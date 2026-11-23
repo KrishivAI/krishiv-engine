@@ -13,7 +13,7 @@ ignore = [
     # shipped binary. Drop this when loom releases without it.
     { id = "RUSTSEC-2026-0441", reason = "unmaintained; dev-only, through loom 0.7.2; no safe upgrade" },
     # paste is unmaintained (archived) and has no successor release. It comes
-    # only from parquet 58.4.1, which iceberg 0.11 pulls (the iceberg skip-tree
+    # only from parquet 58.4.2, which iceberg 0.11 pulls (the iceberg skip-tree
     # below); paste is a proc macro, so nothing of it is linked. Drop this with
     # the skip-tree, when iceberg-rust releases on the workspace Arrow major.
     { id = "RUSTSEC-2024-0436", reason = "unmaintained proc macro; only through iceberg 0.11's parquet 58; no safe upgrade" },
@@ -175,10 +175,10 @@ deny = [
 # iceberg-rust is on the workspace major (apache/iceberg-rust#3257). The
 # iceberg dependency itself is covered by the skip-tree below.
 skip = [
-    { crate = "arrow-array@58.4.1", reason = "krishiv-arrow-bridge: iceberg-rust's Arrow 58 (ADR 0029 update 2026-11-13)" },
-    { crate = "arrow-buffer@58.4.1", reason = "krishiv-arrow-bridge: iceberg-rust's Arrow 58" },
-    { crate = "arrow-data@58.4.1", reason = "krishiv-arrow-bridge: iceberg-rust's Arrow 58" },
-    { crate = "arrow-schema@58.4.1", reason = "krishiv-arrow-bridge: iceberg-rust's Arrow 58" },
+    { crate = "arrow-array@58.4.2", reason = "krishiv-arrow-bridge: iceberg-rust's Arrow 58 (ADR 0029 update 2026-11-13)" },
+    { crate = "arrow-buffer@58.4.2", reason = "krishiv-arrow-bridge: iceberg-rust's Arrow 58" },
+    { crate = "arrow-data@58.4.2", reason = "krishiv-arrow-bridge: iceberg-rust's Arrow 58" },
+    { crate = "arrow-schema@58.4.2", reason = "krishiv-arrow-bridge: iceberg-rust's Arrow 58" },
 ]
 # EXCEPTION (ADR 0028 update 2026-10-17 and 2026-11-06): the iceberg 0.11 subtree,
 # used only by krishiv-connectors-iceberg (metadata, manifests and catalogs; no data

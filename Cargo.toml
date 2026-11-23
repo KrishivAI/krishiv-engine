@@ -90,7 +90,7 @@ arrow-ipc = { version = "60", default-features = false }
 # design note section 3.2); brings arrow-cast.
 arrow-json = { version = "60", default-features = false }
 arrow-flight = { version = "60", default-features = false }
-parquet = { version = "60", default-features = false }
+parquet = { version = "60.2", default-features = false }
 # Arrow 58, the major iceberg-rust 0.11 is on (`^58.4`), under renamed names. Used only
 # by krishiv-arrow-bridge, which moves C Data Interface values 58 -> 60 (ADR 0029 update
 # 2026-11-13, design/P3-lakehouse.md §5.2). Deleted with that crate when iceberg-rust
