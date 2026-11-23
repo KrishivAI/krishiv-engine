@@ -533,6 +533,12 @@ impl Session {
         if !table.managed {
             return Ok(false);
         }
+        // A Delta table's overwrite is a data overwrite in place and its writer handles the key
+        // itself: the shortcut would ask the policy more than that arm does.
+        #[cfg(feature = "delta")]
+        if super::delta::is_delta_table(&table) {
+            return Ok(false);
+        }
         // A write without a key never takes the shortcut: the arm it falls to asks for itself. An
         // invalid key counts as keyed, so its error comes after the checks.
         let keyed = crate::session::writes::write_idempotency_key(&env.config, &spec.options)

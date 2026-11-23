@@ -1749,6 +1749,35 @@ fn a_keyed_overwrite_retry_is_denied_like_the_first_try() {
     assert_eq!(write("overwrite", ""), DENIED);
 }
 
+/// E34 (second review of #966): a Delta overwrite is a data overwrite that asks no `Drop`, keyed or not.
+#[cfg(feature = "delta")]
+#[test]
+fn a_keyed_delta_overwrite_is_allowed_like_the_unkeyed_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(Policy::new(no_drop));
+    s.conf()
+        .set("spark.sql.warehouse.dir", dir.path().to_str().unwrap())
+        .unwrap();
+    block_on(s.table("t").write().format("delta").save_as_table("d")).unwrap();
+    let unkeyed = class(block_on(
+        s.table("t")
+            .write()
+            .format("delta")
+            .mode("overwrite")
+            .save_as_table("d"),
+    ));
+    let keyed = class(block_on(
+        s.table("t")
+            .write()
+            .format("delta")
+            .mode("overwrite")
+            .option("krishiv.write.idempotencyKey", "k")
+            .save_as_table("d"),
+    ));
+    assert_eq!(keyed, unkeyed);
+    assert_ne!(keyed, DENIED);
+}
+
 /// `ignore` on an existing table is still authorized: a denial must not tell an existing table
 /// from a missing one.
 #[test]
