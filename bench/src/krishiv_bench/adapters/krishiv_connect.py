@@ -114,6 +114,12 @@ class KrishivConnectEngine(SparkConnectEngine):
                 self.teardown()
             raise
 
+    def register_view(self, table: str, path: str) -> None:
+        """A catalog table over the Parquet (``session_modes.table_sql``): the server reads no temporary view over
+        Spark Connect (see ``session_modes``)."""
+        assert self.spark is not None, "setup() not called"
+        self.spark.sql(session_modes.table_sql(table, path))
+
     def begin_measure(self) -> None:
         self.end_measure()
         if self._proc is not None:

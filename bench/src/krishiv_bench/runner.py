@@ -333,6 +333,12 @@ def run_suite(
             pool = cf.ThreadPoolExecutor(max_workers=1)
             raise TimeoutError(f"query exceeded {timeout_s}s") from None
 
+    def mark(label: str) -> None:
+        """The query log's marker: through ``call`` (so a hung one is cancelled), and never a failure of the run it
+        labels (the measurement never fails the run it describes)."""
+        with contextlib.suppress(Exception):
+            call(eng.mark, label)
+
     try:
         for q in queries:
             eng.flush_query_log()  # the previous query's statements; teardown flushes the last
@@ -355,7 +361,7 @@ def run_suite(
                         # (its /proc reads would show in in-process adapters' rchar/syscr).
                         sampler = memguard.MemSampler() if mem_floor else None
                         if timed_run:  # untimed, outside the measurement window
-                            eng.mark(f"{q.id} {'warmup' if i < warmup else 'run'} {i} attempt {attempt}")
+                            mark(f"{q.id} {'warmup' if i < warmup else 'run'} {i} attempt {attempt}")
                         eng.begin_measure()
                         m = None
                         failure: Exception | None = None
@@ -391,7 +397,7 @@ def run_suite(
                         raise MemoryError(f"{memguard.INVALID_REASON} in all {mem_retries + 1} attempts of run {i}")
                 if timed_run:  # the rows the answer checks read, untimed; its failure keeps the timings
                     try:
-                        eng.mark(f"{q.id} answer")
+                        mark(f"{q.id} answer")
                         rows = call(eng.run, q)
                     except Exception as e:
                         answer_error = f"{type(e).__name__}: {e}"

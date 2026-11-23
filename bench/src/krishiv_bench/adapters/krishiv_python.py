@@ -1,14 +1,15 @@
 # SPDX-License-Identifier: Apache-2.0
 """``krishiv-python``: the embedded engine through the ``krishiv`` Python package, in the harness's own process.
 
-Tables are registered and queries timed exactly as ``spark-connect`` and ``krishiv-connect`` do
-(``read.parquet(..).createOrReplaceTempView``, ``sql(..).toArrow()``), so against ``krishiv-connect`` the difference
-is the Spark Connect round trip only, and against ``krishiv`` (the native runner) it is the Python layer (plan
-building in Python, the result's handover to pyarrow). The session starts from the runner's settings
-(``session_modes``). The engine runs in this process, so peak RSS, CPU seconds and I/O are this process's
-(``TreeProc(sample=False)``: no sampler thread inside the process it measures; the peak is the VmHWM at the window's
-end and includes the harness's own few hundred MB). ``setup_s`` covers building the session and registering the
-views; ``import krishiv`` happens earlier, in ``version()``.
+Tables are registered and queries timed exactly as ``krishiv-connect`` and ``krishiv-flightsql`` do (a catalog table
+over each Parquet file, ``session_modes.table_sql``; ``sql(..).toArrow()``), so the three modes plan the same scans.
+Against
+``krishiv-connect`` the difference is the Spark Connect round trip only, and against ``krishiv`` (the native runner)
+it is the Python layer (plan building in Python, the result's handover to pyarrow). The session starts from the
+runner's settings (``session_modes``). The engine runs in this process, so peak RSS, CPU seconds and I/O are this
+process's (``TreeProc(sample=False)``: no sampler thread inside the process it measures; the peak is the VmHWM at the
+window's end and includes the harness's own few hundred MB). ``setup_s`` covers building the session and registering the
+tables; ``import krishiv`` happens earlier, in ``version()``.
 """
 
 from __future__ import annotations
@@ -61,7 +62,7 @@ class KrishivPythonEngine(SparkConnectEngine):
     def setup(self, dataset: Dataset) -> None:
         spark = self._session()
         for t in dataset.tables:
-            spark.read.parquet(str(dataset.root / f"{t}.parquet")).createOrReplaceTempView(t)
+            spark.sql(session_modes.table_sql(t, str(dataset.root / f"{t}.parquet")))
 
     def timed_run(self, query: Query) -> tuple[int, float]:
         spark = self._session()

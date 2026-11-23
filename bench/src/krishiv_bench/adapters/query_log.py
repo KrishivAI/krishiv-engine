@@ -25,7 +25,7 @@ from typing import Any
 
 SQL = (
     "SELECT query_id, statement_class, state, query_text, submitted_at, started_at, ended_at, wall_ns, queued_ns, "
-    "cpu_ns, rows_produced, bytes_read, peak_memory_bytes, result_cache_hit FROM system.queries"
+    "cpu_ns, rows_produced, bytes_read, peak_memory_bytes, result_cache_hit FROM system.queries ORDER BY submitted_at"
 )
 
 

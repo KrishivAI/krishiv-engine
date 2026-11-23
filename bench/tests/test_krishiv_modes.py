@@ -169,10 +169,13 @@ class _FakeServer:
         self.blocking = threading.Event()  # a `SELECT block` statement is inside execute
         self.unblock = threading.Event()  # ends it without a cancel
         self.cancel_fails = False
+        self.blocked: list[_FakeCursor] = []  # cursors inside a `SELECT block`, in order
 
-    def connect(self, uri: str, autocommit: bool = False):
+    def connect(self, uri: str, db_kwargs: dict | None = None, autocommit: bool = False):
         assert uri == "grpc://127.0.0.1:1"
         assert autocommit
+        # Without the cookie middleware every statement gets a new server session and the views are gone.
+        assert (db_kwargs or {}).get("adbc.flight.sql.rpc.with_cookie_middleware") == "true"
         c = _FakeConn(self)
         self.connections.append(c)
         return c
@@ -193,6 +196,7 @@ class _FakeCursor:
     def __init__(self, conn: _FakeConn):
         self.conn = conn
         self.cancelled = threading.Event()
+        self.release = threading.Event()  # ends this one statement without a cancel
 
     def __enter__(self):
         return self
@@ -206,8 +210,9 @@ class _FakeCursor:
         server = self.conn.server
         server.executed.append(sql)
         if "block" in sql:
+            server.blocked.append(self)
             server.blocking.set()
-            while not (self.cancelled.wait(0.01) or server.unblock.is_set()):
+            while not (self.cancelled.wait(0.01) or server.unblock.is_set() or self.release.is_set()):
                 pass
             raise RuntimeError("cancelled" if self.cancelled.is_set() else "ended")
 
@@ -240,13 +245,14 @@ def flight(monkeypatch, tmp_path):
 
 def _views(root) -> list[str]:
     return [
-        f"CREATE OR REPLACE TEMPORARY VIEW lineitem AS SELECT * FROM parquet.`{root / 'lineitem.parquet'}`",
-        f"CREATE OR REPLACE TEMPORARY VIEW orders AS SELECT * FROM parquet.`{root / 'orders.parquet'}`",
+        f"CREATE TABLE IF NOT EXISTS lineitem USING parquet LOCATION '{root / 'lineitem.parquet'}'",
+        f"CREATE TABLE IF NOT EXISTS orders USING parquet LOCATION '{root / 'orders.parquet'}'",
     ]
 
 
 def _start_blocked(e, server) -> tuple[threading.Thread, dict]:
     done: dict = {}
+    server.blocking.clear()
 
     def worker():
         try:
@@ -300,6 +306,53 @@ def test_flightsql_reconnects_and_registers_again_when_cancel_fails(flight):
     assert server.executed == [*_views(root), "SELECT 1"]
 
 
+def test_flightsql_never_closes_a_connection_while_a_statement_runs_on_it(flight):
+    e, server, root = flight
+    server.cancel_fails = True
+    t, done = _start_blocked(e, server)
+    e.cancel()  # fails: the statement keeps running past the harness's 30 s wait
+    first = server.connections[0]
+    server.executed.clear()
+    assert e.timed_run(Query("q01", "SELECT 1", "tpch"))[0] == 3  # the next query, on a new connection
+    assert len(server.connections) == 2
+    assert server.executed == [*_views(root), "SELECT 1"]
+    assert first.closed is False  # the old statement is still inside it
+    server.blocked[0].release.set()
+    t.join(5)
+    assert done["error"] == "ended"
+    assert first.closed is True  # closed as its last statement returned
+    assert server.connections[1].closed is False
+
+
+def test_flightsql_cancel_reaches_a_statement_that_overlaps_a_late_one(flight):
+    e, server, _ = flight
+    server.cancel_fails = True
+    t1, done1 = _start_blocked(e, server)
+    e.cancel()  # fails: the first statement is left running
+    server.cancel_fails = False
+    t2, done2 = _start_blocked(e, server)  # the next query, on a new connection
+    server.blocked[0].release.set()  # the first one ends now; it must not clear the second's cursor
+    t1.join(5)
+    assert done1["error"] == "ended"
+    e.cancel()
+    t2.join(5)
+    assert done2["error"] == "cancelled"
+    assert server.connections[1].closed is False
+
+
+def test_flightsql_teardown_closes_every_connection(flight, monkeypatch):
+    e, server, _ = flight
+    server.cancel_fails = True
+    t, _ = _start_blocked(e, server)
+    e.cancel()
+    e.timed_run(Query("q01", "SELECT 1", "tpch"))
+    monkeypatch.setattr(KrishivConnectEngine, "teardown", lambda self: None)
+    e.teardown()
+    assert [c.closed for c in server.connections] == [True, True]
+    server.blocked[0].release.set()
+    t.join(5)
+
+
 def test_flightsql_marks_and_flushes_through_its_connection(flight, monkeypatch, tmp_path):
     e, server, _ = flight
     monkeypatch.setenv("KRISHIV_BENCH_QUERY_LOG", str(tmp_path / "log"))
@@ -310,6 +363,48 @@ def test_flightsql_marks_and_flushes_through_its_connection(flight, monkeypatch,
     e.flush_query_log()
     assert "system.queries" in server.executed[-1]
     assert len(list((tmp_path / "log").glob("krishiv-flightsql-*.parquet"))) == 1
+
+
+class _SqlSpark:
+    def __init__(self):
+        self.sql_text: list[str] = []
+
+    def sql(self, text: str):
+        self.sql_text.append(text)
+
+
+def test_krishiv_connect_registers_catalog_tables_with_sql():
+    e = KrishivConnectEngine(binary="/x/krishiv")
+    spark = _SqlSpark()
+    e.spark = spark  # ty: ignore[invalid-assignment]
+    e.register_view("lineitem", "/d/sf10/lineitem.parquet")
+    # The server reads no temporary view over Spark Connect (session_modes docstring).
+    assert spark.sql_text == ["CREATE TABLE IF NOT EXISTS lineitem USING parquet LOCATION '/d/sf10/lineitem.parquet'"]
+
+
+@pytest.mark.parametrize(("table", "path"), [("li`x", "/d/a.parquet"), ("t", "/d/o'x.parquet"), ("t", "/d/a\\b")])
+def test_table_sql_refuses_what_would_need_quoting(table, path):
+    with pytest.raises(ValueError, match="needs quoting"):
+        session_modes.table_sql(table, path)
+
+
+def test_the_query_log_reads_rows_in_submission_order():
+    assert query_log.SQL.endswith("FROM system.queries ORDER BY submitted_at")
+
+
+def test_usable_cores_applies_the_tightest_cgroup_quota(tmp_path):
+    (tmp_path / "self").write_text("0::/a/b\n")
+    (tmp_path / "a" / "b").mkdir(parents=True)
+    (tmp_path / "cpu.max").write_text("max 100000\n")
+    (tmp_path / "a" / "cpu.max").write_text("250000 100000\n")  # 2.5 cores: 2, as available_parallelism
+    (tmp_path / "a" / "b" / "cpu.max").write_text("max 100000\n")
+    assert session_modes.cgroup_cpu_limit(str(tmp_path), str(tmp_path / "self")) == 2
+    (tmp_path / "a" / "b" / "cpu.max").write_text("50000 100000\n")
+    assert session_modes.cgroup_cpu_limit(str(tmp_path), str(tmp_path / "self")) == 1
+    (tmp_path / "a" / "cpu.max").write_text("max 100000\n")
+    (tmp_path / "a" / "b" / "cpu.max").write_text("max 100000\n")
+    assert session_modes.cgroup_cpu_limit(str(tmp_path), str(tmp_path / "self")) is None
+    assert session_modes.cgroup_cpu_limit(str(tmp_path), str(tmp_path / "missing")) is None
 
 
 # ---- run_suite --timed-run
@@ -332,6 +427,7 @@ class _Fake(Engine):
         self.calls: list[str] = []
         self.block_answer = block_answer
         self.release = threading.Event()
+        self.mark_fails = False
 
     def version(self):
         return "fake"
@@ -356,6 +452,8 @@ class _Fake(Engine):
 
     def mark(self, label):
         self.calls.append(f"mark {label}")
+        if self.mark_fails:
+            raise RuntimeError("marker refused")
 
     def flush_query_log(self):
         self.calls.append("flush")
@@ -393,3 +491,13 @@ def test_a_slow_answer_run_is_cancelled_and_the_timings_are_kept(monkeypatch, tm
     assert q["answer_check"]["status"] == "error"
     assert "TimeoutError" in q["answer_check"]["detail"]
     assert q["rows_stored"] is False
+
+
+def test_a_failed_marker_never_fails_the_run_it_labels(monkeypatch, tmp_path):
+    eng = _Fake()
+    eng.mark_fails = True
+    rec = _suite(monkeypatch, tmp_path, eng, iterations=2, warmup=0)
+    q = rec["queries"]["q01"]
+    assert "error" not in q
+    assert q["times_s"] == [0.75, 1.25]
+    assert q["answer_check"]["status"] != "error"
