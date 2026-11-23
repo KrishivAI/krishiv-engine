@@ -180,6 +180,7 @@ registry! {
     (struct_field, StructField, POST_MIGRATION_READER_VERSION, Semantic, "A struct field access (`GetStructField`: the analyzer-resolved field of a struct)."),
     (table_write, TableWrite, POST_MIGRATION_READER_VERSION, Semantic, "The `TableWrite` node: rows written into a table provider's sink (its writer, or the rewriter of its row-level table), resolved at instantiation; design P3-PR-DML §7."),
     (tail, Tail, POST_MIGRATION_READER_VERSION, Semantic, "The `Tail` node (the last rows of the input in plan order, Spark's `Dataset.tail`)."),
+    (time_precision_nanos, TimePrecisionNanos, POST_MIGRATION_READER_VERSION, Semantic, "A `TIME(p)` type with p in 7..9 (Spark 4.3's nanosecond `TIME`), alone or inside an array, map, struct or user-defined type: a reader that knows only `time_type` (p <= 6) would refuse it as corrupt. It implies `time_type`."),
     (time_type, TimeType, POST_MIGRATION_READER_VERSION, Semantic, "The `TIME` type, with its precision."),
     (udt_type, UdtType, POST_MIGRATION_READER_VERSION, Semantic, "User-defined types (Spark `UserDefinedType`): stored as their SQL type, with the class names in the plan."),
     (union_loop, UnionLoop, POST_MIGRATION_READER_VERSION, Semantic, "The `UnionLoop` and `LoopRef` nodes (recursive common table expressions run as a loop)."),
@@ -250,6 +251,9 @@ pub enum Construct<'a> {
     /// output schema or of an aggregate's result element, or a child field
     /// of an Arrow type): its metadata can name the Spark type.
     ArrowField(&'a arrow_schema::Field),
+    /// The same Arrow field, for the `TIME` precision its metadata names: a
+    /// field can hold both a collated string and a nanosecond `TIME`.
+    ArrowFieldTime(&'a arrow_schema::Field),
     /// A lambda expression or variable: the bound body of a higher-order
     /// function's argument.
     Lambda,
@@ -286,6 +290,9 @@ pub enum Construct<'a> {
 /// mapped there, and classified here.
 fn type_feature(t: &DataType) -> Option<Feature> {
     match t {
+        DataType::Time { precision } if *precision > MICROS_TIME_PRECISION => {
+            Some(Feature::TimePrecisionNanos)
+        }
         DataType::Time { .. } => Some(Feature::TimeType),
         DataType::Geometry { .. } | DataType::Geography { .. } => Some(Feature::GeoTypes),
         DataType::YearMonthInterval { .. }
@@ -299,6 +306,32 @@ fn type_feature(t: &DataType) -> Option<Feature> {
         DataType::Udt(_) => Some(Feature::UdtType),
         _ => t.is_nested().then_some(Feature::NestedTypes),
     }
+}
+
+/// The highest `TIME` precision a reader with only `time_type` decodes.
+const MICROS_TIME_PRECISION: u8 = 6;
+
+/// Whether `t` is or holds a `TIME` with a precision past microseconds.
+fn nanos_time(t: &DataType) -> bool {
+    match t {
+        DataType::Time { precision } => *precision > MICROS_TIME_PRECISION,
+        DataType::Array(a) => nanos_time(a.element_type()),
+        DataType::Map(m) => nanos_time(m.key_type()) || nanos_time(m.value_type()),
+        DataType::Struct(s) => s.fields().iter().any(|x| nanos_time(x.data_type())),
+        DataType::Udt(u) => nanos_time(u.sql_type()),
+        _ => false,
+    }
+}
+
+/// Whether an Arrow field's [`SPARK_TYPE_METADATA_KEY`] tag names a type
+/// that is or holds a nanosecond `TIME`: the carrier (`Time64(ns)`) is the
+/// same at every precision.
+fn nanos_time_field(field: &arrow_schema::Field) -> bool {
+    field
+        .metadata()
+        .get(SPARK_TYPE_METADATA_KEY)
+        .and_then(|tag| krishiv_types::parse_data_type(tag).ok())
+        .is_some_and(|t| nanos_time(&t))
 }
 
 /// Whether `t` is or holds a collated string.
@@ -366,6 +399,7 @@ fn visit_read_source<'a>(source: &'a krishiv_plan::ReadSource, f: &mut impl FnMu
 /// tag of a field at any depth can name a collated type.
 fn visit_arrow_field<'a>(field: &'a arrow_schema::Field, f: &mut impl FnMut(Construct<'a>)) {
     f(Construct::ArrowField(field));
+    f(Construct::ArrowFieldTime(field));
     visit_arrow(field.data_type(), f);
 }
 
@@ -591,6 +625,9 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
             } else {
                 collated_field(field).then_some(Feature::CollatedStrings)
             }
+        }
+        Construct::ArrowFieldTime(field) => {
+            nanos_time_field(field).then_some(Feature::TimePrecisionNanos)
         }
         Construct::ArrowType(t) => {
             if arrow_time(t) {

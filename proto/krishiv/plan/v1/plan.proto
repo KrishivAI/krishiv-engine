@@ -1510,7 +1510,8 @@ message DataType {
     KIND_UDT = 24;
   }
   Kind kind = 1;
-  // `KIND_DECIMAL` and `KIND_TIME` only.
+  // `KIND_DECIMAL` and `KIND_TIME` only. A `KIND_TIME` precision of 7 to 9
+  // (Spark 4.3's nanosecond TIME) needs feature: time_precision_nanos.
   uint32 precision = 2;
   // `KIND_DECIMAL` only.
   uint32 scale = 3;

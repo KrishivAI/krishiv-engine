@@ -2759,6 +2759,26 @@ pub(crate) fn typed() -> Vec<(&'static str, PhysNode)> {
         nullable: None,
         subqueries: Vec::new(),
     };
+    // Spark 4.3's nanosecond TIME, alone and inside an array: `time_precision_nanos`.
+    let time9 = DataType::Time { precision: 9 };
+    let nanos_times = PhysNode::Project {
+        input: boxed(scan()),
+        layout: vec![AttrId(1), AttrId(2)],
+        items: vec![
+            ProjectItemPlan::Expr {
+                name: "time9".to_owned(),
+                expr: lit(Literal::Null(Some(time9.clone()))),
+            },
+            ProjectItemPlan::Expr {
+                name: "times9".to_owned(),
+                expr: lit(Literal::Null(Some(DataType::Array(
+                    krishiv_types::ArrayType::new(time9, true).into(),
+                )))),
+            },
+        ],
+        nullable: None,
+        subqueries: Vec::new(),
+    };
     let ym = |months, start, end| lit(Literal::YearMonthInterval { months, start, end });
     let dt = |micros, start, end| lit(Literal::DayTimeInterval { micros, start, end });
     let interval_literals = PhysNode::Project {
@@ -2996,6 +3016,7 @@ pub(crate) fn typed() -> Vec<(&'static str, PhysNode)> {
         ),
         ("time_nested", nested_times),
         ("time_project", times),
+        ("time_nanos", nanos_times),
         ("geo_scan", PhysNode::Scan(spatial)),
         ("geo_join_residual", residual_join),
         ("udt_scan", PhysNode::Scan(udts)),

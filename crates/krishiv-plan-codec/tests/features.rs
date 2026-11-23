@@ -1363,6 +1363,72 @@ fn a_variant_result_column_is_not_a_nested_type() {
 }
 
 #[test]
+fn nanosecond_time_needs_its_feature() {
+    use krishiv_types::DataType;
+    // TIME(7..9) needs `time_precision_nanos`; a reader from before it (which knows `time_type`, p <= 6)
+    // refuses the plan by feature, not as a corrupt type.
+    let m = message("time_nanos");
+    assert!(
+        m.features.contains(&"time_precision_nanos".to_owned()),
+        "{:?}",
+        m.features
+    );
+    for p in 0..=6 {
+        assert_eq!(
+            feature_of(Construct::Type(&DataType::Time { precision: p })),
+            Some(Feature::TimeType)
+        );
+    }
+    for p in 7..=9 {
+        assert_eq!(
+            feature_of(Construct::Type(&DataType::Time { precision: p })),
+            Some(Feature::TimePrecisionNanos)
+        );
+    }
+    assert_eq!(Feature::TimePrecisionNanos.kind(), FeatureKind::Semantic);
+    assert_eq!(Feature::TimePrecisionNanos.legacy_level(), 6);
+    use krishiv_types::arrow::SPARK_TYPE_METADATA_KEY;
+    let tagged = |tag: &str| {
+        arrow_schema::Field::new(
+            "t",
+            arrow_schema::DataType::Time64(arrow_schema::TimeUnit::Nanosecond),
+            true,
+        )
+        .with_metadata(std::collections::HashMap::from([(
+            SPARK_TYPE_METADATA_KEY.to_owned(),
+            tag.to_owned(),
+        )]))
+    };
+    for tag in ["time(9)", "array<time(7)>", "struct<a:int,b:time(8)>"] {
+        assert_eq!(
+            feature_of(Construct::ArrowFieldTime(&tagged(tag))),
+            Some(Feature::TimePrecisionNanos),
+            "{tag}"
+        );
+    }
+    for tag in ["time(6)", "time(0)", "string", "not a type"] {
+        assert_eq!(
+            feature_of(Construct::ArrowFieldTime(&tagged(tag))),
+            None,
+            "{tag}"
+        );
+    }
+    let bytes = m.encode_to_vec();
+    let older = ReaderFeatures::only(
+        Feature::ALL
+            .iter()
+            .copied()
+            .filter(|f| *f != Feature::TimePrecisionNanos),
+    );
+    assert_eq!(
+        decode_with(&bytes, &Limits::default(), &older).unwrap_err(),
+        CodecError::UnsupportedFeatures {
+            missing: vec!["time_precision_nanos".to_owned()]
+        }
+    );
+}
+
+#[test]
 fn time_and_spatial_types_need_their_features() {
     use krishiv_types::{DataType, Srid};
     assert_eq!(message("time_project").features, ["time_type"]);
@@ -1616,11 +1682,23 @@ fn type_parameters_are_checked_on_decode() {
             t.precision = precision;
             t.scale = scale;
         });
-        m.features = vec!["geo_types".to_owned(), "time_type".to_owned()];
+        // TIME(7..9) lists `time_precision_nanos`, which implies `time_type`.
+        let time_feature = if precision > 6 {
+            "time_precision_nanos"
+        } else {
+            "time_type"
+        };
+        m.features = vec!["geo_types".to_owned(), time_feature.to_owned()];
         m
     };
-    // TIME takes a precision up to 9 (Spark 4.3); 7 decodes.
+    // TIME takes a precision up to 9 (Spark 4.3); 7 decodes, with its feature listed.
     assert!(decode(&time(7, 0).encode_to_vec()).is_ok());
+    let mut hidden = time(7, 0);
+    hidden.features = vec!["geo_types".to_owned(), "time_type".to_owned()];
+    corrupt(
+        &hidden,
+        "the feature header does not match the plan's constructs",
+    );
     corrupt(&time(10, 0), "an invalid time type");
     corrupt(&time(3, 1), "a type parameter on a type that has none");
     let srid_on_int = edit(&|t: &mut pb::DataType| {
