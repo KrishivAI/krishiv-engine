@@ -1231,6 +1231,27 @@ fn instr_over_a_collated_column_quotes_the_literal_with_its_collation() {
     );
 }
 
+/// The literal of `contains` (pattern ending in `i`, so the lower-cased key cannot answer it) and
+/// of `locate` / `position` (literal first) is named with its collation too (review of SQL-41).
+#[test]
+fn search_and_locate_name_their_literal_with_its_collation() {
+    let s = Session::new().unwrap();
+    for (sql, want) in [
+        (
+            "contains(name COLLATE utf8_lcase, 'pi')",
+            "contains(collate(name, utf8_lcase), 'pi' collate UTF8_LCASE)",
+        ),
+        (
+            "locate('PL', name COLLATE utf8_lcase)",
+            "locate('PL' collate UTF8_LCASE, collate(name, utf8_lcase), 1)",
+        ),
+    ] {
+        let df = block_on(s.sql(&format!("SELECT {sql} FROM VALUES ('xpl') AS t(name)"))).unwrap();
+        let name = block_on(df.schema()).unwrap().field(0).name().clone();
+        assert_eq!(name, want, "{sql}");
+    }
+}
+
 /// `x IN (subquery)` compares in the collated side's collation; values are those of a real
 /// Spark 4.2.0 run (`ops/scripts/spark-local.sh`, 2026-11-07).
 #[test]
