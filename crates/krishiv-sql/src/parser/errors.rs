@@ -77,6 +77,11 @@ impl Parser<'_> {
                 let next = self.toks.get(at + 1).map(|t| t.kind);
                 if next == Some(TokenKind::Sym(sym)) && fits(dropped, at) {
                     self.extra = Some(at);
+                } else if next.is_none() && matches!(how, Close::List(n) if n >= 2) {
+                    // After a list of two or more the end of input is extra as well, so the last
+                    // token, with only the end after it, is too (`f(1 + a, b c`: extra input
+                    // 'c'; Spark 4.2.0 run, review of #985).
+                    self.extra = Some(at);
                 }
             } else if matches!(how, Close::List(n) if n >= 2) {
                 self.extra = Some(at);

@@ -297,6 +297,8 @@ pub(crate) struct QueryCatalog {
     scans: FileScans,
     /// Entries loaded by this query, by lower-case name.
     loaded: Mutex<HashMap<String, Arc<TempTable>>>,
+    /// The reads scans that decide once bound to this query's plans (no rows, no reservation).
+    bound_scans: Mutex<Vec<Arc<dyn krishiv_exec::BoundScan>>>,
     /// The file tables of the query's scans, opened before planning.
     opened: Mutex<Vec<(FilesKey, Arc<FileTable>)>>,
     epoch: u64,
@@ -370,6 +372,7 @@ impl QueryCatalog {
             delta,
             scans,
             loaded: Mutex::new(HashMap::new()),
+            bound_scans: Mutex::new(Vec::new()),
             opened: Mutex::new(Vec::new()),
             epoch,
             namespace,
@@ -496,6 +499,18 @@ impl QueryCatalog {
             .unwrap_or_else(PoisonError::into_inner)
             .values()
             .any(|t| matches!(&**t, TempTable::Files { .. }))
+    }
+
+    /// Whether a physical plan decided a scan against this catalog. Each
+    /// plan binds its own scans and the list is never trimmed, so an
+    /// analysis that holds some is not reused: a repeated action would
+    /// grow the list for the life of the frame.
+    pub(crate) fn has_bound_scans(&self) -> bool {
+        !self
+            .bound_scans
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_empty()
     }
 
     /// Every file table opened for the query, in opening order.
@@ -1136,6 +1151,35 @@ impl CatalogResolver for QueryCatalogs {
 }
 
 impl TableProviderResolver for QueryCatalog {
+    fn bind_scan(
+        &self,
+        bound: Arc<dyn krishiv_exec::BoundScan>,
+    ) -> Result<krishiv_exec::BoundScanId, KrishivError> {
+        let mut list = self.bound_scans.lock().map_err(|_| InternalError {
+            message: "a poisoned bound-scan list".to_owned(),
+        })?;
+        let id = u32::try_from(list.len()).map_err(|_| InternalError {
+            message: "too many bound scans".to_owned(),
+        })?;
+        list.push(bound);
+        Ok(krishiv_exec::BoundScanId(id))
+    }
+
+    fn bound_scan(
+        &self,
+        id: krishiv_exec::BoundScanId,
+    ) -> Result<Arc<dyn krishiv_exec::BoundScan>, KrishivError> {
+        let list = self.bound_scans.lock().map_err(|_| InternalError {
+            message: "a poisoned bound-scan list".to_owned(),
+        })?;
+        list.get(id.0 as usize).cloned().ok_or_else(|| {
+            InternalError {
+                message: format!("no bound scan {}", id.0),
+            }
+            .into()
+        })
+    }
+
     fn provider(&self, scan: &Scan) -> Result<Arc<dyn TableProvider>, KrishivError> {
         let kind = match &scan.source {
             ReadSource::Table { name, .. } if crate::system::is_system_table(name) => {
