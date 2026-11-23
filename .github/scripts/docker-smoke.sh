@@ -49,7 +49,8 @@ curl -fsk https://127.0.0.1:8080/readyz >/dev/null
 venv=$work/venv
 uv venv -q "$venv"
 uv pip install -q --python "$venv/bin/python" "pyspark[connect]>=4.0,<5"
-GRPC_DEFAULT_SSL_ROOTS_FILE_PATH="$work/cert.pem" "$venv/bin/python" - "$token" <<'PY'
+# `timeout`: a client that finished its checks must not hang the job on a gRPC thread at exit.
+GRPC_DEFAULT_SSL_ROOTS_FILE_PATH="$work/cert.pem" timeout 300 "$venv/bin/python" - "$token" <<'PY'
 import sys
 from pyspark.sql import SparkSession
 
@@ -65,4 +66,5 @@ spark.sql("INSERT INTO smoke_delta VALUES (1, 'east'), (2, 'west')")
 got = sorted(tuple(r) for r in spark.sql(f"SELECT id, region FROM delta.`{path}`").collect())
 assert got == [(1, "east"), (2, "west")], got
 print("delta ->", got)
+spark.stop()
 PY
