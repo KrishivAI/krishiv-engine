@@ -28,12 +28,12 @@ Paths are relative to this crate.
 - Arbitration and OOM paths return typed errors or trigger spill; never panic.
 - Concurrency primitives tested with loom (`src/loom_model.rs`; `src/sync.rs` swaps in loom's types).
 - Arbitration is cooperative: never call into, lock or mutate another task's operator state; no sync lock across an await.
-- `unsafe` allowed; every block has a `// SAFETY:` comment; runs under Miri in CI and nightly ASan/TSan (ADR 0029).
+- `unsafe` allowed; every block has a `// SAFETY:` comment; nightly ASan/TSan (ADR 0029); CI runs Miri for krishiv-kernels and krishiv-python only, not this crate yet.
 - Spill files (`spillfile`): a finished `.spill` is complete (temp file + rename; not durable by design (the drop-behind's writeback wait is for memory): scratch data, deleted at the
   next start after a crash); every frame is checksummed, so damage is `SpillError::Corrupt`, never wrong data; all names are
   generated, never user-supplied; files go on drop, a query's directory on drop or `SpillScope::cancel`; crashed sessions are
   reclaimed via a held advisory lock (not a pid); write/read scratch is accounted in the caller's `Reservation`; writers drop their written pages from the page cache as they go
-  (`krishiv.spill.dropBehindBytes`, `spillfile/cache.rs` via `rustix` and one `libc::sync_file_range` (the crate's FFI `unsafe`); advisory, failures are logged; a finished file's writeback is waited for (`sync_file_range`, no journal commit or device flush; `fdatasync` where refused) before its pages are dropped), so dirty spill pages never pile up in a cgroup.
+  (`krishiv.spill.dropBehindBytes`, `spillfile/cache.rs` via `rustix` and one `libc::sync_file_range` (the crate's FFI `unsafe`; an ADR 0028 exception pending the owner's decision, to be replaced by `rustix::fs::sync_file_range` when it exists); advisory, failures are logged; a finished file's writeback is waited for (`sync_file_range`, no journal commit or device flush; `fdatasync` where the call is unavailable, `ENOSYS`/`EINVAL`/`ESPIPE`/`EPERM`; any other error, a writeback `EIO`, is returned and logged) before its pages are dropped), so dirty spill pages never pile up in a cgroup.
 - No `unwrap`/`expect`/`panic` in library code; errors carry a Spark error class + SQLSTATE.
 
 ## ADRs (in `../krishiv-internal/adr/`)

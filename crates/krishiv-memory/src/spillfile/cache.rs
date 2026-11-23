@@ -15,9 +15,12 @@
 //! journal and flushes the device's write cache, once per file; a spilling
 //! aggregate finishes one file per radix partition per run, and on TPC-H
 //! q13 at SF100 under a 2 GiB limit those flushes were most of its write
-//! time (0.93x wall with the range wait). Where the
-//! call is refused (a file system without it), the wait falls back to
-//! `fdatasync`.
+//! time (0.93x wall with the range wait). Where the call is not available
+//! (a file that is not a regular file, `ESPIPE`; a seccomp filter, `ENOSYS`
+//! or `EPERM`; `EINVAL`), the wait falls back to `fdatasync`. Any other error
+//! (an `EIO` from writeback) is returned as it is: the range wait has already
+//! consumed the file's writeback error, so an `fdatasync` after it would
+//! report success.
 
 use std::fs::File;
 use std::io;
@@ -47,17 +50,32 @@ pub(crate) fn sync(file: &File) -> io::Result<()> {
     Ok(())
 }
 
-/// [`sync`] with the first wait given: `fdatasync` when it fails.
+/// [`sync`] with the first wait given: `fdatasync` when the wait is not
+/// available for `file`, else the wait's own result.
 #[cfg(target_os = "linux")]
 fn sync_with(file: &File, wait: fn(&File) -> io::Result<()>) -> io::Result<()> {
     match wait(file) {
-        Ok(()) => Ok(()),
-        Err(_) => Ok(rustix::fs::fdatasync(file)?),
+        Err(e) if unavailable(&e) => Ok(rustix::fs::fdatasync(file)?),
+        other => other,
     }
+}
+
+/// The range wait cannot be used here (as opposed to a failed writeback).
+#[cfg(target_os = "linux")]
+fn unavailable(e: &io::Error) -> bool {
+    matches!(
+        e.raw_os_error(),
+        Some(libc::ENOSYS | libc::EINVAL | libc::ESPIPE | libc::EPERM)
+    )
 }
 
 /// Starts writeback of the whole file's dirty pages and waits for it,
 /// with no journal commit or device flush.
+///
+/// A direct `libc` call: an ADR 0028 exception (one call, `rustix` 1.1.6
+/// has no `sync_file_range`), pending the owner's decision in
+/// `ops/needs-owner.md`; replace with `rustix::fs::sync_file_range` when it
+/// exists.
 #[cfg(target_os = "linux")]
 fn wait_range(file: &File) -> io::Result<()> {
     use std::os::fd::AsRawFd;
@@ -120,5 +138,22 @@ mod tests {
         let pipe = File::from(std::os::fd::OwnedFd::from(r));
         assert!(sync_with(&pipe, |_| Ok(())).is_ok(), "no second wait");
         assert!(sync_with(&pipe, refused).is_err(), "fdatasync refused too");
+    }
+
+    /// A failed writeback is returned, never hidden by an `fdatasync` that
+    /// would succeed after the range wait consumed the error.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_writeback_error_is_returned_without_fdatasync() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = File::create(dir.path().join("x")).unwrap();
+        let failed: fn(&File) -> io::Result<()> = |_| Err(io::Error::from_raw_os_error(libc::EIO));
+        // `fdatasync` on a regular file succeeds, so a fallback would be `Ok`.
+        let e = sync_with(&f, failed).unwrap_err();
+        assert_eq!(e.raw_os_error(), Some(libc::EIO));
+        for code in [libc::ENOSYS, libc::EINVAL, libc::ESPIPE, libc::EPERM] {
+            assert!(unavailable(&io::Error::from_raw_os_error(code)), "{code}");
+        }
+        assert!(!unavailable(&io::Error::from_raw_os_error(libc::ENOSPC)));
     }
 }
