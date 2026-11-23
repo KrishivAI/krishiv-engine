@@ -154,8 +154,14 @@ class DataFrame:
 
     def printSchema(self, level: int | None = None) -> None:
         """Prints the schema as a tree, as Spark does (``long``, ``integer`` type names, nested
-        fields, a final empty line); ``level`` limits the depth."""
-        print(self.schema.treeString(level))
+        fields, a final empty line); a positive ``level`` limits the depth."""
+        try:
+            print(self.schema.treeString(level or 0))
+        except Exception:  # a type the schema parser lacks (``time(6)``, ``geometry(0)``): the flat form
+            print("root")
+            for name, type_, nullable in self._df.schema():
+                print(f" |-- {name}: {type_} (nullable = {str(nullable).lower()})")
+            print()
 
     # Column access.
     def __getitem__(self, item: Any) -> Any:

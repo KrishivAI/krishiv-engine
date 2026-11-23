@@ -425,3 +425,13 @@ def test_print_schema_nested_and_level(spark: SparkSession, capsys: pytest.Captu
         " |-- s: struct (nullable = false)",
         "",
     ]
+
+
+def test_print_schema_level_zero_or_negative_prints_everything(
+    df: DataFrame, capsys: pytest.CaptureFixture[str]
+) -> None:
+    df.printSchema()
+    full = capsys.readouterr().out
+    for level in (0, -1):
+        df.printSchema(level)
+        assert capsys.readouterr().out == full

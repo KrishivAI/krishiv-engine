@@ -930,8 +930,11 @@ DataFrame[age: bigint, name: string]
 ### `printSchema`
 
 ```python
-def printSchema(self) -> None
+def printSchema(self, level: int | None=None) -> None
 ```
+
+Prints the schema as a tree, as Spark does (`long`, `integer` type names, nested
+fields, a final empty line); a positive `level` limits the depth.
 
 ### `profile`
 

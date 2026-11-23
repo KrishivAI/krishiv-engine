@@ -521,10 +521,11 @@ class StructType(DataType):
     def fieldNames(self) -> list[str]:
         return list(self.names)
 
-    def treeString(self, level: int | None = None) -> str:
+    def treeString(self, maxDepth: int = 0) -> str:
         """The schema as Spark's ``treeString`` prints it: ``root``, then one ``|--`` line per field
         (type names as Spark spells them: ``long``, ``integer``), nested fields indented, to
-        ``level`` levels when given. Ends with a newline."""
+        ``maxDepth`` levels when positive (zero or less: all). Ends with a newline."""
+        level = maxDepth if maxDepth > 0 else None
         lines = ["root"]
         _tree_fields(self.fields, 1, level, lines)
         return "\n".join(lines) + "\n"
