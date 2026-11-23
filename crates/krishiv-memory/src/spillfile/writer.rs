@@ -33,9 +33,10 @@ const BUF_BYTES: usize = 64 << 10;
 /// complete, and a writer that is dropped, fails or is cancelled leaves
 /// nothing behind. Durability is not a goal: spill files are scratch data
 /// that is only meaningful to the process that wrote them, and after a crash
-/// they are deleted at the next start, never read. The `fdatasync` at
-/// `finish` (with drop-behind on) is for memory, not durability: it makes
-/// the file's pages clean so they can be dropped from the page cache. Errors that surface only at `close` are not
+/// they are deleted at the next start, never read. The writeback wait at
+/// `finish` (with drop-behind on; `sync_file_range`, else `fdatasync`) is
+/// for memory, not durability: it makes the file's pages clean so they can
+/// be dropped from the page cache. Errors that surface only at `close` are not
 /// observable on a local file system, which is why a network one is refused.
 ///
 /// # Accounting
