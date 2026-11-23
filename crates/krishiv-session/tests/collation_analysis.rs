@@ -1216,6 +1216,21 @@ fn the_implicit_collation_cast_quotes_a_literal_in_the_name() {
     );
 }
 
+/// `instr` over a collated column names its literal with the implicit cast too (SQL-41, row D9).
+#[test]
+fn instr_over_a_collated_column_quotes_the_literal_with_its_collation() {
+    let s = Session::new().unwrap();
+    let df = block_on(
+        s.sql("SELECT instr(name COLLATE utf8_lcase, 'PL') FROM VALUES ('xpl') AS t(name)"),
+    )
+    .unwrap();
+    let name = block_on(df.schema()).unwrap().field(0).name().clone();
+    assert_eq!(
+        name,
+        "instr(collate(name, utf8_lcase), 'PL' collate UTF8_LCASE)"
+    );
+}
+
 /// `x IN (subquery)` compares in the collated side's collation; values are those of a real
 /// Spark 4.2.0 run (`ops/scripts/spark-local.sh`, 2026-11-07).
 #[test]

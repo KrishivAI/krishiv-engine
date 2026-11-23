@@ -1707,7 +1707,37 @@ impl Resolver<'_> {
         )
         .with_origin(e.origin);
         let mut b = self.expr_node_inner(&Arc::new(call), &keyed, in_agg, window_fn, cx)?;
-        b.shown = Some(with_children(e, kids.iter().map(Bound::shown).collect()));
+        // A literal of another collation is shown cast to the call's, as the generic rule does
+        // (SQL-41: `instr(c COLLATE UTF8_LCASE, 'PL')` is `.., 'PL' collate UTF8_LCASE)`).
+        let mut memo = Memo::default();
+        let shown = kids
+            .iter()
+            .enumerate()
+            .map(|(i, k)| {
+                let own = match k.ty.data_type.as_ref() {
+                    Some(DataType::CollatedString(c)) => Some(*c),
+                    Some(DataType::String) => Some(Collation::UTF8_BINARY),
+                    _ => None,
+                };
+                let literal = matches!(
+                    strength_of(&k.shown(), &mut memo),
+                    Some((_, Strength::Default))
+                );
+                if i < 2 && literal && own.is_some_and(|o| o != c) {
+                    Arc::new(
+                        Expr::new(ExprNode::Cast {
+                            expr: k.shown(),
+                            to: DataType::collated_string(c),
+                            mode: CastMode::Default,
+                        })
+                        .with_origin(e.origin),
+                    )
+                } else {
+                    k.shown()
+                }
+            })
+            .collect();
+        b.shown = Some(with_children(e, shown));
         Ok(Some(b))
     }
 
