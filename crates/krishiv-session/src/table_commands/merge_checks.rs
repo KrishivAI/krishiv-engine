@@ -331,6 +331,16 @@ impl Checks<'_> {
                     let insert = matches!(clause.action, ClauseAction::Insert(_));
                     for a in assignments {
                         if a.nested {
+                            // `s.id` (a qualifier that is not the target's) names no column of
+                            // the target: delta-spark's unresolved name, not a nested field.
+                            let first = a.column.split('.').next().unwrap_or_default();
+                            if !self
+                                .columns
+                                .iter()
+                                .any(|c| c.name.eq_ignore_ascii_case(first))
+                            {
+                                return Err(self.no_column(&a.column));
+                            }
                             return Err(KrishivUnsupportedFeature {
                                 feature: format!("MERGE INTO of the nested field {}", a.column),
                             }

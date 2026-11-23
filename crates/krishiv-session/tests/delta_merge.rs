@@ -930,6 +930,75 @@ fn a_quoted_column_name_with_a_dot_is_a_top_level_column() {
     assert!(e.to_string().contains("nested field"), "{e}");
 }
 
+/// An `INSERT` column of a `MERGE` resolves against the target as delta-spark 4.4.1 resolves it
+/// (a run of these statements, #962 review): qualified by the target's alias when it has one,
+/// else by its name, `namespace.name` or `spark_catalog.namespace.name`, in any case; the
+/// table's name under an alias, or the source's alias, names no column
+/// (`DELTA_MERGE_UNRESOLVED_EXPRESSION`, 4.4.1's `INTERNAL_ERROR` form).
+#[test]
+fn a_merge_insert_column_takes_the_target_s_qualifier() {
+    let src = "(SELECT CAST(2 AS BIGINT) AS id, 'b' AS v) s";
+    let accepted = [
+        format!(
+            "MERGE INTO t USING {src} ON t.id = s.id WHEN NOT MATCHED THEN INSERT (t.id, t.v) VALUES (s.id, s.v)"
+        ),
+        format!(
+            "MERGE INTO t AS x USING {src} ON x.id = s.id WHEN NOT MATCHED THEN INSERT (x.id, x.v) VALUES (s.id, s.v)"
+        ),
+        format!(
+            "MERGE INTO t USING {src} ON t.id = s.id WHEN NOT MATCHED THEN INSERT (T.ID, v) VALUES (s.id, s.v)"
+        ),
+        format!(
+            "MERGE INTO t USING {src} ON t.id = s.id WHEN NOT MATCHED THEN INSERT (default.t.id, v) VALUES (s.id, s.v)"
+        ),
+        format!(
+            "MERGE INTO t USING {src} ON t.id = s.id WHEN NOT MATCHED THEN INSERT (spark_catalog.default.t.id, v) VALUES (s.id, s.v)"
+        ),
+    ];
+    let refused = [
+        format!(
+            "MERGE INTO t AS x USING {src} ON x.id = s.id WHEN NOT MATCHED THEN INSERT (t.id, v) VALUES (s.id, s.v)"
+        ),
+        format!(
+            "MERGE INTO t USING {src} ON t.id = s.id WHEN NOT MATCHED THEN INSERT (s.id, v) VALUES (s.id, s.v)"
+        ),
+    ];
+    for (i, (statement, ok)) in accepted
+        .iter()
+        .map(|q| (q, true))
+        .chain(refused.iter().map(|q| (q, false)))
+        .enumerate()
+    {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join(format!("t{i}"));
+        let session = Session::new().unwrap();
+        sql(
+            &session,
+            &format!(
+                "CREATE TABLE t (id BIGINT, v STRING) USING delta LOCATION '{}'",
+                dir.display()
+            ),
+        )
+        .unwrap();
+        sql(&session, "INSERT INTO t VALUES (1, 'a')").unwrap();
+        let ran = sql(&session, statement);
+        let (_, rows) = sql(&session, "SELECT id, v FROM t ORDER BY id").unwrap();
+        if ok {
+            let (_, out) = ran.unwrap();
+            assert_eq!(out, serde_json::json!([[1, 0, 0, 1]]), "{statement}");
+            assert_eq!(rows, serde_json::json!([[1, "a"], [2, "b"]]), "{statement}");
+        } else {
+            let e = ran.unwrap_err();
+            assert_eq!(e.error_class().name(), "INTERNAL_ERROR", "{statement}: {e}");
+            assert!(
+                e.to_string().contains("DELTA_MERGE_UNRESOLVED_EXPRESSION"),
+                "{statement}: {e}"
+            );
+            assert_eq!(rows, serde_json::json!([[1, "a"]]), "{statement}");
+        }
+    }
+}
+
 /// A `MERGE` inside a SQL script sees the script's locals in its source, its clause conditions
 /// and its values, and a local shadows a session variable of the same name (#962 review).
 #[test]

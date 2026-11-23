@@ -941,6 +941,31 @@ impl Session {
             }
             (parts.join("."), parts.len() > 1)
         };
+        // An `INSERT` column resolves against the target as delta-spark resolves it (a delta-spark
+        // 4.4.1 run): under an alias only the alias qualifies it, else the table's name,
+        // `namespace.name` or `spark_catalog.namespace.name` (any case).
+        let explicit_alias = m.target_alias.is_some();
+        let insert_key = |parts: &[krishiv_sql::ast::Ident]| -> (String, bool) {
+            let parts: Vec<&str> = parts.iter().map(|p| p.value.as_str()).collect();
+            let qualifiers: Vec<Vec<&str>> = if explicit_alias {
+                vec![vec![target_alias.as_str()]]
+            } else {
+                vec![
+                    vec!["spark_catalog", name.namespace.as_str(), name.name.as_str()],
+                    vec![name.namespace.as_str(), name.name.as_str()],
+                    vec![name.name.as_str()],
+                ]
+            };
+            let skip = qualifiers
+                .iter()
+                .find(|q| {
+                    parts.len() > q.len()
+                        && q.iter().zip(&parts).all(|(a, b)| a.eq_ignore_ascii_case(b))
+                })
+                .map_or(0, Vec::len);
+            let rest = &parts[skip..];
+            (rest.join("."), rest.len() > 1)
+        };
         let mut clauses = Vec::with_capacity(m.clauses.len());
         for c in &m.clauses {
             let kind = match c.matched {
@@ -972,15 +997,13 @@ impl Session {
                     columns
                         .iter()
                         .zip(values)
-                        .map(|(c, v)| Assignment {
-                            nested: c.parts.len() > 1,
-                            column: c
-                                .parts
-                                .iter()
-                                .map(|p| p.value.as_str())
-                                .collect::<Vec<_>>()
-                                .join("."),
-                            value: (!crate::command::is_bare_default(v)).then(|| slice(v.span)),
+                        .map(|(c, v)| {
+                            let (column, nested) = insert_key(&c.parts);
+                            Assignment {
+                                nested,
+                                column,
+                                value: (!crate::command::is_bare_default(v)).then(|| slice(v.span)),
+                            }
                         })
                         .collect(),
                 ),
