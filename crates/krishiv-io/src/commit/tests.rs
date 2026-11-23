@@ -2063,3 +2063,105 @@ fn a_writer_short_of_memory_rolls_to_a_new_file() {
     drop(hold);
     drop(w);
 }
+
+#[test]
+fn a_partitioned_bucketed_writer_short_of_memory_rolls_within_its_partition_and_bucket() {
+    use arrow_array::{Int64Array, StringArray};
+    let env = Env::memory();
+    let w = env
+        .begin_dynamic("tight", SaveMode::ErrorIfExists, "u", false)
+        .unwrap()
+        .unwrap()
+        .partitioned(true);
+    let pool: Arc<dyn krishiv_memory::MemoryPool> =
+        krishiv_memory::TreePool::new(&krishiv_memory::MemoryConfig {
+            limit: Some(4 << 20),
+            ..krishiv_memory::MemoryConfig::default()
+        });
+    let hog = pool.register("hog", None);
+    let mut hold = krishiv_memory::Reservation::new(Arc::clone(&pool), hog);
+    hold.try_grow(2 << 20).unwrap();
+    let id = pool.register("write", None);
+    let schema: SchemaRef = Arc::new(Schema::new(vec![
+        Field::new("v", DataType::Int64, false),
+        Field::new("p", DataType::Utf8, false),
+        Field::new("__bucket", DataType::Int32, false),
+    ]));
+    let mut x: u64 = 0x9E37_79B9_7F4A_7C15;
+    let mut next = || {
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        x.cast_signed()
+    };
+    // Sorted by partition, then bucket: p=a bucket 3, then p=b bucket 1, ~4 MB each.
+    let batches: Vec<RecordBatch> = (0..128)
+        .map(|i| {
+            let (p, bucket) = if i < 64 { ("a", 3) } else { ("b", 1) };
+            let v: Vec<i64> = (0..8192).map(|_| next()).collect();
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Int64Array::from(v)),
+                    Arc::new(StringArray::from(vec![p; 8192])),
+                    Arc::new(Int32Array::from(vec![bucket; 8192])),
+                ],
+            )
+            .unwrap()
+        })
+        .collect();
+    let o = FormatOptions::defaults(ParquetFormat.options());
+    let format: Arc<dyn FileFormat> = Arc::new(ParquetFormat);
+    let files = env
+        .rt
+        .block_on(async {
+            let mut options = w.write_options(0);
+            options.partition_by = vec![1];
+            options.partition_names = vec!["p".to_owned()];
+            let mut writer = FileWriter::new_bucketed(
+                &env.io,
+                Arc::clone(&format),
+                &schema,
+                o.clone(),
+                options,
+                krishiv_memory::Reservation::new(Arc::clone(&pool), id),
+                Some(2),
+            )?
+            .bucketed_by(&schema, 2)?;
+            for b in &batches {
+                writer.write(b).await?;
+            }
+            let files = writer.finish().await?;
+            w.commit(&env.io, format.as_ref(), Arc::clone(&schema), &o, files)
+                .await
+        })
+        .unwrap();
+    let mut per_partition = std::collections::BTreeMap::<String, (usize, u64)>::new();
+    for f in &files {
+        let path = f.path.to_string();
+        let (dir, name) = path.rsplit_once('/').unwrap();
+        let want_bucket = match dir {
+            "tight/p=a" => 3,
+            "tight/p=b" => 1,
+            other => panic!("file outside its partition: {other}"),
+        };
+        assert_eq!(
+            crate::bucket_id_of_file_name(name),
+            Some(want_bucket),
+            "{path}"
+        );
+        let e = per_partition.entry(dir.to_owned()).or_default();
+        e.0 += 1;
+        e.1 += f.rows;
+    }
+    assert_eq!(
+        per_partition.values().map(|e| e.1).collect::<Vec<_>>(),
+        [64 * 8192, 64 * 8192]
+    );
+    assert!(
+        per_partition.values().all(|e| e.0 > 1),
+        "each partition rolled over: {per_partition:?}"
+    );
+    assert_eq!(pool.reserved(), 2 << 20, "only the hog's memory is left");
+    drop(hold);
+}
