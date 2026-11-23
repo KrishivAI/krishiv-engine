@@ -199,23 +199,23 @@ fn ms(t: SystemTime) -> u128 {
 fn vended_cache_drops_expired_entries() {
     let cache = test_cache();
     let id = |n: &str| key(IdentityKey::of("cat", &user(n, None)), "t");
-    let soon = || ms(SystemTime::now() + Duration::from_millis(300));
-    let future = ms(SystemTime::now() + Duration::from_secs(3600));
+    let soon = || ms(cache.now() + Duration::from_millis(300));
+    let future = ms(cache.now() + Duration::from_secs(3600));
     // Live when kept, expired by the time of the lookup: dropped on get.
     cache.put(id("expiring"), s3_answer(Some(soon())), TTL, 10);
     assert_eq!(cache.len(), 1, "kept while live");
-    std::thread::sleep(Duration::from_millis(600));
+    cache.clock().advance(Duration::from_millis(600));
     assert!(cache.get(&id("expiring")).is_none());
     assert_eq!(cache.len(), 0, "dropped on get");
     // Live when kept, expired by the time of a later put of another key: dropped there, without a get.
     cache.put(id("old"), s3_answer(Some(soon())), TTL, 10);
     assert_eq!(cache.len(), 1, "kept while live");
-    std::thread::sleep(Duration::from_millis(600));
+    cache.clock().advance(Duration::from_millis(600));
     cache.put(id("live"), s3_answer(Some(future)), TTL, 10);
     assert_eq!(cache.len(), 1);
     assert!(cache.get(&id("live")).is_some());
     // An answer already expired when offered is not kept at all.
-    let past = ms(SystemTime::now() - Duration::from_secs(1));
+    let past = ms(cache.now() - Duration::from_secs(1));
     cache.put(id("expired"), s3_answer(Some(past)), TTL, 10);
     assert!(cache.get(&id("expired")).is_none());
     // No expiry key: the default TTL counts from the fetch.

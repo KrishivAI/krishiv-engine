@@ -384,7 +384,13 @@ fn declared_metadata_cache_ttl_and_refresh() {
     )
     .unwrap();
     let ttl = Duration::from_millis(300);
-    let built = super::RestCatalog::new(&d, Arc::new(client), ttl, false);
+    let built = super::RestCatalog::new(
+        &d,
+        Arc::new(client),
+        ttl,
+        false,
+        super::vended::VendedCache::global(),
+    );
     let caller = CatalogCaller::server("lake");
     let t: TableIdent = ident(&["db"], "t");
     let load = || {
