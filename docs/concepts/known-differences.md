@@ -693,7 +693,49 @@ They differ in:
   cancellations stay unwrapped.
 - **Refused.** On a table with the change data feed on, `UPDATE` and a `DELETE` that rewrites rows
   are refused (`UNSUPPORTED_FEATURE.TABLE_OPERATION`) before any file is written: Krishiv writes no
-  change data files yet. A `DELETE` of whole partitions commits. `MERGE` is refused by name.
+  change data files yet. A `DELETE` of whole partitions commits.
+
+`MERGE INTO` a Delta table (copy-on-write; the session's `table_commands/merge.rs`, the connector's
+`src/write/merge.rs`) leaves the rows, the command's four counts, the files removed and the counted
+`operationMetrics` that delta-spark leaves (`tests/fixtures/delta-4.4.1/merge/MERGE.json`; Spark
+reads the tables back, `merge/krishiv-written/`). It differs in:
+
+- **Predicate text.** `operationParameters.predicate` and the `predicate` of each entry of
+  `matchedPredicates`, `notMatchedPredicates` and `notMatchedBySourcePredicates` are the
+  conditions as written, in parentheses; delta-spark prints Catalyst's form with expression ids.
+  The same holds for the condition in `DELTA_NON_DETERMINISTIC_FUNCTION_NOT_SUPPORTED` and
+  `DELTA_UNSUPPORTED_SUBQUERY` messages.
+- **Unresolved names.** A name that does not resolve in a `MERGE` is `INTERNAL_ERROR` ("Cannot find
+  main error class 'DELTA_MERGE_UNRESOLVED_EXPRESSION'"), the analyzer's `UNRESOLVED_COLUMN.*` as
+  its cause. This matches a delta-spark 4.4.1 defect: its error class file lacks the class it
+  raises. Revisit when a delta-spark release ships the class. A SQL script's handler does not take
+  it (Krishiv's handlers never take `INTERNAL_ERROR`).
+- **Source.** delta-spark copies the source unless the `MERGE` only inserts (with
+  `spark.databricks.delta.merge.optimizeInsertOnlyMerge.enabled`, on by default) or the source
+  reads only Delta tables and is deterministic (`MergeIntoMaterializeSource`). Krishiv reads an
+  insert-only `MERGE`'s source once, under the same setting (with it off, the source is chosen as
+  for any other `MERGE`), and a source that is one bare scan of a Delta table at its snapshot; any
+  other source (a query, files, a Delta read under a filter or a projection) is copied into a
+  spill file of its own first, a batch at a time, and read back from it. An
+  insert-only `MERGE` and a Delta-table source are read once more to count `numSourceRows`.
+- **Read predicates.** The conflict check reads by the `ON` condition's partition-only conjuncts
+  (the whole table with a `NOT MATCHED BY SOURCE` clause); delta-spark also skips data files by
+  the conjuncts' statistics, so Krishiv's read set is wider (a concurrent append to a partition the
+  `ON` condition does not exclude conflicts).
+- **Change data feed.** On a table with it on, a `MERGE` that removes a file is refused
+  (`UNSUPPORTED_FEATURE.TABLE_OPERATION`) before any file is written; delta-spark commits it with
+  change data files. A `MERGE` that only inserts commits, as delta-spark's does (with no change
+  data files).
+- **Schema evolution.** Under `spark.databricks.delta.schema.autoMerge.enabled = true` a `MERGE`
+  that would add a column (a `*` clause whose source has a column the target lacks, an
+  assignment to a source column the target lacks) is refused (`KRISHIV_UNSUPPORTED_FEATURE`); other
+  `MERGE`s run, with `*` taking the target columns the source has. `MERGE WITH SCHEMA EVOLUTION`
+  does not parse.
+- **Refused.** A `MERGE` under `spark.sql.caseSensitive = true`, `SET c = DEFAULT`, a nested
+  assignment key (`SET s.f = ..`) and a table whose row-level rule is Spark's own
+  `MERGE_CARDINALITY_VIOLATION` (no oracle yet) are refused by name.
+- **Deletion vectors.** Never written (as for `DELETE` and `UPDATE`); delta-spark's default
+  `merge.deletionVectors.persistent = true` marks rows in vectors on a table with them on.
 
 ## HLL sketches: the compact form (`hll_sketch_agg`, `hll_union_agg`, `hll_union`)
 
