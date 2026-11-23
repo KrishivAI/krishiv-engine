@@ -4,7 +4,7 @@
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
     Date32Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type, Int64Type,
-    TimestampMicrosecondType,
+    Time64NanosecondType, TimestampMicrosecondType,
 };
 use arrow_array::{Array, RecordBatch};
 use arrow_schema::{DataType, Schema};
@@ -218,6 +218,12 @@ impl CsvEncoder {
                 &self
                     .dt
                     .format_ntz(a.as_primitive::<TimestampMicrosecondType>().value(i))
+                    .map_err(write_err)?,
+            ),
+            (Kind::Time, _) => buf.push_str(
+                &self
+                    .dt
+                    .format_time(a.as_primitive::<Time64NanosecondType>().value(i))
                     .map_err(write_err)?,
             ),
             (Kind::YearMonth(..) | Kind::DayTime(..), _) => {

@@ -19,6 +19,8 @@
 pub(crate) mod codec;
 mod datetime;
 pub(crate) mod reader;
+#[cfg(test)]
+pub(crate) mod time_golden;
 
 use std::borrow::Cow;
 use std::sync::Arc;

@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Dates and timestamps as text for the text formats: the session time
 //! zone, Spark's default grammars and the `dateFormat` / `timestampFormat` /
-//! `timestampNTZFormat` patterns.
+//! `timestampNTZFormat` / `timeFormat` patterns.
 
 use krishiv_common::error::KrishivError;
+use krishiv_kernels::cast::{format_time, parse_time};
 use krishiv_kernels::datetime::{ZoneRef, resolve_zone, zone_id};
 use krishiv_kernels::datetime_pattern::{DateTimePattern, Purpose, Zone};
 use krishiv_kernels::text::{
@@ -17,6 +18,10 @@ const DATE_PATTERN: &str = "yyyy-MM-dd";
 const TIMESTAMP_PATTERN: &str = "yyyy-MM-dd'T'HH:mm:ss[.SSS][XXX]";
 const NTZ_PATTERN: &str = "yyyy-MM-dd'T'HH:mm:ss[.SSS]";
 
+/// Microseconds in a day, and nanoseconds in a microsecond.
+const MICROS_PER_DAY: i64 = 86_400_000_000;
+const NANOS_PER_MICRO: i64 = 1_000;
+
 /// Dates and timestamps as text in one session time zone.
 #[derive(Debug)]
 pub(crate) struct Datetimes {
@@ -27,6 +32,9 @@ pub(crate) struct Datetimes {
     date: Option<DateTimePattern>,
     timestamp: Option<DateTimePattern>,
     ntz: Option<DateTimePattern>,
+    /// `timeFormat`: unset reads Spark's `TIME` grammar and writes the value's
+    /// own digits (Spark 4.3.0, `tests/fixtures/spark-4.3.0/time-file-reads.json`).
+    time: Option<DateTimePattern>,
     /// Today in the session zone, for a bare time of day.
     today: i32,
     fallback_date: bool,
@@ -63,6 +71,10 @@ impl Datetimes {
         let date = pattern("dateFormat", DATE_PATTERN)?;
         let timestamp = pattern("timestampFormat", TIMESTAMP_PATTERN)?;
         let ntz = pattern("timestampNTZFormat", NTZ_PATTERN)?;
+        let time = o
+            .str("timeFormat")
+            .map(|p| DateTimePattern::new(p, purpose))
+            .transpose()?;
         let explicit = o.bool("enableDateTimeParsingFallback");
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -78,6 +90,7 @@ impl Datetimes {
             date,
             timestamp,
             ntz,
+            time,
         })
     }
 
@@ -140,6 +153,33 @@ impl Datetimes {
                 Ok(spark_string_to_timestamp_ntz(s))
             }
             other => Ok(other),
+        }
+    }
+
+    /// A `TIME` (nanoseconds since midnight) from text: `timeFormat` exactly
+    /// when set (no fallback to the default grammar), else Spark's `TIME`
+    /// grammar, as `CAST(text AS TIME)`.
+    ///
+    /// # Errors
+    /// A text the pattern refuses with an error of its own.
+    pub(crate) fn parse_time(&self, s: &str) -> Result<Option<i64>, KrishivError> {
+        match &self.time {
+            Some(p) => Ok(p
+                .parse_local(s, false)?
+                .map(|m| m.rem_euclid(MICROS_PER_DAY).wrapping_mul(NANOS_PER_MICRO))),
+            None => Ok(parse_time(s)),
+        }
+    }
+
+    /// `nanos` (a `TIME`) as text: `timeFormat` when set, else `HH:mm:ss` with
+    /// the fraction's own digits.
+    ///
+    /// # Errors
+    /// A value the pattern cannot show.
+    pub(crate) fn format_time(&self, nanos: i64) -> Result<String, KrishivError> {
+        match &self.time {
+            Some(p) => p.format_local(nanos.div_euclid(NANOS_PER_MICRO)),
+            None => Ok(format_time(nanos)),
         }
     }
 

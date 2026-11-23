@@ -113,6 +113,7 @@ static SPECS: LazyLock<Vec<OptionSpec>> = LazyLock::new(|| {
         string("dateFormat", "The pattern of DATE values (default: Spark's lenient grammar).");
         string("timestampFormat", "The pattern of TIMESTAMP values.");
         string("timestampNTZFormat", "The pattern of TIMESTAMP_NTZ values.");
+        string("timeFormat", "The pattern of TIME values (default: Spark's TIME grammar to read, the value's own digits to write).");
         conf("timeZone", OptionKind::String, OptionDefault::Str("UTC"), "spark.sql.session.timeZone", "The time zone of timestamps without an offset.");
         conf("binaryOutputStyle", OptionKind::String, OptionDefault::Str("HEX_DISCRETE"), "spark.sql.binaryOutputStyle", "Write: how a BINARY value prints (UTF-8, BASIC, BASE64, HEX or HEX_DISCRETE).");
         string("encoding", "The charset: UTF-8, ISO-8859-1 or US-ASCII.");

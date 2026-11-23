@@ -6,7 +6,7 @@
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
     Date32Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type, Int64Type,
-    TimestampMicrosecondType,
+    Time64NanosecondType, TimestampMicrosecondType,
 };
 use arrow_array::{Array, RecordBatch};
 use arrow_schema::{DataType, Schema};
@@ -167,6 +167,12 @@ impl JsonEncoder {
             (Kind::Timestamp, _) => {
                 let s = dt
                     .format_timestamp(a.as_primitive::<TimestampMicrosecondType>().value(i))
+                    .map_err(write_err)?;
+                push_quoted(buf, &s);
+            }
+            (Kind::Time, _) => {
+                let s = dt
+                    .format_time(a.as_primitive::<Time64NanosecondType>().value(i))
                     .map_err(write_err)?;
                 push_quoted(buf, &s);
             }
