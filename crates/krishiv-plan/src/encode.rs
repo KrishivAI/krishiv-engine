@@ -938,7 +938,7 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 };
                 self.u8(tag);
                 if let JoinKind::Existence(id) = kind {
-                    self.put(&id.0.to_le_bytes());
+                    self.attr_id(id.0);
                 }
                 match condition {
                     JoinCondition::None => self.u8(0),
@@ -996,7 +996,7 @@ impl<'k, 'a> Encoder<'k, 'a> {
             }) => {
                 self.str(name);
                 self.len(source.len());
-                source.iter().for_each(|id| self.put(&id.0.to_le_bytes()));
+                source.iter().for_each(|id| self.attr_id(id.0));
                 self.len(output.len());
                 output.iter().for_each(|c| self.bound(c));
             }
@@ -1394,15 +1394,20 @@ impl<'k, 'a> Encoder<'k, 'a> {
         }
     }
 
-    fn bound(&mut self, c: &BoundColumn) {
+    /// Encodes an attribute id: raw, or by order of first meeting when ids are compared by position.
+    fn attr_id(&mut self, raw: u64) {
         let id = match &mut self.keys.renumber {
             Some(seen) => {
                 let next = seen.len() as u64;
-                *seen.entry(c.id.0).or_insert(next)
+                *seen.entry(raw).or_insert(next)
             }
-            None => c.id.0,
+            None => raw,
         };
         self.put(&id.to_le_bytes());
+    }
+
+    fn bound(&mut self, c: &BoundColumn) {
+        self.attr_id(c.id.0);
         self.str(&c.name);
         self.data_type(&c.data_type);
         self.bool(c.nullable);

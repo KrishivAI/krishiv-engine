@@ -336,6 +336,8 @@ impl Resolver<'_> {
             carriers.insert(id, vec![shown]);
         }
         res.carriers = Arc::new(carriers);
+        // The result reads whatever either input reads from the enclosing query.
+        res.outer = [l.outer, r.outer].into_iter().flatten().min();
         Ok(res)
     }
 }
