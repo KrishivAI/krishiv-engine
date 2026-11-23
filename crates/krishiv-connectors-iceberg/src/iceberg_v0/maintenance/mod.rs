@@ -87,6 +87,41 @@ const REMOVE_ORPHAN_FILES: &[ProcedureParameter] = &[
     opt("stream_results", T::Boolean),
 ];
 
+/// Spark's candidate order of each procedure's parameter names (`Seq(..).toSet.toSeq` in Scala
+/// 2.13, printed by a Spark 4.1.0 + Iceberg 1.12.0 run, 2026-11-23, and checked through the
+/// proposals of an equidistant unknown name). `rewrite_manifests` has four names: its signature
+/// order.
+const EXPIRE_SNAPSHOTS_ORDER: &[&str] = &[
+    "stream_results",
+    "clean_expired_metadata",
+    "older_than",
+    "max_concurrent_deletes",
+    "table",
+    "retain_last",
+    "snapshot_ids",
+];
+const REWRITE_DATA_FILES_ORDER: &[&str] = &[
+    "branch",
+    "options",
+    "strategy",
+    "where",
+    "sort_order",
+    "table",
+];
+const REMOVE_ORPHAN_FILES_ORDER: &[&str] = &[
+    "prefix_listing",
+    "location",
+    "stream_results",
+    "equal_schemes",
+    "file_list_view",
+    "dry_run",
+    "equal_authorities",
+    "max_concurrent_deletes",
+    "table",
+    "prefix_mismatch_mode",
+    "older_than",
+];
+
 /// The procedures of an Iceberg catalog's `system` namespace.
 const NAMES: [&str; 4] = [
     "expire_snapshots",
@@ -154,6 +189,15 @@ impl Procedure for Maintenance {
             "rewrite_manifests" => REWRITE_MANIFESTS,
             "rewrite_data_files" => REWRITE_DATA_FILES,
             _ => REMOVE_ORPHAN_FILES,
+        }
+    }
+
+    fn name_order(&self) -> Vec<&str> {
+        match self.name {
+            "expire_snapshots" => EXPIRE_SNAPSHOTS_ORDER.to_vec(),
+            "rewrite_data_files" => REWRITE_DATA_FILES_ORDER.to_vec(),
+            "remove_orphan_files" => REMOVE_ORPHAN_FILES_ORDER.to_vec(),
+            _ => self.parameters().iter().map(|p| p.name).collect(),
         }
     }
 

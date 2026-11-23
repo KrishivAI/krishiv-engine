@@ -313,6 +313,10 @@ result. Pending, not stubbed: MERGE through SQL. See
   removed snapshot reached, every kept snapshot reached and the decoded manifests' paths in memory, uncharged to any
   pool (each manifest is capped by `krishiv.catalog.maxMetadataBytes`, the sum is not), as Java's
   `ReachableFileCleanup` holds its sets. Follow-up: charge the sets to the procedure's pool or walk in bounded batches.
+- **Expire and gzip metadata (review of #983):** `maintenance/expire.rs` `checked_load` parses the `metadata.json` an
+  answer names as plain JSON, so a table written with `write.metadata.compression-codec=gzip` (`*.gz.metadata.json`) is
+  refused with the "snapshot list that differs from its metadata file" text (safe: nothing is committed or deleted)
+  until gzip metadata is read.
 - `statistics()` takes no filter: the row estimate sums every live file, not the files left after pruning.
 - A deletion vector is read at the length its manifest declares (`deletes.rs` `read_dv`) without the
   `krishiv.catalog.maxMetadataBytes` cap the metadata files get; its memory is charged to the query (the decode's transient copy aside; review of the

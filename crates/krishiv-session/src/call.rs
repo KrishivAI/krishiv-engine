@@ -18,7 +18,7 @@ use krishiv_common::error::{
 use krishiv_plan::procedure::{
     ProcedureContext, ProcedureParameter, ProcedureType, ProcedureValue,
 };
-use krishiv_sql::ast::{Call, DdlName, Expr, ExprKind};
+use krishiv_sql::ast::{BinaryOp, Call, DdlName, Expr, ExprKind, Literal};
 
 use crate::dataframe::DataFrame;
 use crate::session::Session;
@@ -89,10 +89,11 @@ impl Session {
         let slots = rearrange(
             &quote(loaded.name()),
             loaded.parameters(),
+            &loaded.name_order(),
             call,
             case_sensitive,
         )?;
-        refuse_subqueries(call)?;
+        refuse_unbindable(call)?;
         // The casts run in a clone with ANSI on: a non-ANSI cast turns a bad value into `NULL`,
         // which a procedure reads as an absent argument (an expire would fall back to its
         // default retention).
@@ -273,20 +274,49 @@ fn value_of(batch: &RecordBatch, ty: ProcedureType) -> Result<ProcedureValue, Kr
     })
 }
 
-/// A subquery in an argument is refused: Spark's `Call` cannot evaluate one (its binding fails
-/// with an internal `IllegalArgumentException`, Spark 4.1.0 + Iceberg 1.12.0 run), and here it
-/// would read another table to decide what the procedure changes.
-fn refuse_subqueries(call: &Call) -> Result<(), KrishivError> {
+/// The arguments Spark's binding cannot take are refused: a subquery, a non-deterministic call
+/// and `+`/`-` with an `INTERVAL` operand. In a Spark 4.1.0 + Iceberg 1.12.0 run each fails
+/// with an internal `IllegalArgumentException` ("number of args and params must match after
+/// binding"); `1 + 1`, `length('abc')`, `current_timestamp()` and `date_sub(current_date(), 5)`
+/// bind. A subquery would also read another table to decide what the procedure changes.
+fn refuse_unbindable(call: &Call) -> Result<(), KrishivError> {
+    const NON_DETERMINISTIC: [&str; 7] = [
+        "rand", "randn", "random", "uuid", "shuffle", "uniform", "randstr",
+    ];
+    let refuse = |what: &str| -> KrishivError {
+        krishiv_common::error::KrishivUnsupportedFeature {
+            feature: format!("{what} in a CALL argument"),
+        }
+        .into()
+    };
+    let is_interval = |e: &Expr| {
+        let mut e = e;
+        while let ExprKind::Nested(inner) = &e.kind {
+            e = inner;
+        }
+        matches!(e.kind, ExprKind::Literal(Literal::Interval(_)))
+    };
     let mut stack: Vec<&Expr> = call.args.iter().map(|a| &a.expr).collect();
     while let Some(e) = stack.pop() {
-        if matches!(
-            e.kind,
-            ExprKind::Subquery(_) | ExprKind::Exists(_) | ExprKind::InSubquery { .. }
-        ) {
-            return Err(krishiv_common::error::KrishivUnsupportedFeature {
-                feature: "a subquery in a CALL argument".to_owned(),
+        match &e.kind {
+            ExprKind::Subquery(_) | ExprKind::Exists(_) | ExprKind::InSubquery { .. } => {
+                return Err(refuse("a subquery"));
             }
-            .into());
+            ExprKind::Function(f)
+                if f.name.parts.last().is_some_and(|n| {
+                    NON_DETERMINISTIC
+                        .iter()
+                        .any(|d| n.value.eq_ignore_ascii_case(d))
+                }) =>
+            {
+                return Err(refuse("a non-deterministic expression"));
+            }
+            ExprKind::Binary(l, BinaryOp::Plus | BinaryOp::Minus, r)
+                if is_interval(l) || is_interval(r) =>
+            {
+                return Err(refuse("datetime arithmetic with an INTERVAL"));
+            }
+            _ => {}
         }
         e.for_each_child(&mut |c| stack.push(c));
     }
@@ -294,17 +324,18 @@ fn refuse_subqueries(call: &Call) -> Result<(), KrishivError> {
 }
 
 /// The names `UNRECOGNIZED_PARAMETER_NAME` proposes: Spark's `orderSuggestedIdentifiersBySimilarity`
-/// over the parameters, the three closest by edit distance between the quoted parameter and the
-/// name as written, ties by the quoted name (matches the Spark 4.1.0 + Iceberg 1.12.0 run).
-fn proposal(name: &str, signature: &[ProcedureParameter]) -> String {
-    let mut ranked: Vec<(usize, String)> = signature
+/// over `name_order` (Spark's candidate order), stably sorted by the edit distance between the
+/// quoted parameter and the name as written, the first three (matches the Spark 4.1.0 + Iceberg
+/// 1.12.0 run).
+fn proposal(name: &str, name_order: &[&str]) -> String {
+    let mut ranked: Vec<(usize, String)> = name_order
         .iter()
         .map(|p| {
-            let q = quote(p.name);
+            let q = quote(p);
             (levenshtein(&q, name), q)
         })
         .collect();
-    ranked.sort();
+    ranked.sort_by_key(|(d, _)| *d);
     ranked
         .into_iter()
         .take(3)
@@ -335,6 +366,7 @@ fn levenshtein(a: &str, b: &str) -> usize {
 fn rearrange(
     routine: &str,
     signature: &[ProcedureParameter],
+    name_order: &[&str],
     call: &Call,
     case_sensitive: bool,
 ) -> Result<Vec<Option<usize>>, KrishivError> {
@@ -385,7 +417,7 @@ fn rearrange(
             return Err(UnrecognizedParameterName {
                 routine_name: routine.to_owned(),
                 argument_name: param(name),
-                proposal: proposal(name, signature),
+                proposal: proposal(name, name_order),
             }
             .into());
         }

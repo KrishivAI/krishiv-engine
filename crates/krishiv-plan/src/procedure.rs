@@ -99,6 +99,14 @@ pub trait Procedure: fmt::Debug + Send + Sync {
     /// The parameters, in positional order.
     fn parameters(&self) -> &[ProcedureParameter];
 
+    /// The parameter names in the order Spark lists them as candidates for
+    /// `UNRECOGNIZED_PARAMETER_NAME`: `parameterNamesSet.toSeq`, a Scala immutable `Set`'s order,
+    /// which is insertion order up to four names and hash order beyond. Ties of edit distance
+    /// keep this order. The default is the signature's order (right for four names or fewer).
+    fn name_order(&self) -> Vec<&str> {
+        self.parameters().iter().map(|p| p.name).collect()
+    }
+
     /// Whether it changes the table it names, so the session drops what it cached of it
     /// (Spark's `modifyIcebergTable`, against `withIcebergTable`).
     fn modifies_table(&self) -> bool;

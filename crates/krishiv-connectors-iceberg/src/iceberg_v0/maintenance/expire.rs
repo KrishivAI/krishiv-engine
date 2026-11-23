@@ -631,8 +631,20 @@ pub(crate) async fn expire(
         attempts += 1;
         match table.commit(requirements, updates).await {
             CommitOutcome::Committed(_) => {
-                // The valid side is a checked reload, never the commit's answer as sent.
-                let after = checked_load(table, io, max_metadata_bytes).await?;
+                // The valid side is a checked reload, never the commit's answer as sent. If it
+                // fails, the snapshots are already removed: the error stands (Java fails the
+                // action there too), and the log says only the file cleanup was skipped (a re-run
+                // finds nothing to expire; the files are orphans for `remove_orphan_files`).
+                let after = checked_load(table, io, max_metadata_bytes)
+                    .await
+                    .inspect_err(|e| {
+                        tracing::warn!(
+                            table = %name,
+                            snapshots = ?planned.snapshots,
+                            error = %e,
+                            "expire_snapshots committed; its file cleanup was skipped"
+                        );
+                    })?;
                 let deleted = cleanup(io, &start, &after, max_metadata_bytes, concurrency).await?;
                 return Ok(Expired { deleted });
             }

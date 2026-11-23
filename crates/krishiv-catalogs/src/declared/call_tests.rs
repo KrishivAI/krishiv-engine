@@ -367,3 +367,97 @@ fn binding_follows_spark() {
         "{e}"
     );
 }
+
+/// Ties of edit distance keep Spark's candidate order (`parameterNamesSet.toSeq`): from a
+/// Spark 4.1.0 + Iceberg 1.12.0 run, a name of 30 `z`s (equally far from every parameter)
+/// proposes each procedure's first three, and `x` on `rewrite_manifests` ties `spec_id` with
+/// `sort_by` in signature order (review of #983).
+#[test]
+fn proposal_ties_keep_spark_candidate_order() {
+    let server = empty();
+    let s = session(&server, None);
+    let z = "z".repeat(30);
+    for (procedure, name, want) in [
+        (
+            "expire_snapshots",
+            z.as_str(),
+            "[`stream_results` `clean_expired_metadata` `older_than`]",
+        ),
+        (
+            "rewrite_manifests",
+            z.as_str(),
+            "[`table` `use_caching` `spec_id`]",
+        ),
+        (
+            "rewrite_data_files",
+            z.as_str(),
+            "[`branch` `options` `strategy`]",
+        ),
+        (
+            "remove_orphan_files",
+            z.as_str(),
+            "[`prefix_listing` `location` `stream_results`]",
+        ),
+        ("rewrite_manifests", "x", "[`table` `spec_id` `sort_by`]"),
+    ] {
+        let e = call(
+            &s,
+            &format!("CALL lake.system.{procedure}(table => 'db.t', {name} => 1)"),
+        );
+        assert_eq!(e.error_class(), ErrorClass::UnrecognizedParameterName);
+        assert!(e.to_string().contains(want), "{procedure} {name}: {e}");
+    }
+}
+
+/// The argument shapes Spark's binding cannot take (an internal error in the Spark 4.1.0 +
+/// Iceberg 1.12.0 run) are refused; the ones it binds go on to the table.
+#[test]
+fn arguments_spark_cannot_bind_are_refused() {
+    let server = empty();
+    let s = session(&server, None);
+    for (arg, what) in [
+        (
+            "retain_last => CAST(rand() * 10 AS INT) + 1",
+            "non-deterministic",
+        ),
+        (
+            "retain_last => CAST(uuid() IS NOT NULL AS INT)",
+            "non-deterministic",
+        ),
+        (
+            "older_than => TIMESTAMP '2020-01-01 00:00:00' + INTERVAL 1 DAY",
+            "INTERVAL",
+        ),
+        (
+            "older_than => current_timestamp() - (INTERVAL 5 DAYS)",
+            "INTERVAL",
+        ),
+    ] {
+        let e = call(
+            &s,
+            &format!("CALL lake.system.expire_snapshots(table => 'db.missing', {arg})"),
+        );
+        assert_eq!(
+            e.error_class(),
+            ErrorClass::KrishivUnsupportedFeature,
+            "{arg}: {e}"
+        );
+        assert!(e.to_string().contains(what), "{arg}: {e}");
+    }
+    for arg in [
+        "retain_last => 1 + 1",
+        "retain_last => length('abc')",
+        "older_than => current_timestamp()",
+        "older_than => date_sub(current_date(), 5)",
+    ] {
+        let e = call(
+            &s,
+            &format!("CALL lake.system.expire_snapshots(table => 'db.missing', {arg})"),
+        );
+        assert_eq!(
+            e.error_class(),
+            ErrorClass::KrishivIcebergProcedureTableNotFound,
+            "{arg}: {e}"
+        );
+    }
+}
