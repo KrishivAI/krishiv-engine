@@ -126,7 +126,7 @@ _str = str
 
 def col(col: str) -> Column:
     """The column named ``col`` (``a``, ``t.a``, ``*``)."""
-    return Column(_native.col(col))
+    return Column(_native.col(col), col)
 
 
 column = col

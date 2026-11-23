@@ -71,6 +71,8 @@ _SHOW_MAX = 2**31 - 17
 
 #: The session key of the notebook preview size, as Spark's ``spark.sql.repl.eagerEval.maxNumRows``.
 EAGER_MAX_ROWS_KEY = "spark.sql.repl.eagerEval.maxNumRows"
+#: The session key that turns the notebook preview on, as Spark's ``spark.sql.repl.eagerEval.enabled`` (off by default).
+EAGER_ENABLED_KEY = "spark.sql.repl.eagerEval.enabled"
 
 #: The preview size when the key is unset or not a number, as Spark's default of 20.
 EAGER_DEFAULT_MAX_ROWS = 20
@@ -189,13 +191,13 @@ class DataFrame:
     # Column access.
     def __getitem__(self, item: Any) -> Any:
         if isinstance(item, str):
-            return Column(self._df.col(item))
+            return Column(self._df.col(item), item)
         if isinstance(item, Column):
             return self.filter(item)
         if isinstance(item, list | tuple):
             return self.select(*item)
         if isinstance(item, int):
-            return Column(self._df.col(self.columns[item]))
+            return Column(self._df.col(self.columns[item]), self.columns[item])
         raise not_expected_type("item", "int, str, Column, list or tuple", item)
 
     def __getattr__(self, name: str) -> Column:
@@ -207,8 +209,11 @@ class DataFrame:
         if name == "writeStream":  # the property raised an AttributeError: Python lands here
             raise not_implemented_attribute("DataFrame.writeStream (streaming)")
         if name.startswith("_") or name not in self.columns:
-            raise PySparkAttributeError(f"'DataFrame' object has no attribute '{name}'")
-        return Column(self._df.col(name))
+            raise PySparkAttributeError(
+                errorClass="ATTRIBUTE_NOT_SUPPORTED",
+                messageParameters={"attr_name": name},
+            )
+        return Column(self._df.col(name), name)
 
     # Transformations.
     def _new(self, native: _native.DataFrame) -> DataFrame:
@@ -221,9 +226,13 @@ class DataFrame:
         return f"DataFrame[{fields}]"
 
     def _repr_html_(self) -> str | None:
-        """The first ``spark.sql.repl.eagerEval.maxNumRows`` rows (default 20) as an HTML table,
-        for notebooks: column names and types in the header, HTML-escaped values. Without
+        """With ``spark.sql.repl.eagerEval.enabled`` on (off by default, as in Spark; otherwise ``None``
+        and the notebook shows :meth:`__repr__`), the first ``spark.sql.repl.eagerEval.maxNumRows`` rows
+        (default 20) as an HTML table, for notebooks: column names and types in the header, HTML-escaped values. Without
         pyarrow there is no preview, so ``None`` (the notebook falls back to :meth:`__repr__`)."""
+        enabled = self._session.conf.get(EAGER_ENABLED_KEY, "false")
+        if enabled is None or enabled != "true":
+            return None
         try:
             _convert.require_pyarrow("_repr_html_")
         except ImportError:
@@ -247,7 +256,7 @@ class DataFrame:
             if isinstance(c, _RegexColumn):
                 picked.extend(q._c for q in c._expand())
             else:
-                picked.append(_named(c))
+                picked.append(_named(c, "col"))
         return self._new(self._df.select(picked))
 
     def selectExpr(self, *expr: str | list[str]) -> DataFrame:
@@ -437,7 +446,10 @@ class DataFrame:
         >>> df.groupBy("name").agg(F.avg("age")).orderBy("name").collect()
         [Row(name='Alice', avg(age)=2.0), Row(name='Bob', avg(age)=5.0)]
         """
-        return GroupedData(self._df.group_by([_named(c) for c in _flatten(cols)]), self)
+        keys = _flatten(cols)
+        grouped = GroupedData(self._df.group_by([_named(c) for c in keys]), self)
+        grouped._keys = tuple(Column(_named(k), k) if isinstance(k, str) else k for k in keys)
+        return grouped
 
     groupby = groupBy
 
@@ -2055,7 +2067,9 @@ class DataFrame:
             raise not_expected_type("truncate", "bool or int", truncate)
         rows = min(max(n, 0), _SHOW_MAX)  # Spark's bounds: MAX_ROUNDED_ARRAY_LENGTH - 1
         cells = _convert.table_cells(self.limit(rows + 1)._shown()._arrow("show"), self._session_zone())
-        print(_convert.show_string(self.columns, cells, rows, truncate, vertical), end="")
+        print(
+            _convert.show_string(self.columns, cells, rows, truncate, vertical)
+        )  # the text ends in "\n": one empty line, as PySpark
 
     def _shown(self) -> DataFrame:
         """This frame with its interval columns as text, cast by the engine, which knows their fields."""

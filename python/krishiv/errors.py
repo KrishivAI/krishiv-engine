@@ -65,6 +65,7 @@ _TEMPLATES = {
     "NO_ACTIVE_OR_DEFAULT_SESSION": (
         "No active or default Spark session found. Please create a new Spark session before running the code."
     ),
+    "ATTRIBUTE_NOT_SUPPORTED": "Attribute `<attr_name>` is not supported.",
     "NOT_EXPECTED_TYPE": "Argument `<arg_name>` should be <expected_type>, got <arg_type>.",
     "CANNOT_CONVERT_COLUMN_INTO_BOOL": (
         "Cannot convert column into bool: please use '&' for 'and', '|' for 'or', "
@@ -327,6 +328,14 @@ def _context_from_native(raw: Any) -> QueryContext:
     )
 
 
+# The SQLSTATE PySpark's error reader gives these classes (error-conditions.json), used when a raise
+# site names none, so every raise of the class carries it.
+_SQL_STATE_OF_CLASS: dict[str, str] = {
+    "NOT_EXPECTED_TYPE": "42K09",
+    "ATTRIBUTE_NOT_SUPPORTED": "0A000",
+}
+
+
 class PySparkException(Exception):
     """Base of all Krishiv errors (``pyspark.errors.PySparkException``)."""
 
@@ -348,6 +357,8 @@ class PySparkException(Exception):
         self._error_class = errorClass
         self._message_parameters = messageParameters
         self._contexts = [c if isinstance(c, QueryContext) else _context_from_native(c) for c in contexts or []]
+        if sqlState is None and errorClass is not None:
+            sqlState = _SQL_STATE_OF_CLASS.get(errorClass)
         self._sql_state = sqlState
         self._rendered = rendered
 

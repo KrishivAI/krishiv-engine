@@ -673,6 +673,92 @@ jobs:
           KRISHIV_CONNECT_URL: sc://127.0.0.1:15002
         run: cargo test --locked --manifest-path tests/rust-client/Cargo.toml -- --ignored --skip blocked_ --test-threads=1
 
+  # Spark's own PySpark Connect tests against `krishiv server` (P3-T030, PR-01/PR-01b). Downloaded
+  # test code runs here, in the hosted-runner sandbox only. Each version runs the suite, then the
+  # pass-list ratchet against `tests/pyspark/summary/<ver>.json`: a recorded pass that fails fails
+  # the job. `min_rate` is the blocking floor (percent); empty = report-only. 4.0.5 and 4.1.4 take
+  # 75 once the owner freezes the manifest, a first run is committed AND the denominator excludes the
+  # run's JVM-only conditional skips (this job passes no --oracle-junit; `ratchet` refuses --min-rate
+  # whenever `counts.skip > 0`, even with oracle exclusions: the run must have no remaining skips before
+  # the floor is enabled); 3.5.7 stays report-only.
+  pyspark-suite:
+    if: needs.guard.outputs.go == 'true' && github.repository == 'KrishivAI/krishiv-engine'
+    needs: guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    env:
+      RUSTC_WRAPPER: "" # sccache is not installed in this job
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { version: "4.3.0", sha: "98bc0212c947", python: "3.12", deps: "pandas numpy pyarrow", min_rate: "", pyspark: "pyspark[connect]" }
+          - { version: "4.2.1", sha: "617618396087", python: "3.12", deps: "pandas numpy pyarrow", min_rate: "", pyspark: "pyspark[connect]" }
+          - { version: "4.1.4", sha: "45b9b176e6e2", python: "3.12", deps: "pandas numpy pyarrow", min_rate: "", pyspark: "pyspark[connect]" }
+          - { version: "4.0.5", sha: "b472a3aa3c4b", python: "3.12", deps: "pandas numpy pyarrow", min_rate: "", pyspark: "pyspark[connect]" }
+          - { version: "3.5.7", sha: "ed00d046951a", python: "3.11", deps: "pandas<2.3 numpy<2 pyarrow<18", min_rate: "", pyspark: "pyspark[connect]", report_only: "1" }
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Toolchain (from rust-toolchain.toml)
+        run: rustup show active-toolchain
+      - name: protoc
+        run: sudo apt-get install -y --no-install-recommends protobuf-compiler libprotobuf-dev
+      - name: Build the server
+        run: cargo build --locked --release -p krishiv-cli --features server
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      - name: Spark test sources (sparse checkout of the tag)
+        env:
+          VERSION: ${{ matrix.version }}
+          SHA: ${{ matrix.sha }}
+        run: |
+          git clone --no-checkout --filter=blob:none --depth 1 --branch "v${VERSION}" https://github.com/apache/spark.git "$RUNNER_TEMP/spark"
+          git -C "$RUNNER_TEMP/spark" sparse-checkout set python/pyspark/sql/tests python/pyspark/testing python/test_support
+          # The tests are downloaded code: refuse a moved or re-created tag.
+          case "$(git -C "$RUNNER_TEMP/spark" rev-parse "v${VERSION}^{commit}")" in "$SHA"*) ;; *) echo "tag v${VERSION} is not at $SHA"; exit 1 ;; esac
+          git -C "$RUNNER_TEMP/spark" checkout
+      - name: Python venv for the version
+        env:
+          VERSION: ${{ matrix.version }}
+          PYSPARK: ${{ matrix.pyspark }}
+          PYTHON: ${{ matrix.python }}
+          DEPS: ${{ matrix.deps }}
+        run: |
+          uv venv --python "$PYTHON" "$RUNNER_TEMP/venv"
+          uv pip install --python "$RUNNER_TEMP/venv/bin/python" "${PYSPARK}==${VERSION}" pytest pytest-timeout ${DEPS} \
+            grpcio grpcio-status googleapis-common-protos zstandard
+      - name: Run the suite
+        env:
+          VERSION: ${{ matrix.version }}
+        run: |
+          cd tests/scripts
+          # The server's Python workers default to `python3`: put the version venv first on PATH.
+          export PATH="$RUNNER_TEMP/venv/bin:$PATH"
+          "$RUNNER_TEMP/venv/bin/python" -m pyspark_suite run --version "$VERSION" --checkout "$RUNNER_TEMP/spark" \
+            --out "$RUNNER_TEMP/out" --port 15002 --server-cmd "$GITHUB_WORKSPACE/target/release/krishiv" server --port 0 --connect-port 15002
+      # `run --out` leaves the committed summary alone; the ratchet compares the fresh one with it.
+      - name: Pass-list ratchet
+        env:
+          VERSION: ${{ matrix.version }}
+          MIN_RATE: ${{ matrix.min_rate }}
+          REPORT_ONLY: ${{ matrix.report_only }}
+        run: |
+          args=(--version "$VERSION" --current "$RUNNER_TEMP/out/${VERSION}.json")
+          [ -n "$MIN_RATE" ] && args+=(--min-rate "$MIN_RATE")
+          [ -n "$REPORT_ONLY" ] && args+=(--report-only)
+          cd tests/scripts
+          python3 -m pyspark_suite ratchet "${args[@]}"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: pyspark-suite-${{ matrix.version }}
+          path: ${{ runner.temp }}/out
+
   # The vendored Spark Connect protos still equal apache/spark at their tags (P3-T010).
   connect-proto-upstream:
     if: needs.guard.outputs.go == 'true' && github.repository == 'KrishivAI/krishiv-engine'

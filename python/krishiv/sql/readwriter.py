@@ -117,6 +117,7 @@ class DataFrameReader:
         paths = [path] if isinstance(path, str) else list(path)
         schema_json, schema_ddl = self._schema
         native = self._session._native.read(self._format, paths, self._options, schema_json, schema_ddl)
+        native.schema()  # as Spark resolves the relation at the read: a missing path raises here (PY-080)
         return DataFrame(native, self._session)
 
     def parquet(self, *paths: str) -> DataFrame:

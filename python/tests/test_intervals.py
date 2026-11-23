@@ -90,7 +90,7 @@ def test_show_prints_every_family_in_its_fields(spark: SparkSession, capsys: pyt
         "1 days",
         "{k -> INTERVAL '1-1' YEAR TO MONTH}",
     )
-    assert capsys.readouterr().out == f"{rule}|{names}|\n{rule}|{'|'.join(values)}|\n{rule}"
+    assert capsys.readouterr().out == f"{rule}|{names}|\n{rule}|{'|'.join(values)}|\n{rule}\n"
 
 
 def test_show_prints_null_intervals_and_keeps_other_columns(
@@ -98,11 +98,13 @@ def test_show_prints_null_intervals_and_keeps_other_columns(
 ) -> None:
     spark.sql("select cast(null as interval month) a, 1 b, cast(null as interval) a").show()
     assert capsys.readouterr().out == (
-        "+----+---+----+\n|   a|  b|   a|\n+----+---+----+\n|NULL|  1|NULL|\n+----+---+----+\n"
+        "+----+---+----+\n|   a|  b|   a|\n+----+---+----+\n|NULL|  1|NULL|\n+----+---+----+\n\n"
     )
 
 
-def test_repr_html_prints_intervals(spark: SparkSession) -> None:
-    html = spark.sql("select interval '3' month a")._repr_html_()
+def test_repr_html_prints_intervals() -> None:
+    own = SparkSession.builder.create()  # its own session: the key must not leak into the shared one
+    own.conf.set("spark.sql.repl.eagerEval.enabled", "true")
+    html = own.sql("select interval '3' month a")._repr_html_()
     assert html is not None
     assert "INTERVAL &#x27;3&#x27; MONTH" in html or "INTERVAL '3' MONTH" in html

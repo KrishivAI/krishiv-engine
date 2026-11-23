@@ -45,6 +45,13 @@ def _numeric(names: list[str], dtypes: list[tuple[str, str]], strict: bool) -> l
     return out
 
 
+def _truncated(items: list[str], more: str) -> str:
+    """Spark's ``truncatedString`` with two entries shown: ``a, b ... 1 more field(s)``."""
+    if len(items) <= 2:
+        return ", ".join(items)
+    return f"{', '.join(items[:2])} ... {len(items) - 2} more {more}"
+
+
 class GroupedData:
     """The result of :meth:`DataFrame.groupBy`, :meth:`DataFrame.rollup` or :meth:`DataFrame.cube`.
 
@@ -56,6 +63,15 @@ class GroupedData:
         self._source = df
         self._pivoted = False
         self._multi_grouping = False  # rollup, cube or groupingSets: pivot is refused after it
+        self._keys: tuple[Any, ...] = ()  # the grouping expressions, for ``repr``
+
+    def __repr__(self) -> str:
+        """``GroupedData[grouping expressions: [name], value: [name: string, age: bigint], type: GroupBy]``."""
+        names = [k._text if isinstance(k, Column) and k._text is not None else str(k) for k in self._keys]
+        fields = [f"{name}: {type_}" for name, type_ in self._source.dtypes]
+        keys = _truncated(names, "field(s)")
+        values = _truncated(fields, "field" if len(fields) == 3 else "fields")
+        return f"GroupedData[grouping expressions: [{keys}], value: [{values}], type: GroupBy]"
 
     def agg(self, *exprs: Column | dict[str, str]) -> DataFrame:
         """Computes aggregates and returns the result as a :class:`DataFrame`.
