@@ -296,7 +296,10 @@ def test_naive_timestamps_in_a_dst_gap(spark: SparkSession) -> None:
     spark.conf.set("spark.sql.session.timeZone", "America/New_York")
     try:
         frame = pd.DataFrame({"t": pd.to_datetime(["2024-03-10 02:30:00", "2024-11-03 01:30:00"])})
-        assert spark.createDataFrame(frame).count() == 2
+        rows = spark.createDataFrame(frame).collect()
+        assert len(rows) == 2
+        # the gap time becomes the end of the gap (03:00 EDT = 07:00 UTC)
+        assert rows[0][0].astimezone(datetime.timezone.utc).hour == 7
     finally:
         spark.conf.unset("spark.sql.session.timeZone")
 
