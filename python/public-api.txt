@@ -1496,6 +1496,7 @@ def broadcast(df: DataFrame) -> DataFrame
 def bucket(numBuckets: Any, col: ColumnOrName) -> Column
 def call_function(funcName: str, *cols: Any) -> Column
 def call_udf(udfName: str, *cols: ColumnOrName) -> Column
+def cast(col: ColumnOrName, dataType: DataType | str) -> Column
 def col(col: str) -> Column
 def concat(*cols: ColumnOrName) -> Column
 def convert_timezone(sourceTz: Column | None, targetTz: Column, sourceTs: ColumnOrName) -> Column

@@ -572,6 +572,22 @@ def cardinality(col: ColumnOrName) -> Column
 
 Calls the registry function `cardinality`.
 
+### `cast`
+
+```python
+def cast(col: ColumnOrName, dataType: DataType | str) -> Column
+```
+
+`col` cast to `dataType` (a `DataType` or a DDL string), as `pyspark.sql.functions.cast`.
+
+**Examples**
+
+```python
+>>> df = spark.createDataFrame([("1",), ("2",)], ["a"])
+>>> df.select(F.cast("a", "int").alias("a")).collect()
+[Row(a=1), Row(a=2)]
+```
+
 ### `cbrt`
 
 ```python

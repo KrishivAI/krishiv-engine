@@ -47,6 +47,7 @@ _HAND_WRITTEN = [
     "bucket",
     "call_function",
     "call_udf",
+    "cast",
     "col",
     "column",
     "concat",
@@ -130,6 +131,18 @@ def col(col: str) -> Column:
 
 
 column = col
+
+
+def cast(col: ColumnOrName, dataType: DataType | str) -> Column:
+    """``col`` cast to ``dataType`` (a ``DataType`` or a DDL string), as ``pyspark.sql.functions.cast``.
+
+    Examples
+    --------
+    >>> df = spark.createDataFrame([("1",), ("2",)], ["a"])
+    >>> df.select(F.cast("a", "int").alias("a")).collect()
+    [Row(a=1), Row(a=2)]
+    """
+    return (col if isinstance(col, Column) else Column(_named(col))).cast(dataType)
 
 
 def lit(col: Any) -> Column:
