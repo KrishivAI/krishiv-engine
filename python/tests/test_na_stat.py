@@ -63,7 +63,7 @@ def rows(df: DataFrame) -> list[tuple[Any, ...]]:
 
 def assert_shows(df: DataFrame, expected: str, capsys: pytest.CaptureFixture[str]) -> None:
     df.show()
-    assert capsys.readouterr().out == textwrap.dedent(expected).lstrip("\n")
+    assert capsys.readouterr().out == textwrap.dedent(expected).lstrip("\n") + "\n"  # PY-079: the empty line
 
 
 @contextlib.contextmanager
@@ -168,7 +168,7 @@ def failing_examples(method: Any, spark: SparkSession) -> list[str]:
             failed.append(example.source.strip())
 
     test = doctest.DocTestParser().get_doctest(method.__doc__, {"spark": spark}, method.__name__, None, 0)
-    Runner(verbose=False).run(test, out=lambda _: None)
+    Runner(verbose=False, optionflags=doctest.NORMALIZE_WHITESPACE).run(test, out=lambda _: None)
     assert test.examples
     return failed
 

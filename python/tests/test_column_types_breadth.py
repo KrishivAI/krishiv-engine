@@ -255,7 +255,7 @@ def test_docstring_examples_run_as_documented(spark: SparkSession) -> None:
         assert method.__doc__
         test = doctest.DocTestParser().get_doctest(method.__doc__, {"spark": spark}, name, None, 0)
         assert test.examples
-        runner = doctest.DocTestRunner(verbose=False)
+        runner = doctest.DocTestRunner(verbose=False, optionflags=doctest.NORMALIZE_WHITESPACE)
         runner.run(test, out=lambda _: None)
         assert runner.failures == 0, name
         assert runner.tries > 0, name
@@ -641,7 +641,8 @@ def test_empty_dataframe(spark: SparkSession, capsys: Any) -> None:
     assert capsys.readouterr().out.splitlines() == [
         "root",
         " |-- name: string (nullable = true)",
-        " |-- age: int (nullable = true)",
+        " |-- age: integer (nullable = true)",
+        "",
     ]
     assert spark.emptyDataFrame("name STRING, age INT").columns == ["name", "age"]
     with pytest.raises(errors.PySparkTypeError):

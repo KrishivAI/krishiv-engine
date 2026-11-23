@@ -49,6 +49,13 @@ class GroupedData:
     def __init__(self, native: _native.GroupedData, df: DataFrame) -> None:
         self._grouped = native
         self._source = df
+        self._keys: tuple[Any, ...] = ()  # the grouping expressions, for ``repr``
+
+    def __repr__(self) -> str:
+        """``GroupedData[grouping expressions: [name], value: [name: string, age: bigint], type: GroupBy]``."""
+        keys = ", ".join(k._text if isinstance(k, Column) and k._text is not None else str(k) for k in self._keys)
+        values = ", ".join(f"{name}: {type_}" for name, type_ in self._source.dtypes)
+        return f"GroupedData[grouping expressions: [{keys}], value: [{values}], type: GroupBy]"
 
     def agg(self, *exprs: Column | dict[str, str]) -> DataFrame:
         """Computes aggregates and returns the result as a :class:`DataFrame`.

@@ -300,6 +300,45 @@ def show_string(names: list[str], rows: list[list[str]], n: int, truncate: bool 
     return "\n".join(lines) + "\n"
 
 
+def _tree_type_name(dt: Any) -> str:
+    """The type name Spark's tree string prints (``integer``, ``long``, ``decimal(10,2)``, ``array``)."""
+    from krishiv.sql.types import DayTimeIntervalType, DecimalType, YearMonthIntervalType
+
+    if isinstance(dt, DecimalType | DayTimeIntervalType | YearMonthIntervalType):
+        return dt.simpleString()
+    return dt.typeName()
+
+
+def tree_string(schema: Any) -> str:
+    """``DataFrame.printSchema``'s text, as Spark's ``treeString``: the type names are ``integer`` and ``long``,
+    nested types are a tree, and the text ends with an empty line."""
+    from krishiv.sql.types import ArrayType, MapType, StructType
+
+    lines = ["root"]
+
+    def nested(dt: Any, prefix: str) -> None:
+        if isinstance(dt, ArrayType):
+            lines.append(
+                f"{prefix}-- element: {_tree_type_name(dt.elementType)} (containsNull = {str(dt.containsNull).lower()})"
+            )
+            nested(dt.elementType, prefix + "    |")
+        elif isinstance(dt, MapType):
+            lines.append(f"{prefix}-- key: {_tree_type_name(dt.keyType)}")
+            nested(dt.keyType, prefix + "    |")
+            nulls = str(dt.valueContainsNull).lower()
+            lines.append(f"{prefix}-- value: {_tree_type_name(dt.valueType)} (valueContainsNull = {nulls})")
+            nested(dt.valueType, prefix + "    |")
+        elif isinstance(dt, StructType):
+            for f in dt.fields:
+                lines.append(
+                    f"{prefix}-- {f.name}: {_tree_type_name(f.dataType)} (nullable = {str(f.nullable).lower()})"
+                )
+                nested(f.dataType, prefix + "    |")
+
+    nested(schema, " |")
+    return "\n".join(lines) + "\n"
+
+
 def repr_html_string(columns: list[tuple[str, str]], rows: list[list[str]]) -> str:
     """The HTML table ``DataFrame._repr_html_`` returns: one header row of column names, one of
     their types, then one row per preview row. Everything is HTML-escaped, so values cannot

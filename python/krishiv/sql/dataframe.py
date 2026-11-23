@@ -155,20 +155,18 @@ class DataFrame:
         return [(name, type_) for name, type_, _ in self._df.schema()]
 
     def printSchema(self) -> None:
-        print("root")
-        for name, type_, nullable in self._df.schema():
-            print(f" |-- {name}: {type_} (nullable = {str(nullable).lower()})")
+        print(_convert.tree_string(self.schema))
 
     # Column access.
     def __getitem__(self, item: Any) -> Any:
         if isinstance(item, str):
-            return Column(self._df.col(item))
+            return Column(self._df.col(item), item)
         if isinstance(item, Column):
             return self.filter(item)
         if isinstance(item, list | tuple):
             return self.select(*item)
         if isinstance(item, int):
-            return Column(self._df.col(self.columns[item]))
+            return Column(self._df.col(self.columns[item]), self.columns[item])
         raise not_expected_type("item", "int, str, Column, list or tuple", item)
 
     def __getattr__(self, name: str) -> Column:
@@ -182,7 +180,7 @@ class DataFrame:
                 errorClass="ATTRIBUTE_NOT_SUPPORTED",
                 messageParameters={"attr_name": name},
             )
-        return Column(self._df.col(name))
+        return Column(self._df.col(name), name)
 
     # Transformations.
     def _new(self, native: _native.DataFrame) -> DataFrame:
@@ -386,7 +384,10 @@ class DataFrame:
         return self._df.is_cached()
 
     def groupBy(self, *cols: ColumnsOrNames) -> GroupedData:
-        return GroupedData(self._df.group_by([_named(c) for c in _flatten(cols)]), self)
+        keys = _flatten(cols)
+        grouped = GroupedData(self._df.group_by([_named(c) for c in keys]), self)
+        grouped._keys = tuple(Column(_named(k), k) if isinstance(k, str) else k for k in keys)
+        return grouped
 
     groupby = groupBy
 
@@ -1945,7 +1946,9 @@ class DataFrame:
             raise not_expected_type("truncate", "bool or int", truncate)
         rows = min(max(n, 0), _SHOW_MAX)  # Spark's bounds: MAX_ROUNDED_ARRAY_LENGTH - 1
         cells = _convert.table_cells(self.limit(rows + 1)._shown()._arrow(), self._session_zone())
-        print(_convert.show_string(self.columns, cells, rows, truncate, vertical), end="")
+        print(
+            _convert.show_string(self.columns, cells, rows, truncate, vertical)
+        )  # the text ends in "\n": one empty line, as PySpark
 
     def _shown(self) -> DataFrame:
         """This frame with its interval columns as text, cast by the engine, which knows their fields."""

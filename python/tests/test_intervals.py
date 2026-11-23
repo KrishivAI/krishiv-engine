@@ -90,7 +90,7 @@ def test_show_prints_every_family_in_its_fields(spark: SparkSession, capsys: pyt
         "1 days",
         "{k -> INTERVAL '1-1' YEAR TO MONTH}",
     )
-    assert capsys.readouterr().out == f"{rule}|{names}|\n{rule}|{'|'.join(values)}|\n{rule}"
+    assert capsys.readouterr().out == f"{rule}|{names}|\n{rule}|{'|'.join(values)}|\n{rule}\n"
 
 
 def test_show_prints_null_intervals_and_keeps_other_columns(
@@ -98,7 +98,7 @@ def test_show_prints_null_intervals_and_keeps_other_columns(
 ) -> None:
     spark.sql("select cast(null as interval month) a, 1 b, cast(null as interval) a").show()
     assert capsys.readouterr().out == (
-        "+----+---+----+\n|   a|  b|   a|\n+----+---+----+\n|NULL|  1|NULL|\n+----+---+----+\n"
+        "+----+---+----+\n|   a|  b|   a|\n+----+---+----+\n|NULL|  1|NULL|\n+----+---+----+\n\n"
     )
 
 

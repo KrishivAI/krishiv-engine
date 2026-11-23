@@ -61,3 +61,68 @@ def test_not_expected_type_state_comes_from_the_class(spark: SparkSession) -> No
         spark.read.schema(5)  # ty: ignore[invalid-argument-type]
     assert e.value.getCondition() == "NOT_EXPECTED_TYPE"
     assert e.value.getSqlState() == "42K09"
+
+
+def test_print_schema_is_sparks_tree(spark: SparkSession, capsys: pytest.CaptureFixture[str]) -> None:
+    """PY-040: ``integer``/``long`` names, nested types as a tree, a trailing empty line."""
+    from krishiv.sql import _convert
+    from krishiv.sql.types import StructType
+
+    spark.sql("select 1 i, cast(2 as bigint) l").printSchema()
+    assert capsys.readouterr().out.startswith("root\n |-- i: integer (")
+    ddl = (
+        "i int not null, l bigint, d decimal(10,2), s struct<a: int not null>, "
+        "arr array<struct<c: string>>, m map<string, bigint>"
+    )
+    assert _convert.tree_string(StructType.fromDDL(ddl)).split("\n") == [
+        "root",
+        " |-- i: integer (nullable = false)",
+        " |-- l: long (nullable = true)",
+        " |-- d: decimal(10,2) (nullable = true)",
+        " |-- s: struct (nullable = true)",
+        " |    |-- a: integer (nullable = false)",
+        " |-- arr: array (nullable = true)",
+        " |    |-- element: struct (containsNull = true)",
+        " |    |    |-- c: string (nullable = true)",
+        " |-- m: map (nullable = true)",
+        " |    |-- key: string",
+        " |    |-- value: long (valueContainsNull = true)",
+        "",
+    ]
+
+
+def test_spark_context_is_an_unsupported_name() -> None:
+    """PY-045: ``from krishiv import SparkContext`` names the DataFrame way, not a bare ``ImportError``."""
+    from krishiv import SparkContext
+
+    with pytest.raises(Exception, match="KRISHIV_UNSUPPORTED_FEATURE"):
+        SparkContext()
+
+
+def test_show_ends_with_an_empty_line(spark: SparkSession, capsys: pytest.CaptureFixture[str]) -> None:
+    """PY-079: PySpark prints the table text and then a newline of its own."""
+    spark.sql("select 1 a").show()
+    assert capsys.readouterr().out == "+---+\n|  a|\n+---+\n|  1|\n+---+\n\n"
+
+
+def test_read_of_a_missing_path_raises_at_the_read(spark: SparkSession, tmp_path: Path) -> None:
+    """PY-080: Spark resolves the relation at the read, so ``PATH_NOT_FOUND`` is raised there."""
+    for fmt in ("parquet", "csv", "json"):
+        with pytest.raises(Exception, match="PATH_NOT_FOUND"):
+            getattr(spark.read, fmt)(str(tmp_path / "missing"))
+
+
+def test_column_and_grouped_data_repr(spark: SparkSession) -> None:
+    """PY-081: ``Column<'(a + 1)'>`` and ``GroupedData[...]``, as Spark prints them."""
+    import krishiv.sql.functions as F
+
+    df = spark.sql("select 'x' name, 1 age")
+    assert repr(df.age) == "Column<'age'>"
+    assert repr(F.col("age") + 1) == "Column<'(age + 1)'>"
+    assert repr(df.age > 0) == "Column<'(age > 0)'>"
+    assert repr(df.name.alias("n")) == "Column<'name AS n'>"
+    assert repr(1 - df.age) == "Column<'(1 - age)'>"
+    assert (
+        repr(df.groupBy("name"))
+        == "GroupedData[grouping expressions: [name], value: [name: string, age: int], type: GroupBy]"
+    )

@@ -1,6 +1,6 @@
 ## __init__.py
 __all__
-__all__ = ['Console', 'LocalConnect', 'ProfileView', 'SparkConf', 'SparkSession', '__version__', 'build_info', 'metrics', 'session', 'start_local', 'ui']
+__all__ = ['Console', 'LocalConnect', 'ProfileView', 'SparkConf', 'SparkContext', 'SparkSession', '__version__', 'build_info', 'metrics', 'session', 'start_local', 'ui']
 def build_info() -> dict[str, str]
 def metrics() -> list[dict[str, Any]]
 def session() -> SparkSession

@@ -42,6 +42,19 @@ def _operand(value: Any) -> _native.Column:
     return value._c if isinstance(value, Column) else _literal(value)
 
 
+def _text_of(value: Any) -> str | None:
+    """The text Spark prints for an operand: a column's own, a literal's value (``None``: not tracked)."""
+    if isinstance(value, Column):
+        return value._text
+    if value is None:
+        return "NULL"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int | float | str):
+        return str(value)
+    return None
+
+
 def _named(value: Any, arg: str = "cols") -> _native.Column:
     """A Column stays one; a ``str`` names a column (``"*"`` is all of them)."""
     if isinstance(value, Column):
@@ -60,43 +73,52 @@ def _call(name: str, *cols: Any) -> Column:
 class Column:
     """A column expression. Build one with ``F.col``, ``df["name"]`` or an operator."""
 
-    __slots__ = ("_c",)
+    __slots__ = ("_c", "_text")
     # `==` builds an expression (as in PySpark), so instances are unhashable.
     __hash__: None = None  # type: ignore[assignment]  # object defines __hash__ as a method
 
-    def __init__(self, native: _native.Column) -> None:
+    def __init__(self, native: _native.Column, text: str | None = None) -> None:
         self._c = native
+        self._text = text  # Spark's text of the expression, for ``repr``; ``None`` when not tracked
+
+    def _binary(self, native: _native.Column, symbol: str, other: Any, reverse: bool = False) -> Column:
+        """``self <symbol> other`` (or ``other <symbol> self``), with the text Spark prints for it."""
+        left, right = _text_of(self), _text_of(other)
+        if reverse:
+            left, right = right, left
+        text = None if left is None or right is None else f"({left} {symbol} {right})"
+        return Column(native, text)
 
     # Arithmetic.
     def __add__(self, other: Any) -> Column:
-        return Column(self._c.add(_operand(other)))
+        return self._binary(self._c.add(_operand(other)), "+", other)
 
     def __radd__(self, other: Any) -> Column:
-        return Column(_operand(other).add(self._c))
+        return self._binary(_operand(other).add(self._c), "+", other, reverse=True)
 
     def __sub__(self, other: Any) -> Column:
-        return Column(self._c.sub(_operand(other)))
+        return self._binary(self._c.sub(_operand(other)), "-", other)
 
     def __rsub__(self, other: Any) -> Column:
-        return Column(_operand(other).sub(self._c))
+        return self._binary(_operand(other).sub(self._c), "-", other, reverse=True)
 
     def __mul__(self, other: Any) -> Column:
-        return Column(self._c.mul(_operand(other)))
+        return self._binary(self._c.mul(_operand(other)), "*", other)
 
     def __rmul__(self, other: Any) -> Column:
-        return Column(_operand(other).mul(self._c))
+        return self._binary(_operand(other).mul(self._c), "*", other, reverse=True)
 
     def __truediv__(self, other: Any) -> Column:
-        return Column(self._c.div(_operand(other)))
+        return self._binary(self._c.div(_operand(other)), "/", other)
 
     def __rtruediv__(self, other: Any) -> Column:
-        return Column(_operand(other).div(self._c))
+        return self._binary(_operand(other).div(self._c), "/", other, reverse=True)
 
     def __mod__(self, other: Any) -> Column:
-        return Column(self._c.rem(_operand(other)))
+        return self._binary(self._c.rem(_operand(other)), "%", other)
 
     def __rmod__(self, other: Any) -> Column:
-        return Column(_operand(other).rem(self._c))
+        return self._binary(_operand(other).rem(self._c), "%", other, reverse=True)
 
     def __pow__(self, other: Any) -> Column:
         """``self ** other``: the registry's ``power`` (``pow``), as ``pyspark.sql.Column.__pow__``."""
@@ -111,34 +133,34 @@ class Column:
     # Comparison and logic.
     # `==` builds an expression (as in PySpark), not a bool.
     def __eq__(self, other: object) -> Column:  # type: ignore[override]  # ty: ignore[invalid-method-override]
-        return Column(self._c.eq(_operand(other)))
+        return self._binary(self._c.eq(_operand(other)), "=", other)
 
     def __ne__(self, other: object) -> Column:  # type: ignore[override]  # ty: ignore[invalid-method-override]
         return Column(self._c.ne(_operand(other)))
 
     def __lt__(self, other: Any) -> Column:
-        return Column(self._c.lt(_operand(other)))
+        return self._binary(self._c.lt(_operand(other)), "<", other)
 
     def __le__(self, other: Any) -> Column:
-        return Column(self._c.le(_operand(other)))
+        return self._binary(self._c.le(_operand(other)), "<=", other)
 
     def __gt__(self, other: Any) -> Column:
-        return Column(self._c.gt(_operand(other)))
+        return self._binary(self._c.gt(_operand(other)), ">", other)
 
     def __ge__(self, other: Any) -> Column:
-        return Column(self._c.ge(_operand(other)))
+        return self._binary(self._c.ge(_operand(other)), ">=", other)
 
     def __and__(self, other: Any) -> Column:
-        return Column(self._c.and_(_operand(other)))
+        return self._binary(self._c.and_(_operand(other)), "AND", other)
 
     def __rand__(self, other: Any) -> Column:
-        return Column(_operand(other).and_(self._c))
+        return self._binary(_operand(other).and_(self._c), "AND", other, reverse=True)
 
     def __or__(self, other: Any) -> Column:
-        return Column(self._c.or_(_operand(other)))
+        return self._binary(self._c.or_(_operand(other)), "OR", other)
 
     def __ror__(self, other: Any) -> Column:
-        return Column(_operand(other).or_(self._c))
+        return self._binary(_operand(other).or_(self._c), "OR", other, reverse=True)
 
     def __invert__(self) -> Column:
         return Column(self._c.invert())
@@ -150,7 +172,7 @@ class Column:
         raise PySparkTypeError("Column is not iterable")
 
     def __repr__(self) -> str:
-        return "Column<...>"
+        return f"Column<'{self._text}'>" if self._text is not None else "Column<...>"
 
     def __getattr__(self, item: Any) -> Column:
         # Only missing attributes reach here, so methods and `_c` are safe.
@@ -499,7 +521,8 @@ class Column:
             raise PySparkValueError("alias takes exactly one name")
         if not isinstance(alias[0], str):
             raise not_expected_type("alias", "str", alias[0])
-        return Column(self._c.alias(alias[0]))
+        text = None if self._text is None else f"{self._text} AS {alias[0]}"
+        return Column(self._c.alias(alias[0]), text)
 
     name = alias
 
