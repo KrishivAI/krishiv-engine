@@ -2248,7 +2248,7 @@ class DataFrame:
             raise not_expected_type("colName", "str", colName)
         match = re.fullmatch(r"(?:([^`]*)\.)?`((?:[^`]|``)*)`", colName)
         if match is None:
-            return self[colName]  # not a backquoted pattern: a plain column, as Spark
+            return cast("Column", self[colName])  # not a backquoted pattern: a plain column, as Spark
         qualifier = match.group(1)
         pattern = match.group(2).replace("``", "`")
         flags = 0 if _case_sensitive(self._session) else re.IGNORECASE

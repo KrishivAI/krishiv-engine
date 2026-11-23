@@ -527,7 +527,7 @@ class SparkSession:
         timestamp_ntz = timestamp_type.strip().upper() == "TIMESTAMP_NTZ"
         # PySpark's ``_infer_schema`` per row (a dict by its sorted keys, a ``Row`` or named tuple by its
         # fields, any other tuple by ``names`` then ``_1``, ``_2``, ...), the rows merged as ``_merge_type``.
-        inferred = []
+        inferred: list[DataType] = []
         for row in data:
             if isinstance(row, dict):
                 row_names = sorted(row)
