@@ -842,6 +842,27 @@ fn a_reader_without_write_column_types_refuses_the_plan_naming_it() {
     assert_eq!(Feature::WriteColumnTypes.kind(), FeatureKind::Semantic);
 }
 
+/// A sort-merge join with an as-of match is `as_of_join`, not `sort_merge_join`: a reader that
+/// knows only the plain join would return every matching pair, so it must refuse the plan.
+#[test]
+fn a_reader_without_as_of_join_refuses_an_as_of_merge() {
+    let (_, plan) = cases()
+        .into_iter()
+        .find(|(n, _)| n == "as_of_join")
+        .unwrap();
+    assert!(plan_features(&plan).contains(&Feature::AsOfJoin));
+    let bytes = encode(&plan).unwrap();
+    let reader = ReaderFeatures::only([Feature::SortMergeJoin]);
+    assert!(!reader.contains(Feature::AsOfJoin));
+    assert_eq!(
+        decode_with(&bytes, &Limits::default(), &reader).unwrap_err(),
+        CodecError::UnsupportedFeatures {
+            missing: vec!["as_of_join".to_owned()]
+        }
+    );
+    assert_eq!(Feature::AsOfJoin.kind(), FeatureKind::Semantic);
+}
+
 /// The header lists each feature of a write, and the Spark types it names
 /// even when its input holds none of them.
 #[test]

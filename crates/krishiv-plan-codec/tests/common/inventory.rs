@@ -1505,6 +1505,57 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
                     null_safe: j.null_safe,
                     residual: j.residual,
                     single_match: false,
+                    as_of: None,
+                }
+            }),
+        ),
+        (
+            "as_of_join",
+            PhysNode::SortMergeJoin({
+                let j = join_plan(JoinType::LeftOuter);
+                SortMergeJoinPlan {
+                    probe: j.probe,
+                    build: j.build,
+                    join_type: j.join_type,
+                    probe_keys: j.probe_keys,
+                    build_keys: j.build_keys,
+                    null_safe: j.null_safe,
+                    residual: j.residual,
+                    single_match: false,
+                    as_of: Some(krishiv_exec::AsOfMergeSpec {
+                        left_column: 0,
+                        right_column: 0,
+                        direction: krishiv_exec::AsOfMergeDirection::Forward,
+                        allow_exact: true,
+                        distance: Some(residual()),
+                        distance_on_every_pair: false,
+                    }),
+                }
+            }),
+        ),
+        (
+            // The Connect form: the distance is checked on every passing pair, so the flag must
+            // reach the wire (the proto default is `false`).
+            "as_of_join_every_pair",
+            PhysNode::SortMergeJoin({
+                let j = join_plan(JoinType::Inner);
+                SortMergeJoinPlan {
+                    probe: j.probe,
+                    build: j.build,
+                    join_type: j.join_type,
+                    probe_keys: j.probe_keys,
+                    build_keys: j.build_keys,
+                    null_safe: j.null_safe,
+                    residual: None,
+                    single_match: false,
+                    as_of: Some(krishiv_exec::AsOfMergeSpec {
+                        left_column: 0,
+                        right_column: 0,
+                        direction: krishiv_exec::AsOfMergeDirection::Backward,
+                        allow_exact: false,
+                        distance: Some(residual()),
+                        distance_on_every_pair: true,
+                    }),
                 }
             }),
         ),

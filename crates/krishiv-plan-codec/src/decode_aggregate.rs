@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The wire form of the aggregate functions that carry parameters (`percentile`, `percentile_approx`,
-//! `percentile_disc`, `approx_count_distinct`, `histogram_numeric`), checked on decode; split from `decode.rs`.
+//! The wire forms of the aggregate functions that carry parameters (`percentile`, `percentile_approx`,
+//! `percentile_disc`, `approx_count_distinct`, `histogram_numeric`), checked on decode (moved out of `decode.rs` to
+//! keep it under 2,000 lines).
 
 use krishiv_exec::aggregate::AggregateFunction;
 

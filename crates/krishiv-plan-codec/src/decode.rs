@@ -39,7 +39,6 @@ use krishiv_plan::{
 use krishiv_types::{Collation, DataType, DecimalType, Srid};
 
 use crate::arrow::{schema_from, type_from};
-use crate::decode_aggregate_fns as aggregate_fns;
 use crate::decode_sketch::ThetaKind;
 use crate::error::{CodecError, Result, corrupt};
 use crate::features::{Feature, ReaderFeatures, legacy_level, plan_features};
@@ -954,6 +953,13 @@ impl Decoder {
             null_safe: j.null_safe.clone(),
             residual: self.residual(j.residual.as_ref())?,
             single_match: j.single_match,
+            as_of: match &j.as_of {
+                None => None,
+                Some(a) => Some(krishiv_exec::AsOfMergeSpec {
+                    distance: self.residual(a.distance.as_ref())?,
+                    ..crate::decode_asof::as_of_merge(a)?
+                }),
+            },
         })
     }
 
@@ -1358,11 +1364,11 @@ fn aggregate_expr(a: &pb::AggregateExpr) -> Result<AggregateExpr> {
                     .collect(),
             }
         },
-        Percentile => aggregate_fns::percentile_function(a)?,
-        PercentileApprox => aggregate_fns::percentile_approx_function(a)?,
-        PercentileDisc => aggregate_fns::percentile_disc_function(a)?,
-        ApproxCountDistinct => aggregate_fns::hll_function(a)?,
-        HistogramNumeric => aggregate_fns::histogram_function(a)?,
+        Percentile => crate::decode_aggregate::percentile_function(a)?,
+        PercentileApprox => crate::decode_aggregate::percentile_approx_function(a)?,
+        PercentileDisc => crate::decode_aggregate::percentile_disc_function(a)?,
+        ApproxCountDistinct => crate::decode_aggregate::hll_function(a)?,
+        HistogramNumeric => crate::decode_aggregate::histogram_function(a)?,
         Udf => AggregateFunction::Udf(Box::new(udaf_call(a.udaf.as_deref())?)),
     })?;
     if a.udaf.is_some() && !matches!(function, AggregateFunction::Udf(_)) {
