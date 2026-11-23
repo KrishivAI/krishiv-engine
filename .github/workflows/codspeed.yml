@@ -30,7 +30,8 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: codspeed-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  # An unrelated label gets its own group, so it cannot replace a pending `perf` run either.
+  group: codspeed-${{ github.workflow }}-${{ (github.event.action == 'labeled' && github.event.label.name != 'perf') && github.run_id || github.event.pull_request.number || github.ref }}
   # An unrelated label cannot cancel a run in progress.
   cancel-in-progress: ${{ github.event.action != 'labeled' || github.event.label.name == 'perf' }}
 
