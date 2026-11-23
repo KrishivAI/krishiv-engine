@@ -1814,6 +1814,73 @@ fn legacy_store_admits_a_map_with_a_numeric_key_conversion() {
     assert_eq!(rows(&s, "select cast(m[1] as string) from mk"), ["7"]);
 }
 
+/// Under LEGACY each map key and value is cast on its own with a non-ANSI cast, as Spark's
+/// `TableOutputResolver.resolveMapType` does: a value that fails an ANSI cast stores NULL or saturates.
+#[test]
+fn legacy_store_casts_map_values_one_by_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(&s, "create table mv(m map<int,int>) using parquet");
+    s.conf()
+        .set("spark.sql.storeAssignmentPolicy", "LEGACY")
+        .unwrap();
+    run(&s, "insert into mv select map(1, 'x')");
+    assert_eq!(
+        rows(&s, "select cast(m[1] is null as string) from mv"),
+        ["true"]
+    );
+    run(&s, "create table mv2(m map<int,int>) using parquet");
+    run(&s, "insert into mv2 select map(1, 1e20d)");
+    assert_eq!(
+        rows(&s, "select cast(m[1] as string) from mv2"),
+        ["2147483647"]
+    );
+}
+
+/// The LEGACY store cast recurses through array elements and struct fields into a nested map.
+#[test]
+fn legacy_store_casts_a_map_nested_in_an_array_and_a_struct() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(
+        &s,
+        "create table nm(a array<map<int,int>>, st struct<m:map<int,int>>) using parquet",
+    );
+    s.conf()
+        .set("spark.sql.storeAssignmentPolicy", "LEGACY")
+        .unwrap();
+    run(
+        &s,
+        "insert into nm select array(map(cast(1 as double), 7)), named_struct('m', map(cast(2 as double), 8))",
+    );
+    assert_eq!(rows(&s, "select cast(a[0][1] as string) from nm"), ["7"]);
+    assert_eq!(rows(&s, "select cast(st.m[2] as string) from nm"), ["8"]);
+}
+
+/// A non-map source into a map column, and a map whose key type no cast reaches, are refused before anything
+/// is written, even under LEGACY (Spark recurses only through a map-to-map pair).
+#[test]
+fn legacy_store_refuses_a_non_map_source_and_a_refused_map_key() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(&s, "create table rf(m map<int,int>) using parquet");
+    s.conf()
+        .set("spark.sql.storeAssignmentPolicy", "LEGACY")
+        .unwrap();
+    assert_eq!(
+        class(&s, "insert into rf select 1"),
+        "INCOMPATIBLE_DATA_FOR_TABLE.CANNOT_SAFELY_CAST"
+    );
+    assert_eq!(
+        class(&s, "insert into rf select array(1)"),
+        "INCOMPATIBLE_DATA_FOR_TABLE.CANNOT_SAFELY_CAST"
+    );
+    assert_eq!(
+        class(&s, "insert into rf select map(array(1), 1)"),
+        "INCOMPATIBLE_DATA_FOR_TABLE.CANNOT_SAFELY_CAST"
+    );
+}
+
 /// The rows below are a real Spark 4.2.0 run's: `castPartitionSpec` casts with ANSI on under the default
 /// `spark.sql.storeAssignmentPolicy`, whatever `spark.sql.ansi.enabled` says, and the value is re-rendered.
 #[test]

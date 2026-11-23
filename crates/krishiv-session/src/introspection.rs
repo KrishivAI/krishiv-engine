@@ -1595,7 +1595,7 @@ fn json_type(t: &DataType) -> Result<String, KrishivError> {
     Ok(format!(r#"{{"name":"{name}"}}"#))
 }
 
-/// The `Created By` release the session's profile follows.
+/// The `Created By` release: 4.3.0 for the 4.3 profile; the 3.5, 4.0, 4.1 and 4.2 profiles share `Spark 4.2.0`.
 fn created_by(profile: krishiv_plan::analyzer::SparkProfile) -> &'static str {
     let v43 = profile >= krishiv_plan::analyzer::SparkProfile::V4_3;
     if v43 { "Spark 4.3.0" } else { "Spark 4.2.0" }

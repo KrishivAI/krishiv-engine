@@ -125,13 +125,7 @@ pub(super) fn assign(
         // clause commits.
         if let Source::Position(i) = from
             && !(if legacy_store {
-                // A MAP target is not preflighted: Spark resolves its keys and values one by one
-                // (`TableOutputResolver.resolveMapType`), which the whole-map legacy cast rules would refuse.
-                matches!(column.data_type, DataType::Map(_))
-                    || !krishiv_plan::analyzer::cast_always_refused(
-                        &output[*i].data_type,
-                        &column.data_type,
-                    )
+                !legacy_refused(&output[*i].data_type, &column.data_type)
             } else {
                 can_store(&output[*i].data_type, &column.data_type)
             })
@@ -149,6 +143,91 @@ pub(super) fn assign(
         }
     }
     Ok(out)
+}
+
+/// Whether `storeAssignmentPolicy=LEGACY` refuses to store `from` into `to`. Spark recurses only through a
+/// (MAP, MAP), (ARRAY, ARRAY) or (STRUCT, STRUCT of the same arity) pair, one leaf at a time
+/// (`TableOutputResolver.resolveMapType`, `resolveArrayType`, `resolveStructType`), so a map's key pair and value
+/// pair are checked apart; every other pair, a non-map source into a map column included, is one cast
+/// (`checkField`), and a cast Spark refuses in every mode is refused here, before a first clause commits.
+pub(super) fn legacy_refused(from: &DataType, to: &DataType) -> bool {
+    match (from, to) {
+        (DataType::Map(f), DataType::Map(t)) => {
+            legacy_refused(f.key_type(), t.key_type())
+                || legacy_refused(f.value_type(), t.value_type())
+        }
+        (DataType::Array(f), DataType::Array(t)) => {
+            legacy_refused(f.element_type(), t.element_type())
+        }
+        (DataType::Struct(f), DataType::Struct(t)) if f.fields().len() == t.fields().len() => f
+            .fields()
+            .iter()
+            .zip(t.fields().iter())
+            .any(|(f, t)| legacy_refused(f.data_type(), t.data_type())),
+        _ => krishiv_plan::analyzer::cast_always_refused(from, to),
+    }
+}
+
+/// The LEGACY store cast of `value` (of type `from`) to `to`, one leaf at a time as Spark does: a map's keys and
+/// values are cast apart (a non-ANSI cast each, so `'x'` stores `NULL` and an overflow wraps or saturates as
+/// `CAST` does), through array elements and struct fields. `depth` keeps nested lambda names apart.
+pub(super) fn legacy_store_cast(
+    value: crate::Column,
+    from: &DataType,
+    to: &DataType,
+    depth: usize,
+) -> crate::Column {
+    use crate::functions::{call_function, col, lambda, lit};
+    if from == to {
+        return value;
+    }
+    match (from, to) {
+        (DataType::Map(f), DataType::Map(t)) => {
+            let leaf = |arr: crate::Column, f: &DataType, t: &DataType| {
+                let name = format!("__krishiv_x{depth}");
+                let body = legacy_store_cast(col(&name), f, t, depth + 1);
+                call_function("transform", [arr, lambda([name], body)])
+            };
+            let keys = leaf(
+                call_function("map_keys", [value.clone()]),
+                f.key_type(),
+                t.key_type(),
+            );
+            let values = leaf(
+                call_function("map_values", [value]),
+                f.value_type(),
+                t.value_type(),
+            );
+            call_function("map_from_arrays", [keys, values])
+        }
+        (DataType::Array(f), DataType::Array(t)) => {
+            let name = format!("__krishiv_x{depth}");
+            let body = legacy_store_cast(col(&name), f.element_type(), t.element_type(), depth + 1);
+            call_function("transform", [value, lambda([name], body)])
+        }
+        (DataType::Struct(f), DataType::Struct(t)) if f.fields().len() == t.fields().len() => {
+            let mut args = Vec::with_capacity(t.fields().len() * 2);
+            for (f, t) in f.fields().iter().zip(t.fields().iter()) {
+                args.push(lit(t.name()));
+                args.push(legacy_store_cast(
+                    value.clone().get_field(f.name()),
+                    f.data_type(),
+                    t.data_type(),
+                    depth,
+                ));
+            }
+            let built = call_function("named_struct", args);
+            call_function(
+                "if",
+                [
+                    call_function("isnull", [value]),
+                    crate::functions::lit_null().cast(to.clone()),
+                    built,
+                ],
+            )
+        }
+        _ => value.cast_legacy(to.clone()),
+    }
 }
 
 /// Spark's ANSI store assignment (`Cast.canANSIStoreAssign`): whether a

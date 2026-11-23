@@ -234,7 +234,7 @@ fn row_normalized(
     // Spark 4.3 rejects only a zero norm (a subnormal one divides); 4.2 and earlier reject below
     // `Float.MIN_NORMAL` (`VectorFunctionImplUtils`).
     let normalizable = if nan {
-        norm.is_nan() || norm != 0.0
+        norm != 0.0
     } else {
         krishiv_kernels::vector::is_normalizable(norm)
     };
