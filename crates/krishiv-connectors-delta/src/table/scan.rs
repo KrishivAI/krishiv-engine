@@ -178,7 +178,18 @@ impl DeltaScan {
                 let f = decoded.fields().get(data).ok_or_else(|| {
                     internal(format!("projection of {} has no decoded column", c.root()))
                 })?;
-                fields.push(Arc::clone(f));
+                // The decoder reads every nested field as nullable (Spark's rule for file
+                // sources); a Delta table keeps its nested `NOT NULL` fields, and the plan is
+                // typed by the table, so the column gets the table's nested nullability.
+                let f = match inner.schema.field_with_name(f.name()) {
+                    Ok(t) => Arc::new(
+                        f.as_ref()
+                            .clone()
+                            .with_data_type(nested_like(f.data_type(), t.data_type())),
+                    ),
+                    Err(_) => Arc::clone(f),
+                };
+                fields.push(f);
                 layout.push(Slot::Data(data));
                 data += 1;
             }
@@ -207,6 +218,34 @@ impl DeltaScan {
             pushed: self.kernel_predicate(&p.filters).map(Arc::new),
             runtime: p.dynamic.clone(),
         })
+    }
+}
+
+/// `decoded` with the nullability of the nested fields `table` declares: a struct field, list
+/// element or map value of the same name (struct fields matched by name, as a pruned struct
+/// keeps only some). Anything else keeps the decoded type.
+fn nested_like(decoded: &ArrowType, table: &ArrowType) -> ArrowType {
+    let field = |d: &FieldRef, t: &Field| {
+        Arc::new(
+            d.as_ref()
+                .clone()
+                .with_nullable(t.is_nullable())
+                .with_data_type(nested_like(d.data_type(), t.data_type())),
+        )
+    };
+    match (decoded, table) {
+        (ArrowType::Struct(d), ArrowType::Struct(t)) => ArrowType::Struct(
+            d.iter()
+                .map(|f| match t.iter().find(|g| g.name() == f.name()) {
+                    Some(g) => field(f, g),
+                    None => Arc::clone(f),
+                })
+                .collect(),
+        ),
+        (ArrowType::List(d), ArrowType::List(t)) => ArrowType::List(field(d, t)),
+        (ArrowType::LargeList(d), ArrowType::LargeList(t)) => ArrowType::LargeList(field(d, t)),
+        (ArrowType::Map(d, sorted), ArrowType::Map(t, _)) => ArrowType::Map(field(d, t), *sorted),
+        _ => decoded.clone(),
     }
 }
 
@@ -436,7 +475,12 @@ impl DeltaScanSource {
         let mut columns: Vec<ArrayRef> = Vec::with_capacity(self.layout.len());
         for slot in &self.layout {
             columns.push(match *slot {
-                Slot::Data(i) => Arc::clone(batch.column(i)),
+                Slot::Data(i) => {
+                    let column = batch.column(i);
+                    let to = self.output.field(columns.len()).data_type();
+                    crate::engine::relabel::relabel(column, to)
+                        .map_err(|e| internal(format!("a Delta column as the table's type: {e}")))?
+                }
                 Slot::Partition(k) => {
                     let value = partitions
                         .iter()
@@ -592,5 +636,44 @@ impl Source for DeltaScanSource {
 
     fn morsels_claimed(&self, local: &LocalState) -> u64 {
         local.downcast_ref::<Local>().map_or(0, |l| l.claimed)
+    }
+}
+
+#[cfg(test)]
+mod nested_like_tests {
+    use std::sync::Arc;
+
+    use arrow_schema::{DataType as ArrowType, Field, Fields};
+
+    use super::nested_like;
+
+    #[test]
+    fn a_struct_field_the_table_lacks_keeps_its_decoded_nullability() {
+        let decoded = ArrowType::Struct(Fields::from(vec![
+            Field::new("a", ArrowType::Int32, true),
+            Field::new("extra", ArrowType::Utf8, true),
+        ]));
+        let table = ArrowType::Struct(Fields::from(vec![Field::new("a", ArrowType::Int32, false)]));
+        let ArrowType::Struct(out) = nested_like(&decoded, &table) else {
+            panic!("a struct stays a struct");
+        };
+        assert!(
+            !out[0].is_nullable(),
+            "a matched field takes the table's nullability"
+        );
+        assert!(
+            out[1].is_nullable(),
+            "an unmatched field keeps the decoded nullability"
+        );
+    }
+
+    #[test]
+    fn a_large_list_element_takes_the_table_nullability() {
+        let decoded = ArrowType::LargeList(Arc::new(Field::new("element", ArrowType::Int64, true)));
+        let table = ArrowType::LargeList(Arc::new(Field::new("element", ArrowType::Int64, false)));
+        let ArrowType::LargeList(out) = nested_like(&decoded, &table) else {
+            panic!("a large list stays a large list");
+        };
+        assert!(!out.is_nullable());
     }
 }

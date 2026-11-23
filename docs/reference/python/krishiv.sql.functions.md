@@ -3280,7 +3280,7 @@ Calls the registry function `tanh`.
 def theta_difference(col1: ColumnOrName, col2: ColumnOrName) -> Column
 ```
 
-Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+Calls the registry function `theta_difference`.
 
 ### `theta_intersection`
 
@@ -3288,7 +3288,7 @@ Not supported by the engine yet: calling it raises `UnsupportedOperationExceptio
 def theta_intersection(col1: ColumnOrName, col2: ColumnOrName) -> Column
 ```
 
-Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+Calls the registry function `theta_intersection`.
 
 ### `theta_intersection_agg`
 
@@ -3296,7 +3296,7 @@ Not supported by the engine yet: calling it raises `UnsupportedOperationExceptio
 def theta_intersection_agg(col: ColumnOrName) -> Column
 ```
 
-Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+Calls the registry function `theta_intersection_agg`.
 
 ### `theta_sketch_agg`
 
@@ -3304,7 +3304,7 @@ Not supported by the engine yet: calling it raises `UnsupportedOperationExceptio
 def theta_sketch_agg(col: ColumnOrName, lgNomEntries: Column | int | None=None) -> Column
 ```
 
-Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+Calls the registry function `theta_sketch_agg`.
 
 ### `theta_sketch_estimate`
 
@@ -3312,7 +3312,7 @@ Not supported by the engine yet: calling it raises `UnsupportedOperationExceptio
 def theta_sketch_estimate(col: ColumnOrName) -> Column
 ```
 
-Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+Calls the registry function `theta_sketch_estimate`.
 
 ### `theta_union`
 
@@ -3320,7 +3320,7 @@ Not supported by the engine yet: calling it raises `UnsupportedOperationExceptio
 def theta_union(col1: ColumnOrName, col2: ColumnOrName, lgNomEntries: Column | int | None=None) -> Column
 ```
 
-Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+Calls the registry function `theta_union`.
 
 ### `theta_union_agg`
 
@@ -3328,7 +3328,7 @@ Not supported by the engine yet: calling it raises `UnsupportedOperationExceptio
 def theta_union_agg(col: ColumnOrName, lgNomEntries: Column | int | None=None) -> Column
 ```
 
-Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+Calls the registry function `theta_union_agg`.
 
 ### `time_bucket`
 

@@ -188,13 +188,16 @@ pub(crate) fn changed(path: &str, version: &str) -> KrishivError {
     .into()
 }
 
-/// `TASK_WRITE_FAILED` with the reason logged.
+/// `TASK_WRITE_FAILED` with the reason logged and carried as the cause (Spark's `Caused by:` line),
+/// so an operator finds the OS error (`Permission denied`, `No space left on device`) in the server log
+/// and the cause chain; a client sees the class, the SQLSTATE and the `error_id` (the cause's audience
+/// is `Operator`, so its text is redacted for clients).
 pub(crate) fn write_failed(path: &str, reason: &str) -> KrishivError {
     tracing::warn!(path, reason, "file write failed");
-    TaskWriteFailed {
+    KrishivError::from(TaskWriteFailed {
         path: path.to_owned(),
-    }
-    .into()
+    })
+    .with_cause(internal(reason))
 }
 
 /// `KRISHIV_UNSUPPORTED_FEATURE`.

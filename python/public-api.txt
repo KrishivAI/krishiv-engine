@@ -142,7 +142,7 @@ Session.def metrics(self) -> list[dict[str, object]]
 Session.def read(self, format: str, paths: list[str], options: list[tuple[str, str]] | None=..., schema_json: str | None=..., schema_ddl: str | None=...) -> DataFrame
 Session.def refresh_files(self) -> None
 Session.def refresh_table(self, name: str) -> None
-Session.def register_python_source(self, label: str, schema: object, read: object) -> DataFrame
+Session.def register_python_source(self, label: str, schema: object, read: object, plan: object | None=None) -> DataFrame
 Session.def register_python_udf(self, name: str, eval_type: int, return_type: str, deterministic: bool, thread_safe: bool, wrapper: object) -> int
 Session.def sql(self, query: str) -> DataFrame
 Session.def table(self, name: str) -> DataFrame

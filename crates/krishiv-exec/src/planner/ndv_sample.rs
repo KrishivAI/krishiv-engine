@@ -364,7 +364,7 @@ impl FileTable {
         // The query's pool, as the footer reads use; a context without one
         // (embedded tests) reads under a pool of its own.
         let pool: Arc<dyn krishiv_memory::MemoryPool> = match self.io().memory_pool() {
-            Some(p) => Arc::clone(p),
+            Some(p) => p,
             None => krishiv_memory::TreePool::new(&krishiv_memory::MemoryConfig::default()),
         };
         let mut left = budget;

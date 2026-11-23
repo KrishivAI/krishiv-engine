@@ -269,12 +269,15 @@ still merges them.
 ## `PIVOT` cases Spark answers from undefined state are refused
 
 When every aggregate of a `PIVOT` has a numeric, boolean or decimal type, Spark takes its `PivotFirst` path and
-Krishiv reproduces it, including Spark's slot map (a NaN value never matches, `0.0` and `-0.0` are one value,
-repeated values raise `INVALID_ARRAY_INDEX` with ANSI on and leave NULL cells with ANSI off). A few cases fail with
-`KRISHIV_UNSUPPORTED_FEATURE` instead of returning a result:
+Krishiv reproduces it, including Spark's slot map (a NaN value never matches, `0.0` and `-0.0` are one value).
+Repeated pivot values depend on the version: under Spark 4.2 and earlier they raise `INVALID_ARRAY_INDEX` with ANSI
+on and leave NULL cells with ANSI off; under 4.3 (the default) every output reads its own value's slot, so repeated
+values give equal cells and nothing is raised. A few cases fail with `KRISHIV_UNSUPPORTED_FEATURE` instead of
+returning a result:
 
-- repeated pivot values with ANSI off and several aggregates: Spark writes the repeated value's result into the
-  next aggregate's cells;
+- repeated pivot values with ANSI off and several aggregates under 4.2 and earlier: Spark writes the repeated
+  value's result into the next aggregate's cells. This refusal is Krishiv's choice under 4.3 until a 4.3.0 golden
+  for the case exists;
 - several pivot values of a type the analyzer does not evaluate (timestamp, interval, time) when one of them is not
   a literal of the pivot column's type, for example `IN (TIMESTAMP'2020-01-01 00:00:00', '2021-01-01 00:00:00')`:
   Krishiv cannot tell whether two of them are the same value, which decides Spark's result;
@@ -649,6 +652,7 @@ observed node has its own, so the count can exceed `n` (P3-T084c).
   not, completes it.
 - **`Observation.get` blocks** a thread; do not call it from async code on a runtime thread.
 - **Result cache:** a plan that observes is never served from the result cache (every action runs it).
+- **`spark.sql.timestampType = TIMESTAMP_NTZ`:** a bare `TIMESTAMP` literal, `to_timestamp` and the numeric `make_timestamp` forms follow the setting; a bare `TIMESTAMP` cast target or column type still means `TIMESTAMP_LTZ`.
 
 ## Delta Lake writes
 

@@ -9,7 +9,7 @@ use krishiv_common::error::{InternalError, KrishivError, KrishivUnsupportedFeatu
 use krishiv_connectors_delta::engine::pool::LogPool;
 use krishiv_connectors_delta::engine::{DeltaEngine, DeltaLimits};
 use krishiv_connectors_delta::table::{
-    CacheKey, DeltaTable, OpenOptions, SnapshotCache, hadoop_path, has_delta_log,
+    CacheKey, DeltaTable, OpenOptions, SnapshotCache, hadoop_path, has_delta_log, root_holds_files,
 };
 use krishiv_exec::CancellationToken;
 use krishiv_exec::files::PathLocator;
@@ -359,6 +359,16 @@ impl DeltaReads {
         let (store, root) = self.root_of(source)?;
         let engine = self.engine(store, root)?;
         has_delta_log(&engine).await
+    }
+
+    /// Whether the root `source` names holds any object (a Delta table or not).
+    ///
+    /// # Errors
+    /// As [`Self::root_of`]; storage errors listing the root.
+    pub(crate) async fn holds_files(&self, source: &ReadSource) -> Result<bool, KrishivError> {
+        let (store, root) = self.root_of(source)?;
+        let engine = self.engine(store, root)?;
+        root_holds_files(&engine).await
     }
 
     /// The root of the table `source` reads, as delta-spark's errors name it (`file:/abs/dir`).

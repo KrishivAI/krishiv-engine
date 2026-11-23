@@ -200,5 +200,7 @@ pub use python::{
     check_python_aggregates, check_python_relation_determinism, is_python_udaf,
     plan_is_deterministic, python_relation_is_deterministic,
 };
-pub use raises::{conjuncts, exact_decimal, is_deterministic, may_raise, runs_on_any_row};
+pub use raises::{
+    conjuncts, exact_decimal, has_subquery, is_deterministic, may_raise, runs_on_any_row,
+};
 pub use walk::{MAX_DEPTH, check_depth};
