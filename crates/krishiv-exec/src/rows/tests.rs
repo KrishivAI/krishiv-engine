@@ -614,6 +614,15 @@ fn join_index(
     let mut heads = Vec::new();
     index.find_with(layout, &p, &which, &src, &mut heads, prefetch);
     assert_eq!(heads.len(), p.len());
+    // A detailed profile's counted lookups find the same heads.
+    let mut counted = Vec::new();
+    let mut count = crate::hash::ProbeCount::default();
+    index.find_counted(layout, &p, &which, &src, &mut counted, &mut count);
+    assert_eq!(counted, heads, "{choice:?} counted heads");
+    assert!(count.lookups <= u64::try_from(p.len()).unwrap_or(u64::MAX));
+    if heads.iter().any(|&h| h != NO_MATCH) {
+        assert!(count.compares > 0 && count.max > 0, "{choice:?} {count:?}");
+    }
     (heads, next, index.is_flat(), index.is_inline())
 }
 
