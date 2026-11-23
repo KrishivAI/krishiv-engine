@@ -33,7 +33,9 @@ pub fn dense_ids_all(texts: &[&str]) -> Vec<String> {
                 b'\''
                     if quoted
                         || i == 0
-                        || !(b[i - 1].is_ascii_alphanumeric() || b[i - 1] == b'_') =>
+                        || !(b[i - 1].is_ascii_alphanumeric()
+                            || b[i - 1] == b'_'
+                            || b[i - 1] >= 0x80) =>
                 {
                     quoted = !quoted;
                     i += 1;
@@ -96,6 +98,14 @@ mod dense_ids_tests {
         assert_eq!(
             dense_ids("it's#4294967296 a#4294967297 b#3"),
             "it's#4 a#5 b#3"
+        );
+    }
+
+    #[test]
+    fn a_non_ascii_name_before_an_apostrophe_opens_no_literal() {
+        assert_eq!(
+            dense_ids("é's#4294967296 a#4294967297 b#3"),
+            "é's#4 a#5 b#3"
         );
     }
 

@@ -1397,6 +1397,7 @@ impl QueryRow {
                 std::mem::size_of::<OperatorRow>()
                     + o.query_id.len()
                     + o.name.len()
+                    + o.session_id.len()
                     + o.pipelines.len() * 4
                     + o.extra
                         .iter()

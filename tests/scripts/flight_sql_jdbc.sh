@@ -49,12 +49,11 @@ if [ "${major:-0}" -ge 21 ] 2>/dev/null; then
 fi
 # `tpch URL QUERIES DATA` reads QUERIES in the program: mount it; DATA stays the host path,
 # since the server (not this program) opens it.
-mounts=""
+mount=()
 if [ "${1:-}" = "tpch" ] && [ "$#" -eq 4 ]; then
-  mounts="-v $3:/queries:ro"
+  mount=(-v "$3:/queries:ro")
   set -- "$1" "$2" /queries "$4"
 fi
-# shellcheck disable=SC2086
 exec docker run --rm --network host \
-  -v "$jar:/driver.jar:ro" -v "$program:/FlightSqlJdbc.java:ro" $mounts \
+  -v "$jar:/driver.jar:ro" -v "$program:/FlightSqlJdbc.java:ro" ${mount[@]+"${mount[@]}"} \
   "$IMAGE" java "$opens" -cp /driver.jar /FlightSqlJdbc.java "$@"
