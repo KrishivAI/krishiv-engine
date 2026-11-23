@@ -853,6 +853,50 @@ fn a_reader_without_as_of_join_refuses_an_as_of_merge() {
     assert_eq!(Feature::AsOfJoin.kind(), FeatureKind::Semantic);
 }
 
+/// The features an as-of join's distance expression uses are named in the header: a distance
+/// pinned to an ANSI mode (a SQL function body's) needs `captured_eval_mode` beside
+/// `as_of_join`, a reader without it refuses the plan, and it round-trips (review of #990).
+#[test]
+fn an_as_of_distance_names_the_features_its_expression_uses() {
+    let PhysNode::Project { items, .. } = inventory::captured_eval_mode() else {
+        panic!("captured_eval_mode is a projection")
+    };
+    let krishiv_exec::physical::ProjectItemPlan::Expr { expr: pinned, .. } = &items[0] else {
+        panic!("its item is an expression")
+    };
+    let (_, base) = cases()
+        .into_iter()
+        .find(|(n, _)| n == "as_of_join")
+        .unwrap();
+    let mut root = base.root().clone();
+    let PhysNode::SortMergeJoin(j) = &mut root else {
+        panic!("as_of_join is a sort-merge join")
+    };
+    let as_of = j.as_of.as_mut().unwrap();
+    let mut distance = as_of.distance.clone().unwrap();
+    distance.conjuncts = vec![std::sync::Arc::clone(pinned)];
+    as_of.distance = Some(distance);
+    let plan = plan_of(root);
+    let used = plan_features(&plan);
+    assert!(used.contains(&Feature::AsOfJoin), "{used:?}");
+    assert!(used.contains(&Feature::CapturedEvalMode), "{used:?}");
+    let bytes = encode(&plan).unwrap();
+    assert_eq!(decode(&bytes).unwrap(), plan);
+    let mut known: Vec<Feature> = used
+        .iter()
+        .copied()
+        .filter(|f| *f != Feature::CapturedEvalMode)
+        .collect();
+    known.push(Feature::SortMergeJoin);
+    let reader = ReaderFeatures::only(known);
+    assert_eq!(
+        decode_with(&bytes, &Limits::default(), &reader).unwrap_err(),
+        CodecError::UnsupportedFeatures {
+            missing: vec!["captured_eval_mode".to_owned()]
+        }
+    );
+}
+
 /// The header lists each feature of a write, and the Spark types it names
 /// even when its input holds none of them.
 #[test]
