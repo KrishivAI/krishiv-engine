@@ -265,7 +265,20 @@ pub fn from_bytes(bytes: &[u8], function: &str) -> Result<CompactThetaSketch, Kr
     if bytes.get(1) == Some(&3) && bytes.get(5).is_none_or(|f| f & 0x0a != 0x0a) {
         return Err(invalid_buffer(function));
     }
-    CompactThetaSketch::deserialize(bytes).map_err(|_| invalid_buffer(function))
+    let sketch = CompactThetaSketch::deserialize(bytes).map_err(|_| invalid_buffer(function))?;
+    // An ordered image must list its hashes strictly ascending: the compressed serializer subtracts neighbours as
+    // `u64`, so a descending pair would wrap (or panic in a debug build) on the way back out.
+    if sketch.is_ordered() {
+        let mut prev = 0_u64;
+        for entry in sketch.iter() {
+            let h = entry.hash();
+            if h <= prev {
+                return Err(invalid_buffer(function));
+            }
+            prev = h;
+        }
+    }
+    Ok(sketch)
 }
 
 /// `theta_sketch_estimate`: `Math.round(getEstimate)`.
@@ -417,6 +430,15 @@ mod tests {
             assert!(from_bytes(&bad, F).is_err(), "flag {flag:#x}");
         }
         assert!(from_bytes(&[], F).is_err());
+        // An ordered image whose hashes descend is refused: re-serializing it would subtract them as `u64`.
+        let mut swapped = plain;
+        let n = swapped.len();
+        let (head, tail) = swapped.split_at_mut(n - 8);
+        tail.swap_with_slice(&mut head[n - 16..]);
+        assert!(
+            from_bytes(&swapped, F).is_err(),
+            "descending ordered hashes"
+        );
         // An HLL preamble (family 7) is a sketch of another family.
         let hll = [2_u8, 1, 7, 12, 0, 0, 0, 0];
         let e = from_bytes(&hll, F).unwrap_err().to_string();

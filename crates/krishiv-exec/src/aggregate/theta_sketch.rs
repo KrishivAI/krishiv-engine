@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 use arrow_array::{
     Array, ArrayRef, BinaryArray, BinaryViewArray, Float32Array, Float64Array, Int32Array,
-    Int64Array, LargeStringArray, ListArray, StringArray, StringViewArray,
+    Int64Array, LargeBinaryArray, LargeStringArray, ListArray, StringArray, StringViewArray,
 };
 use krishiv_functions::sketch::theta::{
     self, CompactThetaSketch, DEFAULT_LG_NOM, ThetaIntersection, ThetaSketch, ThetaUnion,
@@ -643,6 +643,7 @@ impl ThetaSketchAcc {
 /// A binary column on either carrier.
 enum BinaryRows<'a> {
     Plain(&'a BinaryArray),
+    Large(&'a LargeBinaryArray),
     View(&'a BinaryViewArray),
 }
 
@@ -650,6 +651,8 @@ impl<'a> BinaryRows<'a> {
     fn of(arg: &'a ArrayRef, function: &str) -> Result<Self> {
         if let Some(a) = arg.as_any().downcast_ref::<BinaryArray>() {
             Ok(Self::Plain(a))
+        } else if let Some(a) = arg.as_any().downcast_ref::<LargeBinaryArray>() {
+            Ok(Self::Large(a))
         } else if let Some(a) = arg.as_any().downcast_ref::<BinaryViewArray>() {
             Ok(Self::View(a))
         } else {
@@ -664,6 +667,7 @@ impl<'a> BinaryRows<'a> {
     fn get(&self, i: usize) -> Option<&[u8]> {
         match self {
             Self::Plain(a) => (!a.is_null(i)).then(|| a.value(i)),
+            Self::Large(a) => (!a.is_null(i)).then(|| a.value(i)),
             Self::View(a) => (!a.is_null(i)).then(|| a.value(i)),
         }
     }
