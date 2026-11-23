@@ -1805,6 +1805,15 @@ impl DataFrame {
         self.temp_view(name, false, true).await
     }
 
+    /// Registers this frame as the temporary view `name` (PySpark's `createTempView`). It fails with
+    /// `TEMP_TABLE_OR_VIEW_ALREADY_EXISTS` when the view exists.
+    ///
+    /// # Errors
+    /// As [`Self::create_or_replace_temp_view`], and `TEMP_TABLE_OR_VIEW_ALREADY_EXISTS`.
+    pub async fn create_temp_view(&self, name: &str) -> Result<(), KrishivError> {
+        self.temp_view(name, false, false).await
+    }
+
     /// Registers this frame as the global temporary view `global_temp.name`, kept in this
     /// session's catalog, as `CREATE GLOBAL TEMPORARY VIEW` keeps it (PySpark's `createGlobalTempView`). It
     /// fails with `TEMP_TABLE_OR_VIEW_ALREADY_EXISTS` when the view exists.

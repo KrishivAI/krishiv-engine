@@ -439,3 +439,33 @@ async fn an_unspecified_table_save_method_is_invalid_enum() {
     .expect_err("unspecified");
     assert_eq!(error_class(&status), "CONNECT_INVALID_PLAN.INVALID_ENUM");
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn create_dataframe_view_registers_a_temp_view() {
+    let run = start().await;
+    let view = |name: &str, is_global: bool, replace: bool| {
+        command(pb::command::CommandType::CreateDataframeView(Box::new(
+            pb::CreateDataFrameViewCommand {
+                input: Some(sql(ROWS)),
+                name: name.to_owned(),
+                is_global,
+                replace,
+            },
+        )))
+    };
+    collect(&run.channel, view("tv", false, false))
+        .await
+        .expect("createTempView");
+    assert_eq!(ids(&run, "SELECT id FROM tv").await, [1, 2, 3]);
+    let again = collect(&run.channel, view("tv", false, false))
+        .await
+        .expect_err("the name is taken");
+    assert_eq!(error_class(&again), "TEMP_TABLE_OR_VIEW_ALREADY_EXISTS");
+    collect(&run.channel, view("tv", false, true))
+        .await
+        .expect("createOrReplaceTempView");
+    collect(&run.channel, view("gv", true, false))
+        .await
+        .expect("createGlobalTempView");
+    assert_eq!(ids(&run, "SELECT id FROM global_temp.gv").await, [1, 2, 3]);
+}

@@ -6,7 +6,7 @@
 //! an embedded one share every check and error. The command answers no rows: the stream ends.
 
 use krishiv_common::error::{KrishivError, LegacyErrorTemp1307, LegacyErrorTemp2050};
-use krishiv_connect::translate::{WriteSpec, WriteTarget, WriteV2Spec};
+use krishiv_connect::translate::{ViewSpec, WriteSpec, WriteTarget, WriteV2Spec};
 use krishiv_session::DataFrame;
 
 /// Writes `source` as a `DataFrameWriter` with the state of `spec`; a path write without a
@@ -145,4 +145,25 @@ pub(super) async fn write_v2(source: &DataFrame, spec: WriteV2Spec) -> Result<()
             None,
         )
         .await
+}
+
+/// Registers `source` as the temporary view `spec` names: `createTempView`,
+/// `createOrReplaceTempView`, `createGlobalTempView` and `createOrReplaceGlobalTempView`
+/// (Spark's `transformCreateViewCommand`: a global view lives in `global_temp`).
+///
+/// # Errors
+/// The session's: the view's analysis errors, then `TEMP_TABLE_OR_VIEW_ALREADY_EXISTS` for a
+/// create that finds the name taken, and `KRISHIV_RESERVED_TEMP_VIEW_NAME`.
+pub(super) async fn create_view(source: &DataFrame, spec: ViewSpec) -> Result<(), KrishivError> {
+    let ViewSpec {
+        name,
+        is_global,
+        replace,
+    } = spec;
+    match (is_global, replace) {
+        (false, false) => source.create_temp_view(&name).await,
+        (false, true) => source.create_or_replace_temp_view(&name).await,
+        (true, false) => source.create_global_temp_view(&name).await,
+        (true, true) => source.create_or_replace_global_temp_view(&name).await,
+    }
 }
