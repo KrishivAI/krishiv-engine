@@ -1,0 +1,58 @@
+name: Docker
+
+# The official image (docker/Dockerfile) on both architectures, each built natively (no QEMU:
+# the release profile uses fat LTO), then smoke-tested: start the container, connect PySpark over
+# TLS with a token, run one query. Nothing is published here; the release workflow pushes the
+# multi-arch manifest to ghcr.io on the tag.
+on:
+  workflow_call:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - docker/**
+      - .dockerignore
+      - .github/workflows/docker.yml
+      - .github/scripts/docker-smoke.sh
+      - crates/krishiv-cli/Cargo.toml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docker-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  image:
+    name: image (${{ matrix.platform }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-24.04
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      - name: Build
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          SHA: ${{ github.sha }}
+        run: |
+          docker buildx build --platform "$PLATFORM" -f docker/Dockerfile \
+            --build-arg "KRISHIV_GIT_SHA=$SHA" --load -t krishiv:ci .
+      - name: Smoke test
+        run: |
+          docker run --rm krishiv:ci --version
+          docker run --rm krishiv:ci sql -e "SELECT 1"
+          .github/scripts/docker-smoke.sh krishiv:ci
