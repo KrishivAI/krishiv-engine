@@ -1062,7 +1062,35 @@ impl Session {
     #[cfg(feature = "unstable-ir")]
     #[must_use]
     pub fn from_plan(&self, plan: &Plan) -> DataFrame {
-        DataFrame::new(self.clone(), Arc::clone(plan.root()))
+        self.plan_frame(self.clone(), Arc::clone(plan.root()))
+    }
+
+    /// A frame of `root` on `session`. A root that is a `spark.sql` relation (`PlanNode::Sql`, what
+    /// Spark Connect sends for a query it analyzed earlier) lists its runs in `system.queries` with
+    /// the statement's text (literals masked) and class, as `Session::sql` does; a plan any other
+    /// client built stays without text. A statement that does not parse keeps none: its analysis
+    /// reports the error.
+    #[cfg(feature = "unstable-ir")]
+    fn plan_frame(&self, session: Session, root: Arc<LogicalPlan>) -> DataFrame {
+        let statement = match &root.node {
+            PlanNode::Sql { query, .. } => {
+                let mut env = session.query_env();
+                let redacted = krishiv_sql::redact_sql(query);
+                krishiv_sql::parse_statement(query, &env.parser)
+                    .ok()
+                    .map(|parsed| {
+                        env.set_text(&redacted);
+                        env.statement_class = Some(self.statement_class(&parsed, &env).name());
+                        env
+                    })
+            }
+            _ => None,
+        };
+        let df = DataFrame::new(session, root);
+        match statement {
+            Some(env) => df.with_first_statement(env),
+            None => df,
+        }
     }
 
     /// As [`Self::from_plan`], with per-statement options, as
@@ -1093,10 +1121,7 @@ impl Session {
         plan: &Plan,
         options: crate::QueryOptions,
     ) -> Result<DataFrame, KrishivError> {
-        Ok(DataFrame::new(
-            self.with_options(options)?,
-            Arc::clone(plan.root()),
-        ))
+        Ok(self.plan_frame(self.with_options(options)?, Arc::clone(plan.root())))
     }
 
     /// As [`Self::from_plan_with`], with each read of a table named in `frames` replaced by that
@@ -1117,7 +1142,7 @@ impl Session {
     ) -> Result<DataFrame, KrishivError> {
         let session = self.with_options(options)?;
         if frames.is_empty() {
-            return Ok(DataFrame::new(session, Arc::clone(plan.root())));
+            return Ok(self.plan_frame(session, Arc::clone(plan.root())));
         }
         let frames = frames.to_vec();
         let root = Arc::clone(plan.root());
