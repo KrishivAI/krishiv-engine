@@ -1800,6 +1800,20 @@ fn a_rename_whose_move_fails_puts_the_log_back() {
     );
 }
 
+/// Under LEGACY a map written into a map column is not refused up front for its key type: the
+/// original review example, `map(CAST(1 AS DOUBLE), 7)` into `MAP<INT,INT>`, stores `{1:7}`.
+#[test]
+fn legacy_store_admits_a_map_with_a_numeric_key_conversion() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(&s, "create table mk(m map<int,int>) using parquet");
+    s.conf()
+        .set("spark.sql.storeAssignmentPolicy", "LEGACY")
+        .unwrap();
+    run(&s, "insert into mk select map(cast(1 as double), 7)");
+    assert_eq!(rows(&s, "select cast(m[1] as string) from mk"), ["7"]);
+}
+
 /// The rows below are a real Spark 4.2.0 run's: `castPartitionSpec` casts with ANSI on under the default
 /// `spark.sql.storeAssignmentPolicy`, whatever `spark.sql.ansi.enabled` says, and the value is re-rendered.
 #[test]

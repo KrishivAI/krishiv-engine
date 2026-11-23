@@ -125,10 +125,13 @@ pub(super) fn assign(
         // clause commits.
         if let Source::Position(i) = from
             && !(if legacy_store {
-                !krishiv_plan::analyzer::cast_always_refused(
-                    &output[*i].data_type,
-                    &column.data_type,
-                )
+                // A MAP target is not preflighted: Spark resolves its keys and values one by one
+                // (`TableOutputResolver.resolveMapType`), which the whole-map legacy cast rules would refuse.
+                matches!(column.data_type, DataType::Map(_))
+                    || !krishiv_plan::analyzer::cast_always_refused(
+                        &output[*i].data_type,
+                        &column.data_type,
+                    )
             } else {
                 can_store(&output[*i].data_type, &column.data_type)
             })
