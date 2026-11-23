@@ -29,6 +29,9 @@ A table that uses a protocol feature Krishiv cannot read is refused with Spark's
 (`DELTA_UNSUPPORTED_FEATURES_FOR_READ`) instead of being read wrongly. Writers commit with optimistic concurrency and
 retry after losing a race; `krishiv.write.commitRetryTimeout` bounds all the attempts of one commit.
 
+A Delta write runs as one task in the process that runs the statement: that task writes every data file, then
+commits once. Writes are not spread across workers in 0.3.
+
 ## Iceberg tables
 
 An Iceberg table is read through a [declared catalog](#declare-a-catalog) (`SELECT * FROM lake.sales.orders`).
