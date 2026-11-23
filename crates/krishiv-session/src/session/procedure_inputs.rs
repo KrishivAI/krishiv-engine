@@ -20,6 +20,7 @@ impl Session {
             Arc::clone(&self.state.io),
             stores,
         ));
-        crate::catalog_registry::ScanInputs::new(io, paths, config, 1)
+        let declared = self.declared_stores(&config);
+        crate::catalog_registry::ScanInputs::new(io, paths, config, 1, declared)
     }
 }
