@@ -156,7 +156,11 @@ krishiv server --port 8080 --conf krishiv.history.path=/var/lib/krishiv/history
 the History page and each query's page, nothing live and nothing to cancel. Use it to read the profiles of a
 server that is stopped, or a folder copied from another machine.
 
-Not in the console yet: Resources does not list UDF worker pools.
+**Python UDF workers.** On a server, Resources also lists the Python UDF worker processes: how many run and how
+many of them are busy, against `krishiv.python.worker.maxTotal`, and one row per session that has a worker, with
+its principal and tenant. A session runs at most `krishiv.python.worker.maxPerSession` workers and a tenant
+`krishiv.python.worker.maxPerTenant`. A worker starts with a session's first Python UDF call and stops after it
+has been idle for `krishiv.python.worker.idleTimeout`, so an idle server lists none. The list is read-only.
 
 ## Distributed
 
