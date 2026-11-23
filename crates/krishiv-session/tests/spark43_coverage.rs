@@ -47,7 +47,6 @@ const PENDING: &[(&str, &str)] = &[
         "WRONG_NUM_ARGS.WITHOUT_SUGGESTION",
     ),
     ("fn_localtime_9", "UNRESOLVED_ROUTINE"),
-    ("fix_pivot_duplicate_values", "INVALID_ARRAY_INDEX"),
     (
         "fix_insert_struct_by_position_legacy",
         "setup: INCOMPATIBLE_DATA_FOR_TABLE.CANNOT_SAFELY_CAST",

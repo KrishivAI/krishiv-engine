@@ -36,7 +36,7 @@ if TYPE_CHECKING:
     from krishiv.sql.udf import UDFRegistration
 
 #: The Spark version this engine is compatible with.
-SPARK_VERSION = "4.2.0"
+SPARK_VERSION = "4.3.0"
 
 
 _lock = threading.Lock()
@@ -436,7 +436,7 @@ class SparkSession:
         >>> df.printSchema()
         root
          |-- name: string (nullable = true)
-         |-- age: int (nullable = true)
+         |-- age: integer (nullable = true)
         >>> df.count()
         0
         """

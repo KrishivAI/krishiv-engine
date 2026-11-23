@@ -8,6 +8,9 @@ Explain::Json: EXPLAIN FORMAT JSON INSERT INTO t SELECT 1
 Explain::Json: EXPLAIN FORMAT JSON DROP TABLE t
   analyze only: []
   run only: [("DROP", "table `spark_catalog`.`default`.`t`")]
+InsertDirectory: INSERT OVERWRITE LOCAL DIRECTORY '/tmp/o' USING parquet SELECT 1
+  analyze only: []
+  run only: [("CREATE", "path 'file:/tmp/o'")]
 DirAddPartition: ALTER TABLE p ADD PARTITION (k = 1)
   analyze only: []
   run only: [("CREATE", "path 'file:<warehouse>/p/k=1'")]

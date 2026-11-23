@@ -127,8 +127,9 @@ jobs:
   # A label change re-runs only the label-aware gates of the CI run for this head
   # (they read the labels live). While CI is still running there is nothing to
   # re-run: the gates have not started and will read the new labels themselves.
+  # A draft is left out: its gates are skipped, and the `ready_for_review` run reads the labels live.
   regate:
-    if: github.event_name == 'pull_request' && (github.event.action == 'labeled' || github.event.action == 'unlabeled')
+    if: github.event_name == 'pull_request' && github.event.pull_request.draft != true && (github.event.action == 'labeled' || github.event.action == 'unlabeled')
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:

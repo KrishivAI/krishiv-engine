@@ -886,6 +886,15 @@ enum AggregateFunction {
   // `hll_union_agg(sketch, allowDifferentLgConfigK)`: the folded flag is `hll_precision` (0 or 1).
   // feature: hll_sketch_aggregates
   AGGREGATE_FUNCTION_HLL_UNION_AGG = 54;
+  // `theta_sketch_agg(x, lgNomEntries)`: the folded lgNomEntries is `hll_precision` (4 to 26).
+  // feature: theta_sketch_aggregates
+  AGGREGATE_FUNCTION_THETA_SKETCH_AGG = 55;
+  // `theta_union_agg(sketch, lgNomEntries)`: the folded lgNomEntries is `hll_precision` (4 to 26).
+  // feature: theta_sketch_aggregates
+  AGGREGATE_FUNCTION_THETA_UNION_AGG = 56;
+  // `theta_intersection_agg(sketch)`.
+  // feature: theta_sketch_aggregates
+  AGGREGATE_FUNCTION_THETA_INTERSECTION_AGG = 57;
 }
 
 enum AggregateInput {
