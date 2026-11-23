@@ -85,11 +85,37 @@ def rows_of(table: Any) -> list[Row]:
     columns = [_column_values(table.column(i)) for i in range(table.num_columns)]
     if not names:
         return [Row() for _ in range(table.num_rows)]  # no columns: one empty Row per row, as PySpark
-    return [_create_row(names, list(values)) for values in zip(*columns, strict=True)]
+    # One field list for every row (as PySpark does) and `tuple.__new__` directly: this loop runs once per
+    # result row, so a per-row copy and a call to `_create_row` were most of a `collect()`'s time (PY-071).
+    new = tuple.__new__
+    rows = [new(Row, values) for values in zip(*columns, strict=True)]
+    for row in rows:
+        row.__fields__ = names
+    return rows
 
 
 def _column_values(column: Any) -> list[Any]:
-    return [_value(v, column.type) for v in column.to_pylist()]
+    values: list[Any] = column.to_pylist()
+    if _is_plain(column.type):
+        return values
+    return [_value(v, column.type) for v in values]
+
+
+def _is_plain(arrow_type: Any) -> bool:
+    """True when ``to_pylist`` already gives PySpark's Python value for this type (no zone change,
+    no nested ``Row``, ``dict`` or variant)."""
+    import pyarrow as pa
+
+    t = arrow_type
+    if pa.types.is_timestamp(t):
+        return t.tz is None
+    return not (
+        pa.types.is_struct(t)
+        or pa.types.is_map(t)
+        or pa.types.is_list(t)
+        or pa.types.is_large_list(t)
+        or pa.types.is_fixed_size_list(t)
+    )
 
 
 def _value(value: Any, arrow_type: Any) -> Any:
@@ -271,6 +297,45 @@ def show_string(names: list[str], rows: list[list[str]], n: int, truncate: bool 
         lines = [rule, line(header), rule, *[line(r) for r in body], rule]
     if len(rows) > n:
         lines.append(f"only showing top {n} row{'s' if n != 1 else ''}")
+    return "\n".join(lines) + "\n"
+
+
+def _tree_type_name(dt: Any) -> str:
+    """The type name Spark's tree string prints (``integer``, ``long``, ``decimal(10,2)``, ``array``)."""
+    from krishiv.sql.types import DayTimeIntervalType, DecimalType, YearMonthIntervalType
+
+    if isinstance(dt, DecimalType | DayTimeIntervalType | YearMonthIntervalType):
+        return dt.simpleString()
+    return str(dt.typeName())
+
+
+def tree_string(schema: Any) -> str:
+    """``DataFrame.printSchema``'s text, as Spark's ``treeString``: the type names are ``integer`` and ``long``,
+    nested types are a tree, and the text ends with an empty line."""
+    from krishiv.sql.types import ArrayType, MapType, StructType
+
+    lines = ["root"]
+
+    def nested(dt: Any, prefix: str) -> None:
+        if isinstance(dt, ArrayType):
+            lines.append(
+                f"{prefix}-- element: {_tree_type_name(dt.elementType)} (containsNull = {str(dt.containsNull).lower()})"
+            )
+            nested(dt.elementType, prefix + "    |")
+        elif isinstance(dt, MapType):
+            lines.append(f"{prefix}-- key: {_tree_type_name(dt.keyType)}")
+            nested(dt.keyType, prefix + "    |")
+            nulls = str(dt.valueContainsNull).lower()
+            lines.append(f"{prefix}-- value: {_tree_type_name(dt.valueType)} (valueContainsNull = {nulls})")
+            nested(dt.valueType, prefix + "    |")
+        elif isinstance(dt, StructType):
+            for f in dt.fields:
+                lines.append(
+                    f"{prefix}-- {f.name}: {_tree_type_name(f.dataType)} (nullable = {str(f.nullable).lower()})"
+                )
+                nested(f.dataType, prefix + "    |")
+
+    nested(schema, " |")
     return "\n".join(lines) + "\n"
 
 
