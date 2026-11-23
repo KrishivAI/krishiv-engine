@@ -1244,7 +1244,7 @@ Column.def __ge__(self, other: Any) -> Column
 Column.def __getattr__(self, item: Any) -> Column
 Column.def __getitem__(self, k: Any) -> Column
 Column.def __gt__(self, other: Any) -> Column
-Column.def __init__(self, native: _native.Column) -> None
+Column.def __init__(self, native: _native.Column, text: str | None=None) -> None
 Column.def __invert__(self) -> Column
 Column.def __iter__(self) -> Any
 Column.def __le__(self, other: Any) -> Column
@@ -1563,6 +1563,7 @@ def years(col: ColumnOrName) -> Column
 def zip_with(left: ColumnOrName, right: ColumnOrName, f: Callable[[Column, Column], Column]) -> Column
 ## sql/group.py
 GroupedData.def __init__(self, native: _native.GroupedData, df: DataFrame) -> None
+GroupedData.def __repr__(self) -> str
 GroupedData.def agg(self, *exprs: Column | dict[str, str]) -> DataFrame
 GroupedData.def avg(self, *cols: str) -> DataFrame
 GroupedData.def count(self) -> DataFrame
