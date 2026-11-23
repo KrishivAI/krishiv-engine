@@ -62,6 +62,7 @@ use crate::operators::PathRoots;
 use crate::operators::spark_dir_text;
 
 mod user_schema;
+mod windows_path;
 use user_schema::{UserPartitions, check_user_schema, user_schema_columns};
 
 /// Spark 4.2's built-in data sources that read no files:
@@ -134,13 +135,24 @@ impl LocalPaths {
     pub fn new(store: StoreId, cwd: impl Into<String>) -> Self {
         Self {
             store,
-            cwd: cwd.into(),
+            cwd: local_text(&cwd.into()),
         }
+    }
+}
+
+/// A local path's text in the form the locator reads: on Windows, `\` separators and drive
+/// letters normalized (`files/windows_path.rs`); elsewhere unchanged.
+fn local_text(path: &str) -> String {
+    if cfg!(windows) {
+        windows_path::normalize(path)
+    } else {
+        path.to_owned()
     }
 }
 
 impl PathLocator for LocalPaths {
     fn locate(&self, path: &str) -> Result<LocatedPath> {
+        let path = &local_text(path);
         let local = if let Some(rest) = path.strip_prefix("file://") {
             // `file:///a` and `file://localhost/a`; another host is remote.
             let at = rest.find('/').unwrap_or(rest.len());
@@ -267,6 +279,10 @@ impl PathLocator for ObjectPaths {
 /// The URL scheme of `path` (`s3a` in `s3a://b/k`), if it has one.
 fn scheme(path: &str) -> Option<&str> {
     let (scheme, _) = path.split_once(':')?;
+    // On Windows `C:` is a drive, never a scheme (Hadoop's `Path` reads it so too).
+    if cfg!(windows) && windows_path::is_drive(path) {
+        return None;
+    }
     let mut chars = scheme.chars();
     let valid = chars.next().is_some_and(|c| c.is_ascii_alphabetic())
         && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'));

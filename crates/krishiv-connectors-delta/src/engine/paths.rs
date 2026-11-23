@@ -53,11 +53,16 @@ impl TableRoot {
     /// # Errors
     /// `UNSUPPORTED_FEATURE.TABLE_OPERATION` naming the path, for a URL outside the root.
     pub fn confine(&self, url: &Url) -> Result<Path, KrishivError> {
+        // On Windows one directory has several spellings (an 8.3 short name such as
+        // `RUNNER~1`, any letter case), so a local root's text is no guide: the canonical check
+        // below decides there.
+        let canonical_only = cfg!(windows) && self.local.is_some();
         let inside = url.scheme() == self.root.scheme()
             && url.username() == self.root.username()
             && url.host_str() == self.root.host_str()
             && url.port_or_known_default() == self.root.port_or_known_default()
-            && (url.path().starts_with(self.root.path())
+            && (canonical_only
+                || url.path().starts_with(self.root.path())
                 || format!("{}/", url.path()) == self.root.path())
             && url.query().is_none()
             && url.fragment().is_none();
