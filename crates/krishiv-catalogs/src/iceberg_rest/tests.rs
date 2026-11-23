@@ -879,25 +879,30 @@ const CREDENTIALS_CONFIG: &str = r#"{"defaults": {}, "overrides": {},
 /// with the caller's token, and the table token is dropped.
 #[test]
 fn a_419_for_the_table_token_falls_back_to_the_caller_s_token() {
-    let server = serve(|r| {
-        match path(r) {
+    let bearers = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let seen = Arc::clone(&bearers);
+    let server = serve(move |r| match path(r) {
         "/v1/config" => Reply::Json(200, CREDENTIALS_CONFIG.into()),
-        "/v1/namespaces/db/tables/t/credentials"
-            if r.header("authorization") == Some("Bearer table-token") =>
-        {
-            Reply::Json(419, "{}".into())
+        "/v1/namespaces/db/tables/t/credentials" => {
+            let bearer = r.header("authorization").map(str::to_owned);
+            seen.lock().unwrap().push(bearer.clone());
+            match bearer.as_deref() {
+                Some("Bearer table-token") => Reply::Json(419, "{}".into()),
+                Some("Bearer caller-token") => Reply::Json(
+                    200,
+                    r#"{"storage-credentials": [{"prefix": "s3://b/t", "config": {"s3.access-key-id": "AKIA"}}]}"#
+                        .into(),
+                ),
+                _ => Reply::Json(401, "{}".into()),
+            }
         }
-        "/v1/namespaces/db/tables/t/credentials" => Reply::Json(
-            200,
-            r#"{"storage-credentials": [{"prefix": "s3://b/t", "config": {"s3.access-key-id": "AKIA"}}]}"#
-                .into(),
-        ),
-        _ => Reply::Json(404, "{}".into()),
-    }
+        _ => Reply::Json(500, "{}".into()),
     });
+    let mut config = config_for(&server);
+    config.auth = RestAuth::Token(SecretString::new("caller-token"));
     let token = SecretString::new("table-token");
     let mut table_token = Some(&token);
-    let creds = client_with(config_for(&server))
+    let creds = client_with(config)
         .load_credentials_for(
             &super::RestCaller::server(),
             &mut table_token,
@@ -906,6 +911,14 @@ fn a_419_for_the_table_token_falls_back_to_the_caller_s_token() {
         )
         .unwrap()
         .unwrap();
+    assert_eq!(
+        *bearers.lock().unwrap(),
+        [
+            Some("Bearer table-token".to_owned()),
+            Some("Bearer caller-token".to_owned())
+        ],
+        "one request with the table token, one retry with the caller's"
+    );
     assert_eq!(creds[0].prefix, "s3://b/t");
     assert!(table_token.is_none(), "the refused table token is dropped");
     // Another refusal of the caller's token stays an error.
@@ -925,7 +938,8 @@ fn a_419_for_the_table_token_falls_back_to_the_caller_s_token() {
 fn only_a_404_of_the_credentials_route_is_absence() {
     let server = serve(|r| match path(r) {
         "/v1/config" => Reply::Json(200, CREDENTIALS_CONFIG.into()),
-        _ => Reply::Json(404, "{}".into()),
+        "/v1/namespaces/db/tables/t/credentials" => Reply::Json(404, "{}".into()),
+        _ => Reply::Json(500, "{}".into()),
     });
     let found = client_with(config_for(&server))
         .load_credentials(&ns(&["db"]), "t")

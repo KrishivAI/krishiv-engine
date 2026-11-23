@@ -193,8 +193,10 @@ pub static CATALOG_VENDED_MAX_ENTRIES: ConfigEntry = ConfigEntry {
     key: "krishiv.catalog.vended.maxEntries",
     value_type: ValueType::PositiveInt,
     default: Some(ConfigValue::Int(10_000)),
-    doc: "Most vended storage credentials the server keeps across all declared catalogs, one per \
-          caller identity and table. The least recently used is dropped first and fetched again \
+    doc: "Most vended credential answers the server keeps across all declared catalogs, one per \
+          caller identity and table. The limit counts answers, not credentials: one answer can \
+          hold a credential for each storage prefix of the table. The least recently used answer \
+          is dropped first and fetched again \
           from the catalog on its next use. An expired entry is never used again, but it leaves \
           memory only at the next lookup or insert of the cache: while no query uses a vended \
           catalog, an expired credential can stay in memory.",
