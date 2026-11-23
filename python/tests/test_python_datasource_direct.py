@@ -305,3 +305,76 @@ def test_reader_and_writer_pass_the_path_and_struct_schemas(spark: SparkSession)
     assert seen["sink"]["path"] == "/out"
     # a StructType given to ``schema()`` reaches the source as the user schema
     assert spark.read.format("pathsrc").schema(_schema("a INT")).load("/three").collect() == [Row(a=1)]
+
+
+def test_push_filters_marks_what_the_reader_took(spark: SparkSession) -> None:
+    schema = _schema("a INT, b STRING")
+    eq = ds.EqualTo(("a",), 1)
+    gt = ds.GreaterThan(("a",), 0)
+
+    class Takes(Rows):
+        def pushFilters(self, filters: Any) -> Any:
+            return [filters[1]]  # keeps the second, takes the first
+
+    pushed, _ = ds._plan_and_read(spark, _source(Takes()), schema, "t", [eq, gt], True)
+    assert pushed == [True, False]
+
+    class TakesAll(Rows):
+        def pushFilters(self, filters: Any) -> Any:
+            return None
+
+    pushed, _ = ds._plan_and_read(spark, _source(TakesAll()), schema, "t", [eq], True)
+    assert pushed == [True]
+
+    class Invents(Rows):
+        def pushFilters(self, filters: Any) -> Any:
+            return [ds.EqualTo(("a",), 1)]  # equal, but not one that was offered
+
+    with pytest.raises(AnalysisException):
+        ds._plan_and_read(spark, _source(Invents()), schema, "t", [eq], True)
+
+    # no filters offered: pushFilters is not called
+    pushed, _ = ds._plan_and_read(spark, _source(Invents()), schema, "t", [], True)
+    assert pushed == []
+
+
+def test_filter_of_builds_each_kind() -> None:
+    assert ds._filter_of(("EqualTo", ("a",), 1)) == ds.EqualTo(("a",), 1)
+    assert ds._filter_of(("IsNull", ("a",), None)) == ds.IsNull(("a",))
+    assert ds._filter_of(("IsNotNull", ("a",), None)) == ds.IsNotNull(("a",))
+    assert ds._filter_of(("Not", None, ("StringContains", ("b",), "x"))) == ds.Not(ds.StringContains(("b",), "x"))
+
+
+def test_plan_callback_offers_filters_only_when_pushdown_is_on(
+    spark: SparkSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen: dict[str, Any] = {}
+    real = spark._native
+
+    class Native:
+        def register_python_source(self, name: str, empty: Any, read: Any, plan: Any) -> Any:
+            seen["plan"] = plan
+            return real.sql("SELECT 1 AS a")
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(real, name)
+
+    monkeypatch.setattr(spark, "_base_native" if hasattr(spark, "_base_native") else "_native", Native())
+
+    class Taking(Rows):
+        def pushFilters(self, filters: Any) -> Any:
+            return []
+
+    class Src(DataSource):
+        def schema(self) -> str:
+            return "a INT"
+
+        def reader(self, schema: Any) -> DataSourceReader:
+            return Taking((1,))
+
+    ds.load(spark, ds._Registered(Src, "src", 1), {}, None)
+    specs = [("EqualTo", ("a",), 1)]
+    monkeypatch.setattr(ds, "_pushdown_enabled", lambda _s: False)
+    assert seen["plan"](specs)[0] == [False]
+    monkeypatch.setattr(ds, "_pushdown_enabled", lambda _s: True)
+    assert seen["plan"](specs)[0] == [True]
