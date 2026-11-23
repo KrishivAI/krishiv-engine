@@ -334,11 +334,14 @@ async fn add_artifacts_batch_and_chunked() {
     let used = run.entry().artifacts().used_bytes();
     // One block per segment: 2 + 3 + 2 + 2.
     assert_eq!(used, 9 * ARTIFACT_OVERHEAD + 18 + 5 + 4 + 100_000);
-    // Private directories.
-    use std::os::unix::fs::PermissionsExt;
-    for d in [run.root().expect("root"), dir.clone(), dir.join("files")] {
-        let mode = std::fs::metadata(&d).expect("meta").permissions().mode() & 0o777;
-        assert_eq!(mode, 0o700, "{}", d.display());
+    // Private directories (mode bits: Unix only).
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        for d in [run.root().expect("root"), dir.clone(), dir.join("files")] {
+            let mode = std::fs::metadata(&d).expect("meta").permissions().mode() & 0o777;
+            assert_eq!(mode, 0o700, "{}", d.display());
+        }
     }
     // Only a cached blob exists for ArtifactStatus.
     let s: pb::ArtifactStatusesResponse = unary(
@@ -822,6 +825,7 @@ async fn released_sessions_remove_their_artifacts() {
     assert!(run.root().is_some());
 }
 
+#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn planted_links_in_the_session_directory_are_not_followed() {
     let run = start().await;

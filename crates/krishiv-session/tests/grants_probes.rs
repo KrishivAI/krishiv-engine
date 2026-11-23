@@ -265,6 +265,7 @@ fn p9_case_sensitive_columns_share_a_key() {
     assert!(r.contains(DENIED), "grant on a covers A: {r}");
 }
 
+#[cfg(unix)]
 /// P10: a symlink inside a granted directory reads outside it.
 #[test]
 fn p10_symlink_under_granted_path() {

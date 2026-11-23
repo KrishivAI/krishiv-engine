@@ -1005,6 +1005,7 @@ fn on_path_finds_installed_binaries_only() {
     assert!(!on_path("definitely-not-a-program-xyz"));
 }
 
+#[cfg(unix)]
 #[test]
 fn text_lint_reads_only_git_tracked_files() {
     use std::os::unix::fs::PermissionsExt;
@@ -1052,6 +1053,7 @@ fn text_lint_reads_only_git_tracked_files() {
     assert!(!seen.exists(), "the linter must not run with no files");
 }
 
+#[cfg(unix)]
 #[test]
 fn tracked_files_cmd_skips_deleted_tracked_files() {
     use std::os::unix::fs::PermissionsExt;
@@ -1098,6 +1100,7 @@ fn tracked_files_cmd_skips_deleted_tracked_files() {
     assert!(!seen.exists(), "the linter must not run with no files");
 }
 
+#[cfg(unix)]
 #[test]
 fn markdownlint_paths_are_passed_as_literal_paths() {
     use std::os::unix::fs::PermissionsExt;

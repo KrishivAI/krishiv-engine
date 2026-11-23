@@ -1656,6 +1656,7 @@ mod canonical_path_tests {
         canonical_parts(Path::new(&local)).map(|p| format!("file:/{}", p.join("/")))
     }
 
+    #[cfg(unix)]
     #[test]
     fn folds_dot_dot_in_the_text_then_resolves_links_and_appends_the_rest() {
         let tmp = tempfile::tempdir().unwrap();
@@ -1683,6 +1684,7 @@ mod canonical_path_tests {
         }
     }
 
+    #[cfg(unix)]
     #[test]
     fn refuses_paths_it_cannot_make_canonical() {
         let tmp = tempfile::tempdir().unwrap();

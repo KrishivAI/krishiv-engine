@@ -17,7 +17,9 @@ use delta_kernel::{
 };
 use krishiv_common::error::{ErrorClass, KrishivError};
 use krishiv_exec::CancellationToken;
-use krishiv_io::{IoConfig, IoScheduler, SettledLocalFileSystem, StoreId};
+use krishiv_io::{IoConfig, IoScheduler, StoreId};
+
+use crate::TestLocalStore as SettledLocalFileSystem;
 use object_store::ObjectStore;
 use url::Url;
 

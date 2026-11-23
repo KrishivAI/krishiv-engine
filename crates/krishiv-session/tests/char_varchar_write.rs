@@ -814,6 +814,7 @@ fn equal_null_and_lateral_aliases_pad_char_comparisons() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn stored_cte_references_wide_chars_and_linked_partitions() {
     let s = fresh();
