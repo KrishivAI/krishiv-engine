@@ -102,9 +102,11 @@ fn a_sort_written_to_parquet_under_a_small_limit_finishes_and_spills() {
         let _ = done.send(());
         (s, result)
     });
-    // A hang fails here rather than at the test runner's timeout.
-    wait.recv_timeout(DEADLINE)
-        .unwrap_or_else(|_| panic!("the sorted write did not finish in {DEADLINE:?}"));
+    // A hang fails here rather than at the test runner's timeout; a panic of
+    // the writer thread (the sender dropped unsent) shows through `join`.
+    if let Err(mpsc::RecvTimeoutError::Timeout) = wait.recv_timeout(DEADLINE) {
+        panic!("the sorted write did not finish in {DEADLINE:?}");
+    }
     let (s, result) = writer.join().unwrap();
     result.unwrap();
 
