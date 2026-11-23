@@ -147,6 +147,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &CATALOG_MAX_METADATA_BYTES,
     ),
     (
+        "krishiv.catalog.vendedDefaultTtl",
+        &CATALOG_VENDED_DEFAULT_TTL,
+    ),
+    (
         "krishiv.connect.handshakeTimeout",
         &CONNECT_HANDSHAKE_TIMEOUT,
     ),
@@ -197,6 +201,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.cache.defaultStorageLevel",
         &CACHE_DEFAULT_STORAGE_LEVEL,
+    ),
+    (
+        "krishiv.catalog.vended.maxEntries",
+        &CATALOG_VENDED_MAX_ENTRIES,
     ),
     (
         "krishiv.connect.keepAlive.enabled",
@@ -330,6 +338,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.optimizer.eagerAggregation", &EAGER_AGGREGATION),
     ("krishiv.optimizer.ndvSampling.rows", &NDV_SAMPLING_ROWS),
     ("krishiv.optimizer.subqueryAsWindow", &SUBQUERY_AS_WINDOW),
+    (
+        "krishiv.python.worker.maxPerTenant",
+        &PYTHON_WORKER_MAX_PER_TENANT,
+    ),
     (
         "krishiv.runtimeFilter.equatedSites",
         &RUNTIME_FILTER_EQUATED_SITES,
@@ -557,6 +569,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &CONNECT_MAX_SESSIONS_PER_PRINCIPAL,
     ),
     (
+        "krishiv.connect.pythonFunctions.catalog",
+        &CONNECT_PYTHON_FUNCTIONS_CATALOG,
+    ),
+    (
         "krishiv.flightSql.maxCommandResultBytes",
         &FLIGHT_SQL_MAX_COMMAND_RESULT_BYTES,
     ),
@@ -575,6 +591,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.python.worker.sandbox.allowFork",
         &PYTHON_WORKER_ALLOW_FORK,
+    ),
+    (
+        "krishiv.python.worker.tenantMemoryLimit",
+        &PYTHON_WORKER_TENANT_MEMORY_LIMIT,
     ),
     (
         "krishiv.sql.legacy.statisticalAggregate",

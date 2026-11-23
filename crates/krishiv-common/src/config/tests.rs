@@ -1602,6 +1602,39 @@ fn python_worker_entries_parse_and_default() {
 }
 
 #[test]
+fn python_worker_tenant_entries_parse_and_default() {
+    let mut c = Config::new();
+    assert_eq!(
+        c.get(&PYTHON_WORKER_MAX_PER_TENANT)
+            .and_then(ConfigValue::as_int),
+        Some(32)
+    );
+    assert_eq!(c.get(&PYTHON_WORKER_TENANT_MEMORY_LIMIT), None);
+    c.set("krishiv.python.worker.maxPerTenant", "4").unwrap();
+    c.set("krishiv.python.worker.tenantMemoryLimit", "512m")
+        .unwrap();
+    assert_eq!(
+        c.get(&PYTHON_WORKER_MAX_PER_TENANT)
+            .and_then(ConfigValue::as_int),
+        Some(4)
+    );
+    assert_eq!(
+        c.get(&PYTHON_WORKER_TENANT_MEMORY_LIMIT)
+            .and_then(ConfigValue::as_size),
+        Some(512 << 20)
+    );
+    assert!(c.set("krishiv.python.worker.maxPerTenant", "0").is_err());
+    assert!(
+        c.set("krishiv.python.worker.tenantMemoryLimit", "lots")
+            .is_err()
+    );
+    assert_eq!(
+        PYTHON_WORKER_MAX_PER_TENANT.settable_by,
+        SettableBy::Startup
+    );
+}
+
+#[test]
 fn access_provider_is_unset_and_startup_only() {
     let mut c = Config::new();
     assert_eq!(c.get(&ACCESS_PROVIDER), None);

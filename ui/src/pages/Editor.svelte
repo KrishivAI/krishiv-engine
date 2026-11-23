@@ -3,6 +3,8 @@
   import { EditorState } from "@codemirror/state";
   import { keymap } from "@codemirror/view";
   import { sql } from "@codemirror/lang-sql";
+  import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
+  import { tags } from "@lezer/highlight";
   import { api, type SqlRun } from "../api";
   import { consoleInfo } from "../console.svelte";
   import { Badge, stateVariant } from "$lib/components/ui/badge";
@@ -21,8 +23,8 @@
 
   // The editor lives in a shadow root: CodeMirror then adopts its stylesheet (a constructable one, which the page's
   // `style-src 'self'` does not govern) instead of injecting a <style> element the policy would block. Colours come
-  // from the page's custom properties, which cross the shadow boundary; there is no syntax colouring, so the text
-  // keeps the page's own contrast in dark and light.
+  // from the page's custom properties, which cross the shadow boundary, so the text keeps the page's own contrast
+  // in dark and light.
   const theme = EditorView.theme({
     "&": { color: "var(--foreground)", backgroundColor: "var(--card)", minHeight: "8rem", fontSize: "14px" },
     // A long statement scrolls inside the editor, so the page's own controls stay where they are.
@@ -32,6 +34,16 @@
     ".cm-cursor": { borderLeftColor: "var(--foreground)" },
     ".cm-selectionBackground, &.cm-focused .cm-selectionBackground": { backgroundColor: "color-mix(in srgb, var(--foreground) 25%, transparent)" },
   });
+
+  // Syntax colours are the page's status colours, which are legible on a surface in both schemes. Without this
+  // style CodeMirror's default one applies (minimalSetup carries it as a fallback): fixed colours chosen for a
+  // white page, whose keyword purple is too dark to read on the dark surface.
+  const highlight = HighlightStyle.define([
+    { tag: tags.keyword, color: "var(--k-info)", fontWeight: "600" },
+    { tag: [tags.string, tags.special(tags.string)], color: "var(--k-success)" },
+    { tag: [tags.number, tags.bool, tags.null], color: "var(--k-warning)" },
+    { tag: tags.comment, color: "var(--k-muted)", fontStyle: "italic" },
+  ]);
 
   $effect(() => {
     if (!host) return;
@@ -48,6 +60,7 @@
         extensions: [
           minimalSetup,
           theme,
+          syntaxHighlighting(highlight),
           sql(),
           EditorView.contentAttributes.of({ "aria-label": "SQL statement" }),
           keymap.of([{ key: "Mod-Enter", run: () => (start(), true) }]),
