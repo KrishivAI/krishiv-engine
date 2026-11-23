@@ -30,7 +30,8 @@ docker cp krishiv:/var/lib/krishiv/tls/cert.pem .      # the self-signed certifi
 ```
 
 Clients connect with `sc://localhost:15002/;use_ssl=true;token=change-me-to-32-or-more-characters-of-your-own` (PySpark: set
-`GRPC_DEFAULT_SSL_ROOTS_FILE_PATH=cert.pem` to trust the certificate). The console is `https://localhost:8080/`.
+`GRPC_DEFAULT_SSL_ROOTS_FILE_PATH=cert.pem` to trust the certificate). The console is
+`https://localhost:8080/?token=<your token>` (the token goes in the address once; the page then keeps a session).
 
 | Setting | Default |
 |---|---|

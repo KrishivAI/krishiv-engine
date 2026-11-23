@@ -125,6 +125,8 @@ curl -s -o /dev/null -w '%{http_code}\n' --cacert cert.pem https://localhost:808
 ```
 
 `/healthz` and `/readyz` need no token. `/metrics` does: send the admin token as `Authorization: Bearer <token>`.
+The web console opens at `https://localhost:8080/?token=<token>`: the token goes in the address once, then the page
+keeps a session and removes it from the address (your browser warns about a self-signed certificate).
 The image's `HEALTHCHECK` calls `/healthz` every 15 seconds (over HTTPS when TLS is set), so `docker ps` shows `healthy` after the start period of 20 seconds.
 
 ## Connect PySpark

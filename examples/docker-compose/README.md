@@ -42,8 +42,9 @@ Two things differ from a Spark server in 0.3, and the notebook is written around
 
 Look around while it runs:
 
-- the Krishiv console, `https://localhost:8080/`: your browser warns about the self-signed certificate; sign in
-  with the token (`krishiv-quickstart-token-change-me-please`). The notebook's queries are under Queries and History;
+- the Krishiv console, `https://localhost:8080/?token=krishiv-quickstart-token-change-me-please`: your browser
+  warns about the self-signed certificate. The token goes in the address once (the page then keeps a session and
+  removes it from the address). The notebook's queries are under Queries and History;
 - the MinIO console, <http://127.0.0.1:9001> (`krishiv` / `krishiv-quickstart`): the table's Parquet files and
   its `_delta_log/` are in the `lakehouse` bucket.
 
