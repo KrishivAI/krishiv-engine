@@ -191,6 +191,12 @@ impl Translator<'_> {
                         Expr::literal(Literal::String(echo.message)).alias("message"),
                     )],
                 },
+                // Registered for the command slot only: `resolve` has refused it here.
+                Extension::PersistPythonFunction(_) => {
+                    return Err(super::errors::unsupported(
+                        "the PersistPythonFunction extension in a relation",
+                    ));
+                }
             },
             other => {
                 return Err(unsupported_variant(

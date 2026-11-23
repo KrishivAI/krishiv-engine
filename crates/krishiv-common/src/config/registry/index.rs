@@ -338,6 +338,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.optimizer.ndvSampling.rows", &NDV_SAMPLING_ROWS),
     ("krishiv.optimizer.subqueryAsWindow", &SUBQUERY_AS_WINDOW),
     (
+        "krishiv.python.worker.maxPerTenant",
+        &PYTHON_WORKER_MAX_PER_TENANT,
+    ),
+    (
         "krishiv.runtimeFilter.equatedSites",
         &RUNTIME_FILTER_EQUATED_SITES,
     ),
@@ -580,6 +584,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &CONNECT_MAX_SESSIONS_PER_PRINCIPAL,
     ),
     (
+        "krishiv.connect.pythonFunctions.catalog",
+        &CONNECT_PYTHON_FUNCTIONS_CATALOG,
+    ),
+    (
         "krishiv.flightSql.maxCommandResultBytes",
         &FLIGHT_SQL_MAX_COMMAND_RESULT_BYTES,
     ),
@@ -598,6 +606,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.python.worker.sandbox.allowFork",
         &PYTHON_WORKER_ALLOW_FORK,
+    ),
+    (
+        "krishiv.python.worker.tenantMemoryLimit",
+        &PYTHON_WORKER_TENANT_MEMORY_LIMIT,
     ),
     (
         "krishiv.sql.legacy.statisticalAggregate",
