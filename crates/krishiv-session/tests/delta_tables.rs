@@ -440,6 +440,81 @@ fn table_properties_on_a_delta_create_are_refused_by_name() {
     assert_eq!(ids(&query(&s, "SELECT id FROM p ORDER BY id")), [1, 2]);
 }
 
+/// delta-spark writes a table `COMMENT` as the log's `description`; delta_kernel 0.30.1's create
+/// writes none, so a comment on a new table (declared or CTAS), or over an existing one, is refused
+/// by name rather than kept in the catalog alone. Nothing is written at the location.
+#[test]
+fn a_table_comment_on_a_delta_create_is_refused_by_name() {
+    let t = Table::copy("session-table");
+    let s = Session::new().unwrap();
+    let path = t.path();
+    let fresh = tempfile::tempdir().unwrap();
+    let new_dir = fresh.path().join("new");
+    let ctas_dir = fresh.path().join("ctas");
+    for (sql, table, operation) in [
+        (
+            format!(
+                "CREATE TABLE n (id INT) USING delta COMMENT 'a table' LOCATION '{}'",
+                new_dir.display()
+            ),
+            "n",
+            "CREATE TABLE ... COMMENT on a new Delta table",
+        ),
+        (
+            "CREATE TABLE m (id INT) USING delta COMMENT 'a table'".to_owned(),
+            "m",
+            "CREATE TABLE ... COMMENT on a new Delta table",
+        ),
+        (
+            format!(
+                "CREATE TABLE c USING delta COMMENT 'a table' LOCATION '{}' AS SELECT 1 AS id",
+                ctas_dir.display()
+            ),
+            "c",
+            "CREATE TABLE ... COMMENT on a new Delta table",
+        ),
+        (
+            format!("CREATE TABLE p USING delta COMMENT 'a table' LOCATION '{path}'"),
+            "p",
+            "CREATE TABLE ... COMMENT over an existing Delta table",
+        ),
+    ] {
+        let e = error(&s, &sql);
+        assert_eq!(
+            e.error_class(),
+            ErrorClass::UnsupportedFeatureTableOperation,
+            "{sql}: {e}"
+        );
+        assert_eq!(param(&e, "operation"), refused(operation), "{sql}: {e}");
+        assert_eq!(
+            param(&e, "tableName"),
+            format!("`spark_catalog`.`default`.`{table}`"),
+            "{sql}: {e}"
+        );
+        assert_eq!(
+            error(&s, &format!("SELECT * FROM {table}")).error_class(),
+            ErrorClass::TableOrViewNotFound,
+            "{sql}"
+        );
+    }
+    for dir in [&new_dir, &ctas_dir] {
+        assert!(
+            !dir.join("_delta_log").exists(),
+            "{} has a log",
+            dir.display()
+        );
+    }
+    // `IF NOT EXISTS` over a name that exists does nothing, comment or not.
+    block_on(s.sql(&format!("CREATE TABLE p USING delta LOCATION '{path}'"))).unwrap();
+    block_on(s.sql(&format!(
+        "CREATE TABLE IF NOT EXISTS p (id INT) USING delta COMMENT 'a table' LOCATION '{}'",
+        new_dir.display()
+    )))
+    .unwrap();
+    assert!(!new_dir.join("_delta_log").exists());
+    assert_eq!(ids(&query(&s, "SELECT id FROM p ORDER BY id")), [1, 2]);
+}
+
 #[test]
 fn a_refused_table_is_named_as_delta_spark_names_it() {
     let t = Table::copy("session-appends");

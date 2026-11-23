@@ -525,6 +525,13 @@ impl Session {
                     "bucketBy",
                 ));
             }
+            // The kernel's create writes no `description`, where delta-spark writes the comment.
+            if table.comment.is_some() {
+                return Err(super::delta::delta_write_refused(
+                    quoted(&table.namespace, &table.name),
+                    "CREATE TABLE ... COMMENT on a new Delta table",
+                ));
+            }
             // Version 0 of a new Delta table with the rows (design section 4.1, "CTAS").
             drop(pre.take());
             let source =
