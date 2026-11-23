@@ -112,6 +112,25 @@ def test_a_session_without_declarations_is_unchanged() -> None:
         s.stop()
 
 
+_DELTA_CATALOG = ("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.delta.catalog.DeltaCatalog")
+
+
+def test_the_session_catalog_keys_stay_configuration(stub_uri: str) -> None:
+    # delta-spark's documented builder setup configures `spark_catalog`, which is not a declaration.
+    s = SparkSession.builder.config(*_DELTA_CATALOG).create()
+    try:
+        assert s.sql("SELECT 1 AS one").collect()[0]["one"] == 1
+    finally:
+        s.stop()
+    s = _declared(stub_uri).config(*_DELTA_CATALOG).config("spark.sql.defaultcatalog", "lake").create()
+    try:
+        assert s.sql("SELECT current_catalog() AS c").collect()[0]["c"] == "lake"
+        assert s.conf.get("spark.sql.defaultCatalog") == "lake"
+        assert s.sql("SELECT 1 AS one").collect()[0]["one"] == 1
+    finally:
+        s.stop()
+
+
 @pytest.mark.skipif(REST_URI is None, reason="no ICEBERG_REST_URI (tests/scripts/iceberg_rest_fixture.sh starts one)")
 def test_smoke_against_an_iceberg_rest_catalog() -> None:
     # The 0.3 RC smoke's embedded Iceberg part (SMOKE-iceberg-builder, SMOKE-iceberg-list-namespaces).
