@@ -960,6 +960,13 @@ impl Resolver<'_> {
                 kind,
                 condition,
             } => self.join(p, left, right, *kind, condition, env),
+            PlanNode::AsOfJoin {
+                left,
+                right,
+                kind,
+                condition,
+                as_of,
+            } => self.join_with(p, left, right, *kind, condition, Some(as_of), env),
             PlanNode::Sort {
                 input,
                 order,
@@ -1266,6 +1273,7 @@ impl Resolver<'_> {
             | PlanNode::Aggregate { .. }
             | PlanNode::PartialAggregate { .. }
             | PlanNode::Join { .. }
+            | PlanNode::AsOfJoin { .. }
             | PlanNode::Sort { .. }
             | PlanNode::Limit { .. }
             | PlanNode::Offset { .. }

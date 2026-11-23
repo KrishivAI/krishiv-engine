@@ -32,7 +32,7 @@ doctest = false
 default = ["abi3-py311", "mimalloc", "cloud", "ui"]
 abi3-py311 = ["pyo3/abi3-py311"]
 # mimalloc is the global allocator of the extension module (P2-T012).
-mimalloc = ["dep:mimalloc"]
+mimalloc = ["dep:mimalloc", "dep:libmimalloc-sys"]
 # Cloud object stores (s3://, gs://, az://) in every wheel: without it they fail with
 # KRISHIV_UNSUPPORTED_FEATURE. 0.2.0 shipped without it.
 cloud = ["krishiv-session/cloud"]
@@ -48,6 +48,7 @@ krishiv-common = { path = "../krishiv-common" }
 krishiv-connect-server = { path = "../krishiv-connect-server" }
 krishiv-exec = { path = "../krishiv-exec" }
 krishiv-io = { path = "../krishiv-io" }
+krishiv-memory = { path = "../krishiv-memory" }
 krishiv-plan = { path = "../krishiv-plan" }
 krishiv-server = { path = "../krishiv-server", features = ["session"], optional = true }
 krishiv-session = { path = "../krishiv-session" }
@@ -57,6 +58,8 @@ futures = { workspace = true, features = ["executor"] }
 # `extension-module` is deprecated: maturin sets PYO3_BUILD_EXTENSION_MODULE.
 pyo3 = { workspace = true, features = ["macros"] }
 mimalloc = { workspace = true, optional = true }
+# `mi_collect`, the pressure release hook of the module's mimalloc (`src/lib.rs`).
+libmimalloc-sys = { workspace = true, optional = true, features = ["extended"] }
 
 # musl loads the extension with dlopen, where mimalloc's default initial-exec
 # TLS model crashes at import (musllinux wheels segfaulted in `import krishiv`):

@@ -101,7 +101,7 @@ impl PySession {
     #[new]
     #[pyo3(signature = (config=None))]
     fn new(py: Python<'_>, config: Option<Vec<(String, String)>>) -> PyResult<Self> {
-        let mut builder = Session::builder();
+        let mut builder = Session::builder().source("krishiv-python");
         for (key, value) in config.unwrap_or_default() {
             builder = builder.config(key, value);
         }

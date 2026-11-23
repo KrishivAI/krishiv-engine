@@ -53,8 +53,7 @@ impl FlightSqlServer {
     }
 
     /// The caller of a call that starts new work (handshake, statement, update, prepared-statement create/execute/bind,
-    /// metadata command): refused
-    /// with `KRISHIV_SERVER_DRAINING` while the server drains (design P3-T066 §5.1), a
+    /// metadata command, session options): refused with `KRISHIV_SERVER_DRAINING` while the server drains (design P3-T066 §5.1), a
     /// non-retryable `FAILED_PRECONDITION` and not `UNAVAILABLE`.
     fn admit_new<T>(&self, request: &Request<T>) -> Result<Authenticated, Status> {
         if self.draining() {

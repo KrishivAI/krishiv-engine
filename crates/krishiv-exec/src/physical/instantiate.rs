@@ -97,7 +97,7 @@ mod aggregate;
 mod join;
 mod observe;
 use distributed::planned_schema_holds;
-pub(crate) use join::hash_join;
+pub(crate) use join::{hash_join, sort_merge_join};
 pub(crate) use observe::collect_metrics_op;
 use order::{limit_reads_in_order, range_ordered_evals, reads_range_in_order};
 
@@ -1902,26 +1902,6 @@ fn residual(
         all = eval::and(e, all);
     }
     Ok(Some(Arc::new(Compiled(all)) as Arc<dyn Predicate>))
-}
-
-pub(crate) fn sort_merge_join(
-    probe: &SchemaRef,
-    build: &SchemaRef,
-    j: &SortMergeJoinPlan,
-    env: &EvalEnv,
-    spill: Option<SpillScope>,
-) -> Result<SortMergeJoin> {
-    SortMergeJoin::try_new(JoinSpec {
-        join_type: j.join_type,
-        probe_schema: Arc::clone(probe),
-        build_schema: Arc::clone(build),
-        probe_keys: j.probe_keys.clone(),
-        build_keys: j.build_keys.clone(),
-        null_safe: j.null_safe.clone(),
-        filter: residual(probe, build, j.residual.as_ref(), env)?,
-        single_match: j.single_match,
-        spill,
-    })
 }
 
 pub(crate) fn nested_loop_join(
