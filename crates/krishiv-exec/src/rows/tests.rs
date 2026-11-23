@@ -842,6 +842,31 @@ proptest! {
         };
         check_join_index(&[col(&build)], &[col(&probe)], &[safe]);
     }
+
+    /// One `DOUBLE` key over NaNs of two bit patterns, `-0.0` and `0.0`:
+    /// the inline directory compares the normalized word, so NaN meets NaN
+    /// and `-0.0` meets `0.0` as in the reference (Spark's join semantics).
+    #[test]
+    fn one_word_double_keys_match_the_reference_over_nan_and_zeros(
+        build in proptest::collection::vec(proptest::option::of(0usize..6), 0..300),
+        probe in proptest::collection::vec(proptest::option::of(0usize..6), 0..200),
+        safe in any::<bool>(),
+    ) {
+        let values = [
+            f64::NAN,
+            f64::from_bits(0x7ff8_0000_0000_0001),
+            -0.0,
+            0.0,
+            1.5,
+            -1.5,
+        ];
+        let col = |v: &[Option<usize>]| -> ArrayRef {
+            Arc::new(Float64Array::from(
+                v.iter().map(|x| x.map(|i| values[i])).collect::<Vec<_>>(),
+            ))
+        };
+        check_join_index(&[col(&build)], &[col(&probe)], &[safe]);
+    }
 }
 
 /// `decode` restores fixed-width keys (normalized floats, NULLs) for every

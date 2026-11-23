@@ -89,6 +89,7 @@ pub trait RowSource {
 
 /// Which index a table uses.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum IndexChoice {
     /// By size: flat up to [`FLAT_MAX_BYTES`], salted above, with the key
     /// word in the directory when the layout's key is one word
