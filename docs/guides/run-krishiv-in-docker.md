@@ -8,8 +8,6 @@ The official image runs `krishiv server`: one process that serves Spark Connect,
 It needs no JVM. This page covers the image tags, the ports, how to give it settings, what to mount, and how to connect
 stock PySpark to it.
 
-<!-- FINALISE (p3-2, docker/Dockerfile): image name and tags, non-root uid, HEALTHCHECK command, default flags. -->
-
 ## Image and tags
 
 ```bash
@@ -27,7 +25,7 @@ only when a release is tagged.
 
 The entry point is `krishiv` and the default command is `server`, so `docker run IMAGE` starts the server and
 `docker run IMAGE sql ...` runs the SQL command line instead (see
-[Run SQL from the command line](run-sql-from-the-command-line.md)). The process runs as a non-root user.
+[Run SQL from the command line](run-sql-from-the-command-line.md)). The process runs as a non-root user (uid and gid `10001`) with `/var/lib/krishiv` as its working directory.
 
 ## Ports
 
@@ -92,7 +90,9 @@ Mount a volume only for data you want to keep or read:
 | a data directory, for example `-v "$PWD/data:/data"` | files that queries read or write (`/data/...` paths) |
 | `/certs`, read-only | the TLS certificate and key |
 
-<!-- FINALISE (p3-2): the image's data and spill directories, if it declares any, and whether the non-root user can write to a bind mount. -->
+The image declares no volumes. The server runs as uid `10001`, so a bind-mounted directory it writes to must be writable
+by that uid (`chown 10001:10001 data`), and the key and token files must be readable by it. Spill files go to the
+temporary directory inside the container; mount a volume there only if the container's own disk is small.
 
 To limit what clients can reach, set `krishiv.io.local.allowedRoots=/data`. See
 [Securing a single-node server](single-node-server-security.md#path-confinement).
@@ -105,7 +105,7 @@ curl -s -o /dev/null -w '%{http_code}\n' --cacert certs/server.crt https://local
 ```
 
 `/healthz` and `/readyz` need no token. `/metrics` does: send the admin token as `Authorization: Bearer <token>`.
-`docker ps` shows the container's health state once the image's health check has run.
+The image's `HEALTHCHECK` calls `/healthz` every 15 seconds (over HTTPS when TLS is set), so `docker ps` shows `healthy` after the start period of 20 seconds.
 
 ## Connect PySpark
 
