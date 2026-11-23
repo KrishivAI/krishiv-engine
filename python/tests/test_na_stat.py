@@ -160,6 +160,12 @@ def failing_examples(method: Any, spark: SparkSession) -> list[str]:
     """The sources of the examples in the docstring of ``method`` that do not give the documented output."""
     failed: list[str] = []
 
+    class _ShowChecker(doctest.OutputChecker):
+        """Exact comparison, except that Spark's ``show()`` ends with one extra empty line the docstrings omit."""
+
+        def check_output(self, want: str, got: str, optionflags: int) -> bool:
+            return super().check_output(want, got.removesuffix("\n") if got.endswith("\n\n") else got, optionflags)
+
     class Runner(doctest.DocTestRunner):
         def report_failure(self, out: Any, test: Any, example: Any, got: str) -> None:
             failed.append(example.source.strip())
@@ -168,7 +174,7 @@ def failing_examples(method: Any, spark: SparkSession) -> list[str]:
             failed.append(example.source.strip())
 
     test = doctest.DocTestParser().get_doctest(method.__doc__, {"spark": spark}, method.__name__, None, 0)
-    Runner(verbose=False, optionflags=doctest.NORMALIZE_WHITESPACE).run(test, out=lambda _: None)
+    Runner(verbose=False, checker=_ShowChecker()).run(test, out=lambda _: None)
     assert test.examples
     return failed
 

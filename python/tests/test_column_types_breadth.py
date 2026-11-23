@@ -250,12 +250,18 @@ def test_docstring_examples_run_as_documented(spark: SparkSession) -> None:
 
     from krishiv.sql import column as columns
 
+    class _ShowChecker(doctest.OutputChecker):
+        """Exact comparison, except that Spark's ``show()`` ends with one extra empty line the docstrings omit."""
+
+        def check_output(self, want: str, got: str, optionflags: int) -> bool:
+            return super().check_output(want, got.removesuffix("\n") if got.endswith("\n\n") else got, optionflags)
+
     for name in ("getField", "withField", "dropFields"):
         method = getattr(columns.Column, name)
         assert method.__doc__
         test = doctest.DocTestParser().get_doctest(method.__doc__, {"spark": spark}, name, None, 0)
         assert test.examples
-        runner = doctest.DocTestRunner(verbose=False, optionflags=doctest.NORMALIZE_WHITESPACE)
+        runner = doctest.DocTestRunner(verbose=False, checker=_ShowChecker())
         runner.run(test, out=lambda _: None)
         assert runner.failures == 0, name
         assert runner.tries > 0, name

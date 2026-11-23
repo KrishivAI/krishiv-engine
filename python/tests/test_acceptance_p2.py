@@ -69,7 +69,7 @@ def test_print_schema_is_sparks_tree(spark: SparkSession, capsys: pytest.Capture
     from krishiv.sql.types import StructType
 
     spark.sql("select 1 i, cast(2 as bigint) l").printSchema()
-    assert capsys.readouterr().out.startswith("root\n |-- i: integer (")
+    assert capsys.readouterr().out == "root\n |-- i: integer (nullable = false)\n |-- l: long (nullable = false)\n\n"
     ddl = (
         "i int not null, l bigint, d decimal(10,2), s struct<a: int not null>, "
         "arr array<struct<c: string>>, m map<string, bigint>"
