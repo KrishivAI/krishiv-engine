@@ -15,7 +15,9 @@ name=krishiv-smoke-$$
 cleanup() {
   docker logs "$name" 2>&1 | tail -n 40 || true
   docker rm -f "$name" >/dev/null 2>&1 || true
-  rm -rf "$work"
+  # The container's user (10001) owns what it wrote under data/: clear it as root in the image.
+  docker run --rm --user 0 --entrypoint sh -v "$work/data:/d" "$image" -c 'rm -rf /d/* /d/.[!.]*' >/dev/null 2>&1 || true
+  rm -rf "$work" || true
 }
 trap cleanup EXIT
 
