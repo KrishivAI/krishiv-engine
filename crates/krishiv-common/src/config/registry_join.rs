@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Hash join entries of the configuration registry (`registry.rs`).
+//! Join entries of the configuration registry (`registry.rs`): hash and sort-merge joins, ASOF JOIN.
 
+use std::borrow::Cow;
 use std::time::Duration;
 
 use super::{ConfigEntry, ConfigValue, Scope, SettableBy, ValueType};
@@ -17,6 +18,23 @@ pub static EXEC_JOIN_ROW_LAYOUT: ConfigEntry = ConfigEntry {
     scope: Scope::Session,
     settable_by: SettableBy::User,
     version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// Probe a tiny build with one integer key through an array indexed by the key.
+pub static EXEC_JOIN_DIRECT_INDEX: ConfigEntry = ConfigEntry {
+    key: "krishiv.exec.join.directIndex",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(true)),
+    doc: "Internal: a hash join build of at most 4,096 rows with one integer key whose values \
+          span at most four slots a row (at least 64 slots for a smaller build) is probed \
+          through an array indexed by the key, without encoding or hashing the probe keys \
+          (dimension joins such as TPC-DS q62's). A detailed profile (`PROFILE_DETAILED`) keeps \
+          the hashed probe, so it times that one. Results are the same either way; `false` \
+          keeps the hashed probe.",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
+    version_added: "0.3.1",
     spark_alias: None,
 };
 
@@ -73,4 +91,61 @@ pub static EXEC_COALESCE_INPUT: ConfigEntry = ConfigEntry {
     settable_by: SettableBy::User,
     version_added: "0.3.0",
     spark_alias: None,
+};
+
+/// Forces the sort-merge join on equi-joins without a strategy hint (P2-T056).
+pub static EXEC_JOIN_STRATEGY: ConfigEntry = ConfigEntry {
+    key: "krishiv.exec.join.strategy",
+    value_type: ValueType::Enum(&["auto", "sortMerge"]),
+    default: Some(ConfigValue::String(Cow::Borrowed("auto"))),
+    doc: "Internal: `auto` runs equi-joins as hash joins unless a `MERGE` hint asks otherwise; \
+          `sortMerge` runs every equi-join without a strategy hint as a sort-merge join, except \
+          `NOT IN` and keys that cannot be ordered. Results are the same either way.",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
+    version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// The bytes one key's rows may hold in a sort-merge join (P2-T056).
+pub static EXEC_JOIN_SMJ_BUFFER_BYTES: ConfigEntry = ConfigEntry {
+    key: "krishiv.exec.join.smj.bufferBytes",
+    value_type: ValueType::Size,
+    default: Some(ConfigValue::Size(0)),
+    doc: "Bytes of one join key's right-side rows a sort-merge join keeps in memory before it \
+          moves them to a spill file; 0 takes a share of the memory pool. Spark bounds these \
+          rows by count (`spark.sql.sortMergeJoinExec.buffer.in.memory.threshold` and \
+          `spark.sql.sortMergeJoinExec.buffer.spill.threshold`), which have no effect here.",
+    scope: Scope::Session,
+    settable_by: SettableBy::Admin,
+    version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// `spark.sql.join.asofJoin.enabled` (Spark 4.3): the SQL `ASOF JOIN` syntax.
+pub static SQL_ASOF_JOIN_ENABLED: ConfigEntry = ConfigEntry {
+    key: "krishiv.sql.join.asofJoin.enabled",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(false)),
+    doc: "When true, a query may use `ASOF JOIN ... MATCH_CONDITION (...)`, which joins each \
+          left row with the closest right row satisfying the match condition. When false, as by \
+          default, `ASOF JOIN` fails at parse time with `UNSUPPORTED_FEATURE.ASOF_JOIN`.",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
+    version_added: "0.3.0",
+    spark_alias: Some("spark.sql.join.asofJoin.enabled"),
+};
+
+/// `spark.sql.join.sortMergeAsOfJoin.enabled` (Spark 4.3), accepted with no effect.
+pub static SQL_SORT_MERGE_ASOF_JOIN_ENABLED: ConfigEntry = ConfigEntry {
+    key: "krishiv.sql.join.sortMergeAsOfJoin.enabled",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(false)),
+    doc: "Accepted for Spark compatibility; has no effect. Spark uses it to choose how a \
+          DataFrame as-of join runs; every as-of join here runs as a sort-merge as-of join, \
+          with the same results.",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
+    version_added: "0.3.0",
+    spark_alias: Some("spark.sql.join.sortMergeAsOfJoin.enabled"),
 };

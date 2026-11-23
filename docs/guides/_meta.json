@@ -15,5 +15,17 @@
   "krishiv-doctor": "Check a server configuration with krishiv doctor",
   "python-udf-profiler": "Profile a Python UDF",
   "observability": "Observability from Rust",
-  "migrating-jvm-udfs": "Migrating JVM UDFs"
+  "migrating-jvm-udfs": "Migrating JVM UDFs",
+  "lakehouse-tables": "Iceberg and Delta tables, and catalogs",
+  "access-control": "Access control with grants",
+  "flight-sql": "Arrow Flight SQL",
+  "metric-views": "Metric views",
+  "time-types": "The TIME type",
+  "python-data-sources": "Python data sources",
+  "delta-dml": "Changing rows in a Delta table",
+  "asof-join": "As-of joins",
+  "query-events": "Query events",
+  "python-udf-tenants": "Python UDFs per tenant",
+  "vector-search": "Vector search with SQL",
+  "python-table-functions": "Python table functions"
 }

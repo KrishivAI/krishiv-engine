@@ -58,7 +58,7 @@ type Rule = (&'static str, Off);
 type PanicHook = Box<dyn Fn(&std::panic::PanicHookInfo<'_>) + Sync + Send + 'static>;
 
 /// The switched rules.
-const RULES: [Rule; 8] = [
+const RULES: [Rule; 9] = [
     ("cse", Off::Option(|o| o.cse = false)),
     (
         "stats_propagation",
@@ -75,6 +75,10 @@ const RULES: [Rule; 8] = [
     (
         "late_payload_join",
         Off::Option(|o| o.late_payload_join = false),
+    ),
+    (
+        "preserved_side_semi_join",
+        Off::Option(|o| o.preserved_side_semi_join = false),
     ),
     ("group_key_code", Off::Option(|o| o.group_key_code = false)),
     (
@@ -217,9 +221,30 @@ fn tpch() -> Outcome {
         Ok(dir) => qerror::load(Path::new(&dir), &qerror::tpch_schemas(), "tbl"),
         Err(_) => data::tpch(7, qerror::scale()),
     };
-    let sqls: Vec<(String, String)> = (1..=22)
+    let mut sqls: Vec<(String, String)> = (1..=22)
         .map(|q| (format!("q{q:02}"), support::tpch_sql(q)))
         .collect();
+    // TPC-DS q40/q80's shape on TPC-H tables (the TPC-DS data the interpreter
+    // runs keep no rows there): a filtered dimension joined above the preserved
+    // side of an outer join, for `preserved_side_semi_join`.
+    for (id, sql) in [
+        (
+            "outer-left",
+            "SELECT o_orderkey, count(l_linenumber) FROM orders \
+             LEFT JOIN lineitem ON o_orderkey = l_orderkey AND l_quantity > 10, customer \
+             WHERE o_custkey = c_custkey AND c_nationkey < 3 \
+             GROUP BY o_orderkey",
+        ),
+        (
+            "outer-right",
+            "SELECT o_orderkey, count(l_linenumber) FROM lineitem \
+             RIGHT JOIN orders ON o_orderkey = l_orderkey, customer \
+             WHERE o_custkey = c_custkey AND c_nationkey < 3 \
+             GROUP BY o_orderkey",
+        ),
+    ] {
+        sqls.push((id.to_owned(), sql.to_owned()));
+    }
     run_suite("tpch", &sqls, &support::ctx(), &db)
 }
 

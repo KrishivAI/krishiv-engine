@@ -11,13 +11,17 @@
 
 mod iceberg_v0;
 pub mod plan;
+pub mod rest_commit;
 
 pub use iceberg_v0::provider::IcebergTableProvider;
 pub use iceberg_v0::storage::StorageRegistration;
 pub use iceberg_v0::table::{IcebergMetadata, IcebergTable};
+pub use rest_commit::{RestCommitTransport, TransportFailure, TransportReply};
 
 /// Test tables for other crates' tests (feature `testing`; never in a product build).
 #[cfg(feature = "testing")]
 pub mod testing {
-    pub use crate::iceberg_v0::testing::{WrittenTable, write_table};
+    pub use crate::iceberg_v0::testing::{
+        CommitRefusal, LocalIo, WrittenTable, append, apply_commit, write_table, write_table_with,
+    };
 }

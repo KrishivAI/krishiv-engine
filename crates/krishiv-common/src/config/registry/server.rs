@@ -534,3 +534,19 @@ pub static FLIGHT_SQL_MAX_HANDLE_BYTES_PER_PRINCIPAL: ConfigEntry = startup(
     "The most bytes (SQL text, bound literals, schemas and stored command results) one principal's Arrow Flight SQL handles hold; past it the principal's oldest idle statement tickets are released, and a new handle is `KRISHIV_FLIGHT_SQL_HANDLE_LIMIT` when none is idle.",
     None,
 );
+
+/// `krishiv.connect.pythonFunctions.catalog` (P3-T072c).
+pub static CONNECT_PYTHON_FUNCTIONS_CATALOG: ConfigEntry = ConfigEntry {
+    key: "krishiv.connect.pythonFunctions.catalog",
+    value_type: ValueType::String,
+    default: None,
+    doc: "Path of the SQLite catalog file that keeps the Python UDFs a client persists with the \
+          `krishiv.v1.PersistPythonFunction` command, per tenant: later sessions of the same tenant \
+          find them, also after a restart. Made when it is not there. Needs a `krishiv` binary built with the \
+          `python-function-catalog` feature; when unset, nothing is persisted and the \
+          command is refused.",
+    scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
+    version_added: "0.3.0",
+    spark_alias: None,
+};

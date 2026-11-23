@@ -34,7 +34,7 @@ use krishiv_common::error::{
     InvalidCloneSessionRequestTargetSessionIdAlreadyExists,
     InvalidCloneSessionRequestTargetSessionIdFormat, InvalidHandleSessionClosed, KrishivError,
 };
-use krishiv_session::auth::{Authenticated, Surface};
+use krishiv_session::auth::{Authenticated, Method, Surface};
 use krishiv_session::{QueryId, Transport};
 
 use super::{Inner, Key, SessionEntry, SessionLimits, SessionManager, audit_foreign};
@@ -101,7 +101,12 @@ impl SessionManager {
             (session, snapshot)
         };
         // The clone's own Python UDF runtime, never the source's (its workers serve one owner).
-        let python = source.python().copy_for(&caller.principal.name, &session);
+        let python = source.python().copy_for(
+            &super::principal_id(caller),
+            caller.principal.tenant.as_deref(),
+            caller.method != Method::None,
+            &session,
+        );
         let entry = self.new_entry(
             caller,
             session,
