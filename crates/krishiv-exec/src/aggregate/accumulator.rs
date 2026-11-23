@@ -730,6 +730,15 @@ impl Accumulator {
         }
     }
 
+    /// Whether raw values go into a sketch (`theta_sketch_agg` over a batch, not partial states): an array
+    /// argument is first copied into one buffer, which the projection must hold.
+    pub(crate) fn theta_raw_values(&self, states: bool) -> bool {
+        match &self.kind {
+            Kind::ThetaSketch(h) => !states && !h.takes_sketches(),
+            _ => false,
+        }
+    }
+
     /// Whether [`projected_part`](Self::projected_part) already covers the rows of a batch (the HLL sketches).
     pub(crate) fn projects_by_partition(&self) -> bool {
         matches!(self.kind, Kind::HllSketch(_) | Kind::ThetaSketch(_))

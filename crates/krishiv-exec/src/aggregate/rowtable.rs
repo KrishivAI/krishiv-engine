@@ -120,7 +120,7 @@ use super::merge_index::{MergeIndex, Slot};
 use super::table::{AggCore, batch, own_bytes};
 use std::collections::HashMap;
 
-use super::theta_sketch::{sketch_bytes, sketch_row_bytes};
+use super::theta_sketch::{largest_array_bytes, sketch_bytes, sketch_row_bytes};
 use super::{AggregateOutput, unsupported};
 use crate::error::{Result, internal};
 use crate::hash::{HashSeed, PARTITIONS, ProbeCount, ProbeTotals, grown, spill_partition};
@@ -1065,6 +1065,12 @@ impl RowTable {
                                     .or_else(|| cols.get(i).map(|c| sketch_bytes(c.as_ref())))
                             })
                             .unwrap_or(0)
+                        } else if n > 0 && a.theta_raw_values(states) {
+                            // The one buffer an array value is copied into while it hashes.
+                            a.args()
+                                .first()
+                                .and_then(|&i| cols.get(i))
+                                .map_or(0, |c| largest_array_bytes(c.as_ref()))
                         } else {
                             0
                         };

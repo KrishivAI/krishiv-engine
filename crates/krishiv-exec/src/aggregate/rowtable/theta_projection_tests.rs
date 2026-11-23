@@ -136,3 +136,48 @@ fn a_sketch_is_charged_to_the_partition_that_reads_it() {
         "{growth} for {bytes} over {touched} partitions"
     );
 }
+
+/// A raw `ARRAY<BIGINT>` value is copied into one buffer before it is hashed: the projection holds the largest
+/// array's bytes (`len * 8`), once, and nothing for a column without one.
+#[test]
+fn the_buffer_of_the_largest_array_is_projected() {
+    use arrow_array::ListArray;
+    use arrow_array::types::Int64Type;
+    let item = Arc::new(Field::new("item", DataType::Int64, true));
+    let input = Arc::new(Schema::new(vec![
+        Field::new("g", DataType::Int64, true),
+        Field::new("a", DataType::List(Arc::clone(&item)), true),
+    ]));
+    let spec = AggregateSpec {
+        input: Arc::clone(&input),
+        group_by: vec![0],
+        aggregates: vec![AggregateExpr::new(
+            AggregateFunction::ThetaSketchAgg { lg_nom: 12 },
+            1,
+            DataType::Binary,
+            "t",
+        )],
+        output: AggregateOutput::Final,
+        ansi: true,
+        spill: None,
+        require_unit_weights: false,
+        legacy_statistical: false,
+        udafs: None,
+    };
+    let core = Arc::new(AggCore::new(spec).unwrap());
+    let seed = HashSeed::new(Some(3));
+    let t = RowTable::new(&core, &seed, Mode::Grow, true, 0).unwrap();
+    let growth = |arrays: Vec<Vec<Option<i64>>>| {
+        let n = arrays.len();
+        let list: ArrayRef = Arc::new(ListArray::from_iter_primitive::<Int64Type, _, _>(
+            arrays.into_iter().map(Some),
+        ));
+        let g: ArrayRef = Arc::new(Int64Array::from((0..n as i64).collect::<Vec<_>>()));
+        let b = Batch::new(RecordBatch::try_new(Arc::clone(&input), vec![g, list]).unwrap());
+        let p = t.prepare(&b, false).unwrap();
+        t.projected(&p) + t.transient(&p) - t.memory_size()
+    };
+    let small = growth(vec![vec![Some(1); 4]; 2]);
+    let big = growth(vec![vec![Some(1); 4], vec![Some(1); 1_000_000]]);
+    assert!(big >= small + 7_900_000, "{big} against {small}");
+}

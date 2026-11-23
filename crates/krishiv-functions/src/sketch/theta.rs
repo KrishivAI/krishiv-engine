@@ -240,6 +240,29 @@ pub fn compact(sketch: &mut ThetaSketch) -> CompactThetaSketch {
     sketch.compact(true)
 }
 
+/// Whether a compressed (serial version 4) image claims more retained hashes than two per byte of the image. A
+/// real one spends 30 or more bits on each hash; a crafted one with one-bit deltas decodes to 64 times its size,
+/// which the aggregates' memory projection (32 table bytes per image byte) does not cover. Other versions list
+/// their hashes in full, and the decoder checks the length for them.
+fn expands_past_bound(bytes: &[u8]) -> bool {
+    if bytes.get(1) != Some(&4) {
+        return false;
+    }
+    let (Some(&pre), Some(&width)) = (bytes.first(), bytes.get(4)) else {
+        return false;
+    };
+    let at = usize::from(pre & 0x3F) * 8;
+    let width = usize::from(width).min(4);
+    let Some(field) = bytes.get(at..at + width) else {
+        return false;
+    };
+    let entries = field
+        .iter()
+        .rev()
+        .fold(0_usize, |n, &b| (n << 8) | usize::from(b));
+    entries > bytes.len().saturating_mul(2)
+}
+
 /// Read a compact sketch buffer, as `ThetaSketchUtils.wrapCompactSketch` does for `function`.
 ///
 /// # Errors
@@ -263,6 +286,9 @@ pub fn from_bytes(bytes: &[u8], function: &str) -> Result<CompactThetaSketch, Kr
     // A version-3 image must carry the READ_ONLY (0x02) and COMPACT (0x08) flags, as Spark's wrapper requires; the
     // library decodes one without them. Version 1/2 (legacy) and 4 (compressed) images use other flag layouts.
     if bytes.get(1) == Some(&3) && bytes.get(5).is_none_or(|f| f & 0x0a != 0x0a) {
+        return Err(invalid_buffer(function));
+    }
+    if expands_past_bound(bytes) {
         return Err(invalid_buffer(function));
     }
     let sketch = CompactThetaSketch::deserialize(bytes).map_err(|_| invalid_buffer(function))?;
@@ -507,5 +533,19 @@ mod tests {
                 let _ = estimate(&s);
             }
         }
+    }
+
+    #[test]
+    fn a_compressed_image_may_not_claim_more_than_two_hashes_a_byte() {
+        let real = to_bytes(&of(&(0..5_000).collect::<Vec<_>>()));
+        assert_eq!(real[1], 4, "a compact image of 5,000 hashes is compressed");
+        assert!(from_bytes(&real, F).is_ok());
+        // Same header, one-bit deltas, 2^22 hashes in 17 bytes.
+        let mut crafted = real[..16].to_vec();
+        crafted[3] = 1;
+        crafted[4] = 4;
+        crafted.extend_from_slice(&(1_u32 << 22).to_le_bytes());
+        crafted.push(0);
+        assert!(from_bytes(&crafted, F).is_err());
     }
 }

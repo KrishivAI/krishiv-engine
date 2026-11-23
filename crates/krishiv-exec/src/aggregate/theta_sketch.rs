@@ -51,6 +51,39 @@ fn binary_array(rows: Vec<Vec<u8>>) -> Result<BinaryArray> {
     Ok(BinaryArray::from_iter_values(rows))
 }
 
+/// The bytes of the largest `ARRAY<INT>` or `ARRAY<BIGINT>` value of a raw column: the one buffer the sketch update
+/// builds from an array (`len * width`) is held while it hashes; 0 for any other column.
+pub(crate) fn largest_array_bytes(a: &dyn arrow_array::Array) -> usize {
+    use arrow_array::cast::AsArray;
+    use arrow_schema::DataType;
+    let width = |t: &DataType| match t {
+        DataType::Int32 => 4_usize,
+        DataType::Int64 => 8,
+        _ => 0,
+    };
+    match a.data_type() {
+        DataType::List(f) => {
+            let w = width(f.data_type());
+            a.as_list::<i32>()
+                .value_offsets()
+                .windows(2)
+                .map(|o| usize::try_from(o[1] - o[0]).unwrap_or(0).saturating_mul(w))
+                .max()
+                .unwrap_or(0)
+        }
+        DataType::LargeList(f) => {
+            let w = width(f.data_type());
+            a.as_list::<i64>()
+                .value_offsets()
+                .windows(2)
+                .map(|o| usize::try_from(o[1] - o[0]).unwrap_or(0).saturating_mul(w))
+                .max()
+                .unwrap_or(0)
+        }
+        _ => 0,
+    }
+}
+
 /// The byte length of row `i` of a sketch column (0 for a null row); a column of another carrier is shared
 /// evenly over its rows.
 pub(crate) fn sketch_row_bytes(a: &dyn arrow_array::Array, i: usize) -> usize {
@@ -329,14 +362,17 @@ impl ThetaSketchAcc {
             let per_row = table(self.peak.saturating_mul(GROWTH).saturating_add(OVERHEAD));
             let landing = rows.saturating_mul(per_row).min(room);
             let fresh = if new > 0 {
-                rows.saturating_mul(FRESH_BYTES_PER_ROW)
+                // A new table is allocated while the one it replaces is live (an eighth of its size, the crate
+                // resizing by 8): at the boundary the row term pays for both.
+                (rows.saturating_mul(FRESH_BYTES_PER_ROW) / 8)
+                    .saturating_mul(9)
                     .min(new.saturating_mul(ceiling))
             } else {
                 0
             };
             let rebuild = rows.saturating_add(self.retained) > 1_usize << self.lg_nom();
             let scratch = if rebuild { table(full) } else { 0 };
-            (landing.saturating_add(scratch), fresh, 0)
+            (landing.saturating_add(scratch), fresh, state_bytes)
         } else {
             let input = state_bytes
                 .saturating_mul(TABLE_BYTES_PER_STATE_BYTE)

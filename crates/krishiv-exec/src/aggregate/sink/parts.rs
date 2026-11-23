@@ -371,13 +371,20 @@ impl Spiller {
             self.query.check_cancelled()?;
             // A chunk of large sketch states is cut by bytes, so its `binary` column stays under the offset limit.
             let mut rest = c;
+            // A refused scratch writes nothing and leaves the writer usable: the same groups are tried again in a
+            // smaller prefix (down to one group) before the refusal is the caller's.
+            let mut limit = rest.len();
             while !rest.is_empty() {
-                let n = table.state_cut(rest).clamp(1, rest.len());
+                let n = table.state_cut(rest).clamp(1, rest.len()).min(limit.max(1));
                 let (now, later) = rest.split_at(n);
-                if let Err(e) = w.write(&Batch::new(state(now)?)) {
-                    return Ok(Err(e));
+                match w.write(&Batch::new(state(now)?)) {
+                    Ok(()) => {
+                        rest = later;
+                        limit = rest.len();
+                    }
+                    Err(SpillError::Memory(_)) if n > 1 => limit = n / 2,
+                    Err(e) => return Ok(Err(e)),
                 }
-                rest = later;
             }
         }
         Ok(Ok(self.finish(w)?))
