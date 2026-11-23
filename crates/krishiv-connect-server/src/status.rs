@@ -109,6 +109,12 @@ const SPARK_ILLEGAL_ARGUMENT_EXCEPTION: &[&str] = classes!(
     "java.lang.IllegalArgumentException",
     "java.lang.RuntimeException",
 );
+/// A classless `java.lang.IllegalArgumentException`: what a Scala `require` throws, with no Spark error
+/// class (PySpark raises `IllegalArgumentException`, not a `SparkRuntimeException`).
+const ILLEGAL_ARGUMENT_EXCEPTION: &[&str] = classes!(
+    "java.lang.IllegalArgumentException",
+    "java.lang.RuntimeException",
+);
 /// `SparkUnsupportedOperationException`.
 const SPARK_UNSUPPORTED_OPERATION_EXCEPTION: &[&str] = classes!(
     "org.apache.spark.SparkUnsupportedOperationException",
@@ -169,6 +175,9 @@ pub(crate) fn exception_classes(class: ErrorClass) -> &'static [&'static str] {
         ),
         ("UNSUPPORTED_FEATURE.INTERRUPT_TYPE", SPARK_SQL_EXCEPTION),
         ("SQL_CONF_NOT_FOUND", SPARK_NO_SUCH_ELEMENT_EXCEPTION),
+        // `SparkConnectConfigHandler` on a null value: `require(value != null, ...)`, an
+        // `IllegalArgumentException` (the class itself is Krishiv's, a recorded difference).
+        ("INVALID_CONF_VALUE.REQUIREMENT", ILLEGAL_ARGUMENT_EXCEPTION),
         // `QueryCompilationErrors.cannotModifyValueOf*ConfigError`.
         ("CANNOT_MODIFY_", ANALYSIS_EXCEPTION),
         ("KRISHIV_SESSION_LIMIT", SPARK_EXCEPTION),
@@ -187,6 +196,10 @@ pub(crate) fn exception_classes(class: ErrorClass) -> &'static [&'static str] {
         // Spark's `ExecuteThreadRunner` throws a `SparkSQLException`
         // (v4.3.0, lines 105 and 175): PySpark raises `UnknownException`.
         ("OPERATION_CANCELED", SPARK_SQL_EXCEPTION),
+        // A statement the engine stopped (timeout, operator kill, quota, drain): cancelled by
+        // reason, so the same exception class as a cancel; `errorClass` tells them apart.
+        ("KRISHIV_QUERY_TIMEOUT", SPARK_SQL_EXCEPTION),
+        ("KRISHIV_QUERY_KILLED", SPARK_SQL_EXCEPTION),
         ("CAST_INVALID_INPUT", SPARK_NUMBER_FORMAT_EXCEPTION),
         (
             "INCONSISTENT_BEHAVIOR_CROSS_VERSION",

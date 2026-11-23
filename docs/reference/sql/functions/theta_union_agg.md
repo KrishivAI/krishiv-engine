@@ -10,7 +10,7 @@ Returns the ThetaSketch's Compact binary representation.
 `lgNomEntries` (optional) the log-base-2 of Nominal Entries, with Nominal Entries deciding
 the number buckets or slots for the ThetaSketch.
 
-**Applies to:** not available in Krishiv yet. Spark: 4.1 and later.
+**Applies to:** Krishiv 0.2.0 and above. Spark: 4.1 and later.
 
 ## Syntax
 
@@ -22,7 +22,7 @@ theta_union_agg(expr, lgNomEntries)
 
 | | |
 |---|---|
-| Krishiv | Not implemented yet |
+| Krishiv | Implemented |
 | Group | `agg_funcs` |
 | Kind | aggregate (function) |
 | Added in Spark | 4.1.0 |
@@ -35,12 +35,13 @@ theta_union_agg(expr, lgNomEntries)
 ```sql
 -- theta_union_agg, example 1
 > SELECT theta_sketch_estimate(theta_union_agg(sketch)) FROM (SELECT theta_sketch_agg(col) as sketch FROM VALUES (1) tab(col) UNION ALL SELECT theta_sketch_agg(col, 20) as sketch FROM VALUES (1) tab(col));
-Error: KRISHIV_UNSUPPORTED_FEATURE
+1
 ```
 
 ## Version history
 
 - Added in Spark 4.1.0.
+- Added in Krishiv 0.2.0.
 
 ## Related
 

@@ -52,7 +52,9 @@ pub fn runs_on_any_row(e: &Expr, ansi: bool) -> bool {
     is_deterministic(e) && !has_subquery(e) && (exact_decimal(e) || !may_raise(e, ansi))
 }
 
-fn has_subquery(e: &Expr) -> bool {
+/// Whether `e` holds a subquery expression.
+#[must_use]
+pub fn has_subquery(e: &Expr) -> bool {
     let mut found = false;
     let _ = crate::walk::visit_distinct(crate::walk::Node::Expr(e), |n| {
         if let crate::walk::Node::Expr(x) = n

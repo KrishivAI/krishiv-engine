@@ -26,7 +26,7 @@ const REQUIRED_FILES: &[&str] = &[
 ];
 
 /// `X.Y.Z` with an optional `-pre` suffix: the shape cargo and PyPI both accept here.
-fn is_version(v: &str) -> bool {
+pub(crate) fn is_version(v: &str) -> bool {
     let (core, pre) = v.split_once('-').map_or((v, None), |(c, p)| (c, Some(p)));
     let parts: Vec<&str> = core.split('.').collect();
     parts.len() == 3
@@ -39,7 +39,7 @@ fn is_version(v: &str) -> bool {
 }
 
 /// The workspace version from the root manifest.
-fn workspace_version(root_manifest: &str) -> Result<String, String> {
+pub(crate) fn workspace_version(root_manifest: &str) -> Result<String, String> {
     let doc: toml::Table = toml::from_str(root_manifest).map_err(|e| format!("Cargo.toml: {e}"))?;
     doc.get("workspace")
         .and_then(|w| w.get("package"))

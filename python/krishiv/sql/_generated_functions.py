@@ -534,13 +534,6 @@ _ENGINE_UNSUPPORTED = (
     "schema_of_variant_agg",
     "sentences",
     "session_window",
-    "theta_difference",
-    "theta_intersection",
-    "theta_intersection_agg",
-    "theta_sketch_agg",
-    "theta_sketch_estimate",
-    "theta_union",
-    "theta_union_agg",
     "try_reflect",
     "tuple_difference_double",
     "tuple_difference_integer",
@@ -2488,38 +2481,38 @@ def tanh(col: ColumnOrName) -> Column:
 
 
 def theta_difference(col1: ColumnOrName, col2: ColumnOrName) -> Column:
-    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
-    raise _unsupported("theta_difference")
+    """Calls the registry function ``theta_difference``."""
+    return _call("theta_difference", _named(col1, "col1"), _named(col2, "col2"))
 
 
 def theta_intersection(col1: ColumnOrName, col2: ColumnOrName) -> Column:
-    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
-    raise _unsupported("theta_intersection")
+    """Calls the registry function ``theta_intersection``."""
+    return _call("theta_intersection", _named(col1, "col1"), _named(col2, "col2"))
 
 
 def theta_intersection_agg(col: ColumnOrName) -> Column:
-    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
-    raise _unsupported("theta_intersection_agg")
+    """Calls the registry function ``theta_intersection_agg``."""
+    return _call("theta_intersection_agg", _named(col, "col"))
 
 
 def theta_sketch_agg(col: ColumnOrName, lgNomEntries: Column | int | None = None) -> Column:
-    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
-    raise _unsupported("theta_sketch_agg")
+    """Calls the registry function ``theta_sketch_agg``."""
+    return _call("theta_sketch_agg", _named(col, "col"), *_opt(_lit, lgNomEntries, "lgNomEntries"))
 
 
 def theta_sketch_estimate(col: ColumnOrName) -> Column:
-    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
-    raise _unsupported("theta_sketch_estimate")
+    """Calls the registry function ``theta_sketch_estimate``."""
+    return _call("theta_sketch_estimate", _named(col, "col"))
 
 
 def theta_union(col1: ColumnOrName, col2: ColumnOrName, lgNomEntries: Column | int | None = None) -> Column:
-    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
-    raise _unsupported("theta_union")
+    """Calls the registry function ``theta_union``."""
+    return _call("theta_union", _named(col1, "col1"), _named(col2, "col2"), *_opt(_lit, lgNomEntries, "lgNomEntries"))
 
 
 def theta_union_agg(col: ColumnOrName, lgNomEntries: Column | int | None = None) -> Column:
-    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
-    raise _unsupported("theta_union_agg")
+    """Calls the registry function ``theta_union_agg``."""
+    return _call("theta_union_agg", _named(col, "col"), *_opt(_lit, lgNomEntries, "lgNomEntries"))
 
 
 def time_bucket(bucket_size: Column, ts: ColumnOrName, origin: Column | None = None) -> Column:

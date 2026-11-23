@@ -491,6 +491,12 @@ async fn the_forward_distance_runs_on_the_match_and_the_next_passing_row() {
                     "residual {residual} poison at {poison_at} batch_rows {batch_rows} \
                      (passing {passing:?})"
                 );
+                if let Err(e) = &got {
+                    assert!(
+                        format!("{e:?}").contains("poisoned distance"),
+                        "residual {residual} poison at {poison_at}: unrelated error {e:?}"
+                    );
+                }
             }
         }
         // Both halves see raising and quiet positions (a poison the residual drops never raises).
@@ -613,8 +619,14 @@ async fn the_distance_raises_where_spark_raises() {
                              group_bytes {group_bytes}: {:?}",
                             got.err()
                         );
-                        if let Ok(run) = got {
-                            assert_eq!(run.rows, case.oracle(&left, &right), "{case:?}");
+                        match got {
+                            Ok(run) => {
+                                assert_eq!(run.rows, case.oracle(&left, &right), "{case:?}");
+                            }
+                            Err(e) => assert!(
+                                format!("{e:?}").contains(&format!("past {limit}")),
+                                "{case:?} limit {limit}: unrelated error {e:?}"
+                            ),
                         }
                     }
                 }
