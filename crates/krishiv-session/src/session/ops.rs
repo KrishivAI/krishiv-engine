@@ -4,6 +4,19 @@
 use super::*;
 
 impl Session {
+    /// The object stores one query's declared-catalog reads use: its configuration snapshot
+    /// `config`, the runtime's scheduler and the session's working directory.
+    pub(crate) fn declared_stores(
+        &self,
+        config: &Arc<krishiv_common::config::Config>,
+    ) -> crate::catalog_registry::ScopedStores {
+        crate::catalog_registry::ScopedStores::new(
+            Arc::clone(config),
+            Arc::clone(&self.state.io),
+            self.state.cwd.clone(),
+        )
+    }
+
     /// A query that reads something besides `system.*` is refused with `KRISHIV_SERVER_DRAINING`
     /// while the server drains (design P3-T066 §5.1); its row `log_id` closes as failed.
     pub(crate) fn refuse_query_while_draining(&self, log_id: &str) -> Result<(), KrishivError> {
@@ -765,16 +778,29 @@ impl Session {
         fallback: krishiv_sql::StatementClass,
     ) -> Result<Admitted, KrishivError> {
         // The policy of the query's own configuration snapshot, passed to its row (no shared slot).
+        // A query a command runs for itself (an `INSERT`'s write) has no statement: it is the command's.
+        let command = match env.text {
+            None => super::ran::command_statement(),
+            Some(_) => None,
+        };
+        let (text, class) = match &command {
+            Some(c) => (Some(&*c.text), Some(c.class)),
+            None => (env.text.as_deref(), env.statement_class),
+        };
         let log_id = self.state.queries.begin_as(
             crate::system::TextPolicy::from_config(&env.config),
-            env.text.as_deref(),
-            env.statement_class,
+            text,
+            class,
             self.operation_id(),
         )?;
         crate::action::note_row(&log_id);
         // The request tags join the row's tags at once, so a queued query shows them too.
         self.stamp_row(&log_id);
         *env.row.lock().unwrap_or_else(PoisonError::into_inner) = Some(log_id.clone());
+        // The command's listed run: a failure of it is this row, and the statement gets no refused row.
+        if let Some(c) = &command {
+            *c.row.lock().unwrap_or_else(PoisonError::into_inner) = Some(log_id.clone());
+        }
         let permit = self.admit(&log_id, env, exempt, fallback).await?;
         Ok(Admitted::new(Arc::clone(&self.state), log_id, permit))
     }
