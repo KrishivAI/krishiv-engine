@@ -1008,9 +1008,12 @@ impl JsonLinesSink {
         Ok(())
     }
 
-    fn write(&self, batch: &[Arc<EngineEvent>]) -> std::io::Result<()> {
+    /// Writes the batch; on failure returns the error with the count of the batch's events an earlier
+    /// segment's flush made durable, read under the same lock so a concurrent delivery cannot change it.
+    fn write(&self, batch: &[Arc<EngineEvent>]) -> Result<(), (std::io::Error, usize)> {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         let result = self.write_locked(&mut state, batch);
+        let durable = state.durable;
         if result.is_err() {
             // A failed write may leave a partial line: never append to that segment again, and cut it
             // back to the last flushed whole line.
@@ -1026,7 +1029,7 @@ impl JsonLinesSink {
                 }
             }
         }
-        result
+        result.map_err(|e| (e, durable))
     }
 
     fn write_locked(
@@ -1067,12 +1070,7 @@ impl EventSink for JsonLinesSink {
     }
 
     fn deliver(&self, batch: &[Arc<EngineEvent>]) {
-        if let Err(e) = self.write(batch) {
-            let durable = self
-                .state
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .durable;
+        if let Err((e, durable)) = self.write(batch) {
             self.failures.fetch_add(
                 batch.len().saturating_sub(durable) as u64,
                 Ordering::Relaxed,
