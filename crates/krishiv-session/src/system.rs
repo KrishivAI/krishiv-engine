@@ -697,6 +697,8 @@ pub(crate) struct QueryRow {
     /// The advisor's hints for a finished query; `None` for one that did not finish or ran with
     /// `krishiv.advisor.enabled=false` (`Some` of none: finished, nothing to say).
     pub(crate) hints: Option<Arc<[HintRow]>>,
+    /// The `seq` of the next query event of this row (P3 E9).
+    pub(crate) event_seq: u64,
 }
 
 /// One operator of a finished query, as `system.operators` lists it.
@@ -990,6 +992,7 @@ impl QueryLog {
             workers: None,
             cancel_reason: None,
             hints: None,
+            event_seq: 0,
         }
     }
 

@@ -36,7 +36,9 @@ def df(spark: SparkSession) -> DataFrame:
 
 def shown(df: DataFrame, capsys: pytest.CaptureFixture[str], *args: Any, **kwargs: Any) -> str:
     df.show(*args, **kwargs)
-    return capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert out.endswith("\n\n")  # PySpark's `print` adds an empty line after the table text (PY-079)
+    return out[:-1]
 
 
 def test_smoke_select_one_to_arrow(spark: SparkSession) -> None:
