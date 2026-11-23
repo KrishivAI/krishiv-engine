@@ -584,23 +584,34 @@ async fn stalled_reader_cancelled_after_idle_timeout() {
     )
     .await
     .expect("info");
-    // The limit starts when the query attaches, which may be during `do_get` setup: the timeout can
-    // come from the call itself or from the stream. The whole operation is bounded.
-    let end = tokio::time::timeout(Duration::from_secs(30), async {
-        let mut stream = match h.client.do_get(authed(ticket(&info), OPS, None)).await {
-            Ok(r) => r.into_inner(),
-            Err(status) => return status,
-        };
-        loop {
-            match stream.message().await {
-                Ok(Some(_)) => {}
-                Ok(None) => panic!("the stream finished instead of timing out"),
-                Err(status) => break status,
-            }
+    let mut stream = h
+        .client
+        .do_get(authed(ticket(&info), OPS, None))
+        .await
+        .expect("do_get")
+        .into_inner();
+    stream
+        .message()
+        .await
+        .expect("first message")
+        .expect("schema");
+    // The reader stops: once tonic has filled the HTTP/2 window it owes the stream a poll, which
+    // may take a while under load, so the sweep is repeated until it expires the fetch (m11).
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while h.flight.session_count() != 0 {
+        assert!(Instant::now() < deadline, "the fetch never went idle");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        h.flight.sweep_at(Instant::now() + Duration::from_secs(1));
+    }
+    // Its query was cancelled and its session released; the stream ends with the typed error
+    // after what was already buffered.
+    let end = loop {
+        match stream.message().await {
+            Ok(Some(_)) => {}
+            Ok(None) => panic!("the stream ended without the idle error"),
+            Err(status) => break status,
         }
-    })
-    .await
-    .expect("the statement never timed out");
+    };
     assert_eq!(end.code(), Code::DeadlineExceeded, "{end:?}");
     assert_eq!(
         end.metadata()
@@ -641,14 +652,14 @@ async fn a_statement_past_the_server_time_limit_ends_with_krishiv_query_timeout(
     )
     .await
     .expect("info");
-    let mut stream = h
-        .client
-        .do_get(authed(ticket(&info), OPS, None))
-        .await
-        .expect("do_get")
-        .into_inner();
-    // The whole drain is bounded: a read that stays pending fails the test instead of hanging it.
+    // The limit starts when the query attaches, which may be during `do_get` setup: the timeout can
+    // come from the call itself or from the stream. The whole operation is bounded: a read that stays
+    // pending fails the test instead of hanging it.
     let end = tokio::time::timeout(Duration::from_secs(30), async {
+        let mut stream = match h.client.do_get(authed(ticket(&info), OPS, None)).await {
+            Ok(r) => r.into_inner(),
+            Err(status) => return status,
+        };
         loop {
             match stream.message().await {
                 Ok(Some(_)) => {}
