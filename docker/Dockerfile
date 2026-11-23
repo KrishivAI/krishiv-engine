@@ -32,7 +32,9 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl openssl \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --system --gid 10001 krishiv \
-    && useradd --system --uid 10001 --gid krishiv --home-dir /var/lib/krishiv --create-home --shell /usr/sbin/nologin krishiv
+    && useradd --system --uid 10001 --gid krishiv --home-dir /var/lib/krishiv --create-home --shell /usr/sbin/nologin krishiv \
+    && install -d -o 10001 -g 10001 /data
+VOLUME /data
 COPY --from=build /out/krishiv /usr/local/bin/krishiv
 COPY docker/entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 USER 10001:10001
