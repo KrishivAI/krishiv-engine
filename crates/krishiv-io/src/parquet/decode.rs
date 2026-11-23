@@ -808,7 +808,11 @@ impl ParquetDecoder {
             let mut builder = PageIndexBuilder::new(footer.num_row_groups(), columns);
             for o in offsets.iter().filter(|o| planned.contains(&o.index)) {
                 for (leaf, index) in &o.leaves {
-                    builder.put_offset_index(index.clone(), o.index, *leaf);
+                    // Row group and leaf come from this footer, so only a corrupt footer
+                    // puts one out of bounds.
+                    builder
+                        .try_put_offset_index(index.clone(), o.index, *leaf)
+                        .map_err(|e| FormatError::Corrupt(e.to_string()))?;
                 }
             }
             let metadata = ParquetMetaDataBuilder::new_from_metadata(footer.as_ref().clone())
