@@ -1086,9 +1086,10 @@ mod merge {
     fn a_sql_merge_builds_qualified_insert_and_set_columns_before_its_refusal() {
         // `exec_merge` builds every clause from the SQL text (an `INSERT` column qualified by the
         // target's alias, or without one by its name, `namespace.name` or
-        // `spark_catalog.namespace.name`; a `SET` column qualified the same way) before it asks the
-        // table for a row-level table. A Parquet table has none, so the statement reaches the old
-        // refusal with every clause built.
+        // `spark_catalog.namespace.name`; a `SET` column loses only a first part equal to the alias
+        // or the table name) before it asks the table for a row-level table. A Parquet table has
+        // none, so the statement reaches the old refusal with every clause built: this runs those
+        // paths, it does not check the columns they build.
         let dir = tempfile::tempdir().unwrap();
         let session = Session::new().unwrap();
         block_on(session.sql(&format!(
