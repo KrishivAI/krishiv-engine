@@ -111,6 +111,8 @@ export interface QueryDetail {
   plan?: PlanNode[] | null;
   /** The query has ended and its plan is not stored yet but can still arrive: ask again. */
   plan_pending?: boolean;
+  /** Another session ran a query under this id; operator rows name no session, so none are given. */
+  operators_withheld?: boolean;
 }
 
 export interface CacheRow {
