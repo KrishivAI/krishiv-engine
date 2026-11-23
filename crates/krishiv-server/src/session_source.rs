@@ -609,7 +609,7 @@ const QUERIES_WITH_CLIENT: &str = "SELECT q.*, s.client_type FROM system.queries
 
 impl UiSource for SessionSource {
     fn udf_workers(&self) -> UiFuture<'_, Option<crate::udf_workers::UdfWorkers>> {
-        let pool = self.udf_workers.as_ref().map(|read| read());
+        let pool = self.udf_workers.as_ref().and_then(|read| read());
         Box::pin(async move { Ok(pool) })
     }
 

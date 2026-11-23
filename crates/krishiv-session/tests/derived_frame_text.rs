@@ -242,7 +242,7 @@ fn a_write_that_fails_while_it_runs_is_listed_once_with_its_text() {
 
 /// A script from the editor: the script's own row (the one a cancel addresses) has the script's text and
 /// class, and each statement the script runs is a row with that statement's own text and class. The read of
-/// the script's result is a run of its own and carries neither.
+/// the script's result is a run of its own, listed under the script's text and class.
 #[test]
 fn a_script_is_listed_with_its_text_and_each_statement_with_its_own() {
     let s = Session::new().unwrap();
@@ -265,8 +265,10 @@ fn a_script_is_listed_with_its_text_and_each_statement_with_its_own() {
     block_on(df.limit(10).collect()).unwrap();
     let mut rows = tagged(&s, "ui-run-11");
     rows.sort();
-    let mut with_read = vec![None];
+    // The read of the script's result (its last query's rows) is listed under the script's text and class.
+    let mut with_read = vec![Some(format!("{script} | WRITE"))];
     with_read.extend(listed);
+    with_read.sort();
     assert_eq!(rows, with_read);
 }
 

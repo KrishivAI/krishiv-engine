@@ -51,8 +51,9 @@ pub struct UdfWorkers {
     pub owners: Vec<UdfWorkerOwner>,
 }
 
-/// Reads the pool now. It is called on a request's task, so it must not block: a snapshot under a short lock.
-pub type UdfWorkersProvider = Arc<dyn Fn() -> UdfWorkers + Send + Sync>;
+/// Reads the pool now; `None` once the pool is gone (the server is stopping), and the page shows no table.
+/// It is called on a request's task, so it must not block: a snapshot under a short lock.
+pub type UdfWorkersProvider = Arc<dyn Fn() -> Option<UdfWorkers> + Send + Sync>;
 
 fn owner_json(o: &UdfWorkerOwner) -> Value {
     json!({

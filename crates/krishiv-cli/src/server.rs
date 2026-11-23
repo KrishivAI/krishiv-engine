@@ -700,10 +700,7 @@ fn udf_workers_of(pool: krishiv_udf_pool::PoolMonitor) -> UdfWorkersProvider {
     use krishiv_server::udf_workers::{UdfWorkerOwner, UdfWorkers};
     let n = |n: usize| u64::try_from(n).unwrap_or(u64::MAX);
     Arc::new(move || {
-        let Some(now) = pool.snapshot() else {
-            return UdfWorkers::default();
-        };
-        UdfWorkers {
+        pool.snapshot().map(|now| UdfWorkers {
             live: n(now.live),
             idle: n(now.idle),
             max_total: n(now.max_total),
@@ -720,7 +717,7 @@ fn udf_workers_of(pool: krishiv_udf_pool::PoolMonitor) -> UdfWorkersProvider {
                     idle: n(o.idle),
                 })
                 .collect(),
-        }
+        })
     })
 }
 

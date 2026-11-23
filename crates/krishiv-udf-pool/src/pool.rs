@@ -319,9 +319,13 @@ impl std::fmt::Debug for PoolMonitor {
 
 impl PoolMonitor {
     /// The pool now; `None` once the pool is gone.
+    ///
+    /// The pool is held for the length of the read. If the server drops its pool in that moment, this
+    /// reference is the last one and the idle workers are stopped and reaped here, on the caller's task: only
+    /// at shutdown, and each wait is short (the worker was killed first).
     #[must_use]
     pub fn snapshot(&self) -> Option<PoolSnapshot> {
-        self.inner.upgrade().map(|inner| Pool { inner }.snapshot())
+        self.inner.upgrade().map(|inner| inner.snapshot())
     }
 }
 
@@ -448,16 +452,7 @@ impl Pool {
     /// The workers and the limits now. One short hold of the pool's lock: no worker is waited for.
     #[must_use]
     pub fn snapshot(&self) -> PoolSnapshot {
-        let state = self.inner.lock();
-        PoolSnapshot::of(
-            &self.inner.config,
-            state.live,
-            &state.per_owner,
-            state
-                .idle
-                .iter()
-                .map(|(key, list)| (&key.owner, list.len())),
-        )
+        self.inner.snapshot()
     }
 
     /// A view of this pool that does not keep its workers running.
@@ -1051,6 +1046,20 @@ impl Drop for Released {
 impl Inner {
     fn lock(&self) -> MutexGuard<'_, State> {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// [`Pool::snapshot`].
+    fn snapshot(&self) -> PoolSnapshot {
+        let state = self.lock();
+        PoolSnapshot::of(
+            &self.config,
+            state.live,
+            &state.per_owner,
+            state
+                .idle
+                .iter()
+                .map(|(key, list)| (&key.owner, list.len())),
+        )
     }
 
     /// Stops `victim` (an idle worker taken with `take_oldest_idle`, the state lock released), then releases

@@ -201,6 +201,7 @@ impl Session {
         env.statement_class = Some(class.name());
         self.refuse_changes_while_draining(class, &redacted, &env)?;
         let command = !matches!(statement, Statement::Query(_));
+        let script = matches!(statement, Statement::Script(_));
         if !command {
             let df = self.run_statement(statement, env, query, &redacted).await?;
             df.with_statement(&redacted, class.name());
@@ -218,8 +219,9 @@ impl Session {
         let df = COMMAND.scope(Arc::clone(&running), run).await?;
         // A command that ran no query (`CREATE TABLE`, `SET`, `SHOW`) is listed when its result frame is
         // read, with the statement's text and class. One that ran a query has its row already: a read of
-        // its (empty) result is not the statement again.
-        if !running.listed.load(Ordering::Relaxed) {
+        // its (empty) result is not the statement again. A script's result holds the rows of its last query:
+        // a read of them is listed under the script's text and class, never as a row with neither.
+        if script || !running.listed.load(Ordering::Relaxed) {
             df.with_statement(&redacted, class.name());
         }
         Ok(Ran::Frame(df, true))

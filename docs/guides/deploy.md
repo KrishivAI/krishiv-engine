@@ -158,8 +158,8 @@ server that is stopped, or a folder copied from another machine.
 
 **Python UDF workers.** On a server, Resources also lists the Python UDF worker processes: how many run and how
 many of them are busy, against `krishiv.python.worker.maxTotal`, and one row per session that has a worker, with
-its principal and tenant. A session runs at most `krishiv.python.worker.maxPerSession` workers and a tenant
-`krishiv.python.worker.maxPerTenant`. A worker starts with a session's first Python UDF call and stops after it
+its principal and tenant. A session runs at most `krishiv.python.worker.maxPerSession` workers and a tenant (or a
+principal without one) `krishiv.python.worker.maxPerTenant`. A worker starts with a session's first Python UDF call and stops after it
 has been idle for `krishiv.python.worker.idleTimeout`, so an idle server lists none. The list is read-only.
 
 ## Distributed

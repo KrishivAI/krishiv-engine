@@ -511,10 +511,14 @@ async fn a_source_lists_udf_workers_only_when_it_was_given_a_pool_and_reads_it_e
 
     let live = Arc::new(AtomicU64::new(1));
     let read = Arc::clone(&live);
-    let provider: UdfWorkersProvider = Arc::new(move || UdfWorkers {
-        live: read.load(Ordering::SeqCst),
-        max_total: 64,
-        ..UdfWorkers::default()
+    // A provider whose pool is gone (a count of zero stands for it here) answers no pool.
+    let provider: UdfWorkersProvider = Arc::new(move || {
+        let live = read.load(Ordering::SeqCst);
+        (live > 0).then(|| UdfWorkers {
+            live,
+            max_total: 64,
+            ..UdfWorkers::default()
+        })
     });
     let source = SessionSource::new(runtime())
         .unwrap()
@@ -523,4 +527,6 @@ async fn a_source_lists_udf_workers_only_when_it_was_given_a_pool_and_reads_it_e
     live.store(3, Ordering::SeqCst);
     let pool = source.udf_workers().await.unwrap().unwrap();
     assert_eq!((pool.live, pool.max_total), (3, 64));
+    live.store(0, Ordering::SeqCst);
+    assert_eq!(source.udf_workers().await.unwrap(), None);
 }
