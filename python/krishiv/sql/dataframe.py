@@ -198,7 +198,7 @@ class DataFrame:
         (default 20) as an HTML table, for notebooks: column names and types in the header, HTML-escaped values. Without
         pyarrow there is no preview, so ``None`` (the notebook falls back to :meth:`__repr__`)."""
         enabled = self._session.conf.get(EAGER_ENABLED_KEY, "false")
-        if enabled is None or enabled.strip().lower() != "true":
+        if enabled is None or enabled != "true":
             return None
         try:
             _convert.require_pyarrow("_repr_html_")

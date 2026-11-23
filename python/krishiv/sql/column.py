@@ -42,19 +42,6 @@ def _operand(value: Any) -> _native.Column:
     return value._c if isinstance(value, Column) else _literal(value)
 
 
-def _text_of(value: Any) -> str | None:
-    """The text Spark prints for an operand: a column's own, a literal's value (``None``: not tracked)."""
-    if isinstance(value, Column):
-        return value._text
-    if value is None:
-        return "NULL"
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    if isinstance(value, int | float | str):
-        return str(value)
-    return None
-
-
 def _named(value: Any, arg: str = "cols") -> _native.Column:
     """A Column stays one; a ``str`` names a column (``"*"`` is all of them)."""
     if isinstance(value, Column):
@@ -82,12 +69,10 @@ class Column:
         self._text = text  # Spark's text of the expression, for ``repr``; ``None`` when not tracked
 
     def _binary(self, native: _native.Column, symbol: str, other: Any, reverse: bool = False) -> Column:
-        """``self <symbol> other`` (or ``other <symbol> self``), with the text Spark prints for it."""
-        left, right = _text_of(self), _text_of(other)
-        if reverse:
-            left, right = right, left
-        text = None if left is None or right is None else f"({left} {symbol} {right})"
-        return Column(native, text)
+        """``self <symbol> other`` (or ``other <symbol> self``). Its ``repr`` stays ``Column<...>``: Spark 3.5 and
+        4.x print different text for an operator (``(a + 1)`` and ``+(a, 1)``), so none is tracked yet."""
+        del symbol, other, reverse
+        return Column(native)
 
     # Arithmetic.
     def __add__(self, other: Any) -> Column:

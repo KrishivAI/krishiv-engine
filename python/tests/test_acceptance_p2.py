@@ -113,16 +113,31 @@ def test_read_of_a_missing_path_raises_at_the_read(spark: SparkSession, tmp_path
 
 
 def test_column_and_grouped_data_repr(spark: SparkSession) -> None:
-    """PY-081: ``Column<'(a + 1)'>`` and ``GroupedData[...]``, as Spark prints them."""
+    """PY-081: ``Column<'a'>`` and ``GroupedData[...]``, as Spark prints them."""
     import krishiv.sql.functions as F
 
     df = spark.sql("select 'x' name, 1 age")
     assert repr(df.age) == "Column<'age'>"
-    assert repr(F.col("age") + 1) == "Column<'(age + 1)'>"
-    assert repr(df.age > 0) == "Column<'(age > 0)'>"
     assert repr(df.name.alias("n")) == "Column<'name AS n'>"
-    assert repr(1 - df.age) == "Column<'(1 - age)'>"
+    # An operator's text is not tracked: Spark 3.5 and 4.x print it differently.
+    assert repr(F.col("age") + 1) == "Column<...>"
     assert (
         repr(df.groupBy("name"))
         == "GroupedData[grouping expressions: [name], value: [name: string, age: int], type: GroupBy]"
     )
+
+
+def test_grouped_data_repr_truncates_like_spark(spark: SparkSession) -> None:
+    df = spark.sql("select 'x' name, 1 age, 2 c")
+    assert repr(df.groupBy("name", "age", "c")) == (
+        "GroupedData[grouping expressions: [name, age ... 1 more field(s)], "
+        "value: [name: string, age: int ... 1 more field], type: GroupBy]"
+    )
+
+
+def test_eager_eval_key_is_read_exactly(spark: SparkSession) -> None:
+    spark.conf.set("spark.sql.repl.eagerEval.enabled", " TRUE ")
+    try:
+        assert spark.sql("select 1 a")._repr_html_() is None
+    finally:
+        spark.conf.unset("spark.sql.repl.eagerEval.enabled")
