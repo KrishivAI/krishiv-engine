@@ -655,12 +655,17 @@ impl ThetaSketchAcc {
 
     /// An upper bound of the bytes of group `g`'s partial state: its charge. A compact sketch is at most eight bytes
     /// a retained hash plus a header, its hashes fit the table(s) charged, and the header fits `OVERHEAD`.
+    ///
+    /// A group that holds raw rows beside its merged union builds a second union while its state is read
+    /// (`Slot::compact`): the bound adds the two compact copies and that union (three times the charge), so a batch
+    /// cut by [`state_prefix`](super::accumulator::state_prefix) holds that scratch too, which rides in the merge's
+    /// headroom with the state bytes themselves.
     pub(crate) fn state_bound(&self, g: u32) -> usize {
-        self.charges
-            .get(usize::try_from(g).unwrap_or(usize::MAX))
-            .copied()
-            .unwrap_or(0)
-            .saturating_add(OVERHEAD)
+        let at = usize::try_from(g).unwrap_or(usize::MAX);
+        let charge = self.charges.get(at).copied().unwrap_or(0);
+        let scratch = matches!(self.slots.get(at), Some(Slot::Union(_, Some(_))));
+        let times = if scratch { 3 } else { 1 };
+        charge.saturating_mul(times).saturating_add(OVERHEAD)
     }
 
     /// The partial state of groups `ids`: the sketch bytes as `binary`.

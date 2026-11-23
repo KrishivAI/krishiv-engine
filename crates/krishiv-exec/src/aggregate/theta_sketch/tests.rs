@@ -385,6 +385,17 @@ fn the_state_bound_covers_the_serialized_state() {
     a.merge(&[2], state).unwrap();
     a.update(&[2, 2], &longs(&[Some(-1), Some(-2)]), |_| true)
         .unwrap();
+    // The union beside raw rows is rebuilt while the state is read: its bound adds that scratch (three charges),
+    // and a group without pending rows stays at one.
+    assert!(matches!(a.slots[2], Slot::Union(_, Some(_))));
+    assert!(
+        a.state_bound(2) >= 3 * a.charges[2],
+        "scratch of the pending union"
+    );
+    assert!(
+        a.state_bound(0) < 2 * a.charges[0] + 1024,
+        "no scratch without pending rows"
+    );
     let mut i = ThetaSketchAcc::new(ThetaSketchOp::Intersection).unwrap();
     i.resize(2);
     i.merge(&[0], state).unwrap();
