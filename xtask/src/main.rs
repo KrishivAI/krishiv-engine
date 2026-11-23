@@ -171,6 +171,12 @@ fn run_docs(args: &[String]) -> Result<(), String> {
         .first()
         .and_then(|cmd| Doc::from_command(cmd))
         .ok_or_else(|| USAGE.to_owned())?;
+    if let Some(flag) = args.get(1).filter(|a| a.starts_with('-')) {
+        return Err(format!(
+            "{} takes an output PATH, not the option {flag}; run it with no argument to print to stdout",
+            args[0]
+        ));
+    }
     let path = args.get(1).map(Path::new);
     docs::emit(&doc.markdown(), path, &mut std::io::stdout().lock())
 }

@@ -427,11 +427,28 @@ pub(crate) fn in_action() -> bool {
     CURRENT.try_with(|_| ()).is_ok()
 }
 
+/// The current action's cancellation handle, for [`krishiv_common::stack::with_inherited`] around work
+/// that recurses on other threads.
+pub(crate) fn cancel_handle() -> Option<std::sync::Arc<dyn std::any::Any + Send + Sync>> {
+    CURRENT
+        .try_with(|a| {
+            std::sync::Arc::new(a.reason.subscribe())
+                as std::sync::Arc<dyn std::any::Any + Send + Sync>
+        })
+        .ok()
+}
+
 /// Resolves when the current action is cancelled (never, outside an action):
 /// for planning-time work that holds a cancellation of its own (the Delta
 /// planning reads, `DeltaReads`; a Python UDTF's `analyze`).
 pub(crate) fn cancelled() -> impl Future<Output = CancelReason> + Send + 'static {
-    let reason = CURRENT.try_with(|a| a.reason.subscribe()).ok();
+    let reason = CURRENT.try_with(|a| a.reason.subscribe()).ok().or_else(|| {
+        // On a `krishiv-deep` planning thread the task-local is gone; planning handed the handle on.
+        krishiv_common::stack::inherited().and_then(|v| {
+            v.downcast_ref::<tokio::sync::watch::Receiver<Option<CancelReason>>>()
+                .cloned()
+        })
+    });
     async move {
         let Some(mut reason) = reason else {
             return std::future::pending().await;

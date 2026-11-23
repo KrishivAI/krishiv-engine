@@ -709,7 +709,7 @@ impl QueryContext {
     /// The error a driver stopped by cancellation ends with: the reason's
     /// error of a [`Self::cancel_with`] cancellation, else
     /// `OPERATION_CANCELED`.
-    pub(crate) fn cancellation(&self) -> KrishivError {
+    pub fn cancellation(&self) -> KrishivError {
         self.cancel_error.get().cloned().unwrap_or_else(cancelled)
     }
 

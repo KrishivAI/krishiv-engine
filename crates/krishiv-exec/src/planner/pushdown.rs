@@ -211,7 +211,7 @@ fn tr(e: &Expr, scan: &[BoundColumn], exact: bool) -> Option<PushdownExpr> {
     }
 }
 
-fn builtin(e: &Expr) -> Option<(Builtin, Vec<&Expr>)> {
+pub(super) fn builtin(e: &Expr) -> Option<(Builtin, Vec<&Expr>)> {
     let ExprNode::Resolved(ResolvedExpr::Function(ResolvedFunction {
         id: FunctionId::Builtin(b),
         args,
@@ -223,7 +223,7 @@ fn builtin(e: &Expr) -> Option<(Builtin, Vec<&Expr>)> {
     Some((*b, args.iter().map(AsRef::as_ref).collect()))
 }
 
-fn cmp_op(b: Builtin) -> Option<CmpOp> {
+pub(super) fn cmp_op(b: Builtin) -> Option<CmpOp> {
     Some(match b {
         Builtin::Eq => CmpOp::Eq,
         Builtin::Lt => CmpOp::Lt,
@@ -235,7 +235,7 @@ fn cmp_op(b: Builtin) -> Option<CmpOp> {
 }
 
 /// `l op r` as `r op' l`.
-fn flip(op: CmpOp) -> CmpOp {
+pub(super) fn flip(op: CmpOp) -> CmpOp {
     match op {
         CmpOp::Lt => CmpOp::Gt,
         CmpOp::LtEq => CmpOp::GtEq,
@@ -263,7 +263,7 @@ fn value(e: &Expr) -> Option<ScalarValue> {
 }
 
 /// A literal's value: `Some(None)` for NULL, `None` for anything else.
-fn value_or_null(e: &Expr) -> Option<Option<ScalarValue>> {
+pub(super) fn value_or_null(e: &Expr) -> Option<Option<ScalarValue>> {
     let ExprNode::Literal(l) = &e.node else {
         return None;
     };
