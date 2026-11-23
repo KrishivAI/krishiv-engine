@@ -288,8 +288,8 @@ fn paren(c: &str) -> String {
 mod tests {
     use super::*;
 
-    /// Counts the session took itself pass through; a named observation the query never
-    /// produced is an internal error, never a zero source count.
+    /// Counts the session counted itself pass through unchanged; a named observation the query
+    /// never produced is an internal error, never a zero source count.
     #[test]
     fn the_source_count_comes_from_the_named_observation_only() {
         use std::sync::Arc;

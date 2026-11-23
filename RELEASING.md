@@ -211,13 +211,16 @@ databaseId,startedAt,updatedAt,conclusion > before.json` before it merges and th
 `> after.json` afterwards, then run `cargo xtask ci-time --compare before.json after.json` (median and p90 of the
 PR gate). Then, in order (each step after the check is the owner's):
 
-1. `cargo xtask release-check X.Y.Z` is all `ok`; the latest scheduled nightly is green on the commit.
+1. `cargo xtask release-bump X.Y.Z` moves the workspace version and every exact internal pin (`--check` writes nothing and fails when the root version or any internal path pin is not at X.Y.Z; a re-run repairs a half-done bump), then `cargo update --workspace` refreshes the lockfile. `cargo xtask release-check X.Y.Z` is all `ok`; the latest scheduled nightly is green on the commit.
 2. `cargo xtask changelog assemble X.Y.Z`, review the section, merge the release PR.
 3. Run "Release artifacts" (`release.yml`) on main; check `SHA256SUMS` and `gh attestation verify <file> --repo KrishivAI/krishiv-engine`.
 4. Sign and push the tag (`git tag -s`, `git verify-tag`).
 5. TestPyPI rehearsal, PyPI, crates.io, then the GitHub Release (see the step-by-step above).
-6. `cargo-semver-checks` (nightly job `semver-checks`) is non-blocking until a release tag exists to compare
-   against; once `v0.2.x` is tagged, remove its `continue-on-error`.
+6. `cargo-semver-checks` (nightly job `semver-checks`) is blocking against the last release tag. For a minor release
+   it runs as a major one and lists the breaks in the job summary: copy them, each with a migration line, into the
+   changelog's "Breaking" section (fragment type `breaking`); a patch release must show none. While a `*.breaking.md` fragment is pending the job checks as a minor
+   and cannot fail on a break, so after `changelog assemble` (the fragment is gone) run the nightly workflow on the
+   release commit (`gh workflow run nightly.yml --ref <branch>`) and tag only when `semver-checks` is green there.
 
 ## Before any release
 

@@ -478,6 +478,31 @@ pub(super) fn bitmap_agg(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     Ok(ArgType::new(DataType::Binary, false))
 }
 
+/// `theta_sketch_agg(x, lgNomEntries)`: Spark's `TypeCollection` of `ARRAY<INT>`, `ARRAY<BIGINT>`, `BINARY`, `DOUBLE`,
+/// `FLOAT`, `INT`, `BIGINT` and `STRING`, as it is (no implicit casts). An array of either integral type is taken
+/// whatever its `containsNull`, so the expected type is the argument's own.
+fn theta_sketch_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
+    let value = match c.data_type(0) {
+        Some(t @ DataType::Array(a))
+            if matches!(a.element_type(), DataType::Integer | DataType::Long) =>
+        {
+            InputType::Strict(t.clone())
+        }
+        // The diagnostic names Spark's whole collection, arrays included.
+        _ => InputType::StrictOneOf(vec![
+            DataType::Array(ArrayType::new(DataType::Integer, true).into()),
+            DataType::Array(ArrayType::new(DataType::Long, true).into()),
+            DataType::Binary,
+            DataType::Double,
+            DataType::Float,
+            DataType::Integer,
+            DataType::Long,
+            DataType::String,
+        ]),
+    };
+    vec![value, InputType::Strict(DataType::Integer)]
+}
+
 pub(super) fn aggregates() -> Vec<Spec> {
     let numeric = || Inputs::Expects(vec![InputType::NumericOrTimestamp]);
     let boolean_arg = || Inputs::Expects(vec![exact(DataType::Boolean)]);
@@ -630,6 +655,28 @@ pub(super) fn aggregates() -> Vec<Spec> {
             ]),
             bitmap_agg,
             Aggregate::HllUnionAgg,
+        ),
+        // The Theta sketch aggregates (Spark 4.1): `lgNomEntries` is a constant the analyzer fills in when omitted.
+        aggregate(
+            "theta_sketch_agg",
+            Inputs::Built(InputBuilder(theta_sketch_inputs)),
+            bitmap_agg,
+            Aggregate::ThetaSketchAgg,
+        ),
+        aggregate(
+            "theta_union_agg",
+            Inputs::Expects(vec![
+                InputType::Strict(DataType::Binary),
+                InputType::Strict(DataType::Integer),
+            ]),
+            bitmap_agg,
+            Aggregate::ThetaUnionAgg,
+        ),
+        aggregate(
+            "theta_intersection_agg",
+            Inputs::Expects(vec![InputType::Strict(DataType::Binary)]),
+            bitmap_agg,
+            Aggregate::ThetaIntersectionAgg,
         ),
         // `try_sum` / `try_avg`: `sum` / `avg` that give NULL instead of
         // an overflow error, ANSI on or off.

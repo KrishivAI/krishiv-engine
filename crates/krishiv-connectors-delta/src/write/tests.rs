@@ -54,6 +54,8 @@ struct Env {
     dir: PathBuf,
     rt: tokio::runtime::Runtime,
     query_pool: Arc<dyn MemoryPool>,
+    /// The runtime-root pool the I/O scheduler attached.
+    process_pool: Arc<dyn MemoryPool>,
     engine: DeltaEngine,
     /// The metrics of the last query run.
     metrics: std::sync::Mutex<Option<krishiv_exec::QueryMetrics>>,
@@ -125,6 +127,7 @@ impl Env {
             dir,
             rt,
             query_pool,
+            process_pool: process,
             engine,
             metrics: std::sync::Mutex::new(None),
         }

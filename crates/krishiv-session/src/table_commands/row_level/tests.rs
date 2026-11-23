@@ -1088,7 +1088,8 @@ mod merge {
         // target's alias, or without one by its name, `namespace.name` or
         // `spark_catalog.namespace.name`; a `SET` column qualified the same way) before it asks the
         // table for a row-level table. A Parquet table has none, so the statement reaches the old
-        // refusal with every clause built.
+        // refusal with every clause built: this runs those paths, it does not check the columns
+        // they build.
         let dir = tempfile::tempdir().unwrap();
         let session = Session::new().unwrap();
         block_on(session.sql(&format!(
