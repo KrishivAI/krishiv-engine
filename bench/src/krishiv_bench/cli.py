@@ -701,6 +701,15 @@ def main(argv=None) -> None:
             kw["binary"] = a.runner  # the `krishiv` binary (it runs `krishiv server`)
         if a.engine in ("krishiv", "krishiv-connect", "krishiv-flightsql", "krishiv-python") and a.krishiv_conf:
             kw["conf"] = [_key_value(ap, c) for c in a.krishiv_conf]
+        if a.engine in ("krishiv-connect", "krishiv-flightsql", "krishiv-python") and a.duckdb_threads:
+            from .adapters.session_modes import usable_cores
+
+            # No config key sets a session's compute threads: it uses every core the process may run on.
+            if a.duckdb_threads != usable_cores():
+                ap.error(
+                    f"--duckdb-threads {a.duckdb_threads}: {a.engine} uses every core this process may run on "
+                    f"({usable_cores()}); set the CPU affinity (taskset) instead"
+                )
         if a.engine == "duckdb":
             kw["memory_limit"] = a.duckdb_memory_limit
             if a.duckdb_threads:

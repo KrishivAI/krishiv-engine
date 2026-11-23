@@ -317,12 +317,31 @@ def run_suite(
     eng.setup(ds)
     record["setup_s"] = time.perf_counter() - t_setup
     pool = cf.ThreadPoolExecutor(max_workers=1)
+
+    def call(fn, q):
+        """``fn(q)`` on the engine's one worker; past ``timeout_s`` the engine cancels it, the worker gets up to 30 s
+        to finish, and a fresh pool replaces it, so nothing left running delays or shares the next run."""
+        nonlocal pool
+        fut = pool.submit(fn, q)
+        try:
+            return fut.result(timeout=timeout_s)
+        except cf.TimeoutError:
+            eng.cancel()
+            with contextlib.suppress(Exception):
+                fut.result(timeout=30)
+            pool.shutdown(wait=False, cancel_futures=True)
+            pool = cf.ThreadPoolExecutor(max_workers=1)
+            raise TimeoutError(f"query exceeded {timeout_s}s") from None
+
     try:
         for q in queries:
+            eng.flush_query_log()  # the previous query's statements; teardown flushes the last
             entry: dict = {"iterations": iterations}
             times, meas, warm_times = [], [], []
             invalid: list[dict] = []
             rows: list[tuple] = []
+            timed_rows: int | None = None
+            answer_error: str | None = None
             try:
                 for i in range(warmup + iterations):
                     for attempt in range(mem_retries + 1):
@@ -335,31 +354,26 @@ def run_suite(
                         # No sampler when the guard is off: opting out restores uninstrumented runs
                         # (its /proc reads would show in in-process adapters' rchar/syscr).
                         sampler = memguard.MemSampler() if mem_floor else None
+                        if timed_run:  # untimed, outside the measurement window
+                            eng.mark(f"{q.id} {'warmup' if i < warmup else 'run'} {i} attempt {attempt}")
                         eng.begin_measure()
                         m = None
                         failure: Exception | None = None
                         try:
                             with sampler if sampler is not None else contextlib.nullcontext():
                                 t0 = time.perf_counter()
-                                fut = pool.submit(eng.timed_run if timed_run else eng.run, q)
-                                try:
-                                    got = fut.result(timeout=timeout_s)
-                                except cf.TimeoutError:
-                                    eng.cancel()
-                                    with contextlib.suppress(Exception):
-                                        fut.result(timeout=30)
-                                    pool.shutdown(wait=False, cancel_futures=True)
-                                    pool = cf.ThreadPoolExecutor(max_workers=1)
-                                    raise TimeoutError(f"query exceeded {timeout_s}s") from None
+                                got = call(eng.timed_run if timed_run else eng.run, q)
                                 dtm = time.perf_counter() - t0
                                 if timed_run:
-                                    dtm = cast("tuple[int, float]", got)[1]
+                                    timed_rows, dtm = cast("tuple[int, float]", got)
                                 else:
                                     rows = cast("list[tuple]", got)
                         except Exception as e:
                             failure = e  # decided below: memory reclaimed (retry) or a real failure
                         finally:
                             m = eng.end_measure()
+                            if timed_run:
+                                eng.release_result()  # its Arrow table is in no later window
                         low = sampler.min_available if sampler is not None else None
                         if mem_floor and low is not None and memguard.is_invalid(low, mem_floor):
                             invalid.append(memguard.InvalidSample(i, attempt, low, mem_floor).as_dict())
@@ -375,8 +389,12 @@ def run_suite(
                     else:
                         # Warm-up too: timings must not follow a warm-up done under memory pressure.
                         raise MemoryError(f"{memguard.INVALID_REASON} in all {mem_retries + 1} attempts of run {i}")
-                if timed_run:  # the rows the answer checks read, untimed
-                    rows = pool.submit(eng.run, q).result(timeout=timeout_s)
+                if timed_run:  # the rows the answer checks read, untimed; its failure keeps the timings
+                    try:
+                        eng.mark(f"{q.id} answer")
+                        rows = call(eng.run, q)
+                    except Exception as e:
+                        answer_error = f"{type(e).__name__}: {e}"
             except Exception as e:  # record, keep going
                 entry.update(error_fields(e))
                 if invalid:
@@ -385,6 +403,7 @@ def run_suite(
                 print(f"  {q.id}: ERROR {entry['error'][:120]}")
                 continue
             ordered = compare.has_top_level_order_by(q.sql)
+            n_rows = len(rows) if answer_error is None else timed_rows
             entry.update(
                 order_fields(q.sql),
                 times_s=times,
@@ -395,14 +414,16 @@ def run_suite(
                 max_s=max(times),
                 mean_s=statistics.fmean(times),
                 throughput_qps=len(times) / sum(times),
-                rows_returned=len(rows),
+                rows_returned=n_rows,
                 expected_rows=expected.get(q.id),
-                rows_match_expected=(len(rows) == expected[q.id]) if q.id in expected else None,
+                rows_match_expected=(n_rows == expected[q.id]) if q.id in expected else None,
                 **resource_fields(meas, times),
             )
             if invalid:
                 entry["invalid_samples"] = invalid
-            if q.id in oracle_rows:
+            if answer_error is not None:
+                entry["answer_check"] = {"status": "error", "detail": f"the untimed answer run failed: {answer_error}"}
+            elif q.id in oracle_rows:
                 ok, msg = compare.rows_match(rows, oracle_rows[q.id], ordered, sql=q.sql)
                 entry["answer_check"] = {"status": "pass" if ok else "fail", "detail": msg}
             elif q.id in answers:
@@ -417,14 +438,18 @@ def run_suite(
                     if suite == "dsb"
                     else "no official answer set",
                 }
-            if len(rows) <= MAX_STORED_ROWS:
+            if answer_error is None and len(rows) <= MAX_STORED_ROWS:
                 rows_store[q.id] = rows
                 entry["rows_stored"] = True
             else:
                 entry["rows_stored"] = False
             ac = entry["answer_check"]
-            flag = "" if ac["status"] != "fail" else f"  ANSWER MISMATCH: {ac['detail'][:100]}"
-            print(f"  {q.id}: p50={entry['p50_s'] * 1000:8.1f} ms rows={len(rows)} answer={ac['status']}{flag}")
+            flag = (
+                ""
+                if ac["status"] not in ("fail", "error")
+                else f"  ANSWER {ac['status'].upper()}: {ac['detail'][:100]}"
+            )
+            print(f"  {q.id}: p50={entry['p50_s'] * 1000:8.1f} ms rows={n_rows} answer={ac['status']}{flag}")
             record["queries"][q.id] = entry
     finally:
         pool.shutdown(wait=False, cancel_futures=True)

@@ -5,7 +5,8 @@ The harness starts the ``krishiv`` binary as ``krishiv server --port 0 --connect
 bound ``sc://`` address from its stdout, and drives it with the pinned pyspark client exactly as ``spark-connect``
 does (Arrow results, ``interruptAll`` to cancel). The server runs on the host, so Parquet paths are not rewritten.
 Peak RSS, CPU seconds and I/O are those of the server process tree (``TreeProc``), the same window the embedded
-``krishiv`` engine reports, so the two differ by the Connect round trip and Arrow encoding only.
+``krishiv`` engine reports, so the two differ by the Connect round trip and Arrow encoding only. The server starts
+from the runner's settings (memory limit 12g, session time zone UTC; ``session_modes``) unless ``conf`` sets them.
 """
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from . import query_log
+from . import query_log, session_modes
 from .base import Dataset, Measure
 from .proc_mem import TreeProc, tree_measure
 from .spark_connect import SparkConnectEngine
@@ -55,7 +56,8 @@ class KrishivConnectEngine(SparkConnectEngine):
     ):
         super().__init__(remote="", container=None, container_data_root=None)
         self.binary = server_binary(binary)
-        self.conf = list(conf or [])
+        self.conf = session_modes.with_runner_defaults(conf)
+        self._qlog = query_log.QueryLog(self.name)
         self.startup_timeout_s = startup_timeout_s
         self._proc: subprocess.Popen[str] | None = None
         self._tree: TreeProc | None = None
@@ -95,7 +97,12 @@ class KrishivConnectEngine(SparkConnectEngine):
         return f"krishiv server ({self.binary.name})"
 
     def config(self) -> dict:
-        return {"server": "krishiv server, loopback, Spark Connect", "binary": str(self.binary), "conf": self.conf}
+        return {
+            "server": "krishiv server, loopback, Spark Connect",
+            "binary": str(self.binary),
+            "conf": self.conf,
+            "effective": session_modes.effective(self.conf),
+        }
 
     def setup(self, dataset: Dataset) -> None:
         self._start_server()
@@ -117,14 +124,18 @@ class KrishivConnectEngine(SparkConnectEngine):
         tree, self._tree = self._tree, None
         return tree_measure(tree)
 
-    def _dump_query_log(self) -> None:
+    def mark(self, label: str) -> None:
+        if self.spark is not None and query_log.enabled():
+            self.spark.sql(query_log.mark_sql(label)).toArrow()
+
+    def flush_query_log(self) -> None:
         spark = self.spark
         if spark is not None and self._proc is not None:
-            query_log.dump(self.name, lambda sql: spark.sql(sql).toArrow())
+            self._qlog.flush(lambda sql: spark.sql(sql).toArrow())
 
     def teardown(self) -> None:
         self.end_measure()
-        self._dump_query_log()
+        self.flush_query_log()
         proc, self._proc = self._proc, None
         try:
             super().teardown()

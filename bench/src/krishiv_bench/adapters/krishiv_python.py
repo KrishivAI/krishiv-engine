@@ -4,9 +4,11 @@
 Tables are registered and queries timed exactly as ``spark-connect`` and ``krishiv-connect`` do
 (``read.parquet(..).createOrReplaceTempView``, ``sql(..).toArrow()``), so against ``krishiv-connect`` the difference
 is the Spark Connect round trip only, and against ``krishiv`` (the native runner) it is the Python layer (plan
-building in Python, the result's handover to pyarrow). The engine runs in this process, so peak RSS, CPU seconds and
-I/O are this process's (``TreeProc(sample=False)``: no sampler thread inside the process it measures; the peak is the
-VmHWM at the window's end and includes the harness's own few hundred MB).
+building in Python, the result's handover to pyarrow). The session starts from the runner's settings
+(``session_modes``). The engine runs in this process, so peak RSS, CPU seconds and I/O are this process's
+(``TreeProc(sample=False)``: no sampler thread inside the process it measures; the peak is the VmHWM at the window's
+end and includes the harness's own few hundred MB). ``setup_s`` covers building the session and registering the
+views; ``import krishiv`` happens earlier, in ``version()``.
 """
 
 from __future__ import annotations
@@ -15,7 +17,7 @@ import contextlib
 import os
 import time
 
-from . import query_log
+from . import query_log, session_modes
 from .base import Dataset, Measure, Query
 from .proc_mem import TreeProc, tree_measure
 from .spark_connect import SparkConnectEngine
@@ -26,8 +28,9 @@ class KrishivPythonEngine(SparkConnectEngine):
 
     def __init__(self, conf: list[tuple[str, str]] | None = None):
         super().__init__(remote="", container=None, container_data_root=None)
-        self.conf = list(conf or [])
+        self.conf = session_modes.with_runner_defaults(conf)
         self._tree: TreeProc | None = None
+        self._qlog = query_log.QueryLog(self.name)
 
     def _session(self):
         if self.spark is None:
@@ -50,6 +53,7 @@ class KrishivPythonEngine(SparkConnectEngine):
         return {
             "mode": "embedded Python, in the harness process",
             "conf": self.conf,
+            "effective": session_modes.effective(self.conf),
             "allocator": krishiv.__allocator__,
             "commit": krishiv.__commit__,
         }
@@ -73,6 +77,15 @@ class KrishivPythonEngine(SparkConnectEngine):
             with contextlib.suppress(Exception):
                 self.spark.interruptAll()
 
+    def mark(self, label: str) -> None:
+        if self.spark is not None and query_log.enabled():
+            self.spark.sql(query_log.mark_sql(label)).toArrow()
+
+    def flush_query_log(self) -> None:
+        spark = self.spark
+        if spark is not None:
+            self._qlog.flush(lambda sql: spark.sql(sql).toArrow())
+
     def begin_measure(self) -> None:
         self.end_measure()
         self._tree = TreeProc(os.getpid(), sample=False)
@@ -85,8 +98,7 @@ class KrishivPythonEngine(SparkConnectEngine):
     def teardown(self) -> None:
         self.end_measure()
         if self.spark is not None:
-            spark = self.spark
-            query_log.dump(self.name, lambda sql: spark.sql(sql).toArrow())
+            self.flush_query_log()
             with contextlib.suppress(Exception):
-                spark.stop()
+                self.spark.stop()
             self.spark = None
