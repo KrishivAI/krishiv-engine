@@ -340,17 +340,49 @@ def test_flightsql_cancel_reaches_a_statement_that_overlaps_a_late_one(flight):
     assert server.connections[1].closed is False
 
 
-def test_flightsql_teardown_closes_every_connection(flight, monkeypatch):
+def test_flightsql_teardown_never_closes_a_connection_with_a_statement_inside(flight, monkeypatch):
     e, server, _ = flight
     server.cancel_fails = True
-    t, _ = _start_blocked(e, server)
-    e.cancel()
-    e.timed_run(Query("q01", "SELECT 1", "tpch"))
+    t, done = _start_blocked(e, server)
+    e.cancel()  # fails: the statement is left running on the first connection
+    e.timed_run(Query("q01", "SELECT 1", "tpch"))  # the second connection
     monkeypatch.setattr(KrishivConnectEngine, "teardown", lambda self: None)
     e.teardown()
-    assert [c.closed for c in server.connections] == [True, True]
+    first, second = server.connections
+    assert first.closed is False  # its statement is still inside
+    assert second.closed is True  # idle: closed at once
+    server.blocked[0].release.set()  # the server's stop ends it
+    t.join(5)
+    assert done["error"] == "ended"
+    assert first.closed is True  # closed as its last statement returned
+
+
+def test_flightsql_teardown_leaves_the_current_connection_open_while_its_statement_runs(flight, monkeypatch):
+    e, server, _ = flight
+    t, _ = _start_blocked(e, server)  # a timed-out statement that did not stop in the 30 s wait
+    monkeypatch.setattr(KrishivConnectEngine, "teardown", lambda self: None)
+    e.teardown()
+    assert server.connections[0].closed is False
     server.blocked[0].release.set()
     t.join(5)
+    assert server.connections[0].closed is True
+
+
+def test_flightsql_a_failed_cancel_on_a_retired_connection_keeps_the_current_one(flight):
+    e, server, _ = flight
+    server.cancel_fails = True
+    t1, _ = _start_blocked(e, server)
+    e.cancel()  # fails: the first connection is retired at the next statement
+    t2, done2 = _start_blocked(e, server)  # runs on the second connection
+    assert len(server.connections) == 2
+    server.blocked[1].cancelled.set()  # the second statement ends as if its cancel worked
+    t2.join(5)
+    assert done2["error"] == "cancelled"
+    e.cancel()  # only the first statement is left; its cancel fails again
+    assert e.timed_run(Query("q01", "SELECT 1", "tpch"))[0] == 3
+    assert len(server.connections) == 2  # no reconnect: the current connection is fine
+    server.blocked[0].release.set()
+    t1.join(5)
 
 
 def test_flightsql_marks_and_flushes_through_its_connection(flight, monkeypatch, tmp_path):
@@ -371,6 +403,17 @@ class _SqlSpark:
 
     def sql(self, text: str):
         self.sql_text.append(text)
+
+
+def test_krishiv_python_registers_catalog_tables_with_sql(monkeypatch, tmp_path):
+    spark = _SqlSpark()
+    builder = types.SimpleNamespace(config=lambda k, v: builder, getOrCreate=lambda: spark)
+    fake = types.ModuleType("krishiv")
+    fake.SparkSession = types.SimpleNamespace(builder=builder)  # ty: ignore[unresolved-attribute]
+    monkeypatch.setitem(sys.modules, "krishiv", fake)
+    e = KrishivPythonEngine()
+    e.setup(Dataset("tpch", 1, tmp_path, ["lineitem", "orders"]))
+    assert spark.sql_text == _views(tmp_path)
 
 
 def test_krishiv_connect_registers_catalog_tables_with_sql():

@@ -16,8 +16,9 @@ gone, so the connection always turns it on.
 A timeout cancels every statement in flight with ADBC's ``adbc_cancel`` (the server answers ``CancelFlightInfo``) and
 keeps the connection. Only cancel may be called from another thread than the one inside the cursor, so
 a connection is never closed while a statement runs on it: when a cancel fails, the next statement opens a new
-connection and registers the tables again, and the old one is closed when its last statement returns (or at
-teardown, after the run).
+connection and registers the tables again, and the old one is closed when its last statement returns. Teardown
+closes only the idle connections; one with a statement still inside is closed by that statement's return, which the
+server's stop (right after) brings about.
 """
 
 from __future__ import annotations
@@ -53,7 +54,7 @@ class KrishivFlightSqlEngine(KrishivConnectEngine):
         self._retired: list[_Conn] = []  # replaced while a statement still ran on them; closed when it returns
         self._dataset: Dataset | None = None
         self._lock = threading.Lock()
-        self._cursors: dict[int, Any] = {}  # every cursor inside a statement, for `cancel`
+        self._cursors: dict[int, tuple[Any, _Conn]] = {}  # every cursor inside a statement and its connection
         self._stale = False  # a cancel failed: the next statement opens a new connection
 
     def _uri(self) -> str:
@@ -138,7 +139,7 @@ class KrishivFlightSqlEngine(KrishivConnectEngine):
         try:
             with c.conn.cursor() as cur:
                 with self._lock:
-                    self._cursors[id(cur)] = cur
+                    self._cursors[id(cur)] = (cur, c)
                 try:
                     t0 = time.perf_counter()
                     cur.execute(sql)
@@ -163,11 +164,14 @@ class KrishivFlightSqlEngine(KrishivConnectEngine):
     def cancel(self) -> None:
         with self._lock:
             cursors = list(self._cursors.values())
-        for cur in cursors:  # the timed-out statement, and any earlier one that has not stopped yet
+        for cur, c in cursors:  # the timed-out statement, and any earlier one that has not stopped yet
             try:
                 cur.adbc_cancel()
             except Exception:
-                self._stale = True
+                # Only a statement left running on the current connection makes it unusable; one on a connection
+                # already retired is closed by its own return.
+                if c is self._conn:
+                    self._stale = True
 
     def mark(self, label: str) -> None:
         if query_log.enabled():
@@ -182,10 +186,13 @@ class KrishivFlightSqlEngine(KrishivConnectEngine):
     def teardown(self) -> None:
         self.flush_query_log()
         with self._lock:
-            conns = [c.conn for c in ([self._conn] if self._conn is not None else []) + self._retired]
-            self._conn, self._retired = None, []
-        for conn in conns:  # after the run: nothing is timed any more
+            # Retire the current connection too: an idle one is closed now; one with a statement still inside (a
+            # timed-out statement that did not stop) stays open until that statement returns (`_release`), which the
+            # server's stop below brings about, so no connection is closed under a running statement.
+            idle = self._retire(self._conn) if self._conn is not None else None
+            self._conn = None
+        if idle is not None:
             with contextlib.suppress(Exception):
-                conn.close()
+                idle.close()
         # KrishivConnectEngine.teardown flushes through pyspark (no session here: nothing) and stops the server.
         super().teardown()

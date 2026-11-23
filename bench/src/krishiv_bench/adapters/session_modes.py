@@ -51,7 +51,9 @@ def cgroup_cpu_limit(root: str = "/sys/fs/cgroup", self_cgroup: str = "/proc/sel
 
 
 def usable_cores() -> int:
-    """The cores a session's executor uses: this process's affinity, capped by a cgroup CPU quota."""
+    """The cores a session's executor uses: this process's affinity, capped by a cgroup v2 CPU quota (v2 only: Rust's
+    ``available_parallelism`` also reads a v1 ``cpu.cfs_quota_us``, which this does not, so on a cgroup v1 host with a
+    quota ``effective.threads`` can be higher than what the engine uses)."""
     try:
         cores = len(os.sched_getaffinity(0))
     except AttributeError:  # pragma: no cover  # not Linux
@@ -83,7 +85,10 @@ def effective(conf: list[tuple[str, str]]) -> dict:
 
 def table_sql(table: str, path: str) -> str:
     """The statement that registers ``table`` over the Parquet at ``path``; ``IF NOT EXISTS``, so a reconnect to the
-    same server (``krishiv-flightsql`` after a failed cancel) registers again without an error."""
+    same server (``krishiv-flightsql`` after a failed cancel) registers again without an error. ``IF NOT EXISTS`` also
+    keeps an existing table whatever its location: safe while each process registers one dataset (the catalog is in
+    memory per engine process, every server is new and the CLI runs one suite per process); a process that registered
+    a second dataset under the same table names would read the first one."""
     if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", table) or "'" in path or "\\" in path:
         raise ValueError(f"cannot register {table!r} over {path!r}: name or path needs quoting")
     return f"CREATE TABLE IF NOT EXISTS {table} USING parquet LOCATION '{path}'"
