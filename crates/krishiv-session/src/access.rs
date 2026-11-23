@@ -31,10 +31,12 @@ use krishiv_sql::{
 
 mod intersection;
 mod path_prefix;
+mod statement_context;
 
 pub use intersection::{IntersectionPolicy, SystemOnlyPolicy};
 pub use path_prefix::PathPrefixPolicy;
 pub(crate) use path_prefix::{allowed_roots, resolve_links};
+pub use statement_context::StatementContext;
 
 use crate::dataframe::DataFrame;
 use crate::session::{QueryEnv, Session, sql_context};

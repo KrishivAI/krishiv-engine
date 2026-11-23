@@ -2447,6 +2447,15 @@ pub fn krishiv_session::SessionInfo::eq(&self, &krishiv_session::SessionInfo) ->
 impl core::fmt::Debug for krishiv_session::SessionInfo
 pub fn krishiv_session::SessionInfo::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for krishiv_session::SessionInfo
+pub struct krishiv_session::StatementContext
+impl krishiv_session::StatementContext
+pub fn krishiv_session::StatementContext::class(&self) -> &'static str
+pub fn krishiv_session::StatementContext::current() -> core::option::Option<Self>
+pub fn krishiv_session::StatementContext::query_id(&self) -> core::option::Option<alloc::string::String>
+impl core::clone::Clone for krishiv_session::StatementContext
+pub fn krishiv_session::StatementContext::clone(&self) -> krishiv_session::StatementContext
+impl core::fmt::Debug for krishiv_session::StatementContext
+pub fn krishiv_session::StatementContext::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 #[non_exhaustive] pub struct krishiv_session::StatementInfo
 pub krishiv_session::StatementInfo::class: krishiv_sql::classify::StatementClass
 pub krishiv_session::StatementInfo::explain: core::option::Option<krishiv_sql::classify::ExplainKind>
