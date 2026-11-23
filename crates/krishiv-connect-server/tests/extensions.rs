@@ -147,13 +147,17 @@ async fn a_krishiv_client_reads_the_capabilities() {
     ] {
         let r = config(&run, op).await.expect("get");
         assert_eq!(r.pairs.len(), 1);
-        assert_eq!(r.pairs[0].value.as_deref(), Some("echo"));
+        assert_eq!(
+            r.pairs[0].value.as_deref(),
+            Some("echo,persistpythonfunction")
+        );
     }
     // The same set is a `surface` row of `system.capabilities`.
     let rows = krishiv_session::capabilities();
     assert!(
-        rows.iter()
-            .any(|r| r[0] == "surface" && r[1] == "krishiv.v1" && r[3] == "echo"),
+        rows.iter().any(|r| r[0] == "surface"
+            && r[1] == "krishiv.v1"
+            && r[3] == "echo,persistpythonfunction"),
         "{rows:?}"
     );
 }

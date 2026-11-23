@@ -14,6 +14,7 @@ from typing import final
 
 __version__: str
 __allocator__: str
+__allocator_policy__: str
 __commit__: str
 __ui__: bool
 __all__ = [
@@ -28,9 +29,11 @@ __all__ = [
     "Session",
     "WindowSpec",
     "__allocator__",
+    "__allocator_policy__",
     "__commit__",
     "__ui__",
     "__version__",
+    "_pressure_epoch",
     "_udf_pool_shutdown",
     "_udf_runner_conf",
     "call_function",
@@ -302,6 +305,7 @@ class AnonymousPythonUdf:
     def version(self) -> int: ...
     def call(self, args: list[Column]) -> Column: ...
 
+def _pressure_epoch() -> int: ...
 def _udf_pool_shutdown() -> int: ...
 def _udf_runner_conf() -> dict[str, str]: ...
 def col(name: str) -> Column: ...

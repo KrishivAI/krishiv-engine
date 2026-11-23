@@ -8,6 +8,7 @@
     reason = "test helpers sit outside #[test] fns"
 )]
 
+mod as_of;
 mod cse;
 mod derived_keys;
 mod group_code;
@@ -19,6 +20,7 @@ mod oracle;
 mod payload_above;
 mod plan_stats;
 mod pre_expand;
+mod preserved_side;
 mod props;
 mod python_relations;
 mod qerror;

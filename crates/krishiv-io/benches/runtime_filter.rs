@@ -72,6 +72,12 @@ fn bench(c: &mut Criterion) {
             (n, exact, bloom)
         })
         .collect();
+    // About TPC-DS q34's shape (study 44 F1): 1,028 keys of 1-7,200, a bit set.
+    let dense_keys = Int64Array::from_iter_values((1..=7_200).filter(|k| k % 7 == 0));
+    let dense = build_exact(&dense_keys, 0, usize::MAX, false);
+    assert!(matches!(dense.form(), FilterForm::HashSet(_)));
+    let dense_probe =
+        Int64Array::from_iter_values((0..ROWS).map(|i| 1 + i.wrapping_mul(7919) % 7_200));
     // Join-build-sized filters (study 18 §R4: 1-10 MB at SF10-SF1000): past
     // the caches, where a probe waits on memory unless it prefetches.
     let large: Vec<(i64, KeyFilter)> = [1i64 << 20, 1 << 23]
@@ -130,6 +136,9 @@ fn bench(c: &mut Criterion) {
             b.iter(|| black_box(bloom.evaluate(black_box(&probe))));
         });
     }
+    group.bench_function("probe_dense1028_256k_i64", |b| {
+        b.iter(|| black_box(dense.evaluate(black_box(&dense_probe))));
+    });
     for (n, bloom) in &large {
         group.bench_function(format!("probe_bloom{}m_256k_i64", n >> 20), |b| {
             b.iter(|| black_box(bloom.evaluate(black_box(&probe))));

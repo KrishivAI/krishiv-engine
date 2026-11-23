@@ -70,6 +70,7 @@
 //! | `PlanNode::Aggregate` | U, R | Q1, Q3-Q5, Q7-Q13, Q15, Q16, Q18, Q21, Q22 | `groupBy.agg`, `rollup.agg`, `cube.agg` |
 //! | `PlanNode::PartialAggregate` | R | - | - |
 //! | `PlanNode::Join` | U, R | Q2, Q3, Q5, Q7-Q21 | `join` |
+//! | `PlanNode::AsOfJoin` | U, R | - | - |
 //! | `PlanNode::Sort` | U, R | Q1-Q5, Q7-Q13, Q15, Q16, Q18, Q20-Q22 | `orderBy`, `sort` |
 //! | `PlanNode::Limit` | U, R | Q2, Q3, Q10, Q18, Q21 | `limit` |
 //! | `PlanNode::Offset` | U, R | - | `offset` |
@@ -190,10 +191,10 @@ pub fn generate_qualifier(index: usize, aliased: bool) -> String {
 }
 
 pub use plan::{
-    ALIAS_PART_SEP, ColumnNamesOp, Cte, CteRef, GeneratorKind, Grouping, IR_VERSION, JoinCondition,
-    JoinKind, JoinStrategy, LogicalPlan, MetricColumn, PivotValue, Plan, PlanNode, ReadSource,
-    SampleBounds, Scan, SetOperation, SqlArgs, TABLE_FUNCTION_NAME_SEP, TableArg, TableVersion,
-    UnpivotColumnSet, generator_arg, without_generated_marker,
+    ALIAS_PART_SEP, AsOfDirection, AsOfMatch, ColumnNamesOp, Cte, CteRef, GeneratorKind, Grouping,
+    IR_VERSION, JoinCondition, JoinKind, JoinStrategy, LogicalPlan, MetricColumn, PivotValue, Plan,
+    PlanNode, ReadSource, SampleBounds, Scan, SetOperation, SqlArgs, TABLE_FUNCTION_NAME_SEP,
+    TableArg, TableVersion, UnpivotColumnSet, generator_arg, without_generated_marker,
 };
 pub use python::{
     check_python_aggregates, check_python_relation_determinism, is_python_udaf,

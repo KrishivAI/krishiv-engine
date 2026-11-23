@@ -43,7 +43,7 @@ Paths are relative to this crate.
 - `src/call.rs` the session of one call (design §3.2): the cookie's, else created once (provisional without a cookie,
   a cookie session for a refused one, "session reset" at info); `CallSession` is the drop guard that ends the call in
   the table and releases a session the call created unless its answer went out (`kept`): an error or a dropped
-  future, whatever the row's state (review M4)
+  future, whatever the row's state (review M4); `traced` gives the queries a request starts its `traceparent` / `baggage` headers (P3-T068: per request, as Connect's `ExecutePlan`; applied where a query or update runs: `DoGet` of a statement, a command run by `GetFlightInfo`, `run_update`; `tests/service.rs` `a_requests_traceparent_names_the_trace_of_its_query_and_update`)
 - `src/statement.rs` `GetFlightInfo(CommandStatementQuery)` (slot, `Operation`, classify with `sql_query_with`, a
   command runs once and is stored), `DoGet(TicketStatementQuery)` (re-analysis with the pinned clock,
   `SCHEMA_CHANGED`, the stored rows of a command), `described` (the announced schemas carry `ARROW:FLIGHT:SQL:PRECISION`/`SCALE`
@@ -79,7 +79,7 @@ Paths are relative to this crate.
   is a `FlightRpc` (method + command type URL or action type) and `check_flight` (exhaustive, no wildcard) answers what
   the server does not serve `UNIMPLEMENTED` (an undecodable command `INVALID_ARGUMENT`) before any body decoding, auth or
   session work, counted `unsupported`; `DoPut` and the prepared-statement actions are dispatched here (first message peeked; the create's answer carries the cookie), not by arrow-rs; the session-option actions too; `ListActions` is served (`served_actions`: `CancelFlightInfo`, `CancelQuery`, `CreatePreparedStatement`, `ClosePreparedStatement`, `SetSessionOptions`, `GetSessionOptions`, `CloseSession`, the actions it lets through; counted `list_actions`, no session)
-- `src/service.rs` the arrow-rs `FlightSqlService` impl: caller first, and new work (handshake, statements, updates, prepared-statement create/execute/bind, `GetSqlInfo` info; `admit_new`) refused with `KRISHIV_SERVER_DRAINING` (`FAILED_PRECONDITION`) while the drain flag is set (fetches of held tickets and cancels still served, T066 §5.1); Handshake echoes the bearer
+- `src/service.rs` the arrow-rs `FlightSqlService` impl: caller first, and new work (handshake, statements, updates, prepared-statement create/execute/bind, `GetSqlInfo`, `GetXdbcTypeInfo` and the eight listings (info and `DoGet`), `SetSessionOptions`/`GetSessionOptions`; `admit_new`) refused with `KRISHIV_SERVER_DRAINING` (`FAILED_PRECONDITION`) while the drain flag is set (fetches of held statement tickets, cancels, prepared close and `CloseSession` still served, T066 §5.1); Handshake echoes the bearer
   (a `Basic` login's password as `Bearer`, note §3.1; `Basic` is decoded by Connect's `AuthLayer` on this surface only);
   `GetSqlInfo` without a session; `CancelFlightInfo` and the deprecated `CancelQuery` (a malformed ticket is
   `INVALID_HANDLE.FORMAT`)
