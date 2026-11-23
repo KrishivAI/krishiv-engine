@@ -104,7 +104,13 @@ fn files(dir: &std::path::Path) -> Vec<Vec<i64>> {
 
 #[test]
 fn a_sort_written_to_parquet_under_a_small_limit_finishes_and_spills() {
-    sorted_write_under("16m");
+    // One file at 16m: the 6m case's extra files come from the writer's roll,
+    // not from several write tasks.
+    assert_eq!(
+        sorted_write_under("16m"),
+        1,
+        "the write split without a roll"
+    );
 }
 
 /// At 6 MB the writer's buffered row group cannot grow: it ends the file and
