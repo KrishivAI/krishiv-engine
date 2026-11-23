@@ -185,6 +185,18 @@ fn declared_catalog_resolves_through_its_factory() {
     assert_eq!(strings(&s, "SHOW CURRENT NAMESPACE", 0), ["lake"]);
 }
 
+/// A declared catalog whose factory serves no procedures refuses `CALL` with Spark's class.
+#[test]
+fn a_declared_catalog_without_procedures_refuses_call() {
+    let rt = runtime(DeclMode::Server, &LAKE);
+    let s = session_as(&rt, None, Role::Admin);
+    let e = run(&s, "CALL lake.system.expire_snapshots('db.t')").unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        krishiv_common::error::ErrorClass::MissingCatalogAbilityProcedures
+    );
+}
+
 #[test]
 fn type_without_a_factory_fails_startup() {
     let e = EngineRuntime::builder()
