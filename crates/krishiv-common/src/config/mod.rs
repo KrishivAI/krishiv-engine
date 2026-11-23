@@ -538,6 +538,9 @@ impl fmt::Display for ConfigWarning {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Config {
     values: BTreeMap<&'static str, ConfigValue>,
+    /// A registered entry's value as it was set (Spark's `SQLConf.setConfString` validates a value but stores the
+    /// string as given, and `getConfString` returns it so).
+    texts: BTreeMap<&'static str, String>,
     unregistered: BTreeMap<String, String>,
 }
 
@@ -569,6 +572,7 @@ impl Config {
         if let Some(entry) = lookup(legacy::primary_key(key)) {
             let v = entry.parse(key, value)?;
             self.values.insert(entry.key, v);
+            self.texts.insert(entry.key, value.to_owned());
             Ok(None)
         } else if key.starts_with("krishiv.") {
             Err(KrishivUnknownConfig {
@@ -618,6 +622,7 @@ impl Config {
         match lookup(legacy::primary_key(key)) {
             Some(entry) => {
                 self.values.remove(entry.key);
+                self.texts.remove(entry.key);
             }
             None => {
                 self.unregistered.remove(key);
@@ -632,8 +637,12 @@ impl Config {
         match lookup(legacy::primary_key(key)) {
             Some(entry) => {
                 self.values.remove(entry.key);
+                self.texts.remove(entry.key);
                 if let Some(value) = baseline.values.get(entry.key) {
                     self.values.insert(entry.key, value.clone());
+                }
+                if let Some(text) = baseline.texts.get(entry.key) {
+                    self.texts.insert(entry.key, text.clone());
                 }
             }
             None => {
@@ -652,6 +661,29 @@ impl Config {
             .iter()
             .map(|(k, v)| (*k, v.to_string()))
             .collect()
+    }
+
+    /// The canonical keys of registered entries with explicitly set values, in order, with each value's text
+    /// as it was set (`spark.conf.get` and `SET` show this text, as Spark's `getConfString` does).
+    pub fn explicit_registered_as_set(&self) -> Vec<(&'static str, String)> {
+        self.values
+            .iter()
+            .map(|(k, v)| {
+                (
+                    *k,
+                    self.texts.get(k).cloned().unwrap_or_else(|| v.to_string()),
+                )
+            })
+            .collect()
+    }
+
+    /// The value of `entry` as text, as `spark.conf.get` shows it: the text it was set to, else its default's
+    /// text.
+    pub fn text(&self, entry: &ConfigEntry) -> Option<String> {
+        match self.texts.get(entry.key) {
+            Some(text) => Some(text.clone()),
+            None => self.get(entry).map(ToString::to_string),
+        }
     }
 
     /// The unregistered keys with explicitly set values, in order.
