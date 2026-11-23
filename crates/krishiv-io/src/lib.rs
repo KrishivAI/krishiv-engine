@@ -72,9 +72,9 @@ pub use io::{
     BlockCacheStats, ByteRange, CacheKey, CacheScope, CacheStats, DistinctSample, DistinctSamples,
     FileRef, Held, InferKey, InferredSchemas, IoConfig, IoContext, IoCounters, IoScheduler,
     KeyFact, KeyFactKey, KeyFacts, LATENCY_BUCKETS, LatencyHistogram, ObjectScheme, OpenedStore,
-    ParsedUrl, PinnedStore, PutIfAbsent, SampleKey, SecretResolver, StoreId, StorePolicy,
-    StoreRegistry, StoreSettings, Tail, VersionToken, infer_schema_cached, is_server_scoped_option,
-    parse_object_url, query_registry, register, register_with_options,
+    ParsedUrl, PinnedStore, PutIfAbsent, QueryIoMemory, SampleKey, SecretResolver, StoreId,
+    StorePolicy, StoreRegistry, StoreSettings, Tail, VersionToken, infer_schema_cached,
+    is_server_scoped_option, parse_object_url, query_registry, register, register_with_options,
 };
 pub use json::JsonFormat;
 /// Refuses an `hf://` directory or glob (no listing), from `krishiv-store`.

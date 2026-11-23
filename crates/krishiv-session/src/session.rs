@@ -549,7 +549,7 @@ impl Session {
         spans: Vec<krishiv_sql::ast::Span>,
     ) -> Result<DataFrame, KrishivError> {
         // Boxed: one more nested future level overflows the compiler's query depth in the binaries.
-        Box::pin(self.sql_here_inner(query, Arc::default(), spans, false))
+        Box::pin(self.sql_here_inner(query, Arc::default(), spans, None, false))
             .await
             .and_then(Ran::into_frame)
             .map(|(df, _)| df)
@@ -1242,8 +1242,9 @@ impl Session {
         // at listing from the read's option values (P2-T084).
         let stores = self.scoped_stores(&config);
         // One I/O context for the query's reads, scans and writes: its
-        // counters are the query's own bytes (`system.queries`).
-        let io = self.scoped_io();
+        // counters are the query's own bytes (`system.queries`); its metadata reads charge the
+        // session's pool while planning, the query's once it runs (`start_query`).
+        let io = self.scoped_io().with_memory(Arc::clone(&self.state.memory));
         let paths: Arc<dyn krishiv_exec::files::PathLocator> = Arc::new(ObjectPaths::new(
             StoreId::new(LOCAL_STORE),
             self.state.cwd.clone(),
@@ -1833,6 +1834,7 @@ impl Session {
                 query: Arc::clone(&query),
                 state: Arc::clone(&self.state),
                 start: QueryStart::capture(&self.state, &env.io),
+                _io_memory: Some(env.io.bind_query_memory(Arc::clone(query.pool()))),
                 metrics_on,
                 log_id,
                 _permit: permit,
@@ -1962,4 +1964,7 @@ mod definer;
 
 mod ran;
 mod search_path;
-pub(crate) use ran::Ran;
+pub(crate) use ran::{
+    Ran, as_evaluation, as_listed_script_statement, as_script_statement, command_statement,
+    evaluation_failed,
+};

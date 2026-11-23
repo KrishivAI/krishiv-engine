@@ -7,6 +7,8 @@ use super::*;
 tokio::task_local! {
     /// The command this task is running, while it runs.
     static COMMAND: Arc<Command>;
+    /// Set while the task runs a query that evaluates an expression of its command (a variable's value).
+    static EVALUATION: ();
 }
 
 /// A statement that is not a query, for the queries it runs itself (an `INSERT`'s write): they are begun with
@@ -18,14 +20,19 @@ struct Command {
     listed: std::sync::atomic::AtomicBool,
     /// The statement's slot for the id of the row a query of it began (`sql_ran` adds no refused row then).
     row: Arc<std::sync::Mutex<Option<String>>>,
+    /// A statement of a script. Its queries carry the script's text (the text their error positions
+    /// index), and are listed under the statement's own.
+    of_script: bool,
 }
 
-/// The command a query begun with no text of its own is listed under.
-pub(super) struct Listing {
-    pub(super) text: Arc<str>,
-    pub(super) class: &'static str,
-    /// Where the id of the query's row goes: the query is the statement's listed run.
-    pub(super) row: Arc<std::sync::Mutex<Option<String>>>,
+/// The command a query is listed under.
+pub(crate) struct Listing {
+    pub(crate) text: Arc<str>,
+    pub(crate) class: &'static str,
+    /// Where the id of the query's row goes: the query is the statement's listed run. `None` for a query
+    /// that evaluates an expression of the command: the command may still fail after it finished, so it
+    /// becomes the listed run only by failing ([`evaluation_failed`]).
+    pub(crate) row: Option<Arc<std::sync::Mutex<Option<String>>>>,
 }
 
 /// `work` under the command the calling task is running, if any: a task the command starts for a query of
@@ -37,18 +44,108 @@ pub(super) fn in_running_command<F: Future>(work: F) -> impl Future<Output = F::
     }
 }
 
-/// The text and class of the command the calling task is running, for a query begun with no text of its own.
-pub(super) fn command_statement() -> Option<Listing> {
+/// `work`, a query a command runs to evaluate one of its own expressions (the value of `SET VAR`, a
+/// `DECLARE` default, the string of `EXECUTE IMMEDIATE`): the query carries a `SELECT` put together for
+/// it, and is listed in `system.queries` under the command's text and class, as the command's run.
+pub(crate) fn as_evaluation<F: Future>(work: F) -> impl Future<Output = F::Output> {
+    EVALUATION.scope((), work)
+}
+
+/// A query run [`as_evaluation`] failed: its row (the one `slot` names) is the failed run of the command
+/// the calling task is running, which gets no refused row beside it.
+pub(crate) fn evaluation_failed(slot: &std::sync::Mutex<Option<String>>) {
+    let id = slot
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    if let Some(id) = id {
+        // No command: nothing to tell.
+        let _ = COMMAND.try_with(|c| {
+            *c.row
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(id);
+        });
+    }
+}
+
+/// Tells the statement of a script the calling task is running, if any, that the refused row `id` is its
+/// row: the statement gets no second refused row from [`as_listed_script_statement`].
+pub(crate) fn refused_in_script_statement(id: &str) {
+    let _ = COMMAND.try_with(|c| {
+        if c.of_script {
+            c.row
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .get_or_insert_with(|| id.to_owned());
+        }
+    });
+}
+
+/// The command the calling task is running, for a query begun with no text of its own (`has_text` false),
+/// begun by a statement of a script, or run to evaluate an expression of the command.
+pub(crate) fn command_statement(has_text: bool) -> Option<Listing> {
+    let evaluation = EVALUATION.try_with(|()| ()).is_ok();
     COMMAND
         .try_with(|c| {
-            c.listed.store(true, Ordering::Relaxed);
-            Listing {
-                text: Arc::clone(&c.text),
-                class: c.class,
-                row: Arc::clone(&c.row),
-            }
+            (!has_text || c.of_script || evaluation).then(|| {
+                c.listed.store(true, Ordering::Relaxed);
+                Listing {
+                    text: Arc::clone(&c.text),
+                    class: c.class,
+                    row: (!evaluation).then(|| Arc::clone(&c.row)),
+                }
+            })
         })
         .ok()
+        .flatten()
+}
+
+/// `work`, the run of one statement of a script: the queries it runs are listed in `system.queries` under
+/// `text` (the statement's own, redacted) and `class`, not under the script's.
+pub(crate) fn as_script_statement<F: Future>(
+    text: &str,
+    class: &'static str,
+    work: F,
+) -> impl Future<Output = F::Output> {
+    COMMAND.scope(script_statement(text, class), work)
+}
+
+/// [`as_script_statement`] for a whole statement of a script (`work` checks access, analyzes and runs it).
+/// One that fails before any query of it began is listed as refused under `text` and `class`, on
+/// `session`, as the same statement typed alone is; the script's own row tells the script's failure.
+pub(crate) async fn as_listed_script_statement<T, F>(
+    session: &Session,
+    text: &str,
+    class: &'static str,
+    work: F,
+) -> Result<T, KrishivError>
+where
+    F: Future<Output = Result<T, KrishivError>>,
+{
+    let statement = script_statement(text, class);
+    let result = COMMAND.scope(Arc::clone(&statement), work).await;
+    if let Err(error) = &result
+        && statement
+            .row
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .is_none()
+    {
+        session.record_refused(Some(text), Some(class), error);
+    }
+    result
+}
+
+/// A statement of a script, as the command its queries are listed under.
+fn script_statement(text: &str, class: &'static str) -> Arc<Command> {
+    Arc::new(Command {
+        text: Arc::from(text),
+        class,
+        listed: std::sync::atomic::AtomicBool::new(false),
+        // The statement's own slot: the script's failure is told by the script's row.
+        row: Arc::default(),
+        of_script: true,
+    })
 }
 
 /// What [`Session::sql_here_marked`] did with a statement.
@@ -84,15 +181,17 @@ pub(super) fn not_a_query(class: krishiv_sql::StatementClass) -> KrishivError {
 
 impl Session {
     /// Runs `query` on the calling task as `sql` would, with `row` as the statement's slot for
-    /// the id of the `system.queries` row a query of it began.
+    /// the id of the `system.queries` row a query of it began. `parsed` gets the statement's class
+    /// once it parsed: a statement refused after that is listed with its class.
     pub(crate) async fn sql_here_marked(
         &self,
         query: &str,
         row: Arc<std::sync::Mutex<Option<String>>>,
+        parsed: &std::sync::OnceLock<&'static str>,
         queries_only: bool,
     ) -> Result<Ran, KrishivError> {
         // Boxed: one more nested future level overflows the compiler's query depth in the binaries.
-        Box::pin(self.sql_here_inner(query, row, Vec::new(), queries_only)).await
+        Box::pin(self.sql_here_inner(query, row, Vec::new(), Some(parsed), queries_only)).await
     }
 
     /// With `queries_only`, a statement that is not a query is not authorized or run: its class
@@ -102,6 +201,7 @@ impl Session {
         query: &str,
         row: Arc<std::sync::Mutex<Option<String>>>,
         spans: Vec<krishiv_sql::ast::Span>,
+        parsed: Option<&std::sync::OnceLock<&'static str>>,
         queries_only: bool,
     ) -> Result<Ran, KrishivError> {
         let mut env = self.query_env();
@@ -140,6 +240,11 @@ impl Session {
         // Before any side effect: what the statement writes, creates or
         // drops (its reads are checked by analysis, first thing).
         let class = self.statement_class(&statement, &env);
+        if let Some(parsed) = parsed {
+            // Set once: only `sql_ran` passes a slot, one per call; a statement run inside this one
+            // (`sql_here_spanned`) passes none, so it never writes the outer statement's class.
+            let _ = parsed.set(class.name());
+        }
         if queries_only && !matches!(statement, Statement::Query(_)) {
             return Ok(Ran::NotAQuery(class));
         }
@@ -147,6 +252,7 @@ impl Session {
         env.statement_class = Some(class.name());
         self.refuse_changes_while_draining(class, &redacted, &env)?;
         let command = !matches!(statement, Statement::Query(_));
+        let script = matches!(statement, Statement::Script(_));
         if !command {
             let df = self.run_statement(statement, env, query, &redacted).await?;
             df.with_statement(&redacted, class.name());
@@ -157,14 +263,16 @@ impl Session {
             class: class.name(),
             listed: std::sync::atomic::AtomicBool::new(false),
             row: Arc::clone(&env.row),
+            of_script: false,
         });
         // Boxed, as `sql_here_marked`'s future is: the scope is one more nested future level.
         let run = Box::pin(self.run_statement(statement, env, query, &redacted));
         let df = COMMAND.scope(Arc::clone(&running), run).await?;
         // A command that ran no query (`CREATE TABLE`, `SET`, `SHOW`) is listed when its result frame is
         // read, with the statement's text and class. One that ran a query has its row already: a read of
-        // its (empty) result is not the statement again.
-        if !running.listed.load(Ordering::Relaxed) {
+        // its (empty) result is not the statement again. A script's result holds the rows of its last query:
+        // a read of them is listed under the script's text and class, never as a row with neither.
+        if script || !running.listed.load(Ordering::Relaxed) {
             df.with_statement(&redacted, class.name());
         }
         Ok(Ran::Frame(df, true))
@@ -216,5 +324,39 @@ fn metric_view_gate(
         // Unreachable fallback, refused all the same: the literal's span, whose text is never shown.
         SparkProfile::V3_5 | SparkProfile::V4_0 | SparkProfile::V4_1 => first.or(Some(v.body_span)),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A statement of a script whose work records its own refused row (an action's planning failure
+    /// does) is listed once, not a second time by the script.
+    #[test]
+    fn a_script_statement_that_recorded_its_refusal_is_listed_once() {
+        let s = Session::new().unwrap();
+        let error = || -> KrishivError { crate::session::internal("planning failed".to_owned()) };
+        let rows = |s: &Session| s.state.queries.snapshot(true).len();
+        let before = rows(&s);
+        let own = futures::executor::block_on(as_listed_script_statement(
+            &s,
+            "SELECT 1",
+            "QUERY",
+            async {
+                s.record_refused(Some("SELECT 1"), Some("QUERY"), &error());
+                Err::<(), _>(error())
+            },
+        ));
+        assert!(own.is_err());
+        assert_eq!(rows(&s), before + 1);
+        let none = futures::executor::block_on(as_listed_script_statement(
+            &s,
+            "SELECT 2",
+            "QUERY",
+            async { Err::<(), _>(error()) },
+        ));
+        assert!(none.is_err());
+        assert_eq!(rows(&s), before + 2);
     }
 }
