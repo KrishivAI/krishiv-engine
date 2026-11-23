@@ -84,9 +84,10 @@ def test_print_schema(df: DataFrame, capsys: pytest.CaptureFixture[str]) -> None
     df.printSchema()
     assert capsys.readouterr().out.splitlines() == [
         "root",
-        " |-- id: bigint (nullable = true)",
+        " |-- id: long (nullable = true)",
         " |-- name: string (nullable = true)",
         " |-- v: double (nullable = true)",
+        "",
     ]
 
 
@@ -400,3 +401,27 @@ def test_created_dataframes_own_their_tables(spark: SparkSession) -> None:
         spark.createDataFrame(pa.table({"a": [1]}))
     gc.collect()
     assert names() == []
+
+
+def test_print_schema_nested_and_level(spark: SparkSession, capsys: pytest.CaptureFixture[str]) -> None:
+    df = spark.sql("select array(1) c, map('a', 1) m, named_struct('x', 1) s")
+    df.printSchema()
+    assert capsys.readouterr().out.splitlines() == [
+        "root",
+        " |-- c: array (nullable = false)",
+        " |    |-- element: integer (containsNull = true)",
+        " |-- m: map (nullable = false)",
+        " |    |-- key: string",
+        " |    |-- value: integer (valueContainsNull = true)",
+        " |-- s: struct (nullable = false)",
+        " |    |-- x: integer (nullable = true)",
+        "",
+    ]
+    df.printSchema(1)
+    assert capsys.readouterr().out.splitlines() == [
+        "root",
+        " |-- c: array (nullable = false)",
+        " |-- m: map (nullable = false)",
+        " |-- s: struct (nullable = false)",
+        "",
+    ]

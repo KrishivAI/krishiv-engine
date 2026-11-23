@@ -152,10 +152,10 @@ class DataFrame:
     def dtypes(self) -> list[tuple[str, str]]:
         return [(name, type_) for name, type_, _ in self._df.schema()]
 
-    def printSchema(self) -> None:
-        print("root")
-        for name, type_, nullable in self._df.schema():
-            print(f" |-- {name}: {type_} (nullable = {str(nullable).lower()})")
+    def printSchema(self, level: int | None = None) -> None:
+        """Prints the schema as a tree, as Spark does (``long``, ``integer`` type names, nested
+        fields, a final empty line); ``level`` limits the depth."""
+        print(self.schema.treeString(level))
 
     # Column access.
     def __getitem__(self, item: Any) -> Any:

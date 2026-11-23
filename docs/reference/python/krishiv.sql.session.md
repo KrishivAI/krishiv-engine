@@ -338,7 +338,8 @@ or a DDL string), as `pyspark.sql.SparkSession.emptyDataFrame`.
 >>> df.printSchema()
 root
  |-- name: string (nullable = true)
- |-- age: int (nullable = true)
+ |-- age: integer (nullable = true)
+<BLANKLINE>
 >>> df.count()
 0
 ```

@@ -487,6 +487,13 @@ __all__ = [
     "variant_insert",
     "variant_set",
     "variant_strip_nulls",
+    "vector_avg",
+    "vector_cosine_similarity",
+    "vector_inner_product",
+    "vector_l2_distance",
+    "vector_norm",
+    "vector_normalize",
+    "vector_sum",
     "version",
     "weekday",
     "weekofyear",
@@ -3112,6 +3119,41 @@ def variant_set(v: ColumnOrName, path: Column | str, value: ColumnOrName, create
 def variant_strip_nulls(v: ColumnOrName, include_arrays: bool = True) -> Column:
     """Calls the registry function ``variant_strip_nulls``."""
     return _call("variant_strip_nulls", _named(v, "v"), _lit(include_arrays, "include_arrays"))
+
+
+def vector_avg(col: ColumnOrName) -> Column:
+    """Calls the registry function ``vector_avg``."""
+    return _call("vector_avg", _named(col, "col"))
+
+
+def vector_cosine_similarity(left: ColumnOrName, right: ColumnOrName) -> Column:
+    """Calls the registry function ``vector_cosine_similarity``."""
+    return _call("vector_cosine_similarity", _named(left, "left"), _named(right, "right"))
+
+
+def vector_inner_product(left: ColumnOrName, right: ColumnOrName) -> Column:
+    """Calls the registry function ``vector_inner_product``."""
+    return _call("vector_inner_product", _named(left, "left"), _named(right, "right"))
+
+
+def vector_l2_distance(left: ColumnOrName, right: ColumnOrName) -> Column:
+    """Calls the registry function ``vector_l2_distance``."""
+    return _call("vector_l2_distance", _named(left, "left"), _named(right, "right"))
+
+
+def vector_norm(vector: ColumnOrName, degree: ColumnOrName | None = None) -> Column:
+    """Calls the registry function ``vector_norm``."""
+    return _call("vector_norm", _named(vector, "vector"), *_opt(_named, degree, "degree"))
+
+
+def vector_normalize(vector: ColumnOrName, degree: ColumnOrName | None = None) -> Column:
+    """Calls the registry function ``vector_normalize``."""
+    return _call("vector_normalize", _named(vector, "vector"), *_opt(_named, degree, "degree"))
+
+
+def vector_sum(col: ColumnOrName) -> Column:
+    """Calls the registry function ``vector_sum``."""
+    return _call("vector_sum", _named(col, "col"))
 
 
 def version() -> Column:
