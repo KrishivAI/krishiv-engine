@@ -1291,6 +1291,7 @@ impl Session {
                     declared_paths,
                     Arc::clone(&config),
                     scans.slots,
+                    self.declared_stores(&config),
                 ));
         let catalog = Arc::new(QueryCatalog::new(
             Arc::clone(&self.state.catalog),
