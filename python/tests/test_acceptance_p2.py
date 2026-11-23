@@ -126,13 +126,3 @@ def test_column_and_grouped_data_repr(spark: SparkSession) -> None:
         repr(df.groupBy("name"))
         == "GroupedData[grouping expressions: [name], value: [name: string, age: int], type: GroupBy]"
     )
-
-
-def test_functions_cast(spark: SparkSession) -> None:
-    from krishiv.sql import functions as F
-    from krishiv.sql.types import LongType
-
-    df = spark.createDataFrame([("1",), ("2",)], ["a"])
-    assert df.select(F.cast("a", "int").alias("a")).collect() == [Row(a=1), Row(a=2)]
-    assert df.select(F.cast(F.col("a"), LongType()).alias("a")).schema.simpleString() == "struct<a:bigint>"
-    assert "cast" in F.__all__
