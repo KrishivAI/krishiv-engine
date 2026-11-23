@@ -480,5 +480,5 @@ def test_a_windowed_grouped_aggregate_pandas_udf_in_sql_is_refused() -> None:
     total = pandas_udf(lambda v: v.sum(), "long", 202)  # SQL_GROUPED_AGG_PANDAS_UDF
     spark.udf.register("total_udf", total)
     spark.range(4).createOrReplaceTempView("t")
-    with pytest.raises(Exception, match=r"(?i)NOT_IMPLEMENTED|not implemented|window"):
+    with pytest.raises(Exception, match=r"KRISHIV_UNSUPPORTED_FEATURE|NOT_IMPLEMENTED"):
         spark.sql("SELECT total_udf(id) OVER (PARTITION BY id % 2) FROM t").collect()

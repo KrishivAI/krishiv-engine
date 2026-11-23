@@ -705,7 +705,9 @@ has no free thread and can stall; raise the setting to 2 or more.
 
 The embedded `mapInPandas` / `mapInArrow` takes each result batch's columns by position and relabels them with the
 declared schema. With `spark.sql.execution.arrow.pyspark.validateSchema.enabled` set to `true` the embedded runtime
-refuses a result of other field names or nullability with `ARROW_TYPE_MISMATCH`, as the server's worker pool does.
+refuses a result of other field names or types with `ARROW_TYPE_MISMATCH`, as the server's worker pool does. A declared
+`NOT NULL` (and a nested `containsNull=false` or `valueContainsNull=false`) is not kept by the embedded runtime, so a
+nullable result is accepted where Spark 4.1+ refuses it.
 
 ## Metric views (`CREATE VIEW .. WITH METRICS LANGUAGE YAML`)
 
