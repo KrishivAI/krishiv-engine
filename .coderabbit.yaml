@@ -22,14 +22,16 @@ reviews:
     - "!**/Cargo.lock"
     - "!tests/fixtures/**"
     - "!**/generated/**"
-    # Generated or data-only files: a review of them spends the hourly quota on no finding.
+    # Generated or bulk data files (and the changelog fragments, owner 2026-11-23): a review of them spends the
+    # hourly quota on no finding. Hand-kept files stay reviewed: the golden scripts and manifests
+    # (known-failures*.json, exclusions.json), the .slt tests, docs/reference/sql/{index,statements}.md.
     - "!**/*.snap"
-    - "!tests/spark-golden/**"
-    - "!tests/sqllogictest/**"
-    - "!crates/krishiv-testkit/tests/**/*.json"
+    - "!tests/spark-golden/v4.2.0/**"
+    - "!tests/spark-golden/known-failures-cases/**"
+    - "!tests/spark-golden/profiles/**"
     - "!**/uv.lock"
     - "!**/requirements*.txt"
-    - "!docs/reference/sql/**"
+    - "!docs/reference/sql/functions/**"
     - "!docs/reference/config/**"
     - "!docs/reference/python/**"
     - "!docs/reference/rust/**"
