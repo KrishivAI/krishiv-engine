@@ -136,6 +136,8 @@ def load_queries(
         texts = clickbench_queries.load(engine)
         return [Query(q, sql, suite) for q, sql in texts.items() if not only or q in only]
     d = queries_dir(suite)
+    if not d.is_dir():  # a non-editable install resolves bench_root() into site-packages: fail, never time 0 queries
+        raise SystemExit(f"{suite} queries directory {d} is missing; install the harness editable (uv pip install -e)")
     out = []
     for f in sorted(d.glob("q*.sql")):
         if only and f.stem not in only:
