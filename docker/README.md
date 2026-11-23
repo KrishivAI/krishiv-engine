@@ -9,8 +9,9 @@ uid/gid 10001 (never root), exposes two ports and has a `HEALTHCHECK` on `/healt
 | 15002 | Spark Connect and Arrow Flight SQL (one listener) |
 | 8080 | admin: `/healthz`, `/readyz`, `/metrics`, the web console |
 
-`ENTRYPOINT ["krishiv"]`, `CMD ["server", "--host", "0.0.0.0"]`: any other `krishiv` command works too
-(`docker run --rm krishiv sql -e "SELECT 1"`).
+`ENTRYPOINT ["docker-entrypoint.sh"]`, `CMD ["server"]`: `docker-entrypoint.sh` runs `krishiv server --host 0.0.0.0`
+with authentication and TLS supplied (the server refuses a non-loopback bind without both, ADR 0046). Any other
+`krishiv` command passes through (`docker run --rm krishiv sql -e "SELECT 1"`).
 
 Build (context: the repository root; amd64 and arm64 are built natively, one image each):
 
@@ -21,23 +22,25 @@ docker buildx build --platform linux/amd64,linux/arm64 -f docker/Dockerfile -t k
 
 ## Running the server
 
-The default command binds `0.0.0.0`, and a non-loopback server refuses to start without an authentication method
-and, for tokens, TLS (ADR 0046, `docs/guides/deploy.md`). Mount a certificate and a token and name them:
+One command, one variable:
 
 ```text
-docker run -d --name krishiv -p 15002:15002 -p 8080:8080 -v ./secrets:/etc/krishiv:ro krishiv \
-  server --host 0.0.0.0 \
-  --conf krishiv.server.tls.certFile=/etc/krishiv/cert.pem \
-  --conf krishiv.server.tls.keyFile=/etc/krishiv/key.pem \
-  --conf krishiv.auth.tokens.me.secret=file:/etc/krishiv/token \
-  --conf krishiv.auth.tokens.me.principal=me \
-  --conf krishiv.auth.tokens.me.kind=user \
-  --conf krishiv.auth.tokens.me.role=admin
+docker run -d --name krishiv -p 15002:15002 -p 8080:8080 -e KRISHIV_AUTH_TOKEN=change-me krishiv
+docker cp krishiv:/var/lib/krishiv/tls/cert.pem .      # the self-signed certificate it generated
 ```
 
-The key and the token file must not be readable by group or others, and must be readable by uid 10001. Clients
-connect with `sc://localhost:15002/;use_ssl=true;token=<token>`. `.github/scripts/docker-smoke.sh` is a working
-example (self-signed certificate, PySpark 4.x, one query); CI runs it on both architectures.
+Clients connect with `sc://localhost:15002/;use_ssl=true;token=change-me` (PySpark: set
+`GRPC_DEFAULT_SSL_ROOTS_FILE_PATH=cert.pem` to trust the certificate). The console is `https://localhost:8080/`.
+
+| Setting | Default |
+|---|---|
+| token | `KRISHIV_AUTH_TOKEN`, else the file `KRISHIV_AUTH_TOKEN_FILE` (default `/run/secrets/krishiv_token`, a Docker or compose secret), else a random token generated on first start and printed in the container log. It is one admin principal, `docker`. |
+| certificate | `KRISHIV_TLS_CERT` and `KRISHIV_TLS_KEY` (default `/etc/krishiv/tls/cert.pem` and `key.pem`), else a self-signed certificate (`localhost`, `127.0.0.1`, the container's host name) generated on first start in `KRISHIV_TLS_DIR` (default `/var/lib/krishiv/tls`; its path is printed). Mount that directory to keep the certificate. |
+
+The key and a token file must not be readable by group or others. To configure authentication yourself (several
+tokens, OIDC, client certificates) pass your own `--conf krishiv.auth.*` or `krishiv.server.tls.*` settings after
+`server`: the entrypoint then adds nothing. `.github/scripts/docker-smoke.sh` runs the one-variable start with PySpark 4.x
+on both architectures in CI.
 
 For a throwaway loopback-only run, publish no port and use `docker exec`, or run `--network host` with
 `server --host 127.0.0.1`.

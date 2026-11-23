@@ -4,8 +4,8 @@
 #
 #   docker-smoke.sh IMAGE
 #
-# Generates a self-signed certificate and a token, starts IMAGE with both (the image binds
-# 0.0.0.0, which the server refuses without authentication and TLS), waits for the container to
+# Starts IMAGE with only KRISHIV_AUTH_TOKEN set (the entrypoint binds 0.0.0.0 with a generated
+# self-signed certificate), waits for the container to
 # report healthy, reads the console page, runs one query through PySpark over TLS with the token, writes and reads a Delta table, and checks that the
 # image is set to run as a non-root user and that the admin port answers `/readyz`.
 set -euo pipefail
@@ -19,23 +19,13 @@ cleanup() {
 }
 trap cleanup EXIT
 
-openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=localhost \
-  -addext "subjectAltName=DNS:localhost,IP:127.0.0.1" \
-  -keyout "$work/key.pem" -out "$work/cert.pem" 2>/dev/null
-printf '%s' "smoke-$(openssl rand -hex 16)" >"$work/token"
-# The key and the token must not be readable by group or others; the container runs as the
-# invoking user for this check (the image's own user, 10001, is checked below).
-chmod 600 "$work/key.pem" "$work/token"
+token="smoke-$(openssl rand -hex 16)"
 mkdir -m 777 "$work/data"
 
-docker run -d --name "$name" --user "$(id -u):$(id -g)" -p 15002:15002 -p 8080:8080 -v "$work:/etc/krishiv:ro" -v "$work/data:/data" "$image" \
-  server --host 0.0.0.0 \
-  --conf krishiv.server.tls.certFile=/etc/krishiv/cert.pem \
-  --conf krishiv.server.tls.keyFile=/etc/krishiv/key.pem \
-  --conf krishiv.auth.tokens.smoke.secret=file:/etc/krishiv/token \
-  --conf krishiv.auth.tokens.smoke.principal=smoke \
-  --conf krishiv.auth.tokens.smoke.kind=service \
-  --conf krishiv.auth.tokens.smoke.role=admin >/dev/null
+# The one-variable start: the entrypoint generates the certificate and takes the token from the
+# environment (the server alone refuses 0.0.0.0 without authentication and TLS).
+docker run -d --name "$name" -p 15002:15002 -p 8080:8080 -e KRISHIV_AUTH_TOKEN="$token" \
+  -v "$work/data:/data" "$image" >/dev/null
 
 status=
 for _ in $(seq 1 90); do
@@ -48,6 +38,7 @@ done
 
 user=$(docker image inspect -f '{{.Config.User}}' "$image")
 case "$user" in ''|0|0:*|root|root:*) echo "::error::the image runs as root ($user)"; exit 1 ;; esac
+docker cp "$name:/var/lib/krishiv/tls/cert.pem" "$work/cert.pem"
 curl -fsk https://127.0.0.1:8080/readyz >/dev/null
 # The web console: the page at `/` of the UI port answers 200.
 [ "$(curl -sk -o /dev/null -w '%{http_code}' https://127.0.0.1:8080/)" = 200 ] \
@@ -56,7 +47,7 @@ curl -fsk https://127.0.0.1:8080/readyz >/dev/null
 venv=$work/venv
 uv venv -q "$venv"
 uv pip install -q --python "$venv/bin/python" "pyspark[connect]>=4.0,<5"
-GRPC_DEFAULT_SSL_ROOTS_FILE_PATH="$work/cert.pem" "$venv/bin/python" - "$(cat "$work/token")" <<'PY'
+GRPC_DEFAULT_SSL_ROOTS_FILE_PATH="$work/cert.pem" "$venv/bin/python" - "$token" <<'PY'
 import sys
 from pyspark.sql import SparkSession
 

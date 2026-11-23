@@ -6,8 +6,9 @@
 #   docker run --rm -p 15002:15002 -p 8080:8080 krishiv ...         (see docker/README.md)
 #
 # Ports: 15002 Spark Connect and Arrow Flight SQL (one listener), 8080 admin (/healthz, /readyz,
-# /metrics, the web console). The default command binds 0.0.0.0, so the server refuses to start
-# until authentication and TLS are configured (ADR 0046); docker/README.md shows the settings.
+# /metrics, the web console). The server refuses 0.0.0.0 without authentication and TLS (ADR 0046), so
+# docker/entrypoint.sh supplies both: the token from KRISHIV_AUTH_TOKEN (or a secret file, or one it
+# generates) and a self-signed certificate it generates on first start. See docker/README.md.
 
 ARG RUST_VERSION=1.99.1
 
@@ -26,13 +27,14 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     && install -D target/dist/krishiv /out/krishiv
 
 FROM debian:bookworm-slim AS runtime
-# ca-certificates: TLS to object stores; curl: the health check.
+# ca-certificates: TLS to object stores; curl: the health check; openssl: the first-start certificate.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && apt-get install -y --no-install-recommends ca-certificates curl openssl \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --system --gid 10001 krishiv \
     && useradd --system --uid 10001 --gid krishiv --home-dir /var/lib/krishiv --create-home --shell /usr/sbin/nologin krishiv
 COPY --from=build /out/krishiv /usr/local/bin/krishiv
+COPY docker/entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 USER 10001:10001
 WORKDIR /var/lib/krishiv
 EXPOSE 15002 8080
@@ -40,5 +42,5 @@ EXPOSE 15002 8080
 # certificate is fine from inside the container).
 HEALTHCHECK --interval=15s --timeout=3s --start-period=20s --retries=3 \
     CMD curl -fsS http://127.0.0.1:8080/healthz >/dev/null || curl -fskS https://127.0.0.1:8080/healthz >/dev/null || exit 1
-ENTRYPOINT ["krishiv"]
-CMD ["server", "--host", "0.0.0.0"]
+ENTRYPOINT ["docker-entrypoint.sh"]
+CMD ["server"]
