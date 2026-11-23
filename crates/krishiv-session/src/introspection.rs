@@ -911,10 +911,7 @@ impl Session {
                 ("Table".to_owned(), name.clone()),
                 ("Created Time".to_owned(), created_time(0)),
                 ("Last Access".to_owned(), "UNKNOWN".to_owned()),
-                (
-                    "Created By".to_owned(),
-                    created_by(self.state.profile).to_owned(),
-                ),
+                created_by_entry(self.state.profile),
                 ("Type".to_owned(), "VIEW".to_owned()),
             ];
             if let Some(text) = text {
@@ -1454,10 +1451,7 @@ impl Session {
             ("Table".to_owned(), t.name.clone()),
             ("Created Time".to_owned(), created_time(t.created_ms)),
             ("Last Access".to_owned(), "UNKNOWN".to_owned()),
-            (
-                "Created By".to_owned(),
-                created_by(self.state.profile).to_owned(),
-            ),
+            created_by_entry(self.state.profile),
         ];
         if let Some(view) = t.view.as_ref().filter(|v| v.is_metric()) {
             // `CatalogTable.toLinkedHashMap` for `METRIC_VIEW`: the YAML as `View Text` and a
@@ -1601,18 +1595,19 @@ fn json_type(t: &DataType) -> Result<String, KrishivError> {
     Ok(format!(r#"{{"name":"{name}"}}"#))
 }
 
+/// The `Created By` release the session's profile follows.
+fn created_by(profile: krishiv_plan::analyzer::SparkProfile) -> &'static str {
+    let v43 = profile >= krishiv_plan::analyzer::SparkProfile::V4_3;
+    if v43 { "Spark 4.3.0" } else { "Spark 4.2.0" }
+}
+
+fn created_by_entry(profile: krishiv_plan::analyzer::SparkProfile) -> (String, String) {
+    ("Created By".to_owned(), created_by(profile).to_owned())
+}
+
 /// `DESCRIBE EXTENDED [... PARTITION] ... AS JSON` of a stored table: one JSON object whose keys come in
 /// the order Spark's `DescribeTableJsonCommand` writes them (a partition's differ: its values and location
 /// come first, its statistics follow `last_access`, and the bucket keys sit after `provider`, before the comment).
-/// The release `Created By` names: the one the session's profile follows (Spark prints its own version).
-fn created_by(profile: krishiv_plan::analyzer::SparkProfile) -> &'static str {
-    if profile >= krishiv_plan::analyzer::SparkProfile::V4_3 {
-        "Spark 4.3.0"
-    } else {
-        "Spark 4.2.0"
-    }
-}
-
 fn describe_json(
     t: &CatalogTable,
     p: Option<&CatalogPartition>,
