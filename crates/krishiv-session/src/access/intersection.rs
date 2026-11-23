@@ -310,9 +310,10 @@ impl AccessPolicy for IntersectionPolicy {
                         }
                     }
                 }
-                if !asked.is_empty() {
-                    member.prefetch(principal, &asked).await;
-                }
+                // Every stage reaches every member, an empty one too: a member's stage state (the
+                // `external` provider's answers) is replaced by each call, so a skipped call would
+                // leave the previous stage's answers in place for this one.
+                member.prefetch(principal, &asked).await;
             }
         })
     }

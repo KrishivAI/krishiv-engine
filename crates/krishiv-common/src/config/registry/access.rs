@@ -16,7 +16,7 @@ pub static ACCESS_PROVIDER: ConfigEntry = ConfigEntry {
           objects; an admin passes every data check. `roles`: the role matrix decides \
           everything. Unset: `grants` when authentication is configured, otherwise `roles`. \
           `external`: the policy service of `krishiv.access.external.endpoint` decides them \
-          (`krishiv.access.v1`, ADR 0049) and the role matrix keeps only the server's own objects, \
+          (`krishiv.access.v1`) and the role matrix keeps only the server's own objects, \
           so a viewer may write when the service allows it; `roles+external` keeps the role \
           matrix on data too. A `+`-separated list (`roles+external`) is an \
           intersection: every listed provider that decides a securable must allow it, and one no \

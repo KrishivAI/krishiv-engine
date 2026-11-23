@@ -37,6 +37,10 @@ impl Planner<'_> {
         let planned = self.plan(input);
         let mut scans = self.scan_reads.pop().unwrap_or_default();
         scans.extend((first..self.next_scan).map(ScanId));
+        // A set: a shared plan read twice (and so on up a chain of shared plans) would otherwise
+        // double its ids at every level.
+        scans.sort_unstable();
+        scans.dedup();
         if let Some(parent) = self.scan_reads.last_mut() {
             parent.extend(scans.iter().copied());
         }

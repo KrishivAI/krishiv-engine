@@ -318,7 +318,7 @@ fn held_under(
             // `Shift`; reading the definition keeps a second run from
             // adding what the first found implied (TPC-DS q59).
             PlanNode::CteRef(r) => {
-                let Some(def) = memo.shared_defs.get(&r.name).map(Arc::clone) else {
+                let Some(def) = memo.shared_defs.get(&r.source).map(Arc::clone) else {
                     continue;
                 };
                 let Some(out) = def.resolved_output() else {
@@ -490,9 +490,12 @@ pub(crate) struct Memo {
     /// input relation it comes from.
     shared: HashMap<*const LogicalPlan, (Arc<LogicalPlan>, Arc<LogicalPlan>)>,
     worth: HashMap<*const LogicalPlan, (Arc<LogicalPlan>, bool)>,
-    /// The definitions `ShareCte` added, by name: a `CteRef` to one is
-    /// shared ([`Self::reaches_shared`]), and [`held`] reads through it.
-    shared_defs: HashMap<String, Arc<LogicalPlan>>,
+    /// The definitions `ShareCte` added, by their output attributes (a
+    /// `CteRef`'s `source`, not its name: a nested `WITH` may bind the same
+    /// name again, and a body reading the outer one must not find itself):
+    /// a `CteRef` to one is shared ([`Self::reaches_shared`]), and [`held`]
+    /// reads through it.
+    shared_defs: HashMap<Vec<AttrId>, Arc<LogicalPlan>>,
 }
 
 /// A cheap fingerprint of `plan`'s relation tree (node kinds and shape, not
@@ -535,7 +538,7 @@ impl Memo {
         // `Arc`s (join ordering re-plans a join inside each copy apart).
         let mut bodies: Vec<(Arc<LogicalPlan>, u32)> = Vec::new();
         let mut body_at: HashMap<*const LogicalPlan, usize> = HashMap::new();
-        let mut shared_defs: HashMap<String, Arc<LogicalPlan>> = HashMap::new();
+        let mut shared_defs: HashMap<Vec<AttrId>, Arc<LogicalPlan>> = HashMap::new();
         let mut stack = vec![Arc::clone(root)];
         let mut seen: HashSet<*const LogicalPlan> = HashSet::new();
         while let Some(p) = stack.pop() {
@@ -548,7 +551,10 @@ impl Memo {
                         // `ShareCte`'s definitions; a user CTE named so
                         // only loses an inferred filter.
                         .filter(|c| c.name.starts_with(crate::share_cte::SHARED_PREFIX))
-                        .map(|c| (c.name.clone(), Arc::clone(&c.plan))),
+                        .filter_map(|c| {
+                            let out = c.plan.resolved_output()?;
+                            Some((out.iter().map(|a| a.id).collect(), Arc::clone(&c.plan)))
+                        }),
                 );
             }
             if let PlanNode::Shift { input, .. } = &p.node {
@@ -689,7 +695,7 @@ impl Memo {
                 // What `ShareCte` computes once: the first `optimize` saw
                 // the instance it replaced, so a second adds nothing here
                 // either.
-                PlanNode::CteRef(r) => return self.shared_defs.contains_key(&r.name),
+                PlanNode::CteRef(r) => return self.shared_defs.contains_key(&r.source),
                 _ => return false,
             };
             at = next;

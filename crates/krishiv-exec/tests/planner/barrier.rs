@@ -646,8 +646,43 @@ fn collation_keys_inside_a_barrier_give_the_barrier_free_rows() {
         "SELECT lower(k COLLATE UTF8_LCASE) AS g, count(*) FROM {V} GROUP BY k COLLATE UTF8_LCASE"
     );
     let got = result(&planned_at(&tpch, &sql, "v", 1, &leaf));
-    assert_eq!(got.len(), 2, "{got:?}");
+    assert_eq!(got, ["a|3", "b|2"], "{got:?}");
+    // The sort's own order (not re-sorted): case-insensitive `k`, then `n`.
+    let sql = format!("SELECT k, n FROM {V} ORDER BY k COLLATE UTF8_LCASE, n");
+    let guarded = planned_at(&tpch, &sql, "v", 1, &leaf);
+    let got = rows(&super::run(&guarded).unwrap_or_else(|e| panic!("{e}\n{guarded}")));
+    assert_eq!(got, ["a|1", "A|2", "a|5", "b|3", "B|4"], "{got:?}");
     let sql = format!("SELECT count(DISTINCT k COLLATE UTF8_LCASE) FROM {V}");
     let got = result(&planned_at(&tpch, &sql, "v", 1, &leaf));
     assert_eq!(got, ["2"], "{got:?}");
+}
+
+/// A chain of shared plans, each reading the one below twice, keeps one entry per scan: the
+/// scans a shared plan reads are a set, so they do not double at every level (thirty levels
+/// would otherwise list about 2^30 ids).
+#[test]
+fn a_chain_of_shared_plans_read_twice_keeps_its_scan_list_a_set() {
+    let (tpch, _rt) = tpch();
+    let mut sql = String::from(
+        "WITH s0 AS (SELECT l_orderkey AS k, rand(1) AS r FROM lineitem WHERE l_orderkey < 0)",
+    );
+    for i in 1..=30 {
+        let p = i - 1;
+        sql.push_str(&format!(
+            ", s{i} AS (SELECT k, r + rand({i}) AS r FROM s{p} UNION ALL SELECT k, r FROM s{p})"
+        ));
+    }
+    sql.push_str(" SELECT * FROM s30");
+    let plan = planned(&tpch, &sql, "lineitem", usize::MAX);
+    let lineitem: Vec<ScanId> = all_scans(&plan)
+        .iter()
+        .filter(|(_, t, _)| t.ends_with("lineitem"))
+        .map(|(id, _, _)| *id)
+        .collect();
+    assert_eq!(
+        lineitem.len(),
+        1,
+        "one scan, read through the chain\n{plan}"
+    );
+    assert_eq!(plan.guarded(), lineitem.as_slice(), "{plan}");
 }

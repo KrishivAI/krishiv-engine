@@ -202,7 +202,19 @@ impl ExternalAccess {
     /// Decides `items` for `principal`, in calls of at most [`MAX_ITEMS_PER_CHECK`]; `true` is
     /// an allow. Any failure denies every item of its call.
     async fn decide(&self, principal: &Principal, items: &[(Securable, Privilege)]) -> Vec<bool> {
+        self.decide_versioned(principal, items).await.0
+    }
+
+    /// [`Self::decide`], and whether every call that answered reported one policy version: when
+    /// the version moved between the calls, some answers are from a policy the others replaced.
+    async fn decide_versioned(
+        &self,
+        principal: &Principal,
+        items: &[(Securable, Privilege)],
+    ) -> (Vec<bool>, bool) {
         let mut out = Vec::with_capacity(items.len());
+        let mut version: Option<u64> = None;
+        let mut one_version = true;
         let who = convert::principal(principal);
         for chunk in items.chunks(MAX_ITEMS_PER_CHECK) {
             let message = pb::CheckRequest {
@@ -242,9 +254,17 @@ impl ExternalAccess {
                     None
                 }
             };
+            if let Some(v) = answer
+                .as_ref()
+                .filter(|a| a.decisions.len() == chunk.len())
+                .map(|a| a.policy_version)
+            {
+                one_version &= version.is_none_or(|seen| seen == v);
+                version = Some(v);
+            }
             out.extend(self.read_answer(seq, answer, chunk.len()));
         }
-        out
+        (out, one_version)
     }
 
     /// The decisions of one response for `n` items: all denials unless it holds exactly `n`
@@ -254,8 +274,9 @@ impl ExternalAccess {
             self.note(seq, None);
             return vec![false; n];
         };
-        self.note(seq, Some(answer.policy_version));
         if answer.decisions.len() != n {
+            // A malformed answer is a failed call: the version it names is not trusted.
+            self.note(seq, None);
             tracing::warn!(
                 target: "krishiv::access",
                 provider = "external",
@@ -265,6 +286,7 @@ impl ExternalAccess {
             );
             return vec![false; n];
         }
+        self.note(seq, Some(answer.policy_version));
         answer
             .decisions
             .iter()
@@ -501,7 +523,7 @@ impl AccessPolicy for ExternalPolicy {
             if asked.is_empty() {
                 return;
             }
-            let answers = self.access.decide(principal, &asked).await;
+            let (answers, one_version) = self.access.decide_versioned(principal, &asked).await;
             let id = principal_key(principal);
             let now = Instant::now();
             let mut memo = self.memo();
@@ -509,6 +531,17 @@ impl AccessPolicy for ExternalPolicy {
                 return;
             }
             memo.clear();
+            // Answers from two policy versions (the policy changed between the calls of a large
+            // stage) are not kept: each `check` then asks the service itself, so no allow of a
+            // replaced version authorizes an analysis fingerprinted with the new one.
+            if !one_version {
+                tracing::warn!(
+                    target: "krishiv::access",
+                    provider = "external",
+                    "the policy version changed during a prefetch; its answers are not kept"
+                );
+                return;
+            }
             for ((securable, privilege), allow) in asked.into_iter().zip(answers).take(MEMO_LIMIT) {
                 memo.insert(memo_key(&id, &securable, privilege), (allow, now));
             }

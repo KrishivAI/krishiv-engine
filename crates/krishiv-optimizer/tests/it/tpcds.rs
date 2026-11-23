@@ -139,6 +139,12 @@ fn tpcds_configured_plans_are_fixed_points() {
     let mut bad = Vec::new();
     for q in 1..=99 {
         let Some(plan) = support::try_resolve(&sql(q), &ctx) else {
+            // Only a listed query may drop out (`tpcds_plans` checks the list is exact), so a
+            // regression case such as q59 cannot leave the check by failing to resolve.
+            assert!(
+                UNSUPPORTED.iter().any(|(u, _)| *u == q),
+                "q{q:02} does not resolve and is not in UNSUPPORTED"
+            );
             continue;
         };
         let once = opt(&plan);

@@ -417,7 +417,16 @@ impl Session {
         class: StatementClass,
         env: &QueryEnv,
     ) -> Result<(), KrishivError> {
+        self.fresh_access_stage().await;
         self.check_targets(statement, env, Some(class)).await
+    }
+
+    /// Ends whatever prefetch stage an earlier statement left (one cancelled before its checks
+    /// consumed the answers it prefetched): an empty [`AccessPolicy::prefetch`] clears a
+    /// provider's stage state without asking anything, so the checks that follow, made outside
+    /// any analysis stage, ask the provider rather than reuse an earlier answer.
+    async fn fresh_access_stage(&self) {
+        self.state.policy.prefetch(&self.state.principal, &[]).await;
     }
 
     /// Whether [`Self::authorize_statement`] of `statement` would pass, asked as it asks (the same
@@ -946,6 +955,7 @@ impl Session {
         privilege: Privilege,
         class: StatementClass,
     ) -> Result<(), KrishivError> {
+        self.fresh_access_stage().await;
         let r = authorize(
             &*self.state.policy,
             &self.state.principal,
@@ -966,6 +976,7 @@ impl Session {
         privilege: Privilege,
         env: &QueryEnv,
     ) -> Result<(), KrishivError> {
+        self.fresh_access_stage().await;
         let parts = [
             crate::catalog::CATALOG.to_owned(),
             namespace.to_owned(),
@@ -990,6 +1001,7 @@ impl Session {
         table: &str,
         env: &QueryEnv,
     ) -> Result<Vec<(String, krishiv_types::DataType)>, KrishivError> {
+        self.fresh_access_stage().await;
         let parts = ["system".to_owned(), table.to_owned()];
         let ident = table_ident(&*env.analysis.catalogs, &parts)
             .ok_or_else(|| unplaceable("an empty name"))?;
@@ -1329,6 +1341,7 @@ pub(crate) async fn authorize_checked(
     privileges: &[Privilege],
     class: StatementClass,
 ) -> Result<(), KrishivError> {
+    session.fresh_access_stage().await;
     let asked = Securable::Path(OptionValue::from_user("path", checked.at.display.clone()));
     for privilege in privileges {
         let r = authorize(

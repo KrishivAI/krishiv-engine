@@ -266,8 +266,10 @@ fn a_table_level_member_is_asked_about_the_relation_of_a_column() {
     let view = Securable::View(ident("v"));
     run(p.check(&principal(), &view, Privilege::Browse)).unwrap();
     run(p.check(&principal(), &table("t"), Privilege::Browse)).unwrap();
-    run(p.check(&principal(), &column("v", "a"), Privilege::Select)).unwrap();
-    run(p.check(&principal(), &column("t", "a"), Privilege::Select)).unwrap();
+    for c in [column("v", "a"), column("t", "a")] {
+        let d = run(p.check(&principal(), &c, Privilege::Select)).unwrap();
+        assert_eq!(d, AccessDecision::Allow, "{c:?}");
+    }
     assert_eq!(
         grants.asked(),
         vec![
@@ -330,7 +332,8 @@ fn a_later_table_hint_never_turns_a_view_column_into_a_table_question() {
     let view = Securable::View(ident("v"));
     run(p.check(&principal(), &view, Privilege::Browse)).unwrap();
     run(p.prefetch(&principal(), &[(table("v"), Privilege::Select)]));
-    run(p.check(&principal(), &column("v", "a"), Privilege::Select)).unwrap();
+    let d = run(p.check(&principal(), &column("v", "a"), Privilege::Select)).unwrap();
+    assert_eq!(d, AccessDecision::Allow);
     assert_eq!(
         external.asked(),
         vec![
@@ -412,6 +415,25 @@ fn prefetch_reaches_each_member_with_its_own_questions() {
     assert_eq!(
         *external.prefetched.lock().unwrap(),
         vec![vec![(table("t"), Privilege::Select)]]
+    );
+}
+
+/// A stage with nothing for a member still reaches it, as an empty list: the member replaces
+/// its previous stage's state (the `external` provider's prefetched answers) with nothing.
+#[test]
+fn a_stage_with_nothing_for_a_member_still_reaches_it_empty() {
+    let grants = Arc::new(Member::new(allow));
+    let mut external = Member::new(allow);
+    external.decides = |s| !matches!(s, Securable::System(_));
+    let external = Arc::new(external);
+    let p = list(vec![Arc::clone(&grants), Arc::clone(&external)]);
+    let items = vec![(Securable::System("cluster".to_owned()), Privilege::Manage)];
+    run(p.prefetch(&principal(), &items));
+    run(p.prefetch(&principal(), &[]));
+    assert_eq!(*grants.prefetched.lock().unwrap(), vec![items, Vec::new()]);
+    assert_eq!(
+        *external.prefetched.lock().unwrap(),
+        vec![Vec::<(Securable, Privilege)>::new(), Vec::new()]
     );
 }
 

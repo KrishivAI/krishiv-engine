@@ -1253,9 +1253,14 @@ fn apply(name: &str, a: &[V]) -> V {
             }
             _ => V::Null,
         },
-        // The barrier tests' UDFs: `leak` stands for the query's `abs`, `mask` keeps its value.
+        // The barrier tests' UDFs: `leak` stands for the query's `abs`; `mask` changes every
+        // number and string it masks, so a plan that dropped a mask gives other rows.
         "policy" => V::Bool(policy_keeps(&a[0])),
-        "mask" => a[0].clone(),
+        "mask" => match &a[0] {
+            V::Num(x) => V::Num(x + 1000 * SCALE),
+            V::Str(s) => V::Str(format!("#{s}").into()),
+            v => v.clone(),
+        },
         "leak" => match &a[0] {
             V::Num(x) => V::Num(x.abs()),
             _ => V::Null,

@@ -1011,3 +1011,43 @@ fn a_leak_beside_the_policy_fails_at_run_time() {
     assert_eq!(keys.len(), 1);
     eval::rows_guarded(&data::small(3), &guarded, &keys);
 }
+
+/// The masked column keeps its whole mask: after both runs the barrier holds a projection with
+/// `mask(b)` aliased to the query's `b`, and the policy filter is below it.
+#[test]
+fn the_mask_of_a_masked_column_stays_whole_above_the_policy_filter() {
+    let (root, _) = run("SELECT a, b FROM t WHERE a = 1", &["b"]);
+    let mut inputs = Vec::new();
+    barriers(&root, &mut inputs);
+    assert!(!inputs.is_empty(), "{root}");
+    for input in &inputs {
+        let mut all = Vec::new();
+        nodes(input, &mut all);
+        let project = all
+            .iter()
+            .find(|n| {
+                let PlanNode::Project { exprs, .. } = &n.node else {
+                    return false;
+                };
+                exprs.iter().any(|e| {
+                    matches!(&e.node, ExprNode::Resolved(ResolvedExpr::Alias { expr, output })
+                        if output.name == "b" && is_udf(expr, "mask")
+                            && matches!(&expr.node, ExprNode::Resolved(ResolvedExpr::Function(f))
+                                if matches!(f.args.as_slice(), [a]
+                                    if matches!(&a.node, ExprNode::Resolved(ResolvedExpr::Column(c))
+                                        if c.name == "b"))))
+                })
+            })
+            .unwrap_or_else(|| panic!("no `mask(b) AS b` projection in\n{input}"));
+        let mut below = Vec::new();
+        nodes(project, &mut below);
+        assert!(
+            below
+                .iter()
+                .any(|n| matches!(&n.node, PlanNode::Filter { predicate, .. }
+                if is_udf(predicate, "policy")
+                    || conjuncts(predicate).iter().any(|c| is_udf(c, "policy")))),
+            "the policy filter is below the mask\n{input}"
+        );
+    }
+}

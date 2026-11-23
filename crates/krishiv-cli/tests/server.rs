@@ -1086,6 +1086,12 @@ fn the_external_access_provider_is_checked_at_startup() {
         "krishiv.access.external.endpoint=http://127.0.0.1:9",
     ]);
     assert!(err.contains("needs authentication"), "{err}");
+    // `grants` decides about a principal too: refused without authentication, not run unenforced.
+    let err = refused(&["krishiv.access.provider=grants"]);
+    assert!(
+        err.contains("the grants provider needs authentication"),
+        "{err}"
+    );
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("t");
     std::fs::write(&path, "external-provider-token-0123456789abcdef").expect("write secret");

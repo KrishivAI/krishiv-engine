@@ -124,11 +124,16 @@ fn shared_external(
 fn refuse_unauthenticated_providers(config: &Config) -> Result<(), String> {
     use krishiv_session::grants::{AccessProvider, access_providers};
     let providers = access_providers(config, false).map_err(|e| e.to_string())?;
-    if providers.contains(&AccessProvider::External) {
-        return Err(
-            "krishiv.access.provider: the external provider needs authentication (krishiv.auth.*)"
-                .to_owned(),
-        );
+    // `grants` and `external` both decide about a principal; without authentication the server
+    // would run every caller as the base session and enforce neither (review: grants on an
+    // unauthenticated server started silently).
+    for provider in [AccessProvider::Grants, AccessProvider::External] {
+        if providers.contains(&provider) {
+            return Err(format!(
+                "krishiv.access.provider: the {} provider needs authentication (krishiv.auth.*)",
+                provider.as_str()
+            ));
+        }
     }
     Ok(())
 }

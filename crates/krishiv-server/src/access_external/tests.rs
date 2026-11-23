@@ -25,12 +25,15 @@ enum Mode {
     Slow,
     /// Fail the call.
     Fail,
+    /// Answer by the rule, each call under a policy version one higher than the last.
+    Moving,
 }
 
 struct Fake {
     mode: Mode,
     version: u64,
     requests: Seen,
+    calls: std::sync::atomic::AtomicU64,
 }
 
 fn allows(item: &pb::Item) -> bool {
@@ -68,7 +71,7 @@ impl AccessPolicyService for Fake {
             })
             .collect();
         match self.mode {
-            Mode::Rule => {}
+            Mode::Rule | Mode::Moving => {}
             Mode::Short => {
                 decisions.pop();
             }
@@ -76,9 +79,16 @@ impl AccessPolicyService for Fake {
             Mode::Slow => tokio::time::sleep(Duration::from_secs(2)).await,
             Mode::Fail => return Err(tonic::Status::unavailable("down")),
         }
+        let call = self
+            .calls
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let policy_version = match self.mode {
+            Mode::Moving => self.version + call,
+            _ => self.version,
+        };
         Ok(tonic::Response::new(pb::CheckResponse {
             decisions,
-            policy_version: self.version,
+            policy_version,
         }))
     }
 
@@ -110,6 +120,7 @@ async fn serve(mode: Mode, token: Option<&str>) -> Service {
         mode,
         version: 41,
         requests: Arc::clone(&requests),
+        calls: std::sync::atomic::AtomicU64::new(0),
     };
     let incoming =
         tonic::transport::server::TcpIncoming::bind("127.0.0.1:0".parse().unwrap()).unwrap();
@@ -324,6 +335,42 @@ async fn every_failure_is_a_denial() {
             );
         }
     }
+}
+
+/// A response with the wrong number of decisions is a failed call: the version it names is not
+/// trusted, so no analysis made under it is reused.
+#[tokio::test]
+async fn a_wrong_length_answer_leaves_the_version_untrusted() {
+    let s = serve(Mode::Short, None).await;
+    let d = s
+        .access
+        .policy()
+        .check(&ana(), &table("t"), Privilege::Select)
+        .await
+        .unwrap();
+    assert!(matches!(d, AccessDecision::Deny { .. }), "{d:?}");
+    let v = s.access.current_version();
+    assert_ne!(v.0, 41);
+    assert_ne!(v.0 & (1 << 63), 0, "{v:?}");
+}
+
+/// A prefetch whose calls report two policy versions keeps none of their answers: each check
+/// asks the service again.
+#[tokio::test]
+async fn a_prefetch_across_a_version_change_keeps_nothing() {
+    let s = serve(Mode::Moving, None).await;
+    let policy = s.access.policy();
+    let items: Vec<_> = (0..MAX_ITEMS_PER_CHECK + 1)
+        .map(|i| (table(&format!("t{i}")), Privilege::Select))
+        .collect();
+    policy.prefetch(&ana(), &items).await;
+    assert_eq!(s.requests().len(), 2);
+    let d = policy
+        .check(&ana(), &table("t0"), Privilege::Select)
+        .await
+        .unwrap();
+    assert!(allowed(&d), "{d:?}");
+    assert_eq!(s.requests().len(), 3, "the check asked the service itself");
 }
 
 #[tokio::test]
