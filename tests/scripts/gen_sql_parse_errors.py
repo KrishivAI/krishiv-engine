@@ -104,6 +104,28 @@ CASES = [
     "SELECT a FROM t WHERE a +",
     "SELECT * FROM (SELECT 1 ORDER BY a,",
     "SELECT x IN (SELECT 1 2)",
+    # SQL-38: a non-reserved FROM read as a column after an operator; in a row it takes an alias
+    "SELECT (1 + \nFROM range(1)",
+    "SELECT (1 +\nFROM range(1)",
+    "SELECT (1 + FROM range(1)",
+    "SELECT (1 + FROM t",
+    "SELECT (1 + FROM t(1)",
+    "SELECT (1 + FROM t WHERE a",
+    "SELECT (1 FROM range(1)",
+    "SELECT (a FROM t",
+    "SELECT 1 + FROM range(1)",
+    "SELECT (1 + FROM",
+    "SELECT f(1 + FROM range(1)",
+    # a first argument that is more than a name: ANTLR's prediction fails, no hint
+    "SELECT f(1 + a",
+    "SELECT f(1 + a b",
+    "SELECT f(1 + a range(1)",
+    "SELECT f(a + b",
+    "SELECT f(1 + FROM",
+    "SELECT f(1 * a b",
+    "SELECT f(1 = a b",
+    "SELECT f(a.b c",
+    "SELECT f(- a b",
 ]
 
 

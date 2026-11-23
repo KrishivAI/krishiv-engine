@@ -256,6 +256,26 @@ impl Parser<'_> {
             })
     }
 
+    /// Whether the token before this one is an arithmetic, bitwise, string
+    /// or comparison operator, after which an operand must follow.
+    fn operator_before(&self) -> bool {
+        use Sym::{
+            Amp, Caret, Concat, Eq, Ge, Gt, Le, Lt, Minus, Neq, NullSafeEq, Percent, Pipe, Plus,
+            Shl, Shr, Shru, Slash, Star, Tilde,
+        };
+        self.pos
+            .checked_sub(1)
+            .and_then(|i| self.toks.get(i))
+            .is_some_and(|t| match t.kind {
+                TokenKind::Sym(s) => [
+                    Amp, Caret, Concat, Eq, Ge, Gt, Le, Lt, Minus, Neq, NullSafeEq, Percent, Pipe,
+                    Plus, Shl, Shr, Shru, Slash, Star, Tilde,
+                ]
+                .contains(&s),
+                _ => false,
+            })
+    }
+
     fn exists_follows(&self) -> bool {
         self.kw_at(0, "EXISTS") && self.sym_at(1, Sym::LParen) && self.query_follows(2)
     }
@@ -1043,9 +1063,15 @@ impl Parser<'_> {
             };
         // `NOT` here, where no boolean expression may start, and a lone
         // `CASE` are columns, as ANTLR reads them (`1 + NOT a`).
+        // A word that starts no primary of its own right after an operator
+        // is a column whatever follows, as the operator needs an operand
+        // (`1 + FROM range(1)` is `1 + from AS range`, then the `(` fails;
+        // Spark 4.2.0, SQL-38).
         let keyword_column = !identifier
             && !self.opts.enforce_reserved_keywords
-            && (self.kw_at(0, "NOT") || (self.kw_at(0, "CASE") && self.case_is_column()));
+            && (self.kw_at(0, "NOT")
+                || (self.kw_at(0, "CASE") && self.case_is_column())
+                || (self.class(0) & PRIMARY_WORD == 0 && self.operator_before()));
         if !identifier && (reserved_call || keyword_column || self.reserved_column_here()) {
             parts.push(self.keyword_ident());
         } else {
@@ -1514,10 +1540,18 @@ impl Parser<'_> {
         start: usize,
     ) -> PR<Function> {
         let mut null_treatment = self.null_treatment();
-        // After a plain column name Spark also inserts a missing `)`.
+        // After a plain column name Spark also inserts a missing `)`; not
+        // after an operator, a qualified name or a field ending in a word
+        // (`f(1 + a b`, `f(a.b c`: no hint; Spark 4.2.0, SQL-38).
         let after_name = quantifier.is_none()
             && self.pos > 0
-            && self.toks.get(self.pos - 1).map(|t| t.kind) == Some(TokenKind::Word);
+            && self.toks.get(self.pos - 1).map(|t| t.kind) == Some(TokenKind::Word)
+            && !args.last().is_some_and(|a| {
+                matches!(
+                    &a.expr.kind,
+                    ExprKind::Binary(..) | ExprKind::Unary(..) | ExprKind::Field(..)
+                ) || matches!(&a.expr.kind, ExprKind::Column(parts) if parts.len() > 1)
+            });
         let how = if after_name {
             Close::DropOrInsert
         } else {
