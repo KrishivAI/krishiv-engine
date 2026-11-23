@@ -2575,7 +2575,7 @@ fn binary_output_style() -> PhysicalPlan {
     PhysicalPlan::new(PhysNode::OneRow, schema(), explain, env)
 }
 
-/// A plan whose environment reproduces Spark 4.2.
+/// A plan whose environment reproduces Spark 4.3 (`spark_version` set; absent is 4.2).
 fn spark_version() -> PhysicalPlan {
     let env = ExprEnv {
         spark_version: Some(Arc::from("4.3")),

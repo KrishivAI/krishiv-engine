@@ -1749,7 +1749,8 @@ pub struct PythonUdfFunction {
 pub struct DataType {
     #[prost(enumeration = "data_type::Kind", tag = "1")]
     pub kind: i32,
-    /// `KIND_DECIMAL` and `KIND_TIME` only.
+    /// `KIND_DECIMAL` and `KIND_TIME` only. A `KIND_TIME` precision of 7 to 9
+    /// (Spark 4.3's nanosecond TIME) needs feature: time_precision_nanos.
     #[prost(uint32, tag = "2")]
     pub precision: u32,
     /// `KIND_DECIMAL` only.

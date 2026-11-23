@@ -1413,6 +1413,40 @@ fn nanosecond_time_needs_its_feature() {
             "{tag}"
         );
     }
+    // A user-defined type's field is tagged with the JSON form, which names its SQL type.
+    let udt_over = |precision| {
+        DataType::Udt(std::sync::Arc::new(krishiv_types::UdtType::jvm(
+            DataType::Time { precision },
+            "pkg.ClockUDT".to_owned(),
+            None,
+        )))
+    };
+    for (t, expected) in [
+        (udt_over(9), Some(Feature::TimePrecisionNanos)),
+        (
+            DataType::Array(krishiv_types::ArrayType::new(udt_over(7), true).into()),
+            Some(Feature::TimePrecisionNanos),
+        ),
+        (udt_over(6), None),
+    ] {
+        // An array of a UDT tags its element field, which the walk visits on its own.
+        let field = match t.to_arrow_field("t", true).data_type() {
+            arrow_schema::DataType::List(element) => element.as_ref().clone(),
+            _ => t.to_arrow_field("t", true),
+        };
+        assert!(
+            field
+                .metadata()
+                .get(SPARK_TYPE_METADATA_KEY)
+                .is_some_and(|tag| tag.starts_with('{')),
+            "{field:?}"
+        );
+        assert_eq!(
+            feature_of(Construct::ArrowFieldTime(&field)),
+            expected,
+            "{t:?}"
+        );
+    }
     let bytes = m.encode_to_vec();
     let older = ReaderFeatures::only(
         Feature::ALL

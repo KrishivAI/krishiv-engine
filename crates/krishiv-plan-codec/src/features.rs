@@ -323,15 +323,24 @@ fn nanos_time(t: &DataType) -> bool {
     }
 }
 
-/// Whether an Arrow field's [`SPARK_TYPE_METADATA_KEY`] tag names a type
-/// that is or holds a nanosecond `TIME`: the carrier (`Time64(ns)`) is the
-/// same at every precision.
+/// The Spark type an Arrow field's [`SPARK_TYPE_METADATA_KEY`] tag names,
+/// read as `DataType::from_arrow_field` reads it: the engine's JSON form for
+/// a type that is or holds a user-defined type, DDL otherwise. A malformed
+/// tag is the reader's to refuse, not a feature.
+fn tag_type(field: &arrow_schema::Field) -> Option<DataType> {
+    let tag = field.metadata().get(SPARK_TYPE_METADATA_KEY)?;
+    if tag.starts_with('{') {
+        DataType::from_canonical_json(tag).ok()
+    } else {
+        krishiv_types::parse_data_type(tag).ok()
+    }
+}
+
+/// Whether an Arrow field's tag names a type that is or holds a nanosecond
+/// `TIME` (a user-defined type over one included): the carrier
+/// (`Time64(ns)`) is the same at every precision.
 fn nanos_time_field(field: &arrow_schema::Field) -> bool {
-    field
-        .metadata()
-        .get(SPARK_TYPE_METADATA_KEY)
-        .and_then(|tag| krishiv_types::parse_data_type(tag).ok())
-        .is_some_and(|t| nanos_time(&t))
+    tag_type(field).is_some_and(|t| nanos_time(&t))
 }
 
 /// Whether `t` is or holds a collated string.

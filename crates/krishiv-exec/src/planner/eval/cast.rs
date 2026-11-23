@@ -192,8 +192,9 @@ pub(super) struct CastParts {
     /// `Time64` does not carry `p`, so a nested target's precisions travel
     /// here.
     pub(super) precision: Precision,
-    /// Whether a string cast to `time(p)` cuts to `p` digits (Spark 4.3 on); before 4.3 it keeps
-    /// six whatever `p`.
+    /// Whether a cast to `time(p)` from a non-time source cuts to `p` digits (Spark 4.3 on); before
+    /// 4.3 it keeps six whatever `p`. Today the only non-time source of a `Time64` target is a
+    /// string: a later source (a timestamp-to-time cast) must be checked against Spark 4.2 too.
     pub(super) strings_cut_to_p: bool,
 }
 
