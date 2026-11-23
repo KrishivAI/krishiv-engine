@@ -114,6 +114,17 @@ def test_session_modes_refuse_a_thread_count_they_cannot_apply(monkeypatch, name
     assert seen["krishiv"]["threads"] == 8
 
 
+def test_krishiv_defaults_to_the_cores_the_session_modes_use(monkeypatch):
+    # `taskset -c 0-11` on a 16-core machine, no --duckdb-threads: the runner gets the 12 cores the session modes
+    # use, not os.cpu_count(), so a mode comparison measures the transport only.
+    from krishiv_bench.adapters import krishiv
+
+    monkeypatch.setattr(krishiv.os, "cpu_count", lambda: 16)
+    monkeypatch.setattr(session_modes, "usable_cores", lambda: 12)
+    assert krishiv.KrishivEngine(binary="x").threads == 12
+    assert krishiv.KrishivEngine(binary="x", threads=8).threads == 8
+
+
 def test_clickbench_dataset_has_no_scale_factor(monkeypatch, tmp_path):
     (tmp_path / "clickbench").mkdir()
     monkeypatch.setattr(runner, "data_root", lambda: tmp_path)
