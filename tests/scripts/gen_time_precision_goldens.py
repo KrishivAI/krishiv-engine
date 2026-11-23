@@ -55,8 +55,7 @@ CASES: list[tuple[str, dict[str, str], str, bool]] = [
     (
         "coalesce_time3_str",
         ON,
-        "SELECT typeof(c), CAST(c AS STRING) FROM "
-        "(SELECT coalesce(CAST(NULL AS TIME(3)), '12:00:00.123456789') AS c)",
+        "SELECT typeof(c), CAST(c AS STRING) FROM (SELECT coalesce(CAST(NULL AS TIME(3)), '12:00:00.123456789') AS c)",
         False,
     ),
     ("eq_time3_str", ON, "SELECT CAST(TIME'12:00:00.123' AS TIME(3)) = '12:00:00.1234' AS c", False),
