@@ -7,7 +7,9 @@
 //! provider's check and the store's answer (`403 ExpiredToken`, a 401 from GCS, an Azure
 //! `AuthenticationFailed`) fails the request. This wrapper recognizes that answer, marks the
 //! provider's cached credential stale and retries the request once. Any other 403 fails as it
-//! does today, with no refresh.
+//! does today, with no refresh. A HEAD is the exception: its answer has no body, so an expired
+//! credential's 403 cannot be told from a denial, and any 403 of a HEAD gets the one refresh and
+//! the one retry (an unrelated denial then fails after that retry).
 
 use std::error::Error as StdError;
 use std::fmt;
@@ -62,6 +64,15 @@ pub(crate) fn is_stale_credential(e: &object_store::Error) -> bool {
     }
 }
 
+/// Whether `e`, the answer to a HEAD, may be the store refusing a stale credential. A HEAD's 403
+/// carries no body (S3 answers a bare 403 to an expired key there), so any 403 counts, as do the
+/// answers [`is_stale_credential`] recognizes.
+pub(crate) fn may_be_stale_on_head(e: &object_store::Error) -> bool {
+    is_stale_credential(e)
+        || (matches!(e, object_store::Error::PermissionDenied { .. })
+            && !chain_has_refresh_failure(e))
+}
+
 fn chain_has_refresh_failure(e: &object_store::Error) -> bool {
     let mut source = e.source();
     while let Some(s) = source {
@@ -103,12 +114,25 @@ impl RefreshingStore {
         F: Fn() -> Fut + Send,
         Fut: std::future::Future<Output = Result<T>> + Send,
     {
+        self.retry_when(is_stale_credential, call).await
+    }
+
+    /// [`Self::with_retry`] with `stale` deciding which answers refuse the credential as stale.
+    async fn retry_when<T, F, Fut>(
+        &self,
+        stale: fn(&object_store::Error) -> bool,
+        call: F,
+    ) -> Result<T>
+    where
+        F: Fn() -> Fut + Send,
+        Fut: std::future::Future<Output = Result<T>> + Send,
+    {
         // The provider records the generation it signs with. Without a record (the request
         // never reached the provider) the generation before the call stands in.
         let before = self.cache.generation();
         let served = ServedGeneration::new();
         match Recording::new(served.clone(), call()).await {
-            Err(e) if is_stale_credential(&e) => {
+            Err(e) if stale(&e) => {
                 self.cache.invalidate(served.get().unwrap_or(before));
                 call().await
             }
@@ -216,7 +240,12 @@ impl ObjectStore for RefreshingStore {
     }
 
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
-        self.with_retry(|| self.inner.get_opts(location, options.clone()))
+        let stale = if options.head {
+            may_be_stale_on_head
+        } else {
+            is_stale_credential
+        };
+        self.retry_when(stale, || self.inner.get_opts(location, options.clone()))
             .await
     }
 
@@ -486,6 +515,57 @@ mod tests {
         assert!(is_stale_credential(&unauth));
         assert!(is_stale_credential(&denied("expired")()));
         assert!(!is_stale_credential(&denied("access")()));
+    }
+
+    fn bare_403() -> object_store::Error {
+        object_store::Error::PermissionDenied {
+            path: "k".into(),
+            source: Box::new(Body(
+                "Server returned non-2xx status code: 403 Forbidden: ".into(),
+            )),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_bare_403_on_a_head_forces_one_refresh_and_one_retry() {
+        let (store, inner, source) = setup(1, bare_403).await;
+        let meta = store.head(&Path::from("k")).await.unwrap();
+        assert_eq!(meta.size, 1);
+        assert_eq!(inner.calls.load(Ordering::SeqCst), 2, "one retry");
+        store.cache.credential().await.unwrap();
+        assert_eq!(source.fetches.load(Ordering::SeqCst), 2, "one refresh");
+    }
+
+    #[tokio::test]
+    async fn a_denied_head_fails_after_its_one_retry() {
+        let (store, inner, source) = setup(5, denied("access")).await;
+        let e = store.head(&Path::from("k")).await.unwrap_err();
+        assert!(matches!(e, object_store::Error::PermissionDenied { .. }));
+        assert_eq!(inner.calls.load(Ordering::SeqCst), 2, "exactly one retry");
+        store.cache.credential().await.unwrap();
+        assert_eq!(source.fetches.load(Ordering::SeqCst), 2, "one refresh");
+    }
+
+    #[tokio::test]
+    async fn a_bare_403_on_a_get_is_not_retried() {
+        let (store, inner, _) = setup(1, bare_403).await;
+        assert!(store.get(&Path::from("k")).await.is_err());
+        assert_eq!(inner.calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn a_head_never_retries_a_failed_refresh() {
+        let failed = object_store::Error::PermissionDenied {
+            path: "k".into(),
+            source: Box::new(CredentialRefreshError::for_test("down")),
+        };
+        assert!(!may_be_stale_on_head(&failed));
+        assert!(may_be_stale_on_head(&bare_403()));
+        let missing = object_store::Error::NotFound {
+            path: "k".into(),
+            source: Box::new(Body("gone".into())),
+        };
+        assert!(!may_be_stale_on_head(&missing));
     }
 
     #[tokio::test]
