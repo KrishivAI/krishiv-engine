@@ -1,4 +1,6 @@
 -- query 8: nope(1)
-SELECT legacy_fn_32(a, b) AS c1 FROM t8 WHERE x IN (1, 2) AND y = 'x(legacy_fn_32)';
-SELECT kll_sketch_get_rank_bigint(a, b) AS c2 FROM t8 WHERE x IN (1, 2) AND y = 'x(kll_sketch_get_rank_bigint)';
-SELECT map_zip_with(a, b) AS c3 FROM t8 WHERE x IN (1, 2) AND y = 'x(map_zip_with)';
+SELECT array_compact(a, b) AS c1 FROM t8 WHERE x IN (1, 2) AND y = 'x(array_compact)';
+SELECT sentences(a, b) AS c2 FROM t8 WHERE x IN (1, 2) AND y = 'x(sentences)';
+SELECT ceil(a, b) AS c3 FROM t8 WHERE x IN (1, 2) AND y = 'x(ceil)';
+SELECT time_to_micros(a, b) AS c4 FROM t8 WHERE x IN (1, 2) AND y = 'x(time_to_micros)';
+SELECT array_except(a, b) AS c5 FROM t8 WHERE x IN (1, 2) AND y = 'x(array_except)';

@@ -13,7 +13,10 @@ the sandbox trampoline, talking wire `krishiv.udf.wire.v1` over a `SOCK_SEQPACKE
 Paths are relative to this crate.
 - `src/lib.rs` public surface and `run_trampoline_if_requested` (the binary's `__udf-worker` dispatch)
 - `src/pool.rs` `Pool`, `PoolConfig` (from the `krishiv.python.worker.*` and `krishiv.udf.sandbox` keys), `Launcher`,
-  `Owner`; the spawner thread, the caps, idle stop, `release`, and `Lease` (a worker handed to one call)
+  `Owner`; the spawner thread, the caps, idle stop, `release`, and `Lease` (a worker handed to one call);
+  `Pool::snapshot` (`PoolSnapshot`: live and idle workers, the three caps, `OwnerWorkers` per owner with a live
+  worker; one short lock hold) and `Pool::monitor` (`PoolMonitor`, a weak view for the console's Resources page:
+  `None` once the pool is gone, so a page never keeps workers running)
 - `src/worker.rs` one worker: handshake, `ensure_loaded` (a `udf` message), `run_batch` (a `batch` message), a
   relation task's messages (`start_task`, `task_event`, `send_frame`, `abandon`), the
   error mapping (`PYTHON_EXCEPTION`, `KRISHIV_PYTHON_WORKER_EXITED`, `KRISHIV_UDF_SANDBOX_UNAVAILABLE` for a trampoline

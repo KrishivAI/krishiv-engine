@@ -82,6 +82,7 @@ mod quantile;
 mod rowtable;
 mod sink;
 mod table;
+mod theta_sketch;
 mod udf;
 
 #[cfg(test)]
@@ -359,6 +360,21 @@ pub enum AggregateFunction {
         /// Whether sketches of different lgK may be mixed (else `HLL_UNION_DIFFERENT_LG_K`).
         allow_different: bool,
     },
+    /// `theta_sketch_agg(x[, lgNomEntries])` (Spark 4.1): a compact, compressed Theta sketch of the non-NULL values of
+    /// an `int`, `bigint`, `float`, `double`, `string`, `binary`, `array<int>` or `array<bigint>` (empty strings,
+    /// binaries and arrays skipped); `binary`, never NULL, the empty sketch for no value. `lg_nom` is in `4..=26`.
+    ThetaSketchAgg {
+        /// The log-base-2 of the nominal entry count.
+        lg_nom: u8,
+    },
+    /// `theta_union_agg(sketch[, lgNomEntries])` (Spark 4.1): the union of the non-NULL sketches; `binary`, never NULL.
+    ThetaUnionAgg {
+        /// The log-base-2 of the union's nominal entry count.
+        lg_nom: u8,
+    },
+    /// `theta_intersection_agg(sketch)` (Spark 4.1): the intersection of the non-NULL sketches; the empty sketch for
+    /// no input; `binary`, never NULL.
+    ThetaIntersectionAgg,
     /// A session aggregate UDF (ADR 0045), by name and version: the worker
     /// runs the implementation its library holds under both, or refuses
     /// the plan with `KRISHIV_UDF_NOT_AVAILABLE`.
@@ -665,12 +681,35 @@ impl AggregateExpr {
             }
             // `approx_count_distinct` is `bigint`.
             (F::ApproxCountDistinct { .. }, t) if accumulator::hll_supported(t) => DataType::Int64,
+            // `theta_sketch_agg` over an array: `ARRAY<INT>` or `ARRAY<BIGINT>` only (Spark's `TypeCollection`), whatever
+            // the array's `containsNull`.
+            (F::ThetaSketchAgg { .. }, DataType::List(item))
+                if matches!(item.data_type(), DataType::Int32 | DataType::Int64) =>
+            {
+                DataType::BinaryView
+            }
             // The bitmap and HLL sketch aggregates are a `binary`, on the engine's view carrier (see `bitmap`);
             // the HLL values are `int`, `bigint`, `string` or `binary`.
             (F::BitmapConstructAgg, DataType::Int64)
             | (
-                F::BitmapOrAgg | F::BitmapAndAgg | F::HllUnionAgg { .. },
+                F::BitmapOrAgg
+                | F::BitmapAndAgg
+                | F::HllUnionAgg { .. }
+                | F::ThetaUnionAgg { .. }
+                | F::ThetaIntersectionAgg,
                 DataType::Binary | DataType::BinaryView,
+            )
+            | (
+                F::ThetaSketchAgg { .. },
+                DataType::Int32
+                | DataType::Int64
+                | DataType::Float32
+                | DataType::Float64
+                | DataType::Utf8
+                | DataType::LargeUtf8
+                | DataType::Utf8View
+                | DataType::Binary
+                | DataType::BinaryView,
             )
             | (
                 F::HllSketchAgg { .. },
@@ -844,7 +883,14 @@ impl AggregateExpr {
             (F::BitmapConstructAgg | F::BitmapOrAgg | F::BitmapAndAgg, _) => {
                 vec![Field::new(n("bitmap"), DataType::Binary, false)]
             }
-            (F::HllSketchAgg { .. } | F::HllUnionAgg { .. }, _) => {
+            (
+                F::HllSketchAgg { .. }
+                | F::HllUnionAgg { .. }
+                | F::ThetaSketchAgg { .. }
+                | F::ThetaUnionAgg { .. }
+                | F::ThetaIntersectionAgg,
+                _,
+            ) => {
                 vec![Field::new(n("sketch"), DataType::Binary, false)]
             }
         })

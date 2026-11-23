@@ -437,10 +437,16 @@ fn parquet_reads_unregister_their_memory_consumers() {
     let url = f.url(rel);
     f.run(move |e| e.parquet().write_parquet_file(url, one(data(5))))
         .unwrap();
-    let before = consumers();
-    let files = vec![meta(&f, rel); 8];
     let schema: SchemaRef =
         Arc::new(StructType::try_new([StructField::nullable("name", DataType::STRING)]).unwrap());
+    // One read first: the context's metadata-read consumer registers on its first reservation
+    // and stays for the life of the context, so it is not one of the reads' own.
+    let one_file = vec![meta(&f, rel)];
+    let warm_schema = Arc::clone(&schema);
+    f.run(move |e| collect(e.parquet().read_parquet_files(&one_file, warm_schema, None)))
+        .unwrap();
+    let before = consumers();
+    let files = vec![meta(&f, rel); 8];
     let batches = f
         .run(move |e| collect(e.parquet().read_parquet_files(&files, schema, None)))
         .unwrap();

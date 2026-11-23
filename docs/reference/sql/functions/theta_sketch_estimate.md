@@ -9,7 +9,7 @@ description: "Returns the estimated number of unique values given the binary rep
 Returns the estimated number of unique values
 given the binary representation of a Datasketches ThetaSketch.
 
-**Applies to:** not available in Krishiv yet. Spark: 4.1 and later.
+**Applies to:** Krishiv 0.2.0 and above. Spark: 4.1 and later.
 
 ## Syntax
 
@@ -21,9 +21,9 @@ theta_sketch_estimate(expr)
 
 | | |
 |---|---|
-| Krishiv | Not implemented yet |
+| Krishiv | Implemented |
 | Group | `sketch_funcs` |
-| Kind | aggregate (function) |
+| Kind | scalar (function) |
 | Added in Spark | 4.1.0 |
 | In Spark profiles | 4.1 and later |
 | Arguments | 1 |
@@ -34,12 +34,13 @@ theta_sketch_estimate(expr)
 ```sql
 -- theta_sketch_estimate, example 1
 > SELECT theta_sketch_estimate(theta_sketch_agg(col)) FROM VALUES (1), (1), (2), (2), (3) tab(col);
-Error: KRISHIV_UNSUPPORTED_FEATURE
+3
 ```
 
 ## Version history
 
 - Added in Spark 4.1.0.
+- Added in Krishiv 0.2.0.
 
 ## Related
 

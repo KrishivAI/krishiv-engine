@@ -425,7 +425,8 @@ impl FileTable {
         // `krishiv.session.memoryLimit` see the count), else the I/O
         // context's, else (embedded use) a pool of the count's own.
         let pool: Arc<dyn MemoryPool> = match (&options.pool, self.io().memory_pool()) {
-            (Some(p), _) | (None, Some(p)) => Arc::clone(p),
+            (Some(p), _) => Arc::clone(p),
+            (None, Some(p)) => p,
             (None, None) => krishiv_memory::TreePool::new(&krishiv_memory::MemoryConfig::default()),
         };
         let started = Instant::now();

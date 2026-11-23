@@ -42,7 +42,7 @@ def test_builder_options(spark: SparkSession) -> None:
     assert SparkSession.builder is not SparkSession.builder
     configured = SparkSession.builder.appName("x").config(map={"spark.sql.ansi.enabled": "false"}).create()
     assert configured.conf.get("spark.sql.ansi.enabled") == "false"
-    assert configured.version == "4.2.0"
+    assert configured.version == "4.3.0"
     assert spark.conf.get("no.such.key", None) is None
     assert spark.conf.get("no.such.key", 5) == "5"
     with pytest.raises(errors.SparkNoSuchElementException) as missing:
@@ -267,10 +267,14 @@ def test_session_tables_and_reader(spark: SparkSession, df: DataFrame, tmp_path:
     with pytest.raises(errors.PySparkTypeError):
         spark.read.load()
     reader = spark.read.format("parquet").option("mergeSchema", True).options(x="y")
-    assert reader.load(str(tmp_path / "none.parquet")).__class__ is DataFrame
-    assert spark.read.csv(str(tmp_path / "none.csv"), header=True).__class__ is DataFrame
-    assert spark.read.json([str(tmp_path / "none.json")]).__class__ is DataFrame
-    assert spark.read.parquet(str(tmp_path / "a.parquet"), str(tmp_path / "b.parquet")).__class__ is DataFrame
+    for call in (
+        lambda: reader.load(str(tmp_path / "none.parquet")),
+        lambda: spark.read.csv(str(tmp_path / "none.csv"), header=True),
+        lambda: spark.read.json([str(tmp_path / "none.json")]),
+        lambda: spark.read.parquet(str(tmp_path / "a.parquet"), str(tmp_path / "b.parquet")),
+    ):
+        with pytest.raises(errors.AnalysisException, match="PATH_NOT_FOUND"):
+            call()
     assert df.sparkSession is not None
 
 
