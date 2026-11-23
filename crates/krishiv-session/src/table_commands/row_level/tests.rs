@@ -1083,6 +1083,41 @@ mod merge {
     }
 
     #[test]
+    fn a_sql_merge_builds_qualified_insert_and_set_columns_before_its_refusal() {
+        // `exec_merge` builds every clause from the SQL text (an `INSERT` column qualified by the
+        // target's alias, or without one by its name, `namespace.name` or
+        // `spark_catalog.namespace.name`; a `SET` column qualified the same way) before it asks the
+        // table for a row-level table. A Parquet table has none, so the statement reaches the old
+        // refusal with every clause built.
+        let dir = tempfile::tempdir().unwrap();
+        let session = Session::new().unwrap();
+        block_on(session.sql(&format!(
+            "CREATE TABLE p (id BIGINT, s STRING) USING parquet LOCATION '{}'",
+            dir.path().display()
+        )))
+        .unwrap();
+        for (target, q) in [
+            ("p AS x", "x"),
+            ("p", "p"),
+            ("p", "default.p"),
+            ("p", "spark_catalog.default.p"),
+            ("p", "P"),
+        ] {
+            let sql = format!(
+                "MERGE INTO {target} USING ({SOURCE}) src ON {q}.id = src.id \
+                 WHEN MATCHED THEN UPDATE SET {q}.s = src.s \
+                 WHEN NOT MATCHED THEN INSERT ({q}.id, s) VALUES (src.id, DEFAULT)"
+            );
+            let e = block_on(async { session.sql(&sql).await?.collect().await }).unwrap_err();
+            assert_eq!(
+                format!("{:?}", e.error_class()),
+                "UnsupportedFeatureTableOperation",
+                "{target} / {q}: {e}"
+            );
+        }
+    }
+
+    #[test]
     fn merge_updates_matched_rows_and_inserts_the_others_rewriting_only_touched_files() {
         let files = Files::new();
         let (session, _) = session(&files);

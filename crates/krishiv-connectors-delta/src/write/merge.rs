@@ -288,6 +288,37 @@ fn paren(c: &str) -> String {
 mod tests {
     use super::*;
 
+    /// Counts the session took itself pass through; a named observation the query never
+    /// produced is an internal error, never a zero source count.
+    #[test]
+    fn the_source_count_comes_from_the_named_observation_only() {
+        use std::sync::Arc;
+
+        use krishiv_memory::{MemoryConfig, MemoryPool, TreePool};
+        let pool: Arc<dyn MemoryPool> = TreePool::new(&MemoryConfig::default());
+        let query = krishiv_exec::QueryContext::new(
+            krishiv_exec::QueryId(1),
+            krishiv_exec::WorkloadClass::Interactive,
+            krishiv_exec::ExecConfig::default(),
+            pool,
+        );
+        let counted = MergeInfo::parse(r#"{"source_rows":4}"#, "[]", "t.id = s.id").unwrap();
+        assert_eq!(counted.with_observed(&query).unwrap(), counted);
+        let observed = MergeInfo::parse(
+            r#"{"source_rows_observation":"__krishiv_merge_source_rows"}"#,
+            "[]",
+            "t.id = s.id",
+        )
+        .unwrap();
+        let e = observed.with_observed(&query).unwrap_err();
+        assert_eq!(
+            e.error_class(),
+            krishiv_common::error::ErrorClass::InternalError,
+            "{e}"
+        );
+        assert!(e.message().contains("source row count"), "{e}");
+    }
+
     #[test]
     fn counts_and_parameters_follow_the_options() {
         let info = MergeInfo::parse(
