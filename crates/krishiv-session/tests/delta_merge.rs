@@ -930,8 +930,117 @@ fn a_quoted_column_name_with_a_dot_is_a_top_level_column() {
     assert!(e.to_string().contains("nested field"), "{e}");
 }
 
+/// An `INSERT` column of a `MERGE` resolves against the target as delta-spark 4.4.1 resolves it
+/// (a run of these statements, #962 review): qualified by the target's alias when it has one,
+/// else by its name, `namespace.name` or `spark_catalog.namespace.name`, in any case; the
+/// table's name under an alias, or the source's alias, names no column
+/// (`DELTA_MERGE_UNRESOLVED_EXPRESSION`, 4.4.1's `INTERNAL_ERROR` form).
+#[test]
+fn a_merge_insert_column_takes_the_target_s_qualifier() {
+    let src = "(SELECT CAST(2 AS BIGINT) AS id, 'b' AS v) s";
+    let accepted = [
+        format!(
+            "MERGE INTO t USING {src} ON t.id = s.id WHEN NOT MATCHED THEN INSERT (t.id, t.v) VALUES (s.id, s.v)"
+        ),
+        format!(
+            "MERGE INTO t AS x USING {src} ON x.id = s.id WHEN NOT MATCHED THEN INSERT (x.id, x.v) VALUES (s.id, s.v)"
+        ),
+        format!(
+            "MERGE INTO t USING {src} ON t.id = s.id WHEN NOT MATCHED THEN INSERT (T.ID, v) VALUES (s.id, s.v)"
+        ),
+        format!(
+            "MERGE INTO t USING {src} ON t.id = s.id WHEN NOT MATCHED THEN INSERT (default.t.id, v) VALUES (s.id, s.v)"
+        ),
+        format!(
+            "MERGE INTO t USING {src} ON t.id = s.id WHEN NOT MATCHED THEN INSERT (spark_catalog.default.t.id, v) VALUES (s.id, s.v)"
+        ),
+    ];
+    let refused = [
+        format!(
+            "MERGE INTO t AS x USING {src} ON x.id = s.id WHEN NOT MATCHED THEN INSERT (t.id, v) VALUES (s.id, s.v)"
+        ),
+        format!(
+            "MERGE INTO t USING {src} ON t.id = s.id WHEN NOT MATCHED THEN INSERT (s.id, v) VALUES (s.id, s.v)"
+        ),
+    ];
+    for (i, (statement, ok)) in accepted
+        .iter()
+        .map(|q| (q, true))
+        .chain(refused.iter().map(|q| (q, false)))
+        .enumerate()
+    {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join(format!("t{i}"));
+        let session = Session::new().unwrap();
+        sql(
+            &session,
+            &format!(
+                "CREATE TABLE t (id BIGINT, v STRING) USING delta LOCATION '{}'",
+                dir.display()
+            ),
+        )
+        .unwrap();
+        sql(&session, "INSERT INTO t VALUES (1, 'a')").unwrap();
+        let ran = sql(&session, statement);
+        let (_, rows) = sql(&session, "SELECT id, v FROM t ORDER BY id").unwrap();
+        if ok {
+            let (_, out) = ran.unwrap();
+            assert_eq!(out, serde_json::json!([[1, 0, 0, 1]]), "{statement}");
+            assert_eq!(rows, serde_json::json!([[1, "a"], [2, "b"]]), "{statement}");
+        } else {
+            let e = ran.unwrap_err();
+            assert_eq!(e.error_class().name(), "INTERNAL_ERROR", "{statement}: {e}");
+            assert!(
+                e.to_string().contains("DELTA_MERGE_UNRESOLVED_EXPRESSION"),
+                "{statement}: {e}"
+            );
+            assert_eq!(rows, serde_json::json!([[1, "a"]]), "{statement}");
+        }
+    }
+}
+
+/// A `MERGE` whose source reads the target again under another spelling of its root (the path
+/// with a trailing slash, `file:`) reads every row of the target's snapshot, files the `ON`
+/// condition skips included, and writes the right rows (#962 review). The read set of its
+/// conflict check is `row_level/tests.rs` `a_delta_update_reads_the_whole_table_only_when_..`.
+#[test]
+fn a_merge_source_reading_the_target_by_another_root_spelling_sees_every_row() {
+    for spelling in ["{dir}", "{dir}/", "file:{dir}"] {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("t");
+        let session = Session::new().unwrap();
+        sql(
+            &session,
+            &format!(
+                "CREATE TABLE t (id BIGINT, v STRING) USING delta LOCATION '{}'",
+                dir.display()
+            ),
+        )
+        .unwrap();
+        // One file per row: the `ON` condition's `t.id < 3` skips id 5's file.
+        for row in ["(1, 'a')", "(2, 'b')", "(5, 'e')"] {
+            sql(&session, &format!("INSERT INTO t VALUES {row}")).unwrap();
+        }
+        let root = spelling.replace("{dir}", &dir.display().to_string());
+        let statement = format!(
+            "MERGE INTO t USING (SELECT id + 1 AS id, v FROM delta.`{root}`) s ON t.id = s.id \
+             AND t.id < 3 WHEN MATCHED THEN UPDATE SET v = s.v WHEN NOT MATCHED THEN INSERT *"
+        );
+        let (_, out) = sql(&session, &statement).unwrap();
+        // Source rows (2, a), (3, b), (6, e): 2 matches, 3 and 6 are inserted.
+        assert_eq!(out, serde_json::json!([[3, 1, 0, 2]]), "{statement}");
+        let (_, rows) = sql(&session, "SELECT id, v FROM t ORDER BY id").unwrap();
+        assert_eq!(
+            rows,
+            serde_json::json!([[1, "a"], [2, "a"], [3, "b"], [5, "e"], [6, "e"]]),
+            "{statement}"
+        );
+    }
+}
+
 /// A `MERGE` inside a SQL script sees the script's locals in its source, its clause conditions
-/// and its values, and a local shadows a session variable of the same name (#962 review).
+/// and its values, and a local shadows a session variable of the same name (#962 review): the
+/// clause condition `s.id + k = 3` holds only for the local `k` (2), not the variable (100).
 #[test]
 fn a_merge_in_a_script_reads_the_script_s_locals() {
     let tmp = tempfile::tempdir().unwrap();
@@ -953,7 +1062,7 @@ fn a_merge_in_a_script_reads_the_script_s_locals() {
            DECLARE k BIGINT DEFAULT 2; \
            DECLARE w STRING DEFAULT 'local'; \
            MERGE INTO t USING (SELECT k AS id UNION ALL SELECT 1) s ON t.id = s.id \
-           WHEN MATCHED AND s.id < k THEN UPDATE SET v = w \
+           WHEN MATCHED AND s.id + k = 3 THEN UPDATE SET v = w \
            WHEN NOT MATCHED THEN INSERT (id, v) VALUES (s.id + k, w); \
          END",
     )
@@ -961,5 +1070,51 @@ fn a_merge_in_a_script_reads_the_script_s_locals() {
     assert_eq!(
         table_rows(&dir),
         serde_json::json!([[1, "local"], [4, "local"]])
+    );
+}
+
+/// A table made by CTAS keeps a struct field's NOT NULL flag from its query (`named_struct('x', 1)` gives
+/// `x INT NOT NULL`); a MERGE that leaves that column as it is still runs and keeps its values.
+#[test]
+fn a_merge_keeps_a_ctas_struct_column_whose_field_is_not_null() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("t");
+    let session = Session::new().unwrap();
+    sql(
+        &session,
+        &format!(
+            "CREATE TABLE t USING delta LOCATION '{}' AS SELECT * FROM VALUES \
+             (CAST(1 AS BIGINT), 'one', named_struct('x', 1)) AS v(id, s, st)",
+            dir.display()
+        ),
+    )
+    .unwrap();
+    sql(
+        &session,
+        "MERGE INTO t USING (SELECT CAST(1 AS BIGINT) AS id, 'uno' AS v \
+         UNION ALL SELECT CAST(2 AS BIGINT), 'dos') s ON t.id = s.id \
+         WHEN MATCHED THEN UPDATE SET s = s.v \
+         WHEN NOT MATCHED THEN INSERT (id, s, st) VALUES (s.id, s.v, named_struct('x', 2))",
+    )
+    .unwrap();
+    // A fresh session reads it by path (the log's `NOT NULL` field kept, as the catalog table's).
+    assert_eq!(
+        sql(
+            &Session::new().unwrap(),
+            &format!(
+                "SELECT id, s, st.x FROM delta.`{}` ORDER BY id",
+                dir.display()
+            ),
+        )
+        .unwrap()
+        .1,
+        serde_json::json!([[1, "uno", 1], [2, "dos", 2]])
+    );
+    // The read gives the column the table's type: a conditional over it plans as well.
+    assert_eq!(
+        sql(&session, "SELECT if(id = 1, st, st).x FROM t ORDER BY id")
+            .unwrap()
+            .1,
+        serde_json::json!([[1], [2]])
     );
 }

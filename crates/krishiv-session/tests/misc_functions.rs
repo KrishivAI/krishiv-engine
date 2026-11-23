@@ -240,7 +240,7 @@ fn current_database_and_catalog() {
     );
     assert_eq!(
         rows(&s, "select version()").1,
-        vec![vec!["4.2.0".to_owned()]]
+        vec![vec!["4.3.0".to_owned()]]
     );
 }
 

@@ -129,7 +129,7 @@ impl Task {
                 *at = (t, p + 1, 0);
                 continue;
             }
-            let end = (row + CHUNK).min(len);
+            let end = row + input.state_rows(p, row..(row + CHUNK).min(len));
             let chunk = input.merge_chunk(p, row..end)?;
             let want = table.projected_merge(&chunk);
             if let Err(missing) = reserve_to(reservation, want) {

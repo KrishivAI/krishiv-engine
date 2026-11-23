@@ -52,10 +52,11 @@ def test_eager_max_rows_defaults_and_bounds(spark: SparkSession) -> None:
     assert _eager_max_rows(spark) == 0
     spark.conf.set(EAGER_MAX_ROWS_KEY, "-3")
     assert _eager_max_rows(spark) == 0
-    spark.conf.set(EAGER_MAX_ROWS_KEY, "many")
-    assert _eager_max_rows(spark) == EAGER_DEFAULT_MAX_ROWS
-    spark.conf.set(EAGER_MAX_ROWS_KEY, "")
-    assert _eager_max_rows(spark) == EAGER_DEFAULT_MAX_ROWS
+    # Spark's setting is an int: the server refuses a value that is not one.
+    for bad in ("many", ""):
+        with pytest.raises(Exception, match="KRISHIV_INVALID_CONFIG_VALUE"):
+            spark.conf.set(EAGER_MAX_ROWS_KEY, bad)
+        assert _eager_max_rows(spark) == 0
 
 
 def test_html_is_off_until_eager_eval_is_enabled(spark: SparkSession) -> None:

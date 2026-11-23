@@ -37,6 +37,9 @@
 //! - Deletion vectors are never written (PR-37d): on a table with them on, delta-spark's
 //!   default `merge.deletionVectors.persistent = true` marks rows in vectors; Krishiv rewrites.
 
+use arrow_array::Array;
+use arrow_array::cast::AsArray;
+use arrow_array::types::Int64Type;
 use serde_json::Value;
 
 use krishiv_common::error::{InternalError, KrishivError};
@@ -76,6 +79,9 @@ pub(crate) struct MergeInfo {
     pub(crate) clauses: Vec<ClauseRecord>,
     /// The `ON` condition as written.
     pub(crate) on: String,
+    /// The rewrite's observation that counts the source rows, when the session did not count
+    /// them first (an insert-only `MERGE` reads its source once): read at commit.
+    pub(crate) source_rows_observation: Option<String>,
 }
 
 /// The final counts of a committed `MERGE`, for its result row.
@@ -126,7 +132,40 @@ impl MergeInfo {
             counts,
             clauses,
             on: on.to_owned(),
+            source_rows_observation: c
+                .get("source_rows_observation")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
         })
+    }
+
+    /// These counts with the source rows read from the rewrite's observation
+    /// ([`Self::source_rows_observation`]), once the rewrite's rows have all been written.
+    ///
+    /// # Errors
+    /// The observation's own error, or `INTERNAL_ERROR` when the query holds no such
+    /// observation (it wrote rows, so it read its source).
+    pub(crate) fn with_observed(
+        &self,
+        query: &krishiv_exec::QueryContext,
+    ) -> Result<Self, KrishivError> {
+        let Some(name) = &self.source_rows_observation else {
+            return Ok(self.clone());
+        };
+        let batch = query
+            .observed_each()
+            .remove(name)
+            .ok_or_else(|| internal("a MERGE without its source row count"))??;
+        let rows = batch
+            .columns()
+            .first()
+            .and_then(|c| c.as_primitive_opt::<Int64Type>())
+            .filter(|c| c.len() == 1 && c.is_valid(0))
+            .and_then(|c| u64::try_from(c.value(0)).ok())
+            .ok_or_else(|| internal("a malformed MERGE source row count"))?;
+        let mut out = self.clone();
+        out.counts.source_rows = rows;
+        Ok(out)
     }
 
     /// The final counts given the rows written.
@@ -248,6 +287,37 @@ fn paren(c: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Counts the session counted itself pass through unchanged; a named observation the query
+    /// never produced is an internal error, never a zero source count.
+    #[test]
+    fn the_source_count_comes_from_the_named_observation_only() {
+        use std::sync::Arc;
+
+        use krishiv_memory::{MemoryConfig, MemoryPool, TreePool};
+        let pool: Arc<dyn MemoryPool> = TreePool::new(&MemoryConfig::default());
+        let query = krishiv_exec::QueryContext::new(
+            krishiv_exec::QueryId(1),
+            krishiv_exec::WorkloadClass::Interactive,
+            krishiv_exec::ExecConfig::default(),
+            pool,
+        );
+        let counted = MergeInfo::parse(r#"{"source_rows":4}"#, "[]", "t.id = s.id").unwrap();
+        assert_eq!(counted.with_observed(&query).unwrap(), counted);
+        let observed = MergeInfo::parse(
+            r#"{"source_rows_observation":"__krishiv_merge_source_rows"}"#,
+            "[]",
+            "t.id = s.id",
+        )
+        .unwrap();
+        let e = observed.with_observed(&query).unwrap_err();
+        assert_eq!(
+            e.error_class(),
+            krishiv_common::error::ErrorClass::InternalError,
+            "{e}"
+        );
+        assert!(e.message().contains("source row count"), "{e}");
+    }
 
     #[test]
     fn counts_and_parameters_follow_the_options() {
