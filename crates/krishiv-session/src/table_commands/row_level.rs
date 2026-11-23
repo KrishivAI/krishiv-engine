@@ -137,7 +137,7 @@ impl Session {
         else {
             return Ok(None);
         };
-        let Ok((_, physical)) = plain.physical(&probe.analyzed, &probe.env).await else {
+        let Ok((_, physical)) = plain.physical_probe(&probe.analyzed, &probe.env).await else {
             return Ok(None);
         };
         let Some(scan) = first_scan(physical.root()) else {

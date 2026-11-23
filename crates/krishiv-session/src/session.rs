@@ -549,7 +549,7 @@ impl Session {
         spans: Vec<krishiv_sql::ast::Span>,
     ) -> Result<DataFrame, KrishivError> {
         // Boxed: one more nested future level overflows the compiler's query depth in the binaries.
-        Box::pin(self.sql_here_inner(query, Arc::default(), spans, false))
+        Box::pin(self.sql_here_inner(query, Arc::default(), spans, None, false))
             .await
             .and_then(Ran::into_frame)
             .map(|(df, _)| df)
@@ -669,9 +669,8 @@ impl Session {
             Statement::CreatePipelineDataset(c) => Self::exec_create_pipeline_dataset(&c),
             Statement::CreateFlow(f) => self.exec_create_flow(&f),
             Statement::LoadData(l) => self.exec_load_data(&l),
-            // The path write belongs to the session's write path: it has no plan node to lower to yet.
-            Statement::InsertDirectory(_) => {
-                Err(unsupported_statement("INSERT OVERWRITE DIRECTORY"))
+            Statement::InsertDirectory(d) => {
+                Box::pin(self.exec_insert_directory(&d, &env.identifier_spans)).await
             }
             Statement::AccessControl(a) => Box::pin(self.exec_access_control(&a, &env)).await,
             Statement::AddResource(_) => Err(unsupported_statement("ADD JAR | FILE | ARCHIVE")),
@@ -1865,11 +1864,13 @@ impl Session {
                 // goes on when the caller gives up, so the admission permit must outlive it
                 // (see `PendingFold`). The task hands the stream over, or cancels it if the
                 // caller is gone.
-                let submit =
-                    self.state
-                        .runtime
-                        .runner
-                        .submit(physical.clone(), worker, Arc::clone(&query));
+                // The decided scans read first (`after_reads`), on this async task, against the query's cancel.
+                let (plan, reading) = (physical.clone(), Arc::clone(&query));
+                let submit = self.state.runtime.runner.submit(
+                    plan.clone(),
+                    worker.clone(),
+                    Arc::clone(&reading),
+                );
                 let (stream_tx, stream_rx) = tokio::sync::oneshot::channel();
                 let (done_tx, done_rx) = tokio::sync::oneshot::channel::<bool>();
                 pending.1 = Some(done_rx);
@@ -1879,7 +1880,7 @@ impl Session {
                         WorkloadClass::Interactive,
                         Box::pin(
                             async move {
-                                let result = submit.await;
+                                let result = worker.after_reads(&plan, reading, submit).await;
                                 let started = result.is_ok();
                                 if let Err(Ok(stream)) = stream_tx.send(result) {
                                     abandoned.cancel();
@@ -1964,4 +1965,7 @@ mod definer;
 
 mod ran;
 mod search_path;
-pub(crate) use ran::Ran;
+pub(crate) use ran::{
+    Ran, as_evaluation, as_listed_script_statement, as_script_statement, command_statement,
+    evaluation_failed,
+};

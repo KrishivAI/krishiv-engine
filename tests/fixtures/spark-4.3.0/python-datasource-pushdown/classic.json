@@ -1,0 +1,1539 @@
+{
+ "mode": "classic",
+ "spark_version": "4.3.0",
+ "cases": {},
+ "conf_default_filterPushdown_enabled": "false",
+ "conf_ansi_enabled": "true",
+ "filter_cases": [
+  {
+   "test": "test_unsupported_filter",
+   "sql_type": "struct<a:int, b:int, c:int>",
+   "sql_filter": "x.a = 1 and x.b = x.c",
+   "pushFilters_called": 1,
+   "filters_repr": [
+    "[IsNotNull(attribute=('x', 'a')), IsNotNull(attribute=('x', 'b')), IsNotNull(attribute=('x', 'c')), EqualTo(attribute=('x', 'a'), value=1)]"
+   ],
+   "result": {
+    "ok": true,
+    "value": 0
+   }
+  },
+  {
+   "test": "test_unsupported_filter",
+   "sql_type": "int",
+   "sql_filter": "x = 1 or x > 2",
+   "pushFilters_called": 0,
+   "filters_repr": [],
+   "result": {
+    "ok": true,
+    "value": 0
+   }
+  },
+  {
+   "test": "test_unsupported_filter",
+   "sql_type": "int",
+   "sql_filter": "(0 < x and x < 1) or x = 2",
+   "pushFilters_called": 0,
+   "filters_repr": [],
+   "result": {
+    "ok": true,
+    "value": 0
+   }
+  },
+  {
+   "test": "test_unsupported_filter",
+   "sql_type": "int",
+   "sql_filter": "x % 5 = 1",
+   "pushFilters_called": 1,
+   "filters_repr": [
+    "[IsNotNull(attribute=('x',))]"
+   ],
+   "result": {
+    "ok": true,
+    "value": 0
+   }
+  },
+  {
+   "test": "test_unsupported_filter",
+   "sql_type": "array<int>",
+   "sql_filter": "x[0] = 1",
+   "pushFilters_called": 1,
+   "filters_repr": [
+    "[IsNotNull(attribute=('x',))]"
+   ],
+   "result": {
+    "ok": true,
+    "value": 0
+   }
+  },
+  {
+   "test": "test_unsupported_filter",
+   "sql_type": "string",
+   "sql_filter": "x like 'a%a%'",
+   "pushFilters_called": 1,
+   "filters_repr": [
+    "[IsNotNull(attribute=('x',))]"
+   ],
+   "result": {
+    "ok": true,
+    "value": 0
+   }
+  },
+  {
+   "test": "test_unsupported_filter",
+   "sql_type": "string",
+   "sql_filter": "x ilike 'a'",
+   "pushFilters_called": 1,
+   "filters_repr": [
+    "[IsNotNull(attribute=('x',))]"
+   ],
+   "result": {
+    "ok": true,
+    "value": 0
+   }
+  },
+  {
+   "test": "test_unsupported_filter",
+   "sql_type": "string",
+   "sql_filter": "x = 'a' collate zh",
+   "pushFilters_called": 1,
+   "filters_repr": [
+    "[IsNotNull(attribute=('x',))]"
+   ],
+   "result": {
+    "ok": true,
+    "value": 0
+   }
+  },
+  {
+   "test": "test_filter_value_type",
+   "sql_type": "int",
+   "sql_filter": "x = 1",
+   "pushFilters_called": 1,
+   "filters_repr": [
+    "[IsNotNull(attribute=('x',)), EqualTo(attribute=('x',), value=1)]"
+   ],
+   "result": {
+    "ok": true,
+    "value": 0
+   }
+  },
+  {
+   "test": "test_filter_value_type",
+   "sql_type": "int",
+   "sql_filter": "x = null",
+   "pushFilters_called": 0,
+   "filters_repr": [],
+   "result": {
+    "ok": true,
+    "value": 0
+   }
+  },
+  {
+   "test": "test_filter_value_type",
+   "sql_type": "float",
+   "sql_filter": "x = 3 / 2",
+   "pushFilters_called": 1,
+   "filters_repr": [
+    "[IsNotNull(attribute=('x',)), EqualTo(attribute=('x',), value=1.5)]"
+   ],
+   "result": {
+    "ok": true,
+    "value": 0
+   }
+  },
+  {
+   "test": "test_filter_value_type",
+   "sql_type": "string",
+   "sql_filter": "x = '1'",
+   "pushFilters_called": 1,
+   "filters_repr": [
+    "[IsNotNull(attribute=('x',)), EqualTo(attribute=('x',), value='1')]"
+   ],
+   "result": {
+    "ok": true,
+    "value": 0
+   }
+  },
+  {
+   "test": "test_filter_value_type",
+   "sql_type": "array<int>",
+   "sql_filter": "x = array(1, 2)",
+   "pushFilters_called": 1,
+   "filters_repr": [
+    "[IsNotNull(attribute=('x',)), EqualTo(attribute=('x',), value=[1, 2])]"
+   ],
+   "result": {
+    "ok": true,
+    "value": 0
+   }
+  },
+  {
+   "test": "test_filter_value_type",
+   "sql_type": "struct<x:int>",
+   "sql_filter": "x = named_struct('x', 1)",
+   "pushFilters_called": 1,
+   "filters_repr": [
+    "[IsNotNull(attribute=('x',)), EqualTo(attribute=('x',), value={'x': 1})]"
+   ],
+   "result": {
+    "ok": true,
+    "value": 0
+   }
+  },
+  {
+   "test": "test_filter_value_type",
+   "sql_type": "decimal",
+   "sql_filter": "x in (1.1, 2.1)",
+   "pushFilters_called": 0,
+   "filters_repr": [],
+   "result": {
+    "ok": true,
+    "value": 0
+   }
+  },
+  {
+   "test": "test_filter_value_type",
+   "sql_type": "timestamp_ntz",
+   "sql_filter": "x = timestamp_ntz '2020-01-01 00:00:00'",
+   "pushFilters_called": 1,
+   "filters_repr": [
+    "[IsNotNull(attribute=('x',)), EqualTo(attribute=('x',), value=datetime.datetime(2020, 1, 1, 0, 0))]"
+   ],
+   "result": {
+    "ok": true,
+    "value": 0
+   }
+  },
+  {
+   "test": "test_filter_value_type",
+   "sql_type": "interval second",
+   "sql_filter": "x = interval '2' second",
+   "pushFilters_called": 1,
+   "filters_repr": [
+    "[IsNotNull(attribute=('x',))]"
+   ],
+   "result": {
+    "ok": true,
+    "value": 0
+   }
+  },
+  {
+   "test": "test_filter_type",
+   "sql_type": "boolean",
+   "sql_filter": "x",
+   "pushFilters_called": 1,
+   "filters_repr": [
+    "[IsNotNull(attribute=('x',)), EqualTo(attribute=('x',), value=True)]"
+   ],
+   "result": {
+    "ok": true,
+    "value": 0
+   }
+  },
+  {
+   "test": "test_filter_type",
+   "sql_type": "boolean",
+   "sql_filter": "not x",
+   "pushFilters_called": 1,
+   "filters_repr": [
+    "[IsNotNull(attribute=('x',)), Not(child=EqualTo(attribute=('x',), value=True))]"
+   ],
+   "result": {
+    "ok": true,
+    "value": 0
+   }
+  },
+  {
+   "test": "test_filter_type",
+   "sql_type": "int",
+   "sql_filter": "x is null",
+   "pushFilters_called": 1,
+   "filters_repr": [
+    "[IsNull(attribute=('x',))]"
+   ],
+   "result": {
+    "ok": true,
+    "value": 0
+   }
+  },
+  {
+   "test": "test_filter_type",
+   "sql_type": "int",
+   "sql_filter": "x <> 0",
+   "pushFilters_called": 1,
+   "filters_repr": [
+    "[IsNotNull(attribute=('x',)), Not(child=EqualTo(attribute=('x',), value=0))]"
+   ],
+   "result": {
+    "ok": true,
+    "value": 0
+   }
+  },
+  {
+   "test": "test_filter_type",
+   "sql_type": "int",
+   "sql_filter": "x <=> 1",
+   "pushFilters_called": 1,
+   "filters_repr": [
+    "[EqualNullSafe(attribute=('x',), value=1)]"
+   ],
+   "result": {
+    "ok": true,
+    "value": 0
+   }
+  },
+  {
+   "test": "test_filter_type",
+   "sql_type": "int",
+   "sql_filter": "1 < x",
+   "pushFilters_called": 1,
+   "filters_repr": [
+    "[IsNotNull(attribute=('x',)), GreaterThan(attribute=('x',), value=1)]"
+   ],
+   "result": {
+    "ok": true,
+    "value": 0
+   }
+  },
+  {
+   "test": "test_filter_type",
+   "sql_type": "int",
+   "sql_filter": "1 <= x",
+   "pushFilters_called": 1,
+   "filters_repr": [
+    "[IsNotNull(attribute=('x',)), GreaterThanOrEqual(attribute=('x',), value=1)]"
+   ],
+   "result": {
+    "ok": true,
+    "value": 0
+   }
+  },
+  {
+   "test": "test_filter_type",
+   "sql_type": "int",
+   "sql_filter": "x < 1",
+   "pushFilters_called": 1,
+   "filters_repr": [
+    "[IsNotNull(attribute=('x',)), LessThan(attribute=('x',), value=1)]"
+   ],
+   "result": {
+    "ok": true,
+    "value": 0
+   }
+  },
+  {
+   "test": "test_filter_type",
+   "sql_type": "int",
+   "sql_filter": "x <= 1",
+   "pushFilters_called": 1,
+   "filters_repr": [
+    "[IsNotNull(attribute=('x',)), LessThanOrEqual(attribute=('x',), value=1)]"
+   ],
+   "result": {
+    "ok": true,
+    "value": 0
+   }
+  },
+  {
+   "test": "test_filter_type",
+   "sql_type": "string",
+   "sql_filter": "x like 'a%'",
+   "pushFilters_called": 1,
+   "filters_repr": [
+    "[IsNotNull(attribute=('x',)), StringStartsWith(attribute=('x',), value='a')]"
+   ],
+   "result": {
+    "ok": true,
+    "value": 0
+   }
+  },
+  {
+   "test": "test_filter_type",
+   "sql_type": "string",
+   "sql_filter": "x like '%a'",
+   "pushFilters_called": 1,
+   "filters_repr": [
+    "[IsNotNull(attribute=('x',)), StringEndsWith(attribute=('x',), value='a')]"
+   ],
+   "result": {
+    "ok": true,
+    "value": 0
+   }
+  },
+  {
+   "test": "test_filter_type",
+   "sql_type": "string",
+   "sql_filter": "x like '%a%'",
+   "pushFilters_called": 1,
+   "filters_repr": [
+    "[IsNotNull(attribute=('x',)), StringContains(attribute=('x',), value='a')]"
+   ],
+   "result": {
+    "ok": true,
+    "value": 0
+   }
+  },
+  {
+   "test": "test_filter_type",
+   "sql_type": "string",
+   "sql_filter": "x like 'a%b'",
+   "pushFilters_called": 1,
+   "filters_repr": [
+    "[IsNotNull(attribute=('x',)), StringStartsWith(attribute=('x',), value='a'), StringEndsWith(attribute=('x',), value='b')]"
+   ],
+   "result": {
+    "ok": true,
+    "value": 0
+   }
+  },
+  {
+   "test": "test_filter_type",
+   "sql_type": "int",
+   "sql_filter": "x in (1, 2)",
+   "pushFilters_called": 1,
+   "filters_repr": [
+    "[In(attribute=('x',), value=[1, 2])]"
+   ],
+   "result": {
+    "ok": true,
+    "value": 0
+   }
+  },
+  {
+   "test": "test_filter_nested_column",
+   "sql_type": "struct<y:int>",
+   "sql_filter": "x.y = 1",
+   "pushFilters_called": 1,
+   "filters_repr": [
+    "[IsNotNull(attribute=('x', 'y')), EqualTo(attribute=('x', 'y'), value=1)]"
+   ],
+   "result": {
+    "ok": true,
+    "value": 0
+   }
+  }
+ ],
+ "four_conjunct": {
+  "rows": {
+   "ok": true,
+   "value": [
+    "Row(x=1, y=2)",
+    "Row(x=2, y=2)"
+   ]
+  },
+  "log": [
+   "init",
+   "schema",
+   "reader",
+   "pushFilters [IsNotNull(attribute=('x',)), IsNotNull(attribute=('y',)), EqualTo(attribute=('x',), value=1), EqualTo(attribute=('y',), value=2)]",
+   "partitions",
+   "read 0",
+   "read 1",
+   "read 2"
+  ],
+  "explain_simple": {
+   "ok": true,
+   "value": "== Physical Plan ==\n*(1) Project [x#466, y#467]\n+- *(1) Filter (y#467 = 2)\n   +- BatchScan rec33_pushdown_four_conjunct[x#466, y#467] (Python) RuntimeFilters: []\n\n\n"
+  },
+  "explain_formatted": {
+   "ok": true,
+   "value": "== Physical Plan ==\n* Project (3)\n+- * Filter (2)\n   +- BatchScan rec33_pushdown_four_conjunct (1)\n\n\n(1) BatchScan rec33_pushdown_four_conjunct\nOutput [2]: [x#466, y#467]\nPushedFilters: [IsNotNull(x), IsNotNull(y), EqualTo(x,1)]\nReadSchema: struct<x:int,y:int>\n\n(2) Filter [codegen id : 1]\nInput [2]: [x#466, y#467]\nCondition : (y#467 = 2)\n\n(3) Project [codegen id : 1]\nOutput [2]: [x#466, y#467]\nInput [2]: [x#466, y#467]\n\n\n"
+  },
+  "explain_extended": {
+   "ok": true,
+   "value": "== Parsed Logical Plan ==\n'Filter (('x = 1) AND ('y = 2))\n+- RelationV2[x#466, y#467] rec33_pushdown_four_conjunct\n\n== Analyzed Logical Plan ==\nx: int, y: int\nFilter ((x#466 = 1) AND (y#467 = 2))\n+- RelationV2[x#466, y#467] rec33_pushdown_four_conjunct\n\n== Optimized Logical Plan ==\nFilter (y#467 = 2)\n+- RelationV2[x#466, y#467] rec33_pushdown_four_conjunct\n\n== Physical Plan ==\n*(1) Project [x#466, y#467]\n+- *(1) Filter (y#467 = 2)\n   +- BatchScan rec33_pushdown_four_conjunct[x#466, y#467] (Python) RuntimeFilters: []\n\n"
+  }
+ },
+ "call_counts": {
+  "load_only|no filter": {
+   "result": {
+    "ok": true,
+    "value": null
+   },
+   "counts": {
+    "before": {
+     "init": 0,
+     "schema": 0,
+     "reader": 0,
+     "pushFilters": 0,
+     "partitions": 0,
+     "read": 0
+    },
+    "load": {
+     "init": 1,
+     "schema": 1,
+     "reader": 0,
+     "pushFilters": 0,
+     "partitions": 0,
+     "read": 0
+    }
+   },
+   "log": [
+    "== load ==",
+    "init",
+    "schema"
+   ]
+  },
+  "explain|no filter": {
+   "result": {
+    "ok": true,
+    "value": null
+   },
+   "counts": {
+    "before": {
+     "init": 0,
+     "schema": 0,
+     "reader": 0,
+     "pushFilters": 0,
+     "partitions": 0,
+     "read": 0
+    },
+    "load": {
+     "init": 1,
+     "schema": 1,
+     "reader": 0,
+     "pushFilters": 0,
+     "partitions": 0,
+     "read": 0
+    },
+    "explain": {
+     "init": 0,
+     "schema": 0,
+     "reader": 0,
+     "pushFilters": 0,
+     "partitions": 0,
+     "read": 0
+    }
+   },
+   "log": [
+    "== load ==",
+    "init",
+    "schema",
+    "== explain =="
+   ]
+  },
+  "one_collect|no filter": {
+   "result": {
+    "ok": true,
+    "value": null
+   },
+   "counts": {
+    "before": {
+     "init": 0,
+     "schema": 0,
+     "reader": 0,
+     "pushFilters": 0,
+     "partitions": 0,
+     "read": 0
+    },
+    "load": {
+     "init": 1,
+     "schema": 1,
+     "reader": 0,
+     "pushFilters": 0,
+     "partitions": 0,
+     "read": 0
+    },
+    "collect": {
+     "init": 0,
+     "schema": 0,
+     "reader": 1,
+     "pushFilters": 0,
+     "partitions": 1,
+     "read": 3
+    }
+   },
+   "log": [
+    "== load ==",
+    "init",
+    "schema",
+    "== collect ==",
+    "reader",
+    "partitions",
+    "read 1",
+    "read 0",
+    "read 2"
+   ]
+  },
+  "one_count|no filter": {
+   "result": {
+    "ok": true,
+    "value": null
+   },
+   "counts": {
+    "before": {
+     "init": 0,
+     "schema": 0,
+     "reader": 0,
+     "pushFilters": 0,
+     "partitions": 0,
+     "read": 0
+    },
+    "load": {
+     "init": 1,
+     "schema": 1,
+     "reader": 0,
+     "pushFilters": 0,
+     "partitions": 0,
+     "read": 0
+    },
+    "count": {
+     "init": 0,
+     "schema": 0,
+     "reader": 1,
+     "pushFilters": 0,
+     "partitions": 1,
+     "read": 3
+    }
+   },
+   "log": [
+    "== load ==",
+    "init",
+    "schema",
+    "== count ==",
+    "reader",
+    "partitions",
+    "read 1",
+    "read 0",
+    "read 2"
+   ]
+  },
+  "explain_collect_collect|no filter": {
+   "result": {
+    "ok": true,
+    "value": null
+   },
+   "counts": {
+    "before": {
+     "init": 0,
+     "schema": 0,
+     "reader": 0,
+     "pushFilters": 0,
+     "partitions": 0,
+     "read": 0
+    },
+    "load": {
+     "init": 1,
+     "schema": 1,
+     "reader": 0,
+     "pushFilters": 0,
+     "partitions": 0,
+     "read": 0
+    },
+    "explain": {
+     "init": 0,
+     "schema": 0,
+     "reader": 0,
+     "pushFilters": 0,
+     "partitions": 0,
+     "read": 0
+    },
+    "collect1": {
+     "init": 0,
+     "schema": 0,
+     "reader": 1,
+     "pushFilters": 0,
+     "partitions": 1,
+     "read": 3
+    },
+    "collect2": {
+     "init": 0,
+     "schema": 0,
+     "reader": 0,
+     "pushFilters": 0,
+     "partitions": 0,
+     "read": 3
+    }
+   },
+   "log": [
+    "== load ==",
+    "init",
+    "schema",
+    "== explain ==",
+    "== collect1 ==",
+    "reader",
+    "partitions",
+    "read 0",
+    "read 1",
+    "read 2",
+    "== collect2 ==",
+    "read 1",
+    "read 0",
+    "read 2"
+   ]
+  },
+  "explain_count_show|no filter": {
+   "result": {
+    "ok": true,
+    "value": null
+   },
+   "counts": {
+    "before": {
+     "init": 0,
+     "schema": 0,
+     "reader": 0,
+     "pushFilters": 0,
+     "partitions": 0,
+     "read": 0
+    },
+    "load": {
+     "init": 1,
+     "schema": 1,
+     "reader": 0,
+     "pushFilters": 0,
+     "partitions": 0,
+     "read": 0
+    },
+    "explain": {
+     "init": 0,
+     "schema": 0,
+     "reader": 0,
+     "pushFilters": 0,
+     "partitions": 0,
+     "read": 0
+    },
+    "count": {
+     "init": 0,
+     "schema": 0,
+     "reader": 1,
+     "pushFilters": 0,
+     "partitions": 1,
+     "read": 3
+    },
+    "show": {
+     "init": 0,
+     "schema": 0,
+     "reader": 0,
+     "pushFilters": 0,
+     "partitions": 0,
+     "read": 3
+    }
+   },
+   "log": [
+    "== load ==",
+    "init",
+    "schema",
+    "== explain ==",
+    "== count ==",
+    "reader",
+    "partitions",
+    "read 1",
+    "read 0",
+    "read 2",
+    "== show ==",
+    "read 0",
+    "read 2",
+    "read 1"
+   ]
+  },
+  "collect_collect|no filter": {
+   "result": {
+    "ok": true,
+    "value": null
+   },
+   "counts": {
+    "before": {
+     "init": 0,
+     "schema": 0,
+     "reader": 0,
+     "pushFilters": 0,
+     "partitions": 0,
+     "read": 0
+    },
+    "load": {
+     "init": 1,
+     "schema": 1,
+     "reader": 0,
+     "pushFilters": 0,
+     "partitions": 0,
+     "read": 0
+    },
+    "collect1": {
+     "init": 0,
+     "schema": 0,
+     "reader": 1,
+     "pushFilters": 0,
+     "partitions": 1,
+     "read": 3
+    },
+    "collect2": {
+     "init": 0,
+     "schema": 0,
+     "reader": 0,
+     "pushFilters": 0,
+     "partitions": 0,
+     "read": 3
+    }
+   },
+   "log": [
+    "== load ==",
+    "init",
+    "schema",
+    "== collect1 ==",
+    "reader",
+    "partitions",
+    "read 0",
+    "read 1",
+    "read 2",
+    "== collect2 ==",
+    "read 0",
+    "read 1",
+    "read 2"
+   ]
+  },
+  "load_only|filter x=1": {
+   "result": {
+    "ok": true,
+    "value": null
+   },
+   "counts": {
+    "before": {
+     "init": 0,
+     "schema": 0,
+     "reader": 0,
+     "pushFilters": 0,
+     "partitions": 0,
+     "read": 0
+    },
+    "load": {
+     "init": 1,
+     "schema": 1,
+     "reader": 0,
+     "pushFilters": 0,
+     "partitions": 0,
+     "read": 0
+    }
+   },
+   "log": [
+    "== load ==",
+    "init",
+    "schema"
+   ]
+  },
+  "explain|filter x=1": {
+   "result": {
+    "ok": true,
+    "value": null
+   },
+   "counts": {
+    "before": {
+     "init": 0,
+     "schema": 0,
+     "reader": 0,
+     "pushFilters": 0,
+     "partitions": 0,
+     "read": 0
+    },
+    "load": {
+     "init": 1,
+     "schema": 1,
+     "reader": 0,
+     "pushFilters": 0,
+     "partitions": 0,
+     "read": 0
+    },
+    "explain": {
+     "init": 0,
+     "schema": 0,
+     "reader": 1,
+     "pushFilters": 1,
+     "partitions": 1,
+     "read": 0
+    }
+   },
+   "log": [
+    "== load ==",
+    "init",
+    "schema",
+    "== explain ==",
+    "reader",
+    "pushFilters [IsNotNull(attribute=('x',)), EqualTo(attribute=('x',), value=1)]",
+    "partitions"
+   ]
+  },
+  "one_collect|filter x=1": {
+   "result": {
+    "ok": true,
+    "value": null
+   },
+   "counts": {
+    "before": {
+     "init": 0,
+     "schema": 0,
+     "reader": 0,
+     "pushFilters": 0,
+     "partitions": 0,
+     "read": 0
+    },
+    "load": {
+     "init": 1,
+     "schema": 1,
+     "reader": 0,
+     "pushFilters": 0,
+     "partitions": 0,
+     "read": 0
+    },
+    "collect": {
+     "init": 0,
+     "schema": 0,
+     "reader": 1,
+     "pushFilters": 1,
+     "partitions": 1,
+     "read": 3
+    }
+   },
+   "log": [
+    "== load ==",
+    "init",
+    "schema",
+    "== collect ==",
+    "reader",
+    "pushFilters [IsNotNull(attribute=('x',)), EqualTo(attribute=('x',), value=1)]",
+    "partitions",
+    "read 1",
+    "read 0",
+    "read 2"
+   ]
+  },
+  "one_count|filter x=1": {
+   "result": {
+    "ok": true,
+    "value": null
+   },
+   "counts": {
+    "before": {
+     "init": 0,
+     "schema": 0,
+     "reader": 0,
+     "pushFilters": 0,
+     "partitions": 0,
+     "read": 0
+    },
+    "load": {
+     "init": 1,
+     "schema": 1,
+     "reader": 0,
+     "pushFilters": 0,
+     "partitions": 0,
+     "read": 0
+    },
+    "count": {
+     "init": 0,
+     "schema": 0,
+     "reader": 1,
+     "pushFilters": 1,
+     "partitions": 1,
+     "read": 3
+    }
+   },
+   "log": [
+    "== load ==",
+    "init",
+    "schema",
+    "== count ==",
+    "reader",
+    "pushFilters [IsNotNull(attribute=('x',)), EqualTo(attribute=('x',), value=1)]",
+    "partitions",
+    "read 0",
+    "read 1",
+    "read 2"
+   ]
+  },
+  "explain_collect_collect|filter x=1": {
+   "result": {
+    "ok": true,
+    "value": null
+   },
+   "counts": {
+    "before": {
+     "init": 0,
+     "schema": 0,
+     "reader": 0,
+     "pushFilters": 0,
+     "partitions": 0,
+     "read": 0
+    },
+    "load": {
+     "init": 1,
+     "schema": 1,
+     "reader": 0,
+     "pushFilters": 0,
+     "partitions": 0,
+     "read": 0
+    },
+    "explain": {
+     "init": 0,
+     "schema": 0,
+     "reader": 1,
+     "pushFilters": 1,
+     "partitions": 1,
+     "read": 0
+    },
+    "collect1": {
+     "init": 0,
+     "schema": 0,
+     "reader": 0,
+     "pushFilters": 0,
+     "partitions": 0,
+     "read": 3
+    },
+    "collect2": {
+     "init": 0,
+     "schema": 0,
+     "reader": 0,
+     "pushFilters": 0,
+     "partitions": 0,
+     "read": 3
+    }
+   },
+   "log": [
+    "== load ==",
+    "init",
+    "schema",
+    "== explain ==",
+    "reader",
+    "pushFilters [IsNotNull(attribute=('x',)), EqualTo(attribute=('x',), value=1)]",
+    "partitions",
+    "== collect1 ==",
+    "read 1",
+    "read 0",
+    "read 2",
+    "== collect2 ==",
+    "read 0",
+    "read 1",
+    "read 2"
+   ]
+  },
+  "explain_count_show|filter x=1": {
+   "result": {
+    "ok": true,
+    "value": null
+   },
+   "counts": {
+    "before": {
+     "init": 0,
+     "schema": 0,
+     "reader": 0,
+     "pushFilters": 0,
+     "partitions": 0,
+     "read": 0
+    },
+    "load": {
+     "init": 1,
+     "schema": 1,
+     "reader": 0,
+     "pushFilters": 0,
+     "partitions": 0,
+     "read": 0
+    },
+    "explain": {
+     "init": 0,
+     "schema": 0,
+     "reader": 1,
+     "pushFilters": 1,
+     "partitions": 1,
+     "read": 0
+    },
+    "count": {
+     "init": 0,
+     "schema": 0,
+     "reader": 1,
+     "pushFilters": 1,
+     "partitions": 1,
+     "read": 3
+    },
+    "show": {
+     "init": 0,
+     "schema": 0,
+     "reader": 1,
+     "pushFilters": 1,
+     "partitions": 1,
+     "read": 3
+    }
+   },
+   "log": [
+    "== load ==",
+    "init",
+    "schema",
+    "== explain ==",
+    "reader",
+    "pushFilters [IsNotNull(attribute=('x',)), EqualTo(attribute=('x',), value=1)]",
+    "partitions",
+    "== count ==",
+    "reader",
+    "pushFilters [IsNotNull(attribute=('x',)), EqualTo(attribute=('x',), value=1)]",
+    "partitions",
+    "read 0",
+    "read 1",
+    "read 2",
+    "== show ==",
+    "reader",
+    "pushFilters [IsNotNull(attribute=('x',)), EqualTo(attribute=('x',), value=1)]",
+    "partitions",
+    "read 0",
+    "read 1",
+    "read 2"
+   ]
+  },
+  "collect_collect|filter x=1": {
+   "result": {
+    "ok": true,
+    "value": null
+   },
+   "counts": {
+    "before": {
+     "init": 0,
+     "schema": 0,
+     "reader": 0,
+     "pushFilters": 0,
+     "partitions": 0,
+     "read": 0
+    },
+    "load": {
+     "init": 1,
+     "schema": 1,
+     "reader": 0,
+     "pushFilters": 0,
+     "partitions": 0,
+     "read": 0
+    },
+    "collect1": {
+     "init": 0,
+     "schema": 0,
+     "reader": 1,
+     "pushFilters": 1,
+     "partitions": 1,
+     "read": 3
+    },
+    "collect2": {
+     "init": 0,
+     "schema": 0,
+     "reader": 0,
+     "pushFilters": 0,
+     "partitions": 0,
+     "read": 3
+    }
+   },
+   "log": [
+    "== load ==",
+    "init",
+    "schema",
+    "== collect1 ==",
+    "reader",
+    "pushFilters [IsNotNull(attribute=('x',)), EqualTo(attribute=('x',), value=1)]",
+    "partitions",
+    "read 1",
+    "read 0",
+    "read 2",
+    "== collect2 ==",
+    "read 0",
+    "read 1",
+    "read 2"
+   ]
+  }
+ },
+ "residual": {
+  "ansi=true|10 / x > 1 AND (a = 1 OR b = 2)": {
+   "rows": {
+    "ok": true,
+    "value": []
+   },
+   "explain_extended": {
+    "ok": true,
+    "value": "== Parsed Logical Plan ==\n'Filter (((10 / 'x) > 1) AND (('a = 1) OR ('b = 2)))\n+- RelationV2[x#738, a#739, b#740] rec48_residual_true_scenario\n\n== Analyzed Logical Plan ==\nx: int, a: int, b: int\nFilter (((cast(10 as double) / cast(x#738 as double)) > cast(1 as double)) AND ((a#739 = 1) OR (b#740 = 2)))\n+- RelationV2[x#738, a#739, b#740] rec48_residual_true_scenario\n\n== Optimized Logical Plan ==\nFilter ((isnotnull(x#738) AND ((a#739 = 1) OR (b#740 = 2))) AND ((10.0 / cast(x#738 as double)) > 1.0))\n+- RelationV2[x#738, a#739, b#740] rec48_residual_true_scenario\n\n== Physical Plan ==\n*(1) Project [x#738, a#739, b#740]\n+- *(1) Filter ((isnotnull(x#738) AND ((a#739 = 1) OR (b#740 = 2))) AND ((10.0 / cast(x#738 as double)) > 1.0))\n   +- BatchScan rec48_residual_true_scenario[x#738, a#739, b#740] (Python) RuntimeFilters: []\n\n"
+   },
+   "log": [
+    "init",
+    "schema",
+    "reader",
+    "pushFilters [IsNotNull(attribute=('x',))]",
+    "partitions",
+    "read 1",
+    "read 0",
+    "read 2"
+   ]
+  },
+  "ansi=true|(a = 1 OR b = 2) AND 10 / x > 1": {
+   "rows": {
+    "ok": true,
+    "value": []
+   },
+   "explain_extended": {
+    "ok": true,
+    "value": "== Parsed Logical Plan ==\n'Filter ((('a = 1) OR ('b = 2)) AND ((10 / 'x) > 1))\n+- RelationV2[x#756, a#757, b#758] rec49_residual_true_reordered\n\n== Analyzed Logical Plan ==\nx: int, a: int, b: int\nFilter (((a#757 = 1) OR (b#758 = 2)) AND ((cast(10 as double) / cast(x#756 as double)) > cast(1 as double)))\n+- RelationV2[x#756, a#757, b#758] rec49_residual_true_reordered\n\n== Optimized Logical Plan ==\nFilter ((isnotnull(x#756) AND ((a#757 = 1) OR (b#758 = 2))) AND ((10.0 / cast(x#756 as double)) > 1.0))\n+- RelationV2[x#756, a#757, b#758] rec49_residual_true_reordered\n\n== Physical Plan ==\n*(1) Project [x#756, a#757, b#758]\n+- *(1) Filter ((isnotnull(x#756) AND ((a#757 = 1) OR (b#758 = 2))) AND ((10.0 / cast(x#756 as double)) > 1.0))\n   +- BatchScan rec49_residual_true_reordered[x#756, a#757, b#758] (Python) RuntimeFilters: []\n\n"
+   },
+   "log": [
+    "init",
+    "schema",
+    "reader",
+    "pushFilters [IsNotNull(attribute=('x',))]",
+    "partitions",
+    "read 1",
+    "read 0",
+    "read 2"
+   ]
+  },
+  "ansi=false|10 / x > 1 AND (a = 1 OR b = 2)": {
+   "rows": {
+    "ok": true,
+    "value": []
+   },
+   "explain_extended": {
+    "ok": true,
+    "value": "== Parsed Logical Plan ==\n'Filter (((10 / 'x) > 1) AND (('a = 1) OR ('b = 2)))\n+- RelationV2[x#774, a#775, b#776] rec50_residual_false_scenario\n\n== Analyzed Logical Plan ==\nx: int, a: int, b: int\nFilter (((cast(10 as double) / cast(x#774 as double)) > cast(1 as double)) AND ((a#775 = 1) OR (b#776 = 2)))\n+- RelationV2[x#774, a#775, b#776] rec50_residual_false_scenario\n\n== Optimized Logical Plan ==\nFilter ((isnotnull(x#774) AND ((a#775 = 1) OR (b#776 = 2))) AND ((10.0 / cast(x#774 as double)) > 1.0))\n+- RelationV2[x#774, a#775, b#776] rec50_residual_false_scenario\n\n== Physical Plan ==\n*(1) Project [x#774, a#775, b#776]\n+- *(1) Filter ((isnotnull(x#774) AND ((a#775 = 1) OR (b#776 = 2))) AND ((10.0 / cast(x#774 as double)) > 1.0))\n   +- BatchScan rec50_residual_false_scenario[x#774, a#775, b#776] (Python) RuntimeFilters: []\n\n"
+   },
+   "log": [
+    "init",
+    "schema",
+    "reader",
+    "pushFilters [IsNotNull(attribute=('x',))]",
+    "partitions",
+    "read 0",
+    "read 1",
+    "read 2"
+   ]
+  },
+  "ansi=false|(a = 1 OR b = 2) AND 10 / x > 1": {
+   "rows": {
+    "ok": true,
+    "value": []
+   },
+   "explain_extended": {
+    "ok": true,
+    "value": "== Parsed Logical Plan ==\n'Filter ((('a = 1) OR ('b = 2)) AND ((10 / 'x) > 1))\n+- RelationV2[x#792, a#793, b#794] rec51_residual_false_reordered\n\n== Analyzed Logical Plan ==\nx: int, a: int, b: int\nFilter (((a#793 = 1) OR (b#794 = 2)) AND ((cast(10 as double) / cast(x#792 as double)) > cast(1 as double)))\n+- RelationV2[x#792, a#793, b#794] rec51_residual_false_reordered\n\n== Optimized Logical Plan ==\nFilter ((isnotnull(x#792) AND ((a#793 = 1) OR (b#794 = 2))) AND ((10.0 / cast(x#792 as double)) > 1.0))\n+- RelationV2[x#792, a#793, b#794] rec51_residual_false_reordered\n\n== Physical Plan ==\n*(1) Project [x#792, a#793, b#794]\n+- *(1) Filter ((isnotnull(x#792) AND ((a#793 = 1) OR (b#794 = 2))) AND ((10.0 / cast(x#792 as double)) > 1.0))\n   +- BatchScan rec51_residual_false_reordered[x#792, a#793, b#794] (Python) RuntimeFilters: []\n\n"
+   },
+   "log": [
+    "init",
+    "schema",
+    "reader",
+    "pushFilters [IsNotNull(attribute=('x',))]",
+    "partitions",
+    "read 1",
+    "read 0",
+    "read 2"
+   ]
+  },
+  "ansi=true|row (0,1,1)": {
+   "rows": {
+    "ok": false,
+    "error": {
+     "python_type": "ArithmeticException",
+     "message": "[DIVIDE_BY_ZERO] Division by zero. Use `try_divide` to tolerate divisor being 0 and return NULL instead. If necessary set \"spark.sql.ansi.enabled\" to \"false\" to bypass this error. SQLSTATE: 22012\n== SQL (line 1, position 1) ==\n10 / x > 1 AND (a = 1 OR b = 2)\n^^^^^^\n",
+     "condition": "DIVIDE_BY_ZERO",
+     "sqlstate": "22012",
+     "params": {
+      "config": "\"spark.sql.ansi.enabled\""
+     }
+    }
+   },
+   "log": [
+    "init",
+    "schema",
+    "reader",
+    "pushFilters [IsNotNull(attribute=('x',))]",
+    "partitions",
+    "read 0",
+    "read 1",
+    "read 2"
+   ]
+  }
+ },
+ "errors": {
+  "pushFilters_raises": {
+   "explain": {
+    "ok": false,
+    "error": {
+     "python_type": "AnalysisException",
+     "message": "[PYTHON_DATA_SOURCE_ERROR] Failed to initialize Python data source reader: Traceback (most recent call last):\n  File \"/work/oracle.py\", line 97, in pushFilters\n    raise ValueError(\"boom from pushFilters\")\nValueError: boom from pushFilters\n SQLSTATE: 38000",
+     "condition": "PYTHON_DATA_SOURCE_ERROR",
+     "sqlstate": "38000",
+     "params": {
+      "action": "initialize",
+      "type": "reader",
+      "msg": "Traceback (most recent call last):\n  File \"/work/oracle.py\", line 97, in pushFilters\n    raise ValueError(\"boom from pushFilters\")\nValueError: boom from pushFilters\n"
+     }
+    }
+   },
+   "collect": {
+    "ok": false,
+    "error": {
+     "python_type": "AnalysisException",
+     "message": "[PYTHON_DATA_SOURCE_ERROR] Failed to initialize Python data source reader: Traceback (most recent call last):\n  File \"/work/oracle.py\", line 97, in pushFilters\n    raise ValueError(\"boom from pushFilters\")\nValueError: boom from pushFilters\n SQLSTATE: 38000",
+     "condition": "PYTHON_DATA_SOURCE_ERROR",
+     "sqlstate": "38000",
+     "params": {
+      "action": "initialize",
+      "type": "reader",
+      "msg": "Traceback (most recent call last):\n  File \"/work/oracle.py\", line 97, in pushFilters\n    raise ValueError(\"boom from pushFilters\")\nValueError: boom from pushFilters\n"
+     }
+    }
+   },
+   "log": [
+    "init",
+    "schema",
+    "reader",
+    "pushFilters [IsNotNull(attribute=('x',)), EqualTo(attribute=('x',), value=1)]"
+   ]
+  },
+  "extraneous_filter": {
+   "explain": {
+    "ok": false,
+    "error": {
+     "python_type": "AnalysisException",
+     "message": "[PYTHON_DATA_SOURCE_ERROR] Failed to initialize Python data source reader: Traceback (most recent call last):\n  File \"/opt/spark/python/lib/pyspark.zip/pyspark/sql/worker/utils.py\", line 98, in worker_run\n    main(infile, outfile)\n  File \"/opt/spark/python/lib/pyspark.zip/pyspark/sql/worker/data_source_pushdown_filters.py\", line 189, in _main\n    raise PySparkValueError(\npyspark.errors.exceptions.base.PySparkValueError: [DATA_SOURCE_EXTRANEOUS_FILTERS] ReaderP.pushFilters() returned filters that are not part of the input. Make sure that each returned filter is one of the input filters by reference. Input filters: [FilterRef(filter=IsNotNull(attribute=('x',)), id=139478146655104), FilterRef(filter=EqualTo(attribute=('x',), value=1), id=139478146653520)]. Extraneous filters: [FilterRef(filter=EqualTo(attribute=('x',), value=1), id=139478146655008)].\n SQLSTATE: 38000",
+     "condition": "PYTHON_DATA_SOURCE_ERROR",
+     "sqlstate": "38000",
+     "params": {
+      "action": "initialize",
+      "type": "reader",
+      "msg": "Traceback (most recent call last):\n  File \"/opt/spark/python/lib/pyspark.zip/pyspark/sql/worker/utils.py\", line 98, in worker_run\n    main(infile, outfile)\n  File \"/opt/spark/python/lib/pyspark.zip/pyspark/sql/worker/data_source_pushdown_filters.py\", line 189, in _main\n    raise PySparkValueError(\npyspark.errors.exceptions.base.PySparkValueError: [DATA_SOURCE_EXTRANEOUS_FILTERS] ReaderP.pushFilters() returned filters that are not part of the input. Make sure that each returned filter is one of the input filters by reference. Input filters: [FilterRef(filter=IsNotNull(attribute=('x',)), id=139478146655104), FilterRef(filter=EqualTo(attribute=('x',), value=1), id=139478146653520)]. Extraneous filters: [FilterRef(filter=EqualTo(attribute=('x',), value=1), id=139478146655008)].\n"
+     }
+    }
+   },
+   "collect": {
+    "ok": false,
+    "error": {
+     "python_type": "AnalysisException",
+     "message": "[PYTHON_DATA_SOURCE_ERROR] Failed to initialize Python data source reader: Traceback (most recent call last):\n  File \"/opt/spark/python/lib/pyspark.zip/pyspark/sql/worker/utils.py\", line 98, in worker_run\n    main(infile, outfile)\n  File \"/opt/spark/python/lib/pyspark.zip/pyspark/sql/worker/data_source_pushdown_filters.py\", line 189, in _main\n    raise PySparkValueError(\npyspark.errors.exceptions.base.PySparkValueError: [DATA_SOURCE_EXTRANEOUS_FILTERS] ReaderP.pushFilters() returned filters that are not part of the input. Make sure that each returned filter is one of the input filters by reference. Input filters: [FilterRef(filter=IsNotNull(attribute=('x',)), id=139478146655104), FilterRef(filter=EqualTo(attribute=('x',), value=1), id=139478146653520)]. Extraneous filters: [FilterRef(filter=EqualTo(attribute=('x',), value=1), id=139478146655008)].\n SQLSTATE: 38000",
+     "condition": "PYTHON_DATA_SOURCE_ERROR",
+     "sqlstate": "38000",
+     "params": {
+      "action": "initialize",
+      "type": "reader",
+      "msg": "Traceback (most recent call last):\n  File \"/opt/spark/python/lib/pyspark.zip/pyspark/sql/worker/utils.py\", line 98, in worker_run\n    main(infile, outfile)\n  File \"/opt/spark/python/lib/pyspark.zip/pyspark/sql/worker/data_source_pushdown_filters.py\", line 189, in _main\n    raise PySparkValueError(\npyspark.errors.exceptions.base.PySparkValueError: [DATA_SOURCE_EXTRANEOUS_FILTERS] ReaderP.pushFilters() returned filters that are not part of the input. Make sure that each returned filter is one of the input filters by reference. Input filters: [FilterRef(filter=IsNotNull(attribute=('x',)), id=139478146655104), FilterRef(filter=EqualTo(attribute=('x',), value=1), id=139478146653520)]. Extraneous filters: [FilterRef(filter=EqualTo(attribute=('x',), value=1), id=139478146655008)].\n"
+     }
+    }
+   },
+   "log": [
+    "init",
+    "schema",
+    "reader",
+    "pushFilters [IsNotNull(attribute=('x',)), EqualTo(attribute=('x',), value=1)]"
+   ]
+  },
+  "pushdown_disabled|with_filter": {
+   "explain": {
+    "ok": true,
+    "value": "== Physical Plan ==\n*(1) Project [x#832, y#833]\n+- *(1) Filter (isnotnull(x#832) AND (x#832 = 1))\n   +- BatchScan rec55_err_disabled_with_filter[x#832, y#833] (Python) RuntimeFilters: []\n\n\n"
+   },
+   "collect": {
+    "ok": false,
+    "error": {
+     "python_type": "AnalysisException",
+     "message": "[PYTHON_DATA_SOURCE_ERROR] Failed to initialize Python data source reader: Traceback (most recent call last):\n  File \"/opt/spark/python/lib/pyspark.zip/pyspark/sql/worker/utils.py\", line 98, in worker_run\n    main(infile, outfile)\n  File \"/opt/spark/python/lib/pyspark.zip/pyspark/sql/worker/plan_data_source_read.py\", line 369, in _main\n    raise PySparkAssertionError(\npyspark.errors.exceptions.base.PySparkAssertionError: [DATA_SOURCE_PUSHDOWN_DISABLED] ReaderP implements pushFilters() but filter pushdown is disabled because configuration 'spark.sql.python.filterPushdown.enabled' is false. Set it to true to enable filter pushdown.\n SQLSTATE: 38000",
+     "condition": "PYTHON_DATA_SOURCE_ERROR",
+     "sqlstate": "38000",
+     "params": {
+      "action": "initialize",
+      "type": "reader",
+      "msg": "Traceback (most recent call last):\n  File \"/opt/spark/python/lib/pyspark.zip/pyspark/sql/worker/utils.py\", line 98, in worker_run\n    main(infile, outfile)\n  File \"/opt/spark/python/lib/pyspark.zip/pyspark/sql/worker/plan_data_source_read.py\", line 369, in _main\n    raise PySparkAssertionError(\npyspark.errors.exceptions.base.PySparkAssertionError: [DATA_SOURCE_PUSHDOWN_DISABLED] ReaderP implements pushFilters() but filter pushdown is disabled because configuration 'spark.sql.python.filterPushdown.enabled' is false. Set it to true to enable filter pushdown.\n"
+     }
+    }
+   },
+   "log": [
+    "init",
+    "schema",
+    "reader"
+   ]
+  },
+  "pushdown_disabled|no_filter": {
+   "explain": {
+    "ok": true,
+    "value": "== Physical Plan ==\n*(1) Project [x#834, y#835]\n+- BatchScan rec56_err_disabled_no_filter[x#834, y#835] (Python) RuntimeFilters: []\n\n\n"
+   },
+   "collect": {
+    "ok": false,
+    "error": {
+     "python_type": "AnalysisException",
+     "message": "[PYTHON_DATA_SOURCE_ERROR] Failed to initialize Python data source reader: Traceback (most recent call last):\n  File \"/opt/spark/python/lib/pyspark.zip/pyspark/sql/worker/utils.py\", line 98, in worker_run\n    main(infile, outfile)\n  File \"/opt/spark/python/lib/pyspark.zip/pyspark/sql/worker/plan_data_source_read.py\", line 369, in _main\n    raise PySparkAssertionError(\npyspark.errors.exceptions.base.PySparkAssertionError: [DATA_SOURCE_PUSHDOWN_DISABLED] ReaderP implements pushFilters() but filter pushdown is disabled because configuration 'spark.sql.python.filterPushdown.enabled' is false. Set it to true to enable filter pushdown.\n SQLSTATE: 38000",
+     "condition": "PYTHON_DATA_SOURCE_ERROR",
+     "sqlstate": "38000",
+     "params": {
+      "action": "initialize",
+      "type": "reader",
+      "msg": "Traceback (most recent call last):\n  File \"/opt/spark/python/lib/pyspark.zip/pyspark/sql/worker/utils.py\", line 98, in worker_run\n    main(infile, outfile)\n  File \"/opt/spark/python/lib/pyspark.zip/pyspark/sql/worker/plan_data_source_read.py\", line 369, in _main\n    raise PySparkAssertionError(\npyspark.errors.exceptions.base.PySparkAssertionError: [DATA_SOURCE_PUSHDOWN_DISABLED] ReaderP implements pushFilters() but filter pushdown is disabled because configuration 'spark.sql.python.filterPushdown.enabled' is false. Set it to true to enable filter pushdown.\n"
+     }
+    }
+   },
+   "log": [
+    "init",
+    "schema",
+    "reader"
+   ]
+  },
+  "pushdown_disabled|reader_without_pushFilters|with_filter": {
+   "collect": {
+    "ok": true,
+    "value": [
+     "Row(x=1, y=1)"
+    ]
+   },
+   "log": [
+    "init",
+    "schema",
+    "reader",
+    "partitions",
+    "read 0",
+    "read 2",
+    "read 1"
+   ]
+  },
+  "bad_column_path|dotted_top_level_name": {
+   "collect": {
+    "ok": true,
+    "value": 0
+   },
+   "log": [
+    "init",
+    "schema",
+    "reader",
+    "pushFilters [IsNotNull(attribute=('a.b',)), EqualTo(attribute=('a.b',), value=1)]",
+    "partitions",
+    "read 1",
+    "read 0",
+    "read 2"
+   ]
+  },
+  "bad_column_path|dotted_top_level_name_with_nested_sibling": {
+   "collect": {
+    "ok": true,
+    "value": 0
+   },
+   "log": [
+    "init",
+    "schema",
+    "reader",
+    "pushFilters [IsNotNull(attribute=('a.b',)), EqualTo(attribute=('a.b',), value=1)]",
+    "partitions",
+    "read 0",
+    "read 1",
+    "read 2"
+   ]
+  },
+  "bad_column_path|backtick_in_name": {
+   "collect": {
+    "ok": true,
+    "value": 0
+   },
+   "log": [
+    "init",
+    "schema",
+    "reader",
+    "pushFilters [IsNotNull(attribute=('a`b',)), EqualTo(attribute=('a`b',), value=1)]",
+    "partitions",
+    "read 1",
+    "read 0",
+    "read 2"
+   ]
+  },
+  "bad_column_path|struct_with_dotted_field": {
+   "collect": {
+    "ok": true,
+    "value": 0
+   },
+   "log": [
+    "init",
+    "schema",
+    "reader",
+    "pushFilters [IsNotNull(attribute=('x', 'a.b')), EqualTo(attribute=('x', 'a.b'), value=1)]",
+    "partitions",
+    "read 0",
+    "read 1",
+    "read 2"
+   ]
+  },
+  "bad_column_path|case_mismatch_default": {
+   "collect": {
+    "ok": true,
+    "value": 0
+   },
+   "log": [
+    "init",
+    "schema",
+    "reader",
+    "pushFilters [IsNotNull(attribute=('X',)), EqualTo(attribute=('X',), value=1)]",
+    "partitions",
+    "read 0",
+    "read 1",
+    "read 2"
+   ]
+  },
+  "bad_column_path|map_value": {
+   "collect": {
+    "ok": true,
+    "value": 0
+   },
+   "log": [
+    "init",
+    "schema",
+    "reader",
+    "pushFilters [IsNotNull(attribute=('x',))]",
+    "partitions",
+    "read 1",
+    "read 0",
+    "read 2"
+   ]
+  },
+  "bad_column_path|array_of_struct_field": {
+   "collect": {
+    "ok": true,
+    "value": 0
+   },
+   "log": [
+    "init",
+    "schema",
+    "reader",
+    "pushFilters [IsNotNull(attribute=('x',))]",
+    "partitions",
+    "read 0",
+    "read 1",
+    "read 2"
+   ]
+  }
+ },
+ "explain_pushed": {
+  "everything_pushed": {
+   "simple": {
+    "ok": true,
+    "value": "== Physical Plan ==\n*(1) Project [x#961, y#962]\n+- BatchScan rec65_explain_everything_pushed[x#961, y#962] (Python) RuntimeFilters: []\n\n\n"
+   },
+   "formatted": {
+    "ok": true,
+    "value": "== Physical Plan ==\n* Project (2)\n+- BatchScan rec65_explain_everything_pushed (1)\n\n\n(1) BatchScan rec65_explain_everything_pushed\nOutput [2]: [x#961, y#962]\nPushedFilters: [IsNotNull(x), IsNotNull(y), EqualTo(x,1), EqualTo(y,2)]\nReadSchema: struct<x:int,y:int>\n\n(2) Project [codegen id : 1]\nOutput [2]: [x#961, y#962]\nInput [2]: [x#961, y#962]\n\n\n"
+   },
+   "extended": {
+    "ok": true,
+    "value": "== Parsed Logical Plan ==\n'Filter (('x = 1) AND ('y = 2))\n+- RelationV2[x#961, y#962] rec65_explain_everything_pushed\n\n== Analyzed Logical Plan ==\nx: int, y: int\nFilter ((x#961 = 1) AND (y#962 = 2))\n+- RelationV2[x#961, y#962] rec65_explain_everything_pushed\n\n== Optimized Logical Plan ==\nRelationV2[x#961, y#962] rec65_explain_everything_pushed\n\n== Physical Plan ==\n*(1) Project [x#961, y#962]\n+- BatchScan rec65_explain_everything_pushed[x#961, y#962] (Python) RuntimeFilters: []\n\n"
+   },
+   "log": [
+    "init",
+    "schema",
+    "reader",
+    "pushFilters [IsNotNull(attribute=('x',)), IsNotNull(attribute=('y',)), EqualTo(attribute=('x',), value=1), EqualTo(attribute=('y',), value=2)]",
+    "partitions"
+   ]
+  },
+  "nothing_pushed": {
+   "simple": {
+    "ok": true,
+    "value": "== Physical Plan ==\n*(1) Project [x#963, y#964]\n+- *(1) Filter (((isnotnull(x#963) AND isnotnull(y#964)) AND (x#963 = 1)) AND (y#964 = 2))\n   +- BatchScan rec66_explain_nothing_pushed[x#963, y#964] (Python) RuntimeFilters: []\n\n\n"
+   },
+   "formatted": {
+    "ok": true,
+    "value": "== Physical Plan ==\n* Project (3)\n+- * Filter (2)\n   +- BatchScan rec66_explain_nothing_pushed (1)\n\n\n(1) BatchScan rec66_explain_nothing_pushed\nOutput [2]: [x#963, y#964]\nReadSchema: struct<x:int,y:int>\n\n(2) Filter [codegen id : 1]\nInput [2]: [x#963, y#964]\nCondition : (((isnotnull(x#963) AND isnotnull(y#964)) AND (x#963 = 1)) AND (y#964 = 2))\n\n(3) Project [codegen id : 1]\nOutput [2]: [x#963, y#964]\nInput [2]: [x#963, y#964]\n\n\n"
+   },
+   "extended": {
+    "ok": true,
+    "value": "== Parsed Logical Plan ==\n'Filter (('x = 1) AND ('y = 2))\n+- RelationV2[x#963, y#964] rec66_explain_nothing_pushed\n\n== Analyzed Logical Plan ==\nx: int, y: int\nFilter ((x#963 = 1) AND (y#964 = 2))\n+- RelationV2[x#963, y#964] rec66_explain_nothing_pushed\n\n== Optimized Logical Plan ==\nFilter (((isnotnull(x#963) AND isnotnull(y#964)) AND (x#963 = 1)) AND (y#964 = 2))\n+- RelationV2[x#963, y#964] rec66_explain_nothing_pushed\n\n== Physical Plan ==\n*(1) Project [x#963, y#964]\n+- *(1) Filter (((isnotnull(x#963) AND isnotnull(y#964)) AND (x#963 = 1)) AND (y#964 = 2))\n   +- BatchScan rec66_explain_nothing_pushed[x#963, y#964] (Python) RuntimeFilters: []\n\n"
+   },
+   "log": [
+    "init",
+    "schema",
+    "reader",
+    "pushFilters [IsNotNull(attribute=('x',)), IsNotNull(attribute=('y',)), EqualTo(attribute=('x',), value=1), EqualTo(attribute=('y',), value=2)]",
+    "partitions"
+   ]
+  }
+ }
+}
