@@ -26,6 +26,10 @@ consuming test checks what the oracle wrote, never a hand-written value.
 ``... /out dml`` writes the DML oracle (``dml_cases``): per scenario a ``before`` table and
 ``dml/DML.json`` with each ``DELETE``/``UPDATE`` step's output, commits, rows and history.
 
+``... /out merge`` writes the MERGE oracle (``merge_cases``): the same for ``MERGE`` steps, in
+``merge/MERGE.json``, with the file-backed sources the steps read. Use a fresh ``$OUT`` for each
+attempt: the run refuses an ``$OUT/merge`` left by an earlier or interrupted one.
+
 ``... /out readback /in`` has Spark read the Krishiv-written tables under ``/in``
 (``tests/fixtures/delta-4.4.1/krishiv-written/``) and records ``READBACK.json`` there.
 
@@ -1440,6 +1444,410 @@ def dml_cases(spark: SparkSession, out: str) -> None:
         f.write("\n")
 
 
+#: MERGE sources: an inline query (ids 2 and 4 match, 7 and NULL do not), one with a target row
+#: matched twice (id 2), one with keys of the `n` column (NULL among them) and an empty one.
+MERGE_SRC = (
+    "(SELECT CAST(id AS BIGINT) AS id, v, n FROM VALUES (2, 'B', 20), (4, 'D', 40), (7, 'G', 70), "
+    "(NULL, 'N', 0) AS s(id, v, n)) s"
+)
+MERGE_DUP_SRC = (
+    "(SELECT CAST(id AS BIGINT) AS id, v, n FROM VALUES (2, 'x', 1), (2, 'y', 2), (8, 'z', 3) AS s(id, v, n)) s"
+)
+MERGE_N_SRC = "(SELECT CAST(id AS BIGINT) AS id, v, n FROM VALUES (10, 'k', 1), (11, 'l', NULL) AS s(id, v, n)) s"
+MERGE_EMPTY_SRC = "(SELECT CAST(1 AS BIGINT) AS id, 'e' AS v, 1 AS n WHERE false) s"
+MERGE_NONE_SRC = "(SELECT CAST(99 AS BIGINT) AS id, 'z' AS v, 9 AS n) s"
+MERGE_WIDE_SRC = "(SELECT CAST(2 AS BIGINT) AS id, 'W' AS v, 2 AS n, 'extra' AS e) s"
+#: A source without the target's `n` column.
+MERGE_NARROW_SRC = "(SELECT CAST(id AS BIGINT) AS id, v FROM VALUES (2, 'B'), (7, 'G') AS s(id, v)) s"
+MERGE_PART_SRC = (
+    "(SELECT CAST(id AS BIGINT) AS id, v, n, p FROM VALUES (2, 'B', 20, 'x'), (4, 'D', 40, 'q'), "
+    "(7, 'G', 70, 'q') AS s(id, v, n, p)) s"
+)
+MERGE_PART_NONE_SRC = "(SELECT CAST(99 AS BIGINT) AS id, 'z' AS v, 9 AS n, 'q' AS p) s"
+#: The rows of the file-backed sources (`<src_parquet>`, `<src_delta>`), written once by the
+#: generator.
+MERGE_FILE_SOURCE = "SELECT CAST(id AS BIGINT) AS id, v, n FROM VALUES (3, 'P', 30), (9, 'Q', 90) AS s(id, v, n)"
+
+
+AUTO_MERGE = {"spark.databricks.delta.schema.autoMerge.enabled": "true"}
+
+
+def merge_on(src: str, clauses: str, on: str = "t.id = s.id") -> str:
+    return f"MERGE INTO {{t}} t USING {src} ON {on} {clauses}"
+
+
+MERGE_SCENARIOS: list[tuple[str, list[str], list[tuple[str, str, dict]]]] = [
+    (
+        "unpartitioned",
+        DML_SCENARIOS[0][1],
+        [
+            ("update_matched", merge_on(MERGE_SRC, "WHEN MATCHED THEN UPDATE SET v = s.v"), {}),
+            ("update_star", merge_on(MERGE_SRC, "WHEN MATCHED THEN UPDATE SET *"), {}),
+            ("update_qualified_key", merge_on(MERGE_SRC, "WHEN MATCHED THEN UPDATE SET t.v = s.v, n = t.n + 1"), {}),
+            ("delete_matched", merge_on(MERGE_SRC, "WHEN MATCHED THEN DELETE"), {}),
+            ("insert_star", merge_on(MERGE_SRC, "WHEN NOT MATCHED THEN INSERT *"), {}),
+            ("insert_by_target", merge_on(MERGE_SRC, "WHEN NOT MATCHED BY TARGET THEN INSERT *"), {}),
+            (
+                "insert_values_partial",
+                merge_on(MERGE_SRC, "WHEN NOT MATCHED THEN INSERT (id, v) VALUES (s.id, s.v)"),
+                {},
+            ),
+            (
+                "insert_two_clauses",
+                merge_on(
+                    MERGE_SRC,
+                    "WHEN NOT MATCHED AND s.id > 6 THEN INSERT * "
+                    "WHEN NOT MATCHED THEN INSERT (id, v, n) VALUES (s.id, 'x', -1)",
+                ),
+                {},
+            ),
+            ("upsert", merge_on(MERGE_SRC, "WHEN MATCHED THEN UPDATE SET * WHEN NOT MATCHED THEN INSERT *"), {}),
+            ("nmbs_delete", merge_on(MERGE_SRC, "WHEN NOT MATCHED BY SOURCE THEN DELETE"), {}),
+            (
+                "nmbs_update_conditional",
+                merge_on(MERGE_SRC, "WHEN NOT MATCHED BY SOURCE AND t.n IS NULL THEN UPDATE SET n = -1"),
+                {},
+            ),
+            (
+                "all_kinds",
+                merge_on(
+                    MERGE_SRC,
+                    "WHEN MATCHED THEN UPDATE SET n = s.n WHEN NOT MATCHED THEN INSERT * "
+                    "WHEN NOT MATCHED BY SOURCE THEN DELETE",
+                ),
+                {},
+            ),
+            (
+                "clause_order",
+                merge_on(
+                    MERGE_SRC,
+                    "WHEN MATCHED AND s.n > 30 THEN DELETE WHEN MATCHED AND s.n > 10 THEN UPDATE SET n = s.n "
+                    "WHEN NOT MATCHED AND s.id > 6 THEN INSERT * "
+                    "WHEN NOT MATCHED THEN INSERT (id, v, n) VALUES (s.id, 'x', -1) "
+                    "WHEN NOT MATCHED BY SOURCE AND t.id < 2 THEN UPDATE SET v = 'gone' "
+                    "WHEN NOT MATCHED BY SOURCE AND t.id > 4 THEN DELETE",
+                ),
+                {},
+            ),
+            ("matched_condition_never_holds", merge_on(MERGE_SRC, "WHEN MATCHED AND s.n > 100 THEN DELETE"), {}),
+            (
+                "target_only_on_conjunct",
+                merge_on(MERGE_SRC, "WHEN MATCHED THEN UPDATE SET v = 'c'", "t.id = s.id AND t.n > 2"),
+                {},
+            ),
+            (
+                "null_keys",
+                merge_on(
+                    MERGE_N_SRC,
+                    "WHEN MATCHED THEN UPDATE SET v = s.v WHEN NOT MATCHED THEN INSERT * "
+                    "WHEN NOT MATCHED BY SOURCE AND t.n IS NULL THEN DELETE",
+                    "t.n = s.n",
+                ),
+                {},
+            ),
+            (
+                "null_safe_keys",
+                merge_on(
+                    MERGE_N_SRC, "WHEN MATCHED THEN UPDATE SET v = s.v WHEN NOT MATCHED THEN INSERT *", "t.n <=> s.n"
+                ),
+                {},
+            ),
+            ("nothing_matched", merge_on(MERGE_NONE_SRC, "WHEN MATCHED THEN UPDATE SET v = s.v"), {}),
+            ("empty_source", merge_on(MERGE_EMPTY_SRC, "WHEN MATCHED THEN DELETE WHEN NOT MATCHED THEN INSERT *"), {}),
+            ("empty_source_nmbs", merge_on(MERGE_EMPTY_SRC, "WHEN NOT MATCHED BY SOURCE THEN DELETE"), {}),
+            (
+                "store_assignment",
+                merge_on(
+                    MERGE_SRC,
+                    "WHEN MATCHED THEN UPDATE SET n = s.id * 10 "
+                    "WHEN NOT MATCHED THEN INSERT (id, v, n) VALUES (s.id, s.n, s.n)",
+                ),
+                {},
+            ),
+            ("update_overflow", merge_on(MERGE_SRC, "WHEN MATCHED THEN UPDATE SET n = s.id * 10000000000"), {}),
+            ("multiple_match_update", merge_on(MERGE_DUP_SRC, "WHEN MATCHED THEN UPDATE SET v = s.v"), {}),
+            (
+                "multiple_match_conditional_update",
+                merge_on(MERGE_DUP_SRC, "WHEN MATCHED AND s.v = 'x' THEN UPDATE SET v = s.v"),
+                {},
+            ),
+            ("multiple_match_delete", merge_on(MERGE_DUP_SRC, "WHEN MATCHED THEN DELETE"), {}),
+            (
+                "multiple_match_delete_insert",
+                merge_on(MERGE_DUP_SRC, "WHEN MATCHED THEN DELETE WHEN NOT MATCHED THEN INSERT *"),
+                {},
+            ),
+            ("multiple_match_conditional_delete", merge_on(MERGE_DUP_SRC, "WHEN MATCHED AND s.n > 0 THEN DELETE"), {}),
+            ("multiple_match_insert_only", merge_on(MERGE_DUP_SRC, "WHEN NOT MATCHED THEN INSERT *"), {}),
+            (
+                "multiple_match_insert_only_unoptimized",
+                merge_on(MERGE_DUP_SRC, "WHEN NOT MATCHED THEN INSERT *"),
+                {"spark.databricks.delta.merge.optimizeInsertOnlyMerge.enabled": "false"},
+            ),
+            ("multiple_match_nmbs_only", merge_on(MERGE_DUP_SRC, "WHEN NOT MATCHED BY SOURCE THEN DELETE"), {}),
+            (
+                "non_last_matched_omits_condition",
+                merge_on(MERGE_SRC, "WHEN MATCHED THEN DELETE WHEN MATCHED THEN UPDATE SET v = 'x'"),
+                {},
+            ),
+            (
+                "non_last_not_matched_omits_condition",
+                merge_on(MERGE_SRC, "WHEN NOT MATCHED THEN INSERT * WHEN NOT MATCHED AND s.id > 5 THEN INSERT *"),
+                {},
+            ),
+            (
+                "non_last_nmbs_omits_condition",
+                merge_on(
+                    MERGE_SRC,
+                    "WHEN NOT MATCHED BY SOURCE THEN DELETE WHEN NOT MATCHED BY SOURCE AND t.id > 5 THEN DELETE",
+                ),
+                {},
+            ),
+            ("unresolved_source_column", merge_on(MERGE_SRC, "WHEN MATCHED THEN UPDATE SET v = s.zzz"), {}),
+            ("unresolved_target_column", merge_on(MERGE_SRC, "WHEN MATCHED THEN UPDATE SET zzz = s.v"), {}),
+            (
+                "insert_reads_target",
+                merge_on(MERGE_SRC, "WHEN NOT MATCHED THEN INSERT (id, v, n) VALUES (s.id, t.v, s.n)"),
+                {},
+            ),
+            ("nmbs_reads_source", merge_on(MERGE_SRC, "WHEN NOT MATCHED BY SOURCE THEN UPDATE SET v = s.v"), {}),
+            ("unresolved_on", merge_on(MERGE_SRC, "WHEN MATCHED THEN DELETE", "t.id = s.zzz"), {}),
+            (
+                "insert_duplicate_columns",
+                merge_on(MERGE_SRC, "WHEN NOT MATCHED THEN INSERT (id, id) VALUES (s.id, s.id)"),
+                {},
+            ),
+            ("update_duplicate_columns", merge_on(MERGE_SRC, "WHEN MATCHED THEN UPDATE SET v = s.v, v = 'x'"), {}),
+            ("non_deterministic_on", merge_on(MERGE_SRC, "WHEN MATCHED THEN DELETE", "t.id = s.id AND rand() < 2"), {}),
+            ("subquery_in_clause", merge_on(MERGE_SRC, "WHEN MATCHED AND s.id IN (SELECT 2) THEN DELETE"), {}),
+            (
+                "schema_evolution_conf",
+                merge_on(MERGE_WIDE_SRC, "WHEN MATCHED THEN UPDATE SET * WHEN NOT MATCHED THEN INSERT *"),
+                {"spark.databricks.delta.schema.autoMerge.enabled": "true"},
+            ),
+            ("star_with_extra_source_column", merge_on(MERGE_WIDE_SRC, "WHEN MATCHED THEN UPDATE SET *"), {}),
+            (
+                "source_parquet_files",
+                merge_on(
+                    "(SELECT * FROM parquet.`<src_parquet>`) s",
+                    "WHEN MATCHED THEN UPDATE SET * WHEN NOT MATCHED THEN INSERT *",
+                ),
+                {},
+            ),
+            (
+                "source_delta_table",
+                merge_on("delta.`<src_delta>` s", "WHEN MATCHED THEN UPDATE SET * WHEN NOT MATCHED THEN INSERT *"),
+                {},
+            ),
+            # Schema evolution on, but no clause brings a new column: the MERGE runs.
+            (
+                "schema_evolution_conf_no_new_column",
+                merge_on(MERGE_SRC, "WHEN MATCHED THEN UPDATE SET * WHEN NOT MATCHED THEN INSERT *"),
+                AUTO_MERGE,
+            ),
+            (
+                "schema_evolution_conf_explicit_assignments",
+                merge_on(
+                    MERGE_WIDE_SRC,
+                    "WHEN MATCHED THEN UPDATE SET v = s.e WHEN NOT MATCHED THEN INSERT (id) VALUES (s.id)",
+                ),
+                AUTO_MERGE,
+            ),
+            (
+                "schema_evolution_conf_narrow_source",
+                merge_on(MERGE_NARROW_SRC, "WHEN MATCHED THEN UPDATE SET * WHEN NOT MATCHED THEN INSERT *"),
+                AUTO_MERGE,
+            ),
+            ("star_narrow_source", merge_on(MERGE_NARROW_SRC, "WHEN NOT MATCHED THEN INSERT *"), {}),
+            ("update_star_narrow_source", merge_on(MERGE_NARROW_SRC, "WHEN MATCHED THEN UPDATE SET *"), {}),
+            (
+                "subquery_in_insert_clause",
+                merge_on(MERGE_SRC, "WHEN NOT MATCHED AND s.id IN (SELECT 7) THEN INSERT *"),
+                {},
+            ),
+            (
+                "subquery_in_nmbs_clause",
+                merge_on(MERGE_SRC, "WHEN NOT MATCHED BY SOURCE AND t.id IN (SELECT 1) THEN DELETE"),
+                {},
+            ),
+            (
+                "subquery_in_update_clause",
+                merge_on(MERGE_SRC, "WHEN MATCHED AND s.id IN (SELECT 2) THEN UPDATE SET v = s.v"),
+                {},
+            ),
+            ("non_deterministic_clause", merge_on(MERGE_SRC, "WHEN MATCHED AND rand() < 2 THEN DELETE"), {}),
+        ],
+    ),
+    (
+        "partitioned",
+        DML_SCENARIOS[1][1],
+        [
+            ("update_moves_partition", merge_on(MERGE_SRC, "WHEN MATCHED THEN UPDATE SET p = 'w'"), {}),
+            (
+                "upsert_new_partition",
+                merge_on(MERGE_PART_SRC, "WHEN MATCHED THEN UPDATE SET * WHEN NOT MATCHED THEN INSERT *"),
+                {},
+            ),
+            ("nmbs_delete_partition", merge_on(MERGE_SRC, "WHEN NOT MATCHED BY SOURCE AND t.p = 'z' THEN DELETE"), {}),
+            ("on_partition_conjunct", merge_on(MERGE_SRC, "WHEN MATCHED THEN DELETE", "t.id = s.id AND t.p = 'y'"), {}),
+            ("insert_only", merge_on(MERGE_PART_SRC, "WHEN NOT MATCHED THEN INSERT *"), {}),
+            (
+                "upsert_and_conditional_nmbs",
+                merge_on(
+                    MERGE_PART_SRC,
+                    "WHEN MATCHED THEN UPDATE SET * WHEN NOT MATCHED THEN INSERT * "
+                    "WHEN NOT MATCHED BY SOURCE AND t.p = 'z' THEN UPDATE SET v = 'nmbs'",
+                ),
+                {},
+            ),
+        ],
+    ),
+    (
+        "column-mapping",
+        DML_SCENARIOS[2][1],
+        [
+            (
+                "upsert",
+                merge_on(
+                    MERGE_SRC,
+                    "WHEN MATCHED THEN UPDATE SET v2 = s.v "
+                    "WHEN NOT MATCHED THEN INSERT (id, v2, n, p) VALUES (s.id, s.v, s.n, 'n')",
+                ),
+                {},
+            ),
+            ("nmbs_delete", merge_on(MERGE_SRC, "WHEN NOT MATCHED BY SOURCE AND t.v2 IS NULL THEN DELETE"), {}),
+        ],
+    ),
+    (
+        "deletion-vectors",
+        DML_SCENARIOS[3][1],
+        [
+            (
+                "update_copy_on_write",
+                merge_on(MERGE_SRC, "WHEN MATCHED THEN UPDATE SET v = s.v WHEN NOT MATCHED THEN INSERT *"),
+                {"spark.databricks.delta.merge.deletionVectors.persistent": "false"},
+            ),
+        ],
+    ),
+    (
+        "change-data-feed",
+        DML_SCENARIOS[4][1],
+        [
+            ("insert_only", merge_on(MERGE_PART_SRC, "WHEN NOT MATCHED THEN INSERT *"), {}),
+            (
+                "insert_no_match",
+                merge_on(MERGE_PART_NONE_SRC, "WHEN MATCHED THEN DELETE WHEN NOT MATCHED THEN INSERT *"),
+                {},
+            ),
+            (
+                "upsert",
+                merge_on(MERGE_PART_SRC, "WHEN MATCHED THEN UPDATE SET v = s.v WHEN NOT MATCHED THEN INSERT *"),
+                {},
+            ),
+            ("delete_matched", merge_on(MERGE_SRC, "WHEN MATCHED THEN DELETE"), {}),
+        ],
+    ),
+    (
+        "append-only",
+        DML_SCENARIOS[-1][1],
+        [
+            ("insert_only", merge_on(MERGE_SRC, "WHEN NOT MATCHED THEN INSERT *"), {}),
+            ("update_matched", merge_on(MERGE_SRC, "WHEN MATCHED THEN UPDATE SET v = s.v"), {}),
+            ("delete_matched", merge_on(MERGE_SRC, "WHEN MATCHED THEN DELETE"), {}),
+            (
+                "upsert_no_match",
+                merge_on(MERGE_NONE_SRC, "WHEN MATCHED THEN UPDATE SET v = s.v WHEN NOT MATCHED THEN INSERT *"),
+                {},
+            ),
+        ],
+    ),
+]
+
+
+def cdc_files(path: str, from_version: int) -> int:
+    """The ``cdc`` actions of the table's JSON commits from ``from_version`` on."""
+    log = os.path.join(path, "_delta_log")
+    n = 0
+    for name in sorted(x for x in os.listdir(log) if x.endswith(".json") and x[0].isdigit()):
+        if int(name.split(".")[0]) < from_version:
+            continue
+        with open(os.path.join(log, name)) as f:
+            n += sum(1 for line in f if "cdc" in json.loads(line))
+    return n
+
+
+def merge_cases(spark: SparkSession, out: str) -> None:
+    """``merge/``: as ``dml_cases`` for the ``MERGE`` steps of ``MERGE_SCENARIOS`` (``MERGE.json``),
+    plus the file-backed sources the steps read (``source-parquet``, ``source-delta``; ``<src_parquet>``
+    and ``<src_delta>`` in the SQL) and each step's ``cdc`` action count."""
+    root = os.path.join(out, "merge")
+    if os.path.exists(root):
+        raise SystemExit(f"{root} exists: write the MERGE oracle into a fresh output directory")
+    os.makedirs(root)
+    src_parquet = os.path.join(root, "source-parquet")
+    src_delta = os.path.join(root, "source-delta")
+    spark.sql(MERGE_FILE_SOURCE).coalesce(1).write.parquet(src_parquet)
+    spark.sql(MERGE_FILE_SOURCE).coalesce(1).write.format("delta").save(src_delta)
+    record: dict = {
+        "format_version": FORMAT_VERSION,
+        "generator": "tests/scripts/gen_delta_fixtures.py merge",
+        "spark": spark.version,
+        "delta_spark": "4.4.1",
+        "scenarios": {},
+    }
+    for name, setup, steps in MERGE_SCENARIOS:
+        before = os.path.join(root, name, "before")
+        for q in setup:
+            spark.sql(q.format(t=f"delta.`{before}`")).collect()
+        df = spark.read.format("delta").load(before)
+        scenario: dict = {
+            "setup": [q.replace("{t}", "<t>") for q in setup],
+            "fields": [f.name for f in df.schema.fields],
+            "rows": [[typed(r[i]) for i in range(len(r))] for r in df.orderBy("id").collect()],
+            "versions": len(commits(before)),
+            "steps": [],
+        }
+        for step, sql, confs in steps:
+            work = os.path.join(out, "merge-work", name, step)
+            shutil.copytree(before, work)
+            text = (
+                sql.format(t=f"delta.`{work}`").replace("<src_parquet>", src_parquet).replace("<src_delta>", src_delta)
+            )
+            entry: dict = {"step": step, "sql": sql.replace("{t}", "<t>"), "confs": confs}
+            for k, v in confs.items():
+                spark.conf.set(k, v)
+            try:
+                result = spark.sql(text)
+                entry["output_fields"] = [f.name for f in result.schema.fields]
+                entry["output"] = [[typed(r[i]) for i in range(len(r))] for r in result.collect()]
+                entry["error"] = None
+            except Exception as e:  # the oracle's error is the record
+                entry["error"] = oracle_error(e, work)
+            finally:
+                for k in confs:
+                    spark.conf.unset(k)
+            log = commits(work)
+            entry["commits"] = log[scenario["versions"] :]
+            entry["cdc_files"] = cdc_files(work, scenario["versions"])
+            back = spark.read.format("delta").load(work)
+            entry["fields"] = [f.name for f in back.schema.fields]
+            entry["rows"] = [[typed(r[i]) for i in range(len(r))] for r in back.orderBy("id").collect()]
+            newest = spark.sql(f"DESCRIBE HISTORY delta.`{work}` LIMIT 1").collect()[0]
+            entry["history"] = {
+                "version": newest["version"],
+                "operation": newest["operation"],
+                "operationParameters": dict(newest["operationParameters"] or {}),
+                "operationMetrics": dict(newest["operationMetrics"] or {}),
+            }
+            scenario["steps"].append(entry)
+            shutil.rmtree(work)
+        record["scenarios"][name] = scenario
+    shutil.rmtree(os.path.join(out, "merge-work"), ignore_errors=True)
+    with open(os.path.join(root, "MERGE.json"), "w") as f:
+        json.dump(record, f, indent=1, sort_keys=True)
+        f.write("\n")
+
+
 def readback(spark: SparkSession, out: str, src: str) -> None:
     """Spark reads the Krishiv-written tables under ``src`` (``krishiv-written/``, made by the
     connector's ``write_readback_tables``): per table its rows as ``to_json(struct(*))`` by
@@ -1499,6 +1907,11 @@ def main(out: str, which: str = "checkpoint", src: str = "") -> None:
     spark = session()
     if which == "readback":
         readback(spark, out, src)
+        spark.stop()
+        return
+    if which == "merge":
+        merge_cases(spark, out)
+        drop_hadoop_crc(out)
         spark.stop()
         return
     if which == "dml":

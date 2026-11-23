@@ -8,8 +8,8 @@ use std::time::Instant;
 
 use krishiv_common::error::{ErrorClass, KrishivError};
 use krishiv_connect_server::{SessionEntry, SessionOwner};
-use krishiv_session::Transport;
 use krishiv_session::auth::{Authenticated, Surface};
+use krishiv_session::{QueryOptions, Transport};
 use tonic::metadata::MetadataMap;
 use tonic::{Response, Status};
 
@@ -95,6 +95,14 @@ impl Drop for CallSession {
             server.release(&r);
         }
     }
+}
+
+/// `options` with the request's W3C trace headers (`traceparent`, `baggage`) as the inbound trace
+/// of the queries it starts (design P3-T068: per request, untrusted text the session validates;
+/// a non-ASCII value is no header at all).
+pub(crate) fn traced(options: QueryOptions, metadata: &MetadataMap) -> QueryOptions {
+    let text = |name: &str| metadata.get(name).and_then(|v| v.to_str().ok());
+    options.inbound_trace(text("traceparent"), text("baggage"))
 }
 
 /// The client's `user-agent`, shown as `system.sessions.client_type` (client-asserted).

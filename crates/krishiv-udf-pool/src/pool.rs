@@ -13,8 +13,9 @@ use std::time::{Duration, Instant};
 
 use krishiv_common::config::{
     Config, ConfigValue, PYTHON_WORKER_ALLOW_FORK, PYTHON_WORKER_EXECUTABLES,
-    PYTHON_WORKER_IDLE_TIMEOUT, PYTHON_WORKER_MAX_PER_SESSION, PYTHON_WORKER_MAX_TOTAL,
-    PYTHON_WORKER_MEMORY_LIMIT, UDF_SANDBOX,
+    PYTHON_WORKER_IDLE_TIMEOUT, PYTHON_WORKER_MAX_PER_SESSION, PYTHON_WORKER_MAX_PER_TENANT,
+    PYTHON_WORKER_MAX_TOTAL, PYTHON_WORKER_MEMORY_LIMIT, PYTHON_WORKER_TENANT_MEMORY_LIMIT,
+    UDF_SANDBOX,
 };
 use krishiv_common::error::{
     InternalError, KrishivError, KrishivPythonWorkerLimit, OperationCanceled,
@@ -65,6 +66,10 @@ pub struct PoolConfig {
     pub max_per_session: usize,
     /// Most workers in all.
     pub max_total: usize,
+    /// Most workers of one tenant, over all its sessions.
+    pub max_per_tenant: usize,
+    /// `RLIMIT_AS` of a tenant's workers, when lower than [`Self::memory_limit`].
+    pub tenant_memory_limit: Option<u64>,
     /// Each worker's `RLIMIT_AS`.
     pub memory_limit: Option<u64>,
     /// Allow `fork` in sandboxed workers.
@@ -103,7 +108,7 @@ impl PoolConfig {
                 .filter(|n| *n > 0)
                 .unwrap_or(default)
         };
-        PoolConfig {
+        let pool = PoolConfig {
             sandbox: config
                 .get(&UDF_SANDBOX)
                 .and_then(|v| v.as_str())
@@ -120,6 +125,10 @@ impl PoolConfig {
             idle_timeout: duration,
             max_per_session: count(&PYTHON_WORKER_MAX_PER_SESSION, 8),
             max_total: count(&PYTHON_WORKER_MAX_TOTAL, 64),
+            max_per_tenant: count(&PYTHON_WORKER_MAX_PER_TENANT, 32),
+            tenant_memory_limit: config
+                .get(&PYTHON_WORKER_TENANT_MEMORY_LIMIT)
+                .and_then(ConfigValue::as_size),
             memory_limit: config
                 .get(&PYTHON_WORKER_MEMORY_LIMIT)
                 .and_then(ConfigValue::as_size),
@@ -130,7 +139,19 @@ impl PoolConfig {
             launcher: Launcher::default(),
             capabilities: None,
             artifact_limit: DEFAULT_ARTIFACT_LIMIT,
+        };
+        if pool.tenant_memory_limit_ignored() {
+            tracing::warn!(
+                "krishiv.python.worker.tenantMemoryLimit is not below krishiv.python.worker.memoryLimit, so it \
+                 changes nothing: it only lowers a tenant's workers' limit"
+            );
         }
+        pool
+    }
+
+    /// Whether `tenant_memory_limit` is set but not below `memory_limit` (the lower of the two applies).
+    pub(crate) fn tenant_memory_limit_ignored(&self) -> bool {
+        matches!((self.tenant_memory_limit, self.memory_limit), (Some(t), Some(m)) if t >= m)
     }
 }
 
@@ -142,6 +163,35 @@ pub struct Owner {
     pub principal: String,
     /// The session id.
     pub session: String,
+    /// The principal's tenant (multi-tenant servers). Workers are never shared across tenants, and the
+    /// tenant's workers and running calls are bounded together (`krishiv.python.worker.maxPerTenant`).
+    pub tenant: Option<String>,
+    /// The principal is one of several the server tells apart (authentication on). With authentication off
+    /// every session has the one local principal, so there is nothing to cap it against: such an owner
+    /// without a tenant is in no cap group, and only `maxTotal` and `maxPerSession` bound it.
+    pub capped: bool,
+}
+
+impl Owner {
+    /// What the per-tenant caps count by: the tenant, or the principal when it has none (so a principal of a
+    /// single-tenant server cannot take the whole pool either). Prefixed, so a tenant and a principal of the
+    /// same name are two groups.
+    pub(crate) fn group(&self) -> Option<String> {
+        match &self.tenant {
+            Some(t) => Some(format!("t:{t}")),
+            None if self.capped => Some(format!("p:{}", self.principal)),
+            None => None,
+        }
+    }
+
+    /// Whether both are in the same cap group (no allocation).
+    pub(crate) fn same_group(&self, other: &Owner) -> bool {
+        match (&self.tenant, &other.tenant) {
+            (Some(a), Some(b)) => a == b,
+            (None, None) => self.capped && other.capped && self.principal == other.principal,
+            _ => false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -163,6 +213,8 @@ struct State {
     /// Live workers (idle, busy or starting).
     live: usize,
     per_owner: HashMap<Owner, usize>,
+    /// Live workers per cap group ([`Owner::group`]).
+    per_group: HashMap<String, usize>,
     /// Owners whose session ended while some of their workers were busy: those are stopped on return.
     released: HashSet<Owner>,
 }
@@ -267,9 +319,10 @@ impl Pool {
                 }
             })
             .map_err(|e| internal(format!("cannot start the UDF worker spawner: {e}")))?;
-        let calls = CallThreads::new(
+        let calls = CallThreads::with_tenant_cap(
             config.max_total,
             config.max_per_session,
+            config.max_per_tenant,
             config.idle_timeout,
         );
         let inner = Arc::new(Inner {
@@ -359,7 +412,7 @@ impl Pool {
         self.inner
             .calls
             .submit(owner.clone(), job)
-            .map_err(|r| self.refused(r))
+            .map_err(|r| self.refused(r, owner))
     }
 
     /// Runs `job`, a relation task of `owner` holding one of its slots, ahead of the queued calls.
@@ -367,23 +420,32 @@ impl Pool {
         self.inner
             .calls
             .submit_task(owner.clone(), job)
-            .map_err(|r| self.refused(r))
+            .map_err(|r| self.refused(r, owner))
     }
 
-    fn refused(&self, refused: Refused) -> KrishivError {
+    fn refused(&self, refused: Refused, owner: &Owner) -> KrishivError {
         match refused {
             Refused::NoThread(why) => internal(why),
-            Refused::Reserve => {
-                self.worker_limit("A scalar Python UDF call beside an open Python UDF task", 2)
-            }
+            Refused::Reserve => self.worker_limit(
+                "A scalar Python UDF call beside an open Python UDF task",
+                2,
+                owner,
+            ),
         }
     }
 
     /// `KRISHIV_PYTHON_WORKER_LIMIT` for `operation`, which needs `needed` workers at once; it names the setting
     /// that bounds the slots (`maxTotal` when it is below `maxPerSession`).
-    pub(crate) fn worker_limit(&self, operation: &str, needed: usize) -> KrishivError {
+    pub(crate) fn worker_limit(
+        &self,
+        operation: &str,
+        needed: usize,
+        owner: &Owner,
+    ) -> KrishivError {
         let config = &self.inner.config;
-        let (setting, value) = if self.inner.calls.threads_bound() {
+        let (setting, value) = if self.inner.calls.tenant_bound(owner) {
+            ("krishiv.python.worker.maxPerTenant", config.max_per_tenant)
+        } else if self.inner.calls.threads_bound() {
             ("krishiv.python.worker.maxTotal", config.max_total)
         } else {
             (
@@ -394,7 +456,7 @@ impl Pool {
         KrishivPythonWorkerLimit {
             operation: operation.to_owned(),
             needed: needed.to_string(),
-            available: self.inner.calls.slot_limit().to_string(),
+            available: self.inner.calls.slot_limit_for(owner).to_string(),
             setting: setting.to_owned(),
             value: value.to_string(),
         }
@@ -440,12 +502,40 @@ impl Pool {
                 return Ok(self.lease(key, idle.worker));
             }
             let mine = state.per_owner.get(owner).copied().unwrap_or(0);
+            {
+                let group = owner.group();
+                let theirs = group
+                    .as_ref()
+                    .map_or(0, |g| state.per_group.get(g).copied().unwrap_or(0));
+                if group.is_some() && theirs >= self.inner.config.max_per_tenant {
+                    // At the tenant's cap: stop its longest-idle worker of another key (another session,
+                    // interpreter or artifact set) rather than wait for the idle timeout; never another
+                    // tenant's.
+                    if let Some(victim) =
+                        state.take_oldest_idle(|k| k.owner.same_group(owner) && *k != key)
+                    {
+                        drop(state);
+                        state = self.inner.evicted(victim);
+                        continue;
+                    }
+                    state = self
+                        .inner
+                        .freed
+                        .wait_timeout(state, Duration::from_millis(100))
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .0;
+                    continue;
+                }
+            }
             if mine < self.inner.config.max_per_session {
                 if state.live < self.inner.config.max_total {
                     state.live += 1;
                     *state.per_owner.entry(owner.clone()).or_default() += 1;
+                    if let Some(g) = owner.group() {
+                        *state.per_group.entry(g).or_default() += 1;
+                    }
                     drop(state);
-                    return match self.start(interpreter, artifacts, watch) {
+                    return match self.start(interpreter, artifacts, owner, watch) {
                         Ok(worker) => Ok(self.lease(key, worker)),
                         Err(e) => {
                             self.inner.lock().forget(owner);
@@ -457,8 +547,7 @@ impl Pool {
                 // At the total cap: stop the longest-idle worker of anyone to make room.
                 if let Some(victim) = state.take_oldest_idle(|_| true) {
                     drop(state);
-                    drop(victim);
-                    state = self.inner.lock();
+                    state = self.inner.evicted(victim);
                     continue;
                 }
             } else if let Some(victim) = state.take_oldest_idle(|k| &k.owner == owner && *k != key)
@@ -467,8 +556,7 @@ impl Pool {
                 // session replaced): stop one of those rather than wait for the idle timeout (review
                 // 2026-11-13 m2).
                 drop(state);
-                drop(victim);
-                state = self.inner.lock();
+                state = self.inner.evicted(victim);
                 continue;
             }
             state = self
@@ -495,6 +583,7 @@ impl Pool {
         &self,
         interpreter: &Interpreter,
         artifacts: &ArtifactSet,
+        owner: &Owner,
         watch: &dyn CallWatch,
     ) -> Result<Worker, KrishivError> {
         let inner = &self.inner;
@@ -532,6 +621,11 @@ impl Pool {
             &package::Entry::Worker { paths },
             read,
             None,
+            owner
+                .tenant
+                .is_some()
+                .then_some(inner.config.tenant_memory_limit)
+                .flatten(),
         );
         command
             .stdin(Stdio::from(worker_end))
@@ -560,6 +654,7 @@ impl Pool {
         entry: &package::Entry<'_>,
         read: &[PathBuf],
         file_size: Option<u64>,
+        tenant_memory: Option<u64>,
     ) -> Command {
         let inner = &self.inner;
         let env: Vec<(OsString, OsString)> = vec![
@@ -569,7 +664,10 @@ impl Pool {
         ];
         let config = &inner.config;
         let mut limits = Limits::default();
-        limits.address_space = config.memory_limit;
+        limits.address_space = match (config.memory_limit, tenant_memory) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        };
         if let Some(n) = file_size {
             limits.file_size = Some(limits.file_size.map_or(n, |m| m.min(n)));
         }
@@ -668,6 +766,7 @@ impl Pool {
             &[archive.to_path_buf()],
             // No one file past the whole budget (at least one byte, so an empty file still opens).
             Some(budget.max(1)),
+            None,
         );
         command
             .stdin(Stdio::null())
@@ -847,12 +946,31 @@ impl Inner {
     fn lock(&self) -> MutexGuard<'_, State> {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
+
+    /// Stops `victim` (an idle worker taken with `take_oldest_idle`, the state lock released), then releases
+    /// its charge and wakes the waiters; returns the re-taken lock.
+    fn evicted(&self, victim: (Worker, Owner)) -> MutexGuard<'_, State> {
+        let (worker, owner) = victim;
+        drop(worker);
+        let mut state = self.lock();
+        state.forget(&owner);
+        self.freed.notify_all();
+        state
+    }
 }
 
 impl State {
     /// One worker of `owner` is gone.
     fn forget(&mut self, owner: &Owner) {
         self.live = self.live.saturating_sub(1);
+        if let Some(group) = owner.group()
+            && let Some(n) = self.per_group.get_mut(&group)
+        {
+            *n = n.saturating_sub(1);
+            if *n == 0 {
+                self.per_group.remove(&group);
+            }
+        }
         if let Some(n) = self.per_owner.get_mut(owner) {
             *n = n.saturating_sub(1);
             if *n == 0 {
@@ -862,8 +980,10 @@ impl State {
         }
     }
 
-    /// Removes the worker idle the longest among the keys `which` accepts.
-    fn take_oldest_idle(&mut self, which: impl Fn(&Key) -> bool) -> Option<Worker> {
+    /// Removes the worker idle the longest among the keys `which` accepts. Its count stays charged (owner,
+    /// group, live) until the caller has stopped it and calls [`Inner::evicted`], so a replacement never
+    /// runs beside a victim that is still exiting.
+    fn take_oldest_idle(&mut self, which: impl Fn(&Key) -> bool) -> Option<(Worker, Owner)> {
         let key = self
             .idle
             .iter()
@@ -876,8 +996,7 @@ impl State {
         if list.is_empty() {
             self.idle.remove(&key);
         }
-        self.forget(&key.owner);
-        Some(idle.worker)
+        Some((idle.worker, key.owner))
     }
 }
 
@@ -987,6 +1106,22 @@ fn internal(message: String) -> KrishivError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_tenant_memory_limit_not_below_the_general_one_is_flagged() {
+        let mut config = PoolConfig {
+            memory_limit: Some(1 << 30),
+            tenant_memory_limit: Some(512 << 20),
+            ..PoolConfig::default()
+        };
+        assert!(!config.tenant_memory_limit_ignored());
+        config.tenant_memory_limit = Some(2 << 30);
+        assert!(config.tenant_memory_limit_ignored());
+        config.tenant_memory_limit = Some(1 << 30);
+        assert!(config.tenant_memory_limit_ignored());
+        config.tenant_memory_limit = None;
+        assert!(!config.tenant_memory_limit_ignored());
+    }
 
     fn sleeper() -> (Child, OwnedFd) {
         let child = Command::new("sleep")

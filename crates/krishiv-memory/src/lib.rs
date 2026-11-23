@@ -98,12 +98,13 @@ pub use pool::{
 };
 pub use relation::{RelationHash, RelationLease, RelationRef, RelationStore};
 pub use release::{
-    EPOCH_INTERVAL, pressure_epoch, release_if_pressured, release_if_pressured_here,
-    set_release_hook,
+    EPOCH_INTERVAL, pressure_epoch, release_hook_installed, release_if_pressured,
+    release_if_pressured_here, set_release_hook,
 };
 pub use reservation::Reservation;
 pub use resident::{
-    ALLOWANCE_BASE, SAMPLE_INTERVAL, allowance, process_resident_bytes, set_resident_probe,
+    ALLOWANCE_BASE, SAMPLE_INTERVAL, allowance, process_resident_bytes, resident_probe_installed,
+    set_resident_probe,
 };
 pub use spill::{OwnerId, SpillOwner, SpillService, SpillSignal, SpillTicket, Spillable};
 pub use spillfile::{

@@ -635,8 +635,12 @@ mod tests {
             ColumnPath::new("a"),
             DataType::Int64,
         ));
-        // Spread keys: an exact hash set (no range help on 0..=63).
-        let keys: Vec<i64> = (0..64).filter(|k| k % 8 != 7).chain([1000]).collect();
+        // Spread keys: an exact hash set (no range help on 0..=63; the far
+        // key keeps it hashed rather than a bit set).
+        let keys: Vec<i64> = (0..64)
+            .filter(|k| k % 8 != 7)
+            .chain([1_i64 << 40])
+            .collect();
         publish_with(&set, &keys, KeyFilterOptions::default());
         let form = set.published();
         let FilterSnapshot::Final(k) = &form.snapshot else {
@@ -684,6 +688,34 @@ mod tests {
         // A batch the range mostly keeps is tested by both in full.
         assert_eq!(rows(&mut stage, &[0, 1, 2, 7000]), 3);
         assert_eq!(tested(&set) - before, 3 + 4);
+    }
+
+    /// A bit set (study 44 F1) costs a fifth of a hash set a row, so it
+    /// stays on where a hash set switches off: 7 of 8 rows passing is
+    /// below its cut-off (0.95).
+    #[test]
+    fn a_bit_set_stays_on_where_a_hash_set_stops() {
+        let set = Arc::new(RuntimeFilter::new(
+            FilterId(1),
+            ColumnPath::new("a"),
+            DataType::Int64,
+        ));
+        let keys: Vec<i64> = (0..64).filter(|k| k % 8 != 7).chain([1000]).collect();
+        publish_with(&set, &keys, KeyFilterOptions::default());
+        let FilterSnapshot::Final(k) = &set.published().snapshot else {
+            unreachable!("published")
+        };
+        let cut_off = 1.0 - k.row_cost_ns() / super::DROP_SAVES_NS;
+        assert!(cut_off > 7.0 / 8.0, "{cut_off}");
+        let settings = RowStageSettings {
+            min_rows: 8,
+            max_pass_rate: 1.0,
+        };
+        let slot = RuntimeFilters::new(vec![Arc::clone(&set)]);
+        let mut stage = RowStage::new(&slot.scan_filters(&schema()), &schema(), settings);
+        let loose: Vec<i64> = (0..8).collect();
+        assert_eq!(rows(&mut stage, &loose), 7);
+        assert_eq!(rows(&mut stage, &[7, 15, 23]), 0, "still on");
     }
 
     fn source_rows(rows: &mut super::SourceRows, a: &[i64]) -> usize {

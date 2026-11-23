@@ -1,0 +1,126 @@
+name: RC wheel check
+
+# Manual only (Actions tab, "Run workflow"), run on the release candidate before the tag. It installs the wheels
+# a CI run built (`run_id`: a ci.yml run on the RC commit, whose artifacts are named wheels-* and
+# compat-wheel-*) on machines the release otherwise never touches:
+#   1. aarch64: the manylinux aarch64 wheel is installed on an arm64 runner, imported and a query runs;
+#   2. x86-64 without AVX2: the x86-64 wheel is imported under qemu-user with a CPU model older than
+#      x86-64-v3 (Nehalem). The import must fail with the ImportError that names the missing features and
+#      `krishiv-compat`, not die with SIGILL; the compat wheel must import and run a query there.
+# Nothing is published and nothing is uploaded. Runners are disposable: no machine change is needed.
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "ci.yml run id whose wheels-* artifacts are checked (the run on the RC commit)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: rc-wheel-check
+  cancel-in-progress: false
+
+jobs:
+  aarch64:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 20
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: "wheels-manylinux-aarch64-*"
+          path: wheels
+          merge-multiple: true
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ github.token }}
+      - uses: $/.github/actions/setup-uv
+      - name: Import the wheel and run a query
+        shell: bash
+        run: |
+          set -euo pipefail
+          ls -l wheels
+          uname -m
+          for wheel in wheels/*.whl; do
+            echo "== $wheel"
+            uv venv --python 3.12 "venv-$(basename "$wheel" .whl)"
+            # shellcheck disable=SC1090,SC1091
+            source "venv-$(basename "$wheel" .whl)/bin/activate"
+            uv pip install "$wheel" pyarrow
+            python - <<'PY'
+          import krishiv
+          spark = krishiv.session()
+          rows = spark.sql("SELECT 1 + 1 AS answer, upper('arm') AS s").collect()
+          print(rows)
+          assert rows[0][0] == 2 and rows[0][1] == "ARM", rows
+          PY
+            deactivate
+          done
+
+  x86-old-cpu:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: "{wheels-manylinux-x86_64-*,compat-wheel-manylinux-x86_64}"
+          path: wheels
+          merge-multiple: true
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ github.token }}
+      - uses: $/.github/actions/setup-uv
+      - name: Install qemu-user
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends qemu-user
+          qemu-x86_64 -version | head -1
+      - name: A CPU without AVX2 gets the ImportError, not SIGILL
+        shell: bash
+        run: |
+          set -euo pipefail
+          ls -l wheels
+          # qemu-user does not fake /proc/cpuinfo for x86: the wheel's check reads $KRISHIV_CPUINFO
+          # (python/krishiv/_cpu.py), so give it what a Nehalem reports: no avx, avx2, fma, bmi, f16c.
+          cat > nehalem-cpuinfo <<'EOF2'
+          processor	: 0
+          vendor_id	: GenuineIntel
+          flags		: fpu sse sse2 ssse3 pni sse4_1 sse4_2 popcnt cx16 lahf_lm
+          EOF2
+          main=$(ls wheels/krishiv-*.whl | grep -v compat | head -1)
+          uv venv --python 3.12 venv-main
+          uv pip install --python venv-main/bin/python --no-deps "$main"
+          set +e
+          KRISHIV_CPUINFO="$PWD/nehalem-cpuinfo" qemu-x86_64 -cpu Nehalem venv-main/bin/python -c "import krishiv" 2> err.txt
+          code=$?
+          set -e
+          cat err.txt
+          echo "exit code $code"
+          if [ "$code" -ge 128 ] || [ "$code" -lt 0 ] || [ "$code" -eq 0 ]; then
+            echo "::error::expected a clean ImportError (exit 1), got exit code $code"; exit 1
+          fi
+          grep -q "ImportError" err.txt
+          grep -q "krishiv-compat" err.txt
+          grep -qi "avx2" err.txt
+      - name: The compat wheel imports and runs a query on that CPU
+        shell: bash
+        run: |
+          set -euo pipefail
+          compat=$(ls wheels/krishiv_compat-*.whl wheels/krishiv-compat-*.whl 2>/dev/null | head -1)
+          uv venv --python 3.12 venv-compat
+          uv pip install --python venv-compat/bin/python "$compat" pyarrow
+          qemu-x86_64 -cpu Nehalem venv-compat/bin/python - <<'PY'
+          import krishiv
+          rows = krishiv.session().sql("SELECT 1 + 1 AS answer").collect()
+          print(rows)
+          assert rows[0][0] == 2, rows
+          PY

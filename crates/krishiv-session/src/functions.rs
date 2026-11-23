@@ -43,6 +43,18 @@ pub fn expr(text: &str) -> Result<Column, krishiv_common::error::KrishivError> {
     Ok(Column::new((*lowered).clone()))
 }
 
+/// [`expr`] under a statement's parser options, for text a statement wrote (a `MERGE` clause or
+/// `ON` condition read again): `"x"` stays an identifier under `doubleQuotedIdentifiers`.
+pub(crate) fn expr_with(
+    text: &str,
+    options: &krishiv_sql::ParserOptions,
+) -> Result<Column, krishiv_common::error::KrishivError> {
+    let lowered =
+        krishiv_sql::parse_and_lower_named_expression(text, options, krishiv_plan::SourceId(0))
+            .map_err(|e| e.error)?;
+    Ok(Column::new((*lowered).clone()))
+}
+
 /// A literal value.
 ///
 /// ```
