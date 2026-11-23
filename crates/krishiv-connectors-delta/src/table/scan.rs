@@ -638,3 +638,42 @@ impl Source for DeltaScanSource {
         local.downcast_ref::<Local>().map_or(0, |l| l.claimed)
     }
 }
+
+#[cfg(test)]
+mod nested_like_tests {
+    use std::sync::Arc;
+
+    use arrow_schema::{DataType as ArrowType, Field, Fields};
+
+    use super::nested_like;
+
+    #[test]
+    fn a_struct_field_the_table_lacks_keeps_its_decoded_nullability() {
+        let decoded = ArrowType::Struct(Fields::from(vec![
+            Field::new("a", ArrowType::Int32, true),
+            Field::new("extra", ArrowType::Utf8, true),
+        ]));
+        let table = ArrowType::Struct(Fields::from(vec![Field::new("a", ArrowType::Int32, false)]));
+        let ArrowType::Struct(out) = nested_like(&decoded, &table) else {
+            panic!("a struct stays a struct");
+        };
+        assert!(
+            !out[0].is_nullable(),
+            "a matched field takes the table's nullability"
+        );
+        assert!(
+            out[1].is_nullable(),
+            "an unmatched field keeps the decoded nullability"
+        );
+    }
+
+    #[test]
+    fn a_large_list_element_takes_the_table_nullability() {
+        let decoded = ArrowType::LargeList(Arc::new(Field::new("element", ArrowType::Int64, true)));
+        let table = ArrowType::LargeList(Arc::new(Field::new("element", ArrowType::Int64, false)));
+        let ArrowType::LargeList(out) = nested_like(&decoded, &table) else {
+            panic!("a large list stays a large list");
+        };
+        assert!(!out.is_nullable());
+    }
+}
