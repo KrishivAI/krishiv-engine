@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
-use krishiv_common::error::{InvalidHandleSessionClosed, KrishivError, KrishivSessionLimit};
+use krishiv_common::error::{
+    InvalidHandleSessionClosed, KrishivError, KrishivQueryKilled, KrishivQueryTimeout,
+    KrishivSessionLimit,
+};
 use prost::Message;
 use tonic::Code;
 
@@ -260,4 +263,27 @@ fn a_python_udf_error_is_sparks_python_exception_and_a_crash_a_spark_exception()
     let (_, info) = details(&status_of(&crashed));
     assert_eq!(info.reason, "org.apache.spark.SparkException");
     assert_eq!(info.metadata["errorClass"], "KRISHIV_PYTHON_WORKER_EXITED");
+}
+
+#[test]
+fn a_timeout_and_a_kill_are_sparks_sql_exception_with_their_own_class() {
+    let timeout: KrishivError = KrishivQueryTimeout {
+        query_id: "q1".to_owned(),
+        limit: "300ms".to_owned(),
+    }
+    .into();
+    let killed: KrishivError = KrishivQueryKilled {
+        query_id: "q2".to_owned(),
+        reason: "an operator cancelled it".to_owned(),
+    }
+    .into();
+    for (e, class) in [
+        (timeout, "KRISHIV_QUERY_TIMEOUT"),
+        (killed, "KRISHIV_QUERY_KILLED"),
+    ] {
+        let (_, info) = details(&status_of(&e));
+        assert_eq!(info.reason, "org.apache.spark.SparkSQLException");
+        assert_eq!(info.metadata["errorClass"], class);
+        assert_eq!(info.metadata["sqlState"], "HY008");
+    }
 }
