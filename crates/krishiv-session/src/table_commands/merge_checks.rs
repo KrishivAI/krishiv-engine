@@ -440,40 +440,51 @@ impl Checks<'_> {
 }
 
 /// `e` with each column reference whose first name part is one of `names` (and not `alias`)
-/// qualified by `alias`. Lambda variables keep their names: a name any lambda of `e` binds is
-/// left as written everywhere in `e`. Subquery plans are not entered (they resolve in their own
-/// scope).
+/// qualified by `alias`. A lambda variable keeps its name inside the lambda that binds it only:
+/// `id = 1 AND exists(arr, id -> id > 0)` qualifies the first `id` and leaves the variable. Subquery
+/// plans are not entered (they resolve in their own scope).
 fn qualify(e: &Arc<krishiv_plan::Expr>, alias: &str, names: &[&str]) -> Arc<krishiv_plan::Expr> {
+    qualify_in(Arc::clone(e), alias, names, &mut Vec::new())
+}
+
+/// [`qualify`] with `bound` the lambda variables in scope at `e`.
+fn qualify_in(
+    e: Arc<krishiv_plan::Expr>,
+    alias: &str,
+    names: &[&str],
+    bound: &mut Vec<String>,
+) -> Arc<krishiv_plan::Expr> {
     use krishiv_plan::ExprNode;
-    let mut bound: Vec<String> = Vec::new();
-    let mut stack: Vec<&krishiv_plan::Expr> = vec![e];
-    while let Some(x) = stack.pop() {
-        if let ExprNode::Lambda { params, .. } = &x.node {
-            bound.extend(params.iter().map(|p| p.name.clone()));
+    match &e.node {
+        ExprNode::Column(c)
+            if c.plan_id.is_none()
+                && c.name.first().is_some_and(|first| {
+                    !first.eq_ignore_ascii_case(alias)
+                        && names.iter().any(|n| n.eq_ignore_ascii_case(first))
+                        && !bound.iter().any(|b| b.eq_ignore_ascii_case(first))
+                }) =>
+        {
+            let mut c = c.clone();
+            c.name.insert(0, alias.to_owned());
+            let mut out = (*e).clone();
+            out.node = ExprNode::Column(c);
+            Arc::new(out)
         }
-        x.for_each_child(&mut |c| stack.push(c));
+        ExprNode::Lambda { params, .. } => {
+            let outer = bound.len();
+            bound.extend(params.iter().map(|p| p.name.clone()));
+            let out = e
+                .map_children(|c| {
+                    Ok::<_, std::convert::Infallible>(qualify_in(c, alias, names, bound))
+                })
+                .unwrap_or_else(|e| match e {});
+            bound.truncate(outer);
+            out
+        }
+        _ => e
+            .map_children(|c| Ok::<_, std::convert::Infallible>(qualify_in(c, alias, names, bound)))
+            .unwrap_or_else(|e| match e {}),
     }
-    Arc::clone(e)
-        .transform_up(&mut |x| {
-            Ok::<_, std::convert::Infallible>(match &x.node {
-                ExprNode::Column(c)
-                    if c.plan_id.is_none()
-                        && c.name.first().is_some_and(|first| {
-                            !first.eq_ignore_ascii_case(alias)
-                                && names.iter().any(|n| n.eq_ignore_ascii_case(first))
-                                && !bound.iter().any(|b| b.eq_ignore_ascii_case(first))
-                        }) =>
-                {
-                    let mut c = c.clone();
-                    c.name.insert(0, alias.to_owned());
-                    let mut out = (*x).clone();
-                    out.node = ExprNode::Column(c);
-                    Arc::new(out)
-                }
-                _ => x,
-            })
-        })
-        .unwrap_or_else(|e| match e {})
 }
 
 /// Whether `e` holds a subquery anywhere.

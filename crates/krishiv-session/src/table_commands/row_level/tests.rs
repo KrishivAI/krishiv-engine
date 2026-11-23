@@ -1167,6 +1167,34 @@ mod merge {
         assert_eq!(session.memory_reserved(), 0);
     }
 
+    #[test]
+    fn a_lambda_variable_shadows_a_column_only_inside_its_lambda() {
+        // `id` is both a column of the two sides and the lambda's variable. The bare `id` outside
+        // the lambda is the target's (qualified by its side); the variable inside stays as it is
+        // (review of #962: a name a lambda bound was left unqualified in the whole clause, so the
+        // outer `id` was ambiguous in the join).
+        let files = Files::new();
+        let (session, _) = session(&files);
+        let out = merge(
+            &session,
+            statement(
+                "SELECT CAST(id AS BIGINT) AS id, s FROM VALUES (2, 'u2') AS v(id, s)",
+                vec![clause(
+                    ClauseKind::NotMatchedBySource,
+                    Some("id = 9 AND NOT exists(array(1, 2), id -> id > 5)"),
+                    ClauseAction::Update(vec![set(
+                        "s",
+                        "concat(s, CAST(size(filter(array(7, 8, 9), id -> id >= 8)) AS STRING))",
+                    )]),
+                )],
+            ),
+        );
+        assert_eq!(affected(&out), 1);
+        let rows = strings(&files);
+        assert!(rows.contains(&(9, "s92".to_owned())), "{rows:?}");
+        assert_eq!(session.memory_reserved(), 0);
+    }
+
     /// A MERGE cancelled right after its source's first spill write (the copy waits there, a
     /// test hook) ends with the cancel's class, commits nothing, gives the pool back and leaves
     /// no spill file.
