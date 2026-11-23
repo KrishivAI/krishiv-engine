@@ -923,6 +923,9 @@ jobs:
           now=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)
           type=patch
           [ "${base#v}" != "$now" ] && [ "$(echo "${base#v}" | cut -d. -f1-2)" != "$(echo "$now" | cut -d. -f1-2)" ] && type=major
+          # A pending breaking fragment (changelog.d/*.breaking.md) is a break the next release carries: check as a
+          # 0.x minor (major) so the job is not red every night between the fragment and the version bump.
+          if [ "$type" = patch ] && ls changelog.d/*.breaking.md > /dev/null 2>&1; then type=major; fi
           echo "baseline $base, workspace $now, checked as a $type release"
           set +e
           cargo semver-checks check-release -p krishiv -p krishiv-session -p krishiv-udf-sdk \
@@ -933,7 +936,7 @@ jobs:
           if [ "$type" = major ]; then
             cargo semver-checks check-release -p krishiv -p krishiv-session -p krishiv-udf-sdk \
               --baseline-rev "$base" --release-type patch 2>&1 | tee breaking.txt || true
-            { echo "### Breaking changes since $base (CHANGELOG \"Breaking\")"; echo '```'; grep -E "^(--- failure|  )" breaking.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+            { echo "### Breaking changes since $base (CHANGELOG \"Breaking\")"; echo '```'; { grep -E "^(--- failure|  )" breaking.txt || true; }; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
           fi
           exit "$status"
   # The generated reference under docs/reference/ is what the generators print (SQL, Python, Rust).
