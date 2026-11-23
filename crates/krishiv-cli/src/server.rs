@@ -36,8 +36,8 @@ use krishiv_common::config::{
     CONNECT_ADDRESS, CONNECT_PORT, Config, ConfigValue, IO_EGRESS_PRIVATE_ADDRESSES,
     METRICS_ENABLED, SERVER_ALLOW_CORE_DUMPS, SERVER_METRICS_PUBLIC,
     SERVER_READINESS_FAILURE_THRESHOLD, SERVER_READINESS_INTERVAL, SERVER_READINESS_REQUIRED,
-    SERVER_READINESS_TIMEOUT, SERVER_SHUTDOWN_TIMEOUT, UI_ALLOWED_HOSTS, UI_ALLOWED_ORIGINS,
-    UI_EMBED_HIDE_ATTRIBUTION, UI_EMBED_LINK_TTL, UI_ENABLED,
+    SERVER_READINESS_TIMEOUT, SERVER_ROLE, SERVER_SHUTDOWN_TIMEOUT, UI_ALLOWED_HOSTS,
+    UI_ALLOWED_ORIGINS, UI_EMBED_HIDE_ATTRIBUTION, UI_EMBED_LINK_TTL, UI_ENABLED,
 };
 use krishiv_connect_server::{
     ConnectAuth, ConnectServer, ConnectServerConfig, SessionLimits, SessionManager, host,
@@ -265,6 +265,7 @@ fn serve(args: &ServerArgs) -> Result<(), String> {
     if host::is_root() && !args.allow_root {
         return Err("refusing to run as root; pass --allow-root to override".to_owned());
     }
+    standalone_role(&config)?;
     let core_dumps = flag(&config, &SERVER_ALLOW_CORE_DUMPS, false);
     if !core_dumps {
         host::disable_core_dumps().map_err(|e| format!("cannot turn core dumps off: {e}"))?;
@@ -411,6 +412,24 @@ fn flight_sql(
     let interval = ConnectServerConfig::from_config(config).maintenance_interval;
     let sweeper = flight.spawn_sweeper(interval);
     Ok(Some((flight, sweeper)))
+}
+
+/// Refuses `krishiv.server.role` values other than `standalone`: `coordinator` and `worker` are
+/// reserved for distributed mode (design P2-T171), so a deployment that names one fails at start
+/// instead of running every query in one process unnoticed.
+fn standalone_role(config: &Config) -> Result<(), String> {
+    let role = config
+        .get(&SERVER_ROLE)
+        .and_then(|v| v.as_str().map(str::to_owned))
+        .unwrap_or_else(|| "standalone".to_owned());
+    if role == "standalone" {
+        Ok(())
+    } else {
+        Err(format!(
+            "krishiv.server.role={role} is reserved for distributed mode, which this release \
+             does not run; use `standalone`"
+        ))
+    }
 }
 
 fn flag(config: &Config, entry: &krishiv_common::config::ConfigEntry, default: bool) -> bool {
@@ -1160,6 +1179,20 @@ mod tests {
         ] {
             assert!(list.iter().any(|f| f == name), "{name} in {list:?}");
         }
+    }
+
+    #[test]
+    fn only_the_standalone_role_starts() {
+        assert_eq!(standalone_role(&config(&[])), Ok(()));
+        assert_eq!(
+            standalone_role(&config(&[("krishiv.server.role", "standalone")])),
+            Ok(())
+        );
+        for role in ["coordinator", "worker"] {
+            let err = standalone_role(&config(&[("krishiv.server.role", role)])).unwrap_err();
+            assert!(err.contains("reserved for distributed mode"), "{err}");
+        }
+        assert!(Config::new().set("krishiv.server.role", "driver").is_err());
     }
 
     #[test]
