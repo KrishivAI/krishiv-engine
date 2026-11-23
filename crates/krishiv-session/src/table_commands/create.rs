@@ -910,58 +910,23 @@ impl Session {
         original: &str,
     ) -> Result<DataFrame, KrishivError> {
         let env = self.query_env();
-        let name = self.table_name(table, &env)?;
-        // `delta.`/path``: a Delta table by path (no catalog entry), read as its scans read it.
-        #[cfg(feature = "delta")]
-        let by_path = match crate::access::ddl_parts(table, &env)?.as_slice() {
-            [format, path]
-                if format.eq_ignore_ascii_case("delta")
-                    && path.contains('/')
-                    && self
-                        .state
-                        .catalog
-                        .store
-                        .table(&name.namespace, &name.name)
-                        .is_none() =>
-            {
-                // The path as written: a table name is case-folded, a path is not.
-                Some(format!("delta.`{}`", path.replace('`', "``")))
-            }
-            _ => None,
-        };
-        #[cfg(not(feature = "delta"))]
-        let by_path: Option<String> = None;
-        // The statement's own check named the target as a table; a table by path changes the
-        // files at that path, so `Modify` on it is asked first, as a Delta save to the path asks.
-        #[cfg(feature = "delta")]
-        if by_path.is_some()
-            && let [_, path] = crate::access::ddl_parts(table, &env)?.as_slice()
-        {
-            let qualified = self.qualify_path(path)?;
-            self.authorize_qualified_root(
-                &qualified,
-                &[Privilege::Modify],
-                krishiv_sql::StatementClass::Write,
-            )
+        let target = self
+            .row_level_target_checked(table, operation, &env, changes, original)
             .await?;
-        }
-        let quoted = match by_path {
-            Some(q) => q,
-            None => {
-                if let Err(refusal) = self.table_for_write(&name, operation, &env) {
-                    // Spark analyzes the subqueries before it finds the target cannot change: a time
-                    // travel clause in one is the error then. A target that does not exist is reported first.
-                    if refusal.error_class().name() != "TABLE_OR_VIEW_NOT_FOUND" {
-                        self.refuse_time_travel_in_subqueries(changes, original)
-                            .await?;
-                    }
-                    return Err(refusal);
-                }
-                name.quoted()
-            }
-        };
-        self.refuse_time_travel_in_subqueries(changes, original)
-            .await?;
+        self.exec_row_level_change_on(target, alias, operation, changes, original)
+            .await
+    }
+
+    /// [`Self::exec_row_level_change`] on a target `row_level_target_checked` already resolved
+    /// and checked (`MERGE INTO` falls back here after its own check).
+    pub(crate) async fn exec_row_level_change_on(
+        &self,
+        (name, quoted): (TableName, String),
+        alias: Option<&krishiv_sql::ast::Ident>,
+        operation: &str,
+        changes: &RowChanges<'_>,
+        original: &str,
+    ) -> Result<DataFrame, KrishivError> {
         // Spark analyzes the condition and the new values against the table before it finds that the
         // table cannot change: an unknown column is the error then.
         // Each assigned column is analyzed as a reference, so an unknown one is the analyzer's own
@@ -1037,16 +1002,20 @@ impl Session {
                         parts.remove(0);
                     }
                     super::row_level::Assignment {
+                        nested: parts.len() > 1,
                         column: parts.join("."),
                         value: (!crate::command::is_bare_default(value)).then(|| slice(value)),
                     }
                 })
                 .collect();
             let condition = changes.condition.map(slice);
-            if let Some(done) = self
-                .run_row_level(op, &quoted, &alias, condition.as_deref(), &assignments)
-                .await?
-            {
+            // The statement's hidden tables go at its end, a cancelled one's too.
+            let ran = super::row_level::Swept::new(
+                Arc::clone(&self.state.catalog),
+                self.run_row_level(op, &quoted, &alias, condition.as_deref(), &assignments),
+            )
+            .await;
+            if let Some(done) = ran? {
                 // The table's data changed: what read it is stale (as after an `INSERT`).
                 self.state.catalog.store.bump();
                 self.forget_column_stats(&name);
@@ -1059,6 +1028,95 @@ impl Session {
             operation: operation.to_owned(),
         }
         .into())
+    }
+
+    /// The table a row-level statement changes and the name it is read under: a Delta table by
+    /// path (`delta.`/path``, no catalog entry) as written, else a permanent table that may be
+    /// written by `operation`. The outer error is the name's or the path's own check; the inner one
+    /// is the target's refusal (`table_for_write`), which [`Self::row_level_target_checked`] orders
+    /// after the subqueries' time travel check, as Spark does.
+    async fn row_level_target(
+        &self,
+        table: &DdlName,
+        operation: &str,
+        env: &QueryEnv,
+    ) -> Result<Result<(TableName, String), KrishivError>, KrishivError> {
+        let name = self.table_name(table, env)?;
+        // `delta.`/path``: a Delta table by path (no catalog entry), read as its scans read it.
+        // The raw path beside its quoted form.
+        #[cfg(feature = "delta")]
+        let by_path = match crate::access::ddl_parts(table, env)?.as_slice() {
+            [format, path]
+                if format.eq_ignore_ascii_case("delta")
+                    && path.contains('/')
+                    && self
+                        .state
+                        .catalog
+                        .store
+                        .table(&name.namespace, &name.name)
+                        .is_none() =>
+            {
+                // The path as written: a table name is case-folded, a path is not.
+                Some((path.clone(), format!("delta.`{}`", path.replace('`', "``"))))
+            }
+            _ => None,
+        };
+        #[cfg(not(feature = "delta"))]
+        let by_path: Option<(String, String)> = None;
+        let quoted = match by_path {
+            Some((path, quoted)) => {
+                // The statement's own check named the target as a table; a table by path changes
+                // the files at that path, so `Modify` on it is asked first, as a Delta save to the
+                // path asks.
+                #[cfg(feature = "delta")]
+                {
+                    let qualified = self.qualify_path(&path)?;
+                    self.authorize_qualified_root(
+                        &qualified,
+                        &[Privilege::Modify],
+                        krishiv_sql::StatementClass::Write,
+                    )
+                    .await?;
+                }
+                #[cfg(not(feature = "delta"))]
+                let _ = path;
+                quoted
+            }
+            None => {
+                if let Err(refusal) = self.table_for_write(&name, operation, env) {
+                    return Ok(Err(refusal));
+                }
+                name.quoted()
+            }
+        };
+        Ok(Ok((name, quoted)))
+    }
+
+    /// [`Self::row_level_target`], then a time travel clause in the statement's subqueries: Spark
+    /// analyzes the subqueries before it finds the target cannot change, so a time travel clause in
+    /// one is the error then; a target that does not exist is reported first.
+    pub(crate) async fn row_level_target_checked(
+        &self,
+        table: &DdlName,
+        operation: &str,
+        env: &QueryEnv,
+        changes: &RowChanges<'_>,
+        original: &str,
+    ) -> Result<(TableName, String), KrishivError> {
+        match self.row_level_target(table, operation, env).await? {
+            Ok(target) => {
+                self.refuse_time_travel_in_subqueries(changes, original)
+                    .await?;
+                Ok(target)
+            }
+            Err(refusal) => {
+                if refusal.error_class().name() != "TABLE_OR_VIEW_NOT_FOUND" {
+                    self.refuse_time_travel_in_subqueries(changes, original)
+                        .await?;
+                }
+                Err(refusal)
+            }
+        }
     }
 
     /// Analyzes each subquery of a `DELETE`, `UPDATE` or `MERGE` on its own and refuses a time travel clause

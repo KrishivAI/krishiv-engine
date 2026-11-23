@@ -689,6 +689,36 @@ fn the_fault_store_delegates_and_flags_unscheduled_requests() {
 }
 
 #[test]
+fn a_context_without_memory_reserves_nothing_from_the_query() {
+    use krishiv_memory::{MemoryConfig, MemoryPool, TreePool};
+    rt().block_on(async {
+        let root = TreePool::new(&MemoryConfig::default());
+        let query = root.child("q", None);
+        let s = setup(IoConfig::default());
+        let io = s.io.clone().with_memory(Arc::clone(&query));
+        let detached = io.clone().without_memory();
+        assert!(detached.memory_pool().is_none());
+        assert!(
+            io.memory_pool().is_some(),
+            "the original keeps its consumer"
+        );
+        let f = put(&s, "m", 200_000).await;
+        let tail = detached.get_tail(&f, 0).await.unwrap();
+        assert_eq!(
+            query.reserved(),
+            0,
+            "the held tail is not charged to the query"
+        );
+        assert_eq!(
+            query.peak_reserved(),
+            0,
+            "the read never reserved from the query, not even for a moment"
+        );
+        drop(tail);
+    });
+}
+
+#[test]
 fn metadata_reads_and_the_cache_are_reserved() {
     use krishiv_memory::{MemoryConfig, MemoryPool, TreePool};
     rt().block_on(async {

@@ -4,6 +4,19 @@
 use super::*;
 
 impl Session {
+    /// The object stores one query's declared-catalog reads use: its configuration snapshot
+    /// `config`, the runtime's scheduler and the session's working directory.
+    pub(crate) fn declared_stores(
+        &self,
+        config: &Arc<krishiv_common::config::Config>,
+    ) -> crate::catalog_registry::ScopedStores {
+        crate::catalog_registry::ScopedStores::new(
+            Arc::clone(config),
+            Arc::clone(&self.state.io),
+            self.state.cwd.clone(),
+        )
+    }
+
     /// A query that reads something besides `system.*` is refused with `KRISHIV_SERVER_DRAINING`
     /// while the server drains (design P3-T066 §5.1); its row `log_id` closes as failed.
     pub(crate) fn refuse_query_while_draining(&self, log_id: &str) -> Result<(), KrishivError> {

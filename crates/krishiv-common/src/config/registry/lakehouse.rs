@@ -170,6 +170,42 @@ pub static CATALOG_DELEGATION_MAX_DISTINCT_EXCHANGES_PER_MINUTE: ConfigEntry = C
     spark_alias: None,
 };
 
+/// How long a vended storage credential without an expiry is used (P3-T067 §4.1).
+pub static CATALOG_VENDED_DEFAULT_TTL: ConfigEntry = ConfigEntry {
+    key: "krishiv.catalog.vendedDefaultTtl",
+    value_type: ValueType::Duration,
+    default: Some(ConfigValue::Duration(Duration::from_secs(15 * 60))),
+    doc: "How long a storage credential vended by a catalog with `storage = vended` is used when \
+          the catalog gives no expiry for it (`s3.session-token-expires-at-ms`, \
+          `gcs.oauth2.token-expires-at`, `adls.sas-token-expires-at-ms.<host>`). After it the \
+          credential is fetched again from the catalog. A credential that stops working earlier is \
+          refreshed once and the request retried. A value below twice `krishiv.io.credentials.refreshSkew` \
+          is allowed: the credential is then refreshed after half its lifetime. Must be positive: \
+          `0s` refuses startup when a catalog has `storage = vended`.",
+    scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
+    version_added: "0.2.0",
+    spark_alias: None,
+};
+
+/// Most vended credentials kept across all declared catalogs (P3-T067 §4.3).
+pub static CATALOG_VENDED_MAX_ENTRIES: ConfigEntry = ConfigEntry {
+    key: "krishiv.catalog.vended.maxEntries",
+    value_type: ValueType::PositiveInt,
+    default: Some(ConfigValue::Int(10_000)),
+    doc: "Most vended credential answers the server keeps across all declared catalogs, one per \
+          caller identity and table. The limit counts answers, not credentials: one answer can \
+          hold a credential for each storage prefix of the table. The least recently used answer \
+          is dropped first and fetched again \
+          from the catalog on its next use. An expired entry is never used again, but it leaves \
+          memory only at the next lookup or insert of the cache: while no query uses a vended \
+          catalog, an expired credential can stay in memory.",
+    scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
+    version_added: "0.2.0",
+    spark_alias: None,
+};
+
 /// How long one catalog call may take before it fails.
 pub static CATALOG_REQUEST_TIMEOUT: ConfigEntry = ConfigEntry {
     key: "krishiv.catalog.requestTimeout",

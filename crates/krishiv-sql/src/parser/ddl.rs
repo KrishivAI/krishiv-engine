@@ -24,7 +24,9 @@ use crate::ast::{
     Repair, RepairAction, ResourceType, SchemaBinding, SchemaBindingClause, SetExprKind, Show,
     ShowKind, ShowPattern, Span, SqlSecurity, Statement, Truncate, Update, UpdateAssignment,
 };
-use krishiv_common::error::{LegacyErrorTemp0035, LegacyErrorTemp0064, MergeWithoutWhen};
+use krishiv_common::error::{
+    LegacyErrorTemp0035, LegacyErrorTemp0064, MergeInsertValueCountMismatch, MergeWithoutWhen,
+};
 
 use crate::error::{self, ParseError};
 use crate::lexer::{Sym, TokenKind};
