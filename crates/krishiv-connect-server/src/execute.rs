@@ -46,6 +46,7 @@
 
 pub mod arrow;
 mod cache_command;
+mod catalog_call;
 #[cfg(test)]
 pub(crate) mod hooks;
 pub mod observed;
@@ -61,8 +62,8 @@ use crate::auth::{Check, check_command};
 use arrow_schema::SchemaRef;
 use futures::StreamExt;
 use krishiv_common::error::{
-    ConnectInvalidPlanDataframeNotFound, ConnectInvalidPlanInvalidEnum,
-    ConnectInvalidPlanInvalidOneOfFieldNotSet, ConnectInvalidPlanNotFoundCachedLocalRelation,
+    ConnectInvalidPlanCannotFindCachedLocalRelation, ConnectInvalidPlanDataframeNotFound,
+    ConnectInvalidPlanInvalidEnum, ConnectInvalidPlanInvalidOneOfFieldNotSet,
     ConnectInvalidPlanPlanSizeLargerThanMax, InternalError, InvalidCursorNotReattachable,
     KrishivError, OperationCanceled,
 };
@@ -75,8 +76,8 @@ use krishiv_connect::proto::v4_3::plan::OpType;
 use krishiv_connect::proto::v4_3::plan::compressed_operation::OpType as CompressedOpType;
 use krishiv_connect::translate::{
     CachedRemoteIds, Command as RunCommand, LocalRelations, LocalRequest, TranslateConf,
-    UdfHost as TranslateHost, cached_remote_table, command_not_supported, translate_command,
-    translate_relation_with,
+    UdfHost as TranslateHost, cached_remote_table, cached_request, command_not_supported,
+    translate_command, translate_relation_with,
 };
 use krishiv_connect::wire;
 use krishiv_memory::ConsumerHandle;
@@ -372,6 +373,8 @@ pub async fn execute_plan(
                     command_type: Some(pb::command::CommandType::SqlCommand(Box::new(command))),
                 };
                 crate::auth::enforce(&check_command(&wrapped), session).await?;
+                // A statement may call a function the tenant persisted.
+                load_persisted_udfs(entry).await;
                 let Some(pb::command::CommandType::SqlCommand(command)) = wrapped.command_type
                 else {
                     return Err(InternalError {
@@ -392,7 +395,7 @@ pub async fn execute_plan(
             match Box::pin(execution_plan(entry, plan, limits, &query_options)).await? {
                 Executed::Relation(requested) => {
                     let df = requested.frame(session, query_options).await?;
-                    let schema = df.schema().await?;
+                    let schema = df.schema_boxed().await?;
                     let schema_response = schema::proto_schema(&schema)?;
                     Ok(Prepared::Rows(
                         df,
@@ -641,6 +644,7 @@ async fn execution_plan(
     query_options: &QueryOptions,
 ) -> Result<Executed, KrishivError> {
     let session = entry.session();
+    load_persisted_udfs(entry).await;
     let decompressed = decompressed(plan, limits).await?;
     let mut udfs = InlineUdfs::execution(entry.python());
     let (translated, cached) =
@@ -663,6 +667,9 @@ async fn execution_plan(
             match run? {
                 RunCommand::RegisterPythonUdf(udf) => {
                     entry.python().register(session, udf)?;
+                }
+                RunCommand::PersistPythonFunction { name, drop } => {
+                    entry.python().persist(session, &name, drop).await?;
                 }
                 RunCommand::Checkpoint(spec) => {
                     // No operation id or tags on the source: the result is held by the session
@@ -690,6 +697,24 @@ async fn execution_plan(
             }
             Ok(Executed::Command)
         }
+    }
+}
+
+/// Loads the tenant's persisted Python UDFs into the session at its first request (P3-T072c), when the server has a
+/// function catalog and the principal holds `Usage` on `System("udf")`, the check a `register_function` takes. One
+/// check per session: a principal without it is refused once (one audit record) and gets nothing loaded.
+pub(crate) async fn load_persisted_udfs(entry: &SessionEntry) {
+    if !entry.python().load_pending() {
+        return;
+    }
+    let session = entry.session();
+    if crate::auth::enforce(&crate::auth::client_code(), session)
+        .await
+        .is_ok()
+    {
+        entry.python().load_persisted(session).await;
+    } else {
+        entry.python().skip_load();
     }
 }
 
@@ -867,29 +892,33 @@ async fn translate_locals(
 
 /// The relation of one request of the translator's first pass: an inline one through
 /// `Session::local_relation` (the IPC data decoded, a user schema applied eagerly, the batches
-/// held once in the session's relation store); a cached one through the artifact store.
+/// held once in the session's relation store); a cached one from this session's own
+/// `cache/<hash>` artifact, read as the inline `LocalRelation` it holds.
 ///
-/// The artifact store is not on this branch (T011/T015b), so no hash is ever found:
-/// `CONNECT_INVALID_PLAN.NOT_FOUND_CACHED_LOCAL_RELATION`, as Spark's block read of an unknown
-/// `cache/<hash>` (golden-pending: Spark's `CANNOT_FIND_CACHED_LOCAL_RELATION` for a hash the
-/// artifact manager never registered).
+/// The client's hash names an artifact of this session only: it never reaches the relation store,
+/// which a session shares with its children and which also holds registered memory tables
+/// (design P3-T012a §1, "Security: a client hash never reaches the relation store"). A hash the
+/// session does not hold is `CONNECT_INVALID_PLAN.CANNOT_FIND_CACHED_LOCAL_RELATION`, as Spark's
+/// `transformCachedLocalRelation` when the artifact manager has no block for it, whoever else
+/// holds that hash.
 async fn build_local_relation(
     entry: &SessionEntry,
     request: LocalRequest,
 ) -> Result<krishiv_plan::LocalRelation, KrishivError> {
-    match request {
-        LocalRequest::Inline { data, schema } => {
-            entry
-                .session()
-                .local_relation(data.as_deref(), schema)
-                .await
+    let (data, schema) = match request {
+        LocalRequest::Inline { data, schema } => (data, schema),
+        LocalRequest::Cached { hash } => {
+            let Some(bytes) = entry.artifacts().cached(&hash) else {
+                return Err(ConnectInvalidPlanCannotFindCachedLocalRelation { hash }.into());
+            };
+            cached_request(&bytes)?
         }
-        LocalRequest::Cached { hash } => Err(ConnectInvalidPlanNotFoundCachedLocalRelation {
-            hash,
-            session_u_u_i_d: entry.server_side_id().to_owned(),
-        }
-        .into()),
-    }
+        LocalRequest::Catalog(call) => return catalog_call::run(entry.session(), call).await,
+    };
+    entry
+        .session()
+        .local_relation(data.as_deref(), schema)
+        .await
 }
 
 /// The plan as the engine's IR: a ROOT relation translated, a compressed
@@ -1283,7 +1312,7 @@ async fn produce(
     sender.send(first).await?;
     #[cfg(test)]
     hooks::encoding(sender.op.id().as_str());
-    let mut stream: RecordBatchStream = df.execute_stream().await?;
+    let mut stream: RecordBatchStream = df.execute_stream_boxed().await?;
     let mut offset: i64 = 0;
     let mut sent = false;
     while let Some(batch) = stream.next().await {

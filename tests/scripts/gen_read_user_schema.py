@@ -78,9 +78,28 @@ def layout(spark, root):
     for tree, k in (("pyear", "2024"), ("pabc", "abc"), ("pdec2", "1.50"), ("pdec2", "-3.25"), ("pone", "1")):
         spark.sql("SELECT 'v' AS v").coalesce(1).write.parquet(f"{root}/{tree}/p/k={k}")
     # KN-1 merge review nit 3: trees a case adds a partition directory to after CREATE TEMPORARY VIEW.
-    for tree in ("pva", "pvb"):
+    for tree in ("pva", "pvb", "pvc", "pvd", "pve", "pvf", "pvg", "pvh"):
         for k in ("1", "2"):
             spark.sql(f"SELECT 'v{k}' AS v").coalesce(1).write.parquet(f"{root}/{tree}/p/k={k}")
+    # Follow-up of KN-1: discovered base paths (CONFLICTING_DIRECTORY_STRUCTURES and its message).
+    spark.sql("SELECT 'v1' AS v").coalesce(1).write.parquet(f"{root}/cdb/p/x/k=1")
+    spark.sql("SELECT 'v2' AS v").coalesce(1).write.parquet(f"{root}/cdb/p/k=2")
+    spark.sql("SELECT 'v1' AS v").coalesce(1).write.parquet(f"{root}/cda/p/k=1/j=1")
+    spark.sql("SELECT 'v2' AS v").coalesce(1).write.parquet(f"{root}/cda/p/k=2")
+    spark.sql("SELECT 'v0' AS v").coalesce(1).write.parquet(f"{root}/cdc/p")
+    spark.sql("SELECT 'v1' AS v").coalesce(1).write.parquet(f"{root}/cdc/p/k=1")
+    # Review of the follow-up: a root file's columns still count for the data schema (`allFiles()`).
+    spark.sql("SELECT 1 AS a").coalesce(1).write.parquet(f"{root}/cdm/p")
+    spark.sql("SELECT 'v1' AS b").coalesce(1).write.parquet(f"{root}/cdm/p/k=1")
+    spark.sql("SELECT 'v1' AS v").coalesce(1).write.parquet(f"{root}/cde/a/k=1")
+    spark.sql("SELECT 'v2' AS v").coalesce(1).write.parquet(f"{root}/cde/b/k=2")
+    spark.sql("SELECT 'v1' AS v").coalesce(1).write.parquet(f"{root}/cdg/p/k=1/j=1")
+    spark.sql("SELECT 'v2' AS v").coalesce(1).write.parquet(f"{root}/cdg/p/k=2/j=1")
+    spark.sql("SELECT 'v1' AS v").coalesce(1).write.parquet(f"{root}/cdf/p/k=1")
+    spark.sql("SELECT 'v2' AS v").coalesce(1).write.parquet(f"{root}/cdf/p/j=2")
+    # Review of the follow-up: partition column names that differ only in a non-ASCII case.
+    spark.sql("SELECT 'v1' AS v").coalesce(1).write.parquet(f"{root}/cdu/p/\u00c9=1")
+    spark.sql("SELECT 'v2' AS v").coalesce(1).write.parquet(f"{root}/cdu/p/\u00e9=2")
     for tree, k in (("pfrac", "1.5"), ("pspace", " 1"), ("pplus", "+1"), ("pzeros", "007")):
         spark.sql("SELECT 'v' AS v").coalesce(1).write.parquet(f"{root}/{tree}/p/k={k}")
     for name, values in (
@@ -586,6 +605,141 @@ def cases(spark, root):
         "sql view partition column added after create",
         "CREATE TEMPORARY VIEW v11 (v STRING, k INT) USING parquet OPTIONS (path pvb/p); then pvb/p/k=3/j=1 written",
         view_then_add("v11", "pvb/p", "pvb/p/k=3/j=1"),
+    )
+
+    # Follow-up of KN-1: what else the listing of CREATE keeps, and REFRESH TABLE.
+    def write_v3(path):
+        spark.sql("SELECT 'v3' AS v").coalesce(1).write.parquet(p(path))
+
+    def view_then(name, path, change, cols="(v STRING, k INT) ", refresh=False):
+        def thunk():
+            spark.sql(f"DROP VIEW IF EXISTS {name}")
+            spark.sql(f"CREATE TEMPORARY VIEW {name} {cols}USING parquet OPTIONS (path '{p(path)}')")
+            change()
+            if refresh:
+                spark.sql(f"REFRESH TABLE {name}")
+            return spark.sql(f"SELECT * FROM {name}")
+
+        return thunk
+
+    def add_file_to(path):
+        def change():
+            write_v3(path + "_new")
+            part = next(f for f in os.listdir(p(path + "_new")) if f.endswith(".parquet"))
+            shutil.move(f"{p(path + '_new')}/{part}", f"{p(path)}/added.parquet")
+            shutil.rmtree(p(path + "_new"))
+
+        return change
+
+    add(
+        "sql view inferred, partition value added after create",
+        "CREATE TEMPORARY VIEW v12 USING parquet OPTIONS (path pvc/p); then pvc/p/k=3 written",
+        view_then("v12", "pvc/p", lambda: write_v3("pvc/p/k=3"), cols=""),
+    )
+    add(
+        "sql view file added to a partition after create",
+        "CREATE TEMPORARY VIEW v13 (v STRING, k INT) USING parquet OPTIONS (path pvd/p); then a file added to "
+        "pvd/p/k=1",
+        view_then("v13", "pvd/p", add_file_to("pvd/p/k=1")),
+    )
+    add(
+        "sql view refreshed after a partition value added",
+        "CREATE TEMPORARY VIEW v14 (v STRING, k INT) USING parquet OPTIONS (path pve/p); then pve/p/k=3 written; "
+        "REFRESH TABLE v14",
+        view_then("v14", "pve/p", lambda: write_v3("pve/p/k=3"), refresh=True),
+    )
+    add(
+        "sql view partition directory deleted after create",
+        "CREATE TEMPORARY VIEW v15 (v STRING, k INT) USING parquet OPTIONS (path pvf/p); then pvf/p/k=2 deleted",
+        view_then("v15", "pvf/p", lambda: shutil.rmtree(p("pvf/p/k=2"))),
+    )
+    add(
+        "sql view refreshed after a partition column added",
+        "CREATE TEMPORARY VIEW v16 (v STRING, k INT) USING parquet OPTIONS (path pvg/p); then pvg/p/k=3/j=1 "
+        "written; REFRESH TABLE v16",
+        view_then("v16", "pvg/p", lambda: write_v3("pvg/p/k=3/j=1"), refresh=True),
+    )
+
+    def df_view_then_add():
+        spark.read.parquet(p("pvh/p")).createOrReplaceTempView("v17")
+        write_v3("pvh/p/k=3")
+        return spark.sql("SELECT * FROM v17")
+
+    add(
+        "dataframe view partition value added after create",
+        "spark.read.parquet(pvh/p).createOrReplaceTempView(v17); then pvh/p/k=3 written",
+        df_view_then_add,
+    )
+    add(
+        "partition directory under a plain directory",
+        "parquet cdb/p (files in cdb/p/x/k=1 and cdb/p/k=2)",
+        lambda: spark.read.parquet(p("cdb/p")),
+    )
+    add(
+        "partition directories of two depths",
+        "parquet cda/p (files in cda/p/k=1/j=1 and cda/p/k=2)",
+        lambda: spark.read.parquet(p("cda/p")),
+    )
+    add(
+        "files at the root beside a partition directory",
+        "parquet cdc/p (files in cdc/p and cdc/p/k=1)",
+        lambda: spark.read.parquet(p("cdc/p")),
+    )
+    add(
+        "two partitioned roots",
+        "parquet cde/a, cde/b (files in cde/a/k=1 and cde/b/k=2)",
+        lambda: spark.read.parquet(p("cde/a"), p("cde/b")),
+    )
+    add(
+        "a glob over partition directories",
+        "parquet cdg/p/k={1,2} (files in cdg/p/k=1/j=1, cdg/p/k=2/j=1)",
+        lambda: spark.read.parquet(p("cdg/p/k={1,2}")),
+    )
+    add(
+        "a glob matching one partition directory",
+        "parquet cdg/p/k={1,3} (files in cdg/p/k=1/j=1, cdg/p/k=2/j=1)",
+        lambda: spark.read.parquet(p("cdg/p/k={1,3}")),
+    )
+    add(
+        "partition column names differ",
+        "parquet cdf/p (files in cdf/p/k=1 and cdf/p/j=2)",
+        lambda: spark.read.parquet(p("cdf/p")),
+    )
+    # Review of the follow-up: `ignoreInvalidPartitionPaths` (option, else the conf) skips the base-path check only.
+    ignore = {"ignoreInvalidPartitionPaths": "true"}
+    for name, paths in (
+        ("two partitioned roots", ("cde/a", "cde/b")),
+        ("a glob over partition directories", ("cdg/p/k={1,2}",)),
+        ("partition directory under a plain directory", ("cdb/p",)),
+        ("files at the root beside a partition directory", ("cdc/p",)),
+        ("partition column names differ", ("cdf/p",)),
+    ):
+        add(
+            f"{name}, ignoreInvalidPartitionPaths option",
+            f"parquet {', '.join(paths)} with option ignoreInvalidPartitionPaths=true",
+            lambda paths=paths: spark.read.options(**ignore).parquet(*[p(x) for x in paths]),
+        )
+    add(
+        "two partitioned roots, ignoreInvalidPartitionPaths conf",
+        "parquet cde/a, cde/b with spark.sql.files.ignoreInvalidPartitionPaths=true",
+        lambda: spark.read.parquet(p("cde/a"), p("cde/b")),
+        conf={"spark.sql.files.ignoreInvalidPartitionPaths": "true"},
+    )
+    add(
+        "two partitioned roots, option false over conf true",
+        "parquet cde/a, cde/b with option ignoreInvalidPartitionPaths=false and the conf true",
+        lambda: spark.read.option("ignoreInvalidPartitionPaths", "false").parquet(p("cde/a"), p("cde/b")),
+        conf={"spark.sql.files.ignoreInvalidPartitionPaths": "true"},
+    )
+    add(
+        "files at the root beside a partition directory, mergeSchema",
+        "parquet cdm/p with mergeSchema (a in cdm/p, b in cdm/p/k=1)",
+        lambda: spark.read.option("mergeSchema", "true").parquet(p("cdm/p")),
+    )
+    add(
+        "partition column names differing in non-ASCII case",
+        "parquet cdu/p (files in cdu/p/\u00c9=1 and cdu/p/\u00e9=2)",
+        lambda: spark.read.parquet(p("cdu/p")),
     )
     return out
 

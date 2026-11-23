@@ -145,7 +145,7 @@ pub struct ExplainNode {
 pub struct Node {
     #[prost(
         oneof = "node::Kind",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 22, 23, 21, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 22, 23, 21, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35"
     )]
     pub kind: ::core::option::Option<node::Kind>,
 }
@@ -241,6 +241,9 @@ pub mod node {
         /// feature: python_udtf
         #[prost(message, tag = "34")]
         PythonUdtf(super::PythonUdtfNode),
+        /// feature: tail
+        #[prost(message, tag = "35")]
+        Tail(super::TailNode),
     }
 }
 /// feature: table_write
@@ -338,6 +341,15 @@ pub struct SampleNode {
     pub upper: f64,
     #[prost(int64, tag = "4")]
     pub seed: i64,
+}
+/// feature: tail
+/// `Dataset.tail`: the last `limit` rows of `input` in plan order.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct TailNode {
+    #[prost(uint32, tag = "1")]
+    pub input: u32,
+    #[prost(uint64, tag = "2")]
+    pub limit: u64,
 }
 /// feature: observe
 /// `Dataset.observe`: the rows of `input` pass through unchanged while the
@@ -1178,6 +1190,34 @@ pub struct SortMergeJoinNode {
     pub residual: ::core::option::Option<Residual>,
     #[prost(bool, tag = "8")]
     pub single_match: bool,
+    /// feature: as_of_join
+    #[prost(message, optional, tag = "9")]
+    pub as_of: ::core::option::Option<AsOfMerge>,
+}
+/// feature: as_of_join
+/// An as-of join's match: the as-of column of each input, the direction and whether an equal
+/// value matches.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct AsOfMerge {
+    /// feature: as_of_join
+    #[prost(uint64, tag = "1")]
+    pub left_column: u64,
+    /// feature: as_of_join
+    #[prost(uint64, tag = "2")]
+    pub right_column: u64,
+    /// feature: as_of_join
+    #[prost(enumeration = "AsOfMergeDirection", tag = "3")]
+    pub direction: i32,
+    /// feature: as_of_join
+    #[prost(bool, tag = "4")]
+    pub allow_exact: bool,
+    /// feature: as_of_join
+    #[prost(message, optional, tag = "5")]
+    pub distance: ::core::option::Option<Residual>,
+    /// feature: as_of_join
+    /// The distance counts on every passing pair, in both directions (Spark's Connect form).
+    #[prost(bool, tag = "6")]
+    pub distance_on_every_pair: bool,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct NestedLoopJoinNode {
@@ -1271,6 +1311,20 @@ pub struct WritePlan {
     /// Input columns whose Spark type their Arrow type doesn't say.
     #[prost(message, repeated, tag = "9")]
     pub column_types: ::prost::alloc::vec::Vec<WriteColumnType>,
+    /// feature: write_bucketed
+    /// Bucketed output: the input column with each row's bucket id, and the columns each bucket is sorted by.
+    #[prost(message, optional, tag = "10")]
+    pub bucket: ::core::option::Option<WriteBucket>,
+}
+/// feature: write_bucketed
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct WriteBucket {
+    /// feature: write_bucketed
+    #[prost(uint64, tag = "1")]
+    pub column: u64,
+    /// feature: write_bucketed
+    #[prost(uint64, repeated, tag = "2")]
+    pub sort_by: ::prost::alloc::vec::Vec<u64>,
 }
 /// feature: write_column_types
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
@@ -1694,8 +1748,10 @@ pub struct DataType {
     #[prost(uint32, tag = "3")]
     pub scale: u32,
     /// feature: nested_types
-    /// `KIND_NESTED` only: an array, map or struct type as Spark's JSON form
+    /// `KIND_NESTED`: an array, map or struct type as Spark's JSON form
     /// (`DataType.json`), which keeps nullability and field metadata.
+    /// `KIND_UDT`: the user-defined type as Spark's JSON form (class names and
+    /// the storage type).
     #[prost(string, tag = "4")]
     pub json: ::prost::alloc::string::String,
     /// feature: geo_types
@@ -1774,6 +1830,8 @@ pub mod data_type {
         CollatedString = 22,
         /// feature: variant_type
         Variant = 23,
+        /// feature: udt_type
+        Udt = 24,
     }
     impl Kind {
         /// String value of the enum field names used in the ProtoBuf definition.
@@ -1806,6 +1864,7 @@ pub mod data_type {
                 Self::CalendarInterval => "KIND_CALENDAR_INTERVAL",
                 Self::CollatedString => "KIND_COLLATED_STRING",
                 Self::Variant => "KIND_VARIANT",
+                Self::Udt => "KIND_UDT",
             }
         }
         /// Creates an enum from field names used in the ProtoBuf definition.
@@ -1835,6 +1894,7 @@ pub mod data_type {
                 "KIND_CALENDAR_INTERVAL" => Some(Self::CalendarInterval),
                 "KIND_COLLATED_STRING" => Some(Self::CollatedString),
                 "KIND_VARIANT" => Some(Self::Variant),
+                "KIND_UDT" => Some(Self::Udt),
                 _ => None,
             }
         }
@@ -2607,6 +2667,36 @@ impl JoinType {
             "JOIN_TYPE_RIGHT_OUTER" => Some(Self::RightOuter),
             "JOIN_TYPE_EXISTENCE" => Some(Self::Existence),
             "JOIN_TYPE_FULL_OUTER" => Some(Self::FullOuter),
+            _ => None,
+        }
+    }
+}
+/// feature: as_of_join
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum AsOfMergeDirection {
+    Unspecified = 0,
+    Backward = 1,
+    Forward = 2,
+}
+impl AsOfMergeDirection {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "AS_OF_MERGE_DIRECTION_UNSPECIFIED",
+            Self::Backward => "AS_OF_MERGE_DIRECTION_BACKWARD",
+            Self::Forward => "AS_OF_MERGE_DIRECTION_FORWARD",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "AS_OF_MERGE_DIRECTION_UNSPECIFIED" => Some(Self::Unspecified),
+            "AS_OF_MERGE_DIRECTION_BACKWARD" => Some(Self::Backward),
+            "AS_OF_MERGE_DIRECTION_FORWARD" => Some(Self::Forward),
             _ => None,
         }
     }

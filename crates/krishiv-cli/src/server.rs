@@ -36,7 +36,8 @@ use krishiv_common::config::{
     CONNECT_ADDRESS, CONNECT_PORT, Config, ConfigValue, IO_EGRESS_PRIVATE_ADDRESSES,
     METRICS_ENABLED, SERVER_ALLOW_CORE_DUMPS, SERVER_METRICS_PUBLIC,
     SERVER_READINESS_FAILURE_THRESHOLD, SERVER_READINESS_INTERVAL, SERVER_READINESS_REQUIRED,
-    SERVER_READINESS_TIMEOUT, SERVER_SHUTDOWN_TIMEOUT, UI_ALLOWED_HOSTS, UI_ENABLED,
+    SERVER_READINESS_TIMEOUT, SERVER_SHUTDOWN_TIMEOUT, UI_ALLOWED_HOSTS, UI_ALLOWED_ORIGINS,
+    UI_EMBED_HIDE_ATTRIBUTION, UI_EMBED_LINK_TTL, UI_ENABLED,
 };
 use krishiv_connect_server::{
     ConnectAuth, ConnectServer, ConnectServerConfig, SessionLimits, SessionManager, host,
@@ -232,6 +233,13 @@ fn serve(args: &ServerArgs) -> Result<(), String> {
     let mut builder = EngineRuntime::builder();
     let host = resolve_host(args.host, &settings.config)?;
     check_host(host, &settings)?;
+    // The `krishiv.auth.*` settings as given (references, never resolved), for the admin `GetConfig`.
+    let startup_auth: Vec<(String, String)> = args
+        .conf
+        .iter()
+        .filter(|(k, _)| is_auth_key(k))
+        .cloned()
+        .collect();
     let Settings {
         config,
         auth: auth_config,
@@ -279,6 +287,7 @@ fn serve(args: &ServerArgs) -> Result<(), String> {
         run_listeners(
             runtime,
             &config,
+            startup_auth,
             auth,
             tls,
             SocketAddr::new(host, connect_port),
@@ -290,6 +299,41 @@ fn serve(args: &ServerArgs) -> Result<(), String> {
     // the tokio runtime ends the tasks that were left.
     drop(tokio);
     result
+}
+
+/// Keeps persisted Python UDFs in the SQLite catalog named by `krishiv.connect.pythonFunctions.catalog` (P3-T072c).
+///
+/// # Errors
+/// The file cannot be opened, or the key is set in a build without the `python-function-catalog` feature.
+fn with_function_catalog(
+    manager: SessionManager,
+    config: &Config,
+) -> Result<SessionManager, String> {
+    let Some(path) = config
+        .get(&krishiv_common::config::CONNECT_PYTHON_FUNCTIONS_CATALOG)
+        .and_then(krishiv_common::config::ConfigValue::as_str)
+    else {
+        return Ok(manager);
+    };
+    #[cfg(feature = "python-function-catalog")]
+    {
+        let catalog = krishiv_catalogs::sqlite::SqliteCatalog::open(
+            "python_functions",
+            std::path::Path::new(path),
+            false,
+        )
+        .map_err(|e| format!("cannot open the Python function catalog: {e}"))?;
+        Ok(
+            manager.with_function_store(Arc::new(
+                krishiv_connect_server::SqliteFunctionStore::new(Arc::new(catalog)),
+            )),
+        )
+    }
+    #[cfg(not(feature = "python-function-catalog"))]
+    {
+        let _ = (manager, path);
+        Err("krishiv.connect.pythonFunctions.catalog needs a build with the `python-function-catalog` feature".to_owned())
+    }
 }
 
 /// The declared catalogs' setup in server mode, with the factories this build compiles in.
@@ -394,6 +438,7 @@ fn duration(
 async fn run_listeners(
     runtime: Arc<EngineRuntime>,
     config: &Config,
+    startup_auth: Vec<(String, String)>,
     auth: ServerAuth,
     tls: Option<ServerTls>,
     connect_addr: SocketAddr,
@@ -428,6 +473,7 @@ async fn run_listeners(
             .map_err(|e| format!("cannot start the Python UDF worker pool: {e}"))?;
         manager.with_udf_host(Arc::new(pool))
     };
+    let manager = with_function_catalog(manager, config)?;
     let manager = Arc::new(manager);
     let connect_listener = TcpListener::bind(connect_addr)
         .await
@@ -510,6 +556,7 @@ async fn run_listeners(
         guard,
         authenticated.then(|| Arc::clone(&auth)),
         &ops,
+        startup_auth,
         admin_bound,
         tls.is_some(),
         Arc::clone(&late_metrics),
@@ -655,6 +702,7 @@ fn admin_router(
     guard: Arc<dyn Guard>,
     auth: Option<Arc<ServerAuth>>,
     ops: &Arc<krishiv_server::admin_v1::DrainOps>,
+    startup_auth: Vec<(String, String)>,
     bound: SocketAddr,
     tls: bool,
     late: LateMetrics,
@@ -704,14 +752,16 @@ fn admin_router(
         Arc::new(
             krishiv_server::admin_v1::SessionAdmin::new(Arc::clone(runtime))
                 .with_denials(admin_denials)
+                .with_startup_auth(startup_auth)
                 .with_ops(Arc::clone(ops)),
         ),
         Arc::clone(&guard),
         krishiv_server::admin_v1::AdminConfig::for_listener(bound.ip(), allowed_hosts),
     );
     let base = if cfg!(feature = "ui") && flag(config, &UI_ENABLED, true) {
-        let mut source = krishiv_server::session_source::SessionSource::new(Arc::clone(runtime))
+        let source = krishiv_server::session_source::SessionSource::new(Arc::clone(runtime))
             .map_err(|e| e.to_string())?;
+        let mut source = with_stored_history(source, config);
         if let Some(denials) = denials {
             // The editor runs a statement as the authenticated caller, in the session a Spark Connect session of
             // that caller gets: the same role matrix and path confinement.
@@ -738,12 +788,34 @@ fn admin_router(
             .unwrap_or("")
             .to_owned();
         let from_env = std::env::var("KRISHIV_UI_ALLOWED_HOSTS").unwrap_or_default();
+        // Who may frame the embeddable views (T071): invalid origins stop the start, as a bad host would not.
+        let origins = krishiv_server::embed::parse_origins(
+            config
+                .get(&UI_ALLOWED_ORIGINS)
+                .and_then(ConfigValue::as_str)
+                .unwrap_or(""),
+        )?;
+        let embed = krishiv_server::embed::EmbedPolicy::new(
+            origins,
+            config
+                .get(&UI_EMBED_HIDE_ATTRIBUTION)
+                .and_then(ConfigValue::as_bool)
+                .unwrap_or(false),
+            match config.get(&UI_EMBED_LINK_TTL) {
+                Some(ConfigValue::Duration(d)) => *d,
+                _ => match UI_EMBED_LINK_TTL.default {
+                    Some(ConfigValue::Duration(d)) => d,
+                    _ => std::time::Duration::from_secs(300),
+                },
+            },
+        );
         let policy = krishiv_server::pages::UiPolicy::for_listener(
             bound.ip().is_loopback(),
             configured.split(',').chain(from_env.split(',')),
         )
         // The session cookie holds the bearer token: over TLS it never travels in the clear.
-        .secure_cookie(tls);
+        .secure_cookie(tls)
+        .with_embed(embed);
         krishiv_server::internal::router_with_ui_policy(Arc::new(source), guard, policy)
     } else {
         krishiv_server::api_router()
@@ -765,6 +837,31 @@ fn admin_router(
         app,
         krishiv_server::admin::HttpLimits::default(),
     ))
+}
+
+/// `source` with the history of earlier runs of the server, read from the store this run writes to
+/// (`krishiv.history.path`). A store that does not read costs the old history, not the server.
+#[expect(clippy::print_stderr, reason = "CLI binary: stderr is its interface")]
+fn with_stored_history(
+    source: krishiv_server::session_source::SessionSource,
+    config: &Config,
+) -> krishiv_server::session_source::SessionSource {
+    let Some(dir) = config
+        .get(&krishiv_common::config::HISTORY_PATH)
+        .and_then(ConfigValue::as_str)
+        .filter(|p| !p.is_empty())
+    else {
+        return source;
+    };
+    match krishiv_session::read_profile_history(std::path::Path::new(dir)) {
+        Ok(stored) => source.with_stored_history(&stored),
+        Err(e) => {
+            eprintln!(
+                "warning: the stored query history was not read ({e}); the console lists this run only"
+            );
+            source
+        }
+    }
 }
 
 /// Whether `/metrics` is on and behind the admin token: it is open only on
@@ -841,10 +938,34 @@ async fn reload_on_hangup(tls: ServerTls, hangups: Hangups) {
 async fn watch_signals(mut signals: Signals, drainer: Arc<Drainer>, grace: Duration) {
     signals.next().await;
     eprintln!("krishiv server: draining (a second signal exits at once)");
+    signal_action(&format!(
+        "grace {}s, exit_when_drained true",
+        grace.as_secs()
+    ));
     drainer.start(grace, true);
     signals.next().await;
     eprintln!("krishiv server: second signal, exiting");
+    signal_action("second signal, exit at once");
     std::process::exit(130);
+}
+
+/// The action record (`krishiv::admin_action`) for a drain the operating system asked for, so the
+/// log shows every drain, not only the ones made through `admin.v1` (design P3-T066 §5.6). The
+/// caller is the process's own signal handler: no principal, no secret.
+fn signal_action(target: &str) {
+    krishiv_server::admin_v1::action::record(&krishiv_server::admin_v1::action::Action {
+        principal: "signal",
+        role: "none",
+        auth_method: "none",
+        rpc: "Drain",
+        transport: "signal",
+        target,
+        own: false,
+        request_id: "",
+        result: "ok",
+        error_class: "",
+        replay: false,
+    });
 }
 
 /// What starts, drives and undoes a drain: the signal handler and the admin API's `Drain` /

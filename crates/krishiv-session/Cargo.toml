@@ -41,6 +41,8 @@ sha2.workspace = true
 twox-hash = { workspace = true, features = ["xxhash3_128"] }
 # Selector patterns of the resource group file (`resource_groups/config.rs`).
 regex-lite.workspace = true
+# Metric-view YAML bodies (`metric_view/yaml.rs`).
+saphyr-parser.workspace = true
 # Warnings from analysis and planning are logged, as Spark logs them.
 tracing.workspace = true
 # A oneshot channel back from tasks on the session's executor; `rt` to
@@ -67,8 +69,13 @@ object_store = { workspace = true, features = ["fs"] }
 # The persisted query history (`profile_history.rs`): Parquet segments of finished queries' profiles.
 parquet = { workspace = true, features = ["arrow"] }
 
+# The effective user id of a group-file replace (design P3-T066 §5.4); safe API, Unix only.
+[target.'cfg(unix)'.dependencies]
+rustix.workspace = true
+
 [dev-dependencies]
 bytes.workspace = true
+krishiv-alloc = { path = "../krishiv-alloc", features = ["heap-stats"] }
 krishiv-plan = { path = "../krishiv-plan", version = "=0.2.1", features = ["testing"] }
 arrow-select.workspace = true
 futures = { workspace = true, features = ["alloc", "executor"] }
@@ -134,6 +141,10 @@ required-features = ["delta"]
 
 [[test]]
 name = "delta_writes"
+required-features = ["delta"]
+
+[[test]]
+name = "delta_dml"
 required-features = ["delta"]
 
 # The S3 round trip needs the S3 builder and an emulator (`KRISHIV_TEST_S3_ENDPOINT`).

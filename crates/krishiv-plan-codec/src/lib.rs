@@ -66,7 +66,12 @@
 
 mod arrow;
 mod decode;
+mod decode_aggregate;
+mod decode_asof;
+mod decode_bucket;
 mod decode_sketch;
+mod decode_tail;
+mod decode_udt;
 mod encode;
 mod error;
 pub mod features;

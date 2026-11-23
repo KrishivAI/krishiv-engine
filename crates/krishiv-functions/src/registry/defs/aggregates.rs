@@ -212,6 +212,26 @@ pub(super) fn vector(c: &CallTypes<'_>, name: &str) -> Result<ArgType, KrishivEr
     ))
 }
 
+/// `collect_union(x)`: `x` must be an array (`DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE` otherwise, with no implicit
+/// cast declared); the result has the type of `x`, never NULL.
+pub(super) fn collect_union(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    let sql = c.sql(0).unwrap_or_default();
+    let Some(t @ DataType::Array(_)) = c.data_type(0) else {
+        let input = c
+            .data_type(0)
+            .map_or_else(|| "VOID".to_owned(), DataType::sql);
+        return Err(DatatypeMismatchUnexpectedInputType {
+            sql_expr: format!("\"collect_union({sql})\""),
+            param_index: "first".to_owned(),
+            required_type: "\"ARRAY\"".to_owned(),
+            input_sql: format!("\"{sql}\""),
+            input_type: format!("\"{input}\""),
+        }
+        .into());
+    };
+    Ok(ArgType::new(t.clone(), false))
+}
+
 pub(super) fn vector_sum(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     vector(c, "vector_sum")
 }
@@ -519,6 +539,12 @@ pub(super) fn aggregates() -> Vec<Spec> {
             collect_set,
             Aggregate::CollectSet,
         ),
+        aggregate(
+            "collect_union",
+            Inputs::Any,
+            collect_union,
+            Aggregate::CollectUnion,
+        ),
         aggregate("array_agg", Inputs::Any, collect, Aggregate::CollectList),
         aggregate("vector_sum", Inputs::Any, vector_sum, Aggregate::VectorSum),
         aggregate("vector_avg", Inputs::Any, vector_avg, Aggregate::VectorAvg),
@@ -546,6 +572,14 @@ pub(super) fn aggregates() -> Vec<Spec> {
         // `WITHIN GROUP` forms itself (see `mode_call`); the plain call
         // takes any single value.
         aggregate("mode", Inputs::Any, mode, Aggregate::Mode),
+        // Spark 4.2 metric views (`Measure`): unevaluable; an aggregate over a metric view replaces it
+        // with the measure's expression, and planning refuses one left in a plan.
+        aggregate(
+            "measure",
+            Inputs::Expects(vec![InputType::Any]),
+            min_max,
+            Aggregate::Measure,
+        ),
         // `listagg(expr[, delimiter])`: the analyzer fills a missing
         // delimiter with NULL and lowers `WITHIN GROUP` into the ordering
         // keys (see `listagg_call`); `string_agg` is its alias, resolved

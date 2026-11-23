@@ -64,6 +64,7 @@ use crate::variables::SessionVariables;
 
 mod context;
 mod lifecycle;
+mod traits;
 #[cfg(feature = "unstable-ir")]
 pub use lifecycle::{SqlOutcome, SqlQuery};
 #[cfg(test)]
@@ -71,15 +72,6 @@ mod run_task;
 
 /// The store id of the local file system.
 pub(crate) const LOCAL_STORE: &str = "file";
-
-/// Now, as microseconds since the epoch.
-fn query_start_micros() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .ok()
-        .and_then(|d| i64::try_from(d.as_micros()).ok())
-        .unwrap_or_default()
-}
 
 /// A stream of result batches; dropping it cancels the query.
 pub type RecordBatchStream = BoxStream<'static, Result<RecordBatch, KrishivError>>;
@@ -131,15 +123,6 @@ pub struct Session {
     pub(crate) inbound_baggage: Arc<[(String, String)]>,
     /// The authentication of the request that started the statement, for delegated catalogs.
     pub(crate) request_inbound: Option<crate::catalog_registry::Inbound>,
-}
-
-impl fmt::Debug for Session {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Session")
-            .field("profile", &self.state.profile)
-            .field("principal", &self.state.principal.name)
-            .finish_non_exhaustive()
-    }
 }
 
 pub(crate) struct SessionState {
@@ -212,19 +195,6 @@ pub(crate) struct SessionState {
     pub(crate) inbound: Mutex<Option<crate::catalog_registry::Inbound>>,
 }
 
-impl Drop for SessionState {
-    fn drop(&mut self) {
-        self.runtime.sessions.retire(self.number, || {
-            crate::sessions::SessionRow::of(
-                self,
-                Some(crate::sessions::End::Closed("client_gone")),
-                0,
-            )
-        });
-        self.runtime.forget_session(self.number);
-    }
-}
-
 /// Builds a [`Session`].
 ///
 /// ```
@@ -248,6 +218,7 @@ pub struct SessionBuilder {
     functions: Option<Arc<dyn FunctionRegistry>>,
     runtime: Option<Arc<EngineRuntime>>,
     admission: Option<Arc<dyn AdmissionController>>,
+    source: Option<String>,
 }
 
 impl fmt::Debug for SessionBuilder {
@@ -295,6 +266,21 @@ impl SessionBuilder {
     /// ```
     pub fn principal(mut self, principal: Principal) -> Self {
         self.principal = Some(principal);
+        self
+    }
+
+    /// Who the session says its client is, shown as `system.sessions.client_type` and matched by
+    /// the `source` selector of a resource group (design P3-T003 §3; Python sets
+    /// `krishiv-python`). Client-asserted: a routing hint, never an identity. A front end that
+    /// reports its own client type later does not replace it. `new_session` does not inherit it
+    /// (a Connect manager's sessions take each client's own type).
+    ///
+    /// ```
+    /// let s = krishiv_session::Session::builder().source("etl-job").build()?;
+    /// # Ok::<(), krishiv_common::error::KrishivError>(())
+    /// ```
+    pub fn source(mut self, source: impl Into<String>) -> Self {
+        self.source = Some(source.into());
         self
     }
 
@@ -437,7 +423,11 @@ impl SessionBuilder {
             functions: self.functions,
             admission: self.admission,
         };
-        Ok(Session::on_runtime(runtime, config, parts))
+        let session = Session::on_runtime(runtime, config, parts);
+        if let Some(source) = self.source.as_deref() {
+            session.state.activity.set_client(Some(source), None, None);
+        }
+        Ok(session)
     }
 }
 
@@ -479,6 +469,7 @@ impl Session {
             functions: None,
             runtime: None,
             admission: None,
+            source: None,
         }
     }
 
@@ -638,6 +629,14 @@ impl Session {
                 let ids = (&*env.identifier_spans, &*env.identifier_written);
                 self.exec_create_permanent_view(&v, query, ids).await
             }
+            Statement::CreateMetricView(v) => {
+                if let Some(e) =
+                    ran::metric_view_gate_error(&v, self.state.profile, query, redacted)
+                {
+                    return Err(e);
+                }
+                self.exec_create_metric_view(&v, query).await
+            }
             Statement::DropPermanentView(d) => self.exec_drop_permanent_view(&d).await,
             Statement::AlterView(a) => {
                 let ids = (&*env.identifier_spans, &*env.identifier_written);
@@ -682,6 +681,9 @@ impl Session {
                     targets: &[],
                     values: &[],
                     condition: d.where_clause.as_ref(),
+                    options: &d.options,
+                    more: &[],
+                    sources: &[],
                 };
                 self.exec_row_level_change(&d.table, d.alias.as_ref(), "DELETE", &changes, query)
                     .await
@@ -693,6 +695,9 @@ impl Session {
                     targets: &targets,
                     values: &values,
                     condition: u.where_clause.as_ref(),
+                    options: &u.options,
+                    more: &[],
+                    sources: &[],
                 };
                 self.exec_row_level_change(
                     &u.table,
@@ -704,10 +709,31 @@ impl Session {
                 .await
             }
             Statement::Merge(m) => {
+                let more: Vec<&krishiv_sql::ast::Expr> = std::iter::once(&m.on)
+                    .chain(m.clauses.iter().flat_map(|c| {
+                        let action: Vec<&krishiv_sql::ast::Expr> = match &c.action {
+                            krishiv_sql::ast::MergeAction::Update(assignments) => {
+                                assignments.iter().map(|a| &a.value).collect()
+                            }
+                            krishiv_sql::ast::MergeAction::Insert(
+                                krishiv_sql::ast::MergeInsert::Values { values, .. },
+                            ) => values.iter().collect(),
+                            _ => Vec::new(),
+                        };
+                        c.condition.iter().chain(action)
+                    }))
+                    .collect();
+                let sources: Vec<&krishiv_sql::ast::Query> = match &m.source {
+                    krishiv_sql::ast::MergeSource::Query { query, .. } => vec![&**query],
+                    _ => Vec::new(),
+                };
                 let changes = crate::table_commands::RowChanges {
                     targets: &[],
                     values: &[],
                     condition: None,
+                    options: &m.options,
+                    more: &more,
+                    sources: &sources,
                 };
                 self.exec_row_level_change(&m.target, None, "MERGE INTO TABLE", &changes, query)
                     .await
@@ -1181,6 +1207,7 @@ impl Session {
             self.tagging(),
         );
         let reason = action.reason();
+        let work = ran::in_running_command(work);
         let task = self.state.runtime.executor.spawn(
             WorkloadClass::Interactive,
             Box::pin(async move {
@@ -1258,6 +1285,7 @@ impl Session {
             Arc::clone(&paths),
             Arc::clone(&config),
         ));
+        let declared_paths = Arc::clone(&paths);
         let delta = Arc::new(crate::delta::DeltaReads::new(crate::delta::DeltaInputs {
             io: io.clone(),
             paths,
@@ -1285,6 +1313,14 @@ impl Session {
             relations: Arc::clone(&self.state.relations),
             memory: Arc::clone(&self.state.memory),
         };
+        let declared =
+            self.declared_catalogs()
+                .for_query(crate::catalog_registry::ScanInputs::new(
+                    io.clone(),
+                    declared_paths,
+                    Arc::clone(&config),
+                    scans.slots,
+                ));
         let catalog = Arc::new(QueryCatalog::new(
             Arc::clone(&self.state.catalog),
             Arc::clone(&self.state.cache),
@@ -1307,7 +1343,7 @@ impl Session {
                     self.state.runtime.profile_history.clone(),
                     Arc::clone(&self.state.runtime.executor),
                 )),
-                catalogs: self.declared_catalogs(),
+                catalogs: declared,
                 monitor: Arc::new(crate::system::Monitor::new(
                     Arc::clone(&self.state.principal),
                     Arc::clone(&self.state.policy),
@@ -1372,6 +1408,8 @@ impl Session {
             definer_texts: krishiv_plan::analyzer::views::DefinerTexts::default(),
             // Set per analysis to the permanent views it inlined (review r5 Z1, Z2).
             stored_view_texts: krishiv_plan::analyzer::views::DefinerTexts::default(),
+            // Set per analysis to the temporary views it inlined.
+            temp_view_texts: krishiv_plan::analyzer::views::DefinerTexts::default(),
         };
         // The epoch the query's catalog reads at: entries it loads are at least as new.
         let catalog_epoch = krishiv_plan::analyzer::Catalog::epoch(&*catalog);
@@ -1393,7 +1431,6 @@ impl Session {
             identifier_spans: Arc::default(),
             identifier_written: Arc::default(),
             observers: Arc::default(),
-            view_keeps: Arc::default(),
             withhold_profile: Arc::default(),
             cache_generation,
             cache_cap,
@@ -1411,13 +1448,15 @@ impl Session {
 
     /// Analyzes `plan` (`text` is the redacted query the plan came
     /// from, if it came from SQL text: analysis errors carry its span
-    /// as their query context).
+    /// as their query context). Also returns what the temporary view entries the analysis
+    /// inlined kept (`TempTable::View::keeps`), the query's and its function bodies': the handles
+    /// of the definitions the query runs, whatever replaced them since.
     pub(crate) async fn analyze_in(
         &self,
         plan: &Arc<LogicalPlan>,
         env: &QueryEnv,
         text: Option<&RedactedSql>,
-    ) -> Result<AnalyzedPlan, KrishivError> {
+    ) -> Result<(AnalyzedPlan, Vec<crate::catalog::Keep>), KrishivError> {
         // A store setting this session redirected (endpoint, region, account) could send the
         // server's credentials to another host:
         // asked once per analysis, before any table or file is read (P3-T067b).
@@ -1464,9 +1503,7 @@ impl Session {
         let mut inlined = std::mem::take(&mut expansion.views);
         // What a definer view being created pins (review r10 M10).
         env.sql_functions.note_views(&expansion.reached);
-        *env.view_keeps
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner) = std::mem::take(&mut expansion.keeps);
+        let mut keeps = std::mem::take(&mut expansion.keeps);
         // A permanent view is inlined before binding, so the analyzer never asks the
         // policy about it: ask here, before any read and before the text of a stored view
         // can fail, so a principal who may not read it learns nothing from it.
@@ -1513,16 +1550,12 @@ impl Session {
                 .map(|r| Arc::clone(&r.query))
                 .collect(),
         );
-        let trusting_views;
-        let views_analysis = if texts.is_empty() && stored_texts.is_empty() {
-            &env.analysis
-        } else {
-            let mut ctx = env.analysis.clone();
-            ctx.definer_texts = texts.clone();
-            ctx.stored_view_texts = stored_texts.clone();
-            trusting_views = ctx;
-            &trusting_views
-        };
+        // Every temporary view's text: the metric-view rule stops there, as at a permanent view's.
+        let temp_texts =
+            krishiv_plan::analyzer::views::DefinerTexts::new(expansion.temp_texts.clone());
+        let trusting_views =
+            definer::trusting_context(&env.analysis, &texts, &stored_texts, &temp_texts);
+        let views_analysis = trusting_views.as_ref().unwrap_or(&env.analysis);
         // (Boxed: `analyze_in` runs on the deepest stacks, where the size of its
         // future counts.)
         let (synced, renames) =
@@ -1541,20 +1574,13 @@ impl Session {
         let (renamed, mut kept) = crate::view_schema::apply_renames_keeping(
             &expansion.plan,
             &renames,
-            &[&texts, &stored_texts],
+            &[&texts, &stored_texts, &temp_texts],
         );
+        let temp_texts = kept.pop().unwrap_or_default();
         let stored_texts = kept.pop().unwrap_or_default();
         let texts = kept.pop().unwrap_or_default();
-        let trusting;
-        let analysis = if texts.is_empty() && stored_texts.is_empty() {
-            &env.analysis
-        } else {
-            let mut ctx = env.analysis.clone();
-            ctx.definer_texts = texts;
-            ctx.stored_view_texts = stored_texts;
-            trusting = ctx;
-            &trusting
-        };
+        let trusting = definer::trusting_context(&env.analysis, &texts, &stored_texts, &temp_texts);
+        let analysis = trusting.as_ref().unwrap_or(&env.analysis);
         let plan = Plan::try_new(renamed)?;
         // The bodies of the functions the plan calls read views the same way:
         // the policy is asked about them before the analysis' own result (or
@@ -1605,6 +1631,7 @@ impl Session {
         }
         // The view side table: where each view the query and its functions' bodies inlined landed.
         inlined.extend(env.sql_functions.body_views());
+        keeps.extend(env.sql_functions.body_keeps());
         analyzed.views = krishiv_plan::analyzer::views::locate_views(analyzed.plan.root(), inlined);
         for view in views {
             let securable = krishiv_plan::analyzer::Securable::View(view);
@@ -1618,7 +1645,7 @@ impl Session {
                     });
             }
         }
-        Ok(analyzed)
+        Ok((analyzed, keeps))
     }
 
     /// Runs `physical`; the stream's batches are its result rows.
@@ -1675,12 +1702,18 @@ impl Session {
 
     /// `error`, when it is a memory error of a query whose spill directory could not be set up,
     /// as that failure (the memory error stays its cause): the query may have needed to spill
-    /// (PY-078). Applied below the metrics fold, so `system.queries` and the caller agree.
+    /// (PY-078). A refused reservation and an arbitration abort are both such errors: which
+    /// one ends a query that cannot spill depends on timing. Applied below the metrics fold,
+    /// so `system.queries` and the caller agree.
     fn name_spill_failure(
         error: KrishivError,
         failure: &std::sync::Mutex<Option<KrishivError>>,
     ) -> KrishivError {
-        if error.error_class() != krishiv_common::error::ErrorClass::UnableToAcquireMemory {
+        use krishiv_common::error::ErrorClass;
+        if !matches!(
+            error.error_class(),
+            ErrorClass::UnableToAcquireMemory | ErrorClass::KrishivQueryAbortedOutOfMemory
+        ) {
             return error;
         }
         let found = failure
@@ -1746,7 +1779,8 @@ impl Session {
     ///
     /// Every run completes the frame's observations: a delivered stream as it ends, a run that
     /// fails before it has one (closed session, refused admission, failed submit) with its
-    /// error, and a caller that drops this future during the setup with `OPERATION_CANCELED`.
+    /// error, and a run dropped during the setup with the reason it was dropped for (the action's
+    /// cancellation, a panic, else the caller giving up: `OPERATION_CANCELED`).
     async fn run_on_query_logged(
         &self,
         physical: &PhysicalPlan,
@@ -1779,7 +1813,11 @@ impl Session {
         let (log_id, permit) = match admitted {
             Some(admitted) => admitted.into_parts(),
             None => self
-                .admit_query(env, env.catalog.reads_only_system(physical))
+                .admit_query(
+                    env,
+                    env.catalog.reads_only_system(physical),
+                    krishiv_sql::StatementClass::Read,
+                )
                 .await?
                 .into_parts(),
         };
@@ -1951,4 +1989,5 @@ mod planning;
 mod definer;
 
 mod ran;
+mod search_path;
 pub(crate) use ran::Ran;

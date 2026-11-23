@@ -4,9 +4,12 @@
 //!
 //! The cases and their answers are `python/tests/pyspark_udf/udtf/{cases.py,goldens.json}`, a real local PySpark
 //! 4.2.0 run. `export_cases.py` runs each case against a recording stand-in with `pyspark`'s decorators (what a
-//! Spark Connect client sends) and gives the UDTFs it registers, cloudpickled, and the SQL it runs; this test
-//! registers them on a session (`Session::register_python_udtf`, the pool's `SessionUdfs::register`), runs the
-//! SQL and compares the schema and rows (sorted, as the case orders them by every column), or the error's
+//! Spark Connect client sends) and gives the UDTFs it registers, cloudpickled, and the SQL it runs. Its output is
+//! committed (`tests/goldens/udtf_cases.json.gz`, regenerated with a full PySpark as `export_cases.py` says), so
+//! the replay needs only the workers' interpreter; it fails when `cases.py` or `export_cases.py` changed since the
+//! export (their SHA-256 are recorded) or the workers run another CPython minor version than the export did. This
+//! test registers the UDTFs on a session (`Session::register_python_udtf`, the pool's `SessionUdfs::register`),
+//! runs the SQL and compares the schema and rows (sorted, as the case orders them by every column), or the error's
 //! condition and the worker's `[CLASS] message` (or the traceback line). Cases built with DataFrame calls are
 //! Spark Connect's relation path, not replayed here; definition errors are the client's (`pyspark` raises them
 //! before anything reaches the server) and are checked against the golden as the client gave them.
@@ -14,9 +17,8 @@
 //! `KNOWN_GAPS` lists the cases that differ, with the reason; a listed case that matches fails, so the list
 //! cannot go stale. `INCOMPATIBLE` lists those Krishiv answers differently on purpose (`known-differences.md`).
 //!
-//! The interpreters: `KRISHIV_TEST_UDF_PYTHON` runs the workers; `KRISHIV_TEST_PYSPARK_PYTHON` (a full PySpark
-//! 4.2.0, for its decorators without a JVM) runs the export. Without them the test passes after a note
-//! (`KRISHIV_UDF_POOL_REQUIRED` requires the first only).
+//! The interpreter: `KRISHIV_TEST_UDF_PYTHON` runs the workers; without it the test passes after a note unless
+//! `KRISHIV_UDF_POOL_REQUIRED` is set.
 #![cfg(target_os = "linux")]
 #![expect(
     clippy::print_stderr,
@@ -114,7 +116,7 @@ fn worker_child() {
     std::process::exit(if failed { 125 } else { 1 });
 }
 
-fn interpreters() -> Option<(PathBuf, PathBuf)> {
+fn interpreter() -> Option<PathBuf> {
     let Some(worker) = std::env::var_os("KRISHIV_TEST_UDF_PYTHON") else {
         assert!(
             std::env::var_os("KRISHIV_UDF_POOL_REQUIRED").is_none(),
@@ -123,13 +125,7 @@ fn interpreters() -> Option<(PathBuf, PathBuf)> {
         eprintln!("note: KRISHIV_TEST_UDF_PYTHON is not set; the UDTF replay did not run");
         return None;
     };
-    // The export needs a full PySpark (its decorators without a JVM); the workers' `pyspark-client` is not one.
-    // Not required with the pool: the CI interpreter has no full PySpark.
-    let Some(pyspark) = std::env::var_os("KRISHIV_TEST_PYSPARK_PYTHON") else {
-        eprintln!("note: KRISHIV_TEST_PYSPARK_PYTHON is not set; the UDTF replay did not run");
-        return None;
-    };
-    Some((PathBuf::from(worker), PathBuf::from(pyspark)))
+    Some(PathBuf::from(worker))
 }
 
 fn pool(python: &Path) -> Pool {
@@ -150,19 +146,48 @@ fn repo() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
 
-/// `export_cases.py`'s record of every case.
-fn export(pyspark: &Path, arrow_default: &str) -> serde_json::Map<String, Value> {
-    let out = std::env::temp_dir().join(format!("krishiv-udtf-cases-{}.json", std::process::id()));
-    let status = Command::new(pyspark)
-        .arg(repo().join("python/tests/pyspark_udf/udtf/export_cases.py"))
-        .arg(&out)
-        .env("KRISHIV_UDTF_ARROW_DEFAULT", arrow_default)
-        .status()
-        .expect("run the export");
-    assert!(status.success(), "export_cases.py failed");
-    let text = std::fs::read_to_string(&out).expect("cases");
-    let _ = std::fs::remove_file(&out);
-    match serde_json::from_str(&text).expect("json") {
+/// The case sources whose SHA-256 the export records.
+const SOURCES: [&str; 2] = ["cases.py", "export_cases.py"];
+
+/// The committed `export_cases.py` record of every case (`tests/goldens/udtf_cases.json.gz`), after checking
+/// it is the export of today's sources (hashed by `python`, the workers' interpreter) for `python`'s CPython
+/// minor version and the session's `arrow_default`.
+fn export(python: &Path, arrow_default: &str) -> serde_json::Map<String, Value> {
+    use std::io::Read as _;
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/goldens/udtf_cases.json.gz");
+    let mut text = String::new();
+    flate2::read::GzDecoder::new(std::fs::File::open(&path).expect("the committed export"))
+        .read_to_string(&mut text)
+        .expect("gzip");
+    let mut export: Value = serde_json::from_str(&text).expect("json");
+    let regenerate = "regenerate it as python/tests/pyspark_udf/udtf/export_cases.py says";
+    let dir = repo().join("python/tests/pyspark_udf/udtf");
+    for source in SOURCES {
+        let out = Command::new(python)
+            .args([
+                "-I",
+                "-c",
+                "import hashlib, sys; print(hashlib.sha256(open(sys.argv[1], 'rb').read()).hexdigest(), end='')",
+            ])
+            .arg(dir.join(source))
+            .output()
+            .expect("hash");
+        assert_eq!(
+            export["sources"][source],
+            String::from_utf8_lossy(&out.stdout).as_ref(),
+            "{source} changed since the committed export: {regenerate}"
+        );
+    }
+    assert_eq!(
+        export["python"],
+        python_version(python).as_str(),
+        "the export's code objects are for another CPython: {regenerate} on the workers' version"
+    );
+    assert_eq!(
+        export["arrow_default"], arrow_default,
+        "the export's arrow default: {regenerate}"
+    );
+    match export["cases"].take() {
         Value::Object(m) => m,
         _ => panic!("cases is not an object"),
     }
@@ -497,7 +522,7 @@ async fn run_case(
 /// Every SQL case of `goldens.json` answers as PySpark 4.2.0 did, on the pool.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn udtfs_match_pyspark_4_2_0() {
-    let Some((worker_py, pyspark_py)) = interpreters() else {
+    let Some(worker_py) = interpreter() else {
         return;
     };
     let goldens: Value = serde_json::from_str(
@@ -522,12 +547,14 @@ async fn udtfs_match_pyspark_4_2_0() {
         Value::from(arrow_default.clone()),
         goldens["defaults"]["spark.sql.execution.pythonUDTF.arrow.enabled"]
     );
-    let records = export(&pyspark_py, &arrow_default);
+    let records = export(&worker_py, &arrow_default);
     let udfs = Arc::new(SessionUdfs::new(
         pool(&worker_py),
         Owner {
             principal: "alice".to_owned(),
             session: "s1".to_owned(),
+            tenant: None,
+            capped: true,
         },
     ));
     session.set_python_udf_runtime(Arc::clone(&udfs) as Arc<_>);

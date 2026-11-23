@@ -74,7 +74,9 @@ use crate::operators::{
 use crate::pipeline::{ExecNode, PipelineBuilder};
 use crate::planner::TableProviderResolver;
 use crate::planner::eval::{self, Compiled, EvalEnv, Input, PhysExpr};
-use crate::planner::nodes::{BreakerNode, FanInNode, OperatorNode, OrderedNode, SourceNode};
+use crate::planner::nodes::{
+    BreakerNode, FanInNode, OperatorNode, OrderedInput, OrderedNode, SourceNode,
+};
 use crate::planner::subquery::{SubquerySink, SubqueryValue, WithSubqueries};
 use crate::shared::{Output, SharedSink, SharedSource};
 use crate::values::{
@@ -94,7 +96,7 @@ mod aggregate;
 mod join;
 mod observe;
 use distributed::planned_schema_holds;
-pub(crate) use join::hash_join;
+pub(crate) use join::{hash_join, sort_merge_join};
 pub(crate) use observe::collect_metrics_op;
 use order::{limit_reads_in_order, range_ordered_evals, reads_range_in_order};
 
@@ -1143,6 +1145,18 @@ impl Instantiation<'_> {
                     built
                 })
             }
+            PhysNode::Tail { input, limit } => {
+                let input = self.node(input)?;
+                let tail = crate::operators::Tail::new(Arc::clone(&input.schema), *limit);
+                // The last rows are those of the stream's order: the input
+                // runs one driver per pipeline, branches of a union in turn,
+                // and the breaker keeps the last rows over all of them.
+                let input = Built {
+                    schema: input.schema,
+                    node: Arc::new(OrderedInput { inner: input.node }),
+                };
+                Ok(breaker(input, Arc::clone(&tail) as Arc<dyn Sink>, tail))
+            }
             PhysNode::Sample {
                 input,
                 lower,
@@ -1467,7 +1481,8 @@ impl Instantiation<'_> {
             fields,
             input.schema.metadata().clone(),
         ));
-        let sink = Arc::new(FileWriteSink::try_new(
+        let bucket_column = write.bucket.as_ref().map(|b| b.column);
+        let sink = Arc::new(FileWriteSink::try_new_bucketed(
             Arc::clone(&format),
             io,
             written,
@@ -1497,6 +1512,7 @@ impl Instantiation<'_> {
                     })
                     .collect::<Result<_>>()?,
             },
+            bucket_column,
         )?);
         Ok(Built {
             schema: Source::schema(sink.as_ref()),
@@ -1881,26 +1897,6 @@ fn residual(
         all = eval::and(e, all);
     }
     Ok(Some(Arc::new(Compiled(all)) as Arc<dyn Predicate>))
-}
-
-pub(crate) fn sort_merge_join(
-    probe: &SchemaRef,
-    build: &SchemaRef,
-    j: &SortMergeJoinPlan,
-    env: &EvalEnv,
-    spill: Option<SpillScope>,
-) -> Result<SortMergeJoin> {
-    SortMergeJoin::try_new(JoinSpec {
-        join_type: j.join_type,
-        probe_schema: Arc::clone(probe),
-        build_schema: Arc::clone(build),
-        probe_keys: j.probe_keys.clone(),
-        build_keys: j.build_keys.clone(),
-        null_safe: j.null_safe.clone(),
-        filter: residual(probe, build, j.residual.as_ref(), env)?,
-        single_match: j.single_match,
-        spill,
-    })
 }
 
 pub(crate) fn nested_loop_join(

@@ -4,6 +4,53 @@
 
 use super::*;
 
+tokio::task_local! {
+    /// The command this task is running, while it runs.
+    static COMMAND: Arc<Command>;
+}
+
+/// A statement that is not a query, for the queries it runs itself (an `INSERT`'s write): they are begun with
+/// no statement of their own, and `system.queries` lists them under the command's text and class.
+struct Command {
+    text: Arc<str>,
+    class: &'static str,
+    /// Whether a query took the text: the command has its row.
+    listed: std::sync::atomic::AtomicBool,
+    /// The statement's slot for the id of the row a query of it began (`sql_ran` adds no refused row then).
+    row: Arc<std::sync::Mutex<Option<String>>>,
+}
+
+/// The command a query begun with no text of its own is listed under.
+pub(super) struct Listing {
+    pub(super) text: Arc<str>,
+    pub(super) class: &'static str,
+    /// Where the id of the query's row goes: the query is the statement's listed run.
+    pub(super) row: Arc<std::sync::Mutex<Option<String>>>,
+}
+
+/// `work` under the command the calling task is running, if any: a task the command starts for a query of
+/// its own (`on_executor`) is still the command's.
+pub(super) fn in_running_command<F: Future>(work: F) -> impl Future<Output = F::Output> {
+    match COMMAND.try_with(Arc::clone) {
+        Ok(command) => futures::future::Either::Left(COMMAND.scope(command, work)),
+        Err(_) => futures::future::Either::Right(work),
+    }
+}
+
+/// The text and class of the command the calling task is running, for a query begun with no text of its own.
+pub(super) fn command_statement() -> Option<Listing> {
+    COMMAND
+        .try_with(|c| {
+            c.listed.store(true, Ordering::Relaxed);
+            Listing {
+                text: Arc::clone(&c.text),
+                class: c.class,
+                row: Arc::clone(&c.row),
+            }
+        })
+        .ok()
+}
+
 /// What [`Session::sql_here_marked`] did with a statement.
 #[expect(
     clippy::large_enum_variant,
@@ -72,6 +119,15 @@ impl Session {
         let redacted = krishiv_sql::redact_sql(query);
         let statement = krishiv_sql::parse_statement(query, &env.parser)
             .map_err(|e| sql_context(e.error, &redacted, e.span.start, e.span.end))?;
+        // Metric views arrive in Spark 4.2: older releases fail to parse the statement, at `WITH`
+        // (3.5) or at `METRICS` (4.0, 4.1), the gate goldens of P3 4.2-MV. `session.rs`'s dispatch
+        // arm checks the same again, for EXECUTE IMMEDIATE and scripts; this check is only here so
+        // that the refusal comes right after the parse, before any access check. Keep both.
+        if let Statement::CreateMetricView(v) = &statement
+            && let Some(e) = metric_view_gate_error(v, self.state.profile, query, &redacted)
+        {
+            return Err(e);
+        }
         // Spark refuses a database on a temporary function named by an `IDENTIFIER(...)`
         // clause when it drops it; the parser sees only the evaluated name.
         if named_by_clause
@@ -83,7 +139,7 @@ impl Session {
         }
         // Before any side effect: what the statement writes, creates or
         // drops (its reads are checked by analysis, first thing).
-        let class = krishiv_sql::classify_with(&statement, &env.parser);
+        let class = self.statement_class(&statement, &env);
         if queries_only && !matches!(statement, Statement::Query(_)) {
             return Ok(Ran::NotAQuery(class));
         }
@@ -91,10 +147,74 @@ impl Session {
         env.statement_class = Some(class.name());
         self.refuse_changes_while_draining(class, &redacted, &env)?;
         let command = !matches!(statement, Statement::Query(_));
-        let df = self.run_statement(statement, env, query, &redacted).await?;
-        // Whatever frame the statement returns (a command's result too) shows the statement's
-        // text and class when it runs.
-        df.with_statement(&redacted, class.name());
-        Ok(Ran::Frame(df, command))
+        if !command {
+            let df = self.run_statement(statement, env, query, &redacted).await?;
+            df.with_statement(&redacted, class.name());
+            return Ok(Ran::Frame(df, false));
+        }
+        let running = Arc::new(Command {
+            text: Arc::from(redacted.as_str()),
+            class: class.name(),
+            listed: std::sync::atomic::AtomicBool::new(false),
+            row: Arc::clone(&env.row),
+        });
+        // Boxed, as `sql_here_marked`'s future is: the scope is one more nested future level.
+        let run = Box::pin(self.run_statement(statement, env, query, &redacted));
+        let df = COMMAND.scope(Arc::clone(&running), run).await?;
+        // A command that ran no query (`CREATE TABLE`, `SET`, `SHOW`) is listed when its result frame is
+        // read, with the statement's text and class. One that ran a query has its row already: a read of
+        // its (empty) result is not the statement again.
+        if !running.listed.load(Ordering::Relaxed) {
+            df.with_statement(&redacted, class.name());
+        }
+        Ok(Ran::Frame(df, true))
+    }
+}
+
+/// Spark's `PARSE_SYNTAX_ERROR` for a metric view on a release before 4.2, told against `query`
+/// (the text `v` was parsed from). Checked right after the parse of a top-level statement (before
+/// any access check) and again where the statement is dispatched, for the statements of
+/// `EXECUTE IMMEDIATE` and of a script.
+pub(crate) fn metric_view_gate_error(
+    v: &krishiv_sql::ast::CreateMetricView,
+    profile: SparkProfile,
+    query: &str,
+    redacted: &RedactedSql,
+) -> Option<KrishivError> {
+    let span = metric_view_gate(v, profile)?;
+    // Errors never echo a string literal's text (`krishiv-sql/CLAUDE.md`).
+    let token = if span.range() == v.body_span.range() {
+        "$$"
+    } else {
+        query.get(span.start..span.end).unwrap_or_default()
+    };
+    let error = krishiv_common::error::ParseSyntaxError {
+        error: format!("'{token}'"),
+        hint: String::new(),
+    };
+    Some(sql_context(error.into(), redacted, span.start, span.end))
+}
+
+/// Where a Spark release before 4.2 stops parsing `CREATE VIEW .. WITH METRICS`, if `profile` is
+/// one: at a view's `LANGUAGE` (no release before 4.2 has it), or at `WITH METRICS`, whichever
+/// comes first; 3.5 has no `WITH` there, 4.0 and 4.1 take `WITH` for a schema-binding clause and
+/// fail at the next token (Spark 3.5.7 and 4.1.0 runs, 2026-11-21). The statement always holds
+/// one of the two (else it is no metric view), so the span never covers the YAML literal.
+fn metric_view_gate(
+    v: &krishiv_sql::ast::CreateMetricView,
+    profile: SparkProfile,
+) -> Option<krishiv_sql::ast::Span> {
+    let at = v.with_metrics.map(|[with, metrics]| match profile {
+        SparkProfile::V3_5 => with,
+        _ => metrics,
+    });
+    let first = [at, v.language_keyword]
+        .into_iter()
+        .flatten()
+        .min_by_key(|s| s.start);
+    match profile {
+        // Unreachable fallback, refused all the same: the literal's span, whose text is never shown.
+        SparkProfile::V3_5 | SparkProfile::V4_0 | SparkProfile::V4_1 => first.or(Some(v.body_span)),
+        _ => None,
     }
 }

@@ -281,3 +281,14 @@ fn the_marker_accepts_the_storage_a_plain_string_does() {
             .is_err()
     );
 }
+
+#[test]
+fn a_udt_over_a_collated_string_keys_as_its_storage() {
+    let lcase = DataType::CollatedString(Collation::parse("utf8_lcase").unwrap());
+    let udt = DataType::Udt(std::sync::Arc::new(krishiv_types::UdtType::python(
+        lcase,
+        "__main__.U".to_owned(),
+        "gAWV".to_owned(),
+    )));
+    assert_eq!(udt.collation_key_type(), DataType::Binary);
+}

@@ -257,7 +257,7 @@ impl State {
 }
 
 /// `m` as REST's `snapshots=refs` returns it: only the snapshots refs point at.
-fn refs_only(m: &TableMetadata) -> TableMetadata {
+pub(super) fn refs_only(m: &TableMetadata) -> TableMetadata {
     let mut json = serde_json::to_value(m).unwrap();
     let heads: HashSet<i64> = json["refs"]
         .as_object()
@@ -496,6 +496,7 @@ pub(super) fn foreign_full(
                 branch: &branch,
                 write_id: &key,
                 query_id: None,
+                idempotency_key: None,
             };
             let a = prepare_attempt(&io, &m, &mut new, ids, ts, MAX)
                 .await
@@ -1506,6 +1507,54 @@ fn a_replaced_table_is_a_conflict() {
     assert_eq!(c.cat.requests(), 1);
     assert!(!exists(&c.list(1)) && !exists(&c.manifest()) && !exists(&c.data()));
     c.check(&[INIT]);
+}
+
+/// A replaced table (another UUID) carrying this write's key is not this
+/// write's commit: the key match is refused before it is accepted, and the
+/// UUID check makes it a conflict; every outcome known, so the files go.
+#[test]
+fn a_key_match_in_a_replaced_table_is_a_conflict() {
+    let mut c = case();
+    let update: TableUpdate = serde_json::from_value(serde_json::json!({
+        "action": "assign-uuid",
+        "uuid": "0b8f1e0c-1d2e-4f3a-9b4c-5d6e7f809a1b",
+    }))
+    .unwrap();
+    c.cat.on(
+        When::BeforeRequest(1),
+        Box::new(move |_| Box::pin(async move { (vec![], vec![update]) })),
+    );
+    c.cat.on(
+        When::BeforeRequest(1),
+        c.foreign_keyed("r.parquet", 954, "main", OUR_KEY),
+    );
+    let e = c.run().unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::KrishivIcebergCommitConflict,
+        "{e}"
+    );
+    assert!(e.message().contains("UUID"), "{e}");
+    assert!(c.cat.metadata().0.snapshot_by_id(954).is_some());
+    assert!(!exists(&c.list(1)) && !exists(&c.manifest()) && !exists(&c.data()));
+}
+
+/// A replay of this write (its key under another snapshot id) committed by a
+/// concurrent run and found after a 409, with every answer known: the write
+/// succeeds as the replay, and nothing it produced stays (no request of it is
+/// in the table or can land), its data file included.
+#[test]
+fn a_replay_found_after_a_known_conflict_deletes_the_data_files() {
+    let mut c = case();
+    c.cat.on(
+        When::BeforeRequest(1),
+        c.foreign_keyed("r.parquet", 953, "main", OUR_KEY),
+    );
+    let m = c.run().unwrap();
+    assert!(m.snapshot_by_id(953).is_some() && m.snapshot_by_id(OURS).is_none());
+    assert_eq!(c.cat.requests(), 1);
+    assert!(!exists(&c.list(1)) && !exists(&c.manifest()) && !exists(&c.data()));
+    assert_eq!(rows(&c.env, &c.cat.metadata().1), [INIT, "953|1|r.parquet"]);
 }
 
 /// Re-review nit 4: a conflict found while a request is still unresolved is

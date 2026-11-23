@@ -37,12 +37,14 @@ mod options;
 mod parse;
 mod path;
 mod read;
+mod table;
 mod write;
 
 pub use infer::infer_json;
 pub use options::{JsonOptions, ParseMode};
 pub use path::{get_json_object, json_array_length, json_object_keys};
 pub use read::read_json;
+pub use table::{json_table_exists, json_table_rows, json_table_value};
 pub use write::write_json;
 
 pub(crate) use base64::encode as base64_encode;

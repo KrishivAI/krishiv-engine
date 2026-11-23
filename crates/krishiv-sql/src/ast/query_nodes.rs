@@ -750,6 +750,55 @@ pub enum TableFactorKind {
         /// The arguments (`TABLE(...)` ones included).
         args: Vec<FunctionArg>,
     },
+    /// `JSON_TABLE(input, 'path' COLUMNS (...) [NULL | ERROR ON ERROR])` (Spark 4.3, the flat form: no `NESTED PATH`).
+    JsonTable(Box<JsonTable>),
+}
+
+/// The call of [`TableFactorKind::JsonTable`].
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct JsonTable {
+    /// The JSON text.
+    pub input: Expr,
+    /// The row path, as written (a string literal).
+    pub path: String,
+    /// Where the row path was written.
+    pub path_span: Span,
+    /// The `COLUMNS` list.
+    pub columns: Vec<JsonTableColumn>,
+    /// `ERROR ON ERROR` (`true`) or `NULL ON ERROR` / nothing (`false`): what a malformed input does.
+    pub error_on_error: bool,
+}
+
+/// One column of `JSON_TABLE`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct JsonTableColumn {
+    /// The column name.
+    pub name: Ident,
+    /// What it holds.
+    pub kind: JsonTableColumnKind,
+    /// Source text.
+    pub span: Span,
+}
+
+/// The kinds of [`JsonTableColumn`].
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum JsonTableColumnKind {
+    /// `name FOR ORDINALITY`: the 1-based row number.
+    Ordinality,
+    /// `name type [PATH 'path']`: the value at the path, cast to the type (`$.name` without a path).
+    Value {
+        /// The column type.
+        data_type: DataTypeSpec,
+        /// The path, as written, with where it was.
+        path: Option<(String, Span)>,
+    },
+    /// `name type EXISTS [PATH 'path']`: whether the path exists.
+    Exists {
+        /// The column type.
+        data_type: DataTypeSpec,
+        /// The path, as written, with where it was.
+        path: Option<(String, Span)>,
+    },
 }
 
 /// `TABLESAMPLE [SYSTEM | BERNOULLI] ([method]) [REPEATABLE (seed)]`, as a
@@ -842,6 +891,20 @@ pub struct TemporalClause {
     pub value: Expr,
     /// Source text.
     pub span: Span,
+    /// A fact Spark's `AstBuilder` checks after the whole statement parsed; `validate` raises it.
+    pub fault: Option<TemporalFault>,
+}
+
+/// What is wrong with a [`TemporalClause`], raised after syntax parsing (as Spark's `AstBuilder` does).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum TemporalFault {
+    /// The `@` suffix with `spark.sql.timeTravel.atSyntax.enabled` off; the span is name and suffix.
+    AtSyntaxDisabled(Span),
+    /// An `@` timestamp that is not `yyyyMMddHHmmssSSS`: the digits written, and name and suffix.
+    InvalidAtTimestamp(String, Span),
+    /// A second time travel specification beside the suffix: the span of the clause.
+    Multiple(Span),
 }
 
 /// A table option, `key [=] value`. Keys and values keep their spans, so
@@ -899,6 +962,32 @@ pub enum JoinConstraint {
     Using(Vec<Ident>),
     /// `[APPROX | EXACT] NEAREST [k] BY DISTANCE | SIMILARITY expr`.
     NearestBy(NearestBy),
+    /// `MATCH_CONDITION (expr) [ON expr | USING (columns)]` after `ASOF JOIN`
+    /// (Spark 4.3).
+    AsOf(Box<AsOfCriteria>),
+}
+
+/// The criteria of an `[INNER | LEFT [OUTER]] ASOF JOIN` (Spark 4.3's
+/// `asofJoinCriteria`). The match condition is kept as written: Spark's
+/// `AstBuilder` checks its operator after parsing (`validate/`).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct AsOfCriteria {
+    /// The expression inside `MATCH_CONDITION (...)`.
+    pub match_condition: Expr,
+    /// The `ON` condition or `USING` columns, if written.
+    pub filter: Option<AsOfFilter>,
+    /// Source text, from `MATCH_CONDITION`.
+    pub span: Span,
+}
+
+/// The equality part of an [`AsOfCriteria`].
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum AsOfFilter {
+    /// `ON expr`.
+    On(Expr),
+    /// `USING (columns)`.
+    Using(Vec<Ident>),
 }
 
 /// The ranking clause of a top-k join.

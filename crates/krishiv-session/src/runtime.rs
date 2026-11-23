@@ -12,10 +12,10 @@
 //! always did. A host serving many sessions builds one runtime and hands it
 //! to each session ([`SessionBuilder::runtime`](crate::SessionBuilder::runtime)).
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, OnceLock, PoisonError, Weak};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError, RwLock, Weak};
 
 use krishiv_common::config::{Config, SYSTEM_QUERIES_CAPACITY, lookup};
 use krishiv_common::error::{CannotModifyStaticConfig, KrishivError};
@@ -90,6 +90,8 @@ pub struct EngineRuntime {
     deadlines: OnceLock<Deadlines>,
     /// The queries running now, and the closed sessions.
     live: Mutex<LiveSet>,
+    /// Session defaults set while running (`set_config_defaults`): an overlay on `pairs`.
+    pub(crate) admin_defaults: RwLock<Arc<BTreeMap<String, String>>>,
     /// The admission controller built from `krishiv.workload.resourceGroups.file`, shared by every
     /// session of the runtime so the group limits hold across them (`None` when the key is unset:
     /// every query is admitted at once).
@@ -283,6 +285,29 @@ impl EngineRuntime {
         }
     }
 
+    /// Whether this runtime writes finished queries' profiles to a history store (`krishiv.history.path`).
+    #[must_use]
+    pub fn keeps_profile_history(&self) -> bool {
+        self.profile_history.is_some()
+    }
+
+    /// The stored profile of a finished query, read from this runtime's history store (`krishiv.history.path`):
+    /// the newest one under that id. `None` when the runtime keeps no history, or the store does not hold the
+    /// query: one that is still running, one whose profile the writer has not reached yet (it writes off the
+    /// query's thread), or one trimmed away. Reads files, so an async caller runs it off its executor.
+    ///
+    /// # Errors
+    /// The store's directory cannot be read.
+    pub fn stored_profile(
+        &self,
+        query_id: &str,
+    ) -> Result<Option<crate::StoredProfile>, KrishivError> {
+        match &self.profile_history {
+            Some(store) => crate::profile_history::read_stored(store.dir(), query_id),
+            None => Ok(None),
+        }
+    }
+
     /// The declared catalogs (design P3-T067 §2.3): readiness checks read them (T066).
     #[must_use]
     pub fn catalogs(&self) -> &Arc<crate::catalog_registry::CatalogRegistry> {
@@ -433,6 +458,7 @@ impl EngineRuntime {
             results,
             deadlines: OnceLock::new(),
             live: Mutex::new(LiveSet::default()),
+            admin_defaults: RwLock::default(),
             sessions: Arc::default(),
             admission,
             resource_groups,
@@ -496,7 +522,7 @@ impl EngineRuntime {
     }
 
     /// The configuration a session of this runtime starts from: the
-    /// runtime's pairs, then the session's. A runtime-owned key among the
+    /// runtime's pairs, the defaults set at run time (`set_config_defaults`), then the session's. A runtime-owned key among the
     /// session's pairs fails with `CANNOT_MODIFY_STATIC_CONFIG`, as `SET` of
     /// one does (a private runtime's session passes none: its builder's
     /// pairs are the runtime's).
@@ -515,7 +541,18 @@ impl EngineRuntime {
             .into());
         }
         crate::conf::check_pairs(&session_pairs)?;
-        let pairs = self.pairs.iter().cloned().chain(session_pairs);
+        let admin = Arc::clone(
+            &self
+                .admin_defaults
+                .read()
+                .unwrap_or_else(PoisonError::into_inner),
+        );
+        let pairs = self
+            .pairs
+            .iter()
+            .cloned()
+            .chain(admin.iter().map(|(k, v)| (k.clone(), v.clone())))
+            .chain(session_pairs);
         Ok(Config::from_pairs(pairs)?.0)
     }
 

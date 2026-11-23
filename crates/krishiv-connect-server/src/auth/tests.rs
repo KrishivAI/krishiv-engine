@@ -121,6 +121,27 @@ fn failures_are_spark_unauthenticated_messages() {
     }
 }
 
+/// A valid `Basic` pair (carol's name, her token as the password) is decoded only on the Flight
+/// SQL surface (P3-T101 note §3.1, PR-65d review M2): on Connect it stays a malformed header,
+/// "Invalid authentication token", and the token is never echoed; on Flight SQL it is carol, by
+/// `basic`.
+#[test]
+fn basic_is_decoded_on_flight_sql_only() {
+    let dir = tempfile::tempdir().expect("dir");
+    let auth = token_auth(dir.path());
+    // base64("carol:" + TOKEN)
+    let basic = "Basic Y2Fyb2w6Y2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjYw==";
+    let refused = authenticate(&auth, Some(peer(9)), &[basic]).expect_err("Connect");
+    assert_eq!(refused.code(), Code::Unauthenticated);
+    assert_eq!(refused.message(), "Invalid authentication token");
+    assert!(!refused.message().contains(TOKEN));
+    let caller =
+        block_on(auth.authenticate(&headers(&[basic]), Some(peer(9)), None, Surface::FlightSql))
+            .expect("Flight SQL");
+    assert_eq!(caller.principal.name, "carol");
+    assert_eq!(caller.method, Method::Basic);
+}
+
 #[test]
 fn a_request_without_a_peer_address_is_refused() {
     let dir = tempfile::tempdir().expect("dir");
@@ -241,6 +262,20 @@ fn every_command_has_its_class() {
         (
             CommandType::RemoveCachedRemoteRelationCommand(Box::default()),
             Check::OwnSession,
+        ),
+        (
+            CommandType::Extension(Box::new(prost_types::Any {
+                type_url: "type.googleapis.com/krishiv.v1.PersistPythonFunction".to_owned(),
+                value: Vec::new(),
+            })),
+            super::client_code(),
+        ),
+        (
+            CommandType::Extension(Box::new(prost_types::Any {
+                type_url: "type.googleapis.com/krishiv.v1.Echo".to_owned(),
+                value: Vec::new(),
+            })),
+            Check::Unsupported("extension"),
         ),
         (
             CommandType::MlCommand(Box::new(pb::MlCommand {

@@ -1169,7 +1169,7 @@ async fn a_local_relation_applies_its_schema_eagerly() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_cached_local_relation_without_its_artifact_is_not_found() {
+async fn a_cached_local_relation_without_its_artifact_cannot_be_found() {
     let run = start().await;
     let cached = relation(RelType::CachedLocalRelation(pb::CachedLocalRelation {
         hash: "0123abcd".to_owned(),
@@ -1179,7 +1179,7 @@ async fn a_cached_local_relation_without_its_artifact_is_not_found() {
         .unwrap_err();
     assert_eq!(
         error_class(&e),
-        "CONNECT_INVALID_PLAN.NOT_FOUND_CACHED_LOCAL_RELATION"
+        "CONNECT_INVALID_PLAN.CANNOT_FIND_CACHED_LOCAL_RELATION"
     );
 }
 
@@ -1941,24 +1941,22 @@ async fn connect_limit_zero_sends_no_metrics() {
     assert_eq!(carrying, 0);
 }
 
-/// KNOWN GAP (docs/concepts/known-differences.md): Spark prunes an observe node under an empty
-/// relation (`flows_observe_pruned_by_empty_relation` gives `e: {}`); the engine runs it and
-/// reports the rows it read. When this fails the gap is closed: assert Spark's `{}`.
+/// Spark prunes an observe node under an empty relation (P3-T084c): no metrics are sent.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn connect_gap_where_false_above_observe_is_not_pruned() {
+async fn connect_where_false_above_observe_prunes_the_node() {
     let observed = observe_as(base(), "e", vec![count_n()], 1);
     let filtered = relation(RelType::Filter(Box::new(pb::Filter {
         input: Some(Box::new(observed)),
         condition: Some(call("==", vec![literal_long(1), literal_long(0)])),
     })));
-    let (got, _) = observed_run(filtered).await;
-    assert_eq!(got["e"], vec![("n".to_owned(), long(3))]);
+    let (got, carrying) = observed_run(filtered).await;
+    assert!(got.is_empty(), "{got:?}");
+    assert_eq!(carrying, 0);
 }
 
-/// KNOWN GAP: Spark supports a struct-valued metric (`types`); the server refuses it when it
-/// builds the literal. The refusal names the feature, and the other values of the case work.
+/// Decimal, NaN and array metric values.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn connect_types_and_the_struct_metric_gap() {
+async fn connect_decimal_nan_and_array_metrics() {
     let run = start().await;
     let types = sql(
         "SELECT CAST(1.10 AS DECIMAL(5,2)) d, CAST('NaN' AS DOUBLE) n, CAST(-0.0 AS DOUBLE) z, 1 i",
@@ -2005,58 +2003,57 @@ async fn connect_types_and_the_struct_metric_gap() {
         .map(|e| e.literal_type.clone())
         .collect();
     assert_eq!(elements, vec![Some(LiteralType::Integer(1))]);
-    let with_struct = observe_as(
-        types,
-        "m",
-        vec![aliased(
-            call(
-                "struct",
-                vec![call("max", vec![attr("i")]), call("min", vec![attr("i")])],
-            ),
-            "st",
-        )],
-        1,
-    );
-    let status = collect(&run.channel, request(root(with_struct)))
-        .await
-        .expect_err("a struct metric is not supported yet");
-    assert_eq!(error_class(&status), "KRISHIV_UNSUPPORTED_FEATURE");
 }
 
-/// An observation whose metric has no literal yet fails the action, but only after the other
-/// observations' metrics were sent (as for a metric that failed to finalize).
+/// Struct, map, binary and interval metrics go out in Spark's literal forms
+/// (`observe-goldens-followup.json`, `value_types`, Connect leg). Spark's Python client raises
+/// `UNSUPPORTED_LITERAL` for the year-month and calendar forms; the server sends them.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn connect_unconvertible_metric_still_sends_the_others() {
-    let run = start().await;
-    let inner = observe_as(base(), "a", vec![count_n()], 1);
+#[expect(
+    deprecated,
+    reason = "the literal's struct and map types are read as Spark's clients do"
+)]
+async fn connect_struct_map_binary_and_interval_metrics() {
+    let max = |c: &str| call("max", vec![attr(c)]);
     let plan = observe_as(
-        inner,
-        "b",
-        vec![aliased(
-            call(
-                "struct",
-                vec![call("max", vec![attr("v")]), call("min", vec![attr("v")])],
-            ),
-            "st",
-        )],
-        2,
+        sql("SELECT 1 i, 'x' s, X'FF00FE' b, INTERVAL '2' DAY dt, INTERVAL '2' MONTH ym"),
+        "m",
+        vec![
+            aliased(call("map", vec![literal_long(7), max("i")]), "m"),
+            aliased(max("b"), "b"),
+            aliased(max("dt"), "dt"),
+            aliased(max("ym"), "ym"),
+            aliased(call("struct", vec![max("i"), max("s")]), "st"),
+        ],
+        1,
     );
-    let mut s = stream(&run.channel, "ExecutePlan", request(root(plan)))
-        .await
-        .expect("stream");
-    let mut responses = Vec::new();
-    let status = loop {
-        match s.message().await {
-            Ok(Some(r)) => responses.push(r),
-            Ok(None) => panic!("the action did not fail ({} responses)", responses.len()),
-            Err(status) => break status,
-        }
+    let (got, _) = observed_run(plan).await;
+    let cell = |k: &str| {
+        got["m"]
+            .iter()
+            .find(|(n, _)| n == k)
+            .and_then(|(_, v)| v.clone())
+            .expect(k)
     };
-    assert_eq!(error_class(&status), "KRISHIV_UNSUPPORTED_FEATURE");
-    let (got, carrying) = observed_of(&responses);
-    assert_eq!(carrying, 1);
-    assert_eq!(got.len(), 1, "{got:?}");
-    assert_eq!(got["a"], vec![("n".to_owned(), long(3))]);
+    let LiteralType::Map(map) = cell("m") else {
+        panic!("map")
+    };
+    assert_eq!((map.keys.len(), map.values.len()), (1, 1), "{map:?}");
+    assert_eq!(map.keys[0].literal_type, Some(LiteralType::Long(7)));
+    assert_eq!(map.values[0].literal_type, Some(LiteralType::Integer(1)));
+    assert!(map.key_type.is_some() && map.value_type.is_some());
+    assert_eq!(cell("b"), LiteralType::Binary(vec![0xFF, 0x00, 0xFE]));
+    assert_eq!(cell("dt"), LiteralType::DayTimeInterval(172_800_000_000));
+    assert_eq!(cell("ym"), LiteralType::YearMonthInterval(2));
+    let LiteralType::Struct(st) = cell("st") else {
+        panic!("struct")
+    };
+    assert_eq!(st.elements.len(), 2);
+    assert!(st.struct_type.is_some());
+    assert_eq!(
+        st.elements[1].literal_type,
+        Some(LiteralType::String("x".into()))
+    );
 }
 
 /// The caller of every request to a server without authentication.

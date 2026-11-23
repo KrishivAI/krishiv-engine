@@ -27,7 +27,16 @@ iceberg-rest = [
     "krishiv-store/cloud",
 ]
 # The catalog factories of the session's registry (design P3-T067 §2.3): `iceberg-rest` declared catalogs.
-session = ["iceberg-rest", "dep:krishiv-session", "dep:krishiv-plan", "tokio/rt"]
+# The declared tables' reads open through the Iceberg connector (design P3-T067 PR-58b).
+session = [
+    "iceberg-rest",
+    "dep:krishiv-session",
+    "dep:krishiv-plan",
+    "dep:krishiv-exec",
+    "dep:krishiv-connectors-iceberg",
+    "dep:async-trait",
+    "tokio/rt",
+]
 # The Unity Catalog read-only client (async reqwest over rustls on a thread of its own, every request on krishiv-store's
 # egress policy client). Off by default; shares no code with
 # `iceberg-rest`, so either feature builds without the other.
@@ -36,6 +45,22 @@ unity = [
     "dep:serde_json",
     "dep:tokio",
     "dep:url",
+    "dep:krishiv-plan",
+    "dep:krishiv-types",
+    "tokio/time",
+    "tokio/sync",
+    "dep:krishiv-store",
+    "krishiv-store/cloud",
+]
+
+# The AWS Glue Data Catalog read-only client (JSON API over async reqwest, signed with SigV4 on `sha2`; no AWS SDK).
+# Off by default; shares no code with `iceberg-rest` or `unity`.
+glue = [
+    "dep:reqwest",
+    "dep:serde_json",
+    "dep:tokio",
+    "dep:url",
+    "dep:sha2",
     "dep:krishiv-plan",
     "dep:krishiv-types",
     "tokio/time",
@@ -53,17 +78,26 @@ krishiv-plan = { path = "../krishiv-plan", version = "=0.2.1", optional = true }
 krishiv-types = { path = "../krishiv-types", version = "=0.2.1", optional = true }
 # The egress address rule of the metastore connection (design P3-T067 §5.2).
 krishiv-store = { path = "../krishiv-store", version = "=0.2.1", optional = true }
+# The `TableProvider` a declared table's scan opens, and the Iceberg tables it opens (feature `session`).
+krishiv-exec = { path = "../krishiv-exec", version = "=0.2.1", optional = true }
+krishiv-connectors-iceberg = { path = "../krishiv-connectors-iceberg", version = "=0.2.1", optional = true }
 # The `CatalogFactory` trait and the declarations it builds from (feature `session`).
 krishiv-session = { path = "../krishiv-session", version = "=0.2.1", optional = true }
 tracing.workspace = true
+# The connector's async `RestCommitTransport` trait, implemented by a declared table's committer (feature `session`).
+async-trait = { workspace = true, optional = true }
 thrift = { workspace = true, optional = true }
 tokio = { workspace = true, features = ["rt"], optional = true }
 reqwest = { workspace = true, features = ["rustls"], optional = true }
 serde_json = { workspace = true, features = ["std"], optional = true }
 url = { workspace = true, optional = true }
 rusqlite = { workspace = true, optional = true }
+sha2 = { workspace = true, optional = true }
 
 [dev-dependencies]
 futures = { workspace = true, features = ["alloc", "executor"] }
 krishiv-plan = { path = "../krishiv-plan", version = "=0.2.1", features = ["testing"] }
 tempfile.workspace = true
+# The declared-table read tests serve a table the connector's test helper writes.
+krishiv-connectors-iceberg = { path = "../krishiv-connectors-iceberg", version = "=0.2.1", features = ["testing"] }
+arrow-array = { workspace = true }

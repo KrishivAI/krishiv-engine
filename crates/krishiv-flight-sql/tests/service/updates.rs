@@ -11,6 +11,28 @@ pub(super) fn put_of<M: ProstMessageExt>(cmd: &M) -> FlightData {
     FlightData::new().with_descriptor(FlightDescriptor::new_cmd(cmd.as_any().encode_to_vec()))
 }
 
+/// `DoPut(CommandStatementUpdate{sql})` carrying a `traceparent`: the record count.
+pub(super) async fn update_with_trace(
+    h: &mut Harness,
+    token: &str,
+    cookie: &str,
+    sql: &str,
+    traceparent: &str,
+) -> Result<i64, Status> {
+    let cmd = CommandStatementUpdate {
+        query: sql.to_owned(),
+        transaction_id: None,
+    };
+    let mut request = authed(futures::stream::iter([put_of(&cmd)]), token, Some(cookie));
+    request
+        .metadata_mut()
+        .insert("traceparent", traceparent.parse().expect("header"));
+    let response = h.client.do_put(request).await?;
+    let results: Vec<_> = response.into_inner().try_collect().await?;
+    let result = DoPutUpdateResult::decode(results[0].app_metadata.as_ref()).expect("result");
+    Ok(result.record_count)
+}
+
 /// `DoPut(CommandStatementUpdate{sql})`: the record count and the session id set.
 pub(super) async fn update(
     h: &mut Harness,
@@ -33,7 +55,7 @@ pub(super) async fn update(
     Ok((result.record_count, id))
 }
 
-/// DDL and DML answer `-1` (Spark reports no count for them); the statement runs once, so a
+/// DDL and DML answer `0` (Spark reports no count for them; `-1` would make the JDBC driver ask for a result set); the statement runs once, so a
 /// second create of the same view fails; a cookie session keeps what it made.
 #[tokio::test(flavor = "multi_thread")]
 async fn update_counts() {
@@ -46,7 +68,7 @@ async fn update_counts() {
     )
     .await
     .expect("create");
-    assert_eq!(count, -1);
+    assert_eq!(count, 0, "no count is 0 (Avatica reads -1 as a result set)");
     let cookie = cookie.expect("a temporary view marks the session changed: cookie");
     let e = update(
         &mut h,
@@ -72,7 +94,7 @@ async fn update_counts() {
     )
     .await
     .expect("SET");
-    assert_eq!((count, set), (-1, None), "a presented cookie sets none");
+    assert_eq!((count, set), (0, None), "a presented cookie sets none");
 }
 
 /// A query sent as an update is refused before it runs (design §4.3, N2), and its session is

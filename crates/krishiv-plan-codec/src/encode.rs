@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use krishiv_common::secret::{OptionValue, SecretValue};
+use krishiv_exec::AsOfMergeDirection;
 use krishiv_exec::JoinType;
 use krishiv_exec::aggregate::{
     AggInput, AggregateExpr, AggregateFunction, AggregateOutput, UdafCall,
@@ -309,6 +310,10 @@ impl Encoder {
                 input: self.node_index(input)?,
                 limit: *limit,
                 offset: *offset,
+            }),
+            PhysNode::Tail { input, limit } => Kind::Tail(pb::TailNode {
+                input: self.node_index(input)?,
+                limit: *limit,
             }),
             PhysNode::Sample {
                 input,
@@ -677,6 +682,20 @@ impl Encoder {
             null_safe: join.null_safe.clone(),
             residual: self.residual(join.residual.as_ref())?,
             single_match: join.single_match,
+            as_of: match &join.as_of {
+                None => None,
+                Some(a) => Some(pb::AsOfMerge {
+                    left_column: a.left_column as u64,
+                    right_column: a.right_column as u64,
+                    direction: match a.direction {
+                        AsOfMergeDirection::Backward => pb::AsOfMergeDirection::Backward,
+                        AsOfMergeDirection::Forward => pb::AsOfMergeDirection::Forward,
+                    } as i32,
+                    allow_exact: a.allow_exact,
+                    distance: self.residual(a.distance.as_ref())?,
+                    distance_on_every_pair: a.distance_on_every_pair,
+                }),
+            },
         })
     }
 
@@ -1637,6 +1656,10 @@ fn write_plan(write: &WritePlan, nested: &Cell<bool>) -> Result<pb::WritePlan> {
                 })
             })
             .collect::<Result<_>>()?,
+        bucket: write.bucket.as_ref().map(|b| pb::WriteBucket {
+            column: b.column as u64,
+            sort_by: indexes(&b.sort_by),
+        }),
     })
 }
 
@@ -1753,6 +1776,24 @@ fn spark_type(t: &DataType, nested: &Cell<bool>) -> Result<pb::DataType> {
             });
         }
         DataType::CalendarInterval => (Kind::CalendarInterval, 0, 0, 0),
+        DataType::Udt(u) => {
+            // Spark's JSON form: the class names and the storage type. A storage type that is an
+            // array, map or struct is a nested type the reader needs `nested_types` for.
+            if u.sql_type().any_type(&DataType::is_nested) {
+                nested.set(true);
+            }
+            // The decoder reads the UDT object as one depth level: refuse here what it would refuse there.
+            if t.nesting_depth() > DataType::MAX_NESTING_DEPTH {
+                return Err(CodecError::Unsupported(
+                    "a user-defined type nested deeper than the decoder reads".to_owned(),
+                ));
+            }
+            return Ok(pb::DataType {
+                kind: Kind::Udt as i32,
+                json: t.json(),
+                ..pb::DataType::default()
+            });
+        }
         DataType::CollatedString(c) => {
             // By canonical name: ids index an ICU build's table. INDETERMINATE is `null`.
             if c.is_utf8_binary() {

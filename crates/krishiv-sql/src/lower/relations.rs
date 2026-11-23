@@ -399,6 +399,7 @@ impl Lowerer {
                 JoinConstraint::NearestBy(n) => {
                     return Err(unsupported("NEAREST BY joins", n.span));
                 }
+                JoinConstraint::AsOf(c) => return self.as_of_join(plan, right, kind, c, j.span),
             }
         };
         Ok(self.node(
@@ -409,6 +410,52 @@ impl Lowerer {
                 condition,
             },
             j.span,
+        ))
+    }
+
+    /// `kind ASOF JOIN right MATCH_CONDITION (l op r) [ON | USING]` onto `plan` (Spark 4.3's
+    /// `AsOfJoin.fromMatchCondition`): the operands as written, put per side by the analyzer.
+    fn as_of_join(
+        &mut self,
+        plan: LogicalPlan,
+        right: LogicalPlan,
+        kind: IrJoin,
+        c: &AsOfCriteria,
+        span: Span,
+    ) -> R<LogicalPlan> {
+        let mut m = &c.match_condition;
+        while let ExprKind::Nested(inner) = &m.kind {
+            m = inner;
+        }
+        let ExprKind::Binary(l, op, r) = &m.kind else {
+            return Err(unsupported("this ASOF JOIN match condition", c.span));
+        };
+        let op = match op {
+            BinaryOp::GtEq => ">=",
+            BinaryOp::Gt => ">",
+            BinaryOp::LtEq => "<=",
+            BinaryOp::Lt => "<",
+            _ => return Err(unsupported("this ASOF JOIN match condition", c.span)),
+        };
+        let (l, r) = (arc(self.expr(l)?), arc(self.expr(r)?));
+        let as_of = krishiv_plan::AsOfMatch::sql(l, op, r)
+            .ok_or_else(|| unsupported("this ASOF JOIN match condition", c.span))?;
+        let condition = match &c.filter {
+            None => JoinCondition::None,
+            Some(AsOfFilter::On(e)) => JoinCondition::On(arc(self.expr(e)?)),
+            Some(AsOfFilter::Using(cols)) => {
+                JoinCondition::Using(cols.iter().map(|c| c.value.clone()).collect())
+            }
+        };
+        Ok(self.node(
+            PlanNode::AsOfJoin {
+                left: arc(plan),
+                right: arc(right),
+                kind,
+                condition,
+                as_of: Arc::new(as_of),
+            },
+            span,
         ))
     }
 
@@ -597,10 +644,19 @@ impl Lowerer {
                 temporal,
                 options,
             } => {
-                if let Some(t) = temporal {
-                    return Err(unsupported("time travel", t.span));
-                }
                 let mut opts = BTreeMap::new();
+                if let Some(t) = temporal {
+                    // No table reads an older version yet. Spark raises the error where the
+                    // relation resolves (a missing table is `TABLE_OR_VIEW_NOT_FOUND` first), so
+                    // the clause rides on the read for the session to refuse then.
+                    opts.insert(
+                        krishiv_plan::TIME_TRAVEL_OPTION.to_owned(),
+                        OptionValue::from_user(
+                            krishiv_plan::TIME_TRAVEL_OPTION,
+                            format!("{:?}", t.kind),
+                        ),
+                    );
+                }
                 for o in options {
                     let key: Vec<&str> = o.key.parts.iter().map(|p| p.value.as_str()).collect();
                     let key = key.join(".");
@@ -649,6 +705,7 @@ impl Lowerer {
                 return Err(unsupported("IDENTIFIER()", name.span));
             }
             TableFactorKind::Values(rows) => self.inline_table(rows, tf.alias.as_ref(), tf.span)?,
+            TableFactorKind::JsonTable(t) => self.json_table(t, tf.span)?,
             TableFactorKind::TableFunction {
                 name,
                 dynamic_name,
@@ -750,6 +807,152 @@ impl Lowerer {
             }
         };
         Ok(plan)
+    }
+
+    fn text_literal(&self, s: &str, span: Span) -> krishiv_plan::Expr {
+        self.ex(ExprNode::Literal(IrLiteral::String(s.to_owned())), span)
+    }
+
+    /// `JSON_TABLE(input, 'row path' COLUMNS (...) [... ON ERROR])` (the flat form): a `posexplode` of the row texts
+    /// of the input, then one projected column per `COLUMNS` entry, read from the row text and cast to its type.
+    fn json_table(&mut self, t: &crate::ast::JsonTable, span: Span) -> R<LogicalPlan> {
+        use crate::ast::JsonTableColumnKind as Kind;
+        let call_text = json_table_text(t);
+        let invalid = |location: String, path: &str, at: Span| {
+            err(
+                krishiv_common::error::DatatypeMismatchInvalidJsonTablePath {
+                    sql_expr: format!("\"{call_text}\""),
+                    location,
+                    path: sql_string_value(path),
+                },
+                at,
+            )
+        };
+        if !json_table_path_ok(&t.path, true) {
+            return Err(invalid("row path".to_owned(), &t.path, t.path_span));
+        }
+        let mut seen = std::collections::HashSet::new();
+        for c in &t.columns {
+            if !seen.insert(c.name.value.to_ascii_lowercase()) {
+                return Err(err(
+                    krishiv_common::error::InvalidSqlSyntaxDuplicateJsonTableColumn {
+                        column_name: format!("`{}`", c.name.value),
+                    },
+                    c.span,
+                ));
+            }
+        }
+        let input = self.arg(&t.input)?;
+        let rows = self.call(
+            "__json_table_rows",
+            vec![
+                input,
+                arc(self.text_literal(&t.path, span)),
+                arc(self.ex(
+                    ExprNode::Literal(IrLiteral::Boolean(t.error_on_error)),
+                    span,
+                )),
+            ],
+            span,
+        );
+        let (pos, row) = ("__json_table_pos", "__json_table_row");
+        let one_row = self.node(PlanNode::OneRowRelation, span);
+        let generated = self.node(
+            PlanNode::Generate {
+                input: arc(one_row),
+                kind: krishiv_plan::GeneratorKind::PosExplode,
+                outer: false,
+                arg: arc(rows),
+                output: Vec::new(),
+                names: vec![pos.to_owned(), row.to_owned()],
+                qualifier: None,
+            },
+            span,
+        );
+        let mut exprs = Vec::with_capacity(t.columns.len());
+        for c in &t.columns {
+            let sp = c.span;
+            let value = match &c.kind {
+                Kind::Ordinality => {
+                    let next = self.call(
+                        Builtin::Add.name(),
+                        vec![
+                            arc(self.column(vec![pos.to_owned()], sp)),
+                            arc(self.ex(ExprNode::Literal(IrLiteral::Integer(1)), sp)),
+                        ],
+                        sp,
+                    );
+                    self.ex(
+                        ExprNode::Cast {
+                            expr: arc(next),
+                            to: krishiv_types::DataType::Long,
+                            mode: CastMode::Default,
+                        },
+                        sp,
+                    )
+                }
+                Kind::Value { data_type, path } | Kind::Exists { data_type, path } => {
+                    let (path_text, path_span) = match path {
+                        Some((p, at)) => (p.clone(), *at),
+                        None => (json_table_default_path(&c.name.value), c.span),
+                    };
+                    if !json_table_path_ok(&path_text, false) {
+                        return Err(invalid(
+                            format!("column '{}'", c.name.value),
+                            &path_text,
+                            path_span,
+                        ));
+                    }
+                    let function = if matches!(c.kind, Kind::Exists { .. }) {
+                        "__json_table_exists"
+                    } else {
+                        "__json_table_value"
+                    };
+                    let read = self.call(
+                        function,
+                        vec![
+                            arc(self.column(vec![row.to_owned()], sp)),
+                            arc(self.text_literal(&path_text, sp)),
+                            // The call Spark names when no cast reaches the column's type: the analyzer
+                            // checks the cast in the session's mode and prints this text.
+                            arc(self.text_literal(&call_text, sp)),
+                        ],
+                        sp,
+                    );
+                    let to = data_type
+                        .without_char_varchar()
+                        .to_data_type()
+                        .map_err(|e| err(e, data_type.span))?;
+                    if matches!(c.kind, Kind::Value { .. }) && to == krishiv_types::DataType::String
+                    {
+                        read
+                    } else {
+                        self.ex(
+                            ExprNode::Cast {
+                                expr: arc(read),
+                                to,
+                                mode: CastMode::Default,
+                            },
+                            sp,
+                        )
+                    }
+                }
+            };
+            exprs.push(arc(self.ex(
+                ExprNode::Alias {
+                    expr: arc(value),
+                    name: c.name.value.clone(),
+                },
+                sp,
+            )));
+        }
+        Ok(self.node(
+            PlanNode::Project {
+                input: arc(generated),
+                exprs,
+            },
+            span,
+        ))
     }
 
     /// `TABLE(name)` or `TABLE(query)` with its partitioning, as an
@@ -861,5 +1064,105 @@ impl Lowerer {
             },
             span,
         ))
+    }
+}
+
+/// Whether `path` is a path `JSON_TABLE` takes: `$`, then `.key`, `['key']`, `["key"]` and `[n]` steps, and with
+/// `row` one trailing `[*]` (Spark: "simple, wildcard-free paths").
+fn json_table_path_ok(path: &str, row: bool) -> bool {
+    let Some(mut rest) = path.strip_prefix('$') else {
+        return false;
+    };
+    while !rest.is_empty() {
+        if let Some(r) = rest.strip_prefix('.') {
+            let end = r.find(['.', '[']).unwrap_or(r.len());
+            if end == 0 || &r[..end] == "*" {
+                return false;
+            }
+            rest = &r[end..];
+        } else if let Some(r) = rest.strip_prefix("['") {
+            let Some(end) = r.find('\'') else {
+                return false;
+            };
+            let Some(after) = r[end..].strip_prefix("']") else {
+                return false;
+            };
+            rest = after;
+        } else if let Some(r) = rest.strip_prefix('[') {
+            if row && r == "*]" {
+                return true;
+            }
+            let end = r.find(|c: char| !c.is_ascii_digit()).unwrap_or(r.len());
+            let Some(after) = r[end..].strip_prefix(']') else {
+                return false;
+            };
+            if end == 0 || r[..end].parse::<usize>().is_err() {
+                return false;
+            }
+            rest = after;
+        } else {
+            return false;
+        }
+    }
+    true
+}
+
+/// The path of a column written without one, as Spark builds it: `$['name']` (a name holding `'` makes it invalid).
+/// Spark's path parser reads the name between the quotes as is, so a backslash is a key character; the kernel's
+/// parser unescapes, so it is doubled here to select the same key.
+fn json_table_default_path(name: &str) -> String {
+    format!("$['{}']", name.replace('\\', "\\\\"))
+}
+
+/// A value as Spark's `toSQLValue` prints a string: quoted, `\` and `'` escaped.
+fn sql_string_value(s: &str) -> String {
+    format!("'{}'", s.replace('\\', "\\\\").replace('\'', "\\'"))
+}
+
+/// `JSON_TABLE(...)` as Spark prints the call in an error: the paths as written and the columns with their SQL
+/// types. **Named divergence:** Spark prints the input text; here it is elided as `...` because an error message
+/// must not repeat a document (pinned by `the_error_does_not_repeat_the_input_document`).
+fn json_table_text(t: &crate::ast::JsonTable) -> String {
+    use crate::ast::JsonTableColumnKind as Kind;
+    let input = "...";
+    let columns: Vec<String> = t
+        .columns
+        .iter()
+        .map(|c| match &c.kind {
+            Kind::Ordinality => format!("{} FOR ORDINALITY", c.name.value),
+            Kind::Value { data_type, path } | Kind::Exists { data_type, path } => {
+                let exists = if matches!(c.kind, Kind::Exists { .. }) {
+                    " EXISTS"
+                } else {
+                    ""
+                };
+                let path = path.as_ref().map_or_else(
+                    || json_table_default_path(&c.name.value),
+                    |(p, _)| p.clone(),
+                );
+                let ty = data_type
+                    .without_char_varchar()
+                    .to_data_type()
+                    .map_or_else(|_| "...".to_owned(), |d| d.sql());
+                format!("{} {ty}{exists} PATH '{path}'", c.name.value)
+            }
+        })
+        .collect();
+    format!(
+        "JSON_TABLE({input}, '{}' COLUMNS ({}) {} ON ERROR)",
+        t.path,
+        columns.join(", "),
+        if t.error_on_error { "ERROR" } else { "NULL" }
+    )
+}
+
+#[cfg(test)]
+mod default_path_tests {
+    use super::json_table_default_path;
+
+    #[test]
+    fn a_backslash_in_a_column_name_stays_a_key_character() {
+        assert_eq!(json_table_default_path("a"), "$['a']");
+        assert_eq!(json_table_default_path("a\\b"), "$['a\\\\b']");
     }
 }

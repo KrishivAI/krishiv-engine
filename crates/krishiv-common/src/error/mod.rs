@@ -292,8 +292,9 @@ impl KrishivError {
     /// ([`crate::redact::is_redacted_setting`]). Other parameter text stays,
     /// and so does each occurrence of `key`, so the key is still named; a
     /// value inside a longer word goes too, the safe side. When keeping the
-    /// key would leave the value readable (the value contains the key, or
-    /// overlaps it), the value is replaced everywhere, key included. The
+    /// key would leave the value readable (the value contains the key and is
+    /// longer, or overlaps it), the value is replaced everywhere, key
+    /// included. A value equal to the key stays: the key already shows it. The
     /// class, the SQLSTATE and the query contexts are kept; a cause is
     /// dropped. An empty `value` changes nothing.
     #[must_use]
@@ -356,6 +357,16 @@ impl KrishivError {
             .get_or_insert_with(Box::default)
             .contexts
             .push(context);
+        self
+    }
+
+    /// This error with no query context, for a caller that analyzed text of its own making and
+    /// attaches the context of the text the user wrote instead (a metric view's expressions).
+    #[must_use]
+    pub fn without_query_contexts(mut self) -> Self {
+        if let Some(e) = &mut self.extra {
+            e.contexts.clear();
+        }
         self
     }
 

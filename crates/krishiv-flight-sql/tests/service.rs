@@ -25,7 +25,7 @@ use krishiv_connect_server::{
 };
 use krishiv_flight_sql::{FlightSqlConfig, FlightSqlServer, ServerInfo};
 use krishiv_session::Session;
-use krishiv_session::auth::{AuthConfig, Authenticator, DeniedCounts, ServerAuth};
+use krishiv_session::auth::{AuthConfig, Authenticator, DeniedCounts, Method, ServerAuth, Surface};
 use prost::Message;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
@@ -383,26 +383,73 @@ async fn flight_sql_requires_auth() {
     assert_eq!(h.flight.session_count(), 0);
 }
 
-/// `Authorization: Basic` stays a malformed credential on every surface until owner item 5
-/// (§3.1): the operator's own token as the password is refused before any session work.
+/// `Authorization: Basic` on Flight SQL (§3.1, owner item 5, 2026-11-20): the token as the
+/// password and its principal's name as the user name (padded and unpadded base64 are
+/// `basic_header`'s unit tests); another principal's name with the token is `UNAUTHENTICATED`,
+/// counted under `basic`, before any session work. A Handshake with `Basic` answers the token
+/// as its bearer.
 #[tokio::test(flavor = "multi_thread")]
-async fn basic_refused_until_enabled() {
+async fn basic_binds_the_user_to_the_token() {
     let mut h = start(FlightSqlConfig::default()).await;
-    let cmd = CommandStatementQuery {
-        query: "SELECT 1".to_owned(),
-        transaction_id: None,
+    let with = |value: &str| {
+        let cmd = CommandStatementQuery {
+            query: "SELECT 1".to_owned(),
+            transaction_id: None,
+        };
+        let mut r = Request::new(FlightDescriptor::new_cmd(cmd.as_any().encode_to_vec()));
+        r.metadata_mut()
+            .insert("authorization", value.parse().expect("header"));
+        r
     };
-    let mut r = Request::new(FlightDescriptor::new_cmd(cmd.as_any().encode_to_vec()));
-    // base64("ops:" + OPS)
-    r.metadata_mut().insert(
+    // base64("ops:" + OPS); the scheme ignores case.
+    let ops = "Basic b3BzOmZsaWdodC1vcGVyYXRvci10b2tlbi0wMTIzNDU2Nzg5YWJjZGVm";
+    for value in [ops.to_owned(), ops.replacen("Basic", "BASIC", 1)] {
+        let value = value.as_str();
+        let info = h
+            .client
+            .get_flight_info(with(value))
+            .await
+            .expect("a Basic login");
+        assert_eq!(info.get_ref().endpoint.len(), 1);
+    }
+    // base64("other:" + OPS): the token is ops's.
+    let e = h
+        .client
+        .get_flight_info(with(
+            "Basic b3RoZXI6ZmxpZ2h0LW9wZXJhdG9yLXRva2VuLTAxMjM0NTY3ODlhYmNkZWY=",
+        ))
+        .await
+        .expect_err("another principal's name");
+    assert_eq!(e.code(), Code::Unauthenticated, "{e:?}");
+    let e = h
+        .client
+        .get_flight_info(with("Basic not-base64!"))
+        .await
+        .expect_err("malformed");
+    assert_eq!(e.code(), Code::Unauthenticated, "{e:?}");
+    let failed = h
+        .auth
+        .failure_counts()
+        .into_iter()
+        .find(|c| c.surface == Surface::FlightSql && c.method == Method::Basic)
+        .map(|c| c.count);
+    assert_eq!(failed, Some(1), "the wrong name counts under basic");
+
+    let mut request = Request::new(futures::stream::iter([HandshakeRequest::default()]));
+    request.metadata_mut().insert(
         "authorization",
         "Basic b3BzOmZsaWdodC1vcGVyYXRvci10b2tlbi0wMTIzNDU2Nzg5YWJjZGVm"
             .parse()
             .expect("header"),
     );
-    let e = h.client.get_flight_info(r).await.expect_err("basic");
-    assert_eq!(e.code(), Code::Unauthenticated, "{e:?}");
-    assert_eq!(h.flight.session_count(), 0);
+    let response = h.client.handshake(request).await.expect("handshake");
+    assert_eq!(
+        response
+            .metadata()
+            .get("authorization")
+            .and_then(|v| v.to_str().ok()),
+        Some(format!("Bearer {OPS}").as_str())
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1865,4 +1912,162 @@ async fn list_actions_names_the_served_actions() {
         ]
     );
     assert_eq!(h.flight.session_count(), 0);
+}
+
+/// `authed` with a W3C `traceparent` header.
+fn traced<T>(message: T, token: &str, cookie: Option<&str>, traceparent: &str) -> Request<T> {
+    let mut r = authed(message, token, cookie);
+    r.metadata_mut()
+        .insert("traceparent", traceparent.parse().expect("header"));
+    r
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_requests_traceparent_names_the_trace_of_its_query_and_update() {
+    let mut h = start(FlightSqlConfig::default()).await;
+    let trace = "4bf92f3577b34da6a3ce929d0e0e4736";
+    let header = format!("00-{trace}-00f067aa0ba902b7-01");
+    // A query: only the DoGet header names its trace (the GetFlightInfo classification runs nothing).
+    let cmd = CommandStatementQuery {
+        query: "SELECT 41 AS traced_query".to_owned(),
+        transaction_id: None,
+    };
+    let descriptor = FlightDescriptor::new_cmd(cmd.as_any().encode_to_vec());
+    let response = h
+        .client
+        .get_flight_info(traced(descriptor, OPS, None, &header))
+        .await
+        .expect("info");
+    let cookie = set_cookie(response.metadata()).expect("cookie");
+    let t = ticket(&response.into_inner());
+    let stream = h
+        .client
+        .do_get(traced(t, OPS, Some(&cookie), &header))
+        .await
+        .expect("do_get");
+    let data = stream
+        .into_inner()
+        .map_err(|s| FlightError::Tonic(Box::new(s)));
+    let batches: Vec<RecordBatch> = FlightRecordBatchStream::new_from_flight_data(data)
+        .try_collect()
+        .await
+        .expect("fetch");
+    assert_eq!(rows(&batches), 1);
+    // A command run by GetFlightInfo (a `SET` sent as a statement query) takes the header there.
+    let set = CommandStatementQuery {
+        query: "SET spark.sql.shuffle.partitions=4".to_owned(),
+        transaction_id: None,
+    };
+    h.client
+        .get_flight_info(traced(
+            FlightDescriptor::new_cmd(set.as_any().encode_to_vec()),
+            OPS,
+            Some(&cookie),
+            &header,
+        ))
+        .await
+        .expect("command info");
+    // An update.
+    updates::update_with_trace(
+        &mut h,
+        OPS,
+        &cookie,
+        "SET spark.sql.shuffle.partitions=3",
+        &header,
+    )
+    .await
+    .expect("update");
+    // A non-ASCII header is no header: the query runs, with no trace.
+    let mut odd = authed(
+        FlightDescriptor::new_cmd(
+            CommandStatementQuery {
+                query: "SELECT 43 AS odd_header".to_owned(),
+                transaction_id: None,
+            }
+            .as_any()
+            .encode_to_vec(),
+        ),
+        OPS,
+        Some(&cookie),
+    );
+    let mut headers = std::mem::take(odd.metadata_mut()).into_headers();
+    headers.insert(
+        "traceparent",
+        tonic::codegen::http::HeaderValue::from_bytes(b"00-ab\xe9-00f067aa0ba902b7-01")
+            .expect("opaque bytes"),
+    );
+    *odd.metadata_mut() = tonic::metadata::MetadataMap::from_headers(headers);
+    let response = h.client.get_flight_info(odd).await.expect("info");
+    // The executing DoGet carries the same opaque header: the extraction on the path that runs
+    // the query is what is exercised.
+    let mut get = authed(ticket(&response.into_inner()), OPS, Some(&cookie));
+    let mut headers = std::mem::take(get.metadata_mut()).into_headers();
+    headers.insert(
+        "traceparent",
+        tonic::codegen::http::HeaderValue::from_bytes(b"00-ab\xe9-00f067aa0ba902b7-01")
+            .expect("opaque bytes"),
+    );
+    *get.metadata_mut() = tonic::metadata::MetadataMap::from_headers(headers);
+    let stream = h.client.do_get(get).await.expect("do_get");
+    let data = stream
+        .into_inner()
+        .map_err(|s| FlightError::Tonic(Box::new(s)));
+    let _rows: Vec<RecordBatch> = FlightRecordBatchStream::new_from_flight_data(data)
+        .try_collect()
+        .await
+        .expect("fetch");
+    // A query without the header has no trace.
+    let (plain, _) = info(&mut h, OPS, Some(&cookie), "SELECT 42 AS plain_query")
+        .await
+        .expect("info");
+    fetch(&mut h, OPS, Some(&cookie), ticket(&plain))
+        .await
+        .expect("fetch");
+    let (look, _) = info(
+        &mut h,
+        OPS,
+        Some(&cookie),
+        "SELECT query_text, trace_id FROM system.queries \
+         WHERE query_text LIKE 'SELECT 4_ AS %' OR query_text LIKE 'SET spark.sql.shuffle%'",
+    )
+    .await
+    .expect("info");
+    let seen = fetch(&mut h, OPS, Some(&cookie), ticket(&look))
+        .await
+        .expect("fetch");
+    let mut by_text = std::collections::BTreeMap::new();
+    for b in &seen {
+        let text = b
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("text");
+        let id = b
+            .column(1)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("trace");
+        for i in 0..b.num_rows() {
+            by_text
+                .entry(text.value(i).to_owned())
+                .or_insert_with(Vec::new)
+                .push((!arrow_array::Array::is_null(id, i)).then(|| id.value(i).to_owned()));
+        }
+    }
+    assert_eq!(
+        by_text.get("SELECT 41 AS traced_query"),
+        Some(&vec![Some(trace.to_owned())]),
+        "one row, in the request's trace"
+    );
+    assert_eq!(
+        by_text.get("SET spark.sql.shuffle.partitions=3"),
+        Some(&vec![Some(trace.to_owned())])
+    );
+    assert_eq!(
+        by_text.get("SET spark.sql.shuffle.partitions=4"),
+        Some(&vec![Some(trace.to_owned())]),
+        "a command run by GetFlightInfo"
+    );
+    assert_eq!(by_text.get("SELECT 42 AS plain_query"), Some(&vec![None]));
+    assert_eq!(by_text.get("SELECT 43 AS odd_header"), Some(&vec![None]));
 }

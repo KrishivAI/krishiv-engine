@@ -16,8 +16,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
+use axum::Extension;
 use axum::Router;
-use axum::extract::{Path, State};
+use axum::extract::{Path, RawQuery, State};
 use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, Uri, header};
 use axum::middleware::{self, Next};
 use axum::response::sse::{Event, KeepAlive, Sse};
@@ -31,6 +32,32 @@ use crate::guard::{
 
 /// One system-table row as JSON (column name to value).
 pub type Row = Map<String, Value>;
+
+/// The W3C `traceparent` and `baggage` header values of an HTTP request: untrusted text the session validates
+/// (a malformed value means no trace and never fails the request).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct InboundTrace {
+    /// The `traceparent` header value.
+    pub traceparent: Option<String>,
+    /// The `baggage` header value.
+    pub baggage: Option<String>,
+}
+
+impl InboundTrace {
+    /// The trace headers of `headers` (a non-ASCII value is no header at all).
+    pub fn from_headers(headers: &axum::http::HeaderMap) -> Self {
+        let text = |name: &str| {
+            headers
+                .get(name)
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_owned)
+        };
+        Self {
+            traceparent: text("traceparent"),
+            baggage: text("baggage"),
+        }
+    }
+}
 
 /// A boxed future the source returns (object safe, no `async_trait`).
 pub type UiFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, UiError>> + Send + 'a>>;
@@ -46,6 +73,12 @@ pub enum SystemTable {
     Memory,
     /// `system.caches`.
     Caches,
+    /// `system.sessions`: the sessions of every client, open and lately ended.
+    Sessions,
+    /// `system.resource_groups`: the workload groups with their limits and live counters.
+    ResourceGroups,
+    /// `system.partition_advice`: the partition columns the query history suggests, per table.
+    PartitionAdvice,
 }
 
 /// A source failed to read a table or act on a query. Carries the engine's Spark error class and SQLSTATE
@@ -114,6 +147,57 @@ pub trait UiSource: Send + Sync + 'static {
     /// `KRISHIV_QUERY_KILLED`); `false` when it is not running.
     fn cancel<'a>(&'a self, query_id: &'a str) -> UiFuture<'a, bool>;
 
+    /// [`Self::cancel`] limited to the query `query_id` of session `session_id`: a query another session runs
+    /// under the same id (a client chooses its operation ids) is left running. `false` when that session runs
+    /// no such query, and from a source that does not tell sessions apart.
+    fn cancel_in_session<'a>(
+        &'a self,
+        query_id: &'a str,
+        session_id: &'a str,
+    ) -> UiFuture<'a, bool> {
+        let _ = (query_id, session_id);
+        Box::pin(async { Ok(false) })
+    }
+
+    /// Ends session `session_id` as an operator's kill: its running queries fail with `KRISHIV_QUERY_KILLED`
+    /// and the session's next call is refused. The number of queries cancelled; `None` when no open session
+    /// has that id, or when the source does not end sessions (a console over one session, or over stored
+    /// profiles).
+    fn close_session<'a>(&'a self, session_id: &'a str) -> UiFuture<'a, Option<usize>> {
+        let _ = session_id;
+        Box::pin(async { Ok(None) })
+    }
+
+    /// The plan tree of the finished query whose `system.queries` row is `query`, as the profile document
+    /// stores it (an array of nodes: `id`, `name`, `children` as indexes into the array), `None` when this
+    /// source keeps no plan for it. The page joins the nodes to the query's operators by `node_id`, and lists
+    /// the operators alone when there is none. Only a node's id, name and children reach the page
+    /// (`plan_nodes`).
+    fn plan<'a>(&'a self, query: &'a Row) -> UiFuture<'a, Option<Value>> {
+        let _ = query;
+        Box::pin(async { Ok(None) })
+    }
+
+    /// Whether the plan of the ended query whose row is `query` can still arrive: the source writes a history
+    /// store and the query ended a moment ago, so its profile may not be written yet. The page asks again
+    /// only while this holds; a source that will never have the plan says `false` and the page says so at once.
+    fn plan_pending(&self, query: &Row) -> bool {
+        let _ = query;
+        false
+    }
+
+    /// Which console this is, as `/api/internal/health` reports it and the page reads it: `server` (every
+    /// session of a server), `embedded` (one session of the host process) or `profiles` (stored profiles, no
+    /// engine).
+    fn mode(&self) -> &'static str {
+        "server"
+    }
+
+    /// The id of the one session an `embedded` console shows.
+    fn session_id(&self) -> Option<String> {
+        None
+    }
+
     /// The objects one level below `path` in the catalog tree, as rows with at least a `name`: no path lists the
     /// catalogs, `[catalog]` its schemas, `[catalog, schema]` its tables, `[catalog, schema, table]` its columns
     /// (`name`, `data_type`, `comment`). A source with no catalog has none.
@@ -133,6 +217,18 @@ pub trait UiSource: Send + Sync + 'static {
     fn sql_start<'a>(&'a self, sql: &'a str, caller: Option<&'a Caller>) -> UiFuture<'a, String> {
         let _ = (sql, caller);
         Box::pin(async { Err(UiError::new("this source runs no SQL")) })
+    }
+
+    /// As [`Self::sql_start`], with the W3C trace headers of the HTTP request (P3-T068): the statement's queries join
+    /// that trace. A source that does not trace starts the run as `sql_start` does.
+    fn sql_start_traced<'a>(
+        &'a self,
+        sql: &'a str,
+        caller: Option<&'a Caller>,
+        trace: &'a InboundTrace,
+    ) -> UiFuture<'a, String> {
+        let _ = trace;
+        self.sql_start(sql, caller)
     }
 
     /// The state of an editor run (`state` is `running`, `finished`, `failed` or `cancelled`; a finished run
@@ -181,14 +277,53 @@ pub fn random_token() -> Result<String, UiError> {
 const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; \
 connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'; form-action 'self'";
 
-async fn security_headers(req: axum::extract::Request, next: Next) -> Response {
+/// Whether `req` is the embeddable view: the profile page of one query (`/queries/{id}/profile`, the only
+/// `embeddable` route of `ui/routes.json`) with exactly one `embed` parameter, and it is `1`. Anything else (another
+/// page, `embed=0&embed=1`, an API path) is never framable.
+fn is_embed_page(req: &axum::extract::Request) -> bool {
+    let mut seg = req.uri().path().trim_matches('/').split('/');
+    let profile = matches!(
+        (seg.next(), seg.next(), seg.next(), seg.next()),
+        (Some("queries"), Some(id), Some("profile"), None) if !id.is_empty()
+    );
+    // Names and values are decoded as the page decodes them (`emb%65d` is `embed`).
+    let mut embeds = req.uri().query().unwrap_or("").split('&').filter_map(|kv| {
+        let (k, v) = kv.split_once('=').unwrap_or((kv, ""));
+        (crate::embed::percent_decode(k).as_deref() == Some(crate::embed::EMBED_PARAM))
+            .then(|| crate::embed::percent_decode(v))
+    });
+    profile && embeds.next() == Some(Some("1".to_owned())) && embeds.next().is_none()
+}
+
+async fn security_headers(
+    State(policy): State<Arc<crate::pages::UiPolicy>>,
+    req: axum::extract::Request,
+    next: Next,
+) -> Response {
+    // Only the embeddable view may be framed, and only by the listed origins (T071); the default is `'none'`.
+    let framable = is_embed_page(&req) && !policy.embed().origins().is_empty();
     let mut res = next.run(req).await;
     let h = res.headers_mut();
+    let csp = framable
+        .then(|| {
+            CSP.replace(
+                "frame-ancestors 'none'",
+                &format!("frame-ancestors {}", policy.embed().frame_ancestors()),
+            )
+        })
+        .and_then(|c| HeaderValue::from_str(&c).ok());
+    // A policy that cannot be written falls back to the static one and `DENY`: never open.
+    let framable = csp.is_some();
     h.insert(
         header::CONTENT_SECURITY_POLICY,
-        HeaderValue::from_static(CSP),
+        csp.unwrap_or_else(|| HeaderValue::from_static(CSP)),
     );
-    h.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
+    if framable {
+        // X-Frame-Options cannot name several origins; frame-ancestors decides.
+        h.remove(header::X_FRAME_OPTIONS);
+    } else {
+        h.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
+    }
     h.insert(
         header::X_CONTENT_TYPE_OPTIONS,
         HeaderValue::from_static("nosniff"),
@@ -208,8 +343,8 @@ pub fn router_with_ui(source: Arc<dyn UiSource>, token: &str) -> Router {
 }
 
 /// [`router_with_ui`] behind `guard`: reading other principals' work needs [`Access::Monitor`], a cancel
-/// [`Access::Operate`] (ADR 0046 §3: both operator). The token is taken from the same places as with a start-up
-/// token, so the page works unchanged with a configured token.
+/// [`Access::Operate`] (ADR 0046 §3: both operator), the settings [`Access::Manage`] (admin). The token is taken
+/// from the same places as with a start-up token, so the page works unchanged with a configured token.
 pub fn router_with_ui_guard(source: Arc<dyn UiSource>, guard: Arc<dyn Guard>) -> Router {
     router_with_ui_policy(source, guard, crate::pages::UiPolicy::loopback())
 }
@@ -237,6 +372,13 @@ pub fn router_with_ui_policy(
         .route("/api/internal/history", get(history))
         .route("/api/internal/compare", get(compare))
         .route("/api/internal/resources", get(resources))
+        .route("/api/internal/sessions", get(crate::workload::sessions))
+        .route(
+            "/api/internal/sessions/{id}/close",
+            post(crate::workload::close_session),
+        )
+        .route("/api/internal/groups", get(crate::workload::groups))
+        .route("/api/internal/advice", get(crate::advice::advice))
         .route("/api/internal/events", get(events))
         .route("/api/internal/catalog/catalogs", get(pages::catalogs))
         .route(
@@ -257,12 +399,25 @@ pub fn router_with_ui_policy(
         .route("/api/internal/sql/{run}/cancel", post(pages::sql_cancel))
         .route("/api/internal/session", post(pages::create_session))
         .route("/api/internal/openapi.json", get(pages::openapi_json))
+        .route("/api/internal/queries/{id}/embed-link", get(embed_link))
         .with_state(state.clone())
         .layer(middleware::from_fn_with_state(state.clone(), require_token))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            pages::host_guard,
+        ));
+    let policy = Arc::clone(&state.policy);
+    // The embedded view's own routes: no token (the signed link is the credential, one query, read-only), but the
+    // same host check.
+    let embed_open = Router::new()
+        .route("/api/internal/embed/config", get(embed_config))
+        .route("/api/internal/embed/queries/{id}", get(embed_query))
+        .with_state(state.clone())
         .layer(middleware::from_fn_with_state(state, pages::host_guard));
     crate::router()
         .merge(internal)
-        .layer(middleware::from_fn(security_headers))
+        .merge(embed_open)
+        .layer(middleware::from_fn_with_state(policy, security_headers))
 }
 
 pub(crate) fn json_response(status: StatusCode, body: &Value) -> Response {
@@ -303,6 +458,49 @@ fn param<'a>(uri: &'a Uri, name: &str) -> Option<&'a str> {
         .map(|(_, v)| v)
 }
 
+/// A filter's value as the page sent it (`URLSearchParams`): `+` is a space and every `%XX` its byte. A value
+/// that does not decode is no filter.
+fn filter_param(uri: &Uri, name: &str) -> Option<String> {
+    percent_decode(&param(uri, name)?.replace('+', " ")).filter(|v| !v.is_empty())
+}
+
+/// The session a request names for a query (`name` is `session`, `a_session` or `b_session`): `None` when the
+/// request names none. A qualifier that is there but empty or does not decode is refused (400): dropping it
+/// would act on whichever session's query comes first.
+fn session_param(uri: &Uri, name: &str) -> Result<Option<String>, Box<Response>> {
+    // A bare key (`?session`, no `=`) names an empty session too.
+    let bare = uri
+        .query()
+        .is_some_and(|q| q.split('&').any(|kv| kv == name));
+    if !bare && param(uri, name).is_none() {
+        return Ok(None);
+    }
+    match filter_param(uri, name).filter(|_| !bare) {
+        Some(session) => Ok(Some(session)),
+        None => Err(Box::new(error(
+            StatusCode::BAD_REQUEST,
+            "bad_request",
+            "the session named for the query is empty or not valid text",
+        ))),
+    }
+}
+
+/// Whether a `system.queries` row carries `tag`: a tag's key, or `key=value`. A request tag (Spark Connect's
+/// `addTag`) is a key with an empty value.
+fn has_tag(row: &Row, tag: &str) -> bool {
+    row.get("tags")
+        .and_then(Value::as_object)
+        .is_some_and(|tags| {
+            tags.iter().any(|(k, v)| {
+                k == tag
+                    || tag
+                        .strip_prefix(k.as_str())
+                        .and_then(|rest| rest.strip_prefix('='))
+                        .is_some_and(|value| v.as_str() == Some(value))
+            })
+        })
+}
+
 /// The presented token. `Authorization: Bearer` is accepted for every method. The cookie and `?token=` (an
 /// `EventSource` cannot set headers) are accepted for `GET` only, so a request that changes something (cancel)
 /// cannot be made by a link or a cross-site form that carries the token in its address or a cookie.
@@ -319,11 +517,15 @@ fn presented(method: &Method, headers: &HeaderMap, uri: &Uri) -> Option<String> 
     if method != Method::GET && !crate::pages::has_csrf_header(headers) {
         return None;
     }
+    // Only the cookie of this address counts: another console on the same host name has its own (see
+    // `session_cookie_name`).
+    let name = crate::pages::session_cookie_name(headers);
     if let Some(c) = headers.get(header::COOKIE).and_then(|v| v.to_str().ok())
-        && let Some(t) = c
-            .split(';')
-            .filter_map(|p| p.trim().strip_prefix("krishiv_ui_token="))
-            .next()
+        && let Some(t) = c.split(';').find_map(|p| {
+            p.trim()
+                .strip_prefix(name.as_str())
+                .and_then(|rest| rest.strip_prefix('='))
+        })
     {
         return Some(t.to_owned());
     }
@@ -362,8 +564,12 @@ async fn require_token(
 ) -> Response {
     let token = presented(req.method(), req.headers(), req.uri());
     let malformed = token.is_none() && req.headers().contains_key(header::AUTHORIZATION);
-    // Anything but a read changes something: a cancel acts on another principal's query.
-    let access = if req.method() == Method::GET || req.uri().path() == "/api/internal/session" {
+    // The settings are the administrator's. Anything else but a read changes something: a cancel acts on another
+    // principal's query.
+    let path = req.uri().path();
+    let access = if path == "/api/internal/environment" {
+        Access::Manage
+    } else if req.method() == Method::GET || path == "/api/internal/session" {
         Access::Monitor
     } else {
         Access::Operate
@@ -504,9 +710,16 @@ fn mask_pass(text: &str) -> String {
     out
 }
 
-/// [`pick`] for a `system.queries` row, with the literals of its text masked.
+/// What the tag of a statement run from the console's editor starts with (the editor cancels its run by this
+/// tag). It is the console's own bookkeeping: a query's row is sent without it.
+pub(crate) const EDITOR_TAG_PREFIX: &str = "krishiv-ui-run-";
+
+/// [`pick`] for a `system.queries` row, with the literals of its text masked and without the editor's own tag.
 fn pick_query(row: &Row) -> Row {
     let mut picked = pick(row, QUERY_COLUMNS);
+    if let Some(Value::Object(tags)) = picked.get_mut("tags") {
+        tags.retain(|key, _| !key.starts_with(EDITOR_TAG_PREFIX));
+    }
     if let Some(Value::String(text)) = picked.get("query_text") {
         let masked = mask_literals(text);
         picked.insert("query_text".to_owned(), Value::String(masked));
@@ -514,8 +727,19 @@ fn pick_query(row: &Row) -> Row {
     picked
 }
 
+/// [`pick_query`] for a list of queries (the live list, the history): the row also names its session, so the
+/// Sessions page can point at a session's queries. A query's own page does not carry it: a signed embed link
+/// reads that response with no session of its own.
+fn pick_listed(row: &Row) -> Value {
+    let mut picked = pick_query(row);
+    if let Some(session) = row.get("session_id") {
+        picked.insert("session_id".to_owned(), session.clone());
+    }
+    Value::Object(picked)
+}
+
 /// Keeps only the allowlisted columns of a row.
-fn pick(row: &Row, columns: &[&str]) -> Row {
+pub(crate) fn pick(row: &Row, columns: &[&str]) -> Row {
     columns
         .iter()
         .filter_map(|c| row.get(*c).map(|v| ((*c).to_owned(), v.clone())))
@@ -526,6 +750,8 @@ const QUERY_COLUMNS: &[&str] = &[
     "query_id",
     "state",
     "principal",
+    "client_type",
+    "tags",
     "statement_class",
     "query_text",
     "query_text_truncated",
@@ -594,11 +820,11 @@ const CACHE_COLUMNS: &[&str] = &[
     "loads_in_flight",
 ];
 
-fn text<'a>(row: &'a Row, column: &str) -> &'a str {
+pub(crate) fn text<'a>(row: &'a Row, column: &str) -> &'a str {
     row.get(column).and_then(Value::as_str).unwrap_or("")
 }
 
-fn int(row: &Row, column: &str) -> i64 {
+pub(crate) fn int(row: &Row, column: &str) -> i64 {
     row.get(column).and_then(Value::as_i64).unwrap_or(0)
 }
 
@@ -609,12 +835,10 @@ fn is_live(row: &Row) -> bool {
 fn live_queries(rows: &[Row]) -> Vec<Value> {
     let mut live: Vec<&Row> = rows.iter().filter(|r| is_live(r)).collect();
     live.sort_by_key(|r| int(r, "submitted_at"));
-    live.into_iter()
-        .map(|r| Value::Object(pick_query(r)))
-        .collect()
+    live.into_iter().map(pick_listed).collect()
 }
 
-async fn table(s: &UiState, t: SystemTable) -> Result<Vec<Row>, Box<Response>> {
+pub(crate) async fn table(s: &UiState, t: SystemTable) -> Result<Vec<Row>, Box<Response>> {
     s.source
         .rows(t)
         .await
@@ -661,7 +885,7 @@ fn memory_total(memory: &[Row]) -> Value {
     })
 }
 
-async fn health(State(s): State<UiState>) -> Response {
+async fn health(State(s): State<UiState>, caller: Option<Extension<Caller>>) -> Response {
     let (memory, caches, queries) = match (
         table(&s, SystemTable::Memory).await,
         table(&s, SystemTable::Caches).await,
@@ -679,6 +903,10 @@ async fn health(State(s): State<UiState>) -> Response {
         StatusCode::OK,
         &json!({
             "version": crate::VERSION,
+            "mode": s.source.mode(),
+            "session_id": s.source.session_id(),
+            // The page hides what the caller's role cannot open; the routes decide by themselves.
+            "role": caller.and_then(|c| c.0.role),
             "uptime_seconds": s.started.elapsed().as_secs(),
             "workers": workers.len().max(1),
             "running_queries": queries.iter().filter(|r| text(r, "state") == "running").count(),
@@ -711,39 +939,290 @@ fn hot_operator(operators: &[Row]) -> Value {
         })
 }
 
-async fn query_detail(State(s): State<UiState>, Path(id): Path<String>) -> Response {
+/// `GET /api/internal/queries/{id}[?session=]`: one query's page. Two sessions may run a query under one id
+/// (a client chooses its operation ids), so a list's link names the row's session; without one the first
+/// query of that id answers.
+async fn query_detail(State(s): State<UiState>, Path(id): Path<String>, uri: Uri) -> Response {
+    match session_param(&uri, "session") {
+        Ok(session) => detail(&s, &id, session.as_deref()).await,
+        Err(e) => *e,
+    }
+}
+
+/// Whether a `system.queries` row is query `id`, of session `session` when one is named.
+fn is_query(row: &Row, id: &str, session: Option<&str>) -> bool {
+    text(row, "query_id") == id && session.is_none_or(|s| text(row, "session_id") == s)
+}
+
+async fn detail(s: &UiState, id: &str, session: Option<&str>) -> Response {
     let (queries, operators) = match (
-        table(&s, SystemTable::Queries).await,
-        table(&s, SystemTable::Operators).await,
+        table(s, SystemTable::Queries).await,
+        table(s, SystemTable::Operators).await,
     ) {
         (Ok(q), Ok(o)) => (q, o),
         (Err(e), _) | (_, Err(e)) => return *e,
     };
-    let Some(query) = queries.iter().find(|r| text(r, "query_id") == id) else {
+    let Some(query) = queries.iter().find(|r| is_query(r, id, session)) else {
         return error(
             StatusCode::NOT_FOUND,
             "no_such_query",
             "no query with that id",
         );
     };
+    // Operator rows and stored plans are kept by query id alone. When another session ran a query under this
+    // id they would be both runs', and a signed link is for one session's query: neither run's are given.
+    let other_run = |rows: &[Row]| {
+        rows.iter().any(|r| {
+            text(r, "query_id") == id && text(r, "session_id") != text(query, "session_id")
+        })
+    };
+    let mut shared = other_run(&queries);
     let mut ops: Vec<Row> = operators
         .into_iter()
-        .filter(|r| text(r, "query_id") == id)
+        .filter(|r| !shared && text(r, "query_id") == id)
         .collect();
     ops.sort_by_key(|r| int(r, "operator_id"));
+    // A source with no plan for the query leaves the page its flat operator list. A query that has not ended
+    // has no stored plan, and its page asks again every second: the store is not searched for it.
+    let ended = !matches!(text(query, "state"), "running" | "queued");
+    let mut plan = if !ended || shared {
+        None
+    } else {
+        s.source
+            .plan(query)
+            .await
+            .ok()
+            .flatten()
+            .as_ref()
+            .and_then(plan_nodes)
+    };
+    // Another session may have begun a run of the id after the queries were read, and the operators or the
+    // plan read since may be that run's. A run has its operators and its plan only once it is listed, so
+    // the queries as they are now name it: they are read again whenever there is something to give.
+    if !shared && (!ops.is_empty() || plan.is_some()) {
+        match table(s, SystemTable::Queries).await {
+            Ok(now) if other_run(&now) => {
+                shared = true;
+                ops.clear();
+                plan = None;
+            }
+            Ok(_) => {}
+            Err(e) => return *e,
+        }
+    }
     json_response(
         StatusCode::OK,
         &json!({
             "query": pick_query(query),
             "operators": ops.iter().map(|r| Value::Object(pick(r, OPERATOR_COLUMNS))).collect::<Vec<_>>(),
             "hot_operator": hot_operator(&ops),
+            // A query with no operator rows (one refused before it ran) has nothing to draw a plan over: no wait.
+            "plan_pending": ended && plan.is_none() && !ops.is_empty() && s.source.plan_pending(query),
+            "plan": plan,
+            "operators_withheld": shared,
         }),
     )
 }
 
-async fn cancel(State(s): State<UiState>, Path(id): Path<String>) -> Response {
-    match s.source.cancel(&id).await {
-        Ok(true) => json_response(StatusCode::OK, &json!({"cancelled": true})),
+/// The nodes of a stored plan as the page gets them: `id`, `name` and `children`, nothing else. A node's
+/// `detail` and `facts` are the plan's own text: with `krishiv.history.literals = keep` they hold the
+/// statement's literals, which the page never shows (the statement's text is masked on the same page, and a
+/// signed link reads this response with no session); with the default they are blanked to `?`. `None` when
+/// `plan` is not an array of nodes.
+fn plan_nodes(plan: &Value) -> Option<Value> {
+    let nodes = plan.as_array()?;
+    Some(Value::Array(
+        nodes
+            .iter()
+            .map(|n| {
+                json!({
+                    "id": n.get("id").filter(|v| v.is_u64()),
+                    "name": n.get("name").and_then(Value::as_str).unwrap_or(""),
+                    "children": n
+                        .get("children")
+                        .and_then(Value::as_array)
+                        .map(|c| c.iter().filter(|i| i.is_u64()).cloned().collect::<Vec<_>>())
+                        .unwrap_or_default(),
+                })
+            })
+            .collect(),
+    ))
+}
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
+
+/// The value of `name` in a query string, percent-decoded.
+fn query_param(raw: Option<&str>, name: &str) -> Option<String> {
+    raw?.split('&').find_map(|kv| {
+        let (k, v) = kv.split_once('=')?;
+        (k == name)
+            .then(|| crate::embed::percent_decode(v))
+            .flatten()
+    })
+}
+
+/// `GET /api/internal/queries/{id}/embed-link[?ttl=seconds&theme=json&session=id]`: a signed read-only link to
+/// one query's profile for an embedding console (T071). The life is the asked one, at most
+/// `krishiv.ui.embed.linkTtl`. With `session` the link opens that session's query only (two sessions may run a
+/// query under one id); without it, the first query of the id.
+async fn embed_link(
+    State(s): State<UiState>,
+    Path(id): Path<String>,
+    RawQuery(raw): RawQuery,
+    uri: Uri,
+) -> Response {
+    let session = match session_param(&uri, "session") {
+        Ok(session) => session,
+        Err(e) => return *e,
+    };
+    let embed = s.policy.embed();
+    let max = embed.ttl().as_secs();
+    let ttl = match query_param(raw.as_deref(), "ttl") {
+        None => max,
+        Some(t) => match t.parse::<u64>() {
+            Ok(n) if n > 0 => n.min(max),
+            _ => {
+                return error(
+                    StatusCode::BAD_REQUEST,
+                    "bad_request",
+                    "ttl is a whole number of seconds",
+                );
+            }
+        },
+    };
+    let theme = match query_param(raw.as_deref(), "theme") {
+        None => None,
+        Some(t) if t.len() > crate::embed::MAX_THEME_BYTES => {
+            return error(
+                StatusCode::BAD_REQUEST,
+                "bad_theme",
+                "the theme is too long",
+            );
+        }
+        Some(t) => match serde_json::from_str::<Value>(&t)
+            .map_err(|e| e.to_string())
+            .and_then(|v| crate::embed::validate_theme(&v))
+        {
+            Ok(theme) => Some(theme.to_json().to_string()),
+            Err(m) => return error(StatusCode::BAD_REQUEST, "bad_theme", &m),
+        },
+    };
+    let expires = now_secs().saturating_add(ttl);
+    let Some(sig) = embed.sign_in(&id, session.as_deref(), expires) else {
+        return error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "unavailable",
+            "the server has no signing key",
+        );
+    };
+    let mut url = format!(
+        "/queries/{}/profile?{}=1&exp={expires}&sig={sig}",
+        crate::embed::percent_encode(&id),
+        crate::embed::EMBED_PARAM
+    );
+    if let Some(session) = &session {
+        url.push_str("&session=");
+        url.push_str(&crate::embed::percent_encode(session));
+    }
+    if let Some(t) = theme {
+        url.push_str("&theme=");
+        url.push_str(&crate::embed::percent_encode(&t));
+    }
+    json_response(
+        StatusCode::OK,
+        &json!({"url": url, "expires_at": expires, "query_id": id, "session_id": session}),
+    )
+}
+
+/// `GET /api/internal/embed/config`: what the embedded page needs before it can trust a theme message.
+async fn embed_config(State(s): State<UiState>) -> Response {
+    let e = s.policy.embed();
+    json_response(
+        StatusCode::OK,
+        &json!({"allowed_origins": e.origins(), "hide_attribution": e.hide_attribution()}),
+    )
+}
+
+/// `GET /api/internal/embed/queries/{id}?exp=&sig=[&session=]`: the query detail for a valid signed link,
+/// nothing else. The session is part of what was signed: a link opens the query of the session it was issued
+/// for, and one issued for the id alone opens no named session's.
+async fn embed_query(
+    State(s): State<UiState>,
+    Path(id): Path<String>,
+    RawQuery(raw): RawQuery,
+    uri: Uri,
+) -> Response {
+    let exp = query_param(raw.as_deref(), "exp").and_then(|e| e.parse::<u64>().ok());
+    let sig = query_param(raw.as_deref(), "sig");
+    // A session that is there but empty or does not decode was never signed: the link is not valid.
+    let session = session_param(&uri, "session").ok();
+    match (exp, sig, session) {
+        (Some(exp), Some(sig), Some(session))
+            if s.policy
+                .embed()
+                .verify_in(&id, session.as_deref(), exp, &sig, now_secs()) =>
+        {
+            detail(&s, &id, session.as_deref()).await
+        }
+        _ => error(
+            StatusCode::UNAUTHORIZED,
+            "unauthorized",
+            "the link is not valid, or has expired",
+        ),
+    }
+}
+
+/// `POST /api/internal/queries/{id}/cancel[?session=]`: an operator's kill of a running query; a query that
+/// was cancelled is one audit record. With `session` only that session's query ends. Without it, an id that
+/// several sessions are running is refused (409): the caller must say whose query it means.
+async fn cancel(
+    State(s): State<UiState>,
+    caller: Option<Extension<Caller>>,
+    Path(id): Path<String>,
+    uri: Uri,
+) -> Response {
+    let session = match session_param(&uri, "session") {
+        Ok(session) => session,
+        Err(e) => return *e,
+    };
+    let done = match &session {
+        Some(session) => s.source.cancel_in_session(&id, session).await,
+        None => {
+            let rows = match table(&s, SystemTable::Queries).await {
+                Ok(r) => r,
+                Err(e) => return *e,
+            };
+            let mut running = rows.iter().filter(|r| is_live(r) && is_query(r, &id, None));
+            let first = running.next().map(|r| text(r, "session_id"));
+            if running.any(|r| Some(text(r, "session_id")) != first) {
+                return error(
+                    StatusCode::CONFLICT,
+                    "ambiguous_query",
+                    "more than one session runs a query with that id: name the session",
+                );
+            }
+            s.source.cancel(&id).await
+        }
+    };
+    match done {
+        Ok(true) => {
+            let caller = caller.map(|c| c.0);
+            tracing::info!(
+                target: "krishiv::audit",
+                principal = caller.as_ref().map_or("unknown", |c| c.principal.as_str()),
+                role = caller.as_ref().and_then(|c| c.role.as_deref()).unwrap_or("none"),
+                surface = "ui",
+                action = "cancel_query",
+                query = %id,
+                session = session.as_deref().unwrap_or(""),
+                "query cancelled"
+            );
+            json_response(StatusCode::OK, &json!({"cancelled": true}))
+        }
         Ok(false) => error(
             StatusCode::NOT_FOUND,
             "not_running",
@@ -762,37 +1241,87 @@ async fn history(State(s): State<UiState>, uri: Uri) -> Response {
         .and_then(|v| v.parse::<usize>().ok())
         .unwrap_or(100)
         .clamp(1, 1000);
-    let state = param(&uri, "state");
-    let principal = param(&uri, "principal");
+    let state = filter_param(&uri, "state");
+    let principal = filter_param(&uri, "principal");
+    // A client names itself at length (`_SPARK_CONNECT_PYTHON spark/4.2.0 os/linux python/3.12`): any part
+    // of the name finds it, in either case.
+    let client = filter_param(&uri, "client").map(|c| c.to_lowercase());
+    let tag = filter_param(&uri, "tag");
+    // Any part of a statement finds it, in either case. It is looked for in the text as the list shows it, with
+    // the literals masked: a search of the stored text would tell a caller which literal a statement holds.
+    let statement = filter_param(&uri, "text").map(|t| t.to_lowercase());
+    let session = filter_param(&uri, "session");
+    // An empty filter is no filter, as for the others. One that does not decode is refused: dropping it would
+    // list every session's queries under an address that names one.
+    if session.is_none() && param(&uri, "session").is_some_and(|v| !v.is_empty()) {
+        return error(
+            StatusCode::BAD_REQUEST,
+            "bad_request",
+            "the session filter is not valid text",
+        );
+    }
     let mut done: Vec<&Row> = rows
         .iter()
         .filter(|r| !is_live(r))
-        .filter(|r| state.is_none_or(|s| text(r, "state") == s))
-        .filter(|r| principal.is_none_or(|p| text(r, "principal") == p))
+        .filter(|r| state.as_deref().is_none_or(|s| text(r, "state") == s))
+        .filter(|r| {
+            principal
+                .as_deref()
+                .is_none_or(|p| text(r, "principal") == p)
+        })
+        .filter(|r| {
+            client
+                .as_deref()
+                .is_none_or(|c| text(r, "client_type").to_lowercase().contains(c))
+        })
+        .filter(|r| tag.as_deref().is_none_or(|t| has_tag(r, t)))
+        .filter(|r| {
+            statement.as_deref().is_none_or(|t| {
+                mask_literals(text(r, "query_text"))
+                    .to_lowercase()
+                    .contains(t)
+            })
+        })
+        .filter(|r| {
+            session
+                .as_deref()
+                .is_none_or(|s| text(r, "session_id") == s)
+        })
         .collect();
     done.sort_by_key(|r| std::cmp::Reverse(int(r, "submitted_at")));
     done.truncate(limit);
     json_response(
         StatusCode::OK,
-        &json!({"queries": done.into_iter().map(|r| Value::Object(pick_query(r))).collect::<Vec<_>>()}),
+        &json!({"queries": done.into_iter().map(pick_listed).collect::<Vec<_>>()}),
     )
 }
 
-/// Two runs side by side with the change in each number (`b - a`).
+/// `GET /api/internal/compare?a=&b=[&a_session=&b_session=]`: two runs side by side with the change in each
+/// number (`b - a`). Two sessions may each have run a query under one id, so the page names each run's
+/// session; without one the first run of that id answers.
 async fn compare(State(s): State<UiState>, uri: Uri) -> Response {
-    let (Some(a), Some(b)) = (param(&uri, "a"), param(&uri, "b")) else {
+    let (Some(a), Some(b)) = (filter_param(&uri, "a"), filter_param(&uri, "b")) else {
         return error(
             StatusCode::BAD_REQUEST,
             "bad_request",
             "compare needs ?a=<query_id>&b=<query_id>",
         );
     };
+    let (of_a, of_b) = match (
+        session_param(&uri, "a_session"),
+        session_param(&uri, "b_session"),
+    ) {
+        (Ok(a), Ok(b)) => (a, b),
+        (Err(e), _) | (_, Err(e)) => return *e,
+    };
     let rows = match table(&s, SystemTable::Queries).await {
         Ok(r) => r,
         Err(e) => return *e,
     };
-    let find = |id: &str| rows.iter().find(|r| text(r, "query_id") == id);
-    let (Some(ra), Some(rb)) = (find(a), find(b)) else {
+    let find = |id: &str, session: Option<String>| {
+        rows.iter().find(|r| is_query(r, id, session.as_deref()))
+    };
+    let (Some(ra), Some(rb)) = (find(&a, of_a), find(&b, of_b)) else {
         return error(
             StatusCode::NOT_FOUND,
             "no_such_query",
@@ -878,7 +1407,8 @@ async fn shared_snapshot(s: &UiState) -> Value {
 
 /// `GET /api/internal/events`: the live query list as a `queries` event, once a second. At most
 /// [`MAX_EVENT_CLIENTS`] streams at a time (a further one is a `503`); the streams share one snapshot a period.
-async fn events(State(s): State<UiState>) -> Response {
+/// An administrator's stream opens with an `environment` event.
+async fn events(State(s): State<UiState>, caller: Option<Extension<Caller>>) -> Response {
     if s.streams.fetch_add(1, Ordering::SeqCst) >= MAX_EVENT_CLIENTS {
         s.streams.fetch_sub(1, Ordering::SeqCst);
         return error(
@@ -890,13 +1420,19 @@ async fn events(State(s): State<UiState>) -> Response {
     let slot = StreamSlot(Arc::clone(&s.streams));
     let ticker = tokio::time::interval(EVENT_PERIOD);
     // The stream opens with the environment (secrets masked), so a page can show it without a second request.
-    let first = match crate::pages::environment_json(&s).await {
-        Ok(v) => Event::default().event("environment").data(v.to_string()),
-        Err(e) => Event::default()
-            .event("environment")
-            .data(json!({"error": e.message}).to_string()),
+    // Only for an administrator: the stream itself is open to operators, the settings are not
+    // (`/api/internal/environment` asks for `Access::Manage`).
+    let first = if caller.is_some_and(|c| c.0.is_admin()) {
+        Some(match crate::pages::environment_json(&s).await {
+            Ok(v) => Event::default().event("environment").data(v.to_string()),
+            Err(e) => Event::default()
+                .event("environment")
+                .data(json!({"error": e.message}).to_string()),
+        })
+    } else {
+        None
     };
-    let opening = futures::stream::once(async move { Ok::<_, std::convert::Infallible>(first) });
+    let opening = futures::stream::iter(first.map(Ok::<_, std::convert::Infallible>));
     let ticks = futures::stream::unfold((ticker, s, slot), |(mut ticker, s, slot)| async move {
         ticker.tick().await;
         let body = shared_snapshot(&s).await;
@@ -913,7 +1449,23 @@ async fn events(State(s): State<UiState>) -> Response {
 
 #[cfg(test)]
 mod tests {
-    use super::{CSP, mask_literals, percent_decode};
+    use super::{CSP, InboundTrace, mask_literals, percent_decode};
+
+    /// P3-T068: the trace headers of an HTTP request; a non-ASCII value is no header.
+    #[test]
+    fn the_trace_headers_are_read_as_text_and_a_bad_one_is_none() {
+        use axum::http::{HeaderMap, HeaderValue};
+        assert_eq!(
+            InboundTrace::from_headers(&HeaderMap::new()),
+            InboundTrace::default()
+        );
+        let mut h = HeaderMap::new();
+        h.insert("traceparent", HeaderValue::from_static("00-a-b-01"));
+        h.insert("baggage", HeaderValue::from_bytes(&[0xE9]).unwrap());
+        let t = InboundTrace::from_headers(&h);
+        assert_eq!(t.traceparent.as_deref(), Some("00-a-b-01"));
+        assert_eq!(t.baggage, None);
+    }
 
     /// `ui/tests/fixture_server.py` repeats the policy; the page check is only honest while both agree.
     #[test]

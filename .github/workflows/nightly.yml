@@ -31,8 +31,35 @@ env:
   SCCACHE_CACHE_SIZE: 20G
 
 jobs:
-  all-features:
+  # A scheduled run that GitHub delayed into the working day exits at once, so it never holds the runners
+  # the PR checks need. A manual run is not guarded. Window: scheduled runs may start 18:00-06:00 UTC.
+  # The window bounds the start only: a run that starts at 05:59 may still run into the morning (up to
+  # its job limit).
+  guard:
     if: github.repository == 'KrishivAI/krishiv-engine'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    # The guard reads the clock only: no token scopes.
+    permissions: {}
+    outputs:
+      go: ${{ steps.g.outputs.go }}
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - id: g
+        run: |
+          hour=$((10#$(date -u +%H)))
+          if [ "$GITHUB_EVENT_NAME" = schedule ] && [ "$hour" -ge 6 ] && [ "$hour" -lt 18 ]; then
+            echo "go=false" >> "$GITHUB_OUTPUT"
+            echo "A scheduled run that starts at $hour:xx UTC is outside the night window (18:00-06:00): skipped." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "go=true" >> "$GITHUB_OUTPUT"
+          fi
+  all-features:
+    if: needs.guard.outputs.go == 'true' && github.repository == 'KrishivAI/krishiv-engine'
+    needs: guard
     runs-on: ubuntu-latest
     timeout-minutes: 350
     steps:
@@ -66,7 +93,23 @@ jobs:
         # cases per PR).
         env:
           KRISHIV_TIGHT_MEMORY_CASES: "256"
-        run: cargo nextest run --workspace --all-features --locked --no-tests=pass
+        shell: bash
+        run: set -o pipefail; cargo nextest run --workspace --all-features --locked --no-tests=pass --profile nightly 2>&1 | tee "$RUNNER_TEMP/nextest.log"
+      # The run above uses the `nightly` profile (every test retried once; a command-line `--retries` would
+      # replace the five per-test overrides), so so a test that passed only on a retry shows as FLAKY. It must
+      # be in tests/quarantine.toml (owner, issue, deadline) or this step fails and prints the stanza; the
+      # five tests the default profile retries on purpose (.config/nextest.toml) are exempt.
+      - name: flaky tests are quarantined
+        if: always()
+        # No log means an earlier step failed before nextest ran; that failure is the job's.
+        run: if [ -f "$RUNNER_TEMP/nextest.log" ]; then cargo xtask quarantine --flaky "$RUNNER_TEMP/nextest.log"; fi
+      # Needs Java 21 or Docker and the network (the driver jar), so it is ignored in the
+      # workspace run above (P3-T101 note §17). The Java toolcache is removed above; the
+      # script falls back to Docker.
+      - name: Flight SQL JDBC end to end
+        run: >-
+          cargo nextest run -p krishiv-cli --features flight-sql --locked --test flight_sql
+          --run-ignored only -E 'test(jdbc)'
       - name: doctests (all features)
         run: cargo test --workspace --doc --all-features --locked
       - name: docs (all features)
@@ -82,7 +125,8 @@ jobs:
   # disagreement fails the job (known ones are ratcheted in tests/fixtures). Spark generation is
   # slow (about 5 minutes per 300 roots), hence the root budget; raise it with the runner time.
   differential:
-    if: github.repository == 'KrishivAI/krishiv-engine'
+    if: needs.guard.outputs.go == 'true' && github.repository == 'KrishivAI/krishiv-engine'
+    needs: guard
     runs-on: ubuntu-latest
     timeout-minutes: 300
     env:
@@ -149,7 +193,8 @@ jobs:
   # floors of `tests/coverage-floors.json` and the fall of the total against the previous
   # nightly's `summary.json` fail the job; the report itself stays an artifact.
   coverage:
-    if: github.repository == 'KrishivAI/krishiv-engine'
+    if: needs.guard.outputs.go == 'true' && github.repository == 'KrishivAI/krishiv-engine'
+    needs: guard
     runs-on: ubuntu-latest
     timeout-minutes: 120
     permissions:
@@ -245,7 +290,8 @@ jobs:
   # under cargo-llvm-cov instrumentation, the Python tests run against it, and the
   # profile data is reported as lcov. Report only (Codecov is informational).
   python-rust-coverage:
-    if: github.repository == 'KrishivAI/krishiv-engine'
+    if: needs.guard.outputs.go == 'true' && github.repository == 'KrishivAI/krishiv-engine'
+    needs: guard
     runs-on: ubuntu-latest
     timeout-minutes: 90
     permissions:
@@ -309,7 +355,8 @@ jobs:
   # and a failure opens the
   # "nightly CI failed" issue (nightly-failure-notice, a job of ci.yml).
   ci:
-    if: github.repository == 'KrishivAI/krishiv-engine'
+    if: needs.guard.outputs.go == 'true' && github.repository == 'KrishivAI/krishiv-engine'
+    needs: guard
     permissions:
       contents: read
       actions: read
@@ -320,7 +367,8 @@ jobs:
     uses: $/.github/workflows/ci.yml
 
   loom:
-    if: github.repository == 'KrishivAI/krishiv-engine'
+    if: needs.guard.outputs.go == 'true' && github.repository == 'KrishivAI/krishiv-engine'
+    needs: guard
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
@@ -350,7 +398,8 @@ jobs:
   # process) with every compute-worker poll held to the 10 ms stall bound.
   # The PR test job runs the same suite at 100 rows per table.
   yield-tpch-sf1:
-    if: github.repository == 'KrishivAI/krishiv-engine'
+    if: needs.guard.outputs.go == 'true' && github.repository == 'KrishivAI/krishiv-engine'
+    needs: guard
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -378,7 +427,8 @@ jobs:
   # (`krishiv-session` test `plan_round_trip`) and round-trips the TPC-H and
   # TPC-DS plans (`krishiv-plan-codec` test `ratchet`).
   serialize-through:
-    if: github.repository == 'KrishivAI/krishiv-engine'
+    if: needs.guard.outputs.go == 'true' && github.repository == 'KrishivAI/krishiv-engine'
+    needs: guard
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -399,12 +449,15 @@ jobs:
         run: "cargo test -p krishiv-testkit --release --locked --test golden_ratchet serialize_through_matches_the_frozen_baseline -- --ignored"
       - name: ICU collation goldens (collations-icu)
         run: "cargo test -p krishiv-testkit --release --locked --features collations-icu --test golden_icu"
+      - name: Exact vector top-k at 100k x 768 (P3-T077 design 8.3)
+        run: "cargo test -p krishiv-session --release --locked --test vector_topk top_k_brute_force_at_100k_by_768 -- --ignored"
 
   # Object stores against throw-away emulators (P2-T084): krishiv-io's S3 (MinIO) and Azure (Azurite) round trips,
   # then TPC-H SF1 uploaded to MinIO and read back over `s3a://`, equal to the local answers. The script names and
   # removes only its own containers. Docker Hub no longer serves `minio/minio`, so MinIO comes from Chainguard.
   object-stores:
-    if: github.repository == 'KrishivAI/krishiv-engine'
+    if: needs.guard.outputs.go == 'true' && github.repository == 'KrishivAI/krishiv-engine'
+    needs: guard
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
@@ -454,7 +507,8 @@ jobs:
   # (Docker, apache/spark:4.1.0; the runtime jar from Maven Central) reads them and appends on top, Krishiv reads
   # the result. The Rust steps are `#[ignore]`d tests, so the PR gate never needs Docker.
   iceberg-write-conformance:
-    if: github.repository == 'KrishivAI/krishiv-engine'
+    if: needs.guard.outputs.go == 'true' && github.repository == 'KrishivAI/krishiv-engine'
+    needs: guard
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -489,7 +543,8 @@ jobs:
   # evolved schema and spec; Krishiv appends and runs copy-on-write DELETE/UPDATE; Spark reads, time travels and runs
   # merge-on-read DML on top; Krishiv reads the result. The Rust steps are `#[ignore]`d tests.
   iceberg-roundtrip:
-    if: github.repository == 'KrishivAI/krishiv-engine'
+    if: needs.guard.outputs.go == 'true' && github.repository == 'KrishivAI/krishiv-engine'
+    needs: guard
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -524,7 +579,8 @@ jobs:
   # commits appends and a whole-file DELETE; Spark reads history, time travel and the change feed and runs DML on
   # top; Krishiv reads the result. The Rust steps are `#[ignore]`d tests.
   delta-roundtrip:
-    if: github.repository == 'KrishivAI/krishiv-engine'
+    if: needs.guard.outputs.go == 'true' && github.repository == 'KrishivAI/krishiv-engine'
+    needs: guard
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -560,7 +616,8 @@ jobs:
   # `tests/spark-golden/profiles/<tag>/`, with the phase gate's result rate and a floor (`gate.json`); each
   # version's rate against its gate is in the job summary.
   golden-profiles:
-    if: github.repository == 'KrishivAI/krishiv-engine'
+    if: needs.guard.outputs.go == 'true' && github.repository == 'KrishivAI/krishiv-engine'
+    needs: guard
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -585,7 +642,8 @@ jobs:
   # Apache's Rust Spark Connect client against `krishiv server` (P3-T089, PR-40). A standalone crate
   # with its own lockfile (tests/rust-client): the client pulls an Arrow major the workspace does not.
   rust-client:
-    if: github.repository == 'KrishivAI/krishiv-engine'
+    if: needs.guard.outputs.go == 'true' && github.repository == 'KrishivAI/krishiv-engine'
+    needs: guard
     runs-on: ubuntu-latest
     env:
       RUSTC_WRAPPER: "" # sccache is not installed in this job
@@ -617,7 +675,8 @@ jobs:
 
   # The vendored Spark Connect protos still equal apache/spark at their tags (P3-T010).
   connect-proto-upstream:
-    if: github.repository == 'KrishivAI/krishiv-engine'
+    if: needs.guard.outputs.go == 'true' && github.repository == 'KrishivAI/krishiv-engine'
+    needs: guard
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -634,7 +693,8 @@ jobs:
   # (regression replay, cached corpus, crash triage). The weekly long run is
   # `fuzz-weekly.yml`.
   fuzz:
-    if: github.repository == 'KrishivAI/krishiv-engine'
+    if: needs.guard.outputs.go == 'true' && github.repository == 'KrishivAI/krishiv-engine'
+    needs: guard
     permissions:
       contents: read
     uses: $/.github/workflows/fuzz.yml
@@ -644,7 +704,8 @@ jobs:
   # P2-T020: krishiv-kernels under AddressSanitizer with the property tests at
   # full size (Miri runs the reduced cases per PR). std is rebuilt with ASan.
   asan-kernels:
-    if: github.repository == 'KrishivAI/krishiv-engine'
+    if: needs.guard.outputs.go == 'true' && github.repository == 'KrishivAI/krishiv-engine'
+    needs: guard
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
@@ -675,7 +736,8 @@ jobs:
   # P2-T020: differential fuzzing of the kernels (every specialization and CPU
   # target vs the row-at-a-time reference); libFuzzer builds with ASan.
   fuzz-kernels:
-    if: github.repository == 'KrishivAI/krishiv-engine'
+    if: needs.guard.outputs.go == 'true' && github.repository == 'KrishivAI/krishiv-engine'
+    needs: guard
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
@@ -717,7 +779,8 @@ jobs:
   # outside semver, ADR 0027) must match the checked-in snapshots; a change
   # updates them in the same PR.
   public-api:
-    if: github.repository == 'KrishivAI/krishiv-engine'
+    if: needs.guard.outputs.go == 'true' && github.repository == 'KrishivAI/krishiv-engine'
+    needs: guard
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -746,7 +809,8 @@ jobs:
   # Breaking changes against the last release (docs/concepts/stability.md). Non-blocking until the 0.2
   # release exists to compare against; then drop continue-on-error and set the baseline.
   semver-checks:
-    if: github.repository == 'KrishivAI/krishiv-engine'
+    if: needs.guard.outputs.go == 'true' && github.repository == 'KrishivAI/krishiv-engine'
+    needs: guard
     runs-on: ubuntu-latest
     timeout-minutes: 60
     continue-on-error: true
@@ -773,7 +837,8 @@ jobs:
 
   # The generated reference under docs/reference/ is what the generators print (SQL, Python, Rust).
   docs-reference:
-    if: github.repository == 'KrishivAI/krishiv-engine'
+    if: needs.guard.outputs.go == 'true' && github.repository == 'KrishivAI/krishiv-engine'
+    needs: guard
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:

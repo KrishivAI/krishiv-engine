@@ -408,6 +408,14 @@ pub enum PhysNode {
         /// The row count.
         limit: u64,
     },
+    /// The last `limit` rows of `input` in its row order (Spark's
+    /// `Dataset.tail`, `CollectTailExec`); the input is read by one driver.
+    Tail {
+        /// The input.
+        input: Box<PhysNode>,
+        /// The number of trailing rows to keep.
+        limit: u64,
+    },
     /// The rows of `input`, then one column per Python UDF call evaluated
     /// over **every** row (design P2-T059 §2.2, Spark's `ExtractPythonUDFs`):
     /// the nodes above read each call's column by its attribute. Calls of
@@ -1030,6 +1038,9 @@ pub struct SortMergeJoinPlan {
     pub residual: Option<Residual>,
     /// A left outer join that fails when a left row matches more than once.
     pub single_match: bool,
+    /// An as-of join (Spark 4.3): each left row with the nearest right row of its keys by
+    /// these columns (codec feature `as_of_join`).
+    pub as_of: Option<crate::join::AsOfMergeSpec>,
 }
 
 /// A nested-loop join over every pair of rows.
@@ -1076,6 +1087,18 @@ pub struct WritePlan {
     /// The input columns whose Spark type their Arrow type doesn't say (an
     /// interval's fields), for the writer's footers and text forms.
     pub column_types: BTreeMap<usize, krishiv_types::DataType>,
+    /// Bucketed output (Spark's `bucketBy`), or `None`.
+    pub bucket: Option<BucketWrite>,
+}
+
+/// The bucketing of a write: Spark's `BucketSpec` after the planner computed each row's bucket id.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BucketWrite {
+    /// The input column (an `Int32`) holding each row's bucket id, `pmod(hash(bucket columns), n)`. It is not written
+    /// to the files; a file holds one bucket and its name carries the id.
+    pub column: usize,
+    /// The input columns each bucket's rows are sorted by (`sortBy`), ascending.
+    pub sort_by: Vec<usize>,
 }
 
 impl WritePlan {
@@ -1205,6 +1228,7 @@ plan_data!(enum PhysNode {
     Filter { input, layout, predicate, subqueries },
     Project { input, layout, items, nullable, subqueries },
     Limit { input, offset, limit },
+    Tail { input, limit },
     CollectMetrics { input, name, measure, instance, limit },
     ReplicateRows { input, layout, count, subqueries },
     Sample { input, lower, upper, seed },
@@ -1250,8 +1274,10 @@ plan_data!(struct WritePlan {
     max_records_per_file,
     target_file_bytes,
     partition_by,
-    column_types
+    column_types,
+    bucket
 });
+plan_data!(struct BucketWrite { column, sort_by });
 plan_data!(struct ScanNode { id, scan, projection, filter, runtime_filters, row_stage, row_id });
 plan_data!(
     enum FetchSlot {
@@ -1283,7 +1309,7 @@ plan_data!(struct ProbeColumn { index, name });
 plan_data!(struct ProbeRowStage { scan, columns });
 plan_data!(struct ProbeFilterColumn { id, column });
 plan_data!(struct SortMergeJoinPlan {
-    probe, build, join_type, probe_keys, build_keys, null_safe, residual, single_match
+    probe, build, join_type, probe_keys, build_keys, null_safe, residual, single_match, as_of
 });
 plan_data!(struct NestedLoopPlan { probe, build, join_type, residual });
 plan_data!(struct PhysicalPlan { root, shared, schema, explain, warnings, env });
@@ -1317,6 +1343,7 @@ impl PhysNode {
                 .chain(subqueries.iter().map(|s| &s.plan))
                 .collect(),
             Self::Limit { input, .. }
+            | Self::Tail { input, .. }
             | Self::Sample { input, .. }
             | Self::Sort { input, .. }
             | Self::TopN { input, .. }
@@ -1383,6 +1410,7 @@ impl PhysNode {
                 .chain(subqueries.iter_mut().map(|s| &mut s.plan))
                 .collect(),
             Self::Limit { input, .. }
+            | Self::Tail { input, .. }
             | Self::Sample { input, .. }
             | Self::Sort { input, .. }
             | Self::TopN { input, .. }
@@ -1627,29 +1655,57 @@ impl PhysicalPlan {
             };
             names.push(field.name().as_str());
         }
-        let (root, explain) = if names.is_empty() {
+        if let Some(b) = &write.bucket {
+            for c in std::iter::once(&b.column).chain(&b.sort_by) {
+                if *c >= fields.len() {
+                    return Err(crate::error::internal(format!(
+                        "bucket column {c} is out of range"
+                    )));
+                }
+            }
+        }
+        let (root, explain) = if names.is_empty() && write.bucket.is_none() {
             (
                 Arc::unwrap_or_clone(self.root),
                 ExplainNode::new("WriteFiles", write.describe(), vec![self.explain]),
             )
         } else {
+            // Spark's required ordering: the partition columns, then the bucket id, then the `sortBy` columns.
+            let bucket_cols: Vec<usize> = write
+                .bucket
+                .iter()
+                .flat_map(|b| std::iter::once(b.column).chain(b.sort_by.iter().copied()))
+                .collect();
             let keys: Vec<SortKey> = write
                 .partition_by
                 .iter()
-                .map(|&c| SortKey::asc(c))
+                .copied()
+                .chain(bucket_cols.iter().copied())
+                .map(SortKey::asc)
                 .collect();
             let detail = format!(
                 "[{}]",
-                names
+                write
+                    .partition_by
                     .iter()
-                    .map(|n| format!("{n} ASC NULLS FIRST"))
+                    .chain(&bucket_cols)
+                    .filter_map(|&c| fields.get(c))
+                    .map(|f| format!("{} ASC NULLS FIRST", f.name()))
                     .collect::<Vec<_>>()
                     .join(", ")
             );
             let sort = ExplainNode::new("Sort", detail, vec![self.explain]);
             let explain = ExplainNode::new(
                 "WriteFiles",
-                format!("{} partitioned by [{}]", write.describe(), names.join(", ")),
+                format!(
+                    "{} partitioned by [{}]{}",
+                    write.describe(),
+                    names.join(", "),
+                    write.bucket.as_ref().map_or_else(String::new, |b| format!(
+                        " bucketed by column {}",
+                        fields.get(b.column).map_or("?", |f| f.name().as_str())
+                    ))
+                ),
                 vec![sort],
             );
             (

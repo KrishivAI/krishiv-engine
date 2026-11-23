@@ -1106,6 +1106,13 @@ impl QueryLog {
             .update(&self.session_id, id, |row| row.state = state);
     }
 
+    /// Names the group the controller queued live row `id` in.
+    pub(crate) fn set_group(&self, id: &str, group: &str) {
+        self.history.update(&self.session_id, id, |row| {
+            row.resource_group = Some(group.to_owned());
+        });
+    }
+
     /// Stamps the start of live row `id`: admission let it run.
     pub(crate) fn mark_started(&self, id: &str, group: Option<&str>, queued_ns: u64) {
         self.history.update(&self.session_id, id, |row| {
@@ -1487,6 +1494,14 @@ impl Session {
         .into())
     }
 
+    /// Whether `name` (any letter case) names a catalog this session sees: the session catalog,
+    /// `system`, or a declared catalog visible to its principal (a hidden one is absent).
+    pub(crate) fn is_catalog_name(&self, name: &str) -> bool {
+        name.eq_ignore_ascii_case(crate::catalog::CATALOG)
+            || is_system(name)
+            || self.declared_catalogs().canonical(name).is_some()
+    }
+
     /// The namespace `ns` of a stored object (a function, a namespace named on its own): refused under `system`, which has none,
     /// and under a declared catalog ([`Self::refuse_declared_current`]).
     pub(crate) fn function_namespace(&self, ns: &str) -> Result<String, KrishivError> {
@@ -1547,7 +1562,8 @@ impl Session {
         {
             return Err(krishiv_common::error::TableOrViewNotFound {
                 relation_name: format!("`{}`", parts.join("`.`")),
-                search_path: crate::catalog::search_path(),
+                // From the query's own snapshot, not the session as it is now.
+                search_path: crate::catalog::render_search_path(&env.catalog.sql_path_snapshot()),
             }
             .into());
         }

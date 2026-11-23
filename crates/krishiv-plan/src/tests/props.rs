@@ -182,6 +182,15 @@ impl Gen<'_> {
         }
     }
 
+    fn metric_column(&mut self) -> crate::MetricColumn {
+        crate::MetricColumn {
+            name: self.name(),
+            expr: Arc::new(self.expr(1)),
+            data_type: self.data_type(),
+            nullable: self.flag(),
+        }
+    }
+
     fn bound(&mut self) -> BoundColumn {
         BoundColumn {
             id: AttrId(u64::from(self.pick(4))),
@@ -437,7 +446,7 @@ impl Gen<'_> {
 
     fn plan(&mut self, depth: u8) -> LogicalPlan {
         let origin = self.origin();
-        let kinds = if depth == 0 { 4 } else { 33 };
+        let kinds = if depth == 0 { 4 } else { 37 };
         let d = depth.saturating_sub(1);
         let node = match self.pick(kinds) {
             0 => PlanNode::Read(self.source()),
@@ -530,6 +539,30 @@ impl Gen<'_> {
                     _ => JoinCondition::Using(self.many(1, 2, Gen::name)),
                 },
             },
+            36 => PlanNode::AsOfJoin {
+                left: self.input(d),
+                right: self.input(d),
+                kind: [JoinKind::Inner, JoinKind::LeftOuter][usize::from(self.pick(2))],
+                condition: match self.pick(3) {
+                    0 => JoinCondition::None,
+                    1 => JoinCondition::On(Arc::new(self.expr(2))),
+                    _ => JoinCondition::Using(self.many(1, 2, Gen::name)),
+                },
+                as_of: Arc::new(crate::AsOfMatch {
+                    left: Arc::new(self.expr(1)),
+                    right: Arc::new(self.expr(1)),
+                    direction: [
+                        crate::AsOfDirection::Backward,
+                        crate::AsOfDirection::Forward,
+                        crate::AsOfDirection::Nearest,
+                    ][usize::from(self.pick(3))],
+                    allow_exact: self.flag(),
+                    tolerance: self.flag().then(|| Arc::new(self.expr(1))),
+                    distance: self.flag().then(|| Arc::new(self.expr(1))),
+                    distance_on_every_pair: self.flag(),
+                    as_written: self.flag(),
+                }),
+            },
             8 => PlanNode::Sort {
                 input: self.input(d),
                 order: self.orders(2),
@@ -547,10 +580,22 @@ impl Gen<'_> {
             29 => PlanNode::PipeOperator {
                 input: self.input(d),
             },
+            34 => PlanNode::Tail {
+                input: self.input(d),
+                limit: Arc::new(self.expr(1)),
+            },
             32 => PlanNode::CollectMetrics {
                 input: self.input(d),
                 name: self.name(),
                 metrics: self.exprs(),
+            },
+            35 => PlanNode::MetricViewRead {
+                input: self.input(d),
+                name: self.many(1, 3, Gen::name),
+                dimensions: self.many(0, 2, Gen::metric_column),
+                measures: self.many(0, 2, Gen::metric_column),
+                output: self.many(0, 2, Gen::bound),
+                ansi: self.flag().then(|| self.flag()),
             },
             30 => PlanNode::Repartition {
                 input: self.input(d),
@@ -637,6 +682,17 @@ impl Gen<'_> {
                     alias: g.flag().then(|| g.name()),
                 }),
                 include_nulls: self.flag(),
+            },
+            33 => PlanNode::ColumnNames {
+                input: self.input(d),
+                op: match self.pick(3) {
+                    0 => crate::ColumnNamesOp::ToDf(self.many(0, 2, Gen::name)),
+                    1 => crate::ColumnNamesOp::Rename(self.many(0, 2, |g| (g.name(), g.name()))),
+                    _ => crate::ColumnNamesOp::Drop {
+                        names: self.many(0, 2, Gen::name),
+                        columns: self.many(0, 2, Gen::name),
+                    },
+                },
             },
             _ => PlanNode::WithCte {
                 input: self.input(d),
@@ -1355,6 +1411,25 @@ fn m_plan(p: &mut Arc<LogicalPlan>, w: &mut Walk) -> bool {
             name,
             metrics,
         } => m_string(name, w) || m_exprs(metrics, w) || m_plan(input, w),
+        PlanNode::MetricViewRead {
+            input,
+            name,
+            dimensions,
+            measures,
+            output,
+            ansi,
+        } => {
+            site!(w, *ansi = Some(!ansi.unwrap_or(false)));
+            m_strings(name, w)
+                || dimensions.iter_mut().chain(measures.iter_mut()).any(|c| {
+                    m_string(&mut c.name, w) || m_expr(&mut c.expr, w) || {
+                        site!(w, c.nullable = !c.nullable);
+                        false
+                    }
+                })
+                || output.iter_mut().any(|c| m_bound(c, w))
+                || m_plan(input, w)
+        }
         PlanNode::WithColumns { input, columns } => m_columns(columns, w) || m_plan(input, w),
         PlanNode::Filter {
             input,
@@ -1362,6 +1437,7 @@ fn m_plan(p: &mut Arc<LogicalPlan>, w: &mut Walk) -> bool {
         }
         | PlanNode::Limit { input, limit: e }
         | PlanNode::Offset { input, offset: e }
+        | PlanNode::Tail { input, limit: e }
         | PlanNode::ReplicateRows { input, count: e } => m_expr(e, w) || m_plan(input, w),
         PlanNode::Sample {
             input,
@@ -1509,6 +1585,48 @@ fn m_plan(p: &mut Arc<LogicalPlan>, w: &mut Walk) -> bool {
             };
             inside || m_plan(left, w) || m_plan(right, w)
         }
+        PlanNode::AsOfJoin {
+            left,
+            right,
+            kind,
+            condition,
+            as_of,
+        } => {
+            site!(w, flip(kind, JoinKind::Inner, JoinKind::LeftOuter));
+            let m = Arc::make_mut(as_of);
+            site!(w, m.allow_exact = !m.allow_exact);
+            site!(w, m.as_written = !m.as_written);
+            site!(
+                w,
+                flip(
+                    &mut m.direction,
+                    crate::AsOfDirection::Backward,
+                    crate::AsOfDirection::Forward
+                )
+            );
+            site!(w, m.distance_on_every_pair = !m.distance_on_every_pair);
+            let one = || Some(Arc::new(Expr::literal(crate::Literal::Integer(1))));
+            site!(
+                w,
+                m.tolerance = if m.tolerance.is_some() { None } else { one() }
+            );
+            site!(
+                w,
+                m.distance = if m.distance.is_some() { None } else { one() }
+            );
+            let inside = match condition {
+                JoinCondition::On(e) => m_expr(e, w),
+                JoinCondition::Using(cols) => m_strings(cols, w),
+                JoinCondition::None | JoinCondition::Natural => false,
+            };
+            inside
+                || m_expr(&mut m.left, w)
+                || m_expr(&mut m.right, w)
+                || m.tolerance.as_mut().is_some_and(|e| m_expr(e, w))
+                || m.distance.as_mut().is_some_and(|e| m_expr(e, w))
+                || m_plan(left, w)
+                || m_plan(right, w)
+        }
         PlanNode::Sort {
             input,
             order,
@@ -1555,7 +1673,9 @@ fn m_plan(p: &mut Arc<LogicalPlan>, w: &mut Walk) -> bool {
             site!(w, inputs.push(Arc::new(LogicalPlan::table(["x"]))));
             inputs.iter_mut().any(|i| m_plan(i, w))
         }
-        PlanNode::PipeOperator { input } | PlanNode::Distinct { input } => m_plan(input, w),
+        PlanNode::PipeOperator { input }
+        | PlanNode::ColumnNames { input, .. }
+        | PlanNode::Distinct { input } => m_plan(input, w),
         PlanNode::WithCte { input, ctes } => {
             site!(
                 w,

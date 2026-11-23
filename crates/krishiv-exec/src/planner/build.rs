@@ -116,6 +116,7 @@ fn plan_once(
         .map(|(key, _)| key.clone())
         .collect();
     let mut shared = std::mem::take(&mut planner.shared);
+    planner.shared_reads.strip_dead(&mut shared);
     let fuse = planner.fuse_probe_select();
     attach_runtime_filters(
         &mut planner.scan_filters,
@@ -322,6 +323,8 @@ pub(crate) struct Planner<'a> {
     /// The rank the next observing node takes (`PhysNode::CollectMetrics::instance`), in plan
     /// order.
     pub(super) observers: u32,
+    /// Which shared plans each read of one is under (live, or a `LIMIT 0`'s).
+    shared_reads: super::observe::SharedReads,
     /// The attributes the whole plan reads (`util::referenced_attrs`), for the corrupt-record-only check.
     referenced: HashSet<AttrId>,
     /// The columns the parent of the relation planned next reads from it, when that parent
@@ -370,6 +373,7 @@ impl<'a> Planner<'a> {
             unseeded_samples: 0,
             unobserved: 0,
             observers: 0,
+            shared_reads: super::observe::SharedReads::default(),
             referenced: referenced_attrs(root),
             demand: None,
             instance_projection: cx
@@ -476,6 +480,13 @@ impl<'a> Planner<'a> {
                 kind,
                 condition,
             } => self.join(left, right, *kind, condition, demand),
+            PlanNode::AsOfJoin {
+                left,
+                right,
+                kind,
+                condition,
+                as_of,
+            } => self.as_of_join(left, right, *kind, condition, as_of, demand),
             PlanNode::SubqueryAlias { input, .. } => {
                 self.demand = demand;
                 self.plan(input)
@@ -594,6 +605,7 @@ impl<'a> Planner<'a> {
                 metrics,
             } => self.collect_metrics(input, name, metrics),
             PlanNode::Offset { input, offset } => self.limit(input, limit_value(offset)?, u64::MAX),
+            PlanNode::Tail { input, limit } => self.tail(input, limit_value(limit)?),
             PlanNode::Sort {
                 input,
                 order,
@@ -820,6 +832,9 @@ impl<'a> Planner<'a> {
     /// A reference read from the definition's shared plan.
     fn shared_read(&mut self, r: &krishiv_plan::CteRef) -> Result<Planned> {
         let (id, schema) = self.shared_plan(&r.source, &r.name)?;
+        // Read live unless under a `LIMIT 0` (Spark prunes that read, so nothing it alone reads
+        // is observed).
+        self.shared_reads.read(id, self.unobserved == 0);
         let layout: Vec<AttrId> = r.output.iter().map(|c| c.id).collect();
         let explain = ExplainNode::leaf(
             "SharedRead",
@@ -861,7 +876,15 @@ impl<'a> Planner<'a> {
         let output = def
             .resolved_output()
             .ok_or_else(|| internal("a CTE without output"))?;
-        let planned = self.plan(&def)?;
+        // Planned once, with its observed nodes, whichever reference reads it first: a read under
+        // a `LIMIT 0` is not a second copy of the body (the body would run twice). Where only
+        // such reads reach it, the nodes are stripped afterwards (`SharedReads::strip_dead`).
+        let outer = std::mem::take(&mut self.unobserved);
+        self.shared_reads.begin();
+        let planned = self.plan(&def);
+        self.unobserved = outer;
+        let reads = self.shared_reads.finish();
+        let planned = planned?;
         // Exactly the definition's columns, in its order.
         let planned = select(planned, &output, "CteRef")?;
         let ordered = ends_in_sort(&planned.node);
@@ -876,11 +899,8 @@ impl<'a> Planner<'a> {
             deterministic: krishiv_optimizer::plan_is_deterministic(&def),
             ordered,
         });
-        // Planned under a `LIMIT 0`, the definition lost its observed nodes: that copy is the
-        // zero-row reference's own, and a live reference plans (and shares) one that observes.
-        if self.unobserved == 0 {
-            self.shared_ids.insert(source.to_vec(), id);
-        }
+        self.shared_reads.record(id, reads);
+        self.shared_ids.insert(source.to_vec(), id);
         self.shared_schemas.insert(id, Arc::clone(&schema));
         Ok((id, schema))
     }
@@ -924,6 +944,24 @@ impl<'a> Planner<'a> {
         };
         let input = self.require(input, Distribution::Single)?;
         Ok(Self::skip_rows(input, skip, n))
+    }
+
+    /// The last `n` rows of `input` in plan order (`Dataset.tail`): one
+    /// partition, one driver, the rows kept by [`Tail`](crate::operators::Tail).
+    fn tail(&mut self, input: &Arc<LogicalPlan>, n: u64) -> Result<Planned> {
+        let input = self.plan(input)?;
+        let input = self.require(input, Distribution::Single)?;
+        let schema = Arc::clone(&input.schema);
+        let layout = input.layout.clone();
+        let mut planned = input.wrap(
+            |input| PhysNode::Tail { input, limit: n },
+            schema,
+            layout,
+            ("Tail", n.to_string()),
+        );
+        // A filter above a tail would change which rows it keeps.
+        planned.sites.clear();
+        Ok(planned)
     }
 
     /// The `Limit` operator over `input`.
@@ -1925,45 +1963,3 @@ mod attach_tests;
 
 pub(super) mod util;
 pub(crate) use util::*;
-
-/// `TABLESAMPLE` over `input` (Spark's `SampleExec`) with its resolved
-/// seed. Rows still pass in order, but which ones depends on every row below
-/// reaching the sample: no runtime filter or top-N bound reaches through it.
-fn sample(input: Planned, lower: f64, upper: f64, seed: i64) -> Planned {
-    let schema = Arc::clone(&input.schema);
-    let layout = input.layout.clone();
-    let mut planned = input.wrap(
-        |input| PhysNode::Sample {
-            input,
-            lower,
-            upper,
-            seed,
-        },
-        schema,
-        layout,
-        ("Sample", format!("{lower:?}, {upper:?}, false, {seed}")),
-    );
-    planned.sites.clear();
-    planned
-}
-
-/// The seed of the `n`th unseeded sample, in `0..1000` as Spark's
-/// `(math.random * 1000).toLong`: from the query's sample salt
-/// ([`PlanningContext::sample_salt`](super::PlanningContext::sample_salt)),
-/// so every plan of one DataFrame draws the same seeds, as Spark's executed
-/// plan of one Dataset does; without a salt, from the process's random
-/// hasher keys.
-fn unseeded_sample_seed(salt: Option<u64>, n: u64) -> i64 {
-    use std::hash::BuildHasher as _;
-    let draw = match salt {
-        // SplitMix64's finalizer of the salt and the sample's number.
-        Some(salt) => {
-            let mut z = salt ^ n.wrapping_mul(0x9e37_79b9_7f4a_7c15);
-            z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-            z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
-            z ^ (z >> 31)
-        }
-        None => std::collections::hash_map::RandomState::new().hash_one(n),
-    };
-    (draw % 1000).cast_signed()
-}

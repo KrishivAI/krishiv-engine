@@ -801,3 +801,49 @@ fn show_table_extended_of_a_temporary_view_prints_its_text() {
     }
     assert_eq!(shown[0][2], "true");
 }
+
+/// `SHOW NAMESPACES IN <name>` resolves `<name>` as Spark 4.2.0's `CatalogAndNamespace` does (a
+/// first part naming a catalog is that catalog, else the name is a namespace of the current one),
+/// and the session catalog lists as `V2SessionCatalog.listNamespaces`: all at the top, none under
+/// an existing database, `SCHEMA_NOT_FOUND` for anything else (`v1/ShowNamespacesSuite` "IN
+/// namespace doesn't exist"). `system` has none. Review 58b2 F1.
+#[test]
+fn show_namespaces_in_a_name() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(&s, "CREATE DATABASE d1");
+    assert_eq!(
+        rows(&s, "SHOW NAMESPACES IN spark_catalog"),
+        [["d1"], ["default"]]
+    );
+    assert_eq!(
+        rows(&s, "SHOW DATABASES FROM SPARK_CATALOG LIKE 'd1'"),
+        [["d1"]]
+    );
+    assert!(rows(&s, "SHOW NAMESPACES IN default").is_empty());
+    assert!(rows(&s, "SHOW NAMESPACES IN spark_catalog.D1").is_empty());
+    assert!(rows(&s, "SHOW NAMESPACES IN system").is_empty());
+    for (sql, name) in [
+        ("SHOW NAMESPACES IN dummy", "`spark_catalog`.`dummy`"),
+        (
+            "SHOW NAMESPACES IN spark_catalog.dummy",
+            "`spark_catalog`.`dummy`",
+        ),
+        (
+            "SHOW NAMESPACES IN default.x",
+            "`spark_catalog`.`default`.`x`",
+        ),
+        ("SHOW NAMESPACES IN system.x", "`system`.`x`"),
+    ] {
+        let e = block_on(async { s.sql(sql).await?.collect().await }).unwrap_err();
+        assert_eq!(e.error_class().name(), "SCHEMA_NOT_FOUND", "{sql}: {e}");
+        assert!(e.to_string().contains(name), "{sql}: {e}");
+    }
+    // With `system` current, a name of the session catalog still lists it.
+    run(&s, "USE system");
+    assert!(rows(&s, "SHOW NAMESPACES").is_empty());
+    assert_eq!(
+        rows(&s, "SHOW NAMESPACES IN spark_catalog"),
+        [["d1"], ["default"]]
+    );
+}

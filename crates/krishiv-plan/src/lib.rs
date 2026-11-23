@@ -70,17 +70,21 @@
 //! | `PlanNode::Aggregate` | U, R | Q1, Q3-Q5, Q7-Q13, Q15, Q16, Q18, Q21, Q22 | `groupBy.agg`, `rollup.agg`, `cube.agg` |
 //! | `PlanNode::PartialAggregate` | R | - | - |
 //! | `PlanNode::Join` | U, R | Q2, Q3, Q5, Q7-Q21 | `join` |
+//! | `PlanNode::AsOfJoin` | U, R | - | - |
 //! | `PlanNode::Sort` | U, R | Q1-Q5, Q7-Q13, Q15, Q16, Q18, Q20-Q22 | `orderBy`, `sort` |
 //! | `PlanNode::Limit` | U, R | Q2, Q3, Q10, Q18, Q21 | `limit` |
 //! | `PlanNode::Offset` | U, R | - | `offset` |
+//! | `PlanNode::Tail` | U, R | - | - |
 //! | `PlanNode::SubqueryAlias` | U, R | Q7-Q9, Q13, Q21, Q22 | `df.alias` |
 //! | `PlanNode::WithCte` | U, R | Q15 | - |
 //! | `PlanNode::CteRef` | R | - | - |
 //! | `PlanNode::Shift` | R | - | - |
 //! | `PlanNode::Hint` | U | - | - |
 //! | `PlanNode::PipeOperator` | U | - | - |
+//! | `PlanNode::ColumnNames` | U | - | - |
 //! | `PlanNode::Repartition` | U, R | - | - |
 //! | `PlanNode::CollectMetrics` | U, R | - | `observe` |
+//! | `PlanNode::MetricViewRead` | U, R | - | - |
 //! | `PlanNode::JoinHint` | R | - | - |
 //! | `PlanNode::Union` | U, R | - | - |
 //! | `PlanNode::Distinct` | U | - | - |
@@ -146,6 +150,11 @@ mod tests;
 pub mod udtf;
 mod walk;
 
+/// The option key under which a table reference's time-travel clause (`VERSION AS OF`, `@v1`, ...)
+/// rides on its read: no table reads an older version yet, so the session refuses it when the
+/// relation resolves.
+pub const TIME_TRAVEL_OPTION: &str = "__krishiv.timeTravel";
+
 pub use cache::{CacheKey, normalized_plan_hash, normalized_subtree_hash, semantic_plan_hash};
 pub use display::Annotated;
 #[doc(hidden)]
@@ -180,10 +189,10 @@ pub fn generate_qualifier(index: usize, aliased: bool) -> String {
 }
 
 pub use plan::{
-    ALIAS_PART_SEP, Cte, CteRef, GeneratorKind, Grouping, IR_VERSION, JoinCondition, JoinKind,
-    JoinStrategy, LogicalPlan, PivotValue, Plan, PlanNode, ReadSource, SampleBounds, Scan,
-    SetOperation, SqlArgs, TABLE_FUNCTION_NAME_SEP, TableArg, TableVersion, UnpivotColumnSet,
-    generator_arg, without_generated_marker,
+    ALIAS_PART_SEP, AsOfDirection, AsOfMatch, ColumnNamesOp, Cte, CteRef, GeneratorKind, Grouping,
+    IR_VERSION, JoinCondition, JoinKind, JoinStrategy, LogicalPlan, MetricColumn, PivotValue, Plan,
+    PlanNode, ReadSource, SampleBounds, Scan, SetOperation, SqlArgs, TABLE_FUNCTION_NAME_SEP,
+    TableArg, TableVersion, UnpivotColumnSet, generator_arg, without_generated_marker,
 };
 pub use python::{
     check_python_aggregates, check_python_relation_determinism, is_python_udaf,

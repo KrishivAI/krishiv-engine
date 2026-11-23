@@ -396,7 +396,7 @@ fn a_create_finds_its_own_version_zero() {
             .rt
             .block_on(env.engine.delta_blocking({
                 let table = table.clone();
-                move |e| plan_create(e, table.new_table(), "w", FileLimits::default())
+                move |e| plan_create(e, table.new_table(), "w", None, FileLimits::default())
             }))
             .unwrap()
             .unwrap();
@@ -440,6 +440,46 @@ fn a_create_finds_its_own_version_zero() {
         .write_as(&other, WriteMode::Append, rows, &[], "w2")
         .unwrap_err();
     assert_eq!(e.error_class(), ErrorClass::TableOrViewAlreadyExists, "{e}");
+}
+
+/// E34: a keyed append that creates the table records its key in version 0, so the statement
+/// retried (a new write id) on the created table writes nothing; an unkeyed create has no `txn`.
+#[test]
+fn a_keyed_create_records_its_key_in_version_zero() {
+    let key = [("krishiv.write.idempotencyKey", "job-1")];
+    let env = Env::new();
+    let table = new_table(&env, &modes_schema(), &["p"]);
+    env.write_as(
+        &table,
+        WriteMode::Append,
+        vec![wide_rows(0, 10)],
+        &key,
+        "w1",
+    )
+    .unwrap();
+    assert!(
+        env.log(0)
+            .iter()
+            .any(|a| a["txn"]["appId"] == "krishiv.idempotency:job-1"),
+        "{:?}",
+        env.log(0)
+    );
+    env.write_as(
+        &env.open().unwrap(),
+        WriteMode::Append,
+        vec![wide_rows(0, 10)],
+        &key,
+        "w2",
+    )
+    .unwrap();
+    assert_eq!(env.latest(), 0, "the retry committed nothing");
+    assert_eq!(ids(&env.read(&env.open().unwrap())).len(), 10);
+
+    let env = Env::new();
+    let table = new_table(&env, &modes_schema(), &["p"]);
+    env.write(&table, WriteMode::Append, vec![wide_rows(0, 10)], &[])
+        .unwrap();
+    assert!(env.log(0).iter().all(|a| a.get("txn").is_none()));
 }
 
 fn new_name(new: &super::super::sink::NewTable) -> String {
@@ -540,6 +580,19 @@ fn a_checkpoint_follows_the_interval() {
     }
     assert!(last.exists(), "no checkpoint");
     assert_eq!(ids(&env.read(&env.open().unwrap())).len(), 16);
+}
+
+/// The checkpoint's engine reserves nothing from the statement's pool: it runs after the
+/// statement has ended, and once charged its reads there (`delta_stats_match_spark` saw the pool
+/// at 1 MiB just after the write returned, when its tenth commit started a checkpoint).
+#[test]
+fn a_detached_engine_reserves_nothing_from_the_statement() {
+    let env = Env::new();
+    assert!(env.engine.io().memory_pool().is_some());
+    let detached = env
+        .engine
+        .detached(Arc::new(krishiv_exec::CancellationToken::new()));
+    assert!(detached.io().memory_pool().is_none());
 }
 
 /// No write into an oracle table, of any mode, raises `INTERNAL_ERROR` (design section 3.7:

@@ -372,6 +372,30 @@ proptest! {
     }
 }
 
+/// Seed 12016891243311386888 of `random_queries_reach_the_lowest_operator`: `x4`'s `c1` and
+/// `c2` are both `x5.a`, so the equality join ordering derives for them reads `c1 = c2` over
+/// `Shift (Project [a AS c1, a AS c2])`. Estimated as two columns it made `x4` one row
+/// (`1 / NDV`) and the plan put it on the build side; the next optimization read the same
+/// conjunct as `a = a` (every non-NULL row), a million rows, and swapped the join: not a
+/// fixed point. The renames now hold through a `Shift`.
+#[test]
+fn a_shifted_pair_of_renames_is_one_column_for_the_estimate() {
+    let sql = "SELECT x1.c0 AS c0 FROM (SELECT x3.b AS c0 FROM u AS x2 FULL JOIN t AS x3 \
+               ON x2.a = x3.c AND (coalesce(x2.d, 'y') = 'y' OR x3.b IS NULL) \
+               LEFT JOIN (SELECT x5.c AS c0, x5.a AS c1, x5.a AS c2 FROM t AS x5) AS x4 \
+               ON x2.a = x4.c1 WHERE x4.c2 = x2.a) AS x1 \
+               WHERE ((x1.c0 = 'y' OR x1.c0 IS NOT NULL) OR x1.c0 IN ('y', 'y'))";
+    let plan = support::resolve(sql, &support::ctx());
+    let optimized = optimize(&plan).unwrap();
+    let again = optimize(&optimized).unwrap();
+    assert!(
+        again.structurally_eq(&optimized),
+        "not a fixed point:\n{}\n{}",
+        optimized.root(),
+        again.root()
+    );
+}
+
 /// Seed 3096671712105701144 of `random_queries_reach_the_lowest_operator`:
 /// join ordering regroups `x2 x x3 x x4` so the `WHERE` disjunction sits on
 /// a join with `x3 x x4` as one side, which implies `(x4.a IN (-2, 2) or
@@ -905,5 +929,26 @@ fn an_inner_join_below_a_left_join_keeps_its_input_order() {
          x2.d AS c2 FROM u AS x2 FULL JOIN u AS x3 ON x2.a = x3.a WHERE x3.d <= x3.d) AS x1 \
          LEFT JOIN u AS x4 ON x1.c1 = x4.a AND x4.d <> x1.c2 \
          WHERE (x1.c1 IS NOT NULL AND NOT (x1.c0 <> x4.a))",
+    );
+}
+
+/// Seed 14415185471139882126 of `random_queries_reach_the_lowest_operator` (#930 run
+/// 44990348007): a filter above an aggregate over a `FULL JOIN` whose `ON` holds a one-side
+/// conjunct.
+#[test]
+fn a_filter_over_a_full_join_aggregate_reaches_a_fixed_point() {
+    let sql = "SELECT * FROM (SELECT x1.c1 AS c0, x1.c0 AS c1 FROM (SELECT x2.c1 AS c0, \
+               count(*) AS c1 FROM (SELECT x3.c + 1 AS c0, x3.c AS c1 FROM t AS x3 FULL JOIN \
+               t AS x4 ON x3.c = x4.c AND coalesce(x3.b, 'x') = 'z') AS x2 \
+               WHERE (x2.c0 IN (2, 3) AND x2.c0 = x2.c1) GROUP BY x2.c1) AS x1 \
+               WHERE x1.c1 < -2) ORDER BY c0, c1 LIMIT 4";
+    let plan = support::resolve(sql, &support::ctx());
+    let optimized = optimize(&plan).unwrap();
+    let again = optimize(&optimized).unwrap();
+    assert!(
+        again.structurally_eq(&optimized),
+        "not a fixed point:\n{}\n{}",
+        optimized.root(),
+        again.root()
     );
 }

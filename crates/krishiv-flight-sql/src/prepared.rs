@@ -27,6 +27,7 @@ use futures::{StreamExt, TryStreamExt};
 use krishiv_common::error::{KrishivError, KrishivFlightSqlInvalidParameters};
 use krishiv_connect_server::SessionOwner;
 use krishiv_session::auth::Authenticated;
+use krishiv_session::parameter_types::BoundAs;
 use krishiv_session::{QueryOptions, Session, SqlQuery};
 use prost::Message;
 use tonic::metadata::MetadataMap;
@@ -56,27 +57,33 @@ fn invalid_parameters(reason: String) -> Status {
 fn schema_message(schema: &Schema) -> Result<prost::bytes::Bytes, Status> {
     // `FlightInfo.schema` is the same encapsulated IPC schema message.
     FlightInfo::new()
-        .try_with_schema(schema)
+        .try_with_schema(&crate::statement::described(schema))
         .map(|info| info.schema)
         .map_err(|e| internal(format!("encoding a schema: {e}")))
 }
 
-/// The parameter schema of `markers` markers (design §4.4): each nullable `Null`.
-fn parameter_schema(markers: usize) -> Schema {
-    Schema::new(
-        (1..=markers)
-            .map(|i| Field::new(format!("parameter_{i}"), DataType::Null, true))
-            .collect::<Vec<_>>(),
-    )
+/// The parameter schema of markers typed `types` (design §4.4, amended 2026-11-20): each
+/// nullable, in Spark's Arrow shapes as a result column of that type; a marker with no type is a
+/// string. The JDBC driver binds each value into a vector of this type.
+fn parameter_schema(
+    types: &[Option<krishiv_types::DataType>],
+    session: &Session,
+) -> Result<arrow_schema::SchemaRef, KrishivError> {
+    let schema = krishiv_session::parameter_types::parameter_schema(types);
+    spark_schema(&schema, time_zone(session).as_ref())
 }
 
 /// One row binding every marker to `NULL`: the classification text of a parameterized
-/// statement (its kind and, for a query, its reads and columns are checked at create).
+/// statement (its kind and, for a query, its reads, columns and marker types are checked at
+/// create).
 fn null_row(markers: usize) -> Result<RecordBatch, Status> {
+    let fields: Vec<Field> = (1..=markers)
+        .map(|i| Field::new(format!("parameter_{i}"), DataType::Null, true))
+        .collect();
     let columns: Vec<ArrayRef> = (0..markers)
         .map(|_| Arc::new(NullArray::new(1)) as ArrayRef)
         .collect();
-    RecordBatch::try_new(Arc::new(parameter_schema(markers)), columns)
+    RecordBatch::try_new(Arc::new(Schema::new(fields)), columns)
         .map_err(|e| internal(format!("a parameter row: {e}")))
 }
 
@@ -93,13 +100,12 @@ fn one_row(markers: usize) -> Result<RecordBatch, Status> {
         .map_err(|e| internal(format!("a parameter row: {e}")))
 }
 
-/// The record count of a prepared update's runs (design §4.4): their sum, or `-1` when any run
-/// reports none.
+/// The record count of a prepared update's runs (design §4.4): their sum (a run that reports no
+/// count counts `0`, `update::record_count`).
 fn summed(counts: impl IntoIterator<Item = i64>) -> i64 {
     counts
         .into_iter()
-        .try_fold(0i64, |t, c| (c >= 0).then(|| t.saturating_add(c)))
-        .unwrap_or(-1)
+        .fold(0i64, |t, c| t.saturating_add(c.max(0)))
 }
 
 /// The refusal of row `ran + 1` of a prepared update's `of` rows after `ran` had run: its own
@@ -116,13 +122,24 @@ fn partly_ran(status: &Status, ran: usize, of: usize) -> Status {
     )
 }
 
-/// A statement's kind and, for a query, its columns in Spark's Arrow shapes, analyzed (nothing
-/// runs) as `text` under the session's policy.
+/// What classifying a statement found: whether it is a query, its columns in Spark's Arrow
+/// shapes, and the type of each marker whose bound literal analysis cast (none for a command).
+type Classified = (
+    bool,
+    Option<arrow_schema::SchemaRef>,
+    Vec<Option<krishiv_types::DataType>>,
+);
+
+/// A statement's kind and, for a query, its columns in Spark's Arrow shapes and its markers'
+/// types (`krishiv_session::parameter_types::marker_types`, the markers' values at `spans` of
+/// `text`), analyzed (nothing runs) as `text` under the session's policy.
 async fn classify(
     session: &Session,
     text: &str,
+    spans: &[std::ops::Range<usize>],
+    bound: BoundAs,
     query_start: i64,
-) -> Result<(bool, Option<arrow_schema::SchemaRef>), KrishivError> {
+) -> Result<Classified, KrishivError> {
     match session
         .sql_query_with(text, QueryOptions::new().query_start(query_start))
         .await?
@@ -130,9 +147,16 @@ async fn classify(
         SqlQuery::Query(df) => {
             let schema = df.schema().await?;
             let tz = time_zone(session);
-            Ok((true, Some(spark_schema(&schema, tz.as_ref())?)))
+            // A plan the caller may not be shown (definer views) leaves the markers untyped,
+            // asked quietly (`DataFrame::marker_types`): preparing is not a denial.
+            let types = if spans.is_empty() {
+                Vec::new()
+            } else {
+                df.marker_types(spans, bound).await?
+            };
+            Ok((true, Some(spark_schema(&schema, tz.as_ref())?), types))
         }
-        SqlQuery::NotAQuery(_) => Ok((false, None)),
+        SqlQuery::NotAQuery(_) => Ok((false, None, Vec::new())),
         _ => Err(krishiv_common::error::InternalError {
             message: "an unknown kind of SQL statement".to_owned(),
         }
@@ -285,36 +309,48 @@ impl FlightSqlServer {
         .len();
         let query_start = now_micros();
         let gate = entry.shared().await;
-        let (query, schema) = if markers == 0 {
-            classify(session, &sql, query_start).await
+        let (query, schema, mut types) = if markers == 0 {
+            classify(session, &sql, &[], BoundAs::Null, query_start).await
         } else {
-            let text = session
-                .bind_parameters(&sql, &null_row(markers)?, 0)
+            let (text, spans) = session
+                .bind_parameters_spanned(&sql, &null_row(markers)?, 0)
                 .map_err(|e| flight_status(&e))?;
-            match classify(session, &text, query_start).await {
+            match classify(session, &text, &spans, BoundAs::Null, query_start).await {
                 Ok(c) => Ok(c),
                 // Only a query is analyzed, so only a query fails here: one a `NULL` cannot
                 // stand in (`LIMIT ?`) is tried with `1`; failing both, the `NULL` error stands.
+                // A marker its `1` was not cast for is an `INT`, as the `1` is.
                 Err(first) => {
-                    let text = session
-                        .bind_parameters(&sql, &one_row(markers)?, 0)
+                    let (text, spans) = session
+                        .bind_parameters_spanned(&sql, &one_row(markers)?, 0)
                         .map_err(|e| flight_status(&e))?;
-                    classify(session, &text, query_start)
+                    classify(session, &text, &spans, BoundAs::One, query_start)
                         .await
+                        .map(|(q, s, t)| {
+                            let t = t
+                                .into_iter()
+                                .map(|t| t.or(Some(krishiv_types::DataType::Integer)))
+                                .collect();
+                            (q, s, t)
+                        })
                         .map_err(|_| first)
                 }
             }
         }
         .map_err(|e| flight_status(&e))?;
+        // A command is not analyzed: an `INSERT ... VALUES` cell's marker takes its column's type.
+        if markers > 0 && !query {
+            types = session.insert_parameter_types(&sql, markers).await;
+        }
+        let parameter_schema = if markers == 0 {
+            prost::bytes::Bytes::new()
+        } else {
+            schema_message(&*parameter_schema(&types, session).map_err(|e| flight_status(&e))?)?
+        };
         drop(gate);
         let dataset_schema = match &schema {
             Some(s) => schema_message(s)?,
             None => prost::bytes::Bytes::new(),
-        };
-        let parameter_schema = if markers == 0 {
-            prost::bytes::Bytes::new()
-        } else {
-            schema_message(&parameter_schema(markers))?
         };
         // The handle holds its text (and, once bound, the bound text; `prepared_bind`).
         let bytes = sql.len();
@@ -394,7 +430,7 @@ impl FlightSqlServer {
             .bound
             .clone()
             .unwrap_or_else(|| Arc::clone(&used.payload.sql));
-        let (schema, mut slot) = self.run_statement(&mut call, sql).await?;
+        let (schema, mut slot) = self.run_statement(&mut call, sql, metadata).await?;
         let response = Response::new(flight_info(&schema, &slot.id, descriptor)?);
         slot.answered = true;
         Ok(response)
@@ -470,7 +506,7 @@ impl FlightSqlServer {
     }
 
     /// `DoPut(CommandPreparedStatementUpdate)` (design §4.4): each bound row runs the command
-    /// once, in order, and the counts are summed (`-1` when a run reports none); with no row
+    /// once, in order, and the counts are summed (a run that reports none counts `0`); with no row
     /// it runs once as prepared. A query is `KRISHIV_FLIGHT_SQL_QUERY_AS_UPDATE`, unrun. A row
     /// that fails after others ran says how many did (they are not undone).
     pub(crate) async fn prepared_update(
@@ -512,7 +548,7 @@ impl FlightSqlServer {
         }
         let mut counts = Vec::with_capacity(texts.len());
         for (ran, sql) in texts.iter().enumerate() {
-            match self.run_update(&call, sql).await {
+            match self.run_update(&call, sql, metadata).await {
                 Ok((count, _)) => counts.push(count),
                 Err(s) if ran > 0 => return Err(partly_ran(&s, ran, texts.len())),
                 Err(s) => return Err(s),
@@ -562,27 +598,27 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parameter_schema_is_nullable_null_per_marker() {
-        let s = parameter_schema(2);
-        assert_eq!(s.fields().len(), 2);
-        assert!(
-            s.fields()
-                .iter()
-                .all(|f| f.is_nullable() && f.data_type() == &DataType::Null)
-        );
+    fn parameter_schema_types_each_marker_nullable() {
+        let session = Session::new().expect("session");
+        let s = parameter_schema(&[Some(krishiv_types::DataType::Date), None], &session)
+            .expect("schema");
+        let types: Vec<&DataType> = s.fields().iter().map(|f| f.data_type()).collect();
+        assert_eq!(types, [&DataType::Date32, &DataType::Utf8]);
+        assert!(s.fields().iter().all(|f| f.is_nullable()));
+        assert_eq!(s.field(0).name(), "parameter_1");
         let bytes = schema_message(&s).expect("message");
-        assert_eq!(decode_schema(&bytes).as_deref(), Some(&s));
+        assert_eq!(decode_schema(&bytes).as_deref(), Some(&*s));
         assert_eq!(decode_schema(&[]), None);
         assert_eq!(null_row(3).expect("row").num_rows(), 1);
         assert_eq!(one_row(2).expect("row").num_columns(), 2);
     }
 
     #[test]
-    fn counts_sum_unless_one_is_unknown() {
+    fn counts_sum() {
         assert_eq!(summed([2, 3]), 5);
         assert_eq!(summed([0, 7, 0]), 7);
-        assert_eq!(summed([2, -1, 3]), -1, "one run reports no count");
-        assert_eq!(summed([-1]), -1);
+        assert_eq!(summed([2, -1, 3]), 5, "a negative count is none");
+        assert_eq!(summed([]), 0);
         assert_eq!(summed([i64::MAX, 1]), i64::MAX);
     }
 

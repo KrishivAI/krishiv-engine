@@ -98,6 +98,7 @@ __all__ = [
     "collation",
     "collect_list",
     "collect_set",
+    "collect_union",
     "concat_ws",
     "contains",
     "conv",
@@ -159,6 +160,7 @@ __all__ = [
     "floor",
     "format_number",
     "format_string",
+    "from_base32",
     "from_csv",
     "from_json",
     "from_unixtime",
@@ -193,6 +195,7 @@ __all__ = [
     "isnan",
     "isnotnull",
     "isnull",
+    "jaro_winkler_similarity",
     "java_method",
     "json_array_length",
     "json_object_keys",
@@ -393,6 +396,7 @@ __all__ = [
     "timestamp_seconds",
     "toDegrees",
     "toRadians",
+    "to_base32",
     "to_binary",
     "to_char",
     "to_csv",
@@ -431,7 +435,10 @@ __all__ = [
     "try_to_timestamp",
     "try_url_decode",
     "try_validate_utf8",
+    "try_variant_array_append",
     "try_variant_get",
+    "try_variant_insert",
+    "try_variant_set",
     "tuple_difference_double",
     "tuple_difference_integer",
     "tuple_difference_theta_double",
@@ -474,7 +481,12 @@ __all__ = [
     "var_pop",
     "var_samp",
     "variance",
+    "variant_array_append",
+    "variant_delete",
     "variant_get",
+    "variant_insert",
+    "variant_set",
+    "variant_strip_nulls",
     "version",
     "weekday",
     "weekofyear",
@@ -964,6 +976,11 @@ def collect_set(col: ColumnOrName) -> Column:
     return _call("collect_set", _named(col, "col"))
 
 
+def collect_union(col: ColumnOrName) -> Column:
+    """Calls the registry function ``collect_union``."""
+    return _call("collect_union", _named(col, "col"))
+
+
 def concat_ws(sep: str, *cols: ColumnOrName) -> Column:
     """Calls the registry function ``concat_ws``."""
     return _call("concat_ws", _lit(sep, "sep"), *_cols(cols))
@@ -1271,6 +1288,11 @@ def format_string(format: str, *cols: ColumnOrName) -> Column:
     return _call("format_string", _lit(format, "format"), *_cols(cols))
 
 
+def from_base32(col: ColumnOrName) -> Column:
+    """Calls the registry function ``from_base32``."""
+    return _call("from_base32", _named(col, "col"))
+
+
 def from_csv(col: ColumnOrName, schema: Column | str, options: dict[str, str] | None = None) -> Column:
     """Calls the registry function ``from_csv``."""
     return _call("from_csv", _named(col, "col"), _lit(schema, "schema"), *_opt(_opts, options, "options"))
@@ -1453,6 +1475,11 @@ def isnotnull(col: ColumnOrName) -> Column:
 def isnull(col: ColumnOrName) -> Column:
     """Calls the registry function ``isnull``."""
     return _call("isnull", _named(col, "col"))
+
+
+def jaro_winkler_similarity(left: ColumnOrName, right: ColumnOrName) -> Column:
+    """Calls the registry function ``jaro_winkler_similarity``."""
+    return _call("jaro_winkler_similarity", _named(left, "left"), _named(right, "right"))
 
 
 def java_method(*cols: ColumnOrName) -> Column:
@@ -2537,6 +2564,11 @@ def toRadians(col: ColumnOrName) -> Column:
     return _call("radians", _named(col, "col"))
 
 
+def to_base32(col: ColumnOrName) -> Column:
+    """Calls the registry function ``to_base32``."""
+    return _call("to_base32", _named(col, "col"))
+
+
 def to_binary(col: ColumnOrName, format: ColumnOrName | None = None) -> Column:
     """Calls the registry function ``to_binary``."""
     return _call("to_binary", _named(col, "col"), *_opt(_named, format, "format"))
@@ -2792,9 +2824,30 @@ def try_validate_utf8(str: ColumnOrName) -> Column:
     return _call("try_validate_utf8", _named(str, "str"))
 
 
+def try_variant_array_append(v: ColumnOrName, path: Column | str, value: ColumnOrName) -> Column:
+    """Calls the registry function ``try_variant_array_append``."""
+    return _call("try_variant_array_append", _named(v, "v"), _lit(path, "path"), _named(value, "value"))
+
+
 def try_variant_get(v: ColumnOrName, path: Column | str, targetType: str) -> Column:
     """Calls the registry function ``try_variant_get``."""
     return _call("try_variant_get", _named(v, "v"), _lit(path, "path"), _lit(targetType, "targetType"))
+
+
+def try_variant_insert(v: ColumnOrName, path: Column | str, value: ColumnOrName) -> Column:
+    """Calls the registry function ``try_variant_insert``."""
+    return _call("try_variant_insert", _named(v, "v"), _lit(path, "path"), _named(value, "value"))
+
+
+def try_variant_set(v: ColumnOrName, path: Column | str, value: ColumnOrName, create_if_missing: bool = True) -> Column:
+    """Calls the registry function ``try_variant_set``."""
+    return _call(
+        "try_variant_set",
+        _named(v, "v"),
+        _lit(path, "path"),
+        _named(value, "value"),
+        _lit(create_if_missing, "create_if_missing"),
+    )
 
 
 def tuple_difference_double(col1: ColumnOrName, col2: ColumnOrName) -> Column:
@@ -3025,9 +3078,40 @@ def variance(col: ColumnOrName) -> Column:
     return _call("variance", _named(col, "col"))
 
 
+def variant_array_append(v: ColumnOrName, path: Column | str, value: ColumnOrName) -> Column:
+    """Calls the registry function ``variant_array_append``."""
+    return _call("variant_array_append", _named(v, "v"), _lit(path, "path"), _named(value, "value"))
+
+
+def variant_delete(v: ColumnOrName, *paths: str) -> Column:
+    """Calls the registry function ``variant_delete``."""
+    return _call("variant_delete", _named(v, "v"), *[_lit(value, "paths") for value in paths])
+
+
 def variant_get(v: ColumnOrName, path: Column | str, targetType: str) -> Column:
     """Calls the registry function ``variant_get``."""
     return _call("variant_get", _named(v, "v"), _lit(path, "path"), _lit(targetType, "targetType"))
+
+
+def variant_insert(v: ColumnOrName, path: Column | str, value: ColumnOrName) -> Column:
+    """Calls the registry function ``variant_insert``."""
+    return _call("variant_insert", _named(v, "v"), _lit(path, "path"), _named(value, "value"))
+
+
+def variant_set(v: ColumnOrName, path: Column | str, value: ColumnOrName, create_if_missing: bool = True) -> Column:
+    """Calls the registry function ``variant_set``."""
+    return _call(
+        "variant_set",
+        _named(v, "v"),
+        _lit(path, "path"),
+        _named(value, "value"),
+        _lit(create_if_missing, "create_if_missing"),
+    )
+
+
+def variant_strip_nulls(v: ColumnOrName, include_arrays: bool = True) -> Column:
+    """Calls the registry function ``variant_strip_nulls``."""
+    return _call("variant_strip_nulls", _named(v, "v"), _lit(include_arrays, "include_arrays"))
 
 
 def version() -> Column:

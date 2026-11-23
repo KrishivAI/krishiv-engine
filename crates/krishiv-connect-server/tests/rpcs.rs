@@ -1308,6 +1308,33 @@ async fn the_client_type_and_transport_show_in_system_sessions() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_user_agent_is_the_client_type_when_the_request_has_none() {
+    use arrow_array::cast::AsArray;
+    let run = start().await;
+    analyze_with_metadata(&run, &[("user-agent", "etl-runner/1.2")], None)
+        .await
+        .expect("analyze");
+    let batches = run
+        .entry()
+        .session()
+        .sql("select client_type from system.sessions where client_type is not null")
+        .await
+        .expect("sql")
+        .collect()
+        .await
+        .expect("collect");
+    // The transport appends its own product token to the header.
+    // The client's token, a space, then tonic's own product token (`etl-runner/1.2 tonic/<version>`):
+    // `etl-runner/1.20` or any other suffix does not match.
+    let seen = batches[0].column(0).as_string::<i32>().value(0);
+    assert!(
+        seen.strip_prefix("etl-runner/1.2 tonic/")
+            .is_some_and(|v| !v.is_empty() && !v.contains(' ')),
+        "{seen}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_requests_tags_reach_the_engine_queries() {
     use arrow_array::cast::AsArray;
     let run = start().await;

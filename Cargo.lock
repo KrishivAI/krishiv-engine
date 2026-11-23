@@ -280,6 +280,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d62b7694a562cdf5a74227903507c56ab2cc8bdd1f781ed5cb4cf9c9f810bfc"
 
 [[package]]
+name = "arraydeque"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7d902e3d592a523def97af8f317b08ce16b7ab854c1985a0c671e6f15cebc236"
+
+[[package]]
 name = "arrow-arith"
 version = "58.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1999,9 +2005,9 @@ checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
 
 [[package]]
 name = "form_urlencoded"
-version = "1.2.2"
+version = "1.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cb4cb245038516f5f85277875cdaa4f7d2c9a0fa0468de06ed190163b1581fcf"
+checksum = "afa489199eaffb1211795df1c6236ce1ad0d41a6fa45250add73e3b02420f06e"
 dependencies = [
  "percent-encoding",
 ]
@@ -3023,8 +3029,12 @@ dependencies = [
 name = "krishiv-catalogs"
 version = "0.2.1"
 dependencies = [
+ "arrow-array 60.1.0",
+ "async-trait",
  "futures",
  "krishiv-common",
+ "krishiv-connectors-iceberg",
+ "krishiv-exec",
  "krishiv-plan",
  "krishiv-session",
  "krishiv-store",
@@ -3032,6 +3042,7 @@ dependencies = [
  "reqwest 0.13.5",
  "rusqlite",
  "serde_json",
+ "sha2",
  "tempfile",
  "thrift 0.25.0",
  "tokio",
@@ -3115,6 +3126,7 @@ dependencies = [
  "krishiv-catalogs",
  "krishiv-common",
  "krishiv-connect",
+ "krishiv-connectors-iceberg",
  "krishiv-exec",
  "krishiv-memory",
  "krishiv-plan",
@@ -3276,6 +3288,7 @@ dependencies = [
  "krishiv-memory",
  "krishiv-session",
  "krishiv-sql",
+ "krishiv-types",
  "prost",
  "tempfile",
  "tokio",
@@ -3483,10 +3496,13 @@ dependencies = [
  "krishiv-common",
  "krishiv-connect-server",
  "krishiv-exec",
+ "krishiv-memory",
  "krishiv-plan",
+ "krishiv-server",
  "krishiv-session",
  "krishiv-sql",
  "krishiv-types",
+ "libmimalloc-sys",
  "mimalloc",
  "pyo3",
 ]
@@ -3532,6 +3548,7 @@ dependencies = [
  "prost-reflect",
  "prost-types",
  "serde_json",
+ "sha2",
  "tempfile",
  "tokio",
  "tokio-rustls",
@@ -3556,6 +3573,7 @@ dependencies = [
  "futures",
  "http",
  "insta",
+ "krishiv-alloc",
  "krishiv-common",
  "krishiv-connectors-delta",
  "krishiv-exec",
@@ -3579,7 +3597,9 @@ dependencies = [
  "prost",
  "regex-lite",
  "reqwest 0.13.5",
+ "rustix",
  "rustls",
+ "saphyr-parser",
  "serde",
  "serde_json",
  "sha2",
@@ -3626,7 +3646,9 @@ dependencies = [
  "krishiv-shuffle",
  "krishiv-sql",
  "krishiv-types",
+ "krishiv-udf-sdk",
  "object_store",
+ "parquet 60.1.0",
  "prost",
  "tempfile",
  "tokio",
@@ -3728,6 +3750,7 @@ dependencies = [
  "arrow-buffer 60.1.0",
  "arrow-ipc 60.1.0",
  "arrow-schema 60.1.0",
+ "flate2",
  "futures",
  "krishiv-common",
  "krishiv-exec",
@@ -5312,6 +5335,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "saphyr-parser"
+version = "0.3.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c98d2738e44a25e6ba2e6d83d91805648df204768abc96f4f1278cb3d5c90bbe"
+dependencies = [
+ "arraydeque",
+ "thiserror",
+]
+
+[[package]]
 name = "schannel"
 version = "0.1.30"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6426,9 +6459,9 @@ checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
 
 [[package]]
 name = "url"
-version = "2.5.8"
+version = "2.5.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ff67a8a4397373c3ef660812acab3268222035010ab8680ec4215f38ba3d0eed"
+checksum = "f00cd2407bb42c0ef17be88d4cf020f5cceffd121665bac9b8b9493a369b3b1a"
 dependencies = [
  "form_urlencoded",
  "idna",

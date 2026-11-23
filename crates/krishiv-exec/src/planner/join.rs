@@ -46,6 +46,8 @@ use crate::physical::{
 };
 use crate::values::Producer;
 
+mod asof;
+
 impl Planner<'_> {
     pub(crate) fn join(
         &mut self,
@@ -447,6 +449,7 @@ impl Planner<'_> {
                 null_safe,
                 residual: filter,
                 single_match,
+                as_of: None,
             };
             // Validates the join and gives its schema.
             let schema =

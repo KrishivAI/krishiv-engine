@@ -222,6 +222,28 @@ fn filtered(est: &RelStats, pred: &Expr, propagate: bool) -> RelStats {
     }
 }
 
+/// The fraction of a left as-of join's left rows estimated to find no right row: those whose
+/// as-of value is NULL, and those whose key values the right side lacks (the keys' distinct
+/// counts, as an equi-join's matched fraction). Which rows the match condition leaves without a
+/// nearest row is not modelled.
+fn as_of_unmatched(condition: &JoinCondition, value: &Expr, l: &RelStats, r: &RelStats) -> f64 {
+    // A column, or a cast of one that carries its statistics (the analyzer widens the value).
+    let null_value = derived(value, l, l.rows).map_or(0.0, |s| s.null_frac);
+    let keys_missing = match condition {
+        JoinCondition::On(c) => key_pairs(c, l, r)
+            .iter()
+            .filter_map(|(a, b)| {
+                let (m, o) = (l.cols.get(a)?, r.cols.get(b)?);
+                (m.ndv_known() && o.ndv_known() && m.ndv > 0.0)
+                    .then(|| (m.ndv.min(o.ndv) / m.ndv).min(1.0))
+            })
+            .reduce(f64::min)
+            .map_or(0.0, |matched| 1.0 - matched),
+        _ => 0.0,
+    };
+    (1.0 - (1.0 - null_value) * (1.0 - keys_missing)).clamp(0.0, 1.0)
+}
+
 /// The pairs `(left column, right column)` of the equalities between a
 /// column of `l` and a column of `r` among the conjuncts of `pred`.
 fn key_pairs(pred: &Arc<Expr>, l: &RelStats, r: &RelStats) -> Vec<(AttrId, AttrId)> {
@@ -418,6 +440,30 @@ impl<'a> Estimator<'a> {
                 let (l, r) = (self.plan(left), self.plan(right));
                 self.join(p, &l, &r, *kind, condition)
             }
+            // At most one right row per left row (a left join: exactly one): the left rows, the
+            // right columns as the right input left them, a left join's gaining its unmatched
+            // fraction as nulls.
+            PlanNode::AsOfJoin {
+                left,
+                right,
+                kind,
+                condition,
+                as_of,
+            } => {
+                let (l, r) = (self.plan(left), self.plan(right));
+                let mut out = RelStats::clone(&l);
+                let unmatched = if self.propagate && *kind == JoinKind::LeftOuter {
+                    as_of_unmatched(condition, &as_of.left, &l, &r)
+                } else {
+                    0.0
+                };
+                out.cols.extend(r.cols.iter().map(|(id, c)| {
+                    let mut c = c.clone();
+                    c.null_frac = unmatched + (1.0 - unmatched) * c.null_frac;
+                    (*id, c)
+                }));
+                out
+            }
             PlanNode::Sort { input, .. }
             | PlanNode::SubqueryAlias { input, .. }
             | PlanNode::JoinHint { input, .. }
@@ -459,7 +505,7 @@ impl<'a> Estimator<'a> {
                     RelStats::unknown(rows, ids())
                 }
             }
-            PlanNode::Limit { input, limit } => {
+            PlanNode::Limit { input, limit } | PlanNode::Tail { input, limit } => {
                 let est = RelStats::clone(&self.plan(input));
                 let n = limit_value(limit).map_or(est.rows, to_f64);
                 let rows = est.rows.min(n);
@@ -1000,18 +1046,37 @@ pub(crate) fn same_renames(predicate: &Arc<Expr>, input: &LogicalPlan) -> Arc<Ex
 /// first output (the canonical name of the column).
 fn renames_to_canonical(input: &LogicalPlan) -> HashMap<AttrId, BoundColumn> {
     // Filters and subquery aliases keep their input's columns (attributes):
-    // the projection may sit below them.
+    // the projection may sit below them. A `Shift` renumbers them by its
+    // offset: the renames below it hold at the shifted ids (the instance of a
+    // shared body, `Shift +6 (Project [a AS c1, a AS c2])`).
     let mut input = input;
-    while let PlanNode::Filter { input: below, .. } | PlanNode::SubqueryAlias { input: below, .. } =
-        &input.node
-    {
-        input = below;
+    let mut shift = 0_u64;
+    loop {
+        match &input.node {
+            PlanNode::Filter { input: below, .. }
+            | PlanNode::SubqueryAlias { input: below, .. } => {
+                input = below;
+            }
+            PlanNode::Shift {
+                input: below,
+                offset,
+            } => {
+                shift = shift.saturating_add(*offset);
+                input = below;
+            }
+            _ => break,
+        }
     }
     let PlanNode::Project { exprs, .. } = &input.node else {
         return HashMap::new();
     };
     let mut first: HashMap<AttrId, BoundColumn> = HashMap::new();
     let mut to: HashMap<AttrId, BoundColumn> = HashMap::new();
+    let moved = |c: &BoundColumn| {
+        let mut c = c.clone();
+        c.id = AttrId(c.id.0.saturating_add(shift));
+        c
+    };
     for e in exprs {
         // `a AS c` renames `a`; a bare `a` passes it through under its own
         // name (`Project [a, a AS c0]`: `a = c0` is `a = a`).
@@ -1025,7 +1090,7 @@ fn renames_to_canonical(input: &LogicalPlan) -> HashMap<AttrId, BoundColumn> {
         };
         let canon = first.entry(source).or_insert_with(|| output.clone());
         if canon.id != output.id {
-            to.insert(output.id, canon.clone());
+            to.insert(AttrId(output.id.0.saturating_add(shift)), moved(canon));
         }
     }
     to

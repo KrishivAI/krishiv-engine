@@ -96,6 +96,9 @@ ui = ["krishiv/ui", "server"]
 # `krishiv server` builds declared `iceberg-rest` catalogs (krishiv.catalog.<name>.type = iceberg-rest);
 # without it such a declaration fails startup naming the type.
 catalog-iceberg-rest = ["server", "dep:krishiv-catalogs", "krishiv-catalogs/session"]
+# `krishiv server` keeps persisted Python UDFs in a SQLite catalog file (`krishiv.connect.pythonFunctions.catalog`, P3-T072c);
+# a C build (bundled SQLite). Without it the setting fails startup naming the feature.
+python-function-catalog = ["server", "dep:krishiv-catalogs", "krishiv-catalogs/sqlite", "krishiv-connect-server/function-catalog"]
 celeborn = ["krishiv/celeborn"]
 mimalloc = ["krishiv/mimalloc", "dep:mimalloc", "dep:krishiv-alloc"]
 # Live async-task diagnostics over `tokio-console` (P2-T129): off by default;
@@ -108,4 +111,4 @@ telemetry-otlp = ["krishiv/telemetry-otlp", "dep:krishiv-session"]
 # Cloud object stores (S3, GCS, Azure). Opt-in so the default build stays
 # inside the dependency and binary-size budgets.
 cloud = ["krishiv/cloud"]
-full = ["krishiv/full"]
+full = ["krishiv/full", "catalog-iceberg-rest"]

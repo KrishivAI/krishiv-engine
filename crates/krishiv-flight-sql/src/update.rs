@@ -19,7 +19,7 @@ use prost::Message;
 use tonic::metadata::MetadataMap;
 use tonic::{Response, Status};
 
-use crate::call::CallSession;
+use crate::call::{CallSession, traced};
 use crate::cookies::{SessionCookie, session_cookie};
 use crate::server::FlightSqlServer;
 use crate::statement::{
@@ -34,12 +34,15 @@ pub(crate) type DoPutStream = Pin<Box<dyn Stream<Item = Result<PutResult, Status
 /// commands' `num_affected_rows`).
 const AFFECTED_ROWS: &str = "num_affected_rows";
 
-/// `record_count` of a command's result rows (design §4.3): the affected rows where the statement
-/// reports them (a first column `num_affected_rows` of one `BIGINT` row), else `-1`.
+/// `record_count` of a command's result rows (design §4.3, amended 2026-11-20): the affected rows
+/// where the statement reports them (a first column `num_affected_rows` of one `BIGINT` row),
+/// else `0`, as a JDBC update count of DDL is. Not `-1` ("unknown" in Flight SQL): Arrow's JDBC
+/// driver (Avatica) reads an update count of `-1` as a statement with a result set and asks for
+/// it, which runs the command a second time.
 pub(crate) fn record_count(batches: &[RecordBatch]) -> i64 {
     let mut rows = batches.iter().filter(|b| b.num_rows() > 0);
     let (Some(batch), None) = (rows.next(), rows.next()) else {
-        return -1;
+        return 0;
     };
     if batch.num_rows() != 1
         || batch
@@ -48,14 +51,14 @@ pub(crate) fn record_count(batches: &[RecordBatch]) -> i64 {
             .first()
             .is_none_or(|f| f.name() != AFFECTED_ROWS)
     {
-        return -1;
+        return 0;
     }
     batch
         .column(0)
         .as_any()
         .downcast_ref::<Int64Array>()
         .filter(|a| a.is_valid(0))
-        .map_or(-1, |a| a.value(0))
+        .map_or(0, |a| a.value(0))
 }
 
 /// The answer of an update: one `PutResult` carrying `DoPutUpdateResult{record_count}`.
@@ -78,7 +81,7 @@ impl FlightSqlServer {
         let cookieless = matches!(session_cookie(metadata), SessionCookie::Absent);
         let mut call = self.call_session(metadata, caller)?;
         let sql: Arc<str> = Arc::from(command.query.as_str());
-        let (count, changed) = self.run_update(&call, &sql).await?;
+        let (count, changed) = self.run_update(&call, &sql, metadata).await?;
         let mut response = Response::new(update_result(count));
         // A cookie-less update that left no session state ran in a transient session: no
         // cookie, and the guard releases it as the call ends (§16 M2).
@@ -95,6 +98,7 @@ impl FlightSqlServer {
         &self,
         call: &CallSession,
         sql: &Arc<str>,
+        metadata: &MetadataMap,
     ) -> Result<(i64, bool), Status> {
         let entry = Arc::clone(&call.entry);
         let op = OpGuard::register(
@@ -107,7 +111,7 @@ impl FlightSqlServer {
         let query_start = now_micros();
         let gate = entry.shared().await;
         let session = entry.session();
-        let options = || QueryOptions::new().query_start(query_start);
+        let options = || traced(QueryOptions::new().query_start(query_start), metadata);
         let class = match session
             .sql_query_with(sql, options())
             .await
@@ -160,19 +164,19 @@ mod tests {
             record_count(&[empty.clone(), batch(AFFECTED_ROWS, vec![Some(3)]), empty]),
             3
         );
-        assert_eq!(record_count(&[]), -1, "INSERT reports nothing");
-        assert_eq!(record_count(&[batch("x", vec![Some(7)])]), -1);
-        assert_eq!(record_count(&[batch(AFFECTED_ROWS, vec![None])]), -1);
+        assert_eq!(record_count(&[]), 0, "INSERT reports nothing");
+        assert_eq!(record_count(&[batch("x", vec![Some(7)])]), 0);
+        assert_eq!(record_count(&[batch(AFFECTED_ROWS, vec![None])]), 0);
         assert_eq!(
             record_count(&[batch(AFFECTED_ROWS, vec![Some(1), Some(2)])]),
-            -1
+            0
         );
         assert_eq!(
             record_count(&[
                 batch(AFFECTED_ROWS, vec![Some(1)]),
                 batch(AFFECTED_ROWS, vec![Some(2)])
             ]),
-            -1
+            0
         );
     }
 }

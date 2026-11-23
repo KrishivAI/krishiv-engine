@@ -32,7 +32,9 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use krishiv_common::error::{KrishivError, KrishivUnsupportedFeature};
+use krishiv_common::error::{
+    KrishivCatalogTableUnsupported, KrishivError, KrishivUnsupportedFeature,
+};
 use krishiv_common::secret::wipe_bytes;
 use serde_json::Value;
 use url::Url;
@@ -176,6 +178,46 @@ impl ConfigCache {
     pub(crate) fn len(&self) -> usize {
         self.entries.len()
     }
+}
+
+/// The `snapshots` parameter of `loadTable`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Snapshots {
+    /// `snapshots=all`: every snapshot.
+    All,
+    /// `snapshots=refs`: only the snapshots refs point at.
+    Refs,
+}
+
+impl Snapshots {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::All => "all",
+            Self::Refs => "refs",
+        }
+    }
+}
+
+/// The catalog's answer to a commit request ([`RestClient::commit_table_as`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct CommitReply {
+    /// The HTTP status.
+    pub status: u16,
+    /// `Retry-After` in seconds, when the answer had one.
+    pub retry_after: Option<std::time::Duration>,
+    /// The body (a `LoadTableResult` on 200, an `ErrorModel` otherwise).
+    pub body: Vec<u8>,
+}
+
+/// A commit request that got no usable answer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct CommitFailure {
+    /// Whether the request may have reached the catalog (`false`: provably never sent).
+    pub sent: bool,
+    /// Why, for the log and messages (Krishiv's text; never a token or a server's message).
+    pub reason: String,
 }
 
 /// What the server's `/v1/config` settled.
@@ -583,6 +625,22 @@ impl RestClient {
         namespace: &[String],
         table: &str,
     ) -> Result<Option<LoadedTable>, KrishivError> {
+        self.load_table_snapshots_as(caller, namespace, table, None)
+    }
+
+    /// [`load_table_as`](Self::load_table_as) with the `snapshots` query parameter: [`Snapshots::All`] every
+    /// snapshot (a commit's probe, design T026/T027 §7.2.1), [`Snapshots::Refs`] only those refs point at; `None`
+    /// sends none (the server's default, `all`).
+    ///
+    /// # Errors
+    /// As [`load_table_as`](Self::load_table_as).
+    pub fn load_table_snapshots_as(
+        &self,
+        caller: &RestCaller,
+        namespace: &[String],
+        table: &str,
+        snapshots: Option<Snapshots>,
+    ) -> Result<Option<LoadedTable>, KrishivError> {
         // One deadline for the whole call: the config fetch on first use, every page, the token.
         let deadline = self.deadline();
         let server = self.server(caller, deadline)?;
@@ -591,15 +649,11 @@ impl RestClient {
             check_namespace(namespace, Some(table))?;
             let ns = namespace_path(namespace, &server.separator);
             let name = path_segment(table);
-            let url = self.url(&server, &["namespaces", &ns, "tables", &name])?;
-            let headers = if self.config.vended_credentials {
-                vec![(
-                    "X-Iceberg-Access-Delegation",
-                    "vended-credentials".to_owned(),
-                )]
-            } else {
-                Vec::new()
-            };
+            let mut url = self.url(&server, &["namespaces", &ns, "tables", &name])?;
+            if let Some(s) = snapshots {
+                url.query_pairs_mut().append_pair("snapshots", s.as_str());
+            }
+            let headers = self.delegation_headers();
             self.get(caller, &url, &headers, deadline, NO_SUCH_TABLE)?
                 .map(LoadedTable::from_json)
                 .transpose()
@@ -607,24 +661,139 @@ impl RestClient {
         let Some(loaded) = run().map_err(self.fail(&what))? else {
             return Ok(None);
         };
-        if loaded.restricted {
-            return Err(KrishivUnsupportedFeature {
-                feature: format!("Iceberg REST read restrictions on table {what}"),
+        // Krishiv's own text (the analyzer shows it, unlike a provider's failure).
+        let unsupported = |feature: &str| -> KrishivError {
+            KrishivCatalogTableUnsupported {
+                catalog: quoted(&self.name),
+                relation_name: what.clone(),
+                feature: feature.to_owned(),
             }
-            .into());
+            .into()
+        };
+        if loaded.restricted {
+            return Err(unsupported("Iceberg REST read restrictions"));
         }
         if loaded
             .config
             .get("scan-planning-mode")
             .is_some_and(|m| m.expose_secret().eq_ignore_ascii_case("server"))
         {
-            return Err(KrishivUnsupportedFeature {
-                feature: format!("Iceberg REST server-side scan planning for table {what}"),
-            }
-            .into());
+            return Err(unsupported("Iceberg REST server-side scan planning"));
         }
         self.check_locations(&what, &loaded)?;
         Ok(Some(loaded))
+    }
+
+    /// `X-Iceberg-Access-Delegation` as `loadTable` and a commit send it.
+    fn delegation_headers(&self) -> Vec<(&'static str, String)> {
+        if self.config.vended_credentials {
+            vec![(
+                "X-Iceberg-Access-Delegation",
+                "vended-credentials".to_owned(),
+            )]
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Sends one commit request (`updateTable`, `POST /v1/{prefix}/namespaces/{ns}/tables/{table}`) with `body`
+    /// (a `CommitTableRequest`, JSON) for `caller`: the same token, egress policy and
+    /// `X-Iceberg-Access-Delegation` as [`load_table_as`](Self::load_table_as), one deadline. The request is
+    /// **never retried** except once after a 401 when the token can be renewed (a 401 means the catalog did not
+    /// apply it); a 5xx, a timeout or a reset is returned as it is, for the commit loop to probe. A 200's
+    /// `metadata-location` and `location` pass [`check_location`]: a refused one is a failure after sending (the
+    /// commit may stand, so the caller must treat it as unknown).
+    ///
+    /// # Errors
+    /// No whole answer, or a refused location in a 200 ([`CommitFailure::sent`] says whether the request may have
+    /// reached the catalog); a body over `max_response_bytes` is refused before sending.
+    pub fn commit_table_as(
+        &self,
+        caller: &RestCaller,
+        namespace: &[String],
+        table: &str,
+        body: &[u8],
+    ) -> Result<CommitReply, CommitFailure> {
+        let what = relation(namespace, Some(table));
+        let unsent = |reason: String| CommitFailure {
+            sent: false,
+            reason,
+        };
+        if body.len() > self.config.limits.max_response_bytes {
+            return Err(unsent(format!(
+                "a commit request of {} bytes is over the {}-byte limit",
+                body.len(),
+                self.config.limits.max_response_bytes
+            )));
+        }
+        let deadline = self.deadline();
+        let server = self
+            .server(caller, deadline)
+            .map_err(|e| unsent(format!("the catalog configuration: {e}")))?;
+        let url = check_namespace(namespace, Some(table))
+            .and_then(|()| {
+                let ns = namespace_path(namespace, &server.separator);
+                let name = path_segment(table);
+                self.url(&server, &["namespaces", &ns, "tables", &name])
+            })
+            .map_err(|e| unsent(e.detail()))?;
+        let headers = self.delegation_headers();
+        let mut retried = false;
+        loop {
+            let bearer = self
+                .tokens
+                .token(caller, &self.http, deadline)
+                .map_err(|e| unsent(format!("no token: {}", e.detail())))?;
+            let mut request = Request::get(url.clone());
+            request.post = true;
+            request.json = Some(body.to_vec());
+            request.headers.clone_from(&headers);
+            request.bearer.clone_from(&bearer);
+            let response = match self.http.call_tracked(request, deadline) {
+                Ok(r) => r,
+                Err(f) => {
+                    tracing::warn!(
+                        target: "krishiv::catalog",
+                        catalog = self.name.as_str(),
+                        table = what.as_str(),
+                        sent = f.sent,
+                        detail = f.error.detail().as_str(),
+                        "an Iceberg REST commit request got no answer"
+                    );
+                    return Err(CommitFailure {
+                        sent: f.sent,
+                        reason: f.error.detail(),
+                    });
+                }
+            };
+            if response.status == 401 && !retried && self.tokens.refreshable() {
+                if let Some(refused) = &bearer {
+                    self.tokens.invalidate(refused);
+                }
+                retried = true;
+                continue;
+            }
+            if response.status == 200 {
+                // A location the policy refuses is never handed on, whatever the catalog applied.
+                // A 200 that does not validate is unknown, not committed: the connector probes it.
+                let loaded = types::parse_limited(&response.body, self.config.limits.max_depth)
+                    .and_then(LoadedTable::from_json)
+                    .map_err(|e| CommitFailure {
+                        sent: true,
+                        reason: format!("a 200 answer that does not validate ({})", e.detail()),
+                    })?;
+                self.check_locations(&what, &loaded)
+                    .map_err(|e| CommitFailure {
+                        sent: true,
+                        reason: e.to_string(),
+                    })?;
+            }
+            return Ok(CommitReply {
+                status: response.status,
+                retry_after: response.retry_after,
+                body: response.body,
+            });
+        }
     }
 
     fn check_locations(&self, what: &str, t: &LoadedTable) -> Result<(), KrishivError> {

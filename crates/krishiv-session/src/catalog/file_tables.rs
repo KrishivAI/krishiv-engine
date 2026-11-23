@@ -133,6 +133,8 @@ impl QueryCatalog {
                 .unwrap_or_else(PoisonError::into_inner)
                 .push((key.clone(), Arc::new(opened)));
         }
+        // The declared catalogs' tables, on the I/O runtime (design P3-T067 PR-58b).
+        Box::pin(self.open_declared(plan)).await?;
         // Boxed: the sample's future would otherwise nest inside every
         // caller's state machine (the MCP server's overflows the layout depth).
         if sample {
@@ -144,13 +146,31 @@ impl QueryCatalog {
     /// Refuses a reference whose option has the key (any case) of one the catalog table stores
     /// with another value, as Spark's `DataSourceUtils.generateDatasourceOptions` does
     /// (`_LEGACY_ERROR_TEMP_1151`); the same value is accepted and the table's own is kept.
-    fn check_reference_options(&self, plan: &LogicalPlan) -> Result<(), KrishivError> {
+    pub(crate) fn check_reference_options(&self, plan: &LogicalPlan) -> Result<(), KrishivError> {
         let mut scans = Vec::new();
         collect_scans(plan, &mut scans);
         for scan in scans {
             let ReadSource::Table { name, options } = &scan.source else {
                 continue;
             };
+            if options.contains_key(krishiv_plan::TIME_TRAVEL_OPTION) {
+                // The relation resolved (a missing one failed in analysis): Spark's
+                // `V2SessionCatalog.failTimeTravel` names it in full.
+                let (namespace, table) = match &name[..] {
+                    [table] => (
+                        self.namespace()
+                            .first()
+                            .map_or_else(|| "default".to_owned(), |n| n.to_lowercase()),
+                        table.to_lowercase(),
+                    ),
+                    [.., namespace, table] => (namespace.to_lowercase(), table.to_lowercase()),
+                    [] => continue,
+                };
+                return Err(krishiv_common::error::UnsupportedFeatureTimeTravel {
+                    relation_id: format!("`spark_catalog`.`{namespace}`.`{table}`"),
+                }
+                .into());
+            }
             let Some((_, table)) = self.entry_of(name) else {
                 continue;
             };

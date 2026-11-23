@@ -37,6 +37,161 @@ pub(crate) fn partition_overwrite_is_dynamic(
         == Some("DYNAMIC"))
 }
 
+/// The write's `krishiv.write.idempotencyKey` (E34): the write option, else the session setting.
+///
+/// # Errors
+/// `INVALID_CONF_VALUE` for an empty key.
+pub(super) fn write_idempotency_key(
+    config: &Config,
+    options: &std::collections::BTreeMap<String, krishiv_common::secret::OptionValue>,
+) -> Result<Option<String>, KrishivError> {
+    use krishiv_common::secret::OptionValue;
+    let name = krishiv_exec::planner::IDEMPOTENCY_KEY_OPTION;
+    let key = options
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case(name))
+        .map(|(_, v)| match v {
+            OptionValue::Plain(s) => Ok(s.clone()),
+            _ => Err(krishiv_common::error::KrishivInvalidConfigValue {
+                key: name.to_owned(),
+                value: String::new(),
+                reason: "an idempotency key must be a plain option value, not a secret".to_owned(),
+            }),
+        })
+        .transpose()?
+        .or_else(|| {
+            config
+                .get(&krishiv_common::config::WRITE_IDEMPOTENCY_KEY)
+                .and_then(ConfigValue::as_str)
+                .map(str::to_owned)
+        });
+    match key {
+        Some(k) if k.is_empty() => Err(krishiv_common::error::KrishivInvalidConfigValue {
+            key: name.to_owned(),
+            value: k,
+            reason: "an idempotency key must not be empty".to_owned(),
+        }
+        .into()),
+        k => Ok(k),
+    }
+}
+
+/// The refusal of an idempotency key on a write that goes through no commit log.
+#[cold]
+#[inline(never)]
+pub(super) fn unlogged_key(display: &str) -> KrishivError {
+    krishiv_common::error::KrishivUnsupportedFeature {
+        feature: format!(
+            "krishiv.write.idempotencyKey on a directory without a commit log ({display}); set krishiv.sql.files.commitProtocol"
+        ),
+    }
+    .into()
+}
+
+/// Whether the directory's commit log already holds this write's idempotency key: the retry of a keyed
+/// write then writes nothing, whatever the save mode says about a directory that exists (an
+/// `ErrorIfExists` retry must not fail, an overwrite must not delete what the first try wrote).
+///
+/// # Errors
+/// An invalid key, or the log's read errors.
+pub(super) async fn key_already_committed(
+    config: &Config,
+    options: &std::collections::BTreeMap<String, krishiv_common::secret::OptionValue>,
+    io: &krishiv_io::IoContext,
+    store: &StoreId,
+    at: &krishiv_exec::files::LocatedPath,
+) -> Result<bool, KrishivError> {
+    let Some(key) = write_idempotency_key(config, options)? else {
+        return Ok(false);
+    };
+    let log = krishiv_io::commit_log::CommitLog::new(
+        io,
+        store.clone(),
+        at.path.clone(),
+        at.display.clone(),
+    );
+    Ok(log.exists().await? && log.key_version(&key).await?.is_some())
+}
+
+/// `krishiv.sql.files.commitProtocol`, upper-cased.
+fn commit_protocol(config: &Config) -> Option<String> {
+    config
+        .get(&krishiv_common::config::FILES_COMMIT_PROTOCOL)
+        .and_then(ConfigValue::as_str)
+        .map(str::to_ascii_uppercase)
+}
+
+/// Refuses a write key before anything is touched when the directory cannot be logged: the
+/// commit log is what records a key, and `DirectoryWrite::begin` deletes a single file at the path
+/// when an overwrite replaces it (a directory's files are deleted only at commit).
+/// For `overwrite` and `append` the store is probed for put-if-absent now (once per store, cached in
+/// `probes`, as [`logged_or_plain`] reads it later). `errorifexists` and `ignore` are not probed here:
+/// the probe leaves the directory behind, and they test whether it exists; they are refused early only
+/// for `commitProtocol=NONE` or a store already known to lack put-if-absent.
+///
+/// # Errors
+/// An invalid key; `KRISHIV_UNSUPPORTED_FEATURE` for a directory that cannot be logged; the log's and
+/// the probe's errors.
+#[expect(clippy::too_many_arguments, reason = "the pieces of one write's setup")]
+pub(super) async fn refuse_unlogged_key_early(
+    config: &Config,
+    options: &std::collections::BTreeMap<String, krishiv_common::secret::OptionValue>,
+    probes: &Mutex<HashMap<String, bool>>,
+    io: &krishiv_io::IoContext,
+    store: &StoreId,
+    at: &krishiv_exec::files::LocatedPath,
+    job: &str,
+    mode: krishiv_io::SaveMode,
+) -> Result<(), KrishivError> {
+    if write_idempotency_key(config, options)?.is_none() {
+        return Ok(());
+    }
+    let probe = matches!(
+        mode,
+        krishiv_io::SaveMode::Append | krishiv_io::SaveMode::Overwrite
+    );
+    let none = commit_protocol(config).as_deref() == Some("NONE");
+    let known_unsupported = probes
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .get(at.store.key())
+        == Some(&false);
+    if (probe || none || known_unsupported)
+        && !Box::pin(uses_commit_log(config, probes, io, store, at, job)).await?
+    {
+        return Err(unlogged_key(&at.display));
+    }
+    Ok(())
+}
+
+/// `write`, through the commit log when the directory uses one (with the write's idempotency key,
+/// E34), else as it is.
+///
+/// # Errors
+/// The probe's and the log's errors; an idempotency key on a directory without a log.
+#[expect(clippy::too_many_arguments, reason = "the pieces of one write's setup")]
+pub(super) async fn logged_or_plain(
+    write: krishiv_io::DirectoryWrite,
+    config: &Config,
+    probes: &Mutex<HashMap<String, bool>>,
+    io: &krishiv_io::IoContext,
+    store: &StoreId,
+    at: &krishiv_exec::files::LocatedPath,
+    job: &str,
+    options: &std::collections::BTreeMap<String, krishiv_common::secret::OptionValue>,
+) -> Result<krishiv_io::DirectoryWrite, KrishivError> {
+    let key = write_idempotency_key(config, options)?;
+    if Box::pin(uses_commit_log(config, probes, io, store, at, job)).await? {
+        // Boxed: the statement futures are on the recursion of nested scripts.
+        Ok(Box::pin(write.logged(io)).await?.with_idempotency_key(key))
+    } else if key.is_some() {
+        // Only the commit log records a key: a plain directory write would append twice.
+        Err(unlogged_key(&at.display))
+    } else {
+        Ok(write)
+    }
+}
+
 /// Whether this write goes through the commit log:
 /// `krishiv.sql.files.commitProtocol` `LOG`, or `AUTO` where the store
 /// creates objects only if absent (probed once per write; a store that
@@ -49,10 +204,7 @@ pub(super) async fn uses_commit_log(
     at: &krishiv_exec::files::LocatedPath,
     job: &str,
 ) -> Result<bool, KrishivError> {
-    let protocol = config
-        .get(&krishiv_common::config::FILES_COMMIT_PROTOCOL)
-        .and_then(ConfigValue::as_str)
-        .map(str::to_ascii_uppercase);
+    let protocol = commit_protocol(config);
     let log = krishiv_io::commit_log::CommitLog::new(
         io,
         store.clone(),
@@ -277,6 +429,35 @@ pub(super) fn resolve_partitions(
     Ok(out)
 }
 
+/// The indices of the columns `names` name in `schema` (a `sortBy` column of a bucketed write), matched as the
+/// session's case sensitivity says.
+///
+/// # Errors
+/// `PARTITION_COLUMN_NOT_FOUND_IN_SCHEMA`-style `UNRESOLVED_COLUMN` is not needed here: the names were checked when
+/// the table was created, so a missing one is `INTERNAL_ERROR`.
+pub(super) fn resolve_columns(
+    schema: &SchemaRef,
+    names: &[String],
+    case_sensitive: bool,
+) -> Result<Vec<usize>, KrishivError> {
+    names
+        .iter()
+        .map(|name| {
+            schema
+                .fields()
+                .iter()
+                .position(|f| {
+                    if case_sensitive {
+                        f.name() == name
+                    } else {
+                        f.name().eq_ignore_ascii_case(name)
+                    }
+                })
+                .ok_or_else(|| internal(format!("sort column `{name}` is not in the written rows")))
+        })
+        .collect()
+}
+
 /// `schema` as Spark prints one (`struct<id:int,...>`).
 pub(super) fn schema_simple_string(schema: &SchemaRef) -> String {
     let fields: Vec<String> = schema
@@ -290,4 +471,46 @@ pub(super) fn schema_simple_string(schema: &SchemaRef) -> String {
         })
         .collect();
     format!("struct<{}>", fields.join(","))
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::Session;
+    use futures::executor::block_on;
+
+    /// A key on an overwrite of a single file, on a store that reports no put-if-absent (the probe cache
+    /// says so), is refused before `begin` deletes the file.
+    #[test]
+    fn a_key_is_refused_before_an_overwrite_deletes_on_a_store_without_put_if_absent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let s = Session::new().unwrap();
+        let frame = || block_on(s.sql("SELECT 1 AS id")).unwrap();
+        let plain = tmp.path().join("plain");
+        let other = tmp.path().join("other");
+        std::fs::write(&plain, b"x").unwrap();
+        // A write that fills the probe cache, then the store is marked as lacking put-if-absent.
+        block_on(
+            frame()
+                .write()
+                .mode("overwrite")
+                .parquet(other.to_str().unwrap()),
+        )
+        .unwrap();
+        for v in s.state.commit_log_probes.lock().unwrap().values_mut() {
+            *v = false;
+        }
+        let r = block_on(
+            frame()
+                .write()
+                .mode("overwrite")
+                .option("krishiv.write.idempotencyKey", "k")
+                .parquet(plain.to_str().unwrap()),
+        );
+        assert!(r.unwrap_err().message().contains("commit log"));
+        assert_eq!(
+            std::fs::read(&plain).ok().as_deref(),
+            Some(&b"x"[..]),
+            "the overwrite deleted the file before the refusal"
+        );
+    }
 }

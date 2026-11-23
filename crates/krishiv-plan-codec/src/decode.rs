@@ -391,18 +391,16 @@ fn expr_children(m: &pb::Expr) -> impl Iterator<Item = u32> + '_ {
 /// `i` as an index into a table of `len` entries.
 fn slot(i: u32, len: usize) -> Result<usize> {
     let at = usize::try_from(i).map_err(|_| corrupt("an index out of range"))?;
-    if at < len {
-        Ok(at)
-    } else {
-        Err(corrupt("a reference to a later or missing entry"))
-    }
+    (at < len)
+        .then_some(at)
+        .ok_or_else(|| corrupt("a reference to a later or missing entry"))
 }
 
-fn usize_of(v: u64) -> Result<usize> {
+pub(crate) fn usize_of(v: u64) -> Result<usize> {
     usize::try_from(v).map_err(|_| corrupt("a count or index out of range"))
 }
 
-fn usizes(v: &[u64]) -> Result<Vec<usize>> {
+pub(crate) fn usizes(v: &[u64]) -> Result<Vec<usize>> {
     v.iter().map(|i| usize_of(*i)).collect()
 }
 
@@ -534,6 +532,7 @@ impl Decoder {
                 offset: l.offset,
                 limit: l.limit,
             },
+            Kind::Tail(t) => crate::decode_tail::tail(self.boxed(t.input)?, t),
             Kind::Sample(s) => {
                 // The planner writes finite bounds with `0 <= lower <= upper`,
                 // or `lower = 0` over a negative `upper`: a fraction within
@@ -953,6 +952,13 @@ impl Decoder {
             null_safe: j.null_safe.clone(),
             residual: self.residual(j.residual.as_ref())?,
             single_match: j.single_match,
+            as_of: match &j.as_of {
+                None => None,
+                Some(a) => Some(krishiv_exec::AsOfMergeSpec {
+                    distance: self.residual(a.distance.as_ref())?,
+                    ..crate::decode_asof::as_of_merge(a)?
+                }),
+            },
         })
     }
 
@@ -1354,11 +1360,11 @@ fn aggregate_expr(a: &pb::AggregateExpr) -> Result<AggregateExpr> {
                     .collect(),
             }
         },
-        Percentile => percentile_function(a)?,
-        PercentileApprox => percentile_approx_function(a)?,
-        PercentileDisc => percentile_disc_function(a)?,
-        ApproxCountDistinct => hll_function(a)?,
-        HistogramNumeric => histogram_function(a)?,
+        Percentile => crate::decode_aggregate::percentile_function(a)?,
+        PercentileApprox => crate::decode_aggregate::percentile_approx_function(a)?,
+        PercentileDisc => crate::decode_aggregate::percentile_disc_function(a)?,
+        ApproxCountDistinct => crate::decode_aggregate::hll_function(a)?,
+        HistogramNumeric => crate::decode_aggregate::histogram_function(a)?,
         Udf => AggregateFunction::Udf(Box::new(udaf_call(a.udaf.as_deref())?)),
     })?;
     if a.udaf.is_some() && !matches!(function, AggregateFunction::Udf(_)) {
@@ -1449,102 +1455,6 @@ fn udaf_call(u: Option<&pb::UdafCall>) -> Result<UdafCall> {
         )?,
         nullable: u.nullable,
         state,
-    })
-}
-
-/// A `percentile` function from its wire form: the percentages must be
-/// present, finite and in `[0.0, 1.0]` (the analyzer folds them), and no
-/// parameter of another variant may be set.
-fn percentile_function(a: &pb::AggregateExpr) -> Result<AggregateFunction> {
-    let bad = || corrupt("a `percentile` of bad parameters");
-    if a.percentile_accuracy != 0 || a.percentile_legacy || a.hll_precision != 0 {
-        return Err(bad());
-    }
-    if (a.percentages.is_empty() && !a.percentile_array)
-        || a.percentages
-            .iter()
-            .any(|p| !p.is_finite() || !(0.0..=1.0).contains(p))
-    {
-        return Err(bad());
-    }
-    Ok(AggregateFunction::Percentile {
-        percentages: a.percentages.clone(),
-        array: a.percentile_array,
-        reverse: a.percentile_reverse,
-    })
-}
-
-/// A `percentile_approx` function from its wire form.
-fn percentile_approx_function(a: &pb::AggregateExpr) -> Result<AggregateFunction> {
-    let bad = || corrupt("a `percentile_approx` of bad parameters");
-    if a.percentile_reverse || a.percentile_legacy || a.hll_precision != 0 {
-        return Err(bad());
-    }
-    if a.percentile_accuracy <= 0
-        || (a.percentages.is_empty() && !a.percentile_array)
-        || a.percentages
-            .iter()
-            .any(|p| !p.is_finite() || !(0.0..=1.0).contains(p))
-    {
-        return Err(bad());
-    }
-    Ok(AggregateFunction::PercentileApprox {
-        percentages: a.percentages.clone(),
-        array: a.percentile_array,
-        accuracy: a.percentile_accuracy,
-    })
-}
-
-/// A `percentile_disc` function from its wire form: one percentage.
-fn percentile_disc_function(a: &pb::AggregateExpr) -> Result<AggregateFunction> {
-    let bad = || corrupt("a `percentile_disc` of bad parameters");
-    if a.percentile_accuracy != 0 || a.hll_precision != 0 {
-        return Err(bad());
-    }
-    if (a.percentages.is_empty() && !a.percentile_array)
-        || a.percentages
-            .iter()
-            .any(|p| !p.is_finite() || !(0.0..=1.0).contains(p))
-    {
-        return Err(bad());
-    }
-    Ok(AggregateFunction::PercentileDisc {
-        percentages: a.percentages.clone(),
-        array: a.percentile_array,
-        reverse: a.percentile_reverse,
-        legacy: a.percentile_legacy,
-    })
-}
-
-/// An `approx_count_distinct` function from its wire form.
-fn hll_function(a: &pb::AggregateExpr) -> Result<AggregateFunction> {
-    let bad = || corrupt("an `approx_count_distinct` of bad parameters");
-    if !a.percentages.is_empty()
-        || a.percentile_array
-        || a.percentile_reverse
-        || a.percentile_accuracy != 0
-        || a.percentile_legacy
-        || !(4..=30).contains(&a.hll_precision)
-    {
-        return Err(bad());
-    }
-    Ok(AggregateFunction::ApproxCountDistinct { p: a.hll_precision })
-}
-
-/// A `histogram_numeric` function from its wire form.
-fn histogram_function(a: &pb::AggregateExpr) -> Result<AggregateFunction> {
-    if !a.percentages.is_empty()
-        || a.percentile_array
-        || a.percentile_reverse
-        || a.percentile_accuracy != 0
-        || a.percentile_legacy
-        || a.hll_precision != 0
-        || a.histogram_bins < 2
-    {
-        return Err(corrupt("a `histogram_numeric` of bad parameters"));
-    }
-    Ok(AggregateFunction::HistogramNumeric {
-        nb: a.histogram_bins,
     })
 }
 
@@ -1713,6 +1623,7 @@ fn write_plan(m: &pb::WritePlan) -> Result<WritePlan> {
                 Ok((usize_of(c.column)?, spark_type(t)?))
             })
             .collect::<Result<_>>()?,
+        bucket: crate::decode_bucket::bucket_of(m.bucket.as_ref())?,
     })
 }
 
@@ -1744,6 +1655,7 @@ fn spark_type(t: &pb::DataType) -> Result<DataType> {
         CalendarInterval => DataType::CalendarInterval,
         CollatedString => collated_string(t)?,
         Variant => DataType::Variant,
+        Udt => crate::decode_udt::udt(t)?,
     })?;
     let (precision, scale, srid) = match data_type {
         DataType::Decimal(_) => (true, true, false),
@@ -1764,7 +1676,7 @@ fn spark_type(t: &pb::DataType) -> Result<DataType> {
     {
         return Err(corrupt("a type parameter on a type that has none"));
     }
-    if !data_type.is_nested() && !t.json.is_empty() {
+    if !data_type.is_nested() && !matches!(data_type, DataType::Udt(_)) && !t.json.is_empty() {
         return Err(corrupt("a JSON form on a type that is not nested"));
     }
     if !matches!(data_type, DataType::CollatedString(_)) && !t.collation.is_empty() {

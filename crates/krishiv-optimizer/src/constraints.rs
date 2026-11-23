@@ -49,7 +49,7 @@ use crate::expr::{
     Attrs, Classes, builtin, call_builtin, column, conjuncts, equality, has_aggregate,
     has_subquery, is_deterministic, references, same, substitute, unshift,
 };
-use crate::pushdown::{alias_map, into_side_new, rebuild_join};
+use crate::pushdown::{alias_map, cse_defs, into_side_new, rebuild_join};
 use crate::restrict::subquery_plans;
 
 /// The rule at a `Join` (see the module docs).
@@ -475,6 +475,9 @@ pub(crate) struct Memo {
     /// input relation it comes from.
     shared: HashMap<*const LogicalPlan, (Arc<LogicalPlan>, Arc<LogicalPlan>)>,
     worth: HashMap<*const LogicalPlan, (Arc<LogicalPlan>, bool)>,
+    /// The names of the definitions `ShareCte` added: a `CteRef` to one is
+    /// shared ([`Self::reaches_shared`]).
+    shared_defs: HashSet<String>,
 }
 
 /// A cheap fingerprint of `plan`'s relation tree (node kinds and shape, not
@@ -517,11 +520,21 @@ impl Memo {
         // `Arc`s (join ordering re-plans a join inside each copy apart).
         let mut bodies: Vec<(Arc<LogicalPlan>, u32)> = Vec::new();
         let mut body_at: HashMap<*const LogicalPlan, usize> = HashMap::new();
+        let mut shared_defs: HashSet<String> = HashSet::new();
         let mut stack = vec![Arc::clone(root)];
         let mut seen: HashSet<*const LogicalPlan> = HashSet::new();
         while let Some(p) = stack.pop() {
             if !seen.insert(Arc::as_ptr(&p)) {
                 continue;
+            }
+            if let PlanNode::WithCte { ctes, .. } = &p.node {
+                shared_defs.extend(
+                    ctes.iter()
+                        // `ShareCte`'s definitions; a user CTE named so
+                        // only loses an inferred filter.
+                        .filter(|c| c.name.starts_with(crate::share_cte::SHARED_PREFIX))
+                        .map(|c| c.name.clone()),
+                );
             }
             if let PlanNode::Shift { input, .. } = &p.node {
                 let at = *body_at.entry(Arc::as_ptr(input)).or_insert_with(|| {
@@ -556,6 +569,31 @@ impl Memo {
         // a body with a twin.
         let mut shapes: HashMap<*const LogicalPlan, u64> = HashMap::new();
         let mut groups: HashMap<u64, Vec<(Arc<LogicalPlan>, u32)>> = HashMap::new();
+        // Bodies that differ only in the filters and projections above an
+        // equal core share that core (`ShareCte`), so a core with a twin is
+        // shared too: an inferred filter must not enter one instance's core
+        // and cost the sharing.
+        let mut cores: HashMap<u64, Vec<Arc<LogicalPlan>>> = HashMap::new();
+        if bodies.len() > 1 {
+            for (body, _) in &bodies {
+                let c = crate::share_cte::core(body);
+                cores
+                    .entry(shape(c, &mut shapes))
+                    .or_default()
+                    .push(Arc::clone(c));
+            }
+        }
+        for group in cores.into_values() {
+            for (i, c) in group.iter().enumerate() {
+                let twin = group
+                    .iter()
+                    .enumerate()
+                    .any(|(j, other)| i != j && (Arc::ptr_eq(c, other) || **c == **other));
+                if twin && crate::share_cte::worth_sharing(c) {
+                    shared.insert(Arc::as_ptr(c), (Arc::clone(c), Arc::clone(c)));
+                }
+            }
+        }
         if bodies.len() > 1 || bodies.iter().any(|(_, n)| *n > 1) {
             for (body, n) in bodies {
                 groups
@@ -578,6 +616,7 @@ impl Memo {
         }
         Self {
             shared,
+            shared_defs,
             ..Self::default()
         }
     }
@@ -632,6 +671,10 @@ impl Memo {
                 | PlanNode::Repartition { input, .. }
                 | PlanNode::Window { input, .. }
                 | PlanNode::Generate { input, .. } => Arc::clone(input),
+                // What `ShareCte` computes once: the first `optimize` saw
+                // the instance it replaced, so a second adds nothing here
+                // either.
+                PlanNode::CteRef(r) => return self.shared_defs.contains(&r.name),
                 _ => return false,
             };
             at = next;
@@ -642,6 +685,8 @@ impl Memo {
     /// through filters, inner joins, column-only projections and shifts (the
     /// walk of the implied filters of `pushdown`, plus self-join
     /// instances), in pre-order: a node's own, then its inputs' left first.
+    /// A filter right above a common-subexpression projection gives its
+    /// conjuncts with the `cse_*` columns replaced by what they name.
     fn constraints(&mut self, plan: &Arc<LogicalPlan>) -> Conjuncts {
         if let Some((_, c)) = self.constraints.get(&Arc::as_ptr(plan)) {
             return Arc::clone(c);
@@ -650,7 +695,23 @@ impl Memo {
             |e: &Arc<Expr>| conjuncts(e).into_iter().filter(|c| is_deterministic(c));
         let out: Vec<Arc<Expr>> = match &plan.node {
             PlanNode::Filter { input, predicate } => {
-                let mut out: Vec<_> = deterministic(predicate).collect();
+                // A filter over a common-subexpression projection reads its `cse_*` columns
+                // as the expressions they name: CSE runs last, so a second optimization must
+                // see the conjuncts the first one saw (`(c + 1) = c` is no column equality,
+                // though `cse_0 = c` would be one).
+                let defs = match &input.node {
+                    PlanNode::Project { exprs, .. } => cse_defs(exprs),
+                    _ => HashMap::new(),
+                };
+                let mut out: Vec<_> = deterministic(predicate)
+                    .map(|c| {
+                        if defs.is_empty() {
+                            c
+                        } else {
+                            substitute(&c, &defs)
+                        }
+                    })
+                    .collect();
                 out.extend(self.constraints(input).iter().cloned());
                 out
             }
@@ -708,6 +769,7 @@ impl Memo {
             | PlanNode::Sort { input, .. }
             | PlanNode::Limit { input, .. }
             | PlanNode::Offset { input, .. }
+            | PlanNode::Tail { input, .. }
             | PlanNode::WithCte { input, .. }
             | PlanNode::JoinHint { input, .. }
             | PlanNode::Repartition { input, .. }

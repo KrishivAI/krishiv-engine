@@ -113,7 +113,9 @@ impl DataFrame {
         let mut env = self.session.query_env();
         env.analysis.mode = AnalysisMode::Metadata;
         let plan = self.plan_with_checkpoints().await?;
-        let analyzed = self.session.analyze_in(&plan, &env, None).await?;
+        // A metadata analysis runs nothing: no observation to complete.
+        let (analyzed, _keeps) = self.session.analyze_in(&plan, &env, None).await?;
+        env.catalog.check_reference_options(analyzed.plan.root())?;
         Ok(Arc::new(Analysis {
             env: Arc::new(env),
             analyzed: Arc::new(analyzed),

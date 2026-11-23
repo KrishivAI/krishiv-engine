@@ -83,6 +83,8 @@ use crate::payload_above::keyed;
 use crate::restrict::{MAX_ID, max_id};
 use crate::stats::{RelStats, Statistics};
 
+mod expand;
+
 /// The least fraction of `S`'s rows the join must keep.
 pub(crate) const MIN_RETENTION: f64 = 0.7;
 
@@ -114,6 +116,7 @@ pub(crate) fn rewrite(
     stats: &dyn Statistics,
     propagate: bool,
     defer: bool,
+    expand: bool,
 ) -> Result<Rewritten, KrishivError> {
     let mut memo = Default::default();
     let mut next = max_id(&root, &mut memo).saturating_add(1);
@@ -123,7 +126,7 @@ pub(crate) fn rewrite(
     let mut deferred = false;
     let out = dag::rewrite_up(root, &mut |p| {
         let mut pushed = |d: Arc<LogicalPlan>, est: &mut Estimator<'_>| {
-            attempt(d, defer, est, &mut next, &mut notes, &mut deferred)
+            attempt(d, defer, expand, est, &mut next, &mut notes, &mut deferred)
         };
         if let Some(split) = semi::split(&p, &mut est, &mut pushed) {
             return Ok(match split {
@@ -140,6 +143,7 @@ pub(crate) fn rewrite(
         Ok(attempt(
             p,
             defer,
+            expand,
             &mut est,
             &mut next,
             &mut notes,
@@ -158,28 +162,44 @@ pub(crate) fn rewrite(
 fn attempt(
     p: Arc<LogicalPlan>,
     defer: Option<&dyn Statistics>,
+    expand: bool,
     est: &mut Estimator<'_>,
     next: &mut u64,
     notes: &mut Vec<String>,
     deferred: &mut bool,
 ) -> Arc<LogicalPlan> {
-    let Some(shape) = Shape::of(&p) else {
-        return p;
+    let tried = match Shape::of(&p) {
+        Some(shape) => shape.push(shape.join, defer, est, next).or_else(|why| {
+            *deferred |= why.starts_with(DEFERRED);
+            // The dimension the keys need may sit below another one.
+            shape
+                .rotated()
+                .and_then(|join| match shape.push(&join, defer, est, next) {
+                    Ok(pushed) => Some(pushed),
+                    Err(other) => {
+                        *deferred |= other.starts_with(DEFERRED);
+                        None
+                    }
+                })
+                .ok_or(why)
+        }),
+        None => Err(String::new()),
     };
-    let tried = shape.push(shape.join, defer, est, next).or_else(|why| {
-        *deferred |= why.starts_with(DEFERRED);
-        // The dimension the keys need may sit below another one.
-        shape
-            .rotated()
-            .and_then(|join| match shape.push(&join, defer, est, next) {
-                Ok(pushed) => Some(pushed),
-                Err(other) => {
-                    *deferred |= other.starts_with(DEFERRED);
-                    None
+    // Where no join takes the calls, grouping sets still aggregate their
+    // input before the expansion repeats it ([`expand`]). A join left to
+    // `PayloadAboveAggregate` is not taken here either: that rule runs first.
+    let tried = match (tried, expand.then(|| Shape::over_expand(&p)).flatten()) {
+        (Err(why), Some(shape)) if !why.starts_with(DEFERRED) => {
+            shape.pre_aggregate(est, next).map_err(|below| {
+                if why.is_empty() {
+                    format!("below the Expand: {below}")
+                } else {
+                    format!("{why}; below the Expand: {below}")
                 }
             })
-            .ok_or(why)
-    });
+        }
+        (tried, _) => tried,
+    };
     match tried {
         Ok((pushed, note)) => {
             // Out of attribute ids: leave the plan as it is, as CSE and the sum rewrite do.
@@ -190,6 +210,8 @@ fn attempt(
             notes.push(note);
             pushed
         }
+        // Not an aggregate this rule reads.
+        Err(why) if why.is_empty() => p,
         Err(why) => {
             notes.push(format!("not applied: {why}"));
             p
@@ -361,25 +383,7 @@ impl<'a> Shape<'a> {
         gates.check()?;
 
         // Build, bottom up.
-        let mut states = Vec::new();
-        let mut merged: Vec<(Arc<Expr>, Arc<Expr>)> = Vec::new();
-        for (c, f) in &calls {
-            let raw = f
-                .args
-                .first()
-                .and_then(|a| data_type(a))
-                .unwrap_or(DataType::Long);
-            let columns = partial_state_columns(f, &raw, AttrId(*next))
-                .ok_or_else(|| format!("{} exports no states", f.id.name()))?;
-            *next = next.saturating_add(columns.len() as u64);
-            let mut upper = ResolvedFunction::clone(f);
-            upper.args = vec![resolved(ResolvedExpr::StateInput {
-                columns: columns.iter().map(column).collect(),
-                raw_type: raw,
-            })];
-            merged.push((Arc::clone(c), resolved(ResolvedExpr::Function(upper))));
-            states.extend(columns);
-        }
+        let (states, merged) = states_of(&calls, next)?;
         let partial = Arc::new(LogicalPlan::new(PlanNode::PartialAggregate {
             input: Arc::clone(side),
             keys: keys.iter().map(column).collect(),
@@ -391,7 +395,7 @@ impl<'a> Shape<'a> {
         } else {
             (Arc::clone(left), partial)
         };
-        let mut below = Arc::new(
+        let below = Arc::new(
             LogicalPlan::new(PlanNode::Join {
                 left: new_left,
                 right: new_right,
@@ -400,31 +404,42 @@ impl<'a> Shape<'a> {
             })
             .with_origin(join.origin),
         );
-        // The projections above: the arguments out, the states in.
+        let pushed = self.above(below, &args, &states, &merged)?;
+        let names: Vec<&str> = keys.iter().map(|k| k.name.as_str()).collect();
+        Ok((pushed, format!("pushed by [{}]: {gates}", names.join(", "))))
+    }
+
+    /// The aggregate merging `states` over the spine rebuilt on `below`: the
+    /// arguments out, the states in.
+    fn above(
+        &self,
+        mut below: Arc<LogicalPlan>,
+        args: &Attrs,
+        states: &[BoundColumn],
+        merged: &[Merged],
+    ) -> Result<Arc<LogicalPlan>, String> {
         let mut read = self.read_by_aggregate();
         let mut plans = Vec::with_capacity(self.spine.len());
         for node in &self.spine {
             plans.push((*node, read.clone()));
-            read = read_below(node, &read, &args)?;
+            read = read_below(node, &read, args)?;
         }
         for (node, read) in plans.into_iter().rev() {
-            below = rebuilt(node, below, &read, &states)?;
+            below = rebuilt(node, below, &read, states)?;
         }
         let outputs = self
             .outputs
             .iter()
-            .map(|e| replace_calls(e, &merged))
+            .map(|e| replace_calls(e, merged))
             .collect();
-        let pushed = Arc::new(
+        Ok(Arc::new(
             LogicalPlan::new(PlanNode::Aggregate {
                 input: below,
                 grouping: Grouping::GroupBy(self.keys.to_vec()),
                 aggregates: outputs,
             })
             .with_origin(self.plan.origin),
-        );
-        let names: Vec<&str> = keys.iter().map(|k| k.name.as_str()).collect();
-        Ok((pushed, format!("pushed by [{}]: {gates}", names.join(", "))))
+        ))
     }
 
     /// `(X JOIN Y) JOIN C` as `(X JOIN C) JOIN Y`, all inner, where the calls
@@ -535,6 +550,37 @@ impl<'a> Shape<'a> {
     }
 }
 
+/// A call and the same function merging its states.
+type Merged = (Arc<Expr>, Arc<Expr>);
+
+/// The state columns of `calls` for a partial aggregate below, and each call
+/// as the same function merging them.
+fn states_of(
+    calls: &[(&Arc<Expr>, &ResolvedFunction)],
+    next: &mut u64,
+) -> Result<(Vec<BoundColumn>, Vec<Merged>), String> {
+    let mut states = Vec::new();
+    let mut merged = Vec::with_capacity(calls.len());
+    for (c, f) in calls {
+        let raw = f
+            .args
+            .first()
+            .and_then(|a| data_type(a))
+            .unwrap_or(DataType::Long);
+        let columns = partial_state_columns(f, &raw, AttrId(*next))
+            .ok_or_else(|| format!("{} exports no states", f.id.name()))?;
+        *next = next.saturating_add(columns.len() as u64);
+        let mut upper = ResolvedFunction::clone(f);
+        upper.args = vec![resolved(ResolvedExpr::StateInput {
+            columns: columns.iter().map(column).collect(),
+            raw_type: raw,
+        })];
+        merged.push((Arc::clone(c), resolved(ResolvedExpr::Function(upper))));
+        states.extend(columns);
+    }
+    Ok((states, merged))
+}
+
 /// Whether `p` is a table read whole, under projections and filters that only
 /// drop null columns. Those filters are what `InferJoinFilters` adds to a join
 /// key (and to the keys of joins above): the join drops a null key anyway, so
@@ -576,21 +622,29 @@ fn inner_join(p: &LogicalPlan) -> Option<(&Arc<LogicalPlan>, &Arc<LogicalPlan>, 
 fn read_below(node: &LogicalPlan, read: &Attrs, args: &Attrs) -> Result<Attrs, String> {
     let mut below = Attrs::default();
     let mut item = |out: &BoundColumn, values: &[&Arc<Expr>]| -> Result<(), String> {
+        // An argument's id must pass through unchanged in every value, also
+        // where something above reads it too.
+        if args.contains(&out.id) && !values.iter().all(|v| is_column(v, out.id)) {
+            return Err(format!(
+                "the argument {} is computed between the aggregate and its new input",
+                out.name
+            ));
+        }
         if !read.contains(&out.id) {
-            if args.contains(&out.id) && !values.iter().all(|v| is_column(v, out.id)) {
-                return Err(format!(
-                    "the argument {} is computed above the join",
-                    out.name
-                ));
-            }
             return Ok(());
         }
         for v in values {
             if has_subquery(v) || has_outer_reference(v) {
-                return Err("a projection above the join holds a subquery".to_owned());
+                return Err(
+                    "a projection between the aggregate and its new input holds a subquery"
+                        .to_owned(),
+                );
             }
             if !is_deterministic(v) {
-                return Err("a projection above the join is nondeterministic".to_owned());
+                return Err(
+                    "a projection between the aggregate and its new input is nondeterministic"
+                        .to_owned(),
+                );
             }
             references_into(v, &mut below);
         }
@@ -599,7 +653,8 @@ fn read_below(node: &LogicalPlan, read: &Attrs, args: &Attrs) -> Result<Attrs, S
     match &node.node {
         PlanNode::Project { exprs, .. } => {
             for e in exprs {
-                let out = output_of(e).ok_or("an unnamed projection above the join")?;
+                let out = output_of(e)
+                    .ok_or("an unnamed projection between the aggregate and its new input")?;
                 item(out, &[e])?;
             }
         }
@@ -705,6 +760,18 @@ impl std::fmt::Display for Gates {
     }
 }
 
+/// Whether `t` is or holds (in an array, map or struct) a floating point
+/// type, whose `-0.0` and `0.0` compare equal but read differently.
+pub(crate) fn contains_floating(t: &DataType) -> bool {
+    match t {
+        DataType::Float | DataType::Double => true,
+        DataType::Array(a) => contains_floating(a.element_type()),
+        DataType::Map(m) => contains_floating(m.key_type()) || contains_floating(m.value_type()),
+        DataType::Struct(s) => s.fields().iter().any(|f| contains_floating(f.data_type())),
+        _ => false,
+    }
+}
+
 /// The combined distinct count of `keys` limited to the side's rows, or which
 /// key's count is only a guess.
 fn groups_of(keys: &[BoundColumn], side: &RelStats) -> Result<f64, String> {
@@ -712,9 +779,7 @@ fn groups_of(keys: &[BoundColumn], side: &RelStats) -> Result<f64, String> {
     for k in keys {
         // Values that compare equal but can be told apart above the join (`-0.0` and `0.0`, strings equal under a
         // collation) would merge in the partial aggregate.
-        if matches!(k.data_type, DataType::Float | DataType::Double)
-            || k.data_type.contains_collation()
-        {
+        if contains_floating(&k.data_type) || k.data_type.contains_collation() {
             return Err(format!(
                 "{} is a floating point or collated key: equal values can still differ above the join",
                 k.name
@@ -935,5 +1000,36 @@ fn without_calls(e: &Arc<Expr>, none: &Arc<Expr>) -> Arc<Expr> {
     match out {
         Ok(v) => v,
         Err(never) => match never {},
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::contains_floating;
+
+    fn floating(t: &str) -> bool {
+        krishiv_types::parse_data_type(t).is_ok_and(|t| contains_floating(&t))
+    }
+
+    /// A floating point type nested in an array, map or struct counts as one: the executor groups
+    /// no such key today, but the rule must not rely on that.
+    #[test]
+    fn nested_floating_point_types_are_found() {
+        for t in [
+            "double",
+            "float",
+            "array<double>",
+            "map<int, float>",
+            "map<double, int>",
+            "struct<a: int, b: array<double>>",
+        ] {
+            assert!(floating(t), "{t}");
+        }
+        for t in ["int", "decimal(10,2)", "array<int>", "struct<a: string>"] {
+            assert!(
+                !floating(t) && krishiv_types::parse_data_type(t).is_ok(),
+                "{t}"
+            );
+        }
     }
 }

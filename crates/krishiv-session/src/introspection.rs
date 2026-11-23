@@ -25,11 +25,11 @@ use crate::table_commands::TableName;
 
 type Cell = Option<String>;
 
-fn s(v: impl Into<String>) -> Cell {
+pub(super) fn s(v: impl Into<String>) -> Cell {
     Some(v.into())
 }
 
-fn unsupported(feature: &str) -> KrishivError {
+pub(super) fn unsupported(feature: &str) -> KrishivError {
     KrishivUnsupportedFeature {
         feature: feature.to_owned(),
     }
@@ -38,31 +38,12 @@ fn unsupported(feature: &str) -> KrishivError {
 
 /// Spark's `SHOW ... LIKE` pattern: `*` matches anything, `|` separates alternatives, the match ignores case.
 pub(crate) fn matches(pattern: &str, name: &str) -> bool {
-    // `reach[j]`: the pattern so far matches the first `j` characters of the name. O(pattern x name), so a
-    // pattern like `*a*a*a*` cannot blow up.
-    fn glob(p: &[char], n: &[char]) -> bool {
-        let mut reach = vec![false; n.len() + 1];
-        reach[0] = true;
-        for &c in p {
-            if c == '*' {
-                for j in 1..=n.len() {
-                    reach[j] = reach[j] || reach[j - 1];
-                }
-            } else {
-                for j in (1..=n.len()).rev() {
-                    reach[j] = reach[j - 1] && n[j - 1] == c;
-                }
-                reach[0] = false;
-            }
-        }
-        reach[n.len()]
-    }
-    let name: Vec<char> = name.to_lowercase().chars().collect();
+    // Spark's `StringUtils.filterPattern`: alternatives split on `|` and trimmed, `*` becomes `.*`, the rest is a
+    // case-insensitive regular expression matched against the whole name (`a.s` keeps `abs`). A pattern that is
+    // no regular expression keeps nothing.
     pattern.split('|').any(|alt| {
-        glob(
-            &alt.trim().to_lowercase().chars().collect::<Vec<_>>(),
-            &name,
-        )
+        let re = format!("(?is)^(?:{})$", alt.trim().replace('*', ".*"));
+        regex_lite::Regex::new(&re).is_ok_and(|re| re.is_match(name))
     })
 }
 
@@ -401,7 +382,10 @@ impl Session {
     }
 
     /// The namespace a `SHOW ... IN name` names, else the current one.
-    async fn show_namespace(&self, name: Option<&DdlName>) -> Result<String, KrishivError> {
+    pub(crate) async fn show_namespace(
+        &self,
+        name: Option<&DdlName>,
+    ) -> Result<String, KrishivError> {
         let env = self.query_env();
         let ns = match name {
             Some(n) => self.namespace_name(n, &env)?,
@@ -460,6 +444,24 @@ impl Session {
                     return self
                         .ordered_frame(cols::SHOW_TABLES, &["isTemporary"], rows)
                         .await;
+                }
+                // `SHOW TABLES IN cat.ns` of a declared catalog: the catalog's own listing.
+                if let Some(n) = namespace {
+                    let parts = crate::access::ddl_parts(n, &self.query_env())?;
+                    if let [catalog, ns @ ..] = parts.as_slice()
+                        && !ns.is_empty()
+                        && let Some(found) = self.declared_tables(catalog, ns).await
+                    {
+                        let label = ns.join(".");
+                        let rows: Vec<Vec<Cell>> = found?
+                            .iter()
+                            .filter(|t| keep(pattern.as_ref(), t))
+                            .map(|t| vec![s(&label), s(t), s("false")])
+                            .collect();
+                        return self
+                            .ordered_frame(cols::SHOW_TABLES, &["isTemporary"], rows)
+                            .await;
+                    }
                 }
                 let ns = self.show_namespace(namespace.as_ref()).await?;
                 if is_global_namespace(&ns) {
@@ -567,23 +569,74 @@ impl Session {
                     name.namespace = from;
                     name.bare = false;
                 }
-                let columns = self.columns_of_relation(&name, Privilege::Browse).await?;
+                let columns = self
+                    .columns_of_relation(&name, Privilege::Browse, true)
+                    .await?;
                 let rows = columns.into_iter().map(|c| vec![s(c.0)]).collect();
                 self.frame_with_order(cols::SHOW_COLUMNS, &[], rows, false)
                     .await
             }
-            ShowKind::Namespaces { pattern, .. } => {
-                // `system` has no namespaces; never list the session catalog's under it.
-                let in_system = crate::system::is_system(&self.state.catalog.current_catalog());
-                self.refuse_declared_current()?;
-                let mut rows = Vec::new();
-                for (n, _) in store.namespaces() {
-                    // Only what the principal may see (P3-T062 §2.4).
-                    if !in_system && keep(pattern.as_ref(), &n) && self.may_list_namespace(&n).await
-                    {
-                        rows.push(vec![s(n)]);
-                    }
+            ShowKind::Namespaces {
+                pattern, namespace, ..
+            } => {
+                // Spark's `CatalogAndNamespace`: a first part naming a catalog is that catalog,
+                // anything else a namespace of the current catalog (`LookupCatalog`, v4.2.0).
+                let parts = match namespace {
+                    Some(n) => crate::access::ddl_parts(n, &self.query_env())?,
+                    None => Vec::new(),
+                };
+                let (catalog, parent) = match parts.split_first() {
+                    Some((first, rest)) if self.is_catalog_name(first) => (first.clone(), rest),
+                    _ => (self.state.catalog.current_catalog(), parts.as_slice()),
+                };
+                if let Some(found) = self.declared_namespaces(&catalog, parent).await {
+                    let rows: Vec<Vec<Cell>> = found?
+                        .iter()
+                        .map(|n| n.join("."))
+                        .filter(|n| keep(pattern.as_ref(), n))
+                        .map(|n| vec![s(n)])
+                        .collect();
+                    return self.ordered_frame(cols::SHOW_NAMESPACES, &[], rows).await;
                 }
+                let rows = if crate::system::is_system(&catalog) {
+                    // `system` has no namespaces; never list the session catalog's under it.
+                    if !parent.is_empty() {
+                        return Err(crate::catalog_registry::schema_not_found("system", parent));
+                    }
+                    Vec::new()
+                } else {
+                    if !catalog.eq_ignore_ascii_case(crate::catalog::CATALOG) {
+                        // The current catalog is a declared one that lists nothing here.
+                        self.refuse_declared_current()?;
+                    }
+                    // `V2SessionCatalog.listNamespaces`: every database at the top, none under an
+                    // existing one, `SCHEMA_NOT_FOUND` for anything else.
+                    let all = store.namespaces();
+                    match parent {
+                        [] => {
+                            let mut rows = Vec::new();
+                            for (n, _) in all {
+                                // Only what the principal may see (P3-T062 §2.4).
+                                if keep(pattern.as_ref(), &n) && self.may_list_namespace(&n).await {
+                                    rows.push(vec![s(n)]);
+                                }
+                            }
+                            rows
+                        }
+                        // One the principal may not list answers as a missing one (ADR 0046 §8).
+                        [db] if all.iter().any(|(n, _)| n.eq_ignore_ascii_case(db))
+                            && !self.namespace_hidden(db).await =>
+                        {
+                            Vec::new()
+                        }
+                        _ => {
+                            return Err(crate::catalog_registry::schema_not_found(
+                                crate::catalog::CATALOG,
+                                parent,
+                            ));
+                        }
+                    }
+                };
                 self.ordered_frame(cols::SHOW_NAMESPACES, &[], rows).await
             }
             ShowKind::TblProperties { name, key, .. } => {
@@ -634,6 +687,28 @@ impl Session {
                     .into());
                 }
                 let table = self.stored_relation(&name).await?;
+                if table
+                    .view
+                    .as_ref()
+                    .is_some_and(crate::store::ViewDef::is_metric)
+                {
+                    // `ShowCreateTableCommand` refuses a metric view; `AS SERDE` reaches Hive's
+                    // printer, which throws a plain `IllegalArgumentException` (4.2.1 golden).
+                    if *serde {
+                        return Err(krishiv_common::error::InternalError {
+                            message: "Unknown table type is found at showCreateHiveTable: \
+                                      CatalogTableType(METRIC_VIEW)"
+                                .to_owned(),
+                        }
+                        .into());
+                    }
+                    return Err(
+                        krishiv_common::error::UnsupportedShowCreateTableOnMetricView {
+                            table_name: format!("`{}`", name.name),
+                        }
+                        .into(),
+                    );
+                }
                 // A view prints the same either way; a data source table has no serde to show,
                 // and Spark's error for it is not modelled yet.
                 if *serde && table.view.is_none() {
@@ -662,11 +737,42 @@ impl Session {
                     return Err(unsupported("SHOW PARTITIONS on a temporary view"));
                 }
                 let table = self.stored_relation(&name).await?;
+                if table
+                    .view
+                    .as_ref()
+                    .is_some_and(crate::store::ViewDef::is_metric)
+                {
+                    return Err(krishiv_common::error::ExpectTableNotViewNoAlternative {
+                        operation: "SHOW PARTITIONS".to_owned(),
+                        view_name: name.quoted(),
+                    }
+                    .into());
+                }
                 if table.view.is_some() {
                     return Err(unsupported("SHOW PARTITIONS on a view"));
                 }
                 self.show_partitions(&table, partition.as_ref(), original)
                     .await
+            }
+            ShowKind::Functions {
+                scope,
+                system,
+                namespace,
+                pattern,
+                legacy_pattern,
+                ..
+            } => {
+                // A one-part scope that is not USER, SYSTEM or ALL was kept by the parser: Spark refuses it.
+                if scope.is_some() {
+                    return Err(unsupported("SHOW FUNCTIONS with this scope"));
+                }
+                self.show_functions(
+                    *system,
+                    namespace.as_ref(),
+                    pattern.as_ref(),
+                    legacy_pattern.as_ref(),
+                )
+                .await
             }
             _ => Err(unsupported("this SHOW command")),
         }
@@ -868,14 +974,31 @@ impl Session {
     /// The stored table or view `name` names (temporary views have no stored form).
     /// One the principal may not see under the grants provider reads as missing (review B3).
     async fn stored_relation(&self, name: &TableName) -> Result<Arc<CatalogTable>, KrishivError> {
+        self.stored_relation_on(name, false).await
+    }
+
+    /// [`Self::stored_relation`]; `table_only` names the path of a command that resolves tables and views
+    /// only (`SHOW COLUMNS`), without `system.builtin`.
+    async fn stored_relation_on(
+        &self,
+        name: &TableName,
+        table_only: bool,
+    ) -> Result<Arc<CatalogTable>, KrishivError> {
+        let path = || {
+            if table_only {
+                self.table_search_path()
+            } else {
+                self.search_path()
+            }
+        };
         let table = self
             .state
             .catalog
             .store
             .table(&name.namespace, &name.name)
-            .ok_or_else(|| name.not_found())?;
+            .ok_or_else(|| name.not_found(path()))?;
         if self.hidden(&Self::relation_securable(&table)) {
-            return Err(name.not_found());
+            return Err(name.not_found(path()));
         }
         Ok(table)
     }
@@ -887,6 +1010,7 @@ impl Session {
         &self,
         name: &TableName,
         privilege: Privilege,
+        table_only: bool,
     ) -> Result<Vec<(String, DataType, Option<String>)>, KrishivError> {
         let env = self.query_env();
         if !name.bare
@@ -922,7 +1046,7 @@ impl Session {
                 .map(|c| (c.name.clone(), c.data_type.clone(), None))
                 .collect());
         }
-        let table = self.stored_relation(name).await?;
+        let table = self.stored_relation_on(name, table_only).await?;
         if table.view.is_some() {
             self.authorize_view(&name.namespace, &name.name, privilege, &env)
                 .await?;
@@ -1015,7 +1139,7 @@ impl Session {
                 } else {
                     Privilege::Browse
                 };
-                let columns = self.columns_of_relation(&name, privilege).await?;
+                let columns = self.columns_of_relation(&name, privilege, false).await?;
                 let temp = self.temp_entry_of(&name, &env)
                     || (!name.bare
                         && name
@@ -1182,7 +1306,11 @@ impl Session {
                 self.ordered_frame(cols::DESCRIBE_NAMESPACE, &[], rows)
                     .await
             }
-            _ => Err(unsupported("DESCRIBE FUNCTION")),
+            DescribeKind::Function { extended, name, .. } => {
+                let parts = crate::access::ddl_parts(name, &env)?;
+                self.describe_function(&parts, *extended).await
+            }
+            _ => Err(unsupported("DESCRIBE")),
         }
     }
 
@@ -1325,7 +1453,16 @@ impl Session {
             ("Last Access".to_owned(), "UNKNOWN".to_owned()),
             ("Created By".to_owned(), "Spark 4.2.0".to_owned()),
         ];
-        if let Some(view) = &t.view {
+        if let Some(view) = t.view.as_ref().filter(|v| v.is_metric()) {
+            // `CatalogTable.toLinkedHashMap` for `METRIC_VIEW`: the YAML as `View Text` and a
+            // `Language` tag; none of a SQL view's binding rows apply (`interface.scala:713-722`).
+            rows.push(("Type".to_owned(), "METRIC_VIEW".to_owned()));
+            if let Some(c) = &t.comment {
+                rows.push(("Comment".to_owned(), c.clone()));
+            }
+            rows.push(("View Text".to_owned(), view.written.clone()));
+            rows.push(("Language".to_owned(), "YAML".to_owned()));
+        } else if let Some(view) = &t.view {
             rows.push(("Type".to_owned(), "VIEW".to_owned()));
             if let Some(c) = &t.comment {
                 rows.push(("Comment".to_owned(), c.clone()));

@@ -206,7 +206,13 @@ async fn flight_sql_follows_the_admin_drain() {
         .try_collect()
         .await
         .expect("rows");
-    assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 1);
+    assert_eq!(
+        batches
+            .iter()
+            .map(arrow_array::RecordBatch::num_rows)
+            .sum::<usize>(),
+        1
+    );
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     loop {
         let status = admin_call(&server, "GET", "/drain", "");
@@ -232,7 +238,13 @@ async fn flight_sql_follows_the_admin_drain() {
         .try_collect()
         .await
         .expect("rows");
-    assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 1);
+    assert_eq!(
+        batches
+            .iter()
+            .map(arrow_array::RecordBatch::num_rows)
+            .sum::<usize>(),
+        1
+    );
 }
 
 const ADMIN_TOKEN: &str = "adbc-admin-token-0123456789abcdef0123";
@@ -301,6 +313,48 @@ fn adbc_q1(tls: bool) {
         cmd.arg("--ca").arg(ca);
     }
     let out = cmd.output().expect("uv runs");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{stdout}\n{stderr}");
+    eprintln!("{stdout}");
+}
+
+/// TPC-H q1..q22 over SF 0.01 (`tpchgen-cli`), each through ADBC and through Spark Connect on the
+/// same server; the rows and Arrow types must agree.
+#[cfg(unix)]
+#[test]
+#[ignore = "needs uv, the network and tpchgen-cli (cargo install tpchgen-cli): --run-ignored only"]
+fn adbc_flight_sql_tpch_all() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let tpch = data_dir(dir.path()).join("tpch");
+    let gen_status = Command::new("tpchgen-cli")
+        .args(["parquet", "-s", "0.01", "--output-dir"])
+        .arg(&tpch)
+        .status()
+        .expect("tpchgen-cli runs (cargo install tpchgen-cli)");
+    assert!(gen_status.success());
+    let (conf, _) = auth_conf(dir.path(), false);
+    let conf: Vec<&str> = conf.iter().map(String::as_str).collect();
+    let (server, flight) = start(dir.path(), &conf);
+    assert!(flight);
+    let addr = server
+        .connect
+        .split(';')
+        .next()
+        .expect("address")
+        .trim_end_matches('/')
+        .to_owned();
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let out = Command::new("uv")
+        .args(["run", "--quiet", "--script"])
+        .arg(root.join("tests/scripts/flight_sql_adbc.py"))
+        .args(["--addr", &addr, "--token", ADMIN_TOKEN])
+        .arg("--tpch-dir")
+        .arg(&tpch)
+        .arg("--queries")
+        .arg(root.join("bench/queries/tpch"))
+        .output()
+        .expect("uv runs");
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(out.status.success(), "{stdout}\n{stderr}");
@@ -432,6 +486,10 @@ struct JdbcRun {
     catalogs: Vec<String>,
     schemas: Vec<String>,
     columns: Vec<String>,
+    /// q1's rows over a `user=`/`password=` URL (Basic, design §3.1).
+    basic: Option<usize>,
+    /// The URL with another principal's name was refused.
+    basic_wrong_refused: bool,
 }
 
 fn parse_jdbc(stdout: &str) -> JdbcRun {
@@ -471,21 +529,30 @@ fn parse_jdbc(stdout: &str) -> JdbcRun {
             run.schemas = t.split(',').map(str::to_owned).collect();
         } else if let Some(t) = line.strip_prefix("COLUMNS ") {
             run.columns = t.split(',').map(str::to_owned).collect();
+        } else if let Some(n) = line.strip_prefix("BASIC ") {
+            run.basic = n.parse().ok();
+        } else if line == "BASIC_WRONG refused" {
+            run.basic_wrong_refused = true;
         }
     }
     run
 }
 
 /// TPC-H q1 through the Arrow Flight SQL JDBC driver (arrow-java 19) with a bearer token equals
-/// the Rust Flight SQL client's answer, rows and decimal types; the parameterized prepared q1
-/// takes the query path (m11); each `executeUpdate` runs once; `getTables` and `getTypeInfo`
-/// answer (design §0, §4.4, §5, §11; `tests/scripts/flight_sql_jdbc.sh`). Needs Java 21 or
-/// Docker, and the network the first time (the driver jar is cached), so it is ignored by
-/// default: `cargo nextest run -p krishiv-cli --features flight-sql --test flight_sql
-/// --run-ignored only jdbc`.
+/// the Rust Flight SQL client's answer, rows and decimal types (precision and scale from the
+/// Flight SQL column metadata); the parameterized prepared q1 takes the query path (m11) and
+/// binds `setDate` into the `DATE` parameter its analysis gives the marker (§4.4, amended
+/// 2026-11-20); each `executeUpdate` runs once (an update without a count answers `0`: the driver
+/// reads `-1` as a result set and would run it again), `setInt` binds the `INSERT ... VALUES`
+/// cell's `INT` column; `getTables`, `getCatalogs`, `getSchemas` and `getColumns` answer; a
+/// `user=<principal>&password=<token>` URL (Basic, owner item 5) runs q1 and another user name
+/// with the token is refused (design §0, §3.1, §4.3, §4.4, §5, §11, §17;
+/// `tests/scripts/flight_sql_jdbc.sh`). Needs Java 21 or Docker, and the network the first time
+/// (the driver jar is cached, checked against its pinned SHA-256), so it is `--run-ignored only`:
+/// the nightly all-features job runs it in a step of its own.
 #[cfg(unix)]
 #[test]
-#[ignore = "needs Java 21 or Docker, and the network (the JDBC driver): --run-ignored only"]
+#[ignore = "needs Java 21 or Docker, and the network on a cold cache (JDBC driver): --run-ignored only"]
 fn jdbc_flight_sql_tpch_q1() {
     let dir = tempfile::tempdir().expect("tempdir");
     let (mut conf, _) = auth_conf(dir.path(), false);
@@ -508,12 +575,21 @@ fn jdbc_flight_sql_tpch_q1() {
     let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/scripts/flight_sql_jdbc.sh");
     let url = format!("jdbc:arrow-flight-sql://{addr}?useEncryption=false&token={ADMIN_TOKEN}");
+    // Basic (owner item 5): the token as the password, its principal `adbc` as the user name.
+    let basic = format!(
+        "jdbc:arrow-flight-sql://{addr}?useEncryption=false&user=adbc&password={ADMIN_TOKEN}"
+    );
+    let wrong = format!(
+        "jdbc:arrow-flight-sql://{addr}?useEncryption=false&user=someone&password={ADMIN_TOKEN}"
+    );
     let out = Command::new("sh")
         .arg(&script)
         .arg(&url)
         .arg(JDBC_Q1.replace("{cutoff}", &format!("DATE '{JDBC_CUTOFF}'")))
         .arg(JDBC_Q1.replace("{cutoff}", "?"))
         .arg(JDBC_CUTOFF)
+        .arg(&basic)
+        .arg(&wrong)
         .output()
         .expect("the JDBC script runs");
     let stdout = String::from_utf8_lossy(&out.stdout);
@@ -530,13 +606,15 @@ fn jdbc_flight_sql_tpch_q1() {
     );
     assert_eq!(run.update, Some(3), "each executeUpdate ran once\n{stdout}");
     assert_eq!(run.tables, Some(1), "getTables lists the table\n{stdout}");
-    for t in ["INT", "DECIMAL", "STRING", "TIMESTAMP"] {
-        assert!(
-            run.types.iter().any(|n| n == t),
-            "getTypeInfo: {t} in {:?}",
-            run.types
-        );
-    }
+    // arrow-java 19 does not implement `getTypeInfo` (neither `ArrowDatabaseMetadata` nor
+    // `ArrowFlightMetaImpl` overrides it): Avatica's default answers no rows and the driver never
+    // sends `GetXdbcTypeInfo`, which krishiv-flight-sql's own tests cover. Seeing rows here means
+    // a driver that asks: then check them.
+    assert!(
+        run.types.iter().all(String::is_empty),
+        "the driver now reads GetXdbcTypeInfo: assert INT, DECIMAL, STRING, TIMESTAMP in {:?}",
+        run.types
+    );
     assert!(
         run.catalogs.iter().any(|c| c == "spark_catalog"),
         "getCatalogs: {:?}",
@@ -548,6 +626,15 @@ fn jdbc_flight_sql_tpch_q1() {
         run.schemas
     );
     assert_eq!(run.columns.len(), 1, "getColumns: {:?}", run.columns);
+    assert_eq!(
+        run.basic,
+        Some(expected.rows.len()),
+        "q1 over a user/password URL\n{stdout}"
+    );
+    assert!(
+        run.basic_wrong_refused,
+        "another principal's name with the token is refused\n{stdout}"
+    );
     assert!(
         run.columns[0].starts_with("n:"),
         "getColumns: {:?}",
@@ -565,8 +652,9 @@ fn jdbc_output_parses() {
     let run = parse_jdbc(
         "QUERY statement\nCOL a|12|0|0\nROW x\nQUERY prepared\nCOL a|12|0|0\nROW x\n\
          UPDATE 3\nTABLES 1\nTYPES INT,STRING\nCATALOGS spark_catalog\nSCHEMAS default,db\n\
-         COLUMNS n:INTEGER\n",
+         COLUMNS n:INTEGER\nBASIC 3\nBASIC_WRONG refused\n",
     );
+    assert_eq!((run.basic, run.basic_wrong_refused), (Some(3), true));
     assert_eq!(run.statement, run.prepared);
     assert_eq!(run.statement.rows, ["x"]);
     assert_eq!((run.update, run.tables), (Some(3), Some(1)));

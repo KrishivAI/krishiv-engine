@@ -4,6 +4,7 @@
 //! by the inventory, the generator and the mutation sites.
 
 mod analyzer;
+mod column_names;
 mod dag;
 mod definer_sources;
 mod depth;
@@ -20,6 +21,7 @@ mod json_tuple;
 mod lineage;
 mod local;
 mod metadata_mode;
+mod metric_view;
 mod nested_literals;
 mod nodes;
 mod observe;

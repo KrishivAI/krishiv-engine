@@ -6,20 +6,17 @@
 //! `none`, `token` (a reference resolved when the catalog is built), `client-credentials` at the
 //! declared token endpoint or `delegated` (the caller's own token or an RFC 8693 exchange of it,
 //! design P3-T067 §3.3; each call carries the session's caller), every request on the egress policy client scoped to the catalog's
-//! declared hosts with no redirect followed (§5.2). The catalog resolves names: a table the
-//! catalog does not have is absent; a table it has is refused for now with
-//! `KRISHIV_UNSUPPORTED_FEATURE`, since the metadata mapping and the table provider over the
-//! client (through the Iceberg connector) are a later step. Nothing is ever read through an
-//! unchecked path.
+//! declared hosts with no redirect followed (§5.2). [`table`] maps a loaded table to the
+//! analyzer's metadata and opens its scans through the Iceberg connector (PR-58b), and, with
+//! `option.write = true` (default `false`), commits its writes through the catalog (PR-36c
+//! part 2).
 
 use std::sync::Arc;
 
 use krishiv_common::error::{KrishivError, KrishivInvalidConfigValue, KrishivUnsupportedFeature};
-use krishiv_plan::TableVersion;
-use krishiv_plan::analyzer::{BoxFuture, NameForm, TableIdent, TableMeta};
 use krishiv_session::auth::CredentialKind;
 use krishiv_session::catalog_decl::{
-    CatalogAuth, CatalogDecl, CatalogStorage, CatalogType, Delegation,
+    CatalogAuth, CatalogDecl, CatalogStorage, CatalogType, DeclMode, Delegation,
 };
 use krishiv_session::catalog_registry::{
     CallerCatalog, CatalogCaller, CatalogDeps, CatalogFactory, IdentityKey,
@@ -44,6 +41,21 @@ fn unsupported(feature: String) -> KrishivError {
     KrishivUnsupportedFeature { feature }.into()
 }
 
+/// `option.write` of `decl` (default `false`: the catalog's tables are read-only; PR-36c part 2).
+fn writes(decl: &CatalogDecl) -> Result<bool, KrishivError> {
+    match decl.options.get("write").map(|v| v.trim()) {
+        None => Ok(false),
+        Some(v) if v.eq_ignore_ascii_case("true") => Ok(true),
+        Some(v) if v.eq_ignore_ascii_case("false") => Ok(false),
+        Some(v) => Err(KrishivInvalidConfigValue {
+            value: format!("'{v}'"),
+            key: format!("\"{}\"", key_of(decl, "option.write")),
+            reason: "expected true or false".to_owned(),
+        }
+        .into()),
+    }
+}
+
 impl IcebergRestFactory {
     /// The client configuration `decl` declares; secrets are resolved only with `resolve`
     /// (startup validation checks the shape without reading them again).
@@ -52,6 +64,7 @@ impl IcebergRestFactory {
         deps: &CatalogDeps,
         resolve: bool,
     ) -> Result<RestConfig, KrishivError> {
+        writes(decl)?;
         if decl.options.contains_key("prefix") {
             // The client takes the prefix from the catalog's `/v1/config` only.
             return Err(unsupported(format!(
@@ -147,6 +160,32 @@ impl IcebergRestFactory {
     }
 }
 
+impl IcebergRestFactory {
+    /// [`CatalogFactory::build`] with `ttl` as the `loadTable` cache lifetime.
+    pub(crate) fn build_with_ttl(
+        decl: &CatalogDecl,
+        deps: &CatalogDeps,
+        ttl: std::time::Duration,
+    ) -> Result<Arc<dyn CallerCatalog>, KrishivError> {
+        let config = Self::config(decl, deps, true)?;
+        // Embedded use reads local tables too (as reads by path are not confined there); a
+        // server never reads its own disk for a catalog (`FileFromRemoteCatalog`).
+        let policy: Arc<dyn crate::location::LocationPolicy + Send + Sync> =
+            if deps.mode == DeclMode::Embedded {
+                Arc::new(table::EmbeddedLocations::default())
+            } else {
+                Arc::new(RemoteLocationPolicy::default())
+            };
+        let client = RestClient::new(decl.name.clone(), config, policy)?;
+        Ok(Arc::new(RestCatalog::new(
+            decl,
+            Arc::new(client),
+            ttl,
+            writes(decl)?,
+        )))
+    }
+}
+
 impl CatalogFactory for IcebergRestFactory {
     fn kind(&self) -> CatalogType {
         CatalogType::IcebergRest
@@ -161,23 +200,8 @@ impl CatalogFactory for IcebergRestFactory {
         decl: &CatalogDecl,
         deps: &CatalogDeps,
     ) -> Result<Arc<dyn CallerCatalog>, KrishivError> {
-        let config = Self::config(decl, deps, true)?;
-        let client = RestClient::new(
-            decl.name.clone(),
-            config,
-            Arc::new(RemoteLocationPolicy::default()),
-        )?;
-        Ok(Arc::new(RestCatalog {
-            client: Arc::new(client),
-        }))
+        Self::build_with_ttl(decl, deps, table::METADATA_TTL)
     }
-}
-
-/// A declared Iceberg REST catalog as the analyzer sees it (name resolution only, see the module
-/// docs).
-#[derive(Debug)]
-struct RestCatalog {
-    client: Arc<RestClient>,
 }
 
 fn quoted(part: &str) -> String {
@@ -226,62 +250,13 @@ pub(crate) fn rest_caller(caller: &CatalogCaller) -> RestCaller {
     )
 }
 
-impl CallerCatalog for RestCatalog {
-    fn load_table<'a>(
-        &'a self,
-        caller: &'a CatalogCaller,
-        id: &'a TableIdent,
-        version: Option<TableVersion>,
-        form: NameForm,
-    ) -> BoxFuture<'a, Result<Option<TableMeta>, KrishivError>> {
-        Box::pin(async move {
-            // No temporary relation lives here, and a table needs a namespace.
-            if form.temporary_only || id.namespace.is_empty() {
-                return Ok(None);
-            }
-            let client = Arc::clone(&self.client);
-            let (namespace, name) = (id.namespace.clone(), id.name.clone());
-            let who = rest_caller(caller);
-            // The client blocks until its deadline: never on a compute worker. Outside a tokio
-            // runtime (an embedded host on another executor) there is no blocking pool, and the
-            // call runs on the caller's thread, which is blocking already.
-            let loaded = match tokio::runtime::Handle::try_current() {
-                Ok(handle) => handle
-                    .spawn_blocking(move || client.load_table_as(&who, &namespace, &name))
-                    .await
-                    .map_err(|_| {
-                        crate::iceberg_rest::RestError::Transport(
-                            "the catalog call did not finish".to_owned(),
-                        )
-                        .into_error(
-                            self.client.name(),
-                            "the table",
-                            &crate::iceberg_rest::RestLimits::default(),
-                        )
-                    })??,
-                Err(_) => client.load_table_as(&who, &namespace, &name)?,
-            };
-            let Some(_table) = loaded else {
-                return Ok(None);
-            };
-            let relation: Vec<String> = std::iter::once(id.catalog.as_str())
-                .chain(id.namespace.iter().map(String::as_str))
-                .chain(std::iter::once(id.name.as_str()))
-                .map(quoted)
-                .collect();
-            let what = if version.is_some() {
-                "time travel on"
-            } else {
-                "reading"
-            };
-            Err(unsupported(format!(
-                "{what} the Iceberg REST table {} (the table provider over the declared catalog \
-                 is not in this build yet)",
-                relation.join(".")
-            )))
-        })
-    }
-}
+mod table;
+
+pub(crate) use table::RestCatalog;
 
 #[cfg(test)]
+mod read_tests;
+#[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod write_tests;

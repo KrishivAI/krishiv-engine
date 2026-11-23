@@ -21,11 +21,11 @@ use arrow_array::{Array, ArrayRef};
 use arrow_schema::DataType;
 use krishiv_common::error::KrishivError;
 use krishiv_kernels::variant::{
-    PathSegment, Schema, VariantColumn, VariantColumnBuilder, cast_values, extract,
-    parse_path_or_raise,
+    Edit, PathSegment, Schema, VariantColumn, VariantColumnBuilder, apply, cast_values, edit_path,
+    extract, named_in, parse_path_or_raise, strip_nulls,
 };
 use krishiv_types::DataType as SparkType;
-use krishiv_types::variant::VariantBuilder;
+use krishiv_types::variant::{VariantBuilder, VariantRef};
 
 use super::args::{Inputs, is_string, to_utf8};
 use super::{BindArg, BindOptions, Binding, FamilyResult, bad_types, listed};
@@ -38,8 +38,16 @@ pub(super) const NAMES: &[&str] = &[
     "schema_of_variant",
     "to_variant_object",
     "try_parse_json",
+    "try_variant_array_append",
     "try_variant_get",
+    "try_variant_insert",
+    "try_variant_set",
+    "variant_array_append",
+    "variant_delete",
     "variant_get",
+    "variant_insert",
+    "variant_set",
+    "variant_strip_nulls",
 ];
 
 fn is_variant(t: &DataType) -> bool {
@@ -230,6 +238,164 @@ fn widen_decimal64(a: ArrayRef) -> Result<ArrayRef, KrishivError> {
     Ok(Arc::new(wide))
 }
 
+/// How an edit function writes its value argument.
+#[derive(Clone, Copy)]
+enum EditKind {
+    Insert,
+    Set(bool),
+    Append,
+}
+
+/// The variant values of argument `i` of an edit call: a variant column as it is, any other type cast to `VARIANT`
+/// (the analyzer checked it can be), an untyped NULL as all NULL.
+fn variant_arg(x: &Inputs<'_>, i: usize) -> Result<Option<ArrayRef>, KrishivError> {
+    let column = x.column(i)?;
+    if *column.data_type() == DataType::Null {
+        return Ok(None);
+    }
+    if is_variant(column.data_type()) {
+        return Ok(Some(column));
+    }
+    let from = SparkType::from_arrow(column.data_type())?;
+    krishiv_kernels::variant::cast_to_variant(column.as_ref(), &from).map(Some)
+}
+
+/// `variant_insert`, `variant_set`, `variant_array_append` and their `try_` forms over every row.
+fn edit_rows(
+    x: &Inputs<'_>,
+    name: &'static str,
+    kind: EditKind,
+    try_: bool,
+) -> Result<ArrayRef, KrishivError> {
+    let column = x.column(0)?;
+    if *column.data_type() == DataType::Null {
+        return null_variants(x);
+    }
+    let col = VariantColumn::new(column.as_ref())?;
+    let paths = if *x.column(1)?.data_type() == DataType::Null {
+        None
+    } else {
+        Some(x.strings(1)?)
+    };
+    let value = variant_arg(x, 2)?;
+    let values = value
+        .as_ref()
+        .map(|v| VariantColumn::new(v.as_ref()))
+        .transpose()?;
+    let mut out = VariantColumnBuilder::with_capacity(col.len());
+    for i in 0..col.len() {
+        let (Some(root), Some(paths), Some(values)) = (col.get(i)?, &paths, &values) else {
+            out.append_null();
+            continue;
+        };
+        let (Some(val), false) = (values.get(i)?, paths.is_null(i)) else {
+            out.append_null();
+            continue;
+        };
+        let text = paths.value(i);
+        let steps = edit_path(text, name, matches!(kind, EditKind::Append))?;
+        let edit = match kind {
+            EditKind::Insert => Edit::Insert(val),
+            EditKind::Set(create) => Edit::Set(val, create),
+            EditKind::Append => Edit::Append(val),
+        };
+        match apply(root, &steps, edit).map_err(|e| named_in(e, name))? {
+            Ok(Some((m, v))) => out.append(&m, &v),
+            Ok(None) => match col.raw(i) {
+                Some((m, v)) => out.append(m, v),
+                None => out.append_null(),
+            },
+            Err(_) if try_ => out.append_null(),
+            Err(failure) => return Err(failure.into_error(name, text)),
+        }
+    }
+    out.finish()
+}
+
+/// `variant_delete(v, path1, ...)`: the paths apply left to right, a NULL path is skipped.
+fn delete_rows(x: &Inputs<'_>, count: usize) -> Result<ArrayRef, KrishivError> {
+    let column = x.column(0)?;
+    if *column.data_type() == DataType::Null {
+        return null_variants(x);
+    }
+    let col = VariantColumn::new(column.as_ref())?;
+    let mut paths = Vec::with_capacity(count);
+    for j in 1..count {
+        paths.push(if *x.column(j)?.data_type() == DataType::Null {
+            None
+        } else {
+            Some(x.strings(j)?)
+        });
+    }
+    let mut out = VariantColumnBuilder::with_capacity(col.len());
+    for i in 0..col.len() {
+        let Some(root) = col.get(i)? else {
+            out.append_null();
+            continue;
+        };
+        let mut current: Option<(Vec<u8>, Vec<u8>)> = None;
+        for path in paths.iter().flatten().filter(|p| !p.is_null(i)) {
+            let steps = edit_path(path.value(i), "variant_delete", false)?;
+            let at = match &current {
+                Some((m, v)) => VariantRef::new(m, v)?,
+                None => root,
+            };
+            if let Ok(Some(next)) =
+                apply(at, &steps, Edit::Delete).map_err(|e| named_in(e, "variant_delete"))?
+            {
+                current = Some(next);
+            }
+        }
+        match (current, col.raw(i)) {
+            (Some((m, v)), _) => out.append(&m, &v),
+            (None, Some((m, v))) => out.append(m, v),
+            (None, None) => out.append_null(),
+        }
+    }
+    out.finish()
+}
+
+/// `variant_strip_nulls(v, include_arrays)` over every row.
+fn strip_rows(x: &Inputs<'_>, include_arrays: bool) -> Result<ArrayRef, KrishivError> {
+    let column = x.column(0)?;
+    if *column.data_type() == DataType::Null {
+        return null_variants(x);
+    }
+    let col = VariantColumn::new(column.as_ref())?;
+    let mut out = VariantColumnBuilder::with_capacity(col.len());
+    for i in 0..col.len() {
+        match col.get(i)? {
+            Some(v) => {
+                let (m, bytes) = strip_nulls(v, include_arrays)?;
+                out.append(&m, &bytes);
+            }
+            None => out.append_null(),
+        }
+    }
+    out.finish()
+}
+
+/// The boolean literal at argument `i`: `Some(None)` for a NULL one, `None` for a column.
+fn boolean_literal(args: &[BindArg], i: usize) -> Option<Option<bool>> {
+    use arrow_array::cast::AsArray;
+    match args.get(i)? {
+        BindArg::Literal(a) if *a.data_type() == DataType::Boolean => {
+            Some(a.is_valid(0).then(|| a.as_boolean().value(0)))
+        }
+        BindArg::Literal(a) if a.is_null(0) => Some(None),
+        _ => None,
+    }
+}
+
+/// An all-NULL variant column of `rows` rows.
+fn null_variants(x: &Inputs<'_>) -> Result<ArrayRef, KrishivError> {
+    let mut out = VariantColumnBuilder::with_capacity(x.rows());
+    for _ in 0..x.rows() {
+        out.append_null();
+    }
+    out.finish()
+}
+
 /// Binds the variant function `name`.
 pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyResult {
     let listed = listed(NAMES, name)?;
@@ -301,7 +467,95 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                 })
             })
         }
+        (
+            "variant_insert"
+            | "try_variant_insert"
+            | "variant_set"
+            | "try_variant_set"
+            | "variant_array_append"
+            | "try_variant_array_append",
+            [v, p, _, rest @ ..],
+        ) if variant_or_null(v)
+            && (is_string(p) || *p == DataType::Null)
+            && rest.len() <= usize::from(listed.ends_with("variant_set")) =>
+        {
+            let try_ = listed.starts_with("try_");
+            let name: &'static str = NAMES
+                .iter()
+                .copied()
+                .find(|n| *n == listed)
+                .unwrap_or("variant_insert");
+            // `create_if_missing` is a foldable boolean (the analyzer checked it); NULL makes every row NULL.
+            let create = match (rest.len(), boolean_literal(args, 3)) {
+                (0, _) => Some(Some(true)),
+                (_, Some(c)) => Some(c),
+                (_, None) => None,
+            };
+            let kind = match listed {
+                "variant_insert" | "try_variant_insert" => Some(EditKind::Insert),
+                "variant_array_append" | "try_variant_array_append" => Some(EditKind::Append),
+                _ => create.flatten().map(EditKind::Set),
+            };
+            create.map(|_| {
+                Binding::new(variant.clone(), move |x: &Inputs<'_>| match kind {
+                    Some(kind) => edit_rows(x, name, kind, try_),
+                    None => null_variants(x),
+                })
+            })
+        }
+        ("variant_delete", [v, paths @ ..])
+            if variant_or_null(v)
+                && !paths.is_empty()
+                && paths.iter().all(|p| is_string(p) || *p == DataType::Null) =>
+        {
+            let count = args.len();
+            Some(Binding::new(variant, move |x: &Inputs<'_>| {
+                delete_rows(x, count)
+            }))
+        }
+        ("variant_strip_nulls", [v, rest @ ..]) if variant_or_null(v) && rest.len() <= 1 => {
+            let include = match (rest.len(), boolean_literal(args, 1)) {
+                (0, _) => Some(Some(true)),
+                (_, flag) => flag,
+            };
+            include.map(|include| {
+                Binding::new(variant.clone(), move |x: &Inputs<'_>| match include {
+                    Some(include) => strip_rows(x, include),
+                    None => null_variants(x),
+                })
+            })
+        }
         _ => None,
     };
-    Some((listed, bound.ok_or_else(|| bad_types(listed, args))))
+    // Spark parses a foldable path once per expression, before any row: a bad literal path raises at bind, even
+    // over NULL variants or no rows. A column path is parsed per row, after the NULL checks.
+    let allow_root = listed.ends_with("variant_array_append");
+    let literal_paths = match listed {
+        "variant_delete" => 1..args.len(),
+        "variant_insert"
+        | "try_variant_insert"
+        | "variant_set"
+        | "try_variant_set"
+        | "variant_array_append"
+        | "try_variant_array_append" => 1..2,
+        _ => 0..0,
+    };
+    // `variant_insert`, `variant_set` and `variant_array_append` are null-intolerant in Spark: a NULL literal
+    // argument folds the call to NULL before the path is parsed. `variant_delete` raises regardless.
+    let folds_to_null = listed != "variant_delete"
+        && args.iter().any(|a| match a {
+            BindArg::Literal(a) => *a.data_type() == DataType::Null || a.is_null(0),
+            BindArg::Column { .. } => false,
+        });
+    let checked = bound.ok_or_else(|| bad_types(listed, args)).and_then(|b| {
+        if !folds_to_null {
+            for i in literal_paths {
+                if let Some(Some(path)) = string_literal(args, i) {
+                    edit_path(&path, listed, allow_root)?;
+                }
+            }
+        }
+        Ok(b)
+    });
+    Some((listed, checked))
 }

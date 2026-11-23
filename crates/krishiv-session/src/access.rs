@@ -122,7 +122,7 @@ impl Session {
         redacted: &krishiv_common::redact::RedactedSql,
     ) -> Result<StatementParts, KrishivError> {
         let env = self.query_env();
-        let class = krishiv_sql::classify_with(&statement, &env.parser);
+        let class = self.statement_class(&statement, &env);
         if let Statement::ExecuteImmediate(e) = &statement {
             return Box::pin(self.immediate_parts(e, class, statement.clone(), text)).await;
         }
@@ -168,6 +168,13 @@ impl Session {
         env: &QueryEnv,
         skip_unplaced: bool,
     ) -> Result<(), KrishivError> {
+        // A bare `DROP VIEW` of a stored view is checked as the qualified one when it runs.
+        if let Statement::DropView(v) = statement
+            && let Some(stored) = self.stored_drop_view(v, env)
+            && self.stored_namespace_in(env).is_ok()
+        {
+            return self.add_targets(securables, &stored, env, skip_unplaced);
+        }
         for target in required_targets(statement, &env.parser) {
             let placed = match self.securables_of(target.object, env) {
                 Ok(placed) => placed,
@@ -1167,6 +1174,15 @@ impl Session {
                     .collect(),
             ),
             TargetObject::CurrentCatalog => namespaces(vec![current_catalog()]),
+            // `SHOW NAMESPACES IN name`: a catalog when `name` is one, else a namespace of the
+            // current catalog.
+            TargetObject::NamedCatalog(name) => {
+                let written = parts(name)?;
+                match written.as_slice() {
+                    [only] if catalogs.catalog(only).is_some() => namespaces(vec![only.clone()]),
+                    _ => namespaces(namespace_parts(catalogs, &written)),
+                }
+            }
             TargetObject::Path(path) => vec![Securable::Path(OptionValue::from_user(
                 "path",
                 self.qualify_path(path)?,

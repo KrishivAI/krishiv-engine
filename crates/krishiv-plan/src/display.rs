@@ -346,6 +346,29 @@ impl Display for NodeLine<'_> {
                     JoinCondition::Natural => write!(f, ", NATURAL"),
                 }
             }
+            PlanNode::AsOfJoin {
+                kind,
+                condition,
+                as_of,
+                ..
+            } => {
+                write!(f, "AsOfJoin {kind:?}, {} ", Text(&as_of.left))?;
+                match as_of.direction.sql_operator(as_of.allow_exact) {
+                    Some(op) => f.write_str(op)?,
+                    None if as_of.allow_exact => f.write_str("nearest")?,
+                    None => f.write_str("nearest exclusive")?,
+                }
+                write!(f, " {}", Text(&as_of.right))?;
+                if let Some(t) = &as_of.tolerance {
+                    write!(f, ", tolerance {}", Text(t))?;
+                }
+                match condition {
+                    JoinCondition::None => Ok(()),
+                    JoinCondition::On(e) => write!(f, ", {}", Text(e)),
+                    JoinCondition::Using(cols) => write!(f, ", USING ({})", cols.join(", ")),
+                    JoinCondition::Natural => write!(f, ", NATURAL"),
+                }
+            }
             PlanNode::Sort { order, global, .. } => {
                 f.write_str("Sort [")?;
                 for (i, o) in order.iter().enumerate() {
@@ -367,6 +390,7 @@ impl Display for NodeLine<'_> {
             }
             PlanNode::Limit { limit, .. } => write!(f, "Limit {}", Text(limit)),
             PlanNode::Offset { offset, .. } => write!(f, "Offset {}", Text(offset)),
+            PlanNode::Tail { limit, .. } => write!(f, "Tail {}", Text(limit)),
             PlanNode::SubqueryAlias { alias, columns, .. } => {
                 let parts: Vec<String> = alias
                     .split(crate::plan::ALIAS_PART_SEP)
@@ -394,6 +418,58 @@ impl Display for NodeLine<'_> {
                 write!(f, " ({})", List(params))
             }
             PlanNode::PipeOperator { .. } => f.write_str("PipeOperator"),
+            PlanNode::ColumnNames { op, .. } => match op {
+                crate::ColumnNamesOp::ToDf(names) => write!(f, "ToDF {}", Names(names)),
+                crate::ColumnNamesOp::Rename(pairs) => {
+                    f.write_str("RenameColumns ")?;
+                    for (i, (a, b)) in pairs.iter().enumerate() {
+                        if i > 0 {
+                            f.write_str(", ")?;
+                        }
+                        write!(
+                            f,
+                            "{} -> {}",
+                            Name(std::slice::from_ref(a)),
+                            Name(std::slice::from_ref(b))
+                        )?;
+                    }
+                    Ok(())
+                }
+                crate::ColumnNamesOp::Drop { names, columns } => {
+                    write!(f, "DropColumns {}", Names(names))?;
+                    if !columns.is_empty() {
+                        write!(f, " (resolved: {})", Names(columns))?;
+                    }
+                    Ok(())
+                }
+                crate::ColumnNamesOp::DropNa {
+                    subset,
+                    min_non_nulls,
+                } => {
+                    f.write_str("DropNa")?;
+                    if let Some(n) = min_non_nulls {
+                        write!(f, " min {n}")?;
+                    }
+                    if !subset.is_empty() {
+                        write!(f, " {}", Names(subset))?;
+                    }
+                    Ok(())
+                }
+                crate::ColumnNamesOp::Replace { cols, pairs } => {
+                    write!(f, "Replace ({})", List(pairs))?;
+                    if !cols.is_empty() {
+                        write!(f, " {}", Names(cols))?;
+                    }
+                    Ok(())
+                }
+                crate::ColumnNamesOp::FillNa { cols, values } => {
+                    write!(f, "FillNa ({})", List(values))?;
+                    if !cols.is_empty() {
+                        write!(f, " {}", Names(cols))?;
+                    }
+                    Ok(())
+                }
+            },
             PlanNode::Repartition { exprs, .. } => write!(f, "Repartition ({})", List(exprs)),
             PlanNode::CollectMetrics { name, metrics, .. } => {
                 write!(
@@ -402,6 +478,23 @@ impl Display for NodeLine<'_> {
                     Name(std::slice::from_ref(name)),
                     List(metrics)
                 )
+            }
+            PlanNode::MetricViewRead {
+                name,
+                dimensions,
+                measures,
+                output,
+                ..
+            } => {
+                write!(f, "MetricViewRead {} [", Name(name))?;
+                for (i, c) in dimensions.iter().chain(measures).enumerate() {
+                    write!(f, "{}{} = {}", sep(i), c.name, Text(&c.expr))?;
+                }
+                f.write_str("], [")?;
+                for (i, c) in output.iter().enumerate() {
+                    write!(f, "{}{}#{}", sep(i), c.name, c.id.0)?;
+                }
+                f.write_str("]")
             }
             PlanNode::JoinHint { strategy, .. } => {
                 write!(f, "JoinHint (strategy={})", strategy.name())
@@ -713,6 +806,21 @@ impl Display for List<'_> {
 
 /// A multi-part name, back-quoting parts that are not plain identifiers.
 struct Name<'a>(&'a [String]);
+
+/// Several one-part names, each quoted on its own, comma separated.
+struct Names<'a>(&'a [String]);
+
+impl Display for Names<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        for (i, n) in self.0.iter().enumerate() {
+            if i > 0 {
+                f.write_str(", ")?;
+            }
+            write!(f, "{}", Name(std::slice::from_ref(n)))?;
+        }
+        Ok(())
+    }
+}
 
 impl Display for Name<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {

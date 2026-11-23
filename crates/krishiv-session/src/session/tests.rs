@@ -143,3 +143,41 @@ fn committed_files_refuses_a_malformed_result() {
             .contains("rows")
     );
 }
+
+/// PY-078: a query whose spill set-up failed reports that failure whether its memory error is a
+/// refused reservation or an arbitration abort (which one comes first depends on load).
+#[test]
+fn a_spill_set_up_failure_names_both_kinds_of_memory_error() {
+    use krishiv_common::error::{ErrorClass, KrishivError, KrishivInvalidConfigValue};
+    use krishiv_memory::MemoryError;
+    let failure = std::sync::Mutex::new(Some(KrishivError::from(KrishivInvalidConfigValue {
+        value: "'9999'".to_owned(),
+        key: "\"krishiv.spill.zstd.level\"".to_owned(),
+        reason: "out of range".to_owned(),
+    })));
+    for memory in [
+        MemoryError::Exhausted {
+            requested: 1,
+            available: 0,
+        },
+        MemoryError::Aborted { held: 1 },
+    ] {
+        let named = super::Session::name_spill_failure(KrishivError::from(memory), &failure);
+        assert_eq!(named.error_class(), ErrorClass::KrishivInvalidConfigValue);
+    }
+    // Any other error, and a memory error with no recorded failure, stay as they are.
+    let other = KrishivError::from(MemoryError::TimerUnavailable {
+        reason: "test".to_owned(),
+    });
+    let kept = super::Session::name_spill_failure(other, &failure);
+    assert_eq!(kept.error_class(), ErrorClass::InternalErrorMemory);
+    let none = std::sync::Mutex::new(None);
+    let kept = super::Session::name_spill_failure(
+        KrishivError::from(MemoryError::Aborted { held: 1 }),
+        &none,
+    );
+    assert_eq!(
+        kept.error_class(),
+        ErrorClass::KrishivQueryAbortedOutOfMemory
+    );
+}

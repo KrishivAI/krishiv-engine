@@ -363,6 +363,13 @@ result is first analyzed (its first action, or the first call that needs its sch
 first job. A checkpoint is not a cache entry: `is_cached`, `CLEAR CACHE`, `REFRESH` and `unpersist`
 do not see it, as in Spark. `system.caches` lists the session's live checkpoints in a `checkpoint` row.
 
+## A second catalog, `system`, next to `spark_catalog`
+
+`SHOW CATALOGS` lists `spark_catalog` and `system`. `system` is Krishiv's own catalog of introspection tables
+(`system.capabilities`, `system.caches`, `system.queries`, `system.metrics`, among others); Spark has no such catalog and
+lists only `spark_catalog`. A declared catalog (`krishiv.catalog.<name>.*`, or Spark's `spark.sql.catalog.<name>`) appears in the list as well. The names
+`spark_catalog`, `system`, `delegation` and `vended` cannot be used for a declared catalog.
+
 ## `remote("local")` is not supported
 
 In Spark 4.3, `SparkSession.builder.remote("local")` starts a JVM `SparkContext` with the Connect plugin and
@@ -517,19 +524,72 @@ counted are the first the racing drivers hand over (Spark's are partition 0's: a
 The budget is per instantiation, not global: in a staged or distributed run every task that instantiates the
 observed node has its own, so the count can exceed `n` (P3-T084c).
 
-- **Limit not last, or a filter in between:** `observe(..).limit(n).count()`, a limit under a join, or a filter between the observed node and the limit: Spark's per-partition `LocalLimit` can pull up to `n` rows per partition, and a filter changes how many rows the node saw per row taken; the engine applies one cap of `n` rows per instance of the node (see above). Not yet backed by a golden (P3-T084c).
-- **Sort and limit:** `df.observe(..).orderBy(..).limit(n)` reads every row in the engine (`n` = the input);
-  Spark's `TakeOrderedAndProject` pulls a partition-dependent subset (20 of 1000 in the golden).
-- **ANSI `sum` overflow:** Spark's metric aggregate returns the saturated `9223372036854775807` for a long
-  `sum` that overflows under ANSI; the engine raises `ARITHMETIC_OVERFLOW`. With ANSI off both wrap.
+- **Limit not last, or a filter in between:** Spark counts the rows its limit operator *pulled* through the node, and
+  which limit operator runs depends on the action (`observe-goldens-followup.json`, `limit_counts`, run on Spark 4.2.0,
+  `range(0,1000,1,P)`, every case stable over 3 runs). `count()` plans `GlobalLimit <- Exchange <- LocalLimit` and
+  scans *every* partition (each pulls `min(n, partition rows)`: P x n); `collect()`/`take` scans one partition, then
+  `ceil(1.5 * missing * scanned / got)` more, at most 4 x the scanned. The engine applies one global cap of `n` rows
+  at the node (through projections only). Counts, `n = 5` / `n = 100`, count() then collect():
+
+  | shape | P = 1 | P = 4 | P = 16 | engine |
+  |---|---|---|---|---|
+  | `observe.limit(n)` | 5, 5 / 100, 100 | 20, 5 / 400, 100 | 80, 5 / 1000, 125 | P = 1 only (else 5 / 100) |
+  | `limit(n).observe` | n | n | n | matches |
+  | `observe.filter(v%2=0).limit(n)` | 9 / 199 | 36, 9 / 796, 199 | 152, 9 / 1000, 312 | reads 1000 (750 at P16) |
+  | `observe.filter(v%100=0).limit(n)` | 401 / 1000 | 1000, 500 / 1000 | 1000, 437 / 1000 | reads 1000 |
+  | `observe.offset(3).limit(n)` | n + 3 | 32, 8 / 412, 103 | 128, 8 / 1000, 125 | P = 1 only |
+  | `observe.orderBy(v desc).limit(n)` (TakeOrderedAndProject) | 1000 | 1000 | 1000 | matches |
+  | `orderBy(v desc).observe.limit(n)` | n | n | n | matches |
+  | `observe.union(range).limit(n)` | as `observe.limit(n)` | | | reads everything |
+  | `observe(A).limit(n) UNION ALL observe(B).limit(n)` | n, n | 20, 20 / 400, 400 | 80, 80 / 1000, 1000 | P = 1 only |
+  | `(limit(n) UNION ALL limit(n)).observe` | 2n | 2n | 2n | matches |
+  | observed side streamed through a broadcast join, `limit(n)` above | as `observe.limit(n)` (collect: Connect gives P x n) | | | reads everything |
+  | observed build side of a join | 1000 | 1000 | 1000 | matches |
+
+  The runner (`observe_goldens.rs`, `limit_counts_match_spark_where_they_can`) asserts every row marked "matches" and the
+  P = 1 cases, and pins the rest in `LIMIT_GAPS` with the reason; they must still differ, so a fix removes the line.
+  Emulating the per-partition `LocalLimit` and `CollectLimit`'s incremental scan is not planned: the numbers are plan- and
+  AQE-dependent (the post-shuffle partition count changes them), so only the deterministic shapes are matched.
+- **Sort and limit:** `df.observe(..).orderBy(..).limit(n)` counts every row, as Spark's `TakeOrderedAndProject` does
+  for a descending sort (1000). The first fixture's ascending `orderBy(id)` over a range gave 20 of 1000 in Spark (a
+  partition-dependent count the engine does not reproduce: `observation_through_sort_limit_topn` in `KNOWN_GAPS`).
+- **ANSI `sum` overflow:** modelled on Spark's mechanism (`AggregatingAccumulator`): an overflow inside one task's
+  partition fails the action with `ARITHMETIC_OVERFLOW`; an overflow when the tasks' buffers are merged drops *that task's
+  whole buffer* and the action succeeds (Spark merges in task-completion order, so which task survives varies from run to
+  run: `{MAX-1, MAX}` for two rows in two tasks; the engine merges in partition order, so the first partition's buffer
+  wins). An overflow in a metric's result (a decimal `sum`/`avg`, `max(v) + 2`) is raised by `get`, not the action. The
+  decimal class is `ARITHMETIC_OVERFLOW` where Spark's is `NUMERIC_VALUE_OUT_OF_RANGE.WITH_SUGGESTION` (both SQLSTATE
+  22003). The ANSI setting read is the one at action time (as Connect; classic Spark bakes the `Column`'s mode in when it
+  is built).
 - **Scalar subquery in a metric:** Spark runs it; the engine refuses it with `KRISHIV_UNSUPPORTED_FEATURE`.
-- **Empty relation above:** `observe(..).where(false)` (Spark prunes the node; `{}`) counts the rows read.
-  Only `LIMIT 0` prunes. Streaming frames are not refused as Spark refuses them.
-- **Connect:** struct, map and interval metric values are refused when the server builds the
-  `ObservedMetrics` literal (after the rows were sent); a name with no plan id reports `plan_id` 0.
+- **Empty relation above:** a relation proven empty (a filter that folds to `false` or NULL, `LIMIT 0`, and what
+  Spark's `PropagateEmptyRelation` carries that through: project, sort, keyed aggregate, inner or semi join with an
+  empty side, a union of empties, ...) drops the observed nodes inside it, as Spark does (`{}`); an empty input below the
+  node, an outer join's preserved side and a union with a live branch keep it (`n = 0`). Not matched: a cached frame
+  (`observe(..).cache().where(false)`: the engine fills the cache before the filter prunes it) and `sample` (not supported).
+  Spark's classic Python `get` raises a JVM `AssertionError` for a pruned node (an upstream defect); the engine returns `{}` as Connect does.
+- **Connect:** struct, map, array, binary and day-time interval metrics go out as Spark's `ObservedMetrics` literal forms
+  (year-month and calendar intervals too: Spark's Python client raises `UNSUPPORTED_LITERAL` for those, the server sends them);
+  a name with no plan id reports `plan_id` 0. A calendar-interval metric cannot be built yet (the engine has no aggregate over it).
+- **Streaming:** the engine has no streaming `DataFrame` yet (a Connect `Read` with `is_streaming` is refused when it is translated,
+  `UNSUPPORTED_FEATURE`), so there is nothing for `observe(Observation, ...)` to refuse. Spark refuses it at `observe()`: classic
+  `IllegalArgumentException` (no class) "Observation does not support streaming Datasets.This is because ..." (sic, no space);
+  Connect `UNSUPPORTED_OPERATION` "Streaming DataFrame with Observation is not supported."; `observe("name", ...)` on a stream is
+  allowed and reports per micro-batch in `StreamingQueryProgress.observedMetrics`
+  (`observe-goldens-followup.json`, `streaming`). Both belong to the streaming plan row, not here.
 - **Cancelled actions:** a dropped result stream completes the observation with `{}` or the rows
   folded before the drivers stopped (Spark: a partial value); a failed finalization of a metric is what `get`
   raises.
+- **Actions that fail before their query starts:** an action refused or dropped before its query
+  runs (a closed session, a full resource group, a plan that cannot be submitted, a caller that gives up
+  or a cancel, timeout or kill while it waits) completes the observation with that error, so `get` raises
+  it. Spark completes an observation only when an execution of the query ends (Spark 4.2:
+  `SQLExecution.withNewExecutionId0` calls `ObservationManager.tryComplete` as it finishes; 3.5 to 4.1:
+  the session's `QueryExecutionListener`, on success and failure alike), with the metrics it collected,
+  or (4.1, 4.2) an empty row when it has none (4.2 also completes it with a failure when collecting the
+  metrics fails: `Try(qe.observedMetrics)`), never with the action's own error. An action that fails before an execution starts leaves
+  it pending, and a later action can still complete it. In the engine the first action, failed or
+  not, completes it.
 - **`Observation.get` blocks** a thread; do not call it from async code on a runtime thread.
 - **Result cache:** a plan that observes is never served from the result cache (every action runs it).
 
@@ -565,7 +625,53 @@ Krishiv writes Delta tables through `delta_kernel` and its own writer (`krishiv-
   never raised.
 - **Refused.** `replaceWhere` on data columns, schema evolution (`mergeSchema`), `overwriteSchema`
   on an existing table and every replace (RTAS, `REPLACE TABLE`, `createOrReplace`) are refused by
-  name.
+  name. A `replaceWhere` or `INSERT OVERWRITE` filter must name partition columns by one-part names:
+  a qualified name (`t.p`) and a struct field (`s.p`, a data column for delta-spark) are refused, and
+  so is a string compared with a `TIMESTAMP` partition column, which delta-spark casts in
+  `spark.sql.session.timeZone` (Krishiv's filter translation does not know the zone yet).
+
+`DELETE` and `UPDATE` of a Delta table (copy-on-write, `src/write/dml.rs`) leave the rows, the
+command's `num_affected_rows` and the files removed that delta-spark leaves
+(`tests/fixtures/delta-4.4.1/dml/DML.json`; Spark reads the tables back, `dml/krishiv-written/`).
+They differ in:
+
+- **Predicate text.** `operationParameters.predicate` holds the condition as written, in
+  parentheses (`["(id = 2)"]`); delta-spark prints Catalyst's form with expression ids
+  (`["(id#1231L = 2)"]`). Without a condition both write `["true"]` (`DELETE`) and `[]`
+  (`UPDATE`).
+- **Deletion vectors.** Krishiv never writes them: on a table with
+  `delta.enableDeletionVectors = true` delta-spark marks deleted and updated rows in deletion
+  vectors (its default); Krishiv rewrites the files. The rows are the same.
+- **Files per partition.** A rewrite writes one file per partition per driver; delta-spark one per
+  partition per task.
+- **Whole-file deletes.** A `DELETE` removes whole files without rewriting them only when its
+  condition is a comparison, `IN` or `IS [NOT] NULL` of partition columns with literals (combined
+  by `AND`, `OR`, `NOT`); delta-spark also takes other expressions of partition columns. Other
+  conditions rewrite (the same rows go, with a rewrite's metrics). A column qualified by the
+  statement's alias counts (`x.p`); a struct field (`s.p`) and a string compared with a
+  `TIMESTAMP` partition column (Spark casts it in the session time zone) make the statement a
+  rewrite. A partition file with no live row is removed only when its statistics prove it
+  (`numRecords` less its deletion vector's cardinality); delta-spark removes every file of the
+  matching partitions.
+- **Partition-only `UPDATE`.** An `UPDATE` whose condition names only partition columns rewrites
+  the files that hold a matching row; delta-spark rewrites every file of the matching partitions,
+  which differs only for files with no live row.
+- **Read predicates.** The conflict check reads by the condition's top-level `AND` conjuncts that
+  translate as partition predicates, and every live file they select is a read file (as
+  delta-spark's `filterFiles`); delta-spark also takes partition-only conjuncts of other forms,
+  which Krishiv reads as the whole table (a concurrent append to any partition conflicts).
+- **Subqueries.** A condition with a subquery is refused with `DELTA_UNSUPPORTED_SUBQUERY` before
+  anything runs, as delta-spark does; its `cond` parameter is the condition as written, where
+  delta-spark prints Catalyst's SQL of the resolved condition. `delete.allowExistsSubquery`
+  (delta-spark's internal flag admitting `EXISTS` in a `DELETE`) is not read.
+- **Write errors.** An error raised while the rewrite writes its rows is `TASK_WRITE_FAILED` (the
+  table's root) caused by the error, as Spark's writer raises it; an overflow of the stored value's
+  cast is `DELTA_CAST_OVERFLOW_IN_TABLE_WRITE`, naming the first assigned column whose new value's
+  type casts to the overflowing type. Krishiv's own refusals, conflicts, internal errors and
+  cancellations stay unwrapped.
+- **Refused.** On a table with the change data feed on, `UPDATE` and a `DELETE` that rewrites rows
+  are refused (`UNSUPPORTED_FEATURE.TABLE_OPERATION`) before any file is written: Krishiv writes no
+  change data files yet. A `DELETE` of whole partitions commits. `MERGE` is refused by name.
 
 ## HLL sketches: the compact form (`hll_sketch_agg`, `hll_union_agg`, `hll_union`)
 
@@ -576,3 +682,46 @@ both forms, so a sketch written by one engine can be estimated or unioned by the
 `length`, `hex`, `base64` or equality of an HLL sketch is not the same as Spark's. Compare sketches through
 `hll_sketch_estimate` or `hll_union`, not by their bytes. A sketch built from collated strings
 (`hll_sketch_agg(s COLLATE UTF8_LCASE)`) is refused: Spark hashes the collation key, Krishiv does not yet.
+
+## Metric views (`CREATE VIEW .. WITH METRICS LANGUAGE YAML`)
+
+Metric views follow Spark 4.2.1 and 4.3.0 (goldens in `tests/fixtures/spark-{4.2.1,4.3.0}/metric-views/`), with
+these differences:
+
+- **Malformed YAML.** `INVALID_METRIC_VIEW_YAML` keeps Spark's `Failed to parse YAML:` prefix; the rest of the
+  message is Krishiv's YAML parser's, not SnakeYAML's scanner text.
+- **YAML Krishiv refuses where Spark reads on.** An alias to an anchor the document never defined is a YAML
+  syntax error (Spark's binding reads the alias name as the value). A `name` or `expr` that is null is refused when
+  the view is created, with a Krishiv message (Spark keeps it and fails later).
+- **Spark internal errors, reproduced by class.** Where Spark fails with an internal error, Krishiv raises the same
+  class and SQLSTATE (`INTERNAL_ERROR`, `XX000`, or the `MISSING_ATTRIBUTES.*` class) with Spark's message prefix;
+  plan dumps, expression ids and Java exception text after it differ. This covers: a 4.2 `CREATE VIEW` missing
+  `WITH METRICS` or `LANGUAGE` (Spark 4.2 cannot find `MISSING_CLAUSES_FOR_OPERATION`); a read with no aggregate;
+  `measure(<dimension>)` (`key not found: ExprId(..)`); a read through a view, a temporary view or a CTE over a
+  metric view; `source: ~`; a constant dimension (`expr: 1`); a measure column read anywhere but as the argument of
+  `measure(..)`.
+- **Errors that are not Spark exceptions.** The 1,024-character expression limit, `measure(<dimension>)` and
+  `SHOW CREATE TABLE .. AS SERDE` are plain JVM exceptions in Spark, with no error class: Spark Connect clients
+  see `UnknownException` or `IllegalArgumentException`. Krishiv raises `INTERNAL_ERROR` with Spark's text, and its
+  Connect server withholds the text of internal errors, as for any other.
+- **4.3 missing clause.** Krishiv has no Spark 4.3 profile yet, so a missing `WITH METRICS` or `LANGUAGE` is 4.2's
+  internal error on every release from 4.2 (Spark 4.3 raises `MISSING_CLAUSES_FOR_OPERATION`).
+- **`CANNOT_UP_CAST_DATATYPE` after a source column changed type.** The class, SQLSTATE and types are Spark's;
+  the `expression` parameter is Krishiv's form of the dimension, where Spark qualifies its columns
+  (`spark_catalog.default.t.k`).
+- **Not matched yet:** `DESCRIBE EXTENDED .. AS JSON` of a metric view (refused, as for every view: Krishiv does not
+  record the SQL configuration a view captures); a self-join of a metric view (Spark's
+  `UNRESOLVED_COLUMN`, Krishiv's internal error); `WHERE measure(m)` under an aggregate (Spark's
+  `MISSING_ATTRIBUTES.*`, Krishiv's `INVALID_WHERE_CONDITION`); the physical plan `EXPLAIN` prints.
+
+## Pattern matching over collated strings (`LIKE`, `RLIKE`)
+
+`LIKE` and `ILIKE` over a `UTF8_LCASE` string match as Spark does, character by character in Java's case folding
+(final sigma, `ſ`, `ı`, `İ` and `µ` match their case partners), with or without an `ESCAPE` clause. The value
+operand's collation alone decides: `'Ab' LIKE 'a%' COLLATE UTF8_LCASE` is false, as in Spark. Spark 4.0.0 differs
+from 4.1 to 4.3 for `'ſ' ILIKE 'S'` over a column (false on 4.0); Krishiv follows 4.1 to 4.3. Still refused with a
+`KRISHIV_UNSUPPORTED_FEATURE` error that names the call: `LIKE` over `UTF8_LCASE_RTRIM`, `LIKE` over an ICU collation
+(Spark itself raises `DATATYPE_MISMATCH` there), `RLIKE` and the `regexp_*` family, and the `LIKE ANY`/`ALL` forms.
+Krishiv never matches such strings by bytes.
+
+Two smaller differences in `UTF8_LCASE` `LIKE`: case folding uses Rust's Unicode tables, which are newer than the JDK 17/21 tables Spark runs on, so a case pair added after Unicode 15 matches in Krishiv and not in Spark; and a malformed pattern (invalid or trailing escape) is reported with the case-folded pattern text, where Spark reports it as written. Java's matching is one-directional for a few characters (the pattern `ß` matches only `ß`, the pattern `ẞ` matches both), which a folded comparison cannot express: the value `ẞ` against the pattern `ß` matches in Krishiv and not in Spark.

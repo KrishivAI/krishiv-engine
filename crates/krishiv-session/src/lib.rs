@@ -43,6 +43,7 @@
 
 mod access;
 mod action;
+mod admin_groups;
 mod admin_view;
 mod admission;
 mod analyze;
@@ -60,6 +61,7 @@ mod column;
 mod column_stats;
 mod command;
 mod conf;
+mod config_defaults;
 mod dataframe;
 mod delta;
 pub mod egress;
@@ -71,6 +73,7 @@ pub mod grants;
 mod history;
 mod identifier_clause;
 mod introspection;
+mod introspection_functions;
 #[cfg(test)]
 mod lineage_tests;
 #[cfg(feature = "unstable-ir")]
@@ -79,11 +82,14 @@ mod locals;
 #[cfg(feature = "telemetry-logs")]
 pub mod logging;
 mod memory_table;
+mod metric_view;
 mod monitor;
 mod nested_value;
 mod observation;
 #[cfg(feature = "telemetry-otlp")]
 pub mod otlp;
+#[cfg(feature = "unstable-ir")]
+pub mod parameter_types;
 mod partition_advice;
 mod partition_keys;
 mod partitions;
@@ -120,9 +126,11 @@ mod view_session_refs;
 mod window;
 
 pub use access::{PathPrefixPolicy, READ_ONLY_PRIVILEGES, ReadOnlyPolicy, StatementInfo};
+pub use admin_groups::{ResourceGroupDocument, ResourceGroupInfo};
 pub use admin_view::{QueryInfo, SessionInfo};
 pub use admission::{AdmissionController, Permit, QueryRequest, Unlimited};
 pub use analyze::{Analysis, AnalysisWarning, OutputColumn};
+pub use config_defaults::{ConfigListing, ConfigSource};
 pub use sessions::Transport;
 pub use system::{capabilities, register_build_features, register_surface};
 
@@ -154,6 +162,7 @@ pub use krishiv_udf_sdk::{
     ReturnField, ScalarUdf, Signature, StateField, UdfArg, UdfError, UdfInputType, UdfLibrary,
     UdfProperties,
 };
+pub use memory_table::BatchSource;
 pub use observation::Observation;
 pub use profile::{ExplainVerbose, OptimizerStep, VERBOSE_FORMAT, VERBOSE_VERSION};
 pub use python_udfs::{

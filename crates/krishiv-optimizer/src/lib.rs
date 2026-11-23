@@ -75,6 +75,7 @@ mod cse;
 mod dag;
 mod derived_keys;
 mod eager;
+mod empty;
 mod estimate;
 mod expr;
 mod fold;
@@ -95,6 +96,7 @@ mod repartition;
 mod restrict;
 mod semi_order;
 mod share_cte;
+mod share_scan;
 mod stats;
 mod sum_rewrite;
 mod win_magic;
@@ -104,8 +106,9 @@ use std::sync::Arc;
 use krishiv_common::config::{
     ANSI_ENABLED, AUTO_BROADCAST_JOIN_THRESHOLD, Config, ConfigValue, DERIVED_KEYS_ABOVE,
     EAGER_AGGREGATION, GROUP_KEY_CODE, JOIN_COST, JOIN_DP_LIMIT, JOIN_ENUMERATOR,
-    LATE_PAYLOAD_JOIN, PAYLOAD_ABOVE_AGGREGATE, SEMI_ANTI_JOIN_ORDER, SESSION_TIME_ZONE,
-    SHARE_CTE_INSTANCES, SHARE_REPEATED_SUBTREES, SUBQUERY_AS_WINDOW,
+    LATE_PAYLOAD_JOIN, PAYLOAD_ABOVE_AGGREGATE, PRE_AGGREGATE_EXPAND, PRESERVED_SIDE_SEMI_JOIN,
+    SEMI_ANTI_JOIN_ORDER, SESSION_TIME_ZONE, SHARE_CTE_INSTANCES, SHARE_FILTERED_SCANS,
+    SHARE_REPEATED_SUBTREES, SUBQUERY_AS_WINDOW,
 };
 use krishiv_common::error::{InternalError, KrishivError};
 use krishiv_plan::{
@@ -137,12 +140,14 @@ pub const MAX_ITERATIONS: usize = 100;
 type Rule = fn(Arc<LogicalPlan>) -> Arc<LogicalPlan>;
 
 /// The rewrite batch, in order, with the rules' names.
-const REWRITE: [(&str, Rule); 7] = [
+const REWRITE: [(&str, Rule); 9] = [
     ("RemoveAlias", project::remove_alias),
     ("CollapseRepartition", repartition::collapse),
     ("ConstantFolding", fold_node),
+    ("PruneObservedEmpty", empty::prune),
     ("PushDownFilter", pushdown::push_filter),
     ("PushDownJoinCondition", pushdown::push_join_condition),
+    ("PushDownAsOfCondition", pushdown::push_as_of_condition),
     ("CollapseProject", project::collapse),
     ("PushDownLimit", limit::push_limit),
 ];
@@ -188,6 +193,11 @@ pub struct Options {
     /// statistics say it pays. Needs statistics; a session configuration,
     /// when given, can switch it off.
     pub eager_aggregation: bool,
+    /// Grouping sets aggregate their input before the expansion repeats it
+    /// (`eager`, module `expand`), where no join takes the calls. Runs with
+    /// eager aggregation; a session configuration, when given, can switch it
+    /// off.
+    pub pre_aggregate_expand: bool,
     /// Late payload joins (`late_payload`): a dimension's payload columns
     /// join above the semi and anti joins that never read them. Needs
     /// statistics; a session configuration, when given, can switch it off.
@@ -206,6 +216,11 @@ pub struct Options {
     /// direct members, P3 W1 shape (b)). Runs only when
     /// `krishiv.optimizer.shareRepeatedSubtrees` is also on.
     pub share_repeated_subtrees: bool,
+    /// A table scan read only by filters is read once under the disjunction
+    /// of their predicates (`share_scan`). Needs statistics; runs only with a
+    /// session configuration where `krishiv.optimizer.shareFilteredScans` and
+    /// `krishiv.sql.optimizer.shareCteInstances` are on.
+    pub share_filtered_scans: bool,
     /// Group-key codes (`group_code`, design P2b D2): an aggregate's keys
     /// from one dimension travel as one integer code. Needs statistics; a
     /// session configuration, when given, must also switch it on
@@ -221,6 +236,12 @@ pub struct Options {
     /// `=` keys, in every place the rule runs (after the rewrite batch, in
     /// join ordering's loop, after restriction).
     pub inferred_join_filters: bool,
+    /// Preserved-side semi joins (`restrict`, TPC-DS q40/q80): the preserved
+    /// side of an outer join is reduced by a key-only semi join with a
+    /// filtered input an inner join above joins it to. Needs statistics; a
+    /// session configuration, when given, can switch it off
+    /// (`krishiv.optimizer.preservedSideSemiJoin`).
+    pub preserved_side_semi_join: bool,
 }
 
 impl Default for Options {
@@ -229,13 +250,16 @@ impl Default for Options {
             cse: true,
             stats_propagation: true,
             eager_aggregation: true,
+            pre_aggregate_expand: true,
             late_payload_join: true,
             payload_above_aggregate: true,
             subquery_as_window: true,
             share_repeated_subtrees: true,
+            share_filtered_scans: true,
             group_key_code: true,
             derived_keys_above: true,
             inferred_join_filters: true,
+            preserved_side_semi_join: true,
         }
     }
 }
@@ -527,7 +551,12 @@ fn run(
         // is ordered with its tree, so a second optimization finds nothing new.
         let estimates = stats.unwrap_or(&NoStatistics);
         let mut root = t.once("Restrict", &root, |r| {
-            restrict::restrict(Arc::clone(r), estimates, options.stats_propagation)
+            restrict::restrict(
+                Arc::clone(r),
+                estimates,
+                options.stats_propagation,
+                stats.is_some() && options.preserved_side_semi_join && joins.preserved_side,
+            )
         })?;
         if let Some(stats) = stats {
             root = order_and_restrict(root, stats, options, joins, &mut t)?;
@@ -590,6 +619,13 @@ fn run(
                     .and_then(ConfigValue::as_bool)
                     .unwrap_or(false)
             });
+        let expand = options.pre_aggregate_expand
+            && udfs.is_none_or(|(_, config)| {
+                config
+                    .get(&PRE_AGGREGATE_EXPAND)
+                    .and_then(ConfigValue::as_bool)
+                    .unwrap_or(true)
+            });
         // `krishiv.experimental.groupKeyCodeForce` (measurement only) also
         // switches it on, without the statistics test.
         let forced = udfs.is_some_and(|(_, config)| {
@@ -612,7 +648,7 @@ fn run(
                               t: &mut Trace|
          -> Result<(Arc<LogicalPlan>, bool), KrishivError> {
             let (root, deferred) = match stats {
-                Some(stats) if eager => eager_pass(&root, stats, options, joins, defer, t)?,
+                Some(stats) if eager => eager_pass(&root, stats, options, expand, joins, defer, t)?,
                 _ => (root, false),
             };
             // After eager aggregation (which may pre-empt it) and the final join
@@ -700,7 +736,7 @@ fn run(
                         // A join this leaves to the rule (the moved dimension's own,
                         // say) gets the pass without deferring below.
                         let (pushed, left) =
-                            eager_pass(&ordered, stats, options, joins, true, &mut t)?;
+                            eager_pass(&ordered, stats, options, expand, joins, true, &mut t)?;
                         deferred |= left;
                         ordered = pushed;
                     }
@@ -731,7 +767,8 @@ fn run(
                     root = before_payload(pre, false, &mut t)?.0;
                     t.steps.extend(notes);
                 } else if deferred {
-                    let (pushed, _) = eager_pass(&root, stats, options, joins, false, &mut t)?;
+                    let (pushed, _) =
+                        eager_pass(&root, stats, options, expand, joins, false, &mut t)?;
                     if !Arc::ptr_eq(&pushed, &root) {
                         root = prune_and_tidy(&pushed, Some(stats), &mut t)?;
                     }
@@ -768,7 +805,8 @@ fn run(
                     // the shape eager aggregation reads (where its gates allow,
                     // the aggregate then runs by the dimension's key below it).
                     if eager {
-                        ordered = eager_pass(&ordered, stats, options, joins, false, &mut t)?.0;
+                        ordered =
+                            eager_pass(&ordered, stats, options, expand, joins, false, &mut t)?.0;
                     }
                     prune_and_tidy(&ordered, Some(stats), &mut t)?
                 }
@@ -831,6 +869,22 @@ fn run(
         let root = if share {
             t.once("ShareCte", &root, |r| {
                 share_cte::share(Arc::clone(r), direct)
+            })?
+        } else {
+            root
+        };
+        // A scan read only by filters is read once (`share_scan`, TPC-DS q28).
+        let scans = share
+            && options.share_filtered_scans
+            && udfs.is_some_and(|(_, config)| {
+                config
+                    .get(&SHARE_FILTERED_SCANS)
+                    .and_then(ConfigValue::as_bool)
+                    .unwrap_or(true)
+            });
+        let root = if scans {
+            t.once("ShareFilteredScan", &root, |r| {
+                share_scan::share(Arc::clone(r), stats.unwrap_or(&NoStatistics))
             })?
         } else {
             root
@@ -900,6 +954,12 @@ fn join_settings(config: Option<&Config>, trace: bool) -> join_order::Settings {
         {
             s.semi_anti_order = on;
         }
+        if let Some(on) = config
+            .get(&PRESERVED_SIDE_SEMI_JOIN)
+            .and_then(ConfigValue::as_bool)
+        {
+            s.preserved_side = on;
+        }
     }
     s
 }
@@ -955,6 +1015,7 @@ fn eager_pass(
     root: &Arc<LogicalPlan>,
     stats: &dyn Statistics,
     options: &Options,
+    expand: bool,
     joins: join_order::Settings,
     defer: bool,
     t: &mut Trace,
@@ -963,7 +1024,13 @@ fn eager_pass(
         plan: after,
         notes,
         deferred,
-    } = eager::rewrite(Arc::clone(root), stats, options.stats_propagation, defer)?;
+    } = eager::rewrite(
+        Arc::clone(root),
+        stats,
+        options.stats_propagation,
+        defer,
+        expand,
+    )?;
     t.notes("EagerAggregate", &after, notes);
     // The moved aggregate changes what its join's inputs estimate, and so
     // their canonical order.
@@ -995,14 +1062,24 @@ fn order_and_restrict(
         let (ordered, trees) = join_order::reorder(&root, stats, propagate, joins);
         notes = trees;
         t.step("JoinOrder", round, "JoinOrder", &root, &ordered);
+        // Sorting a semi-join stack changes what the tree above it estimates
+        // (a stack's estimate depends on its order: a restriction's stack,
+        // TPC-DS q80), so a round that sorted one orders again.
+        let mut sorted_stack = false;
         let ordered = if joins.semi_anti_order {
             let sorted = semi_order::reorder(Arc::clone(&ordered), stats, propagate)?;
             t.step("JoinOrder", round, "SemiAntiOrder", &ordered, &sorted);
+            sorted_stack = !Arc::ptr_eq(&sorted, &ordered);
             sorted
         } else {
             ordered
         };
-        let restricted = restrict::restrict(Arc::clone(&ordered), stats, propagate)?;
+        let restricted = restrict::restrict(
+            Arc::clone(&ordered),
+            stats,
+            propagate,
+            options.preserved_side_semi_join && joins.preserved_side,
+        )?;
         t.step("JoinOrder", round, "Restrict", &ordered, &restricted);
         // A filter ordering or restriction leaves can reject the NULL rows of an outer join's
         // null-supplied side (an equality implied across two joins, `a = c` from `a = b` and
@@ -1040,7 +1117,7 @@ fn order_and_restrict(
             &rewritten,
             &inferred,
         );
-        let mut done = Arc::ptr_eq(&inferred, &ordered);
+        let mut done = Arc::ptr_eq(&inferred, &ordered) && !sorted_stack;
         // Pushed down and merged before ordering reads them again, so the
         // next round sees the inputs a second `optimize` would see.
         root = if Arc::ptr_eq(&inferred, &rewritten) {

@@ -187,8 +187,10 @@ fn class_of(
                 DynamicText::Authorized => StatementClass::Session,
             },
         },
-        // The legacy view nodes are temporary views with a one-part name:
-        // session-local, re-analyzed under the session's principal.
+        // The legacy view nodes have a one-part name: a temporary view, session-local and
+        // re-analyzed under the session's principal. A bare `DROP VIEW` may also drop a stored
+        // view of the current namespace; the session reclassifies that one as `DDL`
+        // (`Session::statement_class`).
         Statement::Set(_)
         | Statement::Reset(_)
         | Statement::Use(_)
@@ -238,7 +240,8 @@ fn class_of(
         | Statement::AlterTable(_)
         | Statement::AlterView(_)
         | Statement::AlterNamespace(_)
-        | Statement::Repair(_) => StatementClass::Ddl,
+        | Statement::Repair(_)
+        | Statement::CreateMetricView(_) => StatementClass::Ddl,
         // `ANALYZE TABLE` writes the table's statistics.
         Statement::Insert(_)
         | Statement::Delete(_)
@@ -428,6 +431,9 @@ pub fn statement_queries(statement: &Statement) -> Option<Vec<&Query>> {
         | Statement::LoadData(_)
         | Statement::ListResource(_)
         | Statement::AccessControl(_) => Vec::new(),
+        // A metric view's source and expressions are YAML text, read only when the session creates
+        // the view: its reads are not known here, so fail closed (`partial`), as `MERGE` does.
+        Statement::CreateMetricView(_) => return None,
     })
 }
 
@@ -468,6 +474,9 @@ pub enum TargetObject<'a> {
     CurrentNamespace,
     /// The current catalog.
     CurrentCatalog,
+    /// The catalog a `SHOW NAMESPACES IN name` names, or the namespace of the current catalog when
+    /// `name` is no catalog (resolved by the session).
+    NamedCatalog(&'a DdlName),
     /// A path, as written.
     Path(&'a str),
     /// The cluster: what the `ADMIN` class acts on.
@@ -631,6 +640,9 @@ pub fn statement_targets(statement: &Statement) -> Vec<Target<'_>> {
             out
         }
         Statement::DropNamespace(d) => vec![t(O::Namespace(&d.name), Drop)],
+        // Spark's v1 command ignores `OR REPLACE` (`metricViewCommands.scala:80-85`): nothing is
+        // dropped.
+        Statement::CreateMetricView(v) => vec![t(O::ParentOf(&v.name), Create)],
         Statement::CreatePermanentView(v) => {
             let (object, parent) = match (v.temporary, v.global) {
                 (true, false) => return Vec::new(),
@@ -662,6 +674,7 @@ pub fn statement_targets(statement: &Statement) -> Vec<Target<'_>> {
                 | AlterTableAction::AlterColumn { .. }
                 | AlterTableAction::SetTblProperties(_)
                 | AlterTableAction::SetComment(_)
+                | AlterTableAction::CommentOnColumns { .. }
                 | AlterTableAction::UnsetTblProperties { .. }
                 | AlterTableAction::SetSerdeProperties(_)
                 | AlterTableAction::SetPartitionSerdeProperties { .. }
@@ -728,7 +741,12 @@ pub fn statement_targets(statement: &Statement) -> Vec<Target<'_>> {
                     .map_or(O::Table(table), |namespace| O::TableIn { table, namespace }),
                 Browse,
             )],
-            ShowKind::Namespaces { .. } => vec![t(O::CurrentCatalog, Browse)],
+            ShowKind::Namespaces { namespace, .. } => vec![t(
+                namespace
+                    .as_ref()
+                    .map_or(O::CurrentCatalog, O::NamedCatalog),
+                Browse,
+            )],
             ShowKind::CreateTable { name, .. } | ShowKind::TblProperties { name, .. } => {
                 vec![t(O::Table(name), Browse)]
             }

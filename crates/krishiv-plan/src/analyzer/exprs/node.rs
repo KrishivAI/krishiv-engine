@@ -75,12 +75,8 @@ impl Resolver<'_> {
                 kind: TypedLiteralKind::Time,
                 value,
             } => {
-                if !self.ctx.conf.time_type {
-                    return Err(AnalysisError::new(
-                        krishiv_common::error::UnsupportedTimeType {},
-                        e.origin,
-                    ));
-                }
+                // Spark evaluates a `TIME '..'` literal with the gate off too (4.2.0 probe); the
+                // functions that take one refuse it (`unexecutable`).
                 // A time is a string cast to `TIME(6)` (design P2-T181): the
                 // value is checked again here, in case the plan came from a
                 // front end other than the SQL parser.
@@ -386,6 +382,12 @@ impl Resolver<'_> {
                         )
                         .with_origin(e.origin),
                     ));
+                    return Ok(b);
+                }
+                if !session_qualified
+                    && let Some(b) =
+                        self.collect_union_call(window_fn, lookup_name, e, f, &kids, cx)?
+                {
                     return Ok(b);
                 }
                 // Under `spark.sql.timestampType = TIMESTAMP_NTZ`, `to_timestamp`
@@ -1611,7 +1613,12 @@ impl Resolver<'_> {
                 }
                 bound
             }
-            ExprNode::Cast { to, mode, .. } => {
+            ExprNode::Cast {
+                expr: inner,
+                to,
+                mode,
+            } => {
+                let from_literal = is_time_literal_cast(inner, to, *mode);
                 let mode = match mode {
                     CastMode::Default if self.ctx.conf.ansi => CastMode::Ansi,
                     CastMode::Default => CastMode::Legacy,
@@ -1620,7 +1627,9 @@ impl Resolver<'_> {
                 // Spark's parser rejects the `TIME` type before any cast
                 // is checked (`spark.sql.timeType.enabled` is false by
                 // default; TIME cannot be evaluated here either way).
-                if !self.ctx.conf.time_type && to.any_type(&|t| matches!(t, DataType::Time { .. }))
+                if !self.ctx.conf.time_type
+                    && !from_literal
+                    && to.any_type(&|t| matches!(t, DataType::Time { .. }))
                 {
                     return Err(AnalysisError::new(
                         krishiv_common::error::UnsupportedTimeType {},
@@ -1753,7 +1762,7 @@ impl Resolver<'_> {
                 super::super::python_udtf::refuse_table_argument(kind, e.origin)?;
                 let env = self.sub_env(cx);
                 let saved = std::mem::take(&mut self.lambdas);
-                let rel = self.rel(plan, &env);
+                let rel = self.subquery_rel(plan, &env);
                 let stale = std::mem::replace(&mut self.lambdas, saved);
                 debug_assert!(stale.is_empty(), "a subquery leaks lambda scopes");
                 let rel = rel?;

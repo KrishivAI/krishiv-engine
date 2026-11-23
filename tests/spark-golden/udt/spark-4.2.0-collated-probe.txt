@@ -1,0 +1,7 @@
+# pyspark==4.2.0, probe_collated.py (serializedClass elided). A collation under a UDT is written inline in the UDT's
+# sqlType ("string collate UTF8_LCASE"), also when the UDT is a struct field (field metadata stays {}), and nested.
+TOPLEVEL-string  {"type":"udt","pyClass":"__main__.LUDT","serializedClass":"...","sqlType":"string collate UTF8_LCASE"}
+STRUCTFIELD-string  {"type":"struct","fields":[{"name":"p","type":{"type":"udt","pyClass":"__main__.LUDT","serializedClass":"...","sqlType":"string collate UTF8_LCASE"},"nullable":true,"metadata":{}}]}
+TOPLEVEL-array  {"type":"udt","pyClass":"__main__.AUDT","serializedClass":"...","sqlType":{"type":"array","elementType":"string collate UTF8_LCASE","containsNull":false}}
+STRUCTFIELD-array  {"type":"struct","fields":[{"name":"p","type":{"type":"udt","pyClass":"__main__.AUDT","serializedClass":"...","sqlType":{"type":"array","elementType":"string collate UTF8_LCASE","containsNull":false}},"nullable":true,"metadata":{}}]}
+REREAD (Parquet write and read, both): struct<p:udt>

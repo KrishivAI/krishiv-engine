@@ -44,6 +44,9 @@ use krishiv_plan::{
 
 use crate::cache::{RelationCache, is_cache_name};
 
+mod declared;
+#[cfg(test)]
+mod declared_tests;
 mod file_tables;
 mod key_facts;
 mod ndv_sampling;
@@ -52,9 +55,10 @@ mod script_results;
 mod session_catalog;
 
 use self::file_tables::{FileScanOf, reference_key};
-#[cfg(feature = "delta")]
-pub(crate) use self::scans::reads_files_at;
+pub(crate) use self::scans::reads_source;
 pub(crate) use self::scans::reads_stored_table;
+#[cfg(feature = "delta")]
+pub(crate) use self::scans::{reads_delta_root, reads_files_at};
 
 /// The session catalog's name, as Spark names it.
 pub(crate) const CATALOG: &str = "spark_catalog";
@@ -441,6 +445,24 @@ impl QueryCatalog {
         file_metadata(&format)
     }
 
+    /// The root of the Delta table `scan` reads, as [`crate::delta::DeltaReads::hadoop_root`] names it
+    /// (`file:/..`): a read by path (`` delta.`p` ``, `format("delta")`) or a catalog table whose entry
+    /// this query opened as a Delta read. `None`: not a Delta read (the hidden target of a row-level
+    /// statement is a provider entry, so it is none). `Some(Err)`: a Delta read whose root cannot be
+    /// resolved.
+    #[cfg(feature = "delta")]
+    pub(crate) fn delta_root(&self, scan: &Scan) -> Option<Result<String, KrishivError>> {
+        let source = match &scan.source {
+            source @ ReadSource::Files { .. } => source.clone(),
+            ReadSource::Table { name, .. } => match self.loaded_for(name).as_deref() {
+                Some(TempTable::Files { source, .. }) => source.clone(),
+                _ => return None,
+            },
+            _ => return None,
+        };
+        crate::delta::is_delta(&source).then(|| self.delta.hadoop_root(&source))
+    }
+
     /// The entry a scan of `name` (as the analyzer kept it) reads: a
     /// temporary view or table by its single part, a permanent table by
     /// `namespace.table`.
@@ -602,15 +624,17 @@ impl QueryCatalog {
             match &scan.scan.source {
                 ReadSource::Table { name, options } => {
                     let last = name.last().map_or("", String::as_str);
+                    // A declared catalog's table is opened on the driver with the session's
+                    // stores; a worker cannot open it yet (design P3-T067 PR-58b).
+                    if self.is_declared_scan(name, scan.scan.version) {
+                        return Err(self.declared_refusal(name, " in a distributed stage"));
+                    }
                     let Some(table) = self.loaded(last) else {
                         // A relation cache snapshot lives on the driver (design P3-T083
                         // §3.8): a memory snapshot is dealt as a memory table without a
                         // lease is (no assignment: a stage of one task reads it whole);
                         // a disk snapshot is a driver-local file no worker can open, so
                         // such a plan is refused, not failed as an internal error.
-                        if let Some(e) = self.declared_read(name) {
-                            return Err(e);
-                        }
                         if crate::cache::is_cache_name(last) {
                             if self.cache.is_on_disk(last) {
                                 return Err(unsupported(
@@ -618,6 +642,9 @@ impl QueryCatalog {
                                 ));
                             }
                             continue;
+                        }
+                        if let Some(e) = self.declared_read(name) {
+                            return Err(e);
                         }
                         return Err(InternalError {
                             message: format!("the scanned table {last} was not loaded"),
@@ -842,6 +869,7 @@ fn streaming_leaves(root: &PhysNode) -> (Vec<&krishiv_exec::physical::ScanNode>,
             | PhysNode::Generate { input, .. }
             | PhysNode::Expand { input, .. }
             | PhysNode::Limit { input, .. }
+            | PhysNode::Tail { input, .. }
             | PhysNode::Sort { input, .. }
             | PhysNode::TopN { input, .. }
             | PhysNode::LateFetch { input, .. }
@@ -1000,33 +1028,11 @@ pub(crate) fn table_source(table: &crate::store::CatalogTable) -> ReadSource {
     )
 }
 
-fn unsupported(feature: &str) -> KrishivError {
+pub(super) fn unsupported(feature: &str) -> KrishivError {
     KrishivUnsupportedFeature {
         feature: feature.to_owned(),
     }
     .into()
-}
-
-impl QueryCatalog {
-    /// The refusal of a scan of `name` in a declared catalog: such a catalog resolves names only for
-    /// now (design P3-T067 PR-58a), so its table is never loaded and its read is refused, not failed
-    /// as an internal error. `None` when `name` is no declared catalog's.
-    fn declared_read(&self, name: &[String]) -> Option<KrishivError> {
-        let catalog = match name {
-            [c, _, _, ..] if self.system.catalogs.catalog(c).is_some() => c.clone(),
-            [_] | [_, _]
-                if !self.catalog.eq_ignore_ascii_case(CATALOG)
-                    && !crate::system::is_system(&self.catalog) =>
-            {
-                self.catalog.clone()
-            }
-            _ => return None,
-        };
-        Some(unsupported(&format!(
-            "reading the tables of the declared catalog `{}`",
-            catalog.replace('`', "``")
-        )))
-    }
 }
 
 impl Catalog for QueryCatalog {
@@ -1138,6 +1144,12 @@ impl TableProviderResolver for QueryCatalog {
             _ => &self.scanned.other,
         };
         kind.store(true, std::sync::atomic::Ordering::SeqCst);
+        // A declared catalog's table, opened before planning (`open_declared`).
+        if let ReadSource::Table { name, .. } = &scan.source
+            && let Some(provider) = self.declared_provider(name, scan.version)
+        {
+            return Ok(provider);
+        }
         match &scan.source {
             ReadSource::Table { name, .. } if crate::system::is_system_table(name) => {
                 let table = name.last().map_or("", String::as_str);
@@ -1387,6 +1399,8 @@ pub(crate) struct Expansion {
     pub(crate) keeps: Vec<Keep>,
     /// Every stored view inlined, at any depth (review r10 M10).
     pub(crate) reached: Vec<ReachedView>,
+    /// The inlined query of each temporary view read (`AnalysisContext::temp_view_texts`).
+    pub(crate) temp_texts: Vec<Arc<LogicalPlan>>,
 }
 
 /// Whether creating the temporary view `name` over `plan` would close a
@@ -1662,7 +1676,9 @@ impl Pinner<'_> {
                     Some(table)
                         if matches!(
                             &*table,
-                            TempTable::Memory { .. } | TempTable::Files { .. }
+                            TempTable::Memory { .. }
+                                | TempTable::Files { .. }
+                                | TempTable::Provider { .. }
                         ) =>
                     {
                         let hidden = self.catalog.next_hidden_name();
@@ -1719,9 +1735,24 @@ fn quote(name: &str) -> String {
     format!("`{}`", name.replace('`', "``"))
 }
 
+/// A SQL path as Spark quotes it in `searchPath`: `[`a`.`b`, `c`]`.
+pub(crate) fn render_search_path(path: &[Vec<String>]) -> String {
+    let entries: Vec<String> = path.iter().map(|e| quote_parts(e)).collect();
+    format!("[{}]", entries.join(", "))
+}
+
+fn quote_parts(parts: &[String]) -> String {
+    parts.iter().map(|p| quote(p)).collect::<Vec<_>>().join(".")
+}
+
 /// Spark's search path, as analysis reports it for a missing table.
-pub(crate) fn search_path() -> String {
-    format!("[`system`.`builtin`, `system`.`session`, `{CATALOG}`.`{NAMESPACE}`]")
+///
+/// The last entry is the current namespace, as `USE` left it.
+pub(crate) fn search_path_in(namespace: &str) -> String {
+    format!(
+        "[`system`.`builtin`, `system`.`session`, `{CATALOG}`.`{}`]",
+        namespace.replace('`', "``")
+    )
 }
 
 /// `name` rejected as a temporary table or view name: it starts with the

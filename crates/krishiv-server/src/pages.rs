@@ -12,6 +12,8 @@
 //! `HttpOnly; SameSite=Strict` so no script and no link can read or replay it (T-W5), the token leaves the address
 //! bar at once and is never sent in a URL by the page (T-D7).
 
+use std::sync::Arc;
+
 use axum::Extension;
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
@@ -41,6 +43,7 @@ pub struct UiPolicy {
     /// Whether the `Host` header is checked at all (see [`UiPolicy::for_listener`]).
     enforce: bool,
     secure_cookie: bool,
+    embed: Arc<crate::embed::EmbedPolicy>,
 }
 
 impl Default for UiPolicy {
@@ -60,7 +63,21 @@ impl UiPolicy {
                 .collect(),
             enforce: true,
             secure_cookie: false,
+            embed: Arc::new(crate::embed::EmbedPolicy::default()),
         }
+    }
+
+    /// Lets the embeddable views be framed by `embed`'s origins and signs their links (P3-T071).
+    #[must_use]
+    pub fn with_embed(mut self, embed: crate::embed::EmbedPolicy) -> Self {
+        self.embed = Arc::new(embed);
+        self
+    }
+
+    /// The embedding settings.
+    #[must_use]
+    pub fn embed(&self) -> &crate::embed::EmbedPolicy {
+        &self.embed
     }
 
     /// The policy of a listener: on a loopback address the loopback names and `names` (DNS rebinding, T-W5: a
@@ -118,6 +135,36 @@ fn strip_port(h: &str) -> &str {
     match h.rsplit_once(':') {
         Some((name, port)) if !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) => name,
         _ => h,
+    }
+}
+
+/// The port of a `host[:port]` value, when it names one.
+fn port_of(h: &str) -> Option<&str> {
+    let rest = if h.starts_with('[') {
+        &h[h.find(']')? + 1..]
+    } else {
+        h
+    };
+    match rest.rsplit_once(':') {
+        Some((_, port)) if !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) => {
+            Some(port)
+        }
+        _ => None,
+    }
+}
+
+/// The name of the session cookie for the address a request was sent to: `krishiv_ui_token_<port>`, or
+/// `krishiv_ui_token` when the `Host` header names no port. A browser keeps cookies per host name, not per port,
+/// so two consoles on `127.0.0.1` (one per embedded session, each with its own port and token) would otherwise
+/// overwrite each other's cookie and sign each other out.
+pub(crate) fn session_cookie_name(headers: &HeaderMap) -> String {
+    let port = headers
+        .get(header::HOST)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|h| port_of(h.trim()));
+    match port {
+        Some(port) => format!("krishiv_ui_token_{port}"),
+        None => "krishiv_ui_token".to_owned(),
     }
 }
 
@@ -261,10 +308,11 @@ pub(crate) async fn environment(State(s): State<UiState>) -> Response {
 }
 
 /// `POST /api/internal/sql`: starts a statement; the body is `{"sql": "..."}`.
-#[utoipa::path(post, path = "/api/internal/sql", request_body = SqlRequest, responses((status = 202, description = "Started", body = SqlStarted)))]
+#[utoipa::path(post, path = "/api/internal/sql", request_body = SqlRequest, params(("traceparent" = Option<String>, Header, description = "W3C trace context; the statement joins this trace"), ("baggage" = Option<String>, Header, description = "W3C baggage")), responses((status = 202, description = "Started", body = SqlStarted)))]
 pub(crate) async fn sql_start(
     State(s): State<UiState>,
     caller: Option<Extension<Caller>>,
+    headers: HeaderMap,
     body: String,
 ) -> Response {
     let sql = serde_json::from_str::<Value>(&body)
@@ -286,7 +334,11 @@ pub(crate) async fn sql_start(
     }
     match s
         .source
-        .sql_start(&sql, caller.as_ref().map(|c| &c.0))
+        .sql_start_traced(
+            &sql,
+            caller.as_ref().map(|c| &c.0),
+            &crate::internal::InboundTrace::from_headers(&headers),
+        )
         .await
     {
         Ok(id) => json_response(StatusCode::ACCEPTED, &json!({"run_id": id})),
@@ -364,8 +416,9 @@ pub(crate) async fn create_session(State(s): State<UiState>, headers: HeaderMap)
     } else {
         ""
     };
+    let name = session_cookie_name(&headers);
     let cookie = format!(
-        "krishiv_ui_token={token}; HttpOnly; SameSite=Strict; Path=/api/internal; Max-Age=28800{secure}"
+        "{name}={token}; HttpOnly; SameSite=Strict; Path=/api/internal; Max-Age=28800{secure}"
     );
     let mut res = Response::new(axum::body::Body::empty());
     *res.status_mut() = StatusCode::NO_CONTENT;

@@ -13,6 +13,26 @@ impl Resolver<'_> {
         condition: &JoinCondition,
         env: &Arc<Env>,
     ) -> Result<Rel, AnalysisError> {
+        self.join_with(p, left, right, kind, condition, None, env)
+    }
+
+    /// A join, or with `as_of` an as-of join: the same inputs, condition, `USING` expansion and
+    /// output (Spark's `ResolveAsOfJoin` reuses the join's `USING` resolution), the match bound
+    /// over the two inputs.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the join's parts, as the plan node holds them"
+    )]
+    pub(in crate::analyzer) fn join_with(
+        &mut self,
+        p: &LogicalPlan,
+        left: &Arc<LogicalPlan>,
+        right: &Arc<LogicalPlan>,
+        kind: JoinKind,
+        condition: &JoinCondition,
+        as_of: Option<&AsOfMatch>,
+        env: &Arc<Env>,
+    ) -> Result<Rel, AnalysisError> {
         let lateral = matches!(kind, JoinKind::LateralInner | JoinKind::LateralLeft);
         let l = if lateral {
             self.rel(left, env)?
@@ -107,6 +127,11 @@ impl Resolver<'_> {
             out.extend(r.out.iter().map(|a| nullable(a, rn)));
         }
         let rels = [&l, &r];
+        // Spark binds the match before its `CheckAnalysis` checks the condition.
+        let as_of = match as_of {
+            Some(m) => Some(Arc::new(self.as_of_match(p.origin, m, &l, &r, env)?)),
+            None => None,
+        };
         let mut keys = None;
         let mut kind = kind;
         let condition = match condition {
@@ -197,14 +222,23 @@ impl Resolver<'_> {
         // Columns an earlier `USING` join merged away stay reachable above this join, and its
         // condition may read them (`a NATURAL JOIN b JOIN c ON b.k = c.k`): the inputs are
         // revealed, the join runs over the wide inputs and a projection restores the output.
-        // The `_metadata` of a file table an `ON` condition reads is widened into its input first.
+        // The `_metadata` of a file table an `ON` condition or an as-of operand reads is widened
+        // into its input first (Spark's `AddMetadataColumns` adds it to the side's output).
         let (l0, r0) = (l.clone(), r.clone());
-        let (l, r) = match (&condition, &kind) {
-            (JoinCondition::On(c), k) if !matches!(k, JoinKind::Existence(_)) => (
-                self.reveal_exprs(&l0, std::iter::once(c))?,
-                self.reveal_exprs(&r0, std::iter::once(c))?,
-            ),
-            _ => (l0.clone(), r0.clone()),
+        let read: Vec<&Arc<Expr>> = match &condition {
+            JoinCondition::On(c) => Some(c),
+            _ => None,
+        }
+        .into_iter()
+        .chain(as_of.iter().flat_map(|m| [&m.left, &m.right]))
+        .collect();
+        let (l, r) = if read.is_empty() || matches!(kind, JoinKind::Existence(_)) {
+            (l0.clone(), r0.clone())
+        } else {
+            (
+                self.reveal_exprs(&l0, read.iter().copied())?,
+                self.reveal_exprs(&r0, read.iter().copied())?,
+            )
         };
         let wide = if !matches!(kind, JoinKind::Existence(_)) {
             let (wl, wr) = (self.reveal_hidden(&l)?, self.reveal_hidden(&r)?);
@@ -213,11 +247,20 @@ impl Resolver<'_> {
             None
         };
         let (jl, jr) = wide.as_ref().map_or((&l, &r), |(a, b)| (a, b));
-        let node = PlanNode::Join {
-            left: Arc::clone(&jl.plan),
-            right: Arc::clone(&jr.plan),
-            kind,
-            condition,
+        let node = match as_of {
+            Some(as_of) => PlanNode::AsOfJoin {
+                left: Arc::clone(&jl.plan),
+                right: Arc::clone(&jr.plan),
+                kind,
+                condition,
+                as_of,
+            },
+            None => PlanNode::Join {
+                left: Arc::clone(&jl.plan),
+                right: Arc::clone(&jr.plan),
+                kind,
+                condition,
+            },
         };
         let Some(keys) = keys else {
             let Some((wl, wr)) = &wide else {
@@ -540,65 +583,7 @@ impl Resolver<'_> {
         let inner = if columns.is_empty() {
             c
         } else {
-            if columns.len() != c.out.len() {
-                if let Some(func) = generator_relation_name(input) {
-                    return Err(AnalysisError::new(
-                        NumTableValueAliasesMismatch {
-                            func_name: format!("`{func}`"),
-                            aliases_num: columns.len().to_string(),
-                            out_cols_num: c.out.len().to_string(),
-                        },
-                        p.origin,
-                    ));
-                }
-                return Err(AnalysisError::new(
-                    AssignmentArityMismatch {
-                        num_target: c.out.len().to_string(),
-                        num_expr: columns.len().to_string(),
-                    },
-                    p.origin,
-                ));
-            }
-            let mut exprs = Vec::new();
-            let mut out = Vec::new();
-            for (a, name) in c.out.iter().zip(columns) {
-                let output = BoundColumn {
-                    id: self.fresh(),
-                    name: name.clone(),
-                    ..a.col.clone()
-                };
-                self.carry_column_meta(a.col.id, output.id);
-                exprs.push(Arc::new(Expr::new(ExprNode::Resolved(
-                    ResolvedExpr::Alias {
-                        expr: col_expr(&a.col, Origin::UNKNOWN),
-                        output: output.clone(),
-                    },
-                ))));
-                out.push(Attr {
-                    col: output,
-                    qual: no_qual(),
-                    source: a.source.clone(),
-                    // Spark's `Alias` keeps its child's metadata.
-                    duplicate: a.duplicate,
-                });
-            }
-            let node = PlanNode::Project {
-                input: Arc::clone(&c.plan),
-                exprs: exprs.clone(),
-            };
-            let mut renamed = self.make(Origin::UNKNOWN, node, out, &[&c]);
-            // A file table's `_metadata` stays reachable through the renaming.
-            let meta: Vec<Attr> = c
-                .hidden
-                .iter()
-                .filter(|a| is_generated_metadata(a))
-                .cloned()
-                .collect();
-            if !meta.is_empty() {
-                renamed.hidden = meta.into();
-                renamed.widen = Some(Arc::new(Widen::Project { input: c, exprs }));
-            }
-            renamed
+            self.rename_by_position(p, input, c, columns, true)?
         };
         let qual: Arc<[String]> = alias
             .split(crate::plan::ALIAS_PART_SEP)
@@ -633,5 +618,180 @@ impl Resolver<'_> {
             rel.widen = Some(Arc::new(Widen::Through { child: inner }));
         }
         Ok(rel)
+    }
+
+    /// `c` with its columns renamed by position and its qualifiers dropped (Spark's
+    /// `UnresolvedSubqueryColumnAliases`: a derived table's column list and `toDF`).
+    pub(in crate::analyzer) fn rename_by_position(
+        &mut self,
+        p: &LogicalPlan,
+        input: &Arc<LogicalPlan>,
+        c: Rel,
+        columns: &[String],
+        sql_table_function_form: bool,
+    ) -> Result<Rel, AnalysisError> {
+        if columns.len() != c.out.len() {
+            // Only the SQL `FROM func(..) t(a, b)` form is Spark's `UnresolvedTVFAliases`; a
+            // derived table's column list and `toDF` always raise the arity error below.
+            let generator = if sql_table_function_form {
+                generator_relation_name(input)
+            } else {
+                None
+            };
+            if let Some(func) = generator {
+                return Err(AnalysisError::new(
+                    NumTableValueAliasesMismatch {
+                        func_name: format!("`{func}`"),
+                        aliases_num: columns.len().to_string(),
+                        out_cols_num: c.out.len().to_string(),
+                    },
+                    p.origin,
+                ));
+            }
+            return Err(AnalysisError::new(
+                AssignmentArityMismatch {
+                    num_target: c.out.len().to_string(),
+                    num_expr: columns.len().to_string(),
+                },
+                p.origin,
+            ));
+        }
+        let mut exprs = Vec::new();
+        let mut out = Vec::new();
+        for (a, name) in c.out.iter().zip(columns) {
+            let output = BoundColumn {
+                id: self.fresh(),
+                name: name.clone(),
+                ..a.col.clone()
+            };
+            self.carry_column_meta(a.col.id, output.id);
+            exprs.push(Arc::new(Expr::new(ExprNode::Resolved(
+                ResolvedExpr::Alias {
+                    expr: col_expr(&a.col, Origin::UNKNOWN),
+                    output: output.clone(),
+                },
+            ))));
+            out.push(Attr {
+                col: output,
+                qual: no_qual(),
+                source: a.source.clone(),
+                // Spark's `Alias` keeps its child's metadata.
+                duplicate: a.duplicate,
+            });
+        }
+        let node = PlanNode::Project {
+            input: Arc::clone(&c.plan),
+            exprs: exprs.clone(),
+        };
+        let mut renamed = self.make(Origin::UNKNOWN, node, out, &[&c]);
+        // A file table's `_metadata` stays reachable through the renaming.
+        let meta: Vec<Attr> = c
+            .hidden
+            .iter()
+            .filter(|a| is_generated_metadata(a))
+            .cloned()
+            .collect();
+        if !meta.is_empty() {
+            renamed.hidden = meta.into();
+            renamed.widen = Some(Arc::new(Widen::Project { input: c, exprs }));
+        }
+        Ok(renamed)
+    }
+
+    /// A [`PlanNode::ColumnNames`] as a relation of its own: `renamed["x"]` resolves against it,
+    /// also when the operation changed nothing and returned the child. Out of line so the
+    /// resolver's dispatch frame, on its recursion path, stays small.
+    #[inline(never)]
+    pub(in crate::analyzer) fn column_names_node(
+        &mut self,
+        p: &LogicalPlan,
+        input: &Arc<LogicalPlan>,
+        op: &crate::ColumnNamesOp,
+        env: &Arc<Env>,
+    ) -> Result<Rel, AnalysisError> {
+        let mut r = self.column_names(p, input, op, env)?;
+        if let Some(id) = p.origin.plan_id {
+            let out = Arc::clone(&r.out);
+            Arc::make_mut(&mut r.carriers).insert(id, vec![out]);
+        }
+        Ok(r)
+    }
+
+    /// A [`PlanNode::ColumnNames`]: the input's columns by name, as Spark's `toDF`,
+    /// `withColumnsRenamed` and `drop(names)` resolve them. The node is not kept.
+    pub(in crate::analyzer) fn column_names(
+        &mut self,
+        p: &LogicalPlan,
+        input: &Arc<LogicalPlan>,
+        op: &crate::ColumnNamesOp,
+        env: &Arc<Env>,
+    ) -> Result<Rel, AnalysisError> {
+        use crate::ColumnNamesOp;
+        let c = self.child(input, env)?;
+        let cs = self.ctx.conf.case_sensitive;
+        let same = |a: &str, b: &str| crate::analyzer::bind::same(a, b, cs);
+        match op {
+            ColumnNamesOp::ToDf(names) => self.rename_by_position(p, input, c, names, false),
+            ColumnNamesOp::Rename(pairs) => {
+                let mut names: Vec<String> = c.out.iter().map(|a| a.col.name.clone()).collect();
+                let mut changed = vec![false; names.len()];
+                for (from, to) in pairs {
+                    for (n, ch) in names.iter_mut().zip(changed.iter_mut()) {
+                        if same(n, from) {
+                            n.clone_from(to);
+                            *ch = true;
+                        }
+                    }
+                }
+                let exprs: Vec<Arc<Expr>> = c
+                    .out
+                    .iter()
+                    .zip(names.iter().zip(&changed))
+                    .map(|(a, (n, ch))| {
+                        if *ch {
+                            Arc::new(Expr::new(ExprNode::Alias {
+                                expr: self.pass_expr(&a.col),
+                                name: n.clone(),
+                            }))
+                        } else {
+                            self.pass_expr(&a.col)
+                        }
+                    })
+                    .collect();
+                self.project_items(p, &c, &exprs, env)
+            }
+            ColumnNamesOp::Drop { names, columns } => {
+                // A column reference resolves like any other (Spark's
+                // `ResolveDataFrameDropColumns`): ambiguous is an error, not found is ignored,
+                // found drops that one attribute by id.
+                let mut dropped_ids = Vec::new();
+                for name in columns {
+                    if let Some((a, _)) =
+                        self.find(&c.out, std::slice::from_ref(name), p.origin, false)?
+                    {
+                        dropped_ids.push(a.col.id);
+                    }
+                }
+                let dropped = |a: &Attr| {
+                    dropped_ids.contains(&a.col.id) || names.iter().any(|d| same(&a.col.name, d))
+                };
+                if !c.out.iter().any(&dropped) {
+                    return Ok(c);
+                }
+                let exprs: Vec<Arc<Expr>> = c
+                    .out
+                    .iter()
+                    .filter(|a| !dropped(a))
+                    .map(|a| self.pass_expr(&a.col))
+                    .collect();
+                self.project_items(p, &c, &exprs, env)
+            }
+            ColumnNamesOp::DropNa {
+                subset,
+                min_non_nulls,
+            } => self.drop_na(p, c, subset, *min_non_nulls, env),
+            ColumnNamesOp::FillNa { cols, values } => self.fill_na(p, c, cols, values, env),
+            ColumnNamesOp::Replace { cols, pairs } => self.replace_na(p, c, cols, pairs, env),
+        }
     }
 }

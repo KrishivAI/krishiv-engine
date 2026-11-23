@@ -15,6 +15,7 @@ use krishiv_common::error::KrishivError;
 use krishiv_types::StructType;
 
 use super::commit::CommitTable;
+use super::rest_commit::RestCommitTable;
 use super::scan;
 use super::storage::{Registered, StorageRegistration, from_iceberg};
 use super::types::spark_schema;
@@ -22,6 +23,7 @@ use crate::plan::deletes::DeleteIndex;
 use crate::plan::{
     ManifestFilter, PruneOptions, ScanPlan, TableSnapshot, VersionSpec, WriterMetrics,
 };
+use crate::rest_commit::RestCommitTransport;
 use krishiv_common::config::{
     CATALOG_MAX_METADATA_BYTES, Config, ConfigValue, ICEBERG_MANIFEST_CACHE_BYTES,
 };
@@ -31,6 +33,67 @@ const DEFAULT_MAX_METADATA_BYTES: u64 = 256 << 20;
 /// The default of `krishiv.iceberg.manifestCache.bytes`.
 const DEFAULT_MANIFEST_CACHE_BYTES: u64 = 64 << 20;
 use krishiv_io::PushdownExpr;
+
+/// `krishiv.catalog.maxMetadataBytes` of `config`, else its default.
+fn max_metadata_bytes(config: &Config) -> u64 {
+    config
+        .get(&CATALOG_MAX_METADATA_BYTES)
+        .and_then(ConfigValue::as_size)
+        .unwrap_or(DEFAULT_MAX_METADATA_BYTES)
+}
+
+/// An Iceberg table's metadata document as a catalog returned it (the
+/// `metadata` of an Iceberg REST `loadTable` response), parsed: its schema and
+/// snapshots are known before any file of the table is read.
+#[derive(Clone)]
+pub struct IcebergMetadata(Arc<TableMetadata>);
+
+impl fmt::Debug for IcebergMetadata {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("IcebergMetadata")
+            .field("table_uuid", &self.0.uuid())
+            .field("current_snapshot", &self.current_snapshot_id())
+            .finish_non_exhaustive()
+    }
+}
+
+impl IcebergMetadata {
+    /// The metadata document `value` (Iceberg's table metadata JSON, format 1 to 3).
+    ///
+    /// # Errors
+    /// `INTERNAL_ERROR` naming iceberg-rust's message for a document it cannot
+    /// parse or that breaks the spec.
+    pub fn from_json(value: serde_json::Value) -> Result<Self, KrishivError> {
+        serde_json::from_value::<TableMetadata>(value)
+            .map(|m| Self(Arc::new(m)))
+            .map_err(|e| {
+                krishiv_common::error::InternalError {
+                    message: format!("Iceberg table metadata that does not parse: {e}"),
+                }
+                .into()
+            })
+    }
+
+    /// The snapshot `version` reads and its schema, as [`IcebergTable::snapshot`].
+    ///
+    /// # Errors
+    /// As [`IcebergTable::snapshot`].
+    pub fn snapshot(&self, version: &VersionSpec) -> Result<TableSnapshot, KrishivError> {
+        scan::table_snapshot(&self.0, version)
+    }
+
+    /// The current snapshot's id; `None` for a table without one.
+    #[must_use]
+    pub fn current_snapshot_id(&self) -> Option<i64> {
+        self.0.current_snapshot_id()
+    }
+
+    /// The table's root location (`location`).
+    #[must_use]
+    pub fn location(&self) -> &str {
+        self.0.location()
+    }
+}
 
 /// An Iceberg table's metadata, read through a [`StorageRegistration`].
 pub struct IcebergTable {
@@ -87,14 +150,7 @@ impl IcebergTable {
         name: &str,
         config: &Config,
     ) -> Result<Self, KrishivError> {
-        let manifest_cache_bytes = config
-            .get(&ICEBERG_MANIFEST_CACHE_BYTES)
-            .and_then(ConfigValue::as_size)
-            .unwrap_or(DEFAULT_MANIFEST_CACHE_BYTES);
-        let max_metadata_bytes = config
-            .get(&CATALOG_MAX_METADATA_BYTES)
-            .and_then(ConfigValue::as_size)
-            .unwrap_or(DEFAULT_MAX_METADATA_BYTES);
+        let max_metadata_bytes = max_metadata_bytes(config);
         let file_io = storage.file_io();
         let size = file_io
             .new_input(metadata_location)
@@ -108,6 +164,65 @@ impl IcebergTable {
             .await
             .map_err(from_iceberg)?;
         let ident = TableIdent::from_strs([namespace, name]).map_err(from_iceberg)?;
+        Self::build(
+            storage,
+            file_io,
+            Arc::new(metadata),
+            metadata_location,
+            ident,
+            config,
+        )
+    }
+
+    /// The table whose metadata a catalog returned (`metadata`, read from its
+    /// `metadata_location` by the catalog, as Java's REST catalog takes it from
+    /// the `loadTable` response), named `namespace.name`; no metadata file is
+    /// read here. Manifests read later go through `storage` under the parse
+    /// limit of `config`, as for [`Self::load_with_config`].
+    ///
+    /// # Errors
+    /// `INTERNAL_ERROR` for a namespace or name iceberg-rust refuses, or a
+    /// registration that is gone.
+    pub fn from_metadata(
+        storage: &StorageRegistration,
+        metadata: &IcebergMetadata,
+        metadata_location: &str,
+        namespace: &[String],
+        name: &str,
+        config: &Config,
+    ) -> Result<Self, KrishivError> {
+        let ident = TableIdent::from_strs(
+            namespace
+                .iter()
+                .map(String::as_str)
+                .chain(std::iter::once(name)),
+        )
+        .map_err(from_iceberg)?;
+        Self::build(
+            storage,
+            storage.file_io(),
+            Arc::clone(&metadata.0),
+            metadata_location,
+            ident,
+            config,
+        )
+    }
+
+    /// The table over `metadata`, read through `file_io` (resolved by the
+    /// registration's name on first use; a `FileIO` that already read through it
+    /// keeps working after the registration is dropped).
+    fn build(
+        storage: &StorageRegistration,
+        file_io: iceberg::io::FileIO,
+        metadata: Arc<TableMetadata>,
+        metadata_location: &str,
+        ident: TableIdent,
+        config: &Config,
+    ) -> Result<Self, KrishivError> {
+        let manifest_cache_bytes = config
+            .get(&ICEBERG_MANIFEST_CACHE_BYTES)
+            .and_then(ConfigValue::as_size)
+            .unwrap_or(DEFAULT_MANIFEST_CACHE_BYTES);
         let table = Table::builder()
             .metadata(metadata)
             .metadata_location(metadata_location)
@@ -121,23 +236,30 @@ impl IcebergTable {
         Ok(Self {
             table,
             registered,
-            max_metadata_bytes,
+            max_metadata_bytes: max_metadata_bytes(config),
             manifest_cache_bytes,
             committer: None,
         })
     }
 
     /// The same table committing through `committer`: providers opened over
-    /// it declare `BATCH_WRITE` and append ([`super::sink`]). Crate-private
-    /// until the catalog clients (PR-17) build a `CommitTable`.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "PR-17's catalog clients attach their committer")
-    )]
+    /// it declare `BATCH_WRITE` and append ([`super::sink`]).
     #[must_use]
     pub(crate) fn with_committer(mut self, committer: Arc<dyn CommitTable>) -> Self {
         self.committer = Some(committer);
         self
+    }
+
+    /// The same table committing through an Iceberg REST catalog's commit
+    /// endpoint (`transport`, [`crate::rest_commit`]): providers opened over
+    /// it at the current version declare `BATCH_WRITE`, `TRUNCATE`,
+    /// `OVERWRITE_BY_FILTER` and `OVERWRITE_DYNAMIC` and offer copy-on-write
+    /// row-level changes; each commit is the spec's `CommitTableRequest` for
+    /// this table's identifier, its answers mapped as design note §7.2 says.
+    #[must_use]
+    pub fn with_rest_commit(self, transport: Arc<dyn RestCommitTransport>) -> Self {
+        let ident = self.table.identifier().clone();
+        self.with_committer(Arc::new(RestCommitTable::new(transport, ident)))
     }
 
     /// The current schema as Spark's Iceberg integration shows it.

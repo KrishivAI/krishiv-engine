@@ -11,9 +11,12 @@ use super::ast::{BinaryOp, ExprKind, SetExprKind, SetKind, Span, Statement};
 use super::lexer::{TokenKind, tokenize, unescape_string};
 use super::*;
 
+mod asof;
 mod commands;
 mod function;
 mod golden_syntax;
+mod json_table;
+mod metric_view;
 mod probe;
 mod sample;
 mod tail;

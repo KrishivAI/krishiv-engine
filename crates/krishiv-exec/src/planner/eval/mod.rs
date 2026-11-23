@@ -911,7 +911,13 @@ fn builtin(
         // `rlike(a, b)` is Spark's `RLike(a, b)`: the `regexp_like` kernel
         // over the same arguments, reporting Spark's `rlike` name.
         (Builtin::RLike, 2) => func::compile("rlike", f, args, input, e)?,
-        (Builtin::When, n) if n >= 2 => cond::when(args, out, env)?,
+        (Builtin::When, n) if n >= 2 => {
+            let whole = f
+                .args
+                .iter()
+                .all(|a| krishiv_plan::runs_on_any_row(a, env.ansi));
+            cond::when(args, out, env, whole)?
+        }
         (Builtin::Concat, _) => strings::concat(args, f.nullable)?,
         _ => {
             return Err(unsupported(&format!(
@@ -930,6 +936,12 @@ fn runs_anywhere(f: &ResolvedFunction, i: usize, ansi: bool) -> bool {
     f.args
         .get(i)
         .is_some_and(|a| !krishiv_plan::may_raise(a, ansi) && krishiv_plan::is_deterministic(a))
+}
+
+/// `e IS NOT NULL`, built after optimization (the optimizer folds it over a non-nullable `e`,
+/// which would drop `e`'s evaluation and so what it raises).
+pub(crate) fn is_not_null(e: Arc<dyn PhysExpr>) -> Arc<dyn PhysExpr> {
+    logic::is_null(false, e)
 }
 
 /// Kleene `l AND r`.

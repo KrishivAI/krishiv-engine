@@ -16,7 +16,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use arrow_array::RecordBatch;
 use arrow_flight::sql::{CommandStatementQuery, ProstMessageExt, TicketStatementQuery};
 use arrow_flight::{FlightData, FlightEndpoint, FlightInfo, Ticket};
-use arrow_schema::SchemaRef;
+use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use futures::stream::{self, BoxStream, Stream, StreamExt};
 use krishiv_common::error::{
     ErrorClass, InternalError, InvalidHandleFormat, InvalidHandleOperationNotFound, KrishivError,
@@ -35,7 +35,7 @@ use tokio::sync::OwnedSemaphorePermit;
 use tonic::metadata::MetadataMap;
 use tonic::{Response, Status};
 
-use crate::call::{CallSession, shutting_down};
+use crate::call::{CallSession, shutting_down, traced};
 use crate::cookies::{SessionCookie, session_cookie};
 use crate::encode::{RESPONSE_CONSUMER, encode_results};
 use crate::handles::HandleId;
@@ -343,6 +343,35 @@ pub(crate) fn not_found() -> KrishivError {
     .into()
 }
 
+/// `schema` as a `FlightInfo` or a prepared statement announces it: each top-level decimal column
+/// with the Flight SQL column metadata `ARROW:FLIGHT:SQL:PRECISION` and `ARROW:FLIGHT:SQL:SCALE`
+/// (FlightSql.proto `CommandStatementQuery`). Arrow's JDBC driver reads `ResultSetMetaData`
+/// precision and scale only from these, never from the Arrow type. The streamed batches carry
+/// none (the keys are optional; a client's schema check compares types).
+pub(crate) fn described(schema: &Schema) -> Schema {
+    let fields: Vec<Field> = schema
+        .fields()
+        .iter()
+        .map(|f| {
+            let (precision, scale) = match f.data_type() {
+                DataType::Decimal32(p, s)
+                | DataType::Decimal64(p, s)
+                | DataType::Decimal128(p, s)
+                | DataType::Decimal256(p, s) => (*p, *s),
+                _ => return f.as_ref().clone(),
+            };
+            let mut metadata = f.metadata().clone();
+            metadata.insert(
+                "ARROW:FLIGHT:SQL:PRECISION".to_owned(),
+                precision.to_string(),
+            );
+            metadata.insert("ARROW:FLIGHT:SQL:SCALE".to_owned(), scale.to_string());
+            f.as_ref().clone().with_metadata(metadata)
+        })
+        .collect();
+    Schema::new_with_metadata(fields, schema.metadata().clone())
+}
+
 /// The `FlightInfo` of a statement handle (design §4.1).
 pub(crate) fn flight_info(
     schema: &SchemaRef,
@@ -353,7 +382,7 @@ pub(crate) fn flight_info(
         statement_handle: id.as_bytes().to_vec().into(),
     };
     FlightInfo::new()
-        .try_with_schema(schema)
+        .try_with_schema(&described(schema))
         .map_err(|e| internal(format!("encoding a schema: {e}")))
         .map(|info| {
             info.with_endpoint(
@@ -380,7 +409,7 @@ impl FlightSqlServer {
         // A session this call created is released when the call ends, by an error or a dropped
         // future, unless the answer naming it goes out (`kept`, review M4).
         let mut call = self.call_session(metadata, caller)?;
-        let (schema, mut slot) = self.run_statement(&mut call, sql).await?;
+        let (schema, mut slot) = self.run_statement(&mut call, sql, metadata).await?;
         let mut response = Response::new(flight_info(&schema, &slot.id, descriptor)?);
         call.cookie_on(&mut response);
         call.kept();
@@ -393,6 +422,7 @@ impl FlightSqlServer {
         &self,
         call: &mut CallSession,
         sql: Arc<str>,
+        metadata: &MetadataMap,
     ) -> Result<(SchemaRef, SlotGuard), Status> {
         let inner = &self.inner;
         let cap = call.owner.cap_key();
@@ -450,9 +480,12 @@ impl FlightSqlServer {
                     // §16 m2), even when storing its result fails.
                     call.mark_changed();
                 }
-                let options = QueryOptions::new()
-                    .operation_id(op.id())
-                    .query_start(query_start);
+                let options = traced(
+                    QueryOptions::new()
+                        .operation_id(op.id())
+                        .query_start(query_start),
+                    metadata,
+                );
                 session
                     .sql_command_with(&sql, options)
                     .await
@@ -635,12 +668,15 @@ impl FlightSqlServer {
         ) = match &payload.kind {
             Kind::Query(announced) => {
                 let gate = entry.shared().await;
-                let options = QueryOptions::new()
-                    .operation_id(op.id())
-                    .query_start(payload.query_start_micros)
-                    // The ticket was issued before any drain (a drain refuses new statements): a
-                    // fetch is work the server accepted, which a drain lets finish (T066 §5.1).
-                    .admitted_before_drain();
+                let options = traced(
+                    QueryOptions::new()
+                        .operation_id(op.id())
+                        .query_start(payload.query_start_micros)
+                        // The ticket was issued before any drain (a drain refuses new statements): a
+                        // fetch is work the server accepted, which a drain lets finish (T066 §5.1).
+                        .admitted_before_drain(),
+                    metadata,
+                );
                 let df = session
                     .sql_query_with(&payload.sql, options)
                     .await
@@ -827,6 +863,37 @@ fn client_reason(e: &KrishivError) -> String {
 mod tests {
     use super::*;
     use krishiv_common::error::{ErrorClass, KrishivSpillIoError};
+
+    /// Note §17 A3: each top-level decimal column of an announced schema carries Flight SQL's
+    /// precision and scale; other columns, and the metadata a field had, are kept as they were.
+    #[test]
+    fn described_decimals_carry_precision_and_scale() {
+        let kept = std::collections::HashMap::from([("k".to_owned(), "v".to_owned())]);
+        let schema = Schema::new_with_metadata(
+            vec![
+                Field::new("d", DataType::Decimal128(25, 2), true).with_metadata(kept.clone()),
+                Field::new("w", DataType::Decimal256(40, 0), true),
+                Field::new("s", DataType::Utf8, true),
+            ],
+            kept.clone(),
+        );
+        let out = described(&schema);
+        let meta = |i: usize, key: &str| out.field(i).metadata().get(key).cloned();
+        assert_eq!(meta(0, "ARROW:FLIGHT:SQL:PRECISION").as_deref(), Some("25"));
+        assert_eq!(meta(0, "ARROW:FLIGHT:SQL:SCALE").as_deref(), Some("2"));
+        assert_eq!(meta(0, "k").as_deref(), Some("v"));
+        assert_eq!(meta(1, "ARROW:FLIGHT:SQL:PRECISION").as_deref(), Some("40"));
+        assert_eq!(meta(1, "ARROW:FLIGHT:SQL:SCALE").as_deref(), Some("0"));
+        assert!(out.field(2).metadata().is_empty());
+        assert_eq!(out.metadata(), &kept);
+        let types: Vec<_> = out.fields().iter().map(|f| f.data_type().clone()).collect();
+        let before: Vec<_> = schema
+            .fields()
+            .iter()
+            .map(|f| f.data_type().clone())
+            .collect();
+        assert_eq!(types, before, "types unchanged");
+    }
 
     /// A result that was not stored because the session was closed by shutdown is told apart from
     /// one that failed for its own reason, though `store_command` wraps both (review of d54cd33f4).

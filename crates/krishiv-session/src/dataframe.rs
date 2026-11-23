@@ -34,6 +34,7 @@ mod geo_gate;
 mod observe;
 pub use observe::ObservedSink;
 pub(crate) use observe::{Observers, PendingObservations, deliver};
+mod boxed;
 mod count;
 mod metadata;
 mod traced;
@@ -208,10 +209,15 @@ pub struct DataFrame {
     /// a frame `Session::sql` returned, absent for one a transformation
     /// built.
     trace: Option<Arc<crate::telemetry::QueryTrace>>,
-    /// The statement this frame runs as when it has no analysis of its own yet: set for the
-    /// `count(*)` frame [`Self::count`] builds over a `Session::sql` frame, so its analysis keeps
-    /// the statement's text, class, `system.queries` row and sample salt.
+    /// The statement this frame runs as when it has no analysis of its own yet: the first
+    /// statement the frame came from (a frame derived from a `Session::sql` frame, whatever its
+    /// inputs), so its analysis keeps the statement's text, class, `system.queries` row and
+    /// sample salt.
     statement: Option<Arc<QueryEnv>>,
+    /// Whether this frame's analysis errors render SQL spans against `statement`'s text: only
+    /// the `count(*)` frame [`Self::count`] builds, which adds no expression of its own. A frame
+    /// derived by any other call has its own expressions, whose errors carry a DataFrame context.
+    statement_spans: bool,
     /// Owns what the plan reads by a name no SQL spells (a script result's table), as long as it lives.
     pub(crate) keep: Vec<Arc<dyn std::any::Any + Send + Sync>>,
 }
@@ -242,6 +248,7 @@ impl DataFrame {
             invalid: None,
             trace: None,
             statement: None,
+            statement_spans: false,
             keep: Vec::new(),
         }
     }
@@ -282,7 +289,8 @@ impl DataFrame {
             analysis: Arc::default(),
             invalid: self.invalid.clone(),
             trace: None,
-            statement: None,
+            statement: self.statement_for_derived(),
+            statement_spans: false,
             keep: self.keep.clone(),
         }
     }
@@ -1039,7 +1047,7 @@ impl DataFrame {
         // A first analysis as another frame's statement: its errors carry
         // that statement's SQL span.
         let text = match (&cached, &self.statement) {
-            (None, Some(statement)) => statement.redacted.clone(),
+            (None, Some(statement)) if self.statement_spans => statement.redacted.clone(),
             _ => None,
         };
         if let Some(a) = cached
@@ -1105,7 +1113,10 @@ impl DataFrame {
             return Err(e.clone());
         }
         let plan = self.plan_with_checkpoints().await?;
-        let analyzed = self.session.analyze_in(&plan, &env, text).await?;
+        let (analyzed, through_views) = self.session.analyze_in(&plan, &env, text).await?;
+        // Analysis-only paths (DESCRIBE QUERY, `schema`) never reach `open_files`: refuse a
+        // time-travel clause they would otherwise describe as the current table.
+        env.catalog.check_reference_options(analyzed.plan.root())?;
         let mut env = env;
         // A trial's analysis is kept as an ordinary one: later checks are audited and told to
         // the policy.
@@ -1114,12 +1125,6 @@ impl DataFrame {
         if let Some(t) = text {
             env.set_text(t);
         }
-        let through_views = std::mem::take(
-            &mut *env
-                .view_keeps
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner),
-        );
         env.observers = Arc::new(self.observers_through(through_views));
         let analysis = Arc::new(Analysis {
             env: Arc::new(env),
@@ -1600,6 +1605,7 @@ impl DataFrame {
             partition_by: Vec::new(),
             bucket_by: None,
             sort_by: None,
+            bucket_table: false,
             format_set: false,
         }
     }
@@ -1771,7 +1777,7 @@ impl DataFrame {
             writer = writer.sort_by(cols);
         }
         if insert_into {
-            writer.insert_into(table).await
+            Box::pin(writer.insert_into(table)).await
         } else {
             writer.save_as_table(table).await
         }

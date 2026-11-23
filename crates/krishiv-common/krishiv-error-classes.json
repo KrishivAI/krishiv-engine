@@ -71,6 +71,12 @@
     "sqlState" : "58030",
     "audience" : "operator"
   },
+  "KRISHIV_CATALOG_TABLE_UNSUPPORTED" : {
+    "message" : [
+      "The catalog <catalog> serves <relationName> with <feature>, which Krishiv does not support yet, so the table was not read."
+    ],
+    "sqlState" : "0A000"
+  },
   "KRISHIV_COMMIT_LOG_CORRUPT" : {
     "message" : [
       "The commit log of <root> cannot be read: <reason>. Nothing was changed; a missing or damaged entry under \"_krishiv_log\" needs the directory restored from a copy."
@@ -326,6 +332,12 @@
       "The Python artifact <name> cannot be used by UDF workers: <reason>. Add a smaller or a well-formed artifact (zip, jar, tar, tar.gz or tgz archives), or raise the server's artifact limit."
     ],
     "sqlState" : "22023"
+  },
+  "KRISHIV_PYTHON_DATA_SOURCE_LIMIT" : {
+    "message" : [
+      "The Python data source <source> returned <bytes> bytes, over the <limit> byte limit of this embedded read path, which holds a source's rows in memory when a scan runs. Read less of it per query (narrow the source's options or split it into smaller sources)."
+    ],
+    "sqlState" : "53400"
   },
   "KRISHIV_PYTHON_UDF_EVAL_TYPE_MISMATCH" : {
     "message" : [

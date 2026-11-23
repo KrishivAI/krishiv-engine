@@ -817,6 +817,47 @@ impl Encoder {
                 self.plan(left, bias);
                 self.plan(right, bias);
             }
+            PlanNode::AsOfJoin {
+                left,
+                right,
+                kind,
+                condition,
+                as_of,
+            } => {
+                self.tag("AsOfJoin");
+                self.debug(kind);
+                match condition {
+                    JoinCondition::None => self.tag("no-cond"),
+                    JoinCondition::On(e) => {
+                        self.tag("on");
+                        self.expr(e, bias);
+                    }
+                    JoinCondition::Using(cols) => {
+                        self.tag("using");
+                        self.num(cols.len() as u64);
+                        for c in cols {
+                            self.text(c);
+                        }
+                    }
+                    JoinCondition::Natural => self.tag("natural"),
+                }
+                self.expr(&as_of.left, bias);
+                self.expr(&as_of.right, bias);
+                self.debug(&as_of.direction);
+                self.flag(as_of.allow_exact);
+                self.flag(as_of.as_written);
+                self.flag(as_of.distance_on_every_pair);
+                match &as_of.tolerance {
+                    None => self.tag("no-tolerance"),
+                    Some(t) => self.expr(t, bias),
+                }
+                match &as_of.distance {
+                    None => self.tag("no-distance"),
+                    Some(d) => self.expr(d, bias),
+                }
+                self.plan(left, bias);
+                self.plan(right, bias);
+            }
             PlanNode::Sort {
                 input,
                 order,
@@ -838,6 +879,11 @@ impl Encoder {
             PlanNode::Offset { input, offset } => {
                 self.tag("Offset");
                 self.expr(offset, bias);
+                self.plan(input, bias);
+            }
+            PlanNode::Tail { input, limit } => {
+                self.tag("Tail");
+                self.expr(limit, bias);
                 self.plan(input, bias);
             }
             PlanNode::SubqueryAlias {
@@ -893,6 +939,65 @@ impl Encoder {
                 self.tag("PipeOperator");
                 self.plan(input, bias);
             }
+            PlanNode::ColumnNames { input, op } => {
+                self.tag("ColumnNames");
+                match op {
+                    crate::ColumnNamesOp::ToDf(names) => {
+                        self.num(0);
+                        self.num(names.len() as u64);
+                        for n in names {
+                            self.text(n);
+                        }
+                    }
+                    crate::ColumnNamesOp::Rename(pairs) => {
+                        self.num(1);
+                        self.num(pairs.len() as u64);
+                        for (from, to) in pairs {
+                            self.text(from);
+                            self.text(to);
+                        }
+                    }
+                    crate::ColumnNamesOp::Drop { names, columns } => {
+                        self.num(2);
+                        self.num(names.len() as u64);
+                        for n in names {
+                            self.text(n);
+                        }
+                        self.num(columns.len() as u64);
+                        for n in columns {
+                            self.text(n);
+                        }
+                    }
+                    crate::ColumnNamesOp::DropNa {
+                        subset,
+                        min_non_nulls,
+                    } => {
+                        self.num(3);
+                        self.num(subset.len() as u64);
+                        for n in subset {
+                            self.text(n);
+                        }
+                        self.num(min_non_nulls.map_or(0, |n| u64::from(n) + 1));
+                    }
+                    crate::ColumnNamesOp::Replace { cols, pairs } => {
+                        self.num(5);
+                        self.num(cols.len() as u64);
+                        for n in cols {
+                            self.text(n);
+                        }
+                        self.exprs(pairs, bias);
+                    }
+                    crate::ColumnNamesOp::FillNa { cols, values } => {
+                        self.num(4);
+                        self.num(cols.len() as u64);
+                        for n in cols {
+                            self.text(n);
+                        }
+                        self.exprs(values, bias);
+                    }
+                }
+                self.plan(input, bias);
+            }
             PlanNode::Repartition { input, exprs } => {
                 self.tag("Repartition");
                 self.exprs(exprs, bias);
@@ -906,6 +1011,37 @@ impl Encoder {
                 self.tag("CollectMetrics");
                 self.text(name);
                 self.exprs(metrics, bias);
+                self.plan(input, bias);
+            }
+            PlanNode::MetricViewRead {
+                input,
+                name,
+                dimensions,
+                measures,
+                output,
+                ansi,
+            } => {
+                self.tag("MetricViewRead");
+                self.num(match ansi {
+                    None => 0,
+                    Some(false) => 1,
+                    Some(true) => 2,
+                });
+                self.num(name.len() as u64);
+                name.iter().for_each(|n| self.text(n));
+                for cols in [dimensions, measures] {
+                    self.num(cols.len() as u64);
+                    for c in cols {
+                        self.text(&c.name);
+                        self.expr(&c.expr, bias);
+                        self.debug(&c.data_type);
+                        self.flag(c.nullable);
+                    }
+                }
+                self.num(output.len() as u64);
+                for c in output {
+                    self.bound(c, bias);
+                }
                 self.plan(input, bias);
             }
             PlanNode::JoinHint { input, strategy } => {

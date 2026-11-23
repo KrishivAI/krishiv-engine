@@ -4,7 +4,7 @@
 use super::*;
 
 /// The parser's configs (`ParserOptions::from_conf` reads these).
-pub(super) const PARSER_KEYS: [&str; 15] = [
+pub(super) const PARSER_KEYS: [&str; 17] = [
     "spark.sql.ansi.enabled",
     "spark.sql.ansi.enforceReservedKeywords",
     "spark.sql.ansi.doubleQuotedIdentifiers",
@@ -20,6 +20,8 @@ pub(super) const PARSER_KEYS: [&str; 15] = [
     "spark.sql.parser.quotedRegexColumnNames",
     "spark.sql.legacy.parser.havingWithoutGroupByAsWhere",
     "spark.sql.collation.schemaLevel.enabled",
+    "spark.sql.join.asofJoin.enabled",
+    "spark.sql.timeTravel.atSyntax.enabled",
 ];
 
 /// `KRISHIV_UNSUPPORTED_FEATURE` for a statement `Session::sql` cannot run yet.
@@ -133,9 +135,6 @@ pub(crate) struct QueryEnv {
     /// The observations and sinks of the frame the query runs (`Dataset.observe`): every run of
     /// the query, whatever the action, completes them (`run_on_query_logged`).
     pub(crate) observers: Arc<crate::dataframe::Observers>,
-    /// What the temporary view entries the analysis inlined kept (`TempTable::View::keeps`), set by
-    /// `analyze_in`: the handles of the definitions the query runs, whatever replaced them since.
-    pub(crate) view_keeps: Arc<std::sync::Mutex<Vec<crate::catalog::Keep>>>,
     /// Set by `analyze_in` when the plan inlines a `SQL SECURITY DEFINER` view whose query the
     /// principal may not see as an invoker (review M2, the rule `EXPLAIN` follows): the query's
     /// operators (names, text metrics, row counts of the definer's plan) are kept out of

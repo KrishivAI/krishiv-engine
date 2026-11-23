@@ -70,21 +70,25 @@ const KNOWN_GAPS: &[(&str, &str, &str)] = &[
         "Spark runs a scalar subquery in a metric; the engine refuses it with KRISHIV_UNSUPPORTED_FEATURE (P3-T084c)",
         GAP_SUBQUERY_NOW,
     ),
-    (
-        "ansi_on_overflow_sum",
-        "Spark's metric aggregate saturates a long sum at 9223372036854775807 under ANSI; the engine raises ARITHMETIC_OVERFLOW (P3-T084c)",
-        GAP_OVERFLOW_NOW,
-    ),
 ];
 
 const GAP_TOPN_NOW: &str = r#"{"get":"ok","metrics":{"n":1000}}"#;
 const GAP_SUBQUERY_NOW: &str =
     r#"{"errorClass":"KRISHIV_UNSUPPORTED_FEATURE","outcome":"error","sqlState":"0A000"}"#;
-const GAP_OVERFLOW_NOW: &str = r#"{"action_result":2,"error":{"errorClass":"ARITHMETIC_OVERFLOW","outcome":"error","sqlState":"22003"},"get":"error"}"#;
 
 /// Cases whose `metrics` leave out the named fixture columns (what depends on which of the
 /// parallel drivers' rows a `LIMIT` takes); every other column must still match.
 const OMITTED_METRICS: &[(&str, &[&str])] = &[("limit_big_range", &["s"])];
+
+/// The follow-up fixture (`observe-goldens-followup.json`, P3-T084c): section `section`, leg `leg`.
+fn followup(leg: &str, section: &str) -> Value {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tests/fixtures/spark-4.2.0/observe-goldens-followup.json"
+    );
+    let all: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    all[leg][section].clone()
+}
 
 fn fixture() -> Value {
     let path = concat!(
@@ -803,4 +807,469 @@ fn classic_goldens_match_spark() {
         fixed.is_empty(),
         "these known gaps now match Spark: remove them from KNOWN_GAPS: {fixed:?}"
     );
+}
+
+// ---- proven-empty shapes (`empty_shapes`, P3-T084c) ----
+
+/// `range(0, 6)` as `v`, in two partitions (the generator's `base3`).
+fn base3(s: &Session) -> DataFrame {
+    s.range(0, 6, 1, Some(2)).select_expr(["id as v"]).unwrap()
+}
+
+fn never(df: &DataFrame) -> DataFrame {
+    df.filter_expr("false").unwrap()
+}
+
+/// `build(observed base3)` run with `count()`; or `build` given the unobserved frame when the
+/// case observes inside (`inside`).
+fn empty_run(s: &Session, build: impl FnOnce(&DataFrame) -> DataFrame) -> Value {
+    let o = Observation::named("m").unwrap();
+    let observed = base3(s).observe(&o, [n()]).unwrap();
+    let result = counted(&build(&observed));
+    merged(json!({"action_result": result}), got(&o))
+}
+
+fn empty_inside(_s: &Session, inner: &DataFrame) -> Value {
+    let o = Observation::named("m").unwrap();
+    let observed = inner.observe(&o, [n()]).unwrap();
+    merged(json!({"action_result": counted(&observed)}), got(&o))
+}
+
+fn empty_cases() -> Vec<(&'static str, Case)> {
+    vec![
+        ("where_lit_false_above", |s| {
+            empty_run(s, |d| d.filter(lit(false)))
+        }),
+        ("where_false_sql_above", |s| empty_run(s, never)),
+        ("where_lit_null_above", |s| {
+            empty_run(s, |d| d.filter(e("cast(null as boolean)")))
+        }),
+        ("where_1_eq_0_above", |s| {
+            empty_run(s, |d| d.filter_expr("1 = 0").unwrap())
+        }),
+        ("where_contradiction_above", |s| {
+            empty_run(s, |d| d.filter_expr("v > 5 and v < 0").unwrap())
+        }),
+        ("where_v_null_and_notnull_above", |s| {
+            empty_run(s, |d| d.filter_expr("v is null and v is not null").unwrap())
+        }),
+        ("where_lit_false_below", |s| {
+            empty_inside(s, &never(&base3(s)))
+        }),
+        ("limit0_above", |s| empty_run(s, |d| d.limit(0))),
+        ("limit0_below", |s| empty_inside(s, &base3(s).limit(0))),
+        ("filter_false_then_limit", |s| {
+            empty_run(s, |d| never(d).limit(5))
+        }),
+        ("two_step_filter_false", |s| {
+            empty_run(s, |d| never(&d.filter_expr("v > 1").unwrap()))
+        }),
+        ("project_where_false_above", |s| {
+            empty_run(s, |d| never(&d.select_expr(["v + 1 as w"]).unwrap()))
+        }),
+        ("sort_where_false_above", |s| {
+            empty_run(s, |d| never(&d.order_by([col("v")])))
+        }),
+        ("groupby_where_false_above", |s| {
+            empty_run(s, |d| never(d).group_by([col("v")]).agg([count(lit(1))]))
+        }),
+        ("global_agg_where_false_above", |s| {
+            empty_run(s, |d| never(d).agg([count(lit(1)).alias("c")]))
+        }),
+        ("inner_join_empty_local", |s| {
+            empty_run(s, |d| {
+                d.join_using(&never(&base3(s)), ["v"], JoinType::Inner)
+            })
+        }),
+        ("inner_join_filtered_empty", |s| {
+            empty_run(s, |d| {
+                d.join_using(&never(&base3(s)), ["v"], JoinType::Inner)
+            })
+        }),
+        ("left_join_empty_right", |s| {
+            empty_run(s, |d| {
+                d.join_using(&never(&base3(s)), ["v"], JoinType::LeftOuter)
+            })
+        }),
+        ("right_join_empty_left_observed", |s| {
+            let o = Observation::named("m").unwrap();
+            let observed = base3(s).observe(&o, [n()]).unwrap();
+            let df = never(&base3(s)).join_using(&observed, ["v"], JoinType::RightOuter);
+            merged(json!({"action_result": counted(&df)}), got(&o))
+        }),
+        ("left_semi_empty_right", |s| {
+            empty_run(s, |d| {
+                d.join_using(&never(&base3(s)), ["v"], JoinType::LeftSemi)
+            })
+        }),
+        ("left_anti_empty_right", |s| {
+            empty_run(s, |d| {
+                d.join_using(&never(&base3(s)), ["v"], JoinType::LeftAnti)
+            })
+        }),
+        ("union_with_empty", |s| {
+            empty_run(s, |d| d.union(&never(&base3(s))))
+        }),
+        ("union_empty_first", |s| {
+            let o = Observation::named("m").unwrap();
+            let observed = base3(s).observe(&o, [n()]).unwrap();
+            let df = never(&base3(s)).union(&observed);
+            merged(json!({"action_result": counted(&df)}), got(&o))
+        }),
+        ("union_both_empty_above", |s| {
+            empty_run(s, |d| never(d).union(&never(&base3(s))))
+        }),
+        ("intersect_empty", |s| {
+            empty_run(s, |d| d.intersect(&never(&base3(s))))
+        }),
+        ("except_empty_right", |s| {
+            empty_run(s, |d| d.except_all(&never(&base3(s))))
+        }),
+        ("sample_fraction0", |s| {
+            empty_run(s, |d| d.sample(false, 0.0, 1))
+        }),
+        ("collect_empty_pruned", |s| {
+            let o = Observation::named("m").unwrap();
+            let observed = base3(s).observe(&o, [n()]).unwrap();
+            block_on(never(&observed).collect()).unwrap();
+            got(&o)
+        }),
+        ("cache_then_where_false", |s| {
+            empty_run(s, |d| never(&d.cache()))
+        }),
+    ]
+}
+
+/// Empty shapes the engine does not prune like Spark yet (each must still fail).
+const EMPTY_GAPS: &[(&str, &str)] = &[
+    (
+        "sample_fraction0",
+        "the engine has no DataFrame.sample (KRISHIV_UNSUPPORTED_FEATURE)",
+    ),
+    (
+        "cache_then_where_false",
+        "the engine fills a cache entry (running the observed plan) before the filter prunes it; Spark's cache substitution comes first and the node is pruned with the empty relation",
+    ),
+];
+
+#[test]
+fn empty_shapes_match_spark() {
+    // Classic Spark raises an AssertionError in `get` for a pruned node (an upstream defect);
+    // Connect returns `{}`, which is what the engine returns: the Connect leg is the reference.
+    let want = followup("connect", "empty_shapes");
+    let mut failures = Vec::new();
+    let mut fixed = Vec::new();
+    for (name, case) in empty_cases() {
+        let expected = &want[name];
+        let mut exp = json!({"get": expected["get"], "metrics": expected["metrics"]});
+        if expected["action"].is_number() {
+            exp["action_result"] = expected["action"].clone();
+        }
+        let gap = EMPTY_GAPS.iter().any(|(g, _)| *g == name);
+        match (outcome_of(name, case, &exp), gap) {
+            (Err(why), false) => failures.push(why),
+            (Ok(()), true) => fixed.push(name),
+            _ => {}
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    assert!(fixed.is_empty(), "remove from EMPTY_GAPS: {fixed:?}");
+}
+
+/// `outcome`, comparing the action's count only where the fixture has one (a collect's rows are not).
+fn outcome_of(name: &str, case: Case, want: &Value) -> Result<(), String> {
+    let mut got =
+        std::panic::catch_unwind(|| case(&session())).map_err(|_| format!("{name}: panicked"))?;
+    if want.get("action_result").is_none()
+        && let Some(o) = got.as_object_mut()
+    {
+        o.remove("action_result");
+    }
+    if matches(&got, want, &[], "") {
+        Ok(())
+    } else {
+        Err(format!("{name}: got {got}\n   want {want}"))
+    }
+}
+
+// ---- ANSI overflow inside a metric (`ansi_sum`, P3-T084c) ----
+
+const MAXL: i64 = i64::MAX;
+
+/// One `ansi_sum` case: the rows, the metric and the ANSI setting, run with `count()`.
+fn ansi_run(ansi: bool, parts: u32, rows: &str, metric: &str) -> Value {
+    let s = session();
+    s.conf()
+        .set(
+            "spark.sql.ansi.enabled",
+            if ansi { "true" } else { "false" },
+        )
+        .unwrap();
+    let df = s
+        .range(0, if rows.contains("int") { 3 } else { 2 }, 1, Some(parts))
+        .select_expr([rows])
+        .unwrap();
+    run(df, vec![e(metric).alias("s")], count_action)
+}
+
+/// `got` against the fixture's first run: the action's outcome and what `get` holds. A long
+/// `sum` over two tasks that overflows when merged keeps the first task's rows only, so either
+/// row's value is Spark's answer (the winner is task-completion order there); the engine's is
+/// the first partition's.
+fn ansi_matches(got: &Value, run: &Value, either: &[i64]) -> Result<(), String> {
+    let action = &run["action"];
+    if let Some(err) = action.get("error") {
+        return if got["action_result"]["errorClass"] == err["errorClass"] {
+            Ok(())
+        } else {
+            Err(format!(
+                "action: got {got}, want error {}",
+                err["errorClass"]
+            ))
+        };
+    }
+    if got["action_result"] != *action {
+        return Err(format!(
+            "action: got {}, want {action}",
+            got["action_result"]
+        ));
+    }
+    if got["get"] != run["get"] {
+        return Err(format!("get: got {got}, want {run}"));
+    }
+    if run["get"] == "error" {
+        // Spark raises NUMERIC_VALUE_OUT_OF_RANGE.WITH_SUGGESTION for a decimal sum and
+        // ARITHMETIC_OVERFLOW for the engine's decimal kernels (both SQLSTATE 22003).
+        return if got["error"]["sqlState"] == run["sqlState"] {
+            Ok(())
+        } else {
+            Err(format!("get error: got {got}, want {run}"))
+        };
+    }
+    let key = "s".to_owned();
+    let (mine, theirs) = (&got["metrics"][&key], &run["metrics"][&key]);
+    let float = |v: &Value| v.as_str().and_then(|t| t.parse::<f64>().ok());
+    let same_float = float(mine).zip(float(theirs)).is_some_and(|(a, b)| a == b);
+    if either.iter().any(|v| *mine == json!(v)) || mine == theirs || same_float {
+        Ok(())
+    } else {
+        Err(format!("metric: got {mine}, want {theirs}"))
+    }
+}
+
+/// The fold of each split is its own, so the overflow is at the merge, which drops a buffer, and
+/// the action succeeds as Spark's does, whichever driver reads which split. A driver that read both
+/// used to fail the action (about one run in four), so the case is repeated until that would show.
+#[test]
+fn ansi_sum_overflow_across_splits_fails_only_the_merge() {
+    for _ in 0..100 {
+        let s = session();
+        let df = s
+            .range(0, 2, 1, Some(2))
+            .select_expr([format!("id + {} as v", MAXL - 1)])
+            .unwrap();
+        let got = run(df, vec![e("sum(v)").alias("s")], count_action);
+        assert_eq!(got["action_result"], json!(2), "{got}");
+        assert_eq!(got["get"], json!("ok"), "{got}");
+        let sum = &got["metrics"]["s"];
+        assert!(
+            [MAXL - 1, MAXL].iter().any(|v| *sum == json!(v)),
+            "the merge keeps one partition's buffer: {got}"
+        );
+    }
+}
+
+/// Cases the engine does not match yet (each must still fail).
+const ANSI_GAPS: &[(&str, &str)] = &[];
+
+#[test]
+fn ansi_overflow_in_metrics_matches_spark() {
+    let want = followup("classic", "ansi_sum");
+    let big = format!("id + {} as v", MAXL - 1);
+    let dec = "cast(99999999999999999999999999999999999999 as decimal(38,0)) as v";
+    let int = "cast(2147483647 as int) as v";
+    let cases: Vec<(&str, bool, u32, &str, &str)> = vec![
+        ("sum_bigint_overflow", true, 1, &big, "sum(v)"),
+        ("sum_bigint_overflow", true, 2, &big, "sum(v)"),
+        ("sum_bigint_overflow", false, 1, &big, "sum(v)"),
+        ("sum_bigint_overflow", false, 2, &big, "sum(v)"),
+        ("avg_bigint", true, 2, &big, "avg(v)"),
+        ("sum_decimal_overflow", true, 1, dec, "sum(v)"),
+        ("sum_decimal_overflow", true, 2, dec, "sum(v)"),
+        ("sum_decimal_overflow", false, 1, dec, "sum(v)"),
+        ("avg_decimal_overflow", true, 1, dec, "avg(v)"),
+        ("avg_decimal_overflow", true, 2, dec, "avg(v)"),
+        ("try_sum_bigint_overflow", true, 2, &big, "try_sum(v)"),
+        ("try_sum_bigint_overflow", false, 1, &big, "try_sum(v)"),
+        ("sum_int_no_overflow", true, 2, int, "sum(v)"),
+    ];
+    let mut failures = Vec::new();
+    let mut fixed = Vec::new();
+    for (name, ansi, parts, rows, metric) in cases {
+        let key = format!("{name}/ansi_{ansi}/P{parts}");
+        let first = &want[&key]["runs"][0];
+        let got = ansi_run(ansi, parts, rows, metric);
+        let mut first = first.clone();
+        // The metric is named `s` here; the fixture's average is `a`.
+        if first["metrics"].get("s").is_none()
+            && let Some(a) = first["metrics"].get("a").cloned()
+        {
+            first["metrics"]["s"] = a;
+        }
+        let ok = ansi_matches(&got, &first, &[MAXL - 1, MAXL]);
+        let gap = ANSI_GAPS.iter().any(|(g, _)| *g == key);
+        match (ok, gap) {
+            (Err(why), false) => failures.push(format!("{key}: {why}")),
+            (Ok(()), true) => fixed.push(key),
+            _ => {}
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    assert!(fixed.is_empty(), "remove from ANSI_GAPS: {fixed:?}");
+}
+
+// ---- limits above or below the node (`limit_counts`, P3-T084c) ----
+
+/// `range(0, 1000)` as `v` in `p` partitions.
+fn rows(s: &Session, p: u32) -> DataFrame {
+    s.range(0, 1000, 1, Some(p))
+        .select_expr(["id as v"])
+        .unwrap()
+}
+
+/// What the observations of `shape` hold after one action: the counted rows of each node.
+fn limit_counts(shape: &str, p: u32, limit: i32, collect: bool) -> Vec<i64> {
+    let s = session();
+    let (oa, ob) = (
+        Observation::named("a").unwrap(),
+        Observation::named("b").unwrap(),
+    );
+    let base = rows(&s, p);
+    let obs = |df: &DataFrame, o: &Observation| df.observe(o, [n()]).unwrap();
+    let lim = limit;
+    let desc = || [col("v").desc()];
+    let df = match shape {
+        "observe_limit" => obs(&base, &oa).limit(lim),
+        "observe_filter_limit" => obs(&base, &oa).filter_expr("v % 2 = 0").unwrap().limit(lim),
+        "observe_selective_filter_limit" => obs(&base, &oa)
+            .filter_expr("v % 100 = 0")
+            .unwrap()
+            .limit(lim),
+        "limit_then_observe" => obs(&base.limit(lim), &oa),
+        "observe_sort_limit" => obs(&base, &oa).order_by(desc()).limit(lim),
+        "sort_observe_limit" => obs(&base.order_by(desc()), &oa).limit(lim),
+        "observe_offset_limit" => obs(&base, &oa).offset(3).limit(lim),
+        "observe_union_limit" => obs(&base, &oa).union(&rows(&s, p)).limit(lim),
+        "union_of_limit_branches" => obs(&base, &oa)
+            .limit(lim)
+            .union(&obs(&rows(&s, p), &ob).limit(lim)),
+        "union_of_limit_branches_then_observe" => {
+            obs(&base.limit(lim).union(&rows(&s, p).limit(lim)), &oa)
+        }
+        "join_observe_left_limit" => obs(&base, &oa)
+            .join_using(&rows(&s, p), ["v"], JoinType::Inner)
+            .limit(lim),
+        "join_observe_right_limit" => rows(&s, p)
+            .join_using(&obs(&base, &oa), ["v"], JoinType::Inner)
+            .limit(lim),
+        other => panic!("unknown shape {other}"),
+    };
+    if collect {
+        block_on(df.collect()).unwrap();
+    } else {
+        block_on(df.count()).unwrap();
+    }
+    let n_of = |o: &Observation| {
+        o.get_timeout(Duration::from_millis(300))
+            .ok()
+            .flatten()
+            .map(|r| r.column(0).as_primitive::<Int64Type>().value(0))
+    };
+    [n_of(&oa), n_of(&ob)].into_iter().flatten().collect()
+}
+
+/// The shapes and partition counts the engine does not match for every limit and action, with
+/// why. A shape listed for `p` must still differ somewhere there (a fix removes the line).
+const LIMIT_GAPS: &[(&str, u32, &str)] = &[
+    ("observe_limit", 4, PER_PARTITION),
+    ("observe_limit", 16, PER_PARTITION),
+    ("observe_filter_limit", 1, FILTER_BETWEEN),
+    ("observe_filter_limit", 4, FILTER_BETWEEN),
+    ("observe_filter_limit", 16, FILTER_BETWEEN),
+    ("observe_selective_filter_limit", 1, FILTER_BETWEEN),
+    ("observe_selective_filter_limit", 4, FILTER_BETWEEN),
+    ("observe_selective_filter_limit", 16, FILTER_BETWEEN),
+    ("observe_offset_limit", 4, PER_PARTITION),
+    ("observe_offset_limit", 16, PER_PARTITION),
+    ("observe_union_limit", 1, UNION_BELOW),
+    ("observe_union_limit", 4, UNION_BELOW),
+    ("observe_union_limit", 16, UNION_BELOW),
+    ("union_of_limit_branches", 4, PER_PARTITION),
+    ("union_of_limit_branches", 16, PER_PARTITION),
+    ("join_observe_left_limit", 1, JOIN_BELOW),
+    ("join_observe_left_limit", 4, JOIN_BELOW),
+    ("join_observe_left_limit", 16, JOIN_BELOW),
+];
+
+const PER_PARTITION: &str = "Spark's count() runs a LocalLimit(n) on every partition (P x n rows, capped by the partition), collect() scans partitions incrementally (CollectLimit); the engine counts one global budget of n";
+const FILTER_BETWEEN: &str = "a filter between the node and the limit multiplies the rows pulled by the selectivity (Spark pulls whole batches of a partition's LocalLimit); the engine's cap stops at the filter and counts every row";
+const UNION_BELOW: &str = "the engine's limit cap does not cross a union, so the observed branch reads all its rows; Spark's LocalLimit pulls only what it takes";
+const JOIN_BELOW: &str = "the engine's limit cap does not cross a join, so the streamed observed side reads everything; Spark's join keeps the streamed side lazy";
+
+const LIMIT_SHAPES: &[&str] = &[
+    "observe_limit",
+    "observe_filter_limit",
+    "observe_selective_filter_limit",
+    "limit_then_observe",
+    "observe_sort_limit",
+    "sort_observe_limit",
+    "observe_offset_limit",
+    "observe_union_limit",
+    "union_of_limit_branches",
+    "union_of_limit_branches_then_observe",
+    "join_observe_left_limit",
+    "join_observe_right_limit",
+];
+
+/// Whether the engine's counts for `shape` at `p` partitions equal Spark's for every limit and action.
+fn limit_shape_matches(want: &Value, shape: &str, p: u32) -> Result<(), String> {
+    for limit in [5, 100] {
+        for (collect, action) in [(false, "count"), (true, "collect")] {
+            let key = format!("{shape}/P{p}/n{limit}/{action}");
+            let mut expected: Vec<i64> = want[&key]["runs"][0]["observed"]
+                .as_array()
+                .ok_or_else(|| format!("{key}: not in the fixture"))?
+                .iter()
+                .filter_map(|m| m["metrics"]["n"].as_i64())
+                .collect();
+            let mut got = limit_counts(shape, p, limit, collect);
+            expected.sort_unstable();
+            got.sort_unstable();
+            if got != expected {
+                return Err(format!("{key}: got {got:?}, Spark {expected:?}"));
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn limit_counts_match_spark_where_they_can() {
+    let want = followup("classic", "limit_counts");
+    let mut report = Vec::new();
+    for shape in LIMIT_SHAPES {
+        for p in [1_u32, 4, 16] {
+            let result = limit_shape_matches(&want, shape, p);
+            let gap = LIMIT_GAPS.iter().any(|(s, q, _)| s == shape && *q == p);
+            match (&result, gap) {
+                (Err(why), false) => report.push(format!("unexpected: {why}")),
+                (Ok(()), true) => report.push(format!(
+                    "{shape}/P{p} now matches: remove it from LIMIT_GAPS"
+                )),
+                (Err(why), true) => eprintln!("known gap {shape}/P{p}: {why}"),
+                (Ok(()), false) => eprintln!("match {shape}/P{p}"),
+            }
+        }
+    }
+    assert!(report.is_empty(), "{}", report.join("\n"));
 }

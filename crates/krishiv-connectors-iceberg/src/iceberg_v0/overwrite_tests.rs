@@ -135,12 +135,26 @@ fn write_rows(
     schema: SchemaRef,
     batches: Vec<RecordBatch>,
 ) -> Result<(), KrishivError> {
+    let id = format!("ow-{}", super::sink::unique_u64());
+    write_rows_as(env, p, mode, options, schema, batches, &id)
+}
+
+/// [`write_rows`] under the given write id (a replay carries the id of the first run).
+fn write_rows_as(
+    env: &Env,
+    p: &IcebergTableProvider,
+    mode: WriteMode,
+    options: &[(&str, &str)],
+    schema: SchemaRef,
+    batches: Vec<RecordBatch>,
+    write_id: &str,
+) -> Result<(), KrishivError> {
     let mut r = WriteRequest::new(mode, "`db`.`t`", Arc::clone(&schema));
     r.options = options
         .iter()
         .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
         .collect::<BTreeMap<_, _>>();
-    r.write_id = Some(format!("ow-{}", super::sink::unique_u64()));
+    r.write_id = Some(write_id.to_owned());
     let sink = p.writer(&r)?;
     let input =
         krishiv_exec::testing::Batches::new(schema, batches.into_iter().map(Batch::new).collect());
@@ -686,6 +700,50 @@ fn serializable_validation_from_the_read_snapshot() {
         }
         live(&env, &catalog.metadata());
     }
+}
+
+fn sorted(mut v: Vec<String>) -> Vec<String> {
+    v.sort();
+    v
+}
+
+/// An overwrite with `isolation-level` replayed under its write id (the first run already landed):
+/// validation has no exemption for the write's own snapshot, so the replay must be recognised
+/// first. It commits nothing, answers success and leaves none of its files behind.
+#[test]
+fn a_replayed_validated_overwrite_commits_nothing_and_leaves_no_files() {
+    let env = env();
+    let t = create(&env, 2, true, &[]);
+    let catalog = Catalog::new(&t);
+    append(&env, &catalog, range(0, 6));
+    let s0 = catalog
+        .metadata()
+        .current_snapshot_id()
+        .unwrap()
+        .to_string();
+    let p = provider(&env, &catalog.location(), &catalog);
+    let options = [
+        ("isolation-level", "serializable"),
+        ("validate-from-snapshot-id", s0.as_str()),
+    ];
+    let run = |p: &IcebergTableProvider| {
+        write_rows_as(
+            &env,
+            p,
+            static_x(1),
+            &options,
+            input_schema(),
+            vec![rows(&[Some(40)])],
+            "replayed-overwrite",
+        )
+    };
+    run(&p).unwrap();
+    let snapshots = catalog.metadata().snapshots().count();
+    let files = sorted(super::mor_tests::files_ending(&env, ""));
+    let replay = provider(&env, &catalog.location(), &catalog);
+    run(&replay).unwrap();
+    assert_eq!(catalog.metadata().snapshots().count(), snapshots);
+    assert_eq!(sorted(super::mor_tests::files_ending(&env, "")), files);
 }
 
 /// An unpartitioned dynamic overwrite validates every row: a foreign append

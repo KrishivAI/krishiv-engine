@@ -260,6 +260,8 @@ pub struct ScanStream {
     reading: bool,
     /// Bytes of shares that ended over-committed, in total.
     overcommitted: u64,
+    /// Nanoseconds [`grow_share`](Self::grow_share) waited for the gate.
+    gate_wait_ns: u64,
     /// What the stream's reads cost.
     reads: ReadStats,
 }
@@ -329,6 +331,7 @@ impl ScanStream {
             unit_open: false,
             reading: false,
             overcommitted: 0,
+            gate_wait_ns: 0,
             reads: ReadStats::default(),
         };
         match stream.open_inner(format, split, req, format_options).await {
@@ -422,6 +425,14 @@ impl ScanStream {
         self.overcommitted
     }
 
+    /// Nanoseconds this stream waited for its decode share (another
+    /// stream's share returned, or the pool spilling for it; see
+    /// [`ScanGate`]).
+    #[must_use]
+    pub fn gate_wait_ns(&self) -> u64 {
+        self.gate_wait_ns
+    }
+
     /// What the gate share covers (module docs): the decoder's buffered
     /// bytes and the open unit's working set or decoding estimate.
     fn share_target(&self) -> usize {
@@ -450,7 +461,15 @@ impl ScanStream {
         if target > held {
             // Over-committed bytes are counted when the share drops them
             // (`settle_share`, `end_unit`), which also covers revoked ones.
-            gate.acquire(id, target - held).await?;
+            // Only an acquire that could not be granted at once is a wait
+            // (`decode_gate_wait_ns`).
+            if !gate.try_acquire(id, target - held) {
+                let waiting = tokio::time::Instant::now();
+                let got = gate.acquire(id, target - held).await;
+                let waited = u64::try_from(waiting.elapsed().as_nanos()).unwrap_or(u64::MAX);
+                self.gate_wait_ns = self.gate_wait_ns.saturating_add(waited);
+                got?;
+            }
         }
         Ok(())
     }

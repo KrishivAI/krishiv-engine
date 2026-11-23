@@ -27,14 +27,19 @@ pub mod metrics;
 pub mod admin;
 #[cfg(feature = "admin-api")]
 pub mod admin_v1;
+mod advice;
 pub mod drain;
+pub mod embed;
 pub mod guard;
 pub mod internal;
 pub mod pages;
 pub mod readiness;
 #[cfg(feature = "tls")]
 pub mod tls;
+mod workload;
 
+#[cfg(feature = "session")]
+pub mod embedded;
 #[cfg(feature = "session")]
 pub mod session_guard;
 #[cfg(feature = "session")]
@@ -71,12 +76,20 @@ async fn api_not_found() -> impl IntoResponse {
 /// Serves an embedded asset; extension-less paths fall back to the SPA shell.
 async fn assets(uri: Uri) -> Response {
     let path = uri.path().trim_start_matches('/');
-    let found = krishiv_ui_assets::get(path).or_else(|| {
-        let last = path.rsplit('/').next().unwrap_or(path);
-        (!last.contains('.'))
-            .then(|| krishiv_ui_assets::get(""))
-            .flatten()
-    });
+    // The page's asset links are relative (`./assets/x.js`, ADR 0024), so on a deep link (`/queries/q1/profile`) the
+    // browser asks for `/queries/q1/assets/x.js` or `/queries/q1/favicon.svg`: those are the root's files (T071).
+    let rooted = path
+        .rfind("assets/")
+        .map(|i| &path[i..])
+        .or_else(|| path.ends_with("/favicon.svg").then_some("favicon.svg"));
+    let found = krishiv_ui_assets::get(path)
+        .or_else(|| rooted.and_then(krishiv_ui_assets::get))
+        .or_else(|| {
+            let last = path.rsplit('/').next().unwrap_or(path);
+            (!last.contains('.'))
+                .then(|| krishiv_ui_assets::get(""))
+                .flatten()
+        });
     match found {
         Some(a) => (
             [(header::CONTENT_TYPE, a.content_type)],

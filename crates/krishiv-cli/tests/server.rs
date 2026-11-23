@@ -244,7 +244,20 @@ fn start(spill: &std::path::Path) -> Running {
 
 /// [`start`] with more `--conf KEY=VALUE` settings.
 fn start_with(spill: &std::path::Path, conf: &[String]) -> Running {
-    let mut child = krishiv()
+    spawn_server(spill, conf, false)
+}
+
+/// [`start_with`] with the JSON logs on (`KRISHIV_LOG=json`), so records reach stderr.
+fn start_logging(spill: &std::path::Path, conf: &[String]) -> Running {
+    spawn_server(spill, conf, true)
+}
+
+fn spawn_server(spill: &std::path::Path, conf: &[String], json_logs: bool) -> Running {
+    let mut command = krishiv();
+    if json_logs {
+        command.env("KRISHIV_LOG", "json");
+    }
+    let mut child = command
         // `--allow-root`: CI containers may run as root.
         .args([
             "server",
@@ -379,6 +392,41 @@ fn sigterm_shuts_down_cleanly_and_removes_the_spill_directory() {
         .filter(|n| n.to_string_lossy().starts_with("krishiv-spill-"))
         .collect();
     assert!(left.is_empty(), "spill directories left: {left:?}");
+}
+
+/// A drain the operating system asked for leaves the same action record as `admin.v1`'s `Drain`
+/// (design P3-T066 §5.6), so the log shows every drain.
+#[test]
+#[cfg(feature = "telemetry-logs")]
+fn a_sigterm_drain_leaves_an_action_record() {
+    use std::io::Read;
+    let spill = tempfile::tempdir().expect("tempdir");
+    // Records reach stderr only with the JSON logs on (`KRISHIV_LOG=json`).
+    let mut run = start_logging(spill.path(), &[]);
+    let status = Command::new("kill")
+        .args(["-TERM", &run.child.id().to_string()])
+        .status()
+        .expect("kill");
+    assert!(status.success());
+    let exit = wait_exit(&mut run.child, Duration::from_secs(20));
+    assert_eq!(exit.code(), Some(0), "clean exit");
+    let mut stderr = String::new();
+    run.child
+        .stderr
+        .take()
+        .expect("stderr")
+        .read_to_string(&mut stderr)
+        .expect("stderr is utf-8");
+    let record = stderr
+        .lines()
+        .find(|l| l.contains("admin action"))
+        .unwrap_or_else(|| panic!("no action record in:\n{stderr}"));
+    assert!(record.contains("krishiv::admin_action"), "{record}");
+    assert!(record.contains("\"rpc\":\"Drain\""), "{record}");
+    assert!(record.contains("\"transport\":\"signal\""), "{record}");
+    assert!(record.contains("\"result\":\"ok\""), "{record}");
+    assert!(record.contains("\"auth_method\":\"none\""), "{record}");
+    assert!(record.contains("exit_when_drained true"), "{record}");
 }
 
 /// Runs `script` with a PySpark 4.x Connect client against a fresh server,
@@ -748,7 +796,7 @@ fn the_admin_v1_surface_is_served_behind_the_guard() {
         Some(token),
     );
     assert!(version.starts_with("HTTP/1.1 200"), "{version}");
-    assert!(version.contains("\"adminV1Revision\":\"3\""), "{version}");
+    assert!(version.contains("\"adminV1Revision\":\"4\""), "{version}");
     let caps = http_get_host(
         &server.admin,
         "/api/admin/v1/capabilities",
@@ -973,4 +1021,56 @@ fn the_ui_host_allowlist_follows_krishiv_ui_allowed_hosts() {
         Some(&token),
     );
     assert!(other.starts_with("HTTP/1.1 403"), "{other}");
+}
+
+/// The open line's token: the one a server without authentication settings prints at start.
+#[cfg(feature = "ui")]
+fn startup_token(server: &mut Running) -> String {
+    let line = server
+        ._stdout
+        .next()
+        .expect("the open line")
+        .expect("utf-8");
+    line.split("?token=")
+        .nth(1)
+        .expect("token")
+        .trim()
+        .to_owned()
+}
+
+/// A server started on a history folder lists what an earlier run stored there; a folder that cannot be read
+/// costs the old history, not the server.
+#[cfg(feature = "ui")]
+#[test]
+fn a_restarted_server_lists_the_stored_history() {
+    use krishiv_session::{EngineRuntime, Session};
+    let history = tempfile::tempdir().expect("tempdir");
+    {
+        let rt = EngineRuntime::builder()
+            .config(
+                "krishiv.history.path",
+                history.path().to_str().expect("utf-8"),
+            )
+            .build()
+            .expect("runtime");
+        let session = Session::builder()
+            .runtime(std::sync::Arc::clone(&rt))
+            .build()
+            .expect("session");
+        let df = futures::executor::block_on(
+            session.sql("SELECT count(*) AS before_restart FROM range(0, 100)"),
+        )
+        .expect("sql");
+        futures::executor::block_on(df.collect()).expect("collect");
+        // Dropping the runtime flushes the history writer.
+    }
+    let spill = tempfile::tempdir().expect("tempdir");
+    let mut server = start_with(
+        spill.path(),
+        &[format!("krishiv.history.path={}", history.path().display())],
+    );
+    let token = startup_token(&mut server);
+    let listed = http_get_as(&server.admin, "/api/internal/history", Some(&token));
+    assert!(listed.starts_with("HTTP/1.1 200"), "{listed}");
+    assert!(listed.contains("before_restart"), "{listed}");
 }

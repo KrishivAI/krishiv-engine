@@ -17,8 +17,8 @@ use arrow_array::{Array, ArrayRef, StringArray};
 use arrow_schema::DataType as ArrowDataType;
 use krishiv_common::error::{InternalError, KrishivError};
 use krishiv_kernels::json::{
-    JsonOptions, get_json_object, infer_json, json_array_length, json_object_keys, read_json,
-    write_json,
+    JsonOptions, get_json_object, infer_json, json_array_length, json_object_keys,
+    json_table_exists, json_table_rows, json_table_value, read_json, write_json,
 };
 use krishiv_types::{ArrayType, DataType};
 
@@ -33,6 +33,9 @@ pub(super) const NAMES: &[&str] = &[
     "get_json_object",
     "json_array_length",
     "json_object_keys",
+    "__json_table_rows",
+    "__json_table_value",
+    "__json_table_exists",
 ];
 
 /// `INTERNAL_ERROR`.
@@ -55,6 +58,9 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
         "schema_of_json" => schema_of(args, opts),
         "from_json" => from(args, opts),
         "to_json" => to(args, opts),
+        "__json_table_rows" => table_rows(args),
+        "__json_table_value" => table_value(args),
+        "__json_table_exists" => table_exists(args),
         _ => return Some((listed, Err(bad_types(listed, args)))),
     };
     Some((listed, binding))
@@ -84,6 +90,59 @@ fn object_keys(args: &[BindArg]) -> Result<Binding, KrishivError> {
     let element = DataType::Array(ArrayType::new(DataType::String, false).into()).to_arrow();
     Ok(Binding::new(element, |x: &Inputs<'_>| {
         json_object_keys(&x.strings(0)?)
+    }))
+}
+
+/// `__json_table_rows(json, row path, error on error)`: the row texts of each document, from `JSON_TABLE`'s lowering
+/// (the path and the flag are literals).
+fn table_rows(args: &[BindArg]) -> Result<Binding, KrishivError> {
+    let [json, BindArg::Literal(path), BindArg::Literal(flag)] = args else {
+        return Err(bad_types("__json_table_rows", args));
+    };
+    if !is_string(&json.data_type())
+        || !is_string(path.data_type())
+        || *flag.data_type() != ArrowDataType::Boolean
+    {
+        return Err(bad_types("__json_table_rows", args));
+    }
+    let path = to_utf8(path.as_ref())?;
+    let path = if path.is_valid(0) {
+        path.value(0).to_owned()
+    } else {
+        String::new()
+    };
+    let error_on_error = flag.as_boolean().is_valid(0) && flag.as_boolean().value(0);
+    let element = DataType::Array(ArrayType::new(DataType::String, false).into()).to_arrow();
+    Ok(Binding::new(element, move |x: &Inputs<'_>| {
+        json_table_rows(&x.strings(0)?, &path, error_on_error)
+    }))
+}
+
+/// `__json_table_value(row, path)`: a column's value in a row text.
+fn table_value(args: &[BindArg]) -> Result<Binding, KrishivError> {
+    // The third argument is the call's text for a cast error of the analyzer: not read.
+    let ([row, path] | [row, path, _]) = args else {
+        return Err(bad_types("__json_table_value", args));
+    };
+    if !is_string(&row.data_type()) || !is_string(&path.data_type()) {
+        return Err(bad_types("__json_table_value", args));
+    }
+    Ok(Binding::new(ArrowDataType::Utf8, |x: &Inputs<'_>| {
+        Ok(json_table_value(&x.strings(0)?, &x.strings(1)?))
+    }))
+}
+
+/// `__json_table_exists(row, path)`: whether a column's path exists in a row text.
+fn table_exists(args: &[BindArg]) -> Result<Binding, KrishivError> {
+    // The third argument is the call's text for a cast error of the analyzer: not read.
+    let ([row, path] | [row, path, _]) = args else {
+        return Err(bad_types("__json_table_exists", args));
+    };
+    if !is_string(&row.data_type()) || !is_string(&path.data_type()) {
+        return Err(bad_types("__json_table_exists", args));
+    }
+    Ok(Binding::new(ArrowDataType::Boolean, |x: &Inputs<'_>| {
+        Ok(json_table_exists(&x.strings(0)?, &x.strings(1)?))
     }))
 }
 

@@ -33,7 +33,7 @@ use super::exprs::{
 use super::resolve::{AggInfo, Attr, Env, Rel, Resolver, Widen};
 use super::{AnalysisError, ArgType, FileMetadata, TableKind};
 use crate::{
-    AttrId, BoundColumn, CteRef, Expr, ExprNode, FunctionCall, FunctionKind, Grouping,
+    AsOfMatch, AttrId, BoundColumn, CteRef, Expr, ExprNode, FunctionCall, FunctionKind, Grouping,
     JoinCondition, JoinKind, Literal, LogicalPlan, Origin, PlanNode, ReadSource, ResolvedExpr,
     ResolvedFunction, Scan, SortOrder,
 };
@@ -365,7 +365,34 @@ impl Resolver<'_> {
         env: &Arc<Env>,
     ) -> Result<Rel, AnalysisError> {
         let c = self.child(input, env)?;
-        self.project_items(p, &c, exprs, env)
+        let r = self.project_items(p, &c, exprs, env)?;
+        // A global aggregate over a metric view (`SELECT measure(m) FROM mv`): Spark's rule fires on it.
+        if super::metric_view::reads_metric_view(&c.plan)
+            && super::metric_view::is_aggregate(&r.plan)
+        {
+            return self.metric_view_global_aggregate(p, input, exprs, env);
+        }
+        Ok(r)
+    }
+
+    /// The global aggregate of a metric-view projection; out of line so `project`'s frame, on the
+    /// resolver's recursion path, stays small.
+    #[inline(never)]
+    fn metric_view_global_aggregate(
+        &mut self,
+        p: &LogicalPlan,
+        input: &Arc<LogicalPlan>,
+        exprs: &[Arc<Expr>],
+        env: &Arc<Env>,
+    ) -> Result<Rel, AnalysisError> {
+        let global = Grouping::GroupBy(Vec::new());
+        let agg = LogicalPlan::new(PlanNode::Aggregate {
+            input: Arc::clone(input),
+            grouping: global.clone(),
+            aggregates: exprs.to_vec(),
+        })
+        .with_origin(p.origin);
+        self.aggregate_node(&agg, input, &global, exprs, env)
     }
 
     pub(super) fn project_items(
@@ -1624,8 +1651,13 @@ mod lift;
 pub(in crate::analyzer) use lift::*;
 
 mod sortlimit;
+pub(super) use sortlimit::LimitKind;
 
 mod join;
+
+mod asof;
+
+mod na;
 
 mod distinct;
 

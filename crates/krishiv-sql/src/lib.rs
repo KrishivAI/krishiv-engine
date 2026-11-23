@@ -143,6 +143,13 @@ pub struct ParserOptions {
     /// `DEFAULT COLLATION`; off, `ALTER SCHEMA .. DEFAULT COLLATION` is
     /// `UNSUPPORTED_FEATURE.SCHEMA_LEVEL_COLLATIONS`.
     pub schema_level_collations: bool,
+    /// `spark.sql.join.asofJoin.enabled` (Spark 4.3, off by default):
+    /// `ASOF JOIN` after a relation starts an as-of join; off, an as-of join
+    /// is `UNSUPPORTED_FEATURE.ASOF_JOIN` and `ASOF` stays a name.
+    pub asof_join: bool,
+    /// `spark.sql.timeTravel.atSyntax.enabled` (on by default): a table name may carry an `@v123` or
+    /// `@yyyyMMddHHmmssSSS` time travel suffix.
+    pub time_travel_at_syntax: bool,
 }
 
 impl Default for ParserOptions {
@@ -190,6 +197,8 @@ impl ParserOptions {
                 false,
             ),
             schema_level_collations: on("spark.sql.collation.schemaLevel.enabled", false),
+            asof_join: on("spark.sql.join.asofJoin.enabled", false),
+            time_travel_at_syntax: on("spark.sql.timeTravel.atSyntax.enabled", true),
         }
     }
 }

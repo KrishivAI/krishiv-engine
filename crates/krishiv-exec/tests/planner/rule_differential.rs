@@ -45,7 +45,7 @@ enum Off {
 }
 
 /// The switched rules: the optimizer differential's list.
-const RULES: [(&str, Off); 8] = [
+const RULES: [(&str, Off); 10] = [
     ("cse", Off::Option(|o| o.cse = false)),
     (
         "stats_propagation",
@@ -63,6 +63,10 @@ const RULES: [(&str, Off); 8] = [
         "late_payload_join",
         Off::Option(|o| o.late_payload_join = false),
     ),
+    (
+        "preserved_side_semi_join",
+        Off::Option(|o| o.preserved_side_semi_join = false),
+    ),
     ("group_key_code", Off::Option(|o| o.group_key_code = false)),
     (
         "subquery_as_window",
@@ -71,6 +75,10 @@ const RULES: [(&str, Off); 8] = [
     (
         "share_repeated_subtrees",
         Off::Config("krishiv.optimizer.shareRepeatedSubtrees"),
+    ),
+    (
+        "share_filtered_scans",
+        Off::Config("krishiv.optimizer.shareFilteredScans"),
     ),
 ];
 

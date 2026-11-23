@@ -267,6 +267,8 @@ impl crate::UdfHost for CountingHost {
     fn session_runtime(
         &self,
         _: &str,
+        _: Option<&str>,
+        _: bool,
         _: &str,
         _: crate::RunnerConf,
     ) -> Arc<dyn crate::SessionUdfRuntime> {

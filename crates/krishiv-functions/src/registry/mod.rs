@@ -26,6 +26,7 @@ mod conditional;
 mod crypto;
 mod csv;
 mod defs;
+mod describe;
 mod element;
 mod generator;
 mod geo;
@@ -56,6 +57,7 @@ use std::sync::{Arc, LazyLock};
 pub use catalog::SparkFunction;
 pub use defs::legacy_day_count;
 pub use defs::{approx_percentile_result, exact_percentile_result};
+pub use describe::spark_function_description;
 pub use groups::{FunctionGroup, spark_function_groups};
 pub(crate) use json::parse_json_schema;
 pub use variant::variant_castable;
@@ -142,6 +144,9 @@ pub enum Aggregate {
     CollectList,
     /// `collect_set(x)`.
     CollectSet,
+    /// `collect_union(x)` (Spark 4.3): the distinct non-NULL elements of the arrays of `x`. The analyzer rewrites it to
+    /// `array_distinct(array_compact(flatten(collect_list(x))))`, so no executor ever sees it.
+    CollectUnion,
     /// `vector_sum(x)`: element-wise sums over `ARRAY<FLOAT>`.
     VectorSum,
     /// `vector_avg(x)`: element-wise means over `ARRAY<FLOAT>`.
@@ -181,6 +186,8 @@ pub enum Aggregate {
     /// deterministic)` and `mode() WITHIN GROUP (ORDER BY col)` forms.
     /// The input type.
     Mode,
+    /// `measure(m)` (Spark 4.2 metric views): never evaluated. The input type.
+    Measure,
     /// `listagg(expr[, delimiter])` (and `string_agg`, which the analyzer
     /// resolves as `listagg` for Spark's display name): the non-NULL
     /// values joined by the delimiter. The input type (`STRING` or
@@ -334,12 +341,18 @@ fn grammar_row(name: &str) -> Option<SparkFunction> {
         "__find_in_set_lcase" => "__find_in_set_lcase",
         "__trim_collated" => "__trim_collated",
         "__icu_case" => "__icu_case",
+        "__like_fold" => "__like_fold",
+        "__like_fold_pattern" => "__like_fold_pattern",
         "__replace_lcase" => "__replace_lcase",
         "__translate_lcase" => "__translate_lcase",
         "__split_part_lcase" => "__split_part_lcase",
         "__substring_index_lcase" => "__substring_index_lcase",
         // The run-time `INDETERMINATE_COLLATION` of a call whose operands have no one collation (`str_to_map`, `split_part`).
         "__indeterminate_collation" => "__indeterminate_collation",
+        // `JSON_TABLE`'s lowering: the row texts of a document, and a column's value or existence in a row text.
+        "__json_table_rows" => "__json_table_rows",
+        "__json_table_value" => "__json_table_value",
+        "__json_table_exists" => "__json_table_exists",
         _ => return None,
     };
     let arity = if name == "__time_windows" {
@@ -360,6 +373,7 @@ fn grammar_row(name: &str) -> Option<SparkFunction> {
             | "__startswith_lcase"
             | "__endswith_lcase"
             | "__find_in_set_lcase"
+            | "__like_fold"
     ) {
         Arity::new([false, false, true, false, false, false, false], "2")
     } else {

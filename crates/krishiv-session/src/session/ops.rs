@@ -355,6 +355,7 @@ impl Session {
         dry: bool,
     ) -> Result<Vec<String>, KrishivError> {
         let WriteTarget {
+            bucket,
             format,
             mode,
             path,
@@ -390,6 +391,22 @@ impl Session {
         if !partitions.is_empty() && partitions.len() == schema.fields().len() {
             return Err(AllPartitionColumnsNotAllowed {}.into());
         }
+        // The bucket id column `bucketBy` appended, and the columns each bucket is sorted by.
+        let bucket_write = match &bucket {
+            None => None,
+            Some(b) => {
+                // `with_bucket_id` appends the bucket id as the last column.
+                let column = schema.fields().len().checked_sub(1).ok_or_else(|| {
+                    internal("a bucketed write without its bucket id column".to_owned())
+                })?;
+                let sort_by = super::writes::resolve_columns(
+                    &schema,
+                    &b.sort_by,
+                    env.analysis.conf.case_sensitive,
+                )?;
+                Some(krishiv_exec::physical::BucketWrite { column, sort_by })
+            }
+        };
         let dynamic =
             !partitions.is_empty() && partition_overwrite_is_dynamic(&env.config, &options)?;
         let max_records = max_records_per_file(&options, format.name())?;
@@ -413,7 +430,10 @@ impl Session {
         // Admitted by the caller already (it changed something before this write), else here.
         let mut admitted = Some(match pre.take() {
             Some(admitted) => admitted,
-            None => self.admit_query(env, false).await?,
+            None => {
+                self.admit_query(env, false, krishiv_sql::StatementClass::Write)
+                    .await?
+            }
         });
         // The query's profile waits here for the commit below.
         let hold: Arc<crate::profile_history::HistoryHold> = Arc::default();
@@ -435,6 +455,23 @@ impl Session {
             // An overwrite deletes what it replaces here: from now on a cancel
             // reaches the write through its query, not by dropping it (`action.rs`).
             crate::action::commit_point();
+            if super::writes::key_already_committed(&env.config, &options, &io, &store, &at).await?
+            {
+                return Ok(Vec::new());
+            }
+            // A key the directory cannot record (no commit log) is refused before `begin`, which deletes
+            // a single file an overwrite replaces.
+            super::writes::refuse_unlogged_key_early(
+                &env.config,
+                &options,
+                &self.state.commit_log_probes,
+                &io,
+                &store,
+                &at,
+                &job,
+                mode,
+            )
+            .await?;
             let Some(write) = DirectoryWrite::begin(
                 &io,
                 store.clone(),
@@ -444,26 +481,23 @@ impl Session {
                 dynamic,
             )
             .await?
-            .map(|w| w.partitioned(!partitions.is_empty())) else {
+            .map(|w| w.partitioned(!partitions.is_empty() || bucket.is_some())) else {
                 // `ignore` found the path: nothing is written.
                 return Ok(Vec::new());
             };
             // Boxed: the statement futures are on the recursion of nested
             // scripts, so a larger write future would overflow their stack.
-            let write = if Box::pin(uses_commit_log(
+            let write = Box::pin(logged_or_plain(
+                write,
                 &env.config,
                 &self.state.commit_log_probes,
                 &io,
                 &store,
                 &at,
                 &job,
+                &options,
             ))
-            .await?
-            {
-                Box::pin(write.logged(&io)).await?
-            } else {
-                write
-            };
+            .await?;
             let plan = physical.into_write(WritePlan {
                 format: format.name().to_owned(),
                 // The session's conf fallbacks travel with the plan: a
@@ -476,6 +510,7 @@ impl Session {
                 target_file_bytes: 0,
                 partition_by: partitions.iter().map(|(i, _)| *i).collect(),
                 column_types,
+                bucket: bucket_write,
             })?;
             let worker = self.worker(env);
             let (rows, _, row_id) = self
@@ -639,6 +674,14 @@ impl Drop for AbortOnDrop {
     }
 }
 
+/// The class `StatementClass::name` returned, for the admission request.
+fn statement_class_named(name: &str) -> Option<krishiv_sql::StatementClass> {
+    use krishiv_sql::StatementClass as C;
+    [C::Read, C::Write, C::Ddl, C::Session, C::Admin]
+        .into_iter()
+        .find(|c| c.name() == name)
+}
+
 impl Session {
     /// Asks the admission controller for a permit for the query whose
     /// `system.queries` row is `log_id`. A controller that answers at once
@@ -650,6 +693,7 @@ impl Session {
         log_id: &str,
         env: &QueryEnv,
         exempt: bool,
+        fallback: krishiv_sql::StatementClass,
     ) -> Result<crate::admission::Permit, KrishivError> {
         // A query that reads only `system.*` is never queued behind the load it inspects.
         if exempt {
@@ -660,8 +704,15 @@ impl Session {
             principal: Arc::clone(&self.state.principal),
             tags: self.effective_tags(),
             class: WorkloadClass::Interactive,
-            source: None,
-            statement_class: None,
+            source: self.state.activity.client_type(),
+            // A query no SQL statement started (DataFrame, Spark Connect plan) has no class on
+            // its env, and one a `SELECT` started (`spark.sql("select ..").write...`) carries
+            // `READ` into the write it ends in: the entry point that admits the query names the
+            // class then. A class a statement set itself (CTAS: `WRITE`, DDL) stays.
+            statement_class: match env.statement_class.and_then(statement_class_named) {
+                Some(krishiv_sql::StatementClass::Read) | None => Some(fallback),
+                other => other,
+            },
             estimate: env.catalog.estimate(),
         };
         let controller = Arc::clone(&self.state.admission);
@@ -675,6 +726,9 @@ impl Session {
             Poll::Ready(done) => done,
             Poll::Pending => {
                 self.state.queries.set_state(log_id, "queued");
+                if let Some(group) = controller.queued_group(&request) {
+                    self.state.queries.set_group(log_id, &group);
+                }
                 let done = admit.await;
                 if done.is_ok() {
                     self.state.queries.set_state(log_id, "running");
@@ -702,24 +756,39 @@ impl Session {
 
     /// Begins the `system.queries` row of a query and waits for its admission permit. A caller
     /// that is about to change something (a write replacing files) takes the permit first and
-    /// passes it on, so a refused or cancelled query has changed nothing.
+    /// passes it on, so a refused or cancelled query has changed nothing. `fallback` is the class the
+    /// admission request gets when the env has none (a DataFrame or Connect plan, not SQL text).
     pub(crate) async fn admit_query(
         &self,
         env: &QueryEnv,
         exempt: bool,
+        fallback: krishiv_sql::StatementClass,
     ) -> Result<Admitted, KrishivError> {
         // The policy of the query's own configuration snapshot, passed to its row (no shared slot).
+        // A query a command runs for itself (an `INSERT`'s write) has no statement: it is the command's.
+        let command = match env.text {
+            None => super::ran::command_statement(),
+            Some(_) => None,
+        };
+        let (text, class) = match &command {
+            Some(c) => (Some(&*c.text), Some(c.class)),
+            None => (env.text.as_deref(), env.statement_class),
+        };
         let log_id = self.state.queries.begin_as(
             crate::system::TextPolicy::from_config(&env.config),
-            env.text.as_deref(),
-            env.statement_class,
+            text,
+            class,
             self.operation_id(),
         )?;
         crate::action::note_row(&log_id);
         // The request tags join the row's tags at once, so a queued query shows them too.
         self.stamp_row(&log_id);
         *env.row.lock().unwrap_or_else(PoisonError::into_inner) = Some(log_id.clone());
-        let permit = self.admit(&log_id, env, exempt).await?;
+        // The command's listed run: a failure of it is this row, and the statement gets no refused row.
+        if let Some(c) = &command {
+            *c.row.lock().unwrap_or_else(PoisonError::into_inner) = Some(log_id.clone());
+        }
+        let permit = self.admit(&log_id, env, exempt, fallback).await?;
         Ok(Admitted::new(Arc::clone(&self.state), log_id, permit))
     }
 }

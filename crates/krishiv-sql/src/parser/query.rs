@@ -2,6 +2,7 @@
 //! Parsing queries: set operations, pipes, SELECT, FROM, joins, PIVOT and the clauses around them.
 
 use super::*;
+use crate::ast::{JsonTable, JsonTableColumn, JsonTableColumnKind};
 
 impl Parser<'_> {
     /// A query; a failure at a position is remembered, so the subquery
@@ -12,7 +13,11 @@ impl Parser<'_> {
             self.far = self.far.max(far);
             return Err(Fail::Syntax);
         }
+        // A query inside an as-of join's right side is not that side: `MATCH_CONDITION` there
+        // is an ordinary alias again.
+        let asof_right = std::mem::replace(&mut self.asof_right, false);
         let r = self.query_at();
+        self.asof_right = asof_right;
         if matches!(r, Err(Fail::Syntax)) {
             self.failed_queries.insert(pos, self.far);
         }
@@ -247,42 +252,43 @@ impl Parser<'_> {
     /// Whether `|` before token `n` is the pipe operator, not a bitwise or.
     pub(crate) fn single_pipe_word_at(&self, n: usize) -> bool {
         self.opts.single_character_pipe_operator
-            && self.any_kw_at(
-                n,
-                &[
-                    "SELECT",
-                    "EXTEND",
-                    "SET",
-                    "DROP",
-                    "AS",
-                    "WHERE",
-                    "PIVOT",
-                    "UNPIVOT",
-                    "TABLESAMPLE",
-                    "INNER",
-                    "CROSS",
-                    "LEFT",
-                    "RIGHT",
-                    "FULL",
-                    "NATURAL",
-                    "SEMI",
-                    "ANTI",
-                    "JOIN",
-                    "UNION",
-                    "EXCEPT",
-                    "MINUS",
-                    "INTERSECT",
-                    "ORDER",
-                    "CLUSTER",
-                    "DISTRIBUTE",
-                    "SORT",
-                    "LIMIT",
-                    "OFFSET",
-                    "AGGREGATE",
-                    "WINDOW",
-                    "LATERAL",
-                ],
-            )
+            && (self.opts.asof_join && self.kw_at(n, "ASOF")
+                || self.any_kw_at(
+                    n,
+                    &[
+                        "SELECT",
+                        "EXTEND",
+                        "SET",
+                        "DROP",
+                        "AS",
+                        "WHERE",
+                        "PIVOT",
+                        "UNPIVOT",
+                        "TABLESAMPLE",
+                        "INNER",
+                        "CROSS",
+                        "LEFT",
+                        "RIGHT",
+                        "FULL",
+                        "NATURAL",
+                        "SEMI",
+                        "ANTI",
+                        "JOIN",
+                        "UNION",
+                        "EXCEPT",
+                        "MINUS",
+                        "INTERSECT",
+                        "ORDER",
+                        "CLUSTER",
+                        "DISTRIBUTE",
+                        "SORT",
+                        "LIMIT",
+                        "OFFSET",
+                        "AGGREGATE",
+                        "WINDOW",
+                        "LATERAL",
+                    ],
+                ))
     }
 
     /// One pipe operator, from its `|>` (or `|`).
@@ -1156,6 +1162,73 @@ impl Parser<'_> {
         }))
     }
 
+    /// `JSON_TABLE(input, 'path' COLUMNS (column, ...) [NULL | ERROR ON ERROR])`.
+    fn json_table(&mut self) -> PR<TableFactorKind> {
+        self.bump();
+        self.expect_sym(Sym::LParen)?;
+        let input = self.expr()?;
+        self.expect_sym(Sym::Comma)?;
+        let path_start = self.start();
+        let Some(path) = self.string_lit() else {
+            return self.fail();
+        };
+        let path_span = self.span_from(path_start);
+        self.expect_kw("COLUMNS")?;
+        self.expect_sym(Sym::LParen)?;
+        let mut columns = vec![self.json_table_column()?];
+        while self.eat_sym(Sym::Comma) {
+            columns.push(self.json_table_column()?);
+        }
+        self.expect_sym(Sym::RParen)?;
+        let mut error_on_error = false;
+        if self.any_kw_at(0, &["NULL", "ERROR"]) {
+            error_on_error = self.kw_at(0, "ERROR");
+            self.bump();
+            self.expect_kw("ON")?;
+            self.expect_kw("ERROR")?;
+        }
+        self.expect_sym(Sym::RParen)?;
+        Ok(TableFactorKind::JsonTable(Box::new(JsonTable {
+            input,
+            path,
+            path_span,
+            columns,
+            error_on_error,
+        })))
+    }
+
+    /// One `JSON_TABLE` column: `name FOR ORDINALITY` or `name type [EXISTS] [PATH 'path']`.
+    fn json_table_column(&mut self) -> PR<JsonTableColumn> {
+        let start = self.start();
+        let name = self.any_ident()?;
+        let kind = if self.eat_kw("FOR") {
+            self.expect_kw("ORDINALITY")?;
+            JsonTableColumnKind::Ordinality
+        } else {
+            let data_type = self.data_type()?;
+            let exists = self.eat_kw("EXISTS");
+            let path = if self.eat_kw("PATH") {
+                let at = self.start();
+                let Some(p) = self.string_lit() else {
+                    return self.fail();
+                };
+                Some((p, self.span_from(at)))
+            } else {
+                None
+            };
+            if exists {
+                JsonTableColumnKind::Exists { data_type, path }
+            } else {
+                JsonTableColumnKind::Value { data_type, path }
+            }
+        };
+        Ok(JsonTableColumn {
+            name,
+            kind,
+            span: self.span_from(start),
+        })
+    }
+
     pub(super) fn table_factor(&mut self) -> PR<TableFactor> {
         let start = self.start();
         let kind = if self.kw_at(0, "VALUES") && !self.item_end_at(1) {
@@ -1191,7 +1264,10 @@ impl Parser<'_> {
                     TableFactorKind::Nested(Box::new(r))
                 }
             }
+        } else if self.kw_at(0, "JSON_TABLE") && self.sym_at(1, Sym::LParen) {
+            self.json_table()?
         } else {
+            let name_start = self.tok(0).map_or(0, |t| t.span.start);
             let name = self.ddl_name()?;
             if self.sym_at(0, Sym::LParen) {
                 self.bump();
@@ -1210,7 +1286,16 @@ impl Parser<'_> {
                     args,
                 }
             } else {
-                let temporal = self.temporal_clause()?;
+                let at_suffix = self.at_suffix_clause(name_start)?;
+                let temporal = match (at_suffix, self.temporal_clause()?) {
+                    (Some(mut at), Some(clause)) => {
+                        // Spark's `AstBuilder` reports it after the statement parsed; an earlier
+                        // fault of the suffix is the first error.
+                        at.fault.get_or_insert(TemporalFault::Multiple(clause.span));
+                        Some(at)
+                    }
+                    (at, clause) => at.or(clause),
+                };
                 let options = self.table_options()?;
                 match name {
                     DdlName::Parts(name) => TableFactorKind::Table {
@@ -1375,6 +1460,94 @@ impl Parser<'_> {
         })
     }
 
+    /// The `@v123` / `@yyyyMMddHHmmssSSS` suffix of a table name (Spark 4.3), as the clause it
+    /// stands for: `VERSION AS OF 123` or `TIMESTAMP AS OF 'yyyy-MM-dd HH:mm:ss.SSS'`.
+    /// Spark's grammar is `AT_SIGN INTEGER_VALUE | AT_VERSION (INTEGER_VALUE | stringLit)` with
+    /// `@V` one token: `@v1`, `@v 1` and `@v'x'` are versions, `@ 20240101000000000` a timestamp
+    /// (any digits; `parseAtSyntaxTimestamp` checks them). `name_start` is where the table name
+    /// began: the errors point at name and suffix.
+    #[inline(never)]
+    fn at_suffix_clause(&mut self, name_start: usize) -> PR<Option<TemporalClause>> {
+        let at_tok = match self.tok(0) {
+            Some(t) if t.kind == TokenKind::Unrecognized && t.span.text(self.src) == "@" => t,
+            _ => return Ok(None),
+        };
+        let start = self.start();
+        let adjacent = self
+            .tok(1)
+            .filter(|t| t.span.start == at_tok.span.end && t.kind == TokenKind::Word);
+        let word = adjacent.map(|t| t.span.text(self.src));
+        let int_at = |p: &Self, i: usize| {
+            p.tok(i)
+                .filter(|t| t.kind == TokenKind::Number(NumKind::Int))
+                .map(|t| (t.span, t.span.text(p.src).to_owned()))
+        };
+        let (kind, literal, value_span) = if let Some(n) = word
+            .and_then(|w| w.strip_prefix(['v', 'V']))
+            .filter(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+        {
+            let span = adjacent.map_or(at_tok.span, |t| t.span);
+            self.pos += 2;
+            (
+                TemporalKind::Version,
+                Literal::Number {
+                    text: n.to_owned(),
+                    kind: NumKind::Int,
+                },
+                span,
+            )
+        } else if word.is_some_and(|w| w.eq_ignore_ascii_case("v")) {
+            if let Some((span, text)) = int_at(self, 2) {
+                self.pos += 3;
+                (
+                    TemporalKind::Version,
+                    Literal::Number {
+                        text,
+                        kind: NumKind::Int,
+                    },
+                    span,
+                )
+            } else {
+                self.pos += 2;
+                let span = self.tok(0).map_or(at_tok.span, |t| t.span);
+                let Some(text) = self.single_string() else {
+                    return self.fail();
+                };
+                (TemporalKind::Version, Literal::String(text), span)
+            }
+        } else if let Some((span, text)) = int_at(self, 1) {
+            self.pos += 2;
+            (TemporalKind::Timestamp, Literal::String(text), span)
+        } else {
+            self.bump();
+            return self.fail();
+        };
+        let whole = Span::new(name_start, value_span.end);
+        let mut fault = None;
+        if !self.opts.time_travel_at_syntax {
+            fault = Some(TemporalFault::AtSyntaxDisabled(whole));
+        }
+        let literal = match (kind, literal) {
+            (TemporalKind::Timestamp, Literal::String(digits)) => match at_timestamp(&digits) {
+                Some(text) => Literal::String(text),
+                None => {
+                    fault.get_or_insert(TemporalFault::InvalidAtTimestamp(digits.clone(), whole));
+                    Literal::String(digits)
+                }
+            },
+            (_, literal) => literal,
+        };
+        Ok(Some(TemporalClause {
+            kind,
+            value: Expr {
+                kind: ExprKind::Literal(literal),
+                span: value_span,
+            },
+            span: self.span_from(start),
+            fault,
+        }))
+    }
+
     /// `[FOR] (VERSION | SYSTEM_VERSION) AS OF version` or `[FOR]
     /// (TIMESTAMP | SYSTEM_TIME) AS OF expression`, if one starts here.
     #[inline(never)]
@@ -1420,6 +1593,7 @@ impl Parser<'_> {
             kind,
             value,
             span: self.span_from(start),
+            fault: None,
         }))
     }
 
@@ -1508,14 +1682,24 @@ impl Parser<'_> {
         .find_map(|(kw, k)| at(self, 0, kw).then_some(k))
         {
             (kind, 1 + usize::from(at(self, 1, "OUTER")))
+        } else if !natural && at(self, 0, "ASOF") {
+            (JoinKind::Inner, 0)
         } else {
             if natural {
                 self.bump();
-                return self.fail();
+                return self.asof_extra_input();
             }
             return Ok(None);
         };
         self.pos += n + words;
+        if self.kw_at(0, "ASOF") {
+            if natural || !matches!(kind, JoinKind::Inner | JoinKind::Left) {
+                // Spark's `asofJoinType` is `INNER?` or `LEFT OUTER?`: ANTLR
+                // drops the `ASOF` after any other join type.
+                return self.asof_extra_input();
+            }
+            return self.asof_join(start, kind).map(Some);
+        }
         self.expect_kw("JOIN")?;
         let lateral = self.eat_kw("LATERAL");
         let right = Box::new(self.table_factor()?);
@@ -1538,6 +1722,53 @@ impl Parser<'_> {
             constraint,
             span: self.span_from(start),
         }))
+    }
+
+    /// The syntax error at an `ASOF` after a join type it may not follow
+    /// (`RIGHT`, `FULL`, `CROSS`, `NATURAL`, `[LEFT] SEMI`, `[LEFT] ANTI`):
+    /// ANTLR deletes it as "extra input" when `JOIN` follows.
+    fn asof_extra_input<T>(&mut self) -> PR<T> {
+        if self.kw_at(0, "ASOF") && self.kw_at(1, "JOIN") && self.pos >= self.far {
+            self.extra = Some(self.pos);
+        }
+        self.fail()
+    }
+
+    /// `ASOF JOIN right MATCH_CONDITION (expr) [ON expr | USING (columns)]`
+    /// from the `ASOF` (Spark 4.3's `joinRelation` as-of branch; no
+    /// `LATERAL`). Whether the flag allows it and the match operator are
+    /// checked after parsing (`validate/`), as Spark's `AstBuilder` does.
+    fn asof_join(&mut self, start: usize, kind: JoinKind) -> PR<Join> {
+        self.expect_kw("ASOF")?;
+        self.expect_kw("JOIN")?;
+        let outer = std::mem::replace(&mut self.asof_right, true);
+        let right = self.table_factor();
+        self.asof_right = outer;
+        let right = Box::new(right?);
+        let criteria_start = self.start();
+        self.expect_kw("MATCH_CONDITION")?;
+        self.expect_sym(Sym::LParen)?;
+        let match_condition = self.expr()?;
+        self.expect_closing(Sym::RParen, Close::DropOrInsert)?;
+        let filter = if self.eat_kw("ON") {
+            Some(AsOfFilter::On(self.expr()?))
+        } else if self.eat_kw("USING") {
+            Some(AsOfFilter::Using(self.ident_list()?))
+        } else {
+            None
+        };
+        Ok(Join {
+            kind,
+            natural: false,
+            lateral: false,
+            right,
+            constraint: JoinConstraint::AsOf(Box::new(AsOfCriteria {
+                match_condition,
+                filter,
+                span: self.span_from(criteria_start),
+            })),
+            span: self.span_from(start),
+        })
     }
 
     /// `(APPROX | EXACT) NEAREST [k] BY (DISTANCE | SIMILARITY) expr`.
@@ -1688,4 +1919,36 @@ impl Parser<'_> {
         }
         Ok(out)
     }
+}
+
+/// `yyyyMMddHHmmssSSS` as `yyyy-MM-dd HH:mm:ss.SSS`, when it has 17 digits that make a date-time
+/// (what `LocalDateTime.of` accepts: Spark's `parseAtSyntaxTimestamp`).
+fn at_timestamp(word: &str) -> Option<String> {
+    if word.len() != 17 || !word.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let n = |a: usize, b: usize| word[a..b].parse::<u32>().ok();
+    let (year, month, day) = (n(0, 4)?, n(4, 6)?, n(6, 8)?);
+    let (hour, minute, second) = (n(8, 10)?, n(10, 12)?, n(12, 14)?);
+    let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    let days = match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if leap => 29,
+        2 => 28,
+        _ => return None,
+    };
+    if day == 0 || day > days || hour > 23 || minute > 59 || second > 59 {
+        return None;
+    }
+    Some(format!(
+        "{}-{}-{} {}:{}:{}.{}",
+        &word[0..4],
+        &word[4..6],
+        &word[6..8],
+        &word[8..10],
+        &word[10..12],
+        &word[12..14],
+        &word[14..17]
+    ))
 }
