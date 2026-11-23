@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Dense expression ids for plan text: the planner's high ids follow the plan's own.
 
+use std::collections::HashMap;
 use std::fmt::Write as _;
 
 /// The ids the planner and the common-subexpression pass give their own columns start at 2^62 (the planner) and 2^32 (the common-subexpression pass), far above the
@@ -64,7 +65,8 @@ pub fn dense_ids_all(texts: &[&str]) -> Vec<String> {
         .filter(|&n| n < HIGH)
         .max()
         .map_or(0, |m| m.saturating_add(1));
-    let mut mapped: Vec<u64> = Vec::new();
+    // Rank by first encounter; the map is only looked up, never iterated.
+    let mut ranks: HashMap<u64, usize> = HashMap::new();
     texts
         .iter()
         .zip(&found)
@@ -75,10 +77,8 @@ pub fn dense_ids_all(texts: &[&str]) -> Vec<String> {
                 if n < HIGH {
                     continue;
                 }
-                let rank = mapped.iter().position(|&m| m == n).unwrap_or_else(|| {
-                    mapped.push(n);
-                    mapped.len() - 1
-                });
+                let next = ranks.len();
+                let rank = *ranks.entry(n).or_insert(next);
                 out.push_str(&text[at..start]);
                 let _ = write!(out, "{}", base.saturating_add(rank as u64));
                 at = end;
