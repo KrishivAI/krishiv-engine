@@ -159,9 +159,9 @@ impl CatalogCaller {
     }
 }
 
-/// What a declared catalog's table is read with in one query (PR-58b): the query's I/O, its path
+/// What a declared catalog's table is read with in one query: the query's I/O, its path
 /// placement (the session's stores; in server mode confined to `krishiv.io.local.allowedRoots`
-/// and `krishiv.io.objectStore.allowedPrefixes`, ADR 0046 §3a), its configuration and the
+/// and `krishiv.io.objectStore.allowedPrefixes`), its configuration and the
 /// worker slots splits are cut for.
 #[derive(Clone)]
 #[non_exhaustive]
@@ -174,11 +174,11 @@ pub struct ScanInputs {
     pub config: Arc<Config>,
     /// The drivers splits are planned for.
     pub worker_slots: u64,
-    /// What a table read with credentials of its own builds its stores from (vended, design P3-T067 §4.1).
+    /// What a table read with credentials of its own builds its stores from (vended).
     pub stores: ScopedStores,
 }
 
-/// What a table read with credentials of its own (vended, design P3-T067 §4.1) builds its stores from: the query's
+/// What a table read with credentials of its own (vended) builds its stores from: the query's
 /// configuration and the runtime's I/O scheduler. It holds no credential.
 #[derive(Clone)]
 pub struct ScopedStores {
@@ -265,8 +265,8 @@ impl ScanInputs {
     }
 }
 
-/// A table a declared catalog loaded for one caller at one version: what a scan of it opens
-/// (PR-58b). Opened before planning, on the executor's I/O runtime.
+/// A table a declared catalog loaded for one caller at one version: what a scan of it opens.
+/// Opened before planning, on the executor's I/O runtime.
 pub trait DeclaredTable: fmt::Debug + Send + Sync {
     /// The table's provider, read with `inputs`.
     ///
@@ -701,7 +701,7 @@ struct DeclaredCatalog(Arc<Declared>, CatalogCaller, Arc<DeclaredLoads>);
 /// table, as the catalog spells them) and the version it was loaded at.
 pub(crate) type DeclaredKey = (Vec<String>, Option<TableVersion>);
 
-/// The declared tables one query loaded and opened (PR-58b): the analysis records each table a
+/// The declared tables one query loaded and opened: the analysis records each table a
 /// declared catalog loaded; before planning each scanned one is opened once, so every scan of it
 /// in the query reads one provider.
 #[derive(Default)]
@@ -1074,7 +1074,7 @@ pub(crate) struct CatalogRow {
     pub(crate) kind: &'static str,
     pub(crate) auth: &'static str,
     pub(crate) storage: &'static str,
-    /// The delegation form of a `delegated` catalog (PR-58b); `None` otherwise.
+    /// The delegation form of a `delegated` catalog; `None` otherwise.
     pub(crate) delegation: Option<&'static str>,
     pub(crate) default: bool,
 }

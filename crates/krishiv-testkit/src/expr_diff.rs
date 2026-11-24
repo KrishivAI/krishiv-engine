@@ -228,6 +228,10 @@ fn documented_divergence(m: &Mismatch, ev: &mut dyn Evaluator) -> bool {
     }
 }
 
+/// The Spark release the fixture's answers come from (the nightly generates them with `pyspark==4.2.0`):
+/// the engine answers under that release's profile, not its own default (4.3).
+const ORACLE_TAG: &str = "v4.2.0";
+
 /// Replays every case and returns the minimal mismatches, sorted by key, without the
 /// documented divergences (the ADR 0023 date arithmetic overflow, see `documented_divergence`).
 pub fn run(fixture: &Fixture, ev: &mut dyn Evaluator) -> Vec<Mismatch> {
@@ -272,7 +276,9 @@ impl SessionEvaluator {
     /// # Errors
     /// When the session or the table's setup statement fails.
     pub fn new(setup: &str) -> Result<Self, String> {
-        let mut engine = SessionEngine::new().map_err(|e| e.message)?;
+        let mut engine = SessionEngine::new()
+            .map_err(|e| e.message)?
+            .with_tag(ORACLE_TAG);
         engine
             .reset(&SessionSetup::plain(TestKind::Regular))
             .map_err(|e| e.message)?;
@@ -293,7 +299,9 @@ impl SessionEvaluator {
         if source == fixture.setup {
             return Err("the setup does not define the view `t`".to_owned());
         }
-        let mut engine = SessionEngine::new().map_err(|e| e.message)?;
+        let mut engine = SessionEngine::new()
+            .map_err(|e| e.message)?
+            .with_tag(ORACLE_TAG);
         engine
             .reset(&SessionSetup::plain(TestKind::Regular))
             .map_err(|e| e.message)?;
