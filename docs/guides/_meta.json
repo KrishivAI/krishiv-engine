@@ -31,5 +31,6 @@
   "python-table-functions": "Python table functions",
   "upgrading-from-0.2": "Upgrading from 0.2",
   "run-krishiv-in-docker": "Run Krishiv in Docker",
-  "local-lakehouse-docker-compose": "Local lakehouse with docker compose"
+  "local-lakehouse-docker-compose": "Local lakehouse with docker compose",
+  "streaming": "Streaming: what works today"
 }
