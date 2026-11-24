@@ -2267,3 +2267,44 @@ async fn a_temp_view_made_by_spark_sql_can_be_read() {
         300
     );
 }
+
+/// The `show_string` text a ROOT `ShowString` answers for `input`.
+async fn shown(input: pb::Relation, num_rows: i32, truncate: i32, vertical: bool) -> String {
+    let run = start().await;
+    let show = relation(RelType::ShowString(Box::new(pb::ShowString {
+        input: Some(Box::new(input)),
+        num_rows,
+        truncate,
+        vertical,
+    })));
+    let responses = collect(&run.channel, request(root(show)))
+        .await
+        .expect("show_string");
+    let b = batches(&responses);
+    assert_eq!(b.len(), 1, "one batch");
+    let read = read_ipc(&b[0].data);
+    assert_eq!(read[0].num_rows(), 1);
+    assert_eq!(read[0].schema().field(0).name(), "show_string");
+    read[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<arrow_array::StringArray>()
+        .expect("string")
+        .value(0)
+        .to_owned()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn show_string_lays_out_the_first_rows_like_dataset_show() {
+    let text = shown(
+        sql("SELECT id, CAST(NULL AS STRING) AS s, X'0102' AS b FROM range(3)"),
+        2,
+        20,
+        false,
+    )
+    .await;
+    assert_eq!(
+        text,
+        "+---+----+-------+\n| id|   s|      b|\n+---+----+-------+\n|  0|NULL|[01 02]|\n|  1|NULL|[01 02]|\n+---+----+-------+\nonly showing top 2 rows"
+    );
+}

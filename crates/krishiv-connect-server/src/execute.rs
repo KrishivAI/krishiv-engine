@@ -51,6 +51,7 @@ mod catalog_call;
 pub(crate) mod hooks;
 pub mod observed;
 pub mod schema;
+mod show_string;
 mod sql_command;
 mod write_command;
 
@@ -391,6 +392,22 @@ pub async fn execute_plan(
                 .await?;
                 return Ok(Prepared::Command(answer));
             }
+            // `df.show()`: the input runs as a query and its first rows are laid out as text.
+            if let Some(shown) = show_string::of(plan) {
+                let Executed::Relation(requested) =
+                    Box::pin(execution_plan(entry, &shown.plan, limits, &query_options)).await?
+                else {
+                    return Err(InternalError {
+                        message: "a show_string input is not a relation".to_owned(),
+                    }
+                    .into());
+                };
+                let df = requested.frame(session, query_options).await?;
+                return Ok(Prepared::Text(
+                    shown.html,
+                    show_string::render(&df, &shown).await?,
+                ));
+            }
             // Decompression (up to `maxPlanSize`) runs off the async workers.
             match Box::pin(execution_plan(entry, plan, limits, &query_options)).await? {
                 Executed::Relation(requested) => {
@@ -425,6 +442,15 @@ pub async fn execute_plan(
                 (Work::Command(Box::new(answer)), registered)
             }
             (Prepared::Checkpoint(id), registered) => (Work::Checkpoint(id), registered),
+            (Prepared::Text(html, text), registered) => {
+                let schema = show_string::answer_schema(html);
+                let work = Work::Text(Box::new(Shown {
+                    schema_response: schema::proto_schema(&schema)?,
+                    batch: show_string::answer_batch(html, text)?,
+                    settings: encode_settings(&conf, limits, opts.chunking),
+                }));
+                (work, registered)
+            }
             (Prepared::Done, registered) => (Work::NoResult, registered),
         }
     };
@@ -504,6 +530,8 @@ enum Prepared {
     Done,
     /// A `checkpoint_command`: the id the result frame is held under.
     Checkpoint(String),
+    /// A `show_string` / `html_string` relation, laid out: whether it is the HTML form, and the text.
+    Text(bool, String),
 }
 
 /// The producing side of `op`.
@@ -1171,10 +1199,19 @@ enum Work {
     Command(Box<sql_command::Answer>),
     /// A `checkpoint_command`: the id its result is held under.
     Checkpoint(String),
+    /// A `show_string` / `html_string`: one batch of one string row.
+    Text(Box<Shown>),
     /// A command with no result (`ml_command.clean_cache`, a
     /// `register_function` that ran): only `result_complete`, when
     /// reattachable.
     NoResult,
+}
+
+/// The answer of a `show_string` / `html_string`.
+struct Shown {
+    schema_response: pb::DataType,
+    batch: arrow_array::RecordBatch,
+    settings: EncodeSettings,
 }
 
 /// A prepared query and how its result is encoded.
@@ -1203,6 +1240,18 @@ impl Work {
             }
             Self::Command(answer) => sql_command::produce(sender, *answer).await,
             Self::Checkpoint(id) => cache_command::produce(sender, id).await,
+            Self::Text(shown) => {
+                sender.admit().await?;
+                let mut first = sender.response(None);
+                first.schema = Some(shown.schema_response.clone());
+                sender.send(first).await?;
+                let batch = arrow::spark_batch(&shown.batch, shown.settings.time_zone.as_ref())?;
+                send_batch(sender, &batch, 0, &shown.settings).await?;
+                let mut metrics = sender.response(None);
+                metrics.metrics = Some(Metrics::default());
+                sender.send(metrics).await?;
+                complete(sender).await
+            }
             Self::NoResult => {
                 sender.admit().await?;
                 complete(sender).await
