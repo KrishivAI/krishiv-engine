@@ -3317,6 +3317,7 @@ dependencies = [
  "cbc",
  "datasketches",
  "fancy-regex",
+ "foldhash",
  "getrandom 0.4.3",
  "krishiv-common",
  "krishiv-io",

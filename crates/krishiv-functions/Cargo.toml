@@ -17,6 +17,7 @@ arrow-buffer.workspace = true
 arrow-schema.workspace = true
 arrow-select.workspace = true
 fancy-regex = { workspace = true, features = ["std"] }
+foldhash.workspace = true
 # Feature selection for the engine fancy-regex delegates to, instead of fancy-regex's all-in
 # `unicode`/`perf` (which add the age and segment tables and aho-corasick). Java needs
 # `\p{..}` categories, scripts and binary properties, `(?u)` case folding and Unicode `\b`.

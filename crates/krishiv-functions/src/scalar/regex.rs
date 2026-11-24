@@ -39,6 +39,8 @@
 //! UTF-16 units, as Java's `Matcher` does; the goldens only pin ASCII, so
 //! supplementary characters stay unverified against Spark 4.2.0.
 
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use arrow_array::builder::{GenericStringBuilder, ListBuilder, StringViewBuilder};
@@ -56,7 +58,10 @@ use super::args::{Inputs, Prim, Str, internal, is_string};
 use super::{BindArg, BindOptions, Binding, FamilyResult, bad_types, listed};
 
 mod java;
+mod memo;
+
 pub(super) use java::translate;
+use memo::Memo;
 
 /// The most backtracking steps one match attempt may take (the
 /// `fancy_regex` default, set explicitly so an upgrade cannot change it).
@@ -335,11 +340,44 @@ fn find_all(compiled: &Compiled, text: &str) -> Result<Vec<(usize, usize)>, Kris
     Ok(out)
 }
 
+/// Patterns each thread keeps compiled, newest first.
+const THREAD_PATTERNS: usize = 4;
+
+thread_local! {
+    /// This thread's compiled patterns (function, pattern, compiled), newest first: a constant
+    /// pattern compiles once per thread instead of once per batch, and its lazy DFA stays warm.
+    /// Per thread, so each regex's search caches stay with the one thread that uses it.
+    static THREAD_COMPILED: RefCell<Vec<(&'static str, String, Rc<Compiled>)>> =
+        const { RefCell::new(Vec::new()) };
+}
+
+/// `pattern` compiled for `function`, from this thread's cache when it is there.
+fn compiled_on_thread(pattern: &str, function: &'static str) -> Result<Rc<Compiled>, KrishivError> {
+    let cached = THREAD_COMPILED.with_borrow_mut(|held| {
+        let at = held
+            .iter()
+            .position(|(f, p, _)| *f == function && p == pattern)?;
+        let entry = held.remove(at);
+        let compiled = Rc::clone(&entry.2);
+        held.insert(0, entry);
+        Some(compiled)
+    });
+    if let Some(compiled) = cached {
+        return Ok(compiled);
+    }
+    let compiled = Rc::new(Compiled::new(pattern, function)?);
+    THREAD_COMPILED.with_borrow_mut(|held| {
+        held.truncate(THREAD_PATTERNS - 1);
+        held.insert(0, (function, pattern.to_owned(), Rc::clone(&compiled)));
+    });
+    Ok(compiled)
+}
+
 /// The memo of the compiled pattern of the last row: a constant pattern
-/// compiles once per expression, a column pattern once per distinct value.
+/// compiles once per thread, a column pattern once per distinct value.
 #[derive(Default)]
 struct Cache {
-    pattern: Option<(String, Compiled)>,
+    pattern: Option<(String, Rc<Compiled>)>,
 }
 
 impl Cache {
@@ -349,11 +387,11 @@ impl Cache {
         function: &'static str,
     ) -> Result<&Compiled, KrishivError> {
         if self.pattern.as_ref().is_none_or(|(p, _)| p != pattern) {
-            self.pattern = Some((pattern.to_owned(), Compiled::new(pattern, function)?));
+            self.pattern = Some((pattern.to_owned(), compiled_on_thread(pattern, function)?));
         }
         self.pattern
             .as_ref()
-            .map(|(_, c)| c)
+            .map(|(_, c)| &**c)
             .ok_or_else(|| internal("no compiled pattern".to_owned()))
     }
 }
@@ -373,12 +411,43 @@ fn idx_at(p: &Option<Prim<Int32Type>>, row: usize) -> Option<i32> {
     }
 }
 
+/// Whether `compiled` matches anywhere in `text` (Java `find` from the start). A match needs no
+/// capture positions, so this runs the lazy DFA, not the capture engine.
+fn matches(compiled: &Compiled, text: &str) -> Result<bool, KrishivError> {
+    compiled
+        .for_input(text)
+        .is_match(text)
+        .map_err(|e| compiled.backtrack(e))
+}
+
 /// `regexp` / `regexp_like`: Java `find`, true on any match.
 fn find(x: &Inputs<'_>, function: &'static str) -> Result<ArrayRef, KrishivError> {
     let strings = x.strings(0)?;
     let patterns = x.str(1)?;
     let mut cache = Cache::default();
     let mut out = Vec::with_capacity(x.rows());
+    if let Str::Scalar(pattern) = &patterns {
+        // One pattern for the batch: the result depends on the value alone.
+        let Some(pattern) = pattern else {
+            return Ok(Arc::new(BooleanArray::new_null(x.rows())) as ArrayRef);
+        };
+        // The pattern is compiled for the first value, as on the per-row path: a batch without
+        // one never raises for an invalid pattern.
+        if !(0..x.rows()).any(|row| strings.is_valid(row)) {
+            return Ok(Arc::new(BooleanArray::new_null(x.rows())) as ArrayRef);
+        }
+        let compiled = cache.compiled(pattern, function)?;
+        let mut memo = Memo::new(x.rows());
+        for row in 0..x.rows() {
+            if !strings.is_valid(row) {
+                out.push(None);
+                continue;
+            }
+            let found = memo.get(strings.value(row), |s| matches(compiled, s))?;
+            out.push(Some(*found));
+        }
+        return Ok(Arc::new(BooleanArray::from(out)) as ArrayRef);
+    }
     for row in 0..x.rows() {
         let (Some(source), Some(pattern)) = (
             strings.is_valid(row).then(|| strings.value(row)),
@@ -388,7 +457,7 @@ fn find(x: &Inputs<'_>, function: &'static str) -> Result<ArrayRef, KrishivError
             continue;
         };
         let compiled = cache.compiled(pattern, function)?;
-        out.push(Some(find_at(compiled, source, 0)?.is_some()));
+        out.push(Some(matches(compiled, source)?));
     }
     Ok(Arc::new(BooleanArray::from(out)) as ArrayRef)
 }
@@ -401,6 +470,33 @@ fn extract(x: &Inputs<'_>, with_idx: bool) -> Result<ArrayRef, KrishivError> {
     let patterns = x.str(1)?;
     let idxs = with_idx.then(|| x.int(2)).transpose()?;
     let mut cache = Cache::default();
+    let constant_idx = match &idxs {
+        None => Some(Some(1)),
+        Some(Prim::Scalar(v)) => Some(*v),
+        Some(Prim::Array(_)) => None,
+    };
+    if let (Str::Scalar(pattern), Some(idx)) = (&patterns, constant_idx) {
+        // One pattern and index for the batch: the result depends on the value alone.
+        let (Some(pattern), Some(idx)) = (pattern, idx) else {
+            return Ok(Arc::new(StringArray::new_null(x.rows())) as ArrayRef);
+        };
+        // As in `find`: no value, no compile, so no error for an invalid pattern.
+        if !(0..x.rows()).any(|row| strings.is_valid(row)) {
+            return Ok(Arc::new(StringArray::new_null(x.rows())) as ArrayRef);
+        }
+        let compiled = cache.compiled(pattern, FUNCTION)?;
+        let mut memo = Memo::new(x.rows());
+        let mut out =
+            GenericStringBuilder::<i32>::with_capacity(x.rows(), strings.value_data().len());
+        for row in 0..x.rows() {
+            if strings.is_valid(row) {
+                out.append_value(memo.get(strings.value(row), |s| extract_one(compiled, s, idx))?);
+            } else {
+                out.append_null();
+            }
+        }
+        return Ok(Arc::new(out.finish()) as ArrayRef);
+    }
     let mut out = Vec::with_capacity(x.rows());
     for row in 0..x.rows() {
         let (Some(source), Some(pattern)) = (
@@ -415,23 +511,27 @@ fn extract(x: &Inputs<'_>, with_idx: bool) -> Result<ArrayRef, KrishivError> {
             continue;
         };
         let compiled = cache.compiled(pattern, FUNCTION)?;
-        let re = compiled.for_input(source);
-        let found = re
-            .captures_from_pos(source, 0)
-            .map_err(|e| compiled.backtrack(e))?;
-        // The index is validated only once the pattern matched (as in
-        // Spark): a non-matching input never raises.
-        let text = match found.as_ref() {
-            Some(caps) => {
-                let group = compiled.group(idx)?;
-                caps.get(group)
-                    .map_or_else(String::new, |m| m.as_str().to_owned())
-            }
-            None => String::new(),
-        };
-        out.push(Some(text));
+        out.push(Some(extract_one(compiled, source, idx)?));
     }
     Ok(Arc::new(StringArray::from(out)) as ArrayRef)
+}
+
+/// `regexp_extract` of one value: group `idx` of the first match, `""` without one.
+fn extract_one(compiled: &Compiled, source: &str, idx: i32) -> Result<String, KrishivError> {
+    let re = compiled.for_input(source);
+    let found = re
+        .captures_from_pos(source, 0)
+        .map_err(|e| compiled.backtrack(e))?;
+    // The index is validated only once the pattern matched (as in
+    // Spark): a non-matching input never raises.
+    Ok(match found.as_ref() {
+        Some(caps) => {
+            let group = compiled.group(idx)?;
+            caps.get(group)
+                .map_or_else(String::new, |m| m.as_str().to_owned())
+        }
+        None => String::new(),
+    })
 }
 
 /// `regexp_extract_all(str, regexp[, idx])` over a batch: group `idx` of
@@ -908,7 +1008,7 @@ fn byte_offset(text: &str, units: usize) -> Option<usize> {
 /// The memo of the compiled pattern and replacement of the last row.
 #[derive(Default)]
 struct ReplaceCache {
-    pattern: Option<(String, Compiled)>,
+    pattern: Option<(String, Rc<Compiled>)>,
     replacement: Option<(String, Vec<Part>)>,
 }
 
@@ -916,12 +1016,12 @@ impl ReplaceCache {
     fn compiled(&mut self, pattern: &str) -> Result<&Compiled, KrishivError> {
         const FUNCTION: &str = "`regexp_replace`";
         if self.pattern.as_ref().is_none_or(|(p, _)| p != pattern) {
-            self.pattern = Some((pattern.to_owned(), Compiled::new(pattern, FUNCTION)?));
+            self.pattern = Some((pattern.to_owned(), compiled_on_thread(pattern, FUNCTION)?));
             self.replacement = None;
         }
         self.pattern
             .as_ref()
-            .map(|(_, c)| c)
+            .map(|(_, c)| &**c)
             .ok_or_else(|| internal("regexp_replace: no compiled pattern".to_owned()))
     }
 }
@@ -933,6 +1033,37 @@ fn regexp_replace(x: &Inputs<'_>, with_position: bool) -> Result<ArrayRef, Krish
     let replacements = x.str(2)?;
     let positions = with_position.then(|| x.int(3)).transpose()?;
     let mut cache = ReplaceCache::default();
+    let constant_position = match &positions {
+        None => Some(Some(1)),
+        Some(Prim::Scalar(v)) => Some(*v),
+        Some(Prim::Array(_)) => None,
+    };
+    if let (Str::Scalar(pattern), Str::Scalar(rep), Some(position)) =
+        (&patterns, &replacements, constant_position)
+    {
+        // One pattern, replacement and position for the batch: the result depends on the value
+        // alone.
+        let (Some(pattern), Some(rep), Some(position)) = (pattern, rep, position) else {
+            return Ok(Arc::new(StringArray::new_null(x.rows())) as ArrayRef);
+        };
+        let mut memo = Memo::new(x.rows());
+        let mut out =
+            GenericStringBuilder::<i32>::with_capacity(x.rows(), strings.value_data().len());
+        for row in 0..x.rows() {
+            if !strings.is_valid(row) {
+                out.append_null();
+                continue;
+            }
+            if position < 1 {
+                return Err(position_out_of_range(position));
+            }
+            let replaced = memo.get(strings.value(row), |s| {
+                replace_row(&mut cache, s, pattern, rep, position)
+            })?;
+            out.append_value(replaced);
+        }
+        return Ok(Arc::new(out.finish()) as ArrayRef);
+    }
     let mut out = Vec::with_capacity(x.rows());
     for row in 0..x.rows() {
         let source = strings.is_valid(row).then(|| strings.value(row));
@@ -950,19 +1081,24 @@ fn regexp_replace(x: &Inputs<'_>, with_position: bool) -> Result<ArrayRef, Krish
             continue;
         };
         if position < 1 {
-            return Err(DatatypeMismatchValueOutOfRange {
-                sql_expr: "\"regexp_replace\"".to_owned(),
-                expr_name: "position".to_owned(),
-                value_range: "(0, 2147483647]".to_owned(),
-                current_value: position.to_string(),
-            }
-            .into());
+            return Err(position_out_of_range(position));
         }
         out.push(Some(replace_row(
             &mut cache, source, pattern, rep, position,
         )?));
     }
     Ok(Arc::new(StringArray::from(out)) as ArrayRef)
+}
+
+/// `regexp_replace`'s `position` below 1.
+fn position_out_of_range(position: i32) -> KrishivError {
+    DatatypeMismatchValueOutOfRange {
+        sql_expr: "\"regexp_replace\"".to_owned(),
+        expr_name: "position".to_owned(),
+        value_range: "(0, 2147483647]".to_owned(),
+        current_value: position.to_string(),
+    }
+    .into()
 }
 
 /// One row: every match of `pattern` at or after the 1-based `position`
