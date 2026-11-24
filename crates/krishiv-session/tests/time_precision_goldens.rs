@@ -352,35 +352,6 @@ fn check(profile: SparkProfile, c: &Value) -> Option<Mismatch> {
             format!("names {names:?}"),
         );
     }
-    // The statement's own output types and nullability, before the STRING casts of `run`.
-    let want_schema: Vec<(String, bool)> = c["schema"]
-        .as_array()
-        .expect("schema")
-        .iter()
-        .map(|f| {
-            (
-                f[0].as_str().expect("type").to_owned(),
-                f[1].as_bool().expect("nullable"),
-            )
-        })
-        .collect();
-    let schema: Vec<(String, bool)> = match block_on(s.analyze(sql)) {
-        Ok(a) => a
-            .output_schema
-            .iter()
-            .map(|f| (f.data_type.simple_string(), f.nullable))
-            .collect(),
-        Err(e) => {
-            let got = shown(&e);
-            return mismatch(format!("analysis fails `{got}`"), got);
-        }
-    };
-    if schema != want_schema {
-        return mismatch(
-            format!("schema {schema:?}, Spark {want_schema:?}"),
-            format!("schema {schema:?}"),
-        );
-    }
     if clock {
         for t in c["typed"].as_array().into_iter().flatten() {
             let i = usize::try_from(t[0].as_u64().expect("typed index")).expect("index");
@@ -413,13 +384,52 @@ fn check(profile: SparkProfile, c: &Value) -> Option<Mismatch> {
             );
         }
     }
+    // The statement's own output types and nullability, before the STRING casts of `run`.
+    // Compared last, so a known schema gap still has its values checked.
+    let want_schema: Vec<(String, bool)> = c["schema"]
+        .as_array()
+        .expect("schema")
+        .iter()
+        .map(|f| {
+            (
+                f[0].as_str().expect("type").to_owned(),
+                f[1].as_bool().expect("nullable"),
+            )
+        })
+        .collect();
+    let schema: Vec<(String, bool)> = match block_on(s.analyze(sql)) {
+        Ok(a) => a
+            .output_schema
+            .iter()
+            .map(|f| (f.data_type.simple_string(), f.nullable))
+            .collect(),
+        Err(e) => {
+            let got = shown(&e);
+            return mismatch(format!("analysis fails `{got}`"), got);
+        }
+    };
+    if schema != want_schema {
+        return mismatch(
+            format!("schema {schema:?}, Spark {want_schema:?}"),
+            format!("schema {schema:?}"),
+        );
+    }
     None
 }
 
 fn release(release: &str, profile: SparkProfile) {
     let doc = fixture(release);
+    assert_eq!(
+        doc["format_version"], 2,
+        "Spark {release}: fixture format_version"
+    );
+    let cases = doc["cases"].as_array().expect("cases");
+    assert!(
+        !cases.is_empty(),
+        "Spark {release}: the fixture has no cases"
+    );
     let mut failures = vec![];
-    for c in doc["cases"].as_array().expect("cases") {
+    for c in cases {
         let id = c["id"].as_str().expect("id");
         let gap = KNOWN_GAPS
             .iter()
