@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //! An as-of join's left scan offers runtime-filter sites to a join above it only where the merge
 //! evaluates nothing that may raise: a filter dropping left rows first would hide the row whose
-//! residual or distance raises under ANSI, which Spark raises on.
+//! residual or distance raises under ANSI, which Spark raises on. Without keys both sides gather to
+//! one partition (`Exchange(Single)`), never a hash exchange on the constant key (P2-T171 I8).
 
 use std::sync::Arc;
 
@@ -87,5 +88,45 @@ fn a_raising_residual_or_distance_keeps_runtime_filters_off_the_left_scan() {
         to_big(&query(">=", " AND b.v <> m.v")),
         quiet,
         "quiet residual"
+    );
+}
+
+#[test]
+fn a_keyless_as_of_join_gathers_both_sides_to_one_partition() {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let mut rng = 43;
+    write(dir.path(), "big.parquet", &table(&mut rng, 2_000, 400, 0));
+    write(dir.path(), "mid.parquet", &table(&mut rng, 400, 400, 0));
+    let sources = [
+        ("big", vec!["big.parquet".to_owned()]),
+        ("mid", vec!["mid.parquet".to_owned()]),
+    ];
+    let t = parquet_files(dir.path(), &sources, true, &rt);
+    let shown = |text: &str| {
+        planned(&t, text)
+            .unwrap_or_else(|e| panic!("{text}: {e}"))
+            .to_string()
+    };
+    let keyless = shown("SELECT b.v, m.v FROM big b ASOF JOIN mid m MATCH_CONDITION (b.v >= m.v)");
+    assert!(
+        !keyless.contains("hashpartitioning"),
+        "keyless as-of join hashed:\n{keyless}"
+    );
+    assert_eq!(
+        keyless.matches("Exchange SinglePartition").count(),
+        2,
+        "{keyless}"
+    );
+    let keyed = shown(
+        "SELECT b.v, m.v FROM big b ASOF JOIN mid m MATCH_CONDITION (b.v >= m.v) ON b.k32 = m.k32",
+    );
+    assert_eq!(
+        keyed.matches("Exchange hashpartitioning").count(),
+        2,
+        "{keyed}"
     );
 }
