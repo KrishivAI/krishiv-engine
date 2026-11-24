@@ -237,6 +237,23 @@ fn queries_carry_the_planning_time_of_a_query_that_ran() {
 }
 
 #[test]
+fn a_profile_carries_the_planning_time_its_row_shows() {
+    let s = Session::new().unwrap();
+    let df =
+        block_on(s.sql("SELECT a.id FROM range(50) a JOIN range(50) b ON a.id = b.id")).unwrap();
+    let (_, profile) = block_on(df.collect_with_profile()).unwrap();
+    let planned = profile.planning_ns.expect("a profiled query planned");
+    let doc = profile.to_json_value();
+    assert_eq!(doc["usage"]["planning_ns"], planned);
+    let rows = strings_in(
+        &s,
+        "SELECT CAST(planning_ns AS STRING) FROM system.queries \
+         WHERE query_text NOT LIKE '%system.queries%' AND state = 'finished'",
+    );
+    assert_eq!(rows, [planned.to_string()]);
+}
+
+#[test]
 fn queries_records_an_action_that_fails_in_physical_planning() {
     let s = Session::new().unwrap();
     // Analyzes, so `sql` succeeds; the planner has no window form of `approx_count_distinct` yet.

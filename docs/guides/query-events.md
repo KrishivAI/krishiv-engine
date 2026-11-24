@@ -42,7 +42,7 @@ several lines here (the file has one line per event), shows the masked text:
 
 ```json
 {
-  "schema": "krishiv.event.v1", "minor": 0, "seq": 0, "kind": "submitted",
+  "schema": "krishiv.event.v1", "minor": 1, "seq": 0, "kind": "submitted",
   "emitted_at_ms": 1795384799099,
   "query": {"query_id": "01a20545-ef7b-7001-95bd-056f047eeaf5", "session_id": "01a20545-ef26-7000-aa66-d5ab0940f24d",
             "principal": "krishiv", "compute_id": "krishiv2", "tags": {}, "delegated_by": null, "trace_id": null},

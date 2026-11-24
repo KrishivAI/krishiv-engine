@@ -1647,9 +1647,12 @@ impl Session {
         &self,
         physical: &PhysicalPlan,
         env: &QueryEnv,
-    ) -> Result<(RecordBatchStream, Arc<QueryContext>), KrishivError> {
-        self.run_on_query(physical, self.worker(env), env, true)
-            .await
+    ) -> Result<(RecordBatchStream, Arc<QueryContext>, String), KrishivError> {
+        // The row id too: the profile reads the query's `planning_ns` from its row (MODES-2).
+        let (stream, query, log_id) = self
+            .run_on_query_logged(physical, self.worker(env), env, true, None)
+            .await?;
+        Ok((crate::run_site::resolve_sites(stream, env), query, log_id))
     }
 
     /// The session's relation store (tests): every registered memory

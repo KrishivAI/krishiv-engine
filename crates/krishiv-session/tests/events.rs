@@ -87,6 +87,8 @@ fn a_finished_query_yields_submitted_started_finished() {
     assert_eq!(f.usage.record_id.1, events[0].query.query_id);
     assert_eq!(f.usage.record_id.2, events.last().unwrap().seq);
     assert!(f.usage.wall_ns.is_some());
+    // MODES-2: the planning time is in the usage record, as in the row.
+    assert!(f.usage.planning_ns.is_some_and(|p| p > 0), "{f:?}");
     assert_eq!(events[0].query.compute_id, rt.compute_id());
 }
 
@@ -104,6 +106,8 @@ fn a_refused_statement_is_submitted_then_failed_at_once() {
     };
     assert_eq!(f.state, "failed");
     assert!(f.error_class.is_some());
+    // It never ran, so it has no planning time.
+    assert_eq!(f.usage.planning_ns, None);
 }
 
 #[test]

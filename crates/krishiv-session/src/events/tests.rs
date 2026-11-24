@@ -37,6 +37,7 @@ fn usage(seq: u64) -> UsageRecord {
         window_end_ms: 2,
         wall_ns: Some(5),
         queued_ns: None,
+        planning_ns: Some(3),
         cpu_ns: None,
         bytes_scanned: None,
         rows_read: None,
@@ -260,7 +261,7 @@ fn json_has_the_v1_shape_for_every_kind() {
     docs.push(finished(9).to_json());
     for doc in &docs {
         assert_eq!(doc["schema"], SCHEMA_NAME);
-        assert_eq!(doc["minor"], 0);
+        assert_eq!(doc["minor"], 1);
         assert_eq!(doc["query"]["query_id"], "q");
         assert_eq!(doc["query"]["tags"]["k"], "v");
         assert!(doc["kind"].is_string() && doc["seq"].is_u64());
@@ -273,6 +274,8 @@ fn json_has_the_v1_shape_for_every_kind() {
     assert_eq!(docs[5]["usage"]["fidelity"], "exact");
     assert_eq!(docs[4]["reason"], "timeout");
     assert_eq!(docs[5]["usage"]["record_id"]["seq"], 9);
+    // Minor 1 (MODES-2): the planning time beside the run's.
+    assert_eq!(docs[5]["usage"]["planning_ns"], 3);
     // No error message member exists on any kind.
     assert!(docs.iter().all(|d| d.get("error_message").is_none()));
 }
