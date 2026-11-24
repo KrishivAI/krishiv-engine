@@ -347,6 +347,7 @@ pub(super) fn max_records_per_file(
 
 /// A write directory that could not be opened, as the path-based store
 /// reports it: `TASK_WRITE_FAILED` with the OS reason as its cause (PY-075).
+#[cfg(unix)]
 pub(super) fn anchor_failed(at: &krishiv_exec::files::LocatedPath, reason: &str) -> KrishivError {
     KrishivError::from(krishiv_common::error::TaskWriteFailed {
         path: at.display.clone(),
