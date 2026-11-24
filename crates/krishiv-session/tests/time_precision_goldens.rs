@@ -98,33 +98,13 @@ const KNOWN_GAPS: &[(&str, &str, &str)] = &[
         "ts9_without",
         "[PARSE_SYNTAX_ERROR] Syntax error at or near 'WITHOUT'.",
     ),
-    // SQL-41: a literal given a collation by the implicit cast loses its `collate` in these rewrites' names.
-    // The fix is row SQL-41's, not R3's; the cases stay in the fixture (the generator records every
-    // case of the run), so they are pinned here until SQL-41 lands and removes these six lines.
-    (
-        "4.2.0",
-        "instr_collated",
-        "names [\"instr(collate(name, UTF8_LCASE), PL)\"]",
-    ),
-    (
-        "4.2.0",
-        "locate_collated",
-        "names [\"locate(PL, collate(name, UTF8_LCASE))\"]",
-    ),
+    // SQL-41: `instr` and `locate` name their collated literal as Spark since #986; the `=` of a column
+    // given a collation still loses its `collate` in the name. The case stays in the fixture (the
+    // generator records every case of the run), so it is pinned here until that is fixed.
     (
         "4.2.0",
         "eq_collated",
         "names [\"(collate(name, UTF8_LCASE) = APPLE)\"]",
-    ),
-    (
-        "4.3.0",
-        "instr_collated",
-        "names [\"instr(collate(name, UTF8_LCASE), PL)\"]",
-    ),
-    (
-        "4.3.0",
-        "locate_collated",
-        "names [\"locate(PL, collate(name, UTF8_LCASE))\"]",
     ),
     (
         "4.3.0",
