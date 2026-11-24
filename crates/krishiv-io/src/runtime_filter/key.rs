@@ -87,8 +87,12 @@ pub fn widens_to(from: &DataType, to: &DataType) -> bool {
     }
     match (from, to) {
         (D::Float32 | D::Int8 | D::Int16 | D::Int32, D::Float64)
-        | (D::Int8 | D::Int16, D::Float32)
-        | (D::Timestamp(TimeUnit::Microsecond, _), D::Timestamp(TimeUnit::Microsecond, _)) => true,
+        | (D::Int8 | D::Int16, D::Float32) => true,
+        // `TIMESTAMP_NTZ` (no zone) to `TIMESTAMP` (a zone) or back shifts
+        // the value by the session zone's offset, so only like to like.
+        (D::Timestamp(TimeUnit::Microsecond, a), D::Timestamp(TimeUnit::Microsecond, b)) => {
+            a.is_some() == b.is_some()
+        }
         (
             D::Decimal64(p1, s1) | D::Decimal128(p1, s1),
             D::Decimal64(p2, s2) | D::Decimal128(p2, s2),
