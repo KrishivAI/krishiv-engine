@@ -422,6 +422,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &UNION_OUTPUT_PARTITIONING,
     ),
     (
+        "spark.sql.pyspark.plotting.max_rows",
+        &PYSPARK_PLOTTING_MAX_ROWS,
+    ),
+    (
         "spark.sql.repl.eagerEval.maxNumRows",
         &REPL_EAGER_EVAL_MAX_NUM_ROWS,
     ),
@@ -504,6 +508,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.optimizer.ndvSampling.timeout",
         &NDV_SAMPLING_TIMEOUT,
+    ),
+    (
+        "krishiv.sql.pyspark.plotting.max_rows",
+        &PYSPARK_PLOTTING_MAX_ROWS,
     ),
     (
         "krishiv.sql.repl.eagerEval.maxNumRows",
@@ -926,12 +934,20 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &CONNECT_EXECUTE_SENDER_MAX_STREAM_SIZE,
     ),
     (
+        "spark.sql.execution.arrow.pyspark.selfDestruct.enabled",
+        &ARROW_PYSPARK_SELF_DESTRUCT,
+    ),
+    (
         "krishiv.sql.session.localRelationBatchOfChunksSizeBytes",
         &LOCAL_RELATION_BATCH_OF_CHUNKS_SIZE_BYTES,
     ),
     (
         "krishiv.catalog.delegation.maxDistinctExchangesPerMinute",
         &CATALOG_DELEGATION_MAX_DISTINCT_EXCHANGES_PER_MINUTE,
+    ),
+    (
+        "krishiv.sql.execution.arrow.pyspark.selfDestruct.enabled",
+        &ARROW_PYSPARK_SELF_DESTRUCT,
     ),
     (
         "spark.sql.execution.arrow.pyspark.validateSchema.enabled",

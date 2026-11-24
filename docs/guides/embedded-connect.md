@@ -28,6 +28,10 @@ The host name is `localhost` on purpose: `pyspark-client` sends a token over a p
 
 `server.stop()` closes the listener and waits for the server's thread, so the port is free when it returns. Leaving the `with` block does the same, and so does the end of the interpreter if you forget. Stopping a stopped server does nothing.
 
+## Plotting
+
+`DataFrame.plot` (Spark 4.0+, needs `plotly` and `pandas` in the client) runs in the client against Krishiv's server. `line`, `bar`, `barh`, `scatter`, `area`, `pie` and `kde` work. The client reads `spark.sql.pyspark.plotting.max_rows` (default 1000; the Krishiv key is `krishiv.sql.pyspark.plotting.max_rows`) and collects at most that many rows. `hist` and `box` are refused for now: `hist` needs a generator (`posexplode`) in a Connect select list with two output names, and the internal function `array_binary_search`; `box` sends a `WithRelations` plan.
+
 ## What it is, and what it is not
 
 - The server's sessions start from a new Krishiv session, separate from the one `krishiv.session()` returns: tables and views you created through the embedded API are not visible to the client. Pass `krishiv.start_local({"krishiv.some.key": "value"})` to set `krishiv.*` configuration for its sessions.

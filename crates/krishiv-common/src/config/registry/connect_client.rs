@@ -150,6 +150,18 @@ pub static ARROW_USE_LARGE_VAR_TYPES: ConfigEntry = ConfigEntry {
     spark_alias: Some("spark.sql.execution.arrow.useLargeVarTypes"),
 };
 
+/// `spark.sql.execution.arrow.pyspark.selfDestruct.enabled`.
+pub static ARROW_PYSPARK_SELF_DESTRUCT: ConfigEntry = ConfigEntry {
+    key: "krishiv.sql.execution.arrow.pyspark.selfDestruct.enabled",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(false)),
+    doc: "When true, a client frees Arrow memory while it converts a collected result to pandas (`toPandas`). Read by Spark Connect clients.",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
+    version_added: "0.3.0",
+    spark_alias: Some("spark.sql.execution.arrow.pyspark.selfDestruct.enabled"),
+};
+
 /// `spark.sql.execution.pandas.structHandlingMode`.
 pub static PANDAS_STRUCT_HANDLING_MODE: ConfigEntry = ConfigEntry {
     key: "krishiv.sql.execution.pandas.structHandlingMode",
@@ -196,6 +208,18 @@ pub static REPL_EAGER_EVAL_TRUNCATE: ConfigEntry = ConfigEntry {
     settable_by: SettableBy::User,
     version_added: "0.3.0",
     spark_alias: Some("spark.sql.repl.eagerEval.truncate"),
+};
+
+/// `spark.sql.pyspark.plotting.max_rows`.
+pub static PYSPARK_PLOTTING_MAX_ROWS: ConfigEntry = ConfigEntry {
+    key: "krishiv.sql.pyspark.plotting.max_rows",
+    value_type: ValueType::Int32 { min: i32::MIN },
+    default: Some(ConfigValue::Int(1000)),
+    doc: "The most rows `DataFrame.plot` collects to the client for a plot (top-n plots take the first rows, sampled plots sample down to this many). Read by Spark Connect clients.",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
+    version_added: "0.3.0",
+    spark_alias: Some("spark.sql.pyspark.plotting.max_rows"),
 };
 
 #[cfg(test)]
@@ -257,12 +281,20 @@ mod tests {
                 ConfigValue::Bool(false),
             ),
             (
+                "spark.sql.execution.arrow.pyspark.selfDestruct.enabled",
+                ConfigValue::Bool(false),
+            ),
+            (
                 "spark.sql.execution.pandas.structHandlingMode",
                 ConfigValue::String("legacy".into()),
             ),
             ("spark.sql.repl.eagerEval.enabled", ConfigValue::Bool(false)),
             ("spark.sql.repl.eagerEval.maxNumRows", ConfigValue::Int(20)),
             ("spark.sql.repl.eagerEval.truncate", ConfigValue::Int(20)),
+            (
+                "spark.sql.pyspark.plotting.max_rows",
+                ConfigValue::Int(1000),
+            ),
         ] {
             let entry = lookup(key).unwrap_or_else(|| panic!("{key} is not registered"));
             assert_eq!(c.get(entry), Some(&want), "{key}");
@@ -296,10 +328,12 @@ mod tests {
             "krishiv.sql.pyspark.legacy.inferArrayTypeFromFirstElement.enabled",
             "krishiv.sql.pyspark.legacy.inferMapTypeFromFirstPair.enabled",
             "krishiv.sql.execution.arrow.useLargeVarTypes",
+            "krishiv.sql.execution.arrow.pyspark.selfDestruct.enabled",
             "krishiv.sql.execution.pandas.structHandlingMode",
             "krishiv.sql.repl.eagerEval.enabled",
             "krishiv.sql.repl.eagerEval.maxNumRows",
             "krishiv.sql.repl.eagerEval.truncate",
+            "krishiv.sql.pyspark.plotting.max_rows",
         ] {
             let entry = lookup(key).unwrap_or_else(|| panic!("{key} is not registered"));
             assert_eq!(entry.key, key);
