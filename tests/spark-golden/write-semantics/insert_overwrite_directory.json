@@ -7,7 +7,8 @@
     "/home/krishiv/krishiv-data/tmp/perf-4/rs10/probe.scala (default spark-shell: Hive support on)",
     "/home/krishiv/krishiv-data/tmp/perf-4/rs10/probe2.scala (--conf spark.sql.catalogImplementation=in-memory)",
     "/home/krishiv/krishiv-data/tmp/perf-4/rs10/probe3.scala (empty-result file sizes)",
-    "/home/krishiv/krishiv-data/tmp/s10/probe4.scala (provider names; spark-avro 4.2.0 package)"
+    "/home/krishiv/krishiv-data/tmp/s10/probe4.scala (provider names; spark-avro 4.2.0 package)",
+    "/home/krishiv/krishiv-data/tmp/s10/probe5.scala (mixed-case unknown provider)"
   ],
   "probe_outputs": [
     "probe.out",
@@ -1407,6 +1408,42 @@
       ],
       "compat": "compatible",
       "note": "observed on apache/spark:4.2.0 (probe4.scala)"
+    },
+    {
+      "id": "IOD-50-provider-mixed-case-dotted",
+      "stmt": "INSERT OVERWRITE DIRECTORY '<DIR>' USING Foo.Bar SELECT 1 AS a",
+      "expect": {
+        "kind": "error",
+        "class": "DATA_SOURCE_NOT_FOUND",
+        "sqlstate": "42K02",
+        "message": "[DATA_SOURCE_NOT_FOUND] Failed to find the data source: Foo.Bar. Make sure the provider name is correct and the package is properly registered and compatible with your Spark version. SQLSTATE: 42K02",
+        "parameters": {
+          "provider": "Foo.Bar"
+        }
+      },
+      "source": [
+        "sql/core/.../execution/datasources/DataSource.scala (lookupDataSource)"
+      ],
+      "compat": "compatible",
+      "note": "the provider is reported as written; observed on apache/spark:4.2.0 (probe5.scala)"
+    },
+    {
+      "id": "IOD-50-provider-mixed-case-name",
+      "stmt": "INSERT OVERWRITE DIRECTORY '<DIR>' USING FooBar SELECT 1 AS a",
+      "expect": {
+        "kind": "error",
+        "class": "DATA_SOURCE_NOT_FOUND",
+        "sqlstate": "42K02",
+        "message": "[DATA_SOURCE_NOT_FOUND] Failed to find the data source: FooBar. Make sure the provider name is correct and the package is properly registered and compatible with your Spark version. SQLSTATE: 42K02",
+        "parameters": {
+          "provider": "FooBar"
+        }
+      },
+      "source": [
+        "sql/core/.../execution/datasources/DataSource.scala (lookupDataSource)"
+      ],
+      "compat": "compatible",
+      "note": "the provider is reported as written; observed on apache/spark:4.2.0 (probe5.scala)"
     }
   ]
 }

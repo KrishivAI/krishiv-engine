@@ -15,19 +15,19 @@ use serde_json::Value;
 const KNOWN_GAPS: &[(&str, &str)] = &[
     (
         "IOD-05-orc",
-        "the engine writes no ORC (KRISHIV_UNSUPPORTED_FEATURE, as df.write.orc)",
+        "the engine writes no ORC (KRISHIV_UNSUPPORTED_FEATURE, as df.write.orc); queue-sonnet.md item IOD-05",
     ),
     (
         "IOD-22-avro",
-        "the Avro writer names its files `.avro`; Spark names them `.snappy.avro` (its default codec)",
+        "the Avro writer names its files `.avro`; Spark names them `.snappy.avro` (its default codec); queue-sonnet.md item IOD-22",
     ),
     (
         "IOD-44-duplicate-columns-csv",
-        "the file writer refuses duplicate column names for every format; Spark only for parquet and json",
+        "the file writer refuses duplicate column names for every format; Spark only for parquet and json; queue-sonnet.md item IOD-44, a fix: Spark writes it",
     ),
     (
         "IOD-47-json-nested",
-        "the JSON writer does not write arrays yet (df.write.json too)",
+        "the JSON writer does not write arrays yet (df.write.json too); queue-sonnet.md item IOD-47",
     ),
 ];
 
@@ -49,7 +49,7 @@ fn normalised(name: &str) -> String {
     let Some(rest) = name.strip_prefix("part-") else {
         return name.to_owned();
     };
-    let Some(at) = rest.find("-c0") else {
+    let Some(at) = rest.rfind("-c0") else {
         return name.to_owned();
     };
     let tail = rest[at + 2..].trim_start_matches(|c: char| c.is_ascii_digit());
