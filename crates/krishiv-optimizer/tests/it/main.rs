@@ -12,6 +12,7 @@ mod as_of;
 mod barrier;
 mod cse;
 mod derived_keys;
+mod eager_null_filter;
 mod group_code;
 mod join_cost;
 mod join_enumerator;

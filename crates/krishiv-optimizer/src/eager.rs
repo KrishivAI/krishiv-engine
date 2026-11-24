@@ -42,7 +42,8 @@
 //! - the groups, the product of the keys' distinct counts, are at most
 //!   `1 / `[`MIN_REDUCTION`] of `S`'s rows;
 //! - at most one key beyond the join's own;
-//! - the other side is a table read whole. A filtered dimension prunes the
+//! - the other side is a table read whole (only filters that a join key is
+//!   not NULL, as inferred join filters add them, may sit on it). A filtered dimension prunes the
 //!   aggregated side through a runtime filter, which pays more than grouping
 //!   and which a smaller aggregate could take away by becoming the join's build
 //!   side; estimates cannot see this, as they read a key's matches from its
@@ -244,7 +245,7 @@ impl<'a> Shape<'a> {
             (right, &right_cols)
         };
         let other = if left_side { right } else { left };
-        if !plain_scan(other) {
+        if !read_whole(other, &equi_keys(on, &attrs_of(other)?)) {
             return Err("the other side is filtered or joined: its runtime filter is worth more than the aggregate".to_owned());
         }
         let null_supplying = matches!(
@@ -478,13 +479,54 @@ fn states_of(
     Ok((states, merged))
 }
 
-/// Whether `p` is a table read whole, under projections.
-fn plain_scan(p: &LogicalPlan) -> bool {
+/// Whether `p` is a table read whole, under projections and under filters
+/// that only say a key of the join is not NULL (`keys`, from [`equi_keys`]).
+///
+/// Such a filter is what inferred join filters add to a dimension (#598). It
+/// keeps every row the inner equi-join can match, so its runtime filter
+/// prunes nothing a NULL key would not lose anyway, and the reason to refuse
+/// a filtered dimension does not hold (study 54, TPC-DS q22).
+fn read_whole(p: &LogicalPlan, keys: &Attrs) -> bool {
     match &p.node {
-        PlanNode::Project { input, .. } => plain_scan(input),
+        PlanNode::Project { input, .. } => read_whole(input, keys),
+        PlanNode::Filter { input, predicate } => {
+            conjuncts(predicate)
+                .iter()
+                .all(|c| not_null_of(c).is_some_and(|id| keys.contains(&id)))
+                && read_whole(input, keys)
+        }
         PlanNode::Scan(_) => true,
         _ => false,
     }
+}
+
+/// The column `isnotnull(c)` tests.
+fn not_null_of(e: &Expr) -> Option<AttrId> {
+    match builtin(e) {
+        Some((Builtin::IsNotNull, [a], _)) => match &a.node {
+            ExprNode::Resolved(ResolvedExpr::Column(c)) => Some(c.id),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// The columns of `cols` that a plain (not null-safe) equality conjunct of
+/// `on` compares directly: a NULL there never matches.
+fn equi_keys(on: &Arc<Expr>, cols: &[BoundColumn]) -> Attrs {
+    let mut out = Attrs::default();
+    for c in conjuncts(on) {
+        if let Some((Builtin::Eq, args, _)) = builtin(&c) {
+            for a in args {
+                if let ExprNode::Resolved(ResolvedExpr::Column(col)) = &a.node
+                    && contains(cols, col.id)
+                {
+                    out.insert(col.id);
+                }
+            }
+        }
+    }
+    out
 }
 
 /// The inputs and condition of an inner join on a deterministic condition
