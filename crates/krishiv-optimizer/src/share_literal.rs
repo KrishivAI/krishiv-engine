@@ -315,7 +315,7 @@ fn candidates(i: usize, m: &Member) -> Vec<Candidate> {
         };
         // Instances' conjuncts were pushed down from different places of the
         // query, so their origins differ: keys compare without them.
-        let key = Unorigin::default().plan(&key);
+        let key = canonical_states(&Unorigin::default().plan(&key)).0;
         let Some((literal, conjunct)) = lift.single() else {
             continue;
         };
@@ -405,14 +405,31 @@ fn rewrite_group(
             // An item only some instances output runs on the other literals'
             // groups too, which those instances never computed: only an item
             // that cannot raise may (`runs_on_other_groups`); otherwise the
-            // lists must be equal.
-            let lists: Vec<HashSet<AttrId>> = group
+            // lists must be equal. Items match by what they compute
+            // (`item_key`), not by output id: where a projection was
+            // collapsed into one instance's aggregate, its outputs carry the
+            // projection's ids (TPC-DS q04, q11, q74 once a dropped first
+            // union input left an aliasing projection).
+            // Each instance's state ids (eager aggregation's, fresh per
+            // instance) under the canonical names its comparison key used.
+            let states: HashMap<usize, HashMap<AttrId, AttrId>> = group
+                .iter()
+                .map(|&c| {
+                    (
+                        c,
+                        canonical_states(core(&members[candidates[c].member].body)).1,
+                    )
+                })
+                .collect();
+            let none = HashMap::new();
+            let states_of = |c: usize| states.get(&c).unwrap_or(&none);
+            let lists: Vec<Vec<Arc<Expr>>> = group
                 .iter()
                 .filter_map(|&c| match &core(&members[candidates[c].member].body).node {
                     PlanNode::Aggregate { aggregates, .. } => Some(
                         aggregates
                             .iter()
-                            .filter_map(|e| output_of(e).map(|o| o.id))
+                            .map(|e| item_key(e, states_of(c)))
                             .collect(),
                     ),
                     _ => None,
@@ -423,8 +440,8 @@ fn rewrite_group(
                     &core(&members[candidates[c].member].body).node
                 {
                     for e in aggregates {
-                        let everywhere =
-                            output_of(e).is_some_and(|o| lists.iter().all(|l| l.contains(&o.id)));
+                        let k = item_key(e, states_of(c));
+                        let everywhere = lists.iter().all(|l| l.contains(&k));
                         if !everywhere && !runs_on_other_groups(e) {
                             return None;
                         }
@@ -433,6 +450,9 @@ fn rewrite_group(
             }
             // The union of the instances' outputs, then the key.
             let mut items: Vec<Arc<Expr>> = aggregates.clone();
+            let first_states = states_of(group[0]);
+            let mut keys: Vec<Arc<Expr>> =
+                items.iter().map(|e| item_key(e, first_states)).collect();
             let mut ids: HashSet<AttrId> = items
                 .iter()
                 .filter_map(|e| output_of(e).map(|c| c.id))
@@ -442,11 +462,23 @@ fn rewrite_group(
                     &core(&members[candidates[c].member].body).node
                 {
                     for e in aggregates {
-                        if let Some(o) = output_of(e)
-                            && ids.insert(o.id)
-                        {
-                            items.push(Arc::clone(e));
+                        let k = item_key(e, states_of(c));
+                        if keys.contains(&k) {
+                            continue;
                         }
+                        // An item of this instance alone that reads its own
+                        // state columns: the definition does not have them.
+                        if reads_any(e, states_of(c)) {
+                            return None;
+                        }
+                        // A new computation under an id the definition
+                        // already outputs: the ids would clash.
+                        let o = output_of(e)?;
+                        if !ids.insert(o.id) {
+                            return None;
+                        }
+                        keys.push(k);
+                        items.push(Arc::clone(e));
                     }
                 }
             }
@@ -493,7 +525,7 @@ fn rewrite_group(
         } else {
             Arc::new(LogicalPlan::new(PlanNode::Project {
                 input: filtered,
-                exprs: out.iter().map(column).collect(),
+                exprs: reader_exprs(top, &out, &def, &def_out)?,
             }))
         };
         let body = replace_core(&m.body, top, &new_top)?;
@@ -511,6 +543,150 @@ fn rewrite_group(
         readers.push((Arc::as_ptr(&m.shift), reader));
     }
     Some((def, readers))
+}
+
+/// The first id [`canonical_states`] gives a state column: above any id a
+/// resolved plan holds.
+const CANONICAL_STATE_BASE: u64 = 1 << 60;
+
+/// `plan` with the state columns of its partial aggregates renumbered in
+/// walk order (children first) and every reference to them renamed, for
+/// comparing instances only. Eager aggregation (K5) gives each instance's
+/// `PartialAggregate` fresh state ids, so two instances equal apart from the
+/// literal differ in those ids alone (TPC-DS q04, q11, q74, the store
+/// channel). A comparison up to the renaming of ids a core defines, as
+/// DuckDB's `CommonSubplanOptimizer` compares canonical plan signatures.
+fn canonical_states(plan: &Arc<LogicalPlan>) -> (Arc<LogicalPlan>, HashMap<AttrId, AttrId>) {
+    let mut map: HashMap<AttrId, AttrId> = HashMap::new();
+    let mut next = CANONICAL_STATE_BASE;
+    let out = Arc::clone(plan)
+        .transform_up(&mut |p| {
+            let p = if map.is_empty() {
+                p
+            } else {
+                p.map_expressions(|e| Ok::<_, ()>(renamed(&e, &map)))?
+            };
+            if let PlanNode::PartialAggregate {
+                input,
+                keys,
+                aggregates,
+                states,
+            } = &p.node
+            {
+                let states = states
+                    .iter()
+                    .map(|c| {
+                        let id = *map.entry(c.id).or_insert_with(|| {
+                            let id = AttrId(next);
+                            next += 1;
+                            id
+                        });
+                        BoundColumn { id, ..c.clone() }
+                    })
+                    .collect();
+                return Ok(Arc::new(
+                    LogicalPlan::new(PlanNode::PartialAggregate {
+                        input: Arc::clone(input),
+                        keys: keys.clone(),
+                        aggregates: aggregates.clone(),
+                        states,
+                    })
+                    .with_origin(p.origin),
+                ));
+            }
+            Ok(p)
+        })
+        .unwrap_or_else(|()| Arc::clone(plan));
+    (out, map)
+}
+
+/// Whether `e` reads a column whose id `ids` holds.
+fn reads_any(e: &Arc<Expr>, ids: &HashMap<AttrId, AttrId>) -> bool {
+    if ids.is_empty() {
+        return false;
+    }
+    let mut found = false;
+    let _ = Arc::clone(e).transform_up(&mut |x| {
+        if let ExprNode::Resolved(ResolvedExpr::Column(c)) = &x.node {
+            found |= ids.contains_key(&c.id);
+        }
+        Ok::<_, std::convert::Infallible>(x)
+    });
+    found
+}
+
+/// `e` with each column whose id `map` holds read under the mapped id.
+fn renamed(e: &Arc<Expr>, map: &HashMap<AttrId, AttrId>) -> Arc<Expr> {
+    let out = Arc::clone(e).transform_up(&mut |x| {
+        Ok::<_, std::convert::Infallible>(match &x.node {
+            ExprNode::Resolved(ResolvedExpr::Column(c)) => match map.get(&c.id) {
+                Some(id) => Arc::new(Expr {
+                    node: ExprNode::Resolved(ResolvedExpr::Column(BoundColumn {
+                        id: *id,
+                        ..c.clone()
+                    })),
+                    origin: x.origin,
+                }),
+                None => x,
+            },
+            _ => x,
+        })
+    });
+    match out {
+        Ok(e) => e,
+        Err(never) => match never {},
+    }
+}
+
+/// What an aggregate output item computes, for matching items across
+/// instances: the item without its alias and without origins.
+fn item_key(e: &Arc<Expr>, states: &HashMap<AttrId, AttrId>) -> Arc<Expr> {
+    let e = expr_unorigin(strip_alias(e));
+    if states.is_empty() {
+        e
+    } else {
+        renamed(&e, states)
+    }
+}
+
+/// The projection that gives an instance its own output over the
+/// definition: a column the definition outputs under the same id is read as
+/// it is; an aggregate item the definition computes under another id is read
+/// from that column under the instance's id. `None` when an output is
+/// neither.
+fn reader_exprs(
+    top: &Arc<LogicalPlan>,
+    out: &[BoundColumn],
+    def: &Arc<LogicalPlan>,
+    def_out: &[BoundColumn],
+) -> Option<Vec<Arc<Expr>>> {
+    let (own, theirs) = match (&top.node, &def.node) {
+        (PlanNode::Aggregate { aggregates: a, .. }, PlanNode::Aggregate { aggregates: d, .. }) => {
+            (a.as_slice(), d.as_slice())
+        }
+        _ => (&[][..], &[][..]),
+    };
+    let own_states = canonical_states(top).1;
+    let def_states = canonical_states(def).1;
+    out.iter()
+        .map(|o| {
+            if def_out.iter().any(|d| d.id == o.id) {
+                return Some(column(o));
+            }
+            let mine = own
+                .iter()
+                .find(|e| output_of(e).is_some_and(|c| c.id == o.id))?;
+            let k = item_key(mine, &own_states);
+            let source = theirs.iter().find(|e| item_key(e, &def_states) == k)?;
+            let from = output_of(source)?;
+            Some(Arc::new(Expr::new(ExprNode::Resolved(
+                ResolvedExpr::Alias {
+                    expr: column(from),
+                    output: o.clone(),
+                },
+            ))))
+        })
+        .collect()
 }
 
 /// Whether an aggregate output item can be computed on groups its instance
@@ -811,6 +987,13 @@ impl<'a> Lift<'a> {
                 Some(with_child(plan, &input))
             }
             PlanNode::Distinct { input } => {
+                let input = self.walk(input, g, found)?;
+                Some(with_child(plan, &input))
+            }
+            // Eager aggregation's partial phase (K5) grouped by `g`: its keys
+            // are input columns that keep their ids, so a filter on `g`
+            // commutes with it as with a grouped aggregate.
+            PlanNode::PartialAggregate { input, keys, .. } if is_bare(keys, g) => {
                 let input = self.walk(input, g, found)?;
                 Some(with_child(plan, &input))
             }

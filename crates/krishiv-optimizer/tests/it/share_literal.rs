@@ -181,3 +181,44 @@ fn a_user_cte_named_like_the_rule_s_keeps_its_name() {
         "{text}"
     );
 }
+
+/// TPC-DS q11, q74 (two channels) and q04 (three): `year_total` is a
+/// `UNION ALL` of channel aggregates tagged by a constant `sale_type`, read
+/// once per channel and year. Each reference's other channels fold to
+/// `false` and are dropped (`DropEmptyUnionInputs`), so the two years of a
+/// channel share one definition: each fact table and `customer` per channel
+/// are scanned once.
+#[test]
+fn year_over_year_scans_each_fact_once() {
+    for (q, facts) in [
+        (11, &["store_sales", "web_sales"][..]),
+        (74, &["store_sales", "web_sales"][..]),
+        (4, &["store_sales", "web_sales", "catalog_sales"][..]),
+    ] {
+        let sql = tpcds::sql(q);
+        let off = optimize(&sql, false);
+        let on = optimize(&sql, true);
+        for t in facts {
+            assert_eq!(scans(off.root(), t), 2, "q{q} {t}: {}", off.root());
+            assert_eq!(scans(on.root(), t), 1, "q{q} {t}: {}", on.root());
+        }
+        assert_eq!(
+            scans(off.root(), "customer"),
+            2 * facts.len(),
+            "q{q}: {}",
+            off.root()
+        );
+        assert_eq!(
+            scans(on.root(), "customer"),
+            facts.len(),
+            "q{q}: {}",
+            on.root()
+        );
+        // q74 is not yet a fixed point: a second run's join ordering
+        // estimates a reader's `CteRef` as the whole two-year definition
+        // (design P3-perf031-FA, open item 1).
+        if q != 74 {
+            fixed_point(&on);
+        }
+    }
+}
