@@ -114,6 +114,7 @@ use krishiv_plan::{
 use krishiv_udf_sdk::UdfLibrary;
 
 pub use collation_keys::key_if_collated as collation_key;
+pub use expr::AddrHasher;
 pub use group_code::{could_code_group_keys, is_group_code_dictionary};
 pub use group_limit::{
     DEFAULT_WINDOW_GROUP_LIMIT_THRESHOLD, RankLikeFunction, WindowGroupLimit,

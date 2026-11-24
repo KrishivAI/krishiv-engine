@@ -34,6 +34,7 @@
 //! already implies is never added again ([`held`]), so a second `optimize`
 //! adds nothing.
 
+use crate::expr::AttrMap;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
@@ -87,7 +88,7 @@ pub(crate) fn infer_join_filters(node: Arc<LogicalPlan>, memo: &mut Memo) -> Arc
         sources.extend(memo.constraints(right).iter().cloned());
     }
     let mut classes = Classes::default();
-    let mut members: HashMap<AttrId, Vec<AttrId>> = HashMap::new();
+    let mut members: AttrMap<Vec<AttrId>> = AttrMap::default();
     for s in &sources {
         if let Some([a, b]) = equality(s) {
             classes.union([a.id, b.id]);
@@ -97,7 +98,7 @@ pub(crate) fn infer_join_filters(node: Arc<LogicalPlan>, memo: &mut Memo) -> Arc
         }
     }
     let ids_of: Vec<AttrId> = members.keys().copied().collect();
-    let mut by_root: HashMap<AttrId, Vec<AttrId>> = HashMap::new();
+    let mut by_root: AttrMap<Vec<AttrId>> = AttrMap::default();
     for id in ids_of {
         by_root.entry(classes.find(id)).or_default().push(id);
     }
@@ -141,20 +142,20 @@ pub(crate) fn infer_join_filters(node: Arc<LogicalPlan>, memo: &mut Memo) -> Arc
     // or from one `isnotnull` source of its class (a join chain puts every
     // key in one class, and each of its `isnotnull` filters would otherwise
     // be moved onto every member).
-    let mut nn_done: HashSet<AttrId> = HashSet::new();
+    let mut nn_done: Attrs = Attrs::default();
     for k in keys {
         nn_done.insert(k.id);
         push(k.id, is_not_null_of(k));
     }
     // The column each class member's `=` writes (once, not per member).
-    let mut cols: HashMap<AttrId, &BoundColumn> = HashMap::new();
+    let mut cols: AttrMap<&BoundColumn> = AttrMap::default();
     for s in &sources {
         if let Some([a, b]) = equality(s) {
             cols.entry(a.id).or_insert(a);
             cols.entry(b.id).or_insert(b);
         }
     }
-    let mut nn_classes: HashSet<AttrId> = HashSet::new();
+    let mut nn_classes: Attrs = Attrs::default();
     // The class's literal constraints, moved onto its other members.
     for s in &sources {
         let Some(on) = literal_constraint(s) else {
@@ -179,7 +180,7 @@ pub(crate) fn infer_join_filters(node: Arc<LogicalPlan>, memo: &mut Memo) -> Arc
                 push(m, is_not_null_of(to));
                 continue;
             }
-            let map = HashMap::from([(on, column(to))]);
+            let map = AttrMap::from_iter([(on, column(to))]);
             push(m, substitute(s, &map));
         }
     }
@@ -265,10 +266,9 @@ fn held_under(
                 grouping: Grouping::GroupBy(keys),
                 aggregates,
             } if !keys.is_empty() && aggregates.iter().all(|e| is_deterministic(e)) => {
-                let (defs, calls): (HashMap<AttrId, Arc<Expr>>, HashMap<AttrId, Arc<Expr>>) =
-                    alias_map(aggregates)
-                        .into_iter()
-                        .partition(|(_, e)| !has_aggregate(e));
+                let (defs, calls): (AttrMap<Arc<Expr>>, AttrMap<Arc<Expr>>) = alias_map(aggregates)
+                    .into_iter()
+                    .partition(|(_, e)| !has_aggregate(e));
                 // Not over an aggregate call's result.
                 let passes = |e: &Arc<Expr>| references(e).iter().all(|id| !calls.contains_key(id));
                 if passes(&p) {
@@ -296,7 +296,7 @@ fn held_under(
                         if cols.len() != out.len() {
                             return false;
                         }
-                        let map: HashMap<AttrId, Arc<Expr>> = out
+                        let map: AttrMap<Arc<Expr>> = out
                             .iter()
                             .zip(cols)
                             .map(|(o, c)| (o.id, column(c)))
@@ -687,7 +687,7 @@ impl Memo {
                 // though `cse_0 = c` would be one).
                 let defs = match &input.node {
                     PlanNode::Project { exprs, .. } => cse_defs(exprs),
-                    _ => HashMap::new(),
+                    _ => AttrMap::default(),
                 };
                 let mut out: Vec<_> = deterministic(predicate)
                     .map(|c| {

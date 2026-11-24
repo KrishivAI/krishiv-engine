@@ -2,7 +2,7 @@
 //! Expression helpers shared by the rules: references, determinism,
 //! conjuncts, substitution and semantic equality.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use krishiv_plan::{
@@ -25,8 +25,8 @@ enum Item<'a> {
 /// A hasher for the addresses of plan nodes and attribute ids: they are already well spread,
 /// so a multiply replaces SipHash (these sets are walked for every
 /// expression of every rule).
-#[derive(Default)]
-pub(crate) struct AddrHasher(u64);
+#[derive(Debug, Default, Clone, Copy)]
+pub struct AddrHasher(u64);
 
 impl std::hash::Hasher for AddrHasher {
     fn finish(&self) -> u64 {
@@ -50,6 +50,10 @@ impl std::hash::Hasher for AddrHasher {
 
 /// A set of node addresses.
 pub(crate) type AddrSet<T> = HashSet<*const T, std::hash::BuildHasherDefault<AddrHasher>>;
+
+/// A map keyed by attribute ids (SipHash was the top optimizer symbol on long TPC-DS plans).
+pub(crate) type AttrMap<V> =
+    std::collections::HashMap<AttrId, V, std::hash::BuildHasherDefault<AddrHasher>>;
 
 /// A map keyed by node addresses.
 pub(crate) type AddrMap<T, V> =
@@ -472,7 +476,7 @@ pub(crate) fn output_of(e: &Expr) -> Option<&BoundColumn> {
 /// `e` with each column in `map` replaced by its expression. Subquery plans
 /// are not entered: callers never substitute into a predicate whose
 /// subqueries reference a replaced attribute.
-pub(crate) fn substitute(e: &Arc<Expr>, map: &HashMap<AttrId, Arc<Expr>>) -> Arc<Expr> {
+pub(crate) fn substitute(e: &Arc<Expr>, map: &AttrMap<Arc<Expr>>) -> Arc<Expr> {
     if map.is_empty() {
         return Arc::clone(e);
     }
@@ -591,7 +595,7 @@ pub(crate) fn equality_classes<'a>(preds: impl IntoIterator<Item = &'a Arc<Expr>
 /// Union-find over attributes, for the equalities that a set of joined
 /// inputs already holds.
 #[derive(Default)]
-pub(crate) struct Classes(HashMap<AttrId, AttrId>);
+pub(crate) struct Classes(AttrMap<AttrId>);
 
 impl Classes {
     pub(crate) fn find(&mut self, mut x: AttrId) -> AttrId {

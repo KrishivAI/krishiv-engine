@@ -19,7 +19,8 @@
 //! Anything the rule cannot prove equal leaves the plan as it is. The refusals are numbered as in
 //! the design note (section 2.2); form J (`sum`, `count`) is not part of this rule yet.
 
-use std::collections::{HashMap, HashSet};
+use crate::expr::{AttrMap, Attrs};
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use krishiv_common::error::KrishivError;
@@ -137,10 +138,10 @@ impl Rule<'_> {
         }
         // Group keys are plain columns of `S`.
         let keys: Vec<&BoundColumn> = keys.iter().map(|k| plain(k)).collect::<Option<_>>()?;
-        let key_ids: HashSet<AttrId> = keys.iter().map(|k| k.id).collect();
+        let key_ids: Attrs = keys.iter().map(|k| k.id).collect();
         // The outputs: a key as it is, or an expression over calls and keys.
         let agg_cols = a.resolved_output()?;
-        let a_ids: HashSet<AttrId> = agg_cols.iter().map(|c| c.id).collect();
+        let a_ids: Attrs = agg_cols.iter().map(|c| c.id).collect();
         let mut outputs: Vec<(BoundColumn, Arc<Expr>)> = Vec::new();
         let mut calls: Vec<Arc<Expr>> = Vec::new();
         for e in aggregates {
@@ -191,8 +192,8 @@ impl Rule<'_> {
         }
         // The condition: `k = e` for every key once, the rest is `R`.
         let x_cols = x.resolved_output()?;
-        let x_ids: HashSet<AttrId> = x_cols.iter().map(|c| c.id).collect();
-        let mut pairs: HashMap<AttrId, &BoundColumn> = HashMap::new();
+        let x_ids: Attrs = x_cols.iter().map(|c| c.id).collect();
+        let mut pairs: AttrMap<&BoundColumn> = AttrMap::default();
         let mut rest: Vec<Arc<Expr>> = above;
         let cond_parts = conjuncts(cond);
         let eqs: Vec<Option<[&BoundColumn; 2]>> = cond_parts.iter().map(|c| equality(c)).collect();
@@ -234,7 +235,7 @@ impl Rule<'_> {
         let xb = flatten_block(x)?;
         // Leaves: every leaf of `S` is one leaf of `X`, injectively.
         let mut taken: HashSet<usize> = HashSet::new();
-        let mut to_x: HashMap<AttrId, Arc<Expr>> = HashMap::new();
+        let mut to_x: AttrMap<Arc<Expr>> = AttrMap::default();
         let mut s_leaf_x: Vec<usize> = Vec::new();
         for sl in &sb.leaves {
             let found: Vec<usize> = (0..xb.leaves.len())
@@ -256,7 +257,7 @@ impl Rule<'_> {
             }
         }
         // `X_S`'s columns.
-        let mut xs_ids: HashSet<AttrId> = HashSet::new();
+        let mut xs_ids: Attrs = Attrs::default();
         for i in &taken {
             let l = &xb.leaves[*i];
             for c in l.body.resolved_output()? {
@@ -301,9 +302,9 @@ impl Rule<'_> {
         let in_cls =
             |c: &mut Classes, id: AttrId| p_cols.iter().any(|p| c.find(p.id) == c.find(id));
         // Condition 4: equal row sets per group.
-        let null_ignoring: Option<HashSet<AttrId>> = {
+        let null_ignoring: Option<Attrs> = {
             // `isnotnull(c)` is harmless when every call's sole argument is `c`.
-            let mut set = HashSet::new();
+            let mut set = Attrs::default();
             let mut all = true;
             for c in &calls {
                 match function(c).map(|f| f.args.as_slice()) {
@@ -390,7 +391,7 @@ impl Rule<'_> {
                 .iter()
                 .map(|c| default_size(&c.data_type) as f64)
                 .sum::<f64>();
-        let mut used: HashSet<AttrId> = HashSet::new();
+        let mut used: Attrs = Attrs::default();
         for c in &sb.conjuncts {
             used.extend(references(c));
         }
@@ -459,7 +460,7 @@ impl Rule<'_> {
         }
         self.next = Some(next);
         // Each aggregate output as an expression over the window columns.
-        let mut value: HashMap<AttrId, Arc<Expr>> = HashMap::new();
+        let mut value: AttrMap<Arc<Expr>> = AttrMap::default();
         for (out, inner) in &outputs {
             let over = replace_calls(inner, &call_cols);
             let over = substitute(&over, &to_x);

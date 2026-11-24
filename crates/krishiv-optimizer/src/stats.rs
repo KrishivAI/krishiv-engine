@@ -14,6 +14,7 @@
 //! fractions, distinct counts) is propagated by `estimate`; the types it
 //! produces are here.
 
+use crate::expr::AttrMap;
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
@@ -49,8 +50,8 @@ pub(crate) fn reads_cse(e: &Expr) -> bool {
 /// its definition's values, so estimates read the definition instead of
 /// the column: the same rows are estimated before and after the
 /// common-subexpression pass runs.
-pub(crate) fn cse_definitions(p: &LogicalPlan) -> HashMap<AttrId, Arc<Expr>> {
-    let mut defs = HashMap::new();
+pub(crate) fn cse_definitions(p: &LogicalPlan) -> AttrMap<Arc<Expr>> {
+    let mut defs = AttrMap::default();
     let mut plans = vec![p];
     let mut seen_plans = std::collections::HashSet::new();
     while let Some(q) = plans.pop() {
@@ -79,7 +80,7 @@ pub(crate) fn cse_definitions(p: &LogicalPlan) -> HashMap<AttrId, Arc<Expr>> {
 /// `e` with every common-subexpression column replaced by its definition
 /// (see [`cse_definitions`]); `e` itself when there is nothing to replace.
 /// Definitions hold no `cse_*` references themselves, so one pass suffices.
-pub(crate) fn resolve_cse(e: &Arc<Expr>, defs: &HashMap<AttrId, Arc<Expr>>) -> Arc<Expr> {
+pub(crate) fn resolve_cse(e: &Arc<Expr>, defs: &AttrMap<Arc<Expr>>) -> Arc<Expr> {
     if defs.is_empty() || !reads_cse(e) {
         return Arc::clone(e);
     }
@@ -270,7 +271,7 @@ pub struct RelStats {
     /// decisions read at least 1 ([`Self::rows_for_costing`]).
     pub rows: f64,
     /// Per output attribute.
-    pub cols: HashMap<AttrId, AttrStats>,
+    pub cols: AttrMap<AttrStats>,
     /// Whether every table below reports statistics, so the estimate does
     /// not rest on default row counts (a `WITH` reference has its definition's;
     /// one whose definition is out of scope counts as default-sized).

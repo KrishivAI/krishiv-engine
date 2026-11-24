@@ -23,6 +23,7 @@
 //!   cannot disturb ([`carries`]), anything else is a guess.
 //! - **Union**: rows add; distinct counts are the most of any input.
 
+use crate::expr::AttrMap;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -718,7 +719,7 @@ impl<'a> Estimator<'a> {
         };
         let (left_only, right_only) = ((l.rows - inner).max(0.0), (r.rows - inner).max(0.0));
         let (ml, mr) = (matched(l, r, true), matched(r, l, false));
-        let cols: HashMap<AttrId, AttrStats> = match kind {
+        let cols: AttrMap<AttrStats> = match kind {
             JoinKind::LeftOuter | JoinKind::Single => side(l, ml, false, 0.0)
                 .into_iter()
                 .chain(side(r, mr, true, left_only))
@@ -857,7 +858,7 @@ fn expand(est: RelStats, projections: &[Vec<Arc<Expr>>], output: &[BoundColumn])
         return est.with_rows(rows);
     }
     let per = est.rows;
-    let mut cols = HashMap::with_capacity(output.len());
+    let mut cols = AttrMap::with_capacity_and_hasher(output.len(), Default::default());
     for (j, out) in output.iter().enumerate() {
         let mut null_rows = 0.0;
         let mut col_id: Option<AttrId> = None;
@@ -1044,7 +1045,7 @@ pub(crate) fn same_renames(predicate: &Arc<Expr>, input: &LogicalPlan) -> Arc<Ex
 /// The outputs of the projection under `input` (through filters) that
 /// rename an input column another output already names, by attribute: that
 /// first output (the canonical name of the column).
-fn renames_to_canonical(input: &LogicalPlan) -> HashMap<AttrId, BoundColumn> {
+fn renames_to_canonical(input: &LogicalPlan) -> AttrMap<BoundColumn> {
     // Filters and subquery aliases keep their input's columns (attributes):
     // the projection may sit below them. A `Shift` renumbers them by its
     // offset: the renames below it hold at the shifted ids (the instance of a
@@ -1068,10 +1069,10 @@ fn renames_to_canonical(input: &LogicalPlan) -> HashMap<AttrId, BoundColumn> {
         }
     }
     let PlanNode::Project { exprs, .. } = &input.node else {
-        return HashMap::new();
+        return AttrMap::default();
     };
-    let mut first: HashMap<AttrId, BoundColumn> = HashMap::new();
-    let mut to: HashMap<AttrId, BoundColumn> = HashMap::new();
+    let mut first: AttrMap<BoundColumn> = AttrMap::default();
+    let mut to: AttrMap<BoundColumn> = AttrMap::default();
     let moved = |c: &BoundColumn| {
         let mut c = c.clone();
         c.id = AttrId(c.id.0.saturating_add(shift));

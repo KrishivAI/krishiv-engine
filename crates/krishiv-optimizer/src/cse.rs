@@ -1050,7 +1050,7 @@ fn project_below(
 /// Only bare columns (never aliases or renames) are absorbed, and only
 /// while every column in `keep` is still an output below.
 fn absorb(input: &Arc<LogicalPlan>, keep: &[BoundColumn]) -> Arc<LogicalPlan> {
-    let want: HashSet<AttrId> = keep.iter().map(|c| c.id).collect();
+    let want: Attrs = keep.iter().map(|c| c.id).collect();
     let mut base = Arc::clone(input);
     while let PlanNode::Project {
         input: below,

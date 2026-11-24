@@ -95,7 +95,8 @@
 //! is not raised. This is a documented divergence from Spark, which
 //! computes every group and every row.
 
-use std::collections::{HashMap, HashSet};
+use crate::expr::AttrMap;
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use krishiv_common::error::KrishivError;
@@ -326,7 +327,7 @@ impl Restrict<'_> {
                     at = next;
                 }
                 PlanNode::Project { input, exprs } => {
-                    let map: HashMap<AttrId, Arc<Expr>> = exprs
+                    let map: AttrMap<Arc<Expr>> = exprs
                         .iter()
                         .filter_map(|e| {
                             let out = crate::expr::output_of(e)?;
@@ -351,7 +352,7 @@ impl Restrict<'_> {
             _ => return None,
         };
         // Each grouping key's output attribute, to its expression.
-        let by_output: HashMap<AttrId, Arc<Expr>> = aggregates
+        let by_output: AttrMap<Arc<Expr>> = aggregates
             .iter()
             .filter_map(|a| {
                 let g = groups.iter().find(|g| same(strip_alias(a), g))?;
@@ -497,7 +498,7 @@ impl Restrict<'_> {
         inner: Vec<Arc<Expr>>,
         domain: Arc<LogicalPlan>,
         want: &Attrs,
-        rename: &HashMap<AttrId, Arc<Expr>>,
+        rename: &AttrMap<Arc<Expr>>,
     ) -> Option<Arc<LogicalPlan>> {
         // Fresh ids for the domain's instance.
         let offset = match self.next {
@@ -555,9 +556,11 @@ impl Restrict<'_> {
         loop {
             // The subtrees the domain may move into, each with the columns
             // an equality of the join renames `want` to there.
-            let mut next: Vec<(Arc<LogicalPlan>, HashMap<AttrId, BoundColumn>)> = Vec::new();
+            let mut next: Vec<(Arc<LogicalPlan>, AttrMap<BoundColumn>)> = Vec::new();
             match &at.node {
-                PlanNode::Filter { input, .. } => next.push((Arc::clone(input), HashMap::new())),
+                PlanNode::Filter { input, .. } => {
+                    next.push((Arc::clone(input), AttrMap::default()));
+                }
                 // Only columns passed through unchanged.
                 PlanNode::Project { input, exprs } => {
                     let through: Attrs = exprs
@@ -568,7 +571,7 @@ impl Restrict<'_> {
                         })
                         .collect();
                     if want.is_subset(&through) {
-                        next.push((Arc::clone(input), HashMap::new()));
+                        next.push((Arc::clone(input), AttrMap::default()));
                     }
                 }
                 // A side's columns hold its values or NULL, which matches
@@ -585,9 +588,9 @@ impl Restrict<'_> {
                         JoinKind::LeftSemi | JoinKind::LeftAnti | JoinKind::Existence(_)
                     ) && output_ids(right).is_some_and(|o| want.is_subset(&o));
                     if in_left {
-                        next.push((Arc::clone(left), HashMap::new()));
+                        next.push((Arc::clone(left), AttrMap::default()));
                     } else if in_right {
-                        next.push((Arc::clone(right), HashMap::new()));
+                        next.push((Arc::clone(right), AttrMap::default()));
                     }
                     // Through an inner join's equalities into the other
                     // input: a row of the join has `w = y`, so the join's
@@ -701,7 +704,7 @@ fn rebuild(
 struct Domain {
     plan: Arc<LogicalPlan>,
     want: Attrs,
-    rename: HashMap<AttrId, Arc<Expr>>,
+    rename: AttrMap<Arc<Expr>>,
 }
 
 /// For every column of `want` (none of them in `side`), a column of `side`
@@ -712,7 +715,7 @@ fn partners(
     cond: &Arc<Expr>,
     want: &Attrs,
     side: &Arc<LogicalPlan>,
-) -> Option<HashMap<AttrId, BoundColumn>> {
+) -> Option<AttrMap<BoundColumn>> {
     let cols = output(side)?;
     if want.iter().any(|w| cols.iter().any(|c| c.id == *w)) {
         return None;
@@ -721,7 +724,7 @@ fn partners(
         ExprNode::Resolved(ResolvedExpr::Column(c)) => Some(c.clone()),
         _ => None,
     };
-    let mut map = HashMap::new();
+    let mut map = AttrMap::default();
     for c in conjuncts(cond) {
         let Some((Builtin::Eq, [a, b], _)) = builtin(&c) else {
             continue;
