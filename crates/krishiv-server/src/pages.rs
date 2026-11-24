@@ -168,12 +168,33 @@ pub(crate) fn session_cookie_name(headers: &HeaderMap) -> String {
     }
 }
 
+/// Gives a request without a `Host` header one from the authority of its URI. An HTTP/2 request names the server
+/// in `:authority` (which arrives as the URI's authority) and carries no `Host`, and a browser speaks HTTP/2 to a
+/// TLS listener: without this the host check, the same-origin check and the cookie's name would see no name at
+/// all. Only the host and the port are taken (no user information).
+fn name_by_authority(req: &mut axum::extract::Request) {
+    if req.headers().contains_key(header::HOST) {
+        return;
+    }
+    let Some(authority) = req.uri().authority() else {
+        return;
+    };
+    let name = match authority.port_u16() {
+        Some(port) => format!("{}:{port}", authority.host()),
+        None => authority.host().to_owned(),
+    };
+    if let Ok(v) = HeaderValue::from_str(&name) {
+        req.headers_mut().insert(header::HOST, v);
+    }
+}
+
 /// The host check and the same-origin check, before any route (and so before any token check) of the API.
 pub(crate) async fn host_guard(
     State(s): State<UiState>,
-    req: axum::extract::Request,
+    mut req: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> Response {
+    name_by_authority(&mut req);
     let host = req
         .headers()
         .get(header::HOST)

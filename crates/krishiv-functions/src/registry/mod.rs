@@ -35,6 +35,7 @@ mod hashing;
 mod hll;
 mod hof;
 mod json;
+mod leakproof;
 mod map;
 mod math;
 mod misc;
@@ -257,6 +258,9 @@ pub struct FunctionDef {
     pub result: ResultType,
     /// How it runs.
     pub execution: Execution,
+    /// Whether it is declared leakproof (`registry/leakproof.rs`): a security barrier may run a
+    /// call of it on rows its policy rejects, when the call cannot raise for its arguments.
+    pub leakproof: bool,
 }
 
 impl fmt::Debug for FunctionDef {
@@ -270,6 +274,7 @@ impl fmt::Debug for FunctionDef {
             .field("arity", &self.arity)
             .field("inputs", &self.inputs)
             .field("execution", &self.execution)
+            .field("leakproof", &self.leakproof)
             .finish_non_exhaustive()
     }
 }
@@ -431,6 +436,7 @@ impl Registry {
                     inputs: spec.inputs,
                     result: Arc::new(spec.result),
                     execution: spec.execution,
+                    leakproof: leakproof::declared(spec.name),
                 },
             );
         }
@@ -456,6 +462,12 @@ impl Registry {
             Some(s) if profile >= s.since => Lookup::KnownUnsupported,
             _ => Lookup::NotFound,
         }
+    }
+
+    /// Whether the implemented function `name` (lower case) is declared leakproof.
+    #[must_use]
+    pub fn leakproof(&self, name: &str) -> bool {
+        self.defs.get(name).is_some_and(|d| d.leakproof)
     }
 
     /// Every implemented function, sorted by name.

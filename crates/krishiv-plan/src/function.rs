@@ -147,6 +147,38 @@ pub struct QuantifiedLike {
 }
 
 impl Builtin {
+    /// Whether the operator is declared leakproof (design `P3-E14-security-barrier.md` §4): a
+    /// security barrier may run it on rows its policy rejects, when [`crate::runs_on_any_row`]
+    /// also holds for the call (so arithmetic counts only where it cannot raise). A reviewed
+    /// security decision: the `LIKE` family is not declared, though it may run early.
+    #[must_use]
+    pub fn leakproof(self) -> bool {
+        matches!(
+            self,
+            Self::Eq
+                | Self::EqNullSafe
+                | Self::Lt
+                | Self::LtEq
+                | Self::Gt
+                | Self::GtEq
+                | Self::And
+                | Self::Or
+                | Self::Not
+                | Self::IsNull
+                | Self::IsNotNull
+                | Self::In
+                | Self::Between
+                | Self::When
+                | Self::Add
+                | Self::Subtract
+                | Self::Multiply
+                | Self::Divide
+                | Self::Remainder
+                | Self::IntegralDivide
+                | Self::Negative
+        )
+    }
+
     /// Every operator, in declaration order.
     pub const ALL: [Self; 47] = [
         Self::Eq,

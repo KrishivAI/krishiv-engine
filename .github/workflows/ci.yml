@@ -489,8 +489,12 @@ jobs:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          workspaces: tools/admin-protogen
+          workspaces: |
+            tools/admin-protogen
+            tools/access-protogen
       - run: cargo run --locked --manifest-path tools/admin-protogen/Cargo.toml -- --check
+      # `krishiv.access.v1` (ADR 0049): the messages in krishiv-access-proto, the stubs in krishiv-server.
+      - run: cargo run --locked --manifest-path tools/access-protogen/Cargo.toml -- --check
       - uses: $/.github/actions/setup-mold
       # The label is read now, from the API, as the budget gate does.
       - name: Snapshots and the additive-only check

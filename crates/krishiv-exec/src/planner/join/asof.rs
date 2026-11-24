@@ -5,9 +5,10 @@
 //! The condition's equalities between the two sides are the keys (none: one constant key, so
 //! every row is in one group, Spark's `AllTuples`); the rest is the residual, which filters the
 //! right rows before the nearest one is taken. Each input computes its as-of value as its last
-//! column, and both are hash-partitioned on the keys and sorted on keys then value. Runtime-filter
-//! sites stay on the left side only: a filter that dropped right rows would change which row is
-//! nearest; and none stays where the residual or an evaluated distance may raise.
+//! column, and both are hash-partitioned on the keys (gathered to one partition when there are
+//! none) and sorted on keys then value. Runtime-filter sites stay on the left side only: a filter
+//! that dropped right rows would change which row is nearest; and none stays where the residual or
+//! an evaluated distance may raise.
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -20,6 +21,7 @@ use krishiv_types::DataType;
 
 use super::super::build::{Planned, Planner, unsupported};
 use super::super::explain::ExplainNode;
+use super::super::properties::Distribution;
 use super::{equality, residual_of, sides, split_and, text};
 use crate::error::{Result, internal};
 use crate::join::{AsOfMergeDirection, AsOfMergeSpec, JoinType};
@@ -104,7 +106,16 @@ impl Planner<'_> {
         else {
             return Err(unsupported("an as-of join without its values"));
         };
-        let (probe, build) = self.co_partition(probe, &probe_keys, build, &build_keys)?;
+        // Without keys every row meets in one group, so both sides gather to one partition
+        // (I8): a hash exchange on the constant key would do the same with a hidden hot spot.
+        let (probe, build) = if constant {
+            (
+                self.require(probe, Distribution::Single)?,
+                self.require(build, Distribution::Single)?,
+            )
+        } else {
+            self.co_partition(probe, &probe_keys, build, &build_keys)?
+        };
         let filter = residual_of(&probe, &build, &residual);
         // The Connect form picks the row of the smallest distance (Spark's `min_by`); the SQL
         // scan forward compares the distances of the match and the next passing row. Without

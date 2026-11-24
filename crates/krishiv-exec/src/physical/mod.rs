@@ -1322,7 +1322,7 @@ plan_data!(struct SortMergeJoinPlan {
     probe, build, join_type, probe_keys, build_keys, null_safe, residual, single_match, as_of
 });
 plan_data!(struct NestedLoopPlan { probe, build, join_type, residual });
-plan_data!(struct PhysicalPlan { root, shared, schema, explain, warnings, env });
+plan_data!(struct PhysicalPlan { root, shared, schema, explain, warnings, env, guarded });
 
 impl PhysNode {
     /// The plans this node reads: its inputs, then the subqueries it runs
@@ -1543,6 +1543,9 @@ pub struct PhysicalPlan {
     explain: ExplainNode,
     warnings: Vec<String>,
     env: ExprEnv,
+    /// The scans planned under a security barrier, sorted (design `P3-E14-security-barrier.md`
+    /// §6): coordinator-side, never in the plan codec, so a decoded plan has none.
+    guarded: Vec<ScanId>,
 }
 
 impl PhysicalPlan {
@@ -1556,7 +1559,30 @@ impl PhysicalPlan {
             explain,
             warnings: Vec::new(),
             env,
+            guarded: Vec::new(),
         }
+    }
+
+    /// The scans planned under a security barrier, sorted. Read on the coordinator only (the
+    /// profile's scan entries); the plan codec does not carry them.
+    pub fn guarded(&self) -> &[ScanId] {
+        &self.guarded
+    }
+
+    /// The same plan with `guarded` as its guarded scans: the planner is the only writer.
+    pub(crate) fn with_guarded(mut self, mut guarded: Vec<ScanId>) -> Self {
+        guarded.sort_unstable();
+        guarded.dedup();
+        self.guarded = guarded;
+        self
+    }
+
+    /// The same plan with no guarded scans: what a codec round trip gives, for comparing a
+    /// decoded plan with the planned one.
+    #[must_use]
+    pub fn without_guarded(mut self) -> Self {
+        self.guarded = Vec::new();
+        self
     }
 
     /// The root node.
@@ -1757,6 +1783,7 @@ impl PhysicalPlan {
             explain,
             warnings: self.warnings,
             env: self.env,
+            guarded: self.guarded,
         })
     }
 
@@ -1799,6 +1826,7 @@ impl PhysicalPlan {
             explain,
             warnings: self.warnings,
             env: self.env,
+            guarded: self.guarded,
         }
     }
 

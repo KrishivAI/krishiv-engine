@@ -1,0 +1,8 @@
+**/target
+.git
+.worktrees
+bench/data
+bench/results
+**/node_modules
+**/__pycache__
+python/.venv

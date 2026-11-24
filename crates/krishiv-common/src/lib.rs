@@ -3,7 +3,7 @@
 
 #![forbid(unsafe_code)]
 
-pub use principal::{Principal, PrincipalKind};
+pub use principal::{Principal, PrincipalKey, PrincipalKind};
 pub use sketch::SketchRef;
 
 pub mod config;
