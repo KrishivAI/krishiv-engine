@@ -36,7 +36,7 @@ Any other command passes through to `krishiv`: `docker run --rm IMAGE sql -e "SE
 | `8080` | admin API (`/healthz`, `/readyz`, `/metrics`) and the web console | `--port` |
 
 Publish the ports you use with `-p`. The server inside the image listens on all addresses, and the server refuses a
-non-loopback address without authentication and TLS (ADR 0046), so the image's entry point supplies both.
+non-loopback address without authentication and TLS, so the image's entry point supplies both.
 
 ## Start a server
 
@@ -134,7 +134,7 @@ The image's `HEALTHCHECK` calls `/healthz` every 15 seconds (over HTTPS when TLS
 
 ## Connect PySpark
 
-Install the thin client (no JVM) and connect with the token and TLS. With the one-variable start, the token is the value of `KRISHIV_AUTH_TOKEN` and `cert.pem` is the certificate you copied out:
+Install the thin client (no JVM) and connect with the token and TLS. Put the token in `KRISHIV_TOKEN` in the shell that runs Python (`export KRISHIV_TOKEN=<the token you started the container with>`; with the one-variable start that is the value you gave `KRISHIV_AUTH_TOKEN`). `cert.pem` is the certificate you copied out:
 
 ```python
 # pip install pyspark-client
