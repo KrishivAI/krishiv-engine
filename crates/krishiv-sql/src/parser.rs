@@ -1266,11 +1266,12 @@ impl<'s> Parser<'s> {
         if self.any_kw_at(0, &["APPROX", "EXACT"]) && self.kw_at(1, "NEAREST") {
             return Ok(None);
         }
-        // Spark 4.3: `ASOF JOIN` after a relation starts an as-of join (with
-        // the flag off it stays Spark 4.2's alias `ASOF`), and
-        // `MATCH_CONDITION (` after an as-of join's right side its criteria.
-        if (self.opts.asof_join && self.kw_at(0, "ASOF") && self.kw_at(1, "JOIN"))
-            || (self.asof_right && self.kw_at(0, "MATCH_CONDITION") && self.sym_at(1, Sym::LParen))
+        // Spark 4.3: `ASOF JOIN` after a relation starts an as-of join when
+        // the join reads on to its `MATCH_CONDITION (` (else `ASOF` is the
+        // alias), and `MATCH_CONDITION (` after an as-of join's right side its
+        // criteria.
+        if (self.asof_right && self.kw_at(0, "MATCH_CONDITION") && self.sym_at(1, Sym::LParen))
+            || self.asof_join_ahead()
         {
             return Ok(None);
         }
@@ -1289,6 +1290,32 @@ impl<'s> Parser<'s> {
             return Ok(None);
         }
         self.ident_with(keyword).map(Some)
+    }
+
+    /// Whether `ASOF JOIN` here starts an as-of join rather than naming the
+    /// relation before it `ASOF`. Spark's grammar has the as-of branch of
+    /// `joinRelation` whatever `spark.sql.join.asofJoin.enabled` says (its
+    /// `AstBuilder` raises `UNSUPPORTED_FEATURE.ASOF_JOIN` when it is off), and
+    /// ANTLR predicts that branch when its right side reads on to
+    /// `MATCH_CONDITION (`; otherwise `ASOF` is the alias (`FROM t ASOF JOIN q
+    /// ON ..`, a Spark 4.3.0 run).
+    fn asof_join_ahead(&mut self) -> bool {
+        if !(self.kw_at(0, "ASOF") && self.kw_at(1, "JOIN")) {
+            return false;
+        }
+        let checkpoint = self.checkpoint();
+        self.pos += 2;
+        let outer = std::mem::replace(&mut self.asof_right, true);
+        let right = self.table_factor();
+        self.asof_right = outer;
+        let ahead = match right {
+            Ok(_) => self.kw_at(0, "MATCH_CONDITION") && self.sym_at(1, Sym::LParen),
+            // The as-of reading fails there too: let it report the error.
+            Err(Fail::Fatal(_)) => true,
+            Err(_) => false,
+        };
+        self.restore(checkpoint);
+        ahead
     }
 
     /// `[AS] name`.

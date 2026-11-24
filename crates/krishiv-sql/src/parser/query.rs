@@ -252,7 +252,7 @@ impl Parser<'_> {
     /// Whether `|` before token `n` is the pipe operator, not a bitwise or.
     pub(crate) fn single_pipe_word_at(&self, n: usize) -> bool {
         self.opts.single_character_pipe_operator
-            && (self.opts.asof_join && self.kw_at(n, "ASOF")
+            && (self.kw_at(n, "ASOF")
                 || self.any_kw_at(
                     n,
                     &[

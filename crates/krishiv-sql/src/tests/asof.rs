@@ -297,3 +297,62 @@ fn asof_right_side_parenthesized_relation_clears_the_flag() {
     let columns: Vec<&str> = alias.columns.iter().map(|c| c.value.as_str()).collect();
     assert_eq!(columns, ["x"]);
 }
+
+/// SMOKE-asof-error (Spark 4.3.0 spark-sql run, 2026-11-24): with the flag off, an as-of join
+/// with no alias on its left side is still an as-of join, so the error is Spark's
+/// `UNSUPPORTED_FEATURE.ASOF_JOIN`, not a syntax error at `MATCH_CONDITION (trades.`; with or
+/// without the flag, `ASOF JOIN q ON ..` (no `MATCH_CONDITION`) names the left side `ASOF`.
+#[test]
+fn asof_join_without_a_left_alias_is_gated_not_misread() {
+    for left in [
+        "trades",
+        "trades AS t",
+        "trades t",
+        "(SELECT * FROM trades) t",
+    ] {
+        for right in ["quotes", "quotes q", "quotes AS q"] {
+            let sql = format!(
+                "SELECT * FROM {left} ASOF JOIN {right} MATCH_CONDITION (trades.t >= quotes.t) \
+                 ON trades.s = quotes.s"
+            );
+            let (class, params, span) = error(&sql, &ParserOptions::default());
+            assert_eq!(class, "UNSUPPORTED_FEATURE.ASOF_JOIN", "{sql}");
+            assert_eq!(
+                param(&params, "config"),
+                "\"spark.sql.join.asofJoin.enabled\""
+            );
+            assert!(span.text(&sql).starts_with("ASOF JOIN"), "{sql}");
+            // On, the same text is an as-of join.
+            assert!(
+                matches!(join(&sql).constraint, JoinConstraint::AsOf(_)),
+                "{sql}"
+            );
+        }
+    }
+    // `LEFT ASOF JOIN` and `USING`, flag off: gated as well.
+    let sql = "SELECT * FROM trades LEFT ASOF JOIN quotes MATCH_CONDITION (trades.t >= quotes.t) USING (s)";
+    assert_eq!(
+        error(sql, &ParserOptions::default()).0,
+        "UNSUPPORTED_FEATURE.ASOF_JOIN"
+    );
+    // An invalid match operator: the gate comes first, as in Spark's `withAsOfJoin`.
+    let sql = "SELECT * FROM trades ASOF JOIN quotes MATCH_CONDITION (trades.t = quotes.t)";
+    assert_eq!(
+        error(sql, &ParserOptions::default()).0,
+        "UNSUPPORTED_FEATURE.ASOF_JOIN"
+    );
+    // No `MATCH_CONDITION`: `ASOF` is the left side's alias, flag on or off.
+    for opts in [ParserOptions::default(), on()] {
+        let q = parse_query("SELECT * FROM trades ASOF JOIN quotes ON true", &opts).unwrap();
+        let SetExprKind::Select(s) = q.body.kind else {
+            panic!()
+        };
+        let rel = s.from.unwrap().relations.into_iter().next().unwrap();
+        let alias = rel.primary.alias.as_ref().and_then(|a| a.name.as_ref());
+        assert_eq!(alias.map(|n| n.value.as_str()), Some("ASOF"), "{rel:?}");
+        assert!(
+            matches!(rel.extensions.first(), Some(RelationExt::Join(j)) if matches!(j.constraint, JoinConstraint::On(_))),
+            "{rel:?}"
+        );
+    }
+}
