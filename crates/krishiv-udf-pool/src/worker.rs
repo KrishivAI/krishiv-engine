@@ -28,8 +28,8 @@ use rustix::process::{Pid, PidfdFlags, Signal};
 use serde_json::{Value, json};
 
 use crate::pool::CallWatch;
-use crate::validate::SchemaCheck;
 use crate::wire::{self, Message};
+use krishiv_exec::python_relation::SchemaCheck;
 
 /// How long a new worker may take to import its packages and greet the server.
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(120);
