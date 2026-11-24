@@ -44,6 +44,8 @@ struct Files {
     idempotent: AtomicBool,
     /// The idempotency key each rewrite request carried.
     keys: Mutex<Vec<Option<String>>>,
+    /// Keys the table reports as already committed.
+    landed: Mutex<Vec<String>>,
 }
 
 fn schema() -> SchemaRef {
@@ -76,6 +78,7 @@ impl Files {
             mor: AtomicBool::new(false),
             reads: Mutex::new(Vec::new()),
             idempotent: AtomicBool::new(false),
+            landed: Mutex::new(Vec::new()),
             keys: Mutex::new(Vec::new()),
         })
     }
@@ -159,6 +162,20 @@ impl RowLevelTable for RowLevel {
         c.merge_on_read = self.0.mor.load(Ordering::Relaxed);
         c.idempotent_commit = self.0.idempotent.load(Ordering::Relaxed);
         c
+    }
+
+    fn replayed<'a>(
+        &'a self,
+        key: &'a str,
+    ) -> futures::future::BoxFuture<'a, krishiv_exec::Result<bool>> {
+        let found = self
+            .0
+            .landed
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .any(|k| k == key);
+        Box::pin(async move { Ok(found) })
     }
 
     fn scan(&self) -> krishiv_exec::Result<Arc<dyn ScanPushdown>> {
@@ -544,6 +561,33 @@ fn a_session_idempotency_key_reaches_a_copy_on_write_rewrite_of_a_keyed_table() 
     );
     let keys = files.keys.lock().unwrap().clone();
     assert_eq!(keys, vec![Some("job-1".to_owned())]);
+}
+
+/// A retry of a statement that landed under its key neither scans nor evaluates its values: an
+/// ANSI overflow in `SET` does not fail the replay, and nothing is rewritten.
+#[test]
+fn a_replayed_idempotency_key_evaluates_nothing() {
+    let files = Files::new();
+    files.idempotent.store(true, Ordering::Relaxed);
+    files.landed.lock().unwrap().push("job-1".to_owned());
+    let (session, name) = session(&files);
+    session
+        .conf()
+        .set("krishiv.write.idempotencyKey", "job-1")
+        .unwrap();
+    run(
+        &session,
+        &name,
+        RowLevelOperation::Update,
+        Some("id = 1"),
+        vec![Assignment {
+            column: "id".to_owned(),
+            nested: false,
+            value: Some("2147483647 + id".to_owned()),
+        }],
+    );
+    assert!(files.keys.lock().unwrap().is_empty());
+    assert_eq!(files.commits.load(Ordering::Relaxed), 0);
 }
 
 /// E34: the same through merge-on-read.

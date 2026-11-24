@@ -308,6 +308,13 @@ fn a_keyed_row_level_delete_retried_commits_nothing_and_claims_no_rows() {
         )
     };
     delete("dml-key-1").unwrap();
+    let after = env
+        .open()
+        .unwrap()
+        .row_level(RowLevelOperation::Delete)
+        .unwrap();
+    assert!(env.rt.block_on(after.replayed("job-1")).unwrap());
+    assert!(!env.rt.block_on(after.replayed("job-2")).unwrap());
     let version = env.latest();
     delete("dml-key-2").unwrap();
     assert_eq!(env.latest(), version, "the retry committed nothing");

@@ -173,6 +173,21 @@ impl RowLevelTable for IcebergRowLevel {
         c
     }
 
+    fn replayed<'a>(
+        &'a self,
+        key: &'a str,
+    ) -> futures::future::BoxFuture<'a, krishiv_exec::Result<bool>> {
+        let found = self.provider.write_target().is_some_and(|t| {
+            t.base.snapshots().any(|s| {
+                s.summary()
+                    .additional_properties
+                    .get(super::append::IDEMPOTENCY_KEY_PROP)
+                    .is_some_and(|v| v == key)
+            })
+        });
+        Box::pin(async move { Ok(found) })
+    }
+
     fn scan(&self) -> krishiv_exec::Result<Arc<dyn ScanPushdown>> {
         self.check_mode()?;
         let inner = self.provider.row_level_scan(self.lineage, None)?;

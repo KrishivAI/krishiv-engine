@@ -161,6 +161,19 @@ impl Session {
         } else {
             refuse_idempotency_key(&probe.env.config)?;
         }
+        // A retry of a statement that already committed under this key changes nothing and
+        // evaluates nothing: its SET values (an ANSI overflow, say) never run again.
+        if let Some(key) = krishiv_exec::planner::idempotency_key_option(&key_options)
+            && table.replayed(&key).await?
+        {
+            return match table.output(&RowLevelCounts::affected(0)) {
+                Some(batch) => self
+                    .script_result(batch.schema(), vec![batch])
+                    .await
+                    .map(Some),
+                None => self.empty_frame().await.map(Some),
+            };
+        }
         // The texts are read again under the statement's parser options (as MERGE does), so a
         // double-quoted name under `spark.sql.ansi.doubleQuotedIdentifiers` stays a column.
         let parser = &probe.env.parser;

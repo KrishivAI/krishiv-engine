@@ -52,7 +52,7 @@ fn copy_dir(from: &Path, to: &Path) {
 struct Env {
     _tmp: tempfile::TempDir,
     dir: PathBuf,
-    rt: tokio::runtime::Runtime,
+    pub(super) rt: tokio::runtime::Runtime,
     query_pool: Arc<dyn MemoryPool>,
     /// The runtime-root pool the I/O scheduler attached.
     process_pool: Arc<dyn MemoryPool>,

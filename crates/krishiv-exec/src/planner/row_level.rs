@@ -278,6 +278,19 @@ pub trait RowLevelTable: Send + Sync + fmt::Debug {
     /// `UNSUPPORTED_FEATURE.TABLE_OPERATION` for an operation the table refuses.
     fn rewriter(&self, request: &RowLevelWrite) -> Result<Arc<dyn Sink>>;
 
+    /// Whether a statement with the idempotency key `key` already committed to this table (the
+    /// key a table that sets [`RowLevelCapabilities::idempotent_commit`] records in its commit).
+    /// The session asks before it evaluates anything of the statement, so a retry of a landed
+    /// statement neither scans nor computes its new values (an ANSI overflow in `SET` cannot
+    /// fail a replay). The default is `false`: the commit itself still deduplicates.
+    ///
+    /// # Errors
+    /// Errors reading the table's history.
+    fn replayed<'a>(&'a self, key: &'a str) -> BoxFuture<'a, Result<bool>> {
+        let _ = key;
+        Box::pin(async { Ok(false) })
+    }
+
     /// The statement's result rows from its counts; `None` gives an empty result, as Spark does
     /// for a v2 table.
     fn output(&self, counts: &RowLevelCounts) -> Option<RecordBatch> {

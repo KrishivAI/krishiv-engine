@@ -207,6 +207,13 @@ impl RowLevelTable for DeltaRowLevel {
         c
     }
 
+    fn replayed<'a>(
+        &'a self,
+        key: &'a str,
+    ) -> futures::future::BoxFuture<'a, krishiv_exec::Result<bool>> {
+        Box::pin(self.table.has_idempotency_key(key))
+    }
+
     fn scan(&self) -> krishiv_exec::Result<Arc<dyn ScanPushdown>> {
         self.check_table()?;
         self.row_scan(self.table.row_level_scan(None)?)
