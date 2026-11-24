@@ -713,6 +713,7 @@ impl<'a> Walker<'a> {
             | PlanNode::ColumnNames { .. }
             | PlanNode::PipeOperator { .. }
             | PlanNode::SetOp { .. }
+            | PlanNode::Zip { .. }
             | PlanNode::Pivot { .. }
             | PlanNode::Unpivot { .. }
             | PlanNode::InlineTable { .. }
