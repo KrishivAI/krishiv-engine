@@ -18,6 +18,7 @@
   "migrating-jvm-udfs": "Migrating JVM UDFs",
   "lakehouse-tables": "Iceberg and Delta tables, and catalogs",
   "access-control": "Access control with grants",
+  "session-settings": "Session settings: time zone and ANSI mode",
   "flight-sql": "Arrow Flight SQL",
   "metric-views": "Metric views",
   "time-types": "The TIME type",
