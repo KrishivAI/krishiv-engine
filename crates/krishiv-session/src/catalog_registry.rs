@@ -159,7 +159,7 @@ impl CatalogCaller {
     }
 }
 
-/// What a declared catalog's table is read with in one query (PR-58b): the query's I/O, its path
+/// What a declared catalog's table is read with in one query: the query's I/O, its path
 /// placement (the session's stores; in server mode confined to `krishiv.io.local.allowedRoots`
 /// and `krishiv.io.objectStore.allowedPrefixes`), its configuration and the
 /// worker slots splits are cut for.
@@ -266,7 +266,7 @@ impl ScanInputs {
 }
 
 /// A table a declared catalog loaded for one caller at one version: what a scan of it opens
-/// (PR-58b). Opened before planning, on the executor's I/O runtime.
+///. Opened before planning, on the executor's I/O runtime.
 pub trait DeclaredTable: fmt::Debug + Send + Sync {
     /// The table's provider, read with `inputs`.
     ///
@@ -674,7 +674,7 @@ struct DeclaredCatalog(Arc<Declared>, CatalogCaller, Arc<DeclaredLoads>);
 /// table, as the catalog spells them) and the version it was loaded at.
 pub(crate) type DeclaredKey = (Vec<String>, Option<TableVersion>);
 
-/// The declared tables one query loaded and opened (PR-58b): the analysis records each table a
+/// The declared tables one query loaded and opened: the analysis records each table a
 /// declared catalog loaded; before planning each scanned one is opened once, so every scan of it
 /// in the query reads one provider.
 #[derive(Default)]
@@ -1047,7 +1047,7 @@ pub(crate) struct CatalogRow {
     pub(crate) kind: &'static str,
     pub(crate) auth: &'static str,
     pub(crate) storage: &'static str,
-    /// The delegation form of a `delegated` catalog (PR-58b); `None` otherwise.
+    /// The delegation form of a `delegated` catalog; `None` otherwise.
     pub(crate) delegation: Option<&'static str>,
     pub(crate) default: bool,
 }

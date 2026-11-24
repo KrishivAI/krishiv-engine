@@ -2706,7 +2706,7 @@ pub struct CatalogCaller {
 
 - `NonExhaustive`
 
-What a declared catalog's table is read with in one query (PR-58b): the query's I/O, its path
+What a declared catalog's table is read with in one query: the query's I/O, its path
 placement (the session's stores; in server mode confined to `krishiv.io.local.allowedRoots`
 and `krishiv.io.objectStore.allowedPrefixes`), its configuration and the
 worker slots splits are cut for.
@@ -3458,7 +3458,7 @@ pub struct CatalogRegistry {
 #### Trait `DeclaredTable`
 
 A table a declared catalog loaded for one caller at one version: what a scan of it opens
-(PR-58b). Opened before planning, on the executor's I/O runtime.
+Opened before planning, on the executor's I/O runtime.
 
 ```rust
 pub trait DeclaredTable: fmt::Debug + Send + Sync {
