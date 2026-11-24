@@ -1372,7 +1372,7 @@ mod constant_pattern {
 
     use super::{bools, text};
     use crate::scalar::Arg;
-    use crate::scalar::regex::memo::{Memo, PROBE_ROWS};
+    use crate::scalar::regex::memo::{CAP_BYTES, Value, WINDOW, with_memo};
     use crate::scalar::tests::bind;
 
     fn column(rows: &[Option<&str>]) -> ArrayRef {
@@ -1426,12 +1426,16 @@ mod constant_pattern {
             Some("http://site.ru/path\n"),
             Some("https://example.org/x"),
         ];
-        base.iter().cycle().take(3 * PROBE_ROWS).copied().collect()
+        base.iter()
+            .cycle()
+            .take(3 * WINDOW as usize)
+            .copied()
+            .collect()
     }
 
     /// Every value distinct, past the probe, so the memo stops part way.
     fn distinct() -> Vec<String> {
-        (0..2 * PROBE_ROWS + 7)
+        (0..2 * WINDOW as usize + 7)
             .map(|n| format!("http://h{n}.example/p{n}"))
             .collect()
     }
@@ -1538,34 +1542,60 @@ mod constant_pattern {
     }
 
     #[test]
-    fn the_memo_evaluates_each_value_once_and_stops_on_distinct_batches() {
+    fn the_memo_evaluates_each_value_once_across_batches_and_stops_on_distinct_input() {
         let values = repetitive();
-        let mut memo = Memo::new(values.len());
         let mut calls = 0;
-        for v in values.iter().flatten() {
-            let got = memo.get(v, |x| {
-                calls += 1;
-                Ok(x.len())
+        // Two batches of the same values: the second evaluates nothing.
+        for _ in 0..2 {
+            with_memo("`test`", "repeat", |memo| {
+                for v in values.iter().flatten() {
+                    let got = memo.get(v, |x| {
+                        calls += 1;
+                        Ok(Value::Text(x.into()))
+                    });
+                    assert_eq!(got.ok(), Some(&Value::Text((*v).into())));
+                }
+                assert!(!memo.is_off());
             });
-            assert_eq!(got.ok().copied(), Some(v.len()));
         }
-        assert_eq!(calls, 5, "five distinct values");
-        assert!(!memo.is_off());
+        assert_eq!(calls, 5, "five distinct values, once");
 
-        let owned = distinct();
-        let mut memo = Memo::new(owned.len());
+        // Another key is another cache.
+        with_memo("`test`", "other", |memo| assert_eq!(memo.len(), 0));
+
+        let owned: Vec<String> = (0..2 * WINDOW as usize + 7)
+            .map(|n| format!("v{n}"))
+            .collect();
         let mut calls = 0;
-        for v in &owned {
-            let got = memo.get(v, |x| {
-                calls += 1;
-                Ok(x.len())
-            });
-            assert_eq!(got.ok().copied(), Some(v.len()));
-        }
+        with_memo("`test`", "distinct", |memo| {
+            for v in &owned {
+                let got = memo.get(v, |x| {
+                    calls += 1;
+                    Ok(Value::Bool(x.len() % 2 == 0))
+                });
+                assert_eq!(got.ok(), Some(&Value::Bool(v.len() % 2 == 0)));
+            }
+            assert!(memo.is_off());
+            assert_eq!(memo.len(), 0, "an off cache holds nothing");
+        });
         assert_eq!(calls, owned.len());
-        assert!(memo.is_off());
+    }
 
-        // A batch of one row never builds the index.
-        assert!(Memo::<usize>::new(1).is_off());
+    #[test]
+    fn the_memo_clears_past_its_byte_cap_and_never_caches_errors() {
+        let big = "x".repeat(1 << 16);
+        with_memo("`test`", "cap", |memo| {
+            for n in 0..2 * (CAP_BYTES >> 16) {
+                let key = format!("{n}{big}");
+                assert!(memo.get(&key, |_| Ok(Value::Bool(true))).is_ok());
+                assert!(memo.len() <= CAP_BYTES >> 16);
+            }
+            let failed = memo.get("bad", |_| {
+                Err(crate::scalar::args::internal("no".to_owned()))
+            });
+            assert!(failed.is_err());
+            let again = memo.get("bad", |_| Ok(Value::Bool(false)));
+            assert_eq!(again.ok(), Some(&Value::Bool(false)));
+        });
     }
 }

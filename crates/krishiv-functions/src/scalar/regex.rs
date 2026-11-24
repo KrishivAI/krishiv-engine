@@ -61,7 +61,7 @@ mod java;
 mod memo;
 
 pub(super) use java::translate;
-use memo::Memo;
+use memo::{Value, with_memo};
 
 /// The most backtracking steps one match attempt may take (the
 /// `fancy_regex` default, set explicitly so an upgrade cannot change it).
@@ -432,15 +432,19 @@ fn find(x: &Inputs<'_>, function: &'static str) -> Result<ArrayRef, KrishivError
             return Ok(Arc::new(BooleanArray::new_null(x.rows())) as ArrayRef);
         };
         let compiled = cache.compiled(pattern, function)?;
-        let mut memo = Memo::new(x.rows());
-        for row in 0..x.rows() {
-            if !strings.is_valid(row) {
-                out.push(None);
-                continue;
+        with_memo(function, pattern, |memo| {
+            for row in 0..x.rows() {
+                if !strings.is_valid(row) {
+                    out.push(None);
+                    continue;
+                }
+                let found = memo.get(strings.value(row), |s| {
+                    matches(compiled, s).map(Value::Bool)
+                })?;
+                out.push(Some(matches!(found, Value::Bool(true))));
             }
-            let found = memo.get(strings.value(row), |s| matches(compiled, s))?;
-            out.push(Some(*found));
-        }
+            Ok::<_, KrishivError>(())
+        })?;
         return Ok(Arc::new(BooleanArray::from(out)) as ArrayRef);
     }
     for row in 0..x.rows() {
@@ -476,16 +480,21 @@ fn extract(x: &Inputs<'_>, with_idx: bool) -> Result<ArrayRef, KrishivError> {
             return Ok(Arc::new(StringArray::new_null(x.rows())) as ArrayRef);
         };
         let compiled = cache.compiled(pattern, FUNCTION)?;
-        let mut memo = Memo::new(x.rows());
         let mut out =
             GenericStringBuilder::<i32>::with_capacity(x.rows(), strings.value_data().len());
-        for row in 0..x.rows() {
-            if strings.is_valid(row) {
-                out.append_value(memo.get(strings.value(row), |s| extract_one(compiled, s, idx))?);
-            } else {
-                out.append_null();
+        with_memo(FUNCTION, &format!("{idx}\0{pattern}"), |memo| {
+            for row in 0..x.rows() {
+                if !strings.is_valid(row) {
+                    out.append_null();
+                    continue;
+                }
+                let found = memo.get(strings.value(row), |s| {
+                    extract_one(compiled, s, idx).map(|t| Value::Text(t.into()))
+                })?;
+                out.append_value(text_of(found)?);
             }
-        }
+            Ok::<_, KrishivError>(())
+        })?;
         return Ok(Arc::new(out.finish()) as ArrayRef);
     }
     let mut out = Vec::with_capacity(x.rows());
@@ -505,6 +514,16 @@ fn extract(x: &Inputs<'_>, with_idx: bool) -> Result<ArrayRef, KrishivError> {
         out.push(Some(extract_one(compiled, source, idx)?));
     }
     Ok(Arc::new(StringArray::from(out)) as ArrayRef)
+}
+
+/// A cached string result's text (a string kernel's cache holds only text).
+fn text_of(value: &Value) -> Result<&str, KrishivError> {
+    match value {
+        Value::Text(t) => Ok(t),
+        Value::Bool(_) => Err(internal(
+            "regex memo: a boolean in a string cache".to_owned(),
+        )),
+    }
 }
 
 /// `regexp_extract` of one value: group `idx` of the first match, `""` without one.
@@ -1037,22 +1056,27 @@ fn regexp_replace(x: &Inputs<'_>, with_position: bool) -> Result<ArrayRef, Krish
         let (Some(pattern), Some(rep), Some(position)) = (pattern, rep, position) else {
             return Ok(Arc::new(StringArray::new_null(x.rows())) as ArrayRef);
         };
-        let mut memo = Memo::new(x.rows());
         let mut out =
             GenericStringBuilder::<i32>::with_capacity(x.rows(), strings.value_data().len());
-        for row in 0..x.rows() {
-            if !strings.is_valid(row) {
-                out.append_null();
-                continue;
+        // The replacement is length-prefixed, so no two constant triples share a key.
+        let key = format!("{}:{rep}{position}\0{pattern}", rep.len());
+        with_memo("`regexp_replace`", &key, |memo| {
+            for row in 0..x.rows() {
+                if !strings.is_valid(row) {
+                    out.append_null();
+                    continue;
+                }
+                if position < 1 {
+                    return Err(position_out_of_range(position));
+                }
+                let replaced = memo.get(strings.value(row), |s| {
+                    replace_row(&mut cache, s, pattern, rep, position)
+                        .map(|t| Value::Text(t.into()))
+                })?;
+                out.append_value(text_of(replaced)?);
             }
-            if position < 1 {
-                return Err(position_out_of_range(position));
-            }
-            let replaced = memo.get(strings.value(row), |s| {
-                replace_row(&mut cache, s, pattern, rep, position)
-            })?;
-            out.append_value(replaced);
-        }
+            Ok(())
+        })?;
         return Ok(Arc::new(out.finish()) as ArrayRef);
     }
     let mut out = Vec::with_capacity(x.rows());
