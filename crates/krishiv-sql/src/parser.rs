@@ -1279,7 +1279,7 @@ impl<'s> Parser<'s> {
         // the join reads on to its `MATCH_CONDITION (` (else `ASOF` is the
         // alias), and `MATCH_CONDITION (` after an as-of join's right side its
         // criteria.
-        let asof = if self.opts.asof_grammar {
+        let asof = if self.opts.spark_4_3_grammar {
             self.asof_join_ahead()
         } else {
             self.opts.asof_join && self.kw_at(0, "ASOF") && self.kw_at(1, "JOIN")

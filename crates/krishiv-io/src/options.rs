@@ -50,6 +50,8 @@ pub const FILE_SOURCE_OPTIONS: &[&str] = &[
     "maxRecordsPerFile",
     "partitionOverwriteMode",
     "timeZone",
+    // The write's idempotency key (E34): read by the session's commit log, never by a format.
+    "krishiv.write.idempotencyKey",
 ];
 
 /// The type of an option value.

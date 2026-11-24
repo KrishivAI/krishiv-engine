@@ -301,7 +301,7 @@ fn asof_right_side_parenthesized_relation_clears_the_flag() {
 /// Spark 4.3's grammar (the session's 4.3 profile), with the flag `on` or off.
 fn grammar(on: bool) -> ParserOptions {
     ParserOptions {
-        asof_grammar: true,
+        spark_4_3_grammar: true,
         asof_join: on,
         ..ParserOptions::default()
     }
