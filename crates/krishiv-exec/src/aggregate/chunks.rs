@@ -468,17 +468,34 @@ mod tests {
         rounds_stay_bounded(map);
 
         // A subset of a large struct source is compacted at its leaf.
-        let chunks: Vec<ArrayRef> = (0..3).map(|i| st.slice(i * 100, 1)).collect();
+        // (A stride of 101: every fifth leaf value is NULL, so a stride of 100
+        // would compare NULLs only.)
+        let chunks: Vec<ArrayRef> = (0..3).map(|i| st.slice(i * 101, 1)).collect();
+        let leaves = |a: &ArrayRef| texts(a.as_struct().column(0));
+        let want: Vec<Option<String>> = chunks.iter().flat_map(leaves).collect();
+        assert!(
+            want.iter().any(Option::is_some),
+            "the subset needs a non-NULL value"
+        );
         let out = concat_chunks(&chunks, st.data_type()).unwrap();
         let leaf = out.as_struct().column(0).as_string_view().clone();
         let held: usize = leaf.data_buffers().iter().map(Buffer::len).sum();
         assert!(held <= 2 * leaf.total_buffer_bytes_used(), "{held}");
+        assert_eq!(leaves(&out), want);
+        let struct_nulls = |a: &ArrayRef| (0..a.len()).map(|r| a.is_null(r)).collect::<Vec<_>>();
+        let want_nulls: Vec<bool> = chunks.iter().flat_map(struct_nulls).collect();
+        assert_eq!(struct_nulls(&out), want_nulls);
     }
 
     #[test]
     fn a_subset_of_a_large_source_is_compacted() {
         let src = long_values("a", 1000);
-        let chunks: Vec<ArrayRef> = (0..10).map(|i| src.slice(i * 100, 1)).collect();
+        // A stride of 101: every fifth value is NULL, so 100 would pick NULLs only.
+        let chunks: Vec<ArrayRef> = (0..10).map(|i| src.slice(i * 101, 1)).collect();
+        assert!(
+            chunks.iter().any(|c| c.null_count() == 0),
+            "the subset needs a non-NULL value"
+        );
         let out = concat_chunks(&chunks, &DataType::Utf8View).unwrap();
         let a = out.as_string_view();
         let held: usize = a.data_buffers().iter().map(Buffer::len).sum();
