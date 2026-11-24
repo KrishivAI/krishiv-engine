@@ -33,7 +33,7 @@ use krishiv_types::DataType;
 
 use crate::dag;
 use crate::eager::refusal_of_call;
-use crate::estimate::Estimator;
+use crate::estimate::{Estimator, Memo};
 use crate::expr::{
     Classes, and_all, builtin, column, conjuncts, data_type, equality, equality_classes,
     has_outer_reference, has_subquery, is_deterministic, references, same, strip_alias, substitute,
@@ -381,7 +381,13 @@ impl Rule<'_> {
         // ordering later sees the inferred filters and restrictions. The rewritten plan still
         // carries `X` as written.
         let outs = join.resolved_output()?;
-        let (ordered, _) = join_order::reorder(x, self.stats, self.propagate, self.joins);
+        let (ordered, _) = join_order::reorder(
+            x,
+            self.stats,
+            self.propagate,
+            self.joins,
+            &mut Memo::default(),
+        );
         let x_est = self.est.plan(&ordered);
         if !x_est.from_statistics {
             return None;

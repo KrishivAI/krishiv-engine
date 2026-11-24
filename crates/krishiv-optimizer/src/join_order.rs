@@ -37,7 +37,7 @@ use krishiv_plan::{
 };
 use krishiv_types::DataType;
 
-use crate::estimate::Estimator;
+use crate::estimate::{Estimator, Memo};
 use crate::expr::{
     Attrs, Classes, and_all, call, column, common_equalities, conjuncts, equality, has_subquery,
     implied, is_deterministic, references, substitute,
@@ -208,15 +208,16 @@ impl std::fmt::Display for TreeStats {
 }
 
 /// `root` with every inner-join tree reordered, and a note per tree planned
-/// (when `settings.trace`).
+/// (when `settings.trace`). Estimates start from `memo` and are left in it.
 pub(crate) fn reorder(
     root: &Arc<LogicalPlan>,
     stats: &dyn Statistics,
     propagate: bool,
     settings: Settings,
+    memo: &mut Memo,
 ) -> (Arc<LogicalPlan>, Vec<String>) {
     let mut r = Reorder {
-        est: Estimator::with_propagation(stats, propagate),
+        est: Estimator::resume(stats, propagate, std::mem::take(memo)),
         propagate,
         done: Default::default(),
         settings,
@@ -229,6 +230,7 @@ pub(crate) fn reorder(
     // second optimization must order the tree the same way).
     r.est.plan(root);
     let out = r.positional(root);
+    *memo = r.est.into_memo();
     (out, r.notes)
 }
 

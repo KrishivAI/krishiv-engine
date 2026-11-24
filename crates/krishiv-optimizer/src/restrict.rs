@@ -106,7 +106,7 @@ use krishiv_plan::{
 use krishiv_types::DataType;
 
 use crate::dag::{self, with_input};
-use crate::estimate::Estimator;
+use crate::estimate::{Estimator, Memo};
 use crate::expr::{
     Attrs, and_all, builtin, column, conjuncts, has_outer_reference, has_subquery,
     is_deterministic, recall, references, same, strip_alias, substitute,
@@ -134,20 +134,24 @@ const PRESERVED_FLIP: f64 = 2.0;
 
 /// Restricts the aggregates below joins in `root` (see the module docs);
 /// with `preserved`, also the preserved sides of outer joins below them
-/// (`krishiv.optimizer.preservedSideSemiJoin`, module docs).
+/// (`krishiv.optimizer.preservedSideSemiJoin`, module docs). Estimates start
+/// from `memo` and are left in it.
 pub(crate) fn restrict(
     root: Arc<LogicalPlan>,
     stats: &dyn Statistics,
     propagate: bool,
     preserved: bool,
+    memo: &mut Memo,
 ) -> Result<Arc<LogicalPlan>, KrishivError> {
     let mut r = Restrict {
-        est: Estimator::with_propagation(stats, propagate),
+        est: Estimator::resume(stats, propagate, std::mem::take(memo)),
         root: Arc::clone(&root),
         next: None,
         preserved,
     };
-    dag::rewrite_up(root, &mut |p| Ok(r.join(p)))
+    let out = dag::rewrite_up(root, &mut |p| Ok(r.join(p)));
+    *memo = r.est.into_memo();
+    out
 }
 
 struct Restrict<'a> {

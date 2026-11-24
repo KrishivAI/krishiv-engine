@@ -553,6 +553,7 @@ fn run(
                 estimates,
                 options.stats_propagation,
                 stats.is_some() && options.preserved_side_semi_join && joins.preserved_side,
+                &mut estimate::Memo::default(),
             )
         })?;
         if let Some(stats) = stats {
@@ -777,7 +778,12 @@ fn run(
         // every column, so nothing needs pruning again.
         let root = match stats {
             Some(stats) if joins.semi_anti_order => t.once("SemiAntiOrder", &root, |p| {
-                semi_order::reorder(Arc::clone(p), stats, options.stats_propagation)
+                semi_order::reorder(
+                    Arc::clone(p),
+                    stats,
+                    options.stats_propagation,
+                    &mut estimate::Memo::default(),
+                )
             })?,
             _ => root,
         };
@@ -999,9 +1005,13 @@ fn order_and_restrict(
 ) -> Result<Arc<LogicalPlan>, KrishivError> {
     let propagate = options.stats_propagation;
     let mut notes = Vec::new();
+    // One memo for every step of every round: a subtree a step leaves as it
+    // was keeps its estimate (see `estimate::Memo`), so a round re-estimates
+    // only what the last one changed.
+    let mut memo = estimate::Memo::default();
     for round in 1..=MAX_ITERATIONS {
         let input = Arc::clone(&root);
-        let (ordered, trees) = join_order::reorder(&root, stats, propagate, joins);
+        let (ordered, trees) = join_order::reorder(&root, stats, propagate, joins, &mut memo);
         notes = trees;
         t.step("JoinOrder", round, "JoinOrder", &root, &ordered);
         // Sorting a semi-join stack changes what the tree above it estimates
@@ -1009,7 +1019,7 @@ fn order_and_restrict(
         // TPC-DS q80), so a round that sorted one orders again.
         let mut sorted_stack = false;
         let ordered = if joins.semi_anti_order {
-            let sorted = semi_order::reorder(Arc::clone(&ordered), stats, propagate)?;
+            let sorted = semi_order::reorder(Arc::clone(&ordered), stats, propagate, &mut memo)?;
             t.step("JoinOrder", round, "SemiAntiOrder", &ordered, &sorted);
             sorted_stack = !Arc::ptr_eq(&sorted, &ordered);
             sorted
@@ -1021,6 +1031,7 @@ fn order_and_restrict(
             stats,
             propagate,
             options.preserved_side_semi_join && joins.preserved_side,
+            &mut memo,
         )?;
         t.step("JoinOrder", round, "Restrict", &ordered, &restricted);
         // A filter ordering or restriction leaves can reject the NULL rows of an outer join's
