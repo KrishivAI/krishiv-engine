@@ -824,6 +824,23 @@ storageLevel : `krishiv.storagelevel.StorageLevel`, optional
 `DataFrame`
     The checkpointed frame.
 
+### `mapInArrow`
+
+```python
+def mapInArrow(self, func: Any, schema: Any, barrier: bool=False, profile: Any=None) -> DataFrame
+```
+
+As `mapInPandas`, over iterators of `pyarrow.RecordBatch` (`map_ops.py` `mapInArrow`).
+
+### `mapInPandas`
+
+```python
+def mapInPandas(self, func: Any, schema: Any, barrier: bool=False, profile: Any=None) -> DataFrame
+```
+
+Maps an iterator of batches of this frame using a Python native function that takes and outputs
+`pandas.DataFrame` iterators (`pyspark/sql/pandas/map_ops.py` 4.2.1 `mapInPandas`).
+
 ### `melt`
 
 ```python
