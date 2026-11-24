@@ -81,6 +81,12 @@ pub(crate) fn concat_chunks(chunks: &[ArrayRef], t: &DataType) -> Result<ArrayRe
         }
         DataType::List(f) => concat_lists::<i32>(chunks, f),
         DataType::LargeList(f) => concat_lists::<i64>(chunks, f),
+        // Size 0 holds no values, and `try_new` would infer its length
+        // from the nulls: Arrow's concat keeps the length.
+        DataType::FixedSizeList(_, 0) => {
+            let refs: Vec<&dyn Array> = chunks.iter().map(AsRef::as_ref).collect();
+            concat(&refs).map_err(|e| internal(e.to_string()))
+        }
         DataType::FixedSizeList(f, size) => {
             let parts: Vec<ArrayRef> = chunks
                 .iter()
@@ -422,6 +428,12 @@ mod tests {
             FixedSizeListArray::try_new(Arc::clone(&item), 3, Arc::clone(&s), None).unwrap(),
         );
         rounds_stay_bounded(fixed);
+        let empty: ArrayRef = Arc::new(
+            FixedSizeListArray::try_new_with_length(Arc::clone(&item), 0, s.slice(0, 0), None, 7)
+                .unwrap(),
+        );
+        let parts: Vec<ArrayRef> = (0..7).map(|i| empty.slice(i, 1)).collect();
+        assert_eq!(concat_chunks(&parts, empty.data_type()).unwrap().len(), 7);
 
         // A map from strings to integers.
         let entries = StructArray::try_new(
