@@ -43,7 +43,7 @@ pub use time::{
     TimeTruncUnit, format_time, make_time, parse_time, parse_time_nanos, time_diff,
     time_fraction_digits, time_from_units, time_to_units, time_trunc, to_time,
 };
-pub use timestamp::{TimestampText, timestamp_has_zone, timestamp_text};
+pub use timestamp::{TimestampText, special_value, timestamp_has_zone, timestamp_text};
 
 use crate::decimal::DecimalNative;
 use crate::error::{KernelError, with_capacity};

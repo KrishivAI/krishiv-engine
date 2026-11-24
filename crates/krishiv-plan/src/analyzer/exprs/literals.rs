@@ -2,7 +2,7 @@
 //! Literal types, typed literals (`DATE '...'` and friends) and the cast errors Spark raises for them.
 
 use super::*;
-use krishiv_kernels::cast::{TimestampText, timestamp_text};
+use krishiv_kernels::cast::{TimestampText, special_value, timestamp_text};
 
 /// A cast a `TIME '..'` literal binds to (`time.rs` `time_literal`; an explicit `Ansi` cast, never what
 /// the parser writes for a user's cast): a string read as `TIME(6)` (`parse_time`) or as `TIME(9)`
@@ -244,23 +244,34 @@ pub(super) fn special_kind(kind: TypedLiteralKind, timestamp_ntz: bool) -> Speci
 
 /// The clock expression Spark's special value `now`, `today`, `tomorrow` or
 /// `yesterday` stands for, of the literal's type.
-pub(super) fn special_clock(special: &str, kind: SpecialKind) -> Expr {
+///
+/// With a `zone` (`tomorrow EST`) the day is that zone's today, and a timestamp
+/// is that day's midnight in the zone.
+pub(super) fn special_clock(special: &str, zone: Option<&str>, kind: SpecialKind) -> Expr {
+    let today = || match zone {
+        None => Expr::function("current_date", Vec::new()),
+        Some(z) => Expr::new(ExprNode::Cast {
+            expr: Arc::new(Expr::function(
+                "from_utc_timestamp",
+                vec![
+                    Expr::function("current_timestamp", Vec::new()),
+                    Expr::literal(Literal::String(z.to_owned())),
+                ],
+            )),
+            to: DataType::Date,
+            mode: CastMode::Ansi,
+        }),
+    };
     let day = |offset: &str| match offset {
         "tomorrow" => Expr::function(
             "date_add",
-            vec![
-                Expr::function("current_date", Vec::new()),
-                Expr::literal(Literal::Integer(1)),
-            ],
+            vec![today(), Expr::literal(Literal::Integer(1))],
         ),
         "yesterday" => Expr::function(
             "date_sub",
-            vec![
-                Expr::function("current_date", Vec::new()),
-                Expr::literal(Literal::Integer(1)),
-            ],
+            vec![today(), Expr::literal(Literal::Integer(1))],
         ),
-        _ => Expr::function("current_date", Vec::new()),
+        _ => today(),
     };
     let cast = |expr: Expr, to: DataType| {
         Expr::new(ExprNode::Cast {
@@ -273,7 +284,17 @@ pub(super) fn special_clock(special: &str, kind: SpecialKind) -> Expr {
         (SpecialKind::Date, d) => day(d),
         (SpecialKind::Instant, "now") => Expr::function("current_timestamp", Vec::new()),
         (SpecialKind::Local, "now") => Expr::function("localtimestamp", Vec::new()),
-        (SpecialKind::Instant, d) => cast(day(d), DataType::Timestamp),
+        (SpecialKind::Instant, d) => match zone {
+            // Midnight of the zone's day: the session-zone midnight read as the zone's wall clock.
+            Some(z) => Expr::function(
+                "to_utc_timestamp",
+                vec![
+                    cast(day(d), DataType::Timestamp),
+                    Expr::literal(Literal::String(z.to_owned())),
+                ],
+            ),
+            None => cast(day(d), DataType::Timestamp),
+        },
         (SpecialKind::Local, d) => cast(day(d), DataType::TimestampNtz),
     }
 }
@@ -334,8 +355,7 @@ pub(super) fn time_only_today(
 }
 
 pub(super) fn is_special(value: &str) -> bool {
-    let v = value.trim().to_ascii_lowercase();
-    ["epoch", "now", "today", "yesterday", "tomorrow"].contains(&v.as_str())
+    special_value(value).is_some()
 }
 
 /// The type of a value as typing sees it: `VOID` is an untyped `NULL`
