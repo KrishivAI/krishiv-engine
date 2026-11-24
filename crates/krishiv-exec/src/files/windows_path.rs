@@ -128,7 +128,7 @@ mod tests {
     }
 
     #[test]
-    fn a_root_relative_path_takes_the_working_directorys_drive() {
+    fn a_root_relative_path_takes_the_working_directory_drive() {
         assert_eq!(
             on_drive_of(&["data", "x"], "/D:/a/b"),
             Some(vec!["D:", "data", "x"])
