@@ -3506,7 +3506,7 @@ pub trait CallerCatalog: fmt::Debug + Send + Sync {
   fn load_procedure<'a>(self: &'a Self, caller: &'a CatalogCaller, inputs: ScanInputs, name: &'a str) -> BoxFuture<'a, Result<Option<Arc<dyn krishiv_plan::procedure::Procedure>>, KrishivError>> { /* ... */ }
   ```
   The procedure `name` (lower-case) of the catalog's `system` namespace for `caller`
-  (`CALL cat.system.name(..)`, design P3-T027 PR-36e §3); `None` when there is none. The
+  (`CALL cat.system.name(..)`); `None` when there is none. The
   default is a catalog without procedures: `MISSING_CATALOG_ABILITY.PROCEDURES`.
 
 - ```rust
@@ -6180,7 +6180,7 @@ The `grants` provider.
 
 ###### `External`
 
-The `external` provider: a `krishiv.access.v1` policy service (ADR 0049 §3).
+The `external` provider: a `krishiv.access.v1` policy service.
 
 ##### Implementations
 
@@ -6296,11 +6296,11 @@ pub fn access_provider(config: &krishiv_common::config::Config, authenticated: b
 
 #### Function `access_providers`
 
-The providers `config` lists, in order (ADR 0049 §1): one name or a `+`-separated list of
+The providers `config` lists, in order: one name or a `+`-separated list of
 `roles`, `grants`, `external`, each at most once, combined as an intersection
 ([`crate::IntersectionPolicy`]). Unset, `grants` when the server authenticates and the role
 matrix alone otherwise (owner answer Q1: kept here, in one place). `catalog` is refused until
-its unit lands (P3-T062 G5).
+its unit lands.
 
 # Errors
 `KRISHIV_INVALID_CONFIG_VALUE` naming the key for any other value.
