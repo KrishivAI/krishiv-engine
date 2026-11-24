@@ -384,10 +384,43 @@ class DataFrame:
         return self._df.is_cached()
 
     def groupBy(self, *cols: ColumnsOrNames) -> GroupedData:
-        keys = _flatten(cols)
-        grouped = GroupedData(self._df.group_by([_named(c) for c in keys]), self)
-        grouped._keys = tuple(Column(_named(k), k) if isinstance(k, str) else k for k in keys)
+        flat = _flatten(cols)
+        keys = [_named(c) for c in flat]
+        grouped = GroupedData(self._df.group_by(keys), self, keys)
+        grouped._key_cols = tuple(Column(_named(k), k) if isinstance(k, str) else k for k in flat)
         return grouped
+
+    def mapInPandas(self, func: Any, schema: Any, barrier: bool = False, profile: Any = None) -> DataFrame:
+        """Maps an iterator of batches of this frame using a Python native function that takes and outputs
+        ``pandas.DataFrame`` iterators (``pyspark/sql/pandas/map_ops.py`` 4.2.1 ``mapInPandas``)."""
+        from krishiv.sql.pandas.functions import pandas_udf
+        from krishiv.sql.udf import PythonEvalType
+
+        return self._map_in_python(
+            pandas_udf(func, returnType=schema, functionType=PythonEvalType.SQL_MAP_PANDAS_ITER_UDF),
+            barrier,
+            profile,
+        )
+
+    def mapInArrow(self, func: Any, schema: Any, barrier: bool = False, profile: Any = None) -> DataFrame:
+        """As :meth:`mapInPandas`, over iterators of ``pyarrow.RecordBatch`` (``map_ops.py`` ``mapInArrow``)."""
+        from krishiv.sql.pandas.functions import pandas_udf
+        from krishiv.sql.udf import PythonEvalType
+
+        return self._map_in_python(
+            pandas_udf(func, returnType=schema, functionType=PythonEvalType.SQL_MAP_ARROW_ITER_UDF),
+            barrier,
+            profile,
+        )
+
+    def _map_in_python(self, udf: Any, barrier: bool, profile: Any) -> DataFrame:
+        from krishiv.errors import unsupported_feature
+
+        if barrier:
+            raise unsupported_feature("barrier execution mode of mapInPandas and mapInArrow")
+        if profile is not None:
+            raise unsupported_feature("stage-level scheduling resource profiles")
+        return DataFrame(self._df.map_in_python(udf._unwrapped._handle, False), self._session)
 
     groupby = groupBy
 

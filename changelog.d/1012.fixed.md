@@ -1,0 +1,1 @@
+CI: the `test` job runs the workspace tests in stages (lib and bins, then integration tests by name range) and deletes each stage's executables, so the merge-queue run no longer fills the runner's disk.
