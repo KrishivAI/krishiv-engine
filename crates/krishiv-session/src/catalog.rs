@@ -45,6 +45,7 @@ use krishiv_plan::{
 use crate::cache::{RelationCache, is_cache_name};
 
 mod declared;
+pub(crate) use declared::confined_inputs;
 #[cfg(test)]
 mod declared_tests;
 mod file_tables;
