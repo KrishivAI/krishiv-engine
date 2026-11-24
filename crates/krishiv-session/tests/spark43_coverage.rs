@@ -20,8 +20,7 @@ use krishiv_session::Session;
 use serde_json::Value;
 
 /// Cases that differ from Spark today: `(id, how)`. They are the 4.3 work the golden tail (plan row GT) takes, by area:
-/// the nanosecond and TIME(p) types (`fn_*`), a by-position struct insert under the legacy policy,
-/// and `SHOW ... AS JSON`.
+/// the nanosecond and TIME(p) types (`fn_*`) and a by-position struct insert under the legacy policy.
 const PENDING: &[(&str, &str)] = &[
     (
         "fn_timestamp_ntz_to_time",
@@ -43,9 +42,6 @@ const PENDING: &[(&str, &str)] = &[
         "fix_insert_struct_by_position_legacy",
         "setup: INCOMPATIBLE_DATA_FOR_TABLE.CANNOT_SAFELY_CAST",
     ),
-    ("syn_show_tables_as_json", "PARSE_SYNTAX_ERROR"),
-    ("syn_show_table_extended_as_json", "PARSE_SYNTAX_ERROR"),
-    ("syn_show_partitions_as_json", "PARSE_SYNTAX_ERROR"),
 ];
 
 fn fixture() -> Value {

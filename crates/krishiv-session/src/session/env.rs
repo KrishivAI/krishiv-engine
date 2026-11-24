@@ -70,12 +70,14 @@ pub(super) fn attach_analysis(e: AnalysisError, text: Option<&RedactedSql>) -> K
     }
 }
 
-/// The parser options `config` sets, with the grammar of `profile` (Spark 4.3's type grammar from
-/// 4.3 on).
+/// The parser options `config` sets, with the grammar of `profile`: from Spark 4.3 on, its type grammar
+/// ([`ParserOptions::spark_4_3`]) and its query and command grammar ([`ParserOptions::spark_4_3_grammar`]).
 pub(super) fn parser_options(config: &Config, profile: SparkProfile) -> ParserOptions {
     let values = conf_values(config, &PARSER_KEYS);
+    let spark_4_3 = profile >= SparkProfile::V4_3;
     ParserOptions {
-        spark_4_3: profile >= SparkProfile::V4_3,
+        spark_4_3,
+        spark_4_3_grammar: spark_4_3,
         ..ParserOptions::from_conf(|k| values.get(k).map(String::as_str))
     }
 }
