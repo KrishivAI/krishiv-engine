@@ -443,16 +443,19 @@ async fn an_unspecified_table_save_method_is_invalid_enum() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn create_dataframe_view_registers_a_temp_view() {
     let run = start().await;
-    let view = |name: &str, is_global: bool, replace: bool| {
+    let view_of = |rows: &str, name: &str, is_global: bool, replace: bool| {
         command(pb::command::CommandType::CreateDataframeView(Box::new(
             pb::CreateDataFrameViewCommand {
-                input: Some(sql(ROWS)),
+                input: Some(sql(rows)),
                 name: name.to_owned(),
                 is_global,
                 replace,
             },
         )))
     };
+    let view = |name: &str, is_global: bool, replace: bool| view_of(ROWS, name, is_global, replace);
+    // Rows that differ from `ROWS`, so a replace that does nothing is seen.
+    let other = "SELECT * FROM VALUES (7, 'g'), (8, 'h') AS t(id, name)";
     collect(&run.channel, view("tv", false, false))
         .await
         .expect("createTempView");
@@ -461,11 +464,16 @@ async fn create_dataframe_view_registers_a_temp_view() {
         .await
         .expect_err("the name is taken");
     assert_eq!(error_class(&again), "TEMP_TABLE_OR_VIEW_ALREADY_EXISTS");
-    collect(&run.channel, view("tv", false, true))
+    collect(&run.channel, view_of(other, "tv", false, true))
         .await
         .expect("createOrReplaceTempView");
+    assert_eq!(ids(&run, "SELECT id FROM tv").await, [7, 8]);
     collect(&run.channel, view("gv", true, false))
         .await
         .expect("createGlobalTempView");
     assert_eq!(ids(&run, "SELECT id FROM global_temp.gv").await, [1, 2, 3]);
+    collect(&run.channel, view_of(other, "gv", true, true))
+        .await
+        .expect("createOrReplaceGlobalTempView");
+    assert_eq!(ids(&run, "SELECT id FROM global_temp.gv").await, [7, 8]);
 }
