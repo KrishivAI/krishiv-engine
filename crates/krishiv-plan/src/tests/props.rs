@@ -98,7 +98,7 @@ impl Gen<'_> {
             3 => DataType::Date,
             4 => DataType::TimestampNtz,
             _ => {
-                let p = u32::from(1 + self.pick(39));
+                let p = u32::from(1 + self.pick(38));
                 DataType::Decimal(DecimalType::try_new(p, p / 2).unwrap())
             }
         }
@@ -446,7 +446,7 @@ impl Gen<'_> {
 
     fn plan(&mut self, depth: u8) -> LogicalPlan {
         let origin = self.origin();
-        let kinds = if depth == 0 { 4 } else { 38 };
+        let kinds = if depth == 0 { 4 } else { 39 };
         let d = depth.saturating_sub(1);
         let node = match self.pick(kinds) {
             0 => PlanNode::Read(self.source()),
