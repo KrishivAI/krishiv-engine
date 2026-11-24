@@ -24,6 +24,8 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 #[cfg(feature = "metrics-prometheus")]
 pub mod metrics;
 
+#[cfg(feature = "access-external")]
+pub mod access_external;
 pub mod admin;
 #[cfg(feature = "admin-api")]
 pub mod admin_v1;

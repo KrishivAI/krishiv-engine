@@ -591,7 +591,8 @@ fn window_keys_a_call(e: &Expr) -> bool {
 pub(crate) fn rewrite(root: Arc<LogicalPlan>) -> Res<Arc<LogicalPlan>> {
     let mut next = None;
     let top = Arc::clone(&root);
-    dag::rewrite_up(root, &mut |p| {
+    // A lowering: runs under security barriers too (`dag` module docs).
+    dag::rewrite_up_lowering(root, &mut |p| {
         let free =
             next.get_or_insert_with(|| max_id(&top, &mut Default::default()).saturating_add(1));
         step(p, free)

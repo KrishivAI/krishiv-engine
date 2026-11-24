@@ -380,7 +380,7 @@ impl Catalog<'_> {
     }
 
     /// The namespaces of the embedded catalog `spark_catalog` whatever the current catalog is,
-    /// sorted by name: the Arrow Flight SQL `GetDbSchemas` listing (design P3-T101 §5), which
+    /// sorted by name: the Arrow Flight SQL `GetDbSchemas` listing, which
     /// names its catalog rather than following `USE`.
     ///
     /// # Errors

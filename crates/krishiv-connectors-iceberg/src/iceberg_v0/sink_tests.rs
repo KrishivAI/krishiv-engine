@@ -143,6 +143,14 @@ impl CommitTable for Catalog {
     async fn load(&self, _all_snapshots: bool) -> Result<TableMetadata, KrishivError> {
         Ok(self.metadata())
     }
+
+    async fn load_located(
+        &self,
+        _all_snapshots: bool,
+    ) -> Result<(TableMetadata, Option<String>), KrishivError> {
+        let (m, l) = self.state();
+        Ok((m, Some(l)))
+    }
 }
 
 /// The local path of a `file://`, `file:` or bare absolute location (Spark's Hadoop catalog records a bare path

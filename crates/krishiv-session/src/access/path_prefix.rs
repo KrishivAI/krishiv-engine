@@ -372,6 +372,21 @@ impl AccessPolicy for PathPrefixPolicy {
     fn denied(&self, principal: &Principal, securable: &Securable, privilege: Privilege) {
         self.inner.denied(principal, securable, privilege);
     }
+    fn prefetch<'a>(
+        &'a self,
+        principal: &'a Principal,
+        items: &'a [(Securable, Privilege)],
+    ) -> BoxFuture<'a, ()> {
+        self.inner.prefetch(principal, items)
+    }
+
+    fn decides(&self, securable: &Securable) -> bool {
+        self.inner.decides(securable)
+    }
+
+    fn refusal_label(&self) -> Option<&'static str> {
+        self.inner.refusal_label()
+    }
 }
 
 #[cfg(test)]

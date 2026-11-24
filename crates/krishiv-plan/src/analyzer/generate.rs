@@ -177,6 +177,7 @@ impl Resolver<'_> {
                 .collect();
         let cx = Self::cx(&scope, &rels, env, "Generate");
         let arg = &self.stack_rows(arg, &cx)?;
+        let arg = &self.unnest_rows(arg, &cx)?;
         let mut b = self.bind(arg, &cx)?;
         // `variant_explode` expects a VARIANT: an untyped NULL is cast to one
         // (and gives no rows), as `ExpectsInputTypes` casts it.
@@ -429,6 +430,139 @@ impl Resolver<'_> {
         Ok(Arc::new(
             Expr::function("array", structs).with_origin(origin),
         ))
+    }
+
+    /// `UNNEST(a, b, ..) [WITH ORDINALITY]` (lowered as the call [`crate::UNNEST_FUNCTION`]) as the
+    /// array of structs `inline` generates its rows from, after Spark's `Unnest` check that every
+    /// argument is an array. A NULL array counts as empty, the arrays are zipped to the longest
+    /// (the shorter padded with NULL), the fields are `col` (one array) or `col0`, `col1`, ..., and
+    /// `ordinality` is the 1-based BIGINT position. Any other argument is returned as it is.
+    fn unnest_rows(&mut self, arg: &Arc<Expr>, cx: &Cx<'_>) -> Result<Arc<Expr>, AnalysisError> {
+        let ExprNode::Function(f) = &arg.node else {
+            return Ok(Arc::clone(arg));
+        };
+        let ordinality = if f.name == crate::UNNEST_ORDINALITY_FUNCTION {
+            true
+        } else if f.name == crate::UNNEST_FUNCTION {
+            false
+        } else {
+            return Ok(Arc::clone(arg));
+        };
+        let origin = arg.origin;
+        // `UNNEST` in `FROM` is Spark 4.3 grammar: before it the name is an unknown table function.
+        if self.ctx.profile < super::SparkProfile::V4_3 {
+            return Err(AnalysisError::new(
+                krishiv_common::error::UnresolvableTableValuedFunction {
+                    name: "`unnest`".to_owned(),
+                },
+                origin,
+            ));
+        }
+        let bound = f
+            .args
+            .iter()
+            .map(|a| self.bind(a, cx))
+            .collect::<Result<Vec<_>, _>>()?;
+        let zone = self.ctx.conf.session_zone;
+        for (i, b) in bound.iter().enumerate() {
+            if !matches!(b.ty.data_type, Some(DataType::Array(_))) {
+                let shown = bound
+                    .iter()
+                    .map(|b| pretty(&b.expr, zone))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                return Err(AnalysisError::new(
+                    DatatypeMismatchUnexpectedInputType {
+                        sql_expr: format!("\"unnest({shown})\""),
+                        param_index: super::coerce::ordinal(i),
+                        required_type: "\"ARRAY\"".to_owned(),
+                        input_sql: format!("\"{}\"", pretty(&b.expr, zone)),
+                        input_type: quoted_type(b.ty.data_type.as_ref()),
+                    },
+                    origin,
+                ));
+            }
+        }
+        let width = f.args.len();
+        let name_of = |i: usize| {
+            if width == 1 {
+                "col".to_owned()
+            } else {
+                format!("col{i}")
+            }
+        };
+        // Each array with NULL read as empty.
+        let arrays: Vec<Expr> = f
+            .args
+            .iter()
+            .zip(&bound)
+            .map(|(a, b)| {
+                let ty = b.ty.data_type.clone().unwrap_or(DataType::Null);
+                let empty = Expr::new(ExprNode::Cast {
+                    expr: Arc::new(Expr::function("array", Vec::new()).with_origin(origin)),
+                    to: ty,
+                    mode: crate::CastMode::Legacy,
+                })
+                .with_origin(origin);
+                Expr::function("coalesce", vec![(**a).clone(), empty]).with_origin(origin)
+            })
+            .collect();
+        let text = |t: String| Expr::literal(Literal::String(t)).with_origin(origin);
+        let field = |var: &str, name: String| {
+            Expr::function("__subscript", vec![Expr::column([var]), text(name)]).with_origin(origin)
+        };
+        // The 1-based BIGINT position `i` of a lambda's index variable.
+        let position = || {
+            let big = Expr::new(ExprNode::Cast {
+                expr: Arc::new(Expr::column(["i"])),
+                to: DataType::Long,
+                mode: crate::CastMode::Legacy,
+            })
+            .with_origin(origin);
+            Expr::function(
+                "+",
+                vec![big, Expr::literal(Literal::Long(1)).with_origin(origin)],
+            )
+            .with_origin(origin)
+        };
+        let lambda = |params: &[&str], body: Expr| {
+            Expr::lambda(params.iter().map(|p| (*p).to_owned()).collect(), body).with_origin(origin)
+        };
+        // Every array is read once, so a nondeterministic argument gives one value, and `col` keeps the
+        // array's own element nullability (Spark's `Unnest.elementSchema`; `ordinality` is not nullable).
+        let rows = if let [only] = arrays.as_slice() {
+            let mut fields = vec![
+                text("col".to_owned()),
+                Expr::column(["x"]).with_origin(origin),
+            ];
+            if ordinality {
+                fields.extend([text("ordinality".to_owned()), position()]);
+            }
+            let body = Expr::function("named_struct", fields).with_origin(origin);
+            let params: &[&str] = if ordinality { &["x", "i"] } else { &["x"] };
+            Expr::function("transform", vec![only.clone(), lambda(params, body)])
+                .with_origin(origin)
+        } else {
+            let zipped: Vec<Expr> = arrays
+                .iter()
+                .enumerate()
+                .map(|(i, a)| a.clone().alias(name_of(i)).with_origin(origin))
+                .collect();
+            let zip = Expr::function("arrays_zip", zipped).with_origin(origin);
+            if ordinality {
+                let mut fields = Vec::new();
+                for i in 0..width {
+                    fields.extend([text(name_of(i)), field("s", name_of(i))]);
+                }
+                fields.extend([text("ordinality".to_owned()), position()]);
+                let body = Expr::function("named_struct", fields).with_origin(origin);
+                Expr::function("transform", vec![zip, lambda(&["s", "i"], body)])
+                    .with_origin(origin)
+            } else {
+                zip
+            }
+        };
+        Ok(Arc::new(rows))
     }
 
     fn generated_columns(
