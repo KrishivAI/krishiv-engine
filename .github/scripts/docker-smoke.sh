@@ -7,14 +7,15 @@
 # Starts IMAGE with only KRISHIV_AUTH_TOKEN set (the entrypoint binds 0.0.0.0 with a generated
 # self-signed certificate), waits for the container to
 # report healthy, reads the console page, runs one query through PySpark over TLS with the token, writes and reads a Delta table, and checks that the
-# image is set to run as a non-root user and that the admin port answers `/readyz`.
+# image is set to run as a non-root user and that the admin port answers `/readyz`. Then it exercises
+# the entrypoint's other branches (a token from a mounted file, a generated token, the refusals).
 set -euo pipefail
 image=$1
 work=$(mktemp -d)
 name=krishiv-smoke-$$
 cleanup() {
   docker logs "$name" 2>&1 | tail -n 40 || true
-  docker rm -f "$name" >/dev/null 2>&1 || true
+  docker rm -f "$name" "$name-file" "$name-gen" >/dev/null 2>&1 || true
   # The container's user (10001) owns what it wrote under data/: clear it as root in the image.
   docker run --rm --user 0 --entrypoint sh -v "$work/data:/d" "$image" -c 'rm -rf /d/* /d/.[!.]*' >/dev/null 2>&1 || true
   rm -rf "$work" || true
@@ -68,3 +69,37 @@ assert got == [(1, "east"), (2, "west")], got
 print("delta ->", got)
 spark.stop()
 PY
+
+# Entrypoint branches. Each starts a second container on other host ports (the first still runs).
+echo "== entrypoint: token from a mounted secret file (root-owned, mode 0444) =="
+printf '%s' "file-$(openssl rand -hex 16)" >"$work/secret"
+chmod 444 "$work/secret"
+docker run -d --name "$name-file" -p 15012:15002 -p 8081:8080 \
+  -v "$work/secret:/run/secrets/krishiv_token:ro" "$image" >/dev/null
+for _ in $(seq 1 60); do
+  curl -fsk https://127.0.0.1:8081/readyz >/dev/null 2>&1 && break
+  [ "$(docker inspect -f '{{.State.Running}}' "$name-file")" = true ] || { docker logs "$name-file"; echo "::error::file-token container exited"; exit 1; }
+  sleep 2
+done
+curl -fsk https://127.0.0.1:8081/readyz >/dev/null || { echo "::error::file-token container never became ready"; exit 1; }
+docker rm -f "$name-file" >/dev/null
+
+echo "== entrypoint: no token given generates one and prints it once =="
+docker run -d --name "$name-gen" "$image" >/dev/null
+for _ in $(seq 1 30); do
+  docker logs "$name-gen" 2>&1 | grep -q 'generated a token in' && break
+  sleep 1
+done
+docker logs "$name-gen" 2>&1 | grep -q 'generated a token in' || { echo "::error::no generated-token notice"; exit 1; }
+docker rm -f "$name-gen" >/dev/null
+
+refuses() { # refuses MESSAGE docker-run-args...: the container must exit non-zero with MESSAGE
+  local msg=$1; shift
+  local out
+  if out=$(docker run --rm "$@" "$image" 2>&1); then echo "::error::expected a refusal: $msg"; exit 1; fi
+  grep -q "$msg" <<<"$out" || { echo "$out"; echo "::error::refusal lacks '$msg'"; exit 1; }
+}
+echo "== entrypoint: refusals =="
+: >"$work/empty"
+refuses "is not readable by uid" -v "$work/empty:/run/secrets/krishiv_token:ro"
+refuses "are set but" -e KRISHIV_AUTH_TOKEN=x -e KRISHIV_TLS_CERT=/nonexistent/cert.pem -e KRISHIV_TLS_KEY=/nonexistent/key.pem

@@ -53,6 +53,30 @@ fn a_derived_frame_run_shows_the_statement_it_came_from() {
     );
 }
 
+#[cfg(feature = "unstable-ir")]
+#[test]
+fn a_sql_relation_run_shows_its_text_and_class() {
+    use krishiv_plan::{LogicalPlan, Plan, PlanNode, SqlArgs};
+    let s = Session::new().unwrap();
+    let plan = Plan::try_new(LogicalPlan::new(PlanNode::Sql {
+        query: "SELECT id FROM range(0, 5) WHERE id >= 0 /*relation-marker*/".to_owned(),
+        args: SqlArgs::None,
+    }))
+    .unwrap();
+    let df = s.from_plan(&plan);
+    let rows: usize = block_on(df.collect())
+        .unwrap()
+        .iter()
+        .map(arrow_array::RecordBatch::num_rows)
+        .sum();
+    assert_eq!(rows, 5);
+    let got = texts(&s, "SELECT id FROM range%relation-marker%");
+    assert_eq!(got.len(), 1, "one row: {got:?}");
+    assert_eq!(got[0].1.as_deref(), Some("READ"));
+    let text = got[0].0.as_deref().expect("the relation's run has a text");
+    assert!(text.contains("relation-marker"), "{text}");
+}
+
 #[test]
 fn a_frame_no_sql_started_still_has_no_text() {
     let s = Session::new().unwrap();
