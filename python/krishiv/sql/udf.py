@@ -77,6 +77,50 @@ _RUNNABLE = {
 }
 
 
+#: The relation kinds an embedded session runs (design P3-T085 PR-48a): map, grouped map, cogrouped map and
+#: grouped aggregate. Each runs as itself (``krishiv._udf.relations``); window aggregates and scalar iterators
+#: (PR-48b) are not run yet.
+_RELATION_RUNNABLE = frozenset(
+    {
+        PythonEvalType.SQL_GROUPED_MAP_PANDAS_UDF,
+        PythonEvalType.SQL_GROUPED_AGG_PANDAS_UDF,
+        PythonEvalType.SQL_MAP_PANDAS_ITER_UDF,
+        PythonEvalType.SQL_COGROUPED_MAP_PANDAS_UDF,
+        PythonEvalType.SQL_MAP_ARROW_ITER_UDF,
+        PythonEvalType.SQL_GROUPED_MAP_ARROW_UDF,
+        PythonEvalType.SQL_COGROUPED_MAP_ARROW_UDF,
+        PythonEvalType.SQL_GROUPED_MAP_ARROW_ITER_UDF,
+        PythonEvalType.SQL_GROUPED_MAP_PANDAS_ITER_UDF,
+        PythonEvalType.SQL_GROUPED_AGG_PANDAS_ITER_UDF,
+        PythonEvalType.SQL_GROUPED_AGG_ARROW_UDF,
+        PythonEvalType.SQL_GROUPED_AGG_ARROW_ITER_UDF,
+    }
+)
+
+
+#: The grouped-aggregate kinds: they run in ``groupBy().agg``; over a window (PR-48b) they are not run yet.
+_AGG_EVAL_TYPES = frozenset(
+    {
+        PythonEvalType.SQL_GROUPED_AGG_PANDAS_UDF,
+        PythonEvalType.SQL_GROUPED_AGG_PANDAS_ITER_UDF,
+        PythonEvalType.SQL_GROUPED_AGG_ARROW_UDF,
+        PythonEvalType.SQL_GROUPED_AGG_ARROW_ITER_UDF,
+    }
+)
+
+
+class _AggregateCall(Column):
+    """A grouped-aggregate UDF's call: ``agg`` runs it, ``over`` refuses until window aggregates run (PR-48b)."""
+
+    __slots__ = ()
+
+    def over(self, window: Any) -> Column:
+        raise PySparkNotImplementedError(
+            errorClass="NOT_IMPLEMENTED",
+            messageParameters={"feature": "Python UDFs of eval type 203 (window aggregates)"},
+        )
+
+
 def _engine_ddl(dt: DataType) -> str:
     """``dt`` as a DDL string the engine parses (struct field names backquoted)."""
     if isinstance(dt, StructType):
@@ -95,6 +139,13 @@ def _engine_registration(
     """What the engine registers a UDF with: the eval type it runs, the return type's DDL and the wrapper.
     The wrapper sees the return type as the engine declares it (from the DDL; results are nullable)."""
     from krishiv._udf.worker import make_wrapper
+
+    if eval_type in _RELATION_RUNNABLE:
+        # A relation kind's "wrapper" is its runner: frames in, result batches out (the engine's task calls it).
+        from krishiv._udf.relations import make_relation
+
+        ddl = _engine_ddl(return_type)
+        return eval_type, ddl, make_relation(func, eval_type, _parse_datatype_string(ddl))
 
     run = _RUNNABLE.get(eval_type)
     if run is None:
@@ -308,7 +359,10 @@ class UserDefinedFunction:
                 errorClass="NOT_IMPLEMENTED",
                 messageParameters={"feature": "keyword arguments of Python UDFs"},
             )
-        return Column(self._handle_for_call().call([_named(arg, "col") for arg in args]))
+        call = self._handle_for_call().call([_named(arg, "col") for arg in args])
+        if self.evalType in _AGG_EVAL_TYPES:
+            return _AggregateCall(call)
+        return Column(call)
 
     def _handle_for_call(self) -> Any:
         """The handle a call uses: the plain one, or, when ``spark.sql.pyspark.udf.profiler`` is ``perf`` or

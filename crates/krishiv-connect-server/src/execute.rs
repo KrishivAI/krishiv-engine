@@ -877,6 +877,11 @@ async fn translate_locals(
     if requests.is_empty() || !has_plan {
         return Ok((translated, cached.take()));
     }
+    // A command's class is checked before anything is built for it: a caller the class refuses
+    // gets its 42501, not the error of a local relation it should never have caused to be built.
+    if let Translated::Command(c) = &translated {
+        crate::auth::enforce(&c.check, entry.session()).await?;
+    }
     drop(translated);
     let mut built = Vec::with_capacity(requests.len());
     for request in requests {
