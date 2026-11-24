@@ -37,19 +37,31 @@ impl LocalDirsAsMissing {
     }
 
     /// `e`, or `NotFound` when `location` is a directory.
-    fn directory_is_missing(&self, location: &Path, e: object_store::Error) -> object_store::Error {
+    async fn directory_is_missing(
+        &self,
+        location: &Path,
+        e: object_store::Error,
+    ) -> object_store::Error {
         if matches!(e, object_store::Error::NotFound { .. }) {
             return e;
         }
-        match self.inner.path_to_filesystem(location) {
-            Ok(path) if path.is_dir() => object_store::Error::NotFound {
+        let is_dir = match self.inner.path_to_filesystem(location) {
+            // The metadata call blocks, so it runs off the async worker.
+            Ok(path) => tokio::task::spawn_blocking(move || path.is_dir())
+                .await
+                .unwrap_or(false),
+            Err(_) => false,
+        };
+        if is_dir {
+            object_store::Error::NotFound {
                 path: location.to_string(),
                 source: Box::new(std::io::Error::new(
                     std::io::ErrorKind::NotFound,
                     "is directory",
                 )),
-            },
-            _ => e,
+            }
+        } else {
+            e
         }
     }
 }
@@ -80,10 +92,10 @@ impl ObjectStore for LocalDirsAsMissing {
     }
 
     async fn get_opts(&self, location: &Path, options: GetOptions) -> StoreResult<GetResult> {
-        self.inner
-            .get_opts(location, options)
-            .await
-            .map_err(|e| self.directory_is_missing(location, e))
+        match self.inner.get_opts(location, options).await {
+            Ok(r) => Ok(r),
+            Err(e) => Err(self.directory_is_missing(location, e).await),
+        }
     }
 
     async fn get_ranges(
@@ -91,10 +103,10 @@ impl ObjectStore for LocalDirsAsMissing {
         location: &Path,
         ranges: &[Range<u64>],
     ) -> StoreResult<Vec<bytes::Bytes>> {
-        self.inner
-            .get_ranges(location, ranges)
-            .await
-            .map_err(|e| self.directory_is_missing(location, e))
+        match self.inner.get_ranges(location, ranges).await {
+            Ok(r) => Ok(r),
+            Err(e) => Err(self.directory_is_missing(location, e).await),
+        }
     }
 
     fn delete_stream(
@@ -157,8 +169,8 @@ mod tests {
 
     /// Windows' answer for a directory (a store failure, access denied) is `NotFound`; on a file
     /// or a missing path the error stays as it is. Run on every platform with the failure made up.
-    #[test]
-    fn a_failure_on_a_directory_is_not_found() {
+    #[tokio::test]
+    async fn a_failure_on_a_directory_is_not_found() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir(dir.path().join("d")).unwrap();
         std::fs::write(dir.path().join("f"), b"hi").unwrap();
@@ -167,11 +179,13 @@ mod tests {
             store: "LocalFileSystem",
             source: Box::new(std::io::Error::from(std::io::ErrorKind::PermissionDenied)),
         };
-        let e = store.directory_is_missing(&Path::from("d"), denied());
+        let e = store.directory_is_missing(&Path::from("d"), denied()).await;
         assert!(matches!(e, object_store::Error::NotFound { .. }), "{e}");
-        let e = store.directory_is_missing(&Path::from("f"), denied());
+        let e = store.directory_is_missing(&Path::from("f"), denied()).await;
         assert!(matches!(e, object_store::Error::Generic { .. }), "{e}");
-        let e = store.directory_is_missing(&Path::from("nothing"), denied());
+        let e = store
+            .directory_is_missing(&Path::from("nothing"), denied())
+            .await;
         assert!(matches!(e, object_store::Error::Generic { .. }), "{e}");
     }
 
