@@ -141,11 +141,12 @@ pub const MAX_ITERATIONS: usize = 100;
 type Rule = fn(Arc<LogicalPlan>) -> Arc<LogicalPlan>;
 
 /// The rewrite batch, in order, with the rules' names.
-const REWRITE: [(&str, Rule); 9] = [
+const REWRITE: [(&str, Rule); 10] = [
     ("RemoveAlias", project::remove_alias),
     ("CollapseRepartition", repartition::collapse),
     ("ConstantFolding", fold_node),
     ("PruneObservedEmpty", empty::prune),
+    ("DropEmptyUnionInputs", empty::drop_empty_union_inputs),
     ("PushDownFilter", pushdown::push_filter),
     ("PushDownJoinCondition", pushdown::push_join_condition),
     ("PushDownAsOfCondition", pushdown::push_as_of_condition),
@@ -163,6 +164,7 @@ const REWRITE_INSIDE: [Rule; REWRITE.len()] = [
     repartition::collapse,
     fold_node,
     empty::prune,
+    keep,
     pushdown::push_filter_guarded,
     pushdown::push_join_condition_guarded,
     keep,
@@ -900,9 +902,17 @@ fn run(
                     .unwrap_or(false)
             });
         let root = if literals {
-            t.once("ShareLiteralInstances", &root, |r| {
+            let after = t.once("ShareLiteralInstances", &root, |r| {
                 share_literal::share(Arc::clone(r), direct)
-            })?
+            })?;
+            // A reader's own filters (q11's `year_total > 0`) sit above the
+            // projection over its `g = k` filter: tidied here, as a second
+            // optimization would, so the plan stays a fixed point.
+            if Arc::ptr_eq(&after, &root) {
+                after
+            } else {
+                batch(after, "Tidy", &mut t)?
+            }
         } else {
             root
         };
