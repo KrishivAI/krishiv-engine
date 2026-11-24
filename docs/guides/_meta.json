@@ -27,5 +27,6 @@
   "query-events": "Query events",
   "python-udf-tenants": "Python UDFs per tenant",
   "vector-search": "Vector search with SQL",
-  "python-table-functions": "Python table functions"
+  "python-table-functions": "Python table functions",
+  "upgrading-from-0.2": "Upgrading from 0.2"
 }
