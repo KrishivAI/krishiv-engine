@@ -21,4 +21,4 @@ def test_the_engine_memory_is_the_out_of_core_budget(monkeypatch, tmp_path):
     cfg = PolarsEngine(threads=1, memory_limit="20g").config()
     assert cfg["ooc_memory_budget_mb"] == str(20 * 1024)
     assert cfg["ooc_spill_dir"] == str(tmp_path / "tmp" / f"polars-{os.getpid()}")
-    assert os.path.isdir(cfg["ooc_spill_dir"])
+    assert not os.path.exists(cfg["ooc_spill_dir"])  # made by setup(), not by the constructor

@@ -47,7 +47,6 @@ class PolarsEngine(SelfTreeMeasure, Engine):
         if memory_limit:
             os.environ.setdefault("POLARS_OOC_MEMORY_BUDGET_MB", str(parse_bytes(memory_limit) >> 20))
             os.environ.setdefault("POLARS_OOC_SPILL_DIR", str(data_root() / "tmp" / f"polars-{os.getpid()}"))
-            os.makedirs(os.environ["POLARS_OOC_SPILL_DIR"], exist_ok=True)
         self._ctx: Any = None
         self._frames: dict[str, Any] = {}
 
@@ -72,6 +71,9 @@ class PolarsEngine(SelfTreeMeasure, Engine):
 
     def setup(self, dataset: Dataset) -> None:
         import polars as pl
+
+        if spill := os.environ.get("POLARS_OOC_SPILL_DIR"):
+            os.makedirs(spill, exist_ok=True)
 
         self._frames = {t: pl.scan_parquet(table_path(dataset, t)) for t in dataset.tables}
         self._ctx = pl.SQLContext(frames=self._frames, eager=False)
