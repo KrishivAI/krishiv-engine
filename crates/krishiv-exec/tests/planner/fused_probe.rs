@@ -290,3 +290,84 @@ fn a_scans_row_stage_runs_in_the_probe_with_the_scans_counters() {
         }
     }
 }
+
+/// One run's sorted rows and the probes' `probe_held_rows`, with
+/// `krishiv.exec.coalesceInput` `coalesce` and batch size `batch`.
+fn held_run(plan: &Runnable, coalesce: bool, batch: Option<usize>) -> (Vec<String>, u64) {
+    super::COALESCE_INPUT.set(coalesce);
+    super::BATCH_SIZE.set(batch);
+    let (rows, ..) = counters(plan);
+    let root = TreePool::new(&MemoryConfig::default());
+    let (_, query) = super::run_in(plan, &root);
+    super::COALESCE_INPUT.set(true);
+    super::BATCH_SIZE.set(None);
+    let held = query
+        .metrics()
+        .operators
+        .values()
+        .flat_map(|e| e.extra.iter())
+        .filter(|(name, _)| name.as_ref() == "probe_held_rows")
+        .map(|(_, v)| v.value().unwrap_or(0))
+        .sum();
+    (rows, held)
+}
+
+/// K1 (design `P3-0.3.1-probe-empty-batches.md` §3): a probe whose row
+/// stage keeps under a quarter of a batch holds the kept rows and probes
+/// them as full batches (inner and left semi joins, with a fused filter or
+/// a residual), and a dense stage holds nothing. The rows are those of the
+/// unfused plan and of the same plan holding nothing, at the default batch
+/// size and at one a push fills partway (its tail stays held).
+#[test]
+fn sparse_batches_rows_are_held_and_join_the_same_rows() {
+    let (tpch, _rt) = tpch();
+    for (sql, holds) in [
+        // A Bloom or set from `part` keeps about 8% of `lineitem`.
+        (
+            "SELECT l_orderkey, p_brand FROM lineitem JOIN part ON l_partkey = p_partkey \
+             WHERE p_size < 5",
+            true,
+        ),
+        // With a fused filter too: it runs over the held rows.
+        (
+            "SELECT l_orderkey, p_brand FROM lineitem JOIN part ON l_partkey = p_partkey \
+             WHERE l_quantity < 30 AND p_size < 5",
+            true,
+        ),
+        // A left semi join (`IN`).
+        (
+            "SELECT l_orderkey FROM lineitem WHERE l_partkey IN \
+             (SELECT p_partkey FROM part WHERE p_size < 5)",
+            true,
+        ),
+        // A residual over the held pairs.
+        (
+            "SELECT l_orderkey, p_brand FROM lineitem JOIN part ON l_partkey = p_partkey \
+             AND l_suppkey <> p_partkey WHERE p_size < 5",
+            true,
+        ),
+        // A dense stage (`p_size < 45` keeps 90%): nothing held.
+        (
+            "SELECT l_orderkey, p_brand FROM lineitem JOIN part ON l_partkey = p_partkey \
+             WHERE p_size < 45",
+            false,
+        ),
+    ] {
+        let plan = tpch.plan_sql(sql).unwrap();
+        let text = plan.to_string();
+        let (want, ..) = counters(&unfused(&plan));
+        assert!(!want.is_empty(), "{sql}");
+        for batch in [None, Some(500)] {
+            let (got, held) = held_run(&plan, true, batch);
+            assert_eq!(got, want, "{sql} batch {batch:?}\n{text}");
+            assert_eq!(
+                held > 0,
+                holds,
+                "held {held}: {sql} batch {batch:?}\n{text}"
+            );
+            let (off, none) = held_run(&plan, false, batch);
+            assert_eq!(off, want, "{sql} batch {batch:?}\n{text}");
+            assert_eq!(none, 0, "{sql}");
+        }
+    }
+}
