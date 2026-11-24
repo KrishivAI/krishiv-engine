@@ -81,6 +81,11 @@ mod tests {
             paths.locate(&url).map(|at| at.display).ok().as_deref(),
             Some("file:/C:/a/b")
         );
+        // A `..` never removes the drive.
+        assert_eq!(
+            paths.locate("C:/../x").map(|at| at.display).ok().as_deref(),
+            Some("file:/C:/x")
+        );
         // A UNC share and a device are refused, never read as segments of the current drive.
         for text in [
             r"\\srv\share\x",

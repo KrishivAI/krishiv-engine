@@ -186,6 +186,11 @@ impl PathLocator for LocalPaths {
         for part in local.split('/') {
             match part {
                 "" | "." => {}
+                // On Windows a drive (`C:/../x`) is the root of its path, as `C:\..\x` is `C:\x`:
+                // a `..` never removes it.
+                ".." if cfg!(windows)
+                    && parts.len() == 1
+                    && windows_path::drive_led(parts[0]).is_some() => {}
                 ".." => {
                     parts.pop();
                 }

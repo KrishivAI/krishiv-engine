@@ -261,9 +261,6 @@ fn hadoop_paths() {
     assert_eq!(hadoop_path(&url("s3://bucket/k/t/")), "s3://bucket/k/t");
 }
 
-/// `text` with the table directory `dir` as `<path>`, in each form a message can hold it: the
-/// path of its URL as written and canonical (on Windows `/C:/Users/RUNNER~1/...` and the long
-/// name `/C:/Users/runneradmin/...` a listing returns), and the native text.
 /// `text` with each `%XX` escape decoded (UTF-8), as Hadoop's `Path` shows a URL path.
 fn percent_decode(text: &str) -> String {
     let bytes = text.as_bytes();
@@ -285,6 +282,10 @@ fn percent_decode(text: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
+/// `text` with the table directory `dir` as `<path>`, in each form a message can hold it: the
+/// path of its URL as written and canonical (on Windows `/C:/Users/RUNNER~1/...` and the long
+/// name `/C:/Users/runneradmin/...` a listing returns), the native text, and the
+/// percent-decoded URL path Hadoop shows.
 fn masked(text: &str, dir: &std::path::Path) -> String {
     let url_path = |p: &std::path::Path| {
         url::Url::from_directory_path(p)

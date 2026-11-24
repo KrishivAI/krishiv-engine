@@ -60,6 +60,7 @@ pub(super) fn qualified_namespace_location(
                 // A Windows drive (`/C:/..`) is the root of its path: a `..` never removes it.
                 let drive = |p: &str| {
                     cfg!(windows)
+                        && prefix == "file:"
                         && parts.len() == 1
                         && p.len() == 2
                         && p.as_bytes()[0].is_ascii_alphabetic()
