@@ -1515,6 +1515,11 @@ fn partitioning(p: &pb::Partitioning) -> Result<Partitioning> {
 
 fn join_filter(f: &pb::JoinFilter) -> Result<JoinFilterPlan> {
     let o = required(&f.options, "filter options")?;
+    // A bound column is one side of a residual's comparison: a two-sided
+    // range over it would drop probe rows the residual keeps.
+    if f.bound_column.is_some() && o.side == pb::RangeSide::Both as i32 {
+        return Err(corrupt("a bound column on a two-sided range"));
+    }
     Ok(JoinFilterPlan {
         id: FilterId(f.id),
         key: usize_of(f.key)?,

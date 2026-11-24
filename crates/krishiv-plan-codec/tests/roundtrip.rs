@@ -1065,6 +1065,27 @@ fn existence_joins_and_single_match_are_features() {
     assert_eq!(Feature::JoinSingleMatch.to_string(), "join_single_match");
 }
 
+/// A residual's bound column is one-sided; a two-sided range over it is
+/// corrupt (the planner never writes one).
+#[test]
+fn a_bound_column_on_a_two_sided_range_is_corrupt() {
+    use pb::node::Kind;
+    let mut m = message("join_filter_bound");
+    let mut found = false;
+    for i in 0..m.nodes.len() {
+        if let Kind::HashJoin(j) = node_mut(&mut m, i) {
+            for f in &mut j.runtime_filters {
+                if f.bound_column.is_some() {
+                    f.options.as_mut().unwrap().side = pb::RangeSide::Both as i32;
+                    found = true;
+                }
+            }
+        }
+    }
+    assert!(found, "the case has no bound column");
+    corrupt(&m, "a bound column on a two-sided range");
+}
+
 /// `distinct_build` is only legal where the build's rows are never output
 /// nor read beyond their keys; anywhere else the plan is corrupt.
 #[test]

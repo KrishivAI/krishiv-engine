@@ -131,3 +131,77 @@ fn bounds_are_planned_where_sound() {
     configured(&mut t, NO_BOUNDS);
     assert!(bound(&explain(&t, JOINS[0]), "max").is_empty());
 }
+
+/// A `TIMESTAMP_NTZ` probe column against a `TIMESTAMP` build column: Spark
+/// compares `CAST(ntz AS TIMESTAMP)`, which shifts by the session zone's
+/// offset, so neither an equality key's filter nor a residual's bound may
+/// test the raw NTZ values (review of D2: `widens_to`).
+#[test]
+fn ntz_against_timestamp_keeps_every_matching_row() {
+    use arrow_array::{ArrayRef, Int32Array, RecordBatch, TimestampMicrosecondArray};
+    use arrow_schema::{DataType, Field, Schema, TimeUnit};
+    use std::sync::Arc;
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let base: i64 = 1_700_000_000_000_000;
+    let hour: i64 = 3_600_000_000;
+    let batch = |rows: i32, t: &dyn Fn(i32) -> i64, zone: Option<&str>| {
+        let ts = (0..rows)
+            .map(|i| Some(t(i)))
+            .collect::<TimestampMicrosecondArray>();
+        let ts = match zone {
+            Some(z) => ts.with_timezone(z),
+            None => ts,
+        };
+        let columns: Vec<ArrayRef> = vec![
+            Arc::new((0..rows).map(|i| i % 8).collect::<Int32Array>()),
+            Arc::new(ts),
+        ];
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("k", DataType::Int32, false),
+            Field::new(
+                "t",
+                DataType::Timestamp(TimeUnit::Microsecond, zone.map(Into::into)),
+                false,
+            ),
+        ]));
+        RecordBatch::try_new(schema, columns).unwrap()
+    };
+    // In Asia/Kolkata (UTC+5:30) the probe's wall clock `base + 1h` is the
+    // instant `base - 4h30` (< every build value), `base + 5h30` is `base`
+    // (= every build value), `base + 10h` is past both.
+    let probe = |i: i32| {
+        base + match i % 3 {
+            0 => hour,
+            1 => 11 * hour / 2,
+            _ => 10 * hour,
+        }
+    };
+    write(dir.path(), "big.parquet", &batch(1500, &probe, None));
+    write(
+        dir.path(),
+        "small.parquet",
+        &batch(8, &|_| base, Some("UTC")),
+    );
+    let sources = [
+        ("big", vec!["big.parquet".to_owned()]),
+        ("small", vec!["small.parquet".to_owned()]),
+    ];
+    let mut t = parquet_files(dir.path(), &sources, true, &rt);
+    let zone = ("spark.sql.session.timeZone", "Asia/Kolkata");
+    for q in [
+        "SELECT b.k, b.t FROM big b JOIN small s ON b.k = s.k AND b.t < s.t",
+        "SELECT b.k, b.t, s.k FROM big b JOIN small s ON b.t = s.t",
+    ] {
+        configured(&mut t, &[OFF[0], zone]);
+        let off = sorted(&run(&t.plan_sql(q).unwrap()).0);
+        assert!(!off.is_empty(), "{q}: no matching rows to lose");
+        configured(&mut t, &[BOUNDS[0], zone]);
+        let plan = t.plan_sql(q).unwrap();
+        assert!(!plan.to_string().contains(" max("), "{q}:\n{plan}");
+        assert_eq!(sorted(&run(&plan).0), off, "{q}:\n{plan}");
+    }
+}
