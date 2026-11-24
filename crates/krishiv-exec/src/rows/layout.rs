@@ -146,7 +146,121 @@ pub struct RowLayout {
     hashed: bool,
     /// Buffers of encoded batches that were dropped, for the next batch.
     spares: Arc<Spares>,
+    /// The encoder specialized to this layout's shape, for batches whose
+    /// keys have no NULLs (E1; `None`: the general [`RowLayout::encode`]).
+    fast: Option<FastEncode>,
 }
+
+/// An encoder of hashed key rows of one fixed shape: rows (zero-filled,
+/// `n` strides), hashes (`n`), and each key column's value bytes (`n`
+/// values; unused entries empty). Byte-for-byte what the general path
+/// writes for the same batch without NULLs (study 53, lever E1).
+type FastEncode = fn(&mut [u8], &mut [u64], [&[u8]; 2]);
+
+/// Stride and value offsets of a hashed layout of `k` (1 or 2) fixed keys
+/// of widths `w0`, `w1` (4 or 8), with validity bytes if `nullable`: the
+/// placement of [`RowLayout::with_shape`] (widest first, ties in order).
+const fn fast_place(nullable: bool, k: usize, w0: usize, w1: usize) -> [usize; 3] {
+    let start = if nullable { 16 } else { KEYS_START };
+    if k == 1 {
+        let end = (start + w0).div_ceil(8) * 8;
+        let stride = if end < KEYS_START + 8 {
+            KEYS_START + 8
+        } else {
+            end
+        };
+        return [stride, start, 0];
+    }
+    let stride = (start + w0 + w1).div_ceil(8) * 8;
+    if w1 > w0 {
+        [stride, start + w1, start]
+    } else {
+        [stride, start, start + w0]
+    }
+}
+
+/// The little-endian value `v` zero-extended to a word, as the general
+/// path hashes a value of at most 8 bytes.
+#[inline]
+fn load<const W: usize>(v: &[u8; W]) -> u64 {
+    let mut word = [0u8; 8];
+    word[..W].copy_from_slice(v);
+    u64::from_le_bytes(word)
+}
+
+/// [`FastEncode`] for one shape (`S` the stride, `K` keys, key `i` of
+/// width `Wi` at offset `Oi`): one loop over the rows, every offset known
+/// at compile time. Study 53 step 0.5: 2.5-2.8x the general path on one
+/// `i64` and on `i32` + `i64`; a loop over a column list is slower than
+/// today's, so each shape gets its own copy.
+fn encode_fixed<
+    const S: usize,
+    const K: usize,
+    const W0: usize,
+    const O0: usize,
+    const W1: usize,
+    const O1: usize,
+>(
+    rows: &mut [u8],
+    hashes: &mut [u64],
+    values: [&[u8]; 2],
+) {
+    let start = fold(SEEDLESS, MIX);
+    let (rows, _) = rows.as_chunks_mut::<S>();
+    let (a, _) = values[0].as_chunks::<W0>();
+    if K == 1 {
+        for ((row, h), v) in rows.iter_mut().zip(hashes.iter_mut()).zip(a) {
+            let x = fold(mix(start, load(v)), FINISH);
+            row[O0..O0 + W0].copy_from_slice(v);
+            row[..8].copy_from_slice(&x.to_le_bytes());
+            *h = x;
+        }
+        return;
+    }
+    let (b, _) = values[1].as_chunks::<W1>();
+    for (((row, h), v), u) in rows.iter_mut().zip(hashes.iter_mut()).zip(a).zip(b) {
+        let x = fold(mix(mix(start, load(v)), load(u)), FINISH);
+        row[O0..O0 + W0].copy_from_slice(v);
+        row[O1..O1 + W1].copy_from_slice(u);
+        row[..8].copy_from_slice(&x.to_le_bytes());
+        *h = x;
+    }
+}
+
+/// The specialized encoders, one per shape `(nullable, k, w0, w1)` (a
+/// one-key shape names `w1` 8, unused).
+macro_rules! fast_encoders {
+    ($(($n:literal, $k:literal, $w0:literal, $w1:literal)),* $(,)?) => {
+        fn fast_encoder(nullable: bool, k: usize, w0: usize, w1: usize) -> Option<FastEncode> {
+            match (nullable, k, w0, w1) {
+                $(($n, $k, $w0, $w1) => Some(encode_fixed::<
+                    { fast_place($n, $k, $w0, $w1)[0] },
+                    $k,
+                    $w0,
+                    { fast_place($n, $k, $w0, $w1)[1] },
+                    $w1,
+                    { fast_place($n, $k, $w0, $w1)[2] },
+                >),)*
+                _ => None,
+            }
+        }
+    };
+}
+
+fast_encoders!(
+    (false, 1, 4, 8),
+    (false, 1, 8, 8),
+    (true, 1, 4, 8),
+    (true, 1, 8, 8),
+    (false, 2, 4, 4),
+    (false, 2, 4, 8),
+    (false, 2, 8, 4),
+    (false, 2, 8, 8),
+    (true, 2, 4, 4),
+    (true, 2, 4, 8),
+    (true, 2, 8, 4),
+    (true, 2, 8, 8),
+);
 
 /// Most spare buffer sets a layout keeps.
 const SPARE_SETS: usize = 16;
@@ -306,6 +420,7 @@ impl RowLayout {
             (true, true, 16) => Compare::Two,
             _ => Compare::Words,
         };
+        let fast = Self::fast_for(hashed, &columns, next_bit > 0, stride);
         Ok(Self {
             columns,
             stride,
@@ -316,7 +431,55 @@ impl RowLayout {
             validity_at,
             hashed,
             spares: Arc::default(),
+            fast,
         })
+    }
+
+    /// The specialized encoder of a hashed layout of one or two fixed keys
+    /// of width 4 or 8, if its placement is the one `encode_fixed` assumes.
+    fn fast_for(
+        hashed: bool,
+        columns: &[Column],
+        nullable: bool,
+        stride: usize,
+    ) -> Option<FastEncode> {
+        let width = |c: &Column| match c.kind {
+            Kind::Fixed(w @ (4 | 8)) => Some(w),
+            _ => None,
+        };
+        if !hashed {
+            return None;
+        }
+        let (k, w0, w1) = match columns {
+            [a] => (1, width(a)?, 8),
+            [a, b] => (2, width(a)?, width(b)?),
+            _ => return None,
+        };
+        let [s, o0, o1] = fast_place(nullable, k, w0, w1);
+        let placed =
+            s == stride && columns[0].offset == o0 && columns.get(1).is_none_or(|c| c.offset == o1);
+        if placed {
+            fast_encoder(nullable, k, w0, w1)
+        } else {
+            None
+        }
+    }
+
+    /// The value bytes of each key column for the specialized encoder, or
+    /// `None` when the batch must take the general path (a NULL, a column
+    /// of another type or length: the general path raises those).
+    fn fast_values(&self, columns: &[ArrayRef], n: usize) -> Option<[Option<ArrayData>; 2]> {
+        let mut out = [None, None];
+        for ((slot, column), array) in out.iter_mut().zip(&self.columns).zip(columns) {
+            if array.len() != n
+                || array.data_type() != &column.data_type
+                || array.logical_null_count() > 0
+            {
+                return None;
+            }
+            *slot = Some(array.to_data());
+        }
+        Some(out)
     }
 
     /// The layout of a hash join's keys: only keys compared with `<=>`
@@ -515,6 +678,23 @@ impl RowLayout {
             hashed: self.hashed,
             spares: Some(Arc::clone(&self.spares)),
         };
+        if let Some(fast) = self.fast
+            && let Some(datas) = self.fast_values(columns, n)
+        {
+            let mut values: [&[u8]; 2] = [&[], &[]];
+            for ((value, data), column) in values.iter_mut().zip(&datas).zip(&self.columns) {
+                let (Some(data), Kind::Fixed(w)) = (data, column.kind) else {
+                    continue;
+                };
+                *value = data
+                    .buffers()
+                    .first()
+                    .and_then(|b| b.as_slice().get(data.offset() * w..(data.offset() + n) * w))
+                    .ok_or_else(|| internal("fixed-width key buffer too short".to_owned()))?;
+            }
+            fast(&mut keys.rows, &mut keys.hashes, values);
+            return Ok(keys);
+        }
         let strings = foldhash::fast::FixedState::with_seed(SEEDLESS);
         for (column, array) in self.columns.iter().zip(columns) {
             if array.len() != n {
@@ -1288,5 +1468,91 @@ mod tests {
             )
         };
         assert_eq!(put(&dirty), put(&clean));
+    }
+
+    /// E1: every specialized shape encodes rows and hashes byte for byte
+    /// as the general path does, for every 4- and 8-byte key type, both
+    /// key orders, nullable or not, sliced arrays included; a batch with a
+    /// NULL takes the general path.
+    #[test]
+    fn the_fixed_key_encoders_match_the_general_path() {
+        use arrow_array::{Date32Array, Int32Array, Int64Array, TimestampMicrosecondArray};
+        let n = 300;
+        let v64 = |s: i64| (0..n).map(move |i| (i as i64 * 0x9E37_79B9 + s) ^ (s << 40));
+        #[expect(clippy::cast_possible_truncation, reason = "test values")]
+        let v32 = |s: i64| v64(s).map(|v| v as i32);
+        let four: Vec<ArrayRef> = vec![
+            Arc::new(Int32Array::from_iter_values(v32(1))),
+            Arc::new(Date32Array::from_iter_values(v32(2))),
+        ];
+        let eight: Vec<ArrayRef> = vec![
+            Arc::new(Int64Array::from_iter_values(v64(3))),
+            Arc::new(TimestampMicrosecondArray::from_iter_values(v64(4))),
+        ];
+        let all: Vec<&ArrayRef> = four.iter().chain(&eight).collect();
+        let mut cases: Vec<Vec<ArrayRef>> = all.iter().map(|a| vec![Arc::clone(a)]).collect();
+        for a in &all {
+            for b in &all {
+                cases.push(vec![Arc::clone(a), Arc::clone(b)]);
+            }
+        }
+        let mut shapes = 0;
+        for columns in &cases {
+            let types: Vec<DataType> = columns.iter().map(|c| c.data_type().clone()).collect();
+            for nullable in [vec![false; types.len()], vec![true; types.len()]]
+                .into_iter()
+                .chain((types.len() == 2).then(|| vec![false, true]))
+            {
+                let layout = RowLayout::new(&types, &nullable).expect("layout");
+                assert!(layout.fast.is_some(), "{types:?} {nullable:?}");
+                shapes += 1;
+                let general = RowLayout {
+                    fast: None,
+                    ..layout.clone()
+                };
+                let sliced: Vec<ArrayRef> = columns.iter().map(|c| c.slice(7, n - 20)).collect();
+                for batch in [columns, &sliced] {
+                    let (a, b) = (
+                        layout.encode(batch).expect("fast"),
+                        general.encode(batch).expect("general"),
+                    );
+                    assert_eq!(a.rows, b.rows, "{types:?} {nullable:?}");
+                    assert_eq!(a.hashes, b.hashes, "{types:?} {nullable:?}");
+                }
+            }
+        }
+        assert_eq!(shapes, 4 * 2 + 16 * 3);
+        // A NULL in a nullable key: the general path writes its bit.
+        let with_null: ArrayRef = Arc::new(Int64Array::from(vec![Some(1), None, Some(3)]));
+        let layout = RowLayout::new(&[DataType::Int64], &[true]).expect("layout");
+        let keys = layout.encode(&[with_null]).expect("encode");
+        assert_eq!(keys.row(1)[KEYS_START], 1);
+        assert_ne!(keys.hashes()[0], keys.hashes()[1]);
+        // Other widths and types keep the general path.
+        for t in [
+            DataType::Int16,
+            DataType::Float64,
+            DataType::Utf8,
+            DataType::Decimal128(20, 2),
+        ] {
+            assert!(
+                RowLayout::new(&[t], &[false])
+                    .expect("layout")
+                    .fast
+                    .is_none()
+            );
+        }
+        assert!(
+            RowLayout::new(&[const { DataType::Int64 }; 3], &[false; 3])
+                .expect("layout")
+                .fast
+                .is_none()
+        );
+        assert!(
+            RowLayout::for_payload(&[DataType::Int64])
+                .expect("layout")
+                .fast
+                .is_none()
+        );
     }
 }
