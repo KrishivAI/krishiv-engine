@@ -131,6 +131,7 @@ pub(super) fn assign(
                 &column.data_type,
                 &[column.name.as_str()],
                 case,
+                legacy_store,
             )
         {
             return Err(problem.into_error(table_name));
@@ -168,6 +169,8 @@ enum StructProblem {
     Extra(String, String),
     /// Two source fields match one target field (`AMBIGUOUS_COLUMN_NAME`).
     Ambiguous(String),
+    /// A leaf the ANSI store assignment refuses (`CANNOT_SAFELY_CAST`): its path and both types.
+    CannotSafelyCast(String, DataType, DataType),
 }
 
 impl StructProblem {
@@ -189,6 +192,15 @@ impl StructProblem {
                 col_name,
             }
             .into(),
+            Self::CannotSafelyCast(col_name, from, to) => {
+                IncompatibleDataForTableCannotSafelyCast {
+                    table_name,
+                    col_name,
+                    src_type: format!("\"{}\"", from.catalog_string().to_uppercase()),
+                    target_type: format!("\"{}\"", to.catalog_string().to_uppercase()),
+                }
+                .into()
+            }
         }
     }
 }
@@ -203,22 +215,38 @@ fn quoted_path(path: &[&str]) -> String {
 
 /// The first struct, at any depth of `from` and `to` (through arrays and maps), whose fields do not pair by
 /// name under `case_sensitive`: Spark's `TableOutputResolver.reorderColumnsByName` errors, in its order (each
-/// target field in turn, ambiguity then absence, then source fields left over).
+/// target field in turn, ambiguity then absence, then source fields left over). Under the ANSI and STRICT
+/// store policies a leaf is checked as it is reached (`checkField`), so the first failing leaf or struct wins;
+/// under LEGACY Spark's `canWrite` passes, and only the struct errors are raised here.
 fn struct_problem(
     from: &DataType,
     to: &DataType,
     path: &[&str],
     case_sensitive: bool,
+    legacy: bool,
 ) -> Option<StructProblem> {
     match (from, to) {
         (DataType::Array(f), DataType::Array(t)) => {
             let path = [path, &["element"]].concat();
-            struct_problem(f.element_type(), t.element_type(), &path, case_sensitive)
+            struct_problem(
+                f.element_type(),
+                t.element_type(),
+                &path,
+                case_sensitive,
+                legacy,
+            )
         }
         (DataType::Map(f), DataType::Map(t)) => {
             let (key, value) = ([path, &["key"]].concat(), [path, &["value"]].concat());
-            struct_problem(f.key_type(), t.key_type(), &key, case_sensitive)
-                .or_else(|| struct_problem(f.value_type(), t.value_type(), &value, case_sensitive))
+            struct_problem(f.key_type(), t.key_type(), &key, case_sensitive, legacy).or_else(|| {
+                struct_problem(
+                    f.value_type(),
+                    t.value_type(),
+                    &value,
+                    case_sensitive,
+                    legacy,
+                )
+            })
         }
         (DataType::Struct(f), DataType::Struct(t)) => {
             let same = |a: &str, b: &str| {
@@ -243,6 +271,7 @@ fn struct_problem(
                             target.data_type(),
                             &at,
                             case_sensitive,
+                            legacy,
                         ) {
                             return Some(p);
                         }
@@ -259,6 +288,11 @@ fn struct_problem(
                 .collect();
             (!extra.is_empty()).then(|| StructProblem::Extra(quoted_path(path), extra.join(", ")))
         }
+        _ if !legacy && !can_store(from, to) => Some(StructProblem::CannotSafelyCast(
+            quoted_path(path),
+            from.clone(),
+            to.clone(),
+        )),
         _ => None,
     }
 }

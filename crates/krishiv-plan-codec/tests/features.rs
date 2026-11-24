@@ -43,6 +43,20 @@ fn an_unknown_spark_version_is_corrupt() {
     );
 }
 
+/// The default line is never written; a plan that names it reads as none and records no feature.
+#[test]
+fn a_plan_naming_the_default_spark_version_reads_as_none() {
+    let mut m = message("spark_version");
+    m.env.as_mut().unwrap().spark_version = Some("4.3".to_owned());
+    let plan = decode(&m.encode_to_vec()).unwrap();
+    assert_eq!(plan.env().spark_version, None);
+    assert!(
+        !krishiv_plan_codec::features::plan_features(&plan)
+            .iter()
+            .any(|f| format!("{f:?}") == "SparkVersion")
+    );
+}
+
 #[test]
 fn an_unknown_binary_output_style_is_corrupt() {
     for style in ["hex", "HEX_DISCRETE", "nonsense", ""] {

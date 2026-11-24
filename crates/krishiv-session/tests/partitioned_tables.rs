@@ -1894,6 +1894,107 @@ fn ansi_store_by_name_pairs_nested_struct_fields_by_name() {
     );
 }
 
+/// The class and the `colName` / `extraFields` parameters of a failed statement.
+fn class_and_params(s: &Session, sql: &str) -> (String, Vec<String>) {
+    (class(s, sql), params(s, sql))
+}
+
+/// A struct that does not pair by name under `INSERT .. BY NAME` fails as Spark's `reorderColumnsByName`
+/// does, under every store policy, inside arrays and map values: a missing field, extra fields, an
+/// ambiguous name.
+#[test]
+fn by_name_struct_mismatches_report_spark_classes_and_paths() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(&s, "create table bne(s struct<a:int,b:int>) using parquet");
+    run(
+        &s,
+        "create table bna2(s array<struct<a:int,b:int>>) using parquet",
+    );
+    run(
+        &s,
+        "create table bnm(s map<string,struct<a:int,b:int>>) using parquet",
+    );
+    for policy in ["ANSI", "LEGACY"] {
+        s.conf()
+            .set("spark.sql.storeAssignmentPolicy", policy)
+            .unwrap();
+        let cases = [
+            (
+                "insert into bne by name select named_struct('a', 1, 'c', 2) as s",
+                "INCOMPATIBLE_DATA_FOR_TABLE.CANNOT_FIND_DATA",
+                "`s`.`b`",
+            ),
+            (
+                "insert into bne by name select named_struct('a', 1, 'b', 2, 'c', 3) as s",
+                "INCOMPATIBLE_DATA_FOR_TABLE.EXTRA_STRUCT_FIELDS",
+                "`s`",
+            ),
+            (
+                "insert into bne by name select named_struct('a', 1, 'A', 2, 'b', 3) as s",
+                "INCOMPATIBLE_DATA_FOR_TABLE.AMBIGUOUS_COLUMN_NAME",
+                "`s`.`a`",
+            ),
+            (
+                "insert into bna2 by name select array(named_struct('a', 1, 'c', 2)) as s",
+                "INCOMPATIBLE_DATA_FOR_TABLE.CANNOT_FIND_DATA",
+                "`s`.`element`.`b`",
+            ),
+            (
+                "insert into bnm by name select map('k', named_struct('a', 1, 'c', 2)) as s",
+                "INCOMPATIBLE_DATA_FOR_TABLE.CANNOT_FIND_DATA",
+                "`s`.`value`.`b`",
+            ),
+        ];
+        for (sql, want, path) in cases {
+            let (class, params) = class_and_params(&s, sql);
+            assert_eq!(class, want, "{policy}: {sql}");
+            assert!(
+                params.iter().any(|p| p.contains(path)),
+                "{policy}: {sql}: {params:?} lacks {path}"
+            );
+        }
+        // The extra fields are listed in source order.
+        let (_, params) = class_and_params(
+            &s,
+            "insert into bne by name select named_struct('a', 1, 'b', 2, 'x', 3, 'c', 4) as s",
+        );
+        assert!(
+            params.iter().any(|p| p.ends_with("=`x`, `c`")),
+            "{params:?}"
+        );
+    }
+    // With `caseSensitive`, `a` and `A` are two names: `A` is an extra field, not an ambiguity.
+    s.conf().set("spark.sql.caseSensitive", "true").unwrap();
+    assert_eq!(
+        class(
+            &s,
+            "insert into bne by name select named_struct('a', 1, 'A', 2, 'b', 3) as s"
+        ),
+        "INCOMPATIBLE_DATA_FOR_TABLE.EXTRA_STRUCT_FIELDS"
+    );
+}
+
+/// Under ANSI the first failing field wins (Spark checks each leaf as it pairs the fields); under LEGACY the
+/// struct errors do.
+#[test]
+fn by_name_ansi_checks_a_leaf_before_a_later_missing_field() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(&s, "create table bnl(s struct<a:int,b:int>) using parquet");
+    let sql = "insert into bnl by name select named_struct('a', array(1), 'c', 2) as s";
+    let (class, params) = class_and_params(&s, sql);
+    assert_eq!(class, "INCOMPATIBLE_DATA_FOR_TABLE.CANNOT_SAFELY_CAST");
+    assert!(params.iter().any(|p| p.ends_with("=`s`.`a`")), "{params:?}");
+    s.conf()
+        .set("spark.sql.storeAssignmentPolicy", "LEGACY")
+        .unwrap();
+    assert_eq!(
+        class_and_params(&s, sql).0,
+        "INCOMPATIBLE_DATA_FOR_TABLE.CANNOT_FIND_DATA"
+    );
+}
+
 /// Map keys that collide after the LEGACY store cast follow `spark.sql.mapKeyDedupPolicy` (the map is rebuilt
 /// with `MapFromArrays`): `EXCEPTION` fails with `DUPLICATED_MAP_KEY`, `LAST_WIN` keeps the last value.
 #[test]
