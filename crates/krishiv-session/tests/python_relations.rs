@@ -85,13 +85,19 @@ fn a_relation_refuses_the_wrong_eval_type_or_a_non_struct_result() -> R {
         1,
         false,
     );
-    assert!(is_class(wrong_kind, ErrorClass::InternalError));
+    assert!(is_class(
+        wrong_kind,
+        ErrorClass::KrishivInvalidPythonRelation
+    ));
     let not_struct = df.map_in_python(
         &udf(PythonEvalType::MapPandasIter, DataType::Long),
         1,
         false,
     );
-    assert!(is_class(not_struct, ErrorClass::InternalError));
+    assert!(is_class(
+        not_struct,
+        ErrorClass::KrishivInvalidPythonRelation
+    ));
     Ok(())
 }
 
@@ -114,7 +120,7 @@ fn apply_in_python_takes_grouped_map_kinds_but_not_rollup_or_cube() -> R {
     let wrong = df
         .group_by([key.clone()])
         .apply_in_python(&udf(PythonEvalType::MapPandasIter, structure()), 1);
-    assert!(is_class(wrong, ErrorClass::InternalError));
+    assert!(is_class(wrong, ErrorClass::KrishivInvalidPythonRelation));
     let def = udf(PythonEvalType::GroupedMapPandas, structure());
     assert!(is_class(
         df.rollup([key.clone()]).apply_in_python(&def, 1),
@@ -152,7 +158,7 @@ fn cogroup_needs_matching_key_counts_and_a_cogrouped_kind() -> R {
         &def,
         1,
     );
-    assert!(is_class(uneven, ErrorClass::InternalError));
+    assert!(is_class(uneven, ErrorClass::KrishivInvalidPythonRelation));
     let wrong = left.cogroup_apply_in_python(
         &right,
         [left.col("id")],
@@ -160,6 +166,6 @@ fn cogroup_needs_matching_key_counts_and_a_cogrouped_kind() -> R {
         &udf(PythonEvalType::MapPandasIter, structure()),
         1,
     );
-    assert!(is_class(wrong, ErrorClass::InternalError));
+    assert!(is_class(wrong, ErrorClass::KrishivInvalidPythonRelation));
     Ok(())
 }

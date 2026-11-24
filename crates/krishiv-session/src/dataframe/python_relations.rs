@@ -6,7 +6,9 @@
 
 use std::sync::Arc;
 
-use krishiv_common::error::{InternalError, KrishivError, KrishivUnsupportedFeature};
+use krishiv_common::error::{
+    KrishivError, KrishivInvalidPythonRelation, KrishivUnsupportedFeature,
+};
 use krishiv_plan::{AttrId, BoundColumn, PlanNode, PythonEvalType, PythonUdfRef};
 use krishiv_types::DataType;
 
@@ -21,8 +23,8 @@ fn relation_udf(
     accept: &[PythonEvalType],
 ) -> Result<(PythonUdfRef, Vec<BoundColumn>), KrishivError> {
     if !accept.contains(&def.eval_type) {
-        return Err(InternalError {
-            message: format!(
+        return Err(KrishivInvalidPythonRelation {
+            reason: format!(
                 "a Python UDF of eval type {:?} cannot run as this relation",
                 def.eval_type
             ),
@@ -30,8 +32,8 @@ fn relation_udf(
         .into());
     }
     let DataType::Struct(fields) = &def.return_type else {
-        return Err(InternalError {
-            message: format!(
+        return Err(KrishivInvalidPythonRelation {
+            reason: format!(
                 "the return type of a Python relation UDF must be a struct, got {}",
                 def.return_type.sql()
             ),
@@ -65,7 +67,7 @@ impl DataFrame {
     /// and its rows are what it yields, typed as `def`'s struct return type.
     ///
     /// # Errors
-    /// `KRISHIV_INTERNAL_ERROR` for a UDF that is not a map kind (205, 207) or whose return type is not a
+    /// `KRISHIV_INVALID_PYTHON_RELATION` for a UDF that is not a map kind (205, 207) or whose return type is not a
     /// struct.
     pub fn map_in_python(
         &self,
@@ -90,7 +92,7 @@ impl DataFrame {
     /// the UDF sees the left rows then the right rows (an empty side for a key on one side only).
     ///
     /// # Errors
-    /// `KRISHIV_INTERNAL_ERROR` for a UDF that is not a cogrouped-map kind (206, 210) or whose return type is
+    /// `KRISHIV_INVALID_PYTHON_RELATION` for a UDF that is not a cogrouped-map kind (206, 210) or whose return type is
     /// not a struct, or for different key counts.
     pub fn cogroup_apply_in_python(
         &self,
@@ -103,8 +105,8 @@ impl DataFrame {
         let left_keys: Vec<_> = left_keys.into_iter().map(|c| Arc::new(c.expr)).collect();
         let right_keys: Vec<_> = right_keys.into_iter().map(|c| Arc::new(c.expr)).collect();
         if left_keys.len() != right_keys.len() {
-            return Err(InternalError {
-                message: "a cogroup's sides need the same number of grouping keys".to_owned(),
+            return Err(KrishivInvalidPythonRelation {
+                reason: "a cogroup's sides need the same number of grouping keys".to_owned(),
             }
             .into());
         }
@@ -136,7 +138,7 @@ impl GroupedData {
     /// rows, typed as its struct return type.
     ///
     /// # Errors
-    /// `KRISHIV_UNSUPPORTED_FEATURE` for `rollup` and `cube`; `KRISHIV_INTERNAL_ERROR` for a UDF that is not a
+    /// `KRISHIV_UNSUPPORTED_FEATURE` for `rollup` and `cube`; `KRISHIV_INVALID_PYTHON_RELATION` for a UDF that is not a
     /// grouped-map kind (201, 209, 215, 216) or whose return type is not a struct.
     pub fn apply_in_python(
         &self,

@@ -124,7 +124,7 @@ note = "Embedded relation UDFs run on the Python pool, one pool thread per task 
 
 [[surface]]
 group = "User-defined functions"
-name = "Scalar-iterator `pandas_udf`"
+name = "Scalar-iterator `pandas_udf` / `arrow_udf`"
 status = "not yet"
 note = "Refused as NOT_IMPLEMENTED when embedded."
 

@@ -260,6 +260,12 @@
     ],
     "sqlState" : "22023"
   },
+  "KRISHIV_INVALID_PYTHON_RELATION" : {
+    "message" : [
+      "The Python relation (mapInPandas, applyInPandas and their Arrow forms) is invalid: <reason>."
+    ],
+    "sqlState" : "42000"
+  },
   "KRISHIV_INVALID_OPERATION_TAG" : {
     "message" : [
       "<reason>"

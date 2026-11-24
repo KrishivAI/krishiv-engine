@@ -419,7 +419,8 @@ impl FrameSource {
     fn close(&self, py: Python<'_>) {
         // Dropping the receiver makes every later send fail, which the engine side takes as "ended". The lock
         // is taken detached while it waits: another Python thread may hold it inside `next`, waiting for a
-        // frame.
+        // frame. That cannot hang today: only the vendored `relations.py` runner sees the source, and it never
+        // calls `close` while another of its threads is in `next`.
         drop(
             self.frames
                 .lock_py_attached(py)
