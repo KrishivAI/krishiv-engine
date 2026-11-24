@@ -367,7 +367,11 @@ SHARED_ID = "01932a40-1a00-7a01-8001-00000000000c"
 # A query the fixture answers with no plan tree.
 NO_PLAN_ID = "01932a40-1a00-7a01-8001-00000000000a"
 NO_PLAN_ASKED = [0]
-Q9_PROFILE = json.loads((HERE.parent.parent / "python" / "tests" / "fixtures" / "q09-profile.json").read_text())
+Q9_PROFILE = json.loads(
+    (
+        HERE.parent.parent / "python" / "tests" / "fixtures" / "q09-profile.json"
+    ).read_text()
+)
 # A profile's metric -> the operator column the page reads, as `ProfilesSource::from_profiles` names them.
 OPERATOR_METRICS = {
     "drivers": "drivers",
@@ -401,7 +405,10 @@ def history(query: str) -> list[dict]:
         if client in (q.get("client_type") or "").lower()
         and (not session or q.get("session_id") == session)
         and statement in (q.get("query_text") or "").lower()
-        and (not tag or any(tag in (k, f"{k}={v}") for k, v in (q.get("tags") or {}).items()))
+        and (
+            not tag
+            or any(tag in (k, f"{k}={v}") for k, v in (q.get("tags") or {}).items())
+        )
     ]
 
 
@@ -429,7 +436,8 @@ def compare(query: str) -> tuple[int, dict]:
             (
                 q
                 for q in DATA["history"]
-                if [q["query_id"]] == asked.get(side) and (session is None or [q.get("session_id")] == session)
+                if [q["query_id"]] == asked.get(side)
+                and (session is None or [q.get("session_id")] == session)
             ),
             None,
         )
@@ -485,7 +493,10 @@ def stored_detail(query_id: str, profile: dict, sql: str) -> dict:
             "compute_ns": hot["compute_ns"],
         },
         # The server sends a node's id, name and children, never its detail text.
-        "plan": [{"id": n["id"], "name": n["name"], "children": n["children"]} for n in profile["plan"]],
+        "plan": [
+            {"id": n["id"], "name": n["name"], "children": n["children"]}
+            for n in profile["plan"]
+        ],
         "warnings": [],
     }
 
@@ -564,7 +575,9 @@ def route(
         # A query that has just ended: its profile is written a moment later, so the first answers carry no
         # plan and a later one does.
         LATE_PLAN_ASKED[0] += 1
-        return d["detail"] | ({} if LATE_PLAN_ASKED[0] > 2 else {"plan": None, "plan_pending": True})
+        return d["detail"] | (
+            {} if LATE_PLAN_ASKED[0] > 2 else {"plan": None, "plan_pending": True}
+        )
     if path.startswith("/api/internal/queries/"):
         return d["detail"]
     return None
@@ -609,14 +622,19 @@ class Handler(BaseHTTPRequestHandler):
         self.csp = CSP
         if url.path == "/api/internal/embed/config":
             # Needs no token, as on the real server (the embedded page has no session).
-            return self.send_json(200, {"allowed_origins": [EMBED_PARENT], "hide_attribution": False})
+            return self.send_json(
+                200, {"allowed_origins": [EMBED_PARENT], "hide_attribution": False}
+            )
         if url.path.startswith("/api/internal/embed/queries/"):
             # Blank values are kept: `session=` names a session (an empty one), which no link was signed for.
             asked = parse_qs(url.query, keep_blank_values=True)
             # `ok` is a link for the id alone; `ok-session` was signed for EMBED_SESSION, as the server signs a
             # link that names a session, so the read must name it too.
             valid = asked.get("sig") == ["ok"] and "session" not in asked
-            valid = valid or (asked.get("sig") == ["ok-session"] and asked.get("session") == [EMBED_SESSION])
+            valid = valid or (
+                asked.get("sig") == ["ok-session"]
+                and asked.get("session") == [EMBED_SESSION]
+            )
             if not valid:
                 return self.send_json(401, {"error": "unauthorized"})
             return self.send_json(200, DATA["detail"])
@@ -651,8 +669,12 @@ class Handler(BaseHTTPRequestHandler):
                 try:
                     while True:
                         if self.role == "admin":
-                            self.wfile.write(f"event: environment\ndata: {json.dumps(ENVIRONMENT)}\n\n".encode())
-                        self.wfile.write(f"event: queries\ndata: {json.dumps({'queries': DATA['live']})}\n\n".encode())
+                            self.wfile.write(
+                                f"event: environment\ndata: {json.dumps(ENVIRONMENT)}\n\n".encode()
+                            )
+                        self.wfile.write(
+                            f"event: queries\ndata: {json.dumps({'queries': DATA['live']})}\n\n".encode()
+                        )
                         self.wfile.flush()
                         time.sleep(1)
                 except (BrokenPipeError, ConnectionResetError):
@@ -677,7 +699,11 @@ class Handler(BaseHTTPRequestHandler):
                 self.server.groups,  # type: ignore[attr-defined]
                 self.server.advice,  # type: ignore[attr-defined]
             )
-            return self.send_json(200, body) if body is not None else self.send_json(404, {"error": "not_found"})
+            return (
+                self.send_json(200, body)
+                if body is not None
+                else self.send_json(404, {"error": "not_found"})
+            )
         # Only files that were in the asset folder at start-up are served, looked up by their relative name:
         # no path is built from the request, so nothing outside the folder can be named.
         name = url.path.lstrip("/") or "index.html"
@@ -746,7 +772,10 @@ class Handler(BaseHTTPRequestHandler):
                     "state": "finished",
                     "columns": [f"a_long_column_name_{i}" for i in range(12)],
                     "rows": [
-                        ["lorem ipsum " * 50 if (r, c) == (0, 1) else r * 1000 + c for c in range(12)]
+                        [
+                            "lorem ipsum " * 50 if (r, c) == (0, 1) else r * 1000 + c
+                            for c in range(12)
+                        ]
                         for r in range(40)
                     ],
                     "truncated": False,
@@ -772,7 +801,9 @@ class Handler(BaseHTTPRequestHandler):
                         "queries_running": 0,
                     }
                     self.server.closed.append(session_id)  # type: ignore[attr-defined]
-                    return self.send_json(200, {"closed": True, "queries_cancelled": cancelled})
+                    return self.send_json(
+                        200, {"closed": True, "queries_cancelled": cancelled}
+                    )
             return self.send_json(
                 404,
                 {
