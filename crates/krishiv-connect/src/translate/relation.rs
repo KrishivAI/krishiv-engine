@@ -188,6 +188,9 @@ impl Translator<'_> {
             },
             RelType::WithColumnsRenamed(w) => self.with_columns_renamed(w)?,
             RelType::Drop(d) => self.drop_columns(d)?,
+            // Spark 4.3's `Zip`: the columns of two DataFrames side by side (the analyzer merges the two
+            // projection chains over their shared base, or refuses with `ZIP_PLANS_NOT_MERGEABLE`).
+            RelType::Zip(z) => self.zip(z)?,
             RelType::Extension(any) => match resolve(any, Slot::Relation)? {
                 // One row, one string column: `SELECT '<message>' AS message`.
                 Extension::Echo(echo) => PlanNode::Project {
@@ -494,6 +497,16 @@ impl Translator<'_> {
         Ok(PlanNode::ColumnNames {
             input: self.input("WithColumnsRenamed", w.input.as_deref())?,
             op: ColumnNamesOp::Rename(pairs),
+        })
+    }
+
+    /// Its own function, not inline in the relation match: that frame is recursed through, and a
+    /// deep relation tree must still translate on a small stack.
+    #[inline(never)]
+    fn zip(&mut self, z: &pb::Zip) -> Result<PlanNode> {
+        Ok(PlanNode::Zip {
+            left: self.input("Zip", z.left.as_deref())?,
+            right: self.input("Zip", z.right.as_deref())?,
         })
     }
 

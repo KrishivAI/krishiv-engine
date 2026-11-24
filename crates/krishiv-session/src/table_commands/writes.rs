@@ -188,13 +188,24 @@ impl Session {
         }
         let table = self.table_for_write(&name, "INSERT", &env)?;
         if replace {
+            if c.replace_where.is_some() {
+                // Spark 4.3.0 runs REPLACE WHERE on DSv2 tables only; a Parquet or Hive table (every table
+                // here) fails with this class, with or without a column list
+                // (`tests/fixtures/spark-4.3.0/write-semantics/replace_where.json`). 4.2 reaches the V1
+                // write and refuses there.
+                return Err(
+                    if self.state.profile >= krishiv_plan::analyzer::SparkProfile::V4_3 {
+                        table_operation(&name, "INSERT INTO ... REPLACE WHERE")
+                    } else {
+                        krishiv_common::error::LegacyErrorTemp1012 {
+                            identifier: name.quoted(),
+                        }
+                        .into()
+                    },
+                );
+            }
             // A session-catalog table has no replace-by-condition write (Spark: the table lacks the capability).
-            let operation = if c.replace_where.is_some() {
-                "INSERT INTO ... REPLACE WHERE"
-            } else {
-                "INSERT INTO ... REPLACE ON/USING"
-            };
-            return Err(table_operation(&name, operation));
+            return Err(table_operation(&name, "INSERT INTO ... REPLACE ON/USING"));
         }
         let statics = match &c.partition {
             None => Vec::new(),
@@ -422,9 +433,16 @@ impl Session {
                 .map_err(|e| overflow_in_table_insert(e, &assigned, &output, &assignment));
         }
         let _ = reads_target;
+        let key = target
+            .options
+            .and_then(|o| super::explicit_key(o, |v: &OptionValue| v.as_plain()));
+        // A key given as a secret is refused, as on a write to a path, never dropped.
+        if let Some(o) = target.options {
+            crate::session::writes::write_idempotency_key(&self.state.runtime.config, o)?;
+        }
         if dry {
             // Every check of the write, without writing.
-            return self.check_table_write(table, &df, overwrite).await;
+            return self.check_table_write(table, &df, overwrite, key).await;
         }
         let mode = if overwrite { "overwrite" } else { "append" };
         // A RENAME or DROP PARTITION waits until these rows are written and their partitions registered (it could
@@ -440,7 +458,9 @@ impl Session {
         } else {
             None
         };
-        let written = self.write_table_rows(table, &df, mode, &mut None).await;
+        let written = self
+            .write_table_rows(table, &df, mode, key, &mut None)
+            .await;
         // Data may have changed even when the write failed late.
         self.state.catalog.store.bump();
         self.forget_column_stats(name);
@@ -523,6 +543,66 @@ impl Session {
         TableName::resolve(&parts, &self.namespace_for_stored(&parts, env)?, env)
     }
 
+    /// Whether this keyed `saveAsTable` is the retry of a write the managed file table's commit log
+    /// already holds: it then writes nothing, as a path `save` with the same key does (an overwrite
+    /// must not drop what a later write added, an `errorifexists` retry must not fail on the table the
+    /// first try created). The dedup window of a managed table ends at its next overwrite under another
+    /// key: that drop deletes the directory and its log (a path `save` overwrite keeps the log).
+    ///
+    /// What the skipped arm asks of the policy is asked first (an overwrite: `DROP TABLE`, the table
+    /// write, the options and the table's directory; a create: the same without the drop), before the
+    /// log is read or the key checked, so a denial does not depend on the table's log.
+    async fn keyed_retry_is_done(
+        &self,
+        name: &TableName,
+        spec: &V2WriteSpec,
+        mode: krishiv_io::SaveMode,
+        env: &QueryEnv,
+    ) -> Result<bool, KrishivError> {
+        let Some(table) = self.state.catalog.store.table(&name.namespace, &name.name) else {
+            return Ok(false);
+        };
+        if !table.managed {
+            return Ok(false);
+        }
+        // A Delta table's overwrite is a data overwrite in place and its writer handles the key
+        // itself: the shortcut would ask the policy more than that arm does.
+        #[cfg(feature = "delta")]
+        if super::delta::is_delta_table(&table) {
+            return Ok(false);
+        }
+        // A write without a key never takes the shortcut: the arm it falls to asks for itself. An
+        // invalid key counts as keyed, so its error comes after the checks.
+        let keyed = crate::session::writes::write_idempotency_key(&env.config, &spec.options)
+            .map_or(true, |key| key.is_some());
+        if !keyed {
+            return Ok(false);
+        }
+        if mode == krishiv_io::SaveMode::Overwrite {
+            self.authorize_equivalent(name, "DROP TABLE {}", env)
+                .await?;
+        }
+        self.authorize_table_write(name, true, env).await?;
+        let location = managed_location(&self.warehouse_dir()?, &name.namespace, &name.name);
+        self.authorize_write_options(&spec.options, &BTreeMap::new())
+            .await?;
+        let at = self.locate_write_path(&location.display().to_string(), &spec.options, env)?;
+        self.authorize_write_path(&at).await?;
+        let checked =
+            self.locate_write_path(&table.location.display().to_string(), &spec.options, env)?;
+        // The table's own location can differ from the warehouse's (it moved), and its commit log is
+        // read below: the policy is asked of that path too.
+        self.authorize_write_path(&checked).await?;
+        crate::session::writes::key_already_committed(
+            &env.config,
+            &spec.options,
+            &env.io,
+            &checked.at.store,
+            &checked.at,
+        )
+        .await
+    }
+
     /// `DataFrameWriter.saveAsTable`: Spark's V1 save modes over a table. The
     /// table is created from the DataFrame's schema (an existing one in
     /// `errorifexists` mode fails with `TABLE_OR_VIEW_ALREADY_EXISTS`),
@@ -549,6 +629,14 @@ impl Session {
             .store
             .table(&name.namespace, &name.name)
             .is_some();
+        // A keyed retry of a write the table's commit log already holds writes nothing.
+        if exists
+            && matches!(mode, SaveMode::Overwrite | SaveMode::ErrorIfExists)
+            && !self.temp_entry_of(&name, &env)
+            && self.keyed_retry_is_done(&name, &spec, mode, &env).await?
+        {
+            return Ok(());
+        }
         match (mode, exists) {
             (SaveMode::Ignore, true) => {
                 // A no-op create is still authorized, as the SQL path does, so a denial
@@ -827,6 +915,14 @@ impl Session {
                 let at =
                     self.locate_write_path(&location.display().to_string(), &spec.options, &env)?;
                 self.authorize_write_path(&at).await?;
+                // A key the new table's write would refuse (empty, secret, no commit log): not
+                // after the drop.
+                crate::session::writes::refuse_unkeyable_fresh_write(
+                    &env.config,
+                    &spec.options,
+                    &self.state.commit_log_probes,
+                    &at.at,
+                )?;
                 // A managed table's own directory goes with it; any other one in the way stays.
                 let own = self
                     .state
@@ -1030,9 +1126,10 @@ impl Session {
         table: &CatalogTable,
         df: &DataFrame,
         mode: &str,
+        key: Option<&str>,
         pre: &mut Option<Admitted>,
     ) -> Result<Vec<String>, KrishivError> {
-        table_writer(table, df, mode)?
+        table_writer(table, df, mode, key)?
             .save_reporting(&table.location.display().to_string(), pre.take())
             .await
     }
@@ -1043,9 +1140,10 @@ impl Session {
         table: &CatalogTable,
         df: &DataFrame,
         overwrite: bool,
+        key: Option<&str>,
     ) -> Result<(), KrishivError> {
         let mode = if overwrite { "overwrite" } else { "append" };
-        table_writer(table, df, mode)?
+        table_writer(table, df, mode, key)?
             .check_save(&table.location.display().to_string())
             .await
     }

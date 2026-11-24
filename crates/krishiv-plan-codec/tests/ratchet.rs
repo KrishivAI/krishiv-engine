@@ -121,3 +121,55 @@ fn q10_and_q35_run_two_existence_joins() {
         assert_round_trips(q, &plan);
     }
 }
+
+/// A plan with a security barrier (design `P3-E14-security-barrier.md` §6, §7.4): its guarded
+/// scans are coordinator-side, so the codec does not carry them. The decoded plan equals the plan
+/// with the set cleared, and differs from the plan itself while the set is not empty, which is
+/// why the serialize-through mode (`krishiv-session` `plan_round_trip.rs`) compares with
+/// `without_guarded`.
+#[test]
+fn a_barrier_plan_round_trips_without_its_guarded_scans() {
+    use std::sync::Arc;
+
+    use krishiv_common::{Principal, PrincipalKey, PrincipalKind};
+    use krishiv_plan::analyzer::{Securable, TableIdent};
+    use krishiv_plan::{LogicalPlan, Plan, PlanNode, PolicyRef, ReadSource};
+
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let suite = Suite::tpch(&rt);
+    let policy = PolicyRef::new(
+        Securable::Table(TableIdent {
+            catalog: "spark_catalog".to_owned(),
+            namespace: vec!["default".to_owned()],
+            name: "lineitem".to_owned(),
+        }),
+        PrincipalKey::of(&Principal::new("ana", PrincipalKind::User)),
+        1,
+    );
+    let guard = |plan: Plan| {
+        let root = Arc::clone(plan.root())
+            .transform_up(&mut |p| {
+                let lineitem = matches!(&p.node, PlanNode::Scan(s)
+                    if matches!(&s.source, ReadSource::Table { name, .. }
+                        if name.last().is_some_and(|n| n == "lineitem")));
+                Ok::<_, std::convert::Infallible>(if lineitem {
+                    Arc::new(LogicalPlan::clone(&p).security_barrier(policy.clone()))
+                } else {
+                    p
+                })
+            })
+            .unwrap_or_else(|e| match e {});
+        Plan::try_new(root).unwrap()
+    };
+    let sql = "SELECT l_orderkey, o_orderdate FROM lineitem JOIN orders ON l_orderkey = o_orderkey \
+               WHERE l_quantity < 10 AND o_orderpriority = '1-URGENT'";
+    let plan = suite.plan_with(sql, &guard).unwrap();
+    assert!(!plan.guarded().is_empty(), "{plan}");
+    let back = decode(&encode(&plan).unwrap()).unwrap();
+    assert!(back.guarded().is_empty());
+    assert!(
+        back == plan.clone().without_guarded(),
+        "decode(encode(p)) != p without its set"
+    );
+    assert!(back != plan, "the guarded set is part of plan equality");
+}

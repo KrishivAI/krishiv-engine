@@ -205,6 +205,30 @@ pub(super) async fn authorize_columns(
     if !ctx.policy.column_level() {
         return Ok(());
     }
+    // The pairs the loop below asks, in one hint first (ADR 0049 §3).
+    let mut items: Vec<(Securable, Privilege)> = Vec::new();
+    for (i, used) in uses.iter().enumerate() {
+        let (Securable::Table(table) | Securable::View(table)) = &used.securable else {
+            continue;
+        };
+        if definer_only.contains(&i) || used.privilege != Privilege::Select {
+            continue;
+        }
+        let read = reads.get(i);
+        if read.is_none_or(|r| r.whole) {
+            items.push((used.securable.clone(), Privilege::Select));
+        }
+        for column in read.map(|r| &r.columns).into_iter().flatten() {
+            let securable = Securable::Column {
+                table: table.clone(),
+                column: column.clone(),
+            };
+            items.push((securable, Privilege::Select));
+        }
+    }
+    if !items.is_empty() {
+        ctx.policy.prefetch(&ctx.principal, &items).await;
+    }
     for (i, used) in uses.iter().enumerate() {
         if definer_only.contains(&i) {
             continue;

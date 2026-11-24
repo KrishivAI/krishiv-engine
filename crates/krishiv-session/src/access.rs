@@ -29,8 +29,10 @@ use krishiv_sql::{
     statement_targets,
 };
 
+mod intersection;
 mod path_prefix;
 
+pub use intersection::{IntersectionPolicy, SystemOnlyPolicy};
 pub use path_prefix::PathPrefixPolicy;
 pub(crate) use path_prefix::{allowed_roots, resolve_links};
 
@@ -356,11 +358,15 @@ fn log_denial(session: &Session, class: StatementClass, e: &KrishivError) {
     // ADR 0046 §5: the client's own `user_id` is recorded, marked unverified, never used.
     let client_user_id = session.state.activity.client_user_id();
     let provider = if session.state.grants.is_some() {
-        crate::grants::denial_provider(e)
+        crate::grants::denial_provider(e).as_str()
     } else {
-        crate::grants::DecidedBy::Roles
-    }
-    .as_str();
+        // Another provider in a list (`external`, ADR 0049 §3) names itself; the role matrix otherwise.
+        session
+            .state
+            .policy
+            .refusal_label()
+            .unwrap_or(crate::grants::DecidedBy::Roles.as_str())
+    };
     // A refusal of a principal acting for this one (the definer of a `SQL SECURITY DEFINER` view
     // the session read, P3-T062 §2.4) names it: the record shows both.
     let own =
@@ -411,7 +417,16 @@ impl Session {
         class: StatementClass,
         env: &QueryEnv,
     ) -> Result<(), KrishivError> {
+        self.fresh_access_stage().await;
         self.check_targets(statement, env, Some(class)).await
+    }
+
+    /// Ends whatever prefetch stage an earlier statement left (one cancelled before its checks
+    /// consumed the answers it prefetched): an empty [`AccessPolicy::prefetch`] clears a
+    /// provider's stage state without asking anything, so the checks that follow, made outside
+    /// any analysis stage, ask the provider rather than reuse an earlier answer.
+    async fn fresh_access_stage(&self) {
+        self.state.policy.prefetch(&self.state.principal, &[]).await;
     }
 
     /// Whether [`Self::authorize_statement`] of `statement` would pass, asked as it asks (the same
@@ -940,6 +955,7 @@ impl Session {
         privilege: Privilege,
         class: StatementClass,
     ) -> Result<(), KrishivError> {
+        self.fresh_access_stage().await;
         let r = authorize(
             &*self.state.policy,
             &self.state.principal,
@@ -960,6 +976,7 @@ impl Session {
         privilege: Privilege,
         env: &QueryEnv,
     ) -> Result<(), KrishivError> {
+        self.fresh_access_stage().await;
         let parts = [
             crate::catalog::CATALOG.to_owned(),
             namespace.to_owned(),
@@ -984,6 +1001,7 @@ impl Session {
         table: &str,
         env: &QueryEnv,
     ) -> Result<Vec<(String, krishiv_types::DataType)>, KrishivError> {
+        self.fresh_access_stage().await;
         let parts = ["system".to_owned(), table.to_owned()];
         let ident = table_ident(&*env.analysis.catalogs, &parts)
             .ok_or_else(|| unplaceable("an empty name"))?;
@@ -1323,6 +1341,7 @@ pub(crate) async fn authorize_checked(
     privileges: &[Privilege],
     class: StatementClass,
 ) -> Result<(), KrishivError> {
+    session.fresh_access_stage().await;
     let asked = Securable::Path(OptionValue::from_user("path", checked.at.display.clone()));
     for privilege in privileges {
         let r = authorize(
@@ -1474,6 +1493,22 @@ impl AccessPolicy for ReadOnlyPolicy {
     fn denied(&self, principal: &Principal, securable: &Securable, privilege: Privilege) {
         self.inner.denied(principal, securable, privilege);
     }
+
+    fn prefetch<'a>(
+        &'a self,
+        principal: &'a Principal,
+        items: &'a [(Securable, Privilege)],
+    ) -> BoxFuture<'a, ()> {
+        self.inner.prefetch(principal, items)
+    }
+
+    fn decides(&self, securable: &Securable) -> bool {
+        self.inner.decides(securable)
+    }
+
+    fn refusal_label(&self) -> Option<&'static str> {
+        self.inner.refusal_label()
+    }
 }
 
 /// The policy of a trial analysis ([`crate::session::QueryEnv::set_quiet_denials`], P3 PR-14d):
@@ -1510,6 +1545,22 @@ impl AccessPolicy for QuietPolicy {
     }
 
     // `denied` keeps the default: told nothing.
+
+    fn prefetch<'a>(
+        &'a self,
+        principal: &'a Principal,
+        items: &'a [(Securable, Privilege)],
+    ) -> BoxFuture<'a, ()> {
+        self.inner.prefetch(principal, items)
+    }
+
+    fn decides(&self, securable: &Securable) -> bool {
+        self.inner.decides(securable)
+    }
+
+    fn refusal_label(&self) -> Option<&'static str> {
+        self.inner.refusal_label()
+    }
 }
 
 /// `KRISHIV_RESERVED_NAME` for a statement that creates, replaces, drops or

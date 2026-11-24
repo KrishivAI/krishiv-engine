@@ -254,7 +254,7 @@ def test_writeto_create_twice_fails_and_replace_is_unsupported(df: DataFrame) ->
 
 def test_writeto_failing_create_leaves_no_table(df: DataFrame) -> None:
     with pytest.raises(errors.AnalysisException) as bad:
-        df.writeTo("t").using("delta").create()
+        df.writeTo("t").using("nosuchformat").create()
     assert bad.value.getCondition() == "DATA_SOURCE_NOT_FOUND"
     with pytest.raises(errors.AnalysisException) as bad:
         df.sparkSession.table("t").collect()

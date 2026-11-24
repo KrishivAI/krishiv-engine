@@ -22,8 +22,10 @@ How it runs here:
   acceptance of this API stays open.
 * Interim embedded path: the read is materialised in memory when a scan runs (capped by
   ``KRISHIV_PYTHON_DATA_SOURCE_LIMIT``), not streamed per partition as the design's read operator will.
-* The ``DataSource`` instance is created once by ``load`` and reused by every plan of the DataFrame (Spark
-  re-creates it from the pickled class for each planning), so state a reader keeps on it lasts across actions.
+* The ``DataSource`` instance is created once by ``load`` and reused by every plan of the DataFrame. Spark
+  pickles the instance after ``schema()`` and unpickles that copy for each planning, so state set in
+  ``__init__`` or ``schema()`` reaches the reader, but state set during one planning or action does not
+  reach the next. Do not rely on such state: a reader that runs on a worker will not see it.
 * The streaming classes (``DataSourceStreamReader``, ``SimpleDataSourceStreamReader``,
   ``DataSourceStreamWriter``, ``DataSourceStreamArrowWriter``) are P4: ``streamReader`` and
   ``streamWriter`` raise ``NOT_IMPLEMENTED``.
