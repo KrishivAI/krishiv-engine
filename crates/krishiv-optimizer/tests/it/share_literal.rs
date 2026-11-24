@@ -86,6 +86,19 @@ fn q75_reads_the_channels_once() {
     fixed_point(&on);
 }
 
+/// q39 reads `inventory` for `d_moy = 1` and `2`, each reader with its own
+/// filter (`cov > 1`) above the rule's `d_moy = k`: the two merge in the same
+/// run (the Tidy batch after the rule), so one optimization is a fixed point.
+#[test]
+fn q39_readers_filters_merge_in_one_run() {
+    let sql = tpcds::sql(39);
+    let off = optimize(&sql, false);
+    let on = optimize(&sql, true);
+    assert_eq!(scans(off.root(), "inventory"), 2, "{}", off.root());
+    assert_eq!(scans(on.root(), "inventory"), 1, "{}", on.root());
+    fixed_point(&on);
+}
+
 const BY_KEY: &str = "WITH c AS (SELECT ss_store_sk, ss_quantity, sum(ss_net_paid) AS paid \
      FROM store_sales GROUP BY ss_store_sk, ss_quantity) \
      SELECT a.ss_store_sk, a.paid, b.paid FROM c a, c b \

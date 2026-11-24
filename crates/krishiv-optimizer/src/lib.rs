@@ -878,9 +878,17 @@ fn run(
                     .unwrap_or(false)
             });
         let root = if literals {
-            t.once("ShareLiteralInstances", &root, |r| {
+            let after = t.once("ShareLiteralInstances", &root, |r| {
                 share_literal::share(Arc::clone(r), direct)
-            })?
+            })?;
+            // A reader's own filters (q11's `year_total > 0`) sit above the
+            // projection over its `g = k` filter: tidied here, as a second
+            // optimization would, so the plan stays a fixed point.
+            if Arc::ptr_eq(&after, &root) {
+                after
+            } else {
+                batch(after, "Tidy", &mut t)?
+            }
         } else {
             root
         };
