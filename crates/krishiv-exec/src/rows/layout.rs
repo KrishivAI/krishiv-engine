@@ -205,6 +205,9 @@ fn encode_fixed<
     hashes: &mut [u64],
     values: [&[u8]; 2],
 ) {
+    const {
+        assert!(O0 + W0 <= S && O1 + W1 <= S && W0 <= 8 && W1 <= 8);
+    }
     let start = fold(SEEDLESS, MIX);
     let (rows, _) = rows.as_chunks_mut::<S>();
     let (a, _) = values[0].as_chunks::<W0>();
@@ -466,8 +469,9 @@ impl RowLayout {
     }
 
     /// The value bytes of each key column for the specialized encoder, or
-    /// `None` when the batch must take the general path (a NULL, a column
-    /// of another type or length: the general path raises those).
+    /// `None` when the batch must take the general path: a NULL (which that
+    /// path encodes, or refuses in a key declared non-nullable), or a column
+    /// of another type or length (which it refuses).
     fn fast_values(&self, columns: &[ArrayRef], n: usize) -> Option<[Option<ArrayData>; 2]> {
         let mut out = [None, None];
         for ((slot, column), array) in out.iter_mut().zip(&self.columns).zip(columns) {
@@ -1476,18 +1480,35 @@ mod tests {
     /// NULL takes the general path.
     #[test]
     fn the_fixed_key_encoders_match_the_general_path() {
-        use arrow_array::{Date32Array, Int32Array, Int64Array, TimestampMicrosecondArray};
+        use arrow_array::{
+            Date32Array, Decimal32Array, Decimal64Array, Int32Array, Int64Array,
+            TimestampMicrosecondArray, UInt32Array, UInt64Array,
+        };
         let n = 300;
         let v64 = |s: i64| (0..n).map(move |i| (i as i64 * 0x9E37_79B9 + s) ^ (s << 40));
         #[expect(clippy::cast_possible_truncation, reason = "test values")]
         let v32 = |s: i64| v64(s).map(|v| v as i32);
+        #[expect(clippy::cast_sign_loss, reason = "test values")]
         let four: Vec<ArrayRef> = vec![
-            Arc::new(Int32Array::from_iter_values(v32(1))),
+            Arc::new(Int32Array::from_iter_values(v32(1).map(|v| -v.abs()))),
             Arc::new(Date32Array::from_iter_values(v32(2))),
+            Arc::new(UInt32Array::from_iter_values(v32(5).map(|v| v as u32))),
+            Arc::new(
+                Decimal32Array::from_iter_values(v32(6).map(|v| v % 100_000))
+                    .with_precision_and_scale(9, 2)
+                    .expect("decimal"),
+            ),
         ];
+        #[expect(clippy::cast_sign_loss, reason = "test values")]
         let eight: Vec<ArrayRef> = vec![
             Arc::new(Int64Array::from_iter_values(v64(3))),
             Arc::new(TimestampMicrosecondArray::from_iter_values(v64(4))),
+            Arc::new(UInt64Array::from_iter_values(v64(7).map(|v| v as u64))),
+            Arc::new(
+                Decimal64Array::from_iter_values(v64(8).map(|v| v % 1_000_000_000))
+                    .with_precision_and_scale(18, 3)
+                    .expect("decimal"),
+            ),
         ];
         let all: Vec<&ArrayRef> = four.iter().chain(&eight).collect();
         let mut cases: Vec<Vec<ArrayRef>> = all.iter().map(|a| vec![Arc::clone(a)]).collect();
@@ -1521,13 +1542,43 @@ mod tests {
                 }
             }
         }
-        assert_eq!(shapes, 4 * 2 + 16 * 3);
-        // A NULL in a nullable key: the general path writes its bit.
+        assert_eq!(shapes, 8 * 2 + 64 * 3);
+        // A batch with a NULL takes the general path: a nullable key writes
+        // its bit, a join key compared with `=` its zero bytes, a key
+        // declared non-nullable refuses it; so does a column of another
+        // length.
         let with_null: ArrayRef = Arc::new(Int64Array::from(vec![Some(1), None, Some(3)]));
-        let layout = RowLayout::new(&[DataType::Int64], &[true]).expect("layout");
-        let keys = layout.encode(&[with_null]).expect("encode");
+        let other: ArrayRef = Arc::new(Int32Array::from(vec![Some(-4), Some(5), None]));
+        for layout in [
+            RowLayout::new(&[DataType::Int64, DataType::Int32], &[true, true]),
+            RowLayout::for_join(&[DataType::Int64, DataType::Int32], &[false, true]),
+        ] {
+            let layout = layout.expect("layout");
+            assert!(layout.fast.is_some());
+            let general = RowLayout {
+                fast: None,
+                ..layout.clone()
+            };
+            let batch = [Arc::clone(&with_null), Arc::clone(&other)];
+            let (a, b) = (
+                layout.encode(&batch).expect("fast"),
+                general.encode(&batch).expect("general"),
+            );
+            assert_eq!(a.rows, b.rows);
+            assert_eq!(a.hashes, b.hashes);
+        }
+        let keys = RowLayout::new(&[DataType::Int64], &[true])
+            .expect("layout")
+            .encode(&[Arc::clone(&with_null)])
+            .expect("encode");
         assert_eq!(keys.row(1)[KEYS_START], 1);
         assert_ne!(keys.hashes()[0], keys.hashes()[1]);
+        let strict = RowLayout::new(&[DataType::Int64], &[false]).expect("layout");
+        assert!(strict.encode(&[Arc::clone(&with_null)]).is_err());
+        let short: ArrayRef = Arc::new(Int32Array::from(vec![1, 2]));
+        let pair =
+            RowLayout::new(&[DataType::Int64, DataType::Int32], &[false, false]).expect("layout");
+        assert!(pair.encode(&[Arc::clone(&with_null), short]).is_err());
         // Other widths and types keep the general path.
         for t in [
             DataType::Int16,
