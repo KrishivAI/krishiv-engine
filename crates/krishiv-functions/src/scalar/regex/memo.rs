@@ -101,12 +101,11 @@ impl Memo {
         if self.window.0 == WINDOW {
             let (lookups, misses) = std::mem::take(&mut self.window);
             if misses * 5 > lookups * 4 {
+                // Off from this lookup on: the map is dropped, so even a hit is evaluated.
                 self.off = OFF_LOOKUPS;
                 self.map = HashMap::default();
                 self.bytes = 0;
-                if !hit {
-                    return Ok(self.scratch.insert(eval(value)?));
-                }
+                return Ok(self.scratch.insert(eval(value)?));
             }
         }
         if hit {
