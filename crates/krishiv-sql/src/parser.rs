@@ -205,8 +205,12 @@ pub(crate) struct Parser<'s> {
     /// its criteria, never an implicit alias.
     asof_right: bool,
     /// Inside the speculative read of an as-of right side (`asof_join_ahead`):
-    /// a further `ASOF JOIN` is taken as one without a read of its own.
+    /// a further `ASOF JOIN` at the same level is taken as one without a read
+    /// of its own (cleared inside a query or a parenthesized relation).
     asof_ahead: bool,
+    /// `asof_join_ahead`'s answer by token position, so a speculative read
+    /// and the real parse after it decide each `ASOF JOIN` once.
+    asof_decided: HashMap<usize, bool>,
 }
 
 /// A part of a `CASE` expression.
@@ -822,6 +826,7 @@ impl<'s> Parser<'s> {
             insert_bodies: false,
             asof_right: false,
             asof_ahead: false,
+            asof_decided: HashMap::new(),
         };
         if has_case {
             parser.closer_ahead = parser.closer_ahead_table(&case_words);
@@ -1311,9 +1316,12 @@ impl<'s> Parser<'s> {
     /// parse and ANTLR resolves to the alias). So `t ASOF JOIN q ON ..` and
     /// `t ASOF JOIN one MATCH_CONDITION (a)` name `t` `ASOF` (Spark 4.3.0 runs).
     ///
-    /// The right side is read once, speculatively. An `ASOF JOIN` met during
-    /// that read is taken as an as-of join without a read of its own, so a
-    /// chain of them is read in linear time and without nesting.
+    /// The right side is read once, speculatively, and the answer kept by
+    /// position. An `ASOF JOIN` met during that read at the same level is taken
+    /// as an as-of join without a read of its own: whichever way it reads, the
+    /// token after the right side is not `MATCH_CONDITION (`, so the answer is
+    /// the same, and a chain of them is read in linear time without nesting.
+    /// Inside a query or parentheses (a new level) the read is a full one.
     fn asof_join_ahead(&mut self) -> bool {
         if !(self.kw_at(0, "ASOF") && self.kw_at(1, "JOIN")) {
             return false;
@@ -1321,6 +1329,10 @@ impl<'s> Parser<'s> {
         if self.asof_ahead {
             return true;
         }
+        if let Some(&ahead) = self.asof_decided.get(&self.pos) {
+            return ahead;
+        }
+        let at = self.pos;
         let checkpoint = self.checkpoint();
         self.pos += 2;
         let outer = std::mem::replace(&mut self.asof_right, true);
@@ -1339,6 +1351,7 @@ impl<'s> Parser<'s> {
             Err(_) => false,
         };
         self.restore(checkpoint);
+        self.asof_decided.insert(at, ahead);
         ahead
     }
 

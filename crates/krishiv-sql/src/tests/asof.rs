@@ -428,3 +428,46 @@ fn pipe_asof_follows_the_grammar() {
     assert_eq!(error(sql, &grammar(false)).0, "PARSE_SYNTAX_ERROR");
     assert!(parse_query(sql, &ParserOptions::default()).is_ok());
 }
+
+/// Inside a query or parentheses on a speculated as-of right side, a nested `ASOF JOIN ... ON`
+/// is read in full (an alias `ASOF`), so both levels parse as Spark 4.3.0 reads them; deep
+/// nesting stays fast (each `ASOF JOIN` decided once).
+#[test]
+fn asof_join_nested_in_a_right_side_is_read_in_full() {
+    for on in [false, true] {
+        for sql in [
+            "SELECT * FROM t ASOF JOIN (SELECT * FROM q ASOF JOIN r ON true) x MATCH_CONDITION (t.a >= x.a)",
+            "SELECT * FROM t ASOF JOIN (q ASOF JOIN r ON true) x MATCH_CONDITION (t.a >= x.a)",
+        ] {
+            if on {
+                let (alias, ext) = left(sql, &grammar(true));
+                assert_eq!(alias, None, "{sql}");
+                assert!(
+                    matches!(ext, Some(RelationExt::Join(ref j)) if matches!(j.constraint, JoinConstraint::AsOf(_))),
+                    "{sql}: {ext:?}"
+                );
+            } else {
+                assert_eq!(
+                    error(sql, &grammar(false)).0,
+                    "UNSUPPORTED_FEATURE.ASOF_JOIN",
+                    "{sql}"
+                );
+            }
+        }
+        let sql = "SELECT * FROM t ASOF JOIN (SELECT * FROM q ASOF JOIN r ON true) ON true";
+        let (alias, _) = left(sql, &grammar(on));
+        assert_eq!(alias.as_deref(), Some("ASOF"), "{sql}");
+    }
+    let mut sql = String::from("SELECT * FROM t0");
+    for n in 1..60 {
+        sql =
+            format!("SELECT * FROM t{n} ASOF JOIN ({sql}) x{n} MATCH_CONDITION (t{n}.a >= x{n}.a)");
+    }
+    let started = std::time::Instant::now();
+    assert!(parse_query(&sql, &grammar(true)).is_ok());
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(2),
+        "{:?}",
+        started.elapsed()
+    );
+}
