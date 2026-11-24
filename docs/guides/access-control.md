@@ -1,22 +1,50 @@
 ---
-description: "Who may read or change what in server mode: the grants provider, roles, and views that run with their owner's rights."
+description: "Who may read or change what: the role matrix and the external policy service of `krishiv server`, and the grants provider (GRANT and REVOKE) of a session built with it."
 ---
 
 # Access control with grants
 
-In server mode, who can read or change what is decided by an **access-policy provider**
-(`krishiv.access.provider`, startup only):
+Who can read or change what is decided by an **access-policy provider**. Which providers you can use depends on
+how Krishiv runs.
 
-| Provider | Decides | Default when |
-|---|---|---|
-| `grants` | data objects (tables, views, columns, namespaces, functions, paths, secrets, connections) by `GRANT` and `REVOKE`; the role matrix still decides the server's own objects; an admin passes every data check | authentication is configured |
-| `roles` | everything on authenticated routes, by the role matrix (`viewer`, `operator`, `admin`) | no authentication |
+> **`krishiv server` does not apply `GRANT` and `REVOKE` yet.** On a server, the role matrix or an external policy
+> service decides. The grants provider described from [Grant and revoke](#grant-and-revoke) on works only in a
+> session that a Rust program builds with it. On a server, `GRANT`, `REVOKE`, `SHOW GRANTS` and the role statements
+> are refused: the error class is `KRISHIV_UNSUPPORTED_FEATURE`, unless the role matrix refuses the statement first.
 
-Without authentication a session has no access policy at all: it allows everything. Configure authentication before you rely on either provider.
+## On `krishiv server`
+
+The provider is set by `krishiv.access.provider` (startup only):
+
+| Value | Decides |
+|---|---|
+| unset or `roles` | everything, by the role matrix (`viewer`, `operator`, `admin`) |
+| `external` | data objects (tables, views, columns, namespaces, functions, paths, secrets, connections), by the policy service at `krishiv.access.external.endpoint`; the role matrix still decides the server's own objects, so a `viewer` may write when the service allows it |
+| `roles+external` | data objects, by the role matrix and the policy service together: both must allow |
+| `grants`, or a list that names it | nothing: the server refuses to start |
+| `catalog` | nothing: refused until it is available |
+
+Under the role matrix a `viewer` sees metadata and its own rows of `system.queries` and `system.sessions`, an
+`operator` also reads tables, views, functions and paths, and only an `admin` writes, creates or drops.
+[Securing a single-node server](single-node-server-security.md) describes the tokens and their roles; the
+`krishiv.access.*` rows of the [configuration reference](../reference/config/index.md) describe the policy service's
+settings.
+
+A server without authentication has no access policy at all: it allows everything, and it refuses to start with
+`external` or `grants`. Configure authentication before you rely on a provider.
 
 On a server with authentication, path confinement (`krishiv.io.local.allowedRoots`,
 `krishiv.io.objectStore.allowedPrefixes`) applies first under every provider; a server without authentication does not
-confine paths. `catalog`, `external` and provider lists are refused for now.
+confine paths.
+
+## In a session with the grants provider
+
+A session opened in Python or with `Session::builder()` has no access policy by default: it allows everything. A Rust
+program gets the grants provider by building its session with `SessionBuilder::grants` and the same policy as
+`SessionBuilder::access_policy` (crate `krishiv-session`, module `grants`). In such a session `GRANT` and `REVOKE`
+decide data objects (tables, views, columns, namespaces, functions, paths, secrets, connections), the policy the
+provider was built over (the role matrix, for example) decides everything else, and an admin passes every data check.
+The rest of this page describes that provider.
 
 ## Grant and revoke
 
@@ -39,8 +67,8 @@ GRANT ROLE analysts TO user:ana;
 
 `WITH GRANT OPTION` lets the grantee pass a privilege on; `REVOKE GRANT OPTION FOR` takes that right away and keeps
 the privilege. Revoking it on a table clears the flag on the table's columns too. The grant option alone does not let a principal
-issue `GRANT`: the role matrix must also allow the statement, so a `viewer` who holds a privilege with grant option
-cannot pass it on.
+issue `GRANT`: when the provider is built over the role matrix, the matrix must also allow the statement, so a
+`viewer` who holds a privilege with grant option cannot pass it on.
 
 `SHOW GRANTS` (a Krishiv extension, 7 columns) lists grants; `SHOW GRANTS ON TABLE t` narrows it to one object. Without the `Monitor` privilege both return only the caller's own
 effective grants, so an empty result is not an audit that nobody else has access. A listing of tables, views or functions shows only the ones the caller may see.
@@ -63,5 +91,5 @@ Dropping a view (`DROP VIEW`) needs the `DROP` privilege on it, as `DROP FUNCTIO
 
 ## Check it
 
-Connect as the principal and run the statement; a denied one fails with an error. For the server's authentication settings see
-[Securing a single-node server](single-node-server-security.md).
+Run the statement as the principal; a denied one fails with `KRISHIV_INSUFFICIENT_PERMISSIONS`. For the server's
+authentication settings see [Securing a single-node server](single-node-server-security.md).
