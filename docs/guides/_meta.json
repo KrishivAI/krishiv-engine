@@ -30,5 +30,6 @@
   "vector-search": "Vector search with SQL",
   "python-table-functions": "Python table functions",
   "run-krishiv-in-docker": "Run Krishiv in Docker",
-  "local-lakehouse-docker-compose": "Local lakehouse with docker compose"
+  "local-lakehouse-docker-compose": "Local lakehouse with docker compose",
+  "streaming": "Streaming: what works today"
 }

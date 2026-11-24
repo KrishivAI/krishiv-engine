@@ -23,7 +23,7 @@ list there. Choosing where Krishiv runs: [Deployment](deploy.md)
 - [Iceberg and Delta tables, and catalogs](lakehouse-tables.md): Iceberg REST catalogs, Delta tables, idempotent writes.
 - [Changing rows in a Delta table](delta-dml.md): UPDATE, DELETE and MERGE INTO.
 - [Python data sources](python-data-sources.md): your own formats through `spark.read.format`.
-- Streaming: Structured Streaming APIs in Python are not available in 0.2; see [Compatibility](../concepts/compatibility.md) for what is and is not supported.
+- [Streaming: what works today](streaming.md): Structured Streaming is not available yet; what to run in batch instead.
 
 **SQL features**
 - [Session settings: time zone, ANSI mode and Spark version](session-settings.md).
