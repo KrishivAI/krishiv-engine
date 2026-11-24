@@ -21,7 +21,7 @@ import tempfile
 import threading
 from html import escape
 from pathlib import Path
-from urllib.parse import quote, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 from playwright.sync_api import Page, expect, sync_playwright
 from playwright.sync_api import TimeoutError as PlaywrightTimeout
@@ -72,7 +72,19 @@ PAGES = [
         "#/advisor",
         ["Advisor", "Partition by", "event_date", "100 of 120", "83.1%"],
     ),
-    ("resources", "#/resources", ["Memory", "Caches", "root/query-1"]),
+    (
+        "resources",
+        "#/resources",
+        [
+            "Memory",
+            "Caches",
+            "root/query-1",
+            "Python UDF workers",
+            "5 of 64 worker processes, 3 busy",
+            "5d0c7a52-etl",
+            "acme",
+        ],
+    ),
     ("catalog", "#/catalog", ["Catalog", "spark_catalog", "Schemas", "Tables"]),
     ("sql", "#/sql", ["SQL", "Run", "Cancel"]),
     ("environment", "#/environment", ["Environment", "krishiv.auth.token", "***"]),
@@ -208,6 +220,25 @@ def embed_checks(origin: str, shots: Path | None) -> list[str]:
                     f"{view}: {m}" for m in log if m.startswith(("error", "warning"))
                 ]
                 ctx.close()
+
+        # 2b. A link that names its query's session: the view sends the session with its read (the server signed
+        # the link with it), and the same link without the session is not valid.
+        for src, valid in (
+            (f"{link}-session&session={quote(fixture_server.EMBED_SESSION)}", True),
+            (f"{link}-session", False),
+            # An empty qualifier is not "no qualifier": the view sends it and the server refuses it.
+            (f"{link}&session=", False),
+        ):
+            ctx = browser.new_context(viewport={"width": 1440, "height": 900})
+            ctx.route("http://parent.test/**", serve_html(parent_html(src)))
+            page = ctx.new_page()
+            page.goto("http://parent.test/")
+            want = "HashJoin" if valid else "This link is not valid"
+            try:
+                page.frame_locator("#f").get_by_text(want).first.wait_for(timeout=10000)
+            except PlaywrightTimeout:
+                problems.append(f"embed link {src!r}: {want!r} is not shown")
+            ctx.close()
 
         # 3. Framed from an origin that is not allowed: the browser blocks it (CSP frame-ancestors).
         ctx = browser.new_context()
@@ -602,7 +633,11 @@ MODE_PAGES = {
         ),
         ("#/queries", ["SELECT l_returnflag", "Cancel"], ["Principal"]),
         ("#/history", ["DIVIDE_BY_ZERO", "State"], ["Principal"]),
-        ("#/resources", ["Memory pools and caches of this process"], []),
+        (
+            "#/resources",
+            ["Memory pools and caches of this process"],
+            ["Python UDF workers"],
+        ),
         ("#/sql", ["Statements run in your session", "Run"], []),
         ("#/environment", ["The settings of this session", "***"], []),
         # The sessions of every client, the resource groups and the advice folded from every principal's
@@ -638,6 +673,7 @@ PROFILES_NEVER = (
     "/sessions",
     "/groups",
     "/advice",
+    "/udf-workers",
 )
 
 
@@ -713,7 +749,9 @@ def mode_checks() -> list[str]:
                 problems += [
                     f"embedded: the page asked for {path}"
                     for path in sorted(set(server.asked))
-                    if path.endswith(("/sessions", "/groups", "/advice"))
+                    if path.endswith(
+                        ("/sessions", "/groups", "/advice", "/udf-workers")
+                    )
                 ]
             if mode == "profiles":
                 problems += [
@@ -755,10 +793,12 @@ def start_checks() -> list[str]:
 
 def filter_checks() -> list[str]:
     """History's filters by client type and tag: a server console has them and they narrow the list; the console
-    of one session has neither."""
+    of one session has neither. Both filter by a part of the statement."""
     problems: list[str] = []
     # One link per listed query; the layout for the other width is in the page too, hidden.
     rows = "main a[href^='#/queries/']:visible"
+    # Zero row links also describes "Loading…" and a failed read: no rows counts only once the list has loaded empty.
+    loaded_empty = "main :text-is('No finished queries match.'):visible"
     with sync_playwright() as p:
         browser = p.chromium.launch()
         for mode in ("server", "embedded"):
@@ -773,6 +813,9 @@ def filter_checks() -> list[str]:
             page.evaluate("window.location.hash = '#/history'")
             page.locator(rows).first.wait_for(timeout=10000)
             fields = [page.get_by_label(n, exact=True) for n in ("Client", "Tag")]
+            statement = page.get_by_label("Statement", exact=True)
+            if statement.count() != 1:
+                problems.append(f"{mode}: History has no Statement filter")
             if mode == "embedded":
                 if any(f.count() for f in fields):
                     problems.append("embedded: History has a Client or Tag filter")
@@ -790,6 +833,10 @@ def filter_checks() -> list[str]:
                     field.fill(typed)
                     # Counted through a locator: the console's policy refuses a script given as text.
                     try:
+                        if want == 0:
+                            expect(page.locator(loaded_empty).first).to_be_visible(
+                                timeout=5000
+                            )
                         expect(page.locator(rows)).to_have_count(want, timeout=5000)
                     except AssertionError:
                         got = page.locator(rows).count()
@@ -798,9 +845,182 @@ def filter_checks() -> list[str]:
                         )
                     field.fill("")
                     expect(page.locator(rows)).to_have_count(4, timeout=5000)
+            # Any part of a statement, in either case and whatever the space around it, in every console.
+            for typed, want in (
+                ("LINEITEM", 2),
+                (" from events ", 1),
+                ("no such statement", 0),
+            ):
+                statement.fill(typed)
+                try:
+                    if want == 0:
+                        expect(page.locator(loaded_empty).first).to_be_visible(
+                            timeout=5000
+                        )
+                    expect(page.locator(rows)).to_have_count(want, timeout=5000)
+                except AssertionError:
+                    got = page.locator(rows).count()
+                    problems.append(
+                        f"{mode} history: statement {typed!r} lists {got} queries, not {want}"
+                    )
+                statement.fill("")
+                expect(page.locator(rows)).to_have_count(4, timeout=5000)
             problems += [f"{mode} filters: page error: {e}" for e in errors]
             page.close()
             server.shutdown()
+        browser.close()
+    return problems
+
+
+def compare_checks() -> list[str]:
+    """History's comparison: two selected runs are compared, each named by its id and its session (two sessions
+    may have run a query under one id); a run stored without a session is named by its id alone; a number one
+    of the runs lacks has no change; a third selection replaces the older one and clears the table."""
+    problems: list[str] = []
+    runs = fixture_server.DATA["history"]
+    session = runs[0]["session_id"]
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        server = fixture_server.serve(mode="server")
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        page = browser.new_page(viewport={"width": 1440, "height": 900})
+        errors: list[str] = []
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.goto(f"http://127.0.0.1:{server.server_address[1]}/?token=fixture")
+        page.locator("header nav a").first.wait_for(timeout=10000)
+        page.evaluate("window.location.hash = '#/history'")
+
+        def pick(run: dict) -> None:
+            # The layout for the other width is in the page too, hidden.
+            box = page.locator(
+                f"main input[type=checkbox][aria-label*='({run['query_id'][-8:]})']:visible"
+            )
+            box.first.wait_for(timeout=10000)
+            box.first.check()
+
+        button = page.get_by_role("button", name="Compare the two selected")
+        table = page.locator("main h2", has_text="Comparison")
+        pick(runs[0])
+        if not button.is_disabled():
+            problems.append("compare: the button is enabled with one run selected")
+        pick(runs[1])
+        button.click()
+        # (label, A, B, B - A) of the two runs of one session; the fixture's numbers.
+        want = ("Wall time", "1.8 s", "2.6 s", "+770 ms")
+        try:
+            table.wait_for(timeout=5000)
+            row = page.locator("main tr", has_text=want[0]).first.inner_text()
+            if [c.strip() for c in row.split("\t")] != list(want):
+                problems.append(f"compare: the wall time row is {row!r}")
+        except PlaywrightTimeout:
+            problems.append("compare: no comparison of two selected runs is shown")
+        asked = parse_qs(server.compares[-1]) if server.compares else {}
+        if asked != {
+            "a": [runs[0]["query_id"]],
+            "b": [runs[1]["query_id"]],
+            "a_session": [session],
+            "b_session": [session],
+        }:
+            problems.append(f"compare: two runs of a session were asked as {asked}")
+        # A third selection drops the oldest; the stored run without a session is named by its id alone, and
+        # it has no CPU time, so that row has no change.
+        pick(runs[2])
+        if table.count() != 0:
+            problems.append(
+                "compare: the old comparison stays after the selection changed"
+            )
+        button.click()
+        try:
+            table.wait_for(timeout=5000)
+            row = page.locator("main tr", has_text="CPU time").first.inner_text()
+            if [c.strip() for c in row.split("\t")][2:] != ["–", "–"]:
+                problems.append(f"compare: the CPU time row is {row!r}")
+            if (
+                "−2.6 s"
+                not in page.locator("main tr", has_text="Wall time").first.inner_text()
+            ):
+                problems.append("compare: a faster run B shows no negative change")
+        except PlaywrightTimeout:
+            problems.append("compare: no comparison with a run that has no session")
+        asked = parse_qs(server.compares[-1]) if server.compares else {}
+        if asked != {
+            "a": [runs[1]["query_id"]],
+            "b": [runs[2]["query_id"]],
+            "a_session": [session],
+        }:
+            problems.append(f"compare: a run without a session was asked as {asked}")
+        problems += [f"compare: page error: {e}" for e in errors]
+        page.close()
+        server.shutdown()
+        browser.close()
+    return problems
+
+
+def editor_colour_checks() -> list[str]:
+    """The SQL editor's syntax colours: a keyword, a string, a number and a comment each have their own colour,
+    and every piece of the statement has a contrast of at least 4.5 against the editor's background, in dark and
+    in light (CodeMirror's default colours are chosen for a white page)."""
+    problems: list[str] = []
+    statement = "SELECT 'a', 12 FROM t -- note"
+    read = """el => {
+        const rgb = c => (c.match(/[\\d.]+/g) || []).slice(0, 3).map(Number);
+        const lum = c => {
+            const [r, g, b] = rgb(c).map(v => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; });
+            return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+        };
+        const back = getComputedStyle(el.closest('.cm-editor')).backgroundColor;
+        const ratio = c => { const a = lum(c), b = lum(back); return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05); };
+        const base = getComputedStyle(el).color;
+        const parts = [...el.querySelectorAll('.cm-line span')].map(s => {
+            const c = getComputedStyle(s).color;
+            return { text: s.textContent, colour: c, ratio: ratio(c) };
+        });
+        return { back, base, baseRatio: ratio(base), parts };
+    }"""
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        server = fixture_server.serve(mode="server")
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        for scheme in ("dark", "light"):
+            page = browser.new_page(
+                viewport={"width": 1440, "height": 900}, color_scheme=scheme
+            )
+            page.goto(f"http://127.0.0.1:{server.server_address[1]}/?token=fixture")
+            page.locator("header nav a").first.wait_for(timeout=10000)
+            page.evaluate("window.location.hash = '#/sql'")
+            editor = page.locator(".cm-content")
+            editor.wait_for(timeout=10000)
+            editor.click()
+            page.keyboard.press("Control+A")
+            page.keyboard.type(statement)
+            found = editor.evaluate(read)
+            if found["baseRatio"] < 4.5:
+                problems.append(
+                    f"editor {scheme}: plain text {found['base']} on {found['back']} has contrast {found['baseRatio']:.2f}"
+                )
+            colours = {}
+            for part in found["parts"]:
+                colours[part["text"].strip()] = part["colour"]
+                if part["ratio"] < 4.5:
+                    problems.append(
+                        f"editor {scheme}: {part['text']!r} {part['colour']} on {found['back']} has contrast {part['ratio']:.2f}"
+                    )
+            wanted = ["SELECT", "'a'", "12", "-- note"]
+            missing = [w for w in wanted if w not in colours]
+            if missing:
+                problems.append(f"editor {scheme}: no coloured piece for {missing}")
+            else:
+                seen = [colours[w] for w in wanted]
+                if len(set(seen)) != len(seen) or found["base"] in seen:
+                    problems.append(
+                        f"editor {scheme}: keyword, string, number and comment colours are {seen}, plain text {found['base']}"
+                    )
+                if colours["SELECT"] != colours.get("FROM"):
+                    problems.append(
+                        f"editor {scheme}: SELECT and FROM differ in colour"
+                    )
+            page.close()
+        server.shutdown()
         browser.close()
     return problems
 
@@ -1308,6 +1528,12 @@ def heatmap_checks(origin: str) -> list[str]:
         problems += [f"operator table: no row for {name}" for name in want_cells]
         if page.get_by_test_id("no-plan").count():
             problems.append("heatmap: a query with a plan says it has none")
+        # An id two sessions ran a query under: no operators are given, and the page says why.
+        page.goto(f"{origin}/?token=fixture#/queries/{fixture_server.SHARED_ID}")
+        if not shows(page, ["Another session ran a query under this id"], "main"):
+            problems.append("query detail: withheld operators are not explained")
+        if shows(page, ["No operator metrics recorded"], "main", timeout=500):
+            problems.append("query detail: withheld operators read as none recorded")
         # No plan tree: the operators in id order, at one depth, and a sentence that says why.
         page.goto(f"{origin}/?token=fixture#/queries/{fixture_server.NO_PLAN_ID}")
         page.get_by_test_id("no-plan").wait_for(timeout=10000)
@@ -1515,6 +1741,8 @@ if __name__ == "__main__":
     found += role_checks()
     found += start_checks()
     found += filter_checks()
+    found += compare_checks()
+    found += editor_colour_checks()
     found += workload_checks()
     found += advisor_checks()
     found += heatmap_checks(f"http://127.0.0.1:{server.server_address[1]}")
@@ -1524,7 +1752,7 @@ if __name__ == "__main__":
         "\n".join(found)
         if found
         else "ui pages: ok (11 pages x 4 widths x dark/light, xss, session, cancel, redaction, axe, deep links, embed, "
-        "embedded and profiles consoles, operator, history filters, sessions and workload, the advisor and session links, the plan heatmap, "
+        "embedded and profiles consoles, operator, history filters and comparison, sessions and workload, the advisor and session links, the plan heatmap, "
         "TPC-H Q9's profile, "
         "responsive: 3 consoles x 13 screen sizes, touch targets, SQL editor on a phone, text size, motion)"
     )

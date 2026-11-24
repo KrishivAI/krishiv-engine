@@ -11,8 +11,10 @@
   },
   "dependencies": {
     "@codemirror/lang-sql": "6.10.0",
+    "@codemirror/language": "6.13.1",
     "@codemirror/state": "6.7.6",
     "@codemirror/view": "6.43.15",
+    "@lezer/highlight": "1.2.5",
     "@tanstack/svelte-query": "6.3.3",
     "bits-ui": "2.20.2",
     "clsx": "2.1.1",

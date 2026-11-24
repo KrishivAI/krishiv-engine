@@ -326,10 +326,11 @@ impl GrantsPolicy {
         Some(self.grants.store.snapshot().0.lists(principal, &key, cs))
     }
 
-    /// Whether a listing shows the namespace `securable` to `principal` because of something under
-    /// it (`model::GrantState::holds_under`): admin always; `None` for a securable the `system`
-    /// policy decides. Answered from the grant state alone, with no catalog call.
-    pub(crate) fn listable_under(
+    /// Whether a listing shows the namespace `securable` to `principal`: by [`Self::listable`]'s
+    /// rule or because of something under it (`model::GrantState::lists_namespace`), from one
+    /// grant snapshot; admin always; `None` for a securable the `system` policy decides.
+    /// Answered from the grant state alone, with no catalog call.
+    pub(crate) fn namespace_listable(
         &self,
         principal: &Principal,
         securable: &Securable,
@@ -349,7 +350,7 @@ impl GrantsPolicy {
                 .store
                 .snapshot()
                 .0
-                .holds_under(principal, &key, cs),
+                .lists_namespace(principal, &key, cs),
         )
     }
 
@@ -552,7 +553,7 @@ fn first_quoted(text: &str) -> Option<(String, &str)> {
     None
 }
 
-/// The access provider a server configures (`krishiv.access.provider`).
+/// An access provider a server configures (`krishiv.access.provider`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum AccessProvider {
@@ -560,50 +561,102 @@ pub enum AccessProvider {
     Roles,
     /// The `grants` provider.
     Grants,
+    /// The `external` provider: a `krishiv.access.v1` policy service (ADR 0049 §3).
+    External,
 }
 
-/// The provider `config` selects. Unset, it is `grants` when the server authenticates and the
-/// role matrix alone otherwise (owner answer Q1: kept here, in one place). `catalog`, `external`
-/// and lists (`grants+catalog`) are refused until their units land (G5, G6).
+impl AccessProvider {
+    /// The name in `krishiv.access.provider`.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Roles => "roles",
+            Self::Grants => "grants",
+            Self::External => "external",
+        }
+    }
+}
+
+/// The single provider `config` selects: [`access_providers`] when it names exactly one.
 ///
 /// # Errors
-/// `KRISHIV_INVALID_CONFIG_VALUE` naming the key for any other value.
+/// As [`access_providers`], and `KRISHIV_INVALID_CONFIG_VALUE` for a list.
 pub fn access_provider(
     config: &Config,
     authenticated: bool,
 ) -> Result<AccessProvider, KrishivError> {
+    match access_providers(config, authenticated)?.as_slice() {
+        [one] => Ok(*one),
+        _ => Err(invalid_provider(
+            config,
+            "a list of providers is not a single provider",
+        )),
+    }
+}
+
+/// The providers `config` lists, in order (ADR 0049 §1): one name or a `+`-separated list of
+/// `roles`, `grants`, `external`, each at most once, combined as an intersection
+/// ([`crate::IntersectionPolicy`]). Unset, `grants` when the server authenticates and the role
+/// matrix alone otherwise (owner answer Q1: kept here, in one place). `catalog` is refused until
+/// its unit lands (P3-T062 G5).
+///
+/// # Errors
+/// `KRISHIV_INVALID_CONFIG_VALUE` naming the key for any other value.
+pub fn access_providers(
+    config: &Config,
+    authenticated: bool,
+) -> Result<Vec<AccessProvider>, KrishivError> {
     let raw = match config.get(&ACCESS_PROVIDER) {
         Some(ConfigValue::String(s)) if !s.trim().is_empty() => s.trim().to_owned(),
         _ => {
-            return Ok(if authenticated {
+            return Ok(vec![if authenticated {
                 AccessProvider::Grants
             } else {
                 AccessProvider::Roles
-            });
+            }]);
         }
     };
-    let invalid = |reason: &str| -> KrishivError {
-        KrishivInvalidConfigValue {
-            value: format!("'{raw}'"),
-            key: format!("\"{}\"", ACCESS_PROVIDER.key),
-            reason: reason.to_owned(),
+    let mut out = Vec::new();
+    for name in raw.split('+') {
+        let provider = match name.trim().to_ascii_lowercase().as_str() {
+            "grants" => AccessProvider::Grants,
+            "roles" => AccessProvider::Roles,
+            "external" => AccessProvider::External,
+            "catalog" => {
+                return Err(invalid_provider(
+                    config,
+                    "the catalog provider is not available yet (P3-T062 unit G5)",
+                ));
+            }
+            "" => return Err(invalid_provider(config, "an empty provider name")),
+            _ => {
+                return Err(invalid_provider(
+                    config,
+                    "expected grants, roles or external, or a `+`-separated list of them",
+                ));
+            }
+        };
+        if out.contains(&provider) {
+            return Err(invalid_provider(config, "a provider is listed twice"));
         }
-        .into()
-    };
-    match raw.to_ascii_lowercase().as_str() {
-        "grants" => Ok(AccessProvider::Grants),
-        "roles" => Ok(AccessProvider::Roles),
-        "catalog" => Err(invalid(
-            "the catalog provider is not available yet (P3-T062 unit G5)",
-        )),
-        "external" => Err(invalid(
-            "the external provider is not available yet (P3-T062 unit G6)",
-        )),
-        r if r.contains(['+', ',']) => Err(invalid(
-            "provider lists are not available yet (P3-T062 units G5 and G6)",
-        )),
-        _ => Err(invalid("expected grants or roles")),
+        out.push(provider);
     }
+    Ok(out)
+}
+
+fn invalid_provider(config: &Config, reason: &str) -> KrishivError {
+    let raw = config
+        .get(&ACCESS_PROVIDER)
+        .and_then(ConfigValue::as_str)
+        .unwrap_or_default()
+        .trim()
+        .to_owned();
+    KrishivInvalidConfigValue {
+        value: format!("'{raw}'"),
+        key: format!("\"{}\"", ACCESS_PROVIDER.key),
+        reason: reason.to_owned(),
+    }
+    .into()
 }
 
 #[cfg(test)]

@@ -99,6 +99,10 @@ pub enum ScalarValue {
     Date32(i32),
     /// `Timestamp(Microsecond, _)`: microseconds since the epoch.
     TimestampMicros(i64),
+    /// `Timestamp(Microsecond, None)` (`TIMESTAMP_NTZ`): microseconds of wall-clock time since the
+    /// epoch. File pushdown reads it as [`ScalarValue::TimestampMicros`]; a data source filter keeps
+    /// the two apart (Spark hands Python a naive `datetime` for it and an aware one for `TIMESTAMP`).
+    TimestampNtzMicros(i64),
 }
 
 impl PartialEq for ScalarValue {
@@ -112,7 +116,8 @@ impl PartialEq for ScalarValue {
             (Self::Int16(a), Self::Int16(b)) => a == b,
             (Self::Int32(a), Self::Int32(b)) | (Self::Date32(a), Self::Date32(b)) => a == b,
             (Self::Int64(a), Self::Int64(b))
-            | (Self::TimestampMicros(a), Self::TimestampMicros(b)) => a == b,
+            | (Self::TimestampMicros(a), Self::TimestampMicros(b))
+            | (Self::TimestampNtzMicros(a), Self::TimestampNtzMicros(b)) => a == b,
             (
                 Self::Decimal128 {
                     unscaled: a,

@@ -13,7 +13,10 @@ the sandbox trampoline, talking wire `krishiv.udf.wire.v1` over a `SOCK_SEQPACKE
 Paths are relative to this crate.
 - `src/lib.rs` public surface and `run_trampoline_if_requested` (the binary's `__udf-worker` dispatch)
 - `src/pool.rs` `Pool`, `PoolConfig` (from the `krishiv.python.worker.*` and `krishiv.udf.sandbox` keys), `Launcher`,
-  `Owner`; the spawner thread, the caps, idle stop, `release`, and `Lease` (a worker handed to one call)
+  `Owner`; the spawner thread, the caps, idle stop, `release`, and `Lease` (a worker handed to one call);
+  `Pool::snapshot` (`PoolSnapshot`: live and idle workers, the three caps, `OwnerWorkers` per owner with a live
+  worker; one short lock hold) and `Pool::monitor` (`PoolMonitor`, a weak view for the console's Resources page:
+  `None` once the pool is gone, so a page never keeps workers running)
 - `src/worker.rs` one worker: handshake, `ensure_loaded` (a `udf` message), `run_batch` (a `batch` message), a
   relation task's messages (`start_task`, `task_event`, `send_frame`, `abandon`), the
   error mapping (`PYTHON_EXCEPTION`, `KRISHIV_PYTHON_WORKER_EXITED`, `KRISHIV_UDF_SANDBOX_UNAVAILABLE` for a trampoline
@@ -146,6 +149,16 @@ Paths are relative to this crate.
   `execve`/`execveat` `EPERM` (`package::exec_deny_filter`), before `sys.path` changes: the parent-death signal is
   per thread, so an `exec` from any thread but the first (UDF calls run on such threads) would otherwise outlive
   the server. Test `udf_cannot_outlive_the_server_by_exec_from_a_thread`.
+- **Tenants (P3-T072).** `Owner.tenant` (the principal's tenant, from Connect's `SessionOwner`; `None` in single-tenant
+  servers) is part of the key, so a worker never serves two tenants (nor two sessions). The cap group is `Owner::group()`: the tenant, or the principal when it has no tenant and `Owner.capped` (authentication on; with it off every session is the one local principal and is in no group, so only `maxTotal`/`maxPerSession` bound it) (so one principal of a
+  single-tenant server cannot take the pool either; threat model T-U4/T-D10). A group's live workers
+  (`State::per_tenant`) and running calls (`calls.rs` `running_by_group`/`slots_by_group`, O(1) counters,
+  `with_tenant_cap`) are capped by
+  `krishiv.python.worker.maxPerTenant`, and its relation slots by one less (`slot_limit_for`), so one tenant cannot
+  take the shared call threads and a tenant's tasks never wait behind its own. At the cap a tenant's longest-idle
+  worker of another key is stopped, never another tenant's. `tenant_memory_limit` lowers `RLIMIT_AS` of tenant
+  workers. A slot waiter of the same group holds back a later request of it (no starvation by the group's other
+  sessions). An archive unpack runs under the general `memoryLimit`, not `tenantMemoryLimit`. Tests: `calls.rs` tenant tests, `tests/pool.rs` `*tenant*`.
 - One worker serves one `Owner` (principal and session), one interpreter and one artifact set; reuse only within
   that key. Artifacts are reachable from the worker's working directory through links into a read-only directory
   (Spark's worker runs in a writable files directory): a recorded difference.

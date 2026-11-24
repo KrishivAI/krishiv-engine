@@ -47,7 +47,10 @@ pub use artifacts::PythonArchive;
 #[cfg(target_os = "linux")]
 pub use interpreter::{Interpreter, choose};
 #[cfg(target_os = "linux")]
-pub use pool::{DEFAULT_ARTIFACT_LIMIT, Launcher, Owner, Pool, PoolConfig};
+pub use pool::{
+    DEFAULT_ARTIFACT_LIMIT, Launcher, Owner, OwnerWorkers, Pool, PoolConfig, PoolMonitor,
+    PoolSnapshot,
+};
 #[cfg(target_os = "linux")]
 pub use runtime::{ConfSource, SessionUdfs};
 #[cfg(target_os = "linux")]

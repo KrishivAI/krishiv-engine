@@ -424,6 +424,26 @@ pub const CATALOGUE: &[MetricDef] = &[
         source: MetricSource::Scrape,
     },
     MetricDef {
+        name: "krishiv.events.dropped",
+        kind: MetricKind::Gauge,
+        unit: "{event}",
+        labels: &[],
+        description: "Query events the event sinks dropped since the engine started because a \
+                      sink's queue was full, was closed (its thread did not start), did not drain at shutdown, or \
+                      the sink reported a failed write (`krishiv.events.*`). Always 0 when no sink is registered.",
+        since: "0.3.0",
+        source: MetricSource::Scrape,
+    },
+    MetricDef {
+        name: "krishiv.events.queue_depth",
+        kind: MetricKind::Gauge,
+        unit: "{event}",
+        labels: &[],
+        description: "Query events waiting for their sinks, summed over the sinks.",
+        since: "0.3.0",
+        source: MetricSource::Scrape,
+    },
+    MetricDef {
         name: "krishiv.memory.reserved",
         kind: MetricKind::Gauge,
         unit: "By",

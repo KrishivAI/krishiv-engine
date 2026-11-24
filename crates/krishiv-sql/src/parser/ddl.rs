@@ -15,7 +15,7 @@ use super::metric_view::ViewHead;
 use super::{Close, Fail, PR, Parser};
 use crate::ast::{
     AddResource, AlterColumnAction, AlterNamespace, AlterNamespaceAction, AlterTable,
-    AlterTableAction, AlterView, AlterViewAction, Analyze, AnalyzeColumns, Cache, CacheKind,
+    AlterTableAction, AlterView, AlterViewAction, Analyze, AnalyzeColumns, Cache, CacheKind, Call,
     ChangeColumnAction, ColumnName, CreatePermanentView, DdlName, Delete, Describe, DescribeKind,
     DescribeMode, DirectoryFormat, DropPermanentView, FunctionScope, Ident, Insert, InsertClause,
     InsertDirectory, ListResource, LoadData, Merge, MergeAction, MergeClause, MergeInsert,
@@ -24,7 +24,9 @@ use crate::ast::{
     Repair, RepairAction, ResourceType, SchemaBinding, SchemaBindingClause, SetExprKind, Show,
     ShowKind, ShowPattern, Span, SqlSecurity, Statement, Truncate, Update, UpdateAssignment,
 };
-use krishiv_common::error::{LegacyErrorTemp0035, LegacyErrorTemp0064, MergeWithoutWhen};
+use krishiv_common::error::{
+    LegacyErrorTemp0035, LegacyErrorTemp0064, MergeInsertValueCountMismatch, MergeWithoutWhen,
+};
 
 use crate::error::{self, ParseError};
 use crate::lexer::{Sym, TokenKind};
@@ -58,6 +60,8 @@ impl<'s> Parser<'s> {
             self.cache_command()
         } else if self.kw_at(0, "REFRESH") {
             self.refresh_command()
+        } else if self.kw_at(0, "CALL") {
+            self.call_command()
         } else if self.kw_at(0, "ANALYZE") {
             self.analyze_command()
         } else if self.kw_at(0, "MSCK") || self.kw_at(0, "REPAIR") {
@@ -968,15 +972,28 @@ impl<'s> Parser<'s> {
         })
     }
 
+    /// `[AS JSON]` closing a `SHOW TABLES`, `SHOW TABLE EXTENDED` or `SHOW PARTITIONS`.
+    fn show_as_json(&mut self) -> bool {
+        // Spark 4.3 grammar only: under 4.2 `AS` is a syntax error at the end of the statement.
+        if self.opts.spark_4_3_grammar && self.kw_at(0, "AS") && self.kw_at(1, "JSON") {
+            self.pos += 2;
+            true
+        } else {
+            false
+        }
+    }
+
     /// What a `SHOW` shows, after the `SHOW` keyword.
     fn show_kind(&mut self) -> PR<ShowKind> {
         let start = self.start();
         if self.eat_kw("TABLES") {
             let namespace = self.show_namespace()?;
             let pattern = self.show_pattern_opt()?;
+            let as_json = self.show_as_json();
             return Ok(ShowKind::Tables {
                 namespace,
                 pattern,
+                as_json,
                 span: self.span_from(start),
             });
         }
@@ -991,10 +1008,12 @@ impl<'s> Parser<'s> {
             } else {
                 None
             };
+            let as_json = self.show_as_json();
             return Ok(ShowKind::TableExtended {
                 namespace,
                 pattern,
                 partition,
+                as_json,
                 span: self.span_from(start),
             });
         }
@@ -1082,9 +1101,11 @@ impl<'s> Parser<'s> {
             } else {
                 None
             };
+            let as_json = self.show_as_json();
             return Ok(ShowKind::Partitions {
                 name,
                 partition,
+                as_json,
                 span: self.span_from(start),
             });
         }
@@ -1403,6 +1424,21 @@ impl<'s> Parser<'s> {
             let span = p.span_from(start);
             p.command_end()?;
             Ok(Statement::Cache(Cache { kind, span }))
+        })
+    }
+
+    /// `CALL name([args])`.
+    fn call_command(&mut self) -> PR<Statement> {
+        self.nested(|p| {
+            let start = p.start();
+            p.expect_kw("CALL")?;
+            let name = p.ddl_name()?;
+            p.expect_sym(Sym::LParen)?;
+            let args = p.function_args(false)?;
+            p.expect_sym(Sym::RParen)?;
+            let span = p.span_from(start);
+            p.command_end()?;
+            Ok(Statement::Call(Call { name, args, span }))
         })
     }
 

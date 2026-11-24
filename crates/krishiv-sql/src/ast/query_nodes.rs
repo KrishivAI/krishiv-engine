@@ -740,6 +740,14 @@ pub enum TableFactorKind {
     Nested(Box<Relation>),
     /// `VALUES ...` (its alias is the factor's alias).
     Values(Vec<Expr>),
+    /// `UNNEST(array, ...) [WITH ORDINALITY]` (Spark 4.3): one row per element, the arrays side by
+    /// side padded with NULLs, the 1-based position last with `ORDINALITY`.
+    Unnest {
+        /// The array arguments.
+        args: Vec<Expr>,
+        /// `WITH ORDINALITY`.
+        ordinality: bool,
+    },
     /// A table-valued function call.
     TableFunction {
         /// The function name.
@@ -962,6 +970,32 @@ pub enum JoinConstraint {
     Using(Vec<Ident>),
     /// `[APPROX | EXACT] NEAREST [k] BY DISTANCE | SIMILARITY expr`.
     NearestBy(NearestBy),
+    /// `MATCH_CONDITION (expr) [ON expr | USING (columns)]` after `ASOF JOIN`
+    /// (Spark 4.3).
+    AsOf(Box<AsOfCriteria>),
+}
+
+/// The criteria of an `[INNER | LEFT [OUTER]] ASOF JOIN` (Spark 4.3's
+/// `asofJoinCriteria`). The match condition is kept as written: Spark's
+/// `AstBuilder` checks its operator after parsing (`validate/`).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct AsOfCriteria {
+    /// The expression inside `MATCH_CONDITION (...)`.
+    pub match_condition: Expr,
+    /// The `ON` condition or `USING` columns, if written.
+    pub filter: Option<AsOfFilter>,
+    /// Source text, from `MATCH_CONDITION`.
+    pub span: Span,
+}
+
+/// The equality part of an [`AsOfCriteria`].
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum AsOfFilter {
+    /// `ON expr`.
+    On(Expr),
+    /// `USING (columns)`.
+    Using(Vec<Ident>),
 }
 
 /// The ranking clause of a top-k join.

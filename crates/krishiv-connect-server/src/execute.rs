@@ -373,6 +373,8 @@ pub async fn execute_plan(
                     command_type: Some(pb::command::CommandType::SqlCommand(Box::new(command))),
                 };
                 crate::auth::enforce(&check_command(&wrapped), session).await?;
+                // A statement may call a function the tenant persisted.
+                load_persisted_udfs(entry).await;
                 let Some(pb::command::CommandType::SqlCommand(command)) = wrapped.command_type
                 else {
                     return Err(InternalError {
@@ -642,6 +644,7 @@ async fn execution_plan(
     query_options: &QueryOptions,
 ) -> Result<Executed, KrishivError> {
     let session = entry.session();
+    load_persisted_udfs(entry).await;
     let decompressed = decompressed(plan, limits).await?;
     let mut udfs = InlineUdfs::execution(entry.python());
     let (translated, cached) =
@@ -664,6 +667,9 @@ async fn execution_plan(
             match run? {
                 RunCommand::RegisterPythonUdf(udf) => {
                     entry.python().register(session, udf)?;
+                }
+                RunCommand::PersistPythonFunction { name, drop } => {
+                    entry.python().persist(session, &name, drop).await?;
                 }
                 RunCommand::Checkpoint(spec) => {
                     // No operation id or tags on the source: the result is held by the session
@@ -691,6 +697,24 @@ async fn execution_plan(
             }
             Ok(Executed::Command)
         }
+    }
+}
+
+/// Loads the tenant's persisted Python UDFs into the session at its first request (P3-T072c), when the server has a
+/// function catalog and the principal holds `Usage` on `System("udf")`, the check a `register_function` takes. One
+/// check per session: a principal without it is refused once (one audit record) and gets nothing loaded.
+pub(crate) async fn load_persisted_udfs(entry: &SessionEntry) {
+    if !entry.python().load_pending() {
+        return;
+    }
+    let session = entry.session();
+    if crate::auth::enforce(&crate::auth::client_code(), session)
+        .await
+        .is_ok()
+    {
+        entry.python().load_persisted(session).await;
+    } else {
+        entry.python().skip_load();
     }
 }
 

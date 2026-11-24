@@ -13,7 +13,13 @@ impl Parser<'_> {
             self.far = self.far.max(far);
             return Err(Fail::Syntax);
         }
+        // A query inside an as-of join's right side is not that side: `MATCH_CONDITION` there
+        // is an ordinary alias again.
+        let asof_right = std::mem::replace(&mut self.asof_right, false);
+        let asof_ahead = std::mem::replace(&mut self.asof_ahead, false);
         let r = self.query_at();
+        self.asof_right = asof_right;
+        self.asof_ahead = asof_ahead;
         if matches!(r, Err(Fail::Syntax)) {
             self.failed_queries.insert(pos, self.far);
         }
@@ -248,42 +254,43 @@ impl Parser<'_> {
     /// Whether `|` before token `n` is the pipe operator, not a bitwise or.
     pub(crate) fn single_pipe_word_at(&self, n: usize) -> bool {
         self.opts.single_character_pipe_operator
-            && self.any_kw_at(
-                n,
-                &[
-                    "SELECT",
-                    "EXTEND",
-                    "SET",
-                    "DROP",
-                    "AS",
-                    "WHERE",
-                    "PIVOT",
-                    "UNPIVOT",
-                    "TABLESAMPLE",
-                    "INNER",
-                    "CROSS",
-                    "LEFT",
-                    "RIGHT",
-                    "FULL",
-                    "NATURAL",
-                    "SEMI",
-                    "ANTI",
-                    "JOIN",
-                    "UNION",
-                    "EXCEPT",
-                    "MINUS",
-                    "INTERSECT",
-                    "ORDER",
-                    "CLUSTER",
-                    "DISTRIBUTE",
-                    "SORT",
-                    "LIMIT",
-                    "OFFSET",
-                    "AGGREGATE",
-                    "WINDOW",
-                    "LATERAL",
-                ],
-            )
+            && ((self.opts.spark_4_3_grammar || self.opts.asof_join) && self.kw_at(n, "ASOF")
+                || self.any_kw_at(
+                    n,
+                    &[
+                        "SELECT",
+                        "EXTEND",
+                        "SET",
+                        "DROP",
+                        "AS",
+                        "WHERE",
+                        "PIVOT",
+                        "UNPIVOT",
+                        "TABLESAMPLE",
+                        "INNER",
+                        "CROSS",
+                        "LEFT",
+                        "RIGHT",
+                        "FULL",
+                        "NATURAL",
+                        "SEMI",
+                        "ANTI",
+                        "JOIN",
+                        "UNION",
+                        "EXCEPT",
+                        "MINUS",
+                        "INTERSECT",
+                        "ORDER",
+                        "CLUSTER",
+                        "DISTRIBUTE",
+                        "SORT",
+                        "LIMIT",
+                        "OFFSET",
+                        "AGGREGATE",
+                        "WINDOW",
+                        "LATERAL",
+                    ],
+                ))
     }
 
     /// One pipe operator, from its `|>` (or `|`).
@@ -1254,13 +1261,39 @@ impl Parser<'_> {
                 Some(q) => TableFactorKind::Subquery(Box::new(q)),
                 None => {
                     self.expect_sym(Sym::LParen)?;
-                    let r = self.relation()?;
+                    // Inside parentheses the as-of right side is not that side: `MATCH_CONDITION`
+                    // is an ordinary alias again.
+                    let asof_right = std::mem::replace(&mut self.asof_right, false);
+                    let asof_ahead = std::mem::replace(&mut self.asof_ahead, false);
+                    let r = self.relation();
+                    self.asof_right = asof_right;
+                    self.asof_ahead = asof_ahead;
+                    let r = r?;
                     self.expect_sym(Sym::RParen)?;
                     TableFactorKind::Nested(Box::new(r))
                 }
             }
         } else if self.kw_at(0, "JSON_TABLE") && self.sym_at(1, Sym::LParen) {
             self.json_table()?
+        } else if self.opts.spark_4_3_grammar
+            && self.kw_at(0, "UNNEST")
+            && self.sym_at(1, Sym::LParen)
+        {
+            // ANSI `UNNEST(array, ...) [WITH ORDINALITY]` (Spark 4.3 grammar, the flag the session sets from
+            // its profile; `unnest` is non-reserved, so a quoted name stays a table function, and an older
+            // profile keeps resolving `unnest(..)` as any table function).
+            self.bump();
+            self.bump();
+            let args = self.comma_sep(Self::expr)?;
+            self.expect_sym(Sym::RParen)?;
+            let ordinality = if self.kw_at(0, "WITH") && self.kw_at(1, "ORDINALITY") {
+                self.bump();
+                self.bump();
+                true
+            } else {
+                false
+            };
+            TableFactorKind::Unnest { args, ordinality }
         } else {
             let name_start = self.tok(0).map_or(0, |t| t.span.start);
             let name = self.ddl_name()?;
@@ -1677,14 +1710,24 @@ impl Parser<'_> {
         .find_map(|(kw, k)| at(self, 0, kw).then_some(k))
         {
             (kind, 1 + usize::from(at(self, 1, "OUTER")))
+        } else if !natural && at(self, 0, "ASOF") {
+            (JoinKind::Inner, 0)
         } else {
             if natural {
                 self.bump();
-                return self.fail();
+                return self.asof_extra_input();
             }
             return Ok(None);
         };
         self.pos += n + words;
+        if self.kw_at(0, "ASOF") {
+            if natural || !matches!(kind, JoinKind::Inner | JoinKind::Left) {
+                // Spark's `asofJoinType` is `INNER?` or `LEFT OUTER?`: ANTLR
+                // drops the `ASOF` after any other join type.
+                return self.asof_extra_input();
+            }
+            return self.asof_join(start, kind).map(Some);
+        }
         self.expect_kw("JOIN")?;
         let lateral = self.eat_kw("LATERAL");
         let right = Box::new(self.table_factor()?);
@@ -1707,6 +1750,53 @@ impl Parser<'_> {
             constraint,
             span: self.span_from(start),
         }))
+    }
+
+    /// The syntax error at an `ASOF` after a join type it may not follow
+    /// (`RIGHT`, `FULL`, `CROSS`, `NATURAL`, `[LEFT] SEMI`, `[LEFT] ANTI`):
+    /// ANTLR deletes it as "extra input" when `JOIN` follows.
+    fn asof_extra_input<T>(&mut self) -> PR<T> {
+        if self.kw_at(0, "ASOF") && self.kw_at(1, "JOIN") && self.pos >= self.far {
+            self.extra = Some(self.pos);
+        }
+        self.fail()
+    }
+
+    /// `ASOF JOIN right MATCH_CONDITION (expr) [ON expr | USING (columns)]`
+    /// from the `ASOF` (Spark 4.3's `joinRelation` as-of branch; no
+    /// `LATERAL`). Whether the flag allows it and the match operator are
+    /// checked after parsing (`validate/`), as Spark's `AstBuilder` does.
+    fn asof_join(&mut self, start: usize, kind: JoinKind) -> PR<Join> {
+        self.expect_kw("ASOF")?;
+        self.expect_kw("JOIN")?;
+        let outer = std::mem::replace(&mut self.asof_right, true);
+        let right = self.table_factor();
+        self.asof_right = outer;
+        let right = Box::new(right?);
+        let criteria_start = self.start();
+        self.expect_kw("MATCH_CONDITION")?;
+        self.expect_sym(Sym::LParen)?;
+        let match_condition = self.expr()?;
+        self.expect_closing(Sym::RParen, Close::DropOrInsert)?;
+        let filter = if self.eat_kw("ON") {
+            Some(AsOfFilter::On(self.expr()?))
+        } else if self.eat_kw("USING") {
+            Some(AsOfFilter::Using(self.ident_list()?))
+        } else {
+            None
+        };
+        Ok(Join {
+            kind,
+            natural: false,
+            lateral: false,
+            right,
+            constraint: JoinConstraint::AsOf(Box::new(AsOfCriteria {
+                match_condition,
+                filter,
+                span: self.span_from(criteria_start),
+            })),
+            span: self.span_from(start),
+        })
     }
 
     /// `(APPROX | EXACT) NEAREST [k] BY (DISTANCE | SIMILARITY) expr`.

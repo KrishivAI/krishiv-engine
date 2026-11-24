@@ -18,6 +18,8 @@ pub mod codec;
 pub mod config;
 pub mod errors;
 pub mod execute;
+#[cfg(feature = "function-catalog")]
+mod function_store;
 pub mod get_status;
 pub mod host;
 pub mod interrupt;
@@ -29,17 +31,19 @@ pub mod server;
 pub mod service;
 pub mod status;
 pub mod udf;
+#[cfg(feature = "function-catalog")]
+pub use function_store::SqliteFunctionStore;
 
 pub use artifacts::{ArtifactLimits, ArtifactStore, SessionArtifacts};
 pub use auth::{
-    ACT_AS_GROUPS, ACT_AS_TENANT, ACT_AS_TOKEN, ACT_AS_USER, AuthLayer, Check, ConnectAuth, Rpc,
-    SessionOwner, check_command, check_rpc, role_sessions,
+    ACT_AS_GROUPS, ACT_AS_TENANT, ACT_AS_TOKEN, ACT_AS_USER, AuthLayer, Check, ConnectAuth,
+    ExtraProvider, Rpc, SessionOwner, check_command, check_rpc, provider_sessions, role_sessions,
 };
 pub use errors::SessionErrors;
 pub use local::LocalServer;
-pub use manager::{ManagerCounts, SessionEntry, SessionLimits, SessionManager};
+pub use manager::{ManagerCounts, SessionEntry, SessionFactory, SessionLimits, SessionManager};
 pub use operation::{ExecuteLimits, Operation, OperationState, Operations};
 pub use server::{ConnectServer, ConnectServerConfig};
 pub use service::ConnectService;
 pub use status::status_of;
-pub use udf::{PythonArchive, RunnerConf, SessionUdfRuntime, UdfHost};
+pub use udf::{FunctionStore, PythonArchive, RunnerConf, SessionUdfRuntime, StoreChange, UdfHost};

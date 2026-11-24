@@ -113,11 +113,12 @@ fn set_returns_spark_rows_and_sets() {
     assert_eq!(found, [vec!["spark.sql.ansi.enabled", "TRUE"]]);
     assert_eq!(
         s.conf().get("spark.sql.ansi.enabled").as_deref(),
-        Some("true")
+        Some("TRUE")
     );
-    // A registered key shows its effective value, whatever the spelling.
+    // A registered key shows the text it was set to, as Spark's `getConfString` does (a Spark 4.2.0 run:
+    // `SET spark.sql.caseSensitive` after setting `TRUE` shows `TRUE`).
     let (_, found) = rows(&s, "SET spark.sql.ansi.enabled");
-    assert_eq!(found, [vec!["spark.sql.ansi.enabled", "true"]]);
+    assert_eq!(found, [vec!["spark.sql.ansi.enabled", "TRUE"]]);
     block_on(s.sql("SET spark.sql.ansi.enabled = false")).unwrap();
     assert_eq!(
         s.conf().get("spark.sql.ansi.enabled").as_deref(),

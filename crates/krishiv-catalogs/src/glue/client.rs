@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The three read calls of the AWS Glue Data Catalog API (JSON 1.1, `X-Amz-Target: AWSGlue.<Action>`): `GetDatabases`,
 //! `GetTables` (both paged by `NextToken`) and `GetTable`. Every request is signed with Signature Version 4
-//! ([`super::sigv4`]).
+//! (`super::sigv4`).
 //!
 //! One deadline covers a call, a paged listing included. A response is read within `max_response_bytes`, its nesting
 //! depth is pre-scanned before it is parsed, and a listing is bounded in pages and entries; a token that repeats or is

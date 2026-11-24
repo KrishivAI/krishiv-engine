@@ -33,7 +33,7 @@ use std::fmt;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError};
 
-use krishiv_common::error::{KrishivError, KrishivUnsupportedFeature};
+use krishiv_common::error::{InternalError, KrishivError, KrishivUnsupportedFeature};
 use krishiv_connect::translate::{PythonUdf, UdfCallName, UdfHost as TranslateHost};
 use krishiv_exec::python_eval::UdfRuntime;
 use krishiv_plan::PythonUdfRef;
@@ -80,11 +80,14 @@ pub type RunnerConf = Arc<dyn Fn() -> BTreeMap<String, String> + Send + Sync>;
 
 /// The server's Python UDF workers: one per server, shared by every Connect session.
 pub trait UdfHost: Send + Sync + fmt::Debug {
-    /// A new, empty runtime for session `session` of `principal`: its workers serve that owner only. Each
+    /// A new, empty runtime for session `session` of `principal` (of `tenant`, in a multi-tenant server): its
+    /// workers serve that owner only (`authenticated`: the server tells principals apart, so the pool caps each), and a tenant's workers and calls are bounded together. Each
     /// prepared call reads its runner conf from `conf`.
     fn session_runtime(
         &self,
         principal: &str,
+        tenant: Option<&str>,
+        authenticated: bool,
         session: &str,
         conf: RunnerConf,
     ) -> Arc<dyn SessionUdfRuntime>;
@@ -112,6 +115,8 @@ impl UdfHost for krishiv_udf_pool::Pool {
     fn session_runtime(
         &self,
         principal: &str,
+        tenant: Option<&str>,
+        authenticated: bool,
         session: &str,
         conf: RunnerConf,
     ) -> Arc<dyn SessionUdfRuntime> {
@@ -121,6 +126,8 @@ impl UdfHost for krishiv_udf_pool::Pool {
                 krishiv_udf_pool::Owner {
                     principal: principal.to_owned(),
                     session: session.to_owned(),
+                    tenant: tenant.map(str::to_owned),
+                    capped: authenticated,
                 },
             )
             .with_conf_source(conf),
@@ -148,8 +155,84 @@ impl SessionUdfRuntime for krishiv_udf_pool::SessionUdfs {
     }
 }
 
+/// The server's catalog of persisted Python UDFs (P3-T072c): what a client keeps with the `PersistPythonFunction`
+/// command, per tenant (`None`: the server's one tenant), and what later sessions of the tenant find. The calls
+/// may block (a file); the server runs them on a blocking thread.
+pub trait FunctionStore: Send + Sync + fmt::Debug {
+    /// Every function stored for `tenant`.
+    ///
+    /// # Errors
+    /// The store's failure.
+    fn list(&self, tenant: Option<&str>) -> Result<Vec<PythonUdf>, KrishivError>;
+    /// Stores `udf` for `tenant`, replacing one of the same name; `owner` is the principal that persisted it.
+    /// A function another principal stored is replaced only with `override_owner`, and the store checks that
+    /// atomically with the write: [`StoreChange::OwnedByOther`] changes nothing.
+    ///
+    /// # Errors
+    /// The store's failure.
+    fn put(
+        &self,
+        tenant: Option<&str>,
+        owner: &str,
+        udf: &PythonUdf,
+        override_owner: bool,
+    ) -> Result<StoreChange, KrishivError>;
+    /// The principal that stored `tenant`'s function `name`, if there is one. Only a hint that lets `persist`
+    /// check `Manage` before the first write; the safety is the atomic check in `put` and `remove`.
+    ///
+    /// # Errors
+    /// The store's failure.
+    fn owner(&self, tenant: Option<&str>, name: &str) -> Result<Option<String>, KrishivError>;
+    /// Removes `tenant`'s function `name` for `caller`; another principal's only with `override_owner`
+    /// (checked atomically with the removal).
+    ///
+    /// # Errors
+    /// The store's failure.
+    fn remove(
+        &self,
+        tenant: Option<&str>,
+        name: &str,
+        caller: &str,
+        override_owner: bool,
+    ) -> Result<StoreChange, KrishivError>;
+}
+
+/// What a [`FunctionStore`] change did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StoreChange {
+    /// Written or removed.
+    Done,
+    /// There was nothing to remove.
+    Absent,
+    /// Another principal owns the function and the caller may not override it; nothing changed.
+    OwnedByOther,
+}
+
+/// `Manage` on the cluster: what changing another principal's stored function takes (a refusal is audited).
+async fn authorize_manage(session: &Session) -> Result<(), KrishivError> {
+    session
+        .authorize_privilege(
+            &krishiv_session::Securable::System("cluster".to_owned()),
+            krishiv_session::Privilege::Manage,
+            krishiv_session::StatementClass::Ddl,
+        )
+        .await
+}
+
 /// A Connect session's Python UDFs.
 pub(crate) struct SessionPython {
+    /// The persisted-function catalog, if the server has one.
+    store: Option<Arc<dyn FunctionStore>>,
+    /// The session's principal and tenant, for the catalog.
+    principal: String,
+    tenant: Option<String>,
+    /// The server tells principals apart (authentication is on).
+    authenticated: bool,
+    /// Held while the tenant's persisted functions are listed and registered, so every first request
+    /// of the session waits for the one load.
+    loading: tokio::sync::Mutex<()>,
+    /// The tenant's persisted functions were loaded (or none is to be).
+    loaded: std::sync::atomic::AtomicBool,
     host: Option<Arc<dyn UdfHost>>,
     /// `None` when the server runs no worker pool: every grant is refused.
     runtime: Option<Arc<dyn SessionUdfRuntime>>,
@@ -190,10 +273,31 @@ impl fmt::Debug for SessionPython {
 
 impl SessionPython {
     /// The UDFs of `session`, built for `principal`, on `host`'s workers (none: UDFs are refused).
-    pub(crate) fn new(host: Option<&Arc<dyn UdfHost>>, principal: &str, session: &Session) -> Self {
+    pub(crate) fn new(
+        host: Option<&Arc<dyn UdfHost>>,
+        principal: &str,
+        tenant: Option<&str>,
+        authenticated: bool,
+        session: &Session,
+    ) -> Self {
         Self {
+            store: None,
+            principal: principal.to_owned(),
+            tenant: tenant.map(str::to_owned),
+            authenticated,
+            loading: tokio::sync::Mutex::new(()),
+            // No store yet: nothing to load (`with_store` changes that).
+            loaded: std::sync::atomic::AtomicBool::new(true),
             host: host.map(Arc::clone),
-            runtime: host.map(|h| h.session_runtime(principal, session.id(), runner_conf(session))),
+            runtime: host.map(|h| {
+                h.session_runtime(
+                    principal,
+                    tenant,
+                    authenticated,
+                    session.id(),
+                    runner_conf(session),
+                )
+            }),
             state: Mutex::default(),
             artifacts: Mutex::default(),
         }
@@ -201,6 +305,158 @@ impl SessionPython {
 
     fn lock(&self) -> std::sync::MutexGuard<'_, State> {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// The session with the server's persisted-function catalog (none: nothing is persisted or loaded).
+    pub(crate) fn with_store(mut self, store: Option<&Arc<dyn FunctionStore>>) -> Self {
+        self.store = store.map(Arc::clone);
+        *self.loaded.get_mut() = self.store.is_none();
+        self
+    }
+
+    /// Whether the tenant's persisted functions are still to be loaded into this session.
+    pub(crate) fn load_pending(&self) -> bool {
+        !self.loaded.load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    /// The principal may not run client code: nothing is loaded into this session.
+    pub(crate) fn skip_load(&self) {
+        self.loaded
+            .store(true, std::sync::atomic::Ordering::Release);
+    }
+
+    /// Loads the tenant's persisted functions once, as `register_function` of each would. Call only after the
+    /// session's principal passed the `Usage` check on `System("udf")`. A catalog failure is logged and the
+    /// load is tried again at the next call; a stored function that no longer converts is skipped. A name the
+    /// session registered itself is kept.
+    pub(crate) async fn load_persisted(&self, session: &Session) {
+        let Some(store) = self.store.clone() else {
+            return;
+        };
+        // One load at a time; a request that waited finds it done.
+        let _loading = self.loading.lock().await;
+        if !self.load_pending() {
+            return;
+        }
+        let key = self.store_key();
+        let listed = tokio::task::spawn_blocking(move || store.list(key.as_deref())).await;
+        let udfs = match listed {
+            Ok(Ok(udfs)) => udfs,
+            Ok(Err(e)) => {
+                tracing::warn!(target: "krishiv::udf", error = %e, "the persisted Python UDFs could not be read");
+                return;
+            }
+            Err(_) => return,
+        };
+        for udf in udfs {
+            let held = self
+                .lock()
+                .payloads
+                .iter()
+                // Only a registered function holds the name: an inline UDF (top-bit version) is not in the registry.
+                .any(|(name, v, _)| {
+                    v & ANONYMOUS_VERSION_BIT == 0 && name.to_lowercase() == udf.name.to_lowercase()
+                });
+            if held {
+                continue;
+            }
+            if let Err(e) = self.register(session, udf) {
+                tracing::warn!(target: "krishiv::udf", error = %e, "a persisted Python UDF was not loaded");
+            }
+        }
+        self.loaded
+            .store(true, std::sync::atomic::Ordering::Release);
+    }
+
+    /// The catalog key of this session's functions: its tenant, else (when the server tells principals apart)
+    /// its principal, so one untenanted principal never reads another's; the auth-off local principal has
+    /// the one empty key.
+    fn store_key(&self) -> Option<String> {
+        match (&self.tenant, self.authenticated) {
+            (Some(t), _) => Some(format!("t:{t}")),
+            (None, true) => Some(format!("p:{}", self.principal)),
+            (None, false) => None,
+        }
+    }
+
+    /// `PersistPythonFunction`: keeps the session's registered UDF `name` for the tenant, or removes the tenant's
+    /// stored one (`drop`).
+    ///
+    /// # Errors
+    /// `KRISHIV_UNSUPPORTED_FEATURE` when the server has no function catalog or the session registered no such
+    /// UDF; the catalog's failure.
+    pub(crate) async fn persist(
+        &self,
+        session: &Session,
+        name: &str,
+        drop: bool,
+    ) -> Result<(), KrishivError> {
+        let Some(store) = self.store.clone() else {
+            return Err(KrishivUnsupportedFeature {
+                feature: "persisting Python UDFs on a server without a function catalog".to_owned(),
+            }
+            .into());
+        };
+        let key = self.store_key();
+        let udf = if drop {
+            None
+        } else {
+            Some(
+                self.lock()
+                    .payloads
+                    .iter()
+                    .rev()
+                    // A registered function only: an inline UDF of the same name (top-bit version) is not it.
+                    .find(|(n, v, _)| {
+                        v & ANONYMOUS_VERSION_BIT == 0 && n.to_lowercase() == name.to_lowercase()
+                    })
+                    .map(|(_, _, udf)| Arc::clone(udf))
+                    .ok_or_else(|| {
+                        KrishivError::from(KrishivUnsupportedFeature {
+                            feature: format!(
+                                "persisting `{name}`: this session registered no such Python UDF"
+                            ),
+                        })
+                    })?,
+            )
+        };
+        // Replacing or removing a function another principal stored needs `Manage` on the cluster: what a
+        // stored function runs is the owner's to change (a refusal is audited).
+        let (owner_key, owner_name) = (key.clone(), name.to_owned());
+        let owner_store = Arc::clone(&store);
+        let stored_by =
+            blocking(move || owner_store.owner(owner_key.as_deref(), &owner_name)).await?;
+        let foreign = stored_by.is_some_and(|o| o != self.principal);
+        if foreign {
+            authorize_manage(session).await?;
+        }
+        let name = name.to_owned();
+        let owner = self.principal.clone();
+        let change = |override_owner: bool| {
+            let (store, udf, key) = (Arc::clone(&store), udf.clone(), key.clone());
+            let (name, owner) = (name.clone(), owner.clone());
+            blocking(move || match udf {
+                Some(udf) => store.put(key.as_deref(), &owner, &udf, override_owner),
+                None => store.remove(key.as_deref(), &name, &owner, override_owner),
+            })
+        };
+        // The store checks the owner inside the write, so a row that appeared after the read above is
+        // still refused; the retry runs only once `Manage` passed.
+        let mut outcome = change(foreign).await?;
+        if outcome == StoreChange::OwnedByOther {
+            authorize_manage(session).await?;
+            outcome = change(true).await?;
+        }
+        if outcome == StoreChange::OwnedByOther {
+            // A store that ignored `override_owner`: nothing was written, so do not report success.
+            return Err(InternalError {
+                message: format!(
+                    "the function store refused to change `{name}` although the caller may override"
+                ),
+            }
+            .into());
+        }
+        Ok(())
     }
 
     /// The runtime of `session`, installed on it at the first call. Only after the session's principal
@@ -276,8 +532,17 @@ impl SessionPython {
     /// The UDFs of `clone`, a copy of this session built for `principal` (`CloneSession`): a runtime of
     /// its own (its workers serve the clone only) holding every payload this session registered, so the
     /// registrations the clone copied keep running; installed on the clone when it was on this session.
-    pub(crate) fn copy_for(&self, principal: &str, clone: &Session) -> Self {
-        let copy = Self::new(self.host.as_ref(), principal, clone);
+    pub(crate) fn copy_for(
+        &self,
+        principal: &str,
+        tenant: Option<&str>,
+        authenticated: bool,
+        clone: &Session,
+    ) -> Self {
+        let mut copy = Self::new(self.host.as_ref(), principal, tenant, authenticated, clone);
+        copy.store.clone_from(&self.store);
+        // The clone is another owner's: it loads its own tenant's functions, unless the source never needed to.
+        *copy.loaded.get_mut() = self.store.is_none();
         let state = self.lock().clone();
         if let Some(runtime) = &copy.runtime {
             for (name, version, udf) in &state.payloads {
@@ -290,6 +555,17 @@ impl SessionPython {
         *copy.lock() = state;
         copy
     }
+}
+
+/// Runs a catalog call on a blocking thread.
+async fn blocking<T: Send + 'static>(
+    f: impl FnOnce() -> Result<T, KrishivError> + Send + 'static,
+) -> Result<T, KrishivError> {
+    tokio::task::spawn_blocking(f).await.map_err(|_| {
+        KrishivError::from(krishiv_common::error::InternalError {
+            message: "the function catalog call did not finish".to_owned(),
+        })
+    })?
 }
 
 /// The runner conf of `session`, read live: the conf store, not the session (which holds the runtime that

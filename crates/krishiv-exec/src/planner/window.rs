@@ -382,6 +382,9 @@ impl Planner<'_> {
                 | AggregateFunction::BitmapAndAgg
                 | AggregateFunction::HllSketchAgg { .. }
                 | AggregateFunction::HllUnionAgg { .. }
+                | AggregateFunction::ThetaSketchAgg { .. }
+                | AggregateFunction::ThetaUnionAgg { .. }
+                | AggregateFunction::ThetaIntersectionAgg
         ) {
             return Err(unsupported(&format!("the window aggregate {name}")));
         }

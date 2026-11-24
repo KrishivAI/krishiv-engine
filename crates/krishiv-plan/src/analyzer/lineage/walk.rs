@@ -421,6 +421,21 @@ impl<'a> Walker<'a> {
                 kind,
                 condition,
             } => self.join(left, right, *kind, condition, offset),
+            // The match decides which right row a left row gets: its values are join filters.
+            PlanNode::AsOfJoin {
+                left,
+                right,
+                kind,
+                condition,
+                as_of,
+            } => {
+                let rule = self.join(left, right, *kind, condition, offset)?;
+                for e in as_of.exprs() {
+                    let info = self.value(e, offset)?;
+                    self.record(FilterKind::Join, &info);
+                }
+                Ok(rule)
+            }
             PlanNode::Sort { input, order, .. } => {
                 let out = self.plan(input, offset)?;
                 for o in order {
@@ -437,6 +452,7 @@ impl<'a> Walker<'a> {
             }
             PlanNode::Limit { input, .. }
             | PlanNode::Offset { input, .. }
+            | PlanNode::SecurityBarrier { input, .. }
             | PlanNode::Tail { input, .. }
             | PlanNode::JoinHint { input, .. }
             // `TABLESAMPLE` keeps some input rows, by a draw that reads no column (`BUCKET .. ON col` is refused
@@ -697,6 +713,7 @@ impl<'a> Walker<'a> {
             | PlanNode::ColumnNames { .. }
             | PlanNode::PipeOperator { .. }
             | PlanNode::SetOp { .. }
+            | PlanNode::Zip { .. }
             | PlanNode::Pivot { .. }
             | PlanNode::Unpivot { .. }
             | PlanNode::InlineTable { .. }

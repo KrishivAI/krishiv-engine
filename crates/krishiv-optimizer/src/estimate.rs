@@ -222,6 +222,28 @@ fn filtered(est: &RelStats, pred: &Expr, propagate: bool) -> RelStats {
     }
 }
 
+/// The fraction of a left as-of join's left rows estimated to find no right row: those whose
+/// as-of value is NULL, and those whose key values the right side lacks (the keys' distinct
+/// counts, as an equi-join's matched fraction). Which rows the match condition leaves without a
+/// nearest row is not modelled.
+fn as_of_unmatched(condition: &JoinCondition, value: &Expr, l: &RelStats, r: &RelStats) -> f64 {
+    // A column, or a cast of one that carries its statistics (the analyzer widens the value).
+    let null_value = derived(value, l, l.rows).map_or(0.0, |s| s.null_frac);
+    let keys_missing = match condition {
+        JoinCondition::On(c) => key_pairs(c, l, r)
+            .iter()
+            .filter_map(|(a, b)| {
+                let (m, o) = (l.cols.get(a)?, r.cols.get(b)?);
+                (m.ndv_known() && o.ndv_known() && m.ndv > 0.0)
+                    .then(|| (m.ndv.min(o.ndv) / m.ndv).min(1.0))
+            })
+            .reduce(f64::min)
+            .map_or(0.0, |matched| 1.0 - matched),
+        _ => 0.0,
+    };
+    (1.0 - (1.0 - null_value) * (1.0 - keys_missing)).clamp(0.0, 1.0)
+}
+
 /// The pairs `(left column, right column)` of the equalities between a
 /// column of `l` and a column of `r` among the conjuncts of `pred`.
 fn key_pairs(pred: &Arc<Expr>, l: &RelStats, r: &RelStats) -> Vec<(AttrId, AttrId)> {
@@ -418,8 +440,33 @@ impl<'a> Estimator<'a> {
                 let (l, r) = (self.plan(left), self.plan(right));
                 self.join(p, &l, &r, *kind, condition)
             }
+            // At most one right row per left row (a left join: exactly one): the left rows, the
+            // right columns as the right input left them, a left join's gaining its unmatched
+            // fraction as nulls.
+            PlanNode::AsOfJoin {
+                left,
+                right,
+                kind,
+                condition,
+                as_of,
+            } => {
+                let (l, r) = (self.plan(left), self.plan(right));
+                let mut out = RelStats::clone(&l);
+                let unmatched = if self.propagate && *kind == JoinKind::LeftOuter {
+                    as_of_unmatched(condition, &as_of.left, &l, &r)
+                } else {
+                    0.0
+                };
+                out.cols.extend(r.cols.iter().map(|(id, c)| {
+                    let mut c = c.clone();
+                    c.null_frac = unmatched + (1.0 - unmatched) * c.null_frac;
+                    (*id, c)
+                }));
+                out
+            }
             PlanNode::Sort { input, .. }
             | PlanNode::SubqueryAlias { input, .. }
+            | PlanNode::SecurityBarrier { input, .. }
             | PlanNode::JoinHint { input, .. }
             | PlanNode::Repartition { input, .. }
             // Rows pass through unchanged.
@@ -548,6 +595,14 @@ impl<'a> Estimator<'a> {
                     .extend(states.iter().map(|c| (c.id, AttrStats::guess(rows))));
                 out
             }
+            // `range(start, end, step)`: its values are known exactly (QA-2).
+            PlanNode::Range {
+                start,
+                end,
+                step,
+                output,
+                ..
+            } => range_stats(*start, *end, *step, output.id),
             _ => RelStats::unknown(DEFAULT_ROWS, ids()),
         }
     }
@@ -1048,4 +1103,46 @@ fn renames_to_canonical(input: &LogicalPlan) -> HashMap<AttrId, BoundColumn> {
         }
     }
     to
+}
+
+/// The statistics of `range(start, end, step)` over the column `id`: as many rows as values,
+/// all distinct, none null, from the first value to the last.
+fn range_stats(start: i64, end: i64, step: i64, id: AttrId) -> RelStats {
+    let (start, end, step) = (i128::from(start), i128::from(end), i128::from(step));
+    let span = end - start;
+    let n = if step == 0 || span == 0 || (span > 0) != (step > 0) {
+        0
+    } else {
+        // ceil(span / step) for a span and step of one sign.
+        (span + step - step.signum()) / step
+    };
+    let rows = n as f64;
+    let mut cols = HashMap::new();
+    if n > 0 {
+        let last = start + (n - 1) * step;
+        let (lo, hi) = if step > 0 {
+            (start, last)
+        } else {
+            (last, start)
+        };
+        cols.insert(
+            id,
+            AttrStats {
+                ndv: rows,
+                null_frac: 0.0,
+                min: Some(lo as f64),
+                max: Some(hi as f64),
+                range_estimated: false,
+                source: StatSource::Provided,
+            },
+        );
+    } else {
+        cols.insert(id, AttrStats::guess(1.0));
+    }
+    RelStats {
+        rows,
+        cols,
+        from_statistics: true,
+        unfiltered_rows: 0.0,
+    }
 }

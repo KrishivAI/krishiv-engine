@@ -189,7 +189,10 @@ use krishiv_types::batch::{Batch, Weights};
 pub use broadcast::{BroadcastKey, BroadcastTables, SharedBuildJoinNode};
 pub(crate) use broadcast::{BuildJob, Decision, PrebuiltSink, SharedOrOwnRows};
 pub(crate) use merge::MergeEnv;
-pub use merge::{SortMergeJoin, SortMergeJoinNode, merge_join_supported};
+pub use merge::{
+    AsOfDistance, AsOfMergeDirection, AsOfMergeSpec, SortMergeJoin, SortMergeJoinNode,
+    merge_join_supported,
+};
 pub use nested::{NestedLoopJoin, NestedLoopJoinNode, NestedLoopSpec};
 
 use crate::error::{Result, internal};

@@ -11,6 +11,7 @@ pub(crate) mod eq_deletes;
 pub(crate) mod filter;
 pub(crate) mod lazy;
 pub(crate) mod lineage;
+pub(crate) mod maintenance;
 pub(crate) mod manifest_cache;
 pub(crate) mod merge;
 pub(crate) mod mor_sink;
@@ -59,6 +60,8 @@ mod evolution_tests;
 mod filter_tests;
 #[cfg(test)]
 mod lineage_tests;
+#[cfg(test)]
+mod maintenance_tests;
 #[cfg(test)]
 mod merge_tests;
 #[cfg(test)]

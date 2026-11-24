@@ -123,6 +123,7 @@ macro_rules! registry {
 registry! {
     (aggregate_filter, AggregateFilter, POST_MIGRATION_READER_VERSION, Semantic, "An aggregate's `FILTER (WHERE ...)` mask column."),
     (any_value_by_aggregates, AnyValueByAggregates, POST_MIGRATION_READER_VERSION, Semantic, "The `any_value`, `max_by` and `min_by` aggregates."),
+    (as_of_join, AsOfJoin, POST_MIGRATION_READER_VERSION, Semantic, "A sort-merge join's as-of match (`SortMergeJoinPlan.as_of`, Spark 4.3's `ASOF JOIN`): each left row with the nearest right row of its keys by the as-of columns; without it the join would return every matching pair."),
     (binary_output_style, BinaryOutputStyle, POST_MIGRATION_READER_VERSION, Semantic, "The `binary_output_style` expression environment setting (`spark.sql.binaryOutputStyle`): `to_csv` and `to_xml` print binary fields as UTF-8 text, signed bytes, base64 or hex instead of `[45 61]`."),
     (bitmap_aggregates, BitmapAggregates, POST_MIGRATION_READER_VERSION, Semantic, "The bitmap aggregates (`bitmap_construct_agg`, `bitmap_or_agg`, `bitmap_and_agg`): a 4,096-byte bitmap per group."),
     (calendar_struct, CalendarStruct, POST_MIGRATION_READER_VERSION, Semantic, "CALENDAR INTERVAL columns on the struct carrier (months, days, microseconds, each child marked `krishiv.calendar`; ADR 0009 update 2026-11-06). A reader without it would read the column as a plain STRUCT."),
@@ -178,6 +179,7 @@ registry! {
     (struct_field, StructField, POST_MIGRATION_READER_VERSION, Semantic, "A struct field access (`GetStructField`: the analyzer-resolved field of a struct)."),
     (table_write, TableWrite, POST_MIGRATION_READER_VERSION, Semantic, "The `TableWrite` node: rows written into a table provider's sink (its writer, or the rewriter of its row-level table), resolved at instantiation; design P3-PR-DML §7."),
     (tail, Tail, POST_MIGRATION_READER_VERSION, Semantic, "The `Tail` node (the last rows of the input in plan order, Spark's `Dataset.tail`)."),
+    (theta_sketch_aggregates, ThetaSketchAggregates, POST_MIGRATION_READER_VERSION, Semantic, "The DataSketches Theta aggregates (`theta_sketch_agg` and `theta_union_agg` with their folded lgNomEntries, `theta_intersection_agg`): a sketch per group."),
     (time_type, TimeType, POST_MIGRATION_READER_VERSION, Semantic, "The `TIME` type, with its precision."),
     (udt_type, UdtType, POST_MIGRATION_READER_VERSION, Semantic, "User-defined types (Spark `UserDefinedType`): stored as their SQL type, with the class names in the plan."),
     (union_loop, UnionLoop, POST_MIGRATION_READER_VERSION, Semantic, "The `UnionLoop` and `LoopRef` nodes (recursive common table expressions run as a loop)."),
@@ -480,6 +482,7 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
             PhysNode::SharedRead { .. } => Some(Feature::SharedSubplan),
             PhysNode::ExchangeSource { .. } => Some(Feature::ExchangeSource),
             PhysNode::UnionLoop { .. } | PhysNode::LoopRef { .. } => Some(Feature::UnionLoop),
+            PhysNode::SortMergeJoin(j) if j.as_of.is_some() => Some(Feature::AsOfJoin),
             PhysNode::SortMergeJoin(_) => Some(Feature::SortMergeJoin),
             PhysNode::WindowGroupLimit { .. } => Some(Feature::WindowGroupLimit),
             PhysNode::PythonEval { .. } => Some(Feature::PythonUdf),
@@ -709,6 +712,9 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
             AggregateFunction::HllSketchAgg { .. } | AggregateFunction::HllUnionAgg { .. } => {
                 Some(Feature::HllSketchAggregates)
             }
+            AggregateFunction::ThetaSketchAgg { .. }
+            | AggregateFunction::ThetaUnionAgg { .. }
+            | AggregateFunction::ThetaIntersectionAgg => Some(Feature::ThetaSketchAggregates),
             AggregateFunction::Udf(_) => Some(Feature::RustUdaf),
         },
         // Built-ins and registry functions travel by name; only a
@@ -1012,7 +1018,16 @@ fn exprs_of<'a>(node: &'a PhysNode) -> Vec<&'a Arc<Expr>> {
                     .map(|f| &f.predicate),
             );
         }
-        PhysNode::SortMergeJoin(j) => roots.extend(j.residual.iter().flat_map(|r| &r.conjuncts)),
+        PhysNode::SortMergeJoin(j) => {
+            roots.extend(j.residual.iter().flat_map(|r| &r.conjuncts));
+            // The as-of distance is an expression too: it may carry an `EvalMode`.
+            roots.extend(
+                j.as_of
+                    .iter()
+                    .flat_map(|a| a.distance.iter())
+                    .flat_map(|d| &d.conjuncts),
+            );
+        }
         PhysNode::NestedLoopJoin(j) => roots.extend(j.residual.iter().flat_map(|r| &r.conjuncts)),
         PhysNode::TableWrite { request, .. } => match request {
             TableWriteRequest::Write(w) => {
