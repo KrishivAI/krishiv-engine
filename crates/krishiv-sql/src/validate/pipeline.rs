@@ -60,7 +60,8 @@ impl Checker<'_> {
         if d.has_path() == d.has_path_option() {
             return Err(at(LegacyErrorTemp0049 {}, d.header_span));
         }
-        if d.local {
+        // Spark checks the scheme in `visitInsertOverwriteDir` (the USING form), not in the Hive form.
+        if d.local && matches!(d.format, DirectoryFormat::Provider { .. }) {
             let path = d
                 .option_path()
                 .filter(|p| !p.is_empty())

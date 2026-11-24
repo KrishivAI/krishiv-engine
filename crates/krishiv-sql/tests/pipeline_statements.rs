@@ -249,6 +249,8 @@ fn insert_local_directory_needs_the_file_scheme() {
         "INSERT OVERWRITE LOCAL DIRECTORY '/tmp/o' USING parquet SELECT 1",
         "INSERT OVERWRITE LOCAL DIRECTORY 'file:///tmp/o' USING parquet SELECT 1",
         "INSERT OVERWRITE DIRECTORY 's3://b/p' USING parquet SELECT 1",
+        // The Hive form has no scheme check in Spark (`visitInsertOverwriteHiveDir`); the session refuses it by name.
+        "INSERT OVERWRITE LOCAL DIRECTORY 's3://b/p' STORED AS parquet SELECT 1",
     ] {
         assert!(matches!(parse(sql), Statement::InsertDirectory(_)), "{sql}");
     }
