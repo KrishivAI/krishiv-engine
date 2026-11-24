@@ -85,3 +85,18 @@ mod text;
 mod signatures1;
 mod signatures2;
 mod signatures3;
+
+#[test]
+fn the_leakproof_declarations_are_sorted_registry_entries() {
+    let names = super::leakproof::LEAKPROOF;
+    assert!(names.windows(2).all(|w| w[0] < w[1]), "sorted, no repeats");
+    for name in names {
+        assert!(
+            def(name).leakproof,
+            "{name} is a registry entry and flagged"
+        );
+        assert!(builtins().leakproof(name));
+    }
+    assert!(!def("upper").leakproof);
+    assert!(!builtins().leakproof("no_such_function"));
+}

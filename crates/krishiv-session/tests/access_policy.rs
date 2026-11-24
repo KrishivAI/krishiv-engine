@@ -2123,3 +2123,26 @@ fn browse_on_a_view_shows_its_schema_not_its_text_or_rows() {
         assert_eq!(class(block_on(s.sql(sql))), DENIED, "{sql}");
     }
 }
+
+/// E14 (design `P3-E14-security-barrier.md` §7.5): `AllowWith` stays refused (ADR 0036:
+/// `KRISHIV_UNSUPPORTED_FEATURE`), and no barrier
+/// reaches a production plan; the planner's barrier exists only for P5-T045 to place.
+#[test]
+fn a_row_column_policy_is_still_refused_and_no_plan_holds_a_barrier() {
+    let s = session(Policy::new(filtered_reads));
+    assert_eq!(
+        class(block_on(s.sql("SELECT * FROM t")).and_then(|df| block_on(df.collect()))),
+        "KRISHIV_UNSUPPORTED_FEATURE"
+    );
+    let s = session(Policy::new(allow));
+    let explained = block_on(async {
+        let df = s
+            .sql("EXPLAIN EXTENDED SELECT a FROM t WHERE a > 1")
+            .await?;
+        df.collect().await
+    })
+    .unwrap();
+    let text = format!("{explained:?}");
+    assert!(text.contains("Filter"), "{text}");
+    assert!(!text.contains("SecurityBarrier"), "{text}");
+}
