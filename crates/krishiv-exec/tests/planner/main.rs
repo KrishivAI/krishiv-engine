@@ -11,6 +11,7 @@
 )]
 
 mod asof_sites;
+mod barrier;
 mod broadcast_reuse;
 mod build_projection;
 mod conditionals;

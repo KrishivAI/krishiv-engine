@@ -452,6 +452,7 @@ impl<'a> Walker<'a> {
             }
             PlanNode::Limit { input, .. }
             | PlanNode::Offset { input, .. }
+            | PlanNode::SecurityBarrier { input, .. }
             | PlanNode::Tail { input, .. }
             | PlanNode::JoinHint { input, .. }
             // `TABLESAMPLE` keeps some input rows, by a draw that reads no column (`BUCKET .. ON col` is refused
