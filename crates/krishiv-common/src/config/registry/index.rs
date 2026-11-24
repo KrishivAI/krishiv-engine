@@ -189,6 +189,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &IO_MAX_CONCURRENT_REQUESTS,
     ),
     ("krishiv.optimizer.joinEnumerator", &JOIN_ENUMERATOR),
+    ("krishiv.optimizer.joinPruneFirst", &JOIN_PRUNE_FIRST),
     (
         "krishiv.server.readiness.timeout",
         &SERVER_READINESS_TIMEOUT,

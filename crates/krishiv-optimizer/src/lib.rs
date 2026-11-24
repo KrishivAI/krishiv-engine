@@ -101,7 +101,7 @@ use std::sync::Arc;
 
 use krishiv_common::config::{
     ANSI_ENABLED, AUTO_BROADCAST_JOIN_THRESHOLD, Config, ConfigValue, DERIVED_KEYS_ABOVE,
-    EAGER_AGGREGATION, GROUP_KEY_CODE, JOIN_COST, JOIN_DP_LIMIT, JOIN_ENUMERATOR,
+    EAGER_AGGREGATION, GROUP_KEY_CODE, JOIN_COST, JOIN_DP_LIMIT, JOIN_ENUMERATOR, JOIN_PRUNE_FIRST,
     LATE_PAYLOAD_JOIN, PAYLOAD_ABOVE_AGGREGATE, PRE_AGGREGATE_EXPAND, PRESERVED_SIDE_SEMI_JOIN,
     SEMI_ANTI_JOIN_ORDER, SESSION_TIME_ZONE, SHARE_CTE_INSTANCES, SHARE_FILTERED_SCANS,
     SHARE_REPEATED_SUBTREES, SUBQUERY_AS_WINDOW,
@@ -932,6 +932,9 @@ fn join_settings(config: Option<&Config>, trace: bool) -> join_order::Settings {
             .and_then(ConfigValue::as_bool)
         {
             s.semi_anti_order = on;
+        }
+        if let Some(on) = config.get(&JOIN_PRUNE_FIRST).and_then(ConfigValue::as_bool) {
+            s.prune_first = on;
         }
         if let Some(on) = config
             .get(&PRESERVED_SIDE_SEMI_JOIN)

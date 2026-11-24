@@ -45,6 +45,7 @@ use crate::narrow::{conjunct_selectivities, equi_columns, selectivity};
 use crate::stats::{RelStats, Statistics, cse_definitions, reads_cse, resolve_cse};
 
 mod dp;
+mod prune_first;
 mod reads;
 
 /// An original relation (kept alive) and its rewrite.
@@ -144,6 +145,9 @@ pub(crate) struct Settings {
     /// Whether restriction also reduces the preserved side of an outer join
     /// ([`crate::restrict`], `krishiv.optimizer.preservedSideSemiJoin`).
     pub(crate) preserved_side: bool,
+    /// Whether the block across a clustered composite-key edge of the largest input may be
+    /// planned first ([`prune_first`], `krishiv.optimizer.joinPruneFirst`).
+    pub(crate) prune_first: bool,
 }
 
 impl Default for Settings {
@@ -155,6 +159,7 @@ impl Default for Settings {
             trace: false,
             semi_anti_order: true,
             preserved_side: true,
+            prune_first: true,
         }
     }
 }
@@ -185,13 +190,15 @@ pub(crate) struct TreeStats {
     measure: JoinCost,
     cost: f64,
     shape: String,
+    /// What the prune-first choice did, when its gate held ([`prune_first::Choice`]).
+    prune_first: Option<prune_first::Choice>,
 }
 
 impl std::fmt::Display for TreeStats {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "tree inputs={} edges={} hyperedges={} enumerator={} fallback={} pairs={} considered={} measure={} cost={:.6e} shape={}",
+            "tree inputs={} edges={} hyperedges={} enumerator={} fallback={} pairs={} considered={} measure={} cost={:.6e} ",
             self.inputs,
             self.edges,
             self.hyperedges,
@@ -201,8 +208,12 @@ impl std::fmt::Display for TreeStats {
             self.considered,
             self.measure.name(),
             self.cost,
-            self.shape
-        )
+        )?;
+        // The shape stays last: it is the rest of the line.
+        if let Some(c) = &self.prune_first {
+            write!(f, "prune_first={c} ")?;
+        }
+        write!(f, "shape={}", self.shape)
     }
 }
 
@@ -215,6 +226,7 @@ pub(crate) fn reorder(
     settings: Settings,
 ) -> (Arc<LogicalPlan>, Vec<String>) {
     let mut r = Reorder {
+        stats,
         est: Estimator::with_propagation(stats, propagate),
         propagate,
         done: Default::default(),
@@ -232,6 +244,8 @@ pub(crate) fn reorder(
 }
 
 struct Reorder<'a> {
+    /// What the estimator reads; also asked how clustered a scan's columns are.
+    stats: &'a dyn Statistics,
     est: Estimator<'a>,
     /// Whether estimates narrow ranges within a conjunct
     /// ([`crate::Options::stats_propagation`]).
@@ -533,6 +547,14 @@ impl Reorder<'_> {
         }
         graph.trace = self.settings.trace;
         graph.by_bytes = self.settings.cost == JoinCost::Bytes;
+        if self.settings.prune_first {
+            // Of the inputs in the graph's (canonical) order.
+            graph.clustered = graph
+                .leaves
+                .iter()
+                .map(|l| prune_first::clustered(l, self.stats))
+                .collect();
+        }
         let (plan, stats) = graph.plan(self.settings);
         if self.settings.trace {
             self.notes.push(stats.to_string());
@@ -713,6 +735,9 @@ struct Graph {
     by_bytes: bool,
     /// The conjuncts over more than one input.
     preds: Vec<Pred>,
+    /// Per input, its columns clustered in its files ([`prune_first::clustered`]); empty when
+    /// the prune-first choice is off.
+    clustered: Vec<std::collections::HashSet<AttrId>>,
 }
 
 impl Graph {
@@ -977,6 +1002,7 @@ impl Graph {
             widths,
             by_bytes: false,
             preds: kept,
+            clustered: Vec::new(),
         }
     }
 
@@ -1217,8 +1243,8 @@ impl Graph {
         let n = self.n();
         let masks = self.masks();
         let enumerator = settings.enumerator;
-        let (table, mut fallback, work) = match enumerator {
-            Enumerator::Greedy => (None, Some("forced"), dp::Work::default()),
+        let (table, mut fallback, work, blocked) = match enumerator {
+            Enumerator::Greedy => (None, Some("forced"), dp::Work::default(), None),
             Enumerator::DpSub if n <= settings.dp_limit.min(MAX_DP_LIMIT) => {
                 let bit = |s: Set| move |i: usize| s & (1 << i) != 0;
                 let rows_of = |s: Set| self.rows_of(&bit(s));
@@ -1256,13 +1282,22 @@ impl Graph {
                     ties: !self.by_bytes && self.widths.is_some(),
                     tie_result: &tie_result,
                     tie_bytes: &tie_bytes,
+                    blocks: [0, 0],
                 };
                 let (table, work) = dp::dpsub(n, &masks, &shape);
-                (Some(table), None, work)
+                // The same enumeration with the prune-first block planned on its own first.
+                let blocked = self.prune_block().map(|(block, with_largest)| {
+                    let shape = dp::Shape {
+                        blocks: [block, with_largest],
+                        ..shape
+                    };
+                    (block, dp::dpsub(n, &masks, &shape).0)
+                });
+                (Some(table), None, work, blocked)
             }
-            Enumerator::DpSub => (None, Some("inputs"), dp::Work::default()),
+            Enumerator::DpSub => (None, Some("inputs"), dp::Work::default(), None),
         };
-        let built = match table.and_then(|t| self.table_plan(&t, &masks)) {
+        let mut built = match table.and_then(|t| self.table_plan(&t, &masks)) {
             Some(b) => b,
             None => {
                 // A part held together only by a conjunct over three or more
@@ -1271,6 +1306,19 @@ impl Graph {
                 self.greedy()
             }
         };
+        let mut choice = None;
+        if fallback.is_none()
+            && let Some((block, t)) = blocked
+        {
+            let other = self.table_plan(&t, &masks);
+            let c = prune_first::Choice::new(block, built.cost, other.as_ref().map(|b| b.cost));
+            if c.taken
+                && let Some(b) = other
+            {
+                built = b;
+            }
+            choice = Some(c);
+        }
         let mut pairs_seen = std::collections::BTreeSet::new();
         let mut hyperedges = 0;
         for p in self.preds.iter().filter(|p| p.edge) {
@@ -1293,6 +1341,7 @@ impl Graph {
             measure: settings.cost,
             cost: built.cost,
             shape: built.shape,
+            prune_first: choice,
         };
         (built.plan, stats)
     }
@@ -1642,6 +1691,7 @@ mod tests {
                 class: None,
                 carrier: None,
             }],
+            clustered: Vec::new(),
         }
     }
 

@@ -85,6 +85,13 @@ pub struct ColumnStatistics {
     /// A serialized distinct-count sketch (a later statistics task reads
     /// it); pruning ignores it.
     pub sketch: Option<SketchRef>,
+    /// Over the file's units (Parquet row groups), the sum of each unit's
+    /// `max - min`, for an integer or date column whose every unit has exact
+    /// bounds (else `None`). Divided by the unit count and compared with the
+    /// file's own `max - min`, it says how clustered the column is: a column
+    /// written in order spans a small slice of its range per unit. Only for
+    /// costing (the join orderer); pruning ignores it.
+    pub unit_width_sum: Option<f64>,
 }
 
 /// Statistics of a file or of a unit of one. Formats without statistics
