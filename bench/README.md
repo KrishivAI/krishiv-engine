@@ -619,8 +619,9 @@ timed run; `ab` and the `theirs` method of `reproduce` do not.
 **Memory guard (`krishiv-bench run`).** Before every run, warm-up included, the harness waits until `MemAvailable` in
 `/proc/meminfo` is at least `--min-mem-avail` of `MemTotal` (default 0.75; 0 turns it off; it gives up after 10
 minutes and fails the query). A sampler tracks the lowest `MemAvailable` during the run; if it dips below the
-threshold (a host balloon took the memory) the run is discarded, recorded under the query's `invalid_samples` with
-`"reason": "memory reclaimed"`, and retried up to `--mem-retries` times (default 2). If every attempt dips, the
+threshold by more than the engine's own resident-set growth during the run (peak minus baseline RSS, or the whole
+peak when the adapter has no baseline), a host balloon took the memory: the run is discarded, recorded under the
+query's `invalid_samples` with `"reason": "memory reclaimed"` and its `engine_growth_bytes`, and retried up to `--mem-retries` times (default 2). If every attempt dips, the
 query fails. `report` lists the invalid runs in an "Invalid samples" section. The h2o suites, `ab`, `abba` and
 `reproduce` do not use the guard yet.
 

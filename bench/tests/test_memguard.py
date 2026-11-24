@@ -88,6 +88,20 @@ def test_is_invalid_only_below_the_threshold():
     assert not memguard.is_invalid(None, 200)
 
 
+def test_is_invalid_credits_the_engines_own_growth():
+    # MemAvailable fell 50 under the threshold, but the engine itself grew by 60: its own memory, not a reclaim.
+    assert not memguard.is_invalid(150, 200, engine_growth=60)
+    assert memguard.is_invalid(150, 200, engine_growth=40)
+
+
+def test_engine_growth_is_peak_minus_baseline_or_the_peak_when_no_baseline():
+    assert memguard.engine_growth_bytes(Measure(peak_rss_bytes=900, baseline_rss_bytes=300)) == 600
+    assert memguard.engine_growth_bytes(Measure(peak_rss_bytes=900)) == 900  # upper bound of the growth
+    assert memguard.engine_growth_bytes(Measure(peak_rss_bytes=100, baseline_rss_bytes=300)) == 0
+    assert memguard.engine_growth_bytes(Measure()) == 0
+    assert memguard.engine_growth_bytes(None) == 0
+
+
 def test_report_lists_invalid_samples_and_is_silent_without_them():
     inv = memguard.InvalidSample(3, 0, 2 * 1024**3, 8 * 1024**3).as_dict()
     results = {"krishiv": {"queries": {"q01": {"invalid_samples": [inv]}, "q02": {}}}}
@@ -95,13 +109,14 @@ def test_report_lists_invalid_samples_and_is_silent_without_them():
     assert "Invalid samples" in text
     assert "memory reclaimed" in text
     assert "| q01 | krishiv | 1 |" in text
+    assert "engine growth GB" in text
     assert invalid_sample_lines({"krishiv": {"queries": {"q01": {}}}}, ["q01"]) == []
 
 
 # ---- run_suite: invalid runs are retried and reported
 
 
-def _suite(monkeypatch, tmp_path, avail_per_run, retries=2, warmup=0, guard=0.75, raises=()):
+def _suite(monkeypatch, tmp_path, avail_per_run, retries=2, warmup=0, guard=0.75, raises=(), peak_kb=None):
     """Run a fake one-query suite; ``avail_per_run[i]`` is the MemAvailable (kB) the i-th engine run sees.
 
     ``raises`` lists the engine-call indexes that raise after the dip (a query killed by reclaimed memory).
@@ -135,7 +150,7 @@ def _suite(monkeypatch, tmp_path, avail_per_run, retries=2, warmup=0, guard=0.75
             return [(1,)]
 
         def end_measure(self):
-            return Measure(cpu_seconds=1.0)
+            return Measure(cpu_seconds=1.0, peak_rss_bytes=None if peak_kb is None else peak_kb * 1024)
 
     def memguard_sampler_tick():
         import time
@@ -171,6 +186,22 @@ def test_run_suite_retries_a_run_that_dipped_and_records_it(tmp_path, monkeypatc
     assert [i["reason"] for i in q["invalid_samples"]] == ["memory reclaimed"]
     assert q["invalid_samples"][0]["min_mem_avail_bytes"] == 100 * 1024
     assert rec["mem_guard"]["retries"] == 2
+
+
+def test_run_suite_keeps_a_run_whose_dip_is_the_engines_own_memory(tmp_path, monkeypatch):
+    # floor 750 kB; MemAvailable dips to 600 while the engine's own RSS peaks at 200: 600 + 200 >= 750, so valid
+    rec, calls = _suite(monkeypatch, tmp_path, [600], peak_kb=200)
+    q = rec["queries"]["q01"]
+    assert "error" not in q
+    assert "invalid_samples" not in q
+    assert len(calls) == 2
+
+
+def test_run_suite_still_flags_a_dip_larger_than_the_engines_growth(tmp_path, monkeypatch):
+    rec, _ = _suite(monkeypatch, tmp_path, [600, 900, 900], peak_kb=100)
+    q = rec["queries"]["q01"]
+    assert len(q["times_s"]) == 2
+    assert q["invalid_samples"][0]["engine_growth_bytes"] == 100 * 1024
 
 
 def test_run_suite_fails_the_query_when_every_attempt_dips(tmp_path, monkeypatch):

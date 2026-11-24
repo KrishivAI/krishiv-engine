@@ -199,7 +199,7 @@ def main(argv=None) -> None:
         type=float,
         default=memguard.DEFAULT_MIN_FRACTION,
         help="wait before each timed run until MemAvailable is this fraction of MemTotal, and mark runs that dip "
-        "below it 'invalid: memory reclaimed' (0 = off)",
+        "below it by more than the engine's own RSS growth 'invalid: memory reclaimed' (0 = off)",
     )
     r.add_argument(
         "--mem-retries",

@@ -391,8 +391,9 @@ def run_suite(
                             if timed_run:
                                 eng.release_result()  # its Arrow table is in no later window
                         low = sampler.min_available if sampler is not None else None
-                        if mem_floor and low is not None and memguard.is_invalid(low, mem_floor):
-                            invalid.append(memguard.InvalidSample(i, attempt, low, mem_floor).as_dict())
+                        grown = memguard.engine_growth_bytes(m)
+                        if mem_floor and low is not None and memguard.is_invalid(low, mem_floor, grown):
+                            invalid.append(memguard.InvalidSample(i, attempt, low, mem_floor, grown).as_dict())
                             continue
                         if failure is not None:
                             raise failure
