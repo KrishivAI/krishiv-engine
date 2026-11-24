@@ -53,10 +53,13 @@ docker cp krishiv:/var/lib/krishiv/tls/cert.pem .   # the self-signed certificat
 | Token | `KRISHIV_AUTH_TOKEN` (at least 32 characters: the server refuses a shorter token at start); else the file `KRISHIV_AUTH_TOKEN_FILE` (default `/run/secrets/krishiv_token`, a Docker or Compose secret); else a random token generated on first start and printed in the container log. It is one admin principal, `docker`, and expires on `KRISHIV_AUTH_TOKEN_EXPIRES` (`YYYY-MM-DD`, default one year from start). |
 | Certificate | `KRISHIV_TLS_CERT` and `KRISHIV_TLS_KEY` (default `/etc/krishiv/tls/cert.pem` and `key.pem`); else a self-signed certificate for `localhost`, `127.0.0.1` and the container's host name, generated on first start in `KRISHIV_TLS_DIR` (default `/var/lib/krishiv/tls`). Mount that directory to keep the certificate across containers. |
 
-The key and a token file must not be readable by group or others, or the server refuses them.
+The key must not be readable by group or others, or the server refuses it. A token file is copied to a private file
+first, so any mode works as long as uid `10001` can read it (a Compose secret with `uid: "10001"` and `mode: 0400`).
+A token file or certificate path that is set but cannot be read stops the container with an error.
 
-To configure authentication yourself, pass your own `--host`, `krishiv.auth.*` or `krishiv.server.tls.*` settings after
-`server`; the entry point then adds nothing. This example uses a certificate you already have:
+To configure authentication yourself, pass your own `krishiv.auth.*`, `krishiv.server.tls.*` or
+`spark.connect.authenticate.*` settings after `server`; the entry point then adds nothing but `--host 0.0.0.0`, and
+not even that when you pass `--host`. This example uses a certificate you already have:
 
 ```bash
 docker run --rm --name krishiv \
