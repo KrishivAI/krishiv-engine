@@ -3037,6 +3037,7 @@ dependencies = [
  "krishiv-exec",
  "krishiv-plan",
  "krishiv-session",
+ "krishiv-sql",
  "krishiv-store",
  "krishiv-types",
  "reqwest 0.13.5",
