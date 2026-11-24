@@ -547,15 +547,8 @@ impl Reorder<'_> {
         }
         graph.trace = self.settings.trace;
         graph.by_bytes = self.settings.cost == JoinCost::Bytes;
-        if self.settings.prune_first {
-            // Of the inputs in the graph's (canonical) order.
-            graph.clustered = graph
-                .leaves
-                .iter()
-                .map(|l| prune_first::clustered(l, self.stats))
-                .collect();
-        }
-        let (plan, stats) = graph.plan(self.settings);
+        let clustered = self.settings.prune_first.then_some(self.stats);
+        let (plan, stats) = graph.plan(self.settings, clustered);
         if self.settings.trace {
             self.notes.push(stats.to_string());
         }
@@ -735,9 +728,6 @@ struct Graph {
     by_bytes: bool,
     /// The conjuncts over more than one input.
     preds: Vec<Pred>,
-    /// Per input, its columns clustered in its files ([`prune_first::clustered`]); empty when
-    /// the prune-first choice is off.
-    clustered: Vec<std::collections::HashSet<AttrId>>,
 }
 
 impl Graph {
@@ -1002,7 +992,6 @@ impl Graph {
             widths,
             by_bytes: false,
             preds: kept,
-            clustered: Vec::new(),
         }
     }
 
@@ -1239,11 +1228,17 @@ impl Graph {
     }
 
     /// The tree planned by `settings`' enumerator, and what it did.
-    fn plan(&self, settings: Settings) -> (Arc<LogicalPlan>, TreeStats) {
+    /// The plan of the tree and its note. `clustered`: where the prune-first choice reads which
+    /// columns are clustered in the largest input's files (`None`: the choice is off).
+    fn plan(
+        &self,
+        settings: Settings,
+        clustered: Option<&dyn Statistics>,
+    ) -> (Arc<LogicalPlan>, TreeStats) {
         let n = self.n();
         let masks = self.masks();
         let enumerator = settings.enumerator;
-        let (table, mut fallback, work, blocked) = match enumerator {
+        let (table, mut fallback, mut work, blocked) = match enumerator {
             Enumerator::Greedy => (None, Some("forced"), dp::Work::default(), None),
             Enumerator::DpSub if n <= settings.dp_limit.min(MAX_DP_LIMIT) => {
                 let bit = |s: Set| move |i: usize| s & (1 << i) != 0;
@@ -1286,13 +1281,15 @@ impl Graph {
                 };
                 let (table, work) = dp::dpsub(n, &masks, &shape);
                 // The same enumeration with the prune-first block planned on its own first.
-                let blocked = self.prune_block().map(|(block, with_largest)| {
-                    let shape = dp::Shape {
-                        blocks: [block, with_largest],
-                        ..shape
-                    };
-                    (block, dp::dpsub(n, &masks, &shape).0)
-                });
+                let blocked = clustered.and_then(|stats| self.prune_block(stats)).map(
+                    |(block, with_largest)| {
+                        let shape = dp::Shape {
+                            blocks: [block, with_largest],
+                            ..shape
+                        };
+                        (block, dp::dpsub(n, &masks, &shape))
+                    },
+                );
                 (Some(table), None, work, blocked)
             }
             Enumerator::DpSub => (None, Some("inputs"), dp::Work::default(), None),
@@ -1307,8 +1304,13 @@ impl Graph {
             }
         };
         let mut choice = None;
+        if let Some((_, (_, w))) = &blocked {
+            // The note's planning work counts both enumerations.
+            work.pairs += w.pairs;
+            work.considered += w.considered;
+        }
         if fallback.is_none()
-            && let Some((block, t)) = blocked
+            && let Some((block, (t, _))) = blocked
         {
             let other = self.table_plan(&t, &masks);
             let c = prune_first::Choice::new(block, built.cost, other.as_ref().map(|b| b.cost));
@@ -1691,7 +1693,6 @@ mod tests {
                 class: None,
                 carrier: None,
             }],
-            clustered: Vec::new(),
         }
     }
 

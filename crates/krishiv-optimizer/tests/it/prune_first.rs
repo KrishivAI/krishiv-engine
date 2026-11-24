@@ -253,8 +253,10 @@ fn a_single_column_edge_does_not_open_the_gate() {
     );
 }
 
-/// With one month of `f` (TPC-DS q29's `d1`), joining `f` to the block before its date costs
-/// more than 4x the cheapest order: the cheapest order stays.
+/// With one month of `f` (a `d1` like TPC-DS q29's) on these mock statistics, joining `f` to the
+/// block before its date costs more than 4x the cheapest order, so the cheapest order stays.
+/// This is the mock's ratio, not q29's: on the SF10 statistics q29 is taken (ratio 3.43, design
+/// `P3-0.3.1-fd-ff-step0.md`, D1a result), its other inputs' filters and sizes differing.
 #[test]
 fn a_dearer_blocked_order_is_kept_out() {
     let sql = Q17.replace(
@@ -268,4 +270,21 @@ fn a_dearer_blocked_order_is_kept_out() {
     );
     let (off, _) = plan(&sql, &CLUSTERED, Some(false));
     assert!(on.structurally_eq(&off));
+}
+
+/// Under `krishiv.optimizer.joinCost=bytes` the choice stays off: its 4x bound was measured on
+/// the rows cost (review of D1a, finding 2).
+#[test]
+fn the_bytes_cost_leaves_the_choice_off() {
+    let mut config = Config::new();
+    config.set("krishiv.optimizer.joinCost", "bytes").unwrap();
+    let plan = support::resolve(Q17, &ctx());
+    let (_, steps) =
+        optimize_traced_with_udfs(&plan, &CLUSTERED, &UdfLibrary::new(), &config).unwrap();
+    let notes = notes(&steps);
+    assert!(!notes.is_empty());
+    assert!(
+        notes.iter().all(|n| !n.contains("prune_first")),
+        "{notes:?}"
+    );
 }

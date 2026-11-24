@@ -137,7 +137,7 @@ impl FileTable {
         let spread = stats
             .as_ref()
             .zip(units)
-            .map(|(s, u)| unit_spread(s, u))
+            .map(|(s, u)| unit_spread(s, u, &table))
             .unwrap_or_default();
         let statistics = known
             .then(|| stats.map(|s| table_stats(&s, &table)))
@@ -434,7 +434,7 @@ fn merge(mut acc: FileStatistics, s: &FileStatistics) -> FileStatistics {
 /// Per top-level integer or date column, the mean unit's `max - min` over the
 /// table's `max - min` (`units` units in all): near 0 for a column written in
 /// order, near 1 for one spread over every unit. Columns of one value are left out.
-fn unit_spread(s: &FileStatistics, units: u64) -> HashMap<String, f64> {
+fn unit_spread(s: &FileStatistics, units: u64, table: &SchemaRef) -> HashMap<String, f64> {
     let mut out = HashMap::new();
     if units == 0 {
         return out;
@@ -443,6 +443,10 @@ fn unit_spread(s: &FileStatistics, units: u64) -> HashMap<String, f64> {
         let [name] = c.path.0.as_slice() else {
             continue;
         };
+        // Only a column of the table, as `table_stats` reads them.
+        if !table.fields().iter().any(|f| f.name() == name) {
+            continue;
+        }
         let range = c
             .min
             .exact()
@@ -626,12 +630,22 @@ mod tests {
         };
         // Two files of 5 units each, 0..=999 and 1000..=1999, each unit 20 wide.
         let both = merge(file(0, 999, Some(100.0)), &file(1000, 1999, Some(100.0)));
-        let spread = unit_spread(&both, 10);
+        let schema = |names: &[&str]| -> SchemaRef {
+            let fields: Vec<arrow_schema::Field> = names
+                .iter()
+                .map(|n| arrow_schema::Field::new(*n, arrow_schema::DataType::Int64, true))
+                .collect();
+            Arc::new(arrow_schema::Schema::new(fields))
+        };
+        let table = schema(&["k", "one", "f"]);
+        let spread = unit_spread(&both, 10, &table);
         assert!((spread["k"] - 20.0 / 1999.0).abs() < 1e-12, "{spread:?}");
         assert!(!spread.contains_key("one") && !spread.contains_key("f"));
-        assert!(unit_spread(&both, 0).is_empty());
+        assert!(unit_spread(&both, 0, &table).is_empty());
+        // A file column the table does not have has none.
+        assert!(unit_spread(&both, 10, &schema(&["one"])).is_empty());
         let unknown = merge(file(0, 999, Some(100.0)), &file(1000, 1999, None));
-        assert!(unit_spread(&unknown, 10).is_empty());
+        assert!(unit_spread(&unknown, 10, &table).is_empty());
     }
 
     /// Counts live futures: one more while a [`Live`] exists.

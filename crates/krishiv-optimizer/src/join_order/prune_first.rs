@@ -8,14 +8,17 @@
 //! clustered in `L`'s files: the mean row group spans at most [`SPREAD_MAX`] of the column's
 //! range ([`Statistics::unit_spread`]). The block is `P` with every input it reaches without
 //! passing `L`; the blocked order plans the block on its own and joins `L` to it before anything
-//! else, so `L` (the larger side) probes the block's table. A composite-key estimate cannot tell a foreign key (TPC-DS `store_sales` to
-//! `store_returns` on item and ticket) from a many-to-many match on the same statistics, and when
+//! else, so `L` (the larger side) probes the block's table. A composite-key estimate cannot tell
+//! a foreign key (TPC-DS `store_sales` to `store_returns` on item and ticket) from a many-to-many
+//! match on the same statistics, and when
 //! the block is planned first, the runtime filter its keys publish skips most of `L`'s row groups
 //! through the clustered column, which plain `C_out` does not see.
 //!
 //! The choice: the blocked order wins when its estimated cost is at most [`REGRET`] times the
 //! cheapest order's (bounded regret: a wrong pick costs the block's extra rows, a right one the
-//! scan of most of `L`). `EXPLAIN VERBOSE` names it on the tree's note (`prune_first=`).
+//! scan of most of `L`). `EXPLAIN VERBOSE` names it on the tree's note (`prune_first=`), with
+//! `ratio` the blocked cost over `max(best, 1)` (a cheapest cost under 1 is clamped to 1). Only
+//! under the rows cost (`krishiv.optimizer.joinCost=rows`, the default).
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -102,9 +105,13 @@ impl std::fmt::Display for Choice {
 impl Graph {
     /// The block to plan first when the gate holds (module docs), and the block with the largest
     /// input, as sets of inputs.
-    pub(super) fn prune_block(&self) -> Option<(Set, Set)> {
+    ///
+    /// Only under `krishiv.optimizer.joinCost=rows`: [`REGRET`] was measured on `C_out`, so under
+    /// the bytes cost the choice stays off. `stats` says which of the largest input's columns are
+    /// clustered (asked only here, for that one input).
+    pub(super) fn prune_block(&self, stats: &dyn Statistics) -> Option<(Set, Set)> {
         let n = self.n();
-        if self.clustered.len() != n || n < 3 {
+        if self.by_bytes || n < 3 || self.leaves.len() != n {
             return None;
         }
         let (l, _) = self
@@ -112,7 +119,7 @@ impl Graph {
             .iter()
             .enumerate()
             .max_by(|a, b| a.1.total_cmp(b.1).then(b.0.cmp(&a.0)))?;
-        let lc = &self.clustered[l];
+        let lc = &clustered(&self.leaves[l], stats);
         if lc.is_empty() {
             return None;
         }
