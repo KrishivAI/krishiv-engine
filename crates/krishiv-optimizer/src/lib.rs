@@ -807,23 +807,7 @@ fn run(
         // rewrite batch: the conjunct order of filters above is then the
         // order that executes, so "first operand" is execution order.
         let root = if options.cse {
-            let before = Arc::clone(&root);
-            let origin = before.origin;
-            let output = before.resolved_output();
-            let after = cse::eliminate(root);
-            let after = restore_output(after, &output, origin);
-            t.step("Cse", 1, "CommonSubexpressionElimination", &before, &after);
-            // Reading a `cse_*` column in place of the expression it names
-            // can leave a column unread (an aggregate output, a join side's
-            // column): prune again so that a second optimization finds
-            // nothing to remove.
-            let pruned = prune::prune(&after, stats);
-            t.step("Cse", 1, "Prune", &after, &pruned);
-            if Arc::ptr_eq(&pruned, &after) {
-                after
-            } else {
-                batch(pruned, "Tidy", &mut t)?
-            }
+            cse_and_prune(root, stats, &mut t)?
         } else {
             root
         };
@@ -862,9 +846,17 @@ fn run(
                     .unwrap_or(true)
             });
         let root = if scans {
-            t.once("ShareFilteredScan", &root, |r| {
+            let shared = t.once("ShareFilteredScan", &root, |r| {
                 share_scan::share(Arc::clone(r), stats.unwrap_or(&NoStatistics))
-            })?
+            })?;
+            // A definition's disjunction repeats its readers' conjuncts
+            // (`isnotnull(a)` in two of them): a second optimization would
+            // extract them, so extract them now.
+            if options.cse && !Arc::ptr_eq(&shared, &root) {
+                cse_and_prune(shared, stats, &mut t)?
+            } else {
+                shared
+            }
         } else {
             root
         };
@@ -1155,6 +1147,32 @@ fn fold_ctx<'a>(library: &'a UdfLibrary, config: &'a Config) -> fold::UdfFoldCtx
         library,
         ansi,
         zone,
+    }
+}
+
+/// Common-subexpression elimination of `root`, then a prune (and the rewrite
+/// batch when it removed anything), keeping `root`'s output attributes.
+fn cse_and_prune(
+    root: Arc<LogicalPlan>,
+    stats: Option<&dyn Statistics>,
+    t: &mut Trace,
+) -> Result<Arc<LogicalPlan>, KrishivError> {
+    let before = Arc::clone(&root);
+    let origin = before.origin;
+    let output = before.resolved_output();
+    let after = cse::eliminate(root);
+    let after = restore_output(after, &output, origin);
+    t.step("Cse", 1, "CommonSubexpressionElimination", &before, &after);
+    // Reading a `cse_*` column in place of the expression it names
+    // can leave a column unread (an aggregate output, a join side's
+    // column): prune again so that a second optimization finds
+    // nothing to remove.
+    let pruned = prune::prune(&after, stats);
+    t.step("Cse", 1, "Prune", &after, &pruned);
+    if Arc::ptr_eq(&pruned, &after) {
+        Ok(after)
+    } else {
+        batch(pruned, "Tidy", t)
     }
 }
 
