@@ -100,8 +100,8 @@ impl Pool {
         &self.slots
     }
 
-    /// Starts `size` pinned threads (at least one; a pool of one gets a spare for scalar UDF jobs). Called attached or not;
-    /// a new thread pins once the GIL (if any) is free.
+    /// Starts `size` pinned threads (at least one; a pool of one gets a spare for scalar UDF jobs).
+    /// Called attached or not; a new thread pins once the GIL (if any) is free.
     ///
     /// # Errors
     /// A thread that cannot be spawned (the pool started so far is stopped).

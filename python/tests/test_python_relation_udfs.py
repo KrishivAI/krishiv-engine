@@ -211,6 +211,23 @@ def _run_isolated(threads: int, body: str) -> str:
 
 
 @pytest.mark.parametrize("threads", [1, 2])
+def test_a_scalar_udf_feeding_a_relation_udf_finishes(threads: int) -> None:
+    # A relation task holds its pool thread for its whole life; on a pool of one the scalar UDF job feeding it
+    # runs on the spare thread (pool.rs `spawn`). Without the spare this query hangs.
+    out = _run_isolated(
+        threads,
+        """
+f = pandas_udf(lambda v: v + 1, "long")
+df = spark.range(1000).repartition(3).withColumn("x", f("id"))
+mapped = df.mapInPandas(lambda it: it, "id long, x long").collect()
+grouped = df.groupBy("id").applyInPandas(lambda p: p, "id long, x long").collect()
+print("rows", len(mapped), len(grouped))
+""",
+    )
+    assert out == "rows 1000 1000"
+
+
+@pytest.mark.parametrize("threads", [1, 2])
 def test_apply_in_pandas_over_a_thousand_groups_finishes(threads: int) -> None:
     out = _run_isolated(
         threads,
