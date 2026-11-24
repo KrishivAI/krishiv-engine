@@ -353,6 +353,11 @@ pub trait CallerCatalog: fmt::Debug + Send + Sync {
         })
     }
 
+    /// The cache half of [`Self::refresh`]: drops what the catalog keeps of `id` and moves
+    /// [`Self::epoch`], with no load (after a `CALL` that changed the table, so a failed load
+    /// never fails a procedure that is done). The default keeps nothing, so drops nothing.
+    fn invalidate(&self, _caller: &CatalogCaller, _id: &TableIdent) {}
+
     /// `REFRESH TABLE` of `id` for `caller`: drops what the catalog keeps of the table (its
     /// metadata cache entries, for every caller) and moves [`Self::epoch`], so plans and frames
     /// that read it are analyzed again. Whether the table exists. The default keeps nothing and
@@ -1087,6 +1092,12 @@ impl DeclaredView {
             inbound,
             loads: Arc::default(),
         }
+    }
+
+    /// Whether what a declared catalog's tables read is confined to the server's roots and
+    /// prefixes (server mode).
+    pub(crate) fn confines(&self) -> bool {
+        self.registry.mode() == DeclMode::Server
     }
 
     /// This view for one query reading with `inputs`.

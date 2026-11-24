@@ -105,13 +105,99 @@ fn retain_last_below_one_and_a_disabled_gc_are_refused() {
     assert_eq!(e.error_class(), ErrorClass::KrishivIcebergProcedureArgument);
     assert!(e.to_string().contains("must be at least 1"), "{e}");
 
-    let env = super::provider_tests::env();
-    let t = create(&env, 2, false, &[("gc.enabled", "false")]);
-    let gc_off = Catalog::new(&t);
+    // Java's `Boolean.parseBoolean`: anything but `true` (any case) turns GC off.
+    for value in ["false", "FALSE", "no"] {
+        let env = super::provider_tests::env();
+        let t = create(&env, 2, false, &[("gc.enabled", value)]);
+        let gc_off = Catalog::new(&t);
+        let e = env
+            .rt
+            .block_on(expire(
+                &*gc_off,
+                &env.reg.file_io(),
+                &clock(),
+                1 << 30,
+                &args(Some(1)),
+            ))
+            .unwrap_err();
+        assert_eq!(
+            e.error_class(),
+            ErrorClass::KrishivIcebergProcedureGcDisabled,
+            "{value}"
+        );
+    }
+}
+
+/// A request that removes snapshots asserts every ref as planned, `main` included, so a
+/// concurrent rollback onto a removed snapshot conflicts.
+#[test]
+fn a_snapshot_removal_asserts_every_ref() {
+    let env = env();
+    let catalog = five_snapshots(&env);
+    let meta = catalog.metadata();
+    let p = plan(&meta, &Defaults::of(&meta, FAR), &args(Some(1))).unwrap();
+    assert!(!p.snapshots.is_empty());
+    let (requirements, _) = super::maintenance::expire::request(&meta, &p).unwrap();
+    let main = meta.current_snapshot_id();
+    assert!(
+        requirements.iter().any(|r| matches!(
+            r,
+            TableRequirement::RefSnapshotIdMatch { r#ref, snapshot_id }
+                if r#ref == "main" && *snapshot_id == main
+        )),
+        "{requirements:?}"
+    );
+}
+
+/// A table renamed away and replaced at its name during the retries is another table: the expire
+/// stops, sends nothing more and deletes nothing.
+#[test]
+fn a_replaced_table_stops_the_expire() {
+    struct Replaced {
+        first: std::sync::Arc<Catalog>,
+        other: std::sync::Arc<Catalog>,
+        loads: std::sync::atomic::AtomicUsize,
+        commits: std::sync::atomic::AtomicUsize,
+    }
+    #[async_trait]
+    impl CommitTable for Replaced {
+        fn name(&self) -> String {
+            self.first.name()
+        }
+        async fn commit(&self, _: Vec<TableRequirement>, _: Vec<TableUpdate>) -> CommitOutcome {
+            self.commits
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            CommitOutcome::Conflict { stale: false }
+        }
+        async fn load(&self, all: bool) -> Result<TableMetadata, KrishivError> {
+            self.load_located(all).await.map(|(m, _)| m)
+        }
+        async fn load_located(
+            &self,
+            all: bool,
+        ) -> Result<(TableMetadata, Option<String>), KrishivError> {
+            if self.loads.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                self.first.load_located(all).await
+            } else {
+                self.other.load_located(all).await
+            }
+        }
+    }
+    let env = env();
+    let first = five_snapshots(&env);
+    let other_env = super::provider_tests::env();
+    let other = five_snapshots(&other_env);
+    assert_ne!(first.metadata().uuid(), other.metadata().uuid());
+    let table = Replaced {
+        first,
+        other,
+        loads: std::sync::atomic::AtomicUsize::new(0),
+        commits: std::sync::atomic::AtomicUsize::new(0),
+    };
     let e = env
         .rt
         .block_on(expire(
-            &*gc_off,
+            &table,
             &env.reg.file_io(),
             &clock(),
             1 << 30,
@@ -120,8 +206,11 @@ fn retain_last_below_one_and_a_disabled_gc_are_refused() {
         .unwrap_err();
     assert_eq!(
         e.error_class(),
-        ErrorClass::KrishivIcebergProcedureGcDisabled
+        ErrorClass::KrishivCatalogTableUnsupported,
+        "{e}"
     );
+    assert!(e.to_string().contains("replaced"), "{e}");
+    assert_eq!(table.commits.load(std::sync::atomic::Ordering::SeqCst), 1);
 }
 
 #[test]
@@ -181,7 +270,8 @@ fn retain_last_two_keeps_two_snapshots() {
             &args(Some(2)),
         ))
         .unwrap();
-    assert!(done.deleted.manifest_lists >= 3);
+    // Five snapshots, two kept: exactly the three removed snapshots' manifest lists go.
+    assert_eq!(done.deleted.manifest_lists, 3, "{:?}", done.deleted);
     assert_eq!(catalog.metadata().snapshots().count(), 2);
 }
 
@@ -255,10 +345,14 @@ fn explicit_ids_add_to_the_age_rule() {
     let catalog = five_snapshots(&env);
     let meta = catalog.metadata();
     let ids = chain(&meta);
+    // `retain_last = 2` keeps the two newest by age; the explicit id removes the second newest
+    // too, so the result differs from the age rule alone.
     let explicit = ExpireArgs {
-        snapshot_ids: vec![ids[4]],
-        ..args(Some(1))
+        snapshot_ids: vec![ids[1]],
+        ..args(Some(2))
     };
+    let alone = plan(&meta, &Defaults::of(&meta, FAR), &args(Some(2))).unwrap();
+    assert!(!alone.snapshots.contains(&ids[1]), "{alone:?}");
     let p = plan(&meta, &Defaults::of(&meta, FAR), &explicit).unwrap();
     let mut want = ids[1..].to_vec();
     want.sort_unstable();
@@ -298,7 +392,7 @@ fn with_spec_one(env: &Env, default: bool) -> std::sync::Arc<Catalog> {
         .add_partition_field(2, "x_identity", Transform::Identity)
         .unwrap()
         .build();
-    let (meta, location) = catalog.state();
+    let (meta, _) = catalog.state();
     let meta = edit(meta, |b| {
         let b = b.add_partition_spec(spec).unwrap();
         if default {
@@ -307,7 +401,8 @@ fn with_spec_one(env: &Env, default: bool) -> std::sync::Arc<Catalog> {
             b
         }
     });
-    catalog.restore((meta, location));
+    // A metadata file of its own: an expire plans over the file its answer names.
+    make_current(&catalog, meta, "spec-one");
     catalog
 }
 

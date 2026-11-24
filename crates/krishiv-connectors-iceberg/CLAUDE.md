@@ -315,8 +315,10 @@ result. Pending, not stubbed: MERGE through SQL. See
   `ReachableFileCleanup` holds its sets. Follow-up: charge the sets to the procedure's pool or walk in bounded batches.
 - **Expire and gzip metadata (review of #983):** `maintenance/expire.rs` `checked_load` parses the `metadata.json` an
   answer names as plain JSON, so a table written with `write.metadata.compression-codec=gzip` (`*.gz.metadata.json`) is
-  refused with the "snapshot list that differs from its metadata file" text (safe: nothing is committed or deleted)
-  until gzip metadata is read.
+  refused with the "snapshot list that differs from its metadata file" text until gzip metadata is read. Refused at
+  the first load, nothing is committed or deleted. A table switched to gzip after that load can still take the commit:
+  the reload after it is then refused, so the snapshots are gone, no file is deleted (orphans for
+  `remove_orphan_files`) and the procedure returns that error.
 - `statistics()` takes no filter: the row estimate sums every live file, not the files left after pruning.
 - A deletion vector is read at the length its manifest declares (`deletes.rs` `read_dv`) without the
   `krishiv.catalog.maxMetadataBytes` cap the metadata files get; its memory is charged to the query (the decode's transient copy aside; review of the

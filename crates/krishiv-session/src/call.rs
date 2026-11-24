@@ -59,7 +59,9 @@ impl Session {
                 .into());
             }
         };
-        let Some(built) = self.declared_catalogs().built(&catalog) else {
+        let view = self.declared_catalogs();
+        let confines = view.confines();
+        let Some(built) = view.built(&catalog) else {
             return Err(MissingCatalogAbilityProcedures {
                 plugin: catalog.clone(),
             }
@@ -67,8 +69,25 @@ impl Session {
         };
         let (built, caller) = built?;
         let shown = quote_all(&[catalog.clone(), namespace.clone(), procedure.clone()]);
+        // One configuration snapshot for the whole call: the procedure's inputs and the name
+        // binding below read the same one, whatever `conf().set` does meanwhile.
+        let inputs = self.procedure_inputs();
+        let key = "spark.sql.caseSensitive";
+        let case_sensitive = krishiv_common::config::lookup(key)
+            .and_then(|e| inputs.config.text(e))
+            .or_else(|| inputs.config.get_unregistered(key).map(str::to_owned))
+            .is_some_and(|v| v.eq_ignore_ascii_case("true"));
+        // In server mode, every location the procedure reads or deletes is confined as a declared
+        // table's scan is, before it is read.
+        let inputs = if confines {
+            crate::catalog::confined_inputs(
+                inputs,
+                &[catalog.clone(), namespace.clone(), procedure.clone()],
+            )?
+        } else {
+            inputs
+        };
         let loaded = if namespace.eq_ignore_ascii_case("system") {
-            let inputs = self.procedure_inputs();
             built
                 .load_procedure(&caller, inputs, &procedure.to_lowercase())
                 .await
@@ -83,11 +102,7 @@ impl Session {
             .into());
         };
         // Spark names the procedure alone in the binding errors (`procedure.name()`), and
-        // compares names under the session resolver.
-        let case_sensitive = self
-            .conf()
-            .get("spark.sql.caseSensitive")
-            .is_some_and(|v| v.eq_ignore_ascii_case("true"));
+        // compares names under the session resolver (`case_sensitive`, from the snapshot above).
         let slots = rearrange(
             &quote(loaded.name()),
             loaded.parameters(),
@@ -115,7 +130,10 @@ impl Session {
         let target = loaded
             .table(&args)
             .filter(|_| loaded.modifies_table())
-            .map(|t| table_ident(&catalog, &t));
+            // An empty name is the procedure's own argument error (it opens nothing).
+            .filter(|t| !t.is_empty())
+            .map(|t| table_ident(&catalog, &t))
+            .transpose()?;
         // `CALL` itself needs `MANAGE` on the cluster (checked before dispatch); a procedure that
         // changes a table also needs the write privilege on it, asked before it opens the table.
         if let Some(id) = &target {
@@ -126,11 +144,14 @@ impl Session {
             )
             .await?;
         }
-        let batch = loaded.call(&ctx, args).await?;
+        let result = loaded.call(&ctx, args).await;
         if let Some(id) = target {
-            // Frames and plans that read the table analyze again (`REFRESH TABLE`).
-            built.refresh(&caller, &id).await?;
+            // Frames and plans that read the table analyze again (`REFRESH TABLE`), whether the
+            // procedure succeeded or failed after a commit. Only the caches are dropped: the next
+            // read loads the table, so a failed load never turns a done expire into an error.
+            built.invalidate(&caller, &id);
         }
+        let batch = result?;
         self.script_result(batch.schema(), vec![batch]).await
     }
 
@@ -171,18 +192,31 @@ impl Session {
 }
 
 /// A procedure's `table` argument (`ns.t`, or `cat.ns.t` naming the catalog the call runs in,
-/// as the catalog reads it) as the table in `catalog`.
-fn table_ident(catalog: &str, table: &str) -> krishiv_plan::analyzer::TableIdent {
-    let mut parts: Vec<String> = table.split('.').map(str::to_owned).collect();
+/// as the catalog reads it) as the table in `catalog`, parsed as a multipart identifier
+/// (`` db.`t.v1` `` is two parts).
+///
+/// # Errors
+/// The identifier's parse error.
+pub(crate) fn table_ident(
+    catalog: &str,
+    table: &str,
+) -> Result<krishiv_plan::analyzer::TableIdent, KrishivError> {
+    let mut parts: Vec<String> =
+        krishiv_sql::parse_multipart_identifier(table, &krishiv_sql::ParserOptions::default())
+            .map_err(|e| e.error)?
+            .parts
+            .into_iter()
+            .map(|p| p.value)
+            .collect();
     if parts.len() > 2 && parts[0].eq_ignore_ascii_case(catalog) {
         parts.remove(0);
     }
     let name = parts.pop().unwrap_or_default();
-    krishiv_plan::analyzer::TableIdent {
+    Ok(krishiv_plan::analyzer::TableIdent {
         catalog: catalog.to_owned(),
         namespace: parts,
         name,
-    }
+    })
 }
 
 /// A `NULL` inside an array argument: refused, never dropped (the procedure would act on
@@ -190,6 +224,14 @@ fn table_ident(catalog: &str, table: &str) -> krishiv_plan::analyzer::TableIdent
 fn null_element() -> KrishivError {
     KrishivIcebergProcedureArgument {
         message: "An array argument must not contain NULL elements".to_owned(),
+    }
+    .into()
+}
+
+/// A `NULL` value inside a map argument: refused, as an array's `NULL` element is.
+fn null_map_value() -> KrishivError {
+    KrishivIcebergProcedureArgument {
+        message: "A map argument must not contain NULL values".to_owned(),
     }
     .into()
 }
@@ -242,7 +284,7 @@ fn value_of(batch: &RecordBatch, ty: ProcedureType) -> Result<ProcedureValue, Kr
                 out.push((
                     text(keys, i).ok_or_else(bad)?,
                     if values.is_null(i) {
-                        return Err(null_element());
+                        return Err(null_map_value());
                     } else {
                         text(values, i).ok_or_else(bad)?
                     },
@@ -398,6 +440,12 @@ impl Session {
             match &e.kind {
                 ExprKind::Subquery(_) | ExprKind::Exists(_) | ExprKind::InSubquery { .. } => {
                     return Err(refuse_argument("a subquery"));
+                }
+                // Refused by name: the type probes below analyze an operand alone, where a
+                // lambda's parameter has no binding (Spark's result for this form is not pinned
+                // by a run yet, so no lambda argument is accepted).
+                ExprKind::Lambda { .. } => {
+                    return Err(refuse_argument("a lambda function"));
                 }
                 ExprKind::Function(f)
                     if f.name.parts.last().is_some_and(|n| {

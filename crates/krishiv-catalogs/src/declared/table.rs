@@ -129,11 +129,22 @@ pub(crate) struct RestCatalog {
     vended: Arc<VendedCache>,
     /// This catalog's own part of every vended key: unique in the process.
     instance: u64,
+    /// Retires `instance` when the last clone of this catalog drops.
+    _owner: Arc<Instance>,
 }
 
-impl Drop for RestCatalog {
+/// A catalog's part of every vended key, shared by all its clones: retired from the vended cache
+/// when the last clone goes (a `CALL` clones the catalog; its clone's drop must not retire the
+/// live catalog's entries).
+#[derive(Debug)]
+struct Instance {
+    id: u64,
+    vended: Arc<VendedCache>,
+}
+
+impl Drop for Instance {
     fn drop(&mut self) {
-        self.vended.drop_instance(self.instance);
+        self.vended.drop_instance(self.id);
     }
 }
 
@@ -159,6 +170,10 @@ impl RestCatalog {
             ttl,
             epoch: Arc::new(AtomicU64::new(0)),
             cache: Arc::new(Mutex::new(HashMap::new())),
+            _owner: Arc::new(Instance {
+                id: instance,
+                vended: Arc::clone(&vended),
+            }),
             vended,
             instance,
         }
@@ -476,23 +491,27 @@ impl CallerCatalog for RestCatalog {
         Box::pin(async move { Ok(maintenance_procedure(name, tables)) })
     }
 
+    fn invalidate(&self, _caller: &CatalogCaller, id: &TableIdent) {
+        // REST identifiers go to the catalog as written, by the analyzer and by `REFRESH
+        // TABLE` alike (the catalog decides what a spelling names), so the entries of this
+        // exact spelling are the ones a refresh drops. The count moves first: a load that read the old one and
+        // inserts before this `retain` is removed by it, and one inserting after sees the new count (`loaded`).
+        self.vended
+            .drop_table(self.instance, &id.namespace, &id.name);
+        self.cache
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .retain(|(_, ns, name), _| !(ns == &id.namespace && name == &id.name));
+        self.epoch.fetch_add(1, Ordering::SeqCst);
+    }
+
     fn refresh<'a>(
         &'a self,
         caller: &'a CatalogCaller,
         id: &'a TableIdent,
     ) -> BoxFuture<'a, Result<bool, KrishivError>> {
         Box::pin(async move {
-            // REST identifiers go to the catalog as written, by the analyzer and by `REFRESH
-            // TABLE` alike (the catalog decides what a spelling names), so the entries of this
-            // exact spelling are the ones a refresh drops. The count moves first: a load that read the old one and
-            // inserts before this `retain` is removed by it, and one inserting after sees the new count (`loaded`).
-            self.vended
-                .drop_table(self.instance, &id.namespace, &id.name);
-            self.cache
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .retain(|(_, ns, name), _| !(ns == &id.namespace && name == &id.name));
-            self.epoch.fetch_add(1, Ordering::SeqCst);
+            self.invalidate(caller, id);
             if id.namespace.is_empty() {
                 return Ok(false);
             }
@@ -552,7 +571,18 @@ impl ProcedureTables for RestProcedureTables {
     fn open<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<IcebergTable, KrishivError>> {
         Box::pin(async move {
             let catalog = &self.catalog;
-            let mut parts: Vec<String> = name.split('.').map(str::to_owned).collect();
+            // A multipart identifier, as the session's `MODIFY` check parsed it (`` db.`t.v1` ``).
+            let Ok(parsed) = krishiv_sql::parse_multipart_identifier(
+                name,
+                &krishiv_sql::ParserOptions::default(),
+            ) else {
+                return Err(KrishivIcebergProcedureTableNotFound {
+                    table: format!("'{name}'"),
+                    catalog: format!("'{}'", catalog.name),
+                }
+                .into());
+            };
+            let mut parts: Vec<String> = parsed.parts.into_iter().map(|p| p.value).collect();
             // `cat.ns.t` names the catalog the call runs in; any other first part is a namespace.
             if parts.len() > 2 && parts[0].eq_ignore_ascii_case(&catalog.name) {
                 parts.remove(0);

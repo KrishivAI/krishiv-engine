@@ -227,9 +227,9 @@ fn expire_snapshots_runs_through_the_rest_catalog() {
             "deleted_statistics_files_count",
         ]
     );
-    // The first snapshot's manifest list; its data file is still the second's.
-    assert_eq!(row[4].1, 1, "{row:?}");
-    assert_eq!(row[0].1, 0, "{row:?}");
+    // The first snapshot's manifest list; its data file and manifest are still the second's.
+    let counts: Vec<i64> = row.iter().map(|(_, v)| *v).collect();
+    assert_eq!(counts, [0, 0, 0, 0, 1, 0], "{row:?}");
     let snapshots = lake.lock().unwrap().metadata["snapshots"]
         .as_array()
         .unwrap()

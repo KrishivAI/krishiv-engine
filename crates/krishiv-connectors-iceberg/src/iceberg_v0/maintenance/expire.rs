@@ -36,7 +36,8 @@ pub(crate) struct ExpireArgs {
     pub(crate) snapshot_ids: Vec<i64>,
     /// `clean_expired_metadata`.
     pub(crate) clean_expired_metadata: bool,
-    /// `max_concurrent_deletes`: how many file deletes run at once (one when absent).
+    /// `max_concurrent_deletes`: how many file deletes run at once (one when absent, at most
+    /// [`MAX_CONCURRENT_DELETES`]).
     pub(crate) max_concurrent_deletes: Option<usize>,
 }
 
@@ -84,10 +85,11 @@ pub(crate) fn check(meta: &TableMetadata, args: &ExpireArgs) -> Result<(), Krish
             "Number of snapshots to retain must be at least 1, cannot be: {n}"
         )));
     }
+    // Java's `Boolean.parseBoolean`: present, only `true` in any case enables GC; absent, it is on.
     if meta
         .properties()
         .get("gc.enabled")
-        .is_some_and(|v| v == "false")
+        .is_some_and(|v| !v.eq_ignore_ascii_case("true"))
     {
         return Err(KrishivIcebergProcedureGcDisabled {
             message:
@@ -363,6 +365,24 @@ pub(crate) fn request(
             schema_ids: plan.schemas.clone(),
         });
     }
+    if !plan.snapshots.is_empty() {
+        // Every ref as planned, `main` included: a concurrent rollback or a ref moved onto a
+        // snapshot this removes conflicts instead of having its ref dropped by the server (Iceberg
+        // 1.12.0's `UpdateRequirements` adds none for `RemoveSnapshots`; a stricter check). A ref
+        // created after planning under a new name is not covered: the REST requirements cannot
+        // name it.
+        let mut all: Vec<(String, i64)> = snapshot_refs(meta)?
+            .into_iter()
+            .map(|(n, r)| (n, r.snapshot_id))
+            .collect();
+        all.sort();
+        for (r#ref, snapshot_id) in all {
+            requirements.push(TableRequirement::RefSnapshotIdMatch {
+                r#ref,
+                snapshot_id: Some(snapshot_id),
+            });
+        }
+    }
     if !plan.specs.is_empty() || !plan.schemas.is_empty() {
         requirements.push(TableRequirement::DefaultSpecIdMatch {
             default_spec_id: meta.default_partition_spec_id(),
@@ -376,6 +396,10 @@ pub(crate) fn request(
             .map(|(n, r)| (n, r.snapshot_id))
             .collect();
         branches.sort();
+        // With snapshots removed, every ref is asserted above already.
+        if !plan.snapshots.is_empty() {
+            branches.clear();
+        }
         for (r#ref, snapshot_id) in branches {
             requirements.push(TableRequirement::RefSnapshotIdMatch {
                 r#ref,
@@ -475,9 +499,9 @@ async fn reachable(
 
 /// Deletes the files only the snapshots `start` has and `after` lacks reached (the Spark
 /// action's `findExpiredSnapshotIds(originalMetadata, updatedMetadata)`): candidates are
-/// everything reachable from those snapshots in `start`, the table as loaded when the procedure
-/// began, minus everything reachable from any snapshot of `after`, the checked reload after the
-/// commit, by path. Up to `concurrency` deletes run at once, each retried three times; one that
+/// everything reachable from those snapshots in `start`, the base the committed request was
+/// planned on (after a conflict, that attempt's reload), minus everything reachable from any
+/// snapshot of `after`, the checked reload after the commit, by path. Up to `concurrency` deletes run at once, each retried three times; one that
 /// fails is logged and not counted, and never fails the expire.
 ///
 /// The path sets are held in memory, uncharged, as Java's `ReachableFileCleanup` holds them
@@ -503,6 +527,11 @@ pub(crate) async fn cleanup(
     let mut candidates: HashMap<String, Kind> = HashMap::new();
     for id in removed {
         reachable(io, start, id, max_bytes, &mut cache, &mut candidates).await?;
+    }
+    // Nothing to delete (a spec- or schema-only commit): the kept snapshots are not read, so an
+    // unreadable manifest of theirs fails nothing.
+    if candidates.is_empty() {
+        return Ok(Deleted::default());
     }
     let mut valid: HashMap<String, Kind> = HashMap::new();
     for id in &kept {
@@ -605,21 +634,38 @@ pub(crate) async fn expire(
 ) -> Result<Expired, KrishivError> {
     let start = checked_load(table, io, max_metadata_bytes).await?;
     check(&start, args)?;
-    let concurrency = args.max_concurrent_deletes.unwrap_or(1);
+    // Every later load must be this table: one renamed away and replaced at the name is another.
+    let same = |m: TableMetadata| -> Result<TableMetadata, KrishivError> {
+        if m.uuid() == start.uuid() {
+            Ok(m)
+        } else {
+            Err(replaced(&table.name(), &start, &m))
+        }
+    };
+    // The argument may lower the width, never raise it past the engine's cap.
+    let concurrency = args
+        .max_concurrent_deletes
+        .unwrap_or(1)
+        .clamp(1, MAX_CONCURRENT_DELETES);
     let defaults = Defaults::of(&start, clock.now_ms());
-    let retries = prop(&start, "commit.retry.num-retries").unwrap_or(4).max(0);
+    // Catalog properties are untrusted: bounded before any arithmetic (an hour per wait at most).
+    let retries = prop(&start, "commit.retry.num-retries")
+        .unwrap_or(4)
+        .clamp(0, 100);
     let min_wait = prop(&start, "commit.retry.min-wait-ms")
         .unwrap_or(100)
-        .max(1);
+        .clamp(1, MAX_WAIT_MS);
     let max_wait = prop(&start, "commit.retry.max-wait-ms")
         .unwrap_or(60_000)
-        .max(min_wait);
+        .clamp(min_wait, MAX_WAIT_MS);
     let name = table.name();
     let mut meta = start.clone();
     let mut last;
     let mut attempts = 0_i64;
     let mut planned: Plan;
     loop {
+        // A reload after a conflict may have turned GC off.
+        check(&meta, args)?;
         planned = plan(&meta, &defaults, args)?;
         planned = with_obsolete_specs(io, &meta, args, planned, max_metadata_bytes).await?;
         if planned.is_empty() {
@@ -637,6 +683,7 @@ pub(crate) async fn expire(
                 // finds nothing to expire; the files are orphans for `remove_orphan_files`).
                 let after = checked_load(table, io, max_metadata_bytes)
                     .await
+                    .and_then(same)
                     .inspect_err(|e| {
                         tracing::warn!(
                             table = %name,
@@ -645,7 +692,7 @@ pub(crate) async fn expire(
                             "expire_snapshots committed; its file cleanup was skipped"
                         );
                     })?;
-                let deleted = cleanup(io, &start, &after, max_metadata_bytes, concurrency).await?;
+                let deleted = cleanup(io, &meta, &after, max_metadata_bytes, concurrency).await?;
                 return Ok(Expired { deleted });
             }
             CommitOutcome::Conflict { .. } => last = "a conflicting commit".to_owned(),
@@ -659,7 +706,10 @@ pub(crate) async fn expire(
                     }
                     .into()
                 };
-                let now = match checked_load(table, io, max_metadata_bytes).await {
+                let now = match checked_load(table, io, max_metadata_bytes)
+                    .await
+                    .and_then(same)
+                {
                     Ok(now) => now,
                     Err(e) => {
                         return Err(unknown(format!(
@@ -670,7 +720,7 @@ pub(crate) async fn expire(
                 if !landed(&meta, &now, &planned) {
                     return Err(unknown(reason));
                 }
-                let deleted = cleanup(io, &start, &now, max_metadata_bytes, concurrency).await?;
+                let deleted = cleanup(io, &meta, &now, max_metadata_bytes, concurrency).await?;
                 return Ok(Expired { deleted });
             }
             CommitOutcome::Failed(e) => return Err(e),
@@ -678,16 +728,18 @@ pub(crate) async fn expire(
         if attempts > retries {
             break;
         }
-        let wait = (min_wait << (attempts - 1).min(20)).min(max_wait);
-        let wait = wait
-            + i64::try_from(clock.jitter_ms(u64::try_from(wait / 10 + 1).unwrap_or(1)))
-                .unwrap_or(0);
+        let wait = min_wait
+            .saturating_mul(1_i64 << (attempts - 1).clamp(0, 20))
+            .min(max_wait);
+        let wait = wait.saturating_add(
+            i64::try_from(clock.jitter_ms(u64::try_from(wait / 10 + 1).unwrap_or(1))).unwrap_or(0),
+        );
         clock
             .sleep(std::time::Duration::from_millis(
                 u64::try_from(wait).unwrap_or(0),
             ))
             .await;
-        meta = checked_load(table, io, max_metadata_bytes).await?;
+        meta = same(checked_load(table, io, max_metadata_bytes).await?)?;
     }
     Err(KrishivIcebergExpireFailed {
         snapshot_ids: format!("{:?}", planned.snapshots),
@@ -737,5 +789,33 @@ pub(crate) async fn checked_load(
     if ids(&file) != ids(&meta) {
         return Err(refused(&location, "the snapshot ids differ"));
     }
-    Ok(meta)
+    if file.uuid() != meta.uuid() {
+        return Err(refused(&location, "the table uuids differ"));
+    }
+    // The file decides: its refs, manifest lists and properties are what retention and cleanup
+    // read, never the answer's copy of them.
+    Ok(file)
+}
+
+/// The most file deletes an expire runs at once, whatever `max_concurrent_deletes` asks.
+pub(crate) const MAX_CONCURRENT_DELETES: usize = 64;
+
+/// The longest wait between commit attempts, whatever the table's properties say.
+const MAX_WAIT_MS: i64 = 3_600_000;
+
+/// A later load found another table at the name (its uuid is not the one the expire started on):
+/// nothing more is sent or deleted.
+fn replaced(name: &str, start: &TableMetadata, now: &TableMetadata) -> KrishivError {
+    tracing::warn!(table = %name, started = %start.uuid(), now = %now.uuid(), "an expire's table was replaced");
+    let (catalog, relation) = name.split_once('.').unwrap_or(("", name));
+    KrishivCatalogTableUnsupported {
+        catalog: catalog.to_owned(),
+        relation_name: relation.to_owned(),
+        feature: format!(
+            "a table replaced during expire_snapshots (uuid {} became {})",
+            start.uuid(),
+            now.uuid()
+        ),
+    }
+    .into()
 }
