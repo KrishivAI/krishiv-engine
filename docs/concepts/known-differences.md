@@ -319,7 +319,7 @@ returning a result:
 - `GroupedData.pivot`: `count("*")` raises `INVALID_USAGE_OF_STAR_OR_REGEX` as Spark's DataFrame pivot does (SQL's
   `PIVOT` clause accepts it). A grouping key that is not a plain or aliased column cannot be pivoted beside an
   aggregate that reads a key of the same name (`KRISHIV_UNSUPPORTED_FEATURE`). A pivot's aggregate errors are raised by `agg`.
-  `values=[]` computes the values (as Spark Connect), where classic PySpark gives no pivot columns.
+  An explicit `values=[]` gives no pivot columns, as classic PySpark does; the values are discovered only when `values` is omitted.
 
 ## Inferred join filters differ from Spark's
 Spark's `InferFiltersFromConstraints` adds filters to the inputs of a join from the join condition and the filters

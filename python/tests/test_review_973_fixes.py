@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import array
 import datetime
+import math
 
 import pytest
 
@@ -244,3 +245,10 @@ def test_freq_items_counts_equal_arrays_with_nan_as_one_item(spark: SparkSession
     df = spark.createDataFrame([([nan],), ([nan],)], "a array<double>")
     items = df.freqItems(["a"], 1.0).collect()[0][0]
     assert len(items) == 1
+    assert len(items[0]) == 1
+    assert math.isnan(items[0][0])
+
+
+def test_unchecked_integer_beyond_the_long_range_is_null(spark: SparkSession) -> None:
+    df = spark.createDataFrame([(2**64 + 1,), (2**63,), (5,)], "x bigint", verifySchema=False)
+    assert [r.x for r in df.collect()] == [None, None, 5]

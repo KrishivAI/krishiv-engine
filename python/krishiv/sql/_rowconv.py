@@ -406,6 +406,9 @@ def _recovered(value: Any, arrow_type: Any, pa: Any) -> Any:
         pass
     if pa.types.is_integer(arrow_type) and isinstance(value, int) and not isinstance(value, bool):
         # Spark's unchecked conversion narrows an integer to the target width (128 as tinyint is -128).
+        # An integer outside the JVM Long range (pickle keeps it as a BigInteger) is NULL.
+        if not -(1 << 63) <= value < 1 << 63:
+            return None
         bits = arrow_type.bit_width
         wrapped = value & ((1 << bits) - 1)
         if pa.types.is_signed_integer(arrow_type) and wrapped >= 1 << (bits - 1):
