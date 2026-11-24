@@ -58,25 +58,80 @@ use crate::store::{
 /// The file formats a table can have.
 pub(crate) const PROVIDERS: &[&str] = &["parquet", "csv", "json", "text", "orc", "avro"];
 
-/// The short name of a data source written fully qualified, as Spark maps its built-in classes
-/// (`org.apache.spark.sql.parquet`, `com.databricks.spark.csv`); other names stay as written.
-fn short_provider(written: &str) -> String {
-    let lower = written.to_lowercase();
-    for prefix in [
-        "org.apache.spark.sql.execution.datasources.",
-        "org.apache.spark.sql.",
-    ] {
-        if let Some(rest) = lower.strip_prefix(prefix) {
-            let name = rest.split('.').next().unwrap_or(rest);
-            if PROVIDERS.contains(&name) {
-                return name.to_owned();
-            }
-        }
-    }
-    if lower == "com.databricks.spark.csv" {
-        return "csv".to_owned();
-    }
-    lower
+/// Spark 4.2.0's `DataSource.backwardCompatibilityMap` plus the canonical built-in `FileFormat` class names:
+/// the fully qualified names that load a built-in source (matched exactly, as Spark does). A name outside
+/// this table is looked up whole, so `org.apache.spark.sql.csv` is `DATA_SOURCE_NOT_FOUND`.
+const PROVIDER_CLASSES: &[(&str, &str)] = &[
+    ("org.apache.spark.sql.jdbc", "jdbc"),
+    ("org.apache.spark.sql.jdbc.DefaultSource", "jdbc"),
+    (
+        "org.apache.spark.sql.execution.datasources.jdbc.DefaultSource",
+        "jdbc",
+    ),
+    ("org.apache.spark.sql.execution.datasources.jdbc", "jdbc"),
+    ("org.apache.spark.sql.json", "json"),
+    ("org.apache.spark.sql.json.DefaultSource", "json"),
+    ("org.apache.spark.sql.execution.datasources.json", "json"),
+    (
+        "org.apache.spark.sql.execution.datasources.json.DefaultSource",
+        "json",
+    ),
+    (
+        "org.apache.spark.sql.execution.datasources.json.JsonFileFormat",
+        "json",
+    ),
+    ("org.apache.spark.sql.parquet", "parquet"),
+    ("org.apache.spark.sql.parquet.DefaultSource", "parquet"),
+    (
+        "org.apache.spark.sql.execution.datasources.parquet",
+        "parquet",
+    ),
+    (
+        "org.apache.spark.sql.execution.datasources.parquet.DefaultSource",
+        "parquet",
+    ),
+    (
+        "org.apache.spark.sql.execution.datasources.parquet.ParquetFileFormat",
+        "parquet",
+    ),
+    ("org.apache.spark.sql.execution.datasources.orc", "orc"),
+    (
+        "org.apache.spark.sql.execution.datasources.orc.DefaultSource",
+        "orc",
+    ),
+    (
+        "org.apache.spark.sql.execution.datasources.orc.OrcFileFormat",
+        "orc",
+    ),
+    ("org.apache.spark.sql.hive.orc", "orc"),
+    ("org.apache.spark.sql.hive.orc.DefaultSource", "orc"),
+    (
+        "org.apache.spark.sql.execution.datasources.v2.orc.OrcDataSourceV2",
+        "orc",
+    ),
+    ("com.databricks.spark.csv", "csv"),
+    (
+        "org.apache.spark.sql.execution.datasources.csv.CSVFileFormat",
+        "csv",
+    ),
+    (
+        "org.apache.spark.sql.execution.datasources.text.TextFileFormat",
+        "text",
+    ),
+    ("com.databricks.spark.xml", "xml"),
+    ("org.apache.spark.ml.source.libsvm", "libsvm"),
+    ("org.apache.spark.ml.source.libsvm.DefaultSource", "libsvm"),
+];
+
+/// The data source a `USING` provider names, resolved as Spark's `DataSource.lookupDataSource` does: a
+/// built-in class name or legacy alias maps to its short name, a short name matches case-insensitively,
+/// and any other name is looked up whole (and lowercased, as the short names are). One resolver for every
+/// statement that takes a provider.
+pub(crate) fn short_provider(written: &str) -> String {
+    PROVIDER_CLASSES
+        .iter()
+        .find(|(class, _)| *class == written)
+        .map_or_else(|| written.to_lowercase(), |(_, short)| (*short).to_owned())
 }
 
 /// Whether `name` is a name Spark accepts for a new table or namespace: letters, digits and `_`.

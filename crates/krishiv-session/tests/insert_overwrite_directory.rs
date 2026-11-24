@@ -14,30 +14,12 @@ use serde_json::Value;
 /// Cases whose Krishiv result differs from Spark's, with the reason; each must still differ.
 const KNOWN_GAPS: &[(&str, &str)] = &[
     (
-        "IOD-16-hive-stored-as",
-        "the Hive form is refused as KRISHIV_UNSUPPORTED_FEATURE; Spark says NOT_SUPPORTED_COMMAND_WITHOUT_HIVE_SUPPORT",
-    ),
-    ("IOD-17-hive-row-format", "as IOD-16"),
-    ("IOD-18-hive-local", "as IOD-16"),
-    ("IOD-19-no-using-no-hive", "as IOD-16"),
-    (
-        "IOD-20-using-hive",
-        "USING hive is DATA_SOURCE_NOT_FOUND; Spark says NOT_SUPPORTED_COMMAND_WITHOUT_HIVE_SUPPORT",
-    ),
-    (
-        "IOD-21-jdbc",
-        "a non-file provider is DATA_SOURCE_NOT_FOUND; Spark says _LEGACY_ERROR_TEMP_2233",
-    ),
-    ("IOD-21-noop", "as IOD-21-jdbc"),
-    ("IOD-21-console", "as IOD-21-jdbc"),
-    ("IOD-21-rate", "as IOD-21-jdbc"),
-    (
         "IOD-05-orc",
         "the engine writes no ORC (KRISHIV_UNSUPPORTED_FEATURE, as df.write.orc)",
     ),
     (
         "IOD-22-avro",
-        "Avro is built in here; the Spark image had no spark-avro module",
+        "the Avro writer names its files `.avro`; Spark names them `.snappy.avro` (its default codec)",
     ),
     (
         "IOD-44-duplicate-columns-csv",
@@ -203,6 +185,16 @@ fn schema_names(schema: &str) -> Vec<String> {
         .collect()
 }
 
+/// A message's text up to its position and SQL context (` (line 1, pos 50)`, `== SQL ==`), which Spark
+/// adds to parse errors and the engine places elsewhere.
+fn headline(message: &str) -> String {
+    let first = message.trim_start().lines().next().unwrap_or("");
+    match first.rfind(" (line ") {
+        Some(at) => first[..at].to_owned(),
+        None => first.to_owned(),
+    }
+}
+
 /// Runs one case; `Err` names the first difference.
 #[expect(
     clippy::unwrap_in_result,
@@ -223,8 +215,25 @@ fn run_case(case: &Value) -> Result<(), String> {
         let want = expect["class"].as_str().unwrap();
         return match result {
             Ok(_) => Err(format!("ran, Spark fails with {want}")),
-            Err(e) if e.error_class().name() == want => Ok(()),
-            Err(e) => Err(format!("{}: {e}, Spark: {want}", e.error_class().name())),
+            Err(e) if e.error_class().name() != want => {
+                Err(format!("{}: {e}, Spark: {want}", e.error_class().name()))
+            }
+            Err(e) => {
+                let want_state = expect["sqlstate"].as_str();
+                let want_message = expect["message"]
+                    .as_str()
+                    .unwrap()
+                    .replace("<DIR>", dir.to_str().unwrap())
+                    .replace("<TMP>", tmp.path().to_str().unwrap());
+                let state = e.sql_state();
+                if state != want_state {
+                    Err(format!("SQLSTATE {state:?}: {e}, Spark: {want_state:?}"))
+                } else if headline(&e.to_string()) != headline(&want_message) {
+                    Err(format!("message {e}, Spark: {want_message}"))
+                } else {
+                    Ok(())
+                }
+            }
         };
     }
     let batches = result.map_err(|e| format!("{}: {e}", e.error_class().name()))?;

@@ -68,7 +68,7 @@ impl Checker<'_> {
             if let Some(scheme) = path.and_then(uri_scheme).filter(|s| *s != "file") {
                 return Err(at(
                     LocalMustWithSchemaFile {
-                        actual_schema: format!("`{scheme}`"),
+                        actual_schema: scheme.to_owned(),
                     },
                     d.header_span,
                 ));
@@ -78,7 +78,8 @@ impl Checker<'_> {
     }
 }
 
-/// The scheme of a path read as a `java.net.URI` (`s3` of `s3://bucket/p`); none for a plain path.
+/// The scheme of a path as Hadoop's `new Path(s).toUri` reads it (`CatalogUtils.stringToURI`): the text before a
+/// colon, when it is a valid scheme (`s3` of `s3://bucket/p`); none for a plain path.
 fn uri_scheme(path: &str) -> Option<&str> {
     let (scheme, _) = path.split_once(':')?;
     let mut chars = scheme.chars();
