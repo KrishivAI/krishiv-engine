@@ -354,6 +354,26 @@ const CASES: &[(&str, &str)] = &[
         "infer_string_key",
         "SELECT t.a FROM t JOIN u ON t.b = u.d WHERE u.d = 'x'",
     ),
+    (
+        // TPC-DS q78's shape: the preserved side's filter reaches the null
+        // side of a left outer join through an aliasing projection and a
+        // grouped aggregate's key (Spark's `Project` / `Aggregate`
+        // `validConstraints`), so `u` is filtered before its aggregate.
+        "infer_left_outer_through_aggregate_alias",
+        "SELECT g.y, h.m FROM (SELECT a AS y, count(*) AS n FROM t WHERE a = 5 GROUP BY a) g LEFT JOIN (SELECT a AS y2, count(*) AS m FROM u GROUP BY a) h ON g.y = h.y2",
+    ),
+    (
+        // A computed column is not the column its constraint reads: `u`
+        // gets only the key's `isnotnull`, never `a = 5`.
+        "infer_not_through_computed_column",
+        "SELECT g.k FROM (SELECT a + 1 AS k FROM t WHERE a = 5) g JOIN u ON g.k = u.a",
+    ),
+    (
+        // A rollup's key is NULL in its subtotal rows: `a = 5` does not hold
+        // of its output, so the null side gets nothing.
+        "infer_not_through_rollup",
+        "SELECT g.a FROM (SELECT a, count(*) AS n FROM t WHERE a = 5 GROUP BY ROLLUP(a)) g LEFT JOIN u ON g.a = u.a",
+    ),
     // Restricting an aggregate to the keys its join can match.
     (
         "restrict_scalar_avg",

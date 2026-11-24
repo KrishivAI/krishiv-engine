@@ -1,0 +1,12 @@
+---
+source: crates/krishiv-optimizer/tests/it/rules.rs
+assertion_line: 691
+expression: SELECT g.k FROM (SELECT a + 1 AS k FROM t WHERE a = 5) g JOIN u ON g.k = u.a
+---
+Project [k#3]
++- Join Inner, (k#3 == a#4)
+   :- Filter isnotnull(a#4)
+   :  +- Scan spark_catalog.default.u [a#4]
+   +- Project [(a#0 + 1) AS k#3]
+      +- Filter ((a#0 == 5) and isnotnull((a#0 + 1)))
+         +- Scan spark_catalog.default.t [a#0]

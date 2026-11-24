@@ -703,7 +703,8 @@ impl Memo {
     }
 
     /// The deterministic conjuncts known to hold of `plan`'s output, found
-    /// through filters, inner joins, column-only projections and shifts (the
+    /// through filters, inner joins, deterministic projections and grouped
+    /// aggregates (over the columns they pass on, renamed) and shifts (the
     /// walk of the implied filters of `pushdown`, plus self-join
     /// instances), in pre-order: a node's own, then its inputs' left first.
     /// A filter right above a common-subexpression projection gives its
@@ -750,12 +751,36 @@ impl Memo {
                 out.extend(self.constraints(right).iter().cloned());
                 out
             }
-            PlanNode::Project { input, exprs }
-                if exprs
+            // Spark's `Project` / `Aggregate` `validConstraints`: what holds
+            // of a column passed through (as itself or renamed by an alias)
+            // holds of the output column. A grouped aggregate passes only
+            // its key columns: each output row's key equals the key of every
+            // input row of its group (TPC-DS q78: `ss_sold_year = 2000`
+            // reaches the left outer joins on `ss_sold_year`).
+            PlanNode::Project { input, exprs } if exprs.iter().all(|e| is_deterministic(e)) => {
+                let below = self.constraints(input);
+                renamed(exprs, &below, |_| true)
+            }
+            PlanNode::Aggregate {
+                input,
+                grouping: Grouping::GroupBy(keys),
+                aggregates,
+            } if !keys.is_empty() && aggregates.iter().all(|e| is_deterministic(e)) => {
+                let below = self.constraints(input);
+                let key_ids: HashSet<AttrId> = keys
                     .iter()
-                    .all(|e| matches!(e.node, ExprNode::Resolved(ResolvedExpr::Column(_)))) =>
-            {
-                self.constraints(input).to_vec()
+                    .filter_map(|k| match &k.node {
+                        ExprNode::Resolved(ResolvedExpr::Column(c)) => Some(c.id),
+                        _ => None,
+                    })
+                    .collect();
+                renamed(aggregates, &below, |id| key_ids.contains(&id))
+            }
+            // Eager aggregation's partial phase outputs its key columns as
+            // they are (same ids), as `held` reads it.
+            PlanNode::PartialAggregate { input, keys, .. } if !keys.is_empty() => {
+                let below = self.constraints(input);
+                renamed(keys, &below, |_| true)
             }
             // A self-join instance: its constraints, renumbered as it reads.
             PlanNode::Shift { input, offset } => self
@@ -839,6 +864,42 @@ impl Memo {
         );
         (resolved, set)
     }
+}
+
+/// The constraints `below` of a projection's (or a grouped aggregate's)
+/// input that read only columns `exprs` pass on (and `passed` accepts: an
+/// aggregate passes its grouping keys only), as a bare column or under
+/// an alias, spelled over the output columns. A column passed on under
+/// several names is spelled with the first; the others get nothing (Spark
+/// also adds the aliases' equalities, which only matter for a filter
+/// between two copies of one column).
+fn renamed(
+    exprs: &[Arc<Expr>],
+    below: &[Arc<Expr>],
+    passed: impl Fn(AttrId) -> bool,
+) -> Vec<Arc<Expr>> {
+    if below.is_empty() {
+        return Vec::new();
+    }
+    let mut map: HashMap<AttrId, Arc<Expr>> = HashMap::new();
+    for e in exprs {
+        let (from, to) = match &e.node {
+            ExprNode::Resolved(ResolvedExpr::Column(c)) => (c.id, Arc::clone(e)),
+            ExprNode::Resolved(ResolvedExpr::Alias { expr, output }) => match &expr.node {
+                ExprNode::Resolved(ResolvedExpr::Column(c)) => (c.id, column(output)),
+                _ => continue,
+            },
+            _ => continue,
+        };
+        if passed(from) {
+            map.entry(from).or_insert(to);
+        }
+    }
+    below
+        .iter()
+        .filter(|c| references(c).iter().all(|id| map.contains_key(id)))
+        .map(|c| substitute(c, &map))
+        .collect()
 }
 
 /// `e` with every column id raised by `offset` (what a [`PlanNode::Shift`]

@@ -1,0 +1,13 @@
+---
+source: crates/krishiv-optimizer/tests/it/rules.rs
+assertion_line: 691
+expression: "SELECT g.y, h.m FROM (SELECT a AS y, count(*) AS n FROM t WHERE a = 5 GROUP BY a) g LEFT JOIN (SELECT a AS y2, count(*) AS m FROM u GROUP BY a) h ON g.y = h.y2"
+---
+Project [y#3, m#8]
++- Join LeftOuter, (y#3 == y2#7)
+   :- Aggregate [a#0], [a#0 AS y#3]
+   :  +- Filter (a#0 == 5)
+   :     +- Scan spark_catalog.default.t [a#0]
+   +- Aggregate [a#5], [a#5 AS y2#7, count(1) AS m#8]
+      +- Filter (isnotnull(a#5) and (a#5 == 5))
+         +- Scan spark_catalog.default.u [a#5]
