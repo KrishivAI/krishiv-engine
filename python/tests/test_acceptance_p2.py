@@ -73,7 +73,9 @@ def test_print_schema_is_sparks_tree(spark: SparkSession, capsys: pytest.Capture
         "i int not null, l bigint, d decimal(10,2), s struct<a: int not null>, "
         "arr array<struct<c: string>>, m map<string, bigint>"
     )
-    assert StructType.fromDDL(ddl).treeString().split("\n") == [
+    schema = StructType.fromDDL(ddl)
+    assert isinstance(schema, StructType)
+    assert schema.treeString().split("\n") == [
         "root",
         " |-- i: integer (nullable = false)",
         " |-- l: long (nullable = true)",
