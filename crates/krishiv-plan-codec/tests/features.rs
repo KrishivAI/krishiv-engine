@@ -28,6 +28,22 @@ fn corrupt(m: &pb::PhysicalPlan, expected: &str) {
 }
 
 #[test]
+fn an_unknown_spark_version_is_corrupt() {
+    for version in ["5.0", "4.2.1", ""] {
+        let mut m = message("spark_version");
+        m.env.as_mut().unwrap().spark_version = Some(version.to_owned());
+        corrupt(&m, "an unknown Spark version");
+    }
+    let mut m = message("spark_version");
+    m.env.as_mut().unwrap().spark_version = Some("4.1".to_owned());
+    let plan = decode(&m.encode_to_vec()).unwrap();
+    assert_eq!(
+        plan.env().spark_version,
+        Some(krishiv_kernels::SparkVersion::V4_1)
+    );
+}
+
+#[test]
 fn an_unknown_binary_output_style_is_corrupt() {
     for style in ["hex", "HEX_DISCRETE", "nonsense", ""] {
         let mut m = message("binary_output_style");
@@ -106,6 +122,7 @@ fn the_header_lists_exactly_the_features_in_use() {
         message("binary_output_style").features,
         ["binary_output_style"]
     );
+    assert_eq!(message("spark_version").features, ["spark_version"]);
     assert_eq!(message("aggregate_moments").features, ["moment_aggregates"]);
     // The exchange's schema alone names the collation.
     assert_eq!(

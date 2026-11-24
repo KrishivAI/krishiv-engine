@@ -129,7 +129,7 @@ pub(super) fn assign(
             && !(if legacy_store {
                 !legacy_refused(&output[*i].data_type, &column.data_type, names)
             } else {
-                can_store(&output[*i].data_type, &column.data_type)
+                can_store_by(&output[*i].data_type, &column.data_type, names)
             })
         {
             return Err(IncompatibleDataForTableCannotSafelyCast {
@@ -171,10 +171,15 @@ pub(super) fn legacy_refused(from: &DataType, to: &DataType, by_name: Option<boo
                     .iter()
                     .zip(t.fields().iter())
                     .any(|(f, t)| legacy_refused(f.data_type(), t.data_type(), by_name)),
-                Some(case) => t.fields().iter().any(|t| {
-                    field_named(f, t.name(), case)
-                        .is_none_or(|f| legacy_refused(f.data_type(), t.data_type(), by_name))
-                }),
+                // Source names that repeat under the rule have no name to pair by: refused.
+                Some(case) => {
+                    !unique_names(f, case)
+                        || t.fields().iter().any(|t| {
+                            field_named(f, t.name(), case).is_none_or(|f| {
+                                legacy_refused(f.data_type(), t.data_type(), by_name)
+                            })
+                        })
+                }
             }
         }
         _ => krishiv_plan::analyzer::cast_always_refused(from, to),
@@ -196,12 +201,16 @@ fn field_named<'a>(
     })
 }
 
-/// Whether a struct's field names are all different, ignoring case.
-fn unique_names(st: &krishiv_types::StructType) -> bool {
+/// Whether a struct's field names are all different, ignoring case unless `case_sensitive`.
+fn unique_names(st: &krishiv_types::StructType, case_sensitive: bool) -> bool {
     let mut seen = std::collections::HashSet::new();
-    st.fields()
-        .iter()
-        .all(|f| seen.insert(f.name().to_lowercase()))
+    st.fields().iter().all(|f| {
+        seen.insert(if case_sensitive {
+            f.name().to_owned()
+        } else {
+            f.name().to_lowercase()
+        })
+    })
 }
 
 /// The LEGACY store cast of `value` (of type `from`) to `to`, one leaf at a time as Spark does: a map's keys and
@@ -214,15 +223,74 @@ pub(super) fn legacy_store_cast(
     depth: usize,
     by_name: Option<bool>,
 ) -> crate::Column {
+    store_cast(value, from, to, depth, by_name, false)
+}
+
+/// The ANSI store cast of an `INSERT .. BY NAME` value whose type holds a struct with its fields in another
+/// order than the column's (Spark's `reorderColumnsByName`, under every policy): the same per-field rebuild as
+/// the LEGACY cast, with ANSI casts at the leaves.
+pub(super) fn ansi_store_cast_by_name(
+    value: crate::Column,
+    from: &DataType,
+    to: &DataType,
+    case_sensitive: bool,
+) -> crate::Column {
+    if needs_reorder(from, to, case_sensitive) {
+        store_cast(value, from, to, 0, Some(case_sensitive), true)
+    } else {
+        value.cast_ansi(to.clone())
+    }
+}
+
+/// Whether a struct inside `from`/`to` has fields that pair by name in another order.
+fn needs_reorder(from: &DataType, to: &DataType, case_sensitive: bool) -> bool {
+    match (from, to) {
+        (DataType::Map(f), DataType::Map(t)) => {
+            needs_reorder(f.key_type(), t.key_type(), case_sensitive)
+                || needs_reorder(f.value_type(), t.value_type(), case_sensitive)
+        }
+        (DataType::Array(f), DataType::Array(t)) => {
+            needs_reorder(f.element_type(), t.element_type(), case_sensitive)
+        }
+        (DataType::Struct(f), DataType::Struct(t)) if f.fields().len() == t.fields().len() => {
+            f.fields().iter().zip(t.fields().iter()).any(|(f, t)| {
+                let same_place = if case_sensitive {
+                    f.name() == t.name()
+                } else {
+                    f.name().eq_ignore_ascii_case(t.name())
+                };
+                !same_place || needs_reorder(f.data_type(), t.data_type(), case_sensitive)
+            })
+        }
+        _ => false,
+    }
+}
+
+/// `legacy_store_cast`, or with `ansi` the same walk with ANSI leaf casts.
+fn store_cast(
+    value: crate::Column,
+    from: &DataType,
+    to: &DataType,
+    depth: usize,
+    by_name: Option<bool>,
+    ansi: bool,
+) -> crate::Column {
     use crate::functions::{call_function, col, lambda, lit};
     if from == to {
         return value;
     }
+    let leaf = |value: crate::Column, to: &DataType| {
+        if ansi {
+            value.cast_ansi(to.clone())
+        } else {
+            value.cast_legacy(to.clone())
+        }
+    };
     match (from, to) {
         (DataType::Map(f), DataType::Map(t)) => {
             let leaf = |arr: crate::Column, f: &DataType, t: &DataType| {
                 let name = format!("__krishiv_x{depth}");
-                let body = legacy_store_cast(col(&name), f, t, depth + 1, by_name);
+                let body = store_cast(col(&name), f, t, depth + 1, by_name, ansi);
                 call_function("transform", [arr, lambda([name], body)])
             };
             let keys = leaf(
@@ -239,19 +307,21 @@ pub(super) fn legacy_store_cast(
         }
         (DataType::Array(f), DataType::Array(t)) => {
             let name = format!("__krishiv_x{depth}");
-            let body = legacy_store_cast(
+            let body = store_cast(
                 col(&name),
                 f.element_type(),
                 t.element_type(),
                 depth + 1,
                 by_name,
+                ansi,
             );
             call_function("transform", [value, lambda([name], body)])
         }
         // A field read by name (`get_field`) needs unique source names; Spark reads by ordinal, so a source
         // struct whose names repeat (ignoring case) is cast as one value, by position.
         (DataType::Struct(f), DataType::Struct(t))
-            if f.fields().len() == t.fields().len() && unique_names(f) =>
+            if f.fields().len() == t.fields().len()
+                && unique_names(f, by_name.unwrap_or(false)) =>
         {
             let mut args = Vec::with_capacity(t.fields().len() * 2);
             for (i, t) in t.fields().iter().enumerate() {
@@ -261,15 +331,16 @@ pub(super) fn legacy_store_cast(
                     None => f.fields().get(i),
                 };
                 let Some(f) = f else {
-                    return value.cast_legacy(to.clone());
+                    return leaf(value, to);
                 };
                 args.push(lit(t.name()));
-                args.push(legacy_store_cast(
+                args.push(store_cast(
                     value.clone().get_field(f.name()),
                     f.data_type(),
                     t.data_type(),
                     depth,
                     by_name,
+                    ansi,
                 ));
             }
             let built = call_function("named_struct", args);
@@ -282,13 +353,19 @@ pub(super) fn legacy_store_cast(
                 ],
             )
         }
-        _ => value.cast_legacy(to.clone()),
+        _ => leaf(value, to),
     }
 }
 
 /// Spark's ANSI store assignment (`Cast.canANSIStoreAssign`): whether a
 /// value of type `from` may be stored into a column of type `to`.
 pub(super) fn can_store(from: &DataType, to: &DataType) -> bool {
+    can_store_by(from, to, None)
+}
+
+/// [`can_store`], where `by_name` (`Some(case_sensitive)`, for `INSERT .. BY NAME`) pairs a struct's fields by
+/// name and refuses a target field the source lacks.
+pub(super) fn can_store_by(from: &DataType, to: &DataType, by_name: Option<bool>) -> bool {
     use DataType as T;
     if from == to {
         return true;
@@ -313,20 +390,29 @@ pub(super) fn can_store(from: &DataType, to: &DataType) -> bool {
         (T::Date, T::Timestamp | T::TimestampNtz)
         | (T::Timestamp | T::TimestampNtz, T::Date | T::Timestamp | T::TimestampNtz) => true,
         (T::Array(a), T::Array(b)) => {
-            can_store(a.element_type(), b.element_type())
+            can_store_by(a.element_type(), b.element_type(), by_name)
                 && (b.contains_null() || !a.contains_null())
         }
         (T::Map(a), T::Map(b)) => {
-            can_store(a.key_type(), b.key_type())
-                && can_store(a.value_type(), b.value_type())
+            can_store_by(a.key_type(), b.key_type(), by_name)
+                && can_store_by(a.value_type(), b.value_type(), by_name)
                 && (b.value_contains_null() || !a.value_contains_null())
         }
-        (T::Struct(a), T::Struct(b)) => {
-            a.fields().len() == b.fields().len()
-                && a.fields().iter().zip(b.fields()).all(|(x, y)| {
-                    can_store(x.data_type(), y.data_type()) && (y.nullable() || !x.nullable())
-                })
-        }
+        (T::Struct(a), T::Struct(b)) if a.fields().len() == b.fields().len() => match by_name {
+            None => a.fields().iter().zip(b.fields()).all(|(x, y)| {
+                can_store_by(x.data_type(), y.data_type(), by_name)
+                    && (y.nullable() || !x.nullable())
+            }),
+            Some(case) => {
+                unique_names(a, case)
+                    && b.fields().iter().all(|y| {
+                        field_named(a, y.name(), case).is_some_and(|x| {
+                            can_store_by(x.data_type(), y.data_type(), by_name)
+                                && (y.nullable() || !x.nullable())
+                        })
+                    })
+            }
+        },
         _ => false,
     }
 }

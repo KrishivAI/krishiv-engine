@@ -1860,6 +1860,48 @@ fn legacy_store_by_name_pairs_nested_struct_fields_by_name() {
     );
 }
 
+/// Under the default (ANSI) policy `INSERT .. BY NAME` pairs nested struct fields by name too, at any depth.
+#[test]
+fn ansi_store_by_name_pairs_nested_struct_fields_by_name() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(&s, "create table bna(s struct<a:int,b:int>) using parquet");
+    run(
+        &s,
+        "insert into bna by name select named_struct('b', 2, 'a', 1) as s",
+    );
+    assert_eq!(
+        rows(
+            &s,
+            "select concat(cast(s.a as string), '|', cast(s.b as string)) from bna"
+        ),
+        ["1|2"]
+    );
+    run(
+        &s,
+        "create table bnr(v array<struct<a:int,b:int>>) using parquet",
+    );
+    run(
+        &s,
+        "insert into bnr by name select array(named_struct('b', 2, 'a', 1)) as v",
+    );
+    assert_eq!(
+        rows(
+            &s,
+            "select concat(cast(v[0].a as string), '|', cast(v[0].b as string)) from bnr"
+        ),
+        ["1|2"]
+    );
+    // A target field the source lacks is refused.
+    assert_eq!(
+        class(
+            &s,
+            "insert into bna by name select named_struct('a', 1, 'c', 2) as s"
+        ),
+        "INCOMPATIBLE_DATA_FOR_TABLE.CANNOT_SAFELY_CAST"
+    );
+}
+
 /// Map keys that collide after the LEGACY store cast follow `spark.sql.mapKeyDedupPolicy` (the map is rebuilt
 /// with `MapFromArrays`): `EXCEPTION` fails with `DUPLICATED_MAP_KEY`, `LAST_WIN` keeps the last value.
 #[test]

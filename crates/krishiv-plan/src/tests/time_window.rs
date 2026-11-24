@@ -476,6 +476,8 @@ fn a_window_column_is_found_through_a_limit_and_in_any_case() {
                 ],
             )
             .limit(int(10))
+            .sort(vec![crate::SortOrder::asc(c("cnt"))])
+            .offset(int(1))
             .aggregate(
                 vec![f("window", vec![c(reference), s("5 minutes")])],
                 vec![c("window.start"), f("sum", vec![c("cnt")])],

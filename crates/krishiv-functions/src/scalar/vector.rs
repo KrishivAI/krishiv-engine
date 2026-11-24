@@ -11,11 +11,9 @@
 //!
 //! Spark 4.2 and 4.3 differ here (the infinity norm's NaN, the norm's
 //! normalizability, `double` accumulation); `bind` reads the version from
-//! `BindOptions::kernel`. The executor builds its kernel context with the
-//! default (4.3) version: the session's profile does not reach `EvalEnv` yet
-//! (it would travel as an `ExprEnv` field and a plan codec feature), so a 4.2
-//! session runs these functions with the 4.3 rules. Only `BindOptions` built
-//! with an explicit version (the unit tests, the planner's analysis) see 4.2.
+//! `BindOptions::kernel`, which the executor builds from the session's
+//! profile (a plan carries it as `ExprEnv::spark_version`, codec feature
+//! `spark_version`).
 
 use std::sync::Arc;
 

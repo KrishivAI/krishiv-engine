@@ -183,7 +183,8 @@ impl Session {
             .with_user(self.state.principal.name.as_str())
             .with_udfs(Arc::clone(&self.state.udfs))
             .with_inspection(inspected)
-            .with_decisions(decisions);
+            .with_decisions(decisions)
+            .with_spark_version(kernel_version(self.state.profile));
         // Planning recurses on a `krishiv-deep` thread this worker joins, and a data source's
         // `decide` may run user code there: tell the runtime the worker is blocked so its core
         // goes to another task (a one-thread executor would otherwise stall every other query).
@@ -214,5 +215,17 @@ impl Session {
             tracing::warn!(target: "krishiv::session::warnings", "{w}");
         }
         Ok((optimized, physical, steps))
+    }
+}
+
+/// The kernel line a session profile follows (3.5 has no kernel line of its own: it runs 4.0's rules).
+fn kernel_version(profile: krishiv_plan::analyzer::SparkProfile) -> krishiv_kernels::SparkVersion {
+    use krishiv_kernels::SparkVersion as V;
+    use krishiv_plan::analyzer::SparkProfile as P;
+    match profile {
+        P::V3_5 | P::V4_0 => V::V4_0,
+        P::V4_1 => V::V4_1,
+        P::V4_2 => V::V4_2,
+        _ => V::V4_3,
     }
 }

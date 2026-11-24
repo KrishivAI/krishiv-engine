@@ -128,6 +128,8 @@ pub struct PlanningContext {
     /// run and for inspected plans (`EXPLAIN` asks the source once, as Spark's does); off only for
     /// `physical_counted` and `physical_probe`, which run no user code.
     pub decisions: bool,
+    /// The Spark release line the session follows (`None`: the default, 4.3).
+    pub spark_version: Option<krishiv_kernels::SparkVersion>,
 }
 
 impl PlanningContext {
@@ -142,7 +144,15 @@ impl PlanningContext {
             sample_salt: None,
             inspect: false,
             decisions: true,
+            spark_version: None,
         }
+    }
+
+    /// The same context planning for the Spark release line `version`.
+    #[must_use]
+    pub fn with_spark_version(mut self, version: krishiv_kernels::SparkVersion) -> Self {
+        self.spark_version = Some(version);
+        self
     }
 
     /// The same context for a plan that is only inspected when `inspect`.

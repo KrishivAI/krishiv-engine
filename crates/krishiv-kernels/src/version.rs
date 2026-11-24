@@ -44,6 +44,23 @@ impl SparkVersion {
     /// Every supported version, oldest first.
     pub const ALL: [Self; 4] = [Self::V4_0, Self::V4_1, Self::V4_2, Self::V4_3];
 
+    /// The release line's name (`4.2`): what a plan carries.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::V4_0 => "4.0",
+            Self::V4_1 => "4.1",
+            Self::V4_2 => "4.2",
+            Self::V4_3 => "4.3",
+        }
+    }
+
+    /// The version a [`name`](Self::name) names.
+    #[must_use]
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|v| v.name() == name)
+    }
+
     /// The `ARITHMETIC_OVERFLOW` message of an exact integral operation on
     /// `width` (`MathUtils.*Exact` / `Math.*Exact`): the JDK's text before
     /// 4.2, canonicalized to `overflow` since.

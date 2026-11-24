@@ -269,6 +269,9 @@ impl<'a> Planner<'a> {
         if let Some(micros) = cx.query_start_micros {
             env.set_query_start_micros(micros);
         }
+        if let Some(version) = cx.spark_version {
+            env.set_spark_version(version);
+        }
         // Planning validates UDF calls against the session's library; the
         // implementation a plan runs comes from its worker.
         env.udfs = cx.udfs.clone();

@@ -385,6 +385,13 @@ impl Session {
                                 0,
                                 by_name.then_some(env.analysis.conf.case_sensitive),
                             )
+                        } else if by_name {
+                            super::assign::ansi_store_cast_by_name(
+                                value,
+                                &output[*i].data_type,
+                                &column.data_type,
+                                env.analysis.conf.case_sensitive,
+                            )
                         } else {
                             value.cast_ansi(column.data_type.clone())
                         }

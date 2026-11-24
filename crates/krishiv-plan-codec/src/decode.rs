@@ -315,6 +315,14 @@ fn plan(m: &pb::PhysicalPlan, limits: &Limits) -> Result<PhysicalPlan> {
     {
         return Err(corrupt("an unknown binary output style"));
     }
+    // A writer sets the line only when it is not the default, and by its exact name.
+    let spark_version = match env.spark_version.as_deref() {
+        None => None,
+        Some(name) => Some(
+            krishiv_kernels::SparkVersion::from_name(name)
+                .ok_or_else(|| corrupt("an unknown Spark version"))?,
+        ),
+    };
     let env = ExprEnv {
         ansi: env.ansi,
         // The wire carries the flag for the `legacy_statistical_aggregate`
@@ -332,6 +340,7 @@ fn plan(m: &pb::PhysicalPlan, limits: &Limits) -> Result<PhysicalPlan> {
         legacy_coding_error_action: env.legacy_coding_error_action.unwrap_or(false),
         legacy_time_parser: env.legacy_time_parser.unwrap_or(false),
         binary_output_style: env.binary_output_style.as_deref().map(std::sync::Arc::from),
+        spark_version,
     };
     if !env.zone_name_matches_zone() {
         return Err(corrupt("a session zone name that is not its offset"));

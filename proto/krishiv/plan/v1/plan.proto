@@ -124,6 +124,10 @@ message ExprEnv {
   // would print `[45 61]`.
   // feature: binary_output_style
   optional string binary_output_style = 11;
+  // The Spark release line (`4.0`, `4.1`, `4.2`) whose kernel and function rules the workers
+  // apply, when it is not the default (4.3): a worker without the feature would run 4.3's.
+  // feature: spark_version
+  optional string spark_version = 12;
 }
 
 message ExplainNode {

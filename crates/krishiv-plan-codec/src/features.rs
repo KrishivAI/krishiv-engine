@@ -176,6 +176,7 @@ registry! {
     (session_zone_name, SessionZoneName, POST_MIGRATION_READER_VERSION, Semantic, "The configured session time zone name (`spark.sql.session.timeZone`) where it differs from the rendered offset; without it a worker shows the offset in `current_timezone()` and `VV`/`z` patterns."),
     (shared_subplan, SharedSubplan, POST_MIGRATION_READER_VERSION, Semantic, "Subplans run once per query and read by several `SharedRead` nodes (`WITH` bodies computed once)."),
     (sort_merge_join, SortMergeJoin, POST_MIGRATION_READER_VERSION, Semantic, "The `SortMergeJoin` node: a join of its inputs sorted on the keys (a `MERGE` hint or `krishiv.exec.join.strategy`)."),
+    (spark_version, SparkVersion, POST_MIGRATION_READER_VERSION, Semantic, "The `spark_version` expression environment setting: the Spark release line (4.0, 4.1 or 4.2) whose kernel and function rules the workers apply; without it a worker applies 4.3's."),
     (struct_field, StructField, POST_MIGRATION_READER_VERSION, Semantic, "A struct field access (`GetStructField`: the analyzer-resolved field of a struct)."),
     (table_write, TableWrite, POST_MIGRATION_READER_VERSION, Semantic, "The `TableWrite` node: rows written into a table provider's sink (its writer, or the rewriter of its row-level table), resolved at instantiation; design P3-PR-DML §7."),
     (tail, Tail, POST_MIGRATION_READER_VERSION, Semantic, "The `Tail` node (the last rows of the input in plan order, Spark's `Dataset.tail`)."),
@@ -1113,6 +1114,9 @@ pub fn plan_features(plan: &PhysicalPlan) -> BTreeSet<Feature> {
     }
     if plan.env().binary_output_style.is_some() {
         out.insert(Feature::BinaryOutputStyle);
+    }
+    if plan.env().spark_version.is_some() {
+        out.insert(Feature::SparkVersion);
     }
     if plan.env().zone_name.is_some() {
         out.insert(Feature::SessionZoneName);
