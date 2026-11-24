@@ -533,6 +533,8 @@ async fn run_listeners(
         .runtime(Arc::clone(&runtime))
         .build()
         .map_err(|e| e.to_string())?;
+    // Every client's session is built from this one and none runs in it: the console does not list it.
+    let template = base.id().to_owned();
     let authenticated = auth.is_enabled();
     let auth = Arc::new(auth);
     // One denial counter for the guards and every caller's session (ADR 0046 §8).
@@ -648,6 +650,7 @@ async fn run_listeners(
         tls.is_some(),
         Arc::clone(&late_metrics),
         udf_workers,
+        template,
     )?;
     let mut connect_config = ConnectServerConfig::from_config(config);
     connect_config.shutdown_timeout = Duration::ZERO;
@@ -823,6 +826,7 @@ fn admin_router(
     tls: bool,
     late: LateMetrics,
     udf_workers: Option<UdfWorkersProvider>,
+    template: String,
 ) -> Result<axum::Router, String> {
     let authenticated = auth.is_some();
     let denials = auth.as_ref().map(|a| a.denials());
@@ -882,6 +886,7 @@ fn admin_router(
         if let Some(read) = udf_workers {
             source = source.with_udf_workers(read);
         }
+        let mut templates = vec![template];
         if let Some(denials) = denials {
             // The editor runs a statement as the authenticated caller, in the session a Spark Connect session of
             // that caller gets: the same role matrix and path confinement.
@@ -889,6 +894,7 @@ fn admin_router(
                 .runtime(Arc::clone(runtime))
                 .build()
                 .map_err(|e| e.to_string())?;
+            templates.push(base.id().to_owned());
             // The editor's sessions are UI sessions: their denials count under the `ui` surface, where the
             // statement arrived (P3-T101 §2 H3).
             let factory = caller_sessions(base, config, denials)?;
@@ -899,6 +905,7 @@ fn admin_router(
                 Ok(session)
             }));
         }
+        let source = source.with_template_sessions(templates);
         // The `Host` allowlist (DNS rebinding, T-W5): on a loopback address the loopback names and
         // `krishiv.ui.allowedHosts`; on another address only when names are configured. The environment variable
         // `KRISHIV_UI_ALLOWED_HOSTS` adds names to either.

@@ -64,6 +64,19 @@
           sql(),
           EditorView.contentAttributes.of({ "aria-label": "SQL statement" }),
           keymap.of([{ key: "Mod-Enter", run: () => (start(), true) }]),
+          // Typing over a selection that spans highlighted words: Chromium's own editing first writes a style
+          // attribute onto the text it keeps, which `style-src 'self'` blocks (one console error per key, nothing
+          // to see). The editor makes the change itself, so the browser's editing never runs. Composed text (an
+          // input method) is not `insertText` and stays the browser's.
+          EditorView.domEventHandlers({
+            beforeinput(event, view) {
+              if (event.inputType !== "insertText" || event.data == null || view.composing) return false;
+              if (view.state.readOnly || view.state.selection.ranges.every((r) => r.empty)) return false;
+              event.preventDefault();
+              view.dispatch(view.state.replaceSelection(event.data), { userEvent: "input.type", scrollIntoView: true });
+              return true;
+            },
+          }),
         ],
       }),
     });

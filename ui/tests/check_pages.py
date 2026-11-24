@@ -149,24 +149,18 @@ def embed_checks(origin: str, shots: Path | None) -> list[str]:
         try:
             page.get_by_text("Uptime").first.wait_for(timeout=5000)
         except PlaywrightTimeout:
-            problems.append(
-                "deep link /queries/{id}: the header's Health link does not leave the page"
-            )
+            problems.append("deep link /queries/{id}: the header's Health link does not leave the page")
         page.get_by_role("link", name="Queries").first.click()
         try:
             page.get_by_text("SELECT l_returnflag").first.wait_for(timeout=5000)
         except PlaywrightTimeout:
-            problems.append(
-                "deep link: the header's Queries link does not show the query list"
-            )
+            problems.append("deep link: the header's Queries link does not show the query list")
         page.goto(f"{origin}/sql?token=fixture")
         page.get_by_role("link", name="Environment").first.click()
         try:
             page.get_by_text("krishiv.auth.token").first.wait_for(timeout=5000)
         except PlaywrightTimeout:
-            problems.append(
-                "deep link /sql: the Environment link does not leave the page"
-            )
+            problems.append("deep link /sql: the Environment link does not leave the page")
         ctx.close()
 
         # 2. Framed from the allowed origin: renders, with no header or navigation, at three widths.
@@ -195,9 +189,7 @@ def embed_checks(origin: str, shots: Path | None) -> list[str]:
                     ctx.close()
                     continue
                 if frame.locator("header, nav").count() != 0:
-                    problems.append(
-                        f"{view}: the embedded view shows a header or navigation"
-                    )
+                    problems.append(f"{view}: the embedded view shows a header or navigation")
                 if frame.get_by_text("Powered by Krishiv").count() != 1:
                     problems.append(f"{view}: the attribution mark is not shown")
                 accent = frame.locator("html").evaluate(
@@ -205,10 +197,7 @@ def embed_checks(origin: str, shots: Path | None) -> list[str]:
                 )
                 if (accent == "#ff0000") != (theme is not None):
                     problems.append(f"{view}: --k-accent is {accent!r}")
-                if (
-                    theme is not None
-                    and frame.locator("html").get_attribute("data-theme") != "dark"
-                ):
+                if theme is not None and frame.locator("html").get_attribute("data-theme") != "dark":
                     problems.append(f"{view}: the theme's mode was not applied")
                 if shots is not None:
                     shots.mkdir(parents=True, exist_ok=True)
@@ -216,9 +205,7 @@ def embed_checks(origin: str, shots: Path | None) -> list[str]:
                         path=str(shots / f"embed-{label}-{theme_name}.png"),
                         full_page=True,
                     )
-                problems += [
-                    f"{view}: {m}" for m in log if m.startswith(("error", "warning"))
-                ]
+                problems += [f"{view}: {m}" for m in log if m.startswith(("error", "warning"))]
                 ctx.close()
 
         # 2b. A link that names its query's session: the view sends the session with its read (the server signed
@@ -244,18 +231,14 @@ def embed_checks(origin: str, shots: Path | None) -> list[str]:
         ctx = browser.new_context()
         ctx.route(
             "http://blocked.test/**",
-            lambda r: r.fulfill(
-                status=200, content_type="text/html", body=parent_html(link)
-            ),
+            lambda r: r.fulfill(status=200, content_type="text/html", body=parent_html(link)),
         )
         page = ctx.new_page()
         page.goto("http://blocked.test/")
         page.wait_for_timeout(1500)
         framed = [f for f in page.frames if f != page.main_frame]
         if not framed or not framed[0].url.startswith("chrome-error:"):
-            problems.append(
-                f"embed from a disallowed origin was not blocked: {[f.url for f in framed]}"
-            )
+            problems.append(f"embed from a disallowed origin was not blocked: {[f.url for f in framed]}")
         ctx.close()
 
         # 4. Theme messages: valid from the allowed origin (sent as the frame loads) applies; the others do not.
@@ -287,22 +270,16 @@ def embed_checks(origin: str, shots: Path | None) -> list[str]:
         page.frame_locator("#f").get_by_text("HashJoin").first.wait_for(timeout=10000)
         page.wait_for_timeout(500)
         if accent_of(page) != "#00ff00":
-            problems.append(
-                f"a theme sent as the frame loads was not applied (accent {accent_of(page)!r})"
-            )
+            problems.append(f"a theme sent as the frame loads was not applied (accent {accent_of(page)!r})")
         for bad in (
             {"tokens": {"accent": "url(http://x/y)"}},
             {"tokens": {"nope": "#fff"}},
             {"mode": "sepia"},
         ):
-            page.evaluate(
-                f'(()=>{{const f=document.getElementById("f");{message(bad).replace("this.", "f.")}}})()'
-            )
+            page.evaluate(f'(()=>{{const f=document.getElementById("f");{message(bad).replace("this.", "f.")}}})()')
         page.wait_for_timeout(500)
         if accent_of(page) != "#00ff00":
-            problems.append(
-                f"an invalid theme changed the page (accent {accent_of(page)!r})"
-            )
+            problems.append(f"an invalid theme changed the page (accent {accent_of(page)!r})")
         if sum("ignored an invalid theme message" in m for m in log) != 3:
             problems.append(f"invalid theme messages were not logged: {log}")
         ctx.close()
@@ -322,9 +299,7 @@ def embed_checks(origin: str, shots: Path | None) -> list[str]:
         page.frame_locator("#f").get_by_text("HashJoin").first.wait_for(timeout=10000)
         page.wait_for_timeout(500)
         if accent_of(page) == "#00ff00":
-            problems.append(
-                "a theme message from an origin that is not allowed was applied"
-            )
+            problems.append("a theme message from an origin that is not allowed was applied")
         if not any("not in krishiv.ui.allowedOrigins" in m for m in log):
             problems.append(f"a message from a disallowed origin was not logged: {log}")
         ctx.close()
@@ -335,9 +310,7 @@ def embed_checks(origin: str, shots: Path | None) -> list[str]:
         bad_link = link + "&theme=" + quote(json.dumps({"tokens": {"accent": "red"}}))
         ctx.route(
             "http://parent.test/**",
-            lambda r: r.fulfill(
-                status=200, content_type="text/html", body=parent_html(bad_link)
-            ),
+            lambda r: r.fulfill(status=200, content_type="text/html", body=parent_html(bad_link)),
         )
         page = ctx.new_page()
         _console(page, log)
@@ -370,17 +343,13 @@ def check(shots: Path | None) -> list[str]:
                 foreign: list[str] = []
                 page.on(
                     "console",
-                    lambda m, errors=errors: (
-                        errors.append(m.text) if m.type == "error" else None
-                    ),
+                    lambda m, errors=errors: errors.append(m.text) if m.type == "error" else None,
                 )
                 page.on("pageerror", lambda e, errors=errors: errors.append(str(e)))
                 page.on(
                     "request",
                     lambda r, foreign=foreign: (
-                        foreign.append(r.url)
-                        if not r.url.startswith((origin, "data:", "blob:"))
-                        else None
+                        foreign.append(r.url) if not r.url.startswith((origin, "data:", "blob:")) else None
                     ),
                 )
                 page.goto(f"{origin}/?token=fixture")
@@ -388,13 +357,9 @@ def check(shots: Path | None) -> list[str]:
                     view = f"{name} {label} {scheme}"
                     page.evaluate(f"window.location.hash = {frag!r}")
                     page.wait_for_timeout(1000)
-                    wide = page.evaluate(
-                        "document.documentElement.scrollWidth - document.documentElement.clientWidth"
-                    )
+                    wide = page.evaluate("document.documentElement.scrollWidth - document.documentElement.clientWidth")
                     if wide > 0:
-                        problems.append(
-                            f"{view}: the page scrolls sideways ({wide}px too wide)"
-                        )
+                        problems.append(f"{view}: the page scrolls sideways ({wide}px too wide)")
                     if label == "desktop":
                         problems += [
                             f"{view}: a table is {w}px wider than its box, so its last columns are cut"
@@ -403,23 +368,12 @@ def check(shots: Path | None) -> list[str]:
                     body = page.inner_text("body")
                     if name == "query-detail":
                         hints = page.get_by_test_id("advisor-hints").all_inner_texts()
-                        if (
-                            len(hints) != 1
-                            or "give the query more memory" not in hints[0]
-                        ):
-                            problems.append(
-                                f"{view}: the advisor-hints section is {hints!r}"
-                            )
-                    problems += [
-                        f"{view}: missing text {t!r}"
-                        for t in texts
-                        if t.lower() not in body.lower()
-                    ]
+                        if len(hints) != 1 or "give the query more memory" not in hints[0]:
+                            problems.append(f"{view}: the advisor-hints section is {hints!r}")
+                    problems += [f"{view}: missing text {t!r}" for t in texts if t.lower() not in body.lower()]
                     if label in PHONES:
                         small = page.evaluate(SMALL_TARGETS)
-                        problems += [
-                            f"{view}: touch target under 40 px: {s}" for s in small
-                        ]
+                        problems += [f"{view}: touch target under 40 px: {s}" for s in small]
                     if shots is not None and label != "small":
                         shots.mkdir(parents=True, exist_ok=True)
                         page.screenshot(
@@ -432,42 +386,25 @@ def check(shots: Path | None) -> list[str]:
                     " document.fonts.load('13px \"Red Hat Mono\"')]).then(r => r.map(f => f.length))"
                 )
                 if not all(fonts):
-                    problems.append(
-                        f"{label} {scheme}: a Red Hat font did not load: {fonts}"
-                    )
+                    problems.append(f"{label} {scheme}: a Red Hat font did not load: {fonts}")
                 if label in PHONES:
                     page.evaluate("window.location.hash = '#/health'")
                     page.wait_for_timeout(200)
                     if page.get_by_role("dialog").count() != 0:
-                        problems.append(
-                            f"phone {scheme}: the menu is open before it is asked for"
-                        )
+                        problems.append(f"phone {scheme}: the menu is open before it is asked for")
                     page.get_by_role("button", name="Open the menu").click()
                     page.wait_for_timeout(300)
                     dialog = page.get_by_role("dialog")
-                    if (
-                        dialog.count() != 1
-                        or not dialog.get_by_role("link", name="Queries").is_visible()
-                    ):
-                        problems.append(
-                            f"phone {scheme}: the menu button does not open the pages"
-                        )
+                    if dialog.count() != 1 or not dialog.get_by_role("link", name="Queries").is_visible():
+                        problems.append(f"phone {scheme}: the menu button does not open the pages")
                     else:
                         dialog.get_by_role("link", name="Queries").click()
                         page.wait_for_timeout(300)
-                        if (
-                            page.get_by_role("dialog").count() != 0
-                            or "#/queries" not in page.url
-                        ):
-                            problems.append(
-                                f"phone {scheme}: choosing a page does not close the menu and go there"
-                            )
+                        if page.get_by_role("dialog").count() != 0 or "#/queries" not in page.url:
+                            problems.append(f"phone {scheme}: choosing a page does not close the menu and go there")
                 # Collected last, so an error the menu (or anything above) raises is reported too.
                 problems += [f"{label} {scheme}: console error: {e}" for e in errors]
-                problems += [
-                    f"{label} {scheme}: request outside the page's origin: {u}"
-                    for u in foreign
-                ]
+                problems += [f"{label} {scheme}: request outside the page's origin: {u}" for u in foreign]
                 ctx.close()
         browser.close()
     return problems
@@ -482,9 +419,7 @@ def page_checks(origin: str) -> list[str]:
         page = ctx.new_page()
         errors: list[str] = []
         page.on("pageerror", lambda e: errors.append(str(e)))
-        page.on(
-            "dialog", lambda d: (errors.append(f"dialog: {d.message}"), d.dismiss())
-        )
+        page.on("dialog", lambda d: (errors.append(f"dialog: {d.message}"), d.dismiss()))
         page.goto(f"{origin}/?token=fixture")
         # Ready: the shell shows its navigation and the token has left the address.
         page.wait_for_function("!location.search.includes('token')", timeout=10000)
@@ -507,12 +442,7 @@ def page_checks(origin: str) -> list[str]:
                 problems.append(f"the session cookie path is {c['path']}")
         if page.evaluate("document.cookie").find("fixture") >= 0:
             problems.append("the session cookie is readable by script (not HttpOnly)")
-        if (
-            page.evaluate("JSON.stringify([sessionStorage, localStorage])").find(
-                "fixture"
-            )
-            >= 0
-        ):
+        if page.evaluate("JSON.stringify([sessionStorage, localStorage])").find("fixture") >= 0:
             problems.append("the token is kept in web storage")
         # XSS: hostile text in query text, principals, catalog names, comments, results and errors renders as text.
 
@@ -549,6 +479,20 @@ def page_checks(origin: str) -> list[str]:
         page.evaluate("window.location.hash = '#/sql'")
         editor = page.locator(".cm-content")
         editor.wait_for(timeout=10000)
+        # Typing over a selection must not make the browser write a style attribute, which the policy blocks.
+        blocked: list[str] = []
+        page.on(
+            "console",
+            lambda m: blocked.append(m.text) if m.type == "error" else None,
+        )
+        editor.click()
+        page.keyboard.press("Control+A")
+        page.keyboard.type("SELECT 'typed over'")
+        page.wait_for_timeout(300)
+        typed = editor.inner_text().strip()
+        if typed != "SELECT 'typed over'":
+            problems.append(f"sql: typing over the selection left {typed!r}")
+        problems += [f"sql: typing over a selection logs: {e}" for e in blocked]
         for text, outcome in (("SELECT 1", "finished"), ("boom", "failed")):
             editor.click()
             page.keyboard.press("Control+A")
@@ -566,14 +510,10 @@ def page_checks(origin: str) -> list[str]:
         try:
             page.get_by_text("cancelled", exact=True).wait_for(timeout=2000)
         except PlaywrightTimeout:
-            problems.append(
-                "the SQL editor did not show the cancelled state within 2 s"
-            )
+            problems.append("the SQL editor did not show the cancelled state within 2 s")
         # Redaction on the environment page.
         page.evaluate("window.location.hash = '#/environment'")
-        page.get_by_text("spark.sql.shuffle.partitions", exact=True).first.wait_for(
-            timeout=10000
-        )
+        page.get_by_text("spark.sql.shuffle.partitions", exact=True).first.wait_for(timeout=10000)
         for key in (
             "krishiv.auth.token",
             "db.password",
@@ -583,11 +523,26 @@ def page_checks(origin: str) -> list[str]:
             shown = row.locator("span.mono").nth(1).inner_text().strip()
             if shown != "***":
                 problems.append(f"environment: {key} shows {shown!r}, not '***'")
+        # A setting is found by its Spark name too, and a filter that matches nothing says so.
+        box = page.get_by_placeholder("spark.sql")
+        box.fill("spark.sql.shuffle")
+        if not page.get_by_text("krishiv.sql.shuffle.partitionsHint", exact=True).first.is_visible():
+            problems.append("environment: the Spark name does not find its setting")
+        box.fill("no-such-setting")
+        if not page.get_by_text("No setting matches.").first.is_visible():
+            problems.append("environment: a filter with no match does not say so")
+        box.fill("")
+        # Pools of one name are one row on Resources.
+        page.evaluate("window.location.hash = '#/resources'")
+        page.locator("[data-pools]").first.wait_for(timeout=10000)
+        named = page.locator("tr", has=page.get_by_text("process/relation_cache", exact=True)).count()
+        pools = page.locator("[data-pools]").first.get_attribute("data-pools")
+        row = page.locator("tr", has=page.locator("[data-pools]")).first.inner_text()
+        if named != 1 or pools != "3" or "3.0 MiB" not in row or "8.0 MiB" not in row:
+            problems.append(f"resources: relation_cache is {named} rows of {pools} pools: {row!r}")
         # Accessibility: no serious or critical axe violation on the four pages.
         if not AXE.exists():
-            problems.append(
-                f"axe-core is not installed ({AXE}); run pnpm install in ui/"
-            )
+            problems.append(f"axe-core is not installed ({AXE}); run pnpm install in ui/")
         else:
             axe_js = AXE.read_text()
             for frag in AXE_PAGES:
@@ -606,9 +561,7 @@ def page_checks(origin: str) -> list[str]:
     return problems
 
 
-def shows(
-    page: Page, texts: list[str], where: str = "body", timeout: int = 5000
-) -> bool:
+def shows(page: Page, texts: list[str], where: str = "body", timeout: int = 5000) -> bool:
     """Waits until `where` shows every one of `texts` (any case); whether it did within `timeout` ms."""
     try:
         page.wait_for_function(
@@ -706,60 +659,39 @@ def mode_checks() -> list[str]:
                     body = page.inner_text("main").lower()
                     if label == "desktop":
                         body += page.inner_text("header").lower()
-                        problems += [
-                            f"{view}: missing text {t!r}"
-                            for t in wanted
-                            if t.lower() not in body
-                        ]
+                        problems += [f"{view}: missing text {t!r}" for t in wanted if t.lower() not in body]
                     main = page.inner_text("main").lower()
                     problems += [
-                        f"{view}: shows {t!r}, which this mode does not have"
-                        for t in unwanted
-                        if t.lower() in main
+                        f"{view}: shows {t!r}, which this mode does not have" for t in unwanted if t.lower() in main
                     ]
-                    wide = page.evaluate(
-                        "document.documentElement.scrollWidth - document.documentElement.clientWidth"
-                    )
+                    wide = page.evaluate("document.documentElement.scrollWidth - document.documentElement.clientWidth")
                     if wide > 0:
-                        problems.append(
-                            f"{view}: the page scrolls sideways ({wide}px too wide)"
-                        )
+                        problems.append(f"{view}: the page scrolls sideways ({wide}px too wide)")
                     if label in PHONES:
-                        problems += [
-                            f"{view}: touch target under 40 px: {s}"
-                            for s in page.evaluate(SMALL_TARGETS)
-                        ]
+                        problems += [f"{view}: touch target under 40 px: {s}" for s in page.evaluate(SMALL_TARGETS)]
                 if label == "desktop":
                     links = page.locator("header nav a").all_inner_texts()
                     if mode == "profiles" and links != ["History"]:
-                        problems.append(
-                            f"profiles: the menu lists {links}, not only History"
-                        )
+                        problems.append(f"profiles: the menu lists {links}, not only History")
                     # Every page but a query's own, and but the three a server alone has.
                     if mode == "embedded" and len(links) != len(PAGES) - 4:
                         problems.append(f"embedded: the menu lists {links}")
                     tail = fixture_server.SESSION_ID[-8:]
                     if mode == "embedded" and tail not in page.inner_text("header"):
-                        problems.append(
-                            "embedded: the header does not show the session's id"
-                        )
+                        problems.append("embedded: the header does not show the session's id")
                 problems += [f"{mode} {label}: page error: {e}" for e in errors]
                 ctx.close()
             if mode == "embedded":
                 problems += [
                     f"embedded: the page asked for {path}"
                     for path in sorted(set(server.asked))
-                    if path.endswith(
-                        ("/sessions", "/groups", "/advice", "/udf-workers")
-                    )
+                    if path.endswith(("/sessions", "/groups", "/advice", "/udf-workers"))
                 ]
             if mode == "profiles":
                 problems += [
                     f"profiles: the page asked for {path}"
                     for path in sorted(set(server.asked))
-                    if path.endswith(PROFILES_NEVER)
-                    or "/catalog/" in path
-                    or path == "/api/internal/queries"
+                    if path.endswith(PROFILES_NEVER) or "/catalog/" in path or path == "/api/internal/queries"
                 ]
             server.shutdown()
         browser.close()
@@ -776,9 +708,7 @@ def start_checks() -> list[str]:
         browser = p.chromium.launch()
         page = browser.new_page(viewport={"width": 1440, "height": 900})
         page.goto(f"http://127.0.0.1:{server.server_address[1]}/?token=fixture")
-        if not shows(
-            page, ["The console did not load", "the console is starting"], "main"
-        ):
+        if not shows(page, ["The console did not load", "the console is starting"], "main"):
             problems.append("start: a failed first answer is not shown as one")
         main = page.inner_text("main")
         if "Open the address" in main:
@@ -834,15 +764,11 @@ def filter_checks() -> list[str]:
                     # Counted through a locator: the console's policy refuses a script given as text.
                     try:
                         if want == 0:
-                            expect(page.locator(loaded_empty).first).to_be_visible(
-                                timeout=5000
-                            )
+                            expect(page.locator(loaded_empty).first).to_be_visible(timeout=5000)
                         expect(page.locator(rows)).to_have_count(want, timeout=5000)
                     except AssertionError:
                         got = page.locator(rows).count()
-                        problems.append(
-                            f"history: {typed!r} lists {got} queries, not {want}"
-                        )
+                        problems.append(f"history: {typed!r} lists {got} queries, not {want}")
                     field.fill("")
                     expect(page.locator(rows)).to_have_count(4, timeout=5000)
             # Any part of a statement, in either case and whatever the space around it, in every console.
@@ -854,15 +780,11 @@ def filter_checks() -> list[str]:
                 statement.fill(typed)
                 try:
                     if want == 0:
-                        expect(page.locator(loaded_empty).first).to_be_visible(
-                            timeout=5000
-                        )
+                        expect(page.locator(loaded_empty).first).to_be_visible(timeout=5000)
                     expect(page.locator(rows)).to_have_count(want, timeout=5000)
                 except AssertionError:
                     got = page.locator(rows).count()
-                    problems.append(
-                        f"{mode} history: statement {typed!r} lists {got} queries, not {want}"
-                    )
+                    problems.append(f"{mode} history: statement {typed!r} lists {got} queries, not {want}")
                 statement.fill("")
                 expect(page.locator(rows)).to_have_count(4, timeout=5000)
             problems += [f"{mode} filters: page error: {e}" for e in errors]
@@ -892,9 +814,7 @@ def compare_checks() -> list[str]:
 
         def pick(run: dict) -> None:
             # The layout for the other width is in the page too, hidden.
-            box = page.locator(
-                f"main input[type=checkbox][aria-label*='({run['query_id'][-8:]})']:visible"
-            )
+            box = page.locator(f"main input[type=checkbox][aria-label*='({run['query_id'][-8:]})']:visible")
             box.first.wait_for(timeout=10000)
             box.first.check()
 
@@ -926,19 +846,14 @@ def compare_checks() -> list[str]:
         # it has no CPU time, so that row has no change.
         pick(runs[2])
         if table.count() != 0:
-            problems.append(
-                "compare: the old comparison stays after the selection changed"
-            )
+            problems.append("compare: the old comparison stays after the selection changed")
         button.click()
         try:
             table.wait_for(timeout=5000)
             row = page.locator("main tr", has_text="CPU time").first.inner_text()
             if [c.strip() for c in row.split("\t")][2:] != ["–", "–"]:
                 problems.append(f"compare: the CPU time row is {row!r}")
-            if (
-                "−2.6 s"
-                not in page.locator("main tr", has_text="Wall time").first.inner_text()
-            ):
+            if "−2.6 s" not in page.locator("main tr", has_text="Wall time").first.inner_text():
                 problems.append("compare: a faster run B shows no negative change")
         except PlaywrightTimeout:
             problems.append("compare: no comparison with a run that has no session")
@@ -982,9 +897,7 @@ def editor_colour_checks() -> list[str]:
         server = fixture_server.serve(mode="server")
         threading.Thread(target=server.serve_forever, daemon=True).start()
         for scheme in ("dark", "light"):
-            page = browser.new_page(
-                viewport={"width": 1440, "height": 900}, color_scheme=scheme
-            )
+            page = browser.new_page(viewport={"width": 1440, "height": 900}, color_scheme=scheme)
             page.goto(f"http://127.0.0.1:{server.server_address[1]}/?token=fixture")
             page.locator("header nav a").first.wait_for(timeout=10000)
             page.evaluate("window.location.hash = '#/sql'")
@@ -1016,9 +929,7 @@ def editor_colour_checks() -> list[str]:
                         f"editor {scheme}: keyword, string, number and comment colours are {seen}, plain text {found['base']}"
                     )
                 if colours["SELECT"] != colours.get("FROM"):
-                    problems.append(
-                        f"editor {scheme}: SELECT and FROM differ in colour"
-                    )
+                    problems.append(f"editor {scheme}: SELECT and FROM differ in colour")
             page.close()
         server.shutdown()
         browser.close()
@@ -1041,9 +952,7 @@ def workload_checks() -> list[str]:
         page = browser.new_page(viewport={"width": 1440, "height": 900})
         errors: list[str] = []
         page.on("pageerror", lambda e: errors.append(str(e)))
-        page.on(
-            "dialog", lambda d: (errors.append(f"dialog: {d.message}"), d.dismiss())
-        )
+        page.on("dialog", lambda d: (errors.append(f"dialog: {d.message}"), d.dismiss()))
         page.goto(f"http://127.0.0.1:{server.server_address[1]}/?token=fixture")
         page.locator("header nav a").first.wait_for(timeout=10000)
 
@@ -1059,13 +968,9 @@ def workload_checks() -> list[str]:
         if page.get_by_role("button", name="End session").count() != 2 or not shows(
             page, ["The console's editor"], "main"
         ):
-            problems.append(
-                "sessions: the editor's session is not marked, or offers End session"
-            )
+            problems.append("sessions: the editor's session is not marked, or offers End session")
         if "idle_timeout" in page.inner_text("main"):
-            problems.append(
-                "sessions: an ended session is listed before it is asked for"
-            )
+            problems.append("sessions: an ended session is listed before it is asked for")
         filter_box = page.get_by_label("Filter", exact=True)
         for typed, want in (("flight", 1), ("TEAM=RISK", 1), ("no-such-client", 0)):
             filter_box.fill(typed)
@@ -1096,9 +1001,7 @@ def workload_checks() -> list[str]:
 
         # A session's query count opens History on that session's queries.
         ann = page.locator(rows).filter(has_text="ann")
-        ann.get_by_role(
-            "button", name="The 14 queries of this session in History"
-        ).click()
+        ann.get_by_role("button", name="The 14 queries of this session in History").click()
         page.wait_for_function("location.hash === '#/history'", timeout=5000)
         history_rows = "main a[href^='#/queries/']:visible"
         try:
@@ -1132,9 +1035,7 @@ def workload_checks() -> list[str]:
             count(f"queries: the filter {typed!r}", want)
             shown = page.locator("[data-query-count]")
             if shown.inner_text() != f"{want} of {live} shown":
-                problems.append(
-                    f"queries: {typed!r} says {shown.inner_text()!r}, not '{want} of {live} shown'"
-                )
+                problems.append(f"queries: {typed!r} says {shown.inner_text()!r}, not '{want} of {live} shown'")
         if not shows(page, ["No running query matches."], "main"):
             problems.append("queries: an empty filtered list is not said to be one")
         filter_box.fill("")
@@ -1172,9 +1073,7 @@ def workload_checks() -> list[str]:
     with sync_playwright() as p:
         browser = p.chromium.launch()
         page = browser.new_page(viewport={"width": 390, "height": 844})
-        page.goto(
-            f"http://127.0.0.1:{server.server_address[1]}/?token=fixture#/workload"
-        )
+        page.goto(f"http://127.0.0.1:{server.server_address[1]}/?token=fixture#/workload")
         try:
             page.locator("[data-no-groups]").wait_for(timeout=10000)
         except PlaywrightTimeout:
@@ -1224,10 +1123,7 @@ def advisor_checks() -> list[str]:
             if shown not in first:
                 problems.append(f"advisor: the first table's row lacks {shown!r}")
         others = page.locator("main table [data-other-candidates] li").all_inner_texts()
-        if (
-            len(others) != 2
-            or "region · 20 queries · 3 partitions · 11.1%" not in others[0]
-        ):
+        if len(others) != 2 or "region · 20 queries · 3 partitions · 11.1%" not in others[0]:
             problems.append(f"advisor: the other candidates are {others}")
         # A share too small for one decimal still reads as a number, not as markup or an exponent.
         if len(others) == 2 and "0.1%" not in others[1]:
@@ -1246,14 +1142,10 @@ def advisor_checks() -> list[str]:
         # Reading the advice reads the history store: once for the page, and once more only when asked.
         page.wait_for_timeout(2500)
         if server.asked.count(advice_path) != 1:
-            problems.append(
-                f"advisor: the page read the advice {server.asked.count(advice_path)} times unasked"
-            )
+            problems.append(f"advisor: the page read the advice {server.asked.count(advice_path)} times unasked")
         page.get_by_role("button", name="Read the history again").click()
         try:
-            page.wait_for_function(
-                "() => !document.querySelector('main button[disabled]')", timeout=5000
-            )
+            page.wait_for_function("() => !document.querySelector('main button[disabled]')", timeout=5000)
         except PlaywrightTimeout:
             problems.append("advisor: the page never finished reading again")
         if server.asked.count(advice_path) != 2:
@@ -1274,9 +1166,7 @@ def advisor_checks() -> list[str]:
         if not shows(page, ["Operators"], "main"):
             problems.append("queries: a row's link does not open the query's page")
         want = f"?session={fixture_server.SESSION_B}"
-        if not server.query_reads or not all(
-            r.endswith(want) for r in server.query_reads
-        ):
+        if not server.query_reads or not all(r.endswith(want) for r in server.query_reads):
             problems.append(f"queries: the query's page read {server.query_reads}")
         # A row with no session (a profile stored before a restart) links the id alone, as before.
         try:
@@ -1287,14 +1177,8 @@ def advisor_checks() -> list[str]:
             read = unqualified.value.ok
         except PlaywrightTimeout:
             read = False
-        if (
-            not read
-            or not shows(page, ["Operators"], "main")
-            or "?" in server.query_reads[-1]
-        ):
-            problems.append(
-                f"queries: a link without a session read {server.query_reads}"
-            )
+        if not read or not shows(page, ["Operators"], "main") or "?" in server.query_reads[-1]:
+            problems.append(f"queries: a link without a session read {server.query_reads}")
         problems += [f"advisor: page error: {e}" for e in errors]
         browser.close()
     server.shutdown()
@@ -1305,9 +1189,7 @@ def advisor_checks() -> list[str]:
     with sync_playwright() as p:
         browser = p.chromium.launch()
         page = browser.new_page(viewport={"width": 390, "height": 844})
-        page.goto(
-            f"http://127.0.0.1:{server.server_address[1]}/?token=fixture#/advisor"
-        )
+        page.goto(f"http://127.0.0.1:{server.server_address[1]}/?token=fixture#/advisor")
         try:
             page.locator("[data-no-advice]").wait_for(timeout=10000)
         except PlaywrightTimeout:
@@ -1432,12 +1314,7 @@ def heatmap_checks(origin: str) -> list[str]:
         for label, values in HEATMAPS.items():
             page.get_by_role("button", name=label, exact=True).click()
             view = f"heatmap {label}"
-            if (
-                page.get_by_role("button", name=label, exact=True).get_attribute(
-                    "aria-pressed"
-                )
-                != "true"
-            ):
+            if page.get_by_role("button", name=label, exact=True).get_attribute("aria-pressed") != "true":
                 problems.append(f"{view}: the metric's button is not pressed")
             rows = page.evaluate(HEAT)
             got = [(depth, name, value) for depth, name, value, *_ in rows]
@@ -1446,24 +1323,14 @@ def heatmap_checks(origin: str) -> list[str]:
                 problems.append(f"{view}: the heatmap is {got}, not {want}")
                 continue
             for _, name, value, state, border, background in rows:
-                want_state = (
-                    "none"
-                    if value == NR
-                    else "zero"
-                    if value.startswith("0 ")
-                    else "value"
-                )
+                want_state = "none" if value == NR else "zero" if value.startswith("0 ") else "value"
                 if state != want_state:
-                    problems.append(
-                        f"{view}: {name} ({value}) is drawn as {state}, not {want_state}"
-                    )
+                    problems.append(f"{view}: {name} ({value}) is drawn as {state}, not {want_state}")
                 if (border == "dashed") != (want_state == "zero"):
                     problems.append(f"{view}: {name} ({value}) has a {border} border")
                 # Not reported has no colour; a measured zero has the card's own, a value its shade.
                 if (background in CLEAR) != (want_state == "none"):
-                    problems.append(
-                        f"{view}: {name} ({value}) has the background {background}"
-                    )
+                    problems.append(f"{view}: {name} ({value}) has the background {background}")
             # One scale: the largest value has the strongest shade.
             alphas = page.evaluate(
                 """() => [...document.querySelectorAll("main [data-testid='plan-tree'] > li[data-state='value']")].map(li => {
@@ -1476,21 +1343,14 @@ def heatmap_checks(origin: str) -> list[str]:
             largest = max(range(len(first)), key=lambda i: alphas[i])
             top = HEATMAP_TOP[label]
             if first[largest][1] != top:
-                problems.append(
-                    f"{view}: the strongest shade is on {first[largest][1]}, not {top}"
-                )
+                problems.append(f"{view}: the strongest shade is on {first[largest][1]}, not {top}")
             note = page.get_by_test_id("wall-note")
             if (note.count() == 1) != (label in TIME_METRICS):
-                problems.append(
-                    f"{view}: the wall-time sentence is shown {note.count()} times"
-                )
+                problems.append(f"{view}: the wall-time sentence is shown {note.count()} times")
         # The operator table follows the same rules: a source has no rows in, a sink no rows out, an operator
         # that reserved nothing no peak, and only a scan waits on I/O.
         table = page.locator("main tbody tr")
-        cells = [
-            [c.strip() for c in row.locator("td").all_inner_texts()]
-            for row in table.all()
-        ]
+        cells = [[c.strip() for c in row.locator("td").all_inner_texts()] for row in table.all()]
         want_cells = {
             "0 Result": ["5", "–", "20.0 µs", "– / 0 ns / 0 ns", "–", "–"],
             "5 Filter": [
@@ -1521,9 +1381,7 @@ def heatmap_checks(origin: str) -> list[str]:
         for row in cells:
             name = " ".join(row[0].split()[:2]) if row else ""
             if name in want_cells and row[1:] != want_cells[name]:
-                problems.append(
-                    f"operator table: {name} reads {row[1:]}, not {want_cells[name]}"
-                )
+                problems.append(f"operator table: {name} reads {row[1:]}, not {want_cells[name]}")
             want_cells.pop(name, None)
         problems += [f"operator table: no row for {name}" for name in want_cells]
         if page.get_by_test_id("no-plan").count():
@@ -1570,25 +1428,17 @@ def heatmap_checks(origin: str) -> list[str]:
         page.get_by_test_id("no-plan").wait_for(timeout=10000)
         said = page.get_by_test_id("no-plan").inner_text()
         if "being stored" not in said:
-            problems.append(
-                f"heatmap: while the plan is pending the page says {said!r}"
-            )
+            problems.append(f"heatmap: while the plan is pending the page says {said!r}")
         try:
             page.locator(f"{HEAT_ROWS}[data-depth='5']").wait_for(timeout=10000)
         except PlaywrightTimeout:
-            problems.append(
-                "heatmap: a plan that arrives after the query ended is never drawn"
-            )
+            problems.append("heatmap: a plan that arrives after the query ended is never drawn")
         else:
             late = [(depth, name) for depth, name, *_ in page.evaluate(HEAT)]
             if late != NODES:
-                problems.append(
-                    f"heatmap: the late plan is drawn as {late}, not {NODES}"
-                )
+                problems.append(f"heatmap: the late plan is drawn as {late}, not {NODES}")
             if page.get_by_test_id("no-plan").count():
-                problems.append(
-                    "heatmap: the page still says there is no plan after drawing it"
-                )
+                problems.append("heatmap: the page still says there is no plan after drawing it")
         problems += [f"heatmap: page error: {e}" for e in errors]
         browser.close()
     return problems
@@ -1655,19 +1505,12 @@ def q9_checks(shots: Path | None) -> list[str]:
                 )
             # A node no operator runs (an exchange) is not reported; every other one has a compute time.
             ran = {o["node"] for o in operators}
-            want_states = [
-                "none" if n["id"] not in ran else "value"
-                for n in tree_order(doc["plan"])
-            ] + ["value"]
+            want_states = ["none" if n["id"] not in ran else "value" for n in tree_order(doc["plan"])] + ["value"]
             if [state for *_, state, _, _ in heat] != want_states:
-                problems.append(
-                    f"{view}: the heatmap's states are {[h[3] for h in heat]}, not {want_states}"
-                )
+                problems.append(f"{view}: the heatmap's states are {[h[3] for h in heat]}, not {want_states}")
             rows = page.locator("main :is(tbody tr, ul > li):visible")
             if rows.count() != len(listed):
-                problems.append(
-                    f"{view}: the operator table has {rows.count()} rows, not {len(listed)}"
-                )
+                problems.append(f"{view}: the operator table has {rows.count()} rows, not {len(listed)}")
             main = page.inner_text("main")
             for wanted in (
                 "← History",
@@ -1680,18 +1523,12 @@ def q9_checks(shots: Path | None) -> list[str]:
                     problems.append(f"{view}: missing text {wanted!r}")
             if "Warnings" in main:
                 problems.append(f"{view}: a warning is shown for a run that has none")
-            wide = page.evaluate(
-                "document.documentElement.scrollWidth - document.documentElement.clientWidth"
-            )
+            wide = page.evaluate("document.documentElement.scrollWidth - document.documentElement.clientWidth")
             if wide > 0:
-                problems.append(
-                    f"{view}: the page scrolls sideways ({wide}px too wide)"
-                )
+                problems.append(f"{view}: the page scrolls sideways ({wide}px too wide)")
             if shots is not None:
                 shots.mkdir(parents=True, exist_ok=True)
-                page.screenshot(
-                    path=str(shots / f"q09-console-{label}.png"), full_page=True
-                )
+                page.screenshot(path=str(shots / f"q09-console-{label}.png"), full_page=True)
             problems += [f"{view}: page error: {e}" for e in errors]
             page.close()
             # The offline viewer's page, opened from its file.
@@ -1702,9 +1539,7 @@ def q9_checks(shots: Path | None) -> list[str]:
             page.goto(saved.as_uri())
             view = f"q9 viewer {label}"
             if page.evaluate(VIEWER_TREE) != tree:
-                problems.append(
-                    f"{view}: the plan tree is not python/tests/fixtures/q09-plan-tree.txt"
-                )
+                problems.append(f"{view}: the plan tree is not python/tests/fixtures/q09-plan-tree.txt")
             for selector, want in (
                 (".kp .op", len(operators)),
                 (".kp table tr", len(doc["pipelines"])),
@@ -1712,15 +1547,11 @@ def q9_checks(shots: Path | None) -> list[str]:
             ):
                 got_count = page.locator(selector).count()
                 if got_count != want:
-                    problems.append(
-                        f"{view}: {got_count} elements match {selector!r}, not {want}"
-                    )
+                    problems.append(f"{view}: {got_count} elements match {selector!r}, not {want}")
             if asked != [saved.as_uri()]:
                 problems.append(f"{view}: the page asked for {asked}")
             if shots is not None:
-                page.screenshot(
-                    path=str(shots / f"q09-viewer-{label}.png"), full_page=True
-                )
+                page.screenshot(path=str(shots / f"q09-viewer-{label}.png"), full_page=True)
             ctx.close()
         browser.close()
     server.shutdown()
