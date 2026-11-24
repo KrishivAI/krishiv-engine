@@ -25,6 +25,42 @@ fn a_namespace_location_is_qualified_against_the_warehouse() {
     assert_eq!(q("a/b:c", wh), "file:/w/warehouse/a/b:c");
 }
 
+/// On Windows a drive location is local and absolute whatever its separators or verbatim prefix; a UNC
+/// or drive-relative one is refused, never placed in the warehouse or on the current drive; a URL is left
+/// alone. The rule is tested on every platform; on Windows the qualified form is checked too.
+#[test]
+fn windows_drive_locations_are_local_and_unc_ones_are_refused() {
+    for written in [r"C:\x", "C:/x", r"\\?\C:\x", r"/C:\x"] {
+        assert_eq!(
+            windows_form(written).unwrap().as_deref(),
+            Some("/C:/x"),
+            "{written}"
+        );
+    }
+    assert_eq!(windows_form(r"rel\y").unwrap().as_deref(), Some("rel/y"));
+    assert_eq!(windows_form("s3a://b/x").unwrap(), None);
+    assert_eq!(windows_form("file:/C:/x").unwrap(), None);
+    for written in [
+        r"\\srv\share\x",
+        "//srv/share/x",
+        r"\\?\UNC\srv\share\x",
+        "C:x",
+    ] {
+        let e = windows_form(written).unwrap_err();
+        assert_eq!(
+            e.error_class().name(),
+            "KRISHIV_UNSUPPORTED_FEATURE",
+            "{written}"
+        );
+    }
+    if cfg!(windows) {
+        let wh = std::path::Path::new(r"D:\w\warehouse");
+        assert_eq!(q(r"C:\x\", wh), "file:/C:/x");
+        assert_eq!(q(r"\\?\C:\x", wh), "file:/C:/x");
+        assert_eq!(q(r"rel\y", wh), "file:/D:/w/warehouse/rel/y");
+    }
+}
+
 #[test]
 fn a_namespace_location_keeps_a_dotdot_above_the_root_and_refuses_an_empty_one() {
     let wh = std::path::Path::new("/w/warehouse");

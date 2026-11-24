@@ -20,9 +20,10 @@ pub(super) fn qualified_namespace_location(
         }
         .into());
     }
-    // On Windows a drive path (`C:\x`, `\\?\C:\x`) is an absolute local path, never a scheme `C`.
-    let drive = drive_led(location);
-    let location = drive.as_deref().unwrap_or(location);
+    // On Windows a schemeless location is a local path with `\` as `/` (Hadoop's `normalizePath`), and a
+    // drive (`C:\x`, `\\?\C:\x`) is absolute, never a scheme `C`.
+    let local = windows_local(location)?;
+    let location = local.as_deref().unwrap_or(location);
     let scheme = location.split_once(':').filter(|(s, _)| {
         s.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
             && s.chars()
@@ -45,12 +46,8 @@ pub(super) fn qualified_namespace_location(
         None => {
             let joined = warehouse()?.join(location).display().to_string();
             // `Path::join` puts a `\` before the location on Windows; the URI's separator is `/`.
-            let joined = if cfg!(windows) {
-                joined.replace('\\', "/")
-            } else {
-                joined
-            };
-            ("file:".to_owned(), drive_led(&joined).unwrap_or(joined))
+            let joined = windows_local(&joined)?.unwrap_or(joined);
+            ("file:".to_owned(), joined)
         }
     };
     let mut parts: Vec<&str> = Vec::new();
@@ -81,18 +78,52 @@ pub(super) fn qualified_namespace_location(
     Ok(format!("{prefix}/{}", parts.join("/")))
 }
 
-/// On Windows, a drive-led local path (`C:\x`, `C:/x`, verbatim `\\?\C:\x`) in the form the
-/// locator reads, `/C:/x` (separators `/`); `None` for anything else and on every other platform.
-fn drive_led(text: &str) -> Option<String> {
-    if !cfg!(windows) {
-        return None;
+/// On Windows, a location without a URL scheme in the form the locator reads: separators `/`, a drive
+/// (`C:\x`, `C:/x`, verbatim `\\?\C:\x`) led by `/` (`/C:/x`); `None` for a URL and on every other
+/// platform.
+///
+/// # Errors
+/// `KRISHIV_UNSUPPORTED_FEATURE` for a UNC location (`\\srv\share\x`, `\\?\UNC\..`) and a
+/// drive-relative one (`C:x`): neither is placed in the warehouse or on the current drive.
+fn windows_local(text: &str) -> Result<Option<String>, krishiv_common::error::KrishivError> {
+    if cfg!(windows) {
+        windows_form(text)
+    } else {
+        Ok(None)
+    }
+}
+
+/// [`windows_local`]'s rule on any platform (tested everywhere).
+pub(super) fn windows_form(
+    text: &str,
+) -> Result<Option<String>, krishiv_common::error::KrishivError> {
+    let url = text.split_once(':').is_some_and(|(s, _)| {
+        s.len() > 1
+            && s.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
+            && s.chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+    });
+    if url {
+        return Ok(None);
     }
     let slashed = text.replace('\\', "/");
     let led = slashed.strip_prefix("//?/").unwrap_or(&slashed);
+    let refuse = |what: &str| {
+        krishiv_common::error::KrishivError::from(
+            krishiv_common::error::KrishivUnsupportedFeature {
+                feature: format!("{what} namespace locations"),
+            },
+        )
+    };
+    if led.starts_with("//") || (slashed.starts_with("//?/") && led.starts_with("UNC/")) {
+        return Err(refuse("UNC"));
+    }
     let b = led.as_bytes();
-    let is_drive = b.len() >= 2
-        && b[0].is_ascii_alphabetic()
-        && b[1] == b':'
-        && (b.len() == 2 || b[2] == b'/');
-    is_drive.then(|| format!("/{led}"))
+    if b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b':' {
+        if b.len() > 2 && b[2] != b'/' {
+            return Err(refuse("drive-relative"));
+        }
+        return Ok(Some(format!("/{led}")));
+    }
+    Ok(Some(slashed))
 }

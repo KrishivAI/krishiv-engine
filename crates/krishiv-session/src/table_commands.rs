@@ -1958,6 +1958,8 @@ mod questions;
 use files::remove_dir;
 mod location;
 use location::qualified_namespace_location;
+#[cfg(test)]
+use location::windows_form;
 
 #[cfg(test)]
 mod tests;
