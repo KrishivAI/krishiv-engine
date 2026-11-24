@@ -221,13 +221,21 @@ proptest! {
     }
 }
 
-/// `f`'s answers for the listed rows (`evaluate_keys_at`), as `bool`s.
-fn pass_at(f: &KeyFilter, column: &dyn Array, rows: &[u32]) -> Vec<bool> {
+/// The listed rows `f` keeps (`retain_keys_at`).
+fn kept_at(f: &KeyFilter, column: &dyn Array, rows: &[u32]) -> Vec<u32> {
     let keys = normalize_key_bytes(column, f.key_type())
         .unwrap_or_else(|| panic!("{} does not widen", column.data_type()));
-    let out = f.evaluate_keys_at(&keys, rows);
-    assert_eq!(out.len(), rows.len());
-    out.iter().collect()
+    let mut out = rows.to_vec();
+    f.retain_keys_at(&keys, &mut out);
+    out
+}
+
+/// The listed rows the whole batch's answers `all` keep.
+fn kept_of(all: &[bool], rows: &[u32]) -> Vec<u32> {
+    rows.iter()
+        .copied()
+        .filter(|&i| all.get(i as usize).copied().unwrap_or(false))
+        .collect()
 }
 
 proptest! {
@@ -267,8 +275,7 @@ proptest! {
             .filter(|&i| picks[i])
             .filter_map(|i| u32::try_from(i).ok())
             .collect();
-        let want: Vec<bool> = rows.iter().map(|&i| all[i as usize]).collect();
-        prop_assert_eq!(pass_at(&f, probe.as_ref(), &rows), want, "form {:?}", f.form());
+        prop_assert_eq!(kept_at(&f, probe.as_ref(), &rows), kept_of(&all, &rows), "form {:?}", f.form());
     }
 }
 
@@ -317,23 +324,26 @@ fn listed_rows_of_every_layout() {
     ];
     assert!(strings[0].bloom_bytes().is_some());
     assert!(strings[4].is_empty());
+    let mut checked = 0;
     for f in &strings {
-        let binary = KeyFilterBuilder::new(DataType::Binary, KeyFilterOptions::default()).is_some();
         for column in &columns {
-            let Some(keys) = normalize_key_bytes(column.as_ref(), f.key_type()) else {
-                // Binary does not widen to a string key.
-                assert!(binary);
+            // A binary column that does not widen to the string key is not
+            // filtered.
+            if normalize_key_bytes(column.as_ref(), f.key_type()).is_none() {
                 continue;
-            };
+            }
             let all = pass(f, column.as_ref());
-            let got: Vec<bool> = f.evaluate_keys_at(&keys, &rows).iter().collect();
-            let want: Vec<bool> = rows
-                .iter()
-                .map(|&i| all.get(i as usize).copied().unwrap_or(false))
-                .collect();
-            assert_eq!(got, want, "{:?} over {}", f.form(), column.data_type());
+            assert_eq!(
+                kept_at(f, column.as_ref(), &rows),
+                kept_of(&all, &rows),
+                "{:?} over {}",
+                f.form(),
+                column.data_type()
+            );
+            checked += 1;
         }
     }
+    assert!(checked >= strings.len() * 3, "{checked}");
     // An empty filter whose NULL keys pass keeps exactly the listed NULLs.
     let mut b = KeyFilterBuilder::new(DataType::Int32, KeyFilterOptions::default())
         .unwrap_or_else(|| panic!());
@@ -342,10 +352,7 @@ fn listed_rows_of_every_layout() {
     let f = b.finish();
     assert!(f.is_empty() && f.nulls_pass());
     let column = Int32Array::from(vec![Some(1), None, Some(3), None]);
-    assert_eq!(
-        pass_at(&f, &column, &[0, 1, 3, 9]),
-        vec![false, true, true, false]
-    );
+    assert_eq!(kept_at(&f, &column, &[0, 1, 3, 9]), vec![1, 3]);
 }
 
 /// Integer sets over at most `DENSE_MAX_BITS` values are a bit per value

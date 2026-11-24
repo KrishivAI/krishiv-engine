@@ -14,7 +14,7 @@
 //!   than half the rows survive, a later filter tests only the survivors (as
 //!   Velox orders and narrows conjuncts, research `papers.md` A5 claim 3,
 //!   but by a static cost so the order never depends on timing): by their
-//!   row ids over the whole column (`KeyFilter::evaluate_keys_at`, design
+//!   row ids over the whole column (`KeyFilter::retain_keys_at`, design
 //!   P3 0.3.1 O1), with no filtered copy and no scatter. A filter
 //!   that is pending applies nothing; it is adopted at the next batch once
 //!   published.
@@ -388,14 +388,8 @@ impl RowStage {
                 let Some(norm) = normalize_key_bytes(column.as_ref(), keys.key_type()) else {
                     continue;
                 };
-                let answers = keys.evaluate_keys_at(&norm, &self.survivors);
                 let tested = self.survivors.len() as u64;
-                let mut k = 0;
-                self.survivors.retain(|_| {
-                    let keep = k < answers.len() && answers.value(k);
-                    k += 1;
-                    keep
-                });
+                keys.retain_keys_at(&norm, &mut self.survivors);
                 (tested, self.survivors.len() as u64)
             } else {
                 let Some(mask) = keys.evaluate(column.as_ref()) else {

@@ -167,10 +167,15 @@ fn bench(c: &mut Criterion) {
             black_box(set.evaluate(copy.as_ref()))
         });
     });
+    // The row stage's survivor list is reused across batches.
+    let mut rows: Vec<u32> = Vec::with_capacity(ids.len());
     group.bench_function("narrow_after_range_5pct", |b| {
         b.iter(|| {
             let keys = normalize_key_bytes(black_box(&batch), set.key_type()).expect("keys");
-            black_box(set.evaluate_keys_at(&keys, black_box(&ids)))
+            rows.clear();
+            rows.extend_from_slice(black_box(&ids));
+            set.retain_keys_at(&keys, &mut rows);
+            black_box(rows.len())
         });
     });
     group.finish();
