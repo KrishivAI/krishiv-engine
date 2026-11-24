@@ -180,16 +180,20 @@ fn a_replaced_table_stops_the_expire() {
         loads: std::sync::atomic::AtomicUsize,
         commits: std::sync::atomic::AtomicUsize,
         unknown: bool,
+        /// The commit lands in `first`; the reload after it finds `other`.
+        land: bool,
     }
     #[async_trait]
     impl CommitTable for Replaced {
         fn name(&self) -> String {
             self.first.name()
         }
-        async fn commit(&self, _: Vec<TableRequirement>, _: Vec<TableUpdate>) -> CommitOutcome {
+        async fn commit(&self, r: Vec<TableRequirement>, u: Vec<TableUpdate>) -> CommitOutcome {
             self.commits
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            if self.unknown {
+            if self.land {
+                self.first.commit(r, u).await
+            } else if self.unknown {
                 CommitOutcome::Unknown("503 service unavailable".to_owned())
             } else {
                 CommitOutcome::Conflict { stale: false }
@@ -211,7 +215,8 @@ fn a_replaced_table_stops_the_expire() {
     }
     // A conflict's reload, and an unknown outcome's probe: the replacement is never planned on
     // nor taken for the outcome.
-    for unknown in [false, true] {
+    // And the reload after a commit that landed: no file is deleted from what it finds.
+    for (unknown, land) in [(false, false), (true, false), (false, true)] {
         let env = env();
         let first = five_snapshots(&env);
         let other_env = super::provider_tests::env();
@@ -223,6 +228,7 @@ fn a_replaced_table_stops_the_expire() {
             loads: std::sync::atomic::AtomicUsize::new(0),
             commits: std::sync::atomic::AtomicUsize::new(0),
             unknown,
+            land,
         };
         let e = env
             .rt
@@ -990,4 +996,163 @@ fn the_checked_metadata_file_decides_over_the_answer() {
         ErrorClass::KrishivIcebergProcedureGcDisabled,
         "{e}"
     );
+}
+
+/// [`Catalog`] whose first load answers an older state of the table (the start), so the expire's
+/// first request conflicts and its committed base differs from the start.
+struct StaleStart {
+    inner: std::sync::Arc<Catalog>,
+    start: (TableMetadata, String),
+    loads: std::sync::atomic::AtomicUsize,
+    /// The first commit is applied but answered as a conflict (it landed unnoticed).
+    land_first: bool,
+    commits: std::sync::atomic::AtomicUsize,
+}
+
+#[async_trait]
+impl CommitTable for StaleStart {
+    fn name(&self) -> String {
+        self.inner.name()
+    }
+
+    async fn commit(&self, r: Vec<TableRequirement>, u: Vec<TableUpdate>) -> CommitOutcome {
+        let n = self
+            .commits
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let out = self.inner.commit(r, u).await;
+        if self.land_first && n == 0 {
+            assert!(matches!(out, CommitOutcome::Committed(_)));
+            return CommitOutcome::Conflict { stale: false };
+        }
+        out
+    }
+
+    async fn load(&self, all: bool) -> Result<TableMetadata, KrishivError> {
+        self.load_located(all).await.map(|(m, _)| m)
+    }
+
+    async fn load_located(
+        &self,
+        all: bool,
+    ) -> Result<(TableMetadata, Option<String>), KrishivError> {
+        if self.loads.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+            let (meta, location) = self.start.clone();
+            return Ok((meta, Some(location)));
+        }
+        self.inner.load_located(all).await
+    }
+}
+
+/// Five snapshots and the state after the first two (its metadata file still on disk).
+fn five_with_an_older_state(env: &Env) -> (std::sync::Arc<Catalog>, (TableMetadata, String)) {
+    let t = create(env, 2, false, &[]);
+    let catalog = Catalog::new(&t);
+    append(env, &catalog, range(0, 10));
+    append(env, &catalog, range(10, 20));
+    let older = catalog.state();
+    append(env, &catalog, range(20, 30));
+    append(env, &catalog, range(30, 40));
+    Dml::open(env, &catalog, RowLevelOperation::Delete)
+        .delete("id < 5")
+        .unwrap();
+    assert_eq!(catalog.metadata().snapshots().count(), 5);
+    (catalog, older)
+}
+
+/// The cleanup reads both bases. Stale start: the start had two snapshots, the committed base
+/// five, and the four removed snapshots' manifest lists all go (the start alone would give two).
+/// Landed unnoticed: the first request lands but is answered as a conflict, the replan is empty,
+/// and the cleanup still runs against the start. Either way the kept snapshot's manifest list stays.
+#[test]
+fn the_cleanup_reads_the_start_and_the_committed_base() {
+    for land_first in [false, true] {
+        let env = env();
+        let (catalog, older) = five_with_an_older_state(&env);
+        let start = if land_first { catalog.state() } else { older };
+        let table = StaleStart {
+            inner: std::sync::Arc::clone(&catalog),
+            start,
+            loads: std::sync::atomic::AtomicUsize::new(0),
+            land_first,
+            commits: std::sync::atomic::AtomicUsize::new(0),
+        };
+        let done = env
+            .rt
+            .block_on(expire(
+                &table,
+                &env.reg.file_io(),
+                &clock(),
+                1 << 30,
+                &args(Some(1)),
+            ))
+            .unwrap();
+        let after = catalog.metadata();
+        assert_eq!(after.snapshots().count(), 1, "{land_first}");
+        assert_eq!(
+            done.deleted.manifest_lists, 4,
+            "{land_first}: {:?}",
+            done.deleted
+        );
+        let kept = after.current_snapshot().unwrap().manifest_list().to_owned();
+        assert!(
+            std::path::Path::new(super::sink_tests::local_path(&kept)).exists(),
+            "{land_first}: {kept}"
+        );
+    }
+}
+
+/// The answer's uuid is not its metadata file's: refused before anything is planned.
+#[test]
+fn an_answer_whose_uuid_is_not_its_files_is_refused() {
+    struct OtherUuid {
+        inner: std::sync::Arc<Catalog>,
+        other: TableMetadata,
+    }
+    #[async_trait]
+    impl CommitTable for OtherUuid {
+        fn name(&self) -> String {
+            self.inner.name()
+        }
+        async fn commit(&self, r: Vec<TableRequirement>, u: Vec<TableUpdate>) -> CommitOutcome {
+            self.inner.commit(r, u).await
+        }
+        async fn load(&self, all: bool) -> Result<TableMetadata, KrishivError> {
+            self.load_located(all).await.map(|(m, _)| m)
+        }
+        async fn load_located(
+            &self,
+            all: bool,
+        ) -> Result<(TableMetadata, Option<String>), KrishivError> {
+            let (meta, location) = self.inner.load_located(all).await?;
+            let meta = edit(meta, |b| b.assign_uuid(self.other.uuid()));
+            Ok((meta, location))
+        }
+    }
+    let env = env();
+    let catalog = five_snapshots(&env);
+    let other_env = super::provider_tests::env();
+    let table = OtherUuid {
+        inner: std::sync::Arc::clone(&catalog),
+        other: five_snapshots(&other_env).metadata(),
+    };
+    let e = env
+        .rt
+        .block_on(expire(
+            &table,
+            &env.reg.file_io(),
+            &clock(),
+            1 << 30,
+            &args(Some(1)),
+        ))
+        .unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::KrishivCatalogTableUnsupported,
+        "{e}"
+    );
+    assert!(
+        e.to_string().contains("differs from its metadata file"),
+        "{e}"
+    );
+    assert_eq!(catalog.metadata().snapshots().count(), 5);
 }

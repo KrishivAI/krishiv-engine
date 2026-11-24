@@ -677,9 +677,12 @@ pub(crate) async fn expire(
         planned = plan(&meta, &defaults, args)?;
         planned = with_obsolete_specs(io, &meta, args, planned, max_metadata_bytes).await?;
         if planned.is_empty() {
-            return Ok(Expired {
-                deleted: Deleted::default(),
-            });
+            // After a conflict an earlier attempt may have landed unnoticed: its removals are in
+            // `meta`, a checked reload of this table, so their files are cleaned as Java's action
+            // diffs the start against the refreshed table. On the first attempt `meta` is the
+            // start and nothing is read.
+            let deleted = cleanup(io, &[&start], &meta, max_metadata_bytes, concurrency).await?;
+            return Ok(Expired { deleted });
         }
         let (requirements, updates) = request(&meta, &planned)?;
         attempts += 1;
