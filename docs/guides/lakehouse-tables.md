@@ -21,9 +21,13 @@ SELECT region, sum(amount) FROM delta.`s3://bucket/trips` GROUP BY region;
 |---|---|
 | Read, including partitioned tables | yes |
 | `INSERT`, CTAS, `df.write.format("delta").save`, `saveAsTable`, `insertInto`, `writeTo` | yes |
-| `DELETE` and `UPDATE` | yes, copy-on-write (a changed file is rewritten) |
+| `DELETE`, `UPDATE` and `MERGE INTO` | yes, copy-on-write (a changed file is rewritten); see [Delta DML](delta-dml.md) |
 | Deletion vectors on write | not written; rows are rewritten |
 | Change data feed read | not yet |
+
+Delta support is the `delta` cargo feature. The release `krishiv` binary and the Docker image are built with it. A build
+without it (a wheel that does not carry the feature, or a library build that leaves it off) refuses a Delta table with
+`DATA_SOURCE_NOT_FOUND`: write one small table to check yours.
 
 A table that uses a protocol feature Krishiv cannot read is refused with Spark's own error
 (`DELTA_UNSUPPORTED_FEATURES_FOR_READ`) instead of being read wrongly. Writers commit with optimistic concurrency and
@@ -39,8 +43,10 @@ An Iceberg table is read through a [declared catalog](#declare-a-catalog) (`SELE
 Reads cover position deletes, deletion vectors and equality deletes.
 
 Writing Iceberg tables is not available from SQL or the DataFrame API in 0.3: `INSERT`, `CREATE TABLE ... USING iceberg`
-and the other writes do not reach the Iceberg writer yet. The connector has internal implementations of appends, overwrites and merge-on-read `DELETE` and `UPDATE`, but no
-public path opens a table with a committer in 0.3, so a table stays read-only.
+and the other writes do not reach the Iceberg writer yet. The connector has internal implementations of appends, overwrites, copy-on-write and merge-on-read `DELETE`, `UPDATE`
+and `MERGE`, and a declared REST catalog can hand it a committer (`krishiv.catalog.<name>.option.write = true`, default
+`false`), but the session does not route a statement to a declared catalog's table in 0.3, so every Iceberg table stays
+read-only. `INSERT INTO lake.ns.t` is refused (`REQUIRES_SINGLE_PART_NAMESPACE`). Use Spark, or write the table as Delta or Parquet.
 
 ## Declare a catalog
 
