@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Save modes and the directory commit, on an in-memory store and on the
-//! local file system (which has empty directories and files in the way).
+//! Save modes and the directory commit, on an in-memory store and on the local file system.
 
 use std::sync::Arc;
 
@@ -23,6 +22,7 @@ use crate::{
 
 const STORE: &str = "memory://commit";
 
+#[cfg(unix)]
 mod dead_writers;
 
 struct Env {

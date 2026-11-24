@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Unit tests of `table_commands.rs` (kept apart so the file stays under its size baseline).
 
+use super::location::windows_form;
 use super::*;
 use krishiv_types::{ArrayType, DecimalType};
 

@@ -145,10 +145,8 @@ impl LocalPaths {
     }
 }
 
-/// A local path's text in the form the locator reads: on Windows, `\` separators and drive
-/// letters normalized (`files/windows_path.rs`); elsewhere unchanged. Every `\` becomes `/`,
-/// which is right only for local paths (a `\` is never part of a Windows file name): object-store
-/// URLs must not be routed through here.
+/// A local path's text in the locator's form: on Windows `\` separators and drive letters are
+/// normalized (`files/windows_path.rs`), elsewhere unchanged. Local paths only, never object-store URLs.
 fn local_text(path: &str) -> String {
     if cfg!(windows) {
         windows_path::normalize(path)
@@ -177,8 +175,7 @@ impl PathLocator for LocalPaths {
         } else {
             format!("{}/{path}", self.cwd)
         };
-        // On Windows a `//` lead left after normalizing is a UNC share or a device (`\\srv\share`,
-        // `\\.\COM1`, `\\?\Volume{..}`): its server and share would be lost as path segments.
+        // On Windows a `//` lead after normalizing is a UNC share or device path: refused.
         if cfg!(windows) && local.starts_with("//") {
             return Err(unsupported("UNC and device paths".to_owned()));
         }

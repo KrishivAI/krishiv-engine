@@ -895,10 +895,8 @@ impl Session {
             let local = path.strip_prefix("file:").unwrap_or(path);
             let native = krishiv_exec::files::native_path(local);
             if !path.contains("://") && !native.exists() {
-                return Err(krishiv_common::error::PathNotFound {
-                    path: krishiv_exec::files::file_display(&native),
-                }
-                .into());
+                let path = krishiv_exec::files::file_display(&native);
+                return Err(krishiv_common::error::PathNotFound { path }.into());
             }
         }
         let columns = if infer {
@@ -1969,8 +1967,6 @@ mod questions;
 use files::remove_dir;
 mod location;
 use location::qualified_namespace_location;
-#[cfg(test)]
-use location::windows_form;
 
 #[cfg(test)]
 mod tests;
