@@ -1513,6 +1513,18 @@ pub struct Refresh {
     pub span: Span,
 }
 
+/// `CALL name([args])` (Spark's `Call`): a procedure of a catalog, such as an Iceberg
+/// maintenance procedure `cat.system.expire_snapshots(table => 'ns.t')`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Call {
+    /// The procedure's name, as written (`cat.system.p`, `system.p`).
+    pub name: DdlName,
+    /// The arguments, positional or `name => expr`.
+    pub args: Vec<FunctionArg>,
+    /// Source text, from `CALL` to the end of the statement.
+    pub span: Span,
+}
+
 /// What a [`Refresh`] refreshes.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[non_exhaustive]

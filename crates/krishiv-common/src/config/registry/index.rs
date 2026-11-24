@@ -936,12 +936,20 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &CONNECT_EXECUTE_SENDER_MAX_STREAM_SIZE,
     ),
     (
+        "spark.sql.execution.arrow.pyspark.selfDestruct.enabled",
+        &ARROW_PYSPARK_SELF_DESTRUCT_ENABLED,
+    ),
+    (
         "krishiv.sql.session.localRelationBatchOfChunksSizeBytes",
         &LOCAL_RELATION_BATCH_OF_CHUNKS_SIZE_BYTES,
     ),
     (
         "krishiv.catalog.delegation.maxDistinctExchangesPerMinute",
         &CATALOG_DELEGATION_MAX_DISTINCT_EXCHANGES_PER_MINUTE,
+    ),
+    (
+        "krishiv.sql.execution.arrow.pyspark.selfDestruct.enabled",
+        &ARROW_PYSPARK_SELF_DESTRUCT_ENABLED,
     ),
     (
         "spark.sql.execution.arrow.pyspark.validateSchema.enabled",

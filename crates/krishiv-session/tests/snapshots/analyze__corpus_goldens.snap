@@ -1415,6 +1415,17 @@ error KRISHIV_UNSUPPORTED_FEATURE
 "filters":[],
 "warnings":[]}
 
+-- Call: CALL cat.system.expire_snapshots(table => 'db.t', retain_last => 1)
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"ADMIN",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"system","name":["cluster"],"display":"system `cluster`","privilege":"MANAGE","columns":[]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
 -- ListResource: LIST JARS
 {"schema_version":"krishiv.analyze.v1",
 "statement_class":"READ",

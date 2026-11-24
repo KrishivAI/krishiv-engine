@@ -123,7 +123,13 @@ pub struct ConsumerId(u64);
 
 /// A memory pool in the tree (spec 13 §3). [`TreePool`] is the
 /// implementation; the trait is the seam operators and drivers depend on.
-pub trait MemoryPool: Send + Sync + std::fmt::Debug {
+///
+/// A pool is unwind safe: a `LogicalPlan` holds one through a local relation's lease, and `Column` and
+/// `WindowSpec` (public types over plan expressions) stay `UnwindSafe` for callers of `catch_unwind`
+/// (`cargo-semver-checks` `auto_trait_impl_removed` against 0.2.0).
+pub trait MemoryPool:
+    Send + Sync + std::panic::UnwindSafe + std::panic::RefUnwindSafe + std::fmt::Debug
+{
     /// A child pool, optionally with its own limit. Children of the root
     /// are queries.
     fn child(&self, name: &str, limit: Option<usize>) -> Arc<dyn MemoryPool>;

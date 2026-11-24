@@ -174,6 +174,8 @@ pub enum Statement {
     Cache(Cache),
     /// `REFRESH ...`.
     Refresh(Refresh),
+    /// `CALL name(args)`: a catalog procedure.
+    Call(Call),
     /// `ANALYZE TABLE ... COMPUTE STATISTICS ...`.
     Analyze(Analyze),
     /// `MSCK REPAIR TABLE ...` or `REPAIR TABLE ...`.
@@ -234,6 +236,7 @@ impl Statement {
             Self::Describe(d) => d.span,
             Self::Cache(c) => c.span,
             Self::Refresh(r) => r.span,
+            Self::Call(c) => c.span,
             Self::Analyze(a) => a.span,
             Self::Repair(r) => r.span,
             Self::AddResource(r) => r.span,

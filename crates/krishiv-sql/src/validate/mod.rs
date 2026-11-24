@@ -130,6 +130,15 @@ pub(crate) fn statement(mut s: &Statement, sql: &str, opts: ParserOptions) -> R 
             | Statement::AddResource(_)
             | Statement::ListResource(_)
             | Statement::AccessControl(_) => return Ok(()),
+            // A procedure's name, and each argument as the expression it is.
+            Statement::Call(c) => {
+                let checker = Checker { sql, opts };
+                checker.ddl_name(&c.name)?;
+                for arg in &c.args {
+                    checker.expr(&arg.expr)?;
+                }
+                return Ok(());
+            }
             Statement::CreateNamespace(n) => return Checker { sql, opts }.create_namespace(n),
             Statement::DropPermanentView(v) => return Checker { sql, opts }.ddl_name(&v.name),
             Statement::AlterNamespace(a) => {
