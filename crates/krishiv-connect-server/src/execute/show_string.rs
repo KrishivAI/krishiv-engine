@@ -6,9 +6,6 @@
 //! pretty string (`ToPrettyString`: `NULL` for a null, the cast to string otherwise, a binary as
 //! `[01 02]`), at most `num_rows + 1` rows are collected, and the table is laid out here. The
 //! answer is one row of one string column, `show_string` (`html_string`).
-//!
-//! Known gap: a null inside an array, map or struct prints as the cast does, not as
-//! `ToPrettyString` does.
 
 use std::fmt::Write as _;
 use std::sync::Arc;
@@ -107,9 +104,7 @@ pub(super) async fn render(df: &DataFrame, request: &Request) -> Result<String, 
             | DataType::LargeBinary
             | DataType::BinaryView
             | DataType::FixedSizeBinary(_) => format!("{quoted} AS `c{i}`"),
-            _ => format!(
-                "CASE WHEN {quoted} IS NULL THEN 'NULL' ELSE CAST({quoted} AS STRING) END AS `c{i}`"
-            ),
+            dt => format!("{} AS `c{i}`", pretty(&quoted, dt, 0)),
         });
     }
     let mut rows: Vec<Vec<String>> = Vec::new();
@@ -136,13 +131,56 @@ pub(super) async fn render(df: &DataFrame, request: &Request) -> Result<String, 
         .into_iter()
         .map(|row| row.iter().map(|c| cut(&escape(c), truncate)).collect())
         .collect();
-    let names: Vec<String> = names.iter().map(|n| cut(n, truncate)).collect();
     let n = usize::try_from(num_rows).unwrap_or(usize::MAX);
     Ok(if request.html {
         html_table(&names, &rows, n)
     } else {
         table(&names, &rows, n, truncate, request.vertical)
     })
+}
+
+/// A SQL expression for the pretty string of `expr` (`ToPrettyString`): `NULL` for a null at any depth, a
+/// binary as `[01 02]`, an array `[a, b]`, a struct `{a, b}`, a map `{k -> v}`, anything else its cast.
+fn pretty(expr: &str, dt: &DataType, depth: usize) -> String {
+    let body = match dt {
+        DataType::List(f) | DataType::LargeList(f) | DataType::FixedSizeList(f, _) => {
+            let v = format!("x{depth}");
+            format!(
+                "concat('[', concat_ws(', ', transform({expr}, {v} -> {})), ']')",
+                pretty(&v, f.data_type(), depth + 1)
+            )
+        }
+        DataType::Struct(fields) => {
+            let cells: Vec<String> = fields
+                .iter()
+                .map(|f| {
+                    let name = f.name().replace('`', "``");
+                    pretty(&format!("{expr}.`{name}`"), f.data_type(), depth)
+                })
+                .collect();
+            format!("concat('{{', concat_ws(', ', {}), '}}')", cells.join(", "))
+        }
+        DataType::Map(entries, _) => {
+            let v = format!("x{depth}");
+            let (k, val) = match entries.data_type() {
+                DataType::Struct(f) if f.len() == 2 => (f[0].data_type(), f[1].data_type()),
+                _ => (&DataType::Utf8, &DataType::Utf8),
+            };
+            format!(
+                "concat('{{', concat_ws(', ', transform(map_entries({expr}), {v} -> concat({}, ' -> ', {}))), '}}')",
+                pretty(&format!("{v}.`key`"), k, depth + 1),
+                pretty(&format!("{v}.`value`"), val, depth + 1)
+            )
+        }
+        DataType::Binary
+        | DataType::LargeBinary
+        | DataType::BinaryView
+        | DataType::FixedSizeBinary(_) => format!(
+            "concat('[', concat_ws(' ', transform(sequence(1, length({expr})), b{depth} -> hex(substring({expr}, b{depth}, 1)))), ']')"
+        ),
+        _ => format!("CAST({expr} AS STRING)"),
+    };
+    format!("CASE WHEN {expr} IS NULL THEN 'NULL' ELSE {body} END")
 }
 
 /// The pretty string of one cell of a column the query produced.

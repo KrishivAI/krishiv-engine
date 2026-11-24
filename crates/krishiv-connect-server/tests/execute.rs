@@ -2308,3 +2308,35 @@ async fn show_string_lays_out_the_first_rows_like_dataset_show() {
         "+---+----+-------+\n| id|   s|      b|\n+---+----+-------+\n|  0|NULL|[01 02]|\n|  1|NULL|[01 02]|\n+---+----+-------+\nonly showing top 2 rows"
     );
 }
+
+/// Every case of the Spark 4.3.0 `show_string` fixture (`tests/scripts/gen_show_string_goldens.py`, a real
+/// Spark run) answers the same text.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn show_string_matches_the_spark_430_fixture() {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tests/fixtures/spark-4.3.0/show-string.json"
+    );
+    let fixture: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(path).expect("fixture")).expect("json");
+    let mut failures = Vec::new();
+    for case in fixture["cases"].as_array().expect("cases") {
+        let Some(expected) = case["expected"].as_str() else {
+            continue;
+        };
+        let got = shown(
+            sql(case["sql"].as_str().expect("sql")),
+            i32::try_from(case["num_rows"].as_i64().expect("n")).expect("i32"),
+            i32::try_from(case["truncate"].as_i64().expect("t")).expect("i32"),
+            case["vertical"].as_bool().expect("v"),
+        )
+        .await;
+        if got != expected {
+            failures.push(format!(
+                "{}:\n--- spark\n{expected}\n--- krishiv\n{got}",
+                case["name"]
+            ));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n\n"));
+}
