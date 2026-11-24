@@ -5,6 +5,11 @@
 //! A column counts when a filter of the plan (a `Filter` node, or a filter pushed into a scan) holds, as a
 //! top-level `AND` conjunct, `column = value` or `column IN (values)` (a cast of the column included). Joins
 //! and ranges do not count: only an equality on a value lets a partitioned table skip whole partitions.
+//!
+//! A table that any scan under a security barrier reads ([`PhysicalPlan::guarded`]) lists no column, whichever
+//! filter holds the comparison: a barrier keeps attribute ids, so a filter above it on a column it passes through
+//! names the guarded table's column too, and the policy's own conjuncts must not reach the advisor or later
+//! readers of the history (design `P3-E14-security-barrier.md` §5).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -13,7 +18,7 @@ use krishiv_plan::{
     AttrId, Builtin, Expr, ExprNode, FunctionId, ReadSource, ResolvedExpr, Scan, conjuncts,
 };
 
-use crate::physical::{PhysNode, PhysicalPlan};
+use crate::physical::{PhysNode, PhysicalPlan, ScanId};
 
 /// One table a query scanned.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -48,6 +53,14 @@ pub fn profile_scans(
     for root in plan.roots() {
         collect(root, &mut scans, &mut predicates);
     }
+    let guarded: BTreeSet<String> = scans
+        .iter()
+        .filter(|(id, _)| plan.guarded().binary_search(id).is_ok())
+        .filter_map(|(_, scan)| match &scan.source {
+            ReadSource::Table { name, .. } => Some(table_name(name)),
+            _ => None,
+        })
+        .collect();
     let mut compared = BTreeSet::new();
     for p in predicates {
         for c in conjuncts(p) {
@@ -58,11 +71,12 @@ pub fn profile_scans(
     }
     let mut out: Vec<ProfileScan> = Vec::new();
     let mut seen: BTreeMap<String, usize> = BTreeMap::new();
-    for scan in scans {
+    for (_, scan) in scans {
         let ReadSource::Table { name, .. } = &scan.source else {
             continue;
         };
         let table = table_name(name);
+        let hidden = guarded.contains(&table);
         let table_stats = stats(scan);
         let at = *seen.entry(table.clone()).or_insert_with(|| {
             out.push(ProfileScan {
@@ -72,7 +86,11 @@ pub fn profile_scans(
             });
             out.len() - 1
         });
-        for c in scan.output.iter().filter(|c| compared.contains(&c.id)) {
+        for c in scan
+            .output
+            .iter()
+            .filter(|c| !hidden && compared.contains(&c.id))
+        {
             if out[at].equality.iter().all(|e| e.name != c.name) {
                 let distinct = table_stats
                     .as_ref()
@@ -111,10 +129,14 @@ fn table_name(parts: &[String]) -> String {
     quoted.join(".")
 }
 
-fn collect<'a>(node: &'a PhysNode, scans: &mut Vec<&'a Scan>, predicates: &mut Vec<&'a Expr>) {
+fn collect<'a>(
+    node: &'a PhysNode,
+    scans: &mut Vec<(ScanId, &'a Scan)>,
+    predicates: &mut Vec<&'a Expr>,
+) {
     match node {
         PhysNode::Scan(s) => {
-            scans.push(&s.scan);
+            scans.push((s.id, &s.scan));
             if let Some(f) = &s.filter {
                 predicates.push(&f.predicate);
             }

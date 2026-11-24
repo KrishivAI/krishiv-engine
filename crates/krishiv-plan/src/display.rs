@@ -499,6 +499,9 @@ impl Display for NodeLine<'_> {
             PlanNode::JoinHint { strategy, .. } => {
                 write!(f, "JoinHint (strategy={})", strategy.name())
             }
+            PlanNode::SecurityBarrier { policy, .. } => {
+                write!(f, "SecurityBarrier [{}]", policy.securable)
+            }
             PlanNode::Union {
                 by_name,
                 allow_missing_columns,

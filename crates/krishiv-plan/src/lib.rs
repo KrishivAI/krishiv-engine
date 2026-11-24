@@ -86,6 +86,7 @@
 //! | `PlanNode::CollectMetrics` | U, R | - | `observe` |
 //! | `PlanNode::MetricViewRead` | U, R | - | - |
 //! | `PlanNode::JoinHint` | R | - | - |
+//! | `PlanNode::SecurityBarrier` | R | - | - |
 //! | `PlanNode::Union` | U, R | - | - |
 //! | `PlanNode::Distinct` | U | - | - |
 //! | `PlanNode::SetOp` | U | - | - |
@@ -132,6 +133,7 @@
 #![forbid(unsafe_code)]
 
 pub mod analyzer;
+mod barrier;
 pub mod cache;
 mod dag;
 mod display;
@@ -156,6 +158,7 @@ mod walk;
 /// relation resolves.
 pub const TIME_TRAVEL_OPTION: &str = "__krishiv.timeTravel";
 
+pub use barrier::PolicyRef;
 pub use cache::{CacheKey, normalized_plan_hash, normalized_subtree_hash, semantic_plan_hash};
 pub use display::Annotated;
 #[doc(hidden)]
@@ -205,6 +208,6 @@ pub use python::{
     plan_is_deterministic, python_relation_is_deterministic,
 };
 pub use raises::{
-    conjuncts, exact_decimal, has_subquery, is_deterministic, may_raise, runs_on_any_row,
+    conjuncts, exact_decimal, has_subquery, is_deterministic, leakproof, may_raise, runs_on_any_row,
 };
 pub use walk::{MAX_DEPTH, check_depth};

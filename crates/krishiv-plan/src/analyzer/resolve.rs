@@ -1073,6 +1073,7 @@ impl Resolver<'_> {
             | PlanNode::Expand { .. }
             | PlanNode::Range { .. }
             | PlanNode::PythonTableFunction { .. }
+            | PlanNode::SecurityBarrier { .. }
             | PlanNode::JoinHint { .. } => self.leaf_node(p, env),
             PlanNode::MapPartitions {
                 input,
@@ -1219,6 +1220,17 @@ impl Resolver<'_> {
                 let mut r = self.make(o, node, c.out.to_vec(), &[&c]);
                 r.widen = Some(Arc::new(Widen::Through { child: c }));
                 Ok(r)
+            }
+            PlanNode::SecurityBarrier { input, policy } => {
+                let c = self.child(input, env)?;
+                let node = PlanNode::SecurityBarrier {
+                    input: Arc::clone(&c.plan),
+                    policy: policy.clone(),
+                };
+                // No widen: a parent sees only the barrier's output, never a
+                // column its input's projection dropped (sorting by a hidden
+                // column would reveal it through the row order).
+                Ok(self.make(o, node, c.out.to_vec(), &[&c]))
             }
             PlanNode::JoinHint { input, strategy } => {
                 let c = self.child(input, env)?;

@@ -98,7 +98,7 @@ impl Gen<'_> {
             3 => DataType::Date,
             4 => DataType::TimestampNtz,
             _ => {
-                let p = u32::from(1 + self.pick(38));
+                let p = u32::from(1 + self.pick(39));
                 DataType::Decimal(DecimalType::try_new(p, p / 2).unwrap())
             }
         }
@@ -580,7 +580,7 @@ impl Gen<'_> {
             29 => PlanNode::PipeOperator {
                 input: self.input(d),
             },
-            37 => PlanNode::Zip {
+            38 => PlanNode::Zip {
                 left: self.input(d),
                 right: self.input(d),
             },
@@ -617,6 +617,17 @@ impl Gen<'_> {
                 input: self.input(d),
                 name: self.name(),
                 params: self.exprs(),
+            },
+            37 => PlanNode::SecurityBarrier {
+                input: self.input(d),
+                policy: crate::PolicyRef::new(
+                    crate::analyzer::Securable::System(self.name()),
+                    krishiv_common::PrincipalKey::of(&crate::analyzer::Principal::new(
+                        self.name(),
+                        crate::analyzer::PrincipalKind::User,
+                    )),
+                    u64::from(self.pick(9)),
+                ),
             },
             16 => PlanNode::JoinHint {
                 input: self.input(d),
@@ -1661,6 +1672,11 @@ fn m_plan(p: &mut Arc<LogicalPlan>, w: &mut Walk) -> bool {
             name,
             params,
         } => m_string(name, w) || m_exprs(params, w) || m_plan(input, w),
+        PlanNode::SecurityBarrier { input, policy } => {
+            site!(w, policy.version += 1);
+            site!(w, policy.principal.name.push('x'));
+            m_plan(input, w)
+        }
         PlanNode::JoinHint { input, strategy } => {
             site!(
                 w,

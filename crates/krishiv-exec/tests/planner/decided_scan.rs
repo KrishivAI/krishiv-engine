@@ -169,7 +169,43 @@ fn scan_of_t() -> Scan {
 
 impl Fixture {
     fn plan(&self, sql: &str, decisions: bool) -> Runnable {
-        let plan = krishiv_optimizer::optimize(&self.env.analyze(sql)).unwrap();
+        self.plan_of(&self.env.analyze(sql), decisions)
+    }
+
+    /// `sql` with a security barrier (design E14) over the `Filter` directly above the scan, as a
+    /// policy's filter is placed.
+    fn plan_guarded(&self, sql: &str) -> Runnable {
+        use krishiv_common::{Principal, PrincipalKey, PrincipalKind};
+        use krishiv_plan::analyzer::{Securable, TableIdent};
+        use krishiv_plan::{LogicalPlan, PlanNode, PolicyRef};
+        let policy = PolicyRef::new(
+            Securable::Table(TableIdent {
+                catalog: "spark_catalog".to_owned(),
+                namespace: vec!["default".to_owned()],
+                name: "t".to_owned(),
+            }),
+            PrincipalKey::of(&Principal::new("ana", PrincipalKind::User)),
+            1,
+        );
+        let mut placed = 0;
+        let root = Arc::clone(self.env.analyze(sql).root())
+            .transform_up(&mut |p| {
+                let over_scan = matches!(&p.node, PlanNode::Filter { input, .. }
+                    if matches!(input.node, PlanNode::Scan(_)));
+                Ok::<_, std::convert::Infallible>(if over_scan {
+                    placed += 1;
+                    Arc::new(LogicalPlan::clone(&p).security_barrier(policy.clone()))
+                } else {
+                    p
+                })
+            })
+            .unwrap_or_else(|e| match e {});
+        assert_eq!(placed, 1, "no Filter directly over the scan in {sql}");
+        self.plan_of(&krishiv_plan::Plan::try_new(root).unwrap(), true)
+    }
+
+    fn plan_of(&self, plan: &krishiv_plan::Plan, decisions: bool) -> Runnable {
+        let plan = krishiv_optimizer::optimize(plan).unwrap();
         let cx = PlanningContext::new(Arc::clone(&self.resolver) as _, Arc::new(Config::new()))
             .with_decisions(decisions);
         let planned = DefaultPlanner.plan(&plan, &cx).unwrap();
@@ -335,4 +371,22 @@ fn a_split_like_keeps_spark_length_guard_above_the_scan() {
     // The fixture's source trusts both leaves and filters nothing: the rows that come back are the
     // residual's answer. `s%1` over s0..s9 is exactly `s1`.
     assert_eq!(f.rows(&plan), 1);
+}
+
+#[test]
+fn under_a_barrier_the_source_is_not_asked_and_the_policy_filter_stays() {
+    // Control: without the barrier the source claims `a > 5` and the plan keeps no filter.
+    let f = fixture();
+    let plain = f.plan("SELECT b FROM t WHERE a > 5", true);
+    assert!(decided(&plain) && !has_filter(&plain), "{plain}");
+    // Under one the filter is the policy's: the source's code is not offered it, the scan reads
+    // undecided with nothing pushed, and the engine applies the whole filter.
+    let f = fixture();
+    let plan = f.plan_guarded("SELECT b FROM t WHERE a > 5");
+    assert!(!decided(&plan), "{plan}");
+    assert!(has_filter(&plan), "{plan}");
+    assert!(!plan.to_string().contains("PushedFilters:"), "{plan}");
+    // `a` is 0..9 with 3 and 7 NULL: 6, 8 and 9 pass.
+    assert_eq!(first_column(&plan), [60, 80, 90]);
+    assert!(f.log.decides.lock().unwrap().is_empty());
 }

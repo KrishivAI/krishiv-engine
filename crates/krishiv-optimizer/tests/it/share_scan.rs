@@ -183,3 +183,130 @@ fn readers_in_subqueries_share_the_scan() {
         panic!("not shared:\n{}", on.root());
     }
 }
+
+/// Three filters over one `store_sales` scan, the ones whose predicate text holds a string of
+/// `guard` reading the scan through a security barrier (policy `isnotnull(ss_quantity)`, which
+/// is leakproof, so each filter's own predicate moves in beside it).
+fn guarded(guard: &[&str]) -> Plan {
+    use krishiv_common::{Principal, PrincipalKey, PrincipalKind};
+    use krishiv_plan::analyzer::{Securable, TableIdent};
+    use krishiv_plan::{
+        Builtin, Expr, ExprNode, FunctionId, FunctionKind, PolicyRef, ResolvedExpr,
+        ResolvedFunction,
+    };
+    let sql = "SELECT * FROM \
+         (SELECT count(*) AS a FROM store_sales WHERE ss_quantity BETWEEN 1 AND 5) x, \
+         (SELECT count(*) AS b FROM store_sales WHERE ss_quantity BETWEEN 96 AND 100) y, \
+         (SELECT count(*) AS c FROM store_sales WHERE ss_quantity BETWEEN 50 AND 52) z";
+    let plan = support::resolve(sql, &support::ctx_over(tpcds::catalog()));
+    let policy = PolicyRef::new(
+        Securable::Table(TableIdent {
+            catalog: "spark_catalog".to_owned(),
+            namespace: vec!["default".to_owned()],
+            name: "store_sales".to_owned(),
+        }),
+        PrincipalKey::of(&Principal::new("ana", PrincipalKind::User)),
+        1,
+    );
+    let root = Arc::clone(plan.root())
+        .transform_up(&mut |p| {
+            let PlanNode::Filter { input, predicate } = &p.node else {
+                return Ok::<_, std::convert::Infallible>(p);
+            };
+            let PlanNode::Scan(scan) = &input.node else {
+                return Ok(p);
+            };
+            let text = predicate.to_string();
+            if !guard.iter().any(|g| text.contains(g)) {
+                return Ok(p);
+            }
+            let Some(q) = scan.output.iter().find(|c| c.name == "ss_quantity") else {
+                return Ok(p);
+            };
+            let policy_expr = Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
+                ResolvedFunction {
+                    id: FunctionId::Builtin(Builtin::IsNotNull),
+                    kind: FunctionKind::Scalar,
+                    args: vec![Arc::new(Expr::new(ExprNode::Resolved(
+                        ResolvedExpr::Column(q.clone()),
+                    )))],
+                    distinct: false,
+                    filter: None,
+                    within_group: Vec::new(),
+                    data_type: krishiv_types::DataType::Boolean,
+                    nullable: false,
+                    deterministic: true,
+                },
+            ))));
+            // Over the same scan node the other filters read.
+            let barrier = LogicalPlan::new(PlanNode::Filter {
+                input: Arc::clone(input),
+                predicate: policy_expr,
+            })
+            .security_barrier(policy.clone());
+            Ok(Arc::new(barrier.filter(Arc::clone(predicate))))
+        })
+        .unwrap_or_else(|e| match e {});
+    let plan = Plan::try_new(root).unwrap();
+    let out = optimize_with_udfs(&plan, &StoreSales, &UdfLibrary::new(), &config(true)).unwrap();
+    let again = optimize_with_udfs(&out, &StoreSales, &UdfLibrary::new(), &config(true)).unwrap();
+    assert!(
+        again.structurally_eq(&out),
+        "{}\n{}",
+        out.root(),
+        again.root()
+    );
+    out
+}
+
+/// Whether anything under `p` (`p` included) is a `CteRef` or a shared-scan definition.
+fn reads_a_share(p: &Arc<LogicalPlan>) -> bool {
+    let mut found = match &p.node {
+        PlanNode::CteRef(_) => true,
+        PlanNode::WithCte { ctes, .. } => ctes.iter().any(|c| c.name.starts_with("__shared_scan_")),
+        _ => false,
+    };
+    p.for_each_child(&mut |c| found |= reads_a_share(c));
+    found
+}
+
+/// The scans under `p`'s barriers, each inside one.
+fn guarded_scans(p: &Arc<LogicalPlan>, inside: bool, out: &mut usize) {
+    if inside && matches!(p.node, PlanNode::Scan(_)) {
+        *out += 1;
+    }
+    let inside = inside || matches!(p.node, PlanNode::SecurityBarrier { .. });
+    p.for_each_child(&mut |c| guarded_scans(c, inside, out));
+}
+
+/// G2 (design P3-E14 §5): a scan read inside a security barrier is never shared, neither with a
+/// reader outside it nor with another barrier: the guarded scan stays inside, under its policy.
+#[test]
+fn a_scan_read_inside_a_barrier_is_not_shared() {
+    for guard in [&[">= 1)"][..], &[">= 1)", ">= 96)"][..]] {
+        let out = guarded(guard);
+        let text = out.root().to_string();
+        let mut inside = Vec::new();
+        fn barriers(p: &Arc<LogicalPlan>, out: &mut Vec<Arc<LogicalPlan>>) {
+            if let PlanNode::SecurityBarrier { input, .. } = &p.node {
+                out.push(Arc::clone(input));
+            }
+            p.for_each_child(&mut |c| barriers(c, out));
+        }
+        barriers(out.root(), &mut inside);
+        assert_eq!(inside.len(), guard.len(), "{guard:?}\n{text}");
+        for i in &inside {
+            assert!(
+                !reads_a_share(i),
+                "{guard:?}: a share inside a barrier\n{text}"
+            );
+        }
+        let mut n = 0;
+        guarded_scans(out.root(), false, &mut n);
+        assert_eq!(n, guard.len(), "{guard:?}\n{text}");
+        // The guarded scan is in no shared definition.
+        assert_eq!(shared(&out), 0, "{guard:?}\n{text}");
+    }
+    // Control: the same three filters with no barrier share one scan.
+    assert_eq!(shared(&guarded(&[])), 3);
+}

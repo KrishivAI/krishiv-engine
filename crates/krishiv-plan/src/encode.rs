@@ -7,7 +7,8 @@
 //! strings, so it is the same on every platform, toolchain and process.
 //! It leaves out origins (spans, `plan_id`s). It starts with
 //! [`ENCODING_VERSION`] and [`crate::IR_VERSION`]; a change to the layout
-//! bumps the version.
+//! bumps the version. A layout change is a change to an existing node's bytes: a new node kind
+//! takes a new tag and leaves every existing plan's encoding as it was, so it does not bump it.
 //!
 //! It never holds secret plaintext (ADR 0038). A `secret('scope', 'key')`
 //! reference is encoded as its scope and key. An inline secret, given as an
@@ -123,7 +124,8 @@ pub(crate) fn plan_tag(node: &PlanNode) -> u8 {
         PlanNode::Tail { .. } => 43,
         PlanNode::MetricViewRead { .. } => 44,
         PlanNode::AsOfJoin { .. } => 45,
-        PlanNode::Zip { .. } => 46,
+        PlanNode::SecurityBarrier { .. } => 46,
+        PlanNode::Zip { .. } => 47,
     }
 }
 
@@ -704,6 +706,23 @@ impl<'k, 'a> Encoder<'k, 'a> {
         }
     }
 
+    /// A barrier's policy reference: the securable (a path as its option value, so a secret
+    /// never enters in plaintext), the principal key and the version.
+    fn policy(&mut self, p: &crate::PolicyRef) {
+        match &p.securable {
+            crate::analyzer::Securable::Path(v) => {
+                self.u8(1);
+                self.option_value(v);
+            }
+            other => {
+                self.u8(0);
+                self.str(&other.to_string());
+            }
+        }
+        self.str(&p.principal.to_string());
+        self.put(&p.version.to_le_bytes());
+    }
+
     /// An option value or path: a plain value as itself, a reference as its
     /// (scope, key), an inline secret (alone or inside a URL) as its keyed
     /// fingerprint, never its plaintext (ADR 0038).
@@ -1096,6 +1115,7 @@ impl<'k, 'a> Encoder<'k, 'a> {
             PlanNode::JoinHint { strategy, .. } => {
                 self.str(strategy.name());
             }
+            PlanNode::SecurityBarrier { policy, .. } => self.policy(policy),
             PlanNode::Union {
                 inputs,
                 by_name,
