@@ -817,6 +817,47 @@ impl Encoder {
                 self.plan(left, bias);
                 self.plan(right, bias);
             }
+            PlanNode::AsOfJoin {
+                left,
+                right,
+                kind,
+                condition,
+                as_of,
+            } => {
+                self.tag("AsOfJoin");
+                self.debug(kind);
+                match condition {
+                    JoinCondition::None => self.tag("no-cond"),
+                    JoinCondition::On(e) => {
+                        self.tag("on");
+                        self.expr(e, bias);
+                    }
+                    JoinCondition::Using(cols) => {
+                        self.tag("using");
+                        self.num(cols.len() as u64);
+                        for c in cols {
+                            self.text(c);
+                        }
+                    }
+                    JoinCondition::Natural => self.tag("natural"),
+                }
+                self.expr(&as_of.left, bias);
+                self.expr(&as_of.right, bias);
+                self.debug(&as_of.direction);
+                self.flag(as_of.allow_exact);
+                self.flag(as_of.as_written);
+                self.flag(as_of.distance_on_every_pair);
+                match &as_of.tolerance {
+                    None => self.tag("no-tolerance"),
+                    Some(t) => self.expr(t, bias),
+                }
+                match &as_of.distance {
+                    None => self.tag("no-distance"),
+                    Some(d) => self.expr(d, bias),
+                }
+                self.plan(left, bias);
+                self.plan(right, bias);
+            }
             PlanNode::Sort {
                 input,
                 order,
@@ -1008,6 +1049,25 @@ impl Encoder {
                 self.debug(strategy);
                 self.plan(input, bias);
             }
+            PlanNode::SecurityBarrier { input, policy } => {
+                self.tag("SecurityBarrier");
+                // A path as its option value, as the canonical encoding does:
+                // its display redacts secrets, so two paths that differ only
+                // in a credential would print (and key) the same.
+                match &policy.securable {
+                    crate::analyzer::Securable::Path(v) => {
+                        self.tag("path");
+                        self.option_value(v);
+                    }
+                    other => {
+                        self.tag("named");
+                        self.text(&other.to_string());
+                    }
+                }
+                self.text(&policy.principal.to_string());
+                self.num(policy.version);
+                self.plan(input, bias);
+            }
             PlanNode::Union {
                 inputs,
                 by_name,
@@ -1024,6 +1084,11 @@ impl Encoder {
             PlanNode::Distinct { input } => {
                 self.tag("Distinct");
                 self.plan(input, bias);
+            }
+            PlanNode::Zip { left, right } => {
+                self.tag("Zip");
+                self.plan(left, bias);
+                self.plan(right, bias);
             }
             PlanNode::SetOp {
                 left,

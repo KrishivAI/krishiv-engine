@@ -118,6 +118,9 @@ use krishiv_types::batch::{Batch, Weights};
 use super::accumulator::{Accumulator, paired};
 use super::merge_index::{MergeIndex, Slot};
 use super::table::{AggCore, batch, own_bytes};
+use std::collections::HashMap;
+
+use super::theta_sketch::{largest_array_bytes, sketch_bytes, sketch_row_bytes};
 use super::{AggregateOutput, unsupported};
 use crate::error::{Result, internal};
 use crate::hash::{HashSeed, PARTITIONS, ProbeCount, ProbeTotals, grown, spill_partition};
@@ -999,47 +1002,6 @@ impl RowTable {
         }
     }
 
-    /// The accumulators' bytes after `new[p]` more groups in each partition
-    /// `p` and a fold of `cols` (`fold` says which columns each aggregate
-    /// reads; a string `min`/`max` may keep all their bytes, once).
-    fn projected_accs(&self, new: &[usize], cols: &[ArrayRef], fold: Fold) -> usize {
-        let states = matches!(fold, Fold::States { .. });
-        let parts: usize = self
-            .parts
-            .iter()
-            .zip(new.iter().copied().chain(std::iter::repeat(0)))
-            .map(|(part, n)| {
-                part.accs
-                    .iter()
-                    .map(|a| a.projected_part(n, states))
-                    .sum::<usize>()
-            })
-            .sum();
-        let kept: usize = self.parts.first().map_or(0, |p| {
-            p.accs
-                .iter()
-                .zip(&self.core.ranges)
-                .map(|(a, r)| {
-                    // The HLL sketches are bounded per partition above (their rows are the partition's).
-                    if a.projects_by_partition() {
-                        return 0;
-                    }
-                    // The value column, then (`max_by`/`min_by`) the key.
-                    let at = |n: usize| {
-                        let i = match fold {
-                            Fold::States { offset } => r.start.checked_sub(offset).map(|i| i + n),
-                            Fold::Raw => a.args().get(n).copied(),
-                        };
-                        i.and_then(|i| cols.get(i))
-                    };
-                    a.projected(0, at(0), at(1), states)
-                        .saturating_sub(a.projected(0, None, None, false))
-                })
-                .sum()
-        });
-        parts + kept
-    }
-
     /// Bytes of the gathered argument columns of a fold touching several
     /// partitions, `counts` rows each: one partition's at a time, so the
     /// largest partition's share of the fixed-width columns, and the full
@@ -1081,7 +1043,12 @@ impl RowTable {
             .map(|(v, (c, &b))| grown(&v.rows, c * self.stride) + grown(&v.heap, b))
             .sum();
         rows + self.index_bytes(self.next_mode(), n)
-            + self.projected_accs(&p.counts, &p.cols, Self::fold_of(p))
+            + self.projected_accs(
+                &p.counts,
+                &p.cols,
+                Self::fold_of(p),
+                self.row_parts(p).as_deref(),
+            )
             + self.projected_sketch_bytes(n, p.keys.hashes().len() == n)
             + self.direct.as_ref().map_or(0, direct::Direct::bytes)
     }
@@ -1967,6 +1934,11 @@ impl RowTable {
 #[cfg(test)]
 mod tests;
 
+#[cfg(test)]
+mod theta_projection_tests;
+
 mod merge;
+
+mod projection;
 
 mod probe;

@@ -33,7 +33,7 @@ use std::time::Duration;
 use krishiv_common::config::{
     CATALOG_DELEGATION_MAX_DISTINCT_EXCHANGES_PER_MINUTE,
     CATALOG_DELEGATION_MAX_EXCHANGES_PER_MINUTE, CATALOG_MAX_METADATA_BYTES,
-    CATALOG_REQUEST_TIMEOUT, Config, ConfigValue,
+    CATALOG_REQUEST_TIMEOUT, CATALOG_VENDED_DEFAULT_TTL, Config, ConfigValue,
 };
 use krishiv_common::error::KrishivError;
 use krishiv_common::principal::Principal;
@@ -46,8 +46,8 @@ use krishiv_plan::analyzer::{BoxFuture, Catalog, NameForm, Securable, TableIdent
 
 use crate::auth::{InboundCredential, Method};
 use crate::catalog_decl::{
-    CATALOG_PREFIX, CatalogAuth, CatalogDecl, CatalogDeclarations, CatalogType, DeclMode,
-    Delegation,
+    CATALOG_PREFIX, CatalogAuth, CatalogDecl, CatalogDeclarations, CatalogStorage, CatalogType,
+    DeclMode, Delegation,
 };
 
 /// Who a declared catalog answers: for a `delegated` catalog the catalog,
@@ -159,9 +159,9 @@ impl CatalogCaller {
     }
 }
 
-/// What a declared catalog's table is read with in one query (PR-58b): the query's I/O, its path
+/// What a declared catalog's table is read with in one query: the query's I/O, its path
 /// placement (the session's stores; in server mode confined to `krishiv.io.local.allowedRoots`
-/// and `krishiv.io.objectStore.allowedPrefixes`, ADR 0046 §3a), its configuration and the
+/// and `krishiv.io.objectStore.allowedPrefixes`), its configuration and the
 /// worker slots splits are cut for.
 #[derive(Clone)]
 #[non_exhaustive]
@@ -174,6 +174,66 @@ pub struct ScanInputs {
     pub config: Arc<Config>,
     /// The drivers splits are planned for.
     pub worker_slots: u64,
+    /// What a table read with credentials of its own builds its stores from (vended).
+    pub stores: ScopedStores,
+}
+
+/// What a table read with credentials of its own (vended) builds its stores from: the query's
+/// configuration and the runtime's I/O scheduler. It holds no credential.
+#[derive(Clone)]
+pub struct ScopedStores {
+    config: Arc<Config>,
+    sched: Arc<krishiv_io::IoScheduler>,
+    cwd: String,
+}
+
+impl fmt::Debug for ScopedStores {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ScopedStores").finish_non_exhaustive()
+    }
+}
+
+impl ScopedStores {
+    /// The stores of one query: `config` its snapshot, `sched` the runtime's scheduler, `cwd` where relative local
+    /// paths resolve.
+    #[must_use]
+    pub fn new(
+        config: Arc<Config>,
+        sched: Arc<krishiv_io::IoScheduler>,
+        cwd: impl Into<String>,
+    ) -> Self {
+        Self {
+            config,
+            sched,
+            cwd: cwd.into(),
+        }
+    }
+
+    /// A path locator whose stores under each scope of `sources` sign with that scope's source, registered under
+    /// `cache_scope`, and connect through the runtime's (egress policy) HTTP clients. A location outside every scope
+    /// would use the query's static store configuration, so the caller refuses those before it locates them. The
+    /// scoped stores are unregistered when the locator is dropped.
+    #[must_use]
+    pub fn paths(
+        &self,
+        cache_scope: krishiv_io::CacheScope,
+        sources: Vec<(
+            krishiv_io::CredentialScope,
+            Arc<dyn krishiv_io::CredentialSource>,
+        )>,
+    ) -> Arc<dyn PathLocator> {
+        let mut registry = krishiv_io::query_registry(Arc::clone(&self.config), &self.sched)
+            .with_cache_scope(cache_scope);
+        for (scope, source) in sources {
+            registry = registry.with_source(scope, source);
+        }
+        Arc::new(krishiv_exec::files::ObjectPaths::new(
+            krishiv_io::StoreId::new(crate::session::LOCAL_STORE),
+            self.cwd.clone(),
+            Arc::clone(&self.sched),
+            Arc::new(registry),
+        ))
+    }
 }
 
 impl fmt::Debug for ScanInputs {
@@ -193,18 +253,20 @@ impl ScanInputs {
         paths: Arc<dyn PathLocator>,
         config: Arc<Config>,
         worker_slots: u64,
+        stores: ScopedStores,
     ) -> Self {
         Self {
             io,
             paths,
             config,
             worker_slots,
+            stores,
         }
     }
 }
 
-/// A table a declared catalog loaded for one caller at one version: what a scan of it opens
-/// (PR-58b). Opened before planning, on the executor's I/O runtime.
+/// A table a declared catalog loaded for one caller at one version: what a scan of it opens.
+/// Opened before planning, on the executor's I/O runtime.
 pub trait DeclaredTable: fmt::Debug + Send + Sync {
     /// The table's provider, read with `inputs`.
     ///
@@ -268,6 +330,33 @@ pub trait CallerCatalog: fmt::Debug + Send + Sync {
                 .map(|meta| LoadedDeclared::new(meta, None)))
         })
     }
+
+    /// The procedure `name` (lower-case) of the catalog's `system` namespace for `caller`
+    /// (`CALL cat.system.name(..)`, design P3-T027 PR-36e §3); `None` when there is none. The
+    /// default is a catalog without procedures: `MISSING_CATALOG_ABILITY.PROCEDURES`.
+    ///
+    /// # Errors
+    /// The catalog's failure; the default's refusal.
+    fn load_procedure<'a>(
+        &'a self,
+        caller: &'a CatalogCaller,
+        inputs: ScanInputs,
+        name: &'a str,
+    ) -> BoxFuture<'a, Result<Option<Arc<dyn krishiv_plan::procedure::Procedure>>, KrishivError>>
+    {
+        let _ = (caller, inputs, name);
+        Box::pin(async move {
+            Err(krishiv_common::error::MissingCatalogAbilityProcedures {
+                plugin: "this catalog".to_owned(),
+            }
+            .into())
+        })
+    }
+
+    /// The cache half of [`Self::refresh`]: drops what the catalog keeps of `id` and moves
+    /// [`Self::epoch`], with no load (after a `CALL` that changed the table, so a failed load
+    /// never fails a procedure that is done). The default keeps nothing, so drops nothing.
+    fn invalidate(&self, _caller: &CatalogCaller, _id: &TableIdent) {}
 
     /// `REFRESH TABLE` of `id` for `caller`: drops what the catalog keeps of the table (its
     /// metadata cache entries, for every caller) and moves [`Self::epoch`], so plans and frames
@@ -494,6 +583,24 @@ impl CatalogDeps {
     }
 }
 
+/// Refuses a zero `krishiv.catalog.vendedDefaultTtl` for a runtime with a vended catalog: a credential the catalog
+/// gives no expiry for would expire as it is fetched, and every refetch again.
+fn check_vended_ttl(config: &Config) -> Result<(), KrishivError> {
+    let ttl = config
+        .get(&CATALOG_VENDED_DEFAULT_TTL)
+        .and_then(ConfigValue::as_duration);
+    if ttl.is_some_and(|t| t.is_zero()) {
+        return Err(krishiv_common::error::KrishivInvalidConfigValue {
+            value: "'0s'".to_owned(),
+            key: format!("\"{}\"", CATALOG_VENDED_DEFAULT_TTL.key),
+            reason: "a catalog with storage = vended needs a positive default credential lifetime"
+                .to_owned(),
+        }
+        .into());
+    }
+    Ok(())
+}
+
 /// The catalogs a runtime is built with: the declaration keys, where they come from and the
 /// factories of this build (see the module docs).
 #[must_use]
@@ -594,7 +701,7 @@ struct DeclaredCatalog(Arc<Declared>, CatalogCaller, Arc<DeclaredLoads>);
 /// table, as the catalog spells them) and the version it was loaded at.
 pub(crate) type DeclaredKey = (Vec<String>, Option<TableVersion>);
 
-/// The declared tables one query loaded and opened (PR-58b): the analysis records each table a
+/// The declared tables one query loaded and opened: the analysis records each table a
 /// declared catalog loaded; before planning each scanned one is opened once, so every scan of it
 /// in the query reads one provider.
 #[derive(Default)]
@@ -781,6 +888,9 @@ impl CatalogRegistry {
                 )));
             };
             check_secrets(&decl)?;
+            if decl.storage == CatalogStorage::Vended {
+                check_vended_ttl(config)?;
+            }
             factory.validate(&decl, &deps)?;
             catalogs.insert(
                 decl.name.clone(),
@@ -964,7 +1074,7 @@ pub(crate) struct CatalogRow {
     pub(crate) kind: &'static str,
     pub(crate) auth: &'static str,
     pub(crate) storage: &'static str,
-    /// The delegation form of a `delegated` catalog (PR-58b); `None` otherwise.
+    /// The delegation form of a `delegated` catalog; `None` otherwise.
     pub(crate) delegation: Option<&'static str>,
     pub(crate) default: bool,
 }
@@ -982,6 +1092,12 @@ impl DeclaredView {
             inbound,
             loads: Arc::default(),
         }
+    }
+
+    /// Whether what a declared catalog's tables read is confined to the server's roots and
+    /// prefixes (server mode).
+    pub(crate) fn confines(&self) -> bool {
+        self.registry.mode() == DeclMode::Server
     }
 
     /// This view for one query reading with `inputs`.
@@ -1138,6 +1254,14 @@ impl crate::Session {
         Some(
             async {
                 let (built, caller) = built?;
+                // A namespace the grants hide answers as a missing one before the catalog is
+                // asked (no existence oracle, no outbound call for it, ADR 0046 §8). A table the
+                // grants list implies its namespace is listed, so nothing listable is lost.
+                if self.state.grants.is_some()
+                    && !self.declared_namespace_listed(&name, namespace).await
+                {
+                    return Err(schema_not_found(catalog, namespace));
+                }
                 let Some(found) = built
                     .list_tables(&caller, namespace)
                     .await
@@ -1145,15 +1269,7 @@ impl crate::Session {
                 else {
                     return Err(schema_not_found(catalog, namespace));
                 };
-                let listed = self.listed_declared_tables(&name, namespace, found).await;
-                if listed.is_empty()
-                    && self.state.grants.is_some()
-                    && !self.declared_namespace_listed(&name, namespace).await
-                {
-                    // Nothing listable in it, nor under it: as for a missing one.
-                    return Err(schema_not_found(catalog, namespace));
-                }
-                Ok(listed)
+                Ok(self.listed_declared_tables(&name, namespace, found).await)
             }
             .await,
         )
@@ -1185,18 +1301,19 @@ impl crate::Session {
     /// `catalog` (its canonical name) in a listing, by the session catalog's rule
     /// ([`Session::may_list_namespace`]): it may list the namespace, or, under the `grants`
     /// provider, it owns or holds a grant on something under it at any depth (a nested
-    /// namespace, a table, a column; `GrantsPolicy::listable_under`). Decided from the grant
+    /// namespace, a table, a column; `GrantsPolicy::namespace_listable`). Decided from the grant
     /// state alone: no catalog call, so one namespace the catalog refuses cannot fail a listing.
     async fn declared_namespace_listed(&self, catalog: &str, namespace: &[String]) -> bool {
         let securable = declared_namespace(catalog, namespace);
-        if self.may_list(&securable).await {
-            return true;
-        }
-        self.state
+        if let Some(listed) = self
+            .state
             .grants
             .as_ref()
-            .and_then(|g| g.listable_under(&self.state.principal, &securable))
-            .unwrap_or(false)
+            .and_then(|g| g.namespace_listable(&self.state.principal, &securable))
+        {
+            return listed;
+        }
+        self.may_list(&securable).await
     }
 
     /// Every catalog this session sees, sorted: `spark_catalog`, `system` and the visible

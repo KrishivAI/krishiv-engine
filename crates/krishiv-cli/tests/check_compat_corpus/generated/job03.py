@@ -2,6 +2,7 @@
 import pyspark.sql.functions as F
 
 # F.nope('x')
-df = df.select(F.kll_sketch_agg_double("a"), F.col("b"))
-df = spark.sql("SELECT legacy_fn_9(a) FROM t3")
-df = df.select(F.map_filter("a"), F.col("b"))
+df = spark.sql("SELECT to_binary(a) FROM t3")
+df = df.select(F.user("a"), F.col("b"))
+df = df.select(F.bit_and("a"), F.col("b"))
+df = spark.sql("SELECT legacy_fn_20(a) FROM t3")

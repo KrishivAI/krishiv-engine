@@ -1,0 +1,42 @@
+[
+ {
+  "type": "timestamp",
+  "filter": "x = timestamp '2020-01-01 00:00:00'",
+  "session_tz": "UTC",
+  "filters": [
+   "[IsNotNull(attribute=('x',)), EqualTo(attribute=('x',), value=datetime.datetime(2020, 1, 1, 0, 0, tzinfo=zoneinfo.ZoneInfo(key='UTC')))]"
+  ]
+ },
+ {
+  "type": "timestamp",
+  "filter": "x = timestamp '2020-01-01 00:00:00'",
+  "session_tz": "America/Los_Angeles",
+  "filters": [
+   "[IsNotNull(attribute=('x',)), EqualTo(attribute=('x',), value=datetime.datetime(2020, 1, 1, 8, 0, tzinfo=zoneinfo.ZoneInfo(key='UTC')))]"
+  ]
+ },
+ {
+  "type": "timestamp",
+  "filter": "x = timestamp '2020-01-01 00:00:00'",
+  "session_tz": "Asia/Kolkata",
+  "filters": [
+   "[IsNotNull(attribute=('x',)), EqualTo(attribute=('x',), value=datetime.datetime(2019, 12, 31, 18, 30, tzinfo=zoneinfo.ZoneInfo(key='UTC')))]"
+  ]
+ },
+ {
+  "type": "timestamp_ntz",
+  "filter": "x = timestamp_ntz '2020-01-01 00:00:00'",
+  "session_tz": "America/Los_Angeles",
+  "filters": [
+   "[IsNotNull(attribute=('x',)), EqualTo(attribute=('x',), value=datetime.datetime(2020, 1, 1, 0, 0))]"
+  ]
+ },
+ {
+  "type": "date",
+  "filter": "x = date '2020-01-01'",
+  "session_tz": "UTC",
+  "filters": [
+   "[IsNotNull(attribute=('x',)), EqualTo(attribute=('x',), value=datetime.date(2020, 1, 1))]"
+  ]
+ }
+]

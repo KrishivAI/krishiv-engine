@@ -923,6 +923,7 @@ fn the_w1_rule_keys_default_on_and_are_user_settable() {
     }
 }
 
+mod asof_join;
 mod catalog_delegation;
 mod connect;
 mod delta;
@@ -1643,6 +1644,39 @@ fn python_worker_entries_parse_and_default() {
 }
 
 #[test]
+fn python_worker_tenant_entries_parse_and_default() {
+    let mut c = Config::new();
+    assert_eq!(
+        c.get(&PYTHON_WORKER_MAX_PER_TENANT)
+            .and_then(ConfigValue::as_int),
+        Some(32)
+    );
+    assert_eq!(c.get(&PYTHON_WORKER_TENANT_MEMORY_LIMIT), None);
+    c.set("krishiv.python.worker.maxPerTenant", "4").unwrap();
+    c.set("krishiv.python.worker.tenantMemoryLimit", "512m")
+        .unwrap();
+    assert_eq!(
+        c.get(&PYTHON_WORKER_MAX_PER_TENANT)
+            .and_then(ConfigValue::as_int),
+        Some(4)
+    );
+    assert_eq!(
+        c.get(&PYTHON_WORKER_TENANT_MEMORY_LIMIT)
+            .and_then(ConfigValue::as_size),
+        Some(512 << 20)
+    );
+    assert!(c.set("krishiv.python.worker.maxPerTenant", "0").is_err());
+    assert!(
+        c.set("krishiv.python.worker.tenantMemoryLimit", "lots")
+            .is_err()
+    );
+    assert_eq!(
+        PYTHON_WORKER_MAX_PER_TENANT.settable_by,
+        SettableBy::Startup
+    );
+}
+
+#[test]
 fn access_provider_is_unset_and_startup_only() {
     let mut c = Config::new();
     assert_eq!(c.get(&ACCESS_PROVIDER), None);
@@ -1926,10 +1960,16 @@ fn scan_instance_projection_defaults_on_and_parses_booleans() {
 #[test]
 fn a_key_named_like_a_credential_is_on_the_allow_list() {
     const WORDS: [&str; 5] = ["password", "secret", "token", "credential", "key"];
-    const ALLOWED: &[(&str, &str)] = &[(
-        "krishiv.write.idempotencyKey",
-        "a caller-chosen job id that makes a retried write a no-op, not a credential",
-    )];
+    const ALLOWED: &[(&str, &str)] = &[
+        (
+            "krishiv.access.external.token",
+            "a secret reference (`env:NAME` or `file:/path`); the server refuses a literal at startup",
+        ),
+        (
+            "krishiv.write.idempotencyKey",
+            "a caller-chosen job id that makes a retried write a no-op, not a credential",
+        ),
+    ];
     let mut found = Vec::new();
     for e in REGISTRY {
         let last = e
@@ -1946,4 +1986,30 @@ fn a_key_named_like_a_credential_is_on_the_allow_list() {
         found.is_empty(),
         "keys named like a credential that are not on the allow list: {found:?}"
     );
+}
+
+/// A registered value keeps the text it was set to (Spark's `setConfString` stores the string it validated), while
+/// its typed value is parsed; unset and reset drop or restore the text with the value.
+#[test]
+fn a_registered_value_keeps_the_text_it_was_set_to() {
+    let mut c = Config::new();
+    c.set("spark.sql.repl.eagerEval.enabled", " TRUE ").unwrap();
+    assert_eq!(
+        c.get(&REPL_EAGER_EVAL_ENABLED),
+        Some(&ConfigValue::Bool(true))
+    );
+    assert_eq!(c.text(&REPL_EAGER_EVAL_ENABLED).as_deref(), Some(" TRUE "));
+    assert!(
+        c.explicit_registered_as_set()
+            .contains(&("krishiv.sql.repl.eagerEval.enabled", " TRUE ".to_owned()))
+    );
+    assert!(
+        c.explicit_registered()
+            .contains(&("krishiv.sql.repl.eagerEval.enabled", "true".to_owned()))
+    );
+    let baseline = c.clone();
+    c.unset("krishiv.sql.repl.eagerEval.enabled");
+    assert_eq!(c.text(&REPL_EAGER_EVAL_ENABLED).as_deref(), Some("false"));
+    c.reset_key("spark.sql.repl.eagerEval.enabled", &baseline);
+    assert_eq!(c.text(&REPL_EAGER_EVAL_ENABLED).as_deref(), Some(" TRUE "));
 }

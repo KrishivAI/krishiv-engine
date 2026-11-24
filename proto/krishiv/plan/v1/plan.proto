@@ -886,6 +886,15 @@ enum AggregateFunction {
   // `hll_union_agg(sketch, allowDifferentLgConfigK)`: the folded flag is `hll_precision` (0 or 1).
   // feature: hll_sketch_aggregates
   AGGREGATE_FUNCTION_HLL_UNION_AGG = 54;
+  // `theta_sketch_agg(x, lgNomEntries)`: the folded lgNomEntries is `hll_precision` (4 to 26).
+  // feature: theta_sketch_aggregates
+  AGGREGATE_FUNCTION_THETA_SKETCH_AGG = 55;
+  // `theta_union_agg(sketch, lgNomEntries)`: the folded lgNomEntries is `hll_precision` (4 to 26).
+  // feature: theta_sketch_aggregates
+  AGGREGATE_FUNCTION_THETA_UNION_AGG = 56;
+  // `theta_intersection_agg(sketch)`.
+  // feature: theta_sketch_aggregates
+  AGGREGATE_FUNCTION_THETA_INTERSECTION_AGG = 57;
 }
 
 enum AggregateInput {
@@ -1068,6 +1077,34 @@ message SortMergeJoinNode {
   repeated bool null_safe = 6;
   optional Residual residual = 7;
   bool single_match = 8;
+  // feature: as_of_join
+  optional AsOfMerge as_of = 9;
+}
+
+// feature: as_of_join
+// An as-of join's match: the as-of column of each input, the direction and whether an equal
+// value matches.
+message AsOfMerge {
+  // feature: as_of_join
+  uint64 left_column = 1;
+  // feature: as_of_join
+  uint64 right_column = 2;
+  // feature: as_of_join
+  AsOfMergeDirection direction = 3;
+  // feature: as_of_join
+  bool allow_exact = 4;
+  // feature: as_of_join
+  optional Residual distance = 5;
+  // feature: as_of_join
+  // The distance counts on every passing pair, in both directions (Spark's Connect form).
+  bool distance_on_every_pair = 6;
+}
+
+// feature: as_of_join
+enum AsOfMergeDirection {
+  AS_OF_MERGE_DIRECTION_UNSPECIFIED = 0;
+  AS_OF_MERGE_DIRECTION_BACKWARD = 1;
+  AS_OF_MERGE_DIRECTION_FORWARD = 2;
 }
 
 enum JoinDistribution {

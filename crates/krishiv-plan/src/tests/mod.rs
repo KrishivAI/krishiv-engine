@@ -4,6 +4,7 @@
 //! by the inventory, the generator and the mutation sites.
 
 mod analyzer;
+mod barrier_widen;
 mod column_names;
 mod dag;
 mod definer_sources;
@@ -26,6 +27,7 @@ mod nested_literals;
 mod nodes;
 mod observe;
 mod pivot;
+mod prefetch;
 mod prefix_cache;
 mod props;
 mod python_relation_analysis;

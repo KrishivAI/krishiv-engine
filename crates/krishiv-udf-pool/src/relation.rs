@@ -48,8 +48,8 @@ use crate::artifacts::ArtifactSet;
 use crate::calls::{SlotTake, TaskSlot, TaskTicket};
 use crate::pool::{Owner, Pool};
 use crate::runtime::{CallState, CancelOnDrop, Registered, with_worker};
-use crate::validate::{SchemaCheck, VALIDATE_SCHEMA};
 use crate::worker::{TaskEvent, Worker};
+use krishiv_exec::python_relation::{SchemaCheck, VALIDATE_SCHEMA};
 
 /// The eval types of the relation kinds the worker runs (`relations.py`): map 205, 207; grouped map 201, 209,
 /// 216, 215; cogrouped map 206, 210; grouped aggregate 202, 217, 252, 254; window aggregate 203, 253; scalar
@@ -83,7 +83,7 @@ impl PoolSlots {
 
 impl RelationSlots for PoolSlots {
     fn limit(&self) -> usize {
-        self.pool.calls().slot_limit()
+        self.pool.calls().slot_limit_for(&self.owner)
     }
 
     fn poll_take(
@@ -110,6 +110,7 @@ impl RelationSlots for PoolSlots {
             (SlotTake::TooMany, _) => Poll::Ready(Err(self.pool.worker_limit(
                 "A Python UDF relation operator (one task per UDF of a driver)",
                 n,
+                &self.owner,
             ))),
         }
     }
@@ -571,6 +572,8 @@ mod tests {
         Owner {
             principal: "p".to_owned(),
             session: "s".to_owned(),
+            tenant: None,
+            capped: true,
         }
     }
 

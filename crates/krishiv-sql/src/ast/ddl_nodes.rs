@@ -1067,6 +1067,8 @@ pub struct InsertClause {
     pub target_options: Vec<TableOption>,
     /// The target columns; empty for none.
     pub columns: Vec<ColumnName>,
+    /// Source text of the column list written before `REPLACE` (Spark 4.3 grammar); `None` otherwise.
+    pub columns_span: Option<Span>,
     /// `PARTITION (...)`.
     pub partition: Option<PartitionSpec>,
     /// `IF NOT EXISTS` after the partition (Spark rejects it after
@@ -1265,6 +1267,8 @@ pub enum ShowKind {
         namespace: Option<DdlName>,
         /// The pattern, if written.
         pattern: Option<ShowPattern>,
+        /// `AS JSON` (Spark 4.3).
+        as_json: bool,
         /// Source text.
         span: Span,
     },
@@ -1276,6 +1280,8 @@ pub enum ShowKind {
         pattern: ShowPattern,
         /// `PARTITION ...`, if written.
         partition: Option<PartitionSpec>,
+        /// `AS JSON` (Spark 4.3).
+        as_json: bool,
         /// Source text.
         span: Span,
     },
@@ -1353,6 +1359,8 @@ pub enum ShowKind {
         name: DdlName,
         /// `PARTITION ...`, if written.
         partition: Option<PartitionSpec>,
+        /// `AS JSON` (Spark 4.3).
+        as_json: bool,
         /// Source text.
         span: Span,
     },
@@ -1510,6 +1518,18 @@ pub struct Refresh {
     /// What to refresh.
     pub kind: RefreshKind,
     /// Source text, from `REFRESH` to the end of the statement.
+    pub span: Span,
+}
+
+/// `CALL name([args])` (Spark's `Call`): a procedure of a catalog, such as an Iceberg
+/// maintenance procedure `cat.system.expire_snapshots(table => 'ns.t')`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Call {
+    /// The procedure's name, as written (`cat.system.p`, `system.p`).
+    pub name: DdlName,
+    /// The arguments, positional or `name => expr`.
+    pub args: Vec<FunctionArg>,
+    /// Source text, from `CALL` to the end of the statement.
     pub span: Span,
 }
 

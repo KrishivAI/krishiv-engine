@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use krishiv_common::secret::{OptionValue, SecretValue};
+use krishiv_exec::AsOfMergeDirection;
 use krishiv_exec::JoinType;
 use krishiv_exec::aggregate::{
     AggInput, AggregateExpr, AggregateFunction, AggregateOutput, UdafCall,
@@ -681,6 +682,20 @@ impl Encoder {
             null_safe: join.null_safe.clone(),
             residual: self.residual(join.residual.as_ref())?,
             single_match: join.single_match,
+            as_of: match &join.as_of {
+                None => None,
+                Some(a) => Some(pb::AsOfMerge {
+                    left_column: a.left_column as u64,
+                    right_column: a.right_column as u64,
+                    direction: match a.direction {
+                        AsOfMergeDirection::Backward => pb::AsOfMergeDirection::Backward,
+                        AsOfMergeDirection::Forward => pb::AsOfMergeDirection::Forward,
+                    } as i32,
+                    allow_exact: a.allow_exact,
+                    distance: self.residual(a.distance.as_ref())?,
+                    distance_on_every_pair: a.distance_on_every_pair,
+                }),
+            },
         })
     }
 
@@ -784,6 +799,11 @@ impl Encoder {
     }
 
     fn scan(&mut self, node: &ScanNode) -> Result<pb::ScanNode> {
+        if node.decided.is_some() {
+            return Err(CodecError::Unsupported(
+                "a Python data source in a distributed plan".to_owned(),
+            ));
+        }
         let Scan {
             source,
             output,
@@ -1296,6 +1316,8 @@ fn aggregate_function(a: &AggregateExpr, nested: &Cell<bool>) -> Result<pb::Aggr
         AggregateFunction::ApproxCountDistinct { p } => !(4..=30).contains(p),
         AggregateFunction::HistogramNumeric { nb } => *nb < 2,
         AggregateFunction::HllSketchAgg { lg_k } => !(4..=21).contains(lg_k),
+        AggregateFunction::ThetaSketchAgg { lg_nom }
+        | AggregateFunction::ThetaUnionAgg { lg_nom } => !(4..=26).contains(lg_nom),
         _ => false,
     };
     if invalid {
@@ -1442,6 +1464,45 @@ fn aggregate_function(a: &AggregateExpr, nested: &Cell<bool>) -> Result<pb::Aggr
                 0,
                 false,
                 u32::from(*lg_k),
+                a,
+                nested,
+            ));
+        }
+        AggregateFunction::ThetaSketchAgg { lg_nom } => {
+            return Ok(percentile_expr(
+                pb::AggregateFunction::ThetaSketchAgg,
+                &[],
+                false,
+                false,
+                0,
+                false,
+                u32::from(*lg_nom),
+                a,
+                nested,
+            ));
+        }
+        AggregateFunction::ThetaUnionAgg { lg_nom } => {
+            return Ok(percentile_expr(
+                pb::AggregateFunction::ThetaUnionAgg,
+                &[],
+                false,
+                false,
+                0,
+                false,
+                u32::from(*lg_nom),
+                a,
+                nested,
+            ));
+        }
+        AggregateFunction::ThetaIntersectionAgg => {
+            return Ok(percentile_expr(
+                pb::AggregateFunction::ThetaIntersectionAgg,
+                &[],
+                false,
+                false,
+                0,
+                false,
+                0,
                 a,
                 nested,
             ));

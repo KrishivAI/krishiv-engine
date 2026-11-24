@@ -24,8 +24,11 @@
 //! The calls block for as long as SQLite takes (a local file; the timeout bounds contention), inside the returned
 //! future, as the file catalog is "local and cheap" (ADR 0037).
 
+mod functions;
 mod store;
 mod write;
+
+pub use functions::{FunctionChange, StoredPythonFunction};
 
 use std::collections::BTreeMap;
 use std::path::Path;

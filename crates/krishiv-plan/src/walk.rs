@@ -224,6 +224,7 @@ pub(crate) fn all_resolved(root: Node<'_>) -> bool {
                 | PlanNode::ColumnNames { .. }
                 | PlanNode::PipeOperator { .. }
                 | PlanNode::SetOp { .. }
+                | PlanNode::Zip { .. }
                 | PlanNode::Pivot { .. }
                 | PlanNode::Unpivot { .. }
                 | PlanNode::InlineTable { .. }
@@ -234,6 +235,12 @@ pub(crate) fn all_resolved(root: Node<'_>) -> bool {
                     JoinCondition::Natural | JoinCondition::Using(_) => false,
                     JoinCondition::None | JoinCondition::On(_) => true,
                 },
+                PlanNode::AsOfJoin {
+                    condition, as_of, ..
+                } => {
+                    !as_of.as_written
+                        && matches!(condition, JoinCondition::None | JoinCondition::On(_))
+                }
                 PlanNode::Scan(_)
                 | PlanNode::Range { .. }
                 | PlanNode::OneRowRelation
@@ -249,6 +256,7 @@ pub(crate) fn all_resolved(root: Node<'_>) -> bool {
                 | PlanNode::Tail { .. }
                 | PlanNode::SubqueryAlias { .. }
                 | PlanNode::WithCte { .. }
+                | PlanNode::SecurityBarrier { .. }
                 | PlanNode::JoinHint { .. }
                 | PlanNode::Repartition { .. }
                 | PlanNode::CollectMetrics { .. }
@@ -465,6 +473,23 @@ impl Teardown {
                     JoinCondition::None | JoinCondition::Using(_) | JoinCondition::Natural => {}
                 }
             }
+            PlanNode::AsOfJoin {
+                left,
+                right,
+                condition,
+                as_of,
+                ..
+            } => {
+                self.plans.extend([left, right]);
+                if let JoinCondition::On(e) = condition {
+                    self.exprs.push(e);
+                }
+                if let Some(m) = Arc::into_inner(as_of) {
+                    self.exprs.extend([m.left, m.right]);
+                    self.exprs.extend(m.tolerance);
+                    self.exprs.extend(m.distance);
+                }
+            }
             PlanNode::Sort { input, order, .. } => {
                 self.plans.push(input);
                 self.exprs
@@ -484,6 +509,7 @@ impl Teardown {
             }
             PlanNode::SubqueryAlias { input, .. }
             | PlanNode::Shift { input, .. }
+            | PlanNode::SecurityBarrier { input, .. }
             | PlanNode::JoinHint { input, .. }
             | PlanNode::Sample { input, .. }
             | PlanNode::ColumnNames { input, .. }
@@ -514,7 +540,9 @@ impl Teardown {
                 self.exprs
                     .extend(dimensions.into_iter().chain(measures).map(|c| c.expr));
             }
-            PlanNode::SetOp { left, right, .. } => self.plans.extend([left, right]),
+            PlanNode::SetOp { left, right, .. } | PlanNode::Zip { left, right } => {
+                self.plans.extend([left, right]);
+            }
             PlanNode::MapPartitions { input, .. } => self.plans.push(input),
             PlanNode::GroupMap { input, keys, .. } => {
                 self.plans.push(input);

@@ -72,15 +72,17 @@ pub use io::{
     BlockCacheStats, ByteRange, CacheKey, CacheScope, CacheStats, DistinctSample, DistinctSamples,
     FileRef, Held, InferKey, InferredSchemas, IoConfig, IoContext, IoCounters, IoScheduler,
     KeyFact, KeyFactKey, KeyFacts, LATENCY_BUCKETS, LatencyHistogram, ObjectScheme, OpenedStore,
-    ParsedUrl, PinnedStore, PutIfAbsent, SampleKey, SecretResolver, StoreId, StorePolicy,
-    StoreRegistry, StoreSettings, Tail, VersionToken, infer_schema_cached, is_server_scoped_option,
-    parse_object_url, query_registry, register, register_with_options,
+    ParsedUrl, PinnedStore, PutIfAbsent, QueryIoMemory, SampleKey, SecretResolver, StoreId,
+    StorePolicy, StoreRegistry, StoreSettings, Tail, VersionToken, infer_schema_cached,
+    is_server_scoped_option, parse_object_url, query_registry, register, register_with_options,
 };
 pub use json::JsonFormat;
 /// Refuses an `hf://` directory or glob (no listing), from `krishiv-store`.
 pub use krishiv_store::check_hf_file_path;
 /// The egress address rule (design P3-T067 §5.1), from `krishiv-store`.
 pub use krishiv_store::egress;
+/// Per-location credential sources (design P3-T067 §4.1), from `krishiv-store`.
+pub use krishiv_store::{CredentialScope, CredentialSource, ScopedCredential};
 /// The egress policy's HTTP clients (design P3-T067 §5.2), from `krishiv-store`.
 #[cfg(feature = "cloud")]
 pub use krishiv_store::{PolicyConnector, Redirects, SharedHttpClients};

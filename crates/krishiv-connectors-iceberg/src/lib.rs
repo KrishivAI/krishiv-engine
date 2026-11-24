@@ -13,6 +13,7 @@ mod iceberg_v0;
 pub mod plan;
 pub mod rest_commit;
 
+pub use iceberg_v0::maintenance::{ProcedureTables, procedure};
 pub use iceberg_v0::provider::IcebergTableProvider;
 pub use iceberg_v0::storage::StorageRegistration;
 pub use iceberg_v0::table::{IcebergMetadata, IcebergTable};
@@ -22,6 +23,6 @@ pub use rest_commit::{RestCommitTransport, TransportFailure, TransportReply};
 #[cfg(feature = "testing")]
 pub mod testing {
     pub use crate::iceberg_v0::testing::{
-        CommitRefusal, LocalIo, WrittenTable, append, apply_commit, write_table,
+        CommitRefusal, LocalIo, WrittenTable, append, apply_commit, write_table, write_table_with,
     };
 }

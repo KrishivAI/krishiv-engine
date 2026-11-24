@@ -12,9 +12,17 @@ use krishiv_common::error::ErrorClass;
 mod namespace_and_row_format;
 mod property_keys;
 
+/// The options of a Spark 4.3 session (the grammar of `UNNEST` in `FROM` and `REPLACE` column lists).
+fn v43() -> ParserOptions {
+    ParserOptions {
+        spark_4_3_grammar: true,
+        ..ParserOptions::default()
+    }
+}
+
 /// The tree of `sql`, without Spark's post-parse checks (tree shapes).
 fn tree(sql: &str) -> ast::Statement {
-    match crate::parser::parse_statement_unchecked(sql, ParserOptions::default()) {
+    match crate::parser::parse_statement_unchecked(sql, v43()) {
         Ok(s) => s,
         Err(e) => panic!("{sql}: {}", e.error),
     }
@@ -22,7 +30,7 @@ fn tree(sql: &str) -> ast::Statement {
 
 /// The tree of `sql`, with Spark's post-parse checks.
 fn checked(sql: &str) -> ast::Statement {
-    match parse_statement(sql, &ParserOptions::default()) {
+    match parse_statement(sql, &v43()) {
         Ok(s) => s,
         Err(e) => panic!("{sql}: {}", e.error),
     }
@@ -1085,6 +1093,38 @@ fn delete_update_merge_truncate_errors() {
     let e = err(sql);
     assert_eq!(e.error.error_class(), ErrorClass::MergeWithoutWhen);
     assert_eq!(e.span.range(), 0..sql.len());
+    // An `INSERT` whose value count differs from its column count (Spark 4.2.0 + delta-spark
+    // 4.4.1 run: `MERGE_INSERT_VALUE_COUNT_MISMATCH`, 21S01, over the statement).
+    for (sql, actual, expected) in [
+        (
+            "MERGE INTO t USING s ON t.id = s.id WHEN NOT MATCHED THEN INSERT (id, v) VALUES (s.id)",
+            "1",
+            "2",
+        ),
+        (
+            "MERGE INTO t USING s ON t.id = s.id WHEN NOT MATCHED THEN INSERT (id) VALUES (s.id, s.v)",
+            "2",
+            "1",
+        ),
+    ] {
+        let e = err(sql);
+        assert_eq!(
+            e.error.error_class(),
+            ErrorClass::MergeInsertValueCountMismatch,
+            "{sql}"
+        );
+        assert_eq!(e.error.sql_state(), Some("21S01"));
+        assert_eq!(
+            e.error.to_string(),
+            format!(
+                "[MERGE_INSERT_VALUE_COUNT_MISMATCH] The number of provided values ({actual}) must \
+                 match the number of expected columns ({expected}) in the INSERT clause of MERGE. \
+                 SQLSTATE: 21S01"
+            ),
+            "{sql}"
+        );
+        assert_eq!(e.span.range(), 0..sql.len(), "{sql}");
+    }
     // Syntax errors at Spark 4.2.0's positions, with its "missing" hints.
     for (sql, near, hint, at) in [
         (
@@ -1803,7 +1843,8 @@ fn insert_replace_takes_a_column_list() {
             &["a", "b"],
         ),
     ] {
-        let ast::Statement::Insert(insert) = checked(sql) else {
+        // The tree only: `REPLACE ON` with a column list is a post-parse error in Spark.
+        let ast::Statement::Insert(insert) = tree(sql) else {
             panic!("{sql}: not an insert");
         };
         assert_eq!(

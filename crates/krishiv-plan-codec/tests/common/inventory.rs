@@ -151,6 +151,7 @@ pub(crate) fn table_scan() -> ScanNode {
         ),
     ]);
     ScanNode {
+        decided: None,
         id: ScanId(7),
         scan: Scan {
             source: ReadSource::Table {
@@ -182,6 +183,7 @@ pub(crate) fn table_scan() -> ScanNode {
 /// A scan of files, without a version or a filter.
 pub(crate) fn file_scan() -> ScanNode {
     ScanNode {
+        decided: None,
         id: ScanId(8),
         scan: Scan {
             source: ReadSource::files(
@@ -285,6 +287,30 @@ pub(crate) fn hll_sketch_aggregate_exprs() -> Vec<AggregateExpr> {
             },
             ArrowType::Binary,
         ),
+    ]
+}
+
+/// One aggregate of each Theta sketch aggregate (values at lgNomEntries 14, sketches at 20, then an intersection).
+pub(crate) fn theta_sketch_aggregate_exprs() -> Vec<AggregateExpr> {
+    let a = |function, arg_type| AggregateExpr {
+        function,
+        args: vec![0],
+        input: AggInput::Raw,
+        arg_type,
+        name: "x".to_owned(),
+        mask: None,
+        element: None,
+    };
+    vec![
+        a(
+            AggregateFunction::ThetaSketchAgg { lg_nom: 14 },
+            ArrowType::Int64,
+        ),
+        a(
+            AggregateFunction::ThetaUnionAgg { lg_nom: 20 },
+            ArrowType::Binary,
+        ),
+        a(AggregateFunction::ThetaIntersectionAgg, ArrowType::Binary),
     ]
 }
 
@@ -1444,6 +1470,18 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
                 },
             },
         ),
+        (
+            "aggregate_theta_sketches",
+            PhysNode::Aggregate {
+                input: boxed(scan()),
+                aggregate: AggregatePlan {
+                    group_by: vec![0],
+                    aggregates: theta_sketch_aggregate_exprs(),
+                    distinct: vec![false; 3],
+                    output: AggregateOutput::Final,
+                },
+            },
+        ),
         ("hash_join", PhysNode::HashJoin(join_plan(JoinType::Inner))),
         (
             // A guessed build's fixed Bloom (field 10, ignorable).
@@ -1469,6 +1507,57 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
                     null_safe: j.null_safe,
                     residual: j.residual,
                     single_match: false,
+                    as_of: None,
+                }
+            }),
+        ),
+        (
+            "as_of_join",
+            PhysNode::SortMergeJoin({
+                let j = join_plan(JoinType::LeftOuter);
+                SortMergeJoinPlan {
+                    probe: j.probe,
+                    build: j.build,
+                    join_type: j.join_type,
+                    probe_keys: j.probe_keys,
+                    build_keys: j.build_keys,
+                    null_safe: j.null_safe,
+                    residual: j.residual,
+                    single_match: false,
+                    as_of: Some(krishiv_exec::AsOfMergeSpec {
+                        left_column: 0,
+                        right_column: 0,
+                        direction: krishiv_exec::AsOfMergeDirection::Forward,
+                        allow_exact: true,
+                        distance: Some(residual()),
+                        distance_on_every_pair: false,
+                    }),
+                }
+            }),
+        ),
+        (
+            // The Connect form: the distance is checked on every passing pair, so the flag must
+            // reach the wire (the proto default is `false`).
+            "as_of_join_every_pair",
+            PhysNode::SortMergeJoin({
+                let j = join_plan(JoinType::Inner);
+                SortMergeJoinPlan {
+                    probe: j.probe,
+                    build: j.build,
+                    join_type: j.join_type,
+                    probe_keys: j.probe_keys,
+                    build_keys: j.build_keys,
+                    null_safe: j.null_safe,
+                    residual: None,
+                    single_match: false,
+                    as_of: Some(krishiv_exec::AsOfMergeSpec {
+                        left_column: 0,
+                        right_column: 0,
+                        direction: krishiv_exec::AsOfMergeDirection::Backward,
+                        allow_exact: false,
+                        distance: Some(residual()),
+                        distance_on_every_pair: true,
+                    }),
                 }
             }),
         ),

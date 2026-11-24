@@ -1317,7 +1317,14 @@ impl SessionUdfRuntime for SpyRuntime {
 }
 
 impl UdfHost for ArtifactSpy {
-    fn session_runtime(&self, _: &str, session: &str, _: RunnerConf) -> Arc<dyn SessionUdfRuntime> {
+    fn session_runtime(
+        &self,
+        _: &str,
+        _: Option<&str>,
+        _: bool,
+        session: &str,
+        _: RunnerConf,
+    ) -> Arc<dyn SessionUdfRuntime> {
         Arc::new(SpyRuntime(session.to_owned(), Arc::clone(&self.0)))
     }
 }

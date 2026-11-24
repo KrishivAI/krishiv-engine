@@ -153,8 +153,9 @@ def test_static_refuses_missing_checkout(tmp_path: Path) -> None:
 
     from pyspark_suite.__main__ import cmd_static
 
-    with pytest.raises(SystemExit):
+    with pytest.raises(SystemExit) as failed:
         cmd_static(argparse.Namespace(version="9.9.9", checkout=tmp_path / "nope"))
+    assert failed.value.code not in (0, None)
 
 
 def test_collection_error_is_a_file_failure() -> None:
@@ -190,3 +191,108 @@ def test_conditional_skips_leave_the_denominator_outside_the_cap(tmp_path):
 def test_no_oracle_run_means_no_conditional_skips():
     den, _ = compute("4.3.0", {"a.py::T::t"}, set(), set(), [])
     assert den.conditional_skips == 0
+
+
+def test_ratchet_cli_fails_on_lost_pass_or_low_rate(tmp_path, monkeypatch):
+    import argparse
+    import json
+
+    from pyspark_suite import __main__ as cli
+
+    (tmp_path / "summary").mkdir()
+    base = {"version": "4.0.5", "source": "run", "passed": 2, "pass_rate": 80.0, "passed_ids": ["a", "b"]}
+    (tmp_path / "summary" / "4.0.5.json").write_text(json.dumps(base))
+    monkeypatch.setattr(cli, "DATA", tmp_path)
+
+    def run(cur, **kw):
+        f = tmp_path / "cur.json"
+        f.write_text(json.dumps(dict(base, **cur)))
+        a = argparse.Namespace(version="4.0.5", current=f, min_rate=kw.get("min_rate"), report_only=kw.get("ro", False))
+        cli.cmd_ratchet(a)
+
+    run({})  # same list: ok
+    run({"passed_ids": ["a", "b", "c"]})  # gained a pass: ok
+    with pytest.raises(SystemExit) as lost:
+        run({"passed_ids": ["a"]})  # lost b
+    assert lost.value.code == 1
+    run({"passed_ids": ["a"]}, ro=True)  # report-only never fails
+    with pytest.raises(SystemExit) as low:
+        run({}, min_rate=90.0)  # under the floor
+    assert low.value.code == 1
+    with pytest.raises(SystemExit) as failed:
+        run({"source": "static"})  # not a run
+    assert failed.value.code not in (0, None)
+
+
+def test_ratchet_with_no_committed_summary_and_report_only_with_min_rate(tmp_path, monkeypatch):
+    import argparse
+    import json
+
+    from pyspark_suite import __main__ as cli
+
+    monkeypatch.setattr(cli, "DATA", tmp_path)  # no summary/ dir: 3.5.7 before its first commit
+    cur = {"version": "3.5.7", "source": "run", "passed": 1, "pass_rate": 10.0, "passed_ids": ["a"]}
+    f = tmp_path / "cur.json"
+    f.write_text(json.dumps(cur))
+    ns = argparse.Namespace(version="3.5.7", current=f, min_rate=None, report_only=False)
+    cli.cmd_ratchet(ns)  # an empty baseline loses nothing
+    ns.min_rate = 50.0
+    with pytest.raises(SystemExit) as failed:
+        cli.cmd_ratchet(ns)
+    assert failed.value.code == 1
+    ns.report_only = True
+    cli.cmd_ratchet(ns)  # report-only silences the floor too
+    ns.version = "4.0.5"
+    with pytest.raises(SystemExit) as failed:
+        cli.cmd_ratchet(ns)  # the file is for another version
+    assert failed.value.code not in (0, None)
+
+
+def test_run_fails_when_every_file_fails_to_run(tmp_path, monkeypatch):
+    import argparse
+
+    from pyspark_suite import __main__ as cli
+    from pyspark_suite.junit import Record
+
+    conn = tmp_path / "co" / "python" / "pyspark" / "sql" / "tests" / "connect"
+    conn.mkdir(parents=True)
+    (conn / "test_a.py").write_text("import unittest\nclass FooTests(unittest.TestCase):\n    def test_x(self): pass\n")
+    monkeypatch.setattr(cli, "DATA", tmp_path / "data")
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data" / "manifest.toml").write_text("")
+    monkeypatch.setattr(cli, "check_pytest_timeout", lambda: None)
+    monkeypatch.setattr(cli, "stage_tests", lambda _c: conn)
+    monkeypatch.setattr(cli, "run_file", lambda v, _t, rel, *_a: [Record(v, rel, "<file>", "<file>", "error", 0)])
+    a = argparse.Namespace(
+        version="4.0.5",
+        checkout=tmp_path / "co",
+        port=1,
+        oracle_junit=None,
+        only=None,
+        out=tmp_path / "out",
+        server_cmd=["x"],
+    )
+    with pytest.raises(SystemExit, match="every selected file failed"):
+        cli.cmd_run(a)
+
+
+def test_ratchet_refuses_min_rate_while_any_skip_is_in_the_run(tmp_path, monkeypatch):
+    import argparse
+    import json
+
+    from pyspark_suite import __main__ as cli
+
+    monkeypatch.setattr(cli, "DATA", tmp_path)
+    cur = {"version": "4.0.5", "source": "run", "passed": 2, "pass_rate": 99.0, "passed_ids": [], "counts": {"skip": 3}}
+    f = tmp_path / "cur.json"
+    f.write_text(json.dumps(cur))
+    a = argparse.Namespace(version="4.0.5", current=f, min_rate=75.0, report_only=False)
+    with pytest.raises(SystemExit, match="skipped tests"):
+        cli.cmd_ratchet(a)
+    cur["denominator"] = {"conditional_skips": 3}  # an oracle exclusion elsewhere does not clear a skip left in the run
+    f.write_text(json.dumps(cur))
+    with pytest.raises(SystemExit, match="skipped tests"):
+        cli.cmd_ratchet(a)
+    cur["counts"] = {"skip": 0}
+    f.write_text(json.dumps(cur))
+    cli.cmd_ratchet(a)  # nothing skipped: the floor applies normally

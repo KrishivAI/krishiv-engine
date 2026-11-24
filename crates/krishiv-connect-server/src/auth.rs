@@ -51,7 +51,8 @@ use krishiv_session::auth::{
     Role, RolePolicy, ServerAuth, Surface, basic_header,
 };
 use krishiv_session::{
-    PathPrefixPolicy, PolicyVersion, Privilege, Securable, Session, StatementClass, Transport,
+    AccessPolicy, IntersectionPolicy, PathPrefixPolicy, PolicyVersion, Privilege, Securable,
+    Session, StatementClass, SystemOnlyPolicy, Transport,
 };
 use tonic::codegen::http::HeaderMap;
 use tonic::codegen::http::header::AUTHORIZATION;
@@ -323,10 +324,55 @@ pub fn role_sessions(
     config: &Config,
     denials: Arc<DeniedCounts>,
 ) -> Result<Box<SessionFactory>, KrishivError> {
+    provider_sessions(base, config, denials, None)
+}
+
+/// A provider that joins the role matrix in each caller's policy (ADR 0049 §1): `policy` builds
+/// one session's member, and `roles_decide_data` says whether the role matrix still decides data
+/// securables (`roles` is listed) or only the server's own objects ([`SystemOnlyPolicy`]).
+pub struct ExtraProvider {
+    /// One session's member.
+    pub policy: Arc<dyn Fn() -> Arc<dyn AccessPolicy> + Send + Sync>,
+    /// Whether the role matrix decides data securables too.
+    pub roles_decide_data: bool,
+}
+
+impl std::fmt::Debug for ExtraProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ExtraProvider")
+            .field("roles_decide_data", &self.roles_decide_data)
+            .finish_non_exhaustive()
+    }
+}
+
+/// [`role_sessions`] with another provider: each caller's policy is then
+/// `PathPrefixPolicy(IntersectionPolicy[role matrix, extra])`, so the caller needs both to allow
+/// (owner Q6), and the path confinement is still asked first.
+///
+/// # Errors
+/// As [`role_sessions`].
+pub fn provider_sessions(
+    base: Session,
+    config: &Config,
+    denials: Arc<DeniedCounts>,
+    extra: Option<ExtraProvider>,
+) -> Result<Box<SessionFactory>, KrishivError> {
     let config = config.clone();
     let policy = move |role: Option<Role>| {
-        let roles = RolePolicy::new(role, Role::Admin, PolicyVersion(0));
-        PathPrefixPolicy::from_config(&config, Arc::new(roles))
+        let roles: Arc<dyn AccessPolicy> =
+            Arc::new(RolePolicy::new(role, Role::Admin, PolicyVersion(0)));
+        let inner = match &extra {
+            None => roles,
+            Some(extra) => {
+                let roles: Arc<dyn AccessPolicy> = if extra.roles_decide_data {
+                    roles
+                } else {
+                    Arc::new(SystemOnlyPolicy::new(roles))
+                };
+                Arc::new(IntersectionPolicy::new(vec![roles, (extra.policy)()]))
+            }
+        };
+        PathPrefixPolicy::from_config(&config, inner)
     };
     policy(None)?;
     Ok(Box::new(
@@ -549,7 +595,17 @@ pub fn check_command(command: &pb::Command) -> Check {
         | CommandType::StreamingQueryListenerBusCommand(_) => {
             Check::Unsupported("streaming commands")
         }
-        // No command extension is registered (P3-T015 registers Echo for relations and expressions only); a command extension has no declared class and is refused.
+        // `PersistPythonFunction` keeps client code another session will run: the class of `register_function`.
+        // Any other command extension has no declared class and is refused.
+        CommandType::Extension(any)
+            if any.type_url
+                == format!(
+                    "{}PersistPythonFunction",
+                    krishiv_connect::extension::TYPE_URL_PREFIX
+                ) =>
+        {
+            client_code()
+        }
         CommandType::Extension(_) => Check::Unsupported("extension"),
     }
 }

@@ -446,7 +446,7 @@ impl Gen<'_> {
 
     fn plan(&mut self, depth: u8) -> LogicalPlan {
         let origin = self.origin();
-        let kinds = if depth == 0 { 4 } else { 36 };
+        let kinds = if depth == 0 { 4 } else { 39 };
         let d = depth.saturating_sub(1);
         let node = match self.pick(kinds) {
             0 => PlanNode::Read(self.source()),
@@ -539,6 +539,30 @@ impl Gen<'_> {
                     _ => JoinCondition::Using(self.many(1, 2, Gen::name)),
                 },
             },
+            36 => PlanNode::AsOfJoin {
+                left: self.input(d),
+                right: self.input(d),
+                kind: [JoinKind::Inner, JoinKind::LeftOuter][usize::from(self.pick(2))],
+                condition: match self.pick(3) {
+                    0 => JoinCondition::None,
+                    1 => JoinCondition::On(Arc::new(self.expr(2))),
+                    _ => JoinCondition::Using(self.many(1, 2, Gen::name)),
+                },
+                as_of: Arc::new(crate::AsOfMatch {
+                    left: Arc::new(self.expr(1)),
+                    right: Arc::new(self.expr(1)),
+                    direction: [
+                        crate::AsOfDirection::Backward,
+                        crate::AsOfDirection::Forward,
+                        crate::AsOfDirection::Nearest,
+                    ][usize::from(self.pick(3))],
+                    allow_exact: self.flag(),
+                    tolerance: self.flag().then(|| Arc::new(self.expr(1))),
+                    distance: self.flag().then(|| Arc::new(self.expr(1))),
+                    distance_on_every_pair: self.flag(),
+                    as_written: self.flag(),
+                }),
+            },
             8 => PlanNode::Sort {
                 input: self.input(d),
                 order: self.orders(2),
@@ -555,6 +579,10 @@ impl Gen<'_> {
             },
             29 => PlanNode::PipeOperator {
                 input: self.input(d),
+            },
+            38 => PlanNode::Zip {
+                left: self.input(d),
+                right: self.input(d),
             },
             34 => PlanNode::Tail {
                 input: self.input(d),
@@ -589,6 +617,17 @@ impl Gen<'_> {
                 input: self.input(d),
                 name: self.name(),
                 params: self.exprs(),
+            },
+            37 => PlanNode::SecurityBarrier {
+                input: self.input(d),
+                policy: crate::PolicyRef::new(
+                    crate::analyzer::Securable::System(self.name()),
+                    krishiv_common::PrincipalKey::of(&crate::analyzer::Principal::new(
+                        self.name(),
+                        crate::analyzer::PrincipalKind::User,
+                    )),
+                    u64::from(self.pick(9)),
+                ),
             },
             16 => PlanNode::JoinHint {
                 input: self.input(d),
@@ -1525,6 +1564,7 @@ fn m_plan(p: &mut Arc<LogicalPlan>, w: &mut Walk) -> bool {
             site!(w, columns.push("x".to_owned()));
             rows.iter_mut().any(|r| m_exprs(r, w)) || m_strings(columns, w)
         }
+        PlanNode::Zip { left, right } => m_plan(left, w) || m_plan(right, w),
         PlanNode::SetOp {
             left,
             right,
@@ -1561,6 +1601,48 @@ fn m_plan(p: &mut Arc<LogicalPlan>, w: &mut Walk) -> bool {
             };
             inside || m_plan(left, w) || m_plan(right, w)
         }
+        PlanNode::AsOfJoin {
+            left,
+            right,
+            kind,
+            condition,
+            as_of,
+        } => {
+            site!(w, flip(kind, JoinKind::Inner, JoinKind::LeftOuter));
+            let m = Arc::make_mut(as_of);
+            site!(w, m.allow_exact = !m.allow_exact);
+            site!(w, m.as_written = !m.as_written);
+            site!(
+                w,
+                flip(
+                    &mut m.direction,
+                    crate::AsOfDirection::Backward,
+                    crate::AsOfDirection::Forward
+                )
+            );
+            site!(w, m.distance_on_every_pair = !m.distance_on_every_pair);
+            let one = || Some(Arc::new(Expr::literal(crate::Literal::Integer(1))));
+            site!(
+                w,
+                m.tolerance = if m.tolerance.is_some() { None } else { one() }
+            );
+            site!(
+                w,
+                m.distance = if m.distance.is_some() { None } else { one() }
+            );
+            let inside = match condition {
+                JoinCondition::On(e) => m_expr(e, w),
+                JoinCondition::Using(cols) => m_strings(cols, w),
+                JoinCondition::None | JoinCondition::Natural => false,
+            };
+            inside
+                || m_expr(&mut m.left, w)
+                || m_expr(&mut m.right, w)
+                || m.tolerance.as_mut().is_some_and(|e| m_expr(e, w))
+                || m.distance.as_mut().is_some_and(|e| m_expr(e, w))
+                || m_plan(left, w)
+                || m_plan(right, w)
+        }
         PlanNode::Sort {
             input,
             order,
@@ -1590,6 +1672,11 @@ fn m_plan(p: &mut Arc<LogicalPlan>, w: &mut Walk) -> bool {
             name,
             params,
         } => m_string(name, w) || m_exprs(params, w) || m_plan(input, w),
+        PlanNode::SecurityBarrier { input, policy } => {
+            site!(w, policy.version += 1);
+            site!(w, policy.principal.name.push('x'));
+            m_plan(input, w)
+        }
         PlanNode::JoinHint { input, strategy } => {
             site!(
                 w,
