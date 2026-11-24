@@ -751,6 +751,10 @@ impl crate::Session {
 /// Where `CREATE FUNCTION ... AS 'python' USING PYTHON 'name'` and `DROP FUNCTION` keep and remove
 /// the persisted Python UDFs of a server (P3-T072d): the Connect server's per-tenant function
 /// catalog. A session built alone has none, and both statements are refused there.
+#[cfg_attr(
+    not(feature = "unstable-ir"),
+    expect(unreachable_pub, reason = "re-exported only under unstable-ir")
+)]
 pub trait PersistedFunctions: Send + Sync {
     /// Keeps the session's registered Python UDF `registered` as the stored function `name`
     /// (stored under the registered name: the catalog keys a function by it).
