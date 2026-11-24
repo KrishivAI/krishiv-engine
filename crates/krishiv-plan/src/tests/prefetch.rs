@@ -27,6 +27,7 @@ struct Recording {
 
 impl AccessPolicy for Recording {
     fn version(&self) -> PolicyVersion {
+        self.log.lock().unwrap().push("version".to_owned());
         PolicyVersion(1)
     }
 
@@ -150,6 +151,40 @@ fn the_column_pass_prefetches_its_columns_in_one_hint() {
     let hint = log.iter().position(|l| l == "prefetch 2").unwrap();
     let first_column = log.iter().position(|l| l.contains("column `a`")).unwrap();
     assert!(hint < first_column, "{log:?}");
+}
+
+/// The external provider guards one stage's answers against a policy version change (its
+/// module docs, review 8976a61d1 (b)): that covers an analysis's fingerprint only because the
+/// fingerprint reads `version()` once, after Bind's stage and before the column stage's prefetch.
+#[test]
+fn the_policy_version_is_read_between_the_bind_and_column_stages() {
+    let policy = Arc::new(Recording {
+        column_level: true,
+        ..Recording::default()
+    });
+    analyze(
+        &policy,
+        LogicalPlan::table(["default", "t"]).project(vec![c("a")]),
+    );
+    let log = policy.log.lock().unwrap().clone();
+    let stages: Vec<usize> = log
+        .iter()
+        .enumerate()
+        .filter(|(_, l)| l.starts_with("prefetch"))
+        .map(|(i, _)| i)
+        .collect();
+    assert_eq!(stages.len(), 2, "{log:?}");
+    let versions: Vec<usize> = log
+        .iter()
+        .enumerate()
+        .filter(|(_, l)| *l == "version")
+        .map(|(i, _)| i)
+        .collect();
+    assert_eq!(versions.len(), 1, "one read, for the fingerprint: {log:?}");
+    assert!(
+        stages[0] < versions[0] && versions[0] < stages[1],
+        "read after Bind's stage, before the column stage: {log:?}"
+    );
 }
 
 #[test]

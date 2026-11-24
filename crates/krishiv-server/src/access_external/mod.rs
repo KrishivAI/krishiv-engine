@@ -13,9 +13,13 @@
 //!   [`PREFETCH_LIFETIME`] and until the next prefetch, and asks the service on its own
 //!   otherwise. Nothing else is cached, so a change in the service applies from the next stage
 //!   of analysis. A `check` whose answer reports another policy version than the stage's earlier
-//!   answers drops the stage's prefetched answers, and until the next prefetch the session's
-//!   `version()` is untrusted: no analysis that took allows from two versions is fingerprinted
-//!   with either.
+//!   answers (the prefetch's, or a `check` that finished while the prefetch waited) drops the
+//!   stage's prefetched answers, and until the next prefetch the session's `version()` is
+//!   untrusted. The guard is per stage, not per analysis: the analyzer reads `version()` for its
+//!   context fingerprint right after Bind, the first stage, so the fingerprint covers exactly the
+//!   answers of that stage; the column stage that follows runs its checks in every analysis,
+//!   warm or not, and no fingerprint is taken after it. So no analysis whose Bind took allows
+//!   from two versions is fingerprinted with either.
 //! - The policy version is the service's (highest seen); while there is no trusted one (none
 //!   reported, a 0, or the last call failed) each `version()` is a fresh value, so no analysis or
 //!   cached relation keyed by it is reused.
@@ -599,7 +603,27 @@ impl AccessPolicy for ExternalPolicy {
                 );
                 return;
             }
-            self.answered().version = version;
+            // A `check` that finished while this prefetch waited for the service has already
+            // recorded the version it saw (review 8976a61d1): merge with it, never overwrite. If
+            // they differ, the stage took answers from two versions: it is mixed and the
+            // prefetched answers are not kept, as when a later `check` sees another version.
+            {
+                let mut answered = self.answered();
+                match (answered.version, version) {
+                    (Some(seen), Some(v)) if seen != v => {
+                        answered.mixed = true;
+                        drop(answered);
+                        tracing::warn!(
+                            target: "krishiv::access",
+                            provider = "external",
+                            "the policy version changed during a prefetch; its answers are not kept"
+                        );
+                        return;
+                    }
+                    (None, Some(v)) => answered.version = Some(v),
+                    _ => {}
+                }
+            }
             for ((securable, privilege), allow) in asked.into_iter().zip(answers).take(MEMO_LIMIT) {
                 memo.insert(memo_key(&id, &securable, privilege), (allow, now));
             }

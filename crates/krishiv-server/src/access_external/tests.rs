@@ -418,6 +418,44 @@ async fn a_version_change_after_the_prefetch_drops_its_answers() {
     assert_eq!(policy.version().0, 42);
 }
 
+/// Review 8976a61d1 (a): a `check` that finishes while a prefetch waits for the service records
+/// its version first; the prefetch's answer, under another version, then merges with it: the
+/// stage is mixed and the prefetched answers are not kept (they are never overwritten as one
+/// version).
+#[tokio::test]
+async fn a_check_during_a_prefetch_under_another_version_mixes_the_stage() {
+    use futures::FutureExt as _;
+    let s = serve(Mode::Moving, None).await;
+    let policy = s.access.policy();
+    let p = ana();
+    let items = [(table("a"), Privilege::Select)];
+    let mut prefetch = policy.prefetch(&p, &items);
+    assert!(
+        (&mut prefetch).now_or_never().is_none(),
+        "the call is in flight"
+    );
+    // Each call answers under the next version, so the check's and the prefetch's differ.
+    let b = policy
+        .check(&p, &table("b"), Privilege::Select)
+        .await
+        .unwrap();
+    assert!(allowed(&b), "{b:?}");
+    prefetch.await;
+    assert_eq!(s.access.calls(), 2);
+    let v = policy.version();
+    assert_ne!(
+        v.0 & (1 << 63),
+        0,
+        "a stage with two versions is untrusted: {v:?}"
+    );
+    // The prefetched answer was not kept: the check asks the service.
+    policy
+        .check(&p, &table("a"), Privilege::Select)
+        .await
+        .unwrap();
+    assert_eq!(s.access.calls(), 3, "the prefetch's answers were dropped");
+}
+
 /// Checks that all report one version keep the version trusted.
 #[tokio::test]
 async fn checks_under_one_version_keep_it_trusted() {

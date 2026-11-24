@@ -424,7 +424,8 @@ impl Session {
     /// Ends whatever prefetch stage an earlier statement left (one cancelled before its checks
     /// consumed the answers it prefetched): an empty [`AccessPolicy::prefetch`] clears a
     /// provider's stage state without asking anything, so the checks that follow, made outside
-    /// any analysis stage, ask the provider rather than reuse an earlier answer.
+    /// any analysis stage, ask the provider rather than reuse an earlier answer. The quiet
+    /// trials (`targets_allowed_quietly`, `allowed_quietly`) start one too.
     async fn fresh_access_stage(&self) {
         self.state.policy.prefetch(&self.state.principal, &[]).await;
     }
@@ -440,6 +441,7 @@ impl Session {
         statement: &Statement,
         env: &QueryEnv,
     ) -> bool {
+        self.fresh_access_stage().await;
         self.check_targets(statement, env, None).await.is_ok()
     }
 
@@ -456,6 +458,7 @@ impl Session {
         let Ok(securables) = self.securables_of(object, env) else {
             return false;
         };
+        self.fresh_access_stage().await;
         for securable in &securables {
             let r = authorize_quietly(
                 &*self.state.policy,

@@ -505,3 +505,85 @@ impl krishiv_exec::python_eval::UdfRuntime for Analyzing {
         )))
     }
 }
+
+/// Allows everything and logs each prefetch (by its item count) and each check, in order.
+#[derive(Default)]
+struct StageLog(Mutex<Vec<String>>);
+
+impl AccessPolicy for StageLog {
+    fn version(&self) -> PolicyVersion {
+        PolicyVersion(1)
+    }
+
+    fn check<'a>(
+        &'a self,
+        _: &'a Principal,
+        securable: &'a Securable,
+        privilege: Privilege,
+    ) -> BoxFuture<'a, Result<AccessDecision, KrishivError>> {
+        self.0
+            .lock()
+            .unwrap()
+            .push(format!("check {privilege} {securable}"));
+        Box::pin(std::future::ready(Ok(AccessDecision::Allow)))
+    }
+
+    fn prefetch<'a>(
+        &'a self,
+        _: &'a Principal,
+        items: &'a [(Securable, Privilege)],
+    ) -> BoxFuture<'a, ()> {
+        self.0
+            .lock()
+            .unwrap()
+            .push(format!("prefetch {}", items.len()));
+        Box::pin(std::future::ready(()))
+    }
+}
+
+/// E14 review b659a1482 nit 1: a quiet trial of a statement's target checks starts a fresh access
+/// stage (an empty prefetch) as the run's checks do, so it never takes an answer an earlier
+/// stage prefetched (one a cancelled statement of the session left, within its lifetime).
+#[test]
+fn a_quiet_trial_starts_a_fresh_access_stage() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = Arc::new(StageLog::default());
+    let s = Session::builder()
+        .config(
+            "spark.sql.warehouse.dir",
+            dir.path().join("wh").to_str().unwrap(),
+        )
+        .access_policy(Arc::clone(&log) as Arc<dyn AccessPolicy>)
+        .build()
+        .unwrap();
+    for sql in [
+        "CREATE NAMESPACE d",
+        "CREATE TABLE d.src (a INT) USING parquet",
+        "CREATE TABLE d.t (a INT) USING parquet",
+    ] {
+        run(&s, sql).unwrap_or_else(|e| panic!("{sql}: {e}"));
+    }
+    let sql = "INSERT INTO d.t SELECT a FROM d.src";
+    log.0.lock().unwrap().clear();
+    block_on(s.analyze(sql)).unwrap_or_else(|e| panic!("analyze {sql}: {e}"));
+    let events = std::mem::take(&mut *log.0.lock().unwrap());
+    // The trial asks `MODIFY` on the target; the analysis of the query before it prefetched a stage.
+    let trial = events
+        .iter()
+        .rposition(|e| e == "check MODIFY table `spark_catalog`.`d`.`t`")
+        .unwrap_or_else(|| panic!("no MODIFY check of the target: {events:?}"));
+    let stage = events[..trial]
+        .iter()
+        .rposition(|e| e.starts_with("prefetch"))
+        .unwrap_or_else(|| panic!("no prefetch before the trial: {events:?}"));
+    assert_eq!(
+        events[stage], "prefetch 0",
+        "the trial's checks follow a stage of the analysis, not a fresh one: {events:?}"
+    );
+    assert!(
+        events[..stage]
+            .iter()
+            .any(|e| e.starts_with("prefetch") && e != "prefetch 0"),
+        "the analysis prefetched no stage, so the test proves nothing: {events:?}"
+    );
+}
