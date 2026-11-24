@@ -34,13 +34,7 @@ pub(super) fn assign(
 ) -> Result<Vec<Source>, KrishivError> {
     // `INSERT .. BY NAME` also matches the fields of a nested struct by name (Spark's `reorderColumnsByName`).
     let names = by_name.then_some(case_sensitive);
-    let eq = |a: &str, b: &str| {
-        if case_sensitive {
-            a == b
-        } else {
-            a.eq_ignore_ascii_case(b)
-        }
-    };
+    let eq = |a: &str, b: &str| names_match(a, b, case_sensitive);
     let quoted_names = |names: Vec<&str>| {
         names
             .iter()
@@ -205,12 +199,51 @@ impl StructProblem {
     }
 }
 
+/// A name in backquotes, an embedded backquote doubled (Spark's `quoteIfNeeded` form).
+fn quote_ident(name: &str) -> String {
+    format!("`{}`", name.replace('`', "``"))
+}
+
 /// The backquoted dotted path of a nested column (Spark's `UnresolvedAttribute.quoted`).
 fn quoted_path(path: &[&str]) -> String {
     path.iter()
-        .map(|p| format!("`{p}`"))
+        .map(|p| quote_ident(p))
         .collect::<Vec<_>>()
         .join(".")
+}
+
+/// Whether two field names are the same under the session's case rule: Spark's `equalsIgnoreCase` when it is
+/// off, which compares code point by code point after `toUpperCase` and then `toLowerCase` (so `é` matches `É`
+/// and `İ` matches `i`), the one rule for matching, uniqueness and reorder detection.
+fn names_match(a: &str, b: &str, case_sensitive: bool) -> bool {
+    if case_sensitive {
+        return a == b;
+    }
+    let single = |mut it: Box<dyn Iterator<Item = char>>, c: char| match (it.next(), it.next()) {
+        (Some(one), None) => one,
+        _ => c,
+    };
+    let upper = |c: char| single(Box::new(c.to_uppercase()), c);
+    let lower = |c: char| {
+        // `Character.toLowerCase(U+0130)` is `i`, where Unicode's full mapping is two code points.
+        if c == '\u{130}' {
+            'i'
+        } else {
+            single(Box::new(c.to_lowercase()), c)
+        }
+    };
+    let (mut x, mut y) = (a.chars(), b.chars());
+    loop {
+        match (x.next(), y.next()) {
+            (None, None) => return true,
+            (Some(p), Some(q)) => {
+                if p != q && upper(p) != upper(q) && lower(upper(p)) != lower(upper(q)) {
+                    return false;
+                }
+            }
+            _ => return false,
+        }
+    }
 }
 
 /// The first struct, at any depth of `from` and `to` (through arrays and maps), whose fields do not pair by
@@ -249,13 +282,7 @@ fn struct_problem(
             })
         }
         (DataType::Struct(f), DataType::Struct(t)) => {
-            let same = |a: &str, b: &str| {
-                if case_sensitive {
-                    a == b
-                } else {
-                    a.eq_ignore_ascii_case(b)
-                }
-            };
+            let same = |a: &str, b: &str| names_match(a, b, case_sensitive);
             let mut used = vec![false; f.fields().len()];
             for target in t.fields() {
                 let at = [path, &[target.name()]].concat();
@@ -284,7 +311,7 @@ fn struct_problem(
                 .iter()
                 .zip(&used)
                 .filter(|(_, used)| !**used)
-                .map(|(f, _)| format!("`{}`", f.name()))
+                .map(|(f, _)| quote_ident(f.name()))
                 .collect();
             (!extra.is_empty()).then(|| StructProblem::Extra(quoted_path(path), extra.join(", ")))
         }
@@ -342,24 +369,18 @@ fn field_named<'a>(
     name: &str,
     case_sensitive: bool,
 ) -> Option<&'a krishiv_types::StructField> {
-    st.fields().iter().find(|f| {
-        if case_sensitive {
-            f.name() == name
-        } else {
-            f.name().eq_ignore_ascii_case(name)
-        }
-    })
+    st.fields()
+        .iter()
+        .find(|f| names_match(f.name(), name, case_sensitive))
 }
 
 /// Whether a struct's field names are all different, ignoring case unless `case_sensitive`.
 fn unique_names(st: &krishiv_types::StructType, case_sensitive: bool) -> bool {
-    let mut seen = std::collections::HashSet::new();
-    st.fields().iter().all(|f| {
-        seen.insert(if case_sensitive {
-            f.name().to_owned()
-        } else {
-            f.name().to_lowercase()
-        })
+    let fields = st.fields();
+    fields.iter().enumerate().all(|(i, a)| {
+        fields[..i]
+            .iter()
+            .all(|b| !names_match(a.name(), b.name(), case_sensitive))
     })
 }
 
@@ -385,10 +406,32 @@ pub(super) fn ansi_store_cast_by_name(
     to: &DataType,
     case_sensitive: bool,
 ) -> crate::Column {
-    if needs_reorder(from, to, case_sensitive) {
+    // A map whose keys change type is rebuilt (`map_from_arrays`) in either field order, so the
+    // `spark.sql.mapKeyDedupPolicy` applies to colliding cast keys whatever the order of the struct's fields.
+    if needs_reorder(from, to, case_sensitive) || map_keys_change(from, to) {
         store_cast(value, from, to, 0, Some(case_sensitive), true)
     } else {
         value.cast_ansi(to.clone())
+    }
+}
+
+/// Whether a map inside `from`/`to` has keys of another type: the cast can make two keys collide.
+fn map_keys_change(from: &DataType, to: &DataType) -> bool {
+    match (from, to) {
+        (DataType::Map(f), DataType::Map(t)) => {
+            f.key_type() != t.key_type()
+                || map_keys_change(f.key_type(), t.key_type())
+                || map_keys_change(f.value_type(), t.value_type())
+        }
+        (DataType::Array(f), DataType::Array(t)) => {
+            map_keys_change(f.element_type(), t.element_type())
+        }
+        (DataType::Struct(f), DataType::Struct(t)) if f.fields().len() == t.fields().len() => f
+            .fields()
+            .iter()
+            .zip(t.fields())
+            .any(|(f, t)| map_keys_change(f.data_type(), t.data_type())),
+        _ => false,
     }
 }
 
@@ -404,11 +447,7 @@ fn needs_reorder(from: &DataType, to: &DataType, case_sensitive: bool) -> bool {
         }
         (DataType::Struct(f), DataType::Struct(t)) if f.fields().len() == t.fields().len() => {
             f.fields().iter().zip(t.fields().iter()).any(|(f, t)| {
-                let same_place = if case_sensitive {
-                    f.name() == t.name()
-                } else {
-                    f.name().eq_ignore_ascii_case(t.name())
-                };
+                let same_place = names_match(f.name(), t.name(), case_sensitive);
                 !same_place || needs_reorder(f.data_type(), t.data_type(), case_sensitive)
             })
         }

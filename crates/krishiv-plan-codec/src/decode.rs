@@ -205,7 +205,7 @@ pub fn from_message(
         }
     }
     let plan = plan(m, limits)?;
-    let used = plan_features(&plan);
+    let mut used = plan_features(&plan);
     match kind {
         Header::Current => {
             let declared: BTreeSet<Feature> = m
@@ -213,6 +213,13 @@ pub fn from_message(
                 .iter()
                 .filter_map(|id| Feature::from_id(id))
                 .collect();
+            // A message that names the default line and declares the feature for it is accepted: the plan reads
+            // as no version, which lists no feature, but the header it carries is the one it declares.
+            let names_default = m.env.as_ref().and_then(|e| e.spark_version.as_deref())
+                == Some(krishiv_kernels::SparkVersion::default().name());
+            if names_default && declared.contains(&Feature::SparkVersion) {
+                used.insert(Feature::SparkVersion);
+            }
             if declared != used {
                 return Err(corrupt(
                     "the feature header does not match the plan's constructs",

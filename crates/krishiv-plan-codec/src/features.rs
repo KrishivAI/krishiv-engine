@@ -1099,7 +1099,11 @@ fn functions_in<'a>(e: &'a Arc<Expr>, f: &mut impl FnMut(Construct<'a>)) {
 /// `spark.sql.legacy.statisticalAggregate` needs a reader that carries the
 /// flag, or it would compute NULL where Spark gives NaN. A plan without one
 /// runs the same everywhere, so the flag alone lists no feature and readers
-/// without it keep reading the plan.
+/// without it keep reading the plan. The Spark line is the one exception to
+/// "absent means the same everywhere": a plan that sets none runs on the
+/// default line (4.3), which a reader from before that default applies as 4.2,
+/// so the two can differ (a NaN in `vector_norm(.., inf)`); only another line
+/// than the default is a feature.
 #[must_use]
 pub fn plan_features(plan: &PhysicalPlan) -> BTreeSet<Feature> {
     let mut out = BTreeSet::new();
@@ -1115,7 +1119,12 @@ pub fn plan_features(plan: &PhysicalPlan) -> BTreeSet<Feature> {
     if plan.env().binary_output_style.is_some() {
         out.insert(Feature::BinaryOutputStyle);
     }
-    if plan.env().spark_version.is_some() {
+    // The default line is written as no field at all, so only another line is a feature.
+    if plan
+        .env()
+        .spark_version
+        .is_some_and(|v| v != krishiv_kernels::SparkVersion::default())
+    {
         out.insert(Feature::SparkVersion);
     }
     if plan.env().zone_name.is_some() {

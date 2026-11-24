@@ -715,8 +715,8 @@ fn is_window_column(p: &Arc<LogicalPlan>, name: &str) -> bool {
                     if names.as_slice() == [WINDOW.to_owned()]
                         && call_of(arg, "__time_windows").is_some()
             );
-            over_generator
-                && exprs.iter().any(|e| match &e.node {
+            if over_generator {
+                return exprs.iter().any(|e| match &e.node {
                     ExprNode::Alias { expr, name: n } => {
                         n.eq_ignore_ascii_case(name)
                             && matches!(&expr.node, ExprNode::Column(c) if c.name == [WINDOW])
@@ -727,7 +727,25 @@ fn is_window_column(p: &Arc<LogicalPlan>, name: &str) -> bool {
                             && name.eq_ignore_ascii_case(WINDOW)
                     }
                     _ => false,
-                })
+                });
+            }
+            // A projection that forwards a column (`SELECT a.iw AS w FROM (..) a`): the output `name` is the
+            // window column when the input column it reads is.
+            exprs.iter().any(|e| {
+                let (out, read) = match &e.node {
+                    ExprNode::Alias { expr, name: n } => match &expr.node {
+                        ExprNode::Column(c) => (n.as_str(), c),
+                        _ => return false,
+                    },
+                    ExprNode::Column(c) => (c.name.last().map_or("", String::as_str), c),
+                    _ => return false,
+                };
+                out.eq_ignore_ascii_case(name)
+                    && read
+                        .name
+                        .last()
+                        .is_some_and(|inner| is_window_column(input, inner))
+            })
         }
         _ => false,
     }

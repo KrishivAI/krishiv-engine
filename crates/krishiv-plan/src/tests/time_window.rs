@@ -499,6 +499,37 @@ fn a_window_column_is_found_through_a_limit_and_in_any_case() {
 }
 
 /// A derived table that renames its columns (`AS q(w, n)`) keeps the window identity of the renamed column.
+/// A projection that forwards the inner window column (`SELECT a.iw AS w FROM (SELECT window(..) AS iw ..) a`)
+/// keeps it a window column for an outer `window(w, ..)`.
+#[test]
+fn a_forwarded_window_column_of_a_derived_table_is_still_a_window_column() {
+    let inner = LogicalPlan::table(["t"]).aggregate(
+        vec![window("ts", &["1 minute"])],
+        vec![
+            window("ts", &["1 minute"]).alias("iw"),
+            count_star().alias("cnt"),
+        ],
+    );
+    let a = LogicalPlan::new(PlanNode::SubqueryAlias {
+        input: std::sync::Arc::new(inner),
+        alias: "a".to_owned(),
+        columns: vec![],
+    });
+    let middle = a.project(vec![c("a.iw").alias("w"), c("a.cnt").alias("n")]);
+    let outer = LogicalPlan::new(PlanNode::SubqueryAlias {
+        input: std::sync::Arc::new(middle),
+        alias: "q".to_owned(),
+        columns: vec![],
+    })
+    .aggregate(
+        vec![f("window", vec![c("q.w"), s("5 minutes")])],
+        vec![c("window.start"), f("sum", vec![c("n")])],
+    );
+    let r = run(outer);
+    assert_eq!(class(&r), "OK", "{:?}", r.as_ref().err().map(|e| &e.error));
+    assert_eq!(types(&r), vec![DataType::Timestamp, DataType::Long]);
+}
+
 #[test]
 fn a_renamed_window_column_of_a_derived_table_is_still_a_window_column() {
     let inner = LogicalPlan::table(["t"]).aggregate(

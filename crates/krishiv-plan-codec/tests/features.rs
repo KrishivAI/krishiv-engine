@@ -10,8 +10,8 @@ use krishiv_exec::physical::PhysNode;
 use krishiv_plan_codec::features::{Construct, feature_of};
 use krishiv_plan_codec::proto as pb;
 use krishiv_plan_codec::{
-    CodecError, EPOCH, Feature, FeatureKind, Limits, PlanFeatures, ReaderFeatures, decode,
-    decode_with, encode, features_of, plan_features, to_message,
+    CodecError, EPOCH, Feature, FeatureKind, Limits, POST_MIGRATION_READER_VERSION, PlanFeatures,
+    ReaderFeatures, decode, decode_with, encode, features_of, plan_features, to_message,
 };
 use prost::Message as _;
 
@@ -53,6 +53,29 @@ fn a_plan_naming_the_default_spark_version_reads_as_none() {
     let plan = decode(&m.encode_to_vec()).unwrap();
     assert_eq!(plan.env().spark_version, None);
     assert!(!plan_features(&plan).contains(&Feature::SparkVersion));
+}
+
+/// A header that declares the feature for a message naming the default line is accepted, and an explicit default
+/// on a plan encodes to the bytes of a plan with none.
+#[test]
+fn a_header_declaring_the_feature_for_the_default_line_is_accepted() {
+    let mut m = to_message(&plan_of(PhysNode::OneRow)).unwrap();
+    m.env.get_or_insert_with(Default::default).spark_version = Some("4.3".to_owned());
+    m.features.push("spark_version".to_owned());
+    m.min_reader_version = POST_MIGRATION_READER_VERSION;
+    let plan = decode(&m.encode_to_vec()).unwrap();
+    assert_eq!(plan.env().spark_version, None);
+}
+
+#[test]
+fn an_explicit_default_spark_version_encodes_as_none() {
+    let plain = to_message(&plan_of(PhysNode::OneRow)).unwrap();
+    let mut env = plan_of(PhysNode::OneRow).env().clone();
+    env.spark_version = Some(krishiv_kernels::SparkVersion::default());
+    let explicit = plan_of_env(PhysNode::OneRow, env);
+    let m = to_message(&explicit).unwrap();
+    assert_eq!(m.encode_to_vec(), plain.encode_to_vec());
+    assert!(m.features.is_empty());
 }
 
 #[test]

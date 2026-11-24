@@ -1825,9 +1825,14 @@ fn legacy_store_casts_map_values_one_by_one() {
         .set("spark.sql.storeAssignmentPolicy", "LEGACY")
         .unwrap();
     run(&s, "insert into mv select map(1, 'x')");
+    // One entry, key 1, value NULL (the cast of `'x'`): not a dropped key and not a NULL map.
     assert_eq!(
-        rows(&s, "select cast(m[1] is null as string) from mv"),
-        ["true"]
+        rows(
+            &s,
+            "select concat(cast(size(m) as string), '|', cast(map_keys(m)[0] as string), '|', \
+             cast(map_values(m)[0] is null as string)) from mv"
+        ),
+        ["1|1|true"]
     );
     run(&s, "create table mv2(m map<int,int>) using parquet");
     run(&s, "insert into mv2 select map(1, 1e20d)");
@@ -1950,7 +1955,9 @@ fn by_name_struct_mismatches_report_spark_classes_and_paths() {
             let (class, params) = class_and_params(&s, sql);
             assert_eq!(class, want, "{policy}: {sql}");
             assert!(
-                params.iter().any(|p| p.contains(path)),
+                params
+                    .iter()
+                    .any(|p| p.split_once('=').is_some_and(|(_, v)| v == path)),
                 "{policy}: {sql}: {params:?} lacks {path}"
             );
         }
@@ -2015,6 +2022,38 @@ fn legacy_store_applies_the_map_key_dedup_policy_to_keys_that_collide_after_the_
     run(&s, insert);
     assert_eq!(rows(&s, "select cast(size(m) as string) from dd"), ["1"]);
     assert_eq!(rows(&s, "select cast(m[1] as string) from dd"), ["8"]);
+}
+
+/// Under ANSI, `INSERT .. BY NAME` into a struct holding a map applies the key dedup policy to keys that collide
+/// after the cast the same way whatever the order of the struct's fields (`1.25` and `1.75` both cast to 1).
+#[test]
+fn ansi_by_name_applies_the_map_key_dedup_policy_in_either_field_order() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(
+        &s,
+        "create table dn(s struct<m:map<int,int>,x:int>) using parquet",
+    );
+    let in_order =
+        "insert into dn by name select named_struct('m', map(1.25D, 1, 1.75D, 2), 'x', 1) as s";
+    let reordered =
+        "insert into dn by name select named_struct('x', 1, 'm', map(1.25D, 1, 1.75D, 2)) as s";
+    for sql in [in_order, reordered] {
+        assert_eq!(class(&s, sql), "DUPLICATED_MAP_KEY", "{sql}");
+    }
+    s.conf()
+        .set("spark.sql.mapKeyDedupPolicy", "LAST_WIN")
+        .unwrap();
+    for sql in [in_order, reordered] {
+        run(&s, sql);
+    }
+    assert_eq!(
+        rows(
+            &s,
+            "select concat(cast(s.x as string), '|', cast(size(s.m) as string), '|', cast(s.m[1] as string)) from dn"
+        ),
+        ["1|1|2", "1|1|2"]
+    );
 }
 
 /// The LEGACY store cast recurses through array elements and struct fields into a nested map.
