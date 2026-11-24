@@ -59,9 +59,21 @@ pub(super) fn is_dead(record: &[u8]) -> bool {
     if pid == std::process::id() {
         return false;
     }
-    match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
-        Err(e) => e.kind() == std::io::ErrorKind::NotFound,
-        Ok(stat) => start_of(&stat).is_some_and(|s| s != started),
+    let exists = rustix::process::Pid::from_raw(i32::try_from(pid).unwrap_or(0))
+        .map(rustix::process::test_kill_process);
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok();
+    judged_dead(exists, stat.as_deref(), started)
+}
+
+/// The decision of [`is_dead`]. Liveness comes from the `kill(pid, 0)` result, never from what
+/// `/proc` shows (`hidepid=2` hides another user's live process): `ESRCH` is death, any other
+/// answer (`EPERM` included) is a live process. Only a live process whose start time can be read
+/// and differs from the record's is a recycled PID. An unreadable stat counts as alive.
+fn judged_dead(exists: Option<rustix::io::Result<()>>, stat: Option<&str>, started: &str) -> bool {
+    match exists {
+        None => false,
+        Some(Err(e)) if e == rustix::io::Errno::SRCH => true,
+        Some(_) => stat.and_then(start_of).is_some_and(|s| s != started),
     }
 }
 
@@ -72,7 +84,7 @@ fn machine() -> Option<String> {
     Some(format!("{}:{}", boot.trim(), ns.display()))
 }
 
-fn start_time(pid: u32) -> Option<String> {
+pub(super) fn start_time(pid: u32) -> Option<String> {
     start_of(&std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?).map(str::to_owned)
 }
 
@@ -110,7 +122,20 @@ mod tests {
         assert!(is_dead(record.as_bytes()));
         // The PID of a live process with another start time: a recycled PID.
         let parent = std::os::unix::process::parent_id();
-        let recycled = format!("{machine_id}\n{parent}\n1");
+        let recycled = format!("{machine_id}\n{parent}\n0");
         assert!(is_dead(recycled.as_bytes()));
+    }
+
+    #[test]
+    fn a_process_that_cannot_be_signalled_or_read_is_alive() {
+        let eperm = Some(Err(rustix::io::Errno::PERM));
+        // `hidepid=2`: kill says the process exists, /proc shows nothing.
+        assert!(!judged_dead(eperm, None, "5"));
+        assert!(!judged_dead(Some(Ok(())), None, "5"));
+        assert!(judged_dead(Some(Err(rustix::io::Errno::SRCH)), None, "5"));
+        assert!(!judged_dead(None, None, "5"));
+        let stat = "1 (a) S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 99 23";
+        assert!(judged_dead(Some(Ok(())), Some(stat), "5"));
+        assert!(!judged_dead(Some(Ok(())), Some(stat), "99"));
     }
 }

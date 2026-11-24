@@ -762,7 +762,6 @@ fn shown_path(store: &StoreId, dir: &Path) -> String {
     }
 }
 
-/// Spark's hidden-name rule for one path component.
 /// A storage failure while a write starts (`HEAD` or listing of its path) is a failed write, not
 /// "Reading the file" (PY-075): `TASK_WRITE_FAILED` carrying the store's reason (the OS error) as its
 /// cause. Any other error is returned as it is.
@@ -781,6 +780,7 @@ fn as_write_failure(
     reason.map_or(e, |r| crate::error::write_failed(shown, &r))
 }
 
+/// Spark's hidden-name rule for one path component.
 fn is_hidden(name: &str) -> bool {
     // The same rule as the reads' (`krishiv-exec` `hidden`), or adopted files would vanish from them.
     let exclude = name.starts_with('.')

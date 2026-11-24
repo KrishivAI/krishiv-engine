@@ -1755,36 +1755,68 @@ fn a_write_that_cannot_start_names_the_os_error_not_a_read() {
     assert!(cause.contains("os error"), "{cause}");
 }
 
-/// PY-054: a write whose process died leaves a record; the next write deletes that job's unlogged
-/// files at once (inside the grace), keeps a live write's, and removes the dead record.
-#[test]
-fn a_write_sweeps_the_unlogged_files_of_a_dead_writer_inside_the_grace() {
-    let Some(me) = super::writers::current() else {
-        return;
-    };
+/// Two uncommitted jobs under `t` (after one committed append): job-2's record names a vanished
+/// process, job-3's names this process's parent, which is alive. Then `mode` writes job-4.
+fn sweep_after_dead_writer(mode: SaveMode) -> Vec<String> {
+    let me = super::writers::current().expect("/proc says who this process is");
     let env = Env::memory();
     env.write_logged("t", SaveMode::Append, "job-1", 4, true);
-    // job-2 and job-3 wrote files and did not commit; job-2's process is gone, job-3's is this one.
     for job in ["job-2", "job-3"] {
         env.write_logged("t", SaveMode::Append, job, 3, false);
     }
     let machine_id = me.lines().next().unwrap();
-    let dead = format!("{machine_id}\n4194304\n1");
-    let dead_record = super::writers::record_path(&Path::from("t"), "job-2");
-    env.rt
-        .block_on(
-            env.io
-                .put_object(&env.store, &dead_record, Bytes::from(dead)),
-        )
-        .unwrap();
-    env.write_logged("t", SaveMode::Overwrite, "job-4", 2, true);
-    let on_store = env.names("t");
+    let parent = std::os::unix::process::parent_id();
+    let started = super::writers::start_time(parent).expect("the parent's start time");
+    // PID 4194304 is above the Linux maximum, so it never runs.
+    for (job, pid, start) in [
+        ("job-2", 4_194_304, "1".to_owned()),
+        ("job-3", parent, started),
+    ] {
+        let record = super::writers::record_path(&Path::from("t"), job);
+        let body = format!("{machine_id}\n{pid}\n{start}");
+        env.rt
+            .block_on(env.io.put_object(&env.store, &record, Bytes::from(body)))
+            .unwrap();
+    }
+    env.write_logged("t", mode, "job-4", 2, true);
+    env.names("t")
+}
+
+/// PY-054: a write whose process died leaves a record; the next write deletes that job's unlogged
+/// files at once (inside the grace), keeps a live write's, and removes the dead record.
+#[test]
+fn a_write_sweeps_the_unlogged_files_of_a_dead_writer_inside_the_grace() {
+    if super::writers::current().is_none() {
+        return;
+    }
+    let on_store = sweep_after_dead_writer(SaveMode::Overwrite);
     assert!(
         !on_store.iter().any(|n| n.contains("job-2")),
         "{on_store:?}"
     );
     assert!(on_store.iter().any(|n| n.contains("job-3")), "{on_store:?}");
-    assert!(!on_store.iter().any(|n| n.contains("job-2.writer")));
+}
+
+/// The same in any mode: an append sweeps a dead writer's files and record, and nothing of a live
+/// writer's, so only the liveness decision tells job-2 from job-3.
+#[test]
+fn an_append_sweeps_the_unlogged_files_of_a_dead_writer_and_only_those() {
+    if super::writers::current().is_none() {
+        return;
+    }
+    let on_store = sweep_after_dead_writer(SaveMode::Append);
+    assert!(
+        !on_store.iter().any(|n| n.contains("job-2")),
+        "{on_store:?}"
+    );
+    assert!(
+        on_store.iter().any(|n| n.contains("job-3.writer")),
+        "{on_store:?}"
+    );
+    assert!(
+        on_store.iter().filter(|n| n.contains("job-3")).count() > 1,
+        "{on_store:?}"
+    );
 }
 
 /// A concurrent overwrite replaces only the files its base snapshot shows: the task files of an append that
