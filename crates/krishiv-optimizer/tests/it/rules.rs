@@ -374,6 +374,18 @@ const CASES: &[(&str, &str)] = &[
         "infer_not_through_rollup",
         "SELECT g.a FROM (SELECT a, count(*) AS n FROM t WHERE a = 5 GROUP BY ROLLUP(a)) g LEFT JOIN u ON g.a = u.a",
     ),
+    (
+        // TPC-DS q78's second join: the preserved side's constraints hold of
+        // a left outer join's output (Spark's `Join.validConstraints`), so
+        // `a = 5` reaches the null side of the next left outer join too.
+        "infer_left_outer_chain",
+        "SELECT g.a, h1.d, h2.d FROM (SELECT a FROM t WHERE a = 5) g LEFT JOIN u h1 ON g.a = h1.a LEFT JOIN u h2 ON g.a = h2.a",
+    ),
+    (
+        // The mirror: through a right outer join's preserved (right) side.
+        "infer_right_outer_chain",
+        "SELECT g.a, h1.d, h2.d FROM u h2 RIGHT JOIN (u h1 RIGHT JOIN (SELECT a FROM t WHERE a = 5) g ON h1.a = g.a) ON h2.a = g.a",
+    ),
     // Restricting an aggregate to the keys its join can match.
     (
         "restrict_scalar_avg",

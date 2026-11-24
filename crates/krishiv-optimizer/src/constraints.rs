@@ -751,6 +751,26 @@ impl Memo {
                 out.extend(self.constraints(right).iter().cloned());
                 out
             }
+            // Spark's `Join.validConstraints`: the preserved side's constraints
+            // hold of an outer, semi or anti join's output (its columns are
+            // never null-extended); the condition's do not (TPC-DS q78: the
+            // second left outer join reads `ss_sold_year = 2000` through the
+            // first one).
+            PlanNode::Join {
+                left,
+                kind:
+                    JoinKind::LeftOuter
+                    | JoinKind::LeftSemi
+                    | JoinKind::LeftAnti
+                    | JoinKind::Single
+                    | JoinKind::Existence(_),
+                ..
+            } => self.constraints(left).to_vec(),
+            PlanNode::Join {
+                right,
+                kind: JoinKind::RightOuter,
+                ..
+            } => self.constraints(right).to_vec(),
             // Spark's `Project` / `Aggregate` `validConstraints`: what holds
             // of a column passed through (as itself or renamed by an alias)
             // holds of the output column. A grouped aggregate passes only

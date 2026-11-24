@@ -1,0 +1,15 @@
+---
+source: crates/krishiv-optimizer/tests/it/rules.rs
+expression: "SELECT g.a, h1.d, h2.d FROM u h2 RIGHT JOIN (u h1 RIGHT JOIN (SELECT a FROM t WHERE a = 5) g ON h1.a = g.a) ON h2.a = g.a"
+---
+Project [a#7, d#6, d#1]
++- Join RightOuter, (a#0 == a#7)
+   :- Filter (isnotnull(a#0) and (a#0 == 5))
+   :  +- Scan spark_catalog.default.u [a#0, d#1] (shared #1)
+   +- Project [d#6, a#7]
+      +- Shift +5
+         +- Join RightOuter, (a#0 == a#2)
+            :- Filter (isnotnull(a#0) and (a#0 == 5))
+            :  +- Shared #1, printed above
+            +- Filter (a#2 == 5)
+               +- Scan spark_catalog.default.t [a#2]

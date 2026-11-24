@@ -55,12 +55,17 @@ Project [ss_sold_year#260, ss_item_sk#261, ss_customer_sk#262, ratio#278, store_
                         +- Aggregate [d_year#158, cs_item_sk#106, cs_bill_customer_sk#94], [d_year#158 AS cs_sold_year#180, cs_item_sk#106, cs_bill_customer_sk#94 AS cs_customer_sk#181, sum(cs_quantity#109) AS cs_qty#182, sum(cs_wholesale_cost#110) AS cs_wc#183, sum(cs_sales_price#112) AS cs_sp#184]
                            +- Project [d_year#158, cs_bill_customer_sk#94, cs_item_sk#106, cs_quantity#109, cs_wholesale_cost#110, cs_sales_price#112]
                               +- Join Inner, (cs_sold_date_sk#91 == d_date_sk#152)
-                                 :- Filter (isnotnull(d_date_sk#152) and isnotnull(d_year#158))
-                                 :  +- Scan spark_catalog.default.date_dim [d_date_sk#152, d_year#158]
+                                 :- Filter ((isnotnull(d_date_sk#152) and isnotnull(d_year#158)) and (d_year#158 == 2000))
+                                 :  +- Scan spark_catalog.default.date_dim [d_date_sk#152, d_year#158] (shared #3)
                                  +- Project [cs_sold_date_sk#91, cs_bill_customer_sk#94, cs_item_sk#106, cs_quantity#109, cs_wholesale_cost#110, cs_sales_price#112]
                                     +- Filter isnull(cr_order_number#141)
                                        +- Join LeftOuter, ((cr_order_number#141 == cs_order_number#108) and (cs_item_sk#106 == cr_item_sk#127))
-                                          :- Filter ((isnotnull(cs_sold_date_sk#91) and isnotnull(cs_item_sk#106)) and isnotnull(cs_bill_customer_sk#94))
-                                          :  +- Scan spark_catalog.default.catalog_sales [cs_sold_date_sk#91, cs_bill_customer_sk#94, cs_item_sk#106, cs_order_number#108, cs_quantity#109, cs_wholesale_cost#110, cs_sales_price#112]
+                                          :- Join LeftSemi, (cs_sold_date_sk#91 == d_date_sk#1315)
+                                          :  :- Filter ((isnotnull(cs_sold_date_sk#91) and isnotnull(cs_item_sk#106)) and isnotnull(cs_bill_customer_sk#94))
+                                          :  :  +- Scan spark_catalog.default.catalog_sales [cs_sold_date_sk#91, cs_bill_customer_sk#94, cs_item_sk#106, cs_order_number#108, cs_quantity#109, cs_wholesale_cost#110, cs_sales_price#112]
+                                          :  +- Shift +1163
+                                          :     +- Project [d_date_sk#152]
+                                          :        +- Filter ((isnotnull(d_date_sk#152) and isnotnull(d_year#158)) and (d_year#158 == 2000))
+                                          :           +- Shared #3, printed above
                                           +- Filter (isnotnull(cr_item_sk#127) and isnotnull(cr_order_number#141))
                                              +- Scan spark_catalog.default.catalog_returns [cr_item_sk#127, cr_order_number#141]
