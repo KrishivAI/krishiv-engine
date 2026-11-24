@@ -10,7 +10,11 @@
 //!   filter of 1 Mi and 8 Mi keys (1-10 MB: the join-build sizes whose probes
 //!   miss the caches, which the batched probe prefetches);
 //! - `int` rows widened to the `bigint` key, and 262,144 strings against a
-//!   Bloom filter of 65,536 keys.
+//!   Bloom filter of 65,536 keys;
+//! - a later filter of the row stage once an earlier one kept 5% of a
+//!   4,096-row batch (design P3 0.3.1 O1): a hash set of 1,024 keys tested
+//!   on the survivors' ids (`narrow_after_range_5pct`) against the former
+//!   filtered copy of the column (`narrow_copy_5pct`).
 
 #![expect(
     missing_docs,
@@ -23,8 +27,9 @@
 
 use std::hint::black_box;
 
-use arrow_array::{Array, Int32Array, Int64Array, StringViewArray};
+use arrow_array::{Array, BooleanArray, Int32Array, Int64Array, StringViewArray};
 use criterion::{Criterion, criterion_group, criterion_main};
+use krishiv_io::runtime_filter::normalize_key_bytes;
 use krishiv_io::{FilterForm, KeyFilter, KeyFilterBuilder, KeyFilterOptions};
 
 const ROWS: i64 = 1 << 18;
@@ -149,6 +154,24 @@ fn bench(c: &mut Criterion) {
     });
     group.bench_function("probe_bloom_256k_strings", |b| {
         b.iter(|| black_box(string_bloom.evaluate(black_box(&probe_strings))));
+    });
+    // One scan batch after a date range kept every 20th row.
+    let batch =
+        Int64Array::from_iter_values((0..4_096_i64).map(|i| i.wrapping_mul(7919) & 0xFFFF_FFFF));
+    let kept = BooleanArray::from_iter((0..4_096).map(|i| Some(i % 20 == 0)));
+    let ids: Vec<u32> = (0..4_096).filter(|i| i % 20 == 0).collect();
+    let (_, set, _) = sized.first().expect("sized");
+    group.bench_function("narrow_copy_5pct", |b| {
+        b.iter(|| {
+            let copy = arrow_select::filter::filter(black_box(&batch), &kept).expect("filter");
+            black_box(set.evaluate(copy.as_ref()))
+        });
+    });
+    group.bench_function("narrow_after_range_5pct", |b| {
+        b.iter(|| {
+            let keys = normalize_key_bytes(black_box(&batch), set.key_type()).expect("keys");
+            black_box(set.evaluate_keys_at(&keys, black_box(&ids)))
+        });
     });
     group.finish();
 }

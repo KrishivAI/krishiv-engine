@@ -34,6 +34,7 @@
 //! dictionaries once a reader exposes them) — re-typed to the column and
 //! cached per generation. [`ScanFilter::evaluate`] filters rows.
 
+mod at;
 mod bloom;
 mod bound;
 mod codec;

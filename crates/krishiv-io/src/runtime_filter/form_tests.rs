@@ -221,6 +221,133 @@ proptest! {
     }
 }
 
+/// `f`'s answers for the listed rows (`evaluate_keys_at`), as `bool`s.
+fn pass_at(f: &KeyFilter, column: &dyn Array, rows: &[u32]) -> Vec<bool> {
+    let keys = normalize_key_bytes(column, f.key_type())
+        .unwrap_or_else(|| panic!("{} does not widen", column.data_type()));
+    let out = f.evaluate_keys_at(&keys, rows);
+    assert_eq!(out.len(), rows.len());
+    out.iter().collect()
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(200))]
+    /// A filter's answers for listed rows (the row stage's narrowed test)
+    /// are its answers for those rows over the whole batch: every form,
+    /// key class, NULLs both ways, a top-N bound and an empty filter.
+    #[test]
+    fn listed_rows_answer_as_the_whole_batch(
+        kind in 0u8..6,
+        build_keys in proptest::collection::vec(proptest::option::weighted(0.9, -60i32..60), 0..120),
+        probe_keys in proptest::collection::vec(proptest::option::weighted(0.85, -80i32..80), 1..300),
+        options in prop_oneof![
+            Just(forced(0, 0, false)),
+            Just(forced(0, SMALL_SET_MAX, false)),
+            Just(forced(5, 1000, false)),
+            Just(forced(0, 0, true)),
+            Just(forced(50, EXACT_SET_MAX, true)),
+        ],
+        null_safe in any::<bool>(),
+        top_n in 0u8..4,
+        picks in proptest::collection::vec(any::<bool>(), 300),
+    ) {
+        let (b, _) = keyed(kind, &build_keys);
+        let (_, probe) = keyed(kind, &probe_keys);
+        let f = if top_n == 0 {
+            KeyFilter::top_n_bound(probe.as_ref(), probe_keys.len() / 2, probe.data_type(), null_safe, !null_safe)
+                .unwrap_or_else(|| filter(b.as_ref(), options))
+        } else {
+            let mut x = KeyFilterBuilder::new(b.data_type().clone(), options).unwrap_or_else(|| panic!());
+            let include = (!null_safe).then(|| b.logical_nulls()).flatten();
+            x.add(b.as_ref(), include.as_ref()).unwrap_or_else(|e| panic!("{e}"));
+            x.finish()
+        };
+        let all = pass(&f, probe.as_ref());
+        let rows: Vec<u32> = (0..probe_keys.len())
+            .filter(|&i| picks[i])
+            .filter_map(|i| u32::try_from(i).ok())
+            .collect();
+        let want: Vec<bool> = rows.iter().map(|&i| all[i as usize]).collect();
+        prop_assert_eq!(pass_at(&f, probe.as_ref(), &rows), want, "form {:?}", f.form());
+    }
+}
+
+/// Listed rows of every string and binary layout and string form, an
+/// empty filter and row ids past the batch's end.
+#[test]
+fn listed_rows_of_every_layout() {
+    let keys: Vec<Option<String>> = (0..9_000)
+        .map(|i| (i % 7 != 0).then(|| format!("k{i}")))
+        .collect();
+    let build = keys.iter().step_by(3).cloned().collect::<StringArray>();
+    let probe = || keys.iter().map(|k| k.as_deref());
+    let columns: Vec<ArrayRef> = vec![
+        Arc::new(probe().collect::<StringArray>()),
+        Arc::new(probe().collect::<LargeStringArray>()),
+        Arc::new(probe().collect::<StringViewArray>()),
+        Arc::new(
+            probe()
+                .map(|k| k.map(str::as_bytes))
+                .collect::<BinaryArray>(),
+        ),
+        Arc::new(
+            probe()
+                .map(|k| k.map(str::as_bytes))
+                .collect::<arrow_array::LargeBinaryArray>(),
+        ),
+        Arc::new(
+            probe()
+                .map(|k| k.map(str::as_bytes))
+                .collect::<arrow_array::BinaryViewArray>(),
+        ),
+    ];
+    let rows: Vec<u32> = (0..9_000)
+        .filter(|i| i % 5 != 2)
+        .chain([9_000, 70_000])
+        .collect();
+    let strings = [
+        filter(&build, forced(0, 0, true)),
+        filter(&build, forced(0, EXACT_SET_MAX * 4, false)),
+        filter(&build.slice(0, 5), forced(0, SMALL_SET_MAX, false)),
+        filter(&build, forced(0, 0, false)),
+        filter(
+            &StringArray::from(Vec::<Option<&str>>::new()),
+            forced(0, 0, false),
+        ),
+    ];
+    assert!(strings[0].bloom_bytes().is_some());
+    assert!(strings[4].is_empty());
+    for f in &strings {
+        let binary = KeyFilterBuilder::new(DataType::Binary, KeyFilterOptions::default()).is_some();
+        for column in &columns {
+            let Some(keys) = normalize_key_bytes(column.as_ref(), f.key_type()) else {
+                // Binary does not widen to a string key.
+                assert!(binary);
+                continue;
+            };
+            let all = pass(f, column.as_ref());
+            let got: Vec<bool> = f.evaluate_keys_at(&keys, &rows).iter().collect();
+            let want: Vec<bool> = rows
+                .iter()
+                .map(|&i| all.get(i as usize).copied().unwrap_or(false))
+                .collect();
+            assert_eq!(got, want, "{:?} over {}", f.form(), column.data_type());
+        }
+    }
+    // An empty filter whose NULL keys pass keeps exactly the listed NULLs.
+    let mut b = KeyFilterBuilder::new(DataType::Int32, KeyFilterOptions::default())
+        .unwrap_or_else(|| panic!());
+    b.add(&Int32Array::from(vec![None::<i32>]), None)
+        .unwrap_or_else(|e| panic!("{e}"));
+    let f = b.finish();
+    assert!(f.is_empty() && f.nulls_pass());
+    let column = Int32Array::from(vec![Some(1), None, Some(3), None]);
+    assert_eq!(
+        pass_at(&f, &column, &[0, 1, 3, 9]),
+        vec![false, true, true, false]
+    );
+}
+
 /// Integer sets over at most `DENSE_MAX_BITS` values are a bit per value
 /// (row cost 1 ns), exact at both ends and outside, through the codec;
 /// wider spans, float keys and spans that overflow `i64` stay hashed.

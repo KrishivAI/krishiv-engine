@@ -13,6 +13,7 @@ use arrow_schema::DataType;
 use hashbrown::HashTable;
 
 use super::FilterId;
+use super::at::evaluate_at;
 use super::bloom::RuntimeBloom;
 use super::bound::TopNBound;
 use super::hash::{RowHash, row_hashes};
@@ -762,6 +763,39 @@ impl KeyFilter {
             Some(v) if self.nulls_pass => &pass | &!v,
             _ => pass,
         }
+    }
+
+    /// [`Self::evaluate_keys`] of the rows `rows` only (ids into `keys`):
+    /// answer `k` is row `rows[k]`'s, the same answer the whole batch's
+    /// evaluation, or one over a copy holding only those rows, gives it.
+    /// Hashed forms hash only the listed rows. A row id past the end of
+    /// `keys` is `false`.
+    #[must_use]
+    pub fn evaluate_keys_at(&self, keys: &NormalizedKeys, rows: &[u32]) -> BooleanBuffer {
+        let len = keys.len();
+        let null_at = |k: usize| (rows[k] as usize) < len && keys.is_null(rows[k] as usize);
+        if self.empty {
+            let nulls_pass = self.nulls_pass;
+            return BooleanBuffer::collect_bool(rows.len(), |k| nulls_pass && null_at(k));
+        }
+        let valid = keys.nulls().map(NullBuffer::inner);
+        let pass = match &self.bound {
+            // A top-N's bound tests every row (a compare each); rare on a
+            // probe's row stage.
+            Some(b) => {
+                let all = b.pass(keys);
+                BooleanBuffer::collect_bool(rows.len(), |k| {
+                    let i = rows[k] as usize;
+                    i < len && all.value(i) && !keys.is_null(i)
+                })
+            }
+            None => evaluate_at(self.range.as_ref(), &self.member, keys, valid, rows),
+        };
+        if self.nulls_pass && valid.is_some() {
+            let nulls = BooleanBuffer::collect_bool(rows.len(), null_at);
+            return &pass | &nulls;
+        }
+        pass
     }
 
     /// The filter as a predicate on `column` of type `column_type` (both at

@@ -11,9 +11,11 @@
 //!   batch holds and drops the rows some filter rejects (a superset of the
 //!   rows the producers keep). Filters run cheapest form first (range,
 //!   small set, hash set, Bloom; ties in attachment order), and once fewer
-//!   than half the rows survive, a later filter sees only the survivors (as
+//!   than half the rows survive, a later filter tests only the survivors (as
 //!   Velox orders and narrows conjuncts, research `papers.md` A5 claim 3,
-//!   but by a static cost so the order never depends on timing). A filter
+//!   but by a static cost so the order never depends on timing): by their
+//!   row ids over the whole column (`KeyFilter::evaluate_keys_at`, design
+//!   P3 0.3.1 O1), with no filtered copy and no scatter. A filter
 //!   that is pending applies nothing; it is adopted at the next batch once
 //!   published.
 //! - **Adaptive switch-off.** Per scan partition, a driver measures each
@@ -47,7 +49,10 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use arrow_array::{BooleanArray, RecordBatch};
 use arrow_buffer::{BooleanBuffer, BooleanBufferBuilder};
 use arrow_schema::Schema;
-use krishiv_io::{FilterCounts, FilterId, KeyFilter, RuntimeFilter, ScanFilter};
+use krishiv_io::{
+    FilterCounts, FilterId, KeyFilter, RuntimeFilter, ScanFilter,
+    runtime_filter::normalize_key_bytes,
+};
 
 use crate::error::{Result, internal};
 
@@ -269,6 +274,9 @@ struct RowFilter {
 pub(crate) struct RowStage {
     filters: Vec<RowFilter>,
     settings: RowStageSettings,
+    /// The surviving row ids once most of a batch's rows are gone (reused
+    /// across batches: no allocation per batch once grown).
+    survivors: Vec<u32>,
 }
 
 impl RowStage {
@@ -291,7 +299,11 @@ impl RowStage {
                 })
             })
             .collect();
-        Self { filters, settings }
+        Self {
+            filters,
+            settings,
+            survivors: Vec::new(),
+        }
     }
 
     /// The same stage over batches that hold filter `id`'s column at
@@ -348,6 +360,11 @@ impl RowStage {
         }
         active.sort_by(|a, b| a.1.row_cost_ns().total_cmp(&b.1.row_cost_ns()));
         let mut all: Option<BooleanBuffer> = None;
+        // Once fewer than half the rows survive, the later filters test the
+        // survivors' ids over the whole column (design P3 0.3.1 O1): no
+        // copy of the column, no scatter of the answers; `all` is then
+        // stale and `survivors` holds the stage's answer.
+        let mut narrowed = false;
         for (i, keys, generation) in active {
             let cut_off = self.cut_off(&keys);
             let Some(f) = self.filters.get_mut(i) else {
@@ -357,23 +374,40 @@ impl RowStage {
                 .columns()
                 .get(f.column)
                 .ok_or_else(|| internal("a runtime filter's column is missing".to_owned()))?;
-            // Once most rows are gone, only the survivors reach this filter.
-            let narrowed = match &all {
-                Some(m) if m.count_set_bits() * 2 < rows => Some(
-                    arrow_select::filter::filter(
-                        column.as_ref(),
-                        &BooleanArray::new(m.clone(), None),
-                    )
-                    .map_err(|e| internal(e.to_string()))?,
-                ),
-                _ => None,
+            if !narrowed
+                && let Some(m) = &all
+                && m.count_set_bits() * 2 < rows
+            {
+                self.survivors.clear();
+                self.survivors
+                    .extend(m.set_indices().filter_map(|r| u32::try_from(r).ok()));
+                narrowed = true;
+            }
+            let (tested, passed) = if narrowed {
+                // The same answers the filter gives a copy of these rows.
+                let Some(norm) = normalize_key_bytes(column.as_ref(), keys.key_type()) else {
+                    continue;
+                };
+                let answers = keys.evaluate_keys_at(&norm, &self.survivors);
+                let tested = self.survivors.len() as u64;
+                let mut k = 0;
+                self.survivors.retain(|_| {
+                    let keep = k < answers.len() && answers.value(k);
+                    k += 1;
+                    keep
+                });
+                (tested, self.survivors.len() as u64)
+            } else {
+                let Some(mask) = keys.evaluate(column.as_ref()) else {
+                    continue;
+                };
+                // Runtime filter masks have no nulls.
+                all = Some(match all {
+                    None => mask.values().clone(),
+                    Some(prev) => &prev & mask.values(),
+                });
+                (rows as u64, mask.true_count() as u64)
             };
-            let input = narrowed.as_deref().unwrap_or(column.as_ref());
-            let Some(mask) = keys.evaluate(input) else {
-                continue;
-            };
-            let tested = input.len() as u64;
-            let passed = mask.true_count() as u64;
             f.filter.filter().stats().add_rows(tested, tested - passed);
             f.window_rows += tested;
             f.window_passed += passed;
@@ -386,12 +420,16 @@ impl RowStage {
                 f.window_rows = 0;
                 f.window_passed = 0;
             }
-            // Runtime filter masks have no nulls.
-            all = Some(match (all, narrowed.is_some()) {
-                (None, _) => mask.values().clone(),
-                (Some(prev), false) => &prev & mask.values(),
-                (Some(prev), true) => scatter(&prev, mask.values()),
-            });
+        }
+        if narrowed {
+            let mut out = BooleanBufferBuilder::new(rows);
+            out.append_n(rows, false);
+            for &r in &self.survivors {
+                if (r as usize) < rows {
+                    out.set_bit(r as usize, true);
+                }
+            }
+            return Ok(Some(BooleanArray::new(out.finish(), None)));
         }
         Ok(all
             .filter(|m| m.count_set_bits() < rows)
@@ -795,5 +833,150 @@ mod tests {
         let narrow = RecordBatch::try_new(only_a, vec![Arc::new(Int64Array::from(vec![1]))])
             .unwrap_or_else(|e| unreachable!("{e}"));
         assert!(stage.apply(narrow).is_err());
+    }
+
+    /// The row stage as it was before O1 (design P3 0.3.1): each later
+    /// filter, once fewer than half the rows survive, tests a filtered copy
+    /// of its column and its answers are scattered back. The reference the
+    /// selection path must equal.
+    fn mask_by_copy(
+        stage: &mut RowStage,
+        batch: &RecordBatch,
+    ) -> Option<arrow_array::BooleanArray> {
+        use arrow_array::BooleanArray;
+        let rows = batch.num_rows();
+        if rows == 0 {
+            return None;
+        }
+        let mut active = Vec::new();
+        for (i, f) in stage.filters.iter_mut().enumerate() {
+            let generation = f.filter.generation();
+            if f.off_at.is_some_and(|g| g == generation) {
+                continue;
+            }
+            f.off_at = None;
+            if let Some(keys) = f.filter.current() {
+                active.push((i, keys, generation));
+            }
+        }
+        active.sort_by(|a, b| a.1.row_cost_ns().total_cmp(&b.1.row_cost_ns()));
+        let mut all: Option<arrow_buffer::BooleanBuffer> = None;
+        for (i, keys, generation) in active {
+            let cut_off = stage.cut_off(&keys);
+            let f = &mut stage.filters[i];
+            let column = batch.column(f.column);
+            let narrowed = match &all {
+                Some(m) if m.count_set_bits() * 2 < rows => Some(
+                    arrow_select::filter::filter(
+                        column.as_ref(),
+                        &BooleanArray::new(m.clone(), None),
+                    )
+                    .unwrap_or_else(|e| unreachable!("{e}")),
+                ),
+                _ => None,
+            };
+            let input = narrowed.as_deref().unwrap_or(column.as_ref());
+            let Some(mask) = keys.evaluate(input) else {
+                continue;
+            };
+            let tested = input.len() as u64;
+            let passed = mask.true_count() as u64;
+            f.filter.filter().stats().add_rows(tested, tested - passed);
+            f.window_rows += tested;
+            f.window_passed += passed;
+            if f.window_rows >= stage.settings.min_rows {
+                #[expect(clippy::cast_precision_loss, reason = "a rate")]
+                let rate = f.window_passed as f64 / f.window_rows as f64;
+                if rate > cut_off {
+                    f.off_at = Some(generation);
+                }
+                f.window_rows = 0;
+                f.window_passed = 0;
+            }
+            all = Some(match (all, narrowed.is_some()) {
+                (None, _) => mask.values().clone(),
+                (Some(prev), false) => &prev & mask.values(),
+                (Some(prev), true) => super::scatter(&prev, mask.values()),
+            });
+        }
+        all.filter(|m| m.count_set_bits() < rows)
+            .map(|m| BooleanArray::new(m, None))
+    }
+
+    /// One stage of `filters` (column, keys, form options) over fresh
+    /// runtime filters.
+    fn stage_of(
+        filters: &[(bool, Vec<i64>, KeyFilterOptions)],
+        settings: RowStageSettings,
+    ) -> (RowStage, Vec<Arc<RuntimeFilter>>) {
+        let mut all = Vec::new();
+        for (k, (on_s, keys, options)) in filters.iter().enumerate() {
+            let (name, t) = if *on_s {
+                ("s", DataType::Utf8)
+            } else {
+                ("a", DataType::Int64)
+            };
+            let f = Arc::new(RuntimeFilter::new(
+                FilterId(u64::try_from(k).unwrap_or_else(|e| unreachable!("{e}"))),
+                ColumnPath::new(name),
+                t.clone(),
+            ));
+            let mut b = KeyFilterBuilder::new(t, *options).unwrap_or_else(|| unreachable!("key"));
+            if *on_s {
+                let s: Vec<String> = keys.iter().map(|v| format!("s{v}")).collect();
+                b.add(&StringArray::from(s), None)
+            } else {
+                b.add(&Int64Array::from(keys.clone()), None)
+            }
+            .unwrap_or_else(|e| unreachable!("{e}"));
+            f.publish(FilterSnapshot::Final(Arc::new(b.finish())));
+            all.push(f);
+        }
+        let slot = RuntimeFilters::new(all.clone());
+        (
+            RowStage::new(&slot.scan_filters(&schema()), &schema(), settings),
+            all,
+        )
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::prelude::ProptestConfig::with_cases(96))]
+        /// The selection path keeps the same rows, counts the same rows
+        /// tested and dropped per filter and switches the same filters off
+        /// as the copy path, over batches, filter forms and orders.
+        #[test]
+        fn selection_path_equals_copy_path(
+            filters in proptest::collection::vec(
+                (
+                    proptest::prelude::any::<bool>(),
+                    proptest::collection::vec(-300i64..300, 1..120),
+                    proptest::prop_oneof![
+                        proptest::strategy::Just(KeyFilterOptions::default()),
+                        proptest::strategy::Just(KeyFilterOptions { exact_max_values: 0, bloom: true, ..KeyFilterOptions::default() }),
+                        proptest::strategy::Just(KeyFilterOptions { exact_max_values: 0, bloom: false, ..KeyFilterOptions::default() }),
+                    ],
+                ),
+                1..5,
+            ),
+            batches in proptest::collection::vec(proptest::collection::vec(-400i64..400, 0..300), 1..6),
+            min_rows in 1u64..400,
+            max_pass_rate in 0.1f64..1.0,
+        ) {
+            let settings = RowStageSettings { min_rows, max_pass_rate };
+            let (mut new, new_filters) = stage_of(&filters, settings);
+            let (mut old, old_filters) = stage_of(&filters, settings);
+            for a in &batches {
+                let b = batch(a);
+                let got = new.mask(&b).unwrap_or_else(|e| unreachable!("{e}"));
+                let want = mask_by_copy(&mut old, &b);
+                proptest::prop_assert_eq!(got, want);
+                let offs = |s: &RowStage| s.filters.iter().map(|f| (f.off_at, f.window_rows, f.window_passed)).collect::<Vec<_>>();
+                proptest::prop_assert_eq!(offs(&new), offs(&old));
+            }
+            for (n, o) in new_filters.iter().zip(&old_filters) {
+                let (n, o) = (n.stats().counts(), o.stats().counts());
+                proptest::prop_assert_eq!((n.rows_tested, n.rows_dropped), (o.rows_tested, o.rows_dropped));
+            }
+        }
     }
 }

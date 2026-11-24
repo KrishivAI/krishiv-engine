@@ -111,7 +111,7 @@ impl Class {
     clippy::cast_possible_truncation,
     reason = "integer keys fit i64; float bits fit u64 and are reinterpreted"
 )]
-fn fixed64(n: i128) -> i64 {
+pub(crate) fn fixed64(n: i128) -> i64 {
     n as i64
 }
 
@@ -182,7 +182,7 @@ impl Dense {
     /// Whether `v` is a member: a value below `lo` wraps to a huge offset,
     /// whose word does not exist.
     #[inline]
-    fn contains(&self, v: i64) -> bool {
+    pub(crate) fn contains(&self, v: i64) -> bool {
         let d = v.wrapping_sub(self.lo).cast_unsigned();
         usize::try_from(d >> 6)
             .ok()
