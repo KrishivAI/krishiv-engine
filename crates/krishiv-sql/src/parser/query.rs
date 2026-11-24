@@ -16,8 +16,10 @@ impl Parser<'_> {
         // A query inside an as-of join's right side is not that side: `MATCH_CONDITION` there
         // is an ordinary alias again.
         let asof_right = std::mem::replace(&mut self.asof_right, false);
+        let asof_ahead = std::mem::replace(&mut self.asof_ahead, false);
         let r = self.query_at();
         self.asof_right = asof_right;
+        self.asof_ahead = asof_ahead;
         if matches!(r, Err(Fail::Syntax)) {
             self.failed_queries.insert(pos, self.far);
         }
@@ -252,7 +254,7 @@ impl Parser<'_> {
     /// Whether `|` before token `n` is the pipe operator, not a bitwise or.
     pub(crate) fn single_pipe_word_at(&self, n: usize) -> bool {
         self.opts.single_character_pipe_operator
-            && (self.opts.asof_join && self.kw_at(n, "ASOF")
+            && ((self.opts.spark_4_3_grammar || self.opts.asof_join) && self.kw_at(n, "ASOF")
                 || self.any_kw_at(
                     n,
                     &[
@@ -1262,8 +1264,10 @@ impl Parser<'_> {
                     // Inside parentheses the as-of right side is not that side: `MATCH_CONDITION`
                     // is an ordinary alias again.
                     let asof_right = std::mem::replace(&mut self.asof_right, false);
+                    let asof_ahead = std::mem::replace(&mut self.asof_ahead, false);
                     let r = self.relation();
                     self.asof_right = asof_right;
+                    self.asof_ahead = asof_ahead;
                     let r = r?;
                     self.expect_sym(Sym::RParen)?;
                     TableFactorKind::Nested(Box::new(r))
