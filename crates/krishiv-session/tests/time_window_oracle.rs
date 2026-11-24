@@ -121,3 +121,32 @@ fn an_enormous_overlap_is_an_error_not_an_abort() -> R {
     assert!(r.is_err(), "expected an error for 86.4 billion windows");
     Ok(())
 }
+
+#[test]
+fn a_window_inside_an_aggregate_of_a_nested_grouped_window_is_the_inner_window() -> R {
+    // Spark 4.3.0 (UTC): `min(window)` = {00:01:00, 00:02:00}, `max(window.start)` = 00:03:00, and
+    // `window.start` outside an aggregate is MISSING_AGGREGATION, as the bare `window` is.
+    let s = utc()?;
+    let from = "FROM VALUES (timestamp'2026-01-01 00:01:30'), (timestamp'2026-01-01 00:03:30') AS t(ts) \
+                GROUP BY window(window(ts, '1 minute'), '5 minutes')";
+    let got = rows(
+        &s,
+        &format!(
+            "SELECT CAST(min(window) AS STRING), CAST(max(window.start) AS STRING), \
+                    CAST(max(window.end) AS STRING), CAST(count(*) AS STRING) {from}"
+        ),
+    )?;
+    assert_eq!(
+        got,
+        ["{2026-01-01 00:01:00, 2026-01-01 00:02:00}\t2026-01-01 00:03:00\t2026-01-01 00:04:00\t2"]
+    );
+    let err = block_on(async {
+        s.sql(&format!("SELECT window.start, count(*) {from}"))
+            .await?
+            .collect()
+            .await
+    });
+    let text = format!("{:?}", err.err().ok_or("expected MISSING_AGGREGATION")?);
+    assert!(text.contains("MissingAggregation"), "{text}");
+    Ok(())
+}

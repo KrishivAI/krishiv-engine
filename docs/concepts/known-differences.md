@@ -793,11 +793,3 @@ from 4.1 to 4.3 for `'ſ' ILIKE 'S'` over a column (false on 4.0); Krishiv follo
 Krishiv never matches such strings by bytes.
 
 Two smaller differences in `UTF8_LCASE` `LIKE`: case folding uses Rust's Unicode tables, which are newer than the JDK 17/21 tables Spark runs on, so a case pair added after Unicode 15 matches in Krishiv and not in Spark; and a malformed pattern (invalid or trailing escape) is reported with the case-folded pattern text, where Spark reports it as written. Java's matching is one-directional for a few characters (the pattern `ß` matches only `ß`, the pattern `ẞ` matches both), which a folded comparison cannot express: the value `ẞ` against the pattern `ß` matches in Krishiv and not in Spark.
-
-## Nested `window()` and a bare `window` in the select list
-
-Spark 4.3: with `GROUP BY window(window(ts, '1 minute'), '5 minutes')`, a bare `window` in the select list is the
-inner window's column, so `any_value(window)` returns the inner window (`{start: 00:00:00, end: 00:01:00}` for a row
-at 00:00:30), and a bare `window` outside an aggregate is `MISSING_AGGREGATION`. Krishiv raises the same error for a
-bare `window` and accepts `any_value(window)` with the struct type, but returns the outer window's column. The value
-differs; the type does not. Planned for 0.3.1.

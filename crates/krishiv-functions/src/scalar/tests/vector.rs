@@ -215,7 +215,9 @@ fn pairs_combine_equal_dimensions() {
     assert_eq!(one("vector_l2_distance", &[&a, &b]), Some(5.196_152));
     assert_eq!(
         one("vector_cosine_similarity", &[&a, &b]),
-        Some(0.974_631_9)
+        // Spark 4.3 sums in double: the float of 32 / sqrt(14 * 77). 4.2's float sums give 0.9746319 (pinned by
+        // the 4.2.0 goldens in krishiv-session).
+        Some(0.974_631_85)
     );
     // A zero vector has no direction; empty vectors have no distance.
     assert_eq!(
@@ -396,4 +398,23 @@ fn the_l1_and_l2_norms_are_double_precision_in_43_and_float_in_42() {
         run_on("vector_norm", &[3.0, -4.0], 2.0, V4_3),
         Some(vec![5.0])
     );
+}
+
+/// Spark 4.3 adds the double terms in blocks of 8 and then the accumulator (`VectorFunctionImplUtils`): the
+/// second block of `[1, tiny x 15]` sums to `2^-51` before it meets the `1`, where a left-to-right fold
+/// rounds every `tiny` away and stays at `1.0`.
+#[test]
+fn the_43_double_norms_sum_in_blocks_of_eight() {
+    use crate::scalar::vector::{Degree, norm_of};
+    let mut l1 = vec![2.0_f32.powi(-54); 16];
+    l1[0] = 1.0;
+    assert_eq!(norm_of(&l1, Degree::One, true), 1.0 + 2.0_f64.powi(-51));
+    let mut l2 = vec![2.0_f32.powi(-27); 16];
+    l2[0] = 1.0;
+    assert_eq!(
+        norm_of(&l2, Degree::Two, true),
+        (1.0 + 2.0_f64.powi(-51)).sqrt()
+    );
+    // Under eight elements the block loop is empty: the tail is the plain fold.
+    assert_eq!(norm_of(&[3.0, 4.0], Degree::Two, true), 5.0);
 }

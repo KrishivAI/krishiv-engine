@@ -54,6 +54,18 @@ pub enum SparkProfile {
 }
 
 impl SparkProfile {
+    /// The kernels' Spark line for this profile (3.5 has no line of its own: it runs 4.0's rules).
+    #[must_use]
+    pub const fn kernel_version(self) -> krishiv_kernels::SparkVersion {
+        use krishiv_kernels::SparkVersion as V;
+        match self {
+            Self::V3_5 | Self::V4_0 => V::V4_0,
+            Self::V4_1 => V::V4_1,
+            Self::V4_2 => V::V4_2,
+            Self::V4_3 => V::V4_3,
+        }
+    }
+
     /// Every profile, oldest first.
     pub const ALL: [Self; 5] = [Self::V3_5, Self::V4_0, Self::V4_1, Self::V4_2, Self::V4_3];
 

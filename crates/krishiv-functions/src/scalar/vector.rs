@@ -101,7 +101,7 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                 let mut out = Float32Builder::with_capacity(x.rows());
                 for row in 0..x.rows() {
                     let rows = (if a_lit { 0 } else { row }, if b_lit { 0 } else { row });
-                    out.append_option(pair(kind, listed, a, b, rows)?);
+                    out.append_option(pair(kind, listed, a, b, rows, nan)?);
                 }
                 Ok(Arc::new(out.finish()) as ArrayRef)
             })
@@ -137,7 +137,7 @@ fn row_values(list: &arrow_array::ListArray, row: usize) -> Option<(ArrayRef, bo
 }
 
 #[derive(Clone, Copy)]
-enum Degree {
+pub(crate) enum Degree {
     One,
     Two,
     Infinity,
@@ -179,16 +179,27 @@ fn degree_of(name: &str, d: f32) -> Result<Degree, KrishivError> {
     Ok(degree)
 }
 
+/// Spark 4.3's double sum: blocks of 8 (each block added left to right, then added to the accumulator), then
+/// the tail one element at a time. Double addition is not associative, so the order is observable.
+fn block_sum_f64(v: &[f32], term: impl Fn(f32) -> f64) -> f64 {
+    let (blocks, tail) = v.as_chunks::<8>();
+    let mut acc = 0.0_f64;
+    for b in blocks {
+        let t = b.map(&term);
+        acc += t[0] + t[1] + t[2] + t[3] + t[4] + t[5] + t[6] + t[7];
+    }
+    for &x in tail {
+        acc += term(x);
+    }
+    acc
+}
+
 /// The norm in double precision. Spark 4.3 (`nan_propagates`) accumulates the L1 and L2 norms in `double` and
 /// divides by the double norm; 4.2 and earlier accumulate in `float` (the kernels), so their norm widens exactly.
-fn norm_of(v: &[f32], degree: Degree, nan_propagates: bool) -> f64 {
+pub(crate) fn norm_of(v: &[f32], degree: Degree, nan_propagates: bool) -> f64 {
     match degree {
-        Degree::One if nan_propagates => v.iter().map(|&x| f64::from(x).abs()).sum(),
-        Degree::Two if nan_propagates => v
-            .iter()
-            .map(|&x| f64::from(x) * f64::from(x))
-            .sum::<f64>()
-            .sqrt(),
+        Degree::One if nan_propagates => block_sum_f64(v, |x| f64::from(x).abs()),
+        Degree::Two if nan_propagates => block_sum_f64(v, |x| f64::from(x) * f64::from(x)).sqrt(),
         Degree::One => f64::from(krishiv_kernels::vector::l1_norm(v)),
         Degree::Two => f64::from(krishiv_kernels::vector::l2_norm(v)),
         Degree::Infinity if nan_propagates => f64::from(krishiv_kernels::vector::inf_norm_nan(v)),
@@ -292,6 +303,7 @@ fn pair(
     a: &arrow_array::ListArray,
     b: &arrow_array::ListArray,
     (a_row, b_row): (usize, usize),
+    double: bool,
 ) -> Result<Option<f32>, KrishivError> {
     let (Some((x, x_null)), Some((y, y_null))) = (row_values(a, a_row), row_values(b, b_row))
     else {
@@ -318,9 +330,48 @@ fn pair(
         x.as_primitive::<Float32Type>().values(),
         y.as_primitive::<Float32Type>().values(),
     );
+    if double {
+        return Ok(pair_f64(kind, x, y));
+    }
     Ok(match kind {
         Pair::Inner => Some(krishiv_kernels::vector::inner_product(x, y)),
         Pair::L2 => Some(krishiv_kernels::vector::l2_distance(x, y)),
         Pair::Cosine => krishiv_kernels::vector::cosine_similarity(x, y),
     })
+}
+
+/// Spark 4.3's pair functions: every sum is in `double` (blocks of 8, as `block_sum_f64`) and the result is
+/// cast to float. Cosine similarity is NULL for a zero norm product, where 4.2 compares with `Float.MIN_NORMAL`.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "the result column is FLOAT, as Spark casts the double"
+)]
+fn pair_f64(kind: Pair, x: &[f32], y: &[f32]) -> Option<f32> {
+    let sum = |term: &dyn Fn(f64, f64) -> f64| {
+        let (xb, xt) = x.as_chunks::<8>();
+        let (yb, yt) = y.as_chunks::<8>();
+        let mut acc = 0.0_f64;
+        for (a, b) in xb.iter().zip(yb) {
+            let t: [f64; 8] = std::array::from_fn(|i| term(f64::from(a[i]), f64::from(b[i])));
+            acc += t[0] + t[1] + t[2] + t[3] + t[4] + t[5] + t[6] + t[7];
+        }
+        for (&a, &b) in xt.iter().zip(yt) {
+            acc += term(f64::from(a), f64::from(b));
+        }
+        acc
+    };
+    match kind {
+        Pair::Inner => Some(sum(&|a, b| a * b) as f32),
+        Pair::L2 => Some(sum(&|a, b| (a - b) * (a - b)).sqrt() as f32),
+        Pair::Cosine => {
+            let dot = sum(&|a, b| a * b);
+            let norm_a = sum(&|a, _| a * a);
+            let norm_b = sum(&|_, b| b * b);
+            let norm_product = (norm_a * norm_b).sqrt();
+            if norm_product == 0.0 {
+                return None;
+            }
+            Some((dot / norm_product) as f32)
+        }
+    }
 }

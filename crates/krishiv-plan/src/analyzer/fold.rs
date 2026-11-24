@@ -89,13 +89,7 @@ impl Conf {
         profile: SparkProfile,
         zone: Option<i32>,
     ) -> Self {
-        // The kernels model 4.0 as their oldest line; 3.5 behaves as it.
-        let version = match profile {
-            SparkProfile::V3_5 | SparkProfile::V4_0 => SparkVersion::V4_0,
-            SparkProfile::V4_1 => SparkVersion::V4_1,
-            SparkProfile::V4_2 => SparkVersion::V4_2,
-            _ => SparkVersion::V4_3,
-        };
+        let version = profile.kernel_version();
         Self {
             ansi,
             decimal_loss,

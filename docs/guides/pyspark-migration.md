@@ -152,7 +152,6 @@ Each row links to the full description in [known differences](../concepts/known-
 | [HLL sketches: the compact form (`hll_sketch_agg`, `hll_union_agg`, `hll_union`)](../concepts/known-differences.md#hll-sketches-the-compact-form-hll_sketch_agg-hll_union_agg-hll_union) |
 | [Metric views (`CREATE VIEW .. WITH METRICS LANGUAGE YAML`)](../concepts/known-differences.md#metric-views-create-view--with-metrics-language-yaml) |
 | [Pattern matching over collated strings (`LIKE`, `RLIKE`)](../concepts/known-differences.md#pattern-matching-over-collated-strings-like-rlike) |
-| [Nested `window()` and a bare `window` in the select list](../concepts/known-differences.md#nested-window-and-a-bare-window-in-the-select-list) |
 
 ## Where it runs
 
