@@ -15,7 +15,7 @@ use super::metric_view::ViewHead;
 use super::{Close, Fail, PR, Parser};
 use crate::ast::{
     AddResource, AlterColumnAction, AlterNamespace, AlterNamespaceAction, AlterTable,
-    AlterTableAction, AlterView, AlterViewAction, Analyze, AnalyzeColumns, Cache, CacheKind,
+    AlterTableAction, AlterView, AlterViewAction, Analyze, AnalyzeColumns, Cache, CacheKind, Call,
     ChangeColumnAction, ColumnName, CreatePermanentView, DdlName, Delete, Describe, DescribeKind,
     DescribeMode, DirectoryFormat, DropPermanentView, FunctionScope, Ident, Insert, InsertClause,
     InsertDirectory, ListResource, LoadData, Merge, MergeAction, MergeClause, MergeInsert,
@@ -60,6 +60,8 @@ impl<'s> Parser<'s> {
             self.cache_command()
         } else if self.kw_at(0, "REFRESH") {
             self.refresh_command()
+        } else if self.kw_at(0, "CALL") {
+            self.call_command()
         } else if self.kw_at(0, "ANALYZE") {
             self.analyze_command()
         } else if self.kw_at(0, "MSCK") || self.kw_at(0, "REPAIR") {
@@ -1405,6 +1407,21 @@ impl<'s> Parser<'s> {
             let span = p.span_from(start);
             p.command_end()?;
             Ok(Statement::Cache(Cache { kind, span }))
+        })
+    }
+
+    /// `CALL name([args])`.
+    fn call_command(&mut self) -> PR<Statement> {
+        self.nested(|p| {
+            let start = p.start();
+            p.expect_kw("CALL")?;
+            let name = p.ddl_name()?;
+            p.expect_sym(Sym::LParen)?;
+            let args = p.function_args(false)?;
+            p.expect_sym(Sym::RParen)?;
+            let span = p.span_from(start);
+            p.command_end()?;
+            Ok(Statement::Call(Call { name, args, span }))
         })
     }
 

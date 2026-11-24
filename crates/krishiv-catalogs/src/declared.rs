@@ -256,6 +256,8 @@ mod vended;
 pub(crate) use table::RestCatalog;
 
 #[cfg(test)]
+mod call_tests;
+#[cfg(test)]
 mod read_tests;
 #[cfg(test)]
 mod tests;

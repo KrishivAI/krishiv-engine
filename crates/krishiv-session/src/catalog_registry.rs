@@ -331,6 +331,33 @@ pub trait CallerCatalog: fmt::Debug + Send + Sync {
         })
     }
 
+    /// The procedure `name` (lower-case) of the catalog's `system` namespace for `caller`
+    /// (`CALL cat.system.name(..)`, design P3-T027 PR-36e §3); `None` when there is none. The
+    /// default is a catalog without procedures: `MISSING_CATALOG_ABILITY.PROCEDURES`.
+    ///
+    /// # Errors
+    /// The catalog's failure; the default's refusal.
+    fn load_procedure<'a>(
+        &'a self,
+        caller: &'a CatalogCaller,
+        inputs: ScanInputs,
+        name: &'a str,
+    ) -> BoxFuture<'a, Result<Option<Arc<dyn krishiv_plan::procedure::Procedure>>, KrishivError>>
+    {
+        let _ = (caller, inputs, name);
+        Box::pin(async move {
+            Err(krishiv_common::error::MissingCatalogAbilityProcedures {
+                plugin: "this catalog".to_owned(),
+            }
+            .into())
+        })
+    }
+
+    /// The cache half of [`Self::refresh`]: drops what the catalog keeps of `id` and moves
+    /// [`Self::epoch`], with no load (after a `CALL` that changed the table, so a failed load
+    /// never fails a procedure that is done). The default keeps nothing, so drops nothing.
+    fn invalidate(&self, _caller: &CatalogCaller, _id: &TableIdent) {}
+
     /// `REFRESH TABLE` of `id` for `caller`: drops what the catalog keeps of the table (its
     /// metadata cache entries, for every caller) and moves [`Self::epoch`], so plans and frames
     /// that read it are analyzed again. Whether the table exists. The default keeps nothing and
@@ -1065,6 +1092,12 @@ impl DeclaredView {
             inbound,
             loads: Arc::default(),
         }
+    }
+
+    /// Whether what a declared catalog's tables read is confined to the server's roots and
+    /// prefixes (server mode).
+    pub(crate) fn confines(&self) -> bool {
+        self.registry.mode() == DeclMode::Server
     }
 
     /// This view for one query reading with `inputs`.

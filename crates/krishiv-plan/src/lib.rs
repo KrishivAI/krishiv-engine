@@ -144,6 +144,7 @@ mod local;
 mod origin;
 mod partial;
 mod plan;
+pub mod procedure;
 mod python;
 mod raises;
 pub(crate) mod spark_fmt;
