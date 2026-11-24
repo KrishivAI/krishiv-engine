@@ -1399,6 +1399,60 @@
    "message": "[UNEXPECTED_INPUT_TYPE] Parameter first of function `current_timestamp` requires the \"INT\" type, however \"6\" has the type \"STRING\"."
   },
   {
+   "id": "now_double_column",
+   "conf": {},
+   "sql": "SELECT now(p) FROM VALUES (6D) AS t(p)",
+   "clock": false,
+   "error": "NON_FOLDABLE_ARGUMENT",
+   "message": "[NON_FOLDABLE_ARGUMENT] The function `now` requires the parameter `precision` to be a foldable expression of the type \"DOUBLE\", but the actual argument is a non-foldable."
+  },
+  {
+   "id": "now_int_column",
+   "conf": {},
+   "sql": "SELECT now(p) FROM VALUES (6) AS t(p)",
+   "clock": false,
+   "error": "NON_FOLDABLE_ARGUMENT",
+   "message": "[NON_FOLDABLE_ARGUMENT] The function `now` requires the parameter `precision` to be a foldable expression of the type \"INT\", but the actual argument is a non-foldable."
+  },
+  {
+   "id": "current_timestamp_wraps",
+   "conf": {},
+   "sql": "SELECT typeof(current_timestamp(4294967302L))",
+   "clock": true,
+   "names": [
+    "typeof(current_timestamp())"
+   ],
+   "typed": [
+    [
+     0,
+     "timestamp"
+    ]
+   ]
+  },
+  {
+   "id": "current_timestamp_wraps_to_0",
+   "conf": {},
+   "sql": "SELECT current_timestamp(4294967296L)",
+   "clock": false,
+   "error": "INVALID_TIMESTAMP_PRECISION",
+   "message": "[INVALID_TIMESTAMP_PRECISION] The seconds precision 0 of TIMESTAMP_LTZ is invalid. Expected an integer in [7, 9] for nanosecond precision; use precision 6 or parameterless TIMESTAMP_LTZ for the standard microsecond type."
+  },
+  {
+   "id": "current_timestamp_dayofweek",
+   "conf": {},
+   "sql": "SELECT typeof(current_timestamp(dayofweek(DATE '1970-01-02')))",
+   "clock": true,
+   "names": [
+    "typeof(current_timestamp())"
+   ],
+   "typed": [
+    [
+     0,
+     "timestamp"
+    ]
+   ]
+  },
+  {
    "id": "instr_collated",
    "conf": {},
    "sql": "SELECT instr(name COLLATE UTF8_LCASE, 'PL') FROM VALUES ('apple') t(name)",

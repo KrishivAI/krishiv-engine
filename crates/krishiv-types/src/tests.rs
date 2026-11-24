@@ -11,7 +11,7 @@ use crate::arrow::{
 };
 use crate::{
     ArrayType, DataType, DecimalStorage, DecimalType, MapType, Metadata, Srid, StructField,
-    StructType, UdtType, parse_data_type,
+    StructType, TypeGrammar, UdtType, parse_data_type, parse_data_type_in,
 };
 
 fn dec(p: u32, s: u32) -> DataType {
@@ -161,7 +161,6 @@ fn spatial_fields_need_their_tag() {
 /// the range as `[0, 9]`.
 #[test]
 fn the_type_grammar_follows_the_release() {
-    use crate::{TypeGrammar, parse_data_type_in};
     let class = |r: crate::error::Result<DataType>| r.err().map(|e| e.error_class());
     let v42 = |s: &str| parse_data_type_in(s, TypeGrammar::V4_2);
     let v43 = |s: &str| parse_data_type_in(s, TypeGrammar::V4_3);
@@ -192,7 +191,10 @@ fn the_type_grammar_follows_the_release() {
         class(v43("timestamp_ntz(3)")),
         Some(ErrorClass::InvalidTimestampPrecision)
     );
-    assert!(v42("timestamp_ntz(6)").is_err());
+    assert_eq!(
+        class(v42("timestamp_ntz(6)")),
+        Some(ErrorClass::UnsupportedDatatype)
+    );
     // Schema JSON: 6 is the microsecond type, 7..=9 refused, anything else malformed.
     let field = |t: &str| {
         format!(
@@ -209,7 +211,35 @@ fn the_type_grammar_follows_the_release() {
         class(DataType::from_json(&field("timestamp_ntz(2)"))),
         Some(ErrorClass::InvalidTimestampPrecision)
     );
-    assert!(DataType::from_json(&field("timestamp_ntz(x)")).is_err());
+    assert_eq!(
+        class(DataType::from_json(&field("timestamp_ntz(x)"))),
+        Some(ErrorClass::InvalidJsonDataType)
+    );
+    // Spark 4.2.0's `nameToType` has no `timestamp_ntz(p)` / `timestamp_ltz(p)`: under 4.2 every
+    // such name is `INVALID_JSON_DATA_TYPE` naming it, but `(6)`, which Krishiv still reads.
+    for name in [
+        "timestamp_ntz(9)",
+        "timestamp_ltz(7)",
+        "timestamp_ntz(3)",
+        "timestamp_ltz(0)",
+    ] {
+        let e = DataType::from_json_in(&field(name), TypeGrammar::V4_2).unwrap_err();
+        assert_eq!(e.error_class(), ErrorClass::InvalidJsonDataType, "{name}");
+        assert_eq!(
+            e.message_parameters(),
+            [("invalidType", name.to_owned())],
+            "{name}"
+        );
+    }
+    let ntz = DataType::from_json_in(&field("timestamp_ntz(6)"), TypeGrammar::V4_2).unwrap();
+    assert_eq!(ntz.simple_string(), "struct<a:timestamp_ntz>");
+    assert_eq!(
+        class(DataType::from_json_in(
+            &field("timestamp_ntz(9)"),
+            TypeGrammar::V4_3
+        )),
+        Some(ErrorClass::KrishivUnsupportedFeature)
+    );
     // A `time(9)` read under 4.2 is refused with 4.2's text.
     let t9 = DataType::from_json_in(&field("time(9)"), TypeGrammar::V4_2).unwrap_err();
     assert!(t9.to_string().contains("range [0, 6]"));
@@ -351,8 +381,10 @@ fn time_and_spatial_types_round_trip_through_json() {
     .into();
     assert_eq!(DataType::from_json(&nested.json()).as_ref(), Ok(&nested));
     let class = |s: &str| DataType::from_json(s).map_err(|e| e.error_class());
+    // `time(7)` is Spark 4.3's (the default grammar); Spark 4.2 refuses it.
+    assert_eq!(class("\"time(7)\""), Ok(DataType::Time { precision: 7 }));
     assert_eq!(
-        class("\"time(7)\""),
+        DataType::from_json_in("\"time(7)\"", TypeGrammar::V4_2).map_err(|e| e.error_class()),
         Err(ErrorClass::UnsupportedTimePrecision)
     );
     assert_eq!(
@@ -646,10 +678,15 @@ fn parser_error_classes() {
         class("array<char(3)>"),
         Err(ErrorClass::KrishivUnsupportedFeature)
     );
-    let e = parse_data_type("timestamp(3)").err();
+    // Spark 4.2 has no timestamp precision; 4.3 (the default grammar) takes only 6 and 7..=9.
+    let e = parse_data_type_in("timestamp(3)", TypeGrammar::V4_2).err();
     assert_eq!(
         e.map(|e| e.to_string()).as_deref(),
         Some("[UNSUPPORTED_DATATYPE] Unsupported data type \"TIMESTAMP(3)\". SQLSTATE: 0A000")
+    );
+    assert_eq!(
+        parse_data_type("timestamp(3)").map_err(|e| e.error_class()),
+        Err(ErrorClass::InvalidTimestampPrecision)
     );
 }
 

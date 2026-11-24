@@ -354,8 +354,9 @@ impl Resolver<'_> {
         };
         let [value] = &values[..] else { return e };
         // Spark's legacy rule (`subquery_legacy.rs`) answers it otherwise.
+        // A projection over the aggregate counts too (`count(*) + 3L`, or the cast the comparison
+        // adds: `CAST(id AS DECIMAL(10,0)) IN (SELECT count(*) ...)`).
         if self.ctx.conf.legacy_exists_in_count
-            || !matches!(plan.node, crate::PlanNode::Aggregate { .. })
             || !crate::analyzer::subquery::one_row_aggregate(plan)
         {
             return e;

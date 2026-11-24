@@ -27,57 +27,117 @@ use serde_json::Value;
 /// Result rows, each value as text (NULL as `None`).
 type Rows = Vec<Vec<Option<String>>>;
 
-/// Cases not matched yet, by `(release, id, how)`: each must still differ, in the way `how` (a part
-/// of the mismatch report) says; a fixed gap, or one that differs in another way, fails the test.
+/// Cases not matched yet, by `(release, id, how)`: each must still differ, and Krishiv's own outcome
+/// must be exactly `how` (`Mismatch::got`); a fixed gap, or one that differs in another way, fails
+/// the test.
 const KNOWN_GAPS: &[(&str, &str, &str)] = &[
     // `min`/`max` have no `Time64` accumulator yet.
-    ("4.2.0", "max_distinct", "Max of Time64(ns)"),
-    ("4.3.0", "max_distinct", "Max of Time64(ns)"),
-    ("4.2.0", "max_only", "Max of Time64(ns)"),
-    ("4.3.0", "max_only", "Max of Time64(ns)"),
+    (
+        "4.2.0",
+        "max_distinct",
+        "[KRISHIV_UNSUPPORTED_FEATURE] The feature Max of Time64(ns) is not supported by Krishiv yet.",
+    ),
+    (
+        "4.3.0",
+        "max_distinct",
+        "[KRISHIV_UNSUPPORTED_FEATURE] The feature Max of Time64(ns) is not supported by Krishiv yet.",
+    ),
+    (
+        "4.2.0",
+        "max_only",
+        "[KRISHIV_UNSUPPORTED_FEATURE] The feature Max of Time64(ns) is not supported by Krishiv yet.",
+    ),
+    (
+        "4.3.0",
+        "max_only",
+        "[KRISHIV_UNSUPPORTED_FEATURE] The feature Max of Time64(ns) is not supported by Krishiv yet.",
+    ),
     // The nanosecond timestamp types are Krishiv 0.3.1 (scope note P3-R3): with
     // `spark.sql.timestampNanosTypes.enabled` on, Spark 4.3 builds them; Krishiv refuses by name.
     (
         "4.3.0",
         "ts_ntz9_nanos_on",
-        "nanosecond-precision timestamp types",
+        "[KRISHIV_UNSUPPORTED_FEATURE] The feature nanosecond-precision timestamp types (Krishiv 0.3.1) is not supported by Krishiv yet.",
     ),
     (
         "4.3.0",
         "ts_ltz7_nanos_on",
-        "nanosecond-precision timestamp types",
+        "[KRISHIV_UNSUPPORTED_FEATURE] The feature nanosecond-precision timestamp types (Krishiv 0.3.1) is not supported by Krishiv yet.",
     ),
     // `date_format` refuses a TIME before the implicit cast Spark tries (4.2: the class differs).
     (
         "4.2.0",
         "date_format",
-        "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
+        "[DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE] Cannot resolve \"date_format(TIME '12:00:00.123456789', HH:mm:ss.SSSSSSSSS)\" due to data type mismatch: The first parameter requires the (\"STRING\" or \"DATE\" or \"TIMESTAMP\" or \"TIMESTAMP_NTZ\") type, however \"TIME '12:00:00.123456'\" has the type \"TIME(6)\".",
     ),
-    ("4.3.0", "date_format", "date_format of a TIME value"),
+    (
+        "4.3.0",
+        "date_format",
+        "[KRISHIV_UNSUPPORTED_FEATURE] The feature date_format of a TIME value (Spark 4.3) is not supported by Krishiv yet.",
+    ),
     // No cast from TIME to TIMESTAMP_NTZ yet.
     (
         "4.3.0",
         "to_timestamp_ntz",
-        "a cast from TIME to TIMESTAMP_NTZ",
+        "[KRISHIV_UNSUPPORTED_FEATURE] The feature a cast from TIME to TIMESTAMP_NTZ (Spark 4.3) is not supported by Krishiv yet.",
     ),
     // A bare TIMESTAMP does not follow `spark.sql.timestampType` yet.
     (
         "4.3.0",
         "ts6_ntz_default",
-        "TIMESTAMP(6) with spark.sql.timestampType",
+        "[KRISHIV_UNSUPPORTED_FEATURE] The feature TIMESTAMP(6) with spark.sql.timestampType=TIMESTAMP_NTZ is not supported by Krishiv yet.",
     ),
     // Spark 4.2 adds `: missing ')'` to the syntax error for some shapes; the hint is not reproduced.
-    ("4.2.0", "ts3_with_local", "missing ')'"),
-    ("4.2.0", "ts9_without", "missing ')'"),
+    (
+        "4.2.0",
+        "ts3_with_local",
+        "[PARSE_SYNTAX_ERROR] Syntax error at or near 'WITH'.",
+    ),
+    (
+        "4.2.0",
+        "ts9_without",
+        "[PARSE_SYNTAX_ERROR] Syntax error at or near 'WITHOUT'.",
+    ),
     // SQL-41: a literal given a collation by the implicit cast loses its `collate` in these rewrites' names.
     // The fix is row SQL-41's, not R3's; the cases stay in the fixture (the generator records every
     // case of the run), so they are pinned here until SQL-41 lands and removes these six lines.
-    ("4.2.0", "instr_collated", "names ["),
-    ("4.2.0", "locate_collated", "names ["),
-    ("4.2.0", "eq_collated", "names ["),
-    ("4.3.0", "instr_collated", "names ["),
-    ("4.3.0", "locate_collated", "names ["),
-    ("4.3.0", "eq_collated", "names ["),
+    (
+        "4.2.0",
+        "instr_collated",
+        "names [\"instr(collate(name, UTF8_LCASE), PL)\"]",
+    ),
+    (
+        "4.2.0",
+        "locate_collated",
+        "names [\"locate(PL, collate(name, UTF8_LCASE))\"]",
+    ),
+    (
+        "4.2.0",
+        "eq_collated",
+        "names [\"(collate(name, UTF8_LCASE) = APPLE)\"]",
+    ),
+    (
+        "4.3.0",
+        "instr_collated",
+        "names [\"instr(collate(name, UTF8_LCASE), PL)\"]",
+    ),
+    (
+        "4.3.0",
+        "locate_collated",
+        "names [\"locate(PL, collate(name, UTF8_LCASE))\"]",
+    ),
+    (
+        "4.3.0",
+        "eq_collated",
+        "names [\"(collate(name, UTF8_LCASE) = APPLE)\"]",
+    ),
+    // A foldable precision Krishiv's folder cannot evaluate: Spark evaluates it (6), Krishiv refuses
+    // it by name.
+    (
+        "4.3.0",
+        "current_timestamp_dayofweek",
+        "[KRISHIV_UNSUPPORTED_FEATURE] The feature `current_timestamp(dayofweek(DATE '1970-01-02'))` with a precision Krishiv cannot fold is not supported by Krishiv yet.",
+    ),
 ];
 
 fn fixture(release: &str) -> Value {
@@ -139,8 +199,23 @@ fn run(s: &Session, sql: &str) -> Result<(Vec<String>, Rows), KrishivError> {
     Ok((names, rows))
 }
 
-/// Why case `c` differs on `profile`, or `None` when it matches.
-fn check(profile: SparkProfile, c: &Value) -> Option<String> {
+/// How a case differs: `why` compares with Spark, `got` is Krishiv's own outcome alone (its error as
+/// `[CLASS] message`, or the names, column or values it gave), which `KNOWN_GAPS` pins exactly.
+struct Mismatch {
+    why: String,
+    got: String,
+}
+
+fn mismatch(why: String, got: String) -> Option<Mismatch> {
+    Some(Mismatch { why, got })
+}
+
+fn shown(e: &KrishivError) -> String {
+    format!("[{}] {}", e.error_class().name(), e.message())
+}
+
+/// How case `c` differs on `profile`, or `None` when it matches.
+fn check(profile: SparkProfile, c: &Value) -> Option<Mismatch> {
     let sql = c["sql"].as_str().expect("sql");
     let clock = c["clock"].as_bool().unwrap_or(false);
     let conf = c["conf"].as_object().expect("conf");
@@ -148,7 +223,12 @@ fn check(profile: SparkProfile, c: &Value) -> Option<String> {
     let got = run(&s, sql);
     if c.get("error").is_some() || c.get("message").is_some() {
         let err = match got {
-            Ok(v) => return Some(format!("ran ({v:?}), Spark fails: {}", c["message"])),
+            Ok(v) => {
+                return mismatch(
+                    format!("ran ({v:?}), Spark fails: {}", c["message"]),
+                    format!("ran {v:?}"),
+                );
+            }
             Err(e) => e,
         };
         let Some(class) = c["error"].as_str() else {
@@ -156,20 +236,17 @@ fn check(profile: SparkProfile, c: &Value) -> Option<String> {
             return None;
         };
         let want = c["message"].as_str().unwrap_or_default();
-        let got = format!("[{}] {}", err.error_class().name(), err.message());
+        let got = shown(&err);
         if err.error_class().name() != class || !got.starts_with(want.trim_end_matches('.')) {
-            return Some(format!("error `{got}`, Spark `{want}`"));
+            return mismatch(format!("error `{got}`, Spark `{want}`"), got);
         }
         return None;
     }
     let (names, rows) = match got {
         Ok(v) => v,
         Err(e) => {
-            return Some(format!(
-                "fails `[{}] {}`",
-                e.error_class().name(),
-                e.message()
-            ));
+            let got = shown(&e);
+            return mismatch(format!("fails `{got}`"), got);
         }
     };
     let want_names: Vec<String> = c["names"]
@@ -179,7 +256,10 @@ fn check(profile: SparkProfile, c: &Value) -> Option<String> {
         .map(|n| n.as_str().expect("name").to_owned())
         .collect();
     if names != want_names {
-        return Some(format!("names {names:?}, Spark {want_names:?}"));
+        return mismatch(
+            format!("names {names:?}, Spark {want_names:?}"),
+            format!("names {names:?}"),
+        );
     }
     if clock {
         for t in c["typed"].as_array().into_iter().flatten() {
@@ -187,7 +267,10 @@ fn check(profile: SparkProfile, c: &Value) -> Option<String> {
             let want = t[1].as_str().map(str::to_owned);
             let got = rows.first().and_then(|r| r.get(i)).cloned().flatten();
             if got != want {
-                return Some(format!("column {i}: {got:?}, Spark {want:?}"));
+                return mismatch(
+                    format!("column {i}: {got:?}, Spark {want:?}"),
+                    format!("column {i}: {got:?}"),
+                );
             }
         }
     } else {
@@ -204,7 +287,10 @@ fn check(profile: SparkProfile, c: &Value) -> Option<String> {
             })
             .collect();
         if rows != want {
-            return Some(format!("values {rows:?}, Spark {want:?}"));
+            return mismatch(
+                format!("values {rows:?}, Spark {want:?}"),
+                format!("values {rows:?}"),
+            );
         }
     }
     None
@@ -220,11 +306,12 @@ fn release(release: &str, profile: SparkProfile) {
             .find(|(r, g, _)| *r == release && *g == id)
             .map(|(_, _, how)| *how);
         match (check(profile, c), gap) {
-            (Some(why), None) => failures.push(format!("{id}: {why}")),
+            (Some(m), None) => failures.push(format!("{id}: {}", m.why)),
             (None, Some(_)) => failures.push(format!("{id}: listed in KNOWN_GAPS but matches now")),
-            (Some(why), Some(how)) if !why.contains(how) => {
+            (Some(m), Some(how)) if m.got != how => {
                 failures.push(format!(
-                    "{id}: a known gap that differs in another way: {why}"
+                    "{id}: a known gap that differs in another way: {} (Krishiv: {:?})",
+                    m.why, m.got
                 ));
             }
             _ => {}

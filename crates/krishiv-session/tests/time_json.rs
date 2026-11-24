@@ -7,6 +7,7 @@
 use arrow_array::Array;
 use arrow_array::cast::AsArray;
 use futures::executor::block_on;
+use krishiv_common::error::ErrorClass;
 use krishiv_plan::analyzer::SparkProfile;
 use krishiv_session::Session;
 
@@ -91,7 +92,7 @@ fn from_json_keeps_nine_digits_under_spark_4_3() {
     );
 }
 
-/// Spark 4.3.0 (lane review probe `probe-430.out`): a DDL schema string reports a bad
+/// Spark 4.3.0 (lane probe of 2026-11-24: `error` is `'<type name>'`, `hint` empty): a DDL schema string reports a bad
 /// timestamp or time precision as `PARSE_SYNTAX_ERROR` at the type name, since
 /// `DataType.parseTypeWithFallback` throws the direct parse's error when the field-list
 /// parse fails too. `timestamp(6)` and `timestamp_ltz(6)` are the microsecond type.
@@ -109,11 +110,21 @@ fn a_ddl_schema_precision_error_is_a_syntax_error_under_spark_4_3() {
         ("timestamp_ntz(3)", "timestamp_ntz"),
         ("time(10)", "time"),
     ] {
-        let e = run(&format!("SELECT from_json('{{\"a\":1}}', 'a {ty}')"))
-            .unwrap_err()
-            .to_string();
-        assert!(e.contains("PARSE_SYNTAX_ERROR"), "{ty}: {e}");
-        assert!(e.contains(&format!("near '{near}'")), "{ty}: {e}");
+        let e = run(&format!("SELECT from_json('{{\"a\":1}}', 'a {ty}')")).unwrap_err();
+        assert_eq!(e.error_class(), ErrorClass::ParseSyntaxError, "{ty}: {e}");
+        let params: Vec<(String, String)> = e
+            .message_parameters()
+            .iter()
+            .map(|(k, v)| ((*k).to_owned(), v.clone()))
+            .collect();
+        assert_eq!(
+            params,
+            [
+                ("error".to_owned(), format!("'{near}'")),
+                ("hint".to_owned(), String::new())
+            ],
+            "{ty}"
+        );
     }
     for ty in ["timestamp_ltz(6)", "timestamp(6)"] {
         let b = run(&format!(

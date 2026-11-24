@@ -76,6 +76,26 @@ fn an_unknown_spark_version_is_corrupt() {
 }
 
 #[test]
+fn an_encoder_refuses_a_spark_version_its_reader_calls_corrupt() {
+    let (_, plan) = cases()
+        .into_iter()
+        .find(|(n, _)| n == "spark_version")
+        .unwrap();
+    for line in ["4.2", "3.5", "4.3.0", ""] {
+        let mut env = plan.env().clone();
+        env.spark_version = Some(std::sync::Arc::from(line));
+        let bad = plan_of_env(krishiv_exec::physical::PhysNode::OneRow, env);
+        assert_eq!(
+            encode(&bad).unwrap_err(),
+            CodecError::Unsupported(format!(
+                "the Spark version {line:?} in the expression environment"
+            )),
+            "{line:?}"
+        );
+    }
+}
+
+#[test]
 fn the_header_lists_exactly_the_features_in_use() {
     let m = message("window_ranking");
     assert_eq!(m.features, ["window"]);

@@ -282,6 +282,14 @@ CASES: list[tuple[str, dict[str, str], str, bool]] = [
     ("localtimestamp_negative", {}, "SELECT localtimestamp(-1)", False),
     ("current_timestamp_decimal", {}, "SELECT current_timestamp(6.0)", False),
     ("current_timestamp_string", {}, "SELECT current_timestamp('6')", False),
+    # Foldability is checked before the type, with the argument's own type in the message.
+    ("now_double_column", {}, "SELECT now(p) FROM VALUES (6D) AS t(p)", False),
+    ("now_int_column", {}, "SELECT now(p) FROM VALUES (6) AS t(p)", False),
+    # The precision is the value's `Number.intValue()`: a long wraps.
+    ("current_timestamp_wraps", {}, "SELECT typeof(current_timestamp(4294967302L))", True),
+    ("current_timestamp_wraps_to_0", {}, "SELECT current_timestamp(4294967296L)", False),
+    # A foldable precision Krishiv's folder cannot evaluate (Spark evaluates it to 6).
+    ("current_timestamp_dayofweek", {}, "SELECT typeof(current_timestamp(dayofweek(DATE '1970-01-02')))", True),
     # SQL-41: a literal given a collation by the implicit cast.
     ("instr_collated", {}, "SELECT instr(name COLLATE UTF8_LCASE, 'PL') FROM VALUES ('apple') t(name)", False),
     ("instr_literal_collated", {}, "SELECT instr(name, 'pl' COLLATE UTF8_LCASE) FROM VALUES ('apple') t(name)", False),
@@ -295,7 +303,7 @@ CONDITION = re.compile(r"\[([A-Z0-9_.]+)\]")
 def error_record(e: Exception) -> dict[str, Any]:
     """The condition and the message's first line, without the SQLSTATE and query context."""
     lines = [line for line in str(e).splitlines() if CONDITION.search(line)]
-    line = lines[0] if lines else str(e).splitlines()[0]
+    line = lines[0] if lines else (str(e).splitlines() or [""])[0]
     line = line[line.index("[") :] if "[" in line else line
     match = CONDITION.match(line)
     message = line.split(" SQLSTATE:")[0].strip()

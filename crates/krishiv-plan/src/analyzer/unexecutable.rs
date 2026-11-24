@@ -382,7 +382,22 @@ pub(super) fn check_known(
                 (t, e.origin)
             }
         };
-        if let Some(p) = types.iter().find_map(|t| time_over(t, max_time_precision)) {
+        // A cast's target counts for the precision only: a `TIME '..'` literal's own cast passes the
+        // feature gate (`is_time_literal_cast`), but a `TIME(7..9)` target from a front end that reads
+        // the 4.3 grammar is refused under an older profile.
+        let cast_to = match node {
+            Node::Expr(e) => match &e.node {
+                ExprNode::Cast { to, .. } => Some(to),
+                _ => None,
+            },
+            Node::Plan(_) => None,
+        };
+        if let Some(p) = types
+            .iter()
+            .copied()
+            .chain(cast_to)
+            .find_map(|t| time_over(t, max_time_precision))
+        {
             error = Some(AnalysisError::new(
                 UnsupportedTimePrecision {
                     precision: p.to_string(),

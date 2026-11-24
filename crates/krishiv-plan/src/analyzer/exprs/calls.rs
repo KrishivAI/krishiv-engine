@@ -102,7 +102,9 @@ impl Resolver<'_> {
 
     /// Spark 4.3's `current_timestamp(p)`, `now(p)` and `localtimestamp(p)`
     /// (`CurrentTimestampPrecision.validate`, `datetimeExpressions.scala`): `true` when the call
-    /// is one with `p = 6`, the plain call. A non-integral argument is `UNEXPECTED_INPUT_TYPE`;
+    /// is one with `p = 6`, the plain call. A non-foldable argument is `NON_FOLDABLE_ARGUMENT` (with
+    /// its own type), then a non-integral one `UNEXPECTED_INPUT_TYPE`; the value is read as Java's
+    /// `intValue()` (a long wraps);
     /// 7..=9 asks for the nanosecond types, which Spark keeps behind
     /// `spark.sql.timestampNanosTypes.enabled` (off): `FEATURE_NOT_ENABLED`; any other value is
     /// `INVALID_TIMESTAMP_PRECISION`. Before 4.3 (and for other calls) `false`: the arity check
@@ -120,32 +122,47 @@ impl Resolver<'_> {
         {
             return Ok(false);
         }
+        let zone = self.ctx.conf.session_zone;
+        let sql_type = |t: Option<&DataType>| {
+            t.map_or_else(|| "\"VOID\"".to_owned(), |t| format!("\"{}\"", t.sql()))
+        };
+        // Spark 4.3's `CurrentTimestampPrecision.validate` checks foldability first, naming the
+        // argument's own type (`now(p)` over a DOUBLE column: "DOUBLE"), then the type.
+        if crate::analyzer::ops::not_constant(&arg.expr) {
+            return Err(AnalysisError::new(
+                krishiv_common::error::NonFoldableArgument {
+                    func_name: format!("`{name}`"),
+                    param_name: "`precision`".to_owned(),
+                    param_type: sql_type(arg.ty.data_type.as_ref()),
+                },
+                e.origin,
+            ));
+        }
         let integral = matches!(
             arg.ty.data_type,
             Some(DataType::Byte | DataType::Short | DataType::Integer | DataType::Long)
         );
         if !integral {
-            let zone = self.ctx.conf.session_zone;
             return Err(AnalysisError::new(
                 krishiv_common::error::UnexpectedInputType {
                     param_index: "first".to_owned(),
                     function_name: format!("`{name}`"),
                     required_type: "\"INT\"".to_owned(),
                     input_sql: format!("\"{}\"", pretty(&arg.shown(), zone)),
-                    input_type: arg
-                        .ty
-                        .data_type
-                        .as_ref()
-                        .map_or_else(|| "\"VOID\"".to_owned(), |t| format!("\"{}\"", t.sql())),
+                    input_type: sql_type(arg.ty.data_type.as_ref()),
                 },
                 e.origin,
             ));
         }
         let p = match self.fold(&arg.expr, self.ctx.conf.ansi) {
-            Some(Constant::Integral(p)) => p,
+            // Spark reads the value's `Number.intValue()`: a long wraps
+            // (`current_timestamp(4294967302L)` is 6).
+            Some(Constant::Integral(p)) => {
+                let [a, b, c, d, ..] = p.to_le_bytes();
+                i32::from_le_bytes([a, b, c, d])
+            }
             // `now(CAST(NULL AS INT))` (Spark 4.3: `DATATYPE_MISMATCH.UNEXPECTED_NULL`).
             Some(Constant::Null) => {
-                let zone = self.ctx.conf.session_zone;
                 return Err(AnalysisError::new(
                     krishiv_common::error::DatatypeMismatchUnexpectedNull {
                         sql_expr: format!("\"{}\"", pretty(&arg.shown(), zone)),
@@ -154,19 +171,19 @@ impl Resolver<'_> {
                     e.origin,
                 ));
             }
-            // A column (`current_timestamp(n) AS x`): Spark 4.3's `NON_FOLDABLE_ARGUMENT`.
-            None if crate::analyzer::ops::not_constant(&arg.expr) => {
+            // A foldable precision the folder cannot evaluate (`dayofweek(DATE '1970-01-02')`):
+            // Spark evaluates it; Krishiv refuses it by name (an explicit divergence).
+            _ => {
                 return Err(AnalysisError::new(
-                    krishiv_common::error::NonFoldableArgument {
-                        func_name: format!("`{name}`"),
-                        param_name: "`precision`".to_owned(),
-                        // Spark's text is fixed: `"INT"` for every precision function.
-                        param_type: "\"INT\"".to_owned(),
+                    krishiv_common::error::KrishivUnsupportedFeature {
+                        feature: format!(
+                            "`{name}({})` with a precision Krishiv cannot fold",
+                            pretty(&arg.shown(), zone)
+                        ),
                     },
                     e.origin,
                 ));
             }
-            _ => return Ok(false),
         };
         match p {
             6 => Ok(true),

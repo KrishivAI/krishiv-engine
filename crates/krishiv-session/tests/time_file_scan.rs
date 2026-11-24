@@ -11,34 +11,36 @@
 use arrow_array::Array;
 use arrow_array::cast::AsArray;
 use futures::executor::block_on;
+use krishiv_common::error::{ErrorClass, KrishivError};
 use krishiv_plan::analyzer::SparkProfile;
 use krishiv_session::Session;
 
-fn read(profile: SparkProfile, format: &str, ty: &str) -> Result<Option<String>, String> {
-    let dir = tempfile::tempdir().map_err(|e| e.to_string())?;
+/// A directory holding one `format` file with the cell.
+fn file(format: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+    let dir = tempfile::tempdir().expect("temp dir");
     let (name, body) = match format {
         "csv" => ("t.csv", "12:00:00.123456789\n"),
         _ => ("t.json", "{\"t\":\"12:00:00.123456789\"}\n"),
     };
-    std::fs::write(dir.path().join(name), body).map_err(|e| e.to_string())?;
-    let s = Session::builder()
-        .profile(profile)
-        .build()
-        .map_err(|e| e.to_string())?;
-    block_on(s.sql("SET spark.sql.timeType.enabled = true")).map_err(|e| e.to_string())?;
     let path = dir.path().join(name);
+    std::fs::write(&path, body).expect("write the file");
+    (dir, path)
+}
+
+fn read(profile: SparkProfile, format: &str, ty: &str) -> Result<Option<String>, KrishivError> {
+    let (_dir, path) = file(format);
+    let s = Session::builder().profile(profile).build()?;
+    block_on(s.sql("SET spark.sql.timeType.enabled = true"))?;
     block_on(s.sql(&format!(
         "CREATE TEMPORARY VIEW v(t {ty}) USING {format} OPTIONS (path '{}')",
         path.display()
-    )))
-    .map_err(|e| e.to_string())?;
+    )))?;
     let b = block_on(async {
         s.sql("SELECT CAST(t AS STRING) FROM v")
             .await?
             .collect()
             .await
-    })
-    .map_err(|e| e.to_string())?;
+    })?;
     let c = &b[0].columns()[0];
     Ok((!c.is_null(0)).then(|| c.as_string_view().value(0).to_owned()))
 }
@@ -51,15 +53,17 @@ fn a_time_column_of_a_csv_or_json_file_is_refused_not_misread() {
                 if profile == SparkProfile::V4_2 && ty == "time(9)" {
                     // Spark 4.2's precision bound comes first.
                     let e = read(profile, format, ty).unwrap_err();
-                    assert!(
-                        e.contains("UNSUPPORTED_TIME_PRECISION"),
+                    assert_eq!(
+                        e.error_class(),
+                        ErrorClass::UnsupportedTimePrecision,
                         "{format} {ty}: {e}"
                     );
                     continue;
                 }
                 let e = read(profile, format, ty).unwrap_err();
-                assert!(
-                    e.contains("KRISHIV_UNSUPPORTED_FEATURE"),
+                assert_eq!(
+                    e.error_class(),
+                    ErrorClass::KrishivUnsupportedFeature,
                     "{profile:?} {format} {ty}: {e}"
                 );
             }

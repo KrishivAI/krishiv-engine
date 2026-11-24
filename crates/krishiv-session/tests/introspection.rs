@@ -847,3 +847,26 @@ fn show_namespaces_in_a_name() {
         [["d1"], ["default"]]
     );
 }
+
+/// `Created By` names the release of the reading session's profile (a Spark 4.3.0 run prints
+/// `Created By Spark 4.3.0`; 4.2.0 prints `Spark 4.2.0`).
+#[test]
+fn created_by_names_the_profile_release() {
+    for (profile, want) in [
+        (krishiv_plan::analyzer::SparkProfile::V4_3, "Spark 4.3.0"),
+        (krishiv_plan::analyzer::SparkProfile::V4_2, "Spark 4.2.0"),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let s = Session::builder().profile(profile).build().unwrap();
+        s.conf()
+            .set("spark.sql.warehouse.dir", dir.path().to_str().unwrap())
+            .unwrap();
+        run(&s, "CREATE TABLE c (a INT) USING parquet");
+        let ext = rows(&s, "DESCRIBE TABLE EXTENDED c");
+        let created = ext
+            .iter()
+            .find(|r| r[0] == "Created By")
+            .unwrap_or_else(|| panic!("no Created By row: {ext:?}"));
+        assert_eq!(created[1], want, "{profile:?}");
+    }
+}
