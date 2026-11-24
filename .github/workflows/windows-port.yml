@@ -111,6 +111,8 @@ jobs:
         env:
           TEMP: ${{ runner.temp }}
           TMP: ${{ runner.temp }}
+          # A test thread's stack is 2 MiB by default (8 MiB on Linux); the deep-plan tests overflow it.
+          RUST_MIN_STACK: "8388608"
         run: |
           set -o pipefail
           status=0

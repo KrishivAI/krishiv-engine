@@ -646,10 +646,11 @@ fn endpoints_are_checked() {
         "https://policy.example.com:8443/",
         "http://127.0.0.1:9000",
         "http://[::1]:9000",
-        "unix:/run/krishiv/policy.sock",
     ] {
         Endpoint::parse(ok).unwrap_or_else(|e| panic!("{ok}: {e}"));
     }
+    #[cfg(unix)]
+    Endpoint::parse("unix:/run/krishiv/policy.sock").unwrap();
     for bad in [
         "http://policy.example.com",
         "http://10.0.0.1:9000",
