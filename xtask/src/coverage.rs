@@ -602,6 +602,30 @@ fn package_args(packages: &[String]) -> Vec<String> {
     }
 }
 
+/// `crates/(a|b)/` for every directory under `crates/` that is not one of `packages`, or `None`
+/// for a whole-workspace run (or when no other crate exists). Handed to `llvm-cov report` so a
+/// `-p` run exports only the named packages' sources: the full export crashes the pinned
+/// toolchain's lcov renderer on some files (SIGSEGV in `CoverageExporterLcov::renderRoot`), and
+/// diff-coverage only needs the changed crates.
+fn other_crates_regex(root: &Path, packages: &[String]) -> Option<String> {
+    if packages.is_empty() {
+        return None;
+    }
+    let mut others: Vec<String> = std::fs::read_dir(root.join("crates"))
+        .ok()?
+        .filter_map(Result::ok)
+        .filter(|e| e.path().is_dir())
+        .filter_map(|e| e.file_name().into_string().ok())
+        .filter(|n| !packages.contains(n))
+        .collect();
+    others.sort();
+    if others.is_empty() {
+        None
+    } else {
+        Some(format!("crates/({})/", others.join("|")))
+    }
+}
+
 /// The nightly toolchain of branch coverage: pinned like the fuzz and ASan jobs, because a floating
 /// `nightly` broke the run (the 2026-10-31 nightly fails to compile `apache-avro` 0.22 with "cycle
 /// detected when computing when `ArraySchema` needs async drop"). `KRISHIV_COVERAGE_TOOLCHAIN` overrides it;
@@ -656,10 +680,14 @@ pub fn run_coverage(root: &Path, flags: &[&str]) -> Result<(), String> {
         test.env("LLVM_PROFILE_FILE_NAME", "krishiv-%8m.profraw");
     }
     run(test, "cargo llvm-cov nextest")?;
+    let ignore = other_crates_regex(root, &packages);
     let report = |extra: &[&str], out: &Path| {
         let mut c = base(&["report"]);
         if branch {
             c.arg("--branch");
+        }
+        if let Some(re) = &ignore {
+            c.args(["--ignore-filename-regex", re]);
         }
         c.args(extra).arg(out);
         c
@@ -832,6 +860,16 @@ mod tests {
         let f = super::CoverageFlags::parse(&["--no-branch", "-p", "a", "--package", "b"]).unwrap();
         assert!(!f.branch && !f.all && !f.html);
         assert_eq!(super::package_args(&f.packages), ["-p", "a", "-p", "b"]);
+        let root = std::env::temp_dir().join(format!("krishiv-cov-{}", std::process::id()));
+        for d in ["a", "b", "c", "d"] {
+            std::fs::create_dir_all(root.join("crates").join(d)).unwrap();
+        }
+        assert_eq!(
+            super::other_crates_regex(&root, &f.packages).as_deref(),
+            Some("crates/(c|d)/")
+        );
+        assert_eq!(super::other_crates_regex(&root, &[]), None);
+        std::fs::remove_dir_all(&root).unwrap();
         assert_eq!(super::package_args(&[]), ["--workspace"]);
         assert!(super::CoverageFlags::parse(&["-p"]).is_err());
         assert!(super::CoverageFlags::parse(&["--bogus"]).is_err());
