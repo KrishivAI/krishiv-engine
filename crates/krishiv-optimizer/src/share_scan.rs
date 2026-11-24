@@ -52,8 +52,8 @@
 //! estimator reads a reference to a definition of this rule as the scan
 //! (`estimate.rs`), since each reader's predicate implies the disjunction:
 //! read as the definition, a reader would count the disjunction's
-//! selectivity twice and a second join ordering would differ. Whether a reference really reads the buffer is
-//! decided by the physical planner, as for every shared definition (copies
+//! selectivity twice and a second join ordering would differ. Whether a
+//! reference really reads the buffer is decided by the physical planner, as for every shared definition (copies
 //! are kept when a runtime filter reaches one of them).
 
 use std::collections::{HashMap, HashSet};

@@ -315,7 +315,7 @@ fn a_scan_read_inside_a_barrier_is_not_shared() {
     assert_eq!(shared(&guarded(&[])), 3);
 }
 
-/// Every table a million rows with every column from statistics (`u` of the
+/// Every table ten million rows with every column from statistics (`u` of the
 /// generated-query tests at scale).
 #[derive(Debug)]
 struct Large;
@@ -387,4 +387,23 @@ proptest! {
         let db = data::small(seed);
         prop_assert_eq!(eval::rows(&db, once.root()), eval::rows(&db, plan.root()), "{}", sql);
     }
+}
+
+/// The generator gives the proptest above queries the rule shares: without
+/// them it would test nothing. About 3% do (2 of seeds 0..64), so its 256
+/// cases meet several.
+#[test]
+fn generated_queries_share_scans() {
+    let fired = (0..64_u64)
+        .filter(|&seed| {
+            let plan = support::resolve(&Gen::new(seed).top(), &support::ctx());
+            let once =
+                optimize_with_udfs(&plan, &Large, &UdfLibrary::new(), &config(true)).unwrap();
+            shared(&once) > 0
+        })
+        .count();
+    assert!(
+        fired >= 2,
+        "only {fired} of 64 generated queries share a scan"
+    );
 }
