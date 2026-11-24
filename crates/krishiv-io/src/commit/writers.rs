@@ -1,0 +1,116 @@
+// SPDX-License-Identifier: Apache-2.0
+//! Which writers of a directory are still alive (PY-054).
+//!
+//! A logged write records who it is in `_krishiv_log/<job>.writer` before any task writes a
+//! file, and removes the record at its commit. A write that was killed leaves the record behind; a
+//! later write that finds a record of a dead process on this machine deletes that job's unlogged
+//! files at once, instead of waiting for the one-hour grace that guards a concurrent write's files.
+//! A record that cannot be judged (another machine, another PID namespace, no `/proc`) is never
+//! dead: the grace still applies to it.
+
+use object_store::path::Path;
+
+use crate::commit_log::LOG_DIR;
+
+/// The suffix of a record's name; it never parses as a log version (`<n>.json`).
+const SUFFIX: &str = ".writer";
+
+/// The record of the write `job` under `root`.
+pub(super) fn record_path(root: &Path, job: &str) -> Path {
+    log_dir(root).join(format!("{job}{SUFFIX}"))
+}
+
+/// The directory of the records under `root`: the commit log's own (a record is deleted at the commit,
+/// and a directory of their own would be left behind empty).
+pub(super) fn log_dir(root: &Path) -> Path {
+    root.clone().join(LOG_DIR)
+}
+
+/// The job a record is named for.
+pub(super) fn job_of(record: &Path) -> Option<&str> {
+    record.filename()?.strip_suffix(SUFFIX)
+}
+
+/// This process as a record body: boot id, PID namespace, PID and start time, so a recycled PID
+/// is not mistaken for the writer. `None` where `/proc` does not say.
+pub(super) fn current() -> Option<String> {
+    let pid = std::process::id();
+    Some(format!("{}\n{pid}\n{}", machine()?, start_time(pid)?))
+}
+
+/// Whether the process a record names is gone from this machine. `false` when the record is
+/// another machine's or namespace's, or cannot be read: only a certain death counts.
+pub(super) fn is_dead(record: &[u8]) -> bool {
+    let Ok(text) = std::str::from_utf8(record) else {
+        return false;
+    };
+    let mut lines = text.lines();
+    let (Some(machine_id), Some(pid), Some(started)) = (lines.next(), lines.next(), lines.next())
+    else {
+        return false;
+    };
+    if machine().as_deref() != Some(machine_id) {
+        return false;
+    }
+    let Ok(pid) = pid.parse::<u32>() else {
+        return false;
+    };
+    // Not our own record: a write of this process is alive until it commits or fails.
+    if pid == std::process::id() {
+        return false;
+    }
+    match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+        Err(e) => e.kind() == std::io::ErrorKind::NotFound,
+        Ok(stat) => start_of(&stat).is_some_and(|s| s != started),
+    }
+}
+
+/// The boot id and PID namespace: two processes with the same pair share a PID space.
+fn machine() -> Option<String> {
+    let boot = std::fs::read_to_string("/proc/sys/kernel/random/boot_id").ok()?;
+    let ns = std::fs::read_link("/proc/self/ns/pid").ok()?;
+    Some(format!("{}:{}", boot.trim(), ns.display()))
+}
+
+fn start_time(pid: u32) -> Option<String> {
+    start_of(&std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?).map(str::to_owned)
+}
+
+/// Field 22 of `/proc/<pid>/stat` (clock ticks after boot at which the process started). The
+/// command name in field 2 may hold spaces and parentheses: fields count from the last `)`.
+fn start_of(stat: &str) -> Option<&str> {
+    stat.rsplit_once(')')?.1.split_whitespace().nth(19)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_start_time_is_field_22_even_when_the_command_holds_parentheses() {
+        let stat = "1234 (a (b) c) S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 99 23 24";
+        assert_eq!(start_of(stat), Some("99"));
+    }
+
+    #[test]
+    fn a_record_of_a_running_process_is_alive_and_one_of_another_machine_is_not_judged() {
+        let Some(me) = current() else { return };
+        assert!(!is_dead(me.as_bytes()));
+        let other = me.replacen(':', "x:", 1);
+        assert!(!is_dead(other.as_bytes()));
+        assert!(!is_dead(b"garbage"));
+    }
+
+    #[test]
+    fn a_record_of_a_vanished_process_is_dead() {
+        let Some(me) = current() else { return };
+        let machine_id = me.lines().next().unwrap();
+        // PID 4194304 is above the Linux maximum, so it never runs.
+        let record = format!("{machine_id}\n4194304\n1");
+        assert!(is_dead(record.as_bytes()));
+        // The PID of a live process with another start time: a recycled PID.
+        let parent = std::os::unix::process::parent_id();
+        let recycled = format!("{machine_id}\n{parent}\n1");
+        assert!(is_dead(recycled.as_bytes()));
+    }
+}

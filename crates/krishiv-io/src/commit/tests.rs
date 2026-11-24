@@ -1737,6 +1737,56 @@ fn a_logged_overwrite_sweeps_unlogged_files_of_a_killed_write_and_the_old_marker
     );
 }
 
+/// PY-075: a write under a file fails as a write (`TASK_WRITE_FAILED`, not "Reading the file"), and the
+/// OS error is the error's cause.
+#[test]
+fn a_write_that_cannot_start_names_the_os_error_not_a_read() {
+    let tmp = TempDir::new("py075");
+    std::fs::write(tmp.0.join("f.csv"), b"hi").unwrap();
+    let env = Env::new(
+        Arc::new(LocalFileSystem::new_with_prefix(&tmp.0).unwrap()),
+        "file://",
+    );
+    let e = env
+        .begin("f.csv/sub", SaveMode::Overwrite, "job-1")
+        .unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::TaskWriteFailed, "{e}");
+    let cause = e.cause().expect("the OS error is the cause").to_string();
+    assert!(cause.contains("os error"), "{cause}");
+}
+
+/// PY-054: a write whose process died leaves a record; the next write deletes that job's unlogged
+/// files at once (inside the grace), keeps a live write's, and removes the dead record.
+#[test]
+fn a_write_sweeps_the_unlogged_files_of_a_dead_writer_inside_the_grace() {
+    let Some(me) = super::writers::current() else {
+        return;
+    };
+    let env = Env::memory();
+    env.write_logged("t", SaveMode::Append, "job-1", 4, true);
+    // job-2 and job-3 wrote files and did not commit; job-2's process is gone, job-3's is this one.
+    for job in ["job-2", "job-3"] {
+        env.write_logged("t", SaveMode::Append, job, 3, false);
+    }
+    let machine_id = me.lines().next().unwrap();
+    let dead = format!("{machine_id}\n4194304\n1");
+    let dead_record = super::writers::record_path(&Path::from("t"), "job-2");
+    env.rt
+        .block_on(
+            env.io
+                .put_object(&env.store, &dead_record, Bytes::from(dead)),
+        )
+        .unwrap();
+    env.write_logged("t", SaveMode::Overwrite, "job-4", 2, true);
+    let on_store = env.names("t");
+    assert!(
+        !on_store.iter().any(|n| n.contains("job-2")),
+        "{on_store:?}"
+    );
+    assert!(on_store.iter().any(|n| n.contains("job-3")), "{on_store:?}");
+    assert!(!on_store.iter().any(|n| n.contains("job-2.writer")));
+}
+
 /// A concurrent overwrite replaces only the files its base snapshot shows: the task files of an append that
 /// has not committed yet are never in it, so they survive (and the append can still commit).
 #[test]
@@ -1808,7 +1858,9 @@ fn an_append_whose_files_an_overwrite_swept_never_publishes_missing_files() {
         .block_on(over.commit(&env.io, format.as_ref(), schema(), &o, over_files))
         .unwrap();
     assert!(
-        !env.names("t").iter().any(|n| n.contains("job-2")),
+        !env.names("t")
+            .iter()
+            .any(|n| n.contains("job-2") && !n.ends_with(".writer")),
         "the overwrite swept the append's files"
     );
     // Now the append commits.
