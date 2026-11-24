@@ -275,26 +275,37 @@ fn run(sql: &str, stats: &Stats) -> (String, Vec<String>) {
     run_checked(sql, stats, true)
 }
 
+/// Default options with eager aggregation off.
+fn no_eager() -> Options {
+    support::options(|o| o.eager_aggregation = false)
+}
+
 /// [`run`], comparing rows only when `rows` (the reference interpreter groups
 /// a collated string by its value, not by its collation key).
 fn run_checked(sql: &str, stats: &Stats, rows: bool) -> (String, Vec<String>) {
     let ctx = support::ctx_over(catalog());
     let plan = support::resolve(sql, &ctx);
-    let (optimized, steps) =
-        optimize_traced_with_options(&plan, stats, &Options::default()).unwrap();
+    // Eager aggregation runs first and may pre-empt the rule (or code the
+    // merged aggregate above its partial one): off, so these cases test the
+    // rule alone.
+    let on = no_eager();
+    let (optimized, steps) = optimize_traced_with_options(&plan, stats, &on).unwrap();
     assert_eq!(
         optimized.root().resolved_output(),
         plan.root().resolved_output(),
         "{sql}: the output keeps its attributes"
     );
-    let again = optimize_with(&optimized, stats).unwrap();
+    let again = optimize_with_options(&optimized, stats, &on).unwrap();
     assert!(
         again.structurally_eq(&optimized),
         "{sql}: a fixed point\n{}\nagain:\n{}",
         optimized.root(),
         again.root()
     );
-    let off = support::options(|o| o.group_key_code = false);
+    let off = support::options(|o| {
+        o.group_key_code = false;
+        o.eager_aggregation = false;
+    });
     let without = optimize_with_options(&plan, stats, &off).unwrap();
     if !rows {
         // Unchecked rows only where the rule leaves the plan alone.
@@ -546,6 +557,10 @@ fn shared_dictionaries_stay_a_fixed_point() {
     // Off by default until its timed A/B passes.
     config
         .set("krishiv.optimizer.groupKeyCode", "true")
+        .unwrap();
+    // Eager aggregation would pre-empt the rule on the first query.
+    config
+        .set("krishiv.optimizer.eagerAggregation", "false")
         .unwrap();
     let udfs = krishiv_udf_sdk::UdfLibrary::new();
     let mut mixed = Stats::new();

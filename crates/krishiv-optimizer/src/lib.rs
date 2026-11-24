@@ -47,6 +47,10 @@
 //!    A5): an aggregate grouping by a dimension's proven-unique key and its
 //!    payload groups by the other side's key, the dimension joined above it;
 //!    then join order, eager aggregation, prune and tidy again when it moved.
+//!    While the rule is on, eager aggregation leaves it the joins whose other
+//!    side's keys the aggregate groups by and are proven unique (or await a
+//!    key count the rule requests), and runs once more without that after
+//!    it, so a join the rule refuses is still pushed.
 //!    **Late payload join**, once, with statistics (`late_payload`): a
 //!    dimension's payload columns join above the semi, anti and outer joins
 //!    that never read them, a key-only semi join left in place; then join
@@ -629,6 +633,15 @@ fn run(
                     .and_then(ConfigValue::as_bool)
                     .unwrap_or(true)
             });
+        // Read here: eager aggregation leaves the joins that rule moves to it
+        // until it has run.
+        let above = options.payload_above_aggregate
+            && udfs.is_some_and(|(_, config)| {
+                config
+                    .get(&PAYLOAD_ABOVE_AGGREGATE)
+                    .and_then(ConfigValue::as_bool)
+                    .unwrap_or(false)
+            });
         let expand = options.pre_aggregate_expand
             && udfs.is_none_or(|(_, config)| {
                 config
@@ -636,13 +649,6 @@ fn run(
                     .and_then(ConfigValue::as_bool)
                     .unwrap_or(true)
             });
-        let root = match stats {
-            Some(stats) if eager => eager_pass(&root, stats, options, expand, joins, &mut t)?,
-            _ => root,
-        };
-        // After eager aggregation (which may pre-empt it) and the final join
-        // order, before pruning: an aggregate's dimension keys travel as one
-        // code (design P2b D2).
         // `krishiv.experimental.groupKeyCodeForce` (measurement only) also
         // switches it on, without the statistics test.
         let forced = udfs.is_some_and(|(_, config)| {
@@ -656,60 +662,72 @@ fn run(
                         .and_then(ConfigValue::as_bool)
                         .unwrap_or(false)
                 }));
-        let root = match stats {
-            Some(stats) if coded => {
-                let (after, notes) = group_code::rewrite(
-                    Arc::clone(&root),
-                    stats,
-                    options.stats_propagation,
-                    forced,
-                )?;
-                t.step("GroupKeyCode", 1, "GroupKeyCode", &root, &after);
-                t.notes("GroupKeyCode", &after, notes);
-                // The decode join is a new inner join: ordered (and its
-                // inputs' canonical order settled) here, as a second
-                // optimization would.
-                if Arc::ptr_eq(&after, &root) {
-                    after
-                } else {
-                    order_and_restrict(after, stats, options, joins, &mut t)?
+        // Eager aggregation through pruning. While `PayloadAboveAggregate` is
+        // on, eager first leaves that rule the joins it may move (`defer`); if
+        // it then moves none, this runs again without deferring, so the plan
+        // is the one the rule off gives (its key requests stand).
+        let before_payload = |root: Arc<LogicalPlan>,
+                              defer: bool,
+                              t: &mut Trace|
+         -> Result<(Arc<LogicalPlan>, bool), KrishivError> {
+            let (root, deferred) = match stats {
+                Some(stats) if eager => eager_pass(&root, stats, options, expand, joins, defer, t)?,
+                _ => (root, false),
+            };
+            // After eager aggregation (which may pre-empt it) and the final join
+            // order, before pruning: an aggregate's dimension keys travel as one
+            // code (design P2b D2).
+            let root = match stats {
+                Some(stats) if coded => {
+                    let (after, notes) = group_code::rewrite(
+                        Arc::clone(&root),
+                        stats,
+                        options.stats_propagation,
+                        forced,
+                    )?;
+                    t.step("GroupKeyCode", 1, "GroupKeyCode", &root, &after);
+                    t.notes("GroupKeyCode", &after, notes);
+                    // The decode join is a new inner join: ordered (and its
+                    // inputs' canonical order settled) here, as a second
+                    // optimization would.
+                    if Arc::ptr_eq(&after, &root) {
+                        after
+                    } else {
+                        order_and_restrict(after, stats, options, joins, t)?
+                    }
                 }
-            }
-            _ => root,
-        };
-        // Without join ordering, once more after restriction (its semi
-        // joins); with it, `order_and_restrict` already ran the rule on the
-        // final joins. Tidying pushes what it adds.
-        // The rule and the batch alternate until the rule adds nothing, as in
-        // `order_and_restrict`: what it adds can make another outer join
-        // one-sided, whose `ON` conjuncts the batch then moves.
-        let root = if stats.is_none() && options.inferred_join_filters {
-            let mut root = root;
-            for _ in 1..=MAX_ITERATIONS {
-                let inferred = t.once("InferJoinFilters", &root, infer_join_filters)?;
-                if Arc::ptr_eq(&inferred, &root) {
-                    break;
+                _ => root,
+            };
+            // Without join ordering, once more after restriction (its semi
+            // joins); with it, `order_and_restrict` already ran the rule on the
+            // final joins. Tidying pushes what it adds.
+            // The rule and the batch alternate until the rule adds nothing, as in
+            // `order_and_restrict`: what it adds can make another outer join
+            // one-sided, whose `ON` conjuncts the batch then moves.
+            let root = if stats.is_none() && options.inferred_join_filters {
+                let mut root = root;
+                for _ in 1..=MAX_ITERATIONS {
+                    let inferred = t.once("InferJoinFilters", &root, infer_join_filters)?;
+                    if Arc::ptr_eq(&inferred, &root) {
+                        break;
+                    }
+                    root = batch(inferred, "Rewrite", t)?;
                 }
-                root = batch(inferred, "Rewrite", &mut t)?;
-            }
-            root
-        } else {
-            root
+                root
+            } else {
+                root
+            };
+            Ok((prune_and_tidy(&root, stats, t)?, deferred))
         };
-        let root = prune_and_tidy(&root, stats, &mut t)?;
+        let pre = Arc::clone(&root);
+        let mark = t.steps.len();
+        let (root, mut deferred) = before_payload(Arc::clone(&pre), above, &mut t)?;
         // After pruning, so the payload is what the aggregate really groups
         // by; the moved join is then ordered with the dimension's joins (it
         // sits above an aggregate, which ordering never looks through, so
         // ordering cannot undo it), eager aggregation and the group-key code
         // see the new aggregate, and the plan is pruned and tidied again
         // (design P2b A5).
-        let above = options.payload_above_aggregate
-            && udfs.is_some_and(|(_, config)| {
-                config
-                    .get(&PAYLOAD_ABOVE_AGGREGATE)
-                    .and_then(ConfigValue::as_bool)
-                    .unwrap_or(false)
-            });
         let root = match stats {
             Some(stats) if above => {
                 // To a fixed point: a move gives a new aggregate, which the
@@ -717,6 +735,7 @@ fn run(
                 // may carry another payload; a second optimization would do
                 // the same.
                 let mut root = root;
+                let mut moved = false;
                 for _ in 1..=MAX_ITERATIONS {
                     let (after, notes) = payload_above::rewrite(
                         Arc::clone(&root),
@@ -734,9 +753,15 @@ fn run(
                     if Arc::ptr_eq(&after, &root) {
                         break;
                     }
+                    moved = true;
                     let mut ordered = order_and_restrict(after, stats, options, joins, &mut t)?;
                     if eager {
-                        ordered = eager_pass(&ordered, stats, options, expand, joins, &mut t)?;
+                        // A join this leaves to the rule (the moved dimension's own,
+                        // say) gets the pass without deferring below.
+                        let (pushed, left) =
+                            eager_pass(&ordered, stats, options, expand, joins, true, &mut t)?;
+                        deferred |= left;
+                        ordered = pushed;
                     }
                     if coded {
                         let (after, notes) = group_code::rewrite(
@@ -752,6 +777,24 @@ fn run(
                         }
                     }
                     root = prune_and_tidy(&ordered, Some(stats), &mut t)?;
+                }
+                // The joins eager aggregation left to the rule and the rule
+                // refused: none moved, so the plan is the rule-off one (the
+                // rule's notes kept); some moved, so eager runs on what is left.
+                if deferred && !moved {
+                    let notes: Vec<RuleStep> = t
+                        .steps
+                        .drain(mark..)
+                        .filter(|s| s.rule == "PayloadAboveAggregate")
+                        .collect();
+                    root = before_payload(pre, false, &mut t)?.0;
+                    t.steps.extend(notes);
+                } else if deferred {
+                    let (pushed, _) =
+                        eager_pass(&root, stats, options, expand, joins, false, &mut t)?;
+                    if !Arc::ptr_eq(&pushed, &root) {
+                        root = prune_and_tidy(&pushed, Some(stats), &mut t)?;
+                    }
                 }
                 root
             }
@@ -785,7 +828,8 @@ fn run(
                     // the shape eager aggregation reads (where its gates allow,
                     // the aggregate then runs by the dimension's key below it).
                     if eager {
-                        ordered = eager_pass(&ordered, stats, options, expand, joins, &mut t)?;
+                        ordered =
+                            eager_pass(&ordered, stats, options, expand, joins, false, &mut t)?.0;
                     }
                     prune_and_tidy(&ordered, Some(stats), &mut t)?
                 }
@@ -988,23 +1032,38 @@ fn prune_and_tidy(
 }
 
 /// Eager aggregation, then join ordering again when it moved an aggregate.
+/// `defer`: leave `PayloadAboveAggregate`'s joins alone ([`eager::rewrite`]);
+/// also returns whether a join was left.
 fn eager_pass(
     root: &Arc<LogicalPlan>,
     stats: &dyn Statistics,
     options: &Options,
     expand: bool,
     joins: join_order::Settings,
+    defer: bool,
     t: &mut Trace,
-) -> Result<Arc<LogicalPlan>, KrishivError> {
-    let (after, notes) =
-        eager::rewrite(Arc::clone(root), stats, options.stats_propagation, expand)?;
+) -> Result<(Arc<LogicalPlan>, bool), KrishivError> {
+    let eager::Rewritten {
+        plan: after,
+        notes,
+        deferred,
+    } = eager::rewrite(
+        Arc::clone(root),
+        stats,
+        options.stats_propagation,
+        defer,
+        expand,
+    )?;
     t.notes("EagerAggregate", &after, notes);
     // The moved aggregate changes what its join's inputs estimate, and so
     // their canonical order.
     if Arc::ptr_eq(&after, root) {
-        Ok(after)
+        Ok((after, deferred))
     } else {
-        order_and_restrict(after, stats, options, joins, t)
+        Ok((
+            order_and_restrict(after, stats, options, joins, t)?,
+            deferred,
+        ))
     }
 }
 

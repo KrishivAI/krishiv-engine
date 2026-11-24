@@ -970,4 +970,13 @@ fn magnitude(e: &Expr, rel: &RelStats) -> Option<f64> {
 
 #[cfg(test)]
 mod tests;
+/// Whether `p` is unique on a subset of `cols` by a proof (the plan or a
+/// [`Statistics::unique_keys`] fact) or could be once a base relation's key
+/// count answers a request ([`Statistics::want_unique`]). Eager aggregation
+/// leaves such a join to this rule first, so the rule can fire or issue the
+/// request; eager runs again after it.
+pub(crate) fn keyed(p: &Arc<LogicalPlan>, cols: &Attrs, stats: &dyn Statistics) -> bool {
+    unique(p, cols, stats).is_some()
+}
+
 mod unique;

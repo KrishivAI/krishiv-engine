@@ -103,20 +103,34 @@ enum Session {
 }
 
 fn optimized(t: &Tpch, text: &str, stats: &dyn Statistics, on: bool, s: Session) -> Plan {
+    optimized_eager(t, text, stats, on, true, s)
+}
+
+/// [`optimized`], with eager aggregation on or off (`eager`).
+fn optimized_eager(
+    t: &Tpch,
+    text: &str,
+    stats: &dyn Statistics,
+    on: bool,
+    eager: bool,
+    s: Session,
+) -> Plan {
     let plan = analyze(t, text);
+    let flag = |b: bool| if b { "true" } else { "false" };
     match s {
         Session::None => {
             let mut options = Options::default();
             options.group_key_code = on;
+            options.eager_aggregation = eager;
             krishiv_optimizer::optimize_with_options(&plan, stats, &options).unwrap()
         }
         Session::Config => {
             let mut config = Config::new();
             config
-                .set(
-                    "krishiv.optimizer.groupKeyCode",
-                    if on { "true" } else { "false" },
-                )
+                .set("krishiv.optimizer.groupKeyCode", flag(on))
+                .unwrap();
+            config
+                .set("krishiv.optimizer.eagerAggregation", flag(eager))
                 .unwrap();
             krishiv_optimizer::optimize_with_udfs(&plan, stats, &UdfLibrary::new(), &config)
                 .unwrap()
@@ -227,7 +241,9 @@ fn null_stats() -> ByName {
 
 /// A null key tuple is one `dict` row, joined by `<=>`: the null groups
 /// survive the encoding join, with and without a shared dictionary, and
-/// under an outer join above `D`.
+/// under an outer join above `D`. Eager aggregation is off: with it on it
+/// takes these joins first (`d`'s `isnotnull(dk)` filter only drops null
+/// keys), and that plan must return the same rows.
 #[test]
 fn null_dimension_keys_keep_their_groups() {
     let rt = runtime();
@@ -242,12 +258,15 @@ fn null_dimension_keys_keep_their_groups() {
          LEFT JOIN f AS f2 ON f.x = f2.fk GROUP BY g1, g2",
     ] {
         for s in [Session::None, Session::Config] {
-            let on = optimized(&t, q, &stats, true, s);
+            let on = optimized_eager(&t, q, &stats, true, false, s);
             assert!(coded(&on), "{q} {s:?}: not coded\n{}", on.root());
-            let off = optimized(&t, q, &stats, false, s);
+            let off = optimized_eager(&t, q, &stats, false, false, s);
             let got = sorted(&run(&physical(&t, &on).unwrap()).unwrap());
             let want = sorted(&run(&physical(&t, &off).unwrap()).unwrap());
             assert_eq!(got, want, "{q} {s:?}\n{}", on.root());
+            let eager = optimized(&t, q, &stats, true, s);
+            let rows = sorted(&run(&physical(&t, &eager).unwrap()).unwrap());
+            assert_eq!(rows, want, "{q} {s:?} eager\n{}", eager.root());
             assert!(
                 want.iter().any(|r| r.starts_with("NULL|NULL|")),
                 "{q}: the data has a null group: {want:?}"

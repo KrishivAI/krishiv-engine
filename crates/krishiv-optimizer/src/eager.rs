@@ -9,6 +9,11 @@
 //! `sum`, `avg`, `min` and `max` need no duplication factor, and the same
 //! accumulators run, so result types and rounding do not change.
 //!
+//! An aggregate without calls (a distinct) pushes its groups the same way:
+//! the partial aggregate removes repeated groups below the join, the
+//! aggregate above the rest. A distinct over a semi or anti join (`INTERSECT`,
+//! `EXCEPT`) first moves below it, onto both inputs ([`semi`]).
+//!
 //! # When it applies
 //!
 //! Calls ([`refusal_of_call`]). Every aggregate call must be one that exports
@@ -16,7 +21,9 @@
 //!
 //! 1. Its arguments read only `S`, are deterministic, hold no subquery and
 //!    cannot raise under ANSI: the join may drop a row Spark never evaluated
-//!    the argument on.
+//!    the argument on. Exact decimal `+`, `-` and `*` (the result type holds
+//!    every value) and their division by a nonzero integral literal that keeps
+//!    the integral digits never raise ([`decimal_never_raises`]).
 //! 2. It cannot be affected by summation order. Spark checks overflow in
 //!    processing order, so a sum runs here only where no buffer can overflow:
 //!    `sum` of at most 32-bit integers into `bigint` (fewer than 2^32 rows per
@@ -42,7 +49,8 @@
 //! - the groups, the product of the keys' distinct counts, are at most
 //!   `1 / `[`MIN_REDUCTION`] of `S`'s rows;
 //! - at most one key beyond the join's own;
-//! - the other side is a table read whole. A filtered dimension prunes the
+//! - the other side is a table read whole (filters that only drop nulls of a
+//!   column, as `InferJoinFilters` adds them, count as whole). A filtered dimension prunes the
 //!   aggregated side through a runtime filter, which pays more than grouping
 //!   and which a smaller aggregate could take away by becoming the join's build
 //!   side; estimates cannot see this, as they read a key's matches from its
@@ -58,10 +66,12 @@ use std::sync::Arc;
 use krishiv_common::error::KrishivError;
 use krishiv_plan::{
     AttrId, BoundColumn, Builtin, Expr, ExprNode, FunctionKind, Grouping, JoinCondition, JoinKind,
-    Literal, LogicalPlan, PlanNode, ResolvedExpr, ResolvedFunction, may_raise,
-    partial_state_columns,
+    Literal, LogicalPlan, PlanNode, ResolvedExpr, ResolvedFunction, decimal_never_raises,
+    may_raise, partial_state_columns,
 };
 use krishiv_types::DataType;
+
+mod semi;
 
 use crate::dag;
 use crate::estimate::Estimator;
@@ -69,6 +79,7 @@ use crate::expr::{
     Attrs, builtin, column, conjuncts, data_type, has_outer_reference, has_subquery,
     is_deterministic, lit, output_of, references, references_into, same,
 };
+use crate::payload_above::keyed;
 use crate::restrict::{MAX_ID, max_id};
 use crate::stats::{RelStats, Statistics};
 
@@ -92,58 +103,133 @@ const ROW_MARGIN: f64 = 8.0;
 /// Pushes aggregates below joins, entering subquery plans. Also returns one
 /// line per aggregate over a join: why it was pushed, or the gate that refused
 /// it (`EXPLAIN VERBOSE`).
+///
+/// With `defer`, a join whose other side's join keys are all group keys of the
+/// aggregate and unique, or could be proven so (by the plan, a key fact or a
+/// key count the rule requests), is left alone: that is the join
+/// `PayloadAboveAggregate` moves, and its plan needs no aggregate above the
+/// join. Leaving it also lets the rule request the count the session answers
+/// on the next optimization. The optimizer runs this pass again without
+/// `defer` after that rule, so a join it refuses is still pushed here.
 pub(crate) fn rewrite(
     root: Arc<LogicalPlan>,
     stats: &dyn Statistics,
     propagate: bool,
+    defer: bool,
     expand: bool,
-) -> Result<(Arc<LogicalPlan>, Vec<String>), KrishivError> {
+) -> Result<Rewritten, KrishivError> {
     let mut memo = Default::default();
     let mut next = max_id(&root, &mut memo).saturating_add(1);
     let mut est = Estimator::with_propagation(stats, propagate);
     let mut notes = Vec::new();
+    let defer = defer.then_some(stats);
+    let mut deferred = false;
     let out = dag::rewrite_up(root, &mut |p| {
-        let tried = match Shape::of(&p) {
-            Some(shape) => shape.push(shape.join, &mut est, &mut next).or_else(|why| {
-                // The dimension the keys need may sit below another one.
-                shape
-                    .rotated()
-                    .and_then(|join| shape.push(&join, &mut est, &mut next).ok())
-                    .ok_or(why)
-            }),
-            None => Err(String::new()),
+        let mut pushed = |d: Arc<LogicalPlan>, est: &mut Estimator<'_>| {
+            attempt(d, defer, expand, est, &mut next, &mut notes, &mut deferred)
         };
-        // Where no join takes the calls, grouping sets still aggregate their
-        // input before the expansion repeats it ([`expand`]).
-        let tried = match (tried, expand.then(|| Shape::over_expand(&p)).flatten()) {
-            (Err(why), Some(shape)) => shape.pre_aggregate(&mut est, &mut next).map_err(|below| {
+        if let Some(split) = semi::split(&p, &mut est, &mut pushed) {
+            return Ok(match split {
+                Ok(s) => {
+                    notes.push(s.note);
+                    s.plan
+                }
+                Err(why) => {
+                    notes.push(format!("distinct not split: {why}"));
+                    p
+                }
+            });
+        }
+        Ok(attempt(
+            p,
+            defer,
+            expand,
+            &mut est,
+            &mut next,
+            &mut notes,
+            &mut deferred,
+        ))
+    })?;
+    Ok(Rewritten {
+        plan: out,
+        notes,
+        deferred,
+    })
+}
+
+/// `p` with its aggregate pushed below its join, or `p` (the reason in
+/// `notes`).
+fn attempt(
+    p: Arc<LogicalPlan>,
+    defer: Option<&dyn Statistics>,
+    expand: bool,
+    est: &mut Estimator<'_>,
+    next: &mut u64,
+    notes: &mut Vec<String>,
+    deferred: &mut bool,
+) -> Arc<LogicalPlan> {
+    let tried = match Shape::of(&p) {
+        Some(shape) => shape.push(shape.join, defer, est, next).or_else(|why| {
+            *deferred |= why.starts_with(DEFERRED);
+            // The dimension the keys need may sit below another one.
+            shape
+                .rotated()
+                .and_then(|join| match shape.push(&join, defer, est, next) {
+                    Ok(pushed) => Some(pushed),
+                    Err(other) => {
+                        *deferred |= other.starts_with(DEFERRED);
+                        None
+                    }
+                })
+                .ok_or(why)
+        }),
+        None => Err(String::new()),
+    };
+    // Where no join takes the calls, grouping sets still aggregate their
+    // input before the expansion repeats it ([`expand`]). A join left to
+    // `PayloadAboveAggregate` is not taken here either: that rule runs first.
+    let tried = match (tried, expand.then(|| Shape::over_expand(&p)).flatten()) {
+        (Err(why), Some(shape)) if !why.starts_with(DEFERRED) => {
+            shape.pre_aggregate(est, next).map_err(|below| {
                 if why.is_empty() {
                     format!("below the Expand: {below}")
                 } else {
                     format!("{why}; below the Expand: {below}")
                 }
-            }),
-            (tried, _) => tried,
-        };
-        match tried {
-            Ok((pushed, note)) => {
-                // Out of attribute ids: leave the plan as it is, as CSE and the sum rewrite do.
-                if next > MAX_ID {
-                    notes.push("not applied: the plan has no attribute ids left".to_owned());
-                    return Ok(p);
-                }
-                notes.push(note);
-                Ok(pushed)
-            }
-            // Not an aggregate this rule reads.
-            Err(why) if why.is_empty() => Ok(p),
-            Err(why) => {
-                notes.push(format!("not applied: {why}"));
-                Ok(p)
-            }
+            })
         }
-    })?;
-    Ok((out, notes))
+        (tried, _) => tried,
+    };
+    match tried {
+        Ok((pushed, note)) => {
+            // Out of attribute ids: leave the plan as it is, as CSE and the sum rewrite do.
+            if *next > MAX_ID {
+                notes.push("not applied: the plan has no attribute ids left".to_owned());
+                return p;
+            }
+            notes.push(note);
+            pushed
+        }
+        // Not an aggregate this rule reads.
+        Err(why) if why.is_empty() => p,
+        Err(why) => {
+            notes.push(format!("not applied: {why}"));
+            p
+        }
+    }
+}
+
+/// The start of the refusal of a join left to `PayloadAboveAggregate`.
+const DEFERRED: &str = "deferred:";
+
+/// What [`rewrite`] did.
+pub(crate) struct Rewritten {
+    /// The plan, the input `Arc` when nothing moved.
+    pub(crate) plan: Arc<LogicalPlan>,
+    /// One line per aggregate over a join (`EXPLAIN VERBOSE`).
+    pub(crate) notes: Vec<String>,
+    /// Whether a join was left to `PayloadAboveAggregate` (only with `defer`).
+    pub(crate) deferred: bool,
 }
 
 /// An aggregate over projections and expansions over a join.
@@ -192,13 +278,13 @@ impl<'a> Shape<'a> {
     fn push(
         &self,
         join: &Arc<LogicalPlan>,
+        defer: Option<&dyn Statistics>,
         est: &mut Estimator<'_>,
         next: &mut u64,
     ) -> Result<(Arc<LogicalPlan>, String), String> {
+        // No calls (a distinct): the partial aggregate below only removes
+        // repeated groups, which the aggregate above removes anyway.
         let calls = distinct_calls(self.outputs);
-        if calls.is_empty() {
-            return Err("no aggregate call".to_owned());
-        }
         let mut args = Attrs::default();
         for (_, f) in &calls {
             for a in &f.args {
@@ -246,6 +332,23 @@ impl<'a> Shape<'a> {
         let other = if left_side { right } else { left };
         if !plain_scan(other) {
             return Err("the other side is filtered or joined: its runtime filter is worth more than the aggregate".to_owned());
+        }
+        if let Some(stats) = defer {
+            let other_cols = if left_side { &right_cols } else { &left_cols };
+            let other_keys = equi_columns(on, other_cols);
+            let grouped = |id: &AttrId| {
+                self.keys.iter().any(|k| {
+                    matches!(&k.node, ExprNode::Resolved(ResolvedExpr::Column(c)) if c.id == *id)
+                })
+            };
+            if !other_keys.is_empty()
+                && other_keys.iter().all(grouped)
+                && keyed(other, &other_keys, stats)
+            {
+                return Err(format!(
+                    "{DEFERRED} the other side's join keys are grouped and may be unique (PayloadAboveAggregate first)"
+                ));
+            }
         }
         let null_supplying = matches!(
             (kind, left_side),
@@ -478,10 +581,23 @@ fn states_of(
     Ok((states, merged))
 }
 
-/// Whether `p` is a table read whole, under projections.
+/// Whether `p` is a table read whole, under projections and filters that only
+/// drop null columns. Those filters are what `InferJoinFilters` adds to a join
+/// key (and to the keys of joins above): the join drops a null key anyway, so
+/// such a filter gives no runtime filter worth more than the aggregate (TPC-DS
+/// q11, q74 and q04's `customer`).
 fn plain_scan(p: &LogicalPlan) -> bool {
     match &p.node {
         PlanNode::Project { input, .. } => plain_scan(input),
+        PlanNode::Filter { input, predicate } => {
+            conjuncts(predicate).iter().all(|c| {
+                matches!(
+                    builtin(c),
+                    Some((Builtin::IsNotNull, [a], _))
+                        if matches!(&a.node, ExprNode::Resolved(ResolvedExpr::Column(_)))
+                )
+            }) && plain_scan(input)
+        }
         PlanNode::Scan(_) => true,
         _ => false,
     }
@@ -690,7 +806,7 @@ pub(crate) fn refusal_of_call(
             || has_subquery(a)
             || has_outer_reference(a)
             || is_state(a)
-            || may_raise(a, true)
+            || (may_raise(a, true) && !decimal_never_raises(a))
     }) {
         return Err(format!("{name}'s argument can raise or is not plain"));
     }

@@ -275,6 +275,20 @@ fn held_under(
                     stack.push((input, substitute(&p, &defs), Vec::new()));
                 }
             }
+            // Eager aggregation's partial aggregate outputs its key columns
+            // as they are (same ids): what holds of them below holds above.
+            PlanNode::PartialAggregate { input, keys, .. } if !keys.is_empty() => {
+                let key_ids: HashSet<AttrId> = keys
+                    .iter()
+                    .filter_map(|k| match &k.node {
+                        ExprNode::Resolved(ResolvedExpr::Column(c)) => Some(c.id),
+                        _ => None,
+                    })
+                    .collect();
+                if references(&p).iter().all(|id| key_ids.contains(id)) {
+                    stack.push((input, p, known));
+                }
+            }
             // A positional union holds `p` when every input does, its
             // columns read by position (pushdown moves filters into each).
             PlanNode::Union {
