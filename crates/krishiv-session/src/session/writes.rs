@@ -346,14 +346,14 @@ pub(super) fn max_records_per_file(
 }
 
 /// A write directory that could not be opened, as the path-based store
-/// reports it (`KRISHIV_OBJECT_STORE_REQUEST_FAILED`).
+/// reports it: `TASK_WRITE_FAILED` with the OS reason as its cause (PY-075).
 pub(super) fn anchor_failed(at: &krishiv_exec::files::LocatedPath, reason: &str) -> KrishivError {
-    krishiv_common::error::KrishivObjectStoreRequestFailed {
+    KrishivError::from(krishiv_common::error::TaskWriteFailed {
         path: at.display.clone(),
-        attempts: "1".to_owned(),
-        reason: reason.to_owned(),
-    }
-    .into()
+    })
+    .with_cause(KrishivError::from(krishiv_common::error::InternalError {
+        message: reason.to_owned(),
+    }))
 }
 
 /// Removes a write's private store registration when the write is over.
