@@ -33,7 +33,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --system --gid 10001 krishiv \
     && useradd --system --uid 10001 --gid krishiv --home-dir /var/lib/krishiv --create-home --shell /usr/sbin/nologin krishiv \
-    && install -d -o 10001 -g 10001 /data
+    && install -d -o 10001 -g 10001 /data /var/lib/krishiv/tls
 VOLUME /data
 COPY --from=build /out/krishiv /usr/local/bin/krishiv
 COPY docker/entrypoint.sh /usr/local/bin/docker-entrypoint.sh

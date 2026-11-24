@@ -20,23 +20,36 @@ case "${1:-server}" in
 esac
 [ "$#" -eq 0 ] || shift
 
+say() { echo "krishiv-image: $*" >&2; }
+die() { say "$*"; exit 1; }
+
+# The caller configures authentication or TLS itself: add nothing but the bind address.
+host_args="--host 0.0.0.0"
+own=
 for a in "$@"; do
   case "$a" in
-    krishiv.auth.*|krishiv.server.tls.*|--host|--host=*)
-      exec krishiv server "$@" ;; # the caller configures authentication and TLS itself
+    krishiv.auth.*|krishiv.server.tls.*|--conf=krishiv.auth.*|--conf=krishiv.server.tls.*) own=1 ;;
+    spark.connect.authenticate.*|--conf=spark.connect.authenticate.*) own=1 ;;
+    --host|--host=*) host_args= ;;
   esac
 done
+# shellcheck disable=SC2086 # host_args is empty or two words
+[ -z "$own" ] || exec krishiv server $host_args "$@"
 
-say() { echo "krishiv-image: $*" >&2; }
 state=${KRISHIV_TLS_DIR:-/var/lib/krishiv/tls}
 
-# Token.
+# Token. A secret file is copied to a private file we own: Docker and compose mount secrets as
+# root-owned 0444 or 0400, which the server refuses (group/other bits) or this user cannot read.
 if [ -n "${KRISHIV_AUTH_TOKEN:-}" ]; then
   secret="env:KRISHIV_AUTH_TOKEN"
 else
   tokenfile=${KRISHIV_AUTH_TOKEN_FILE:-/run/secrets/krishiv_token}
-  if [ -r "$tokenfile" ]; then
-    secret="file:$tokenfile"
+  if [ -r "$tokenfile" ] && [ -s "$tokenfile" ]; then
+    mkdir -p "$state"
+    (umask 077; cat "$tokenfile" >"$state/token.secret")
+    secret="file:$state/token.secret"
+  elif [ -n "${KRISHIV_AUTH_TOKEN_FILE:-}" ] || [ -e "$tokenfile" ]; then
+    die "the token file $tokenfile is not readable by uid $(id -u) or is empty (mount it readable, e.g. compose secret uid: \"10001\", mode: 0400)"
   else
     mkdir -p "$state"
     tokenfile=$state/token
@@ -53,6 +66,7 @@ fi
 cert=${KRISHIV_TLS_CERT:-/etc/krishiv/tls/cert.pem}
 key=${KRISHIV_TLS_KEY:-/etc/krishiv/tls/key.pem}
 if [ ! -r "$cert" ] || [ ! -r "$key" ]; then
+  [ -z "${KRISHIV_TLS_CERT:-}${KRISHIV_TLS_KEY:-}" ] || die "KRISHIV_TLS_CERT/KRISHIV_TLS_KEY are set but $cert or $key is not readable"
   cert=$state/cert.pem
   key=$state/key.pem
   if [ ! -r "$cert" ] || [ ! -r "$key" ]; then
@@ -68,7 +82,7 @@ fi
 # A static service token must say when it stops working: default one year, like the certificate.
 expires="${KRISHIV_AUTH_TOKEN_EXPIRES:-$(date -u -d '+365 days' +%F)}"
 
-exec krishiv server --host 0.0.0.0 \
+exec krishiv server $host_args \
   --conf "krishiv.server.tls.certFile=$cert" \
   --conf "krishiv.server.tls.keyFile=$key" \
   --conf "krishiv.auth.tokens.docker.secret=$secret" \
