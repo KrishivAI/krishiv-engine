@@ -1847,6 +1847,23 @@ impl DataFrame {
         global: bool,
         replace: bool,
     ) -> Result<(), KrishivError> {
+        // Spark parses the name as a multipart identifier: a parse failure is
+        // `_LEGACY_ERROR_TEMP_1321`, more than one part is
+        // `TEMP_VIEW_NAME_TOO_MANY_NAME_PARTS`, and backquotes are stripped.
+        let parts = krishiv_sql::parse_multipart_identifier(view, &self.session.query_env().parser)
+            .map_err(|_| {
+                KrishivError::from(krishiv_common::error::LegacyErrorTemp1321 {
+                    view_name: view.to_owned(),
+                })
+            })?
+            .parts;
+        let [part] = parts.as_slice() else {
+            return Err(krishiv_common::error::TempViewNameTooManyNameParts {
+                actual_name: view.to_owned(),
+            }
+            .into());
+        };
+        let view = part.value.as_str();
         if crate::catalog::is_reserved_view_name(view) {
             return Err(crate::catalog::reserved_temp_view_name(view));
         }
