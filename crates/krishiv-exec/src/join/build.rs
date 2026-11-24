@@ -628,16 +628,28 @@ impl Partials {
     fn add(
         &mut self,
         shared: &Shared,
-        keys: &[ArrayRef],
+        (keys, columns): (&[ArrayRef], &[ArrayRef]),
         valid: Option<&arrow_buffer::NullBuffer>,
     ) {
-        self.add_keys(&shared.runtime, keys, valid);
+        self.add_sources(&shared.runtime, (keys, columns), valid);
     }
 
+    #[cfg(test)]
     fn add_keys(
         &mut self,
         filters: &[super::JoinRuntimeFilter],
         keys: &[ArrayRef],
+        valid: Option<&arrow_buffer::NullBuffer>,
+    ) {
+        self.add_sources(filters, (keys, &[]), valid);
+    }
+
+    /// Adds the batch's `keys` (and, for a residual's bound, its build input
+    /// `columns`) of the rows `valid` marks (the rows the build stores).
+    fn add_sources(
+        &mut self,
+        filters: &[super::JoinRuntimeFilter],
+        (keys, columns): (&[ArrayRef], &[ArrayRef]),
         valid: Option<&arrow_buffer::NullBuffer>,
     ) {
         // Another partial dropped a filter's hashes: its merged filter
@@ -649,9 +661,18 @@ impl Partials {
         for (i, (b, f)) in self.builders.iter_mut().zip(filters).enumerate() {
             let had = b.as_ref().is_some_and(KeyFilterBuilder::has_hashes);
             let before = b.as_ref().map_or(0, KeyFilterBuilder::rows);
-            let ok = match (b.as_mut(), keys.get(f.key)) {
-                (Some(builder), Some(k)) => builder.add(k.as_ref(), valid).is_ok(),
-                _ => false,
+            let ok = match (b.as_mut(), f.column) {
+                (Some(builder), None) => keys
+                    .get(f.key)
+                    .is_some_and(|k| builder.add(k.as_ref(), valid).is_ok()),
+                // A bound: a NULL value matches nothing (`x < NULL`), so only
+                // the stored rows whose value is not NULL are collected (a
+                // NULL in an included row would let NULL probe values pass).
+                (Some(builder), Some(c)) => columns.get(c).is_some_and(|col| {
+                    let kept = arrow_buffer::NullBuffer::union(valid, col.logical_nulls().as_ref());
+                    builder.add(col.as_ref(), kept.as_ref()).is_ok()
+                }),
+                (None, _) => false,
             };
             if !ok {
                 *b = None;
@@ -1279,7 +1300,8 @@ impl Sink for BuildSink {
         // Only once the batch is stored: a `NeedMemory` retry sinks the same
         // batch again, which must not count its keys twice.
         if !s.runtime.is_empty() {
-            l.runtime.add(s, &key_columns, keys.valid.as_ref());
+            l.runtime
+                .add(s, (&key_columns, columns), keys.valid.as_ref());
         }
         for (p, c) in chunks {
             l.parts[p].chunks.push(c);

@@ -458,6 +458,16 @@ pub enum PlanNode {
         /// `max(m - n, 0)` times (except).
         all: bool,
     },
+    /// DataFrame `zip` (Spark 4.3's `Zip`): the columns of `left` followed by those of `right`, row
+    /// by row. Both sides derive from one base through projection chains; the analyzer merges them
+    /// into one [`PlanNode::Project`] chain over that base (`ZIP_PLANS_NOT_MERGEABLE` when they
+    /// do not). Unresolved plans only.
+    Zip {
+        /// The columns that come first.
+        left: Arc<LogicalPlan>,
+        /// The columns that follow.
+        right: Arc<LogicalPlan>,
+    },
     /// Window functions over `input` (Spark's `Window`): every input row,
     /// with one column per window expression after the input's. Resolved
     /// plans only; the analyzer makes one node per distinct partitioning
@@ -1179,6 +1189,7 @@ impl LogicalPlan {
             PlanNode::Join { left, right, .. }
             | PlanNode::AsOfJoin { left, right, .. }
             | PlanNode::SetOp { left, right, .. }
+            | PlanNode::Zip { left, right }
             | PlanNode::CoGroupMap { left, right, .. } => {
                 f(left);
                 f(right);
@@ -1250,6 +1261,7 @@ impl LogicalPlan {
             PlanNode::Join { left, right, .. }
             | PlanNode::AsOfJoin { left, right, .. }
             | PlanNode::SetOp { left, right, .. }
+            | PlanNode::Zip { left, right }
             | PlanNode::CoGroupMap { left, right, .. } => {
                 f(left);
                 f(right);
@@ -1291,6 +1303,7 @@ impl LogicalPlan {
             | PlanNode::JoinHint { .. }
             | PlanNode::Union { .. }
             | PlanNode::SetOp { .. }
+            | PlanNode::Zip { .. }
             | PlanNode::Sample { .. }
             | PlanNode::MapPartitions { .. }
             | PlanNode::Distinct { .. }
@@ -1417,6 +1430,7 @@ impl LogicalPlan {
             | PlanNode::JoinHint { .. }
             | PlanNode::Union { .. }
             | PlanNode::SetOp { .. }
+            | PlanNode::Zip { .. }
             | PlanNode::Sample { .. }
             | PlanNode::MapPartitions { .. }
             | PlanNode::Distinct { .. }
@@ -1724,6 +1738,7 @@ impl LogicalPlan {
                 | PlanNode::ColumnNames { .. }
                 | PlanNode::PipeOperator { .. }
                 | PlanNode::SetOp { .. }
+                | PlanNode::Zip { .. }
                 | PlanNode::Pivot { .. }
                 | PlanNode::Unpivot { .. }
                 | PlanNode::InlineTable { .. }

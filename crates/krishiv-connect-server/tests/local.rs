@@ -103,7 +103,11 @@ fn start_stop_100_times_leaves_no_port_and_no_thread() {
 
 #[test]
 fn dropping_a_server_stops_it() {
-    let before = threads();
+    // One start first: lazily created process-wide threads (allocator, runtimes, the Delta log
+    // pool of a build with the `delta` feature) exist after it and are not the server's.
+    let mut warm = LocalServer::start(Session::new().expect("session")).expect("start");
+    warm.stop().expect("stop");
+    let before = quiesced_threads();
     let addr = {
         let server = LocalServer::start(Session::new().expect("session")).expect("start");
         server.addr()

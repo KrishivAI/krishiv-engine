@@ -848,7 +848,9 @@ pub(crate) fn join_plan(join_type: JoinType) -> HashJoinPlan {
                 bloom_max_fpp: 0.05,
                 bloom_bytes: None,
                 bloom_spill_bytes: None,
+                side: krishiv_io::RangeSide::Both,
             },
+            column: None,
         }],
         distribution: JoinDistribution::Broadcast,
         select: None,
@@ -1649,6 +1651,27 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
                     ]),
                 }),
                 ..join_plan(JoinType::Inner)
+            }),
+        ),
+        (
+            // A bound from the residual's `a < b` (design P3-0.3.1 D2): the
+            // build's column 1, the upper end only.
+            "join_filter_bound",
+            PhysNode::HashJoin({
+                let mut j = join_plan(JoinType::Inner);
+                j.runtime_filters.push(JoinFilterPlan {
+                    id: FilterId(4),
+                    key: 0,
+                    options: KeyFilterOptions {
+                        max_values: 0,
+                        exact_max_values: 0,
+                        bloom: false,
+                        side: krishiv_io::RangeSide::Upper,
+                        ..KeyFilterOptions::default()
+                    },
+                    column: Some(1),
+                });
+                j
             }),
         ),
         (

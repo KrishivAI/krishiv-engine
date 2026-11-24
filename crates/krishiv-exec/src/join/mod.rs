@@ -651,6 +651,10 @@ pub struct JoinRuntimeFilter {
     pub filter: Arc<krishiv_io::RuntimeFilter>,
     /// What to collect (the cost model's decisions).
     pub options: krishiv_io::KeyFilterOptions,
+    /// A build input column collected instead of the key (a residual's
+    /// bound, [`crate::physical::JoinFilterPlan::column`]): its non-NULL
+    /// values in the rows the build stores.
+    pub column: Option<usize>,
 }
 
 impl fmt::Debug for Shared {
@@ -1024,12 +1028,16 @@ impl HashJoin {
             )));
         }
         for f in &filters {
-            // Key types are the same on both sides.
-            let key = shared
-                .probe_keys
-                .get(f.key)
-                .and_then(|&k| shared.probe_schema.fields().get(k).cloned())
-                .ok_or_else(|| internal(format!("runtime filter key {} out of range", f.key)))?;
+            // Key types are the same on both sides; a bound is collected
+            // from a build column of its own type.
+            let key = match f.column {
+                Some(c) => shared.build_fields.get(c).cloned().map(Arc::new),
+                None => shared
+                    .probe_keys
+                    .get(f.key)
+                    .and_then(|&k| shared.probe_schema.fields().get(k).cloned()),
+            }
+            .ok_or_else(|| internal(format!("runtime filter key {} out of range", f.key)))?;
             if key.data_type() != f.filter.key_type() {
                 return Err(internal(format!(
                     "runtime filter of type {} on a {} key",

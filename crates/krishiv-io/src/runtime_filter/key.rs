@@ -23,6 +23,7 @@ use arrow_array::{Array, ArrayRef};
 use arrow_buffer::{NullBuffer, ScalarBuffer};
 use arrow_schema::{DataType, TimeUnit};
 
+use super::filter::RangeSide;
 use crate::request::ScalarValue;
 
 /// Whether `t` can be a runtime filter's key type.
@@ -386,6 +387,43 @@ impl KeyRange {
                 Self::Bytes(a.min(c).clone(), b.max(d).clone())
             }
             _ => return None,
+        })
+    }
+
+    /// The range with the end `side` does not keep opened to the smallest
+    /// (or largest) value of `key_type`, so that only the kept end drops
+    /// rows (a bound from a join's `<`/`>` residual). `None` when that end
+    /// cannot be opened soundly: a float's `Lower` (a NaN is larger than
+    /// every value in Spark but fails the range's compares), a byte
+    /// string's `Lower` (no largest value), booleans.
+    pub(crate) fn opened(self, side: RangeSide, key_type: &DataType) -> Option<Self> {
+        use DataType as D;
+        let int_limits = || -> Option<(i64, i64)> {
+            Some(match key_type {
+                D::Int8 => (i64::from(i8::MIN), i64::from(i8::MAX)),
+                D::Int16 => (i64::from(i16::MIN), i64::from(i16::MAX)),
+                D::Int32 | D::Date32 => (i64::from(i32::MIN), i64::from(i32::MAX)),
+                D::Int64 | D::Timestamp(..) => (i64::MIN, i64::MAX),
+                _ => return None,
+            })
+        };
+        let decimal_limit = || -> Option<i128> {
+            match key_type {
+                D::Decimal64(p, _) | D::Decimal128(p, _) => {
+                    Some(10i128.checked_pow(u32::from(*p))? - 1)
+                }
+                _ => None,
+            }
+        };
+        Some(match (side, self) {
+            (RangeSide::Both, r) => r,
+            (RangeSide::Upper, Self::Int(_, hi)) => Self::Int(int_limits()?.0, hi),
+            (RangeSide::Lower, Self::Int(lo, _)) => Self::Int(lo, int_limits()?.1),
+            (RangeSide::Upper, Self::Decimal(_, hi)) => Self::Decimal(-decimal_limit()?, hi),
+            (RangeSide::Lower, Self::Decimal(lo, _)) => Self::Decimal(lo, decimal_limit()?),
+            (RangeSide::Upper, Self::Float(_, hi)) => Self::Float(f64::NEG_INFINITY, hi),
+            (RangeSide::Upper, Self::Bytes(_, hi)) => Self::Bytes(Box::from(&[][..]), hi),
+            (RangeSide::Lower, Self::Float(..) | Self::Bytes(..)) => return None,
         })
     }
 

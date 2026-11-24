@@ -1,0 +1,133 @@
+// SPDX-License-Identifier: Apache-2.0
+//! Bounds from a hash join's comparison residual (design P3-0.3.1 D2,
+//! `krishiv.runtimeFilter.residualBounds`) never change results, and drop
+//! probe rows no build row can match: randomized joins over Parquet files
+//! with `<`, `<=`, `>`, `>=` conjuncts on integers, decimals and floats
+//! (signed zeros, NaN, NULLs), operands either way round, inner and semi
+//! joins (bounded), and outer joins whose probe side is preserved (not).
+
+use proptest::prelude::*;
+
+use super::runtime_filters::{Counters, configured, run, sorted, table, write};
+use super::tpch::parquet_files;
+
+const OFF: &[(&str, &str)] = &[("krishiv.runtimeFilter.enabled", "false")];
+const NO_BOUNDS: &[(&str, &str)] = &[("krishiv.runtimeFilter.residualBounds", "false")];
+const BOUNDS: &[(&str, &str)] = &[
+    // No adaptive switch-off: every planned bound runs on every row.
+    ("krishiv.runtimeFilter.adaptive.maxPassPercent", "100"),
+];
+
+/// Joins with a comparison residual; `big` is the probe side.
+const JOINS: [&str; 10] = [
+    "SELECT b.v, s.v FROM big b JOIN small s ON b.k32 = s.k32 AND b.v < s.v",
+    "SELECT b.v, s.v FROM big b JOIN small s ON b.k32 = s.k32 AND s.v >= b.v",
+    "SELECT b.v, s.v FROM big b JOIN small s ON b.k64 = s.k64 AND b.v > s.v",
+    "SELECT b.v, s.v FROM big b JOIN small s ON b.k32 = s.k32 AND b.d102 <= s.d102",
+    "SELECT b.v, s.v FROM big b JOIN small s ON b.k32 = s.k32 AND b.x < s.x",
+    "SELECT b.v, s.v FROM big b JOIN small s ON b.k32 = s.k32 AND b.x >= s.x",
+    "SELECT b.v, s.v FROM big b JOIN small s ON b.k32 = s.k32 AND b.f < s.x",
+    "SELECT b.v FROM big b LEFT SEMI JOIN small s ON b.k32 = s.k32 AND b.v <= s.v",
+    "SELECT b.v, s.v FROM big b RIGHT JOIN small s ON b.k32 = s.k32 AND b.v < s.v",
+    "SELECT b.v, s.v FROM big b LEFT JOIN small s ON b.k32 = s.k32 AND b.v < s.v",
+];
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(8))]
+    #[test]
+    fn residual_bounds_change_no_result(
+        seed in 1u64..u64::MAX,
+        domain in prop_oneof![Just(4i32), Just(40)],
+        nulls in 0u32..30,
+        small_rows in prop_oneof![Just(0usize), Just(5), Just(40)],
+    ) {
+        let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let mut rng = seed;
+        write(dir.path(), "big.parquet", &table(&mut rng, 1500, domain, nulls));
+        write(dir.path(), "small.parquet", &table(&mut rng, small_rows, domain, nulls));
+        let sources = [
+            ("big", vec!["big.parquet".to_owned()]),
+            ("small", vec!["small.parquet".to_owned()]),
+        ];
+        let mut t = parquet_files(dir.path(), &sources, true, &rt);
+        let (mut with, mut without) = (Counters::default(), Counters::default());
+        for q in JOINS {
+            configured(&mut t, OFF);
+            let off = sorted(&run(&t.plan_sql(q).unwrap()).0);
+            for (mode, total) in [(NO_BOUNDS, &mut without), (BOUNDS, &mut with)] {
+                configured(&mut t, mode);
+                let plan = t.plan_sql(q).unwrap();
+                let (got, c) = run(&plan);
+                total.rows_dropped += c.rows_dropped;
+                total.units_pruned += c.units_pruned;
+                prop_assert_eq!(&sorted(&got), &off, "{}:\n{}", q, plan);
+            }
+        }
+        // `small`'s `v` holds row numbers below its row count, `big`'s up
+        // to 1,499 in file order: an upper bound on `b.v` prunes most of
+        // `big`'s row groups by their statistics.
+        if small_rows == 5 {
+            prop_assert!(with.units_pruned > without.units_pruned, "{:?} {:?}", with, without);
+        }
+    }
+}
+
+/// Which conjuncts plan a bound: the side follows the operator and the
+/// operands' order; a float's lower bound, a left join, a residual that
+/// may raise and the setting turned off plan none.
+#[test]
+fn bounds_are_planned_where_sound() {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let mut rng = 7;
+    write(dir.path(), "big.parquet", &table(&mut rng, 1500, 40, 5));
+    write(dir.path(), "small.parquet", &table(&mut rng, 40, 40, 5));
+    let sources = [
+        ("big", vec!["big.parquet".to_owned()]),
+        ("small", vec!["small.parquet".to_owned()]),
+    ];
+    let mut t = parquet_files(dir.path(), &sources, true, &rt);
+    configured(&mut t, &[]);
+    let explain = |t: &super::tpch::Tpch, q: &str| t.plan_sql(q).unwrap().to_string();
+    // The bounds `EXPLAIN` lists on the join: `RuntimeFilter n: <probe>
+    // <= max(<build>) -> <scan column>`.
+    let bound = |text: &str, agg: &str| -> Vec<String> {
+        text.split("RuntimeFilter ")
+            .skip(1)
+            .filter(|f| f.contains(&format!(" {agg}(")))
+            .map(|f| f.split(", ").next().unwrap_or(f).trim().to_owned())
+            .collect()
+    };
+    let upper = explain(&t, JOINS[0]);
+    let lines = bound(&upper, "max");
+    assert_eq!(lines.len(), 1, "{upper}");
+    assert!(
+        lines[0].contains("<= max(") && lines[0].ends_with("big.v"),
+        "{upper}"
+    );
+    // `s.v >= b.v` is `b.v <= s.v`.
+    assert_eq!(bound(&explain(&t, JOINS[1]), "max").len(), 1);
+    let lower = explain(&t, JOINS[2]);
+    assert!(
+        bound(&lower, "min").iter().all(|l| l.contains(">= min(")),
+        "{lower}"
+    );
+    assert_eq!(bound(&lower, "min").len(), 1, "{lower}");
+    assert_eq!(bound(&explain(&t, JOINS[3]), "max").len(), 1);
+    assert_eq!(bound(&explain(&t, JOINS[4]), "max").len(), 1);
+    // A NaN probe value is larger than every value: no lower float bound.
+    assert!(bound(&explain(&t, JOINS[5]), "min").is_empty());
+    // The left join keeps every probe row.
+    assert!(bound(&explain(&t, JOINS[9]), "max").is_empty());
+    // A conjunct that may raise (ANSI division) keeps every row its pairs
+    // are evaluated on.
+    let raises = "SELECT b.v, s.v FROM big b JOIN small s \
+                  ON b.k32 = s.k32 AND b.v < s.v AND b.v DIV s.k32 > 0";
+    assert!(bound(&explain(&t, raises), "max").is_empty());
+    configured(&mut t, NO_BOUNDS);
+    assert!(bound(&explain(&t, JOINS[0]), "max").is_empty());
+}
