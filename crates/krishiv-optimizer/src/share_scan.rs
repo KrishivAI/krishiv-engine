@@ -45,7 +45,8 @@
 //! decided by the physical planner, as for every shared definition (copies
 //! are kept when a runtime filter reaches one of them).
 
-use std::collections::{HashMap, HashSet};
+use crate::expr::{AddrMap, AddrSet};
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use krishiv_common::error::KrishivError;
@@ -82,7 +83,7 @@ pub(crate) fn share(
 ) -> Result<Arc<LogicalPlan>, KrishivError> {
     let (order, parents) = parents(&root);
     let mut est = Estimator::new(stats);
-    let mut replace: HashMap<*const LogicalPlan, Arc<LogicalPlan>> = HashMap::new();
+    let mut replace: AddrMap<LogicalPlan, Arc<LogicalPlan>> = Default::default();
     let mut ctes = Vec::new();
     for scan in &order {
         let PlanNode::Scan(s) = &scan.node else {
@@ -167,7 +168,7 @@ pub(crate) fn share(
     }
     let mut sharer = Sharer {
         replace: &replace,
-        done: HashMap::new(),
+        done: Default::default(),
     };
     // Into the root's `WITH` when `ShareCte` added one: `InlineCTE` keeps the
     // generated definitions it finds there (a second optimization finds them
@@ -210,16 +211,11 @@ fn filters_only(readers: &[Parent]) -> Option<Vec<Arc<LogicalPlan>>> {
 
 /// Every relation under `root` (subquery plans included) in a stable
 /// pre-order, and for each one its distinct parents in the order first met.
-fn parents(
-    root: &Arc<LogicalPlan>,
-) -> (
-    Vec<Arc<LogicalPlan>>,
-    HashMap<*const LogicalPlan, Vec<Parent>>,
-) {
+fn parents(root: &Arc<LogicalPlan>) -> (Vec<Arc<LogicalPlan>>, AddrMap<LogicalPlan, Vec<Parent>>) {
     let mut order = Vec::new();
-    let mut parents: HashMap<*const LogicalPlan, Vec<Parent>> = HashMap::new();
+    let mut parents: AddrMap<LogicalPlan, Vec<Parent>> = Default::default();
     let mut edges: HashSet<(*const LogicalPlan, *const LogicalPlan)> = HashSet::new();
-    let mut seen: HashSet<*const LogicalPlan> = HashSet::new();
+    let mut seen: AddrSet<LogicalPlan> = Default::default();
     let mut stack = vec![Arc::clone(root)];
     while let Some(p) = stack.pop() {
         if !seen.insert(Arc::as_ptr(&p)) {

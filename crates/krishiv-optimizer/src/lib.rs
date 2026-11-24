@@ -1095,7 +1095,7 @@ fn same_plan(a: &Arc<LogicalPlan>, b: &Arc<LogicalPlan>) -> bool {
 /// Whether a `Filter` whose predicate is the literal `false` is anywhere in
 /// `root` (subquery plans included).
 fn has_false_filter(root: &Arc<LogicalPlan>) -> bool {
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = crate::expr::AddrSet::default();
     let mut stack = vec![Arc::clone(root)];
     while let Some(p) = stack.pop() {
         if let PlanNode::Filter { predicate, .. } = &p.node

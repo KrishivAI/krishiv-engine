@@ -9,7 +9,8 @@
 //! extra columns get a projection. The root's output never changes; CTE
 //! definitions and scalar and `IN` subquery plans keep their whole output.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use crate::expr::{AddrMap, AddrSet};
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 
 use krishiv_plan::{
@@ -38,7 +39,7 @@ pub(crate) fn prune(root: &Arc<LogicalPlan>, stats: Option<&dyn Statistics>) -> 
 /// `root` is alive): the columns pruning would keep at the node's output,
 /// the union over its consumers. Join ordering reads it to cost a tree by
 /// the columns read above it (`krishiv.optimizer.joinCost=bytes`).
-pub(crate) fn requirements(root: &Arc<LogicalPlan>) -> HashMap<*const LogicalPlan, Attrs> {
+pub(crate) fn requirements(root: &Arc<LogicalPlan>) -> AddrMap<LogicalPlan, Attrs> {
     let graph = Graph::new(root);
     let req = graph.requirements();
     graph
@@ -509,7 +510,7 @@ fn narrow_as(input: &Arc<LogicalPlan>, need: &Attrs, origin: Origin) -> Arc<Logi
 /// Whether `p` holds a common-subexpression projection (an alias named
 /// `cse_*`, see `crate::cse`) on its main plan, subquery plans excluded.
 fn contains_cse(p: &LogicalPlan) -> bool {
-    let mut seen_plans: HashSet<*const LogicalPlan> = HashSet::new();
+    let mut seen_plans: AddrSet<LogicalPlan> = Default::default();
     let mut plans = vec![p];
     while let Some(q) = plans.pop() {
         if !seen_plans.insert(std::ptr::from_ref(q)) {
@@ -517,7 +518,7 @@ fn contains_cse(p: &LogicalPlan) -> bool {
         }
         let mut stack: Vec<&Expr> = Vec::new();
         q.for_each_expr(&mut |e| stack.push(e));
-        let mut seen: HashSet<*const Expr> = HashSet::new();
+        let mut seen: AddrSet<Expr> = Default::default();
         while let Some(e) = stack.pop() {
             if !seen.insert(std::ptr::from_ref(e)) {
                 continue;
@@ -664,7 +665,7 @@ fn output_ids(p: &LogicalPlan) -> Attrs {
 fn subqueries<'a>(p: &'a LogicalPlan, f: &mut impl FnMut(&'a SubqueryKind, &'a Arc<LogicalPlan>)) {
     let mut stack: Vec<&'a Arc<Expr>> = Vec::new();
     p.for_each_expr(&mut |e| stack.push(e));
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = crate::expr::AddrSet::default();
     while let Some(e) = stack.pop() {
         if !seen.insert(Arc::as_ptr(e)) {
             continue;

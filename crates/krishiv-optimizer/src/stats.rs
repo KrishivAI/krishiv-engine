@@ -29,7 +29,7 @@ use crate::expr::substitute;
 pub(crate) fn reads_cse(e: &Expr) -> bool {
     let mut found = false;
     let mut stack = vec![e];
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = crate::expr::AddrSet::default();
     while let Some(x) = stack.pop() {
         if !seen.insert(std::ptr::from_ref(x)) {
             continue;
@@ -53,14 +53,14 @@ pub(crate) fn reads_cse(e: &Expr) -> bool {
 pub(crate) fn cse_definitions(p: &LogicalPlan) -> AttrMap<Arc<Expr>> {
     let mut defs = AttrMap::default();
     let mut plans = vec![p];
-    let mut seen_plans = std::collections::HashSet::new();
+    let mut seen_plans = crate::expr::AddrSet::default();
     while let Some(q) = plans.pop() {
         if !seen_plans.insert(std::ptr::from_ref(q)) {
             continue;
         }
         let mut stack: Vec<&Expr> = Vec::new();
         q.for_each_expr(&mut |e| stack.push(e));
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = crate::expr::AddrSet::default();
         while let Some(e) = stack.pop() {
             if !seen.insert(std::ptr::from_ref(e)) {
                 continue;

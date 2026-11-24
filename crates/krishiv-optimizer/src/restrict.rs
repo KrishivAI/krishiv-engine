@@ -96,7 +96,6 @@
 //! computes every group and every row.
 
 use crate::expr::AttrMap;
-use std::collections::HashSet;
 use std::sync::Arc;
 
 use krishiv_common::error::KrishivError;
@@ -651,7 +650,7 @@ impl Restrict<'_> {
 
     /// The estimated rows the scans of `p` read.
     fn scanned(&mut self, p: &Arc<LogicalPlan>) -> f64 {
-        let mut seen = HashSet::new();
+        let mut seen = crate::expr::AddrSet::default();
         let mut stack = vec![Arc::clone(p)];
         let mut total = 0.0;
         while let Some(x) = stack.pop() {
@@ -896,7 +895,7 @@ fn node_exprs_deterministic(p: &LogicalPlan) -> bool {
 /// shift does not renumber), deterministic expressions (subquery plans
 /// included) and no outer references.
 pub(crate) fn repeatable(p: &Arc<LogicalPlan>) -> bool {
-    let mut seen = HashSet::new();
+    let mut seen = crate::expr::AddrSet::default();
     let mut stack = vec![Arc::clone(p)];
     while let Some(x) = stack.pop() {
         if seen.insert(Arc::as_ptr(&x)) {
@@ -1013,7 +1012,7 @@ pub(crate) fn max_id(
 pub(crate) fn subquery_plans(e: &Arc<Expr>) -> Vec<Arc<LogicalPlan>> {
     let mut out = Vec::new();
     let mut stack = vec![Arc::clone(e)];
-    let mut seen = HashSet::new();
+    let mut seen = crate::expr::AddrSet::default();
     while let Some(x) = stack.pop() {
         if !seen.insert(Arc::as_ptr(&x)) {
             continue;

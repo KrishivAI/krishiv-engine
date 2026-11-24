@@ -39,7 +39,7 @@
 //!
 //! Plans are pure data; the rewrite is deterministic and changes no result.
 
-use std::collections::{HashMap, HashSet};
+use crate::expr::{AddrMap, AddrSet};
 use std::sync::Arc;
 
 use krishiv_plan::{
@@ -300,7 +300,7 @@ fn aes_key(e: &Expr) -> Option<Arc<Expr>> {
 fn has_lambda_var(e: &Expr) -> bool {
     let mut found = false;
     let mut stack = vec![e];
-    let mut seen: HashSet<*const Expr> = HashSet::new();
+    let mut seen: AddrSet<Expr> = Default::default();
     while let Some(x) = stack.pop() {
         if !seen.insert(std::ptr::from_ref(x)) {
             continue;
@@ -544,7 +544,7 @@ fn eligible_with(e: &Expr, clean: bool) -> bool {
 
 /// The size of `e` in distinct nodes, capped at `cap`.
 fn size(e: &Expr, cap: usize) -> usize {
-    let mut seen: HashSet<*const Expr> = HashSet::new();
+    let mut seen: AddrSet<Expr> = Default::default();
     let mut stack = vec![e];
     let mut n = 0;
     while let Some(x) = stack.pop() {
@@ -571,10 +571,10 @@ type Edge = (usize, bool, u8);
 /// ancestor, and per-node eligibility.
 type Graph = (
     Vec<Arc<Expr>>,
-    HashMap<*const Expr, usize>,
+    AddrMap<Expr, usize>,
     Vec<Vec<Edge>>,
-    HashSet<*const Expr>,
-    HashMap<*const Expr, bool>,
+    AddrSet<Expr>,
+    AddrMap<Expr, bool>,
 );
 
 /// Builds the distinct-node graph of `roots`: post-order nodes, address
@@ -584,8 +584,8 @@ type Graph = (
 fn graph(roots: &[Arc<Expr>]) -> Option<Graph> {
     const LIMIT: usize = 10_000;
     let mut order = Vec::new();
-    let mut index: HashMap<*const Expr, usize> = HashMap::new();
-    let mut visiting: HashSet<*const Expr> = HashSet::new();
+    let mut index: AddrMap<Expr, usize> = Default::default();
+    let mut visiting: AddrSet<Expr> = Default::default();
     let mut pending: Vec<Arc<Expr>> = roots.to_vec();
     // Iterative post-order over distinct nodes.
     let mut stack: Vec<(Arc<Expr>, bool)> = pending.drain(..).map(|e| (e, false)).collect();
@@ -637,7 +637,7 @@ fn graph(roots: &[Arc<Expr>]) -> Option<Graph> {
         }
     }
     // Nodes under a `try_*` ancestor (the `try_*` node included).
-    let mut tainted: HashSet<*const Expr> = HashSet::new();
+    let mut tainted: AddrSet<Expr> = Default::default();
     // The key argument of an AES call is tainted too: hoisting it into a
     // lower projection would move an error that must never show the key
     // (ADR 0042) out of the evaluator that masks it.
@@ -649,7 +649,7 @@ fn graph(roots: &[Arc<Expr>]) -> Option<Graph> {
         };
         if let Some(seed) = seed {
             let mut stack = vec![seed];
-            let mut seen: HashSet<*const Expr> = HashSet::new();
+            let mut seen: AddrSet<Expr> = Default::default();
             while let Some(x) = stack.pop() {
                 let ptr = Arc::as_ptr(&x);
                 if !seen.insert(ptr) {
@@ -672,7 +672,7 @@ fn graph(roots: &[Arc<Expr>]) -> Option<Graph> {
         };
         clean[i] = own && edges[i].iter().all(|&(j, ..)| j >= i || clean[j]);
     }
-    let eligible_map: HashMap<*const Expr, bool> = order
+    let eligible_map: AddrMap<Expr, bool> = order
         .iter()
         .enumerate()
         .map(|(i, e)| (Arc::as_ptr(e), eligible_with(e, clean[i])))
@@ -794,10 +794,10 @@ fn analyze(
     roots: &[Arc<Expr>],
     conditional_roots: &[Arc<Expr>],
     order: &[Arc<Expr>],
-    index: &HashMap<*const Expr, usize>,
+    index: &AddrMap<Expr, usize>,
     edges: &[Vec<Edge>],
-    tainted: &HashSet<*const Expr>,
-    eligible_map: &HashMap<*const Expr, bool>,
+    tainted: &AddrSet<Expr>,
+    eligible_map: &AddrMap<Expr, bool>,
 ) -> Vec<Group> {
     let mut uncond = vec![0u8; order.len()];
     let mut cond = vec![0u8; order.len()];
@@ -1207,7 +1207,7 @@ fn rewrite_filter(
 fn aggregates_in(e: &Arc<Expr>) -> Vec<Arc<Expr>> {
     let mut out = Vec::new();
     let mut stack = vec![Arc::clone(e)];
-    let mut seen: HashSet<*const Expr> = HashSet::new();
+    let mut seen: AddrSet<Expr> = Default::default();
     while let Some(x) = stack.pop() {
         if !seen.insert(Arc::as_ptr(&x)) {
             continue;

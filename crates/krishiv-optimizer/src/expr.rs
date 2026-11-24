@@ -257,7 +257,7 @@ pub(crate) fn builtin(e: &Expr) -> Option<(Builtin, &[Arc<Expr>], &ResolvedFunct
 /// The conjuncts of `e`, splitting nested `and`s, in order.
 pub(crate) fn conjuncts(e: &Arc<Expr>) -> Vec<Arc<Expr>> {
     let mut out = Vec::new();
-    let mut seen = HashSet::new();
+    let mut seen = crate::expr::AddrSet::default();
     let mut stack = vec![Arc::clone(e)];
     while let Some(x) = stack.pop() {
         // A repeated (shared) operand adds nothing: `x and x` is `x`.
@@ -278,7 +278,7 @@ pub(crate) fn conjuncts(e: &Arc<Expr>) -> Vec<Arc<Expr>> {
 /// The disjuncts of `e`, splitting nested `or`s, in order.
 pub(crate) fn disjuncts(e: &Arc<Expr>) -> Vec<Arc<Expr>> {
     let mut out = Vec::new();
-    let mut seen = HashSet::new();
+    let mut seen = crate::expr::AddrSet::default();
     let mut stack = vec![Arc::clone(e)];
     while let Some(x) = stack.pop() {
         // A repeated (shared) operand adds nothing: `x or x` is `x`.

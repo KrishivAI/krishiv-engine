@@ -35,6 +35,7 @@
 //! adds nothing.
 
 use crate::expr::AttrMap;
+use crate::expr::{AddrMap, AddrSet};
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
@@ -452,15 +453,15 @@ type Conjuncts = Arc<[Arc<Expr>]>;
 /// lives (the plan crate's rule for address-keyed memos).
 #[derive(Default)]
 pub(crate) struct Memo {
-    constraints: HashMap<*const LogicalPlan, (Arc<LogicalPlan>, Conjuncts)>,
-    ids: HashMap<*const LogicalPlan, (Arc<LogicalPlan>, bool, Arc<Attrs>)>,
+    constraints: AddrMap<LogicalPlan, (Arc<LogicalPlan>, Conjuncts)>,
+    ids: AddrMap<LogicalPlan, (Arc<LogicalPlan>, bool, Arc<Attrs>)>,
     /// The relations of the pass's root that more than one path reaches
     /// (shared through `Arc`, subquery plans included), with whether
     /// `ShareCte` could compute them once (worked out when first asked; a
     /// scan read twice is not one). A relation the pass rebuilt points at the
     /// input relation it comes from.
-    shared: HashMap<*const LogicalPlan, (Arc<LogicalPlan>, Arc<LogicalPlan>)>,
-    worth: HashMap<*const LogicalPlan, (Arc<LogicalPlan>, bool)>,
+    shared: AddrMap<LogicalPlan, (Arc<LogicalPlan>, Arc<LogicalPlan>)>,
+    worth: AddrMap<LogicalPlan, (Arc<LogicalPlan>, bool)>,
     /// The names of the definitions `ShareCte` added: a `CteRef` to one is
     /// shared ([`Self::reaches_shared`]).
     shared_defs: HashSet<String>,
@@ -469,7 +470,7 @@ pub(crate) struct Memo {
 /// A cheap fingerprint of `plan`'s relation tree (node kinds and shape, not
 /// expressions), memoised by address in `memo`: equal plans have equal
 /// fingerprints.
-fn shape(plan: &Arc<LogicalPlan>, memo: &mut HashMap<*const LogicalPlan, u64>) -> u64 {
+fn shape(plan: &Arc<LogicalPlan>, memo: &mut AddrMap<LogicalPlan, u64>) -> u64 {
     let mut stack = vec![(Arc::clone(plan), false)];
     while let Some((p, expanded)) = stack.pop() {
         let key = Arc::as_ptr(&p);
@@ -499,16 +500,16 @@ impl Memo {
     /// A memo for one pass over `root`, knowing which of its relations
     /// more than one path reaches.
     pub(crate) fn for_root(root: &Arc<LogicalPlan>) -> Self {
-        let mut parents: HashMap<*const LogicalPlan, (Arc<LogicalPlan>, u32)> = HashMap::new();
+        let mut parents: AddrMap<LogicalPlan, (Arc<LogicalPlan>, u32)> = Default::default();
         // The bodies of the `Shift`s (instances of one CTE or view), with how
         // many `Shift`s read each: equal bodies under two or more instances
         // are read twice even when an earlier pass rebuilt them into separate
         // `Arc`s (join ordering re-plans a join inside each copy apart).
         let mut bodies: Vec<(Arc<LogicalPlan>, u32)> = Vec::new();
-        let mut body_at: HashMap<*const LogicalPlan, usize> = HashMap::new();
+        let mut body_at: AddrMap<LogicalPlan, usize> = Default::default();
         let mut shared_defs: HashSet<String> = HashSet::new();
         let mut stack = vec![Arc::clone(root)];
-        let mut seen: HashSet<*const LogicalPlan> = HashSet::new();
+        let mut seen: AddrSet<LogicalPlan> = Default::default();
         while let Some(p) = stack.pop() {
             if !seen.insert(Arc::as_ptr(&p)) {
                 continue;
@@ -545,7 +546,7 @@ impl Memo {
         // A child of a shared relation is reached by more than one path too,
         // but the walk in `reaches_shared` stops at the first shared node, so
         // its parent count is enough.
-        let mut shared: HashMap<*const LogicalPlan, (Arc<LogicalPlan>, Arc<LogicalPlan>)> = parents
+        let mut shared: AddrMap<LogicalPlan, (Arc<LogicalPlan>, Arc<LogicalPlan>)> = parents
             .into_iter()
             .filter(|(_, (_, n))| *n > 1)
             .map(|(k, (p, _))| (k, (Arc::clone(&p), p)))
@@ -553,7 +554,7 @@ impl Memo {
         // Twins are found by `==` within groups of equal shape (a cheap
         // fingerprint of the relation tree); `worth_sharing` is asked only of
         // a body with a twin.
-        let mut shapes: HashMap<*const LogicalPlan, u64> = HashMap::new();
+        let mut shapes: AddrMap<LogicalPlan, u64> = Default::default();
         let mut groups: HashMap<u64, Vec<(Arc<LogicalPlan>, u32)>> = HashMap::new();
         // Bodies that differ only in the filters and projections above an
         // equal core share that core (`ShareCte`), so a core with a twin is
