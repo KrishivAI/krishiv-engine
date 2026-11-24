@@ -498,6 +498,30 @@ impl Runner {
                 let (batches, secs, _) = self.execute(&read_sql(&decode_path(file)?)?)?;
                 Ok(format!("OK {} {secs:.6}", count_rows(&batches)))
             }
+            // WIP (opus-2 F-A step 0.5, not for main): the first column's
+            // strings of a statement's rows, newlines as `\\n` (an `EXPLAIN`).
+            (Some("PRINT"), Some(file), None, _) => {
+                use arrow_array::cast::AsArray;
+                let (batches, _, _) = self.execute(&read_sql(&decode_path(file)?)?)?;
+                let mut out = String::new();
+                for b in &batches {
+                    let c = b.column(0);
+                    for r in 0..b.num_rows() {
+                        let v = if let Some(a) = c.as_string_opt::<i32>() {
+                            a.value(r).to_owned()
+                        } else if let Some(a) = c.as_string_opt::<i64>() {
+                            a.value(r).to_owned()
+                        } else if let Some(a) = c.as_string_view_opt() {
+                            a.value(r).to_owned()
+                        } else {
+                            String::from("?")
+                        };
+                        out.push_str(&v.replace('\n', "\\n"));
+                        out.push_str("\\n");
+                    }
+                }
+                Ok(format!("OK {out}"))
+            }
             (Some("RUN_CHECKED"), Some(file), None, _) => {
                 let (batches, secs, df) = self.execute(&read_sql(&decode_path(file)?)?)?;
                 // The checksum is taken after the seconds, outside the timed span.
