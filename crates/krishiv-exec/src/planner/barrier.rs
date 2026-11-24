@@ -2,7 +2,8 @@
 //! A security barrier at lowering (design `P3-E14-security-barrier.md` §6): no physical node. The
 //! input is planned as it is, its scans join the planner's guarded set (which the finished plan
 //! carries for `profile_scans`, and which probe fusion skips), and its runtime-filter sites are
-//! cleared, so no join's build filters a scan inside it.
+//! cleared, so no join's build filters a scan inside it. A scan that decides once (a Python data
+//! source) is not asked to decide inside it: the policy's filter stays above the scan.
 
 use std::sync::Arc;
 
@@ -15,7 +16,9 @@ use crate::physical::ScanId;
 impl Planner<'_> {
     /// The planned input of a barrier over `input`.
     pub(super) fn barrier(&mut self, input: &Arc<LogicalPlan>) -> Result<Planned> {
+        self.barriers += 1;
         let (planned, scans) = self.planned_with_scans(input);
+        self.barriers -= 1;
         let mut planned = planned?;
         // Every scan the input reads: those numbered while planning it (a shared definition
         // planned from inside counts too: over-marking only hides more) and those of a shared

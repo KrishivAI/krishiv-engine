@@ -235,6 +235,9 @@ pub(crate) struct Planner<'a> {
     /// One entry per barrier or shared plan being planned: the scans of already planned shared
     /// plans read inside it (scans numbered inside it are its id range).
     pub(super) scan_reads: Vec<Vec<ScanId>>,
+    /// How many security barriers enclose the plan being planned: under one, a scan that decides
+    /// once is not asked (its user code would take the policy's conjuncts out of the plan).
+    pub(super) barriers: usize,
     /// The next subquery's id.
     next_subquery: u64,
     /// The next exchange's id.
@@ -302,6 +305,7 @@ impl<'a> Planner<'a> {
             guarded: HashSet::new(),
             shared_scans: HashMap::new(),
             scan_reads: Vec::new(),
+            barriers: 0,
             next_subquery: next_id.saturating_add(SUBQUERY_GAP),
             next_exchange: 0,
             scan_filters: HashMap::new(),
@@ -1255,13 +1259,19 @@ impl<'a> Planner<'a> {
         // A scan that decides once (a Python data source) sees every conjunct at once; a plan that
         // is only looked at, or a row-level probe, keeps the whole filter above the scan instead.
         let deciding = filter.is_some() && factory.decides_once();
+        // Under a security barrier the filter over the scan is the policy's (design E14 §6): it is
+        // not offered to the source's code, which could take it out of the plan, and the scan reads
+        // with no filter pushed, so it needs no decision (fail closed).
+        let withheld = deciding && self.barriers > 0;
         let mut decision = None;
-        if let (true, Some(predicate)) = (deciding, filter) {
-            if self.decide && !row_id {
-                decision =
-                    Some(self.decide_scan(&*factory, &table, scan, predicate, &projection)?);
-            } else if self.cx.decisions && !row_id {
-                self.deferred = true;
+        if deciding {
+            if let (false, Some(predicate)) = (withheld, filter) {
+                if self.decide && !row_id {
+                    decision =
+                        Some(self.decide_scan(&*factory, &table, scan, predicate, &projection)?);
+                } else if self.cx.decisions && !row_id {
+                    self.deferred = true;
+                }
             }
         } else if let Some(predicate) = filter {
             // The scan evaluates pushed filters over its table schema.
@@ -1346,7 +1356,7 @@ impl<'a> Planner<'a> {
                 row_id,
                 decided: match &decision {
                     Some(d) => Some(Box::new(d.decided.clone())),
-                    None if deciding && !self.decide => {
+                    None if deciding && !withheld && !self.decide => {
                         Some(Box::new(crate::operators::DecidedScan::undecided()))
                     }
                     None => None,
