@@ -1128,8 +1128,7 @@ pub fn cap_prefix(cap: &str) -> Vec<String> {
 pub fn on_path(bin: &str) -> bool {
     std::env::var_os("PATH").is_some_and(|p| {
         std::env::split_paths(&p).any(|d| {
-            let f = d.join(bin);
-            f.is_file()
+            d.join(bin).is_file() || (cfg!(windows) && d.join(format!("{bin}.exe")).is_file())
         })
     })
 }

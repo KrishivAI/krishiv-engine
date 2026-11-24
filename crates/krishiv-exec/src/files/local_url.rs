@@ -21,6 +21,10 @@ pub fn native_path(text: &str) -> std::path::PathBuf {
     if cfg!(windows)
         && let Some(led) = windows_path::drive_led(local)
     {
+        // A bare drive (`C:`) is drive-relative on Windows; the root keeps its separator.
+        if led.len() == 2 {
+            return std::path::PathBuf::from(format!("{led}/"));
+        }
         return std::path::PathBuf::from(led);
     }
     std::path::PathBuf::from(local)
