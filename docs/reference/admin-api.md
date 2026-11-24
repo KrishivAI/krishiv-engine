@@ -4,7 +4,7 @@ description: "The krishiv.admin.v1 control API of krishiv server: inspect and en
 
 # Admin API (`krishiv.admin.v1`)
 
-Stability: stable since 0.3. Changes to `krishiv.admin.v1` are additive (new methods, new fields); a breaking change
+Stability: stable since 0.3. (A build made before the 0.3.0 tag still reports `preview` in `GetVersion` and `system.capabilities`; the release flips that flag.) Changes to `krishiv.admin.v1` are additive (new methods, new fields); a breaking change
 ships as `krishiv.admin.v2` next to it.
 
 `krishiv server` serves the admin API on its admin listener (port `8080` by default), over gRPC and over REST under
@@ -23,7 +23,7 @@ ships as `krishiv.admin.v2` next to it.
 | `GetReadiness` | `GET /readiness` | whether the server accepts new queries |
 | `GetDrainStatus`, `Drain`, `ResumeServing` | `GET`, `POST`, `DELETE /drain` | stop taking new queries, wait for running ones, resume |
 | `ListResourceGroups` | `GET /resourceGroups` | the resource groups and their current load |
-| `GetResourceGroupConfig`, `ValidateResourceGroupConfig`, `ReplaceResourceGroupConfig`, `ReloadResourceGroupConfig` | `/resourceGroups/config` | read, check, replace or reload the resource-group file ([Resource groups](../guides/resource-groups.md)) |
+| `GetResourceGroupConfig`, `ValidateResourceGroupConfig`, `ReplaceResourceGroupConfig`, `ReloadResourceGroupConfig` | `GET`, `PUT /resourceGroups/config`, `POST /resourceGroups/config:validate`, `POST /resourceGroups/config:reload` | read, check, replace or reload the resource-group file ([Resource groups](../guides/resource-groups.md)) |
 | `GetConfig`, `SetConfigDefaults` | `GET /config`, `PATCH /config/defaults` | read the server's settings and change session defaults |
 
 The machine-readable definitions are `descriptor.json` (the gRPC service), `openapi.json` and `routes.json` in

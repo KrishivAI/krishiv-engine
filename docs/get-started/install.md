@@ -9,7 +9,7 @@ Pick the form that matches how you will use Krishiv.
 | You want | Install | Page |
 |---|---|---|
 | The engine inside your Python program | `pip install krishiv` | [Quickstart](quickstart.md) |
-| A server for PySpark, JDBC or ADBC clients | the Docker image, or the `krishiv` binary | [Deployment](../guides/deploy.md) |
+| A server for PySpark, JDBC or ADBC clients | the Docker image (Spark Connect, Flight SQL, Delta, Iceberg), or the `krishiv` binary (Spark Connect only) | [Deployment](../guides/deploy.md) |
 | The `krishiv sql` shell | the `krishiv` binary | [Run SQL from the command line](../guides/run-sql-from-the-command-line.md) |
 | Krishiv from Rust | `cargo add krishiv` | [Rust reference](../reference/rust/index.md) |
 
@@ -85,9 +85,29 @@ Building needs Rust 1.97 or newer. Features are additive; the [Rust reference](.
 
 Python 3.11 to 3.14 on every platform with a wheel. A platform marked pending ships only if its release checks pass.
 
+## What each artifact includes
+
+| Artifact | Delta tables | Iceberg tables | Arrow Flight SQL | Cloud stores (`s3://` ...) |
+|---|---|---|---|---|
+| Docker image | yes | yes | yes | yes |
+| `krishiv` release binary (`server`, `ui`) | no | no | no | no |
+| Python wheel | no | no | no | yes |
+
+A `pip install krishiv` or the release binary refuses a Delta table with `DATA_SOURCE_NOT_FOUND`. For lakehouse tables or
+ADBC and JDBC clients, use the Docker image or build from source with the `delta`, `iceberg` and `flight-sql` features.
+
 ## Check the install
+
+With the Python package and CLI on the host (the pip or cargo routes):
 
 ```bash
 python -c "import krishiv; print(krishiv.session().sql('SELECT 1 AS ok').collect())"
 krishiv --version
+```
+
+With only the Docker image, start it on loopback and check its health endpoint (the image has no host CLI or Python package):
+
+```bash
+docker run -d --name krishiv -p 127.0.0.1:15002:15002 -p 127.0.0.1:8080:8080 ghcr.io/krishivai/krishiv:0.3.0
+curl -fsS http://127.0.0.1:8080/healthz
 ```
