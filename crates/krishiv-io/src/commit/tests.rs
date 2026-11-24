@@ -579,15 +579,18 @@ impl Drop for TempDir {
     }
 }
 
+impl Env {
+    /// The local file system rooted at `tmp`, with directories read as missing objects.
+    fn local(tmp: &TempDir) -> Self {
+        let fs = LocalFileSystem::new_with_prefix(&tmp.0).unwrap();
+        Self::new(Arc::new(LocalDirsAsMissing::new(fs)), "file://")
+    }
+}
+
 #[test]
 fn local_directories_and_files_follow_spark() {
     let tmp = TempDir::new("local");
-    let env = Env::new(
-        Arc::new(LocalDirsAsMissing::new(
-            LocalFileSystem::new_with_prefix(&tmp.0).unwrap(),
-        )),
-        "file://",
-    );
+    let env = Env::local(&tmp);
     // An empty directory exists for error and ignore.
     std::fs::create_dir(tmp.0.join("empty")).unwrap();
     let e = env
@@ -790,12 +793,7 @@ fn listing_and_head_requests_are_retried_then_fail_as_store_failures() {
 fn a_failing_store_request_is_not_retried() {
     let tmp = TempDir::new("fail");
     std::fs::write(tmp.0.join("afile"), b"hi").unwrap();
-    let env = Env::new(
-        Arc::new(LocalDirsAsMissing::new(
-            LocalFileSystem::new_with_prefix(&tmp.0).unwrap(),
-        )),
-        "file://",
-    );
+    let env = Env::local(&tmp);
     // A path under a file: the file system refuses it outright.
     let r = env
         .rt
@@ -854,12 +852,7 @@ fn listings_and_deletes_are_retried() {
 fn a_store_refusing_a_listing_or_delete_is_not_retried() {
     let tmp = TempDir::new("refuse");
     std::fs::write(tmp.0.join("afile"), b"hi").unwrap();
-    let env = Env::new(
-        Arc::new(LocalDirsAsMissing::new(
-            LocalFileSystem::new_with_prefix(&tmp.0).unwrap(),
-        )),
-        "file://",
-    );
+    let env = Env::local(&tmp);
     let e = env
         .rt
         .block_on(env.io.list(&env.store, &Path::from("afile/x")));
@@ -878,12 +871,7 @@ fn a_store_refusing_a_listing_or_delete_is_not_retried() {
 fn partitioned_writes_follow_sparks_layout() {
     let memory = Env::memory();
     let tmp = TempDir::new("partitioned");
-    let local = Env::new(
-        Arc::new(LocalDirsAsMissing::new(
-            LocalFileSystem::new_with_prefix(&tmp.0).unwrap(),
-        )),
-        "file://",
-    );
+    let local = Env::local(&tmp);
     for env in [&memory, &local] {
         let files = env
             .write_partitioned(

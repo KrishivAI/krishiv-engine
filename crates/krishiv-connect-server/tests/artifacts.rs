@@ -478,6 +478,8 @@ async fn windows_reserved_segments_are_refused() {
         "files/a*b",
         "files/a|b",
         "files/a\"b",
+        "files/a<b",
+        "files/a>b",
     ] {
         let status = add(&run, vec![batch(vec![single(name, b"x")])])
             .await

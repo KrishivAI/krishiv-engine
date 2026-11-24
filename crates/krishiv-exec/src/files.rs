@@ -61,8 +61,10 @@ use crate::error::Result;
 use crate::operators::PathRoots;
 use crate::operators::spark_dir_text;
 
+mod local_url;
 mod user_schema;
 mod windows_path;
+pub use local_url::{file_url, native_path};
 use user_schema::{UserPartitions, check_user_schema, user_schema_columns};
 
 /// Spark 4.2's built-in data sources that read no files:
@@ -278,46 +280,6 @@ impl PathLocator for ObjectPaths {
             None | Some("file") => self.local.locate(path).map(|at| at.display),
             Some(_) => parse_object_url(path).map(|url| url.display),
         }
-    }
-}
-
-/// The native file-system path of a local path written as [`LocalPaths`] displays it (`file:/a/b`,
-/// `file:///a/b` or `/a/b`): the `file:` prefix and the extra slashes after it go and, on Windows, a drive-led path loses its
-/// leading slashes (`file:/C:/x` is `C:/x`; `/C:/x` would name a directory `C:` on the current
-/// drive). Other text is returned as it is.
-#[must_use]
-pub fn native_path(text: &str) -> std::path::PathBuf {
-    // `file:///a` and `file:/a` name the same path; the slashes before the first segment fold to one.
-    let local = match text.strip_prefix("file:") {
-        Some(rest) if rest.starts_with('/') => {
-            &rest[rest.len() - rest.trim_start_matches('/').len() - 1..]
-        }
-        Some(rest) => rest,
-        None => text,
-    };
-    if cfg!(windows)
-        && let Some(led) = windows_path::drive_led(local)
-    {
-        return std::path::PathBuf::from(led);
-    }
-    std::path::PathBuf::from(local)
-}
-
-/// The `file://` URL of the absolute local path `path`: `file:///a/b` on Unix and, on Windows,
-/// `file:///C:/a/b` for `C:\a\b` (separators as `/`, the drive as the first segment), the form
-/// [`LocalPaths`] and URL parsers read.
-#[must_use]
-pub fn file_url(path: &std::path::Path) -> String {
-    let text = path.to_string_lossy();
-    let slashed = if cfg!(windows) {
-        text.replace('\\', "/")
-    } else {
-        text.into_owned()
-    };
-    if slashed.starts_with('/') {
-        format!("file://{slashed}")
-    } else {
-        format!("file:///{slashed}")
     }
 }
 
@@ -1712,31 +1674,6 @@ fn unsupported(feature: String) -> KrishivError {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[cfg(unix)]
-    #[test]
-    fn native_paths_and_file_urls_keep_unix_paths() {
-        assert_eq!(native_path("file:/a/b"), std::path::PathBuf::from("/a/b"));
-        assert_eq!(native_path("/a/b"), std::path::PathBuf::from("/a/b"));
-        assert_eq!(native_path("file:///a").as_os_str(), "/a");
-        assert_eq!(native_path("file:/").as_os_str(), "/");
-        assert_eq!(file_url(std::path::Path::new("/a/b")), "file:///a/b");
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn native_paths_and_file_urls_carry_the_drive() {
-        assert_eq!(
-            native_path("file:/C:/a/b"),
-            std::path::PathBuf::from("C:/a/b")
-        );
-        assert_eq!(
-            native_path("file:///C:/a"),
-            std::path::PathBuf::from("C:/a")
-        );
-        assert_eq!(native_path("/C:/a"), std::path::PathBuf::from("C:/a"));
-        assert_eq!(file_url(std::path::Path::new(r"C:\a\b")), "file:///C:/a/b");
-    }
 
     #[test]
     fn an_overlapped_data_column_keeps_its_place_as_the_partition_column() {
