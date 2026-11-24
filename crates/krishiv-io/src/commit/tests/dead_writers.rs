@@ -9,6 +9,25 @@ use object_store::local::LocalFileSystem;
 use object_store::path::Path;
 
 use super::{Env, SaveMode, TempDir};
+use crate::SettledLocalFileSystem;
+use crate::io::{IoConfig, IoScheduler, StoreId};
+
+/// The local store as a session registers it: with the sweeper of its hidden staging files.
+fn local_env() -> Env {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .unwrap();
+    let sched = IoScheduler::new(IoConfig::default());
+    let store = Arc::new(SettledLocalFileSystem::new());
+    sched.register_store(StoreId::new("file"), Arc::clone(&store) as _);
+    sched.register_staging_sweeper(StoreId::new("file"), store);
+    Env {
+        rt,
+        io: sched.context(),
+        store: StoreId::new("file"),
+    }
+}
 
 /// PY-075: a write under a file fails as a write (`TASK_WRITE_FAILED`, not "Reading the file"), and the
 /// OS error is the error's cause.
@@ -101,7 +120,7 @@ fn a_write_deletes_the_hidden_staging_files_of_a_dead_writer_only() {
         return;
     };
     let tmp = TempDir::new("py054-staging");
-    let env = Env::new(Arc::new(LocalFileSystem::new()), "file");
+    let env = local_env();
     let dir = tmp.0.join("t");
     std::fs::create_dir_all(dir.join("p=1")).unwrap();
     let dead = dir.join("part-00000-job-2-c000.snappy.parquet#1");
@@ -145,7 +164,7 @@ fn killed_writer_child() {
     let Ok(dir) = std::env::var(CHILD_DIR) else {
         return;
     };
-    let env = Env::new(Arc::new(LocalFileSystem::new()), "file");
+    let env = local_env();
     let rel = dir.trim_start_matches('/');
     let w = env
         .begin(rel, SaveMode::Overwrite, "job-killed")
@@ -186,17 +205,17 @@ fn a_write_killed_with_sigkill_leaves_nothing_a_directory_read_finds() {
     let flag = dir.join("ready.flag");
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
     while !flag.exists() {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "the child never got going"
-        );
+        if std::time::Instant::now() >= deadline {
+            let _ = child.kill();
+            panic!("the child never got going");
+        }
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
     child.kill().unwrap(); // SIGKILL
     child.wait().unwrap();
     std::fs::remove_file(&flag).unwrap();
 
-    let env = Env::new(Arc::new(LocalFileSystem::new()), "file");
+    let env = local_env();
     let rel = dir.to_str().unwrap().trim_start_matches('/');
     env.write_logged(rel, SaveMode::Overwrite, "job-next", 2, true);
     let mut left: Vec<String> = walk(&dir);
@@ -219,4 +238,128 @@ fn walk(dir: &std::path::Path) -> Vec<String> {
         }
     }
     out
+}
+
+/// PY-054 in a container: the writer died with its PID namespace, so its record cannot be judged.
+/// An overwrite deletes the staging files older than the grace whatever job they name, and keeps
+/// a fresh one (an upload in flight).
+#[test]
+fn an_overwrite_sweeps_old_staging_files_of_a_writer_nobody_can_judge() {
+    let tmp = TempDir::new("py054-grace");
+    let env = local_env();
+    let dir = tmp.0.join("t");
+    std::fs::create_dir_all(dir.join("p=1")).unwrap();
+    let old = dir.join("part-00000-job-9-c000.snappy.parquet#1");
+    let nested = dir.join("p=1/part-00001-job-9_1-c001.snappy.parquet#3");
+    let fresh = dir.join("part-00000-job-8-c000.snappy.parquet#1");
+    for f in [&old, &nested, &fresh] {
+        std::fs::write(f, b"partial").unwrap();
+    }
+    let long_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(3 * 3600);
+    for f in [&old, &nested] {
+        std::fs::File::options()
+            .write(true)
+            .open(f)
+            .unwrap()
+            .set_modified(long_ago)
+            .unwrap();
+    }
+    let rel = dir.to_str().unwrap().trim_start_matches('/');
+    env.write_logged(rel, SaveMode::Overwrite, "job-next", 2, true);
+    assert!(!old.exists() && !nested.exists(), "old staging files stay");
+    assert!(fresh.exists(), "a fresh staging file was deleted");
+}
+
+/// An append never sweeps staging files by age: only a dead writer's go.
+#[test]
+fn an_append_leaves_old_staging_files_of_unknown_writers() {
+    let tmp = TempDir::new("py054-append");
+    let env = local_env();
+    let dir = tmp.0.join("t");
+    std::fs::create_dir_all(&dir).unwrap();
+    let old = dir.join("part-00000-job-9-c000.snappy.parquet#1");
+    std::fs::write(&old, b"partial").unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(&old)
+        .unwrap()
+        .set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(3 * 3600))
+        .unwrap();
+    let rel = dir.to_str().unwrap().trim_start_matches('/');
+    env.write_logged(rel, SaveMode::Append, "job-next", 2, true);
+    assert!(old.exists());
+}
+
+/// The store that staged the files sweeps them: a store with no sweeper (here an in-memory one)
+/// is left alone, and the sweep reports clean.
+#[test]
+fn a_store_without_a_sweeper_has_nothing_to_sweep() {
+    let env = Env::memory();
+    assert!(
+        env.rt.block_on(
+            env.io
+                .sweep_staging(&env.store, &Path::from("t"), |_, _| true)
+        )
+    );
+}
+
+/// Staging files of an anchored write are swept descriptor-relative, links are not followed.
+#[cfg(unix)]
+#[test]
+fn the_anchored_store_sweeps_staging_files_and_follows_no_link() {
+    use crate::io::StagingSweep;
+    let tmp = TempDir::new("py054-anchored");
+    let dir = tmp.0.join("t");
+    let elsewhere = tmp.0.join("elsewhere");
+    std::fs::create_dir_all(dir.join("p=1")).unwrap();
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    let victim = elsewhere.join("part-00000-job-2-c000.parquet#1");
+    std::fs::write(&victim, b"x").unwrap();
+    std::os::unix::fs::symlink(&elsewhere, dir.join("link")).unwrap();
+    let mine = dir.join("p=1/part-00000-job-2-c000.parquet#1");
+    let plain = dir.join("p=1/part-00000-job-2-c000.parquet");
+    std::fs::write(&mine, b"x").unwrap();
+    std::fs::write(&plain, b"x").unwrap();
+    let store = crate::BeneathStore::anchor(&dir).unwrap();
+    let rel = Path::from(dir.to_str().unwrap().trim_start_matches('/'));
+    store
+        .sweep_staging(&rel, &|name, _| name.contains("job-2"))
+        .unwrap();
+    assert!(!mine.exists(), "the staging file stays");
+    assert!(plain.exists(), "a finished file was deleted");
+    assert!(victim.exists(), "a file behind a link was deleted");
+}
+
+/// A sweep that could not remove a file keeps the dead writer's record, so the next write looks
+/// again (and drops it once the sweep is clean).
+#[cfg(unix)]
+#[test]
+fn a_sweep_that_failed_keeps_the_dead_writers_record() {
+    use std::os::unix::fs::PermissionsExt;
+    let Some(me) = crate::commit::writers::current() else {
+        return;
+    };
+    let tmp = TempDir::new("py054-keep");
+    let env = local_env();
+    let dir = tmp.0.join("t");
+    let locked = dir.join("p=1");
+    std::fs::create_dir_all(&locked).unwrap();
+    std::fs::write(locked.join("part-00000-job-2-c000.parquet#1"), b"x").unwrap();
+    // Readable, not writable: the file cannot be removed.
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o555)).unwrap();
+    if std::fs::File::create(locked.join("probe")).is_ok() {
+        // Root writes anywhere: the failure cannot be made.
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+        return;
+    }
+    let rel = dir.to_str().unwrap().trim_start_matches('/');
+    let record = crate::commit::writers::record_path(&Path::from(rel), "job-2");
+    let body = format!("{}\n4194304\n1", me.lines().next().unwrap());
+    env.rt
+        .block_on(env.io.put_object(&env.store, &record, Bytes::from(body)))
+        .unwrap();
+    env.write_logged(rel, SaveMode::Append, "job-4", 2, true);
+    let kept = dir.join("_krishiv_log/job-2.writer").exists();
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(kept, "the record of a sweep that failed was dropped");
 }

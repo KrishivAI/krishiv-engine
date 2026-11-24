@@ -77,40 +77,6 @@ fn judged_dead(exists: Option<rustix::io::Result<()>>, stat: Option<&str>, start
     }
 }
 
-/// Deletes the upload-staging files (`<name>#<n>`) that dead writers left under `root`, a directory
-/// of the local file system. The local store stages an upload under that name until it completes
-/// and hides it from listings, so a write killed mid-file leaves a partial file that no listing
-/// finds and that readers of the directory (pyarrow) still take (PY-054). Links are never followed.
-/// Best effort: what cannot be read or removed stays for the next write.
-pub(super) fn sweep_staging(root: &std::path::Path, dead_jobs: &[String]) {
-    let mut pending = vec![root.to_path_buf()];
-    while let Some(dir) = pending.pop() {
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let Ok(kind) = entry.file_type() else {
-                continue;
-            };
-            let name = entry.file_name();
-            let Some(name) = name.to_str() else { continue };
-            if kind.is_dir() {
-                if name != LOG_DIR {
-                    pending.push(entry.path());
-                }
-            } else if kind.is_file()
-                && name.split_once('#').is_some_and(|(base, n)| {
-                    !n.is_empty()
-                        && n.bytes().all(|b| b.is_ascii_digit())
-                        && dead_jobs.iter().any(|j| super::is_job_file(base, j))
-                })
-            {
-                let _ = std::fs::remove_file(entry.path());
-            }
-        }
-    }
-}
-
 /// The boot id and PID namespace: two processes with the same pair share a PID space.
 fn machine() -> Option<String> {
     let boot = std::fs::read_to_string("/proc/sys/kernel/random/boot_id").ok()?;

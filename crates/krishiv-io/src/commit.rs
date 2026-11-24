@@ -264,13 +264,23 @@ impl DirectoryWrite {
                 )
                 .await;
         }
-        if !dead_jobs.is_empty() && self.store.key().split('#').next() == Some("file") {
-            // The staging files of a killed upload are hidden from listings (PY-054). The local
-            // store is rooted at `/`, so the directory's object path is its file system path.
-            let root = std::path::PathBuf::from(format!("/{}", self.dir));
-            let dead = dead_jobs.clone();
-            let _ = tokio::task::spawn_blocking(move || writers::sweep_staging(&root, &dead)).await;
-        }
+        // The staging files of an upload that never completed are hidden from listings (PY-054):
+        // the store that staged them deletes those of a dead writer at once, and on an overwrite
+        // those older than the grace, whichever job they name (a writer killed with its container
+        // leaves a record nobody can judge).
+        let cutoff = chrono::Utc::now() - self.grace;
+        let clean = if dead_jobs.is_empty() && !self.overwrite {
+            true
+        } else {
+            let (dead, overwrite) = (dead_jobs.clone(), self.overwrite);
+            io.sweep_staging(&self.store, &self.dir, move |name, modified| {
+                let base = name.split_once('#').map_or(name, |(base, _)| base);
+                dead.iter().any(|j| is_job_file(base, j)) || (overwrite && modified <= cutoff)
+            })
+            .await
+        };
+        // A record stays while its job's files may remain: the next write looks again.
+        let dead_records = if clean { dead_records } else { Vec::new() };
         if self.overwrite || !dead_jobs.is_empty() {
             if self.overwrite {
                 // The old marker goes first: a run killed before its commit must not leave the
@@ -283,7 +293,6 @@ impl DirectoryWrite {
             }
             let seen: std::collections::HashSet<&str> =
                 visible.iter().map(String::as_str).collect();
-            let cutoff = chrono::Utc::now() - self.grace;
             for meta in io.list(&self.store, &self.dir).await? {
                 let rel = self.relative(&meta.location);
                 if rel.is_empty() || rel.split('/').any(is_hidden) || seen.contains(rel.as_str()) {
