@@ -20,6 +20,9 @@ pub(super) fn qualified_namespace_location(
         }
         .into());
     }
+    // On Windows a drive path (`C:\x`, `\\?\C:\x`) is an absolute local path, never a scheme `C`.
+    let drive = drive_led(location);
+    let location = drive.as_deref().unwrap_or(location);
     let scheme = location.split_once(':').filter(|(s, _)| {
         s.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
             && s.chars()
@@ -39,10 +42,16 @@ pub(super) fn qualified_namespace_location(
         },
         // Only a relative location needs the warehouse (and may create its directory).
         None if location.starts_with('/') => ("file:".to_owned(), location.to_owned()),
-        None => (
-            "file:".to_owned(),
-            warehouse()?.join(location).display().to_string(),
-        ),
+        None => {
+            let joined = warehouse()?.join(location).display().to_string();
+            // `Path::join` puts a `\` before the location on Windows; the URI's separator is `/`.
+            let joined = if cfg!(windows) {
+                joined.replace('\\', "/")
+            } else {
+                joined
+            };
+            ("file:".to_owned(), drive_led(&joined).unwrap_or(joined))
+        }
     };
     let mut parts: Vec<&str> = Vec::new();
     for segment in path.split('/') {
@@ -70,4 +79,20 @@ pub(super) fn qualified_namespace_location(
         });
     }
     Ok(format!("{prefix}/{}", parts.join("/")))
+}
+
+/// On Windows, a drive-led local path (`C:\x`, `C:/x`, verbatim `\\?\C:\x`) in the form the
+/// locator reads, `/C:/x` (separators `/`); `None` for anything else and on every other platform.
+fn drive_led(text: &str) -> Option<String> {
+    if !cfg!(windows) {
+        return None;
+    }
+    let slashed = text.replace('\\', "/");
+    let led = slashed.strip_prefix("//?/").unwrap_or(&slashed);
+    let b = led.as_bytes();
+    let is_drive = b.len() >= 2
+        && b[0].is_ascii_alphabetic()
+        && b[1] == b':'
+        && (b.len() == 2 || b[2] == b'/');
+    is_drive.then(|| format!("/{led}"))
 }

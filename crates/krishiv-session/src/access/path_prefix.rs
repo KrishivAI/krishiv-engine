@@ -309,6 +309,33 @@ pub(crate) fn resolve_links(path: &Path) -> Option<PathBuf> {
     }
 }
 
+/// Whether `a` and `b` name the same place, a drive written plain (`C:\x`) or verbatim (`\\?\C:\x`) alike:
+/// `std::fs::canonicalize` gives the verbatim form on Windows, while a path made from a `file:/C:/x`
+/// location is plain. Any other prefix (a UNC share, a device) must match as written.
+pub(crate) fn same_place(a: &Path, b: &Path) -> bool {
+    fn drive(c: Component<'_>) -> Option<u8> {
+        match c {
+            Component::Prefix(p) => match p.kind() {
+                Prefix::Disk(d) | Prefix::VerbatimDisk(d) => Some(d.to_ascii_uppercase()),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+    let (mut x, mut y) = (a.components(), b.components());
+    loop {
+        match (x.next(), y.next()) {
+            (None, None) => return true,
+            (Some(p), Some(q)) if p == q => {}
+            (Some(p), Some(q)) => match (drive(p), drive(q)) {
+                (Some(d), Some(e)) if d == e => {}
+                _ => return false,
+            },
+            _ => return false,
+        }
+    }
+}
+
 /// Whether `e` says the entry is not there: missing, or below a file.
 fn absent(e: &std::io::Error) -> bool {
     matches!(
@@ -355,13 +382,16 @@ mod tests {
     use krishiv_common::secret::OptionValue;
     use krishiv_plan::analyzer::AllowAll;
 
-    use super::{PathPrefixPolicy, plain_absolute};
+    use super::{PathPrefixPolicy, plain_absolute, same_place};
 
     #[test]
     fn plain_absolute_paths() {
-        assert!(plain_absolute(Path::new("/data/x")));
-        assert!(!plain_absolute(Path::new("/data/../x")));
         assert!(!plain_absolute(Path::new("data/x")));
+        // `/data/x` has no drive, so it is not absolute on Windows.
+        if cfg!(unix) {
+            assert!(plain_absolute(Path::new("/data/x")));
+            assert!(!plain_absolute(Path::new("/data/../x")));
+        }
         if cfg!(windows) {
             assert!(plain_absolute(Path::new(r"C:\data\x")));
             assert!(plain_absolute(Path::new("C:/data/x")));
@@ -403,5 +433,22 @@ mod tests {
         }
         assert!(!allows(format!("file:{}", slashed(&sibling.join("b.csv")))));
         assert!(!allows(format!("file:{}/../other/b.csv", slashed(&root))));
+    }
+
+    /// A canonical path is the same place as the path it came from, so the directory checks hold where
+    /// `canonicalize` writes a drive verbatim (Windows).
+    #[test]
+    fn a_canonical_path_is_the_same_place() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let canonical = std::fs::canonicalize(tmp.path()).expect("canonical");
+        assert!(same_place(&canonical, &canonical));
+        assert!(!same_place(&canonical, &canonical.join("x")));
+        assert!(!same_place(&canonical.join("x"), &canonical.join("y")));
+        if cfg!(windows) {
+            assert!(same_place(Path::new(r"\\?\C:\a\b"), Path::new(r"C:\a\b")));
+            assert!(same_place(Path::new(r"\\?\c:\a"), Path::new(r"C:\a")));
+            assert!(!same_place(Path::new(r"\\?\D:\a"), Path::new(r"C:\a")));
+            assert!(!same_place(Path::new(r"\\srv\share\a"), Path::new(r"C:\a")));
+        }
     }
 }

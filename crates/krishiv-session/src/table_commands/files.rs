@@ -120,7 +120,7 @@ impl Session {
                 }
             };
             match std::fs::canonicalize(&at) {
-                Ok(now) if now == at => {}
+                Ok(now) if crate::access::same_place(&now, &at) => {}
                 now => {
                     if let Ok(now) = now {
                         remove_made(made, &now);
@@ -155,7 +155,8 @@ impl Session {
         }
         std::fs::rename(source, target)
             .map_err(|e| fs_failed("cannot move a directory", source, Some(target), &e))?;
-        let in_place = |p: &Path| std::fs::canonicalize(p).is_ok_and(|now| now == p);
+        let in_place =
+            |p: &Path| std::fs::canonicalize(p).is_ok_and(|now| crate::access::same_place(&now, p));
         if in_place(target) && source.parent().is_none_or(in_place) {
             return Ok(());
         }

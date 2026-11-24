@@ -32,7 +32,7 @@ use krishiv_sql::{
 mod path_prefix;
 
 pub use path_prefix::PathPrefixPolicy;
-pub(crate) use path_prefix::{allowed_roots, resolve_links};
+pub(crate) use path_prefix::{allowed_roots, resolve_links, same_place};
 
 use crate::dataframe::DataFrame;
 use crate::session::{QueryEnv, Session, sql_context};
