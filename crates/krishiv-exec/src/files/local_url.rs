@@ -33,7 +33,8 @@ pub fn native_path(text: &str) -> std::path::PathBuf {
 pub fn file_url(path: &std::path::Path) -> String {
     let text = path.to_string_lossy();
     let slashed = if cfg!(windows) {
-        text.replace('\\', "/")
+        // `\\?\C:\a` as `/C:/a`: the verbatim prefix would otherwise become a `?` segment.
+        windows_path::normalize(&text)
     } else {
         text.into_owned()
     };
@@ -71,5 +72,23 @@ mod tests {
         );
         assert_eq!(native_path("/C:/a"), std::path::PathBuf::from("C:/a"));
         assert_eq!(file_url(std::path::Path::new(r"C:\a\b")), "file:///C:/a/b");
+        // A canonical (verbatim) path gives the same URL, and the locator reads it back.
+        let url = file_url(std::path::Path::new(r"\\?\C:\a\b"));
+        assert_eq!(url, "file:///C:/a/b");
+        use crate::files::PathLocator;
+        let paths = super::super::LocalPaths::new(krishiv_io::StoreId::new("local"), "C:/");
+        assert_eq!(
+            paths.locate(&url).map(|at| at.display).ok().as_deref(),
+            Some("file:/C:/a/b")
+        );
+        // A UNC share and a device are refused, never read as segments of the current drive.
+        for text in [
+            r"\\srv\share\x",
+            "//srv/share/x",
+            r"\\.\COM1",
+            r"\\?\Volume{0}\x",
+        ] {
+            assert!(paths.locate(text).is_err(), "{text}");
+        }
     }
 }

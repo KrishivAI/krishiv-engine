@@ -177,6 +177,11 @@ impl PathLocator for LocalPaths {
         } else {
             format!("{}/{path}", self.cwd)
         };
+        // On Windows a `//` lead left after normalizing is a UNC share or a device (`\\srv\share`,
+        // `\\.\COM1`, `\\?\Volume{..}`): its server and share would be lost as path segments.
+        if cfg!(windows) && local.starts_with("//") {
+            return Err(unsupported("UNC and device paths".to_owned()));
+        }
         let mut parts: Vec<&str> = Vec::new();
         for part in local.split('/') {
             match part {
@@ -515,15 +520,18 @@ impl FileReads {
             };
             // `hf://` has no listing: a directory or a glob is refused with how to name files.
             krishiv_io::check_hf_file_path(text)?;
-            // A Windows verbatim path (`\\?\C:\x`, what `canonicalize` returns) is no glob: its `?` is
-            // part of the prefix. It reads as the plain drive path.
-            let verbatim;
-            let text = if cfg!(windows) && text.starts_with(r"\\?\") {
-                verbatim = local_text(text);
-                verbatim.as_str()
-            } else {
-                text
-            };
+            // On Windows a local path is read in the locator's form before the glob check and the prefix
+            // split: `C:\data\*.csv` lists `C:/data` (a `\` is a separator, not a glob escape), and a
+            // verbatim path (`\\?\C:\x`, what `canonicalize` returns) is no glob, its `?` being part of
+            // the prefix. Cloud URLs keep their text.
+            let local;
+            let text =
+                if cfg!(windows) && scheme(text).is_none_or(|s| s.eq_ignore_ascii_case("file")) {
+                    local = local_text(text);
+                    local.as_str()
+                } else {
+                    text
+                };
             if krishiv_io::partition::glob::has_glob(text) {
                 // Boxed, as the listing below: these futures sit on the recursion of nested scripts, where a
                 // larger one overflows the stack (`script_nesting_is_bounded_at_the_limit`).

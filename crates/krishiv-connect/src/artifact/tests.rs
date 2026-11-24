@@ -113,7 +113,16 @@ fn win32_reserved_characters_are_refused_on_windows_only() {
         if cfg!(windows) {
             assert_eq!(class(name), ErrorClass::InvalidArtifactPath, "{name}");
         } else {
-            assert!(parse_artifact_name(name).is_ok(), "{name}");
+            // Parsed whole elsewhere: the name is its path, its kind is its first segment, no fragment.
+            let n = parse_artifact_name(name).unwrap_or_else(|e| panic!("{name}: {e}"));
+            assert_eq!(n.path(), name);
+            let kind = if name.starts_with("pyfiles/") {
+                ArtifactKind::PyFiles
+            } else {
+                ArtifactKind::Files
+            };
+            assert_eq!(n.kind(), kind, "{name}");
+            assert_eq!(n.fragment(), None, "{name}");
         }
     }
 }

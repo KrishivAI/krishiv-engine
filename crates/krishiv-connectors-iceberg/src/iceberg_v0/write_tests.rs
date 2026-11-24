@@ -804,10 +804,12 @@ fn attempts_of_one_task_name_their_files_apart() {
     env.rt.block_on(failed.abort());
     assert_eq!(files.len(), 1);
     assert!(files[0].location.ends_with("/00003-8-w1-00001.parquet"));
-    assert_eq!(
-        parquet_files(env.dir.path()),
-        [local(&files[0].location).display().to_string()]
-    );
+    // As paths: `local` writes `/` and the directory walk `\` on Windows, for the same file.
+    let found: Vec<std::path::PathBuf> = parquet_files(env.dir.path())
+        .into_iter()
+        .map(std::path::PathBuf::from)
+        .collect();
+    assert_eq!(found, [local(&files[0].location)]);
 }
 
 /// An `abort` dropped while its first delete is pending, then the writer

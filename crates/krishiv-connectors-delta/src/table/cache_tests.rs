@@ -264,6 +264,27 @@ fn hadoop_paths() {
 /// `text` with the table directory `dir` as `<path>`, in each form a message can hold it: the
 /// path of its URL as written and canonical (on Windows `/C:/Users/RUNNER~1/...` and the long
 /// name `/C:/Users/runneradmin/...` a listing returns), and the native text.
+/// `text` with each `%XX` escape decoded (UTF-8), as Hadoop's `Path` shows a URL path.
+fn percent_decode(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let hex = |b: u8| char::from(b).to_digit(16);
+        if bytes[i] == b'%'
+            && i + 2 < bytes.len()
+            && let (Some(h), Some(l)) = (hex(bytes[i + 1]), hex(bytes[i + 2]))
+        {
+            out.push(u8::try_from(h * 16 + l).unwrap_or(b'?'));
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 fn masked(text: &str, dir: &std::path::Path) -> String {
     let url_path = |p: &std::path::Path| {
         url::Url::from_directory_path(p)
@@ -272,9 +293,13 @@ fn masked(text: &str, dir: &std::path::Path) -> String {
     };
     let canonical = dir.canonicalize().unwrap();
     let mut out = text.to_owned();
+    // `hadoop_path` names a table by its percent-decoded URL path (`/C:/Users/Jane Doe/..` on Windows).
+    let decoded = |p: &std::path::Path| percent_decode(&url_path(p));
     for form in [
         url_path(&canonical),
         url_path(dir),
+        decoded(&canonical),
+        decoded(dir),
         dir.to_string_lossy().into_owned(),
     ] {
         if !form.is_empty() {

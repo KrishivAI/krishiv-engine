@@ -202,7 +202,9 @@ impl DescriptorSet {
         let file = std::fs::File::open(local).map_err(|e| fail(&e))?;
         let opened = file.metadata().map_err(|e| fail(&e))?;
         // Unix: the same device and inode. Windows' file identity (volume serial and file index) is not in
-        // stable std, so there the file opened is read without this check (Windows port, 0.3.0).
+        // stable std: there the handle's creation time (100 ns ticks), last write time and size must be
+        // the path's, so a file swapped in between the check and the open is refused unless it matches all
+        // three (Windows port, 0.3.0).
         #[cfg(unix)]
         {
             use std::os::unix::fs::MetadataExt;
@@ -210,7 +212,16 @@ impl DescriptorSet {
                 return Err(CannotParseProtobufDescriptor {}.into());
             }
         }
-        #[cfg(not(unix))]
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt;
+            let stamp =
+                |m: &std::fs::Metadata| (m.creation_time(), m.last_write_time(), m.file_size());
+            if stamp(&opened) != stamp(&before) {
+                return Err(CannotParseProtobufDescriptor {}.into());
+            }
+        }
+        #[cfg(not(any(unix, windows)))]
         let _ = (&before, &opened);
         let mut bytes = Vec::new();
         std::io::Read::read_to_end(&mut std::io::Read::take(file, MAX_BYTES + 1), &mut bytes)

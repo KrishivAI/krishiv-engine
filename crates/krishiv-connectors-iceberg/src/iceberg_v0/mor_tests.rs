@@ -328,7 +328,8 @@ pub(super) fn files_ending(env: &Env, suffix: &str) -> Vec<String> {
             if p.is_dir() {
                 walk(&p, suffix, out);
             } else if p.display().to_string().ends_with(suffix) {
-                out.push(p.display().to_string());
+                // `/` separators on every platform, so the tests' `/x=1/` checks hold on Windows.
+                out.push(p.display().to_string().replace('\\', "/"));
             }
         }
     }

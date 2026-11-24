@@ -215,7 +215,10 @@ fn view_properties_serde_properties_and_partition_locations() {
         ),
     )
     .unwrap();
-    assert_eq!(location(), format!("file:{}", loc1.display()));
+    assert_eq!(
+        same_form(&location()),
+        same_form(&format!("file:{}", loc1.display()))
+    );
     run(
         &s,
         &format!(
@@ -224,7 +227,10 @@ fn view_properties_serde_properties_and_partition_locations() {
         ),
     )
     .unwrap();
-    assert_eq!(location(), format!("file:{}", loc2.display()));
+    assert_eq!(
+        same_form(&location()),
+        same_form(&format!("file:{}", loc2.display()))
+    );
     // An empty location is refused (Spark: Hadoop cannot make a path of it).
     for sql in [
         "alter table tp partition (v='ke', c='nt') set location ''",
@@ -1277,5 +1283,15 @@ fn a_collated_char_or_varchar_keeps_its_limit_and_collation() {
                 assert_eq!(count(&s, "select 1 from k5"), 0, "{ddl} {value}");
             }
         }
+    }
+}
+
+/// A partition location's text with `/` separators and the `file:` slashes before a drive folded
+/// (`file:/C:/x`, `file:C:\x` alike), so the row compares with the directory on every platform.
+fn same_form(text: &str) -> String {
+    let slashed = text.replace('\\', "/");
+    match slashed.strip_prefix("file:") {
+        Some(rest) if cfg!(windows) => format!("file:{}", rest.trim_start_matches('/')),
+        _ => slashed,
     }
 }

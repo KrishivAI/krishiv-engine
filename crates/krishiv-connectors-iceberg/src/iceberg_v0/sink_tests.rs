@@ -425,7 +425,8 @@ pub(super) fn parquet_files(env: &Env, settle: bool) -> Vec<String> {
             if p.is_dir() {
                 walk(&p, out);
             } else if p.extension().is_some_and(|x| x == "parquet") {
-                out.push(p.display().to_string());
+                // `/` separators on every platform, so the tests' `/00000-` checks hold on Windows.
+                out.push(p.display().to_string().replace('\\', "/"));
             }
         }
     }

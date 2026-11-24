@@ -57,7 +57,15 @@ pub(super) fn qualified_namespace_location(
             // Java's `URI.normalize` keeps a `..` that has nothing left to remove: `/../x` is
             // `file:/../x` (Spark 4.2.0).
             ".." => {
-                if parts.last().is_some_and(|p| *p != "..") {
+                // A Windows drive (`/C:/..`) is the root of its path: a `..` never removes it.
+                let drive = |p: &str| {
+                    cfg!(windows)
+                        && parts.len() == 1
+                        && p.len() == 2
+                        && p.as_bytes()[0].is_ascii_alphabetic()
+                        && p.ends_with(':')
+                };
+                if parts.last().is_some_and(|p| *p != ".." && !drive(p)) {
                     parts.pop();
                 } else {
                     parts.push("..");
@@ -121,7 +129,8 @@ pub(super) fn windows_form(
     };
     let b = led.as_bytes();
     if b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b':' {
-        if b.len() > 2 && b[2] != b'/' {
+        // `C:` alone and `C:x` are relative to the drive's current directory.
+        if b.len() == 2 || b[2] != b'/' {
             return Err(refuse("drive-relative"));
         }
         return Ok(Some(format!("/{led}")));

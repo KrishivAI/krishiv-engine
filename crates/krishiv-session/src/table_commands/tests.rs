@@ -60,6 +60,7 @@ fn windows_drive_locations_are_local_and_unc_ones_are_refused() {
         r"\\?\GLOBALROOT\Device\x",
         r"\\.\C:\x",
         "C:x",
+        "C:",
     ] {
         let e = windows_form(written).unwrap_err();
         assert_eq!(
@@ -75,6 +76,9 @@ fn windows_drive_locations_are_local_and_unc_ones_are_refused() {
         assert_eq!(q(r"rel\y", wh), "file:/D:/w/warehouse/rel/y");
         assert_eq!(q(r"file:///C:\x", wh), "file:/C:/x");
         assert_eq!(q(r"file:C:\x", wh), "file:/C:/x");
+        // A `..` never removes the drive.
+        assert_eq!(q("C:/../x", wh), "file:/C:/../x");
+        assert_eq!(q("C:/a/../x", wh), "file:/C:/x");
     }
 }
 

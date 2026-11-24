@@ -244,7 +244,7 @@ impl Session {
         let checked = self
             .authorize_path(location, &[Privilege::Modify], StatementClass::Write)
             .await?;
-        if checked.path != canonical {
+        if !crate::access::same_place(&checked.path, &canonical) {
             return Err(internal(format!(
                 "refusing to delete {}: it changed while it was checked",
                 location.display()
