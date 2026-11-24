@@ -39,11 +39,26 @@ fn windows_drive_locations_are_local_and_unc_ones_are_refused() {
     }
     assert_eq!(windows_form(r"rel\y").unwrap().as_deref(), Some("rel/y"));
     assert_eq!(windows_form("s3a://b/x").unwrap(), None);
-    assert_eq!(windows_form("file:/C:/x").unwrap(), None);
+    assert_eq!(
+        windows_form("file:/C:/x").unwrap().as_deref(),
+        Some("file:/C:/x")
+    );
+    assert_eq!(
+        windows_form(r"file:///C:\x").unwrap().as_deref(),
+        Some("file:///C:/x")
+    );
+    assert_eq!(
+        windows_form(r"FILE:C:\x").unwrap().as_deref(),
+        Some("FILE:C:/x")
+    );
     for written in [
         r"\\srv\share\x",
         "//srv/share/x",
         r"\\?\UNC\srv\share\x",
+        r"\\?\unc\srv\share\x",
+        r"\\?\Volume{0}\x",
+        r"\\?\GLOBALROOT\Device\x",
+        r"\\.\C:\x",
         "C:x",
     ] {
         let e = windows_form(written).unwrap_err();
@@ -58,6 +73,8 @@ fn windows_drive_locations_are_local_and_unc_ones_are_refused() {
         assert_eq!(q(r"C:\x\", wh), "file:/C:/x");
         assert_eq!(q(r"\\?\C:\x", wh), "file:/C:/x");
         assert_eq!(q(r"rel\y", wh), "file:/D:/w/warehouse/rel/y");
+        assert_eq!(q(r"file:///C:\x", wh), "file:/C:/x");
+        assert_eq!(q(r"file:C:\x", wh), "file:/C:/x");
     }
 }
 

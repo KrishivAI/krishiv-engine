@@ -83,8 +83,9 @@ pub(super) fn qualified_namespace_location(
 /// platform.
 ///
 /// # Errors
-/// `KRISHIV_UNSUPPORTED_FEATURE` for a UNC location (`\\srv\share\x`, `\\?\UNC\..`) and a
-/// drive-relative one (`C:x`): neither is placed in the warehouse or on the current drive.
+/// `KRISHIV_UNSUPPORTED_FEATURE` for a UNC, device or verbatim location that is not a drive
+/// (`\\srv\share\x`, `\\?\UNC\..`, `\\.\C:\x`, `\\?\Volume{..}\x`) and a drive-relative one (`C:x`): none is
+/// placed in the warehouse or on the current drive.
 fn windows_local(text: &str) -> Result<Option<String>, krishiv_common::error::KrishivError> {
     if cfg!(windows) {
         windows_form(text)
@@ -97,14 +98,17 @@ fn windows_local(text: &str) -> Result<Option<String>, krishiv_common::error::Kr
 pub(super) fn windows_form(
     text: &str,
 ) -> Result<Option<String>, krishiv_common::error::KrishivError> {
-    let url = text.split_once(':').is_some_and(|(s, _)| {
+    let scheme = text.split_once(':').map(|(s, _)| s).filter(|s| {
         s.len() > 1
             && s.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
             && s.chars()
                 .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
     });
-    if url {
-        return Ok(None);
+    match scheme {
+        // Hadoop's `normalizePath` replaces `\` in a `file:` URL too (`file:C:\x`, `file:///C:\x`).
+        Some(s) if s.eq_ignore_ascii_case("file") => return Ok(Some(text.replace('\\', "/"))),
+        Some(_) => return Ok(None),
+        None => {}
     }
     let slashed = text.replace('\\', "/");
     let led = slashed.strip_prefix("//?/").unwrap_or(&slashed);
@@ -115,15 +119,17 @@ pub(super) fn windows_form(
             },
         )
     };
-    if led.starts_with("//") || (slashed.starts_with("//?/") && led.starts_with("UNC/")) {
-        return Err(refuse("UNC"));
-    }
     let b = led.as_bytes();
     if b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b':' {
         if b.len() > 2 && b[2] != b'/' {
             return Err(refuse("drive-relative"));
         }
         return Ok(Some(format!("/{led}")));
+    }
+    // Every other `\\` lead is no local drive path: a UNC share (`\\srv\share`, `\\?\UNC\..` in any case),
+    // a device (`\\.\C:`) or a verbatim volume (`\\?\Volume{..}`, `\\?\GLOBALROOT`).
+    if slashed.starts_with("//") {
+        return Err(refuse("UNC, device or verbatim"));
     }
     Ok(Some(slashed))
 }
