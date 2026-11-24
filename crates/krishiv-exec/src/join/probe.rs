@@ -656,6 +656,12 @@ impl ProbeOp {
                             // A sparse batch's survivors wait for a full
                             // batch (K1): the predicate, the lookups and
                             // the output then run once for all of them.
+                            // A weighted batch is never held and does not
+                            // flush the held rows first (the design's
+                            // order): a row stage comes only from a file
+                            // scan's runtime filters in this pipeline, and
+                            // a file scan's rows are unweighted, so no
+                            // change stream reaches a probe that holds.
                             (Some(mask), Some(kept))
                                 if built.spilled == 0
                                     && received.is_unweighted()
@@ -908,6 +914,11 @@ impl Operator for ProbeOp {
         // row stage reaches a probe only in the scan's pipeline, and those
         // joins are planned over an exchange, so none would hold; holding
         // there would have to finish before every driver's flush barrier.
+        // The pipeline sink's `Sink::coalesce_input` is not asked (the
+        // driver's coalescer asks it): the probe is never lane-safe
+        // (`lane_safe`), so an ordered result sink's positions never
+        // interleave drivers; a lane-safe probe would have to ask it, or
+        // held rows would move past later position reports.
         let held_bytes = if ctx.query().config().coalesce_input
             && self.0.join_type != JoinType::NullAwareAnti
             && !self.0.join_type.builds_preserved()

@@ -110,6 +110,7 @@ impl Held {
             return Ok(None);
         };
         if let Some(done) = rows.next_completed_batch() {
+            self.bytes = 0;
             return Ok(Some(done));
         }
         rows.finish_buffered_batch()
