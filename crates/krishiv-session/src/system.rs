@@ -663,7 +663,11 @@ pub(crate) struct QueryRow {
     /// `system.queries.planning_ns` (MODES-2): for a query that ran, the time it spent planning before
     /// its run, outside `wall_ns` and the queue: its parse and analysis (once, in the first run of
     /// the analysis) and the optimization and physical planning of this run, file listing included.
-    /// `None` for a row that never ran.
+    /// `None` for a row that never ran; a result-cache replay counts as not run. Known limits (review
+    /// of 5aad51d3c): the parse-to-analysis window includes the access checks and any `IDENTIFIER(..)`
+    /// query it evaluates; a command that runs a query (INSERT, CTAS, MERGE, a write) times that
+    /// query's analysis and planning, not the command's own parse; two actions running at once on
+    /// one DataFrame share its clock, so one row may take the other's physical planning.
     pub(crate) planning_ns: Option<i64>,
     pub(crate) peak_memory_bytes: Option<i64>,
     pub(crate) error_class: Option<String>,

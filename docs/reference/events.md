@@ -30,7 +30,7 @@ Consumers ignore unknown members and unknown kinds: minor versions only add (min
 event schema is experimental until the design note's review findings are settled; do not treat `record_id` as a
 billing-grade key yet. Members: `kind` (`final`), `fidelity` (`exact`), `principal`, `delegated_by`, `session_id`,
 `compute_id`, `workload_class`, `resource_group`, `statement_class`, `window_start_ms`, `window_end_ms`,
-`wall_ns` (queue time excluded for a query that started; a query cancelled before it started reports the time since its submission), `queued_ns`, `planning_ns` (the parse, analysis, optimization and physical planning before the run, outside `wall_ns` and the queue; null for a query that never ran; minor 1), `cpu_ns`, `bytes_scanned`, `rows_read`, `files_read`, `bytes_written`,
+`wall_ns` (queue time excluded for a query that started; a query cancelled before it started reports the time since its submission), `queued_ns`, `planning_ns` (the parse, analysis, optimization and physical planning before the run, outside `wall_ns` and the queue; null for a query that never ran or was answered from the result cache; for a write, the analysis and planning of the query it runs; minor 1), `cpu_ns`, `bytes_scanned`, `rows_read`, `files_read`, `bytes_written`,
 `rows_written`, `files_written`, `spill_bytes`, `spill_files`, `peak_memory_bytes`, `result_cache_hit`.
 The figures are the `system.queries` row's.
 

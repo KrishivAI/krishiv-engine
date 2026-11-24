@@ -237,6 +237,27 @@ fn queries_carry_the_planning_time_of_a_query_that_ran() {
 }
 
 #[test]
+fn each_run_of_one_dataframe_records_its_own_planning_time() {
+    let s = Session::new().unwrap();
+    let df = block_on(s.sql(
+        "SELECT a.id, count(*) FROM range(100) a JOIN range(100) b ON a.id = b.id GROUP BY a.id",
+    ))
+    .unwrap();
+    block_on(df.collect()).unwrap();
+    block_on(df.collect()).unwrap();
+    let rows = strings_in(
+        &s,
+        "SELECT CAST(planning_ns AS STRING) FROM system.queries \
+         WHERE query_text NOT LIKE '%system.queries%' ORDER BY submitted_at",
+    );
+    assert_eq!(rows.len(), 2, "{rows:?}");
+    let ns: Vec<i64> = rows.iter().map(|r| r.parse().unwrap()).collect();
+    // The second run plans again (optimization and physical planning), so it has a time of its own;
+    // the parse and analysis count only in the first (`PlanningClock::take`, unit-tested in `env.rs`).
+    assert!(ns.iter().all(|&n| n > 0), "{ns:?}");
+}
+
+#[test]
 fn a_profile_carries_the_planning_time_its_row_shows() {
     let s = Session::new().unwrap();
     let df =
