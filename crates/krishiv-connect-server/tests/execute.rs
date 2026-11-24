@@ -2234,3 +2234,36 @@ async fn other_ml_commands_stay_unsupported() {
         .expect("session");
     assert!(entry.operations().is_empty());
 }
+
+/// CON-RC-3: a temporary view made by `spark.sql` over Connect reads back through the SQL
+/// relation the client sends again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_temp_view_made_by_spark_sql_can_be_read() {
+    let run = start().await;
+    collect(
+        &run.channel,
+        request(sql_command_input(
+            "CREATE OR REPLACE TEMP VIEW t AS SELECT id, id % 7 AS k FROM range(300)",
+            1,
+        )),
+    )
+    .await
+    .expect("creates the view");
+    let r = collect(
+        &run.channel,
+        request(sql_command_input("SELECT count(*) AS n FROM t", 2)),
+    )
+    .await
+    .expect("analyzes the query");
+    let rel = sql_result(&r);
+    let r = collect(&run.channel, request(root(rel)))
+        .await
+        .expect("reads the view");
+    let got = rows(&r);
+    assert_eq!(
+        got.column(0)
+            .as_primitive::<arrow_array::types::Int64Type>()
+            .value(0),
+        300
+    );
+}

@@ -78,6 +78,7 @@ server = [
     "krishiv-server/metrics-prometheus",
     "krishiv-server/admin-api",
     "krishiv-server/tls",
+    "krishiv-server/access-external",
     "dep:krishiv-session",
     "krishiv-session/tls",
     "dep:krishiv-connect-server",
