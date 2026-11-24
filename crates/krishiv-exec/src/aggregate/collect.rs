@@ -1065,6 +1065,16 @@ mod tests {
             next.merge(&ids, &state).unwrap();
             state = next.state(&ids, &list).unwrap();
         }
+        let child = state
+            .as_list::<i32>()
+            .values()
+            .as_string_view()
+            .data_buffers()
+            .len();
+        assert!(
+            child <= batches as usize,
+            "{child} buffers after the last round"
+        );
         let got = state
             .as_list::<i32>()
             .iter()
