@@ -303,12 +303,45 @@ jobs:
             -r tests/udf-worker/requirements.txt
       # Every GitHub-hosted x64 runner has x86-64-v3, so the kernel tests must
       # run that clone, not skip it (AVX-512 varies by runner: not required).
-      - run: cargo nextest run --workspace --locked --no-tests=pass
+      # One workspace run built all ~560 test executables at once (116 GB of target on 2026-11-24, then "No space left
+      # on device" in the merge queue). The run is split by target so each stage's executables are deleted before
+      # the next: the package selection stays `--workspace`, so feature unification is the one a single run had.
+      # A `--test` glob that matches a target whose `required-features` are off is an error (a whole-workspace run
+      # skips it), so the stages name their targets: every integration test whose `required-features` the workspace
+      # resolve has on (`cargo metadata` resolve), grouped by first letter.
+      - name: Workspace tests, in stages
         env:
           KRISHIV_REQUIRE_TARGETS: baseline,x86_64v3
           KRISHIV_SIM_TPCH_DIR: ${{ runner.temp }}/tpch-sf0.1
           KRISHIV_TEST_UDF_PYTHON: ${{ runner.temp }}/udf-python/bin/python
           KRISHIV_UDF_POOL_REQUIRED: "1"
+        run: |
+          stage() {
+            echo "::group::nextest stage ($# args)"
+            cargo nextest run --workspace --locked --no-tests=pass "$@"
+            echo "::endgroup::"
+            find target/debug/deps -maxdepth 1 -type f -perm -u+x ! -name '*.so' -delete
+            df -h /
+          }
+          df -h /
+          stage --lib --bins
+          cargo metadata --format-version 1 --locked > "$RUNNER_TEMP/meta.json"
+          for range in a-c d-l m-r s t-z; do
+            args=$(python3 -I - "$range" "$RUNNER_TEMP/meta.json" << 'PY'
+          import json, re, sys
+          rng, path = sys.argv[1], sys.argv[2]
+          meta = json.load(open(path))
+          on = {n["id"]: set(n["features"]) for n in meta["resolve"]["nodes"]}
+          names = sorted({t["name"] for p in meta["packages"] if p["id"] in meta["workspace_members"] for t in p["targets"]
+                          if "test" in t["kind"] and set(t.get("required-features") or []) <= on[p["id"]]
+                          and re.match("[" + rng + "]", t["name"])})
+          print(" ".join("--test " + n for n in names))
+          PY
+            )
+            [ -n "$args" ] || { echo "no test targets in $range"; continue; }
+            # shellcheck disable=SC2086
+            stage $args
+          done
       - run: cargo test --workspace --doc --locked
       # The workspace run's test executables are not reused by the feature runs below (other features, other
       # hashes); libraries and build-script outputs stay, so those runs still reuse what they can.
