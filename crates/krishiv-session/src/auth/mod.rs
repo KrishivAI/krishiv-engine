@@ -203,7 +203,7 @@ pub enum Method {
     /// No credential was presented.
     None,
     /// `Authorization: Basic` on the Flight SQL surface: a bearer token as the password, its
-    /// principal's name as the user name (P3-T101 note §3.1).
+    /// principal's name as the user name.
     Basic,
 }
 
@@ -288,7 +288,7 @@ impl<'a> Credentials<'a> {
     }
 
     /// The same credentials carrying a decoded `Basic` credential: its password as the bearer
-    /// token and its user name to check against the token's principal (P3-T101 note §3.1). The
+    /// token and its user name to check against the token's principal. The
     /// transport decodes `Basic` only on `Surface::FlightSql`.
     #[must_use]
     pub fn with_basic(mut self, basic: &'a BasicCredentials) -> Self {

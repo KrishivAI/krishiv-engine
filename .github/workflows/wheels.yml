@@ -43,7 +43,7 @@ env:
   KRISHIV_GIT_SHA: ${{ github.sha }}
   # maturin build flags per flavour; `dist` is the LTO + stripped profile of the workspace Cargo.toml.
   ABI3_ARGS: --profile dist --locked
-  FT_ARGS: --profile dist --locked --no-default-features --features mimalloc,cloud,ui,catalog-iceberg-rest
+  FT_ARGS: --profile dist --locked --no-default-features --features mimalloc,cloud,ui,delta,catalog-iceberg-rest
   # The shipped CPU levels (see README.md, "Supported CPUs").
   X86_RUSTFLAGS: -C target-cpu=x86-64-v3
   ARM_RUSTFLAGS: -C target-cpu=neoverse-n1

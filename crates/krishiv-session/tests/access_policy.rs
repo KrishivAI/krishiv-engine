@@ -916,8 +916,9 @@ fn a_special_character_in_an_ancestor_name_is_refused() {
     );
 }
 
-/// A file where a directory of the path should be fails as a storage error,
-/// not an internal one.
+/// A file where a directory of the path should be fails as a failed write with the OS reason
+/// as its cause, not an internal error; the file is left as it was (the classes and modes are
+/// in `write_under_file.rs`).
 #[cfg(unix)]
 #[test]
 fn a_file_on_the_path_is_a_storage_failure() {
@@ -929,7 +930,7 @@ fn a_file_on_the_path_is_a_storage_failure() {
     let out = root.join("f/sub/out");
     assert_eq!(
         class(block_on(df.write().parquet(out.to_str().unwrap()))),
-        "KRISHIV_OBJECT_STORE_REQUEST_FAILED"
+        "TASK_WRITE_FAILED"
     );
     assert_eq!(std::fs::read(root.join("f")).unwrap(), b"x");
 }
@@ -1720,6 +1721,64 @@ fn dataframe_overwrites_need_drop_and_modify() {
         )),
         DENIED
     );
+}
+
+/// E34 (review of #966): a keyed overwrite retry is asked what the overwrite asks, `Drop` first, so a
+/// denial does not depend on whether the table's commit log holds the key.
+#[test]
+fn a_keyed_overwrite_retry_is_denied_like_the_first_try() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(Policy::new(no_drop));
+    s.conf()
+        .set("spark.sql.warehouse.dir", dir.path().to_str().unwrap())
+        .unwrap();
+    let write = |mode: &str, key: &str| {
+        class(block_on(
+            s.table("t")
+                .write()
+                .mode(mode)
+                .option("krishiv.write.idempotencyKey", key)
+                .save_as_table("keyed"),
+        ))
+    };
+    assert_eq!(write("errorifexists", "k1"), "OK");
+    // A key the log holds and one it does not: the same denial.
+    assert_eq!(write("overwrite", "k1"), DENIED);
+    assert_eq!(write("overwrite", "k2"), DENIED);
+    assert_eq!(block_on(s.table("keyed").count()).unwrap(), 3);
+    // An invalid key is reported after the denial, not before it.
+    assert_eq!(write("overwrite", ""), DENIED);
+}
+
+/// E34 (second review of #966): a Delta overwrite is a data overwrite that asks no `Drop`, keyed or not.
+#[cfg(feature = "delta")]
+#[test]
+fn a_keyed_delta_overwrite_is_allowed_like_the_unkeyed_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(Policy::new(no_drop));
+    s.conf()
+        .set("spark.sql.warehouse.dir", dir.path().to_str().unwrap())
+        .unwrap();
+    block_on(s.table("t").write().format("delta").save_as_table("d")).unwrap();
+    let unkeyed = class(block_on(
+        s.table("t")
+            .write()
+            .format("delta")
+            .mode("overwrite")
+            .save_as_table("d"),
+    ));
+    let keyed = class(block_on(
+        s.table("t")
+            .write()
+            .format("delta")
+            .mode("overwrite")
+            .option("krishiv.write.idempotencyKey", "k")
+            .save_as_table("d"),
+    ));
+    assert_eq!(unkeyed, "OK");
+    assert_eq!(keyed, "OK");
+    // Each overwrite replaced the table with the source's rows.
+    assert_eq!(block_on(s.table("d").count()).unwrap(), 3);
 }
 
 /// `ignore` on an existing table is still authorized: a denial must not tell an existing table
