@@ -77,6 +77,37 @@ fn a_sql_relation_run_shows_its_text_and_class() {
     assert!(text.contains("relation-marker"), "{text}");
 }
 
+/// What a Spark Connect client sends for `spark.sql(...).filter(...)` or `.count()`: its own nodes over
+/// the relation. The run is listed under the statement it reads, as an embedded derived frame's is.
+#[cfg(feature = "unstable-ir")]
+#[test]
+fn a_plan_over_sql_relations_shows_the_first_ones_text() {
+    use krishiv_plan::{JoinCondition, JoinKind, LogicalPlan, Plan, PlanNode, SqlArgs};
+    let sql = |query: &str| {
+        LogicalPlan::new(PlanNode::Sql {
+            query: query.to_owned(),
+            args: SqlArgs::None,
+        })
+    };
+    let s = Session::new().unwrap();
+    let plan = Plan::try_new(sql("SELECT id FROM range(0, 5) /*left-marker*/").join(
+        sql("SELECT id AS other FROM range(0, 2) /*right-marker*/"),
+        JoinKind::Cross,
+        JoinCondition::None,
+    ))
+    .unwrap();
+    let rows: usize = block_on(s.from_plan(&plan).collect())
+        .unwrap()
+        .iter()
+        .map(arrow_array::RecordBatch::num_rows)
+        .sum();
+    assert_eq!(rows, 10);
+    let got = texts(&s, "SELECT id FROM range%left-marker%");
+    assert_eq!(got.len(), 1, "one row: {got:?}");
+    assert_eq!(got[0].1.as_deref(), Some("READ"));
+    assert!(texts(&s, "SELECT id AS other%right-marker%").is_empty());
+}
+
 #[test]
 fn a_frame_no_sql_started_still_has_no_text() {
     let s = Session::new().unwrap();

@@ -1067,27 +1067,38 @@ impl Session {
         self.plan_frame(self.clone(), Arc::clone(plan.root()))
     }
 
-    /// A frame of `root` on `session`. A root that is a `spark.sql` relation (`PlanNode::Sql`, what
-    /// Spark Connect sends for a query it analyzed earlier) lists its runs in `system.queries` with
-    /// the statement's text (literals masked) and class, as `Session::sql` does; a plan any other
-    /// client built stays without text. A statement that does not parse keeps none: its analysis
+    /// A frame of `root` on `session`. A plan over a `spark.sql` relation (`PlanNode::Sql`, what
+    /// Spark Connect sends for a query it analyzed earlier, alone for `collect()` or under the
+    /// client's own nodes for `count()`, `filter(...)` or `first()`) lists its runs in
+    /// `system.queries` with that statement's text (secrets masked) and class, as a frame derived
+    /// from `Session::sql` does; with several such relations it is the first one, as there. A plan
+    /// with none stays without text. A statement that does not parse keeps none: its analysis
     /// reports the error.
     #[cfg(feature = "unstable-ir")]
     fn plan_frame(&self, session: Session, root: Arc<LogicalPlan>) -> DataFrame {
-        let statement = match &root.node {
-            PlanNode::Sql { query, .. } => {
-                let mut env = session.query_env();
-                let redacted = krishiv_sql::redact_sql(query);
-                krishiv_sql::parse_statement(query, &env.parser)
-                    .ok()
-                    .map(|parsed| {
-                        env.set_text(&redacted);
-                        env.statement_class = Some(self.statement_class(&parsed, &env).name());
-                        env
-                    })
+        fn first_sql(plan: &LogicalPlan) -> Option<&str> {
+            if let PlanNode::Sql { query, .. } = &plan.node {
+                return Some(query);
             }
-            _ => None,
-        };
+            let mut found = None;
+            plan.for_each_child(&mut |child| {
+                if found.is_none() {
+                    found = first_sql(child);
+                }
+            });
+            found
+        }
+        let statement = first_sql(&root).and_then(|query| {
+            let mut env = session.query_env();
+            let redacted = krishiv_sql::redact_sql(query);
+            krishiv_sql::parse_statement(query, &env.parser)
+                .ok()
+                .map(|parsed| {
+                    env.set_text(&redacted);
+                    env.statement_class = Some(self.statement_class(&parsed, &env).name());
+                    env
+                })
+        });
         let df = DataFrame::new(session, root);
         match statement {
             Some(env) => df.with_first_statement(env),
