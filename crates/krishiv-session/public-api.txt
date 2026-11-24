@@ -1203,12 +1203,16 @@ pub fn krishiv_session::events::QueryEvent::fmt(&self, &mut core::fmt::Formatter
 impl core::marker::StructuralPartialEq for krishiv_session::events::QueryEvent
 #[non_exhaustive] pub struct krishiv_session::events::QueryRef
 pub krishiv_session::events::QueryRef::compute_id: alloc::string::String
+pub krishiv_session::events::QueryRef::attempt: core::option::Option<u32>
 pub krishiv_session::events::QueryRef::delegated_by: core::option::Option<alloc::string::String>
 pub krishiv_session::events::QueryRef::principal: alloc::string::String
 pub krishiv_session::events::QueryRef::query_id: alloc::string::String
 pub krishiv_session::events::QueryRef::session_id: alloc::string::String
+pub krishiv_session::events::QueryRef::stage_id: core::option::Option<u32>
 pub krishiv_session::events::QueryRef::tags: alloc::vec::Vec<(alloc::string::String, alloc::string::String)>
+pub krishiv_session::events::QueryRef::task_id: core::option::Option<u32>
 pub krishiv_session::events::QueryRef::trace_id: core::option::Option<alloc::string::String>
+pub krishiv_session::events::QueryRef::worker_id: core::option::Option<alloc::string::String>
 impl core::clone::Clone for krishiv_session::events::QueryRef
 pub fn krishiv_session::events::QueryRef::clone(&self) -> krishiv_session::events::QueryRef
 impl core::cmp::Eq for krishiv_session::events::QueryRef
@@ -1241,7 +1245,7 @@ pub krishiv_session::events::UsageRecord::kind: krishiv_session::events::UsageKi
 pub krishiv_session::events::UsageRecord::peak_memory_bytes: core::option::Option<i64>
 pub krishiv_session::events::UsageRecord::principal: alloc::string::String
 pub krishiv_session::events::UsageRecord::queued_ns: core::option::Option<i64>
-pub krishiv_session::events::UsageRecord::record_id: (alloc::string::String, alloc::string::String, u64)
+pub krishiv_session::events::UsageRecord::record_id: krishiv_session::events::UsageRecordId
 pub krishiv_session::events::UsageRecord::resource_group: core::option::Option<alloc::string::String>
 pub krishiv_session::events::UsageRecord::result_cache_hit: bool
 pub krishiv_session::events::UsageRecord::rows_read: core::option::Option<i64>
@@ -1263,6 +1267,24 @@ pub fn krishiv_session::events::UsageRecord::eq(&self, &krishiv_session::events:
 impl core::fmt::Debug for krishiv_session::events::UsageRecord
 pub fn krishiv_session::events::UsageRecord::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for krishiv_session::events::UsageRecord
+#[non_exhaustive] pub struct krishiv_session::events::UsageRecordId
+pub krishiv_session::events::UsageRecordId::query_id: alloc::string::String
+pub krishiv_session::events::UsageRecordId::seq: u64
+pub krishiv_session::events::UsageRecordId::session_id: alloc::string::String
+pub krishiv_session::events::UsageRecordId::worker_id: core::option::Option<alloc::string::String>
+impl krishiv_session::events::UsageRecordId
+pub fn krishiv_session::events::UsageRecordId::new(session_id: alloc::string::String, query_id: alloc::string::String, seq: u64) -> Self
+pub fn krishiv_session::events::UsageRecordId::with_worker(self, worker_id: core::option::Option<alloc::string::String>) -> Self
+impl core::clone::Clone for krishiv_session::events::UsageRecordId
+pub fn krishiv_session::events::UsageRecordId::clone(&self) -> krishiv_session::events::UsageRecordId
+impl core::cmp::Eq for krishiv_session::events::UsageRecordId
+impl core::cmp::PartialEq for krishiv_session::events::UsageRecordId
+pub fn krishiv_session::events::UsageRecordId::eq(&self, &krishiv_session::events::UsageRecordId) -> bool
+impl core::fmt::Debug for krishiv_session::events::UsageRecordId
+pub fn krishiv_session::events::UsageRecordId::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for krishiv_session::events::UsageRecordId
+pub fn krishiv_session::events::UsageRecordId::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::StructuralPartialEq for krishiv_session::events::UsageRecordId
 pub const krishiv_session::events::SCHEMA_NAME: &str
 pub const krishiv_session::events::SCHEMA_VERSION: krishiv_session::events::SchemaVersion
 pub const krishiv_session::events::SHUTDOWN_FLUSH: core::time::Duration
