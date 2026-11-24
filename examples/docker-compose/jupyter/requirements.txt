@@ -1,4 +1,6 @@
 jupyterlab>=4.2,<5
-pyspark-client>=4.0,<5
+# toPandas() of the 4.3 client reads spark.sql.execution.arrow.pyspark.selfDestruct.enabled, which the
+# 0.3 server does not answer yet (4.2 is not checked). CI runs the notebook with this range.
+pyspark-client>=4.0,<4.2
 # PySpark 4.x does not support pandas 3 yet.
 pandas>=2.2,<3

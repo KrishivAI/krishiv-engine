@@ -72,8 +72,12 @@ spark.sql("DELETE FROM trips WHERE distance_km < 4")
 See [Changing rows in a Delta table](delta-dml.md) and
 [Iceberg and Delta tables, and catalogs](lakehouse-tables.md) for `MERGE` and the rest.
 
-One thing differs from a Spark server in 0.3.0, and the notebook is written around it: `DataFrame.show()` is not
-served yet. Use `toPandas()` (a table in the notebook) or `collect()`.
+Two things differ from a Spark server in 0.3.0, and the notebook is written around them:
+
+- `DataFrame.show()` is not served yet: use `toPandas()` (a table in the notebook) or `collect()`;
+- `toPandas()` of the 4.3 client reads a setting the server does not answer yet (`spark.sql.execution.arrow.pyspark.selfDestruct.enabled`),
+  and fails with `SQL_CONF_NOT_FOUND`. The example installs `pyspark-client` below 4.2, the range the notebook is tested with;
+  `collect()` works with the 4.3 client too.
 
 ## Look around
 
@@ -89,7 +93,7 @@ Copy the server's certificate out and point gRPC at it:
 
 ```bash
 docker compose cp krishiv:/var/lib/krishiv/tls/cert.pem .
-pip install "pyspark-client>=4.0,<5"
+pip install "pyspark-client>=4.0,<4.2"
 GRPC_DEFAULT_SSL_ROOTS_FILE_PATH=cert.pem python -c '
 from pyspark.sql import SparkSession
 spark = SparkSession.builder.remote("sc://localhost:15002/;use_ssl=true;token=krishiv-quickstart-token-change-me-please").getOrCreate()
