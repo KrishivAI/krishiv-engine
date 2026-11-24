@@ -171,7 +171,7 @@ pub(crate) struct SessionState {
     pub(crate) memory: Arc<dyn MemoryPool>,
     /// Whether a store creates objects only if absent (the commit log's
     /// probe), by store id; per session, never process-wide.
-    commit_log_probes: Mutex<HashMap<String, bool>>,
+    pub(crate) commit_log_probes: Mutex<HashMap<String, bool>>,
     pub(crate) io: Arc<IoScheduler>,
     /// The session's content-addressed relations: every memory table's
     /// batches as Arrow IPC, so workers resolve a batch range through it
@@ -787,7 +787,7 @@ impl Session {
         // first action's error.
         match krishiv_sql::parse_multipart_identifier(
             name,
-            &parser_options(&self.state.conf.snapshot()),
+            &parser_options(&self.state.conf.snapshot(), self.state.profile),
         ) {
             Ok(id) => {
                 let parts = id.parts.into_iter().map(|p| p.value);
@@ -1328,7 +1328,7 @@ impl Session {
             let values = conf_values(&config, &ResolutionConf::KEYS);
             ResolutionConf::from_conf(|k| values.get(k).map(String::as_str))
         };
-        let parser = parser_options(&config);
+        let parser = parser_options(&config, self.state.profile);
         // The cache cap is the query's own configuration snapshot.
         let cache_cap = RelationCache::cap_of(&config);
         // One snapshot of the variables per query, like the configuration
@@ -1953,7 +1953,7 @@ pub(crate) use env::*;
 mod spill;
 pub(crate) use spill::*;
 
-mod writes;
+pub(crate) mod writes;
 pub(crate) use writes::partition_overwrite_is_dynamic;
 use writes::*;
 

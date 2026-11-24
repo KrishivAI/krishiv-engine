@@ -325,6 +325,7 @@ impl Walk {
                 | PlanNode::PipeOperator { .. }
                 | PlanNode::Distinct { .. }
                 | PlanNode::SetOp { .. }
+                | PlanNode::Zip { .. }
                 | PlanNode::Pivot { .. }
                 | PlanNode::Unpivot { .. }
                 | PlanNode::InlineTable { .. }
