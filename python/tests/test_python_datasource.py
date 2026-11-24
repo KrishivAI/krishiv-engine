@@ -3,6 +3,9 @@
 
 from __future__ import annotations
 
+import json
+from datetime import UTC, date, datetime
+from pathlib import Path
 from typing import Any, ClassVar
 
 import pytest
@@ -15,7 +18,7 @@ from krishiv.errors import (
     PySparkTypeError,
     SparkRuntimeException,
 )
-from krishiv.sql import SparkSession
+from krishiv.sql import SparkSession, datasource
 from krishiv.sql.datasource import (
     CaseInsensitiveDict,
     DataSource,
@@ -23,7 +26,9 @@ from krishiv.sql.datasource import (
     DataSourceReader,
     DataSourceWriter,
     EqualTo,
+    GreaterThan,
     InputPartition,
+    IsNotNull,
     WriterCommitMessage,
 )
 from krishiv.sql.row import Row
@@ -307,6 +312,29 @@ def test_reregistering_a_name_replaces_the_class(spark: SparkSession) -> None:
     assert rows(spark.read.format("fixed").load()) == [(9, 9)]
 
 
+def test_builtin_format_wins_over_a_python_source_of_the_same_name(spark: SparkSession, tmp_path: Path) -> None:
+    class Shadow(Fixed):
+        @classmethod
+        def name(cls) -> str:
+            return "parquet"
+
+    spark.dataSource.register(Shadow)
+    target = str(tmp_path / "t")
+    spark.createDataFrame([(5, 6)], "a int, b int").write.parquet(target)
+    assert rows(spark.read.format("parquet").load(target)) == [(5, 6)]
+
+
+@pytest.mark.parametrize("builtin", ["xml", "jdbc", "noop", "rate", "org.apache.spark.sql.parquet"])
+def test_every_spark_registered_short_name_wins_over_a_python_source(spark: SparkSession, builtin: str) -> None:
+    class Shadow(Fixed):
+        @classmethod
+        def name(cls) -> str:
+            return builtin
+
+    spark.dataSource.register(Shadow)
+    assert datasource.registered(spark, builtin) is None
+
+
 def test_sessions_do_not_share_registrations(spark: SparkSession) -> None:
     spark.dataSource.register(Fixed)
     other = SparkSession.builder.create()
@@ -458,6 +486,100 @@ def test_pushfilters_without_the_conf_is_refused(spark: SparkSession) -> None:
     assert "DATA_SOURCE_PUSHDOWN_DISABLED" in str(e.value)
     spark.conf.set("spark.sql.python.filterPushdown.enabled", "true")
     assert spark.read.format("Plain").option("push", "1").load().filter("a = 1").count() == 1
+
+
+class Recording(DataSource):
+    """A source over `x`, `y` that records what pushFilters saw and takes the filters named in `take`."""
+
+    seen: ClassVar[list[Any]] = []
+    calls: ClassVar[list[str]] = []
+
+    @classmethod
+    def name(cls) -> str:
+        return "recording"
+
+    def schema(self) -> str:
+        return "x INT, y INT"
+
+    def reader(self, schema: Any) -> DataSourceReader:
+        options = self.options
+        Recording.calls.append("reader")
+
+        class R(DataSourceReader):
+            def __init__(self) -> None:
+                self.taken: list[Any] = []
+
+            def pushFilters(self, filters: list[Any]) -> Any:
+                Recording.calls.append("pushFilters")
+                Recording.seen.append(list(filters))
+                if options.get("mode") == "boom":
+                    raise ValueError("boom")
+                if options.get("mode") == "extra":
+                    return [*filters, EqualTo(("zzz",), 1)]
+                if options.get("mode") == "take":
+                    self.taken = [f for f in filters if isinstance(f, EqualTo)]
+                    return [f for f in filters if not isinstance(f, EqualTo)]
+                return filters
+
+            def read(self, partition: InputPartition) -> Any:
+                for x in range(0 if options.get("mode") == "zero" else 1, 5):
+                    if all(not (isinstance(f, EqualTo) and f.attribute == ("x",)) or x == f.value for f in self.taken):
+                        yield (x, x * 10)
+
+        return R()
+
+
+@pytest.fixture
+def pushdown(spark: SparkSession) -> SparkSession:
+    Recording.seen.clear()
+    Recording.calls.clear()
+    spark.conf.set("spark.sql.python.filterPushdown.enabled", "true")
+    spark.dataSource.register(Recording)
+    return spark
+
+
+def test_pushfilters_receives_the_serializable_conjuncts(pushdown: SparkSession) -> None:
+    df = pushdown.read.format("recording").load().filter("x = 2 AND y > 5")
+    assert [r.x for r in df.collect()] == [2]
+    assert Recording.seen == [[IsNotNull(("x",)), IsNotNull(("y",)), EqualTo(("x",), 2), GreaterThan(("y",), 5)]]
+    assert Recording.calls == ["reader", "pushFilters"]
+
+
+def test_no_filter_never_calls_pushfilters(pushdown: SparkSession) -> None:
+    assert pushdown.read.format("recording").load().count() == 4
+    assert Recording.calls == ["reader"]
+
+
+def test_a_taken_filter_is_applied_by_the_source_only(pushdown: SparkSession) -> None:
+    df = pushdown.read.format("recording").option("mode", "take").load().filter("x = 3")
+    assert [r.x for r in df.collect()] == [3]
+
+
+def test_unhandled_filters_stay_with_the_engine(pushdown: SparkSession) -> None:
+    df = pushdown.read.format("recording").load().filter("x = 3 AND (y = 30 OR y = 99)")
+    assert [r.x for r in df.collect()] == [3]
+
+
+def test_residual_division_by_a_filtered_zero(pushdown: SparkSession) -> None:
+    # The source also holds the row x = 0: only the engine's own residual keeps `10 / x` from seeing it.
+    df = pushdown.read.format("recording").option("mode", "zero").load().filter("x > 0 AND 10 / x > 1")
+    assert sorted(r.x for r in df.collect()) == [1, 2, 3, 4]
+    assert Recording.seen[0] == [IsNotNull(("x",)), GreaterThan(("x",), 0)]
+
+
+def test_pushfilters_failure_is_the_python_data_source_error(pushdown: SparkSession) -> None:
+    df = pushdown.read.format("recording").option("mode", "boom").load().filter("x = 1")
+    with pytest.raises(Exception) as e:  # noqa: PT011
+        df.collect()
+    assert "PYTHON_DATA_SOURCE_ERROR" in str(e.value)
+    assert "boom" in str(e.value)
+
+
+def test_extraneous_filters_are_refused(pushdown: SparkSession) -> None:
+    df = pushdown.read.format("recording").option("mode", "extra").load().filter("x = 1")
+    with pytest.raises(Exception) as e:  # noqa: PT011
+        df.collect()
+    assert "DATA_SOURCE_EXTRANEOUS_FILTERS" in str(e.value)
 
 
 def test_filter_classes_are_dataclasses() -> None:
@@ -739,3 +861,143 @@ def test_a_partitioned_save_through_a_python_sink_is_refused_before_the_writer_r
     with pytest.raises(UnsupportedOperationException):
         df.write.format("sink").mode("append").save(partitionBy="nonexistent")
     assert Log.events == []
+
+
+QUERIES = Path(__file__).parents[2] / "tests" / "connect" / "python-source-queries.sql"
+
+
+def _equivalence_rows() -> list[tuple[Any, ...]]:
+    return [(i, f"n{i}", i % 4, None if i % 7 == 0 else i * 3, date(2026, 1, 1 + i % 5)) for i in range(40)]
+
+
+def _canonical(df: Any) -> list[str]:
+    return sorted(repr(tuple(r)) for r in df.collect())
+
+
+def test_python_source_matches_parquet(spark: SparkSession, tmp_path: Path) -> None:
+    """The 20 statements of ``tests/connect/python-source-queries.sql`` agree on a Python source and Parquet."""
+    pq = pytest.importorskip("pyarrow.parquet")
+    data = _equivalence_rows()
+
+    class Equiv(DataSource):
+        @classmethod
+        def name(cls) -> str:
+            return "equiv"
+
+        def schema(self) -> str:
+            return "id INT, name STRING, grp INT, v INT, d DATE"
+
+        def reader(self, schema: Any) -> DataSourceReader:
+            class R(DataSourceReader):
+                def partitions(self) -> list[InputPartition]:
+                    return [InputPartition(k) for k in range(4)]
+
+                def read(self, partition: InputPartition) -> Any:
+                    yield from data[partition.value :: 4]
+
+            return R()
+
+    spark.dataSource.register(Equiv)
+    spark.read.format("equiv").load().createOrReplaceTempView("src")
+    table = pa.table(
+        {
+            "id": pa.array([r[0] for r in data], pa.int32()),
+            "name": [r[1] for r in data],
+            "grp": pa.array([r[2] for r in data], pa.int32()),
+            "v": pa.array([r[3] for r in data], pa.int32()),
+            "d": pa.array([r[4] for r in data], pa.date32()),
+        }
+    )
+    pq.write_table(table, tmp_path / "t.parquet")
+    spark.read.parquet(str(tmp_path / "t.parquet")).createOrReplaceTempView("pq")
+    statements = [line for line in QUERIES.read_text().splitlines() if line.strip() and not line.startswith("--")]
+    assert len(statements) == 20
+    for statement in statements:
+        got = _canonical(spark.sql(statement.format(t="src")))
+        want = _canonical(spark.sql(statement.format(t="pq")))
+        assert got == want, statement
+
+
+class Stamps(DataSource):
+    """A source over a TIMESTAMP and a TIMESTAMP_NTZ column that records the filter values."""
+
+    seen: ClassVar[list[Any]] = []
+
+    @classmethod
+    def name(cls) -> str:
+        return "stamps"
+
+    def schema(self) -> str:
+        return "t TIMESTAMP, n TIMESTAMP_NTZ"
+
+    def reader(self, schema: Any) -> DataSourceReader:
+        class R(DataSourceReader):
+            def pushFilters(self, filters: list[Any]) -> Any:
+                Stamps.seen.extend(filters)
+                return filters
+
+            def read(self, partition: InputPartition) -> Any:
+                return iter([])
+
+        return R()
+
+
+def test_timestamp_values_are_aware_utc_and_ntz_values_are_naive(pushdown: SparkSession) -> None:
+    """Spark 4.3.0 (`tests/fixtures/spark-4.3.0/python-datasource-pushdown/timestamp_ltz.json`)."""
+    Stamps.seen.clear()
+    pushdown.conf.set("spark.sql.session.timeZone", "America/Los_Angeles")
+    pushdown.dataSource.register(Stamps)
+    pushdown.read.format("stamps").load().filter(
+        "t = timestamp '2020-01-01 00:00:00' AND n = timestamp_ntz '2020-01-01 00:00:00'"
+    ).count()
+    values = {f.attribute: f.value for f in Stamps.seen if isinstance(f, EqualTo)}
+    assert values[("t",)] == datetime(2020, 1, 1, 8, 0, tzinfo=UTC)
+    assert values[("t",)].tzinfo is not None
+    assert values[("n",)] == datetime(2020, 1, 1, 0, 0)
+    assert values[("n",)].tzinfo is None
+
+
+_ORACLE = Path(__file__).resolve().parents[2] / "tests/fixtures/spark-4.3.0/python-datasource-pushdown/classic.json"
+_FILTER_CASES = json.loads(_ORACLE.read_text())["filter_cases"]
+
+
+class Probe(DataSource):
+    """A source of the schema in option `type` (column `x`) that records what pushFilters saw, takes nothing."""
+
+    seen: ClassVar[list[str]] = []
+
+    @classmethod
+    def name(cls) -> str:
+        return "probe"
+
+    def schema(self) -> str:
+        return f"x {self.options['type']}"
+
+    def reader(self, schema: Any) -> DataSourceReader:
+        class R(DataSourceReader):
+            def pushFilters(self, filters: list[Any]) -> Any:
+                Probe.seen.append(repr(list(filters)))
+                return filters
+
+            def read(self, partition: InputPartition) -> Any:
+                return iter(())
+
+        return R()
+
+
+_NO_SCHEMA = ("struct<", "array<", "interval")
+
+
+@pytest.mark.parametrize("case", _FILTER_CASES, ids=lambda c: c["sql_filter"])
+def test_filters_reach_the_source_as_spark_4_3_sends_them(pushdown: SparkSession, case: dict[str, Any]) -> None:
+    if "collate" in case["sql_filter"]:
+        pytest.xfail("collated comparison is not supported yet")
+    if "3 / 2" in case["sql_filter"]:
+        pytest.xfail("the optimizer does not fold a literal division, so the value never reaches the source")
+    if any(case["sql_type"].startswith(t) or t in case["sql_type"] for t in _NO_SCHEMA):
+        pytest.xfail("a Python source with a struct, array or interval column is not readable yet (createDataFrame)")
+    Probe.seen.clear()
+    pushdown.dataSource.register(Probe)
+    df = pushdown.read.format("probe").option("type", case["sql_type"]).load()
+    df.filter(case["sql_filter"]).count()
+    assert Probe.seen == case["filters_repr"]

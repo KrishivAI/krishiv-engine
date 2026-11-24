@@ -1267,7 +1267,12 @@ impl Parser<'_> {
                 Some(q) => TableFactorKind::Subquery(Box::new(q)),
                 None => {
                     self.expect_sym(Sym::LParen)?;
-                    let r = self.relation()?;
+                    // Inside parentheses the as-of right side is not that side: `MATCH_CONDITION`
+                    // is an ordinary alias again.
+                    let asof_right = std::mem::replace(&mut self.asof_right, false);
+                    let r = self.relation();
+                    self.asof_right = asof_right;
+                    let r = r?;
                     self.expect_sym(Sym::RParen)?;
                     TableFactorKind::Nested(Box::new(r))
                 }

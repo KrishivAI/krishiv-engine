@@ -196,6 +196,10 @@ pub(crate) fn exception_classes(class: ErrorClass) -> &'static [&'static str] {
         // Spark's `ExecuteThreadRunner` throws a `SparkSQLException`
         // (v4.3.0, lines 105 and 175): PySpark raises `UnknownException`.
         ("OPERATION_CANCELED", SPARK_SQL_EXCEPTION),
+        // A statement the engine stopped (timeout, operator kill, quota, drain): cancelled by
+        // reason, so the same exception class as a cancel; `errorClass` tells them apart.
+        ("KRISHIV_QUERY_TIMEOUT", SPARK_SQL_EXCEPTION),
+        ("KRISHIV_QUERY_KILLED", SPARK_SQL_EXCEPTION),
         ("CAST_INVALID_INPUT", SPARK_NUMBER_FORMAT_EXCEPTION),
         (
             "INCONSISTENT_BEHAVIOR_CROSS_VERSION",

@@ -73,6 +73,12 @@
     ],
     "sqlState" : "2D521"
   },
+  "DELTA_CONFLICT_SET_COLUMN" : {
+    "message" : [
+      "There is a conflict from these SET columns: <columnList>."
+    ],
+    "sqlState" : "42701"
+  },
   "DELTA_CREATE_TABLE_SCHEME_MISMATCH" : {
     "message" : [
       "The specified schema does not match the existing schema at <path>.",
@@ -110,6 +116,12 @@
       "Cannot create table ('<tableId>'). The associated location ('<tableLocation>') is not empty and also not a Delta table."
     ],
     "sqlState" : "42601"
+  },
+  "DELTA_DUPLICATE_COLUMNS_ON_INSERT" : {
+    "message" : [
+      "Duplicate column names in INSERT clause"
+    ],
+    "sqlState" : "42701"
   },
   "DELTA_FAILED_TO_MERGE_FIELDS" : {
     "message" : [
@@ -183,6 +195,24 @@
       }
     },
     "sqlState" : "42KDG"
+  },
+  "DELTA_MULTIPLE_SOURCE_ROW_MATCHING_TARGET_ROW_IN_MERGE" : {
+    "message" : [
+      "Cannot perform Merge as multiple source rows matched and attempted to modify the same",
+      "target row in the Delta table in possibly conflicting ways. By SQL semantics of Merge,",
+      "when multiple source rows match on the same target row, the result may be ambiguous",
+      "as it is unclear which source row should be used to update or delete the matching",
+      "target row. You can preprocess the source table to eliminate the possibility of",
+      "multiple matches. Please refer to",
+      "<usageReference>"
+    ],
+    "sqlState" : "21506"
+  },
+  "DELTA_NON_DETERMINISTIC_FUNCTION_NOT_SUPPORTED" : {
+    "message" : [
+      "Non-deterministic functions are not supported in the <operation> <expression>"
+    ],
+    "sqlState" : "0AKDC"
   },
   "DELTA_NOT_NULL_CONSTRAINT_VIOLATED" : {
     "message" : [

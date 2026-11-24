@@ -112,6 +112,7 @@ pub fn scalar_column(field: &Field, value: &ScalarValue, rows: usize) -> Result<
             };
             Arc::new(TimestampMicrosecondArray::from(vec![*v; rows]).with_timezone_opt(zone))
         }
+        S::TimestampNtzMicros(v) => Arc::new(TimestampMicrosecondArray::from(vec![*v; rows])),
     };
     if natural.data_type() == target {
         return Ok(natural);

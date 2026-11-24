@@ -15,6 +15,8 @@
   let principal = $state("");
   let client = $state("");
   let tag = $state("");
+  // Any part of a statement, as the list shows it (its literals masked).
+  let statement = $state("");
   // The Sessions page opens History on one session's queries: it leaves the id here, and it is read once.
   function sessionAsked(): string {
     try {
@@ -35,13 +37,14 @@
   let compareError = $state("");
 
   const q = createQuery<{ queries: Query[] }>(() => ({
-    queryKey: ["history", stateFilter, principal, client, tag, session],
+    queryKey: ["history", stateFilter, principal, client, tag, statement, session],
     queryFn: () => {
       const p = new URLSearchParams({ limit: "200" });
       if (stateFilter) p.set("state", stateFilter);
       if (principal) p.set("principal", principal);
       if (client.trim()) p.set("client", client.trim());
       if (tag.trim()) p.set("tag", tag.trim());
+      if (statement.trim()) p.set("text", statement.trim());
       if (session.trim()) p.set("session", session.trim());
       return api(`/api/internal/history?${p}`);
     },
@@ -106,6 +109,9 @@
       <option value="failed">failed</option>
       <option value="cancelled">cancelled</option>
     </select>
+  </label>
+  <label class="flex w-full items-center gap-2 sm:w-auto">Statement
+    <input class={cn(fieldClass, "flex-1")} bind:value={statement} placeholder="any part of the SQL" size="20" />
   </label>
   {#if !onePrincipal}
     <label class="flex w-full items-center gap-2 sm:w-auto">Principal

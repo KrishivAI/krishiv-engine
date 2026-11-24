@@ -180,6 +180,7 @@ registry! {
     (struct_field, StructField, POST_MIGRATION_READER_VERSION, Semantic, "A struct field access (`GetStructField`: the analyzer-resolved field of a struct)."),
     (table_write, TableWrite, POST_MIGRATION_READER_VERSION, Semantic, "The `TableWrite` node: rows written into a table provider's sink (its writer, or the rewriter of its row-level table), resolved at instantiation; design P3-PR-DML §7."),
     (tail, Tail, POST_MIGRATION_READER_VERSION, Semantic, "The `Tail` node (the last rows of the input in plan order, Spark's `Dataset.tail`)."),
+    (theta_sketch_aggregates, ThetaSketchAggregates, POST_MIGRATION_READER_VERSION, Semantic, "The DataSketches Theta aggregates (`theta_sketch_agg` and `theta_union_agg` with their folded lgNomEntries, `theta_intersection_agg`): a sketch per group."),
     (time_precision_nanos, TimePrecisionNanos, POST_MIGRATION_READER_VERSION, Semantic, "A `TIME(p)` type with p in 7..9 (Spark 4.3's nanosecond `TIME`), alone or inside an array, map, struct or user-defined type: a reader that knows only `time_type` (p <= 6) would refuse it as corrupt. It implies `time_type`."),
     (time_type, TimeType, POST_MIGRATION_READER_VERSION, Semantic, "The `TIME` type, with its precision."),
     (udt_type, UdtType, POST_MIGRATION_READER_VERSION, Semantic, "User-defined types (Spark `UserDefinedType`): stored as their SQL type, with the class names in the plan."),
@@ -758,6 +759,9 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
             AggregateFunction::HllSketchAgg { .. } | AggregateFunction::HllUnionAgg { .. } => {
                 Some(Feature::HllSketchAggregates)
             }
+            AggregateFunction::ThetaSketchAgg { .. }
+            | AggregateFunction::ThetaUnionAgg { .. }
+            | AggregateFunction::ThetaIntersectionAgg => Some(Feature::ThetaSketchAggregates),
             AggregateFunction::Udf(_) => Some(Feature::RustUdaf),
         },
         // Built-ins and registry functions travel by name; only a
@@ -1061,7 +1065,16 @@ fn exprs_of<'a>(node: &'a PhysNode) -> Vec<&'a Arc<Expr>> {
                     .map(|f| &f.predicate),
             );
         }
-        PhysNode::SortMergeJoin(j) => roots.extend(j.residual.iter().flat_map(|r| &r.conjuncts)),
+        PhysNode::SortMergeJoin(j) => {
+            roots.extend(j.residual.iter().flat_map(|r| &r.conjuncts));
+            // The as-of distance is an expression too: it may carry an `EvalMode`.
+            roots.extend(
+                j.as_of
+                    .iter()
+                    .flat_map(|a| a.distance.iter())
+                    .flat_map(|d| &d.conjuncts),
+            );
+        }
         PhysNode::NestedLoopJoin(j) => roots.extend(j.residual.iter().flat_map(|r| &r.conjuncts)),
         PhysNode::TableWrite { request, .. } => match request {
             TableWriteRequest::Write(w) => {

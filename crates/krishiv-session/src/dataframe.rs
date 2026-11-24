@@ -209,10 +209,15 @@ pub struct DataFrame {
     /// a frame `Session::sql` returned, absent for one a transformation
     /// built.
     trace: Option<Arc<crate::telemetry::QueryTrace>>,
-    /// The statement this frame runs as when it has no analysis of its own yet: set for the
-    /// `count(*)` frame [`Self::count`] builds over a `Session::sql` frame, so its analysis keeps
-    /// the statement's text, class, `system.queries` row and sample salt.
+    /// The statement this frame runs as when it has no analysis of its own yet: the first
+    /// statement the frame came from (a frame derived from a `Session::sql` frame, whatever its
+    /// inputs), so its analysis keeps the statement's text, class, `system.queries` row and
+    /// sample salt.
     statement: Option<Arc<QueryEnv>>,
+    /// Whether this frame's analysis errors render SQL spans against `statement`'s text: only
+    /// the `count(*)` frame [`Self::count`] builds, which adds no expression of its own. A frame
+    /// derived by any other call has its own expressions, whose errors carry a DataFrame context.
+    statement_spans: bool,
     /// Owns what the plan reads by a name no SQL spells (a script result's table), as long as it lives.
     pub(crate) keep: Vec<Arc<dyn std::any::Any + Send + Sync>>,
 }
@@ -243,6 +248,7 @@ impl DataFrame {
             invalid: None,
             trace: None,
             statement: None,
+            statement_spans: false,
             keep: Vec::new(),
         }
     }
@@ -283,7 +289,8 @@ impl DataFrame {
             analysis: Arc::default(),
             invalid: self.invalid.clone(),
             trace: None,
-            statement: None,
+            statement: self.statement_for_derived(),
+            statement_spans: false,
             keep: self.keep.clone(),
         }
     }
@@ -1040,12 +1047,13 @@ impl DataFrame {
         // A first analysis as another frame's statement: its errors carry
         // that statement's SQL span.
         let text = match (&cached, &self.statement) {
-            (None, Some(statement)) => statement.redacted.clone(),
+            (None, Some(statement)) if self.statement_spans => statement.redacted.clone(),
             _ => None,
         };
         if let Some(a) = cached
             && !a.analyzed.reads_files
             && !a.env.catalog.loaded_file_views()
+            && !a.env.catalog.has_bound_scans()
             && a.env.conf_version == env.conf_version
             && a.env.catalog_epoch == env.catalog_epoch
             && a.env.variables_version == env.variables_version
@@ -1491,7 +1499,7 @@ impl DataFrame {
         self.session
             .on_executor(async move {
                 let a = df.analysis().await?;
-                let (_, physical) = df.session.physical_inspected(&a.analyzed, &a.env).await?;
+                let (_, physical) = df.session.physical_counted(&a.analyzed, &a.env).await?;
                 let mut all = a.analyzed.warnings.clone();
                 all.extend(physical.warnings().iter().cloned());
                 Ok(all)

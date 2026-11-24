@@ -1045,6 +1045,226 @@ pub mod krishiv_session::egress
 pub fn krishiv_session::egress::egress_policy(&krishiv_common::config::Config, impl core::ops::function::Fn(&str) -> core::option::Option<alloc::string::String>) -> core::result::Result<alloc::sync::Arc<krishiv_store::egress::EgressPolicy>, krishiv_common::error::KrishivError>
 pub fn krishiv_session::egress::egress_proxy(&krishiv_common::config::Config) -> core::option::Option<alloc::string::String>
 pub fn krishiv_session::egress::store_scope(&alloc::sync::Arc<krishiv_store::egress::EgressPolicy>, &krishiv_common::config::Config) -> core::result::Result<krishiv_store::egress::EgressScope, krishiv_common::error::KrishivError>
+pub mod krishiv_session::events
+#[non_exhaustive] pub enum krishiv_session::events::EngineEvent
+pub krishiv_session::events::EngineEvent::Query(krishiv_session::events::QueryEvent)
+impl krishiv_session::events::EngineEvent
+pub fn krishiv_session::events::EngineEvent::tag(&self) -> krishiv_session::events::EventKindTag
+pub fn krishiv_session::events::EngineEvent::to_json(&self) -> serde_json::value::Value
+impl core::clone::Clone for krishiv_session::events::EngineEvent
+pub fn krishiv_session::events::EngineEvent::clone(&self) -> krishiv_session::events::EngineEvent
+impl core::cmp::PartialEq for krishiv_session::events::EngineEvent
+pub fn krishiv_session::events::EngineEvent::eq(&self, &krishiv_session::events::EngineEvent) -> bool
+impl core::fmt::Debug for krishiv_session::events::EngineEvent
+pub fn krishiv_session::events::EngineEvent::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for krishiv_session::events::EngineEvent
+#[non_exhaustive] pub enum krishiv_session::events::EventKindTag
+pub krishiv_session::events::EventKindTag::Cancelled
+pub krishiv_session::events::EventKindTag::Finished
+pub krishiv_session::events::EventKindTag::Progress
+pub krishiv_session::events::EventKindTag::Queued
+pub krishiv_session::events::EventKindTag::Started
+pub krishiv_session::events::EventKindTag::Submitted
+impl krishiv_session::events::EventKindTag
+pub const fn krishiv_session::events::EventKindTag::name(self) -> &'static str
+impl core::clone::Clone for krishiv_session::events::EventKindTag
+pub fn krishiv_session::events::EventKindTag::clone(&self) -> krishiv_session::events::EventKindTag
+impl core::cmp::Eq for krishiv_session::events::EventKindTag
+impl core::cmp::PartialEq for krishiv_session::events::EventKindTag
+pub fn krishiv_session::events::EventKindTag::eq(&self, &krishiv_session::events::EventKindTag) -> bool
+impl core::fmt::Debug for krishiv_session::events::EventKindTag
+pub fn krishiv_session::events::EventKindTag::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for krishiv_session::events::EventKindTag
+pub fn krishiv_session::events::EventKindTag::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for krishiv_session::events::EventKindTag
+impl core::marker::StructuralPartialEq for krishiv_session::events::EventKindTag
+#[non_exhaustive] pub enum krishiv_session::events::QueryEventKind
+pub krishiv_session::events::QueryEventKind::Cancelled
+pub krishiv_session::events::QueryEventKind::Cancelled::reason: core::option::Option<alloc::string::String>
+pub krishiv_session::events::QueryEventKind::Cancelled::usage: krishiv_session::events::UsageRecord
+pub krishiv_session::events::QueryEventKind::Finished(alloc::boxed::Box<krishiv_session::events::FinishedEvent>)
+pub krishiv_session::events::QueryEventKind::Progress(krishiv_session::events::UsageRecord)
+pub krishiv_session::events::QueryEventKind::Queued
+pub krishiv_session::events::QueryEventKind::Started
+pub krishiv_session::events::QueryEventKind::Started::queued_ns: u64
+pub krishiv_session::events::QueryEventKind::Started::resource_group: core::option::Option<alloc::string::String>
+pub krishiv_session::events::QueryEventKind::Submitted
+pub krishiv_session::events::QueryEventKind::Submitted::statement_class: core::option::Option<alloc::string::String>
+pub krishiv_session::events::QueryEventKind::Submitted::text: core::option::Option<alloc::string::String>
+impl krishiv_session::events::QueryEventKind
+pub const fn krishiv_session::events::QueryEventKind::tag(&self) -> krishiv_session::events::EventKindTag
+impl core::clone::Clone for krishiv_session::events::QueryEventKind
+pub fn krishiv_session::events::QueryEventKind::clone(&self) -> krishiv_session::events::QueryEventKind
+impl core::cmp::PartialEq for krishiv_session::events::QueryEventKind
+pub fn krishiv_session::events::QueryEventKind::eq(&self, &krishiv_session::events::QueryEventKind) -> bool
+impl core::fmt::Debug for krishiv_session::events::QueryEventKind
+pub fn krishiv_session::events::QueryEventKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for krishiv_session::events::QueryEventKind
+#[non_exhaustive] pub enum krishiv_session::events::UsageKind
+pub krishiv_session::events::UsageKind::Final
+pub krishiv_session::events::UsageKind::Progress
+impl core::clone::Clone for krishiv_session::events::UsageKind
+pub fn krishiv_session::events::UsageKind::clone(&self) -> krishiv_session::events::UsageKind
+impl core::cmp::Eq for krishiv_session::events::UsageKind
+impl core::cmp::PartialEq for krishiv_session::events::UsageKind
+pub fn krishiv_session::events::UsageKind::eq(&self, &krishiv_session::events::UsageKind) -> bool
+impl core::fmt::Debug for krishiv_session::events::UsageKind
+pub fn krishiv_session::events::UsageKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for krishiv_session::events::UsageKind
+impl core::marker::StructuralPartialEq for krishiv_session::events::UsageKind
+pub struct krishiv_session::events::EventBus
+impl krishiv_session::events::EventBus
+pub fn krishiv_session::events::EventBus::compute_id(&self) -> &str
+pub fn krishiv_session::events::EventBus::dropped(&self, &str, krishiv_session::events::EventKindTag) -> u64
+pub fn krishiv_session::events::EventBus::dropped_total(&self) -> u64
+pub fn krishiv_session::events::EventBus::emit(&self, krishiv_session::events::EngineEvent)
+pub fn krishiv_session::events::EventBus::is_active(&self) -> bool
+pub fn krishiv_session::events::EventBus::new(alloc::string::String, usize, usize) -> Self
+pub fn krishiv_session::events::EventBus::queue_depth(&self) -> usize
+pub fn krishiv_session::events::EventBus::register(&self, alloc::sync::Arc<dyn krishiv_session::events::EventSink>)
+pub fn krishiv_session::events::EventBus::shutdown(&self, core::time::Duration)
+impl core::default::Default for krishiv_session::events::EventBus
+pub fn krishiv_session::events::EventBus::default() -> Self
+impl core::fmt::Debug for krishiv_session::events::EventBus
+pub fn krishiv_session::events::EventBus::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::ops::drop::Drop for krishiv_session::events::EventBus
+pub fn krishiv_session::events::EventBus::drop(&mut self)
+#[non_exhaustive] pub struct krishiv_session::events::FinishedEvent
+pub krishiv_session::events::FinishedEvent::error_class: core::option::Option<alloc::string::String>
+pub krishiv_session::events::FinishedEvent::result_cache_hit: bool
+pub krishiv_session::events::FinishedEvent::state: alloc::string::String
+pub krishiv_session::events::FinishedEvent::statement_class: core::option::Option<alloc::string::String>
+pub krishiv_session::events::FinishedEvent::usage: krishiv_session::events::UsageRecord
+impl core::clone::Clone for krishiv_session::events::FinishedEvent
+pub fn krishiv_session::events::FinishedEvent::clone(&self) -> krishiv_session::events::FinishedEvent
+impl core::cmp::PartialEq for krishiv_session::events::FinishedEvent
+pub fn krishiv_session::events::FinishedEvent::eq(&self, &krishiv_session::events::FinishedEvent) -> bool
+impl core::fmt::Debug for krishiv_session::events::FinishedEvent
+pub fn krishiv_session::events::FinishedEvent::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for krishiv_session::events::FinishedEvent
+pub struct krishiv_session::events::JsonLinesSink
+impl krishiv_session::events::JsonLinesSink
+pub fn krishiv_session::events::JsonLinesSink::failures(&self) -> u64
+pub fn krishiv_session::events::JsonLinesSink::new(std::path::PathBuf, u64, usize) -> Self
+impl core::fmt::Debug for krishiv_session::events::JsonLinesSink
+pub fn krishiv_session::events::JsonLinesSink::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl krishiv_session::events::EventSink for krishiv_session::events::JsonLinesSink
+pub fn krishiv_session::events::JsonLinesSink::accept(&self, krishiv_session::events::EventKindTag) -> bool
+pub fn krishiv_session::events::JsonLinesSink::deliver(&self, &[alloc::sync::Arc<krishiv_session::events::EngineEvent>])
+pub fn krishiv_session::events::JsonLinesSink::flush(&self)
+pub fn krishiv_session::events::JsonLinesSink::name(&self) -> &str
+#[non_exhaustive] pub struct krishiv_session::events::QueryEvent
+pub krishiv_session::events::QueryEvent::emitted_at_ms: i64
+pub krishiv_session::events::QueryEvent::kind: krishiv_session::events::QueryEventKind
+pub krishiv_session::events::QueryEvent::query: krishiv_session::events::QueryRef
+pub krishiv_session::events::QueryEvent::seq: u64
+pub krishiv_session::events::QueryEvent::version: krishiv_session::events::SchemaVersion
+impl krishiv_session::events::QueryEvent
+pub fn krishiv_session::events::QueryEvent::to_json(&self) -> serde_json::value::Value
+impl core::clone::Clone for krishiv_session::events::QueryEvent
+pub fn krishiv_session::events::QueryEvent::clone(&self) -> krishiv_session::events::QueryEvent
+impl core::cmp::PartialEq for krishiv_session::events::QueryEvent
+pub fn krishiv_session::events::QueryEvent::eq(&self, &krishiv_session::events::QueryEvent) -> bool
+impl core::fmt::Debug for krishiv_session::events::QueryEvent
+pub fn krishiv_session::events::QueryEvent::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for krishiv_session::events::QueryEvent
+#[non_exhaustive] pub struct krishiv_session::events::QueryRef
+pub krishiv_session::events::QueryRef::compute_id: alloc::string::String
+pub krishiv_session::events::QueryRef::attempt: core::option::Option<u32>
+pub krishiv_session::events::QueryRef::delegated_by: core::option::Option<alloc::string::String>
+pub krishiv_session::events::QueryRef::principal: alloc::string::String
+pub krishiv_session::events::QueryRef::query_id: alloc::string::String
+pub krishiv_session::events::QueryRef::session_id: alloc::string::String
+pub krishiv_session::events::QueryRef::stage_id: core::option::Option<u32>
+pub krishiv_session::events::QueryRef::tags: alloc::vec::Vec<(alloc::string::String, alloc::string::String)>
+pub krishiv_session::events::QueryRef::task_id: core::option::Option<u32>
+pub krishiv_session::events::QueryRef::trace_id: core::option::Option<alloc::string::String>
+pub krishiv_session::events::QueryRef::worker_id: core::option::Option<alloc::string::String>
+impl core::clone::Clone for krishiv_session::events::QueryRef
+pub fn krishiv_session::events::QueryRef::clone(&self) -> krishiv_session::events::QueryRef
+impl core::cmp::Eq for krishiv_session::events::QueryRef
+impl core::cmp::PartialEq for krishiv_session::events::QueryRef
+pub fn krishiv_session::events::QueryRef::eq(&self, &krishiv_session::events::QueryRef) -> bool
+impl core::fmt::Debug for krishiv_session::events::QueryRef
+pub fn krishiv_session::events::QueryRef::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for krishiv_session::events::QueryRef
+#[non_exhaustive] pub struct krishiv_session::events::SchemaVersion
+pub krishiv_session::events::SchemaVersion::major: u32
+pub krishiv_session::events::SchemaVersion::minor: u32
+impl core::clone::Clone for krishiv_session::events::SchemaVersion
+pub fn krishiv_session::events::SchemaVersion::clone(&self) -> krishiv_session::events::SchemaVersion
+impl core::cmp::Eq for krishiv_session::events::SchemaVersion
+impl core::cmp::PartialEq for krishiv_session::events::SchemaVersion
+pub fn krishiv_session::events::SchemaVersion::eq(&self, &krishiv_session::events::SchemaVersion) -> bool
+impl core::fmt::Debug for krishiv_session::events::SchemaVersion
+pub fn krishiv_session::events::SchemaVersion::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for krishiv_session::events::SchemaVersion
+impl core::marker::StructuralPartialEq for krishiv_session::events::SchemaVersion
+#[non_exhaustive] pub struct krishiv_session::events::UsageRecord
+pub krishiv_session::events::UsageRecord::bytes_scanned: core::option::Option<i64>
+pub krishiv_session::events::UsageRecord::bytes_written: core::option::Option<i64>
+pub krishiv_session::events::UsageRecord::compute_id: alloc::string::String
+pub krishiv_session::events::UsageRecord::cpu_ns: core::option::Option<i64>
+pub krishiv_session::events::UsageRecord::delegated_by: core::option::Option<alloc::string::String>
+pub krishiv_session::events::UsageRecord::files_read: core::option::Option<i64>
+pub krishiv_session::events::UsageRecord::files_written: core::option::Option<i64>
+pub krishiv_session::events::UsageRecord::kind: krishiv_session::events::UsageKind
+pub krishiv_session::events::UsageRecord::peak_memory_bytes: core::option::Option<i64>
+pub krishiv_session::events::UsageRecord::principal: alloc::string::String
+pub krishiv_session::events::UsageRecord::queued_ns: core::option::Option<i64>
+pub krishiv_session::events::UsageRecord::record_id: krishiv_session::events::UsageRecordId
+pub krishiv_session::events::UsageRecord::resource_group: core::option::Option<alloc::string::String>
+pub krishiv_session::events::UsageRecord::result_cache_hit: bool
+pub krishiv_session::events::UsageRecord::rows_read: core::option::Option<i64>
+pub krishiv_session::events::UsageRecord::rows_written: core::option::Option<i64>
+pub krishiv_session::events::UsageRecord::session_id: alloc::string::String
+pub krishiv_session::events::UsageRecord::spill_bytes: core::option::Option<i64>
+pub krishiv_session::events::UsageRecord::spill_files: core::option::Option<i64>
+pub krishiv_session::events::UsageRecord::statement_class: core::option::Option<alloc::string::String>
+pub krishiv_session::events::UsageRecord::wall_ns: core::option::Option<i64>
+pub krishiv_session::events::UsageRecord::window_end_ms: i64
+pub krishiv_session::events::UsageRecord::window_start_ms: i64
+pub krishiv_session::events::UsageRecord::workload_class: core::option::Option<alloc::string::String>
+impl krishiv_session::events::UsageRecord
+pub fn krishiv_session::events::UsageRecord::to_json(&self) -> serde_json::value::Value
+impl core::clone::Clone for krishiv_session::events::UsageRecord
+pub fn krishiv_session::events::UsageRecord::clone(&self) -> krishiv_session::events::UsageRecord
+impl core::cmp::PartialEq for krishiv_session::events::UsageRecord
+pub fn krishiv_session::events::UsageRecord::eq(&self, &krishiv_session::events::UsageRecord) -> bool
+impl core::fmt::Debug for krishiv_session::events::UsageRecord
+pub fn krishiv_session::events::UsageRecord::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for krishiv_session::events::UsageRecord
+#[non_exhaustive] pub struct krishiv_session::events::UsageRecordId
+pub krishiv_session::events::UsageRecordId::query_id: alloc::string::String
+pub krishiv_session::events::UsageRecordId::seq: u64
+pub krishiv_session::events::UsageRecordId::session_id: alloc::string::String
+pub krishiv_session::events::UsageRecordId::worker_id: core::option::Option<alloc::string::String>
+impl krishiv_session::events::UsageRecordId
+pub fn krishiv_session::events::UsageRecordId::new(session_id: alloc::string::String, query_id: alloc::string::String, seq: u64) -> Self
+pub fn krishiv_session::events::UsageRecordId::with_worker(self, worker_id: core::option::Option<alloc::string::String>) -> Self
+impl core::clone::Clone for krishiv_session::events::UsageRecordId
+pub fn krishiv_session::events::UsageRecordId::clone(&self) -> krishiv_session::events::UsageRecordId
+impl core::cmp::Eq for krishiv_session::events::UsageRecordId
+impl core::cmp::PartialEq for krishiv_session::events::UsageRecordId
+pub fn krishiv_session::events::UsageRecordId::eq(&self, &krishiv_session::events::UsageRecordId) -> bool
+impl core::fmt::Debug for krishiv_session::events::UsageRecordId
+pub fn krishiv_session::events::UsageRecordId::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for krishiv_session::events::UsageRecordId
+pub fn krishiv_session::events::UsageRecordId::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::StructuralPartialEq for krishiv_session::events::UsageRecordId
+pub const krishiv_session::events::SCHEMA_NAME: &str
+pub const krishiv_session::events::SCHEMA_VERSION: krishiv_session::events::SchemaVersion
+pub const krishiv_session::events::SHUTDOWN_FLUSH: core::time::Duration
+pub trait krishiv_session::events::EventSink: core::marker::Send + core::marker::Sync + 'static
+pub fn krishiv_session::events::EventSink::accept(&self, krishiv_session::events::EventKindTag) -> bool
+pub fn krishiv_session::events::EventSink::deliver(&self, &[alloc::sync::Arc<krishiv_session::events::EngineEvent>])
+pub fn krishiv_session::events::EventSink::flush(&self)
+pub fn krishiv_session::events::EventSink::name(&self) -> &str
+impl krishiv_session::events::EventSink for krishiv_session::events::JsonLinesSink
+pub fn krishiv_session::events::JsonLinesSink::accept(&self, krishiv_session::events::EventKindTag) -> bool
+pub fn krishiv_session::events::JsonLinesSink::deliver(&self, &[alloc::sync::Arc<krishiv_session::events::EngineEvent>])
+pub fn krishiv_session::events::JsonLinesSink::flush(&self)
+pub fn krishiv_session::events::JsonLinesSink::name(&self) -> &str
 pub mod krishiv_session::functions
 pub trait krishiv_session::functions::IntoLiteral
 pub fn krishiv_session::functions::IntoLiteral::into_literal(self) -> krishiv_plan::literal::Literal
@@ -1679,7 +1899,9 @@ pub fn krishiv_session::EngineRuntime::cancel_all(&self, krishiv_session::Cancel
 pub fn krishiv_session::EngineRuntime::cancel_by_tag(&self, &str, &krishiv_common::principal::Principal, bool) -> alloc::vec::Vec<krishiv_session::QueryId>
 pub fn krishiv_session::EngineRuntime::cancel_in_session(&self, &str, &krishiv_session::QueryId, krishiv_session::CancelReason) -> bool
 pub fn krishiv_session::EngineRuntime::catalogs(&self) -> &alloc::sync::Arc<krishiv_session::catalog_registry::CatalogRegistry>
+pub fn krishiv_session::EngineRuntime::compute_id(&self) -> &str
 pub fn krishiv_session::EngineRuntime::egress_policy(&self) -> &alloc::sync::Arc<krishiv_store::egress::EgressPolicy>
+pub fn krishiv_session::EngineRuntime::event_queue_depth(&self) -> usize
 pub fn krishiv_session::EngineRuntime::executor(&self) -> &alloc::sync::Arc<dyn krishiv_exec::executor::Executor>
 pub fn krishiv_session::EngineRuntime::expire_session(&self, &str) -> core::option::Option<usize>
 pub fn krishiv_session::EngineRuntime::io_totals(&self) -> &krishiv_io::io::IoCounters
@@ -1713,6 +1935,7 @@ impl krishiv_session::EngineRuntimeBuilder
 pub fn krishiv_session::EngineRuntimeBuilder::build(self) -> core::result::Result<alloc::sync::Arc<krishiv_session::EngineRuntime>, krishiv_common::error::KrishivError>
 pub fn krishiv_session::EngineRuntimeBuilder::catalogs(self, krishiv_session::catalog_registry::CatalogSetup) -> Self
 pub fn krishiv_session::EngineRuntimeBuilder::config(self, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn krishiv_session::EngineRuntimeBuilder::event_sink(self, alloc::sync::Arc<dyn krishiv_session::events::EventSink>) -> Self
 pub fn krishiv_session::EngineRuntimeBuilder::executor(self, alloc::sync::Arc<dyn krishiv_exec::executor::Executor>) -> Self
 impl core::fmt::Debug for krishiv_session::EngineRuntimeBuilder
 pub fn krishiv_session::EngineRuntimeBuilder::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result

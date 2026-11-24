@@ -842,7 +842,7 @@ async fn config_the_local_user_sets_admin_keys() {
     let values: Vec<_> = got.pairs.iter().map(|p| p.value.as_deref()).collect();
     assert_eq!(
         values,
-        [Some("1min"), Some("1"), Some("http://minio.local:9000")]
+        [Some("1m"), Some("1"), Some("http://minio.local:9000")]
     );
     config(
         &run,

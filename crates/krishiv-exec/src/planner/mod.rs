@@ -28,6 +28,7 @@
 mod aggregate;
 mod build;
 mod build_project;
+mod decide;
 pub(crate) mod eval;
 mod explain;
 mod file_table;
@@ -47,6 +48,7 @@ mod python_udtf;
 mod row_level;
 mod runtime_filter;
 mod scan_facts;
+mod source_filter;
 pub(crate) mod subquery;
 mod table;
 mod window;
@@ -67,7 +69,7 @@ pub use key_count::{KeyOptions, KeyOutcome, KeyResult, KeyUnknown};
 pub use ndv_sample::{SampleOptions, SampleOutcome, SampleResult};
 pub use row_level::{
     CardinalityRule, RowIdScan, RowLevelCapabilities, RowLevelCounts, RowLevelOperation,
-    RowLevelTable, RowLevelWrite,
+    RowLevelProblem, RowLevelTable, RowLevelWrite,
 };
 pub use table::{
     MemoryTable, MemoryTables, ProviderStatistics, SpilledTable, TableProvider,
@@ -126,6 +128,10 @@ pub struct PlanningContext {
     /// session's profile). Plan data: a version other than 4.2 travels in
     /// [`ExprEnv::spark_version`](crate::physical::ExprEnv::spark_version).
     pub spark_version: krishiv_kernels::SparkVersion,
+    /// Whether a scan that decides once (`ScanPushdown::decides_once`) is asked to decide. On for plans that
+    /// run and for inspected plans (`EXPLAIN` asks the source once, as Spark's does); off only for
+    /// `physical_counted` and `physical_probe`, which run no user code.
+    pub decisions: bool,
 }
 
 impl PlanningContext {
@@ -140,6 +146,7 @@ impl PlanningContext {
             sample_salt: None,
             inspect: false,
             spark_version: krishiv_kernels::SparkVersion::default(),
+            decisions: true,
         }
     }
 
@@ -154,6 +161,13 @@ impl PlanningContext {
     #[must_use]
     pub fn with_inspection(mut self, inspect: bool) -> Self {
         self.inspect = inspect;
+        self
+    }
+
+    /// The same context asking deciding scans to decide only when `decisions`.
+    #[must_use]
+    pub fn with_decisions(mut self, decisions: bool) -> Self {
+        self.decisions = decisions;
         self
     }
 

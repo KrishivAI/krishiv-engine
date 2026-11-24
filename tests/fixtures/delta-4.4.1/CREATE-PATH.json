@@ -1,0 +1,1096 @@
+{
+ "cases": [
+  {
+   "case": "plain",
+   "columns": [
+    [
+     "id",
+     "bigint",
+     true
+    ],
+    [
+     "v",
+     "string",
+     true
+    ]
+   ],
+   "commits": [
+    {
+     "actions": [
+      {
+       "commitInfo": {
+        "isBlindAppend": true,
+        "isolationLevel": "Serializable",
+        "operation": "CREATE TABLE",
+        "operationMetrics": {},
+        "operationParameters": {
+         "clusterBy": "[]",
+         "description": null,
+         "isManaged": "false",
+         "partitionBy": "[]",
+         "properties": "{}"
+        }
+       }
+      },
+      {
+       "metaData": {
+        "configuration": {},
+        "format": {
+         "options": {},
+         "provider": "parquet"
+        },
+        "partitionColumns": [],
+        "schemaString": "{\"type\":\"struct\",\"fields\":[{\"name\":\"id\",\"type\":\"long\",\"nullable\":true,\"metadata\":{}},{\"name\":\"v\",\"type\":\"string\",\"nullable\":true,\"metadata\":{}}]}"
+       }
+      },
+      {
+       "protocol": {
+        "minReaderVersion": 1,
+        "minWriterVersion": 2
+       }
+      }
+     ],
+     "version": 0
+    }
+   ],
+   "created_log": true,
+   "error": null,
+   "rows": [],
+   "sql": "CREATE TABLE delta.`<path>` (id BIGINT, v STRING) USING delta"
+  },
+  {
+   "case": "partitioned",
+   "columns": [
+    [
+     "id",
+     "bigint",
+     true
+    ],
+    [
+     "v",
+     "string",
+     true
+    ],
+    [
+     "p",
+     "string",
+     true
+    ],
+    [
+     "n",
+     "int",
+     true
+    ]
+   ],
+   "commits": [
+    {
+     "actions": [
+      {
+       "commitInfo": {
+        "isBlindAppend": true,
+        "isolationLevel": "Serializable",
+        "operation": "CREATE TABLE",
+        "operationMetrics": {},
+        "operationParameters": {
+         "clusterBy": "[]",
+         "description": null,
+         "isManaged": "false",
+         "partitionBy": "[\"p\",\"n\"]",
+         "properties": "{}"
+        }
+       }
+      },
+      {
+       "metaData": {
+        "configuration": {},
+        "format": {
+         "options": {},
+         "provider": "parquet"
+        },
+        "partitionColumns": [
+         "p",
+         "n"
+        ],
+        "schemaString": "{\"type\":\"struct\",\"fields\":[{\"name\":\"id\",\"type\":\"long\",\"nullable\":true,\"metadata\":{}},{\"name\":\"v\",\"type\":\"string\",\"nullable\":true,\"metadata\":{}},{\"name\":\"p\",\"type\":\"string\",\"nullable\":true,\"metadata\":{}},{\"name\":\"n\",\"type\":\"integer\",\"nullable\":true,\"metadata\":{}}]}"
+       }
+      },
+      {
+       "protocol": {
+        "minReaderVersion": 1,
+        "minWriterVersion": 2
+       }
+      }
+     ],
+     "version": 0
+    }
+   ],
+   "created_log": true,
+   "error": null,
+   "rows": [],
+   "sql": "CREATE TABLE delta.`<path>` (id BIGINT, v STRING, p STRING, n INT) USING delta PARTITIONED BY (p, n)"
+  },
+  {
+   "case": "partition_first",
+   "columns": [
+    [
+     "p",
+     "string",
+     true
+    ],
+    [
+     "id",
+     "bigint",
+     true
+    ]
+   ],
+   "commits": [
+    {
+     "actions": [
+      {
+       "commitInfo": {
+        "isBlindAppend": true,
+        "isolationLevel": "Serializable",
+        "operation": "CREATE TABLE",
+        "operationMetrics": {},
+        "operationParameters": {
+         "clusterBy": "[]",
+         "description": null,
+         "isManaged": "false",
+         "partitionBy": "[\"p\"]",
+         "properties": "{}"
+        }
+       }
+      },
+      {
+       "metaData": {
+        "configuration": {},
+        "format": {
+         "options": {},
+         "provider": "parquet"
+        },
+        "partitionColumns": [
+         "p"
+        ],
+        "schemaString": "{\"type\":\"struct\",\"fields\":[{\"name\":\"p\",\"type\":\"string\",\"nullable\":true,\"metadata\":{}},{\"name\":\"id\",\"type\":\"long\",\"nullable\":true,\"metadata\":{}}]}"
+       }
+      },
+      {
+       "protocol": {
+        "minReaderVersion": 1,
+        "minWriterVersion": 2
+       }
+      }
+     ],
+     "version": 0
+    }
+   ],
+   "created_log": true,
+   "error": null,
+   "rows": [],
+   "sql": "CREATE TABLE delta.`<path>` (p STRING, id BIGINT) USING delta PARTITIONED BY (p)"
+  },
+  {
+   "case": "not_null_comments",
+   "columns": [
+    [
+     "id",
+     "bigint",
+     false
+    ],
+    [
+     "v",
+     "string",
+     true
+    ]
+   ],
+   "commits": [
+    {
+     "actions": [
+      {
+       "commitInfo": {
+        "isBlindAppend": true,
+        "isolationLevel": "Serializable",
+        "operation": "CREATE TABLE",
+        "operationMetrics": {},
+        "operationParameters": {
+         "clusterBy": "[]",
+         "description": "a table",
+         "isManaged": "false",
+         "partitionBy": "[]",
+         "properties": "{}"
+        }
+       }
+      },
+      {
+       "metaData": {
+        "configuration": {},
+        "description": "a table",
+        "format": {
+         "options": {},
+         "provider": "parquet"
+        },
+        "partitionColumns": [],
+        "schemaString": "{\"type\":\"struct\",\"fields\":[{\"name\":\"id\",\"type\":\"long\",\"nullable\":false,\"metadata\":{\"comment\":\"the key\"}},{\"name\":\"v\",\"type\":\"string\",\"nullable\":true,\"metadata\":{}}]}"
+       }
+      },
+      {
+       "protocol": {
+        "minReaderVersion": 1,
+        "minWriterVersion": 2
+       }
+      }
+     ],
+     "version": 0
+    }
+   ],
+   "created_log": true,
+   "error": null,
+   "rows": [],
+   "sql": "CREATE TABLE delta.`<path>` (id BIGINT NOT NULL COMMENT 'the key', v STRING) USING delta COMMENT 'a table'"
+  },
+  {
+   "case": "tblproperties",
+   "columns": [
+    [
+     "id",
+     "bigint",
+     true
+    ]
+   ],
+   "commits": [
+    {
+     "actions": [
+      {
+       "commitInfo": {
+        "isBlindAppend": true,
+        "isolationLevel": "Serializable",
+        "operation": "CREATE TABLE",
+        "operationMetrics": {},
+        "operationParameters": {
+         "clusterBy": "[]",
+         "description": null,
+         "isManaged": "false",
+         "partitionBy": "[]",
+         "properties": "{\"delta.appendOnly\":\"true\",\"krishiv.k\":\"v\"}"
+        }
+       }
+      },
+      {
+       "metaData": {
+        "configuration": {
+         "delta.appendOnly": "true",
+         "krishiv.k": "v"
+        },
+        "format": {
+         "options": {},
+         "provider": "parquet"
+        },
+        "partitionColumns": [],
+        "schemaString": "{\"type\":\"struct\",\"fields\":[{\"name\":\"id\",\"type\":\"long\",\"nullable\":true,\"metadata\":{}}]}"
+       }
+      },
+      {
+       "protocol": {
+        "minReaderVersion": 1,
+        "minWriterVersion": 2
+       }
+      }
+     ],
+     "version": 0
+    }
+   ],
+   "created_log": true,
+   "error": null,
+   "rows": [],
+   "sql": "CREATE TABLE delta.`<path>` (id BIGINT) USING delta TBLPROPERTIES ('delta.appendOnly' = 'true', 'krishiv.k' = 'v')"
+  },
+  {
+   "case": "types",
+   "columns": [
+    [
+     "b",
+     "tinyint",
+     true
+    ],
+    [
+     "s",
+     "smallint",
+     true
+    ],
+    [
+     "i",
+     "int",
+     true
+    ],
+    [
+     "l",
+     "bigint",
+     true
+    ],
+    [
+     "f",
+     "float",
+     true
+    ],
+    [
+     "d",
+     "double",
+     true
+    ],
+    [
+     "dec",
+     "decimal(10,2)",
+     true
+    ],
+    [
+     "str",
+     "string",
+     true
+    ],
+    [
+     "c",
+     "string",
+     true
+    ],
+    [
+     "vc",
+     "string",
+     true
+    ],
+    [
+     "bool",
+     "boolean",
+     true
+    ],
+    [
+     "bin",
+     "binary",
+     true
+    ],
+    [
+     "dt",
+     "date",
+     true
+    ],
+    [
+     "ts",
+     "timestamp",
+     true
+    ],
+    [
+     "ntz",
+     "timestamp_ntz",
+     true
+    ],
+    [
+     "arr",
+     "array<int>",
+     true
+    ],
+    [
+     "m",
+     "map<string,int>",
+     true
+    ],
+    [
+     "st",
+     "struct<x:int,y:string>",
+     true
+    ]
+   ],
+   "commits": [
+    {
+     "actions": [
+      {
+       "commitInfo": {
+        "isBlindAppend": true,
+        "isolationLevel": "Serializable",
+        "operation": "CREATE TABLE",
+        "operationMetrics": {},
+        "operationParameters": {
+         "clusterBy": "[]",
+         "description": null,
+         "isManaged": "false",
+         "partitionBy": "[]",
+         "properties": "{}"
+        }
+       }
+      },
+      {
+       "metaData": {
+        "configuration": {},
+        "format": {
+         "options": {},
+         "provider": "parquet"
+        },
+        "partitionColumns": [],
+        "schemaString": "{\"type\":\"struct\",\"fields\":[{\"name\":\"b\",\"type\":\"byte\",\"nullable\":true,\"metadata\":{}},{\"name\":\"s\",\"type\":\"short\",\"nullable\":true,\"metadata\":{}},{\"name\":\"i\",\"type\":\"integer\",\"nullable\":true,\"metadata\":{}},{\"name\":\"l\",\"type\":\"long\",\"nullable\":true,\"metadata\":{}},{\"name\":\"f\",\"type\":\"float\",\"nullable\":true,\"metadata\":{}},{\"name\":\"d\",\"type\":\"double\",\"nullable\":true,\"metadata\":{}},{\"name\":\"dec\",\"type\":\"decimal(10,2)\",\"nullable\":true,\"metadata\":{}},{\"name\":\"str\",\"type\":\"string\",\"nullable\":true,\"metadata\":{}},{\"name\":\"c\",\"type\":\"string\",\"nullable\":true,\"metadata\":{\"__CHAR_VARCHAR_TYPE_STRING\":\"char(3)\"}},{\"name\":\"vc\",\"type\":\"string\",\"nullable\":true,\"metadata\":{\"__CHAR_VARCHAR_TYPE_STRING\":\"varchar(5)\"}},{\"name\":\"bool\",\"type\":\"boolean\",\"nullable\":true,\"metadata\":{}},{\"name\":\"bin\",\"type\":\"binary\",\"nullable\":true,\"metadata\":{}},{\"name\":\"dt\",\"type\":\"date\",\"nullable\":true,\"metadata\":{}},{\"name\":\"ts\",\"type\":\"timestamp\",\"nullable\":true,\"metadata\":{}},{\"name\":\"ntz\",\"type\":\"timestamp_ntz\",\"nullable\":true,\"metadata\":{}},{\"name\":\"arr\",\"type\":{\"type\":\"array\",\"elementType\":\"integer\",\"containsNull\":true},\"nullable\":true,\"metadata\":{}},{\"name\":\"m\",\"type\":{\"type\":\"map\",\"keyType\":\"string\",\"valueType\":\"integer\",\"valueContainsNull\":true},\"nullable\":true,\"metadata\":{}},{\"name\":\"st\",\"type\":{\"type\":\"struct\",\"fields\":[{\"name\":\"x\",\"type\":\"integer\",\"nullable\":true,\"metadata\":{}},{\"name\":\"y\",\"type\":\"string\",\"nullable\":true,\"metadata\":{}}]},\"nullable\":true,\"metadata\":{}}]}"
+       }
+      },
+      {
+       "protocol": {
+        "minReaderVersion": 3,
+        "minWriterVersion": 7,
+        "readerFeatures": [
+         "timestampNtz"
+        ],
+        "writerFeatures": [
+         "timestampNtz",
+         "invariants",
+         "appendOnly"
+        ]
+       }
+      }
+     ],
+     "version": 0
+    }
+   ],
+   "created_log": true,
+   "error": null,
+   "rows": [],
+   "sql": "CREATE TABLE delta.`<path>` (b TINYINT, s SMALLINT, i INT, l BIGINT, f FLOAT, d DOUBLE, dec DECIMAL(10, 2), str STRING, c CHAR(3), vc VARCHAR(5), bool BOOLEAN, bin BINARY, dt DATE, ts TIMESTAMP, ntz TIMESTAMP_NTZ, arr ARRAY<INT>, m MAP<STRING, INT>, st STRUCT<x: INT, y: STRING>) USING delta"
+  },
+  {
+   "case": "again_same",
+   "columns": [
+    [
+     "id",
+     "bigint",
+     true
+    ],
+    [
+     "v",
+     "string",
+     true
+    ]
+   ],
+   "commits": [],
+   "created_log": true,
+   "error": {
+    "condition": "TABLE_OR_VIEW_ALREADY_EXISTS",
+    "message": "[TABLE_OR_VIEW_ALREADY_EXISTS] Cannot create table or view `delta`.`<path>` because it already exists.",
+    "parameters": {
+     "relationName": "`delta`.`<path>`"
+    },
+    "sqlstate": "42P07"
+   },
+   "rows": [],
+   "sql": "CREATE TABLE delta.`<path>` (id BIGINT, v STRING) USING delta"
+  },
+  {
+   "case": "again_other",
+   "columns": [
+    [
+     "id",
+     "bigint",
+     true
+    ],
+    [
+     "v",
+     "string",
+     true
+    ]
+   ],
+   "commits": [],
+   "created_log": true,
+   "error": {
+    "condition": "TABLE_OR_VIEW_ALREADY_EXISTS",
+    "message": "[TABLE_OR_VIEW_ALREADY_EXISTS] Cannot create table or view `delta`.`<path>` because it already exists.",
+    "parameters": {
+     "relationName": "`delta`.`<path>`"
+    },
+    "sqlstate": "42P07"
+   },
+   "rows": [],
+   "sql": "CREATE TABLE delta.`<path>` (id INT) USING delta"
+  },
+  {
+   "case": "again_no_columns",
+   "columns": [
+    [
+     "id",
+     "bigint",
+     true
+    ],
+    [
+     "v",
+     "string",
+     true
+    ]
+   ],
+   "commits": [],
+   "created_log": true,
+   "error": {
+    "condition": "TABLE_OR_VIEW_ALREADY_EXISTS",
+    "message": "[TABLE_OR_VIEW_ALREADY_EXISTS] Cannot create table or view `delta`.`<path>` because it already exists.",
+    "parameters": {
+     "relationName": "`delta`.`<path>`"
+    },
+    "sqlstate": "42P07"
+   },
+   "rows": [],
+   "sql": "CREATE TABLE delta.`<path>` USING delta"
+  },
+  {
+   "case": "if_not_exists_same",
+   "columns": [
+    [
+     "id",
+     "bigint",
+     true
+    ],
+    [
+     "v",
+     "string",
+     true
+    ]
+   ],
+   "commits": [],
+   "created_log": true,
+   "error": null,
+   "rows": [],
+   "sql": "CREATE TABLE IF NOT EXISTS delta.`<path>` (id BIGINT, v STRING) USING delta"
+  },
+  {
+   "case": "if_not_exists_other",
+   "columns": [
+    [
+     "id",
+     "bigint",
+     true
+    ],
+    [
+     "v",
+     "string",
+     true
+    ]
+   ],
+   "commits": [],
+   "created_log": true,
+   "error": null,
+   "rows": [],
+   "sql": "CREATE TABLE IF NOT EXISTS delta.`<path>` (id INT) USING delta"
+  },
+  {
+   "case": "again_partitioned",
+   "columns": [
+    [
+     "id",
+     "bigint",
+     true
+    ],
+    [
+     "v",
+     "string",
+     true
+    ]
+   ],
+   "commits": [],
+   "created_log": true,
+   "error": {
+    "condition": "TABLE_OR_VIEW_ALREADY_EXISTS",
+    "message": "[TABLE_OR_VIEW_ALREADY_EXISTS] Cannot create table or view `delta`.`<path>` because it already exists.",
+    "parameters": {
+     "relationName": "`delta`.`<path>`"
+    },
+    "sqlstate": "42P07"
+   },
+   "rows": [],
+   "sql": "CREATE TABLE delta.`<path>` (id BIGINT, v STRING) USING delta PARTITIONED BY (v)"
+  },
+  {
+   "case": "empty_directory",
+   "columns": [
+    [
+     "id",
+     "bigint",
+     true
+    ]
+   ],
+   "commits": [
+    {
+     "actions": [
+      {
+       "commitInfo": {
+        "isBlindAppend": true,
+        "isolationLevel": "Serializable",
+        "operation": "CREATE TABLE",
+        "operationMetrics": {},
+        "operationParameters": {
+         "clusterBy": "[]",
+         "description": null,
+         "isManaged": "false",
+         "partitionBy": "[]",
+         "properties": "{}"
+        }
+       }
+      },
+      {
+       "metaData": {
+        "configuration": {},
+        "format": {
+         "options": {},
+         "provider": "parquet"
+        },
+        "partitionColumns": [],
+        "schemaString": "{\"type\":\"struct\",\"fields\":[{\"name\":\"id\",\"type\":\"long\",\"nullable\":true,\"metadata\":{}}]}"
+       }
+      },
+      {
+       "protocol": {
+        "minReaderVersion": 1,
+        "minWriterVersion": 2
+       }
+      }
+     ],
+     "version": 0
+    }
+   ],
+   "created_log": true,
+   "error": null,
+   "rows": [],
+   "sql": "CREATE TABLE delta.`<path>` (id BIGINT) USING delta"
+  },
+  {
+   "case": "parquet_directory",
+   "created_log": false,
+   "error": {
+    "condition": "TABLE_OR_VIEW_ALREADY_EXISTS",
+    "message": "[TABLE_OR_VIEW_ALREADY_EXISTS] Cannot create table or view `delta`.`<path>` because it already exists.",
+    "parameters": {
+     "relationName": "`delta`.`<path>`"
+    },
+    "sqlstate": "42P07"
+   },
+   "sql": "CREATE TABLE delta.`<path>` (id BIGINT) USING delta"
+  },
+  {
+   "case": "trailing_slash",
+   "columns": [
+    [
+     "id",
+     "bigint",
+     true
+    ]
+   ],
+   "commits": [
+    {
+     "actions": [
+      {
+       "commitInfo": {
+        "isBlindAppend": true,
+        "isolationLevel": "Serializable",
+        "operation": "CREATE TABLE",
+        "operationMetrics": {},
+        "operationParameters": {
+         "clusterBy": "[]",
+         "description": null,
+         "isManaged": "false",
+         "partitionBy": "[]",
+         "properties": "{}"
+        }
+       }
+      },
+      {
+       "metaData": {
+        "configuration": {},
+        "format": {
+         "options": {},
+         "provider": "parquet"
+        },
+        "partitionColumns": [],
+        "schemaString": "{\"type\":\"struct\",\"fields\":[{\"name\":\"id\",\"type\":\"long\",\"nullable\":true,\"metadata\":{}}]}"
+       }
+      },
+      {
+       "protocol": {
+        "minReaderVersion": 1,
+        "minWriterVersion": 2
+       }
+      }
+     ],
+     "version": 0
+    }
+   ],
+   "created_log": true,
+   "error": null,
+   "rows": [],
+   "sql": "CREATE TABLE delta.`<path>/` (id BIGINT) USING delta"
+  },
+  {
+   "case": "file_uri",
+   "columns": [
+    [
+     "id",
+     "bigint",
+     true
+    ]
+   ],
+   "commits": [
+    {
+     "actions": [
+      {
+       "commitInfo": {
+        "isBlindAppend": true,
+        "isolationLevel": "Serializable",
+        "operation": "CREATE TABLE",
+        "operationMetrics": {},
+        "operationParameters": {
+         "clusterBy": "[]",
+         "description": null,
+         "isManaged": "false",
+         "partitionBy": "[]",
+         "properties": "{}"
+        }
+       }
+      },
+      {
+       "metaData": {
+        "configuration": {},
+        "format": {
+         "options": {},
+         "provider": "parquet"
+        },
+        "partitionColumns": [],
+        "schemaString": "{\"type\":\"struct\",\"fields\":[{\"name\":\"id\",\"type\":\"long\",\"nullable\":true,\"metadata\":{}}]}"
+       }
+      },
+      {
+       "protocol": {
+        "minReaderVersion": 1,
+        "minWriterVersion": 2
+       }
+      }
+     ],
+     "version": 0
+    }
+   ],
+   "created_log": true,
+   "error": null,
+   "rows": [],
+   "sql": "CREATE TABLE delta.`file:<path>` (id BIGINT) USING delta"
+  },
+  {
+   "case": "location_too",
+   "columns": [
+    [
+     "id",
+     "bigint",
+     true
+    ]
+   ],
+   "commits": [
+    {
+     "actions": [
+      {
+       "commitInfo": {
+        "isBlindAppend": true,
+        "isolationLevel": "Serializable",
+        "operation": "CREATE TABLE",
+        "operationMetrics": {},
+        "operationParameters": {
+         "clusterBy": "[]",
+         "description": null,
+         "isManaged": "false",
+         "partitionBy": "[]",
+         "properties": "{}"
+        }
+       }
+      },
+      {
+       "metaData": {
+        "configuration": {},
+        "format": {
+         "options": {},
+         "provider": "parquet"
+        },
+        "partitionColumns": [],
+        "schemaString": "{\"type\":\"struct\",\"fields\":[{\"name\":\"id\",\"type\":\"long\",\"nullable\":true,\"metadata\":{}}]}"
+       }
+      },
+      {
+       "protocol": {
+        "minReaderVersion": 1,
+        "minWriterVersion": 2
+       }
+      }
+     ],
+     "version": 0
+    }
+   ],
+   "created_log": true,
+   "error": null,
+   "rows": [],
+   "sql": "CREATE TABLE delta.`<path>` (id BIGINT) USING delta LOCATION '<path>'"
+  },
+  {
+   "case": "or_replace_new",
+   "columns": [
+    [
+     "id",
+     "bigint",
+     true
+    ]
+   ],
+   "commits": [
+    {
+     "actions": [
+      {
+       "commitInfo": {
+        "isBlindAppend": true,
+        "isolationLevel": "Serializable",
+        "operation": "CREATE OR REPLACE TABLE",
+        "operationMetrics": {},
+        "operationParameters": {
+         "clusterBy": "[]",
+         "description": null,
+         "isManaged": "false",
+         "partitionBy": "[]",
+         "properties": "{}"
+        }
+       }
+      },
+      {
+       "metaData": {
+        "configuration": {},
+        "format": {
+         "options": {},
+         "provider": "parquet"
+        },
+        "partitionColumns": [],
+        "schemaString": "{\"type\":\"struct\",\"fields\":[{\"name\":\"id\",\"type\":\"long\",\"nullable\":true,\"metadata\":{}}]}"
+       }
+      },
+      {
+       "protocol": {
+        "minReaderVersion": 1,
+        "minWriterVersion": 2
+       }
+      }
+     ],
+     "version": 0
+    }
+   ],
+   "created_log": true,
+   "error": null,
+   "rows": [],
+   "sql": "CREATE OR REPLACE TABLE delta.`<path>` (id BIGINT) USING delta"
+  },
+  {
+   "case": "or_replace_existing",
+   "columns": [
+    [
+     "id",
+     "bigint",
+     true
+    ],
+    [
+     "v",
+     "string",
+     true
+    ]
+   ],
+   "commits": [],
+   "created_log": true,
+   "error": {
+    "condition": "DELTA_CREATE_TABLE_SCHEME_MISMATCH",
+    "message": "[DELTA_CREATE_TABLE_SCHEME_MISMATCH] The specified schema does not match the existing schema at <path>.",
+    "parameters": {
+     "existingSchema": "root\n |-- id: long (nullable = true)\n |-- v: string (nullable = true)\n",
+     "path": "<path>",
+     "schemaDifferences": "- Specified schema is missing field(s): v\n- Specified schema has additional field(s): w\n- Specified type for id is different from existing schema:\n  Specified: integer\n  Existing:  long",
+     "specifiedSchema": "root\n |-- id: integer (nullable = true)\n |-- w: string (nullable = true)\n"
+    },
+    "sqlstate": "42KD7"
+   },
+   "rows": [],
+   "sql": "CREATE OR REPLACE TABLE delta.`<path>` (id INT, w STRING) USING delta"
+  },
+  {
+   "case": "ctas",
+   "columns": [
+    [
+     "id",
+     "bigint",
+     true
+    ],
+    [
+     "v",
+     "string",
+     true
+    ]
+   ],
+   "commits": [
+    {
+     "actions": [
+      {
+       "commitInfo": {
+        "isBlindAppend": true,
+        "isolationLevel": "Serializable",
+        "operation": "CREATE TABLE AS SELECT",
+        "operationMetrics": {
+         "numFiles": "1",
+         "numOutputBytes": "691",
+         "numOutputRows": "1"
+        },
+        "operationParameters": {
+         "clusterBy": "[]",
+         "description": null,
+         "isManaged": "false",
+         "partitionBy": "[]",
+         "properties": "{}"
+        }
+       }
+      },
+      {
+       "metaData": {
+        "configuration": {},
+        "format": {
+         "options": {},
+         "provider": "parquet"
+        },
+        "partitionColumns": [],
+        "schemaString": "{\"type\":\"struct\",\"fields\":[{\"name\":\"id\",\"type\":\"long\",\"nullable\":true,\"metadata\":{}},{\"name\":\"v\",\"type\":\"string\",\"nullable\":true,\"metadata\":{}}]}"
+       }
+      },
+      {
+       "protocol": {
+        "minReaderVersion": 1,
+        "minWriterVersion": 2
+       }
+      },
+      {
+       "add": {
+        "dataChange": true,
+        "partitionValues": {},
+        "path": "part-00000-52dfc586-eea1-419b-88c4-502a55517d4a-c000.snappy.parquet",
+        "stats": "{\"numRecords\":1,\"minValues\":{\"id\":1,\"v\":\"a\"},\"maxValues\":{\"id\":1,\"v\":\"a\"},\"nullCount\":{\"id\":0,\"v\":0}}"
+       }
+      }
+     ],
+     "version": 0
+    }
+   ],
+   "created_log": true,
+   "error": null,
+   "rows": [
+    [
+     1,
+     "a"
+    ]
+   ],
+   "sql": "CREATE TABLE delta.`<path>` USING delta AS SELECT CAST(1 AS BIGINT) AS id, 'a' AS v"
+  },
+  {
+   "case": "no_columns",
+   "columns": [],
+   "commits": [
+    {
+     "actions": [
+      {
+       "commitInfo": {
+        "isBlindAppend": true,
+        "isolationLevel": "Serializable",
+        "operation": "CREATE TABLE",
+        "operationMetrics": {},
+        "operationParameters": {
+         "clusterBy": "[]",
+         "description": null,
+         "isManaged": "false",
+         "partitionBy": "[]",
+         "properties": "{}"
+        }
+       }
+      },
+      {
+       "metaData": {
+        "configuration": {},
+        "format": {
+         "options": {},
+         "provider": "parquet"
+        },
+        "partitionColumns": [],
+        "schemaString": "{\"type\":\"struct\",\"fields\":[]}"
+       }
+      },
+      {
+       "protocol": {
+        "minReaderVersion": 1,
+        "minWriterVersion": 2
+       }
+      }
+     ],
+     "version": 0
+    }
+   ],
+   "created_log": true,
+   "error": null,
+   "read_error": {
+    "condition": "DELTA_READ_TABLE_WITHOUT_COLUMNS",
+    "message": "[DELTA_READ_TABLE_WITHOUT_COLUMNS] You are trying to read a Delta table `delta`.`file:<path>` that does not have any columns.",
+    "parameters": {
+     "tableName": "`delta`.`file:<path>`"
+    },
+    "sqlstate": "428GU"
+   },
+   "sql": "CREATE TABLE delta.`<path>` USING delta"
+  },
+  {
+   "case": "using_parquet",
+   "created_log": false,
+   "error": {
+    "condition": "INVALID_SCHEMA_OR_RELATION_NAME",
+    "message": "[INVALID_SCHEMA_OR_RELATION_NAME] `<path>` is not a valid name for tables/schemas. Valid names only contain alphabet characters, numbers and _. SQLSTATE: 42602",
+    "parameters": {
+     "name": "`<path>`"
+    },
+    "sqlstate": "42602"
+   },
+   "sql": "CREATE TABLE delta.`<path>` (id BIGINT) USING parquet"
+  },
+  {
+   "case": "no_using",
+   "created_log": false,
+   "error": {
+    "condition": "INVALID_SCHEMA_OR_RELATION_NAME",
+    "message": "[INVALID_SCHEMA_OR_RELATION_NAME] `<path>` is not a valid name for tables/schemas. Valid names only contain alphabet characters, numbers and _. SQLSTATE: 42602",
+    "parameters": {
+     "name": "`<path>`"
+    },
+    "sqlstate": "42602"
+   },
+   "sql": "CREATE TABLE delta.`<path>` (id BIGINT)"
+  },
+  {
+   "case": "relative_path",
+   "created_log": false,
+   "error": {
+    "condition": "SCHEMA_NOT_FOUND",
+    "message": "[SCHEMA_NOT_FOUND] The schema `spark_catalog`.`delta` cannot be found. Verify the spelling and correctness of the schema and catalog.",
+    "parameters": {
+     "schemaName": "`spark_catalog`.`delta`"
+    },
+    "sqlstate": "42704"
+   },
+   "sql": "CREATE TABLE delta.`<path>` (id BIGINT) USING delta"
+  },
+  {
+   "case": "no_slash",
+   "created_log": false,
+   "error": {
+    "condition": "SCHEMA_NOT_FOUND",
+    "message": "[SCHEMA_NOT_FOUND] The schema `spark_catalog`.`delta` cannot be found. Verify the spelling and correctness of the schema and catalog.",
+    "parameters": {
+     "schemaName": "`spark_catalog`.`delta`"
+    },
+    "sqlstate": "42704"
+   },
+   "sql": "CREATE TABLE delta.`<path>` (id BIGINT) USING delta"
+  }
+ ],
+ "delta_spark": "4.4.1",
+ "format_version": 1,
+ "generator": "tests/scripts/gen_delta_fixtures.py",
+ "spark": "4.2.0",
+ "tables_after": []
+}

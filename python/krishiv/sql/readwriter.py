@@ -112,6 +112,7 @@ class DataFrameReader:
         paths = [path] if isinstance(path, str) else list(path)
         schema_json, schema_ddl = self._schema
         native = self._session._native.read(self._format, paths, self._options, schema_json, schema_ddl)
+        native.schema()  # as Spark resolves the relation at the read: a missing path raises here (PY-080)
         return DataFrame(native, self._session)
 
     def parquet(self, *paths: str) -> DataFrame:
@@ -122,6 +123,16 @@ class DataFrameReader:
 
     def json(self, path: str | list[str], **options: object) -> DataFrame:
         return self.load(path, format="json", **options)
+
+    def text(
+        self, paths: str | list[str], wholetext: bool = False, lineSep: str | None = None, **options: object
+    ) -> DataFrame:
+        """Reads text files into a ``value`` string column, a row per line (``wholetext=True``: a row
+        per file), as ``pyspark.sql.DataFrameReader.text``."""
+        options["wholetext"] = wholetext  # always set, as PySpark: it overrides an earlier option
+        if lineSep is not None:
+            options["lineSep"] = lineSep
+        return self.load(paths, format="text", **options)
 
 
 class DataFrameWriter:

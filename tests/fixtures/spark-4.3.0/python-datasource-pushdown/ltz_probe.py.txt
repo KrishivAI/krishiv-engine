@@ -1,0 +1,31 @@
+import json, os
+from pyspark.sql import SparkSession
+from pyspark.sql.datasource import DataSource, DataSourceReader, InputPartition
+spark = SparkSession.builder.master("local[1]").config("spark.ui.enabled","false").getOrCreate()
+spark.conf.set("spark.sql.python.filterPushdown.enabled","true")
+out=[]
+cases=[("timestamp","x = timestamp '2020-01-01 00:00:00'","UTC"),
+       ("timestamp","x = timestamp '2020-01-01 00:00:00'","America/Los_Angeles"),
+       ("timestamp","x = timestamp '2020-01-01 00:00:00'","Asia/Kolkata"),
+       ("timestamp_ntz","x = timestamp_ntz '2020-01-01 00:00:00'","America/Los_Angeles"),
+       ("date","x = date '2020-01-01'","UTC")]
+for i,(t,f,tz) in enumerate(cases):
+    spark.conf.set("spark.sql.session.timeZone", tz)
+    seen=[]
+    log=f"/work/ltz{i}.log"
+    open(log,"w").close()
+    class R(DataSourceReader):
+        def pushFilters(self, filters):
+            with open(log,"a") as fh: fh.write(repr(list(filters))+"\n")
+            return filters
+        def partitions(self): return [InputPartition(0)]
+        def read(self,p): return iter([])
+    class S(DataSource):
+        @classmethod
+        def name(cls): return f"ltz{i}"
+        def schema(self): return f"x {t}"
+        def reader(self, schema): return R()
+    spark.dataSource.register(S)
+    spark.read.format(f"ltz{i}").load().filter(f).count()
+    out.append({"type":t,"filter":f,"session_tz":tz,"filters":open(log).read().strip().splitlines()})
+json.dump(out,open("/work/ltz.json","w"),indent=1)

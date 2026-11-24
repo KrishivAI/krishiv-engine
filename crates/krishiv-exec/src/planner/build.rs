@@ -30,27 +30,25 @@ use krishiv_common::error::{
 use krishiv_io::{ColumnPath, FilterId, MetadataCols};
 use krishiv_optimizer::PlanStats;
 use krishiv_plan::{
-    AttrId, BoundColumn, CastMode, Expr, ExprNode, Literal, LogicalPlan, NullOrdering, Plan,
-    PlanNode, ResolvedExpr, SortDirection, SortOrder,
+    AttrId, BoundColumn, CastMode, Expr, ExprNode, Literal, LogicalPlan, NullOrdering, PlanNode,
+    ResolvedExpr, SortDirection, SortOrder,
 };
 
+use super::PlanningContext;
 use super::eval::{self, EvalEnv, PhysExpr};
 use super::explain::ExplainNode;
-use super::probe_select::attach_runtime_filters;
 use super::properties::{Distribution, Placement, range_keys};
 use super::python_udf::has_python_udf;
 use super::runtime_filter::{Settings, Site, column_type, kept, key_source, renamed};
 pub(crate) use super::subquery::has_subquery;
 use super::subquery::{ByPlan, SubqueryValue, subqueries, with_subquery_columns};
-use super::{PhysicalPlanner, PlanningContext};
 use crate::error::Result;
 use crate::operator::{Operator, Source};
 use crate::operators::{FilterPushdown, Limit, Project, ProjectItem, ScanPushdowns, SortKey, TopN};
 use crate::physical::{
-    LoopLimits, PhysNode, PhysicalPlan, ProjectItemPlan, ScanFilter, ScanId, ScanNode,
-    ScanRuntimeFilter, SharedId, SharedPlan, SubqueryId, SubqueryPlan, SubqueryValueKind, ValueId,
-    Values, expand_op, filter_op, generate_op, project_op, replicate_op, scan_filter, sort_op,
-    top_n_op,
+    LoopLimits, PhysNode, ProjectItemPlan, ScanFilter, ScanId, ScanNode, ScanRuntimeFilter,
+    SharedId, SharedPlan, SubqueryId, SubqueryPlan, SubqueryValueKind, ValueId, Values, expand_op,
+    filter_op, generate_op, project_op, replicate_op, scan_filter, sort_op, top_n_op,
 };
 use crate::values::{LocalValues, ValueService};
 
@@ -58,84 +56,6 @@ use crate::values::{LocalValues, ValueService};
 /// subquery values are read as attributes of these numbers, so they must
 /// never meet an attribute of the plan or one the planner adds.
 const SUBQUERY_GAP: u64 = 1 << 62;
-
-/// The embedded physical planner.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct DefaultPlanner;
-
-impl PhysicalPlanner for DefaultPlanner {
-    fn plan(&self, plan: &Plan, cx: &PlanningContext) -> Result<PhysicalPlan> {
-        let root = plan.root();
-        if !root.is_resolved() {
-            return Err(internal("the physical planner needs a resolved plan"));
-        }
-        let output = root
-            .resolved_output()
-            .ok_or_else(|| internal("the plan has no resolved output"))?;
-        // Planning recurses once per relation; plans nest up to
-        // `krishiv_plan::MAX_DEPTH` levels.
-        let run = || {
-            // First as a plan with its deterministic shared definitions
-            // inlined per reference (as before); the groups no runtime
-            // filter reaches are then planned shared (design P2-T198 3.1).
-            let (plan, shareable) = plan_once(cx, root, &output, None)?;
-            if shareable.is_empty() {
-                return Ok::<_, KrishivError>(plan);
-            }
-            Ok(plan_once(cx, root, &output, Some(shareable))?.0)
-        };
-        krishiv_common::stack::on_big_stack(run)
-            .ok_or_else(|| internal("cannot start a planner thread"))?
-    }
-}
-
-/// One planning pass; the definitions of `share` are shared. Also returns the
-/// deterministic groups a second pass may share: two or more references whose
-/// copies no runtime filter reaches.
-fn plan_once(
-    cx: &PlanningContext,
-    root: &Arc<LogicalPlan>,
-    output: &[BoundColumn],
-    share: Option<HashSet<Vec<AttrId>>>,
-) -> Result<(PhysicalPlan, HashSet<Vec<AttrId>>)> {
-    let mut planner = Planner::new(cx, root);
-    planner.share_groups = share;
-    let planned = planner.plan(root)?;
-    let mut planned = select(planned, output, "Project")?;
-    // A group is shareable when no copy's scan receives a filter from outside the copy: a join inside the body
-    // keeps filtering the body's own scans when the body is shared (design 3.1, 6.1).
-    let reached = |copy: &Copy| {
-        planner.scan_filters.iter().any(|(scan, filters)| {
-            copy.scans.contains(&scan.0) && filters.iter().any(|f| !copy.filters.contains(&f.id.0))
-        })
-    };
-    let shareable: HashSet<Vec<AttrId>> = planner
-        .copies
-        .iter()
-        .filter(|(_, copies)| copies.len() >= 2 && !copies.iter().any(reached))
-        .map(|(key, _)| key.clone())
-        .collect();
-    let mut shared = std::mem::take(&mut planner.shared);
-    planner.shared_reads.strip_dead(&mut shared);
-    let fuse = planner.fuse_probe_select();
-    attach_runtime_filters(
-        &mut planner.scan_filters,
-        fuse,
-        shared
-            .iter_mut()
-            .map(|s| &mut s.plan)
-            .chain(std::iter::once(&mut planned.node)),
-    );
-    let plan = PhysicalPlan::new(
-        planned.node,
-        planned.schema,
-        planned.explain,
-        planner.env.to_plan(),
-    )
-    .with_shared(shared)?
-    .with_warnings(planner.warnings);
-    Ok((plan, shareable))
-}
 
 /// Whether `n` produces its rows in an order a reader must keep: a sort or top-N, possibly under row-wise
 /// projections and filters.
@@ -292,6 +212,10 @@ pub(crate) struct Planner<'a> {
     /// The deterministic definitions to share (design P2-T198 kind 2); `None` shares none of them, which is how
     /// the first pass plans.
     share_groups: Option<HashSet<Vec<AttrId>>>,
+    /// Whether this pass lets a deciding source decide (the pass whose plan is kept).
+    decide: bool,
+    /// A deciding source was left undecided by a pass that does not decide.
+    deferred: bool,
     /// The scans and runtime filters of each unshared deterministic reference's copy, by definition.
     copies: HashMap<Vec<AttrId>, Vec<Copy>>,
     /// The join hints a join read, by address.
@@ -360,6 +284,8 @@ impl<'a> Planner<'a> {
             shared_ids: HashMap::new(),
             shared_schemas: HashMap::new(),
             share_groups: None,
+            decide: cx.decisions,
+            deferred: false,
             copies: HashMap::new(),
             consumed_hints: HashSet::new(),
             next_id,
@@ -1309,7 +1235,18 @@ impl<'a> Planner<'a> {
         let mut pushed = Vec::new();
         let mut scan_filter_plan = None;
         let mut detail = format!("{} [{}]", source_name(scan), columns(&scan.output));
-        if let Some(predicate) = filter {
+        // A scan that decides once (a Python data source) sees every conjunct at once; a plan that
+        // is only looked at, or a row-level probe, keeps the whole filter above the scan instead.
+        let deciding = filter.is_some() && factory.decides_once();
+        let mut decision = None;
+        if let (true, Some(predicate)) = (deciding, filter) {
+            if self.decide && !row_id {
+                decision =
+                    Some(self.decide_scan(&*factory, &table, scan, predicate, &projection)?);
+            } else if self.cx.decisions && !row_id {
+                self.deferred = true;
+            }
+        } else if let Some(predicate) = filter {
             // The scan evaluates pushed filters over its table schema.
             let layout: Vec<AttrId> = table
                 .fields()
@@ -1336,11 +1273,24 @@ impl<'a> Planner<'a> {
             metadata,
             ..ScanPushdowns::default()
         };
-        if let Some(more) = factory.explain(&pushdowns) {
+        let bound = decision.as_ref().map(|d| Arc::clone(&d.bound));
+        if let Some(d) = &decision
+            && !d.shown.is_empty()
+        {
+            detail.push_str(&format!(", PushedFilters: [{}]", d.shown.join(", ")));
+        }
+        let more = match &bound {
+            Some(b) => b.explain(&pushdowns),
+            None => factory.explain(&pushdowns),
+        };
+        if let Some(more) = more {
             detail.push_str(", ");
             detail.push_str(&more);
         }
-        let schema = factory.output_schema(&pushdowns)?;
+        let schema = match &bound {
+            Some(b) => b.output_schema(&pushdowns)?,
+            None => factory.output_schema(&pushdowns)?,
+        };
         let id = self.next_scan_id()?;
         let sites = if self.rf.enabled() {
             let scan_rows = self.estimated_rows(plan);
@@ -1377,6 +1327,13 @@ impl<'a> Planner<'a> {
                 runtime_filters: Vec::new(),
                 row_stage: self.rf.row_stage(),
                 row_id,
+                decided: match &decision {
+                    Some(d) => Some(Box::new(d.decided.clone())),
+                    None if deciding && !self.decide => {
+                        Some(Box::new(crate::operators::DecidedScan::undecided()))
+                    }
+                    None => None,
+                },
             }),
             layout,
             explain: ExplainNode::leaf("Scan", detail).with_facts(super::scan_facts::of(
@@ -1390,21 +1347,13 @@ impl<'a> Planner<'a> {
         if let Some(predicate) = filter {
             self.no_runtime_filters_before(&mut planned, predicate);
         }
-        match filter {
-            Some(predicate) if !exact => self.filter(planned, predicate),
+        match (decision, filter) {
+            (Some(d), _) => match d.residual {
+                Some(residual) => self.filter(planned, &residual),
+                None => Ok(planned),
+            },
+            (None, Some(predicate)) if !exact => self.filter(planned, predicate),
             _ => Ok(planned),
-        }
-    }
-
-    /// A scan whose filter has a conjunct that may raise gets no runtime
-    /// filter: Spark evaluates its runtime filter as the last conjunct of
-    /// the filter over the scan, so it never keeps that conjunct from
-    /// seeing a row (it raises on a row whose key matches nothing, even
-    /// alone in its file). Dropping the scan's sites keeps joins above from
-    /// targeting it.
-    fn no_runtime_filters_before(&self, scan: &mut Planned, predicate: &Expr) {
-        if krishiv_plan::may_raise(predicate, self.env.ansi) {
-            scan.sites.clear();
         }
     }
 
@@ -1430,34 +1379,6 @@ impl<'a> Planner<'a> {
                 subqueries,
             },
         ))
-    }
-
-    /// Each row `count` times (`INTERSECT ALL` / `EXCEPT ALL`).
-    fn replicate(&mut self, input: Planned, count: &Expr) -> Result<Planned> {
-        let prepared = self.prepare(&[count])?;
-        let e = prepared
-            .exprs
-            .first()
-            .cloned()
-            .ok_or_else(|| internal("a replication without a count"))?;
-        let op = replicate_op(&input.schema, &input.layout, &e, &self.values(&prepared))?;
-        let layout = input.layout.clone();
-        let mut planned = Self::attach(
-            input,
-            prepared,
-            op.schema(),
-            layout,
-            ("ReplicateRows", count.to_string()),
-            |input, layout, subqueries| PhysNode::ReplicateRows {
-                input,
-                layout,
-                count: e,
-                subqueries,
-            },
-        );
-        // The replication count is computed over groups the filter cuts.
-        planned.sites.clear();
-        Ok(planned)
     }
 
     /// Each row once per element of `arg` (`explode`, `posexplode`,
@@ -1961,6 +1882,8 @@ impl<'a> Planner<'a> {
 
 #[cfg(test)]
 mod attach_tests;
+mod passes;
+pub use passes::DefaultPlanner;
 
 pub(super) mod util;
 pub(crate) use util::*;

@@ -369,8 +369,22 @@ impl Spiller {
     ) -> Result<std::result::Result<SpillFile, SpillError>> {
         for c in chunks(ids, chunk, table) {
             self.query.check_cancelled()?;
-            if let Err(e) = w.write(&Batch::new(state(c)?)) {
-                return Ok(Err(e));
+            // A chunk of large sketch states is cut by bytes, so its `binary` column stays under the offset limit.
+            let mut rest = c;
+            // A refused scratch writes nothing and leaves the writer usable: the same groups are tried again in a
+            // smaller prefix (down to one group) before the refusal is the caller's.
+            let mut limit = rest.len();
+            while !rest.is_empty() {
+                let n = table.state_cut(rest).clamp(1, rest.len()).min(limit.max(1));
+                let (now, later) = rest.split_at(n);
+                match w.write(&Batch::new(state(now)?)) {
+                    Ok(()) => {
+                        rest = later;
+                        limit = rest.len();
+                    }
+                    Err(SpillError::Memory(_)) if n > 1 => limit = n / 2,
+                    Err(e) => return Ok(Err(e)),
+                }
             }
         }
         Ok(Ok(self.finish(w)?))

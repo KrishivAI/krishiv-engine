@@ -153,6 +153,7 @@ fn a_write_keeps_the_shared_plans() {
 /// A scan declaring runtime filter `id` to the worker's values.
 fn filtered_scan(id: u64) -> PhysNode {
     PhysNode::Scan(ScanNode {
+        decided: None,
         id: ScanId(0),
         scan: Scan {
             source: ReadSource::Table {
