@@ -99,6 +99,14 @@ impl Session {
         let mut at = PathBuf::new();
         for part in checked.components() {
             at.push(part);
+            // A Windows prefix (`\\?\C:`) and the root are not directories to make: `create_dir` on a
+            // bare prefix fails with neither success nor `AlreadyExists`.
+            if matches!(
+                part,
+                std::path::Component::Prefix(_) | std::path::Component::RootDir
+            ) {
+                continue;
+            }
             let made = match std::fs::create_dir(&at) {
                 Ok(()) => dir_identity(&at),
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => None,

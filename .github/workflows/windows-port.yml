@@ -105,6 +105,12 @@ jobs:
         id: test
         shell: bash
         continue-on-error: true
+        # The runner's TEMP is the 8.3 short form `C:\Users\RUNNER~1\...`. Local paths with `~` are
+        # still misread (object_store encodes it as `%7E` and its LocalFileSystem never decodes it, on
+        # every platform; a queue row of its own), so the tests' temp files go under runner.temp.
+        env:
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
         run: |
           set -o pipefail
           status=0
