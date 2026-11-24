@@ -25,6 +25,7 @@ list there. Choosing where Krishiv runs: [Deployment](deploy.md)
 - [Python data sources](python-data-sources.md): your own formats through `spark.read.format`.
 
 **SQL features**
+- [Session settings: time zone, ANSI mode and Spark version](session-settings.md).
 - [As-of joins](asof-join.md), [Metric views](metric-views.md), [The TIME type](time-types.md),
   [Vector search with SQL](vector-search.md), [Collations and ICU](collations-and-icu.md).
 - [Run SQL from the command line](run-sql-from-the-command-line.md).
