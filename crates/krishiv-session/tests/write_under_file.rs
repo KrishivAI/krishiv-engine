@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! PY-075: a write that cannot start (the path is under a file, or on a full device) fails as a
 //! write, `TASK_WRITE_FAILED`, with the OS reason as its cause, never as "Reading the file".
+
 #![cfg(test)]
 
 use futures::executor::block_on;
