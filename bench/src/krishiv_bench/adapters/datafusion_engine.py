@@ -40,12 +40,12 @@ class DataFusionEngine(SelfTreeMeasure, Engine):
     def setup(self, dataset: Dataset) -> None:
         from datafusion import RuntimeEnvBuilder, SessionConfig, SessionContext
 
-        # ClickBench column names are CamelCase and unquoted in the queries (DuckDB/Spark match case-insensitively).
-        cfg = (
-            SessionConfig()
-            .with_target_partitions(self.threads)
-            .set("datafusion.sql_parser.enable_ident_normalization", "false")
-        )
+        # ClickBench column names are CamelCase and unquoted in the queries (DuckDB/Spark match case-insensitively), so
+        # identifiers keep their case there. Elsewhere they are normalized as usual: TPC-DS q49 spells one alias
+        # `CATALOG` and `catalog`.
+        cfg = SessionConfig().with_target_partitions(self.threads)
+        if "hits" in dataset.tables:  # ClickBench
+            cfg = cfg.set("datafusion.sql_parser.enable_ident_normalization", "false")
         rt = RuntimeEnvBuilder().with_fair_spill_pool(parse_bytes(self.memory_limit))
         self._ctx = SessionContext(cfg, rt)
         for t in dataset.tables:
@@ -72,4 +72,10 @@ class DataFusionEngine(SelfTreeMeasure, Engine):
         import pyarrow as pa
 
         batches, schema = pending
-        return pa.Table.from_batches(batches, schema=schema)
+        if not batches:
+            return pa.Table.from_batches([], schema=schema)
+        # DataFusion 55's batches can disagree with its plan schema (TPC-DS q16/q94/q95: decimal(27,2) planned,
+        # decimal(17,2) produced; q70/q86: nullability), so the table takes the batches' own schema; values are what
+        # the checksum compares.
+        first = batches[0].schema
+        return pa.Table.from_batches([b if b.schema == first else b.cast(first) for b in batches], schema=first)
