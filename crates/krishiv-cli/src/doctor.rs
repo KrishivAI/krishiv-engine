@@ -566,12 +566,12 @@ mod tests {
         for entry in REGISTRY {
             let bad = match entry.value_type {
                 ValueType::Bool => "maybe",
-                ValueType::Int | ValueType::SignedSize => "twelve",
+                ValueType::Int | ValueType::SignedSize | ValueType::Int32 { .. } => "twelve",
                 ValueType::PositiveInt => "0",
                 ValueType::Size => "12 parsecs",
                 ValueType::Duration | ValueType::Millis => "soon",
                 ValueType::TimeZone => "+99:99:99:99",
-                ValueType::Enum(_) => "__no_such_value__",
+                ValueType::Enum(_) | ValueType::ExactEnum(_) => "__no_such_value__",
                 ValueType::String => continue,
             };
             let conf = vec![(entry.key.to_owned(), bad.to_owned())];
