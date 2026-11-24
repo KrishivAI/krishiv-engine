@@ -45,8 +45,14 @@
 //!
 //! Runs once, after `ShareCte`, only with a session configuration and
 //! `krishiv.optimizer.shareFilteredScans` on. The scan is then read by one
-//! filter only (the definition's), so a second run finds nothing: the plan
-//! stays a fixed point. Whether a reference really reads the buffer is
+//! filter only (the definition's), so a second run finds nothing. Two things
+//! keep the whole of `optimize` a fixed point as well: the disjunction goes
+//! through common-subexpression elimination at once (its readers' predicates
+//! repeat conjuncts, which a second run's CSE would extract), and the
+//! estimator reads a reference to a definition of this rule as the scan
+//! (`estimate.rs`), since each reader's predicate implies the disjunction:
+//! read as the definition, a reader would count the disjunction's
+//! selectivity twice and a second join ordering would differ. Whether a reference really reads the buffer is
 //! decided by the physical planner, as for every shared definition (copies
 //! are kept when a runtime filter reaches one of them).
 
