@@ -46,15 +46,13 @@ fn an_unknown_spark_version_is_corrupt() {
 /// The default line is never written; a plan that names it reads as none and records no feature.
 #[test]
 fn a_plan_naming_the_default_spark_version_reads_as_none() {
-    let mut m = message("spark_version");
-    m.env.as_mut().unwrap().spark_version = Some("4.3".to_owned());
+    // A plan that uses no feature, so its header lists none.
+    let mut m = to_message(&plan_of(PhysNode::OneRow)).unwrap();
+    assert!(m.features.is_empty());
+    m.env.get_or_insert_with(Default::default).spark_version = Some("4.3".to_owned());
     let plan = decode(&m.encode_to_vec()).unwrap();
     assert_eq!(plan.env().spark_version, None);
-    assert!(
-        !krishiv_plan_codec::features::plan_features(&plan)
-            .iter()
-            .any(|f| format!("{f:?}") == "SparkVersion")
-    );
+    assert!(!plan_features(&plan).contains(&Feature::SparkVersion));
 }
 
 #[test]
