@@ -224,6 +224,7 @@ pub(crate) fn all_resolved(root: Node<'_>) -> bool {
                 | PlanNode::ColumnNames { .. }
                 | PlanNode::PipeOperator { .. }
                 | PlanNode::SetOp { .. }
+                | PlanNode::Zip { .. }
                 | PlanNode::Pivot { .. }
                 | PlanNode::Unpivot { .. }
                 | PlanNode::InlineTable { .. }
@@ -539,7 +540,9 @@ impl Teardown {
                 self.exprs
                     .extend(dimensions.into_iter().chain(measures).map(|c| c.expr));
             }
-            PlanNode::SetOp { left, right, .. } => self.plans.extend([left, right]),
+            PlanNode::SetOp { left, right, .. } | PlanNode::Zip { left, right } => {
+                self.plans.extend([left, right]);
+            }
             PlanNode::MapPartitions { input, .. } => self.plans.push(input),
             PlanNode::GroupMap { input, keys, .. } => {
                 self.plans.push(input);

@@ -916,8 +916,9 @@ fn a_special_character_in_an_ancestor_name_is_refused() {
     );
 }
 
-/// A file where a directory of the path should be fails as a storage error,
-/// not an internal one.
+/// A file where a directory of the path should be fails as a failed write with the OS reason
+/// as its cause, not an internal error; the file is left as it was (the classes and modes are
+/// in `write_under_file.rs`).
 #[cfg(unix)]
 #[test]
 fn a_file_on_the_path_is_a_storage_failure() {
@@ -929,7 +930,7 @@ fn a_file_on_the_path_is_a_storage_failure() {
     let out = root.join("f/sub/out");
     assert_eq!(
         class(block_on(df.write().parquet(out.to_str().unwrap()))),
-        "KRISHIV_OBJECT_STORE_REQUEST_FAILED"
+        "TASK_WRITE_FAILED"
     );
     assert_eq!(std::fs::read(root.join("f")).unwrap(), b"x");
 }
