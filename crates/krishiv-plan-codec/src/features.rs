@@ -1103,7 +1103,9 @@ fn functions_in<'a>(e: &'a Arc<Expr>, f: &mut impl FnMut(Construct<'a>)) {
 /// "absent means the same everywhere": a plan that sets none runs on the
 /// default line (4.3), which a reader from before that default applies as 4.2,
 /// so the two can differ (a NaN in `vector_norm(.., inf)`); only another line
-/// than the default is a feature.
+/// than the default is a feature. That is the accepted N-1 design: an older
+/// reader is not required to read a newer writer's plans, so this is no open
+/// hazard.
 #[must_use]
 pub fn plan_features(plan: &PhysicalPlan) -> BTreeSet<Feature> {
     let mut out = BTreeSet::new();

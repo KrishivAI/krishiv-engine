@@ -32,7 +32,8 @@ use krishiv_common::error::{
     CannotParseInterval, DatatypeMismatchParameterConstraintViolation,
     DatatypeMismatchValueOutOfRange, InternalError, LegacyErrorTemp1006, LegacyErrorTemp1039,
     LegacyErrorTemp1207, LegacyErrorTemp3231, MissingAggregation,
-    MissingAttributesResolvedAttributeMissingFromInput, WrongNumArgsWithoutSuggestion,
+    MissingAttributesResolvedAttributeMissingFromInput, UnresolvedColumnWithSuggestion,
+    WrongNumArgsWithoutSuggestion,
 };
 use krishiv_types::DataType;
 use krishiv_types::interval_parse::parse_string;
@@ -106,6 +107,18 @@ pub(super) fn rewrite(root: Arc<LogicalPlan>) -> Result<Arc<LogicalPlan>, Analys
 }
 
 fn rewrite_plan(root: Arc<LogicalPlan>) -> Result<Arc<LogicalPlan>, AnalysisError> {
+    // Checked before the rewrite: it replaces the nested window call the check looks for.
+    let mut refused = Ok(());
+    let _ = visit_distinct(Node::Plan(&root), |n| {
+        if let Node::Plan(p) = n
+            && let Err(e) = refuse_inner_window_above_nested(p)
+        {
+            refused = Err(e);
+            return ControlFlow::Break(());
+        }
+        ControlFlow::Continue(())
+    });
+    refused?;
     root.transform_up(&mut |p| {
         let p = p.map_expressions(rewrite_subqueries)?;
         let p = rename_window_time(p)?;
@@ -354,6 +367,92 @@ fn outermost(
         }
     }
     Ok((calls, keys))
+}
+
+/// Whether `agg` is an aggregate that groups by `window(window(ts, ..), ..)`.
+fn is_nested_grouped_window(agg: &LogicalPlan) -> bool {
+    if !matches!(agg.node, PlanNode::Aggregate { .. }) {
+        return false;
+    }
+    let mut found = Vec::new();
+    agg.for_each_expr(&mut |e| collect(e, &mut found));
+    found.iter().any(|c| {
+        call_of(c, WINDOW)
+            .and_then(|f| f.args.first())
+            .is_some_and(|a| call_of(a, WINDOW).is_some())
+    })
+}
+
+/// In a `HAVING` or `ORDER BY` over an aggregate grouped by a nested window, `window`, `window.start` and
+/// `window.end` inside an aggregate do not resolve (Spark 4.3: `UNRESOLVED_COLUMN.WITH_SUGGESTION`, where the
+/// select list reads the inner window).
+fn refuse_inner_window_above_nested(p: &LogicalPlan) -> Result<(), AnalysisError> {
+    fn through_filter(input: &Arc<LogicalPlan>) -> &LogicalPlan {
+        match &input.node {
+            PlanNode::Filter { input, .. } => input,
+            _ => input,
+        }
+    }
+    let below: &LogicalPlan = match &p.node {
+        PlanNode::Filter { input, .. } => input,
+        PlanNode::Sort { input, .. } => through_filter(input),
+        _ => return Ok(()),
+    };
+    let over = is_nested_grouped_window(below).then_some(below);
+    let Some(agg) = over else {
+        return Ok(());
+    };
+    let alias_window = matches!(&agg.node, PlanNode::Aggregate { input, .. }
+        if matches!(&input.node, PlanNode::SubqueryAlias { alias, .. } if alias.eq_ignore_ascii_case(WINDOW)));
+    let mut hit: Option<(Vec<String>, crate::Origin)> = None;
+    p.for_each_expr(&mut |e| {
+        let _ = visit_aggregate_args(e, &mut |c, o| {
+            if hit.is_none() && inner_window_ref(c, alias_window).is_some() {
+                hit = Some((c.to_vec(), o));
+            }
+        });
+    });
+    let Some((name, origin)) = hit else {
+        return Ok(());
+    };
+    Err(AnalysisError::new(
+        UnresolvedColumnWithSuggestion {
+            object_name: name
+                .iter()
+                .map(|n| format!("`{n}`"))
+                .collect::<Vec<_>>()
+                .join("."),
+            proposal: "`count(1)`".to_owned(),
+        },
+        origin,
+    ))
+}
+
+/// Calls `f` with every column reference inside an aggregate call of `e`.
+fn visit_aggregate_args(
+    e: &Arc<Expr>,
+    f: &mut dyn FnMut(&[String], crate::Origin),
+) -> Result<(), AnalysisError> {
+    let mut seen = std::collections::HashSet::new();
+    fn go(
+        e: &Arc<Expr>,
+        in_agg: bool,
+        seen: &mut std::collections::HashSet<(*const Expr, bool)>,
+        f: &mut dyn FnMut(&[String], crate::Origin),
+    ) {
+        if !seen.insert((Arc::as_ptr(e), in_agg)) {
+            return;
+        }
+        let agg = in_agg
+            || matches!(&e.node, ExprNode::Function(c)
+                if c.qualifier.is_empty() && super::BuiltinFunctions::is_aggregate(&c.name));
+        if agg && let ExprNode::Column(c) = &e.node {
+            f(&c.name, e.origin);
+        }
+        e.for_each_child(&mut |c| go(c, agg, seen, f));
+    }
+    go(e, false, &mut seen, f);
+    Ok(())
 }
 
 /// `p` with its window calls read from a new input (see the module documentation).

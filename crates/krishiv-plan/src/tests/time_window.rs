@@ -498,7 +498,6 @@ fn a_window_column_is_found_through_a_limit_and_in_any_case() {
     }
 }
 
-/// A derived table that renames its columns (`AS q(w, n)`) keeps the window identity of the renamed column.
 /// A projection that forwards the inner window column (`SELECT a.iw AS w FROM (SELECT window(..) AS iw ..) a`)
 /// keeps it a window column for an outer `window(w, ..)`.
 #[test]
@@ -530,6 +529,7 @@ fn a_forwarded_window_column_of_a_derived_table_is_still_a_window_column() {
     assert_eq!(types(&r), vec![DataType::Timestamp, DataType::Long]);
 }
 
+/// A derived table that renames its columns (`AS q(w, n)`) keeps the window identity of the renamed column.
 #[test]
 fn a_renamed_window_column_of_a_derived_table_is_still_a_window_column() {
     let inner = LogicalPlan::table(["t"]).aggregate(

@@ -148,5 +148,22 @@ fn a_window_inside_an_aggregate_of_a_nested_grouped_window_is_the_inner_window()
     });
     let text = format!("{:?}", err.err().ok_or("expected MISSING_AGGREGATION")?);
     assert!(text.contains("MissingAggregation"), "{text}");
+    // Spark 4.3.0: inside an aggregate of HAVING or ORDER BY the inner window does not resolve.
+    for tail in [
+        "HAVING max(window.start) = timestamp'2026-01-01 00:03:00'",
+        "ORDER BY max(window.start)",
+    ] {
+        let err = block_on(async {
+            s.sql(&format!("SELECT count(*) {from} {tail}"))
+                .await?
+                .collect()
+                .await
+        });
+        let text = format!("{:?}", err.err().ok_or("expected UNRESOLVED_COLUMN")?);
+        assert!(
+            text.contains("UnresolvedColumnWithSuggestion"),
+            "{tail}: {text}"
+        );
+    }
     Ok(())
 }

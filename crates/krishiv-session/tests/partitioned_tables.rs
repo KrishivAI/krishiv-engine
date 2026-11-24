@@ -1982,6 +1982,54 @@ fn by_name_struct_mismatches_report_spark_classes_and_paths() {
     );
 }
 
+/// `INSERT .. BY NAME` pairs struct fields under Spark's `equalsIgnoreCase` (per code point, upper then lower
+/// case: `\u{e9}` = `\u{c9}`, `\u{130}` = `i`), reports two fields equal under that rule as ambiguous, and
+/// quotes a field name with a backquote by doubling it.
+#[test]
+fn by_name_struct_fields_pair_by_unicode_case_and_quote_backquotes() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(
+        &s,
+        "create table bnu(s struct<`\u{e9}`:int,i:int>) using parquet",
+    );
+    run(&s, "create table bnq(s struct<`a``b`:int>) using parquet");
+    // Pairs under the default (case-insensitive) rule.
+    run(
+        &s,
+        "insert into bnu by name select named_struct('\u{c9}', 1, '\u{130}', 2) as s",
+    );
+    // Two source fields equal under the rule are ambiguous.
+    let (got, params) = class_and_params(
+        &s,
+        "insert into bnu by name select named_struct('\u{e9}', 1, '\u{c9}', 2, 'i', 3) as s",
+    );
+    assert_eq!(got, "INCOMPATIBLE_DATA_FOR_TABLE.AMBIGUOUS_COLUMN_NAME");
+    assert!(
+        params.iter().any(|p| p.ends_with("=`s`.`\u{e9}`")),
+        "{params:?}"
+    );
+    // A missing field is quoted with the backquote doubled.
+    let (got, params) = class_and_params(
+        &s,
+        "insert into bnq by name select named_struct('c', 1) as s",
+    );
+    assert_eq!(got, "INCOMPATIBLE_DATA_FOR_TABLE.CANNOT_FIND_DATA");
+    assert!(
+        params.iter().any(|p| p.ends_with("=`s`.`a``b`")),
+        "{params:?}"
+    );
+    // Case sensitive: the same names no longer pair.
+    s.conf().set("spark.sql.caseSensitive", "true").unwrap();
+    assert_eq!(
+        class(
+            &s,
+            "insert into bnu by name select named_struct('\u{c9}', 1, '\u{130}', 2) as s"
+        ),
+        "INCOMPATIBLE_DATA_FOR_TABLE.CANNOT_FIND_DATA"
+    );
+}
+
 /// Under ANSI the first failing field wins (Spark checks each leaf as it pairs the fields); under LEGACY the
 /// struct errors do.
 #[test]
