@@ -64,7 +64,7 @@ use crate::operators::spark_dir_text;
 mod local_url;
 mod user_schema;
 mod windows_path;
-pub use local_url::{file_url, native_path};
+pub use local_url::{file_display, file_url, native_path};
 use user_schema::{UserPartitions, check_user_schema, user_schema_columns};
 
 /// Spark 4.2's built-in data sources that read no files:
@@ -198,6 +198,13 @@ impl PathLocator for LocalPaths {
             }
         }
         let display = format!("file:/{}", parts.join("/"));
+        // On Windows `/data/x` is on the working directory's drive; the display keeps Hadoop's
+        // `file:/data/x`.
+        if cfg!(windows)
+            && let Some(on_drive) = windows_path::on_drive_of(&parts, &self.cwd)
+        {
+            parts = on_drive;
+        }
         Ok(LocatedPath {
             store: self.store.clone(),
             path: Path::from_iter(parts),

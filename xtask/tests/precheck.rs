@@ -1000,6 +1000,10 @@ fn notes_make_a_passing_step_partial() {
 }
 
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "repo tooling test: runs shell-script stand-ins and sh, Unix only"
+)]
 fn on_path_finds_installed_binaries_only() {
     assert!(on_path("sh"));
     assert!(!on_path("definitely-not-a-program-xyz"));
@@ -1200,6 +1204,10 @@ fn coverage_is_scoped_to_touched_crates_in_a_dedicated_target_dir() {
 }
 
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "repo tooling test: runs shell-script stand-ins and sh, Unix only"
+)]
 fn staleness_and_attribution_are_checked_unless_allowed() {
     let ch = detect(&["crates/common/src/lib.rs"]);
     let fresh = make_plan(&ch, &opts(&["--base", "main"]), true);

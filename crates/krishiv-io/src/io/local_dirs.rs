@@ -154,4 +154,72 @@ mod tests {
         assert_eq!(listed.common_prefixes, vec![Path::from("d")]);
         assert_eq!(listed.objects.len(), 1);
     }
+
+    /// Windows' answer for a directory (a store failure, access denied) is `NotFound`; on a file
+    /// or a missing path the error stays as it is. Run on every platform with the failure made up.
+    #[test]
+    fn a_failure_on_a_directory_is_not_found() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("d")).unwrap();
+        std::fs::write(dir.path().join("f"), b"hi").unwrap();
+        let store = LocalDirsAsMissing::new(LocalFileSystem::new_with_prefix(dir.path()).unwrap());
+        let denied = || object_store::Error::Generic {
+            store: "LocalFileSystem",
+            source: Box::new(std::io::Error::from(std::io::ErrorKind::PermissionDenied)),
+        };
+        let e = store.directory_is_missing(&Path::from("d"), denied());
+        assert!(matches!(e, object_store::Error::NotFound { .. }), "{e}");
+        let e = store.directory_is_missing(&Path::from("f"), denied());
+        assert!(matches!(e, object_store::Error::Generic { .. }), "{e}");
+        let e = store.directory_is_missing(&Path::from("nothing"), denied());
+        assert!(matches!(e, object_store::Error::Generic { .. }), "{e}");
+    }
+
+    #[tokio::test]
+    async fn writes_lists_copies_and_renames_reach_the_file_system() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = LocalDirsAsMissing::new(LocalFileSystem::new_with_prefix(dir.path()).unwrap());
+        assert!(store.to_string().contains("LocalFileSystem"));
+        store
+            .put(&Path::from("a/x"), b"one".to_vec().into())
+            .await
+            .unwrap();
+        let mut up = store.put_multipart(&Path::from("a/y")).await.unwrap();
+        up.put_part(b"two".to_vec().into()).await.unwrap();
+        up.complete().await.unwrap();
+        let got = store
+            .get_ranges(&Path::from("a/y"), std::slice::from_ref(&(0..2)))
+            .await
+            .unwrap();
+        assert_eq!(got[0].as_ref(), b"tw");
+        let e = store
+            .get_ranges(&Path::from("a"), std::slice::from_ref(&(0..1)))
+            .await
+            .unwrap_err();
+        assert!(matches!(e, object_store::Error::NotFound { .. }), "{e}");
+        store
+            .copy(&Path::from("a/x"), &Path::from("a/z"))
+            .await
+            .unwrap();
+        store
+            .rename(&Path::from("a/z"), &Path::from("b"))
+            .await
+            .unwrap();
+        let mut names: Vec<String> = futures::TryStreamExt::try_collect::<Vec<_>>(store.list(None))
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|m| m.location.to_string())
+            .collect();
+        names.sort();
+        assert_eq!(names, ["a/x", "a/y", "b"]);
+        let after: Vec<_> = futures::TryStreamExt::try_collect::<Vec<_>>(
+            store.list_with_offset(None, &Path::from("a/x")),
+        )
+        .await
+        .unwrap();
+        assert_eq!(after.len(), 2);
+        store.delete(&Path::from("b")).await.unwrap();
+        assert!(store.head(&Path::from("b")).await.is_err());
+    }
 }

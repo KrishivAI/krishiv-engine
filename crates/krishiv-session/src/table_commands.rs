@@ -893,9 +893,10 @@ impl Session {
         }
         if let Some(path) = paths.first().and_then(OptionValue::as_plain) {
             let local = path.strip_prefix("file:").unwrap_or(path);
-            if !path.contains("://") && !krishiv_exec::files::native_path(local).exists() {
+            let native = krishiv_exec::files::native_path(local);
+            if !path.contains("://") && !native.exists() {
                 return Err(krishiv_common::error::PathNotFound {
-                    path: format!("file:{local}"),
+                    path: krishiv_exec::files::file_display(&native),
                 }
                 .into());
             }

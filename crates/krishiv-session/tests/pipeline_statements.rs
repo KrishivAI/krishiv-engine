@@ -3,9 +3,11 @@
 //! DIRECTORY` and unbound parameter markers through `Session::sql`, against a real Spark 4.2.0 run.
 #![cfg(test)]
 
+mod literal_path;
 use futures::executor::block_on;
 use krishiv_common::error::{ErrorClass, KrishivError};
 use krishiv_session::Session;
+use literal_path::sql_path;
 
 fn session() -> Session {
     let s = Session::new().unwrap();
@@ -104,7 +106,7 @@ fn insert_overwrite_directory_writes_the_rows_and_replaces_the_directory() {
     std::fs::write(out.join("stale.txt"), "x").expect("write");
     let sql = format!(
         "INSERT OVERWRITE DIRECTORY '{}' USING parquet SELECT 1 AS a UNION ALL SELECT 2",
-        out.display()
+        sql_path(&out)
     );
     block_on(async { s.sql(&sql).await?.collect().await }).expect("insert");
     assert!(!out.join("stale.txt").exists());
@@ -120,7 +122,7 @@ fn insert_overwrite_directory_takes_the_path_and_options_from_the_options_list()
     let sql = format!(
         "INSERT OVERWRITE DIRECTORY USING csv OPTIONS (path '{}', header true, sep ';', maxColumns 10) \
          SELECT 1 AS a, 'x' AS b",
-        out.display()
+        sql_path(&out)
     );
     block_on(async { s.sql(&sql).await?.collect().await }).expect("insert");
     let part = std::fs::read_dir(&out)

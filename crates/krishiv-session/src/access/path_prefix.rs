@@ -85,7 +85,7 @@ impl PathPrefixPolicy {
             .map(|r| {
                 std::fs::canonicalize(r.as_ref()).map_err(|_| {
                     KrishivError::from(PathNotFound {
-                        path: format!("file:{}", r.as_ref().display()),
+                        path: krishiv_exec::files::file_display(r.as_ref()),
                     })
                 })
             })
@@ -392,7 +392,8 @@ mod tests {
             assert!(plain_absolute(Path::new("/data/x")));
             assert!(!plain_absolute(Path::new("/data/../x")));
         }
-        if cfg!(windows) {
+        #[cfg(windows)]
+        {
             assert!(plain_absolute(Path::new(r"C:\data\x")));
             assert!(plain_absolute(Path::new("C:/data/x")));
             assert!(plain_absolute(Path::new(r"\\?\C:\data\x")));
@@ -444,7 +445,8 @@ mod tests {
         assert!(same_place(&canonical, &canonical));
         assert!(!same_place(&canonical, &canonical.join("x")));
         assert!(!same_place(&canonical.join("x"), &canonical.join("y")));
-        if cfg!(windows) {
+        #[cfg(windows)]
+        {
             assert!(same_place(Path::new(r"\\?\C:\a\b"), Path::new(r"C:\a\b")));
             assert!(same_place(Path::new(r"\\?\c:\a"), Path::new(r"C:\a")));
             assert!(!same_place(Path::new(r"\\?\D:\a"), Path::new(r"C:\a")));

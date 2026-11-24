@@ -1305,6 +1305,15 @@ pub(crate) fn canonical_dir(
 /// # Errors
 /// `KRISHIV_UNSUPPORTED_FEATURE` for a relative or non-UTF-8 path.
 pub(crate) fn lexical_dir(path: &Path) -> Result<LocatedPath, KrishivError> {
+    // On Windows `\x` (or `/x`) has a root but no drive: it is on the current drive, as Windows
+    // opens it, and checked there.
+    let on_drive;
+    let path = if cfg!(windows) && path.has_root() && !path.is_absolute() {
+        on_drive = std::path::absolute(path).map_err(|_| unplaceable("relative paths"))?;
+        on_drive.as_path()
+    } else {
+        path
+    };
     let text = path
         .to_str()
         .ok_or_else(|| unplaceable("non-UTF-8 paths"))?;

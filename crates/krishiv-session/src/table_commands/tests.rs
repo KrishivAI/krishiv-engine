@@ -69,7 +69,8 @@ fn windows_drive_locations_are_local_and_unc_ones_are_refused() {
             "{written}"
         );
     }
-    if cfg!(windows) {
+    #[cfg(windows)]
+    {
         let wh = std::path::Path::new(r"D:\w\warehouse");
         assert_eq!(q(r"C:\x\", wh), "file:/C:/x");
         assert_eq!(q(r"\\?\C:\x", wh), "file:/C:/x");

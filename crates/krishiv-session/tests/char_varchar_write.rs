@@ -3,7 +3,9 @@
 //! trimmed, anything else longer fails with `EXCEED_LIMIT_LENGTH`
 //! (Spark 4.2.0 `CharVarcharUtils.stringLengthCheck`); the legacy flag turns the check off.
 #![expect(clippy::unwrap_used, reason = "test code")]
+mod file_url;
 mod literal_path;
+use file_url::file_url;
 use literal_path::sql_path;
 
 use arrow_array::cast::AsArray;
@@ -256,7 +258,7 @@ fn view_properties_serde_properties_and_partition_locations() {
         .unwrap_err();
         assert_eq!(e.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE");
     }
-    assert_eq!(location(), format!("file:{}", loc2.display()));
+    assert_eq!(location(), file_url(&loc2));
     let e = run(
         &s,
         &format!(

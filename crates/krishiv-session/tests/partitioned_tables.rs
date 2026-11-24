@@ -5,7 +5,9 @@
 //! `describe`, `describe-part-after-analyze`, `change-column`, `explain`, `identifier-clause` and
 //! `show-create-table` (rows as `SQLQueryTestSuite` prints them, cells joined by a tab and trimmed).
 #![cfg(test)]
+mod file_url;
 mod literal_path;
+use file_url::file_url;
 use literal_path::sql_path;
 
 use arrow_array::Array;
@@ -784,8 +786,8 @@ fn add_partition_locations() {
     run(
         &s,
         &format!(
-            "ALTER TABLE t ADD PARTITION (p = 'y') LOCATION 'file:{}'",
-            other.display()
+            "ALTER TABLE t ADD PARTITION (p = 'y') LOCATION '{}'",
+            file_url(&other)
         ),
     );
     assert!(other.is_dir());

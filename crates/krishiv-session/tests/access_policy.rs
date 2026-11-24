@@ -12,7 +12,9 @@
 //! * a filtered reader cannot write; denials do not reveal existence;
 //! * `PathPrefixPolicy` keeps reads and writes under its roots.
 #![cfg(test)]
+mod file_url;
 mod literal_path;
+use file_url::file_url;
 use literal_path::sql_path;
 
 use std::collections::BTreeSet;
@@ -476,7 +478,7 @@ fn names_are_checked_as_written_and_folded() {
     // Every change asks about the read first (a filtered reader may not
     // change the securable).
     let cwd = std::env::current_dir().unwrap();
-    let loc = format!("path 'file:{}/loc'", cwd.display());
+    let loc = format!("path '{}/loc'", file_url(&cwd));
     assert_eq!(
         asked("CREATE TABLE x.y USING parquet LOCATION 'loc' AS SELECT 1"),
         [

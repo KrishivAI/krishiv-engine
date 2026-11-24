@@ -3,7 +3,9 @@
 //! the reviewer's probes P1-P14, each asserting the secure outcome, and the further shapes the
 //! review lists for B1 (column reads derived from the resolved plan).
 #![cfg(test)]
+mod file_url;
 mod literal_path;
+use file_url::file_url;
 use literal_path::sql_path;
 
 use std::sync::Arc;
@@ -108,8 +110,8 @@ fn wh_grant(w: &World, root: &Session, who: &str) {
     ok(
         root,
         &format!(
-            "GRANT ALL PRIVILEGES ON PATH 'file:{}' TO user:{who}",
-            wh.display()
+            "GRANT ALL PRIVILEGES ON PATH '{}' TO user:{who}",
+            file_url(&wh)
         ),
     );
 }
@@ -281,8 +283,8 @@ fn p10_symlink_under_granted_path() {
     ok(
         &root,
         &format!(
-            "GRANT SELECT ON PATH 'file:{}' TO user:ana",
-            data.join("sales").display()
+            "GRANT SELECT ON PATH '{}' TO user:ana",
+            file_url(&data.join("sales"))
         ),
     );
     let r = show(
@@ -746,6 +748,10 @@ fn r4_dataframe_ops() {
 }
 
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "case twins need a case-sensitive file system: on NTFS `CT` and `ct` are one directory"
+)]
 fn r5_case_twins_with_default_reader() {
     let w = World::new();
     let (root, ana) = (w.admin(), w.user("ana"));
@@ -821,6 +827,10 @@ fn r6_replace_and_owner_edges() {
 }
 
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "case twins need a case-sensitive file system: on NTFS `CT` and `ct` are one directory"
+)]
 fn r5b_grant_on_upper_twin_read_lower() {
     let w = World::new();
     let (root, ana) = (w.admin(), w.user("ana"));
@@ -946,6 +956,10 @@ fn q1_table_named_like_a_namespace_dir() {
 }
 
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "case twins need a case-sensitive file system: on NTFS `CT` and `ct` are one directory"
+)]
 fn q2_twins_after_grant_across_namespaces_and_views() {
     let w = World::new();
     let (root, ana) = (w.admin(), w.user("ana"));

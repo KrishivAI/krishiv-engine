@@ -453,7 +453,8 @@ fn local_files() {
     let store = StoreId::new("file");
     sched.register_store(
         store.clone(),
-        Arc::new(LocalFileSystem::new()) as Arc<dyn ObjectStore>,
+        Arc::new(krishiv_io::LocalDirsAsMissing::new(LocalFileSystem::new()))
+            as Arc<dyn ObjectStore>,
     );
     let r = FileReads::new(
         sched.context(),
@@ -541,7 +542,8 @@ fn agrees_with_spark_on_the_file_read_probe() {
     let store = StoreId::new("file");
     sched.register_store(
         store.clone(),
-        Arc::new(LocalFileSystem::new()) as Arc<dyn ObjectStore>,
+        Arc::new(krishiv_io::LocalDirsAsMissing::new(LocalFileSystem::new()))
+            as Arc<dyn ObjectStore>,
     );
     let mut checked = 0;
     for case in fixture["cases"].as_array().unwrap() {

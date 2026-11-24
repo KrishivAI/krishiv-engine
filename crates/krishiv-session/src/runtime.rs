@@ -405,13 +405,19 @@ impl EngineRuntime {
                 Arc::new(local) as Arc<dyn ObjectStore>,
             );
         }
+        // Off Unix the roots are still read, so a bad one refuses startup as on Unix; the access
+        // policy checks every path against them, but a listing is not confined to them (the
+        // confined store walks by device and inode).
         #[cfg(not(unix))]
-        io.register_store(
-            StoreId::new(crate::session::LOCAL_STORE),
-            Arc::new(krishiv_io::LocalDirsAsMissing::new(
-                object_store::local::LocalFileSystem::new(),
-            )) as Arc<dyn ObjectStore>,
-        );
+        {
+            crate::access::allowed_roots(&config)?;
+            io.register_store(
+                StoreId::new(crate::session::LOCAL_STORE),
+                Arc::new(krishiv_io::LocalDirsAsMissing::new(
+                    object_store::local::LocalFileSystem::new(),
+                )) as Arc<dyn ObjectStore>,
+            );
+        }
         let metrics = Arc::new(MetricsRegistry::new());
         let capacity = config
             .get(&SYSTEM_QUERIES_CAPACITY)

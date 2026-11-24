@@ -6,6 +6,8 @@
 #![cfg(test)]
 mod literal_path;
 use literal_path::sql_path;
+mod file_url;
+use file_url::file_url;
 
 mod analyze_support;
 
@@ -897,8 +899,23 @@ fn warehouses_free(s: &str) -> String {
     let (mut out, mut rest) = (String::new(), s);
     while let Some(at) = rest.find("krishiv-warehouse-") {
         let start = rest[..at].rfind('/').map_or(0, |i| {
-            // The start of the absolute path: after `file:` or a quote.
-            rest[..i].rfind(['\'', '"', ':']).map_or(0, |q| q + 1)
+            // The start of the absolute path: after `file:` or a quote; a Windows drive's `:`
+            // (`/D:/..`, `'D:/..`) is part of the path.
+            let mut end = i;
+            loop {
+                let Some(q) = rest[..end].rfind(['\'', '"', ':']) else {
+                    break 0;
+                };
+                let b = rest.as_bytes();
+                let drive = b[q] == b':'
+                    && q >= 1
+                    && b[q - 1].is_ascii_alphabetic()
+                    && (q == 1 || matches!(b[q - 2], b'/' | b'\'' | b'"'));
+                if !drive {
+                    break q + 1;
+                }
+                end = q - 1;
+            }
         });
         let end = rest[at..].find('/').map_or(rest.len(), |e| at + e);
         out.push_str(&rest[..start]);
@@ -954,6 +971,10 @@ fn warehouse_free(s: &str) -> String {
 /// (`monitor.rs`) calls the policy's `check` directly, bypassing `authorize()`. It filters rows, it is
 /// not a requirement, so analyze does not list it and this test does not see it.
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "the corpus and its snapshot use Unix absolute paths (`/tmp/o`), which have no drive on Windows"
+)]
 fn securables_equal_what_a_run_authorizes() {
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| tracing::subscriber::set_global_default(Recorder).unwrap());
@@ -961,7 +982,7 @@ fn securables_equal_what_a_run_authorizes() {
     let mut row_level = BTreeSet::new();
     let mut differences = String::new();
     let dir = tempfile::tempdir().unwrap();
-    let dir = dir.path().to_str().unwrap().to_owned();
+    let dir = sql_path(dir.path());
     let extra = DIRECTORY_CASES
         .iter()
         .map(|(label, setup, sql)| ((*label).to_owned(), *setup, sql.replace("{dir}", &dir)));
@@ -1475,8 +1496,7 @@ fn writes_and_drops_list_the_directory_a_run_asks() {
             _ => None,
         })
         .unwrap();
-    let dir = dir.strip_prefix("file:").unwrap();
-    std::fs::remove_dir_all(dir).unwrap();
+    std::fs::remove_dir_all(krishiv_exec::files::native_path(&dir)).unwrap();
     assert!(dirs("DROP TABLE u").is_empty());
     assert!(dirs("TRUNCATE TABLE u").is_empty());
     assert_eq!(dirs("INSERT INTO u SELECT * FROM s").len(), 2);
@@ -1584,27 +1604,22 @@ fn ddl_lists_the_directories_a_run_asks() {
             _ => None,
         })
         .unwrap();
-    let warehouse = std::path::PathBuf::from(
-        t_dir
-            .strip_prefix("file:")
-            .unwrap()
-            .strip_suffix("/t")
-            .unwrap(),
-    );
+    let warehouse = krishiv_exec::files::native_path(t_dir.strip_suffix("/t").unwrap());
     std::fs::create_dir(warehouse.join("c_taken")).unwrap();
     assert_eq!(dirs("CREATE TABLE c_taken (a INT)"), none);
     assert_eq!(dirs("CREATE TABLE c_taken AS SELECT 1 AS a"), none);
     // With a location: `CREATE` on it after its `MODIFY` target, as the run asks it.
     let external = tempfile::tempdir().unwrap();
-    let ext = external.path().join("e");
-    let ext = ext.display();
+    let ext_dir = external.path().join("e");
+    // In SQL text with `/` separators; as the engine prints it, a `file:` URL.
+    let (ext, ext_url) = (sql_path(&ext_dir), file_url(&ext_dir));
     assert_eq!(
         dirs(&format!(
             "CREATE TABLE c_e (a INT) USING parquet LOCATION '{ext}'"
         )),
         [
-            format!("MODIFY path 'file:{ext}'"),
-            format!("CREATE path 'file:{ext}'")
+            format!("MODIFY path '{ext_url}'"),
+            format!("CREATE path '{ext_url}'")
         ]
     );
     assert_eq!(
@@ -1612,8 +1627,8 @@ fn ddl_lists_the_directories_a_run_asks() {
             "CREATE TABLE c_e (a INT) USING parquet OPTIONS (path '{ext}/../o')"
         )),
         [format!(
-            "CREATE path 'file:{}'",
-            external.path().join("o").display()
+            "CREATE path '{}'",
+            file_url(&external.path().join("o"))
         )]
     );
     assert_eq!(
@@ -1621,8 +1636,8 @@ fn ddl_lists_the_directories_a_run_asks() {
             "CREATE TABLE c_e USING parquet LOCATION '{ext}' AS SELECT * FROM t"
         )),
         [
-            format!("MODIFY path 'file:{ext}'"),
-            format!("CREATE path 'file:{ext}'")
+            format!("MODIFY path '{ext_url}'"),
+            format!("CREATE path '{ext_url}'")
         ]
     );
     // A relative location is qualified against the working directory, as the run's 42501 names it
@@ -1631,7 +1646,7 @@ fn ddl_lists_the_directories_a_run_asks() {
     let listed = dirs("CREATE TABLE c_rel (a INT) USING parquet LOCATION 'rel-q3/d'");
     assert_eq!(
         listed.last().map(String::as_str),
-        Some(format!("CREATE path 'file:{}/rel-q3/d'", cwd.display()).as_str()),
+        Some(format!("CREATE path '{}/rel-q3/d'", file_url(&cwd)).as_str()),
         "{listed:?}"
     );
     assert_eq!(
@@ -1688,7 +1703,7 @@ fn ddl_lists_the_directories_a_run_asks() {
         dirs(&format!(
             "ALTER TABLE p PARTITION (k = 1) SET LOCATION '{ext}'"
         )),
-        [format!("MODIFY path 'file:{ext}'")]
+        [format!("MODIFY path '{ext_url}'")]
     );
 }
 
@@ -1708,7 +1723,7 @@ fn analyze_makes_no_warehouse_directory() {
         })
         .collect();
     assert_eq!(listed.len(), 1, "{listed:?}");
-    let dir = std::path::PathBuf::from(listed[0].strip_prefix("file:").unwrap());
+    let dir = krishiv_exec::files::native_path(&listed[0]);
     let warehouse = dir.parent().unwrap();
     assert!(
         warehouse
@@ -1864,7 +1879,7 @@ fn a_denied_target_reveals_nothing() {
     .map(str::to_owned);
     // Review N2: a location the caller supplies is not echoed under a denied namespace `CREATE`.
     let elsewhere = external.path().join("distinctive-elsewhere-q8");
-    let elsewhere = elsewhere.display();
+    let elsewhere = sql_path(&elsewhere);
     let statements: Vec<String> = statements
         .into_iter()
         .chain([

@@ -339,7 +339,14 @@ fn dir_identity(path: &Path) -> Option<(u64, u64)> {
         let meta = std::fs::metadata(path).ok()?;
         meta.is_dir().then(|| (meta.dev(), meta.ino()))
     }
-    #[cfg(not(unix))]
+    // As `OwnedDirectory`: the creation time stands in for Windows' file id.
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        let meta = std::fs::metadata(path).ok()?;
+        meta.is_dir().then(|| (meta.creation_time(), 0))
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = path;
         None

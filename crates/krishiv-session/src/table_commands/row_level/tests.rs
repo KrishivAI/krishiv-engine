@@ -1094,7 +1094,7 @@ mod merge {
         let session = Session::new().unwrap();
         block_on(session.sql(&format!(
             "CREATE TABLE p (id BIGINT, s STRING) USING parquet LOCATION '{}'",
-            dir.path().display()
+            dir.path().display().to_string().replace('\\', "/")
         )))
         .unwrap();
         for (target, q) in [

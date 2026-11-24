@@ -45,6 +45,19 @@ pub fn file_url(path: &std::path::Path) -> String {
     }
 }
 
+/// A local path as Spark prints it in a location (`file:/a/b`; `file:/C:/a/b` for `C:\a\b` on
+/// Windows, as Hadoop qualifies a drive path, never `file:C:\a\b`). A relative path keeps its
+/// text (`file:rel`), as before.
+#[must_use]
+pub fn file_display(path: &std::path::Path) -> String {
+    let text = path.to_string_lossy();
+    if cfg!(windows) {
+        format!("file:{}", windows_path::normalize(&text))
+    } else {
+        format!("file:{text}")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -56,7 +69,10 @@ mod tests {
         assert_eq!(native_path("/a/b"), std::path::PathBuf::from("/a/b"));
         assert_eq!(native_path("file:///a").as_os_str(), "/a");
         assert_eq!(native_path("file:/").as_os_str(), "/");
+        assert_eq!(native_path("file:rel").as_os_str(), "rel");
         assert_eq!(file_url(std::path::Path::new("/a/b")), "file:///a/b");
+        assert_eq!(file_display(std::path::Path::new("/a/b")), "file:/a/b");
+        assert_eq!(file_display(std::path::Path::new("rel")), "file:rel");
     }
 
     #[cfg(windows)]

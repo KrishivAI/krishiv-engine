@@ -328,7 +328,7 @@ impl Catalog<'_> {
                 } else {
                     wh.join(format!("{name}.db"))
                 };
-                format!("file:{}", dir.display())
+                krishiv_exec::files::file_display(&dir)
             }),
         }
     }

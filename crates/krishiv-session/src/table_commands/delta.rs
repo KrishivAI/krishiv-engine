@@ -475,7 +475,7 @@ impl Session {
             }
         };
         let root = match &checked {
-            Some(dir) => format!("file:{}", dir.path.display()),
+            Some(dir) => krishiv_exec::files::file_display(&dir.path),
             None => qualified.clone(),
         };
         let source = super::delta_source(&root);

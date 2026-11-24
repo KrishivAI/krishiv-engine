@@ -3,7 +3,9 @@
 //! own (a `path` option is the location), creating the table makes no directory, and a view lists
 //! `TBLPROPERTIES` before `WITH SCHEMA`.
 #![cfg(test)]
+mod file_url;
 mod literal_path;
+use file_url::file_url;
 use literal_path::sql_path;
 
 use arrow_array::cast::AsArray;
@@ -46,7 +48,7 @@ fn a_path_option_and_a_location_are_the_same_external_table() {
         assert_eq!(rows, 0);
     }
     assert!(!place.exists(), "a read does not make it either");
-    let want = format!("LOCATION 'file:{}'\n", place.display());
+    let want = format!("LOCATION '{}'\n", file_url(&place));
     for t in ["t1", "t2"] {
         let text = show_create(&s, t);
         assert!(text.ends_with(&want), "{text}");

@@ -58,6 +58,23 @@ pub(crate) fn is_drive(text: &str) -> bool {
         && (b.len() == 2 || matches!(b[2], b'/' | b'\\'))
 }
 
+/// The object-store segments of a root-relative local path on Windows (`/data/x`, which names
+/// `\data\x` on the current drive, as `java.io.File` reads it): `parts` with the drive of `cwd`
+/// (the working directory in the locator's form, `/C:/..`) first, when `parts` has no drive of its
+/// own. `object_store`'s `LocalFileSystem` cannot open a `file:///data/x` URL on Windows. `None`
+/// when nothing changes.
+pub(crate) fn on_drive_of<'a>(parts: &[&'a str], cwd: &'a str) -> Option<Vec<&'a str>> {
+    if parts.first().is_some_and(|p| is_drive(p)) {
+        return None;
+    }
+    let drive = drive_led(cwd)?.get(..2)?;
+    Some(
+        std::iter::once(drive)
+            .chain(parts.iter().copied())
+            .collect(),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -108,5 +125,17 @@ mod tests {
         assert!(!is_drive("1:/x"));
         assert!(!is_drive("C"));
         assert!(is_drive(r"C:\x"));
+    }
+
+    #[test]
+    fn a_root_relative_path_takes_the_working_directorys_drive() {
+        assert_eq!(
+            on_drive_of(&["data", "x"], "/D:/a/b"),
+            Some(vec!["D:", "data", "x"])
+        );
+        assert_eq!(on_drive_of(&[], "/c:"), Some(vec!["c:"]));
+        assert_eq!(on_drive_of(&["C:", "x"], "/D:/a"), None);
+        // A working directory without a drive (never on Windows) changes nothing.
+        assert_eq!(on_drive_of(&["data"], "/home/a"), None);
     }
 }
