@@ -250,9 +250,11 @@ impl BeneathStore {
     }
 
     /// The anchor's own object path: its names as they are, which `anchor`
-    /// checked each path segment holds.
-    fn base_path(&self) -> Path {
-        Path::parse(self.inner.base.join("/")).unwrap_or_default()
+    /// checked each path segment holds. A name that does not parse fails
+    /// closed (`InvalidPath`), never as the store's root.
+    fn base_path(&self) -> StoreResult<Path> {
+        Path::parse(self.inner.base.join("/"))
+            .map_err(|e| object_store::Error::InvalidPath { source: e })
     }
 
     /// The object-path segments of `location` below the anchor.
@@ -778,7 +780,10 @@ impl ObjectStore for BeneathStore {
 
     fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, StoreResult<ObjectMeta>> {
         let store = self.clone();
-        let prefix = prefix.cloned().unwrap_or_else(|| store.base_path());
+        let prefix = match prefix.cloned().map_or_else(|| store.base_path(), Ok) {
+            Ok(prefix) => prefix,
+            Err(e) => return futures::stream::once(std::future::ready(Err(e))).boxed(),
+        };
         futures::stream::once(async move { blocking(move || store.list_all(&prefix)).await })
             .flat_map(|r| match r {
                 Ok(v) => futures::stream::iter(v.into_iter().map(Ok)).boxed(),
@@ -789,7 +794,7 @@ impl ObjectStore for BeneathStore {
 
     async fn list_with_delimiter(&self, prefix: Option<&Path>) -> StoreResult<ListResult> {
         let store = self.clone();
-        let prefix = prefix.cloned().unwrap_or_else(|| store.base_path());
+        let prefix = prefix.cloned().map_or_else(|| store.base_path(), Ok)?;
         blocking(move || store.list_one_level(&prefix)).await
     }
 

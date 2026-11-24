@@ -20,6 +20,8 @@ use crate::{
     WrittenFileInfo,
 };
 
+mod escaped;
+
 const STORE: &str = "memory://commit";
 
 struct Env {

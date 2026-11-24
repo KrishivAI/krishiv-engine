@@ -22,7 +22,7 @@ pub fn local_object_path<S: AsRef<str>>(parts: &[S]) -> Result<Path> {
         .map(AsRef::as_ref)
         .collect::<Vec<_>>()
         .join("/");
-    Path::parse(&joined).map_err(|e| unsupported(format!("local paths with this file name ({e})")))
+    Path::parse(&joined).map_err(|e| unsupported(format!("object paths with this file name ({e})")))
 }
 
 #[cfg(test)]
