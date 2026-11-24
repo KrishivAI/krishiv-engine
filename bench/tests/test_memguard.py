@@ -116,7 +116,9 @@ def test_report_lists_invalid_samples_and_is_silent_without_them():
 # ---- run_suite: invalid runs are retried and reported
 
 
-def _suite(monkeypatch, tmp_path, avail_per_run, retries=2, warmup=0, guard=0.75, raises=(), peak_kb=None):
+def _suite(
+    monkeypatch, tmp_path, avail_per_run, retries=2, warmup=0, guard=0.75, raises=(), peak_kb=None, baseline_kb=None
+):
     """Run a fake one-query suite; ``avail_per_run[i]`` is the MemAvailable (kB) the i-th engine run sees.
 
     ``raises`` lists the engine-call indexes that raise after the dip (a query killed by reclaimed memory).
@@ -150,7 +152,11 @@ def _suite(monkeypatch, tmp_path, avail_per_run, retries=2, warmup=0, guard=0.75
             return [(1,)]
 
         def end_measure(self):
-            return Measure(cpu_seconds=1.0, peak_rss_bytes=None if peak_kb is None else peak_kb * 1024)
+            return Measure(
+                cpu_seconds=1.0,
+                peak_rss_bytes=None if peak_kb is None else peak_kb * 1024,
+                baseline_rss_bytes=None if baseline_kb is None else baseline_kb * 1024,
+            )
 
     def memguard_sampler_tick():
         import time
@@ -202,6 +208,15 @@ def test_run_suite_still_flags_a_dip_larger_than_the_engines_growth(tmp_path, mo
     q = rec["queries"]["q01"]
     assert len(q["times_s"]) == 2
     assert q["invalid_samples"][0]["engine_growth_bytes"] == 100 * 1024
+
+
+def test_run_suite_credits_only_the_growth_over_the_engines_baseline(tmp_path, monkeypatch):
+    # floor 750 kB; the engine held 180 before the run and peaked at 200 (growth 20); the dip to 600 is larger than
+    # the growth but smaller than the whole peak, so the run is a host reclaim, not the engine's own memory
+    rec, _ = _suite(monkeypatch, tmp_path, [600, 900, 900], peak_kb=200, baseline_kb=180)
+    q = rec["queries"]["q01"]
+    assert len(q["times_s"]) == 2
+    assert q["invalid_samples"][0]["engine_growth_bytes"] == 20 * 1024
 
 
 def test_run_suite_fails_the_query_when_every_attempt_dips(tmp_path, monkeypatch):

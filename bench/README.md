@@ -63,7 +63,7 @@ published on Docker Hub (verified 2026-10-16 via `docker manifest inspect`); the
 Interface (`base.Engine`): `setup(dataset)` registers Parquet tables as views (no pre-loading, for parity), `run(query)`
 returns all rows, `teardown()`; optional `begin_measure()/end_measure()` bracket each timed run for peak RSS / CPU / spill.
 - `duckdb` (in-process, `memory_limit` 12GB to match Spark's container cap): peak RSS = `/proc/self` VmHWM reset with `clear_refs` before each run
-  (whole harness process; its pre-run RSS is recorded as `baseline_rss_bytes`); spill = null.
+  (whole harness process; its pre-run RSS is recorded as `baseline_rss_bytes`, as every adapter does); spill = null.
 - `spark-connect`: same VmHWM/`clear_refs` method on the server JVM (`pgrep -x java` + `docker exec`, failures raise); CPU-s from `/proc/<pid>/stat`;
   spill = null (Spark spill is available via the REST API :14040 but not collected yet). Host data path is rewritten to `/data`.
 - `krishiv-connect`: starts `krishiv server --port 0 --connect-port 0` on loopback (binary: `--runner`, `$KRISHIV_BENCH_SERVER`, else `<target>/dist/krishiv`), reads the bound `sc://` address from its stdout and drives it with the pinned pyspark client like `spark-connect` (Arrow results, no path rewrite). Peak RSS, CPU-s and I/O are those of the server process tree, so against `krishiv` it shows the Connect round-trip cost (P3-PR-53a). Needs a `krishiv` build with the `server` feature. The server starts from the runner's settings (`krishiv.memory.limit=12g`, session time zone UTC) unless `--krishiv-conf` sets them.
@@ -621,8 +621,10 @@ timed run; `ab` and the `theirs` method of `reproduce` do not.
 minutes and fails the query). A sampler tracks the lowest `MemAvailable` during the run; if it dips below the
 threshold by more than the engine's own resident-set growth during the run (peak minus baseline RSS, or the whole
 peak when the adapter has no baseline), a host balloon took the memory: the run is discarded, recorded under the
-query's `invalid_samples` with `"reason": "memory reclaimed"` and its `engine_growth_bytes`, and retried up to `--mem-retries` times (default 2). If every attempt dips, the
-query fails. `report` lists the invalid runs in an "Invalid samples" section. The h2o suites, `ab`, `abba` and
+query's `invalid_samples` with `"reason": "memory reclaimed"` and its `engine_growth_bytes`, and retried up to
+`--mem-retries` times (default 2). If every attempt dips, the query fails. Every adapter records a baseline: the
+process tree's summed RSS at the start of the run for Krishiv, Polars, DataFusion and Spark local mode, the process
+RSS for DuckDB, ClickHouse and Spark Connect, so memory an engine already held before the run is not credited. `report` lists the invalid runs in an "Invalid samples" section. The h2o suites, `ab`, `abba` and
 `reproduce` do not use the guard yet.
 
 `krishiv-bench report --suite tpch --ladder [result.json ...]` takes results at two or more scale factors (newest per
