@@ -553,7 +553,11 @@ impl<'a> Estimator<'a> {
                 // what it kept over the scan, so the reference reads as the
                 // scan. Reading it as the definition would count the
                 // disjunction's selectivity twice, and a second optimization
-                // would order the joins above differently.
+                // would order the joins above differently. The reference's
+                // own estimate (`EXPLAIN COST`) is then the scan's, above
+                // the rows it buffers. A definition of another shape (none
+                // is built today: the rule's filter, under CSE's
+                // projections) is read as it is.
                 let def = if r.name.starts_with(SHARED_SCAN_PREFIX) {
                     shared_scan_leaf(&def, &r.source).unwrap_or(def)
                 } else {
