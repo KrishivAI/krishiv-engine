@@ -436,6 +436,9 @@ pub(crate) enum Counter {
     GraceLoadsRefused,
     /// The build bytes those loads had read when they gave up.
     GraceRefusedBytes,
+    /// Probe rows the row stage kept of sparse batches, held and probed as
+    /// full batches (`probe/held.rs`, K1).
+    ProbeHeldRows,
 }
 
 /// The build sink's counters, by name.
@@ -479,7 +482,10 @@ const PROBE_DETAIL_COUNTERS: [(Counter, &str); 3] = [
 
 /// Counters updated by every driver (relaxed: read once the query ended).
 #[derive(Debug)]
-pub(crate) struct Counters([std::sync::atomic::AtomicU64; 40]);
+pub(crate) struct Counters([std::sync::atomic::AtomicU64; COUNTERS]);
+
+/// One counter per [`Counter`]: the last one's index plus one.
+const COUNTERS: usize = Counter::ProbeHeldRows as usize + 1;
 
 impl Default for Counters {
     fn default() -> Self {
@@ -563,6 +569,10 @@ impl Counters {
         }
         if self.get(Counter::DirectInnerRows) > 0 {
             out.extend(self.report(&[(Counter::DirectInnerRows, "direct_inner_rows")]));
+        }
+        // Only a probe that held sparse batches' rows (`probe/held.rs`) reports it.
+        if self.get(Counter::ProbeHeldRows) > 0 {
+            out.extend(self.report(&[(Counter::ProbeHeldRows, "probe_held_rows")]));
         }
         // Only a grace join that had a partition load refused reports it.
         if self.get(Counter::GraceLoadsRefused) > 0 {

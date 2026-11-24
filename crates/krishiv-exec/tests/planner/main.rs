@@ -279,6 +279,11 @@ thread_local! {
     /// as `KRISHIV_AGG_ROW_LAYOUT=0` does for every test
     /// (`KRISHIV_JOIN_ROW_LAYOUT=0` turns the join's row layout off).
     static AGG_ROW_LAYOUT: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+    /// `krishiv.exec.coalesceInput` of a run (on by default): off, a hash
+    /// probe holds no sparse batch's rows either (`join/probe/held.rs`).
+    static COALESCE_INPUT: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+    /// `krishiv.exec.batchSize` of a run (`None`: the default).
+    static BATCH_SIZE: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
 }
 
 /// Runs `plan` to completion as a query of `root`; also returns the query
@@ -305,6 +310,8 @@ fn run_on(
         ExecConfig {
             agg_row_layout,
             join_row_layout: !std::env::var("KRISHIV_JOIN_ROW_LAYOUT").is_ok_and(|v| v == "0"),
+            coalesce_input: COALESCE_INPUT.get(),
+            batch_size: BATCH_SIZE.get().unwrap_or(krishiv_exec::DEFAULT_BATCH_SIZE),
             ..ExecConfig::default()
         },
         root.child("q", None),
