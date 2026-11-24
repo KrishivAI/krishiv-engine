@@ -392,3 +392,21 @@ fn a_query_reading_its_target_writes_what_it_read() {
     let (rows, _) = read_back(&s, d, &serde_json::json!({"format": "parquet"})).unwrap();
     assert_eq!(rows, ["10", "11", "12"]);
 }
+
+/// IOD-22: a source that writes no files is refused when the command runs, as `_LEGACY_ERROR_TEMP_2233`.
+#[test]
+fn a_source_that_writes_no_files_is_refused() {
+    let tmp = tempfile::tempdir().unwrap();
+    let d = tmp.path().join("out");
+    let s = Session::new().unwrap();
+    let stmt = format!(
+        "INSERT OVERWRITE DIRECTORY '{}' USING noop SELECT 1 AS a",
+        d.to_str().unwrap()
+    );
+    let e = block_on(async { s.sql(&stmt).await?.collect().await }).unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        krishiv_common::error::ErrorClass::LegacyErrorTemp2233,
+        "{e}"
+    );
+}
