@@ -112,7 +112,7 @@ impl Resolver<'_> {
             ExprNode::TypedLiteral { kind, value }
                 if *kind != TypedLiteralKind::Time && is_special(value) =>
             {
-                let special = value.trim().to_ascii_lowercase();
+                let (special, zone) = special_value(value).unwrap_or(("today", None));
                 if special == "epoch" {
                     let text = match special_kind(*kind, self.ctx.conf.timestamp_ntz) {
                         SpecialKind::Date => "1970-01-01",
@@ -129,9 +129,12 @@ impl Resolver<'_> {
                         ..keep(ty)
                     });
                 }
-                let call =
-                    special_clock(&special, special_kind(*kind, self.ctx.conf.timestamp_ntz))
-                        .with_origin(e.origin);
+                let call = special_clock(
+                    special,
+                    zone,
+                    special_kind(*kind, self.ctx.conf.timestamp_ntz),
+                )
+                .with_origin(e.origin);
                 return self.expr(&Arc::new(call), cx);
             }
             // `TIMESTAMP '11:00'`: that time today, in the session zone (Spark reads a time of day alone

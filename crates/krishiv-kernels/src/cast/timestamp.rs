@@ -68,6 +68,29 @@ pub fn timestamp_text(s: &str) -> TimestampText {
     }
 }
 
+/// Spark's special date/timestamp value in `s` (`DateTimeUtils.extractSpecialValue`):
+/// `epoch`, `now`, `today`, `yesterday` or `tomorrow` (any case, trimmed),
+/// optionally followed by a time-zone id (`tomorrow EST`) whose "today" it
+/// is. `None` for anything else, for a zone the database does not know,
+/// and for `now` with a zone.
+#[must_use]
+pub fn special_value(s: &str) -> Option<(&'static str, Option<&str>)> {
+    let t = s.trim();
+    let (word, zone) = match t.split_once(' ') {
+        Some((w, z)) => (w, Some(z.trim())),
+        None => (t, None),
+    };
+    let word = ["epoch", "now", "today", "yesterday", "tomorrow"]
+        .into_iter()
+        .find(|k| word.eq_ignore_ascii_case(k))?;
+    if let Some(z) = zone
+        && (word == "now" || crate::datetime::resolve_zone(z).is_err())
+    {
+        return None;
+    }
+    Some((word, zone))
+}
+
 /// Whether `s` names an explicit zone (an offset or region id after the
 /// seconds), as the cast kernel's parse sees it. Session-independent
 /// timestamp strings evaluate the same in every session zone.
@@ -338,6 +361,17 @@ mod tests {
         for special in ["now", "today", "epoch", "yesterday", "tomorrow", "t10:00"] {
             assert_eq!(parse(special.as_bytes()), Parsed::Malformed, "{special}");
         }
+    }
+
+    #[test]
+    fn special_values_with_a_zone() {
+        use super::special_value;
+        assert_eq!(special_value(" Tomorrow "), Some(("tomorrow", None)));
+        assert_eq!(special_value("today EST"), Some(("today", Some("EST"))));
+        assert_eq!(special_value("epoch Zulu"), Some(("epoch", Some("Zulu"))));
+        assert_eq!(special_value("now EST"), None);
+        assert_eq!(special_value("today Not/AZone"), None);
+        assert_eq!(special_value("2020-01-01"), None);
     }
 
     #[test]
