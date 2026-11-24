@@ -284,6 +284,9 @@ thread_local! {
     static COALESCE_INPUT: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
     /// `krishiv.exec.batchSize` of a run (`None`: the default).
     static BATCH_SIZE: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+    /// `ExecConfig::join_direct_index` for [`run_in`] on this thread (J1/P3;
+    /// `krishiv.exec.join.directIndex`).
+    static DIRECT_INDEX: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
 }
 
 /// Runs `plan` to completion as a query of `root`; also returns the query
@@ -311,6 +314,7 @@ fn run_on(
             agg_row_layout,
             join_row_layout: !std::env::var("KRISHIV_JOIN_ROW_LAYOUT").is_ok_and(|v| v == "0"),
             coalesce_input: COALESCE_INPUT.get(),
+            join_direct_index: DIRECT_INDEX.get(),
             batch_size: BATCH_SIZE.get().unwrap_or(krishiv_exec::DEFAULT_BATCH_SIZE),
             ..ExecConfig::default()
         },
