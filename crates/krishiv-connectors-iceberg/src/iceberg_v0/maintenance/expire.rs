@@ -335,9 +335,12 @@ impl Defaults {
     }
 }
 
-/// The requirements and updates of `plan` against `meta`: `assert-table-uuid`, and with a spec or
-/// schema removal also the default spec, the current schema and every branch but `main`
-/// (Java's `UpdateRequirements`, so a concurrent append to `main` never conflicts).
+/// The requirements and updates of `plan` against `meta`: `assert-table-uuid`; with a snapshot
+/// removal every ref as planned, `main` included (stricter than Java's `UpdateRequirements`,
+/// which asserts none: a concurrent append to `main`, or any ref moved, conflicts and the expire
+/// plans again on the new base, so a busy table can use up its retries, crate CLAUDE.md known
+/// limits); with only a spec or schema removal the default spec, the current schema and every
+/// branch but `main` (Java's, so an append to `main` never conflicts there).
 pub(crate) fn request(
     meta: &TableMetadata,
     plan: &Plan,
@@ -497,11 +500,13 @@ async fn reachable(
     Ok(())
 }
 
-/// Deletes the files only the snapshots `start` has and `after` lacks reached (the Spark
+/// Deletes the files only the snapshots of the `bases` that `after` lacks reached (the Spark
 /// action's `findExpiredSnapshotIds(originalMetadata, updatedMetadata)`): candidates are
-/// everything reachable from those snapshots in `start`, the base the committed request was
-/// planned on (after a conflict, that attempt's reload), minus everything reachable from any
-/// snapshot of `after`, the checked reload after the commit, by path. Up to `concurrency` deletes run at once, each retried three times; one that
+/// everything reachable from those snapshots, in each base that has them, minus everything
+/// reachable from any snapshot of `after`, the checked reload after the commit, by path. The
+/// bases are the table as loaded when the procedure began (design §4.1: an earlier attempt that
+/// landed unnoticed removed snapshots only it had) and the base the committed request was planned
+/// on (snapshots concurrent writers added after the start and this request removed). Up to `concurrency` deletes run at once, each retried three times; one that
 /// fails is logged and not counted, and never fails the expire.
 ///
 /// The path sets are held in memory, uncharged, as Java's `ReachableFileCleanup` holds them
@@ -511,22 +516,25 @@ async fn reachable(
 /// A manifest list or manifest that cannot be read: nothing is deleted then.
 pub(crate) async fn cleanup(
     io: &iceberg::io::FileIO,
-    start: &TableMetadata,
+    bases: &[&TableMetadata],
     after: &TableMetadata,
     max_bytes: u64,
     concurrency: usize,
 ) -> Result<Deleted, KrishivError> {
     use futures::StreamExt as _;
     let kept: HashSet<i64> = after.snapshots().map(|s| s.snapshot_id()).collect();
-    let removed: Vec<i64> = start
-        .snapshots()
-        .map(|s| s.snapshot_id())
-        .filter(|id| !kept.contains(id))
-        .collect();
     let mut cache = HashMap::new();
     let mut candidates: HashMap<String, Kind> = HashMap::new();
-    for id in removed {
-        reachable(io, start, id, max_bytes, &mut cache, &mut candidates).await?;
+    let mut seen: HashSet<i64> = HashSet::new();
+    for base in bases {
+        let removed: Vec<i64> = base
+            .snapshots()
+            .map(|s| s.snapshot_id())
+            .filter(|id| !kept.contains(id) && seen.insert(*id))
+            .collect();
+        for id in removed {
+            reachable(io, base, id, max_bytes, &mut cache, &mut candidates).await?;
+        }
     }
     // Nothing to delete (a spec- or schema-only commit): the kept snapshots are not read, so an
     // unreadable manifest of theirs fails nothing.
@@ -692,7 +700,14 @@ pub(crate) async fn expire(
                             "expire_snapshots committed; its file cleanup was skipped"
                         );
                     })?;
-                let deleted = cleanup(io, &meta, &after, max_metadata_bytes, concurrency).await?;
+                let deleted = cleanup(
+                    io,
+                    &[&start, &meta],
+                    &after,
+                    max_metadata_bytes,
+                    concurrency,
+                )
+                .await?;
                 return Ok(Expired { deleted });
             }
             CommitOutcome::Conflict { .. } => last = "a conflicting commit".to_owned(),
@@ -720,7 +735,8 @@ pub(crate) async fn expire(
                 if !landed(&meta, &now, &planned) {
                     return Err(unknown(reason));
                 }
-                let deleted = cleanup(io, &meta, &now, max_metadata_bytes, concurrency).await?;
+                let deleted =
+                    cleanup(io, &[&start, &meta], &now, max_metadata_bytes, concurrency).await?;
                 return Ok(Expired { deleted });
             }
             CommitOutcome::Failed(e) => return Err(e),

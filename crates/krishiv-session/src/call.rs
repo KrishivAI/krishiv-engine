@@ -196,14 +196,14 @@ impl Session {
 /// (`` db.`t.v1` `` is two parts).
 ///
 /// # Errors
-/// The identifier's parse error.
+/// `KRISHIV_ICEBERG_PROCEDURE_ARGUMENT` for a name that does not parse, as Iceberg's.
 pub(crate) fn table_ident(
     catalog: &str,
     table: &str,
 ) -> Result<krishiv_plan::analyzer::TableIdent, KrishivError> {
     let mut parts: Vec<String> =
         krishiv_sql::parse_multipart_identifier(table, &krishiv_sql::ParserOptions::default())
-            .map_err(|e| e.error)?
+            .map_err(|_| unparsable_table(table))?
             .parts
             .into_iter()
             .map(|p| p.value)
@@ -224,6 +224,15 @@ pub(crate) fn table_ident(
 fn null_element() -> KrishivError {
     KrishivIcebergProcedureArgument {
         message: "An array argument must not contain NULL elements".to_owned(),
+    }
+    .into()
+}
+
+/// A `table` argument that is no multipart identifier: Iceberg 1.12.0's argument error
+/// (`Spark3Util.catalogAndIdentifier`: `Cannot parse identifier for arg table: <name>`).
+pub(crate) fn unparsable_table(table: &str) -> KrishivError {
+    KrishivIcebergProcedureArgument {
+        message: format!("Cannot parse identifier for arg table: {table}"),
     }
     .into()
 }

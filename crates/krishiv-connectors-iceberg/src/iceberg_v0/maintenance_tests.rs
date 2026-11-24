@@ -135,17 +135,38 @@ fn a_snapshot_removal_asserts_every_ref() {
     let env = env();
     let catalog = five_snapshots(&env);
     let meta = catalog.metadata();
+    let newest = chain(&meta)[0];
+    let meta = edit(meta, |b| {
+        b.set_ref(
+            "t1",
+            SnapshotReference::new(
+                newest,
+                SnapshotRetention::Tag {
+                    max_ref_age_ms: None,
+                },
+            ),
+        )
+        .unwrap()
+    });
     let p = plan(&meta, &Defaults::of(&meta, FAR), &args(Some(1))).unwrap();
     assert!(!p.snapshots.is_empty());
     let (requirements, _) = super::maintenance::expire::request(&meta, &p).unwrap();
-    let main = meta.current_snapshot_id();
-    assert!(
-        requirements.iter().any(|r| matches!(
-            r,
-            TableRequirement::RefSnapshotIdMatch { r#ref, snapshot_id }
-                if r#ref == "main" && *snapshot_id == main
-        )),
-        "{requirements:?}"
+    let mut asserted: Vec<(String, Option<i64>)> = requirements
+        .iter()
+        .filter_map(|r| match r {
+            TableRequirement::RefSnapshotIdMatch { r#ref, snapshot_id } => {
+                Some((r#ref.clone(), *snapshot_id))
+            }
+            _ => None,
+        })
+        .collect();
+    asserted.sort();
+    assert_eq!(
+        asserted,
+        [
+            ("main".to_owned(), meta.current_snapshot_id()),
+            ("t1".to_owned(), Some(newest)),
+        ]
     );
 }
 
@@ -158,6 +179,7 @@ fn a_replaced_table_stops_the_expire() {
         other: std::sync::Arc<Catalog>,
         loads: std::sync::atomic::AtomicUsize,
         commits: std::sync::atomic::AtomicUsize,
+        unknown: bool,
     }
     #[async_trait]
     impl CommitTable for Replaced {
@@ -167,7 +189,11 @@ fn a_replaced_table_stops_the_expire() {
         async fn commit(&self, _: Vec<TableRequirement>, _: Vec<TableUpdate>) -> CommitOutcome {
             self.commits
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            CommitOutcome::Conflict { stale: false }
+            if self.unknown {
+                CommitOutcome::Unknown("503 service unavailable".to_owned())
+            } else {
+                CommitOutcome::Conflict { stale: false }
+            }
         }
         async fn load(&self, all: bool) -> Result<TableMetadata, KrishivError> {
             self.load_located(all).await.map(|(m, _)| m)
@@ -183,34 +209,40 @@ fn a_replaced_table_stops_the_expire() {
             }
         }
     }
-    let env = env();
-    let first = five_snapshots(&env);
-    let other_env = super::provider_tests::env();
-    let other = five_snapshots(&other_env);
-    assert_ne!(first.metadata().uuid(), other.metadata().uuid());
-    let table = Replaced {
-        first,
-        other,
-        loads: std::sync::atomic::AtomicUsize::new(0),
-        commits: std::sync::atomic::AtomicUsize::new(0),
-    };
-    let e = env
-        .rt
-        .block_on(expire(
-            &table,
-            &env.reg.file_io(),
-            &clock(),
-            1 << 30,
-            &args(Some(1)),
-        ))
-        .unwrap_err();
-    assert_eq!(
-        e.error_class(),
-        ErrorClass::KrishivCatalogTableUnsupported,
-        "{e}"
-    );
-    assert!(e.to_string().contains("replaced"), "{e}");
-    assert_eq!(table.commits.load(std::sync::atomic::Ordering::SeqCst), 1);
+    // A conflict's reload, and an unknown outcome's probe: the replacement is never planned on
+    // nor taken for the outcome.
+    for unknown in [false, true] {
+        let env = env();
+        let first = five_snapshots(&env);
+        let other_env = super::provider_tests::env();
+        let other = five_snapshots(&other_env);
+        assert_ne!(first.metadata().uuid(), other.metadata().uuid());
+        let table = Replaced {
+            first,
+            other,
+            loads: std::sync::atomic::AtomicUsize::new(0),
+            commits: std::sync::atomic::AtomicUsize::new(0),
+            unknown,
+        };
+        let e = env
+            .rt
+            .block_on(expire(
+                &table,
+                &env.reg.file_io(),
+                &clock(),
+                1 << 30,
+                &args(Some(1)),
+            ))
+            .unwrap_err();
+        let want = if unknown {
+            ErrorClass::KrishivIcebergExpireStateUnknown
+        } else {
+            ErrorClass::KrishivCatalogTableUnsupported
+        };
+        assert_eq!(e.error_class(), want, "{e}");
+        assert!(e.to_string().contains("replaced"), "{e}");
+        assert_eq!(table.commits.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
 }
 
 #[test]
@@ -836,4 +868,126 @@ fn a_shared_puffin_file_stays_while_a_kept_snapshot_names_it() {
     let shared = env.at("shared.puffin");
     assert!(std::path::Path::new(super::sink_tests::local_path(&shared)).exists());
     assert_eq!(read_back(&env, &catalog), rows);
+}
+
+/// [`Catalog`] whose first commit turns GC off (a foreign property change) and conflicts.
+struct GcTurnedOff {
+    inner: std::sync::Arc<Catalog>,
+    done: AtomicBool,
+}
+
+#[async_trait]
+impl CommitTable for GcTurnedOff {
+    fn name(&self) -> String {
+        self.inner.name()
+    }
+
+    async fn commit(&self, r: Vec<TableRequirement>, u: Vec<TableUpdate>) -> CommitOutcome {
+        if !self.done.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            let off = TableUpdate::SetProperties {
+                updates: [("gc.enabled".to_owned(), "false".to_owned())].into(),
+            };
+            assert!(matches!(
+                self.inner.commit(Vec::new(), vec![off]).await,
+                CommitOutcome::Committed(_)
+            ));
+            return CommitOutcome::Conflict { stale: false };
+        }
+        self.inner.commit(r, u).await
+    }
+
+    async fn load(&self, all: bool) -> Result<TableMetadata, KrishivError> {
+        self.inner.load(all).await
+    }
+
+    async fn load_located(
+        &self,
+        all: bool,
+    ) -> Result<(TableMetadata, Option<String>), KrishivError> {
+        self.inner.load_located(all).await
+    }
+}
+
+/// A conflict whose reload has GC off ends the expire: no second request, nothing deleted.
+#[test]
+fn gc_turned_off_during_the_retries_stops_the_expire() {
+    let env = env();
+    let catalog = five_snapshots(&env);
+    let before = catalog.metadata().snapshots().count();
+    let table = GcTurnedOff {
+        inner: std::sync::Arc::clone(&catalog),
+        done: AtomicBool::new(false),
+    };
+    let e = env
+        .rt
+        .block_on(expire(
+            &table,
+            &env.reg.file_io(),
+            &clock(),
+            1 << 30,
+            &args(Some(1)),
+        ))
+        .unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::KrishivIcebergProcedureGcDisabled,
+        "{e}"
+    );
+    assert_eq!(catalog.metadata().snapshots().count(), before);
+}
+
+/// [`Catalog`] whose answers leave out the table's properties while the metadata file it names
+/// has them: the file decides.
+struct PropertiesDropped {
+    inner: std::sync::Arc<Catalog>,
+}
+
+#[async_trait]
+impl CommitTable for PropertiesDropped {
+    fn name(&self) -> String {
+        self.inner.name()
+    }
+
+    async fn commit(&self, r: Vec<TableRequirement>, u: Vec<TableUpdate>) -> CommitOutcome {
+        self.inner.commit(r, u).await
+    }
+
+    async fn load(&self, all: bool) -> Result<TableMetadata, KrishivError> {
+        self.load_located(all).await.map(|(m, _)| m)
+    }
+
+    async fn load_located(
+        &self,
+        all: bool,
+    ) -> Result<(TableMetadata, Option<String>), KrishivError> {
+        let (meta, location) = self.inner.load_located(all).await?;
+        let keys: Vec<String> = meta.properties().keys().cloned().collect();
+        let meta = edit(meta, |b| b.remove_properties(&keys).unwrap());
+        Ok((meta, location))
+    }
+}
+
+/// The answer says nothing of `gc.enabled`, the checked metadata file turns it off: refused.
+#[test]
+fn the_checked_metadata_file_decides_over_the_answer() {
+    let env = super::provider_tests::env();
+    let t = create(&env, 2, false, &[("gc.enabled", "false")]);
+    let table = PropertiesDropped {
+        inner: Catalog::new(&t),
+    };
+    let e = env
+        .rt
+        .block_on(expire(
+            &table,
+            &env.reg.file_io(),
+            &clock(),
+            1 << 30,
+            &args(Some(1)),
+        ))
+        .unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::KrishivIcebergProcedureGcDisabled,
+        "{e}"
+    );
 }

@@ -631,3 +631,103 @@ fn array_arguments_and_the_current_catalog() {
         "{e}"
     );
 }
+
+/// Review of #983: the `table` argument is a multipart identifier (a name that does not parse is
+/// Iceberg's argument error), a `NULL` map value and a lambda argument are refused by name.
+#[test]
+fn call_arguments_are_parsed_and_refused_by_name() {
+    let dir = tempfile::tempdir().unwrap();
+    let table = krishiv_connectors_iceberg::testing::write_table(dir.path()).unwrap();
+    let (server, _) = super::write_tests::catalog(&table, &[]);
+    let s = lake_session(&server, true);
+    let e = call(&s, "CALL lake.system.expire_snapshots(table => 'db.`t')");
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::KrishivIcebergProcedureArgument,
+        "{e}"
+    );
+    assert!(
+        e.to_string()
+            .contains("Cannot parse identifier for arg table: db.`t"),
+        "{e}"
+    );
+    // A quoted dot stays inside its part: `t.v1` is one table name, which the catalog lacks.
+    let e = call(
+        &s,
+        "CALL lake.system.expire_snapshots(table => 'db.`t.v1`')",
+    );
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::KrishivIcebergProcedureTableNotFound,
+        "{e}"
+    );
+    let e = call(
+        &s,
+        "CALL lake.system.expire_snapshots(table => 'db.t', snapshot_ids => transform(array(1L), x -> x + 1L))",
+    );
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::KrishivUnsupportedFeature,
+        "{e}"
+    );
+    assert!(
+        e.to_string()
+            .contains("a lambda function in a CALL argument"),
+        "{e}"
+    );
+    let e = call(
+        &s,
+        "CALL lake.system.rewrite_data_files(table => 'db.t', options => map('a', CAST(NULL AS STRING)))",
+    );
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::KrishivIcebergProcedureArgument,
+        "{e}"
+    );
+    assert!(
+        e.to_string()
+            .contains("A map argument must not contain NULL values"),
+        "{e}"
+    );
+}
+
+/// Review of #983: in server mode a procedure reads and deletes only inside the server's
+/// confinement, as a declared table's scan does; the table here is outside every allowed root.
+#[test]
+fn a_server_mode_call_is_confined_to_the_allowed_roots() {
+    let dir = tempfile::tempdir().unwrap();
+    let allowed = tempfile::tempdir().unwrap();
+    let table = krishiv_connectors_iceberg::testing::write_table(dir.path()).unwrap();
+    let (server, lake) = super::write_tests::catalog(&table, &[]);
+    let root = allowed.path().display().to_string();
+    let s = super::read_tests::session_with(
+        DeclMode::Server,
+        &[
+            ("krishiv.catalog.lake.type", "iceberg-rest"),
+            ("krishiv.catalog.lake.uri", server.base.as_str()),
+            ("krishiv.catalog.lake.allowInsecure", "true"),
+            ("krishiv.catalog.lake.storage", "allowed-prefixes"),
+            ("krishiv.catalog.lake.option.write", "true"),
+        ],
+        &[("krishiv.io.local.allowedRoots", root.as_str())],
+    );
+    let before = lake.lock().unwrap().metadata["snapshots"]
+        .as_array()
+        .unwrap()
+        .len();
+    let e = call(
+        &s,
+        "CALL lake.system.expire_snapshots(table => 'lake.db.t', \
+         older_than => TIMESTAMP '9999-01-01 00:00:00', retain_last => 1)",
+    );
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::KrishivCatalogLocationRefused,
+        "{e}"
+    );
+    let after = lake.lock().unwrap().metadata["snapshots"]
+        .as_array()
+        .unwrap()
+        .len();
+    assert_eq!(after, before, "nothing is committed");
+}

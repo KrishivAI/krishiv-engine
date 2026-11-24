@@ -576,9 +576,9 @@ impl ProcedureTables for RestProcedureTables {
                 name,
                 &krishiv_sql::ParserOptions::default(),
             ) else {
-                return Err(KrishivIcebergProcedureTableNotFound {
-                    table: format!("'{name}'"),
-                    catalog: format!("'{}'", catalog.name),
+                // Iceberg 1.12.0's argument error (`Spark3Util.catalogAndIdentifier`).
+                return Err(krishiv_common::error::KrishivIcebergProcedureArgument {
+                    message: format!("Cannot parse identifier for arg table: {name}"),
                 }
                 .into());
             };
