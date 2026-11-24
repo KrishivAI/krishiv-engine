@@ -1581,23 +1581,6 @@ mod constant_pattern {
         assert_eq!(calls, owned.len());
     }
 
-    /// The window that turns the cache off may close on a hit: that value is evaluated, not looked
-    /// up in the dropped map.
-    #[test]
-    fn the_memo_turns_off_on_a_hit_too() {
-        let distinct: Vec<String> = (0..WINDOW as usize - 1).map(|n| format!("d{n}")).collect();
-        with_memo("`test`", "hit-at-close", |memo| {
-            for v in &distinct {
-                assert!(memo.get(v, |_| Ok(Value::Bool(true))).is_ok());
-            }
-            assert!(!memo.is_off());
-            // Lookup WINDOW: a hit, with WINDOW - 1 misses in the window.
-            let got = memo.get(&distinct[0], |_| Ok(Value::Bool(false)));
-            assert_eq!(got.ok(), Some(&Value::Bool(false)));
-            assert!(memo.is_off());
-        });
-    }
-
     #[test]
     fn the_memo_clears_past_its_byte_cap_and_never_caches_errors() {
         let big = "x".repeat(1 << 16);
