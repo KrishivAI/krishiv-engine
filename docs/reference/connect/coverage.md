@@ -107,13 +107,13 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 
 ## Command.command_type
 
-20 arms: 2 done, 5 partial, 7 missing, 6 out of scope.
+20 arms: 3 done, 5 partial, 6 missing, 6 out of scope.
 
 | # | Arm | Status | Refused fields | IR target | Task | Group |
 |---:|---|---|---|---|---|---:|
 | 1 | register_function | partial | scalar_scala_udf and java_udf (56K00: no JVM code; T081), Python eval types other than 100/101/200/250, additional_includes | Session::register_python_udf plus the payload on the session's UDF workers (translate_command; run by the server) | P3-T014 | 6 |
 | 2 | write_operation | partial | clustering_columns, with_schema_evolution | krishiv-session's DataFrameWriter (write_to_with: save; write_table_with: saveAsTable, insertInto), the facade's path; save() without a path takes the path option (_LEGACY_ERROR_TEMP_2050 without one); run by the server after the Write class check | P3-T012 | 11 |
-| 3 | create_dataframe_view | missing |  | create_or_replace_temp_view (exists), global temp views | P3-T012 | 4 |
+| 3 | create_dataframe_view | done |  | DataFrame::create_temp_view, create_or_replace_temp_view and the global forms (the server runs it: `execute/write_command.rs` `create_view`) | P3-T012 | 4 |
 | 4 | write_operation_v2 | partial | with_schema_evolution, partition transforms (partitioning_columns other than a column), overwrite_condition (overwrite is refused by the session) | krishiv-session's DataFrameWriterV2 (write_to_table_with), the facade's path; run by the server after the Write class check | P3-T012 | 11 |
 | 5 | sql_command | partial | input of WithRelations form (group 4; the plain SQL input is supported); named and positional arguments (the analyzer refuses SQL parameters) | spark.sql() sends this. Run commands at once; for queries return sql_command_result.relation (Spark returns a SQL or LocalRelation relation the client re-sends). Translated here as the SQL relation of a query; the server runs commands (execute.rs) | P3-T012 | 1 |
 | 6 | write_stream_operation_start | out of scope |  | P4 |  | 0 |
