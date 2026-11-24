@@ -71,7 +71,8 @@ impl Session {
             let inputs = self.procedure_inputs();
             built
                 .load_procedure(&caller, inputs, &procedure.to_lowercase())
-                .await?
+                .await
+                .map_err(|e| names_plugin(e, &catalog))?
         } else {
             None
         };
@@ -644,4 +645,17 @@ fn rearrange(
         }
     }
     Ok(slots)
+}
+
+/// `e` naming the catalog `catalog` when it is a catalog's refusal of procedures: Spark's
+/// `missingCatalogProceduresAbilityError(plugin)` names `plugin.name` (v4.3.0
+/// `QueryCompilationErrors.scala`), which a catalog's own default refusal cannot know.
+fn names_plugin(e: KrishivError, catalog: &str) -> KrishivError {
+    if e.error_class() == krishiv_common::error::ErrorClass::MissingCatalogAbilityProcedures {
+        return MissingCatalogAbilityProcedures {
+            plugin: catalog.to_owned(),
+        }
+        .into();
+    }
+    e
 }
