@@ -23,6 +23,7 @@ list there. Choosing where Krishiv runs: [Deployment](deploy.md)
 - [Iceberg and Delta tables, and catalogs](lakehouse-tables.md): Iceberg REST catalogs, Delta tables, idempotent writes.
 - [Changing rows in a Delta table](delta-dml.md): UPDATE, DELETE and MERGE INTO.
 - [Python data sources](python-data-sources.md): your own formats through `spark.read.format`.
+- Streaming: Structured Streaming APIs in Python are not available in 0.2; see [Compatibility](../concepts/compatibility.md) for what is and is not supported.
 
 **SQL features**
 - [Session settings: time zone, ANSI mode and Spark version](session-settings.md).
@@ -35,6 +36,7 @@ list there. Choosing where Krishiv runs: [Deployment](deploy.md)
   [Python UDFs in the server: the sandbox](python-udf-sandbox.md), [Python UDFs per tenant](python-udf-tenants.md).
 
 **Run and operate**
+- [Upgrading: release notes for each version](../releases/index.md): what changed and what to check before you move to a new version.
 - [Deployment](deploy.md): embedded, single-node and distributed.
 - [Connect stock PySpark to an in-process server](embedded-connect.md) and [Arrow Flight SQL](flight-sql.md).
 - [Securing a single-node server](single-node-server-security.md), [Access control with grants](access-control.md),
