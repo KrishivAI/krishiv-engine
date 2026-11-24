@@ -2137,6 +2137,12 @@ pub use nested::StructField;
 pub use nested::StructType;
 ```
 
+### Re-export `UdtType`
+
+```rust
+pub use nested::UdtType;
+```
+
 ### Re-export `equals_ignore_case`
 
 ```rust

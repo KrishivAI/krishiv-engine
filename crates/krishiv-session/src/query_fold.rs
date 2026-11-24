@@ -236,6 +236,9 @@ pub(crate) struct QueryFold {
     pub(crate) query: Arc<QueryContext>,
     pub(crate) state: Arc<SessionState>,
     pub(crate) start: QueryStart,
+    /// The query's pool bound to the statement's I/O context: footer and metadata reads of
+    /// the file tables the planner opened charge the query while it runs.
+    pub(crate) _io_memory: Option<krishiv_io::QueryIoMemory>,
     /// `krishiv.metrics.enabled` as the query started.
     pub(crate) metrics_on: bool,
     /// The query's id in `system.queries`.
@@ -364,6 +367,8 @@ impl QueryFold {
         let probe = self.start.read_probe();
         let reported = self.start.bytes_read_since();
         let permit = std::mem::replace(&mut self._permit, Permit::unlimited());
+        // A scan task still running after cancellation keeps charging this query's pool.
+        let io_memory = self._io_memory.take();
         let query = Arc::clone(&self.query);
         let state = Arc::clone(&self.state);
         self.finish(error);
@@ -376,6 +381,7 @@ impl QueryFold {
             Box::pin(async move {
                 query.finished().await;
                 Self::settle_permit(permit, &probe, reported);
+                drop(io_memory);
             }),
         ));
     }
@@ -387,6 +393,7 @@ impl QueryFold {
         let probe = self.start.read_probe();
         let reported = self.start.bytes_read_since();
         let permit = std::mem::replace(&mut self._permit, Permit::unlimited());
+        let io_memory = self._io_memory.take();
         let query = Arc::clone(&self.query);
         let state = Arc::clone(&self.state);
         self.finish(None);
@@ -397,6 +404,7 @@ impl QueryFold {
                     query.finished().await;
                 }
                 Self::settle_permit(permit, &probe, reported);
+                drop(io_memory);
             }),
         ));
     }

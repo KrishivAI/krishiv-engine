@@ -59,9 +59,10 @@ use self::spans::{context_children_text, property_list_span};
 use krishiv_common::error::{
     CreateTableColumnDescriptorDuplicate, DescribeJsonNotExtended, DuplicateClauses,
     DuplicatedCteNames, FeatureNotEnabled, IdentityColumnsDuplicatedSequenceGeneratorOption,
-    IdentityColumnsIllegalStep, IncompatibleJoinTypes, InsertReplaceWhereTableAliasNotAllowed,
-    InvalidBucketCount, InvalidInlineTableNumColumnsMismatch, InvalidParameterValueDatetimeUnit,
-    InvalidSetSyntax, InvalidSqlSyntaxCreateFuncWithColumnConstraints,
+    IdentityColumnsIllegalStep, IncompatibleJoinTypes, InsertReplaceOnColumnListNotAllowed,
+    InsertReplaceWhereTableAliasNotAllowed, InvalidBucketCount,
+    InvalidInlineTableNumColumnsMismatch, InvalidParameterValueDatetimeUnit, InvalidSetSyntax,
+    InvalidSqlSyntaxCreateFuncWithColumnConstraints,
     InvalidSqlSyntaxCreateFuncWithGeneratedColumnsAsParameters, InvalidSqlSyntaxEmptyInPredicate,
     InvalidSqlSyntaxEmptyPartitionValue, InvalidSqlSyntaxInvalidWindowReference,
     InvalidSqlSyntaxRepetitiveWindowDefinition, InvalidSqlSyntaxShowFunctionsInvalidPattern,
@@ -129,6 +130,15 @@ pub(crate) fn statement(mut s: &Statement, sql: &str, opts: ParserOptions) -> R 
             | Statement::AddResource(_)
             | Statement::ListResource(_)
             | Statement::AccessControl(_) => return Ok(()),
+            // A procedure's name, and each argument as the expression it is.
+            Statement::Call(c) => {
+                let checker = Checker { sql, opts };
+                checker.ddl_name(&c.name)?;
+                for arg in &c.args {
+                    checker.expr(&arg.expr)?;
+                }
+                return Ok(());
+            }
             Statement::CreateNamespace(n) => return Checker { sql, opts }.create_namespace(n),
             Statement::DropPermanentView(v) => return Checker { sql, opts }.ddl_name(&v.name),
             Statement::AlterNamespace(a) => {
@@ -862,6 +872,13 @@ impl Checker<'_> {
                 ));
             }
         }
+        // Only `REPLACE WHERE` takes a column list; `REPLACE ON` shares its grammar rule.
+        if c.replace_on.is_some() && !c.columns.is_empty() {
+            return Err(at(
+                InsertReplaceOnColumnListNotAllowed {},
+                c.columns_span.unwrap_or(c.head_span),
+            ));
+        }
         // Spark rejects a `REPLACE WHERE` alias before it reads the options.
         if c.replace_where.is_some() && c.target_alias.is_some() {
             return Err(at(InsertReplaceWhereTableAliasNotAllowed {}, c.head_span));
@@ -1489,6 +1506,7 @@ impl Checker<'_> {
             TableFactorKind::Subquery(q) => self.query(q),
             TableFactorKind::Nested(r) => self.relation(r),
             TableFactorKind::Values(rows) => self.inline_table(rows, f.alias.as_ref(), f.span),
+            TableFactorKind::Unnest { args, .. } => args.iter().try_for_each(|a| self.expr(a)),
             TableFactorKind::TableFunction {
                 dynamic_name, args, ..
             } => {

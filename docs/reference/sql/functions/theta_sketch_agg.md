@@ -10,7 +10,7 @@ Returns the ThetaSketch compact binary representation.
 `lgNomEntries` (optional) is the log-base-2 of nominal entries, with nominal entries deciding
 the number buckets or slots for the ThetaSketch.
 
-**Applies to:** not available in Krishiv yet. Spark: 4.1 and later.
+**Applies to:** Krishiv 0.2.0 and above. Spark: 4.1 and later.
 
 ## Syntax
 
@@ -22,7 +22,7 @@ theta_sketch_agg(expr, lgNomEntries)
 
 | | |
 |---|---|
-| Krishiv | Not implemented yet |
+| Krishiv | Implemented |
 | Group | `agg_funcs` |
 | Kind | aggregate (function) |
 | Added in Spark | 4.1.0 |
@@ -35,12 +35,13 @@ theta_sketch_agg(expr, lgNomEntries)
 ```sql
 -- theta_sketch_agg, example 1
 > SELECT theta_sketch_estimate(theta_sketch_agg(col, 12)) FROM VALUES (1), (1), (2), (2), (3) tab(col);
-Error: KRISHIV_UNSUPPORTED_FEATURE
+3
 ```
 
 ## Version history
 
 - Added in Spark 4.1.0.
+- Added in Krishiv 0.2.0.
 
 ## Related
 

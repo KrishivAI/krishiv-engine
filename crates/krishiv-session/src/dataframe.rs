@@ -32,6 +32,7 @@ pub(crate) mod checkpoint;
 mod fill_stream;
 mod geo_gate;
 mod observe;
+mod python_relations;
 pub use observe::ObservedSink;
 pub(crate) use observe::{Observers, PendingObservations, deliver};
 mod boxed;
@@ -1053,6 +1054,7 @@ impl DataFrame {
         if let Some(a) = cached
             && !a.analyzed.reads_files
             && !a.env.catalog.loaded_file_views()
+            && !a.env.catalog.has_bound_scans()
             && a.env.conf_version == env.conf_version
             && a.env.catalog_epoch == env.catalog_epoch
             && a.env.variables_version == env.variables_version
@@ -1498,7 +1500,7 @@ impl DataFrame {
         self.session
             .on_executor(async move {
                 let a = df.analysis().await?;
-                let (_, physical) = df.session.physical_inspected(&a.analyzed, &a.env).await?;
+                let (_, physical) = df.session.physical_counted(&a.analyzed, &a.env).await?;
                 let mut all = a.analyzed.warnings.clone();
                 all.extend(physical.warnings().iter().cloned());
                 Ok(all)

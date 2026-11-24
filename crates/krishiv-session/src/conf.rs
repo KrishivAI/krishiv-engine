@@ -205,7 +205,7 @@ impl ConfStore {
     pub(crate) fn explicit_entries(&self) -> Vec<(String, String)> {
         let config = self.snapshot();
         let mut rows: Vec<(String, String)> = config
-            .explicit_registered()
+            .explicit_registered_as_set()
             .into_iter()
             .map(|(key, value)| (key.to_owned(), value))
             .chain(
@@ -368,7 +368,7 @@ fn leading_number(text: &str) -> Option<(u32, &str)> {
 /// key as set.
 pub(crate) fn get(config: &Config, key: &str) -> Option<String> {
     match lookup(krishiv_common::config::resolve_alternative(key)) {
-        Some(entry) => config.get(entry).map(ToString::to_string),
+        Some(entry) => config.text(entry),
         None => config.get_unregistered(key).map(str::to_owned),
     }
 }

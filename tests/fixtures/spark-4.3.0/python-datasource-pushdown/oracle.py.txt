@@ -1,0 +1,415 @@
+# SPDX-License-Identifier: Apache-2.0
+"""Recording oracle for T040 part 2 (pushFilters), run against Spark 4.3.0 classic and Connect.
+
+Usage: python3 oracle.py classic|connect OUT_JSON
+
+Every data source here is a recording source: each lifecycle step appends one line to a per-case log file
+(`init`, `schema`, `reader`, `pushFilters <repr(filters)>`, `partitions`, `read <partition>`), and the driver adds
+`== <phase> ==` markers, so the counts per phase and the order are both recoverable. Nothing is transcribed:
+the output JSON is the run.
+"""
+
+import contextlib
+import io
+import json
+import os
+import sys
+from datetime import datetime  # noqa: F401  (used by the filter cases through eval-free tables below)
+from decimal import Decimal  # noqa: F401
+
+mode, out_path = sys.argv[1], sys.argv[2]
+LOGDIR = f"/work/logs-{mode}"
+os.makedirs(LOGDIR, exist_ok=True)
+os.chmod(LOGDIR, 0o777)
+
+if mode == "classic":
+    from pyspark.sql import SparkSession
+
+    spark = (
+        SparkSession.builder.master("local[2]")
+        .appName("t040-oracle")
+        .config("spark.ui.enabled", "false")
+        .config("spark.sql.shuffle.partitions", "2")
+        .getOrCreate()
+    )
+else:
+    from pyspark.sql.connect.session import SparkSession
+
+    spark = SparkSession.builder.remote("sc://localhost:15002").getOrCreate()
+
+from pyspark.sql.datasource import (  # noqa: E402
+    DataSource,
+    DataSourceReader,
+    EqualNullSafe,
+    EqualTo,
+    GreaterThan,
+    GreaterThanOrEqual,
+    In,
+    InputPartition,
+    IsNotNull,
+    IsNull,
+    LessThan,
+    LessThanOrEqual,
+    Not,
+    StringContains,
+    StringEndsWith,
+    StringStartsWith,
+)
+
+RESULT = {"mode": mode, "spark_version": spark.version, "cases": {}}
+PUSH_CONF = "spark.sql.python.filterPushdown.enabled"
+RESULT["conf_default_filterPushdown_enabled"] = spark.conf.get(PUSH_CONF)
+RESULT["conf_ansi_enabled"] = spark.conf.get("spark.sql.ansi.enabled")
+_counter = [0]
+
+
+def make_source(log, schema, push="all", rows=None, nparts=3, override_push=True, bad=None):
+    """Build a recording DataSource class. `push` is what pushFilters returns:
+    all -> the filters unchanged (nothing pushed); none -> [] (everything pushed);
+    raise -> raises ValueError; extraneous -> a new equal-but-not-identical filter; only_y2 -> yield y = 2 only."""
+    _counter[0] += 1
+    name = f"rec{_counter[0]}_{os.path.basename(log).split('.')[0]}".replace("-", "_")
+    rows = rows or []
+
+    def ev(s):
+        with open(log, "a") as f:
+            f.write(s + "\n")
+
+    class Reader(DataSourceReader):
+        def partitions(self):
+            ev("partitions")
+            return [InputPartition(i) for i in range(nparts)]
+
+        def read(self, partition):
+            ev(f"read {partition.value}")
+            if partition.value == 0:
+                for r in rows:
+                    yield r
+
+    class ReaderP(Reader):
+        def pushFilters(self, filters):
+            ev("pushFilters " + repr(filters))
+            if push == "all":
+                return filters
+            if push == "none":
+                return []
+            if push == "raise":
+                raise ValueError("boom from pushFilters")
+            if push == "extraneous":
+                return [EqualTo(("x",), 1)]
+            if push == "only_y2":
+                return [f for f in filters if f == EqualTo(("y",), 2)]
+            raise AssertionError(push)
+
+    class Src(DataSource):
+        def __init__(self, options):
+            super().__init__(options)
+            ev("init")
+
+        @classmethod
+        def name(cls):
+            return name
+
+        def schema(self):
+            ev("schema")
+            return schema
+
+        def reader(self, schema):
+            ev("reader")
+            return ReaderP() if override_push else Reader()
+
+    return name, Src
+
+
+def new_log(case):
+    path = f"{LOGDIR}/{case}.log"
+    open(path, "w").close()
+    os.chmod(path, 0o666)
+    return path
+
+
+def mark(log, text):
+    with open(log, "a") as f:
+        f.write(f"== {text} ==\n")
+
+
+def read_log(log):
+    with open(log) as f:
+        return f.read().splitlines()
+
+
+def counts(lines):
+    """Counts per phase: {phase: {init, schema, reader, pushFilters, partitions, read}}."""
+    out, phase = {}, "before"
+    keys = ["init", "schema", "reader", "pushFilters", "partitions", "read"]
+    out[phase] = dict.fromkeys(keys, 0)
+    for ln in lines:
+        if ln.startswith("== "):
+            phase = ln[3:-3]
+            out[phase] = dict.fromkeys(keys, 0)
+            continue
+        out[phase][ln.split(" ", 1)[0]] += 1
+    return out
+
+
+def exc_info(e):
+    info = {"python_type": type(e).__name__, "message": str(e)}
+    for attr, key in (("getCondition", "condition"), ("getSqlState", "sqlstate"), ("getMessageParameters", "params")):
+        try:
+            info[key] = getattr(e, attr)()
+        except Exception as ee:  # noqa: BLE001
+            info[key] = f"<{type(ee).__name__}>"
+    return info
+
+
+def attempt(fn):
+    try:
+        return {"ok": True, "value": fn()}
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": exc_info(e)}
+
+
+def explain_text(df, extended=False, formatted=False):
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        if formatted:
+            df.explain(mode="formatted")
+        elif extended:
+            df.explain(True)
+        else:
+            df.explain()
+    return buf.getvalue()
+
+
+def load(name):
+    return spark.read.format(name).load()
+
+
+# ---- 1. filter lists -------------------------------------------------------------------------------------------
+# Cases are the exact (sql_type, sql_filter) pairs of _check_filters in test_python_datasource.py at v4.3.0;
+# the expected values in the test are NOT recorded here, only what Spark sent.
+FILTER_CASES = [
+    ("test_unsupported_filter", "struct<a:int, b:int, c:int>", "x.a = 1 and x.b = x.c"),
+    ("test_unsupported_filter", "int", "x = 1 or x > 2"),
+    ("test_unsupported_filter", "int", "(0 < x and x < 1) or x = 2"),
+    ("test_unsupported_filter", "int", "x % 5 = 1"),
+    ("test_unsupported_filter", "array<int>", "x[0] = 1"),
+    ("test_unsupported_filter", "string", "x like 'a%a%'"),
+    ("test_unsupported_filter", "string", "x ilike 'a'"),
+    ("test_unsupported_filter", "string", "x = 'a' collate zh"),
+    ("test_filter_value_type", "int", "x = 1"),
+    ("test_filter_value_type", "int", "x = null"),
+    ("test_filter_value_type", "float", "x = 3 / 2"),
+    ("test_filter_value_type", "string", "x = '1'"),
+    ("test_filter_value_type", "array<int>", "x = array(1, 2)"),
+    ("test_filter_value_type", "struct<x:int>", "x = named_struct('x', 1)"),
+    ("test_filter_value_type", "decimal", "x in (1.1, 2.1)"),
+    ("test_filter_value_type", "timestamp_ntz", "x = timestamp_ntz '2020-01-01 00:00:00'"),
+    ("test_filter_value_type", "interval second", "x = interval '2' second"),
+    ("test_filter_type", "boolean", "x"),
+    ("test_filter_type", "boolean", "not x"),
+    ("test_filter_type", "int", "x is null"),
+    ("test_filter_type", "int", "x <> 0"),
+    ("test_filter_type", "int", "x <=> 1"),
+    ("test_filter_type", "int", "1 < x"),
+    ("test_filter_type", "int", "1 <= x"),
+    ("test_filter_type", "int", "x < 1"),
+    ("test_filter_type", "int", "x <= 1"),
+    ("test_filter_type", "string", "x like 'a%'"),
+    ("test_filter_type", "string", "x like '%a'"),
+    ("test_filter_type", "string", "x like '%a%'"),
+    ("test_filter_type", "string", "x like 'a%b'"),
+    ("test_filter_type", "int", "x in (1, 2)"),
+    ("test_filter_nested_column", "struct<y:int>", "x.y = 1"),
+]
+
+spark.conf.set(PUSH_CONF, "true")
+RESULT["filter_cases"] = []
+for i, (test, sql_type, sql_filter) in enumerate(FILTER_CASES):
+    log = new_log(f"filter-{i:02d}")
+    name, src = make_source(log, f"x {sql_type}", push="all")
+    spark.dataSource.register(src)
+    res = attempt(lambda: load(name).filter(sql_filter).count())
+    lines = read_log(log)
+    pf = [ln[len("pushFilters ") :] for ln in lines if ln.startswith("pushFilters ")]
+    RESULT["filter_cases"].append(
+        {
+            "test": test,
+            "sql_type": sql_type,
+            "sql_filter": sql_filter,
+            "pushFilters_called": len(pf),
+            "filters_repr": pf,
+            "result": res,
+        }
+    )
+
+# the four-conjunct case of test_filter_pushdown: reader claims x = 1 (does not apply it) by returning only y = 2.
+log = new_log("pushdown-four-conjunct")
+name, src = make_source(log, "x int, y int", push="only_y2", rows=[(1, 1), (1, 2), (2, 2)])
+spark.dataSource.register(src)
+df = load(name).filter("x = 1 and y = 2")
+RESULT["four_conjunct"] = {
+    "rows": attempt(lambda: [str(r) for r in df.collect()]),
+    "log": read_log(log),
+    "explain_simple": attempt(lambda: explain_text(df)),
+    "explain_formatted": attempt(lambda: explain_text(df, formatted=True)),
+    "explain_extended": attempt(lambda: explain_text(df, extended=True)),
+}
+
+# ---- 2. call counts --------------------------------------------------------------------------------------------
+SCENARIOS = {
+    "load_only": lambda df, log: None,
+    "explain": lambda df, log: df.explain(),
+    "one_collect": lambda df, log: df.collect(),
+    "one_count": lambda df, log: df.count(),
+    "explain_collect_collect": None,
+    "explain_count_show": None,
+    "collect_collect": None,
+}
+
+
+def run_scenario(sc, df, log):
+    def phase(label, fn):
+        mark(log, label)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            fn()
+
+    if sc == "load_only":
+        return
+    if sc == "explain":
+        phase("explain", lambda: df.explain())
+    elif sc == "one_collect":
+        phase("collect", lambda: df.collect())
+    elif sc == "one_count":
+        phase("count", lambda: df.count())
+    elif sc == "explain_collect_collect":
+        phase("explain", lambda: df.explain())
+        phase("collect1", lambda: df.collect())
+        phase("collect2", lambda: df.collect())
+    elif sc == "explain_count_show":
+        phase("explain", lambda: df.explain())
+        phase("count", lambda: df.count())
+        phase("show", lambda: df.show())
+    elif sc == "collect_collect":
+        phase("collect1", lambda: df.collect())
+        phase("collect2", lambda: df.collect())
+
+
+RESULT["call_counts"] = {}
+for with_filter in (False, True):
+    for sc in SCENARIOS:
+        key = f"{sc}|{'filter x=1' if with_filter else 'no filter'}"
+        log = new_log(f"count-{sc}-{int(with_filter)}")
+        name, src = make_source(log, "x int, y int", push="all", rows=[(1, 1), (2, 2)], nparts=3)
+        spark.dataSource.register(src)
+        mark(log, "load")
+        df = load(name)
+        if with_filter:
+            df = df.filter("x = 1")
+        res = attempt(lambda: run_scenario(sc, df, log))
+        lines = read_log(log)
+        RESULT["call_counts"][key] = {"result": res, "counts": counts(lines), "log": lines}
+
+# ---- 3. residual scenario --------------------------------------------------------------------------------------
+RESULT["residual"] = {}
+for ansi in ("true", "false"):
+    spark.conf.set("spark.sql.ansi.enabled", ansi)
+    for label, q in (
+        ("scenario", "x_filter"),
+        ("reordered", "x_filter_swapped"),
+    ):
+        log = new_log(f"residual-{ansi}-{label}")
+        name, src = make_source(log, "x int, a int, b int", push="all", rows=[(0, 0, 0)])
+        spark.dataSource.register(src)
+        pred = "10 / x > 1 AND (a = 1 OR b = 2)" if label == "scenario" else "(a = 1 OR b = 2) AND 10 / x > 1"
+        df = load(name).filter(pred)
+        RESULT["residual"][f"ansi={ansi}|{pred}"] = {
+            "rows": attempt(lambda: [str(r) for r in df.collect()]),
+            "explain_extended": attempt(lambda: explain_text(df, extended=True)),
+            "log": read_log(log),
+        }
+spark.conf.set("spark.sql.ansi.enabled", "true")
+# the same predicate with an erroring row selected, to show the residual is evaluated (and raises) when the row passes
+log = new_log("residual-error-row")
+name, src = make_source(log, "x int, a int, b int", push="all", rows=[(0, 1, 1)])
+spark.dataSource.register(src)
+df = load(name).filter("10 / x > 1 AND (a = 1 OR b = 2)")
+RESULT["residual"]["ansi=true|row (0,1,1)"] = {
+    "rows": attempt(lambda: [str(r) for r in df.collect()]),
+    "log": read_log(log),
+}
+
+# ---- 4. errors ------------------------------------------------------------------------------------------------
+ERR = {}
+RESULT["errors"] = ERR
+for label, push in (("pushFilters_raises", "raise"), ("extraneous_filter", "extraneous")):
+    log = new_log(f"err-{label}")
+    name, src = make_source(log, "x int, y int", push=push, rows=[(1, 1)])
+    spark.dataSource.register(src)
+    df = load(name).filter("x = 1")
+    ERR[label] = {
+        "explain": attempt(lambda: explain_text(df)),
+        "collect": attempt(lambda: [str(r) for r in df.collect()]),
+        "log": read_log(log),
+    }
+# disabled conf, reader overrides pushFilters
+spark.conf.set(PUSH_CONF, "false")
+for label, flt in (("with_filter", "x = 1"), ("no_filter", None)):
+    log = new_log(f"err-disabled-{label}")
+    name, src = make_source(log, "x int, y int", push="all", rows=[(1, 1)])
+    spark.dataSource.register(src)
+    df = load(name)
+    if flt:
+        df = df.filter(flt)
+    ERR[f"pushdown_disabled|{label}"] = {
+        "explain": attempt(lambda: explain_text(df)),
+        "collect": attempt(lambda: [str(r) for r in df.collect()]),
+        "log": read_log(log),
+    }
+# disabled conf, reader does NOT override pushFilters (control)
+log = new_log("err-disabled-control")
+name, src = make_source(log, "x int, y int", push="all", rows=[(1, 1)], override_push=False)
+spark.dataSource.register(src)
+df = load(name).filter("x = 1")
+ERR["pushdown_disabled|reader_without_pushFilters|with_filter"] = {
+    "collect": attempt(lambda: [str(r) for r in df.collect()]),
+    "log": read_log(log),
+}
+spark.conf.set(PUSH_CONF, "true")
+# bad column path candidates
+for label, schema, flt in (
+    ("dotted_top_level_name", "`a.b` int", "`a.b` = 1"),
+    ("dotted_top_level_name_with_nested_sibling", "`a.b` int, a struct<b:int>", "`a.b` = 1"),
+    ("backtick_in_name", "`a``b` int", "`a``b` = 1"),
+    ("struct_with_dotted_field", "x struct<`a.b`:int>", "x.`a.b` = 1"),
+    ("case_mismatch_default", "X int", "x = 1"),
+    ("map_value", "x map<string,int>", "x['k'] = 1"),
+    ("array_of_struct_field", "x array<struct<y:int>>", "x[0].y = 1"),
+):
+    log = new_log(f"err-badpath-{label}")
+    name, src = make_source(log, schema, push="all")
+    spark.dataSource.register(src)
+    df = load(name).filter(flt)
+    ERR[f"bad_column_path|{label}"] = {
+        "collect": attempt(lambda: df.count()),
+        "log": read_log(log),
+    }
+
+# EXPLAIN line of a pushed scan (everything pushed) and of an unpushed one
+RESULT["explain_pushed"] = {}
+for label, push in (("everything_pushed", "none"), ("nothing_pushed", "all")):
+    log = new_log(f"explain-{label}")
+    name, src = make_source(log, "x int, y int", push=push, rows=[(1, 1)])
+    spark.dataSource.register(src)
+    df = load(name).filter("x = 1 and y = 2")
+    RESULT["explain_pushed"][label] = {
+        "simple": attempt(lambda: explain_text(df)),
+        "formatted": attempt(lambda: explain_text(df, formatted=True)),
+        "extended": attempt(lambda: explain_text(df, extended=True)),
+        "log": read_log(log),
+    }
+
+with open(out_path, "w") as f:
+    json.dump(RESULT, f, indent=1, sort_keys=False, default=str)
+print("done", out_path)

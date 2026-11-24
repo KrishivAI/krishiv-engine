@@ -1038,6 +1038,39 @@ fn startup_token(server: &mut Running) -> String {
         .to_owned()
 }
 
+/// The console's Resources page reads the server's own Python UDF worker pool: its limits as configured, and
+/// no worker before a session's first Python UDF call.
+#[cfg(all(feature = "ui", target_os = "linux"))]
+#[test]
+fn the_console_lists_the_servers_udf_worker_pool() {
+    let spill = tempfile::tempdir().expect("tempdir");
+    let mut server = start_with(
+        spill.path(),
+        &[
+            "krishiv.python.worker.maxTotal=7".to_owned(),
+            "krishiv.python.worker.maxPerSession=2".to_owned(),
+            "krishiv.python.worker.maxPerTenant=5".to_owned(),
+        ],
+    );
+    let token = startup_token(&mut server);
+    let answer = http_get_as(&server.admin, "/api/internal/udf-workers", Some(&token));
+    assert!(answer.starts_with("HTTP/1.1 200"), "{answer}");
+    let body = answer.split("\r\n\r\n").nth(1).expect("a body");
+    let json: serde_json::Value =
+        serde_json::from_str(&body[body.find('{').expect("json")..=body.rfind('}').expect("json")])
+            .expect("json");
+    assert_eq!(
+        json["pool"],
+        serde_json::json!({
+            "live": 0, "busy": 0, "max_total": 7, "max_per_session": 2, "max_per_tenant": 5,
+            "owners": [], "truncated": false,
+        }),
+        "{answer}"
+    );
+    let none = http_get(&server.admin, "/api/internal/udf-workers");
+    assert!(none.starts_with("HTTP/1.1 401"), "{none}");
+}
+
 /// A server started on a history folder lists what an earlier run stored there; a folder that cannot be read
 /// costs the old history, not the server.
 #[cfg(feature = "ui")]
@@ -1073,4 +1106,64 @@ fn a_restarted_server_lists_the_stored_history() {
     let listed = http_get_as(&server.admin, "/api/internal/history", Some(&token));
     assert!(listed.starts_with("HTTP/1.1 200"), "{listed}");
     assert!(listed.contains("before_restart"), "{listed}");
+}
+
+/// ADR 0049: the `external` access provider's startup refusals (no authentication, no endpoint,
+/// any list with `grants`, which `krishiv server` does not wire yet) stop the server before it binds.
+#[cfg(unix)]
+#[test]
+fn the_external_access_provider_is_checked_at_startup() {
+    use std::os::unix::fs::PermissionsExt;
+    let err = refused(&[
+        "krishiv.access.provider=external",
+        "krishiv.access.external.endpoint=http://127.0.0.1:9",
+    ]);
+    assert!(err.contains("needs authentication"), "{err}");
+    // `grants` decides about a principal too: refused without authentication, not run unenforced.
+    let err = refused(&["krishiv.access.provider=grants"]);
+    assert!(
+        err.contains("the grants provider needs authentication"),
+        "{err}"
+    );
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("t");
+    std::fs::write(&path, "external-provider-token-0123456789abcdef").expect("write secret");
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).expect("chmod");
+    let secret = format!("krishiv.auth.tokens.a.secret=file:{}", path.display());
+    let auth = [
+        secret.as_str(),
+        "krishiv.auth.tokens.a.principal=a",
+        "krishiv.auth.tokens.a.role=viewer",
+    ];
+    let with = |more: &[&'static str]| {
+        let mut confs: Vec<&str> = auth.to_vec();
+        confs.extend_from_slice(more);
+        refused(&confs)
+    };
+    let err = with(&["krishiv.access.provider=external"]);
+    assert!(err.contains("endpoint"), "{err}");
+    let err = with(&[
+        "krishiv.access.provider=grants+external",
+        "krishiv.access.external.endpoint=http://127.0.0.1:9",
+    ]);
+    assert!(
+        err.contains("not available in `krishiv server` yet"),
+        "{err}"
+    );
+    // Any list naming `grants` is refused, with or without `external`.
+    for list in [
+        "krishiv.access.provider=grants",
+        "krishiv.access.provider=roles+grants",
+    ] {
+        let err = with(&[list]);
+        assert!(
+            err.contains("a list naming grants is refused"),
+            "{list}: {err}"
+        );
+    }
+    let err = with(&[
+        "krishiv.access.provider=external",
+        "krishiv.access.external.endpoint=http://policy.example.com",
+    ]);
+    assert!(err.contains("loopback"), "{err}");
 }

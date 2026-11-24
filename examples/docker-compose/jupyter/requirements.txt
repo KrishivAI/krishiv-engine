@@ -1,0 +1,4 @@
+jupyterlab>=4.2,<5
+pyspark-client>=4.0,<5
+# PySpark 4.x does not support pandas 3 yet.
+pandas>=2.2,<3

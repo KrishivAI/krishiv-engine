@@ -62,8 +62,10 @@ impl InboundTrace {
 /// A boxed future the source returns (object safe, no `async_trait`).
 pub type UiFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, UiError>> + Send + 'a>>;
 
-/// The system tables the UI reads.
+/// The system tables the UI reads. More are added as pages are: a [`UiSource`] outside this crate gives no rows
+/// for a table it does not know.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum SystemTable {
     /// `system.queries`.
     Queries,
@@ -184,6 +186,12 @@ pub trait UiSource: Send + Sync + 'static {
     fn plan_pending(&self, query: &Row) -> bool {
         let _ = query;
         false
+    }
+
+    /// The Python UDF worker pool now, for the Resources page; `None` when this source has no pool (a console
+    /// over one session or over stored profiles, a server without one).
+    fn udf_workers(&self) -> UiFuture<'_, Option<crate::udf_workers::UdfWorkers>> {
+        Box::pin(async { Ok(None) })
     }
 
     /// Which console this is, as `/api/internal/health` reports it and the page reads it: `server` (every
@@ -372,6 +380,10 @@ pub fn router_with_ui_policy(
         .route("/api/internal/history", get(history))
         .route("/api/internal/compare", get(compare))
         .route("/api/internal/resources", get(resources))
+        .route(
+            "/api/internal/udf-workers",
+            get(crate::udf_workers::udf_workers),
+        )
         .route("/api/internal/sessions", get(crate::workload::sessions))
         .route(
             "/api/internal/sessions/{id}/close",

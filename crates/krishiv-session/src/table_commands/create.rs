@@ -13,6 +13,11 @@ impl Session {
         ids: &[krishiv_sql::ast::Span],
     ) -> Result<DataFrame, KrishivError> {
         let env = self.query_env();
+        #[cfg(feature = "delta")]
+        if let Some(path) = self.delta_path_target(t, &env)? {
+            self.create_delta_path_table(t, &path, original).await?;
+            return self.empty_frame().await;
+        }
         let warehouse = self.warehouse_dir()?;
         let Some(new) = self.new_table(t, &env)? else {
             return self.empty_frame().await;
@@ -171,6 +176,17 @@ impl Session {
         let provider = self.provider_of(using)?;
         let name = self.table_name(&t.name, env)?;
         self.refuse_collated_namespace(&name)?;
+        // DeltaCatalog asks for the namespace before the session catalog checks the name
+        // (`CREATE-PATH.json` `relative_path`, `no_slash`: `SCHEMA_NOT_FOUND`).
+        #[cfg(feature = "delta")]
+        if provider.eq_ignore_ascii_case(crate::delta::DELTA)
+            && !self.state.catalog.store.has_namespace(&name.namespace)
+        {
+            return Err(SchemaNotFound {
+                schema_name: format!("`spark_catalog`.`{}`", name.namespace),
+            }
+            .into());
+        }
         check_new_name(&name.namespace)?;
         check_new_name(&name.name)?;
         self.check_namespace(&name)?;
@@ -567,7 +583,11 @@ impl Session {
         } else {
             "errorifexists"
         };
-        let dirs = self.write_table_rows(&table, &df, write_mode, pre).await?;
+        let key =
+            super::explicit_key(&table.options, |v: &String| Some(v.as_str())).map(str::to_owned);
+        let dirs = self
+            .write_table_rows(&table, &df, write_mode, key.as_deref(), pre)
+            .await?;
         if let Some(owned) = owned {
             owned.keep();
         }

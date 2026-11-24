@@ -1,0 +1,19 @@
+# Generates the `krishiv.access.v1` Rust types (krishiv-access-proto) and the gRPC stubs (krishiv-server) from proto/krishiv/access/v1
+# (ADR 0049 §3). A workspace of its own, like plan-protogen: protox (a pure-Rust protobuf
+# compiler, so no protoc anywhere), prost-build and tonic-prost-build stay out of the product
+# dependency graph. Run from the repository root:
+#   cargo run --locked --manifest-path tools/access-protogen/Cargo.toml -- --write
+#   cargo run --locked --manifest-path tools/access-protogen/Cargo.toml -- --check
+[package]
+name = "access-protogen"
+version = "0.0.0"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+
+[dependencies]
+prost-build = "0.14.4"
+protox = "0.9"
+tonic-prost-build = "0.14"
+
+[workspace]

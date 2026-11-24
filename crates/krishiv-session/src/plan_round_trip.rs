@@ -25,6 +25,12 @@ pub(crate) fn round_trip(
     if !on {
         return Ok(None);
     }
+    if plan.has_decided_scan() {
+        return Err(krishiv_common::error::KrishivUnsupportedFeature {
+            feature: "a Python data source in a distributed plan".to_owned(),
+        }
+        .into());
+    }
     let fail = |what: String| -> KrishivError {
         InternalError {
             message: format!("plan round trip: {what}"),
@@ -33,7 +39,9 @@ pub(crate) fn round_trip(
     };
     let bytes = krishiv_plan_codec::encode(plan).map_err(|e| fail(e.to_string()))?;
     let back = krishiv_plan_codec::decode(&bytes).map_err(|e| fail(e.to_string()))?;
-    if back != *plan {
+    // The codec does not carry the guarded-scan set (coordinator-side, design
+    // `P3-E14-security-barrier.md` §6): the decoded plan is compared with the set cleared.
+    if back != plan.clone().without_guarded() {
         return Err(fail(
             "the decoded plan differs from the encoded one".to_owned(),
         ));

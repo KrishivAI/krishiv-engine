@@ -777,6 +777,9 @@ pub struct ScanNode {
     /// Whether the output ends in the row id (file, then position) that a
     /// [`PhysNode::LateFetch`] above reads.
     pub row_id: bool,
+    /// The scan's decision, when it decides once (a Python data source): the plan holds the id of the
+    /// bound scan in the query's resolver, never the scan.
+    pub decided: Option<Box<crate::operators::DecidedScan>>,
 }
 
 /// A range source: `range(start, end, step, numSlices)` (Spark's `Range`).
@@ -1121,6 +1124,9 @@ impl WritePlan {
 }
 
 plan_data!(tuple ScanId(id));
+use crate::operators::{BoundScanId, DecidedScan};
+plan_data!(tuple BoundScanId(id));
+plan_data!(struct DecidedScan { id, pushed });
 plan_data!(tuple SubqueryId(id));
 plan_data!(tuple ExchangeId(id));
 plan_data!(tuple SharedId(id));
@@ -1278,7 +1284,7 @@ plan_data!(struct WritePlan {
     bucket
 });
 plan_data!(struct BucketWrite { column, sort_by });
-plan_data!(struct ScanNode { id, scan, projection, filter, runtime_filters, row_stage, row_id });
+plan_data!(struct ScanNode { id, scan, projection, filter, runtime_filters, row_stage, row_id, decided });
 plan_data!(
     enum FetchSlot {
         Input(index),
@@ -1312,7 +1318,7 @@ plan_data!(struct SortMergeJoinPlan {
     probe, build, join_type, probe_keys, build_keys, null_safe, residual, single_match, as_of
 });
 plan_data!(struct NestedLoopPlan { probe, build, join_type, residual });
-plan_data!(struct PhysicalPlan { root, shared, schema, explain, warnings, env });
+plan_data!(struct PhysicalPlan { root, shared, schema, explain, warnings, env, guarded });
 
 impl PhysNode {
     /// The plans this node reads: its inputs, then the subqueries it runs
@@ -1533,6 +1539,9 @@ pub struct PhysicalPlan {
     explain: ExplainNode,
     warnings: Vec<String>,
     env: ExprEnv,
+    /// The scans planned under a security barrier, sorted (design `P3-E14-security-barrier.md`
+    /// §6): coordinator-side, never in the plan codec, so a decoded plan has none.
+    guarded: Vec<ScanId>,
 }
 
 impl PhysicalPlan {
@@ -1546,12 +1555,45 @@ impl PhysicalPlan {
             explain,
             warnings: Vec::new(),
             env,
+            guarded: Vec::new(),
         }
+    }
+
+    /// The scans planned under a security barrier, sorted. Read on the coordinator only (the
+    /// profile's scan entries); the plan codec does not carry them.
+    pub fn guarded(&self) -> &[ScanId] {
+        &self.guarded
+    }
+
+    /// The same plan with `guarded` as its guarded scans: the planner is the only writer.
+    pub(crate) fn with_guarded(mut self, mut guarded: Vec<ScanId>) -> Self {
+        guarded.sort_unstable();
+        guarded.dedup();
+        self.guarded = guarded;
+        self
+    }
+
+    /// The same plan with no guarded scans: what a codec round trip gives, for comparing a
+    /// decoded plan with the planned one.
+    #[must_use]
+    pub fn without_guarded(mut self) -> Self {
+        self.guarded = Vec::new();
+        self
     }
 
     /// The root node.
     pub fn root(&self) -> &PhysNode {
         &self.root
+    }
+
+    /// Whether a scan in any tree of the plan decided once (a Python data source): such a plan
+    /// holds a bound scan of its query's resolver and cannot leave the process.
+    pub fn has_decided_scan(&self) -> bool {
+        fn any(n: &PhysNode) -> bool {
+            matches!(n, PhysNode::Scan(s) if s.decided.is_some())
+                || n.children().into_iter().any(any)
+        }
+        self.roots().any(any)
     }
 
     /// The plans [`PhysNode::SharedRead`]s read, inner first.
@@ -1737,6 +1779,7 @@ impl PhysicalPlan {
             explain,
             warnings: self.warnings,
             env: self.env,
+            guarded: self.guarded,
         })
     }
 
@@ -1779,6 +1822,7 @@ impl PhysicalPlan {
             explain,
             warnings: self.warnings,
             env: self.env,
+            guarded: self.guarded,
         }
     }
 

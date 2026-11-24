@@ -176,6 +176,7 @@ fn layout(table: &str) -> Option<Vec<(&'static str, Kind, bool)>> {
         ],
         "operators" => vec![
             ("query_id", Text, false),
+            ("session_id", Text, false),
             ("operator_id", Int, false),
             ("node_id", Int, true),
             ("name", Text, false),
@@ -438,6 +439,7 @@ fn values(table: &str, sources: &Sources) -> Vec<ArrayRef> {
         let l = |f: fn(&OperatorRow) -> i64| long(rows.iter().map(move |r| Some(f(r))));
         return vec![
             text(rows.iter().map(|r| Some(r.query_id.as_str()))),
+            text(rows.iter().map(|r| Some(r.session_id.as_str()))),
             Arc::new(Int32Array::from_iter(
                 rows.iter().map(|r| Some(r.operator_id)),
             )),
@@ -705,6 +707,8 @@ pub(crate) struct QueryRow {
 #[derive(Debug, Clone)]
 pub(crate) struct OperatorRow {
     pub(crate) query_id: String,
+    /// The session that ran the query (set when the query finishes).
+    pub(crate) session_id: String,
     pub(crate) operator_id: i32,
     pub(crate) node_id: Option<i32>,
     pub(crate) name: String,
@@ -742,6 +746,7 @@ impl OperatorRow {
         let m = &e.metrics;
         Self {
             query_id: query_id.to_owned(),
+            session_id: String::new(),
             operator_id: i32::try_from(id.0).unwrap_or(i32::MAX),
             node_id: e.node.map(|v| i32::try_from(v).unwrap_or(i32::MAX)),
             name: e.name.to_string(),
@@ -1395,6 +1400,7 @@ impl QueryRow {
                 std::mem::size_of::<OperatorRow>()
                     + o.query_id.len()
                     + o.name.len()
+                    + o.session_id.len()
                     + o.pipelines.len() * 4
                     + o.extra
                         .iter()

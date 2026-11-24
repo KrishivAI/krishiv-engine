@@ -16,14 +16,14 @@ use krishiv_common::error::{ArrowTypeMismatch, KrishivError};
 use krishiv_types::{DataType, StructField, StructType};
 
 /// The settings key (canonical, and Spark's) that turns the check on.
-pub(crate) const VALIDATE_SCHEMA: [&str; 2] = [
+pub const VALIDATE_SCHEMA: [&str; 2] = [
     "krishiv.sql.execution.arrow.pyspark.validateSchema.enabled",
     "spark.sql.execution.arrow.pyspark.validateSchema.enabled",
 ];
 
 /// The check of one map call site.
 #[derive(Debug, Clone)]
-pub(crate) struct SchemaCheck {
+pub struct SchemaCheck {
     /// `PythonEvalType.toString` of the call's eval type.
     operation: &'static str,
     /// The declared output, as a struct.
@@ -32,7 +32,7 @@ pub(crate) struct SchemaCheck {
 
 impl SchemaCheck {
     /// The check of a call of `eval_type` declaring `expected`, when `eval_type` is a map kind and `enabled`.
-    pub(crate) fn new(eval_type: i32, expected: StructType, enabled: bool) -> Option<Self> {
+    pub fn new(eval_type: i32, expected: StructType, enabled: bool) -> Option<Self> {
         let operation = match eval_type {
             205 => "SQL_MAP_PANDAS_ITER_UDF",
             207 => "SQL_MAP_ARROW_ITER_UDF",
@@ -45,7 +45,7 @@ impl SchemaCheck {
     }
 
     /// `ARROW_TYPE_MISMATCH` unless a batch of `actual` (the result stream's schema) is what Spark accepts.
-    pub(crate) fn check(&self, actual: &Schema) -> Result<(), KrishivError> {
+    pub fn check(&self, actual: &Schema) -> Result<(), KrishivError> {
         let fields: Option<Vec<StructField>> = actual
             .fields()
             .iter()

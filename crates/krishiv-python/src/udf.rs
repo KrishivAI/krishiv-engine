@@ -15,7 +15,9 @@
 
 pub(crate) mod interrupt;
 pub(crate) mod pool;
+pub(crate) mod relation;
 pub(crate) mod runtime;
+pub(crate) mod slots;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -137,6 +139,12 @@ pub(crate) struct PyAnonymousUdf {
     version: u32,
 }
 
+impl PyAnonymousUdf {
+    pub(crate) fn def(&self) -> &krishiv_session::PythonUdfDef {
+        &self.def
+    }
+}
+
 #[pymethods]
 impl PyAnonymousUdf {
     /// Adds `wrapper` (one `pyarrow.Array` per argument in, one of
@@ -184,7 +192,7 @@ impl PyAnonymousUdf {
 
     /// The version plans name this UDF by (top bit set).
     #[getter]
-    fn version(&self) -> u32 {
+    pub(crate) fn version(&self) -> u32 {
         self.version
     }
 

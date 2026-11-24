@@ -671,6 +671,39 @@ fn empty_writes_commit_as_delta_spark() {
     );
 }
 
+/// A `replaceWhere` is read under the session's parser options, as delta-spark parses it with
+/// the session's parser: under `spark.sql.ansi.doubleQuotedIdentifiers`, `"p" = 'y'` names the
+/// partition column (by default it would compare the string `p`).
+#[test]
+fn a_replace_where_reads_a_double_quoted_name_as_the_column_under_ansi_identifiers() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("q");
+    let path = dir.to_string_lossy().into_owned();
+    let s = Session::new().unwrap();
+    run(
+        &s,
+        &format!(
+            "CREATE TABLE q (a INT, p STRING) USING delta PARTITIONED BY (p) LOCATION '{path}'"
+        ),
+    )
+    .unwrap();
+    run(&s, "INSERT INTO q VALUES (1, 'x'), (2, 'y')").unwrap();
+    run(&s, "SET spark.sql.ansi.doubleQuotedIdentifiers = true").unwrap();
+    let new = block_on(s.sql("SELECT 3 AS a, 'y' AS p")).unwrap();
+    block_on(
+        new.write()
+            .format("delta")
+            .mode("overwrite")
+            .option("replaceWhere", "\"p\" = 'y'")
+            .save(&path),
+    )
+    .unwrap();
+    assert_eq!(
+        query(&s, "SELECT a, p FROM q ORDER BY a"),
+        serde_json::json!([[1, "x"], [3, "y"]])
+    );
+}
+
 /// A NULL into a `NOT NULL` column of a Delta table, through SQL and the DataFrame writer, at
 /// the top level and in a nested struct field, fails as delta-spark does (`WRITE-EDGES.json`
 /// `not_null`) and commits nothing.
@@ -930,6 +963,56 @@ fn a_retried_insert_with_the_same_idempotency_key_appends_once() {
     assert_eq!(
         query(&s, "SELECT a FROM k ORDER BY a"),
         serde_json::json!([[1], [2], [3]])
+    );
+}
+
+/// E34: a retried `UPDATE` or `DELETE` under the same `krishiv.write.idempotencyKey` changes the
+/// table once, even when the statement is not idempotent (`a = a + 1`); a new key applies again.
+#[test]
+fn a_retried_update_and_delete_with_the_same_idempotency_key_apply_once() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("k");
+    let path = dir.to_string_lossy().into_owned();
+    let s = Session::new().unwrap();
+    run(
+        &s,
+        &format!("CREATE TABLE k (a INT) USING delta LOCATION '{path}'"),
+    )
+    .unwrap();
+    run(&s, "INSERT INTO k VALUES (1), (2), (3)").unwrap();
+    s.conf()
+        .set("krishiv.write.idempotencyKey", "upd-1")
+        .unwrap();
+    run(&s, "UPDATE k SET a = a + 10").unwrap();
+    let after_first = versions(&dir);
+    run(&s, "UPDATE k SET a = a + 10").unwrap();
+    assert_eq!(versions(&dir), after_first, "the retry committed nothing");
+    assert_eq!(
+        query(&s, "SELECT a FROM k ORDER BY a"),
+        serde_json::json!([[11], [12], [13]])
+    );
+    assert!(
+        last_commit(&dir)
+            .iter()
+            .any(|a| a["txn"]["appId"] == "krishiv.idempotency:upd-1")
+    );
+    s.conf()
+        .set("krishiv.write.idempotencyKey", "del-1")
+        .unwrap();
+    assert_eq!(
+        query(&s, "DELETE FROM k WHERE a = 11"),
+        serde_json::json!([[1]])
+    );
+    let after_delete = versions(&dir);
+    // The retry changed nothing: its result row claims no rows (not the scan's count of 1).
+    assert_eq!(
+        query(&s, "DELETE FROM k WHERE a = 12"),
+        serde_json::json!([[0]])
+    );
+    assert_eq!(versions(&dir), after_delete, "the retried key is a no-op");
+    assert_eq!(
+        query(&s, "SELECT a FROM k ORDER BY a"),
+        serde_json::json!([[12], [13]])
     );
 }
 

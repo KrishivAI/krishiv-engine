@@ -15,7 +15,7 @@
 //!
 //! `kafka`, `iceberg`, `cdc`, `connect`, `flight-sql`, `mcp`, `python`, `wasm-udf`,
 //! `celeborn` and `mimalloc` are reserved names: they enable no code in this crate
-//! yet (features are additive, ADR 0027, so they can gain code later without breaking
+//! yet (features are additive, so they can gain code later without breaking
 //! anyone who names them). The ones that do something are `delta`, `cloud`,
 //! `collations-icu` (on by default), `ui`, `unstable-ir`, `tokio-console`, `telemetry-logs` and
 //! `telemetry-otlp`; `full` turns on the reserved names and the optional backends together.
