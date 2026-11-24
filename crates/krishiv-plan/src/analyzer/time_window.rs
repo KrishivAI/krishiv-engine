@@ -385,7 +385,12 @@ fn is_nested_grouped_window(agg: &LogicalPlan) -> bool {
 
 /// In a `HAVING` or `ORDER BY` over an aggregate grouped by a nested window, `window`, `window.start` and
 /// `window.end` inside an aggregate do not resolve (Spark 4.3: `UNRESOLVED_COLUMN.WITH_SUGGESTION`, where the
-/// select list reads the inner window).
+/// select list reads the inner window). The proposal is the aggregate's output names, closest first. An aggregate
+/// whose own list reads the window outside an aggregate is left to the `MISSING_AGGREGATION` check, which Spark
+/// raises first.
+///
+/// The plan shapes the analyzer produces over the aggregate are `Filter` (HAVING), `Sort` and `Sort -> Filter`
+/// (ORDER BY with HAVING); a `Project` between them is not produced.
 fn refuse_inner_window_above_nested(p: &LogicalPlan) -> Result<(), AnalysisError> {
     fn through_filter(input: &Arc<LogicalPlan>) -> &LogicalPlan {
         match &input.node {
@@ -398,15 +403,27 @@ fn refuse_inner_window_above_nested(p: &LogicalPlan) -> Result<(), AnalysisError
         PlanNode::Sort { input, .. } => through_filter(input),
         _ => return Ok(()),
     };
-    let over = is_nested_grouped_window(below).then_some(below);
-    let Some(agg) = over else {
+    let PlanNode::Aggregate {
+        input, aggregates, ..
+    } = &below.node
+    else {
         return Ok(());
     };
-    let alias_window = matches!(&agg.node, PlanNode::Aggregate { input, .. }
-        if matches!(&input.node, PlanNode::SubqueryAlias { alias, .. } if alias.eq_ignore_ascii_case(WINDOW)));
+    if !is_nested_grouped_window(below) {
+        return Ok(());
+    }
+    let alias_window = matches!(&input.node, PlanNode::SubqueryAlias { alias, .. }
+        if alias.eq_ignore_ascii_case(WINDOW));
+    let mut seen = std::collections::HashSet::new();
+    if aggregates
+        .iter()
+        .any(|e| bare_window(e, alias_window, &mut seen))
+    {
+        return Ok(());
+    }
     let mut hit: Option<(Vec<String>, crate::Origin)> = None;
     p.for_each_expr(&mut |e| {
-        let _ = visit_aggregate_args(e, &mut |c, o| {
+        visit_aggregate_args(e, &mut |c, o| {
             if hit.is_none() && inner_window_ref(c, alias_window).is_some() {
                 hit = Some((c.to_vec(), o));
             }
@@ -415,24 +432,49 @@ fn refuse_inner_window_above_nested(p: &LogicalPlan) -> Result<(), AnalysisError
     let Some((name, origin)) = hit else {
         return Ok(());
     };
+    let outputs = aggregates
+        .iter()
+        .map(|e| match &e.node {
+            ExprNode::Alias { name, .. } => vec![name.clone()],
+            ExprNode::Column(c) => vec![c.name.last().cloned().unwrap_or_default()],
+            _ => vec![super::exprs::pretty(&count_star_as_one(e), None)],
+        })
+        .collect();
+    let proposal = super::suggest::closest(&name.join("."), outputs)
+        .iter()
+        .map(|n| super::catalog::quoted(n))
+        .collect::<Vec<_>>()
+        .join(", ");
     Err(AnalysisError::new(
         UnresolvedColumnWithSuggestion {
-            object_name: name
-                .iter()
-                .map(|n| format!("`{n}`"))
-                .collect::<Vec<_>>()
-                .join("."),
-            proposal: "`count(1)`".to_owned(),
+            object_name: super::catalog::quoted(&name),
+            proposal,
         },
         origin,
     ))
 }
 
+/// `e` with a plain `count(*)` as `count(1)`, which is how Spark names it (the star is still unresolved here).
+fn count_star_as_one(e: &Arc<Expr>) -> Arc<Expr> {
+    match &e.node {
+        ExprNode::Function(f)
+            if !f.distinct
+                && call_of(e, "count").is_some()
+                && matches!(&f.args[..], [a] if matches!(&a.node, ExprNode::Star(s) if s.qualifier.is_empty())) =>
+        {
+            let mut f = f.clone();
+            f.args = vec![Arc::new(Expr::literal(Literal::Integer(1)))];
+            Arc::new(Expr {
+                node: ExprNode::Function(f),
+                ..(**e).clone()
+            })
+        }
+        _ => Arc::clone(e),
+    }
+}
+
 /// Calls `f` with every column reference inside an aggregate call of `e`.
-fn visit_aggregate_args(
-    e: &Arc<Expr>,
-    f: &mut dyn FnMut(&[String], crate::Origin),
-) -> Result<(), AnalysisError> {
+fn visit_aggregate_args(e: &Arc<Expr>, f: &mut dyn FnMut(&[String], crate::Origin)) {
     let mut seen = std::collections::HashSet::new();
     fn go(
         e: &Arc<Expr>,
@@ -452,7 +494,6 @@ fn visit_aggregate_args(
         e.for_each_child(&mut |c| go(c, agg, seen, f));
     }
     go(e, false, &mut seen, f);
-    Ok(())
 }
 
 /// `p` with its window calls read from a new input (see the module documentation).

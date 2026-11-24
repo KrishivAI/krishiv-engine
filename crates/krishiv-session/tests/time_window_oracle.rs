@@ -164,6 +164,36 @@ fn a_window_inside_an_aggregate_of_a_nested_grouped_window_is_the_inner_window()
             text.contains("UnresolvedColumnWithSuggestion"),
             "{tail}: {text}"
         );
+        assert!(
+            text.contains("(\"proposal\", \"`count(1)`\")"),
+            "{tail}: {text}"
+        );
+    }
+    // The proposal lists the aggregate's output names (Spark 4.3.0), and a select list that reads the window
+    // outside an aggregate is MISSING_AGGREGATION first.
+    let having = "HAVING max(window.start) = timestamp'2026-01-01 00:03:00'";
+    for (select, tail, want) in [
+        ("count(*) AS c", having, "(\"proposal\", \"`c`\")"),
+        (
+            "max(window.start) AS m, count(*)",
+            having,
+            "(\"proposal\", \"`count(1)`, `m`\")",
+        ),
+        ("window, count(*)", having, "MissingAggregation"),
+        (
+            "window, count(*)",
+            "ORDER BY max(window.start)",
+            "MissingAggregation",
+        ),
+    ] {
+        let err = block_on(async {
+            s.sql(&format!("SELECT {select} {from} {tail}"))
+                .await?
+                .collect()
+                .await
+        });
+        let text = format!("{:?}", err.err().ok_or("expected an error")?);
+        assert!(text.contains(want), "{select} {tail}: {text}");
     }
     Ok(())
 }
