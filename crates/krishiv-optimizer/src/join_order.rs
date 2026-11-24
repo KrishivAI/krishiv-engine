@@ -1227,9 +1227,9 @@ impl Graph {
             .collect()
     }
 
-    /// The tree planned by `settings`' enumerator, and what it did.
-    /// The plan of the tree and its note. `clustered`: where the prune-first choice reads which
-    /// columns are clustered in the largest input's files (`None`: the choice is off).
+    /// The tree planned by `settings`' enumerator, and its note. `clustered`: where the prune-first
+    /// choice reads which columns are clustered in the largest input's files (`None`: the choice
+    /// is off).
     fn plan(
         &self,
         settings: Settings,

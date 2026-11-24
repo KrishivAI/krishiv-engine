@@ -10,9 +10,9 @@
 //! passing `L`; the blocked order plans the block on its own and joins `L` to it before anything
 //! else, so `L` (the larger side) probes the block's table. A composite-key estimate cannot tell
 //! a foreign key (TPC-DS `store_sales` to `store_returns` on item and ticket) from a many-to-many
-//! match on the same statistics, and when
-//! the block is planned first, the runtime filter its keys publish skips most of `L`'s row groups
-//! through the clustered column, which plain `C_out` does not see.
+//! match on the same statistics, and when the block is planned first, the runtime filter its keys
+//! publish skips most of `L`'s row groups through the clustered column, which plain `C_out` does
+//! not see.
 //!
 //! The choice: the blocked order wins when its estimated cost is at most [`REGRET`] times the
 //! cheapest order's (bounded regret: a wrong pick costs the block's extra rows, a right one the
