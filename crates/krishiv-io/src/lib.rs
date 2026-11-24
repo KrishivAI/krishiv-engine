@@ -36,6 +36,7 @@ mod error;
 mod format;
 pub mod io;
 pub mod json;
+mod local_path;
 mod name_mapping;
 mod options;
 pub mod parquet;
@@ -86,6 +87,7 @@ pub use krishiv_store::{CredentialScope, CredentialSource, ScopedCredential};
 /// The egress policy's HTTP clients (design P3-T067 §5.2), from `krishiv-store`.
 #[cfg(feature = "cloud")]
 pub use krishiv_store::{PolicyConnector, Redirects, SharedHttpClients};
+pub use local_path::local_object_path;
 pub use options::{
     FILE_SOURCE_OPTIONS, FormatOptions, OptionDefault, OptionKind, OptionSchema, OptionSpec,
     OptionWarning,

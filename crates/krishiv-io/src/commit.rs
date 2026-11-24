@@ -298,7 +298,9 @@ impl DirectoryWrite {
         for chunk in add.chunks(32) {
             let mut heads = Vec::with_capacity(chunk.len());
             for f in chunk {
-                let path = Path::from(format!("{}/{}", self.dir, f.path));
+                let path = Path::parse(format!("{}/{}", self.dir, f.path)).map_err(|e| {
+                    crate::error::unsupported(format!("committed file names ({e})"))
+                })?;
                 heads.push(Box::pin(async move { io.head(&self.store, &path).await }));
             }
             for head in futures::future::join_all(heads).await {

@@ -1275,7 +1275,8 @@ pub(crate) fn physical(
     Ok(Checked {
         at: LocatedPath {
             store: at.store,
-            path: object_store::path::Path::from_iter(parts.iter().map(String::as_str)),
+            path: krishiv_io::local_object_path(&parts)
+                .map_err(|_| unresolved(session, class, &shown, privilege))?,
             display: format!("file:/{}", parts.join("/")),
         },
         shown,

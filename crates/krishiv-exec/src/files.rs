@@ -55,7 +55,7 @@ use krishiv_io::{
 };
 use krishiv_plan::analyzer::{FileSchemaResolver, SourceKind, TableColumn};
 use krishiv_types::{DataType, StructType};
-use object_store::path::Path;
+use object_store::path::{Path, PathPart};
 
 use crate::error::Result;
 use crate::operators::PathRoots;
@@ -174,7 +174,7 @@ impl PathLocator for LocalPaths {
         let display = format!("file:/{}", parts.join("/"));
         Ok(LocatedPath {
             store: self.store.clone(),
-            path: Path::from_iter(parts),
+            path: krishiv_io::local_object_path(&parts)?,
             display,
         })
     }
@@ -1050,11 +1050,11 @@ impl FileReads {
             Arc<BTreeMap<String, krishiv_io::commit_log::AddedFile>>,
         )>,
     > {
-        let mut parts: Vec<String> = at.path.parts().map(|p| p.as_ref().to_owned()).collect();
+        let mut parts: Vec<PathPart<'_>> = at.path.parts().collect();
         let mut display = at.display.clone();
         while parts
             .last()
-            .is_some_and(|name| parse_segment(name).is_some())
+            .is_some_and(|name| parse_segment(name.as_ref()).is_some())
         {
             parts.pop();
             display = display
@@ -1062,7 +1062,7 @@ impl FileReads {
                 .map_or_else(String::new, |(head, _)| head.to_owned());
             let parent = LocatedPath {
                 store: at.store.clone(),
-                path: Path::from_iter(parts.iter().map(String::as_str)),
+                path: Path::from_iter(parts.iter().cloned()),
                 display: display.clone(),
             };
             if let Some(files) = Box::pin(self.committed_files(&parent)).await? {
