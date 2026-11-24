@@ -31,6 +31,7 @@ iceberg-rest = [
 session = [
     "iceberg-rest",
     "dep:krishiv-session",
+    "dep:krishiv-sql",
     "dep:krishiv-plan",
     "dep:krishiv-exec",
     "dep:krishiv-connectors-iceberg",
@@ -87,6 +88,7 @@ krishiv-exec = { path = "../krishiv-exec", version = "=0.2.1", optional = true }
 krishiv-connectors-iceberg = { path = "../krishiv-connectors-iceberg", version = "=0.2.1", optional = true }
 # The `CatalogFactory` trait and the declarations it builds from (feature `session`).
 krishiv-session = { path = "../krishiv-session", version = "=0.2.1", optional = true }
+krishiv-sql = { path = "../krishiv-sql", version = "=0.2.1", optional = true }
 tracing.workspace = true
 # The vended-credential source of a declared table (`krishiv-store`'s `CredentialSource`) and the
 # connector's async `RestCommitTransport` trait, implemented by a declared table's committer (feature `session`).

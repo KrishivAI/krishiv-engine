@@ -409,6 +409,43 @@ fn is_string(t: Option<&DataType>) -> bool {
 /// not be walked once per parent (`shared_expressions_stay_linear`).
 type Memo = std::collections::HashMap<usize, Option<(Collation, Strength)>>;
 
+/// `k`'s display cast to `want` (SQL-41: Spark names a literal of another collation as
+/// `'x' collate C` when the call's collation differs from the literal's).
+fn shown_cast(k: &Bound, want: Collation, origin: crate::Origin) -> Arc<Expr> {
+    Arc::new(
+        Expr::new(ExprNode::Cast {
+            expr: k.shown(),
+            to: if want.is_utf8_binary() {
+                DataType::String
+            } else {
+                DataType::collated_string(want)
+            },
+            mode: CastMode::Default,
+        })
+        .with_origin(origin),
+    )
+}
+
+/// `k`'s display: cast to `want` when it is a literal of another collation, as written otherwise.
+fn shown_literal_cast(
+    k: &Bound,
+    want: Collation,
+    origin: crate::Origin,
+    memo: &mut Memo,
+) -> Arc<Expr> {
+    let own = match k.ty.data_type.as_ref() {
+        Some(DataType::CollatedString(c)) => Some(*c),
+        Some(DataType::String) => Some(Collation::UTF8_BINARY),
+        _ => None,
+    };
+    let literal = matches!(strength_of(&k.shown(), memo), Some((_, Strength::Default)));
+    if literal && own.is_some_and(|o| o != want) {
+        shown_cast(k, want, origin)
+    } else {
+        k.shown()
+    }
+}
+
 /// The collation and strength `e` carries, when it is a string.
 fn strength_of(e: &Expr, memo: &mut Memo) -> Option<(Collation, Strength)> {
     let key = std::ptr::from_ref(e) as usize;
@@ -1004,17 +1041,7 @@ impl Resolver<'_> {
                         "encode" | "decode" | "to_binary" | "try_to_binary"
                     )
                 {
-                    let shown = Expr::new(ExprNode::Cast {
-                        expr: k.shown(),
-                        to: if want.is_utf8_binary() {
-                            DataType::String
-                        } else {
-                            DataType::collated_string(want)
-                        },
-                        mode: CastMode::Default,
-                    })
-                    .with_origin(e.origin);
-                    k.shown = Some(Arc::new(shown));
+                    k.shown = Some(shown_cast(&k, want, e.origin));
                 }
                 if is_marker(k.ty.data_type.as_ref()) || is_collated(k.ty.data_type.as_ref()) {
                     k.ty.data_type = Some(DataType::String);
@@ -1302,14 +1329,7 @@ impl Resolver<'_> {
                 )
                 && k.ty.data_type != Some(DataType::collated_string(c))
             {
-                b.shown = Some(Arc::new(
-                    Expr::new(ExprNode::Cast {
-                        expr: k.shown(),
-                        to: DataType::collated_string(c),
-                        mode: CastMode::Default,
-                    })
-                    .with_origin(e.origin),
-                ));
+                b.shown = Some(shown_cast(k, c, e.origin));
             }
             b.carry_markers(std::slice::from_ref(k));
             keyed.push(b);
@@ -1661,7 +1681,21 @@ impl Resolver<'_> {
         )
         .with_origin(e.origin);
         let mut b = self.expr_node_inner(&Arc::new(call), &plain, in_agg, window_fn, cx)?;
-        b.shown = Some(with_children(e, kids.iter().map(Bound::shown).collect()));
+        let (chosen, _) = self.choose_collation(e, kids, 2, name)?;
+        let c = chosen.unwrap_or(Collation::UTF8_LCASE);
+        let mut memo = Memo::default();
+        let shown = kids
+            .iter()
+            .enumerate()
+            .map(|(i, k)| {
+                if i < 2 {
+                    shown_literal_cast(k, c, e.origin, &mut memo)
+                } else {
+                    k.shown()
+                }
+            })
+            .collect();
+        b.shown = Some(with_children(e, shown));
         Ok(Some(b))
     }
 
@@ -1709,7 +1743,32 @@ impl Resolver<'_> {
         )
         .with_origin(e.origin);
         let mut b = self.expr_node_inner(&Arc::new(call), &keyed, in_agg, window_fn, cx)?;
-        b.shown = Some(with_children(e, kids.iter().map(Bound::shown).collect()));
+        // A literal of another collation is shown cast to the call's by `shown_cast`
+        // (SQL-41: `instr(c COLLATE UTF8_LCASE, 'PL')` is `.., 'PL' collate UTF8_LCASE)`).
+        let mut memo = Memo::default();
+        let shown = kids
+            .iter()
+            .enumerate()
+            .map(|(i, k)| {
+                if i < 2 {
+                    shown_literal_cast(k, c, e.origin, &mut memo)
+                } else {
+                    k.shown()
+                }
+            })
+            .collect::<Vec<_>>();
+        // Spark's two-argument `locate` / `position` carries the start 1 it defaults to.
+        let mut shown_call = with_children(e, shown.clone());
+        if n == 2
+            && !matches!(name, "instr" | "find_in_set")
+            && let ExprNode::Function(call) = &e.node
+        {
+            let mut call = call.clone();
+            call.args = shown;
+            call.args.push(Arc::clone(&keyed[2].expr));
+            shown_call = Arc::new(Expr::new(ExprNode::Function(call)).with_origin(e.origin));
+        }
+        b.shown = Some(shown_call);
         Ok(Some(b))
     }
 

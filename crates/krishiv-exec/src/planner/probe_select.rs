@@ -120,6 +120,13 @@ impl Planner<'_> {
         else {
             return None;
         };
+        // Not into a scan under a security barrier: the policy's filter keeps its own operator.
+        if let PhysNode::Filter { input, .. } = n
+            && let PhysNode::Scan(scan) = &**input
+            && self.guarded.contains(&scan.id)
+        {
+            return None;
+        }
         if !subqueries.is_empty()
             || has_subquery(predicate)
             || !is_deterministic(predicate)

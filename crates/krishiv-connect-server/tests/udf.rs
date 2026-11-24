@@ -1320,10 +1320,17 @@ async fn a_persisted_udf_survives_a_restart_and_is_typed_by_the_first_analysis()
         Some(file_store(&file)),
     )
     .await;
+    // As PySpark 4.x sends it: the statement as `input`, a `SQL` relation.
     let command = pb::Plan {
         op_type: Some(OpType::Command(Box::new(pb::Command {
             command_type: Some(CommandType::SqlCommand(Box::new(pb::SqlCommand {
-                sql: "SELECT plus_one(id) FROM range(3)".to_owned(),
+                input: Some(pb::Relation {
+                    common: None,
+                    rel_type: Some(RelType::Sql(pb::Sql {
+                        query: "SELECT plus_one(id) FROM range(3)".to_owned(),
+                        ..Default::default()
+                    })),
+                }),
                 ..Default::default()
             }))),
         }))),
