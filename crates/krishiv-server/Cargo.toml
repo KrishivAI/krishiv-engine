@@ -54,6 +54,8 @@ krishiv-session = { path = "../krishiv-session" }
 krishiv-exec = { path = "../krishiv-exec" }
 tempfile.workspace = true
 tower = { workspace = true, features = ["util"] }
+# The HTTP/2 client of the TLS console test (tonic's channel over a `tokio-rustls` stream).
+hyper-util = { workspace = true, features = ["tokio"] }
 tonic = { workspace = true, features = ["channel", "server", "router", "codegen"] }
 tonic-prost.workspace = true
 prost = { workspace = true, features = ["derive", "std"] }
