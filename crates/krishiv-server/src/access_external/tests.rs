@@ -314,6 +314,23 @@ async fn a_large_prefetch_is_split_into_calls_of_the_cap() {
 }
 
 #[tokio::test]
+async fn a_prefetch_asks_no_more_pairs_than_the_memo_keeps() {
+    let s = serve(Mode::Rule, None).await;
+    let policy = s.access.policy();
+    let items: Vec<_> = (0..MEMO_LIMIT + 5)
+        .map(|i| (table(&format!("t{i}")), Privilege::Select))
+        .collect();
+    policy.prefetch(&ana(), &items).await;
+    let asked: usize = s.requests().iter().map(|(r, _)| r.items.len()).sum();
+    assert_eq!(asked, MEMO_LIMIT);
+    // A pair past the bound is asked alone.
+    let before = s.access.calls();
+    let (last, privilege) = items.last().cloned().unwrap();
+    policy.check(&ana(), &last, privilege).await.unwrap();
+    assert_eq!(s.access.calls(), before + 1);
+}
+
+#[tokio::test]
 async fn every_failure_is_a_denial() {
     for mode in [Mode::Short, Mode::Unknown, Mode::Slow, Mode::Fail] {
         let s = serve(mode, None).await;

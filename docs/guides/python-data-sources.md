@@ -103,9 +103,11 @@ instead, with `None` for the failed task's message. `mode("overwrite")` passes `
 - Filter pushdown is off, as in Spark 4.3 (`spark.sql.python.filterPushdown.enabled`). A reader that overrides
   `pushFilters` fails with `DATA_SOURCE_PUSHDOWN_DISABLED`; with the key on, `pushFilters` is still not called and
   Krishiv applies every filter itself.
-- One `DataSource` object is created per `load` and reused by every action on that DataFrame. Spark pickles it after
-  `schema()` and unpickles that copy for every planning: state set in `__init__` or `schema()` reaches the reader,
-  state set during one action does not reach the next. Do not rely on such state; Krishiv will behave the same once
-  readers run on workers.
+- One `DataSource` object is created per `load` and reused by every action on that DataFrame. Spark pickles it once
+  `load` has its schema (after `schema()` when the schema is inferred; with `.schema(...)` neither Spark nor Krishiv
+  calls `schema()`, so state set there does not exist) and unpickles that copy for every planning: state set in
+  `__init__` (or in `schema()` when it ran) reaches the reader, and so does state the reader gets while it is planned
+  (its constructor's arguments, for example), but state set during one planning or action does not reach the next.
+  Do not rely on state carried from one action to the next; Krishiv will behave the same once readers run on workers.
 
 The full API is in the [Python reference](../reference/python/krishiv.sql.datasource.md).

@@ -578,6 +578,9 @@ impl AccessPolicy for ExternalPolicy {
             let asked: Vec<(Securable, Privilege)> = items
                 .iter()
                 .filter(|(s, p)| self.access.decides(s) && convert::known(s, *p))
+                // The memo keeps at most `MEMO_LIMIT` answers, so no more are asked ahead: a
+                // check past them asks the service itself.
+                .take(MEMO_LIMIT)
                 .cloned()
                 .collect();
             if asked.is_empty() {
