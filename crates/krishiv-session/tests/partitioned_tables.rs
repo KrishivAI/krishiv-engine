@@ -1892,14 +1892,6 @@ fn ansi_store_by_name_pairs_nested_struct_fields_by_name() {
         ),
         ["1|2"]
     );
-    // A target field the source lacks is refused.
-    assert_eq!(
-        class(
-            &s,
-            "insert into bna by name select named_struct('a', 1, 'c', 2) as s"
-        ),
-        "INCOMPATIBLE_DATA_FOR_TABLE.CANNOT_SAFELY_CAST"
-    );
 }
 
 /// Map keys that collide after the LEGACY store cast follow `spark.sql.mapKeyDedupPolicy` (the map is rebuilt

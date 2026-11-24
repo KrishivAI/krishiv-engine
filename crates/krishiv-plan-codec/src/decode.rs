@@ -316,12 +316,14 @@ fn plan(m: &pb::PhysicalPlan, limits: &Limits) -> Result<PhysicalPlan> {
         return Err(corrupt("an unknown binary output style"));
     }
     // A writer sets the line only when it is not the default, and by its exact name.
+    // The default is never written; a plan that names it reads as the canonical `None`.
     let spark_version = match env.spark_version.as_deref() {
         None => None,
         Some(name) => Some(
             krishiv_kernels::SparkVersion::from_name(name)
                 .ok_or_else(|| corrupt("an unknown Spark version"))?,
-        ),
+        )
+        .filter(|v| *v != krishiv_kernels::SparkVersion::default()),
     };
     let env = ExprEnv {
         ansi: env.ansi,

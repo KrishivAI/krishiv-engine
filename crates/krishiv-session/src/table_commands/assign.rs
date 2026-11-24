@@ -3,9 +3,10 @@
 //! store-assignment rule and the `CAST_OVERFLOW_IN_TABLE_INSERT` rewrite of a write's overflow.
 
 use krishiv_common::error::{
-    CastOverflowInTableInsert, ErrorClass, IncompatibleDataForTableCannotSafelyCast,
-    InsertColumnArityMismatchNotEnoughDataColumns, InsertColumnArityMismatchTooManyDataColumns,
-    KrishivError, UnresolvedColumnWithSuggestion,
+    CastOverflowInTableInsert, ErrorClass, IncompatibleDataForTableAmbiguousColumnName,
+    IncompatibleDataForTableCannotFindData, IncompatibleDataForTableCannotSafelyCast,
+    IncompatibleDataForTableExtraStructFields, InsertColumnArityMismatchNotEnoughDataColumns,
+    InsertColumnArityMismatchTooManyDataColumns, KrishivError, UnresolvedColumnWithSuggestion,
 };
 use krishiv_plan::analyzer::TableColumn;
 use krishiv_types::DataType;
@@ -122,6 +123,18 @@ pub(super) fn assign(
         }
     }
     for (column, from) in table.columns.iter().zip(&out) {
+        // `INSERT .. BY NAME` resolves a struct's fields by name under every policy (Spark's
+        // `reorderColumnsByName`), before any leaf is checked.
+        if let (Source::Position(i), Some(case)) = (from, names)
+            && let Some(problem) = struct_problem(
+                &output[*i].data_type,
+                &column.data_type,
+                &[column.name.as_str()],
+                case,
+            )
+        {
+            return Err(problem.into_error(table_name));
+        }
         // `spark.sql.storeAssignmentPolicy=LEGACY` stores through any cast Spark can run: no ANSI check, but
         // a cast Spark refuses in every mode (an `ARRAY` into an `INT`) is refused here, before a first
         // clause commits.
@@ -145,6 +158,109 @@ pub(super) fn assign(
         }
     }
     Ok(out)
+}
+
+/// What `INSERT .. BY NAME` found wrong when it paired a struct's fields by name.
+enum StructProblem {
+    /// A target field no source field matches (`CANNOT_FIND_DATA`).
+    CannotFind(String),
+    /// Source fields no target field takes (`EXTRA_STRUCT_FIELDS`): the struct's path and the fields.
+    Extra(String, String),
+    /// Two source fields match one target field (`AMBIGUOUS_COLUMN_NAME`).
+    Ambiguous(String),
+}
+
+impl StructProblem {
+    fn into_error(self, table_name: String) -> KrishivError {
+        match self {
+            Self::CannotFind(col_name) => IncompatibleDataForTableCannotFindData {
+                table_name,
+                col_name,
+            }
+            .into(),
+            Self::Extra(col_name, extra_fields) => IncompatibleDataForTableExtraStructFields {
+                table_name,
+                col_name,
+                extra_fields,
+            }
+            .into(),
+            Self::Ambiguous(col_name) => IncompatibleDataForTableAmbiguousColumnName {
+                table_name,
+                col_name,
+            }
+            .into(),
+        }
+    }
+}
+
+/// The backquoted dotted path of a nested column (Spark's `UnresolvedAttribute.quoted`).
+fn quoted_path(path: &[&str]) -> String {
+    path.iter()
+        .map(|p| format!("`{p}`"))
+        .collect::<Vec<_>>()
+        .join(".")
+}
+
+/// The first struct, at any depth of `from` and `to` (through arrays and maps), whose fields do not pair by
+/// name under `case_sensitive`: Spark's `TableOutputResolver.reorderColumnsByName` errors, in its order (each
+/// target field in turn, ambiguity then absence, then source fields left over).
+fn struct_problem(
+    from: &DataType,
+    to: &DataType,
+    path: &[&str],
+    case_sensitive: bool,
+) -> Option<StructProblem> {
+    match (from, to) {
+        (DataType::Array(f), DataType::Array(t)) => {
+            let path = [path, &["element"]].concat();
+            struct_problem(f.element_type(), t.element_type(), &path, case_sensitive)
+        }
+        (DataType::Map(f), DataType::Map(t)) => {
+            let (key, value) = ([path, &["key"]].concat(), [path, &["value"]].concat());
+            struct_problem(f.key_type(), t.key_type(), &key, case_sensitive)
+                .or_else(|| struct_problem(f.value_type(), t.value_type(), &value, case_sensitive))
+        }
+        (DataType::Struct(f), DataType::Struct(t)) => {
+            let same = |a: &str, b: &str| {
+                if case_sensitive {
+                    a == b
+                } else {
+                    a.eq_ignore_ascii_case(b)
+                }
+            };
+            let mut used = vec![false; f.fields().len()];
+            for target in t.fields() {
+                let at = [path, &[target.name()]].concat();
+                let matches: Vec<usize> = (0..f.fields().len())
+                    .filter(|&i| same(f.fields()[i].name(), target.name()))
+                    .collect();
+                match matches.as_slice() {
+                    [] => return Some(StructProblem::CannotFind(quoted_path(&at))),
+                    [one] => {
+                        used[*one] = true;
+                        if let Some(p) = struct_problem(
+                            f.fields()[*one].data_type(),
+                            target.data_type(),
+                            &at,
+                            case_sensitive,
+                        ) {
+                            return Some(p);
+                        }
+                    }
+                    _ => return Some(StructProblem::Ambiguous(quoted_path(&at))),
+                }
+            }
+            let extra: Vec<String> = f
+                .fields()
+                .iter()
+                .zip(&used)
+                .filter(|(_, used)| !**used)
+                .map(|(f, _)| format!("`{}`", f.name()))
+                .collect();
+            (!extra.is_empty()).then(|| StructProblem::Extra(quoted_path(path), extra.join(", ")))
+        }
+        _ => None,
+    }
 }
 
 /// Whether `storeAssignmentPolicy=LEGACY` refuses to store `from` into `to`. Spark recurses only through a
