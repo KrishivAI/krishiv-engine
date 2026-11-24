@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import os
 import threading
+import urllib.request
 import uuid
 from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -138,19 +139,32 @@ def test_the_session_catalog_keys_stay_configuration(stub_uri: str) -> None:
 def test_smoke_against_an_iceberg_rest_catalog() -> None:
     # The 0.3 RC smoke's embedded Iceberg part (SMOKE-iceberg-builder, SMOKE-iceberg-list-namespaces).
     assert REST_URI is not None
+    # A namespace of this run's own, made through the REST API, is the oracle: the listing must hold it.
+    ns = f"smoke_{uuid.uuid4().hex[:8]}"
+    request = urllib.request.Request(
+        f"{REST_URI.rstrip('/')}/v1/namespaces",
+        data=json.dumps({"namespace": [ns], "properties": {}}).encode(),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=30) as response:
+        assert response.status == 200
     s = _declared(REST_URI).create()
     try:
         names = [r[0] for r in s.sql("SHOW NAMESPACES IN lake").collect()]
-        assert isinstance(names, list)
+        assert ns in names, names
         assert "lake" in [c.name for c in s.catalog.listCatalogs()]
     finally:
         s.stop()
 
 
 def test_new_session_keeps_the_declarations(stub_uri: str) -> None:
-    s = _declared(stub_uri, f"c{uuid.uuid4().hex[:8]}").create()
+    name = f"c{uuid.uuid4().hex[:8]}"
+    s = _declared(stub_uri, name).create()
     try:
         other = s.newSession()
-        assert len(other.catalog.listCatalogs()) == len(s.catalog.listCatalogs())
+        assert [c.name for c in other.catalog.listCatalogs()] == [c.name for c in s.catalog.listCatalogs()]
+        assert name in [c.name for c in other.catalog.listCatalogs()]
+        assert [r[0] for r in other.sql(f"SHOW NAMESPACES IN {name}").collect()] == ["rc"]
     finally:
         s.stop()
