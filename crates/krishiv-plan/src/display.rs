@@ -524,6 +524,7 @@ impl Display for NodeLine<'_> {
                 (crate::SetOperation::Except, false) => f.write_str("Except false"),
                 (crate::SetOperation::Except, true) => f.write_str("Except All true"),
             },
+            PlanNode::Zip { .. } => f.write_str("Zip"),
             PlanNode::ReplicateRows { count, .. } => {
                 write!(f, "Generate replicaterows({})", Text(count))
             }

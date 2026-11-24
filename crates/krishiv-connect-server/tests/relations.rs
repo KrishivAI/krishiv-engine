@@ -704,3 +704,455 @@ async fn na_drop_how_all_keeps_a_row_with_any_value() {
         strings(&[&["NULL", "3"], &["a", "5"]])
     );
 }
+
+fn project(input: pb::Relation, expressions: Vec<pb::Expression>) -> pb::Relation {
+    relation(RelType::Project(Box::new(pb::Project {
+        input: Some(Box::new(input)),
+        expressions,
+    })))
+}
+
+/// `left + right AS name`.
+fn plus(left: &str, right: i32, name: &str) -> pb::Expression {
+    use pb::expression::{Alias, ExprType, Literal, UnresolvedFunction, literal::LiteralType};
+    let literal = pb::Expression {
+        common: None,
+        expr_type: Some(ExprType::Literal(Literal {
+            literal_type: Some(LiteralType::Integer(right)),
+            data_type: None,
+        })),
+    };
+    let call = pb::Expression {
+        common: None,
+        expr_type: Some(ExprType::UnresolvedFunction(UnresolvedFunction {
+            function_name: "+".to_owned(),
+            arguments: vec![attr(left), literal],
+            is_distinct: false,
+            is_user_defined_function: false,
+            is_internal: None,
+        })),
+    };
+    pb::Expression {
+        common: None,
+        expr_type: Some(ExprType::Alias(Box::new(Alias {
+            expr: Some(Box::new(call)),
+            name: vec![name.to_owned()],
+            metadata: None,
+        }))),
+    }
+}
+
+fn zip(left: pb::Relation, right: pb::Relation) -> pb::Relation {
+    relation(RelType::Zip(Box::new(pb::Zip {
+        left: Some(Box::new(left)),
+        right: Some(Box::new(right)),
+    })))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn zip_puts_the_columns_of_two_projections_of_one_source_side_by_side() {
+    let server = start().await;
+    let left = project(source(), vec![attr("id"), plus("a", 1, "a1")]);
+    let right = project(source(), vec![attr("b"), plus("a", 2, "a2")]);
+    assert_eq!(
+        run(&server, zip(left, right)).await.expect("runs"),
+        strings(&[
+            &["1", "11", "100", "12"],
+            &["1", "11", "100", "12"],
+            &["2", "21", "NULL", "22"],
+        ])
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn zip_of_a_source_with_a_projection_of_it_keeps_both_sets_of_columns() {
+    let server = start().await;
+    let right = project(source(), vec![plus("id", 100, "big")]);
+    assert_eq!(
+        run(&server, zip(source(), right)).await.expect("runs"),
+        strings(&[
+            &["1", "10", "100", "101"],
+            &["1", "10", "100", "101"],
+            &["2", "20", "NULL", "102"],
+        ])
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn zip_of_different_sources_is_not_mergeable() {
+    let server = start().await;
+    let other = relation(RelType::Sql(pb::Sql {
+        query: "SELECT 1 AS x".to_owned(),
+        ..Default::default()
+    }));
+    let status = run(&server, zip(source(), other))
+        .await
+        .expect_err("refused");
+    assert_eq!(error_class(&status), "ZIP_PLANS_NOT_MERGEABLE");
+}
+
+fn call(function: &str, arg: pb::Expression, name: &str) -> pb::Expression {
+    use pb::expression::{Alias, ExprType, UnresolvedFunction};
+    let call = pb::Expression {
+        common: None,
+        expr_type: Some(ExprType::UnresolvedFunction(UnresolvedFunction {
+            function_name: function.to_owned(),
+            arguments: vec![arg],
+            is_distinct: false,
+            is_user_defined_function: false,
+            is_internal: None,
+        })),
+    };
+    pb::Expression {
+        common: None,
+        expr_type: Some(ExprType::Alias(Box::new(Alias {
+            expr: Some(Box::new(call)),
+            name: vec![name.to_owned()],
+            metadata: None,
+        }))),
+    }
+}
+
+fn aggregate(
+    input: pb::Relation,
+    keys: Vec<pb::Expression>,
+    aggs: Vec<pb::Expression>,
+) -> pb::Relation {
+    relation(RelType::Aggregate(Box::new(pb::Aggregate {
+        input: Some(Box::new(input)),
+        group_type: pb::aggregate::GroupType::Groupby as i32,
+        grouping_expressions: keys,
+        aggregate_expressions: aggs,
+        pivot: None,
+        grouping_sets: Vec::new(),
+    })))
+}
+
+fn renamed(input: pb::Relation, from: &str, to: &str) -> pb::Relation {
+    relation(RelType::WithColumnsRenamed(Box::new(
+        pb::WithColumnsRenamed {
+            input: Some(Box::new(input)),
+            rename_columns_map: [(from.to_owned(), to.to_owned())].into(),
+            renames: Vec::new(),
+        },
+    )))
+}
+
+fn dropped(input: pb::Relation, column: &str) -> pb::Relation {
+    relation(RelType::Drop(Box::new(pb::Drop {
+        input: Some(Box::new(input)),
+        columns: Vec::new(),
+        column_names: vec![column.to_owned()],
+    })))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn zip_sees_through_a_rename_and_a_drop_on_either_side() {
+    let server = start().await;
+    // DataFrameZipSuite "withColumnRenamed on both sides" and a drop against a select.
+    let both = zip(renamed(source(), "id", "id1"), renamed(source(), "a", "a1"));
+    assert_eq!(
+        run(&server, both).await.expect("runs"),
+        strings(&[
+            &["1", "10", "100", "1", "10", "100"],
+            &["1", "10", "100", "1", "10", "100"],
+            &["2", "20", "NULL", "2", "20", "NULL"],
+        ])
+    );
+    let drop_select = zip(dropped(source(), "b"), project(source(), vec![attr("a")]));
+    assert_eq!(
+        run(&server, drop_select).await.expect("runs"),
+        strings(&[&["1", "10", "10"], &["1", "10", "10"], &["2", "20", "20"]])
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn zip_layers_a_chain_of_projections_and_keeps_a_shared_producer_once() {
+    let server = start().await;
+    // Several layers on one side: `a2` reads `a1`, which reads the base.
+    let left = project(
+        project(source(), vec![attr("id"), plus("a", 1, "a1")]),
+        vec![plus("a1", 1, "a2")],
+    );
+    let right = project(source(), vec![plus("a", 5, "a5")]);
+    assert_eq!(
+        run(&server, zip(left, right)).await.expect("runs"),
+        strings(&[&["12", "15"], &["12", "15"], &["22", "25"]])
+    );
+    // The same producer under two names is computed once and keeps both names' values.
+    let x = project(source(), vec![plus("a", 1, "x")]);
+    let y = project(source(), vec![plus("a", 1, "y")]);
+    assert_eq!(
+        run(&server, zip(x, y)).await.expect("runs"),
+        strings(&[&["11", "11"], &["11", "11"], &["21", "21"]])
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn zip_refuses_an_aggregate_against_the_plan_it_aggregates() {
+    let server = start().await;
+    let maxima = || vec![call("max", attr("id"), "m"), call("max", attr("a"), "n")];
+    let left = aggregate(source(), Vec::new(), maxima());
+    let right = project(source(), vec![attr("id"), attr("a")]);
+    let status = run(&server, zip(left, right)).await.expect_err("refused");
+    assert_eq!(error_class(&status), "ZIP_PLANS_NOT_MERGEABLE");
+    // Two aggregates over a grouped DataFrame: the outer one is not the grouped DataFrame itself.
+    let grouped = || {
+        aggregate(
+            source(),
+            vec![attr("id")],
+            vec![call("sum", attr("a"), "s")],
+        )
+    };
+    let outer = aggregate(
+        grouped(),
+        Vec::new(),
+        vec![call("max", attr("id"), "id"), call("max", attr("s"), "s")],
+    );
+    let inner = project(grouped(), vec![attr("id"), attr("s")]);
+    let status = run(&server, zip(outer, inner)).await.expect_err("refused");
+    assert_eq!(error_class(&status), "ZIP_PLANS_NOT_MERGEABLE");
+}
+
+/// `rand() AS name`.
+fn rand_as(name: &str) -> pb::Expression {
+    use pb::expression::{Alias, ExprType, UnresolvedFunction};
+    pb::Expression {
+        common: None,
+        expr_type: Some(ExprType::Alias(Box::new(Alias {
+            expr: Some(Box::new(pb::Expression {
+                common: None,
+                expr_type: Some(ExprType::UnresolvedFunction(UnresolvedFunction {
+                    function_name: "rand".to_owned(),
+                    arguments: Vec::new(),
+                    is_distinct: false,
+                    is_user_defined_function: false,
+                    is_internal: None,
+                })),
+            })),
+            name: vec![name.to_owned()],
+            metadata: None,
+        }))),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn zip_computes_a_shared_unseeded_producer_once() {
+    let server = start().await;
+    // `P = select(rand() AS r)`; `zip(P.select(r + r AS x), P)`: both sides share P's alias, so `x` reads
+    // the one `r` the output carries.
+    let shared = project(source(), vec![rand_as("r")]);
+    let left = project(shared.clone(), vec![add_columns("r", "r", "x")]);
+    let rows = run(&server, zip(left, shared)).await.expect("runs");
+    assert_eq!(rows.len(), 3, "{rows:?}");
+    for r in &rows {
+        assert_eq!(r.len(), 2, "{r:?}");
+        assert!(
+            (cell_number(&r[0]) - 2.0 * cell_number(&r[1])).abs() < 1e-12,
+            "{r:?}"
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn zip_keeps_independent_nondeterministic_producers_apart() {
+    let server = start().await;
+    // Equal bodies, no shared parent: Spark gives each `rand()` its own seed, so `y` is not read from `x`.
+    let left = project(source(), vec![rand_as("x")]);
+    let right = project(source(), vec![rand_as("y")]);
+    let rows = run(&server, zip(left, right)).await.expect("runs");
+    assert_eq!(rows.len(), 3);
+    assert!(rows.iter().all(|r| r[0] != r[1]), "{rows:?}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn zip_of_a_zero_column_projection_keeps_the_other_side() {
+    let server = start().await;
+    let left = project(source(), Vec::new());
+    let right = project(source(), vec![attr("id")]);
+    assert_eq!(
+        run(&server, zip(left, right)).await.expect("runs"),
+        strings(&[&["1"], &["1"], &["2"]])
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn zip_keeps_a_reference_to_an_input_dataframe_resolvable() {
+    let server = start().await;
+    let with_id = |mut r: pb::Relation, id: i64| {
+        r.common = Some(pb::RelationCommon {
+            plan_id: Some(id),
+            ..Default::default()
+        });
+        r
+    };
+    let left = with_id(project(source(), vec![attr("id"), attr("a")]), 7);
+    let right = project(source(), vec![attr("b")]);
+    let by_plan = pb::Expression {
+        common: None,
+        expr_type: Some(pb::expression::ExprType::UnresolvedAttribute(
+            pb::expression::UnresolvedAttribute {
+                unparsed_identifier: "a".to_owned(),
+                plan_id: Some(7),
+                is_metadata_column: None,
+            },
+        )),
+    };
+    assert_eq!(
+        run(&server, project(zip(left, right), vec![by_plan]))
+            .await
+            .expect("runs"),
+        strings(&[&["10"], &["10"], &["20"]])
+    );
+}
+
+/// `rand(seed) AS name`.
+fn rand_seeded_as(name: &str, seed: i32) -> pb::Expression {
+    use pb::expression::{Alias, ExprType, Literal, UnresolvedFunction, literal::LiteralType};
+    pb::Expression {
+        common: None,
+        expr_type: Some(ExprType::Alias(Box::new(Alias {
+            expr: Some(Box::new(pb::Expression {
+                common: None,
+                expr_type: Some(ExprType::UnresolvedFunction(UnresolvedFunction {
+                    function_name: "rand".to_owned(),
+                    arguments: vec![pb::Expression {
+                        common: None,
+                        expr_type: Some(ExprType::Literal(Literal {
+                            literal_type: Some(LiteralType::Integer(seed)),
+                            data_type: None,
+                        })),
+                    }],
+                    is_distinct: false,
+                    is_user_defined_function: false,
+                    is_internal: None,
+                })),
+            })),
+            name: vec![name.to_owned()],
+            metadata: None,
+        }))),
+    }
+}
+
+/// `left + right AS name` over two columns.
+fn add_columns(left: &str, right: &str, name: &str) -> pb::Expression {
+    use pb::expression::{Alias, ExprType, UnresolvedFunction};
+    pb::Expression {
+        common: None,
+        expr_type: Some(ExprType::Alias(Box::new(Alias {
+            expr: Some(Box::new(pb::Expression {
+                common: None,
+                expr_type: Some(ExprType::UnresolvedFunction(UnresolvedFunction {
+                    function_name: "+".to_owned(),
+                    arguments: vec![attr(left), attr(right)],
+                    is_distinct: false,
+                    is_user_defined_function: false,
+                    is_internal: None,
+                })),
+            })),
+            name: vec![name.to_owned()],
+            metadata: None,
+        }))),
+    }
+}
+
+fn cell_number(cell: &str) -> f64 {
+    cell.parse().expect("a number")
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn zip_merges_one_seeded_producer_and_keeps_different_seeds_apart() {
+    let server = start().await;
+    // Different seeds are different producers.
+    let rows = run(
+        &server,
+        zip(
+            project(source(), vec![rand_seeded_as("x", 1)]),
+            project(source(), vec![rand_seeded_as("y", 2)]),
+        ),
+    )
+    .await
+    .expect("runs");
+    assert_eq!(rows.len(), 3, "{rows:?}");
+    assert!(rows.iter().all(|r| r[0] != r[1]), "{rows:?}");
+    // The same seeded producer on both sides is computed once: `x = r + r` reads the merged `r`.
+    let left = project(source(), vec![rand_seeded_as("r", 7)]);
+    let right = project(
+        project(source(), vec![rand_seeded_as("r", 7)]),
+        vec![add_columns("r", "r", "x")],
+    );
+    let rows = run(&server, zip(left, right)).await.expect("runs");
+    assert_eq!(rows.len(), 3);
+    for r in &rows {
+        assert!(
+            (cell_number(&r[1]) - 2.0 * cell_number(&r[0])).abs() < 1e-12,
+            "{r:?}"
+        );
+    }
+    // A chain `withColumn("r", rand(7)).withColumn("x", r + r)` zipped with a plain select.
+    let chain = project(
+        project(source(), vec![attr("id"), rand_seeded_as("r", 7)]),
+        vec![attr("r"), add_columns("r", "r", "x")],
+    );
+    let rows = run(&server, zip(chain, project(source(), vec![attr("id")])))
+        .await
+        .expect("runs");
+    assert_eq!(rows.len(), 3, "{rows:?}");
+    assert!(rows.iter().all(|r| r.len() == 3), "{rows:?}");
+    assert_eq!(
+        rows.iter().map(|r| r[2].as_str()).collect::<Vec<_>>(),
+        ["1", "1", "2"]
+    );
+    for r in &rows {
+        assert!(
+            (cell_number(&r[1]) - 2.0 * cell_number(&r[0])).abs() < 1e-12,
+            "{r:?}"
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn zip_resolves_a_right_reference_to_a_deduplicated_column_by_its_own_name() {
+    let server = start().await;
+    // `l` computes `a + 1` as `x` in an inner layer only; `r["y"]` is the same value under another name.
+    let inner = project(source(), vec![attr("id"), plus("a", 1, "x")]);
+    let left = project(inner, vec![attr("id")]);
+    let mut right = project(source(), vec![plus("a", 1, "y")]);
+    right.common = Some(pb::RelationCommon {
+        plan_id: Some(9),
+        ..Default::default()
+    });
+    let by_plan = pb::Expression {
+        common: None,
+        expr_type: Some(pb::expression::ExprType::UnresolvedAttribute(
+            pb::expression::UnresolvedAttribute {
+                unparsed_identifier: "y".to_owned(),
+                plan_id: Some(9),
+                is_metadata_column: None,
+            },
+        )),
+    };
+    assert_eq!(
+        run(&server, project(zip(left, right), vec![by_plan]))
+            .await
+            .expect("runs"),
+        strings(&[&["11"], &["11"], &["21"]])
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn zip_merges_two_independent_range_inputs() {
+    let server = start().await;
+    let range = || {
+        relation(RelType::Range(pb::Range {
+            start: Some(0),
+            end: 3,
+            step: 1,
+            num_partitions: None,
+        }))
+    };
+    assert_eq!(
+        run(&server, zip(range(), range())).await.expect("runs"),
+        strings(&[&["0", "0"], &["1", "1"], &["2", "2"]])
+    );
+}

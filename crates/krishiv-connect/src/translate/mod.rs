@@ -326,8 +326,10 @@ pub(crate) struct Translator<'c> {
 /// one per subtree that reaches [`INLINE_LEVELS`] levels and is itself
 /// composite (a plan with a thousand such columns is unusual), and the cap
 /// keeps a hostile plan of millions of them from spending its time on
-/// thread creation.
-const MAX_HOPS: usize = 10_000;
+/// thread creation. The cap was 10,000 when the first hop came at 32 levels;
+/// a hop now comes at [`INLINE_LEVELS`] levels, so the cap scales with it and
+/// a plan that translated then still does.
+const MAX_HOPS: usize = 10_000 * 32 / INLINE_LEVELS;
 
 impl<'c> Translator<'c> {
     const fn new(conf: &'c TranslateConf) -> Self {

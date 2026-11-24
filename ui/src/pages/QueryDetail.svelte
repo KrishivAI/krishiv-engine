@@ -19,9 +19,8 @@
   const ended = (d: QueryDetail) => !["running", "queued"].includes(d.query.state ?? "");
 
   // The session travels with both reads; a signed link was signed with it, so the embedded view sends its own.
-  // An embedded link with an empty qualifier is sent as it came, so the server refuses it as it does when asked directly.
-  const at = (sep: string) =>
-    session || (embed && session === "") ? `${sep}session=${encodeURIComponent(session)}` : "";
+  // An empty qualifier is sent as it came, so the server refuses it as it does when asked directly.
+  const at = (sep: string) => (session !== undefined ? `${sep}session=${encodeURIComponent(session)}` : "");
 
   const q = createQuery<QueryDetail>(() => ({
     // An absent qualifier and an empty one are different requests, so different entries.

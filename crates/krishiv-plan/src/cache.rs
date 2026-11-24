@@ -1085,6 +1085,11 @@ impl Encoder {
                 self.tag("Distinct");
                 self.plan(input, bias);
             }
+            PlanNode::Zip { left, right } => {
+                self.tag("Zip");
+                self.plan(left, bias);
+                self.plan(right, bias);
+            }
             PlanNode::SetOp {
                 left,
                 right,

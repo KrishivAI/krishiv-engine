@@ -186,6 +186,18 @@ pub(crate) trait CommitTable: Send + Sync {
     /// # Errors
     /// The load's failure; the loop counts it as "still unknown".
     async fn load(&self, all_snapshots: bool) -> Result<TableMetadata, KrishivError>;
+
+    /// [`Self::load`] with the answer's `metadata-location`, `None` when it names none (the
+    /// deleting procedures check the answer against that file, design 36e §4).
+    ///
+    /// # Errors
+    /// As [`Self::load`].
+    async fn load_located(
+        &self,
+        all_snapshots: bool,
+    ) -> Result<(TableMetadata, Option<String>), KrishivError> {
+        Ok((self.load(all_snapshots).await?, None))
+    }
 }
 
 /// Time for the loop, injected so simulations run on virtual time.
