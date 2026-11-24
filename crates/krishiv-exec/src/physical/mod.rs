@@ -831,6 +831,12 @@ pub struct JoinFilterPlan {
     pub key: usize,
     /// What the build collects.
     pub options: KeyFilterOptions,
+    /// A build column (an index into the build input) the filter is
+    /// collected from instead of a key: a bound from a comparison conjunct
+    /// of the residual (`probe_col < build_col`, design P3-0.3.1 D2), whose
+    /// [`KeyFilterOptions::side`] keeps one end. `key` is then unused (0).
+    /// Codec feature `join_filter_bound`.
+    pub column: Option<usize>,
 }
 
 /// One output column of a [`PhysNode::Project`].
@@ -1294,7 +1300,7 @@ plan_data!(
 plan_data!(struct RangeNode { start, end, step, num_slices, output });
 plan_data!(struct ScanFilter { layout, predicate, exact });
 plan_data!(struct ScanRuntimeFilter { id, column, key_type });
-plan_data!(struct JoinFilterPlan { id, key, options });
+plan_data!(struct JoinFilterPlan { id, key, options, column });
 plan_data!(enum ProjectItemPlan { Column { index, name }, Expr { name, expr }, NullOf { index, name } });
 plan_data!(
     enum SubqueryValueKind {

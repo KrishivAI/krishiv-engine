@@ -976,6 +976,7 @@ impl Decoder {
                         id: f.id,
                         key: 0,
                         options: f.options,
+                        bound_column: None,
                     })?
                     .options;
                     Ok(ExchangeFilterPlan {
@@ -1528,7 +1529,14 @@ fn join_filter(f: &pb::JoinFilter) -> Result<JoinFilterPlan> {
             bloom_max_fpp: o.bloom_max_fpp,
             bloom_bytes: o.bloom_bytes,
             bloom_spill_bytes: o.bloom_spill_bytes,
+            side: match pb::RangeSide::try_from(o.side) {
+                Ok(pb::RangeSide::Both) => krishiv_io::RangeSide::Both,
+                Ok(pb::RangeSide::Upper) => krishiv_io::RangeSide::Upper,
+                Ok(pb::RangeSide::Lower) => krishiv_io::RangeSide::Lower,
+                Err(_) => return Err(corrupt("an unknown range side")),
+            },
         },
+        column: f.bound_column.map(usize_of).transpose()?,
     })
 }
 

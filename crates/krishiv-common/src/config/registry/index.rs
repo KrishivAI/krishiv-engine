@@ -468,6 +468,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &RUNTIME_FILTER_BLOOM_MAX_ITEMS,
     ),
     (
+        "krishiv.runtimeFilter.residualBounds",
+        &RUNTIME_FILTER_RESIDUAL_BOUNDS,
+    ),
+    (
         "krishiv.sql.legacy.codingErrorAction",
         &LEGACY_CODING_ERROR_ACTION,
     ),

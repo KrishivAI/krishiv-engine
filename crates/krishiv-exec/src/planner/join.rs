@@ -333,13 +333,15 @@ impl Planner<'_> {
                 .iter()
                 .map(|&k| probe.schema.field(k).data_type().clone())
                 .collect();
-            let rf = self.runtime_filters(
+            let mut rf = self.runtime_filters(
                 &probe,
                 &probe_exprs,
                 &key_types,
                 &build.node,
                 (build_rows, distribution == JoinDistribution::Partitioned),
             );
+            // Bounds from the comparison conjuncts (design P3-0.3.1 D2).
+            self.residual_bounds((&probe, &build), &residual, build_rows, &mut rf);
             published = rf.explain;
             runtime_filters = rf.filters;
             gaps = rf.gaps;

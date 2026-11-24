@@ -112,7 +112,7 @@ pub use request::{
 };
 pub use runtime_filter::{
     DisabledReason, FilterCounts, FilterForm, FilterId, FilterSnapshot, KeyFilter,
-    KeyFilterBuilder, KeyFilterOptions, Published, RowHash, RuntimeFilter, ScanFilter,
+    KeyFilterBuilder, KeyFilterOptions, Published, RangeSide, RowHash, RuntimeFilter, ScanFilter,
 };
 pub use scan::{ReadStats, ScanOptions, ScanStream};
 pub use scan_gate::ScanGate;

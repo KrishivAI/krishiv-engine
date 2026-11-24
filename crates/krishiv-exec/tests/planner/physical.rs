@@ -236,6 +236,7 @@ fn inconsistent_plans_are_internal_errors() {
                 id: FilterId(id),
                 key: 0,
                 options: KeyFilterOptions::default(),
+                column: None,
             }],
             distribution: JoinDistribution::Broadcast,
             select: None,

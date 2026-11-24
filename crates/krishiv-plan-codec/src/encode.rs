@@ -1129,10 +1129,12 @@ fn join_filter(f: &JoinFilterPlan) -> pb::JoinFilter {
         bloom_max_fpp,
         bloom_bytes,
         bloom_spill_bytes,
+        side,
     } = f.options;
     pb::JoinFilter {
         id: f.id.0,
         key: f.key as u64,
+        bound_column: f.column.map(|c| c as u64),
         options: Some(pb::KeyFilterOptions {
             max_values: max_values as u64,
             exact_max_values: exact_max_values as u64,
@@ -1144,6 +1146,11 @@ fn join_filter(f: &JoinFilterPlan) -> pb::JoinFilter {
             bloom_max_fpp,
             bloom_bytes,
             bloom_spill_bytes,
+            side: match side {
+                krishiv_io::RangeSide::Both => pb::RangeSide::Both,
+                krishiv_io::RangeSide::Upper => pb::RangeSide::Upper,
+                krishiv_io::RangeSide::Lower => pb::RangeSide::Lower,
+            } as i32,
         }),
     }
 }
@@ -1157,6 +1164,7 @@ fn exchange_filter(f: &ExchangeFilterPlan, nested: &Cell<bool>) -> pb::ExchangeF
             id: f.id,
             key: 0,
             options: f.options,
+            column: None,
         })
         .options,
         null_safe: f.null_safe,

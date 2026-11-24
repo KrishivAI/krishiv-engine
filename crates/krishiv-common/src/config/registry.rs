@@ -79,6 +79,7 @@ pub use runtime_filter::{
 };
 pub use runtime_filter_bloom::{
     RUNTIME_FILTER_BLOOM_AT_SCALE, RUNTIME_FILTER_BLOOM_MEMORY_TIER, RUNTIME_FILTER_EQUATED_SITES,
+    RUNTIME_FILTER_RESIDUAL_BOUNDS,
 };
 // Every public item of `server` is a config entry (Connect, Flight SQL, server).
 pub use server::*;
@@ -217,6 +218,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &RUNTIME_FILTER_BLOOM_AT_SCALE,
     &RUNTIME_FILTER_BLOOM_MEMORY_TIER,
     &RUNTIME_FILTER_EQUATED_SITES,
+    &RUNTIME_FILTER_RESIDUAL_BOUNDS,
     &IO_STRICT_OPTIONS,
     &FILES_MAX_PARTITION_BYTES,
     &FILES_OPEN_COST_IN_BYTES,
