@@ -118,9 +118,15 @@ note = ""
 
 [[surface]]
 group = "User-defined functions"
-name = "Grouped-aggregate and iterator `pandas_udf`, `applyInPandas`, `mapInPandas`"
+name = "Grouped-aggregate `pandas_udf`, `applyInPandas`, `mapInPandas`, `cogroup`"
 status = "supported"
-note = "Embedded relation UDFs (grouped-aggregate and iterator `pandas_udf`, `applyInPandas`, `mapInPandas`, `cogroup`) run on the Python pool, one pool thread per task (`krishiv.python.udf.threads`). `barrier=True` is refused."
+note = "Embedded relation UDFs run on the Python pool, one pool thread per task (`krishiv.python.udf.threads`). `barrier=True` is refused. Grouped-aggregate UDFs over a window (`.over(window)`) are refused."
+
+[[surface]]
+group = "User-defined functions"
+name = "Scalar-iterator `pandas_udf`"
+status = "not yet"
+note = "Refused as NOT_IMPLEMENTED when embedded."
 
 [[surface]]
 group = "Not covered"
