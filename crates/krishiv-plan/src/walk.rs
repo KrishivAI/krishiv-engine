@@ -255,6 +255,7 @@ pub(crate) fn all_resolved(root: Node<'_>) -> bool {
                 | PlanNode::Tail { .. }
                 | PlanNode::SubqueryAlias { .. }
                 | PlanNode::WithCte { .. }
+                | PlanNode::SecurityBarrier { .. }
                 | PlanNode::JoinHint { .. }
                 | PlanNode::Repartition { .. }
                 | PlanNode::CollectMetrics { .. }
@@ -507,6 +508,7 @@ impl Teardown {
             }
             PlanNode::SubqueryAlias { input, .. }
             | PlanNode::Shift { input, .. }
+            | PlanNode::SecurityBarrier { input, .. }
             | PlanNode::JoinHint { input, .. }
             | PlanNode::Sample { input, .. }
             | PlanNode::ColumnNames { input, .. }

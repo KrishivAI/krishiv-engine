@@ -36,7 +36,8 @@ not print the derived value. `EXPLAIN ANALYZE` prints the limit the query ran un
 The 0.2.0 command line has no `server` subcommand: it lists only `sql` and `debug-bundle`. In builds after 0.2.0,
 `krishiv server` (a binary built with the `server` feature) starts one process that serves Spark Connect, by default on
 `127.0.0.1` port `15002` (`--connect-port`, `krishiv.connect.port`), and the admin API on port `8080` (`--port`).
-Settings are given as `--conf KEY=VALUE`. See [configuration](../reference/config/index.md) and
+Settings are given as `--conf KEY=VALUE`. The server is standalone: one process plans and runs every query
+itself, and there is no coordinator or worker mode yet (see [distributed](#distributed)). See [configuration](../reference/config/index.md) and
 [known differences](../concepts/known-differences.md#krishiv-server-spark-connect).
 
 ```bash
@@ -166,4 +167,5 @@ has been idle for `krishiv.python.worker.idleTimeout`, so an idle server lists n
 
 ## Distributed
 
-A scheduler and workers run one query across machines. It is in development; the mode is not available yet.
+A scheduler and workers run one query across machines. It is in development; the mode is not available yet, and
+`krishiv server` has no setting or subcommand that selects a coordinator or worker role.

@@ -228,7 +228,13 @@ fn kind_name(kind: FunctionKind) -> &'static str {
 /// Whether a function takes or returns the `TIME` type, which Spark 4.2.0 gates behind
 /// `spark.sql.timeType.enabled` (SQL-2): its name says so, or an example writes a `TIME` literal.
 fn uses_time_type(name: &str, examples: &[(String, String)]) -> bool {
-    const NAMED: [&str; 4] = ["current_time", "make_time", "to_time", "try_to_time"];
+    const NAMED: [&str; 5] = [
+        "current_time",
+        "make_time",
+        "time",
+        "to_time",
+        "try_to_time",
+    ];
     if name.starts_with("time_") || NAMED.contains(&name) {
         return true;
     }
