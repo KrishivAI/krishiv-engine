@@ -332,7 +332,7 @@ jobs:
           rng, path = sys.argv[1], sys.argv[2]
           meta = json.load(open(path))
           on = {n["id"]: set(n["features"]) for n in meta["resolve"]["nodes"]}
-          names = sorted({t["name"] for p in meta["packages"] if p["id"] in on for t in p["targets"]
+          names = sorted({t["name"] for p in meta["packages"] if p["id"] in meta["workspace_members"] for t in p["targets"]
                           if "test" in t["kind"] and set(t.get("required-features") or []) <= on[p["id"]]
                           and re.match("[" + rng + "]", t["name"])})
           print(" ".join("--test " + n for n in names))
