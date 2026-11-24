@@ -264,6 +264,13 @@ impl DirectoryWrite {
                 )
                 .await;
         }
+        if !dead_jobs.is_empty() && self.store.key().split('#').next() == Some("file") {
+            // The staging files of a killed upload are hidden from listings (PY-054). The local
+            // store is rooted at `/`, so the directory's object path is its file system path.
+            let root = std::path::PathBuf::from(format!("/{}", self.dir));
+            let dead = dead_jobs.clone();
+            let _ = tokio::task::spawn_blocking(move || writers::sweep_staging(&root, &dead)).await;
+        }
         if self.overwrite || !dead_jobs.is_empty() {
             if self.overwrite {
                 // The old marker goes first: a run killed before its commit must not leave the
