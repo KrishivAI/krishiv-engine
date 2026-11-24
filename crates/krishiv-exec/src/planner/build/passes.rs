@@ -99,6 +99,7 @@ fn plan_once(
         planner.env.to_plan(),
     )
     .with_shared(shared)?
-    .with_warnings(planner.warnings);
+    .with_warnings(planner.warnings)
+    .with_guarded(planner.guarded.into_iter().collect());
     Ok((plan, shareable, planner.deferred))
 }

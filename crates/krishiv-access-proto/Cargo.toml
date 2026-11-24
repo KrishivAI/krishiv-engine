@@ -1,0 +1,18 @@
+[package]
+name = "krishiv-access-proto"
+description = "The krishiv.access.v1 messages of the external access-policy service"
+readme = "README.md"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+publish = true
+
+[lints]
+workspace = true
+
+[dependencies]
+prost = { workspace = true, features = ["derive", "std"] }
