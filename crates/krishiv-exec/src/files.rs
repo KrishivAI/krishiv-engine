@@ -515,6 +515,15 @@ impl FileReads {
             };
             // `hf://` has no listing: a directory or a glob is refused with how to name files.
             krishiv_io::check_hf_file_path(text)?;
+            // A Windows verbatim path (`\\?\C:\x`, what `canonicalize` returns) is no glob: its `?` is
+            // part of the prefix. It reads as the plain drive path.
+            let verbatim;
+            let text = if cfg!(windows) && text.starts_with(r"\\?\") {
+                verbatim = local_text(text);
+                verbatim.as_str()
+            } else {
+                text
+            };
             if krishiv_io::partition::glob::has_glob(text) {
                 // Boxed, as the listing below: these futures sit on the recursion of nested scripts, where a
                 // larger one overflows the stack (`script_nesting_is_bounded_at_the_limit`).
