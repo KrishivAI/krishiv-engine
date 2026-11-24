@@ -69,11 +69,14 @@ impl Session {
             Some(p) if !p.is_empty() => p.to_owned(),
             _ => d.path.clone().unwrap_or_default(),
         };
-        let format = provider
-            .parts
-            .last()
-            .map(|p| p.value.clone())
-            .unwrap_or_default();
+        let format = provider_format(
+            &provider
+                .parts
+                .iter()
+                .map(|p| p.value.as_str())
+                .collect::<Vec<_>>()
+                .join("."),
+        );
         let plan = krishiv_sql::lower_identified(
             &d.query,
             self.next_source_id(),
@@ -105,4 +108,14 @@ impl Session {
         writer.save(&path).await?;
         self.empty_frame().await
     }
+}
+
+/// The format a `USING` provider names. Spark knows the short names and its own `org.apache.spark.sql.<name>`
+/// aliases; any other dotted name is looked up whole (`foo.parquet` is `DATA_SOURCE_NOT_FOUND`).
+fn provider_format(provider: &str) -> String {
+    provider
+        .strip_prefix("org.apache.spark.sql.")
+        .filter(|rest| !rest.contains('.'))
+        .unwrap_or(provider)
+        .to_owned()
 }
