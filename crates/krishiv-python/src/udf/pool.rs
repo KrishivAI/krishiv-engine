@@ -101,7 +101,8 @@ impl Pool {
         &self.slots
     }
 
-    /// Starts `size` pinned threads (at least one; a pool of one gets a spare thread, but still runs one scalar UDF job at a time).
+    /// Starts `size` pinned threads (at least one; a pool of one gets a spare thread, but still runs
+    /// one scalar UDF job at a time).
     /// Called attached or not; a new thread pins once the GIL (if any) is free.
     ///
     /// # Errors
@@ -112,8 +113,9 @@ impl Pool {
         let abandoned = Arc::new(AtomicBool::new(false));
         // A one-thread pool has no thread to keep for the scalar UDF jobs that feed a relation task (which holds
         // its thread for its whole life), so it gets one spare thread: the relation task still has its one slot,
-        // and a scalar call queued behind it runs on the spare instead of hanging the query. Scalar calls still
-        // run one at a time (the gate), so the configured one thread's no-overlap guarantee holds.
+        // and a scalar call of another query or pipeline queued behind it runs on the spare instead of waiting
+        // for it. Scalar calls still run one at a time (the gate), so the configured one thread's no-overlap
+        // guarantee holds.
         let scalar_gate = (size <= 1).then(|| Arc::new(Mutex::new(())));
         let spawn = if size <= 1 { 2 } else { size };
         let mut threads = Vec::with_capacity(spawn);
@@ -234,6 +236,11 @@ fn worker(queue: &Mutex<Receiver<Message>>, abandoned: &AtomicBool, gate: Option
                 let _turn = gate
                     .filter(|_| scalar)
                     .map(|g| g.lock().unwrap_or_else(PoisonError::into_inner));
+                // The wait above can outlast the exit deadline: check again so no job
+                // starts once the interpreter may be finalizing (T098b I2).
+                if abandoned.load(Ordering::SeqCst) {
+                    break;
+                }
                 // A panicking job is contained: the thread keeps serving.
                 let _ = catch_unwind(AssertUnwindSafe(|| Python::attach(job)));
             }

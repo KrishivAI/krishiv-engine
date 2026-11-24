@@ -771,8 +771,9 @@ free for scalar UDFs that feed them) and the query runs. The setting is startup-
 runtime change with `CANNOT_MODIFY_STATIC_CONFIG`. The pool is made when the first Python UDF query starts and is not
 resized, so put the value in the configuration passed when the session is created (or set it at engine startup, or
 start a fresh interpreter with the higher value).
-A single-thread pool starts one spare thread for scalar UDF calls (which still run one at a time), so a scalar `pandas_udf` feeding a
-`mapInPandas` or `applyInPandas` in the same query does not stall on it.
+A single-thread pool starts one spare thread for scalar UDF calls (which still run one at a time), so a scalar UDF
+call of another query does not wait for a running `mapInPandas` or `applyInPandas`. In one query a scalar
+`pandas_udf` feeding such a node finishes before the node starts.
 
 The embedded `mapInArrow` takes each result batch's columns by position and relabels them with the
 declared schema; `mapInPandas` matches the result's columns to the declared schema by name, as Spark does. With `spark.sql.execution.arrow.pyspark.validateSchema.enabled` set to `true` the embedded

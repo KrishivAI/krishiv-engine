@@ -80,7 +80,7 @@ pub static PYTHON_UDF_THREADS: ConfigEntry = ConfigEntry {
     doc: "Threads of the embedded Python UDF pool, fixed when the pool starts (the first query \
           calling a Python UDF). 0 picks one: the executor's thread count on a free-threaded \
           Python, else 1 (with the GIL more threads only contend). A value of 1 starts two OS \
-          threads, so scalar UDF calls that feed a relation task have a thread to run on; scalar calls \
+          threads, so a scalar UDF call queued behind a relation task runs beside it; scalar calls \
           still run one at a time. With two or more threads, one \
           stays free for scalar UDFs, so a grouped-aggregate or map UDF relation can use at most \
           threads - 1.",

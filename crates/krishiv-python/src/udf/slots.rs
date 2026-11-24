@@ -87,7 +87,8 @@ pub(crate) struct SlotHandle {
 impl SlotHandle {
     /// The slots of a pool of `threads` threads: all of them, but with two or more one thread stays free for
     /// the scalar UDF jobs that feed a relation task (they queue on the same threads and never take a slot).
-    /// A one-thread pool starts a second, spare thread (`Pool::start`) that runs scalar jobs while the relation task holds the first; scalar jobs still run one at a time.
+    /// A one-thread pool starts a second, spare thread (`Pool::start`) that runs scalar jobs of another
+    /// query or pipeline while the relation task holds the first; scalar jobs still run one at a time.
     pub(crate) fn new(threads: usize) -> Arc<Self> {
         let limit = if threads >= 2 { threads - 1 } else { threads };
         Arc::new(Self {
