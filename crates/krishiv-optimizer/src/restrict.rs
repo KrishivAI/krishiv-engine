@@ -148,6 +148,7 @@ pub(crate) fn restrict(
         root: Arc::clone(&root),
         next: None,
         preserved,
+        reaches: Default::default(),
     };
     let out = dag::rewrite_up(root, &mut |p| Ok(r.join(p)));
     *memo = r.est.into_memo();
@@ -163,6 +164,9 @@ struct Restrict<'a> {
     next: Option<u64>,
     /// Whether the preserved side of an outer join is a target too.
     preserved: bool,
+    /// Per relation (kept alive, so its address stays unique): whether
+    /// [`Self::side`]'s descent can reach a target from it.
+    reaches: crate::expr::AddrMap<LogicalPlan, (Arc<LogicalPlan>, bool)>,
 }
 
 /// One restricting equality: `agg = other`, each over its own side.
@@ -195,6 +199,13 @@ impl Restrict<'_> {
             JoinKind::RightOuter => (true, false),
             _ => (false, false),
         };
+        // Most sides hold no aggregate the descent reaches: those skip
+        // collecting either side's outputs.
+        let r = r && self.reaches(right);
+        let l = l && self.reaches(left);
+        if !l && !r {
+            return p;
+        }
         let conj = conjuncts(cond);
         let mut out_left = Arc::clone(left);
         let mut out_right = Arc::clone(right);
@@ -213,6 +224,33 @@ impl Restrict<'_> {
             *right = out_right;
         }
         Arc::new(node)
+    }
+
+    /// Whether [`Self::side`]'s descent from `p` can reach a target: an
+    /// aggregate or, when [`Self::preserved`], an outer join, through
+    /// filters, projections and inner joins only (either input of a join,
+    /// so a superset of what the descent follows).
+    fn reaches(&mut self, p: &Arc<LogicalPlan>) -> bool {
+        if let Some((_, r)) = self.reaches.get(&Arc::as_ptr(p)) {
+            return *r;
+        }
+        let r = match &p.node {
+            PlanNode::Aggregate { .. } => true,
+            PlanNode::Join {
+                kind: JoinKind::LeftOuter | JoinKind::RightOuter,
+                ..
+            } => self.preserved,
+            PlanNode::Filter { input, .. } | PlanNode::Project { input, .. } => self.reaches(input),
+            PlanNode::Join {
+                left,
+                right,
+                kind: JoinKind::Inner | JoinKind::Cross,
+                ..
+            } => self.reaches(left) || self.reaches(right),
+            _ => false,
+        };
+        self.reaches.insert(Arc::as_ptr(p), (Arc::clone(p), r));
+        r
     }
 
     /// `side` with the aggregate at its top restricted to `other`'s keys
