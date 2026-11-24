@@ -563,6 +563,20 @@ def page_checks(origin: str) -> list[str]:
         if typed != "SELECT 'typed over'":
             problems.append(f"sql: typing over the selection left {typed!r}")
         problems += [f"sql: typing over a selection logs: {e}" for e in blocked]
+        # Ctrl + Enter runs the statement, as the page says; it must not add a line to it instead.
+        editor.click()
+        page.keyboard.press("Control+A")
+        page.keyboard.type("SELECT 1")
+        page.keyboard.press("Control+Enter")
+        try:
+            page.get_by_text("finished", exact=True).first.wait_for(timeout=5000)
+        except PlaywrightTimeout:
+            problems.append("sql: Ctrl + Enter did not run the statement")
+        kept = editor.inner_text().strip()
+        if kept != "SELECT 1":
+            problems.append(f"sql: Ctrl + Enter changed the statement to {kept!r}")
+        page.reload()
+        editor.wait_for(timeout=10000)
         for text, outcome in (("SELECT 1", "finished"), ("boom", "failed")):
             editor.click()
             page.keyboard.press("Control+A")
