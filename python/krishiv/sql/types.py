@@ -500,8 +500,6 @@ def _tree_line(
 
 
 def _tree_fields(fields: list[StructField], depth: int, level: int | None, out: list[str]) -> None:
-    if level is not None and depth > level:
-        return
     prefix = " " + "|    " * (depth - 1)
     for f in fields:
         _tree_line(prefix, f.name, f.dataType, f"nullable = {str(f.nullable).lower()}", depth, level, out)

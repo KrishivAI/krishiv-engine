@@ -439,3 +439,18 @@ def test_print_schema_level_zero_or_negative_prints_everything(
     for level in (0, -1):
         df.printSchema(level)
         assert capsys.readouterr().out == full
+
+
+def test_print_schema_falls_back_to_the_flat_form_for_a_type_the_parser_lacks(
+    df: DataFrame, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def refuse(self: DataFrame) -> object:
+        raise ValueError("unsupported type time(6)")
+
+    monkeypatch.setattr(DataFrame, "schema", property(refuse))
+    df.printSchema()
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[0] == "root"
+    assert lines[1].startswith(" |-- ")
+    assert "(nullable = " in lines[1]
+    assert lines[-1] == ""
