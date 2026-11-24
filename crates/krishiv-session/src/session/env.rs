@@ -68,10 +68,13 @@ pub(super) fn attach_analysis(e: AnalysisError, text: Option<&RedactedSql>) -> K
     }
 }
 
-/// The parser options `config` sets.
-pub(super) fn parser_options(config: &Config) -> ParserOptions {
+/// The parser options `config` sets for a session of `profile` (Spark 4.3's grammar from 4.3 on).
+pub(super) fn parser_options(config: &Config, profile: SparkProfile) -> ParserOptions {
     let values = conf_values(config, &PARSER_KEYS);
-    ParserOptions::from_conf(|k| values.get(k).map(String::as_str))
+    ParserOptions {
+        asof_grammar: profile >= SparkProfile::V4_3,
+        ..ParserOptions::from_conf(|k| values.get(k).map(String::as_str))
+    }
 }
 
 /// The values of `keys` that are set or have a default.

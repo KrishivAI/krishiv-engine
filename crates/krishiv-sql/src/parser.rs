@@ -204,6 +204,9 @@ pub(crate) struct Parser<'s> {
     /// Reading the right side of an `ASOF JOIN`: `MATCH_CONDITION (` starts
     /// its criteria, never an implicit alias.
     asof_right: bool,
+    /// Inside the speculative read of an as-of right side (`asof_join_ahead`):
+    /// a further `ASOF JOIN` is taken as one without a read of its own.
+    asof_ahead: bool,
 }
 
 /// A part of a `CASE` expression.
@@ -818,6 +821,7 @@ impl<'s> Parser<'s> {
             force_bare,
             insert_bodies: false,
             asof_right: false,
+            asof_ahead: false,
         };
         if has_case {
             parser.closer_ahead = parser.closer_ahead_table(&case_words);
@@ -1270,8 +1274,13 @@ impl<'s> Parser<'s> {
         // the join reads on to its `MATCH_CONDITION (` (else `ASOF` is the
         // alias), and `MATCH_CONDITION (` after an as-of join's right side its
         // criteria.
-        if (self.asof_right && self.kw_at(0, "MATCH_CONDITION") && self.sym_at(1, Sym::LParen))
-            || self.asof_join_ahead()
+        let asof = if self.opts.asof_grammar {
+            self.asof_join_ahead()
+        } else {
+            self.opts.asof_join && self.kw_at(0, "ASOF") && self.kw_at(1, "JOIN")
+        };
+        if asof
+            || (self.asof_right && self.kw_at(0, "MATCH_CONDITION") && self.sym_at(1, Sym::LParen))
         {
             return Ok(None);
         }
@@ -1293,29 +1302,65 @@ impl<'s> Parser<'s> {
     }
 
     /// Whether `ASOF JOIN` here starts an as-of join rather than naming the
-    /// relation before it `ASOF`. Spark's grammar has the as-of branch of
-    /// `joinRelation` whatever `spark.sql.join.asofJoin.enabled` says (its
-    /// `AstBuilder` raises `UNSUPPORTED_FEATURE.ASOF_JOIN` when it is off), and
-    /// ANTLR predicts that branch when its right side reads on to
-    /// `MATCH_CONDITION (`; otherwise `ASOF` is the alias (`FROM t ASOF JOIN q
-    /// ON ..`, a Spark 4.3.0 run).
+    /// relation before it `ASOF` (Spark 4.3's grammar). The as-of branch of
+    /// `joinRelation` is there whatever `spark.sql.join.asofJoin.enabled` says
+    /// (`AstBuilder` raises `UNSUPPORTED_FEATURE.ASOF_JOIN` when it is off), and
+    /// ANTLR takes it only where the alias reading fails: when its right side
+    /// reads on to `MATCH_CONDITION (` and that is not the right side's alias
+    /// with a column list (`one MATCH_CONDITION (a, b)`, which both readings
+    /// parse and ANTLR resolves to the alias). So `t ASOF JOIN q ON ..` and
+    /// `t ASOF JOIN one MATCH_CONDITION (a)` name `t` `ASOF` (Spark 4.3.0 runs).
+    ///
+    /// The right side is read once, speculatively. An `ASOF JOIN` met during
+    /// that read is taken as an as-of join without a read of its own, so a
+    /// chain of them is read in linear time and without nesting.
     fn asof_join_ahead(&mut self) -> bool {
         if !(self.kw_at(0, "ASOF") && self.kw_at(1, "JOIN")) {
             return false;
         }
+        if self.asof_ahead {
+            return true;
+        }
         let checkpoint = self.checkpoint();
         self.pos += 2;
         let outer = std::mem::replace(&mut self.asof_right, true);
+        self.asof_ahead = true;
         let right = self.table_factor();
+        self.asof_ahead = false;
         self.asof_right = outer;
         let ahead = match right {
-            Ok(_) => self.kw_at(0, "MATCH_CONDITION") && self.sym_at(1, Sym::LParen),
+            Ok(right) => {
+                self.kw_at(0, "MATCH_CONDITION")
+                    && self.sym_at(1, Sym::LParen)
+                    && (right.alias.is_some() || !self.identifier_list_at(1))
+            }
             // The as-of reading fails there too: let it report the error.
             Err(Fail::Fatal(_)) => true,
             Err(_) => false,
         };
         self.restore(checkpoint);
         ahead
+    }
+
+    /// Whether tokens from `n` are `( name [, name]... )`, an alias's column
+    /// list (`identifierList`).
+    fn identifier_list_at(&self, n: usize) -> bool {
+        if !self.sym_at(n, Sym::LParen) {
+            return false;
+        }
+        let mut i = n + 1;
+        loop {
+            if !self.is_ident_at(i, true) {
+                return false;
+            }
+            if self.sym_at(i + 1, Sym::RParen) {
+                return true;
+            }
+            if !self.sym_at(i + 1, Sym::Comma) {
+                return false;
+            }
+            i += 2;
+        }
     }
 
     /// `[AS] name`.

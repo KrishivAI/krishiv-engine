@@ -787,7 +787,7 @@ impl Session {
         // first action's error.
         match krishiv_sql::parse_multipart_identifier(
             name,
-            &parser_options(&self.state.conf.snapshot()),
+            &parser_options(&self.state.conf.snapshot(), self.state.profile),
         ) {
             Ok(id) => {
                 let parts = id.parts.into_iter().map(|p| p.value);
@@ -1328,7 +1328,7 @@ impl Session {
             let values = conf_values(&config, &ResolutionConf::KEYS);
             ResolutionConf::from_conf(|k| values.get(k).map(String::as_str))
         };
-        let parser = parser_options(&config);
+        let parser = parser_options(&config, self.state.profile);
         // The cache cap is the query's own configuration snapshot.
         let cache_cap = RelationCache::cap_of(&config);
         // One snapshot of the variables per query, like the configuration
