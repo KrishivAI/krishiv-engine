@@ -306,8 +306,9 @@ returning a result:
   them are Spark's. Krishiv ignores `numSlices` (`spark.range(0, 20, 1, 4)` is one partition), reads a `union` as one
   stream rather than one partition per input, and cannot match Spark after a shuffle (`repartition`) or on a file
   split Spark divides differently; then a sample holds different rows and a different number of them. Only the
-  expected fraction holds. `randomSplit` sorts each partition by every sortable column as Spark does, and its splits
-  stay disjoint and complete for the same input.
+  expected fraction holds. `randomSplit` sorts each partition by its scalar columns; Spark 4.2 also sorts array and struct columns whose
+  children are orderable, so inputs with equal scalar keys and different array or struct values can split
+  differently. Its splits stay disjoint and complete for the same input.
 - `sampleBy` finds a stratum by type, as Spark's typed map does: a string column matches only string keys and a
   numeric column only numbers.
 - `df.sample(0.3, seed=1)`: PySpark (3.5 to 4.2) drops the seed of this call form and samples at random. Krishiv

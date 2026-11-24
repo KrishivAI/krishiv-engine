@@ -112,6 +112,8 @@ def _struct_values(value: Any, struct: StructType) -> list[Any] | None:
         return [value.get(f.name) for f in struct.fields]
     if isinstance(value, list | tuple):
         return list(value)
+    if hasattr(value, "__dict__") and not isinstance(value, type):
+        return [getattr(value, f.name, None) for f in struct.fields]  # an object read by field name, as Spark does
     return None
 
 
@@ -127,8 +129,8 @@ def unacceptable(name: str | None, data_type: DataType, value: Any) -> PySparkTy
 def verify(value: Any, data_type: DataType, nullable: bool = True, name: str | None = None) -> None:
     """Checks ``value`` against ``data_type``, nested values included, and raises as PySpark's
     classic ``createDataFrame`` verification does."""
-    if value is None:
-        if not nullable:
+    if value is None or (isinstance(data_type, DecimalType) and isinstance(value, Decimal) and value.is_nan()):
+        if not nullable:  # Spark reads a decimal NaN as null
             if name is None:
                 raise PySparkValueError(errorClass="FIELD_NOT_NULLABLE")
             raise PySparkValueError(errorClass="FIELD_NOT_NULLABLE_WITH_NAME", messageParameters={"field_name": name})
@@ -183,7 +185,7 @@ def verify(value: Any, data_type: DataType, nullable: bool = True, name: str | N
         values = _struct_values(value, data_type)
         if values is None:
             raise unacceptable(name, data_type, value)
-        if not isinstance(value, dict) and len(values) != len(data_type.fields):
+        if _is_sequence(value) and len(values) != len(data_type.fields):
             params = {"object_length": str(len(values)), "field_length": str(len(data_type.fields))}
             if name is None:
                 raise PySparkValueError(errorClass="FIELD_STRUCT_LENGTH_MISMATCH", messageParameters=params)
@@ -238,12 +240,14 @@ def convert(value: Any, data_type: DataType, zone: Any) -> Any:
             return value  # not a container: pyarrow refuses it (a type error, or NULL when unchecked)
         return [convert(v, data_type.elementType, zone) for v in value]
     if isinstance(data_type, MapType):
+        if not isinstance(value, dict):
+            return value  # not a mapping: pyarrow refuses it (a type error, or NULL when unchecked)
         return [(convert(k, data_type.keyType, zone), convert(v, data_type.valueType, zone)) for k, v in value.items()]
     if isinstance(data_type, StructType):
         values = _struct_values(value, data_type)
         if values is None:
             return value
-        if not isinstance(value, dict) and len(values) != len(data_type.fields):
+        if _is_sequence(value) and len(values) != len(data_type.fields):
             raise PySparkValueError(
                 errorClass="STRUCT_ARRAY_LENGTH_MISMATCH",
                 messageParameters={"expected": str(len(data_type.fields)), "actual": str(len(values))},
@@ -261,7 +265,9 @@ def convert(value: Any, data_type: DataType, zone: Any) -> Any:
             return "true" if value else "false"
         return str(value)
     if isinstance(data_type, DecimalType):
-        return _decimal(value, data_type) if isinstance(value, Decimal) else value
+        if not isinstance(value, Decimal):
+            return value
+        return None if value.is_nan() else _decimal(value, data_type)
     if isinstance(data_type, DateType):
         if isinstance(value, datetime.datetime):
             return value.date()

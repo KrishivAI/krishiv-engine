@@ -252,3 +252,26 @@ def test_freq_items_counts_equal_arrays_with_nan_as_one_item(spark: SparkSession
 def test_unchecked_integer_beyond_the_long_range_is_null(spark: SparkSession) -> None:
     df = spark.createDataFrame([(2**64 + 1,), (2**63,), (5,)], "x bigint", verifySchema=False)
     assert [r.x for r in df.collect()] == [None, None, 5]
+
+
+def test_an_attribute_object_is_a_struct_value(spark: SparkSession) -> None:
+    from types import SimpleNamespace
+
+    df = spark.createDataFrame([(SimpleNamespace(x=1),)], "s struct<x:int>")
+    assert df.collect()[0]["s"]["x"] == 1
+
+
+def test_decimal_nan_is_null(spark: SparkSession) -> None:
+    from decimal import Decimal
+
+    from krishiv.sql._rowconv import verify
+
+    with pytest.raises(Exception, match="FIELD_NOT_NULLABLE_WITH_NAME"):
+        verify(Decimal("NaN"), T.DecimalType(10, 2), False, "x")
+    df = spark.createDataFrame([(Decimal("NaN"),)], "d decimal(10,2)")
+    assert df.collect()[0]["d"] is None
+
+
+def test_a_non_mapping_for_a_map_column_is_null_when_unchecked(spark: SparkSession) -> None:
+    df = spark.createDataFrame([(1,)], "m map<string,int>", verifySchema=False)
+    assert df.collect()[0]["m"] is None
