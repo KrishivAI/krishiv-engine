@@ -318,6 +318,8 @@ jobs:
           find target/debug/deps -maxdepth 1 -type f -perm -u+x ! -name '*.so' -delete
           du -sh target 2> /dev/null || true
           df -h /
+      # krishiv-python turns `delta` on for the whole workspace run above, so the build without it is tested alone.
+      - run: cargo nextest run -p krishiv-session --test delta_disabled --locked
       - run: cargo nextest run -p krishiv-session --features telemetry-otlp --test otlp_collector --locked
       # Server TLS (`tls`) and OIDC (`oidc`), both off by default: the in-memory rustls handshakes,
       # and the JWT verifier against keys generated per run.
@@ -852,7 +854,7 @@ jobs:
             coverage: true
           - name: cp314t
             python: "3.14t"
-            maturin_args: "--no-default-features --features mimalloc,cloud,ui"
+            maturin_args: "--no-default-features --features mimalloc,cloud,ui,delta"
             wheel_tag: cp314t
             coverage: false
     name: wheels (${{ matrix.name }})
