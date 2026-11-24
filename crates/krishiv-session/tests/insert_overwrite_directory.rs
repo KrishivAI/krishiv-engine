@@ -292,7 +292,10 @@ fn insert_overwrite_directory_matches_spark() {
                 .get("conf")
                 .and_then(Value::as_object)
                 .is_some_and(|c| !c.contains_key("spark.sql.catalogImplementation"));
-        if setup || SKIPPED.contains(&id) {
+        // With the `delta` feature (workspace test runs unify it on) `USING delta` is a known source,
+        // so the case of an unknown provider named delta does not apply.
+        let delta_known = cfg!(feature = "delta") && id == "IOD-22-unknown-delta";
+        if setup || delta_known || SKIPPED.contains(&id) {
             continue;
         }
         ran += 1;
