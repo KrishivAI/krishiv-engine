@@ -443,8 +443,7 @@ impl ModeAcc {
                 taking.push(group.chunks[c].slice(r, 1));
             }
             if !taking.is_empty() {
-                let refs: Vec<&dyn Array> = taking.iter().map(AsRef::as_ref).collect();
-                children.push(concat(&refs).map_err(|e| internal(e.to_string()))?);
+                children.push(super::chunks::concat_chunks(&taking, &self.arg_type)?);
                 key_total = key_total
                     .checked_add(
                         i32::try_from(taking.len())
@@ -468,12 +467,7 @@ impl ModeAcc {
                     + i32::try_from(group.counts.len()).unwrap_or(i32::MAX),
             );
         }
-        let key_values = if children.is_empty() {
-            arrow_array::new_empty_array(&self.arg_type)
-        } else {
-            let refs: Vec<&dyn Array> = children.iter().map(AsRef::as_ref).collect();
-            concat(&refs).map_err(|e| internal(e.to_string()))?
-        };
+        let key_values = super::chunks::concat_chunks(&children, &self.arg_type)?;
         let count_values = if counts.is_empty() {
             Arc::new(arrow_array::Int64Array::new_null(0)) as ArrayRef
         } else {
@@ -511,8 +505,7 @@ impl ModeAcc {
                 None => arrow_array::new_null_array(&self.arg_type, 1),
             });
         }
-        let refs: Vec<&dyn Array> = out.iter().map(AsRef::as_ref).collect();
-        concat(&refs).map_err(|e| internal(e.to_string()))
+        super::chunks::concat_chunks(&out, &self.arg_type)
     }
 
     /// The winning sample `(chunk, row)` of `group`, if it has a value.

@@ -43,7 +43,6 @@ use arrow_array::{
 };
 use arrow_buffer::{OffsetBuffer, ScalarBuffer};
 use arrow_schema::{DataType, Field};
-use arrow_select::concat::concat;
 use arrow_select::take::take;
 
 use crate::error::{Result, internal};
@@ -482,12 +481,7 @@ impl CollectAcc {
             }
             offsets.push(total);
         }
-        let child = if children.is_empty() {
-            arrow_array::new_empty_array(elem)
-        } else {
-            let refs: Vec<&dyn Array> = children.iter().map(AsRef::as_ref).collect();
-            concat(&refs).map_err(|e| internal(e.to_string()))?
-        };
+        let child = super::chunks::concat_chunks(&children, elem)?;
         ListArray::try_new(
             Arc::clone(field),
             OffsetBuffer::new(ScalarBuffer::from(offsets)),
@@ -1025,5 +1019,64 @@ mod tests {
         let nulls: ArrayRef = arrow_array::new_null_array(&DataType::Null, 2);
         acc.update(&[0, 0], &nulls, &|_| true, None).unwrap();
         assert!(acc.values[0].is_empty());
+    }
+
+    /// A state's child shares each input batch's data buffers once, however
+    /// many groups and merge rounds it passes through (Arrow's `concat`
+    /// appended a batch's list once per group chunk, so each round
+    /// multiplied the list; a spilling `collect_list` reached 12 GB).
+    #[test]
+    fn view_states_keep_their_buffer_lists_through_merge_rounds() {
+        let (groups, batches) = (400_u32, 10_u32);
+        let list = DataType::List(Arc::new(Field::new("item", DataType::Utf8View, true)));
+        let mut acc = CollectAcc::new(DataType::Utf8View, false).unwrap();
+        acc.resize(groups as usize);
+        for b in 0..batches {
+            let col: ArrayRef = Arc::new(StringViewArray::from_iter_values(
+                (0..groups).map(|g| format!("batch-{b:02}-group-{g:04}-long-value")),
+            ));
+            let ids: Vec<u32> = (0..groups).collect();
+            acc.update(&ids, &col, &|_| true, None).unwrap();
+        }
+        let ids: Vec<u32> = (0..groups).collect();
+        let mut state = acc.state(&ids, &list).unwrap();
+        let want = state
+            .as_list::<i32>()
+            .iter()
+            .map(|l| {
+                l.map(|v| {
+                    v.as_string_view()
+                        .iter()
+                        .map(|s| s.map(str::to_owned))
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect::<Vec<_>>();
+        for _ in 0..3 {
+            let child = state
+                .as_list::<i32>()
+                .values()
+                .as_string_view()
+                .data_buffers()
+                .len();
+            assert!(child <= batches as usize, "{child} buffers");
+            let mut next = CollectAcc::new(DataType::Utf8View, false).unwrap();
+            next.resize(groups as usize);
+            next.merge(&ids, &state).unwrap();
+            state = next.state(&ids, &list).unwrap();
+        }
+        let got = state
+            .as_list::<i32>()
+            .iter()
+            .map(|l| {
+                l.map(|v| {
+                    v.as_string_view()
+                        .iter()
+                        .map(|s| s.map(str::to_owned))
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(got, want);
     }
 }
