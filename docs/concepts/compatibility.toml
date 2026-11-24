@@ -119,8 +119,8 @@ note = ""
 [[surface]]
 group = "User-defined functions"
 name = "Grouped-aggregate and iterator `pandas_udf`, `applyInPandas`, `mapInPandas`"
-status = "not yet"
-note = "The two `pandas_udf` forms fail with NOT_IMPLEMENTED (eval types 202 and 204); `applyInPandas` and `mapInPandas` do not exist on `DataFrame` and raise `AttributeError`."
+status = "supported"
+note = "Embedded relation UDFs (grouped-aggregate and iterator `pandas_udf`, `applyInPandas`, `mapInPandas`, `cogroup`) run on the Python pool, one pool thread per task (`krishiv.python.udf.threads`). `barrier=True` is refused."
 
 [[surface]]
 group = "Not covered"

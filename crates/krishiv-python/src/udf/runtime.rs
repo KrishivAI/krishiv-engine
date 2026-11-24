@@ -318,7 +318,7 @@ impl PreparedUdf for Prepared {
         let runner = Arc::clone(&self.runner);
         let call = Call::new();
         let cancel = CancelOnDrop(Arc::clone(&call));
-        pool.submit(Box::new(move |py| {
+        pool.submit_scalar(Box::new(move |py| {
             // A call whose future was dropped (its query cancelled or
             // failed) is skipped: it would hold the pool thread and its input
             // for a result nobody reads (T098b I2).

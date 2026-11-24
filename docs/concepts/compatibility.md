@@ -51,7 +51,7 @@ Status per surface. Anything not listed here is unknown and not supported.
 | --- | --- | --- |
 | Rust UDFs | supported |  |
 | Python `@udf` and scalar `pandas_udf` / `arrow_udf` | supported |  |
-| Grouped-aggregate and iterator `pandas_udf`, `applyInPandas`, `mapInPandas` | not yet | The two `pandas_udf` forms fail with NOT_IMPLEMENTED (eval types 202 and 204); `applyInPandas` and `mapInPandas` do not exist on `DataFrame` and raise `AttributeError`. |
+| Grouped-aggregate and iterator `pandas_udf`, `applyInPandas`, `mapInPandas` | supported | Embedded relation UDFs (grouped-aggregate and iterator `pandas_udf`, `applyInPandas`, `mapInPandas`, `cogroup`) run on the Python pool, one pool thread per task (`krishiv.python.udf.threads`). `barrier=True` is refused. |
 
 ## Not covered
 

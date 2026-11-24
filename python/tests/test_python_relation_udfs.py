@@ -227,6 +227,50 @@ print("rows", len(mapped), len(grouped))
     assert out == "rows 1000 1000"
 
 
+_COUNTING = """
+import threading, time
+active = peak = 0
+lock = threading.Lock()
+def counting(v):
+    global active, peak
+    with lock:
+        active += 1
+        peak = max(peak, active)
+    time.sleep(0.002)
+    with lock:
+        active -= 1
+    return v + 1
+f = pandas_udf(counting, "long")
+spark.conf.set("spark.sql.execution.arrow.maxRecordsPerBatch", "1000")
+"""
+
+
+def test_one_thread_pool_never_overlaps_scalar_udf_calls() -> None:
+    # `threads = 1` starts a spare OS thread (pool.rs), but scalar calls still run one at a time, on every interpreter.
+    out = _run_isolated(
+        1,
+        _COUNTING
+        + """
+rows = spark.range(0, 200000, 1, 8).select(f("id")).collect()
+print("peak", peak, len(rows))
+""",
+    )
+    assert out == "peak 1 200000"
+
+
+def test_one_thread_pool_runs_a_relation_udf_beside_gated_scalar_calls() -> None:
+    out = _run_isolated(
+        1,
+        _COUNTING
+        + """
+df = spark.range(0, 20000, 1, 8).withColumn("x", f("id"))
+rows = df.mapInPandas(lambda it: it, "id long, x long").collect()
+print("peak", peak, len(rows))
+""",
+    )
+    assert out == "peak 1 20000"
+
+
 @pytest.mark.parametrize("threads", [1, 2])
 def test_apply_in_pandas_over_a_thousand_groups_finishes(threads: int) -> None:
     out = _run_isolated(

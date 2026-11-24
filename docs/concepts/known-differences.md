@@ -771,15 +771,13 @@ free for scalar UDFs that feed them) and the query runs. The setting is startup-
 runtime change with `CANNOT_MODIFY_STATIC_CONFIG`. The pool is made when the first Python UDF query starts and is not
 resized, so put the value in the configuration passed when the session is created (or set it at engine startup, or
 start a fresh interpreter with the higher value).
-A single-thread pool starts one spare thread for scalar UDF calls, so a scalar `pandas_udf` feeding a
+A single-thread pool starts one spare thread for scalar UDF calls (which still run one at a time), so a scalar `pandas_udf` feeding a
 `mapInPandas` or `applyInPandas` in the same query does not stall on it.
 
-The embedded `mapInPandas` / `mapInArrow` takes each result batch's columns by position and relabels them with the
-declared schema. With `spark.sql.execution.arrow.pyspark.validateSchema.enabled` set to `true` the embedded
+The embedded `mapInArrow` takes each result batch's columns by position and relabels them with the
+declared schema; `mapInPandas` matches the result's columns to the declared schema by name, as Spark does. With `spark.sql.execution.arrow.pyspark.validateSchema.enabled` set to `true` the embedded
 `mapInArrow` path compares the UDF's own field names with the declared schema and refuses a mismatch of names or
-types with `ARROW_TYPE_MISMATCH`, as the server's worker pool does. Embedded `mapInPandas` relabels its result
-columns by position before the check and does not check field names: a same-typed result with reordered fields is
-accepted and its values are assigned by position. A declared
+types with `ARROW_TYPE_MISMATCH`, as the server's worker pool does. A declared
 `NOT NULL` (and a nested `containsNull=false` or `valueContainsNull=false`) is not kept by the embedded runtime, so a
 nullable result is accepted where Spark 4.1+ refuses it.
 
