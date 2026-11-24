@@ -8,7 +8,7 @@ place, so there is no load step and no server.
 ```bash
 ./benchmark.sh                                  # downloads hits.parquet (about 14 GB), installs Krishiv, runs all 43 queries 3 times
 HITS_PARQUET=/data/hits.parquet ./benchmark.sh  # reuse a downloaded file
-KRISHIV_WHEEL=./krishiv-0.2.0-cp311-abi3-manylinux_2_28_x86_64.whl ./benchmark.sh   # a specific wheel instead of PyPI
+KRISHIV_WHEEL=./krishiv-0.3.1-cp311-abi3-manylinux_2_28_x86_64.whl ./benchmark.sh   # a specific wheel instead of PyPI
 ```
 
 Output, in ClickBench's format: `Load time: <seconds>`, `Data size: <bytes>`, then 43 lines `[first, second, third],` in
@@ -54,12 +54,23 @@ applies (`bench/src/krishiv_bench/clickbench_queries.py`, which also checks resu
 
 ## Status
 The entry for P3-T091; any submission to ClickBench and its `results/<date>/<machine>.json` come from T093 (the
-c6a.4xlarge run). The wheel version defaults to the 0.2.0 release (`KRISHIV_VERSION`).
+c6a.4xlarge run). The wheel version defaults to the 0.3.1 release (`KRISHIV_VERSION`).
 
 Checked (2026-11-13, perf-1): `benchmark.sh` end to end on the bench server (Ryzen 5 3600, 64 GB, NVMe) against the
 real `hits.parquet` (14,779,976,446 bytes, linked with `HITS_PARQUET`), with a 0.2.0 wheel built from `v0.2.0`
 (`KRISHIV_WHEEL`): all 43 queries x 3 runs return, no `null`, and each query's row count equals the T091 run's
 (`compat-0.2.md` in krishiv-internal, where the answers were also checked against DuckDB's). The server had no
 password-free `sudo`, so the cold path printed its `no-cold` warning and was not exercised; its load was 17-31 from
-other work, so those times are not a measurement. Not checked: the cold path with `sudo`, and ClickBench's own driver
+other work, so those times are not a measurement. Not checked then: the cold path with `sudo`, and ClickBench's own driver
 (`../lib/benchmark-common.sh`).
+
+Checked (2026-11-24, perf-1): ClickBench's own driver at upstream `b4468bb` (`lib/benchmark-common.sh`, copied next to
+this folder as in a ClickBench checkout) on the same server and file, with a wheel of main from 2026-11-23,
+`BENCH_TRIES=1`: install, load (the driver's partial-load check needs a data size over 5 GB; `data-size` counts the
+linked file), `Startup time: 0.203` (`SELECT 1` through `query`), all 43 queries return with no `null`, the
+concurrency test skipped (`Concurrent QPS: null`, as for the other embedded entries). The download step was stubbed
+with a link to the local copy. The upstream download script now fetches `hits_compatible/athena/hits.parquet`; it has
+the same length as the file above and the same bytes at three sampled 1 MB ranges, and `benchmark.sh` run on its own
+now downloads that URL too. The driver's `drop_caches` needs `sudo` and was stubbed here, so the cold path is still
+not exercised (the dry run on the board's machine does that). `queries.sql` upstream is unchanged (same SHA-256 as
+the pinned commit).

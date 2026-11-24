@@ -1,6 +1,6 @@
 #!/bin/bash
 # SPDX-License-Identifier: Apache-2.0
-# Installs Krishiv into ./venv. KRISHIV_VERSION (default 0.2.0) picks the PyPI release; KRISHIV_WHEEL (a path or URL)
+# Installs Krishiv into ./venv. KRISHIV_VERSION (default 0.3.1) picks the PyPI release; KRISHIV_WHEEL (a path or URL)
 # installs that wheel instead. Python 3.11 or newer is required (the wheel is abi3-py311).
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -20,7 +20,7 @@ else
     fi
     PIP="venv/bin/python -m pip install -q"
 fi
-$PIP "${KRISHIV_WHEEL:-krishiv==${KRISHIV_VERSION:-0.2.0}}" pyarrow
+$PIP "${KRISHIV_WHEEL:-krishiv==${KRISHIV_VERSION:-0.3.1}}" pyarrow
 venv/bin/python -c "import krishiv, pyarrow; print('krishiv ready')"
 # queries.sql is generated, not committed (README "Licence"); here so that it stays out of the timed load.
 [ -f queries.sql ] || ./make-queries.py > queries.sql

@@ -10,7 +10,7 @@
 # the first run cold (page cache dropped before it; Krishiv is embedded, so every run is also a fresh process).
 #
 #   HITS_PARQUET=/path/to/hits.parquet   use this file instead of downloading ~14 GB
-#   KRISHIV_VERSION=0.2.0 | KRISHIV_WHEEL=<path or URL>   what `install` installs
+#   KRISHIV_VERSION=0.3.1 | KRISHIV_WHEEL=<path or URL>   what `install` installs
 #   BENCH_TRIES=3                        runs per query
 set -uo pipefail
 cd "$(dirname "$0")"
@@ -26,7 +26,7 @@ TRIES="${BENCH_TRIES:-3}"
 
 if [ ! -e hits.parquet ]; then
     if [ -n "${HITS_PARQUET:-}" ]; then ln -s "$(readlink -f "$HITS_PARQUET")" hits.parquet
-    else wget --continue --progress=dot:giga https://datasets.clickhouse.com/hits_compatible/hits.parquet || exit 1
+    else wget --continue --progress=dot:giga https://datasets.clickhouse.com/hits_compatible/athena/hits.parquet || exit 1
     fi
 fi
 
