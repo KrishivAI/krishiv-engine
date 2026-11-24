@@ -433,7 +433,7 @@ No credential was presented.
 ###### `Basic`
 
 `Authorization: Basic` on the Flight SQL surface: a bearer token as the password, its
-principal's name as the user name (P3-T101 note §3.1).
+principal's name as the user name.
 
 ##### Implementations
 
@@ -592,7 +592,7 @@ pub struct Credentials<'a> {
   pub fn with_basic(self: Self, basic: &'a BasicCredentials) -> Self { /* ... */ }
   ```
   The same credentials carrying a decoded `Basic` credential: its password as the bearer
-  token and its user name to check against the token's principal (P3-T101 note §3.1). The
+  token and its user name to check against the token's principal. The
   transport decodes `Basic` only on `Surface::FlightSql`.
 
 ###### Trait Implementations
@@ -2708,7 +2708,7 @@ pub struct CatalogCaller {
 
 What a declared catalog's table is read with in one query (PR-58b): the query's I/O, its path
 placement (the session's stores; in server mode confined to `krishiv.io.local.allowedRoots`
-and `krishiv.io.objectStore.allowedPrefixes`, ADR 0046 §3a), its configuration and the
+and `krishiv.io.objectStore.allowedPrefixes`), its configuration and the
 worker slots splits are cut for.
 
 ```rust
@@ -2729,7 +2729,7 @@ pub struct ScanInputs {
 | `paths` | `std::sync::Arc<dyn PathLocator>` | Where the table's files live. |
 | `config` | `std::sync::Arc<krishiv_common::config::Config>` | The query's configuration. |
 | `worker_slots` | `u64` | The drivers splits are planned for. |
-| `stores` | `ScopedStores` | What a table read with credentials of its own builds its stores from (vended, design P3-T067 §4.1). |
+| `stores` | `ScopedStores` | What a table read with credentials of its own builds its stores from (vended). |
 
 ##### Implementations
 
@@ -2818,7 +2818,7 @@ pub struct ScanInputs {
 - **WithSubscriber**
 #### Struct `ScopedStores`
 
-What a table read with credentials of its own (vended, design P3-T067 §4.1) builds its stores from: the query's
+What a table read with credentials of its own (vended) builds its stores from: the query's
 configuration and the runtime's I/O scheduler. It holds no credential.
 
 ```rust
@@ -6962,7 +6962,7 @@ pub struct Catalog<'a> {
   pub async fn list_embedded_databases(self: &Self) -> Result<Vec<Database>, KrishivError> { /* ... */ }
   ```
   The namespaces of the embedded catalog `spark_catalog` whatever the current catalog is,
-  sorted by name: the Arrow Flight SQL `GetDbSchemas` listing (design P3-T101 §5), which
+  sorted by name: the Arrow Flight SQL `GetDbSchemas` listing, which
   names its catalog rather than following `USE`.
 
 - ```rust
