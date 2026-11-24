@@ -4,8 +4,9 @@
 //! written by `tests/scripts/gen_time_precision_goldens.py`. Each case runs on the session profile of
 //! its release, in UTC. A case that runs is compared by its column names and by every value cast to
 //! STRING on the engine (so TIME values keep their nanoseconds); a case that reads a clock only by
-//! its `typed` columns (the `typeof(..)` values, which do not depend on the clock). A case that fails
-//! is compared by its error condition and message.
+//! its `typed` columns (the `typeof(..)` values, which do not depend on the clock); both also by their
+//! output types and nullability (`Session::analyze`). A case that fails is compared by its message's
+//! first line, exactly, and, when Spark gave an error class, by the class, SQLSTATE and parameters.
 #![forbid(unsafe_code)]
 #![expect(
     clippy::expect_used,
@@ -14,6 +15,7 @@
     reason = "a golden runner: a malformed fixture or a mismatch fails the test"
 )]
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use arrow_array::Array;
@@ -118,6 +120,87 @@ const KNOWN_GAPS: &[(&str, &str, &str)] = &[
         "current_timestamp_dayofweek",
         "[KRISHIV_UNSUPPORTED_FEATURE] The feature `current_timestamp(dayofweek(DATE '1970-01-02'))` with a precision Krishiv cannot fold is not supported by Krishiv yet.",
     ),
+    // Nullability (review round 6): Spark's TIME functions over a literal report a nullable result
+    // (`extract`/`date_part`, `hour`/`minute`/`second`, `time_diff`, `time_trunc`, `time_to_micros`,
+    // `to_time`, `make_time`); Krishiv's analysis marks them not nullable.
+    (
+        "4.2.0",
+        "date_part_second",
+        "schema [(\"decimal(8,6)\", false)]",
+    ),
+    (
+        "4.2.0",
+        "fields",
+        "schema [(\"int\", false), (\"int\", false), (\"int\", false), (\"string\", false)]",
+    ),
+    ("4.2.0", "time_diff", "schema [(\"bigint\", false)]"),
+    (
+        "4.2.0",
+        "time_trunc",
+        "schema [(\"string\", false), (\"string\", false), (\"string\", false)]",
+    ),
+    ("4.2.0", "time_to_micros", "schema [(\"bigint\", false)]"),
+    (
+        "4.2.0",
+        "to_time",
+        "schema [(\"string\", false), (\"string\", false), (\"string\", false)]",
+    ),
+    ("4.2.0", "make_time", "schema [(\"string\", false)]"),
+    (
+        "4.3.0",
+        "extract_second",
+        "schema [(\"decimal(11,9)\", false), (\"string\", false), (\"string\", false)]",
+    ),
+    (
+        "4.3.0",
+        "date_part_second",
+        "schema [(\"decimal(11,9)\", false)]",
+    ),
+    (
+        "4.3.0",
+        "fields",
+        "schema [(\"int\", false), (\"int\", false), (\"int\", false), (\"string\", false)]",
+    ),
+    ("4.3.0", "time_diff", "schema [(\"bigint\", false)]"),
+    (
+        "4.3.0",
+        "time_trunc",
+        "schema [(\"string\", false), (\"string\", false), (\"string\", false)]",
+    ),
+    ("4.3.0", "time_to_micros", "schema [(\"bigint\", false)]"),
+    (
+        "4.3.0",
+        "to_time",
+        "schema [(\"string\", false), (\"string\", false), (\"string\", false)]",
+    ),
+    ("4.3.0", "make_time", "schema [(\"string\", false)]"),
+    // `instr` and `locate` of a collated column give a NOT NULL result in Spark; Krishiv's is nullable.
+    ("4.2.0", "instr_collated", "schema [(\"int\", true)]"),
+    (
+        "4.2.0",
+        "instr_literal_collated",
+        "schema [(\"int\", true)]",
+    ),
+    ("4.2.0", "locate_collated", "schema [(\"int\", true)]"),
+    ("4.3.0", "instr_collated", "schema [(\"int\", true)]"),
+    (
+        "4.3.0",
+        "instr_literal_collated",
+        "schema [(\"int\", true)]",
+    ),
+    ("4.3.0", "locate_collated", "schema [(\"int\", true)]"),
+    // Spark 4.2 parses a precision past `Int` with `Integer.parseInt` and fails outside its error
+    // classes (`NumberFormatException: For input string`); Krishiv raises its own class.
+    (
+        "4.2.0",
+        "time_huge",
+        "[UNSUPPORTED_TIME_PRECISION] The seconds precision 99999999999 of the TIME data type is out of the supported range [0, 6].",
+    ),
+    (
+        "4.2.0",
+        "ts_ntz_huge",
+        "[UNSUPPORTED_DATATYPE] Unsupported data type \"TIMESTAMP_NTZ(99999999999)\".",
+    ),
 ];
 
 fn fixture(release: &str) -> Value {
@@ -211,14 +294,42 @@ fn check(profile: SparkProfile, c: &Value) -> Option<Mismatch> {
             }
             Err(e) => e,
         };
-        let Some(class) = c["error"].as_str() else {
-            // Spark failed outside its error classes (a JVM exception): any error matches.
-            return None;
-        };
         let want = c["message"].as_str().unwrap_or_default();
         let got = shown(&err);
-        if err.error_class().name() != class || !got.starts_with(want.trim_end_matches('.')) {
+        // The message's first line without a SQLSTATE suffix, as the generator records Spark's.
+        let line = got.lines().next().unwrap_or_default();
+        let line = line.split(" SQLSTATE:").next().unwrap_or_default().trim();
+        if line != want {
             return mismatch(format!("error `{got}`, Spark `{want}`"), got);
+        }
+        if let Some(class) = c["error"].as_str() {
+            if err.error_class().name() != class {
+                return mismatch(format!("class of `{got}`, Spark {class}"), got);
+            }
+            let want_state = c["sql_state"].as_str();
+            if err.sql_state() != want_state {
+                return mismatch(
+                    format!("SQLSTATE {:?}, Spark {want_state:?}", err.sql_state()),
+                    got,
+                );
+            }
+            let want_params: BTreeMap<String, String> = c["parameters"]
+                .as_object()
+                .expect("parameters")
+                .iter()
+                .map(|(k, v)| (k.clone(), v.as_str().expect("parameter").to_owned()))
+                .collect();
+            let params: BTreeMap<String, String> = err
+                .message_parameters()
+                .iter()
+                .map(|(k, v)| ((*k).to_owned(), v.clone()))
+                .collect();
+            if params != want_params {
+                return mismatch(
+                    format!("parameters {params:?}, Spark {want_params:?}"),
+                    format!("{got} parameters {params:?}"),
+                );
+            }
         }
         return None;
     }
@@ -239,6 +350,35 @@ fn check(profile: SparkProfile, c: &Value) -> Option<Mismatch> {
         return mismatch(
             format!("names {names:?}, Spark {want_names:?}"),
             format!("names {names:?}"),
+        );
+    }
+    // The statement's own output types and nullability, before the STRING casts of `run`.
+    let want_schema: Vec<(String, bool)> = c["schema"]
+        .as_array()
+        .expect("schema")
+        .iter()
+        .map(|f| {
+            (
+                f[0].as_str().expect("type").to_owned(),
+                f[1].as_bool().expect("nullable"),
+            )
+        })
+        .collect();
+    let schema: Vec<(String, bool)> = match block_on(s.analyze(sql)) {
+        Ok(a) => a
+            .output_schema
+            .iter()
+            .map(|f| (f.data_type.simple_string(), f.nullable))
+            .collect(),
+        Err(e) => {
+            let got = shown(&e);
+            return mismatch(format!("analysis fails `{got}`"), got);
+        }
+    };
+    if schema != want_schema {
+        return mismatch(
+            format!("schema {schema:?}, Spark {want_schema:?}"),
+            format!("schema {schema:?}"),
         );
     }
     if clock {

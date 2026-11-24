@@ -1801,7 +1801,19 @@ fn type_parameters_are_checked_on_decode() {
         m
     };
     // TIME takes a precision up to 9 (Spark 4.3); 7 decodes, with its feature listed.
-    assert!(decode(&time(7, 0).encode_to_vec()).is_ok());
+    let decoded = decode(&time(7, 0).encode_to_vec()).unwrap();
+    let mut stack = vec![decoded.root()];
+    let mut scanned = None;
+    while let Some(n) = stack.pop() {
+        if let PhysNode::Scan(s) = n {
+            scanned = Some(s.scan.output[0].data_type.clone());
+        }
+        stack.extend(n.children());
+    }
+    assert_eq!(
+        scanned,
+        Some(krishiv_types::DataType::Time { precision: 7 })
+    );
     let mut hidden = time(7, 0);
     hidden.features = vec!["geo_types".to_owned(), "time_type".to_owned()];
     corrupt(

@@ -7,8 +7,10 @@ Krishiv profile. A case is a SQL statement with optional session configs. For a 
 fixture records the output column names and every value cast to STRING on the server (`CAST(c AS STRING)`
 of each output column), so TIME values keep their nanoseconds (Python rows would hold microseconds); a case
 marked `clock` reads a clock: it records the names, and as `typed` the first row's values of its `typeof(..)`
-columns (by position), which do not depend on the clock. For a statement that fails it records the error
-condition and the message's first line without the `SQLSTATE` suffix and query context.
+columns (by position), which do not depend on the clock. Both also record `schema`, each output field's
+`simpleString` type and nullability before the casts. For a statement that fails it records the error
+condition, the message's first line without the `SQLSTATE` suffix and query context, the SQLSTATE and the
+message parameters (`sql_state` null and no parameters for a failure outside Spark's error classes).
 
 Usage (from the repository root, Java 17+ on PATH):
 
@@ -31,7 +33,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-FORMAT_VERSION = 1
+FORMAT_VERSION = 2
 GENERATOR = "tests/scripts/gen_time_precision_goldens.py"
 ON = {"spark.sql.timeType.enabled": "true"}
 NTZ = {"spark.sql.timestampType": "TIMESTAMP_NTZ"}
@@ -300,6 +302,25 @@ CASES: list[tuple[str, dict[str, str], str, bool]] = [
 CONDITION = re.compile(r"\[([A-Z0-9_.]+)\]")
 
 
+def sql_state_and_parameters(e: Exception) -> tuple[str | None, dict[str, str]]:
+    """The SQLSTATE and message parameters: from a PySparkException (classic and Connect), else from the
+    `SparkThrowable` a `Py4JJavaError` wraps (an exception the classic bridge does not convert, such as a
+    `SparkException` raised in parsing), else none (a JVM exception outside Spark's error classes)."""
+    sql_state = getattr(e, "getSqlState", None)
+    parameters = getattr(e, "getMessageParameters", None)
+    if callable(sql_state) and callable(parameters):
+        return sql_state(), dict(parameters() or {})
+    java = getattr(e, "java_exception", None)
+    if java is not None:
+        try:
+            state = java.getSqlState()
+            params = java.getMessageParameters()
+        except Exception:  # not a SparkThrowable
+            return None, {}
+        return state, {str(k): str(params.get(k)) for k in params.keySet()} if params is not None else {}
+    return None, {}
+
+
 def error_record(e: Exception) -> dict[str, Any]:
     """The condition and the message's first line, without the SQLSTATE and query context."""
     lines = [line for line in str(e).splitlines() if CONDITION.search(line)]
@@ -307,7 +328,13 @@ def error_record(e: Exception) -> dict[str, Any]:
     line = line[line.index("[") :] if "[" in line else line
     match = CONDITION.match(line)
     message = line.split(" SQLSTATE:")[0].strip()
-    return {"error": match.group(1) if match else None, "message": message}
+    state, params = sql_state_and_parameters(e)
+    return {
+        "error": match.group(1) if match else None,
+        "message": message,
+        "sql_state": state,
+        "parameters": dict(sorted(params.items())) if params else {},
+    }
 
 
 def run(spark: Any, conf: dict[str, str], sql: str, clock: bool) -> dict[str, Any]:
@@ -318,13 +345,15 @@ def run(spark: Any, conf: dict[str, str], sql: str, clock: bool) -> dict[str, An
     try:
         df = spark.sql(sql)
         names = list(df.columns)
+        # The original output schema, before the STRING casts below hide its types.
+        schema = [[f.dataType.simpleString(), f.nullable] for f in df.schema.fields]
         # Positional names first: two output names may be equal (Spark 4.2 cuts a literal's digits).
         positional = df.toDF(*[f"c{i}" for i in range(len(names))])
         rows = positional.select(*[F.col(f"c{i}").cast("string") for i in range(len(names))]).collect()
         if clock:
             typed = [[i, rows[0][i]] for i, n in enumerate(names) if n.startswith("typeof(")]
-            return {"names": names, "typed": typed}
-        return {"names": names, "values": [[r[i] for i in range(len(names))] for r in rows]}
+            return {"names": names, "schema": schema, "typed": typed}
+        return {"names": names, "schema": schema, "values": [[r[i] for i in range(len(names))] for r in rows]}
     except Exception as e:  # a Spark error is the expected result of a case
         return error_record(e)
     finally:
