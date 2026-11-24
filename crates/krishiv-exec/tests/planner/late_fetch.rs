@@ -251,3 +251,27 @@ fn late_fetch_runs_under_a_small_memory_limit() {
     );
     drop(query);
 }
+
+/// E14 (design `P3-E14-security-barrier.md` §6): a late fetch never reads a scan behind a security
+/// barrier (the planner's `late_fetch` matches a scan or a filter over one, never a barrier). The
+/// query that plans one over the plain table plans none with the table behind a barrier, and
+/// returns the same rows.
+#[test]
+fn a_scan_behind_a_barrier_is_not_fetched_late() {
+    let rt = runtime();
+    let dir = tempfile::tempdir().unwrap();
+    let mut rng = 3;
+    let batch = table(&mut rng, 3000, 400, 5);
+    let mut t = tables(dir.path(), &batch, &rt);
+    configured(&mut t, &[]);
+    let q = "SELECT * FROM big ORDER BY k32, v LIMIT 3";
+    let plain = t.plan_sql(q).unwrap();
+    assert!(plain.to_string().contains("LateFetch"), "{plain}");
+    let guarded = super::barrier::behind_barrier(&t.analyzed(q).unwrap(), "big");
+    let stats = krishiv_exec::planner::ProviderStatistics(Arc::clone(&t.tables) as _);
+    let optimized = krishiv_optimizer::optimize_with(&guarded, &stats).unwrap();
+    let plan = t.runnable(&optimized).unwrap();
+    assert!(!plan.guarded().is_empty(), "{plan}");
+    assert!(!plan.to_string().contains("LateFetch"), "{plan}");
+    assert_eq!(rows(&run(&plan).0), rows(&run(&plain).0));
+}

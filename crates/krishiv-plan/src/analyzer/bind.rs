@@ -938,20 +938,62 @@ async fn authorize_as(
     }
     // A policy that decides columns is asked only whether the schema may be seen here; the rows
     // are asked per referenced column once the query is resolved (`authorize_columns`).
-    let asked = if privilege == Privilege::Select
-        && matches!(securable, Securable::Table(_) | Securable::View(_))
-        && ctx.policy.column_level()
-    {
-        Privilege::Browse
-    } else {
-        privilege
-    };
+    let asked = asked_privilege(ctx, &securable, privilege);
     super::access::authorize_reported(&*ctx.policy, &ctx.principal, &securable, asked, privilege)
         .await
         .map_err(|e| AnalysisError::new(e, origin))?;
     b.securables.push((securable.clone(), privilege));
     checked.push((securable, b.securables.len() - 1));
     Ok(b.securables.len() - 1)
+}
+
+/// The privilege [`authorize_as`] asks for `privilege` on `securable`: `Browse` for a table or
+/// view read under a policy that decides columns.
+fn asked_privilege(
+    ctx: &AnalysisContext,
+    securable: &Securable,
+    privilege: Privilege,
+) -> Privilege {
+    if privilege == Privilege::Select
+        && matches!(securable, Securable::Table(_) | Securable::View(_))
+        && ctx.policy.column_level()
+    {
+        Privilege::Browse
+    } else {
+        privilege
+    }
+}
+
+/// Tells the policy the table reads [`load`] is about to ask (ADR 0049 §3), so a remote provider
+/// decides them in one call: each catalog read's name as located, as written and folded. A hint
+/// ([`AccessPolicy::prefetch`]): the names a bare read finds on the SQL path, the catalog's own
+/// identifier and the view kind are asked as they come.
+async fn prefetch_reads(ctx: &AnalysisContext, b: &Bindings, found: &[Found<'_>]) {
+    if b.under_definer {
+        return;
+    }
+    let cs = ctx.conf.case_sensitive;
+    let mut items: Vec<(Securable, Privilege)> = Vec::new();
+    for f in found {
+        let name = match f {
+            Found::Table(name, _) | Found::Scan(name, ..) => *name,
+            _ => continue,
+        };
+        let Some((_, ident)) = locate(ctx, name) else {
+            continue;
+        };
+        for ident in [fold(&ident, cs), ident] {
+            let securable = Securable::Table(ident);
+            let privilege = asked_privilege(ctx, &securable, ctx.mode.read_privilege());
+            let item = (securable, privilege);
+            if !items.contains(&item) {
+                items.push(item);
+            }
+        }
+    }
+    if !items.is_empty() {
+        ctx.policy.prefetch(&ctx.principal, &items).await;
+    }
 }
 
 /// For every table a plan reads (`Read` or an already-resolved `Scan`): asks
@@ -967,6 +1009,7 @@ async fn load(
 ) -> Result<(), AnalysisError> {
     let cs = ctx.conf.case_sensitive;
     let mut checked: Vec<(Securable, usize)> = Vec::new();
+    prefetch_reads(ctx, b, &found).await;
     // Scans already validated, by table: a scan of one table may differ from
     // another in version and columns, and each is checked on its own.
     type Seen<'a> = (Option<TableVersion>, &'a [BoundColumn]);
