@@ -28,5 +28,7 @@
   "python-udf-tenants": "Python UDFs per tenant",
   "vector-search": "Vector search with SQL",
   "python-table-functions": "Python table functions",
-  "upgrading-from-0.2": "Upgrading from 0.2"
+  "upgrading-from-0.2": "Upgrading from 0.2",
+  "run-krishiv-in-docker": "Run Krishiv in Docker",
+  "local-lakehouse-docker-compose": "Local lakehouse with docker compose"
 }
