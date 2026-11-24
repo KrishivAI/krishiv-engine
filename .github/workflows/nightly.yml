@@ -209,6 +209,13 @@ jobs:
       # DWARF, so no debug info at all.
       CARGO_PROFILE_DEV_DEBUG: "0"
       CARGO_PROFILE_TEST_DEBUG: "0"
+      # 2026-11-23: full again (ld Bus error linking krishiv-session tests, 119 GB free): about 300
+      # krishiv-session test binaries of 341 MB each, 136 MB of that the symbol table. Coverage reads
+      # its own sections (`__llvm_covfun`, `__llvm_prf_*`), not symbols: the lcov export of a
+      # stripped binary is byte-identical, and the binary is 206 MB. Backtraces of a failing test
+      # here lose function names; the all-features job runs the same tests unstripped.
+      CARGO_PROFILE_DEV_STRIP: symbols
+      CARGO_PROFILE_TEST_STRIP: symbols
     steps:
       - name: Harden the runner (audit egress)
         uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
@@ -251,6 +258,14 @@ jobs:
         env:
           KRISHIV_TEST_UDF_PYTHON: ${{ runner.temp }}/udf-python/bin/python
           KRISHIV_UDF_POOL_REQUIRED: "1"
+      # Where the disk went, also when the run failed (as coverage.yml's PR job reports it).
+      - name: Coverage disk use
+        if: always()
+        run: |
+          df -h /
+          du -sh target/llvm-cov-target target/llvm-cov-target/debug/deps target/llvm-cov-target/debug/build 2> /dev/null || true
+          find target/llvm-cov-target -maxdepth 1 -name '*.profraw' -printf '%s\n' 2> /dev/null \
+            | awk '{ n++; s += $1 } END { printf "profraw: %d files, %.1f GB\n", n, s / 1e9 }'
       - name: Per-crate summary
         run: cargo xtask coverage-summary --markdown | tee -a "$GITHUB_STEP_SUMMARY"
       # The newest coverage-report artifact is the previous nightly's (this run uploads its own
