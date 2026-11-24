@@ -795,6 +795,7 @@ fn a_zero_timeout_is_refused() {
 
 /// The token is read from its reference when the header is made, trimmed, and marked sensitive;
 /// a token that is not header text is refused without echoing it.
+#[cfg(unix)]
 #[test]
 fn the_bearer_header_comes_from_the_token_reference() {
     let dir = tempfile::tempdir().unwrap();
@@ -840,6 +841,7 @@ async fn an_https_endpoint_makes_a_lazy_channel() {
 
 /// A `unix:` endpoint dials the socket: a service that closes the connection is a denial, and so
 /// is a socket nobody listens on.
+#[cfg(unix)]
 #[tokio::test]
 async fn a_unix_endpoint_dials_the_socket() {
     let dir = tempfile::tempdir().unwrap();

@@ -430,6 +430,9 @@ fn clear_dir(dir: &Path) -> Result<(), KrishivError> {
 mod tests {
     use super::{dir_identity, remove_made};
 
+    // Windows has no stable directory identity in std (creation times of directories made in the
+    // same tick are equal), so a swapped directory cannot be told apart there.
+    #[cfg(unix)]
     #[test]
     fn only_the_directory_made_is_removed() {
         let tmp = tempfile::tempdir().unwrap();

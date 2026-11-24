@@ -799,11 +799,11 @@ fn add_partition_locations() {
     };
     assert_eq!(
         location("p = 'x'"),
-        format!("Location\tfile:{}", elsewhere.display())
+        format!("Location\t{}", shown_location(&elsewhere))
     );
     assert_eq!(
         location("p = 'y'"),
-        format!("Location\tfile:{}", other.display())
+        format!("Location\t{}", shown_location(&other))
     );
     // A relative location is made absolute against the working directory (Spark's `makeQualified`). The
     // directory `ADD PARTITION` creates there has a name of its own and is removed even if an assertion fails.
@@ -821,7 +821,7 @@ fn add_partition_locations() {
     );
     assert_eq!(
         location("p = 'z'"),
-        format!("Location\tfile:{}", created.0.display())
+        format!("Location\t{}", shown_location(&created.0))
     );
     assert!(created.0.is_dir());
     assert_eq!(rows(&s, "SHOW PARTITIONS t"), ["p=x", "p=y", "p=z"]);
@@ -2963,4 +2963,15 @@ fn a_scan_that_prunes_every_partition_shows_its_pruned_units() {
         .collect();
     assert_eq!(pruned, "2", "{plan}");
     assert!(plan.contains("scan_rows_decoded=0"), "{plan}");
+}
+
+/// A partition location as Spark prints it: `file:` and the path, a Windows drive path as
+/// `file:/D:/a/b`.
+fn shown_location(path: &std::path::Path) -> String {
+    let text = path.display().to_string();
+    if cfg!(windows) {
+        format!("file:/{}", text.replace('\\', "/"))
+    } else {
+        format!("file:{text}")
+    }
 }
