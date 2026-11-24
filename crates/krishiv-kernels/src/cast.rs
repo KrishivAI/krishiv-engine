@@ -598,6 +598,30 @@ fn widen_decimal(input: &dyn Array, to: &DataType) -> Option<Result<ArrayRef, Ke
     }
 }
 
+/// An integral cast to a strictly wider integral type (TINYINT, SMALLINT or
+/// INT to a wider one) keeps every value: it cannot overflow or give a NULL
+/// in any mode, so it is one widening over the values buffer, with the NULL
+/// buffer shared (Spark compiles it to a plain Java widening conversion,
+/// `Cast.castToIntCode` at v4.2.0). `None` for any other cast. Without it the
+/// cast took the per-row path, ~20 ns a row: most of ClickBench q30's and
+/// q02's time is one `CAST(smallint AS INT)`.
+fn widen_integral(input: &dyn Array, to: &DataType) -> Option<ArrayRef> {
+    macro_rules! widen {
+        ($f:ty, $t:ty, $n:ty) => {
+            Arc::new(input.as_primitive::<$f>().unary::<_, $t>(<$n>::from)) as ArrayRef
+        };
+    }
+    Some(match (input.data_type(), to) {
+        (DataType::Int8, DataType::Int16) => widen!(Int8Type, Int16Type, i16),
+        (DataType::Int8, DataType::Int32) => widen!(Int8Type, Int32Type, i32),
+        (DataType::Int8, DataType::Int64) => widen!(Int8Type, Int64Type, i64),
+        (DataType::Int16, DataType::Int32) => widen!(Int16Type, Int32Type, i32),
+        (DataType::Int16, DataType::Int64) => widen!(Int16Type, Int64Type, i64),
+        (DataType::Int32, DataType::Int64) => widen!(Int32Type, Int64Type, i64),
+        _ => return None,
+    })
+}
+
 /// `CAST(input AS to)` with Spark semantics.
 ///
 /// # Errors
@@ -630,6 +654,9 @@ pub fn cast(
     }
     if let Some(out) = widen_decimal(input, to) {
         return out;
+    }
+    if let Some(out) = widen_integral(input, to) {
+        return Ok(out);
     }
     // `Decimal64` is a carrier of `decimal(p <= 18, s)` (design P2-T160):
     // the cast is the `Decimal128` one, with the operand widened and the
