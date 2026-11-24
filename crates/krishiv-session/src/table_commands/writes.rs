@@ -383,6 +383,7 @@ impl Session {
                                 &output[*i].data_type,
                                 &column.data_type,
                                 0,
+                                by_name.then_some(env.analysis.conf.case_sensitive),
                             )
                         } else {
                             value.cast_ansi(column.data_type.clone())

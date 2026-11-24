@@ -607,6 +607,10 @@ fn is_window_column(p: &Arc<LogicalPlan>, name: &str) -> bool {
         PlanNode::SubqueryAlias { input, columns, .. } if columns.is_empty() => {
             is_window_column(input, name)
         }
+        // These keep their input's rows and output columns.
+        PlanNode::Sort { input, .. }
+        | PlanNode::Limit { input, .. }
+        | PlanNode::Offset { input, .. } => is_window_column(input, name),
         // A renamed column list (`AS q(w, n)`): `name` is the list's entry at some position, and the input's
         // output column at that position is the one to look at.
         PlanNode::SubqueryAlias { input, columns, .. } => columns
@@ -629,9 +633,14 @@ fn is_window_column(p: &Arc<LogicalPlan>, name: &str) -> bool {
             over_generator
                 && exprs.iter().any(|e| match &e.node {
                     ExprNode::Alias { expr, name: n } => {
-                        n == name && matches!(&expr.node, ExprNode::Column(c) if c.name == [WINDOW])
+                        n.eq_ignore_ascii_case(name)
+                            && matches!(&expr.node, ExprNode::Column(c) if c.name == [WINDOW])
                     }
-                    ExprNode::Column(c) => c.name == [name] && name == WINDOW,
+                    ExprNode::Column(c) => {
+                        c.name.len() == 1
+                            && c.name[0].eq_ignore_ascii_case(name)
+                            && name.eq_ignore_ascii_case(WINDOW)
+                    }
                     _ => false,
                 })
         }
@@ -644,6 +653,9 @@ fn is_window_column(p: &Arc<LogicalPlan>, name: &str) -> bool {
 fn output_names(p: &Arc<LogicalPlan>) -> Vec<String> {
     match &p.node {
         PlanNode::SubqueryAlias { input, columns, .. } if columns.is_empty() => output_names(input),
+        PlanNode::Sort { input, .. }
+        | PlanNode::Limit { input, .. }
+        | PlanNode::Offset { input, .. } => output_names(input),
         PlanNode::SubqueryAlias { columns, .. } => columns.clone(),
         PlanNode::Project { exprs, .. }
         | PlanNode::Aggregate {

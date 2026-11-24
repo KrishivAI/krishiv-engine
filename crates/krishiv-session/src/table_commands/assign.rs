@@ -31,6 +31,8 @@ pub(super) fn assign(
     case_sensitive: bool,
     legacy_store: bool,
 ) -> Result<Vec<Source>, KrishivError> {
+    // `INSERT .. BY NAME` also matches the fields of a nested struct by name (Spark's `reorderColumnsByName`).
+    let names = by_name.then_some(case_sensitive);
     let eq = |a: &str, b: &str| {
         if case_sensitive {
             a == b
@@ -125,7 +127,7 @@ pub(super) fn assign(
         // clause commits.
         if let Source::Position(i) = from
             && !(if legacy_store {
-                !legacy_refused(&output[*i].data_type, &column.data_type)
+                !legacy_refused(&output[*i].data_type, &column.data_type, names)
             } else {
                 can_store(&output[*i].data_type, &column.data_type)
             })
@@ -150,22 +152,48 @@ pub(super) fn assign(
 /// (`TableOutputResolver.resolveMapType`, `resolveArrayType`, `resolveStructType`), so a map's key pair and value
 /// pair are checked apart; every other pair, a non-map source into a map column included, is one cast
 /// (`checkField`), and a cast Spark refuses in every mode is refused here, before a first clause commits.
-pub(super) fn legacy_refused(from: &DataType, to: &DataType) -> bool {
+///
+/// `by_name` is `Some(case_sensitive)` for `INSERT .. BY NAME`, where a struct's fields are paired by name and a
+/// target field the source lacks is refused.
+pub(super) fn legacy_refused(from: &DataType, to: &DataType, by_name: Option<bool>) -> bool {
     match (from, to) {
         (DataType::Map(f), DataType::Map(t)) => {
-            legacy_refused(f.key_type(), t.key_type())
-                || legacy_refused(f.value_type(), t.value_type())
+            legacy_refused(f.key_type(), t.key_type(), by_name)
+                || legacy_refused(f.value_type(), t.value_type(), by_name)
         }
         (DataType::Array(f), DataType::Array(t)) => {
-            legacy_refused(f.element_type(), t.element_type())
+            legacy_refused(f.element_type(), t.element_type(), by_name)
         }
-        (DataType::Struct(f), DataType::Struct(t)) if f.fields().len() == t.fields().len() => f
-            .fields()
-            .iter()
-            .zip(t.fields().iter())
-            .any(|(f, t)| legacy_refused(f.data_type(), t.data_type())),
+        (DataType::Struct(f), DataType::Struct(t)) if f.fields().len() == t.fields().len() => {
+            match by_name {
+                None => f
+                    .fields()
+                    .iter()
+                    .zip(t.fields().iter())
+                    .any(|(f, t)| legacy_refused(f.data_type(), t.data_type(), by_name)),
+                Some(case) => t.fields().iter().any(|t| {
+                    field_named(f, t.name(), case)
+                        .is_none_or(|f| legacy_refused(f.data_type(), t.data_type(), by_name))
+                }),
+            }
+        }
         _ => krishiv_plan::analyzer::cast_always_refused(from, to),
     }
+}
+
+/// The field of `st` named `name`, under the session's case rule.
+fn field_named<'a>(
+    st: &'a krishiv_types::StructType,
+    name: &str,
+    case_sensitive: bool,
+) -> Option<&'a krishiv_types::StructField> {
+    st.fields().iter().find(|f| {
+        if case_sensitive {
+            f.name() == name
+        } else {
+            f.name().eq_ignore_ascii_case(name)
+        }
+    })
 }
 
 /// Whether a struct's field names are all different, ignoring case.
@@ -184,6 +212,7 @@ pub(super) fn legacy_store_cast(
     from: &DataType,
     to: &DataType,
     depth: usize,
+    by_name: Option<bool>,
 ) -> crate::Column {
     use crate::functions::{call_function, col, lambda, lit};
     if from == to {
@@ -193,7 +222,7 @@ pub(super) fn legacy_store_cast(
         (DataType::Map(f), DataType::Map(t)) => {
             let leaf = |arr: crate::Column, f: &DataType, t: &DataType| {
                 let name = format!("__krishiv_x{depth}");
-                let body = legacy_store_cast(col(&name), f, t, depth + 1);
+                let body = legacy_store_cast(col(&name), f, t, depth + 1, by_name);
                 call_function("transform", [arr, lambda([name], body)])
             };
             let keys = leaf(
@@ -210,7 +239,13 @@ pub(super) fn legacy_store_cast(
         }
         (DataType::Array(f), DataType::Array(t)) => {
             let name = format!("__krishiv_x{depth}");
-            let body = legacy_store_cast(col(&name), f.element_type(), t.element_type(), depth + 1);
+            let body = legacy_store_cast(
+                col(&name),
+                f.element_type(),
+                t.element_type(),
+                depth + 1,
+                by_name,
+            );
             call_function("transform", [value, lambda([name], body)])
         }
         // A field read by name (`get_field`) needs unique source names; Spark reads by ordinal, so a source
@@ -219,13 +254,22 @@ pub(super) fn legacy_store_cast(
             if f.fields().len() == t.fields().len() && unique_names(f) =>
         {
             let mut args = Vec::with_capacity(t.fields().len() * 2);
-            for (f, t) in f.fields().iter().zip(t.fields().iter()) {
+            for (i, t) in t.fields().iter().enumerate() {
+                // `BY NAME` pairs the fields by name; `legacy_refused` has refused a target field with no match.
+                let f = match by_name {
+                    Some(case) => field_named(f, t.name(), case),
+                    None => f.fields().get(i),
+                };
+                let Some(f) = f else {
+                    return value.cast_legacy(to.clone());
+                };
                 args.push(lit(t.name()));
                 args.push(legacy_store_cast(
                     value.clone().get_field(f.name()),
                     f.data_type(),
                     t.data_type(),
                     depth,
+                    by_name,
                 ));
             }
             let built = call_function("named_struct", args);

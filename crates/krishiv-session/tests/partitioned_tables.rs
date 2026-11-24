@@ -1837,6 +1837,29 @@ fn legacy_store_casts_map_values_one_by_one() {
     );
 }
 
+/// `INSERT .. BY NAME` pairs the fields of a nested struct by name under LEGACY too: the source's `b` goes to
+/// the target's `b`, not to its second field by position.
+#[test]
+fn legacy_store_by_name_pairs_nested_struct_fields_by_name() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(&s, "create table bn(s struct<a:int,b:int>) using parquet");
+    s.conf()
+        .set("spark.sql.storeAssignmentPolicy", "LEGACY")
+        .unwrap();
+    run(
+        &s,
+        "insert into bn by name select named_struct('b', '2', 'a', '1') as s",
+    );
+    assert_eq!(
+        rows(
+            &s,
+            "select concat(cast(s.a as string), '|', cast(s.b as string)) from bn"
+        ),
+        ["1|2"]
+    );
+}
+
 /// Map keys that collide after the LEGACY store cast follow `spark.sql.mapKeyDedupPolicy` (the map is rebuilt
 /// with `MapFromArrays`): `EXCEPTION` fails with `DUPLICATED_MAP_KEY`, `LAST_WIN` keeps the last value.
 #[test]

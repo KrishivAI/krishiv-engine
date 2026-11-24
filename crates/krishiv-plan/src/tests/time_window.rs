@@ -346,7 +346,8 @@ fn nested_windows_and_window_time() {
     );
     let r = run(nested_any_value);
     assert_eq!(class(&r), "OK", "{:?}", r.as_ref().err().map(|e| &e.error));
-    // `any_value(window)` is the inner window struct; `count(*)` a long.
+    // The bare `window` is the outer window's output column (the inner one is `__tw_inner`), so
+    // `any_value(window)` is a struct; the test checks the type only. `count(*)` is a long.
     assert!(
         matches!(types(&r)[0], DataType::Struct(_)),
         "{:?}",
@@ -460,6 +461,39 @@ fn a_window_over_a_window_column_of_a_derived_table_reads_its_window_time() {
             vec![c("window.start")],
         );
     assert_ne!(class(&run(plain)), "OK");
+}
+
+/// The window column survives a `LIMIT` above the projection, and its name matches whatever the case.
+#[test]
+fn a_window_column_is_found_through_a_limit_and_in_any_case() {
+    let derived = |alias: &str, reference: &str| {
+        run(LogicalPlan::table(["t"])
+            .aggregate(
+                vec![window("ts", &["1 minute"])],
+                vec![
+                    window("ts", &["1 minute"]).alias(alias),
+                    count_star().alias("cnt"),
+                ],
+            )
+            .limit(int(10))
+            .aggregate(
+                vec![f("window", vec![c(reference), s("5 minutes")])],
+                vec![c("window.start"), f("sum", vec![c("cnt")])],
+            ))
+    };
+    for (alias, reference) in [
+        ("inner_window", "inner_window"),
+        ("Inner_Window", "inner_window"),
+    ] {
+        let r = derived(alias, reference);
+        assert_eq!(
+            class(&r),
+            "OK",
+            "{alias}: {:?}",
+            r.as_ref().err().map(|e| &e.error)
+        );
+        assert_eq!(types(&r), vec![DataType::Timestamp, DataType::Long]);
+    }
 }
 
 /// A derived table that renames its columns (`AS q(w, n)`) keeps the window identity of the renamed column.
