@@ -151,11 +151,11 @@ pub static ARROW_USE_LARGE_VAR_TYPES: ConfigEntry = ConfigEntry {
 };
 
 /// `spark.sql.execution.arrow.pyspark.selfDestruct.enabled`.
-pub static ARROW_PYSPARK_SELF_DESTRUCT: ConfigEntry = ConfigEntry {
+pub static ARROW_PYSPARK_SELF_DESTRUCT_ENABLED: ConfigEntry = ConfigEntry {
     key: "krishiv.sql.execution.arrow.pyspark.selfDestruct.enabled",
     value_type: ValueType::Bool,
     default: Some(ConfigValue::Bool(false)),
-    doc: "When true, a client frees Arrow memory while it converts a collected result to pandas (`toPandas`). Read by Spark Connect clients.",
+    doc: "Whether a client frees Arrow memory as it converts a result to pandas (`toPandas`). Read by Spark Connect clients.",
     scope: Scope::Session,
     settable_by: SettableBy::User,
     version_added: "0.3.0",
@@ -288,6 +288,10 @@ mod tests {
                 "spark.sql.execution.pandas.structHandlingMode",
                 ConfigValue::String("legacy".into()),
             ),
+            (
+                "spark.sql.execution.arrow.pyspark.selfDestruct.enabled",
+                ConfigValue::Bool(false),
+            ),
             ("spark.sql.repl.eagerEval.enabled", ConfigValue::Bool(false)),
             ("spark.sql.repl.eagerEval.maxNumRows", ConfigValue::Int(20)),
             ("spark.sql.repl.eagerEval.truncate", ConfigValue::Int(20)),
@@ -330,6 +334,7 @@ mod tests {
             "krishiv.sql.execution.arrow.useLargeVarTypes",
             "krishiv.sql.execution.arrow.pyspark.selfDestruct.enabled",
             "krishiv.sql.execution.pandas.structHandlingMode",
+            "krishiv.sql.execution.arrow.pyspark.selfDestruct.enabled",
             "krishiv.sql.repl.eagerEval.enabled",
             "krishiv.sql.repl.eagerEval.maxNumRows",
             "krishiv.sql.repl.eagerEval.truncate",

@@ -163,6 +163,7 @@ impl RowLevelTable for IcebergRowLevel {
     fn capabilities(&self) -> RowLevelCapabilities {
         let mut c = RowLevelCapabilities::copy_on_write(CardinalityRule::SparkMergeCardinality);
         // A mode that cannot be read is the statement's error, raised by `scan` (`check_mode`).
+        c.idempotent_commit = true;
         c.merge_on_read = self.provider.write_target().is_some_and(|t| {
             matches!(
                 super::row_delta::row_level_mode(t.base.properties(), self.op),
@@ -196,6 +197,7 @@ impl RowLevelTable for IcebergRowLevel {
                 self.op,
                 request.read_filter_pushdown(),
                 request.write_id.clone(),
+                request.idempotency_key(),
             )?;
             return Ok(Arc::new(super::mor_sink::MergeOnReadSink::new(
                 write, self.op,

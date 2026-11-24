@@ -714,6 +714,7 @@ impl Binder<'_> {
             | PlanNode::SubqueryAlias { .. }
             | PlanNode::Window { .. }
             | PlanNode::Generate { .. }
+            | PlanNode::SecurityBarrier { .. }
             | PlanNode::JoinHint { .. }
             | PlanNode::Sample { .. }
             | PlanNode::CollectMetrics { .. } => self.widen_input(p),

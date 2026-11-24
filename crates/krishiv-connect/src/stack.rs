@@ -12,8 +12,8 @@
 
 use krishiv_common::error::{InternalError, KrishivError};
 
-/// Nesting handled on the caller's stack: 32 levels take about 100 KiB.
-pub(crate) const INLINE_LEVELS: usize = 32;
+/// Nesting handled on the caller's stack: 16 levels take about 50 KiB.
+pub(crate) const INLINE_LEVELS: usize = 16;
 
 /// Runs `f` on a thread with a big stack. A panic of `f` is re-raised on the
 /// caller, as it would be had `f` run there.
