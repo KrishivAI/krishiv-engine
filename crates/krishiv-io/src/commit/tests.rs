@@ -22,6 +22,8 @@ use crate::{
 
 const STORE: &str = "memory://commit";
 
+mod dead_writers;
+
 struct Env {
     rt: tokio::runtime::Runtime,
     io: IoContext,
@@ -1808,7 +1810,9 @@ fn an_append_whose_files_an_overwrite_swept_never_publishes_missing_files() {
         .block_on(over.commit(&env.io, format.as_ref(), schema(), &o, over_files))
         .unwrap();
     assert!(
-        !env.names("t").iter().any(|n| n.contains("job-2")),
+        !env.names("t")
+            .iter()
+            .any(|n| n.contains("job-2") && !n.ends_with(".writer")),
         "the overwrite swept the append's files"
     );
     // Now the append commits.

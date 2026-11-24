@@ -10,7 +10,7 @@ use krishiv_common::secret::OptionValue;
 use krishiv_types::DataType;
 
 use super::depth::self_joins;
-use crate::{AttrId, BoundColumn};
+use crate::{AttrId, BoundColumn, CteRef};
 use crate::{
     Builtin, ColumnRef, Expr, ExprNode, FunctionId, FunctionKind, JoinCondition, JoinKind, Literal,
     LogicalPlan, Origin, Plan, PlanId, PlanNode, ReadSource, ResolvedExpr, ResolvedFunction,
@@ -572,4 +572,31 @@ fn star_replacement_values_enter_the_key() {
     assert!(with(1).structurally_eq(&with(1)));
     assert!(!with(1).structurally_eq(&with(2)));
     assert_ne!(with(1).structural_hash(), with(2).structural_hash());
+}
+
+// ---- attribute ids compared by position ------------------------------------
+
+fn cte_ref(source: [u64; 2], out: [u64; 2]) -> Plan {
+    let bound = |id: u64, name: &str| BoundColumn {
+        id: AttrId(id),
+        name: name.to_owned(),
+        data_type: DataType::Integer,
+        nullable: false,
+    };
+    Plan::try_new(LogicalPlan::new(PlanNode::CteRef(CteRef {
+        name: "c".to_owned(),
+        source: source.iter().map(|i| AttrId(*i)).collect(),
+        output: vec![bound(out[0], "a"), bound(out[1], "b")],
+    })))
+    .unwrap()
+}
+
+#[test]
+fn cte_references_renamed_consistently_are_equal_modulo_attr_ids() {
+    let (a, b) = (cte_ref([10, 11], [10, 11]), cte_ref([20, 21], [20, 21]));
+    assert!(a.structurally_eq_modulo_attr_ids(&b));
+    assert!(!a.structurally_eq(&b));
+    // Not a consistent renaming: the source ids differ from the output ids on one side only.
+    let c = cte_ref([20, 21], [30, 31]);
+    assert!(!a.structurally_eq_modulo_attr_ids(&c));
 }

@@ -1107,3 +1107,63 @@ fn a_restarted_server_lists_the_stored_history() {
     assert!(listed.starts_with("HTTP/1.1 200"), "{listed}");
     assert!(listed.contains("before_restart"), "{listed}");
 }
+
+/// ADR 0049: the `external` access provider's startup refusals (no authentication, no endpoint,
+/// any list with `grants`, which `krishiv server` does not wire yet) stop the server before it binds.
+#[cfg(unix)]
+#[test]
+fn the_external_access_provider_is_checked_at_startup() {
+    use std::os::unix::fs::PermissionsExt;
+    let err = refused(&[
+        "krishiv.access.provider=external",
+        "krishiv.access.external.endpoint=http://127.0.0.1:9",
+    ]);
+    assert!(err.contains("needs authentication"), "{err}");
+    // `grants` decides about a principal too: refused without authentication, not run unenforced.
+    let err = refused(&["krishiv.access.provider=grants"]);
+    assert!(
+        err.contains("the grants provider needs authentication"),
+        "{err}"
+    );
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("t");
+    std::fs::write(&path, "external-provider-token-0123456789abcdef").expect("write secret");
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).expect("chmod");
+    let secret = format!("krishiv.auth.tokens.a.secret=file:{}", path.display());
+    let auth = [
+        secret.as_str(),
+        "krishiv.auth.tokens.a.principal=a",
+        "krishiv.auth.tokens.a.role=viewer",
+    ];
+    let with = |more: &[&'static str]| {
+        let mut confs: Vec<&str> = auth.to_vec();
+        confs.extend_from_slice(more);
+        refused(&confs)
+    };
+    let err = with(&["krishiv.access.provider=external"]);
+    assert!(err.contains("endpoint"), "{err}");
+    let err = with(&[
+        "krishiv.access.provider=grants+external",
+        "krishiv.access.external.endpoint=http://127.0.0.1:9",
+    ]);
+    assert!(
+        err.contains("not available in `krishiv server` yet"),
+        "{err}"
+    );
+    // Any list naming `grants` is refused, with or without `external`.
+    for list in [
+        "krishiv.access.provider=grants",
+        "krishiv.access.provider=roles+grants",
+    ] {
+        let err = with(&[list]);
+        assert!(
+            err.contains("a list naming grants is refused"),
+            "{list}: {err}"
+        );
+    }
+    let err = with(&[
+        "krishiv.access.provider=external",
+        "krishiv.access.external.endpoint=http://policy.example.com",
+    ]);
+    assert!(err.contains("loopback"), "{err}");
+}
