@@ -6,7 +6,7 @@
 //! `none`, `token` (a reference resolved when the catalog is built), `client-credentials` at the
 //! declared token endpoint or `delegated` (the caller's own token or an RFC 8693 exchange of it,
 //! design P3-T067 §3.3; each call carries the session's caller), every request on the egress policy client scoped to the catalog's
-//! declared hosts with no redirect followed (§5.2). [`table`] maps a loaded table to the
+//! declared hosts with no redirect followed (§5.2). The `table` module maps a loaded table to the
 //! analyzer's metadata and opens its scans through the Iceberg connector (PR-58b), and, with
 //! `option.write = true` (default `false`), commits its writes through the catalog (PR-36c
 //! part 2).
