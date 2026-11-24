@@ -201,6 +201,40 @@ impl PyDataFrame {
         self.derive(self.inner.agg(columns(cols)))
     }
 
+    /// `mapInPandas` / `mapInArrow` with the relation UDF `udf`.
+    fn map_in_python(
+        &self,
+        py: Python<'_>,
+        udf: &crate::udf::PyAnonymousUdf,
+        barrier: bool,
+    ) -> PyResult<Self> {
+        self.inner
+            .map_in_python(udf.def(), udf.version(), barrier)
+            .map(|df| self.derive(df))
+            .map_err(|e| crate::errors::to_py(py, &e))
+    }
+
+    /// `groupBy(left_keys).cogroup(other.groupBy(right_keys)).applyInPandas` / `applyInArrow`.
+    fn cogroup_apply_in_python(
+        &self,
+        py: Python<'_>,
+        other: &Self,
+        left_keys: Vec<PyColumn>,
+        right_keys: Vec<PyColumn>,
+        udf: &crate::udf::PyAnonymousUdf,
+    ) -> PyResult<Self> {
+        self.inner
+            .cogroup_apply_in_python(
+                &other.inner,
+                columns(left_keys),
+                columns(right_keys),
+                udf.def(),
+                udf.version(),
+            )
+            .map(|df| self.derive_with(df, other))
+            .map_err(|e| crate::errors::to_py(py, &e))
+    }
+
     /// Joins `other` on the condition `on`, or on the shared columns `using`;
     /// `how` is a Spark join type, `cross` (no condition) a cross join.
     #[pyo3(signature = (other, on=None, using=None, how="inner"))]
@@ -712,5 +746,20 @@ impl PyGroupedData {
             inner: self.inner.agg(columns(cols)),
             owned: self.owned.clone(),
         }
+    }
+
+    /// `applyInPandas` / `applyInArrow` with the relation UDF `udf`.
+    fn apply_in_python(
+        &self,
+        py: Python<'_>,
+        udf: &crate::udf::PyAnonymousUdf,
+    ) -> PyResult<PyDataFrame> {
+        self.inner
+            .apply_in_python(udf.def(), udf.version())
+            .map(|df| PyDataFrame {
+                inner: df,
+                owned: self.owned.clone(),
+            })
+            .map_err(|e| crate::errors::to_py(py, &e))
     }
 }

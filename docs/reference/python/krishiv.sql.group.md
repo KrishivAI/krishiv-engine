@@ -71,7 +71,7 @@ Not available: the deprecated grouped-map `pandas_udf` form (`NOT_IMPLEMENTED`).
 def applyInArrow(self, func: Any, schema: Any) -> DataFrame
 ```
 
-Not available: it needs the Python UDF worker pool, which is planned (`NOT_IMPLEMENTED`).
+Maps each group using a `pyarrow.Table` function (`group_ops.py` `applyInArrow`).
 
 ### `applyInPandas`
 
@@ -79,7 +79,11 @@ Not available: it needs the Python UDF worker pool, which is planned (`NOT_IMPLE
 def applyInPandas(self, func: Any, schema: Any) -> DataFrame
 ```
 
-Not available: it needs the Python UDF worker pool, which is planned (`NOT_IMPLEMENTED`).
+Maps each group of the current `DataFrame` using a pandas UDF and returns the result as a
+`DataFrame` (`pyspark/sql/pandas/group_ops.py` 4.2.1 `applyInPandas`).
+
+`func` takes a `pandas.DataFrame` (or `(key, pandas.DataFrame)`, or an iterator of them) and
+returns a `pandas.DataFrame`; `schema` is its result's `StructType` or DDL string.
 
 ### `avg`
 
@@ -106,10 +110,10 @@ The average per group of each numeric column, as `pyspark.sql.GroupedData.avg`.
 ### `cogroup`
 
 ```python
-def cogroup(self, other: GroupedData) -> Any
+def cogroup(self, other: GroupedData) -> PandasCogroupedOps
 ```
 
-Not available: it needs the Python UDF worker pool, which is planned (`NOT_IMPLEMENTED`).
+Cogroups this group with another by common keys, for `applyInPandas`/`applyInArrow`.
 
 ### `count`
 
@@ -237,3 +241,27 @@ The sum per group of each numeric column, as `pyspark.sql.GroupedData.sum`.
 |  Bob|       5|
 +-----+--------+
 ```
+
+## `PandasCogroupedOps`
+
+```python
+class PandasCogroupedOps
+```
+
+Two `GroupedData` cogrouped by their keys (`pyspark/sql/pandas/group_ops.py`).
+
+### `applyInArrow`
+
+```python
+def applyInArrow(self, func: Any, schema: Any) -> DataFrame
+```
+
+Applies `func(left, right)` (or `func(key, left, right)`) to each key's two `pyarrow.Table`s.
+
+### `applyInPandas`
+
+```python
+def applyInPandas(self, func: Any, schema: Any) -> DataFrame
+```
+
+Applies `func(left, right)` (or `func(key, left, right)`) to each key's two `pandas.DataFrame`s.

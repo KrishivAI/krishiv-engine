@@ -56,6 +56,7 @@ DataFrame.def agg(self, cols: list[Column]) -> DataFrame
 DataFrame.def alias(self, alias: str) -> DataFrame
 DataFrame.def cache(self) -> DataFrame
 DataFrame.def checkpoint(self, eager: bool=...) -> DataFrame
+DataFrame.def cogroup_apply_in_python(self, other: DataFrame, left_keys: list[Column], right_keys: list[Column], udf: AnonymousPythonUdf) -> DataFrame
 DataFrame.def col(self, name: str) -> Column
 DataFrame.def count(self) -> int
 DataFrame.def create_global_temp_view(self, name: str, replace: bool) -> None
@@ -77,6 +78,7 @@ DataFrame.def is_cached(self) -> bool
 DataFrame.def join(self, other: DataFrame, on: Column | None=..., using: list[str] | None=..., how: str=...) -> DataFrame
 DataFrame.def limit(self, n: int) -> DataFrame
 DataFrame.def local_checkpoint(self, eager: bool=..., level: tuple[bool, bool, bool, bool, int] | None=...) -> DataFrame
+DataFrame.def map_in_python(self, udf: AnonymousPythonUdf, barrier: bool) -> DataFrame
 DataFrame.def observe(self, observation: Observation, metrics: list[Column]) -> DataFrame
 DataFrame.def offset(self, n: int) -> DataFrame
 DataFrame.def order_by(self, cols: list[Column]) -> DataFrame
@@ -99,6 +101,7 @@ DataFrame.def write(self, format: str, mode: str, path: str, options: list[tuple
 DataFrame.def write_table(self, insert_into: bool, table: str, format: str | None, mode: str, options: list[tuple[str, str]] | None=..., partition_by: list[str] | None=..., bucket_by: tuple[int, list[str]] | None=..., sort_by: list[str] | None=...) -> None
 DataFrame.def write_to_table(self, table: str, mode: str, provider: str | None=..., options: list[tuple[str, str]] | None=..., properties: list[tuple[str, str]] | None=..., partitioned_by: list[str] | None=..., cluster_by: list[str] | None=..., condition: str | None=...) -> None
 GroupedData.def agg(self, cols: list[Column]) -> DataFrame
+GroupedData.def apply_in_python(self, udf: AnonymousPythonUdf) -> DataFrame
 GroupedData.def pivot(self, col: Column, values: list[Column]) -> GroupedData
 LocalConnectServer.@property def connection_string(self) -> str
 LocalConnectServer.@property def port(self) -> int
@@ -1381,8 +1384,8 @@ DataFrame.def isEmpty(self) -> bool
 DataFrame.def join(self, other: DataFrame, on: str | list[str] | Column | list[Column] | None=None, how: str | None=None) -> DataFrame
 DataFrame.def limit(self, num: int) -> DataFrame
 DataFrame.def localCheckpoint(self, eager: bool=True, storageLevel: StorageLevel | None=None) -> DataFrame
-DataFrame.def mapInArrow(self, func: Callable[..., Any], schema: StructType | str, barrier: bool=False, profile: Any=None) -> DataFrame
-DataFrame.def mapInPandas(self, func: Callable[..., Any], schema: StructType | str, barrier: bool=False, profile: Any=None) -> DataFrame
+DataFrame.def mapInArrow(self, func: Any, schema: Any, barrier: bool=False, profile: Any=None) -> DataFrame
+DataFrame.def mapInPandas(self, func: Any, schema: Any, barrier: bool=False, profile: Any=None) -> DataFrame
 DataFrame.def melt(self, ids: ColumnOrName | list[ColumnOrName] | tuple[ColumnOrName, ...], values: ColumnOrName | list[ColumnOrName] | tuple[ColumnOrName, ...] | None, variableColumnName: str, valueColumnName: str) -> DataFrame
 DataFrame.def observe(self, observation: Observation | str, *exprs: Column) -> DataFrame
 DataFrame.def offset(self, num: int) -> DataFrame
@@ -1597,21 +1600,25 @@ def window_time(windowColumn: ColumnOrName) -> Column
 def years(col: ColumnOrName) -> Column
 def zip_with(left: ColumnOrName, right: ColumnOrName, f: Callable[[Column, Column], Column]) -> Column
 ## sql/group.py
-GroupedData.def __init__(self, native: _native.GroupedData, df: DataFrame) -> None
+GroupedData.def __init__(self, native: _native.GroupedData, df: DataFrame, keys: list[Any] | None=None) -> None
 GroupedData.def __repr__(self) -> str
 GroupedData.def agg(self, *exprs: Column | dict[str, str]) -> DataFrame
 GroupedData.def apply(self, udf: Any) -> DataFrame
 GroupedData.def applyInArrow(self, func: Any, schema: Any) -> DataFrame
 GroupedData.def applyInPandas(self, func: Any, schema: Any) -> DataFrame
 GroupedData.def avg(self, *cols: str) -> DataFrame
-GroupedData.def cogroup(self, other: GroupedData) -> Any
+GroupedData.def cogroup(self, other: GroupedData) -> PandasCogroupedOps
 GroupedData.def count(self) -> DataFrame
 GroupedData.def max(self, *cols: str) -> DataFrame
 GroupedData.def min(self, *cols: str) -> DataFrame
 GroupedData.def pivot(self, pivot_col: str, values: list[Any] | None=None) -> GroupedData
 GroupedData.def sum(self, *cols: str) -> DataFrame
 GroupedData.mean
+PandasCogroupedOps.def __init__(self, gd1: GroupedData, gd2: GroupedData) -> None
+PandasCogroupedOps.def applyInArrow(self, func: Any, schema: Any) -> DataFrame
+PandasCogroupedOps.def applyInPandas(self, func: Any, schema: Any) -> DataFrame
 class GroupedData()
+class PandasCogroupedOps()
 ## sql/na.py
 DataFrameNaFunctions.def __init__(self, df: DataFrame) -> None
 DataFrameNaFunctions.def drop(self, how: str | None='any', thresh: int | None=None, subset: Any=None) -> DataFrame

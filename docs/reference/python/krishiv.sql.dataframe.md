@@ -948,18 +948,19 @@ storageLevel : `krishiv.storagelevel.StorageLevel`, optional
 ### `mapInArrow`
 
 ```python
-def mapInArrow(self, func: Callable[..., Any], schema: StructType | str, barrier: bool=False, profile: Any=None) -> DataFrame
+def mapInArrow(self, func: Any, schema: Any, barrier: bool=False, profile: Any=None) -> DataFrame
 ```
 
-Not available: it needs the Python UDF worker pool, which is planned (`NOT_IMPLEMENTED`).
+As `mapInPandas`, over iterators of `pyarrow.RecordBatch` (`map_ops.py` `mapInArrow`).
 
 ### `mapInPandas`
 
 ```python
-def mapInPandas(self, func: Callable[..., Any], schema: StructType | str, barrier: bool=False, profile: Any=None) -> DataFrame
+def mapInPandas(self, func: Any, schema: Any, barrier: bool=False, profile: Any=None) -> DataFrame
 ```
 
-Not available: it needs the Python UDF worker pool, which is planned (`NOT_IMPLEMENTED`).
+Maps an iterator of batches of this frame using a Python native function that takes and outputs
+`pandas.DataFrame` iterators (`pyspark/sql/pandas/map_ops.py` 4.2.1 `mapInPandas`).
 
 ### `melt`
 

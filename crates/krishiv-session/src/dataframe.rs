@@ -33,6 +33,7 @@ mod fill_stream;
 mod generators;
 mod geo_gate;
 mod observe;
+mod python_relations;
 pub use observe::ObservedSink;
 pub(crate) use observe::{Observers, PendingObservations, deliver};
 mod boxed;

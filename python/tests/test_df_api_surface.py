@@ -304,17 +304,12 @@ def test_names_the_engine_cannot_run_are_not_implemented(df, call) -> None:
         call(df)
 
 
-# mapInPandas, applyInPandas, cogroup: need the Python UDF worker pool (planned) ----------------------------------
+# the deprecated grouped-map apply stays refused ----------------------------------
 
 
 @pytest.mark.parametrize(
     "call",
     [
-        lambda df: df.mapInPandas(lambda it: it, "a long"),
-        lambda df: df.mapInArrow(lambda it: it, "a long"),
-        lambda df: df.groupBy("a").applyInPandas(lambda p: p, "a long"),
-        lambda df: df.groupBy("a").applyInArrow(lambda t: t, "a long"),
-        lambda df: df.groupBy("a").cogroup(df.groupBy("a")),
         lambda df: df.groupBy("a").apply(None),
     ],
 )

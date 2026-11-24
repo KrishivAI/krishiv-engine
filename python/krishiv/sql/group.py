@@ -58,16 +58,67 @@ class GroupedData:
     Apply aggregates with :meth:`agg` or the shorthands (``count``, ``sum``, ``avg`` ...).
     """
 
-    def __init__(self, native: _native.GroupedData, df: DataFrame) -> None:
+    def __init__(self, native: _native.GroupedData, df: DataFrame, keys: list[Any] | None = None) -> None:
         self._grouped = native
         self._source = df
         self._pivoted = False
         self._multi_grouping = False  # rollup, cube or groupingSets: pivot is refused after it
-        self._keys: tuple[Any, ...] = ()  # the grouping expressions, for ``repr``
+        # The grouping columns, which a cogroup needs again (the native handle keeps them to itself).
+        self._keys = [] if keys is None else keys
+        self._key_cols: tuple[Any, ...] = ()  # the grouping expressions, for ``repr``
+
+    def applyInPandas(self, func: Any, schema: Any) -> DataFrame:
+        """Maps each group of the current :class:`DataFrame` using a pandas UDF and returns the result as a
+        :class:`DataFrame` (``pyspark/sql/pandas/group_ops.py`` 4.2.1 ``applyInPandas``).
+
+        ``func`` takes a ``pandas.DataFrame`` (or ``(key, pandas.DataFrame)``, or an iterator of them) and
+        returns a ``pandas.DataFrame``; ``schema`` is its result's :class:`StructType` or DDL string.
+        """
+        import warnings
+
+        from krishiv._udf.typehints import infer_group_pandas_eval_type_from_func
+        from krishiv.sql.pandas.functions import pandas_udf
+        from krishiv.sql.udf import PythonEvalType
+
+        eval_type: int | None = None
+        try:
+            eval_type = infer_group_pandas_eval_type_from_func(func)
+        except Exception as e:
+            warnings.warn(f"Cannot infer the eval type from type hints: {e}", UserWarning, stacklevel=2)
+        if eval_type is None:
+            eval_type = PythonEvalType.SQL_GROUPED_MAP_PANDAS_UDF
+        return self._apply(pandas_udf(func, returnType=schema, functionType=eval_type))
+
+    def applyInArrow(self, func: Any, schema: Any) -> DataFrame:
+        """Maps each group using a ``pyarrow.Table`` function (``group_ops.py`` ``applyInArrow``)."""
+        import warnings
+
+        from krishiv._udf.typehints import infer_group_arrow_eval_type_from_func
+        from krishiv.sql.pandas.functions import pandas_udf
+        from krishiv.sql.udf import PythonEvalType
+
+        eval_type: int | None = None
+        try:
+            eval_type = infer_group_arrow_eval_type_from_func(func)
+        except Exception:
+            warnings.warn("Cannot infer the eval type from type hints. ", UserWarning, stacklevel=2)
+        if eval_type is None:
+            eval_type = PythonEvalType.SQL_GROUPED_MAP_ARROW_UDF
+        return self._apply(pandas_udf(func, returnType=schema, functionType=eval_type))
+
+    def _apply(self, udf: Any) -> DataFrame:
+        from krishiv.sql.dataframe import DataFrame
+
+        # PySpark builds the call over every column of the frame; the engine's task sees the frame itself.
+        return DataFrame(self._grouped.apply_in_python(udf._unwrapped._handle), self._source._session)
+
+    def cogroup(self, other: GroupedData) -> PandasCogroupedOps:
+        """Cogroups this group with another by common keys, for ``applyInPandas``/``applyInArrow``."""
+        return PandasCogroupedOps(self, other)
 
     def __repr__(self) -> str:
         """``GroupedData[grouping expressions: [name], value: [name: string, age: bigint], type: GroupBy]``."""
-        names = [k._text if isinstance(k, Column) and k._text is not None else str(k) for k in self._keys]
+        names = [k._text if isinstance(k, Column) and k._text is not None else str(k) for k in self._key_cols]
         fields = [f"{name}: {type_}" for name, type_ in self._source.dtypes]
         keys = _truncated(names, "field(s)")
         values = _truncated(fields, "field" if len(fields) == 3 else "fields")
@@ -342,18 +393,42 @@ class GroupedData:
             out.append(F.lit(value))
         return out
 
-    def applyInPandas(self, func: Any, schema: Any) -> DataFrame:
-        """Not available: it needs the Python UDF worker pool, which is planned (``NOT_IMPLEMENTED``)."""
-        raise not_implemented("GroupedData.applyInPandas (needs the Python UDF worker pool, planned)")
-
-    def applyInArrow(self, func: Any, schema: Any) -> DataFrame:
-        """Not available: it needs the Python UDF worker pool, which is planned (``NOT_IMPLEMENTED``)."""
-        raise not_implemented("GroupedData.applyInArrow (needs the Python UDF worker pool, planned)")
-
-    def cogroup(self, other: GroupedData) -> Any:
-        """Not available: it needs the Python UDF worker pool, which is planned (``NOT_IMPLEMENTED``)."""
-        raise not_implemented("GroupedData.cogroup (needs the Python UDF worker pool, planned)")
-
     def apply(self, udf: Any) -> DataFrame:
         """Not available: the deprecated grouped-map ``pandas_udf`` form (``NOT_IMPLEMENTED``)."""
         raise not_implemented("GroupedData.apply (needs the Python UDF worker pool, planned)")
+
+
+class PandasCogroupedOps:
+    """Two :class:`GroupedData` cogrouped by their keys (``pyspark/sql/pandas/group_ops.py``)."""
+
+    def __init__(self, gd1: GroupedData, gd2: GroupedData) -> None:
+        self._gd1 = gd1
+        self._gd2 = gd2
+
+    def applyInPandas(self, func: Any, schema: Any) -> DataFrame:
+        """Applies ``func(left, right)`` (or ``func(key, left, right)``) to each key's two ``pandas.DataFrame``s."""
+        from krishiv.sql.pandas.functions import pandas_udf
+        from krishiv.sql.udf import PythonEvalType
+
+        return self._apply(
+            pandas_udf(func, returnType=schema, functionType=PythonEvalType.SQL_COGROUPED_MAP_PANDAS_UDF)
+        )
+
+    def applyInArrow(self, func: Any, schema: Any) -> DataFrame:
+        """Applies ``func(left, right)`` (or ``func(key, left, right)``) to each key's two ``pyarrow.Table``s."""
+        from krishiv.sql.pandas.functions import pandas_udf
+        from krishiv.sql.udf import PythonEvalType
+
+        return self._apply(pandas_udf(func, returnType=schema, functionType=PythonEvalType.SQL_COGROUPED_MAP_ARROW_UDF))
+
+    def _apply(self, udf: Any) -> DataFrame:
+        from krishiv.sql.dataframe import DataFrame
+
+        left, right = self._gd1, self._gd2
+        native = left._source._df.cogroup_apply_in_python(
+            right._source._df,
+            list(left._keys),
+            list(right._keys),
+            udf._unwrapped._handle,
+        )
+        return DataFrame(native, left._source._session)
