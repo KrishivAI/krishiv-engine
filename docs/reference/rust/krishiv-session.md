@@ -3457,7 +3457,7 @@ pub struct CatalogRegistry {
 
 #### Trait `DeclaredTable`
 
-A table a declared catalog loaded for one caller at one version: what a scan of it opens
+A table a declared catalog loaded for one caller at one version: what a scan of it opens.
 Opened before planning, on the executor's I/O runtime.
 
 ```rust

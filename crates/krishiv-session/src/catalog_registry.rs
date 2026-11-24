@@ -265,8 +265,8 @@ impl ScanInputs {
     }
 }
 
-/// A table a declared catalog loaded for one caller at one version: what a scan of it opens
-///. Opened before planning, on the executor's I/O runtime.
+/// A table a declared catalog loaded for one caller at one version: what a scan of it opens.
+/// Opened before planning, on the executor's I/O runtime.
 pub trait DeclaredTable: fmt::Debug + Send + Sync {
     /// The table's provider, read with `inputs`.
     ///
