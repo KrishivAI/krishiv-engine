@@ -2296,6 +2296,7 @@ fn the_indeterminate_collation_needs_its_feature() {
 fn an_indeterminate_arrow_field_tag_needs_its_feature() {
     use arrow_schema::{DataType as Arrow, Field};
     use krishiv_types::arrow::SPARK_TYPE_METADATA_KEY;
+    use krishiv_types::{Collation, DataType};
     for tag in ["string collate null", "array<string collate null>"] {
         let field = Field::new("s", Arrow::Utf8View, true).with_metadata(
             std::collections::HashMap::from([(SPARK_TYPE_METADATA_KEY.to_owned(), tag.to_owned())]),
@@ -2306,6 +2307,31 @@ fn an_indeterminate_arrow_field_tag_needs_its_feature() {
             "{tag}"
         );
     }
+    // A user-defined type over a struct is tagged with the JSON form, where the INDETERMINATE
+    // collation is `spark.null` in the struct field's `__COLLATIONS`, not `collate null`.
+    let udt = DataType::Udt(std::sync::Arc::new(krishiv_types::UdtType::jvm(
+        DataType::Struct(krishiv_types::StructType::new(vec![
+            krishiv_types::StructField::new(
+                "s",
+                DataType::CollatedString(Collation::INDETERMINATE),
+                true,
+            ),
+        ])),
+        "pkg.PairUDT".to_owned(),
+        None,
+    )));
+    let tag = udt.json();
+    assert!(
+        tag.contains("spark.null") && !tag.contains("collate null"),
+        "{tag}"
+    );
+    let field = Field::new("u", Arrow::Utf8View, true).with_metadata(
+        std::collections::HashMap::from([(SPARK_TYPE_METADATA_KEY.to_owned(), tag)]),
+    );
+    assert_eq!(
+        feature_of(Construct::ArrowField(&field)),
+        Some(Feature::IndeterminateCollation)
+    );
 }
 
 /// `max` and `min` of a collated string (`MaxByKeyFirst`, `MinByKeyFirst`)

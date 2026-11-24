@@ -181,7 +181,7 @@ registry! {
     (table_write, TableWrite, POST_MIGRATION_READER_VERSION, Semantic, "The `TableWrite` node: rows written into a table provider's sink (its writer, or the rewriter of its row-level table), resolved at instantiation; design P3-PR-DML §7."),
     (tail, Tail, POST_MIGRATION_READER_VERSION, Semantic, "The `Tail` node (the last rows of the input in plan order, Spark's `Dataset.tail`)."),
     (theta_sketch_aggregates, ThetaSketchAggregates, POST_MIGRATION_READER_VERSION, Semantic, "The DataSketches Theta aggregates (`theta_sketch_agg` and `theta_union_agg` with their folded lgNomEntries, `theta_intersection_agg`): a sketch per group."),
-    (time_precision_nanos, TimePrecisionNanos, POST_MIGRATION_READER_VERSION, Semantic, "A `TIME(p)` type with p in 7..9 (Spark 4.3's nanosecond `TIME`), alone or inside an array, map, struct or user-defined type: a reader that knows only `time_type` (p <= 6) would refuse it as corrupt. The header lists this feature alone, without `time_type`."),
+    (time_precision_nanos, TimePrecisionNanos, POST_MIGRATION_READER_VERSION, Semantic, "A `TIME(p)` type with p in 7..9 (Spark 4.3's nanosecond `TIME`), alone or inside an array, map, struct or user-defined type: a reader that knows only `time_type` (p <= 6) would refuse it as corrupt. Such a type contributes this feature alone, not `time_type`; a `TIME(p <= 6)` elsewhere in the plan still adds `time_type` beside it."),
     (time_type, TimeType, POST_MIGRATION_READER_VERSION, Semantic, "The `TIME` type, with its precision."),
     (udt_type, UdtType, POST_MIGRATION_READER_VERSION, Semantic, "User-defined types (Spark `UserDefinedType`): stored as their SQL type, with the class names in the plan."),
     (union_loop, UnionLoop, POST_MIGRATION_READER_VERSION, Semantic, "The `UnionLoop` and `LoopRef` nodes (recursive common table expressions run as a loop)."),
@@ -363,13 +363,28 @@ fn collated_field(field: &arrow_schema::Field) -> bool {
     tag_type(field).is_some_and(|t| collated(&t))
 }
 
-/// Whether an Arrow field's tag names the INDETERMINATE collation (`string collate null`, alone or inside
-/// an array, map or struct): `parse_data_type` refuses it, so [`collated_field`] sees no collated type.
+/// Whether `t` is or holds a string of the INDETERMINATE collation.
+fn indeterminate(t: &DataType) -> bool {
+    match t {
+        DataType::CollatedString(c) => c.is_indeterminate(),
+        DataType::Array(a) => indeterminate(a.element_type()),
+        DataType::Map(m) => indeterminate(m.key_type()) || indeterminate(m.value_type()),
+        DataType::Struct(s) => s.fields().iter().any(|x| indeterminate(x.data_type())),
+        DataType::Udt(u) => indeterminate(u.sql_type()),
+        _ => false,
+    }
+}
+
+/// Whether an Arrow field's tag names the INDETERMINATE collation, alone or inside an array, map,
+/// struct or user-defined type. A DDL tag (`string collate null`) is matched as text, since
+/// `parse_data_type` refuses it; a JSON tag is parsed, since its form may be `spark.null` in a
+/// field's `__COLLATIONS` (a user-defined type over a struct) with no `collate null` in the text.
 fn indeterminate_field(field: &arrow_schema::Field) -> bool {
     field
         .metadata()
         .get(SPARK_TYPE_METADATA_KEY)
         .is_some_and(|tag| tag.contains("collate null"))
+        || tag_type(field).is_some_and(|t| indeterminate(&t))
 }
 
 /// The constructs of a source a plan reads or writes: a declared file schema, or the stored

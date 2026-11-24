@@ -870,3 +870,22 @@ fn created_by_names_the_profile_release() {
         assert_eq!(created[1], want, "{profile:?}");
     }
 }
+
+/// Spark 4.3.0 (lane probe of 2026-11-24): `SHOW CREATE TABLE` of a `STRING` column prints its
+/// `UTF8_BINARY` collation, as 4.2 does.
+#[test]
+fn show_create_table_names_the_string_collation_under_spark_4_3() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = Session::builder()
+        .profile(krishiv_plan::analyzer::SparkProfile::V4_3)
+        .build()
+        .unwrap();
+    s.conf()
+        .set("spark.sql.warehouse.dir", dir.path().to_str().unwrap())
+        .unwrap();
+    run(&s, "CREATE TABLE t (s STRING, i INT) USING parquet");
+    assert_eq!(
+        rows(&s, "SHOW CREATE TABLE t")[0][0],
+        "CREATE TABLE spark_catalog.default.t (\n  s STRING COLLATE UTF8_BINARY,\n  i INT)\nUSING parquet\n"
+    );
+}

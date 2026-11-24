@@ -92,7 +92,8 @@ fn from_json_keeps_nine_digits_under_spark_4_3() {
     );
 }
 
-/// Spark 4.3.0 (lane probe of 2026-11-24: `error` is `'<type name>'`, `hint` empty): a DDL schema string reports a bad
+/// Spark 4.3.0 (lane probe of 2026-11-24: `error` is `'<type name>'`, `hint` empty, SQLSTATE 42601, message
+/// `Syntax error at or near '<type name>'.`): a DDL schema string reports a bad
 /// timestamp or time precision as `PARSE_SYNTAX_ERROR` at the type name, since
 /// `DataType.parseTypeWithFallback` throws the direct parse's error when the field-list
 /// parse fails too. `timestamp(6)` and `timestamp_ltz(6)` are the microsecond type.
@@ -112,6 +113,12 @@ fn a_ddl_schema_precision_error_is_a_syntax_error_under_spark_4_3() {
     ] {
         let e = run(&format!("SELECT from_json('{{\"a\":1}}', 'a {ty}')")).unwrap_err();
         assert_eq!(e.error_class(), ErrorClass::ParseSyntaxError, "{ty}: {e}");
+        assert_eq!(e.sql_state(), Some("42601"), "{ty}");
+        assert_eq!(
+            e.message(),
+            format!("Syntax error at or near '{near}'."),
+            "{ty}"
+        );
         let params: Vec<(String, String)> = e
             .message_parameters()
             .iter()
