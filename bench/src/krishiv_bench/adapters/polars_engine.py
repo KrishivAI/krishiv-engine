@@ -3,7 +3,10 @@ native API does (all 22 TPC-H queries parse, so no hand-written native versions 
 
 Threads: ``POLARS_MAX_THREADS`` is read when polars is imported, so the process that hosts this adapter sets it
 before the first import (the reproduce worker does; ``config()`` records what was requested and what polars reports).
-Polars has no memory limit knob; the cap is recorded as ``None`` (unbounded).
+Memory: Polars has no hard limit (``memory_limit`` is recorded as ``None``). Since Polars 2.2 its streaming engine
+spills joins past an out-of-core budget, ``POLARS_OOC_MEMORY_BUDGET_MB`` (read at import like ``POLARS_MAX_THREADS``;
+the default engine ignores it). The adapter sets it to the engine memory every other engine gets and moves the spill
+from ``/var/tmp/polars-<user>/spill`` to ``$KRISHIV_DATA/tmp`` (``POLARS_OOC_SPILL_DIR``). Both are recorded.
 """
 
 from __future__ import annotations
@@ -11,7 +14,9 @@ from __future__ import annotations
 import os
 from typing import Any
 
+from ..paths import data_root
 from .base import Dataset, Engine, Query, table_path
+from .datafusion_engine import parse_bytes
 from .proc_mem import SelfTreeMeasure
 
 
@@ -39,6 +44,10 @@ class PolarsEngine(SelfTreeMeasure, Engine):
         self.threads = threads or os.cpu_count() or 1
         self.memory_limit = memory_limit  # accepted for interface parity; polars cannot enforce it
         os.environ.setdefault("POLARS_MAX_THREADS", str(self.threads))
+        if memory_limit:
+            os.environ.setdefault("POLARS_OOC_MEMORY_BUDGET_MB", str(parse_bytes(memory_limit) >> 20))
+            os.environ.setdefault("POLARS_OOC_SPILL_DIR", str(data_root() / "tmp" / f"polars-{os.getpid()}"))
+            os.makedirs(os.environ["POLARS_OOC_SPILL_DIR"], exist_ok=True)
         self._ctx: Any = None
         self._frames: dict[str, Any] = {}
 
@@ -54,6 +63,8 @@ class PolarsEngine(SelfTreeMeasure, Engine):
             "threads_requested": self.threads,
             "threads_effective": pl.thread_pool_size(),
             "memory_limit": None,
+            "ooc_memory_budget_mb": os.environ.get("POLARS_OOC_MEMORY_BUDGET_MB"),
+            "ooc_spill_dir": os.environ.get("POLARS_OOC_SPILL_DIR"),
             "api": "lazy: scan_parquet + SQLContext",
             "engine": "streaming" if self.streaming else "default",
             "runtime": polars_runtime(),
