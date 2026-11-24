@@ -12,6 +12,71 @@ Nothing yet.
 
 ## 0.3.0
 
+### Breaking changes
+
+- `krishiv-session`'s `Column` and `WindowSpec` are no longer `UnwindSafe` or `RefUnwindSafe`. Code that passes one across `std::panic::catch_unwind` wraps it in `AssertUnwindSafe`. (#972)
+
+### Added
+
+- The Connect server answers the sixteen Spark SQL settings a PySpark client reads when it starts a session or calls `createDataFrame` (`spark.sql.timestampType`, `spark.sql.session.localRelation*` and others) with Spark 4.3's defaults, instead of SQL_CONF_NOT_FOUND. (#879)
+  
+  `COMMENT ON COLUMN table.column IS 'comment' | NULL` (Spark 4.3) sets or clears a column comment.
+  Spark 4.3 `SHOW TABLES`, `SHOW TABLE EXTENDED` and `SHOW PARTITIONS ... AS JSON` return one `json_metadata` string in Spark's shape.
+  Spark 4.3 `table@v1` and `table@<yyyyMMddHHmmssSSS>` time-travel suffixes parse, with `MULTIPLE_TIME_TRAVEL_SPEC` beside a `VERSION AS OF` clause and `INVALID_TIME_TRAVEL_TIMESTAMP_FORMAT`; time travel on a table that has none is `UNSUPPORTED_FEATURE.TIME_TRAVEL`.
+  Spark 4.3 `WITH (key = value, ...)` after the target (and its alias) of `UPDATE`, `DELETE` and `MERGE`, and after a `MERGE` source table (before its alias), parses; a table that supports none of them still raises `UNSUPPORTED_FEATURE.TABLE_OPERATION`.
+- `SELECT ... FROM UNNEST(array, ...) [WITH ORDINALITY]` (Spark 4.3): one row per element, several arrays side by side padded with NULL, a 1-based `ordinality` column. DataFrame `zip` over Spark Connect puts the columns of two projections of one source side by side, or fails with `ZIP_PLANS_NOT_MERGEABLE`. `INSERT INTO t (cols) REPLACE WHERE cond` parses (Spark 4.3 grammar; under the 4.2 profile it is a `PARSE_SYNTAX_ERROR` at `REPLACE`) and is refused on a file table as Spark 4.3 does. (#919)
+- Python: `Row.asDict(recursive=True)`, `spark.read.text(...)` (`wholetext`, `lineSep`), `ATTRIBUTE_NOT_SUPPORTED` (SQLSTATE 0A000) for an unknown DataFrame attribute, and a faster `collect()` row build. (#944)
+- Theta sketches: `theta_sketch_agg`, `theta_union_agg`, `theta_intersection_agg` and the scalar `theta_sketch_estimate`, `theta_union`, `theta_intersection`, `theta_difference`, with Spark 4.3 results; a collated string input is refused. (#950)
+- Embedded sessions run `mapInPandas`, `mapInArrow`, `groupBy().applyInPandas`, `applyInArrow`, `cogroup().applyInPandas`/`applyInArrow` and grouped-aggregate `pandas_udf`s in process; `barrier=True` is refused. (#959)
+- The nightly run now includes Spark's own PySpark Connect tests per version, with a pass-list ratchet that fails when a recorded pass is lost. (#960)
+- Metadata reads on a query's own io pool count against that query's memory reservation, and the ADBC Flight SQL end-to-end script runs TPC-H q1..q22 against one Spark Connect server. (#965)
+- `INSERT OVERWRITE [LOCAL] DIRECTORY ... USING <provider> [OPTIONS (..)]` now writes the query's rows to the directory (replacing its contents), through the same writer and access checks as `df.write`; the Hive `ROW FORMAT` / `STORED AS` form is still refused by name (RS-10). (#968)
+- Query events: with an event sink registered (`krishiv.events.file.path` writes a JSON-lines file), every `system.queries` transition emits an event; literals in the statement text are always masked. Without a sink no events are built. (#974)
+- `SHOW TABLES`, `SHOW TABLE EXTENDED` and `SHOW PARTITIONS ... AS JSON` (Spark 4.3) return one `json_metadata` document; `SHOW TABLE EXTENDED ... PARTITION ... AS JSON` is `UNSUPPORTED_FEATURE.SHOW_TABLE_EXTENDED_JSON_WITH_PARTITION`. (#975)
+- `krishiv server` can ask an external access-policy service (`krishiv.access.provider` = `external` or `roles+external`, the `krishiv.access.external.*` keys) which tables, views, columns and paths a caller may use; a slow, failing or unreachable service refuses, and its reasons never reach the user. (#980)
+- `CALL` is now a SQL statement, and Iceberg tables on a writable REST catalog can expire snapshots with `CALL cat.system.expire_snapshots(...)`. The other Iceberg system procedures (`rewrite_manifests`, `rewrite_data_files`, `remove_orphan_files`) are recognised and refused as not supported yet. (#983)
+- The console's Resources page lists a server's Python UDF workers: how many are live and busy, the pool's limits (#988)
+  (in total, per session, per tenant) and the workers of each principal and session (`GET /api/internal/udf-workers`).
+- The official Docker image (docker/Dockerfile): server, Spark Connect, Flight SQL and cloud stores, non-root, with a health check and a CI build and PySpark smoke test on amd64 and arm64. (#989)
+- A Docker Compose quickstart in `examples/docker-compose/`: the Krishiv image, MinIO and a Jupyter client with PySpark, with a notebook that writes a Delta table to MinIO and reads it back over Spark Connect. (#991)
+
+### Spark compatibility
+
+- The default Spark profile is 4.3: `version()`, Spark Connect's `spark_version` and Python's `spark.version` answer 4.3.0. Under 4.3, `PIVOT` with duplicate values gives each output the slot of its own value (Spark 4.3.0; 4.2 raises `INVALID_ARRAY_INDEX`); duplicates with several aggregates and ANSI off stay refused until a 4.3 golden exists. (#879)
+- The notebook preview of a DataFrame (`_repr_html_`) follows `spark.sql.repl.eagerEval.enabled`, as PySpark: it is off by default, so a notebook cell shows `DataFrame[a: int]` until `spark.conf.set("spark.sql.repl.eagerEval.enabled", "true")`. On 0.2.0 the HTML table was always shown. (#944)
+  
+  Also changed (each matches PySpark): `printSchema` prints `integer` / `long` and a trailing empty line, `show()` prints a trailing empty line, `read.*` of a missing path raises `PATH_NOT_FOUND` at the read instead of at the action, and `repr(GroupedData)` truncates to two fields as Spark does. `repr(Column)` shows a column's name (and alias) only; an operator expression prints `Column<...>`.
+
+### Fixed
+
+- Fixed: EXPLAIN ANALYZE prints the plan's dense expression ids, as EXPLAIN does, instead of raw internal ids. (#965)
+- An explicit `krishiv.write.idempotencyKey` now reaches a file table's own writes (creating and appending), so a retried keyed write is not applied twice; a secret-valued key on a table insert is refused instead of dropped. (#966)
+  UPDATE and DELETE of a Delta table take `krishiv.write.idempotencyKey`: a retried statement under the same key is committed once.
+  UPDATE and DELETE of an Iceberg table (copy-on-write and merge-on-read) take `krishiv.write.idempotencyKey` too: a retried statement under the same key commits once.
+- A read by path skips a subdirectory that is not `name=value` (Spark 4.2.0), and a plain subdirectory beside partition directories is `CONFLICTING_DIRECTORY_STRUCTURES` (PY-052). (#968)
+  Writes: a failed local write now shows the operating-system error as its cause, a logged overwrite removes the old `_SUCCESS` and stale unlogged files, `_metadata` and `_common_metadata` are read like Spark, and a read that sees a new commit log lists again instead of failing.
+- The planner estimates `range()` exactly from its start, end and step (row count, bounds, distinct values), so a join or aggregate over it is sized from the right counts instead of a default guess. (#980)
+- A syntax error after an operator followed by a keyword now names the token and position Spark 4.2.0 names: `SELECT (1 +` then `FROM range(1)` on the next line reads `FROM` as a column and `range` as its alias, so the error is at the `(` (line 2, pos 10), not at `FROM`. An unclosed call with an argument that is more than a name or a literal no longer adds a `missing ')'` hint that Spark does not give; beside another argument it reports the extra input as Spark does. (#985)
+- instr on a collated string literal now reports the literal as Spark does, and the time() reference page names the TIME key. (#986)
+- Delta tables: ``CREATE TABLE delta.`/path` (cols) USING delta`` creates version 0 at the path; new Delta tables keep decimal columns, column comments and CHAR/VARCHAR; DELETE, UPDATE and `replaceWhere` read their conditions under the statement's parser options; an insert-only MERGE reports `numSourceRows`; Delta reads keep NOT NULL struct fields. (#987)
+- A `BEGIN ... END` script is listed in `system.queries` with its own text and class, and each of its statements (#988)
+  with its own text and class; before, the script's row had no text and its statements carried the whole script's.
+  A statement refused after it parsed (an analysis error, no access) is listed with its class.
+- `ASOF JOIN`: the features an as-of join's distance expression uses (such as a SQL function body's fixed ANSI mode) are now named in the plan's codec header, so a reader without them refuses the plan instead of misreading it; a parenthesized relation on an as-of join's right side no longer keeps the join's right-side flag. (#990)
+- A Spark Connect client 4.3 can call `toPandas()`: the server answers `spark.sql.execution.arrow.pyspark.selfDestruct.enabled` (default `false`) instead of failing with `SQL_CONF_NOT_FOUND`. (#991)
+- The Python wheel now includes Delta tables: writes, appends, UPDATE, DELETE, MERGE and the idempotency key work in `pip install krishiv`, where they failed with `DATA_SOURCE_NOT_FOUND: delta`. (#992)
+- Web console of a server with TLS: a browser could not sign in. A browser speaks HTTP/2 to a TLS listener, and an HTTP/2 request names the server in `:authority`, not in a `Host` header, so the console's same-origin check refused the page's own sign-in (`403 bad_origin`), and on a loopback listener the host check refused every request (`403 bad_host`). This affected `krishiv server` with `krishiv.server.tls.*` and the Docker image. The host check, the same-origin check and the session cookie's name now read the authority when there is no `Host` header. The page shown without a token now also says how to open the console of a server with configured tokens (add `?token=` and the token to the address). (#997)
+- A temp view created with `spark.sql("CREATE TEMP VIEW ...")` over Spark Connect can now be read back; the view body is no longer lost when it is expanded. (#998)
+- `Column` and `WindowSpec` stay unwind safe, so a caller can hold them across `catch_unwind`; the Rust client test expects Spark 4.3.0. Both traits (`Clock`, `MemoryPool`) now require `UnwindSafe` and `RefUnwindSafe`, so an out-of-tree implementor that is not unwind safe stops compiling. (#1001)
+- ceil and floor raise ARITHMETIC_OVERFLOW under ANSI only on the Spark 4.3 profile, for a constant folded at plan time. A column evaluated at run time still raises on every profile (follow-up: carry the session's Spark line into the executor). (#1003)
+- A write that was killed no longer leaves files that later readers take: the next write to the directory removes the unfinished files of a writer that is gone (Linux). A write that cannot start now fails as `TASK_WRITE_FAILED` and shows the operating system's reason, instead of "Reading the file". (#1006)
+- A stock `pyspark-client` 4.3.0 `toPandas()` against `krishiv server` failed with `SQL_CONF_NOT_FOUND` for `spark.sql.execution.arrow.pyspark.selfDestruct.enabled`. The server now answers it with Spark 4.3's default (`false`). (#1007)
+- A local write under a file, or to `/dev/full`, now fails as `TASK_WRITE_FAILED` with the OS reason in `Caused by:`, not as "Reading the file". (#1010)
+- With `spark.sql.join.asofJoin.enabled` off, `FROM t ASOF JOIN q MATCH_CONDITION (...)` with no alias on `t` now raises `UNSUPPORTED_FEATURE.ASOF_JOIN`, as Spark 4.3 does, instead of a syntax error. Where Spark reads `ASOF` as an alias (`t ASOF JOIN q ON ...`, or `MATCH_CONDITION (a)` as the right side's alias with a column list), Krishiv does too; a Spark 4.2 session keeps 4.2's reading. (#1011)
+- CI: the `test` job runs the workspace tests in stages (lib and bins, then integration tests by name range) and deletes each stage's executables, so the merge-queue run no longer fills the runner's disk. (#1012)
+
+## 0.3.0
+
 Krishiv 0.3 grows from an embedded engine into a server you can put in front of other tools and other engines' tables.
 
 ### Highlights
