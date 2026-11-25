@@ -95,6 +95,9 @@ def rows_of(table: Any) -> list[Row]:
 
 
 def _column_values(column: Any) -> list[Any]:
+    if _has_duplicate_struct_fields(column.type):
+        # ``to_pylist`` raises on a struct with duplicate field names: walk the arrays by position instead.
+        return _by_position(column.combine_chunks() if hasattr(column, "combine_chunks") else column, column.type)
     values: list[Any] = column.to_pylist()
     if _is_plain(column.type):
         return values
@@ -116,6 +119,47 @@ def _is_plain(arrow_type: Any) -> bool:
         or pa.types.is_large_list(t)
         or pa.types.is_fixed_size_list(t)
     )
+
+
+def _has_duplicate_struct_fields(arrow_type: Any) -> bool:
+    import pyarrow as pa
+
+    if pa.types.is_struct(arrow_type):
+        names = [arrow_type.field(i).name for i in range(arrow_type.num_fields)]
+        return len(set(names)) != len(names) or any(
+            _has_duplicate_struct_fields(arrow_type.field(i).type) for i in range(arrow_type.num_fields)
+        )
+    if pa.types.is_map(arrow_type):
+        return _has_duplicate_struct_fields(arrow_type.key_type) or _has_duplicate_struct_fields(arrow_type.item_type)
+    if pa.types.is_list(arrow_type) or pa.types.is_large_list(arrow_type) or pa.types.is_fixed_size_list(arrow_type):
+        return _has_duplicate_struct_fields(arrow_type.value_type)
+    return False
+
+
+def _by_position(array: Any, arrow_type: Any) -> list[Any]:
+    """``array`` as PySpark Python values, struct fields read by position (so duplicate names survive)."""
+    import pyarrow as pa
+
+    if not _has_duplicate_struct_fields(arrow_type):
+        return [_value(v, arrow_type) for v in array.to_pylist()]
+    if pa.types.is_struct(arrow_type):
+        fields = [arrow_type.field(i) for i in range(arrow_type.num_fields)]
+        children = [_by_position(array.field(i), f.type) for i, f in enumerate(fields)]
+        names = [f.name for f in fields]
+        valid = array.is_valid().to_pylist()
+        return [_create_row(names, [c[j] for c in children]) if ok else None for j, ok in enumerate(valid)]
+    if pa.types.is_map(arrow_type):
+        out: list[Any] = []
+        for scalar in array:
+            if not scalar.is_valid:
+                out.append(None)
+                continue
+            entries = scalar.values
+            keys = _by_position(entries.field(0), arrow_type.key_type)
+            vals = _by_position(entries.field(1), arrow_type.item_type)
+            out.append(dict(zip(keys, vals, strict=True)))
+        return out
+    return [None if not scalar.is_valid else _by_position(scalar.values, arrow_type.value_type) for scalar in array]
 
 
 def _value(value: Any, arrow_type: Any) -> Any:
@@ -297,45 +341,6 @@ def show_string(names: list[str], rows: list[list[str]], n: int, truncate: bool 
         lines = [rule, line(header), rule, *[line(r) for r in body], rule]
     if len(rows) > n:
         lines.append(f"only showing top {n} row{'s' if n != 1 else ''}")
-    return "\n".join(lines) + "\n"
-
-
-def _tree_type_name(dt: Any) -> str:
-    """The type name Spark's tree string prints (``integer``, ``long``, ``decimal(10,2)``, ``array``)."""
-    from krishiv.sql.types import DayTimeIntervalType, DecimalType, YearMonthIntervalType
-
-    if isinstance(dt, DecimalType | DayTimeIntervalType | YearMonthIntervalType):
-        return dt.simpleString()
-    return str(dt.typeName())
-
-
-def tree_string(schema: Any) -> str:
-    """``DataFrame.printSchema``'s text, as Spark's ``treeString``: the type names are ``integer`` and ``long``,
-    nested types are a tree, and the text ends with an empty line."""
-    from krishiv.sql.types import ArrayType, MapType, StructType
-
-    lines = ["root"]
-
-    def nested(dt: Any, prefix: str) -> None:
-        if isinstance(dt, ArrayType):
-            lines.append(
-                f"{prefix}-- element: {_tree_type_name(dt.elementType)} (containsNull = {str(dt.containsNull).lower()})"
-            )
-            nested(dt.elementType, prefix + "    |")
-        elif isinstance(dt, MapType):
-            lines.append(f"{prefix}-- key: {_tree_type_name(dt.keyType)}")
-            nested(dt.keyType, prefix + "    |")
-            nulls = str(dt.valueContainsNull).lower()
-            lines.append(f"{prefix}-- value: {_tree_type_name(dt.valueType)} (valueContainsNull = {nulls})")
-            nested(dt.valueType, prefix + "    |")
-        elif isinstance(dt, StructType):
-            for f in dt.fields:
-                lines.append(
-                    f"{prefix}-- {f.name}: {_tree_type_name(f.dataType)} (nullable = {str(f.nullable).lower()})"
-                )
-                nested(f.dataType, prefix + "    |")
-
-    nested(schema, " |")
     return "\n".join(lines) + "\n"
 
 

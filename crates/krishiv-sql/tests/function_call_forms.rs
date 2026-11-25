@@ -114,3 +114,34 @@ fn empty_like_any_is_still_a_parse_error() {
     let err = lower("SELECT a LIKE ANY () FROM t").unwrap_err();
     assert_eq!(err.error.error_class().name(), "_LEGACY_ERROR_TEMP_0064");
 }
+
+/// Spark 4.3.0 `SqlBaseParser.g4` adds `LOCALTIME` to `#currentLike`: `localtime(n)` as a whole
+/// select item is `localtime AS (n)`, as `current_time(n)` is. Under the 4.2 grammar the word is
+/// an identifier, so `localtime(n)` is a call.
+#[test]
+fn localtime_is_current_like_only_under_the_4_3_grammar() {
+    use krishiv_sql::ast::{Alias, ExprKind, SetExprKind};
+    let item = |spark_4_3: bool| {
+        let opts = krishiv_sql::ParserOptions {
+            spark_4_3,
+            ..krishiv_sql::ParserOptions::default()
+        };
+        let q = krishiv_sql::parse_query("SELECT localtime(n) FROM t", &opts).unwrap();
+        let SetExprKind::Select(s) = q.body.kind else {
+            panic!("not a select")
+        };
+        s.projection[0].clone()
+    };
+    let v43 = item(true);
+    assert!(
+        matches!(&v43.expr.kind, ExprKind::Column(p) if p[0].value == "localtime"),
+        "{v43:?}"
+    );
+    assert!(
+        matches!(&v43.alias, Some(Alias::List(l)) if l.len() == 1),
+        "{v43:?}"
+    );
+    let v42 = item(false);
+    assert!(matches!(&v42.expr.kind, ExprKind::Function(_)), "{v42:?}");
+    assert!(v42.alias.is_none(), "{v42:?}");
+}

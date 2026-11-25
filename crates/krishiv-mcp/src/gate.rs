@@ -170,6 +170,14 @@ mod tests {
 
     use super::allows_parts;
 
+    /// The gate parses with the default profile's grammar (Spark 4.3): a `TIME(9)` cast is a read,
+    /// not a parse error (R3 review finding 12).
+    #[test]
+    fn the_gate_reads_the_default_profiles_grammar() {
+        assert!(super::check_read("SELECT CAST(c AS TIME(9)) FROM t").is_ok());
+        assert!(super::check_read("SELECT CAST(c AS TIMESTAMP_NTZ(6)) FROM t").is_ok());
+    }
+
     /// The analyze layer refuses `Monitor` and `Usage` (others' `system.*` rows, sending code the server
     /// runs), and anything that is not a complete read; it allows `Select` and `Browse`. A unit test: no
     /// SQL statement asks `Monitor` or `Usage` at `authorize()` today (see the integration test

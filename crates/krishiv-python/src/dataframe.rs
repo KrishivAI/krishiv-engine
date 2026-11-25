@@ -168,8 +168,71 @@ impl PyDataFrame {
         }
     }
 
+    /// The rollup of `cols`, for `GroupedData.agg` (`DataFrame.rollup`).
+    fn rollup(&self, cols: Vec<PyColumn>) -> PyGroupedData {
+        PyGroupedData {
+            inner: self.inner.rollup(columns(cols)),
+            owned: self.owned.clone(),
+        }
+    }
+
+    /// The cube of `cols`, for `GroupedData.agg` (`DataFrame.cube`).
+    fn cube(&self, cols: Vec<PyColumn>) -> PyGroupedData {
+        PyGroupedData {
+            inner: self.inner.cube(columns(cols)),
+            owned: self.owned.clone(),
+        }
+    }
+
+    /// The grouping `sets` over `keys`, for `GroupedData.agg` (`DataFrame.groupingSets`).
+    fn grouping_sets(&self, sets: Vec<Vec<PyColumn>>, keys: Vec<PyColumn>) -> PyGroupedData {
+        PyGroupedData {
+            inner: self.inner.grouping_sets(
+                sets.into_iter()
+                    .map(columns)
+                    .map(Iterator::collect::<Vec<_>>),
+                columns(keys),
+            ),
+            owned: self.owned.clone(),
+        }
+    }
+
     fn agg(&self, cols: Vec<PyColumn>) -> Self {
         self.derive(self.inner.agg(columns(cols)))
+    }
+
+    /// `mapInPandas` / `mapInArrow` with the relation UDF `udf`.
+    fn map_in_python(
+        &self,
+        py: Python<'_>,
+        udf: &crate::udf::PyAnonymousUdf,
+        barrier: bool,
+    ) -> PyResult<Self> {
+        self.inner
+            .map_in_python(udf.def(), udf.version(), barrier)
+            .map(|df| self.derive(df))
+            .map_err(|e| crate::errors::to_py(py, &e))
+    }
+
+    /// `groupBy(left_keys).cogroup(other.groupBy(right_keys)).applyInPandas` / `applyInArrow`.
+    fn cogroup_apply_in_python(
+        &self,
+        py: Python<'_>,
+        other: &Self,
+        left_keys: Vec<PyColumn>,
+        right_keys: Vec<PyColumn>,
+        udf: &crate::udf::PyAnonymousUdf,
+    ) -> PyResult<Self> {
+        self.inner
+            .cogroup_apply_in_python(
+                &other.inner,
+                columns(left_keys),
+                columns(right_keys),
+                udf.def(),
+                udf.version(),
+            )
+            .map(|df| self.derive_with(df, other))
+            .map_err(|e| crate::errors::to_py(py, &e))
     }
 
     /// Joins `other` on the condition `on`, or on the shared columns `using`;
@@ -222,6 +285,10 @@ impl PyDataFrame {
         Ok(self.derive(inner))
     }
 
+    fn sort_within_partitions(&self, cols: Vec<PyColumn>) -> Self {
+        self.derive(self.inner.sort_within_partitions(columns(cols)))
+    }
+
     fn limit(&self, n: i32) -> Self {
         self.derive(self.inner.limit(n))
     }
@@ -268,10 +335,6 @@ impl PyDataFrame {
 
     fn to_df(&self, names: Vec<String>) -> Self {
         self.derive(self.inner.to_df(names))
-    }
-
-    fn sample(&self, with_replacement: bool, fraction: f64, seed: i64) -> Self {
-        self.derive(self.inner.sample(with_replacement, fraction, seed))
     }
 
     fn unpivot(
@@ -609,6 +672,12 @@ impl PyDataFrame {
         )
     }
 
+    /// Registers this DataFrame as the temporary view `name`, failing when one exists.
+    fn create_temp_view(&self, py: Python<'_>, name: &str) -> PyResult<()> {
+        let (df, name) = (self.inner.clone(), name.to_owned());
+        block_on(py, async move { df.create_temp_view(&name).await })
+    }
+
     /// Registers this DataFrame as the global temporary view `global_temp.name`; `replace` says whether
     /// one of that name may be replaced.
     fn create_global_temp_view(&self, py: Python<'_>, name: &str, replace: bool) -> PyResult<()> {
@@ -620,6 +689,21 @@ impl PyDataFrame {
                 df.create_global_temp_view(&name).await
             }
         })
+    }
+
+    /// `(name, Spark JSON type, nullable)` per column, by analysis. The JSON form keeps every
+    /// nested field name and field exactly (the simple string does not quote names).
+    fn schema_json(&self, py: Python<'_>) -> PyResult<Vec<(String, String, bool)>> {
+        let df = self.inner.clone();
+        let schema = block_on(py, async move { df.schema().await })?;
+        schema
+            .fields()
+            .iter()
+            .map(|f| {
+                let data_type = DataType::from_arrow_field(f).map_err(|e| to_py(py, &e))?;
+                Ok((f.name().clone(), data_type.json(), f.is_nullable()))
+            })
+            .collect()
     }
 
     /// `(name, Spark simple type string, nullable)` per column, by analysis.
@@ -647,10 +731,35 @@ pub struct PyGroupedData {
 
 #[pymethods]
 impl PyGroupedData {
+    /// Pivots on `col` with literal `values`: the next `agg` gives one column per value.
+    fn pivot(&self, col: PyColumn, values: Vec<PyColumn>) -> PyGroupedData {
+        PyGroupedData {
+            inner: self
+                .inner
+                .pivot(col.inner, values.into_iter().map(|c| c.inner)),
+            owned: self.owned.clone(),
+        }
+    }
+
     fn agg(&self, cols: Vec<PyColumn>) -> PyDataFrame {
         PyDataFrame {
             inner: self.inner.agg(columns(cols)),
             owned: self.owned.clone(),
         }
+    }
+
+    /// `applyInPandas` / `applyInArrow` with the relation UDF `udf`.
+    fn apply_in_python(
+        &self,
+        py: Python<'_>,
+        udf: &crate::udf::PyAnonymousUdf,
+    ) -> PyResult<PyDataFrame> {
+        self.inner
+            .apply_in_python(udf.def(), udf.version())
+            .map(|df| PyDataFrame {
+                inner: df,
+                owned: self.owned.clone(),
+            })
+            .map_err(|e| crate::errors::to_py(py, &e))
     }
 }

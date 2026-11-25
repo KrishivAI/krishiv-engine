@@ -315,6 +315,14 @@ fn plan(m: &pb::PhysicalPlan, limits: &Limits) -> Result<PhysicalPlan> {
     {
         return Err(corrupt("an unknown binary output style"));
     }
+    // Likewise the version: absent means Spark 4.2 (every plan written before the feature), so
+    // an encoder never sends "4.2". The lines are `krishiv_kernels::SparkVersion::ALL` but 4.2
+    // (`spark_version_lines_match_the_kernels` keeps them equal).
+    if let Some(line) = env.spark_version.as_deref()
+        && !matches!(line, "4.0" | "4.1" | "4.3")
+    {
+        return Err(corrupt("an unknown Spark version"));
+    }
     let env = ExprEnv {
         ansi: env.ansi,
         // The wire carries the flag for the `legacy_statistical_aggregate`
@@ -332,6 +340,7 @@ fn plan(m: &pb::PhysicalPlan, limits: &Limits) -> Result<PhysicalPlan> {
         legacy_coding_error_action: env.legacy_coding_error_action.unwrap_or(false),
         legacy_time_parser: env.legacy_time_parser.unwrap_or(false),
         binary_output_style: env.binary_output_style.as_deref().map(std::sync::Arc::from),
+        spark_version: env.spark_version.as_deref().map(std::sync::Arc::from),
     };
     if !env.zone_name_matches_zone() {
         return Err(corrupt("a session zone name that is not its offset"));
