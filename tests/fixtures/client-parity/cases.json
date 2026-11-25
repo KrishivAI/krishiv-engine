@@ -1,0 +1,193 @@
+{
+ "about": "Client parity cases: the Python package (python/tests/test_client_parity.py) and the npm package's embedded engine (js/test/parity.test.ts) run each case and compare the Arrow result, canonicalized as README.md describes, with `expected`. `{root}` is the repository root.",
+ "conf": {
+  "spark.sql.session.timeZone": "UTC"
+ },
+ "cases": [
+  {
+   "name": "parquet_scalar_types",
+   "source": "pyarrow 26.0.1 read of the fixture (independent reader)",
+   "setup": [],
+   "sql": "SELECT i32, i64, f64, dec, d, ts, s, b, flag FROM parquet.`{root}/tests/fixtures/parquet/pyarrow_snappy.parquet` WHERE i32 <= -1497 ORDER BY i32",
+   "types": [
+    "int",
+    "bigint",
+    "double",
+    "decimal(15,2)",
+    "date",
+    "timestamp",
+    "string",
+    "binary",
+    "boolean"
+   ],
+   "expected": [
+    {
+     "i32": "-1500",
+     "i64": "-1099511627776",
+     "f64": -100.0,
+     "dec": "-90.00",
+     "d": "1959-01-19",
+     "ts": "1938-04-24T22:13:20.000000Z",
+     "s": "v0-\u00fc",
+     "b": "0000ff",
+     "flag": true
+    },
+    {
+     "i32": "-1499",
+     "i64": "-1099510627773",
+     "f64": -99.85714285714286,
+     "dec": "-89.63",
+     "d": "1959-01-22",
+     "ts": "1938-04-25T22:13:20.000123Z",
+     "s": "v1-\u00fcx",
+     "b": "0100ff",
+     "flag": false
+    },
+    {
+     "i32": "-1498",
+     "i64": "-1099509627770",
+     "f64": -99.71428571428571,
+     "dec": "-89.26",
+     "d": "1959-01-25",
+     "ts": "1938-04-26T22:13:20.000246Z",
+     "s": "v2-\u00fcxx",
+     "b": "0200ff",
+     "flag": false
+    }
+   ]
+  },
+  {
+   "name": "parquet_null_counts",
+   "source": "pyarrow 26.0.1 read of the fixture (independent reader)",
+   "setup": [],
+   "sql": "SELECT count(*) AS n, count(i32) AS non_null FROM parquet.`{root}/tests/fixtures/parquet/pyarrow_snappy.parquet`",
+   "types": [
+    "bigint",
+    "bigint"
+   ],
+   "expected": [
+    {
+     "n": "600",
+     "non_null": "514"
+    }
+   ]
+  },
+  {
+   "name": "csv_with_schema",
+   "source": "hand-written fixture people.csv",
+   "setup": [
+    "CREATE OR REPLACE TEMPORARY VIEW parity_people (id INT, name STRING, score DOUBLE, joined DATE, active BOOLEAN) USING csv OPTIONS (path '{root}/tests/fixtures/client-parity/people.csv', header 'true')"
+   ],
+   "sql": "SELECT id, name, score, joined, active FROM parity_people ORDER BY id",
+   "types": [
+    "int",
+    "string",
+    "double",
+    "date",
+    "boolean"
+   ],
+   "expected": [
+    {
+     "id": "1",
+     "name": "Ana",
+     "score": 9.5,
+     "joined": "2024-01-02",
+     "active": true
+    },
+    {
+     "id": "2",
+     "name": "Bo",
+     "score": null,
+     "joined": "2024-02-29",
+     "active": false
+    },
+    {
+     "id": "3",
+     "name": "Cy, Jr.",
+     "score": 7.25,
+     "joined": null,
+     "active": true
+    }
+   ]
+  },
+  {
+   "name": "json_nested_inferred",
+   "source": "hand-written fixture events.jsonl; Spark's JSON inference sorts the fields and reads integers as bigint",
+   "setup": [],
+   "sql": "SELECT * FROM json.`{root}/tests/fixtures/client-parity/events.jsonl` ORDER BY id",
+   "types": [
+    "bigint",
+    "struct<city:string,zip:bigint>",
+    "array<string>"
+   ],
+   "expected": [
+    {
+     "id": "1",
+     "loc": {
+      "city": "Pune",
+      "zip": "411001"
+     },
+     "tags": [
+      "a",
+      "b"
+     ]
+    },
+    {
+     "id": "2",
+     "loc": null,
+     "tags": []
+    },
+    {
+     "id": "3",
+     "loc": {
+      "city": "Goa",
+      "zip": null
+     },
+     "tags": null
+    }
+   ]
+  },
+  {
+   "name": "delta_column_mapping",
+   "source": "tests/fixtures/delta-4.4.1/column-mapping-id/EXPECTED.json typed_rows (written by delta-spark 4.4.1)",
+   "setup": [],
+   "sql": "SELECT id, a2, s, p, b FROM delta.`{root}/tests/fixtures/delta-4.4.1/column-mapping-id` ORDER BY id",
+   "types": [
+    "bigint",
+    "string",
+    "struct<x2:int,y:string>",
+    "string",
+    "string"
+   ],
+   "expected": [
+    {
+     "id": "1",
+     "a2": "a1",
+     "s": {
+      "x2": "100",
+      "y": "y1"
+     },
+     "p": "p1",
+     "b": null
+    },
+    {
+     "id": "2",
+     "a2": null,
+     "s": null,
+     "p": null,
+     "b": null
+    },
+    {
+     "id": "3",
+     "a2": "a3",
+     "s": {
+      "x2": "300",
+      "y": "y3"
+     },
+     "p": "p1",
+     "b": "new-b"
+    }
+   ]
+  }
+ ]
+}
