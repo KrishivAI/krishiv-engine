@@ -373,6 +373,68 @@ pub(crate) fn kll_sketch_aggregate_exprs() -> Vec<AggregateExpr> {
     ]
 }
 
+/// The Tuple aggregates: both summary types, each mode, with and without lgNomEntries.
+pub(crate) fn tuple_sketch_aggregate_exprs() -> Vec<AggregateExpr> {
+    use krishiv_exec::aggregate::TupleMode as M;
+    let a = |function, arg_type| AggregateExpr {
+        function,
+        args: vec![0],
+        input: AggInput::Raw,
+        arg_type,
+        name: "x".to_owned(),
+        mask: None,
+        element: None,
+    };
+    vec![
+        a(
+            AggregateFunction::TupleSketchAgg {
+                integer: false,
+                lg_nom: 12,
+                mode: M::Sum,
+            },
+            ArrowType::Int64,
+        ),
+        a(
+            AggregateFunction::TupleSketchAgg {
+                integer: true,
+                lg_nom: 4,
+                mode: M::Min,
+            },
+            ArrowType::Utf8,
+        ),
+        a(
+            AggregateFunction::TupleUnionAgg {
+                integer: false,
+                lg_nom: 26,
+                mode: M::Max,
+            },
+            ArrowType::Binary,
+        ),
+        a(
+            AggregateFunction::TupleUnionAgg {
+                integer: true,
+                lg_nom: 12,
+                mode: M::AlwaysOne,
+            },
+            ArrowType::Binary,
+        ),
+        a(
+            AggregateFunction::TupleIntersectionAgg {
+                integer: false,
+                mode: M::Sum,
+            },
+            ArrowType::Binary,
+        ),
+        a(
+            AggregateFunction::TupleIntersectionAgg {
+                integer: true,
+                mode: M::Max,
+            },
+            ArrowType::Binary,
+        ),
+    ]
+}
+
 /// One aggregate of each new variant of this change: the exact and
 /// approximate percentiles, the discrete percentile and
 /// `approx_count_distinct`, with their folded parameters.
@@ -1548,6 +1610,18 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
                 aggregate: AggregatePlan {
                     group_by: vec![0],
                     aggregates: kll_sketch_aggregate_exprs(),
+                    distinct: vec![false; 6],
+                    output: AggregateOutput::Final,
+                },
+            },
+        ),
+        (
+            "aggregate_tuple_sketches",
+            PhysNode::Aggregate {
+                input: boxed(scan()),
+                aggregate: AggregatePlan {
+                    group_by: vec![0],
+                    aggregates: tuple_sketch_aggregate_exprs(),
                     distinct: vec![false; 6],
                     output: AggregateOutput::Final,
                 },

@@ -561,6 +561,27 @@ fn constructs_map_to_one_feature_or_the_baseline() {
         );
     }
     for f in [
+        krishiv_exec::aggregate::AggregateFunction::TupleSketchAgg {
+            integer: false,
+            lg_nom: 12,
+            mode: krishiv_exec::aggregate::TupleMode::Sum,
+        },
+        krishiv_exec::aggregate::AggregateFunction::TupleUnionAgg {
+            integer: true,
+            lg_nom: 12,
+            mode: krishiv_exec::aggregate::TupleMode::Min,
+        },
+        krishiv_exec::aggregate::AggregateFunction::TupleIntersectionAgg {
+            integer: false,
+            mode: krishiv_exec::aggregate::TupleMode::Max,
+        },
+    ] {
+        assert_eq!(
+            feature_of(Construct::AggregateFunction(&f)),
+            Some(Feature::TupleSketchAggregates)
+        );
+    }
+    for f in [
         krishiv_exec::aggregate::AggregateFunction::ThetaSketchAgg { lg_nom: 12 },
         krishiv_exec::aggregate::AggregateFunction::ThetaUnionAgg { lg_nom: 12 },
         krishiv_exec::aggregate::AggregateFunction::ThetaIntersectionAgg,
@@ -1063,6 +1084,7 @@ fn a_reader_without_partitioned_writes_refuses_the_plan_naming_it() {
         ("aggregate_hll_sketches", "hll_sketch_aggregates"),
         ("aggregate_theta_sketches", "theta_sketch_aggregates"),
         ("aggregate_kll_sketches", "kll_sketch_aggregates"),
+        ("aggregate_tuple_sketches", "tuple_sketch_aggregates"),
         ("aggregate_moments", "moment_aggregates"),
         ("aggregate_any_value", "any_value_by_aggregates"),
         ("aggregate_max_min_by", "any_value_by_aggregates"),

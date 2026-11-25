@@ -2488,6 +2488,24 @@ pub enum AggregateFunction {
     /// `kll_merge_agg_*(sketch\[, k\])`: `hll_precision` is the folded `k` (8 to 65535), 0 when omitted.
     /// feature: kll_sketch_aggregates
     KllMergeAggDouble = 63,
+    /// `tuple_sketch_agg_double(key, summary\[, lgNomEntries[, mode]\])`: `hll_precision` is the folded lgNomEntries (4 to 26, 0 for an intersection) plus 256 times the mode (0 sum, 1 min, 2 max, 3 alwaysone).
+    /// feature: tuple_sketch_aggregates
+    TupleSketchAggDouble = 64,
+    /// `tuple_sketch_agg_integer(key, summary\[, lgNomEntries[, mode]\])`: `hll_precision` is the folded lgNomEntries (4 to 26, 0 for an intersection) plus 256 times the mode (0 sum, 1 min, 2 max, 3 alwaysone).
+    /// feature: tuple_sketch_aggregates
+    TupleSketchAggInteger = 65,
+    /// `tuple_union_agg_double(sketch\[, lgNomEntries[, mode]\])`: `hll_precision` is the folded lgNomEntries (4 to 26, 0 for an intersection) plus 256 times the mode (0 sum, 1 min, 2 max, 3 alwaysone).
+    /// feature: tuple_sketch_aggregates
+    TupleUnionAggDouble = 66,
+    /// `tuple_union_agg_integer(sketch\[, lgNomEntries[, mode]\])`: `hll_precision` is the folded lgNomEntries (4 to 26, 0 for an intersection) plus 256 times the mode (0 sum, 1 min, 2 max, 3 alwaysone).
+    /// feature: tuple_sketch_aggregates
+    TupleUnionAggInteger = 67,
+    /// `tuple_intersection_agg_double(sketch\[, mode\])`: `hll_precision` is the folded lgNomEntries (4 to 26, 0 for an intersection) plus 256 times the mode (0 sum, 1 min, 2 max, 3 alwaysone).
+    /// feature: tuple_sketch_aggregates
+    TupleIntersectionAggDouble = 68,
+    /// `tuple_intersection_agg_integer(sketch\[, mode\])`: `hll_precision` is the folded lgNomEntries (4 to 26, 0 for an intersection) plus 256 times the mode (0 sum, 1 min, 2 max, 3 alwaysone).
+    /// feature: tuple_sketch_aggregates
+    TupleIntersectionAggInteger = 69,
 }
 impl AggregateFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2560,6 +2578,16 @@ impl AggregateFunction {
             Self::KllMergeAggBigint => "AGGREGATE_FUNCTION_KLL_MERGE_AGG_BIGINT",
             Self::KllMergeAggFloat => "AGGREGATE_FUNCTION_KLL_MERGE_AGG_FLOAT",
             Self::KllMergeAggDouble => "AGGREGATE_FUNCTION_KLL_MERGE_AGG_DOUBLE",
+            Self::TupleSketchAggDouble => "AGGREGATE_FUNCTION_TUPLE_SKETCH_AGG_DOUBLE",
+            Self::TupleSketchAggInteger => "AGGREGATE_FUNCTION_TUPLE_SKETCH_AGG_INTEGER",
+            Self::TupleUnionAggDouble => "AGGREGATE_FUNCTION_TUPLE_UNION_AGG_DOUBLE",
+            Self::TupleUnionAggInteger => "AGGREGATE_FUNCTION_TUPLE_UNION_AGG_INTEGER",
+            Self::TupleIntersectionAggDouble => {
+                "AGGREGATE_FUNCTION_TUPLE_INTERSECTION_AGG_DOUBLE"
+            }
+            Self::TupleIntersectionAggInteger => {
+                "AGGREGATE_FUNCTION_TUPLE_INTERSECTION_AGG_INTEGER"
+            }
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2631,6 +2659,24 @@ impl AggregateFunction {
             "AGGREGATE_FUNCTION_KLL_MERGE_AGG_BIGINT" => Some(Self::KllMergeAggBigint),
             "AGGREGATE_FUNCTION_KLL_MERGE_AGG_FLOAT" => Some(Self::KllMergeAggFloat),
             "AGGREGATE_FUNCTION_KLL_MERGE_AGG_DOUBLE" => Some(Self::KllMergeAggDouble),
+            "AGGREGATE_FUNCTION_TUPLE_SKETCH_AGG_DOUBLE" => {
+                Some(Self::TupleSketchAggDouble)
+            }
+            "AGGREGATE_FUNCTION_TUPLE_SKETCH_AGG_INTEGER" => {
+                Some(Self::TupleSketchAggInteger)
+            }
+            "AGGREGATE_FUNCTION_TUPLE_UNION_AGG_DOUBLE" => {
+                Some(Self::TupleUnionAggDouble)
+            }
+            "AGGREGATE_FUNCTION_TUPLE_UNION_AGG_INTEGER" => {
+                Some(Self::TupleUnionAggInteger)
+            }
+            "AGGREGATE_FUNCTION_TUPLE_INTERSECTION_AGG_DOUBLE" => {
+                Some(Self::TupleIntersectionAggDouble)
+            }
+            "AGGREGATE_FUNCTION_TUPLE_INTERSECTION_AGG_INTEGER" => {
+                Some(Self::TupleIntersectionAggInteger)
+            }
             _ => None,
         }
     }

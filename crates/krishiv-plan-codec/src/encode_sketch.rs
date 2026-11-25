@@ -5,6 +5,7 @@
 
 use std::cell::Cell;
 
+use krishiv_exec::aggregate::TupleMode as Mode;
 use krishiv_exec::aggregate::{AggregateExpr, AggregateFunction, KllType};
 
 use crate::proto as pb;
@@ -19,6 +20,30 @@ fn kll(
         KllType::Bigint => bigint,
         KllType::Float => float,
         KllType::Double => double,
+    }
+}
+
+/// The mode of a Tuple aggregate on the wire.
+pub(crate) fn mode_code(m: Mode) -> u32 {
+    match m {
+        Mode::Sum => 0,
+        Mode::Min => 1,
+        Mode::Max => 2,
+        Mode::AlwaysOne => 3,
+    }
+}
+
+/// Whether a sketch aggregate's folded parameter is out of range (the encoder refuses it).
+pub(crate) fn bad_parameter(function: &AggregateFunction) -> bool {
+    match function {
+        AggregateFunction::HllSketchAgg { lg_k } => !(4..=21).contains(lg_k),
+        AggregateFunction::KllSketchAgg { k, .. }
+        | AggregateFunction::KllMergeAgg { k: Some(k), .. } => !(8..=65_535).contains(k),
+        AggregateFunction::ThetaSketchAgg { lg_nom }
+        | AggregateFunction::ThetaUnionAgg { lg_nom }
+        | AggregateFunction::TupleSketchAgg { lg_nom, .. }
+        | AggregateFunction::TupleUnionAgg { lg_nom, .. } => !(4..=26).contains(lg_nom),
+        _ => false,
     }
 }
 
@@ -51,6 +76,38 @@ fn sketch_function(function: &AggregateFunction) -> (pb::AggregateFunction, u32)
                 P::KllMergeAggDouble,
             ),
             k.map_or(0, u32::from),
+        ),
+        AggregateFunction::TupleSketchAgg {
+            integer,
+            lg_nom,
+            mode,
+        } => (
+            if *integer {
+                P::TupleSketchAggInteger
+            } else {
+                P::TupleSketchAggDouble
+            },
+            u32::from(*lg_nom) | (mode_code(*mode) << 8),
+        ),
+        AggregateFunction::TupleUnionAgg {
+            integer,
+            lg_nom,
+            mode,
+        } => (
+            if *integer {
+                P::TupleUnionAggInteger
+            } else {
+                P::TupleUnionAggDouble
+            },
+            u32::from(*lg_nom) | (mode_code(*mode) << 8),
+        ),
+        AggregateFunction::TupleIntersectionAgg { integer, mode } => (
+            if *integer {
+                P::TupleIntersectionAggInteger
+            } else {
+                P::TupleIntersectionAggDouble
+            },
+            mode_code(*mode) << 8,
         ),
         _ => (P::Unspecified, 0),
     }

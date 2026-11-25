@@ -920,6 +920,24 @@ enum AggregateFunction {
   // `kll_merge_agg_*(sketch[, k])`: `hll_precision` is the folded `k` (8 to 65535), 0 when omitted.
   // feature: kll_sketch_aggregates
   AGGREGATE_FUNCTION_KLL_MERGE_AGG_DOUBLE = 63;
+  // `tuple_sketch_agg_double(key, summary[, lgNomEntries[, mode]])`: `hll_precision` is the folded lgNomEntries (4 to 26, 0 for an intersection) plus 256 times the mode (0 sum, 1 min, 2 max, 3 alwaysone).
+  // feature: tuple_sketch_aggregates
+  AGGREGATE_FUNCTION_TUPLE_SKETCH_AGG_DOUBLE = 64;
+  // `tuple_sketch_agg_integer(key, summary[, lgNomEntries[, mode]])`: `hll_precision` is the folded lgNomEntries (4 to 26, 0 for an intersection) plus 256 times the mode (0 sum, 1 min, 2 max, 3 alwaysone).
+  // feature: tuple_sketch_aggregates
+  AGGREGATE_FUNCTION_TUPLE_SKETCH_AGG_INTEGER = 65;
+  // `tuple_union_agg_double(sketch[, lgNomEntries[, mode]])`: `hll_precision` is the folded lgNomEntries (4 to 26, 0 for an intersection) plus 256 times the mode (0 sum, 1 min, 2 max, 3 alwaysone).
+  // feature: tuple_sketch_aggregates
+  AGGREGATE_FUNCTION_TUPLE_UNION_AGG_DOUBLE = 66;
+  // `tuple_union_agg_integer(sketch[, lgNomEntries[, mode]])`: `hll_precision` is the folded lgNomEntries (4 to 26, 0 for an intersection) plus 256 times the mode (0 sum, 1 min, 2 max, 3 alwaysone).
+  // feature: tuple_sketch_aggregates
+  AGGREGATE_FUNCTION_TUPLE_UNION_AGG_INTEGER = 67;
+  // `tuple_intersection_agg_double(sketch[, mode])`: `hll_precision` is the folded lgNomEntries (4 to 26, 0 for an intersection) plus 256 times the mode (0 sum, 1 min, 2 max, 3 alwaysone).
+  // feature: tuple_sketch_aggregates
+  AGGREGATE_FUNCTION_TUPLE_INTERSECTION_AGG_DOUBLE = 68;
+  // `tuple_intersection_agg_integer(sketch[, mode])`: `hll_precision` is the folded lgNomEntries (4 to 26, 0 for an intersection) plus 256 times the mode (0 sum, 1 min, 2 max, 3 alwaysone).
+  // feature: tuple_sketch_aggregates
+  AGGREGATE_FUNCTION_TUPLE_INTERSECTION_AGG_INTEGER = 69;
 }
 
 enum AggregateInput {

@@ -85,7 +85,9 @@ mod rowtable;
 mod sink;
 mod table;
 pub use krishiv_functions::sketch::kll::KllType;
+pub use krishiv_functions::sketch::tuple::Mode as TupleMode;
 mod theta_sketch;
+mod tuple_sketch;
 mod udf;
 
 #[cfg(test)]
@@ -393,6 +395,34 @@ pub enum AggregateFunction {
         ty: krishiv_functions::sketch::kll::KllType,
         /// The sketch's `k` when given.
         k: Option<u16>,
+    },
+    /// `tuple_sketch_agg_{double,integer}(key, summary[, lgNomEntries[, mode]])` (Spark 4.2): a compact Tuple sketch
+    /// of the keys, their summaries folded as `mode` says; `binary`, never NULL. A row with a NULL key or summary
+    /// is skipped.
+    TupleSketchAgg {
+        /// `_integer` (an `int` summary), else `_double`.
+        integer: bool,
+        /// The log-base-2 of the sketch's nominal entry count.
+        lg_nom: u8,
+        /// How summaries combine.
+        mode: krishiv_functions::sketch::tuple::Mode,
+    },
+    /// `tuple_union_agg_{double,integer}(sketch[, lgNomEntries[, mode]])`: the union of the non-NULL sketches.
+    TupleUnionAgg {
+        /// `_integer`, else `_double`.
+        integer: bool,
+        /// The log-base-2 of the union's nominal entry count.
+        lg_nom: u8,
+        /// How summaries of one key combine.
+        mode: krishiv_functions::sketch::tuple::Mode,
+    },
+    /// `tuple_intersection_agg_{double,integer}(sketch[, mode])`: the intersection of the non-NULL sketches; the
+    /// empty sketch for no input.
+    TupleIntersectionAgg {
+        /// `_integer`, else `_double`.
+        integer: bool,
+        /// How summaries of one key combine.
+        mode: krishiv_functions::sketch::tuple::Mode,
     },
     /// A session aggregate UDF (ADR 0045), by name and version: the worker
     /// runs the implementation its library holds under both, or refuses
@@ -702,7 +732,7 @@ impl AggregateExpr {
             (F::ApproxCountDistinct { .. }, t) if accumulator::hll_supported(t) => DataType::Int64,
             // `theta_sketch_agg` over an array: `ARRAY<INT>` or `ARRAY<BIGINT>` only (Spark's `TypeCollection`), whatever
             // the array's `containsNull`.
-            (F::ThetaSketchAgg { .. }, DataType::List(item))
+            (F::ThetaSketchAgg { .. } | F::TupleSketchAgg { .. }, DataType::List(item))
                 if matches!(item.data_type(), DataType::Int32 | DataType::Int64) =>
             {
                 DataType::BinaryView
@@ -716,7 +746,9 @@ impl AggregateExpr {
                 | F::HllUnionAgg { .. }
                 | F::ThetaUnionAgg { .. }
                 | F::ThetaIntersectionAgg
-                | F::KllMergeAgg { .. },
+                | F::KllMergeAgg { .. }
+                | F::TupleUnionAgg { .. }
+                | F::TupleIntersectionAgg { .. },
                 DataType::Binary | DataType::BinaryView,
             )
             | (
@@ -729,7 +761,7 @@ impl AggregateExpr {
                 | DataType::Float64,
             )
             | (
-                F::ThetaSketchAgg { .. },
+                F::ThetaSketchAgg { .. } | F::TupleSketchAgg { .. },
                 DataType::Int32
                 | DataType::Int64
                 | DataType::Float32
@@ -919,7 +951,10 @@ impl AggregateExpr {
                 | F::ThetaUnionAgg { .. }
                 | F::ThetaIntersectionAgg
                 | F::KllSketchAgg { .. }
-                | F::KllMergeAgg { .. },
+                | F::KllMergeAgg { .. }
+                | F::TupleSketchAgg { .. }
+                | F::TupleUnionAgg { .. }
+                | F::TupleIntersectionAgg { .. },
                 _,
             ) => {
                 vec![Field::new(n("sketch"), DataType::Binary, false)]

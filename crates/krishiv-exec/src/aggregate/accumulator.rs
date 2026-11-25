@@ -50,6 +50,7 @@ use super::mode::ModeAcc;
 use super::moments::Moments;
 use super::quantile::{self, ExactAcc, GkAcc};
 use super::theta_sketch::{ThetaSketchAcc, ThetaSketchOp};
+use super::tuple_sketch::{TupleSketchAcc, TupleSketchOp};
 use super::{
     AggInput, AggregateExpr, AggregateFunction, decimal_sum_overflow, interval_sum_overflow,
     is_ansi_interval, long_overflow, out_of_range, unsupported,
@@ -330,6 +331,8 @@ enum Kind {
     ThetaSketch(ThetaSketchAcc),
     /// The KLL sketch aggregates (see `kll_sketch`).
     KllSketch(KllSketchAcc),
+    /// The Tuple sketch aggregates (see `tuple_sketch`).
+    TupleSketch(TupleSketchAcc),
 }
 
 /// A bitwise aggregate operation.
@@ -525,6 +528,35 @@ impl Accumulator {
             (F::KllMergeAgg { ty, k }, _) => {
                 Kind::KllSketch(KllSketchAcc::new(KllSketchOp::Merge(*ty, *k))?)
             }
+            (
+                F::TupleSketchAgg {
+                    integer,
+                    lg_nom,
+                    mode,
+                },
+                _,
+            ) => Kind::TupleSketch(TupleSketchAcc::new(
+                TupleSketchOp::Sketch,
+                *integer,
+                *lg_nom,
+                *mode,
+            )?),
+            (
+                F::TupleUnionAgg {
+                    integer,
+                    lg_nom,
+                    mode,
+                },
+                _,
+            ) => Kind::TupleSketch(TupleSketchAcc::new(
+                TupleSketchOp::Union,
+                *integer,
+                *lg_nom,
+                *mode,
+            )?),
+            (F::TupleIntersectionAgg { integer, mode }, _) => Kind::TupleSketch(
+                TupleSketchAcc::new(TupleSketchOp::Intersection, *integer, 12, *mode)?,
+            ),
             (F::HllUnionAgg { allow_different }, _) => {
                 Kind::HllSketch(HllSketchAcc::new(HllSketchOp::Union(*allow_different))?)
             }
@@ -625,6 +657,7 @@ impl Accumulator {
         match &self.kind {
             Kind::ThetaSketch(h) => h.state_bound(g),
             Kind::KllSketch(h) => h.state_bound(g),
+            Kind::TupleSketch(h) => h.state_bound(g),
             _ => 0,
         }
     }
@@ -687,6 +720,7 @@ impl Accumulator {
             | Kind::HllSketch(_)
             | Kind::ThetaSketch(_)
             | Kind::KllSketch(_)
+            | Kind::TupleSketch(_)
             | Kind::Udf(_) => Vec::new(),
         }
     }
@@ -706,6 +740,7 @@ impl Accumulator {
             Kind::HllSketch(h) => h.size(),
             Kind::ThetaSketch(h) => h.size(),
             Kind::KllSketch(h) => h.size(),
+            Kind::TupleSketch(h) => h.size(),
             Kind::Udf(u) => u.size(),
             _ => {
                 let heap = match &self.kind {
@@ -730,6 +765,7 @@ impl Accumulator {
             Kind::HllSketch(h) => h.projected(rows, rows, states),
             Kind::ThetaSketch(h) => h.projected(rows, rows, states, state_bytes),
             Kind::KllSketch(h) => h.projected(rows, rows, states, state_bytes),
+            Kind::TupleSketch(h) => h.projected(rows, rows, states, state_bytes),
             _ => self.projected(rows, None, None, false),
         }
     }
@@ -740,6 +776,7 @@ impl Accumulator {
         match &self.kind {
             Kind::ThetaSketch(h) => states || h.takes_sketches(),
             Kind::KllSketch(h) => states || h.takes_sketches(),
+            Kind::TupleSketch(h) => states || h.takes_sketches(),
             _ => false,
         }
     }
@@ -757,7 +794,7 @@ impl Accumulator {
     pub(crate) fn projects_by_partition(&self) -> bool {
         matches!(
             self.kind,
-            Kind::HllSketch(_) | Kind::ThetaSketch(_) | Kind::KllSketch(_)
+            Kind::HllSketch(_) | Kind::ThetaSketch(_) | Kind::KllSketch(_) | Kind::TupleSketch(_)
         )
     }
 
@@ -837,6 +874,19 @@ impl Accumulator {
             Kind::Hist(h) => h.projected(new, arg),
             Kind::Bitmap(b) => b.projected(new),
             Kind::HllSketch(h) => h.projected(new, arg.map_or(0, arrow_array::Array::len), states),
+            Kind::TupleSketch(h) => {
+                let state_bytes = if states || h.takes_sketches() {
+                    arg.map_or(0, |c| super::theta_sketch::sketch_bytes(c.as_ref()))
+                } else {
+                    0
+                };
+                h.projected(
+                    new,
+                    arg.map_or(0, arrow_array::Array::len),
+                    states,
+                    state_bytes,
+                )
+            }
             Kind::KllSketch(h) => {
                 let state_bytes = if states || h.takes_sketches() {
                     arg.map_or(0, |c| super::theta_sketch::sketch_bytes(c.as_ref()))
@@ -939,6 +989,7 @@ impl Accumulator {
             Kind::HllSketch(h) => h.resize(n),
             Kind::ThetaSketch(h) => h.resize(n),
             Kind::KllSketch(h) => h.resize(n),
+            Kind::TupleSketch(h) => h.resize(n),
             Kind::Udf(u) => u.resize(n),
             Kind::By {
                 values,
@@ -1026,6 +1077,7 @@ impl Accumulator {
             Kind::HllSketch(h) => h.reserve(new),
             Kind::ThetaSketch(h) => h.reserve(new),
             Kind::KllSketch(h) => h.reserve(new),
+            Kind::TupleSketch(h) => h.reserve(new),
             Kind::Udf(_) => {}
             Kind::By {
                 values,
@@ -1212,7 +1264,8 @@ impl Accumulator {
             | Kind::Bitmap(_)
             | Kind::HllSketch(_)
             | Kind::ThetaSketch(_)
-            | Kind::KllSketch(_) => 1,
+            | Kind::KllSketch(_)
+            | Kind::TupleSketch(_) => 1,
             Kind::TrySumInt { .. }
             | Kind::SumInterval { .. }
             | Kind::SumDec { .. }
@@ -1243,10 +1296,12 @@ pub(crate) fn state_prefix(
     used: &mut usize,
     cap: usize,
 ) -> usize {
-    if !accs
-        .iter()
-        .any(|a| matches!(a.kind, Kind::ThetaSketch(_) | Kind::KllSketch(_)))
-    {
+    if !accs.iter().any(|a| {
+        matches!(
+            a.kind,
+            Kind::ThetaSketch(_) | Kind::KllSketch(_) | Kind::TupleSketch(_)
+        )
+    }) {
         return ids.len();
     }
     for (n, &g) in ids.iter().enumerate() {

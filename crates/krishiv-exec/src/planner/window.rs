@@ -387,6 +387,9 @@ impl Planner<'_> {
                 | AggregateFunction::ThetaIntersectionAgg
                 | AggregateFunction::KllSketchAgg { .. }
                 | AggregateFunction::KllMergeAgg { .. }
+                | AggregateFunction::TupleSketchAgg { .. }
+                | AggregateFunction::TupleUnionAgg { .. }
+                | AggregateFunction::TupleIntersectionAgg { .. }
         ) {
             return Err(unsupported(&format!("the window aggregate {name}")));
         }

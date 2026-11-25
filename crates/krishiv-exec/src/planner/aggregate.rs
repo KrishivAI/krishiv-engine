@@ -522,6 +522,28 @@ fn kll_k(f: &ResolvedFunction) -> Option<Option<u16>> {
     }
 }
 
+/// The `lgNomEntries` and mode of a Tuple aggregate call (the analyzer checked them): `lg_at` and `mode_at` are their
+/// argument positions; an omitted one takes Spark's default (12, `sum`). `None` when one is not a literal.
+fn tuple_constants(
+    f: &ResolvedFunction,
+    lg_at: Option<usize>,
+    mode_at: usize,
+) -> Option<(u8, krishiv_functions::sketch::tuple::Mode)> {
+    use krishiv_functions::sketch::tuple::Mode;
+    let lg = match lg_at.and_then(|i| f.args.get(i)) {
+        None => 12,
+        Some(e) => u8::try_from(integer_literal(e)?).ok()?,
+    };
+    let mode = match f.args.get(mode_at) {
+        None => Mode::Sum,
+        Some(e) => match &e.node {
+            ExprNode::Literal(Literal::String(m)) => Mode::parse(m, f.id.name()).ok()?,
+            _ => return None,
+        },
+    };
+    Some((lg, mode))
+}
+
 /// `None` for a function the executor does not run as an aggregate.
 pub(super) fn lower(f: &ResolvedFunction) -> Option<Lowered> {
     // Before the names: a UDF may be called as a built-in is (`count`).
@@ -664,6 +686,42 @@ pub(super) fn lower(f: &ResolvedFunction) -> Option<Lowered> {
                 AggregateFunction::KllMergeAgg {
                     ty: kll_type(f.id.name())?,
                     k: kll_k(f)?,
+                },
+                vec![Arc::clone(&f.args[0])],
+            )
+        }
+        "tuple_sketch_agg_double" | "tuple_sketch_agg_integer"
+            if (2..=4).contains(&f.args.len()) =>
+        {
+            let (lg_nom, mode) = tuple_constants(f, Some(2), 3)?;
+            (
+                AggregateFunction::TupleSketchAgg {
+                    integer: f.id.name().ends_with("integer"),
+                    lg_nom,
+                    mode,
+                },
+                vec![Arc::clone(&f.args[0]), Arc::clone(&f.args[1])],
+            )
+        }
+        "tuple_union_agg_double" | "tuple_union_agg_integer" if (1..=3).contains(&f.args.len()) => {
+            let (lg_nom, mode) = tuple_constants(f, Some(1), 2)?;
+            (
+                AggregateFunction::TupleUnionAgg {
+                    integer: f.id.name().ends_with("integer"),
+                    lg_nom,
+                    mode,
+                },
+                vec![Arc::clone(&f.args[0])],
+            )
+        }
+        "tuple_intersection_agg_double" | "tuple_intersection_agg_integer"
+            if matches!(f.args.len(), 1 | 2) =>
+        {
+            let (_, mode) = tuple_constants(f, None, 1)?;
+            (
+                AggregateFunction::TupleIntersectionAgg {
+                    integer: f.id.name().ends_with("integer"),
+                    mode,
                 },
                 vec![Arc::clone(&f.args[0])],
             )

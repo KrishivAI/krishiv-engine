@@ -536,6 +536,9 @@ fn reference(
                         | AggregateFunction::ThetaIntersectionAgg
                         | AggregateFunction::KllSketchAgg { .. }
                         | AggregateFunction::KllMergeAgg { .. }
+                        | AggregateFunction::TupleSketchAgg { .. }
+                        | AggregateFunction::TupleUnionAgg { .. }
+                        | AggregateFunction::TupleIntersectionAgg { .. }
                         | AggregateFunction::Udf(_) => {
                             unreachable!("no window test aggregates with this function")
                         }

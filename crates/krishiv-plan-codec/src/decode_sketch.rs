@@ -104,3 +104,47 @@ pub(crate) fn kll_sketch_function(
         _ => Err(bad()),
     }
 }
+
+/// A Tuple aggregate from its wire form: `hll_precision` is lgNomEntries (4 to 26; 0 for an intersection) plus 256
+/// times the mode.
+pub(crate) fn tuple_sketch_function(
+    a: &pb::AggregateExpr,
+    kind: crate::decode_sketch::ThetaKind,
+    integer: bool,
+) -> Result<AggregateFunction> {
+    use krishiv_exec::aggregate::TupleMode as Mode;
+    let bad = || corrupt("a Tuple sketch aggregate of bad parameters");
+    if !a.percentages.is_empty()
+        || a.percentile_array
+        || a.percentile_reverse
+        || a.percentile_accuracy != 0
+        || a.percentile_legacy
+    {
+        return Err(bad());
+    }
+    let mode = match a.hll_precision >> 8 {
+        0 => Mode::Sum,
+        1 => Mode::Min,
+        2 => Mode::Max,
+        3 => Mode::AlwaysOne,
+        _ => return Err(bad()),
+    };
+    let lg = a.hll_precision & 0xFF;
+    let lg_nom = u8::try_from(lg).ok().filter(|k| (4..=26).contains(k));
+    match (kind, lg_nom, lg) {
+        (ThetaKind::Sketch, Some(lg_nom), _) => Ok(AggregateFunction::TupleSketchAgg {
+            integer,
+            lg_nom,
+            mode,
+        }),
+        (ThetaKind::Union, Some(lg_nom), _) => Ok(AggregateFunction::TupleUnionAgg {
+            integer,
+            lg_nom,
+            mode,
+        }),
+        (ThetaKind::Intersection, _, 0) => {
+            Ok(AggregateFunction::TupleIntersectionAgg { integer, mode })
+        }
+        _ => Err(bad()),
+    }
+}

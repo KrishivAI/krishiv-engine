@@ -1325,12 +1325,7 @@ fn aggregate_function(a: &AggregateExpr, nested: &Cell<bool>) -> Result<pb::Aggr
         } => *accuracy <= 0 || bad_percentages(percentages),
         AggregateFunction::ApproxCountDistinct { p } => !(4..=30).contains(p),
         AggregateFunction::HistogramNumeric { nb } => *nb < 2,
-        AggregateFunction::HllSketchAgg { lg_k } => !(4..=21).contains(lg_k),
-        AggregateFunction::KllSketchAgg { k, .. }
-        | AggregateFunction::KllMergeAgg { k: Some(k), .. } => !(8..=65_535).contains(k),
-        AggregateFunction::ThetaSketchAgg { lg_nom }
-        | AggregateFunction::ThetaUnionAgg { lg_nom } => !(4..=26).contains(lg_nom),
-        _ => false,
+        f => crate::encode_sketch::bad_parameter(f),
     };
     if invalid {
         return Err(CodecError::Unsupported(
@@ -1473,7 +1468,10 @@ fn aggregate_function(a: &AggregateExpr, nested: &Cell<bool>) -> Result<pb::Aggr
         | AggregateFunction::ThetaUnionAgg { .. }
         | AggregateFunction::ThetaIntersectionAgg
         | AggregateFunction::KllSketchAgg { .. }
-        | AggregateFunction::KllMergeAgg { .. } => {
+        | AggregateFunction::KllMergeAgg { .. }
+        | AggregateFunction::TupleSketchAgg { .. }
+        | AggregateFunction::TupleUnionAgg { .. }
+        | AggregateFunction::TupleIntersectionAgg { .. } => {
             return Ok(crate::encode_sketch::sketch_expr(a, nested));
         }
         AggregateFunction::StddevSamp => (pb::AggregateFunction::StddevSamp, false),

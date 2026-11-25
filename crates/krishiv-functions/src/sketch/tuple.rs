@@ -9,9 +9,9 @@ use datasketches::error::{Error, ErrorKind};
 use datasketches::hash::value::{canonical_float, raw_bytes};
 use datasketches::tuple::{
     CompactTupleSketch, SummaryCombinePolicy, SummaryPolicy, SummaryUpdatePolicy, TupleANotB,
-    TupleIntersection, TupleSketch, TupleSketchBuilder, TupleSummaryValue, TupleUnion,
-    TupleUnionBuilder,
+    TupleSketchBuilder, TupleSummaryValue, TupleUnionBuilder,
 };
+pub use datasketches::tuple::{TupleIntersection, TupleSketch, TupleUnion};
 use krishiv_common::error::{
     InternalError, KrishivError, TupleInvalidInputSketchBuffer, TupleInvalidSketchMode,
 };

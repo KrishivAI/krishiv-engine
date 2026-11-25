@@ -62,6 +62,7 @@ impl Accumulator {
                     | Kind::HllSketch(_)
                     | Kind::ThetaSketch(_)
                     | Kind::KllSketch(_)
+                    | Kind::TupleSketch(_)
             ))
             && !is_unit(w)
         {
@@ -108,6 +109,7 @@ impl Accumulator {
                     | Kind::HllSketch(_)
                     | Kind::ThetaSketch(_)
                     | Kind::KllSketch(_)
+                    | Kind::TupleSketch(_)
                     | Kind::MinMax {
                         values: Values::Bytes(_),
                         ..
@@ -927,6 +929,20 @@ impl Accumulator {
                 let Some(states) = states.as_any().downcast_ref::<BinaryArray>() else {
                     return Err(internal(
                         "a Theta sketch state of another type than binary".to_owned(),
+                    ));
+                };
+                h.merge(groups, states)?;
+            }
+            (Kind::TupleSketch(h), false) => h.update(groups, args, valid)?,
+            (Kind::TupleSketch(h), true) => {
+                let [states] = args else {
+                    return Err(internal(
+                        "a Tuple sketch state of another column than its bytes".to_owned(),
+                    ));
+                };
+                let Some(states) = states.as_any().downcast_ref::<BinaryArray>() else {
+                    return Err(internal(
+                        "a Tuple sketch state of another type than binary".to_owned(),
                     ));
                 };
                 h.merge(groups, states)?;
