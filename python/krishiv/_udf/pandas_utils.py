@@ -23,6 +23,10 @@ from krishiv._udf.loose_version import LooseVersion
 from krishiv._udf._host import PySparkImportError, PySparkRuntimeError
 
 
+#: Set once the pandas 3 warning was shown, so a script with many UDFs sees it once.
+_warned_pandas_3: list[bool] = []
+
+
 def require_minimum_pandas_version() -> None:
     """Raise ImportError if minimum version of Pandas is not installed"""
     # TODO(HyukjinKwon): Relocate and deduplicate the version specification.
@@ -60,13 +64,13 @@ def require_minimum_pandas_version() -> None:
                 "current_version": str(pandas.__version__),
             },
         )
-    if LooseVersion(pandas.__version__) >= LooseVersion("3.0.0"):
+    if LooseVersion(pandas.__version__) >= LooseVersion("3.0.0") and not _warned_pandas_3:
         import warnings
 
+        _warned_pandas_3[:] = [True]
         warnings.warn(
-            "PySpark does not yet fully support pandas >= 3.0.0. "
-            "Some features may not work correctly. "
-            "It is recommended to use pandas < 3.0.0 for now.",
+            "Krishiv's pandas UDFs are not yet tested with pandas >= 3.0.0; some features may not work correctly. "
+            "Use pandas < 3.0.0 if you see a difference from the documented behaviour.",
             FutureWarning,
             stacklevel=2,
         )
