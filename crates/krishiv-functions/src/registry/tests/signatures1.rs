@@ -40,6 +40,7 @@ fn every_definition_is_in_sparks_catalog() {
             assert!(s.deterministic.is_none() && s.kind.is_none());
             assert_eq!(d.kind, FunctionKind::Aggregate);
         } else if d.name.starts_with("kll_sketch_") && !d.name.starts_with("kll_sketch_agg_")
+            || d.name.starts_with("tuple_") && !d.name.contains("_agg_")
             || matches!(
                 d.name,
                 "hll_sketch_estimate"
@@ -622,14 +623,6 @@ fn calendar_signatures() {
         assert!(def(name).deterministic, "{name}");
         assert_eq!(def(name).execution, Execution::Scalar, "{name}");
     }
-    // What stays unregistered is known to Spark, so it is not "not found".
-    assert!(
-        matches!(
-            builtins().lookup("tuple_sketch_agg_double", SparkProfile::V4_2),
-            Lookup::KnownUnsupported
-        ),
-        "tuple_sketch_agg_double"
-    );
 }
 
 #[test]

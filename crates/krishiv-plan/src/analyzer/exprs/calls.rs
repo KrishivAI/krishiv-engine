@@ -45,6 +45,48 @@ pub(super) fn hll_default(name: &str, n: usize, origin: Origin) -> Option<Bound>
     }
 }
 
+/// The omitted trailing constants of the Tuple sketch functions (`lgNomEntries` 12, mode `'sum'`), as Spark's constructors
+/// write them: `tuple_sketch_agg_*(key, summary[, lg[, mode]])`, `tuple_union_agg_*(sketch[, lg[, mode]])`,
+/// `tuple_union_*(a, b[, lg[, mode]])`, `tuple_intersection_agg_*(sketch[, mode])`, `tuple_intersection_*(a, b[, mode])`
+/// and `tuple_sketch_summary_*(sketch[, mode])`.
+pub(super) fn tuple_defaults(name: &str, n: usize, origin: Origin) -> Vec<Bound> {
+    let lg = || default_argument(Literal::Integer(12), DataType::Integer, false, origin);
+    let mode = || {
+        default_argument(
+            Literal::String("sum".to_owned()),
+            DataType::String,
+            false,
+            origin,
+        )
+    };
+    let Some(rest) = name.strip_prefix("tuple_") else {
+        return Vec::new();
+    };
+    let sized = |base: usize| match n.checked_sub(base) {
+        Some(0) => vec![lg(), mode()],
+        Some(1) => vec![mode()],
+        _ => Vec::new(),
+    };
+    if rest.starts_with("sketch_agg_") {
+        sized(2)
+    } else if rest.starts_with("union_agg_") {
+        sized(1)
+    } else if rest.starts_with("union_") {
+        sized(2)
+    } else if rest.starts_with("intersection_agg_") {
+        if n == 1 { vec![mode()] } else { Vec::new() }
+    } else if rest.starts_with("intersection_") || rest.starts_with("sketch_summary_") {
+        let base = if rest.starts_with("sketch_summary_") {
+            1
+        } else {
+            2
+        };
+        if n == base { vec![mode()] } else { Vec::new() }
+    } else {
+        Vec::new()
+    }
+}
+
 /// The position of the options argument of the CSV and JSON functions (`n` arguments in the call: `from_protobuf` and `to_protobuf`
 /// take the options third in a three-argument call and fourth otherwise).
 pub(super) fn options_index(name: &str, n: usize) -> Option<usize> {

@@ -51,6 +51,10 @@ impl Mode {
         }
     }
 
+    fn sum_for_count(self) -> Self {
+        self
+    }
+
     fn byte(self) -> u8 {
         match self {
             Self::Sum => 0,
@@ -81,6 +85,10 @@ pub trait Value: Copy + PartialOrd + std::fmt::Debug {
     fn write(self, out: &mut SketchBytes);
     /// Read the image back.
     fn read(cursor: &mut SketchSlice<'_>) -> Result<Self, Error>;
+    /// The value widened to `f64` (a `_double` summary result).
+    fn as_f64(self) -> f64;
+    /// The value widened to `i64` (an `_integer` summary result).
+    fn as_i64(self) -> i64;
     /// The size of the image.
     const SIZE: usize;
 }
@@ -110,6 +118,16 @@ impl Value for f64 {
             .read_f64_le()
             .map_err(|_| Error::new(ErrorKind::InvalidData, "tuple double summary"))
     }
+    fn as_f64(self) -> f64 {
+        self
+    }
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "never read: a double summary reports as f64"
+    )]
+    fn as_i64(self) -> i64 {
+        self as i64
+    }
     const SIZE: usize = 8;
 }
 
@@ -137,6 +155,12 @@ impl Value for i32 {
         cursor
             .read_i32_le()
             .map_err(|_| Error::new(ErrorKind::InvalidData, "tuple integer summary"))
+    }
+    fn as_f64(self) -> f64 {
+        f64::from(self)
+    }
+    fn as_i64(self) -> i64 {
+        i64::from(self)
     }
     const SIZE: usize = 4;
 }
@@ -509,28 +533,38 @@ pub fn difference<V: Value>(
     }
 }
 
-/// `tuple_sketch_summary_*`: the retained summaries folded with `mode` (Spark's `aggregateNumericSummaries`).
+/// `tuple_sketch_summary_double`: the retained summaries folded with `mode` (`alwaysone` counts the entries).
 #[must_use]
-pub fn summary<V: Value>(sketch: &Compact<V>, mode: Mode) -> V {
-    let mut it = sketch.iter().map(|e| e.summary().value);
-    match mode {
-        Mode::AlwaysOne => {
-            // Spark counts the entries (a `1` for each).
-            let n = sketch.num_retained();
-            let mut acc = V::identity(Mode::Sum);
-            for _ in 0..n {
-                acc = acc.fold(Mode::Sum, V::identity(Mode::AlwaysOne));
-            }
-            acc
-        }
-        _ => {
-            let mut acc = V::identity(mode);
-            for v in it.by_ref() {
-                acc = acc.fold(mode, v);
-            }
-            acc
-        }
+pub fn summary_double<V: Value>(sketch: &Compact<V>, mode: Mode) -> f64 {
+    let mut acc = f64::identity(mode.sum_for_count());
+    for e in sketch.iter() {
+        acc = acc.fold(mode.sum_for_count(), e.summary().value.as_f64());
     }
+    if matches!(mode, Mode::AlwaysOne) {
+        // Spark adds a 1 per entry.
+        return sketch.num_retained() as f64;
+    }
+    acc
+}
+
+/// `tuple_sketch_summary_integer`: as [`summary_double`], accumulated in a `bigint` (Spark's `Long`).
+#[must_use]
+pub fn summary_integer<V: Value>(sketch: &Compact<V>, mode: Mode) -> i64 {
+    let mut acc = match mode {
+        Mode::Sum | Mode::AlwaysOne => 0,
+        Mode::Min => i64::MAX,
+        Mode::Max => i64::MIN,
+    };
+    for e in sketch.iter() {
+        let v = e.summary().value.as_i64();
+        acc = match mode {
+            Mode::Sum => acc.wrapping_add(v),
+            Mode::Min => acc.min(v),
+            Mode::Max => acc.max(v),
+            Mode::AlwaysOne => acc.wrapping_add(1),
+        };
+    }
+    acc
 }
 
 impl<V: Value> Clone for Either<'_, V> {
@@ -561,9 +595,9 @@ mod tests {
     fn reads_and_rewrites_spark_bytes() {
         let d = from_bytes::<f64>(&unhex(SPARK_DOUBLE), "f").unwrap();
         assert_eq!(d.estimate(), 2.0);
-        assert_eq!(summary(&d, Mode::Sum), 6.0);
+        assert_eq!(summary_double(&d, Mode::Sum), 6.0);
         let i = from_bytes::<i32>(&unhex(SPARK_INTEGER), "f").unwrap();
-        assert_eq!(summary(&i, Mode::Sum), 6);
+        assert_eq!(summary_integer(&i, Mode::Sum), 6);
     }
 
     #[test]

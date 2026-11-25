@@ -1527,6 +1527,7 @@ pub(super) fn specs() -> Vec<Spec> {
     out.extend(super::hll::specs());
     out.extend(super::theta::specs());
     out.extend(super::kll::specs());
+    out.extend(super::tuple::specs());
     out.extend(super::bitwise::specs());
     out.extend(super::predicate::specs());
     out.extend(super::number::specs());

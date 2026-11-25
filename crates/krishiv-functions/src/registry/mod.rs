@@ -48,6 +48,7 @@ mod text;
 mod theta;
 mod time;
 mod time_window;
+mod tuple;
 mod url;
 mod variant;
 mod vector;
@@ -247,6 +248,18 @@ pub enum Aggregate {
     KllMergeAggFloat,
     /// `kll_merge_agg_double(sketch[, k])`.
     KllMergeAggDouble,
+    /// `tuple_sketch_agg_double(key, summary[, lgNomEntries[, mode]])`: a compact Tuple sketch of double summaries; never NULL.
+    TupleSketchAggDouble,
+    /// `tuple_sketch_agg_integer(key, summary[, lgNomEntries[, mode]])`.
+    TupleSketchAggInteger,
+    /// `tuple_union_agg_double(sketch[, lgNomEntries[, mode]])`: the union of Tuple sketches; never NULL.
+    TupleUnionAggDouble,
+    /// `tuple_union_agg_integer(sketch[, lgNomEntries[, mode]])`.
+    TupleUnionAggInteger,
+    /// `tuple_intersection_agg_double(sketch[, mode])`: the intersection of Tuple sketches; never NULL.
+    TupleIntersectionAggDouble,
+    /// `tuple_intersection_agg_integer(sketch[, mode])`.
+    TupleIntersectionAggInteger,
 }
 
 /// A built-in function.

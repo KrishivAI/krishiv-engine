@@ -521,30 +521,6 @@ _ENGINE_UNSUPPORTED = (
     "sentences",
     "session_window",
     "try_reflect",
-    "tuple_difference_double",
-    "tuple_difference_integer",
-    "tuple_difference_theta_double",
-    "tuple_difference_theta_integer",
-    "tuple_intersection_agg_double",
-    "tuple_intersection_agg_integer",
-    "tuple_intersection_double",
-    "tuple_intersection_integer",
-    "tuple_intersection_theta_double",
-    "tuple_intersection_theta_integer",
-    "tuple_sketch_agg_double",
-    "tuple_sketch_agg_integer",
-    "tuple_sketch_estimate_double",
-    "tuple_sketch_estimate_integer",
-    "tuple_sketch_summary_double",
-    "tuple_sketch_summary_integer",
-    "tuple_sketch_theta_double",
-    "tuple_sketch_theta_integer",
-    "tuple_union_agg_double",
-    "tuple_union_agg_integer",
-    "tuple_union_double",
-    "tuple_union_integer",
-    "tuple_union_theta_double",
-    "tuple_union_theta_integer",
     "xpath",
     "xpath_boolean",
     "xpath_double",
@@ -2830,141 +2806,191 @@ def try_variant_set(v: ColumnOrName, path: Column | str, value: ColumnOrName, cr
 
 
 def tuple_difference_double(col1: ColumnOrName, col2: ColumnOrName) -> Column:
-    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
-    raise _unsupported("tuple_difference_double")
+    """Calls the registry function ``tuple_difference_double``."""
+    return _call("tuple_difference_double", _named(col1, "col1"), _named(col2, "col2"))
 
 
 def tuple_difference_integer(col1: ColumnOrName, col2: ColumnOrName) -> Column:
-    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
-    raise _unsupported("tuple_difference_integer")
+    """Calls the registry function ``tuple_difference_integer``."""
+    return _call("tuple_difference_integer", _named(col1, "col1"), _named(col2, "col2"))
 
 
 def tuple_difference_theta_double(col1: ColumnOrName, col2: ColumnOrName) -> Column:
-    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
-    raise _unsupported("tuple_difference_theta_double")
+    """Calls the registry function ``tuple_difference_theta_double``."""
+    return _call("tuple_difference_theta_double", _named(col1, "col1"), _named(col2, "col2"))
 
 
 def tuple_difference_theta_integer(col1: ColumnOrName, col2: ColumnOrName) -> Column:
-    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
-    raise _unsupported("tuple_difference_theta_integer")
+    """Calls the registry function ``tuple_difference_theta_integer``."""
+    return _call("tuple_difference_theta_integer", _named(col1, "col1"), _named(col2, "col2"))
 
 
 def tuple_intersection_agg_double(col: ColumnOrName, mode: Column | str | None = None) -> Column:
-    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
-    raise _unsupported("tuple_intersection_agg_double")
+    """Calls the registry function ``tuple_intersection_agg_double``."""
+    return _call("tuple_intersection_agg_double", _named(col, "col"), *_opt(_lit, mode, "mode"))
 
 
 def tuple_intersection_agg_integer(col: ColumnOrName, mode: Column | str | None = None) -> Column:
-    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
-    raise _unsupported("tuple_intersection_agg_integer")
+    """Calls the registry function ``tuple_intersection_agg_integer``."""
+    return _call("tuple_intersection_agg_integer", _named(col, "col"), *_opt(_lit, mode, "mode"))
 
 
 def tuple_intersection_double(col1: ColumnOrName, col2: ColumnOrName, mode: Column | str | None = None) -> Column:
-    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
-    raise _unsupported("tuple_intersection_double")
+    """Calls the registry function ``tuple_intersection_double``."""
+    return _call("tuple_intersection_double", _named(col1, "col1"), _named(col2, "col2"), *_opt(_lit, mode, "mode"))
 
 
 def tuple_intersection_integer(col1: ColumnOrName, col2: ColumnOrName, mode: Column | str | None = None) -> Column:
-    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
-    raise _unsupported("tuple_intersection_integer")
+    """Calls the registry function ``tuple_intersection_integer``."""
+    return _call("tuple_intersection_integer", _named(col1, "col1"), _named(col2, "col2"), *_opt(_lit, mode, "mode"))
 
 
 def tuple_intersection_theta_double(col1: ColumnOrName, col2: ColumnOrName, mode: Column | str | None = None) -> Column:
-    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
-    raise _unsupported("tuple_intersection_theta_double")
+    """Calls the registry function ``tuple_intersection_theta_double``."""
+    return _call(
+        "tuple_intersection_theta_double", _named(col1, "col1"), _named(col2, "col2"), *_opt(_lit, mode, "mode")
+    )
 
 
 def tuple_intersection_theta_integer(
     col1: ColumnOrName, col2: ColumnOrName, mode: Column | str | None = None
 ) -> Column:
-    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
-    raise _unsupported("tuple_intersection_theta_integer")
+    """Calls the registry function ``tuple_intersection_theta_integer``."""
+    return _call(
+        "tuple_intersection_theta_integer", _named(col1, "col1"), _named(col2, "col2"), *_opt(_lit, mode, "mode")
+    )
 
 
 def tuple_sketch_agg_double(
     key: ColumnOrName, summary: ColumnOrName, lgNomEntries: Column | int | None = None, mode: Column | str | None = None
 ) -> Column:
-    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
-    raise _unsupported("tuple_sketch_agg_double")
+    """Calls the registry function ``tuple_sketch_agg_double``."""
+    return _call(
+        "tuple_sketch_agg_double",
+        _named(key, "key"),
+        _named(summary, "summary"),
+        *_opt(_lit, lgNomEntries, "lgNomEntries"),
+        *_opt(_lit, mode, "mode"),
+    )
 
 
 def tuple_sketch_agg_integer(
     key: ColumnOrName, summary: ColumnOrName, lgNomEntries: Column | int | None = None, mode: Column | str | None = None
 ) -> Column:
-    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
-    raise _unsupported("tuple_sketch_agg_integer")
+    """Calls the registry function ``tuple_sketch_agg_integer``."""
+    return _call(
+        "tuple_sketch_agg_integer",
+        _named(key, "key"),
+        _named(summary, "summary"),
+        *_opt(_lit, lgNomEntries, "lgNomEntries"),
+        *_opt(_lit, mode, "mode"),
+    )
 
 
 def tuple_sketch_estimate_double(col: ColumnOrName) -> Column:
-    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
-    raise _unsupported("tuple_sketch_estimate_double")
+    """Calls the registry function ``tuple_sketch_estimate_double``."""
+    return _call("tuple_sketch_estimate_double", _named(col, "col"))
 
 
 def tuple_sketch_estimate_integer(col: ColumnOrName) -> Column:
-    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
-    raise _unsupported("tuple_sketch_estimate_integer")
+    """Calls the registry function ``tuple_sketch_estimate_integer``."""
+    return _call("tuple_sketch_estimate_integer", _named(col, "col"))
 
 
 def tuple_sketch_summary_double(col: ColumnOrName, mode: Column | str | None = None) -> Column:
-    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
-    raise _unsupported("tuple_sketch_summary_double")
+    """Calls the registry function ``tuple_sketch_summary_double``."""
+    return _call("tuple_sketch_summary_double", _named(col, "col"), *_opt(_lit, mode, "mode"))
 
 
 def tuple_sketch_summary_integer(col: ColumnOrName, mode: Column | str | None = None) -> Column:
-    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
-    raise _unsupported("tuple_sketch_summary_integer")
+    """Calls the registry function ``tuple_sketch_summary_integer``."""
+    return _call("tuple_sketch_summary_integer", _named(col, "col"), *_opt(_lit, mode, "mode"))
 
 
 def tuple_sketch_theta_double(col: ColumnOrName) -> Column:
-    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
-    raise _unsupported("tuple_sketch_theta_double")
+    """Calls the registry function ``tuple_sketch_theta_double``."""
+    return _call("tuple_sketch_theta_double", _named(col, "col"))
 
 
 def tuple_sketch_theta_integer(col: ColumnOrName) -> Column:
-    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
-    raise _unsupported("tuple_sketch_theta_integer")
+    """Calls the registry function ``tuple_sketch_theta_integer``."""
+    return _call("tuple_sketch_theta_integer", _named(col, "col"))
 
 
 def tuple_union_agg_double(
     col: ColumnOrName, lgNomEntries: Column | int | None = None, mode: Column | str | None = None
 ) -> Column:
-    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
-    raise _unsupported("tuple_union_agg_double")
+    """Calls the registry function ``tuple_union_agg_double``."""
+    return _call(
+        "tuple_union_agg_double",
+        _named(col, "col"),
+        *_opt(_lit, lgNomEntries, "lgNomEntries"),
+        *_opt(_lit, mode, "mode"),
+    )
 
 
 def tuple_union_agg_integer(
     col: ColumnOrName, lgNomEntries: Column | int | None = None, mode: Column | str | None = None
 ) -> Column:
-    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
-    raise _unsupported("tuple_union_agg_integer")
+    """Calls the registry function ``tuple_union_agg_integer``."""
+    return _call(
+        "tuple_union_agg_integer",
+        _named(col, "col"),
+        *_opt(_lit, lgNomEntries, "lgNomEntries"),
+        *_opt(_lit, mode, "mode"),
+    )
 
 
 def tuple_union_double(
     col1: ColumnOrName, col2: ColumnOrName, lgNomEntries: Column | int | None = None, mode: Column | str | None = None
 ) -> Column:
-    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
-    raise _unsupported("tuple_union_double")
+    """Calls the registry function ``tuple_union_double``."""
+    return _call(
+        "tuple_union_double",
+        _named(col1, "col1"),
+        _named(col2, "col2"),
+        *_opt(_lit, lgNomEntries, "lgNomEntries"),
+        *_opt(_lit, mode, "mode"),
+    )
 
 
 def tuple_union_integer(
     col1: ColumnOrName, col2: ColumnOrName, lgNomEntries: Column | int | None = None, mode: Column | str | None = None
 ) -> Column:
-    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
-    raise _unsupported("tuple_union_integer")
+    """Calls the registry function ``tuple_union_integer``."""
+    return _call(
+        "tuple_union_integer",
+        _named(col1, "col1"),
+        _named(col2, "col2"),
+        *_opt(_lit, lgNomEntries, "lgNomEntries"),
+        *_opt(_lit, mode, "mode"),
+    )
 
 
 def tuple_union_theta_double(
     col1: ColumnOrName, col2: ColumnOrName, lgNomEntries: Column | int | None = None, mode: Column | str | None = None
 ) -> Column:
-    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
-    raise _unsupported("tuple_union_theta_double")
+    """Calls the registry function ``tuple_union_theta_double``."""
+    return _call(
+        "tuple_union_theta_double",
+        _named(col1, "col1"),
+        _named(col2, "col2"),
+        *_opt(_lit, lgNomEntries, "lgNomEntries"),
+        *_opt(_lit, mode, "mode"),
+    )
 
 
 def tuple_union_theta_integer(
     col1: ColumnOrName, col2: ColumnOrName, lgNomEntries: Column | int | None = None, mode: Column | str | None = None
 ) -> Column:
-    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
-    raise _unsupported("tuple_union_theta_integer")
+    """Calls the registry function ``tuple_union_theta_integer``."""
+    return _call(
+        "tuple_union_theta_integer",
+        _named(col1, "col1"),
+        _named(col2, "col2"),
+        *_opt(_lit, lgNomEntries, "lgNomEntries"),
+        *_opt(_lit, mode, "mode"),
+    )
 
 
 def typeof(col: ColumnOrName) -> Column:

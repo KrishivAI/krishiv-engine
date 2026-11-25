@@ -738,6 +738,42 @@ pub(super) fn aggregates() -> Vec<Spec> {
             super::super::kll::merge_agg_double,
             Aggregate::KllMergeAggDouble,
         ),
+        aggregate(
+            "tuple_sketch_agg_double",
+            super::super::tuple::sketch_agg_inputs(false),
+            super::super::tuple::sketch_agg_double,
+            Aggregate::TupleSketchAggDouble,
+        ),
+        aggregate(
+            "tuple_sketch_agg_integer",
+            super::super::tuple::sketch_agg_inputs(true),
+            super::super::tuple::sketch_agg_integer,
+            Aggregate::TupleSketchAggInteger,
+        ),
+        aggregate(
+            "tuple_union_agg_double",
+            super::super::tuple::union_agg_inputs(),
+            super::super::tuple::union_agg_double,
+            Aggregate::TupleUnionAggDouble,
+        ),
+        aggregate(
+            "tuple_union_agg_integer",
+            super::super::tuple::union_agg_inputs(),
+            super::super::tuple::union_agg_integer,
+            Aggregate::TupleUnionAggInteger,
+        ),
+        aggregate(
+            "tuple_intersection_agg_double",
+            super::super::tuple::intersection_agg_inputs(),
+            super::super::tuple::intersection_agg_double,
+            Aggregate::TupleIntersectionAggDouble,
+        ),
+        aggregate(
+            "tuple_intersection_agg_integer",
+            super::super::tuple::intersection_agg_inputs(),
+            super::super::tuple::intersection_agg_integer,
+            Aggregate::TupleIntersectionAggInteger,
+        ),
         // `try_sum` / `try_avg`: `sum` / `avg` that give NULL instead of
         // an overflow error, ANSI on or off.
         aggregate("try_sum", numeric(), try_sum, Aggregate::TrySum),

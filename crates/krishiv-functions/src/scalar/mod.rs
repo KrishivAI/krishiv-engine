@@ -65,6 +65,7 @@ mod r#struct;
 mod text43;
 mod theta;
 mod time_window;
+mod tuple;
 mod udf;
 mod url;
 mod variant;
@@ -516,6 +517,7 @@ const FAMILIES: &[(&[&str], Binder)] = &[
     (bitmap::NAMES, bitmap::bind),
     (hll::NAMES, hll::bind),
     (theta::NAMES, theta::bind),
+    (tuple::NAMES, tuple::bind),
     (kll::NAMES, kll::bind),
     (interval::NAMES, interval::bind),
     (avro::NAMES, avro::bind),
