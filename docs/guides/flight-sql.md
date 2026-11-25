@@ -43,8 +43,8 @@ with flight.connect("grpc://localhost:15002", db_kwargs={
 ## What is supported
 
 - **Queries and updates**: statements, prepared statements with bound parameters, and updates (`INSERT`, `UPDATE`,
-  `DELETE`, DDL) through the same session machinery as Spark Connect, so grants, resource groups and the query
-  history apply.
+  `DELETE`, DDL) through the same session machinery as Spark Connect, so the [access policy](access-control.md)
+  (token roles or an external policy service), resource groups and the query history apply.
 - **Metadata**: catalogs, schemas, tables (with schemas on request), table types, primary and foreign keys, SQL info,
   XDBC type info, and session options.
 - **Sessions**: a call with no session gets a short-lived one (`krishiv.flightSql.provisionalTtl`); a client that
