@@ -404,3 +404,52 @@ def test_created_dataframes_own_their_tables(spark: SparkSession) -> None:
         spark.createDataFrame(pa.table({"a": [1]}))
     gc.collect()
     assert names() == []
+
+
+def test_print_schema_nested_and_level(spark: SparkSession, capsys: pytest.CaptureFixture[str]) -> None:
+    df = spark.sql("select array(1) c, map('a', 1) m, named_struct('x', 1) s")
+    df.printSchema()
+    assert capsys.readouterr().out.splitlines() == [
+        "root",
+        " |-- c: array (nullable = false)",
+        " |    |-- element: integer (containsNull = true)",
+        " |-- m: map (nullable = false)",
+        " |    |-- key: string",
+        " |    |-- value: integer (valueContainsNull = true)",
+        " |-- s: struct (nullable = false)",
+        " |    |-- x: integer (nullable = true)",
+        "",
+    ]
+    df.printSchema(1)
+    assert capsys.readouterr().out.splitlines() == [
+        "root",
+        " |-- c: array (nullable = false)",
+        " |-- m: map (nullable = false)",
+        " |-- s: struct (nullable = false)",
+        "",
+    ]
+
+
+def test_print_schema_level_zero_or_negative_prints_everything(
+    df: DataFrame, capsys: pytest.CaptureFixture[str]
+) -> None:
+    df.printSchema()
+    full = capsys.readouterr().out
+    for level in (0, -1):
+        df.printSchema(level)
+        assert capsys.readouterr().out == full
+
+
+def test_print_schema_falls_back_to_the_flat_form_for_a_type_the_parser_lacks(
+    df: DataFrame, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def refuse(self: DataFrame) -> object:
+        raise ValueError("unsupported type time(6)")
+
+    monkeypatch.setattr(DataFrame, "schema", property(refuse))
+    df.printSchema()
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[0] == "root"
+    assert lines[1].startswith(" |-- ")
+    assert "(nullable = " in lines[1]
+    assert lines[-1] == ""

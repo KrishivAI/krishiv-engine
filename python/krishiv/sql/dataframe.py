@@ -182,11 +182,15 @@ class DataFrame:
         return [(name, type_) for name, type_, _ in self._df.schema()]
 
     def printSchema(self, level: int | None = None) -> None:
-        """Prints the schema as a tree, with the type names Spark prints (``integer``, ``long``, ...),
-        to ``level`` levels of nesting (all by default)."""
-        if level is not None and (not isinstance(level, int) or isinstance(level, bool)):
-            raise not_expected_type("level", "int", level)
-        print(self.schema.treeString(level))
+        """Prints the schema as a tree, as Spark does (``long``, ``integer`` type names, nested
+        fields, a final empty line); a positive ``level`` limits the depth."""
+        try:
+            print(self.schema.treeString(level or 0))
+        except Exception:  # a type the schema parser lacks (``time(6)``, ``geometry(0)``): the flat form
+            print("root")
+            for name, type_, nullable in self._df.schema():
+                print(f" |-- {name}: {type_} (nullable = {str(nullable).lower()})")
+            print()
 
     # Column access.
     def __getitem__(self, item: Any) -> Any:

@@ -509,6 +509,7 @@ class SparkSession:
         root
          |-- name: string (nullable = true)
          |-- age: integer (nullable = true)
+        <BLANKLINE>
         >>> df.count()
         0
         """

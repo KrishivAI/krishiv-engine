@@ -473,6 +473,46 @@ class StructField(DataType):
         return hash((self.name, self.dataType, self.nullable))
 
 
+def _tree_type_name(dt: DataType) -> str:
+    if isinstance(dt, StructType | ArrayType | MapType):
+        return dt.typeName()
+    name = dt.jsonValue()
+    return name if isinstance(name, str) else dt.typeName()
+
+
+def _escape_label(label: str) -> str:
+    """``label`` with control characters escaped, so a field name never splits the tree across lines."""
+    return "".join(
+        c if c.isprintable() or c == " " else {"\n": "\\n", "\t": "\\t", "\r": "\\r"}.get(c, f"\\x{ord(c):02x}")
+        for c in label
+    )
+
+
+def _tree_line(
+    prefix: str, name: str, dt: DataType, flag: str | None, depth: int, level: int | None, out: list[str]
+) -> None:
+    suffix = "" if flag is None else f" ({flag})"
+    out.append(f"{prefix}|-- {_escape_label(name)}: {_tree_type_name(dt)}{suffix}")
+    if level is not None and depth >= level:
+        return
+    inner = prefix + "|    "
+    if isinstance(dt, StructType):
+        _tree_fields(dt.fields, depth + 1, level, out)
+    elif isinstance(dt, ArrayType):
+        flag = f"containsNull = {str(dt.containsNull).lower()}"
+        _tree_line(inner, "element", dt.elementType, flag, depth + 1, level, out)
+    elif isinstance(dt, MapType):
+        flag = f"valueContainsNull = {str(dt.valueContainsNull).lower()}"
+        _tree_line(inner, "key", dt.keyType, None, depth + 1, level, out)
+        _tree_line(inner, "value", dt.valueType, flag, depth + 1, level, out)
+
+
+def _tree_fields(fields: list[StructField], depth: int, level: int | None, out: list[str]) -> None:
+    prefix = " " + "|    " * (depth - 1)
+    for f in fields:
+        _tree_line(prefix, f.name, f.dataType, f"nullable = {str(f.nullable).lower()}", depth, level, out)
+
+
 class StructType(DataType):
     def __init__(self, fields: Iterable[StructField] | None = None) -> None:
         self.fields = list(fields or [])
@@ -487,11 +527,13 @@ class StructType(DataType):
     def fieldNames(self) -> list[str]:
         return list(self.names)
 
-    def treeString(self, maxDepth: int | None = None) -> str:
-        """The schema as the indented tree ``printSchema`` prints, to ``maxDepth`` levels (all by default and for
-        ``maxDepth <= 0``, as Spark)."""
+    def treeString(self, maxDepth: int = 0) -> str:
+        """The schema as Spark's ``treeString`` prints it: ``root``, then one ``|--`` line per field
+        (type names as Spark spells them: ``long``, ``integer``), nested fields indented, to
+        ``maxDepth`` levels when positive (zero or less: all). Ends with a newline."""
+        level = maxDepth if maxDepth > 0 else None
         lines = ["root"]
-        _tree_fields(self, " |", 1, maxDepth if maxDepth is not None and maxDepth > 0 else 2**31 - 1, lines)
+        _tree_fields(self.fields, 1, level, lines)
         return "\n".join(lines) + "\n"
 
     def simpleString(self) -> str:
@@ -866,50 +908,3 @@ class _DdlParser:
         if re.fullmatch(r"\d+", tok):
             return int(tok)
         raise ValueError(tok)
-
-
-def _tree_type_name(t: DataType) -> str:
-    """The type as ``printSchema`` names it (Spark's ``typeName``: ``integer``, ``long``, ``decimal(5,2)``)."""
-    if isinstance(t, ArrayType | MapType | StructType):
-        return t.typeName()
-    value = t.jsonValue()
-    return value if isinstance(value, str) else t.typeName()
-
-
-def _escape_label(label: str) -> str:
-    """``label`` with control characters escaped, so a field name never splits the tree across lines."""
-    return "".join(
-        c if c.isprintable() or c == " " else {"\n": "\\n", "\t": "\\t", "\r": "\\r"}.get(c, f"\\x{ord(c):02x}")
-        for c in label
-    )
-
-
-def _tree_type(
-    t: DataType, label: str, nullable_note: str, prefix: str, depth: int, limit: int, out: list[str]
-) -> None:
-    out.append(f"{prefix}-- {_escape_label(label)}: {_tree_type_name(t)}{nullable_note}")
-    if depth >= limit:
-        return
-    child = prefix + "    |"
-    if isinstance(t, StructType):
-        _tree_fields(t, child, depth + 1, limit, out)
-    elif isinstance(t, ArrayType):
-        _tree_type(
-            t.elementType, "element", f" (containsNull = {str(t.containsNull).lower()})", child, depth + 1, limit, out
-        )
-    elif isinstance(t, MapType):
-        _tree_type(t.keyType, "key", "", child, depth + 1, limit, out)
-        _tree_type(
-            t.valueType,
-            "value",
-            f" (valueContainsNull = {str(t.valueContainsNull).lower()})",
-            child,
-            depth + 1,
-            limit,
-            out,
-        )
-
-
-def _tree_fields(struct: StructType, prefix: str, depth: int, limit: int, out: list[str]) -> None:
-    for f in struct.fields:
-        _tree_type(f.dataType, f.name, f" (nullable = {str(f.nullable).lower()})", prefix, depth, limit, out)

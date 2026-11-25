@@ -1080,8 +1080,8 @@ DataFrame[age: bigint, name: string]
 def printSchema(self, level: int | None=None) -> None
 ```
 
-Prints the schema as a tree, with the type names Spark prints (`integer`, `long`, ...),
-to `level` levels of nesting (all by default).
+Prints the schema as a tree, as Spark does (`long`, `integer` type names, nested
+fields, a final empty line); a positive `level` limits the depth.
 
 ### `profile`
 
