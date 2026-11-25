@@ -263,7 +263,7 @@ fn spec(s: &SchemaRef, group_by: Vec<usize>, aggregates: Vec<AggregateExpr>) -> 
         ansi: true,
         spill: None,
         require_unit_weights: false,
-        legacy_statistical: false,
+        moments: Default::default(),
         udafs: None,
     }
 }
@@ -391,7 +391,7 @@ fn two_phase_of(
 ) -> (Arc<dyn ExecNode>, Arc<PartialAggregate>) {
     first.output = AggregateOutput::Partial;
     let mut second = second_phase(&first, spill);
-    second.legacy_statistical = first.legacy_statistical;
+    second.moments = first.moments;
     second.ansi = first.ansi;
     let partial = PartialAggregate::new(first, policy, Some(7)).unwrap();
     let plan = node(PartialNode::new(input, Arc::clone(&partial)), second);
@@ -948,9 +948,13 @@ fn moment_oracle(b: &[Vec<ArrayRef>], keys: i64, keyed: bool, legacy: bool) -> M
     let mut accs: Vec<Accumulator> = moment_aggs()
         .iter()
         .map(|a| {
-            let mut acc = Accumulator::new(a, true)
-                .unwrap()
-                .legacy_statistical(legacy);
+            let mut acc =
+                Accumulator::new(a, true)
+                    .unwrap()
+                    .moment_rules(crate::aggregate::MomentRules {
+                        legacy_nan: legacy,
+                        spark_4_3: false,
+                    });
             acc.resize(groups);
             acc
         })

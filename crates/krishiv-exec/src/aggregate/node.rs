@@ -230,7 +230,7 @@ pub fn union_distinct(
         ansi: true,
         spill,
         require_unit_weights: true,
-        legacy_statistical: false,
+        moments: Default::default(),
         udafs: None,
     };
     Ok(AggregateNode::new(input, HashAggregate::new(spec)?))

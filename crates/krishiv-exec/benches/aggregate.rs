@@ -128,7 +128,7 @@ fn decimal_plan(batches: &[Batch], f: &AggregateFunction) -> Arc<dyn ExecNode> {
         ansi: true,
         spill: None,
         require_unit_weights: false,
-        legacy_statistical: false,
+        moments: Default::default(),
         udafs: None,
     };
     let scan = Arc::new(Scan(Batches::new(s, batches.to_vec())));
@@ -278,7 +278,7 @@ fn count_plan(batches: &[Batch], udaf: bool) -> Arc<dyn ExecNode> {
         ansi: true,
         spill: None,
         require_unit_weights: false,
-        legacy_statistical: false,
+        moments: Default::default(),
         udafs,
     };
     let scan = Arc::new(Scan(Batches::new(s, batches.to_vec())));
@@ -342,7 +342,7 @@ fn fold_plan(batches: &[Batch], keys: u64, f: AggregateFunction) -> Arc<dyn Exec
         ansi: true,
         spill: None,
         require_unit_weights: false,
-        legacy_statistical: false,
+        moments: Default::default(),
         udafs: None,
     };
     let scan = Arc::new(Scan(Batches::new(s, batches.to_vec())));
@@ -464,7 +464,7 @@ fn q01_plan(batches: &[Batch]) -> Arc<dyn ExecNode> {
         ansi: true,
         spill: None,
         require_unit_weights: false,
-        legacy_statistical: false,
+        moments: Default::default(),
         udafs: None,
     };
     let scan = Arc::new(Scan(Batches::new(s, batches.to_vec())));
@@ -486,7 +486,7 @@ fn wide_plan(
         ansi: true,
         spill: None,
         require_unit_weights: false,
-        legacy_statistical: false,
+        moments: Default::default(),
         udafs: None,
     };
     let scan = Arc::new(Scan(Batches::new(s, batches.to_vec())));
@@ -603,7 +603,7 @@ fn distinct_shape_plan(
         ansi: true,
         spill: None,
         require_unit_weights: false,
-        legacy_statistical: false,
+        moments: Default::default(),
         udafs: None,
     };
     let scan = Arc::new(Scan(Batches::new(s, batches.to_vec())));
@@ -635,7 +635,7 @@ fn plan(batches: &[Batch], spill: Option<SpillScope>) -> Arc<dyn ExecNode> {
         ansi: true,
         spill,
         require_unit_weights: false,
-        legacy_statistical: false,
+        moments: Default::default(),
         udafs: None,
     };
     let scan = Arc::new(Scan(Batches::new(s, batches.to_vec())));

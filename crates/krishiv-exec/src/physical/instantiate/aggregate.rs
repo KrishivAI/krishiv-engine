@@ -36,7 +36,7 @@ pub(crate) fn aggregate_spec(
         ansi: env.ansi,
         spill,
         require_unit_weights: false,
-        legacy_statistical: env.legacy_statistical_aggregate,
+        moments: crate::aggregate::MomentRules::of(env),
         udafs: UdafEnv::of(env.udfs.as_ref(), env.zone),
     }
 }

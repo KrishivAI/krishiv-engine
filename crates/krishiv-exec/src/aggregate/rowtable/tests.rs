@@ -23,7 +23,7 @@ fn core() -> Arc<AggCore> {
         ansi: true,
         spill: None,
         require_unit_weights: false,
-        legacy_statistical: false,
+        moments: Default::default(),
         udafs: None,
     };
     Arc::new(AggCore::new(spec).unwrap())
@@ -1023,7 +1023,7 @@ fn gather_bytes_covers_skewed_var_width() {
         ansi: true,
         spill: None,
         require_unit_weights: false,
-        legacy_statistical: false,
+        moments: Default::default(),
         udafs: None,
     };
     let core = Arc::new(AggCore::new(spec).unwrap());
@@ -1541,7 +1541,7 @@ fn hll_core(output: AggregateOutput) -> Arc<AggCore> {
         ansi: true,
         spill: None,
         require_unit_weights: false,
-        legacy_statistical: false,
+        moments: Default::default(),
         udafs: None,
     };
     Arc::new(AggCore::new(spec).unwrap())

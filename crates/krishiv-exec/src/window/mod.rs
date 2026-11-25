@@ -475,9 +475,8 @@ struct Env {
     /// `spark.sql.ansi.enabled`: overflow raises instead of wrapping or
     /// becoming NULL.
     ansi: bool,
-    /// `spark.sql.legacy.statisticalAggregate`: the sample moment aggregates give NaN instead of NULL where Spark
-    /// divides by zero.
-    legacy: bool,
+    /// The moment aggregates' session rules (`spark.sql.legacy.statisticalAggregate` and the Spark line).
+    moments: crate::aggregate::MomentRules,
     /// The session time zone, for a year-month `RANGE` bound over a `TIMESTAMP` key.
     zone: krishiv_kernels::datetime::ZoneRef,
     /// The session's aggregate UDFs, for window frames of one (ADR 0045).
@@ -689,7 +688,7 @@ impl Window {
                 input,
                 plan,
                 ansi,
-                legacy: false,
+                moments: Default::default(),
                 zone,
                 udafs: None,
             }),
@@ -726,7 +725,7 @@ impl Window {
             ));
         };
         e.udafs = udafs;
-        e.legacy = env.legacy_statistical_aggregate;
+        e.moments = crate::aggregate::MomentRules::of(env);
         Ok(me)
     }
 
@@ -877,7 +876,7 @@ impl Window {
                 &self.env.plan,
                 &unit,
                 self.env.ansi,
-                self.env.legacy,
+                self.env.moments,
                 &self.env.zone,
                 self.env.udafs.as_ref(),
                 Some(&mut l.reservation),

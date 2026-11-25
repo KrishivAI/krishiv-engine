@@ -96,7 +96,7 @@ impl AggCore {
             let acc = UdfAcc::new(call, self.spec.udafs.as_ref(), self.spec.ansi)?;
             return Accumulator::udf(a, acc);
         }
-        Ok(Accumulator::new(a, self.spec.ansi)?.legacy_statistical(self.spec.legacy_statistical))
+        Ok(Accumulator::new(a, self.spec.ansi)?.moment_rules(self.spec.moments))
     }
 
     /// Row indices of a state batch per spill partition at `level`.

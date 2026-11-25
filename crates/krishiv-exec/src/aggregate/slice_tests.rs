@@ -86,7 +86,7 @@ pub(super) fn spec(view: bool) -> AggregateSpec {
         ansi: true,
         spill: None,
         require_unit_weights: false,
-        legacy_statistical: false,
+        moments: Default::default(),
         udafs: None,
     }
 }

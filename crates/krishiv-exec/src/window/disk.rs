@@ -660,7 +660,7 @@ fn fold_from_file(
     )?;
     let mut folds = Vec::with_capacity(frames.len());
     for _ in frames {
-        let fold = Fold::new(a, env.ansi, env.legacy, env.udafs.as_ref())?;
+        let fold = Fold::new(a, env.ansi, env.moments, env.udafs.as_ref())?;
         // An aggregate UDF's state is opaque: each frame's fold charges it.
         folds.push(if super::udaf::is_udf(a) {
             fold.charged(a, consumer, false)
@@ -919,10 +919,10 @@ impl Framed {
                     edges: Edges::open(env, f, file, consumer)?,
                     stream: Stream::open(file, consumer)?,
                     fold: if super::udaf::is_udf(a) {
-                        Fold::new(a, env.ansi, env.legacy, env.udafs.as_ref())?
+                        Fold::new(a, env.ansi, env.moments, env.udafs.as_ref())?
                             .charged(a, consumer, true)
                     } else {
-                        Fold::new(a, env.ansi, env.legacy, env.udafs.as_ref())?
+                        Fold::new(a, env.ansi, env.moments, env.udafs.as_ref())?
                     },
                     folded: 0,
                 }))
