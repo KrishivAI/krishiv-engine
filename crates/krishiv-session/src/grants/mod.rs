@@ -561,7 +561,7 @@ pub enum AccessProvider {
     Roles,
     /// The `grants` provider.
     Grants,
-    /// The `external` provider: a `krishiv.access.v1` policy service (ADR 0049 §3).
+    /// The `external` provider: a `krishiv.access.v1` policy service.
     External,
 }
 
@@ -594,11 +594,11 @@ pub fn access_provider(
     }
 }
 
-/// The providers `config` lists, in order (ADR 0049 §1): one name or a `+`-separated list of
+/// The providers `config` lists, in order: one name or a `+`-separated list of
 /// `roles`, `grants`, `external`, each at most once, combined as an intersection
 /// ([`crate::IntersectionPolicy`]). Unset, `grants` when the server authenticates and the role
 /// matrix alone otherwise (owner answer Q1: kept here, in one place). `catalog` is refused until
-/// its unit lands (P3-T062 G5).
+/// its unit lands.
 ///
 /// # Errors
 /// `KRISHIV_INVALID_CONFIG_VALUE` naming the key for any other value.

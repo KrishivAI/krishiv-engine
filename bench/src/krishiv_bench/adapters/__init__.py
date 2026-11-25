@@ -18,6 +18,14 @@ def make_engine(name: str, **kw) -> Engine:
         from .krishiv_connect import KrishivConnectEngine
 
         return KrishivConnectEngine(**kw)
+    if name == "krishiv-flightsql":
+        from .krishiv_flightsql import KrishivFlightSqlEngine
+
+        return KrishivFlightSqlEngine(**kw)
+    if name == "krishiv-python":
+        from .krishiv_python import KrishivPythonEngine
+
+        return KrishivPythonEngine(**kw)
     if name == "polars-streaming":
         from .polars_engine import PolarsEngine
 
@@ -54,6 +62,8 @@ ENGINES = [
     "spark-connect",
     "krishiv",
     "krishiv-connect",
+    "krishiv-flightsql",
+    "krishiv-python",
     "polars",
     "datafusion",
     "spark-local",

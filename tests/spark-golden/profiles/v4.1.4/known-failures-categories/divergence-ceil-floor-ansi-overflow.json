@@ -1,0 +1,14 @@
+{
+  "adr": "0023",
+  "category": "divergence-ceil-floor-ansi-overflow",
+  "format_version": 1,
+  "kind": "divergence",
+  "rules": [
+    {
+      "file": "^postgreSQL/float8$",
+      "order": 472,
+      "query": "ceil|floor"
+    }
+  ],
+  "summary": "ceil/ceiling/floor of a double outside BIGINT raise ARITHMETIC_OVERFLOW under ANSI, as Spark 4.3.0 does (plan row 4.3-A); Spark 4.2.0 saturated to Long.MAX_VALUE, which this 4.2.0 golden records. The 4.3.0 golden profile expects the error."
+}

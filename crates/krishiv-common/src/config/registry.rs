@@ -67,8 +67,9 @@ pub use lakehouse::{
 };
 pub use optimizer::{
     DERIVED_KEYS_ABOVE, DISCOVER_KEYS, DISCOVER_KEYS_TIMEOUT, EXPERIMENTAL_GROUP_KEY_CODE_FORCE,
-    GROUP_KEY_CODE, LATE_PAYLOAD_JOIN, PAYLOAD_ABOVE_AGGREGATE, PRESERVED_SIDE_SEMI_JOIN,
-    SEMI_ANTI_JOIN_ORDER, SHARE_FILTERED_SCANS, SHARE_REPEATED_SUBTREES, SUBQUERY_AS_WINDOW,
+    GROUP_KEY_CODE, GROUP_KEY_CODE_MULTI_DIMENSION, LATE_PAYLOAD_JOIN, PAYLOAD_ABOVE_AGGREGATE,
+    PRESERVED_SIDE_SEMI_JOIN, SEMI_ANTI_JOIN_ORDER, SHARE_FILTERED_SCANS, SHARE_LITERAL_INSTANCES,
+    SHARE_REPEATED_SUBTREES, SUBQUERY_AS_WINDOW,
 };
 pub use result_cache::{RESULT_CACHE_ENABLED, RESULT_CACHE_MAX_BYTES, RESULT_CACHE_TTL};
 pub use runtime_filter::{
@@ -199,10 +200,12 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &DISCOVER_KEYS,
     &DISCOVER_KEYS_TIMEOUT,
     &GROUP_KEY_CODE,
+    &GROUP_KEY_CODE_MULTI_DIMENSION,
     &DERIVED_KEYS_ABOVE,
     &EXPERIMENTAL_GROUP_KEY_CODE_FORCE,
     &SHARE_REPEATED_SUBTREES,
     &SHARE_FILTERED_SCANS,
+    &SHARE_LITERAL_INSTANCES,
     &SEMI_ANTI_JOIN_ORDER,
     &PRESERVED_SIDE_SEMI_JOIN,
     &SPILL_DIR,
@@ -555,7 +558,9 @@ pub static MEMORY_LIMIT: ConfigEntry = ConfigEntry {
     doc: "Memory available to query execution in this process: the limit of the root memory \
           pool. Operators reserve memory before allocating and spill when the limit is reached. \
           When unset: 80% of the effective memory limit (the tightest cgroup limit, else \
-          physical memory), or 2 GiB where that cannot be determined.",
+          physical memory), or 2 GiB where that cannot be determined. A value above that \
+          effective limit is not honoured (the kernel would kill the process before the engine \
+          spills): the default is used instead, with a warning.",
     scope: Scope::Cluster,
     settable_by: SettableBy::Startup,
     version_added: "0.1.0",
