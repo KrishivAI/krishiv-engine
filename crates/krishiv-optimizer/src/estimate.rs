@@ -36,6 +36,7 @@ use krishiv_types::{DataType, DecimalType};
 use crate::expr::{builtin, conjuncts, output_of, references, strip_alias};
 use crate::limit::limit_value;
 use crate::narrow::{View, apply};
+use crate::share_scan::SHARED_SCAN_PREFIX;
 use crate::stats::{
     AttrStats, DEFAULT_ROWS, RelStats, StatSource, Statistics, cap, cse_definitions, number,
     reads_cse, resolve_cse, to_f64,
@@ -613,6 +614,21 @@ impl<'a> Estimator<'a> {
                 if !self.open.insert(r.source.clone()) {
                     return RelStats::unknown(DEFAULT_ROWS, ids());
                 }
+                // Every reader of a `ShareFilteredScan` definition is a
+                // filter whose predicate implies the definition's: it keeps
+                // what it kept over the scan, so the reference reads as the
+                // scan. Reading it as the definition would count the
+                // disjunction's selectivity twice, and a second optimization
+                // would order the joins above differently. The reference's
+                // own estimate (`EXPLAIN COST`) is then the scan's, above
+                // the rows it buffers. A definition of another shape (none
+                // is built today: the rule's filter, under CSE's
+                // projections) is read as it is.
+                let def = if r.name.starts_with(SHARED_SCAN_PREFIX) {
+                    shared_scan_leaf(&def, &r.source).unwrap_or(def)
+                } else {
+                    def
+                };
                 let est = self.plan(&def);
                 self.open.remove(&r.source);
                 RelStats {
@@ -1210,6 +1226,24 @@ fn range_stats(start: i64, end: i64, step: i64, id: AttrId) -> RelStats {
         cols,
         from_statistics: true,
         unfiltered_rows: 0.0,
+    }
+}
+
+/// The scan under a `ShareFilteredScan` definition (its disjunction, and the
+/// projections common-subexpression elimination put around it), when the
+/// scan outputs the definition's attributes `source`.
+fn shared_scan_leaf(def: &Arc<LogicalPlan>, source: &[AttrId]) -> Option<Arc<LogicalPlan>> {
+    let mut p = def;
+    loop {
+        match &p.node {
+            PlanNode::Filter { input, .. } | PlanNode::Project { input, .. } => p = input,
+            PlanNode::Scan(s) => {
+                let same = s.output.len() == source.len()
+                    && s.output.iter().zip(source).all(|(c, id)| c.id == *id);
+                return same.then(|| Arc::clone(p));
+            }
+            _ => return None,
+        }
     }
 }
 
