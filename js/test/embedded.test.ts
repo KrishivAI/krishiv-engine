@@ -25,7 +25,9 @@ const nativeError = (
  * A fake addon: each query answers `ipc` in chunks of 7 bytes with its 8-byte end-of-stream marker as a chunk of its
  * own (as the addon sends it), or fails with `fail`.
  */
-function fake(opts: { ipc?: Uint8Array; fail?: Error; hang?: boolean; closeFails?: Error } = {}) {
+function fake(
+  opts: { ipc?: Uint8Array; fail?: Error; hang?: boolean; closeFails?: Error; cancelFails?: Error } = {},
+) {
   const log = { sql: [] as string[], cancels: 0, closes: 0, conf: new Map<string, string>() };
   const addon: NativeAddon = {
     version: () => "0.0.0-test",
@@ -56,6 +58,7 @@ function fake(opts: { ipc?: Uint8Array; fail?: Error; hang?: boolean; closeFails
               cancel() {
                 cancelled = true;
                 log.cancels++;
+                if (opts.cancelFails) throw opts.cancelFails;
               },
             };
           },
@@ -143,6 +146,22 @@ describe("embedded backend (fake addon)", () => {
     const s = await b.execute("SELECT 1");
     for await (const _ of s.batches()) break;
     expect(log.cancels).toBe(1);
+  });
+
+  it("a failing cancel is swallowed when stopping early or aborting", async () => {
+    const half = (from: number) => tableFromArrays({ id: Int32Array.from({ length: 5 }, (_, i) => from + i) });
+    const big = tableToIPC(half(0).concat(half(5)), "stream");
+    const { addon, log } = fake({ ipc: big, hang: true, cancelFails: new Error("already gone") });
+    const b = await embeddedBackend({}, addon);
+    const s = await b.execute("SELECT 1");
+    for await (const _ of s.batches()) break;
+    expect(log.cancels).toBe(1);
+    const ac = new AbortController();
+    const t = await b.execute("SELECT 2", { signal: ac.signal });
+    ac.abort();
+    const e = await collectTable(t).catch((x: unknown) => x);
+    expect((e as KrishivError).errorClass).toBe("OPERATION_CANCELED");
+    expect(log.cancels).toBeGreaterThanOrEqual(2);
   });
 
   it("batches can be read once", async () => {

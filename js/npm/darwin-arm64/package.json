@@ -1,0 +1,28 @@
+{
+  "name": "@krishiv/engine-darwin-arm64",
+  "version": "0.0.0",
+  "description": "The embedded Krishiv engine for the npm package krishiv: macOS arm64 (11.0 or newer). Install krishiv, not this package.",
+  "license": "Apache-2.0",
+  "os": [
+    "darwin"
+  ],
+  "cpu": [
+    "arm64"
+  ],
+  "main": "krishiv.node",
+  "files": [
+    "krishiv.node"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/KrishivAI/krishiv-engine.git",
+    "directory": "js/npm/darwin-arm64"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
+}

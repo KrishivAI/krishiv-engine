@@ -1,0 +1,31 @@
+{
+  "name": "@krishiv/engine-linux-x64-musl",
+  "version": "0.0.0",
+  "description": "The embedded Krishiv engine for the npm package krishiv: Linux x64 (musl 1.2, e.g. Alpine). Install krishiv, not this package.",
+  "license": "Apache-2.0",
+  "os": [
+    "linux"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "libc": [
+    "musl"
+  ],
+  "main": "krishiv.node",
+  "files": [
+    "krishiv.node"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/KrishivAI/krishiv-engine.git",
+    "directory": "js/npm/linux-x64-musl"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
+}

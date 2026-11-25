@@ -1,0 +1,296 @@
+name: Publish JS (dry run)
+
+# The npm packages of `krishiv` (design/node-engine-napi.md, design/engine-js-ts.md): `krishiv` itself (TypeScript,
+# remote + embedded mode) and one `@krishiv/engine-<platform>` package per addon binary (js/npm/<platform>), which
+# `krishiv` names as optionalDependencies so npm installs only the one that matches the machine. The packages are
+# built, packed and tested from the packed tarballs in a scratch project (Node 22 and 24 on every target; Bun and
+# Deno on Linux x64 glibc). NOTHING IS PUBLISHED: publishing to npm is the owner's step (a hard stop; the first
+# publish of each package is manual, then a trusted-publisher entry per package names this workflow).
+#
+# Targets: linux-x64-gnu and linux-arm64-gnu built in the PyPA manylinux_2_28 images (glibc 2.28 floor, as the
+# Python wheels), linux-x64-musl in musllinux_1_2, darwin-arm64 on macos-15 (11.0+). Windows follows #1002.
+#
+# Runs by hand, when called (`workflow_call`), and on pull requests that change the packaging itself (this file,
+# the platform manifests, the pack script, the build script or the smoke test); the engine and js/src are covered
+# by ci.yml's `js` job, which needs no LTO build.
+on:
+  workflow_call:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/publish-js.yml
+      - .github/scripts/node-addon-build.sh
+      - js/npm/**
+      - js/scripts/**
+      - js/smoke/**
+      - .github/scripts/node-smoke.sh
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-js-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  KRISHIV_GIT_SHA: ${{ github.sha }}
+
+jobs:
+  # `krishiv` itself: build the TypeScript, then pack it with the platform packages as optionalDependencies.
+  main:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+      - name: Build and pack krishiv
+        working-directory: js
+        run: |
+          npm ci
+          npm run build
+          node scripts/npm-packages.mjs main ../npm-out
+      - name: The tarball names every platform package at its own version
+        run: |
+          tar -xzf npm-out/krishiv-*.tgz -O package/package.json > "$RUNNER_TEMP/pkg.json"
+          node -e '
+            const p = require(process.argv[1]);
+            const want = require("fs").readdirSync("js/npm").map((d) => `@krishiv/engine-${d}`).sort();
+            const got = Object.keys(p.optionalDependencies).filter((n) => n.startsWith("@krishiv/engine-")).sort();
+            if (JSON.stringify(got) !== JSON.stringify(want)) throw new Error(`optionalDependencies ${got} != ${want}`);
+            for (const n of got) if (p.optionalDependencies[n] !== p.version) throw new Error(`${n} is not ${p.version}`);
+          ' "$RUNNER_TEMP/pkg.json"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: npm-main
+          path: npm-out/*.tgz
+          if-no-files-found: error
+
+  # One addon per platform, packed as `@krishiv/engine-<platform>`. One job per runner: workflow-lint bans
+  # expression runner labels.
+  addon-linux-x64:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x64-gnu
+            image: quay.io/pypa/manylinux_2_28_x86_64:2026.10.03-1@sha256:39df0042d5cc900b085aa25a0659368b42a0006c54c474299b785b44c1b4ff82
+          - platform: linux-x64-musl
+            image: quay.io/pypa/musllinux_1_2_x86_64:2026.10.03-1@sha256:ff786af69d772d7ac3e318c00a2b682428a352cc822d6175f6a0d4b431c0d44d
+    name: addon (${{ matrix.platform }})
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build (in the PyPA image)
+        env:
+          IMAGE: ${{ matrix.image }}
+        run: |
+          docker run --rm -e KRISHIV_GIT_SHA -e CARGO_TERM_COLOR -e CARGO_INCREMENTAL -v "$PWD:/w" -w /w "$IMAGE" \
+            bash .github/scripts/node-addon-build.sh addon-out "$(id -u):$(id -g)"
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+      - name: Pack
+        env:
+          PLATFORM: ${{ matrix.platform }}
+        run: node js/scripts/npm-packages.mjs platform "$PLATFORM" addon-out/krishiv.node npm-out
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: npm-${{ matrix.platform }}
+          path: npm-out/*.tgz
+          if-no-files-found: error
+
+  addon-linux-arm64-gnu:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
+    name: addon (linux-arm64-gnu)
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build (in the PyPA image)
+        env:
+          IMAGE: quay.io/pypa/manylinux_2_28_aarch64:2026.10.03-1 # tag only until Renovate pins the digest (same release as x86_64)
+        run: |
+          docker run --rm -e KRISHIV_GIT_SHA -e CARGO_TERM_COLOR -e CARGO_INCREMENTAL -v "$PWD:/w" -w /w "$IMAGE" \
+            bash .github/scripts/node-addon-build.sh addon-out "$(id -u):$(id -g)"
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+      - name: Pack
+        env:
+          PLATFORM: linux-arm64-gnu
+        run: node js/scripts/npm-packages.mjs platform "$PLATFORM" addon-out/krishiv.node npm-out
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: npm-linux-arm64-gnu
+          path: npm-out/*.tgz
+          if-no-files-found: error
+
+  addon-darwin-arm64:
+    runs-on: macos-15
+    timeout-minutes: 90
+    name: addon (darwin-arm64)
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build (on the runner)
+        run: bash .github/scripts/node-addon-build.sh addon-out
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+      - name: Pack
+        env:
+          PLATFORM: darwin-arm64
+        run: node js/scripts/npm-packages.mjs platform "$PLATFORM" addon-out/krishiv.node npm-out
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: npm-darwin-arm64
+          path: npm-out/*.tgz
+          if-no-files-found: error
+
+  # The packed tarballs installed in a scratch project, as a user gets them (.github/scripts/node-smoke.sh).
+  smoke-linux-x64-gnu:
+    needs: [main, addon-linux-x64]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - node: "22"
+            runtimes: node bun deno
+          - node: "24"
+            runtimes: node
+    name: smoke (linux-x64-gnu, node ${{ matrix.node }})
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: npm-main
+          path: npm-in
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: npm-linux-x64-gnu
+          path: npm-in
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "${{ matrix.node }}"
+      - name: Smoke (${{ matrix.runtimes }})
+        env:
+          RUNTIMES: ${{ matrix.runtimes }}
+        run: bash .github/scripts/node-smoke.sh npm-in $RUNTIMES
+
+  smoke-linux-x64-musl:
+    needs: [main, addon-linux-x64]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    name: smoke (linux-x64-musl, node 22)
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: npm-main
+          path: npm-in
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: npm-linux-x64-musl
+          path: npm-in
+      # Alpine: node, npm and musl. Tag only until Renovate pins the digest.
+      - name: Smoke (in node:22-alpine)
+        run: |
+          docker run --rm -v "$PWD:/w:ro" node:22-alpine sh -euc '
+            apk add --no-cache bash >/dev/null
+            bash /w/.github/scripts/node-smoke.sh /w/npm-in node
+          '
+
+  smoke-linux-arm64-gnu:
+    needs: [main, addon-linux-arm64-gnu]
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 20
+    name: smoke (linux-arm64-gnu, node 22)
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: npm-main
+          path: npm-in
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: npm-linux-arm64-gnu
+          path: npm-in
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+      - name: Smoke
+        run: bash .github/scripts/node-smoke.sh npm-in node
+
+  smoke-darwin-arm64:
+    needs: [main, addon-darwin-arm64]
+    runs-on: macos-15
+    timeout-minutes: 20
+    name: smoke (darwin-arm64, node 22)
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: npm-main
+          path: npm-in
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: npm-darwin-arm64
+          path: npm-in
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+      - name: Smoke
+        run: bash .github/scripts/node-smoke.sh npm-in node

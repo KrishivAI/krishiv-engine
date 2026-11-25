@@ -39,7 +39,8 @@ function isGlibc(): boolean {
   if (process.platform !== "linux") return false;
   // Node's diagnostic report names the glibc it runs on; on musl the field is absent. Without network data:
   // collecting it resolves interface names, which is slow on some hosts (napi-rs's own loader does the same).
-  const report = process.report;
+  // `excludeNetwork` is in Node 22's report API (v22.13) but not in @types/node 22's declaration of it.
+  const report = process.report as (NodeJS.ProcessReport & { excludeNetwork?: boolean }) | undefined;
   if (report === undefined) return true;
   const before = report.excludeNetwork;
   report.excludeNetwork = true;
@@ -157,16 +158,17 @@ function native<T>(f: () => T): T {
  */
 async function* chunks(query: NativeQuery, signal?: AbortSignal): AsyncGenerator<Uint8Array> {
   // Runs in an event listener, where a throw (only a panic in the addon) would be uncaught.
-  const onAbort = () => {
+  // A failing cancel is swallowed: the query ends on its next step anyway.
+  const cancelQuietly = () => {
     try {
       query.cancel();
     } catch {
-      // The query ends on its next step anyway.
+      // ignored, see above
     }
   };
-  signal?.addEventListener("abort", onAbort, { once: true });
+  signal?.addEventListener("abort", cancelQuietly, { once: true });
   // An abort between `execute` and here fired no event.
-  if (signal?.aborted) query.cancel();
+  if (signal?.aborted) cancelQuietly();
   let done = false;
   try {
     for (;;) {
@@ -190,8 +192,8 @@ async function* chunks(query: NativeQuery, signal?: AbortSignal): AsyncGenerator
       yield c;
     }
   } finally {
-    signal?.removeEventListener("abort", onAbort);
-    if (!done) query.cancel();
+    signal?.removeEventListener("abort", cancelQuietly);
+    if (!done) cancelQuietly();
   }
 }
 
@@ -208,7 +210,8 @@ export class EmbeddedBackend implements Backend {
     if (opts.signal?.aborted) throw cancelled(opts.signal);
     const query = native(() => this.session.execute(sql));
     // Reading the schema starts the query, so analysis errors reject here, as in remote mode.
-    const reader = await RecordBatchReader.from(chunks(query, opts.signal));
+    const source = chunks(query, opts.signal);
+    const reader = await RecordBatchReader.from(source);
     await reader.open();
     let used = false;
     return {
@@ -216,7 +219,15 @@ export class EmbeddedBackend implements Backend {
       async *batches(): AsyncIterable<RecordBatch> {
         if (used) throw new KrishivError("a result's batches can be read once");
         used = true;
-        for await (const b of reader) yield b;
+        let ended = false;
+        try {
+          for await (const b of reader) yield b;
+          ended = true;
+        } finally {
+          // Arrow's reader does not pass a `break` on to its source: closing the generator here runs its `finally`,
+          // which cancels a query not read to the end (closing it again after the end is a no-op).
+          if (!ended) await source.return(undefined);
+        }
       },
     };
   }
