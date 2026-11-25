@@ -6,6 +6,7 @@
 
 use arrow_array::{Array, Decimal128Array, Int32Array, Int64Array, TimestampMicrosecondArray};
 use krishiv_common::error::ErrorClass;
+use krishiv_kernels::SparkVersion;
 use krishiv_kernels::cast::FixedOffset;
 use krishiv_kernels::datetime::{
     TimestampFields, TimestampUnit, Zones, make_timestamp, resolve_zone, timestamp_add,
@@ -170,7 +171,7 @@ fn make_timestamp_validates_in_javas_order_and_nulls_win() {
         seconds: &s,
     };
     let utc = FixedOffset(0);
-    let out = make_timestamp(fields, Some(&Zones::One(&utc)), true).unwrap();
+    let out = make_timestamp(fields, Some(&Zones::One(&utc)), true, SparkVersion::V4_2).unwrap();
     assert_eq!(out.value(0), 1_625_985_045_678_000);
     assert!(out.is_null(1) && out.is_null(2));
     assert_eq!(out.value(3), 1_625_985_060_000_000);
@@ -198,35 +199,41 @@ fn make_timestamp_rejects_bad_shapes_and_overflow() {
     let s = seconds(&[Some(0)]);
     let fields = |years, secs| fields_of(years, &one, secs);
     let uneven = ints(&[Some(1), Some(2)]);
-    let err = make_timestamp(fields(&uneven, &s), None, true).unwrap_err();
+    let err = make_timestamp(fields(&uneven, &s), None, true, SparkVersion::V4_2).unwrap_err();
     assert_eq!(err.error_class(), ErrorClass::InternalError);
     let coarse = Decimal128Array::from(vec![Some(1_i128)])
         .with_precision_and_scale(10, 0)
         .unwrap();
-    let err = make_timestamp(fields(&y, &coarse), None, true).unwrap_err();
+    let err = make_timestamp(fields(&y, &coarse), None, true, SparkVersion::V4_2).unwrap_err();
     assert_eq!(err.error_class(), ErrorClass::InternalError);
     // Negative and fractional seconds are out of bounds; the year past the
     // microsecond range overflows rather than wrapping.
     let neg = seconds(&[Some(-1_500_000)]);
-    let err = make_timestamp(fields(&y, &neg), None, true).unwrap_err();
+    let err = make_timestamp(fields(&y, &neg), None, true, SparkVersion::V4_2).unwrap_err();
     assert!(
         err.error()
             .to_string()
             .contains("SecondOfMinute (valid values 0 - 59): -2")
     );
     assert!(
-        make_timestamp(fields(&y, &neg), None, false)
+        make_timestamp(fields(&y, &neg), None, false, SparkVersion::V4_2)
             .unwrap()
             .is_null(0)
     );
     let far = ints(&[Some(999_999_999)]);
-    let err = make_timestamp(fields(&far, &s), None, true).unwrap_err();
+    let err = make_timestamp(fields(&far, &s), None, true, SparkVersion::V4_2).unwrap_err();
     assert_eq!(err.error_class(), ErrorClass::DatetimeOverflow);
     // ... in both modes: Spark's bare `ArithmeticException` is not caught.
-    let err = make_timestamp(fields(&far, &s), None, false).unwrap_err();
+    let err = make_timestamp(fields(&far, &s), None, false, SparkVersion::V4_2).unwrap_err();
     assert_eq!(err.error_class(), ErrorClass::DatetimeOverflow);
     // A per-row NULL zone is a NULL result.
     let zones = [None];
-    let out = make_timestamp(fields(&y, &s), Some(&Zones::PerRow(&zones)), true).unwrap();
+    let out = make_timestamp(
+        fields(&y, &s),
+        Some(&Zones::PerRow(&zones)),
+        true,
+        SparkVersion::V4_2,
+    )
+    .unwrap();
     assert!(out.is_null(0));
 }

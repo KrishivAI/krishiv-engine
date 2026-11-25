@@ -646,10 +646,34 @@ fn months_between_nulls_and_edges() {
 }
 
 fn make(y: i32, m: i32, d: i32, ansi: bool) -> Result<Option<i32>, (ErrorClass, String)> {
+    make_in(y, m, d, ansi, SparkVersion::V4_2)
+}
+
+fn make_in(
+    y: i32,
+    m: i32,
+    d: i32,
+    ansi: bool,
+    version: SparkVersion,
+) -> Result<Option<i32>, (ErrorClass, String)> {
     let one = |v: i32| Int32Array::from(vec![v]);
-    make_date(&one(y), &one(m), &one(d), ansi, &KernelCtx::new())
-        .map(|a| (!a.is_null(0)).then(|| a.value(0)))
-        .map_err(|e| (e.error_class(), e.to_string()))
+    make_date(
+        &one(y),
+        &one(m),
+        &one(d),
+        ansi,
+        &KernelCtx::new().with_spark_version(version),
+    )
+    .map(|a| (!a.is_null(0)).then(|| a.value(0)))
+    .map_err(|e| (e.error_class(), e.to_string()))
+}
+
+#[test]
+fn make_date_names_no_ansi_switch_from_spark_4_3() {
+    let (class, text) = make_in(2000, 13, 1, true, SparkVersion::V4_3).unwrap_err();
+    assert_eq!(class, ErrorClass::DatetimeFieldOutOfBoundsWithoutSuggestion);
+    assert!(text.contains("Invalid value for MonthOfYear (valid values 1 - 12): 13"));
+    assert!(!text.contains("spark.sql.ansi.enabled"), "{text}");
 }
 
 #[test]

@@ -207,6 +207,14 @@ fn check(tally: &mut Tally, s: &Session, case: &Value, mode: &str) {
                 .map(|(k, v)| ((*k).to_owned(), v.clone()))
                 .collect();
             let mut params = params.clone();
+            // The matrix is a Spark 4.2.0 run; 4.3 (the session's default) dropped the suggestion
+            // sub-class and its `ansiConfig`.
+            let class = &if class == "DATETIME_FIELD_OUT_OF_BOUNDS.WITH_SUGGESTION" {
+                params.remove("ansiConfig");
+                "DATETIME_FIELD_OUT_OF_BOUNDS.WITHOUT_SUGGESTION".to_owned()
+            } else {
+                class.clone()
+            };
             // The registry's `CAST_INVALID_INPUT` has no `ansiConfig`.
             if class == "CAST_INVALID_INPUT" {
                 params.remove("ansiConfig");
@@ -392,8 +400,6 @@ fn register(s: &Session, name: &str, field: Field, values: ArrayRef) {
     s.register_batches(name, schema, vec![batch]).unwrap();
 }
 
-const ANSI_CONF: &str = "\"spark.sql.ansi.enabled\"";
-
 #[test]
 fn make_date_goldens() {
     let s = session(true);
@@ -417,12 +423,9 @@ fn make_date_goldens() {
         let e = failure(&s, expr);
         assert_eq!(
             e.error_class(),
-            ErrorClass::DatetimeFieldOutOfBoundsWithSuggestion
+            ErrorClass::DatetimeFieldOutOfBoundsWithoutSuggestion
         );
-        assert_eq!(
-            params(&e),
-            map(&[("ansiConfig", ANSI_CONF), ("rangeMessage", range)])
-        );
+        assert_eq!(params(&e), map(&[("rangeMessage", range)]));
     }
     // datetime-special.sql
     let special = ["make_date(999999, 3, 18)", "make_date(-1, 1, 28)"];
@@ -648,7 +651,7 @@ fn calendar_functions_in_queries_over_columns() {
         .unwrap_err();
     assert_eq!(
         e.error_class(),
-        ErrorClass::DatetimeFieldOutOfBoundsWithSuggestion,
+        ErrorClass::DatetimeFieldOutOfBoundsWithoutSuggestion,
         "{e}"
     );
 }

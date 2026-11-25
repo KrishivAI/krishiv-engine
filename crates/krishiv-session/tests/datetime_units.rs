@@ -257,32 +257,32 @@ fn make_timestamp_errors_are_sparks_and_try_gives_null() {
     for (expr, class, text) in [
         (
             "make_timestamp(2021, 13, 11, 6, 30, 45.678)",
-            ErrorClass::DatetimeFieldOutOfBoundsWithSuggestion,
+            ErrorClass::DatetimeFieldOutOfBoundsWithoutSuggestion,
             "Invalid value for MonthOfYear (valid values 1 - 12): 13",
         ),
         (
             "make_timestamp(2021, 2, 30, 6, 30, 45.678)",
-            ErrorClass::DatetimeFieldOutOfBoundsWithSuggestion,
+            ErrorClass::DatetimeFieldOutOfBoundsWithoutSuggestion,
             "Invalid date 'FEBRUARY 30'",
         ),
         (
             "make_timestamp(2021, 7, 11, 25, 30, 45)",
-            ErrorClass::DatetimeFieldOutOfBoundsWithSuggestion,
+            ErrorClass::DatetimeFieldOutOfBoundsWithoutSuggestion,
             "Invalid value for HourOfDay (valid values 0 - 23): 25",
         ),
         (
             "make_timestamp(2021, 7, 11, 6, 61, 45)",
-            ErrorClass::DatetimeFieldOutOfBoundsWithSuggestion,
+            ErrorClass::DatetimeFieldOutOfBoundsWithoutSuggestion,
             "Invalid value for MinuteOfHour (valid values 0 - 59): 61",
         ),
         (
             "make_timestamp(1, 1, 1, 1, 1, 61)",
-            ErrorClass::DatetimeFieldOutOfBoundsWithSuggestion,
+            ErrorClass::DatetimeFieldOutOfBoundsWithoutSuggestion,
             "Invalid value for SecondOfMinute (valid values 0 - 59): 61",
         ),
         (
             "make_timestamp(1, 1, 1, 1, 1, 99.999999)",
-            ErrorClass::DatetimeFieldOutOfBoundsWithSuggestion,
+            ErrorClass::DatetimeFieldOutOfBoundsWithoutSuggestion,
             "Invalid value for SecondOfMinute (valid values 0 - 59): 99",
         ),
         (

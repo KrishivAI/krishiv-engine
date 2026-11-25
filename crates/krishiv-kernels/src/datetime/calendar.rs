@@ -492,7 +492,7 @@ const MONTH_LONG_NAMES: [&str; 12] = [
 ];
 
 /// `make_date(year, month, day)`. A field out of range, or a day the month
-/// does not have, is `DATETIME_FIELD_OUT_OF_BOUNDS.WITH_SUGGESTION` with
+/// does not have, is `DATETIME_FIELD_OUT_OF_BOUNDS` (`.WITH_SUGGESTION` before Spark 4.3, `.WITHOUT_SUGGESTION` since) with
 /// `fail_on_error` (ANSI) and NULL without. A year whose dates leave the
 /// `DATE` range (about 5.88 million) is `ARITHMETIC_OVERFLOW` in both modes:
 /// Spark raises an `ArithmeticException` there that its handler of
@@ -520,7 +520,11 @@ pub fn make_date(
         let (y, m, d) = (years.value(i), months.value(i), days.value(i));
         if let Some(message) = invalid_date(y, m, d) {
             if fail_on_error {
-                return Err(KernelError::datetime_field_out_of_bounds(i, message));
+                return Err(KernelError::datetime_field_out_of_bounds(
+                    i,
+                    message,
+                    ctx.spark_version(),
+                ));
             }
             values.push(0);
             valid.push(false);

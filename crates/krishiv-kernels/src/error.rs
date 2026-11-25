@@ -13,7 +13,7 @@
 //! | ANSI cast to a narrower integral type | `CAST_OVERFLOW` |
 //! | ANSI string to decimal with over 38 integral digits | `NUMERIC_OUT_OF_SUPPORTED_RANGE` |
 //! | a date or timestamp outside the microsecond range | `DATETIME_OVERFLOW` |
-//! | `make_date` with a field out of range (ANSI) | `DATETIME_FIELD_OUT_OF_BOUNDS.WITH_SUGGESTION` |
+//! | `make_date` with a field out of range (ANSI) | `DATETIME_FIELD_OUT_OF_BOUNDS.WITH_SUGGESTION` (4.3: `.WITHOUT_SUGGESTION`) |
 //! | `next_day` with an unknown weekday name (ANSI) | `ILLEGAL_DAY_OF_WEEK` |
 //! | a `LIKE` pattern ending in its escape, or escaping a character that cannot be escaped | `INVALID_FORMAT.ESC_AT_THE_END`, `INVALID_FORMAT.ESC_IN_THE_MIDDLE` |
 //! | ANSI `BINARY` -> `STRING` of bytes that are not UTF-8 | `INVALID_UTF8_STRING` |
@@ -325,16 +325,29 @@ impl KernelError {
         }
     }
 
-    /// `DATETIME_FIELD_OUT_OF_BOUNDS.WITH_SUGGESTION`: `message` is the text
-    /// of the `DateTimeException` Spark's `java.time` call raised.
-    pub(crate) fn datetime_field_out_of_bounds(row: usize, message: String) -> Self {
-        Self {
-            row: Some(row),
-            error: DatetimeFieldOutOfBoundsWithSuggestion {
+    /// `DATETIME_FIELD_OUT_OF_BOUNDS`: `message` is the text of the `DateTimeException` Spark's
+    /// `java.time` call raised. Spark 4.3 dropped the `.WITH_SUGGESTION` sub-class (no ANSI switch
+    /// is named); 4.0 to 4.2 raise it.
+    pub(crate) fn datetime_field_out_of_bounds(
+        row: usize,
+        message: String,
+        version: crate::version::SparkVersion,
+    ) -> Self {
+        let error = if version >= crate::version::SparkVersion::V4_3 {
+            DatetimeFieldOutOfBoundsWithoutSuggestion {
+                range_message: message,
+            }
+            .into()
+        } else {
+            DatetimeFieldOutOfBoundsWithSuggestion {
                 ansi_config: ANSI_CONF.to_owned(),
                 range_message: message,
             }
-            .into(),
+            .into()
+        };
+        Self {
+            row: Some(row),
+            error,
         }
     }
 
