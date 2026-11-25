@@ -49,7 +49,10 @@ def checksum(table: pa.Table) -> dict[str, Any]:
         elif pt.is_integer(t) or pt.is_decimal(t):
             exprs.append(f"CAST(sum({c}) AS VARCHAR)")
             kinds.append("exact")
-            row_cols.append(f"c{i} := {c}")
+            # DuckDB hashes a decimal by its storage width (decimal(17,2) as BIGINT, decimal(27,2) as HUGEINT), so the
+            # row hash takes every decimal at the widest precision: engines that type the same values with another
+            # precision (DataFusion's q16/q94/q95 batches) give the same row hash. The scale still counts, as in sum.
+            row_cols.append(f"c{i} := CAST({c} AS DECIMAL(38, {t.scale}))" if pt.is_decimal128(t) else f"c{i} := {c}")
         else:
             exprs.append(f"CAST(sum(CAST(hash({c}) AS HUGEINT)) AS VARCHAR)")
             kinds.append("exact")
