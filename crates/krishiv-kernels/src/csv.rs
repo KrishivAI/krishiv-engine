@@ -27,9 +27,6 @@ use crate::text::{
     java_parse_double, java_parse_float, java_parse_integral,
 };
 
-/// Microseconds in a day.
-const MICROS_PER_DAY: i64 = 86_400_000_000;
-
 // ---------------------------------------------------------------------------
 // Syntax and tokenizer (shared with the CSV file format).
 // ---------------------------------------------------------------------------
@@ -872,6 +869,8 @@ pub struct Converter<'a> {
     pub time: Option<&'a DateTimePattern>,
     /// Whether to fall back to the lenient grammar.
     pub fallback: bool,
+    /// Spark 4.2 reads six fraction digits of a `TIME`; 4.3 (`false`) keeps nine.
+    pub time_micros_only: bool,
 }
 
 impl Converter<'_> {
@@ -944,17 +943,24 @@ impl Converter<'_> {
                 }
             }
             FieldKind::Time => {
+                let lenient = |s: &str| {
+                    if self.time_micros_only {
+                        crate::cast::time::parse_time(s)
+                    } else {
+                        crate::cast::time::parse_time_nanos(s)
+                    }
+                };
                 let parsed = match self.time {
                     Some(p) => p
-                        .parse_local(s, false)
+                        .parse_time_of_day_nanos(s)
                         .map_err(|e| ConvError::Fatal(KernelError::with_row(None, e)))?
-                        .map(|m| m.rem_euclid(MICROS_PER_DAY).wrapping_mul(1_000)),
-                    None => crate::cast::time::parse_time(s),
+                        .map(|n| crate::cast::time::cut_to_micros(n, self.time_micros_only)),
+                    None => lenient(s),
                 };
                 match parsed {
                     Some(n) => Val::I64(n),
                     None if self.fallback && self.time.is_some() => {
-                        Val::I64(crate::cast::time::parse_time(s).ok_or_else(bad)?)
+                        Val::I64(lenient(s).ok_or_else(bad)?)
                     }
                     None => return Err(bad()),
                 }
@@ -1283,6 +1289,8 @@ pub struct FromCsvOptions {
     pub ntz_pattern: Option<DateTimePattern>,
     /// Fall back to the lenient grammar when the pattern fails.
     pub fallback: bool,
+    /// Spark 4.2 reads six fraction digits of a `TIME`; 4.3 (`false`) keeps nine.
+    pub time_micros_only: bool,
 }
 
 /// A parsed row as Spark prints a failed record: `[1,null,abc]`.
@@ -1347,6 +1355,7 @@ pub fn from_csv(
         date: o.date_pattern.as_ref(),
         time: o.time_pattern.as_ref(),
         fallback: o.fallback,
+        time_micros_only: o.time_micros_only,
     };
     let mut cols: Vec<Column> = fields
         .iter()

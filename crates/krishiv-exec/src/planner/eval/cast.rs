@@ -186,13 +186,21 @@ pub(super) struct CastParts {
     /// day cast to `TIMESTAMP` takes its date from.
     pub(super) query_start: i64,
     /// Where the `time(p)` targets are: a time cast to `time(p)` drops the
-    /// digits below `p` (a string cast keeps them, as Spark does:
+    /// digits below `p` (a string cast keeps six, as Spark 4.2 does:
     /// `time_to_micros(cast('09:08:01.987654' as time(1)))` is
     /// 32881987654). Arrow's
     /// `Time64` does not carry `p`, so a nested target's precisions travel
     /// here.
     pub(super) precision: Precision,
+    /// Whether a cast to `time(p)` from a non-time source cuts to `p` digits (Spark 4.3 on); before
+    /// 4.3 it keeps six whatever `p`. Today the only non-time source of a `Time64` target is a
+    /// string: a later source (a timestamp-to-time cast) must be checked against Spark 4.2 too.
+    pub(super) strings_cut_to_p: bool,
 }
+
+/// Nanoseconds per microsecond: the `TIME(6)` unit a Spark 4.2 string cast
+/// keeps.
+const MICROS_UNIT: i64 = 1_000;
 
 /// The `time(p)` precisions of a cast target, in the shape of the type.
 #[derive(Debug, Clone, Default)]
@@ -230,12 +238,12 @@ impl Precision {
         if p.is_empty() { Self::None } else { p }
     }
 
-    /// Whether no `time(p)` target needs truncating (none, or only `time(6)` and wider: a time is whole
-    /// microseconds already).
+    /// Whether no `time(p)` target needs truncating (none, or only `time(9)`: since Spark 4.3 a time may
+    /// hold nanoseconds, so `time(6)` truncates too).
     pub(super) fn is_empty(&self) -> bool {
         match self {
             Self::None => true,
-            Self::Time(unit) => *unit <= 1_000,
+            Self::Time(unit) => *unit <= 1,
             Self::List(e) => e.is_empty(),
             Self::Map(k, v) => k.is_empty() && v.is_empty(),
             Self::Struct(f) => f.iter().all(Self::is_empty),
@@ -305,6 +313,7 @@ pub(super) fn parts(
         zone,
         query_start: env.query_start_micros,
         precision: Precision::None,
+        strings_cut_to_p: env.kernels.spark_version() >= krishiv_kernels::SparkVersion::V4_3,
     })
 }
 
@@ -324,6 +333,7 @@ impl CastParts {
             zone: self.zone.clone(),
             query_start: self.query_start,
             precision,
+            strings_cut_to_p: self.strings_cut_to_p,
         }
     }
 }
@@ -377,10 +387,18 @@ pub(super) fn apply(p: &CastParts, a: &ArrayRef) -> Result<ArrayRef> {
         time_zone: &zone,
     };
     let out = cast(input.as_ref(), &p.kernel_to, &opts)?;
+    // A `time(q)` cast to `time(p)` keeps `p` digits, and so does a string
+    // cast from Spark 4.3 on (explicit, implicit or nested alike). Spark 4.2's
+    // string cast keeps six digits whatever `p`: `cast('12:00:00.123456789'
+    // as time(1))` is `12:00:00.123456`. The kernel reads nine.
     let out = match (input.data_type(), out.data_type()) {
-        (ArrowType::Time64(_), ArrowType::Time64(_)) if p.precision.unit() > 1 => {
+        (from, ArrowType::Time64(_)) if p.precision.unit() > 1 => {
             use arrow_array::types::Time64NanosecondType;
-            let unit = p.precision.unit();
+            let unit = if p.strings_cut_to_p || matches!(from, ArrowType::Time64(_)) {
+                p.precision.unit()
+            } else {
+                MICROS_UNIT
+            };
             Arc::new(
                 out.as_primitive::<Time64NanosecondType>()
                     .unary::<_, Time64NanosecondType>(|v| v - v % unit),

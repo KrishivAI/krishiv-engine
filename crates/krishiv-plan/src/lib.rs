@@ -148,6 +148,7 @@ mod plan;
 pub mod procedure;
 mod python;
 mod raises;
+mod select_generators;
 pub(crate) mod spark_fmt;
 #[cfg(test)]
 mod tests;
@@ -178,6 +179,7 @@ pub use literal::{DayTimeField, Literal, YearMonthField};
 pub use local::LocalRelation;
 pub use origin::{Origin, PlanId, SourceId, Span};
 pub use partial::partial_state_columns;
+pub use select_generators::{select_with_generators, with_column_generator};
 /// The call lowering gives a generator for `UNNEST(arrays)` in `FROM`; the analyzer expands it
 /// into `inline` over an array of structs (as it does `stack`). Not a function a query can name.
 pub const UNNEST_FUNCTION: &str = "__krishiv_unnest";

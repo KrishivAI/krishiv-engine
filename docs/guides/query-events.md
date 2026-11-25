@@ -4,6 +4,9 @@ description: "Record every query's lifecycle and usage in a JSON-lines file: tur
 
 # Query events
 
+Stability: experimental since 0.3. The event names and the `krishiv.event.v1` envelope stay; fields may be added in a
+minor release.
+
 A server can write one event for each step of every query (submitted, queued, started, finished or cancelled) to a
 file. The final event carries the query's usage: wall time, CPU time, bytes and rows read and written, spill and peak
 memory. Use it to feed a usage report, an audit trail or a dashboard without polling `system.queries`.

@@ -362,8 +362,10 @@ fn resolution_corpus_matches_spark() {
     // since a correlated `EXISTS` in an aggregate's key or `FILTER`; 11 since
     // a scalar subquery over no relation reads the outer query's columns; 9
     // since grouped scalar subqueries run as Spark's single join, P2b row 20;
-    // 8 since a correlated subquery's own `WITH` is inlined, P2-T115).
-    assert_eq!(gaps, 8, "statements in documented gaps");
+    // 8 since a correlated subquery's own `WITH` is inlined, P2-T115; 7
+    // since `v IN` over a projection of a correlated global aggregate, such as
+    // the cast the comparison adds, takes the scalar rewrite, #981).
+    assert_eq!(gaps, 7, "statements in documented gaps");
     assert_eq!(by_design, NULLABLE_BY_DESIGN.len());
     // Classes of lateral aliases, ordinals and type coercion, each matched
     // against Spark above.
