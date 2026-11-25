@@ -6,10 +6,14 @@
 use arrow_array::Array;
 use arrow_array::cast::AsArray;
 use futures::executor::block_on;
+use krishiv_plan::analyzer::SparkProfile;
 use krishiv_session::Session;
 
 fn text(sql: &str) -> String {
-    let s = Session::new().unwrap();
+    let s = Session::builder()
+        .profile(SparkProfile::V4_2)
+        .build()
+        .unwrap();
     block_on(s.sql("SET spark.sql.timeType.enabled = true")).unwrap();
     let df = block_on(s.sql(&format!("SELECT CAST(({sql}) AS STRING)"))).unwrap();
     let b = block_on(df.collect()).unwrap();
@@ -54,7 +58,10 @@ fn a_time_literal_with_a_long_fraction_truncates_to_microseconds() {
 fn listagg_distinct_over_a_time_cast_passes_the_analyzer() {
     let sql = "SELECT listagg(DISTINCT CAST(t AS STRING)) WITHIN GROUP (ORDER BY t) \
                FROM VALUES (TIME '01:00:00'), (TIME '02:00:00') AS v(t)";
-    let s = Session::new().unwrap();
+    let s = Session::builder()
+        .profile(SparkProfile::V4_2)
+        .build()
+        .unwrap();
     block_on(s.sql("SET spark.sql.timeType.enabled = true")).unwrap();
     let df = block_on(s.sql(sql)).unwrap();
     let e = block_on(df.collect()).unwrap_err();
@@ -69,7 +76,10 @@ fn listagg_distinct_over_a_time_cast_passes_the_analyzer() {
 /// map key that may become NULL is refused.
 #[test]
 fn narrowing_time_casts_are_nullable() {
-    let s = Session::new().unwrap();
+    let s = Session::builder()
+        .profile(SparkProfile::V4_2)
+        .build()
+        .unwrap();
     block_on(s.sql("SET spark.sql.timeType.enabled = true")).unwrap();
     block_on(s.sql("SET spark.sql.ansi.enabled = false")).unwrap();
     for (to, nullable) in [

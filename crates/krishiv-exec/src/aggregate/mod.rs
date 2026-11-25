@@ -65,6 +65,7 @@
 
 mod accumulator;
 mod bitmap;
+mod chunks;
 mod collect;
 mod distinct;
 mod histogram;

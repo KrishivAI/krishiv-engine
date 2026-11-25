@@ -26,10 +26,11 @@
 use krishiv_common::error::{
     DecimalPrecisionExceedsMaxPrecision, FailedToParseTooComplex, IncompleteTypeDefinitionArray,
     IncompleteTypeDefinitionMap, IncompleteTypeDefinitionStruct, InternalError, InvalidIdentifier,
-    InvalidIntervalFormatUnsupportedFromToExpression, InvalidJsonDataType, KrishivError,
-    KrishivUnsupportedFeature, LegacyErrorTemp1228, NegativeScaleDisallowed, ParseEmptyStatement,
-    ParseSyntaxError, StInvalidCrsValue, StInvalidSridValue, UnclosedBracketedComment,
-    UnsupportedDatatype, UnsupportedTimePrecision, WkbParseError,
+    InvalidIntervalFormatUnsupportedFromToExpression, InvalidJsonDataType,
+    InvalidTimestampPrecision, KrishivError, KrishivUnsupportedFeature, LegacyErrorTemp1228,
+    NegativeScaleDisallowed, ParseEmptyStatement, ParseSyntaxError, StInvalidCrsValue,
+    StInvalidSridValue, UnclosedBracketedComment, UnsupportedDatatype, UnsupportedTimePrecision,
+    WkbParseError,
 };
 
 use crate::DecimalType;
@@ -133,6 +134,16 @@ pub(crate) fn interval_from_to(from: &str, to: &str) -> KrishivError {
 pub(crate) fn time_precision(precision: &str) -> KrishivError {
     UnsupportedTimePrecision {
         precision: precision.to_owned(),
+    }
+    .into()
+}
+
+/// `INVALID_TIMESTAMP_PRECISION` (Spark 4.3); `precision` as written, `ty` `TIMESTAMP_NTZ` or
+/// `TIMESTAMP_LTZ`.
+pub(crate) fn invalid_timestamp_precision(precision: &str, ty: &str) -> KrishivError {
+    InvalidTimestampPrecision {
+        precision: precision.to_owned(),
+        r#type: ty.to_owned(),
     }
     .into()
 }

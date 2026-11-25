@@ -43,12 +43,12 @@ fn dec(p: u32, s: u32) -> DataType {
 }
 
 /// The input of the time fields: either timestamp, or a time of any
-/// precision.
+/// precision of the default (Spark 4.3) profile, `[0, 9]`.
 fn timestamp_or_time() -> InputType {
     InputType::OneOf(
         [DataType::Timestamp, DataType::TimestampNtz]
             .into_iter()
-            .chain((0..=6).map(|precision| DataType::Time { precision }))
+            .chain((0..=DataType::TIME_MAX_PRECISION).map(|precision| DataType::Time { precision }))
             .collect(),
     )
 }

@@ -12,7 +12,7 @@
 //! | `date` | `Date32` | |
 //! | `timestamp` | `Timestamp(Microsecond, "UTC")` | |
 //! | `timestamp_ntz` | `Timestamp(Microsecond, None)` | |
-//! | `time(p)` | `Time64(Nanosecond)`, tagged when `p < 6` | |
+//! | `time(p)` | `Time64(Nanosecond)`, tagged when `p != 6` | |
 //! | `interval year to month` | `Interval(YearMonth)`, tagged for other fields | |
 //! | `interval day to second` | `Duration(Microsecond)`, tagged for other fields | |
 //! | `interval` | `Struct<months: Int32, days: Int32, microseconds: Int64>`, children non-null and marked with [`CALENDAR_CHILD_METADATA_KEY`] (Spark's `CalendarInterval`) | `Interval(MonthDayNano)` (the session edges convert to and from it) |
@@ -477,7 +477,7 @@ impl DataType {
 
     /// A field of the canonical Arrow type, tagged with the Spark type when
     /// the Arrow type alone does not determine it (`decimal(0,0)`, `time(p)`
-    /// below precision 6, intervals with other than the default fields,
+    /// of a precision other than 6, intervals with other than the default fields,
     /// geometry, geography and variant).
     pub fn to_arrow_field(&self, name: impl Into<String>, nullable: bool) -> Field {
         self.tagged_field(name, self.to_arrow(), nullable)

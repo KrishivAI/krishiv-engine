@@ -6,7 +6,9 @@
 
 use std::ops::ControlFlow;
 
-use krishiv_common::error::{UnsupportedGeneratorOutsideSelect, UnsupportedTimeType};
+use krishiv_common::error::{
+    UnsupportedGeneratorOutsideSelect, UnsupportedTimePrecision, UnsupportedTimeType,
+};
 use krishiv_types::DataType;
 
 use super::AnalysisError;
@@ -42,6 +44,12 @@ fn feature(t: &DataType, time_type: bool) -> Option<&'static str> {
     // The first unevaluable type in the type or inside it (an array
     // element, a map key or value, a struct field).
     (!time_type && t.any_type(&|x| matches!(x, DataType::Time { .. }))).then_some(TIME)
+}
+
+/// A `TIME` precision above `max` (Spark 4.2's 6 under an older profile) in `t`: a type from a
+/// front end that reads the 4.3 grammar (Spark Connect, schema JSON).
+fn time_over(t: &DataType, max: u8) -> Option<u8> {
+    t.max_time_precision().filter(|p| *p > max)
 }
 
 /// The type of a resolved expression, when it is a column or a call.
@@ -317,6 +325,7 @@ fn key_use(
 pub(super) fn check_known(
     root: &LogicalPlan,
     time_type: bool,
+    max_time_precision: u8,
     seen: &mut crate::walk::PtrSet<usize>,
 ) -> Result<(), AnalysisError> {
     let mut error = None;
@@ -373,6 +382,30 @@ pub(super) fn check_known(
                 (t, e.origin)
             }
         };
+        // A cast's target counts for the precision only: a `TIME '..'` literal's own cast passes the
+        // feature gate (`is_time_literal_cast`), but a `TIME(7..9)` target from a front end that reads
+        // the 4.3 grammar is refused under an older profile.
+        let cast_to = match node {
+            Node::Expr(e) => match &e.node {
+                ExprNode::Cast { to, .. } => Some(to),
+                _ => None,
+            },
+            Node::Plan(_) => None,
+        };
+        if let Some(p) = types
+            .iter()
+            .copied()
+            .chain(cast_to)
+            .find_map(|t| time_over(t, max_time_precision))
+        {
+            error = Some(AnalysisError::new(
+                UnsupportedTimePrecision {
+                    precision: p.to_string(),
+                },
+                origin,
+            ));
+            return ControlFlow::Break(());
+        }
         match types.into_iter().find_map(|t| feature(t, time_type)) {
             // Spark rejects `TIME` with its own class while
             // `spark.sql.timeType.enabled` is false (the default; the type
