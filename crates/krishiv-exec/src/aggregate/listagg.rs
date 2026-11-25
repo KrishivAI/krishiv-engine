@@ -32,7 +32,6 @@ use arrow_array::types::{
 use arrow_array::{Array, ArrayRef, ListArray, UInt32Array};
 use arrow_buffer::{OffsetBuffer, ScalarBuffer};
 use arrow_schema::{DataType, Field, TimeUnit};
-use arrow_select::concat::concat;
 use arrow_select::take::take;
 
 use super::collect::{kept_bytes, normalize};
@@ -307,12 +306,7 @@ impl ListAggAcc {
                 }
                 offsets.push(total);
             }
-            let child = if children.is_empty() {
-                arrow_array::new_empty_array(t)
-            } else {
-                let refs: Vec<&dyn Array> = children.iter().map(AsRef::as_ref).collect();
-                concat(&refs).map_err(|e| internal(e.to_string()))?
-            };
+            let child = super::chunks::concat_chunks(&children, t)?;
             let field = Arc::new(Field::new("element", t.clone(), true));
             lists.push(
                 ListArray::try_new(
