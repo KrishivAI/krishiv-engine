@@ -241,6 +241,18 @@ fn concat_views<T: ByteViewType>(chunks: &[ArrayRef]) -> Result<GenericByteViewA
 
 /// `a` compacted (its values copied into fresh buffers) when it is a view
 /// array whose buffers hold more than twice the bytes its values use.
+///
+/// The copy is not reserved here: it is the state batch's own values,
+/// which the chunks' reservations already count ([`kept_bytes`]: 16 bytes
+/// a view plus the bytes of its long values, an upper bound of the copy;
+/// test `the_compacted_copy_is_within_what_the_chunks_charged`). A state
+/// batch is a batch in flight, cut to a size by its caller (`sink.rs`
+/// `spill_chunk`, `out_chunk`, `CHUNK`), as Arrow's `concat` it replaces
+/// copied the same values. Where the batch is encoded (a spill run, an
+/// exchange) the copy lowers the peak: the encoder would otherwise copy
+/// every buffer the views point into, more than twice the copy.
+///
+/// [`kept_bytes`]: super::collect::kept_bytes
 fn compacted(a: ArrayRef) -> ArrayRef {
     fn wasteful<T: ByteViewType>(a: &GenericByteViewArray<T>) -> bool {
         let held: usize = a.data_buffers().iter().map(Buffer::len).sum();
@@ -502,6 +514,31 @@ mod tests {
         assert!(held <= 2 * a.total_buffer_bytes_used(), "{held}");
         let want: Vec<Option<String>> = chunks.iter().flat_map(texts).collect();
         assert_eq!(texts(&out), want);
+    }
+
+    /// The compaction's copy (views and data buffers) is no larger than
+    /// what the chunks' reservations count for their values.
+    #[test]
+    fn the_compacted_copy_is_within_what_the_chunks_charged() {
+        let src = long_values("b", 4000);
+        for stride in [7_usize, 101, 997] {
+            let chunks: Vec<ArrayRef> = (0..4000 / stride)
+                .map(|i| src.slice(i * stride, 2.min(4000 - i * stride)))
+                .collect();
+            let out = concat_chunks(&chunks, &DataType::Utf8View).unwrap();
+            let a = out.as_string_view();
+            let held: usize = a.data_buffers().iter().map(Buffer::len).sum();
+            let source: usize = src
+                .as_string_view()
+                .data_buffers()
+                .iter()
+                .map(Buffer::len)
+                .sum();
+            assert!(held < source, "stride {stride}: not compacted");
+            let copy = held + a.views().inner().len();
+            let charged: usize = chunks.iter().map(super::super::collect::kept_bytes).sum();
+            assert!(copy <= charged, "stride {stride}: {copy} > {charged}");
+        }
     }
 
     #[test]

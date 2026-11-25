@@ -207,6 +207,47 @@ struct Group {
     loc: Vec<(usize, usize)>,
 }
 
+impl Group {
+    /// The first samples of the group's keys, in key order, as one piece
+    /// per chunk they lie in (pushed onto `out`): a slice where the rows
+    /// are consecutive, else one `take` of them. `loc` runs over the
+    /// chunks in order (a fold appends its chunk last), so a group has no
+    /// more pieces than chunks, each no larger than its chunk: no one-row
+    /// slice object per key stays alive until the state's concatenation.
+    fn pieces(&self, out: &mut Vec<ArrayRef>) -> Result<()> {
+        let mut rest = self.loc.as_slice();
+        while let Some(&(c, first)) = rest.first() {
+            let run = rest.iter().take_while(|&&(k, _)| k == c).count();
+            let (now, next) = rest.split_at(run);
+            rest = next;
+            let chunk = self
+                .chunks
+                .get(c)
+                .ok_or_else(|| internal(format!("a mode sample in chunk {c} out of range")))?;
+            let consecutive = now
+                .iter()
+                .enumerate()
+                .all(|(i, &(_, r))| first.checked_add(i) == Some(r));
+            if now.iter().any(|&(_, r)| r >= chunk.len()) {
+                return Err(internal("a mode sample row out of range".to_owned()));
+            }
+            if consecutive {
+                out.push(chunk.slice(first, run));
+            } else {
+                let rows = now
+                    .iter()
+                    .map(|&(_, r)| u32::try_from(r))
+                    .collect::<std::result::Result<Vec<u32>, _>>()
+                    .map_err(|_| internal("a mode chunk past 2^32 rows".to_owned()))?;
+                let piece = take(chunk.as_ref(), &UInt32Array::from(rows), None)
+                    .map_err(|e| internal(e.to_string()))?;
+                out.push(piece);
+            }
+        }
+        Ok(())
+    }
+}
+
 /// The per-group state of one `mode` aggregate.
 #[derive(Debug)]
 pub(super) struct ModeAcc {
@@ -438,11 +479,9 @@ impl ModeAcc {
         count_offsets.push(0);
         for &g in ids {
             let group = &self.groups[g as usize];
-            // Every group's one-row slices go into one concatenation, so a
-            // buffer list the groups share is added to the state once.
-            for &(c, r) in &group.loc {
-                children.push(group.chunks[c].slice(r, 1));
-            }
+            // Every group's pieces go into one concatenation, so a buffer
+            // list the groups share is added to the state once.
+            group.pieces(&mut children)?;
             key_total = key_total
                 .checked_add(
                     i32::try_from(group.loc.len())
@@ -813,6 +852,32 @@ mod tests {
                 "round {round}"
             );
         }
+    }
+
+    /// A group's state pieces: one per chunk its keys came from, a slice
+    /// for consecutive rows and a `take` for rows with repeats between
+    /// them, in first-seen order.
+    #[test]
+    fn a_groups_state_is_one_piece_per_chunk() {
+        let mut a = acc();
+        a.resize(1);
+        a.reserve(1);
+        a.fold(&[0, 0, 0], &ints(vec![1, 2, 3]), &|_| true).unwrap();
+        // 2 repeats between the new keys 4 and 5, 1 after them.
+        a.fold(&[0; 5], &ints(vec![4, 2, 5, 1, 6]), &|_| true)
+            .unwrap();
+        let group = &a.groups[0];
+        let mut pieces = Vec::new();
+        group.pieces(&mut pieces).unwrap();
+        assert_eq!(pieces.len(), group.chunks.len());
+        assert_eq!(pieces.iter().map(Array::len).collect::<Vec<_>>(), [3, 3]);
+        let states = a.state(&[0]).unwrap();
+        let keys = states[0].as_list::<i32>().value(0);
+        let keys: Vec<i64> = keys.as_primitive::<Int64Type>().values().to_vec();
+        assert_eq!(keys, [1, 2, 3, 4, 5, 6]);
+        let counts = states[1].as_list::<i32>().value(0);
+        let counts: Vec<i64> = counts.as_primitive::<Int64Type>().values().to_vec();
+        assert_eq!(counts, [2, 2, 1, 1, 1, 1]);
     }
 
     fn texts(a: &ArrayRef) -> Vec<Option<String>> {
