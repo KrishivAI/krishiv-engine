@@ -613,7 +613,7 @@ pub static MEMORY_RELEASE_AT_QUERY_END: ConfigEntry = ConfigEntry {
     value_type: ValueType::Bool,
     default: Some(ConfigValue::Bool(true)),
     doc: "Whether the executor returns freed memory to the operating system once no query has \
-          run for 10 ms: each of its threads releases what its allocator kept from the queries \
+          run for 1 s: each of its threads releases what its allocator kept from the queries \
           that ran, so an idle process does not keep the peak of its last query. It needs a \
           release hook from the program that owns the allocator (the `krishiv` CLI, the Python \
           module and the bench runner, built with mimalloc, install one); without one the \

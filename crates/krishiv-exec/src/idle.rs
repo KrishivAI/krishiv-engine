@@ -6,7 +6,7 @@
 //! thread that freed it. A running query holds a [`QueryRun`]; when the last
 //! one ends, the executor is told ([`Executor::queries_idle`]), and a
 //! [`TokioExecutor`](crate::TokioExecutor) wakes its *releaser* thread. The
-//! releaser waits [`IDLE_DELAY`]; if no query started meanwhile, it starts an
+//! releaser waits [`IDLE_DELAY`] (1 s); if no query started meanwhile, it starts an
 //! idle epoch ([`krishiv_memory::note_idle`]) and runs one closure on every
 //! worker and every idle pool thread of both runtimes, each calling
 //! [`krishiv_memory::release_if_due_here`] on its own thread. Workers also
@@ -28,12 +28,33 @@ use crate::executor::Executor;
 
 /// How long the process must stay without a running query before the
 /// releaser starts a round: statements closer together than this (a
-/// script, a burst of metadata queries) never trigger one.
-pub const IDLE_DELAY: Duration = Duration::from_millis(10);
+/// script, a BI tool's burst, a client's stream of small queries) never
+/// trigger one. A release costs the next query the page faults of
+/// rebuilding its threads' heaps (TPC-DS SF10 small queries: 3-13 ms after a
+/// release, measured with 15 ms and 50 ms gaps), so it is worth paying only
+/// after real idleness.
+pub const IDLE_DELAY: Duration = Duration::from_secs(1);
 
 /// The longest a round's closure waits for its peers to land on threads of
 /// their own (it releases first, so the wait only spreads the closures).
 const PEER_WAIT: Duration = Duration::from_millis(5);
+
+/// The releaser's waits: [`IDLE_DELAY`] and the peer wait in production;
+/// tests use longer ones so that a loaded machine cannot fail them.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Waits {
+    pub(crate) debounce: Duration,
+    pub(crate) peer: Duration,
+}
+
+impl Default for Waits {
+    fn default() -> Self {
+        Self {
+            debounce: IDLE_DELAY,
+            peer: PEER_WAIT,
+        }
+    }
+}
 
 /// The longest step of a closure's wait: a query start ends it within this.
 const WAIT_STEP: Duration = Duration::from_millis(1);
@@ -145,6 +166,10 @@ struct Shared {
     wake: Condvar,
     /// Rounds that ran (after the debounce).
     rounds: AtomicU64,
+    /// Closures whose peer wait ended on its deadline: their pool had fewer
+    /// idle threads than closures (one busy with other work), so a thread
+    /// may have been reached twice and another not at all.
+    short: Arc<AtomicU64>,
 }
 
 /// The releaser thread of one executor; stops when dropped.
@@ -158,12 +183,12 @@ impl Releaser {
     ///
     /// # Errors
     /// The OS refused the thread.
-    pub(crate) fn start(pools: Vec<Pool>) -> std::io::Result<Self> {
+    pub(crate) fn start(pools: Vec<Pool>, waits: Waits) -> std::io::Result<Self> {
         let shared = Arc::new(Shared::default());
         let theirs = Arc::clone(&shared);
         std::thread::Builder::new()
             .name("krishiv-release".to_owned())
-            .spawn(move || run(&theirs, &pools))?;
+            .spawn(move || run(&theirs, &pools, waits))?;
         Ok(Self { shared })
     }
 
@@ -182,6 +207,11 @@ impl Releaser {
     pub(crate) fn rounds(&self) -> u64 {
         self.shared.rounds.load(Ordering::Acquire)
     }
+
+    /// Round closures whose peer wait ran out (see `Shared::short`).
+    pub(crate) fn short_waits(&self) -> u64 {
+        self.shared.short.load(Ordering::Acquire)
+    }
 }
 
 impl Drop for Releaser {
@@ -196,7 +226,7 @@ impl Drop for Releaser {
 }
 
 /// The releaser's loop: one round per request that the debounce confirms.
-fn run(shared: &Shared, pools: &[Pool]) {
+fn run(shared: &Shared, pools: &[Pool], waits: Waits) {
     let mut seen = 0;
     loop {
         let state = shared.state.lock().unwrap_or_else(PoisonError::into_inner);
@@ -214,7 +244,7 @@ fn run(shared: &Shared, pools: &[Pool]) {
         let state = shared.state.lock().unwrap_or_else(PoisonError::into_inner);
         let (state, _) = shared
             .wake
-            .wait_timeout_while(state, IDLE_DELAY, |s| !s.shutdown)
+            .wait_timeout_while(state, waits.debounce, |s| !s.shutdown)
             .unwrap_or_else(PoisonError::into_inner);
         if state.shutdown {
             return;
@@ -225,18 +255,18 @@ fn run(shared: &Shared, pools: &[Pool]) {
         }
         krishiv_memory::note_idle();
         shared.rounds.fetch_add(1, Ordering::AcqRel);
-        round(pools, starts);
+        round(pools, starts, waits.peer, &shared.short);
     }
 }
 
 /// Every worker, then every idle blocking thread, of each pool releases.
-fn round(pools: &[Pool], starts: u64) {
+fn round(pools: &[Pool], starts: u64, peer: Duration, short: &Arc<AtomicU64>) {
     for pool in pools {
         for (n, blocking) in [(pool.workers, false), (pool.blocking_alive(), true)] {
             if !still_idle(starts) {
                 return;
             }
-            rendezvous(&pool.handle, n, blocking, starts);
+            rendezvous(&pool.handle, n, blocking, starts, peer, short);
         }
     }
 }
@@ -244,7 +274,14 @@ fn round(pools: &[Pool], starts: u64) {
 /// Runs `n` closures on `handle` (as tasks, or on its blocking pool), each
 /// releasing on its thread and then waiting briefly for its peers so that
 /// each lands on a thread of its own. Returns how many reported in time.
-fn rendezvous(handle: &Handle, n: usize, blocking: bool, starts: u64) -> usize {
+fn rendezvous(
+    handle: &Handle,
+    n: usize,
+    blocking: bool,
+    starts: u64,
+    peer: Duration,
+    short: &Arc<AtomicU64>,
+) -> usize {
     if n == 0 {
         return 0;
     }
@@ -253,16 +290,24 @@ fn rendezvous(handle: &Handle, n: usize, blocking: bool, starts: u64) -> usize {
     for _ in 0..n {
         let gate = Arc::clone(&gate);
         let tx = tx.clone();
+        let short = Arc::clone(short);
         let f = move || {
+            // A closure that runs late, after a query started, leaves the
+            // query's threads alone.
+            if !still_idle(starts) {
+                tx.send(()).ok();
+                return;
+            }
             krishiv_memory::release_if_due_here();
             let (count, arrived) = &*gate;
             let mut c = count.lock().unwrap_or_else(PoisonError::into_inner);
             *c += 1;
             arrived.notify_all();
-            let deadline = Instant::now() + PEER_WAIT;
+            let deadline = Instant::now() + peer;
             while *c < n && still_idle(starts) {
                 let now = Instant::now();
                 if now >= deadline {
+                    short.fetch_add(1, Ordering::Relaxed);
                     break;
                 }
                 c = arrived
@@ -291,4 +336,135 @@ fn rendezvous(handle: &Handle, n: usize, blocking: bool, starts: u64) -> usize {
         reported += 1;
     }
     reported
+}
+
+#[cfg(all(test, not(loom)))]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "test threads sleep and wait; never on a compute worker"
+)]
+#[expect(clippy::unwrap_used, reason = "test helpers build runtimes")]
+mod tests {
+    use std::collections::HashSet;
+    use std::sync::Barrier;
+    use std::thread::ThreadId;
+
+    use super::*;
+
+    /// Threads that called the release hook: (thread name, id).
+    static HITS: Mutex<Vec<(String, ThreadId)>> = Mutex::new(Vec::new());
+    /// The tests share the hook and the records.
+    static SERIAL: Mutex<()> = Mutex::new(());
+
+    fn hook() {
+        let t = std::thread::current();
+        HITS.lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push((t.name().unwrap_or("").to_owned(), t.id()));
+    }
+
+    fn hits(name: &str) -> HashSet<ThreadId> {
+        HITS.lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .filter(|(n, _)| n == name)
+            .map(|(_, id)| *id)
+            .collect()
+    }
+
+    /// A runtime of `workers` workers and up to two blocking threads, named
+    /// `name`, counted and with the park check, as `TokioExecutor::new`
+    /// builds them; two blocking threads are started.
+    fn pool(name: &str, workers: usize) -> (tokio::runtime::Runtime, Pool) {
+        let count = Arc::new(ThreadCount::default());
+        let (up, down) = (Arc::clone(&count), Arc::clone(&count));
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(workers)
+            .max_blocking_threads(2)
+            .thread_name(name)
+            .on_thread_park(|| {
+                krishiv_memory::release_if_idle_here();
+            })
+            .on_thread_start(move || up.start())
+            .on_thread_stop(move || down.stop())
+            .build()
+            .unwrap();
+        let barrier = Arc::new(Barrier::new(2));
+        let warm: Vec<_> = (0..2)
+            .map(|_| {
+                let barrier = Arc::clone(&barrier);
+                rt.spawn_blocking(move || {
+                    barrier.wait();
+                })
+            })
+            .collect();
+        rt.block_on(async {
+            for w in warm {
+                w.await.unwrap();
+            }
+        });
+        let pool = Pool {
+            handle: rt.handle().clone(),
+            workers,
+            blocking_cap: 2,
+            threads: count,
+        };
+        (rt, pool)
+    }
+
+    /// Waits up to ten seconds for `done`.
+    fn eventually(mut done: impl FnMut() -> bool) -> bool {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < deadline {
+            if done() {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        done()
+    }
+
+    /// Waits long enough that a loaded machine never cuts a rendezvous short.
+    const PATIENT: Waits = Waits {
+        debounce: Duration::from_millis(10),
+        peer: Duration::from_secs(2),
+    };
+
+    #[test]
+    fn a_round_reaches_every_worker_and_blocking_thread_and_starts_none() {
+        let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
+        krishiv_memory::set_release_hook(hook);
+        let (_c, compute) = pool("idle-test-c", 3);
+        let (_i, io) = pool("idle-test-io", 2);
+        HITS.lock().unwrap_or_else(PoisonError::into_inner).clear();
+        let releaser = Releaser::start(vec![compute, io], PATIENT).unwrap();
+        releaser.request();
+        // Three workers and two blocking threads; two and two.
+        assert!(
+            eventually(|| hits("idle-test-c").len() >= 5 && hits("idle-test-io").len() >= 4),
+            "{:?} {:?}",
+            hits("idle-test-c"),
+            hits("idle-test-io")
+        );
+        std::thread::sleep(Duration::from_millis(100));
+        assert_eq!(hits("idle-test-c").len(), 5, "no thread started");
+        assert_eq!(hits("idle-test-io").len(), 4, "no thread started");
+        assert_eq!(releaser.rounds(), 1);
+        assert_eq!(releaser.short_waits(), 0);
+    }
+
+    #[test]
+    fn no_request_is_lost() {
+        let _serial = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
+        krishiv_memory::set_release_hook(hook);
+        let (_c, compute) = pool("idle-test-r", 2);
+        let releaser = Releaser::start(vec![compute], PATIENT).unwrap();
+        releaser.request();
+        assert!(eventually(|| releaser.rounds() == 1));
+        // A request once that round started gets a round of its own.
+        releaser.request();
+        assert!(eventually(|| releaser.rounds() == 2));
+        std::thread::sleep(Duration::from_millis(100));
+        assert_eq!(releaser.rounds(), 2);
+    }
 }

@@ -104,6 +104,23 @@ thread_local! {
     static SEEN_IDLE: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
+/// Calls the release hook on this thread once if an idle epoch
+/// ([`note_idle`]) started since it last released for one; pressure epochs
+/// are left to the batch-boundary checks. For a worker about to park: it
+/// parks often under load, and a pressure release there would add collects
+/// on threads that never took part in them (I/O workers). Cheap otherwise.
+pub fn release_if_idle_here() -> bool {
+    let Some(hook) = HOOK.get() else {
+        return false;
+    };
+    let idle = idle_epoch();
+    let due = SEEN_IDLE.with(|s| s.replace(idle) != idle);
+    if due {
+        hook();
+    }
+    due
+}
+
 /// Calls the release hook on this thread once if a pressure epoch or an idle
 /// epoch ([`note_idle`]) started since it last released; returns whether it
 /// called the hook. Cheap otherwise: a few atomic and thread-local loads. For

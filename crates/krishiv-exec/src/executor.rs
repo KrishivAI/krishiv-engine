@@ -285,11 +285,12 @@ impl TokioExecutor {
             |builder: &mut tokio::runtime::Builder, name: &str, count: &Arc<ThreadCount>| {
                 if release {
                     // A worker about to park has no task: release there for an
-                    // idle epoch (or a pressure one) it has not released for.
+                    // idle epoch it has not released for (pressure epochs are
+                    // the batch boundaries' job).
                     let (up, down) = (Arc::clone(count), Arc::clone(count));
                     builder
                         .on_thread_park(|| {
-                            krishiv_memory::release_if_due_here();
+                            krishiv_memory::release_if_idle_here();
                         })
                         .on_thread_start(move || up.start())
                         .on_thread_stop(move || down.stop());
@@ -347,7 +348,7 @@ impl TokioExecutor {
                 },
             ];
             Some(
-                Releaser::start(pools)
+                Releaser::start(pools, crate::idle::Waits::default())
                     .map_err(|e| internal(format!("cannot start the release thread: {e}")))?,
             )
         } else {
@@ -372,6 +373,13 @@ impl TokioExecutor {
     #[must_use]
     pub fn idle_rounds(&self) -> u64 {
         self.releaser.as_ref().map_or(0, Releaser::rounds)
+    }
+
+    /// Idle-round closures whose wait for their peers ran out: their pool
+    /// had a thread busy with other work, so the round may have missed one.
+    #[must_use]
+    pub fn idle_round_short_waits(&self) -> u64 {
+        self.releaser.as_ref().map_or(0, Releaser::short_waits)
     }
 
     /// Deterministic test mode (spec 13 §4, ADR 0029): every task, blocking

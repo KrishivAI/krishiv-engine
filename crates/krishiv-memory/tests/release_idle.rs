@@ -5,7 +5,9 @@
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use krishiv_memory::{idle_epoch, note_idle, release_if_due_here, set_release_hook};
+use krishiv_memory::{
+    idle_epoch, note_idle, release_if_due_here, release_if_idle_here, set_release_hook,
+};
 
 static CALLS: AtomicUsize = AtomicUsize::new(0);
 
@@ -40,4 +42,14 @@ fn each_thread_releases_once_per_idle_epoch() {
     assert!(release_if_due_here());
     assert!(!release_if_due_here());
     assert_eq!(CALLS.load(Ordering::SeqCst), 3);
+
+    // The idle-only check shares the idle record with the combined one.
+    note_idle();
+    assert!(release_if_idle_here());
+    assert!(
+        !release_if_due_here(),
+        "already released for this idle epoch"
+    );
+    assert!(!release_if_idle_here());
+    assert_eq!(CALLS.load(Ordering::SeqCst), 4);
 }

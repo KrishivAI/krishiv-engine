@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Releasing freed memory when the process goes idle (`krishiv_exec::idle`,
-//! design `0.4-memory-query-end-release`): the releaser's round reaches every
-//! worker and every idle blocking thread without starting new ones, a query
+//! design `0.4-memory-query-end-release`): the last query's end runs a round
+//! on the executor's threads (full coverage: `idle::tests`), a query
 //! that starts during the debounce cancels it, and nothing happens while a
 //! query runs or with the setting off. The running-query counter and the
 //! release hook are process-wide, so the tests take one lock.
@@ -13,7 +13,7 @@
 )]
 
 use std::collections::HashSet;
-use std::sync::{Arc, Barrier, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread::ThreadId;
 use std::time::{Duration, Instant};
 
@@ -74,58 +74,18 @@ fn hit_threads(name: &str) -> HashSet<ThreadId> {
         .collect()
 }
 
-/// Starts two blocking threads on `handle` (two closures that meet) and
-/// returns their ids.
-fn warm_blocking(handle: &tokio::runtime::Handle) -> HashSet<ThreadId> {
-    let barrier = Arc::new(Barrier::new(2));
-    let tasks: Vec<_> = (0..2)
-        .map(|_| {
-            let barrier = Arc::clone(&barrier);
-            handle.spawn_blocking(move || {
-                barrier.wait();
-                std::thread::current().id()
-            })
-        })
-        .collect();
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .build()
-        .unwrap();
-    rt.block_on(async {
-        let mut ids = HashSet::new();
-        for t in tasks {
-            ids.insert(t.await.unwrap());
-        }
-        ids
-    })
-}
-
 #[test]
-fn a_round_reaches_every_worker_and_idle_blocking_thread() {
+fn the_last_query_ending_runs_a_round_on_the_executors_threads() {
     let _serial = setup();
     let exec = executor(true);
-    let compute_blocking = warm_blocking(exec.compute_handle());
-    let io_blocking = warm_blocking(exec.io_handle());
     HITS.lock().unwrap_or_else(PoisonError::into_inner).clear();
-
     drop(query_run(&as_dyn(&exec)));
-    // Three workers and the two blocking threads of each runtime.
-    assert!(
-        eventually(
-            || hit_threads("krishiv-compute").len() >= 5 && hit_threads("krishiv-io").len() >= 4
-        ),
-        "compute {:?}, io {:?}",
-        hit_threads("krishiv-compute"),
-        hit_threads("krishiv-io")
-    );
-    assert_eq!(exec.idle_rounds(), 1);
-    // The warmed blocking threads released, and no other thread was started.
-    let compute = hit_threads("krishiv-compute");
-    let io = hit_threads("krishiv-io");
-    assert!(compute_blocking.is_subset(&compute), "{compute:?}");
-    assert!(io_blocking.is_subset(&io), "{io:?}");
-    std::thread::sleep(Duration::from_millis(200));
-    assert_eq!(hit_threads("krishiv-compute").len(), 5);
-    assert_eq!(hit_threads("krishiv-io").len(), 4);
+    assert!(eventually(|| exec.idle_rounds() == 1));
+    // Coverage of every thread is checked with patient waits in the unit
+    // tests (`idle::tests`); here, that the round reached this executor.
+    assert!(eventually(
+        || !hit_threads("krishiv-compute").is_empty() && !hit_threads("krishiv-io").is_empty()
+    ));
 }
 
 #[test]
@@ -136,12 +96,12 @@ fn a_query_starting_during_the_debounce_cancels_the_round() {
     drop(first);
     let ended = Instant::now();
     let second = query_run(&as_dyn(&exec));
-    if ended.elapsed() >= Duration::from_millis(5) {
+    if ended.elapsed() >= Duration::from_millis(500) {
         // The test thread was descheduled past half the debounce: the
         // round may have run legitimately, so nothing can be asserted.
         return;
     }
-    std::thread::sleep(Duration::from_millis(60));
+    std::thread::sleep(Duration::from_millis(1200));
     assert_eq!(exec.idle_rounds(), 0, "a query started within the debounce");
     drop(second);
     assert!(eventually(|| exec.idle_rounds() == 1));
@@ -156,7 +116,7 @@ fn nothing_is_released_while_a_query_runs() {
     assert_eq!(queries_running(), 2);
     let epoch = krishiv_memory::idle_epoch();
     drop(short);
-    std::thread::sleep(Duration::from_millis(60));
+    std::thread::sleep(Duration::from_millis(1200));
     assert_eq!(exec.idle_rounds(), 0);
     assert_eq!(krishiv_memory::idle_epoch(), epoch);
     drop(long);
@@ -171,7 +131,7 @@ fn the_setting_off_starts_no_round() {
     let exec = executor(false);
     let epoch = krishiv_memory::idle_epoch();
     drop(query_run(&as_dyn(&exec)));
-    std::thread::sleep(Duration::from_millis(60));
+    std::thread::sleep(Duration::from_millis(1200));
     assert_eq!(exec.idle_rounds(), 0);
     assert_eq!(krishiv_memory::idle_epoch(), epoch);
 }
@@ -198,7 +158,7 @@ fn a_deterministic_executor_runs_no_round() {
         .unwrap();
     let epoch = krishiv_memory::idle_epoch();
     drop(query_run(&as_dyn(&exec)));
-    std::thread::sleep(Duration::from_millis(60));
+    std::thread::sleep(Duration::from_millis(1200));
     assert_eq!(exec.idle_rounds(), 0);
     assert_eq!(krishiv_memory::idle_epoch(), epoch);
 }
