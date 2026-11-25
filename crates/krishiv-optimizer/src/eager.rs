@@ -62,9 +62,9 @@ use std::sync::Arc;
 
 use krishiv_common::error::KrishivError;
 use krishiv_plan::{
-    AttrId, BoundColumn, Builtin, Expr, ExprNode, FunctionKind, Grouping, JoinCondition, JoinKind,
-    Literal, LogicalPlan, PlanNode, ResolvedExpr, ResolvedFunction, may_raise,
-    partial_state_columns,
+    AttrId, BoundColumn, Builtin, Expr, ExprNode, FunctionId, FunctionKind, Grouping,
+    JoinCondition, JoinKind, Literal, LogicalPlan, PlanNode, ResolvedExpr, ResolvedFunction,
+    exact_decimal, may_raise, partial_state_columns,
 };
 use krishiv_types::DataType;
 
@@ -290,7 +290,7 @@ impl<'a> Shape<'a> {
 
         let side_est = est.plan(side);
         for (_, f) in &calls {
-            refusal_of_call(f, &side_est, null_supplying)?;
+            refusal_of_call(f, &side_est, null_supplying, false)?;
         }
 
         // The columns of `S` that stay readable: the join condition's and
@@ -755,11 +755,38 @@ fn groups_of(keys: &[BoundColumn], side: &RelStats) -> Result<f64, String> {
     Ok(groups.min(side.rows))
 }
 
+/// Whether `e` may raise under ANSI, where exact decimal arithmetic
+/// ([`exact_decimal`]), alone or as an argument of `coalesce`, raises on no
+/// row.
+fn raises_beyond_exact_decimal(e: &Expr) -> bool {
+    if exact_decimal(e) {
+        return false;
+    }
+    match &e.node {
+        ExprNode::Resolved(ResolvedExpr::Alias { expr, .. }) => raises_beyond_exact_decimal(expr),
+        ExprNode::Resolved(ResolvedExpr::Function(f))
+            if f.kind == FunctionKind::Scalar
+                && f.filter.is_none()
+                && matches!(&f.id, FunctionId::Registry { name, .. } if name == "coalesce") =>
+        {
+            f.args.iter().any(|a| raises_beyond_exact_decimal(a))
+        }
+        _ => may_raise(e, true),
+    }
+}
+
 /// Why `f` cannot run below the join, on a side with these statistics.
+///
+/// With `same_rows` the call runs on exactly the rows the aggregate above
+/// reads (below an `Expand`, which drops none), so an argument may also be
+/// exact decimal arithmetic ([`exact_decimal`], under `coalesce` too: q67's
+/// `coalesce(price * quantity, 0)`), which raises on no row. Below a join it
+/// stays [`may_raise`] alone, the rule this aggregation was measured with.
 pub(crate) fn refusal_of_call(
     f: &ResolvedFunction,
     side: &RelStats,
     null_supplying: bool,
+    same_rows: bool,
 ) -> Result<(), String> {
     let name = f.id.name();
     if f.args.iter().any(|a| {
@@ -767,7 +794,11 @@ pub(crate) fn refusal_of_call(
             || has_subquery(a)
             || has_outer_reference(a)
             || is_state(a)
-            || may_raise(a, true)
+            || if same_rows {
+                raises_beyond_exact_decimal(a)
+            } else {
+                may_raise(a, true)
+            }
     }) {
         return Err(format!("{name}'s argument can raise or is not plain"));
     }

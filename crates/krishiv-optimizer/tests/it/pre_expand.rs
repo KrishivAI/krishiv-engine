@@ -237,6 +237,24 @@ fn a_grouping_expression_groups_by_its_value() {
     );
 }
 
+/// q67's argument: exact decimal arithmetic under `coalesce` raises on no row, and the partial
+/// reads the rows the aggregate above reads, so it moves below the expansion.
+#[test]
+fn an_exact_decimal_argument_under_coalesce_moves() {
+    assert_fires(
+        "SELECT c, s, sum(coalesce(CAST(c AS decimal(12,2)) * w, 0)) FROM h GROUP BY ROLLUP(c, s)",
+    );
+}
+
+/// Integer `*` raises on overflow under ANSI: it stays above the expansion.
+#[test]
+fn an_integer_product_stays() {
+    assert_refuses(
+        "SELECT c, sum(coalesce(c * w, 0)) FROM h GROUP BY ROLLUP(c)",
+        "can raise",
+    );
+}
+
 /// Floating-point sums depend on the order of their rows.
 #[test]
 fn a_floating_point_sum_stays() {

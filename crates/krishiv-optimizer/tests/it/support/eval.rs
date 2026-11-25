@@ -749,6 +749,17 @@ impl Interp<'_> {
             f.args.first().map(|a| &a.node)
         {
             let name = f.id.name();
+            // A decimal `sum`'s state is (sum, nonempty): a NULL sum with
+            // `nonempty` set overflowed, and the merged sum is NULL too.
+            if name == "sum" && columns.len() == 2 {
+                let overflowed = g.iter().any(|r| {
+                    self.eval(&columns[0], ix, r, outer) == V::Null
+                        && self.eval(&columns[1], ix, r, outer) == V::Bool(true)
+                });
+                if overflowed {
+                    return vec![V::Null, V::Bool(true)];
+                }
+            }
             return columns
                 .iter()
                 .enumerate()

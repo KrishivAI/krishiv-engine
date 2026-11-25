@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 //! `RollupFromParent` (perf lever F-C2, study 54 Finding 2, TPC-DS q67): the
-//! grouping sets of a pre-aggregated expansion are each computed from their
-//! smallest already-computed parent set instead of from every input row.
+//! grouping sets of a pre-aggregated expansion are each computed from an
+//! already-computed parent set instead of from every input row.
 //!
 //! ```text
 //! Aggregate(merge)(Project*(Expand[p_1 .. p_n](P)))      P = PartialAggregate(X) by K
 //!   =>  Aggregate(merge)(Project*(Union(Project p_1 (S_1), .., Project p_n (S_n))))
 //!       S_j = P                                  when K_j = K
 //!           = S_parent                           when K_j = ()
-//!           = PartialAggregate(merge)(S_parent)  by K_j, S_parent the smallest
+//!           = PartialAggregate(merge)(S_parent)  by K_j, S_parent the newest
 //!                                                computed set with K_parent ⊇ K_j
 //! ```
 //!
@@ -39,7 +39,7 @@
 //! the parent's columns. The grand total `()` is never a keyless partial
 //! aggregate (over empty input it would yield a state row, and the grouped
 //! aggregate above a row where Spark yields none): its branch reads the
-//! smallest computed set's rows as they are, which the merge above folds into
+//! chosen parent's rows as they are, which the merge above folds into
 //! one group. The output keeps the expansion's attributes (the
 //! first branch's, a union's output); nullability is the expansion's.
 //!
@@ -101,7 +101,10 @@ pub(crate) fn chain(
         return Ok(root);
     }
     // Into the root's `WITH` when one is there (`ShareCte`'s, kept by
-    // `InlineCTE`); these read no other definition, so they go first.
+    // `InlineCTE`); these go first. `P`'s input may read a
+    // `ShareFilteredScan` definition, which then comes after them: the
+    // executor registers every definition before it plans the input
+    // (`krishiv-exec` `planner/build.rs`).
     if let PlanNode::WithCte {
         input,
         ctes: theirs,
@@ -318,7 +321,12 @@ fn rewrite(
         return None;
     }
 
-    // The sets, finest first; each reads the smallest computed superset.
+    // The sets, finest first; each reads the newest computed superset. The
+    // estimate below orders `P` before the sets built so far, but a set not
+    // yet built reads a placeholder of its parent's plan and so has its
+    // parent's estimate: among those the newest wins. For a `ROLLUP` that is
+    // the level above (the smallest parent); for a `CUBE` it is a superset,
+    // not always the smallest one.
     let mut all_keys: Vec<AttrId> = key_cols.iter().map(|k| k.id).collect();
     all_keys.sort_unstable();
     let mut built: Vec<Set> = vec![Set {

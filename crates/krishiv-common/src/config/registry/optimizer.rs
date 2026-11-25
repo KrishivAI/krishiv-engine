@@ -88,14 +88,14 @@ pub static SHARE_FILTERED_SCANS: ConfigEntry = ConfigEntry {
 };
 
 /// The grouping sets of a pre-aggregated expansion are each computed from
-/// their smallest computed parent set (`krishiv.optimizer.rollupFromParent`,
+/// a computed parent set (`krishiv.optimizer.rollupFromParent`,
 /// perf lever F-C2).
 pub static ROLLUP_FROM_PARENT: ConfigEntry = ConfigEntry {
     key: "krishiv.optimizer.rollupFromParent",
     value_type: ValueType::Bool,
     default: Some(ConfigValue::Bool(true)),
     doc: "Compute each grouping set of a `ROLLUP`, `CUBE` or `GROUPING SETS` aggregate from the \
-          already aggregated states of its smallest finer set, instead of from every input row \
+          already aggregated states of a finer set, instead of from every input row \
           (TPC-DS q67), when statistics say the finest set barely reduces its input. The sets read \
           by more than one coarser set are stored, charged to the query's memory and spilled to \
           disk under pressure. Needs `krishiv.sql.optimizer.shareCteInstances`. Results are the \
