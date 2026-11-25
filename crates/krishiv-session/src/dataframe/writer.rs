@@ -23,7 +23,8 @@ pub struct DataFrameWriter {
     /// the files are laid out by them. A plain `save` or `insertInto` of a bucketed writer is still refused, as in Spark.
     pub(super) bucket_table: bool,
     /// `INSERT OVERWRITE DIRECTORY ... USING csv` writes duplicate column names (Spark's command
-    /// path has no name check for csv; `df.write.csv` refuses them).
+    /// path has no name check for csv). `df.write.csv` still refuses them here, which differs from
+    /// Spark (it writes them too); the check moves onto the csv format when that is fixed.
     pub(crate) skip_duplicate_check: bool,
     /// Whether [`Self::format`] was called: a table writer without one uses
     /// `spark.sql.sources.default`.

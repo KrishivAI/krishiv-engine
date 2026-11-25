@@ -60,12 +60,44 @@ fn push_quoted(out: &mut String, s: &str) {
     out.push('"');
 }
 
-/// Whether `dt` is an array, struct or map.
-fn is_nested(dt: &DataType) -> bool {
-    matches!(
-        dt,
-        DataType::List(_) | DataType::LargeList(_) | DataType::Struct(_) | DataType::Map(..)
-    )
+/// Whether the column `f` is an array, struct or map. A calendar interval and a Variant are
+/// Arrow structs too, but Spark's JSON writer treats them as leaves it refuses.
+fn is_nested(f: &Field) -> bool {
+    match f.data_type() {
+        DataType::List(_) | DataType::LargeList(_) | DataType::Map(..) => true,
+        DataType::Struct(_) => matches!(
+            krishiv_types::DataType::from_arrow_field(f),
+            Ok(krishiv_types::DataType::Struct(_))
+        ),
+        _ => false,
+    }
+}
+
+/// Checks every type inside `f` is writable, so a refusal comes at planning, not mid-write.
+fn check_field(f: &Field) -> FormatResult<()> {
+    if !is_nested(f) {
+        return kind_of(f)
+            .map(drop)
+            .map_err(|_| crate::error::unsupported_column("JSON", f));
+    }
+    match f.data_type() {
+        DataType::List(c) | DataType::LargeList(c) => check_field(c),
+        DataType::Struct(fields) => fields.iter().try_for_each(|c| check_field(c)),
+        DataType::Map(entry, _) => match entry.data_type() {
+            // A binary key has no text Spark writes (`toString` of a byte array).
+            DataType::Struct(kv)
+                if kv.len() == 2
+                    && !matches!(
+                        kv[0].data_type(),
+                        DataType::Binary | DataType::LargeBinary | DataType::BinaryView
+                    ) =>
+            {
+                kv.iter().try_for_each(|c| check_field(c))
+            }
+            _ => Err(crate::error::unsupported_column("JSON", f)),
+        },
+        _ => Err(crate::error::unsupported_column("JSON", f)),
+    }
 }
 
 impl JsonEncoder {
@@ -76,7 +108,8 @@ impl JsonEncoder {
             .fields()
             .iter()
             .map(|f| {
-                if is_nested(f.data_type()) {
+                if is_nested(f) {
+                    check_field(f)?;
                     return Ok(None);
                 }
                 kind_of(f)
@@ -218,7 +251,7 @@ impl JsonEncoder {
             return Ok(None);
         }
         let item = |buf: &mut String, child: &dyn Array, f: &Field, j: usize| {
-            if is_nested(f.data_type()) {
+            if is_nested(f) {
                 Self::push_nested(dt, ignore_null, buf, child, f, j)
             } else {
                 let kind = kind_of(f).map_err(|_| crate::error::unsupported_column("JSON", f))?;
@@ -291,12 +324,30 @@ impl JsonEncoder {
                     if n > 0 {
                         buf.push(',');
                     }
-                    let mut key = String::new();
-                    item(&mut key, m.keys().as_ref(), &kv[0], j)?;
-                    if key.starts_with('"') {
-                        buf.push_str(&key);
-                    } else {
-                        push_quoted(buf, &key);
+                    // A map key is the text of Spark's internal value (`toString`): a date is its
+                    // day count and a timestamp its microseconds.
+                    let keys = m.keys();
+                    match keys.data_type() {
+                        DataType::Date32 => push_quoted(
+                            buf,
+                            &keys.as_primitive::<Date32Type>().value(j).to_string(),
+                        ),
+                        DataType::Timestamp(..) => push_quoted(
+                            buf,
+                            &keys
+                                .as_primitive::<TimestampMicrosecondType>()
+                                .value(j)
+                                .to_string(),
+                        ),
+                        _ => {
+                            let mut key = String::new();
+                            item(&mut key, keys.as_ref(), &kv[0], j)?;
+                            if key.starts_with('"') {
+                                buf.push_str(&key);
+                            } else {
+                                push_quoted(buf, &key);
+                            }
+                        }
                     }
                     buf.push(':');
                     if item(buf, m.values().as_ref(), &kv[1], j)?.is_none() {

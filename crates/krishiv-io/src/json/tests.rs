@@ -1959,3 +1959,28 @@ fn nested_values_write_as_jackson_does() {
         "{\"l\":[1,null],\"m\":{\"k\":null},\"s\":{\"x\":1,\"y\":\"a\"}}\n{\"l\":null,\"m\":null,\"s\":{\"x\":null,\"y\":null}}\n"
     );
 }
+
+/// Map keys write as the text of Spark's internal value (a date is its day count), and a
+/// calendar interval, a leaf Spark refuses, is still refused at planning, also inside an array.
+#[test]
+fn map_keys_use_internal_values_and_intervals_stay_refused() {
+    use arrow_array::builder::{Date32Builder, Int32Builder, MapBuilder};
+    let mut map = MapBuilder::new(None, Date32Builder::new(), Int32Builder::new());
+    map.keys().append_value(18263);
+    map.values().append_value(1);
+    map.append(true).unwrap();
+    let map = map.finish();
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "m",
+        map.data_type().clone(),
+        true,
+    )]));
+    let batch = RecordBatch::try_new(schema, vec![Arc::new(map)]).unwrap();
+    let out = encode(&batch, &options(&serde_json::json!({}))).unwrap();
+    assert_eq!(String::from_utf8(out).unwrap(), "{\"m\":{\"18263\":1}}\n");
+
+    let interval = krishiv_types::DataType::CalendarInterval.to_arrow_field("i", true);
+    let list = Field::new("l", DataType::List(Arc::new(interval)), true);
+    let o = options(&serde_json::json!({}));
+    assert!(JsonEncoder::new(&Schema::new(vec![list]), &o).is_err());
+}
