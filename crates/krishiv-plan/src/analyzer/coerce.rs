@@ -1714,8 +1714,9 @@ pub(super) fn try_nullable(from: &DataType, to: &DataType) -> bool {
     // Spark's `UpCastRule` reads a collated string as a `StringType` (only a CHAR/VARCHAR
     // constraint matters, never the collation), on either side.
     let string = |t: &T| matches!(t, T::String | T::CollatedString(_));
-    // Spark's `canUpCast` has no arm for a variant source, so only variant to variant is an up-cast
-    // (`TRY_CAST(parse_json('1') AS STRING)` is nullable, Spark 4.2.0 and 4.3.0 runs).
+    // Spark's `canUpCast` refuses a variant source (`(VariantType, _) => false`), so only variant
+    // to variant is an up-cast (`TRY_CAST(parse_json('1') AS STRING)` is nullable, Spark 4.2.0
+    // and 4.3.0 runs).
     if *from == T::Variant {
         return *to != T::Variant;
     }
