@@ -8,8 +8,10 @@ from __future__ import annotations
 
 import importlib
 import random
+import re
 import sys
-from collections.abc import Iterable, Iterator, Sequence
+import zlib
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from functools import reduce
 from typing import TYPE_CHECKING, Any, cast
 
@@ -21,10 +23,11 @@ from krishiv.errors import (
     PySparkTypeError,
     PySparkValueError,
     not_expected_type,
+    not_implemented,
+    not_implemented_attribute,
     unsupported_attribute,
-    unsupported_feature,
 )
-from krishiv.sql import _convert
+from krishiv.sql import _convert, _stats
 from krishiv.sql.column import Column, _literal, _named
 from krishiv.sql.functions import first as _first
 from krishiv.sql.group import GroupedData
@@ -33,7 +36,7 @@ from krishiv.sql.observation import Observation, _pyspark_error
 from krishiv.sql.profile_view import ProfileView
 from krishiv.sql.row import Row
 from krishiv.sql.stat import DataFrameStatFunctions
-from krishiv.sql.types import StructType, _struct_from_columns
+from krishiv.sql.types import StructField, StructType, _parse_datatype_json_string
 from krishiv.storagelevel import StorageLevel
 
 if TYPE_CHECKING:
@@ -83,6 +86,28 @@ def _flatten(cols: tuple[Any, ...]) -> list[Any]:
     if len(cols) == 1 and isinstance(cols[0], list | tuple):
         return list(cols[0])
     return list(cols)
+
+
+class _RegexColumn(Column):
+    """What :meth:`DataFrame.colRegex` returns: ``select`` expands it to the matching columns."""
+
+    def __init__(self, names: list[str], text: str, qualifier: str | None = None) -> None:
+        super().__init__(_native.col(_regex_ref(names[0], qualifier) if names else "*"))
+        self._names = names
+        self._text = text
+        self._qualifier = qualifier
+
+    def _expand(self) -> list[Column]:
+        return [Column(_native.col(_regex_ref(n, self._qualifier))) for n in self._names]
+
+    def __repr__(self) -> str:
+        return f"Column<'unresolvedregex({self._text})'>"
+
+
+def _regex_ref(name: str, qualifier: str | None) -> str:
+    """A reference to column ``name`` (literal, backquoted), under ``qualifier`` (a DataFrame alias) when given."""
+    quoted = "`" + name.replace("`", "``") + "`"
+    return quoted if qualifier is None else f"{qualifier}.{quoted}"
 
 
 def _quoted(name: str) -> Column:
@@ -144,7 +169,9 @@ class DataFrame:
     @property
     def schema(self) -> StructType:
         """The result schema, by analysis."""
-        return _struct_from_columns(self._df.schema())
+        return StructType(
+            [StructField(n, _parse_datatype_json_string(t), nullable) for n, t, nullable in self._df.schema_json()]
+        )
 
     @property
     def columns(self) -> list[str]:
@@ -154,8 +181,16 @@ class DataFrame:
     def dtypes(self) -> list[tuple[str, str]]:
         return [(name, type_) for name, type_, _ in self._df.schema()]
 
-    def printSchema(self) -> None:
-        print(_convert.tree_string(self.schema))
+    def printSchema(self, level: int | None = None) -> None:
+        """Prints the schema as a tree, as Spark does (``long``, ``integer`` type names, nested
+        fields, a final empty line); a positive ``level`` limits the depth."""
+        try:
+            print(self.schema.treeString(level or 0))
+        except Exception:  # a type the schema parser lacks (``time(6)``, ``geometry(0)``): the flat form
+            print("root")
+            for name, type_, nullable in self._df.schema():
+                print(f" |-- {name}: {type_} (nullable = {str(nullable).lower()})")
+            print()
 
     # Column access.
     def __getitem__(self, item: Any) -> Any:
@@ -175,6 +210,8 @@ class DataFrame:
         # would then hide the message.
         if name == "rdd":
             raise unsupported_attribute("DataFrame.rdd (RDDs; use the DataFrame API)")
+        if name == "writeStream":  # the property raised an AttributeError: Python lands here
+            raise not_implemented_attribute("DataFrame.writeStream (streaming)")
         if name.startswith("_") or name not in self.columns:
             raise PySparkAttributeError(
                 errorClass="ATTRIBUTE_NOT_SUPPORTED",
@@ -205,13 +242,26 @@ class DataFrame:
         except ImportError:
             return None
         rows = _eager_max_rows(self._session)
-        table = self.limit(rows)._shown()._arrow()
+        table = self.limit(rows)._shown()._arrow("_repr_html_")
         cells = _convert.table_cells(table, self._session_zone())
         columns = [(name, type_) for name, type_ in self.dtypes]
         return _convert.repr_html_string(columns, cells)
 
     def select(self, *cols: ColumnsOrNames) -> DataFrame:
-        return self._new(self._df.select([_named(c, "col") for c in _flatten(cols)]))
+        """Projects ``cols`` (names, Columns or ``"*"``) into a new DataFrame.
+
+        Examples
+        --------
+        >>> df.select("name", (F.col("age") + 1).alias("next_age")).collect()
+        [Row(name='Alice', next_age=3), Row(name='Bob', next_age=6)]
+        """
+        picked: list[Any] = []
+        for c in _flatten(cols):
+            if isinstance(c, _RegexColumn):
+                picked.extend(q._c for q in c._expand())
+            else:
+                picked.append(_named(c, "col"))
+        return self._new(self._df.select(picked))
 
     def selectExpr(self, *expr: str | list[str]) -> DataFrame:
         """Projects a set of SQL expressions, as ``pyspark.sql.DataFrame.selectExpr``: each string
@@ -235,11 +285,19 @@ class DataFrame:
     where = filter
 
     def withColumn(self, colName: str, col: Column) -> DataFrame:
+        """Adds the column ``colName`` computed by ``col``, or replaces the one of that name.
+
+        Examples
+        --------
+        >>> df.withColumn("age2", F.col("age") * 2).collect()
+        [Row(age=2, name='Alice', age2=4), Row(age=5, name='Bob', age2=10)]
+        """
         if not isinstance(col, Column):
             raise not_expected_type("col", "Column", col)
         return self._new(self._df.with_column(colName, col._c))
 
     def alias(self, alias: str) -> DataFrame:
+        """Returns this DataFrame under the name ``alias``, for qualifying columns in a join."""
         return self._new(self._df.alias(alias))
 
     def cache(self) -> DataFrame:
@@ -384,14 +442,62 @@ class DataFrame:
         return self._df.is_cached()
 
     def groupBy(self, *cols: ColumnsOrNames) -> GroupedData:
-        keys = _flatten(cols)
-        grouped = GroupedData(self._df.group_by([_named(c) for c in keys]), self)
-        grouped._keys = tuple(Column(_named(k), k) if isinstance(k, str) else k for k in keys)
+        """Groups the DataFrame by ``cols`` (names or Columns) so aggregates can be applied; with no columns the
+        whole DataFrame is one group.
+
+        Examples
+        --------
+        >>> df.groupBy("name").agg(F.avg("age")).orderBy("name").collect()
+        [Row(name='Alice', avg(age)=2.0), Row(name='Bob', avg(age)=5.0)]
+        """
+        flat = _flatten(cols)
+        keys = [_named(c) for c in flat]
+        grouped = GroupedData(self._df.group_by(keys), self, keys)
+        grouped._key_cols = tuple(Column(_named(k), k) if isinstance(k, str) else k for k in flat)
         return grouped
+
+    def mapInPandas(self, func: Any, schema: Any, barrier: bool = False, profile: Any = None) -> DataFrame:
+        """Maps an iterator of batches of this frame using a Python native function that takes and outputs
+        ``pandas.DataFrame`` iterators (``pyspark/sql/pandas/map_ops.py`` 4.2.1 ``mapInPandas``)."""
+        from krishiv.sql.pandas.functions import pandas_udf
+        from krishiv.sql.udf import PythonEvalType
+
+        return self._map_in_python(
+            pandas_udf(func, returnType=schema, functionType=PythonEvalType.SQL_MAP_PANDAS_ITER_UDF),
+            barrier,
+            profile,
+        )
+
+    def mapInArrow(self, func: Any, schema: Any, barrier: bool = False, profile: Any = None) -> DataFrame:
+        """As :meth:`mapInPandas`, over iterators of ``pyarrow.RecordBatch`` (``map_ops.py`` ``mapInArrow``)."""
+        from krishiv.sql.pandas.functions import pandas_udf
+        from krishiv.sql.udf import PythonEvalType
+
+        return self._map_in_python(
+            pandas_udf(func, returnType=schema, functionType=PythonEvalType.SQL_MAP_ARROW_ITER_UDF),
+            barrier,
+            profile,
+        )
+
+    def _map_in_python(self, udf: Any, barrier: bool, profile: Any) -> DataFrame:
+        from krishiv.errors import unsupported_feature
+
+        if barrier:
+            raise unsupported_feature("barrier execution mode of mapInPandas and mapInArrow")
+        if profile is not None:
+            raise unsupported_feature("stage-level scheduling resource profiles")
+        return DataFrame(self._df.map_in_python(udf._unwrapped._handle, False), self._session)
 
     groupby = groupBy
 
     def agg(self, *exprs: Column) -> DataFrame:
+        """Aggregates the whole DataFrame as one group (shorthand for ``df.groupBy().agg(...)``).
+
+        Examples
+        --------
+        >>> df.agg(F.max("age")).collect()
+        [Row(max(age)=5)]
+        """
         return self.groupBy().agg(*exprs)
 
     def join(
@@ -400,6 +506,15 @@ class DataFrame:
         on: str | list[str] | Column | list[Column] | None = None,
         how: str | None = None,
     ) -> DataFrame:
+        """Joins this DataFrame with ``other`` on ``on`` (a column name, a list of names or a condition) using the
+        join type ``how`` (``inner`` by default).
+
+        Examples
+        --------
+        >>> other = spark.createDataFrame([("Alice", "NL")], ["name", "country"])
+        >>> df.join(other, on="name", how="left").orderBy("name").collect()
+        [Row(name='Alice', age=2, country='NL'), Row(name='Bob', age=5, country=None)]
+        """
         if not isinstance(other, DataFrame):
             raise not_expected_type("other", "DataFrame", other)
         kind = _HOW.get((how or "inner").lower())
@@ -430,9 +545,17 @@ class DataFrame:
         )
 
     def crossJoin(self, other: DataFrame) -> DataFrame:
+        """The Cartesian product of this DataFrame and ``other``."""
         return self.join(other, how="cross")
 
     def orderBy(self, *cols: ColumnsOrNames, ascending: bool | list[bool] = True) -> DataFrame:
+        """Sorts by ``cols`` (names or Columns); ``ascending`` is a bool or one bool per column.
+
+        Examples
+        --------
+        >>> df.orderBy(F.col("age").desc()).collect()
+        [Row(age=5, name='Bob'), Row(age=2, name='Alice')]
+        """
         keys = _flatten(cols)
         orders = ascending if isinstance(ascending, list) else [ascending] * len(keys)
         if len(orders) != len(keys):
@@ -468,6 +591,7 @@ class DataFrame:
             raise _pyspark_error(e) from e
 
     def limit(self, num: int) -> DataFrame:
+        """Keeps the first ``num`` rows."""
         if not isinstance(num, int):
             raise not_expected_type("num", "int", num)
         return self._new(self._df.limit(num))
@@ -1056,13 +1180,11 @@ class DataFrame:
     ) -> DataFrame:
         """Returns a sampled subset of this :class:`DataFrame`.
 
-        .. note:: The engine cannot sample yet: the returned :class:`DataFrame` fails its
-            first action with ``KRISHIV_UNSUPPORTED_FEATURE``.
-
         Parameters
         ----------
         withReplacement : bool, optional
-            Sample with replacement or not (default ``False``).
+            Sample with replacement or not (default ``False``). Sampling with replacement is not
+            supported: it fails with ``KRISHIV_UNSUPPORTED_FEATURE``.
         fraction : float, optional
             Fraction of rows to generate, range [0.0, 1.0].
         seed : int, optional
@@ -1079,13 +1201,25 @@ class DataFrame:
         count of the given :class:`DataFrame`.
 
         `fraction` is required and, `withReplacement` and `seed` are optional.
+
+        Each row draws one number from Spark's ``XORShiftRandom`` stream (``rand(seed)``) and is kept when
+        it is below ``fraction``, so on one partition the rows are the ones Spark keeps for the same seed. An
+        explicit ``seed`` is always honoured, also in ``df.sample(0.3, seed=1)``, where PySpark (4.2.0) drops
+        it and samples at random. The result depends on the order of the rows and on how they are partitioned.
+
+        Examples
+        --------
+        >>> df = spark.range(20)
+        >>> df.sample(0.3, 1).count()
+        7
         """
         if isinstance(withReplacement, bool) and isinstance(fraction, float):
             replace, frac, sampled_seed = withReplacement, fraction, seed
         elif withReplacement is None and isinstance(fraction, float):
             replace, frac, sampled_seed = False, fraction, seed
         elif isinstance(withReplacement, float):
-            replace, frac, sampled_seed = False, float(withReplacement), None if fraction is None else int(fraction)
+            # ``sample(0.3, 1)``: the seed is the second positional argument, or the keyword.
+            replace, frac, sampled_seed = False, float(withReplacement), seed if fraction is None else int(fraction)
         else:
             raise PySparkTypeError(
                 errorClass="NOT_EXPECTED_TYPE",
@@ -1096,7 +1230,39 @@ class DataFrame:
                 },
             )
         sampled = int(sampled_seed) if sampled_seed is not None else random.randint(0, sys.maxsize)
-        return self._new(self._df.sample(replace, frac, sampled))
+        return _stats.sample(self, replace, frac, sampled)
+
+    def randomSplit(self, weights: list[float], seed: int | None = None) -> list[DataFrame]:
+        """Randomly splits this :class:`DataFrame` with the provided weights.
+
+        Parameters
+        ----------
+        weights : list
+            list of doubles as weights with which to split the :class:`DataFrame`.
+            Weights will be normalized if they don't sum up to 1.0.
+        seed : int, optional
+            The seed for sampling.
+
+        Notes
+        -----
+        The rows are ordered by every sortable column first, so a split does not depend on the order of the
+        input; each split is the rows whose draw of ``rand(seed)`` falls in its slice of the weights, so the
+        splits are disjoint and together are the input.
+
+        Examples
+        --------
+        >>> df = spark.range(20)
+        >>> splits = df.randomSplit([1.0, 2.0, 3.0], 11)
+        >>> [s.count() for s in splits]
+        [6, 5, 9]
+        """
+        for w in weights:
+            if w < 0.0:
+                raise PySparkValueError(
+                    errorClass="VALUE_NOT_POSITIVE", messageParameters={"arg_name": "weights", "arg_value": str(w)}
+                )
+        chosen = int(seed) if seed is not None else random.randint(0, sys.maxsize)
+        return _stats.random_split(self, [float(w) for w in weights], chosen)
 
     @property
     def na(self) -> DataFrameNaFunctions:
@@ -1421,10 +1587,6 @@ class DataFrame:
         """Returns a stratified sample without replacement based on the
         fraction given on each stratum.
 
-        .. note:: The engine cannot sample yet: unless ``fractions`` is empty, the returned
-            :class:`DataFrame` fails its first action with ``KRISHIV_UNSUPPORTED_FEATURE`` (from
-            :meth:`DataFrame.sample`).
-
         Parameters
         ----------
         col : :class:`Column` or str
@@ -1441,67 +1603,64 @@ class DataFrame:
 
         Notes
         -----
-        The rows come back grouped by stratum, not in the order of this DataFrame.
+        As Spark, each row draws ``rand(seed)`` and is kept when the draw is below its stratum's fraction.
         """
         return self.stat.sampleBy(col, fractions, seed)
 
     def describe(self, *cols: str | list[str]) -> DataFrame:
         """Computes basic statistics for numeric and string columns: count, mean, stddev, min and max.
 
-        .. note:: The engine has no standard-deviation aggregate yet: after checking its
-            arguments this fails with ``KRISHIV_UNSUPPORTED_FEATURE``.
+        This includes count, mean, stddev, min, and max. If no columns are given, this function computes
+        statistics for all numerical or string columns. Other columns are left out.
 
         Parameters
         ----------
         cols : str, list, optional
              Column name or list of column names to describe by (default All columns).
+
+        Notes
+        -----
+        The statistics are computed when this is called (one engine aggregate) and the result is a local
+        :class:`DataFrame` of strings.
         """
         names = cols[0] if len(cols) == 1 and isinstance(cols[0], list) else cols
         for name in names:
             if not isinstance(name, str):
                 raise not_expected_type("cols", "str", name)
-        raise unsupported_feature("DataFrame.describe")
+        return _stats.describe_frame(self, tuple(cast("tuple[str, ...]", names)))
 
     def summary(self, *statistics: str | list[str]) -> DataFrame:
         """Computes the given statistics (count, mean, stddev, min, max and percentiles such as
         ``75%``) for numeric and string columns.
 
-        .. note:: The engine has no standard-deviation or approximate-percentile aggregate yet:
-            after checking its arguments this fails with ``KRISHIV_UNSUPPORTED_FEATURE``.
-
         Parameters
         ----------
         statistics : str, optional
              The statistics to calculate (default count, mean, stddev, min, 25%, 50%, 75%, max).
+             Also ``count_distinct`` and ``approx_count_distinct``, and any ``<number>%``.
+
+        Notes
+        -----
+        The statistics are computed when this is called (one engine aggregate) and the result is a local
+        :class:`DataFrame` of strings. A percentile is the exact nearest-rank value up to 10000 rows.
         """
         names = statistics[0] if len(statistics) == 1 and isinstance(statistics[0], list) else statistics
         for name in names:
             if not isinstance(name, str):
                 raise not_expected_type("statistics", "list[str]", name)
-        raise unsupported_feature("DataFrame.summary")
+        return _stats.summary_frame(self, tuple(cast("tuple[str, ...]", names)) or _stats.DEFAULT_SUMMARY)
 
     def corr(self, col1: str, col2: str, method: str | None = None) -> float:
-        """The Pearson correlation of two columns as a double value.
-
-        .. note:: The engine has no correlation aggregate yet: after checking its arguments this
-            fails with ``KRISHIV_UNSUPPORTED_FEATURE``.
-        """
+        """The Pearson correlation of two columns as a double value (see :meth:`DataFrameStatFunctions.corr`)."""
         return self.stat.corr(col1, col2, method)
 
     def cov(self, col1: str, col2: str) -> float:
-        """The sample covariance of two columns as a double value.
-
-        .. note:: The engine has no covariance aggregate yet: after checking its arguments this
-            fails with ``KRISHIV_UNSUPPORTED_FEATURE``.
-        """
+        """The sample covariance of two columns as a double value."""
         return self.stat.cov(col1, col2)
 
     def freqItems(self, cols: list[str] | tuple[str, ...], support: float | None = None) -> DataFrame:
-        """The frequent items of columns, possibly with false positives.
-
-        .. note:: The engine has no frequent-items sketch yet: after checking its arguments this
-            fails with ``KRISHIV_UNSUPPORTED_FEATURE``.
-        """
+        """The frequent items of columns, possibly with false positives (see
+        :meth:`DataFrameStatFunctions.freqItems`)."""
         return self.stat.freqItems(cols, support)
 
     def approxQuantile(
@@ -1510,11 +1669,7 @@ class DataFrame:
         probabilities: list[float] | tuple[float, ...],
         relativeError: float,
     ) -> list[Any]:
-        """The approximate quantiles of numeric columns.
-
-        .. note:: The engine has no approximate-percentile aggregate yet: after checking its
-            arguments this fails with ``KRISHIV_UNSUPPORTED_FEATURE``.
-        """
+        """The approximate quantiles of numeric columns (see :meth:`DataFrameStatFunctions.approxQuantile`)."""
         return self.stat.approxQuantile(col, probabilities, relativeError)
 
     def repartition(self, numPartitions: int | ColumnOrName, *cols: ColumnOrName) -> DataFrame:
@@ -1823,12 +1978,11 @@ class DataFrame:
     def toJSON(self, use_unicode: bool = True) -> DataFrame:
         """Converts a :class:`DataFrame` into one of JSON strings, one row per document, in a
         single ``string`` column ``value`` (Spark Connect's form; classic PySpark returns an
-        ``RDD``).
-
-        The engine has no ``to_json`` function yet, so this raises the engine's
-        ``KRISHIV_UNSUPPORTED_FEATURE`` rather than formatting JSON in Python.
+        ``RDD``): ``to_json(struct(*))`` of each row, so null fields are left out as Spark does.
         """
-        raise unsupported_feature("DataFrame.toJSON")
+        from krishiv.sql import functions as F
+
+        return self.select(F.to_json(F.struct(*[_quoted(c) for c in self.columns])).alias("value"))
 
     def tail(self, num: int) -> list[Row]:
         """Returns the last ``num`` rows as a :class:`list` of :class:`Row`.
@@ -1883,9 +2037,10 @@ class DataFrame:
             )
         return table
 
-    def _arrow(self) -> Any:
-        """The result as a ``pyarrow.Table``, whatever its types."""
-        pa = _convert.require_pyarrow("toArrow")
+    def _arrow(self, action: str = "toArrow") -> Any:
+        """The result as a ``pyarrow.Table``, whatever its types; ``action`` names the caller in the
+        message when pyarrow is missing."""
+        pa = _convert.require_pyarrow(action)
         stream = self._df.execute()
         stream.use_placeholder_names()
         try:
@@ -1903,7 +2058,7 @@ class DataFrame:
     def toPandas(self) -> Any:
         """The result as a ``pandas.DataFrame``, converted from Arrow (needs pyarrow and pandas). Instants are
         wall-clock times in the session time zone without a zone, as Spark's ``toPandas``."""
-        table = self._arrow()
+        table = self._arrow("toPandas")
         try:
             importlib.import_module("pandas")  # pandas itself is optional: only checked here
         except ImportError as e:
@@ -1913,7 +2068,7 @@ class DataFrame:
     def collect(self) -> list[Row]:
         """All result rows (needs pyarrow). As PySpark's Connect client, it refuses a year-month or calendar interval
         at any depth, by its Arrow type."""
-        table = self._arrow()
+        table = self._arrow("collect")
         for f in table.schema:
             if (name := _convert.not_collectable_arrow(f.type)) is not None:
                 raise PySparkTypeError(
@@ -1923,15 +2078,18 @@ class DataFrame:
         return _convert.rows_of(table)
 
     def take(self, num: int) -> list[Row]:
+        """The first ``num`` rows as a list."""
         return self.limit(num).collect()
 
     def head(self, n: int | None = None) -> Row | list[Row] | None:
+        """The first ``n`` rows: a single :class:`Row` (or ``None``) when ``n`` is omitted, else a list."""
         if n is None:
             rows = self.take(1)
             return rows[0] if rows else None
         return self.take(n)
 
     def first(self) -> Row | None:
+        """The first row, or ``None`` when the DataFrame is empty."""
         return cast("Row | None", self.head())
 
     def count(self) -> int:
@@ -1945,7 +2103,7 @@ class DataFrame:
         if not isinstance(truncate, bool | int):
             raise not_expected_type("truncate", "bool or int", truncate)
         rows = min(max(n, 0), _SHOW_MAX)  # Spark's bounds: MAX_ROUNDED_ARRAY_LENGTH - 1
-        cells = _convert.table_cells(self.limit(rows + 1)._shown()._arrow(), self._session_zone())
+        cells = _convert.table_cells(self.limit(rows + 1)._shown()._arrow("show"), self._session_zone())
         print(
             _convert.show_string(self.columns, cells, rows, truncate, vertical)
         )  # the text ends in "\n": one empty line, as PySpark
@@ -2039,6 +2197,13 @@ class DataFrame:
             raise not_expected_type("name", "str", name)
         self._df.create_or_replace_temp_view(name)
 
+    def createTempView(self, name: str) -> None:
+        """Registers this DataFrame as the temporary view ``name``; fails with
+        ``TEMP_TABLE_OR_VIEW_ALREADY_EXISTS`` when a view of that name exists."""
+        if not isinstance(name, str):
+            raise not_expected_type("name", "str", name)
+        self._df.create_temp_view(name)
+
     def createGlobalTempView(self, name: str) -> None:
         """Registers this DataFrame as ``global_temp.<name>``; fails when that view exists."""
         if not isinstance(name, str):
@@ -2050,6 +2215,177 @@ class DataFrame:
         if not isinstance(name, str):
             raise not_expected_type("name", "str", name)
         self._df.create_global_temp_view(name, True)
+
+    def registerTempTable(self, name: str) -> None:
+        """Deprecated alias of :meth:`createOrReplaceTempView` (deprecated since Spark 2.0)."""
+        self.createOrReplaceTempView(name)
+
+    # More of the PySpark DataFrame API.
+    @property
+    def isStreaming(self) -> bool:
+        """Always ``False``: the engine runs no streaming DataFrames."""
+        return False
+
+    def isEmpty(self) -> bool:
+        """Whether this :class:`DataFrame` has no rows."""
+        return self.limit(1).count() == 0
+
+    def rollup(self, *cols: ColumnsOrNames) -> GroupedData:
+        """Groups by ``cols`` and their prefixes (a key a row is rolled up over reads ``NULL``)."""
+        grouped = GroupedData(self._df.rollup([_named(c) for c in _flatten(cols)]), self)
+        grouped._multi_grouping = True
+        return grouped
+
+    def cube(self, *cols: ColumnsOrNames) -> GroupedData:
+        """Groups by every subset of ``cols`` (a key a row is rolled up over reads ``NULL``)."""
+        grouped = GroupedData(self._df.cube([_named(c) for c in _flatten(cols)]), self)
+        grouped._multi_grouping = True
+        return grouped
+
+    def groupingSets(self, groupingSets: Sequence[Sequence[ColumnOrName]], *cols: ColumnOrName) -> GroupedData:
+        """Groups by each of ``groupingSets`` (a key a set does not group by reads ``NULL``); ``cols``
+        are the grouping columns of the result."""
+        if not isinstance(groupingSets, list | tuple) or not all(isinstance(g, list | tuple) for g in groupingSets):
+            raise not_expected_type("groupingSets", "list of lists of Column or str", groupingSets)
+        sets = [[_named(c) for c in g] for g in groupingSets]
+        grouped = GroupedData(self._df.grouping_sets(sets, [_named(c) for c in _flatten(cols)]), self)
+        grouped._multi_grouping = True
+        return grouped
+
+    def withColumns(self, colsMap: dict[str, Column | str]) -> DataFrame:
+        """Adds or replaces columns by name (a replaced column keeps its place); every expression
+        sees the columns of this DataFrame, not those added in the same call."""
+        if not isinstance(colsMap, dict):
+            raise not_expected_type("colsMap", "dict", colsMap)
+        values: dict[str, Column] = {}
+        for name, value in colsMap.items():
+            if not isinstance(name, str):
+                raise not_expected_type("colsMap", "dict of str to Column", name)
+            if isinstance(value, str):
+                values[name] = Column(_named(value))
+            elif isinstance(value, Column):
+                values[name] = value
+            else:
+                raise not_expected_type("col", "Column or str", value)
+        if not values:
+            return self
+        case_sensitive = _case_sensitive(self._session)
+        names = list(values)
+        for i, n in enumerate(names):
+            if any(_same(n, m, case_sensitive) for m in names[:i]):
+                raise ValueError(
+                    f"[COLUMN_ALREADY_EXISTS] The column `{n}` already exists. "
+                    "Choose another name or rename the existing column."
+                )
+        taken: set[str] = set()
+        picked: list[Column] = []
+        for c in self.columns:
+            match = next((n for n in values if _same(n, c, case_sensitive)), None)
+            if match is None:
+                picked.append(_quoted(c))
+            else:
+                picked.append(values[match].alias(match))
+                taken.add(match)
+        picked.extend(v.alias(n) for n, v in values.items() if n not in taken)
+        return self.select(*picked)
+
+    def colRegex(self, colName: str) -> Column:
+        """The columns whose names match the regular expression ``colName`` (in backquotes,
+        optionally qualified by a DataFrame alias, which then selects the columns of that alias), for
+        ``select``: ``df.select(df.colRegex("`^a.*`"))``. It is only meaningful as a ``select`` argument
+        (anywhere else it stands for its first match). Matching is case-insensitive unless
+        ``spark.sql.caseSensitive`` is true."""
+        if not isinstance(colName, str):
+            raise not_expected_type("colName", "str", colName)
+        match = re.fullmatch(r"(?:([^`]*)\.)?`((?:[^`]|``)*)`", colName)
+        if match is None:
+            return cast("Column", self[colName])  # not a backquoted pattern: a plain column, as Spark
+        qualifier = match.group(1)
+        pattern = match.group(2).replace("``", "`")
+        flags = 0 if _case_sensitive(self._session) else re.IGNORECASE
+        names = [c for c in self.columns if re.fullmatch(pattern, c, flags)]
+        if qualifier:
+            # Keep the names the qualifier can resolve (a joined frame lists a name once per side).
+            names = [n for n in dict.fromkeys(names) if self._resolves(_regex_ref(n, qualifier))]
+        return _RegexColumn(names, colName, qualifier or None)
+
+    def _resolves(self, ref: str) -> bool:
+        try:
+            self._new(self._df.select([_native.col(ref)])).schema  # noqa: B018  (analysis raises when unresolved)
+        except AnalysisException:
+            return False
+        return True
+
+    def sortWithinPartitions(self, *cols: ColumnsOrNames, ascending: bool | list[bool] = True) -> DataFrame:
+        """Sorts each partition; the embedded engine has one partition, so this is :meth:`orderBy`."""
+        return self.orderBy(*cols, ascending=ascending)
+
+    def repartitionByRange(self, numPartitions: int | ColumnOrName, *cols: ColumnOrName) -> DataFrame:
+        """Partitions by ranges of ``cols``; accepted and ignored on one node, as :meth:`repartition`."""
+        if isinstance(numPartitions, int):
+            targets: tuple[ColumnOrName, ...] = cols
+            _check_partitions(numPartitions)
+        elif isinstance(numPartitions, str | Column):
+            targets = (numPartitions, *cols)
+        else:
+            raise not_expected_type("numPartitions", "int, Column or str", numPartitions)
+        if not targets:
+            raise PySparkValueError(errorClass="CANNOT_BE_EMPTY", messageParameters={"item": "partition-by expression"})
+        for c in targets:
+            if not isinstance(c, str | Column):
+                raise not_expected_type("cols", "Column or str", c)
+        return self._new(self._df)
+
+    def inputFiles(self) -> list[str]:
+        """Not available: the engine does not report the files a plan reads (``NOT_IMPLEMENTED``)."""
+        raise not_implemented("DataFrame.inputFiles")
+
+    def _plan_text(self) -> str:
+        return self._df.explain("extended", False)
+
+    def sameSemantics(self, other: DataFrame) -> bool:
+        """Whether this and ``other`` have the same logical plan (compared by their ``explain``
+        text, so ``True`` is reliable and ``False`` may miss equivalent plans, as in Spark)."""
+        if not isinstance(other, DataFrame):
+            raise not_expected_type("other", "DataFrame", other)
+        return self._plan_text() == other._plan_text()
+
+    def semanticHash(self) -> int:
+        """A 32-bit hash of the plan, equal for DataFrames :meth:`sameSemantics` calls the same."""
+        value = zlib.crc32(self._plan_text().encode())
+        return value - 2**32 if value >= 2**31 else value
+
+    def to(self, schema: StructType) -> DataFrame:
+        """Reconciles each row with ``schema`` as Spark's ``Dataset.to``: columns are matched by name,
+        reordered (inside structs too) and cast where store assignment allows; see
+        :mod:`krishiv.sql._to_schema` for the errors. (Spark 4.x: the method is new in 3.4.)"""
+        from krishiv.sql._to_schema import to_schema
+
+        if not isinstance(schema, StructType):
+            raise not_expected_type("schema", "StructType", schema)
+        return to_schema(self, schema, _case_sensitive(self._session))
+
+    def foreach(self, f: Callable[[Row], None]) -> None:
+        """Applies ``f`` to every row (in this process, as there are no executors), streaming the result."""
+        for row in self.toLocalIterator():
+            f(row)
+
+    def foreachPartition(self, f: Callable[[Iterator[Row]], None]) -> None:
+        """Applies ``f`` to an iterator over all the rows (the one partition of an embedded session)."""
+        f(self.toLocalIterator())
+
+    @property
+    def writeStream(self) -> Any:
+        """Not available: streaming writes are not part of 0.2 (``NOT_IMPLEMENTED``)."""
+        raise not_implemented_attribute("DataFrame.writeStream (streaming)")
+
+    def withWatermark(self, eventTime: str, delayThreshold: str) -> DataFrame:
+        """Not available: streaming is not part of 0.2 (``NOT_IMPLEMENTED``)."""
+        raise not_implemented("DataFrame.withWatermark (streaming)")
+
+    def dropDuplicatesWithinWatermark(self, subset: list[str] | None = None) -> DataFrame:
+        """Not available: streaming is not part of 0.2 (``NOT_IMPLEMENTED``)."""
+        raise not_implemented("DataFrame.dropDuplicatesWithinWatermark (streaming)")
 
     @property
     def write(self) -> DataFrameWriter:
