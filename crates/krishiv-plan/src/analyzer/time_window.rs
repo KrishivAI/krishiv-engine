@@ -28,6 +28,8 @@
 use std::ops::ControlFlow;
 use std::sync::Arc;
 
+use krishiv_types::equals_ignore_case;
+
 use krishiv_common::error::{
     CannotParseInterval, DatatypeMismatchParameterConstraintViolation,
     DatatypeMismatchValueOutOfRange, InternalError, LegacyErrorTemp1006, LegacyErrorTemp1039,
@@ -314,7 +316,7 @@ fn inner_window_ref(parts: &[String], alias_window: bool) -> Option<&[String]> {
 /// column.
 fn shadows_window(e: &Expr) -> bool {
     matches!(&e.node, ExprNode::Lambda { params, .. }
-        if params.iter().any(|p| p.name.eq_ignore_ascii_case(WINDOW)))
+        if params.iter().any(|p| equals_ignore_case(&p.name, WINDOW)))
 }
 
 /// Whether `e` names the inner window's `window` column outside any aggregate call: an aggregate's
@@ -929,7 +931,7 @@ fn name_selected_window(
 fn derived_column_name<'a>(base: &Arc<LogicalPlan>, parts: &'a [String]) -> Option<&'a str> {
     match parts {
         [name] => Some(name),
-        [qualifier, name] if matches!(&base.node, PlanNode::SubqueryAlias { alias, .. } if alias.eq_ignore_ascii_case(qualifier)) => {
+        [qualifier, name] if matches!(&base.node, PlanNode::SubqueryAlias { alias, .. } if equals_ignore_case(alias, qualifier)) => {
             Some(name)
         }
         _ => None,
@@ -938,10 +940,35 @@ fn derived_column_name<'a>(base: &Arc<LogicalPlan>, parts: &'a [String]) -> Opti
 
 /// Whether the output column `name` of `p` is the window column an inner `window(..)` added.
 fn is_window_column(p: &Arc<LogicalPlan>, name: &str) -> bool {
-    output_names(p)
-        .iter()
-        .position(|n| n.eq_ignore_ascii_case(name))
-        .is_some_and(|at| is_window_output(p, at))
+    match &p.node {
+        PlanNode::SubqueryAlias { input, columns, .. } if columns.is_empty() => {
+            is_window_column(input, name)
+        }
+        PlanNode::Sort { input, .. }
+        | PlanNode::Limit { input, .. }
+        | PlanNode::Offset { input, .. } => is_window_column(input, name),
+        PlanNode::Project { input, exprs }
+        | PlanNode::Aggregate {
+            input,
+            aggregates: exprs,
+            ..
+        } => match output_names(p)
+            .iter()
+            .position(|n| equals_ignore_case(n, name))
+        {
+            Some(at) => exprs.get(at).is_some_and(|e| is_window_item(input, e)),
+            // No item is written with the name: it comes through a `*`.
+            None => {
+                exprs.iter().any(|e| matches!(e.node, ExprNode::Star(_)))
+                    && is_window_column(input, name)
+            }
+        },
+        // A renamed column list names its columns by position.
+        _ => output_names(p)
+            .iter()
+            .position(|n| equals_ignore_case(n, name))
+            .is_some_and(|at| is_window_output(p, at)),
+    }
 }
 
 /// Whether the output column at `at` of `p` is that window column: `window`, under any alias, over the
@@ -966,28 +993,33 @@ fn is_window_output(p: &Arc<LogicalPlan>, at: usize) -> bool {
             if upto.iter().any(|e| matches!(e.node, ExprNode::Star(_))) {
                 return false;
             }
-            let read = match &exprs[at].node {
-                ExprNode::Alias { expr, .. } => &expr.node,
-                node => node,
-            };
-            let ExprNode::Column(c) = read else {
-                return false;
-            };
-            let over_generator = matches!(
-                &input.node,
-                PlanNode::Generate { names, arg, .. }
-                    if matches!(names.as_slice(), [n] if n == WINDOW || n == OUTER)
-                        && call_of(arg, "__time_windows").is_some()
-            );
-            if over_generator {
-                return c.name == [WINDOW] || c.name == [OUTER];
-            }
-            // A projection that forwards a column (`SELECT a.iw AS w FROM (..) a`). The whole reference
-            // counts: `a.payload.iw` is a struct field, not the column `iw`.
-            derived_column_name(input, &c.name).is_some_and(|inner| is_window_column(input, inner))
+            is_window_item(input, &exprs[at])
         }
         _ => false,
     }
+}
+
+/// Whether the select item `e` over `input` is that window column.
+fn is_window_item(input: &Arc<LogicalPlan>, e: &Expr) -> bool {
+    let read = match &e.node {
+        ExprNode::Alias { expr, .. } => &expr.node,
+        node => node,
+    };
+    let ExprNode::Column(c) = read else {
+        return false;
+    };
+    let over_generator = matches!(
+        &input.node,
+        PlanNode::Generate { names, arg, .. }
+            if matches!(names.as_slice(), [n] if n == WINDOW || n == OUTER)
+                && call_of(arg, "__time_windows").is_some()
+    );
+    if over_generator {
+        return c.name == [WINDOW] || c.name == [OUTER];
+    }
+    // A projection that forwards a column (`SELECT a.iw AS w FROM (..) a`). The whole reference
+    // counts: `a.payload.iw` is a struct field, not the column `iw`.
+    derived_column_name(input, &c.name).is_some_and(|inner| is_window_column(input, inner))
 }
 
 /// The output column names of a projection or aggregate (an alias, or a bare column's own name; `""` for an

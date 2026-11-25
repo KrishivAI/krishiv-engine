@@ -46,10 +46,49 @@ pub(super) fn assign(
     let table_name = quoted(&table.namespace, &table.name);
     let table_cols = || quoted_names(table.columns.iter().map(|c| c.name.as_str()).collect());
     let data_cols = || quoted_names(output.iter().map(|c| c.name.as_str()).collect());
+    // What one table column checks about the data column paired with it.
+    let check_column =
+        |column: &crate::store::StoreColumn, data: &TableColumn, by_name: Option<bool>| {
+            // `INSERT .. BY NAME` resolves a struct's fields by name under every policy (Spark's
+            // `reorderColumnsByName`), before any leaf is checked.
+            if let Some(case) = by_name
+                && let Some(problem) = struct_problem(
+                    &data.data_type,
+                    &column.data_type,
+                    &[column.name.as_str()],
+                    case,
+                    legacy_store,
+                )
+            {
+                return Err(problem.into_error(table_name.clone()));
+            }
+            // `spark.sql.storeAssignmentPolicy=LEGACY` stores through any cast Spark can run: no ANSI check, but
+            // a cast Spark refuses in every mode (an `ARRAY` into an `INT`) is refused here, before a first
+            // clause commits.
+            let stores = if legacy_store {
+                !legacy_refused(&data.data_type, &column.data_type, by_name)
+            } else {
+                can_store_by(&data.data_type, &column.data_type, by_name)
+            };
+            if !stores {
+                return Err(KrishivError::from(
+                    IncompatibleDataForTableCannotSafelyCast {
+                        table_name: table_name.clone(),
+                        col_name: format!("`{}`", column.name),
+                        src_type: format!("\"{}\"", data.data_type.catalog_string().to_uppercase()),
+                        target_type: format!(
+                            "\"{}\"",
+                            column.data_type.catalog_string().to_uppercase()
+                        ),
+                    },
+                ));
+            }
+            Ok(())
+        };
     let mut out = vec![Source::Default; table.columns.len()];
     if by_name {
-        // Spark's `reorderColumnsByName`: the arity, then each table column's matches, then the data columns no
-        // table column took.
+        // Spark's `reorderColumnsByName`: the arity, then each table column in turn (its matches, then its
+        // struct fields and store cast), then the data columns no table column took.
         if output.len() > table.columns.len() {
             return Err(InsertColumnArityMismatchTooManyDataColumns {
                 table_name,
@@ -74,15 +113,23 @@ pub(super) fn assign(
                 }
                 .into());
             }
+            check_column(column, &output[i], names)?;
             taken[i] = true;
             *slot = Source::Position(i);
         }
-        let extra: Vec<String> = output
+        // Spark names each with `toSQLId`, which parses the raw name: one that does not parse is
+        // `INVALID_ATTRIBUTE_NAME_SYNTAX`.
+        let extra = output
             .iter()
             .zip(&taken)
             .filter(|(_, taken)| !**taken)
-            .map(|(o, _)| format!("`{}`", o.name.replace('`', "``")))
-            .collect();
+            .map(|(o, _)| {
+                let parts = krishiv_common::names::parse_attribute_name(&o.name)?;
+                Ok(quoted_path(
+                    &parts.iter().map(String::as_str).collect::<Vec<_>>(),
+                ))
+            })
+            .collect::<Result<Vec<String>, KrishivError>>()?;
         if !extra.is_empty() {
             return Err(IncompatibleDataForTableExtraColumns {
                 table_name,
@@ -147,40 +194,11 @@ pub(super) fn assign(
             }
         }
     }
-    for (column, from) in table.columns.iter().zip(&out) {
-        // `INSERT .. BY NAME` resolves a struct's fields by name under every policy (Spark's
-        // `reorderColumnsByName`), before any leaf is checked.
-        if let (Source::Position(i), Some(case)) = (from, names)
-            && let Some(problem) = struct_problem(
-                &output[*i].data_type,
-                &column.data_type,
-                &[column.name.as_str()],
-                case,
-                legacy_store,
-            )
-        {
-            return Err(problem.into_error(table_name));
-        }
-        // `spark.sql.storeAssignmentPolicy=LEGACY` stores through any cast Spark can run: no ANSI check, but
-        // a cast Spark refuses in every mode (an `ARRAY` into an `INT`) is refused here, before a first
-        // clause commits.
-        if let Source::Position(i) = from
-            && !(if legacy_store {
-                !legacy_refused(&output[*i].data_type, &column.data_type, names)
-            } else {
-                can_store_by(&output[*i].data_type, &column.data_type, names)
-            })
-        {
-            return Err(IncompatibleDataForTableCannotSafelyCast {
-                table_name,
-                col_name: format!("`{}`", column.name),
-                src_type: format!(
-                    "\"{}\"",
-                    output[*i].data_type.catalog_string().to_uppercase()
-                ),
-                target_type: format!("\"{}\"", column.data_type.catalog_string().to_uppercase()),
+    if !by_name {
+        for (column, from) in table.columns.iter().zip(&out) {
+            if let Source::Position(i) = from {
+                check_column(column, &output[*i], None)?;
             }
-            .into());
         }
     }
     Ok(out)

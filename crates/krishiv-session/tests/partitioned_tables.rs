@@ -1983,8 +1983,8 @@ fn by_name_struct_mismatches_report_spark_classes_and_paths() {
 }
 
 /// `INSERT .. BY NAME` over the top-level columns fails in Spark's order: more data columns than table columns,
-/// then two data columns matching one table column (named as the table spells it), before any type check, then
-/// the data columns the table does not have.
+/// then each table column in turn (two data columns matching it, named as the table spells it, before its type
+/// check), then the data columns the table does not have.
 #[test]
 fn by_name_columns_report_arity_then_ambiguity_then_extra_columns() {
     let dir = tempfile::tempdir().unwrap();
@@ -2013,13 +2013,32 @@ fn by_name_columns_report_arity_then_ambiguity_then_extra_columns() {
         let got = params(&s, &sql);
         assert!(got.contains(&format!("colName={column}")), "{sql}: {got:?}");
     }
-    let sql = "insert into bt by name select 1 as a, 2 as zz, 3 as `y``y`";
+    // A table column's store cast comes before a later column's ambiguity and before the extra columns.
+    for select in [
+        "select array(1) as a, 1 as c, 2 as C",
+        "select array(1) as a, 2 as zz",
+    ] {
+        let sql = format!("insert into bt by name {select}");
+        assert_eq!(
+            class(&s, &sql),
+            "INCOMPATIBLE_DATA_FOR_TABLE.CANNOT_SAFELY_CAST",
+            "{sql}"
+        );
+        let got = params(&s, &sql);
+        assert!(got.contains(&"colName=`a`".to_owned()), "{sql}: {got:?}");
+    }
+    let sql = "insert into bt by name select 1 as a, 2 as zz, 3 as `x y`";
     assert_eq!(class(&s, sql), "INCOMPATIBLE_DATA_FOR_TABLE.EXTRA_COLUMNS");
     let got = params(&s, sql);
     assert!(
-        got.contains(&"extraColumns=`zz`, `y``y`".to_owned()),
+        got.contains(&"extraColumns=`zz`, `x y`".to_owned()),
         "{got:?}"
     );
+    // Spark quotes an extra name by parsing it: one that does not parse is that error.
+    let sql = "insert into bt by name select 1 as a, 2 as zz, 3 as `y``y`";
+    assert_eq!(class(&s, sql), "INVALID_ATTRIBUTE_NAME_SYNTAX");
+    let got = params(&s, sql);
+    assert!(got.contains(&"name=y`y".to_owned()), "{got:?}");
 }
 
 /// `INSERT .. BY NAME` pairs struct fields under Spark's `equalsIgnoreCase` (per code point, upper then lower

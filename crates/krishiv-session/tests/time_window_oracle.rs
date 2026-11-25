@@ -221,6 +221,15 @@ fn a_window_over_a_derived_window_column_follows_the_column_it_names() -> R {
                    FROM (SELECT window(ts, '1 minute') AS iw, named_struct('iw', ts) AS payload \
                          FROM {v}) a) q"
         ),
+        // The window column next to a `*`, and through one.
+        format!(
+            "SELECT CAST(window(q.w, '5 minutes') AS STRING) \
+             FROM (SELECT *, a.iw AS w FROM (SELECT window(ts, '1 minute') AS iw FROM {v}) a) q"
+        ),
+        format!(
+            "SELECT CAST(window(q.iw, '5 minutes') AS STRING) \
+             FROM (SELECT * FROM (SELECT window(ts, '1 minute') AS iw FROM {v}) a) q"
+        ),
     ] {
         assert_eq!(rows(&s, &sql)?, want, "{sql}");
     }
