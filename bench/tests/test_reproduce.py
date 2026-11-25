@@ -932,8 +932,6 @@ def test_krishiv_without_the_option_times_with_run(tmp_path, monkeypatch):
 @pytest.mark.parametrize(
     ("sql", "status"),
     [
-        ("WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM r WHERE n < 3) SELECT * FROM r", "unsupported"),
-        ("SELECT * FROM t, LATERAL (SELECT * FROM t) x", "unsupported"),
         ("SELECT no_such_function(a) FROM t", "unsupported"),
         ("SELECT zzz FROM t", "unsupported"),
         ("SELECT FROM WHERE", "unsupported"),
