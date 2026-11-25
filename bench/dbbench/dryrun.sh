@@ -95,7 +95,7 @@ one() {
   sed -i "s/^export RUN_TASKS=.*/export RUN_TASKS=\"$task\"/" "$board/run.conf"
   printf 'task,data,nrow,k,na,sort,active\n%s,%s,%s,1\n' "$task" "$name" "$fields" >"$board/_control/data.csv"
   rm -f "$board/run.lock"
-  box "${DBB_RUN_MEMORY:-16g}" ./run.sh 2>&1 | grep -E '^(start|finish|# Bench)|rror|timed out|Killed' || true
+  box "${DBB_RUN_MEMORY:-16g}" ./run.sh 2>&1 | grep -E '^(start|finish|# Bench)|error|Error|timed out|Killed' || true
   for s in duckdb krishiv; do
     if [[ $(cat "$board/out/run_${s}_${task}_${name}.ret" 2>/dev/null) != 0 ]]; then
       echo "FAILED: $s $task $name (see $board/out/run_${s}_${task}_${name}.err)"
