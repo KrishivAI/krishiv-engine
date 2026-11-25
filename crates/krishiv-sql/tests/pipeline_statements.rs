@@ -227,3 +227,31 @@ fn partition_columns_and_comment_are_kept() {
     assert_eq!(c.table.comment.as_deref(), Some("x"));
     assert_eq!(c.table.partitioned_by.len(), 1);
 }
+
+#[test]
+fn insert_local_directory_needs_the_file_scheme() {
+    // LOCAL with another scheme is refused at parse (LOCAL_MUST_WITH_SCHEMA_FILE, `LocalMustWithSchemaFile`).
+    for (sql, scheme) in [
+        (
+            "INSERT OVERWRITE LOCAL DIRECTORY 's3://b/p' USING parquet SELECT 1",
+            "`s3`",
+        ),
+        (
+            "INSERT OVERWRITE LOCAL DIRECTORY USING parquet OPTIONS ('path' 'hdfs://nn/p') SELECT 1",
+            "`hdfs`",
+        ),
+    ] {
+        let (class, message, _) = fails(sql);
+        assert_eq!(class, ErrorClass::LocalMustWithSchemaFile, "{sql}");
+        assert!(message.contains(scheme), "{message}");
+    }
+    for sql in [
+        "INSERT OVERWRITE LOCAL DIRECTORY '/tmp/o' USING parquet SELECT 1",
+        "INSERT OVERWRITE LOCAL DIRECTORY 'file:///tmp/o' USING parquet SELECT 1",
+        "INSERT OVERWRITE DIRECTORY 's3://b/p' USING parquet SELECT 1",
+        // The Hive form has no scheme check in Spark (`visitInsertOverwriteHiveDir`); the session refuses it by name.
+        "INSERT OVERWRITE LOCAL DIRECTORY 's3://b/p' STORED AS parquet SELECT 1",
+    ] {
+        assert!(matches!(parse(sql), Statement::InsertDirectory(_)), "{sql}");
+    }
+}
