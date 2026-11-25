@@ -2,8 +2,8 @@
 import pyspark.sql.functions as F
 
 # F.nope('x')
-df = df.select(F.to_utc_timestamp("a"), F.col("b"))
-df = df.select(F.try_reflect("a"), F.col("b"))
-df = df.select(F.array_agg("a"), F.col("b"))
-df = spark.sql("SELECT tuple_sketch_summary_integer(a) FROM t6")
-df = spark.sql("SELECT tuple_union_theta_integer(a) FROM t6")
+df = df.select(F.sum("a"), F.col("b"))
+df = df.select(F.cardinality("a"), F.col("b"))
+df = df.select(F.legacy_fn_18("a"), F.col("b"))
+df = spark.sql("SELECT legacy_fn_32(a) FROM t6")
+df = spark.sql("SELECT bitmap_bit_position(a) FROM t6")

@@ -1,7 +1,6 @@
 -- query 9: nope(1)
-SELECT legacy_fn_12(a, b) AS c1 FROM t9 WHERE x IN (1, 2) AND y = 'x(legacy_fn_12)';
-SELECT try_parse_url(a, b) AS c2 FROM t9 WHERE x IN (1, 2) AND y = 'x(try_parse_url)';
-SELECT legacy_fn_15(a, b) AS c3 FROM t9 WHERE x IN (1, 2) AND y = 'x(legacy_fn_15)';
-SELECT legacy_fn_14(a, b) AS c4 FROM t9 WHERE x IN (1, 2) AND y = 'x(legacy_fn_14)';
-SELECT legacy_fn_0(a, b) AS c5 FROM t9 WHERE x IN (1, 2) AND y = 'x(legacy_fn_0)';
-SELECT xpath_string(a, b) AS c6 FROM t9 WHERE x IN (1, 2) AND y = 'x(xpath_string)';
+SELECT array_sort(a, b) AS c1 FROM t9 WHERE x IN (1, 2) AND y = 'x(array_sort)';
+SELECT reflect(a, b) AS c2 FROM t9 WHERE x IN (1, 2) AND y = 'x(reflect)';
+SELECT exists(a, b) AS c3 FROM t9 WHERE x IN (1, 2) AND y = 'x(exists)';
+SELECT ilike(a, b) AS c4 FROM t9 WHERE x IN (1, 2) AND y = 'x(ilike)';
+SELECT legacy_fn_24(a, b) AS c5 FROM t9 WHERE x IN (1, 2) AND y = 'x(legacy_fn_24)';

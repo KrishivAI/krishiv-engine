@@ -5,17 +5,43 @@
 //! `TUPLE_INVALID_SKETCH_MODE`); the aggregates are run by `krishiv-exec`, the scalars by `scalar/tuple.rs`.
 
 use krishiv_common::error::{
-    DatatypeMismatchNonFoldableInput, DatatypeMismatchTypeCheckFailureWithHint, KrishivError,
+    DatatypeMismatchNonFoldableInput, DatatypeMismatchTypeCheckFailureWithHint,
+    DatatypeMismatchUnexpectedNull, KrishivError,
 };
 use krishiv_types::{ArrayType, DataType};
 
 use super::defs::{Spec, scalar};
 use crate::signature::{ArgType, CallTypes, Constant, InputBuilder, InputType, Inputs};
 
+/// The call as Spark prints it: the analyzer's constructors append the omitted `lgNomEntries` (12) and mode (`sum`).
 fn call_sql(name: &str, c: &CallTypes<'_>) -> String {
-    let args: Vec<String> = (0..c.args().len())
+    let mut args: Vec<String> = (0..c.args().len())
         .map(|i| c.sql(i).unwrap_or_default())
         .collect();
+    let (arity, lg) = if name.starts_with("tuple_sketch_agg") || name.starts_with("tuple_union") {
+        (
+            if name.starts_with("tuple_union_agg") {
+                3
+            } else {
+                4
+            },
+            true,
+        )
+    } else if name.starts_with("tuple_intersection_agg") {
+        (2, false)
+    } else if name.starts_with("tuple_intersection") {
+        (3, false)
+    } else if name.starts_with("tuple_sketch_summary") {
+        (2, false)
+    } else {
+        (0, false)
+    };
+    if lg && args.len() < arity - 1 {
+        args.push("12".to_owned());
+    }
+    if args.len() < arity {
+        args.push("sum".to_owned());
+    }
     format!("\"{name}({})\"", args.join(", "))
 }
 
@@ -42,13 +68,38 @@ fn hint(name: &str, c: &CallTypes<'_>, msg: String) -> KrishivError {
 fn check_lg(name: &str, c: &CallTypes<'_>, i: usize) -> Result<(), KrishivError> {
     match c.constant(i) {
         None => Err(non_foldable(name, c, i, "lgNomEntries", "int")),
-        Some(Constant::Integral(k)) if !(4..=26).contains(k) => Err(hint(
-            name,
-            c,
-            format!(
-                "[SKETCH_INVALID_LG_NOM_ENTRIES] Invalid call to `{name}`; the `lgNomEntries` value must be between 4 and 26, inclusive: {k}. SQLSTATE: 22003"
-            ),
-        )),
+        Some(Constant::Error(e)) => Err(e.clone()),
+        // A string cast to `INT` as the implicit cast folds it.
+        Some(Constant::String(text)) => match text.trim().parse::<i32>() {
+            Ok(k) if !(4..=26).contains(&k) => Err(hint(
+                name,
+                c,
+                format!(
+                    "[SKETCH_INVALID_LG_NOM_ENTRIES] Invalid call to `{name}`; the `lgNomEntries` value must be between 4 and 26, inclusive: {k}. SQLSTATE: 22003"
+                ),
+            )),
+            Ok(_) => Ok(()),
+            Err(_) => Err(krishiv_common::error::CastInvalidInput {
+                expression: c.sql(i).unwrap_or_default(),
+                source_type: "\"STRING\"".to_owned(),
+                target_type: "\"INT\"".to_owned(),
+            }
+            .into()),
+        },
+        Some(Constant::Null) => Err(DatatypeMismatchUnexpectedNull {
+            sql_expr: call_sql(name, c),
+            expr_name: "lgNomEntries".to_owned(),
+        }
+        .into()),
+        Some(Constant::Integral(k) | Constant::Fractional(k)) if !(4..=26).contains(k) => {
+            Err(hint(
+                name,
+                c,
+                format!(
+                    "[SKETCH_INVALID_LG_NOM_ENTRIES] Invalid call to `{name}`; the `lgNomEntries` value must be between 4 and 26, inclusive: {k}. SQLSTATE: 22003"
+                ),
+            ))
+        }
         Some(_) => Ok(()),
     }
 }
@@ -219,7 +270,7 @@ pub(super) fn specs() -> Vec<Spec> {
     let union = Inputs::Expects(vec![
         bin(),
         bin(),
-        InputType::Exact(DataType::Integer),
+        InputType::Strict(DataType::Integer),
         string(),
     ]);
     let inter = Inputs::Expects(vec![bin(), bin(), string()]);

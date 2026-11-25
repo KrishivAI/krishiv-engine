@@ -1,393 +1,381 @@
 [
  {
   "file": "job00.py",
-  "line": 5,
-  "name": "tuple_union_theta_double",
-  "status": "not yet"
- },
- {
-  "file": "job00.py",
   "line": 6,
-  "name": "legacy_fn_8",
-  "status": "unknown"
- },
- {
-  "file": "job00.py",
-  "line": 7,
-  "name": "tuple_intersection_theta_double",
+  "name": "approx_top_k",
   "status": "not yet"
  },
  {
   "file": "job01.py",
   "line": 6,
-  "name": "tuple_difference_double",
+  "name": "xpath_float",
   "status": "not yet"
- },
- {
-  "file": "job01.py",
-  "line": 7,
-  "name": "legacy_fn_23",
-  "status": "unknown"
  },
  {
   "file": "job02.py",
-  "line": 6,
-  "name": "sentences",
+  "line": 5,
+  "name": "reflect",
+  "status": "not yet"
+ },
+ {
+  "file": "job02.py",
+  "line": 7,
+  "name": "reflect",
   "status": "not yet"
  },
  {
   "file": "job03.py",
-  "line": 7,
-  "name": "tuple_union_integer",
-  "status": "not yet"
+  "line": 5,
+  "name": "legacy_fn_21",
+  "status": "unknown"
  },
  {
   "file": "job03.py",
   "line": 8,
-  "name": "count_min_sketch",
+  "name": "legacy_fn_18",
+  "status": "unknown"
+ },
+ {
+  "file": "job04.py",
+  "line": 7,
+  "name": "python_worker_logs",
   "status": "not yet"
  },
  {
   "file": "job04.py",
   "line": 9,
-  "name": "tuple_difference_integer",
+  "name": "python_worker_logs",
+  "status": "not yet"
+ },
+ {
+  "file": "job05.py",
+  "line": 5,
+  "name": "approx_top_k",
   "status": "not yet"
  },
  {
   "file": "job05.py",
   "line": 6,
-  "name": "tuple_intersection_theta_double",
+  "name": "xpath_float",
   "status": "not yet"
  },
  {
   "file": "job05.py",
   "line": 7,
-  "name": "legacy_fn_12",
-  "status": "unknown"
+  "name": "count_min_sketch",
+  "status": "not yet"
+ },
+ {
+  "file": "job05.py",
+  "line": 10,
+  "name": "reflect",
+  "status": "not yet"
  },
  {
   "file": "job06.py",
-  "line": 6,
-  "name": "try_reflect",
-  "status": "not yet"
+  "line": 7,
+  "name": "legacy_fn_18",
+  "status": "unknown"
  },
  {
   "file": "job06.py",
   "line": 8,
-  "name": "tuple_sketch_summary_integer",
-  "status": "not yet"
- },
- {
-  "file": "job06.py",
-  "line": 9,
-  "name": "tuple_union_theta_integer",
-  "status": "not yet"
+  "name": "legacy_fn_32",
+  "status": "unknown"
  },
  {
   "file": "job07.py",
-  "line": 9,
-  "name": "legacy_fn_1",
-  "status": "unknown"
- },
- {
-  "file": "job08.py",
   "line": 5,
-  "name": "legacy_fn_1",
+  "name": "legacy_fn_28",
   "status": "unknown"
  },
  {
-  "file": "job08.py",
-  "line": 6,
-  "name": "approx_top_k_accumulate",
-  "status": "not yet"
+  "file": "job07.py",
+  "line": 7,
+  "name": "legacy_fn_39",
+  "status": "unknown"
+ },
+ {
+  "file": "job07.py",
+  "line": 8,
+  "name": "legacy_fn_34",
+  "status": "unknown"
  },
  {
   "file": "job08.py",
   "line": 7,
-  "name": "tuple_union_double",
+  "name": "java_method",
   "status": "not yet"
  },
  {
-  "file": "job08.py",
+  "file": "job09.py",
+  "line": 5,
+  "name": "collations",
+  "status": "not yet"
+ },
+ {
+  "file": "job09.py",
+  "line": 7,
+  "name": "legacy_fn_15",
+  "status": "unknown"
+ },
+ {
+  "file": "job10.py",
+  "line": 5,
+  "name": "legacy_fn_2",
+  "status": "unknown"
+ },
+ {
+  "file": "job10.py",
+  "line": 7,
+  "name": "schema_of_variant_agg",
+  "status": "not yet"
+ },
+ {
+  "file": "job11.py",
+  "line": 6,
+  "name": "xpath_string",
+  "status": "not yet"
+ },
+ {
+  "file": "job11.py",
+  "line": 7,
+  "name": "sentences",
+  "status": "not yet"
+ },
+ {
+  "file": "job11.py",
   "line": 8,
   "name": "sentences",
   "status": "not yet"
  },
  {
-  "file": "job09.py",
-  "line": 5,
-  "name": "tuple_union_agg_double",
-  "status": "not yet"
- },
- {
-  "file": "job09.py",
-  "line": 6,
-  "name": "tuple_sketch_agg_integer",
-  "status": "not yet"
- },
- {
-  "file": "job09.py",
-  "line": 8,
-  "name": "tuple_union_theta_double",
-  "status": "not yet"
- },
- {
-  "file": "job09.py",
-  "line": 9,
-  "name": "legacy_fn_35",
-  "status": "unknown"
- },
- {
-  "file": "job10.py",
-  "line": 6,
-  "name": "legacy_fn_28",
-  "status": "unknown"
- },
- {
-  "file": "job10.py",
-  "line": 8,
-  "name": "legacy_fn_39",
-  "status": "unknown"
- },
- {
-  "file": "job10.py",
-  "line": 9,
-  "name": "legacy_fn_34",
-  "status": "unknown"
- },
- {
   "file": "job11.py",
-  "line": 6,
-  "name": "legacy_fn_4",
-  "status": "unknown"
- },
- {
-  "file": "job12.py",
-  "line": 5,
-  "name": "legacy_fn_9",
-  "status": "unknown"
- },
- {
-  "file": "job12.py",
-  "line": 7,
-  "name": "legacy_fn_13",
-  "status": "unknown"
- },
- {
-  "file": "job12.py",
-  "line": 9,
-  "name": "tuple_intersection_double",
-  "status": "not yet"
- },
- {
-  "file": "job12.py",
   "line": 10,
-  "name": "legacy_fn_36",
+  "name": "approx_top_k",
+  "status": "not yet"
+ },
+ {
+  "file": "job12.py",
+  "line": 6,
+  "name": "legacy_fn_3",
   "status": "unknown"
  },
  {
   "file": "job13.py",
-  "line": 7,
-  "name": "legacy_fn_9",
-  "status": "unknown"
+  "line": 5,
+  "name": "try_reflect",
+  "status": "not yet"
  },
  {
   "file": "job13.py",
-  "line": 9,
-  "name": "tuple_union_double",
-  "status": "not yet"
- },
- {
-  "file": "job14.py",
-  "line": 5,
-  "name": "legacy_fn_35",
-  "status": "unknown"
- },
- {
-  "file": "job14.py",
   "line": 6,
-  "name": "legacy_fn_22",
-  "status": "unknown"
- },
- {
-  "file": "job14.py",
-  "line": 8,
-  "name": "xpath_long",
+  "name": "reflect",
   "status": "not yet"
  },
  {
-  "file": "job15.py",
-  "line": 5,
-  "name": "tuple_union_integer",
-  "status": "not yet"
- },
- {
-  "file": "job15.py",
-  "line": 6,
-  "name": "tuple_difference_double",
-  "status": "not yet"
- },
- {
-  "file": "job15.py",
-  "line": 7,
-  "name": "tuple_union_integer",
-  "status": "not yet"
- },
- {
-  "file": "job15.py",
-  "line": 8,
-  "name": "tuple_difference_integer",
-  "status": "not yet"
- },
- {
-  "file": "job16.py",
-  "line": 5,
-  "name": "tuple_sketch_agg_integer",
-  "status": "not yet"
- },
- {
-  "file": "job16.py",
-  "line": 6,
-  "name": "tuple_difference_theta_integer",
-  "status": "not yet"
- },
- {
-  "file": "job16.py",
+  "file": "job13.py",
   "line": 9,
   "name": "legacy_fn_22",
   "status": "unknown"
  },
  {
-  "file": "job17.py",
+  "file": "job14.py",
   "line": 5,
   "name": "legacy_fn_24",
   "status": "unknown"
  },
  {
-  "file": "job17.py",
+  "file": "job14.py",
   "line": 7,
-  "name": "tuple_sketch_agg_integer",
+  "name": "try_reflect",
   "status": "not yet"
  },
  {
-  "file": "job17.py",
+  "file": "job14.py",
   "line": 8,
   "name": "legacy_fn_21",
   "status": "unknown"
  },
  {
-  "file": "job17.py",
+  "file": "job14.py",
   "line": 9,
-  "name": "tuple_intersection_theta_double",
+  "name": "schema_of_variant_agg",
   "status": "not yet"
  },
  {
-  "file": "job17.py",
+  "file": "job14.py",
   "line": 10,
-  "name": "python_worker_logs",
+  "name": "approx_top_k_estimate",
   "status": "not yet"
  },
  {
-  "file": "job18.py",
+  "file": "job15.py",
   "line": 6,
-  "name": "tuple_intersection_integer",
+  "name": "schema_of_variant_agg",
   "status": "not yet"
  },
  {
-  "file": "job18.py",
+  "file": "job15.py",
   "line": 7,
   "name": "legacy_fn_37",
   "status": "unknown"
  },
  {
-  "file": "job18.py",
+  "file": "job15.py",
   "line": 10,
-  "name": "java_method",
+  "name": "approx_top_k_estimate",
+  "status": "not yet"
+ },
+ {
+  "file": "job16.py",
+  "line": 5,
+  "name": "xpath_float",
+  "status": "not yet"
+ },
+ {
+  "file": "job16.py",
+  "line": 7,
+  "name": "xpath_short",
+  "status": "not yet"
+ },
+ {
+  "file": "job17.py",
+  "line": 5,
+  "name": "xpath_string",
+  "status": "not yet"
+ },
+ {
+  "file": "job17.py",
+  "line": 9,
+  "name": "legacy_fn_32",
+  "status": "unknown"
+ },
+ {
+  "file": "job18.py",
+  "line": 9,
+  "name": "approx_top_k_accumulate",
   "status": "not yet"
  },
  {
   "file": "job19.py",
   "line": 5,
-  "name": "tuple_union_double",
+  "name": "reflect",
   "status": "not yet"
  },
  {
   "file": "job19.py",
   "line": 7,
-  "name": "tuple_union_theta_integer",
-  "status": "not yet"
+  "name": "legacy_fn_24",
+  "status": "unknown"
  },
  {
-  "file": "job19.py",
+  "file": "job20.py",
   "line": 9,
-  "name": "tuple_sketch_agg_double",
+  "name": "schema_of_variant_agg",
   "status": "not yet"
  },
  {
-  "file": "job20.py",
-  "line": 5,
-  "name": "xpath_long",
-  "status": "not yet"
- },
- {
-  "file": "job20.py",
-  "line": 8,
-  "name": "legacy_fn_8",
+  "file": "job21.py",
+  "line": 7,
+  "name": "legacy_fn_34",
   "status": "unknown"
  },
  {
   "file": "job21.py",
+  "line": 8,
+  "name": "legacy_fn_10",
+  "status": "unknown"
+ },
+ {
+  "file": "job22.py",
   "line": 5,
-  "name": "xpath_double",
-  "status": "not yet"
- },
- {
-  "file": "job22.py",
-  "line": 6,
-  "name": "tuple_difference_theta_integer",
-  "status": "not yet"
- },
- {
-  "file": "job22.py",
-  "line": 7,
-  "name": "approx_top_k_combine",
-  "status": "not yet"
+  "name": "legacy_fn_14",
+  "status": "unknown"
  },
  {
   "file": "job22.py",
   "line": 8,
-  "name": "tuple_sketch_agg_integer",
+  "name": "xpath_long",
+  "status": "not yet"
+ },
+ {
+  "file": "job23.py",
+  "line": 5,
+  "name": "approx_top_k_accumulate",
   "status": "not yet"
  },
  {
   "file": "job23.py",
   "line": 6,
-  "name": "legacy_fn_24",
+  "name": "sentences",
+  "status": "not yet"
+ },
+ {
+  "file": "job23.py",
+  "line": 8,
+  "name": "legacy_fn_25",
   "status": "unknown"
  },
  {
   "file": "job24.py",
+  "line": 7,
+  "name": "xpath_int",
+  "status": "not yet"
+ },
+ {
+  "file": "job25.py",
   "line": 5,
-  "name": "tuple_difference_double",
+  "name": "reflect",
   "status": "not yet"
  },
  {
-  "file": "job26.py",
+  "file": "job25.py",
   "line": 6,
-  "name": "tuple_intersection_agg_integer",
+  "name": "reflect",
   "status": "not yet"
  },
  {
-  "file": "job26.py",
+  "file": "job25.py",
+  "line": 7,
+  "name": "legacy_fn_35",
+  "status": "unknown"
+ },
+ {
+  "file": "job25.py",
   "line": 8,
-  "name": "legacy_fn_4",
+  "name": "legacy_fn_3",
+  "status": "unknown"
+ },
+ {
+  "file": "job25.py",
+  "line": 9,
+  "name": "legacy_fn_5",
   "status": "unknown"
  },
  {
   "file": "job27.py",
-  "line": 8,
-  "name": "approx_top_k_accumulate",
+  "line": 6,
+  "name": "xpath_string",
   "status": "not yet"
+ },
+ {
+  "file": "job27.py",
+  "line": 8,
+  "name": "count_min_sketch",
+  "status": "not yet"
+ },
+ {
+  "file": "job28.py",
+  "line": 5,
+  "name": "xpath_long",
+  "status": "not yet"
+ },
+ {
+  "file": "job28.py",
+  "line": 6,
+  "name": "legacy_fn_19",
+  "status": "unknown"
  },
  {
   "file": "job28.py",
@@ -398,475 +386,373 @@
  {
   "file": "job29.py",
   "line": 5,
-  "name": "legacy_fn_25",
-  "status": "unknown"
+  "name": "reflect",
+  "status": "not yet"
  },
  {
   "file": "job29.py",
   "line": 8,
-  "name": "approx_top_k_combine",
+  "name": "xpath_int",
   "status": "not yet"
  },
  {
-  "file": "q00.sql",
+  "file": "q01.sql",
   "line": 3,
-  "name": "count_min_sketch",
-  "status": "not yet"
- },
- {
-  "file": "q00.sql",
-  "line": 4,
-  "name": "tuple_intersection_theta_integer",
-  "status": "not yet"
- },
- {
-  "file": "q01.sql",
-  "line": 4,
-  "name": "tuple_intersection_theta_integer",
-  "status": "not yet"
- },
- {
-  "file": "q01.sql",
-  "line": 7,
-  "name": "try_reflect",
+  "name": "sentences",
   "status": "not yet"
  },
  {
   "file": "q02.sql",
   "line": 2,
-  "name": "legacy_fn_14",
+  "name": "legacy_fn_34",
   "status": "unknown"
- },
- {
-  "file": "q02.sql",
-  "line": 4,
-  "name": "xpath_number",
-  "status": "not yet"
- },
- {
-  "file": "q02.sql",
-  "line": 5,
-  "name": "try_reflect",
-  "status": "not yet"
  },
  {
   "file": "q02.sql",
   "line": 6,
-  "name": "tuple_sketch_summary_double",
+  "name": "xpath_string",
   "status": "not yet"
  },
  {
   "file": "q03.sql",
   "line": 2,
-  "name": "legacy_fn_30",
-  "status": "unknown"
- },
- {
-  "file": "q03.sql",
-  "line": 3,
-  "name": "tuple_intersection_double",
-  "status": "not yet"
- },
- {
-  "file": "q03.sql",
-  "line": 4,
   "name": "xpath",
   "status": "not yet"
  },
  {
   "file": "q03.sql",
+  "line": 4,
+  "name": "legacy_fn_30",
+  "status": "unknown"
+ },
+ {
+  "file": "q03.sql",
   "line": 5,
-  "name": "tuple_sketch_theta_integer",
+  "name": "schema_of_avro",
   "status": "not yet"
  },
  {
   "file": "q04.sql",
   "line": 2,
-  "name": "legacy_fn_6",
-  "status": "unknown"
- },
- {
-  "file": "q04.sql",
-  "line": 3,
-  "name": "tuple_sketch_agg_double",
+  "name": "xpath_short",
   "status": "not yet"
  },
  {
   "file": "q04.sql",
   "line": 4,
+  "name": "sentences",
+  "status": "not yet"
+ },
+ {
+  "file": "q04.sql",
+  "line": 5,
   "name": "legacy_fn_16",
   "status": "unknown"
  },
  {
-  "file": "q04.sql",
-  "line": 6,
-  "name": "legacy_fn_35",
-  "status": "unknown"
- },
- {
   "file": "q05.sql",
-  "line": 3,
-  "name": "schema_of_avro",
+  "line": 2,
+  "name": "count_min_sketch",
   "status": "not yet"
- },
- {
-  "file": "q05.sql",
-  "line": 5,
-  "name": "legacy_fn_13",
-  "status": "unknown"
- },
- {
-  "file": "q05.sql",
-  "line": 6,
-  "name": "approx_top_k",
-  "status": "not yet"
- },
- {
-  "file": "q05.sql",
-  "line": 7,
-  "name": "legacy_fn_1",
-  "status": "unknown"
  },
  {
   "file": "q06.sql",
   "line": 2,
-  "name": "legacy_fn_35",
-  "status": "unknown"
+  "name": "xpath_short",
+  "status": "not yet"
  },
  {
   "file": "q06.sql",
-  "line": 5,
-  "name": "legacy_fn_3",
-  "status": "unknown"
- },
- {
-  "file": "q06.sql",
-  "line": 6,
-  "name": "xpath_int",
+  "line": 3,
+  "name": "xpath_string",
   "status": "not yet"
  },
  {
   "file": "q07.sql",
+  "line": 3,
+  "name": "legacy_fn_3",
+  "status": "unknown"
+ },
+ {
+  "file": "q07.sql",
+  "line": 4,
+  "name": "xpath_short",
+  "status": "not yet"
+ },
+ {
+  "file": "q08.sql",
   "line": 2,
   "name": "legacy_fn_32",
   "status": "unknown"
  },
  {
-  "file": "q07.sql",
-  "line": 3,
-  "name": "schema_of_avro",
-  "status": "not yet"
- },
- {
   "file": "q08.sql",
   "line": 3,
-  "name": "tuple_difference_theta_integer",
+  "name": "collations",
   "status": "not yet"
  },
  {
   "file": "q09.sql",
-  "line": 2,
-  "name": "legacy_fn_12",
-  "status": "unknown"
- },
- {
-  "file": "q09.sql",
-  "line": 4,
-  "name": "legacy_fn_15",
-  "status": "unknown"
- },
- {
-  "file": "q09.sql",
-  "line": 5,
-  "name": "legacy_fn_14",
-  "status": "unknown"
+  "line": 3,
+  "name": "reflect",
+  "status": "not yet"
  },
  {
   "file": "q09.sql",
   "line": 6,
+  "name": "legacy_fn_24",
+  "status": "unknown"
+ },
+ {
+  "file": "q10.sql",
+  "line": 3,
+  "name": "legacy_fn_14",
+  "status": "unknown"
+ },
+ {
+  "file": "q10.sql",
+  "line": 4,
   "name": "legacy_fn_0",
   "status": "unknown"
  },
  {
-  "file": "q09.sql",
-  "line": 7,
-  "name": "xpath_string",
+  "file": "q10.sql",
+  "line": 5,
+  "name": "xpath_long",
   "status": "not yet"
  },
  {
-  "file": "q10.sql",
+  "file": "q11.sql",
+  "line": 3,
+  "name": "approx_top_k_accumulate",
+  "status": "not yet"
+ },
+ {
+  "file": "q11.sql",
   "line": 4,
   "name": "legacy_fn_26",
   "status": "unknown"
  },
  {
-  "file": "q11.sql",
+  "file": "q12.sql",
   "line": 4,
-  "name": "legacy_fn_20",
-  "status": "unknown"
+  "name": "try_reflect",
+  "status": "not yet"
  },
  {
-  "file": "q12.sql",
-  "line": 5,
-  "name": "legacy_fn_20",
-  "status": "unknown"
- },
- {
-  "file": "q12.sql",
-  "line": 7,
+  "file": "q13.sql",
+  "line": 3,
   "name": "legacy_fn_28",
   "status": "unknown"
  },
  {
   "file": "q13.sql",
-  "line": 2,
-  "name": "tuple_sketch_summary_integer",
-  "status": "not yet"
- },
- {
-  "file": "q13.sql",
   "line": 4,
-  "name": "tuple_intersection_theta_double",
-  "status": "not yet"
- },
- {
-  "file": "q14.sql",
-  "line": 3,
-  "name": "legacy_fn_29",
+  "name": "legacy_fn_37",
   "status": "unknown"
  },
  {
   "file": "q14.sql",
+  "line": 4,
+  "name": "approx_top_k_accumulate",
+  "status": "not yet"
+ },
+ {
+  "file": "q15.sql",
   "line": 4,
   "name": "approx_top_k_estimate",
   "status": "not yet"
  },
  {
   "file": "q15.sql",
-  "line": 2,
-  "name": "java_method",
-  "status": "not yet"
- },
- {
-  "file": "q15.sql",
-  "line": 3,
-  "name": "tuple_intersection_integer",
-  "status": "not yet"
- },
- {
-  "file": "q15.sql",
-  "line": 4,
-  "name": "legacy_fn_0",
-  "status": "unknown"
- },
- {
-  "file": "q16.sql",
-  "line": 3,
-  "name": "tuple_difference_theta_integer",
-  "status": "not yet"
- },
- {
-  "file": "q16.sql",
-  "line": 4,
-  "name": "tuple_intersection_integer",
-  "status": "not yet"
- },
- {
-  "file": "q17.sql",
-  "line": 2,
+  "line": 5,
   "name": "schema_of_variant_agg",
   "status": "not yet"
  },
  {
   "file": "q17.sql",
   "line": 3,
-  "name": "tuple_union_theta_integer",
+  "name": "xpath_long",
+  "status": "not yet"
+ },
+ {
+  "file": "q17.sql",
+  "line": 4,
+  "name": "legacy_fn_4",
+  "status": "unknown"
+ },
+ {
+  "file": "q17.sql",
+  "line": 5,
+  "name": "approx_top_k_combine",
+  "status": "not yet"
+ },
+ {
+  "file": "q17.sql",
+  "line": 6,
+  "name": "legacy_fn_6",
+  "status": "unknown"
+ },
+ {
+  "file": "q18.sql",
+  "line": 4,
+  "name": "schema_of_variant_agg",
   "status": "not yet"
  },
  {
   "file": "q18.sql",
-  "line": 2,
-  "name": "tuple_difference_integer",
+  "line": 5,
+  "name": "schema_of_avro",
   "status": "not yet"
  },
  {
   "file": "q19.sql",
   "line": 2,
-  "name": "tuple_intersection_integer",
+  "name": "schema_of_variant_agg",
   "status": "not yet"
  },
  {
   "file": "q19.sql",
   "line": 3,
-  "name": "tuple_intersection_agg_integer",
-  "status": "not yet"
- },
- {
-  "file": "q19.sql",
-  "line": 4,
-  "name": "xpath_float",
-  "status": "not yet"
- },
- {
-  "file": "q19.sql",
-  "line": 5,
-  "name": "legacy_fn_21",
-  "status": "unknown"
- },
- {
-  "file": "q19.sql",
-  "line": 6,
   "name": "legacy_fn_26",
   "status": "unknown"
  },
  {
   "file": "q20.sql",
-  "line": 4,
-  "name": "legacy_fn_39",
+  "line": 2,
+  "name": "legacy_fn_7",
   "status": "unknown"
  },
  {
   "file": "q20.sql",
+  "line": 3,
+  "name": "xpath_int",
+  "status": "not yet"
+ },
+ {
+  "file": "q20.sql",
   "line": 5,
-  "name": "tuple_intersection_theta_integer",
+  "name": "xpath_boolean",
   "status": "not yet"
  },
  {
   "file": "q21.sql",
   "line": 2,
-  "name": "tuple_sketch_summary_integer",
+  "name": "java_method",
   "status": "not yet"
  },
  {
   "file": "q21.sql",
-  "line": 5,
-  "name": "tuple_difference_double",
-  "status": "not yet"
- },
- {
-  "file": "q22.sql",
   "line": 3,
-  "name": "xpath_double",
-  "status": "not yet"
- },
- {
-  "file": "q22.sql",
-  "line": 4,
-  "name": "legacy_fn_12",
+  "name": "legacy_fn_25",
   "status": "unknown"
  },
  {
   "file": "q22.sql",
-  "line": 5,
-  "name": "legacy_fn_15",
-  "status": "unknown"
- },
- {
-  "file": "q23.sql",
-  "line": 2,
-  "name": "tuple_intersection_integer",
-  "status": "not yet"
- },
- {
-  "file": "q23.sql",
   "line": 3,
-  "name": "tuple_union_double",
-  "status": "not yet"
- },
- {
-  "file": "q23.sql",
-  "line": 4,
   "name": "legacy_fn_13",
   "status": "unknown"
  },
  {
   "file": "q23.sql",
-  "line": 6,
-  "name": "legacy_fn_14",
-  "status": "unknown"
+  "line": 2,
+  "name": "xpath",
+  "status": "not yet"
  },
  {
   "file": "q23.sql",
-  "line": 7,
-  "name": "tuple_difference_theta_double",
-  "status": "not yet"
- },
- {
-  "file": "q24.sql",
-  "line": 2,
-  "name": "tuple_sketch_theta_integer",
-  "status": "not yet"
- },
- {
-  "file": "q24.sql",
   "line": 3,
-  "name": "approx_top_k_combine",
-  "status": "not yet"
- },
- {
-  "file": "q24.sql",
-  "line": 4,
-  "name": "tuple_sketch_summary_double",
-  "status": "not yet"
- },
- {
-  "file": "q24.sql",
-  "line": 5,
   "name": "approx_top_k",
   "status": "not yet"
  },
  {
-  "file": "q25.sql",
+  "file": "q24.sql",
   "line": 2,
-  "name": "legacy_fn_37",
-  "status": "unknown"
+  "name": "schema_of_avro",
+  "status": "not yet"
  },
  {
-  "file": "q25.sql",
-  "line": 3,
-  "name": "xpath_int",
+  "file": "q24.sql",
+  "line": 4,
+  "name": "approx_top_k_accumulate",
+  "status": "not yet"
+ },
+ {
+  "file": "q24.sql",
+  "line": 7,
+  "name": "schema_of_variant_agg",
   "status": "not yet"
  },
  {
   "file": "q25.sql",
-  "line": 5,
-  "name": "collations",
+  "line": 2,
+  "name": "count_min_sketch",
   "status": "not yet"
  },
  {
   "file": "q26.sql",
-  "line": 3,
-  "name": "legacy_fn_11",
+  "line": 2,
+  "name": "legacy_fn_25",
   "status": "unknown"
  },
  {
+  "file": "q26.sql",
+  "line": 3,
+  "name": "java_method",
+  "status": "not yet"
+ },
+ {
+  "file": "q26.sql",
+  "line": 4,
+  "name": "xpath_number",
+  "status": "not yet"
+ },
+ {
   "file": "q27.sql",
+  "line": 3,
+  "name": "approx_top_k",
+  "status": "not yet"
+ },
+ {
+  "file": "q27.sql",
+  "line": 4,
+  "name": "approx_top_k_combine",
+  "status": "not yet"
+ },
+ {
+  "file": "q28.sql",
   "line": 2,
-  "name": "legacy_fn_34",
-  "status": "unknown"
+  "name": "xpath_int",
+  "status": "not yet"
  },
  {
   "file": "q28.sql",
   "line": 3,
-  "name": "xpath_string",
+  "name": "legacy_fn_8",
+  "status": "unknown"
+ },
+ {
+  "file": "q28.sql",
+  "line": 5,
+  "name": "legacy_fn_23",
+  "status": "unknown"
+ },
+ {
+  "file": "q28.sql",
+  "line": 6,
+  "name": "python_worker_logs",
+  "status": "not yet"
+ },
+ {
+  "file": "q29.sql",
+  "line": 2,
+  "name": "java_method",
   "status": "not yet"
  },
  {
   "file": "q29.sql",
   "line": 4,
-  "name": "xpath_int",
-  "status": "not yet"
- },
- {
-  "file": "q29.sql",
-  "line": 5,
-  "name": "tuple_intersection_theta_double",
-  "status": "not yet"
- },
- {
-  "file": "q29.sql",
-  "line": 6,
-  "name": "count_min_sketch",
-  "status": "not yet"
+  "name": "legacy_fn_0",
+  "status": "unknown"
  }
 ]

@@ -2,7 +2,8 @@
 import pyspark.sql.functions as F
 
 # F.nope('x')
-df = spark.sql("SELECT printf(a) FROM t3")
-df = spark.sql("SELECT hash(a) FROM t3")
-df = spark.sql("SELECT tuple_union_integer(a) FROM t3")
-df = df.select(F.count_min_sketch("a"), F.col("b"))
+df = df.select(F.legacy_fn_21("a"), F.col("b"))
+df = spark.sql("SELECT variant_explode_outer(a) FROM t3")
+df = df.select(F.greatest("a"), F.col("b"))
+df = df.select(F.legacy_fn_18("a"), F.col("b"))
+df = spark.sql("SELECT version(a) FROM t3")

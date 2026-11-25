@@ -112,7 +112,7 @@ fn builder_failure(function: &str, e: &dyn std::fmt::Display) -> KrishivError {
 }
 
 /// Spark's `Family.toString` for a preamble family id (the names of `org.apache.datasketches.common.Family`).
-fn family_name(id: u8) -> Option<&'static str> {
+pub(super) fn family_name(id: u8) -> Option<&'static str> {
     Some(match id {
         1 => "ALPHA",
         2 => "QUICKSELECT",

@@ -13,7 +13,7 @@ Returns the TupleSketch compact binary representation.
 the number buckets or slots for the TupleSketch. Default is 12.
 `mode` is the aggregation mode for numeric summaries (sum, min, max, alwaysone). Default is sum.
 
-**Applies to:** not available in Krishiv yet. Spark: 4.2 and later.
+**Applies to:** Krishiv 0.2.0 and above. Spark: 4.2 and later.
 
 ## Syntax
 
@@ -25,7 +25,7 @@ tuple_sketch_agg_integer(key, summary, lgNomEntries, mode)
 
 | | |
 |---|---|
-| Krishiv | Not implemented yet |
+| Krishiv | Implemented |
 | Group | `agg_funcs` |
 | Kind | aggregate (function) |
 | Added in Spark | 4.2.0 |
@@ -44,6 +44,7 @@ Error: KRISHIV_UNSUPPORTED_FEATURE
 ## Version history
 
 - Added in Spark 4.2.0.
+- Added in Krishiv 0.2.0.
 
 ## Related
 

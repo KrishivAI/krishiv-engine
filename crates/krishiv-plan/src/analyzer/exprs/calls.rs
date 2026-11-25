@@ -903,6 +903,7 @@ impl Resolver<'_> {
                     NamedDefault::Null => Literal::Null(None),
                     NamedDefault::Text(s) => Literal::String(s.to_owned()),
                     NamedDefault::Bool(b) => Literal::Boolean(b),
+                    NamedDefault::Int(v) => Literal::Integer(v),
                     NamedDefault::Required => {
                         return Err(unsupported("a required parameter default", origin));
                     }

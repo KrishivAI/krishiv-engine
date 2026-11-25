@@ -13,7 +13,7 @@ assigned a default double summary value based on the mode: 0.0 for 'sum' mode, +
 'min' mode, -Infinity for 'max' mode, or 1.0 for 'alwaysone' mode. Users can set mode to 'sum',
 'min', 'max', or 'alwaysone' (defaults to 'sum').
 
-**Applies to:** not available in Krishiv yet. Spark: 4.2 and later.
+**Applies to:** Krishiv 0.2.0 and above. Spark: 4.2 and later.
 
 ## Syntax
 
@@ -25,9 +25,9 @@ tuple_intersection_theta_double(tupleSketch, thetaSketch, mode)
 
 | | |
 |---|---|
-| Krishiv | Not implemented yet |
+| Krishiv | Implemented |
 | Group | `sketch_funcs` |
-| Kind | aggregate (function) |
+| Kind | scalar (function) |
 | Added in Spark | 4.2.0 |
 | In Spark profiles | 4.2 and later |
 | Arguments | [2, 3] |
@@ -44,6 +44,7 @@ Error: KRISHIV_UNSUPPORTED_FEATURE
 ## Version history
 
 - Added in Spark 4.2.0.
+- Added in Krishiv 0.2.0.
 
 ## Related
 

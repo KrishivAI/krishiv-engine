@@ -396,6 +396,18 @@ pub fn compact<V: Value>(sketch: &TupleSketch<Policy<V>>) -> Compact<V> {
 /// # Errors
 /// `TUPLE_INVALID_INPUT_SKETCH_BUFFER` for bytes that are no tuple sketch of `V` summaries.
 pub fn from_bytes<V: Value>(bytes: &[u8], function: &str) -> Result<Compact<V>, KrishivError> {
+    // A sketch of another family (a Theta one, say) is its own error, naming the family.
+    if let Some(&id) = bytes.get(2)
+        && id != 9
+        && let Some(actual) = theta::family_name(id)
+    {
+        return Err(krishiv_common::error::TupleInvalidInputSketchBufferFamily {
+            function: format!("`{function}`"),
+            expected_family: "TUPLE".to_owned(),
+            actual_family: actual.to_owned(),
+        }
+        .into());
+    }
     CompactTupleSketch::<Summary<V>>::deserialize(bytes).map_err(|_| invalid_buffer(function))
 }
 

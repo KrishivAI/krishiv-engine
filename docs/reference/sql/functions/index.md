@@ -508,30 +508,30 @@ Every Spark built-in function and operator, with Spark 4.2.0's description and e
 | [`try_url_decode`](try_url_decode.md) | scalar | yes | This is a special version of `url_decode` that performs the same operation, but returns a NULL value instead of raising an error if the decoding cannot be performed. |
 | [`try_validate_utf8`](try_validate_utf8.md) | scalar | yes | Returns the original string if `str` is a valid UTF-8 string, otherwise returns NULL. |
 | [`try_variant_get`](try_variant_get.md) | scalar | yes | Extracts a sub-variant from `v` according to `path`, and then cast the sub-variant to `type`. When `type` is omitted, it is default to `variant`. Returns null if the path does not exist or the cast fails. |
-| [`tuple_difference_double`](tuple_difference_double.md) | aggregate | not yet | Subtracts two binary representations of Datasketches |
-| [`tuple_difference_integer`](tuple_difference_integer.md) | aggregate | not yet | Subtracts two binary representations of Datasketches |
-| [`tuple_difference_theta_double`](tuple_difference_theta_double.md) | aggregate | not yet | Subtracts the binary representation of a |
-| [`tuple_difference_theta_integer`](tuple_difference_theta_integer.md) | aggregate | not yet | Subtracts the binary representation of a |
-| [`tuple_intersection_agg_double`](tuple_intersection_agg_double.md) | aggregate | not yet | Returns the intersected TupleSketch compact binary representation. |
-| [`tuple_intersection_agg_integer`](tuple_intersection_agg_integer.md) | aggregate | not yet | Returns the intersected TupleSketch compact binary representation. |
-| [`tuple_intersection_double`](tuple_intersection_double.md) | aggregate | not yet | Intersects two binary representations of Datasketches |
-| [`tuple_intersection_integer`](tuple_intersection_integer.md) | aggregate | not yet | Intersects two binary representations of Datasketches |
-| [`tuple_intersection_theta_double`](tuple_intersection_theta_double.md) | aggregate | not yet | Intersects the binary representation of a |
-| [`tuple_intersection_theta_integer`](tuple_intersection_theta_integer.md) | aggregate | not yet | Intersects the binary representation of a |
-| [`tuple_sketch_agg_double`](tuple_sketch_agg_double.md) | aggregate | not yet | Returns the TupleSketch compact binary representation. |
-| [`tuple_sketch_agg_integer`](tuple_sketch_agg_integer.md) | aggregate | not yet | Returns the TupleSketch compact binary representation. |
-| [`tuple_sketch_estimate_double`](tuple_sketch_estimate_double.md) | aggregate | not yet | Returns the estimated number of unique values |
-| [`tuple_sketch_estimate_integer`](tuple_sketch_estimate_integer.md) | aggregate | not yet | Returns the estimated number of unique values |
-| [`tuple_sketch_summary_double`](tuple_sketch_summary_double.md) | aggregate | not yet | Aggregates the summary values from a double summary type |
-| [`tuple_sketch_summary_integer`](tuple_sketch_summary_integer.md) | aggregate | not yet | Aggregates the summary values from a integer summary type |
-| [`tuple_sketch_theta_double`](tuple_sketch_theta_double.md) | aggregate | not yet | Returns the theta value (sampling rate) from a Datasketches TupleSketch. |
-| [`tuple_sketch_theta_integer`](tuple_sketch_theta_integer.md) | aggregate | not yet | Returns the theta value (sampling rate) from a Datasketches TupleSketch. |
-| [`tuple_union_agg_double`](tuple_union_agg_double.md) | aggregate | not yet | Returns the unioned TupleSketch compact binary representation. |
-| [`tuple_union_agg_integer`](tuple_union_agg_integer.md) | aggregate | not yet | Returns the unioned TupleSketch compact binary representation. |
-| [`tuple_union_double`](tuple_union_double.md) | aggregate | not yet | Merges two binary representations of Datasketches |
-| [`tuple_union_integer`](tuple_union_integer.md) | aggregate | not yet | Merges two binary representations of Datasketches |
-| [`tuple_union_theta_double`](tuple_union_theta_double.md) | aggregate | not yet | Merges the binary representation of a |
-| [`tuple_union_theta_integer`](tuple_union_theta_integer.md) | aggregate | not yet | Merges the binary representation of a |
+| [`tuple_difference_double`](tuple_difference_double.md) | aggregate | yes | Subtracts two binary representations of Datasketches |
+| [`tuple_difference_integer`](tuple_difference_integer.md) | aggregate | yes | Subtracts two binary representations of Datasketches |
+| [`tuple_difference_theta_double`](tuple_difference_theta_double.md) | aggregate | yes | Subtracts the binary representation of a |
+| [`tuple_difference_theta_integer`](tuple_difference_theta_integer.md) | aggregate | yes | Subtracts the binary representation of a |
+| [`tuple_intersection_agg_double`](tuple_intersection_agg_double.md) | aggregate | yes | Returns the intersected TupleSketch compact binary representation. |
+| [`tuple_intersection_agg_integer`](tuple_intersection_agg_integer.md) | aggregate | yes | Returns the intersected TupleSketch compact binary representation. |
+| [`tuple_intersection_double`](tuple_intersection_double.md) | aggregate | yes | Intersects two binary representations of Datasketches |
+| [`tuple_intersection_integer`](tuple_intersection_integer.md) | aggregate | yes | Intersects two binary representations of Datasketches |
+| [`tuple_intersection_theta_double`](tuple_intersection_theta_double.md) | aggregate | yes | Intersects the binary representation of a |
+| [`tuple_intersection_theta_integer`](tuple_intersection_theta_integer.md) | aggregate | yes | Intersects the binary representation of a |
+| [`tuple_sketch_agg_double`](tuple_sketch_agg_double.md) | aggregate | yes | Returns the TupleSketch compact binary representation. |
+| [`tuple_sketch_agg_integer`](tuple_sketch_agg_integer.md) | aggregate | yes | Returns the TupleSketch compact binary representation. |
+| [`tuple_sketch_estimate_double`](tuple_sketch_estimate_double.md) | aggregate | yes | Returns the estimated number of unique values |
+| [`tuple_sketch_estimate_integer`](tuple_sketch_estimate_integer.md) | aggregate | yes | Returns the estimated number of unique values |
+| [`tuple_sketch_summary_double`](tuple_sketch_summary_double.md) | aggregate | yes | Aggregates the summary values from a double summary type |
+| [`tuple_sketch_summary_integer`](tuple_sketch_summary_integer.md) | aggregate | yes | Aggregates the summary values from a integer summary type |
+| [`tuple_sketch_theta_double`](tuple_sketch_theta_double.md) | aggregate | yes | Returns the theta value (sampling rate) from a Datasketches TupleSketch. |
+| [`tuple_sketch_theta_integer`](tuple_sketch_theta_integer.md) | aggregate | yes | Returns the theta value (sampling rate) from a Datasketches TupleSketch. |
+| [`tuple_union_agg_double`](tuple_union_agg_double.md) | aggregate | yes | Returns the unioned TupleSketch compact binary representation. |
+| [`tuple_union_agg_integer`](tuple_union_agg_integer.md) | aggregate | yes | Returns the unioned TupleSketch compact binary representation. |
+| [`tuple_union_double`](tuple_union_double.md) | aggregate | yes | Merges two binary representations of Datasketches |
+| [`tuple_union_integer`](tuple_union_integer.md) | aggregate | yes | Merges two binary representations of Datasketches |
+| [`tuple_union_theta_double`](tuple_union_theta_double.md) | aggregate | yes | Merges the binary representation of a |
+| [`tuple_union_theta_integer`](tuple_union_theta_integer.md) | aggregate | yes | Merges the binary representation of a |
 | [`typeof`](typeof.md) | scalar | yes | Return DDL-formatted type string for the data type of the input. |
 | [`ucase`](ucase.md) | scalar | yes | Returns `str` with all characters changed to uppercase. |
 | [`unbase64`](unbase64.md) | scalar | yes | Converts the argument from a base 64 string `str` to a binary. |
@@ -585,4 +585,4 @@ Every Spark built-in function and operator, with Spark 4.2.0's description and e
 | [`\|\|`](op-pipe-pipe.md) | scalar | yes | Returns the concatenation of `expr1` and `expr2`. |
 | [`~`](op-tilde.md) | scalar | yes | Returns the result of bitwise NOT of `expr`. |
 
-528 of 574 functions are implemented. The 46 that are not are listed in [functions not implemented yet](not-implemented.md).
+552 of 574 functions are implemented. The 22 that are not are listed in [functions not implemented yet](not-implemented.md).
