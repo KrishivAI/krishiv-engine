@@ -946,7 +946,8 @@ pub fn cast(
         (DataType::Date32, t) if is_numeric(t) && mode != CastMode::Ansi => {
             Ok(arrow_array::new_null_array(t, input.len()))
         }
-        (DataType::Date32 | DataType::Timestamp(TimeUnit::Microsecond, _), _) => {
+        (DataType::Date32 | DataType::Timestamp(TimeUnit::Microsecond, _), _)
+        | (DataType::Time64(TimeUnit::Nanosecond), DataType::Timestamp(..)) => {
             temporal(input, to, opts).ok_or_else(unsupported)?
         }
         _ => Err(unsupported()),
@@ -1272,7 +1273,8 @@ fn integral_bytes<T: ArrowPrimitiveType, const N: usize>(
     Ok(Arc::new(out.finish()))
 }
 
-/// `DATE` ↔ `TIMESTAMP` ↔ `TIMESTAMP_NTZ`; `None` for other targets.
+/// `DATE` ↔ `TIMESTAMP` ↔ `TIMESTAMP_NTZ`, and `TIME` ↔ both timestamps (Spark 4.3; the analyzer
+/// refuses the cast before it); `None` for other targets.
 fn temporal(
     input: &dyn Array,
     to: &DataType,
@@ -1330,7 +1332,61 @@ fn temporal(
             })
             .map(ts_out(to_zone))
         }
+        // The wall clock's time of day: a `TIMESTAMP` is read in the session zone.
+        (
+            DataType::Timestamp(TimeUnit::Microsecond, from_zone),
+            DataType::Time64(TimeUnit::Nanosecond),
+        ) => {
+            let t = input.as_primitive::<TimestampMicrosecondType>();
+            map_rows::<Time64NanosecondType>(input, |i| {
+                let local = if from_zone.is_some() {
+                    utc_to_local(t.value(i), tz)
+                } else {
+                    Some(t.value(i))
+                };
+                let of_day = local.ok_or_else(|| overflow(i))?.rem_euclid(MICROS_PER_DAY);
+                of_day
+                    .checked_mul(1_000)
+                    .map(Some)
+                    .ok_or_else(|| overflow(i))
+            })
+            .map(|a| Arc::new(a) as ArrayRef)
+        }
+        // The time on the query's current date in the session zone, cut to microseconds.
+        (
+            DataType::Time64(TimeUnit::Nanosecond),
+            DataType::Timestamp(TimeUnit::Microsecond, zone),
+        ) => time_on_current_date(input, zone.is_some(), tz).map(ts_out(zone)),
         _ => return None,
+    })
+}
+
+/// Each `TIME` of `input` on the date the query started in `tz`: a wall clock, read in `tz` when
+/// `zoned` (a `TIMESTAMP`), else kept (a `TIMESTAMP_NTZ`).
+fn time_on_current_date(
+    input: &dyn Array,
+    zoned: bool,
+    tz: &dyn TimeZoneRules,
+) -> Result<PrimitiveArray<TimestampMicrosecondType>, KernelError> {
+    use datetime::{MICROS_PER_DAY, local_to_utc, utc_to_local};
+    let Some(start) = tz.query_start_micros() else {
+        return Err(KernelError::unsupported(
+            "a cast of a TIME to a timestamp without the query clock",
+        ));
+    };
+    let overflow = |i| KernelError::datetime_overflow(i, "cast to timestamp");
+    let midnight = utc_to_local(start, tz)
+        .and_then(|l| l.checked_sub(l.rem_euclid(MICROS_PER_DAY)))
+        .ok_or_else(|| overflow(0))?;
+    let t = input.as_primitive::<Time64NanosecondType>();
+    map_rows::<TimestampMicrosecondType>(input, |i| {
+        let local = midnight.checked_add(t.value(i).div_euclid(1_000));
+        let micros = if zoned {
+            local.and_then(|l| local_to_utc(l, tz))
+        } else {
+            local
+        };
+        micros.map(Some).ok_or_else(|| overflow(i))
     })
 }
 

@@ -91,7 +91,8 @@ Vectorised compute kernels (SIMD) with Spark semantics, Spark-observable Murmur3
   (`format_timestamps`, `parse_timestamps`/`parse_dates`/`parse_ntz` over Arrow arrays, `seconds_to_timestamps` for
   numeric `to_timestamp` input): NULL rows are skipped, parse failures are `CANNOT_PARSE_TIMESTAMP` with `fail_on_error`
   and NULL without (`DATETIME_OVERFLOW` past the microsecond range either way, as Java's `ArithmeticException`
-  escapes even `try_to_*`), pattern errors always raise. The cast module also
+  escapes even `try_to_*`), pattern errors always raise. The cast module also casts `TIME` to and from both timestamps (Spark 4.3; the analyzer refuses it before; a `TIME` lands on the date of
+  `TimeZoneRules::query_start_micros` in the session zone) and
   parses `string -> TIMESTAMP[_NTZ]` (`cast/timestamp.rs`: the full Spark grammar, region ids resolved against the bundled database; a bare
   time of day is `KRISHIV_UNSUPPORTED_FEATURE` until the query clock reaches the kernels).
 - `math` (P2-T026): the `double` functions (`UnaryFn`/`BinaryFn`: `sqrt` .. `signum`, `pow`, `atan2`, `hypot`, `log`; pure-Rust `libm`

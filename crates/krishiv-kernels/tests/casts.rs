@@ -1145,3 +1145,70 @@ proptest! {
         }
     }
 }
+
+/// `TIME` ↔ `TIMESTAMP` (Spark 4.3) around the DST transitions of the day the query starts:
+/// the wall clock is read as `ZonedDateTime.of` reads it.
+#[test]
+fn a_time_lands_on_the_query_date_in_the_session_zone() {
+    use arrow_array::Time64NanosecondArray;
+    use krishiv_kernels::cast::Clocked;
+    use krishiv_kernels::datetime::resolve_zone;
+
+    const HOUR: i64 = 3_600_000_000;
+    let zone = resolve_zone("America/Los_Angeles").unwrap();
+    // Per day: the epoch day, then two (wall clock, UTC time of day) pairs in microseconds.
+    for (day, first, second) in [
+        // 2024-03-10: 02:30 does not exist and moves forward to 03:30 PDT; 05:00 is PDT.
+        (19_792, (5 * HOUR / 2, 21 * HOUR / 2), (5 * HOUR, 12 * HOUR)),
+        // 2024-11-03: 01:30 happens twice and is the earlier (PDT) one; 03:00 is PST.
+        (20_030, (3 * HOUR / 2, 17 * HOUR / 2), (3 * HOUR, 11 * HOUR)),
+    ] {
+        let midnight = day * 24 * HOUR;
+        let clock = Clocked {
+            inner: &zone,
+            query_start: midnight + 12 * HOUR,
+        };
+        let o = CastOptions {
+            mode: CastMode::Ansi,
+            time_zone: &clock,
+        };
+        // The second time carries nanoseconds below a microsecond, which are dropped.
+        let times = Time64NanosecondArray::from(vec![
+            Some(first.0 * 1000),
+            Some(second.0 * 1000 + 999),
+            None,
+        ]);
+        let micros = |to: &DataType| {
+            let out = cast(&times, to, &o).unwrap();
+            out.as_any()
+                .downcast_ref::<TimestampMicrosecondArray>()
+                .unwrap()
+                .iter()
+                .collect::<Vec<_>>()
+        };
+        let ltz = DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into()));
+        assert_eq!(
+            micros(&ltz),
+            [Some(midnight + first.1), Some(midnight + second.1), None]
+        );
+        // The NTZ cast keeps the wall clock.
+        let ntz = DataType::Timestamp(TimeUnit::Microsecond, None);
+        assert_eq!(
+            micros(&ntz),
+            [Some(midnight + first.0), Some(midnight + second.0), None]
+        );
+    }
+    // Without a query clock the date is unknown.
+    let times = Time64NanosecondArray::from(vec![0]);
+    let e = run(
+        &times,
+        &DataType::Timestamp(TimeUnit::Microsecond, None),
+        CastMode::Ansi,
+    )
+    .unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::KrishivUnsupportedFeature,
+        "{e}"
+    );
+}
