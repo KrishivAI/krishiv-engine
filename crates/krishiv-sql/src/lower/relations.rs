@@ -397,7 +397,7 @@ impl Lowerer {
                     JoinCondition::Using(cols.iter().map(|c| c.value.clone()).collect())
                 }
                 JoinConstraint::NearestBy(n) => {
-                    return Err(unsupported("NEAREST BY joins", n.span));
+                    return self.nearest_by_join(plan, right, kind, n, j.span);
                 }
                 JoinConstraint::AsOf(c) => return self.as_of_join(plan, right, kind, c, j.span),
             }
@@ -410,6 +410,110 @@ impl Lowerer {
                 condition,
             },
             j.span,
+        ))
+    }
+
+    /// `left [INNER | LEFT OUTER] JOIN right (APPROX | EXACT) NEAREST [k] BY (DISTANCE | SIMILARITY) ranking`:
+    /// the `k` right rows nearest to each left row. Spark rewrites it to a `max_by`/`min_by` of
+    /// `k` rows over a cross join (`RewriteNearestByJoin`); here the same rows are the first `k`
+    /// of a `row_number()` over the left row's id, ordered by the ranking (largest first for
+    /// `SIMILARITY`, smallest first for `DISTANCE`, nulls last), over the cross join. A left
+    /// outer join keeps a left row with no right row as one row of NULLs (the join's padding).
+    /// The two internal columns are dropped again. `k` and the join type were checked by
+    /// `validate`.
+    fn nearest_by_join(
+        &mut self,
+        left: LogicalPlan,
+        right: LogicalPlan,
+        kind: IrJoin,
+        n: &crate::ast::NearestBy,
+        span: Span,
+    ) -> R<LogicalPlan> {
+        const QID: &str = "__nearest_qid__";
+        const RANK: &str = "__nearest_rank__";
+        let k: i64 = n
+            .num_results
+            .as_deref()
+            .map_or(1, |k| k.parse().unwrap_or(1));
+        let star = |this: &Self, except: Vec<Vec<String>>| {
+            arc(this.ex(
+                ExprNode::Star(Star {
+                    qualifier: Vec::new(),
+                    except,
+                    replace: Vec::new(),
+                    position: None,
+                    regex: None,
+                    plan_id: None,
+                }),
+                span,
+            ))
+        };
+        let id = self
+            .call("monotonically_increasing_id", Vec::new(), span)
+            .alias(QID);
+        let left = self.node(
+            PlanNode::Project {
+                input: arc(left),
+                exprs: vec![star(self, Vec::new()), arc(id)],
+            },
+            span,
+        );
+        let joined = self.node(
+            PlanNode::Join {
+                left: arc(left),
+                right: arc(right),
+                kind,
+                condition: JoinCondition::None,
+            },
+            span,
+        );
+        let ranking = arc(self.expr(&n.ranking)?);
+        let order = match n.direction {
+            crate::ast::NearestDirection::Similarity => SortOrder::desc(ranking),
+            _ => SortOrder {
+                nulls: krishiv_plan::NullOrdering::NullsLast,
+                ..SortOrder::asc(ranking)
+            },
+        };
+        let qid = arc(self.column(vec![QID.to_owned()], span));
+        let row_number = self.call("row_number", Vec::new(), span);
+        let windowed = self.ex(
+            ExprNode::Window(WindowExpr {
+                function: arc(row_number),
+                window: WindowSpecRef::Spec(IrWindowSpec {
+                    partition_by: vec![qid],
+                    order_by: vec![order],
+                    frame: None,
+                }),
+            }),
+            span,
+        );
+        let ranked = self.node(
+            PlanNode::Project {
+                input: arc(joined),
+                exprs: vec![star(self, Vec::new()), arc(windowed.alias(RANK))],
+            },
+            span,
+        );
+        let limit = arc(self.ex(ExprNode::Literal(IrLiteral::Long(k)), span));
+        let rank = arc(self.column(vec![RANK.to_owned()], span));
+        let predicate = arc(self.call("<=", vec![rank, limit], span));
+        let kept = self.node(
+            PlanNode::Filter {
+                input: arc(ranked),
+                predicate,
+            },
+            span,
+        );
+        Ok(self.node(
+            PlanNode::Project {
+                input: arc(kept),
+                exprs: vec![star(
+                    self,
+                    vec![vec![QID.to_owned()], vec![RANK.to_owned()]],
+                )],
+            },
+            span,
         ))
     }
 
