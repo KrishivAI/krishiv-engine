@@ -98,7 +98,7 @@ impl QueryCatalog {
 const TIME_TRAVEL_OPTIONS: &[&str] = &["versionasof", "timestampasof"];
 
 /// Iceberg's read options that choose a snapshot other than the current one or an incremental
-/// range (`SparkReadOptions`; keys are case-insensitive there). A declared table reads only its
+/// range, or an internal task set that chooses the files (`SparkReadOptions`; keys are case-insensitive there). A declared table reads only its
 /// current snapshot until time travel lands (design `0.4-iceberg-branches-tags` I1), so each is
 /// refused rather than ignored.
 const SNAPSHOT_OPTIONS: &[&str] = &[
@@ -110,6 +110,7 @@ const SNAPSHOT_OPTIONS: &[&str] = &[
     "end-snapshot-id",
     "start-timestamp",
     "end-timestamp",
+    "scan-task-set-id",
 ];
 
 /// Refuses a read of the declared table `name` with an option that would choose another snapshot
@@ -118,7 +119,7 @@ const SNAPSHOT_OPTIONS: &[&str] = &[
 /// # Errors
 /// `UNSUPPORTED_FEATURE.TIME_TRAVEL` naming the table for `versionAsOf` / `timestampAsOf`;
 /// `KRISHIV_UNSUPPORTED_FEATURE` naming the option for Iceberg's own.
-fn refuse_snapshot_options(
+pub(super) fn refuse_snapshot_options(
     name: &[String],
     options: &std::collections::BTreeMap<String, OptionValue>,
 ) -> Result<(), KrishivError> {

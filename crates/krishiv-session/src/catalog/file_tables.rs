@@ -153,6 +153,11 @@ impl QueryCatalog {
             let ReadSource::Table { name, options } = &scan.source else {
                 continue;
             };
+            // Analysis-only calls (`df.schema`, `DESCRIBE QUERY`, Connect `AnalyzePlan`) never
+            // open the table, so a declared table's snapshot options are refused here too.
+            if self.is_declared_scan(name, scan.version) {
+                super::declared::refuse_snapshot_options(name, options)?;
+            }
             if options.contains_key(krishiv_plan::TIME_TRAVEL_OPTION) {
                 // The relation resolved (a missing one failed in analysis): Spark's
                 // `V2SessionCatalog.failTimeTravel` names it in full. A name with its catalog
