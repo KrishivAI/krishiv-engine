@@ -201,6 +201,10 @@ pub(crate) struct Parser<'s> {
     /// Reading the bodies of a multi-table insert: `INSERT INTO|OVERWRITE`
     /// starts the next clause, never an implicit alias.
     insert_bodies: bool,
+    /// The token of a `CURRENT_TIMESTAMP`-like keyword that starts a select item followed by an
+    /// identifier list that ends the item (`current_timestamp(n)`): ANTLR reads the keyword
+    /// alone and the list as a multi-part alias, so the keyword is no call there.
+    current_like_alias: Option<usize>,
     /// Reading the right side of an `ASOF JOIN`: `MATCH_CONDITION (` starts
     /// its criteria, never an implicit alias.
     asof_right: bool,
@@ -383,8 +387,8 @@ impl TopRule for DataTypeRule {
         p.single_data_type()
     }
 
-    fn validate(out: &Self::Out, _src: &str, _opts: ParserOptions) -> Result<(), ParseError> {
-        validate::data_type(out)
+    fn validate(out: &Self::Out, _src: &str, opts: ParserOptions) -> Result<(), ParseError> {
+        validate::data_type(out, opts)
     }
 }
 
@@ -399,8 +403,8 @@ impl TopRule for TableSchemaRule {
         p.single_table_schema()
     }
 
-    fn validate(out: &Self::Out, _src: &str, _opts: ParserOptions) -> Result<(), ParseError> {
-        validate::columns(out)
+    fn validate(out: &Self::Out, _src: &str, opts: ParserOptions) -> Result<(), ParseError> {
+        validate::columns(out, opts)
     }
 }
 
@@ -824,6 +828,7 @@ impl<'s> Parser<'s> {
             cast_types: vec![],
             force_bare,
             insert_bodies: false,
+            current_like_alias: None,
             asof_right: false,
             asof_ahead: false,
             asof_decided: HashMap::new(),
@@ -1253,6 +1258,42 @@ impl<'s> Parser<'s> {
 
     fn ident_list(&mut self) -> PR<Vec<Ident>> {
         self.paren_list(Self::any_ident)
+    }
+
+    /// Whether tokens `n..` are `( ident [, ident]* )` followed by the end of a select item (a
+    /// list end or a clause keyword such as `FROM`).
+    fn ident_list_ends_item_at(&self, n: usize) -> bool {
+        if !self.sym_at(n, Sym::LParen) {
+            return false;
+        }
+        let mut k = n + 1;
+        loop {
+            if !self.is_ident_at(k, true) {
+                return false;
+            }
+            k += 1;
+            if self.sym_at(k, Sym::Comma) {
+                k += 1;
+            } else {
+                break;
+            }
+        }
+        // The reserved words that may follow a select item (they have no `CLAUSE_WORD` bit).
+        const FOLLOWERS: &[&str] = &[
+            "FROM",
+            "WHERE",
+            "GROUP",
+            "HAVING",
+            "ORDER",
+            "UNION",
+            "EXCEPT",
+            "INTERSECT",
+        ];
+        self.sym_at(k, Sym::RParen)
+            && (self.item_end_at(k + 1)
+                || self.any_kw_at(k + 1, FOLLOWERS)
+                || (self.kind(k + 1) == Some(TokenKind::Word)
+                    && self.class(k + 1) & CLAUSE_WORD != 0))
     }
 
     /// Whether token `n` ends a list item: end of input, `,`, `)` or `;`.

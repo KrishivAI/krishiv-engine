@@ -22,8 +22,34 @@ fn trim_ascii_end(s: &str) -> &str {
     s.trim_end_matches(|c: char| c.is_ascii_whitespace())
 }
 
-/// Nanoseconds since midnight for `text`, or `None` when malformed.
+/// Nanoseconds since midnight for `text`, or `None` when malformed; fraction digits past the
+/// sixth are dropped (a `TIME(6)` value, as Spark 4.2 reads every time and 4.3 a `TIME(<=6)`).
 pub fn parse_time(text: &str) -> Option<i64> {
+    parse_time_digits(text, 6)
+}
+
+/// Nanoseconds since midnight for `text`, or `None` when malformed, keeping up to nine fraction
+/// digits (Spark 4.3's `stringToTime`, `TimeType.NANOS_PRECISION`); a cast truncates to its
+/// target's precision afterwards.
+pub fn parse_time_nanos(text: &str) -> Option<i64> {
+    parse_time_digits(text, 9)
+}
+
+/// The number of fraction digits written in a time `text` (`12:00:00.1234567` has 7); 0 without
+/// a fraction. Spark 4.3 types a `TIME` literal as `TIME(max(6, digits))`.
+#[must_use]
+pub fn time_fraction_digits(text: &str) -> usize {
+    let clock = text
+        .trim_matches(|c: char| c.is_ascii_whitespace())
+        .split(|c: char| c.is_ascii_whitespace())
+        .next()
+        .unwrap_or("");
+    clock
+        .rsplit_once('.')
+        .map_or(0, |(_, f)| f.bytes().take_while(u8::is_ascii_digit).count())
+}
+
+fn parse_time_digits(text: &str, digits: usize) -> Option<i64> {
     let s = text.trim_matches(|c: char| c.is_ascii_whitespace());
     let s = s.strip_prefix('T').unwrap_or(s);
     // The suffix is separated by a run of ASCII whitespace (a tab will do).
@@ -48,7 +74,7 @@ pub fn parse_time(text: &str) -> Option<i64> {
                 return None;
             }
             let mut nanos = 0_i64;
-            for (i, d) in fraction.bytes().take(6).enumerate() {
+            for (i, d) in fraction.bytes().take(digits).enumerate() {
                 let scale = 10_i64.checked_pow(u32::try_from(8_usize.checked_sub(i)?).ok()?)?;
                 nanos = nanos.checked_add(i64::from(d.wrapping_sub(b'0')).checked_mul(scale)?)?;
             }
@@ -275,6 +301,16 @@ pub fn make_time(
     Ok(out.into_iter().collect())
 }
 
+/// `nanos` cut to whole microseconds when `micros_only` (Spark 4.2's `TIME`), else unchanged.
+#[must_use]
+pub(crate) fn cut_to_micros(nanos: i64, micros_only: bool) -> i64 {
+    if micros_only {
+        nanos.wrapping_sub(nanos.rem_euclid(1_000))
+    } else {
+        nanos
+    }
+}
+
 /// `time_to_seconds|millis|micros`: whole `nanos_per_unit`s of each time.
 pub fn time_to_units(
     times: &PrimitiveArray<Time64NanosecondType>,
@@ -287,9 +323,9 @@ pub fn time_to_units(
 /// `to_time` (its text is read with the default `TIME` grammar).
 const DEFAULT_TIME_FORMAT: &str = "HH:mm:ss.SSSSSS";
 
-/// `to_time(text[, format])`: with no `formats`, the default `TIME` grammar;
-/// else each row's pattern (a NULL pattern gives NULL). An unparsable row
-/// is `CANNOT_PARSE_TIME` with `fail_on_error`, else NULL.
+/// `to_time(text[, format])`: with no `formats`, the default `TIME` grammar (nine fraction digits
+/// with `nanos`, Spark 4.3; six before); else each row's pattern (a NULL pattern gives NULL). An
+/// unparsable row is `CANNOT_PARSE_TIME` with `fail_on_error`, else NULL.
 ///
 /// # Errors
 /// `CANNOT_PARSE_TIME`; an invalid pattern's own error.
@@ -297,9 +333,9 @@ pub fn to_time(
     strings: &StringArray,
     formats: Option<&StringArray>,
     fail_on_error: bool,
+    nanos: bool,
 ) -> Result<PrimitiveArray<Time64NanosecondType>, KernelError> {
     use crate::datetime_pattern::{DateTimePattern, Purpose};
-    const MICROS_PER_DAY: i64 = 86_400_000_000;
     let mut out = Vec::with_capacity(strings.len());
     for i in 0..strings.len() {
         let fmt = formats.map(|f| (!f.is_null(i)).then(|| f.value(i)));
@@ -309,12 +345,12 @@ pub fn to_time(
         }
         let text = strings.value(i);
         let parsed = match fmt.flatten() {
+            None if nanos => parse_time_nanos(text),
             None => parse_time(text),
             Some(f) => DateTimePattern::new(f, Purpose::Parse)
                 .map_err(|e| KernelError::with_row(Some(i), e))?
-                .parse_local(text, false)
-                .map_err(|e| KernelError::with_row(Some(i), e))?
-                .map(|m| m.rem_euclid(MICROS_PER_DAY).wrapping_mul(1_000)),
+                .parse_time_of_day_nanos(text)
+                .map_err(|e| KernelError::with_row(Some(i), e))?,
         };
         match parsed {
             Some(n) => out.push(Some(n)),
@@ -496,16 +532,16 @@ mod tests {
     fn to_time_reads_the_default_grammar_or_a_pattern() {
         let text = StringArray::from(vec![Some("01:02:03"), Some("23-59-59.999999"), None]);
         let fmts = StringArray::from(vec![Some("HH:mm:ss"), Some("HH-mm-ss.SSSSSS"), Some("HH")]);
-        let plain = to_time(&text.slice(0, 1), None, true).unwrap();
+        let plain = to_time(&text.slice(0, 1), None, true, false).unwrap();
         assert_eq!(plain.value(0), 3723 * S);
-        let piped = to_time(&text, Some(&fmts), false).unwrap();
+        let piped = to_time(&text, Some(&fmts), false, false).unwrap();
         assert_eq!(piped.value(0), 3723 * S);
         assert_eq!(piped.value(1), 86_399 * S + 999_999_000);
         assert!(piped.is_null(2));
         // A NULL pattern is NULL.
         let none = StringArray::from(vec![None::<&str>]);
         assert!(
-            to_time(&text.slice(0, 1), Some(&none), true)
+            to_time(&text.slice(0, 1), Some(&none), true, false)
                 .unwrap()
                 .is_null(0)
         );
@@ -515,17 +551,17 @@ mod tests {
     fn to_time_refuses_or_nulls_what_does_not_parse() {
         let text = StringArray::from(vec![Some("13-60"), Some("abc")]);
         let fmts = StringArray::from(vec![Some("HH-mm"), Some("HH:mm")]);
-        let e = to_time(&text, Some(&fmts), true).unwrap_err();
+        let e = to_time(&text, Some(&fmts), true, false).unwrap_err();
         assert_eq!(
             e.error().error_class(),
             krishiv_common::error::ErrorClass::CannotParseTime
         );
-        let e = to_time(&text.slice(1, 1), None, true).unwrap_err();
+        let e = to_time(&text.slice(1, 1), None, true, false).unwrap_err();
         assert_eq!(
             e.error().error_class(),
             krishiv_common::error::ErrorClass::CannotParseTime
         );
-        let nulls = to_time(&text, Some(&fmts), false).unwrap();
+        let nulls = to_time(&text, Some(&fmts), false, false).unwrap();
         assert_eq!(nulls.null_count(), 2);
     }
 }

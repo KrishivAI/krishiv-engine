@@ -41,6 +41,61 @@ fn an_unknown_binary_output_style_is_corrupt() {
 }
 
 #[test]
+fn spark_version_lines_match_the_kernels() {
+    // Every kernel line but 4.2 (what an absent field means) decodes; 4.2 is never sent.
+    for v in krishiv_kernels::SparkVersion::ALL {
+        let mut m = message("spark_version");
+        m.env.as_mut().unwrap().spark_version = Some(v.line().to_owned());
+        if v == krishiv_kernels::SparkVersion::V4_2 {
+            corrupt(&m, "an unknown Spark version");
+        } else {
+            let plan = decode(&m.encode_to_vec()).unwrap();
+            assert_eq!(plan.env().spark_version.as_deref(), Some(v.line()));
+        }
+    }
+}
+
+#[test]
+fn an_unknown_spark_version_is_corrupt() {
+    for line in ["4.2", "3.5", "4.3.0", ""] {
+        let mut m = message("spark_version");
+        m.env.as_mut().unwrap().spark_version = Some(line.to_owned());
+        corrupt(&m, "an unknown Spark version");
+    }
+    let bytes = message("spark_version").encode_to_vec();
+    let plan = decode(&bytes).unwrap();
+    assert_eq!(plan.env().spark_version.as_deref(), Some("4.3"));
+    // A reader without the feature would run the plan as Spark 4.2: it refuses it.
+    let err = decode_with(&bytes, &Limits::default(), &ReaderFeatures::only([])).unwrap_err();
+    assert_eq!(
+        err,
+        CodecError::UnsupportedFeatures {
+            missing: vec!["spark_version".to_owned()]
+        }
+    );
+}
+
+#[test]
+fn an_encoder_refuses_a_spark_version_its_reader_calls_corrupt() {
+    let (_, plan) = cases()
+        .into_iter()
+        .find(|(n, _)| n == "spark_version")
+        .unwrap();
+    for line in ["4.2", "3.5", "4.3.0", ""] {
+        let mut env = plan.env().clone();
+        env.spark_version = Some(std::sync::Arc::from(line));
+        let bad = plan_of_env(krishiv_exec::physical::PhysNode::OneRow, env);
+        assert_eq!(
+            encode(&bad).unwrap_err(),
+            CodecError::Unsupported(format!(
+                "the Spark version {line:?} in the expression environment"
+            )),
+            "{line:?}"
+        );
+    }
+}
+
+#[test]
 fn the_header_lists_exactly_the_features_in_use() {
     let m = message("window_ranking");
     assert_eq!(m.features, ["window"]);
@@ -106,6 +161,7 @@ fn the_header_lists_exactly_the_features_in_use() {
         message("binary_output_style").features,
         ["binary_output_style"]
     );
+    assert_eq!(message("spark_version").features, ["spark_version"]);
     assert_eq!(message("aggregate_moments").features, ["moment_aggregates"]);
     // The exchange's schema alone names the collation.
     assert_eq!(
@@ -499,6 +555,16 @@ fn constructs_map_to_one_feature_or_the_baseline() {
             Some(Feature::ThetaSketchAggregates)
         );
     }
+    assert_eq!(
+        feature_of(Construct::AggregateFunction(
+            &krishiv_exec::aggregate::AggregateFunction::CountMinSketch {
+                depth: 3,
+                width: 4,
+                seed: 1,
+            }
+        )),
+        Some(Feature::CountMinSketchAggregate)
+    );
     assert_eq!(
         feature_of(Construct::AggregateFunction(
             &krishiv_exec::aggregate::AggregateFunction::CovarPop
@@ -991,6 +1057,7 @@ fn a_reader_without_partitioned_writes_refuses_the_plan_naming_it() {
         ("aggregate_bitmaps", "bitmap_aggregates"),
         ("aggregate_hll_sketches", "hll_sketch_aggregates"),
         ("aggregate_theta_sketches", "theta_sketch_aggregates"),
+        ("aggregate_count_min_sketch", "count_min_sketch_aggregate"),
         ("aggregate_moments", "moment_aggregates"),
         ("aggregate_any_value", "any_value_by_aggregates"),
         ("aggregate_max_min_by", "any_value_by_aggregates"),
@@ -1382,6 +1449,106 @@ fn a_variant_result_column_is_not_a_nested_type() {
 }
 
 #[test]
+fn nanosecond_time_needs_its_feature() {
+    use krishiv_types::DataType;
+    // TIME(7..9) needs `time_precision_nanos`; a reader from before it (which knows `time_type`, p <= 6)
+    // refuses the plan by feature, not as a corrupt type.
+    let m = message("time_nanos");
+    assert!(
+        m.features.contains(&"time_precision_nanos".to_owned()),
+        "{:?}",
+        m.features
+    );
+    for p in 0..=6 {
+        assert_eq!(
+            feature_of(Construct::Type(&DataType::Time { precision: p })),
+            Some(Feature::TimeType)
+        );
+    }
+    for p in 7..=9 {
+        assert_eq!(
+            feature_of(Construct::Type(&DataType::Time { precision: p })),
+            Some(Feature::TimePrecisionNanos)
+        );
+    }
+    assert_eq!(Feature::TimePrecisionNanos.kind(), FeatureKind::Semantic);
+    assert_eq!(Feature::TimePrecisionNanos.legacy_level(), 6);
+    use krishiv_types::arrow::SPARK_TYPE_METADATA_KEY;
+    let tagged = |tag: &str| {
+        arrow_schema::Field::new(
+            "t",
+            arrow_schema::DataType::Time64(arrow_schema::TimeUnit::Nanosecond),
+            true,
+        )
+        .with_metadata(std::collections::HashMap::from([(
+            SPARK_TYPE_METADATA_KEY.to_owned(),
+            tag.to_owned(),
+        )]))
+    };
+    for tag in ["time(9)", "array<time(7)>", "struct<a:int,b:time(8)>"] {
+        assert_eq!(
+            feature_of(Construct::ArrowFieldTime(&tagged(tag))),
+            Some(Feature::TimePrecisionNanos),
+            "{tag}"
+        );
+    }
+    for tag in ["time(6)", "time(0)", "string", "not a type"] {
+        assert_eq!(
+            feature_of(Construct::ArrowFieldTime(&tagged(tag))),
+            None,
+            "{tag}"
+        );
+    }
+    // A user-defined type's field is tagged with the JSON form, which names its SQL type.
+    let udt_over = |precision| {
+        DataType::Udt(std::sync::Arc::new(krishiv_types::UdtType::jvm(
+            DataType::Time { precision },
+            "pkg.ClockUDT".to_owned(),
+            None,
+        )))
+    };
+    for (t, expected) in [
+        (udt_over(9), Some(Feature::TimePrecisionNanos)),
+        (
+            DataType::Array(krishiv_types::ArrayType::new(udt_over(7), true).into()),
+            Some(Feature::TimePrecisionNanos),
+        ),
+        (udt_over(6), None),
+    ] {
+        // An array of a UDT tags its element field, which the walk visits on its own.
+        let field = match t.to_arrow_field("t", true).data_type() {
+            arrow_schema::DataType::List(element) => element.as_ref().clone(),
+            _ => t.to_arrow_field("t", true),
+        };
+        assert!(
+            field
+                .metadata()
+                .get(SPARK_TYPE_METADATA_KEY)
+                .is_some_and(|tag| tag.starts_with('{')),
+            "{field:?}"
+        );
+        assert_eq!(
+            feature_of(Construct::ArrowFieldTime(&field)),
+            expected,
+            "{t:?}"
+        );
+    }
+    let bytes = m.encode_to_vec();
+    let older = ReaderFeatures::only(
+        Feature::ALL
+            .iter()
+            .copied()
+            .filter(|f| *f != Feature::TimePrecisionNanos),
+    );
+    assert_eq!(
+        decode_with(&bytes, &Limits::default(), &older).unwrap_err(),
+        CodecError::UnsupportedFeatures {
+            missing: vec!["time_precision_nanos".to_owned()]
+        }
+    );
+}
+
+#[test]
 fn time_and_spatial_types_need_their_features() {
     use krishiv_types::{DataType, Srid};
     assert_eq!(message("time_project").features, ["time_type"]);
@@ -1635,10 +1802,36 @@ fn type_parameters_are_checked_on_decode() {
             t.precision = precision;
             t.scale = scale;
         });
-        m.features = vec!["geo_types".to_owned(), "time_type".to_owned()];
+        // TIME(7..9) lists `time_precision_nanos`, which implies `time_type`.
+        let time_feature = if precision > 6 {
+            "time_precision_nanos"
+        } else {
+            "time_type"
+        };
+        m.features = vec!["geo_types".to_owned(), time_feature.to_owned()];
         m
     };
-    corrupt(&time(7, 0), "an invalid time type");
+    // TIME takes a precision up to 9 (Spark 4.3); 7 decodes, with its feature listed.
+    let decoded = decode(&time(7, 0).encode_to_vec()).unwrap();
+    let mut stack = vec![decoded.root()];
+    let mut scanned = None;
+    while let Some(n) = stack.pop() {
+        if let PhysNode::Scan(s) = n {
+            scanned = Some(s.scan.output[0].data_type.clone());
+        }
+        stack.extend(n.children());
+    }
+    assert_eq!(
+        scanned,
+        Some(krishiv_types::DataType::Time { precision: 7 })
+    );
+    let mut hidden = time(7, 0);
+    hidden.features = vec!["geo_types".to_owned(), "time_type".to_owned()];
+    corrupt(
+        &hidden,
+        "the feature header does not match the plan's constructs",
+    );
+    corrupt(&time(10, 0), "an invalid time type");
     corrupt(&time(3, 1), "a type parameter on a type that has none");
     let srid_on_int = edit(&|t: &mut pb::DataType| {
         t.kind = Kind::Integer as i32;
@@ -2126,6 +2319,7 @@ fn the_indeterminate_collation_needs_its_feature() {
 fn an_indeterminate_arrow_field_tag_needs_its_feature() {
     use arrow_schema::{DataType as Arrow, Field};
     use krishiv_types::arrow::SPARK_TYPE_METADATA_KEY;
+    use krishiv_types::{Collation, DataType};
     for tag in ["string collate null", "array<string collate null>"] {
         let field = Field::new("s", Arrow::Utf8View, true).with_metadata(
             std::collections::HashMap::from([(SPARK_TYPE_METADATA_KEY.to_owned(), tag.to_owned())]),
@@ -2136,6 +2330,31 @@ fn an_indeterminate_arrow_field_tag_needs_its_feature() {
             "{tag}"
         );
     }
+    // A user-defined type over a struct is tagged with the JSON form, where the INDETERMINATE
+    // collation is `spark.null` in the struct field's `__COLLATIONS`, not `collate null`.
+    let udt = DataType::Udt(std::sync::Arc::new(krishiv_types::UdtType::jvm(
+        DataType::Struct(krishiv_types::StructType::new(vec![
+            krishiv_types::StructField::new(
+                "s",
+                DataType::CollatedString(Collation::INDETERMINATE),
+                true,
+            ),
+        ])),
+        "pkg.PairUDT".to_owned(),
+        None,
+    )));
+    let tag = udt.json();
+    assert!(
+        tag.contains("spark.null") && !tag.contains("collate null"),
+        "{tag}"
+    );
+    let field = Field::new("u", Arrow::Utf8View, true).with_metadata(
+        std::collections::HashMap::from([(SPARK_TYPE_METADATA_KEY.to_owned(), tag)]),
+    );
+    assert_eq!(
+        feature_of(Construct::ArrowField(&field)),
+        Some(Feature::IndeterminateCollation)
+    );
 }
 
 /// `max` and `min` of a collated string (`MaxByKeyFirst`, `MinByKeyFirst`)

@@ -7,10 +7,14 @@
 use arrow_array::Array;
 use arrow_array::cast::AsArray;
 use futures::executor::block_on;
+use krishiv_plan::analyzer::SparkProfile;
 use krishiv_session::Session;
 
 fn text(sql: &str) -> String {
-    let s = Session::new().unwrap();
+    let s = Session::builder()
+        .profile(SparkProfile::V4_2)
+        .build()
+        .unwrap();
     block_on(s.sql("SET spark.sql.timeType.enabled = true")).unwrap();
     let df = block_on(s.sql(&format!("SELECT CAST(({sql}) AS STRING)"))).unwrap();
     let b = block_on(df.collect()).unwrap();
@@ -85,7 +89,10 @@ fn null_and_invalid_inputs_keep_their_modes() {
 
 #[test]
 fn an_invalid_string_is_an_error_under_ansi() {
-    let s = Session::new().unwrap();
+    let s = Session::builder()
+        .profile(SparkProfile::V4_2)
+        .build()
+        .unwrap();
     block_on(s.sql("SET spark.sql.timeType.enabled = true")).unwrap();
     block_on(s.sql("SET spark.sql.ansi.enabled = true")).unwrap();
     let e = block_on(s.sql("SELECT CAST('nope' AS time(2))"))
@@ -152,7 +159,10 @@ fn a_cast_to_the_same_time_type_is_a_no_op() {
 /// (golden: `extract(SECOND FROM CAST(.. AS TIME(1))):decimal(8,6)`).
 #[test]
 fn extract_second_on_a_column_and_the_output_schema() {
-    let s = Session::new().unwrap();
+    let s = Session::builder()
+        .profile(SparkProfile::V4_2)
+        .build()
+        .unwrap();
     block_on(s.sql("SET spark.sql.timeType.enabled = true")).unwrap();
     let sql = "SELECT extract(SECOND FROM CAST(s AS time(3))) FROM \
                VALUES ('09:08:01.987654'), ('00:00:00.123456') AS v(s)";
@@ -196,7 +206,10 @@ fn a_time_casts_to_decimal_as_seconds() {
     ] {
         assert_eq!(text(expr), want, "{expr}");
     }
-    let s = Session::new().unwrap();
+    let s = Session::builder()
+        .profile(SparkProfile::V4_2)
+        .build()
+        .unwrap();
     block_on(s.sql("SET spark.sql.timeType.enabled = true")).unwrap();
     let e = block_on(s.sql("SELECT CAST(TIME '00:01:00' AS decimal(1, 0))"))
         .and_then(|df| block_on(df.collect()))
@@ -206,4 +219,23 @@ fn a_time_casts_to_decimal_as_seconds() {
         krishiv_common::error::ErrorClass::NumericValueOutOfRangeWithSuggestion
     );
     assert!(e.to_string().contains("60.000000000"), "{e}");
+}
+
+/// Spark 4.3 refuses a `TIME` literal with more than nine fractional digits
+/// (4.3.0 golden `time-precision-goldens.json`, `SELECT TIME'12:00:00.1234567890'`).
+#[test]
+fn a_time_literal_past_nine_digits_is_refused_under_spark_4_3() {
+    let s = Session::builder()
+        .profile(SparkProfile::V4_3)
+        .build()
+        .unwrap();
+    let e = block_on(s.sql("SELECT TIME'12:00:00.1234567890'"))
+        .and_then(|df| block_on(df.collect()))
+        .unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        krishiv_common::error::ErrorClass::InvalidTimeLiteralPrecision,
+        "{e}"
+    );
+    assert!(e.to_string().contains("'12:00:00.1234567890'"), "{e}");
 }

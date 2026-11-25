@@ -629,9 +629,11 @@ impl Session {
             match krishiv_io::BeneathStore::anchor(std::path::Path::new(local)) {
                 Ok(anchored) => {
                     let id = at.store.private_to(job);
+                    let anchored = Arc::new(anchored);
                     self.state
                         .io
-                        .register_store(id.clone(), Arc::new(anchored) as Arc<dyn ObjectStore>);
+                        .register_store(id.clone(), Arc::clone(&anchored) as Arc<dyn ObjectStore>);
+                    self.state.io.register_staging_sweeper(id.clone(), anchored);
                     let registration = StoreRegistration {
                         io: Arc::clone(&self.state.io),
                         id: id.clone(),

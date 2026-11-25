@@ -57,14 +57,6 @@
       "reason": "SELECT current_time(INTERVAL '1 02:03:04' DAY TO SECOND) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has DATATYPE_MISMATCH.VALUE_OUT_OF_RANGE"
     },
     {
-      "id": "current_time#7ddb3c7ee4de/ansi_on",
-      "reason": "SELECT current_time(true) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has MULTI_ALIAS_WITHOUT_GENERATOR"
-    },
-    {
-      "id": "current_time#7ddb3c7ee4de/ansi_off",
-      "reason": "SELECT current_time(true) | DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE where Spark has MULTI_ALIAS_WITHOUT_GENERATOR"
-    },
-    {
       "id": "current_time#8c0102f684d2/ansi_on",
       "reason": "SELECT current_time('1') | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT"
     },
@@ -103,14 +95,6 @@
     {
       "id": "current_time#dc4869cd5cda/ansi_off",
       "reason": "SELECT current_time(CAST(NULL AS int)) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT where Spark has DATATYPE_MISMATCH.UNEXPECTED_NULL"
-    },
-    {
-      "id": "current_time#eb7bf9218c73/ansi_on",
-      "reason": "SELECT current_time(NULL) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT where Spark has MULTI_ALIAS_WITHOUT_GENERATOR"
-    },
-    {
-      "id": "current_time#eb7bf9218c73/ansi_off",
-      "reason": "SELECT current_time(NULL) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT where Spark has MULTI_ALIAS_WITHOUT_GENERATOR"
     }
   ],
   "format_version": 1,

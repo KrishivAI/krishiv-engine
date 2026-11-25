@@ -100,6 +100,124 @@ impl Resolver<'_> {
         )
     }
 
+    /// Spark 4.3's `current_timestamp(p)`, `now(p)` and `localtimestamp(p)`
+    /// (`CurrentTimestampPrecision.validate`, `datetimeExpressions.scala`): `true` when the call
+    /// is one with `p = 6`, the plain call. A non-foldable argument is `NON_FOLDABLE_ARGUMENT` (with
+    /// its own type), then a non-integral one `UNEXPECTED_INPUT_TYPE`; the value is read as Java's
+    /// `intValue()` (a long wraps);
+    /// 7..=9 asks for the nanosecond types, which Spark keeps behind
+    /// `spark.sql.timestampNanosTypes.enabled` (off): `FEATURE_NOT_ENABLED`; any other value is
+    /// `INVALID_TIMESTAMP_PRECISION`. Before 4.3 (and for other calls) `false`: the arity check
+    /// refuses the argument.
+    fn timestamp_precision_call(
+        &self,
+        entry: &FunctionEntry,
+        e: &Arc<Expr>,
+        arg: &Bound,
+    ) -> Result<bool, AnalysisError> {
+        let name = entry.id.name();
+        if self.ctx.profile < crate::analyzer::SparkProfile::V4_3
+            || !is_builtin_entry(entry)
+            || !matches!(name, "current_timestamp" | "now" | "localtimestamp")
+        {
+            return Ok(false);
+        }
+        let zone = self.ctx.conf.session_zone;
+        let sql_type = |t: Option<&DataType>| {
+            t.map_or_else(|| "\"VOID\"".to_owned(), |t| format!("\"{}\"", t.sql()))
+        };
+        // Spark 4.3's `CurrentTimestampPrecision.validate` checks foldability first, naming the
+        // argument's own type (`now(p)` over a DOUBLE column: "DOUBLE"), then the type.
+        if crate::analyzer::ops::not_constant(&arg.expr) {
+            return Err(AnalysisError::new(
+                krishiv_common::error::NonFoldableArgument {
+                    func_name: format!("`{name}`"),
+                    param_name: "`precision`".to_owned(),
+                    param_type: sql_type(arg.ty.data_type.as_ref()),
+                },
+                e.origin,
+            ));
+        }
+        let integral = matches!(
+            arg.ty.data_type,
+            Some(DataType::Byte | DataType::Short | DataType::Integer | DataType::Long)
+        );
+        if !integral {
+            return Err(AnalysisError::new(
+                krishiv_common::error::UnexpectedInputType {
+                    param_index: "first".to_owned(),
+                    function_name: format!("`{name}`"),
+                    required_type: "\"INT\"".to_owned(),
+                    input_sql: format!("\"{}\"", pretty(&arg.shown(), zone)),
+                    input_type: sql_type(arg.ty.data_type.as_ref()),
+                },
+                e.origin,
+            ));
+        }
+        let p = match self.fold(&arg.expr, self.ctx.conf.ansi) {
+            // Spark reads the value's `Number.intValue()`: a long wraps
+            // (`current_timestamp(4294967302L)` is 6).
+            Some(Constant::Integral(p)) => {
+                let [a, b, c, d, ..] = p.to_le_bytes();
+                i32::from_le_bytes([a, b, c, d])
+            }
+            // `now(CAST(NULL AS INT))` (Spark 4.3: `DATATYPE_MISMATCH.UNEXPECTED_NULL`).
+            Some(Constant::Null) => {
+                return Err(AnalysisError::new(
+                    krishiv_common::error::DatatypeMismatchUnexpectedNull {
+                        sql_expr: format!("\"{}\"", pretty(&arg.shown(), zone)),
+                        expr_name: "`precision`".to_owned(),
+                    },
+                    e.origin,
+                ));
+            }
+            // A foldable precision the folder cannot evaluate (`dayofweek(DATE '1970-01-02')`):
+            // Spark evaluates it; Krishiv refuses it by name (an explicit divergence).
+            _ => {
+                return Err(AnalysisError::new(
+                    krishiv_common::error::KrishivUnsupportedFeature {
+                        feature: format!(
+                            "`{name}({})` with a precision Krishiv cannot fold",
+                            pretty(&arg.shown(), zone)
+                        ),
+                    },
+                    e.origin,
+                ));
+            }
+        };
+        match p {
+            6 => Ok(true),
+            7..=9 if self.ctx.conf.timestamp_nanos_types => Err(AnalysisError::new(
+                krishiv_common::error::KrishivUnsupportedFeature {
+                    feature: format!(
+                        "`{name}({p})`: the nanosecond-precision timestamp types (Krishiv 0.3.1)"
+                    ),
+                },
+                e.origin,
+            )),
+            7..=9 => Err(AnalysisError::new(
+                krishiv_common::error::FeatureNotEnabled {
+                    feature_name: "Nanosecond-precision timestamp types".to_owned(),
+                    config_key: "spark.sql.timestampNanosTypes.enabled".to_owned(),
+                    config_value: "true".to_owned(),
+                },
+                e.origin,
+            )),
+            _ => Err(AnalysisError::new(
+                krishiv_common::error::InvalidTimestampPrecision {
+                    precision: p.to_string(),
+                    r#type: if name == "localtimestamp" {
+                        "TIMESTAMP_NTZ"
+                    } else {
+                        "TIMESTAMP_LTZ"
+                    }
+                    .to_owned(),
+                },
+                e.origin,
+            )),
+        }
+    }
+
     /// A registry call's arguments after their implicit casts, and its
     /// result type: Spark's arity check, then the function's input types
     /// and result rule. Out of line: it keeps the recursive `expr` frame
@@ -112,6 +230,10 @@ impl Resolver<'_> {
         kids: &[Bound],
     ) -> Result<(Vec<Bound>, ArgType), AnalysisError> {
         let n = kids.len();
+        if n == 1 && self.timestamp_precision_call(entry, e, &kids[0])? {
+            // `current_timestamp(6)` is the call without its argument, and so named.
+            return self.typed_call(entry, e, &[]);
+        }
         if !entry.arity.accepts(n) {
             return Err(AnalysisError::new(
                 WrongNumArgsWithoutSuggestion {
@@ -176,6 +298,7 @@ impl Resolver<'_> {
             .with_literals(&literals)
             .with_sql(&sql)
             .with_ansi(ansi)
+            .with_profile(self.ctx.profile)
             .with_decimal_loss(loss)
             .with_case_sensitive(self.ctx.conf.case_sensitive)
             .with_concat_binary_as_string(self.ctx.conf.concat_binary_as_string);
@@ -197,6 +320,7 @@ impl Resolver<'_> {
             .with_sql(&sql)
             .with_bound_sql(&bound_sql)
             .with_ansi(ansi)
+            .with_profile(self.ctx.profile)
             .with_decimal_loss(loss)
             .with_case_sensitive(self.ctx.conf.case_sensitive)
             .with_concat_binary_as_string(self.ctx.conf.concat_binary_as_string);

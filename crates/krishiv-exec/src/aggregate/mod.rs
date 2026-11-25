@@ -65,6 +65,7 @@
 
 mod accumulator;
 mod bitmap;
+mod chunks;
 mod collect;
 mod count_min;
 mod distinct;

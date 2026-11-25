@@ -163,8 +163,10 @@ impl Accumulator {
         if parts.is_empty() {
             return Ok(arrow_array::new_null_array(t, 0));
         }
-        let refs: Vec<&dyn Array> = parts.iter().map(AsRef::as_ref).collect();
-        arrow_select::concat::concat(&refs).map_err(|e| internal(e.to_string()))
+        // The winners are one-row slices of input batches: their view
+        // leaves share the batches' buffer lists, which a plain concat
+        // would copy once per group (and again at every merge round).
+        crate::aggregate::chunks::concat_chunks(&parts, t)
     }
 
     /// `values` of groups `ids` as type `t`; `on(group)` says whether the
