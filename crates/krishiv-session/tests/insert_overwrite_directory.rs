@@ -18,10 +18,6 @@ const KNOWN_GAPS: &[(&str, &str)] = &[
         "the engine writes no ORC (KRISHIV_UNSUPPORTED_FEATURE, as df.write.orc); queue-sonnet.md item IOD-05",
     ),
     (
-        "IOD-22-avro",
-        "the Avro writer names its files `.avro`; Spark names them `.snappy.avro` (its default codec); queue-sonnet.md item IOD-22",
-    ),
-    (
         "IOD-47-json-nested",
         "the JSON writer does not write arrays yet (df.write.json too); queue-sonnet.md item IOD-47",
     ),

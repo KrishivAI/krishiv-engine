@@ -81,7 +81,7 @@ fn writer_schema_json() {
         e.into_error("test").error_class(),
         ErrorClass::KrishivUnsupportedFeature
     );
-    assert_eq!(AvroFormat.file_suffix(&env_options_none()), ".avro");
+    assert_eq!(AvroFormat.file_suffix(&env_options_none()), ".snappy.avro");
 }
 
 /// A file written by Spark 3.0 or later says how it was written: its rebase

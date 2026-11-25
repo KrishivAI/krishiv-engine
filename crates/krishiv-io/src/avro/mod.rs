@@ -379,8 +379,12 @@ impl FileFormat for AvroFormat {
         c
     }
 
-    fn file_suffix(&self, _o: &FormatOptions) -> String {
-        ".avro".to_owned()
+    fn file_suffix(&self, o: &FormatOptions) -> String {
+        // Spark's `AvroOutputWriterFactory`: `.<codec>.avro`, plain `.avro` without a codec.
+        match Codec::of(o.str("compression").unwrap_or("snappy")) {
+            Codec::Null => ".avro".to_owned(),
+            codec => format!(".{}.avro", codec.header_name()),
+        }
     }
 
     fn infer_schema<'a>(
