@@ -4,8 +4,9 @@ description: "The krishiv.admin.v1 control API of krishiv server: inspect and en
 
 # Admin API (`krishiv.admin.v1`)
 
-Stability: stable since 0.3. (A build made before the 0.3.0 tag still reports `preview` in `GetVersion` and `system.capabilities`; the release flips that flag.) Changes to `krishiv.admin.v1` are additive (new methods, new fields); a breaking change
-ships as `krishiv.admin.v2` next to it.
+Stability: stable since 0.3. (A build made before the 0.3.0 tag still reports `preview` in `GetVersion` and
+`system.capabilities`; the release flips that flag.) Changes to `krishiv.admin.v1` are additive (new methods, new
+fields); a breaking change ships as `krishiv.admin.v2` next to it.
 
 `krishiv server` serves the admin API on its admin listener (port `8080` by default), over gRPC and over REST under
 `/api/admin/v1`. With authentication configured, every call needs a token, and the caller's role decides what it may do

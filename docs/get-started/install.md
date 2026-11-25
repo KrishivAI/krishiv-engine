@@ -94,7 +94,8 @@ Python 3.11 to 3.14 on every platform with a wheel. A platform marked pending sh
 | Python wheel | no | no | no | yes |
 
 A `pip install krishiv` or the release binary refuses a Delta table with `DATA_SOURCE_NOT_FOUND`. For lakehouse tables or
-ADBC and JDBC clients, use the Docker image or build from source with the `delta`, `iceberg` and `flight-sql` features.
+ADBC and JDBC clients, use the Docker image or build the `krishiv` binary from source with the `delta`,
+`iceberg`, `catalog-iceberg-rest` (Iceberg REST catalogs in the server) and `flight-sql` features.
 
 ## Check the install
 
@@ -109,5 +110,6 @@ With only the Docker image, start it on loopback and check its health endpoint (
 
 ```bash
 docker run -d --name krishiv -p 127.0.0.1:15002:15002 -p 127.0.0.1:8080:8080 ghcr.io/krishivai/krishiv:0.3.0
-curl -fsS http://127.0.0.1:8080/healthz
+# The image serves TLS with a self-signed certificate (-k); retry while the server starts.
+curl -fsSk --retry 30 --retry-delay 1 --retry-all-errors https://127.0.0.1:8080/healthz
 ```

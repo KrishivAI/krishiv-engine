@@ -25,9 +25,9 @@ SELECT region, sum(amount) FROM delta.`s3://bucket/trips` GROUP BY region;
 | Deletion vectors on write | not written; rows are rewritten |
 | Change data feed read | not yet |
 
-Delta support is the `delta` cargo feature. Of the release artifacts only the Docker image is built with it; the wheels and the release `krishiv` binary are not
-(see [What each artifact includes](../get-started/install.md#what-each-artifact-includes)). A build
-without it refuses a Delta table with
+Delta support is the `delta` cargo feature. Of the release artifacts only the Docker image is built with it; the
+wheels and the release `krishiv` binary are not (see [What each artifact
+includes](../get-started/install.md#what-each-artifact-includes)). A build without it refuses a Delta table with
 `DATA_SOURCE_NOT_FOUND`: write one small table to check yours.
 
 A table that uses a protocol feature Krishiv cannot read is refused with Spark's own error
@@ -43,8 +43,10 @@ table's files from several workers, with one commit made by the coordinator, com
 An Iceberg table is read through a [declared catalog](#declare-a-catalog) (`SELECT * FROM lake.sales.orders`).
 Reads cover position deletes, deletion vectors and equality deletes.
 
-Writing Iceberg tables is not available from SQL or the DataFrame API in 0.3: `INSERT`, `CREATE TABLE ... USING iceberg`
-and the other writes do not reach the Iceberg writer yet. The session does not route a write statement to a declared catalog's table in 0.3, so every Iceberg table is read-only. `INSERT INTO lake.ns.t` is refused (`REQUIRES_SINGLE_PART_NAMESPACE`). Use Spark, or write the table as Delta or Parquet.
+Writing Iceberg tables is not available from SQL or the DataFrame API in 0.3: `INSERT`, `CREATE TABLE ... USING
+iceberg` and the other writes do not reach the Iceberg writer yet. The session does not route a write statement to a
+declared catalog's table in 0.3, so every Iceberg table is read-only. `INSERT INTO lake.ns.t` is refused
+(`REQUIRES_SINGLE_PART_NAMESPACE`). Use Spark, or write the table as Delta or Parquet.
 
 ## Declare a catalog
 
