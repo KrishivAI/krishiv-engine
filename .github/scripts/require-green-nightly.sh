@@ -8,6 +8,41 @@ set -euo pipefail
 
 : "${GITHUB_REPOSITORY:?}" "${GITHUB_SHA:?}"
 
+# One-time written waiver (release.yml input `nightly_waiver`, "run=<id> jobs=<a,b> reason=<text>"). Narrow on purpose:
+# the named run must be a Nightly (heavy) run of nightly.yml on a release/ branch whose head is an ancestor of (or
+# equal to) $GITHUB_SHA, and EVERY job of it that is not named must have succeeded or been skipped. The named jobs may
+# fail. The waiver is printed into the job summary. Without the input nothing below changes.
+if [ -n "${NIGHTLY_WAIVER:-}" ]; then
+  if [[ ! "$NIGHTLY_WAIVER" =~ ^run=([0-9]+)[[:space:]]+jobs=([A-Za-z0-9_.,/\ -]+)[[:space:]]+reason=(.+)$ ]]; then
+    echo "::error::nightly_waiver must read: run=<id> jobs=<a,b> reason=<text>"
+    exit 1
+  fi
+  w_run=${BASH_REMATCH[1]}; w_jobs=${BASH_REMATCH[2]}; w_reason=${BASH_REMATCH[3]}
+  info=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$w_run" --jq '[.path, .head_branch, .head_sha, .status, .html_url] | @tsv')
+  IFS=$'\t' read -r w_path w_branch w_sha w_status w_url <<<"$info"
+  [ "$w_path" = ".github/workflows/nightly.yml" ] || { echo "::error::waiver run $w_run is not a nightly.yml run ($w_path)"; exit 1; }
+  [ "$w_status" = completed ] || { echo "::error::waiver run $w_run is not completed ($w_status)"; exit 1; }
+  case "$w_branch" in release/*) ;; *) echo "::error::waiver run $w_run is on $w_branch, not a release/ branch"; exit 1 ;; esac
+  rel=$(gh api "repos/$GITHUB_REPOSITORY/compare/$w_sha...$GITHUB_SHA" --jq .status)
+  case "$rel" in identical | ahead) ;; *) echo "::error::waiver run $w_run ($w_sha) is not an ancestor of $GITHUB_SHA ($rel)"; exit 1 ;; esac
+  all=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$w_run/jobs?per_page=100" --paginate --jq '.jobs[] | [.name, .conclusion] | @tsv')
+  [ -n "$all" ] || { echo "::error::waiver run $w_run has no jobs"; exit 1; }
+  bad=$(printf '%s\n' "$all" | awk -F'\t' -v named="$w_jobs" 'BEGIN { n = split(named, a, ","); for (i = 1; i <= n; i++) skip[a[i]] = 1 }
+    !($1 in skip) && $2 != "success" && $2 != "skipped" { print $1 " (" $2 ")" }')
+  if [ -n "$bad" ]; then
+    echo "::error::jobs outside the waiver are not green in $w_url"
+    printf '%s\n' "$bad"
+    exit 1
+  fi
+  {
+    echo "### Nightly waiver (one-time, owner-approved)"
+    echo "- run: $w_url (head $w_sha, ancestor of $GITHUB_SHA)"
+    echo "- waived jobs: $w_jobs"
+    echo "- reason: $w_reason"
+  } | tee -a "${GITHUB_STEP_SUMMARY:-/dev/null}"
+  exit 0
+fi
+
 # A completed Nightly (heavy) run on exactly $GITHUB_SHA counts whether it was scheduled or dispatched by hand (a release
 # branch has no schedule); its `ci /` jobs are checked below like any other run. Otherwise the latest scheduled run on main.
 run=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/nightly.yml/runs?head_sha=$GITHUB_SHA&status=completed&per_page=1" \
