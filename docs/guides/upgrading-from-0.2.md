@@ -62,7 +62,7 @@ If you start `krishiv server` for the first time, these rules are new for you ra
   fail with `CANNOT_MODIFY_STATIC_CONFIG` for every role.
 - `SHOW CATALOGS` and `spark.catalog.listCatalogs` list every declared catalog the caller may see, including catalogs
   no query has used yet.
-- With grants on, `DROP VIEW` checks the Drop privilege on the view, as `DROP TABLE` does.
+- In a Rust library session with grants, `DROP VIEW` checks the Drop privilege on the view, as `DROP TABLE` does.
 - Spark Connect refuses a plan nested deeper than `krishiv.connect.maxPlanDepth` (default 1024, at most 4096).
 
 ## Rust API changes

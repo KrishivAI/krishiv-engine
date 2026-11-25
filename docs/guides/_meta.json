@@ -17,7 +17,7 @@
   "observability": "Observability from Rust",
   "migrating-jvm-udfs": "Migrating JVM UDFs",
   "lakehouse-tables": "Iceberg and Delta tables, and catalogs",
-  "access-control": "Access control with grants",
+  "access-control": "Access control",
   "flight-sql": "Arrow Flight SQL",
   "metric-views": "Metric views",
   "time-types": "The TIME type",
