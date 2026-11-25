@@ -15,7 +15,7 @@
     }
   },
   "files": ["dist", "README.md"],
-  "engines": { "node": ">=20" },
+  "engines": { "node": ">=22" },
   "scripts": {
     "build": "tsup src/index.ts --format esm,cjs --dts --clean --external @grpc/grpc-js --external protobufjs",
     "typecheck": "tsc --noEmit",
