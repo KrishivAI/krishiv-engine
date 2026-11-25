@@ -152,6 +152,8 @@ pub(crate) struct WriteTarget {
     /// stored: an option equal to one of them is not asked about again (P3-T067b).
     pub(crate) table_options: BTreeMap<String, OptionValue>,
     pub(crate) partition_by: Vec<String>,
+    /// Duplicate column names are not refused (csv of `INSERT OVERWRITE DIRECTORY`).
+    pub(crate) skip_duplicate_check: bool,
 }
 
 /// A fresh job id naming a write's files (`part-00000-<id>-c000...`), in

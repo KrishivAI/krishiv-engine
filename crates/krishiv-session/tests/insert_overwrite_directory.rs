@@ -22,10 +22,6 @@ const KNOWN_GAPS: &[(&str, &str)] = &[
         "the Avro writer names its files `.avro`; Spark names them `.snappy.avro` (its default codec); queue-sonnet.md item IOD-22",
     ),
     (
-        "IOD-44-duplicate-columns-csv",
-        "the file writer refuses duplicate column names for every format; Spark only for parquet and json; queue-sonnet.md item IOD-44, a fix: Spark writes it",
-    ),
-    (
         "IOD-47-json-nested",
         "the JSON writer does not write arrays yet (df.write.json too); queue-sonnet.md item IOD-47",
     ),

@@ -1411,6 +1411,7 @@ impl DataFrame {
             bucket_by: None,
             sort_by: None,
             bucket_table: false,
+            skip_duplicate_check: false,
             format_set: false,
         }
     }

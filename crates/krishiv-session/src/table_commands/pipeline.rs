@@ -97,6 +97,7 @@ impl Session {
             .into());
         }
         let mut writer = source.write().format(&format).mode("overwrite");
+        writer.skip_duplicate_check = format == "csv";
         for option in options {
             let key = option
                 .key

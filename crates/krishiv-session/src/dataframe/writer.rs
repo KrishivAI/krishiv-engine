@@ -22,6 +22,9 @@ pub struct DataFrameWriter {
     /// The write is into a bucketed table ([`Self::for_table_bucket`]): `bucket_by` and `sort_by` are the table's, and
     /// the files are laid out by them. A plain `save` or `insertInto` of a bucketed writer is still refused, as in Spark.
     pub(super) bucket_table: bool,
+    /// `INSERT OVERWRITE DIRECTORY ... USING csv` writes duplicate column names (Spark's command
+    /// path has no name check for csv; `df.write.csv` refuses them).
+    pub(crate) skip_duplicate_check: bool,
     /// Whether [`Self::format`] was called: a table writer without one uses
     /// `spark.sql.sources.default`.
     pub(super) format_set: bool,
@@ -213,6 +216,7 @@ impl DataFrameWriter {
             options: self.options,
             table_options: self.table_options,
             partition_by: self.partition_by,
+            skip_duplicate_check: self.skip_duplicate_check,
         };
         let df = match &target.bucket {
             Some(b) => b.with_bucket_id(&self.df).await?,

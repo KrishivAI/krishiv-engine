@@ -378,9 +378,12 @@ impl Session {
             options,
             table_options,
             partition_by,
+            skip_duplicate_check,
         } = target;
         let mode = SaveMode::parse(&mode)?;
-        unique_columns(physical.schema(), env.analysis.conf.case_sensitive)?;
+        if !skip_duplicate_check {
+            unique_columns(physical.schema(), env.analysis.conf.case_sensitive)?;
+        }
         let format = self.writable_format(&format)?;
         let (parsed, _) = format.options().parse(&options, &env.config)?;
         let Some(text) = path.as_plain() else {
