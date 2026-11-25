@@ -1666,8 +1666,9 @@ pub(super) fn force_nullable(from: &DataType, to: &DataType) -> bool {
     match (from, to) {
         // A variant null is SQL NULL, so a cast of a variant is nullable.
         (T::Variant, _) => true,
+        // Spark's `(_, _: StringType) => false`: a collated string is a `StringType` too.
         (T::String, T::Binary)
-        | (_, T::String)
+        | (_, T::String | T::CollatedString(_))
         | (T::Timestamp, T::Date)
         | (T::Date, T::Timestamp) => false,
         // The seconds of a time may not fit a `tinyint` or `smallint`.

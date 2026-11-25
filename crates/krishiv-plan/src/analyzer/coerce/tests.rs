@@ -648,3 +648,17 @@ fn nested_casts_follow_spark() {
         Ok(())
     );
 }
+
+/// Spark's `Cast.forceNullable` is `(_, _: StringType) => false`, and a collated string is a `StringType`:
+/// casting a NOT NULL string to `UTF8_LCASE` (or back) gives no NULL, so the collation rewrites of `instr`,
+/// `locate` and `=` stay NOT NULL (`time_precision_goldens` `instr_collated`).
+#[test]
+fn a_cast_between_string_collations_is_never_forced_nullable() {
+    use krishiv_types::Collation;
+    let lcase = T::CollatedString(Collation::UTF8_LCASE);
+    assert!(!force_nullable(&T::String, &lcase));
+    assert!(!force_nullable(&lcase, &T::String));
+    assert!(!force_nullable(&T::Integer, &lcase));
+    // Other casts from a string keep their rule.
+    assert!(force_nullable(&T::String, &T::Integer));
+}
