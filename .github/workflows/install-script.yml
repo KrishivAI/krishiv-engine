@@ -10,6 +10,7 @@ on:
       - scripts/install.sh
       - tests/scripts/install_test.sh
       - .github/workflows/install-script.yml
+      - .github/workflows/install-release.yml
 
 permissions:
   contents: read

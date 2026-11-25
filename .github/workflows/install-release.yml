@@ -1,0 +1,41 @@
+name: Install from release
+
+# After a release is published, install the real binary with scripts/install.sh on Linux and macOS
+# and run `krishiv --version`. Read-only: it downloads public release files and publishes nothing.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release to install (for example 0.3.1); empty = latest"
+        required: false
+        default: ""
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  install:
+    name: install (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-15]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install and run
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -eu
+          v="${INPUT_VERSION:-$RELEASE_TAG}"
+          if [ -n "$v" ]; then KRISHIV_VERSION="$v"; export KRISHIV_VERSION; fi
+          KRISHIV_INSTALL_DIR="$RUNNER_TEMP/bin"; export KRISHIV_INSTALL_DIR
+          sh scripts/install.sh
+          "$KRISHIV_INSTALL_DIR/krishiv" --version

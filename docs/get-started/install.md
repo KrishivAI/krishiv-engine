@@ -49,6 +49,24 @@ it starts; see [Securing a single-node server](../guides/single-node-server-secu
 Each release attaches the `krishiv` binary to its [GitHub release](https://github.com/KrishivAI/krishiv-engine/releases),
 with a `.sha256` file for each, an SBOM and a build provenance attestation.
 
+The quickest way is the install script. It picks the build for your machine (Linux x86-64 and aarch64, macOS arm64; on
+x86-64 Linux the `krishiv-compat` build when the CPU lacks AVX2), downloads it and `SHA256SUMS` from the release, checks the
+checksum and only then installs `krishiv` into `~/.local/bin`:
+
+```bash
+curl -fsSL https://krishiv.ai/install.sh | sh
+```
+
+| Variable | Effect |
+|---|---|
+| `KRISHIV_VERSION` | Release to install, for example `0.3.1` (default: the latest) |
+| `KRISHIV_INSTALL_DIR` | Directory for the binary (default: `$HOME/.local/bin`) |
+| `KRISHIV_COMPAT=1` | Install the `krishiv-compat` build even on a CPU that could run the fast one |
+
+To uninstall, delete the file: `rm ~/.local/bin/krishiv`.
+
+To download by hand instead:
+
 <!-- BINARIES: replace with the final asset names and the install one-liners from the binaries workflow (sonnet-8): Linux x86-64 and aarch64 (gnu and musl), macOS arm64 and x86-64, Windows x86-64. Verify the checksum and the attestation command. -->
 
 ```bash
