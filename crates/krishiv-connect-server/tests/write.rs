@@ -487,7 +487,7 @@ async fn create_dataframe_view_registers_a_temp_view() {
         let query = format!("SELECT id FROM {read}");
         assert_eq!(ids(&run, &query).await, [1, 2, 3], "{name}");
     }
-    for name in ["a.b.v", "a b", "db.", ""] {
+    for name in ["a.b.v", "a b", "a-b", "db.", ""] {
         let refused = collect(&run.channel, view(name, false, false))
             .await
             .expect_err(name);

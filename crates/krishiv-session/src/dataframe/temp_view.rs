@@ -27,7 +27,7 @@ impl DataFrame {
     /// Analysis errors, and `KRISHIV_RESERVED_TEMP_VIEW_NAME` when `name`
     /// starts with the reserved snapshot prefix `` `__krishiv_snapshot_` ``
     /// or the cache prefix `` `__krishiv_cache_` `` (in any letter case),
-    /// which [`Session::sql`] cannot spell either.
+    /// which [`crate::Session::sql`] cannot spell either.
     pub async fn create_or_replace_temp_view(&self, name: &str) -> Result<(), KrishivError> {
         self.temp_view(name, false, true).await
     }
@@ -78,7 +78,9 @@ impl DataFrame {
             .map_err(|_| invalid())?
             .parts;
         match parts.as_slice() {
-            [view] | [_, view] => Ok(format!("`{}`", view.value.replace('`', "``"))),
+            [view] | [_, view] => Ok(krishiv_common::names::quote_parts(std::slice::from_ref(
+                &view.value,
+            ))),
             _ => Err(invalid()),
         }
     }
@@ -125,22 +127,22 @@ impl DataFrame {
         // Spark analyzes the view's plan first: its errors come first.
         let analysis = self.analysis().await?;
         // After the analysis, as Spark: a bad query is reported before an existing name.
-        if !replace
-            && self
-                .session
-                .state
-                .catalog
-                .exists(name, self.session.query_env().analysis.conf.case_sensitive)
-        {
+        // The catalog tests again as it publishes, so of two concurrent creates one fails.
+        let case_sensitive = self.session.query_env().analysis.conf.case_sensitive;
+        let only_new = (!replace).then_some(case_sensitive);
+        let taken = || -> KrishivError {
             let shown = if global {
                 format!("`{}`.`{view}`", crate::catalog::GLOBAL_NAMESPACE)
             } else {
                 format!("`{view}`")
             };
-            return Err(krishiv_common::error::TempTableOrViewAlreadyExists {
+            krishiv_common::error::TempTableOrViewAlreadyExists {
                 relation_name: shown,
             }
-            .into());
+            .into()
+        };
+        if !replace && self.session.state.catalog.exists(name, case_sensitive) {
+            return Err(taken());
         }
         let columns: Vec<TableColumn> =
             crate::char_write::refuse_indeterminate_schema(&analysis.analyzed)?
@@ -151,16 +153,21 @@ impl DataFrame {
         // A view over files keeps listing them: files added or changed
         // later show up in the next query.
         if let PlanNode::Read(source @ ReadSource::Files { .. }) = &self.plan.node {
-            self.session.state.catalog.put(
-                name,
-                TempTable::Files {
-                    source: source.clone(),
-                    columns,
-                    known: false,
-                    permanent: false,
-                    partitions: Some(Default::default()),
-                },
-            );
+            let files = TempTable::Files {
+                source: source.clone(),
+                columns,
+                known: false,
+                permanent: false,
+                partitions: Some(Default::default()),
+            };
+            if !self
+                .session
+                .state
+                .catalog
+                .put_with_pins(name, files, Vec::new(), only_new)
+            {
+                return Err(taken());
+            }
             self.session.state.cache.forget_table(view);
             return Ok(());
         }
@@ -174,16 +181,25 @@ impl DataFrame {
             analysis.analyzed.plan.root(),
             analysis.env.analysis.conf.case_sensitive,
         )?;
-        self.session.state.catalog.put_view(
-            name,
-            expanded,
+        let table = TempTable::View {
+            plan: expanded,
             columns,
             pins,
-            new_pins,
+            text: None,
             // A query that reads the view runs its observed nodes: it completes the same
             // observations. Published with the entry, under the same lock.
-            crate::catalog::ViewKeeps(self.observation_handles_with(&analysis.env.observers)),
-        );
+            keeps: crate::catalog::ViewKeeps(
+                self.observation_handles_with(&analysis.env.observers),
+            ),
+        };
+        if !self
+            .session
+            .state
+            .catalog
+            .put_with_pins(name, table, new_pins, only_new)
+        {
+            return Err(taken());
+        }
         self.session.state.cache.forget_table(view);
         Ok(())
     }

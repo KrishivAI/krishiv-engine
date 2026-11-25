@@ -54,45 +54,50 @@ impl SessionCatalog {
     /// Adds or replaces `name`, removing the snapshot pins the old entry
     /// owned that no other live view still owns.
     pub(crate) fn put(&self, name: &str, table: TempTable) {
-        let mut tables = self.tables.write().unwrap_or_else(PoisonError::into_inner);
-        tables.insert(name.to_lowercase(), (name.to_owned(), Arc::new(table)));
-        Self::collect_garbage(&mut tables);
-        self.epoch.fetch_add(1, Ordering::AcqRel);
+        self.put_with_pins(name, table, Vec::new(), None);
     }
 
-    /// Adds or replaces `name` with a view over `plan` and `columns` that
-    /// owns `pins`, inserting `new_pins` (the hidden entries the view pins)
-    /// in the same critical section: no concurrent `put` or `drop_table`
-    /// can collect a new pin between its insert and the view's, which would
-    /// leave the view reading a missing entry.
-    pub(crate) fn put_view(
+    /// [`put`](Self::put) for a create that must not replace: false, with nothing changed, when
+    /// `name` [`exists`](Self::exists).
+    pub(crate) fn put_new(&self, name: &str, table: TempTable, case_sensitive: bool) -> bool {
+        self.put_with_pins(name, table, Vec::new(), Some(case_sensitive))
+    }
+
+    /// Adds or replaces `name`, inserting `new_pins` (the hidden entries a view pins) in the
+    /// same critical section: no concurrent `put` or `drop_table` can collect a new pin between
+    /// its insert and the view's, which would leave the view reading a missing entry. With
+    /// `only_new` (the session's case sensitivity), an existing `name` is kept and the answer is
+    /// false; the test and the insert share that critical section, so of two creates one fails.
+    pub(crate) fn put_with_pins(
         &self,
         name: &str,
-        plan: Arc<LogicalPlan>,
-        columns: Vec<TableColumn>,
-        pins: Vec<String>,
+        table: TempTable,
         new_pins: Vec<(String, Arc<TempTable>)>,
-        keeps: ViewKeeps,
-    ) {
+        only_new: Option<bool>,
+    ) -> bool {
         let mut tables = self.tables.write().unwrap_or_else(PoisonError::into_inner);
+        if only_new.is_some_and(|case_sensitive| Self::holds(&tables, name, case_sensitive)) {
+            return false;
+        }
         for (hidden, table) in new_pins {
             tables.insert(hidden.clone(), (hidden, table));
         }
-        tables.insert(
-            name.to_lowercase(),
-            (
-                name.to_owned(),
-                Arc::new(TempTable::View {
-                    plan,
-                    columns,
-                    pins,
-                    text: None,
-                    keeps,
-                }),
-            ),
-        );
+        tables.insert(name.to_lowercase(), (name.to_owned(), Arc::new(table)));
         Self::collect_garbage(&mut tables);
         self.epoch.fetch_add(1, Ordering::AcqRel);
+        true
+    }
+
+    /// [`exists`](Self::exists) under a lock the caller holds.
+    fn holds(
+        tables: &BTreeMap<String, (String, Arc<TempTable>)>,
+        name: &str,
+        case_sensitive: bool,
+    ) -> bool {
+        !is_hidden_name(name)
+            && tables
+                .get(&name.to_lowercase())
+                .is_some_and(|(registered, _)| !case_sensitive || registered == name)
     }
 
     /// Removes the hidden entries nothing needs; the caller holds the write lock and bumps the epoch.
@@ -109,7 +114,7 @@ impl SessionCatalog {
     /// Hands out the next hidden name snapshot pins use: no SQL text
     /// spells it, so snapshot views read it however the session's names
     /// change afterwards. The caller inserts the entry with
-    /// [`SessionCatalog::put_view`], which stores the pins and the owning
+    /// [`SessionCatalog::put_with_pins`], which stores the pins and the owning
     /// view atomically.
     pub(super) fn next_hidden_name(&self) -> String {
         format!(
@@ -263,14 +268,8 @@ impl SessionCatalog {
     /// `case_sensitive`, when the name must be as registered. Hidden
     /// names never exist for user input, however they are spelled.
     pub(crate) fn exists(&self, name: &str, case_sensitive: bool) -> bool {
-        if is_hidden_name(name) {
-            return false;
-        }
         let tables = self.tables.read().unwrap_or_else(PoisonError::into_inner);
-        match tables.get(&name.to_lowercase()) {
-            Some((registered, _)) => !case_sensitive || registered == name,
-            None => false,
-        }
+        Self::holds(&tables, name, case_sensitive)
     }
 
     /// The number of catalog entries, snapshot pins included: tests only.

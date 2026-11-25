@@ -59,8 +59,8 @@ async fn a_tagged_handle_runs_queries_and_a_closed_session_refuses() {
     assert!(s.with_request_tags(["etl"]).is_err());
 }
 
-/// Spark's `Dataset.createTempView` parses the name as a multipart identifier (Spark 4.1.0
-/// `classic/Dataset.scala`): backquotes are stripped, two parts are `TEMP_VIEW_NAME_TOO_MANY_NAME_PARTS`,
+/// Spark's `Dataset.createTempView` parses the name as a multipart identifier (Spark v4.3.0
+/// `classic/Dataset.scala:1679-1712`): backquotes are stripped, two parts are `TEMP_VIEW_NAME_TOO_MANY_NAME_PARTS`,
 /// an unparsable name is `_LEGACY_ERROR_TEMP_1321`.
 #[tokio::test]
 async fn a_view_name_is_parsed_as_spark_does() {
