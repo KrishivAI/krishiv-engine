@@ -45,7 +45,9 @@ fuzz_target!(|data: &[u8]| {
         schema_level_collations: rest.first().is_some_and(|b| b & 32 != 0),
         time_travel_at_syntax: rest.first().is_some_and(|b| b & 64 != 0),
         asof_join: rest.first().is_some_and(|b| b & 128 != 0),
-        spark_4_3_grammar: rest.get(1).is_some_and(|b| b & 1 != 0),
+        spark_4_3: rest.get(1).is_none_or(|b| b & 1 == 0),
+        timestamp_nanos_types: rest.get(1).is_some_and(|b| b & 2 != 0),
+        spark_4_3_grammar: rest.get(1).is_some_and(|b| b & 4 != 0),
     };
     match parse_query(&sql, &options) {
         Ok(q) => {

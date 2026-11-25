@@ -35,6 +35,7 @@ pub mod local_dirs;
 pub mod local_listing;
 mod pace;
 mod query_memory;
+pub mod staging;
 pub mod stores;
 pub mod upload;
 
@@ -79,6 +80,7 @@ pub use self::latency::{LATENCY_BUCKETS, LatencyHistogram};
 use self::pace::{Direction, Pacer};
 use self::query_memory::MemorySlot;
 pub use self::query_memory::QueryIoMemory;
+pub use self::staging::{StagingDoomed, StagingSweep};
 pub use self::stores::{
     AZURE_ACCOUNT_KEY, AZURE_ACCOUNT_NAME, AZURE_ENDPOINT, AZURE_SAS, GCS_ENDPOINT, GCS_KEY,
     GCS_KEYFILE, GCS_STORAGE_ROOT_URL, ObjectScheme, OpenedStore, ParsedUrl, S3_ACCESS_KEY,
@@ -412,6 +414,8 @@ impl Lane {
 pub struct IoScheduler {
     config: IoConfig,
     stores: RwLock<HashMap<StoreId, Registered>>,
+    /// The stores that can delete the upload-staging files they hide from listings.
+    sweepers: RwLock<HashMap<StoreId, Arc<dyn staging::StagingSweep>>>,
     cache: MetadataCache,
     /// The distinct-value samples the planner took of file columns (P2-T164 U6).
     distinct_samples: DistinctSamples,
@@ -490,6 +494,7 @@ impl IoScheduler {
             jitter: AtomicU64::new(config.seed),
             config,
             stores: RwLock::new(HashMap::new()),
+            sweepers: RwLock::new(HashMap::new()),
             runtime,
             totals: IoCounters::default(),
             http_clients,
@@ -592,6 +597,10 @@ impl IoScheduler {
     /// write is over); requests for it fail afterwards.
     pub fn unregister_store(&self, id: &StoreId) {
         self.stores
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(id);
+        self.sweepers
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(id);

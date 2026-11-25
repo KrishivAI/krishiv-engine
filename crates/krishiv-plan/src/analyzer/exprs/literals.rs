@@ -4,17 +4,37 @@
 use super::*;
 use krishiv_kernels::cast::{TimestampText, timestamp_text};
 
-/// The cast a `TIME '..'` literal binds to (an explicit `Ansi` string cast to `TIME(6)`, never what the parser
-/// writes): it passes the `spark.sql.timeType.enabled` gate again, so a plan analyzed once analyzes to itself.
+/// A cast a `TIME '..'` literal binds to (`time.rs` `time_literal`; an explicit `Ansi` cast, never what
+/// the parser writes for a user's cast): a string read as `TIME(6)` (`parse_time`) or as `TIME(9)`
+/// (`parse_time_nanos`), or such a `TIME(9)` cast cut to `TIME(7|8)`. It passes the
+/// `spark.sql.timeType.enabled` gate again, so a plan analyzed once analyzes to itself under every
+/// precision.
 pub(in crate::analyzer) fn is_time_literal_cast(
     inner: &Expr,
     to: &DataType,
     mode: CastMode,
 ) -> bool {
-    mode == CastMode::Ansi
-        && *to == (DataType::Time { precision: 6 })
-        && matches!(&inner.node, ExprNode::Literal(Literal::String(v))
-            if krishiv_kernels::cast::parse_time(v).is_some())
+    use krishiv_kernels::cast::{parse_time, parse_time_nanos};
+    if mode != CastMode::Ansi {
+        return false;
+    }
+    match (to, &inner.node) {
+        (DataType::Time { precision: 6 }, ExprNode::Literal(Literal::String(v))) => {
+            parse_time(v).is_some()
+        }
+        (DataType::Time { precision: 9 }, ExprNode::Literal(Literal::String(v))) => {
+            parse_time_nanos(v).is_some()
+        }
+        (
+            DataType::Time { precision: 7 | 8 },
+            ExprNode::Cast {
+                expr,
+                to: nine @ DataType::Time { precision: 9 },
+                mode,
+            },
+        ) => is_time_literal_cast(expr, nine, *mode),
+        _ => false,
+    }
 }
 
 pub(in crate::analyzer) fn literal_type(v: &Literal) -> Option<DataType> {
@@ -327,7 +347,9 @@ pub(in crate::analyzer) fn arg_type(data_type: DataType, nullable: bool) -> ArgT
     }
 }
 
-/// Spark's error for a cast of `arg` to `to` it refuses.
+/// Spark's error for a cast of `arg` to `to` it refuses. Spark 4.3 (`spark_4_3`) casts a `TIME`
+/// to a timestamp (today's date at that time), which Krishiv does not yet: that cast is
+/// `KRISHIV_UNSUPPORTED_FEATURE`, not Spark's mismatch.
 pub(super) fn bad_cast(
     bad: BadCast,
     origin: Origin,
@@ -335,7 +357,19 @@ pub(super) fn bad_cast(
     to: &DataType,
     mode: CastMode,
     zone: Option<SessionZone>,
+    spark_4_3: bool,
 ) -> AnalysisError {
+    if spark_4_3
+        && matches!(arg.ty.data_type, Some(DataType::Time { .. }))
+        && matches!(to, DataType::Timestamp | DataType::TimestampNtz)
+    {
+        return AnalysisError::new(
+            krishiv_common::error::KrishivUnsupportedFeature {
+                feature: format!("a cast from TIME to {} (Spark 4.3)", to.sql()),
+            },
+            origin,
+        );
+    }
     // A `JSON_TABLE` column: Spark checks the column's cast in `JsonTable.checkInputDataTypes` and names the
     // whole call (the lowering passes its text as the read's last argument), whatever the refusal.
     let shown_arg = arg.shown();

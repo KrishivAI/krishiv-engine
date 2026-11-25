@@ -110,12 +110,10 @@ def test_generators_build_their_call(name: str) -> None:
     assert isinstance(column, Column)
 
 
-@pytest.mark.xfail(reason="generators in select() wait for the DataFrame generator work (PR-C)", strict=True)
 def test_explode_in_select(df: DataFrame) -> None:
     assert [r[0] for r in df.select(F.explode("arr")).collect()] == [3, 1, 2]
 
 
-@pytest.mark.xfail(reason="generators in select() wait for the DataFrame generator work (PR-C)", strict=True)
 def test_posexplode_and_inline_in_select(df: DataFrame) -> None:
     assert [tuple(r) for r in df.select(F.posexplode("arr")).collect()] == [(0, 3), (1, 1), (2, 2)]
     assert [tuple(r) for r in df.select(F.inline("astr")).collect()] == [("a", 1)]

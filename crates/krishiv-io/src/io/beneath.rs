@@ -579,6 +579,48 @@ impl BeneathStore {
     }
 }
 
+impl super::staging::StagingSweep for BeneathStore {
+    /// The walk of a listing (descriptor-relative, no link followed, below the anchor), deleting
+    /// the staging files that `doomed` selects with `unlinkat` on the directory it read them in.
+    fn sweep_staging(
+        &self,
+        dir: &Path,
+        doomed: &super::staging::StagingDoomed<'_>,
+    ) -> std::io::Result<()> {
+        let other = |e: object_store::Error| std::io::Error::other(e.to_string());
+        let mut failure = None;
+        let mut pending = vec![self.rel(dir).map_err(other)?];
+        while let Some(rel) = pending.pop() {
+            let step = (|| -> StoreResult<()> {
+                let Some(fd) = self.listing_rel(&rel, dir)? else {
+                    return Ok(());
+                };
+                for (name, st) in entries(&fd)? {
+                    let kind = FileType::from_raw_mode(st.st_mode);
+                    if kind == FileType::Directory {
+                        let mut sub = rel.clone();
+                        sub.push(name);
+                        pending.push(sub);
+                    } else if kind == FileType::RegularFile
+                        && is_staging(&name)
+                        && doomed(&name, modified(&st))
+                    {
+                        match unlinkat(&fd, name.as_str(), AtFlags::empty()) {
+                            Ok(()) | Err(Errno::NOENT) => {}
+                            Err(e) => return Err(io_err(e.into())),
+                        }
+                    }
+                }
+                Ok(())
+            })();
+            if let Err(e) = step {
+                failure.get_or_insert_with(|| other(e));
+            }
+        }
+        failure.map_or(Ok(()), Err)
+    }
+}
+
 #[async_trait]
 impl ObjectStore for BeneathStore {
     async fn put_opts(

@@ -58,27 +58,6 @@ use crate::store::{
 /// The file formats a table can have.
 pub(crate) const PROVIDERS: &[&str] = &["parquet", "csv", "json", "text", "orc", "avro"];
 
-/// The short name of a data source written fully qualified, as Spark maps its built-in classes
-/// (`org.apache.spark.sql.parquet`, `com.databricks.spark.csv`); other names stay as written.
-fn short_provider(written: &str) -> String {
-    let lower = written.to_lowercase();
-    for prefix in [
-        "org.apache.spark.sql.execution.datasources.",
-        "org.apache.spark.sql.",
-    ] {
-        if let Some(rest) = lower.strip_prefix(prefix) {
-            let name = rest.split('.').next().unwrap_or(rest);
-            if PROVIDERS.contains(&name) {
-                return name.to_owned();
-            }
-        }
-    }
-    if lower == "com.databricks.spark.csv" {
-        return "csv".to_owned();
-    }
-    lower
-}
-
 /// Whether `name` is a name Spark accepts for a new table or namespace: letters, digits and `_`.
 fn valid_name(name: &str) -> bool {
     !name.is_empty() && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
@@ -1958,6 +1937,8 @@ pub(crate) fn now_ms() -> i64 {
         .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
 }
 
+mod provider;
+pub(crate) use provider::short_provider;
 mod assign;
 use assign::{Source, assign, can_store, overflow_in_table_insert};
 

@@ -286,6 +286,42 @@ returning a result:
 - a NULL pivot value for a binary or collated pivot column: Spark 4.2 compares it with the other values in a sorted
   map (and fails), earlier versions look it up in a hash map.
 
+## `describe`, `summary`, `freqItems` and sampling in Python
+
+- `describe`, `summary` and `freqItems` evaluate when called and return a local DataFrame (a snapshot: it is not
+  re-evaluated if the source changes); Spark builds a lazy plan. The values, formats and errors are Spark's.
+  `describe`/`summary` run one engine aggregate. A percentile is the engine's `percentile_approx` with Spark's accuracy
+  of 10000, which is the exact nearest rank up to 10000 rows.
+- `freqItems` reads each column into the Python driver and runs Spark's counting algorithm one row at a time, so it
+  costs O(rows) single-threaded Python work per column and fails with `KRISHIV_UNSUPPORTED_FEATURE` past 10,000,000
+  rows. It is exact on one partition; the order of the items is not Spark's hash order. An engine aggregate is the
+  follow-up.
+- `approxQuantile` runs one `percentile_approx` per column and probability (the engine takes no array of
+  percentages): with `relativeError=0` each one buffers the whole column, so k probabilities use k times its memory.
+  With `relativeError` above 0 the result may differ from Spark's Greenwald-Khanna summary in the last rank;
+  `relativeError=0` is exact. An empty `probabilities` raises `CANNOT_BE_EMPTY` (Spark fails with a
+  `NullPointerException`).
+- `sample`, `randomSplit` and `sampleBy` draw one number per row from Spark's `XORShiftRandom` (`rand(seed)`, seeded
+  with `seed + partition`) and keep the rows Spark keeps only when the partitions and the order of the rows inside
+  them are Spark's. Krishiv ignores `numSlices` (`spark.range(0, 20, 1, 4)` is one partition), reads a `union` as one
+  stream rather than one partition per input, and cannot match Spark after a shuffle (`repartition`) or on a file
+  split Spark divides differently; then a sample holds different rows and a different number of them. Only the
+  expected fraction holds. `randomSplit` sorts each partition by its scalar columns; Spark 4.2 also sorts array and struct columns whose
+  children are orderable, so inputs with equal scalar keys and different array or struct values can split
+  differently. Its splits stay disjoint and complete for the same input.
+- `sampleBy` finds a stratum by type, as Spark's typed map does: a string column matches only string keys and a
+  numeric column only numbers.
+- `df.sample(0.3, seed=1)`: PySpark (3.5 to 4.2) drops the seed of this call form and samples at random. Krishiv
+  honours it, so the result is deterministic.
+- `sample(withReplacement=True, ...)` fails with `KRISHIV_UNSUPPORTED_FEATURE`: Spark draws each row's copies from a
+  Poisson distribution (commons-math `Well19937c`) seeded per partition, which is not reproduced, and a different
+  multiset of rows would be a silent difference. The Rust `DataFrame::sample` is not implemented either (no sample plan
+  node: the Python layer filters on `rand`), and a Spark Connect `Sample` is not served yet.
+- `GroupedData.pivot`: `count("*")` raises `INVALID_USAGE_OF_STAR_OR_REGEX` as Spark's DataFrame pivot does (SQL's
+  `PIVOT` clause accepts it). A grouping key that is not a plain or aliased column cannot be pivoted beside an
+  aggregate that reads a key of the same name (`KRISHIV_UNSUPPORTED_FEATURE`). A pivot's aggregate errors are raised by `agg`.
+  An explicit `values=[]` gives no pivot columns, as classic PySpark does; the values are discovered only when `values` is omitted.
+
 ## Inferred join filters differ from Spark's
 Spark's `InferFiltersFromConstraints` adds filters to the inputs of a join from the join condition and the filters
 below it. Krishiv adds the same `isnotnull` on nullable join keys, and moves comparisons with a literal, literal `IN`
@@ -372,6 +408,13 @@ the rows in the session's memory whatever it is. With `eager = false` the rows a
 result is first analyzed (its first action, or the first call that needs its schema), not at its
 first job. A checkpoint is not a cache entry: `is_cached`, `CLEAR CACHE`, `REFRESH` and `unpersist`
 do not see it, as in Spark. `system.caches` lists the session's live checkpoints in a `checkpoint` row.
+
+`spark.conf.set("spark.checkpoint.dir", ...)` succeeds in Krishiv. Spark 4.2 over Spark Connect refuses it
+with `CANNOT_MODIFY_CONFIG` (SQLSTATE 46110), and a Connect client there has no other way to set the
+directory, so a reliable `checkpoint()` fails with "Checkpoint directory has not been set in the SparkContext"
+unless the server was started with one. Krishiv accepts the setting per session (or `krishiv.checkpoint.dir`
+at server start) because a client with no `SparkContext` has no other route; code that relies on Spark's
+refusal is the only code that sees a difference.
 
 ## A second catalog, `system`, next to `spark_catalog`
 
@@ -617,7 +660,7 @@ observed node has its own, so the count can exceed `n` (P3-T084c).
   not, completes it.
 - **`Observation.get` blocks** a thread; do not call it from async code on a runtime thread.
 - **Result cache:** a plan that observes is never served from the result cache (every action runs it).
-- **`spark.sql.timestampType = TIMESTAMP_NTZ`:** a bare `TIMESTAMP` literal, `to_timestamp` and the numeric `make_timestamp` forms follow the setting; a bare `TIMESTAMP` cast target or column type still means `TIMESTAMP_LTZ`.
+- **`spark.sql.timestampType = TIMESTAMP_NTZ`:** a bare `TIMESTAMP` literal, `to_timestamp` and the numeric `make_timestamp` forms follow the setting; a bare `TIMESTAMP` cast target or column type still means `TIMESTAMP_LTZ`. Under the Spark 4.3 profile `TIMESTAMP(6)` is refused with `KRISHIV_UNSUPPORTED_FEATURE` while the setting is `TIMESTAMP_NTZ` (Spark types it `TIMESTAMP_NTZ`).
 
 ## Delta Lake writes
 
@@ -741,6 +784,34 @@ reads the tables back, `merge/krishiv-written/`). It differs in:
 - **Deletion vectors.** Never written (as for `DELETE` and `UPDATE`); delta-spark's default
   `merge.deletionVectors.persistent = true` marks rows in vectors on a table with them on.
 
+## Spark 4.3's nanosecond timestamps and nanosecond clocks
+
+Spark 4.3.0 previews `TIMESTAMP_NTZ(7..9)` and `TIMESTAMP_LTZ(7..9)` behind the internal
+`spark.sql.timestampNanosTypes.enabled` (off). With the key off Krishiv answers as Spark does:
+`FEATURE_NOT_ENABLED` for a precision of 7 to 9 (also `current_timestamp(p)`, `now(p)`,
+`localtimestamp(p)`), `INVALID_TIMESTAMP_PRECISION` for any precision but 6. Krishiv has no
+nanosecond timestamp type yet (planned for 0.3.1), so:
+
+- With `spark.sql.timestampNanosTypes.enabled=true`, a `TIMESTAMP*(7..9)` type is
+  `KRISHIV_UNSUPPORTED_FEATURE` where Spark builds the type. `SET` and `RESET` of the key work under
+  every profile; under the Spark 4.2 profile it changes nothing, as in Spark 4.2.
+- A schema in Spark's JSON form naming `timestamp_ntz(p)` or `timestamp_ltz(p)` is
+  `KRISHIV_UNSUPPORTED_FEATURE` (Spark's `DataType.fromJson` builds the type with the key off too).
+  `timestamp_ntz(6)` and `timestamp_ltz(6)` there are the microsecond types under every profile;
+  Spark 4.2's `DataType.fromJson` has no such names and refuses them.
+- Spark Connect's `timestamp_ntz_nanos` and `timestamp_ltz_nanos` types and literals are refused
+  as every arm Krishiv does not translate (`CONNECT_INVALID_PLAN.INVALID_ONE_OF_FIELD_NOT_SUPPORTED`).
+
+`TIME(p)` takes `p` up to 9 under the Spark 4.3 profile and keeps nanoseconds, but the query clock
+is in microseconds: `current_time(7..9)` and `LOCALTIME(7..9)` have zero digits below the
+microsecond, where Spark 4.3 reads a nanosecond clock.
+
+Also not matched yet under the Spark 4.3 profile:
+
+- The CSV and JSON file readers have no `TIME` columns: a read with one in its schema is
+  `KRISHIV_UNSUPPORTED_FEATURE` (`from_csv`, `from_json` and `from_xml` read them). Spark 4.2 reads
+  such a column with six fraction digits; Spark 4.3 keeps every digit of the file, whatever `p`.
+
 ## HLL sketches: the compact form (`hll_sketch_agg`, `hll_union_agg`, `hll_union`)
 
 `hll_sketch_agg` returns the sketch in the compact serialized form; Spark returns the updatable one
@@ -750,6 +821,30 @@ both forms, so a sketch written by one engine can be estimated or unioned by the
 `length`, `hex`, `base64` or equality of an HLL sketch is not the same as Spark's. Compare sketches through
 `hll_sketch_estimate` or `hll_union`, not by their bytes. A sketch built from collated strings
 (`hll_sketch_agg(s COLLATE UTF8_LCASE)`) is refused: Spark hashes the collation key, Krishiv does not yet.
+
+## Several grouped-aggregate pandas UDFs in one `agg`
+
+Spark runs every grouped-aggregate pandas UDF of one `agg` in a single Python worker. Krishiv gives each UDF
+its own Python UDF worker, because each is a task that holds its worker until its partition ends. On the
+default (`krishiv.python.udf.threads` = 0, which is one worker on a GIL build, or when the value is set to 1),
+`df.groupBy(k).agg(udf1(x), udf2(y))` with two such UDFs therefore fails with
+`KRISHIV_PYTHON_WORKER_LIMIT` (SQLSTATE 54000), which names the setting. On a free-threaded build the default is the
+executor thread count, so with two or more executor threads two grouped-aggregate UDFs can run without that error.
+Raise `krishiv.python.udf.threads` to the number of grouped-aggregate UDFs in the `agg` plus one (one thread stays
+free for scalar UDFs that feed them) and the query runs. The setting is startup-only: an existing session rejects a
+runtime change with `CANNOT_MODIFY_STATIC_CONFIG`. The pool is made when the first Python UDF query starts and is not
+resized, so put the value in the configuration passed when the session is created (or set it at engine startup, or
+start a fresh interpreter with the higher value).
+A single-thread pool starts one spare thread for scalar UDF calls (which still run one at a time), so a scalar UDF
+call of another query does not wait for a running `mapInPandas` or `applyInPandas`. In one query a scalar
+`pandas_udf` feeding such a node finishes before the node starts.
+
+The embedded `mapInArrow` takes each result batch's columns by position and relabels them with the
+declared schema; `mapInPandas` matches the result's columns to the declared schema by name, as Spark does. With `spark.sql.execution.arrow.pyspark.validateSchema.enabled` set to `true` the embedded
+`mapInArrow` path compares the UDF's own field names with the declared schema and refuses a mismatch of names or
+types with `ARROW_TYPE_MISMATCH`, as the server's worker pool does. A declared
+`NOT NULL` (and a nested `containsNull=false` or `valueContainsNull=false`) is not kept by the embedded runtime, so a
+nullable result is accepted where Spark 4.1+ refuses it.
 
 ## Metric views (`CREATE VIEW .. WITH METRICS LANGUAGE YAML`)
 

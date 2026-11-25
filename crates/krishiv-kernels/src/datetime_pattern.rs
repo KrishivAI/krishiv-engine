@@ -406,6 +406,27 @@ impl DateTimePattern {
         Ok(p.local_micros())
     }
 
+    /// `s` as a time of day in nanoseconds (`to_time` with a pattern): every fraction digit the
+    /// pattern reads is kept (`SSSSSSSSS` gives nine). The legacy parser has microseconds.
+    ///
+    /// # Errors
+    /// As [`Self::parse_local`].
+    pub fn parse_time_of_day_nanos(&self, s: &str) -> Result<Option<i64>, KrishivError> {
+        const MICROS_PER_DAY: i64 = 86_400_000_000;
+        if self.legacy.is_some() {
+            return Ok(self
+                .parse_local(s, false)?
+                .map(|m| m.rem_euclid(MICROS_PER_DAY).wrapping_mul(1_000)));
+        }
+        let Some(p) = parse::parse(&self.items, s) else {
+            return Ok(None);
+        };
+        if !matches!(p.zone, parse::ParsedZone::None) {
+            return Ok(None);
+        }
+        Ok(p.time_of_day_nanos())
+    }
+
     /// `s` as a date (days since the epoch), as Spark's CSV and JSON
     /// readers parse dates: time and zone fields are read but ignored. An
     /// unresolvable zone id does not match either.

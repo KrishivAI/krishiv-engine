@@ -478,6 +478,34 @@ fn queries_under_a_declared_catalog_never_read_embedded_views_or_functions() {
         assert!(text.contains("`lake`"), "{sql}: {text}");
     }
     assert_eq!(schema_of(&s, "SELECT * FROM db.t").unwrap(), ["x"]);
+    // No write statement reaches a declared catalog's table in 0.3 (docs/guides/lakehouse-tables.md says so): it is
+    // refused, whatever the catalog's `option.write`, and nothing of the embedded catalog changes.
+    for (sql, expected) in [
+        (
+            "INSERT INTO lake.db.t VALUES (1)",
+            "REQUIRES_SINGLE_PART_NAMESPACE",
+        ),
+        (
+            "INSERT OVERWRITE lake.db.t VALUES (1)",
+            "REQUIRES_SINGLE_PART_NAMESPACE",
+        ),
+        (
+            "DELETE FROM lake.db.t WHERE x = 1",
+            "REQUIRES_SINGLE_PART_NAMESPACE",
+        ),
+        (
+            "UPDATE lake.db.t SET x = 2",
+            "REQUIRES_SINGLE_PART_NAMESPACE",
+        ),
+        (
+            "MERGE INTO lake.db.t USING default.e ON x = a WHEN MATCHED THEN DELETE",
+            "REQUIRES_SINGLE_PART_NAMESPACE",
+        ),
+    ] {
+        // `error` panics when the statement succeeds; the class says which refusal it is.
+        let (class, text) = error(sql);
+        assert_eq!(class, expected, "{sql}: {text}");
+    }
     // The embedded catalog's objects by their full names.
     assert_eq!(
         strings(

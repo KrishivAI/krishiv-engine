@@ -17,7 +17,7 @@
   "observability": "Observability from Rust",
   "migrating-jvm-udfs": "Migrating JVM UDFs",
   "lakehouse-tables": "Iceberg and Delta tables, and catalogs",
-  "access-control": "Access control with grants",
+  "access-control": "Access control",
   "flight-sql": "Arrow Flight SQL",
   "metric-views": "Metric views",
   "time-types": "The TIME type",
@@ -28,6 +28,7 @@
   "python-udf-tenants": "Python UDFs per tenant",
   "vector-search": "Vector search with SQL",
   "python-table-functions": "Python table functions",
+  "upgrading-from-0.2": "Upgrading from 0.2",
   "run-krishiv-in-docker": "Run Krishiv in Docker",
   "local-lakehouse-docker-compose": "Local lakehouse with docker compose"
 }
