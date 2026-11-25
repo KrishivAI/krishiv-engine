@@ -60,6 +60,29 @@ impl DataFrame {
         self.temp_view(name, true, true).await
     }
 
+    /// The name Spark Connect's `create_dataframe_view` registers for `name`, quoted for the
+    /// `create_*temp_view` methods. Its planner reads a table identifier of one or two parts and
+    /// `CreateViewCommand` keeps the last one, so `db.v` is the view `v` (Spark 4.2.0 and 4.3.0
+    /// run). A DataFrame of a classic session refuses `db.v` instead. For the Connect server.
+    ///
+    /// # Errors
+    /// `_LEGACY_ERROR_TEMP_1321` for a name that does not parse or has more than two parts.
+    #[doc(hidden)]
+    pub fn connect_view_name(&self, name: &str) -> Result<String, KrishivError> {
+        let invalid = || {
+            KrishivError::from(krishiv_common::error::LegacyErrorTemp1321 {
+                view_name: name.to_owned(),
+            })
+        };
+        let parts = krishiv_sql::parse_multipart_identifier(name, &self.session.query_env().parser)
+            .map_err(|_| invalid())?
+            .parts;
+        match parts.as_slice() {
+            [view] | [_, view] => Ok(format!("`{}`", view.value.replace('`', "``"))),
+            _ => Err(invalid()),
+        }
+    }
+
     async fn temp_view(&self, name: &str, global: bool, replace: bool) -> Result<(), KrishivError> {
         let (df, name) = (self.clone(), name.to_owned());
         self.session

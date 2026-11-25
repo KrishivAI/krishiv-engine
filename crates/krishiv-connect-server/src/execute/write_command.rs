@@ -4,6 +4,8 @@
 //! written through `krishiv-session`'s writers, the same calls the Python facade makes
 //! (`DataFrame::write_to_with`, `write_table_with`, `write_to_table_with`), so a Connect write and
 //! an embedded one share every check and error. The command answers no rows: the stream ends.
+//! `create_dataframe_view` (Spark's `transformCreateViewCommand`) runs here too; it reads the
+//! view's name by Spark Connect's rule, not the classic DataFrame's.
 
 use krishiv_common::error::{KrishivError, LegacyErrorTemp1307, LegacyErrorTemp2050};
 use krishiv_connect::translate::{ViewSpec, WriteSpec, WriteTarget, WriteV2Spec};
@@ -152,7 +154,8 @@ pub(super) async fn write_v2(source: &DataFrame, spec: WriteV2Spec) -> Result<()
 /// (Spark's `transformCreateViewCommand`: a global view lives in `global_temp`).
 ///
 /// # Errors
-/// The session's: the view's analysis errors, then `TEMP_TABLE_OR_VIEW_ALREADY_EXISTS` for a
+/// `_LEGACY_ERROR_TEMP_1321` for a name Spark Connect refuses ([`DataFrame::connect_view_name`]),
+/// then the session's: the view's analysis errors, then `TEMP_TABLE_OR_VIEW_ALREADY_EXISTS` for a
 /// create that finds the name taken, and `KRISHIV_RESERVED_TEMP_VIEW_NAME`.
 pub(super) async fn create_view(source: &DataFrame, spec: ViewSpec) -> Result<(), KrishivError> {
     let ViewSpec {
@@ -160,6 +163,7 @@ pub(super) async fn create_view(source: &DataFrame, spec: ViewSpec) -> Result<()
         is_global,
         replace,
     } = spec;
+    let name = source.connect_view_name(&name)?;
     match (is_global, replace) {
         (false, false) => source.create_temp_view(&name).await,
         (false, true) => source.create_or_replace_temp_view(&name).await,
