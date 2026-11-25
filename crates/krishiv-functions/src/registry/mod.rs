@@ -235,6 +235,18 @@ pub enum Aggregate {
     ThetaUnionAgg,
     /// `theta_intersection_agg(sketch)` (Spark 4.1): the intersection of Theta sketches; never NULL.
     ThetaIntersectionAgg,
+    /// `kll_sketch_agg_bigint(x[, k])`: a KLL sketch of the non-NULL integral values; never NULL.
+    KllSketchAggBigint,
+    /// `kll_sketch_agg_float(x[, k])`.
+    KllSketchAggFloat,
+    /// `kll_sketch_agg_double(x[, k])`.
+    KllSketchAggDouble,
+    /// `kll_merge_agg_bigint(sketch[, k])`: the merge of the non-NULL sketches; never NULL.
+    KllMergeAggBigint,
+    /// `kll_merge_agg_float(sketch[, k])`.
+    KllMergeAggFloat,
+    /// `kll_merge_agg_double(sketch[, k])`.
+    KllMergeAggDouble,
 }
 
 /// A built-in function.

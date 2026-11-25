@@ -3,6 +3,7 @@
 //! `theta_sketch_agg`, `theta_union_agg`, `theta_intersection_agg`).
 
 use krishiv_exec::aggregate::AggregateFunction;
+use krishiv_exec::aggregate::KllType;
 
 use crate::error::{Result, corrupt};
 use crate::proto as pb;
@@ -74,5 +75,32 @@ pub(crate) fn theta_sketch_function(
             Ok(AggregateFunction::ThetaIntersectionAgg)
         }
         ThetaKind::Intersection => Err(bad()),
+    }
+}
+
+/// A KLL aggregate from its wire form: `hll_precision` is the folded `k` in `8..=65535` of a sketch, and of a merge
+/// when given (0 when omitted).
+pub(crate) fn kll_sketch_function(
+    a: &pb::AggregateExpr,
+    ty: KllType,
+    sketch: bool,
+) -> Result<AggregateFunction> {
+    let bad = || corrupt("a KLL sketch aggregate of bad parameters");
+    if !a.percentages.is_empty()
+        || a.percentile_array
+        || a.percentile_reverse
+        || a.percentile_accuracy != 0
+        || a.percentile_legacy
+    {
+        return Err(bad());
+    }
+    let k = u16::try_from(a.hll_precision)
+        .ok()
+        .filter(|k| (8..=u16::MAX).contains(k));
+    match (sketch, k, a.hll_precision) {
+        (true, Some(k), _) => Ok(AggregateFunction::KllSketchAgg { ty, k }),
+        (false, Some(k), _) => Ok(AggregateFunction::KllMergeAgg { ty, k: Some(k) }),
+        (false, None, 0) => Ok(AggregateFunction::KllMergeAgg { ty, k: None }),
+        _ => Err(bad()),
     }
 }

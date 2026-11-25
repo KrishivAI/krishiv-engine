@@ -902,6 +902,24 @@ enum AggregateFunction {
   // `theta_intersection_agg(sketch)`.
   // feature: theta_sketch_aggregates
   AGGREGATE_FUNCTION_THETA_INTERSECTION_AGG = 57;
+  // `kll_sketch_agg_*(x, k)`: the folded `k` is `hll_precision` (8 to 65535).
+  // feature: kll_sketch_aggregates
+  AGGREGATE_FUNCTION_KLL_SKETCH_AGG_BIGINT = 58;
+  // `kll_sketch_agg_*(x, k)`: the folded `k` is `hll_precision` (8 to 65535).
+  // feature: kll_sketch_aggregates
+  AGGREGATE_FUNCTION_KLL_SKETCH_AGG_FLOAT = 59;
+  // `kll_sketch_agg_*(x, k)`: the folded `k` is `hll_precision` (8 to 65535).
+  // feature: kll_sketch_aggregates
+  AGGREGATE_FUNCTION_KLL_SKETCH_AGG_DOUBLE = 60;
+  // `kll_merge_agg_*(sketch[, k])`: `hll_precision` is the folded `k` (8 to 65535), 0 when omitted.
+  // feature: kll_sketch_aggregates
+  AGGREGATE_FUNCTION_KLL_MERGE_AGG_BIGINT = 61;
+  // `kll_merge_agg_*(sketch[, k])`: `hll_precision` is the folded `k` (8 to 65535), 0 when omitted.
+  // feature: kll_sketch_aggregates
+  AGGREGATE_FUNCTION_KLL_MERGE_AGG_FLOAT = 62;
+  // `kll_merge_agg_*(sketch[, k])`: `hll_precision` is the folded `k` (8 to 65535), 0 when omitted.
+  // feature: kll_sketch_aggregates
+  AGGREGATE_FUNCTION_KLL_MERGE_AGG_DOUBLE = 63;
 }
 
 enum AggregateInput {

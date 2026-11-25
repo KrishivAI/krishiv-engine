@@ -10,7 +10,7 @@ Returns the KllFloatsSketch compact binary representation.
 The optional k parameter controls the size and accuracy of the sketch (default 200, range 8-65535).
 Larger k values provide more accurate quantile estimates but result in larger, slower sketches.
 
-**Applies to:** not available in Krishiv yet. Spark: 4.1 and later.
+**Applies to:** Krishiv 0.2.0 and above. Spark: 4.1 and later.
 
 ## Syntax
 
@@ -22,7 +22,7 @@ kll_sketch_agg_float(expr[, k])
 
 | | |
 |---|---|
-| Krishiv | Not implemented yet |
+| Krishiv | Implemented |
 | Group | `agg_funcs` |
 | Kind | aggregate (function) |
 | Added in Spark | 4.1.0 |
@@ -47,6 +47,7 @@ Error: KRISHIV_UNSUPPORTED_FEATURE
 ## Version history
 
 - Added in Spark 4.1.0.
+- Added in Krishiv 0.2.0.
 
 ## Related
 

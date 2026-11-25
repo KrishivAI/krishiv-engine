@@ -148,6 +148,7 @@ registry! {
     (join_full_outer, JoinFullOuter, POST_MIGRATION_READER_VERSION, Semantic, "The `FULL_OUTER` hash join: both sides preserved, with no equivalent plan without it."),
     (join_single_match, JoinSingleMatch, POST_MIGRATION_READER_VERSION, Semantic, "The single-match flag of a `LeftOuter` hash join (a scalar subquery: more than one match per probe row is an error)."),
     (key_group_hash, KeyGroupHash, POST_MIGRATION_READER_VERSION, Semantic, "Hash exchanges that route by key-group ranges of the routing hash `H_kg` version 1 (XXH64, seed 0, of the normalized key bytes, folded over several columns)."),
+    (kll_sketch_aggregates, KllSketchAggregates, POST_MIGRATION_READER_VERSION, Semantic, "The DataSketches KLL quantile aggregates (`kll_sketch_agg_bigint`, `_float`, `_double` with their folded k; `kll_merge_agg_*` with their folded k, if any): a sketch per group."),
     (lambda_functions, LambdaFunctions, POST_MIGRATION_READER_VERSION, Semantic, "Lambda expressions (`x -> body`) and variables: the bound bodies of higher-order function arguments (`transform`, `filter`, `exists`, `forall`)."),
     (late_fetch, LateFetch, POST_MIGRATION_READER_VERSION, Optimization, "The `LateFetch` node and a scan's row id: a top-N that ranks a narrow scan and reads the other columns of its rows afterwards."),
     (legacy_charset_switches, LegacyCharsetSwitches, POST_MIGRATION_READER_VERSION, Semantic, "The session's `encode`/`decode` switches (`spark.sql.legacy.javaCharsets`, `spark.sql.legacy.codingErrorAction`); without them a worker would refuse the charset or raise on malformed input."),
@@ -769,6 +770,9 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
             | AggregateFunction::BitmapAndAgg => Some(Feature::BitmapAggregates),
             AggregateFunction::HllSketchAgg { .. } | AggregateFunction::HllUnionAgg { .. } => {
                 Some(Feature::HllSketchAggregates)
+            }
+            AggregateFunction::KllSketchAgg { .. } | AggregateFunction::KllMergeAgg { .. } => {
+                Some(Feature::KllSketchAggregates)
             }
             AggregateFunction::ThetaSketchAgg { .. }
             | AggregateFunction::ThetaUnionAgg { .. }

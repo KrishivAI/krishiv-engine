@@ -5,11 +5,14 @@
 //! are a constant, a single value or an array (`NON_FOLDABLE_INPUT` otherwise); the result is an array of the
 //! same length for an array. NULL in, NULL out.
 
-use krishiv_common::error::{DatatypeMismatchNonFoldableInput, KrishivError};
+use krishiv_common::error::{
+    DatatypeMismatchNonFoldableInput, DatatypeMismatchTypeCheckFailureWithHint,
+    DatatypeMismatchUnexpectedNull, KrishivError,
+};
 use krishiv_types::{ArrayType, DataType};
 
 use super::defs::{Spec, scalar};
-use crate::signature::{ArgType, CallTypes, InputBuilder, InputType, Inputs};
+use crate::signature::{ArgType, CallTypes, Constant, InputBuilder, InputType, Inputs};
 
 fn call_sql(name: &str, c: &CallTypes<'_>) -> String {
     let args: Vec<String> = (0..c.args().len())
@@ -23,11 +26,20 @@ fn array_of(t: DataType) -> DataType {
 }
 
 /// The second argument of `get_quantile` (`double`) and `get_rank` (the sketch's element type): the type or an
-/// array of it, as Spark's `TypeCollection` takes it.
+/// array of it, cast implicitly as Spark's `TypeCollection` under `ImplicitCastInputTypes` is.
 fn second(c: &CallTypes<'_>, elem: DataType) -> InputType {
-    match c.data_type(1) {
-        Some(t @ DataType::Array(a)) if *a.element_type() == elem => InputType::Strict(t.clone()),
-        _ => InputType::StrictOneOf(vec![elem.clone(), array_of(elem)]),
+    // `TypeCollection` casts to the first member the argument may be cast to, numbers included (`0.5` is a
+    // decimal); the choice is the array member only for an array argument.
+    if matches!(c.data_type(1), Some(DataType::Array(_))) {
+        // Spark's `ArrayType(elem, containsNull = false)` accepts an array whatever its `containsNull`.
+        match c.data_type(1) {
+            Some(DataType::Array(a)) if *a.element_type() == elem => {
+                InputType::Strict(c.data_type(1).cloned().unwrap_or_else(|| array_of(elem)))
+            }
+            _ => InputType::Exact(array_of(elem)),
+        }
+    } else {
+        InputType::Exact(elem)
     }
 }
 
@@ -50,7 +62,7 @@ rank_inputs!(rank_float, DataType::Float);
 rank_inputs!(rank_double, DataType::Double);
 
 fn check_foldable(name: &str, c: &CallTypes<'_>) -> Result<(), KrishivError> {
-    if c.constant(1).is_none() && c.args().len() == 2 {
+    if !c.foldable(1) && c.args().len() == 2 {
         return Err(DatatypeMismatchNonFoldableInput {
             sql_expr: call_sql(name, c),
             input_name: "`quantile`".to_owned(),
@@ -186,3 +198,55 @@ pub(super) fn specs() -> Vec<Spec> {
     ));
     out
 }
+
+/// The `k` of a KLL aggregate (Spark's `checkKInputDataTypes`): foldable (`NON_FOLDABLE_INPUT`), not NULL
+/// (`UNEXPECTED_NULL`), in `8..=65535` (`TYPE_CHECK_FAILURE_WITH_HINT` with the `KLL_SKETCH_K_OUT_OF_RANGE` text).
+fn check_k(name: &str, c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    if c.args().len() == 2 {
+        match c.constant(1) {
+            None => {
+                return Err(DatatypeMismatchNonFoldableInput {
+                    sql_expr: call_sql(name, c),
+                    input_name: "k".to_owned(),
+                    input_type: "int".to_owned(),
+                    input_expr: c.sql(1).unwrap_or_default(),
+                }
+                .into());
+            }
+            Some(Constant::Null) => {
+                return Err(DatatypeMismatchUnexpectedNull {
+                    sql_expr: call_sql(name, c),
+                    expr_name: "k".to_owned(),
+                }
+                .into());
+            }
+            Some(Constant::Integral(k)) if !(8..=65_535).contains(k) => {
+                return Err(DatatypeMismatchTypeCheckFailureWithHint {
+                    sql_expr: call_sql(name, c),
+                    msg: format!(
+                        "[KLL_SKETCH_K_OUT_OF_RANGE] For function `{name}`, the k parameter must be between 8 and 65535 (inclusive), but got {k}. SQLSTATE: 22003"
+                    ),
+                    hint: String::new(),
+                }
+                .into());
+            }
+            Some(_) => {}
+        }
+    }
+    Ok(ArgType::new(DataType::Binary, false))
+}
+
+macro_rules! agg_rule {
+    ($f:ident, $name:literal) => {
+        /// The result rule of the aggregate: a `binary` once `k` checks out.
+        pub(super) fn $f(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+            check_k($name, c)
+        }
+    };
+}
+agg_rule!(sketch_agg_bigint, "kll_sketch_agg_bigint");
+agg_rule!(sketch_agg_float, "kll_sketch_agg_float");
+agg_rule!(sketch_agg_double, "kll_sketch_agg_double");
+agg_rule!(merge_agg_bigint, "kll_merge_agg_bigint");
+agg_rule!(merge_agg_float, "kll_merge_agg_float");
+agg_rule!(merge_agg_double, "kll_merge_agg_double");

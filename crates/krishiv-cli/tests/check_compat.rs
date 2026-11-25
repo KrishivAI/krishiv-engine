@@ -368,7 +368,7 @@ fn findings_carry_an_alternative_where_one_is_listed() {
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::write(
         dir.path().join("a.sql"),
-        "SELECT kll_sketch_agg_bigint(c), count_min_sketch(s) FROM t\n",
+        "SELECT approx_top_k(c), count_min_sketch(s) FROM t\n",
     )
     .expect("write");
     let (_, rep) = report(dir.path());
@@ -379,17 +379,16 @@ fn findings_carry_an_alternative_where_one_is_listed() {
             .cloned()
             .expect("finding")
     };
-    let alt = by_name("kll_sketch_agg_bigint")["alternative"].clone();
+    let alt = by_name("approx_top_k")["alternative"].clone();
     assert!(
-        alt.as_str()
-            .is_some_and(|a| a.contains("percentile_approx")),
+        alt.as_str().is_some_and(|a| a.contains("GROUP BY")),
         "{alt}"
     );
     assert!(by_name("count_min_sketch").get("alternative").is_none());
     let text = run(&[], dir.path());
     let out = String::from_utf8_lossy(&text.stdout);
     assert!(
-        out.contains("kll_sketch_agg_bigint: not yet (alternative: percentile_approx"),
+        out.contains("approx_top_k: not yet (alternative: exact top k"),
         "{out}"
     );
 }

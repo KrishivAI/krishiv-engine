@@ -1326,6 +1326,8 @@ fn aggregate_function(a: &AggregateExpr, nested: &Cell<bool>) -> Result<pb::Aggr
         AggregateFunction::ApproxCountDistinct { p } => !(4..=30).contains(p),
         AggregateFunction::HistogramNumeric { nb } => *nb < 2,
         AggregateFunction::HllSketchAgg { lg_k } => !(4..=21).contains(lg_k),
+        AggregateFunction::KllSketchAgg { k, .. }
+        | AggregateFunction::KllMergeAgg { k: Some(k), .. } => !(8..=65_535).contains(k),
         AggregateFunction::ThetaSketchAgg { lg_nom }
         | AggregateFunction::ThetaUnionAgg { lg_nom } => !(4..=26).contains(lg_nom),
         _ => false,
@@ -1465,70 +1467,14 @@ fn aggregate_function(a: &AggregateExpr, nested: &Cell<bool>) -> Result<pb::Aggr
                 nested,
             ));
         }
-        AggregateFunction::HllSketchAgg { lg_k } => {
-            return Ok(percentile_expr(
-                pb::AggregateFunction::HllSketchAgg,
-                &[],
-                false,
-                false,
-                0,
-                false,
-                u32::from(*lg_k),
-                a,
-                nested,
-            ));
-        }
-        AggregateFunction::ThetaSketchAgg { lg_nom } => {
-            return Ok(percentile_expr(
-                pb::AggregateFunction::ThetaSketchAgg,
-                &[],
-                false,
-                false,
-                0,
-                false,
-                u32::from(*lg_nom),
-                a,
-                nested,
-            ));
-        }
-        AggregateFunction::ThetaUnionAgg { lg_nom } => {
-            return Ok(percentile_expr(
-                pb::AggregateFunction::ThetaUnionAgg,
-                &[],
-                false,
-                false,
-                0,
-                false,
-                u32::from(*lg_nom),
-                a,
-                nested,
-            ));
-        }
-        AggregateFunction::ThetaIntersectionAgg => {
-            return Ok(percentile_expr(
-                pb::AggregateFunction::ThetaIntersectionAgg,
-                &[],
-                false,
-                false,
-                0,
-                false,
-                0,
-                a,
-                nested,
-            ));
-        }
-        AggregateFunction::HllUnionAgg { allow_different } => {
-            return Ok(percentile_expr(
-                pb::AggregateFunction::HllUnionAgg,
-                &[],
-                false,
-                false,
-                0,
-                false,
-                u32::from(*allow_different),
-                a,
-                nested,
-            ));
+        AggregateFunction::HllSketchAgg { .. }
+        | AggregateFunction::HllUnionAgg { .. }
+        | AggregateFunction::ThetaSketchAgg { .. }
+        | AggregateFunction::ThetaUnionAgg { .. }
+        | AggregateFunction::ThetaIntersectionAgg
+        | AggregateFunction::KllSketchAgg { .. }
+        | AggregateFunction::KllMergeAgg { .. } => {
+            return Ok(crate::encode_sketch::sketch_expr(a, nested));
         }
         AggregateFunction::StddevSamp => (pb::AggregateFunction::StddevSamp, false),
         AggregateFunction::StddevPop => (pb::AggregateFunction::StddevPop, false),
@@ -1607,7 +1553,7 @@ fn udaf_call(call: &UdafCall, nested: &Cell<bool>) -> Result<pb::UdafCall> {
     clippy::too_many_arguments,
     reason = "one call site, every folded parameter"
 )]
-fn percentile_expr(
+pub(crate) fn percentile_expr(
     function: pb::AggregateFunction,
     percentages: &[f64],
     array: bool,

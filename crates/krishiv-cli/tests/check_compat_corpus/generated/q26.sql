@@ -1,5 +1,4 @@
 -- query 26: nope(1)
-SELECT st_geogfromwkb(a, b) AS c1 FROM t26 WHERE x IN (1, 2) AND y = 'x(st_geogfromwkb)';
-SELECT legacy_fn_20(a, b) AS c2 FROM t26 WHERE x IN (1, 2) AND y = 'x(legacy_fn_20)';
-SELECT legacy_fn_34(a, b) AS c3 FROM t26 WHERE x IN (1, 2) AND y = 'x(legacy_fn_34)';
-SELECT bool_or(a, b) AS c4 FROM t26 WHERE x IN (1, 2) AND y = 'x(bool_or)';
+SELECT regr_r2(a, b) AS c1 FROM t26 WHERE x IN (1, 2) AND y = 'x(regr_r2)';
+SELECT legacy_fn_11(a, b) AS c2 FROM t26 WHERE x IN (1, 2) AND y = 'x(legacy_fn_11)';
+SELECT time_to_millis(a, b) AS c3 FROM t26 WHERE x IN (1, 2) AND y = 'x(time_to_millis)';

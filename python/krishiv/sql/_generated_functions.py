@@ -516,27 +516,6 @@ _ENGINE_UNSUPPORTED = (
     "collate",
     "count_min_sketch",
     "java_method",
-    "kll_merge_agg_bigint",
-    "kll_merge_agg_double",
-    "kll_merge_agg_float",
-    "kll_sketch_agg_bigint",
-    "kll_sketch_agg_double",
-    "kll_sketch_agg_float",
-    "kll_sketch_get_n_bigint",
-    "kll_sketch_get_n_double",
-    "kll_sketch_get_n_float",
-    "kll_sketch_get_quantile_bigint",
-    "kll_sketch_get_quantile_double",
-    "kll_sketch_get_quantile_float",
-    "kll_sketch_get_rank_bigint",
-    "kll_sketch_get_rank_double",
-    "kll_sketch_get_rank_float",
-    "kll_sketch_merge_bigint",
-    "kll_sketch_merge_double",
-    "kll_sketch_merge_float",
-    "kll_sketch_to_string_bigint",
-    "kll_sketch_to_string_double",
-    "kll_sketch_to_string_float",
     "reflect",
     "schema_of_variant_agg",
     "sentences",
@@ -1503,108 +1482,108 @@ def json_tuple(col: ColumnOrName, *fields: str) -> Column:
 
 
 def kll_merge_agg_bigint(col: ColumnOrName, k: Column | int | None = None) -> Column:
-    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
-    raise _unsupported("kll_merge_agg_bigint")
+    """Calls the registry function ``kll_merge_agg_bigint``."""
+    return _call("kll_merge_agg_bigint", _named(col, "col"), *_opt(_lit, k, "k"))
 
 
 def kll_merge_agg_double(col: ColumnOrName, k: Column | int | None = None) -> Column:
-    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
-    raise _unsupported("kll_merge_agg_double")
+    """Calls the registry function ``kll_merge_agg_double``."""
+    return _call("kll_merge_agg_double", _named(col, "col"), *_opt(_lit, k, "k"))
 
 
 def kll_merge_agg_float(col: ColumnOrName, k: Column | int | None = None) -> Column:
-    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
-    raise _unsupported("kll_merge_agg_float")
+    """Calls the registry function ``kll_merge_agg_float``."""
+    return _call("kll_merge_agg_float", _named(col, "col"), *_opt(_lit, k, "k"))
 
 
 def kll_sketch_agg_bigint(col: ColumnOrName, k: Column | int | None = None) -> Column:
-    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
-    raise _unsupported("kll_sketch_agg_bigint")
+    """Calls the registry function ``kll_sketch_agg_bigint``."""
+    return _call("kll_sketch_agg_bigint", _named(col, "col"), *_opt(_lit, k, "k"))
 
 
 def kll_sketch_agg_double(col: ColumnOrName, k: Column | int | None = None) -> Column:
-    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
-    raise _unsupported("kll_sketch_agg_double")
+    """Calls the registry function ``kll_sketch_agg_double``."""
+    return _call("kll_sketch_agg_double", _named(col, "col"), *_opt(_lit, k, "k"))
 
 
 def kll_sketch_agg_float(col: ColumnOrName, k: Column | int | None = None) -> Column:
-    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
-    raise _unsupported("kll_sketch_agg_float")
+    """Calls the registry function ``kll_sketch_agg_float``."""
+    return _call("kll_sketch_agg_float", _named(col, "col"), *_opt(_lit, k, "k"))
 
 
 def kll_sketch_get_n_bigint(col: ColumnOrName) -> Column:
-    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
-    raise _unsupported("kll_sketch_get_n_bigint")
+    """Calls the registry function ``kll_sketch_get_n_bigint``."""
+    return _call("kll_sketch_get_n_bigint", _named(col, "col"))
 
 
 def kll_sketch_get_n_double(col: ColumnOrName) -> Column:
-    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
-    raise _unsupported("kll_sketch_get_n_double")
+    """Calls the registry function ``kll_sketch_get_n_double``."""
+    return _call("kll_sketch_get_n_double", _named(col, "col"))
 
 
 def kll_sketch_get_n_float(col: ColumnOrName) -> Column:
-    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
-    raise _unsupported("kll_sketch_get_n_float")
+    """Calls the registry function ``kll_sketch_get_n_float``."""
+    return _call("kll_sketch_get_n_float", _named(col, "col"))
 
 
 def kll_sketch_get_quantile_bigint(sketch: ColumnOrName, rank: ColumnOrName) -> Column:
-    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
-    raise _unsupported("kll_sketch_get_quantile_bigint")
+    """Calls the registry function ``kll_sketch_get_quantile_bigint``."""
+    return _call("kll_sketch_get_quantile_bigint", _named(sketch, "sketch"), _named(rank, "rank"))
 
 
 def kll_sketch_get_quantile_double(sketch: ColumnOrName, rank: ColumnOrName) -> Column:
-    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
-    raise _unsupported("kll_sketch_get_quantile_double")
+    """Calls the registry function ``kll_sketch_get_quantile_double``."""
+    return _call("kll_sketch_get_quantile_double", _named(sketch, "sketch"), _named(rank, "rank"))
 
 
 def kll_sketch_get_quantile_float(sketch: ColumnOrName, rank: ColumnOrName) -> Column:
-    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
-    raise _unsupported("kll_sketch_get_quantile_float")
+    """Calls the registry function ``kll_sketch_get_quantile_float``."""
+    return _call("kll_sketch_get_quantile_float", _named(sketch, "sketch"), _named(rank, "rank"))
 
 
 def kll_sketch_get_rank_bigint(sketch: ColumnOrName, quantile: ColumnOrName) -> Column:
-    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
-    raise _unsupported("kll_sketch_get_rank_bigint")
+    """Calls the registry function ``kll_sketch_get_rank_bigint``."""
+    return _call("kll_sketch_get_rank_bigint", _named(sketch, "sketch"), _named(quantile, "quantile"))
 
 
 def kll_sketch_get_rank_double(sketch: ColumnOrName, quantile: ColumnOrName) -> Column:
-    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
-    raise _unsupported("kll_sketch_get_rank_double")
+    """Calls the registry function ``kll_sketch_get_rank_double``."""
+    return _call("kll_sketch_get_rank_double", _named(sketch, "sketch"), _named(quantile, "quantile"))
 
 
 def kll_sketch_get_rank_float(sketch: ColumnOrName, quantile: ColumnOrName) -> Column:
-    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
-    raise _unsupported("kll_sketch_get_rank_float")
+    """Calls the registry function ``kll_sketch_get_rank_float``."""
+    return _call("kll_sketch_get_rank_float", _named(sketch, "sketch"), _named(quantile, "quantile"))
 
 
 def kll_sketch_merge_bigint(left: ColumnOrName, right: ColumnOrName) -> Column:
-    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
-    raise _unsupported("kll_sketch_merge_bigint")
+    """Calls the registry function ``kll_sketch_merge_bigint``."""
+    return _call("kll_sketch_merge_bigint", _named(left, "left"), _named(right, "right"))
 
 
 def kll_sketch_merge_double(left: ColumnOrName, right: ColumnOrName) -> Column:
-    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
-    raise _unsupported("kll_sketch_merge_double")
+    """Calls the registry function ``kll_sketch_merge_double``."""
+    return _call("kll_sketch_merge_double", _named(left, "left"), _named(right, "right"))
 
 
 def kll_sketch_merge_float(left: ColumnOrName, right: ColumnOrName) -> Column:
-    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
-    raise _unsupported("kll_sketch_merge_float")
+    """Calls the registry function ``kll_sketch_merge_float``."""
+    return _call("kll_sketch_merge_float", _named(left, "left"), _named(right, "right"))
 
 
 def kll_sketch_to_string_bigint(col: ColumnOrName) -> Column:
-    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
-    raise _unsupported("kll_sketch_to_string_bigint")
+    """Calls the registry function ``kll_sketch_to_string_bigint``."""
+    return _call("kll_sketch_to_string_bigint", _named(col, "col"))
 
 
 def kll_sketch_to_string_double(col: ColumnOrName) -> Column:
-    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
-    raise _unsupported("kll_sketch_to_string_double")
+    """Calls the registry function ``kll_sketch_to_string_double``."""
+    return _call("kll_sketch_to_string_double", _named(col, "col"))
 
 
 def kll_sketch_to_string_float(col: ColumnOrName) -> Column:
-    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
-    raise _unsupported("kll_sketch_to_string_float")
+    """Calls the registry function ``kll_sketch_to_string_float``."""
+    return _call("kll_sketch_to_string_float", _named(col, "col"))
 
 
 def kurtosis(col: ColumnOrName) -> Column:

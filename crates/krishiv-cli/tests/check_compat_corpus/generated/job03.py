@@ -2,7 +2,7 @@
 import pyspark.sql.functions as F
 
 # F.nope('x')
-df = spark.sql("SELECT to_binary(a) FROM t3")
-df = df.select(F.user("a"), F.col("b"))
-df = df.select(F.bit_and("a"), F.col("b"))
-df = spark.sql("SELECT legacy_fn_20(a) FROM t3")
+df = spark.sql("SELECT printf(a) FROM t3")
+df = spark.sql("SELECT hash(a) FROM t3")
+df = spark.sql("SELECT tuple_union_integer(a) FROM t3")
+df = df.select(F.count_min_sketch("a"), F.col("b"))

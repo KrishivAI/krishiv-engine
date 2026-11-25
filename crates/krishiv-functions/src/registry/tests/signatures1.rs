@@ -39,15 +39,17 @@ fn every_definition_is_in_sparks_catalog() {
             // arity and first release only. An aggregate to the analyzer.
             assert!(s.deterministic.is_none() && s.kind.is_none());
             assert_eq!(d.kind, FunctionKind::Aggregate);
-        } else if matches!(
-            d.name,
-            "hll_sketch_estimate"
-                | "hll_union"
-                | "theta_difference"
-                | "theta_intersection"
-                | "theta_sketch_estimate"
-                | "theta_union"
-        ) {
+        } else if d.name.starts_with("kll_sketch_") && !d.name.starts_with("kll_sketch_agg_")
+            || matches!(
+                d.name,
+                "hll_sketch_estimate"
+                    | "hll_union"
+                    | "theta_difference"
+                    | "theta_intersection"
+                    | "theta_sketch_estimate"
+                    | "theta_union"
+            )
+        {
             // The probe records the sketch scalars as aggregates (a generator artifact: Spark's
             // `ExpressionDescription` group of both is `sketch_funcs`, and the probe's arguments are
             // sketch aggregates); they are plain expressions in Spark. Regenerate with a Spark run to fix.

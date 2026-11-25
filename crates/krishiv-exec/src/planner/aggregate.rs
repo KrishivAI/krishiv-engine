@@ -502,6 +502,26 @@ pub(super) fn check_constants(f: &ResolvedFunction) -> Result<()> {
     Ok(())
 }
 
+/// The element type of a KLL aggregate's name.
+fn kll_type(name: &str) -> Option<krishiv_functions::sketch::kll::KllType> {
+    use krishiv_functions::sketch::kll::KllType;
+    match name.rsplit('_').next()? {
+        "bigint" => Some(KllType::Bigint),
+        "float" => Some(KllType::Float),
+        "double" => Some(KllType::Double),
+        _ => None,
+    }
+}
+
+/// The folded `k` of a KLL aggregate call: `Some(Some(k))` given, `Some(None)` omitted; `None` when it is not a
+/// literal in `8..=65535` (the analyzer checked it).
+fn kll_k(f: &ResolvedFunction) -> Option<Option<u16>> {
+    match f.args.get(1) {
+        None => Some(None),
+        Some(e) => u16::try_from(integer_literal(e)?).ok().map(Some),
+    }
+}
+
 /// `None` for a function the executor does not run as an aggregate.
 pub(super) fn lower(f: &ResolvedFunction) -> Option<Lowered> {
     // Before the names: a UDF may be called as a built-in is (`count`).
@@ -624,6 +644,29 @@ pub(super) fn lower(f: &ResolvedFunction) -> Option<Lowered> {
         }
         "theta_intersection_agg" if f.args.len() == 1 => {
             (AggregateFunction::ThetaIntersectionAgg, f.args.clone())
+        }
+        "kll_sketch_agg_bigint" | "kll_sketch_agg_float" | "kll_sketch_agg_double"
+            if matches!(f.args.len(), 1 | 2) =>
+        {
+            let k = kll_k(f)?.unwrap_or(krishiv_functions::sketch::kll::DEFAULT_K);
+            (
+                AggregateFunction::KllSketchAgg {
+                    ty: kll_type(f.id.name())?,
+                    k,
+                },
+                vec![Arc::clone(&f.args[0])],
+            )
+        }
+        "kll_merge_agg_bigint" | "kll_merge_agg_float" | "kll_merge_agg_double"
+            if matches!(f.args.len(), 1 | 2) =>
+        {
+            (
+                AggregateFunction::KllMergeAgg {
+                    ty: kll_type(f.id.name())?,
+                    k: kll_k(f)?,
+                },
+                vec![Arc::clone(&f.args[0])],
+            )
         }
         "hll_union_agg" if f.args.len() == 2 => {
             // A NULL flag reads as false (Spark's `null.asInstanceOf[Boolean]`).

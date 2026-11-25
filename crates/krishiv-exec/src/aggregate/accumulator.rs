@@ -44,6 +44,7 @@ use super::collect::{CollectAcc, VectorAcc};
 use super::histogram::HistAcc;
 use super::hll::{self, HllAcc};
 use super::hll_sketch::{HllSketchAcc, HllSketchOp};
+use super::kll_sketch::{KllSketchAcc, KllSketchOp};
 use super::listagg::ListAggAcc;
 use super::mode::ModeAcc;
 use super::moments::Moments;
@@ -327,6 +328,8 @@ enum Kind {
     HllSketch(HllSketchAcc),
     /// The Theta sketch aggregates (see `theta_sketch`).
     ThetaSketch(ThetaSketchAcc),
+    /// The KLL sketch aggregates (see `kll_sketch`).
+    KllSketch(KllSketchAcc),
 }
 
 /// A bitwise aggregate operation.
@@ -516,6 +519,12 @@ impl Accumulator {
             (F::ThetaIntersectionAgg, _) => {
                 Kind::ThetaSketch(ThetaSketchAcc::new(ThetaSketchOp::Intersection)?)
             }
+            (F::KllSketchAgg { ty, k }, _) => {
+                Kind::KllSketch(KllSketchAcc::new(KllSketchOp::Sketch(*ty, *k))?)
+            }
+            (F::KllMergeAgg { ty, k }, _) => {
+                Kind::KllSketch(KllSketchAcc::new(KllSketchOp::Merge(*ty, *k))?)
+            }
             (F::HllUnionAgg { allow_different }, _) => {
                 Kind::HllSketch(HllSketchAcc::new(HllSketchOp::Union(*allow_different))?)
             }
@@ -615,6 +624,7 @@ impl Accumulator {
     pub(crate) fn state_bound(&self, g: u32) -> usize {
         match &self.kind {
             Kind::ThetaSketch(h) => h.state_bound(g),
+            Kind::KllSketch(h) => h.state_bound(g),
             _ => 0,
         }
     }
@@ -676,6 +686,7 @@ impl Accumulator {
             | Kind::Bitmap(_)
             | Kind::HllSketch(_)
             | Kind::ThetaSketch(_)
+            | Kind::KllSketch(_)
             | Kind::Udf(_) => Vec::new(),
         }
     }
@@ -694,6 +705,7 @@ impl Accumulator {
             Kind::Bitmap(b) => b.size(),
             Kind::HllSketch(h) => h.size(),
             Kind::ThetaSketch(h) => h.size(),
+            Kind::KllSketch(h) => h.size(),
             Kind::Udf(u) => u.size(),
             _ => {
                 let heap = match &self.kind {
@@ -717,6 +729,7 @@ impl Accumulator {
         match &self.kind {
             Kind::HllSketch(h) => h.projected(rows, rows, states),
             Kind::ThetaSketch(h) => h.projected(rows, rows, states, state_bytes),
+            Kind::KllSketch(h) => h.projected(rows, rows, states, state_bytes),
             _ => self.projected(rows, None, None, false),
         }
     }
@@ -726,6 +739,7 @@ impl Accumulator {
     pub(crate) fn theta_reads_sketches(&self, states: bool) -> bool {
         match &self.kind {
             Kind::ThetaSketch(h) => states || h.takes_sketches(),
+            Kind::KllSketch(h) => states || h.takes_sketches(),
             _ => false,
         }
     }
@@ -741,7 +755,10 @@ impl Accumulator {
 
     /// Whether [`projected_part`](Self::projected_part) already covers the rows of a batch (the HLL sketches).
     pub(crate) fn projects_by_partition(&self) -> bool {
-        matches!(self.kind, Kind::HllSketch(_) | Kind::ThetaSketch(_))
+        matches!(
+            self.kind,
+            Kind::HllSketch(_) | Kind::ThetaSketch(_) | Kind::KllSketch(_)
+        )
     }
 
     /// [`size`](Self::size) after [`resize`](Self::resize) to `new` more
@@ -820,6 +837,19 @@ impl Accumulator {
             Kind::Hist(h) => h.projected(new, arg),
             Kind::Bitmap(b) => b.projected(new),
             Kind::HllSketch(h) => h.projected(new, arg.map_or(0, arrow_array::Array::len), states),
+            Kind::KllSketch(h) => {
+                let state_bytes = if states || h.takes_sketches() {
+                    arg.map_or(0, |c| super::theta_sketch::sketch_bytes(c.as_ref()))
+                } else {
+                    0
+                };
+                h.projected(
+                    new,
+                    arg.map_or(0, arrow_array::Array::len),
+                    states,
+                    state_bytes,
+                )
+            }
             Kind::ThetaSketch(h) => {
                 let state_bytes = if states || h.takes_sketches() {
                     arg.map_or(0, |c| super::theta_sketch::sketch_bytes(c.as_ref()))
@@ -908,6 +938,7 @@ impl Accumulator {
             Kind::Bitmap(b) => b.resize(n),
             Kind::HllSketch(h) => h.resize(n),
             Kind::ThetaSketch(h) => h.resize(n),
+            Kind::KllSketch(h) => h.resize(n),
             Kind::Udf(u) => u.resize(n),
             Kind::By {
                 values,
@@ -994,6 +1025,7 @@ impl Accumulator {
             Kind::Bitmap(b) => b.reserve(new),
             Kind::HllSketch(h) => h.reserve(new),
             Kind::ThetaSketch(h) => h.reserve(new),
+            Kind::KllSketch(h) => h.reserve(new),
             Kind::Udf(_) => {}
             Kind::By {
                 values,
@@ -1179,7 +1211,8 @@ impl Accumulator {
             | Kind::Hll(_)
             | Kind::Bitmap(_)
             | Kind::HllSketch(_)
-            | Kind::ThetaSketch(_) => 1,
+            | Kind::ThetaSketch(_)
+            | Kind::KllSketch(_) => 1,
             Kind::TrySumInt { .. }
             | Kind::SumInterval { .. }
             | Kind::SumDec { .. }
@@ -1210,7 +1243,10 @@ pub(crate) fn state_prefix(
     used: &mut usize,
     cap: usize,
 ) -> usize {
-    if !accs.iter().any(|a| matches!(a.kind, Kind::ThetaSketch(_))) {
+    if !accs
+        .iter()
+        .any(|a| matches!(a.kind, Kind::ThetaSketch(_) | Kind::KllSketch(_)))
+    {
         return ids.len();
     }
     for (n, &g) in ids.iter().enumerate() {

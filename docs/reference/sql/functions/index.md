@@ -230,27 +230,27 @@ Every Spark built-in function and operator, with Spark 4.2.0's description and e
 | [`json_array_length`](json_array_length.md) | scalar | yes | Returns the number of elements in the outermost JSON array. |
 | [`json_object_keys`](json_object_keys.md) | scalar | yes | Returns all the keys of the outermost JSON object as an array. |
 | [`json_tuple`](json_tuple.md) | generator | yes | Returns a tuple like the function get_json_object, but it takes multiple names. All the input parameters and output column types are string. |
-| [`kll_merge_agg_bigint`](kll_merge_agg_bigint.md) | aggregate | not yet | Merges binary KllLongsSketch representations and returns the merged sketch. |
-| [`kll_merge_agg_double`](kll_merge_agg_double.md) | aggregate | not yet | Merges binary KllDoublesSketch representations and returns the merged sketch. |
-| [`kll_merge_agg_float`](kll_merge_agg_float.md) | aggregate | not yet | Merges binary KllFloatsSketch representations and returns the merged sketch. |
-| [`kll_sketch_agg_bigint`](kll_sketch_agg_bigint.md) | aggregate | not yet | Returns the KllLongsSketch compact binary representation. |
-| [`kll_sketch_agg_double`](kll_sketch_agg_double.md) | aggregate | not yet | Returns the KllDoublesSketch compact binary representation. |
-| [`kll_sketch_agg_float`](kll_sketch_agg_float.md) | aggregate | not yet | Returns the KllFloatsSketch compact binary representation. |
-| [`kll_sketch_get_n_bigint`](kll_sketch_get_n_bigint.md) | aggregate | not yet | Returns the number of items collected in the sketch. |
-| [`kll_sketch_get_n_double`](kll_sketch_get_n_double.md) | aggregate | not yet | Returns the number of items collected in the sketch. |
-| [`kll_sketch_get_n_float`](kll_sketch_get_n_float.md) | aggregate | not yet | Returns the number of items collected in the sketch. |
-| [`kll_sketch_get_quantile_bigint`](kll_sketch_get_quantile_bigint.md) | aggregate | not yet | Extracts a single value from the quantiles sketch representing the |
-| [`kll_sketch_get_quantile_double`](kll_sketch_get_quantile_double.md) | aggregate | not yet | Extracts a single value from the quantiles sketch representing the |
-| [`kll_sketch_get_quantile_float`](kll_sketch_get_quantile_float.md) | aggregate | not yet | Extracts a single value from the quantiles sketch representing the |
-| [`kll_sketch_get_rank_bigint`](kll_sketch_get_rank_bigint.md) | aggregate | not yet | Extracts a single value from the quantiles sketch representing the |
-| [`kll_sketch_get_rank_double`](kll_sketch_get_rank_double.md) | aggregate | not yet | Extracts a single value from the quantiles sketch representing the |
-| [`kll_sketch_get_rank_float`](kll_sketch_get_rank_float.md) | aggregate | not yet | Extracts a single value from the quantiles sketch representing the |
-| [`kll_sketch_merge_bigint`](kll_sketch_merge_bigint.md) | aggregate | not yet | Merges two sketch buffers together into one. |
-| [`kll_sketch_merge_double`](kll_sketch_merge_double.md) | aggregate | not yet | Merges two sketch buffers together into one. |
-| [`kll_sketch_merge_float`](kll_sketch_merge_float.md) | aggregate | not yet | Merges two sketch buffers together into one. |
-| [`kll_sketch_to_string_bigint`](kll_sketch_to_string_bigint.md) | aggregate | not yet | Returns human readable summary information about this sketch. |
-| [`kll_sketch_to_string_double`](kll_sketch_to_string_double.md) | aggregate | not yet | Returns human readable summary information about this sketch. |
-| [`kll_sketch_to_string_float`](kll_sketch_to_string_float.md) | aggregate | not yet | Returns human readable summary information about this sketch. |
+| [`kll_merge_agg_bigint`](kll_merge_agg_bigint.md) | aggregate | yes | Merges binary KllLongsSketch representations and returns the merged sketch. |
+| [`kll_merge_agg_double`](kll_merge_agg_double.md) | aggregate | yes | Merges binary KllDoublesSketch representations and returns the merged sketch. |
+| [`kll_merge_agg_float`](kll_merge_agg_float.md) | aggregate | yes | Merges binary KllFloatsSketch representations and returns the merged sketch. |
+| [`kll_sketch_agg_bigint`](kll_sketch_agg_bigint.md) | aggregate | yes | Returns the KllLongsSketch compact binary representation. |
+| [`kll_sketch_agg_double`](kll_sketch_agg_double.md) | aggregate | yes | Returns the KllDoublesSketch compact binary representation. |
+| [`kll_sketch_agg_float`](kll_sketch_agg_float.md) | aggregate | yes | Returns the KllFloatsSketch compact binary representation. |
+| [`kll_sketch_get_n_bigint`](kll_sketch_get_n_bigint.md) | aggregate | yes | Returns the number of items collected in the sketch. |
+| [`kll_sketch_get_n_double`](kll_sketch_get_n_double.md) | aggregate | yes | Returns the number of items collected in the sketch. |
+| [`kll_sketch_get_n_float`](kll_sketch_get_n_float.md) | aggregate | yes | Returns the number of items collected in the sketch. |
+| [`kll_sketch_get_quantile_bigint`](kll_sketch_get_quantile_bigint.md) | aggregate | yes | Extracts a single value from the quantiles sketch representing the |
+| [`kll_sketch_get_quantile_double`](kll_sketch_get_quantile_double.md) | aggregate | yes | Extracts a single value from the quantiles sketch representing the |
+| [`kll_sketch_get_quantile_float`](kll_sketch_get_quantile_float.md) | aggregate | yes | Extracts a single value from the quantiles sketch representing the |
+| [`kll_sketch_get_rank_bigint`](kll_sketch_get_rank_bigint.md) | aggregate | yes | Extracts a single value from the quantiles sketch representing the |
+| [`kll_sketch_get_rank_double`](kll_sketch_get_rank_double.md) | aggregate | yes | Extracts a single value from the quantiles sketch representing the |
+| [`kll_sketch_get_rank_float`](kll_sketch_get_rank_float.md) | aggregate | yes | Extracts a single value from the quantiles sketch representing the |
+| [`kll_sketch_merge_bigint`](kll_sketch_merge_bigint.md) | aggregate | yes | Merges two sketch buffers together into one. |
+| [`kll_sketch_merge_double`](kll_sketch_merge_double.md) | aggregate | yes | Merges two sketch buffers together into one. |
+| [`kll_sketch_merge_float`](kll_sketch_merge_float.md) | aggregate | yes | Merges two sketch buffers together into one. |
+| [`kll_sketch_to_string_bigint`](kll_sketch_to_string_bigint.md) | aggregate | yes | Returns human readable summary information about this sketch. |
+| [`kll_sketch_to_string_double`](kll_sketch_to_string_double.md) | aggregate | yes | Returns human readable summary information about this sketch. |
+| [`kll_sketch_to_string_float`](kll_sketch_to_string_float.md) | aggregate | yes | Returns human readable summary information about this sketch. |
 | [`kurtosis`](kurtosis.md) | aggregate | yes | Returns the kurtosis value calculated from values of a group. |
 | [`lag`](lag.md) | window | yes | Returns the value of `input` at the `offset`th row |
 | [`last`](last.md) | aggregate | yes | Returns the last value of `expr` for a group of rows. |
@@ -585,4 +585,4 @@ Every Spark built-in function and operator, with Spark 4.2.0's description and e
 | [`\|\|`](op-pipe-pipe.md) | scalar | yes | Returns the concatenation of `expr1` and `expr2`. |
 | [`~`](op-tilde.md) | scalar | yes | Returns the result of bitwise NOT of `expr`. |
 
-507 of 574 functions are implemented. The 67 that are not are listed in [functions not implemented yet](not-implemented.md).
+528 of 574 functions are implemented. The 46 that are not are listed in [functions not implemented yet](not-implemented.md).

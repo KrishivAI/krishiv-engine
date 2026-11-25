@@ -106,6 +106,7 @@ impl Accumulator {
             Kind::Bitmap(b) => b.state(ids)?,
             Kind::HllSketch(h) => h.state(ids)?,
             Kind::ThetaSketch(h) => h.state(ids)?,
+            Kind::KllSketch(h) => h.state(ids)?,
             Kind::Udf(u) => u.state(ids)?,
             Kind::By {
                 values,
@@ -371,6 +372,7 @@ impl Accumulator {
             Kind::Bitmap(b) => b.evaluate(ids)?,
             Kind::HllSketch(h) => h.evaluate(ids)?,
             Kind::ThetaSketch(h) => h.evaluate(ids)?,
+            Kind::KllSketch(h) => h.evaluate(ids)?,
             Kind::Udf(u) => u.evaluate(ids)?,
             // Only the value: the ordering key is state, not a result.
             Kind::By {

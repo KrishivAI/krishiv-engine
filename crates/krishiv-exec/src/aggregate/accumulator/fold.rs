@@ -61,6 +61,7 @@ impl Accumulator {
                     | Kind::Bitmap(_)
                     | Kind::HllSketch(_)
                     | Kind::ThetaSketch(_)
+                    | Kind::KllSketch(_)
             ))
             && !is_unit(w)
         {
@@ -106,6 +107,7 @@ impl Accumulator {
                     | Kind::Bitmap(_)
                     | Kind::HllSketch(_)
                     | Kind::ThetaSketch(_)
+                    | Kind::KllSketch(_)
                     | Kind::MinMax {
                         values: Values::Bytes(_),
                         ..
@@ -925,6 +927,20 @@ impl Accumulator {
                 let Some(states) = states.as_any().downcast_ref::<BinaryArray>() else {
                     return Err(internal(
                         "a Theta sketch state of another type than binary".to_owned(),
+                    ));
+                };
+                h.merge(groups, states)?;
+            }
+            (Kind::KllSketch(h), false) => h.update(groups, args[0], valid)?,
+            (Kind::KllSketch(h), true) => {
+                let [states] = args else {
+                    return Err(internal(
+                        "a KLL sketch state of another column than its bytes".to_owned(),
+                    ));
+                };
+                let Some(states) = states.as_any().downcast_ref::<BinaryArray>() else {
+                    return Err(internal(
+                        "a KLL sketch state of another type than binary".to_owned(),
                     ));
                 };
                 h.merge(groups, states)?;

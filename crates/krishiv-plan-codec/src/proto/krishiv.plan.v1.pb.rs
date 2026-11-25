@@ -2470,6 +2470,24 @@ pub enum AggregateFunction {
     /// `theta_intersection_agg(sketch)`.
     /// feature: theta_sketch_aggregates
     ThetaIntersectionAgg = 57,
+    /// `kll_sketch_agg_*(x, k)`: the folded `k` is `hll_precision` (8 to 65535).
+    /// feature: kll_sketch_aggregates
+    KllSketchAggBigint = 58,
+    /// `kll_sketch_agg_*(x, k)`: the folded `k` is `hll_precision` (8 to 65535).
+    /// feature: kll_sketch_aggregates
+    KllSketchAggFloat = 59,
+    /// `kll_sketch_agg_*(x, k)`: the folded `k` is `hll_precision` (8 to 65535).
+    /// feature: kll_sketch_aggregates
+    KllSketchAggDouble = 60,
+    /// `kll_merge_agg_*(sketch\[, k\])`: `hll_precision` is the folded `k` (8 to 65535), 0 when omitted.
+    /// feature: kll_sketch_aggregates
+    KllMergeAggBigint = 61,
+    /// `kll_merge_agg_*(sketch\[, k\])`: `hll_precision` is the folded `k` (8 to 65535), 0 when omitted.
+    /// feature: kll_sketch_aggregates
+    KllMergeAggFloat = 62,
+    /// `kll_merge_agg_*(sketch\[, k\])`: `hll_precision` is the folded `k` (8 to 65535), 0 when omitted.
+    /// feature: kll_sketch_aggregates
+    KllMergeAggDouble = 63,
 }
 impl AggregateFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2536,6 +2554,12 @@ impl AggregateFunction {
             Self::ThetaSketchAgg => "AGGREGATE_FUNCTION_THETA_SKETCH_AGG",
             Self::ThetaUnionAgg => "AGGREGATE_FUNCTION_THETA_UNION_AGG",
             Self::ThetaIntersectionAgg => "AGGREGATE_FUNCTION_THETA_INTERSECTION_AGG",
+            Self::KllSketchAggBigint => "AGGREGATE_FUNCTION_KLL_SKETCH_AGG_BIGINT",
+            Self::KllSketchAggFloat => "AGGREGATE_FUNCTION_KLL_SKETCH_AGG_FLOAT",
+            Self::KllSketchAggDouble => "AGGREGATE_FUNCTION_KLL_SKETCH_AGG_DOUBLE",
+            Self::KllMergeAggBigint => "AGGREGATE_FUNCTION_KLL_MERGE_AGG_BIGINT",
+            Self::KllMergeAggFloat => "AGGREGATE_FUNCTION_KLL_MERGE_AGG_FLOAT",
+            Self::KllMergeAggDouble => "AGGREGATE_FUNCTION_KLL_MERGE_AGG_DOUBLE",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2601,6 +2625,12 @@ impl AggregateFunction {
             "AGGREGATE_FUNCTION_THETA_INTERSECTION_AGG" => {
                 Some(Self::ThetaIntersectionAgg)
             }
+            "AGGREGATE_FUNCTION_KLL_SKETCH_AGG_BIGINT" => Some(Self::KllSketchAggBigint),
+            "AGGREGATE_FUNCTION_KLL_SKETCH_AGG_FLOAT" => Some(Self::KllSketchAggFloat),
+            "AGGREGATE_FUNCTION_KLL_SKETCH_AGG_DOUBLE" => Some(Self::KllSketchAggDouble),
+            "AGGREGATE_FUNCTION_KLL_MERGE_AGG_BIGINT" => Some(Self::KllMergeAggBigint),
+            "AGGREGATE_FUNCTION_KLL_MERGE_AGG_FLOAT" => Some(Self::KllMergeAggFloat),
+            "AGGREGATE_FUNCTION_KLL_MERGE_AGG_DOUBLE" => Some(Self::KllMergeAggDouble),
             _ => None,
         }
     }

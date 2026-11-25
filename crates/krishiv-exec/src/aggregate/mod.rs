@@ -71,6 +71,7 @@ mod distinct;
 mod histogram;
 mod hll;
 mod hll_sketch;
+mod kll_sketch;
 mod listagg;
 mod merge_index;
 mod mode;
@@ -83,6 +84,7 @@ mod quantile;
 mod rowtable;
 mod sink;
 mod table;
+pub use krishiv_functions::sketch::kll::KllType;
 mod theta_sketch;
 mod udf;
 
@@ -376,6 +378,22 @@ pub enum AggregateFunction {
     /// `theta_intersection_agg(sketch)` (Spark 4.1): the intersection of the non-NULL sketches; the empty sketch for
     /// no input; `binary`, never NULL.
     ThetaIntersectionAgg,
+    /// `kll_sketch_agg_{bigint,float,double}(x[, k])` (Spark 4.1): a KLL quantile sketch of the non-NULL values;
+    /// `binary`, never NULL, the empty sketch for no value. `k` is in `8..=65535` (default 200).
+    KllSketchAgg {
+        /// The element type of the sketch.
+        ty: krishiv_functions::sketch::kll::KllType,
+        /// The sketch's `k`.
+        k: u16,
+    },
+    /// `kll_merge_agg_{bigint,float,double}(sketch[, k])` (Spark 4.1): the merge of the non-NULL sketches;
+    /// `binary`, never NULL. Without `k` the sketch takes the `k` of the first input (default 200 when empty).
+    KllMergeAgg {
+        /// The element type of the sketches.
+        ty: krishiv_functions::sketch::kll::KllType,
+        /// The sketch's `k` when given.
+        k: Option<u16>,
+    },
     /// A session aggregate UDF (ADR 0045), by name and version: the worker
     /// runs the implementation its library holds under both, or refuses
     /// the plan with `KRISHIV_UDF_NOT_AVAILABLE`.
@@ -697,8 +715,18 @@ impl AggregateExpr {
                 | F::BitmapAndAgg
                 | F::HllUnionAgg { .. }
                 | F::ThetaUnionAgg { .. }
-                | F::ThetaIntersectionAgg,
+                | F::ThetaIntersectionAgg
+                | F::KllMergeAgg { .. },
                 DataType::Binary | DataType::BinaryView,
+            )
+            | (
+                F::KllSketchAgg { .. },
+                DataType::Int8
+                | DataType::Int16
+                | DataType::Int32
+                | DataType::Int64
+                | DataType::Float32
+                | DataType::Float64,
             )
             | (
                 F::ThetaSketchAgg { .. },
@@ -889,7 +917,9 @@ impl AggregateExpr {
                 | F::HllUnionAgg { .. }
                 | F::ThetaSketchAgg { .. }
                 | F::ThetaUnionAgg { .. }
-                | F::ThetaIntersectionAgg,
+                | F::ThetaIntersectionAgg
+                | F::KllSketchAgg { .. }
+                | F::KllMergeAgg { .. },
                 _,
             ) => {
                 vec![Field::new(n("sketch"), DataType::Binary, false)]

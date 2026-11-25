@@ -1,0 +1,1 @@
+functions, exec, plan-codec: the KLL quantile sketch functions: `kll_sketch_agg_{bigint,float,double}`, `kll_merge_agg_*` and the `kll_sketch_{to_string,get_n,get_quantile,get_rank,merge}_*` scalars over Apache DataSketches (the `kllquantiles` golden file passes in full)

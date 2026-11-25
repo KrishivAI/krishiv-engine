@@ -398,13 +398,13 @@ impl HllSketchAcc {
 }
 
 /// A binary column on either carrier.
-enum BinaryRows<'a> {
+pub(super) enum BinaryRows<'a> {
     Plain(&'a BinaryArray),
     View(&'a BinaryViewArray),
 }
 
 impl<'a> BinaryRows<'a> {
-    fn of(arg: &'a ArrayRef) -> Result<Self> {
+    pub(super) fn of(arg: &'a ArrayRef) -> Result<Self> {
         if let Some(a) = arg.as_any().downcast_ref::<BinaryArray>() {
             Ok(Self::Plain(a))
         } else if let Some(a) = arg.as_any().downcast_ref::<BinaryViewArray>() {
@@ -418,7 +418,7 @@ impl<'a> BinaryRows<'a> {
     }
 
     /// Row `i`, `None` for NULL.
-    fn get(&self, i: usize) -> Option<&[u8]> {
+    pub(super) fn get(&self, i: usize) -> Option<&[u8]> {
         match self {
             Self::Plain(a) => (!a.is_null(i)).then(|| a.value(i)),
             Self::View(a) => (!a.is_null(i)).then(|| a.value(i)),
