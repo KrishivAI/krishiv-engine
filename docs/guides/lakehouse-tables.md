@@ -25,8 +25,8 @@ SELECT region, sum(amount) FROM delta.`s3://bucket/trips` GROUP BY region;
 | Deletion vectors on write | not written; rows are rewritten |
 | Change data feed read | not yet |
 
-Delta support is the `delta` cargo feature. Of the release artifacts only the Docker image is built with it; the
-wheels and the release `krishiv` binary are not (see [What each artifact
+Delta support is the `delta` cargo feature. Of the release artifacts, the Docker image and the Python wheel are built
+with it; the release `krishiv` binary is not (see [What each artifact
 includes](../get-started/install.md#what-each-artifact-includes)). A build without it refuses a Delta table with
 `DATA_SOURCE_NOT_FOUND`: write one small table to check yours.
 

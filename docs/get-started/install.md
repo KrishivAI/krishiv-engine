@@ -91,11 +91,12 @@ Python 3.11 to 3.14 on every platform with a wheel. A platform marked pending sh
 |---|---|---|---|---|
 | Docker image | yes | yes | yes | yes |
 | `krishiv` release binary (`server`, `ui`) | no | no | no | no |
-| Python wheel | no | no | no | yes |
+| Python wheel | yes | no | no | yes |
 
-A `pip install krishiv` or the release binary refuses a Delta table with `DATA_SOURCE_NOT_FOUND`. For lakehouse tables or
-ADBC and JDBC clients, use the Docker image or build the `krishiv` binary from source with the `delta`,
-`iceberg`, `catalog-iceberg-rest` (Iceberg REST catalogs in the server) and `flight-sql` features.
+The release binary refuses a Delta table with `DATA_SOURCE_NOT_FOUND`; `pip install krishiv` reads and writes Delta
+tables. For Iceberg tables or ADBC and JDBC clients, use the Docker image or build the `krishiv` binary from source with
+the `iceberg`, `catalog-iceberg-rest` (Iceberg REST catalogs in the server) and `flight-sql` features, plus `delta` for
+Delta tables.
 
 ## Check the install
 
