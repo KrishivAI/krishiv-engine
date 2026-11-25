@@ -667,3 +667,18 @@ fn a_cast_between_string_collations_is_never_forced_nullable() {
         assert!(force_nullable(&T::String, &to), "{to:?}");
     }
 }
+
+/// `TRY_CAST` with a collated string on either side: Spark's `UpCastRule` sees a `StringType` whatever the
+/// collation, and a string to binary keeps the child's nullability (`Cast.nullable`, `isTryCast`).
+#[test]
+fn try_cast_reads_a_collated_string_as_a_string() {
+    use krishiv_types::Collation;
+    let lcase = T::CollatedString(Collation::UTF8_LCASE);
+    assert!(!try_nullable(&T::String, &lcase));
+    assert!(!try_nullable(&lcase, &T::String));
+    assert!(!try_nullable(&T::Integer, &lcase));
+    assert!(!try_nullable(&lcase, &T::Binary));
+    // A binary that is not UTF-8 becomes NULL (ADR 0023), whatever the collation.
+    assert!(try_nullable(&T::Binary, &lcase));
+    assert!(try_nullable(&lcase, &T::Integer));
+}

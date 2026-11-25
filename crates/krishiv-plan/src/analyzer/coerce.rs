@@ -1711,7 +1711,10 @@ pub(super) fn try_nullable(from: &DataType, to: &DataType) -> bool {
     if from.is_nested() || to.is_nested() {
         return !nested_up_cast(from, to);
     }
-    if (from, to) == (&T::Binary, &T::String) {
+    // Spark's `UpCastRule` reads a collated string as a `StringType` (only a CHAR/VARCHAR
+    // constraint matters, never the collation), on either side.
+    let string = |t: &T| matches!(t, T::String | T::CollatedString(_));
+    if *from == T::Binary && string(to) {
         return true;
     }
     // Integral and floating types widen in this order.
@@ -1725,9 +1728,9 @@ pub(super) fn try_nullable(from: &DataType, to: &DataType) -> bool {
         _ => None,
     };
     let up = match (from, to) {
-        _ if from == to || *to == T::String => true,
-        (T::String, T::Binary)
-        | (T::Date | T::TimestampNtz | T::Long, T::Timestamp)
+        _ if from == to || string(to) => true,
+        (f, T::Binary) if string(f) => true,
+        (T::Date | T::TimestampNtz | T::Long, T::Timestamp)
         | (T::Date | T::Timestamp, T::TimestampNtz)
         | (T::Timestamp, T::Long) => true,
         (T::Decimal(a), T::Decimal(b)) => {
