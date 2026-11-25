@@ -785,13 +785,20 @@ impl Lowerer {
                     {
                         return Err(unsupported("table-valued functions", a.span));
                     }
-                    // `variant_explode` names its one parameter `input`
-                    // (Spark's `FunctionSignature(InputParameter("input"))`).
+                    // A generator has one parameter, which a named argument
+                    // may name: `collection` for `explode` and `posexplode`,
+                    // `input` for `inline` and `variant_explode` (Spark's
+                    // `FunctionSignature`s).
+                    let param = match kind {
+                        krishiv_plan::GeneratorKind::Explode
+                        | krishiv_plan::GeneratorKind::PosExplode => "collection",
+                        _ => "input",
+                    };
                     let named = |a: &&crate::ast::FunctionArg| match &a.name {
                         Some(n) => {
-                            kind != krishiv_plan::GeneratorKind::VariantExplode
+                            lname == "stack"
                                 || args.len() != 1
-                                || !n.value.eq_ignore_ascii_case("input")
+                                || !n.value.eq_ignore_ascii_case(param)
                         }
                         None => false,
                     };

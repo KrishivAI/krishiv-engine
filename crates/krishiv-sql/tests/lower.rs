@@ -813,3 +813,22 @@ fn a_statement_nested_past_the_inline_limit_still_parses() {
         line(&deep).chars().take(200).collect::<String>()
     );
 }
+
+#[test]
+fn a_generator_table_function_takes_its_one_named_parameter() {
+    for sql in [
+        "SELECT * FROM explode(collection => array(1, 2))",
+        "SELECT * FROM explode_outer(collection => map('a', 1))",
+        "SELECT * FROM posexplode(collection => array(1, 2))",
+        "SELECT * FROM inline(input => array(struct(1, 'a')))",
+    ] {
+        assert!(lower(sql).is_ok(), "{sql}: {}", line(sql));
+    }
+    // Another name, or the other function's name, stays refused.
+    for sql in [
+        "SELECT * FROM explode(input => array(1, 2))",
+        "SELECT * FROM inline(collection => array(struct(1, 'a')))",
+    ] {
+        assert!(lower(sql).is_err(), "{sql}");
+    }
+}
