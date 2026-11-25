@@ -556,7 +556,9 @@ pub static MEMORY_LIMIT: ConfigEntry = ConfigEntry {
     doc: "Memory available to query execution in this process: the limit of the root memory \
           pool. Operators reserve memory before allocating and spill when the limit is reached. \
           When unset: 80% of the effective memory limit (the tightest cgroup limit, else \
-          physical memory), or 2 GiB where that cannot be determined.",
+          physical memory), or 2 GiB where that cannot be determined. A value above that \
+          effective limit is not honoured (the kernel would kill the process before the engine \
+          spills): the default is used instead, with a warning.",
     scope: Scope::Cluster,
     settable_by: SettableBy::Startup,
     version_added: "0.1.0",
