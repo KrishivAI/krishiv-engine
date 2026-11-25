@@ -887,7 +887,18 @@ fn run(
             if Arc::ptr_eq(&after, &root) {
                 after
             } else {
-                batch(after, "Tidy", &mut t)?
+                let tidied = batch(after, "Tidy", &mut t)?;
+                // The shared definition's filter now admits every literal
+                // (q64's `d_year IN (1999, 2000)`), which changes the
+                // estimates its joins were ordered on: order them again and
+                // prune, as a second optimization would.
+                match stats {
+                    Some(stats) => {
+                        let ordered = order_and_restrict(tidied, stats, options, joins, &mut t)?;
+                        prune_and_tidy(&ordered, Some(stats), &mut t)?
+                    }
+                    None => tidied,
+                }
             }
         } else {
             root
