@@ -13,6 +13,12 @@ name: Binaries
 # workflows.
 on:
   workflow_call:
+    inputs:
+      nightly_waiver:
+        description: "One-time owner waiver passed down by release.yml (see require-green-nightly.sh); empty = none"
+        type: string
+        required: false
+        default: ""
   workflow_dispatch:
   pull_request:
     paths:
@@ -59,6 +65,7 @@ jobs:
       - name: Latest scheduled CI run is green on this commit
         env:
           GH_TOKEN: ${{ github.token }}
+          NIGHTLY_WAIVER: ${{ inputs.nightly_waiver }}
         run: .github/scripts/require-green-nightly.sh
 
   cli-x86_64:

@@ -67,6 +67,8 @@ jobs:
       contents: read
       actions: read
     uses: $/.github/workflows/binaries.yml
+    with:
+      nightly_waiver: ${{ inputs.nightly_waiver }}
 
   bundle:
     needs: [wheels, binaries]
