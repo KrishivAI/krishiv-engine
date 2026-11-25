@@ -22,6 +22,7 @@ use super::table::IcebergTable;
 
 pub(crate) mod expire;
 pub(crate) mod rewrite_options;
+pub(crate) mod rewrite_plan;
 
 /// Where a procedure finds its table: the catalog that serves `CALL cat.system.p(table => ..)`.
 pub trait ProcedureTables: fmt::Debug + Send + Sync {
