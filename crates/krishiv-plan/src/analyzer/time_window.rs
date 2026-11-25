@@ -927,11 +927,33 @@ fn name_selected_window(
     Ok(Arc::new(LogicalPlan::new(node).with_origin(p.origin)))
 }
 
+/// The input of a node whose output has its input's columns, with the same names, in the same places.
+fn kept_columns_input(node: &PlanNode) -> Option<&Arc<LogicalPlan>> {
+    match node {
+        PlanNode::Filter { input, .. }
+        | PlanNode::Sort { input, .. }
+        | PlanNode::Limit { input, .. }
+        | PlanNode::Offset { input, .. }
+        | PlanNode::Tail { input, .. }
+        | PlanNode::Distinct { input }
+        | PlanNode::Hint { input, .. }
+        | PlanNode::JoinHint { input, .. }
+        | PlanNode::Repartition { input, .. }
+        | PlanNode::Sample { input, .. } => Some(input),
+        _ => None,
+    }
+}
+
 /// The column name of a one-part reference, or of a two-part one whose qualifier is the derived table's alias.
 fn derived_column_name<'a>(base: &Arc<LogicalPlan>, parts: &'a [String]) -> Option<&'a str> {
+    // A `WHERE` or an `ORDER BY` over the derived table leaves its alias in scope.
+    let mut under = base;
+    while let Some(input) = kept_columns_input(&under.node) {
+        under = input;
+    }
     match parts {
         [name] => Some(name),
-        [qualifier, name] if matches!(&base.node, PlanNode::SubqueryAlias { alias, .. } if equals_ignore_case(alias, qualifier)) => {
+        [qualifier, name] if matches!(&under.node, PlanNode::SubqueryAlias { alias, .. } if equals_ignore_case(alias, qualifier)) => {
             Some(name)
         }
         _ => None,
@@ -940,13 +962,13 @@ fn derived_column_name<'a>(base: &Arc<LogicalPlan>, parts: &'a [String]) -> Opti
 
 /// Whether the output column `name` of `p` is the window column an inner `window(..)` added.
 fn is_window_column(p: &Arc<LogicalPlan>, name: &str) -> bool {
+    if let Some(input) = kept_columns_input(&p.node) {
+        return is_window_column(input, name);
+    }
     match &p.node {
         PlanNode::SubqueryAlias { input, columns, .. } if columns.is_empty() => {
             is_window_column(input, name)
         }
-        PlanNode::Sort { input, .. }
-        | PlanNode::Limit { input, .. }
-        | PlanNode::Offset { input, .. } => is_window_column(input, name),
         PlanNode::Project { input, exprs }
         | PlanNode::Aggregate {
             input,
@@ -974,12 +996,12 @@ fn is_window_column(p: &Arc<LogicalPlan>, name: &str) -> bool {
 /// Whether the output column at `at` of `p` is that window column: `window`, under any alias, over the
 /// time-window generator. By position, since two output columns may share a name.
 fn is_window_output(p: &Arc<LogicalPlan>, at: usize) -> bool {
+    if let Some(input) = kept_columns_input(&p.node) {
+        return is_window_output(input, at);
+    }
     match &p.node {
-        // These keep their input's rows and the places of its columns; a derived table may rename them.
-        PlanNode::SubqueryAlias { input, .. }
-        | PlanNode::Sort { input, .. }
-        | PlanNode::Limit { input, .. }
-        | PlanNode::Offset { input, .. } => is_window_output(input, at),
+        // A derived table may rename its columns; they keep their places.
+        PlanNode::SubqueryAlias { input, .. } => is_window_output(input, at),
         PlanNode::Project { input, exprs }
         | PlanNode::Aggregate {
             input,
@@ -1025,11 +1047,11 @@ fn is_window_item(input: &Arc<LogicalPlan>, e: &Expr) -> bool {
 /// The output column names of a projection or aggregate (an alias, or a bare column's own name; `""` for an
 /// expression with neither), seen through derived-table aliases; empty for any other node.
 fn output_names(p: &Arc<LogicalPlan>) -> Vec<String> {
+    if let Some(input) = kept_columns_input(&p.node) {
+        return output_names(input);
+    }
     match &p.node {
         PlanNode::SubqueryAlias { input, columns, .. } if columns.is_empty() => output_names(input),
-        PlanNode::Sort { input, .. }
-        | PlanNode::Limit { input, .. }
-        | PlanNode::Offset { input, .. } => output_names(input),
         PlanNode::SubqueryAlias { columns, .. } => columns.clone(),
         PlanNode::Project { exprs, .. }
         | PlanNode::Aggregate {

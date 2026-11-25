@@ -2034,11 +2034,42 @@ fn by_name_columns_report_arity_then_ambiguity_then_extra_columns() {
         got.contains(&"extraColumns=`zz`, `x y`".to_owned()),
         "{got:?}"
     );
-    // Spark quotes an extra name by parsing it: one that does not parse is that error.
+    // A table column's name is quoted with a backquote doubled.
+    run(&s, "create table btq(`a``b` int) using parquet");
+    let sql = "insert into btq by name select array(1) as `a``b`";
+    assert_eq!(
+        class(&s, sql),
+        "INCOMPATIBLE_DATA_FOR_TABLE.CANNOT_SAFELY_CAST"
+    );
+    let got = params(&s, sql);
+    assert!(got.contains(&"colName=`a``b`".to_owned()), "{got:?}");
+    // The default profile (4.3) quotes an extra name as one part, as Spark 4.3.0 does.
+    for (select, quoted) in [
+        ("2 as zz, 3 as `y``y`", "`zz`, `y``y`"),
+        ("3 as `a.b`", "`a.b`"),
+    ] {
+        let sql = format!("insert into bt by name select 1 as a, {select}");
+        assert_eq!(class(&s, &sql), "INCOMPATIBLE_DATA_FOR_TABLE.EXTRA_COLUMNS");
+        let got = params(&s, &sql);
+        assert!(got.contains(&format!("extraColumns={quoted}")), "{got:?}");
+    }
+    // Spark 4.2.0 parses the name first: one that does not parse is that error, and a dot splits it.
+    let old = tempfile::tempdir().unwrap();
+    let s = Session::builder()
+        .profile(krishiv_plan::analyzer::SparkProfile::V4_2)
+        .build()
+        .unwrap();
+    s.conf()
+        .set("spark.sql.warehouse.dir", old.path().to_str().unwrap())
+        .unwrap();
+    run(&s, "create table bt(a int, b int, c int) using parquet");
     let sql = "insert into bt by name select 1 as a, 2 as zz, 3 as `y``y`";
     assert_eq!(class(&s, sql), "INVALID_ATTRIBUTE_NAME_SYNTAX");
     let got = params(&s, sql);
     assert!(got.contains(&"name=y`y".to_owned()), "{got:?}");
+    let sql = "insert into bt by name select 1 as a, 3 as `a.b`";
+    let got = params(&s, sql);
+    assert!(got.contains(&"extraColumns=`a`.`b`".to_owned()), "{got:?}");
 }
 
 /// `INSERT .. BY NAME` pairs struct fields under Spark's `equalsIgnoreCase` (per code point, upper then lower
