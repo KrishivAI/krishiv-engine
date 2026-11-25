@@ -189,7 +189,7 @@ impl Kll {
     pub fn summary(&self) -> String {
         let (name, k, min_k, n, retained, est) = match self {
             Self::Long(s) => (
-                "KllLongsSketch",
+                "KllKllLongsSketch",
                 s.k(),
                 s.min_k(),
                 s.n(),
@@ -197,7 +197,7 @@ impl Kll {
                 s.is_estimation_mode(),
             ),
             Self::Float(s) => (
-                "KllFloatsSketch",
+                "KllKllFloatsSketch",
                 s.k(),
                 s.min_k(),
                 s.n(),
@@ -205,7 +205,7 @@ impl Kll {
                 s.is_estimation_mode(),
             ),
             Self::Double(s) => (
-                "KllDoublesSketch",
+                "KllKllDoublesSketch",
                 s.k(),
                 s.min_k(),
                 s.n(),
@@ -215,7 +215,7 @@ impl Kll {
         };
         let bytes = self.to_bytes().len();
         format!(
-            "### Kll{name} Summary:\n   K                      : {k}\n   Dynamic min K          : {min_k}\n   \
+            "### {name} Summary:\n   K                      : {k}\n   Dynamic min K          : {min_k}\n   \
              N                      : {n}\n   Retained Items         : {retained}\n   \
              Estimation Mode        : {est}\n   Compact Storage Bytes  : {bytes}\n### End sketch summary\n"
         )
