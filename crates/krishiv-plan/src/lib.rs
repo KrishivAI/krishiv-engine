@@ -70,6 +70,7 @@
 //! | `PlanNode::Aggregate` | U, R | Q1, Q3-Q5, Q7-Q13, Q15, Q16, Q18, Q21, Q22 | `groupBy.agg`, `rollup.agg`, `cube.agg` |
 //! | `PlanNode::PartialAggregate` | R | - | - |
 //! | `PlanNode::Join` | U, R | Q2, Q3, Q5, Q7-Q21 | `join` |
+//! | `PlanNode::AsOfJoin` | U, R | - | - |
 //! | `PlanNode::Sort` | U, R | Q1-Q5, Q7-Q13, Q15, Q16, Q18, Q20-Q22 | `orderBy`, `sort` |
 //! | `PlanNode::Limit` | U, R | Q2, Q3, Q10, Q18, Q21 | `limit` |
 //! | `PlanNode::Offset` | U, R | - | `offset` |
@@ -85,9 +86,11 @@
 //! | `PlanNode::CollectMetrics` | U, R | - | `observe` |
 //! | `PlanNode::MetricViewRead` | U, R | - | - |
 //! | `PlanNode::JoinHint` | R | - | - |
+//! | `PlanNode::SecurityBarrier` | R | - | - |
 //! | `PlanNode::Union` | U, R | - | - |
 //! | `PlanNode::Distinct` | U | - | - |
 //! | `PlanNode::SetOp` | U | - | - |
+//! | `PlanNode::Zip` | U | - | `zip` |
 //! | `PlanNode::ReplicateRows` | R | - | - |
 //! | `PlanNode::Sample` | U, R | - | - |
 //! | `PlanNode::Pivot` | U | - | - |
@@ -130,6 +133,7 @@
 #![forbid(unsafe_code)]
 
 pub mod analyzer;
+mod barrier;
 pub mod cache;
 mod dag;
 mod display;
@@ -141,8 +145,10 @@ mod local;
 mod origin;
 mod partial;
 mod plan;
+pub mod procedure;
 mod python;
 mod raises;
+mod select_generators;
 pub(crate) mod spark_fmt;
 #[cfg(test)]
 mod tests;
@@ -154,6 +160,7 @@ mod walk;
 /// relation resolves.
 pub const TIME_TRAVEL_OPTION: &str = "__krishiv.timeTravel";
 
+pub use barrier::PolicyRef;
 pub use cache::{CacheKey, normalized_plan_hash, normalized_subtree_hash, semantic_plan_hash};
 pub use display::Annotated;
 #[doc(hidden)]
@@ -172,6 +179,12 @@ pub use literal::{DayTimeField, Literal, YearMonthField};
 pub use local::LocalRelation;
 pub use origin::{Origin, PlanId, SourceId, Span};
 pub use partial::partial_state_columns;
+pub use select_generators::{select_with_generators, with_column_generator};
+/// The call lowering gives a generator for `UNNEST(arrays)` in `FROM`; the analyzer expands it
+/// into `inline` over an array of structs (as it does `stack`). Not a function a query can name.
+pub const UNNEST_FUNCTION: &str = "__krishiv_unnest";
+/// As [`UNNEST_FUNCTION`], for `UNNEST(arrays) WITH ORDINALITY`.
+pub const UNNEST_ORDINALITY_FUNCTION: &str = "__krishiv_unnest_ordinality";
 /// The qualifier prefix of the columns a select-list generator adds: an
 /// unqualified `*` skips them (the generator's own star reads them).
 pub const GENERATE_QUALIFIER_PREFIX: &str = "__krishiv_generate_";
@@ -188,14 +201,16 @@ pub fn generate_qualifier(index: usize, aliased: bool) -> String {
 }
 
 pub use plan::{
-    ALIAS_PART_SEP, ColumnNamesOp, Cte, CteRef, GeneratorKind, Grouping, IR_VERSION, JoinCondition,
-    JoinKind, JoinStrategy, LogicalPlan, MetricColumn, PivotValue, Plan, PlanNode, ReadSource,
-    SampleBounds, Scan, SetOperation, SqlArgs, TABLE_FUNCTION_NAME_SEP, TableArg, TableVersion,
-    UnpivotColumnSet, generator_arg, without_generated_marker,
+    ALIAS_PART_SEP, AsOfDirection, AsOfMatch, ColumnNamesOp, Cte, CteRef, GeneratorKind, Grouping,
+    IR_VERSION, JoinCondition, JoinKind, JoinStrategy, LogicalPlan, MetricColumn, PivotValue, Plan,
+    PlanNode, ReadSource, SampleBounds, Scan, SetOperation, SqlArgs, TABLE_FUNCTION_NAME_SEP,
+    TableArg, TableVersion, UnpivotColumnSet, generator_arg, without_generated_marker,
 };
 pub use python::{
     check_python_aggregates, check_python_relation_determinism, is_python_udaf,
     plan_is_deterministic, python_relation_is_deterministic,
 };
-pub use raises::{conjuncts, exact_decimal, is_deterministic, may_raise, runs_on_any_row};
+pub use raises::{
+    conjuncts, exact_decimal, has_subquery, is_deterministic, leakproof, may_raise, runs_on_any_row,
+};
 pub use walk::{MAX_DEPTH, check_depth};

@@ -670,6 +670,58 @@ fn join_errors() {
     assert!(message(&join_with).contains("join_data_type"));
 }
 
+fn as_of_join_of(join_type: &str, direction: &str, using: &[&str]) -> Relation {
+    relation(RelType::AsOfJoin(Box::new(pb::AsOfJoin {
+        left: boxed(read_table("l")),
+        right: boxed(read_table("r")),
+        left_as_of: Some(attr("lt")),
+        right_as_of: Some(attr("rt")),
+        join_expr: Some(func("==", vec![attr("a"), attr("b")])),
+        using_columns: using.iter().map(|c| (*c).to_owned()).collect(),
+        join_type: join_type.to_owned(),
+        tolerance: None,
+        allow_exact_matches: true,
+        direction: direction.to_owned(),
+    })))
+}
+
+#[test]
+fn as_of_joins_translate_as_joinasof_reads_them() {
+    use krishiv_plan::AsOfDirection;
+    for (join_type, kind) in [
+        ("inner", JoinKind::Inner),
+        ("left", JoinKind::LeftOuter),
+        ("LEFT_OUTER", JoinKind::LeftOuter),
+    ] {
+        for (direction, want) in [
+            ("backward", AsOfDirection::Backward),
+            ("Forward", AsOfDirection::Forward),
+            ("nearest", AsOfDirection::Nearest),
+        ] {
+            let PlanNode::AsOfJoin {
+                kind: k,
+                condition,
+                as_of,
+                ..
+            } = node(&as_of_join_of(join_type, direction, &[]))
+            else {
+                panic!("not an as-of join")
+            };
+            assert_eq!(k, kind, "{join_type}");
+            assert!(matches!(condition, JoinCondition::On(_)));
+            assert_eq!(as_of.direction, want, "{direction}");
+            assert!(as_of.allow_exact && !as_of.as_written && as_of.tolerance.is_none());
+        }
+    }
+    for bad in [
+        as_of_join_of("right", "backward", &[]),
+        as_of_join_of("inner", "sideways", &[]),
+        as_of_join_of("inner", "backward", &["k"]),
+    ] {
+        assert_eq!(code(&bad), ErrorClass::KrishivUnsupportedFeature);
+    }
+}
+
 // ---- sort ------------------------------------------------------------------------------------
 
 fn order(name: &str, direction: i32, nulls: i32) -> expression::SortOrder {
@@ -860,6 +912,65 @@ fn with_columns_errors() {
     assert!(message(&with_columns(vec![alias_of(&["a", "b"], None)])).contains("[a, b]"));
     let metadata = with_columns(vec![alias_of(&["x"], Some("{\"k\":1}"))]);
     assert_eq!(code(&metadata), ErrorClass::KrishivUnsupportedFeature);
+}
+
+// ---- generators in select lists and withColumn ----------------------------------------------
+
+#[test]
+fn a_project_lifts_its_generators_like_the_dataframe_api() {
+    let r = project(vec![attr("a"), func("explode", vec![attr("b")])]);
+    let PlanNode::Project { input, exprs } = node(&r) else {
+        panic!("not Project")
+    };
+    assert!(matches!(input.node, PlanNode::Generate { .. }), "{input:?}");
+    assert_eq!(exprs.len(), 2);
+    // Two generators chain, a cross product.
+    let two = project(vec![
+        func("explode", vec![attr("b")]),
+        func("posexplode", vec![attr("b")]),
+    ]);
+    let PlanNode::Project { input, .. } = node(&two) else {
+        panic!("not Project")
+    };
+    let PlanNode::Generate { input: below, .. } = &input.node else {
+        panic!("not Generate")
+    };
+    assert!(matches!(below.node, PlanNode::Generate { .. }));
+    // Beside an aggregate the list is a global aggregation, whose generators the analyzer extracts.
+    let agg = project(vec![
+        func("explode", vec![attr("b")]),
+        func("count", vec![lit(LiteralType::Integer(1))]),
+    ]);
+    assert!(matches!(node(&agg), PlanNode::Aggregate { .. }));
+    // No generator: the plain projection.
+    assert!(matches!(
+        node(&project(vec![attr("a")])),
+        PlanNode::Project { .. }
+    ));
+}
+
+#[test]
+fn with_columns_lifts_a_generator_column() {
+    let mut generated = alias_of(&["x"], None);
+    generated.expr = Some(Box::new(func("explode", vec![attr("b")])));
+    let r = with_columns(vec![generated]);
+    let PlanNode::Project { input, .. } = node(&r) else {
+        panic!("not Project")
+    };
+    let PlanNode::WithColumns { input: below, .. } = &input.node else {
+        panic!("not WithColumns")
+    };
+    assert!(matches!(below.node, PlanNode::Generate { .. }));
+}
+
+#[test]
+fn with_columns_refuses_a_generator_beside_an_alias_reading_a_replaced_column() {
+    let mut generated = alias_of(&["x"], None);
+    generated.expr = Some(Box::new(func("explode", vec![attr("b")])));
+    let mut reader = alias_of(&["y"], None);
+    reader.expr = Some(Box::new(attr("x")));
+    let r = with_columns(vec![generated, reader]);
+    assert_eq!(code(&r), ErrorClass::KrishivUnsupportedFeature);
 }
 
 // ---- plan ids, unsupported relations ---------------------------------------------------------

@@ -83,6 +83,14 @@ pub trait TableProvider: Send + Sync + fmt::Debug {
         None
     }
 
+    /// Whether every scan of this provider reads the same rows (a table-format snapshot at one
+    /// version, an immutable in-memory table): a statement that reads it twice, as `MERGE`
+    /// reads its source, need not copy it first. The default is no (a file listing is taken
+    /// again per scan).
+    fn pinned(&self) -> bool {
+        false
+    }
+
     /// Sets of column names, each unique among the table's rows whose
     /// columns of the set are all non-NULL (a fact, never an estimate:
     /// [`Statistics::unique_keys`]). None by default; a [`FileTable`]
@@ -112,6 +120,35 @@ pub trait TableProviderResolver: Send + Sync + fmt::Debug {
     /// `TABLE_OR_VIEW_NOT_FOUND` when the table is gone;
     /// `KRISHIV_UNSUPPORTED_FEATURE` for a source the resolver cannot open.
     fn provider(&self, scan: &Scan) -> Result<Arc<dyn TableProvider>>;
+
+    /// Keeps `bound` for this plan and names it.
+    ///
+    /// # Errors
+    /// `KRISHIV_UNSUPPORTED_FEATURE` by default: a resolver that cannot hold one refuses the plan.
+    fn bind_scan(
+        &self,
+        bound: Arc<dyn crate::operators::BoundScan>,
+    ) -> Result<crate::operators::BoundScanId> {
+        let _ = bound;
+        Err(KrishivUnsupportedFeature {
+            feature: "a Python data source in this planning context".to_owned(),
+        }
+        .into())
+    }
+
+    /// The read [`Self::bind_scan`] named.
+    ///
+    /// # Errors
+    /// `INTERNAL_ERROR` by default and for an unknown id.
+    fn bound_scan(
+        &self,
+        id: crate::operators::BoundScanId,
+    ) -> Result<Arc<dyn crate::operators::BoundScan>> {
+        let _ = id;
+        Err(crate::error::internal(
+            "no bound scan in this context".to_owned(),
+        ))
+    }
 }
 
 /// The optimizer's [`Statistics`] read from table providers.
@@ -276,6 +313,10 @@ impl TableProvider for SpilledTable {
             rows: self.file.num_rows(),
             ..TableStats::default()
         })
+    }
+
+    fn pinned(&self) -> bool {
+        true
     }
 }
 

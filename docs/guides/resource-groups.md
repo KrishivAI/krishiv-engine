@@ -79,6 +79,20 @@ ORDER BY queued_ns DESC;
 
 `resource_group` is the group the query ran in. `queued_ns` is the time it waited for a slot, in nanoseconds.
 
+## See the groups and the sessions
+
+Two more system tables show the live state. They need no resource group file to be queried.
+
+```sql
+SELECT group_id, running, queued, hard_concurrency_limit, max_queued FROM system.resource_groups;
+SELECT session_id, principal, client_type, state, queries_running FROM system.sessions;
+```
+
+`system.resource_groups` has one row per group with its limits and live counters (`running`, `queued`,
+`memory_reserved_bytes`, `scan_bytes_in_window`). `system.sessions` has one row per client session, including
+its tags and how many queries it is running. The web console's Workload and Sessions pages show the same tables, and
+an operator can end a session there, which also cancels what it runs.
+
 ## Tag requests and cancel by tag
 
 A client can tag a query when it starts it, so that a group of related queries can be found and stopped together.

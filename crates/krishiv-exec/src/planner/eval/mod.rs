@@ -320,7 +320,13 @@ impl EvalEnv {
             legacy_statistical_aggregate: env.legacy_statistical_aggregate,
             zone: env.zone,
             zone_name: env.zone_name.clone(),
-            kernels: KernelCtx::new(),
+            kernels: KernelCtx::new().with_spark_version(
+                env.spark_version
+                    .as_deref()
+                    .and_then(krishiv_kernels::SparkVersion::from_line)
+                    // Absent: Spark 4.2, what plans written before the field ran.
+                    .unwrap_or(krishiv_kernels::SparkVersion::V4_2),
+            ),
             query_start_micros: env.query_start_micros,
             user: Arc::clone(&env.user),
             udfs: None,
@@ -356,6 +362,9 @@ impl EvalEnv {
             binary_output_style: (self.binary_style
                 != krishiv_kernels::binary_style::BinaryStyle::default())
             .then(|| Arc::from(self.binary_style.name())),
+            // Likewise only a version other than 4.2 (what an absent field means) is plan data.
+            spark_version: (self.kernels.spark_version() != krishiv_kernels::SparkVersion::V4_2)
+                .then(|| Arc::from(self.kernels.spark_version().line())),
         }
     }
 }
@@ -936,6 +945,12 @@ fn runs_anywhere(f: &ResolvedFunction, i: usize, ansi: bool) -> bool {
     f.args
         .get(i)
         .is_some_and(|a| !krishiv_plan::may_raise(a, ansi) && krishiv_plan::is_deterministic(a))
+}
+
+/// `e IS NOT NULL`, built after optimization (the optimizer folds it over a non-nullable `e`,
+/// which would drop `e`'s evaluation and so what it raises).
+pub(crate) fn is_not_null(e: Arc<dyn PhysExpr>) -> Arc<dyn PhysExpr> {
+    logic::is_null(false, e)
 }
 
 /// Kleene `l AND r`.

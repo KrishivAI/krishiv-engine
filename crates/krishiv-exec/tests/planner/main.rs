@@ -10,12 +10,15 @@
     reason = "test helpers sit outside #[test] fns; the TPC-H runs print their timings"
 )]
 
+mod asof_sites;
+mod barrier;
 mod broadcast_reuse;
 mod build_projection;
 mod conditionals;
 mod correlated_or;
 mod cse;
 mod date_arith;
+mod decided_scan;
 mod derived_keys;
 mod eager_aggregate;
 mod exchanges;
@@ -314,6 +317,10 @@ fn run_on(
         .build()
         .unwrap();
     let out = rt.block_on(async {
+        // The session reads decided scans before it submits; so does this harness.
+        plan.worker
+            .fill_reads(&plan.plan, std::future::pending())
+            .await?;
         let mut stream = runner
             .submit(plan.plan.clone(), plan.worker.clone(), Arc::clone(&query))
             .await?;

@@ -127,6 +127,7 @@ impl Graph {
             | PlanNode::Sort { input, .. }
             | PlanNode::Limit { input, .. }
             | PlanNode::Offset { input, .. }
+            | PlanNode::SecurityBarrier { input, .. }
             | PlanNode::Tail { input, .. }
             | PlanNode::JoinHint { input, .. }
             // A repartition reads its expressions' columns whatever is
@@ -145,6 +146,13 @@ impl Graph {
             }
             PlanNode::Join { left, right, .. } => {
                 let need = join_need(p, req);
+                child(left, Some(need.clone()));
+                child(right, Some(need));
+            }
+            // An as-of join reads its condition and match columns whatever is read above.
+            PlanNode::AsOfJoin { left, right, .. } => {
+                let mut need = req.clone();
+                p.for_each_expr(&mut |e| references_into(e, &mut need));
                 child(left, Some(need.clone()));
                 child(right, Some(need));
             }
@@ -364,6 +372,24 @@ impl Rewrite<'_> {
                     right: narrow(right, &need),
                     kind: *kind,
                     condition: condition.clone(),
+                };
+                replace(&rebuilt, node)
+            }
+            PlanNode::AsOfJoin {
+                left,
+                right,
+                kind,
+                condition,
+                as_of,
+            } => {
+                let mut need = req.clone();
+                rebuilt.for_each_expr(&mut |e| references_into(e, &mut need));
+                let node = PlanNode::AsOfJoin {
+                    left: narrow(left, &need),
+                    right: narrow(right, &need),
+                    kind: *kind,
+                    condition: condition.clone(),
+                    as_of: Arc::clone(as_of),
                 };
                 replace(&rebuilt, node)
             }

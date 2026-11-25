@@ -1,6 +1,6 @@
 ## __init__.py
 __all__
-__all__ = ['Console', 'LocalConnect', 'ProfileView', 'SparkConf', 'SparkSession', '__version__', 'build_info', 'metrics', 'session', 'start_local', 'ui']
+__all__ = ['Console', 'LocalConnect', 'ProfileView', 'SparkConf', 'SparkContext', 'SparkSession', '__version__', 'build_info', 'metrics', 'session', 'start_local', 'ui']
 def build_info() -> dict[str, str]
 def metrics() -> list[dict[str, Any]]
 def session() -> SparkSession
@@ -17,6 +17,7 @@ ArrowStream.def names(self) -> list[str]
 ArrowStream.def use_placeholder_names(self) -> None
 Column.def add(self, other: Column) -> Column
 Column.def alias(self, name: str) -> Column
+Column.def alias_all(self, names: list[str]) -> Column
 Column.def and_(self, other: Column) -> Column
 Column.def between(self, low: Column, high: Column) -> Column
 Column.def cast(self, to: str) -> Column
@@ -55,10 +56,13 @@ DataFrame.def agg(self, cols: list[Column]) -> DataFrame
 DataFrame.def alias(self, alias: str) -> DataFrame
 DataFrame.def cache(self) -> DataFrame
 DataFrame.def checkpoint(self, eager: bool=...) -> DataFrame
+DataFrame.def cogroup_apply_in_python(self, other: DataFrame, left_keys: list[Column], right_keys: list[Column], udf: AnonymousPythonUdf) -> DataFrame
 DataFrame.def col(self, name: str) -> Column
 DataFrame.def count(self) -> int
 DataFrame.def create_global_temp_view(self, name: str, replace: bool) -> None
 DataFrame.def create_or_replace_temp_view(self, name: str) -> None
+DataFrame.def create_temp_view(self, name: str) -> None
+DataFrame.def cube(self, cols: list[Column]) -> GroupedData
 DataFrame.def distinct(self) -> DataFrame
 DataFrame.def except_all(self, other: DataFrame) -> DataFrame
 DataFrame.def execute(self) -> ArrowStream
@@ -66,6 +70,7 @@ DataFrame.def explain(self, mode: str, json: bool=...) -> str
 DataFrame.def filter(self, condition: Column) -> DataFrame
 DataFrame.def filter_expr(self, condition: str) -> DataFrame
 DataFrame.def group_by(self, cols: list[Column]) -> GroupedData
+DataFrame.def grouping_sets(self, sets: list[list[Column]], keys: list[Column]) -> GroupedData
 DataFrame.def hint(self, name: str, params: list[Column]) -> DataFrame
 DataFrame.def intersect(self, other: DataFrame) -> DataFrame
 DataFrame.def intersect_all(self, other: DataFrame) -> DataFrame
@@ -73,14 +78,17 @@ DataFrame.def is_cached(self) -> bool
 DataFrame.def join(self, other: DataFrame, on: Column | None=..., using: list[str] | None=..., how: str=...) -> DataFrame
 DataFrame.def limit(self, n: int) -> DataFrame
 DataFrame.def local_checkpoint(self, eager: bool=..., level: tuple[bool, bool, bool, bool, int] | None=...) -> DataFrame
+DataFrame.def map_in_python(self, udf: AnonymousPythonUdf, barrier: bool) -> DataFrame
 DataFrame.def observe(self, observation: Observation, metrics: list[Column]) -> DataFrame
 DataFrame.def offset(self, n: int) -> DataFrame
 DataFrame.def order_by(self, cols: list[Column]) -> DataFrame
 DataFrame.def persist(self, use_disk: bool, use_memory: bool, use_offheap: bool, deserialized: bool, replication: int) -> DataFrame
-DataFrame.def sample(self, with_replacement: bool, fraction: float, seed: int) -> DataFrame
+DataFrame.def rollup(self, cols: list[Column]) -> GroupedData
 DataFrame.def schema(self) -> list[tuple[str, str, bool]]
+DataFrame.def schema_json(self) -> list[tuple[str, str, bool]]
 DataFrame.def select(self, cols: list[Column]) -> DataFrame
 DataFrame.def select_expr(self, exprs: list[str]) -> DataFrame
+DataFrame.def sort_within_partitions(self, cols: list[Column]) -> DataFrame
 DataFrame.def storage_level(self) -> tuple[bool, bool, bool, bool, int]
 DataFrame.def subtract(self, other: DataFrame) -> DataFrame
 DataFrame.def to_df(self, names: list[str]) -> DataFrame
@@ -93,6 +101,8 @@ DataFrame.def write(self, format: str, mode: str, path: str, options: list[tuple
 DataFrame.def write_table(self, insert_into: bool, table: str, format: str | None, mode: str, options: list[tuple[str, str]] | None=..., partition_by: list[str] | None=..., bucket_by: tuple[int, list[str]] | None=..., sort_by: list[str] | None=...) -> None
 DataFrame.def write_to_table(self, table: str, mode: str, provider: str | None=..., options: list[tuple[str, str]] | None=..., properties: list[tuple[str, str]] | None=..., partitioned_by: list[str] | None=..., cluster_by: list[str] | None=..., condition: str | None=...) -> None
 GroupedData.def agg(self, cols: list[Column]) -> DataFrame
+GroupedData.def apply_in_python(self, udf: AnonymousPythonUdf) -> DataFrame
+GroupedData.def pivot(self, col: Column, values: list[Column]) -> GroupedData
 LocalConnectServer.@property def connection_string(self) -> str
 LocalConnectServer.@property def port(self) -> int
 LocalConnectServer.@property def token(self) -> str
@@ -102,6 +112,7 @@ LocalConnectServer.def stop(self) -> None
 Observation.@property def name(self) -> str
 Observation.def __new__(cls, name: str | None=...) -> Observation
 Observation.def get(self) -> ArrowStream
+Session.@staticmethod def conf_is_registered(key: str) -> bool
 Session.@staticmethod def is_dataframe_table(name: str) -> bool
 Session.def __new__(cls, config: list[tuple[str, str]] | None=...) -> Session
 Session.def cache_reserved(self) -> int
@@ -134,7 +145,7 @@ Session.def metrics(self) -> list[dict[str, object]]
 Session.def read(self, format: str, paths: list[str], options: list[tuple[str, str]] | None=..., schema_json: str | None=..., schema_ddl: str | None=...) -> DataFrame
 Session.def refresh_files(self) -> None
 Session.def refresh_table(self, name: str) -> None
-Session.def register_python_source(self, label: str, schema: object, read: object) -> DataFrame
+Session.def register_python_source(self, label: str, schema: object, read: object, plan: object | None=None) -> DataFrame
 Session.def register_python_udf(self, name: str, eval_type: int, return_type: str, deterministic: bool, thread_safe: bool, wrapper: object) -> int
 Session.def sql(self, query: str) -> DataFrame
 Session.def table(self, name: str) -> DataFrame
@@ -147,7 +158,7 @@ WindowSpec.def partition_by(self, cols: list[Column]) -> WindowSpec
 WindowSpec.def range_between(self, start: int, end: int) -> WindowSpec
 WindowSpec.def rows_between(self, start: int, end: int) -> WindowSpec
 __all__
-__all__ = ['AnonymousPythonUdf', 'ArrowStream', 'Column', 'Console', 'DataFrame', 'GroupedData', 'LocalConnectServer', 'Observation', 'Session', 'WindowSpec', '__allocator__', '__commit__', '__ui__', '__version__', '_udf_pool_shutdown', '_udf_runner_conf', 'call_function', 'col', 'count_distinct', 'count_star', 'expr', 'lambda_function', 'lit', 'map_literal']
+__all__ = ['AnonymousPythonUdf', 'ArrowStream', 'Column', 'Console', 'DataFrame', 'GroupedData', 'LocalConnectServer', 'Observation', 'Session', 'WindowSpec', '__allocator__', '__allocator_policy__', '__commit__', '__ui__', '__version__', '_pressure_epoch', '_udf_pool_shutdown', '_udf_runner_conf', 'call_function', 'col', 'count_distinct', 'count_star', 'expr', 'lambda_function', 'lit', 'map_literal']
 class AnonymousPythonUdf()
 class ArrowStream()
 class Column()
@@ -219,6 +230,7 @@ class PySparkException(Exception)
 class PySparkImportError(PySparkException, ImportError)
 class PySparkIndexError(PySparkException, IndexError)
 class PySparkKeyError(PySparkException, KeyError)
+class PySparkNotImplementedAttributeError(PySparkNotImplementedError, AttributeError)
 class PySparkNotImplementedError(PySparkException, NotImplementedError)
 class PySparkRuntimeError(PySparkException, RuntimeError)
 class PySparkTypeError(PySparkException, TypeError)
@@ -236,6 +248,7 @@ class UnsupportedFeatureImportError(UnsupportedOperationException, ImportError)
 class UnsupportedOperationException(PySparkException)
 def not_expected_type(arg_name: str, expected: str, value: object) -> PySparkTypeError
 def not_implemented(feature: str) -> PySparkNotImplementedError
+def not_implemented_attribute(feature: str) -> PySparkNotImplementedAttributeError
 def unsupported_attribute(feature: str) -> UnsupportedFeatureAttributeError
 def unsupported_feature(feature: str) -> UnsupportedOperationException
 def unsupported_module(feature: str) -> UnsupportedFeatureImportError
@@ -244,7 +257,7 @@ __all__
 __all__ = ['Catalog', 'Column', 'DataFrame', 'DataFrameNaFunctions', 'DataFrameReader', 'DataFrameStatFunctions', 'DataFrameWriter', 'DataFrameWriterV2', 'GroupedData', 'Observation', 'Row', 'RuntimeConfig', 'SparkSession', 'UDFRegistration', 'Window', 'WindowSpec', 'functions', 'types']
 ## sql/_generated_functions.py
 __all__
-__all__ = ['abs', 'acos', 'acosh', 'add_months', 'aes_decrypt', 'aes_encrypt', 'any_value', 'approxCountDistinct', 'approx_count_distinct', 'approx_percentile', 'array', 'array_agg', 'array_append', 'array_compact', 'array_contains', 'array_distinct', 'array_except', 'array_insert', 'array_intersect', 'array_join', 'array_max', 'array_min', 'array_position', 'array_prepend', 'array_remove', 'array_repeat', 'array_size', 'array_union', 'arrays_overlap', 'arrays_zip', 'ascii', 'asin', 'asinh', 'assert_true', 'atan', 'atan2', 'atanh', 'avg', 'base64', 'bin', 'bit_and', 'bit_count', 'bit_get', 'bit_length', 'bit_or', 'bit_xor', 'bitmap_and_agg', 'bitmap_bit_position', 'bitmap_bucket_number', 'bitmap_construct_agg', 'bitmap_count', 'bitmap_or_agg', 'bitwiseNOT', 'bitwise_not', 'bool_and', 'bool_or', 'bround', 'btrim', 'cardinality', 'cbrt', 'ceil', 'ceiling', 'char', 'char_length', 'character_length', 'chr', 'coalesce', 'collate', 'collation', 'collect_list', 'collect_set', 'collect_union', 'concat_ws', 'contains', 'conv', 'corr', 'cos', 'cosh', 'cot', 'count_if', 'count_min_sketch', 'counter_diff', 'covar_pop', 'covar_samp', 'crc32', 'create_map', 'csc', 'cume_dist', 'curdate', 'current_catalog', 'current_database', 'current_date', 'current_path', 'current_schema', 'current_timestamp', 'current_timezone', 'current_user', 'date_add', 'date_diff', 'date_format', 'date_from_unix_date', 'date_part', 'date_sub', 'date_trunc', 'dateadd', 'datediff', 'datepart', 'day', 'dayname', 'dayofmonth', 'dayofweek', 'dayofyear', 'decode', 'degrees', 'dense_rank', 'e', 'element_at', 'elt', 'encode', 'endswith', 'equal_null', 'every', 'exp', 'expm1', 'extract', 'factorial', 'find_in_set', 'first', 'first_value', 'flatten', 'floor', 'format_number', 'format_string', 'from_base32', 'from_csv', 'from_json', 'from_unixtime', 'from_utc_timestamp', 'from_xml', 'get', 'get_json_object', 'getbit', 'greatest', 'grouping', 'grouping_id', 'hash', 'hex', 'histogram_numeric', 'hll_sketch_agg', 'hll_sketch_estimate', 'hll_union', 'hll_union_agg', 'hmac', 'hour', 'hypot', 'ifnull', 'ilike', 'initcap', 'input_file_block_length', 'input_file_block_start', 'input_file_name', 'instr', 'is_valid_utf8', 'is_valid_variant', 'is_variant_null', 'isnan', 'isnotnull', 'isnull', 'jaro_winkler_similarity', 'java_method', 'json_array_length', 'json_object_keys', 'json_tuple', 'kll_merge_agg_bigint', 'kll_merge_agg_double', 'kll_merge_agg_float', 'kll_sketch_agg_bigint', 'kll_sketch_agg_double', 'kll_sketch_agg_float', 'kll_sketch_get_n_bigint', 'kll_sketch_get_n_double', 'kll_sketch_get_n_float', 'kll_sketch_get_quantile_bigint', 'kll_sketch_get_quantile_double', 'kll_sketch_get_quantile_float', 'kll_sketch_get_rank_bigint', 'kll_sketch_get_rank_double', 'kll_sketch_get_rank_float', 'kll_sketch_merge_bigint', 'kll_sketch_merge_double', 'kll_sketch_merge_float', 'kll_sketch_to_string_bigint', 'kll_sketch_to_string_double', 'kll_sketch_to_string_float', 'kurtosis', 'lag', 'last', 'last_day', 'last_value', 'lcase', 'lead', 'least', 'left', 'length', 'levenshtein', 'like', 'listagg', 'ln', 'localtimestamp', 'locate', 'log10', 'log1p', 'log2', 'lower', 'lpad', 'ltrim', 'make_date', 'make_timestamp', 'make_timestamp_ltz', 'make_timestamp_ntz', 'make_valid_utf8', 'map_concat', 'map_contains_key', 'map_entries', 'map_from_arrays', 'map_from_entries', 'map_keys', 'map_values', 'mask', 'max', 'max_by', 'md5', 'mean', 'median', 'min', 'min_by', 'minute', 'mode', 'monotonically_increasing_id', 'month', 'monthname', 'months_between', 'named_struct', 'nanvl', 'negate', 'negative', 'next_day', 'now', 'nth_value', 'ntile', 'nullif', 'nullifzero', 'nvl', 'nvl2', 'octet_length', 'overlay', 'parse_json', 'parse_url', 'percent_rank', 'percentile', 'percentile_approx', 'pi', 'pmod', 'position', 'positive', 'pow', 'power', 'printf', 'quarter', 'quote', 'radians', 'raise_error', 'rand', 'randn', 'random', 'randstr', 'rank', 'reflect', 'regexp', 'regexp_count', 'regexp_extract', 'regexp_extract_all', 'regexp_instr', 'regexp_like', 'regexp_replace', 'regexp_substr', 'regr_avgx', 'regr_avgy', 'regr_count', 'regr_intercept', 'regr_r2', 'regr_slope', 'regr_sxx', 'regr_sxy', 'regr_syy', 'repeat', 'replace', 'reverse', 'right', 'rint', 'rlike', 'round', 'row_number', 'rpad', 'rtrim', 'schema_of_csv', 'schema_of_json', 'schema_of_variant', 'schema_of_variant_agg', 'schema_of_xml', 'sec', 'second', 'sentences', 'sequence', 'session_user', 'session_window', 'sha', 'sha1', 'sha2', 'shiftLeft', 'shiftRight', 'shiftRightUnsigned', 'shiftleft', 'shiftright', 'shiftrightunsigned', 'shuffle', 'sign', 'signum', 'sin', 'sinh', 'size', 'skewness', 'slice', 'some', 'sort_array', 'soundex', 'spark_partition_id', 'split', 'split_part', 'sqrt', 'startswith', 'std', 'stddev', 'stddev_pop', 'stddev_samp', 'str_to_map', 'string_agg', 'struct', 'substr', 'substring', 'substring_index', 'sum', 'tan', 'tanh', 'theta_difference', 'theta_intersection', 'theta_intersection_agg', 'theta_sketch_agg', 'theta_sketch_estimate', 'theta_union', 'theta_union_agg', 'time_bucket', 'timestamp_add', 'timestamp_diff', 'timestamp_micros', 'timestamp_millis', 'timestamp_seconds', 'toDegrees', 'toRadians', 'to_base32', 'to_binary', 'to_char', 'to_csv', 'to_date', 'to_json', 'to_number', 'to_timestamp', 'to_timestamp_ltz', 'to_timestamp_ntz', 'to_unix_timestamp', 'to_utc_timestamp', 'to_varchar', 'to_variant_object', 'to_xml', 'translate', 'trim', 'trunc', 'try_add', 'try_aes_decrypt', 'try_avg', 'try_divide', 'try_element_at', 'try_make_timestamp', 'try_make_timestamp_ltz', 'try_make_timestamp_ntz', 'try_mod', 'try_multiply', 'try_parse_json', 'try_parse_url', 'try_reflect', 'try_subtract', 'try_sum', 'try_to_binary', 'try_to_date', 'try_to_number', 'try_to_timestamp', 'try_url_decode', 'try_validate_utf8', 'try_variant_array_append', 'try_variant_get', 'try_variant_insert', 'try_variant_set', 'tuple_difference_double', 'tuple_difference_integer', 'tuple_difference_theta_double', 'tuple_difference_theta_integer', 'tuple_intersection_agg_double', 'tuple_intersection_agg_integer', 'tuple_intersection_double', 'tuple_intersection_integer', 'tuple_intersection_theta_double', 'tuple_intersection_theta_integer', 'tuple_sketch_agg_double', 'tuple_sketch_agg_integer', 'tuple_sketch_estimate_double', 'tuple_sketch_estimate_integer', 'tuple_sketch_summary_double', 'tuple_sketch_summary_integer', 'tuple_sketch_theta_double', 'tuple_sketch_theta_integer', 'tuple_union_agg_double', 'tuple_union_agg_integer', 'tuple_union_double', 'tuple_union_integer', 'tuple_union_theta_double', 'tuple_union_theta_integer', 'typeof', 'ucase', 'unbase64', 'unhex', 'uniform', 'unix_date', 'unix_micros', 'unix_millis', 'unix_seconds', 'upper', 'url_decode', 'url_encode', 'user', 'uuid', 'validate_utf8', 'var_pop', 'var_samp', 'variance', 'variant_array_append', 'variant_delete', 'variant_get', 'variant_insert', 'variant_set', 'variant_strip_nulls', 'version', 'weekday', 'weekofyear', 'width_bucket', 'xpath', 'xpath_boolean', 'xpath_double', 'xpath_float', 'xpath_int', 'xpath_long', 'xpath_number', 'xpath_short', 'xpath_string', 'xxhash64', 'year', 'zeroifnull']
+__all__ = ['abs', 'acos', 'acosh', 'add_months', 'aes_decrypt', 'aes_encrypt', 'any_value', 'approxCountDistinct', 'approx_count_distinct', 'approx_percentile', 'array', 'array_agg', 'array_append', 'array_compact', 'array_contains', 'array_distinct', 'array_except', 'array_insert', 'array_intersect', 'array_join', 'array_max', 'array_min', 'array_position', 'array_prepend', 'array_remove', 'array_repeat', 'array_size', 'array_union', 'arrays_overlap', 'arrays_zip', 'ascii', 'asin', 'asinh', 'assert_true', 'atan', 'atan2', 'atanh', 'avg', 'base64', 'bin', 'bit_and', 'bit_count', 'bit_get', 'bit_length', 'bit_or', 'bit_xor', 'bitmap_and_agg', 'bitmap_bit_position', 'bitmap_bucket_number', 'bitmap_construct_agg', 'bitmap_count', 'bitmap_or_agg', 'bitwiseNOT', 'bitwise_not', 'bool_and', 'bool_or', 'bround', 'btrim', 'cardinality', 'cbrt', 'ceil', 'ceiling', 'char', 'char_length', 'character_length', 'chr', 'coalesce', 'collate', 'collation', 'collect_list', 'collect_set', 'collect_union', 'concat_ws', 'contains', 'conv', 'corr', 'cos', 'cosh', 'cot', 'count_if', 'count_min_sketch', 'counter_diff', 'covar_pop', 'covar_samp', 'crc32', 'create_map', 'csc', 'cume_dist', 'curdate', 'current_catalog', 'current_database', 'current_date', 'current_path', 'current_schema', 'current_timestamp', 'current_timezone', 'current_user', 'date_add', 'date_diff', 'date_format', 'date_from_unix_date', 'date_part', 'date_sub', 'date_trunc', 'dateadd', 'datediff', 'datepart', 'day', 'dayname', 'dayofmonth', 'dayofweek', 'dayofyear', 'decode', 'degrees', 'dense_rank', 'e', 'element_at', 'elt', 'encode', 'endswith', 'equal_null', 'every', 'exp', 'expm1', 'extract', 'factorial', 'find_in_set', 'first', 'first_value', 'flatten', 'floor', 'format_number', 'format_string', 'from_base32', 'from_csv', 'from_json', 'from_unixtime', 'from_utc_timestamp', 'from_xml', 'get', 'get_json_object', 'getbit', 'greatest', 'grouping', 'grouping_id', 'hash', 'hex', 'histogram_numeric', 'hll_sketch_agg', 'hll_sketch_estimate', 'hll_union', 'hll_union_agg', 'hmac', 'hour', 'hypot', 'ifnull', 'ilike', 'initcap', 'input_file_block_length', 'input_file_block_start', 'input_file_name', 'instr', 'is_valid_utf8', 'is_valid_variant', 'is_variant_null', 'isnan', 'isnotnull', 'isnull', 'jaro_winkler_similarity', 'java_method', 'json_array_length', 'json_object_keys', 'json_tuple', 'kll_merge_agg_bigint', 'kll_merge_agg_double', 'kll_merge_agg_float', 'kll_sketch_agg_bigint', 'kll_sketch_agg_double', 'kll_sketch_agg_float', 'kll_sketch_get_n_bigint', 'kll_sketch_get_n_double', 'kll_sketch_get_n_float', 'kll_sketch_get_quantile_bigint', 'kll_sketch_get_quantile_double', 'kll_sketch_get_quantile_float', 'kll_sketch_get_rank_bigint', 'kll_sketch_get_rank_double', 'kll_sketch_get_rank_float', 'kll_sketch_merge_bigint', 'kll_sketch_merge_double', 'kll_sketch_merge_float', 'kll_sketch_to_string_bigint', 'kll_sketch_to_string_double', 'kll_sketch_to_string_float', 'kurtosis', 'lag', 'last', 'last_day', 'last_value', 'lcase', 'lead', 'least', 'left', 'length', 'levenshtein', 'like', 'listagg', 'ln', 'localtimestamp', 'locate', 'log10', 'log1p', 'log2', 'lower', 'lpad', 'ltrim', 'make_date', 'make_timestamp', 'make_timestamp_ltz', 'make_timestamp_ntz', 'make_valid_utf8', 'map_concat', 'map_contains_key', 'map_entries', 'map_from_arrays', 'map_from_entries', 'map_keys', 'map_values', 'mask', 'max', 'max_by', 'md5', 'mean', 'median', 'min', 'min_by', 'minute', 'mode', 'monotonically_increasing_id', 'month', 'monthname', 'months_between', 'named_struct', 'nanvl', 'negate', 'negative', 'next_day', 'now', 'nth_value', 'ntile', 'nullif', 'nullifzero', 'nvl', 'nvl2', 'octet_length', 'overlay', 'parse_json', 'parse_url', 'percent_rank', 'percentile', 'percentile_approx', 'pi', 'pmod', 'position', 'positive', 'pow', 'power', 'printf', 'quarter', 'quote', 'radians', 'raise_error', 'rand', 'randn', 'random', 'randstr', 'rank', 'reflect', 'regexp', 'regexp_count', 'regexp_extract', 'regexp_extract_all', 'regexp_instr', 'regexp_like', 'regexp_replace', 'regexp_substr', 'regr_avgx', 'regr_avgy', 'regr_count', 'regr_intercept', 'regr_r2', 'regr_slope', 'regr_sxx', 'regr_sxy', 'regr_syy', 'repeat', 'replace', 'reverse', 'right', 'rint', 'rlike', 'round', 'row_number', 'rpad', 'rtrim', 'schema_of_csv', 'schema_of_json', 'schema_of_variant', 'schema_of_variant_agg', 'schema_of_xml', 'sec', 'second', 'sentences', 'sequence', 'session_user', 'session_window', 'sha', 'sha1', 'sha2', 'shiftLeft', 'shiftRight', 'shiftRightUnsigned', 'shiftleft', 'shiftright', 'shiftrightunsigned', 'shuffle', 'sign', 'signum', 'sin', 'sinh', 'size', 'skewness', 'slice', 'some', 'sort_array', 'soundex', 'spark_partition_id', 'split', 'split_part', 'sqrt', 'startswith', 'std', 'stddev', 'stddev_pop', 'stddev_samp', 'str_to_map', 'string_agg', 'struct', 'substr', 'substring', 'substring_index', 'sum', 'tan', 'tanh', 'theta_difference', 'theta_intersection', 'theta_intersection_agg', 'theta_sketch_agg', 'theta_sketch_estimate', 'theta_union', 'theta_union_agg', 'time_bucket', 'timestamp_add', 'timestamp_diff', 'timestamp_micros', 'timestamp_millis', 'timestamp_seconds', 'toDegrees', 'toRadians', 'to_base32', 'to_binary', 'to_char', 'to_csv', 'to_date', 'to_json', 'to_number', 'to_timestamp', 'to_timestamp_ltz', 'to_timestamp_ntz', 'to_unix_timestamp', 'to_utc_timestamp', 'to_varchar', 'to_variant_object', 'to_xml', 'translate', 'trim', 'trunc', 'try_add', 'try_aes_decrypt', 'try_avg', 'try_divide', 'try_element_at', 'try_make_timestamp', 'try_make_timestamp_ltz', 'try_make_timestamp_ntz', 'try_mod', 'try_multiply', 'try_parse_json', 'try_parse_url', 'try_reflect', 'try_subtract', 'try_sum', 'try_to_binary', 'try_to_date', 'try_to_number', 'try_to_timestamp', 'try_url_decode', 'try_validate_utf8', 'try_variant_array_append', 'try_variant_get', 'try_variant_insert', 'try_variant_set', 'tuple_difference_double', 'tuple_difference_integer', 'tuple_difference_theta_double', 'tuple_difference_theta_integer', 'tuple_intersection_agg_double', 'tuple_intersection_agg_integer', 'tuple_intersection_double', 'tuple_intersection_integer', 'tuple_intersection_theta_double', 'tuple_intersection_theta_integer', 'tuple_sketch_agg_double', 'tuple_sketch_agg_integer', 'tuple_sketch_estimate_double', 'tuple_sketch_estimate_integer', 'tuple_sketch_summary_double', 'tuple_sketch_summary_integer', 'tuple_sketch_theta_double', 'tuple_sketch_theta_integer', 'tuple_union_agg_double', 'tuple_union_agg_integer', 'tuple_union_double', 'tuple_union_integer', 'tuple_union_theta_double', 'tuple_union_theta_integer', 'typeof', 'ucase', 'unbase64', 'unhex', 'uniform', 'unix_date', 'unix_micros', 'unix_millis', 'unix_seconds', 'upper', 'url_decode', 'url_encode', 'user', 'uuid', 'validate_utf8', 'var_pop', 'var_samp', 'variance', 'variant_array_append', 'variant_delete', 'variant_get', 'variant_insert', 'variant_set', 'variant_strip_nulls', 'vector_avg', 'vector_cosine_similarity', 'vector_inner_product', 'vector_l2_distance', 'vector_norm', 'vector_normalize', 'vector_sum', 'version', 'weekday', 'weekofyear', 'width_bucket', 'xpath', 'xpath_boolean', 'xpath_double', 'xpath_float', 'xpath_int', 'xpath_long', 'xpath_number', 'xpath_short', 'xpath_string', 'xxhash64', 'year', 'zeroifnull']
 def abs(col: ColumnOrName) -> Column
 def acos(col: ColumnOrName) -> Column
 def acosh(col: ColumnOrName) -> Column
@@ -705,6 +718,13 @@ def variant_get(v: ColumnOrName, path: Column | str, targetType: str) -> Column
 def variant_insert(v: ColumnOrName, path: Column | str, value: ColumnOrName) -> Column
 def variant_set(v: ColumnOrName, path: Column | str, value: ColumnOrName, create_if_missing: bool=True) -> Column
 def variant_strip_nulls(v: ColumnOrName, include_arrays: bool=True) -> Column
+def vector_avg(col: ColumnOrName) -> Column
+def vector_cosine_similarity(left: ColumnOrName, right: ColumnOrName) -> Column
+def vector_inner_product(left: ColumnOrName, right: ColumnOrName) -> Column
+def vector_l2_distance(left: ColumnOrName, right: ColumnOrName) -> Column
+def vector_norm(vector: ColumnOrName, degree: ColumnOrName | None=None) -> Column
+def vector_normalize(vector: ColumnOrName, degree: ColumnOrName | None=None) -> Column
+def vector_sum(col: ColumnOrName) -> Column
 def version() -> Column
 def weekday(col: ColumnOrName) -> Column
 def weekofyear(col: ColumnOrName) -> Column
@@ -723,7 +743,7 @@ def year(col: ColumnOrName) -> Column
 def zeroifnull(col: ColumnOrName) -> Column
 ## sql/_generated_functions.pyi
 __all__
-__all__ = ['abs', 'acos', 'acosh', 'add_months', 'aes_decrypt', 'aes_encrypt', 'any_value', 'approxCountDistinct', 'approx_count_distinct', 'approx_percentile', 'array', 'array_agg', 'array_append', 'array_compact', 'array_contains', 'array_distinct', 'array_except', 'array_insert', 'array_intersect', 'array_join', 'array_max', 'array_min', 'array_position', 'array_prepend', 'array_remove', 'array_repeat', 'array_size', 'array_union', 'arrays_overlap', 'arrays_zip', 'ascii', 'asin', 'asinh', 'assert_true', 'atan', 'atan2', 'atanh', 'avg', 'base64', 'bin', 'bit_and', 'bit_count', 'bit_get', 'bit_length', 'bit_or', 'bit_xor', 'bitmap_and_agg', 'bitmap_bit_position', 'bitmap_bucket_number', 'bitmap_construct_agg', 'bitmap_count', 'bitmap_or_agg', 'bitwiseNOT', 'bitwise_not', 'bool_and', 'bool_or', 'bround', 'btrim', 'cardinality', 'cbrt', 'ceil', 'ceiling', 'char', 'char_length', 'character_length', 'chr', 'coalesce', 'collate', 'collation', 'collect_list', 'collect_set', 'collect_union', 'concat_ws', 'contains', 'conv', 'corr', 'cos', 'cosh', 'cot', 'count_if', 'count_min_sketch', 'counter_diff', 'covar_pop', 'covar_samp', 'crc32', 'create_map', 'csc', 'cume_dist', 'curdate', 'current_catalog', 'current_database', 'current_date', 'current_path', 'current_schema', 'current_timestamp', 'current_timezone', 'current_user', 'date_add', 'date_diff', 'date_format', 'date_from_unix_date', 'date_part', 'date_sub', 'date_trunc', 'dateadd', 'datediff', 'datepart', 'day', 'dayname', 'dayofmonth', 'dayofweek', 'dayofyear', 'decode', 'degrees', 'dense_rank', 'e', 'element_at', 'elt', 'encode', 'endswith', 'equal_null', 'every', 'exp', 'expm1', 'extract', 'factorial', 'find_in_set', 'first', 'first_value', 'flatten', 'floor', 'format_number', 'format_string', 'from_base32', 'from_csv', 'from_json', 'from_unixtime', 'from_utc_timestamp', 'from_xml', 'get', 'get_json_object', 'getbit', 'greatest', 'grouping', 'grouping_id', 'hash', 'hex', 'histogram_numeric', 'hll_sketch_agg', 'hll_sketch_estimate', 'hll_union', 'hll_union_agg', 'hmac', 'hour', 'hypot', 'ifnull', 'ilike', 'initcap', 'input_file_block_length', 'input_file_block_start', 'input_file_name', 'instr', 'is_valid_utf8', 'is_valid_variant', 'is_variant_null', 'isnan', 'isnotnull', 'isnull', 'jaro_winkler_similarity', 'java_method', 'json_array_length', 'json_object_keys', 'json_tuple', 'kll_merge_agg_bigint', 'kll_merge_agg_double', 'kll_merge_agg_float', 'kll_sketch_agg_bigint', 'kll_sketch_agg_double', 'kll_sketch_agg_float', 'kll_sketch_get_n_bigint', 'kll_sketch_get_n_double', 'kll_sketch_get_n_float', 'kll_sketch_get_quantile_bigint', 'kll_sketch_get_quantile_double', 'kll_sketch_get_quantile_float', 'kll_sketch_get_rank_bigint', 'kll_sketch_get_rank_double', 'kll_sketch_get_rank_float', 'kll_sketch_merge_bigint', 'kll_sketch_merge_double', 'kll_sketch_merge_float', 'kll_sketch_to_string_bigint', 'kll_sketch_to_string_double', 'kll_sketch_to_string_float', 'kurtosis', 'lag', 'last', 'last_day', 'last_value', 'lcase', 'lead', 'least', 'left', 'length', 'levenshtein', 'like', 'listagg', 'ln', 'localtimestamp', 'locate', 'log10', 'log1p', 'log2', 'lower', 'lpad', 'ltrim', 'make_date', 'make_timestamp', 'make_timestamp_ltz', 'make_timestamp_ntz', 'make_valid_utf8', 'map_concat', 'map_contains_key', 'map_entries', 'map_from_arrays', 'map_from_entries', 'map_keys', 'map_values', 'mask', 'max', 'max_by', 'md5', 'mean', 'median', 'min', 'min_by', 'minute', 'mode', 'monotonically_increasing_id', 'month', 'monthname', 'months_between', 'named_struct', 'nanvl', 'negate', 'negative', 'next_day', 'now', 'nth_value', 'ntile', 'nullif', 'nullifzero', 'nvl', 'nvl2', 'octet_length', 'overlay', 'parse_json', 'parse_url', 'percent_rank', 'percentile', 'percentile_approx', 'pi', 'pmod', 'position', 'positive', 'pow', 'power', 'printf', 'quarter', 'quote', 'radians', 'raise_error', 'rand', 'randn', 'random', 'randstr', 'rank', 'reflect', 'regexp', 'regexp_count', 'regexp_extract', 'regexp_extract_all', 'regexp_instr', 'regexp_like', 'regexp_replace', 'regexp_substr', 'regr_avgx', 'regr_avgy', 'regr_count', 'regr_intercept', 'regr_r2', 'regr_slope', 'regr_sxx', 'regr_sxy', 'regr_syy', 'repeat', 'replace', 'reverse', 'right', 'rint', 'rlike', 'round', 'row_number', 'rpad', 'rtrim', 'schema_of_csv', 'schema_of_json', 'schema_of_variant', 'schema_of_variant_agg', 'schema_of_xml', 'sec', 'second', 'sentences', 'sequence', 'session_user', 'session_window', 'sha', 'sha1', 'sha2', 'shiftLeft', 'shiftRight', 'shiftRightUnsigned', 'shiftleft', 'shiftright', 'shiftrightunsigned', 'shuffle', 'sign', 'signum', 'sin', 'sinh', 'size', 'skewness', 'slice', 'some', 'sort_array', 'soundex', 'spark_partition_id', 'split', 'split_part', 'sqrt', 'startswith', 'std', 'stddev', 'stddev_pop', 'stddev_samp', 'str_to_map', 'string_agg', 'struct', 'substr', 'substring', 'substring_index', 'sum', 'tan', 'tanh', 'theta_difference', 'theta_intersection', 'theta_intersection_agg', 'theta_sketch_agg', 'theta_sketch_estimate', 'theta_union', 'theta_union_agg', 'time_bucket', 'timestamp_add', 'timestamp_diff', 'timestamp_micros', 'timestamp_millis', 'timestamp_seconds', 'toDegrees', 'toRadians', 'to_base32', 'to_binary', 'to_char', 'to_csv', 'to_date', 'to_json', 'to_number', 'to_timestamp', 'to_timestamp_ltz', 'to_timestamp_ntz', 'to_unix_timestamp', 'to_utc_timestamp', 'to_varchar', 'to_variant_object', 'to_xml', 'translate', 'trim', 'trunc', 'try_add', 'try_aes_decrypt', 'try_avg', 'try_divide', 'try_element_at', 'try_make_timestamp', 'try_make_timestamp_ltz', 'try_make_timestamp_ntz', 'try_mod', 'try_multiply', 'try_parse_json', 'try_parse_url', 'try_reflect', 'try_subtract', 'try_sum', 'try_to_binary', 'try_to_date', 'try_to_number', 'try_to_timestamp', 'try_url_decode', 'try_validate_utf8', 'try_variant_array_append', 'try_variant_get', 'try_variant_insert', 'try_variant_set', 'tuple_difference_double', 'tuple_difference_integer', 'tuple_difference_theta_double', 'tuple_difference_theta_integer', 'tuple_intersection_agg_double', 'tuple_intersection_agg_integer', 'tuple_intersection_double', 'tuple_intersection_integer', 'tuple_intersection_theta_double', 'tuple_intersection_theta_integer', 'tuple_sketch_agg_double', 'tuple_sketch_agg_integer', 'tuple_sketch_estimate_double', 'tuple_sketch_estimate_integer', 'tuple_sketch_summary_double', 'tuple_sketch_summary_integer', 'tuple_sketch_theta_double', 'tuple_sketch_theta_integer', 'tuple_union_agg_double', 'tuple_union_agg_integer', 'tuple_union_double', 'tuple_union_integer', 'tuple_union_theta_double', 'tuple_union_theta_integer', 'typeof', 'ucase', 'unbase64', 'unhex', 'uniform', 'unix_date', 'unix_micros', 'unix_millis', 'unix_seconds', 'upper', 'url_decode', 'url_encode', 'user', 'uuid', 'validate_utf8', 'var_pop', 'var_samp', 'variance', 'variant_array_append', 'variant_delete', 'variant_get', 'variant_insert', 'variant_set', 'variant_strip_nulls', 'version', 'weekday', 'weekofyear', 'width_bucket', 'xpath', 'xpath_boolean', 'xpath_double', 'xpath_float', 'xpath_int', 'xpath_long', 'xpath_number', 'xpath_short', 'xpath_string', 'xxhash64', 'year', 'zeroifnull']
+__all__ = ['abs', 'acos', 'acosh', 'add_months', 'aes_decrypt', 'aes_encrypt', 'any_value', 'approxCountDistinct', 'approx_count_distinct', 'approx_percentile', 'array', 'array_agg', 'array_append', 'array_compact', 'array_contains', 'array_distinct', 'array_except', 'array_insert', 'array_intersect', 'array_join', 'array_max', 'array_min', 'array_position', 'array_prepend', 'array_remove', 'array_repeat', 'array_size', 'array_union', 'arrays_overlap', 'arrays_zip', 'ascii', 'asin', 'asinh', 'assert_true', 'atan', 'atan2', 'atanh', 'avg', 'base64', 'bin', 'bit_and', 'bit_count', 'bit_get', 'bit_length', 'bit_or', 'bit_xor', 'bitmap_and_agg', 'bitmap_bit_position', 'bitmap_bucket_number', 'bitmap_construct_agg', 'bitmap_count', 'bitmap_or_agg', 'bitwiseNOT', 'bitwise_not', 'bool_and', 'bool_or', 'bround', 'btrim', 'cardinality', 'cbrt', 'ceil', 'ceiling', 'char', 'char_length', 'character_length', 'chr', 'coalesce', 'collate', 'collation', 'collect_list', 'collect_set', 'collect_union', 'concat_ws', 'contains', 'conv', 'corr', 'cos', 'cosh', 'cot', 'count_if', 'count_min_sketch', 'counter_diff', 'covar_pop', 'covar_samp', 'crc32', 'create_map', 'csc', 'cume_dist', 'curdate', 'current_catalog', 'current_database', 'current_date', 'current_path', 'current_schema', 'current_timestamp', 'current_timezone', 'current_user', 'date_add', 'date_diff', 'date_format', 'date_from_unix_date', 'date_part', 'date_sub', 'date_trunc', 'dateadd', 'datediff', 'datepart', 'day', 'dayname', 'dayofmonth', 'dayofweek', 'dayofyear', 'decode', 'degrees', 'dense_rank', 'e', 'element_at', 'elt', 'encode', 'endswith', 'equal_null', 'every', 'exp', 'expm1', 'extract', 'factorial', 'find_in_set', 'first', 'first_value', 'flatten', 'floor', 'format_number', 'format_string', 'from_base32', 'from_csv', 'from_json', 'from_unixtime', 'from_utc_timestamp', 'from_xml', 'get', 'get_json_object', 'getbit', 'greatest', 'grouping', 'grouping_id', 'hash', 'hex', 'histogram_numeric', 'hll_sketch_agg', 'hll_sketch_estimate', 'hll_union', 'hll_union_agg', 'hmac', 'hour', 'hypot', 'ifnull', 'ilike', 'initcap', 'input_file_block_length', 'input_file_block_start', 'input_file_name', 'instr', 'is_valid_utf8', 'is_valid_variant', 'is_variant_null', 'isnan', 'isnotnull', 'isnull', 'jaro_winkler_similarity', 'java_method', 'json_array_length', 'json_object_keys', 'json_tuple', 'kll_merge_agg_bigint', 'kll_merge_agg_double', 'kll_merge_agg_float', 'kll_sketch_agg_bigint', 'kll_sketch_agg_double', 'kll_sketch_agg_float', 'kll_sketch_get_n_bigint', 'kll_sketch_get_n_double', 'kll_sketch_get_n_float', 'kll_sketch_get_quantile_bigint', 'kll_sketch_get_quantile_double', 'kll_sketch_get_quantile_float', 'kll_sketch_get_rank_bigint', 'kll_sketch_get_rank_double', 'kll_sketch_get_rank_float', 'kll_sketch_merge_bigint', 'kll_sketch_merge_double', 'kll_sketch_merge_float', 'kll_sketch_to_string_bigint', 'kll_sketch_to_string_double', 'kll_sketch_to_string_float', 'kurtosis', 'lag', 'last', 'last_day', 'last_value', 'lcase', 'lead', 'least', 'left', 'length', 'levenshtein', 'like', 'listagg', 'ln', 'localtimestamp', 'locate', 'log10', 'log1p', 'log2', 'lower', 'lpad', 'ltrim', 'make_date', 'make_timestamp', 'make_timestamp_ltz', 'make_timestamp_ntz', 'make_valid_utf8', 'map_concat', 'map_contains_key', 'map_entries', 'map_from_arrays', 'map_from_entries', 'map_keys', 'map_values', 'mask', 'max', 'max_by', 'md5', 'mean', 'median', 'min', 'min_by', 'minute', 'mode', 'monotonically_increasing_id', 'month', 'monthname', 'months_between', 'named_struct', 'nanvl', 'negate', 'negative', 'next_day', 'now', 'nth_value', 'ntile', 'nullif', 'nullifzero', 'nvl', 'nvl2', 'octet_length', 'overlay', 'parse_json', 'parse_url', 'percent_rank', 'percentile', 'percentile_approx', 'pi', 'pmod', 'position', 'positive', 'pow', 'power', 'printf', 'quarter', 'quote', 'radians', 'raise_error', 'rand', 'randn', 'random', 'randstr', 'rank', 'reflect', 'regexp', 'regexp_count', 'regexp_extract', 'regexp_extract_all', 'regexp_instr', 'regexp_like', 'regexp_replace', 'regexp_substr', 'regr_avgx', 'regr_avgy', 'regr_count', 'regr_intercept', 'regr_r2', 'regr_slope', 'regr_sxx', 'regr_sxy', 'regr_syy', 'repeat', 'replace', 'reverse', 'right', 'rint', 'rlike', 'round', 'row_number', 'rpad', 'rtrim', 'schema_of_csv', 'schema_of_json', 'schema_of_variant', 'schema_of_variant_agg', 'schema_of_xml', 'sec', 'second', 'sentences', 'sequence', 'session_user', 'session_window', 'sha', 'sha1', 'sha2', 'shiftLeft', 'shiftRight', 'shiftRightUnsigned', 'shiftleft', 'shiftright', 'shiftrightunsigned', 'shuffle', 'sign', 'signum', 'sin', 'sinh', 'size', 'skewness', 'slice', 'some', 'sort_array', 'soundex', 'spark_partition_id', 'split', 'split_part', 'sqrt', 'startswith', 'std', 'stddev', 'stddev_pop', 'stddev_samp', 'str_to_map', 'string_agg', 'struct', 'substr', 'substring', 'substring_index', 'sum', 'tan', 'tanh', 'theta_difference', 'theta_intersection', 'theta_intersection_agg', 'theta_sketch_agg', 'theta_sketch_estimate', 'theta_union', 'theta_union_agg', 'time_bucket', 'timestamp_add', 'timestamp_diff', 'timestamp_micros', 'timestamp_millis', 'timestamp_seconds', 'toDegrees', 'toRadians', 'to_base32', 'to_binary', 'to_char', 'to_csv', 'to_date', 'to_json', 'to_number', 'to_timestamp', 'to_timestamp_ltz', 'to_timestamp_ntz', 'to_unix_timestamp', 'to_utc_timestamp', 'to_varchar', 'to_variant_object', 'to_xml', 'translate', 'trim', 'trunc', 'try_add', 'try_aes_decrypt', 'try_avg', 'try_divide', 'try_element_at', 'try_make_timestamp', 'try_make_timestamp_ltz', 'try_make_timestamp_ntz', 'try_mod', 'try_multiply', 'try_parse_json', 'try_parse_url', 'try_reflect', 'try_subtract', 'try_sum', 'try_to_binary', 'try_to_date', 'try_to_number', 'try_to_timestamp', 'try_url_decode', 'try_validate_utf8', 'try_variant_array_append', 'try_variant_get', 'try_variant_insert', 'try_variant_set', 'tuple_difference_double', 'tuple_difference_integer', 'tuple_difference_theta_double', 'tuple_difference_theta_integer', 'tuple_intersection_agg_double', 'tuple_intersection_agg_integer', 'tuple_intersection_double', 'tuple_intersection_integer', 'tuple_intersection_theta_double', 'tuple_intersection_theta_integer', 'tuple_sketch_agg_double', 'tuple_sketch_agg_integer', 'tuple_sketch_estimate_double', 'tuple_sketch_estimate_integer', 'tuple_sketch_summary_double', 'tuple_sketch_summary_integer', 'tuple_sketch_theta_double', 'tuple_sketch_theta_integer', 'tuple_union_agg_double', 'tuple_union_agg_integer', 'tuple_union_double', 'tuple_union_integer', 'tuple_union_theta_double', 'tuple_union_theta_integer', 'typeof', 'ucase', 'unbase64', 'unhex', 'uniform', 'unix_date', 'unix_micros', 'unix_millis', 'unix_seconds', 'upper', 'url_decode', 'url_encode', 'user', 'uuid', 'validate_utf8', 'var_pop', 'var_samp', 'variance', 'variant_array_append', 'variant_delete', 'variant_get', 'variant_insert', 'variant_set', 'variant_strip_nulls', 'vector_avg', 'vector_cosine_similarity', 'vector_inner_product', 'vector_l2_distance', 'vector_norm', 'vector_normalize', 'vector_sum', 'version', 'weekday', 'weekofyear', 'width_bucket', 'xpath', 'xpath_boolean', 'xpath_double', 'xpath_float', 'xpath_int', 'xpath_long', 'xpath_number', 'xpath_short', 'xpath_string', 'xxhash64', 'year', 'zeroifnull']
 def abs(col: ColumnOrName) -> Column
 def acos(col: ColumnOrName) -> Column
 def acosh(col: ColumnOrName) -> Column
@@ -1184,6 +1204,13 @@ def variant_get(v: ColumnOrName, path: Column | str, targetType: str) -> Column
 def variant_insert(v: ColumnOrName, path: Column | str, value: ColumnOrName) -> Column
 def variant_set(v: ColumnOrName, path: Column | str, value: ColumnOrName, create_if_missing: bool=True) -> Column
 def variant_strip_nulls(v: ColumnOrName, include_arrays: bool=True) -> Column
+def vector_avg(col: ColumnOrName) -> Column
+def vector_cosine_similarity(left: ColumnOrName, right: ColumnOrName) -> Column
+def vector_inner_product(left: ColumnOrName, right: ColumnOrName) -> Column
+def vector_l2_distance(left: ColumnOrName, right: ColumnOrName) -> Column
+def vector_norm(vector: ColumnOrName, degree: ColumnOrName | None=None) -> Column
+def vector_normalize(vector: ColumnOrName, degree: ColumnOrName | None=None) -> Column
+def vector_sum(col: ColumnOrName) -> Column
 def version() -> Column
 def weekday(col: ColumnOrName) -> Column
 def weekofyear(col: ColumnOrName) -> Column
@@ -1244,7 +1271,7 @@ Column.def __ge__(self, other: Any) -> Column
 Column.def __getattr__(self, item: Any) -> Column
 Column.def __getitem__(self, k: Any) -> Column
 Column.def __gt__(self, other: Any) -> Column
-Column.def __init__(self, native: _native.Column) -> None
+Column.def __init__(self, native: _native.Column, text: str | None=None) -> None
 Column.def __invert__(self) -> Column
 Column.def __iter__(self) -> Any
 Column.def __le__(self, other: Any) -> Column
@@ -1301,8 +1328,10 @@ Column.def withField(self, fieldName: str, col: Column) -> Column
 Column.name
 class Column()
 ## sql/conf.py
-RuntimeConfig.def __init__(self, session: _native.Session) -> None
+RuntimeConfig.@property def getAll(self) -> dict[str, str]
+RuntimeConfig.def __init__(self, session: _native.Session, spark: SparkSession | None=None) -> None
 RuntimeConfig.def get(self, key: str, default: object=_UNSET) -> str | None
+RuntimeConfig.def isModifiable(self, key: str) -> bool
 RuntimeConfig.def set(self, key: str, value: str | int | bool) -> None
 RuntimeConfig.def unset(self, key: str) -> None
 class RuntimeConfig()
@@ -1311,6 +1340,7 @@ ColumnOrName
 ColumnsOrNames
 DataFrame.@property def columns(self) -> list[str]
 DataFrame.@property def dtypes(self) -> list[tuple[str, str]]
+DataFrame.@property def isStreaming(self) -> bool
 DataFrame.@property def is_cached(self) -> bool
 DataFrame.@property def na(self) -> DataFrameNaFunctions
 DataFrame.@property def schema(self) -> StructType
@@ -1318,6 +1348,7 @@ DataFrame.@property def sparkSession(self) -> SparkSession
 DataFrame.@property def stat(self) -> DataFrameStatFunctions
 DataFrame.@property def storageLevel(self) -> StorageLevel
 DataFrame.@property def write(self) -> DataFrameWriter
+DataFrame.@property def writeStream(self) -> Any
 DataFrame.def __arrow_c_stream__(self, requested_schema: object=None) -> object
 DataFrame.def __getattr__(self, name: str) -> Column
 DataFrame.def __getitem__(self, item: Any) -> Any
@@ -1329,6 +1360,7 @@ DataFrame.def approxQuantile(self, col: str | list[str] | tuple[str, ...], proba
 DataFrame.def cache(self) -> DataFrame
 DataFrame.def checkpoint(self, eager: bool=True) -> DataFrame
 DataFrame.def coalesce(self, numPartitions: int) -> DataFrame
+DataFrame.def colRegex(self, colName: str) -> Column
 DataFrame.def collect(self) -> list[Row]
 DataFrame.def corr(self, col1: str, col2: str, method: str | None=None) -> float
 DataFrame.def count(self) -> int
@@ -1336,12 +1368,15 @@ DataFrame.def cov(self, col1: str, col2: str) -> float
 DataFrame.def createGlobalTempView(self, name: str) -> None
 DataFrame.def createOrReplaceGlobalTempView(self, name: str) -> None
 DataFrame.def createOrReplaceTempView(self, name: str) -> None
+DataFrame.def createTempView(self, name: str) -> None
 DataFrame.def crossJoin(self, other: DataFrame) -> DataFrame
 DataFrame.def crosstab(self, col1: str, col2: str) -> DataFrame
+DataFrame.def cube(self, *cols: ColumnsOrNames) -> GroupedData
 DataFrame.def describe(self, *cols: str | list[str]) -> DataFrame
 DataFrame.def distinct(self) -> DataFrame
 DataFrame.def drop(self, *cols: ColumnOrName) -> DataFrame
 DataFrame.def dropDuplicates(self, subset: list[str] | tuple[str, ...] | None=None) -> DataFrame
+DataFrame.def dropDuplicatesWithinWatermark(self, subset: list[str] | None=None) -> DataFrame
 DataFrame.def dropna(self, how: str | None='any', thresh: int | None=None, subset: str | tuple[str, ...] | list[str] | None=None) -> DataFrame
 DataFrame.def exceptAll(self, other: DataFrame) -> DataFrame
 DataFrame.def explain(self, extended: bool | str | None=None, mode: str | None=None, *, analyze: bool=False, verbose: bool=False) -> None
@@ -1349,33 +1384,48 @@ DataFrame.def explainString(self, extended: bool | str | None=None, mode: str | 
 DataFrame.def fillna(self, value: float | str | bool | dict[str, Any], subset: str | tuple[str, ...] | list[str] | None=None) -> DataFrame
 DataFrame.def filter(self, condition: Column | str) -> DataFrame
 DataFrame.def first(self) -> Row | None
+DataFrame.def foreach(self, f: Callable[[Row], None]) -> None
+DataFrame.def foreachPartition(self, f: Callable[[Iterator[Row]], None]) -> None
 DataFrame.def freqItems(self, cols: list[str] | tuple[str, ...], support: float | None=None) -> DataFrame
 DataFrame.def groupBy(self, *cols: ColumnsOrNames) -> GroupedData
+DataFrame.def groupingSets(self, groupingSets: Sequence[Sequence[ColumnOrName]], *cols: ColumnOrName) -> GroupedData
 DataFrame.def head(self, n: int | None=None) -> Row | list[Row] | None
 DataFrame.def hint(self, name: str, *parameters: Any) -> DataFrame
+DataFrame.def inputFiles(self) -> list[str]
 DataFrame.def intersect(self, other: DataFrame) -> DataFrame
 DataFrame.def intersectAll(self, other: DataFrame) -> DataFrame
+DataFrame.def isEmpty(self) -> bool
 DataFrame.def join(self, other: DataFrame, on: str | list[str] | Column | list[Column] | None=None, how: str | None=None) -> DataFrame
 DataFrame.def limit(self, num: int) -> DataFrame
 DataFrame.def localCheckpoint(self, eager: bool=True, storageLevel: StorageLevel | None=None) -> DataFrame
+DataFrame.def mapInArrow(self, func: Any, schema: Any, barrier: bool=False, profile: Any=None) -> DataFrame
+DataFrame.def mapInPandas(self, func: Any, schema: Any, barrier: bool=False, profile: Any=None) -> DataFrame
 DataFrame.def melt(self, ids: ColumnOrName | list[ColumnOrName] | tuple[ColumnOrName, ...], values: ColumnOrName | list[ColumnOrName] | tuple[ColumnOrName, ...] | None, variableColumnName: str, valueColumnName: str) -> DataFrame
 DataFrame.def observe(self, observation: Observation | str, *exprs: Column) -> DataFrame
 DataFrame.def offset(self, num: int) -> DataFrame
 DataFrame.def orderBy(self, *cols: ColumnsOrNames, ascending: bool | list[bool]=True) -> DataFrame
 DataFrame.def persist(self, storageLevel: StorageLevel=StorageLevel.MEMORY_AND_DISK) -> DataFrame
-DataFrame.def printSchema(self) -> None
+DataFrame.def printSchema(self, level: int | None=None) -> None
 DataFrame.def profile(self) -> ProfileView
+DataFrame.def randomSplit(self, weights: list[float], seed: int | None=None) -> list[DataFrame]
+DataFrame.def registerTempTable(self, name: str) -> None
 DataFrame.def repartition(self, numPartitions: int | ColumnOrName, *cols: ColumnOrName) -> DataFrame
+DataFrame.def repartitionByRange(self, numPartitions: int | ColumnOrName, *cols: ColumnOrName) -> DataFrame
 DataFrame.def replace(self, to_replace: Any, value: Any=_NO_VALUE, subset: str | tuple[str, ...] | list[str] | None=None) -> DataFrame
+DataFrame.def rollup(self, *cols: ColumnsOrNames) -> GroupedData
+DataFrame.def sameSemantics(self, other: DataFrame) -> bool
 DataFrame.def sample(self, withReplacement: bool | float | None=None, fraction: float | None=None, seed: int | None=None) -> DataFrame
 DataFrame.def sampleBy(self, col: ColumnOrName, fractions: dict[Any, float], seed: int | None=None) -> DataFrame
 DataFrame.def select(self, *cols: ColumnsOrNames) -> DataFrame
 DataFrame.def selectExpr(self, *expr: str | list[str]) -> DataFrame
+DataFrame.def semanticHash(self) -> int
 DataFrame.def show(self, n: int=20, truncate: bool | int=True, vertical: bool=False) -> None
+DataFrame.def sortWithinPartitions(self, *cols: ColumnsOrNames, ascending: bool | list[bool]=True) -> DataFrame
 DataFrame.def subtract(self, other: DataFrame) -> DataFrame
 DataFrame.def summary(self, *statistics: str | list[str]) -> DataFrame
 DataFrame.def tail(self, num: int) -> list[Row]
 DataFrame.def take(self, num: int) -> list[Row]
+DataFrame.def to(self, schema: StructType) -> DataFrame
 DataFrame.def toArrow(self) -> Any
 DataFrame.def toDF(self, *cols: str) -> DataFrame
 DataFrame.def toJSON(self, use_unicode: bool=True) -> DataFrame
@@ -1389,13 +1439,16 @@ DataFrame.def unpersist(self, blocking: bool=False) -> DataFrame
 DataFrame.def unpivot(self, ids: ColumnOrName | list[ColumnOrName] | tuple[ColumnOrName, ...], values: ColumnOrName | list[ColumnOrName] | tuple[ColumnOrName, ...] | None, variableColumnName: str, valueColumnName: str) -> DataFrame
 DataFrame.def withColumn(self, colName: str, col: Column) -> DataFrame
 DataFrame.def withColumnRenamed(self, existing: str, new: str) -> DataFrame
+DataFrame.def withColumns(self, colsMap: dict[str, Column | str]) -> DataFrame
 DataFrame.def withColumnsRenamed(self, colsMap: dict[str, str]) -> DataFrame
+DataFrame.def withWatermark(self, eventTime: str, delayThreshold: str) -> DataFrame
 DataFrame.def writeTo(self, table: str) -> DataFrameWriterV2
 DataFrame.drop_duplicates
 DataFrame.groupby
 DataFrame.sort
 DataFrame.where
 EAGER_DEFAULT_MAX_ROWS
+EAGER_ENABLED_KEY
 EAGER_MAX_ROWS_KEY
 class DataFrame()
 ## sql/datasource.py
@@ -1561,16 +1614,25 @@ def window_time(windowColumn: ColumnOrName) -> Column
 def years(col: ColumnOrName) -> Column
 def zip_with(left: ColumnOrName, right: ColumnOrName, f: Callable[[Column, Column], Column]) -> Column
 ## sql/group.py
-GroupedData.def __init__(self, native: _native.GroupedData, df: DataFrame) -> None
+GroupedData.def __init__(self, native: _native.GroupedData, df: DataFrame, keys: list[Any] | None=None) -> None
+GroupedData.def __repr__(self) -> str
 GroupedData.def agg(self, *exprs: Column | dict[str, str]) -> DataFrame
+GroupedData.def apply(self, udf: Any) -> DataFrame
+GroupedData.def applyInArrow(self, func: Any, schema: Any) -> DataFrame
+GroupedData.def applyInPandas(self, func: Any, schema: Any) -> DataFrame
 GroupedData.def avg(self, *cols: str) -> DataFrame
+GroupedData.def cogroup(self, other: GroupedData) -> PandasCogroupedOps
 GroupedData.def count(self) -> DataFrame
 GroupedData.def max(self, *cols: str) -> DataFrame
 GroupedData.def min(self, *cols: str) -> DataFrame
 GroupedData.def pivot(self, pivot_col: str, values: list[Any] | None=None) -> GroupedData
 GroupedData.def sum(self, *cols: str) -> DataFrame
 GroupedData.mean
+PandasCogroupedOps.def __init__(self, gd1: GroupedData, gd2: GroupedData) -> None
+PandasCogroupedOps.def applyInArrow(self, func: Any, schema: Any) -> DataFrame
+PandasCogroupedOps.def applyInPandas(self, func: Any, schema: Any) -> DataFrame
 class GroupedData()
+class PandasCogroupedOps()
 ## sql/na.py
 DataFrameNaFunctions.def __init__(self, df: DataFrame) -> None
 DataFrameNaFunctions.def drop(self, how: str | None='any', thresh: int | None=None, subset: Any=None) -> DataFrame
@@ -1623,10 +1685,15 @@ DataFrameReader.def json(self, path: str | list[str], **options: object) -> Data
 DataFrameReader.def load(self, path: str | list[str] | None=None, format: str | None=None, **options: object) -> DataFrame
 DataFrameReader.def option(self, key: str, value: object) -> DataFrameReader
 DataFrameReader.def options(self, **options: object) -> DataFrameReader
+DataFrameReader.def orc(self, path: str | list[str], **options: object) -> DataFrame
 DataFrameReader.def parquet(self, *paths: str) -> DataFrame
 DataFrameReader.def schema(self, schema: StructType | str) -> DataFrameReader
+DataFrameReader.def table(self, tableName: str) -> DataFrame
+DataFrameReader.def text(self, paths: str | list[str], wholetext: bool=False, lineSep: str | None=None, pathGlobFilter: str | None=None, recursiveFileLookup: bool | None=None, modifiedBefore: str | None=None, modifiedAfter: str | None=None) -> DataFrame
+DataFrameReader.def xml(self, path: str | list[str], **options: object) -> DataFrame
 DataFrameWriter.def __init__(self, df: DataFrame) -> None
 DataFrameWriter.def bucketBy(self, numBuckets: int, col: str | list[str] | tuple[str, ...], *cols: str) -> DataFrameWriter
+DataFrameWriter.def clusterBy(self, col: str | list[str] | tuple[str, ...], *cols: str) -> DataFrameWriter
 DataFrameWriter.def csv(self, path: str, mode: str | None=None, partitionBy: str | list[str] | tuple[str, ...] | None=None, **options: object) -> None
 DataFrameWriter.def format(self, source: str) -> DataFrameWriter
 DataFrameWriter.def insertInto(self, tableName: str, overwrite: bool | None=None) -> None
@@ -1635,12 +1702,14 @@ DataFrameWriter.def json(self, path: str, mode: str | None=None, partitionBy: st
 DataFrameWriter.def mode(self, saveMode: str) -> DataFrameWriter
 DataFrameWriter.def option(self, key: str, value: object) -> DataFrameWriter
 DataFrameWriter.def options(self, **options: object) -> DataFrameWriter
+DataFrameWriter.def orc(self, path: str, mode: str | None=None, partitionBy: str | list[str] | tuple[str, ...] | None=None, compression: str | None=None) -> None
 DataFrameWriter.def parquet(self, path: str, mode: str | None=None, partitionBy: str | list[str] | tuple[str, ...] | None=None, **options: object) -> None
 DataFrameWriter.def partitionBy(self, *cols: str | list[str] | tuple[str, ...]) -> DataFrameWriter
 DataFrameWriter.def save(self, path: str | None=None, format: str | None=None, mode: str | None=None, partitionBy: str | list[str] | tuple[str, ...] | None=None, **options: object) -> None
 DataFrameWriter.def saveAsTable(self, name: str, format: str | None=None, mode: str | None=None, partitionBy: str | list[str] | tuple[str, ...] | None=None, **options: object) -> None
 DataFrameWriter.def sortBy(self, col: str | list[str] | tuple[str, ...], *cols: str) -> DataFrameWriter
 DataFrameWriter.def text(self, path: str, compression: str | None=None, lineSep: str | None=None) -> None
+DataFrameWriter.def xml(self, path: str, **options: object) -> None
 DataFrameWriterV2.def __init__(self, df: DataFrame, table: str) -> None
 DataFrameWriterV2.def append(self) -> None
 DataFrameWriterV2.def clusterBy(self, col: str, *cols: str) -> DataFrameWriterV2
@@ -1658,21 +1727,25 @@ class DataFrameReader()
 class DataFrameWriter()
 class DataFrameWriterV2()
 ## sql/row.py
+Row.def __call__(self, *args: Any) -> Row
 Row.def __contains__(self, item: object) -> bool
 Row.def __getattr__(self, name: str) -> Any
 Row.def __getitem__(self, item: Any) -> Any
 Row.def __new__(cls, *args: Any, **kwargs: Any) -> Row
 Row.def __reduce__(self) -> tuple[Any, ...]
 Row.def __repr__(self) -> str
-Row.def asDict(self) -> dict[str, Any]
+Row.def asDict(self, recursive: bool=False) -> dict[str, Any]
 class Row(tuple[Any, ...])
 ## sql/session.py
 Catalog.def __init__(self, session: SparkSession) -> None
 Catalog.def cacheTable(self, tableName: str, storageLevel: StorageLevel | None=None) -> None
 Catalog.def clearCache(self) -> None
+Catalog.def createExternalTable(self, tableName: str, path: str | None=None, source: str | None=None, schema: StructType | None=None, **options: str) -> DataFrame
+Catalog.def createTable(self, tableName: str, path: str | None=None, source: str | None=None, schema: StructType | None=None, description: str | None=None, **options: str) -> DataFrame
 Catalog.def currentCatalog(self) -> str
 Catalog.def currentDatabase(self) -> str
 Catalog.def databaseExists(self, dbName: str) -> bool
+Catalog.def dropGlobalTempView(self, viewName: str) -> bool
 Catalog.def dropTempView(self, viewName: str) -> bool
 Catalog.def functionExists(self, functionName: str, dbName: str | None=None) -> bool
 Catalog.def getDatabase(self, dbName: str) -> Database
@@ -1684,6 +1757,7 @@ Catalog.def listColumns(self, tableName: str, dbName: str | None=None) -> list[C
 Catalog.def listDatabases(self, pattern: str | None=None) -> list[Database]
 Catalog.def listFunctions(self, dbName: str | None=None, pattern: str | None=None) -> list[Function]
 Catalog.def listTables(self, dbName: str | None=None, pattern: str | None=None) -> list[Table]
+Catalog.def recoverPartitions(self, tableName: str) -> None
 Catalog.def refreshByPath(self, path: str) -> None
 Catalog.def refreshTable(self, tableName: str) -> DataFrame
 Catalog.def registerFunction(self, name: str, f: Any, returnType: Any=None) -> Any
@@ -1692,13 +1766,19 @@ Catalog.def setCurrentDatabase(self, dbName: str) -> None
 Catalog.def tableExists(self, tableName: str, dbName: str | None=None) -> bool
 Catalog.def uncacheTable(self, tableName: str) -> None
 SPARK_VERSION
+SparkSession.@classmethod def active(cls) -> SparkSession
+SparkSession.@classmethod def getActiveSession(cls) -> SparkSession | None
 SparkSession.@property def catalog(self) -> Catalog
 SparkSession.@property def conf(self) -> RuntimeConfig
 SparkSession.@property def dataSource(self) -> DataSourceRegistration
 SparkSession.@property def profile(self) -> Profile
 SparkSession.@property def read(self) -> DataFrameReader
+SparkSession.@property def readStream(self) -> Any
 SparkSession.@property def sparkContext(self) -> Any
+SparkSession.@property def streams(self) -> Any
+SparkSession.@property def tvf(self) -> Any
 SparkSession.@property def udf(self) -> UDFRegistration
+SparkSession.@property def udtf(self) -> Any
 SparkSession.@property def version(self) -> str
 SparkSession.Builder.def __init__(self) -> None
 SparkSession.Builder.def appName(self, name: str) -> SparkSession.Builder
@@ -1708,11 +1788,14 @@ SparkSession.Builder.def enableHiveSupport(self) -> SparkSession.Builder
 SparkSession.Builder.def getOrCreate(self) -> SparkSession
 SparkSession.Builder.def master(self, master: str) -> SparkSession.Builder
 SparkSession.Builder.def remote(self, url: str) -> SparkSession.Builder
+SparkSession.addArtifact
 SparkSession.builder: Builder
 SparkSession.class Builder()
 SparkSession.def __init__(self, native: _NativeSession, config: list[tuple[str, str]] | None=None) -> None
+SparkSession.def addArtifacts(self, *path: str, pyfile: bool=False, archive: bool=False, file: bool=False) -> None
 SparkSession.def addTag(self, tag: str) -> None
 SparkSession.def clearTags(self) -> None
+SparkSession.def copyFromLocalToFs(self, local_path: str, dest_path: str) -> None
 SparkSession.def createDataFrame(self, data: Any, schema: Any=None, samplingRatio: float | None=None, verifySchema: bool=True) -> DataFrame
 SparkSession.def emptyDataFrame(self, schema: StructType | str) -> DataFrame
 SparkSession.def getTags(self) -> set[str]
@@ -1808,6 +1891,7 @@ StructType.def add(self, field: str | StructField, data_type: str | DataType | N
 StructType.def fieldNames(self) -> list[str]
 StructType.def jsonValue(self) -> dict[str, Any]
 StructType.def simpleString(self) -> str
+StructType.def treeString(self, maxDepth: int=0) -> str
 TimestampNTZType.@classmethod def typeName(cls) -> str
 VarcharType.def __init__(self, length: int) -> None
 VarcharType.def __repr__(self) -> str

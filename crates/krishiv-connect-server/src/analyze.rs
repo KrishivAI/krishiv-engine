@@ -10,7 +10,7 @@
 //! - `is_local`: whether the translated root is a local relation (Spark's
 //!   `LocalRelation`); `is_streaming`: always false (no streaming sources);
 //! - `input_files`: the paths of the file scans, as written;
-//! - `spark_version`: the session profile's release (`4.2.0` for 4.2);
+//! - `spark_version`: the session profile's release (`4.3.0` for 4.3, the default);
 //! - `ddl_parse`, `json_to_ddl`: Spark's type parsers and `toDDL`;
 //! - `same_semantics`, `semantic_hash`: the semantic hash of the analyzed
 //!   plans (`krishiv_plan::semantic_plan_hash`: attribute ids renumbered,
@@ -56,7 +56,7 @@ use krishiv_plan::{LogicalPlan, PlanNode, ReadSource};
 use krishiv_session::{DataFrame, ExplainMode, QueryOptions};
 
 use crate::cache::{proto_of, storage_level_of};
-use crate::execute::{request_plan, request_relation, schema};
+use crate::execute::{load_persisted_udfs, request_plan, request_relation, schema};
 use crate::manager::SessionEntry;
 use crate::operation::ExecuteLimits;
 
@@ -75,6 +75,8 @@ pub async fn analyze_plan(
     limits: &ExecuteLimits,
     options: &QueryOptions,
 ) -> Result<pb::AnalyzePlanResponse, KrishivError> {
+    // A persisted Python UDF is typed like a registered one, so a fresh session's first request may be an analysis.
+    load_persisted_udfs(entry).await;
     let result = analyze(entry, options, request.analyze.as_ref(), limits).await?;
     Ok(pb::AnalyzePlanResponse {
         session_id: request.session_id.clone(),

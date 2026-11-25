@@ -89,12 +89,23 @@ pub(crate) fn request_body(
 
 /// The table metadata of a `LoadTableResult` body.
 pub(crate) fn load_result_metadata(body: &[u8]) -> Result<TableMetadata, String> {
+    load_result(body).map(|(m, _)| m)
+}
+
+/// A `LoadTableResult`'s metadata and its `metadata-location` (absent: `None`).
+fn load_result(body: &[u8]) -> Result<(TableMetadata, Option<String>), String> {
     let value: Value = serde_json::from_slice(body).map_err(|e| format!("not JSON: {e}"))?;
     let metadata = value
         .get("metadata")
         .cloned()
         .ok_or_else(|| "no `metadata` member".to_owned())?;
-    serde_json::from_value(metadata).map_err(|e| format!("metadata that does not parse: {e}"))
+    let location = value
+        .get("metadata-location")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    let metadata = serde_json::from_value(metadata)
+        .map_err(|e| format!("metadata that does not parse: {e}"))?;
+    Ok((metadata, location))
 }
 
 /// The `ErrorModel` of a body: its `type` and `message`, when present.
@@ -228,8 +239,15 @@ impl CommitTable for RestCommitTable {
     }
 
     async fn load(&self, all_snapshots: bool) -> Result<TableMetadata, KrishivError> {
+        self.load_located(all_snapshots).await.map(|(m, _)| m)
+    }
+
+    async fn load_located(
+        &self,
+        all_snapshots: bool,
+    ) -> Result<(TableMetadata, Option<String>), KrishivError> {
         let body = self.transport.load(all_snapshots).await?;
-        load_result_metadata(&body).map_err(|e| {
+        load_result(&body).map_err(|e| {
             InternalError {
                 message: format!(
                     "the Iceberg REST catalog's table {} answered with {e}",

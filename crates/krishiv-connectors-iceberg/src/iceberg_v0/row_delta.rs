@@ -149,6 +149,8 @@ pub(crate) struct MergeOnReadWrite {
     filter: Option<PushdownExpr>,
     filter_text: String,
     write_id: String,
+    /// The caller's `krishiv.write.idempotencyKey` (E34).
+    idempotency_key: Option<String>,
     /// S0 is format v3: DVs, and row lineage on inserted rows.
     dvs: bool,
     clock: Arc<dyn CommitClock>,
@@ -179,6 +181,7 @@ impl MergeOnReadWrite {
         op: RowLevelOperation,
         read_filter: Option<PushdownExpr>,
         write_id: Option<String>,
+        idempotency_key: Option<String>,
     ) -> Result<Arc<Self>, KrishivError> {
         let target = Arc::clone(provider.write_target().ok_or_else(|| {
             unsupported(
@@ -210,6 +213,7 @@ impl MergeOnReadWrite {
             filter: read_filter,
             filter_text,
             write_id: write_id.unwrap_or_else(random_uuid),
+            idempotency_key,
             clock,
             created_by: created_by(),
         }))
@@ -295,6 +299,19 @@ impl MergeOnReadWrite {
     ) -> Result<TableMetadata, KrishivError> {
         let t = &self.target;
         let base = &t.base;
+        // E34: the statement committed before (a retry opens the table anew): nothing is committed
+        // and this attempt's files are orphans, deleted here (not left to `Written`'s best-effort drop).
+        if let Some(key) = &self.idempotency_key
+            && base.snapshots().any(|s| {
+                s.summary()
+                    .additional_properties
+                    .get(super::append::IDEMPOTENCY_KEY_PROP)
+                    .is_some_and(|v| v == key)
+            })
+        {
+            written.delete().await;
+            return Ok(base.clone());
+        }
         let snapshot_id = snapshot_id(base);
         let mut data = Vec::new();
         let mut deletes = Vec::new();
@@ -371,8 +388,7 @@ impl MergeOnReadWrite {
             branch: BRANCH,
             write_id: &self.write_id,
             query_id,
-            // Row-level changes take no idempotency key: the session refuses one on DML (E34).
-            idempotency_key: None,
+            idempotency_key: self.idempotency_key.as_deref(),
         };
         let outcome =
             commit_validated(t.committer.as_ref(), cx, base, &mut new, ids, &validation).await;

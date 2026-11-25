@@ -815,3 +815,20 @@ fn a_case_column_before_later_items_and_merge_clauses() {
     let err = krishiv_sql::parse_statement(sql, &opts).expect_err(sql);
     assert!(err.to_string().contains("end of input"), "{err}");
 }
+
+/// After `DIV`, as after a symbol operator, a reserved word is the operand column (a Spark 4.2.0
+/// run: `SELECT 1 DIV FROM AS x` is `'Project [(1 div 'FROM) AS x]`, and over a column `from`
+/// `7 DIV FROM` is 3; review of #985).
+#[test]
+fn a_reserved_word_after_div_is_a_column() {
+    for (sql, want) in [
+        ("SELECT 1 DIV FROM AS x", "(lit IntegerDivide col(FROM))"),
+        ("SELECT 1 div from", "(lit IntegerDivide col(from))"),
+        (
+            "SELECT 7 DIV FROM AS x FROM VALUES (2) t(`from`)",
+            "(lit IntegerDivide col(FROM))",
+        ),
+    ] {
+        assert_eq!(shape(sql).as_deref(), Ok(want), "{sql}");
+    }
+}

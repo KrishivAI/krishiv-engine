@@ -90,6 +90,25 @@ impl QueryCatalog {
     }
 }
 
+/// `inputs` with their path placement confined by the server's roots and prefixes
+/// (`krishiv.io.local.allowedRoots`, `krishiv.io.objectStore.allowedPrefixes`), as a declared
+/// table's scan is: what a `CALL` procedure reads and deletes through (`name` is the procedure, for
+/// the refusal).
+///
+/// # Errors
+/// `KRISHIV_INVALID_CONFIG_VALUE` for a confinement setting that does not parse.
+pub(crate) fn confined_inputs(
+    mut inputs: ScanInputs,
+    name: &[String],
+) -> Result<ScanInputs, KrishivError> {
+    inputs.paths = Arc::new(ConfinedPaths::new(
+        Arc::clone(&inputs.paths),
+        PathPrefixPolicy::from_config(&inputs.config, Arc::new(krishiv_plan::analyzer::AllowAll))?,
+        name,
+    ));
+    Ok(inputs)
+}
+
 /// A path placement that refuses every location outside the server's confinement (module docs).
 pub(crate) struct ConfinedPaths {
     inner: Arc<dyn PathLocator>,

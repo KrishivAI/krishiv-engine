@@ -10,7 +10,7 @@ Sort [nation#50 ASC NULLS FIRST, o_year#51 DESC NULLS LAST]
 :  · sink   #1 Sort p1: in 16 rows (1 batch); compute <t> (max <t>, <n> drivers); peak mem <mem>
 :  · source #28 Sort p0: out 16 rows (1 batch); compute <t> (max <t>, <n> drivers); io <t> (max <t>)
 +- Exchange rangepartitioning(nation#50 ASC NULLS FIRST, o_year#51 DESC NULLS LAST)
-   +- Project [nation#50, o_year#51, sum(amount#52)#4611686018427387937 AS sum_profit#53]
+   +- Project [nation#50, o_year#51, sum(amount#52)#54 AS sum_profit#53]
       :  · operator #27 Project p1: in 16 rows (1 batch); out 16 rows (1 batch); compute <t> (max <t>, <n> drivers)
       +- HashAggregate keys=[nation#50, o_year#51], functions=[sum(amount#52)]
          :  · source #26 HashAggregate p1: out 16 rows (1 batch); compute <t> (max <t>, <n> drivers); io <t> (max <t>)

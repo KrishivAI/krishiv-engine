@@ -346,6 +346,29 @@ impl Display for NodeLine<'_> {
                     JoinCondition::Natural => write!(f, ", NATURAL"),
                 }
             }
+            PlanNode::AsOfJoin {
+                kind,
+                condition,
+                as_of,
+                ..
+            } => {
+                write!(f, "AsOfJoin {kind:?}, {} ", Text(&as_of.left))?;
+                match as_of.direction.sql_operator(as_of.allow_exact) {
+                    Some(op) => f.write_str(op)?,
+                    None if as_of.allow_exact => f.write_str("nearest")?,
+                    None => f.write_str("nearest exclusive")?,
+                }
+                write!(f, " {}", Text(&as_of.right))?;
+                if let Some(t) = &as_of.tolerance {
+                    write!(f, ", tolerance {}", Text(t))?;
+                }
+                match condition {
+                    JoinCondition::None => Ok(()),
+                    JoinCondition::On(e) => write!(f, ", {}", Text(e)),
+                    JoinCondition::Using(cols) => write!(f, ", USING ({})", cols.join(", ")),
+                    JoinCondition::Natural => write!(f, ", NATURAL"),
+                }
+            }
             PlanNode::Sort { order, global, .. } => {
                 f.write_str("Sort [")?;
                 for (i, o) in order.iter().enumerate() {
@@ -476,6 +499,9 @@ impl Display for NodeLine<'_> {
             PlanNode::JoinHint { strategy, .. } => {
                 write!(f, "JoinHint (strategy={})", strategy.name())
             }
+            PlanNode::SecurityBarrier { policy, .. } => {
+                write!(f, "SecurityBarrier [{}]", policy.securable)
+            }
             PlanNode::Union {
                 by_name,
                 allow_missing_columns,
@@ -498,6 +524,7 @@ impl Display for NodeLine<'_> {
                 (crate::SetOperation::Except, false) => f.write_str("Except false"),
                 (crate::SetOperation::Except, true) => f.write_str("Except All true"),
             },
+            PlanNode::Zip { .. } => f.write_str("Zip"),
             PlanNode::ReplicateRows { count, .. } => {
                 write!(f, "Generate replicaterows({})", Text(count))
             }

@@ -31,6 +31,7 @@ fn env() -> ExprEnv {
         legacy_coding_error_action: false,
         legacy_time_parser: false,
         binary_output_style: None,
+        spark_version: None,
     }
 }
 
@@ -301,6 +302,7 @@ fn fragments_round_trip_through_the_plan_codec() {
 
 fn scan(id: u64) -> PhysNode {
     PhysNode::Scan(krishiv_exec::physical::ScanNode {
+        decided: None,
         id: krishiv_exec::physical::ScanId(id),
         scan: krishiv_plan::Scan {
             source: krishiv_plan::ReadSource::Table {
@@ -397,6 +399,7 @@ fn streaming_scans_follow_every_join_kind_to_its_probe() {
         null_safe: vec![false],
         residual: None,
         single_match: false,
+        as_of: None,
     });
     let ids: Vec<ScanId> = crate::streaming_scans(&merge)
         .iter()

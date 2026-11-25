@@ -170,6 +170,7 @@ pub struct EngineRuntimeBuilder {
     pairs: Vec<(String, String)>,
     executor: Option<Arc<dyn Executor>>,
     catalogs: Option<crate::catalog_registry::CatalogSetup>,
+    sinks: Vec<Arc<dyn crate::events::EventSink>>,
 }
 
 impl fmt::Debug for EngineRuntimeBuilder {
@@ -223,7 +224,15 @@ impl EngineRuntimeBuilder {
     /// cannot start; every startup refusal of a catalog declaration
     /// ([`Self::catalogs`]).
     pub fn build(self) -> Result<Arc<EngineRuntime>, KrishivError> {
-        EngineRuntime::new(self.pairs, self.executor, false, self.catalogs)
+        EngineRuntime::new(self.pairs, self.executor, false, self.catalogs, self.sinks)
+    }
+
+    /// Registers a consumer of the runtime's query events (P3 E9, [`crate::events`]): it gets every
+    /// transition of every query of every session, on its own thread, through a bounded queue that drops
+    /// (and counts) rather than slow a query.
+    pub fn event_sink(mut self, sink: Arc<dyn crate::events::EventSink>) -> Self {
+        self.sinks.push(sink);
+        self
     }
 }
 
@@ -282,7 +291,20 @@ impl EngineRuntime {
             pairs: Vec::new(),
             executor: None,
             catalogs: None,
+            sinks: Vec::new(),
         }
+    }
+
+    /// The `krishiv.compute.id` the usage records of this runtime's query events carry.
+    #[must_use]
+    pub fn compute_id(&self) -> &str {
+        self.history.events().compute_id()
+    }
+
+    /// Query events waiting for their sinks (`krishiv_events_queue_depth`).
+    #[must_use]
+    pub fn event_queue_depth(&self) -> usize {
+        self.history.events().queue_depth()
     }
 
     /// Whether this runtime writes finished queries' profiles to a history store (`krishiv.history.path`).
@@ -319,7 +341,7 @@ impl EngineRuntime {
         pairs: Vec<(String, String)>,
         executor: Option<Arc<dyn Executor>>,
     ) -> Result<Arc<Self>, KrishivError> {
-        Self::new(pairs, executor, true, None)
+        Self::new(pairs, executor, true, None, Vec::new())
     }
 
     fn new(
@@ -327,6 +349,7 @@ impl EngineRuntime {
         executor: Option<Arc<dyn Executor>>,
         private: bool,
         catalogs: Option<crate::catalog_registry::CatalogSetup>,
+        sinks: Vec<Arc<dyn crate::events::EventSink>>,
     ) -> Result<Arc<Self>, KrishivError> {
         // Diagnostics first: installs the tokio-console subscriber when the
         // feature is on and `KRISHIV_TOKIO_CONSOLE=1`, a no-op otherwise.
@@ -377,10 +400,12 @@ impl EngineRuntime {
             } else {
                 krishiv_io::SettledLocalFileSystem::confined(roots)
             };
+            let local = Arc::new(local);
             io.register_whole_listing_store(
                 StoreId::new(crate::session::LOCAL_STORE),
-                Arc::new(local) as Arc<dyn ObjectStore>,
+                Arc::clone(&local) as Arc<dyn ObjectStore>,
             );
+            io.register_staging_sweeper(StoreId::new(crate::session::LOCAL_STORE), local);
         }
         #[cfg(not(unix))]
         io.register_store(
@@ -414,6 +439,7 @@ impl EngineRuntime {
             }
             None => None,
         };
+        let events = Arc::new(Self::event_bus(&config, sinks));
         let results = if private {
             Arc::clone(crate::result_cache::global())
         } else {
@@ -450,7 +476,7 @@ impl EngineRuntime {
             query_index: AtomicU64::new(0),
             session_seq: AtomicU64::new(0),
             draining: AtomicBool::new(false),
-            history: Arc::new(QueryHistory::new(capacity)),
+            history: Arc::new(QueryHistory::new(capacity).with_events(events)),
             profile_history,
             catalog_store: Arc::new(InMemoryCatalogStore::with_hub(Arc::clone(&invalidation))),
             invalidation,
@@ -949,6 +975,54 @@ impl EngineRuntime {
             .remove(&session);
     }
 
+    /// The query event bus of a runtime: the sinks the host linked, and the JSON-lines file
+    /// `krishiv.events.file.path` names.
+    fn event_bus(
+        config: &Config,
+        sinks: Vec<Arc<dyn crate::events::EventSink>>,
+    ) -> crate::events::EventBus {
+        use krishiv_common::config as c;
+        let bus = crate::events::EventBus::new(
+            config
+                .get(&c::COMPUTE_ID)
+                .and_then(|v| v.as_str().map(str::to_owned))
+                .filter(|id| !id.is_empty())
+                .unwrap_or_else(crate::events::host_name),
+            config
+                .get(&c::EVENTS_TEXT_MAX_BYTES)
+                .and_then(c::ConfigValue::as_size)
+                .and_then(|n| usize::try_from(n).ok())
+                .unwrap_or(4096),
+            config
+                .get(&c::EVENTS_QUEUE_CAPACITY)
+                .and_then(c::ConfigValue::as_int)
+                .and_then(|n| usize::try_from(n).ok())
+                .unwrap_or(10_000),
+        );
+        if let Some(path) = config
+            .get(&c::EVENTS_FILE_PATH)
+            .and_then(|v| v.as_str().map(str::to_owned))
+            .filter(|p| !p.is_empty())
+        {
+            bus.register(Arc::new(crate::events::JsonLinesSink::new(
+                std::path::PathBuf::from(path),
+                config
+                    .get(&c::EVENTS_FILE_MAX_BYTES)
+                    .and_then(c::ConfigValue::as_size)
+                    .unwrap_or(256 << 20),
+                config
+                    .get(&c::EVENTS_FILE_MAX_FILES)
+                    .and_then(c::ConfigValue::as_int)
+                    .and_then(|n| usize::try_from(n).ok())
+                    .unwrap_or(8),
+            )));
+        }
+        for sink in sinks {
+            bus.register(sink);
+        }
+        bus
+    }
+
     /// Registers the engine gauges on the runtime's registry: closures over
     /// the owning components, evaluated at scrape time, never pushed. No
     /// gauge holds the runtime itself, so the runtime can end.
@@ -958,6 +1032,18 @@ impl EngineRuntime {
             let history = Arc::clone(history);
             metrics.add_gauge("krishiv.history.write_failures", Vec::new(), move || {
                 Some(history.failures())
+            })?;
+        }
+        {
+            let events = Arc::clone(self.history.events());
+            metrics.add_gauge("krishiv.events.dropped", Vec::new(), move || {
+                Some(events.dropped_total())
+            })?;
+        }
+        {
+            let events = Arc::clone(self.history.events());
+            metrics.add_gauge("krishiv.events.queue_depth", Vec::new(), move || {
+                u64::try_from(events.queue_depth()).ok()
             })?;
         }
         {

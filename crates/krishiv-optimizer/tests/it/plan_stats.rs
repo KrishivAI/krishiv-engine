@@ -16,8 +16,13 @@ use krishiv_optimizer::{
     AttrStats, ColumnStats, PlanStats, StatSource, Statistics, TableStats, estimated_rows,
     optimize_with, optimize_with_options,
 };
-use krishiv_plan::analyzer::{AnalysisContext, MemoryCatalog, TableColumn};
-use krishiv_plan::{AttrId, ExprNode, Literal, LogicalPlan, Plan, PlanNode, ReadSource, Scan};
+use krishiv_plan::analyzer::testing::block_on;
+use krishiv_plan::analyzer::{
+    AnalysisContext, Analyzer as _, DefaultAnalyzer, MemoryCatalog, TableColumn,
+};
+use krishiv_plan::{
+    AttrId, ExprNode, Literal, LogicalPlan, Plan, PlanNode, ReadSource, Scan, SourceId,
+};
 use krishiv_types::{DataType, DecimalType};
 
 use crate::support;
@@ -1156,4 +1161,97 @@ fn a_predicate_the_estimator_cannot_model_is_a_guess() {
     ] {
         assert!(!guessed(sql), "{sql}");
     }
+}
+
+/// `range()` is estimated from its bounds and step (QA-2): its rows, all distinct, from the
+/// first value to the last; a negative step and an empty range too.
+#[test]
+fn a_range_is_estimated_exactly_from_its_bounds_and_step() {
+    let range = |sql: &str| Estimated::of(sql, |p| matches!(p.node, PlanNode::Range { .. }));
+    let r = range("SELECT * FROM range(0, 1000)");
+    close(r.rows(), 1000.0, "rows");
+    let id = r.col("id");
+    close(id.ndv, 1000.0, "ndv");
+    assert!(id.ndv_known());
+    assert_eq!((id.min, id.max), (Some(0.0), Some(999.0)));
+    let r = range("SELECT * FROM range(10, 0, -3)");
+    close(r.rows(), 4.0, "rows of 10, 7, 4, 1");
+    assert_eq!((r.col("id").min, r.col("id").max), (Some(1.0), Some(10.0)));
+    let r = range("SELECT * FROM range(5, 5)");
+    close(r.rows(), 0.0, "an empty range");
+    let r = range("SELECT * FROM range(0, 10, 4)");
+    close(r.rows(), 3.0, "rows of 0, 4, 8");
+    assert_eq!(r.col("id").max, Some(8.0));
+}
+
+/// An equi-join of an expression key with a column divides by the column's distinct count once
+/// it is known: `a.id % 1000 = b.id` over `range(100000)` and `range(1000)` keeps about one `b`
+/// row per `a` row (QA-2: 2e11 rows before, a fifth of the cross product).
+#[test]
+fn an_expression_key_join_with_a_known_column_count_divides_by_it() {
+    let j = join("SELECT * FROM range(0, 100000) a JOIN range(0, 1000) b ON a.id % 1000 = b.id");
+    close(j.rows(), 100_000.0, "rows");
+    // The QA-2 repro, optimized as `EXPLAIN COST` reads it: `a.id > 5` runs below the join and
+    // keeps 99,994 of `a`'s 100,000 values (an unoptimized plan compares with an unfolded
+    // `CAST(5 AS BIGINT)`), each with one `b` row.
+    let plan = resolve(
+        "SELECT * FROM range(0, 100000) a JOIN range(0, 1000) b ON a.id % 1000 = b.id \
+         WHERE a.id > 5",
+    );
+    let stats = fixture();
+    let optimized = optimize_with(&plan, &stats).unwrap();
+    let join = find(optimized.root(), |p| {
+        matches!(p.node, PlanNode::Join { .. })
+    });
+    let estimate = PlanStats::compute(optimized.root(), &stats);
+    close(
+        estimate.get(&join).unwrap().rows,
+        100_000.0 * 99_994.0 / 99_999.0,
+        "filtered rows",
+    );
+}
+
+/// A left as-of join's right columns gain the left rows that find no right row as nulls: those
+/// whose key the right side lacks (`t.a`'s 100 values against `u.k`'s 40: 60%) or whose as-of
+/// value is NULL (`t.a`: 10%); an inner one keeps the right input's fractions.
+#[test]
+fn a_left_as_of_join_gains_its_unmatched_fraction_as_nulls() {
+    let estimated = |sql: &str| {
+        let options = krishiv_sql::ParserOptions {
+            asof_join: true,
+            ..krishiv_sql::ParserOptions::default()
+        };
+        let plan = krishiv_sql::parse_and_lower(sql, &options, SourceId(0))
+            .unwrap_or_else(|e| panic!("{sql}: {e:?}"));
+        let plan = block_on(DefaultAnalyzer.analyze(&plan, &ctx()))
+            .unwrap_or_else(|e| panic!("{sql}: {e:?}"))
+            .plan;
+        let stats = PlanStats::compute(plan.root(), &fixture());
+        let node = find(plan.root(), |p| matches!(p.node, PlanNode::AsOfJoin { .. }));
+        Estimated { stats, node }
+    };
+    let by_key = |kind: &str| {
+        estimated(&format!(
+            "SELECT * FROM t {kind} ASOF JOIN u MATCH_CONDITION (t.b >= u.v) ON t.a = u.k"
+        ))
+    };
+    let left = by_key("LEFT");
+    close(left.col("v").null_frac, 0.6, "v: keys u lacks");
+    close(
+        left.col("k").null_frac,
+        0.6 + 0.4 * 0.1,
+        "k: its own nulls too",
+    );
+    close(left.col("a").null_frac, 0.1, "the left side keeps its own");
+    close(left.rows(), 1000.0, "every left row");
+    let inner = by_key("");
+    close(inner.col("v").null_frac, 0.0, "inner: v");
+    close(inner.col("k").null_frac, 0.1, "inner: k");
+    let by_value =
+        estimated("SELECT * FROM t LEFT ASOF JOIN u MATCH_CONDITION (t.a >= u.v) ON t.b = u.k");
+    close(
+        by_value.col("v").null_frac,
+        0.1,
+        "NULL as-of values match nothing",
+    );
 }

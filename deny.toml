@@ -201,5 +201,5 @@ deny = ["object_store"]
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
-# The parquet 60.1.0 patch of the root Cargo.toml (ADR 0028 update 2026-11-22): remove with it.
+# The parquet 60.2.0 patch of the root Cargo.toml (ADR 0028 update 2026-11-22): remove with it.
 allow-git = ["https://github.com/KrishivAI/arrow-rs"]

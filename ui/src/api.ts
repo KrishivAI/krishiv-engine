@@ -111,6 +111,8 @@ export interface QueryDetail {
   plan?: PlanNode[] | null;
   /** The query has ended and its plan is not stored yet but can still arrive: ask again. */
   plan_pending?: boolean;
+  /** Another session ran a query under this id; operator rows name no session, so none are given. */
+  operators_withheld?: boolean;
 }
 
 export interface CacheRow {
@@ -219,6 +221,28 @@ export interface MemoryRow {
   peak_bytes: number;
   limit_bytes: number | null;
   spillable: boolean;
+}
+
+/** The Python UDF workers of one principal and session. */
+export interface UdfWorkerOwner {
+  principal: string;
+  session_id: string;
+  tenant: string | null;
+  /** Live workers: idle, running a call or starting. */
+  live: number;
+  /** Those of them that run a call or are starting. */
+  busy: number;
+}
+
+/** A server's Python UDF worker pool (`/api/internal/udf-workers`); the owners with the most workers first. */
+export interface UdfPool {
+  live: number;
+  busy: number;
+  max_total: number;
+  max_per_session: number;
+  max_per_tenant: number;
+  owners: UdfWorkerOwner[];
+  truncated: boolean;
 }
 
 export interface Compare {

@@ -230,6 +230,118 @@ fn a_creation_key_is_not_kept_in_the_files_tables_options() {
     assert_eq!(count(&s, "keyed_files"), 2 * n);
 }
 
+/// E34: the key reaches the file table's own writes, the creating one and an append to the existing
+/// table: repeating either with the same key adds no rows.
+#[test]
+fn an_explicit_key_deduplicates_file_table_saves() {
+    let s = session();
+    let n = count(&s, "people");
+    let keyed = |mode: &str, key: &str| {
+        block_on(
+            s.table("people")
+                .write()
+                .mode(mode)
+                .option("krishiv.write.idempotencyKey", key)
+                .save_as_table("keyed_dedup"),
+        )
+    };
+    keyed("append", "job-1").unwrap();
+    assert_eq!(count(&s, "keyed_dedup"), n);
+    keyed("append", "job-1").unwrap();
+    assert_eq!(count(&s, "keyed_dedup"), n);
+    keyed("append", "job-2").unwrap();
+    assert_eq!(count(&s, "keyed_dedup"), 2 * n);
+}
+
+/// E34 (review of #966): an overwrite whose key the write would refuse leaves the old table in place.
+#[test]
+fn a_refused_key_on_an_overwrite_keeps_the_old_table() {
+    let s = session();
+    let n = count(&s, "people");
+    block_on(s.table("people").write().save_as_table("kept")).unwrap();
+    let empty = block_on(
+        s.table("people")
+            .write()
+            .mode("overwrite")
+            .option("krishiv.write.idempotencyKey", "")
+            .save_as_table("kept"),
+    );
+    assert!(empty.is_err());
+    assert_eq!(count(&s, "kept"), n);
+    s.conf()
+        .set("krishiv.sql.files.commitProtocol", "NONE")
+        .unwrap();
+    let none = block_on(
+        s.table("people")
+            .write()
+            .mode("overwrite")
+            .option("krishiv.write.idempotencyKey", "job-1")
+            .save_as_table("kept"),
+    );
+    assert_eq!(class(none), "KRISHIV_UNSUPPORTED_FEATURE");
+    assert_eq!(count(&s, "kept"), n);
+}
+
+/// E34: an overwrite with a usable key replaces the table, and repeating it with that key adds nothing.
+#[test]
+fn a_usable_key_on_an_overwrite_replaces_the_table() {
+    let s = session();
+    let n = count(&s, "people");
+    let keyed = || {
+        block_on(
+            s.table("people")
+                .write()
+                .mode("overwrite")
+                .option("krishiv.write.idempotencyKey", "job-9")
+                .save_as_table("replaced"),
+        )
+    };
+    keyed().unwrap();
+    assert_eq!(count(&s, "replaced"), n);
+    keyed().unwrap();
+    assert_eq!(count(&s, "replaced"), n);
+}
+
+/// E34 (review of #966): a retried keyed overwrite or `errorifexists` create writes nothing, so it
+/// cannot drop what a later write added.
+#[test]
+fn a_retried_keyed_save_as_table_does_not_undo_a_later_append() {
+    let s = session();
+    let n = count(&s, "people");
+    let write = |mode: &str, key: &str| {
+        block_on(
+            s.table("people")
+                .write()
+                .mode(mode)
+                .option("krishiv.write.idempotencyKey", key)
+                .save_as_table("retried"),
+        )
+    };
+    write("overwrite", "k1").unwrap();
+    write("append", "k2").unwrap();
+    assert_eq!(count(&s, "retried"), 2 * n);
+    // The retry of the overwrite: nothing is dropped.
+    write("overwrite", "k1").unwrap();
+    assert_eq!(count(&s, "retried"), 2 * n);
+    // The retry of a creating write does not fail on the table the first try made.
+    write("errorifexists", "k1").unwrap();
+    assert_eq!(count(&s, "retried"), 2 * n);
+}
+
+/// E34 (review of #966): strict option checking accepts the forwarded key.
+#[test]
+fn strict_options_accept_the_idempotency_key_on_a_file_table() {
+    let s = session();
+    s.conf().set("krishiv.io.strictOptions", "true").unwrap();
+    block_on(
+        s.table("people")
+            .write()
+            .option("krishiv.write.idempotencyKey", "job-1")
+            .save_as_table("strict_keyed"),
+    )
+    .unwrap();
+}
+
 #[test]
 fn text_writes_one_string_column_and_orc_is_unsupported() {
     let s = session();

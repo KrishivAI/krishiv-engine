@@ -102,12 +102,26 @@ fn the_provider_follows_the_config() {
         access_provider(&config(Some("roles")), true).unwrap(),
         AccessProvider::Roles
     );
-    for (value, unit) in [
+    assert_eq!(
+        access_provider(&config(Some("external")), true).unwrap(),
+        AccessProvider::External
+    );
+    assert_eq!(
+        access_providers(&config(Some("grants + External")), true).unwrap(),
+        vec![AccessProvider::Grants, AccessProvider::External]
+    );
+    assert_eq!(
+        access_providers(&config(Some("roles+external")), true).unwrap(),
+        vec![AccessProvider::Roles, AccessProvider::External]
+    );
+    for (value, reason) in [
         ("catalog", "G5"),
-        ("external", "G6"),
         ("grants+catalog", "G5"),
-        ("grants,external", "G6"),
-        ("ranger", "grants or roles"),
+        ("grants+external", "not a single provider"),
+        ("grants+grants", "twice"),
+        ("grants+", "empty"),
+        ("grants,external", "`+`-separated"),
+        ("ranger", "grants, roles or external"),
     ] {
         let e = access_provider(&config(Some(value)), true).unwrap_err();
         assert_eq!(
@@ -115,7 +129,7 @@ fn the_provider_follows_the_config() {
             "KRISHIV_INVALID_CONFIG_VALUE",
             "{value}"
         );
-        assert!(e.to_string().contains(unit), "{value}: {e}");
+        assert!(e.to_string().contains(reason), "{value}: {e}");
     }
 }
 

@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //! `DataFrame::count`, as Spark's `Dataset.count`: an aggregate over the frame that keeps the
-//! frame's statement. A child of `dataframe` so that it reads the frame's private fields and
-//! keeps `dataframe.rs` from growing (`cargo xtask file-size`).
+//! frame's statement, and the statement a derived frame inherits. A child of `dataframe` so that
+//! it reads the frame's private fields and keeps `dataframe.rs` from growing
+//! (`cargo xtask file-size`).
 
 use std::sync::{Arc, PoisonError};
 
@@ -9,8 +10,28 @@ use futures::StreamExt;
 use krishiv_common::error::KrishivError;
 
 use super::DataFrame;
+use crate::session::QueryEnv;
 
 impl DataFrame {
+    /// The statement a frame derived from this one runs as: this frame's own analysis's, else the
+    /// one it inherited, so a `limit` or `filter` of a `sql` frame shows that SQL in
+    /// `system.queries`. Its `system.queries` row marker is its own, not the statement's.
+    pub(super) fn statement_for_derived(&self) -> Option<Arc<QueryEnv>> {
+        let own = self
+            .analysis
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+            .map(|a| Arc::clone(&a.env));
+        let source = own.or_else(|| self.statement.clone())?;
+        source.text.as_ref()?;
+        let mut env = QueryEnv::clone(&source);
+        env.row = Arc::default();
+        // A derived frame's unseeded sample draws again, whatever its source drew.
+        env.sample_salt = self.session.query_env().sample_salt;
+        Some(Arc::new(env))
+    }
+
     /// The number of result rows.
     ///
     /// ```
@@ -39,6 +60,8 @@ impl DataFrame {
             .as_ref()
             .map(|a| Arc::clone(&a.env))
             .or_else(|| self.statement.clone());
+        // Spans only for the `sql` frame itself: a derived frame's statement is its parent's text.
+        frame.statement_spans = self.statement.is_none();
         let mut stream = frame.execute_stream().await?;
         let mut rows = 0_u64;
         while let Some(batch) = stream.next().await {

@@ -229,3 +229,49 @@ fn every_session_spills_under_one_cap() {
     assert_eq!(e.error_class().name(), "KRISHIV_SPILL_CAP_EXCEEDED");
     drop(held);
 }
+
+/// A Parquet file of three rows whose footer carries `bytes` of key-value metadata.
+fn wide_footer_file(path: &std::path::Path, bytes: usize) {
+    let schema = Arc::new(Schema::new(vec![Field::new("k", DataType::Int64, false)]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![Arc::new(Int64Array::from(vec![1, 2, 3]))],
+    )
+    .unwrap();
+    let props = parquet::file::properties::WriterProperties::builder()
+        .set_key_value_metadata(Some(vec![parquet::file::metadata::KeyValue::new(
+            "padding".to_owned(),
+            "x".repeat(bytes),
+        )]))
+        .build();
+    let file = std::fs::File::create(path).unwrap();
+    let mut w = parquet::arrow::ArrowWriter::try_new(file, schema, Some(props)).unwrap();
+    w.write(&batch).unwrap();
+    w.close().unwrap();
+}
+
+/// Footer and metadata reads are charged to the statement (the session's pool while it is
+/// planned, the query's while it runs), so `krishiv.session.memoryLimit` bounds them: a
+/// 16 MiB footer is refused under an 8 MiB session and read under a 64 MiB one.
+#[test]
+fn a_session_limit_bounds_the_footer_reads() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("wide.parquet");
+    wide_footer_file(&file, 16 * MIB);
+    let rt = runtime(&dir.path().join("spill"), "1g", None);
+    let query = format!("SELECT sum(k) FROM parquet.`{}`", file.display());
+    let run = |s: &Session| block_on(async { s.sql(&query).await?.collect().await });
+
+    let small = session(&rt, Some("8m"));
+    let e = run(&small).unwrap_err();
+    assert_eq!(e.error_class().name(), "UNABLE_TO_ACQUIRE_MEMORY", "{e}");
+
+    let large = session(&rt, Some("64m"));
+    let got = run(&large).unwrap();
+    let sums = got[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .unwrap();
+    assert_eq!(sums.value(0), 6);
+}
