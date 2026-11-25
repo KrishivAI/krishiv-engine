@@ -319,10 +319,6 @@ impl DataFileWriter {
     ///
     /// # Errors
     /// `INTERNAL_ERROR` for zero bytes.
-    #[expect(
-        dead_code,
-        reason = "used by the rewrite_data_files group executor (36e-2a)"
-    )]
     #[must_use = "the override is on the returned writer"]
     pub(crate) fn with_target_file_bytes(mut self, bytes: u64) -> Result<Self, KrishivError> {
         if bytes == 0 {

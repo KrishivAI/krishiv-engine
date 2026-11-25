@@ -7,11 +7,6 @@
 //! Java keeps the partitions in a `StructLikeMap` (hash order) and applies `max-files-to-rewrite`
 //! in that order; the order is unspecified there, so Krishiv uses the partition key's order.
 
-#![expect(
-    dead_code,
-    reason = "group execution and the procedure's call arm (next commits of 36e-2a) call this"
-)]
-
 use std::collections::BTreeMap;
 
 use super::rewrite_options::{JobOrder, RewriteOptions};

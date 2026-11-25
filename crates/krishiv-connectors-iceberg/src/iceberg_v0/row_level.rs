@@ -211,6 +211,48 @@ impl RowLevelTable for IcebergRowLevel {
         self.cow_sink(request, target, false)
     }
 
+    fn plan_rewrite(
+        &self,
+        options: &std::collections::BTreeMap<String, String>,
+    ) -> krishiv_exec::Result<Vec<krishiv_exec::planner::RewriteGroup>> {
+        use super::maintenance::{rewrite_options::RewriteOptions, rewrite_plan};
+        let target = self.provider.write_target().ok_or_else(|| {
+            KrishivError::from(krishiv_common::error::InternalError {
+                message: "a rewritten Iceberg table without a write target".to_owned(),
+            })
+        })?;
+        let table_target = target
+            .base
+            .properties()
+            .get(super::write::TARGET_FILE_SIZE)
+            .and_then(|v| v.parse::<i64>().ok());
+        let opts = RewriteOptions::parse(options, table_target)?;
+        let (candidates, keys): (Vec<_>, Vec<_>) = self
+            .provider
+            .rewrite_candidates(target.base.default_partition_spec_id())?
+            .into_iter()
+            .unzip();
+        let by_path: std::collections::HashMap<String, Vec<u8>> = candidates
+            .iter()
+            .map(|c| c.path.clone())
+            .zip(keys)
+            .collect();
+        Ok(rewrite_plan::plan(candidates, &opts)
+            .groups
+            .into_iter()
+            .map(|g| krishiv_exec::planner::RewriteGroup {
+                input_bytes: g.input_bytes(),
+                write_max_file_size: g.write_max_file_size,
+                expected_output_files: g.expected_output_files,
+                files: g
+                    .files
+                    .iter()
+                    .filter_map(|f| by_path.get(&f.path).cloned())
+                    .collect(),
+            })
+            .collect())
+    }
+
     /// The sink of one `rewrite_data_files` group (36e-2a): `request.touched` are the group's
     /// files, the rows are theirs unchanged. Validated as Java's `BaseRewriteFiles` (a concurrent
     /// append is no conflict; a file removed or a delete added for a rewritten file is).
@@ -282,15 +324,22 @@ impl IcebergRowLevel {
             validation,
             lineage: self.lineage,
         };
-        Ok(Arc::new(
-            IcebergWriteSink::try_rewrite(
-                target,
-                &request.input_schema,
-                &request.table_name,
-                request.write_id.clone(),
-                overwrite,
-            )?
-            .with_idempotency_key(request.idempotency_key()),
-        ))
+        let mut sink = IcebergWriteSink::try_rewrite(
+            target,
+            &request.input_schema,
+            &request.table_name,
+            request.write_id.clone(),
+            overwrite,
+        )?
+        .with_idempotency_key(request.idempotency_key());
+        if rewrite
+            && let Some(bytes) = request
+                .options
+                .get(krishiv_exec::planner::REWRITE_WRITE_MAX_OPTION)
+                .and_then(|v| v.parse::<u64>().ok())
+        {
+            sink = sink.with_target_file_bytes(bytes);
+        }
+        Ok(Arc::new(sink))
     }
 }

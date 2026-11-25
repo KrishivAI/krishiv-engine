@@ -289,7 +289,6 @@ impl IcebergTableProvider {
     ///
     /// # Errors
     /// The delete assignment's errors.
-    #[expect(dead_code, reason = "group execution (next commit of 36e-2a) calls it")]
     pub(super) fn rewrite_candidates(
         &self,
         default_spec: i32,
