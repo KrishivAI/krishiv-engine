@@ -2322,12 +2322,8 @@ async fn show_string_matches_the_spark_430_fixture() {
     let mut failures = Vec::new();
     for case in fixture["cases"].as_array().expect("cases") {
         let Some(expected) = case["expected"].as_str() else {
-            // An oracle error is a refusal listed on purpose; none may appear unnoticed.
-            assert!(
-                case["error"].is_string() && case["name"].is_string(),
-                "fixture case without an expected text or an error: {case}"
-            );
-            continue;
+            // The fixture lists no refusals today; an oracle error is a regenerated-fixture surprise.
+            panic!("fixture case without an expected text (oracle error?): {case}");
         };
         let got = shown(
             sql(case["sql"].as_str().expect("sql")),
