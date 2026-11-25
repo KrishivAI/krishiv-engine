@@ -2,7 +2,7 @@
  {
   "file": "job00.py",
   "line": 5,
-  "name": "schema_of_avro",
+  "name": "schema_of_variant_agg",
   "status": "not yet"
  },
  {
@@ -14,7 +14,7 @@
  {
   "file": "job01.py",
   "line": 5,
-  "name": "xpath_int",
+  "name": "xpath_long",
   "status": "not yet"
  },
  {
@@ -26,19 +26,19 @@
  {
   "file": "job01.py",
   "line": 8,
-  "name": "tuple_difference_theta_double",
+  "name": "tuple_difference_theta_integer",
   "status": "not yet"
  },
  {
   "file": "job02.py",
   "line": 5,
-  "name": "xpath_number",
+  "name": "xpath_short",
   "status": "not yet"
  },
  {
   "file": "job02.py",
   "line": 10,
-  "name": "try_reflect",
+  "name": "tuple_difference_double",
   "status": "not yet"
  },
  {
@@ -50,13 +50,13 @@
  {
   "file": "job04.py",
   "line": 9,
-  "name": "tuple_difference_double",
+  "name": "tuple_difference_integer",
   "status": "not yet"
  },
  {
   "file": "job05.py",
   "line": 5,
-  "name": "kll_sketch_agg_bigint",
+  "name": "kll_sketch_agg_double",
   "status": "not yet"
  },
  {
@@ -68,19 +68,19 @@
  {
   "file": "job05.py",
   "line": 7,
-  "name": "reflect",
+  "name": "schema_of_avro",
   "status": "not yet"
  },
  {
   "file": "job06.py",
   "line": 7,
-  "name": "kll_sketch_get_rank_double",
+  "name": "kll_sketch_get_rank_float",
   "status": "not yet"
  },
  {
   "file": "job07.py",
   "line": 8,
-  "name": "count_min_sketch",
+  "name": "java_method",
   "status": "not yet"
  },
  {
@@ -98,7 +98,7 @@
  {
   "file": "job08.py",
   "line": 7,
-  "name": "kll_sketch_merge_double",
+  "name": "kll_sketch_merge_float",
   "status": "not yet"
  },
  {
@@ -110,19 +110,19 @@
  {
   "file": "job09.py",
   "line": 7,
-  "name": "tuple_intersection_agg_integer",
+  "name": "tuple_intersection_double",
   "status": "not yet"
  },
  {
   "file": "job10.py",
   "line": 5,
-  "name": "count_min_sketch",
+  "name": "java_method",
   "status": "not yet"
  },
  {
   "file": "job10.py",
   "line": 6,
-  "name": "tuple_sketch_agg_integer",
+  "name": "tuple_sketch_estimate_double",
   "status": "not yet"
  },
  {
@@ -134,13 +134,13 @@
  {
   "file": "job10.py",
   "line": 8,
-  "name": "tuple_union_agg_integer",
+  "name": "tuple_union_double",
   "status": "not yet"
  },
  {
   "file": "job11.py",
   "line": 5,
-  "name": "tuple_intersection_integer",
+  "name": "tuple_intersection_theta_double",
   "status": "not yet"
  },
  {
@@ -170,7 +170,7 @@
  {
   "file": "job13.py",
   "line": 8,
-  "name": "tuple_sketch_estimate_integer",
+  "name": "tuple_sketch_summary_double",
   "status": "not yet"
  },
  {
@@ -182,19 +182,19 @@
  {
   "file": "job14.py",
   "line": 7,
-  "name": "python_worker_logs",
+  "name": "reflect",
   "status": "not yet"
  },
  {
   "file": "job15.py",
   "line": 5,
-  "name": "tuple_sketch_summary_integer",
+  "name": "tuple_sketch_theta_double",
   "status": "not yet"
  },
  {
   "file": "job15.py",
   "line": 6,
-  "name": "sentences",
+  "name": "try_reflect",
   "status": "not yet"
  },
  {
@@ -212,7 +212,7 @@
  {
   "file": "job16.py",
   "line": 7,
-  "name": "tuple_sketch_summary_double",
+  "name": "tuple_sketch_summary_integer",
   "status": "not yet"
  },
  {
@@ -224,19 +224,19 @@
  {
   "file": "job16.py",
   "line": 9,
-  "name": "tuple_intersection_theta_integer",
+  "name": "tuple_sketch_agg_double",
   "status": "not yet"
  },
  {
   "file": "job16.py",
   "line": 10,
-  "name": "kll_sketch_get_n_double",
+  "name": "kll_sketch_get_n_float",
   "status": "not yet"
  },
  {
   "file": "job17.py",
   "line": 6,
-  "name": "tuple_intersection_integer",
+  "name": "tuple_intersection_theta_double",
   "status": "not yet"
  },
  {
@@ -248,31 +248,31 @@
  {
   "file": "job17.py",
   "line": 10,
-  "name": "kll_sketch_get_n_bigint",
+  "name": "kll_sketch_get_n_double",
   "status": "not yet"
  },
  {
   "file": "job18.py",
   "line": 5,
-  "name": "xpath_string",
+  "name": "kll_sketch_merge_bigint",
   "status": "not yet"
  },
  {
   "file": "job18.py",
   "line": 7,
-  "name": "kll_sketch_agg_bigint",
+  "name": "kll_sketch_agg_double",
   "status": "not yet"
  },
  {
   "file": "job19.py",
   "line": 5,
-  "name": "tuple_difference_theta_integer",
+  "name": "tuple_intersection_agg_double",
   "status": "not yet"
  },
  {
   "file": "job20.py",
   "line": 5,
-  "name": "try_reflect",
+  "name": "tuple_difference_double",
   "status": "not yet"
  },
  {
@@ -284,7 +284,7 @@
  {
   "file": "job20.py",
   "line": 7,
-  "name": "tuple_difference_theta_double",
+  "name": "tuple_difference_theta_integer",
   "status": "not yet"
  },
  {
@@ -302,7 +302,7 @@
  {
   "file": "job22.py",
   "line": 5,
-  "name": "tuple_difference_integer",
+  "name": "tuple_difference_theta_double",
   "status": "not yet"
  },
  {
@@ -314,13 +314,13 @@
  {
   "file": "job23.py",
   "line": 5,
-  "name": "kll_sketch_to_string_double",
+  "name": "kll_sketch_to_string_float",
   "status": "not yet"
  },
  {
   "file": "job25.py",
   "line": 6,
-  "name": "tuple_difference_theta_integer",
+  "name": "tuple_intersection_agg_double",
   "status": "not yet"
  },
  {
@@ -350,19 +350,19 @@
  {
   "file": "job28.py",
   "line": 8,
-  "name": "count_min_sketch",
+  "name": "java_method",
   "status": "not yet"
  },
  {
   "file": "job29.py",
   "line": 6,
-  "name": "xpath",
+  "name": "xpath_boolean",
   "status": "not yet"
  },
  {
   "file": "job29.py",
   "line": 9,
-  "name": "tuple_union_theta_double",
+  "name": "tuple_union_theta_integer",
   "status": "not yet"
  },
  {
@@ -374,25 +374,25 @@
  {
   "file": "q00.sql",
   "line": 3,
-  "name": "kll_sketch_agg_double",
+  "name": "kll_sketch_agg_float",
   "status": "not yet"
  },
  {
   "file": "q00.sql",
   "line": 4,
-  "name": "tuple_sketch_agg_double",
+  "name": "tuple_sketch_agg_integer",
   "status": "not yet"
  },
  {
   "file": "q01.sql",
   "line": 4,
-  "name": "tuple_sketch_agg_double",
+  "name": "tuple_sketch_agg_integer",
   "status": "not yet"
  },
  {
   "file": "q01.sql",
   "line": 7,
-  "name": "kll_sketch_to_string_bigint",
+  "name": "kll_sketch_to_string_double",
   "status": "not yet"
  },
  {
@@ -404,31 +404,31 @@
  {
   "file": "q02.sql",
   "line": 4,
-  "name": "kll_sketch_to_string_bigint",
+  "name": "kll_sketch_to_string_double",
   "status": "not yet"
  },
  {
   "file": "q02.sql",
   "line": 5,
-  "name": "tuple_union_double",
+  "name": "tuple_union_integer",
   "status": "not yet"
  },
  {
   "file": "q02.sql",
   "line": 7,
-  "name": "tuple_union_agg_double",
+  "name": "tuple_union_agg_integer",
   "status": "not yet"
  },
  {
   "file": "q03.sql",
   "line": 2,
-  "name": "tuple_intersection_agg_integer",
+  "name": "tuple_intersection_double",
   "status": "not yet"
  },
  {
   "file": "q03.sql",
   "line": 3,
-  "name": "xpath_double",
+  "name": "xpath_float",
   "status": "not yet"
  },
  {
@@ -440,7 +440,7 @@
  {
   "file": "q03.sql",
   "line": 6,
-  "name": "tuple_sketch_estimate_integer",
+  "name": "tuple_sketch_summary_double",
   "status": "not yet"
  },
  {
@@ -452,13 +452,13 @@
  {
   "file": "q04.sql",
   "line": 2,
-  "name": "kll_merge_agg_double",
+  "name": "kll_merge_agg_float",
   "status": "not yet"
  },
  {
   "file": "q04.sql",
   "line": 3,
-  "name": "kll_sketch_get_rank_double",
+  "name": "kll_sketch_get_rank_float",
   "status": "not yet"
  },
  {
@@ -494,7 +494,7 @@
  {
   "file": "q06.sql",
   "line": 6,
-  "name": "tuple_intersection_agg_integer",
+  "name": "tuple_intersection_double",
   "status": "not yet"
  },
  {
@@ -506,13 +506,13 @@
  {
   "file": "q07.sql",
   "line": 3,
-  "name": "kll_sketch_get_rank_bigint",
+  "name": "kll_sketch_get_rank_double",
   "status": "not yet"
  },
  {
   "file": "q08.sql",
   "line": 3,
-  "name": "sentences",
+  "name": "try_reflect",
   "status": "not yet"
  },
  {
@@ -542,13 +542,13 @@
  {
   "file": "q09.sql",
   "line": 7,
-  "name": "sentences",
+  "name": "try_reflect",
   "status": "not yet"
  },
  {
   "file": "q10.sql",
   "line": 3,
-  "name": "kll_merge_agg_bigint",
+  "name": "kll_merge_agg_double",
   "status": "not yet"
  },
  {
@@ -578,13 +578,13 @@
  {
   "file": "q13.sql",
   "line": 2,
-  "name": "tuple_union_theta_integer",
+  "name": "xpath",
   "status": "not yet"
  },
  {
   "file": "q13.sql",
   "line": 4,
-  "name": "tuple_intersection_theta_integer",
+  "name": "tuple_sketch_agg_double",
   "status": "not yet"
  },
  {
@@ -596,19 +596,19 @@
  {
   "file": "q14.sql",
   "line": 4,
-  "name": "java_method",
+  "name": "kll_merge_agg_bigint",
   "status": "not yet"
  },
  {
   "file": "q15.sql",
   "line": 2,
-  "name": "kll_sketch_get_n_bigint",
+  "name": "kll_sketch_get_n_double",
   "status": "not yet"
  },
  {
   "file": "q15.sql",
   "line": 3,
-  "name": "tuple_intersection_double",
+  "name": "tuple_intersection_integer",
   "status": "not yet"
  },
  {
@@ -620,13 +620,13 @@
  {
   "file": "q17.sql",
   "line": 2,
-  "name": "kll_merge_agg_float",
+  "name": "kll_sketch_agg_bigint",
   "status": "not yet"
  },
  {
   "file": "q17.sql",
   "line": 3,
-  "name": "kll_merge_agg_float",
+  "name": "kll_sketch_agg_bigint",
   "status": "not yet"
  },
  {
@@ -644,13 +644,13 @@
  {
   "file": "q18.sql",
   "line": 5,
-  "name": "tuple_intersection_double",
+  "name": "tuple_intersection_integer",
   "status": "not yet"
  },
  {
   "file": "q19.sql",
   "line": 3,
-  "name": "tuple_intersection_theta_integer",
+  "name": "tuple_sketch_agg_double",
   "status": "not yet"
  },
  {
@@ -668,19 +668,19 @@
  {
   "file": "q20.sql",
   "line": 5,
-  "name": "tuple_sketch_agg_double",
+  "name": "tuple_sketch_agg_integer",
   "status": "not yet"
  },
  {
   "file": "q21.sql",
   "line": 2,
-  "name": "tuple_union_theta_double",
+  "name": "tuple_union_theta_integer",
   "status": "not yet"
  },
  {
   "file": "q21.sql",
   "line": 4,
-  "name": "kll_sketch_to_string_double",
+  "name": "kll_sketch_to_string_float",
   "status": "not yet"
  },
  {
@@ -692,19 +692,19 @@
  {
   "file": "q22.sql",
   "line": 3,
-  "name": "kll_merge_agg_bigint",
+  "name": "kll_merge_agg_double",
   "status": "not yet"
  },
  {
   "file": "q22.sql",
   "line": 7,
-  "name": "kll_sketch_to_string_float",
+  "name": "python_worker_logs",
   "status": "not yet"
  },
  {
   "file": "q23.sql",
   "line": 2,
-  "name": "reflect",
+  "name": "schema_of_avro",
   "status": "not yet"
  },
  {
@@ -716,7 +716,7 @@
  {
   "file": "q24.sql",
   "line": 2,
-  "name": "tuple_union_double",
+  "name": "tuple_union_integer",
   "status": "not yet"
  },
  {
@@ -752,25 +752,25 @@
  {
   "file": "q27.sql",
   "line": 6,
-  "name": "tuple_union_double",
+  "name": "tuple_union_integer",
   "status": "not yet"
  },
  {
   "file": "q28.sql",
   "line": 2,
-  "name": "tuple_intersection_double",
+  "name": "tuple_intersection_integer",
   "status": "not yet"
  },
  {
   "file": "q28.sql",
   "line": 5,
-  "name": "kll_sketch_agg_bigint",
+  "name": "kll_sketch_agg_double",
   "status": "not yet"
  },
  {
   "file": "q29.sql",
   "line": 2,
-  "name": "kll_sketch_agg_bigint",
+  "name": "kll_sketch_agg_double",
   "status": "not yet"
  },
  {
@@ -782,7 +782,7 @@
  {
   "file": "q29.sql",
   "line": 4,
-  "name": "kll_sketch_get_quantile_bigint",
+  "name": "kll_sketch_get_quantile_double",
   "status": "not yet"
  }
 ]

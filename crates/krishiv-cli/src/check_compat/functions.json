@@ -113,6 +113,7 @@
  "cot": "supported",
  "count": "supported",
  "count_if": "supported",
+ "count_min_sketch": "supported",
  "covar_pop": "supported",
  "covar_samp": "supported",
  "crc32": "supported",
