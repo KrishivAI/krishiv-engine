@@ -54,7 +54,12 @@ pub(super) fn on_small_stack(f: impl FnOnce() + Send + 'static) {
 #[test]
 fn instrumented_builds_get_a_larger_stack() {
     use std::ffi::OsStr;
-    assert_eq!(small_stack_size(None), 2 << 20);
+    let plain = if cfg!(windows) {
+        WINDOWS_STACK
+    } else {
+        WORKER_STACK
+    };
+    assert_eq!(small_stack_size(None), plain);
     assert_eq!(small_stack_size(Some(OsStr::new("x.profraw"))), 16 << 20);
 }
 
