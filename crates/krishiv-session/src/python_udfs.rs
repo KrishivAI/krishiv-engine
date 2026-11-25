@@ -886,8 +886,10 @@ mod tests {
         // A qualified name never reaches the persisted-function hook.
         let before = hook.0.lock().unwrap().len();
         run("CREATE FUNCTION f AS 'python' USING PYTHON 'f'").unwrap();
+        run("CREATE SCHEMA other").unwrap();
         let err = run("DROP FUNCTION other.f").unwrap_err();
-        assert!(err.to_string().contains("SCHEMA_NOT_FOUND"), "{err}");
+        assert!(err.to_string().contains("ROUTINE_NOT_FOUND"), "{err}");
+        assert_eq!(*hook.0.lock().unwrap(), ["f"]);
         assert_eq!(hook.0.lock().unwrap().len(), before + 1);
         run("DROP FUNCTION f").unwrap();
         run("DROP FUNCTION IF EXISTS f").unwrap();
