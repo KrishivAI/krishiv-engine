@@ -22,7 +22,7 @@ check() { # name, expected-exit(0|1), expected output of installed binary (or "-
   name=$1; want_rc=$2; want_out=$3; shift 3
   dest="$work/bin-$name"
   rc=0
-  env KRISHIV_BASE_URL="file://$rel" KRISHIV_INSTALL_DIR="$dest" "$@" sh "$script" >"$work/log-$name" 2>&1 || rc=$?
+  env KRISHIV_NO_ATTEST=1 KRISHIV_BASE_URL="file://$rel" KRISHIV_INSTALL_DIR="$dest" "$@" sh "$script" >"$work/log-$name" 2>&1 || rc=$?
   if [ "$rc" != "$want_rc" ]; then echo "FAIL $name: exit $rc, wanted $want_rc"; cat "$work/log-$name"; fails=$((fails + 1)); return; fi
   if [ "$want_out" = "-" ]; then
     [ ! -e "$dest/krishiv" ] || { echo "FAIL $name: installed despite refusal"; fails=$((fails + 1)); return; }
@@ -66,6 +66,20 @@ out=$(env KRISHIV_VERSION=v0.3.1 KRISHIV_INSTALL_DIR="$work/bin-ver" KRISHIV_CPU
   mkdir -p "$0/fakebin"; printf "#!/bin/sh\necho \"\$@\" >> \"$0/curl.log\"; exit 22\n" > "$0/fakebin/curl"; chmod +x "$0/fakebin/curl"
   PATH="$0/fakebin:$PATH" sh "$1" 2>&1 || true; cat "$0/curl.log"' "$work" "$script")
 case "$out" in *"releases/download/v0.3.1/"*) echo "ok version-url" ;; *) echo "FAIL version-url: $out"; fails=$((fails + 1)) ;; esac
+
+# --dry-run changes nothing; --version selects the release; unknown flags are refused.
+rel="$work/rel"
+rc=0; sh "$script" --dry-run --version 0.3.1 KRISHIV_X >/dev/null 2>&1 || rc=$?
+[ "$rc" != 0 ] && echo "ok unknown-arg" || { echo "FAIL unknown-arg"; fails=$((fails + 1)); }
+out=$(KRISHIV_CPU_FLAGS="$v3" KRISHIV_INSTALL_DIR="$work/bin-dry" sh "$script" --dry-run --version 0.3.1 2>&1)
+case "$out" in *"releases/download/v0.3.1/"*) [ ! -e "$work/bin-dry" ] && echo "ok dry-run" || { echo "FAIL dry-run: created dir"; fails=$((fails + 1)); } ;; *) echo "FAIL dry-run: $out"; fails=$((fails + 1)) ;; esac
+
+# With gh present the attestation is checked: a failing check installs nothing, KRISHIV_NO_ATTEST=1 skips it.
+mkdir -p "$work/ghbin"; printf '#!/bin/sh\nexit 1\n' > "$work/ghbin/gh"; chmod +x "$work/ghbin/gh"
+rc=0; env PATH="$work/ghbin:$PATH" KRISHIV_NO_ATTEST= KRISHIV_BASE_URL="file://$rel" KRISHIV_INSTALL_DIR="$work/bin-att" KRISHIV_CPU_FLAGS="$v3" sh "$script" >"$work/log-att" 2>&1 || rc=$?
+if [ "$rc" != 0 ] && [ ! -e "$work/bin-att/krishiv" ] && grep -q 'attestation' "$work/log-att"; then echo "ok attestation-refused"; else echo "FAIL attestation-refused"; fails=$((fails + 1)); fi
+rc=0; env PATH="$work/ghbin:$PATH" KRISHIV_NO_ATTEST=1 KRISHIV_BASE_URL="file://$rel" KRISHIV_INSTALL_DIR="$work/bin-att2" KRISHIV_CPU_FLAGS="$v3" sh "$script" >/dev/null 2>&1 || rc=$?
+[ "$rc" = 0 ] && [ -e "$work/bin-att2/krishiv" ] && echo "ok attestation-skipped" || { echo "FAIL attestation-skipped"; fails=$((fails + 1)); }
 
 [ "$fails" = 0 ] || { echo "$fails failure(s)"; exit 1; }
 echo "all install tests passed"

@@ -63,6 +63,11 @@ curl -fsSL https://krishiv.ai/install.sh | sh
 | `KRISHIV_INSTALL_DIR` | Directory for the binary (default: `$HOME/.local/bin`) |
 | `KRISHIV_COMPAT=1` | Install the `krishiv-compat` build even on a CPU that could run the fast one |
 
+`--version 0.3.1` (or `KRISHIV_VERSION`) picks a release and `--dry-run` shows what would happen without changing anything:
+`curl -fsSL https://krishiv.ai/install.sh | sh -s -- --dry-run`. When the GitHub CLI (`gh`) is installed, the script also
+verifies the build attestation and installs nothing if it fails (`KRISHIV_NO_ATTEST=1` skips this). On Windows,
+`irm https://krishiv.ai/install.ps1 | iex` does the same once the Windows build is in a release.
+
 To uninstall, delete the file: `rm ~/.local/bin/krishiv`.
 
 To download by hand instead:
