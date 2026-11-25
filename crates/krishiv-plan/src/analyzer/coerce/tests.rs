@@ -719,7 +719,7 @@ fn try_cast_of_a_nested_value_to_string_may_be_null() {
     assert!(!try_nullable(&t("map<int,int>"), &t("map<int,string>")));
 }
 
-/// `TRY_CAST` of a variant may be NULL whatever the target: Spark's `canUpCast` has no variant arm
+/// `TRY_CAST` of a variant may be NULL whatever the target: Spark's `canUpCast` refuses a variant source
 /// (Spark 4.2.0 and 4.3.0: `TRY_CAST(parse_json('1') AS STRING)` and `AS INT` are nullable).
 #[test]
 fn try_cast_of_a_variant_may_be_null() {
