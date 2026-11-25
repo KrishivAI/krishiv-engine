@@ -18,6 +18,7 @@ Nothing yet.
 
 ### Added
 
+- Under the Spark 4.3 profile, with `spark.sql.timeType.enabled`, `TIME(p)` takes a precision up to 9 (nanoseconds), `LOCALTIME` returns the current time, and `current_timestamp(p)` / `now(p)` take a precision; a nanosecond timestamp precision is refused with Spark 4.3's error. (#981)
 - The Connect server answers the sixteen Spark SQL settings a PySpark client reads when it starts a session or calls `createDataFrame` (`spark.sql.timestampType`, `spark.sql.session.localRelation*` and others) with Spark 4.3's defaults, instead of SQL_CONF_NOT_FOUND. (#879)
   
   `COMMENT ON COLUMN table.column IS 'comment' | NULL` (Spark 4.3) sets or clears a column comment.
@@ -49,6 +50,9 @@ Nothing yet.
 
 ### Fixed
 
+- `collect_list`, `collect_set`, `listagg` and `mode` over string or binary columns no longer use memory outside the (#1013)
+  query's memory limit while they spill; a spilling query could grow to many gigabytes and be killed by the OS.
+- `DataFrame.printSchema(level)` takes the Spark `level` argument and `StructType.treeString(maxDepth)` is added; the Spark 4.3 `vector_*` functions are available in Python. (#1015)
 - Fixed: EXPLAIN ANALYZE prints the plan's dense expression ids, as EXPLAIN does, instead of raw internal ids. (#965)
 - An explicit `krishiv.write.idempotencyKey` now reaches a file table's own writes (creating and appending), so a retried keyed write is not applied twice; a secret-valued key on a table insert is refused instead of dropped. (#966)
   UPDATE and DELETE of a Delta table take `krishiv.write.idempotencyKey`: a retried statement under the same key is committed once.
