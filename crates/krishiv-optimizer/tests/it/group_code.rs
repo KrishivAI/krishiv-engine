@@ -713,3 +713,83 @@ fn tpch_q16_codes_its_part_keys() {
     );
     insta::assert_snapshot!(text);
 }
+
+/// The notes `EagerAggregate` left and the plan, with every rule on.
+fn eager_notes(sql: &str) -> (Plan, Vec<String>) {
+    let ctx = support::ctx_over(catalog());
+    let plan = support::resolve(sql, &ctx);
+    let (optimized, steps) =
+        optimize_traced_with_options(&plan, &Stats::new(), &Options::default()).unwrap();
+    let notes = steps
+        .into_iter()
+        .filter(|s| s.rule == "EagerAggregate" && !s.note.is_empty())
+        .map(|s| s.note)
+        .collect();
+    (optimized, notes)
+}
+
+/// An aggregate both rules accept (its dimension carries only the inferred `isnotnull` on its
+/// join key, which eager aggregation reads as whole since study 54's F-C1): eager aggregation
+/// yields, `GroupKeyCode` codes it, and the plan is the one optimized with eager aggregation off
+/// (Opus review of 091e87454, finding 1).
+#[test]
+fn eager_aggregation_yields_an_aggregate_group_key_code_takes() {
+    let sql = "SELECT g1, g2, count(*) AS n, sum(x) AS s FROM f JOIN d ON fk = dk GROUP BY g1, g2";
+    let (on, notes) = eager_notes(sql);
+    assert!(
+        notes
+            .iter()
+            .any(|n| n == "not applied: GroupKeyCode takes the aggregate"),
+        "{notes:?}\n{}",
+        on.root()
+    );
+    let text = on.root().to_string();
+    assert!(coded(&text), "{notes:?}\n{text}");
+    assert!(!text.contains("PartialAggregate"), "{text}");
+    let ctx = support::ctx_over(catalog());
+    let plan = support::resolve(sql, &ctx);
+    let off = optimize_with_options(
+        &plan,
+        &Stats::new(),
+        &support::options(|o| {
+            o.eager_aggregation = false;
+        }),
+    )
+    .unwrap();
+    assert!(
+        off.structurally_eq(&on),
+        "{}\neager off:\n{}",
+        on.root(),
+        off.root()
+    );
+    // And without the yield's beneficiary, eager aggregation takes the same aggregate.
+    let uncoded = optimize_with_options(
+        &plan,
+        &Stats::new(),
+        &support::options(|o| {
+            o.group_key_code = false;
+        }),
+    )
+    .unwrap();
+    assert!(
+        uncoded.root().to_string().contains("PartialAggregate"),
+        "{}",
+        uncoded.root()
+    );
+}
+
+/// Where `GroupKeyCode` refuses (a floating-point key), eager aggregation does not yield and
+/// takes the aggregate below the join.
+#[test]
+fn eager_aggregation_takes_an_aggregate_group_key_code_refuses() {
+    let sql = "SELECT g1, gd, count(*) AS n FROM f JOIN d ON fk = dk GROUP BY g1, gd";
+    let (on, notes) = eager_notes(sql);
+    assert!(
+        !notes.iter().any(|n| n.contains("GroupKeyCode takes")),
+        "{notes:?}"
+    );
+    let text = on.root().to_string();
+    assert!(!coded(&text), "{text}");
+    assert!(text.contains("PartialAggregate"), "{notes:?}\n{text}");
+    run(sql, &Stats::new());
+}

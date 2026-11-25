@@ -169,6 +169,12 @@ pub(crate) fn rewrite(
 /// (the rule's single aggregate then needs no merge above the join). A
 /// candidate awaiting a key count is not taken, and its request is made as
 /// the rule itself would make it.
+///
+/// It asks on the plan before `prune_and_tidy`, which the rule runs after:
+/// pruning drops only columns nothing reads and tidies projections, so the
+/// aggregate's keys, calls, joins and the proofs of uniqueness the rule
+/// reads are the same. Were the two ever to disagree, eager yields and the
+/// rule refuses, so neither fires; never both.
 pub(crate) struct Probe<'a> {
     ctx: Context<'a>,
 }

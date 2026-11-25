@@ -43,11 +43,12 @@
 //!   `1 / `[`MIN_REDUCTION`] of `S`'s rows;
 //! - at most one key beyond the join's own;
 //! - the other side is a table read whole (only filters that a join key is
-//!   not NULL, as inferred join filters add them, may sit on it). A filtered dimension prunes the
-//!   aggregated side through a runtime filter, which pays more than grouping
-//!   and which a smaller aggregate could take away by becoming the join's build
-//!   side; estimates cannot see this, as they read a key's matches from its
-//!   distinct counts (TPC-DS q12, q43 and q63 ran 1.2–1.4x slower);
+//!   not NULL, as inferred join filters add them, may sit on it). A filtered
+//!   dimension prunes the aggregated side through a runtime filter, which pays
+//!   more than grouping and which a smaller aggregate could take away by
+//!   becoming the join's build side; estimates cannot see this, as they read a
+//!   key's matches from its distinct counts (TPC-DS q12, q43 and q63 ran
+//!   1.2–1.4x slower);
 //! - every key's distinct count is known (never [`StatSource::Guess`]): Umbra
 //!   measured this rewrite over 10× slower on TPC-H Q17 when it fires blind.
 //!
