@@ -1672,7 +1672,8 @@ pub(super) fn force_nullable(from: &DataType, to: &DataType) -> bool {
         | (_, T::String | T::CollatedString(_))
         | (T::Timestamp, T::Date)
         | (T::Date, T::Timestamp) => false,
-        // The seconds of a time may not fit a `tinyint` or `smallint`.
+        // A string (collated or not) or a date may not parse or fit; the seconds of a time may
+        // not fit a `tinyint` or `smallint`.
         (T::String | T::CollatedString(_) | T::Date, _)
         | (T::Float | T::Double, T::Timestamp)
         | (_, T::Date)
