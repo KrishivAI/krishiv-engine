@@ -363,3 +363,66 @@ fn a_sweep_that_failed_keeps_the_dead_writers_record() {
     std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
     assert!(kept, "the record of a sweep that failed was dropped");
 }
+
+/// The anchored sweep of a directory that is gone is clean; one that cannot unlink a staging file
+/// reports the failure (after trying the rest).
+#[cfg(unix)]
+#[test]
+fn the_anchored_sweep_reports_a_file_it_cannot_remove_and_skips_a_gone_directory() {
+    use crate::io::StagingSweep;
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = TempDir::new("py054-anchored-fail");
+    let dir = tmp.0.join("t");
+    let locked = dir.join("p=1");
+    std::fs::create_dir_all(&locked).unwrap();
+    let staged = locked.join("part-00000-job-2-c000.parquet#1");
+    std::fs::write(&staged, b"x").unwrap();
+    let store = crate::BeneathStore::anchor(&dir).unwrap();
+    let rel = Path::from(dir.to_str().unwrap().trim_start_matches('/'));
+    let gone = Path::from(format!("{}/missing", rel.as_ref()));
+    store.sweep_staging(&gone, &|_, _| true).unwrap();
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let rooted = std::fs::File::create(locked.join("probe")).is_ok();
+    let result = store.sweep_staging(&rel, &|_, _| true);
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+    if !rooted {
+        assert!(result.is_err(), "a file that stayed was reported clean");
+        assert!(staged.exists());
+    }
+}
+
+/// A confined store refuses to sweep a directory outside its roots, and reports a directory it
+/// cannot read.
+#[cfg(unix)]
+#[test]
+fn the_confined_sweep_refuses_outside_roots_and_reports_an_unreadable_directory() {
+    use crate::io::StagingSweep;
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = TempDir::new("py054-confined");
+    let root = std::fs::canonicalize(&tmp.0).unwrap();
+    let inside = root.join("in");
+    let outside = TempDir::new("py054-confined-out");
+    std::fs::create_dir_all(&inside).unwrap();
+    std::fs::write(outside.0.join("part-00000-job-2-c000.parquet#1"), b"x").unwrap();
+    let store = SettledLocalFileSystem::confined(vec![root]);
+    let as_path = |p: &std::path::Path| Path::from(p.to_str().unwrap().trim_start_matches('/'));
+    let refused = store
+        .sweep_staging(
+            &as_path(&std::fs::canonicalize(&outside.0).unwrap()),
+            &|_, _| true,
+        )
+        .unwrap_err();
+    assert_eq!(refused.kind(), std::io::ErrorKind::PermissionDenied);
+    assert!(outside.0.join("part-00000-job-2-c000.parquet#1").exists());
+
+    std::fs::set_permissions(&inside, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let rooted = std::fs::read_dir(&inside).is_ok();
+    let result = store.sweep_staging(&as_path(&inside), &|_, _| true);
+    std::fs::set_permissions(&inside, std::fs::Permissions::from_mode(0o755)).unwrap();
+    if !rooted {
+        assert!(
+            result.is_err(),
+            "an unreadable directory was reported clean"
+        );
+    }
+}
