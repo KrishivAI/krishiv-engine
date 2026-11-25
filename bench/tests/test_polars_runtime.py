@@ -16,9 +16,28 @@ def test_the_runtime_is_recorded_in_the_engine_config():
 
 def test_the_engine_memory_is_the_out_of_core_budget(monkeypatch, tmp_path):
     monkeypatch.setenv("KRISHIV_DATA", str(tmp_path))
-    monkeypatch.delenv("POLARS_OOC_MEMORY_BUDGET_MB", raising=False)
-    monkeypatch.delenv("POLARS_OOC_SPILL_DIR", raising=False)
+    # The constructor sets these with os.environ.setdefault. setenv first, so monkeypatch records each variable and
+    # undoes what the constructor sets (a bare delenv of an unset variable records nothing to undo).
+    for name in ("POLARS_OOC_MEMORY_BUDGET_MB", "POLARS_OOC_SPILL_DIR", "POLARS_MAX_THREADS"):
+        monkeypatch.setenv(name, "")
+        monkeypatch.delenv(name)
     cfg = PolarsEngine(threads=1, memory_limit="20g").config()
     assert cfg["ooc_memory_budget_mb"] == str(20 * 1024)
     assert cfg["ooc_spill_dir"] == str(tmp_path / "tmp" / f"polars-{os.getpid()}")
     assert not os.path.exists(cfg["ooc_spill_dir"])  # made by setup(), not by the constructor
+
+
+def test_teardown_removes_an_empty_spill_directory(monkeypatch, tmp_path):
+    for name in ("POLARS_OOC_MEMORY_BUDGET_MB", "POLARS_OOC_SPILL_DIR", "POLARS_MAX_THREADS"):
+        monkeypatch.setenv(name, "")
+        monkeypatch.delenv(name)
+    spill = tmp_path / "spill"
+    monkeypatch.setenv("POLARS_OOC_SPILL_DIR", str(spill))
+    eng = PolarsEngine(threads=1)
+    spill.mkdir()
+    eng.teardown()
+    assert not spill.exists()
+    spill.mkdir()
+    (spill / "left").write_text("x")
+    eng.teardown()  # a directory still holding files stays
+    assert (spill / "left").exists()

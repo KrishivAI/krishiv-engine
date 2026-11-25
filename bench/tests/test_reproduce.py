@@ -811,6 +811,45 @@ def test_datafusion_keeps_the_schema_of_an_empty_answer():
     assert checksum(table)["values"][0] == 0
 
 
+def test_datafusion_takes_the_batches_own_schema():
+    """DataFusion 55's batches can disagree with its plan schema (decimal precision, nullability): the table takes the
+    first batch's schema, later batches are cast to it, and the checksum is the one of the same values on the plan's."""
+    pytest.importorskip("datafusion")
+    import pyarrow as pa
+
+    from krishiv_bench.adapters.datafusion_engine import DataFusionEngine
+    from krishiv_bench.result_check import checksum
+
+    plan = pa.schema([pa.field("d", pa.decimal128(27, 2)), pa.field("n", pa.int64())])
+    first = pa.schema([pa.field("d", pa.decimal128(17, 2), nullable=False), pa.field("n", pa.int64(), nullable=False)])
+    later = pa.schema([pa.field("d", pa.decimal128(18, 2), nullable=False), pa.field("n", pa.int64(), nullable=False)])
+    d1 = pa.array([Decimal("1.25"), Decimal("-3.50")], pa.decimal128(17, 2))
+    b1 = pa.record_batch([d1, pa.array([1, 2])], schema=first)
+    b2 = pa.record_batch([pa.array([Decimal("7.00")], pa.decimal128(18, 2)), pa.array([3])], schema=later)
+    table = DataFusionEngine()._as_arrow(([b1, b2], plan))
+    assert table.schema == first
+    assert table.num_rows == 3
+    on_plan = pa.Table.from_batches([b.cast(plan) for b in (b1, b2)], schema=plan)
+    assert checksum(table) == checksum(on_plan)
+
+
+def test_datafusion_normalizes_identifiers_except_on_clickbench(tiny, tmp_path):
+    pytest.importorskip("datafusion")
+    import duckdb
+
+    from krishiv_bench.adapters.datafusion_engine import DataFusionEngine
+
+    eng = DataFusionEngine(threads=1)
+    eng.setup(tiny)
+    # TPC-DS q49 spells one alias `CATALOG` and `catalog`.
+    assert eng.run(q("SELECT a AS CATALOG FROM t ORDER BY catalog LIMIT 2")) == [(0,), (1,)]
+    duckdb.sql(f"COPY (SELECT 7 AS EventDate) TO '{tmp_path / 'hits.parquet'}' (FORMAT parquet)")
+    eng = DataFusionEngine(threads=1)
+    eng.setup(Dataset("clickbench", 1, tmp_path, ["hits"]))
+    # ClickBench's CamelCase columns are unquoted in its queries.
+    assert eng.run(q("SELECT EventDate FROM hits")) == [(7,)]
+
+
 def test_a_failing_result_run_drops_the_engine_from_the_samples(tiny):
     class Boom(Fake):
         def timed_run(self, query):
@@ -954,3 +993,18 @@ def test_the_polars_statuses_follow_what_real_polars_raises(sql: str, status: st
         pl.SQLContext(t=t).execute(sql).collect()
     e = raised.value
     assert _answer_status("polars", EngineError(describe_error(e))) == status, describe_error(e)[:80]
+
+
+@pytest.mark.parametrize(
+    ("sql", "rows"),
+    [
+        ("WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM r WHERE n < 3) SELECT * FROM r", 3),
+        ("SELECT * FROM t, LATERAL (SELECT * FROM t) x", 4),
+    ],
+)
+def test_polars_2_2_runs_what_older_polars_refused(sql: str, rows: int):
+    """The pinned Polars plans these, so a run of them is never reported unsupported."""
+    import polars as pl
+
+    t = pl.DataFrame({"a": [1, 2], "b": ["x", "y"]}).lazy()
+    assert pl.SQLContext(t=t).execute(sql).collect().height == rows

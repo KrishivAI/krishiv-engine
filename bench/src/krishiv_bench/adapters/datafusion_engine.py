@@ -75,7 +75,7 @@ class DataFusionEngine(SelfTreeMeasure, Engine):
         if not batches:
             return pa.Table.from_batches([], schema=schema)
         # DataFusion 55's batches can disagree with its plan schema (TPC-DS q16/q94/q95: decimal(27,2) planned,
-        # decimal(17,2) produced; q70/q86: nullability), so the table takes the batches' own schema; values are what
-        # the checksum compares.
+        # decimal(17,2) produced; q70/q86: nullability), so the table takes the batches' own schema. The checksum
+        # compares values: neither precision nor nullability changes it (`result_check.checksum`).
         first = batches[0].schema
         return pa.Table.from_batches([b if b.schema == first else b.cast(first) for b in batches], schema=first)

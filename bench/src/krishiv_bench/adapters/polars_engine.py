@@ -11,6 +11,7 @@ from ``/var/tmp/polars-<user>/spill`` to ``$KRISHIV_DATA/tmp`` (``POLARS_OOC_SPI
 
 from __future__ import annotations
 
+import contextlib
 import os
 from typing import Any
 
@@ -100,3 +101,9 @@ class PolarsEngine(SelfTreeMeasure, Engine):
 
     def _as_arrow(self, pending):
         return pending.to_arrow()
+
+    def teardown(self) -> None:
+        # The per-process spill directory setup() made: removed when Polars left nothing in it.
+        if spill := os.environ.get("POLARS_OOC_SPILL_DIR"):
+            with contextlib.suppress(OSError):
+                os.rmdir(spill)
