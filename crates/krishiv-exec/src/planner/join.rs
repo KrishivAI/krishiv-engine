@@ -341,7 +341,12 @@ impl Planner<'_> {
                 (build_rows, distribution == JoinDistribution::Partitioned),
             );
             // Bounds from the comparison conjuncts (design P3-0.3.1 D2).
-            self.residual_bounds((&probe, &build), &residual, build_rows, &mut rf);
+            self.residual_bounds(
+                (&probe, &build),
+                (&probe_exprs, &residual),
+                build_rows,
+                &mut rf,
+            );
             published = rf.explain;
             runtime_filters = rf.filters;
             gaps = rf.gaps;

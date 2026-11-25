@@ -45,7 +45,11 @@ proptest! {
         let dir = tempfile::tempdir().unwrap();
         let mut rng = seed;
         write(dir.path(), "big.parquet", &table(&mut rng, 1500, domain, nulls));
-        write(dir.path(), "small.parquet", &table(&mut rng, small_rows, domain, nulls));
+        let small = table(&mut rng, small_rows, domain, nulls);
+        // The build stores only rows with a key: with none, no bound has a
+        // value and nothing more is pruned.
+        let keyed = small.column(0).null_count() < small.num_rows();
+        write(dir.path(), "small.parquet", &small);
         let sources = [
             ("big", vec!["big.parquet".to_owned()]),
             ("small", vec!["small.parquet".to_owned()]),
@@ -67,7 +71,7 @@ proptest! {
         // `small`'s `v` holds row numbers below its row count, `big`'s up
         // to 1,499 in file order: an upper bound on `b.v` prunes most of
         // `big`'s row groups by their statistics.
-        if small_rows == 5 {
+        if small_rows == 5 && keyed {
             prop_assert!(with.units_pruned > without.units_pruned, "{:?} {:?}", with, without);
         }
     }
@@ -128,6 +132,11 @@ fn bounds_are_planned_where_sound() {
     let raises = "SELECT b.v, s.v FROM big b JOIN small s \
                   ON b.k32 = s.k32 AND b.v < s.v AND b.v DIV s.k32 > 0";
     assert!(bound(&explain(&t, raises), "max").is_empty());
+    // So does a probe key that may raise: it is computed above the scan, on
+    // every row the scan keeps (review of #1029).
+    let key_raises = "SELECT b.v, s.v FROM big b JOIN small s \
+                      ON b.k32 DIV b.v = s.k32 AND b.v < s.v";
+    assert!(bound(&explain(&t, key_raises), "max").is_empty());
     configured(&mut t, NO_BOUNDS);
     assert!(bound(&explain(&t, JOINS[0]), "max").is_empty());
 }
@@ -204,4 +213,60 @@ fn ntz_against_timestamp_keeps_every_matching_row() {
         assert!(!plan.to_string().contains(" max("), "{q}:\n{plan}");
         assert_eq!(sorted(&run(&plan).0), off, "{q}:\n{plan}");
     }
+}
+
+/// A decimal bound keeps one end: with equal keys, a probe value of `1.00`
+/// below the build's `10.00` matches `b.d <= s.d`, which a closed
+/// `[10.00, 10.00]` range would drop; `11.00` is past the bound (review of
+/// #1029: the random tables tie `d102` to the key).
+#[test]
+fn a_decimal_bound_keeps_values_below_the_build_maximum() {
+    use arrow_array::{ArrayRef, Decimal128Array, Int32Array, RecordBatch};
+    use arrow_schema::{DataType, Field, Schema};
+    use std::sync::Arc;
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let batch = |values: &[(i32, i32, i128)]| {
+        let columns: Vec<ArrayRef> = vec![
+            Arc::new(values.iter().map(|v| v.0).collect::<Int32Array>()),
+            Arc::new(values.iter().map(|v| v.1).collect::<Int32Array>()),
+            Arc::new(
+                values
+                    .iter()
+                    .map(|v| v.2)
+                    .collect::<Decimal128Array>()
+                    .with_precision_and_scale(10, 2)
+                    .unwrap(),
+            ),
+        ];
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("k", DataType::Int32, false),
+            Field::new("d", DataType::Decimal128(10, 2), false),
+        ]));
+        RecordBatch::try_new(schema, columns).unwrap()
+    };
+    write(
+        dir.path(),
+        "big.parquet",
+        &batch(&[(1, 7, 100), (2, 7, 1_100), (3, 8, 100)]),
+    );
+    write(dir.path(), "small.parquet", &batch(&[(9, 7, 1_000)]));
+    let sources = [
+        ("big", vec!["big.parquet".to_owned()]),
+        ("small", vec!["small.parquet".to_owned()]),
+    ];
+    let mut t = parquet_files(dir.path(), &sources, true, &rt);
+    let q = "SELECT b.id, s.id FROM big b JOIN small s ON b.k = s.k AND b.d <= s.d";
+    configured(&mut t, BOUNDS);
+    let plan = t.plan_sql(q).unwrap();
+    let text = plan.to_string();
+    assert!(text.contains("<= max("), "{text}");
+    let got = sorted(&run(&plan).0);
+    configured(&mut t, OFF);
+    assert_eq!(got, sorted(&run(&t.plan_sql(q).unwrap()).0));
+    assert_eq!(got, vec!["1|9".to_owned()]);
 }

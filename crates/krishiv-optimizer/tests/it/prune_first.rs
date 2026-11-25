@@ -169,21 +169,15 @@ fn tables(p: &LogicalPlan) -> Vec<String> {
     out
 }
 
-/// The topmost inner join over the scan of `table` and whether that join's other input holds
-/// exactly `others` (sorted table names).
-fn joined_last(p: &LogicalPlan, table: &str, others: &[&str]) -> bool {
+/// Whether some inner join of `p` has one input scanning exactly `one`
+/// and the other exactly `others` (sorted table names, repeats kept).
+fn joined_last(p: &LogicalPlan, one: &[&str], others: &[&str]) -> bool {
     let mut stack = vec![p];
     while let Some(n) = stack.pop() {
         if let PlanNode::Join { left, right, .. } = &n.node {
             for (a, b) in [(left, right), (right, left)] {
-                if tables(a).iter().any(|t| t == table) && !tables(b).iter().any(|t| t == table) {
-                    let mut b = tables(b);
-                    b.dedup();
-                    if tables(a).iter().filter(|t| *t == table).count() == 1
-                        && b.iter().map(String::as_str).collect::<Vec<_>>() == others
-                    {
-                        return true;
-                    }
+                if tables(a) == one && tables(b) == others {
+                    return true;
                 }
             }
         }
@@ -206,7 +200,7 @@ fn a_clustered_composite_key_plans_the_other_side_first() {
     );
     // `f` meets the block {r, c, d2, d3} (and nothing else of it) as one input.
     assert!(
-        joined_last(on.root(), "f", &["c", "d", "r"]),
+        joined_last(on.root(), &["f"], &["c", "d", "d", "r"]),
         "{}",
         on.root()
     );

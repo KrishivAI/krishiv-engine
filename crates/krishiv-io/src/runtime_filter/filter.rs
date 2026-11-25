@@ -185,13 +185,16 @@ impl KeyFilterBuilder {
         if !supported_key_type(&key_type) {
             return None;
         }
+        // A one-sided range keeps every value up to (or from) the bound, so
+        // no membership form (value list, exact set, Bloom) may test it.
+        let members = options.side == RangeSide::Both;
         Some(Self {
             class: Class::of(&key_type)?,
-            hashes: options.bloom.then(Vec::new),
+            hashes: (options.bloom && members).then(Vec::new),
             drained: false,
             owned: false,
             // No value form (a bound): nothing to hash.
-            distinct: (options.max_values.max(options.exact_max_values) > 0)
+            distinct: (members && options.max_values.max(options.exact_max_values) > 0)
                 .then(Distinct::default),
             key_type,
             options,

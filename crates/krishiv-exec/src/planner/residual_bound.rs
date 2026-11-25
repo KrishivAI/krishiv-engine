@@ -18,9 +18,11 @@
 //! binary and booleans none (a collation orders strings otherwise).
 //!
 //! Planned only where key filters are (joins that drop unmatched probe
-//! rows), and only when no residual conjunct may raise: a probe row the
+//! rows), and only when no residual conjunct or probe key may raise: a probe row the
 //! bound drops may still match a key, and Spark would evaluate the other
 //! conjuncts on that pair. `krishiv.runtimeFilter.residualBounds`.
+
+use std::sync::Arc;
 
 use arrow_schema::DataType;
 use krishiv_io::{KeyFilterOptions, RangeSide};
@@ -81,12 +83,12 @@ fn bound_of<'e>(conjunct: &'e Expr, build: &Planned) -> Option<(&'e Expr, AttrId
 
 impl Planner<'_> {
     /// Adds to `out` the bounds a hash join's `residual` conjuncts publish
-    /// for `probe`'s scans (see the module docs), given the build's plan
-    /// and estimated rows.
+    /// for `probe`'s scans (see the module docs), given the probe side's
+    /// key expressions `keys`, the build's plan and estimated rows.
     pub(crate) fn residual_bounds(
         &mut self,
         (probe, build): (&Planned, &Planned),
-        residual: &[&Expr],
+        (keys, residual): (&[Arc<Expr>], &[&Expr]),
         build_rows: f64,
         out: &mut JoinFilters,
     ) {
@@ -94,7 +96,11 @@ impl Planner<'_> {
         if !s.enabled() || !s.residual_bounds || residual.is_empty() {
             return;
         }
-        if residual.iter().any(|c| may_raise(c, self.env.ansi)) {
+        // A probe key computed above the scan (`CAST(p.s AS BIGINT)`) is
+        // evaluated on every row the scan keeps: a row the bound drops
+        // would not raise its error.
+        let ansi = self.env.ansi;
+        if residual.iter().any(|c| may_raise(c, ansi)) || keys.iter().any(|k| may_raise(k, ansi)) {
             return;
         }
         let input_type = |id: AttrId| column_type(probe, id);

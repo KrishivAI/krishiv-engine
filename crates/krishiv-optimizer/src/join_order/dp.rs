@@ -275,12 +275,11 @@ mod tests {
         };
         let (b, _) = dpsub(n, &masks, &blocked);
         assert!(t.contains_key(&0b0011), "unconstrained plans {{0, 1}}");
-        for s in 1..=0b1111 {
-            if super::splits_block(s, 0b0110) {
-                assert!(!b.contains_key(&s), "{s:#b}");
-            }
-        }
-        assert!(b.contains_key(&0b0110) && b.contains_key(&0b1111));
+        // The chain's connected sets but {0, 1} and {2, 3}, which split
+        // the block.
+        let mut planned: Vec<Set> = b.keys().copied().collect();
+        planned.sort_unstable();
+        assert_eq!(planned, [1, 2, 4, 6, 7, 8, 14, 15]);
         assert!(b[&0b1111].cost >= t[&0b1111].cost);
     }
 

@@ -223,3 +223,27 @@ proptest! {
         }
     }
 }
+
+/// A one-sided range with the default membership caps and a Bloom asked
+/// for still tests the range alone: a value set `{5}` would drop the `4`
+/// the `Upper` range keeps (review of #1029).
+#[test]
+fn a_one_sided_range_takes_no_membership_form() {
+    for side in [RangeSide::Upper, RangeSide::Lower] {
+        let options = KeyFilterOptions {
+            side,
+            bloom: true,
+            ..KeyFilterOptions::default()
+        };
+        let mut b = KeyFilterBuilder::new(DataType::Int32, options).unwrap();
+        b.add(&Int32Array::from(vec![5]), None).unwrap();
+        let f = b.finish();
+        assert_eq!(f.form(), FilterForm::Range, "{side:?}");
+        let probe = Int32Array::from(vec![4, 5, 6]);
+        let want = match side {
+            RangeSide::Upper => vec![true, true, false],
+            _ => vec![false, true, true],
+        };
+        assert_eq!(pass(&f, &probe), want, "{side:?}");
+    }
+}
