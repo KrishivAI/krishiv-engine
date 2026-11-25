@@ -21,22 +21,32 @@ SELECT region, sum(amount) FROM delta.`s3://bucket/trips` GROUP BY region;
 |---|---|
 | Read, including partitioned tables | yes |
 | `INSERT`, CTAS, `df.write.format("delta").save`, `saveAsTable`, `insertInto`, `writeTo` | yes |
-| `DELETE` and `UPDATE` | yes, copy-on-write (a changed file is rewritten) |
+| `DELETE`, `UPDATE` and `MERGE INTO` | yes, copy-on-write (a changed file is rewritten); see [Delta DML](delta-dml.md) |
 | Deletion vectors on write | not written; rows are rewritten |
 | Change data feed read | not yet |
+
+Delta support is the `delta` cargo feature. Of the release artifacts, the Docker image and the Python wheel are built
+with it; the release `krishiv` binary is not (see [What each artifact
+includes](../get-started/install.md#what-each-artifact-includes)). A build without it refuses a Delta table with
+`DATA_SOURCE_NOT_FOUND`: write one small table to check yours.
 
 A table that uses a protocol feature Krishiv cannot read is refused with Spark's own error
 (`DELTA_UNSUPPORTED_FEATURES_FOR_READ`) instead of being read wrongly. Writers commit with optimistic concurrency and
 retry after losing a race; `krishiv.write.commitRetryTimeout` bounds all the attempts of one commit.
+
+A Delta write is single-writer in 0.3: the rows of one statement are gathered to one task, which writes every data
+file and makes the commit. The scans and the rest of the query before the write still run in parallel. Writing a
+table's files from several workers, with one commit made by the coordinator, comes with distributed mode.
 
 ## Iceberg tables
 
 An Iceberg table is read through a [declared catalog](#declare-a-catalog) (`SELECT * FROM lake.sales.orders`).
 Reads cover position deletes, deletion vectors and equality deletes.
 
-Writing Iceberg tables is not available from SQL or the DataFrame API in 0.3: `INSERT`, `CREATE TABLE ... USING iceberg`
-and the other writes do not reach the Iceberg writer yet. The connector has internal implementations of appends, overwrites and merge-on-read `DELETE` and `UPDATE`, but no
-public path opens a table with a committer in 0.3, so a table stays read-only.
+Writing Iceberg tables is not available from SQL or the DataFrame API in 0.3: `INSERT`, `CREATE TABLE ... USING
+iceberg` and the other writes do not reach the Iceberg writer yet. The session does not route a write statement to a
+declared catalog's table in 0.3, so every Iceberg table is read-only. `INSERT INTO lake.ns.t` is refused
+(`REQUIRES_SINGLE_PART_NAMESPACE`). Use Spark, or write the table as Delta or Parquet.
 
 ## Declare a catalog
 

@@ -198,6 +198,24 @@
     ],
     "sqlState" : "40003"
   },
+  "KRISHIV_ICEBERG_EXPIRE_FAILED" : {
+    "message" : [
+      "The expiry of snapshots <snapshotIds> from the Iceberg table <table> was not applied in any of <attempts> requests, the last answered with: <reason>. No file was deleted."
+    ],
+    "sqlState" : "40001"
+  },
+  "KRISHIV_ICEBERG_EXPIRE_STATE_UNKNOWN" : {
+    "message" : [
+      "The expiry of snapshots <snapshotIds> from the Iceberg table <table> may or may not have been applied: <reason>. No file was deleted. Look whether these snapshot ids are still in the table's snapshots before running it again."
+    ],
+    "sqlState" : "40003"
+  },
+  "KRISHIV_ICEBERG_PROCEDURE_GC_DISABLED" : {
+    "message" : [
+      "<message>"
+    ],
+    "sqlState" : "55000"
+  },
   "KRISHIV_ICEBERG_INVALID_DELETES" : {
     "message" : [
       "<message>"
@@ -205,11 +223,35 @@
     "sqlState" : "KD001",
     "audience" : "operator"
   },
+  "KRISHIV_ICEBERG_ORPHAN_LOCATION_SHARED" : {
+    "message" : [
+      "Cannot remove orphan files under <location>: table <otherTable> is stored there."
+    ],
+    "sqlState" : "55000"
+  },
+  "KRISHIV_ICEBERG_ORPHAN_PATH_UNREADABLE" : {
+    "message" : [
+      "Cannot remove orphan files of <table>: the path <path> in <source> cannot be read as a file location, so no file was deleted."
+    ],
+    "sqlState" : "22000"
+  },
   "KRISHIV_ICEBERG_OVERWRITE_PARTIAL_FILE" : {
     "message" : [
       "Cannot delete file where some, but not all, rows match filter <filter>: <file>. The overwrite of the Iceberg table <table> (snapshot <snapshotId>) is not committed; <files>. An overwrite by filter removes whole files only, so running it again fails the same way: overwrite by a filter on the table's partition columns, or one every file matches wholly or not at all."
     ],
     "sqlState" : "22000"
+  },
+  "KRISHIV_ICEBERG_PROCEDURE_ARGUMENT" : {
+    "message" : [
+      "<message>"
+    ],
+    "sqlState" : "22023"
+  },
+  "KRISHIV_ICEBERG_PROCEDURE_TABLE_NOT_FOUND" : {
+    "message" : [
+      "Couldn't load table <table> in catalog <catalog>."
+    ],
+    "sqlState" : "42P01"
   },
   "KRISHIV_IDEMPOTENCY_KEY_REUSED" : {
     "message" : [
@@ -259,6 +301,12 @@
       "The format string or its arguments are invalid: <reason>. Spark raises a Java `java.util.IllegalFormatException` here without an error class."
     ],
     "sqlState" : "22023"
+  },
+  "KRISHIV_INVALID_PYTHON_RELATION" : {
+    "message" : [
+      "The Python relation (mapInPandas, applyInPandas and their Arrow forms) is invalid: <reason>."
+    ],
+    "sqlState" : "42000"
   },
   "KRISHIV_INVALID_OPERATION_TAG" : {
     "message" : [

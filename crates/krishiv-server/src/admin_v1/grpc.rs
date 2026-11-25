@@ -16,11 +16,16 @@ use super::rest::{MAX_BODY, bearer, fresh_request_id, refusal_error};
 use super::{
     AdminError, AdminService, AdminServiceServer, Call, CancelQueriesByTagRequest,
     CancelQueriesByTagResponse, CancelQueryRequest, CancelQueryResponse, DrainRequest,
-    DrainResponse, ErrorKind, GetCapabilitiesRequest, GetCapabilitiesResponse,
-    GetDrainStatusRequest, GetDrainStatusResponse, GetReadinessRequest, GetReadinessResponse,
+    DrainResponse, ErrorKind, GetCapabilitiesRequest, GetCapabilitiesResponse, GetConfigRequest,
+    GetConfigResponse, GetDrainStatusRequest, GetDrainStatusResponse, GetReadinessRequest,
+    GetReadinessResponse, GetResourceGroupConfigRequest, GetResourceGroupConfigResponse,
     GetVersionRequest, GetVersionResponse, KillSessionRequest, KillSessionResponse,
-    ListQueriesRequest, ListQueriesResponse, ListSessionsRequest, ListSessionsResponse,
-    ResumeServingRequest, ResumeServingResponse,
+    ListQueriesRequest, ListQueriesResponse, ListResourceGroupsRequest, ListResourceGroupsResponse,
+    ListSessionsRequest, ListSessionsResponse, ReloadResourceGroupConfigRequest,
+    ReloadResourceGroupConfigResponse, ReplaceResourceGroupConfigRequest,
+    ReplaceResourceGroupConfigResponse, ResumeServingRequest, ResumeServingResponse,
+    SetConfigDefaultsRequest, SetConfigDefaultsResponse, ValidateResourceGroupConfigRequest,
+    ValidateResourceGroupConfigResponse,
 };
 use super::{GRPC_PREFIX, Privilege, routes};
 use crate::guard::{Access, Caller, Guard, GuardRequest, GuardSurface, peer_leaf_of, peer_of};
@@ -141,6 +146,55 @@ impl AdminService for Service {
         request: tonic::Request<ResumeServingRequest>,
     ) -> Result<tonic::Response<ResumeServingResponse>, Status> {
         self.run("ResumeServing", request).await
+    }
+
+    async fn list_resource_groups(
+        &self,
+        request: tonic::Request<ListResourceGroupsRequest>,
+    ) -> Result<tonic::Response<ListResourceGroupsResponse>, Status> {
+        self.run("ListResourceGroups", request).await
+    }
+
+    async fn get_resource_group_config(
+        &self,
+        request: tonic::Request<GetResourceGroupConfigRequest>,
+    ) -> Result<tonic::Response<GetResourceGroupConfigResponse>, Status> {
+        self.run("GetResourceGroupConfig", request).await
+    }
+
+    async fn validate_resource_group_config(
+        &self,
+        request: tonic::Request<ValidateResourceGroupConfigRequest>,
+    ) -> Result<tonic::Response<ValidateResourceGroupConfigResponse>, Status> {
+        self.run("ValidateResourceGroupConfig", request).await
+    }
+
+    async fn replace_resource_group_config(
+        &self,
+        request: tonic::Request<ReplaceResourceGroupConfigRequest>,
+    ) -> Result<tonic::Response<ReplaceResourceGroupConfigResponse>, Status> {
+        self.run("ReplaceResourceGroupConfig", request).await
+    }
+
+    async fn reload_resource_group_config(
+        &self,
+        request: tonic::Request<ReloadResourceGroupConfigRequest>,
+    ) -> Result<tonic::Response<ReloadResourceGroupConfigResponse>, Status> {
+        self.run("ReloadResourceGroupConfig", request).await
+    }
+
+    async fn get_config(
+        &self,
+        request: tonic::Request<GetConfigRequest>,
+    ) -> Result<tonic::Response<GetConfigResponse>, Status> {
+        self.run("GetConfig", request).await
+    }
+
+    async fn set_config_defaults(
+        &self,
+        request: tonic::Request<SetConfigDefaultsRequest>,
+    ) -> Result<tonic::Response<SetConfigDefaultsResponse>, Status> {
+        self.run("SetConfigDefaults", request).await
     }
 }
 

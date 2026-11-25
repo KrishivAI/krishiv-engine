@@ -312,6 +312,8 @@ pub(crate) struct QueryHistory {
     /// Most rows of all principals together
     /// (`krishiv.system.queries.capacity`).
     capacity: usize,
+    /// Where every row transition goes as a query event (P3 E9); inactive without a sink.
+    events: Arc<crate::events::EventBus>,
 }
 
 /// The rows, oldest first, and how many each principal holds (kept beside
@@ -351,6 +353,26 @@ impl QueryHistory {
             rows: Mutex::new(Rows::default()),
             counter: AtomicU64::new(0),
             capacity: capacity.max(1),
+            events: Arc::default(),
+        }
+    }
+
+    /// This history, emitting the events of its rows' transitions to `events`.
+    pub(crate) fn with_events(mut self, events: Arc<crate::events::EventBus>) -> Self {
+        self.events = events;
+        self
+    }
+
+    /// The bus this history emits to.
+    pub(crate) fn events(&self) -> &Arc<crate::events::EventBus> {
+        &self.events
+    }
+
+    /// Emits the `Submitted` event of `row`, a row that is about to be added.
+    fn emit_submitted(&self, row: &mut QueryRow) {
+        if self.events.is_active() {
+            let event = self.events.make(row, crate::events::Transition::Submitted);
+            self.events.emit(event);
         }
     }
 
@@ -366,7 +388,10 @@ impl QueryHistory {
         let rand = h.finish();
         let ms = u64::try_from(ms).unwrap_or(0) & 0xFFFF_FFFF_FFFF;
         // 12 bits after the version, then the variant and 62 more bits.
-        let rand_a = (rand >> 52) & 0xFFF;
+        // The counter leads `rand_a` so ids minted in one millisecond sort in mint order (within a window of 4,096 mints: the
+        // 12 bits wrap); the
+        // random tail keeps them unique.
+        let rand_a = n & 0xFFF;
         let rand_b = (rand ^ n.rotate_left(32)) & 0x3FFF_FFFF_FFFF_FFFF;
         format!(
             "{:08x}-{:04x}-7{:03x}-{:04x}-{:012x}",
@@ -383,9 +408,10 @@ impl QueryHistory {
     /// rows, then, at the runtime's capacity, the oldest finished row of the
     /// principal holding the most finished rows. Running rows are never
     /// evicted.
-    pub(crate) fn push(&self, row: QueryRow) {
+    pub(crate) fn push(&self, mut row: QueryRow) {
         let mut rows = self.rows.lock().unwrap_or_else(PoisonError::into_inner);
         rows.trim(&row.principal, 1, self.capacity);
+        self.emit_submitted(&mut row);
         let principal = row.principal.clone();
         rows.add(row);
         // The incoming row's own bytes may have passed the bound: finished rows go, running ones stay.
@@ -397,7 +423,7 @@ impl QueryHistory {
     /// same session under that id is live (Spark Connect runs one execution
     /// per operation id, so an action run twice at once is refused). The
     /// check and the insertion happen under one lock.
-    pub(crate) fn push_given(&self, row: QueryRow) -> Result<(), KrishivError> {
+    pub(crate) fn push_given(&self, mut row: QueryRow) -> Result<(), KrishivError> {
         let mut rows = self.rows.lock().unwrap_or_else(PoisonError::into_inner);
         if rows
             .rows
@@ -407,6 +433,7 @@ impl QueryHistory {
             return Err(InvalidHandleOperationAlreadyExists { handle: row.id }.into());
         }
         rows.trim(&row.principal, 1, self.capacity);
+        self.emit_submitted(&mut row);
         let principal = row.principal.clone();
         rows.add(row);
         rows.trim(&principal, 0, self.capacity);
@@ -426,7 +453,17 @@ impl QueryHistory {
         {
             let was_running = row.ended_ms.is_none();
             let before = row.heap_bytes();
+            let mark = self
+                .events
+                .is_active()
+                .then(|| crate::events::RowMark::of(row));
             f(row);
+            if let Some(mark) = mark {
+                for t in mark.since(crate::events::RowMark::of(row)) {
+                    let event = self.events.make(row, t);
+                    self.events.emit(event);
+                }
+            }
             *bytes = (*bytes + row.heap_bytes()).saturating_sub(before);
             let just_finished = was_running && row.ended_ms.is_some();
             if just_finished {
@@ -462,7 +499,14 @@ impl QueryHistory {
             row.wall_ns = Some(done.wall_ns);
             row.peak_memory_bytes = Some(done.peak_memory_bytes);
             row.error_class = done.error_class.map(str::to_owned);
-            row.operators = Arc::from(done.operators.as_slice());
+            row.operators = done
+                .operators
+                .iter()
+                .map(|o| OperatorRow {
+                    session_id: session.to_owned(),
+                    ..o.clone()
+                })
+                .collect();
             row.hints = done.hints.as_deref().map(Arc::from);
             if let Some(t) = done.totals {
                 row.workload_class = Some(t.workload_class);

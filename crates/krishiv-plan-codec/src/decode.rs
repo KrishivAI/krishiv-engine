@@ -39,6 +39,7 @@ use krishiv_plan::{
 use krishiv_types::{Collation, DataType, DecimalType, Srid};
 
 use crate::arrow::{schema_from, type_from};
+use crate::decode_sketch::ThetaKind;
 use crate::error::{CodecError, Result, corrupt};
 use crate::features::{Feature, ReaderFeatures, legacy_level, plan_features};
 use crate::proto as pb;
@@ -314,6 +315,14 @@ fn plan(m: &pb::PhysicalPlan, limits: &Limits) -> Result<PhysicalPlan> {
     {
         return Err(corrupt("an unknown binary output style"));
     }
+    // Likewise the version: absent means Spark 4.2 (every plan written before the feature), so
+    // an encoder never sends "4.2". The lines are `krishiv_kernels::SparkVersion::ALL` but 4.2
+    // (`spark_version_lines_match_the_kernels` keeps them equal).
+    if let Some(line) = env.spark_version.as_deref()
+        && !matches!(line, "4.0" | "4.1" | "4.3")
+    {
+        return Err(corrupt("an unknown Spark version"));
+    }
     let env = ExprEnv {
         ansi: env.ansi,
         // The wire carries the flag for the `legacy_statistical_aggregate`
@@ -331,6 +340,7 @@ fn plan(m: &pb::PhysicalPlan, limits: &Limits) -> Result<PhysicalPlan> {
         legacy_coding_error_action: env.legacy_coding_error_action.unwrap_or(false),
         legacy_time_parser: env.legacy_time_parser.unwrap_or(false),
         binary_output_style: env.binary_output_style.as_deref().map(std::sync::Arc::from),
+        spark_version: env.spark_version.as_deref().map(std::sync::Arc::from),
     };
     if !env.zone_name_matches_zone() {
         return Err(corrupt("a session zone name that is not its offset"));
@@ -952,6 +962,13 @@ impl Decoder {
             null_safe: j.null_safe.clone(),
             residual: self.residual(j.residual.as_ref())?,
             single_match: j.single_match,
+            as_of: match &j.as_of {
+                None => None,
+                Some(a) => Some(krishiv_exec::AsOfMergeSpec {
+                    distance: self.residual(a.distance.as_ref())?,
+                    ..crate::decode_asof::as_of_merge(a)?
+                }),
+            },
         })
     }
 
@@ -1026,6 +1043,7 @@ impl Decoder {
                 max_pass_rate: row_stage.max_pass_rate,
             },
             row_id: s.row_id,
+            decided: None,
         })
     }
 
@@ -1340,6 +1358,9 @@ fn aggregate_expr(a: &pb::AggregateExpr) -> Result<AggregateExpr> {
         BitmapAndAgg => AggregateFunction::BitmapAndAgg,
         HllSketchAgg => crate::decode_sketch::hll_sketch_function(a, true)?,
         HllUnionAgg => crate::decode_sketch::hll_sketch_function(a, false)?,
+        ThetaSketchAgg => crate::decode_sketch::theta_sketch_function(a, ThetaKind::Sketch)?,
+        ThetaUnionAgg => crate::decode_sketch::theta_sketch_function(a, ThetaKind::Union)?,
+        ThetaIntersectionAgg => crate::decode_sketch::theta_sketch_function(a, ThetaKind::Intersection)?,
         Listagg => if a.listagg_desc.len() != a.listagg_nulls_first.len() {
             return Err(corrupt("a listagg state of another shape than its orders"));
         } else {
@@ -1353,11 +1374,11 @@ fn aggregate_expr(a: &pb::AggregateExpr) -> Result<AggregateExpr> {
                     .collect(),
             }
         },
-        Percentile => percentile_function(a)?,
-        PercentileApprox => percentile_approx_function(a)?,
-        PercentileDisc => percentile_disc_function(a)?,
-        ApproxCountDistinct => hll_function(a)?,
-        HistogramNumeric => histogram_function(a)?,
+        Percentile => crate::decode_aggregate::percentile_function(a)?,
+        PercentileApprox => crate::decode_aggregate::percentile_approx_function(a)?,
+        PercentileDisc => crate::decode_aggregate::percentile_disc_function(a)?,
+        ApproxCountDistinct => crate::decode_aggregate::hll_function(a)?,
+        HistogramNumeric => crate::decode_aggregate::histogram_function(a)?,
         Udf => AggregateFunction::Udf(Box::new(udaf_call(a.udaf.as_deref())?)),
     })?;
     if a.udaf.is_some() && !matches!(function, AggregateFunction::Udf(_)) {
@@ -1448,102 +1469,6 @@ fn udaf_call(u: Option<&pb::UdafCall>) -> Result<UdafCall> {
         )?,
         nullable: u.nullable,
         state,
-    })
-}
-
-/// A `percentile` function from its wire form: the percentages must be
-/// present, finite and in `[0.0, 1.0]` (the analyzer folds them), and no
-/// parameter of another variant may be set.
-fn percentile_function(a: &pb::AggregateExpr) -> Result<AggregateFunction> {
-    let bad = || corrupt("a `percentile` of bad parameters");
-    if a.percentile_accuracy != 0 || a.percentile_legacy || a.hll_precision != 0 {
-        return Err(bad());
-    }
-    if (a.percentages.is_empty() && !a.percentile_array)
-        || a.percentages
-            .iter()
-            .any(|p| !p.is_finite() || !(0.0..=1.0).contains(p))
-    {
-        return Err(bad());
-    }
-    Ok(AggregateFunction::Percentile {
-        percentages: a.percentages.clone(),
-        array: a.percentile_array,
-        reverse: a.percentile_reverse,
-    })
-}
-
-/// A `percentile_approx` function from its wire form.
-fn percentile_approx_function(a: &pb::AggregateExpr) -> Result<AggregateFunction> {
-    let bad = || corrupt("a `percentile_approx` of bad parameters");
-    if a.percentile_reverse || a.percentile_legacy || a.hll_precision != 0 {
-        return Err(bad());
-    }
-    if a.percentile_accuracy <= 0
-        || (a.percentages.is_empty() && !a.percentile_array)
-        || a.percentages
-            .iter()
-            .any(|p| !p.is_finite() || !(0.0..=1.0).contains(p))
-    {
-        return Err(bad());
-    }
-    Ok(AggregateFunction::PercentileApprox {
-        percentages: a.percentages.clone(),
-        array: a.percentile_array,
-        accuracy: a.percentile_accuracy,
-    })
-}
-
-/// A `percentile_disc` function from its wire form: one percentage.
-fn percentile_disc_function(a: &pb::AggregateExpr) -> Result<AggregateFunction> {
-    let bad = || corrupt("a `percentile_disc` of bad parameters");
-    if a.percentile_accuracy != 0 || a.hll_precision != 0 {
-        return Err(bad());
-    }
-    if (a.percentages.is_empty() && !a.percentile_array)
-        || a.percentages
-            .iter()
-            .any(|p| !p.is_finite() || !(0.0..=1.0).contains(p))
-    {
-        return Err(bad());
-    }
-    Ok(AggregateFunction::PercentileDisc {
-        percentages: a.percentages.clone(),
-        array: a.percentile_array,
-        reverse: a.percentile_reverse,
-        legacy: a.percentile_legacy,
-    })
-}
-
-/// An `approx_count_distinct` function from its wire form.
-fn hll_function(a: &pb::AggregateExpr) -> Result<AggregateFunction> {
-    let bad = || corrupt("an `approx_count_distinct` of bad parameters");
-    if !a.percentages.is_empty()
-        || a.percentile_array
-        || a.percentile_reverse
-        || a.percentile_accuracy != 0
-        || a.percentile_legacy
-        || !(4..=30).contains(&a.hll_precision)
-    {
-        return Err(bad());
-    }
-    Ok(AggregateFunction::ApproxCountDistinct { p: a.hll_precision })
-}
-
-/// A `histogram_numeric` function from its wire form.
-fn histogram_function(a: &pb::AggregateExpr) -> Result<AggregateFunction> {
-    if !a.percentages.is_empty()
-        || a.percentile_array
-        || a.percentile_reverse
-        || a.percentile_accuracy != 0
-        || a.percentile_legacy
-        || a.hll_precision != 0
-        || a.histogram_bins < 2
-    {
-        return Err(corrupt("a `histogram_numeric` of bad parameters"));
-    }
-    Ok(AggregateFunction::HistogramNumeric {
-        nb: a.histogram_bins,
     })
 }
 

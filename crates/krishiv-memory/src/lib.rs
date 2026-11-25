@@ -98,12 +98,13 @@ pub use pool::{
 };
 pub use relation::{RelationHash, RelationLease, RelationRef, RelationStore};
 pub use release::{
-    EPOCH_INTERVAL, pressure_epoch, release_if_pressured, release_if_pressured_here,
-    set_release_hook,
+    EPOCH_INTERVAL, pressure_epoch, release_hook_installed, release_if_pressured,
+    release_if_pressured_here, set_release_hook,
 };
 pub use reservation::Reservation;
 pub use resident::{
-    ALLOWANCE_BASE, SAMPLE_INTERVAL, allowance, process_resident_bytes, set_resident_probe,
+    ALLOWANCE_BASE, SAMPLE_INTERVAL, allowance, process_resident_bytes, resident_probe_installed,
+    set_resident_probe,
 };
 pub use spill::{OwnerId, SpillOwner, SpillService, SpillSignal, SpillTicket, Spillable};
 pub use spillfile::{
@@ -122,7 +123,13 @@ pub struct ConsumerId(u64);
 
 /// A memory pool in the tree (spec 13 §3). [`TreePool`] is the
 /// implementation; the trait is the seam operators and drivers depend on.
-pub trait MemoryPool: Send + Sync + std::fmt::Debug {
+///
+/// A pool is unwind safe: a `LogicalPlan` holds one through a local relation's lease, and `Column` and
+/// `WindowSpec` (public types over plan expressions) stay `UnwindSafe` for callers of `catch_unwind`
+/// (`cargo-semver-checks` `auto_trait_impl_removed` against 0.2.0).
+pub trait MemoryPool:
+    Send + Sync + std::panic::UnwindSafe + std::panic::RefUnwindSafe + std::fmt::Debug
+{
     /// A child pool, optionally with its own limit. Children of the root
     /// are queries.
     fn child(&self, name: &str, limit: Option<usize>) -> Arc<dyn MemoryPool>;

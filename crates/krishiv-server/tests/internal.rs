@@ -11,6 +11,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 use krishiv_server::internal::{Row, SystemTable, UiError, UiFuture, UiSource, router_with_ui};
+use krishiv_server::udf_workers::{UdfWorkerOwner, UdfWorkers};
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -35,6 +36,8 @@ struct Fake {
     fail: bool,
     /// Two sessions each run a query under the id `q-dup`.
     dup: bool,
+    /// Set by a test: the next read of the queries does not list session `s-b`'s run of `q-fin` yet.
+    late: std::sync::atomic::AtomicBool,
     /// How many times the live-query table was read.
     reads: std::sync::atomic::AtomicUsize,
 }
@@ -54,14 +57,33 @@ impl UiSource for Fake {
                 ));
             }
             if dup && table == SystemTable::Queries {
-                return Ok(rows(json!([
+                let late = self.late.swap(false, std::sync::atomic::Ordering::SeqCst);
+                let mut listed = rows(json!([
                     {"query_id": "q-dup", "state": "running", "principal": "ann", "submitted_at": 10, "session_id": "s-a",
                      "query_text": "SELECT a FROM t"},
                     {"query_id": "q-dup", "state": "running", "principal": "bob", "submitted_at": 20, "session_id": "s-b",
                      "query_text": "SELECT b FROM t"},
                     {"query_id": "q-solo", "state": "running", "principal": "bob", "submitted_at": 30, "session_id": "s-b"},
                     {"query_id": "q-old", "state": "finished", "principal": "ann", "submitted_at": 1, "session_id": "s-a"},
-                    {"query_id": "q-old", "state": "running", "principal": "cy", "submitted_at": 40, "session_id": "s-c"}
+                    {"query_id": "q-old", "state": "running", "principal": "cy", "submitted_at": 40, "session_id": "s-c"},
+                    {"query_id": "q-fin", "state": "finished", "principal": "ann", "submitted_at": 50, "session_id": "s-a"},
+                    {"query_id": "q-fin", "state": "finished", "principal": "bob", "submitted_at": 60, "session_id": "s-b"},
+                    {"query_id": "q-one", "state": "finished", "principal": "ann", "submitted_at": 70, "session_id": "s-a"}
+                ]));
+                if late {
+                    listed.retain(|r| r["query_id"] != "q-fin" || r["session_id"] != "s-b");
+                }
+                return Ok(listed);
+            }
+            if dup && table == SystemTable::Operators {
+                // No session on an operator row: the two `q-dup` runs' rows cannot be told apart.
+                return Ok(rows(json!([
+                    {"query_id": "q-dup", "operator_id": 1, "name": "ScanOfAnn", "drivers": 1, "compute_ns": 5},
+                    {"query_id": "q-dup", "operator_id": 1, "name": "ScanOfBob", "drivers": 1, "compute_ns": 900},
+                    {"query_id": "q-solo", "operator_id": 1, "name": "Scan", "drivers": 1, "compute_ns": 7},
+                    {"query_id": "q-fin", "operator_id": 1, "name": "ScanOfAnn", "drivers": 1, "compute_ns": 5},
+                    {"query_id": "q-fin", "operator_id": 1, "name": "ScanOfBob", "drivers": 1, "compute_ns": 900},
+                    {"query_id": "q-one", "operator_id": 1, "name": "Scan", "drivers": 1, "compute_ns": 7}
                 ])));
             }
             Ok(match table {
@@ -71,9 +93,11 @@ impl UiSource for Fake {
                     {"query_id": "q-wait", "state": "queued", "principal": "bob", "submitted_at": 1_000},
                     {"query_id": "q-a", "state": "finished", "principal": "ann", "submitted_at": 100, "session_id": "s-old",
                      "client_type": "_SPARK_CONNECT_PYTHON spark/4.2.0", "tags": {"team": "risk", "nightly": ""},
+                     "query_text": "SELECT sum(amount) FROM Orders WHERE region = 'emea-canary'",
                      "wall_ns": 1_000, "peak_memory_bytes": 10, "rows_produced": 5, "spill_bytes": 0},
                     {"query_id": "q-b", "state": "finished", "principal": "ann", "submitted_at": 200, "session_id": "s-old",
                      "client_type": "krishiv-cli", "tags": {"team": "ads", "krishiv-ui-run-7": ""},
+                     "query_text": "SELECT count(*) FROM clicks",
                      "wall_ns": 1_500, "peak_memory_bytes": 30, "rows_produced": 5, "spill_bytes": 7,
                      "hints": [{"code": "SPILL", "node_id": 2, "operator_id": 2, "message": "HashJoin spilled 4.0 KiB"}]},
                     {"query_id": "q-bad", "state": "failed", "principal": "bob@example.com", "submitted_at": 300,
@@ -142,7 +166,45 @@ impl UiSource for Fake {
                     {"table_name": "spark_catalog.default.ev", "rank": 2, "column_name": "c", "table_queries": 120,
                      "column_queries": 20, "partitions": 3, "pruned_fraction": 0.6667}
                 ])),
+                // `SystemTable` is non-exhaustive: a table added later has no rows here.
+                _ => Vec::new(),
             })
+        })
+    }
+
+    fn plan<'a>(&'a self, query: &'a Row) -> UiFuture<'a, Option<Value>> {
+        // The store keeps a plan by query id alone: `q-fin`'s is whichever session's run was written last.
+        let id = query.get("query_id").and_then(Value::as_str);
+        let stored = matches!(id, Some("q-fin" | "q-one"));
+        Box::pin(
+            async move { Ok(stored.then(|| json!([{"id": 0, "name": "Scan", "children": []}]))) },
+        )
+    }
+
+    fn udf_workers(&self) -> UiFuture<'_, Option<UdfWorkers>> {
+        let fail = self.fail;
+        Box::pin(async move {
+            if fail {
+                return Err(UiError::new("the worker pool is unavailable"));
+            }
+            let owner = |tenant: Option<&str>, session: &str, live, idle| UdfWorkerOwner {
+                principal: "ana".to_owned(),
+                session_id: session.to_owned(),
+                tenant: tenant.map(str::to_owned),
+                live,
+                idle,
+            };
+            Ok(Some(UdfWorkers {
+                live: 4,
+                idle: 1,
+                max_total: 64,
+                max_per_session: 4,
+                max_per_tenant: 32,
+                owners: vec![
+                    owner(None, "s-idle", 1, 1),
+                    owner(Some("acme"), "s-busy", 3, 0),
+                ],
+            }))
         })
     }
 
@@ -196,6 +258,7 @@ async fn start_with(fail: bool, dup: bool) -> (std::net::SocketAddr, Arc<Fake>) 
         closed: Mutex::new(Vec::new()),
         fail,
         dup,
+        late: std::sync::atomic::AtomicBool::new(false),
         reads: std::sync::atomic::AtomicUsize::new(0),
     });
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -250,6 +313,7 @@ async fn every_internal_endpoint_needs_the_token() {
         "/api/internal/sessions",
         "/api/internal/groups",
         "/api/internal/advice",
+        "/api/internal/udf-workers",
     ] {
         let (status, _, body) = request(addr, "GET", path, false).await;
         assert_eq!(status, 401, "{path}");
@@ -423,6 +487,62 @@ async fn history_filters_by_user_client_type_and_tag() {
     // The tag the editor gives its own run is not sent.
     let from_editor = &get(addr, "/api/internal/history?client=cli").await["queries"][0];
     assert_eq!(from_editor["tags"], json!({"team": "ads"}));
+}
+
+#[tokio::test]
+async fn history_filters_by_a_part_of_the_statement_as_it_is_shown() {
+    let (addr, _) = start(false).await;
+    let ids = |path: &'static str| async move {
+        let body = get(addr, path).await;
+        body["queries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|q| q["query_id"].as_str().unwrap().to_owned())
+            .collect::<Vec<_>>()
+    };
+    // Any part of the statement, in either case; a space arrives as `+` or `%20`.
+    assert_eq!(ids("/api/internal/history?text=orders").await, ["q-a"]);
+    assert_eq!(ids("/api/internal/history?text=FROM+ORDERS").await, ["q-a"]);
+    assert_eq!(
+        ids("/api/internal/history?text=select").await,
+        ["q-b", "q-a"]
+    );
+    assert_eq!(
+        ids("/api/internal/history?text=count(*)%20from").await,
+        ["q-b"]
+    );
+    // A query whose text was not recorded matches no text.
+    assert_eq!(
+        ids("/api/internal/history?text=divide").await,
+        Vec::<String>::new()
+    );
+    // The literal is masked in the list, so it finds nothing: a search must not tell which literal a statement
+    // holds. The mask itself is what the list shows, and is found.
+    let shown = &get(addr, "/api/internal/history?text=orders").await["queries"][0];
+    assert_eq!(
+        shown["query_text"],
+        "SELECT sum(amount) FROM Orders WHERE region = ?"
+    );
+    assert_eq!(
+        ids("/api/internal/history?text=emea").await,
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        ids("/api/internal/history?text=region+%3D+%3F").await,
+        ["q-a"]
+    );
+    // It combines with the other filters; empty or undecodable, it is no filter.
+    assert_eq!(
+        ids("/api/internal/history?text=select&tag=nightly").await,
+        ["q-a"]
+    );
+    assert_eq!(
+        ids("/api/internal/history?text=select&client=cli").await,
+        ["q-b"]
+    );
+    assert_eq!(ids("/api/internal/history?text=").await.len(), 5);
+    assert_eq!(ids("/api/internal/history?text=%zz").await.len(), 5);
 }
 
 #[tokio::test]
@@ -759,6 +879,7 @@ async fn a_failing_source_fails_the_session_and_group_routes_as_json() {
         "/api/internal/sessions",
         "/api/internal/groups",
         "/api/internal/advice",
+        "/api/internal/udf-workers",
     ] {
         let (status, _, body) = request(addr, "GET", path, true).await;
         assert_eq!(status, 500, "{path}");
@@ -820,6 +941,34 @@ async fn advice_is_grouped_by_table_in_the_tables_order_with_only_allowlisted_co
     // Advice is read, never applied.
     let (status, ..) = request(addr, "POST", "/api/internal/advice", true).await;
     assert_eq!(status, 405);
+}
+
+/// An ended query has operator rows and a stored plan, both kept by query id alone. When two sessions ran
+/// the id neither is given, also when the other session's run is listed only after the page's first read.
+#[tokio::test]
+async fn an_ended_query_whose_id_two_sessions_ran_gets_no_operators_and_no_plan() {
+    let (addr, fake) = start_dup().await;
+    // The control: one session ran the id, and its operators and plan are given.
+    let one = get(addr, "/api/internal/queries/q-one?session=s-a").await;
+    assert_eq!(
+        one["plan"],
+        json!([{"id": 0, "name": "Scan", "children": []}]),
+        "{one}"
+    );
+    assert_eq!(one["operators"].as_array().unwrap().len(), 1, "{one}");
+    assert_eq!(one["operators_withheld"], false, "{one}");
+    for late in [false, true] {
+        fake.late.store(late, std::sync::atomic::Ordering::SeqCst);
+        let fin = get(addr, "/api/internal/queries/q-fin?session=s-a").await;
+        assert_eq!(fin["query"]["principal"], "ann", "late {late}: {fin}");
+        assert_eq!(fin["plan"], Value::Null, "late {late}: {fin}");
+        assert_eq!(fin["operators"], json!([]), "late {late}: {fin}");
+        assert_eq!(fin["hot_operator"], Value::Null, "late {late}: {fin}");
+        assert_eq!(fin["plan_pending"], false, "late {late}: {fin}");
+        assert_eq!(fin["operators_withheld"], true, "late {late}: {fin}");
+        assert!(!fin.to_string().contains("ScanOf"), "late {late}: {fin}");
+        assert!(!fake.late.load(std::sync::atomic::Ordering::SeqCst));
+    }
 }
 
 #[tokio::test]
@@ -908,12 +1057,80 @@ async fn a_session_qualifier_that_is_empty_or_does_not_decode_is_refused_not_dro
             "GET",
             "/api/internal/compare?a=q-dup&b=q-solo&b_session=%zz",
         ),
+        // A key with no `=` names an empty session too.
+        ("POST", "/api/internal/queries/q-solo/cancel?session"),
+        ("GET", "/api/internal/queries/q-dup?session"),
+        ("GET", "/api/internal/compare?a=q-dup&b=q-solo&a_session"),
+        ("GET", "/api/internal/queries/q-dup/embed-link?session=%FF"),
+        ("GET", "/api/internal/queries/q-dup/embed-link?session"),
+        // The history's filter: not decodable is refused, where dropping it would list every session's.
+        ("GET", "/api/internal/history?session=%FF"),
     ] {
         let (status, _, body) = request(addr, method, path, true).await;
         assert_eq!(status, 400, "{path}: {body}");
         assert_eq!(body["error"], "bad_request", "{path}");
     }
     assert!(fake.cancelled.lock().unwrap().is_empty());
+}
+
+/// An empty history filter is no filter, as the page sends it when the box is cleared.
+#[tokio::test]
+async fn an_empty_session_filter_lists_the_history_of_every_session() {
+    let (addr, _) = start_dup().await;
+    let all = get(addr, "/api/internal/history").await;
+    assert_eq!(get(addr, "/api/internal/history?session=").await, all);
+}
+
+/// A signed link issued for one session's query opens that query, and no other reading of the same link does:
+/// not the other session's query of the id, not the id alone.
+#[tokio::test]
+async fn a_signed_link_opens_the_query_of_the_session_it_names() {
+    let (addr, _) = start_dup().await;
+    let link = |session: String| async move {
+        let path = format!("/api/internal/queries/q-dup/embed-link?ttl=60{session}");
+        let (status, _, body) = request(addr, "GET", &path, true).await;
+        assert_eq!(status, 200, "{body}");
+        let url = body["url"].as_str().unwrap().to_owned();
+        (url.split_once('?').unwrap().1.to_owned(), body)
+    };
+    let open = |query: String| async move {
+        let path = format!("/api/internal/embed/queries/q-dup?{query}");
+        request(addr, "GET", &path, false).await
+    };
+    for (session, principal) in [("s-a", "ann"), ("s-b", "bob")] {
+        let (query, issued) = link(format!("&session={session}")).await;
+        assert_eq!(issued["session_id"], session);
+        assert!(query.ends_with(&format!("&session={session}")), "{query}");
+        let (status, _, body) = open(query.clone()).await;
+        assert_eq!(status, 200, "{body}");
+        assert_eq!(body["query"]["principal"], principal, "{body}");
+        // Operator rows name no session, so the other session's run of the id is not read through the link.
+        assert_eq!(body["operators"], json!([]), "{body}");
+        assert_eq!(body["hot_operator"], Value::Null, "{body}");
+        assert_eq!(body["plan"], Value::Null, "{body}");
+        assert_eq!(body["plan_pending"], false, "{body}");
+        assert_eq!(body["operators_withheld"], true, "{body}");
+        assert!(!body.to_string().contains("ScanOf"), "{body}");
+        // The same signature under another session, or under none, is not a link.
+        let other = if session == "s-a" { "s-b" } else { "s-a" };
+        let swapped = query.replace(&format!("session={session}"), &format!("session={other}"));
+        assert_eq!(open(swapped).await.0, 401);
+        let stripped = query.replace(&format!("&session={session}"), "");
+        assert_eq!(open(stripped).await.0, 401);
+    }
+    // A link for the id alone opens the first query of the id, and gains no session afterwards.
+    let (query, issued) = link(String::new()).await;
+    assert_eq!(issued["session_id"], Value::Null);
+    assert!(!query.contains("session"), "{query}");
+    let (status, _, body) = open(query.clone()).await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["query"]["principal"], "ann", "{body}");
+    assert_eq!(open(format!("{query}&session=s-b")).await.0, 401);
+    assert_eq!(open(format!("{query}&session=%FF")).await.0, 401);
+    assert_eq!(open(format!("{query}&session=")).await.0, 401, "empty");
+    // A link for a session with no query of the id is signed (nothing is read to issue it) and finds nothing.
+    let (query, _) = link("&session=s-c".to_owned()).await;
+    assert_eq!(open(query).await.0, 404);
 }
 
 #[tokio::test]
@@ -948,4 +1165,39 @@ async fn a_source_that_does_not_tell_sessions_apart_cancels_nothing_in_a_named_s
     // The default is not the unqualified cancel: that would end another session's query of the same id.
     assert!(Plain.cancel("q").await.unwrap());
     assert!(!Plain.cancel_in_session("q", "s").await.unwrap());
+}
+
+#[tokio::test]
+async fn the_udf_workers_are_listed_most_workers_first_with_the_pools_limits() {
+    let (addr, _) = start(false).await;
+    let body = get(addr, "/api/internal/udf-workers").await;
+    let pool = &body["pool"];
+    assert_eq!(pool["live"], 4);
+    assert_eq!(pool["busy"], 3);
+    assert_eq!(pool["max_total"], 64);
+    assert_eq!(pool["max_per_session"], 4);
+    assert_eq!(pool["max_per_tenant"], 32);
+    assert_eq!(pool["truncated"], false);
+    let owners = pool["owners"].as_array().unwrap();
+    assert_eq!(owners.len(), 2);
+    assert_eq!(
+        owners[0],
+        json!({"principal": "ana", "session_id": "s-busy", "tenant": "acme", "live": 3, "busy": 3})
+    );
+    assert_eq!(owners[1]["session_id"], "s-idle");
+    assert_eq!(owners[1]["tenant"], Value::Null);
+    assert_eq!(owners[1]["busy"], 0);
+    // Reading only: the route takes no change.
+    let (status, ..) = request(addr, "POST", "/api/internal/udf-workers", true).await;
+    assert_eq!(status, 405);
+}
+
+#[tokio::test]
+async fn a_source_without_a_worker_pool_answers_no_pool() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let app = router_with_ui(Arc::new(Plain), TOKEN);
+    tokio::spawn(async move { axum::serve(listener, app).await });
+    let body = get(addr, "/api/internal/udf-workers").await;
+    assert_eq!(body, json!({"pool": null}));
 }

@@ -1933,8 +1933,8 @@
     "ok": true,
     "rows": [
       "Alice\t0\t2",
-      "NULL\t1\t7",
-      "Bob\t0\t5"
+      "Bob\t0\t5",
+      "NULL\t1\t7"
     ]
   },
   "grouping_id#1": {
@@ -5225,32 +5225,46 @@
     ]
   },
   "theta_difference#1": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "2"
+    ]
   },
   "theta_intersection#1": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "2"
+    ]
   },
   "theta_intersection_agg#1": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "1"
+    ]
   },
   "theta_sketch_agg#1": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "3"
+    ]
   },
   "theta_sketch_estimate#1": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "3"
+    ]
   },
   "theta_union#1": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "6"
+    ]
   },
   "theta_union_agg#1": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "1"
+    ]
   },
   "time_bucket#1": {
     "ok": true,

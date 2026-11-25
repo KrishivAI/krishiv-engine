@@ -33,11 +33,39 @@ use crate::guard::{
 /// One system-table row as JSON (column name to value).
 pub type Row = Map<String, Value>;
 
+/// The W3C `traceparent` and `baggage` header values of an HTTP request: untrusted text the session validates
+/// (a malformed value means no trace and never fails the request).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct InboundTrace {
+    /// The `traceparent` header value.
+    pub traceparent: Option<String>,
+    /// The `baggage` header value.
+    pub baggage: Option<String>,
+}
+
+impl InboundTrace {
+    /// The trace headers of `headers` (a non-ASCII value is no header at all).
+    pub fn from_headers(headers: &axum::http::HeaderMap) -> Self {
+        let text = |name: &str| {
+            headers
+                .get(name)
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_owned)
+        };
+        Self {
+            traceparent: text("traceparent"),
+            baggage: text("baggage"),
+        }
+    }
+}
+
 /// A boxed future the source returns (object safe, no `async_trait`).
 pub type UiFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, UiError>> + Send + 'a>>;
 
-/// The system tables the UI reads.
+/// The system tables the UI reads. More are added as pages are: a [`UiSource`] outside this crate gives no rows
+/// for a table it does not know.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum SystemTable {
     /// `system.queries`.
     Queries,
@@ -160,6 +188,12 @@ pub trait UiSource: Send + Sync + 'static {
         false
     }
 
+    /// The Python UDF worker pool now, for the Resources page; `None` when this source has no pool (a console
+    /// over one session or over stored profiles, a server without one).
+    fn udf_workers(&self) -> UiFuture<'_, Option<crate::udf_workers::UdfWorkers>> {
+        Box::pin(async { Ok(None) })
+    }
+
     /// Which console this is, as `/api/internal/health` reports it and the page reads it: `server` (every
     /// session of a server), `embedded` (one session of the host process) or `profiles` (stored profiles, no
     /// engine).
@@ -191,6 +225,18 @@ pub trait UiSource: Send + Sync + 'static {
     fn sql_start<'a>(&'a self, sql: &'a str, caller: Option<&'a Caller>) -> UiFuture<'a, String> {
         let _ = (sql, caller);
         Box::pin(async { Err(UiError::new("this source runs no SQL")) })
+    }
+
+    /// As [`Self::sql_start`], with the W3C trace headers of the HTTP request (P3-T068): the statement's queries join
+    /// that trace. A source that does not trace starts the run as `sql_start` does.
+    fn sql_start_traced<'a>(
+        &'a self,
+        sql: &'a str,
+        caller: Option<&'a Caller>,
+        trace: &'a InboundTrace,
+    ) -> UiFuture<'a, String> {
+        let _ = trace;
+        self.sql_start(sql, caller)
     }
 
     /// The state of an editor run (`state` is `running`, `finished`, `failed` or `cancelled`; a finished run
@@ -334,6 +380,10 @@ pub fn router_with_ui_policy(
         .route("/api/internal/history", get(history))
         .route("/api/internal/compare", get(compare))
         .route("/api/internal/resources", get(resources))
+        .route(
+            "/api/internal/udf-workers",
+            get(crate::udf_workers::udf_workers),
+        )
         .route("/api/internal/sessions", get(crate::workload::sessions))
         .route(
             "/api/internal/sessions/{id}/close",
@@ -430,10 +480,14 @@ fn filter_param(uri: &Uri, name: &str) -> Option<String> {
 /// request names none. A qualifier that is there but empty or does not decode is refused (400): dropping it
 /// would act on whichever session's query comes first.
 fn session_param(uri: &Uri, name: &str) -> Result<Option<String>, Box<Response>> {
-    if param(uri, name).is_none() {
+    // A bare key (`?session`, no `=`) names an empty session too.
+    let bare = uri
+        .query()
+        .is_some_and(|q| q.split('&').any(|kv| kv == name));
+    if !bare && param(uri, name).is_none() {
         return Ok(None);
     }
-    match filter_param(uri, name) {
+    match filter_param(uri, name).filter(|_| !bare) {
         Some(session) => Ok(Some(session)),
         None => Err(Box::new(error(
             StatusCode::BAD_REQUEST,
@@ -927,15 +981,23 @@ async fn detail(s: &UiState, id: &str, session: Option<&str>) -> Response {
             "no query with that id",
         );
     };
+    // Operator rows and stored plans are kept by query id alone. When another session ran a query under this
+    // id they would be both runs', and a signed link is for one session's query: neither run's are given.
+    let other_run = |rows: &[Row]| {
+        rows.iter().any(|r| {
+            text(r, "query_id") == id && text(r, "session_id") != text(query, "session_id")
+        })
+    };
+    let mut shared = other_run(&queries);
     let mut ops: Vec<Row> = operators
         .into_iter()
-        .filter(|r| text(r, "query_id") == id)
+        .filter(|r| !shared && text(r, "query_id") == id)
         .collect();
     ops.sort_by_key(|r| int(r, "operator_id"));
     // A source with no plan for the query leaves the page its flat operator list. A query that has not ended
     // has no stored plan, and its page asks again every second: the store is not searched for it.
     let ended = !matches!(text(query, "state"), "running" | "queued");
-    let plan = if !ended {
+    let mut plan = if !ended || shared {
         None
     } else {
         s.source
@@ -946,6 +1008,20 @@ async fn detail(s: &UiState, id: &str, session: Option<&str>) -> Response {
             .as_ref()
             .and_then(plan_nodes)
     };
+    // Another session may have begun a run of the id after the queries were read, and the operators or the
+    // plan read since may be that run's. A run has its operators and its plan only once it is listed, so
+    // the queries as they are now name it: they are read again whenever there is something to give.
+    if !shared && (!ops.is_empty() || plan.is_some()) {
+        match table(s, SystemTable::Queries).await {
+            Ok(now) if other_run(&now) => {
+                shared = true;
+                ops.clear();
+                plan = None;
+            }
+            Ok(_) => {}
+            Err(e) => return *e,
+        }
+    }
     json_response(
         StatusCode::OK,
         &json!({
@@ -955,6 +1031,7 @@ async fn detail(s: &UiState, id: &str, session: Option<&str>) -> Response {
             // A query with no operator rows (one refused before it ran) has nothing to draw a plan over: no wait.
             "plan_pending": ended && plan.is_none() && !ops.is_empty() && s.source.plan_pending(query),
             "plan": plan,
+            "operators_withheld": shared,
         }),
     )
 }
@@ -1000,13 +1077,20 @@ fn query_param(raw: Option<&str>, name: &str) -> Option<String> {
     })
 }
 
-/// `GET /api/internal/queries/{id}/embed-link[?ttl=seconds&theme=json]`: a signed read-only link to one query's
-/// profile for an embedding console (T071). The life is the asked one, at most `krishiv.ui.embed.linkTtl`.
+/// `GET /api/internal/queries/{id}/embed-link[?ttl=seconds&theme=json&session=id]`: a signed read-only link to
+/// one query's profile for an embedding console (T071). The life is the asked one, at most
+/// `krishiv.ui.embed.linkTtl`. With `session` the link opens that session's query only (two sessions may run a
+/// query under one id); without it, the first query of the id.
 async fn embed_link(
     State(s): State<UiState>,
     Path(id): Path<String>,
     RawQuery(raw): RawQuery,
+    uri: Uri,
 ) -> Response {
+    let session = match session_param(&uri, "session") {
+        Ok(session) => session,
+        Err(e) => return *e,
+    };
     let embed = s.policy.embed();
     let max = embed.ttl().as_secs();
     let ttl = match query_param(raw.as_deref(), "ttl") {
@@ -1040,7 +1124,7 @@ async fn embed_link(
         },
     };
     let expires = now_secs().saturating_add(ttl);
-    let Some(sig) = embed.sign(&id, expires) else {
+    let Some(sig) = embed.sign_in(&id, session.as_deref(), expires) else {
         return error(
             StatusCode::SERVICE_UNAVAILABLE,
             "unavailable",
@@ -1052,13 +1136,17 @@ async fn embed_link(
         crate::embed::percent_encode(&id),
         crate::embed::EMBED_PARAM
     );
+    if let Some(session) = &session {
+        url.push_str("&session=");
+        url.push_str(&crate::embed::percent_encode(session));
+    }
     if let Some(t) = theme {
         url.push_str("&theme=");
         url.push_str(&crate::embed::percent_encode(&t));
     }
     json_response(
         StatusCode::OK,
-        &json!({"url": url, "expires_at": expires, "query_id": id}),
+        &json!({"url": url, "expires_at": expires, "query_id": id, "session_id": session}),
     )
 }
 
@@ -1071,17 +1159,26 @@ async fn embed_config(State(s): State<UiState>) -> Response {
     )
 }
 
-/// `GET /api/internal/embed/queries/{id}?exp=&sig=`: the query detail for a valid signed link, nothing else.
+/// `GET /api/internal/embed/queries/{id}?exp=&sig=[&session=]`: the query detail for a valid signed link,
+/// nothing else. The session is part of what was signed: a link opens the query of the session it was issued
+/// for, and one issued for the id alone opens no named session's.
 async fn embed_query(
     State(s): State<UiState>,
     Path(id): Path<String>,
     RawQuery(raw): RawQuery,
+    uri: Uri,
 ) -> Response {
     let exp = query_param(raw.as_deref(), "exp").and_then(|e| e.parse::<u64>().ok());
     let sig = query_param(raw.as_deref(), "sig");
-    match (exp, sig) {
-        (Some(exp), Some(sig)) if s.policy.embed().verify(&id, exp, &sig, now_secs()) => {
-            detail(&s, &id, None).await
+    // A session that is there but empty or does not decode was never signed: the link is not valid.
+    let session = session_param(&uri, "session").ok();
+    match (exp, sig, session) {
+        (Some(exp), Some(sig), Some(session))
+            if s.policy
+                .embed()
+                .verify_in(&id, session.as_deref(), exp, &sig, now_secs()) =>
+        {
+            detail(&s, &id, session.as_deref()).await
         }
         _ => error(
             StatusCode::UNAUTHORIZED,
@@ -1162,7 +1259,19 @@ async fn history(State(s): State<UiState>, uri: Uri) -> Response {
     // of the name finds it, in either case.
     let client = filter_param(&uri, "client").map(|c| c.to_lowercase());
     let tag = filter_param(&uri, "tag");
+    // Any part of a statement finds it, in either case. It is looked for in the text as the list shows it, with
+    // the literals masked: a search of the stored text would tell a caller which literal a statement holds.
+    let statement = filter_param(&uri, "text").map(|t| t.to_lowercase());
     let session = filter_param(&uri, "session");
+    // An empty filter is no filter, as for the others. One that does not decode is refused: dropping it would
+    // list every session's queries under an address that names one.
+    if session.is_none() && param(&uri, "session").is_some_and(|v| !v.is_empty()) {
+        return error(
+            StatusCode::BAD_REQUEST,
+            "bad_request",
+            "the session filter is not valid text",
+        );
+    }
     let mut done: Vec<&Row> = rows
         .iter()
         .filter(|r| !is_live(r))
@@ -1178,6 +1287,13 @@ async fn history(State(s): State<UiState>, uri: Uri) -> Response {
                 .is_none_or(|c| text(r, "client_type").to_lowercase().contains(c))
         })
         .filter(|r| tag.as_deref().is_none_or(|t| has_tag(r, t)))
+        .filter(|r| {
+            statement.as_deref().is_none_or(|t| {
+                mask_literals(text(r, "query_text"))
+                    .to_lowercase()
+                    .contains(t)
+            })
+        })
         .filter(|r| {
             session
                 .as_deref()
@@ -1345,7 +1461,23 @@ async fn events(State(s): State<UiState>, caller: Option<Extension<Caller>>) -> 
 
 #[cfg(test)]
 mod tests {
-    use super::{CSP, mask_literals, percent_decode};
+    use super::{CSP, InboundTrace, mask_literals, percent_decode};
+
+    /// P3-T068: the trace headers of an HTTP request; a non-ASCII value is no header.
+    #[test]
+    fn the_trace_headers_are_read_as_text_and_a_bad_one_is_none() {
+        use axum::http::{HeaderMap, HeaderValue};
+        assert_eq!(
+            InboundTrace::from_headers(&HeaderMap::new()),
+            InboundTrace::default()
+        );
+        let mut h = HeaderMap::new();
+        h.insert("traceparent", HeaderValue::from_static("00-a-b-01"));
+        h.insert("baggage", HeaderValue::from_bytes(&[0xE9]).unwrap());
+        let t = InboundTrace::from_headers(&h);
+        assert_eq!(t.traceparent.as_deref(), Some("00-a-b-01"));
+        assert_eq!(t.baggage, None);
+    }
 
     /// `ui/tests/fixture_server.py` repeats the policy; the page check is only honest while both agree.
     #[test]

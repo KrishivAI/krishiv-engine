@@ -43,12 +43,14 @@
 
 mod access;
 mod action;
+mod admin_groups;
 mod admin_view;
 mod admission;
 mod analyze;
 mod arrow_values;
 pub mod auth;
 mod cache;
+mod call;
 mod cancel;
 mod carrier;
 mod catalog;
@@ -60,9 +62,11 @@ mod column;
 mod column_stats;
 mod command;
 mod conf;
+mod config_defaults;
 mod dataframe;
 mod delta;
 pub mod egress;
+pub mod events;
 mod execute_immediate;
 mod explain;
 mod explain_graph;
@@ -123,10 +127,15 @@ mod view_schema;
 mod view_session_refs;
 mod window;
 
-pub use access::{PathPrefixPolicy, READ_ONLY_PRIVILEGES, ReadOnlyPolicy, StatementInfo};
+pub use access::{
+    IntersectionPolicy, PathPrefixPolicy, READ_ONLY_PRIVILEGES, ReadOnlyPolicy, StatementInfo,
+    SystemOnlyPolicy,
+};
+pub use admin_groups::{ResourceGroupDocument, ResourceGroupInfo};
 pub use admin_view::{QueryInfo, SessionInfo};
 pub use admission::{AdmissionController, Permit, QueryRequest, Unlimited};
 pub use analyze::{Analysis, AnalysisWarning, OutputColumn};
+pub use config_defaults::{ConfigListing, ConfigSource};
 pub use sessions::Transport;
 pub use system::{capabilities, register_build_features, register_surface};
 
@@ -158,13 +167,14 @@ pub use krishiv_udf_sdk::{
     ReturnField, ScalarUdf, Signature, StateField, UdfArg, UdfError, UdfInputType, UdfLibrary,
     UdfProperties,
 };
-pub use memory_table::BatchSource;
+pub use memory_table::{BatchSource, PlannedRead, SourcePlanner};
 pub use observation::Observation;
 pub use profile::{ExplainVerbose, OptimizerStep, VERBOSE_FORMAT, VERBOSE_VERSION};
 pub use python_udfs::{
     ANONYMOUS_VERSION_BIT, PythonUdfDef, PythonUdfEntry, PythonUdfLibrary, PythonUdtfDef,
     PythonUdtfEntry,
 };
+pub use python_udfs::{MAX_PYTHON_SOURCE_CALLS, python_source_call, run_python_source_call};
 #[cfg(feature = "unstable-ir")]
 pub use python_udfs::{python_udf_call_name, python_udtf_call_name};
 pub use runtime::{EngineRuntime, EngineRuntimeBuilder};

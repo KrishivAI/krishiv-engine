@@ -244,7 +244,20 @@ fn start(spill: &std::path::Path) -> Running {
 
 /// [`start`] with more `--conf KEY=VALUE` settings.
 fn start_with(spill: &std::path::Path, conf: &[String]) -> Running {
-    let mut child = krishiv()
+    spawn_server(spill, conf, false)
+}
+
+/// [`start_with`] with the JSON logs on (`KRISHIV_LOG=json`), so records reach stderr.
+fn start_logging(spill: &std::path::Path, conf: &[String]) -> Running {
+    spawn_server(spill, conf, true)
+}
+
+fn spawn_server(spill: &std::path::Path, conf: &[String], json_logs: bool) -> Running {
+    let mut command = krishiv();
+    if json_logs {
+        command.env("KRISHIV_LOG", "json");
+    }
+    let mut child = command
         // `--allow-root`: CI containers may run as root.
         .args([
             "server",
@@ -379,6 +392,41 @@ fn sigterm_shuts_down_cleanly_and_removes_the_spill_directory() {
         .filter(|n| n.to_string_lossy().starts_with("krishiv-spill-"))
         .collect();
     assert!(left.is_empty(), "spill directories left: {left:?}");
+}
+
+/// A drain the operating system asked for leaves the same action record as `admin.v1`'s `Drain`
+/// (design P3-T066 §5.6), so the log shows every drain.
+#[test]
+#[cfg(feature = "telemetry-logs")]
+fn a_sigterm_drain_leaves_an_action_record() {
+    use std::io::Read;
+    let spill = tempfile::tempdir().expect("tempdir");
+    // Records reach stderr only with the JSON logs on (`KRISHIV_LOG=json`).
+    let mut run = start_logging(spill.path(), &[]);
+    let status = Command::new("kill")
+        .args(["-TERM", &run.child.id().to_string()])
+        .status()
+        .expect("kill");
+    assert!(status.success());
+    let exit = wait_exit(&mut run.child, Duration::from_secs(20));
+    assert_eq!(exit.code(), Some(0), "clean exit");
+    let mut stderr = String::new();
+    run.child
+        .stderr
+        .take()
+        .expect("stderr")
+        .read_to_string(&mut stderr)
+        .expect("stderr is utf-8");
+    let record = stderr
+        .lines()
+        .find(|l| l.contains("admin action"))
+        .unwrap_or_else(|| panic!("no action record in:\n{stderr}"));
+    assert!(record.contains("krishiv::admin_action"), "{record}");
+    assert!(record.contains("\"rpc\":\"Drain\""), "{record}");
+    assert!(record.contains("\"transport\":\"signal\""), "{record}");
+    assert!(record.contains("\"result\":\"ok\""), "{record}");
+    assert!(record.contains("\"auth_method\":\"none\""), "{record}");
+    assert!(record.contains("exit_when_drained true"), "{record}");
 }
 
 /// Runs `script` with a PySpark 4.x Connect client against a fresh server,
@@ -748,7 +796,7 @@ fn the_admin_v1_surface_is_served_behind_the_guard() {
         Some(token),
     );
     assert!(version.starts_with("HTTP/1.1 200"), "{version}");
-    assert!(version.contains("\"adminV1Revision\":\"3\""), "{version}");
+    assert!(version.contains("\"adminV1Revision\":\"4\""), "{version}");
     let caps = http_get_host(
         &server.admin,
         "/api/admin/v1/capabilities",
@@ -990,6 +1038,39 @@ fn startup_token(server: &mut Running) -> String {
         .to_owned()
 }
 
+/// The console's Resources page reads the server's own Python UDF worker pool: its limits as configured, and
+/// no worker before a session's first Python UDF call.
+#[cfg(all(feature = "ui", target_os = "linux"))]
+#[test]
+fn the_console_lists_the_servers_udf_worker_pool() {
+    let spill = tempfile::tempdir().expect("tempdir");
+    let mut server = start_with(
+        spill.path(),
+        &[
+            "krishiv.python.worker.maxTotal=7".to_owned(),
+            "krishiv.python.worker.maxPerSession=2".to_owned(),
+            "krishiv.python.worker.maxPerTenant=5".to_owned(),
+        ],
+    );
+    let token = startup_token(&mut server);
+    let answer = http_get_as(&server.admin, "/api/internal/udf-workers", Some(&token));
+    assert!(answer.starts_with("HTTP/1.1 200"), "{answer}");
+    let body = answer.split("\r\n\r\n").nth(1).expect("a body");
+    let json: serde_json::Value =
+        serde_json::from_str(&body[body.find('{').expect("json")..=body.rfind('}').expect("json")])
+            .expect("json");
+    assert_eq!(
+        json["pool"],
+        serde_json::json!({
+            "live": 0, "busy": 0, "max_total": 7, "max_per_session": 2, "max_per_tenant": 5,
+            "owners": [], "truncated": false,
+        }),
+        "{answer}"
+    );
+    let none = http_get(&server.admin, "/api/internal/udf-workers");
+    assert!(none.starts_with("HTTP/1.1 401"), "{none}");
+}
+
 /// A server started on a history folder lists what an earlier run stored there; a folder that cannot be read
 /// costs the old history, not the server.
 #[cfg(feature = "ui")]
@@ -1025,4 +1106,64 @@ fn a_restarted_server_lists_the_stored_history() {
     let listed = http_get_as(&server.admin, "/api/internal/history", Some(&token));
     assert!(listed.starts_with("HTTP/1.1 200"), "{listed}");
     assert!(listed.contains("before_restart"), "{listed}");
+}
+
+/// ADR 0049: the `external` access provider's startup refusals (no authentication, no endpoint,
+/// any list with `grants`, which `krishiv server` does not wire yet) stop the server before it binds.
+#[cfg(unix)]
+#[test]
+fn the_external_access_provider_is_checked_at_startup() {
+    use std::os::unix::fs::PermissionsExt;
+    let err = refused(&[
+        "krishiv.access.provider=external",
+        "krishiv.access.external.endpoint=http://127.0.0.1:9",
+    ]);
+    assert!(err.contains("needs authentication"), "{err}");
+    // `grants` decides about a principal too: refused without authentication, not run unenforced.
+    let err = refused(&["krishiv.access.provider=grants"]);
+    assert!(
+        err.contains("the grants provider needs authentication"),
+        "{err}"
+    );
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("t");
+    std::fs::write(&path, "external-provider-token-0123456789abcdef").expect("write secret");
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).expect("chmod");
+    let secret = format!("krishiv.auth.tokens.a.secret=file:{}", path.display());
+    let auth = [
+        secret.as_str(),
+        "krishiv.auth.tokens.a.principal=a",
+        "krishiv.auth.tokens.a.role=viewer",
+    ];
+    let with = |more: &[&'static str]| {
+        let mut confs: Vec<&str> = auth.to_vec();
+        confs.extend_from_slice(more);
+        refused(&confs)
+    };
+    let err = with(&["krishiv.access.provider=external"]);
+    assert!(err.contains("endpoint"), "{err}");
+    let err = with(&[
+        "krishiv.access.provider=grants+external",
+        "krishiv.access.external.endpoint=http://127.0.0.1:9",
+    ]);
+    assert!(
+        err.contains("not available in `krishiv server` yet"),
+        "{err}"
+    );
+    // Any list naming `grants` is refused, with or without `external`.
+    for list in [
+        "krishiv.access.provider=grants",
+        "krishiv.access.provider=roles+grants",
+    ] {
+        let err = with(&[list]);
+        assert!(
+            err.contains("a list naming grants is refused"),
+            "{list}: {err}"
+        );
+    }
+    let err = with(&[
+        "krishiv.access.provider=external",
+        "krishiv.access.external.endpoint=http://policy.example.com",
+    ]);
+    assert!(err.contains("loopback"), "{err}");
 }

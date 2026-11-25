@@ -10,14 +10,17 @@ description: "`GroupedData`: a DataFrame grouped by key columns, as `pyspark.sql
 
 Aggregations reuse the group-by aggregation the engine already runs; the
 shortcuts and the dict form of `agg` build the same expressions the SQL
-equivalents build. The engine has no pivot, so `pivot` fails with the
-engine's own `KRISHIV_UNSUPPORTED_FEATURE` error instead of emulating it.
+equivalents build. `pivot` builds the plan node SQL's `PIVOT` lowers to.
 
 ## `GroupedData`
 
 ```python
 class GroupedData
 ```
+
+The result of `DataFrame.groupBy`, `DataFrame.rollup` or `DataFrame.cube`.
+
+Apply aggregates with `agg` or the shorthands (`count`, `sum`, `avg` ...).
 
 ### `agg`
 
@@ -54,6 +57,34 @@ expressions.
 +-----+--------+
 ```
 
+### `apply`
+
+```python
+def apply(self, udf: Any) -> DataFrame
+```
+
+Not available: the deprecated grouped-map `pandas_udf` form (`NOT_IMPLEMENTED`).
+
+### `applyInArrow`
+
+```python
+def applyInArrow(self, func: Any, schema: Any) -> DataFrame
+```
+
+Maps each group using a `pyarrow.Table` function (`group_ops.py` `applyInArrow`).
+
+### `applyInPandas`
+
+```python
+def applyInPandas(self, func: Any, schema: Any) -> DataFrame
+```
+
+Maps each group of the current `DataFrame` using a pandas UDF and returns the result as a
+`DataFrame` (`pyspark/sql/pandas/group_ops.py` 4.2.1 `applyInPandas`).
+
+`func` takes a `pandas.DataFrame` (or `(key, pandas.DataFrame)`, or an iterator of them) and
+returns a `pandas.DataFrame`; `schema` is its result's `StructType` or DDL string.
+
 ### `avg`
 
 ```python
@@ -75,6 +106,14 @@ The average per group of each numeric column, as `pyspark.sql.GroupedData.avg`.
 |  Bob|     5.0|
 +-----+--------+
 ```
+
+### `cogroup`
+
+```python
+def cogroup(self, other: GroupedData) -> PandasCogroupedOps
+```
+
+Cogroups this group with another by common keys, for `applyInPandas`/`applyInArrow`.
 
 ### `count`
 
@@ -147,11 +186,39 @@ The minimum per group of each numeric column, as `pyspark.sql.GroupedData.min`.
 def pivot(self, pivot_col: str, values: list[Any] | None=None) -> GroupedData
 ```
 
-Pivots a column of the DataFrame, as `pyspark.sql.GroupedData.pivot`.
+Pivots a column of the DataFrame and performs the specified aggregation, as
+`pyspark.sql.GroupedData.pivot`.
 
-.. note:: The engine has no pivot: this always fails with the
-    engine's `KRISHIV_UNSUPPORTED_FEATURE` error instead of
-    emulating it.
+**Parameters**
+
+pivot_col : str
+    Name of the column to pivot.
+values : list, optional
+    List of values that will be translated to columns in the output DataFrame. When omitted
+    the distinct values are read from the DataFrame first, sorted ascending with NULL first
+    (at most `spark.sql.pivotMaxValues`, default 10000).
+
+**Notes**
+
+An output column is named by the value (`2012`), or, with several aggregates, by the value and the
+aggregate (`2012_sum(x)`, `2012_s` for an alias). A group with no row for a value has NULL there
+(`count` too) when every aggregate is a numeric one; a pivot that also holds an aggregate such as
+`collect_list` is computed per value with a conditional aggregate, where `count` gives 0 and
+`collect_list` an empty array.
+
+**Examples**
+
+```python
+>>> df = spark.createDataFrame([(2012, "Java", 20000), (2012, "dotNET", 5000), (2013, "Java", 30000)],
+...     ["year", "course", "earnings"])
+>>> df.groupBy("year").pivot("course", ["Java", "dotNET"]).sum("earnings").sort("year").show()
++----+-----+------+
+|year| Java|dotNET|
++----+-----+------+
+|2012|20000|  5000|
+|2013|30000|  NULL|
++----+-----+------+
+```
 
 ### `sum`
 
@@ -174,3 +241,27 @@ The sum per group of each numeric column, as `pyspark.sql.GroupedData.sum`.
 |  Bob|       5|
 +-----+--------+
 ```
+
+## `PandasCogroupedOps`
+
+```python
+class PandasCogroupedOps
+```
+
+Two `GroupedData` cogrouped by their keys (`pyspark/sql/pandas/group_ops.py`).
+
+### `applyInArrow`
+
+```python
+def applyInArrow(self, func: Any, schema: Any) -> DataFrame
+```
+
+Applies `func(left, right)` (or `func(key, left, right)`) to each key's two `pyarrow.Table`s.
+
+### `applyInPandas`
+
+```python
+def applyInPandas(self, func: Any, schema: Any) -> DataFrame
+```
+
+Applies `func(left, right)` (or `func(key, left, right)`) to each key's two `pandas.DataFrame`s.

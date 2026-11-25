@@ -250,12 +250,18 @@ def test_docstring_examples_run_as_documented(spark: SparkSession) -> None:
 
     from krishiv.sql import column as columns
 
+    class _ShowChecker(doctest.OutputChecker):
+        """Exact comparison, except that Spark's ``show()`` ends with one extra empty line the docstrings omit."""
+
+        def check_output(self, want: str, got: str, optionflags: int) -> bool:
+            return super().check_output(want, got.removesuffix("\n") if got.endswith("\n\n") else got, optionflags)
+
     for name in ("getField", "withField", "dropFields"):
         method = getattr(columns.Column, name)
         assert method.__doc__
         test = doctest.DocTestParser().get_doctest(method.__doc__, {"spark": spark}, name, None, 0)
         assert test.examples
-        runner = doctest.DocTestRunner(verbose=False)
+        runner = doctest.DocTestRunner(verbose=False, checker=_ShowChecker())
         runner.run(test, out=lambda _: None)
         assert runner.failures == 0, name
         assert runner.tries > 0, name
@@ -519,12 +525,7 @@ def test_agg_dict(spark: SparkSession) -> None:
         df.groupBy("name").agg("age")  # ty: ignore[invalid-argument-type]
 
 
-def test_pivot_is_unsupported(df: DataFrame) -> None:
-    with pytest.raises(errors.UnsupportedOperationException) as bad:
-        df.groupBy("name").pivot("name")
-    assert bad.value.getCondition() == "KRISHIV_UNSUPPORTED_FEATURE"
-    with pytest.raises(errors.UnsupportedOperationException):
-        df.groupBy("name").pivot("name", ["Alice"])
+def test_pivot_checks_its_arguments(df: DataFrame) -> None:
     with pytest.raises(errors.PySparkTypeError):
         df.groupBy("name").pivot(1)  # ty: ignore[invalid-argument-type]
     with pytest.raises(errors.PySparkTypeError):
@@ -607,7 +608,7 @@ def test_create_verify_schema(spark: SparkSession) -> None:
     with pytest.raises(errors.PySparkTypeError, match="can not accept"):
         spark.createDataFrame([("Alice", "x")], schema)
     strict = T.StructType([T.StructField("name", T.StringType(), False), T.StructField("age", T.IntegerType(), True)])
-    with pytest.raises(errors.PySparkTypeError, match="not nullable"):
+    with pytest.raises(errors.PySparkValueError, match="not nullable"):
         spark.createDataFrame([(None, 1)], strict)
     # Without verification the Arrow conversion decides (a datetime truncates to a date).
     assert spark.createDataFrame(
@@ -618,14 +619,13 @@ def test_create_verify_schema(spark: SparkSession) -> None:
     assert spark.createDataFrame([("Alice", 1)]).columns == ["_1", "_2"]
     with pytest.raises(TypeError):
         spark.createDataFrame(spark.range(1))
-    with pytest.raises(errors.PySparkNotImplementedError):
-        spark.createDataFrame(pa.table({"a": [1]}), schema="a int")
+    # An Arrow table takes a schema: its columns are cast.
+    assert spark.createDataFrame(pa.table({"a": [1]}), schema="a int").dtypes == [("a", "int")]
 
 
-def test_create_nested_schema_is_engine_unsupported(spark: SparkSession) -> None:
-    with pytest.raises(errors.UnsupportedOperationException) as bad:
-        spark.createDataFrame([([1, 2],)], T.StructType([T.StructField("a", T.ArrayType(T.IntegerType()))]))
-    assert bad.value.getCondition() == "KRISHIV_UNSUPPORTED_FEATURE"
+def test_create_nested_schema(spark: SparkSession) -> None:
+    df = spark.createDataFrame([([1, 2],)], T.StructType([T.StructField("a", T.ArrayType(T.IntegerType()))]))
+    assert df.collect() == [Row(a=[1, 2])]
     with pytest.raises(errors.UnsupportedOperationException):
         spark.createDataFrame([("x",)], "a char(3)")
 
@@ -641,7 +641,8 @@ def test_empty_dataframe(spark: SparkSession, capsys: Any) -> None:
     assert capsys.readouterr().out.splitlines() == [
         "root",
         " |-- name: string (nullable = true)",
-        " |-- age: int (nullable = true)",
+        " |-- age: integer (nullable = true)",
+        "",
     ]
     assert spark.emptyDataFrame("name STRING, age INT").columns == ["name", "age"]
     with pytest.raises(errors.PySparkTypeError):

@@ -131,6 +131,14 @@ pub struct ExprEnv {
     /// feature: binary_output_style
     #[prost(string, optional, tag = "11")]
     pub binary_output_style: ::core::option::Option<::prost::alloc::string::String>,
+    /// The Spark release line ("4.0", "4.1", "4.3") whose behaviour the kernels and function
+    /// bindings reproduce (the session's profile). Absent means Spark 4.2, what every plan
+    /// written before the feature ran, so a 0.2 writer's plan keeps its meaning; a 0.3 session
+    /// on its default 4.3 profile sets "4.3", and a worker without the feature (which would run
+    /// it as Spark 4.2) refuses it.
+    /// feature: spark_version
+    #[prost(string, optional, tag = "12")]
+    pub spark_version: ::core::option::Option<::prost::alloc::string::String>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ExplainNode {
@@ -1190,6 +1198,34 @@ pub struct SortMergeJoinNode {
     pub residual: ::core::option::Option<Residual>,
     #[prost(bool, tag = "8")]
     pub single_match: bool,
+    /// feature: as_of_join
+    #[prost(message, optional, tag = "9")]
+    pub as_of: ::core::option::Option<AsOfMerge>,
+}
+/// feature: as_of_join
+/// An as-of join's match: the as-of column of each input, the direction and whether an equal
+/// value matches.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct AsOfMerge {
+    /// feature: as_of_join
+    #[prost(uint64, tag = "1")]
+    pub left_column: u64,
+    /// feature: as_of_join
+    #[prost(uint64, tag = "2")]
+    pub right_column: u64,
+    /// feature: as_of_join
+    #[prost(enumeration = "AsOfMergeDirection", tag = "3")]
+    pub direction: i32,
+    /// feature: as_of_join
+    #[prost(bool, tag = "4")]
+    pub allow_exact: bool,
+    /// feature: as_of_join
+    #[prost(message, optional, tag = "5")]
+    pub distance: ::core::option::Option<Residual>,
+    /// feature: as_of_join
+    /// The distance counts on every passing pair, in both directions (Spark's Connect form).
+    #[prost(bool, tag = "6")]
+    pub distance_on_every_pair: bool,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct NestedLoopJoinNode {
@@ -1713,7 +1749,8 @@ pub struct PythonUdfFunction {
 pub struct DataType {
     #[prost(enumeration = "data_type::Kind", tag = "1")]
     pub kind: i32,
-    /// `KIND_DECIMAL` and `KIND_TIME` only.
+    /// `KIND_DECIMAL` and `KIND_TIME` only. A `KIND_TIME` precision of 7 to 9
+    /// (Spark 4.3's nanosecond TIME) needs feature: time_precision_nanos.
     #[prost(uint32, tag = "2")]
     pub precision: u32,
     /// `KIND_DECIMAL` only.
@@ -2424,6 +2461,15 @@ pub enum AggregateFunction {
     /// `hll_union_agg(sketch, allowDifferentLgConfigK)`: the folded flag is `hll_precision` (0 or 1).
     /// feature: hll_sketch_aggregates
     HllUnionAgg = 54,
+    /// `theta_sketch_agg(x, lgNomEntries)`: the folded lgNomEntries is `hll_precision` (4 to 26).
+    /// feature: theta_sketch_aggregates
+    ThetaSketchAgg = 55,
+    /// `theta_union_agg(sketch, lgNomEntries)`: the folded lgNomEntries is `hll_precision` (4 to 26).
+    /// feature: theta_sketch_aggregates
+    ThetaUnionAgg = 56,
+    /// `theta_intersection_agg(sketch)`.
+    /// feature: theta_sketch_aggregates
+    ThetaIntersectionAgg = 57,
 }
 impl AggregateFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2487,6 +2533,9 @@ impl AggregateFunction {
             Self::BitmapAndAgg => "AGGREGATE_FUNCTION_BITMAP_AND_AGG",
             Self::HllSketchAgg => "AGGREGATE_FUNCTION_HLL_SKETCH_AGG",
             Self::HllUnionAgg => "AGGREGATE_FUNCTION_HLL_UNION_AGG",
+            Self::ThetaSketchAgg => "AGGREGATE_FUNCTION_THETA_SKETCH_AGG",
+            Self::ThetaUnionAgg => "AGGREGATE_FUNCTION_THETA_UNION_AGG",
+            Self::ThetaIntersectionAgg => "AGGREGATE_FUNCTION_THETA_INTERSECTION_AGG",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2547,6 +2596,11 @@ impl AggregateFunction {
             "AGGREGATE_FUNCTION_BITMAP_AND_AGG" => Some(Self::BitmapAndAgg),
             "AGGREGATE_FUNCTION_HLL_SKETCH_AGG" => Some(Self::HllSketchAgg),
             "AGGREGATE_FUNCTION_HLL_UNION_AGG" => Some(Self::HllUnionAgg),
+            "AGGREGATE_FUNCTION_THETA_SKETCH_AGG" => Some(Self::ThetaSketchAgg),
+            "AGGREGATE_FUNCTION_THETA_UNION_AGG" => Some(Self::ThetaUnionAgg),
+            "AGGREGATE_FUNCTION_THETA_INTERSECTION_AGG" => {
+                Some(Self::ThetaIntersectionAgg)
+            }
             _ => None,
         }
     }
@@ -2639,6 +2693,36 @@ impl JoinType {
             "JOIN_TYPE_RIGHT_OUTER" => Some(Self::RightOuter),
             "JOIN_TYPE_EXISTENCE" => Some(Self::Existence),
             "JOIN_TYPE_FULL_OUTER" => Some(Self::FullOuter),
+            _ => None,
+        }
+    }
+}
+/// feature: as_of_join
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum AsOfMergeDirection {
+    Unspecified = 0,
+    Backward = 1,
+    Forward = 2,
+}
+impl AsOfMergeDirection {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "AS_OF_MERGE_DIRECTION_UNSPECIFIED",
+            Self::Backward => "AS_OF_MERGE_DIRECTION_BACKWARD",
+            Self::Forward => "AS_OF_MERGE_DIRECTION_FORWARD",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "AS_OF_MERGE_DIRECTION_UNSPECIFIED" => Some(Self::Unspecified),
+            "AS_OF_MERGE_DIRECTION_BACKWARD" => Some(Self::Backward),
+            "AS_OF_MERGE_DIRECTION_FORWARD" => Some(Self::Forward),
             _ => None,
         }
     }

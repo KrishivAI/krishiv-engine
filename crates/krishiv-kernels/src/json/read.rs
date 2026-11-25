@@ -860,12 +860,14 @@ fn read_string(raw: RawStr<'_>, out: &mut Scalar, ctx: &Ctx<'_>) -> Result<(), F
             }
         }
         Scalar::Time(b) => {
+            let micros_only = ctx.opts.time_micros_only;
             let parsed = match &ctx.opts.time_format {
                 Some(pattern) => pattern
-                    .parse_local(&text, false)
+                    .parse_time_of_day_nanos(&text)
                     .map_err(|_| Poison)?
-                    .map(|m| m.rem_euclid(86_400_000_000).wrapping_mul(1_000)),
-                None => crate::cast::time::parse_time(&text),
+                    .map(|n| crate::cast::time::cut_to_micros(n, micros_only)),
+                None if micros_only => crate::cast::time::parse_time(&text),
+                None => crate::cast::time::parse_time_nanos(&text),
             };
             match parsed {
                 Some(v) => {

@@ -92,3 +92,16 @@ for each `DELETE`/`UPDATE` step, each run on its own copy of `before`: the confs
 `...deletionVectors.persistent` confs. Consumer: krishiv-session `tests/delta_dml.rs`. `dml/krishiv-written/` holds
 tables after Krishiv's statements (`write_dml_readback_tables`, `--ignored`, `KRISHIV_DELTA_READBACK_OUT`) and the
 `READBACK.json` Spark recorded reading them (`gen_delta_fixtures.py /out readback /in`).
+
+MERGE oracle (PR-37c; `gen_delta_fixtures.py /out merge`, run as the session probes are): `merge/<scenario>/before` is
+the DML oracle's table setup (`unpartitioned`, `partitioned`, `column-mapping`, `deletion-vectors`, `change-data-feed`,
+`append-only`), `merge/source-parquet` and `merge/source-delta` the file-backed sources the steps read
+(`<src_parquet>`, `<src_delta>`), and `merge/MERGE.json` records for each `MERGE` step, each run on its own copy of
+`before`: the confs set around it, the command's output (four counts) or error, the commits it wrote, its `cdc`
+action count, the rows read back and `DESCRIBE HISTORY`'s newest row. Consumer: krishiv-session `tests/delta_merge.rs`.
+`merge/krishiv-written/` holds tables after Krishiv's `MERGE` statements (`write_merge_readback_tables`, `--ignored`,
+`KRISHIV_DELTA_READBACK_OUT`) and the `READBACK.json` Spark recorded reading them (`gen_delta_fixtures.py /out
+readback /in`). delta-spark 4.4.1 raises an unresolved name in a `MERGE` as `INTERNAL_ERROR` ("Cannot find main
+error class 'DELTA_MERGE_UNRESOLVED_EXPRESSION'"): recorded as it ran.
+
+`CREATE-PATH.json` (`gen_delta_fixtures.py /out create-path`, with `-e TZ=UTC` and the `/etc/passwd`, `/etc/group` mounts): `CREATE TABLE delta.`<path>`` in each form, one path per case: the log each case writes (every action, per-run values dropped) and what `SELECT *` reads back, or the oracle's error; `tables_after` shows that no catalog entry is made.

@@ -14,9 +14,9 @@ use std::sync::Arc;
 
 use krishiv_common::secret::OptionValue;
 use krishiv_plan::{
-    ALIAS_PART_SEP, Builtin, CastMode, ColumnNamesOp, Expr, ExprNode, Grouping, JoinCondition,
-    JoinKind, Literal, LogicalPlan, Origin, PlanId, PlanNode, ReadSource, SampleBounds,
-    SetOperation, SqlArgs, UnpivotColumnSet,
+    ALIAS_PART_SEP, AsOfDirection, AsOfMatch, Builtin, CastMode, ColumnNamesOp, Expr, ExprNode,
+    Grouping, JoinCondition, JoinKind, Literal, LogicalPlan, Origin, PlanId, PlanNode, ReadSource,
+    SampleBounds, SetOperation, SqlArgs, UnpivotColumnSet,
 };
 
 use super::errors::{
@@ -45,19 +45,25 @@ impl Translator<'_> {
         let node = match kind {
             RelType::Read(r) => self.read(r)?,
             RelType::Sql(s) => self.sql(s)?,
-            RelType::Project(p) => PlanNode::Project {
+            RelType::Project(p) => {
                 // Spark reads a missing input as `OneRowRelation`.
-                input: match &p.input {
+                let input = match &p.input {
                     Some(input) => self.relation(input)?,
                     None => Arc::new(LogicalPlan::new(PlanNode::OneRowRelation)),
-                },
-                exprs: self.expressions(&p.expressions)?,
-            },
+                };
+                // Generators in the list are lifted as the native DataFrame API does.
+                krishiv_plan::select_with_generators(
+                    input,
+                    self.expressions(&p.expressions)?,
+                    || Origin::UNKNOWN,
+                )
+            }
             RelType::Filter(f) => PlanNode::Filter {
                 input: self.input("Filter", f.input.as_deref())?,
                 predicate: self.required_expression(f.condition.as_ref())?,
             },
             RelType::Join(j) => self.join(j)?,
+            RelType::AsOfJoin(j) => self.as_of_join(j)?,
             RelType::Sort(s) => {
                 if s.order.is_empty() {
                     return Err(assertion("'order' must be present and contain elements."));
@@ -182,6 +188,9 @@ impl Translator<'_> {
             },
             RelType::WithColumnsRenamed(w) => self.with_columns_renamed(w)?,
             RelType::Drop(d) => self.drop_columns(d)?,
+            // Spark 4.3's `Zip`: the columns of two DataFrames side by side (the analyzer merges the two
+            // projection chains over their shared base, or refuses with `ZIP_PLANS_NOT_MERGEABLE`).
+            RelType::Zip(z) => self.zip(z)?,
             RelType::Extension(any) => match resolve(any, Slot::Relation)? {
                 // One row, one string column: `SELECT '<message>' AS message`.
                 Extension::Echo(echo) => PlanNode::Project {
@@ -190,6 +199,12 @@ impl Translator<'_> {
                         Expr::literal(Literal::String(echo.message)).alias("message"),
                     )],
                 },
+                // Registered for the command slot only: `resolve` has refused it here.
+                Extension::PersistPythonFunction(_) => {
+                    return Err(super::errors::unsupported(
+                        "the PersistPythonFunction extension in a relation",
+                    ));
+                }
             },
             other => {
                 return Err(unsupported_variant(
@@ -482,6 +497,16 @@ impl Translator<'_> {
         Ok(PlanNode::ColumnNames {
             input: self.input("WithColumnsRenamed", w.input.as_deref())?,
             op: ColumnNamesOp::Rename(pairs),
+        })
+    }
+
+    /// Its own function, not inline in the relation match: that frame is recursed through, and a
+    /// deep relation tree must still translate on a small stack.
+    #[inline(never)]
+    fn zip(&mut self, z: &pb::Zip) -> Result<PlanNode> {
+        Ok(PlanNode::Zip {
+            left: self.input("Zip", z.left.as_deref())?,
+            right: self.input("Zip", z.right.as_deref())?,
         })
     }
 
@@ -833,6 +858,74 @@ impl Translator<'_> {
         })
     }
 
+    /// `AsOfJoin`, as Spark's `transformAsOfJoin` and `Dataset.joinAsOf` (v4.3.0): an inner or
+    /// left join (`JoinType`'s names, case and `_` ignored), `backward`, `forward` or `nearest`
+    /// (any case), the as-of values per side as given (no reordering, unlike the SQL match), the
+    /// tolerance kept for the analyzer. `using_columns` (Spark: `left[c] === right[c]` conditions)
+    /// is not translated yet.
+    fn as_of_join(&mut self, j: &pb::AsOfJoin) -> Result<PlanNode> {
+        let (Some(left), Some(right)) = (&j.left, &j.right) else {
+            return Err(assertion("Both join sides must be present"));
+        };
+        let kind = match j.join_type.to_ascii_lowercase().replace('_', "").as_str() {
+            "inner" => JoinKind::Inner,
+            "left" | "leftouter" => JoinKind::LeftOuter,
+            _ => {
+                return Err(unsupported(format!(
+                    "an as-of join of type '{}'",
+                    j.join_type
+                )));
+            }
+        };
+        let direction = match j.direction.to_ascii_lowercase().as_str() {
+            "backward" => AsOfDirection::Backward,
+            "forward" => AsOfDirection::Forward,
+            "nearest" => AsOfDirection::Nearest,
+            _ => {
+                return Err(unsupported(format!(
+                    "the as-of join direction '{}'",
+                    j.direction
+                )));
+            }
+        };
+        if !j.using_columns.is_empty() {
+            return Err(unsupported_field(
+                "AsOfJoin",
+                "using_columns",
+                "an as-of join on using columns",
+            ));
+        }
+        let (Some(left_as_of), Some(right_as_of)) = (&j.left_as_of, &j.right_as_of) else {
+            return Err(assertion("Both as-of values must be present"));
+        };
+        let condition = match &j.join_expr {
+            Some(c) => JoinCondition::On(self.expression(c)?),
+            None => JoinCondition::None,
+        };
+        let as_of = AsOfMatch {
+            left: self.expression(left_as_of)?,
+            right: self.expression(right_as_of)?,
+            direction,
+            allow_exact: j.allow_exact_matches,
+            tolerance: match &j.tolerance {
+                Some(t) => Some(self.expression(t)?),
+                None => None,
+            },
+            distance: None,
+            // Spark runs a Connect `AsOfJoin` as `RewriteAsOfJoin`'s `min_by` over every
+            // passing right row, which evaluates the distance on each.
+            distance_on_every_pair: true,
+            as_written: false,
+        };
+        Ok(PlanNode::AsOfJoin {
+            left: self.relation(left)?,
+            right: self.relation(right)?,
+            kind,
+            condition,
+            as_of: Arc::new(as_of),
+        })
+    }
+
     /// `Aggregate`. The output is the grouping expressions followed by the
     /// aggregate expressions, as Spark builds it.
     fn aggregate(&mut self, a: &pb::Aggregate) -> Result<PlanNode> {
@@ -959,15 +1052,62 @@ impl Translator<'_> {
                 self.required_expression(alias.expr.as_deref())?,
             ));
         }
-        Ok(PlanNode::WithColumns {
-            input: self.input("WithColumns", w.input.as_deref())?,
-            columns,
-        })
+        let input = self.input("WithColumns", w.input.as_deref())?;
+        // Generator columns are lifted as the native DataFrame API does (one column at a time,
+        // each reading the ones before it).
+        if columns.iter().any(|(n, e)| {
+            krishiv_plan::with_column_generator(&input, n, e, || Origin::UNKNOWN).is_some()
+        }) {
+            // Spark binds every alias to the input; the one-at-a-time lift below would let an alias read a
+            // column an earlier alias of the same call has just replaced (`x = y, y = x`).
+            for (i, (_, value)) in columns.iter().enumerate() {
+                if columns[..i]
+                    .iter()
+                    .any(|(earlier, _)| reads_column(value, earlier))
+                {
+                    return Err(unsupported_field(
+                        "WithColumns",
+                        "aliases",
+                        "a generator column beside an alias that reads a column an earlier alias replaces",
+                    ));
+                }
+            }
+            let mut plan = input;
+            let last = columns.len() - 1;
+            for (i, (name, value)) in columns.into_iter().enumerate() {
+                let node =
+                    krishiv_plan::with_column_generator(&plan, &name, &value, || Origin::UNKNOWN)
+                        .unwrap_or_else(|| PlanNode::WithColumns {
+                            input: Arc::clone(&plan),
+                            columns: vec![(name, value)],
+                        });
+                if i == last {
+                    return Ok(node);
+                }
+                plan = Arc::new(LogicalPlan::new(node));
+            }
+            return Err(assertion("'aliases' must contain elements."));
+        }
+        Ok(PlanNode::WithColumns { input, columns })
     }
 }
 
 #[cfg(test)]
 mod tests;
+
+/// Whether `e` reads a column whose last name part is `name` (case-insensitively, as the resolver's default).
+fn reads_column(e: &krishiv_plan::Expr, name: &str) -> bool {
+    let mut stack = vec![e];
+    while let Some(e) = stack.pop() {
+        if let krishiv_plan::ExprNode::Column(c) = &e.node
+            && c.name.last().is_some_and(|n| n.eq_ignore_ascii_case(name))
+        {
+            return true;
+        }
+        e.for_each_child(&mut |child| stack.push(child));
+    }
+    false
+}
 
 /// The alias of a `SubqueryAlias`: `qualifier ++ [alias]` joined by [`ALIAS_PART_SEP`], as the IR
 /// holds a multi-part alias (Spark's `AliasIdentifier(alias, qualifier)`). A part holding the

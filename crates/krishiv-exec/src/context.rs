@@ -58,11 +58,16 @@ pub struct ExecConfig {
     pub agg_direct_keys: bool,
     /// Collect the costlier metrics of a detailed profile (`EXPLAIN
     /// ANALYZE`): per-lookup hash-table probe lengths. The always-on
-    /// counters do not depend on it.
+    /// counters do not depend on it. A hash join's direct index
+    /// (`krishiv.exec.join.directIndex`) is off under it, so a detailed
+    /// profile times the hashed probe, not the direct one.
     pub detailed_metrics: bool,
     /// Hash joins use the row layout and its size-adaptive index
     /// (`krishiv.exec.join.rowLayout`; P2-T158).
     pub join_row_layout: bool,
+    /// A tiny build with one integer key is probed through an array indexed
+    /// by the key (`krishiv.exec.join.directIndex`; perf lever J1).
+    pub join_direct_index: bool,
     /// Level-0 radix bits of a row-layout join build
     /// (`krishiv.exec.join.radixBits`, 3 to 6).
     pub join_radix_bits: u32,
@@ -114,6 +119,7 @@ impl Default for ExecConfig {
             agg_direct_keys: true,
             detailed_metrics: false,
             join_row_layout: true,
+            join_direct_index: true,
             join_radix_bits: 3,
             sort_hash_buckets: true,
             join_merge_buffer_bytes: 0,
@@ -145,6 +151,10 @@ impl ExecConfig {
             .unwrap_or(true);
         let join_row_layout = config
             .get(&EXEC_JOIN_ROW_LAYOUT)
+            .and_then(krishiv_common::config::ConfigValue::as_bool)
+            .unwrap_or(true);
+        let join_direct_index = config
+            .get(&krishiv_common::config::EXEC_JOIN_DIRECT_INDEX)
             .and_then(krishiv_common::config::ConfigValue::as_bool)
             .unwrap_or(true);
         let join_radix_bits = config
@@ -199,6 +209,7 @@ impl ExecConfig {
             agg_row_layout,
             agg_direct_keys,
             join_row_layout,
+            join_direct_index,
             join_radix_bits,
             join_merge_buffer_bytes,
             shared_broadcast_bytes,
@@ -698,7 +709,7 @@ impl QueryContext {
     /// The error a driver stopped by cancellation ends with: the reason's
     /// error of a [`Self::cancel_with`] cancellation, else
     /// `OPERATION_CANCELED`.
-    pub(crate) fn cancellation(&self) -> KrishivError {
+    pub fn cancellation(&self) -> KrishivError {
         self.cancel_error.get().cloned().unwrap_or_else(cancelled)
     }
 

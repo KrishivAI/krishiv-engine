@@ -487,6 +487,13 @@ __all__ = [
     "variant_insert",
     "variant_set",
     "variant_strip_nulls",
+    "vector_avg",
+    "vector_cosine_similarity",
+    "vector_inner_product",
+    "vector_l2_distance",
+    "vector_norm",
+    "vector_normalize",
+    "vector_sum",
     "version",
     "weekday",
     "weekofyear",
@@ -534,13 +541,6 @@ _ENGINE_UNSUPPORTED = (
     "schema_of_variant_agg",
     "sentences",
     "session_window",
-    "theta_difference",
-    "theta_intersection",
-    "theta_intersection_agg",
-    "theta_sketch_agg",
-    "theta_sketch_estimate",
-    "theta_union",
-    "theta_union_agg",
     "try_reflect",
     "tuple_difference_double",
     "tuple_difference_integer",
@@ -2488,38 +2488,38 @@ def tanh(col: ColumnOrName) -> Column:
 
 
 def theta_difference(col1: ColumnOrName, col2: ColumnOrName) -> Column:
-    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
-    raise _unsupported("theta_difference")
+    """Calls the registry function ``theta_difference``."""
+    return _call("theta_difference", _named(col1, "col1"), _named(col2, "col2"))
 
 
 def theta_intersection(col1: ColumnOrName, col2: ColumnOrName) -> Column:
-    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
-    raise _unsupported("theta_intersection")
+    """Calls the registry function ``theta_intersection``."""
+    return _call("theta_intersection", _named(col1, "col1"), _named(col2, "col2"))
 
 
 def theta_intersection_agg(col: ColumnOrName) -> Column:
-    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
-    raise _unsupported("theta_intersection_agg")
+    """Calls the registry function ``theta_intersection_agg``."""
+    return _call("theta_intersection_agg", _named(col, "col"))
 
 
 def theta_sketch_agg(col: ColumnOrName, lgNomEntries: Column | int | None = None) -> Column:
-    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
-    raise _unsupported("theta_sketch_agg")
+    """Calls the registry function ``theta_sketch_agg``."""
+    return _call("theta_sketch_agg", _named(col, "col"), *_opt(_lit, lgNomEntries, "lgNomEntries"))
 
 
 def theta_sketch_estimate(col: ColumnOrName) -> Column:
-    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
-    raise _unsupported("theta_sketch_estimate")
+    """Calls the registry function ``theta_sketch_estimate``."""
+    return _call("theta_sketch_estimate", _named(col, "col"))
 
 
 def theta_union(col1: ColumnOrName, col2: ColumnOrName, lgNomEntries: Column | int | None = None) -> Column:
-    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
-    raise _unsupported("theta_union")
+    """Calls the registry function ``theta_union``."""
+    return _call("theta_union", _named(col1, "col1"), _named(col2, "col2"), *_opt(_lit, lgNomEntries, "lgNomEntries"))
 
 
 def theta_union_agg(col: ColumnOrName, lgNomEntries: Column | int | None = None) -> Column:
-    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
-    raise _unsupported("theta_union_agg")
+    """Calls the registry function ``theta_union_agg``."""
+    return _call("theta_union_agg", _named(col, "col"), *_opt(_lit, lgNomEntries, "lgNomEntries"))
 
 
 def time_bucket(bucket_size: Column, ts: ColumnOrName, origin: Column | None = None) -> Column:
@@ -3112,6 +3112,41 @@ def variant_set(v: ColumnOrName, path: Column | str, value: ColumnOrName, create
 def variant_strip_nulls(v: ColumnOrName, include_arrays: bool = True) -> Column:
     """Calls the registry function ``variant_strip_nulls``."""
     return _call("variant_strip_nulls", _named(v, "v"), _lit(include_arrays, "include_arrays"))
+
+
+def vector_avg(col: ColumnOrName) -> Column:
+    """Calls the registry function ``vector_avg``."""
+    return _call("vector_avg", _named(col, "col"))
+
+
+def vector_cosine_similarity(left: ColumnOrName, right: ColumnOrName) -> Column:
+    """Calls the registry function ``vector_cosine_similarity``."""
+    return _call("vector_cosine_similarity", _named(left, "left"), _named(right, "right"))
+
+
+def vector_inner_product(left: ColumnOrName, right: ColumnOrName) -> Column:
+    """Calls the registry function ``vector_inner_product``."""
+    return _call("vector_inner_product", _named(left, "left"), _named(right, "right"))
+
+
+def vector_l2_distance(left: ColumnOrName, right: ColumnOrName) -> Column:
+    """Calls the registry function ``vector_l2_distance``."""
+    return _call("vector_l2_distance", _named(left, "left"), _named(right, "right"))
+
+
+def vector_norm(vector: ColumnOrName, degree: ColumnOrName | None = None) -> Column:
+    """Calls the registry function ``vector_norm``."""
+    return _call("vector_norm", _named(vector, "vector"), *_opt(_named, degree, "degree"))
+
+
+def vector_normalize(vector: ColumnOrName, degree: ColumnOrName | None = None) -> Column:
+    """Calls the registry function ``vector_normalize``."""
+    return _call("vector_normalize", _named(vector, "vector"), *_opt(_named, degree, "degree"))
+
+
+def vector_sum(col: ColumnOrName) -> Column:
+    """Calls the registry function ``vector_sum``."""
+    return _call("vector_sum", _named(col, "col"))
 
 
 def version() -> Column:

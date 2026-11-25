@@ -3,7 +3,8 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use krishiv_session::Session;
+use krishiv_exec::SourceFilter;
+use krishiv_session::{PlannedRead, Session, SourcePlanner};
 use pyo3::prelude::*;
 
 use crate::dataframe::{OwnedTable, PyDataFrame};
@@ -100,7 +101,7 @@ impl PySession {
     #[new]
     #[pyo3(signature = (config=None))]
     fn new(py: Python<'_>, config: Option<Vec<(String, String)>>) -> PyResult<Self> {
-        let mut builder = Session::builder();
+        let mut builder = Session::builder().source("krishiv-python");
         for (key, value) in config.unwrap_or_default() {
             builder = builder.config(key, value);
         }
@@ -272,78 +273,32 @@ impl PySession {
     /// every scan of the table in a query, so a source that lists its
     /// partitions in `read` sees new ones on the next action. A failure of `read` is `PYTHON_EXCEPTION`; a planning failure the
     /// Python side classed as `PYTHON_DATA_SOURCE_ERROR` keeps its action and type.
+    ///
+    /// `plan`, when given, is called once per physical plan whose scan has filters the source can be
+    /// offered, with `[(kind, attribute path, value)]`; it returns `(pushed flags, read)` where `read`
+    /// is as above for that plan (design P3-T040 part 2 §4).
+    #[pyo3(signature = (label, schema, read, plan=None))]
     fn register_python_source(
         &self,
         py: Python<'_>,
         label: &str,
         schema: &Bound<'_, PyAny>,
         read: Py<PyAny>,
+        plan: Option<Py<PyAny>>,
     ) -> PyResult<PyDataFrame> {
         let (schema, _) = ArrowStream::from_arrow(schema)?.read_all()?;
         let name = format!(
             "{ARROW_TABLE_PREFIX}{}",
             ARROW_TABLES.fetch_add(1, Ordering::Relaxed)
         );
-        let source: krishiv_session::BatchSource = std::sync::Arc::new(move || {
-            Python::attach(|py| {
-                // One wrap: a planning failure the reader's Python side already classed as
-                // `PYTHON_DATA_SOURCE_ERROR` keeps its action and type (Spark's
-                // `pythonDataSourceError` pairs); every other exception of user code is
-                // Spark's `PYTHON_EXCEPTION`, as a task of the read raises it.
-                let fail = |err: &PyErr| {
-                    let value = err.value(py);
-                    let class = value
-                        .call_method0("getCondition")
-                        .and_then(|c| c.extract::<String>())
-                        .ok();
-                    if matches!(
-                        class.as_deref(),
-                        Some("PYTHON_DATA_SOURCE_ERROR" | "KRISHIV_PYTHON_DATA_SOURCE_LIMIT")
-                    ) {
-                        let parameter = |key: &str| {
-                            value
-                                .call_method0("getMessageParameters")
-                                .and_then(|p| p.get_item(key))
-                                .and_then(|v| v.extract::<String>())
-                                .unwrap_or_default()
-                        };
-                        if class.as_deref() == Some("KRISHIV_PYTHON_DATA_SOURCE_LIMIT") {
-                            return krishiv_common::error::KrishivError::from(
-                                krishiv_common::error::KrishivPythonDataSourceLimit {
-                                    source: parameter("source"),
-                                    bytes: parameter("bytes"),
-                                    limit: parameter("limit"),
-                                },
-                            );
-                        }
-                        return krishiv_common::error::KrishivError::from(
-                            krishiv_common::error::PythonDataSourceError {
-                                action: parameter("action"),
-                                r#type: parameter("type"),
-                                msg: parameter("msg"),
-                            },
-                        );
-                    }
-                    let traceback = err
-                        .traceback(py)
-                        .and_then(|t| t.format().ok())
-                        .unwrap_or_default();
-                    krishiv_common::error::KrishivError::from(
-                        krishiv_common::error::PythonException {
-                            msg: "An exception was thrown from the Python worker".to_owned(),
-                            traceback: format!("{traceback}{err}"),
-                        },
-                    )
-                };
-                let table = read.call0(py).map_err(|e| fail(&e))?;
-                let (_, batches) = ArrowStream::from_arrow(table.bind(py))
-                    .and_then(|s| s.read_all())
-                    .map_err(|e| fail(&e))?;
-                Ok(batches)
-            })
+        let source = python_batch_source(read);
+        let planner = plan.map(|plan| {
+            std::sync::Arc::new(PythonPlanner {
+                plan: std::sync::Arc::new(plan),
+            }) as std::sync::Arc<dyn SourcePlanner>
         });
         self.inner
-            .register_batch_source(&name, label, schema, source)
+            .register_planned_source(&name, label, schema, source, planner)
             .map_err(|e| to_py(py, &e))?;
         Ok(PyDataFrame {
             inner: self.inner.table(&name),
@@ -551,6 +506,13 @@ impl PySession {
         self.inner.conf().is_modifiable(key)
     }
 
+    /// Whether `key` is a registered configuration entry (by its key or a Spark alias): Spark's
+    /// `isModifiable` is false for any other key.
+    #[staticmethod]
+    fn conf_is_registered(key: &str) -> bool {
+        krishiv_common::config::lookup(krishiv_common::config::resolve_alternative(key)).is_some()
+    }
+
     fn conf_get(&self, key: &str) -> Option<String> {
         self.inner.conf().get(key)
     }
@@ -638,4 +600,208 @@ impl PySession {
                 as std::sync::Arc<dyn krishiv_exec::python_eval::UdfRuntime>);
         Ok(runtime)
     }
+}
+
+/// A failure of the Python side of a data source as the engine's error: a planning failure the
+/// reader's Python side already classed as `PYTHON_DATA_SOURCE_ERROR` keeps its action and type
+/// (Spark's `pythonDataSourceError` pairs); every other exception of user code is Spark's
+/// `PYTHON_EXCEPTION`, as a task of the read raises it.
+fn source_failure(py: Python<'_>, err: &PyErr) -> krishiv_common::error::KrishivError {
+    let value = err.value(py);
+    let class = value
+        .call_method0("getCondition")
+        .and_then(|c| c.extract::<String>())
+        .ok();
+    if matches!(
+        class.as_deref(),
+        Some("PYTHON_DATA_SOURCE_ERROR" | "KRISHIV_PYTHON_DATA_SOURCE_LIMIT")
+    ) {
+        let parameter = |key: &str| {
+            value
+                .call_method0("getMessageParameters")
+                .and_then(|p| p.get_item(key))
+                .and_then(|v| v.extract::<String>())
+                .unwrap_or_default()
+        };
+        if class.as_deref() == Some("KRISHIV_PYTHON_DATA_SOURCE_LIMIT") {
+            return krishiv_common::error::KrishivError::from(
+                krishiv_common::error::KrishivPythonDataSourceLimit {
+                    source: parameter("source"),
+                    bytes: parameter("bytes"),
+                    limit: parameter("limit"),
+                },
+            );
+        }
+        return krishiv_common::error::KrishivError::from(
+            krishiv_common::error::PythonDataSourceError {
+                action: parameter("action"),
+                r#type: parameter("type"),
+                msg: parameter("msg"),
+            },
+        );
+    }
+    let traceback = err
+        .traceback(py)
+        .and_then(|t| t.format().ok())
+        .unwrap_or_default();
+    krishiv_common::error::KrishivError::from(krishiv_common::error::PythonException {
+        msg: "An exception was thrown from the Python worker".to_owned(),
+        traceback: format!("{traceback}{err}"),
+    })
+}
+
+/// The batches a Python callable returns (an Arrow object), read on the calling thread.
+fn python_batch_source(read: Py<PyAny>) -> krishiv_session::BatchSource {
+    std::sync::Arc::new(move || {
+        Python::attach(|py| {
+            let table = read.call0(py).map_err(|e| source_failure(py, &e))?;
+            let (_, batches) = ArrowStream::from_arrow(table.bind(py))
+                .and_then(|s| s.read_all())
+                .map_err(|e| source_failure(py, &e))?;
+            Ok(batches)
+        })
+    })
+}
+
+/// A source's planning in Python: `reader()`, `pushFilters` and `partitions()`.
+struct PythonPlanner {
+    plan: std::sync::Arc<Py<PyAny>>,
+}
+
+impl SourcePlanner for PythonPlanner {
+    fn plan(
+        &self,
+        filters: &[SourceFilter],
+    ) -> Result<PlannedRead, krishiv_common::error::KrishivError> {
+        // User Python, on a thread of its own: no engine thread waits holding the GIL, and the
+        // statement's cancel ends the wait at once.
+        let filters = filters.to_vec();
+        // Cloned as an `Arc`: a `Py` clone needs the GIL on this thread, which a cancel could not interrupt.
+        let plan = std::sync::Arc::clone(&self.plan);
+        krishiv_session::run_python_source_call(move || {
+            Python::attach(|py| {
+                let offered = filters
+                    .iter()
+                    .map(|f| filter_spec(py, f))
+                    .collect::<PyResult<Vec<_>>>()
+                    .map_err(|e| source_failure(py, &e))?;
+                let answer = plan
+                    .call1(py, (offered,))
+                    .map_err(|e| source_failure(py, &e))?;
+                let (pushed, read): (Vec<bool>, Py<PyAny>) =
+                    answer.extract(py).map_err(|e| source_failure(py, &e))?;
+                Ok(PlannedRead {
+                    pushed,
+                    read: python_batch_source(read),
+                })
+            })
+        })
+    }
+}
+
+/// One filter as `(kind, attribute path, value)`; `Not` is `("Not", (), inner spec)`.
+fn filter_spec<'py>(py: Python<'py>, filter: &SourceFilter) -> PyResult<Bound<'py, PyAny>> {
+    use pyo3::types::PyTuple;
+    let path = |p: &krishiv_io::ColumnPath| PyTuple::new(py, p.0.iter());
+    let leaf = |kind: &str, p: &krishiv_io::ColumnPath, value: Bound<'py, PyAny>| {
+        PyTuple::new(
+            py,
+            [
+                kind.into_pyobject(py)?.into_any(),
+                path(p)?.into_any(),
+                value,
+            ],
+        )
+        .map(Bound::into_any)
+    };
+    match filter {
+        SourceFilter::EqualTo(p, v) => leaf("EqualTo", p, scalar(py, v)?),
+        SourceFilter::EqualNullSafe(p, v) => leaf("EqualNullSafe", p, scalar(py, v)?),
+        SourceFilter::GreaterThan(p, v) => leaf("GreaterThan", p, scalar(py, v)?),
+        SourceFilter::GreaterThanOrEqual(p, v) => leaf("GreaterThanOrEqual", p, scalar(py, v)?),
+        SourceFilter::LessThan(p, v) => leaf("LessThan", p, scalar(py, v)?),
+        SourceFilter::LessThanOrEqual(p, v) => leaf("LessThanOrEqual", p, scalar(py, v)?),
+        SourceFilter::In(p, vs) => {
+            let values = vs
+                .iter()
+                .map(|v| scalar(py, v))
+                .collect::<PyResult<Vec<_>>>()?;
+            leaf("In", p, pyo3::types::PyList::new(py, values)?.into_any())
+        }
+        SourceFilter::IsNull(p) => leaf("IsNull", p, py.None().into_bound(py)),
+        SourceFilter::IsNotNull(p) => leaf("IsNotNull", p, py.None().into_bound(py)),
+        SourceFilter::StringStartsWith(p, s) => {
+            leaf("StringStartsWith", p, s.into_pyobject(py)?.into_any())
+        }
+        SourceFilter::StringEndsWith(p, s) => {
+            leaf("StringEndsWith", p, s.into_pyobject(py)?.into_any())
+        }
+        SourceFilter::StringContains(p, s) => {
+            leaf("StringContains", p, s.into_pyobject(py)?.into_any())
+        }
+        SourceFilter::Not(inner) => PyTuple::new(
+            py,
+            [
+                "Not".into_pyobject(py)?.into_any(),
+                PyTuple::empty(py).into_any(),
+                filter_spec(py, inner)?,
+            ],
+        )
+        .map(Bound::into_any),
+    }
+}
+
+/// A pushed literal as the Python value `pushFilters` sees (`Decimal`, `date`, `datetime` as Spark's).
+fn scalar<'py>(py: Python<'py>, value: &krishiv_io::ScalarValue) -> PyResult<Bound<'py, PyAny>> {
+    use krishiv_io::ScalarValue as V;
+    let datetime = || py.import("datetime");
+    Ok(match value {
+        V::Null => py.None().into_bound(py),
+        V::Boolean(v) => v.into_pyobject(py)?.to_owned().into_any(),
+        V::Int8(v) => v.into_pyobject(py)?.into_any(),
+        V::Int16(v) => v.into_pyobject(py)?.into_any(),
+        V::Int32(v) => v.into_pyobject(py)?.into_any(),
+        V::Int64(v) => v.into_pyobject(py)?.into_any(),
+        V::Float32(v) => v.into_pyobject(py)?.into_any(),
+        V::Float64(v) => v.into_pyobject(py)?.into_any(),
+        V::Utf8(v) => v.into_pyobject(py)?.into_any(),
+        V::Binary(v) => pyo3::types::PyBytes::new(py, v).into_any(),
+        V::Decimal128 {
+            unscaled, scale, ..
+        } => {
+            let text = if *scale > 0 {
+                format!("{unscaled}E-{scale}")
+            } else {
+                format!("{unscaled}E{}", -i32::from(*scale))
+            };
+            py.import("decimal")?.getattr("Decimal")?.call1((text,))?
+        }
+        V::Date32(days) => datetime()?
+            .getattr("date")?
+            .call_method1("fromordinal", (i64::from(*days) + 719_163,))?,
+        // TIMESTAMP: an aware UTC `datetime`, whatever the session zone (the oracle's `timestamp_ltz.json`).
+        V::TimestampMicros(micros) => {
+            // Spark 4.3.0 hands `zoneinfo.ZoneInfo(key='UTC')`, not `datetime.timezone.utc`.
+            let utc = py
+                .import("zoneinfo")?
+                .getattr("ZoneInfo")?
+                .call1(("UTC",))?;
+            let epoch = datetime()?
+                .getattr("datetime")?
+                .call1((1970, 1, 1, 0, 0, 0, 0, utc))?;
+            let delta = datetime()?.getattr("timedelta")?.call1((0, 0, *micros))?;
+            epoch.call_method1("__add__", (delta,))?
+        }
+        // TIMESTAMP_NTZ: a naive `datetime`.
+        V::TimestampNtzMicros(micros) => {
+            let epoch = datetime()?.getattr("datetime")?.call1((1970, 1, 1))?;
+            let delta = datetime()?.getattr("timedelta")?.call1((0, 0, *micros))?;
+            epoch.call_method1("__add__", (delta,))?
+        }
+        _ => {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "a pushed value of a type with no Python form",
+            ));
+        }
+    })
 }

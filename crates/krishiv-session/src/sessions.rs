@@ -161,6 +161,16 @@ impl Activity {
             .store(ms.unwrap_or(NO_TIMEOUT), Ordering::Relaxed);
     }
 
+    /// The client type the client reported (client-asserted; a routing hint for the `source`
+    /// selector of a resource group, never an identity).
+    pub(crate) fn client_type(&self) -> Option<String> {
+        self.client
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .client_type
+            .clone()
+    }
+
     /// The user id the client reported (client-asserted, never an identity).
     pub(crate) fn client_user_id(&self) -> Option<String> {
         self.client
@@ -200,10 +210,7 @@ impl Activity {
 /// (with `impersonates = *` a service could otherwise name the `spark` admin principal and read
 /// its rows; P3-T061 security review).
 pub(crate) fn owner_key(p: &krishiv_plan::analyzer::Principal) -> String {
-    format!(
-        "{:?}|{:?}|{}|{:?}",
-        p.kind, p.tenant, p.name, p.delegated_by
-    )
+    krishiv_common::PrincipalKey::of(p).to_string()
 }
 
 /// One row of `system.sessions`.

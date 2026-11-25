@@ -185,6 +185,13 @@ fn operators_lists_what_a_finished_query_ran() {
          WHERE q.query_text LIKE '%GROUP BY%'",
     );
     assert_eq!(rows, ["1000"], "{rows:?}");
+    // Each operator row carries the session of its query.
+    let wrong = strings_in(
+        &s,
+        "SELECT CAST(count(*) AS STRING) FROM system.operators o JOIN system.queries q \
+         ON o.query_id = q.query_id WHERE o.session_id <> q.session_id OR o.session_id = ''",
+    );
+    assert_eq!(wrong, ["0"], "{wrong:?}");
     let roles = strings_in(
         &s,
         "SELECT DISTINCT role FROM system.operators ORDER BY role",
@@ -1456,7 +1463,8 @@ fn listings_overrides_and_dataframe_writes_with_an_explicit_catalog_work_under_s
     )
     .unwrap();
     s.register_batches("src", schema, vec![batch]).unwrap();
-    let write = |name: &str| block_on(async { s.table("src").write().insert_into(name).await });
+    let write =
+        |name: &str| block_on(async { Box::pin(s.table("src").write().insert_into(name)).await });
     assert!(write("spark_catalog.default.t").is_ok());
     assert!(write("t").is_err());
     assert!(write("default.t").is_err());

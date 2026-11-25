@@ -48,6 +48,7 @@ pub(crate) fn env() -> ExprEnv {
         legacy_coding_error_action: false,
         legacy_time_parser: false,
         binary_output_style: None,
+        spark_version: None,
     }
 }
 
@@ -151,6 +152,7 @@ pub(crate) fn table_scan() -> ScanNode {
         ),
     ]);
     ScanNode {
+        decided: None,
         id: ScanId(7),
         scan: Scan {
             source: ReadSource::Table {
@@ -182,6 +184,7 @@ pub(crate) fn table_scan() -> ScanNode {
 /// A scan of files, without a version or a filter.
 pub(crate) fn file_scan() -> ScanNode {
     ScanNode {
+        decided: None,
         id: ScanId(8),
         scan: Scan {
             source: ReadSource::files(
@@ -285,6 +288,30 @@ pub(crate) fn hll_sketch_aggregate_exprs() -> Vec<AggregateExpr> {
             },
             ArrowType::Binary,
         ),
+    ]
+}
+
+/// One aggregate of each Theta sketch aggregate (values at lgNomEntries 14, sketches at 20, then an intersection).
+pub(crate) fn theta_sketch_aggregate_exprs() -> Vec<AggregateExpr> {
+    let a = |function, arg_type| AggregateExpr {
+        function,
+        args: vec![0],
+        input: AggInput::Raw,
+        arg_type,
+        name: "x".to_owned(),
+        mask: None,
+        element: None,
+    };
+    vec![
+        a(
+            AggregateFunction::ThetaSketchAgg { lg_nom: 14 },
+            ArrowType::Int64,
+        ),
+        a(
+            AggregateFunction::ThetaUnionAgg { lg_nom: 20 },
+            ArrowType::Binary,
+        ),
+        a(AggregateFunction::ThetaIntersectionAgg, ArrowType::Binary),
     ]
 }
 
@@ -1444,6 +1471,18 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
                 },
             },
         ),
+        (
+            "aggregate_theta_sketches",
+            PhysNode::Aggregate {
+                input: boxed(scan()),
+                aggregate: AggregatePlan {
+                    group_by: vec![0],
+                    aggregates: theta_sketch_aggregate_exprs(),
+                    distinct: vec![false; 3],
+                    output: AggregateOutput::Final,
+                },
+            },
+        ),
         ("hash_join", PhysNode::HashJoin(join_plan(JoinType::Inner))),
         (
             // A guessed build's fixed Bloom (field 10, ignorable).
@@ -1469,6 +1508,57 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
                     null_safe: j.null_safe,
                     residual: j.residual,
                     single_match: false,
+                    as_of: None,
+                }
+            }),
+        ),
+        (
+            "as_of_join",
+            PhysNode::SortMergeJoin({
+                let j = join_plan(JoinType::LeftOuter);
+                SortMergeJoinPlan {
+                    probe: j.probe,
+                    build: j.build,
+                    join_type: j.join_type,
+                    probe_keys: j.probe_keys,
+                    build_keys: j.build_keys,
+                    null_safe: j.null_safe,
+                    residual: j.residual,
+                    single_match: false,
+                    as_of: Some(krishiv_exec::AsOfMergeSpec {
+                        left_column: 0,
+                        right_column: 0,
+                        direction: krishiv_exec::AsOfMergeDirection::Forward,
+                        allow_exact: true,
+                        distance: Some(residual()),
+                        distance_on_every_pair: false,
+                    }),
+                }
+            }),
+        ),
+        (
+            // The Connect form: the distance is checked on every passing pair, so the flag must
+            // reach the wire (the proto default is `false`).
+            "as_of_join_every_pair",
+            PhysNode::SortMergeJoin({
+                let j = join_plan(JoinType::Inner);
+                SortMergeJoinPlan {
+                    probe: j.probe,
+                    build: j.build,
+                    join_type: j.join_type,
+                    probe_keys: j.probe_keys,
+                    build_keys: j.build_keys,
+                    null_safe: j.null_safe,
+                    residual: None,
+                    single_match: false,
+                    as_of: Some(krishiv_exec::AsOfMergeSpec {
+                        left_column: 0,
+                        right_column: 0,
+                        direction: krishiv_exec::AsOfMergeDirection::Backward,
+                        allow_exact: false,
+                        distance: Some(residual()),
+                        distance_on_every_pair: true,
+                    }),
                 }
             }),
         ),
@@ -2420,6 +2510,7 @@ pub(crate) fn cases() -> Vec<(String, PhysicalPlan)> {
     ));
     out.push(("legacy_time_parser".to_owned(), legacy_time_parser()));
     out.push(("binary_output_style".to_owned(), binary_output_style()));
+    out.push(("spark_version".to_owned(), spark_version()));
     out.push(("session_zone_name".to_owned(), session_zone_name()));
     out.push(("shared_subplan".to_owned(), shared_subplan()));
     out.extend(
@@ -2492,6 +2583,7 @@ fn legacy_charset_switches() -> PhysicalPlan {
         legacy_coding_error_action: true,
         legacy_time_parser: false,
         binary_output_style: None,
+        spark_version: None,
         ..env()
     };
     let explain = ExplainNode::new("Root", "details", vec![]);
@@ -2503,6 +2595,7 @@ fn legacy_time_parser() -> PhysicalPlan {
     let env = ExprEnv {
         legacy_time_parser: true,
         binary_output_style: None,
+        spark_version: None,
         ..env()
     };
     let explain = ExplainNode::new("Root", "details", vec![]);
@@ -2513,6 +2606,17 @@ fn legacy_time_parser() -> PhysicalPlan {
 fn binary_output_style() -> PhysicalPlan {
     let env = ExprEnv {
         binary_output_style: Some(Arc::from("HEX")),
+        spark_version: None,
+        ..env()
+    };
+    let explain = ExplainNode::new("Root", "details", vec![]);
+    PhysicalPlan::new(PhysNode::OneRow, schema(), explain, env)
+}
+
+/// A plan whose environment reproduces Spark 4.3 (`spark_version` set; absent is 4.2).
+fn spark_version() -> PhysicalPlan {
+    let env = ExprEnv {
+        spark_version: Some(Arc::from("4.3")),
         ..env()
     };
     let explain = ExplainNode::new("Root", "details", vec![]);
@@ -2690,6 +2794,26 @@ pub(crate) fn typed() -> Vec<(&'static str, PhysNode)> {
                 krishiv_types::ArrayType::new(time3, true).into(),
             )))),
         }],
+        nullable: None,
+        subqueries: Vec::new(),
+    };
+    // Spark 4.3's nanosecond TIME, alone and inside an array: `time_precision_nanos`.
+    let time9 = DataType::Time { precision: 9 };
+    let nanos_times = PhysNode::Project {
+        input: boxed(scan()),
+        layout: vec![AttrId(1), AttrId(2)],
+        items: vec![
+            ProjectItemPlan::Expr {
+                name: "time9".to_owned(),
+                expr: lit(Literal::Null(Some(time9.clone()))),
+            },
+            ProjectItemPlan::Expr {
+                name: "times9".to_owned(),
+                expr: lit(Literal::Null(Some(DataType::Array(
+                    krishiv_types::ArrayType::new(time9, true).into(),
+                )))),
+            },
+        ],
         nullable: None,
         subqueries: Vec::new(),
     };
@@ -2930,6 +3054,7 @@ pub(crate) fn typed() -> Vec<(&'static str, PhysNode)> {
         ),
         ("time_nested", nested_times),
         ("time_project", times),
+        ("time_nanos", nanos_times),
         ("geo_scan", PhysNode::Scan(spatial)),
         ("geo_join_residual", residual_join),
         ("udt_scan", PhysNode::Scan(udts)),

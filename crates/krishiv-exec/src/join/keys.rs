@@ -242,6 +242,11 @@ impl KeyCodec {
         })
     }
 
+    /// Per key, whether it compares null-safe (`<=>`).
+    pub(crate) fn null_safe(&self) -> &[bool] {
+        &self.null_safe
+    }
+
     /// The row layout of these keys, if they have one.
     pub(crate) fn layout(&self) -> Option<&Arc<RowLayout>> {
         self.layout.as_ref()

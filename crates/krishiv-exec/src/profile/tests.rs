@@ -33,6 +33,7 @@ fn env() -> ExprEnv {
         legacy_coding_error_action: false,
         legacy_time_parser: false,
         binary_output_style: None,
+        spark_version: None,
     }
 }
 
@@ -564,7 +565,7 @@ fn the_mean_reads_in_flight_is_reported() {
 fn a_later_minor_is_read() {
     let p = QueryProfile::new(&plan(matching()), metrics(), true);
     let mut v = p.to_json_value();
-    v["minor"] = 7.into();
+    v["minor"] = (PROFILE_MINOR + 1).into();
     v["tasks"] = serde_json::json!([{"fragment": 3}]);
     v["query"]["new_counter"] = 5.into();
     v["operators"][2]["extra"][0]["kind"] = "avg".into();
@@ -951,6 +952,7 @@ fn lit(v: i64) -> Expr {
 fn scan_of(table: &str, cols: &[(u64, &str)], filter: Option<Expr>) -> PhysNode {
     use crate::physical::{ScanFilter, ScanId, ScanNode};
     PhysNode::Scan(ScanNode {
+        decided: None,
         id: ScanId(0),
         scan: krishiv_plan::Scan {
             source: krishiv_plan::ReadSource::Table {

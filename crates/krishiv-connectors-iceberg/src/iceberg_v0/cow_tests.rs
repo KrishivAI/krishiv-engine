@@ -114,6 +114,7 @@ pub(super) struct Dml<'a> {
     table: Arc<dyn RowLevelTable>,
     op: RowLevelOperation,
     lineage: bool,
+    key: Option<String>,
 }
 
 impl<'a> Dml<'a> {
@@ -136,7 +137,14 @@ impl<'a> Dml<'a> {
             table: p.row_level(op).expect("a row-level table"),
             op,
             lineage,
+            key: None,
         }
+    }
+
+    /// The statement carries `krishiv.write.idempotencyKey` = `key` (E34).
+    pub(super) fn with_key(mut self, key: &str) -> Self {
+        self.key = Some(key.to_owned());
+        self
     }
 
     /// The scan's columns: the table's, the lineage columns on v3, the row id.
@@ -216,6 +224,11 @@ impl<'a> Dml<'a> {
         }
         let mut request = RowLevelWrite::new(self.op, "`db`.`t`", schema, touched, None);
         request.write_id = Some(format!("dml-{}", super::sink::unique_u64()));
+        if let Some(key) = &self.key {
+            request
+                .options
+                .insert("krishiv.write.idempotencyKey".to_owned(), key.clone());
+        }
         let sink = self.table.rewriter(&request)?;
         let input = Arc::new(PerDriver {
             schema: self.input(),
@@ -460,6 +473,31 @@ fn delete_case(partitioned: bool) {
     let kept: Vec<_> = before.iter().filter(|f| now.contains(f)).collect();
     assert_eq!(kept.len(), before.len() - replaced);
     assert_eq!(names(&m, &env, &catalog.location()), now.len());
+}
+
+/// E34: a retry of a keyed copy-on-write statement commits no snapshot and leaves no file.
+#[test]
+fn a_retry_with_the_same_idempotency_key_commits_no_snapshot() {
+    let env = env();
+    let t = create(&env, 2, false, &[]);
+    let catalog = Catalog::new(&t);
+    append(&env, &catalog, range(0, 10));
+    let first = Dml::open(&env, &catalog, RowLevelOperation::Delete);
+    assert!(first.table.capabilities().idempotent_commit);
+    first.with_key("job-1").delete("id < 3").unwrap();
+    let snapshots = catalog.metadata().snapshots().count();
+    let mut files = super::mor_tests::files_ending(&env, "");
+    files.sort();
+    // The retry reads the table anew (the first try's rows are gone) and rewrites a file.
+    Dml::open(&env, &catalog, RowLevelOperation::Delete)
+        .with_key("job-1")
+        .delete("id < 5")
+        .unwrap();
+    assert_eq!(catalog.metadata().snapshots().count(), snapshots);
+    assert_eq!(read_back(&env, &catalog), expected(3..10));
+    let mut after = super::mor_tests::files_ending(&env, "");
+    after.sort();
+    assert_eq!(after, files);
 }
 
 #[test]

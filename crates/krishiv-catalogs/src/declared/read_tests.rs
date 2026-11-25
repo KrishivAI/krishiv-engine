@@ -63,7 +63,11 @@ fn loads(server: &Server) -> usize {
         .count()
 }
 
-fn session_with(mode: DeclMode, pairs: &[(&str, &str)], config: &[(&str, &str)]) -> Session {
+pub(super) fn session_with(
+    mode: DeclMode,
+    pairs: &[(&str, &str)],
+    config: &[(&str, &str)],
+) -> Session {
     let mut setup = CatalogSetup::new(mode).factory(Arc::new(IcebergRestFactory));
     for (k, v) in pairs {
         setup = setup.setting(*k, *v);
@@ -79,7 +83,7 @@ fn session_with(mode: DeclMode, pairs: &[(&str, &str)], config: &[(&str, &str)])
 }
 
 /// An embedded session with `lake` on `server` (and `storage`, when given).
-fn session(server: &Server, storage: Option<&str>) -> Session {
+pub(super) fn session(server: &Server, storage: Option<&str>) -> Session {
     let mut pairs = vec![
         ("krishiv.catalog.lake.type", "iceberg-rest"),
         ("krishiv.catalog.lake.uri", server.base.as_str()),
@@ -96,7 +100,7 @@ fn run(s: &Session, sql: &str) -> Result<Vec<arrow_array::RecordBatch>, KrishivE
 }
 
 /// `(id, name)` rows of `sql`, sorted.
-fn rows(s: &Session, sql: &str) -> Vec<(i64, String)> {
+pub(super) fn rows(s: &Session, sql: &str) -> Vec<(i64, String)> {
     let mut out = Vec::new();
     for b in run(s, sql).unwrap() {
         let ids = b.column(0).as_primitive::<Int64Type>();
@@ -114,7 +118,7 @@ fn rows(s: &Session, sql: &str) -> Vec<(i64, String)> {
     out
 }
 
-fn pairs(v: &[(i64, &str)]) -> Vec<(i64, String)> {
+pub(super) fn pairs(v: &[(i64, &str)]) -> Vec<(i64, String)> {
     v.iter().map(|(i, s)| (*i, (*s).to_owned())).collect()
 }
 
@@ -229,27 +233,28 @@ fn declared_table_read_restrictions_refused_before_data() {
     assert!(e.to_string().contains("read restrictions"), "{e}");
 }
 
+/// Design §4.1 "no fallback": `storage = vended` and an answer with no credential is a catalog fault before any
+/// storage request; the server's own (here: local) access is never tried.
 #[test]
-fn declared_vended_table_refused_in_this_build() {
+fn no_ambient_fallback_when_vending_returns_none() {
     let dir = tempfile::tempdir().unwrap();
     let table = write_table(dir.path()).unwrap();
     let server = catalog(body(&table, "{}", ""));
     let s = session(&server, Some("vended"));
-    // Metadata is shown; a read is refused at planning, before any storage request.
+    // Metadata is shown; a read is refused at planning.
     block_on(
         block_on(s.sql("SELECT id FROM lake.db.t"))
             .unwrap()
             .schema(),
     )
     .unwrap();
-    std::fs::rename(dir.path().join("db/t"), dir.path().join("moved")).unwrap();
     let e = run(&s, "SELECT id FROM lake.db.t").unwrap_err();
     assert_eq!(
         e.error_class(),
-        ErrorClass::KrishivUnsupportedFeature,
+        ErrorClass::KrishivCatalogLocationRefused,
         "{e}"
     );
-    assert!(e.to_string().contains("vended credentials"), "{e}");
+    assert!(e.to_string().contains("no vended credential"), "{e}");
     // The catalog was asked for vended credentials.
     let seen = server.seen();
     let load = seen
@@ -260,6 +265,30 @@ fn declared_vended_table_refused_in_this_build() {
         load.header("x-iceberg-access-delegation"),
         Some("vended-credentials")
     );
+}
+
+/// Design §4.1: the table's files (here local, the manifest list first) lie outside every prefix the catalog
+/// vended credentials for, so the read is refused before any of them is opened.
+#[test]
+fn a_table_file_outside_the_vended_prefixes_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let table = write_table(dir.path()).unwrap();
+    let creds = r#", "storage-credentials": [{"prefix": "s3://bucket/wh", "config": {"s3.access-key-id": "AKIA-canary", "s3.secret-access-key": "secret-canary"}}]"#;
+    let server = catalog(body(&table, "{}", creds));
+    let s = session(&server, Some("vended"));
+    std::fs::rename(dir.path().join("db/t"), dir.path().join("moved")).unwrap();
+    let e = run(&s, "SELECT id FROM lake.db.t").unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::KrishivCatalogLocationRefused,
+        "{e}"
+    );
+    let text = e.to_string();
+    assert!(
+        text.contains("outside the vended credential prefixes"),
+        "{text}"
+    );
+    assert!(!text.contains("canary"), "{text}");
 }
 
 #[test]
@@ -359,7 +388,7 @@ fn declared_metadata_cache_ttl_and_refresh() {
     )
     .unwrap();
     let ttl = Duration::from_millis(300);
-    let built = super::RestCatalog::new(&d, Arc::new(client), ttl);
+    let built = super::RestCatalog::new(&d, Arc::new(client), ttl, false);
     let caller = CatalogCaller::server("lake");
     let t: TableIdent = ident(&["db"], "t");
     let load = || {

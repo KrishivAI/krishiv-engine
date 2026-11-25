@@ -43,12 +43,12 @@ fn dec(p: u32, s: u32) -> DataType {
 }
 
 /// The input of the time fields: either timestamp, or a time of any
-/// precision.
+/// precision of the default (Spark 4.3) profile, `[0, 9]`.
 fn timestamp_or_time() -> InputType {
     InputType::OneOf(
         [DataType::Timestamp, DataType::TimestampNtz]
             .into_iter()
-            .chain((0..=6).map(|precision| DataType::Time { precision }))
+            .chain((0..=DataType::TIME_MAX_PRECISION).map(|precision| DataType::Time { precision }))
             .collect(),
     )
 }
@@ -85,3 +85,18 @@ mod text;
 mod signatures1;
 mod signatures2;
 mod signatures3;
+
+#[test]
+fn the_leakproof_declarations_are_sorted_registry_entries() {
+    let names = super::leakproof::LEAKPROOF;
+    assert!(names.windows(2).all(|w| w[0] < w[1]), "sorted, no repeats");
+    for name in names {
+        assert!(
+            def(name).leakproof,
+            "{name} is a registry entry and flagged"
+        );
+        assert!(builtins().leakproof(name));
+    }
+    assert!(!def("upper").leakproof);
+    assert!(!builtins().leakproof("no_such_function"));
+}

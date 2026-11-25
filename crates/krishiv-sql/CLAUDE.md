@@ -55,7 +55,9 @@ Paths are relative to this crate.
   `REPEATABLE`) to `PlanNode::Sample` (goldens `tests/fixtures/spark-4.2.0/tablesample.json`, `src/tests/sample.rs`);
   `SYSTEM` is `KRISHIV_UNSUPPORTED_FEATURE`, as are `COLLATE`, `NEAREST BY`, `TABLE(...)` arguments,
   `IDENTIFIER(...)` (names, function names, identifier literals unless `legacy_identifier_clause`), variant paths
-  and `TRANSFORM`.
+  and `TRANSFORM`. Spark 4.3's `ASOF JOIN` is Spark's `UNSUPPORTED_FEATURE.ASOF_JOIN` while
+  `spark.sql.join.asofJoin.enabled` is off, and lowers to `PlanNode::AsOfJoin` when it is on; it is parsed with its
+  `AstBuilder` checks in `validate/relation.rs` (the gate, `ParserOptions::asof_join`, and the match operator).
 - `FROM ... SELECT ...` stores its `FROM` once (`FromStatement`); never copy subtrees per use.
 - Ambiguities ANTLR resolves by prediction are decided deterministically; every decision is checked
   against a real Spark run (`tests/fixtures/spark-4.2.0/sql-parse-probe.json`,

@@ -176,6 +176,7 @@ fn layout(table: &str) -> Option<Vec<(&'static str, Kind, bool)>> {
         ],
         "operators" => vec![
             ("query_id", Text, false),
+            ("session_id", Text, false),
             ("operator_id", Int, false),
             ("node_id", Int, true),
             ("name", Text, false),
@@ -438,6 +439,7 @@ fn values(table: &str, sources: &Sources) -> Vec<ArrayRef> {
         let l = |f: fn(&OperatorRow) -> i64| long(rows.iter().map(move |r| Some(f(r))));
         return vec![
             text(rows.iter().map(|r| Some(r.query_id.as_str()))),
+            text(rows.iter().map(|r| Some(r.session_id.as_str()))),
             Arc::new(Int32Array::from_iter(
                 rows.iter().map(|r| Some(r.operator_id)),
             )),
@@ -697,12 +699,16 @@ pub(crate) struct QueryRow {
     /// The advisor's hints for a finished query; `None` for one that did not finish or ran with
     /// `krishiv.advisor.enabled=false` (`Some` of none: finished, nothing to say).
     pub(crate) hints: Option<Arc<[HintRow]>>,
+    /// The `seq` of the next query event of this row (P3 E9).
+    pub(crate) event_seq: u64,
 }
 
 /// One operator of a finished query, as `system.operators` lists it.
 #[derive(Debug, Clone)]
 pub(crate) struct OperatorRow {
     pub(crate) query_id: String,
+    /// The session that ran the query (set when the query finishes).
+    pub(crate) session_id: String,
     pub(crate) operator_id: i32,
     pub(crate) node_id: Option<i32>,
     pub(crate) name: String,
@@ -740,6 +746,7 @@ impl OperatorRow {
         let m = &e.metrics;
         Self {
             query_id: query_id.to_owned(),
+            session_id: String::new(),
             operator_id: i32::try_from(id.0).unwrap_or(i32::MAX),
             node_id: e.node.map(|v| i32::try_from(v).unwrap_or(i32::MAX)),
             name: e.name.to_string(),
@@ -990,6 +997,7 @@ impl QueryLog {
             workers: None,
             cancel_reason: None,
             hints: None,
+            event_seq: 0,
         }
     }
 
@@ -1104,6 +1112,13 @@ impl QueryLog {
     pub(crate) fn set_state(&self, id: &str, state: &'static str) {
         self.history
             .update(&self.session_id, id, |row| row.state = state);
+    }
+
+    /// Names the group the controller queued live row `id` in.
+    pub(crate) fn set_group(&self, id: &str, group: &str) {
+        self.history.update(&self.session_id, id, |row| {
+            row.resource_group = Some(group.to_owned());
+        });
     }
 
     /// Stamps the start of live row `id`: admission let it run.
@@ -1385,6 +1400,7 @@ impl QueryRow {
                 std::mem::size_of::<OperatorRow>()
                     + o.query_id.len()
                     + o.name.len()
+                    + o.session_id.len()
                     + o.pipelines.len() * 4
                     + o.extra
                         .iter()

@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use krishiv_common::secret::{OptionValue, SecretValue};
+use krishiv_exec::AsOfMergeDirection;
 use krishiv_exec::JoinType;
 use krishiv_exec::aggregate::{
     AggInput, AggregateExpr, AggregateFunction, AggregateOutput, UdafCall,
@@ -103,7 +104,7 @@ pub fn to_message(plan: &PhysicalPlan) -> Result<pb::PhysicalPlan> {
         explain,
         explain_root,
         warnings: plan.warnings().to_vec(),
-        env: Some(env(plan.env())),
+        env: Some(env(plan.env())?),
         exprs: e.exprs,
         features: features.iter().map(|f| f.id().to_owned()).collect(),
         epoch: EPOCH,
@@ -153,8 +154,17 @@ fn index(n: usize) -> Result<u32> {
     u32::try_from(n).map_err(|_| CodecError::Unsupported("more than 2^32 entries".to_owned()))
 }
 
-fn env(env: &ExprEnv) -> pb::ExprEnv {
-    pb::ExprEnv {
+/// The wire form of `env`. A Spark version the decoder does not accept (`decode.rs`: 4.0, 4.1
+/// and 4.3; absent is 4.2) is refused here, so no writer sends bytes its reader calls corrupt.
+fn env(env: &ExprEnv) -> Result<pb::ExprEnv> {
+    if let Some(line) = env.spark_version.as_deref()
+        && !matches!(line, "4.0" | "4.1" | "4.3")
+    {
+        return Err(CodecError::Unsupported(format!(
+            "the Spark version {line:?} in the expression environment"
+        )));
+    }
+    Ok(pb::ExprEnv {
         ansi: env.ansi,
         zone: env.zone,
         zone_name: env.zone_name.as_deref().map(str::to_owned),
@@ -166,7 +176,8 @@ fn env(env: &ExprEnv) -> pb::ExprEnv {
         legacy_coding_error_action: env.legacy_coding_error_action.then_some(true),
         legacy_time_parser: env.legacy_time_parser.then_some(true),
         binary_output_style: env.binary_output_style.as_deref().map(str::to_owned),
-    }
+        spark_version: env.spark_version.as_deref().map(str::to_owned),
+    })
 }
 
 #[derive(Default)]
@@ -681,6 +692,20 @@ impl Encoder {
             null_safe: join.null_safe.clone(),
             residual: self.residual(join.residual.as_ref())?,
             single_match: join.single_match,
+            as_of: match &join.as_of {
+                None => None,
+                Some(a) => Some(pb::AsOfMerge {
+                    left_column: a.left_column as u64,
+                    right_column: a.right_column as u64,
+                    direction: match a.direction {
+                        AsOfMergeDirection::Backward => pb::AsOfMergeDirection::Backward,
+                        AsOfMergeDirection::Forward => pb::AsOfMergeDirection::Forward,
+                    } as i32,
+                    allow_exact: a.allow_exact,
+                    distance: self.residual(a.distance.as_ref())?,
+                    distance_on_every_pair: a.distance_on_every_pair,
+                }),
+            },
         })
     }
 
@@ -784,6 +809,11 @@ impl Encoder {
     }
 
     fn scan(&mut self, node: &ScanNode) -> Result<pb::ScanNode> {
+        if node.decided.is_some() {
+            return Err(CodecError::Unsupported(
+                "a Python data source in a distributed plan".to_owned(),
+            ));
+        }
         let Scan {
             source,
             output,
@@ -1296,6 +1326,8 @@ fn aggregate_function(a: &AggregateExpr, nested: &Cell<bool>) -> Result<pb::Aggr
         AggregateFunction::ApproxCountDistinct { p } => !(4..=30).contains(p),
         AggregateFunction::HistogramNumeric { nb } => *nb < 2,
         AggregateFunction::HllSketchAgg { lg_k } => !(4..=21).contains(lg_k),
+        AggregateFunction::ThetaSketchAgg { lg_nom }
+        | AggregateFunction::ThetaUnionAgg { lg_nom } => !(4..=26).contains(lg_nom),
         _ => false,
     };
     if invalid {
@@ -1442,6 +1474,45 @@ fn aggregate_function(a: &AggregateExpr, nested: &Cell<bool>) -> Result<pb::Aggr
                 0,
                 false,
                 u32::from(*lg_k),
+                a,
+                nested,
+            ));
+        }
+        AggregateFunction::ThetaSketchAgg { lg_nom } => {
+            return Ok(percentile_expr(
+                pb::AggregateFunction::ThetaSketchAgg,
+                &[],
+                false,
+                false,
+                0,
+                false,
+                u32::from(*lg_nom),
+                a,
+                nested,
+            ));
+        }
+        AggregateFunction::ThetaUnionAgg { lg_nom } => {
+            return Ok(percentile_expr(
+                pb::AggregateFunction::ThetaUnionAgg,
+                &[],
+                false,
+                false,
+                0,
+                false,
+                u32::from(*lg_nom),
+                a,
+                nested,
+            ));
+        }
+        AggregateFunction::ThetaIntersectionAgg => {
+            return Ok(percentile_expr(
+                pb::AggregateFunction::ThetaIntersectionAgg,
+                &[],
+                false,
+                false,
+                0,
+                false,
+                0,
                 a,
                 nested,
             ));

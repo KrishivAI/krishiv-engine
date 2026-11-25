@@ -11,10 +11,11 @@ use futures::TryStreamExt;
 use iceberg::TableIdent;
 use iceberg::spec::TableMetadata;
 use iceberg::table::Table;
-use krishiv_common::error::KrishivError;
+use krishiv_common::error::{KrishivError, KrishivUnsupportedFeature};
 use krishiv_types::StructType;
 
-use super::commit::CommitTable;
+use super::commit::{CommitClock, CommitTable};
+use super::rest_commit::RestCommitTable;
 use super::scan;
 use super::storage::{Registered, StorageRegistration, from_iceberg};
 use super::types::spark_schema;
@@ -22,6 +23,7 @@ use crate::plan::deletes::DeleteIndex;
 use crate::plan::{
     ManifestFilter, PruneOptions, ScanPlan, TableSnapshot, VersionSpec, WriterMetrics,
 };
+use crate::rest_commit::RestCommitTransport;
 use krishiv_common::config::{
     CATALOG_MAX_METADATA_BYTES, Config, ConfigValue, ICEBERG_MANIFEST_CACHE_BYTES,
 };
@@ -116,6 +118,13 @@ impl fmt::Debug for IcebergTable {
             .finish_non_exhaustive()
     }
 }
+
+/// What a maintenance procedure works through: the commit endpoint, the file access, the clock.
+pub(crate) type MaintenanceParts = (
+    Arc<dyn CommitTable>,
+    iceberg::io::FileIO,
+    Arc<dyn CommitClock>,
+);
 
 impl IcebergTable {
     /// The table whose metadata file is `metadata_location`, named `namespace.name`.
@@ -241,16 +250,54 @@ impl IcebergTable {
     }
 
     /// The same table committing through `committer`: providers opened over
-    /// it declare `BATCH_WRITE` and append ([`super::sink`]). Crate-private
-    /// until the catalog clients (PR-17) build a `CommitTable`.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "PR-17's catalog clients attach their committer")
-    )]
+    /// it declare `BATCH_WRITE` and append ([`super::sink`]).
     #[must_use]
     pub(crate) fn with_committer(mut self, committer: Arc<dyn CommitTable>) -> Self {
         self.committer = Some(committer);
         self
+    }
+
+    /// The same table committing through an Iceberg REST catalog's commit
+    /// endpoint (`transport`, [`crate::rest_commit`]): providers opened over
+    /// it at the current version declare `BATCH_WRITE`, `TRUNCATE`,
+    /// `OVERWRITE_BY_FILTER` and `OVERWRITE_DYNAMIC` and offer copy-on-write
+    /// row-level changes; each commit is the spec's `CommitTableRequest` for
+    /// this table's identifier, its answers mapped as design note §7.2 says.
+    #[must_use]
+    pub fn with_rest_commit(self, transport: Arc<dyn RestCommitTransport>) -> Self {
+        let ident = self.table.identifier().clone();
+        self.with_committer(Arc::new(RestCommitTable::new(transport, ident)))
+    }
+
+    /// What a maintenance procedure commits and deletes through: the catalog's commit endpoint,
+    /// the table's file access and the commit clock (`make_clock` builds it from the I/O
+    /// registration).
+    ///
+    /// # Errors
+    /// `KRISHIV_UNSUPPORTED_FEATURE` when the table has no commit endpoint (a read-only catalog
+    /// table or a table at an older version); the clock's failure.
+    pub(crate) fn maintenance_parts(
+        &self,
+        make_clock: fn(&Registered) -> Result<Arc<dyn CommitClock>, KrishivError>,
+    ) -> Result<MaintenanceParts, KrishivError> {
+        let committer = self.committer.clone().ok_or_else(|| {
+            KrishivError::from(KrishivUnsupportedFeature {
+                feature: format!(
+                    "an Iceberg procedure on {}: the catalog serves it read-only",
+                    self.table.identifier().name()
+                ),
+            })
+        })?;
+        Ok((
+            committer,
+            self.table.file_io().clone(),
+            make_clock(&self.registered)?,
+        ))
+    }
+
+    /// `krishiv.catalog.maxMetadataBytes`, the parse limit on what a procedure reads.
+    pub(crate) fn max_metadata_bytes(&self) -> u64 {
+        self.max_metadata_bytes
     }
 
     /// The current schema as Spark's Iceberg integration shows it.

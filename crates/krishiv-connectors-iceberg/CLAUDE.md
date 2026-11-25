@@ -11,13 +11,13 @@ and the manifest cache since PR-25d; commits T027.
 Iceberg table connector. The only crate that depends on `iceberg` (iceberg-rust, Arrow 58).
 
 ## Layout
-`src/lib.rs` the public items (`StorageRegistration`, `IcebergTable` (`from_metadata`: a table whose metadata a catalog returned, no metadata file read), `IcebergMetadata`, `IcebergTableProvider`, module `plan`, feature `testing`: `testing::write_table`, a small table for other crates' tests) · `src/iceberg_v0/` (private; every item
+`src/lib.rs` the public items (`StorageRegistration`, `IcebergTable` (`from_metadata`: a table whose metadata a catalog returned, no metadata file read; `with_rest_commit`: commits through a REST catalog's transport), `IcebergMetadata`, `IcebergTableProvider`, module `plan`, module `rest_commit` (PR-36c part 2: `RestCommitTransport` (`post_commit(body) -> TransportReply | TransportFailure { sent }`, `load(all_snapshots)`), JSON bytes only, no iceberg type), feature `testing`: `testing::write_table`, a small table for other crates' tests, `write_table_with`, the same table under any warehouse URL through the stores of a caller's path locator, `LocalIo`, `append` (rows through a provider's writer), `apply_commit` (a fake REST server's apply)) · `src/iceberg_v0/` (private; every item
 that names `iceberg`): `storage.rs` iceberg's `Storage`/`StorageFactory` (`#[typetag::serde]`, tag `krishiv`)
 over `krishiv-io`'s `IoContext`, the process registry of registration names, `iceberg::Runtime` on the
 scheduler's I/O runtime, error mapping both ways (a Krishiv error keeps its class through iceberg-rust) ·
 `types.rs` Iceberg → Spark types (Iceberg's `TypeToSparkType`, apache-iceberg 1.12.0) · `table.rs`
 `IcebergTable` (load from a metadata location, schema, `snapshots`/`manifests` as Arrow 60, `snapshot(VersionSpec)`,
-`plan`; crate-private `with_committer`, the `CommitTable` its providers append through) · `provider.rs` `IcebergTableProvider` (design note §3.1): a pinned snapshot's data files as the file list
+`plan`; crate-private `with_committer`, the `CommitTable` its providers append through) · `rest_commit.rs` (PR-36c part 2) `RestCommitTable`, the production `CommitTable` over a `RestCommitTransport`: the spec's `CommitTableRequest` (`identifier`, `requirements`, `updates` from iceberg's serde types) and the status mapping of `CommitOutcome`'s table (duplicate id `Snapshot already exists for` → unknown; stale texts → stale conflict; 409 → conflict; 500/502/503/504, any other 2xx than a parsable 200 (201, 202, 204: accepted, so it may have landed) and a sent request without answer → unknown, `Retry-After` named in the reason only; never sent, 401/403/404/422/other → `KRISHIV_ICEBERG_COMMIT_FAILED` naming status and type, never the server's message); tests `rest_commit_tests.rs` (one per row; the loop over a wire on `commit_tests`' catalog: plain, 409 rebase, stale 400, lost 200, duplicated, 401 first and after a 503, never sent) · `provider.rs` `IcebergTableProvider` (design note §3.1): a pinned snapshot's data files as the file list
 of `krishiv-exec`'s `FileScan` (Parquet, Spark split planning), columns by field id with Java's positional fallback
 for files without ids (`FieldMapping::FieldIdOr`; under `schema.name-mapping.default` by the mapping's names instead, `types.rs` `parse_name_mapping`, strict as Java: `names` required, no name twice at a level; PR-25c. Equality delete files ignore the mapping, as Java's delete loader does), identity-partition
 columns constant in every file's spec read from the manifest (`FileConstants`, FC S4), a mixed-spec identity
@@ -76,7 +76,7 @@ later) and `CommitClock` (time and jitter, injected): an unknown outcome probed 
 the branch moved; own-key search (snapshot id or `krishiv.write-id`) before every rebase; per-request outcomes;
 rebase across v2 → v3 only (other format changes and a replaced table `KRISHIV_ICEBERG_COMMIT_CONFLICT`); Iceberg's
 `commit.retry.*` budget and Java's `Tasks` backoff; `KRISHIV_ICEBERG_COMMIT_FAILED` / `_STATE_UNKNOWN`; §7.4 cleanup (statistics files as lists: kept when the committed metadata names them); a known refusal of a request carrying `set-statistics` resent once at once without it (PR-54b).
-No production `CommitTable` yet (PR-17's catalog clients); the production clock is `sink.rs`'s `IoClock`. Tests `commit_tests.rs` (DST: `TestCatalog`
+The production `CommitTable` is `rest_commit.rs`'s (krishiv-catalogs attaches it to declared REST tables with `option.write = true`); the production clock is `sink.rs`'s `IoClock`. Tests `commit_tests.rs` (DST: `TestCatalog`
 applies requests as `append_tests` does, with scripted faults per request and foreign writers at chosen points,
 on virtual time; the §10 36a cases; merged first attempts committed, rebased, failed and left unknown; the sweep
 merging in one schedule in three; table invariants and the store's files checked after each case)
@@ -309,6 +309,23 @@ result. Pending, not stubbed: MERGE through SQL. Concurrent writers: `race_k` (t
 - **Merge-on-read drops (review 36c1 M3):** a `MorTask::finish` dropped midway deletes its delete files and finished
   data files in the background, and a `put` dropped in flight deletes its file once the store is done; a data file
   whose close is dropped after the store completed it is `write.rs`'s documented limit (an unreferenced file).
+- **Expire cleanup memory (PR-36e, review of #983):** `maintenance/expire.rs` `cleanup` holds the paths every
+  removed snapshot reached, every kept snapshot reached and the decoded manifests' paths in memory, uncharged to any
+  pool (each manifest is capped by `krishiv.catalog.maxMetadataBytes`, the sum is not), as Java's
+  `ReachableFileCleanup` holds its sets. Follow-up: charge the sets to the procedure's pool or walk in bounded batches.
+- **Expire and concurrent refs (review of #983):** a snapshot removal asserts every ref as planned, `main` included
+  (`maintenance/expire.rs` `request`), so a concurrent rollback or a ref moved onto a removed snapshot conflicts and the
+  expire plans again. Two costs: a concurrent append to `main` conflicts too, so a busy table can use up
+  `commit.retry.num-retries` (`KRISHIV_ICEBERG_EXPIRE_FAILED`); and a ref created after planning under a new name is not
+  covered (no REST requirement names a ref that did not exist), so the server drops that new ref with the snapshot and
+  its files are deleted. Iceberg 1.12.0 has the same window: `UpdateRequirements` asserts nothing for
+  `remove-snapshots`.
+- **Expire and gzip metadata (review of #983):** `maintenance/expire.rs` `checked_load` parses the `metadata.json` an
+  answer names as plain JSON, so a table written with `write.metadata.compression-codec=gzip` (`*.gz.metadata.json`) is
+  refused with the "snapshot list that differs from its metadata file" text until gzip metadata is read. Refused at
+  the first load, nothing is committed or deleted. A table switched to gzip after that load can still take the commit:
+  the reload after it is then refused, so the snapshots are gone, no file is deleted (orphans for
+  `remove_orphan_files`) and the procedure returns that error.
 - `statistics()` takes no filter: the row estimate sums every live file, not the files left after pruning.
 - A deletion vector is read at the length its manifest declares (`deletes.rs` `read_dv`) without the
   `krishiv.catalog.maxMetadataBytes` cap the metadata files get; its memory is charged to the query (the decode's transient copy aside; review of the

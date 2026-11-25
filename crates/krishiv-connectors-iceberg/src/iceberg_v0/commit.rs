@@ -151,13 +151,6 @@ const COMMIT_STATUS_CHECKS_MAX_WAIT_MS: &str = "commit.status-check.max-wait-ms"
 /// The loop, not the implementation, decides that a `Failed` answer to a
 /// resend is still unknown (§7.2's per-request rule).
 #[derive(Debug)]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "built only by a `CommitTable`: PR-17's catalog clients"
-    )
-)]
 pub(crate) enum CommitOutcome {
     /// Applied; the table's new metadata.
     Committed(Box<TableMetadata>),
@@ -193,6 +186,18 @@ pub(crate) trait CommitTable: Send + Sync {
     /// # Errors
     /// The load's failure; the loop counts it as "still unknown".
     async fn load(&self, all_snapshots: bool) -> Result<TableMetadata, KrishivError>;
+
+    /// [`Self::load`] with the answer's `metadata-location`, `None` when it names none (the
+    /// deleting procedures check the answer against that file, design 36e §4).
+    ///
+    /// # Errors
+    /// As [`Self::load`].
+    async fn load_located(
+        &self,
+        all_snapshots: bool,
+    ) -> Result<(TableMetadata, Option<String>), KrishivError> {
+        Ok((self.load(all_snapshots).await?, None))
+    }
 }
 
 /// Time for the loop, injected so simulations run on virtual time.
@@ -919,7 +924,7 @@ impl Loop<'_> {
 }
 
 /// The `<files>` text of a failed write whose files were deleted.
-const REMOVED: &str = "the written files were removed where possible, and the write \
+pub(crate) const REMOVED: &str = "the written files were removed where possible, and the write \
      can run again";
 
 /// The `<files>` text of a failed write that once had an unknown answer.

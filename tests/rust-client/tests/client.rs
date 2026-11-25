@@ -20,8 +20,8 @@ fn session() -> SparkSession {
 #[ignore = "needs a running krishiv server"]
 fn session_reports_a_spark_version() {
     let version = session().version().expect("version");
-    // The server's default session profile is Spark 4.2 (`krishiv-connect-server/tests/rpcs.rs`).
-    assert_eq!(version, "4.2.0");
+    // The server's default session profile is Spark 4.3 (`krishiv-connect-server/tests/rpcs.rs`).
+    assert_eq!(version, "4.3.0");
 }
 
 #[test]

@@ -5,7 +5,6 @@ pub use krishiv_session::AggregateProperties
 pub use krishiv_session::AggregateUdf
 pub use krishiv_session::AllowAll
 pub use krishiv_session::ArgField
-pub use krishiv_session::BatchSource
 pub use krishiv_session::BoxFuture
 pub use krishiv_session::CounterSample
 pub use krishiv_session::DenyAll
@@ -384,7 +383,7 @@ pub krishiv_session::auth::Surface::Ui
 impl krishiv_session::auth::Surface
 pub const krishiv_session::auth::Surface::ALL: [Self; 5]
 pub fn krishiv_session::auth::Surface::as_str(self) -> &'static str
-pub fn krishiv_session::auth::Surface::of(transport: krishiv_session::Transport) -> core::option::Option<Self>
+pub fn krishiv_session::auth::Surface::of(krishiv_session::Transport) -> core::option::Option<Self>
 impl core::clone::Clone for krishiv_session::auth::Surface
 pub fn krishiv_session::auth::Surface::clone(&self) -> krishiv_session::auth::Surface
 impl core::cmp::Eq for krishiv_session::auth::Surface
@@ -737,6 +736,7 @@ pub fn krishiv_session::auth::ServerAuth::impersonate(&self, &krishiv_session::a
 pub async fn krishiv_session::auth::ServerAuth::impersonate_signed(&self, &krishiv_session::auth::Authenticated, krishiv_session::auth::Surface, core::net::socket_addr::SocketAddr, &str, &krishiv_session::auth::ActAsHint) -> core::result::Result<(krishiv_session::auth::ActAs, krishiv_session::auth::Authenticated), krishiv_common::error::KrishivError>
 pub fn krishiv_session::auth::ServerAuth::impersonation_counts(&self) -> krishiv_session::auth::ImpersonationCount
 pub fn krishiv_session::auth::ServerAuth::is_enabled(&self) -> bool
+pub fn krishiv_session::auth::ServerAuth::jwks_ready(&self) -> core::option::Option<core::result::Result<(), alloc::string::String>>
 pub fn krishiv_session::auth::ServerAuth::metrics(&self) -> krishiv_exec::metrics::registry::MetricsSnapshot
 pub fn krishiv_session::auth::ServerAuth::new(&krishiv_session::auth::AuthConfig) -> core::result::Result<Self, krishiv_common::error::KrishivError>
 pub fn krishiv_session::auth::ServerAuth::refuse_impersonation(&self, &krishiv_session::auth::Authenticated, krishiv_session::auth::Surface, core::net::socket_addr::SocketAddr, krishiv_session::auth::Denial) -> krishiv_common::error::KrishivError
@@ -1024,26 +1024,280 @@ pub fn krishiv_session::catalog_registry::IdentityKey::fmt(&self, &mut core::fmt
 impl core::hash::Hash for krishiv_session::catalog_registry::IdentityKey
 pub fn krishiv_session::catalog_registry::IdentityKey::hash<__H: core::hash::Hasher>(&self, &mut __H)
 impl core::marker::StructuralPartialEq for krishiv_session::catalog_registry::IdentityKey
+#[non_exhaustive] pub struct krishiv_session::catalog_registry::LoadedDeclared
+pub krishiv_session::catalog_registry::LoadedDeclared::meta: krishiv_plan::analyzer::catalog::TableMeta
+pub krishiv_session::catalog_registry::LoadedDeclared::table: core::option::Option<alloc::sync::Arc<dyn krishiv_session::catalog_registry::DeclaredTable>>
+impl krishiv_session::catalog_registry::LoadedDeclared
+pub fn krishiv_session::catalog_registry::LoadedDeclared::new(krishiv_plan::analyzer::catalog::TableMeta, core::option::Option<alloc::sync::Arc<dyn krishiv_session::catalog_registry::DeclaredTable>>) -> Self
+impl core::clone::Clone for krishiv_session::catalog_registry::LoadedDeclared
+pub fn krishiv_session::catalog_registry::LoadedDeclared::clone(&self) -> krishiv_session::catalog_registry::LoadedDeclared
+impl core::fmt::Debug for krishiv_session::catalog_registry::LoadedDeclared
+pub fn krishiv_session::catalog_registry::LoadedDeclared::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+#[non_exhaustive] pub struct krishiv_session::catalog_registry::ScanInputs
+pub krishiv_session::catalog_registry::ScanInputs::config: alloc::sync::Arc<krishiv_common::config::Config>
+pub krishiv_session::catalog_registry::ScanInputs::io: krishiv_io::io::IoContext
+pub krishiv_session::catalog_registry::ScanInputs::paths: alloc::sync::Arc<dyn krishiv_exec::files::PathLocator>
+pub krishiv_session::catalog_registry::ScanInputs::worker_slots: u64
+impl krishiv_session::catalog_registry::ScanInputs
+pub fn krishiv_session::catalog_registry::ScanInputs::new(krishiv_io::io::IoContext, alloc::sync::Arc<dyn krishiv_exec::files::PathLocator>, alloc::sync::Arc<krishiv_common::config::Config>, u64) -> Self
+impl core::clone::Clone for krishiv_session::catalog_registry::ScanInputs
+pub fn krishiv_session::catalog_registry::ScanInputs::clone(&self) -> krishiv_session::catalog_registry::ScanInputs
+impl core::fmt::Debug for krishiv_session::catalog_registry::ScanInputs
+pub fn krishiv_session::catalog_registry::ScanInputs::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct krishiv_session::catalog_registry::ServerIdentity(pub alloc::sync::Arc<dyn krishiv_plan::analyzer::catalog::Catalog>)
 impl core::fmt::Debug for krishiv_session::catalog_registry::ServerIdentity
 pub fn krishiv_session::catalog_registry::ServerIdentity::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl krishiv_session::catalog_registry::CallerCatalog for krishiv_session::catalog_registry::ServerIdentity
 pub fn krishiv_session::catalog_registry::ServerIdentity::epoch(&self) -> u64
+pub fn krishiv_session::catalog_registry::ServerIdentity::list_namespaces<'a>(&'a self, &'a krishiv_session::catalog_registry::CatalogCaller, &'a [alloc::string::String]) -> krishiv_plan::analyzer::catalog::BoxFuture<'a, core::result::Result<core::option::Option<alloc::vec::Vec<alloc::vec::Vec<alloc::string::String>>>, krishiv_common::error::KrishivError>>
+pub fn krishiv_session::catalog_registry::ServerIdentity::list_tables<'a>(&'a self, &'a krishiv_session::catalog_registry::CatalogCaller, &'a [alloc::string::String]) -> krishiv_plan::analyzer::catalog::BoxFuture<'a, core::result::Result<core::option::Option<alloc::vec::Vec<alloc::string::String>>, krishiv_common::error::KrishivError>>
+pub fn krishiv_session::catalog_registry::ServerIdentity::load_declared<'a>(&'a self, &'a krishiv_session::catalog_registry::CatalogCaller, &'a krishiv_plan::analyzer::catalog::TableIdent, core::option::Option<krishiv_plan::plan::TableVersion>, krishiv_plan::analyzer::catalog::NameForm) -> krishiv_plan::analyzer::catalog::BoxFuture<'a, core::result::Result<core::option::Option<krishiv_session::catalog_registry::LoadedDeclared>, krishiv_common::error::KrishivError>>
 pub fn krishiv_session::catalog_registry::ServerIdentity::load_table<'a>(&'a self, &'a krishiv_session::catalog_registry::CatalogCaller, &'a krishiv_plan::analyzer::catalog::TableIdent, core::option::Option<krishiv_plan::plan::TableVersion>, krishiv_plan::analyzer::catalog::NameForm) -> krishiv_plan::analyzer::catalog::BoxFuture<'a, core::result::Result<core::option::Option<krishiv_plan::analyzer::catalog::TableMeta>, krishiv_common::error::KrishivError>>
+pub fn krishiv_session::catalog_registry::ServerIdentity::refresh<'a>(&'a self, &'a krishiv_session::catalog_registry::CatalogCaller, &'a krishiv_plan::analyzer::catalog::TableIdent) -> krishiv_plan::analyzer::catalog::BoxFuture<'a, core::result::Result<bool, krishiv_common::error::KrishivError>>
 pub trait krishiv_session::catalog_registry::CallerCatalog: core::fmt::Debug + core::marker::Send + core::marker::Sync
 pub fn krishiv_session::catalog_registry::CallerCatalog::epoch(&self) -> u64
+pub fn krishiv_session::catalog_registry::CallerCatalog::list_namespaces<'a>(&'a self, &'a krishiv_session::catalog_registry::CatalogCaller, &'a [alloc::string::String]) -> krishiv_plan::analyzer::catalog::BoxFuture<'a, core::result::Result<core::option::Option<alloc::vec::Vec<alloc::vec::Vec<alloc::string::String>>>, krishiv_common::error::KrishivError>>
+pub fn krishiv_session::catalog_registry::CallerCatalog::list_tables<'a>(&'a self, &'a krishiv_session::catalog_registry::CatalogCaller, &'a [alloc::string::String]) -> krishiv_plan::analyzer::catalog::BoxFuture<'a, core::result::Result<core::option::Option<alloc::vec::Vec<alloc::string::String>>, krishiv_common::error::KrishivError>>
+pub fn krishiv_session::catalog_registry::CallerCatalog::load_declared<'a>(&'a self, &'a krishiv_session::catalog_registry::CatalogCaller, &'a krishiv_plan::analyzer::catalog::TableIdent, core::option::Option<krishiv_plan::plan::TableVersion>, krishiv_plan::analyzer::catalog::NameForm) -> krishiv_plan::analyzer::catalog::BoxFuture<'a, core::result::Result<core::option::Option<krishiv_session::catalog_registry::LoadedDeclared>, krishiv_common::error::KrishivError>>
 pub fn krishiv_session::catalog_registry::CallerCatalog::load_table<'a>(&'a self, &'a krishiv_session::catalog_registry::CatalogCaller, &'a krishiv_plan::analyzer::catalog::TableIdent, core::option::Option<krishiv_plan::plan::TableVersion>, krishiv_plan::analyzer::catalog::NameForm) -> krishiv_plan::analyzer::catalog::BoxFuture<'a, core::result::Result<core::option::Option<krishiv_plan::analyzer::catalog::TableMeta>, krishiv_common::error::KrishivError>>
+pub fn krishiv_session::catalog_registry::CallerCatalog::refresh<'a>(&'a self, &'a krishiv_session::catalog_registry::CatalogCaller, &'a krishiv_plan::analyzer::catalog::TableIdent) -> krishiv_plan::analyzer::catalog::BoxFuture<'a, core::result::Result<bool, krishiv_common::error::KrishivError>>
 impl krishiv_session::catalog_registry::CallerCatalog for krishiv_session::catalog_registry::ServerIdentity
 pub fn krishiv_session::catalog_registry::ServerIdentity::epoch(&self) -> u64
+pub fn krishiv_session::catalog_registry::ServerIdentity::list_namespaces<'a>(&'a self, &'a krishiv_session::catalog_registry::CatalogCaller, &'a [alloc::string::String]) -> krishiv_plan::analyzer::catalog::BoxFuture<'a, core::result::Result<core::option::Option<alloc::vec::Vec<alloc::vec::Vec<alloc::string::String>>>, krishiv_common::error::KrishivError>>
+pub fn krishiv_session::catalog_registry::ServerIdentity::list_tables<'a>(&'a self, &'a krishiv_session::catalog_registry::CatalogCaller, &'a [alloc::string::String]) -> krishiv_plan::analyzer::catalog::BoxFuture<'a, core::result::Result<core::option::Option<alloc::vec::Vec<alloc::string::String>>, krishiv_common::error::KrishivError>>
+pub fn krishiv_session::catalog_registry::ServerIdentity::load_declared<'a>(&'a self, &'a krishiv_session::catalog_registry::CatalogCaller, &'a krishiv_plan::analyzer::catalog::TableIdent, core::option::Option<krishiv_plan::plan::TableVersion>, krishiv_plan::analyzer::catalog::NameForm) -> krishiv_plan::analyzer::catalog::BoxFuture<'a, core::result::Result<core::option::Option<krishiv_session::catalog_registry::LoadedDeclared>, krishiv_common::error::KrishivError>>
 pub fn krishiv_session::catalog_registry::ServerIdentity::load_table<'a>(&'a self, &'a krishiv_session::catalog_registry::CatalogCaller, &'a krishiv_plan::analyzer::catalog::TableIdent, core::option::Option<krishiv_plan::plan::TableVersion>, krishiv_plan::analyzer::catalog::NameForm) -> krishiv_plan::analyzer::catalog::BoxFuture<'a, core::result::Result<core::option::Option<krishiv_plan::analyzer::catalog::TableMeta>, krishiv_common::error::KrishivError>>
+pub fn krishiv_session::catalog_registry::ServerIdentity::refresh<'a>(&'a self, &'a krishiv_session::catalog_registry::CatalogCaller, &'a krishiv_plan::analyzer::catalog::TableIdent) -> krishiv_plan::analyzer::catalog::BoxFuture<'a, core::result::Result<bool, krishiv_common::error::KrishivError>>
 pub trait krishiv_session::catalog_registry::CatalogFactory: core::fmt::Debug + core::marker::Send + core::marker::Sync
 pub fn krishiv_session::catalog_registry::CatalogFactory::build(&self, &krishiv_session::catalog_decl::CatalogDecl, &krishiv_session::catalog_registry::CatalogDeps) -> core::result::Result<alloc::sync::Arc<dyn krishiv_session::catalog_registry::CallerCatalog>, krishiv_common::error::KrishivError>
 pub fn krishiv_session::catalog_registry::CatalogFactory::kind(&self) -> krishiv_session::catalog_decl::CatalogType
 pub fn krishiv_session::catalog_registry::CatalogFactory::validate(&self, &krishiv_session::catalog_decl::CatalogDecl, &krishiv_session::catalog_registry::CatalogDeps) -> core::result::Result<(), krishiv_common::error::KrishivError>
+pub trait krishiv_session::catalog_registry::DeclaredTable: core::fmt::Debug + core::marker::Send + core::marker::Sync
+pub fn krishiv_session::catalog_registry::DeclaredTable::open(alloc::sync::Arc<Self>, krishiv_session::catalog_registry::ScanInputs) -> krishiv_plan::analyzer::catalog::BoxFuture<'static, core::result::Result<alloc::sync::Arc<dyn krishiv_exec::planner::table::TableProvider>, krishiv_common::error::KrishivError>>
 pub mod krishiv_session::egress
 pub fn krishiv_session::egress::egress_policy(&krishiv_common::config::Config, impl core::ops::function::Fn(&str) -> core::option::Option<alloc::string::String>) -> core::result::Result<alloc::sync::Arc<krishiv_store::egress::EgressPolicy>, krishiv_common::error::KrishivError>
 pub fn krishiv_session::egress::egress_proxy(&krishiv_common::config::Config) -> core::option::Option<alloc::string::String>
 pub fn krishiv_session::egress::store_scope(&alloc::sync::Arc<krishiv_store::egress::EgressPolicy>, &krishiv_common::config::Config) -> core::result::Result<krishiv_store::egress::EgressScope, krishiv_common::error::KrishivError>
+pub mod krishiv_session::events
+#[non_exhaustive] pub enum krishiv_session::events::EngineEvent
+pub krishiv_session::events::EngineEvent::Query(krishiv_session::events::QueryEvent)
+impl krishiv_session::events::EngineEvent
+pub fn krishiv_session::events::EngineEvent::tag(&self) -> krishiv_session::events::EventKindTag
+pub fn krishiv_session::events::EngineEvent::to_json(&self) -> serde_json::value::Value
+impl core::clone::Clone for krishiv_session::events::EngineEvent
+pub fn krishiv_session::events::EngineEvent::clone(&self) -> krishiv_session::events::EngineEvent
+impl core::cmp::PartialEq for krishiv_session::events::EngineEvent
+pub fn krishiv_session::events::EngineEvent::eq(&self, &krishiv_session::events::EngineEvent) -> bool
+impl core::fmt::Debug for krishiv_session::events::EngineEvent
+pub fn krishiv_session::events::EngineEvent::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for krishiv_session::events::EngineEvent
+#[non_exhaustive] pub enum krishiv_session::events::EventKindTag
+pub krishiv_session::events::EventKindTag::Cancelled
+pub krishiv_session::events::EventKindTag::Finished
+pub krishiv_session::events::EventKindTag::Progress
+pub krishiv_session::events::EventKindTag::Queued
+pub krishiv_session::events::EventKindTag::Started
+pub krishiv_session::events::EventKindTag::Submitted
+impl krishiv_session::events::EventKindTag
+pub const fn krishiv_session::events::EventKindTag::name(self) -> &'static str
+impl core::clone::Clone for krishiv_session::events::EventKindTag
+pub fn krishiv_session::events::EventKindTag::clone(&self) -> krishiv_session::events::EventKindTag
+impl core::cmp::Eq for krishiv_session::events::EventKindTag
+impl core::cmp::PartialEq for krishiv_session::events::EventKindTag
+pub fn krishiv_session::events::EventKindTag::eq(&self, &krishiv_session::events::EventKindTag) -> bool
+impl core::fmt::Debug for krishiv_session::events::EventKindTag
+pub fn krishiv_session::events::EventKindTag::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for krishiv_session::events::EventKindTag
+pub fn krishiv_session::events::EventKindTag::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for krishiv_session::events::EventKindTag
+impl core::marker::StructuralPartialEq for krishiv_session::events::EventKindTag
+#[non_exhaustive] pub enum krishiv_session::events::QueryEventKind
+pub krishiv_session::events::QueryEventKind::Cancelled
+pub krishiv_session::events::QueryEventKind::Cancelled::reason: core::option::Option<alloc::string::String>
+pub krishiv_session::events::QueryEventKind::Cancelled::usage: krishiv_session::events::UsageRecord
+pub krishiv_session::events::QueryEventKind::Finished(alloc::boxed::Box<krishiv_session::events::FinishedEvent>)
+pub krishiv_session::events::QueryEventKind::Progress(krishiv_session::events::UsageRecord)
+pub krishiv_session::events::QueryEventKind::Queued
+pub krishiv_session::events::QueryEventKind::Started
+pub krishiv_session::events::QueryEventKind::Started::queued_ns: u64
+pub krishiv_session::events::QueryEventKind::Started::resource_group: core::option::Option<alloc::string::String>
+pub krishiv_session::events::QueryEventKind::Submitted
+pub krishiv_session::events::QueryEventKind::Submitted::statement_class: core::option::Option<alloc::string::String>
+pub krishiv_session::events::QueryEventKind::Submitted::text: core::option::Option<alloc::string::String>
+impl krishiv_session::events::QueryEventKind
+pub const fn krishiv_session::events::QueryEventKind::tag(&self) -> krishiv_session::events::EventKindTag
+impl core::clone::Clone for krishiv_session::events::QueryEventKind
+pub fn krishiv_session::events::QueryEventKind::clone(&self) -> krishiv_session::events::QueryEventKind
+impl core::cmp::PartialEq for krishiv_session::events::QueryEventKind
+pub fn krishiv_session::events::QueryEventKind::eq(&self, &krishiv_session::events::QueryEventKind) -> bool
+impl core::fmt::Debug for krishiv_session::events::QueryEventKind
+pub fn krishiv_session::events::QueryEventKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for krishiv_session::events::QueryEventKind
+#[non_exhaustive] pub enum krishiv_session::events::UsageKind
+pub krishiv_session::events::UsageKind::Final
+pub krishiv_session::events::UsageKind::Progress
+impl core::clone::Clone for krishiv_session::events::UsageKind
+pub fn krishiv_session::events::UsageKind::clone(&self) -> krishiv_session::events::UsageKind
+impl core::cmp::Eq for krishiv_session::events::UsageKind
+impl core::cmp::PartialEq for krishiv_session::events::UsageKind
+pub fn krishiv_session::events::UsageKind::eq(&self, &krishiv_session::events::UsageKind) -> bool
+impl core::fmt::Debug for krishiv_session::events::UsageKind
+pub fn krishiv_session::events::UsageKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for krishiv_session::events::UsageKind
+impl core::marker::StructuralPartialEq for krishiv_session::events::UsageKind
+pub struct krishiv_session::events::EventBus
+impl krishiv_session::events::EventBus
+pub fn krishiv_session::events::EventBus::compute_id(&self) -> &str
+pub fn krishiv_session::events::EventBus::dropped(&self, &str, krishiv_session::events::EventKindTag) -> u64
+pub fn krishiv_session::events::EventBus::dropped_total(&self) -> u64
+pub fn krishiv_session::events::EventBus::emit(&self, krishiv_session::events::EngineEvent)
+pub fn krishiv_session::events::EventBus::is_active(&self) -> bool
+pub fn krishiv_session::events::EventBus::new(alloc::string::String, usize, usize) -> Self
+pub fn krishiv_session::events::EventBus::queue_depth(&self) -> usize
+pub fn krishiv_session::events::EventBus::register(&self, alloc::sync::Arc<dyn krishiv_session::events::EventSink>)
+pub fn krishiv_session::events::EventBus::shutdown(&self, core::time::Duration)
+impl core::default::Default for krishiv_session::events::EventBus
+pub fn krishiv_session::events::EventBus::default() -> Self
+impl core::fmt::Debug for krishiv_session::events::EventBus
+pub fn krishiv_session::events::EventBus::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::ops::drop::Drop for krishiv_session::events::EventBus
+pub fn krishiv_session::events::EventBus::drop(&mut self)
+#[non_exhaustive] pub struct krishiv_session::events::FinishedEvent
+pub krishiv_session::events::FinishedEvent::error_class: core::option::Option<alloc::string::String>
+pub krishiv_session::events::FinishedEvent::result_cache_hit: bool
+pub krishiv_session::events::FinishedEvent::state: alloc::string::String
+pub krishiv_session::events::FinishedEvent::statement_class: core::option::Option<alloc::string::String>
+pub krishiv_session::events::FinishedEvent::usage: krishiv_session::events::UsageRecord
+impl core::clone::Clone for krishiv_session::events::FinishedEvent
+pub fn krishiv_session::events::FinishedEvent::clone(&self) -> krishiv_session::events::FinishedEvent
+impl core::cmp::PartialEq for krishiv_session::events::FinishedEvent
+pub fn krishiv_session::events::FinishedEvent::eq(&self, &krishiv_session::events::FinishedEvent) -> bool
+impl core::fmt::Debug for krishiv_session::events::FinishedEvent
+pub fn krishiv_session::events::FinishedEvent::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for krishiv_session::events::FinishedEvent
+pub struct krishiv_session::events::JsonLinesSink
+impl krishiv_session::events::JsonLinesSink
+pub fn krishiv_session::events::JsonLinesSink::failures(&self) -> u64
+pub fn krishiv_session::events::JsonLinesSink::new(std::path::PathBuf, u64, usize) -> Self
+impl core::fmt::Debug for krishiv_session::events::JsonLinesSink
+pub fn krishiv_session::events::JsonLinesSink::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl krishiv_session::events::EventSink for krishiv_session::events::JsonLinesSink
+pub fn krishiv_session::events::JsonLinesSink::accept(&self, krishiv_session::events::EventKindTag) -> bool
+pub fn krishiv_session::events::JsonLinesSink::deliver(&self, &[alloc::sync::Arc<krishiv_session::events::EngineEvent>])
+pub fn krishiv_session::events::JsonLinesSink::flush(&self)
+pub fn krishiv_session::events::JsonLinesSink::name(&self) -> &str
+#[non_exhaustive] pub struct krishiv_session::events::QueryEvent
+pub krishiv_session::events::QueryEvent::emitted_at_ms: i64
+pub krishiv_session::events::QueryEvent::kind: krishiv_session::events::QueryEventKind
+pub krishiv_session::events::QueryEvent::query: krishiv_session::events::QueryRef
+pub krishiv_session::events::QueryEvent::seq: u64
+pub krishiv_session::events::QueryEvent::version: krishiv_session::events::SchemaVersion
+impl krishiv_session::events::QueryEvent
+pub fn krishiv_session::events::QueryEvent::to_json(&self) -> serde_json::value::Value
+impl core::clone::Clone for krishiv_session::events::QueryEvent
+pub fn krishiv_session::events::QueryEvent::clone(&self) -> krishiv_session::events::QueryEvent
+impl core::cmp::PartialEq for krishiv_session::events::QueryEvent
+pub fn krishiv_session::events::QueryEvent::eq(&self, &krishiv_session::events::QueryEvent) -> bool
+impl core::fmt::Debug for krishiv_session::events::QueryEvent
+pub fn krishiv_session::events::QueryEvent::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for krishiv_session::events::QueryEvent
+#[non_exhaustive] pub struct krishiv_session::events::QueryRef
+pub krishiv_session::events::QueryRef::compute_id: alloc::string::String
+pub krishiv_session::events::QueryRef::attempt: core::option::Option<u32>
+pub krishiv_session::events::QueryRef::delegated_by: core::option::Option<alloc::string::String>
+pub krishiv_session::events::QueryRef::principal: alloc::string::String
+pub krishiv_session::events::QueryRef::query_id: alloc::string::String
+pub krishiv_session::events::QueryRef::session_id: alloc::string::String
+pub krishiv_session::events::QueryRef::stage_id: core::option::Option<u32>
+pub krishiv_session::events::QueryRef::tags: alloc::vec::Vec<(alloc::string::String, alloc::string::String)>
+pub krishiv_session::events::QueryRef::task_id: core::option::Option<u32>
+pub krishiv_session::events::QueryRef::trace_id: core::option::Option<alloc::string::String>
+pub krishiv_session::events::QueryRef::worker_id: core::option::Option<alloc::string::String>
+impl core::clone::Clone for krishiv_session::events::QueryRef
+pub fn krishiv_session::events::QueryRef::clone(&self) -> krishiv_session::events::QueryRef
+impl core::cmp::Eq for krishiv_session::events::QueryRef
+impl core::cmp::PartialEq for krishiv_session::events::QueryRef
+pub fn krishiv_session::events::QueryRef::eq(&self, &krishiv_session::events::QueryRef) -> bool
+impl core::fmt::Debug for krishiv_session::events::QueryRef
+pub fn krishiv_session::events::QueryRef::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for krishiv_session::events::QueryRef
+#[non_exhaustive] pub struct krishiv_session::events::SchemaVersion
+pub krishiv_session::events::SchemaVersion::major: u32
+pub krishiv_session::events::SchemaVersion::minor: u32
+impl core::clone::Clone for krishiv_session::events::SchemaVersion
+pub fn krishiv_session::events::SchemaVersion::clone(&self) -> krishiv_session::events::SchemaVersion
+impl core::cmp::Eq for krishiv_session::events::SchemaVersion
+impl core::cmp::PartialEq for krishiv_session::events::SchemaVersion
+pub fn krishiv_session::events::SchemaVersion::eq(&self, &krishiv_session::events::SchemaVersion) -> bool
+impl core::fmt::Debug for krishiv_session::events::SchemaVersion
+pub fn krishiv_session::events::SchemaVersion::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for krishiv_session::events::SchemaVersion
+impl core::marker::StructuralPartialEq for krishiv_session::events::SchemaVersion
+#[non_exhaustive] pub struct krishiv_session::events::UsageRecord
+pub krishiv_session::events::UsageRecord::bytes_scanned: core::option::Option<i64>
+pub krishiv_session::events::UsageRecord::bytes_written: core::option::Option<i64>
+pub krishiv_session::events::UsageRecord::compute_id: alloc::string::String
+pub krishiv_session::events::UsageRecord::cpu_ns: core::option::Option<i64>
+pub krishiv_session::events::UsageRecord::delegated_by: core::option::Option<alloc::string::String>
+pub krishiv_session::events::UsageRecord::files_read: core::option::Option<i64>
+pub krishiv_session::events::UsageRecord::files_written: core::option::Option<i64>
+pub krishiv_session::events::UsageRecord::kind: krishiv_session::events::UsageKind
+pub krishiv_session::events::UsageRecord::peak_memory_bytes: core::option::Option<i64>
+pub krishiv_session::events::UsageRecord::principal: alloc::string::String
+pub krishiv_session::events::UsageRecord::queued_ns: core::option::Option<i64>
+pub krishiv_session::events::UsageRecord::record_id: krishiv_session::events::UsageRecordId
+pub krishiv_session::events::UsageRecord::resource_group: core::option::Option<alloc::string::String>
+pub krishiv_session::events::UsageRecord::result_cache_hit: bool
+pub krishiv_session::events::UsageRecord::rows_read: core::option::Option<i64>
+pub krishiv_session::events::UsageRecord::rows_written: core::option::Option<i64>
+pub krishiv_session::events::UsageRecord::session_id: alloc::string::String
+pub krishiv_session::events::UsageRecord::spill_bytes: core::option::Option<i64>
+pub krishiv_session::events::UsageRecord::spill_files: core::option::Option<i64>
+pub krishiv_session::events::UsageRecord::statement_class: core::option::Option<alloc::string::String>
+pub krishiv_session::events::UsageRecord::wall_ns: core::option::Option<i64>
+pub krishiv_session::events::UsageRecord::window_end_ms: i64
+pub krishiv_session::events::UsageRecord::window_start_ms: i64
+pub krishiv_session::events::UsageRecord::workload_class: core::option::Option<alloc::string::String>
+impl krishiv_session::events::UsageRecord
+pub fn krishiv_session::events::UsageRecord::to_json(&self) -> serde_json::value::Value
+impl core::clone::Clone for krishiv_session::events::UsageRecord
+pub fn krishiv_session::events::UsageRecord::clone(&self) -> krishiv_session::events::UsageRecord
+impl core::cmp::PartialEq for krishiv_session::events::UsageRecord
+pub fn krishiv_session::events::UsageRecord::eq(&self, &krishiv_session::events::UsageRecord) -> bool
+impl core::fmt::Debug for krishiv_session::events::UsageRecord
+pub fn krishiv_session::events::UsageRecord::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for krishiv_session::events::UsageRecord
+#[non_exhaustive] pub struct krishiv_session::events::UsageRecordId
+pub krishiv_session::events::UsageRecordId::query_id: alloc::string::String
+pub krishiv_session::events::UsageRecordId::seq: u64
+pub krishiv_session::events::UsageRecordId::session_id: alloc::string::String
+pub krishiv_session::events::UsageRecordId::worker_id: core::option::Option<alloc::string::String>
+impl krishiv_session::events::UsageRecordId
+pub fn krishiv_session::events::UsageRecordId::new(session_id: alloc::string::String, query_id: alloc::string::String, seq: u64) -> Self
+pub fn krishiv_session::events::UsageRecordId::with_worker(self, worker_id: core::option::Option<alloc::string::String>) -> Self
+impl core::clone::Clone for krishiv_session::events::UsageRecordId
+pub fn krishiv_session::events::UsageRecordId::clone(&self) -> krishiv_session::events::UsageRecordId
+impl core::cmp::Eq for krishiv_session::events::UsageRecordId
+impl core::cmp::PartialEq for krishiv_session::events::UsageRecordId
+pub fn krishiv_session::events::UsageRecordId::eq(&self, &krishiv_session::events::UsageRecordId) -> bool
+impl core::fmt::Debug for krishiv_session::events::UsageRecordId
+pub fn krishiv_session::events::UsageRecordId::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for krishiv_session::events::UsageRecordId
+pub fn krishiv_session::events::UsageRecordId::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::StructuralPartialEq for krishiv_session::events::UsageRecordId
+pub const krishiv_session::events::SCHEMA_NAME: &str
+pub const krishiv_session::events::SCHEMA_VERSION: krishiv_session::events::SchemaVersion
+pub const krishiv_session::events::SHUTDOWN_FLUSH: core::time::Duration
+pub trait krishiv_session::events::EventSink: core::marker::Send + core::marker::Sync + 'static
+pub fn krishiv_session::events::EventSink::accept(&self, krishiv_session::events::EventKindTag) -> bool
+pub fn krishiv_session::events::EventSink::deliver(&self, &[alloc::sync::Arc<krishiv_session::events::EngineEvent>])
+pub fn krishiv_session::events::EventSink::flush(&self)
+pub fn krishiv_session::events::EventSink::name(&self) -> &str
+impl krishiv_session::events::EventSink for krishiv_session::events::JsonLinesSink
+pub fn krishiv_session::events::JsonLinesSink::accept(&self, krishiv_session::events::EventKindTag) -> bool
+pub fn krishiv_session::events::JsonLinesSink::deliver(&self, &[alloc::sync::Arc<krishiv_session::events::EngineEvent>])
+pub fn krishiv_session::events::JsonLinesSink::flush(&self)
+pub fn krishiv_session::events::JsonLinesSink::name(&self) -> &str
 pub mod krishiv_session::functions
 pub trait krishiv_session::functions::IntoLiteral
 pub fn krishiv_session::functions::IntoLiteral::into_literal(self) -> krishiv_plan::literal::Literal
@@ -1084,8 +1338,11 @@ pub fn krishiv_session::functions::python_udf_call(&krishiv_session::PythonUdfDe
 pub fn krishiv_session::functions::sum(krishiv_session::Column) -> krishiv_session::Column
 pub mod krishiv_session::grants
 #[non_exhaustive] pub enum krishiv_session::grants::AccessProvider
+pub krishiv_session::grants::AccessProvider::External
 pub krishiv_session::grants::AccessProvider::Grants
 pub krishiv_session::grants::AccessProvider::Roles
+impl krishiv_session::grants::AccessProvider
+pub const fn krishiv_session::grants::AccessProvider::as_str(self) -> &'static str
 impl core::clone::Clone for krishiv_session::grants::AccessProvider
 pub fn krishiv_session::grants::AccessProvider::clone(&self) -> krishiv_session::grants::AccessProvider
 impl core::cmp::Eq for krishiv_session::grants::AccessProvider
@@ -1174,6 +1431,7 @@ pub trait krishiv_session::grants::GrantStore: core::marker::Send + core::marker
 impl krishiv_session::grants::GrantStore for krishiv_session::grants::FileGrantStore
 impl krishiv_session::grants::GrantStore for krishiv_session::grants::MemoryGrantStore
 pub fn krishiv_session::grants::access_provider(&krishiv_common::config::Config, bool) -> core::result::Result<krishiv_session::grants::AccessProvider, krishiv_common::error::KrishivError>
+pub fn krishiv_session::grants::access_providers(&krishiv_common::config::Config, bool) -> core::result::Result<alloc::vec::Vec<krishiv_session::grants::AccessProvider>, krishiv_common::error::KrishivError>
 pub mod krishiv_session::resource_groups
 pub struct krishiv_session::resource_groups::GroupRow
 impl core::clone::Clone for krishiv_session::resource_groups::GroupRow
@@ -1197,26 +1455,41 @@ pub fn krishiv_session::resource_groups::ResourceGroups::etag(&self) -> alloc::s
 pub fn krishiv_session::resource_groups::ResourceGroups::from_file(&str, usize) -> core::result::Result<Self, krishiv_common::error::KrishivError>
 pub fn krishiv_session::resource_groups::ResourceGroups::from_json(&str, usize) -> core::result::Result<Self, krishiv_common::error::KrishivError>
 pub fn krishiv_session::resource_groups::ResourceGroups::loaded_at_ms(&self) -> u64
-pub fn krishiv_session::resource_groups::ResourceGroups::reload_file(&self, &str) -> core::result::Result<(), krishiv_common::error::KrishivError>
+pub fn krishiv_session::resource_groups::ResourceGroups::problems(&str, usize) -> alloc::vec::Vec<krishiv_common::error::KrishivError>
+pub fn krishiv_session::resource_groups::ResourceGroups::reload_file(&self, &str) -> core::result::Result<(alloc::string::String, alloc::string::String, u64), krishiv_common::error::KrishivError>
 pub fn krishiv_session::resource_groups::ResourceGroups::reload_json(&self, &str) -> core::result::Result<(), krishiv_common::error::KrishivError>
 pub fn krishiv_session::resource_groups::ResourceGroups::rows(&self) -> alloc::vec::Vec<krishiv_session::resource_groups::GroupRow>
 pub fn krishiv_session::resource_groups::ResourceGroups::validate(&str, usize) -> core::result::Result<(), krishiv_common::error::KrishivError>
 pub fn krishiv_session::resource_groups::ResourceGroups::with_clock(&str, usize, alloc::sync::Arc<(dyn core::ops::function::Fn() -> u64 + core::marker::Send + core::marker::Sync)>) -> core::result::Result<Self, krishiv_common::error::KrishivError>
 impl krishiv_session::resource_groups::ResourceGroups
 pub fn krishiv_session::resource_groups::ResourceGroups::file_etag(&str) -> core::option::Option<alloc::string::String>
-pub fn krishiv_session::resource_groups::ResourceGroups::replace_file(&self, &str, &str, &str) -> core::result::Result<(), krishiv_common::error::KrishivError>
+pub fn krishiv_session::resource_groups::ResourceGroups::replace_file(&self, &str, &str, &str) -> core::result::Result<(alloc::string::String, alloc::string::String, u64), krishiv_common::error::KrishivError>
 impl core::fmt::Debug for krishiv_session::resource_groups::ResourceGroups
 pub fn krishiv_session::resource_groups::ResourceGroups::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl krishiv_session::AdmissionController for krishiv_session::resource_groups::ResourceGroups
 pub fn krishiv_session::resource_groups::ResourceGroups::admit<'a>(&'a self, &'a krishiv_session::QueryRequest) -> krishiv_plan::analyzer::catalog::BoxFuture<'a, core::result::Result<krishiv_session::Permit, krishiv_common::error::KrishivError>>
 pub fn krishiv_session::resource_groups::ResourceGroups::uses_estimate(&self) -> bool
+pub fn krishiv_session::resource_groups::ResourceGroups::queued_group(&self, &krishiv_session::QueryRequest) -> core::option::Option<alloc::string::String>
 pub fn krishiv_session::resource_groups::tag_matches(&str, &str, &str) -> bool
 pub mod krishiv_session::spark_catalog
 pub struct krishiv_session::spark_catalog::Catalog<'a>
 impl krishiv_session::spark_catalog::Catalog<'_>
+pub async fn krishiv_session::spark_catalog::Catalog<'_>::analyze_table(&self, &str, bool) -> core::result::Result<(), krishiv_common::error::KrishivError>
+pub async fn krishiv_session::spark_catalog::Catalog<'_>::create_database(&self, &str, bool, &alloc::collections::btree::map::BTreeMap<alloc::string::String, alloc::string::String>) -> core::result::Result<(), krishiv_common::error::KrishivError>
+pub async fn krishiv_session::spark_catalog::Catalog<'_>::drop_database(&self, &str, bool, bool) -> core::result::Result<(), krishiv_common::error::KrishivError>
+pub async fn krishiv_session::spark_catalog::Catalog<'_>::drop_table(&self, &str, bool, bool) -> core::result::Result<(), krishiv_common::error::KrishivError>
+pub async fn krishiv_session::spark_catalog::Catalog<'_>::drop_view(&self, &str, bool) -> core::result::Result<(), krishiv_common::error::KrishivError>
+pub async fn krishiv_session::spark_catalog::Catalog<'_>::get_create_table_string(&self, &str, bool) -> core::result::Result<alloc::string::String, krishiv_common::error::KrishivError>
+pub async fn krishiv_session::spark_catalog::Catalog<'_>::get_table_properties(&self, &str) -> core::result::Result<alloc::collections::btree::map::BTreeMap<alloc::string::String, alloc::string::String>, krishiv_common::error::KrishivError>
+pub fn krishiv_session::spark_catalog::Catalog<'_>::list_catalogs_matching(&self, core::option::Option<&str>) -> alloc::vec::Vec<alloc::string::String>
+pub async fn krishiv_session::spark_catalog::Catalog<'_>::list_partitions(&self, &str) -> core::result::Result<alloc::vec::Vec<alloc::string::String>, krishiv_common::error::KrishivError>
+pub async fn krishiv_session::spark_catalog::Catalog<'_>::list_views(&self, core::option::Option<&str>, core::option::Option<&str>) -> core::result::Result<alloc::vec::Vec<krishiv_session::spark_catalog::Table>, krishiv_common::error::KrishivError>
+pub fn krishiv_session::spark_catalog::Catalog<'_>::qualified(&str, &str) -> alloc::string::String
+pub async fn krishiv_session::spark_catalog::Catalog<'_>::truncate_table(&self, &str) -> core::result::Result<(), krishiv_common::error::KrishivError>
+impl krishiv_session::spark_catalog::Catalog<'_>
 pub async fn krishiv_session::spark_catalog::Catalog<'_>::cache_table(&self, &str) -> core::result::Result<(), krishiv_common::error::KrishivError>
-pub async fn krishiv_session::spark_catalog::Catalog<'_>::clear_cache(&self) -> core::result::Result<(), krishiv_common::error::KrishivError>
 pub async fn krishiv_session::spark_catalog::Catalog<'_>::check_cache_target(&self, &str) -> core::result::Result<(), krishiv_common::error::KrishivError>
+pub async fn krishiv_session::spark_catalog::Catalog<'_>::clear_cache(&self) -> core::result::Result<(), krishiv_common::error::KrishivError>
 pub async fn krishiv_session::spark_catalog::Catalog<'_>::create_table(&self, &str, core::option::Option<&str>, core::option::Option<&str>, core::option::Option<&str>, &[(&str, &str)]) -> core::result::Result<(), krishiv_common::error::KrishivError>
 pub fn krishiv_session::spark_catalog::Catalog<'_>::current_catalog(&self) -> alloc::string::String
 pub fn krishiv_session::spark_catalog::Catalog<'_>::current_database(&self) -> alloc::string::String
@@ -1351,6 +1624,19 @@ impl core::hash::Hash for krishiv_session::CancelReason
 pub fn krishiv_session::CancelReason::hash<__H: core::hash::Hasher>(&self, &mut __H)
 impl core::marker::Copy for krishiv_session::CancelReason
 impl core::marker::StructuralPartialEq for krishiv_session::CancelReason
+pub enum krishiv_session::ConfigSource
+pub krishiv_session::ConfigSource::Admin
+pub krishiv_session::ConfigSource::Default
+pub krishiv_session::ConfigSource::Startup
+impl core::clone::Clone for krishiv_session::ConfigSource
+pub fn krishiv_session::ConfigSource::clone(&self) -> krishiv_session::ConfigSource
+impl core::cmp::Eq for krishiv_session::ConfigSource
+impl core::cmp::PartialEq for krishiv_session::ConfigSource
+pub fn krishiv_session::ConfigSource::eq(&self, &krishiv_session::ConfigSource) -> bool
+impl core::fmt::Debug for krishiv_session::ConfigSource
+pub fn krishiv_session::ConfigSource::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for krishiv_session::ConfigSource
+impl core::marker::StructuralPartialEq for krishiv_session::ConfigSource
 #[non_exhaustive] pub enum krishiv_session::ExplainMode
 pub krishiv_session::ExplainMode::Codegen
 pub krishiv_session::ExplainMode::Cost
@@ -1437,6 +1723,7 @@ impl core::marker::StructuralPartialEq for krishiv_session::Analysis
 pub struct krishiv_session::Column
 impl krishiv_session::Column
 pub fn krishiv_session::Column::alias(self, &str) -> Self
+pub fn krishiv_session::Column::alias_all(self, alloc::vec::Vec<alloc::string::String>) -> Self
 pub fn krishiv_session::Column::and(self, impl core::convert::Into<Self>) -> Self
 pub fn krishiv_session::Column::asc(self) -> Self
 pub fn krishiv_session::Column::asc_nulls_last(self) -> Self
@@ -1507,6 +1794,21 @@ pub fn krishiv_session::Column::rem(self, T) -> krishiv_session::Column
 impl<T: core::convert::Into<krishiv_session::Column>> core::ops::arith::Sub<T> for krishiv_session::Column
 pub type krishiv_session::Column::Output = krishiv_session::Column
 pub fn krishiv_session::Column::sub(self, T) -> krishiv_session::Column
+pub struct krishiv_session::ConfigListing
+pub krishiv_session::ConfigListing::key: alloc::string::String
+pub krishiv_session::ConfigListing::scope: core::option::Option<&'static str>
+pub krishiv_session::ConfigListing::settable_by: core::option::Option<&'static str>
+pub krishiv_session::ConfigListing::source: krishiv_session::ConfigSource
+pub krishiv_session::ConfigListing::value: core::option::Option<alloc::string::String>
+pub krishiv_session::ConfigListing::withheld: bool
+impl core::clone::Clone for krishiv_session::ConfigListing
+pub fn krishiv_session::ConfigListing::clone(&self) -> krishiv_session::ConfigListing
+impl core::cmp::Eq for krishiv_session::ConfigListing
+impl core::cmp::PartialEq for krishiv_session::ConfigListing
+pub fn krishiv_session::ConfigListing::eq(&self, &krishiv_session::ConfigListing) -> bool
+impl core::fmt::Debug for krishiv_session::ConfigListing
+pub fn krishiv_session::ConfigListing::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for krishiv_session::ConfigListing
 pub struct krishiv_session::DataFrame
 impl krishiv_session::DataFrame
 pub fn krishiv_session::DataFrame::agg(&self, impl core::iter::traits::collect::IntoIterator<Item = krishiv_session::Column>) -> Self
@@ -1514,16 +1816,15 @@ pub fn krishiv_session::DataFrame::alias(&self, &str) -> Self
 pub fn krishiv_session::DataFrame::cache(&self) -> Self
 pub fn krishiv_session::DataFrame::col(&self, &str) -> krishiv_session::Column
 pub async fn krishiv_session::DataFrame::collect(&self) -> core::result::Result<alloc::vec::Vec<arrow_array::record_batch::RecordBatch>, krishiv_common::error::KrishivError>
-pub fn krishiv_session::DataFrame::collect_boxed(&self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<alloc::vec::Vec<arrow_array::record_batch::RecordBatch>, krishiv_common::error::KrishivError>> + core::marker::Send + '_)>>
 pub async fn krishiv_session::DataFrame::create_global_temp_view(&self, &str) -> core::result::Result<(), krishiv_common::error::KrishivError>
 pub async fn krishiv_session::DataFrame::create_or_replace_global_temp_view(&self, &str) -> core::result::Result<(), krishiv_common::error::KrishivError>
 pub async fn krishiv_session::DataFrame::create_or_replace_temp_view(&self, &str) -> core::result::Result<(), krishiv_common::error::KrishivError>
+pub async fn krishiv_session::DataFrame::create_temp_view(&self, &str) -> core::result::Result<(), krishiv_common::error::KrishivError>
 pub fn krishiv_session::DataFrame::cross_join(&self, &Self) -> Self
 pub fn krishiv_session::DataFrame::cube(&self, impl core::iter::traits::collect::IntoIterator<Item = impl core::convert::Into<krishiv_session::Column>>) -> krishiv_session::GroupedData
 pub fn krishiv_session::DataFrame::distinct(&self) -> Self
 pub fn krishiv_session::DataFrame::except_all(&self, &Self) -> Self
 pub async fn krishiv_session::DataFrame::execute_stream(&self) -> core::result::Result<krishiv_session::RecordBatchStream, krishiv_common::error::KrishivError>
-pub fn krishiv_session::DataFrame::execute_stream_boxed(&self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<krishiv_session::RecordBatchStream, krishiv_common::error::KrishivError>> + core::marker::Send + '_)>>
 pub async fn krishiv_session::DataFrame::explain(&self, krishiv_session::ExplainMode) -> core::result::Result<alloc::string::String, krishiv_common::error::KrishivError>
 pub fn krishiv_session::DataFrame::filter(&self, krishiv_session::Column) -> Self
 pub fn krishiv_session::DataFrame::filter_expr(&self, &str) -> core::result::Result<Self, krishiv_common::error::KrishivError>
@@ -1543,10 +1844,10 @@ pub fn krishiv_session::DataFrame::persist(&self, krishiv_session::StorageLevel)
 pub fn krishiv_session::DataFrame::rollup(&self, impl core::iter::traits::collect::IntoIterator<Item = impl core::convert::Into<krishiv_session::Column>>) -> krishiv_session::GroupedData
 pub fn krishiv_session::DataFrame::sample(&self, bool, f64, i64) -> Self
 pub async fn krishiv_session::DataFrame::schema(&self) -> core::result::Result<arrow_schema::schema::SchemaRef, krishiv_common::error::KrishivError>
-pub fn krishiv_session::DataFrame::schema_boxed(&self) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<arrow_schema::schema::SchemaRef, krishiv_common::error::KrishivError>> + core::marker::Send + '_)>>
 pub fn krishiv_session::DataFrame::select(&self, impl core::iter::traits::collect::IntoIterator<Item = impl core::convert::Into<krishiv_session::Column>>) -> Self
 pub fn krishiv_session::DataFrame::select_expr(&self, impl core::iter::traits::collect::IntoIterator<Item = impl core::convert::AsRef<str>>) -> core::result::Result<Self, krishiv_common::error::KrishivError>
 pub fn krishiv_session::DataFrame::sort(&self, impl core::iter::traits::collect::IntoIterator<Item = impl core::convert::Into<krishiv_session::Column>>) -> Self
+pub fn krishiv_session::DataFrame::sort_within_partitions(&self, impl core::iter::traits::collect::IntoIterator<Item = impl core::convert::Into<krishiv_session::Column>>) -> Self
 pub async fn krishiv_session::DataFrame::storage_level(&self) -> core::result::Result<krishiv_session::StorageLevel, krishiv_common::error::KrishivError>
 pub fn krishiv_session::DataFrame::subtract(&self, &Self) -> Self
 pub fn krishiv_session::DataFrame::to_df(&self, impl core::iter::traits::collect::IntoIterator<Item = impl core::convert::AsRef<str>>) -> Self
@@ -1566,6 +1867,10 @@ pub async fn krishiv_session::DataFrame::write_to_with(&self, &str, &str, &str, 
 impl krishiv_session::DataFrame
 pub async fn krishiv_session::DataFrame::checkpoint(&self, bool) -> core::result::Result<krishiv_session::DataFrame, krishiv_common::error::KrishivError>
 pub async fn krishiv_session::DataFrame::local_checkpoint(&self, bool, core::option::Option<krishiv_session::StorageLevel>) -> core::result::Result<krishiv_session::DataFrame, krishiv_common::error::KrishivError>
+impl krishiv_session::DataFrame
+pub fn krishiv_session::DataFrame::collect_boxed(&self) -> krishiv_plan::analyzer::catalog::BoxFuture<'_, core::result::Result<alloc::vec::Vec<arrow_array::record_batch::RecordBatch>, krishiv_common::error::KrishivError>>
+pub fn krishiv_session::DataFrame::execute_stream_boxed(&self) -> krishiv_plan::analyzer::catalog::BoxFuture<'_, core::result::Result<krishiv_session::RecordBatchStream, krishiv_common::error::KrishivError>>
+pub fn krishiv_session::DataFrame::schema_boxed(&self) -> krishiv_plan::analyzer::catalog::BoxFuture<'_, core::result::Result<arrow_schema::schema::SchemaRef, krishiv_common::error::KrishivError>>
 impl krishiv_session::DataFrame
 pub async fn krishiv_session::DataFrame::collect_with_metrics(&self) -> core::result::Result<(alloc::vec::Vec<arrow_array::record_batch::RecordBatch>, krishiv_exec::metrics::QueryMetrics), krishiv_common::error::KrishivError>
 impl krishiv_session::DataFrame
@@ -1644,22 +1949,39 @@ pub struct krishiv_session::EngineRuntime
 impl krishiv_session::EngineRuntime
 pub fn krishiv_session::EngineRuntime::builder() -> krishiv_session::EngineRuntimeBuilder
 pub fn krishiv_session::EngineRuntime::cancel(&self, &krishiv_session::QueryId, krishiv_session::CancelReason) -> bool
+pub fn krishiv_session::EngineRuntime::cancel_all(&self, krishiv_session::CancelReason) -> usize
 pub fn krishiv_session::EngineRuntime::cancel_by_tag(&self, &str, &krishiv_common::principal::Principal, bool) -> alloc::vec::Vec<krishiv_session::QueryId>
 pub fn krishiv_session::EngineRuntime::cancel_in_session(&self, &str, &krishiv_session::QueryId, krishiv_session::CancelReason) -> bool
 pub fn krishiv_session::EngineRuntime::catalogs(&self) -> &alloc::sync::Arc<krishiv_session::catalog_registry::CatalogRegistry>
+pub fn krishiv_session::EngineRuntime::compute_id(&self) -> &str
 pub fn krishiv_session::EngineRuntime::egress_policy(&self) -> &alloc::sync::Arc<krishiv_store::egress::EgressPolicy>
+pub fn krishiv_session::EngineRuntime::event_queue_depth(&self) -> usize
 pub fn krishiv_session::EngineRuntime::executor(&self) -> &alloc::sync::Arc<dyn krishiv_exec::executor::Executor>
 pub fn krishiv_session::EngineRuntime::expire_session(&self, &str) -> core::option::Option<usize>
 pub fn krishiv_session::EngineRuntime::io_totals(&self) -> &krishiv_io::io::IoCounters
+pub fn krishiv_session::EngineRuntime::is_draining(&self) -> bool
 pub fn krishiv_session::EngineRuntime::keeps_profile_history(&self) -> bool
 pub fn krishiv_session::EngineRuntime::kill_session(&self, &str, krishiv_session::CancelReason) -> core::option::Option<usize>
 pub fn krishiv_session::EngineRuntime::memory(&self) -> alloc::sync::Arc<dyn krishiv_memory::MemoryPool>
 pub fn krishiv_session::EngineRuntime::metrics(&self) -> krishiv_exec::metrics::registry::MetricsSnapshot
 pub fn krishiv_session::EngineRuntime::session_ended(&self, &str) -> bool
+pub fn krishiv_session::EngineRuntime::set_draining(&self, bool)
+impl krishiv_session::EngineRuntime
+pub fn krishiv_session::EngineRuntime::config_defaults(&self) -> alloc::vec::Vec<(alloc::string::String, alloc::string::String)>
+pub fn krishiv_session::EngineRuntime::set_config_defaults(&self, &[(alloc::string::String, alloc::string::String)], &[alloc::string::String]) -> core::result::Result<alloc::vec::Vec<(alloc::string::String, core::option::Option<alloc::string::String>)>, krishiv_common::error::KrishivError>
+impl krishiv_session::EngineRuntime
+pub fn krishiv_session::EngineRuntime::config_listing(&self, core::option::Option<&str>, bool) -> alloc::vec::Vec<krishiv_session::ConfigListing>
 pub fn krishiv_session::EngineRuntime::stored_profile(&self, &str) -> core::result::Result<core::option::Option<krishiv_session::StoredProfile>, krishiv_common::error::KrishivError>
 impl krishiv_session::EngineRuntime
 pub fn krishiv_session::EngineRuntime::query_infos(&self) -> alloc::vec::Vec<krishiv_session::QueryInfo>
 pub fn krishiv_session::EngineRuntime::session_infos(&self) -> alloc::vec::Vec<krishiv_session::SessionInfo>
+impl krishiv_session::EngineRuntime
+pub fn krishiv_session::EngineRuntime::reload_resource_group_document(&self) -> core::result::Result<krishiv_session::ResourceGroupDocument, krishiv_common::error::KrishivError>
+pub fn krishiv_session::EngineRuntime::replace_resource_group_document(&self, &str, &str) -> core::result::Result<krishiv_session::ResourceGroupDocument, krishiv_common::error::KrishivError>
+pub fn krishiv_session::EngineRuntime::resource_group_document(&self) -> krishiv_session::ResourceGroupDocument
+pub fn krishiv_session::EngineRuntime::resource_group_problems(&self, &str) -> alloc::vec::Vec<krishiv_common::error::KrishivError>
+pub fn krishiv_session::EngineRuntime::resource_group_infos(&self, &krishiv_common::principal::Principal, bool) -> alloc::vec::Vec<krishiv_session::ResourceGroupInfo>
+pub fn krishiv_session::EngineRuntime::validate_resource_group_document(&self, &str) -> core::result::Result<(), krishiv_common::error::KrishivError>
 impl core::fmt::Debug for krishiv_session::EngineRuntime
 pub fn krishiv_session::EngineRuntime::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct krishiv_session::EngineRuntimeBuilder
@@ -1667,6 +1989,7 @@ impl krishiv_session::EngineRuntimeBuilder
 pub fn krishiv_session::EngineRuntimeBuilder::build(self) -> core::result::Result<alloc::sync::Arc<krishiv_session::EngineRuntime>, krishiv_common::error::KrishivError>
 pub fn krishiv_session::EngineRuntimeBuilder::catalogs(self, krishiv_session::catalog_registry::CatalogSetup) -> Self
 pub fn krishiv_session::EngineRuntimeBuilder::config(self, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn krishiv_session::EngineRuntimeBuilder::event_sink(self, alloc::sync::Arc<dyn krishiv_session::events::EventSink>) -> Self
 pub fn krishiv_session::EngineRuntimeBuilder::executor(self, alloc::sync::Arc<dyn krishiv_exec::executor::Executor>) -> Self
 impl core::fmt::Debug for krishiv_session::EngineRuntimeBuilder
 pub fn krishiv_session::EngineRuntimeBuilder::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
@@ -1703,10 +2026,25 @@ impl core::marker::StructuralPartialEq for krishiv_session::ExplainVerbose
 pub struct krishiv_session::GroupedData
 impl krishiv_session::GroupedData
 pub fn krishiv_session::GroupedData::agg(&self, impl core::iter::traits::collect::IntoIterator<Item = krishiv_session::Column>) -> krishiv_session::DataFrame
+pub fn krishiv_session::GroupedData::pivot(&self, krishiv_session::Column, impl core::iter::traits::collect::IntoIterator<Item = krishiv_session::Column>) -> krishiv_session::GroupedData
 impl core::clone::Clone for krishiv_session::GroupedData
 pub fn krishiv_session::GroupedData::clone(&self) -> krishiv_session::GroupedData
 impl core::fmt::Debug for krishiv_session::GroupedData
 pub fn krishiv_session::GroupedData::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct krishiv_session::IntersectionPolicy
+impl krishiv_session::IntersectionPolicy
+pub fn krishiv_session::IntersectionPolicy::members(&self) -> &[alloc::sync::Arc<dyn krishiv_plan::analyzer::catalog::AccessPolicy>]
+pub fn krishiv_session::IntersectionPolicy::new(alloc::vec::Vec<alloc::sync::Arc<dyn krishiv_plan::analyzer::catalog::AccessPolicy>>) -> Self
+impl core::fmt::Debug for krishiv_session::IntersectionPolicy
+pub fn krishiv_session::IntersectionPolicy::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl krishiv_plan::analyzer::catalog::AccessPolicy for krishiv_session::IntersectionPolicy
+pub fn krishiv_session::IntersectionPolicy::check<'a>(&'a self, &'a krishiv_common::principal::Principal, &'a krishiv_plan::analyzer::catalog::Securable, krishiv_plan::analyzer::catalog::Privilege) -> futures_core::future::BoxFuture<'a, core::result::Result<krishiv_plan::analyzer::catalog::AccessDecision, krishiv_common::error::KrishivError>>
+pub fn krishiv_session::IntersectionPolicy::column_level(&self) -> bool
+pub fn krishiv_session::IntersectionPolicy::decides(&self, &krishiv_plan::analyzer::catalog::Securable) -> bool
+pub fn krishiv_session::IntersectionPolicy::denied(&self, &krishiv_common::principal::Principal, &krishiv_plan::analyzer::catalog::Securable, krishiv_plan::analyzer::catalog::Privilege)
+pub fn krishiv_session::IntersectionPolicy::prefetch<'a>(&'a self, &'a krishiv_common::principal::Principal, &'a [(krishiv_plan::analyzer::catalog::Securable, krishiv_plan::analyzer::catalog::Privilege)]) -> futures_core::future::BoxFuture<'a, ()>
+pub fn krishiv_session::IntersectionPolicy::refusal_label(&self) -> core::option::Option<&'static str>
+pub fn krishiv_session::IntersectionPolicy::version(&self) -> krishiv_plan::analyzer::catalog::PolicyVersion
 pub struct krishiv_session::Observation
 impl krishiv_session::Observation
 pub fn krishiv_session::Observation::get(&self) -> core::result::Result<arrow_array::record_batch::RecordBatch, krishiv_common::error::KrishivError>
@@ -1761,7 +2099,10 @@ pub fn krishiv_session::PathPrefixPolicy::fmt(&self, &mut core::fmt::Formatter<'
 impl krishiv_plan::analyzer::catalog::AccessPolicy for krishiv_session::PathPrefixPolicy
 pub fn krishiv_session::PathPrefixPolicy::check<'a>(&'a self, &'a krishiv_common::principal::Principal, &'a krishiv_plan::analyzer::catalog::Securable, krishiv_plan::analyzer::catalog::Privilege) -> krishiv_plan::analyzer::catalog::BoxFuture<'a, core::result::Result<krishiv_plan::analyzer::catalog::AccessDecision, krishiv_common::error::KrishivError>>
 pub fn krishiv_session::PathPrefixPolicy::column_level(&self) -> bool
+pub fn krishiv_session::PathPrefixPolicy::decides(&self, &krishiv_plan::analyzer::catalog::Securable) -> bool
 pub fn krishiv_session::PathPrefixPolicy::denied(&self, &krishiv_common::principal::Principal, &krishiv_plan::analyzer::catalog::Securable, krishiv_plan::analyzer::catalog::Privilege)
+pub fn krishiv_session::PathPrefixPolicy::prefetch<'a>(&'a self, &'a krishiv_common::principal::Principal, &'a [(krishiv_plan::analyzer::catalog::Securable, krishiv_plan::analyzer::catalog::Privilege)]) -> krishiv_plan::analyzer::catalog::BoxFuture<'a, ()>
+pub fn krishiv_session::PathPrefixPolicy::refusal_label(&self) -> core::option::Option<&'static str>
 pub fn krishiv_session::PathPrefixPolicy::version(&self) -> krishiv_plan::analyzer::catalog::PolicyVersion
 pub struct krishiv_session::Permit
 impl krishiv_session::Permit
@@ -1920,8 +2261,53 @@ pub fn krishiv_session::ReadOnlyPolicy::fmt(&self, &mut core::fmt::Formatter<'_>
 impl krishiv_plan::analyzer::catalog::AccessPolicy for krishiv_session::ReadOnlyPolicy
 pub fn krishiv_session::ReadOnlyPolicy::check<'a>(&'a self, &'a krishiv_common::principal::Principal, &'a krishiv_plan::analyzer::catalog::Securable, krishiv_plan::analyzer::catalog::Privilege) -> krishiv_plan::analyzer::catalog::BoxFuture<'a, core::result::Result<krishiv_plan::analyzer::catalog::AccessDecision, krishiv_common::error::KrishivError>>
 pub fn krishiv_session::ReadOnlyPolicy::column_level(&self) -> bool
+pub fn krishiv_session::ReadOnlyPolicy::decides(&self, &krishiv_plan::analyzer::catalog::Securable) -> bool
 pub fn krishiv_session::ReadOnlyPolicy::denied(&self, &krishiv_common::principal::Principal, &krishiv_plan::analyzer::catalog::Securable, krishiv_plan::analyzer::catalog::Privilege)
+pub fn krishiv_session::ReadOnlyPolicy::prefetch<'a>(&'a self, &'a krishiv_common::principal::Principal, &'a [(krishiv_plan::analyzer::catalog::Securable, krishiv_plan::analyzer::catalog::Privilege)]) -> krishiv_plan::analyzer::catalog::BoxFuture<'a, ()>
+pub fn krishiv_session::ReadOnlyPolicy::refusal_label(&self) -> core::option::Option<&'static str>
 pub fn krishiv_session::ReadOnlyPolicy::version(&self) -> krishiv_plan::analyzer::catalog::PolicyVersion
+pub struct krishiv_session::ResourceGroupDocument
+pub krishiv_session::ResourceGroupDocument::document: alloc::string::String
+pub krishiv_session::ResourceGroupDocument::etag: alloc::string::String
+pub krishiv_session::ResourceGroupDocument::file_etag: core::option::Option<alloc::string::String>
+pub krishiv_session::ResourceGroupDocument::loaded_at_ms: i64
+impl core::clone::Clone for krishiv_session::ResourceGroupDocument
+pub fn krishiv_session::ResourceGroupDocument::clone(&self) -> krishiv_session::ResourceGroupDocument
+impl core::cmp::Eq for krishiv_session::ResourceGroupDocument
+impl core::cmp::PartialEq for krishiv_session::ResourceGroupDocument
+pub fn krishiv_session::ResourceGroupDocument::eq(&self, &krishiv_session::ResourceGroupDocument) -> bool
+impl core::fmt::Debug for krishiv_session::ResourceGroupDocument
+pub fn krishiv_session::ResourceGroupDocument::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for krishiv_session::ResourceGroupDocument
+pub struct krishiv_session::ResourceGroupInfo
+pub krishiv_session::ResourceGroupInfo::config_etag: alloc::string::String
+pub krishiv_session::ResourceGroupInfo::group_id: alloc::string::String
+pub krishiv_session::ResourceGroupInfo::hard_concurrency_limit: i32
+pub krishiv_session::ResourceGroupInfo::loaded_at_ms: i64
+pub krishiv_session::ResourceGroupInfo::max_queued: i32
+pub krishiv_session::ResourceGroupInfo::memory_reserved_bytes: core::option::Option<i64>
+pub krishiv_session::ResourceGroupInfo::parent_id: core::option::Option<alloc::string::String>
+pub krishiv_session::ResourceGroupInfo::per_query_memory_limit_bytes: core::option::Option<i64>
+pub krishiv_session::ResourceGroupInfo::priority: i32
+pub krishiv_session::ResourceGroupInfo::queued: core::option::Option<i32>
+pub krishiv_session::ResourceGroupInfo::running: core::option::Option<i32>
+pub krishiv_session::ResourceGroupInfo::scan_bytes_in_window: core::option::Option<i64>
+pub krishiv_session::ResourceGroupInfo::scan_quota_bytes: core::option::Option<i64>
+pub krishiv_session::ResourceGroupInfo::scan_quota_period_s: core::option::Option<i64>
+pub krishiv_session::ResourceGroupInfo::scan_window_resets_at_ms: core::option::Option<i64>
+pub krishiv_session::ResourceGroupInfo::scheduling_policy: alloc::string::String
+pub krishiv_session::ResourceGroupInfo::scheduling_weight: i32
+pub krishiv_session::ResourceGroupInfo::soft_memory_limit_bytes: core::option::Option<i64>
+pub krishiv_session::ResourceGroupInfo::state: alloc::string::String
+pub krishiv_session::ResourceGroupInfo::workload_class: alloc::string::String
+impl core::clone::Clone for krishiv_session::ResourceGroupInfo
+pub fn krishiv_session::ResourceGroupInfo::clone(&self) -> krishiv_session::ResourceGroupInfo
+impl core::cmp::Eq for krishiv_session::ResourceGroupInfo
+impl core::cmp::PartialEq for krishiv_session::ResourceGroupInfo
+pub fn krishiv_session::ResourceGroupInfo::eq(&self, &krishiv_session::ResourceGroupInfo) -> bool
+impl core::fmt::Debug for krishiv_session::ResourceGroupInfo
+pub fn krishiv_session::ResourceGroupInfo::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for krishiv_session::ResourceGroupInfo
 pub struct krishiv_session::RuntimeConf
 impl krishiv_session::RuntimeConf
 pub fn krishiv_session::RuntimeConf::entries(&self) -> alloc::vec::Vec<(alloc::string::String, alloc::string::String)>
@@ -1964,12 +2350,10 @@ pub fn krishiv_session::Session::range(&self, i64, i64, i64, core::option::Optio
 pub fn krishiv_session::Session::read(&self) -> krishiv_session::DataFrameReader
 pub fn krishiv_session::Session::refresh_files(&self)
 pub fn krishiv_session::Session::refresh_table(&self, &str)
-pub fn krishiv_session::Session::register_batch_source(&self, &str, &str, arrow_schema::schema::SchemaRef, krishiv_session::BatchSource) -> core::result::Result<(), krishiv_common::error::KrishivError>
 pub fn krishiv_session::Session::register_batches(&self, &str, arrow_schema::schema::SchemaRef, alloc::vec::Vec<arrow_array::record_batch::RecordBatch>) -> core::result::Result<(), krishiv_common::error::KrishivError>
 pub fn krishiv_session::Session::register_udaf(&self, impl krishiv_udf_sdk::aggregate::AggregateUdf) -> core::result::Result<(), krishiv_common::error::KrishivError>
 pub fn krishiv_session::Session::register_udf(&self, impl krishiv_udf_sdk::udf::ScalarUdf) -> core::result::Result<(), krishiv_common::error::KrishivError>
 pub async fn krishiv_session::Session::sql(&self, &str) -> core::result::Result<krishiv_session::DataFrame, krishiv_common::error::KrishivError>
-pub fn krishiv_session::Session::sql_boxed<'a>(&'a self, &'a str) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<krishiv_session::DataFrame, krishiv_common::error::KrishivError>> + core::marker::Send + 'a)>>
 pub fn krishiv_session::Session::table(&self, &str) -> krishiv_session::DataFrame
 pub fn krishiv_session::Session::temp_table_names(&self) -> alloc::vec::Vec<alloc::string::String>
 pub fn krishiv_session::Session::uncache_table(&self, &str)
@@ -1988,8 +2372,9 @@ pub fn krishiv_session::Session::runtime(&self) -> &alloc::sync::Arc<krishiv_ses
 pub fn krishiv_session::Session::set_client_info(&self, krishiv_session::Transport, core::option::Option<&str>, core::option::Option<&str>, core::option::Option<&str>)
 pub fn krishiv_session::Session::set_idle_timeout_ms(&self, core::option::Option<i64>)
 pub fn krishiv_session::Session::spark_profile(&self) -> krishiv_functions::signature::SparkProfile
+pub fn krishiv_session::Session::sql_boxed<'a>(&'a self, &'a str) -> krishiv_plan::analyzer::catalog::BoxFuture<'a, core::result::Result<krishiv_session::DataFrame, krishiv_common::error::KrishivError>>
 pub async fn krishiv_session::Session::sql_with(&self, &str, krishiv_session::QueryOptions) -> core::result::Result<krishiv_session::DataFrame, krishiv_common::error::KrishivError>
-pub fn krishiv_session::Session::sql_with_boxed<'a>(&'a self, &'a str, krishiv_session::QueryOptions) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<krishiv_session::DataFrame, krishiv_common::error::KrishivError>> + core::marker::Send + 'a)>>
+pub fn krishiv_session::Session::sql_with_boxed<'a>(&'a self, &'a str, krishiv_session::QueryOptions) -> krishiv_plan::analyzer::catalog::BoxFuture<'a, core::result::Result<krishiv_session::DataFrame, krishiv_common::error::KrishivError>>
 pub fn krishiv_session::Session::with_request_tags<I, T>(&self, I) -> core::result::Result<krishiv_session::Session, krishiv_common::error::KrishivError> where I: core::iter::traits::collect::IntoIterator<Item = T>, T: core::convert::AsRef<str>
 impl krishiv_session::Session
 pub const fn krishiv_session::Session::catalog(&self) -> krishiv_session::spark_catalog::Catalog<'_>
@@ -2000,6 +2385,8 @@ pub fn krishiv_session::Session::python_udtf_frame(&self, &krishiv_session::Pyth
 pub fn krishiv_session::Session::register_python_udf(&self, krishiv_session::PythonUdfDef) -> krishiv_session::PythonUdfEntry
 pub fn krishiv_session::Session::register_python_udtf(&self, krishiv_session::PythonUdtfDef) -> core::result::Result<krishiv_session::PythonUdtfEntry, krishiv_common::error::KrishivError>
 pub fn krishiv_session::Session::set_python_udf_runtime(&self, alloc::sync::Arc<dyn krishiv_exec::python_eval::UdfRuntime>)
+impl krishiv_session::Session
+pub fn krishiv_session::Session::register_batch_source(&self, &str, &str, arrow_schema::schema::SchemaRef, krishiv_session::BatchSource) -> core::result::Result<(), krishiv_common::error::KrishivError>
 impl krishiv_session::Session
 pub fn krishiv_session::Session::set_inbound_credential(&self, krishiv_session::auth::Method, core::option::Option<krishiv_session::auth::InboundCredential>)
 impl krishiv_session::Session
@@ -2020,6 +2407,7 @@ pub fn krishiv_session::SessionBuilder::grants(self, alloc::sync::Arc<krishiv_se
 pub fn krishiv_session::SessionBuilder::principal(self, krishiv_common::principal::Principal) -> Self
 pub fn krishiv_session::SessionBuilder::profile(self, krishiv_functions::signature::SparkProfile) -> Self
 pub fn krishiv_session::SessionBuilder::runtime(self, alloc::sync::Arc<krishiv_session::EngineRuntime>) -> Self
+pub fn krishiv_session::SessionBuilder::source(self, impl core::convert::Into<alloc::string::String>) -> Self
 impl core::fmt::Debug for krishiv_session::SessionBuilder
 pub fn krishiv_session::SessionBuilder::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct krishiv_session::SessionFunctions
@@ -2120,6 +2508,16 @@ pub fn krishiv_session::StoredProfile::eq(&self, &krishiv_session::StoredProfile
 impl core::fmt::Debug for krishiv_session::StoredProfile
 pub fn krishiv_session::StoredProfile::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for krishiv_session::StoredProfile
+pub struct krishiv_session::SystemOnlyPolicy
+impl krishiv_session::SystemOnlyPolicy
+pub fn krishiv_session::SystemOnlyPolicy::new(alloc::sync::Arc<dyn krishiv_plan::analyzer::catalog::AccessPolicy>) -> Self
+impl core::fmt::Debug for krishiv_session::SystemOnlyPolicy
+pub fn krishiv_session::SystemOnlyPolicy::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl krishiv_plan::analyzer::catalog::AccessPolicy for krishiv_session::SystemOnlyPolicy
+pub fn krishiv_session::SystemOnlyPolicy::check<'a>(&'a self, &'a krishiv_common::principal::Principal, &'a krishiv_plan::analyzer::catalog::Securable, krishiv_plan::analyzer::catalog::Privilege) -> futures_core::future::BoxFuture<'a, core::result::Result<krishiv_plan::analyzer::catalog::AccessDecision, krishiv_common::error::KrishivError>>
+pub fn krishiv_session::SystemOnlyPolicy::decides(&self, &krishiv_plan::analyzer::catalog::Securable) -> bool
+pub fn krishiv_session::SystemOnlyPolicy::denied(&self, &krishiv_common::principal::Principal, &krishiv_plan::analyzer::catalog::Securable, krishiv_plan::analyzer::catalog::Privilege)
+pub fn krishiv_session::SystemOnlyPolicy::version(&self) -> krishiv_plan::analyzer::catalog::PolicyVersion
 pub struct krishiv_session::Unlimited
 impl core::clone::Clone for krishiv_session::Unlimited
 pub fn krishiv_session::Unlimited::clone(&self) -> krishiv_session::Unlimited
@@ -2155,12 +2553,14 @@ pub const krishiv_session::VERBOSE_VERSION: u64
 pub trait krishiv_session::AdmissionController: core::marker::Send + core::marker::Sync + core::fmt::Debug
 pub fn krishiv_session::AdmissionController::admit<'a>(&'a self, &'a krishiv_session::QueryRequest) -> krishiv_plan::analyzer::catalog::BoxFuture<'a, core::result::Result<krishiv_session::Permit, krishiv_common::error::KrishivError>>
 pub fn krishiv_session::AdmissionController::uses_estimate(&self) -> bool
+pub fn krishiv_session::AdmissionController::queued_group(&self, &krishiv_session::QueryRequest) -> core::option::Option<alloc::string::String>
 impl krishiv_session::AdmissionController for krishiv_session::Unlimited
 pub fn krishiv_session::Unlimited::admit<'a>(&'a self, &'a krishiv_session::QueryRequest) -> krishiv_plan::analyzer::catalog::BoxFuture<'a, core::result::Result<krishiv_session::Permit, krishiv_common::error::KrishivError>>
 pub fn krishiv_session::Unlimited::uses_estimate(&self) -> bool
 impl krishiv_session::AdmissionController for krishiv_session::resource_groups::ResourceGroups
 pub fn krishiv_session::resource_groups::ResourceGroups::admit<'a>(&'a self, &'a krishiv_session::QueryRequest) -> krishiv_plan::analyzer::catalog::BoxFuture<'a, core::result::Result<krishiv_session::Permit, krishiv_common::error::KrishivError>>
 pub fn krishiv_session::resource_groups::ResourceGroups::uses_estimate(&self) -> bool
+pub fn krishiv_session::resource_groups::ResourceGroups::queued_group(&self, &krishiv_session::QueryRequest) -> core::option::Option<alloc::string::String>
 pub fn krishiv_session::capabilities() -> alloc::vec::Vec<[alloc::string::String; 4]>
 pub fn krishiv_session::dot_of_plan(&krishiv_exec::planner::explain::ExplainNode) -> alloc::string::String
 pub fn krishiv_session::dot_of_profile(&krishiv_exec::profile::QueryProfile) -> alloc::string::String
@@ -2169,4 +2569,5 @@ pub fn krishiv_session::mermaid_of_profile(&krishiv_exec::profile::QueryProfile)
 pub fn krishiv_session::read_profile_history(&std::path::Path) -> core::result::Result<alloc::vec::Vec<krishiv_session::StoredProfile>, krishiv_common::error::KrishivError>
 pub fn krishiv_session::register_build_features(&[(&str, bool)])
 pub fn krishiv_session::register_surface(&str, &str, &str)
+pub type krishiv_session::BatchSource = alloc::sync::Arc<(dyn core::ops::function::Fn() -> core::result::Result<alloc::vec::Vec<arrow_array::record_batch::RecordBatch>, krishiv_common::error::KrishivError> + core::marker::Send + core::marker::Sync)>
 pub type krishiv_session::RecordBatchStream = futures_core::stream::BoxStream<'static, core::result::Result<arrow_array::record_batch::RecordBatch, krishiv_common::error::KrishivError>>

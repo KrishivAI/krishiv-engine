@@ -25,6 +25,32 @@ _TEMPLATES = {
     "_LEGACY_ERROR_TEMP_1312": "'<operation>' does not support bucketBy right now.",
     "_LEGACY_ERROR_TEMP_1313": "'<operation>' does not support bucketBy and sortBy right now.",
     "SORT_BY_WITHOUT_BUCKETING": "sortBy must be used together with bucketBy.",
+    "CANNOT_INFER_TYPE_FOR_FIELD": "Unable to infer the type of the field `<field_name>`.",
+    "CANNOT_INFER_SCHEMA_FOR_TYPE": "Can not infer schema for type: `<data_type>`.",
+    "FIELD_DATA_TYPE_UNACCEPTABLE": "<data_type> can not accept object <obj> in type <obj_type>.",
+    "FIELD_DATA_TYPE_UNACCEPTABLE_WITH_NAME": (
+        "<field_name>: <data_type> can not accept object <obj> in type <obj_type>."
+    ),
+    "FIELD_NOT_NULLABLE": "Field is not nullable, but got None.",
+    "FIELD_NOT_NULLABLE_WITH_NAME": "<field_name>: This field is not nullable, but got None.",
+    "FIELD_STRUCT_LENGTH_MISMATCH": (
+        "Length of object (<object_length>) does not match with length of fields (<field_length>)."
+    ),
+    "FIELD_STRUCT_LENGTH_MISMATCH_WITH_NAME": (
+        "<field_name>: Length of object (<object_length>) does not match with length of fields (<field_length>)."
+    ),
+    "VALUE_OUT_OF_BOUNDS": (
+        "Value for `<arg_name>` must be between <lower_bound> and <upper_bound> (inclusive), got <actual>"
+    ),
+    "STRUCT_ARRAY_LENGTH_MISMATCH": (
+        "Input row doesn't have expected number of values required by the schema. "
+        "<expected> fields are required while <actual> values are provided."
+    ),
+    "NUMERIC_VALUE_OUT_OF_RANGE.WITHOUT_SUGGESTION": (
+        " The <roundedValue> rounded half up from <originalValue> cannot be represented as "
+        "Decimal(<precision>, <scale>)."
+    ),
+    "UNSUPPORTED_TIME_TYPE": "The data type TIME is not supported.",
     "NOT_IMPLEMENTED": "<feature> is not implemented.",
     "CONTEXT_ONLY_VALID_ON_DRIVER": (
         "It appears that you are attempting to reference SparkContext from a broadcast variable, action, or "
@@ -32,6 +58,14 @@ _TEMPLATES = {
         "information, see SPARK-5063."
     ),
     "CANNOT_SET_TOGETHER": "<arg_list> should not be set together.",
+    "JVM_ATTRIBUTE_NOT_SUPPORTED": "Attribute `<attr_name>` is not supported: Krishiv runs without a JVM.",
+    "CANNOT_BE_EMPTY": "At least one <item> must be specified.",
+    "CANNOT_CONVERT_TYPE": "Cannot convert <from_type> into <to_type>.",
+    "TOO_MANY_VALUES": "Expected <expected> values for `<item>`, got <actual>.",
+    "NO_ACTIVE_OR_DEFAULT_SESSION": (
+        "No active or default Spark session found. Please create a new Spark session before running the code."
+    ),
+    "ATTRIBUTE_NOT_SUPPORTED": "Attribute `<attr_name>` is not supported.",
     "NOT_EXPECTED_TYPE": "Argument `<arg_name>` should be <expected_type>, got <arg_type>.",
     "CANNOT_CONVERT_COLUMN_INTO_BOOL": (
         "Cannot convert column into bool: please use '&' for 'and', '|' for 'or', "
@@ -63,7 +97,6 @@ _TEMPLATES = {
     "NO_OBSERVE_BEFORE_GET": "Should observe by calling `DataFrame.observe` before `get`.",
     "VALUE_ALLOWED": "Value for `<arg_name>` does not allow <disallowed_value>.",
     "VALUE_NOT_NON_EMPTY_STR": "Value for `<arg_name>` must be a non-empty string, got '<arg_value>'.",
-    "CANNOT_BE_EMPTY": "At least one <item> must be specified.",
     "VALUE_NOT_POSITIVE": "Value for `<arg_name>` must be positive, got '<arg_value>'.",
     "NEGATIVE_VALUE": "Value for `<arg_name>` must be greater than or equal to 0, got '<arg_value>'.",
     "ARGUMENT_REQUIRED": "Argument `<arg_name>` is required when <condition>.",
@@ -295,6 +328,14 @@ def _context_from_native(raw: Any) -> QueryContext:
     )
 
 
+# The SQLSTATE PySpark's error reader gives these classes (error-conditions.json), used when a raise
+# site names none, so every raise of the class carries it.
+_SQL_STATE_OF_CLASS: dict[str, str] = {
+    "NOT_EXPECTED_TYPE": "42K09",
+    "ATTRIBUTE_NOT_SUPPORTED": "0A000",
+}
+
+
 class PySparkException(Exception):
     """Base of all Krishiv errors (``pyspark.errors.PySparkException``)."""
 
@@ -316,6 +357,8 @@ class PySparkException(Exception):
         self._error_class = errorClass
         self._message_parameters = messageParameters
         self._contexts = [c if isinstance(c, QueryContext) else _context_from_native(c) for c in contexts or []]
+        if sqlState is None and errorClass is not None:
+            sqlState = _SQL_STATE_OF_CLASS.get(errorClass)
         self._sql_state = sqlState
         self._rendered = rendered
 
@@ -436,6 +479,11 @@ class PySparkNotImplementedError(PySparkException, NotImplementedError):
     pass
 
 
+class PySparkNotImplementedAttributeError(PySparkNotImplementedError, AttributeError):
+    """``NOT_IMPLEMENTED`` for an attribute: also an ``AttributeError``, so ``hasattr`` and
+    ``getattr(obj, name, default)`` work on names the engine lacks (as PySpark Connect's JVM attributes)."""
+
+
 class PySparkImportError(PySparkException, ImportError):
     pass
 
@@ -460,6 +508,8 @@ _BY_PREFIX: tuple[tuple[str, type[PySparkException]], ...] = (
     ("INCONSISTENT_BEHAVIOR_CROSS_VERSION", SparkUpgradeException),
     ("INVALID_ARRAY_INDEX", ArrayIndexOutOfBoundsException),
     ("INVALID_PARAMETER_VALUE", IllegalArgumentException),
+    # Spark's legacy analysis errors (`_LEGACY_ERROR_TEMP_1xxx`) are `AnalysisException`s.
+    ("_LEGACY_ERROR_TEMP_1", AnalysisException),
     ("PARSE_", ParseException),
     # Spark raises it from `QueryCompilationErrors` for every `action`/`type` pair.
     ("PYTHON_DATA_SOURCE_ERROR", AnalysisException),
@@ -556,6 +606,11 @@ def unsupported_attribute(feature: str) -> UnsupportedFeatureAttributeError:
 def unsupported_module(feature: str) -> UnsupportedFeatureImportError:
     """:func:`unsupported_feature` for a module (also an ``ImportError``)."""
     return UnsupportedFeatureImportError(_unsupported_text(feature), **_unsupported_args(feature))
+
+
+def not_implemented_attribute(feature: str) -> PySparkNotImplementedAttributeError:
+    """:func:`not_implemented` for a property: ``hasattr`` is ``False`` and the error still says ``NOT_IMPLEMENTED``."""
+    return PySparkNotImplementedAttributeError(errorClass="NOT_IMPLEMENTED", messageParameters={"feature": feature})
 
 
 def unsupported_feature(feature: str) -> UnsupportedOperationException:

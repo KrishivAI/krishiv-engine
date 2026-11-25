@@ -20,7 +20,7 @@ use serde_json::{Number, Value};
 use krishiv_session::auth::{Authenticated, Role};
 
 use crate::guard::Caller;
-use crate::internal::{Row, SystemTable, UiError, UiFuture, UiSource};
+use crate::internal::{InboundTrace, Row, SystemTable, UiError, UiFuture, UiSource};
 
 /// The principal of the UI's own session; its queries are hidden from the UI.
 pub const UI_PRINCIPAL: &str = "krishiv-ui";
@@ -47,6 +47,8 @@ pub struct SessionSource {
     /// Whether [`Self::anonymous`] is the one session the console shows ([`Self::over_session`]): a cancel from
     /// the editor is then that session's own.
     own_session: bool,
+    /// The server's Python UDF worker pool, when it has one ([`Self::with_udf_workers`]).
+    udf_workers: Option<crate::udf_workers::UdfWorkersProvider>,
 }
 
 /// How long after a query ended its plan is still expected from the history writer.
@@ -110,6 +112,7 @@ impl SessionSource {
             sessions: Mutex::new(std::collections::HashMap::new()),
             stored: None,
             own_session: false,
+            udf_workers: None,
         })
     }
 
@@ -131,6 +134,14 @@ impl SessionSource {
     #[must_use]
     pub fn with_caller_sessions(mut self, factory: Arc<CallerSessions>) -> Self {
         self.caller_sessions = Some(factory);
+        self
+    }
+
+    /// The same, with the server's Python UDF worker pool: the Resources page lists its workers. `provider`
+    /// runs on a request's task and must not block.
+    #[must_use]
+    pub fn with_udf_workers(mut self, provider: crate::udf_workers::UdfWorkersProvider) -> Self {
+        self.udf_workers = Some(provider);
         self
     }
 
@@ -304,8 +315,9 @@ async fn run_to_end(
     run: Arc<Mutex<Run>>,
     sql: String,
     tag: String,
+    trace: InboundTrace,
 ) {
-    supervise(&run, execute(editor, Arc::clone(&run), sql, tag)).await;
+    supervise(&run, execute(editor, Arc::clone(&run), sql, tag, trace)).await;
     drop(runtime);
 }
 
@@ -334,6 +346,7 @@ async fn execute(
     run: Arc<Mutex<Run>>,
     sql: String,
     tag: String,
+    trace: InboundTrace,
 ) -> Result<Option<RunOutput>, KrishivError> {
     // A cancel that came before the statement started: do not run it at all (a write would otherwise commit).
     if lock(&run).cancel_requested {
@@ -342,7 +355,9 @@ async fn execute(
     let df = editor
         .sql_with_boxed(
             &sql,
-            krishiv_session::QueryOptions::new().tags([tag.as_str()]),
+            krishiv_session::QueryOptions::new()
+                .tags([tag.as_str()])
+                .inbound_trace(trace.traceparent.as_deref(), trace.baggage.as_deref()),
         )
         .await?;
     // A cancel that came before the query was registered has nothing to stop yet: honour it now.
@@ -593,6 +608,11 @@ const QUERIES_WITH_CLIENT: &str = "SELECT q.*, s.client_type FROM system.queries
      LEFT JOIN system.sessions s ON q.session_id = s.session_id";
 
 impl UiSource for SessionSource {
+    fn udf_workers(&self) -> UiFuture<'_, Option<crate::udf_workers::UdfWorkers>> {
+        let pool = self.udf_workers.as_ref().and_then(|read| read());
+        Box::pin(async move { Ok(pool) })
+    }
+
     fn rows(&self, table: SystemTable) -> UiFuture<'_, Vec<Row>> {
         Box::pin(async move {
             // A query row carries `client_type`: what the client of the query's session said it is
@@ -738,6 +758,19 @@ impl UiSource for SessionSource {
     }
 
     fn sql_start<'a>(&'a self, sql: &'a str, caller: Option<&'a Caller>) -> UiFuture<'a, String> {
+        static NO_TRACE: InboundTrace = InboundTrace {
+            traceparent: None,
+            baggage: None,
+        };
+        self.sql_start_traced(sql, caller, &NO_TRACE)
+    }
+
+    fn sql_start_traced<'a>(
+        &'a self,
+        sql: &'a str,
+        caller: Option<&'a Caller>,
+        trace: &'a InboundTrace,
+    ) -> UiFuture<'a, String> {
         Box::pin(async move {
             // The statement runs as the caller, under the caller's policy. Only the local administrator (a server
             // with no authentication, whoever holds its start-up token) runs in the ordinary session; a caller no
@@ -824,6 +857,7 @@ impl UiSource for SessionSource {
                 run,
                 sql.to_owned(),
                 tag,
+                trace.clone(),
             ));
             Ok(id)
         })

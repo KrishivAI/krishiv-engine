@@ -4,6 +4,19 @@
 use super::*;
 
 impl Session {
+    /// The object stores one query's declared-catalog reads use: its configuration snapshot
+    /// `config`, the runtime's scheduler and the session's working directory.
+    pub(crate) fn declared_stores(
+        &self,
+        config: &Arc<krishiv_common::config::Config>,
+    ) -> crate::catalog_registry::ScopedStores {
+        crate::catalog_registry::ScopedStores::new(
+            Arc::clone(config),
+            Arc::clone(&self.state.io),
+            self.state.cwd.clone(),
+        )
+    }
+
     /// A query that reads something besides `system.*` is refused with `KRISHIV_SERVER_DRAINING`
     /// while the server drains (design P3-T066 §5.1); its row `log_id` closes as failed.
     pub(crate) fn refuse_query_while_draining(&self, log_id: &str) -> Result<(), KrishivError> {
@@ -56,6 +69,8 @@ impl Session {
         let (session, text) = (self.clone(), query.to_owned());
         let row: Arc<std::sync::Mutex<Option<String>>> = Arc::default();
         let marker = Arc::clone(&row);
+        let parsed: Arc<std::sync::OnceLock<&'static str>> = Arc::default();
+        let class = Arc::clone(&parsed);
         let (result, cancelled) = self
             .on_executor_reasoned(async move {
                 let seq = session.state.statements.fetch_add(1, Ordering::Relaxed);
@@ -63,7 +78,7 @@ impl Session {
                 let trace = crate::telemetry::QueryTrace::of(seq, &text);
                 let span = trace.prepare_span(&crate::telemetry::Who::of(&session));
                 session
-                    .sql_here_marked(&text, marker, queries_only)
+                    .sql_here_marked(&text, marker, &class, queries_only)
                     .instrument(span)
                     .await
                     .map(|ran| match ran {
@@ -75,7 +90,8 @@ impl Session {
             })
             .await;
         // A statement refused before it ran (parse, analysis, access) is a
-        // row of `system.queries` too, with the text as the session may show it.
+        // row of `system.queries` too, with the text as the session may show it
+        // and, once it parsed, its class.
         // ...unless a query already ran inside `sql` (an `EXPLAIN ANALYZE`
         // that failed while it ran): that one has its row.
         if let Err(error) = &result
@@ -84,7 +100,7 @@ impl Session {
             let id = self.state.queries.record_refused(
                 crate::system::TextPolicy::from_config(&self.state.conf.snapshot()),
                 Some(krishiv_sql::redact_sql(query).as_str()),
-                None,
+                parsed.get().copied(),
                 error,
                 self.operation_id(),
             );
@@ -101,13 +117,13 @@ impl Session {
     /// Connect server that parses `Expression.expression_string` while it translates a plan.
     #[cfg(feature = "unstable-ir")]
     pub fn parser_options(&self) -> ParserOptions {
-        parser_options(&self.state.conf.snapshot())
+        parser_options(&self.state.conf.snapshot(), self.state.profile)
     }
 
     /// This session's parser options, from its configuration.
     #[cfg(not(feature = "unstable-ir"))]
     pub(crate) fn parser_options(&self) -> ParserOptions {
-        parser_options(&self.state.conf.snapshot())
+        parser_options(&self.state.conf.snapshot(), self.state.profile)
     }
 
     /// The directory a write of `text` goes to, as it physically is (links in
@@ -430,7 +446,10 @@ impl Session {
         // Admitted by the caller already (it changed something before this write), else here.
         let mut admitted = Some(match pre.take() {
             Some(admitted) => admitted,
-            None => self.admit_query(env, false).await?,
+            None => {
+                self.admit_query(env, false, krishiv_sql::StatementClass::Write)
+                    .await?
+            }
         });
         // The query's profile waits here for the commit below.
         let hold: Arc<crate::profile_history::HistoryHold> = Arc::default();
@@ -610,9 +629,11 @@ impl Session {
             match krishiv_io::BeneathStore::anchor(std::path::Path::new(local)) {
                 Ok(anchored) => {
                     let id = at.store.private_to(job);
+                    let anchored = Arc::new(anchored);
                     self.state
                         .io
-                        .register_store(id.clone(), Arc::new(anchored) as Arc<dyn ObjectStore>);
+                        .register_store(id.clone(), Arc::clone(&anchored) as Arc<dyn ObjectStore>);
+                    self.state.io.register_staging_sweeper(id.clone(), anchored);
                     let registration = StoreRegistration {
                         io: Arc::clone(&self.state.io),
                         id: id.clone(),
@@ -671,6 +692,14 @@ impl Drop for AbortOnDrop {
     }
 }
 
+/// The class `StatementClass::name` returned, for the admission request.
+fn statement_class_named(name: &str) -> Option<krishiv_sql::StatementClass> {
+    use krishiv_sql::StatementClass as C;
+    [C::Read, C::Write, C::Ddl, C::Session, C::Admin]
+        .into_iter()
+        .find(|c| c.name() == name)
+}
+
 impl Session {
     /// Asks the admission controller for a permit for the query whose
     /// `system.queries` row is `log_id`. A controller that answers at once
@@ -682,6 +711,7 @@ impl Session {
         log_id: &str,
         env: &QueryEnv,
         exempt: bool,
+        fallback: krishiv_sql::StatementClass,
     ) -> Result<crate::admission::Permit, KrishivError> {
         // A query that reads only `system.*` is never queued behind the load it inspects.
         if exempt {
@@ -692,8 +722,15 @@ impl Session {
             principal: Arc::clone(&self.state.principal),
             tags: self.effective_tags(),
             class: WorkloadClass::Interactive,
-            source: None,
-            statement_class: None,
+            source: self.state.activity.client_type(),
+            // A query no SQL statement started (DataFrame, Spark Connect plan) has no class on
+            // its env, and one a `SELECT` started (`spark.sql("select ..").write...`) carries
+            // `READ` into the write it ends in: the entry point that admits the query names the
+            // class then. A class a statement set itself (CTAS: `WRITE`, DDL) stays.
+            statement_class: match env.statement_class.and_then(statement_class_named) {
+                Some(krishiv_sql::StatementClass::Read) | None => Some(fallback),
+                other => other,
+            },
             estimate: env.catalog.estimate(),
         };
         let controller = Arc::clone(&self.state.admission);
@@ -707,6 +744,9 @@ impl Session {
             Poll::Ready(done) => done,
             Poll::Pending => {
                 self.state.queries.set_state(log_id, "queued");
+                if let Some(group) = controller.queued_group(&request) {
+                    self.state.queries.set_group(log_id, &group);
+                }
                 let done = admit.await;
                 if done.is_ok() {
                     self.state.queries.set_state(log_id, "running");
@@ -734,24 +774,37 @@ impl Session {
 
     /// Begins the `system.queries` row of a query and waits for its admission permit. A caller
     /// that is about to change something (a write replacing files) takes the permit first and
-    /// passes it on, so a refused or cancelled query has changed nothing.
+    /// passes it on, so a refused or cancelled query has changed nothing. `fallback` is the class the
+    /// admission request gets when the env has none (a DataFrame or Connect plan, not SQL text).
     pub(crate) async fn admit_query(
         &self,
         env: &QueryEnv,
         exempt: bool,
+        fallback: krishiv_sql::StatementClass,
     ) -> Result<Admitted, KrishivError> {
         // The policy of the query's own configuration snapshot, passed to its row (no shared slot).
+        // A query a command runs for itself (an `INSERT`'s write) has no statement: it is the command's.
+        // A statement of a script is listed under its own text, not the script's (which `env` carries).
+        let command = super::ran::command_statement(env.text.is_some());
+        let (text, class) = match &command {
+            Some(c) => (Some(&*c.text), Some(c.class)),
+            None => (env.text.as_deref(), env.statement_class),
+        };
         let log_id = self.state.queries.begin_as(
             crate::system::TextPolicy::from_config(&env.config),
-            env.text.as_deref(),
-            env.statement_class,
+            text,
+            class,
             self.operation_id(),
         )?;
         crate::action::note_row(&log_id);
         // The request tags join the row's tags at once, so a queued query shows them too.
         self.stamp_row(&log_id);
         *env.row.lock().unwrap_or_else(PoisonError::into_inner) = Some(log_id.clone());
-        let permit = self.admit(&log_id, env, exempt).await?;
+        // The command's listed run: a failure of it is this row, and the statement gets no refused row.
+        if let Some(row) = command.as_ref().and_then(|c| c.row.as_ref()) {
+            *row.lock().unwrap_or_else(PoisonError::into_inner) = Some(log_id.clone());
+        }
+        let permit = self.admit(&log_id, env, exempt, fallback).await?;
         Ok(Admitted::new(Arc::clone(&self.state), log_id, permit))
     }
 }

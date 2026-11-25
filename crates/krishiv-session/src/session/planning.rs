@@ -3,6 +3,15 @@
 
 use super::*;
 
+/// Now, as microseconds since the epoch.
+fn query_start_micros() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .and_then(|d| i64::try_from(d.as_micros()).ok())
+        .unwrap_or_default()
+}
+
 impl Session {
     /// The physical plan of `analyzed`, once the files it scans are
     /// listed and their footers read.
@@ -12,7 +21,7 @@ impl Session {
         env: &QueryEnv,
     ) -> Result<(Plan, PhysicalPlan), KrishivError> {
         let (optimized, physical, _) = self
-            .physical_with(analyzed, env, false, false, false)
+            .physical_with(analyzed, env, false, false, false, true)
             .await?;
         Ok((optimized, physical))
     }
@@ -27,7 +36,21 @@ impl Session {
         // A plan that is shown shows the queries of its definer views (P3-T062 §2.4).
         self.authorize_shown_definer_reads(analyzed).await?;
         let (optimized, physical, _) = self
-            .physical_with(analyzed, env, false, false, true)
+            .physical_with(analyzed, env, false, false, true, true)
+            .await?;
+        Ok((optimized, physical))
+    }
+
+    /// As [`Self::physical_inspected`] for a plan that only feeds a number or a list
+    /// (`DataFrame::warnings`, `DataFrame::estimate`): no scan that decides once runs user code.
+    pub(crate) async fn physical_counted(
+        &self,
+        analyzed: &AnalyzedPlan,
+        env: &QueryEnv,
+    ) -> Result<(Plan, PhysicalPlan), KrishivError> {
+        self.authorize_shown_definer_reads(analyzed).await?;
+        let (optimized, physical, _) = self
+            .physical_with(analyzed, env, false, false, true, false)
             .await?;
         Ok((optimized, physical))
     }
@@ -42,7 +65,8 @@ impl Session {
         trace: bool,
     ) -> Result<(Plan, PhysicalPlan, Vec<krishiv_optimizer::RuleStep>), KrishivError> {
         self.authorize_shown_definer_reads(analyzed).await?;
-        self.physical_with(analyzed, env, trace, false, true).await
+        self.physical_with(analyzed, env, trace, false, true, true)
+            .await
     }
 
     /// As [`Self::physical_inspected`] with every table's statistics and planning hints withheld
@@ -54,7 +78,22 @@ impl Session {
         env: &QueryEnv,
     ) -> Result<(Plan, PhysicalPlan), KrishivError> {
         self.authorize_shown_definer_reads(analyzed).await?;
-        let (optimized, physical, _) = self.physical_with(analyzed, env, false, true, true).await?;
+        let (optimized, physical, _) = self
+            .physical_with(analyzed, env, false, true, true, false)
+            .await?;
+        Ok((optimized, physical))
+    }
+
+    /// As [`Self::physical`] for a plan made only to find the first scan (the row-level probe): no
+    /// scan that decides once runs user code.
+    pub(crate) async fn physical_probe(
+        &self,
+        analyzed: &AnalyzedPlan,
+        env: &QueryEnv,
+    ) -> Result<(Plan, PhysicalPlan), KrishivError> {
+        let (optimized, physical, _) = self
+            .physical_with(analyzed, env, false, false, false, false)
+            .await?;
         Ok((optimized, physical))
     }
 
@@ -65,6 +104,7 @@ impl Session {
         trace: bool,
         withheld: bool,
         inspected: bool,
+        decisions: bool,
     ) -> Result<(Plan, PhysicalPlan, Vec<krishiv_optimizer::RuleStep>), KrishivError> {
         let start = self.query_start.unwrap_or_else(query_start_micros);
         // A metric-view read no aggregate rewrote, or a `measure(..)` left over, is analyzable but
@@ -142,8 +182,25 @@ impl Session {
             .with_sample_salt(env.sample_salt)
             .with_user(self.state.principal.name.as_str())
             .with_udfs(Arc::clone(&self.state.udfs))
-            .with_inspection(inspected);
-        let physical = self.state.planner.plan(&optimized, &cx)?;
+            .with_inspection(inspected)
+            .with_spark_version(self.state.profile.kernel_version())
+            .with_decisions(decisions);
+        // Planning recurses on a `krishiv-deep` thread this worker joins, and a data source's
+        // `decide` may run user code there: tell the runtime the worker is blocked so its core
+        // goes to another task (a one-thread executor would otherwise stall every other query).
+        let plan = || self.state.planner.plan(&optimized, &cx);
+        // `krishiv-deep` threads lose the action's task-local: hand its cancellation handle on.
+        let plan = || match crate::action::cancel_handle() {
+            Some(handle) => krishiv_common::stack::with_inherited(handle, plan),
+            None => plan(),
+        };
+        let physical = if tokio::runtime::Handle::try_current()
+            .is_ok_and(|h| h.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread)
+        {
+            tokio::task::block_in_place(plan)?
+        } else {
+            plan()?
+        };
         // The admission request's estimate, only for a controller that reads it.
         if !withheld && self.state.admission.uses_estimate() {
             env.catalog.set_estimate(crate::explain::estimate_of(

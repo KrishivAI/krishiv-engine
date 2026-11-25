@@ -26,6 +26,18 @@ Krishiv follows [semantic versioning](https://semver.org). While the major versi
 - Other workspace crates, which are implementation detail even when they are published.
 - Items documented as internal or hidden from the docs.
 
+## Interface stability
+
+Interfaces that programs and tools read, other than the Rust and Python APIs above:
+
+| Interface | Stability | Notes |
+|---|---|---|
+| [Admin API](../reference/admin-api.md) (`krishiv.admin.v1`) | stable since 0.3 | additive changes only; a break is `admin.v2`; builds before the 0.3.0 tag still report `preview` |
+| [Query events and the usage record](../guides/query-events.md) (`krishiv.event.v1`) | experimental since 0.3 | the event names and the `v1` envelope stay; fields may be added |
+| [`system.*` tables](../reference/system-tables.md) | experimental since 0.3 | columns may be added or renamed in a minor release |
+| [`system.capabilities`](../reference/system-tables.md#systemcapabilities) | stable since 0.3 | the row shape and the `surface` rows; the `feature` row names are experimental |
+| Error classes and SQLSTATE | stable since 0.3 | Spark's classes and the `KRISHIV_*` classes; the message text is not stable |
+
 ## Breaking changes and deprecation
 
 - Every breaking change is listed under a "Breaking" heading in the changelog for its release.
@@ -36,5 +48,6 @@ Krishiv follows [semantic versioning](https://semver.org). While the major versi
 ## Checks
 
 - `public-api` (nightly): the snapshot diff above.
-- `semver-checks` (nightly): `cargo-semver-checks` against the last released version. It is **non-blocking** in CI
-  today (`continue-on-error`), and becomes blocking when the job's baseline is set.
+- `semver-checks` (nightly): `cargo-semver-checks` against the last release tag (`v0.2.0` for
+  the 0.3 line). It is **blocking**. A minor release below 1.0 may break, so the job checks it as a major release and
+  writes the list of breaks to its summary for the changelog's "Breaking" section; a patch release may not break.

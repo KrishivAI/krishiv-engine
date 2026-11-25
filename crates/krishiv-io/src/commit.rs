@@ -99,6 +99,8 @@ pub struct DirectoryWrite {
     overwrite: bool,
     /// The commit log state, when the write goes through the log.
     log: Option<LogState>,
+    /// Minimum age of an unlogged file an overwrite sweeps.
+    grace: chrono::Duration,
     /// The caller's idempotency key (E34), recorded in the log entry.
     idempotency_key: Option<Box<str>>,
 }
@@ -110,7 +112,16 @@ struct LogState {
     base: Option<u64>,
     /// Files visible in the log at that version, relative to the root.
     visible: Vec<String>,
+    /// Data files of an overwrite's directory that no log entry lists and that are older than
+    /// [`UNLOGGED_GRACE`]: what a killed earlier write left (PY-054). Deleted after the commit.
+    stale: Vec<Path>,
+    /// The records of writes whose process is gone (PY-054), deleted with the commit.
+    dead_records: Vec<Path>,
 }
+
+/// How old an unlogged data file must be before an overwrite sweeps it: a younger one may be the
+/// task output of a concurrent write that has not committed yet.
+const UNLOGGED_GRACE: chrono::Duration = chrono::Duration::hours(1);
 
 impl DirectoryWrite {
     /// Starts a write of `dir` in `store` with `mode`; `job_uuid` names its
@@ -129,22 +140,32 @@ impl DirectoryWrite {
         job_uuid: impl Into<String>,
         dynamic_overwrite: bool,
     ) -> Result<Option<Self>> {
-        let file = io.head(&store, &dir).await?;
+        let shown = shown_path(&store, &dir);
+        let file = io
+            .head(&store, &dir)
+            .await
+            .map_err(|e| as_write_failure(e, &shown))?;
         // An append needs no listing: only a file at the path blocks it. A
         // dynamic overwrite lists what it wrote at commit time instead.
         let listed = match mode {
             SaveMode::Append => Vec::new(),
             SaveMode::Overwrite if dynamic_overwrite => Vec::new(),
-            _ => io.list(&store, &dir).await?,
+            _ => io
+                .list(&store, &dir)
+                .await
+                .map_err(|e| as_write_failure(e, &shown))?,
         };
         let exists = file.is_some()
             || !listed.is_empty()
             || (matches!(mode, SaveMode::ErrorIfExists | SaveMode::Ignore)
-                && io.is_directory(&store, &dir).await?);
+                && io
+                    .is_directory(&store, &dir)
+                    .await
+                    .map_err(|e| as_write_failure(e, &shown))?);
         let replaced = match mode {
             SaveMode::ErrorIfExists if exists => {
                 return Err(PathAlreadyExists {
-                    output_path: format!("{store}/{dir}"),
+                    output_path: shown_path(&store, &dir),
                 }
                 .into());
             }
@@ -153,7 +174,7 @@ impl DirectoryWrite {
             // append to it, and overwriting replaces it.
             SaveMode::Append if file.is_some() => {
                 return Err(PathAlreadyExists {
-                    output_path: format!("{store}/{dir}"),
+                    output_path: shown_path(&store, &dir),
                 }
                 .into());
             }
@@ -178,6 +199,7 @@ impl DirectoryWrite {
             partitioned: false,
             overwrite: matches!(mode, SaveMode::Overwrite),
             log: None,
+            grace: UNLOGGED_GRACE,
             idempotency_key: None,
         }))
     }
@@ -228,11 +250,150 @@ impl DirectoryWrite {
         let log_dir = self.dir.clone().join(LOG_DIR);
         self.replaced
             .retain(|p| !p.prefix_matches(&log_dir) && *p != log_dir);
+        let visible: Vec<String> = snap.files.into_keys().collect();
+        let mut stale = Vec::new();
+        // Writes whose process died before their commit: their unlogged files are swept at once.
+        let (dead_jobs, dead_records) = self.dead_writers(io).await?;
+        if let Some(me) = writers::current() {
+            // Best effort: without the record a killed write is swept after the grace only.
+            let _ = io
+                .put_object(
+                    &self.store,
+                    &writers::record_path(&self.dir, &self.job_uuid),
+                    Bytes::from(me),
+                )
+                .await;
+        }
+        // The staging files of an upload that never completed are hidden from listings (PY-054):
+        // the store that staged them deletes those of a dead writer at once, and on an overwrite
+        // those older than the grace, whichever job they name (a writer killed with its container
+        // leaves a record nobody can judge).
+        let cutoff = chrono::Utc::now() - self.grace;
+        let clean = if dead_jobs.is_empty() && !self.overwrite {
+            true
+        } else {
+            let (dead, overwrite) = (dead_jobs.clone(), self.overwrite);
+            io.sweep_staging(&self.store, &self.dir, move |name, modified| {
+                let base = name.split_once('#').map_or(name, |(base, _)| base);
+                dead.iter().any(|j| is_job_file(base, j)) || (overwrite && modified <= cutoff)
+            })
+            .await
+        };
+        // A record stays while its job's files may remain: the next write looks again.
+        let dead_records = if clean { dead_records } else { Vec::new() };
+        if self.overwrite || !dead_jobs.is_empty() {
+            if self.overwrite {
+                // The old marker goes first: a run killed before its commit must not leave the
+                // `_SUCCESS` of the data it began to replace (readers take it for complete).
+                let marker = self.dir.clone().join(SUCCESS_MARKER);
+                // Best effort: a marker that stays is rewritten by this write's commit.
+                if matches!(io.head(&self.store, &marker).await, Ok(Some(_))) {
+                    let _ = io.delete(&self.store, &marker).await;
+                }
+            }
+            let seen: std::collections::HashSet<&str> =
+                visible.iter().map(String::as_str).collect();
+            for meta in io.list(&self.store, &self.dir).await? {
+                let rel = self.relative(&meta.location);
+                if rel.is_empty() || rel.split('/').any(is_hidden) || seen.contains(rel.as_str()) {
+                    continue;
+                }
+                let of_dead = meta
+                    .location
+                    .filename()
+                    .is_some_and(|n| dead_jobs.iter().any(|j| is_job_file(n, j)));
+                if of_dead || (self.overwrite && meta.last_modified <= cutoff) {
+                    stale.push(meta.location);
+                }
+            }
+        }
         self.log = Some(LogState {
             base: snap.version,
-            visible: snap.files.into_keys().collect(),
+            visible,
+            stale,
+            dead_records,
         });
         Ok(self)
+    }
+
+    /// The jobs whose writer process is gone, and their records (PY-054).
+    async fn dead_writers(&self, io: &IoContext) -> Result<(Vec<String>, Vec<Path>)> {
+        let (mut jobs, mut records) = (Vec::new(), Vec::new());
+        for meta in io.list(&self.store, &writers::log_dir(&self.dir)).await? {
+            let Some(job) = writers::job_of(&meta.location) else {
+                continue;
+            };
+            if job == self.job_uuid {
+                continue;
+            }
+            // A record that cannot be read is not judged.
+            let Ok(Some(body)) = io.get_object(&self.store, &meta.location).await else {
+                continue;
+            };
+            if writers::is_dead(&body) {
+                jobs.push(job.to_owned());
+                records.push(meta.location);
+            }
+        }
+        Ok((jobs, records))
+    }
+
+    /// Removes this write's record and the dead writers' (best effort: a record that stays is
+    /// judged again by the next write).
+    async fn drop_records(&self, io: &IoContext) {
+        if self.log.is_none() {
+            return;
+        }
+        let own = writers::record_path(&self.dir, &self.job_uuid);
+        let dead = self.log.iter().flat_map(|l| l.dead_records.iter());
+        for p in std::iter::once(&own).chain(dead) {
+            let _ = io.delete(&self.store, p).await;
+        }
+    }
+
+    /// The age an unlogged file must have for an overwrite to sweep it.
+    #[cfg(test)]
+    pub(crate) fn with_grace(mut self, grace: chrono::Duration) -> Self {
+        self.grace = grace;
+        self
+    }
+
+    /// An append that another writer's commit overtook publishes only files that are still there: an
+    /// overwrite sweeps unlogged files older than its grace, and an append that stayed uncommitted
+    /// that long would otherwise list files that are gone. A file that vanishes after this check
+    /// needs the sweep to run inside the window between the check and the publish; the sweep's one-hour grace
+    /// is the real guard, this check only turns the rare late append into a refusal.
+    async fn refuse_if_files_swept(
+        &self,
+        io: &IoContext,
+        state: &LogState,
+        add: &[AddedFile],
+    ) -> Result<()> {
+        let now = self.commit_log(io).snapshot().await?;
+        if now.version == state.base {
+            return Ok(());
+        }
+        // Concurrent HEADs, bounded: a large append that lost a race must not cost one request after another.
+        // Only a missing file (`Ok(None)`) is a swept one; a failed request is its own error.
+        for chunk in add.chunks(32) {
+            let mut heads = Vec::with_capacity(chunk.len());
+            for f in chunk {
+                let path = Path::from(format!("{}/{}", self.dir, f.path));
+                heads.push(Box::pin(async move { io.head(&self.store, &path).await }));
+            }
+            for head in futures::future::join_all(heads).await {
+                if head?.is_none() {
+                    return Err(krishiv_common::error::KrishivConcurrentCommit {
+                        root: format!("{}/{}", self.store, self.dir),
+                        version: now
+                            .version
+                            .map_or_else(|| "0".to_owned(), |v| v.to_string()),
+                    }
+                    .into());
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Records the caller's idempotency key (`krishiv.write.idempotencyKey`) in the commit: a
@@ -357,7 +518,8 @@ impl DirectoryWrite {
             self.replaced.clone()
         };
         // A logged overwrite replaces only what its base snapshot shows: another writer's task files
-        // (written, not yet committed) are never in it, so a concurrent append's files survive it.
+        // (written, not yet committed) are never in it, so a concurrent append's files survive it. The unlogged-file sweep can still take an append's files older than
+        // its grace; that append's commit is then refused (`refuse_if_files_swept`).
         let replaced: Vec<Path> = match &self.log {
             Some(state) => {
                 let visible: std::collections::HashSet<&str> =
@@ -415,6 +577,9 @@ impl DirectoryWrite {
                 remove,
                 idempotency_key: self.idempotency_key.as_deref().map(str::to_owned),
             };
+            if !self.overwrite {
+                self.refuse_if_files_swept(io, state, &entry.add).await?;
+            }
             if let Keyed::Replayed(version) =
                 Box::pin(self.commit_log(io).commit_keyed(state.base, &entry)).await?
             {
@@ -425,14 +590,53 @@ impl DirectoryWrite {
                 );
                 self.delete_orphans(io, &std::collections::HashSet::new())
                     .await?;
+                if self.overwrite {
+                    // This attempt removed the marker the winner wrote (overlapping same-key writes):
+                    // the data is complete, so put it back.
+                    let marker = io
+                        .put_object(
+                            &self.store,
+                            &self.dir.clone().join(SUCCESS_MARKER),
+                            Bytes::new(),
+                        )
+                        .await;
+                    after_publish(true, "restoring the success marker", marker)?;
+                }
+                self.drop_records(io).await;
                 return Ok(Vec::new());
             }
         }
         // The (lazy) delete futures are built first: a stream mapping
         // through a borrowing closure makes this future unprovably `Send`
         // for callers that spawn it.
+        // An append past the grace may have committed between the sweep's listing and now: the log
+        // is read again and a stale file it lists is kept (this narrows the window to the deletes
+        // themselves; the grace is what makes the remainder rare).
+        // The entry is published: a failed re-read is maintenance, so the stale files are left for the
+        // next overwrite instead of failing a write that is already visible.
+        let committed_since: Option<std::collections::HashSet<String>> = match &self.log {
+            Some(l) if !l.stale.is_empty() => match self.commit_log(io).snapshot().await {
+                Ok(snapshot) => Some(snapshot.files.into_keys().collect()),
+                Err(e) => {
+                    after_publish(true, "reading the log before the stale sweep", Err(e))?;
+                    None
+                }
+            },
+            _ => Some(std::collections::HashSet::new()),
+        };
+        let swept: Vec<&Path> = match &committed_since {
+            Some(committed) => self
+                .log
+                .as_ref()
+                .map_or(&[][..], |l| l.stale.as_slice())
+                .iter()
+                .filter(|p| !committed.contains(&self.relative(p)))
+                .collect(),
+            None => Vec::new(),
+        };
         let deletes: Vec<_> = replaced
             .iter()
+            .chain(swept)
             .filter(|p| !new.contains(p))
             .map(|p| io.delete(&self.store, p))
             .collect();
@@ -454,6 +658,7 @@ impl DirectoryWrite {
             )
             .await;
         after_publish(logged, "writing the success marker", marker)?;
+        self.drop_records(io).await;
         Ok(files)
     }
 
@@ -562,12 +767,42 @@ impl DirectoryWrite {
     }
 }
 
+/// A path as Spark's messages show it: a local file is `file:/<path>` (a Hadoop `Path` with its
+/// scheme), an object store `<scheme>://<bucket>/<key>`.
+fn shown_path(store: &StoreId, dir: &Path) -> String {
+    let store = store.to_string();
+    if store == "file" {
+        format!("file:/{dir}")
+    } else {
+        format!("{store}/{dir}")
+    }
+}
+
+/// A storage failure while a write starts (`HEAD` or listing of its path) is a failed write, not
+/// "Reading the file" (PY-075): `TASK_WRITE_FAILED` carrying the store's reason (the OS error) as its
+/// cause. Any other error is returned as it is.
+fn as_write_failure(
+    e: krishiv_common::error::KrishivError,
+    shown: &str,
+) -> krishiv_common::error::KrishivError {
+    if e.error_class() != krishiv_common::error::ErrorClass::KrishivObjectStoreRequestFailed {
+        return e;
+    }
+    let reason = e
+        .message_parameters()
+        .iter()
+        .find(|(k, _)| *k == "reason")
+        .map(|(_, v)| v.clone());
+    reason.map_or(e, |r| crate::error::write_failed(shown, &r))
+}
+
 /// Spark's hidden-name rule for one path component.
 fn is_hidden(name: &str) -> bool {
     // The same rule as the reads' (`krishiv-exec` `hidden`), or adopted files would vanish from them.
-    name.starts_with('.')
+    let exclude = name.starts_with('.')
         || (name.starts_with('_') && !name.contains('='))
-        || name.ends_with("._COPYING_")
+        || name.ends_with("._COPYING_");
+    exclude && !(name.starts_with("_common_metadata") || name.starts_with("_metadata"))
 }
 
 /// The `name=value` directories of the relative file path `rel`.
@@ -629,6 +864,7 @@ fn is_job_file(name: &str, job: &str) -> bool {
 
 #[cfg(test)]
 mod tests;
+mod writers;
 
 /// Files with repeated paths (one task result reported twice) commit once, in first-seen order.
 fn dedupe_by_path(files: Vec<WrittenFileInfo>) -> Vec<WrittenFileInfo> {

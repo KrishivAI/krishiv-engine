@@ -79,7 +79,11 @@ pub static PYTHON_UDF_THREADS: ConfigEntry = ConfigEntry {
     default: Some(ConfigValue::Int(0)),
     doc: "Threads of the embedded Python UDF pool, fixed when the pool starts (the first query \
           calling a Python UDF). 0 picks one: the executor's thread count on a free-threaded \
-          Python, else 1 (with the GIL more threads only contend).",
+          Python, else 1 (with the GIL more threads only contend). A value of 1 starts two OS \
+          threads, so a scalar UDF call queued behind a relation task runs beside it; scalar calls \
+          still run one at a time. With two or more threads, one \
+          stays free for scalar UDFs, so a grouped-aggregate or map UDF relation can use at most \
+          threads - 1.",
     scope: Scope::Cluster,
     version_added: "0.1.0",
     spark_alias: None,
@@ -153,6 +157,34 @@ pub static PYTHON_WORKER_MAX_TOTAL: ConfigEntry = ConfigEntry {
           limit an idle worker of another session is stopped, else the call waits.",
     scope: Scope::Cluster,
     version_added: "0.2.0",
+    spark_alias: None,
+    settable_by: SettableBy::Startup,
+};
+
+/// `krishiv.python.worker.maxPerTenant` (P3-T072).
+pub static PYTHON_WORKER_MAX_PER_TENANT: ConfigEntry = ConfigEntry {
+    key: "krishiv.python.worker.maxPerTenant",
+    value_type: ValueType::PositiveInt,
+    default: Some(ConfigValue::Int(32)),
+    doc: "Most Python UDF worker processes one tenant runs at once, over all its sessions, and \
+          most calls it runs at once; further calls wait, so one tenant cannot take every worker \
+          or call thread. Sessions without a tenant count per principal; with authentication off there is no such cap. A tenant's workers are \
+          never shared with another tenant.",
+    scope: Scope::Cluster,
+    version_added: "0.3.0",
+    spark_alias: None,
+    settable_by: SettableBy::Startup,
+};
+
+/// `krishiv.python.worker.tenantMemoryLimit` (P3-T072).
+pub static PYTHON_WORKER_TENANT_MEMORY_LIMIT: ConfigEntry = ConfigEntry {
+    key: "krishiv.python.worker.tenantMemoryLimit",
+    value_type: ValueType::Size,
+    default: None,
+    doc: "Address-space limit (`RLIMIT_AS`) of each Python UDF worker of a tenant, when lower than \
+          `krishiv.python.worker.memoryLimit`. Unset: the general limit applies.",
+    scope: Scope::Cluster,
+    version_added: "0.3.0",
     spark_alias: None,
     settable_by: SettableBy::Startup,
 };

@@ -2,8 +2,9 @@
 //! The config entries. Add new entries here and to [`REGISTRY`].
 
 use super::registry_join::{
-    EXEC_COALESCE_INPUT, EXEC_JOIN_FUSE_PROBE_SELECT, EXEC_JOIN_IDLE_SPILL_AFTER,
-    EXEC_JOIN_ROW_LAYOUT,
+    EXEC_COALESCE_INPUT, EXEC_JOIN_DIRECT_INDEX, EXEC_JOIN_FUSE_PROBE_SELECT,
+    EXEC_JOIN_IDLE_SPILL_AFTER, EXEC_JOIN_ROW_LAYOUT, EXEC_JOIN_SMJ_BUFFER_BYTES,
+    EXEC_JOIN_STRATEGY, SQL_ASOF_JOIN_ENABLED, SQL_SORT_MERGE_ASOF_JOIN_ENABLED,
 };
 use std::borrow::Cow;
 use std::time::Duration;
@@ -21,10 +22,12 @@ pub use python::{
     ARROW_MAX_RECORDS_PER_BATCH, ARROW_PYSPARK_VALIDATE_SCHEMA, PYTHON_UDF_ARROW_ENABLED,
     PYTHON_UDF_THREADS, PYTHON_UDTF_ARROW_ENABLED, PYTHON_WORKER_ALLOW_FORK,
     PYTHON_WORKER_EXECUTABLES, PYTHON_WORKER_IDLE_TIMEOUT, PYTHON_WORKER_MAX_PER_SESSION,
-    PYTHON_WORKER_MAX_TOTAL, PYTHON_WORKER_MEMORY_LIMIT, UDF_SANDBOX,
+    PYTHON_WORKER_MAX_PER_TENANT, PYTHON_WORKER_MAX_TOTAL, PYTHON_WORKER_MEMORY_LIMIT,
+    PYTHON_WORKER_TENANT_MEMORY_LIMIT, UDF_SANDBOX,
 };
 mod access;
 mod advisor;
+mod connect_client;
 mod lakehouse;
 mod optimizer;
 mod result_cache;
@@ -34,7 +37,9 @@ mod server;
 mod sql_session;
 mod ui_embed;
 pub use access::{
-    ACCESS_PROVIDER, IO_EGRESS_ALLOWED_CIDRS, IO_EGRESS_PRIVATE_ADDRESSES, IO_EGRESS_PROXY,
+    ACCESS_EXTERNAL_ENDPOINT, ACCESS_EXTERNAL_SECURABLES, ACCESS_EXTERNAL_TIMEOUT,
+    ACCESS_EXTERNAL_TOKEN, ACCESS_PROVIDER, IO_EGRESS_ALLOWED_CIDRS, IO_EGRESS_PRIVATE_ADDRESSES,
+    IO_EGRESS_PROXY,
 };
 pub use advisor::{
     ADVISOR_ENABLED, ADVISOR_MAX_HINTS, ADVISOR_MEMORY_WAIT_FACTOR, ADVISOR_MEMORY_WAIT_MIN_TIME,
@@ -43,18 +48,27 @@ pub use advisor::{
     ADVISOR_SKEW_FACTOR, ADVISOR_SKEW_MIN_ROWS, ADVISOR_SKEW_MIN_TIME, ADVISOR_SPILL_MIN_BYTES,
     ADVISOR_SPILL_MIN_PERCENT,
 };
+pub use connect_client::{
+    ARROW_PYSPARK_SELF_DESTRUCT_ENABLED, ARROW_USE_LARGE_VAR_TYPES,
+    LOCAL_RELATION_BATCH_OF_CHUNKS_SIZE_BYTES, LOCAL_RELATION_CACHE_THRESHOLD,
+    LOCAL_RELATION_CHUNK_SIZE_BYTES, LOCAL_RELATION_CHUNK_SIZE_ROWS, LOCAL_RELATION_SIZE_LIMIT,
+    PANDAS_CONVERT_TO_ARROW_ARRAY_SAFELY, PANDAS_INFER_DICT_AS_MAP, PANDAS_STRUCT_HANDLING_MODE,
+    PYSPARK_INFER_NESTED_DICT_AS_STRUCT, PYSPARK_LEGACY_INFER_ARRAY_FROM_FIRST,
+    PYSPARK_LEGACY_INFER_MAP_FROM_FIRST, REPL_EAGER_EVAL_ENABLED, REPL_EAGER_EVAL_MAX_NUM_ROWS,
+    REPL_EAGER_EVAL_TRUNCATE, SQL_TIMESTAMP_TYPE,
+};
 pub use lakehouse::{
     CATALOG_DELEGATION_MAX_DISTINCT_EXCHANGES_PER_MINUTE,
     CATALOG_DELEGATION_MAX_EXCHANGES_PER_MINUTE, CATALOG_MAX_COLUMNS, CATALOG_MAX_METADATA_BYTES,
-    CATALOG_REQUEST_TIMEOUT, DELTA_LOG_THREADS, DELTA_MAX_COMMIT_ATTEMPTS,
-    DELTA_SNAPSHOT_CACHE_MAX_BYTES, ICEBERG_COMMIT_MAX_INTERVENING, ICEBERG_MANIFEST_CACHE_BYTES,
-    ICEBERG_WRITE_MAX_OPEN_FILES, ICEBERG_WRITE_STATISTICS_ENABLED, WRITE_COMMIT_RETRY_TIMEOUT,
-    WRITE_IDEMPOTENCY_KEY,
+    CATALOG_REQUEST_TIMEOUT, CATALOG_VENDED_DEFAULT_TTL, CATALOG_VENDED_MAX_ENTRIES,
+    DELTA_LOG_THREADS, DELTA_MAX_COMMIT_ATTEMPTS, DELTA_SNAPSHOT_CACHE_MAX_BYTES,
+    ICEBERG_COMMIT_MAX_INTERVENING, ICEBERG_MANIFEST_CACHE_BYTES, ICEBERG_WRITE_MAX_OPEN_FILES,
+    ICEBERG_WRITE_STATISTICS_ENABLED, WRITE_COMMIT_RETRY_TIMEOUT, WRITE_IDEMPOTENCY_KEY,
 };
 pub use optimizer::{
     DERIVED_KEYS_ABOVE, DISCOVER_KEYS, DISCOVER_KEYS_TIMEOUT, EXPERIMENTAL_GROUP_KEY_CODE_FORCE,
-    GROUP_KEY_CODE, LATE_PAYLOAD_JOIN, PAYLOAD_ABOVE_AGGREGATE, SEMI_ANTI_JOIN_ORDER,
-    SHARE_FILTERED_SCANS, SHARE_REPEATED_SUBTREES, SUBQUERY_AS_WINDOW,
+    GROUP_KEY_CODE, LATE_PAYLOAD_JOIN, PAYLOAD_ABOVE_AGGREGATE, PRESERVED_SIDE_SEMI_JOIN,
+    SEMI_ANTI_JOIN_ORDER, SHARE_FILTERED_SCANS, SHARE_REPEATED_SUBTREES, SUBQUERY_AS_WINDOW,
 };
 pub use result_cache::{RESULT_CACHE_ENABLED, RESULT_CACHE_MAX_BYTES, RESULT_CACHE_TTL};
 pub use runtime_filter::{
@@ -82,6 +96,23 @@ const MIB: u64 = 1024 * 1024;
 /// Every registered entry. Order is irrelevant; docs sort by key.
 pub static REGISTRY: &[&ConfigEntry] = &[
     &ANSI_ENABLED,
+    &SQL_TIMESTAMP_TYPE,
+    &PANDAS_STRUCT_HANDLING_MODE,
+    &REPL_EAGER_EVAL_ENABLED,
+    &REPL_EAGER_EVAL_MAX_NUM_ROWS,
+    &REPL_EAGER_EVAL_TRUNCATE,
+    &LOCAL_RELATION_CACHE_THRESHOLD,
+    &LOCAL_RELATION_SIZE_LIMIT,
+    &LOCAL_RELATION_CHUNK_SIZE_ROWS,
+    &LOCAL_RELATION_CHUNK_SIZE_BYTES,
+    &LOCAL_RELATION_BATCH_OF_CHUNKS_SIZE_BYTES,
+    &PANDAS_CONVERT_TO_ARROW_ARRAY_SAFELY,
+    &PANDAS_INFER_DICT_AS_MAP,
+    &PYSPARK_INFER_NESTED_DICT_AS_STRUCT,
+    &PYSPARK_LEGACY_INFER_ARRAY_FROM_FIRST,
+    &PYSPARK_LEGACY_INFER_MAP_FROM_FIRST,
+    &ARROW_USE_LARGE_VAR_TYPES,
+    &ARROW_PYSPARK_SELF_DESTRUCT_ENABLED,
     &SESSION_TIME_ZONE,
     &SQL_PATH_ENABLED,
     &SCHEMA_LEVEL_COLLATIONS_ENABLED,
@@ -99,6 +130,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &EXEC_AGG_OUTPUT_FILTER,
     &EXEC_DEBUG_PLAN_ROUND_TRIP,
     &EXEC_JOIN_ROW_LAYOUT,
+    &EXEC_JOIN_DIRECT_INDEX,
     &EXEC_JOIN_BUILD_SIDE,
     &EXEC_JOIN_BUILD_PROJECTION,
     &EXEC_SCAN_INSTANCE_PROJECTION,
@@ -109,6 +141,8 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &EXEC_JOIN_FUSE_PROBE_SELECT,
     &EXEC_COALESCE_INPUT,
     &EXEC_JOIN_IDLE_SPILL_AFTER,
+    &SQL_ASOF_JOIN_ENABLED,
+    &SQL_SORT_MERGE_ASOF_JOIN_ENABLED,
     &EXEC_SEED,
     &EXEC_SORT_HASH_BUCKETS,
     &SHUFFLE_PARTITIONS_HINT,
@@ -122,6 +156,12 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &SESSION_MEMORY_LIMIT,
     &SYSTEM_QUERIES_CAPACITY,
     &HISTORY_PATH,
+    &COMPUTE_ID,
+    &EVENTS_FILE_PATH,
+    &EVENTS_FILE_MAX_BYTES,
+    &EVENTS_FILE_MAX_FILES,
+    &EVENTS_TEXT_MAX_BYTES,
+    &EVENTS_QUEUE_CAPACITY,
     &ADVISOR_ENABLED,
     &ADVISOR_SPILL_MIN_PERCENT,
     &ADVISOR_SPILL_MIN_BYTES,
@@ -164,8 +204,10 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &SHARE_REPEATED_SUBTREES,
     &SHARE_FILTERED_SCANS,
     &SEMI_ANTI_JOIN_ORDER,
+    &PRESERVED_SIDE_SEMI_JOIN,
     &SPILL_DIR,
     &WORKLOAD_RESOURCE_GROUPS_FILE,
+    &CONNECT_PYTHON_FUNCTIONS_CATALOG,
     &SPILL_MAX_BYTES,
     &SPILL_COMPRESSION,
     &SPILL_ZSTD_LEVEL,
@@ -200,6 +242,8 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &CATALOG_REQUEST_TIMEOUT,
     &CATALOG_DELEGATION_MAX_EXCHANGES_PER_MINUTE,
     &CATALOG_DELEGATION_MAX_DISTINCT_EXCHANGES_PER_MINUTE,
+    &CATALOG_VENDED_DEFAULT_TTL,
+    &CATALOG_VENDED_MAX_ENTRIES,
     &IO_COALESCE_BYTES,
     &IO_COALESCE_WASTE_BYTES,
     &IO_COALESCE_WASTE_DIVISOR,
@@ -215,6 +259,10 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &IO_CACHE_PATH,
     &IO_LOCAL_ALLOWED_ROOTS,
     &ACCESS_PROVIDER,
+    &ACCESS_EXTERNAL_ENDPOINT,
+    &ACCESS_EXTERNAL_TIMEOUT,
+    &ACCESS_EXTERNAL_TOKEN,
+    &ACCESS_EXTERNAL_SECURABLES,
     &IO_OBJECT_STORE_ALLOWED_PREFIXES,
     &IO_EGRESS_PRIVATE_ADDRESSES,
     &IO_EGRESS_ALLOWED_CIDRS,
@@ -255,6 +303,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &AGENT_GATE_BYTES,
     &SHARE_CTE_INSTANCES,
     &EAGER_AGGREGATION,
+    &PRE_AGGREGATE_EXPAND,
     &ARROW_MAX_RECORDS_PER_BATCH,
     &ARROW_PYSPARK_VALIDATE_SCHEMA,
     &PYTHON_UDF_ARROW_ENABLED,
@@ -265,7 +314,9 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &PYTHON_WORKER_IDLE_TIMEOUT,
     &PYTHON_WORKER_MAX_PER_SESSION,
     &PYTHON_WORKER_MAX_TOTAL,
+    &PYTHON_WORKER_MAX_PER_TENANT,
     &PYTHON_WORKER_MEMORY_LIMIT,
+    &PYTHON_WORKER_TENANT_MEMORY_LIMIT,
     &PYTHON_WORKER_ALLOW_FORK,
     &JOIN_ENUMERATOR,
     &JOIN_DP_LIMIT,
@@ -439,35 +490,6 @@ pub static EXEC_JOIN_RADIX_BITS: ConfigEntry = ConfigEntry {
     spark_alias: None,
 };
 
-/// Forces the sort-merge join on equi-joins without a strategy hint (P2-T056).
-pub static EXEC_JOIN_STRATEGY: ConfigEntry = ConfigEntry {
-    key: "krishiv.exec.join.strategy",
-    value_type: ValueType::Enum(&["auto", "sortMerge"]),
-    default: Some(ConfigValue::String(Cow::Borrowed("auto"))),
-    doc: "Internal: `auto` runs equi-joins as hash joins unless a `MERGE` hint asks otherwise; \
-          `sortMerge` runs every equi-join without a strategy hint as a sort-merge join, except \
-          `NOT IN` and keys that cannot be ordered. Results are the same either way.",
-    scope: Scope::Session,
-    settable_by: SettableBy::User,
-    version_added: "0.1.0",
-    spark_alias: None,
-};
-
-/// The bytes one key's rows may hold in a sort-merge join (P2-T056).
-pub static EXEC_JOIN_SMJ_BUFFER_BYTES: ConfigEntry = ConfigEntry {
-    key: "krishiv.exec.join.smj.bufferBytes",
-    value_type: ValueType::Size,
-    default: Some(ConfigValue::Size(0)),
-    doc: "Bytes of one join key's right-side rows a sort-merge join keeps in memory before it \
-          moves them to a spill file; 0 takes a share of the memory pool. Spark bounds these \
-          rows by count (`spark.sql.sortMergeJoinExec.buffer.in.memory.threshold` and \
-          `spark.sql.sortMergeJoinExec.buffer.spill.threshold`), which have no effect here.",
-    scope: Scope::Session,
-    settable_by: SettableBy::Admin,
-    version_added: "0.1.0",
-    spark_alias: None,
-};
-
 /// The most one query's shared broadcast tables may hold on a worker
 /// (P2-T177 unit 3, row 30c (b)).
 pub static EXEC_JOIN_SHARED_BROADCAST_BYTES: ConfigEntry = ConfigEntry {
@@ -593,9 +615,12 @@ pub static MEMORY_RESIDENT_GUARD: ConfigEntry = ConfigEntry {
           (allocator overhead, memory used without a reservation) within an allowance of 1/8 of \
           the limit plus 64 MiB, by lowering the memory ordinary reservations may take so \
           operators spill. It needs a resident-set probe from the program that owns the \
-          allocator: the `krishiv` CLI and the bench runner install one when started with a \
-          limit below 4 GiB; elsewhere the setting has no effect. Spill I/O and arbitration \
-          rounds whose spills are exhausted are exempt from it.",
+          allocator: on Linux, the `krishiv` CLI and the Python module (builds with mimalloc, \
+          as shipped) install one at every limit, the bench runner when started with a limit \
+          below 4 GiB; on macOS and Windows, and elsewhere, the setting has no effect. In the \
+          Python module the resident set includes the Python program's own memory (its \
+          DataFrames, NumPy and Arrow data), so that memory lowers what queries may reserve. \
+          Spill I/O and arbitration rounds whose spills are exhausted are exempt from it.",
     scope: Scope::Cluster,
     settable_by: SettableBy::Startup,
     version_added: "0.1.0",
@@ -647,6 +672,78 @@ pub static HISTORY_PATH: ConfigEntry = ConfigEntry {
           them: a statement refused in parsing, analysis or an access check is not. Writing happens after the result stream \
           ends and never fails the query; a failed write is counted in \
           `krishiv_history_write_failures`. When unset, nothing is stored.",
+    scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
+    version_added: "0.3.0",
+    spark_alias: None,
+};
+
+/// The compute a usage record is billed to (P3 E7).
+pub static COMPUTE_ID: ConfigEntry = ConfigEntry {
+    key: "krishiv.compute.id",
+    value_type: ValueType::String,
+    default: None,
+    doc: "The compute (cluster or warehouse) this engine runtime bills to. Every usage record in the query events carries it as `compute_id`. Unset, it is the host name.",
+    scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
+    version_added: "0.3.0",
+    spark_alias: None,
+};
+
+/// Where the JSON-lines event sink writes (P3 E9).
+pub static EVENTS_FILE_PATH: ConfigEntry = ConfigEntry {
+    key: "krishiv.events.file.path",
+    value_type: ValueType::String,
+    default: None,
+    doc: "A path prefix for the JSON-lines event file: one event per line, schema `krishiv.event.v1`, rotated at `krishiv.events.file.maxBytes`. When unset, no file is written.",
+    scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
+    version_added: "0.3.0",
+    spark_alias: None,
+};
+
+/// Rotation size of the event file (P3 E9).
+pub static EVENTS_FILE_MAX_BYTES: ConfigEntry = ConfigEntry {
+    key: "krishiv.events.file.maxBytes",
+    value_type: ValueType::Size,
+    default: Some(ConfigValue::Size(256 << 20)),
+    doc: "Bytes after which the event file moves on to a new segment.",
+    scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
+    version_added: "0.3.0",
+    spark_alias: None,
+};
+
+/// Segments of the event file kept (P3 E9).
+pub static EVENTS_FILE_MAX_FILES: ConfigEntry = ConfigEntry {
+    key: "krishiv.events.file.maxFiles",
+    value_type: ValueType::PositiveInt,
+    default: Some(ConfigValue::Int(8)),
+    doc: "Event file segments kept; older ones are removed at rotation.",
+    scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
+    version_added: "0.3.0",
+    spark_alias: None,
+};
+
+/// Statement text bound in query events (P3 E9).
+pub static EVENTS_TEXT_MAX_BYTES: ConfigEntry = ConfigEntry {
+    key: "krishiv.events.textMaxBytes",
+    value_type: ValueType::Size,
+    default: Some(ConfigValue::Size(4096)),
+    doc: "Most bytes of statement text a `submitted` event carries, cut at a character boundary. The text is always literal-masked first.",
+    scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
+    version_added: "0.3.0",
+    spark_alias: None,
+};
+
+/// Per-sink queue bound of the query event bus (P3 E9).
+pub static EVENTS_QUEUE_CAPACITY: ConfigEntry = ConfigEntry {
+    key: "krishiv.events.queueCapacity",
+    value_type: ValueType::PositiveInt,
+    default: Some(ConfigValue::Int(10_000)),
+    doc: "Events one event sink may hold waiting for its delivery thread. A full queue drops events (counted in the gauge `krishiv_events_dropped`) and never slows a query.",
     scope: Scope::Cluster,
     settable_by: SettableBy::Startup,
     version_added: "0.3.0",
@@ -1718,6 +1815,23 @@ pub static NDV_SAMPLING_TIMEOUT: ConfigEntry = ConfigEntry {
     scope: Scope::Session,
     settable_by: SettableBy::User,
     version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// Grouping sets aggregate their input before the expansion
+/// (`krishiv.optimizer.preAggregateExpand`).
+pub static PRE_AGGREGATE_EXPAND: ConfigEntry = ConfigEntry {
+    key: "krishiv.optimizer.preAggregateExpand",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(true)),
+    doc: "Where an aggregate reads an expansion (GROUP BY ROLLUP, CUBE and GROUPING SETS, and the \
+          rewrite of several DISTINCT calls), aggregate the input rows into their finest groups before \
+          each row is repeated once per projection, and merge those groups' states per projection. \
+          Only calls whose result cannot depend on row order are moved; it runs with \
+          krishiv.optimizer.eagerAggregation. Results are the same either way.",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
+    version_added: "0.3.0",
     spark_alias: None,
 };
 

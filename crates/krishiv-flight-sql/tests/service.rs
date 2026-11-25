@@ -101,6 +101,8 @@ struct Setup {
     limits: SessionLimits,
     /// The session factory; `role_sessions` when `None`.
     factory: Option<Box<krishiv_connect_server::manager::SessionFactory>>,
+    /// The server's base session (its config is every caller's default); a plain one when `None`.
+    base: Option<Session>,
 }
 
 async fn start_with(config: FlightSqlConfig, setup: Setup) -> Harness {
@@ -109,11 +111,12 @@ async fn start_with(config: FlightSqlConfig, setup: Setup) -> Harness {
         stream_window,
         limits,
         factory,
+        base,
     } = setup;
     let dir = tempfile::tempdir().expect("tempdir");
     let auth = server_auth(dir.path());
     let denials = Arc::new(DeniedCounts::new());
-    let base = Session::new().expect("session");
+    let base = base.unwrap_or_else(|| Session::new().expect("session"));
     let runtime = Arc::clone(base.runtime());
     let factory = match factory {
         Some(f) => f,
@@ -615,6 +618,64 @@ async fn stalled_reader_cancelled_after_idle_timeout() {
             .get("x-krishiv-error-class")
             .and_then(|v| v.to_str().ok()),
         Some("KRISHIV_FLIGHT_SQL_FETCH_IDLE")
+    );
+}
+
+/// The server default `krishiv.query.maxExecutionTime` (the base session's config) cancels a long
+/// fetch: the stream ends with `DEADLINE_EXCEEDED` and the class `KRISHIV_QUERY_TIMEOUT`, and the
+/// session is released (E4).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_statement_past_the_server_time_limit_ends_with_krishiv_query_timeout() {
+    let base = Session::builder()
+        .config("krishiv.query.maxExecutionTime", "200ms")
+        .build()
+        .expect("session");
+    let mut h = start_with(
+        FlightSqlConfig {
+            encode: krishiv_flight_sql::EncodeLimits {
+                batch_bytes: 64 << 10,
+                data_bytes: 16 << 10,
+            },
+            ..FlightSqlConfig::default()
+        },
+        Setup {
+            base: Some(base),
+            ..Setup::default()
+        },
+    )
+    .await;
+    let (info, _) = info(
+        &mut h,
+        OPS,
+        None,
+        "SELECT id, id * 2 AS d FROM range(0, 2000000000)",
+    )
+    .await
+    .expect("info");
+    // The limit starts when the query attaches, which may be during `do_get` setup: the timeout can
+    // come from the call itself or from the stream. The whole operation is bounded: a read that stays
+    // pending fails the test instead of hanging it.
+    let end = tokio::time::timeout(Duration::from_secs(30), async {
+        let mut stream = match h.client.do_get(authed(ticket(&info), OPS, None)).await {
+            Ok(r) => r.into_inner(),
+            Err(status) => return status,
+        };
+        loop {
+            match stream.message().await {
+                Ok(Some(_)) => {}
+                Ok(None) => panic!("the stream finished instead of timing out"),
+                Err(status) => break status,
+            }
+        }
+    })
+    .await
+    .expect("the statement never timed out");
+    assert_eq!(end.code(), Code::DeadlineExceeded, "{end:?}");
+    assert_eq!(
+        end.metadata()
+            .get("x-krishiv-error-class")
+            .and_then(|v| v.to_str().ok()),
+        Some("KRISHIV_QUERY_TIMEOUT")
     );
 }
 
@@ -1912,4 +1973,162 @@ async fn list_actions_names_the_served_actions() {
         ]
     );
     assert_eq!(h.flight.session_count(), 0);
+}
+
+/// `authed` with a W3C `traceparent` header.
+fn traced<T>(message: T, token: &str, cookie: Option<&str>, traceparent: &str) -> Request<T> {
+    let mut r = authed(message, token, cookie);
+    r.metadata_mut()
+        .insert("traceparent", traceparent.parse().expect("header"));
+    r
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_requests_traceparent_names_the_trace_of_its_query_and_update() {
+    let mut h = start(FlightSqlConfig::default()).await;
+    let trace = "4bf92f3577b34da6a3ce929d0e0e4736";
+    let header = format!("00-{trace}-00f067aa0ba902b7-01");
+    // A query: only the DoGet header names its trace (the GetFlightInfo classification runs nothing).
+    let cmd = CommandStatementQuery {
+        query: "SELECT 41 AS traced_query".to_owned(),
+        transaction_id: None,
+    };
+    let descriptor = FlightDescriptor::new_cmd(cmd.as_any().encode_to_vec());
+    let response = h
+        .client
+        .get_flight_info(traced(descriptor, OPS, None, &header))
+        .await
+        .expect("info");
+    let cookie = set_cookie(response.metadata()).expect("cookie");
+    let t = ticket(&response.into_inner());
+    let stream = h
+        .client
+        .do_get(traced(t, OPS, Some(&cookie), &header))
+        .await
+        .expect("do_get");
+    let data = stream
+        .into_inner()
+        .map_err(|s| FlightError::Tonic(Box::new(s)));
+    let batches: Vec<RecordBatch> = FlightRecordBatchStream::new_from_flight_data(data)
+        .try_collect()
+        .await
+        .expect("fetch");
+    assert_eq!(rows(&batches), 1);
+    // A command run by GetFlightInfo (a `SET` sent as a statement query) takes the header there.
+    let set = CommandStatementQuery {
+        query: "SET spark.sql.shuffle.partitions=4".to_owned(),
+        transaction_id: None,
+    };
+    h.client
+        .get_flight_info(traced(
+            FlightDescriptor::new_cmd(set.as_any().encode_to_vec()),
+            OPS,
+            Some(&cookie),
+            &header,
+        ))
+        .await
+        .expect("command info");
+    // An update.
+    updates::update_with_trace(
+        &mut h,
+        OPS,
+        &cookie,
+        "SET spark.sql.shuffle.partitions=3",
+        &header,
+    )
+    .await
+    .expect("update");
+    // A non-ASCII header is no header: the query runs, with no trace.
+    let mut odd = authed(
+        FlightDescriptor::new_cmd(
+            CommandStatementQuery {
+                query: "SELECT 43 AS odd_header".to_owned(),
+                transaction_id: None,
+            }
+            .as_any()
+            .encode_to_vec(),
+        ),
+        OPS,
+        Some(&cookie),
+    );
+    let mut headers = std::mem::take(odd.metadata_mut()).into_headers();
+    headers.insert(
+        "traceparent",
+        tonic::codegen::http::HeaderValue::from_bytes(b"00-ab\xe9-00f067aa0ba902b7-01")
+            .expect("opaque bytes"),
+    );
+    *odd.metadata_mut() = tonic::metadata::MetadataMap::from_headers(headers);
+    let response = h.client.get_flight_info(odd).await.expect("info");
+    // The executing DoGet carries the same opaque header: the extraction on the path that runs
+    // the query is what is exercised.
+    let mut get = authed(ticket(&response.into_inner()), OPS, Some(&cookie));
+    let mut headers = std::mem::take(get.metadata_mut()).into_headers();
+    headers.insert(
+        "traceparent",
+        tonic::codegen::http::HeaderValue::from_bytes(b"00-ab\xe9-00f067aa0ba902b7-01")
+            .expect("opaque bytes"),
+    );
+    *get.metadata_mut() = tonic::metadata::MetadataMap::from_headers(headers);
+    let stream = h.client.do_get(get).await.expect("do_get");
+    let data = stream
+        .into_inner()
+        .map_err(|s| FlightError::Tonic(Box::new(s)));
+    let _rows: Vec<RecordBatch> = FlightRecordBatchStream::new_from_flight_data(data)
+        .try_collect()
+        .await
+        .expect("fetch");
+    // A query without the header has no trace.
+    let (plain, _) = info(&mut h, OPS, Some(&cookie), "SELECT 42 AS plain_query")
+        .await
+        .expect("info");
+    fetch(&mut h, OPS, Some(&cookie), ticket(&plain))
+        .await
+        .expect("fetch");
+    let (look, _) = info(
+        &mut h,
+        OPS,
+        Some(&cookie),
+        "SELECT query_text, trace_id FROM system.queries \
+         WHERE query_text LIKE 'SELECT 4_ AS %' OR query_text LIKE 'SET spark.sql.shuffle%'",
+    )
+    .await
+    .expect("info");
+    let seen = fetch(&mut h, OPS, Some(&cookie), ticket(&look))
+        .await
+        .expect("fetch");
+    let mut by_text = std::collections::BTreeMap::new();
+    for b in &seen {
+        let text = b
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("text");
+        let id = b
+            .column(1)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("trace");
+        for i in 0..b.num_rows() {
+            by_text
+                .entry(text.value(i).to_owned())
+                .or_insert_with(Vec::new)
+                .push((!arrow_array::Array::is_null(id, i)).then(|| id.value(i).to_owned()));
+        }
+    }
+    assert_eq!(
+        by_text.get("SELECT 41 AS traced_query"),
+        Some(&vec![Some(trace.to_owned())]),
+        "one row, in the request's trace"
+    );
+    assert_eq!(
+        by_text.get("SET spark.sql.shuffle.partitions=3"),
+        Some(&vec![Some(trace.to_owned())])
+    );
+    assert_eq!(
+        by_text.get("SET spark.sql.shuffle.partitions=4"),
+        Some(&vec![Some(trace.to_owned())]),
+        "a command run by GetFlightInfo"
+    );
+    assert_eq!(by_text.get("SELECT 42 AS plain_query"), Some(&vec![None]));
+    assert_eq!(by_text.get("SELECT 43 AS odd_header"), Some(&vec![None]));
 }

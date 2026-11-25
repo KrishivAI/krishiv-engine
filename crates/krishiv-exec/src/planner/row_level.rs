@@ -15,6 +15,7 @@ use std::sync::Arc;
 use arrow_array::RecordBatch;
 use arrow_schema::{DataType, Field, FieldRef, Schema, SchemaRef};
 use futures::future::BoxFuture;
+use krishiv_common::error::KrishivError;
 use krishiv_io::{ColumnPath, FilterId};
 use krishiv_plan::Expr;
 use krishiv_types::batch::Batch;
@@ -68,6 +69,9 @@ pub struct RowLevelCapabilities {
     /// Changed rows can be recorded as deletes (Delta deletion vectors, Iceberg position deletes)
     /// instead of rewriting their files.
     pub merge_on_read: bool,
+    /// The table's commit records the write's `krishiv.write.idempotencyKey` and a commit whose key
+    /// the snapshot already has writes nothing (E34); a table without it refuses a key.
+    pub idempotent_commit: bool,
     /// `MERGE`'s multiple-match check.
     pub cardinality: CardinalityRule,
 }
@@ -78,6 +82,7 @@ impl RowLevelCapabilities {
     pub fn copy_on_write(cardinality: CardinalityRule) -> Self {
         Self {
             merge_on_read: false,
+            idempotent_commit: false,
             cardinality,
         }
     }
@@ -149,6 +154,52 @@ impl RowLevelWrite {
             write_id: None,
         }
     }
+}
+
+/// A problem a row-level statement found, for the table to raise in its own terms
+/// ([`RowLevelTable::error`]): a table format may raise its own classes where Spark's
+/// analyzer would raise another (delta-spark's `DELTA_*` classes).
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum RowLevelProblem<'a> {
+    /// A name of the statement that does not resolve: the analyzer's error.
+    Unresolved(&'a KrishivError),
+    /// A non-deterministic condition: `what` names it as delta-spark does (`search condition`,
+    /// `DELETE condition`), `condition` is its text as written.
+    NonDeterministic {
+        /// The condition's role.
+        what: &'a str,
+        /// The condition as written.
+        condition: &'a str,
+    },
+    /// A condition holding a subquery.
+    Subquery {
+        /// The condition's role.
+        what: &'a str,
+        /// The condition as written.
+        condition: &'a str,
+    },
+    /// A `MERGE` `UPDATE` clause sets a column twice: the repeated keys as written, in order
+    /// (Spark's `DUPLICATE_ASSIGNMENTS` by default).
+    DuplicateAssignment {
+        /// The repeated keys.
+        columns: &'a [String],
+    },
+    /// A `MERGE` `INSERT` clause names a column twice (refused by default).
+    DuplicateInsertColumn,
+    /// An error raised while the rewrite ran: `overflow` is the assigned column whose
+    /// store-assignment cast can overflow, when the error is arithmetic (SQLSTATE 22003 or
+    /// 22012).
+    WriteFailed {
+        /// The error as it came.
+        error: &'a KrishivError,
+        /// The column, the new value's type and the column's type.
+        overflow: Option<(
+            &'a str,
+            &'a krishiv_types::DataType,
+            &'a krishiv_types::DataType,
+        )>,
+    },
 }
 
 impl RowLevelWrite {
@@ -231,6 +282,15 @@ pub trait RowLevelTable: Send + Sync + fmt::Debug {
     /// for a v2 table.
     fn output(&self, counts: &RowLevelCounts) -> Option<RecordBatch> {
         let _ = counts;
+        None
+    }
+
+    /// The error the table raises for `problem` of `op`; `None` leaves the planner's own
+    /// (Spark's): the analyzer's error, the rewrite's error as it came, a refusal of a
+    /// non-deterministic condition and of a `MERGE` condition with a subquery (a subquery in a
+    /// `DELETE` or `UPDATE` condition runs).
+    fn error(&self, op: RowLevelOperation, problem: &RowLevelProblem<'_>) -> Option<KrishivError> {
+        let _ = (op, problem);
         None
     }
 }

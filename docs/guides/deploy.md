@@ -36,7 +36,8 @@ not print the derived value. `EXPLAIN ANALYZE` prints the limit the query ran un
 The 0.2.0 command line has no `server` subcommand: it lists only `sql` and `debug-bundle`. In builds after 0.2.0,
 `krishiv server` (a binary built with the `server` feature) starts one process that serves Spark Connect, by default on
 `127.0.0.1` port `15002` (`--connect-port`, `krishiv.connect.port`), and the admin API on port `8080` (`--port`).
-Settings are given as `--conf KEY=VALUE`. See [configuration](../reference/config/index.md) and
+Settings are given as `--conf KEY=VALUE`. The server is standalone: one process plans and runs every query
+itself, and there is no coordinator or worker mode yet (see [distributed](#distributed)). See [configuration](../reference/config/index.md) and
 [known differences](../concepts/known-differences.md#krishiv-server-spark-connect).
 
 ```bash
@@ -114,10 +115,16 @@ spark.stop()             # the console stops with the session
 what its holder sees (the table in [single-node server security](single-node-server-security.md)): an operator
 sees and cancels every query and runs SQL as the signed-in user in a session of its own, and only an administrator
 opens Environment, where secrets show as `***`. The History page filters by state, principal, client (any part of
-the name a client reports, such as `python`), tag (`team` or `team=risk`) and session; the Queries page has one
-filter box over the running queries (principal, client, tag, text or id). A client chooses its operation ids, so
+the name a client reports, such as `python`), tag (`team` or `team=risk`), session and statement (any part of the
+SQL as the list shows it, in either case; literals are masked there, so a literal's value finds nothing); the
+Queries page has one filter box over the running queries (principal, client, tag, text or id). A statement run
+from the console's SQL editor is listed with its SQL like any other. A client chooses its operation ids, so
 two sessions can run queries under one id: a query's link and its **Cancel** carry the row's session
-(`/queries/<id>?session=<session id>`), and Cancel ends that session's query only.
+(`/queries/<id>?session=<session id>`), and Cancel ends that session's query only. Operator metrics and the
+stored plan are kept by query id alone, so a query's page (and a signed link to it) shows neither while another
+session has a query under the same id. A statement that writes (`INSERT`) is listed as the run that wrote, with
+its SQL; reading its empty result afterwards is a second run with no SQL. A DataFrame built from two statements
+(a `union` of two `sql` results) is listed under the first one's SQL.
 
 The Sessions page lists the sessions of every client: who opened each, with which client and over which protocol,
 its current catalog and namespace, when it was last active and how many queries it runs and has started (the
@@ -150,8 +157,15 @@ krishiv server --port 8080 --conf krishiv.history.path=/var/lib/krishiv/history
 the History page and each query's page, nothing live and nothing to cancel. Use it to read the profiles of a
 server that is stopped, or a folder copied from another machine.
 
-Not in the console yet: Resources does not list UDF worker pools.
+**Python UDF workers.** On a server, Resources also lists the Python UDF worker processes: how many run and how
+many of them are busy, against `krishiv.python.worker.maxTotal`, and one row per session that has a worker, with
+its principal and tenant: the 500 sessions with the most workers, and a note when there are more. A session runs
+at most `krishiv.python.worker.maxPerSession` workers and a tenant `krishiv.python.worker.maxPerTenant`; with
+authentication on, that limit also holds for a principal without a tenant (with it off, only the first two
+limits apply). A worker starts with a session's first Python UDF call and stops after it
+has been idle for `krishiv.python.worker.idleTimeout`, so an idle server lists none. The list is read-only.
 
 ## Distributed
 
-A scheduler and workers run one query across machines. It is in development; the mode is not available yet.
+A scheduler and workers run one query across machines. It is in development; the mode is not available yet, and
+`krishiv server` has no setting or subcommand that selects a coordinator or worker role.

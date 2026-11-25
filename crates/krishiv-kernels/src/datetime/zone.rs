@@ -165,6 +165,27 @@ impl TimeZoneRules for ZoneRef {
 }
 
 impl ZoneRef {
+    /// Whether local date-times in this zone never run backwards: no transition
+    /// lowers the offset (a DST fallback or a move west repeats local times).
+    /// Spark's `TIMESTAMP` subtraction takes the local date-times in the session
+    /// zone, so only here does its order follow the instants' order. A fixed
+    /// offset always does. The scan stops at the first lowering transition, and a
+    /// zone with only raising ones has finitely many (a recurring rule lowers too).
+    #[must_use]
+    pub fn local_time_is_monotonic(&self) -> bool {
+        let Self::Named(zone) = self else {
+            return true;
+        };
+        let mut offset = zone.to_offset(Timestamp::MIN);
+        for transition in zone.following(Timestamp::MIN) {
+            if transition.offset() < offset {
+                return false;
+            }
+            offset = transition.offset();
+        }
+        true
+    }
+
     /// `java.util.TimeZone`'s raw (standard) offset at `utc_seconds`, which
     /// the legacy parser adds a zone name's saving to: the smallest of the
     /// offset then and the offsets of the periods just before and after it
@@ -518,6 +539,24 @@ mod tests {
         let pst = resolve_zone("PST").expect("PST");
         assert_eq!(pst.offset_at_utc(1_700_000_000), -28_800);
         assert_eq!(pst.offset_at_utc(1_715_000_000), -25_200);
+    }
+
+    /// Fixed offsets (and `Etc/GMT+5`, a region without transitions) keep local
+    /// time in instant order; New York's fallback and Kolkata's 1945 move west
+    /// repeat local times.
+    #[test]
+    fn local_time_runs_backwards_only_where_an_offset_drops() {
+        for (text, monotonic) in [
+            ("UTC", true),
+            ("+05:30", true),
+            ("Etc/GMT+5", true),
+            ("America/New_York", false),
+            ("PST", false),
+            ("Asia/Kolkata", false),
+        ] {
+            let zone = resolve_zone(text).expect(text);
+            assert_eq!(zone.local_time_is_monotonic(), monotonic, "{text}");
+        }
     }
 
     /// The legacy offset switches to the raw (modern standard) offset only

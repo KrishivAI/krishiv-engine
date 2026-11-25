@@ -168,12 +168,33 @@ pub(crate) fn session_cookie_name(headers: &HeaderMap) -> String {
     }
 }
 
+/// Gives a request without a `Host` header one from the authority of its URI. An HTTP/2 request names the server
+/// in `:authority` (which arrives as the URI's authority) and carries no `Host`, and a browser speaks HTTP/2 to a
+/// TLS listener: without this the host check, the same-origin check and the cookie's name would see no name at
+/// all. Only the host and the port are taken (no user information).
+fn name_by_authority(req: &mut axum::extract::Request) {
+    if req.headers().contains_key(header::HOST) {
+        return;
+    }
+    let Some(authority) = req.uri().authority() else {
+        return;
+    };
+    let name = match authority.port_u16() {
+        Some(port) => format!("{}:{port}", authority.host()),
+        None => authority.host().to_owned(),
+    };
+    if let Ok(v) = HeaderValue::from_str(&name) {
+        req.headers_mut().insert(header::HOST, v);
+    }
+}
+
 /// The host check and the same-origin check, before any route (and so before any token check) of the API.
 pub(crate) async fn host_guard(
     State(s): State<UiState>,
-    req: axum::extract::Request,
+    mut req: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> Response {
+    name_by_authority(&mut req);
     let host = req
         .headers()
         .get(header::HOST)
@@ -308,10 +329,11 @@ pub(crate) async fn environment(State(s): State<UiState>) -> Response {
 }
 
 /// `POST /api/internal/sql`: starts a statement; the body is `{"sql": "..."}`.
-#[utoipa::path(post, path = "/api/internal/sql", request_body = SqlRequest, responses((status = 202, description = "Started", body = SqlStarted)))]
+#[utoipa::path(post, path = "/api/internal/sql", request_body = SqlRequest, params(("traceparent" = Option<String>, Header, description = "W3C trace context; the statement joins this trace"), ("baggage" = Option<String>, Header, description = "W3C baggage")), responses((status = 202, description = "Started", body = SqlStarted)))]
 pub(crate) async fn sql_start(
     State(s): State<UiState>,
     caller: Option<Extension<Caller>>,
+    headers: HeaderMap,
     body: String,
 ) -> Response {
     let sql = serde_json::from_str::<Value>(&body)
@@ -333,7 +355,11 @@ pub(crate) async fn sql_start(
     }
     match s
         .source
-        .sql_start(&sql, caller.as_ref().map(|c| &c.0))
+        .sql_start_traced(
+            &sql,
+            caller.as_ref().map(|c| &c.0),
+            &crate::internal::InboundTrace::from_headers(&headers),
+        )
         .await
     {
         Ok(id) => json_response(StatusCode::ACCEPTED, &json!({"run_id": id})),

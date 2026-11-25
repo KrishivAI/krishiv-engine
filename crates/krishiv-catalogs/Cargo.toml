@@ -31,9 +31,11 @@ iceberg-rest = [
 session = [
     "iceberg-rest",
     "dep:krishiv-session",
+    "dep:krishiv-sql",
     "dep:krishiv-plan",
     "dep:krishiv-exec",
     "dep:krishiv-connectors-iceberg",
+    "dep:async-trait",
     "tokio/rt",
 ]
 # The Unity Catalog read-only client (async reqwest over rustls on a thread of its own, every request on krishiv-store's
@@ -51,6 +53,10 @@ unity = [
     "dep:krishiv-store",
     "krishiv-store/cloud",
 ]
+
+# Test helpers for other crates' tests (`testing::serve_s3`, a loopback S3 stand-in, and `write_s3_table`).
+# Never in a product build.
+testing = ["session", "krishiv-connectors-iceberg/testing"]
 
 # The AWS Glue Data Catalog read-only client (JSON API over async reqwest, signed with SigV4 on `sha2`; no AWS SDK).
 # Off by default; shares no code with `iceberg-rest` or `unity`.
@@ -82,7 +88,11 @@ krishiv-exec = { path = "../krishiv-exec", version = "=0.2.1", optional = true }
 krishiv-connectors-iceberg = { path = "../krishiv-connectors-iceberg", version = "=0.2.1", optional = true }
 # The `CatalogFactory` trait and the declarations it builds from (feature `session`).
 krishiv-session = { path = "../krishiv-session", version = "=0.2.1", optional = true }
+krishiv-sql = { path = "../krishiv-sql", version = "=0.2.1", optional = true }
 tracing.workspace = true
+# The vended-credential source of a declared table (`krishiv-store`'s `CredentialSource`) and the
+# connector's async `RestCommitTransport` trait, implemented by a declared table's committer (feature `session`).
+async-trait = { workspace = true, optional = true }
 thrift = { workspace = true, optional = true }
 tokio = { workspace = true, features = ["rt"], optional = true }
 reqwest = { workspace = true, features = ["rustls"], optional = true }

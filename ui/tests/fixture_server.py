@@ -53,6 +53,8 @@ CSP = (
 EMBED_PARENT = "http://parent.test"
 # Framed by the page's CSP but absent from the allowed origins: its theme messages must be ignored.
 EMBED_OTHER = "http://other.test"
+# The session a signed link of the embed check names (a space: the page must encode it).
+EMBED_SESSION = "s 1"
 # The paths the page serves as deep links (routes.json); the page itself is `index.html`.
 DEEP_LINKS = (
     "health",
@@ -207,6 +209,32 @@ def group(group_id: str, parent: str | None, **over: object) -> dict:
     } | over
 
 
+# A server's Python UDF worker pool (`/api/internal/udf-workers`): the owners with the most workers first.
+UDF_POOL = {
+    "live": 5,
+    "busy": 3,
+    "max_total": 64,
+    "max_per_session": 4,
+    "max_per_tenant": 32,
+    "owners": [
+        {
+            "principal": "etl-nightly",
+            "session_id": "5d0c7a52-etl",
+            "tenant": "acme",
+            "live": 4,
+            "busy": 3,
+        },
+        {
+            "principal": "ana",
+            "session_id": "9f31b0c4-ana",
+            "tenant": None,
+            "live": 1,
+            "busy": 0,
+        },
+    ],
+    "truncated": False,
+}
+
 # A server's partition advice (`/api/internal/advice`): one entry a table, its suggestions by rank.
 ADVICE = [
     {
@@ -329,6 +357,8 @@ Q9_ID = "01932a40-1a00-7a01-8001-000000000009"
 # A query whose plan arrives with the third answer; the count of answers so far.
 LATE_PLAN_ID = "01932a40-1a00-7a01-8001-00000000000b"
 LATE_PLAN_ASKED = [0]
+# A query another session also ran under the same id: the fixture answers with no operators and no plan.
+SHARED_ID = "01932a40-1a00-7a01-8001-00000000000c"
 # A query the fixture answers with no plan tree.
 NO_PLAN_ID = "01932a40-1a00-7a01-8001-00000000000a"
 NO_PLAN_ASKED = [0]
@@ -359,20 +389,65 @@ PROFILES_ROUTES = (
 
 def history(query: str) -> list[dict]:
     """The history under the page's filters, as `krishiv_server::internal` applies them: any part of the client's
-    name, a tag by its key or as `key=value`."""
+    name, a tag by its key or as `key=value`, any part of the statement (either case)."""
     asked = {k: v[0] for k, v in parse_qs(query).items()}
     client, tag = asked.get("client", "").lower(), asked.get("tag", "")
     session = asked.get("session", "")
+    statement = asked.get("text", "").lower()
     return [
         q
         for q in DATA["history"]
         if client in (q.get("client_type") or "").lower()
         and (not session or q.get("session_id") == session)
+        and statement in (q.get("query_text") or "").lower()
         and (
             not tag
             or any(tag in (k, f"{k}={v}") for k, v in (q.get("tags") or {}).items())
         )
     ]
+
+
+COMPARED = (
+    "wall_ns",
+    "cpu_ns",
+    "peak_memory_bytes",
+    "rows_produced",
+    "bytes_read",
+    "spill_bytes",
+)
+
+
+def compare(query: str) -> tuple[int, dict]:
+    """Two runs of the history side by side, as `krishiv_server::internal` answers `/api/internal/compare`: each
+    run is picked by its id and, when the request names one, its session; the change is listed for the numbers
+    both runs have. A session that is named but empty is refused, and a run that is not there is a 404."""
+    asked = parse_qs(query, keep_blank_values=True)
+    runs = []
+    for side in ("a", "b"):
+        session = asked.get(f"{side}_session")
+        if session == [""]:
+            return 400, {"error": "bad_request"}
+        run = next(
+            (
+                q
+                for q in DATA["history"]
+                if [q["query_id"]] == asked.get(side)
+                and (session is None or [q.get("session_id")] == session)
+            ),
+            None,
+        )
+        if run is None:
+            return 404, {
+                "error": "no_such_query",
+                "message": "one of the queries is not in the history",
+            }
+        runs.append(run)
+    delta = {
+        k: runs[1][k] - runs[0][k]
+        for k in COMPARED
+        if isinstance(runs[0].get(k), int) and isinstance(runs[1].get(k), int)
+    }
+    return 200, {"a": runs[0], "b": runs[1], "delta": delta}
 
 
 def stored_detail(query_id: str, profile: dict, sql: str) -> dict:
@@ -449,6 +524,9 @@ def route(
         return {"groups": groups or []}
     if path == "/api/internal/advice" and mode == "server":
         return {"tables": advice or [], "truncated": False}
+    # The worker pool too: a console over one session has none.
+    if path == "/api/internal/udf-workers":
+        return {"pool": UDF_POOL if mode == "server" else None}
     if path == "/api/internal/environment":
         return ENVIRONMENT if role == "admin" else None
     if path == "/api/internal/catalog/catalogs":
@@ -480,6 +558,14 @@ def route(
         # trimmed out of it): the page is told not to wait.
         NO_PLAN_ASKED[0] += 1
         return d["detail"] | {"plan": None, "plan_pending": False}
+    if path == f"/api/internal/queries/{SHARED_ID}":
+        return d["detail"] | {
+            "operators": [],
+            "hot_operator": None,
+            "plan": None,
+            "plan_pending": False,
+            "operators_withheld": True,
+        }
     if path == f"/api/internal/queries/{LATE_PLAN_ID}":
         # A query that has just ended: its profile is written a moment later, so the first answers carry no
         # plan and a later one does.
@@ -535,7 +621,16 @@ class Handler(BaseHTTPRequestHandler):
                 200, {"allowed_origins": [EMBED_PARENT], "hide_attribution": False}
             )
         if url.path.startswith("/api/internal/embed/queries/"):
-            if "sig=ok" not in url.query:
+            # Blank values are kept: `session=` names a session (an empty one), which no link was signed for.
+            asked = parse_qs(url.query, keep_blank_values=True)
+            # `ok` is a link for the id alone; `ok-session` was signed for EMBED_SESSION, as the server signs a
+            # link that names a session, so the read must name it too.
+            valid = asked.get("sig") == ["ok"] and "session" not in asked
+            valid = valid or (
+                asked.get("sig") == ["ok-session"]
+                and asked.get("session") == [EMBED_SESSION]
+            )
+            if not valid:
                 return self.send_json(401, {"error": "unauthorized"})
             return self.send_json(200, DATA["detail"])
         if url.path.startswith("/api/internal/"):
@@ -587,6 +682,9 @@ class Handler(BaseHTTPRequestHandler):
                         "message": "the principal's role does not allow this",
                     },
                 )
+            if url.path == "/api/internal/compare":
+                self.server.compares.append(url.query)  # type: ignore[attr-defined]
+                return self.send_json(*compare(url.query))
             body = route(
                 url.path,
                 self.mode,
@@ -731,7 +829,7 @@ def serve(
     `asked` collects the `/api/internal/*` paths pages requested. The first `health_failures` requests for the
     health answer 503, as a console that is let in before its server can answer. Each server has its own
     sessions (`closed` collects the ids of the ones a page ended); without `groups` it is a server started
-    with no resource-group file, without `advice` one whose history has none. `query_reads` and `cancels`
+    with no resource-group file, without `advice` one whose history has none. `query_reads`, `compares` and `cancels`
     collect the addresses, parameters included, a page read a query's detail from and cancelled a query at."""
     if mode not in MODES:
         raise ValueError(f"mode must be one of {MODES}, got {mode!r}")
@@ -745,6 +843,7 @@ def serve(
     server.groups = GROUPS if groups else []  # type: ignore[attr-defined]
     server.advice = ADVICE if advice else []  # type: ignore[attr-defined]
     server.query_reads = []  # type: ignore[attr-defined]
+    server.compares = []  # type: ignore[attr-defined]
     server.cancels = []  # type: ignore[attr-defined]
     return server
 
