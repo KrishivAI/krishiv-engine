@@ -16,14 +16,10 @@ permissions:
   contents: read
 
 jobs:
-  test:
-    name: install script (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
+  linux:
+    name: install script (ubuntu-24.04)
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-24.04, macos-15]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -33,7 +29,20 @@ jobs:
       - name: Tests (bash, POSIX mode)
         run: bash --posix tests/scripts/install_test.sh
       - name: Tests (dash)
-        if: runner.os == 'Linux'
         run: dash tests/scripts/install_test.sh
+      - name: shellcheck
+        run: shellcheck scripts/install.sh tests/scripts/install_test.sh
+  macos:
+    name: install script (macos-15)
+    runs-on: macos-15
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Tests (platform sh)
+        run: sh tests/scripts/install_test.sh
+      - name: Tests (bash, POSIX mode)
+        run: bash --posix tests/scripts/install_test.sh
       - name: shellcheck
         run: shellcheck scripts/install.sh tests/scripts/install_test.sh
