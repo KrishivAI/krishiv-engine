@@ -31,6 +31,7 @@ use arrow_array::{Array, ArrayRef, Float32Array, Int32Array, RecordBatch};
 use arrow_schema::{DataType, Field, Schema};
 use futures::executor::block_on;
 use krishiv_common::error::{ErrorClass, KrishivError};
+use krishiv_plan::analyzer::SparkProfile;
 use krishiv_session::Session;
 
 type R<T = ()> = Result<T, Box<dyn std::error::Error>>;
@@ -199,7 +200,14 @@ const REGRESSION: [[Option<i32>; 3]; 6] = [
 ];
 
 fn session() -> R<Session> {
-    let s = Session::new()?;
+    with_tables(Session::new()?)
+}
+
+fn session_on(profile: SparkProfile) -> R<Session> {
+    with_tables(Session::builder().profile(profile).build()?)
+}
+
+fn with_tables(s: Session) -> R<Session> {
     let rows: Vec<&[Option<i32>]> = TEST_DATA.iter().map(|r| &r[..]).collect();
     table(&s, "testData", &["a", "b"], &rows)?;
     let rows: Vec<&[Option<i32>]> = REGRESSION.iter().map(|r| &r[..]).collect();
@@ -428,7 +436,9 @@ fn corr_of_a_constant_column_follows_ansi() -> R {
     // Oracle: on a Spark 4.2.0 server this query returns NULL with
     // `spark.sql.ansi.enabled=false` and fails with DIVIDE_BY_ZERO with it
     // true, for `spark.sql.legacy.statisticalAggregate` false and true alike.
-    let s = session()?;
+    // From 4.3 (SPARK-58213, the 4.3.0 `linear-regression` golden) it is NULL
+    // with ANSI on too.
+    let s = session_on(SparkProfile::V4_2)?;
     // `a` is 3 in every row of the filtered input, `b` varies.
     let q = "SELECT corr(a, b) FROM testData WHERE a = 3 AND b IS NOT NULL";
     for legacy in ["false", "true"] {
@@ -440,6 +450,14 @@ fn corr_of_a_constant_column_follows_ansi() -> R {
         s.conf().set("spark.sql.ansi.enabled", "true")?;
         let e = run(&s, q).expect_err("DIVIDE_BY_ZERO under ANSI");
         assert_eq!(e.error_class(), ErrorClass::DivideByZero, "legacy={legacy}");
+    }
+    let s = session_on(SparkProfile::V4_3)?;
+    for legacy in ["false", "true"] {
+        s.conf()
+            .set("spark.sql.legacy.statisticalAggregate", legacy)?;
+        s.conf().set("spark.sql.ansi.enabled", "true")?;
+        let (schema, batches) = run(&s, q)?;
+        assert_eq!(render(&schema, &batches).1, ["NULL"], "legacy={legacy}");
     }
     Ok(())
 }
