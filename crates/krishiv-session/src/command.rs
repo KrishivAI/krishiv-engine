@@ -1537,7 +1537,8 @@ impl Session {
             // Not a SQL function of the catalog: a persisted Python UDF of the same name.
             if in_catalog {
                 true
-            } else if let Some(hook) = self.persisted_functions()
+            } else if f.name.parts.len() == 1
+                && let Some(hook) = self.persisted_functions()
                 && hook.exists(self, &part.value).await?
             {
                 hook.remove(self, &part.value).await?;

@@ -108,12 +108,14 @@ pub(super) async fn render(df: &DataFrame, request: &Request) -> Result<String, 
         });
     }
     let mut rows: Vec<Vec<String>> = Vec::new();
-    if !exprs.is_empty() {
-        let mut stream = df
-            .limit(limit)
-            .select_expr(&exprs)?
-            .execute_stream_boxed()
-            .await?;
+    {
+        // An input with no columns still has rows to count.
+        let limited = df.limit(limit);
+        let mut stream = if exprs.is_empty() {
+            limited.execute_stream_boxed().await?
+        } else {
+            limited.select_expr(&exprs)?.execute_stream_boxed().await?
+        };
         while let Some(batch) = stream.next().await {
             let batch = batch?;
             for r in 0..batch.num_rows() {
@@ -176,7 +178,7 @@ fn pretty(expr: &str, dt: &DataType, depth: usize) -> String {
         | DataType::LargeBinary
         | DataType::BinaryView
         | DataType::FixedSizeBinary(_) => format!(
-            "concat('[', concat_ws(' ', transform(sequence(1, length({expr})), b{depth} -> hex(substring({expr}, b{depth}, 1)))), ']')"
+            "CASE WHEN length({expr}) = 0 THEN '[]' ELSE concat('[', concat_ws(' ', transform(sequence(1, length({expr})), b{depth} -> hex(substring({expr}, b{depth}, 1)))), ']') END"
         ),
         _ => format!("CAST({expr} AS STRING)"),
     };

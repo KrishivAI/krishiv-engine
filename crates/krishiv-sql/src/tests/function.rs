@@ -531,10 +531,24 @@ fn a_persisted_python_function_parses_as_its_own_statement() {
     assert!(f.or_replace && !f.if_not_exists);
     assert_eq!(f.registered, "g");
     // A temporary one, or another class, is still the JVM refusal.
-    for text in [
-        "CREATE TEMPORARY FUNCTION f AS 'python' USING PYTHON 'g'",
-        "CREATE FUNCTION f AS 'com.example.F' USING PYTHON 'g'",
+    for (text, class) in [
+        (
+            "CREATE TEMPORARY FUNCTION f AS 'python' USING PYTHON 'g'",
+            ErrorClass::KrishivJvmFunctionUnsupported,
+        ),
+        (
+            "CREATE FUNCTION f AS 'com.example.F' USING PYTHON 'g'",
+            ErrorClass::ParseSyntaxError,
+        ),
     ] {
-        assert!(parse_statement(text, &options).is_err(), "{text}");
+        let e = parse_statement(text, &options).expect_err(text);
+        assert_eq!(e.error.error_class(), class, "{text}");
     }
+    // OR REPLACE with IF NOT EXISTS is Spark's own refusal for a routine.
+    let text = "CREATE OR REPLACE FUNCTION IF NOT EXISTS f AS 'python' USING PYTHON 'g'";
+    let e = parse_statement(text, &options).expect_err(text);
+    assert_eq!(
+        e.error.error_class(),
+        ErrorClass::InvalidSqlSyntaxCreateRoutineWithIfNotExistsAndReplace
+    );
 }

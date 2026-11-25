@@ -59,6 +59,9 @@ impl Parser<'_> {
                 }
                 let span = p.span_from(start);
                 p.command_end()?;
+                if registered.is_some() && !temporary && if_not_exists && or_replace {
+                    return Self::fatal(error::create_routine_with_if_not_exists_and_replace(span));
+                }
                 if let (Some(registered), false) = (registered, temporary) {
                     return Ok(Statement::CreatePersistedFunction(
                         CreatePersistedFunction {

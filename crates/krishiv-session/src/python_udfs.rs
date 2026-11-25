@@ -881,7 +881,15 @@ mod tests {
 
         run("DROP FUNCTION f").unwrap();
         assert!(hook.0.lock().unwrap().is_empty());
-        assert!(run("DROP FUNCTION f").is_err());
+        let err = run("DROP FUNCTION f").unwrap_err();
+        assert!(err.to_string().contains("ROUTINE_NOT_FOUND"), "{err}");
+        // A qualified name never reaches the persisted-function hook.
+        let before = hook.0.lock().unwrap().len();
+        run("CREATE FUNCTION f AS 'python' USING PYTHON 'f'").unwrap();
+        let err = run("DROP FUNCTION other.f").unwrap_err();
+        assert!(err.to_string().contains("ROUTINE_NOT_FOUND"), "{err}");
+        assert_eq!(hook.0.lock().unwrap().len(), before + 1);
+        run("DROP FUNCTION f").unwrap();
         run("DROP FUNCTION IF EXISTS f").unwrap();
     }
 

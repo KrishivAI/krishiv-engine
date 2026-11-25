@@ -1244,6 +1244,7 @@ fn file_store(path: &Path) -> Arc<dyn krishiv_connect_server::FunctionStore> {
 async fn sql_creates_and_drops_a_persisted_udf() {
     let dir = tempfile::tempdir().expect("dir");
     let file = dir.path().join("functions.db");
+    #[expect(deprecated, reason = "the field every client version sends")]
     let command = |text: &str| pb::Plan {
         op_type: Some(OpType::Command(Box::new(pb::Command {
             command_type: Some(CommandType::SqlCommand(Box::new(pb::SqlCommand {
