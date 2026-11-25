@@ -163,7 +163,9 @@ or delete the release tag** (`v0.2.0`): a published tag is permanent.
 2. Tag it `vX.Y.Z-publishN` (for 0.2.0: `v0.2.0-publish`, `-publish2`, `-publish3`) and push the tag.
 3. Dispatch the publish workflows (`publish-pypi.yml`, `publish-crates.yml`, and `publish-testpypi.yml` for a
    rehearsal) on that tag. `.github/scripts/require-green-nightly.sh` (called by `release.yml` and `binaries.yml`, the
-   artifact workflows; `publish-crates.yml` runs `ci.yml` on the ref instead and does not call it) accepts exactly one
+   artifact workflows; `publish-crates.yml` runs `ci.yml` on the ref instead and does not call it) first accepts a
+   completed Nightly (heavy) run on exactly the commit (scheduled or dispatched; a release branch has no schedule) whose
+   `ci /` jobs are green, else the latest scheduled run on main; the fallback accepts exactly one
    `.github`-only commit whose parent a green scheduled nightly covers; any second commit, a commit that touches
    other paths, or a file list too long to check (300 files) is refused.
 

@@ -8,23 +8,29 @@ set -euo pipefail
 
 : "${GITHUB_REPOSITORY:?}" "${GITHUB_SHA:?}"
 
-run=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/nightly.yml/runs?event=schedule&branch=main&status=completed&per_page=1" \
-  --jq '.workflow_runs[0] | [.id, .head_sha, .html_url] | @tsv')
-if [ -z "$run" ] || [ "$run" = "null	null	null" ]; then
-  echo "::error::no completed scheduled nightly run on main; run the nightly and retry"
+# A completed Nightly (heavy) run on exactly $GITHUB_SHA counts whether it was scheduled or dispatched by hand (a release
+# branch has no schedule); its `ci /` jobs are checked below like any other run. Otherwise the latest scheduled run on main.
+run=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/nightly.yml/runs?head_sha=$GITHUB_SHA&status=completed&per_page=1" \
+  --jq '.workflow_runs[0] | select(. != null) | [.id, .head_sha, .html_url] | @tsv')
+if [ -z "$run" ]; then
+  run=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/nightly.yml/runs?event=schedule&branch=main&status=completed&per_page=1" \
+    --jq '.workflow_runs[0] | select(. != null) | [.id, .head_sha, .html_url] | @tsv')
+fi
+if [ -z "$run" ]; then
+  echo "::error::no completed nightly run on $GITHUB_SHA or scheduled on main; run the nightly and retry"
   exit 1
 fi
 IFS=$'\t' read -r run_id run_sha url <<<"$run"
-echo "latest scheduled nightly run: $run_sha ($url)"
+echo "nightly run used: $run_sha ($url)"
 
 jobs=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id/jobs?per_page=100" --paginate --jq '.jobs[] | select(.name | startswith("ci / ")) | [.name, .conclusion] | @tsv')
 if [ -z "$jobs" ]; then
-  echo "::error::the scheduled nightly run has no 'ci /' jobs: $url"
+  echo "::error::the nightly run has no 'ci /' jobs: $url"
   exit 1
 fi
 bad=$(printf '%s\n' "$jobs" | awk -F'\t' '$2 != "success" && $2 != "skipped" {print $1 " (" $2 ")"}')
 if [ -n "$bad" ]; then
-  echo "::error::the latest scheduled nightly run on main has failing CI jobs: $url"
+  echo "::error::the nightly run has failing CI jobs: $url"
   printf '%s\n' "$bad"
   exit 1
 fi
