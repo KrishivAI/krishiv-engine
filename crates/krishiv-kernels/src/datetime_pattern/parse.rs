@@ -102,6 +102,8 @@ impl Raw {
 pub(crate) struct Resolved {
     days: i64,
     time_micros: i64,
+    /// The nanoseconds below the microsecond (`time_micros` drops them).
+    sub_micros: i64,
     pub(super) zone: ParsedZone,
 }
 
@@ -114,6 +116,14 @@ impl Resolved {
         self.days
             .checked_mul(MICROS_PER_DAY)?
             .checked_add(self.time_micros)
+    }
+
+    /// The local time of day in nanoseconds, all nine fraction digits kept (`to_time`).
+    pub(crate) fn time_of_day_nanos(&self) -> Option<i64> {
+        self.time_micros
+            .rem_euclid(MICROS_PER_DAY)
+            .checked_mul(1_000)?
+            .checked_add(self.sub_micros)
     }
 
     pub(crate) fn zone(&self) -> &ParsedZone {
@@ -619,11 +629,13 @@ pub(super) fn offset_id(rest: &str) -> Option<i32> {
 /// `DateTimeFormatter.parse`; [`Fail::PostParse`] is Spark's post-parse
 /// step rejecting the resolved fields.
 fn resolve_detailed(mut r: Raw) -> Result<Resolved, Fail> {
+    let sub_micros = r.nanos.unwrap_or(0).rem_euclid(1_000);
     let (date, time) = resolve_java(&mut r).map_err(Fail::InParse)?;
     let days = spark_date(&r, date).map_err(Fail::PostParse)?;
     Ok(Resolved {
         days,
         time_micros: spark_time(&r, time),
+        sub_micros,
         zone: r.zone.unwrap_or(ParsedZone::None),
     })
 }

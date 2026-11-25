@@ -57,7 +57,10 @@ impl TableRoot {
             && url.username() == self.root.username()
             && url.host_str() == self.root.host_str()
             && url.port_or_known_default() == self.root.port_or_known_default()
-            && (url.path().starts_with(self.root.path())
+            // A local root is judged on canonical paths below (a link may be spelled either
+            // way: macOS `/var` is `/private/var`), so only an object store compares text.
+            && (self.local.is_some()
+                || url.path().starts_with(self.root.path())
                 || format!("{}/", url.path()) == self.root.path())
             && url.query().is_none()
             && url.fragment().is_none();

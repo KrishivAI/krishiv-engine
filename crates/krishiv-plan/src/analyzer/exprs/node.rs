@@ -75,34 +75,13 @@ impl Resolver<'_> {
                 kind: TypedLiteralKind::Time,
                 value,
             } => {
-                // Spark evaluates a `TIME '..'` literal with the gate off too (4.2.0 probe); the
-                // functions that take one refuse it (`unexecutable`).
-                // A time is a string cast to `TIME(6)` (design P2-T181): the
-                // value is checked again here, in case the plan came from a
-                // front end other than the SQL parser.
-                let Some(nanos) = krishiv_kernels::cast::parse_time(value) else {
-                    return Err(AnalysisError::new(
-                        krishiv_common::error::InvalidTypedLiteral {
-                            value: format!("'{value}'"),
-                            value_type: "\"TIME\"".to_owned(),
-                        },
-                        e.origin,
-                    ));
-                };
-                let text = krishiv_kernels::cast::format_time(nanos);
-                let text = Arc::new(Expr::from(Literal::String(text)).with_origin(e.origin));
-                let cast = Expr::new(ExprNode::Cast {
-                    expr: text,
-                    to: DataType::Time { precision: 6 },
-                    mode: CastMode::Ansi,
-                })
-                .with_origin(e.origin);
+                let (cast, shown, precision) = self.time_literal(e, value)?;
                 Bound {
-                    expr: Arc::new(cast),
-                    shown: Some(Arc::clone(e)),
+                    expr: cast,
+                    shown: Some(shown),
                     ..keep(ArgType {
                         nullable: false,
-                        data_type: Some(DataType::Time { precision: 6 }),
+                        data_type: Some(DataType::Time { precision }),
                     })
                 }
             }
@@ -1322,6 +1301,14 @@ impl Resolver<'_> {
                     return Ok(b);
                 }
                 let (mut call_kids, mut ty) = self.typed_call(&entry, e, &kids[..n])?;
+                // Spark 4.3's `current_timestamp(6)` is the call without its
+                // argument (`typed_call` drops it), and so named.
+                let trimmed =
+                    (call_kids.len() < n).then(|| drop_arguments(kids, call_kids.len(), n));
+                let (kids, n) = match &trimmed {
+                    Some(t) => (&t[..], call_kids.len()),
+                    None => (kids, n),
+                };
                 // `histogram_numeric(x, nb)`: `nb` is foldable and at least 2
                 // (Spark's `checkInputDataTypes`, after the implicit casts);
                 // the executor reads the folded literal.
@@ -1395,20 +1382,14 @@ impl Resolver<'_> {
                         Expr::new(ExprNode::Literal(Literal::Boolean(true))).with_origin(e.origin),
                     ));
                 }
-                // `extract(SECOND FROM t)` reads a `time(p)` to `p` digits
-                // whatever digits the value holds (a string cast keeps all
-                // of them, and Arrow's `Time64` does not carry `p`): the
-                // precision follows as a trailing literal.
-                if is_builtin_entry(&entry)
-                    && matches!(entry.id.name(), "extract" | "date_part" | "datepart")
-                    && n == 2
-                    && let Some(DataType::Time { precision }) = &call_kids[1].ty.data_type
-                    && *precision < 6
-                {
-                    zip_names.push(Arc::new(
-                        Expr::new(ExprNode::Literal(Literal::Integer(i32::from(*precision))))
-                            .with_origin(e.origin),
-                    ));
+                if is_builtin_entry(&entry) {
+                    self.time_trailing_args(
+                        entry.id.name(),
+                        n,
+                        &call_kids,
+                        e.origin,
+                        &mut zip_names,
+                    );
                 }
                 if is_builtin_entry(&entry)
                     && entry.id.name() == "arrays_zip"
@@ -1645,6 +1626,7 @@ impl Resolver<'_> {
                         to,
                         mode,
                         self.ctx.conf.session_zone,
+                        self.ctx.profile >= crate::analyzer::SparkProfile::V4_3,
                     ));
                 }
                 let nullable = child.nullable
@@ -1738,11 +1720,16 @@ impl Resolver<'_> {
             // Generators take their several names before this point
             // (`extract_generator`, lowering): any other expression with
             // a multi-part alias is an error.
-            ExprNode::MultiAlias { expr, names } => {
+            // Spark shows the resolved expression (`current_date()`, `localtime` as
+            // `current_time(6)`).
+            ExprNode::MultiAlias { names, .. } => {
                 return Err(AnalysisError::new(
                     krishiv_common::error::MultiAliasWithoutGenerator {
                         names: names.join(", "),
-                        expr: format!("\"{}\"", pretty(expr, self.ctx.conf.session_zone)),
+                        expr: format!(
+                            "\"{}\"",
+                            pretty(&kids[0].shown(), self.ctx.conf.session_zone)
+                        ),
                     },
                     e.origin,
                 ));
@@ -1858,103 +1845,6 @@ impl Resolver<'_> {
     }
 }
 
-impl Resolver<'_> {
-    /// `v IN (correlated global aggregate)`: the aggregate has exactly one
-    /// row for each outer row (a count of nothing is 0), so the `IN` is
-    /// `v = (scalar subquery)`, which the scalar path decorrelates with
-    /// its count-bug handling. Any other `IN` is returned as it came.
-    fn in_global_aggregate(&self, e: Arc<Expr>) -> Arc<Expr> {
-        let ExprNode::Subquery {
-            kind: SubqueryKind::In(values),
-            plan,
-        } = &e.node
-        else {
-            return e;
-        };
-        let [value] = &values[..] else { return e };
-        // Spark's legacy rule (`subquery_legacy.rs`) answers it otherwise.
-        if self.ctx.conf.legacy_exists_in_count
-            || !matches!(plan.node, crate::PlanNode::Aggregate { .. })
-            || !crate::analyzer::subquery::one_row_aggregate(plan)
-        {
-            return e;
-        }
-        let scalar = Arc::new(
-            Expr::new(ExprNode::Subquery {
-                kind: SubqueryKind::Scalar,
-                plan: Arc::clone(plan),
-            })
-            .with_origin(e.origin),
-        );
-        let nullable = crate::analyzer::subquery::typed(value).1
-            || crate::analyzer::subquery::typed(&scalar).1;
-        Arc::new(
-            Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
-                ResolvedFunction {
-                    id: FunctionId::Builtin(Builtin::Eq),
-                    kind: FunctionKind::Scalar,
-                    args: vec![Arc::clone(value), scalar],
-                    distinct: false,
-                    filter: None,
-                    within_group: Vec::new(),
-                    data_type: DataType::Boolean,
-                    nullable,
-                    deterministic: true,
-                },
-            )))
-            .with_origin(e.origin),
-        )
-    }
-
-    /// `NULL IN (subquery)`: Spark folds it by whether the subquery has
-    /// rows. It is `exists(subquery) AND NULL`: NULL over rows, false over
-    /// none (NULL either way under
-    /// `spark.sql.legacy.nullInEmptyListBehavior`). Any other `IN` is
-    /// returned as it came.
-    fn null_in_subquery(&self, e: Arc<Expr>) -> Arc<Expr> {
-        let ExprNode::Subquery {
-            kind: SubqueryKind::In(values),
-            plan,
-        } = &e.node
-        else {
-            return e;
-        };
-        let [value] = &values[..] else { return e };
-        if !crate::analyzer::subquery::null_literal(value) {
-            return e;
-        }
-        let null = Arc::new(Expr::new(ExprNode::Literal(Literal::Null(Some(
-            DataType::Boolean,
-        )))));
-        if self.ctx.conf.legacy_null_in_empty_list {
-            return null;
-        }
-        let exists = Arc::new(
-            Expr::new(ExprNode::Subquery {
-                kind: SubqueryKind::Exists,
-                plan: Arc::clone(plan),
-            })
-            .with_origin(e.origin),
-        );
-        Arc::new(
-            Expr::new(ExprNode::Resolved(ResolvedExpr::Function(
-                ResolvedFunction {
-                    id: FunctionId::Builtin(Builtin::And),
-                    kind: FunctionKind::Scalar,
-                    args: vec![exists, null],
-                    distinct: false,
-                    filter: None,
-                    within_group: Vec::new(),
-                    data_type: DataType::Boolean,
-                    nullable: true,
-                    deterministic: true,
-                },
-            )))
-            .with_origin(e.origin),
-        )
-    }
-}
-
 /// Whether `t` is or holds a map at any depth (Spark does not order it).
 fn holds_map(t: &DataType) -> bool {
     match t {
@@ -1997,4 +1887,11 @@ fn first_aggregate(e: &Arc<Expr>) -> Option<Arc<Expr>> {
         }
     }
     None
+}
+
+/// `kids` without the call arguments `kept..n` that `typed_call` dropped (the
+/// kids after `n` stay). Out of line so the recursive `expr` frame stays small.
+#[inline(never)]
+fn drop_arguments(kids: &[Bound], kept: usize, n: usize) -> Vec<Bound> {
+    kids[..kept].iter().chain(&kids[n..]).cloned().collect()
 }

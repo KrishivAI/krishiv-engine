@@ -4,7 +4,7 @@
 use super::*;
 
 /// The parser's configs (`ParserOptions::from_conf` reads these).
-pub(super) const PARSER_KEYS: [&str; 17] = [
+pub(super) const PARSER_KEYS: [&str; 19] = [
     "spark.sql.ansi.enabled",
     "spark.sql.ansi.enforceReservedKeywords",
     "spark.sql.ansi.doubleQuotedIdentifiers",
@@ -20,6 +20,8 @@ pub(super) const PARSER_KEYS: [&str; 17] = [
     "spark.sql.parser.quotedRegexColumnNames",
     "spark.sql.legacy.parser.havingWithoutGroupByAsWhere",
     "spark.sql.collation.schemaLevel.enabled",
+    "spark.sql.timestampNanosTypes.enabled",
+    "spark.sql.timestampType",
     "spark.sql.join.asofJoin.enabled",
     "spark.sql.timeTravel.atSyntax.enabled",
 ];
@@ -68,16 +70,16 @@ pub(super) fn attach_analysis(e: AnalysisError, text: Option<&RedactedSql>) -> K
     }
 }
 
-/// The parser options `config` sets.
-pub(super) fn parser_options(
-    config: &Config,
-    profile: krishiv_plan::analyzer::SparkProfile,
-) -> ParserOptions {
+/// The parser options `config` sets, with the grammar of `profile`: from Spark 4.3 on, its type grammar
+/// ([`ParserOptions::spark_4_3`]) and its query and command grammar ([`ParserOptions::spark_4_3_grammar`]).
+pub(super) fn parser_options(config: &Config, profile: SparkProfile) -> ParserOptions {
     let values = conf_values(config, &PARSER_KEYS);
-    let mut options = ParserOptions::from_conf(|k| values.get(k).map(String::as_str));
-    // Grammar that differs by Spark version follows the session's profile, not a conf.
-    options.spark_4_3_grammar = profile >= krishiv_plan::analyzer::SparkProfile::V4_3;
-    options
+    let spark_4_3 = profile >= SparkProfile::V4_3;
+    ParserOptions {
+        spark_4_3,
+        spark_4_3_grammar: spark_4_3,
+        ..ParserOptions::from_conf(|k| values.get(k).map(String::as_str))
+    }
 }
 
 /// The values of `keys` that are set or have a default.
