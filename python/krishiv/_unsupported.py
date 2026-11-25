@@ -16,3 +16,10 @@ class SparkConf:
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         raise unsupported_feature("SparkConf (use SparkSession.builder.config or spark.conf.set)")
+
+
+class SparkContext:
+    """Not supported: Krishiv has no ``SparkContext`` or RDDs; use the DataFrame API."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        raise unsupported_feature("SparkContext (use the DataFrame API and SparkSession)")

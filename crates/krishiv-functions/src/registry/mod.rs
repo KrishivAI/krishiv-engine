@@ -35,6 +35,7 @@ mod hashing;
 mod hll;
 mod hof;
 mod json;
+mod leakproof;
 mod map;
 mod math;
 mod misc;
@@ -43,6 +44,7 @@ mod predicate;
 mod protobuf;
 mod r#struct;
 mod text;
+mod theta;
 mod time;
 mod time_window;
 mod url;
@@ -226,6 +228,12 @@ pub enum Aggregate {
     HllSketchAgg,
     /// `hll_union_agg(sketch[, allowDifferentLgConfigK])`: the union of HLL sketches; never NULL.
     HllUnionAgg,
+    /// `theta_sketch_agg(x[, lgNomEntries])` (Spark 4.1): a compact Theta sketch of the non-NULL values; never NULL.
+    ThetaSketchAgg,
+    /// `theta_union_agg(sketch[, lgNomEntries])` (Spark 4.1): the union of Theta sketches; never NULL.
+    ThetaUnionAgg,
+    /// `theta_intersection_agg(sketch)` (Spark 4.1): the intersection of Theta sketches; never NULL.
+    ThetaIntersectionAgg,
 }
 
 /// A built-in function.
@@ -250,6 +258,9 @@ pub struct FunctionDef {
     pub result: ResultType,
     /// How it runs.
     pub execution: Execution,
+    /// Whether it is declared leakproof (`registry/leakproof.rs`): a security barrier may run a
+    /// call of it on rows its policy rejects, when the call cannot raise for its arguments.
+    pub leakproof: bool,
 }
 
 impl fmt::Debug for FunctionDef {
@@ -263,6 +274,7 @@ impl fmt::Debug for FunctionDef {
             .field("arity", &self.arity)
             .field("inputs", &self.inputs)
             .field("execution", &self.execution)
+            .field("leakproof", &self.leakproof)
             .finish_non_exhaustive()
     }
 }
@@ -424,6 +436,7 @@ impl Registry {
                     inputs: spec.inputs,
                     result: Arc::new(spec.result),
                     execution: spec.execution,
+                    leakproof: leakproof::declared(spec.name),
                 },
             );
         }
@@ -449,6 +462,12 @@ impl Registry {
             Some(s) if profile >= s.since => Lookup::KnownUnsupported,
             _ => Lookup::NotFound,
         }
+    }
+
+    /// Whether the implemented function `name` (lower case) is declared leakproof.
+    #[must_use]
+    pub fn leakproof(&self, name: &str) -> bool {
+        self.defs.get(name).is_some_and(|d| d.leakproof)
     }
 
     /// Every implemented function, sorted by name.

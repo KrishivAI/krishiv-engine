@@ -209,6 +209,13 @@ jobs:
       # DWARF, so no debug info at all.
       CARGO_PROFILE_DEV_DEBUG: "0"
       CARGO_PROFILE_TEST_DEBUG: "0"
+      # 2026-11-23: full again (ld Bus error linking krishiv-session tests, 119 GB free): about 300
+      # krishiv-session test binaries of 341 MB each, 136 MB of that the symbol table. Coverage reads
+      # its own sections (`__llvm_covfun`, `__llvm_prf_*`), not symbols: the lcov export of a
+      # stripped binary is byte-identical, and the binary is 206 MB. Backtraces of a failing test
+      # here lose function names; the all-features job runs the same tests unstripped.
+      CARGO_PROFILE_DEV_STRIP: symbols
+      CARGO_PROFILE_TEST_STRIP: symbols
     steps:
       - name: Harden the runner (audit egress)
         uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
@@ -251,6 +258,14 @@ jobs:
         env:
           KRISHIV_TEST_UDF_PYTHON: ${{ runner.temp }}/udf-python/bin/python
           KRISHIV_UDF_POOL_REQUIRED: "1"
+      # Where the disk went, also when the run failed (as coverage.yml's PR job reports it).
+      - name: Coverage disk use
+        if: always()
+        run: |
+          df -h /
+          du -sh target/llvm-cov-target target/llvm-cov-target/debug/deps target/llvm-cov-target/debug/build 2> /dev/null || true
+          find target/llvm-cov-target -maxdepth 1 -name '*.profraw' -printf '%s\n' 2> /dev/null \
+            | awk '{ n++; s += $1 } END { printf "profraw: %d files, %.1f GB\n", n, s / 1e9 }'
       - name: Per-crate summary
         run: cargo xtask coverage-summary --markdown | tee -a "$GITHUB_STEP_SUMMARY"
       # The newest coverage-report artifact is the previous nightly's (this run uploads its own
@@ -511,6 +526,8 @@ jobs:
     needs: guard
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    env:
+      RUSTC_WRAPPER: "" # sccache is not installed in this job
     steps:
       - name: Harden the runner (audit egress)
         uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
@@ -547,6 +564,8 @@ jobs:
     needs: guard
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    env:
+      RUSTC_WRAPPER: "" # sccache is not installed in this job
     steps:
       - name: Harden the runner (audit egress)
         uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
@@ -583,6 +602,8 @@ jobs:
     needs: guard
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    env:
+      RUSTC_WRAPPER: "" # sccache is not installed in this job
     steps:
       - name: Harden the runner (audit egress)
         uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
@@ -892,14 +913,15 @@ jobs:
             diff -u "crates/$crate/public-api.txt" "$RUNNER_TEMP/$crate.txt"
           done
 
-  # Breaking changes against the last release (docs/concepts/stability.md). Non-blocking until the 0.2
-  # release exists to compare against; then drop continue-on-error and set the baseline.
+  # Breaking changes against the last release tag (docs/concepts/stability.md). Blocking. Below 1.0 a
+  # minor bump may break (0.2.0 -> 0.3.0), so the check runs as a major release then and the list of
+  # breaks goes to the job summary for the CHANGELOG "Breaking" section; a patch release (0.3.0 ->
+  # 0.3.1) may not break, and the job fails on any break.
   semver-checks:
     if: needs.guard.outputs.go == 'true' && github.repository == 'KrishivAI/krishiv-engine'
     needs: guard
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    continue-on-error: true
     steps:
       - name: Harden the runner (audit egress)
         uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
@@ -919,8 +941,25 @@ jobs:
         run: |
           base=$(git tag --list 'v*' --sort=-v:refname | grep -v -- '-' | head -n1 || true)
           if [ -z "$base" ]; then echo "no released version yet; nothing to compare"; exit 0; fi
-          cargo semver-checks check-release -p krishiv -p krishiv-session -p krishiv-udf-sdk --baseline-rev "$base"
-
+          now=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)
+          type=patch
+          [ "${base#v}" != "$now" ] && [ "$(echo "${base#v}" | cut -d. -f1-2)" != "$(echo "$now" | cut -d. -f1-2)" ] && type=major
+          # A pending breaking fragment (changelog.d/*.breaking.md) is a break the next release carries: check as a
+          # 0.x minor (major) so the job is not red every night between the fragment and the version bump.
+          if [ "$type" = patch ] && ls changelog.d/*.breaking.md > /dev/null 2>&1; then type=major; fi
+          echo "baseline $base, workspace $now, checked as a $type release"
+          set +e
+          cargo semver-checks check-release -p krishiv -p krishiv-session -p krishiv-udf-sdk \
+            --baseline-rev "$base" --release-type "$type" 2>&1 | tee semver.txt
+          status=${PIPESTATUS[0]}
+          set -e
+          # The breaks of a 0.x minor are expected: list them for the CHANGELOG "Breaking" section.
+          if [ "$type" = major ]; then
+            cargo semver-checks check-release -p krishiv -p krishiv-session -p krishiv-udf-sdk \
+              --baseline-rev "$base" --release-type patch 2>&1 | tee breaking.txt || true
+            { echo "### Breaking changes since $base (CHANGELOG \"Breaking\")"; echo '```'; { grep -E "^(--- failure|  )" breaking.txt || true; }; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit "$status"
   # The generated reference under docs/reference/ is what the generators print (SQL, Python, Rust).
   docs-reference:
     if: needs.guard.outputs.go == 'true' && github.repository == 'KrishivAI/krishiv-engine'

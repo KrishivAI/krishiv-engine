@@ -594,6 +594,32 @@ pub trait AccessPolicy: Send + Sync {
     /// provider can write its audit record and count the denial; never for a trial
     /// ([`super::authorize_quietly`]). The default does nothing.
     fn denied(&self, _principal: &Principal, _securable: &Securable, _privilege: Privilege) {}
+    /// Told, before the individual checks of a stage of analysis, the `(securable, privilege)`
+    /// pairs that stage expects to ask for `principal`, so a remote provider can decide them in
+    /// one round trip (ADR 0049 §3: Bind's table reads, then the column pass). A hint only:
+    /// every pair is still asked through [`Self::check`], which may answer from what this call
+    /// fetched; pairs it never asks may be listed, and asked ones may be missing. Never an
+    /// error (a failed fetch leaves each check to ask on its own). The default does nothing; a
+    /// wrapper that forwards `check` forwards this too.
+    fn prefetch<'a>(
+        &'a self,
+        _principal: &'a Principal,
+        _items: &'a [(Securable, Privilege)],
+    ) -> BoxFuture<'a, ()> {
+        Box::pin(std::future::ready(()))
+    }
+    /// Whether this policy decides `securable` at all (provider lists, ADR 0049 §1): a list asks
+    /// only its members that decide a securable, and refuses one that none decides. The default,
+    /// `true`, decides everything.
+    fn decides(&self, _securable: &Securable) -> bool {
+        true
+    }
+    /// The audit and counter label (`provider`) of the provider behind this policy's latest
+    /// refusal, when it is not the role matrix (`external`; ADR 0049 §3). The default, `None`,
+    /// reads as `roles`; a wrapper that forwards `check` forwards this too.
+    fn refusal_label(&self) -> Option<&'static str> {
+        None
+    }
 }
 
 /// The embedded default policy: everything is allowed.
@@ -736,6 +762,14 @@ pub trait FileSchemaResolver: Send + Sync {
             }
             .into())
         })
+    }
+    /// Whether a read of `format` keeps the nullability [`Self::infer`] gives. A file source's
+    /// columns are made nullable at every depth (`HadoopFsRelation` over `dataSchema.asNullable`);
+    /// a table format whose log declares the schema (Delta) keeps its `NOT NULL` columns and
+    /// fields, as the catalog table over it does. The default is `false`.
+    fn keeps_nullability(&self, format: &str) -> bool {
+        let _ = format;
+        false
     }
 }
 

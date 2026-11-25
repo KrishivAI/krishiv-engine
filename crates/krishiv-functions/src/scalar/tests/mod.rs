@@ -621,6 +621,7 @@ mod random;
 mod r#struct;
 mod text;
 mod text43;
+mod theta;
 mod time_window;
 mod url;
 mod variant;

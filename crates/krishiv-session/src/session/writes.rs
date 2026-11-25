@@ -41,7 +41,7 @@ pub(crate) fn partition_overwrite_is_dynamic(
 ///
 /// # Errors
 /// `INVALID_CONF_VALUE` for an empty key.
-pub(super) fn write_idempotency_key(
+pub(crate) fn write_idempotency_key(
     config: &Config,
     options: &std::collections::BTreeMap<String, krishiv_common::secret::OptionValue>,
 ) -> Result<Option<String>, KrishivError> {
@@ -94,7 +94,7 @@ pub(super) fn unlogged_key(display: &str) -> KrishivError {
 ///
 /// # Errors
 /// An invalid key, or the log's read errors.
-pub(super) async fn key_already_committed(
+pub(crate) async fn key_already_committed(
     config: &Config,
     options: &std::collections::BTreeMap<String, krishiv_common::secret::OptionValue>,
     io: &krishiv_io::IoContext,
@@ -159,6 +159,36 @@ pub(super) async fn refuse_unlogged_key_early(
     if (probe || none || known_unsupported)
         && !Box::pin(uses_commit_log(config, probes, io, store, at, job)).await?
     {
+        return Err(unlogged_key(&at.display));
+    }
+    Ok(())
+}
+
+/// What [`refuse_unlogged_key_early`] decides for a write to a directory that does not exist yet
+/// (`errorifexists`), from the configuration and the store's cached probe alone: no I/O, so an
+/// overwrite can ask it before it drops the table it replaces.
+///
+/// Only a store already probed is known to lack put-if-absent; for one not probed yet the refusal
+/// still comes after the drop. Not reachable while managed tables live in the local warehouse.
+///
+/// # Errors
+/// An invalid key; `KRISHIV_UNSUPPORTED_FEATURE` for a key on `commitProtocol=NONE` or on a store
+/// known to lack put-if-absent.
+pub(crate) fn refuse_unkeyable_fresh_write(
+    config: &Config,
+    options: &std::collections::BTreeMap<String, krishiv_common::secret::OptionValue>,
+    probes: &Mutex<HashMap<String, bool>>,
+    at: &krishiv_exec::files::LocatedPath,
+) -> Result<(), KrishivError> {
+    if write_idempotency_key(config, options)?.is_none() {
+        return Ok(());
+    }
+    let known_unsupported = probes
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .get(at.store.key())
+        == Some(&false);
+    if commit_protocol(config).as_deref() == Some("NONE") || known_unsupported {
         return Err(unlogged_key(&at.display));
     }
     Ok(())
@@ -281,7 +311,9 @@ pub(super) async fn uses_commit_log(
 }
 
 /// The `maxRecordsPerFile` write option (`FILE_SOURCE_OPTIONS`), case
-/// insensitive; 0 (unlimited) when unset.
+/// insensitive; 0 (unlimited) when unset. Spark reads a long and limits only
+/// above 0, so a negative value means unlimited too (Spark 4.0.0 run: -1 and 0
+/// both write one file).
 pub(super) fn max_records_per_file(
     options: &BTreeMap<String, OptionValue>,
     format: &str,
@@ -301,26 +333,27 @@ pub(super) fn max_records_per_file(
         }
         .into());
     };
-    raw.trim().parse::<u64>().map_err(|_| {
+    let parsed = raw.trim().parse::<i64>().map_err(|_| -> KrishivError {
         krishiv_common::error::KrishivInvalidFormatOptionValue {
             value: format!("'{raw}'"),
             option: format!("\"{key}\""),
             format: format!("\"{format}\""),
-            reason: "expected an integer in 0..=18446744073709551615".to_owned(),
+            reason: "expected an integer in -9223372036854775808..=9223372036854775807".to_owned(),
         }
         .into()
-    })
+    })?;
+    Ok(u64::try_from(parsed).unwrap_or(0))
 }
 
 /// A write directory that could not be opened, as the path-based store
-/// reports it (`KRISHIV_OBJECT_STORE_REQUEST_FAILED`).
+/// reports it: `TASK_WRITE_FAILED` with the OS reason as its cause (PY-075).
 pub(super) fn anchor_failed(at: &krishiv_exec::files::LocatedPath, reason: &str) -> KrishivError {
-    krishiv_common::error::KrishivObjectStoreRequestFailed {
+    KrishivError::from(krishiv_common::error::TaskWriteFailed {
         path: at.display.clone(),
-        attempts: "1".to_owned(),
-        reason: reason.to_owned(),
-    }
-    .into()
+    })
+    .with_cause(KrishivError::from(krishiv_common::error::InternalError {
+        message: reason.to_owned(),
+    }))
 }
 
 /// Removes a write's private store registration when the write is over.

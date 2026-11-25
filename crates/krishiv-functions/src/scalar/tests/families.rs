@@ -152,6 +152,28 @@ fn ceil_and_floor() {
 }
 
 #[test]
+fn ceil_and_floor_overflow_raises_only_on_the_4_3_profile() {
+    use krishiv_kernels::{KernelCtx, SparkVersion};
+    let d = doubles(&[
+        Some(1e308),
+        Some(f64::INFINITY),
+        Some(f64::NEG_INFINITY),
+        Some(f64::NAN),
+    ]);
+    for name in ["ceil", "floor"] {
+        let v42 =
+            BindOptions::new().with_kernel(KernelCtx::new().with_spark_version(SparkVersion::V4_2));
+        let f = bind_with(name, &[&d], &v42);
+        assert!(f.invoke(&[col(&d)], 4).is_ok(), "{name} saturates on 4.2");
+        let v43 =
+            BindOptions::new().with_kernel(KernelCtx::new().with_spark_version(SparkVersion::V4_3));
+        let f = bind_with(name, &[&d], &v43);
+        let e = f.invoke(&[col(&d)], 4).unwrap_err();
+        assert_eq!(class(&e), ErrorClass::ArithmeticOverflow);
+    }
+}
+
+#[test]
 fn pmod_is_never_negative() {
     let (a, b) = (
         ints(&[Some(-7), Some(7), Some(-7), None]),

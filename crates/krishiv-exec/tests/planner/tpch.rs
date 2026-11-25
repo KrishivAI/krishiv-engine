@@ -222,6 +222,20 @@ impl Tpch {
         ))
     }
 
+    /// As [`Self::runnable`], planned with the session UDFs `udfs`.
+    pub(crate) fn runnable_with_udfs(
+        &self,
+        plan: &Plan,
+        udfs: Arc<krishiv_udf_sdk::UdfLibrary>,
+    ) -> Result<Runnable, KrishivError> {
+        let cx = PlanningContext::new(Arc::clone(&self.tables) as _, Arc::clone(&self.config))
+            .with_udfs(udfs);
+        Ok(Runnable::new(
+            DefaultPlanner.plan(plan, &cx)?,
+            Arc::clone(&self.tables) as _,
+        ))
+    }
+
     /// `text` parsed, analyzed and optimized (joins ordered by `order`).
     pub(crate) fn optimized(&self, text: &str, order: Order) -> Result<Plan, KrishivError> {
         let plan = self.analyzed(text)?;

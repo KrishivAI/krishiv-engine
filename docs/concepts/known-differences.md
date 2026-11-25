@@ -269,12 +269,15 @@ still merges them.
 ## `PIVOT` cases Spark answers from undefined state are refused
 
 When every aggregate of a `PIVOT` has a numeric, boolean or decimal type, Spark takes its `PivotFirst` path and
-Krishiv reproduces it, including Spark's slot map (a NaN value never matches, `0.0` and `-0.0` are one value,
-repeated values raise `INVALID_ARRAY_INDEX` with ANSI on and leave NULL cells with ANSI off). A few cases fail with
-`KRISHIV_UNSUPPORTED_FEATURE` instead of returning a result:
+Krishiv reproduces it, including Spark's slot map (a NaN value never matches, `0.0` and `-0.0` are one value).
+Repeated pivot values depend on the version: under Spark 4.2 and earlier they raise `INVALID_ARRAY_INDEX` with ANSI
+on and leave NULL cells with ANSI off; under 4.3 (the default) every output reads its own value's slot, so repeated
+values give equal cells and nothing is raised. A few cases fail with `KRISHIV_UNSUPPORTED_FEATURE` instead of
+returning a result:
 
-- repeated pivot values with ANSI off and several aggregates: Spark writes the repeated value's result into the
-  next aggregate's cells;
+- repeated pivot values with ANSI off and several aggregates under 4.2 and earlier: Spark writes the repeated
+  value's result into the next aggregate's cells. This refusal is Krishiv's choice under 4.3 until a 4.3.0 golden
+  for the case exists;
 - several pivot values of a type the analyzer does not evaluate (timestamp, interval, time) when one of them is not
   a literal of the pivot column's type, for example `IN (TIMESTAMP'2020-01-01 00:00:00', '2021-01-01 00:00:00')`:
   Krishiv cannot tell whether two of them are the same value, which decides Spark's result;
@@ -369,6 +372,13 @@ the rows in the session's memory whatever it is. With `eager = false` the rows a
 result is first analyzed (its first action, or the first call that needs its schema), not at its
 first job. A checkpoint is not a cache entry: `is_cached`, `CLEAR CACHE`, `REFRESH` and `unpersist`
 do not see it, as in Spark. `system.caches` lists the session's live checkpoints in a `checkpoint` row.
+
+`spark.conf.set("spark.checkpoint.dir", ...)` succeeds in Krishiv. Spark 4.2 over Spark Connect refuses it
+with `CANNOT_MODIFY_CONFIG` (SQLSTATE 46110), and a Connect client there has no other way to set the
+directory, so a reliable `checkpoint()` fails with "Checkpoint directory has not been set in the SparkContext"
+unless the server was started with one. Krishiv accepts the setting per session (or `krishiv.checkpoint.dir`
+at server start) because a client with no `SparkContext` has no other route; code that relies on Spark's
+refusal is the only code that sees a difference.
 
 ## A second catalog, `system`, next to `spark_catalog`
 
@@ -614,6 +624,7 @@ observed node has its own, so the count can exceed `n` (P3-T084c).
   not, completes it.
 - **`Observation.get` blocks** a thread; do not call it from async code on a runtime thread.
 - **Result cache:** a plan that observes is never served from the result cache (every action runs it).
+- **`spark.sql.timestampType = TIMESTAMP_NTZ`:** a bare `TIMESTAMP` literal, `to_timestamp` and the numeric `make_timestamp` forms follow the setting; a bare `TIMESTAMP` cast target or column type still means `TIMESTAMP_LTZ`.
 
 ## Delta Lake writes
 
@@ -746,6 +757,30 @@ both forms, so a sketch written by one engine can be estimated or unioned by the
 `length`, `hex`, `base64` or equality of an HLL sketch is not the same as Spark's. Compare sketches through
 `hll_sketch_estimate` or `hll_union`, not by their bytes. A sketch built from collated strings
 (`hll_sketch_agg(s COLLATE UTF8_LCASE)`) is refused: Spark hashes the collation key, Krishiv does not yet.
+
+## Several grouped-aggregate pandas UDFs in one `agg`
+
+Spark runs every grouped-aggregate pandas UDF of one `agg` in a single Python worker. Krishiv gives each UDF
+its own Python UDF worker, because each is a task that holds its worker until its partition ends. On the
+default (`krishiv.python.udf.threads` = 0, which is one worker on a GIL build, or when the value is set to 1),
+`df.groupBy(k).agg(udf1(x), udf2(y))` with two such UDFs therefore fails with
+`KRISHIV_PYTHON_WORKER_LIMIT` (SQLSTATE 54000), which names the setting. On a free-threaded build the default is the
+executor thread count, so with two or more executor threads two grouped-aggregate UDFs can run without that error.
+Raise `krishiv.python.udf.threads` to the number of grouped-aggregate UDFs in the `agg` plus one (one thread stays
+free for scalar UDFs that feed them) and the query runs. The setting is startup-only: an existing session rejects a
+runtime change with `CANNOT_MODIFY_STATIC_CONFIG`. The pool is made when the first Python UDF query starts and is not
+resized, so put the value in the configuration passed when the session is created (or set it at engine startup, or
+start a fresh interpreter with the higher value).
+A single-thread pool starts one spare thread for scalar UDF calls (which still run one at a time), so a scalar UDF
+call of another query does not wait for a running `mapInPandas` or `applyInPandas`. In one query a scalar
+`pandas_udf` feeding such a node finishes before the node starts.
+
+The embedded `mapInArrow` takes each result batch's columns by position and relabels them with the
+declared schema; `mapInPandas` matches the result's columns to the declared schema by name, as Spark does. With `spark.sql.execution.arrow.pyspark.validateSchema.enabled` set to `true` the embedded
+`mapInArrow` path compares the UDF's own field names with the declared schema and refuses a mismatch of names or
+types with `ARROW_TYPE_MISMATCH`, as the server's worker pool does. A declared
+`NOT NULL` (and a nested `containsNull=false` or `valueContainsNull=false`) is not kept by the embedded runtime, so a
+nullable result is accepted where Spark 4.1+ refuses it.
 
 ## Metric views (`CREATE VIEW .. WITH METRICS LANGUAGE YAML`)
 

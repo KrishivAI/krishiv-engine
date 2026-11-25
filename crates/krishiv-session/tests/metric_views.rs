@@ -76,7 +76,7 @@ fn rows(batches: &[RecordBatch]) -> Vec<Value> {
 
 /// A row as text, with `<normalized>` cells kept as the fixture wrote them.
 /// A text cell without what differs between runs and patch releases: the creating release
-/// (`Created By`, the engine says 4.2.0, the goldens ran on 4.2.1 and 4.3.0) and, inside
+/// (`Created By`, the engine names its profile's release, the goldens ran on 4.2.1 and 4.3.0) and, inside
 /// `SHOW TABLE EXTENDED`'s information, the times the goldens print as `<normalized>`.
 fn text(cell: &str) -> String {
     let release = |s: &str| {

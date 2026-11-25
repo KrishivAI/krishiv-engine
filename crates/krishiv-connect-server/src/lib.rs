@@ -36,12 +36,12 @@ pub use function_store::SqliteFunctionStore;
 
 pub use artifacts::{ArtifactLimits, ArtifactStore, SessionArtifacts};
 pub use auth::{
-    ACT_AS_GROUPS, ACT_AS_TENANT, ACT_AS_TOKEN, ACT_AS_USER, AuthLayer, Check, ConnectAuth, Rpc,
-    SessionOwner, check_command, check_rpc, role_sessions,
+    ACT_AS_GROUPS, ACT_AS_TENANT, ACT_AS_TOKEN, ACT_AS_USER, AuthLayer, Check, ConnectAuth,
+    ExtraProvider, Rpc, SessionOwner, check_command, check_rpc, provider_sessions, role_sessions,
 };
 pub use errors::SessionErrors;
 pub use local::LocalServer;
-pub use manager::{ManagerCounts, SessionEntry, SessionLimits, SessionManager};
+pub use manager::{ManagerCounts, SessionEntry, SessionFactory, SessionLimits, SessionManager};
 pub use operation::{ExecuteLimits, Operation, OperationState, Operations};
 pub use server::{ConnectServer, ConnectServerConfig};
 pub use service::ConnectService;

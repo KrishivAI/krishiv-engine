@@ -1,6 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 //! A bottom-up rewrite over every relation of a plan, subquery plans
 //! included, that rewrites a shared subtree once.
+//!
+//! A [`PlanNode::SecurityBarrier`]'s input is a plan of its own (design
+//! `P3-E14-security-barrier.md` G3'): a rewrite leaves it as it is unless the caller says what runs
+//! there. Every caller is one of two kinds, and says which:
+//! - an **optimization** ([`rewrite_up`], [`rewrite_up_traced`], [`Rewriter::new`]) fails closed:
+//!   it does not run inside a barrier, or runs there only the step it passes to
+//!   [`rewrite_up_inside`] (the rules that opted in, guarded where they move expressions);
+//! - a **lowering** ([`rewrite_up_lowering`]), a rewrite whose absence changes results or leaves a
+//!   plan the executor cannot run, runs inside with the same step (`collation_keys` alone today).
 
 use std::sync::Arc;
 
@@ -15,22 +24,36 @@ pub(crate) type Step<'a> =
 pub(crate) type TracedStep<'a> =
     dyn FnMut(&Arc<LogicalPlan>, Arc<LogicalPlan>) -> Result<Arc<LogicalPlan>, KrishivError> + 'a;
 
+/// What runs on the relations under a security barrier.
+enum Inside<'r, 'a> {
+    /// Nothing: the barrier's input is returned as it is.
+    Skip,
+    /// The step that runs outside (a lowering).
+    Same,
+    /// A step of its own.
+    Step(&'r mut TracedStep<'a>),
+}
+
 /// Rewrites relations children first, entering subquery plans; each
 /// distinct relation (by address) is rewritten once and its rewrite shared.
 pub(crate) struct Rewriter {
-    /// Original → rewritten; the original is kept alive so its address
-    /// stays unique.
-    done: crate::expr::AddrMap<LogicalPlan, (Arc<LogicalPlan>, Arc<LogicalPlan>)>,
+    /// Original → rewritten, outside (`[0]`) and under a barrier (`[1]`); the original is kept
+    /// alive so its address stays unique.
+    done: [Done; 2],
 }
 
+/// One mode's memo: original → (original, rewritten).
+type Done = crate::expr::AddrMap<LogicalPlan, (Arc<LogicalPlan>, Arc<LogicalPlan>)>;
+
 impl Rewriter {
+    /// A rewriter for an optimization: nothing runs under a barrier.
     pub(crate) fn new() -> Self {
         Self {
             done: Default::default(),
         }
     }
 
-    /// Applies `step` to every relation under `plan`, children first.
+    /// Applies `step` to every relation under `plan` outside any barrier, children first.
     pub(crate) fn up(
         &mut self,
         plan: Arc<LogicalPlan>,
@@ -45,30 +68,56 @@ impl Rewriter {
         plan: Arc<LogicalPlan>,
         step: &mut TracedStep<'_>,
     ) -> Result<Arc<LogicalPlan>, KrishivError> {
-        if let Some((_, out)) = self.done.get(&Arc::as_ptr(&plan)) {
+        self.walk(plan, step, &mut Inside::Skip, false)
+    }
+
+    fn walk(
+        &mut self,
+        plan: Arc<LogicalPlan>,
+        step: &mut TracedStep<'_>,
+        inside: &mut Inside<'_, '_>,
+        under: bool,
+    ) -> Result<Arc<LogicalPlan>, KrishivError> {
+        let mode = usize::from(under);
+        if let Some((_, out)) = self.done[mode].get(&Arc::as_ptr(&plan)) {
             return Ok(Arc::clone(out));
         }
-        let rebuilt = Arc::clone(&plan)
-            .map_children(|c| self.up_traced(c, step))?
-            .map_expressions(|e| self.subqueries_traced(e, step))?;
-        let out = step(&plan, rebuilt)?;
-        self.done
-            .insert(Arc::as_ptr(&plan), (plan, Arc::clone(&out)));
+        let rebuilt = if matches!(plan.node, PlanNode::SecurityBarrier { .. }) {
+            // A barrier holds no expression; its input is rewritten in the inside mode.
+            match inside {
+                Inside::Skip => Arc::clone(&plan),
+                Inside::Same | Inside::Step(_) => {
+                    Arc::clone(&plan).map_children(|c| self.walk(c, step, inside, true))?
+                }
+            }
+        } else {
+            Arc::clone(&plan)
+                .map_children(|c| self.walk(c, step, inside, under))?
+                .map_expressions(|e| self.subqueries(e, step, inside, under))?
+        };
+        let out = match (under, &mut *inside) {
+            (false, _) | (true, Inside::Same) => step(&plan, rebuilt)?,
+            (true, Inside::Step(s)) => s(&plan, rebuilt)?,
+            (true, Inside::Skip) => rebuilt,
+        };
+        self.done[mode].insert(Arc::as_ptr(&plan), (plan, Arc::clone(&out)));
         Ok(out)
     }
 
-    /// `e` with its subquery plans rewritten.
-    fn subqueries_traced(
+    /// `e` with its subquery plans rewritten, in the mode of the relation holding `e`.
+    fn subqueries(
         &mut self,
         e: Arc<Expr>,
         step: &mut TracedStep<'_>,
+        inside: &mut Inside<'_, '_>,
+        under: bool,
     ) -> Result<Arc<Expr>, KrishivError> {
         if !crate::expr::has_subquery(&e) {
             return Ok(e);
         }
         e.transform_up(&mut |x| match &x.node {
             ExprNode::Subquery { kind, plan } => {
-                let rewritten = self.up_traced(Arc::clone(plan), step)?;
+                let rewritten = self.walk(Arc::clone(plan), step, inside, under)?;
                 // A subquery's consumer reads its output by position or
                 // width: a rewrite that widened its root (CSE's extracted
                 // columns under a filter) is projected back.
@@ -90,7 +139,8 @@ impl Rewriter {
     }
 }
 
-/// Applies `step` to every relation of `root`, children first.
+/// Applies `step` to every relation of `root` outside any barrier, children first (an
+/// optimization that did not opt in).
 pub(crate) fn rewrite_up(
     root: Arc<LogicalPlan>,
     step: &mut Step<'_>,
@@ -104,6 +154,30 @@ pub(crate) fn rewrite_up_traced(
     step: &mut TracedStep<'_>,
 ) -> Result<Arc<LogicalPlan>, KrishivError> {
     Rewriter::new().up_traced(root, step)
+}
+
+/// As [`rewrite_up`], and `inside` on every relation under a barrier (an optimization that opted
+/// in; `inside` is its guarded form where it moves expressions).
+pub(crate) fn rewrite_up_inside(
+    root: Arc<LogicalPlan>,
+    step: &mut Step<'_>,
+    inside: &mut Step<'_>,
+) -> Result<Arc<LogicalPlan>, KrishivError> {
+    let mut inner = |_: &Arc<LogicalPlan>, p: Arc<LogicalPlan>| inside(p);
+    Rewriter::new().walk(
+        root,
+        &mut |_, p| step(p),
+        &mut Inside::Step(&mut inner),
+        false,
+    )
+}
+
+/// As [`rewrite_up`], with `step` also on every relation under a barrier (a lowering).
+pub(crate) fn rewrite_up_lowering(
+    root: Arc<LogicalPlan>,
+    step: &mut Step<'_>,
+) -> Result<Arc<LogicalPlan>, KrishivError> {
+    Rewriter::new().walk(root, &mut |_, p| step(p), &mut Inside::Same, false)
 }
 
 /// `node` (a relation with an `input`) over `input` instead.
@@ -120,6 +194,7 @@ pub(crate) fn with_input(node: &Arc<LogicalPlan>, input: Arc<LogicalPlan>) -> Ar
         | PlanNode::SubqueryAlias { input: slot, .. }
         | PlanNode::WithCte { input: slot, .. }
         | PlanNode::Shift { input: slot, .. }
+        | PlanNode::SecurityBarrier { input: slot, .. }
         | PlanNode::JoinHint { input: slot, .. }
         | PlanNode::Repartition { input: slot, .. }
         | PlanNode::CollectMetrics { input: slot, .. }

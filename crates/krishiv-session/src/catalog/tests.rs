@@ -830,6 +830,7 @@ fn split_scan_plan(source: ReadSource) -> PhysicalPlan {
     };
     PhysicalPlan::new(
         PhysNode::Scan(ScanNode {
+            decided: None,
             id: ScanId(1),
             scan,
             projection: vec![ColumnPath::new("id")],

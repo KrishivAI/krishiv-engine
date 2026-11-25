@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Tests that runtime filters reach the scans of every root of a plan.
 
+use crate::planner::probe_select::attach_runtime_filters;
 use std::collections::BTreeMap;
 
 use arrow_schema::DataType;
@@ -12,6 +13,7 @@ use crate::physical::ScanNode;
 
 fn scan(id: u64) -> PhysNode {
     PhysNode::Scan(ScanNode {
+        decided: None,
         id: ScanId(id),
         scan: Scan {
             source: ReadSource::Table {

@@ -69,9 +69,15 @@ pub(super) fn attach_analysis(e: AnalysisError, text: Option<&RedactedSql>) -> K
 }
 
 /// The parser options `config` sets.
-pub(super) fn parser_options(config: &Config) -> ParserOptions {
+pub(super) fn parser_options(
+    config: &Config,
+    profile: krishiv_plan::analyzer::SparkProfile,
+) -> ParserOptions {
     let values = conf_values(config, &PARSER_KEYS);
-    ParserOptions::from_conf(|k| values.get(k).map(String::as_str))
+    let mut options = ParserOptions::from_conf(|k| values.get(k).map(String::as_str));
+    // Grammar that differs by Spark version follows the session's profile, not a conf.
+    options.spark_4_3_grammar = profile >= krishiv_plan::analyzer::SparkProfile::V4_3;
+    options
 }
 
 /// The values of `keys` that are set or have a default.
@@ -267,7 +273,8 @@ impl Session {
         }))
         .with_io(env.io.clone())
         .with_formats(Arc::clone(&self.state.runtime.formats))
-        .with_config(Arc::clone(&env.config));
+        .with_config(Arc::clone(&env.config))
+        .with_execution_reads(Arc::default());
         self.with_python_runtime(worker)
     }
 }

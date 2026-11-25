@@ -539,6 +539,12 @@ def _map_pandas(f: Callable[..., Any], return_type: Any) -> Runner:
             for batch in _map_batches(source):
                 # The JVM wraps each row in a struct (`MapInBatchEvaluatorFactory`), which load_stream turns into
                 # one DataFrame (`df_for_struct`, `serializers.py:443-455`).
+                if batch.num_columns == 0:
+                    # No field to concatenate: a frame of the rows alone (the conversion has nothing to build it from).
+                    import pandas as pd
+
+                    yield pd.DataFrame(index=range(batch.num_rows))
+                    continue
                 struct = ArrowBatchTransformer.wrap_struct(_spark_batch(batch, conf.timezone))
                 yield _to_pandas(struct, conf, struct_in_pandas="dict", ndarray_as_list=False, df_for_struct=True)[0]
 

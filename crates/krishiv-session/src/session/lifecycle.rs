@@ -817,6 +817,7 @@ impl Session {
             .queries
             .record_refused(policy, text, class, error, self.operation_id());
         self.state.queries.add_request_tags(&id, &self.request_tags);
+        super::ran::refused_in_script_statement(&id);
         id
     }
 }
