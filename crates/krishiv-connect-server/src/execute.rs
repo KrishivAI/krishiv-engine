@@ -404,14 +404,10 @@ pub async fn execute_plan(
                 if let Some(style) = session.conf().get("spark.sql.binaryOutputStyle")
                     && !style.is_empty()
                 {
-                    {
-                        return Err(krishiv_common::error::KrishivUnsupportedFeature {
-                            feature: format!(
-                                "show_string with spark.sql.binaryOutputStyle = {style}"
-                            ),
-                        }
-                        .into());
+                    return Err(krishiv_common::error::KrishivUnsupportedFeature {
+                        feature: format!("show_string with spark.sql.binaryOutputStyle = {style}"),
                     }
+                    .into());
                 }
                 let Executed::Relation(requested) =
                     Box::pin(execution_plan(entry, &shown.plan, limits, &query_options)).await?

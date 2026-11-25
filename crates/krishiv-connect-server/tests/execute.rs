@@ -2369,3 +2369,28 @@ async fn html_string_is_refused_until_it_has_goldens() {
         .expect_err("html_string is refused");
     assert!(err.to_string().contains("html_string"), "{err}");
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_show_string_result_over_the_byte_cap_is_refused() {
+    let run = start_with(ExecuteLimits {
+        max_batch_size: 1024,
+        ..ExecuteLimits::default()
+    })
+    .await;
+    // Empty cells still cost their headers, so many rows pass the cap without any text.
+    for input in [
+        "SELECT '' AS x FROM range(100000)",
+        "SELECT repeat('a', 5000) AS x",
+    ] {
+        let show = relation(RelType::ShowString(Box::new(pb::ShowString {
+            input: Some(Box::new(sql(input))),
+            num_rows: 1_000_000,
+            truncate: 0,
+            vertical: false,
+        })));
+        let e = collect(&run.channel, request(root(show)))
+            .await
+            .unwrap_err();
+        assert_eq!(error_class(&e), "KRISHIV_UNSUPPORTED_FEATURE", "{input}");
+    }
+}

@@ -136,9 +136,13 @@ pub(super) async fn render(
             let batch = batch?;
             for r in 0..batch.num_rows() {
                 let mut row = Vec::with_capacity(batch.num_columns());
+                // A row and each cell cost their headers even when empty.
+                held = held.saturating_add(std::mem::size_of::<Vec<String>>());
                 for c in 0..batch.num_columns() {
                     let cell = cut(&escape(&cell_text(batch.column(c).as_ref(), r)?), truncate);
-                    held = held.saturating_add(cell.len());
+                    held = held
+                        .saturating_add(cell.len())
+                        .saturating_add(std::mem::size_of::<String>());
                     row.push(cell);
                 }
                 if held > cap {
