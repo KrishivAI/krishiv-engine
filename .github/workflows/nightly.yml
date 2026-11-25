@@ -111,11 +111,12 @@ jobs:
         run: if [ -f "$RUNNER_TEMP/nextest.log" ]; then cargo xtask quarantine --flaky "$RUNNER_TEMP/nextest.log"; fi
       # Needs Java 21 or Docker and the network (the driver jar), so it is ignored in the
       # workspace run above (P3-T101 note §17). The Java toolcache is removed above; the
-      # script falls back to Docker.
+      # script falls back to Docker. jdbc_flight_sql_tpch_all also needs tpchgen-cli, which the runner lacks (run
+      # 45574109863 failed there with "tpchgen-cli runs"), so it stays a manual run.
       - name: Flight SQL JDBC end to end
         run: >-
           cargo nextest run -p krishiv-cli --features flight-sql --locked --test flight_sql
-          --run-ignored only -E 'test(jdbc)'
+          --run-ignored only -E 'test(jdbc) and not test(jdbc_flight_sql_tpch_all)'
       - name: doctests (all features)
         run: cargo test --workspace --doc --all-features --locked
       - name: docs (all features)
