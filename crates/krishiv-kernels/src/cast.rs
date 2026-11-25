@@ -40,8 +40,8 @@ use arrow_schema::{DataType, TimeUnit};
 
 pub use datetime::{Clocked, FixedOffset, TimeZoneRules};
 pub use time::{
-    TimeTruncUnit, format_time, make_time, parse_time, time_diff, time_from_units, time_to_units,
-    time_trunc, to_time,
+    TimeTruncUnit, format_time, make_time, parse_time, parse_time_nanos, time_diff,
+    time_fraction_digits, time_from_units, time_to_units, time_trunc, to_time,
 };
 pub use timestamp::{TimestampText, timestamp_has_zone, timestamp_text};
 
@@ -1126,11 +1126,12 @@ fn from_string<O: OffsetSizeTrait>(
             decimal_out(out, p, sc)
         }
         DataType::Time64(TimeUnit::Nanosecond) => {
-            let out =
-                map_rows::<Time64NanosecondType>(s, |i| match time::parse_time(s.value(i)) {
+            let out = map_rows::<Time64NanosecondType>(s, |i| {
+                match time::parse_time_nanos(s.value(i)) {
                     Some(n) => Ok(Some(n)),
                     None => fail(mode, None, || invalid(i)),
-                })?;
+                }
+            })?;
             Ok(Arc::new(out))
         }
         DataType::Boolean => {
