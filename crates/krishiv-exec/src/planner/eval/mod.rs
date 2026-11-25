@@ -305,11 +305,6 @@ impl EvalEnv {
         }
     }
 
-    /// Sets the Spark release line the kernels follow (the session's profile).
-    pub(crate) fn set_spark_version(&mut self, version: krishiv_kernels::SparkVersion) {
-        self.kernels = std::mem::take(&mut self.kernels).with_spark_version(version);
-    }
-
     /// Fixes the query start instant (see `PlanningContext::query_start_micros`).
     pub(crate) fn set_query_start_micros(&mut self, micros: i64) {
         self.query_start_micros = micros;
@@ -325,7 +320,13 @@ impl EvalEnv {
             legacy_statistical_aggregate: env.legacy_statistical_aggregate,
             zone: env.zone,
             zone_name: env.zone_name.clone(),
-            kernels: KernelCtx::new().with_spark_version(env.spark_version.unwrap_or_default()),
+            kernels: KernelCtx::new().with_spark_version(
+                env.spark_version
+                    .as_deref()
+                    .and_then(krishiv_kernels::SparkVersion::from_line)
+                    // Absent: Spark 4.2, what plans written before the field ran.
+                    .unwrap_or(krishiv_kernels::SparkVersion::V4_2),
+            ),
             query_start_micros: env.query_start_micros,
             user: Arc::clone(&env.user),
             udfs: None,
@@ -361,9 +362,9 @@ impl EvalEnv {
             binary_output_style: (self.binary_style
                 != krishiv_kernels::binary_style::BinaryStyle::default())
             .then(|| Arc::from(self.binary_style.name())),
-            // Only a version other than the default is plan data, so older plans encode as before.
-            spark_version: Some(self.kernels.spark_version())
-                .filter(|v| *v != krishiv_kernels::SparkVersion::default()),
+            // Likewise only a version other than 4.2 (what an absent field means) is plan data.
+            spark_version: (self.kernels.spark_version() != krishiv_kernels::SparkVersion::V4_2)
+                .then(|| Arc::from(self.kernels.spark_version().line())),
         }
     }
 }

@@ -205,7 +205,7 @@ pub fn from_message(
         }
     }
     let plan = plan(m, limits)?;
-    let mut used = plan_features(&plan);
+    let used = plan_features(&plan);
     match kind {
         Header::Current => {
             let declared: BTreeSet<Feature> = m
@@ -213,13 +213,6 @@ pub fn from_message(
                 .iter()
                 .filter_map(|id| Feature::from_id(id))
                 .collect();
-            // A message that names the default line and declares the feature for it is accepted: the plan reads
-            // as no version, which lists no feature, but the header it carries is the one it declares.
-            let names_default = m.env.as_ref().and_then(|e| e.spark_version.as_deref())
-                == Some(krishiv_kernels::SparkVersion::default().name());
-            if names_default && declared.contains(&Feature::SparkVersion) {
-                used.insert(Feature::SparkVersion);
-            }
             if declared != used {
                 return Err(corrupt(
                     "the feature header does not match the plan's constructs",
@@ -322,16 +315,14 @@ fn plan(m: &pb::PhysicalPlan, limits: &Limits) -> Result<PhysicalPlan> {
     {
         return Err(corrupt("an unknown binary output style"));
     }
-    // A writer sets the line only when it is not the default, and by its exact name.
-    // The default is never written; a plan that names it reads as the canonical `None`.
-    let spark_version = match env.spark_version.as_deref() {
-        None => None,
-        Some(name) => Some(
-            krishiv_kernels::SparkVersion::from_name(name)
-                .ok_or_else(|| corrupt("an unknown Spark version"))?,
-        )
-        .filter(|v| *v != krishiv_kernels::SparkVersion::default()),
-    };
+    // Likewise the version: absent means Spark 4.2 (every plan written before the feature), so
+    // an encoder never sends "4.2". The lines are `krishiv_kernels::SparkVersion::ALL` but 4.2
+    // (`spark_version_lines_match_the_kernels` keeps them equal).
+    if let Some(line) = env.spark_version.as_deref()
+        && !matches!(line, "4.0" | "4.1" | "4.3")
+    {
+        return Err(corrupt("an unknown Spark version"));
+    }
     let env = ExprEnv {
         ansi: env.ansi,
         // The wire carries the flag for the `legacy_statistical_aggregate`
@@ -349,7 +340,7 @@ fn plan(m: &pb::PhysicalPlan, limits: &Limits) -> Result<PhysicalPlan> {
         legacy_coding_error_action: env.legacy_coding_error_action.unwrap_or(false),
         legacy_time_parser: env.legacy_time_parser.unwrap_or(false),
         binary_output_style: env.binary_output_style.as_deref().map(std::sync::Arc::from),
-        spark_version,
+        spark_version: env.spark_version.as_deref().map(std::sync::Arc::from),
     };
     if !env.zone_name_matches_zone() {
         return Err(corrupt("a session zone name that is not its offset"));

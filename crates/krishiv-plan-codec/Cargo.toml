@@ -20,13 +20,13 @@ arrow-schema.workspace = true
 krishiv-common = { path = "../krishiv-common", version = "=0.2.1" }
 krishiv-exec = { path = "../krishiv-exec", version = "=0.2.1" }
 krishiv-io = { path = "../krishiv-io", version = "=0.2.1" }
-krishiv-kernels = { path = "../krishiv-kernels", version = "=0.2.1" }
 krishiv-plan = { path = "../krishiv-plan", version = "=0.2.1" }
 krishiv-types = { path = "../krishiv-types", version = "=0.2.1" }
 prost = { workspace = true, features = ["derive", "std"] }
 thiserror.workspace = true
 
 [dev-dependencies]
+krishiv-kernels = { path = "../krishiv-kernels" }
 krishiv-optimizer = { path = "../krishiv-optimizer" }
 krishiv-plan = { path = "../krishiv-plan", features = ["testing"] }
 krishiv-sql = { path = "../krishiv-sql" }

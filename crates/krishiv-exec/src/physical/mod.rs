@@ -349,9 +349,11 @@ pub struct ExprEnv {
     /// prints): `to_csv` and `to_xml` print binary fields in that style. A plan that sets it
     /// needs the `binary_output_style` codec feature.
     pub binary_output_style: Option<Arc<str>>,
-    /// The Spark release line the session follows, when it is not the default (4.3): kernels and
-    /// functions apply that line's rules. A plan that sets it needs the `spark_version` codec feature.
-    pub spark_version: Option<krishiv_kernels::SparkVersion>,
+    /// The Spark release line (`"4.3"`) whose behaviour the kernels and function bindings
+    /// reproduce. `None` is Spark 4.2: what every plan written before the field existed ran,
+    /// so such a plan keeps its meaning. A plan that sets it needs the `spark_version` codec
+    /// feature.
+    pub spark_version: Option<Arc<str>>,
 }
 
 impl ExprEnv {

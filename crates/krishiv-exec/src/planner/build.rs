@@ -277,11 +277,9 @@ impl<'a> Planner<'a> {
     fn new(cx: &'a PlanningContext, root: &Arc<LogicalPlan>) -> Self {
         let next_id = max_id(root).saturating_add(1).max(1 << 62);
         let mut env = EvalEnv::new(&cx.config, Arc::clone(&cx.user));
+        env.kernels = env.kernels.with_spark_version(cx.spark_version);
         if let Some(micros) = cx.query_start_micros {
             env.set_query_start_micros(micros);
-        }
-        if let Some(version) = cx.spark_version {
-            env.set_spark_version(version);
         }
         // Planning validates UDF calls against the session's library; the
         // implementation a plan runs comes from its worker.

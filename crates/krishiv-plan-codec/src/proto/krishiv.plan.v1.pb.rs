@@ -131,8 +131,11 @@ pub struct ExprEnv {
     /// feature: binary_output_style
     #[prost(string, optional, tag = "11")]
     pub binary_output_style: ::core::option::Option<::prost::alloc::string::String>,
-    /// The Spark release line (`4.0`, `4.1`, `4.2`) whose kernel and function rules the workers
-    /// apply, when it is not the default (4.3): a worker without the feature would run 4.3's.
+    /// The Spark release line ("4.0", "4.1", "4.3") whose behaviour the kernels and function
+    /// bindings reproduce (the session's profile). Absent means Spark 4.2, what every plan
+    /// written before the feature ran, so a 0.2 writer's plan keeps its meaning; a 0.3 session
+    /// on its default 4.3 profile sets "4.3", and a worker without the feature (which would run
+    /// it as Spark 4.2) refuses it.
     /// feature: spark_version
     #[prost(string, optional, tag = "12")]
     pub spark_version: ::core::option::Option<::prost::alloc::string::String>,
@@ -1746,7 +1749,8 @@ pub struct PythonUdfFunction {
 pub struct DataType {
     #[prost(enumeration = "data_type::Kind", tag = "1")]
     pub kind: i32,
-    /// `KIND_DECIMAL` and `KIND_TIME` only.
+    /// `KIND_DECIMAL` and `KIND_TIME` only. A `KIND_TIME` precision of 7 to 9
+    /// (Spark 4.3's nanosecond TIME) needs feature: time_precision_nanos.
     #[prost(uint32, tag = "2")]
     pub precision: u32,
     /// `KIND_DECIMAL` only.

@@ -54,20 +54,20 @@ pub enum SparkProfile {
 }
 
 impl SparkProfile {
-    /// The kernels' Spark line for this profile (3.5 has no line of its own: it runs 4.0's rules).
-    #[must_use]
-    pub const fn kernel_version(self) -> krishiv_kernels::SparkVersion {
-        use krishiv_kernels::SparkVersion as V;
-        match self {
-            Self::V3_5 | Self::V4_0 => V::V4_0,
-            Self::V4_1 => V::V4_1,
-            Self::V4_2 => V::V4_2,
-            Self::V4_3 => V::V4_3,
-        }
-    }
-
     /// Every profile, oldest first.
     pub const ALL: [Self; 5] = [Self::V3_5, Self::V4_0, Self::V4_1, Self::V4_2, Self::V4_3];
+
+    /// The kernels' release line for this profile (the kernels model 4.0 as their oldest line;
+    /// 3.5 behaves as it).
+    #[must_use]
+    pub const fn kernel_version(self) -> krishiv_kernels::SparkVersion {
+        match self {
+            Self::V3_5 | Self::V4_0 => krishiv_kernels::SparkVersion::V4_0,
+            Self::V4_1 => krishiv_kernels::SparkVersion::V4_1,
+            Self::V4_2 => krishiv_kernels::SparkVersion::V4_2,
+            Self::V4_3 => krishiv_kernels::SparkVersion::V4_3,
+        }
+    }
 
     /// The release line, as `"4.2"`.
     #[must_use]
@@ -165,6 +165,7 @@ pub struct CallTypes<'a> {
     decimal_loss: bool,
     case_sensitive: bool,
     concat_binary_as_string: bool,
+    profile: SparkProfile,
 }
 
 impl fmt::Debug for CallTypes<'_> {
@@ -196,6 +197,7 @@ impl<'a> CallTypes<'a> {
             decimal_loss: true,
             case_sensitive: false,
             concat_binary_as_string: false,
+            profile: SparkProfile::V4_3,
         }
     }
 
@@ -223,6 +225,20 @@ impl<'a> CallTypes<'a> {
             .get(i)
             .copied()
             .unwrap_or_else(|| self.constant(i).is_some())
+    }
+
+    /// With the session's Spark profile (Spark 4.3 by default): a few rules differ by release
+    /// (`current_time(p)` takes `p` up to 6 before 4.3, up to 9 from it).
+    #[must_use]
+    pub const fn with_profile(mut self, profile: SparkProfile) -> Self {
+        self.profile = profile;
+        self
+    }
+
+    /// The session's Spark profile.
+    #[must_use]
+    pub const fn profile(&self) -> SparkProfile {
+        self.profile
     }
 
     /// With `spark.sql.ansi.enabled = ansi` (on by default): some legacy

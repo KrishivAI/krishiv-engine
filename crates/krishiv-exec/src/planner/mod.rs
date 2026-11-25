@@ -125,12 +125,14 @@ pub struct PlanningContext {
     /// executes, such as `QUERY_ONLY_CORRUPT_RECORD_COLUMN` (raised by the file format's reader), are
     /// skipped.
     pub inspect: bool,
+    /// The Spark release whose behaviour the kernels and function bindings reproduce (the
+    /// session's profile). Plan data: a version other than 4.2 travels in
+    /// [`ExprEnv::spark_version`](crate::physical::ExprEnv::spark_version).
+    pub spark_version: krishiv_kernels::SparkVersion,
     /// Whether a scan that decides once (`ScanPushdown::decides_once`) is asked to decide. On for plans that
     /// run and for inspected plans (`EXPLAIN` asks the source once, as Spark's does); off only for
     /// `physical_counted` and `physical_probe`, which run no user code.
     pub decisions: bool,
-    /// The Spark release line the session follows (`None`: the default, 4.3).
-    pub spark_version: Option<krishiv_kernels::SparkVersion>,
 }
 
 impl PlanningContext {
@@ -144,15 +146,15 @@ impl PlanningContext {
             query_start_micros: None,
             sample_salt: None,
             inspect: false,
+            spark_version: krishiv_kernels::SparkVersion::default(),
             decisions: true,
-            spark_version: None,
         }
     }
 
-    /// The same context planning for the Spark release line `version`.
+    /// The same context reproducing Spark `version`.
     #[must_use]
     pub fn with_spark_version(mut self, version: krishiv_kernels::SparkVersion) -> Self {
-        self.spark_version = Some(version);
+        self.spark_version = version;
         self
     }
 

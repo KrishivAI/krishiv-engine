@@ -183,8 +183,8 @@ impl Session {
             .with_user(self.state.principal.name.as_str())
             .with_udfs(Arc::clone(&self.state.udfs))
             .with_inspection(inspected)
-            .with_decisions(decisions)
-            .with_spark_version(self.state.profile.kernel_version());
+            .with_spark_version(self.state.profile.kernel_version())
+            .with_decisions(decisions);
         // Planning recurses on a `krishiv-deep` thread this worker joins, and a data source's
         // `decide` may run user code there: tell the runtime the worker is blocked so its core
         // goes to another task (a one-thread executor would otherwise stall every other query).

@@ -2606,16 +2606,17 @@ fn legacy_time_parser() -> PhysicalPlan {
 fn binary_output_style() -> PhysicalPlan {
     let env = ExprEnv {
         binary_output_style: Some(Arc::from("HEX")),
+        spark_version: None,
         ..env()
     };
     let explain = ExplainNode::new("Root", "details", vec![]);
     PhysicalPlan::new(PhysNode::OneRow, schema(), explain, env)
 }
 
-/// A plan whose session follows Spark 4.2.
+/// A plan whose environment reproduces Spark 4.3 (`spark_version` set; absent is 4.2).
 fn spark_version() -> PhysicalPlan {
     let env = ExprEnv {
-        spark_version: Some(krishiv_kernels::SparkVersion::V4_2),
+        spark_version: Some(Arc::from("4.3")),
         ..env()
     };
     let explain = ExplainNode::new("Root", "details", vec![]);
@@ -2793,6 +2794,26 @@ pub(crate) fn typed() -> Vec<(&'static str, PhysNode)> {
                 krishiv_types::ArrayType::new(time3, true).into(),
             )))),
         }],
+        nullable: None,
+        subqueries: Vec::new(),
+    };
+    // Spark 4.3's nanosecond TIME, alone and inside an array: `time_precision_nanos`.
+    let time9 = DataType::Time { precision: 9 };
+    let nanos_times = PhysNode::Project {
+        input: boxed(scan()),
+        layout: vec![AttrId(1), AttrId(2)],
+        items: vec![
+            ProjectItemPlan::Expr {
+                name: "time9".to_owned(),
+                expr: lit(Literal::Null(Some(time9.clone()))),
+            },
+            ProjectItemPlan::Expr {
+                name: "times9".to_owned(),
+                expr: lit(Literal::Null(Some(DataType::Array(
+                    krishiv_types::ArrayType::new(time9, true).into(),
+                )))),
+            },
+        ],
         nullable: None,
         subqueries: Vec::new(),
     };
@@ -3033,6 +3054,7 @@ pub(crate) fn typed() -> Vec<(&'static str, PhysNode)> {
         ),
         ("time_nested", nested_times),
         ("time_project", times),
+        ("time_nanos", nanos_times),
         ("geo_scan", PhysNode::Scan(spatial)),
         ("geo_join_residual", residual_join),
         ("udt_scan", PhysNode::Scan(udts)),
