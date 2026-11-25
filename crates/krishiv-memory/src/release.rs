@@ -11,6 +11,15 @@
 //! host's release hook ([`set_release_hook`]) on its own thread. Unlimited
 //! runs never refuse a grant, so they never pay for it.
 //!
+//! An *idle epoch* ([`note_idle`]) starts when the process has stayed without
+//! a running query for a while (the executor's idle round decides; design
+//! `0.4-memory-query-end-release`). Threads that check with
+//! [`release_if_due_here`] (an idle worker before it parks, a pool thread
+//! after its closure) then release once for it, so memory a finished query
+//! freed does not stay in the allocator of every thread that ran it. Running
+//! drivers check only pressure epochs ([`release_if_pressured_here`]), so a
+//! query never releases mid-task for an idle epoch.
+//!
 //! The engine never sets a global allocator (a library cannot: its host
 //! owns it), so the hook comes from the binary that chose the allocator,
 //! e.g. one calling `mi_collect(true)` for mimalloc. Without a hook, memory
@@ -26,6 +35,7 @@ pub const EPOCH_INTERVAL: Duration = Duration::from_millis(1);
 
 static HOOK: OnceLock<fn()> = OnceLock::new();
 static EPOCH: AtomicU64 = AtomicU64::new(0);
+static IDLE_EPOCH: AtomicU64 = AtomicU64::new(0);
 /// Milliseconds since [`start`] at the last epoch (0: none yet).
 static LAST: AtomicU64 = AtomicU64::new(0);
 
@@ -74,9 +84,43 @@ pub(crate) fn note_pressure() {
     }
 }
 
+/// The current idle epoch.
+pub fn idle_epoch() -> u64 {
+    IDLE_EPOCH.load(Ordering::Acquire)
+}
+
+/// The process has stayed idle (no query running): starts a new idle epoch.
+/// Called by the executor once its debounce confirmed idleness, never per
+/// query end (a burst of statements must not make threads release between
+/// them).
+pub fn note_idle() {
+    IDLE_EPOCH.fetch_add(1, Ordering::AcqRel);
+}
+
 thread_local! {
     /// The pressure epoch this thread last released memory for.
     static SEEN: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    /// The idle epoch this thread last released memory for.
+    static SEEN_IDLE: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Calls the release hook on this thread once if a pressure epoch or an idle
+/// epoch ([`note_idle`]) started since it last released; returns whether it
+/// called the hook. Cheap otherwise: a few atomic and thread-local loads. For
+/// threads between tasks (a worker about to park, a pool thread after its
+/// closure), not for running drivers.
+pub fn release_if_due_here() -> bool {
+    let Some(hook) = HOOK.get() else {
+        return false;
+    };
+    let pressure = pressure_epoch();
+    let idle = idle_epoch();
+    let due = SEEN.with(|s| s.replace(pressure) != pressure)
+        | SEEN_IDLE.with(|s| s.replace(idle) != idle);
+    if due {
+        hook();
+    }
+    due
 }
 
 /// [`release_if_pressured`] with this thread's own record of the epochs it

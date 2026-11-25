@@ -19,6 +19,7 @@ use tokio::sync::{Semaphore, oneshot};
 use tokio::task::{JoinError, JoinHandle};
 
 use crate::error::{Result, cancelled, internal};
+use crate::idle::{Pool, Releaser, ThreadCount};
 
 /// Workload class of a query. P2a runs every class on one compute runtime;
 /// the class is threaded through so workload management (per-class
@@ -73,6 +74,11 @@ pub trait Executor: Send + Sync + fmt::Debug {
     fn compute_handle(&self) -> &Handle;
     /// Worker slots: the most drivers one pipeline runs at once.
     fn parallelism(&self) -> usize;
+    /// The last running query of the process ended ([`crate::QueryRun`]):
+    /// an executor may return its threads' freed memory once the process
+    /// stays idle. Called on whatever thread dropped the run, so it must
+    /// not block. The default (an embedder's executor) does nothing.
+    fn queries_idle(&self) {}
     /// The time source of the stall detector and the metrics (the paused
     /// Tokio clock in deterministic mode).
     fn now(&self) -> Instant {
@@ -179,6 +185,10 @@ pub struct ExecutorConfig {
     /// reads and writes (`krishiv.io.blockingThreads`, default 8; see
     /// [`TokioExecutor::new`]).
     pub io_blocking_threads: usize,
+    /// Return freed memory on every thread once the process has no query
+    /// running (`krishiv.memory.releaseAtQueryEnd`, default on; see
+    /// [`crate::idle`]).
+    pub release_when_idle: bool,
 }
 
 impl Default for ExecutorConfig {
@@ -189,6 +199,7 @@ impl Default for ExecutorConfig {
             io_threads: 2,
             blocking_threads: cores,
             io_blocking_threads: DEFAULT_IO_BLOCKING_THREADS,
+            release_when_idle: true,
         }
     }
 }
@@ -198,7 +209,8 @@ const DEFAULT_IO_BLOCKING_THREADS: usize = 8;
 
 impl ExecutorConfig {
     /// Takes the executor settings of `config`: `krishiv.io.blockingThreads`
-    /// (validated as a positive integer when it was set).
+    /// (validated as a positive integer when it was set) and
+    /// `krishiv.memory.releaseAtQueryEnd`.
     #[must_use]
     pub fn with_config(mut self, config: &krishiv_common::config::Config) -> Self {
         let blocking = config
@@ -206,6 +218,10 @@ impl ExecutorConfig {
             .and_then(krishiv_common::config::ConfigValue::as_int)
             .and_then(|n| usize::try_from(n).ok());
         self.io_blocking_threads = blocking.unwrap_or(DEFAULT_IO_BLOCKING_THREADS);
+        self.release_when_idle = config
+            .get(&krishiv_common::config::MEMORY_RELEASE_AT_QUERY_END)
+            .and_then(krishiv_common::config::ConfigValue::as_bool)
+            .unwrap_or(true);
         self
     }
 }
@@ -235,6 +251,10 @@ pub struct TokioExecutor {
     /// Deterministic mode: blocking closures run as tasks on the caller's
     /// runtime and time is Tokio's clock.
     deterministic: bool,
+    /// Returns freed memory when the process goes idle
+    /// (`ExecutorConfig::release_when_idle`); declared before the runtimes,
+    /// so it stops first.
+    releaser: Option<Releaser>,
     _owned: Option<Runtimes>,
 }
 
@@ -258,13 +278,28 @@ impl TokioExecutor {
     pub fn new(config: &ExecutorConfig) -> Result<Arc<Self>> {
         let compute_threads = config.compute_threads.max(1);
         let blocking_threads = config.blocking_threads.max(1);
-        let build = |builder: &mut tokio::runtime::Builder, name: &str| {
-            builder
-                .thread_name(name)
-                .enable_all()
-                .build()
-                .map_err(|e| internal(format!("cannot start the {name} runtime: {e}")))
-        };
+        let release = config.release_when_idle;
+        let compute_count = Arc::new(ThreadCount::default());
+        let io_count = Arc::new(ThreadCount::default());
+        let build =
+            |builder: &mut tokio::runtime::Builder, name: &str, count: &Arc<ThreadCount>| {
+                if release {
+                    // A worker about to park has no task: release there for an
+                    // idle epoch (or a pressure one) it has not released for.
+                    let (up, down) = (Arc::clone(count), Arc::clone(count));
+                    builder
+                        .on_thread_park(|| {
+                            krishiv_memory::release_if_due_here();
+                        })
+                        .on_thread_start(move || up.start())
+                        .on_thread_stop(move || down.stop());
+                }
+                builder
+                    .thread_name(name)
+                    .enable_all()
+                    .build()
+                    .map_err(|e| internal(format!("cannot start the {name} runtime: {e}")))
+            };
         // Statements run on compute threads, and some recurse deeply
         // through their futures (an SQL script nested to Spark's limit of
         // 32 blocks needs about 2 MiB in a debug build, tokio's default
@@ -276,6 +311,7 @@ impl TokioExecutor {
                 .max_blocking_threads(blocking_threads)
                 .thread_stack_size(COMPUTE_STACK_BYTES),
             "krishiv-compute",
+            &compute_count,
         )?;
         // The I/O runtime's blocking pool is bounded too
         // (`io_blocking_threads`). A local file store reads each range on a
@@ -293,18 +329,49 @@ impl TokioExecutor {
                 .worker_threads(config.io_threads.max(1))
                 .max_blocking_threads(config.io_blocking_threads.max(1)),
             "krishiv-io",
+            &io_count,
         )?;
+        let releaser = if release {
+            let pools = vec![
+                Pool {
+                    handle: compute.handle().clone(),
+                    workers: compute_threads,
+                    blocking_cap: blocking_threads,
+                    threads: compute_count,
+                },
+                Pool {
+                    handle: io.handle().clone(),
+                    workers: config.io_threads.max(1),
+                    blocking_cap: config.io_blocking_threads.max(1),
+                    threads: io_count,
+                },
+            ];
+            Some(
+                Releaser::start(pools)
+                    .map_err(|e| internal(format!("cannot start the release thread: {e}")))?,
+            )
+        } else {
+            None
+        };
         Ok(Arc::new(Self {
             compute: compute.handle().clone(),
             io: io.handle().clone(),
             parallelism: compute_threads,
             blocking: Arc::new(Semaphore::new(blocking_threads)),
             deterministic: false,
+            releaser,
             _owned: Some(Runtimes {
                 compute: Some(compute),
                 io: Some(io),
             }),
         }))
+    }
+
+    /// Idle rounds this executor's releaser ran (see [`crate::idle`]); 0
+    /// when `release_when_idle` is off or in deterministic mode.
+    #[must_use]
+    pub fn idle_rounds(&self) -> u64 {
+        self.releaser.as_ref().map_or(0, Releaser::rounds)
     }
 
     /// Deterministic test mode (spec 13 §4, ADR 0029): every task, blocking
@@ -331,6 +398,7 @@ impl TokioExecutor {
             parallelism: slots.max(1),
             blocking: Arc::new(Semaphore::new(1)),
             deterministic: true,
+            releaser: None,
             _owned: None,
         }))
     }
@@ -347,6 +415,7 @@ impl Executor for TokioExecutor {
     ) -> BoxFuture<'static, Result<()>> {
         let permits = Arc::clone(&self.blocking);
         let compute = self.compute.clone();
+        let release = self.releaser.is_some();
         if self.deterministic {
             // On the controlled runtime, scheduled like any task.
             return Box::pin(TaskHandle::new(compute.spawn(async move { f() })));
@@ -358,8 +427,12 @@ impl Executor for TokioExecutor {
                 .await
                 .map_err(|_| internal("the blocking pool is closed".to_owned()))?;
             let task = compute.spawn_blocking(move || {
-                let _slot = permit;
                 f();
+                drop(permit);
+                // After the slot is free, so no closure waits on the release.
+                if release {
+                    krishiv_memory::release_if_due_here();
+                }
             });
             TaskHandle::new(task).await
         })
@@ -375,6 +448,12 @@ impl Executor for TokioExecutor {
 
     fn parallelism(&self) -> usize {
         self.parallelism
+    }
+
+    fn queries_idle(&self) {
+        if let Some(releaser) = &self.releaser {
+            releaser.request();
+        }
     }
 
     fn now(&self) -> Instant {
@@ -429,6 +508,7 @@ mod tests {
             io_threads: 1,
             blocking_threads: 1,
             io_blocking_threads: 3,
+            release_when_idle: true,
         };
         let executor = TokioExecutor::new(&config).unwrap();
         let most = most_at_once_on_io(&executor, 12);

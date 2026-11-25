@@ -98,8 +98,8 @@ pub use pool::{
 };
 pub use relation::{RelationHash, RelationLease, RelationRef, RelationStore};
 pub use release::{
-    EPOCH_INTERVAL, pressure_epoch, release_hook_installed, release_if_pressured,
-    release_if_pressured_here, set_release_hook,
+    EPOCH_INTERVAL, idle_epoch, note_idle, pressure_epoch, release_hook_installed,
+    release_if_due_here, release_if_pressured, release_if_pressured_here, set_release_hook,
 };
 pub use reservation::Reservation;
 pub use resident::{

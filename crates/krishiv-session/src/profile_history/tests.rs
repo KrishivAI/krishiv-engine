@@ -923,6 +923,7 @@ fn stored_hints_equal_the_explain_analyze_hints_under_masking() {
         io_threads: 1,
         blocking_threads: 4,
         io_blocking_threads: 2,
+        release_when_idle: true,
     })
     .unwrap();
     let rt = EngineRuntime::builder()
