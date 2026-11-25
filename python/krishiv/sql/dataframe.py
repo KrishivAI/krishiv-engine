@@ -2028,14 +2028,15 @@ class DataFrame:
 
     def toArrow(self) -> Any:
         """The result as a ``pyarrow.Table`` (needs pyarrow). As PySpark's Connect client, it refuses a year-month or
-        calendar interval at any depth, by its Spark type."""
+        calendar interval at any depth, by its Spark type. Top-level ``string_view`` and ``binary_view`` columns are
+        returned as ``string`` and ``binary``, which every Arrow reader accepts; ``pa.table(df)`` keeps the views."""
         table = self._arrow()
         if any(_convert.not_collectable_arrow(f.type) for f in table.schema):
             raise PySparkTypeError(
                 errorClass="UNSUPPORTED_DATA_TYPE_FOR_ARROW_CONVERSION",
                 messageParameters={"data_type": repr(_convert.not_collectable(self.schema))},
             )
-        return table
+        return _convert.without_views(table)
 
     def _arrow(self, action: str = "toArrow") -> Any:
         """The result as a ``pyarrow.Table``, whatever its types; ``action`` names the caller in the

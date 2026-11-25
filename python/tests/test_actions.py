@@ -506,3 +506,9 @@ def test_session_zone_accepts_java_zone_id_forms() -> None:
         "Europe/Paris": "14:00:00",
     }.items():
         assert noon.astimezone(session_zone(name)).strftime("%H:%M:%S") == expected, name
+
+
+def test_to_arrow_returns_plain_string_columns_and_the_stream_keeps_views(spark: SparkSession, big: Any) -> None:
+    df = spark.createDataFrame(big).select("name")
+    assert df.toArrow().schema.field("name").type in (pa.string(), pa.large_string())
+    assert pa.table(df).schema.field("name").type == pa.string_view()

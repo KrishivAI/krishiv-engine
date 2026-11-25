@@ -55,6 +55,19 @@ def not_collectable(t: DataType) -> DataType | None:
     return next((x for x in _leaves(t) if isinstance(x, YearMonthIntervalType | CalendarIntervalType)), None)
 
 
+def without_views(table: Any) -> Any:
+    """``table`` with its top-level view columns cast to ``string`` / ``binary`` (PY-007)."""
+    import pyarrow as pa
+
+    types = table.schema.types
+    if not any(pa.types.is_string_view(t) or pa.types.is_binary_view(t) for t in types):
+        return table
+    target = [
+        pa.string() if pa.types.is_string_view(t) else pa.binary() if pa.types.is_binary_view(t) else t for t in types
+    ]
+    return table.cast(pa.schema([f.with_type(t) for f, t in zip(table.schema, target, strict=True)]))
+
+
 def not_collectable_arrow(arrow_type: Any) -> str | None:
     """The name of the first year-month or calendar interval in an Arrow type."""
     import pyarrow as pa
