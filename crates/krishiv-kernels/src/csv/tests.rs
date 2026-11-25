@@ -77,6 +77,7 @@ fn from_csv_builds_structs() {
         timestamp_pattern: None,
         ntz_pattern: None,
         fallback: false,
+        time_micros_only: false,
     };
     let zone = crate::cast::FixedOffset(0);
     let out = from_csv(
@@ -339,6 +340,7 @@ fn from_csv_converts_every_kind_and_reports_the_parsed_row() {
         timestamp_pattern: None,
         ntz_pattern: None,
         fallback: false,
+        time_micros_only: false,
     };
     let zone = crate::cast::FixedOffset(0);
     let ts = |s: &str| -> Result<Option<i64>, KernelError> { Ok((s == "T").then_some(5)) };

@@ -1,0 +1,11 @@
+{
+  "cases": {
+    "divergence-time-4-3-precision": [
+      155,
+      156,
+      163
+    ]
+  },
+  "file": "nonansi/cast",
+  "format_version": 1
+}

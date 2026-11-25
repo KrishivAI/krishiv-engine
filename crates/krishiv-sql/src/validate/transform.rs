@@ -17,7 +17,9 @@ impl Checker<'_> {
             return Err(at(UnsupportedFeatureTransformDistinctAll {}, t.span));
         }
         if let Some(TransformOutput::Columns(columns)) = &t.output {
-            columns.iter().try_for_each(|c| data_type(&c.data_type))?;
+            columns
+                .iter()
+                .try_for_each(|c| data_type(&c.data_type, self.opts))?;
         }
         self.select(&t.select)?;
         t.input_format
