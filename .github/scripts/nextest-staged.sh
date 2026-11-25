@@ -17,7 +17,9 @@ stage() {
   df -h /
 }
 df -h /
-stage --lib --bins
+# krishiv-python is test = false (its cdylib cannot link as a test harness; --lib ignores the flag); its integration
+# tests still run in the later stages.
+stage --lib --bins --exclude krishiv-python
 # shellcheck disable=SC2086
 cargo metadata --format-version 1 --locked ${META_ARGS:-} > "$meta"
 for range in a-c d-l m-r s t-z; do
