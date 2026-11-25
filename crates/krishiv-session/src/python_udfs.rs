@@ -887,7 +887,7 @@ mod tests {
         let before = hook.0.lock().unwrap().len();
         run("CREATE FUNCTION f AS 'python' USING PYTHON 'f'").unwrap();
         let err = run("DROP FUNCTION other.f").unwrap_err();
-        assert!(err.to_string().contains("ROUTINE_NOT_FOUND"), "{err}");
+        assert!(err.to_string().contains("SCHEMA_NOT_FOUND"), "{err}");
         assert_eq!(hook.0.lock().unwrap().len(), before + 1);
         run("DROP FUNCTION f").unwrap();
         run("DROP FUNCTION IF EXISTS f").unwrap();
