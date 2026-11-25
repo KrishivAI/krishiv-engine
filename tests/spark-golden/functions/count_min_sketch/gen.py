@@ -17,7 +17,10 @@ VALUES = [
     "(CAST(NULL AS INT))",
     # An untyped NULL value is the statement `count_min_sketch(NULL, ...)` below.
 ]
-QUERIES = [f"SELECT hex(count_min_sketch(c, 0.2d, 0.9d, 42)) FROM VALUES {v} t(c)" for v in VALUES]
+QUERIES = [
+    f"SELECT hex(count_min_sketch(c, 0.2d, 0.9d, 42)) FROM VALUES {v} t(c)"
+    for v in VALUES
+]
 ONE = "FROM VALUES (1) t(c)"
 QUERIES += [
     f"SELECT hex(count_min_sketch(NULL, 0.2d, 0.9d, 42)) {ONE}",
@@ -71,20 +74,28 @@ QUERIES += [
 ]
 QUERIES += [
     f"SELECT hex(count_min_sketch(c, 0.5d, 0.5d, 1)) {ONE} WHERE false",
-    "SELECT g, hex(count_min_sketch(c, 0.5d, 0.5d, -7)) FROM VALUES (1,1),(1,2),(2,CAST(NULL AS INT)) t(g,c) "
-    "GROUP BY g ORDER BY g",
+    (
+        "SELECT g, hex(count_min_sketch(c, 0.5d, 0.5d, -7)) FROM VALUES (1,1),(1,2),(2,CAST(NULL AS INT)) t(g,c) "
+        "GROUP BY g ORDER BY g"
+    ),
     "SELECT hex(count_min_sketch(DISTINCT c, 0.5d, 0.5d, 1)) FROM VALUES (1),(1),(2) t(c)",
     "SELECT hex(count_min_sketch(c, 0.5d, 0.5d, 1) FILTER (WHERE c > 1)) FROM VALUES (1),(1),(2) t(c)",
     "SELECT hex(count_min_sketch(confidence => 0.9d, seed => 3, column => c, epsilon => 0.2d)) FROM VALUES (7) t(c)",
     # Enough rows to cross several batches and partitions.
     "SELECT sha2(count_min_sketch(id % 1000, 0.01d, 0.95d, 11), 256) FROM range(0, 100000, 1, 8)",
-    "SELECT id % 3 AS g, sha2(count_min_sketch(CAST(id AS STRING), 0.05d, 0.9d, 5), 256) "
-    "FROM range(0, 30000, 1, 8) GROUP BY id % 3 ORDER BY g",
+    (
+        "SELECT id % 3 AS g, sha2(count_min_sketch(CAST(id AS STRING), 0.05d, 0.9d, 5), 256) "
+        "FROM range(0, 30000, 1, 8) GROUP BY id % 3 ORDER BY g"
+    ),
 ]
 
 
 def main() -> None:
-    spark = SparkSession.builder.master("local[2]").config("spark.sql.catalogImplementation", "in-memory").getOrCreate()
+    spark = (
+        SparkSession.builder.master("local[2]")
+        .config("spark.sql.catalogImplementation", "in-memory")
+        .getOrCreate()
+    )
     cases = []
     for sql in QUERIES:
         try:
@@ -92,9 +103,13 @@ def main() -> None:
             rows = ["|".join(str(v) for v in r) for r in df.collect()]
             cases.append({"sql": sql, "columns": df.columns, "rows": rows})
         except Exception as e:  # noqa: BLE001 - the error is the answer
-            cases.append({"sql": sql, "error": e.getCondition(), "sqlstate": e.getSqlState()})
+            cases.append(
+                {"sql": sql, "error": e.getCondition(), "sqlstate": e.getSqlState()}
+            )
     with open(sys.argv[1], "w", encoding="utf-8") as out:
-        json.dump({"spark": spark.version, "cases": cases}, out, indent=1, ensure_ascii=False)
+        json.dump(
+            {"spark": spark.version, "cases": cases}, out, indent=1, ensure_ascii=False
+        )
         out.write("\n")
 
 
