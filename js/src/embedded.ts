@@ -37,9 +37,18 @@ export function platformPackage(
 
 function isGlibc(): boolean {
   if (process.platform !== "linux") return false;
-  // Node's diagnostic report names the glibc it runs on; on musl the field is absent.
-  const report = process.report?.getReport() as { header?: { glibcVersionRuntime?: string } } | undefined;
-  return report?.header?.glibcVersionRuntime !== undefined;
+  // Node's diagnostic report names the glibc it runs on; on musl the field is absent. Without network data:
+  // collecting it resolves interface names, which is slow on some hosts (napi-rs's own loader does the same).
+  const report = process.report;
+  if (report === undefined) return true;
+  const before = report.excludeNetwork;
+  report.excludeNetwork = true;
+  try {
+    const header = (report.getReport() as { header?: { glibcVersionRuntime?: string } }).header;
+    return header?.glibcVersionRuntime !== undefined;
+  } finally {
+    report.excludeNetwork = before;
+  }
 }
 
 function packageVersion(req: NodeRequire): string | undefined {
@@ -47,6 +56,18 @@ function packageVersion(req: NodeRequire): string | undefined {
     return (req("../package.json") as { version?: string }).version;
   } catch {
     return undefined;
+  }
+}
+
+/**
+ * Refuses a binary of another version than the package (the platform packages are published in lockstep). The
+ * `KRISHIV_NATIVE_ENGINE` override (local builds, CI) is not checked: it names a binary on purpose.
+ */
+export function checkVersion(pkg: string, got: string, want: string | undefined): void {
+  if (want !== undefined && got !== want) {
+    throw new KrishivError(`${pkg} is version ${got} but krishiv is ${want}; install the same version of both`, {
+      errorClass: "KRISHIV_NATIVE_ENGINE_UNAVAILABLE",
+    });
   }
 }
 
@@ -77,13 +98,7 @@ export function loadAddon(env: NodeJS.ProcessEnv = process.env): NativeAddon {
       { errorClass: "KRISHIV_NATIVE_ENGINE_UNAVAILABLE", cause: e },
     );
   }
-  const want = packageVersion(req);
-  const got = addon.version();
-  if (want !== undefined && got !== want) {
-    throw new KrishivError(`${pkg} is version ${got} but krishiv is ${want}; install the same version of both`, {
-      errorClass: "KRISHIV_NATIVE_ENGINE_UNAVAILABLE",
-    });
-  }
+  checkVersion(pkg, addon.version(), packageVersion(req));
   return addon;
 }
 
@@ -97,12 +112,34 @@ export function fromNative(e: unknown): unknown {
     return e;
   }
   if (typeof j !== "object" || j === null || typeof (j as { message?: unknown }).message !== "string") return e;
-  const o = j as { message: string; errorClass?: unknown; sqlState?: unknown };
+  const o = j as { message: string; errorClass?: unknown; sqlState?: unknown; messageParameters?: unknown };
+  const messageParameters: Record<string, string> = {};
+  if (typeof o.messageParameters === "object" && o.messageParameters !== null && !Array.isArray(o.messageParameters)) {
+    for (const [k, v] of Object.entries(o.messageParameters)) if (typeof v === "string") messageParameters[k] = v;
+  }
   return new KrishivError(o.message, {
     errorClass: typeof o.errorClass === "string" ? o.errorClass : undefined,
     sqlState: typeof o.sqlState === "string" ? o.sqlState : undefined,
+    messageParameters,
     cause: e,
   });
+}
+
+/** The error of an abort, in either backend's shape: `OPERATION_CANCELED`, the reason as its cause. */
+export function cancelled(signal: AbortSignal): KrishivError {
+  return new KrishivError("The operation has been cancelled.", {
+    errorClass: "OPERATION_CANCELED",
+    sqlState: "HY008",
+    cause: signal.reason,
+  });
+}
+
+/** The Arrow IPC end-of-stream marker (continuation, zero length), exactly the addon's last chunk. */
+function isEndOfStream(c: Uint8Array): boolean {
+  return (
+    c.length === 8 && c[0] === 0xff && c[1] === 0xff && c[2] === 0xff && c[3] === 0xff &&
+    c[4] === 0 && c[5] === 0 && c[6] === 0 && c[7] === 0
+  );
 }
 
 function native<T>(f: () => T): T {
@@ -113,10 +150,16 @@ function native<T>(f: () => T): T {
   }
 }
 
-/** The IPC chunks of `query`; a break or an abort cancels it. */
+/**
+ * The IPC chunks of `query`; a break or an abort before the end cancels it. Arrow JS stops reading at the
+ * end-of-stream marker and returns the source without asking for the `null` after it, so the marker itself ends
+ * the query (a cancel after the end would be a no-op anyway).
+ */
 async function* chunks(query: NativeQuery, signal?: AbortSignal): AsyncGenerator<Uint8Array> {
   const onAbort = () => query.cancel();
   signal?.addEventListener("abort", onAbort, { once: true });
+  // An abort between `execute` and here fired no event.
+  if (signal?.aborted) query.cancel();
   let done = false;
   try {
     for (;;) {
@@ -125,12 +168,18 @@ async function* chunks(query: NativeQuery, signal?: AbortSignal): AsyncGenerator
         c = await query.next();
       } catch (e) {
         done = true;
-        throw fromNative(e);
+        const err = fromNative(e);
+        // A cancel of ours from the signal is the abort, whatever the timing.
+        if (signal?.aborted && err instanceof KrishivError && err.errorClass === "OPERATION_CANCELED") {
+          throw cancelled(signal);
+        }
+        throw err;
       }
       if (c === null) {
         done = true;
         return;
       }
+      if (isEndOfStream(c)) done = true;
       yield c;
     }
   } finally {
@@ -139,13 +188,17 @@ async function* chunks(query: NativeQuery, signal?: AbortSignal): AsyncGenerator
   }
 }
 
-/** A `Backend` over an addon session. */
+/**
+ * A `Backend` over an addon session. A result holds its engine query until its batches are read to the end, its
+ * iteration stops (`break`), its signal aborts or the session closes (which ends every running query); a result
+ * that is never read keeps its query until it is garbage collected, so read or abort the results you start.
+ */
 export class EmbeddedBackend implements Backend {
   private closed = false;
   constructor(private readonly session: NativeSession) {}
 
   async execute(sql: string, opts: { signal?: AbortSignal } = {}): Promise<ResultStream> {
-    opts.signal?.throwIfAborted();
+    if (opts.signal?.aborted) throw cancelled(opts.signal);
     const query = native(() => this.session.execute(sql));
     // Reading the schema starts the query, so analysis errors reject here, as in remote mode.
     const reader = await RecordBatchReader.from(chunks(query, opts.signal));

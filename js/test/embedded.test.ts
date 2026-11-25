@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 import { tableFromArrays, tableToIPC } from "apache-arrow";
 import {
+  checkVersion,
   embeddedBackend,
   fromNative,
   loadAddon,
@@ -13,10 +14,17 @@ import {
 import { collectTable, toObjects } from "../src/result.js";
 import { KrishivError, Session, col, count } from "../src/index.js";
 
-const nativeError = (errorClass: string, sqlState: string, message: string) =>
-  new Error(JSON.stringify({ errorClass, sqlState, messageParameters: {}, message }));
+const nativeError = (
+  errorClass: string,
+  sqlState: string,
+  message: string,
+  messageParameters: Record<string, string> = {},
+) => new Error(JSON.stringify({ errorClass, sqlState, messageParameters, message }));
 
-/** A fake addon: each query answers `ipc` in chunks of 7 bytes, or fails with `fail`. */
+/**
+ * A fake addon: each query answers `ipc` in chunks of 7 bytes with its 8-byte end-of-stream marker as a chunk of its
+ * own (as the addon sends it), or fails with `fail`.
+ */
 function fake(opts: { ipc?: Uint8Array; fail?: Error; hang?: boolean } = {}) {
   const log = { sql: [] as string[], cancels: 0, closes: 0, conf: new Map<string, string>() };
   const addon: NativeAddon = {
@@ -28,6 +36,10 @@ function fake(opts: { ipc?: Uint8Array; fail?: Error; hang?: boolean } = {}) {
           execute(sql): NativeQuery {
             log.sql.push(sql);
             const bytes = opts.ipc ?? new Uint8Array();
+            const body = Math.max(0, bytes.length - 8);
+            const parts: Uint8Array[] = [];
+            for (let i = 0; i < body; i += 7) parts.push(bytes.subarray(i, Math.min(i + 7, body)));
+            if (bytes.length >= 8) parts.push(bytes.subarray(body));
             let at = 0;
             let cancelled = false;
             return {
@@ -38,10 +50,8 @@ function fake(opts: { ipc?: Uint8Array; fail?: Error; hang?: boolean } = {}) {
                   await new Promise((r) => setTimeout(r, 5));
                   if (cancelled) throw nativeError("OPERATION_CANCELED", "HY008", "The operation has been cancelled.");
                 }
-                if (at >= bytes.length) return null;
-                const c = bytes.subarray(at, at + 7);
-                at += 7;
-                return c;
+                if (at >= parts.length) return null;
+                return parts[at++]!;
               },
               cancel() {
                 cancelled = true;
@@ -84,13 +94,16 @@ describe("embedded backend (fake addon)", () => {
   });
 
   it("a failure is a KrishivError with the Spark error class", async () => {
-    const { addon } = fake({ fail: nativeError("TABLE_OR_VIEW_NOT_FOUND", "42P01", "no table t") });
+    const { addon } = fake({
+      fail: nativeError("TABLE_OR_VIEW_NOT_FOUND", "42P01", "no table t", { relationName: "`t`" }),
+    });
     const b = await embeddedBackend({}, addon);
     const e = await b.execute("SELECT * FROM t").catch((x: unknown) => x);
     expect(e).toBeInstanceOf(KrishivError);
     expect((e as KrishivError).errorClass).toBe("TABLE_OR_VIEW_NOT_FOUND");
     expect((e as KrishivError).sqlState).toBe("42P01");
     expect((e as KrishivError).message).toBe("no table t");
+    expect((e as KrishivError).messageParameters).toEqual({ relationName: "`t`" });
   });
 
   it("an aborted signal cancels the query", async () => {
@@ -98,9 +111,13 @@ describe("embedded backend (fake addon)", () => {
     const b = await embeddedBackend({}, addon);
     const ac = new AbortController();
     const s = await b.execute("SELECT 1", { signal: ac.signal });
-    ac.abort();
+    const why = new Error("user left");
+    ac.abort(why);
     const e = await collectTable(s).catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(KrishivError);
     expect((e as KrishivError).errorClass).toBe("OPERATION_CANCELED");
+    expect((e as KrishivError).sqlState).toBe("HY008");
+    expect((e as KrishivError).cause).toBe(why);
     expect(log.cancels).toBeGreaterThanOrEqual(1);
   });
 
@@ -109,12 +126,17 @@ describe("embedded backend (fake addon)", () => {
     const b = await embeddedBackend({}, addon);
     const ac = new AbortController();
     ac.abort();
-    await expect(b.execute("SELECT 1", { signal: ac.signal })).rejects.toThrow();
+    const e = await b.execute("SELECT 1", { signal: ac.signal }).catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(KrishivError);
+    expect((e as KrishivError).errorClass).toBe("OPERATION_CANCELED");
+    expect((e as KrishivError).sqlState).toBe("HY008");
     expect(log.sql).toEqual([]);
   });
 
   it("stopping early cancels the query", async () => {
-    const big = tableToIPC(tableFromArrays({ id: Int32Array.from({ length: 10 }, (_, i) => i) }), "stream");
+    // Two batches: the break after the first comes before the end-of-stream marker.
+    const half = (from: number) => tableFromArrays({ id: Int32Array.from({ length: 5 }, (_, i) => from + i) });
+    const big = tableToIPC(half(0).concat(half(5)), "stream");
     const { addon, log } = fake({ ipc: big });
     const b = await embeddedBackend({}, addon);
     const s = await b.execute("SELECT 1");
@@ -149,6 +171,19 @@ describe("loading the addon", () => {
     expect(platformPackage("linux", "arm64", false)).toBe("@krishiv/engine-linux-arm64-musl");
     expect(platformPackage("darwin", "arm64")).toBe("@krishiv/engine-darwin-arm64");
     expect(platformPackage("win32", "x64")).toBe("@krishiv/engine-win32-x64-msvc");
+  });
+
+  it("refuses a binary of another version", () => {
+    expect(() => checkVersion("@krishiv/engine-linux-x64-gnu", "0.0.0-test", "0.2.1")).toThrow(
+      /is version 0\.0\.0-test but krishiv is 0\.2\.1/,
+    );
+    try {
+      checkVersion("@krishiv/engine-linux-x64-gnu", "0.0.0-test", "0.2.1");
+    } catch (e) {
+      expect((e as KrishivError).errorClass).toBe("KRISHIV_NATIVE_ENGINE_UNAVAILABLE");
+    }
+    expect(() => checkVersion("p", "0.2.1", "0.2.1")).not.toThrow();
+    expect(() => checkVersion("p", "0.2.1", undefined)).not.toThrow();
   });
 
   it("a bad path is KRISHIV_NATIVE_ENGINE_UNAVAILABLE", () => {
@@ -202,8 +237,16 @@ describe.skipIf(real === undefined || real === "")("embedded engine (real addon)
       const e = await s.sql("SELECT * FROM no_such_table").toArrow().catch((x: unknown) => x);
       expect((e as KrishivError).errorClass).toBe("TABLE_OR_VIEW_NOT_FOUND");
       expect((e as KrishivError).sqlState).toBe("42P01");
+      expect((e as KrishivError).messageParameters).toHaveProperty("relationName");
     } finally {
       await s.close();
     }
+  });
+
+  it("a closed session refuses with INVALID_HANDLE.SESSION_CLOSED", async () => {
+    const s = await Session.builder().getOrCreate();
+    await s.close();
+    const e = await s.sql("SELECT 1").toArrow().catch((x: unknown) => x);
+    expect((e as KrishivError).errorClass).toBe("INVALID_HANDLE.SESSION_CLOSED");
   });
 });

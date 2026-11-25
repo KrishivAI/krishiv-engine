@@ -4,9 +4,9 @@
 //! embedded backend; nothing here is public npm API.
 //!
 //! JavaScript surface: `NativeSession.open(conf)`, `execute(sql) -> NativeQuery`,
-//! `setConf`, `close`; `NativeQuery.next()` (Arrow IPC chunks, `null` at the end) and
-//! `cancel()`; `version()`. Failures reject with an `Error` whose message is the JSON
-//! of the engine error (`error.rs`).
+//! `setConf`, `getConf`, `close`; `NativeQuery.next()` (Arrow IPC chunks, `null` at the
+//! end) and `cancel()`; `version()`. Failures, panics included, reject with an `Error`
+//! whose message is the JSON of the engine error (`error.rs`).
 
 mod error;
 mod ipc;

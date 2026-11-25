@@ -18,7 +18,7 @@ use napi::bindgen_prelude::Buffer;
 use napi_derive::napi;
 use tokio::sync::{Mutex, Notify};
 
-use crate::error::to_napi;
+use crate::error::{guarded_async, napi_guarded, to_napi};
 use crate::ipc::Encoder;
 
 /// Where a query is.
@@ -160,7 +160,7 @@ impl NativeQuery {
     /// end-of-stream marker), or `null` once the stream has ended.
     #[napi]
     pub async fn next(&self) -> napi::Result<Option<Buffer>> {
-        self.step()
+        guarded_async(self.step())
             .await
             .map(|chunk| chunk.map(Buffer::from))
             .map_err(|e| to_napi(&e))
@@ -169,7 +169,10 @@ impl NativeQuery {
     /// Cancels the query, before or while it streams: the next `next()` rejects with
     /// `OPERATION_CANCELED` unless the stream had already ended.
     #[napi]
-    pub fn cancel(&self) {
-        self.stop();
+    pub fn cancel(&self) -> napi::Result<()> {
+        napi_guarded(|| {
+            self.stop();
+            Ok(())
+        })
     }
 }

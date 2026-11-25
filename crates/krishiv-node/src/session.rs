@@ -7,20 +7,19 @@
     reason = "napi hands JavaScript strings to `set_conf` as owned `String`s"
 )]
 
-use std::collections::HashMap;
-use std::sync::{Mutex, PoisonError};
-
-use krishiv_common::error::{InternalError, KrishivError};
+use krishiv_common::error::{InvalidHandleSessionClosed, KrishivError};
 use krishiv_session::Session;
 use napi_derive::napi;
+use std::collections::HashMap;
 
-use crate::error::to_napi;
+use crate::error::napi_guarded;
 use crate::query::NativeQuery;
 
-/// The session behind a JavaScript `NativeSession`; `None` once closed.
+/// The session behind a JavaScript `NativeSession`. Kept after `close()`, so a later call
+/// is refused with the engine's own `INVALID_HANDLE.SESSION_CLOSED`, as in remote mode.
 #[napi]
 pub struct NativeSession {
-    inner: Mutex<Option<Session>>,
+    inner: Session,
 }
 
 impl std::fmt::Debug for NativeSession {
@@ -40,21 +39,19 @@ impl NativeSession {
             builder = builder.config(key, value);
         }
         Ok(Self {
-            inner: Mutex::new(Some(builder.build()?)),
+            inner: builder.build()?,
         })
     }
 
+    /// The open session, or `INVALID_HANDLE.SESSION_CLOSED`.
     pub(crate) fn session(&self) -> Result<Session, KrishivError> {
-        self.inner
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
-            .ok_or_else(|| {
-                InternalError {
-                    message: "krishiv-node: the session is closed".to_owned(),
-                }
-                .into()
-            })
+        if self.inner.is_closed() {
+            return Err(InvalidHandleSessionClosed {
+                handle: self.inner.id().to_owned(),
+            }
+            .into());
+        }
+        Ok(self.inner.clone())
     }
 
     pub(crate) fn conf_value(&self, key: &str) -> Result<Option<String>, KrishivError> {
@@ -62,14 +59,7 @@ impl NativeSession {
     }
 
     pub(crate) fn shut(&self) {
-        let taken = self
-            .inner
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .take();
-        if let Some(session) = taken {
-            session.close();
-        }
+        self.inner.close();
     }
 }
 
@@ -78,33 +68,34 @@ impl NativeSession {
     /// Opens an embedded session with the configuration `conf` (`krishiv.*` and Spark keys).
     #[napi(factory)]
     pub fn open(conf: HashMap<String, String>) -> napi::Result<Self> {
-        Self::build(conf).map_err(|e| to_napi(&e))
+        napi_guarded(|| Self::build(conf))
     }
 
     /// Starts the SQL statement `sql`; its result is read with `NativeQuery.next()`.
     #[napi]
     pub fn execute(&self, sql: String) -> napi::Result<NativeQuery> {
-        let session = self.session().map_err(|e| to_napi(&e))?;
-        Ok(NativeQuery::new(session, sql))
+        napi_guarded(|| Ok(NativeQuery::new(self.session()?, sql)))
     }
 
     /// Sets the session configuration `key` to `value`, as SQL `SET` does.
     #[napi]
     pub fn set_conf(&self, key: String, value: String) -> napi::Result<()> {
-        let session = self.session().map_err(|e| to_napi(&e))?;
-        session.conf().set(&key, &value).map_err(|e| to_napi(&e))
+        napi_guarded(|| self.session()?.conf().set(&key, &value))
     }
 
     /// The session configuration value of `key`, or `undefined` when it is not set and has no
     /// default, as `SET key` reads it.
     #[napi]
     pub fn get_conf(&self, key: String) -> napi::Result<Option<String>> {
-        self.conf_value(&key).map_err(|e| to_napi(&e))
+        napi_guarded(|| self.conf_value(&key))
     }
 
     /// Closes the session: its running queries end and its state is freed. Idempotent.
     #[napi]
-    pub fn close(&self) {
-        self.shut();
+    pub fn close(&self) -> napi::Result<()> {
+        napi_guarded(|| {
+            self.shut();
+            Ok(())
+        })
     }
 }

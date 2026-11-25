@@ -39,6 +39,33 @@ pub(crate) fn is_version(v: &str) -> bool {
 }
 
 /// The workspace version from the root manifest.
+/// The npm package's own version and its lockfile's two root entries (`version`, `packages[""].version`), which
+/// follow the workspace version: the package refuses an engine binary of another version.
+pub(crate) const JS_VERSION_FILES: &[&str] = &["js/package.json", "js/package-lock.json"];
+
+/// The root versions of an npm `package.json` or `package-lock.json` (one or two values).
+pub(crate) fn js_versions(text: &str) -> Result<Vec<String>, String> {
+    let v: serde_json::Value = serde_json::from_str(text).map_err(|e| e.to_string())?;
+    let mut out = Vec::new();
+    for found in [
+        v.get("version"),
+        v.get("packages")
+            .and_then(|p| p.get(""))
+            .and_then(|r| r.get("version")),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        out.push(
+            found
+                .as_str()
+                .ok_or("a version that is not a string")?
+                .to_owned(),
+        );
+    }
+    Ok(out)
+}
+
 pub(crate) fn workspace_version(root_manifest: &str) -> Result<String, String> {
     let doc: toml::Table = toml::from_str(root_manifest).map_err(|e| format!("Cargo.toml: {e}"))?;
     doc.get("workspace")
@@ -185,6 +212,15 @@ fn check(root: &Path, flags: &[&str]) -> Result<(String, Report), String> {
 
     for f in REQUIRED_FILES {
         r.check(root.join(f).is_file(), format!("{f} exists"));
+    }
+    for f in JS_VERSION_FILES {
+        if root.join(f).is_file() {
+            let found = js_versions(&read(f)?).map_err(|e| format!("{f}: {e}"))?;
+            r.check(
+                !found.is_empty() && found.iter().all(|v| *v == current),
+                format!("{f} version is the workspace's {current} (found {found:?})"),
+            );
+        }
     }
 
     let mut manifests = BTreeMap::new();
@@ -359,6 +395,18 @@ mod tests {
     }
 
     #[test]
+    fn js_root_versions() {
+        assert_eq!(js_versions(r#"{"version": "1.2.3"}"#).unwrap(), ["1.2.3"]);
+        assert_eq!(
+            js_versions(r#"{"version": "1", "packages": {"": {"version": "1"}, "node_modules/a": {"version": "9"}}}"#)
+                .unwrap(),
+            ["1", "1"]
+        );
+        assert!(js_versions(r#"{"version": 1}"#).is_err());
+        assert!(js_versions("not json").is_err());
+    }
+
+    #[test]
     fn changelog_section() {
         assert!(has_section("# C\n\n## 0.3.0\n\nx\n", "0.3.0"));
         assert!(!has_section("## 0.3.0-rc.1\n", "0.3.0"));
@@ -466,6 +514,15 @@ mod tests {
         let d = fixture("0.3.0", "krishiv-a\nkrishiv-b\n", "krishiv-a = \"1\"");
         std::fs::write(d.path().join("changelog.d/not-a-fragment.md"), "x").expect("write");
         one(failures(&d), "fragments are readable");
+        let d = fixture("0.3.0", "krishiv-a\nkrishiv-b\n", "krishiv-a = \"1\"");
+        std::fs::create_dir_all(d.path().join("js")).expect("mkdir");
+        std::fs::write(d.path().join("js/package.json"), r#"{"version": "0.3.0"}"#).expect("write");
+        std::fs::write(
+            d.path().join("js/package-lock.json"),
+            r#"{"version": "0.3.0", "packages": {"": {"version": "0.3.1"}}}"#,
+        )
+        .expect("write");
+        one(failures(&d), "js/package-lock.json version");
     }
 
     #[test]

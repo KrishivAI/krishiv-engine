@@ -1,6 +1,6 @@
 {
   "name": "krishiv",
-  "version": "0.3.1",
+  "version": "0.2.1",
   "description": "Krishiv for JavaScript and TypeScript: SQL and DataFrames over Arrow, embedded or against a remote Krishiv server.",
   "license": "Apache-2.0",
   "type": "module",
@@ -15,7 +15,7 @@
     }
   },
   "files": ["dist", "README.md"],
-  "engines": { "node": ">=20" },
+  "engines": { "node": ">=22" },
   "scripts": {
     "build": "tsup src/index.ts --format esm,cjs --dts --clean --external @grpc/grpc-js --external protobufjs",
     "typecheck": "tsc --noEmit",

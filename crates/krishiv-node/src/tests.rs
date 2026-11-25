@@ -101,7 +101,8 @@ fn configuration_reaches_the_session_and_close_is_final() {
     );
     session.shut();
     session.shut();
-    assert!(session.session().is_err());
+    let e = session.session().unwrap_err();
+    assert_eq!(e.error_class().name(), "INVALID_HANDLE.SESSION_CLOSED");
 }
 
 #[test]
@@ -129,5 +130,6 @@ fn get_conf_reads_set_values_and_defaults() {
     );
     assert_eq!(session.conf_value("my.app.flag").unwrap(), None);
     session.shut();
-    assert!(session.conf_value("spark.sql.ansi.enabled").is_err());
+    let e = session.conf_value("spark.sql.ansi.enabled").unwrap_err();
+    assert_eq!(e.error_class().name(), "INVALID_HANDLE.SESSION_CLOSED");
 }
