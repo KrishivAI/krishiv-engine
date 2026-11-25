@@ -113,3 +113,44 @@ fn select_star_has_only_the_two_sides_columns() {
     );
     assert_eq!(names, ["id", "s", "name", "s"]);
 }
+
+fn error_of(s: &Session, sql: &str) -> String {
+    match block_on(async { s.sql(sql).await?.collect().await }) {
+        Ok(_) => panic!("{sql} should fail"),
+        Err(e) => e.to_string(),
+    }
+}
+
+#[test]
+fn a_ranking_that_does_not_order_is_the_joins_own_error() {
+    let s = session();
+    let msg = error_of(
+        &s,
+        "SELECT u.id FROM u JOIN p APPROX NEAREST 1 BY SIMILARITY map(u.s, p.s)",
+    );
+    assert!(
+        msg.contains("NEAREST_BY_JOIN.NON_ORDERABLE_RANKING_EXPRESSION"),
+        "{msg}"
+    );
+    assert!(msg.contains("MAP<INT, INT>"), "{msg}");
+}
+
+#[test]
+fn nearest_by_needs_cross_joins_enabled() {
+    let s = session();
+    block_on(s.sql("SET spark.sql.crossJoin.enabled = false")).unwrap();
+    let msg = error_of(
+        &s,
+        "SELECT u.id FROM u JOIN p APPROX NEAREST 1 BY DISTANCE abs(u.s - p.s)",
+    );
+    assert!(
+        msg.contains("NEAREST_BY_JOIN.CROSS_JOIN_NOT_ENABLED"),
+        "{msg}"
+    );
+    block_on(s.sql("SET spark.sql.crossJoin.enabled = true")).unwrap();
+    let (_, rows) = run(
+        &s,
+        "SELECT u.id FROM u JOIN p APPROX NEAREST 1 BY DISTANCE abs(u.s - p.s) WHERE u.id = 1",
+    );
+    assert_eq!(rows.len(), 1);
+}

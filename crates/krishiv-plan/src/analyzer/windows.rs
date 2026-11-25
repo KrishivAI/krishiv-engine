@@ -45,12 +45,14 @@ use krishiv_common::error::{
     FailedFunctionCall, InvalidAggregateFilterContainsWindowFunction,
     InvalidSqlSyntaxFunctionWithUnsupportedSyntax, InvalidWindowSpecForAggregationFunc,
     KrishivError, LegacyErrorTemp1031, LegacyErrorTemp1035, LegacyErrorTemp1036,
-    MissingWindowSpecification, UnsupportedExprForOperator, UnsupportedExprForWindow,
+    MissingWindowSpecification, NearestByJoinNonOrderableRankingExpression,
+    UnsupportedExprForOperator, UnsupportedExprForWindow,
     UnsupportedFeatureLateralColumnAliasInWindow, WindowFunctionFrameNotOrdered,
     WindowFunctionNotAllowedInClause, WindowFunctionWithoutOverClause,
 };
 
 use super::bind::unsupported;
+use super::coerce::{orderable, quoted_type};
 use super::exprs::{Bound, Cx, WindowUse, builtin_name, pretty, semantic_key};
 use super::ops::col_expr;
 use super::resolve::{Attr, Rel, Resolver};
@@ -802,6 +804,22 @@ impl Resolver<'_> {
         }
         let mut bound = shown_of(rest.iter().map(|k| Arc::clone(&k.expr)).collect());
         let mut shown = shown_of(rest.iter().map(Bound::shown).collect());
+        // The window a `NEAREST BY` join lowers to (`row_number()` over the left row's id, ordered
+        // by the ranking): a ranking that does not order is the join's own error.
+        if spec.order_by.len() == 1
+            && spec.partition_by.len() == 1
+            && matches!(&spec.partition_by[0].node, ExprNode::Column(c) if c.name == ["__nearest_qid__"])
+            && let Some(key) = rest.get(1)
+            && let Some(t) = key.ty.data_type.as_ref().filter(|t| !orderable(t))
+        {
+            return Err(AnalysisError::new(
+                NearestByJoinNonOrderableRankingExpression {
+                    expression: format!("\"{}\"", pretty(&key.shown(), None)),
+                    r#type: quoted_type(Some(t)),
+                },
+                e.origin,
+            ));
+        }
         let name = call.id.name();
         // A window function's own arguments: Spark replaces a rank's by the
         // ordering, `ntile()` is `ntile(1)`.

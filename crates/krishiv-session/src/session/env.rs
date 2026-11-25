@@ -4,7 +4,7 @@
 use super::*;
 
 /// The parser's configs (`ParserOptions::from_conf` reads these).
-pub(super) const PARSER_KEYS: [&str; 20] = [
+pub(super) const PARSER_KEYS: [&str; 21] = [
     "spark.sql.ansi.enabled",
     "spark.sql.ansi.enforceReservedKeywords",
     "spark.sql.ansi.doubleQuotedIdentifiers",
@@ -25,6 +25,7 @@ pub(super) const PARSER_KEYS: [&str; 20] = [
     "spark.sql.timestampType",
     "spark.sql.join.asofJoin.enabled",
     "spark.sql.timeTravel.atSyntax.enabled",
+    "spark.sql.crossJoin.enabled",
 ];
 
 /// `KRISHIV_UNSUPPORTED_FEATURE` for a statement `Session::sql` cannot run yet.
