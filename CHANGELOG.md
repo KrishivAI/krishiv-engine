@@ -53,6 +53,7 @@ Nothing yet.
 - `collect_list`, `collect_set`, `listagg` and `mode` over string or binary columns no longer use memory outside the (#1013)
   query's memory limit while they spill; a spilling query could grow to many gigabytes and be killed by the OS.
 - `DataFrame.printSchema(level)` takes the Spark `level` argument and `StructType.treeString(maxDepth)` is added; the Spark 4.3 `vector_*` functions are available in Python. (#1015)
+- A write killed mid-file (`kill -9`) no longer leaves its partial `part-...#<n>` files in the directory: the next write to it deletes the staging files of writers that are gone, so other readers (pyarrow) can read the directory again (PY-054). (#1018)
 - Fixed: EXPLAIN ANALYZE prints the plan's dense expression ids, as EXPLAIN does, instead of raw internal ids. (#965)
 - An explicit `krishiv.write.idempotencyKey` now reaches a file table's own writes (creating and appending), so a retried keyed write is not applied twice; a secret-valued key on a table insert is refused instead of dropped. (#966)
   UPDATE and DELETE of a Delta table take `krishiv.write.idempotencyKey`: a retried statement under the same key is committed once.
