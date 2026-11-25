@@ -27,5 +27,7 @@
   "query-events": "Query events",
   "python-udf-tenants": "Python UDFs per tenant",
   "vector-search": "Vector search with SQL",
-  "python-table-functions": "Python table functions"
+  "python-table-functions": "Python table functions",
+  "run-krishiv-in-docker": "Run Krishiv in Docker",
+  "local-lakehouse-docker-compose": "Local lakehouse with docker compose"
 }

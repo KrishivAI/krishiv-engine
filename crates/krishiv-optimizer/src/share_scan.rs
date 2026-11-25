@@ -36,7 +36,12 @@
 //!   nondeterministic or hold a subquery; and none reads an outer reference;
 //! - statistics say it pays: the scan's estimate comes from statistics, is at
 //!   least [`MIN_ROWS`] rows, and the disjunction keeps at most [`MAX_KEPT`] of its rows (the buffer
-//!   replaces scans, it should be small next to them).
+//!   replaces scans, it should be small next to them);
+//! - no reader sits inside a security barrier: the candidate walk visits each
+//!   scan per (address, inside a barrier) and counts a read from inside one as
+//!   a non-filter parent, so a scan read inside a barrier is never shared, and
+//!   then not for the readers outside it either (conservative: nothing computed
+//!   inside a barrier is shared with anything outside, G2).
 //!
 //! Runs once, after `ShareCte`, only with a session configuration and
 //! `krishiv.optimizer.shareFilteredScans` on. The scan is then read by one
@@ -215,12 +220,24 @@ fn parents(root: &Arc<LogicalPlan>) -> (Vec<Arc<LogicalPlan>>, AddrMap<LogicalPl
     let mut order = Vec::new();
     let mut parents: AddrMap<LogicalPlan, Vec<Parent>> = Default::default();
     let mut edges: HashSet<(*const LogicalPlan, *const LogicalPlan)> = HashSet::new();
-    let mut seen: AddrSet<LogicalPlan> = Default::default();
-    let mut stack = vec![Arc::clone(root)];
-    while let Some(p) = stack.pop() {
-        if !seen.insert(Arc::as_ptr(&p)) {
+    // Visited per (relation, under a barrier): a relation met outside first is walked again
+    // when it is also reached inside one, so its whole subtree is marked.
+    let mut seen: HashSet<(*const LogicalPlan, bool)> = HashSet::new();
+    let mut listed: AddrSet<LogicalPlan> = Default::default();
+    let mut stack = vec![(Arc::clone(root), false)];
+    while let Some((p, inside)) = stack.pop() {
+        if !seen.insert((Arc::as_ptr(&p), inside)) {
             continue;
         }
+        if inside {
+            // A relation under a security barrier is never shared, nor is anything below it
+            // (G2, design P3-E14 §5): its readers count as not a filter.
+            parents
+                .entry(Arc::as_ptr(&p))
+                .or_default()
+                .push(Parent::Other);
+        }
+        let below = inside || matches!(p.node, PlanNode::SecurityBarrier { .. });
         let mut children: Vec<(Arc<LogicalPlan>, bool)> = Vec::new();
         p.for_each_child(&mut |c| children.push((Arc::clone(c), true)));
         p.for_each_expr(&mut |e| {
@@ -239,9 +256,11 @@ fn parents(root: &Arc<LogicalPlan>) -> (Vec<Arc<LogicalPlan>>, AddrMap<LogicalPl
                         Parent::Other
                     });
             }
-            stack.push(Arc::clone(c));
+            stack.push((Arc::clone(c), below));
         }
-        order.push(p);
+        if listed.insert(Arc::as_ptr(&p)) {
+            order.push(p);
+        }
     }
     // The root itself is read by the query.
     parents

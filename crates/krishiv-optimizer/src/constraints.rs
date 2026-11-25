@@ -36,8 +36,8 @@
 
 use crate::expr::AttrMap;
 use crate::expr::{AddrMap, AddrSet};
+use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
-use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
@@ -313,6 +313,31 @@ fn held_under(
                     stack.push((input, p, Vec::new()));
                 }
             }
+            // A reference to a `ShareCte` definition returns the
+            // definition's rows under its own ids: what holds there holds
+            // here. The first `optimize` met the instance through its
+            // `Shift`; reading the definition keeps a second run from
+            // adding what the first found implied (TPC-DS q59).
+            PlanNode::CteRef(r) => {
+                let Some(def) = memo.shared_defs.get(&r.source).map(Arc::clone) else {
+                    continue;
+                };
+                let Some(out) = def.resolved_output() else {
+                    continue;
+                };
+                if out.len() != r.output.len() {
+                    continue;
+                }
+                let map: AttrMap<Arc<Expr>> = r
+                    .output
+                    .iter()
+                    .zip(&out)
+                    .map(|(o, c)| (o.id, column(c)))
+                    .collect();
+                if held_under(&def, substitute(&p, &map), Vec::new(), memo) {
+                    return true;
+                }
+            }
             PlanNode::Join {
                 left,
                 right,
@@ -349,8 +374,12 @@ fn held_under(
                 }
             }
             // Row-preserving nodes: what holds of the input columns below
-            // holds above.
-            PlanNode::Sort { input, .. }
+            // holds above. A security barrier too: `held` only finds an
+            // inferred filter redundant, it moves nothing in, and a masked
+            // column leaves the barrier under a new id (`mask(b) AS b`), so
+            // nothing known of the column below is read as known of it.
+            PlanNode::SecurityBarrier { input, .. }
+            | PlanNode::Sort { input, .. }
             | PlanNode::SubqueryAlias { input, .. }
             | PlanNode::WithCte { input, .. }
             | PlanNode::JoinHint { input, .. }
@@ -462,9 +491,12 @@ pub(crate) struct Memo {
     /// input relation it comes from.
     shared: AddrMap<LogicalPlan, (Arc<LogicalPlan>, Arc<LogicalPlan>)>,
     worth: AddrMap<LogicalPlan, (Arc<LogicalPlan>, bool)>,
-    /// The names of the definitions `ShareCte` added: a `CteRef` to one is
-    /// shared ([`Self::reaches_shared`]).
-    shared_defs: HashSet<String>,
+    /// The definitions `ShareCte` added, by their output attributes (a
+    /// `CteRef`'s `source`, not its name: a nested `WITH` may bind the same
+    /// name again, and a body reading the outer one must not find itself):
+    /// a `CteRef` to one is shared ([`Self::reaches_shared`]), and [`held`]
+    /// reads through it.
+    shared_defs: HashMap<Vec<AttrId>, Arc<LogicalPlan>>,
 }
 
 /// A cheap fingerprint of `plan`'s relation tree (node kinds and shape, not
@@ -507,7 +539,7 @@ impl Memo {
         // `Arc`s (join ordering re-plans a join inside each copy apart).
         let mut bodies: Vec<(Arc<LogicalPlan>, u32)> = Vec::new();
         let mut body_at: AddrMap<LogicalPlan, usize> = Default::default();
-        let mut shared_defs: HashSet<String> = HashSet::new();
+        let mut shared_defs: HashMap<Vec<AttrId>, Arc<LogicalPlan>> = HashMap::new();
         let mut stack = vec![Arc::clone(root)];
         let mut seen: AddrSet<LogicalPlan> = Default::default();
         while let Some(p) = stack.pop() {
@@ -520,7 +552,10 @@ impl Memo {
                         // `ShareCte`'s definitions; a user CTE named so
                         // only loses an inferred filter.
                         .filter(|c| c.name.starts_with(crate::share_cte::SHARED_PREFIX))
-                        .map(|c| c.name.clone()),
+                        .filter_map(|c| {
+                            let out = c.plan.resolved_output()?;
+                            Some((out.iter().map(|a| a.id).collect(), Arc::clone(&c.plan)))
+                        }),
                 );
             }
             if let PlanNode::Shift { input, .. } = &p.node {
@@ -661,7 +696,7 @@ impl Memo {
                 // What `ShareCte` computes once: the first `optimize` saw
                 // the instance it replaced, so a second adds nothing here
                 // either.
-                PlanNode::CteRef(r) => return self.shared_defs.contains(&r.name),
+                PlanNode::CteRef(r) => return self.shared_defs.contains_key(&r.source),
                 _ => return false,
             };
             at = next;

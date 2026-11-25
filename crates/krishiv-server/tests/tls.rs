@@ -23,8 +23,9 @@ use std::sync::atomic::AtomicBool;
 use krishiv_exec::MetricsSnapshot;
 use krishiv_server::admin::{HttpLimits, health_routes, with_limits};
 use krishiv_server::guard::Guard;
-use krishiv_server::internal::{Row, SystemTable, UiFuture, UiSource, router_with_ui_guard};
+use krishiv_server::internal::{Row, SystemTable, UiFuture, UiSource, router_with_ui_policy};
 use krishiv_server::metrics::metrics_route_guarded;
+use krishiv_server::pages::UiPolicy;
 use krishiv_server::session_guard::SessionGuard;
 use krishiv_server::tls::serve_capped_tls;
 use krishiv_session::auth::{AuthConfig, ServerAuth, ServerTls, TlsConfig};
@@ -36,6 +37,7 @@ use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName}
 use tokio_rustls::rustls::{ClientConfig, RootCertStore};
 
 const VIEWER: &str = "viewer-token-0123456789abcdef0123456789";
+const OPERATOR: &str = "operator-token-0123456789abcdef012345678";
 
 struct Empty;
 
@@ -64,7 +66,15 @@ fn private_copy(dir: &Path, src: &Path, name: &str) -> String {
 /// The admin router of `krishiv server` over TLS: a viewer token, client certificates
 /// `optional` with the principal from the CN, `etl-job` an operator.
 async fn start() -> (SocketAddr, tempfile::TempDir) {
+    start_with(UiPolicy::loopback()).await
+}
+
+/// [`start`] with the console under `policy`, plus an operator token (`console`).
+async fn start_with(policy: UiPolicy) -> (SocketAddr, tempfile::TempDir) {
     let dir = tempfile::tempdir().expect("tempdir");
+    let operator = dir.path().join("o");
+    std::fs::write(&operator, OPERATOR).expect("write secret");
+    let operator = format!("file:{}", private_copy(dir.path(), &operator, "operator"));
     let secret = dir.path().join("v");
     std::fs::write(&secret, VIEWER).expect("write secret");
     let secret = private_copy(dir.path(), &secret, "viewer");
@@ -76,6 +86,9 @@ async fn start() -> (SocketAddr, tempfile::TempDir) {
         ("krishiv.auth.tokens.prom.secret", secret_ref.as_str()),
         ("krishiv.auth.tokens.prom.principal", "prometheus"),
         ("krishiv.auth.tokens.prom.role", "viewer"),
+        ("krishiv.auth.tokens.console.secret", operator.as_str()),
+        ("krishiv.auth.tokens.console.principal", "console"),
+        ("krishiv.auth.tokens.console.role", "operator"),
         ("krishiv.auth.clientCertificates", "optional"),
         ("krishiv.auth.clientCa", ca.as_str()),
         ("krishiv.auth.mtls.principalFrom", "cn"),
@@ -95,7 +108,7 @@ async fn start() -> (SocketAddr, tempfile::TempDir) {
         Arc::new(MetricsSnapshot::default),
         Some(Arc::clone(&guard)),
     );
-    let app = router_with_ui_guard(Arc::new(Empty), guard)
+    let app = router_with_ui_policy(Arc::new(Empty), guard, policy)
         .merge(health_routes(Arc::new(AtomicBool::new(true))))
         .merge(metrics);
     let limits = HttpLimits::default();
@@ -202,4 +215,107 @@ async fn a_client_certificate_authenticates_with_its_listed_role() {
         status(&get(addr, "/metrics", Some("nosan"), None).await),
         "403"
     );
+}
+
+/// A browser speaks HTTP/2 to a TLS listener, and an HTTP/2 request names the server in `:authority`, with no
+/// `Host` header. Over a real HTTP/2 connection the console lets its own page in (the sign-in is a `POST` with an
+/// `Origin`), names the cookie after the port, and still refuses another origin and another host name.
+#[cfg(feature = "admin-api")]
+#[tokio::test]
+async fn a_browser_signs_in_to_the_console_over_http2() {
+    use axum::http::{Request, Version, header};
+    use tower::{Service as _, ServiceExt as _};
+    // As `krishiv server` sets it on a loopback TLS listener: the host check on, `https` origins, a `Secure` cookie.
+    let (addr, _dir) = start_with(UiPolicy::for_listener(true, []).secure_cookie(true)).await;
+    let port = addr.port();
+    let request = |method: &str, path: &str, origin: Option<&str>| {
+        let mut b = Request::builder()
+            .method(method)
+            .uri(path)
+            .header(header::AUTHORIZATION, format!("Bearer {OPERATOR}"))
+            .header("x-krishiv-csrf", "1");
+        if let Some(o) = origin {
+            b = b.header(header::ORIGIN, o);
+        }
+        b.body(tonic::body::Body::empty()).expect("request")
+    };
+    let mut page = h2_channel(addr, &format!("https://localhost:{port}")).await;
+    let own = format!("https://localhost:{port}");
+    let res = page
+        .ready()
+        .await
+        .expect("ready")
+        .call(request("POST", "/api/internal/session", Some(&own)))
+        .await
+        .expect("sign-in");
+    assert_eq!(res.version(), Version::HTTP_2);
+    assert_eq!(res.status(), 204);
+    let cookie = res.headers()[header::SET_COOKIE].to_str().expect("cookie");
+    assert!(
+        cookie.starts_with(&format!("krishiv_ui_token_{port}=")) && cookie.ends_with("; Secure"),
+        "{cookie}"
+    );
+    // A read (no `Origin`) passes the host check under the listener's own name.
+    let res = page
+        .ready()
+        .await
+        .expect("ready")
+        .call(request("GET", "/api/internal/queries", None))
+        .await
+        .expect("read");
+    assert_eq!(res.status(), 200);
+    // Another origin, and this host over `http`, cannot sign in.
+    for other in [
+        "https://evil.example".to_owned(),
+        format!("http://localhost:{port}"),
+    ] {
+        let res = page
+            .ready()
+            .await
+            .expect("ready")
+            .call(request("POST", "/api/internal/session", Some(&other)))
+            .await
+            .expect("answer");
+        assert_eq!(res.status(), 403, "{other}");
+    }
+    // A name the listener does not answer to (DNS rebinding) is refused before the token is looked at.
+    let mut rebound = h2_channel(addr, &format!("https://evil.example:{port}")).await;
+    let res = rebound
+        .ready()
+        .await
+        .expect("ready")
+        .call(request("GET", "/api/internal/queries", None))
+        .await
+        .expect("answer");
+    assert_eq!(res.status(), 403);
+}
+
+/// An HTTP/2 connection over TLS to `addr` whose requests carry `origin`'s authority (as `:authority`).
+#[cfg(feature = "admin-api")]
+async fn h2_channel(addr: SocketAddr, origin: &str) -> tonic::transport::Channel {
+    let mut roots = RootCertStore::empty();
+    roots
+        .add(CertificateDer::from_pem_file(fixture("ca.pem")).expect("ca"))
+        .expect("add ca");
+    let provider = Arc::new(tokio_rustls::rustls::crypto::aws_lc_rs::default_provider());
+    let mut config = ClientConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()
+        .expect("versions")
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+    config.alpn_protocols = vec![b"h2".to_vec()];
+    let connector = TlsConnector::from(Arc::new(config));
+    tonic::transport::Endpoint::from_shared(origin.to_owned())
+        .expect("endpoint")
+        .connect_with_connector(tower::service_fn(move |_| {
+            let connector = connector.clone();
+            async move {
+                let tcp = TcpStream::connect(addr).await?;
+                let name = ServerName::try_from("localhost").map_err(std::io::Error::other)?;
+                let tls = connector.connect(name, tcp).await?;
+                Ok::<_, std::io::Error>(hyper_util::rt::TokioIo::new(tls))
+            }
+        }))
+        .await
+        .expect("connect")
 }

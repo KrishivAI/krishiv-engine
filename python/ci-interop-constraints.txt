@@ -2,11 +2,12 @@
 # against in CI (ci.yml and nightly.yml). Pinned for reproducibility; upgrades
 # arrive through Renovate PRs.
 #
-# duckdb stays on 1.x: DuckDB 2.0 removed `fetchone()` on relations, which the
-# interop tests still call. Moving to 2.0 lands with the `fetchall()` change.
+# duckdb 2.0.0: the interop tests use `fetchall()` (2.0 removed `fetchone()` on
+# relations). On the free-threaded 3.14t build duckdb 2.0.0 re-enables the GIL when
+# imported (it does not declare Py_mod_gil) and nanobind prints leak reports at exit.
 pyarrow==26.0.0
 polars==2.0.0
-duckdb==1.5.6
+duckdb==2.0.0
 # pandas_udf and toPandas tests (T059 review 2c I3).
 pandas==3.0.6
 # numpy 2.5 needs CPython >= 3.12; the abi3 leg tests on 3.11, which 2.4.4

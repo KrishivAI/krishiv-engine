@@ -408,6 +408,11 @@ impl Reorder<'_> {
 
     /// `p` with its inputs and subquery plans reordered.
     fn children(&mut self, p: &Arc<LogicalPlan>) -> Arc<LogicalPlan> {
+        // A security barrier is a leaf: its input is not reordered (an optimization that has not
+        // opted in to run there, design `P3-E14-security-barrier.md` G3').
+        if matches!(p.node, PlanNode::SecurityBarrier { .. }) {
+            return Arc::clone(p);
+        }
         // CTE definitions (named by their exact columns), the input of a
         // renaming alias and the inputs of a union or the terms of a
         // recursive CTE (their output is the first input's columns, and the

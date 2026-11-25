@@ -13,6 +13,8 @@ pub(super) struct Expander<'a> {
     pub(super) case_sensitive: bool,
     pub(super) path: Vec<String>,
     pub(super) stored: Option<&'a StoredViews<'a>>,
+    /// How many temporary views the walk has inlined.
+    pub(super) inlined_temp: usize,
     /// Inside a stored view: the namespace its bare table names belong to.
     pub(super) view_namespace: Option<String>,
     /// Inside a stored view: the SQL path frozen with it.
@@ -82,6 +84,7 @@ impl<'a> Expander<'a> {
             case_sensitive,
             path: Vec::new(),
             stored,
+            inlined_temp: 0,
             view_namespace: namespace,
             view_path,
             view_functions: None,
@@ -226,6 +229,38 @@ impl Expander<'_> {
             }
             .into());
         }
+        // A `SQL` relation (Spark Connect's `spark.sql(..)` query, sent back as a root relation) is
+        // lowered by the analyzer, after this walk: its text's views would never be inlined. Lower it
+        // here and expand that; text that does not parse, or reads no view, stays as the analyzer's
+        // own to report and lower.
+        if let PlanNode::Sql {
+            query,
+            args: krishiv_plan::SqlArgs::None,
+        } = &plan.node
+            && let Some(stored) = self.stored
+            && let Ok(krishiv_sql::ast::Statement::Query(parsed)) =
+                krishiv_sql::parse_statement(query, &stored.parser)
+            && let Ok(lowered) = krishiv_sql::lower_with(
+                &parsed,
+                (stored.next_source)(),
+                stored.parser.case_sensitive,
+            )
+        {
+            // A trial walk on a copy of the walk's inputs: only a text that reads a view is replaced
+            // (its reads and checks are then recorded by the real walk, once).
+            let mut trial = Expander::new(
+                self.catalog,
+                self.case_sensitive,
+                self.stored,
+                self.view_namespace.clone(),
+                self.view_path.clone(),
+            );
+            trial.go(Arc::clone(lowered.root()), &mut scope.clone())?;
+            if trial.inlined_temp > 0 || !trial.reached.is_empty() {
+                return self.go(Arc::clone(lowered.root()), scope);
+            }
+            return Ok(plan);
+        }
         // After the reserved-name guard: a read of a hidden name is a missing table, options or not.
         self.refuse_time_travel_here(&plan, scope)?;
         // Inside a stored view a bare table name is the view's own namespace's, never a temporary view.
@@ -290,6 +325,7 @@ impl Expander<'_> {
                     ..
                 } = &*entry
             {
+                self.inlined_temp += 1;
                 self.keeps.extend(keeps.0.iter().cloned());
                 // Debug-quoted parts keep the part boundaries: `a.b` (one part) and `a`.`b` differ.
                 let key = format!(

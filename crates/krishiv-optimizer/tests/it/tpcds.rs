@@ -117,3 +117,41 @@ fn tpcds_plans() {
     );
     assert!(snapshotted == 99 - UNSUPPORTED.len());
 }
+
+/// Every TPC-DS query is a fixed point in the configured arm too: statistics (the q-error
+/// report's TPC-DS data) and a default session configuration, so `ShareCte`,
+/// `ShareFilteredScan` and the other configuration-gated rules run. A second `optimize` meets
+/// `ShareCte`'s `CteRef`s where the first met `Shift` instances (q59: an inferred `isnotnull`
+/// the first run found implied inside the instance must be found inside the definition).
+#[test]
+fn tpcds_configured_plans_are_fixed_points() {
+    use krishiv_common::config::Config;
+    use krishiv_optimizer::optimize_with_udfs;
+    use krishiv_udf_sdk::UdfLibrary;
+
+    let schemas = crate::qerror::tpcds_schemas();
+    let db = crate::qerror::synthetic_tpcds(&schemas, 11, 2 * crate::qerror::scale());
+    let stats = crate::qerror::stats_of(&db);
+    let ctx = support::ctx_over(catalog());
+    let opt = |p: &krishiv_plan::Plan| {
+        optimize_with_udfs(p, &stats, &UdfLibrary::new(), &Config::new()).unwrap()
+    };
+    let mut bad = Vec::new();
+    for q in 1..=99 {
+        let Some(plan) = support::try_resolve(&sql(q), &ctx) else {
+            // Only a listed query may drop out (`tpcds_plans` checks the list is exact), so a
+            // regression case such as q59 cannot leave the check by failing to resolve.
+            assert!(
+                UNSUPPORTED.iter().any(|(u, _)| *u == q),
+                "q{q:02} does not resolve and is not in UNSUPPORTED"
+            );
+            continue;
+        };
+        let once = opt(&plan);
+        let twice = opt(&once);
+        if !once.structurally_eq(&twice) {
+            bad.push(format!("q{q:02}:\n{once}\n{twice}"));
+        }
+    }
+    assert!(bad.is_empty(), "not fixed points:\n{}", bad.join("\n"));
+}

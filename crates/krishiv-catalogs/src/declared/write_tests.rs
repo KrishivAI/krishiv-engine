@@ -32,7 +32,7 @@ const TABLE: &str = "/v1/namespaces/db/tables/t";
 
 /// What the fake catalog does with the next commit.
 #[derive(Debug, Clone, Copy)]
-enum Fault {
+pub(super) enum Fault {
     /// Applied and answered.
     Answer,
     /// Applied; the connection closes without an answer.
@@ -40,8 +40,8 @@ enum Fault {
 }
 
 /// The catalog's one table.
-struct Lake {
-    metadata: serde_json::Value,
+pub(super) struct Lake {
+    pub(super) metadata: serde_json::Value,
     location: String,
     root: String,
     version: u32,
@@ -80,7 +80,7 @@ impl Lake {
 }
 
 /// A REST catalog over `table` with `script` for its commits.
-fn catalog(table: &WrittenTable, script: &[Fault]) -> (Server, Arc<Mutex<Lake>>) {
+pub(super) fn catalog(table: &WrittenTable, script: &[Fault]) -> (Server, Arc<Mutex<Lake>>) {
     let lake = Arc::new(Mutex::new(Lake {
         metadata: table.metadata.clone(),
         location: table.metadata_location.clone(),

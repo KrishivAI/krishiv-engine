@@ -956,3 +956,26 @@ fn column_names_operations_hash_apart_and_display_their_fields() {
     distinct.dedup();
     assert_eq!(distinct.len(), hashes.len(), "{hashes:?}");
 }
+
+#[test]
+fn barrier_paths_that_differ_only_in_a_credential_hash_apart() {
+    let barrier = |url: &str| {
+        LogicalPlan::new(PlanNode::SecurityBarrier {
+            input: Arc::new(scan(&[1], &["a"])),
+            policy: crate::PolicyRef::new(
+                crate::analyzer::Securable::Path(krishiv_common::secret::OptionValue::from_user(
+                    "path", url,
+                )),
+                krishiv_common::PrincipalKey::of(&crate::analyzer::Principal::new(
+                    "alice",
+                    crate::analyzer::PrincipalKind::User,
+                )),
+                1,
+            ),
+        })
+    };
+    let one = barrier("s3://u:pw1@host/x");
+    // Both display as the same redacted text; the key tells them apart.
+    assert_ne!(hash(&one), hash(&barrier("s3://u:pw2@host/x")));
+    assert_eq!(hash(&one), hash(&barrier("s3://u:pw1@host/x")));
+}

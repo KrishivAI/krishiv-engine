@@ -197,11 +197,11 @@ fn asof_join_gate() {
     );
     assert_eq!(span.range(), sql.find("ASOF").unwrap()..sql.len());
     assert!(span.text(sql).starts_with("ASOF JOIN\n"));
-    // The flag is read from the session's configs.
+    // The flag is read from the session's configs (the grammar from its Spark profile).
     let opts =
         ParserOptions::from_conf(|k| (k == "spark.sql.join.asofJoin.enabled").then_some("true"));
     assert!(opts.asof_join && !ParserOptions::default().asof_join);
-    // Off, `ASOF` is still Spark 4.2's alias: `t AS ASOF`, then an ordinary join.
+    // `ASOF JOIN q ON ..` names `t` `ASOF` (Spark 4.2 and 4.3 alike), then an ordinary join.
     let q = parse_query(
         "SELECT * FROM t ASOF JOIN q ON true",
         &ParserOptions::default(),
@@ -296,4 +296,178 @@ fn asof_right_side_parenthesized_relation_clears_the_flag() {
     );
     let columns: Vec<&str> = alias.columns.iter().map(|c| c.value.as_str()).collect();
     assert_eq!(columns, ["x"]);
+}
+
+/// Spark 4.3's grammar (the session's 4.3 profile), with the flag `on` or off.
+fn grammar(on: bool) -> ParserOptions {
+    ParserOptions {
+        spark_4_3_grammar: true,
+        asof_join: on,
+        ..ParserOptions::default()
+    }
+}
+
+/// The left relation's alias and the first extension of `sql`'s first relation.
+fn left(sql: &str, opts: &ParserOptions) -> (Option<String>, Option<RelationExt>) {
+    let q = parse_query(sql, opts).unwrap_or_else(|e| panic!("{sql}: {}", e.error));
+    let SetExprKind::Select(s) = q.body.kind else {
+        panic!("{sql}")
+    };
+    let rel = s.from.unwrap().relations.into_iter().next().unwrap();
+    let alias = rel
+        .primary
+        .alias
+        .as_ref()
+        .and_then(|a| a.name.as_ref())
+        .map(|n| n.value.clone());
+    (alias, rel.extensions.into_iter().next())
+}
+
+/// SMOKE-asof-error (Spark 4.3.0 runs, flag off and on, 2026-11-24): with Spark 4.3's grammar an
+/// as-of join with no alias on its left side is still an as-of join, so with the flag off the
+/// error is `UNSUPPORTED_FEATURE.ASOF_JOIN`, not a syntax error at `MATCH_CONDITION (trades.`.
+#[test]
+fn asof_join_without_a_left_alias_is_gated_not_misread() {
+    for l in [
+        "trades",
+        "trades AS t",
+        "trades t",
+        "(SELECT * FROM trades) t",
+    ] {
+        for r in ["quotes", "quotes q", "quotes AS q"] {
+            let sql = format!(
+                "SELECT * FROM {l} ASOF JOIN {r} MATCH_CONDITION (trades.t >= quotes.t) \
+                 ON trades.s = quotes.s"
+            );
+            let (class, params, span) = error(&sql, &grammar(false));
+            assert_eq!(class, "UNSUPPORTED_FEATURE.ASOF_JOIN", "{sql}");
+            assert_eq!(
+                param(&params, "config"),
+                "\"spark.sql.join.asofJoin.enabled\""
+            );
+            assert!(span.text(&sql).starts_with("ASOF JOIN"), "{sql}");
+            let (_, ext) = left(&sql, &grammar(true));
+            assert!(
+                matches!(ext, Some(RelationExt::Join(ref j)) if matches!(j.constraint, JoinConstraint::AsOf(_))),
+                "{sql}: {ext:?}"
+            );
+        }
+    }
+    // `LEFT ASOF JOIN ... USING`, a chained as-of join, an invalid operator (the gate comes first,
+    // as in `withAsOfJoin`) and a dotted one-sided condition: gated.
+    for sql in [
+        "SELECT * FROM t LEFT ASOF JOIN q MATCH_CONDITION (t.a >= q.a) USING (s)",
+        "SELECT * FROM t ASOF JOIN q ASOF JOIN r MATCH_CONDITION (q.a >= r.a)",
+        "SELECT * FROM t ASOF JOIN q MATCH_CONDITION (t.a = q.a)",
+        "SELECT * FROM t ASOF JOIN q MATCH_CONDITION (q.a)",
+    ] {
+        assert_eq!(
+            error(sql, &grammar(false)).0,
+            "UNSUPPORTED_FEATURE.ASOF_JOIN",
+            "{sql}"
+        );
+    }
+    // Spark 4.2's grammar (the parser's defaults) keeps 4.2's reading: `ASOF` is `trades`' alias.
+    let sql = "SELECT * FROM trades ASOF JOIN quotes MATCH_CONDITION (trades.t >= quotes.t)";
+    assert_eq!(
+        error(sql, &ParserOptions::default()).0,
+        "PARSE_SYNTAX_ERROR"
+    );
+}
+
+/// Where both readings parse, ANTLR takes the alias: `ASOF` names the left side and
+/// `MATCH_CONDITION (a)` is the right side's alias with a column list (Spark 4.3.0, flag off and
+/// on). With no `MATCH_CONDITION` at all `ASOF` is the alias too.
+#[test]
+fn asof_join_ambiguous_with_an_alias_column_list_reads_the_alias() {
+    for on in [false, true] {
+        for sql in [
+            "SELECT * FROM t ASOF JOIN one MATCH_CONDITION (a)",
+            "SELECT * FROM t ASOF JOIN one MATCH_CONDITION (a) ON true",
+            "SELECT * FROM t ASOF JOIN one MATCH_CONDITION (a) USING (a)",
+            "SELECT * FROM t ASOF JOIN q MATCH_CONDITION (a, s) ON ASOF.a = MATCH_CONDITION.a",
+            "SELECT * FROM t ASOF JOIN q ON true",
+        ] {
+            let (alias, ext) = left(sql, &grammar(on));
+            assert_eq!(alias.as_deref(), Some("ASOF"), "{sql} on={on}");
+            let Some(RelationExt::Join(j)) = ext else {
+                panic!("{sql}: {ext:?}")
+            };
+            assert!(
+                !matches!(j.constraint, JoinConstraint::AsOf(_)),
+                "{sql} on={on}"
+            );
+        }
+    }
+}
+
+/// A long chain of `ASOF JOIN`s is read once: linear time, and no nesting (a 2 MiB stack).
+#[test]
+fn asof_join_chains_are_read_in_linear_time() {
+    let mut sql = String::from("SELECT * FROM t");
+    for _ in 0..4000 {
+        sql.push_str(" ASOF JOIN t");
+    }
+    let handle = std::thread::Builder::new()
+        .stack_size(2 << 20)
+        .spawn(move || {
+            let started = std::time::Instant::now();
+            let _ = parse_query(&sql, &grammar(true));
+            started.elapsed()
+        })
+        .unwrap();
+    let took = handle.join().unwrap();
+    assert!(took < std::time::Duration::from_secs(2), "{took:?}");
+}
+
+/// `| ASOF` starts a pipe operator in Spark 4.3 (`isOperatorPipeStart`), flag or not; in 4.2 it is
+/// a bitwise or.
+#[test]
+fn pipe_asof_follows_the_grammar() {
+    let sql = "SELECT x | asof FROM (SELECT 1 x, 2 asof)";
+    assert_eq!(error(sql, &grammar(false)).0, "PARSE_SYNTAX_ERROR");
+    assert!(parse_query(sql, &ParserOptions::default()).is_ok());
+}
+
+/// Inside a query or parentheses on a speculated as-of right side, a nested `ASOF JOIN ... ON`
+/// is read in full (an alias `ASOF`), so both levels parse as Spark 4.3.0 reads them; deep
+/// nesting stays fast (each `ASOF JOIN` decided once).
+#[test]
+fn asof_join_nested_in_a_right_side_is_read_in_full() {
+    for on in [false, true] {
+        for sql in [
+            "SELECT * FROM t ASOF JOIN (SELECT * FROM q ASOF JOIN r ON true) x MATCH_CONDITION (t.a >= x.a)",
+            "SELECT * FROM t ASOF JOIN (q ASOF JOIN r ON true) x MATCH_CONDITION (t.a >= x.a)",
+        ] {
+            if on {
+                let (alias, ext) = left(sql, &grammar(true));
+                assert_eq!(alias, None, "{sql}");
+                assert!(
+                    matches!(ext, Some(RelationExt::Join(ref j)) if matches!(j.constraint, JoinConstraint::AsOf(_))),
+                    "{sql}: {ext:?}"
+                );
+            } else {
+                assert_eq!(
+                    error(sql, &grammar(false)).0,
+                    "UNSUPPORTED_FEATURE.ASOF_JOIN",
+                    "{sql}"
+                );
+            }
+        }
+        let sql = "SELECT * FROM t ASOF JOIN (SELECT * FROM q ASOF JOIN r ON true) ON true";
+        let (alias, _) = left(sql, &grammar(on));
+        assert_eq!(alias.as_deref(), Some("ASOF"), "{sql}");
+    }
+    let mut sql = String::from("SELECT * FROM t0");
+    for n in 1..60 {
+        sql =
+            format!("SELECT * FROM t{n} ASOF JOIN ({sql}) x{n} MATCH_CONDITION (t{n}.a >= x{n}.a)");
+    }
+    let started = std::time::Instant::now();
+    assert!(parse_query(&sql, &grammar(true)).is_ok());
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(2),
+        "{:?}",
+        started.elapsed()
+    );
 }

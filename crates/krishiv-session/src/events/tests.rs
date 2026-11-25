@@ -17,6 +17,10 @@ fn event(kind: QueryEventKind, seq: u64) -> EngineEvent {
             compute_id: "c".into(),
             trace_id: None,
             tags: vec![("k".into(), "v".into())],
+            stage_id: None,
+            task_id: None,
+            attempt: None,
+            worker_id: None,
         },
         kind,
     })
@@ -24,7 +28,7 @@ fn event(kind: QueryEventKind, seq: u64) -> EngineEvent {
 
 fn usage(seq: u64) -> UsageRecord {
     UsageRecord {
-        record_id: ("s".into(), "q".into(), seq),
+        record_id: UsageRecordId::new("s".into(), "q".into(), seq),
         kind: UsageKind::Final,
         principal: "p".into(),
         delegated_by: None,
@@ -276,6 +280,20 @@ fn json_has_the_v1_shape_for_every_kind() {
     assert_eq!(docs[5]["usage"]["record_id"]["seq"], 9);
     // Minor 1 (MODES-2): the planning time beside the run's.
     assert_eq!(docs[5]["usage"]["planning_ns"], 3);
+    // The distributed ids are members already, null in-process, so a worker's events add no key (G5).
+    for doc in &docs {
+        for id in ["stage_id", "task_id", "attempt", "worker_id"] {
+            assert!(
+                doc["query"].get(id).is_some_and(Value::is_null),
+                "{id}: {doc}"
+            );
+        }
+    }
+    assert!(
+        docs[5]["usage"]["record_id"]
+            .get("worker_id")
+            .is_some_and(Value::is_null)
+    );
     // No error message member exists on any kind.
     assert!(docs.iter().all(|d| d.get("error_message").is_none()));
 }
@@ -412,4 +430,18 @@ fn row_marks_name_the_transitions() {
     };
     assert_eq!(ended.since(failed).collect::<Vec<_>>(), [Transition::Ended]);
     assert_eq!(ended.since(ended).count(), 0);
+}
+
+#[test]
+fn a_usage_key_names_its_worker() {
+    let id = UsageRecordId::new("s".into(), "q".into(), 3);
+    assert_eq!(id.worker_id, None);
+    let on_worker = id.clone().with_worker(Some("w1".into()));
+    assert_ne!(on_worker, id);
+    let mut record = usage(3);
+    record.record_id = on_worker;
+    let doc = record.to_json();
+    assert_eq!(doc["record_id"]["worker_id"], "w1");
+    assert_eq!(doc["record_id"]["query_id"], "q");
+    assert_eq!(doc["record_id"]["seq"], 3);
 }
