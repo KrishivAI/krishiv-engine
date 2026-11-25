@@ -1,1 +1,5 @@
-{ "index": "Releases", "0.2.0": "Krishiv 0.2.0" }
+{
+  "index": "Releases",
+  "0.2.0": "Krishiv 0.2.0",
+  "0.3.0": "Krishiv 0.3.0"
+}

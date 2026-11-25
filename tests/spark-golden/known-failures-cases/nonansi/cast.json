@@ -1,8 +1,9 @@
 {
   "cases": {
-    "sql-commands": [
-      37,
-      38
+    "divergence-time-4-3-precision": [
+      155,
+      156,
+      163
     ]
   },
   "file": "nonansi/cast",

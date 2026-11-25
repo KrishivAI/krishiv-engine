@@ -1,6 +1,6 @@
 {
   "cases": {
-    "depends-on-command": [
+    "divergence-ceil-floor-ansi-overflow": [
       34,
       35,
       36

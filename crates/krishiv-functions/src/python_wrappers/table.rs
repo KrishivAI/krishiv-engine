@@ -203,11 +203,6 @@ pub(super) const NOT_EXPORTED: &[(&str, &str)] = &[
         "percentile_disc",
         "ordered-set aggregate: SQL-only, needs WITHIN GROUP (ORDER BY ...)",
     ),
-    ("vector_cosine_similarity", "no PySpark function in 4.2"),
-    ("vector_inner_product", "no PySpark function in 4.2"),
-    ("vector_l2_distance", "no PySpark function in 4.2"),
-    ("vector_norm", "no PySpark function in 4.2"),
-    ("vector_normalize", "no PySpark function in 4.2"),
     // The cast-named functions (`float(x)`, `int(x)`, ...): the analyzer
     // rewrites every call to a `CAST`, so there is no call to send.
     (
@@ -258,8 +253,6 @@ pub(super) const NOT_EXPORTED: &[(&str, &str)] = &[
         "timestamp",
         "cast-named function; the analyzer rewrites the call to a cast",
     ),
-    ("vector_avg", "no PySpark function; SQL only"),
-    ("vector_sum", "no PySpark function; SQL only"),
     ("space", "no PySpark function"),
     (
         "mean",
@@ -943,6 +936,16 @@ pub(super) fn rows() -> Vec<Row> {
         Row::new("unix_seconds", "col: ColumnOrName"),
         Row::new("unix_millis", "col: ColumnOrName"),
         Row::new("unix_micros", "col: ColumnOrName"),
+        Row::new("vector_cosine_similarity", "left: ColumnOrName, right: ColumnOrName"),
+        Row::new("vector_inner_product", "left: ColumnOrName, right: ColumnOrName"),
+        Row::new("vector_l2_distance", "left: ColumnOrName, right: ColumnOrName"),
+        Row::new("vector_norm", "vector: ColumnOrName, degree: ColumnOrName = None"),
+        Row::new(
+            "vector_normalize",
+            "vector: ColumnOrName, degree: ColumnOrName = None",
+        ),
+        Row::new("vector_avg", "col: ColumnOrName"),
+        Row::new("vector_sum", "col: ColumnOrName"),
         Row::new("date_from_unix_date", "days: ColumnOrName"),
         Row::new(
             "months_between",
