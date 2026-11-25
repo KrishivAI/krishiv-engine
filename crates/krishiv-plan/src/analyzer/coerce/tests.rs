@@ -648,3 +648,83 @@ fn nested_casts_follow_spark() {
         Ok(())
     );
 }
+
+/// Spark's `Cast.forceNullable` is `(_, _: StringType) => false`, and a collated string is a `StringType`:
+/// casting a NOT NULL string to `UTF8_LCASE` (or back) gives no NULL, so the collation rewrites of `instr`,
+/// `locate` and `=` stay NOT NULL (`time_precision_goldens` `instr_collated`).
+#[test]
+fn a_cast_between_string_collations_is_never_forced_nullable() {
+    use krishiv_types::Collation;
+    let lcase = T::CollatedString(Collation::UTF8_LCASE);
+    assert!(!force_nullable(&T::String, &lcase));
+    assert!(!force_nullable(&lcase, &T::String));
+    assert!(!force_nullable(&T::Integer, &lcase));
+    // From a collated string the string rules hold too: a binary is never NULL, any other
+    // target may be (`CAST('apple' COLLATE UTF8_LCASE AS INT)` with ANSI off).
+    assert!(!force_nullable(&lcase, &T::Binary));
+    for to in [T::Integer, T::Boolean, T::Double, T::Timestamp, T::Date] {
+        assert!(force_nullable(&lcase, &to), "{to:?}");
+        assert!(force_nullable(&T::String, &to), "{to:?}");
+    }
+}
+
+/// `TRY_CAST` with a collated string on either side: Spark's `UpCastRule` sees a `StringType` whatever the
+/// collation, and a string to binary keeps the child's nullability (`Cast.nullable`, `isTryCast`).
+#[test]
+fn try_cast_reads_a_collated_string_as_a_string() {
+    use krishiv_types::Collation;
+    let lcase = T::CollatedString(Collation::UTF8_LCASE);
+    assert!(!try_nullable(&T::String, &lcase));
+    assert!(!try_nullable(&lcase, &T::String));
+    assert!(!try_nullable(&T::Integer, &lcase));
+    assert!(!try_nullable(&lcase, &T::Binary));
+    // A binary that is not UTF-8 becomes NULL (ADR 0023), whatever the collation.
+    assert!(try_nullable(&T::Binary, &lcase));
+    assert!(try_nullable(&lcase, &T::Integer));
+}
+
+/// `TRY_CAST` of a nested value to `STRING` may be NULL: Spark's `canUpCast` takes only an atomic
+/// source to a string (Spark 4.2.0 and 4.3.0: `TRY_CAST(array(1, 2) AS STRING)`, of a struct, a map
+/// and `array(array(1))` are nullable; of `1`, `1.5D` and a date are not).
+#[test]
+fn try_cast_of_a_nested_value_to_string_may_be_null() {
+    let t = |s: &str| krishiv_types::parse_data_type(s).unwrap();
+    for from in [
+        "array<int>",
+        "array<string>",
+        "array<array<int>>",
+        "struct<a:int>",
+        "map<int,int>",
+    ] {
+        assert!(try_nullable(&t(from), &T::String), "{from}");
+    }
+    for from in [T::Integer, T::Double, T::Date] {
+        assert!(!try_nullable(&from, &T::String), "{from:?}");
+    }
+    // Element by element the same rule holds: an inner array to a string is no up-cast.
+    assert!(try_nullable(&t("array<array<int>>"), &t("array<string>")));
+    assert!(!try_nullable(&t("array<int>"), &t("array<string>")));
+    assert!(!try_nullable(&t("array<int>"), &t("array<int>")));
+    // A map value and a struct field are compared the same way (Spark 4.2.0 and 4.3.0:
+    // `TRY_CAST(map(1, array(2)) AS MAP<INT, STRING>)` and of `named_struct('a', array(1))` to
+    // `STRUCT<a: STRING>` are nullable).
+    assert!(try_nullable(
+        &t("map<int,array<int>>"),
+        &t("map<int,string>")
+    ));
+    assert!(try_nullable(
+        &t("struct<a:array<int>>"),
+        &t("struct<a:string>")
+    ));
+    assert!(!try_nullable(&t("map<int,int>"), &t("map<int,string>")));
+}
+
+/// `TRY_CAST` of a variant may be NULL whatever the target: Spark's `canUpCast` refuses a variant source
+/// (Spark 4.2.0 and 4.3.0: `TRY_CAST(parse_json('1') AS STRING)` and `AS INT` are nullable).
+#[test]
+fn try_cast_of_a_variant_may_be_null() {
+    for to in [T::String, T::Integer, T::Binary] {
+        assert!(try_nullable(&T::Variant, &to), "{to:?}");
+    }
+    assert!(!try_nullable(&T::Variant, &T::Variant));
+}

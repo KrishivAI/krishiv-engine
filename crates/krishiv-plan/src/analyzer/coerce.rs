@@ -1666,12 +1666,15 @@ pub(super) fn force_nullable(from: &DataType, to: &DataType) -> bool {
     match (from, to) {
         // A variant null is SQL NULL, so a cast of a variant is nullable.
         (T::Variant, _) => true,
-        (T::String, T::Binary)
-        | (_, T::String)
+        // Spark's `(StringType, BinaryType)` and `(_, _: StringType) => false`, then
+        // `(_: StringType, _) => true`: a collated string is a `StringType` on either side.
+        (T::String | T::CollatedString(_), T::Binary)
+        | (_, T::String | T::CollatedString(_))
         | (T::Timestamp, T::Date)
         | (T::Date, T::Timestamp) => false,
-        // The seconds of a time may not fit a `tinyint` or `smallint`.
-        (T::String | T::Date, _)
+        // A string (collated or not) or a date may not parse or fit; the seconds of a time may
+        // not fit a `tinyint` or `smallint`.
+        (T::String | T::CollatedString(_) | T::Date, _)
         | (T::Float | T::Double, T::Timestamp)
         | (_, T::Date)
         | (T::Time { .. }, T::Byte | T::Short) => true,
@@ -1708,7 +1711,16 @@ pub(super) fn try_nullable(from: &DataType, to: &DataType) -> bool {
     if from.is_nested() || to.is_nested() {
         return !nested_up_cast(from, to);
     }
-    if (from, to) == (&T::Binary, &T::String) {
+    // Spark's `UpCastRule` reads a collated string as a `StringType` (only a CHAR/VARCHAR
+    // constraint matters, never the collation), on either side.
+    let string = |t: &T| matches!(t, T::String | T::CollatedString(_));
+    // Spark's `canUpCast` refuses a variant source (`(VariantType, _) => false`), so only variant
+    // to variant is an up-cast (`TRY_CAST(parse_json('1') AS STRING)` is nullable, Spark 4.2.0
+    // and 4.3.0 runs).
+    if *from == T::Variant {
+        return *to != T::Variant;
+    }
+    if *from == T::Binary && string(to) {
         return true;
     }
     // Integral and floating types widen in this order.
@@ -1722,9 +1734,9 @@ pub(super) fn try_nullable(from: &DataType, to: &DataType) -> bool {
         _ => None,
     };
     let up = match (from, to) {
-        _ if from == to || *to == T::String => true,
-        (T::String, T::Binary)
-        | (T::Date | T::TimestampNtz | T::Long, T::Timestamp)
+        _ if from == to || string(to) => true,
+        (f, T::Binary) if string(f) => true,
+        (T::Date | T::TimestampNtz | T::Long, T::Timestamp)
         | (T::Date | T::Timestamp, T::TimestampNtz)
         | (T::Timestamp, T::Long) => true,
         (T::Decimal(a), T::Decimal(b)) => {
@@ -1740,14 +1752,16 @@ pub(super) fn try_nullable(from: &DataType, to: &DataType) -> bool {
 }
 
 /// Spark's `Cast.canUpCast` for nested types: element by element, where a
-/// target that may not hold NULL needs a source that has none (to `STRING`
-/// as for any type).
+/// target that may not hold NULL needs a source that has none. A nested
+/// value to `STRING` is no up-cast (Spark's rule is `(_: AtomicType,
+/// StringType)`), so `TRY_CAST(array(1) AS STRING)` is nullable (Spark
+/// 4.2.0 and 4.3.0 runs).
 fn nested_up_cast(from: &DataType, to: &DataType) -> bool {
     use DataType as T;
     let fits = |from_null: bool, to_null: bool| !from_null || to_null;
     let up = |f: &DataType, t: &DataType| !try_nullable(f, t);
     match (from, to) {
-        _ if from == to || *to == T::String => true,
+        _ if from == to => true,
         (T::Array(a), T::Array(b)) => {
             up(a.element_type(), b.element_type()) && fits(a.contains_null(), b.contains_null())
         }

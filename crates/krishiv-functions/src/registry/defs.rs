@@ -240,6 +240,32 @@ fn time6(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     typed(DataType::Time { precision: 6 }, c)
 }
 
+/// The result of a `TIME` function: Spark's `TIME` functions are `RuntimeReplaceable` over a
+/// `StaticInvoke` (or `Invoke`, `to_time`) with the default `returnNullable = true`, so the result
+/// is nullable whatever the arguments (Spark 4.2.0 and 4.3.0 `timeExpressions.scala`).
+fn time_fn(t: DataType) -> ArgType {
+    ArgType::new(t, true)
+}
+
+/// `make_time`, `time_from_*`, `to_time`: a `TIME(6)`, nullable (`time_fn`).
+fn time6_fn(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    Ok(time_fn(DataType::Time { precision: 6 }))
+}
+
+/// `time_to_millis`, `time_to_micros`, `time_diff`: a `BIGINT`, nullable (`time_fn`).
+fn time_long(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    Ok(time_fn(DataType::Long))
+}
+
+/// `hour`, `minute`, `second`: an `INT`. Of a `TIME` it is Spark's `HoursOfTime` and its kin
+/// (nullable, `time_fn`); of a timestamp `Hour` and its kin (nullable with the argument).
+fn time_field_int(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    if matches!(c.data_type(0), Some(DataType::Time { .. })) {
+        return Ok(time_fn(DataType::Integer));
+    }
+    typed(DataType::Integer, c)
+}
+
 /// The seconds of `time_from_seconds` and `time_to_seconds`: `DECIMAL(14,6)`.
 fn time_decimal() -> DataType {
     DataType::Decimal(DecimalType::try_new(14, 6).unwrap_or(DecimalType::USER_DEFAULT))
@@ -249,8 +275,8 @@ fn time_seconds_input() -> InputType {
     exact(time_decimal())
 }
 
-fn time_seconds_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
-    typed(time_decimal(), c)
+fn time_seconds_result(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    Ok(time_fn(time_decimal()))
 }
 
 /// `time_trunc(unit, time)`: the time's own type.
@@ -260,7 +286,7 @@ fn time_trunc_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
         .get(1)
         .and_then(|a| a.data_type.clone())
         .unwrap_or(DataType::Time { precision: 6 });
-    typed(t, c)
+    Ok(time_fn(t))
 }
 
 pub(super) fn double(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
@@ -579,7 +605,10 @@ fn extract_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     if let Some(t) = c.data_type(1).filter(|t| is_interval(t)) {
         return interval_extract_result(c, t);
     }
-    let nullable = c.args().get(1).is_some_and(|a| a.nullable);
+    // Of a `TIME`, the fields are Spark's `HoursOfTime`, `MinutesOfTime` and
+    // `SecondsOfTimeWithFraction`: nullable whatever the argument (`time_fn`).
+    let nullable = c.args().get(1).is_some_and(|a| a.nullable)
+        || matches!(c.data_type(1), Some(DataType::Time { .. }));
     Ok(match extract_field(c)? {
         // `date_part(NULL, x)` is a NULL `double`.
         None => ArgType::new(DataType::Double, true),
@@ -706,11 +735,24 @@ fn try_make_timestamp_ltz(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     Ok(make_timestamp_result(c, DataType::Timestamp, true))
 }
 
+/// `make_timestamp_ntz(date, time)` is Spark's `MakeTimestampNTZ`, a `StaticInvoke` with the default
+/// `returnNullable = true` (the `try_` form a `TryEval` of it): nullable whatever the arguments. The
+/// `make_timestamp[_ltz](date, time)` forms are `MakeTimestampFromDateTime`, nullable with their arguments.
+fn ntz_date_form(c: &CallTypes<'_>) -> bool {
+    c.args().len() == 2
+}
+
 fn make_timestamp_ntz(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    if ntz_date_form(c) {
+        return Ok(ArgType::new(DataType::TimestampNtz, true));
+    }
     Ok(make_timestamp_result(c, DataType::TimestampNtz, false))
 }
 
 fn try_make_timestamp_ntz(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    if ntz_date_form(c) {
+        return Ok(ArgType::new(DataType::TimestampNtz, true));
+    }
     Ok(make_timestamp_result(c, DataType::TimestampNtz, true))
 }
 
@@ -1105,7 +1147,7 @@ fn datetime() -> Vec<Spec> {
     out.extend(scalar(
         &["hour", "minute", "second"],
         &Inputs::Expects(vec![any_timestamp]),
-        int,
+        time_field_int,
     ));
     out.extend(scalar(&["monthname", "dayname"], &date_only, string));
     out.extend(scalar(
@@ -1138,17 +1180,17 @@ fn datetime() -> Vec<Spec> {
             exact(DataType::Integer),
             seconds_input(),
         ]),
-        time6,
+        time6_fn,
     ));
     out.extend(scalar(
         &["time_from_seconds"],
         &Inputs::Expects(vec![time_seconds_input()]),
-        time6,
+        time6_fn,
     ));
     out.extend(scalar(
         &["time_from_millis", "time_from_micros"],
         &Inputs::Expects(vec![exact(DataType::Long)]),
-        time6,
+        time6_fn,
     ));
     out.extend(scalar(
         &["time_to_seconds"],
@@ -1158,12 +1200,12 @@ fn datetime() -> Vec<Spec> {
     out.extend(scalar(
         &["time_to_millis", "time_to_micros"],
         &Inputs::Built(InputBuilder(one_time_input)),
-        long,
+        time_long,
     ));
     out.extend(scalar(
         &["to_time"],
         &Inputs::Expects(vec![InputType::Strict(DataType::String)]),
-        time6,
+        time6_fn,
     ));
     out.extend(scalar(
         &["try_to_time"],
@@ -1173,7 +1215,7 @@ fn datetime() -> Vec<Spec> {
     out.extend(scalar(
         &["time_diff"],
         &Inputs::Built(InputBuilder(time_diff_inputs)),
-        long,
+        time_long,
     ));
     out.extend(scalar(
         &["timestampadd"],
