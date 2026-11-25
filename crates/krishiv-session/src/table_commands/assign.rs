@@ -5,8 +5,9 @@
 use krishiv_common::error::{
     CastOverflowInTableInsert, ErrorClass, IncompatibleDataForTableAmbiguousColumnName,
     IncompatibleDataForTableCannotFindData, IncompatibleDataForTableCannotSafelyCast,
-    IncompatibleDataForTableExtraStructFields, InsertColumnArityMismatchNotEnoughDataColumns,
-    InsertColumnArityMismatchTooManyDataColumns, KrishivError, UnresolvedColumnWithSuggestion,
+    IncompatibleDataForTableExtraColumns, IncompatibleDataForTableExtraStructFields,
+    InsertColumnArityMismatchNotEnoughDataColumns, InsertColumnArityMismatchTooManyDataColumns,
+    KrishivError, UnresolvedColumnWithSuggestion,
 };
 use krishiv_plan::analyzer::TableColumn;
 use krishiv_types::DataType;
@@ -47,17 +48,47 @@ pub(super) fn assign(
     let data_cols = || quoted_names(output.iter().map(|c| c.name.as_str()).collect());
     let mut out = vec![Source::Default; table.columns.len()];
     if by_name {
-        for (i, o) in output.iter().enumerate() {
-            let Some(at) = table.columns.iter().position(|c| eq(&c.name, &o.name)) else {
-                // A data column the table does not have: Spark counts the table's columns against the data's.
-                return Err(InsertColumnArityMismatchTooManyDataColumns {
+        // Spark's `reorderColumnsByName`: the arity, then each table column's matches, then the data columns no
+        // table column took.
+        if output.len() > table.columns.len() {
+            return Err(InsertColumnArityMismatchTooManyDataColumns {
+                table_name,
+                table_columns: table_cols(),
+                data_columns: data_cols(),
+            }
+            .into());
+        }
+        let mut taken = vec![false; output.len()];
+        for (column, slot) in table.columns.iter().zip(&mut out) {
+            let mut matches = output
+                .iter()
+                .enumerate()
+                .filter(|(_, o)| eq(&column.name, &o.name));
+            let Some((i, _)) = matches.next() else {
+                continue;
+            };
+            if matches.next().is_some() {
+                return Err(IncompatibleDataForTableAmbiguousColumnName {
                     table_name,
-                    table_columns: table_cols(),
-                    data_columns: data_cols(),
+                    col_name: format!("`{}`", column.name.replace('`', "``")),
                 }
                 .into());
-            };
-            out[at] = Source::Position(i);
+            }
+            taken[i] = true;
+            *slot = Source::Position(i);
+        }
+        let extra: Vec<String> = output
+            .iter()
+            .zip(&taken)
+            .filter(|(_, taken)| !**taken)
+            .map(|(o, _)| format!("`{}`", o.name.replace('`', "``")))
+            .collect();
+        if !extra.is_empty() {
+            return Err(IncompatibleDataForTableExtraColumns {
+                table_name,
+                extra_columns: extra.join(", "),
+            }
+            .into());
         }
     } else if !listed.is_empty() {
         if listed.len() != output.len() {

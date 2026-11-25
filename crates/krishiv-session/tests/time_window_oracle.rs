@@ -197,3 +197,84 @@ fn a_window_inside_an_aggregate_of_a_nested_grouped_window_is_the_inner_window()
     }
     Ok(())
 }
+
+#[test]
+fn a_window_over_a_derived_window_column_follows_the_column_it_names() -> R {
+    // Spark 4.2.0 and 4.3.0 (UTC) run every shape here; the outer window is [00:00, 00:05).
+    let s = utc()?;
+    let v = "VALUES (TIMESTAMP '2026-01-01 00:01:30') AS t(ts)";
+    let want = ["{2026-01-01 00:00:00, 2026-01-01 00:05:00}"];
+    for sql in [
+        // Two output columns share a name inside; the renamed list tells them apart by position.
+        format!(
+            "SELECT CAST(window(q.a, '5 minutes') AS STRING) \
+             FROM (SELECT window(ts, '1 minute') AS x, ts AS x FROM {v}) AS q(a, b)"
+        ),
+        format!(
+            "SELECT CAST(window(q.b, '5 minutes') AS STRING) \
+             FROM (SELECT window(ts, '1 minute') AS x, ts AS x FROM {v}) AS q(a, b)"
+        ),
+        // A struct field with the window column's name is not that column.
+        format!(
+            "SELECT CAST(window(q.w, '5 minutes') AS STRING) \
+             FROM (SELECT a.payload.iw AS w \
+                   FROM (SELECT window(ts, '1 minute') AS iw, named_struct('iw', ts) AS payload \
+                         FROM {v}) a) q"
+        ),
+    ] {
+        assert_eq!(rows(&s, &sql)?, want, "{sql}");
+    }
+    // A bare `*` shows the derived table's columns and no column of the rewrite.
+    for inner in ["w", "window"] {
+        let sql = format!(
+            "SELECT *, window(q.{inner}, '5 minutes') AS outer_w \
+             FROM (SELECT window(ts, '1 minute') AS {inner} FROM {v}) q"
+        );
+        let batches = block_on(async { s.sql(&sql).await?.collect().await })
+            .map_err(|e| format!("{sql}: {e}"))?;
+        let names: Vec<String> = batches[0]
+            .schema()
+            .fields()
+            .iter()
+            .map(|f| f.name().clone())
+            .collect();
+        assert_eq!(names, [inner, "outer_w"], "{sql}");
+    }
+    // An unaliased window over a column called `window` is called `window`, and a window over it follows it.
+    let over = format!(
+        "SELECT window(window, '5 minutes') FROM (SELECT window(ts, '1 minute') AS window FROM {v})"
+    );
+    for sql in [
+        over.clone(),
+        format!("SELECT window(window, '5 minutes') FROM ({over})"),
+        format!(
+            "SELECT window(window, '5 minutes'), count(*) \
+             FROM (SELECT window(ts, '1 minute') AS window FROM {v}) \
+             GROUP BY window(window, '5 minutes')"
+        ),
+    ] {
+        let batches = block_on(async { s.sql(&sql).await?.collect().await })
+            .map_err(|e| format!("{sql}: {e}"))?;
+        assert_eq!(batches[0].schema().field(0).name(), "window", "{sql}");
+    }
+    Ok(())
+}
+
+#[test]
+fn a_lambda_variable_called_window_is_not_the_inner_window() -> R {
+    // Spark 4.2.0 and 4.3.0: `window` in the lambda's body is its variable, inside an aggregate too.
+    let s = utc()?;
+    let from = "FROM VALUES (TIMESTAMP '2026-01-01 00:01:30') AS t(ts) \
+                GROUP BY window(window(ts, '1 minute'), '5 minutes')";
+    let call = "transform(array(1), window -> window + 1)";
+    for select in [
+        format!("CAST({call} AS STRING)"),
+        format!("CAST({call} AS STRING), CAST(count(*) AS STRING)"),
+        format!("CAST(max({call}) AS STRING)"),
+    ] {
+        let sql = format!("SELECT {select} {from}");
+        let got = rows(&s, &sql)?;
+        assert!(got[0].starts_with("[2]"), "{sql}: {got:?}");
+    }
+    Ok(())
+}

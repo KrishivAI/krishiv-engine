@@ -1982,6 +1982,46 @@ fn by_name_struct_mismatches_report_spark_classes_and_paths() {
     );
 }
 
+/// `INSERT .. BY NAME` over the top-level columns fails in Spark's order: more data columns than table columns,
+/// then two data columns matching one table column (named as the table spells it), before any type check, then
+/// the data columns the table does not have.
+#[test]
+fn by_name_columns_report_arity_then_ambiguity_then_extra_columns() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(
+        &s,
+        "create table bt(a int, `\u{e9}` int, c int) using parquet",
+    );
+    assert_eq!(
+        class(
+            &s,
+            "insert into bt by name select 1 as a, 2 as A, 3 as x, 4 as y"
+        ),
+        "INSERT_COLUMN_ARITY_MISMATCH.TOO_MANY_DATA_COLUMNS"
+    );
+    for (select, column) in [
+        ("select array(1) as A, 2 as a", "`a`"),
+        ("select 1 as `\u{c9}`, 2 as `\u{e9}`, 3 as zz", "`\u{e9}`"),
+    ] {
+        let sql = format!("insert into bt by name {select}");
+        assert_eq!(
+            class(&s, &sql),
+            "INCOMPATIBLE_DATA_FOR_TABLE.AMBIGUOUS_COLUMN_NAME",
+            "{sql}"
+        );
+        let got = params(&s, &sql);
+        assert!(got.contains(&format!("colName={column}")), "{sql}: {got:?}");
+    }
+    let sql = "insert into bt by name select 1 as a, 2 as zz, 3 as `y``y`";
+    assert_eq!(class(&s, sql), "INCOMPATIBLE_DATA_FOR_TABLE.EXTRA_COLUMNS");
+    let got = params(&s, sql);
+    assert!(
+        got.contains(&"extraColumns=`zz`, `y``y`".to_owned()),
+        "{got:?}"
+    );
+}
+
 /// `INSERT .. BY NAME` pairs struct fields under Spark's `equalsIgnoreCase` (per code point, upper then lower
 /// case: `\u{e9}` = `\u{c9}`, `\u{130}` = `i`), reports two fields equal under that rule as ambiguous, and
 /// quotes a field name with a backquote by doubling it.
@@ -1994,10 +2034,17 @@ fn by_name_struct_fields_pair_by_unicode_case_and_quote_backquotes() {
         "create table bnu(s struct<`\u{e9}`:int,i:int>) using parquet",
     );
     run(&s, "create table bnq(s struct<`a``b`:int>) using parquet");
-    // Pairs under the default (case-insensitive) rule.
+    // Pairs under the default (case-insensitive) rule, by name and not by position.
     run(
         &s,
-        "insert into bnu by name select named_struct('\u{c9}', 1, '\u{130}', 2) as s",
+        "insert into bnu by name select named_struct('\u{130}', 2, '\u{c9}', 1) as s",
+    );
+    assert_eq!(
+        rows(
+            &s,
+            "select concat(cast(s.`\u{e9}` as string), '|', cast(s.i as string)) from bnu"
+        ),
+        ["1|2"]
     );
     // Two source fields equal under the rule are ambiguous.
     let (got, params) = class_and_params(
