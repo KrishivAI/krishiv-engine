@@ -154,3 +154,14 @@ fn nearest_by_needs_cross_joins_enabled() {
     );
     assert_eq!(rows.len(), 1);
 }
+
+#[test]
+fn a_window_ordered_by_a_map_is_invalid_ordering_type() {
+    let s = session();
+    let msg = error_of(
+        &s,
+        "SELECT row_number() OVER (ORDER BY map(u.s, u.s)) FROM u",
+    );
+    assert!(msg.contains("INVALID_ORDERING_TYPE"), "{msg}");
+    assert!(msg.contains("sortorder"), "{msg}");
+}

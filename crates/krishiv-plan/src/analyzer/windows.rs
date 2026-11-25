@@ -36,9 +36,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use krishiv_common::error::{
-    DatatypeMismatchNonFoldableInput, DatatypeMismatchRangeFrameInvalidType,
-    DatatypeMismatchRangeFrameMultiOrder, DatatypeMismatchRangeFrameWithoutOrder,
-    DatatypeMismatchSpecifiedWindowFrameDiffTypes,
+    DatatypeMismatchInvalidOrderingType, DatatypeMismatchNonFoldableInput,
+    DatatypeMismatchRangeFrameInvalidType, DatatypeMismatchRangeFrameMultiOrder,
+    DatatypeMismatchRangeFrameWithoutOrder, DatatypeMismatchSpecifiedWindowFrameDiffTypes,
     DatatypeMismatchSpecifiedWindowFrameInvalidBound,
     DatatypeMismatchSpecifiedWindowFrameUnacceptedType,
     DatatypeMismatchSpecifiedWindowFrameWrongComparison, DistinctWindowFunctionUnsupported,
@@ -819,6 +819,31 @@ impl Resolver<'_> {
                 },
                 e.origin,
             ));
+        }
+        // A window's ordering key that does not order (a map) is `INVALID_ORDERING_TYPE`, as `SortOrder`.
+        for (o, key) in spec
+            .order_by
+            .iter()
+            .zip(rest.iter().skip(spec.partition_by.len()))
+        {
+            if let Some(t) = key.ty.data_type.as_ref().filter(|t| !orderable(t)) {
+                let direction = match o.direction {
+                    crate::SortDirection::Ascending => "ASC",
+                    crate::SortDirection::Descending => "DESC",
+                };
+                let nulls = match o.nulls {
+                    crate::NullOrdering::NullsFirst => "NULLS FIRST",
+                    crate::NullOrdering::NullsLast => "NULLS LAST",
+                };
+                return Err(AnalysisError::new(
+                    DatatypeMismatchInvalidOrderingType {
+                        sql_expr: format!("\"{} {direction} {nulls}\"", pretty(&key.shown(), None)),
+                        function_name: "`sortorder`".to_owned(),
+                        data_type: quoted_type(Some(t)),
+                    },
+                    o.expr.origin,
+                ));
+            }
         }
         let name = call.id.name();
         // A window function's own arguments: Spark replaces a rank's by the
