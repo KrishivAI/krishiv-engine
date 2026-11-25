@@ -90,6 +90,7 @@ mod prune;
 mod pushdown;
 mod repartition;
 mod restrict;
+mod rollup_chain;
 mod semi_order;
 mod share_cte;
 mod share_scan;
@@ -103,8 +104,8 @@ use krishiv_common::config::{
     ANSI_ENABLED, AUTO_BROADCAST_JOIN_THRESHOLD, Config, ConfigValue, DERIVED_KEYS_ABOVE,
     EAGER_AGGREGATION, GROUP_KEY_CODE, JOIN_COST, JOIN_DP_LIMIT, JOIN_ENUMERATOR,
     LATE_PAYLOAD_JOIN, PAYLOAD_ABOVE_AGGREGATE, PRE_AGGREGATE_EXPAND, PRESERVED_SIDE_SEMI_JOIN,
-    SEMI_ANTI_JOIN_ORDER, SESSION_TIME_ZONE, SHARE_CTE_INSTANCES, SHARE_FILTERED_SCANS,
-    SHARE_REPEATED_SUBTREES, SUBQUERY_AS_WINDOW,
+    ROLLUP_FROM_PARENT, SEMI_ANTI_JOIN_ORDER, SESSION_TIME_ZONE, SHARE_CTE_INSTANCES,
+    SHARE_FILTERED_SCANS, SHARE_REPEATED_SUBTREES, SUBQUERY_AS_WINDOW,
 };
 use krishiv_common::error::{InternalError, KrishivError};
 use krishiv_plan::{
@@ -240,6 +241,12 @@ pub struct Options {
     /// session configuration where `krishiv.optimizer.shareFilteredScans` and
     /// `krishiv.sql.optimizer.shareCteInstances` are on.
     pub share_filtered_scans: bool,
+    /// The grouping sets of a pre-aggregated expansion are each computed
+    /// from their smallest computed parent set (`rollup_chain`, perf lever
+    /// F-C2). Needs statistics; runs only with a session configuration where
+    /// `krishiv.optimizer.rollupFromParent` and
+    /// `krishiv.sql.optimizer.shareCteInstances` are on.
+    pub rollup_from_parent: bool,
     /// Group-key codes (`group_code`, design P2b D2): an aggregate's keys
     /// from one dimension travel as one integer code. Needs statistics; a
     /// session configuration, when given, must also switch it on
@@ -275,6 +282,7 @@ impl Default for Options {
             subquery_as_window: true,
             share_repeated_subtrees: true,
             share_filtered_scans: true,
+            rollup_from_parent: true,
             group_key_code: true,
             derived_keys_above: true,
             inferred_join_filters: true,
@@ -881,6 +889,22 @@ fn run(
         let root = if scans {
             t.once("ShareFilteredScan", &root, |r| {
                 share_scan::share(Arc::clone(r), stats.unwrap_or(&NoStatistics))
+            })?
+        } else {
+            root
+        };
+        // Grouping sets from their parent sets (`rollup_chain`, TPC-DS q67).
+        let rollups = share
+            && options.rollup_from_parent
+            && udfs.is_some_and(|(_, config)| {
+                config
+                    .get(&ROLLUP_FROM_PARENT)
+                    .and_then(ConfigValue::as_bool)
+                    .unwrap_or(true)
+            });
+        let root = if rollups {
+            t.once("RollupFromParent", &root, |r| {
+                rollup_chain::chain(Arc::clone(r), stats.unwrap_or(&NoStatistics))
             })?
         } else {
             root

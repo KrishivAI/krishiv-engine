@@ -730,8 +730,7 @@ fn eager_notes(sql: &str) -> (Plan, Vec<String>) {
 
 /// An aggregate both rules accept (its dimension carries only the inferred `isnotnull` on its
 /// join key, which eager aggregation reads as whole since study 54's F-C1): eager aggregation
-/// yields, `GroupKeyCode` codes it, and the plan is the one optimized with eager aggregation off
-/// (Opus review of 091e87454, finding 1).
+/// yields, `GroupKeyCode` codes it, and the plan is the one optimized with eager aggregation off.
 #[test]
 fn eager_aggregation_yields_an_aggregate_group_key_code_takes() {
     let sql = "SELECT g1, g2, count(*) AS n, sum(x) AS s FROM f JOIN d ON fk = dk GROUP BY g1, g2";

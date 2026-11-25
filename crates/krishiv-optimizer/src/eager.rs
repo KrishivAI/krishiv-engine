@@ -873,7 +873,7 @@ fn is_column(e: &Expr, id: AttrId) -> bool {
     matches!(&e.node, ExprNode::Resolved(ResolvedExpr::Column(c)) if c.id == id)
 }
 
-fn is_state(e: &Expr) -> bool {
+pub(crate) fn is_state(e: &Expr) -> bool {
     matches!(&e.node, ExprNode::Resolved(ResolvedExpr::StateInput { .. }))
 }
 

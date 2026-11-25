@@ -327,23 +327,25 @@ impl Planner<'_> {
             if matches!(l.function, AggregateFunction::Udf(_)) {
                 return Err(unsupported("a partial aggregate of an aggregate UDF"));
             }
-            arg_at.push(wanted.len()..wanted.len() + l.args.len());
-            wanted.extend(l.args);
-            functions.push(l.function);
+            // A call over `StateInput` merges a previous partial's states and
+            // emits them again (the partial merge of `distinct_phases`; a
+            // rollup level computed from its parent, `rollup_chain`).
+            let merge = state_input(f);
+            let args = merge.map_or(l.args, |(columns, _)| columns.to_vec());
+            arg_at.push(wanted.len()..wanted.len() + args.len());
+            wanted.extend(args);
+            functions.push((l.function, merge.map(|(_, raw)| raw.clone())));
             names.push(e.to_string());
         }
         let (input, columns) = self.with_columns(input, &wanted)?;
         let k = keys.len();
         let mut aggregates = Vec::with_capacity(calls.len());
-        for ((function, at), name) in functions.into_iter().zip(arg_at).zip(&names) {
+        for (((function, raw), at), name) in functions.into_iter().zip(arg_at).zip(&names) {
             let args = columns[at].to_vec();
-            aggregates.push(aggregate_expr(
-                function,
-                args,
-                None,
-                &input.schema,
-                name.clone(),
-            )?);
+            aggregates.push(match raw {
+                Some(raw) => merging_expr(function, args, &raw, &input.schema, name.clone())?,
+                None => aggregate_expr(function, args, None, &input.schema, name.clone())?,
+            });
         }
         let plan = AggregatePlan {
             group_by: columns[..k].to_vec(),

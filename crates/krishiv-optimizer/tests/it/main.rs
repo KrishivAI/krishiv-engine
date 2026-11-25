@@ -26,6 +26,7 @@ mod preserved_side;
 mod props;
 mod python_relations;
 mod qerror;
+mod rollup_chain;
 mod rule_differential;
 mod rules;
 mod semi_order;

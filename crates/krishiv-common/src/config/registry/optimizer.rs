@@ -87,6 +87,25 @@ pub static SHARE_FILTERED_SCANS: ConfigEntry = ConfigEntry {
     spark_alias: None,
 };
 
+/// The grouping sets of a pre-aggregated expansion are each computed from
+/// their smallest computed parent set (`krishiv.optimizer.rollupFromParent`,
+/// perf lever F-C2).
+pub static ROLLUP_FROM_PARENT: ConfigEntry = ConfigEntry {
+    key: "krishiv.optimizer.rollupFromParent",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(true)),
+    doc: "Compute each grouping set of a `ROLLUP`, `CUBE` or `GROUPING SETS` aggregate from the \
+          already aggregated states of its smallest finer set, instead of from every input row \
+          (TPC-DS q67), when statistics say the finest set barely reduces its input. The sets read \
+          by more than one coarser set are stored, charged to the query's memory and spilled to \
+          disk under pressure. Needs `krishiv.sql.optimizer.shareCteInstances`. Results are the \
+          same either way; `false` turns it off.",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
+    version_added: "0.3.1",
+    spark_alias: None,
+};
+
 /// A group key computed from other group keys moves above the aggregate
 /// (`krishiv.optimizer.derivedKeysAbove`, P3-A part 2c).
 pub static DERIVED_KEYS_ABOVE: ConfigEntry = ConfigEntry {

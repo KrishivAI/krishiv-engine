@@ -950,6 +950,25 @@ fn share_filtered_scans_defaults_on_and_parses() {
 }
 
 #[test]
+fn rollup_from_parent_defaults_on_and_parses() {
+    let mut c = Config::new();
+    assert_eq!(
+        c.get(&ROLLUP_FROM_PARENT).and_then(ConfigValue::as_bool),
+        Some(true)
+    );
+    c.set("krishiv.optimizer.rollupFromParent", "false")
+        .unwrap();
+    assert_eq!(
+        c.get(&ROLLUP_FROM_PARENT).and_then(ConfigValue::as_bool),
+        Some(false)
+    );
+    assert!(
+        c.set("krishiv.optimizer.rollupFromParent", "maybe")
+            .is_err()
+    );
+}
+
+#[test]
 fn group_key_code_defaults_off_and_parses() {
     let mut c = Config::new();
     assert_eq!(
