@@ -144,7 +144,17 @@ impl Session {
             )
             .await?;
         }
-        let result = loaded.call(&ctx, args).await;
+        let result = if loaded.name() == "rewrite_data_files"
+            && let Some(id) = &target
+        {
+            let mut quoted = vec![id.catalog.clone()];
+            quoted.extend(id.namespace.iter().cloned());
+            quoted.push(id.name.clone());
+            self.run_rewrite_data_files(&quote_all(&quoted), &rewrite_args(&args))
+                .await
+        } else {
+            loaded.call(&ctx, args).await
+        };
         if let Some(id) = target {
             // Frames and plans that read the table analyze again (`REFRESH TABLE`), whether the
             // procedure succeeded or failed after a commit. Only the caches are dropped: the next
@@ -217,6 +227,25 @@ pub(crate) fn table_ident(
         namespace: parts,
         name,
     })
+}
+
+/// The arguments of `rewrite_data_files`, in its signature's order (`table`, `strategy`,
+/// `sort_order`, `options`, `where`, `branch`).
+fn rewrite_args(args: &[ProcedureValue]) -> crate::table_commands::RewriteArgs {
+    let text = |i: usize| match args.get(i) {
+        Some(ProcedureValue::String(s)) => Some(s.clone()),
+        _ => None,
+    };
+    crate::table_commands::RewriteArgs {
+        strategy: text(1),
+        sort_order: text(2),
+        options: match args.get(3) {
+            Some(ProcedureValue::StringMap(m)) => m.iter().cloned().collect(),
+            _ => std::collections::BTreeMap::new(),
+        },
+        filter: text(4),
+        branch: text(5),
+    }
 }
 
 /// A `NULL` inside an array argument: refused, never dropped (the procedure would act on

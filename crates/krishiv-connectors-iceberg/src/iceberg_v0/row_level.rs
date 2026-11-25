@@ -253,6 +253,18 @@ impl RowLevelTable for IcebergRowLevel {
             .collect())
     }
 
+    fn live_data_files(&self) -> krishiv_exec::Result<usize> {
+        let target = self.provider.write_target().ok_or_else(|| {
+            KrishivError::from(krishiv_common::error::InternalError {
+                message: "a rewritten Iceberg table without a write target".to_owned(),
+            })
+        })?;
+        Ok(self
+            .provider
+            .rewrite_candidates(target.base.default_partition_spec_id())?
+            .len())
+    }
+
     /// The sink of one `rewrite_data_files` group (36e-2a): `request.touched` are the group's
     /// files, the rows are theirs unchanged. Validated as Java's `BaseRewriteFiles` (a concurrent
     /// append is no conflict; a file removed or a delete added for a rewritten file is).

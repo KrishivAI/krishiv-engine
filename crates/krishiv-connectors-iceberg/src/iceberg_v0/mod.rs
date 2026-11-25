@@ -81,6 +81,8 @@ mod puffin_stats_tests;
 #[cfg(test)]
 mod rest_commit_tests;
 #[cfg(test)]
+mod rewrite_group_tests;
+#[cfg(test)]
 mod rolling_tests;
 #[cfg(test)]
 mod roundtrip_tests;

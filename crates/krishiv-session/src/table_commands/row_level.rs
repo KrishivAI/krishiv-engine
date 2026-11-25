@@ -802,6 +802,8 @@ fn the_delta_connector_reads_the_same_option_keys() {
     assert_eq!(ALIAS_OPTION, d::ROW_LEVEL_ALIAS_OPTION);
 }
 
+pub(crate) mod rewrite_files;
+
 #[cfg(test)]
 pub(crate) mod tests;
 

@@ -69,8 +69,9 @@ pub use file_table::FileTable;
 pub use key_count::{KeyOptions, KeyOutcome, KeyResult, KeyUnknown};
 pub use ndv_sample::{SampleOptions, SampleOutcome, SampleResult};
 pub use row_level::{
-    CardinalityRule, REWRITE_WRITE_MAX_OPTION, RewriteGroup, RowIdScan, RowLevelCapabilities,
-    RowLevelCounts, RowLevelOperation, RowLevelProblem, RowLevelTable, RowLevelWrite,
+    CardinalityRule, REWRITE_GROUP_OPTION, REWRITE_WRITE_MAX_OPTION, RewriteGroup, RowIdScan,
+    RowLevelCapabilities, RowLevelCounts, RowLevelOperation, RowLevelProblem, RowLevelTable,
+    RowLevelWrite,
 };
 pub use table::{
     MemoryTable, MemoryTables, ProviderStatistics, SpilledTable, TableProvider,

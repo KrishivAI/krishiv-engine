@@ -248,6 +248,10 @@ pub(super) fn bound_columns(e: &Expr, out: &mut Vec<krishiv_plan::BoundColumn>) 
 /// The `RowLevelWrite` option carrying a compaction group's output file size ceiling in bytes.
 pub const REWRITE_WRITE_MAX_OPTION: &str = "__krishiv_rewrite_write_max_file_size";
 
+/// The `RowLevelWrite` option marking a `rewrite_data_files` group: the write goes to the table's
+/// [`RowLevelTable::group_rewriter`], not its statement rewriter.
+pub const REWRITE_GROUP_OPTION: &str = "__krishiv_rewrite_group";
+
 /// One file group of a `rewrite_data_files` plan.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RewriteGroup {
@@ -316,6 +320,18 @@ pub trait RowLevelTable: Send + Sync + fmt::Debug {
     /// table overrides it.
     fn plan_rewrite(&self, options: &BTreeMap<String, String>) -> Result<Vec<RewriteGroup>> {
         let _ = options;
+        Err(krishiv_common::error::KrishivUnsupportedFeature {
+            feature: "rewriting data files of this table".to_owned(),
+        }
+        .into())
+    }
+
+    /// How many live data files the table holds now (what a `rewrite_data_files` result's added
+    /// count is read from: files after, less files before, plus the files it replaced).
+    ///
+    /// # Errors
+    /// `UNSUPPORTED_FEATURE` unless the table supports `rewrite_data_files`.
+    fn live_data_files(&self) -> Result<usize> {
         Err(krishiv_common::error::KrishivUnsupportedFeature {
             feature: "rewriting data files of this table".to_owned(),
         }
