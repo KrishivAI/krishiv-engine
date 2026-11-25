@@ -2322,6 +2322,11 @@ async fn show_string_matches_the_spark_430_fixture() {
     let mut failures = Vec::new();
     for case in fixture["cases"].as_array().expect("cases") {
         let Some(expected) = case["expected"].as_str() else {
+            // An oracle error is a refusal listed on purpose; none may appear unnoticed.
+            assert!(
+                case["error"].is_string() && case["name"].is_string(),
+                "fixture case without an expected text or an error: {case}"
+            );
             continue;
         };
         let got = shown(
@@ -2339,4 +2344,14 @@ async fn show_string_matches_the_spark_430_fixture() {
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n\n"));
+}
+
+/// Result columns that share a name show by position, as `Dataset.showString` does.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn show_string_binds_duplicate_named_columns_by_position() {
+    let text = shown(sql("SELECT 1 AS x, 2 AS x"), 20, 20, false).await;
+    assert_eq!(
+        text,
+        "+---+---+\n|  x|  x|\n+---+---+\n|  1|  2|\n+---+---+\n"
+    );
 }

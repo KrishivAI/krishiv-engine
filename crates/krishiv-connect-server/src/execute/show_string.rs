@@ -98,7 +98,8 @@ pub(super) async fn render(df: &DataFrame, request: &Request) -> Result<String, 
     let limit = i32::try_from(num_rows + 1).unwrap_or(i32::MAX);
     let mut exprs = Vec::new();
     for (i, field) in schema.fields().iter().enumerate() {
-        let quoted = format!("`{}`", field.name().replace('`', "``"));
+        // Columns are bound by position (`c{i}`): result columns may share a name.
+        let quoted = format!("`c{i}`");
         exprs.push(match field.data_type() {
             DataType::Binary
             | DataType::LargeBinary
@@ -110,7 +111,8 @@ pub(super) async fn render(df: &DataFrame, request: &Request) -> Result<String, 
     let mut rows: Vec<Vec<String>> = Vec::new();
     {
         // An input with no columns still has rows to count.
-        let limited = df.limit(limit);
+        let positional = df.to_df((0..schema.fields().len()).map(|i| format!("c{i}")));
+        let limited = positional.limit(limit);
         let mut stream = if exprs.is_empty() {
             limited.execute_stream_boxed().await?
         } else {
