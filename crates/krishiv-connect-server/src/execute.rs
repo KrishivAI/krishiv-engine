@@ -1269,6 +1269,8 @@ impl Work {
             Self::Command(answer) => sql_command::produce(sender, *answer).await,
             Self::Checkpoint(id) => cache_command::produce(sender, id).await,
             Self::Text(shown) => {
+                // A show action sends no observed metrics (Spark's show_string answers one text row and an
+                // empty `Metrics`): the show frame is built without an `ObservedSink`, unlike `produce`.
                 sender.admit().await?;
                 let mut first = sender.response(None);
                 first.schema = Some(shown.schema_response.clone());
