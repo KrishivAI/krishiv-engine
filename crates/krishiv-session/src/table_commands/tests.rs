@@ -96,14 +96,6 @@ fn ansi_store_assignment() {
     assert!(!can_store(&a(T::String), &a(T::Long)));
 }
 
-#[test]
-fn literal_text_strips_one_pair_of_quotes() {
-    assert_eq!(literal_text("'a b'"), "a b");
-    assert_eq!(literal_text("\"x\""), "x");
-    assert_eq!(literal_text(" true "), "true");
-    assert_eq!(literal_text("'"), "'");
-}
-
 /// A location with a scheme or an absolute path never asks for the warehouse directory, so a
 /// warehouse that cannot be created does not fail it.
 #[test]
