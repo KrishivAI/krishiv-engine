@@ -1746,14 +1746,16 @@ pub(super) fn try_nullable(from: &DataType, to: &DataType) -> bool {
 }
 
 /// Spark's `Cast.canUpCast` for nested types: element by element, where a
-/// target that may not hold NULL needs a source that has none (to `STRING`
-/// as for any type).
+/// target that may not hold NULL needs a source that has none. A nested
+/// value to `STRING` is no up-cast (Spark's rule is `(_: AtomicType,
+/// StringType)`), so `TRY_CAST(array(1) AS STRING)` is nullable (Spark
+/// 4.2.0 and 4.3.0 runs).
 fn nested_up_cast(from: &DataType, to: &DataType) -> bool {
     use DataType as T;
     let fits = |from_null: bool, to_null: bool| !from_null || to_null;
     let up = |f: &DataType, t: &DataType| !try_nullable(f, t);
     match (from, to) {
-        _ if from == to || *to == T::String => true,
+        _ if from == to => true,
         (T::Array(a), T::Array(b)) => {
             up(a.element_type(), b.element_type()) && fits(a.contains_null(), b.contains_null())
         }

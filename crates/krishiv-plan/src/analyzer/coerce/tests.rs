@@ -682,3 +682,27 @@ fn try_cast_reads_a_collated_string_as_a_string() {
     assert!(try_nullable(&T::Binary, &lcase));
     assert!(try_nullable(&lcase, &T::Integer));
 }
+
+/// `TRY_CAST` of a nested value to `STRING` may be NULL: Spark's `canUpCast` takes only an atomic
+/// source to a string (Spark 4.2.0 and 4.3.0: `TRY_CAST(array(1, 2) AS STRING)`, of a struct, a map
+/// and `array(array(1))` are nullable; of `1`, `1.5D` and a date are not).
+#[test]
+fn try_cast_of_a_nested_value_to_string_may_be_null() {
+    let t = |s: &str| krishiv_types::parse_data_type(s).unwrap();
+    for from in [
+        "array<int>",
+        "array<string>",
+        "array<array<int>>",
+        "struct<a:int>",
+        "map<int,int>",
+    ] {
+        assert!(try_nullable(&t(from), &T::String), "{from}");
+    }
+    for from in [T::Integer, T::Double, T::Date] {
+        assert!(!try_nullable(&from, &T::String), "{from:?}");
+    }
+    // Element by element the same rule holds: an inner array to a string is no up-cast.
+    assert!(try_nullable(&t("array<array<int>>"), &t("array<string>")));
+    assert!(!try_nullable(&t("array<int>"), &t("array<string>")));
+    assert!(!try_nullable(&t("array<int>"), &t("array<int>")));
+}
