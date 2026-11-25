@@ -9,6 +9,7 @@ use krishiv_common::error::{
 };
 
 use super::*;
+use crate::function::{Builtin, FunctionId};
 
 impl Resolver<'_> {
     /// The match `m` of an as-of join of `l` and `r` at `origin`, resolved: `left` reads only
@@ -47,10 +48,14 @@ impl Resolver<'_> {
             refs.iter().any(|i| left_ids.contains(i)) && refs.iter().any(|i| right_ids.contains(i))
         };
         if both(&refs1) || both(&refs2) {
+            // Spark runs this check before the operands resolve, so it names them as they stand
+            // then (`as_first_checked`).
+            let checked =
+                |b: &Bound| format!("\"{}\"", pretty(&as_first_checked(&b.shown()), zone));
             return Err(AnalysisError::new(
                 AsofJoinMatchConditionTableReference {
-                    refs1: shown(&first),
-                    refs2: shown(&second),
+                    refs1: checked(&first),
+                    refs2: checked(&second),
                 },
                 origin,
             ));
@@ -125,22 +130,16 @@ impl Resolver<'_> {
         };
         // Spark's distance (`buildLeafOrderExpression`, `makeOrderingExpr`) over the operands as
         // normalized, where the left one's type subtracts (`supportsSubtract`): `R - L` forward,
-        // `L - R` backward (evaluated only on the Connect form, `RewriteAsOfJoin`; Spark's SQL
-        // scan evaluates none backward). The executor evaluates it where Spark does. A
-        // subtraction Krishiv cannot resolve for the two types leaves no check (the match itself
-        // is unchanged); tuple and array values are not subtracted yet (Spark subtracts their
-        // leaves), see the design note.
+        // `L - R` backward. Spark builds it in every form, so `CheckAnalysis` checks it in every
+        // form, but evaluates it only forward and on the Connect form (`RewriteAsOfJoin`); the
+        // executor evaluates it where Spark does. Tuple and array values are not subtracted yet
+        // (Spark subtracts their leaves), see the design note.
         let every_pair = m.distance_on_every_pair;
-        let operands = match direction {
-            crate::AsOfDirection::Forward => Some((&right.expr, &left.expr)),
-            crate::AsOfDirection::Backward if every_pair => Some((&left.expr, &right.expr)),
-            _ => None,
-        };
-        let distance = match operands {
-            Some((a, b)) if subtracts(left.ty.data_type.as_ref()) => self
-                .call("-", vec![Arc::clone(a), Arc::clone(b)], env, origin)
-                .ok(),
-            _ => None,
+        let forward = matches!(direction, crate::AsOfDirection::Forward);
+        let operands = if forward {
+            (&right.expr, &left.expr)
+        } else {
+            (&left.expr, &right.expr)
         };
         // The two values meet at the type a comparison of them casts both to.
         let compared = self
@@ -151,6 +150,18 @@ impl Resolver<'_> {
                 origin,
             )
             .map_err(|_| type_error())?;
+        // Spark's `CheckAnalysis` reaches the distance after the comparison, so a comparison
+        // type error wins; a subtraction that does not resolve is reported as Spark reports it.
+        let distance = if subtracts(left.ty.data_type.as_ref()) {
+            let (a, b) = operands;
+            // Resolved whether or not it is kept, so its error is reported either way.
+            let subtraction = self.call("-", vec![Arc::clone(a), Arc::clone(b)], env, origin)?;
+            let kept =
+                forward || (every_pair && matches!(direction, crate::AsOfDirection::Backward));
+            kept.then_some(subtraction)
+        } else {
+            None
+        };
         let ExprNode::Resolved(ResolvedExpr::Function(ResolvedFunction { args, .. })) =
             &compared.node
         else {
@@ -184,6 +195,80 @@ impl Resolver<'_> {
             distance_on_every_pair: every_pair,
             as_written: false,
         })
+    }
+}
+
+/// An operand as Spark's table-reference check names it. `ResolveAsOfJoin` checks the operands
+/// in the first analyzer pass that resolves both inputs, after `ResolveTimeZone` and the one
+/// bottom-up `ResolveBinaryArithmetic` of that pass. The datetime nodes that rewrite creates
+/// (`TimeAdd`, `TimestampAddYMInterval`, `DateAddInterval`, `DatetimeSub`, `SubtractTimestamps`)
+/// have no time zone yet, so they are unresolved, and an operator over one is left as written:
+/// `(trade_time + (quote_time - trade_time))`, not the timestamp addition. Explicit casts already
+/// have their zone (Spark 4.3.0 runs, `opus1-asof-ref`).
+fn as_first_checked(e: &Arc<Expr>) -> Arc<Expr> {
+    // The outputs whose Spark form is unresolved, by address; `kept` holds each alive so no
+    // address is reused while the set is read.
+    let mut pending: HashSet<*const Expr> = HashSet::new();
+    let mut kept: Vec<Arc<Expr>> = Vec::new();
+    let out = Arc::clone(e).transform_up(&mut |x: Arc<Expr>| {
+        let mut over_pending = false;
+        x.for_each_child(&mut |c| over_pending |= pending.contains(&Arc::as_ptr(c)));
+        let ExprNode::Resolved(ResolvedExpr::Function(f)) = &x.node else {
+            if over_pending {
+                pending.insert(Arc::as_ptr(&x));
+                kept.push(Arc::clone(&x));
+            }
+            return Ok::<_, std::convert::Infallible>(x);
+        };
+        let FunctionId::Builtin(id) = f.id else {
+            if over_pending {
+                pending.insert(Arc::as_ptr(&x));
+                kept.push(Arc::clone(&x));
+            }
+            return Ok(x);
+        };
+        let zoned_rewrite = match id {
+            Builtin::TimestampAddInterval
+            | Builtin::TimestampAddYmInterval
+            | Builtin::DateAddInterval
+            | Builtin::DatetimeSub => true,
+            // `SubtractTimestamps` shows as `-` already; a timestamp on either side makes one.
+            Builtin::Subtract => f.args.iter().any(|a| {
+                matches!(
+                    a.resolved_type(),
+                    Some(DataType::Timestamp | DataType::TimestampNtz)
+                )
+            }),
+            _ => false,
+        };
+        let plain = match id {
+            Builtin::TimestampAddInterval
+            | Builtin::TimestampAddYmInterval
+            | Builtin::DateAddInterval
+            | Builtin::DateAddYmInterval => Some(Builtin::Add),
+            Builtin::DatetimeSub => Some(Builtin::Subtract),
+            _ => None,
+        };
+        let x = match plain {
+            // Not rewritten: Spark's `Add`/`Subtract` over the operands, `(l + r)`.
+            Some(op) if over_pending => {
+                let mut g = f.clone();
+                g.id = FunctionId::Builtin(op);
+                Arc::new(
+                    Expr::new(ExprNode::Resolved(ResolvedExpr::Function(g))).with_origin(x.origin),
+                )
+            }
+            _ => x,
+        };
+        if zoned_rewrite || over_pending {
+            pending.insert(Arc::as_ptr(&x));
+            kept.push(Arc::clone(&x));
+        }
+        Ok(x)
+    });
+    match out {
+        Ok(x) => x,
+        Err(never) => match never {},
     }
 }
 

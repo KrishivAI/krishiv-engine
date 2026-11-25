@@ -386,15 +386,56 @@ fn match_condition_errors_are_sparks() {
     for (sql, class, params) in cases {
         assert_eq!(failure(&s, sql), (class.to_owned(), params), "{sql}");
     }
-    // An operand reading both inputs. Spark names it `"(trade_time + (quote_time -
-    // trade_time))"`: its outer `+` is not yet rewritten to the timestamp addition when the
-    // check runs. Krishiv names the rewritten form, without the outer parentheses.
-    let sql = "SELECT * FROM trades t ASOF JOIN quotes q \
-               MATCH_CONDITION (t.trade_time + (q.quote_time - t.trade_time) >= q.quote_time) \
-               ON t.symbol = q.symbol";
-    let (class, params) = failure(&s, sql);
-    assert_eq!(class, "ASOF_JOIN_MATCH_CONDITION_TABLE_REFERENCE");
-    assert_eq!(params[1], ("refs2".to_owned(), "\"quote_time\"".to_owned()));
+    // An operand reading both inputs, named as Spark's check sees it: before the time zone of a
+    // datetime node the arithmetic rewrite made, so an operator over one is still `(l op r)`
+    // (Spark 4.3.0 runs; one-level `trade_time - INTERVAL '01' HOUR` is in the table above).
+    let both = [
+        (
+            "t.trade_time + (q.quote_time - t.trade_time)",
+            "(trade_time + (quote_time - trade_time))",
+        ),
+        (
+            "(t.trade_time + INTERVAL '1' HOUR) + (q.quote_time - t.trade_time)",
+            "(trade_time + INTERVAL '01' HOUR + (quote_time - trade_time))",
+        ),
+        (
+            "(t.trade_time + INTERVAL '1' MONTH) + (q.quote_time - t.trade_time)",
+            "(trade_time + INTERVAL '1' MONTH + (quote_time - trade_time))",
+        ),
+        (
+            "(t.trade_time - INTERVAL '1' HOUR) + (q.quote_time - t.trade_time)",
+            "(trade_time - INTERVAL '01' HOUR + (quote_time - trade_time))",
+        ),
+        (
+            "t.trade_time - (q.quote_time - t.trade_time)",
+            "(trade_time - (quote_time - trade_time))",
+        ),
+        (
+            "t.trade_time + (q.quote_time - t.trade_time) + INTERVAL '1' HOUR",
+            "((trade_time + (quote_time - trade_time)) + INTERVAL '01' HOUR)",
+        ),
+        // Explicit casts have their zone, so the date arithmetic is rewritten.
+        (
+            "CAST(t.trade_time AS DATE) + (CAST(q.quote_time AS DATE) - CAST(t.trade_time AS DATE))",
+            "date_add(CAST(trade_time AS DATE), extractansiintervaldays((CAST(quote_time AS DATE) - CAST(trade_time AS DATE))))",
+        ),
+    ];
+    for (operand, named) in both {
+        let sql = format!(
+            "SELECT * FROM trades t ASOF JOIN quotes q \
+             MATCH_CONDITION ({operand} >= q.quote_time) ON t.symbol = q.symbol"
+        );
+        let (class, params) = failure(&s, &sql);
+        assert_eq!(class, "ASOF_JOIN_MATCH_CONDITION_TABLE_REFERENCE", "{sql}");
+        assert_eq!(
+            params,
+            vec![
+                ("refs1".to_owned(), format!("\"{named}\"")),
+                ("refs2".to_owned(), "\"quote_time\"".to_owned()),
+            ],
+            "{sql}"
+        );
+    }
 }
 
 /// A floating-point distance ranks unlike the values at the infinities: Spark's forward scan over
@@ -506,4 +547,46 @@ fn a_forward_timestamp_as_of_join_across_daylight_saving_is_refused() {
     );
     set("SET spark.sql.session.timeZone=UTC");
     assert_eq!(rows(&s, &sql("TIMESTAMP", "<=")), ["1"]);
+}
+
+/// Spark builds the distance in every form, so `CheckAnalysis` checks its subtraction even where
+/// it is never evaluated (SQL backward); for every operand pair the comparison accepts, the
+/// subtraction resolves too. Spark 4.3.0 runs (`opus1-asof-c`): each query below analyzes, and
+/// the three backward ones each find their row; a forward match finds none in this data.
+/// A distance that does not resolve would now fail the query, where it was dropped before.
+#[test]
+fn the_distance_resolves_for_every_comparable_pair() {
+    let s = session();
+    for sql in [
+        "CREATE TEMPORARY VIEW a AS SELECT * FROM VALUES (1, 5, DATE'2024-01-02', \
+         TIMESTAMP'2024-01-01 10:00:00', TIMESTAMP_NTZ'2024-01-01 10:00:00', 1.5D, 2.5BD, '7') \
+         AS a(k, i, d, ts, ntz, db, dec, s)",
+        "CREATE TEMPORARY VIEW b AS SELECT * FROM VALUES (1, 4, DATE'2024-01-01', \
+         TIMESTAMP'2024-01-01 09:00:00', TIMESTAMP_NTZ'2024-01-01 09:00:00', 0.5D, 1.5BD, '3') \
+         AS b(k, i, d, ts, ntz, db, dec, s)",
+    ] {
+        rows(&s, sql);
+    }
+    for (cond, n) in [
+        ("a.i <= b.s", 0),
+        ("a.d <= b.ts", 0),
+        ("a.d <= b.ntz", 0),
+        ("a.ts <= b.ntz", 0),
+        ("a.ntz <= b.ts", 0),
+        ("a.ts <= b.d", 0),
+        ("a.s <= b.i", 0),
+        ("a.d >= b.ts", 1),
+        ("a.i >= b.s", 1),
+        ("a.s >= b.i", 1),
+        ("a.dec >= b.s", 0),
+    ] {
+        let sql = format!("SELECT a.k FROM a ASOF JOIN b MATCH_CONDITION ({cond}) ON a.k = b.k");
+        assert_eq!(rows(&s, &sql).len(), n, "{cond}");
+    }
+    // A forward double distance resolves too; Krishiv refuses to run it (its order differs from
+    // the values' at the infinities), which Spark does not.
+    for cond in ["a.i <= b.db", "a.dec <= b.db"] {
+        let sql = format!("SELECT a.k FROM a ASOF JOIN b MATCH_CONDITION ({cond}) ON a.k = b.k");
+        assert_eq!(error(&s, &sql), "KRISHIV_UNSUPPORTED_FEATURE", "{cond}");
+    }
 }
