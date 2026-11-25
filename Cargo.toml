@@ -139,6 +139,10 @@ prost-types = { version = "0.14.4", default-features = false }
 # krishiv-sim only, test infrastructure.
 turmoil = { version = "0.7.2", default-features = false }
 pyo3 = { version = "0.30.1", default-features = false }
+# Node.js bindings (krishiv-node, design/node-engine-napi.md): Node-API through napi-rs 3, MIT.
+napi = { version = "3.16.3", default-features = false }
+napi-derive = { version = "3.7.2", default-features = false }
+napi-build = { version = "2.7.0", default-features = false }
 hashbrown = { version = "0.17", default-features = false }
 foldhash = { version = "0.2", default-features = false }
 # Theta sketches of Iceberg Puffin NDV (P3-T024) and the T086 sketch functions; owner approved 0.6.0 pinned exactly (needs-owner, 2026-11-12). Features are additive per crate.
