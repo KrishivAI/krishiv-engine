@@ -62,10 +62,13 @@ impl QueryCatalog {
         let mut scans = Vec::new();
         collect_scans(plan, &mut scans);
         for scan in scans {
-            let ReadSource::Table { name, .. } = &scan.source else {
+            let ReadSource::Table { name, options } = &scan.source else {
                 continue;
             };
             let key = Self::declared_key(name, scan.version);
+            if loads.loaded(&key).is_some() {
+                refuse_snapshot_options(name, options)?;
+            }
             if loads.opened(&key).is_some() {
                 continue;
             }
@@ -88,6 +91,61 @@ impl QueryCatalog {
         }
         Ok(())
     }
+}
+
+/// Spark's time-travel read options (`DataFrameReader.option`, `WITH (...)`), refused as Spark's
+/// `V2SessionCatalog.failTimeTravel` refuses the clause on a table that cannot travel.
+const TIME_TRAVEL_OPTIONS: &[&str] = &["versionasof", "timestampasof"];
+
+/// Iceberg's read options that choose a snapshot other than the current one or an incremental
+/// range (`SparkReadOptions`; keys are case-insensitive there). A declared table reads only its
+/// current snapshot until time travel lands (design `0.4-iceberg-branches-tags` I1), so each is
+/// refused rather than ignored.
+const SNAPSHOT_OPTIONS: &[&str] = &[
+    "snapshot-id",
+    "as-of-timestamp",
+    "branch",
+    "tag",
+    "start-snapshot-id",
+    "end-snapshot-id",
+    "start-timestamp",
+    "end-timestamp",
+];
+
+/// Refuses a read of the declared table `name` with an option that would choose another snapshot
+/// (above): reading the current one instead would return the wrong rows.
+///
+/// # Errors
+/// `UNSUPPORTED_FEATURE.TIME_TRAVEL` naming the table for `versionAsOf` / `timestampAsOf`;
+/// `KRISHIV_UNSUPPORTED_FEATURE` naming the option for Iceberg's own.
+fn refuse_snapshot_options(
+    name: &[String],
+    options: &std::collections::BTreeMap<String, OptionValue>,
+) -> Result<(), KrishivError> {
+    for key in options.keys() {
+        let lower = key.to_ascii_lowercase();
+        if TIME_TRAVEL_OPTIONS.contains(&lower.as_str()) {
+            return Err(krishiv_common::error::UnsupportedFeatureTimeTravel {
+                relation_id: relation_id(name),
+            }
+            .into());
+        }
+        if SNAPSHOT_OPTIONS.contains(&lower.as_str()) {
+            return Err(unsupported(&format!(
+                "the Iceberg read option {key} on {} (only the current snapshot is read)",
+                relation_id(name)
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// `name` as Spark prints a relation: each part back-quoted, joined by dots.
+pub(crate) fn relation_id(name: &[String]) -> String {
+    name.iter()
+        .map(|p| format!("`{}`", p.replace('`', "``")))
+        .collect::<Vec<_>>()
+        .join(".")
 }
 
 /// `inputs` with their path placement confined by the server's roots and prefixes

@@ -605,3 +605,80 @@ fn embedded_locations_take_plain_absolute_file_paths_only() {
         Err(LocationRule::SchemeNotAllowed)
     );
 }
+
+/// A read option that would choose another snapshot of a declared Iceberg table (Spark's
+/// `versionAsOf` / `timestampAsOf`, Iceberg's `snapshot-id`, `branch`, ...) is refused, in any
+/// case, rather than ignored: the current snapshot is all a declared table reads yet, and
+/// reading it instead returns the wrong rows (snapshot 1 holds 2 rows, the current one 3).
+#[test]
+fn snapshot_choosing_read_options_are_refused_not_ignored() {
+    let dir = tempfile::tempdir().unwrap();
+    let table = write_table(dir.path()).unwrap();
+    let server = catalog(body(&table, "{}", ""));
+    let s = session(&server, None);
+    let first = table.snapshots[0];
+    let travel = |opt: &str, value: &str| {
+        let q = format!("SELECT id, name FROM lake.db.t WITH ('{opt}' = '{value}')");
+        let e = run(&s, &q).unwrap_err();
+        assert_eq!(
+            e.error_class(),
+            ErrorClass::UnsupportedFeatureTimeTravel,
+            "{q}: {e}"
+        );
+        assert!(e.to_string().contains("`lake`.`db`.`t`"), "{q}: {e}");
+    };
+    travel("versionAsOf", &first.to_string());
+    travel("VERSIONASOF", &first.to_string());
+    travel("timestampAsOf", "1970-01-02 00:00:00");
+    for opt in [
+        "snapshot-id",
+        "Snapshot-Id",
+        "as-of-timestamp",
+        "branch",
+        "tag",
+        "start-snapshot-id",
+        "end-snapshot-id",
+        "start-timestamp",
+        "end-timestamp",
+    ] {
+        let q = format!("SELECT id, name FROM lake.db.t WITH ('{opt}' = '{first}')");
+        let e = run(&s, &q).unwrap_err();
+        assert_eq!(
+            e.error_class(),
+            ErrorClass::KrishivUnsupportedFeature,
+            "{q}: {e}"
+        );
+        assert!(e.to_string().contains(opt), "{q}: {e}");
+    }
+    // Other options still read the current snapshot.
+    assert_eq!(
+        rows(
+            &s,
+            "SELECT id, name FROM lake.db.t WITH ('split-size' = '1048576')"
+        ),
+        pairs(&[(1, "a"), (2, "b"), (3, "c")])
+    );
+}
+
+/// The SQL clause on a declared table is refused naming the table as written, not as a
+/// `spark_catalog` table.
+#[test]
+fn the_time_travel_clause_names_the_declared_table() {
+    let dir = tempfile::tempdir().unwrap();
+    let table = write_table(dir.path()).unwrap();
+    let server = catalog(body(&table, "{}", ""));
+    let s = session(&server, None);
+    let first = table.snapshots[0];
+    for q in [
+        format!("SELECT id, name FROM lake.db.t VERSION AS OF {first}"),
+        "SELECT id, name FROM lake.db.t TIMESTAMP AS OF '1970-01-02 00:00:00'".to_owned(),
+    ] {
+        let e = run(&s, &q).unwrap_err();
+        assert_eq!(
+            e.error_class(),
+            ErrorClass::UnsupportedFeatureTimeTravel,
+            "{q}: {e}"
+        );
+        assert!(e.to_string().contains("`lake`.`db`.`t`"), "{q}: {e}");
+    }
+}

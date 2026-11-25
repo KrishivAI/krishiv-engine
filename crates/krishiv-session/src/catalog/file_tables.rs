@@ -155,7 +155,14 @@ impl QueryCatalog {
             };
             if options.contains_key(krishiv_plan::TIME_TRAVEL_OPTION) {
                 // The relation resolved (a missing one failed in analysis): Spark's
-                // `V2SessionCatalog.failTimeTravel` names it in full.
+                // `V2SessionCatalog.failTimeTravel` names it in full. A name with its catalog
+                // (a declared catalog's table) is named as written, never as `spark_catalog`'s.
+                if name.len() >= 3 && !name[0].eq_ignore_ascii_case("spark_catalog") {
+                    return Err(krishiv_common::error::UnsupportedFeatureTimeTravel {
+                        relation_id: super::declared::relation_id(name),
+                    }
+                    .into());
+                }
                 let (namespace, table) = match &name[..] {
                     [table] => (
                         self.namespace()
