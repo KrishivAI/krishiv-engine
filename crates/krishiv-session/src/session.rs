@@ -64,6 +64,7 @@ use crate::variables::SessionVariables;
 
 mod context;
 mod lifecycle;
+mod procedure_inputs;
 mod traits;
 #[cfg(feature = "unstable-ir")]
 pub use lifecycle::{SqlOutcome, SqlQuery};
@@ -170,7 +171,7 @@ pub(crate) struct SessionState {
     pub(crate) memory: Arc<dyn MemoryPool>,
     /// Whether a store creates objects only if absent (the commit log's
     /// probe), by store id; per session, never process-wide.
-    commit_log_probes: Mutex<HashMap<String, bool>>,
+    pub(crate) commit_log_probes: Mutex<HashMap<String, bool>>,
     pub(crate) io: Arc<IoScheduler>,
     /// The session's content-addressed relations: every memory table's
     /// batches as Arrow IPC, so workers resolve a batch range through it
@@ -243,7 +244,7 @@ impl SessionBuilder {
         self
     }
 
-    /// The Spark version whose behaviour queries follow (default 4.2).
+    /// The Spark version whose behaviour queries follow (default 4.3).
     ///
     /// ```
     /// use krishiv_plan::analyzer::SparkProfile;
@@ -549,7 +550,7 @@ impl Session {
         spans: Vec<krishiv_sql::ast::Span>,
     ) -> Result<DataFrame, KrishivError> {
         // Boxed: one more nested future level overflows the compiler's query depth in the binaries.
-        Box::pin(self.sql_here_inner(query, Arc::default(), spans, false))
+        Box::pin(self.sql_here_inner(query, Arc::default(), spans, None, false))
             .await
             .and_then(Ran::into_frame)
             .map(|(df, _)| df)
@@ -592,6 +593,7 @@ impl Session {
                 Box::pin(self.exec_cache(&c, query, &env.identifier_spans)).await
             }
             Statement::Refresh(r) => self.exec_refresh(&r).await,
+            Statement::Call(c) => Box::pin(self.exec_call(&c, query)).await,
             Statement::DeclareVariable(v) => self.exec_declare(&v, query, redacted).await,
             Statement::SetVariable(v) => self.exec_set_variable(&v, query, redacted).await,
             Statement::DropVariable(v) => self.exec_drop_variable(&v, redacted).await,
@@ -669,9 +671,8 @@ impl Session {
             Statement::CreatePipelineDataset(c) => Self::exec_create_pipeline_dataset(&c),
             Statement::CreateFlow(f) => self.exec_create_flow(&f),
             Statement::LoadData(l) => self.exec_load_data(&l),
-            // The path write belongs to the session's write path: it has no plan node to lower to yet.
-            Statement::InsertDirectory(_) => {
-                Err(unsupported_statement("INSERT OVERWRITE DIRECTORY"))
+            Statement::InsertDirectory(d) => {
+                Box::pin(self.exec_insert_directory(&d, &env.identifier_spans)).await
             }
             Statement::AccessControl(a) => Box::pin(self.exec_access_control(&a, &env)).await,
             Statement::AddResource(_) => Err(unsupported_statement("ADD JAR | FILE | ARCHIVE")),
@@ -708,36 +709,7 @@ impl Session {
                 )
                 .await
             }
-            Statement::Merge(m) => {
-                let more: Vec<&krishiv_sql::ast::Expr> = std::iter::once(&m.on)
-                    .chain(m.clauses.iter().flat_map(|c| {
-                        let action: Vec<&krishiv_sql::ast::Expr> = match &c.action {
-                            krishiv_sql::ast::MergeAction::Update(assignments) => {
-                                assignments.iter().map(|a| &a.value).collect()
-                            }
-                            krishiv_sql::ast::MergeAction::Insert(
-                                krishiv_sql::ast::MergeInsert::Values { values, .. },
-                            ) => values.iter().collect(),
-                            _ => Vec::new(),
-                        };
-                        c.condition.iter().chain(action)
-                    }))
-                    .collect();
-                let sources: Vec<&krishiv_sql::ast::Query> = match &m.source {
-                    krishiv_sql::ast::MergeSource::Query { query, .. } => vec![&**query],
-                    _ => Vec::new(),
-                };
-                let changes = crate::table_commands::RowChanges {
-                    targets: &[],
-                    values: &[],
-                    condition: None,
-                    options: &m.options,
-                    more: &more,
-                    sources: &sources,
-                };
-                self.exec_row_level_change(&m.target, None, "MERGE INTO TABLE", &changes, query)
-                    .await
-            }
+            Statement::Merge(m) => self.exec_merge(&m, query).await,
             _ => Err(unsupported_statement("statements other than queries")),
         }
     }
@@ -815,7 +787,7 @@ impl Session {
         // first action's error.
         match krishiv_sql::parse_multipart_identifier(
             name,
-            &parser_options(&self.state.conf.snapshot()),
+            &parser_options(&self.state.conf.snapshot(), self.state.profile),
         ) {
             Ok(id) => {
                 let parts = id.parts.into_iter().map(|p| p.value);
@@ -1271,8 +1243,9 @@ impl Session {
         // at listing from the read's option values (P2-T084).
         let stores = self.scoped_stores(&config);
         // One I/O context for the query's reads, scans and writes: its
-        // counters are the query's own bytes (`system.queries`).
-        let io = self.scoped_io();
+        // counters are the query's own bytes (`system.queries`); its metadata reads charge the
+        // session's pool while planning, the query's once it runs (`start_query`).
+        let io = self.scoped_io().with_memory(Arc::clone(&self.state.memory));
         let paths: Arc<dyn krishiv_exec::files::PathLocator> = Arc::new(ObjectPaths::new(
             StoreId::new(LOCAL_STORE),
             self.state.cwd.clone(),
@@ -1320,6 +1293,7 @@ impl Session {
                     declared_paths,
                     Arc::clone(&config),
                     scans.slots,
+                    self.declared_stores(&config),
                 ));
         let catalog = Arc::new(QueryCatalog::new(
             Arc::clone(&self.state.catalog),
@@ -1354,7 +1328,7 @@ impl Session {
             let values = conf_values(&config, &ResolutionConf::KEYS);
             ResolutionConf::from_conf(|k| values.get(k).map(String::as_str))
         };
-        let parser = parser_options(&config);
+        let parser = parser_options(&config, self.state.profile);
         // The cache cap is the query's own configuration snapshot.
         let cache_cap = RelationCache::cap_of(&config);
         // One snapshot of the variables per query, like the configuration
@@ -1861,6 +1835,7 @@ impl Session {
                 query: Arc::clone(&query),
                 state: Arc::clone(&self.state),
                 start: QueryStart::capture(&self.state, &env.io),
+                _io_memory: Some(env.io.bind_query_memory(Arc::clone(query.pool()))),
                 metrics_on,
                 log_id,
                 _permit: permit,
@@ -1891,11 +1866,13 @@ impl Session {
                 // goes on when the caller gives up, so the admission permit must outlive it
                 // (see `PendingFold`). The task hands the stream over, or cancels it if the
                 // caller is gone.
-                let submit =
-                    self.state
-                        .runtime
-                        .runner
-                        .submit(physical.clone(), worker, Arc::clone(&query));
+                // The decided scans read first (`after_reads`), on this async task, against the query's cancel.
+                let (plan, reading) = (physical.clone(), Arc::clone(&query));
+                let submit = self.state.runtime.runner.submit(
+                    plan.clone(),
+                    worker.clone(),
+                    Arc::clone(&reading),
+                );
                 let (stream_tx, stream_rx) = tokio::sync::oneshot::channel();
                 let (done_tx, done_rx) = tokio::sync::oneshot::channel::<bool>();
                 pending.1 = Some(done_rx);
@@ -1905,7 +1882,7 @@ impl Session {
                         WorkloadClass::Interactive,
                         Box::pin(
                             async move {
-                                let result = submit.await;
+                                let result = worker.after_reads(&plan, reading, submit).await;
                                 let started = result.is_ok();
                                 if let Err(Ok(stream)) = stream_tx.send(result) {
                                     abandoned.cancel();
@@ -1976,7 +1953,7 @@ pub(crate) use env::*;
 mod spill;
 pub(crate) use spill::*;
 
-mod writes;
+pub(crate) mod writes;
 pub(crate) use writes::partition_overwrite_is_dynamic;
 use writes::*;
 
@@ -1990,4 +1967,7 @@ mod definer;
 
 mod ran;
 mod search_path;
-pub(crate) use ran::Ran;
+pub(crate) use ran::{
+    Ran, as_evaluation, as_listed_script_statement, as_script_statement, command_statement,
+    evaluation_failed,
+};

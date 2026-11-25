@@ -209,6 +209,32 @@ def group(group_id: str, parent: str | None, **over: object) -> dict:
     } | over
 
 
+# A server's Python UDF worker pool (`/api/internal/udf-workers`): the owners with the most workers first.
+UDF_POOL = {
+    "live": 5,
+    "busy": 3,
+    "max_total": 64,
+    "max_per_session": 4,
+    "max_per_tenant": 32,
+    "owners": [
+        {
+            "principal": "etl-nightly",
+            "session_id": "5d0c7a52-etl",
+            "tenant": "acme",
+            "live": 4,
+            "busy": 3,
+        },
+        {
+            "principal": "ana",
+            "session_id": "9f31b0c4-ana",
+            "tenant": None,
+            "live": 1,
+            "busy": 0,
+        },
+    ],
+    "truncated": False,
+}
+
 # A server's partition advice (`/api/internal/advice`): one entry a table, its suggestions by rank.
 ADVICE = [
     {
@@ -498,6 +524,9 @@ def route(
         return {"groups": groups or []}
     if path == "/api/internal/advice" and mode == "server":
         return {"tables": advice or [], "truncated": False}
+    # The worker pool too: a console over one session has none.
+    if path == "/api/internal/udf-workers":
+        return {"pool": UDF_POOL if mode == "server" else None}
     if path == "/api/internal/environment":
         return ENVIRONMENT if role == "admin" else None
     if path == "/api/internal/catalog/catalogs":

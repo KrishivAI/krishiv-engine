@@ -18,7 +18,9 @@ use krishiv_connectors_iceberg::testing::{
 };
 use krishiv_exec::planner::TableProvider;
 use krishiv_session::catalog_decl::DeclMode;
-use krishiv_session::catalog_registry::{CallerCatalog, CatalogCaller, CatalogFactory, ScanInputs};
+use krishiv_session::catalog_registry::{
+    CallerCatalog, CatalogCaller, CatalogFactory, ScanInputs, ScopedStores,
+};
 use krishiv_store::egress::PrivateAddresses;
 
 use super::IcebergRestFactory;
@@ -30,7 +32,7 @@ const TABLE: &str = "/v1/namespaces/db/tables/t";
 
 /// What the fake catalog does with the next commit.
 #[derive(Debug, Clone, Copy)]
-enum Fault {
+pub(super) enum Fault {
     /// Applied and answered.
     Answer,
     /// Applied; the connection closes without an answer.
@@ -38,8 +40,8 @@ enum Fault {
 }
 
 /// The catalog's one table.
-struct Lake {
-    metadata: serde_json::Value,
+pub(super) struct Lake {
+    pub(super) metadata: serde_json::Value,
     location: String,
     root: String,
     version: u32,
@@ -78,7 +80,7 @@ impl Lake {
 }
 
 /// A REST catalog over `table` with `script` for its commits.
-fn catalog(table: &WrittenTable, script: &[Fault]) -> (Server, Arc<Mutex<Lake>>) {
+pub(super) fn catalog(table: &WrittenTable, script: &[Fault]) -> (Server, Arc<Mutex<Lake>>) {
     let lake = Arc::new(Mutex::new(Lake {
         metadata: table.metadata.clone(),
         location: table.metadata_location.clone(),
@@ -125,7 +127,9 @@ fn open(catalog: &Arc<dyn CallerCatalog>, io: &LocalIo) -> Arc<dyn TableProvider
     ))
     .unwrap()
     .unwrap();
-    let inputs = ScanInputs::new(io.io(), io.paths(), Arc::new(Config::new()), 1);
+    let config = Arc::new(Config::new());
+    let stores = ScopedStores::new(Arc::clone(&config), Arc::clone(io.io().scheduler()), "/");
+    let inputs = ScanInputs::new(io.io(), io.paths(), config, 1, stores);
     block_on(loaded.table.unwrap().open(inputs)).unwrap()
 }
 

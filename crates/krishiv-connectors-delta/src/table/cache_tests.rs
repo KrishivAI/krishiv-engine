@@ -330,6 +330,19 @@ fn the_delta_log_is_found_or_not() {
 }
 
 #[test]
+fn a_root_holds_files_or_not() {
+    let empty = Env::empty();
+    assert!(
+        !empty.block_on(root_holds_files(&empty.engine)).unwrap(),
+        "an empty log directory is no file"
+    );
+    std::fs::write(empty.dir.join("part-0.parquet"), b"x").unwrap();
+    assert!(empty.block_on(root_holds_files(&empty.engine)).unwrap());
+    let missing = Env::at(empty.dir.join("missing"));
+    assert!(!missing.block_on(root_holds_files(&missing.engine)).unwrap());
+}
+
+#[test]
 fn a_corrupt_commit_is_a_failed_read_of_that_file() {
     let env = two_commits();
     let commit = env.dir.join("_delta_log/00000000000000000001.json");

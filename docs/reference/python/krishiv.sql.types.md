@@ -426,6 +426,16 @@ def jsonValue(self) -> dict[str, Any]
 def simpleString(self) -> str
 ```
 
+### `treeString`
+
+```python
+def treeString(self, maxDepth: int=0) -> str
+```
+
+The schema as Spark's `treeString` prints it: `root`, then one `|--` line per field
+(type names as Spark spells them: `long`, `integer`), nested fields indented, to
+`maxDepth` levels when positive (zero or less: all). Ends with a newline.
+
 ### `typeName`
 
 ```python

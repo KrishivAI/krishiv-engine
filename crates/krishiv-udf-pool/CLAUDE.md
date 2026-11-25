@@ -13,7 +13,10 @@ the sandbox trampoline, talking wire `krishiv.udf.wire.v1` over a `SOCK_SEQPACKE
 Paths are relative to this crate.
 - `src/lib.rs` public surface and `run_trampoline_if_requested` (the binary's `__udf-worker` dispatch)
 - `src/pool.rs` `Pool`, `PoolConfig` (from the `krishiv.python.worker.*` and `krishiv.udf.sandbox` keys), `Launcher`,
-  `Owner`; the spawner thread, the caps, idle stop, `release`, and `Lease` (a worker handed to one call)
+  `Owner`; the spawner thread, the caps, idle stop, `release`, and `Lease` (a worker handed to one call);
+  `Pool::snapshot` (`PoolSnapshot`: live and idle workers, the three caps, `OwnerWorkers` per owner with a live
+  worker; one short lock hold) and `Pool::monitor` (`PoolMonitor`, a weak view for the console's Resources page:
+  `None` once the pool is gone, so a page never keeps workers running)
 - `src/worker.rs` one worker: handshake, `ensure_loaded` (a `udf` message), `run_batch` (a `batch` message), a
   relation task's messages (`start_task`, `task_event`, `send_frame`, `abandon`), the
   error mapping (`PYTHON_EXCEPTION`, `KRISHIV_PYTHON_WORKER_EXITED`, `KRISHIV_UDF_SANDBOX_UNAVAILABLE` for a trampoline
@@ -43,8 +46,9 @@ Paths are relative to this crate.
   a control message, the result capped at `MAX_ANALYZE_RESULT` on both sides (the analyze class); the worker
   converts each constant as Spark does (internal value, then `fromInternal`). A UDTF task's call data goes in a
   memfd too (`udtf_len`)
-- `src/validate.rs` Spark 4.1+'s result-schema check of the map kinds under
-  `spark.sql.execution.arrow.pyspark.validateSchema.enabled` (`ARROW_TYPE_MISMATCH`, compatible nullability)
+- Spark 4.1+'s result-schema check of the map kinds under
+  `spark.sql.execution.arrow.pyspark.validateSchema.enabled` lives in `krishiv-exec`
+  `src/python_relation/schema_check.rs` (`ARROW_TYPE_MISMATCH`, compatible nullability), shared by both runtimes
 - `src/calls.rs` `CallThreads`: the bounded call threads (at most `maxTotal` threads, at most `maxPerSession`
   running calls per owner; the rest wait in a FIFO queue, not on a thread), and the relation task slots: at most
   `min(maxPerSession, maxTotal) - 1` per owner (all of them when that is 1) and `maxTotal - 1` in all (the threads

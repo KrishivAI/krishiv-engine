@@ -201,9 +201,20 @@ pub(crate) struct Parser<'s> {
     /// Reading the bodies of a multi-table insert: `INSERT INTO|OVERWRITE`
     /// starts the next clause, never an implicit alias.
     insert_bodies: bool,
+    /// The token of a `CURRENT_TIMESTAMP`-like keyword that starts a select item followed by an
+    /// identifier list that ends the item (`current_timestamp(n)`): ANTLR reads the keyword
+    /// alone and the list as a multi-part alias, so the keyword is no call there.
+    current_like_alias: Option<usize>,
     /// Reading the right side of an `ASOF JOIN`: `MATCH_CONDITION (` starts
     /// its criteria, never an implicit alias.
     asof_right: bool,
+    /// Inside the speculative read of an as-of right side (`asof_join_ahead`):
+    /// a further `ASOF JOIN` at the same level is taken as one without a read
+    /// of its own (cleared inside a query or a parenthesized relation).
+    asof_ahead: bool,
+    /// `asof_join_ahead`'s answer by token position, so a speculative read
+    /// and the real parse after it decide each `ASOF JOIN` once.
+    asof_decided: HashMap<usize, bool>,
 }
 
 /// A part of a `CASE` expression.
@@ -376,8 +387,8 @@ impl TopRule for DataTypeRule {
         p.single_data_type()
     }
 
-    fn validate(out: &Self::Out, _src: &str, _opts: ParserOptions) -> Result<(), ParseError> {
-        validate::data_type(out)
+    fn validate(out: &Self::Out, _src: &str, opts: ParserOptions) -> Result<(), ParseError> {
+        validate::data_type(out, opts)
     }
 }
 
@@ -392,8 +403,8 @@ impl TopRule for TableSchemaRule {
         p.single_table_schema()
     }
 
-    fn validate(out: &Self::Out, _src: &str, _opts: ParserOptions) -> Result<(), ParseError> {
-        validate::columns(out)
+    fn validate(out: &Self::Out, _src: &str, opts: ParserOptions) -> Result<(), ParseError> {
+        validate::columns(out, opts)
     }
 }
 
@@ -817,7 +828,10 @@ impl<'s> Parser<'s> {
             cast_types: vec![],
             force_bare,
             insert_bodies: false,
+            current_like_alias: None,
             asof_right: false,
+            asof_ahead: false,
+            asof_decided: HashMap::new(),
         };
         if has_case {
             parser.closer_ahead = parser.closer_ahead_table(&case_words);
@@ -1246,6 +1260,42 @@ impl<'s> Parser<'s> {
         self.paren_list(Self::any_ident)
     }
 
+    /// Whether tokens `n..` are `( ident [, ident]* )` followed by the end of a select item (a
+    /// list end or a clause keyword such as `FROM`).
+    fn ident_list_ends_item_at(&self, n: usize) -> bool {
+        if !self.sym_at(n, Sym::LParen) {
+            return false;
+        }
+        let mut k = n + 1;
+        loop {
+            if !self.is_ident_at(k, true) {
+                return false;
+            }
+            k += 1;
+            if self.sym_at(k, Sym::Comma) {
+                k += 1;
+            } else {
+                break;
+            }
+        }
+        // The reserved words that may follow a select item (they have no `CLAUSE_WORD` bit).
+        const FOLLOWERS: &[&str] = &[
+            "FROM",
+            "WHERE",
+            "GROUP",
+            "HAVING",
+            "ORDER",
+            "UNION",
+            "EXCEPT",
+            "INTERSECT",
+        ];
+        self.sym_at(k, Sym::RParen)
+            && (self.item_end_at(k + 1)
+                || self.any_kw_at(k + 1, FOLLOWERS)
+                || (self.kind(k + 1) == Some(TokenKind::Word)
+                    && self.class(k + 1) & CLAUSE_WORD != 0))
+    }
+
     /// Whether token `n` ends a list item: end of input, `,`, `)` or `;`.
     fn item_end_at(&self, n: usize) -> bool {
         matches!(
@@ -1266,10 +1316,16 @@ impl<'s> Parser<'s> {
         if self.any_kw_at(0, &["APPROX", "EXACT"]) && self.kw_at(1, "NEAREST") {
             return Ok(None);
         }
-        // Spark 4.3: `ASOF JOIN` after a relation starts an as-of join (with
-        // the flag off it stays Spark 4.2's alias `ASOF`), and
-        // `MATCH_CONDITION (` after an as-of join's right side its criteria.
-        if (self.opts.asof_join && self.kw_at(0, "ASOF") && self.kw_at(1, "JOIN"))
+        // Spark 4.3: `ASOF JOIN` after a relation starts an as-of join when
+        // the join reads on to its `MATCH_CONDITION (` (else `ASOF` is the
+        // alias), and `MATCH_CONDITION (` after an as-of join's right side its
+        // criteria.
+        let asof = if self.opts.spark_4_3_grammar {
+            self.asof_join_ahead()
+        } else {
+            self.opts.asof_join && self.kw_at(0, "ASOF") && self.kw_at(1, "JOIN")
+        };
+        if asof
             || (self.asof_right && self.kw_at(0, "MATCH_CONDITION") && self.sym_at(1, Sym::LParen))
         {
             return Ok(None);
@@ -1289,6 +1345,76 @@ impl<'s> Parser<'s> {
             return Ok(None);
         }
         self.ident_with(keyword).map(Some)
+    }
+
+    /// Whether `ASOF JOIN` here starts an as-of join rather than naming the
+    /// relation before it `ASOF` (Spark 4.3's grammar). The as-of branch of
+    /// `joinRelation` is there whatever `spark.sql.join.asofJoin.enabled` says
+    /// (`AstBuilder` raises `UNSUPPORTED_FEATURE.ASOF_JOIN` when it is off), and
+    /// ANTLR takes it only where the alias reading fails: when its right side
+    /// reads on to `MATCH_CONDITION (` and that is not the right side's alias
+    /// with a column list (`one MATCH_CONDITION (a, b)`, which both readings
+    /// parse and ANTLR resolves to the alias). So `t ASOF JOIN q ON ..` and
+    /// `t ASOF JOIN one MATCH_CONDITION (a)` name `t` `ASOF` (Spark 4.3.0 runs).
+    ///
+    /// The right side is read once, speculatively, and the answer kept by
+    /// position. An `ASOF JOIN` met during that read at the same level is taken
+    /// as an as-of join without a read of its own: whichever way it reads, the
+    /// token after the right side is not `MATCH_CONDITION (`, so the answer is
+    /// the same, and a chain of them is read in linear time without nesting.
+    /// Inside a query or parentheses (a new level) the read is a full one.
+    fn asof_join_ahead(&mut self) -> bool {
+        if !(self.kw_at(0, "ASOF") && self.kw_at(1, "JOIN")) {
+            return false;
+        }
+        if self.asof_ahead {
+            return true;
+        }
+        if let Some(&ahead) = self.asof_decided.get(&self.pos) {
+            return ahead;
+        }
+        let at = self.pos;
+        let checkpoint = self.checkpoint();
+        self.pos += 2;
+        let outer = std::mem::replace(&mut self.asof_right, true);
+        self.asof_ahead = true;
+        let right = self.table_factor();
+        self.asof_ahead = false;
+        self.asof_right = outer;
+        let ahead = match right {
+            Ok(right) => {
+                self.kw_at(0, "MATCH_CONDITION")
+                    && self.sym_at(1, Sym::LParen)
+                    && (right.alias.is_some() || !self.identifier_list_at(1))
+            }
+            // The as-of reading fails there too: let it report the error.
+            Err(Fail::Fatal(_)) => true,
+            Err(_) => false,
+        };
+        self.restore(checkpoint);
+        self.asof_decided.insert(at, ahead);
+        ahead
+    }
+
+    /// Whether tokens from `n` are `( name [, name]... )`, an alias's column
+    /// list (`identifierList`).
+    fn identifier_list_at(&self, n: usize) -> bool {
+        if !self.sym_at(n, Sym::LParen) {
+            return false;
+        }
+        let mut i = n + 1;
+        loop {
+            if !self.is_ident_at(i, true) {
+                return false;
+            }
+            if self.sym_at(i + 1, Sym::RParen) {
+                return true;
+            }
+            if !self.sym_at(i + 1, Sym::Comma) {
+                return false;
+            }
+            i += 2;
+        }
     }
 
     /// `[AS] name`.

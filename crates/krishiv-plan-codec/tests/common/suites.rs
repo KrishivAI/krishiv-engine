@@ -168,10 +168,20 @@ impl Suite {
 
     /// Plans `sql`.
     pub(crate) fn plan(&self, sql: &str) -> Result<PhysicalPlan, KrishivError> {
+        self.plan_with(sql, &|p| p)
+    }
+
+    /// Plans `sql`, its analyzed plan passed through `wrap` before optimizing (a test places
+    /// security barriers there; nothing else does yet).
+    pub(crate) fn plan_with(
+        &self,
+        sql: &str,
+        wrap: &dyn Fn(Plan) -> Plan,
+    ) -> Result<PhysicalPlan, KrishivError> {
         let parsed =
             krishiv_sql::parse_and_lower(sql, &krishiv_sql::ParserOptions::default(), SourceId(0))
                 .map_err(KrishivError::from)?;
-        let plan: Plan = block_on(DefaultAnalyzer.analyze(&parsed, &self.ctx))?.plan;
+        let plan: Plan = wrap(block_on(DefaultAnalyzer.analyze(&parsed, &self.ctx))?.plan);
         let plan = if self.statistics {
             krishiv_optimizer::optimize_with(
                 &plan,

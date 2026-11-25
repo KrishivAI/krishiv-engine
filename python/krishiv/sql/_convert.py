@@ -85,11 +85,81 @@ def rows_of(table: Any) -> list[Row]:
     columns = [_column_values(table.column(i)) for i in range(table.num_columns)]
     if not names:
         return [Row() for _ in range(table.num_rows)]  # no columns: one empty Row per row, as PySpark
-    return [_create_row(names, list(values)) for values in zip(*columns, strict=True)]
+    # One field list for every row (as PySpark does) and `tuple.__new__` directly: this loop runs once per
+    # result row, so a per-row copy and a call to `_create_row` were most of a `collect()`'s time (PY-071).
+    new = tuple.__new__
+    rows = [new(Row, values) for values in zip(*columns, strict=True)]
+    for row in rows:
+        row.__fields__ = names
+    return rows
 
 
 def _column_values(column: Any) -> list[Any]:
-    return [_value(v, column.type) for v in column.to_pylist()]
+    if _has_duplicate_struct_fields(column.type):
+        # ``to_pylist`` raises on a struct with duplicate field names: walk the arrays by position instead.
+        return _by_position(column.combine_chunks() if hasattr(column, "combine_chunks") else column, column.type)
+    values: list[Any] = column.to_pylist()
+    if _is_plain(column.type):
+        return values
+    return [_value(v, column.type) for v in values]
+
+
+def _is_plain(arrow_type: Any) -> bool:
+    """True when ``to_pylist`` already gives PySpark's Python value for this type (no zone change,
+    no nested ``Row``, ``dict`` or variant)."""
+    import pyarrow as pa
+
+    t = arrow_type
+    if pa.types.is_timestamp(t):
+        return t.tz is None
+    return not (
+        pa.types.is_struct(t)
+        or pa.types.is_map(t)
+        or pa.types.is_list(t)
+        or pa.types.is_large_list(t)
+        or pa.types.is_fixed_size_list(t)
+    )
+
+
+def _has_duplicate_struct_fields(arrow_type: Any) -> bool:
+    import pyarrow as pa
+
+    if pa.types.is_struct(arrow_type):
+        names = [arrow_type.field(i).name for i in range(arrow_type.num_fields)]
+        return len(set(names)) != len(names) or any(
+            _has_duplicate_struct_fields(arrow_type.field(i).type) for i in range(arrow_type.num_fields)
+        )
+    if pa.types.is_map(arrow_type):
+        return _has_duplicate_struct_fields(arrow_type.key_type) or _has_duplicate_struct_fields(arrow_type.item_type)
+    if pa.types.is_list(arrow_type) or pa.types.is_large_list(arrow_type) or pa.types.is_fixed_size_list(arrow_type):
+        return _has_duplicate_struct_fields(arrow_type.value_type)
+    return False
+
+
+def _by_position(array: Any, arrow_type: Any) -> list[Any]:
+    """``array`` as PySpark Python values, struct fields read by position (so duplicate names survive)."""
+    import pyarrow as pa
+
+    if not _has_duplicate_struct_fields(arrow_type):
+        return [_value(v, arrow_type) for v in array.to_pylist()]
+    if pa.types.is_struct(arrow_type):
+        fields = [arrow_type.field(i) for i in range(arrow_type.num_fields)]
+        children = [_by_position(array.field(i), f.type) for i, f in enumerate(fields)]
+        names = [f.name for f in fields]
+        valid = array.is_valid().to_pylist()
+        return [_create_row(names, [c[j] for c in children]) if ok else None for j, ok in enumerate(valid)]
+    if pa.types.is_map(arrow_type):
+        out: list[Any] = []
+        for scalar in array:
+            if not scalar.is_valid:
+                out.append(None)
+                continue
+            entries = scalar.values
+            keys = _by_position(entries.field(0), arrow_type.key_type)
+            vals = _by_position(entries.field(1), arrow_type.item_type)
+            out.append(dict(zip(keys, vals, strict=True)))
+        return out
+    return [None if not scalar.is_valid else _by_position(scalar.values, arrow_type.value_type) for scalar in array]
 
 
 def _value(value: Any, arrow_type: Any) -> Any:

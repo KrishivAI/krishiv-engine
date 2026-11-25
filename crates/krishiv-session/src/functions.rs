@@ -43,6 +43,21 @@ pub fn expr(text: &str) -> Result<Column, krishiv_common::error::KrishivError> {
     Ok(Column::new((*lowered).clone()))
 }
 
+/// [`expr`] under a statement's parser options, for text a statement wrote (a `MERGE` clause or
+/// `ON` condition read again): `"x"` stays an identifier under `doubleQuotedIdentifiers`.
+/// The text is a piece of the statement, so its offsets are not the statement's: it is read
+/// under [`DF_SOURCE`](crate::run_site::DF_SOURCE), as a DataFrame expression string is, and an
+/// error in it carries no query-context fragment cut from the statement at the wrong place.
+pub(crate) fn expr_with(
+    text: &str,
+    options: &krishiv_sql::ParserOptions,
+) -> Result<Column, krishiv_common::error::KrishivError> {
+    let lowered =
+        krishiv_sql::parse_and_lower_named_expression(text, options, crate::run_site::DF_SOURCE)
+            .map_err(|e| e.error)?;
+    Ok(Column::new((*lowered).clone()))
+}
+
 /// A literal value.
 ///
 /// ```

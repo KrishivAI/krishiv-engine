@@ -224,6 +224,7 @@ pub(crate) fn all_resolved(root: Node<'_>) -> bool {
                 | PlanNode::ColumnNames { .. }
                 | PlanNode::PipeOperator { .. }
                 | PlanNode::SetOp { .. }
+                | PlanNode::Zip { .. }
                 | PlanNode::Pivot { .. }
                 | PlanNode::Unpivot { .. }
                 | PlanNode::InlineTable { .. }
@@ -255,6 +256,7 @@ pub(crate) fn all_resolved(root: Node<'_>) -> bool {
                 | PlanNode::Tail { .. }
                 | PlanNode::SubqueryAlias { .. }
                 | PlanNode::WithCte { .. }
+                | PlanNode::SecurityBarrier { .. }
                 | PlanNode::JoinHint { .. }
                 | PlanNode::Repartition { .. }
                 | PlanNode::CollectMetrics { .. }
@@ -507,6 +509,7 @@ impl Teardown {
             }
             PlanNode::SubqueryAlias { input, .. }
             | PlanNode::Shift { input, .. }
+            | PlanNode::SecurityBarrier { input, .. }
             | PlanNode::JoinHint { input, .. }
             | PlanNode::Sample { input, .. }
             | PlanNode::ColumnNames { input, .. }
@@ -537,7 +540,9 @@ impl Teardown {
                 self.exprs
                     .extend(dimensions.into_iter().chain(measures).map(|c| c.expr));
             }
-            PlanNode::SetOp { left, right, .. } => self.plans.extend([left, right]),
+            PlanNode::SetOp { left, right, .. } | PlanNode::Zip { left, right } => {
+                self.plans.extend([left, right]);
+            }
             PlanNode::MapPartitions { input, .. } => self.plans.push(input),
             PlanNode::GroupMap { input, keys, .. } => {
                 self.plans.push(input);

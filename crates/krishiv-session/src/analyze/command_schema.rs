@@ -168,6 +168,9 @@ fn set_columns(kind: &SetKind) -> Option<&'static [CommandColumn]> {
 
 fn show_columns(kind: &ShowKind) -> Option<&'static [CommandColumn]> {
     Some(match kind {
+        ShowKind::Tables { as_json: true, .. }
+        | ShowKind::TableExtended { as_json: true, .. }
+        | ShowKind::Partitions { as_json: true, .. } => DESCRIBE_JSON,
         ShowKind::Tables { .. } => SHOW_TABLES,
         ShowKind::TableExtended { .. } => SHOW_TABLE_EXTENDED,
         ShowKind::Views { .. } => SHOW_VIEWS,

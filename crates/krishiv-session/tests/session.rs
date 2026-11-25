@@ -208,9 +208,10 @@ fn configuration_is_snapshotted_per_query() {
         .config("krishiv.memory.limit", "256m")
         .build()
         .unwrap();
+    // The text as set, as Spark's `getConfString` returns it (a Spark 4.2.0 run: `10m` stays `10m`).
     assert_eq!(
         built.conf().get("krishiv.memory.limit").as_deref(),
-        Some("256MB")
+        Some("256m")
     );
     assert!(
         Session::builder()
@@ -1447,13 +1448,13 @@ fn cte_precedence_policy_set_validates_values() {
         class(block_on(s.sql(shadow))),
         ErrorClass::AmbiguousAliasInNestedCte
     );
-    // Values match case-insensitively and are stored canonically.
+    // Values match case-insensitively, and `get` shows the text as set (a Spark 4.2.0 run: `legacy`).
     block_on(s.sql("SET spark.sql.legacy.ctePrecedencePolicy=legacy")).unwrap();
     assert_eq!(
         s.conf()
             .get("spark.sql.legacy.ctePrecedencePolicy")
             .as_deref(),
-        Some("LEGACY")
+        Some("legacy")
     );
     assert_eq!(long(shadow), 1);
     // An invalid value fails through the session configuration and leaves
@@ -1467,7 +1468,7 @@ fn cte_precedence_policy_set_validates_values() {
         s.conf()
             .get("spark.sql.legacy.ctePrecedencePolicy")
             .as_deref(),
-        Some("LEGACY")
+        Some("legacy")
     );
     assert_eq!(long(shadow), 1);
 }

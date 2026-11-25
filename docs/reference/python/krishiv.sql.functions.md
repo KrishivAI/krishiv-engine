@@ -292,6 +292,8 @@ Not available: table UDFs (UDTF) are not implemented.
 def asc(col: ColumnOrName) -> Column
 ```
 
+A sort expression ordering `col` ascending, NULLs first.
+
 ### `asc_nulls_first`
 
 ```python
@@ -690,6 +692,8 @@ Calls the registry function `collect_union`.
 def concat(*cols: ColumnOrName) -> Column
 ```
 
+Concatenates the string (or binary, or array) columns `cols`; the result is NULL if any input is NULL.
+
 ### `concat_ws`
 
 ```python
@@ -769,6 +773,8 @@ The number of rows where `col` is not null (`count("*")`: all rows).
 ```python
 def count_distinct(col: ColumnOrName, *cols: ColumnOrName) -> Column
 ```
+
+The number of distinct non-NULL values of `col` (of the combination of `cols` when several).
 
 ### `count_if`
 
@@ -1079,6 +1085,8 @@ Calls the registry function `dense_rank`.
 ```python
 def desc(col: ColumnOrName) -> Column
 ```
+
+A sort expression ordering `col` descending, NULLs last.
 
 ### `desc_nulls_first`
 
@@ -3272,7 +3280,7 @@ Calls the registry function `tanh`.
 def theta_difference(col1: ColumnOrName, col2: ColumnOrName) -> Column
 ```
 
-Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+Calls the registry function `theta_difference`.
 
 ### `theta_intersection`
 
@@ -3280,7 +3288,7 @@ Not supported by the engine yet: calling it raises `UnsupportedOperationExceptio
 def theta_intersection(col1: ColumnOrName, col2: ColumnOrName) -> Column
 ```
 
-Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+Calls the registry function `theta_intersection`.
 
 ### `theta_intersection_agg`
 
@@ -3288,7 +3296,7 @@ Not supported by the engine yet: calling it raises `UnsupportedOperationExceptio
 def theta_intersection_agg(col: ColumnOrName) -> Column
 ```
 
-Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+Calls the registry function `theta_intersection_agg`.
 
 ### `theta_sketch_agg`
 
@@ -3296,7 +3304,7 @@ Not supported by the engine yet: calling it raises `UnsupportedOperationExceptio
 def theta_sketch_agg(col: ColumnOrName, lgNomEntries: Column | int | None=None) -> Column
 ```
 
-Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+Calls the registry function `theta_sketch_agg`.
 
 ### `theta_sketch_estimate`
 
@@ -3304,7 +3312,7 @@ Not supported by the engine yet: calling it raises `UnsupportedOperationExceptio
 def theta_sketch_estimate(col: ColumnOrName) -> Column
 ```
 
-Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+Calls the registry function `theta_sketch_estimate`.
 
 ### `theta_union`
 
@@ -3312,7 +3320,7 @@ Not supported by the engine yet: calling it raises `UnsupportedOperationExceptio
 def theta_union(col1: ColumnOrName, col2: ColumnOrName, lgNomEntries: Column | int | None=None) -> Column
 ```
 
-Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+Calls the registry function `theta_union`.
 
 ### `theta_union_agg`
 
@@ -3320,7 +3328,7 @@ Not supported by the engine yet: calling it raises `UnsupportedOperationExceptio
 def theta_union_agg(col: ColumnOrName, lgNomEntries: Column | int | None=None) -> Column
 ```
 
-Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+Calls the registry function `theta_union_agg`.
 
 ### `time_bucket`
 
@@ -4268,6 +4276,62 @@ def variant_strip_nulls(v: ColumnOrName, include_arrays: bool=True) -> Column
 ```
 
 Calls the registry function `variant_strip_nulls`.
+
+### `vector_avg`
+
+```python
+def vector_avg(col: ColumnOrName) -> Column
+```
+
+Calls the registry function `vector_avg`.
+
+### `vector_cosine_similarity`
+
+```python
+def vector_cosine_similarity(left: ColumnOrName, right: ColumnOrName) -> Column
+```
+
+Calls the registry function `vector_cosine_similarity`.
+
+### `vector_inner_product`
+
+```python
+def vector_inner_product(left: ColumnOrName, right: ColumnOrName) -> Column
+```
+
+Calls the registry function `vector_inner_product`.
+
+### `vector_l2_distance`
+
+```python
+def vector_l2_distance(left: ColumnOrName, right: ColumnOrName) -> Column
+```
+
+Calls the registry function `vector_l2_distance`.
+
+### `vector_norm`
+
+```python
+def vector_norm(vector: ColumnOrName, degree: ColumnOrName | None=None) -> Column
+```
+
+Calls the registry function `vector_norm`.
+
+### `vector_normalize`
+
+```python
+def vector_normalize(vector: ColumnOrName, degree: ColumnOrName | None=None) -> Column
+```
+
+Calls the registry function `vector_normalize`.
+
+### `vector_sum`
+
+```python
+def vector_sum(col: ColumnOrName) -> Column
+```
+
+Calls the registry function `vector_sum`.
 
 ### `version`
 

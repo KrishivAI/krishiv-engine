@@ -36,11 +36,12 @@ use std::sync::Arc;
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
     Decimal64Type, Decimal128Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type,
-    Int64Type,
+    Int64Type, Time64NanosecondType,
 };
 use arrow_array::{
     Array, ArrayRef, BooleanArray, Date32Array, Decimal128Array, Float32Array, Float64Array,
-    Int8Array, Int16Array, Int32Array, Int64Array, StringArray, new_null_array,
+    Int8Array, Int16Array, Int32Array, Int64Array, StringArray, Time64NanosecondArray,
+    new_null_array,
 };
 use arrow_schema::DataType as ArrowType;
 use krishiv_common::error::{ErrorClass, InternalError, KrishivError};
@@ -89,12 +90,7 @@ impl Conf {
         profile: SparkProfile,
         zone: Option<i32>,
     ) -> Self {
-        // The kernels model 4.0 as their oldest line; 3.5 behaves as it.
-        let version = match profile {
-            SparkProfile::V3_5 | SparkProfile::V4_0 => SparkVersion::V4_0,
-            SparkProfile::V4_1 => SparkVersion::V4_1,
-            _ => SparkVersion::V4_2,
-        };
+        let version = profile.kernel_version();
         Self {
             ansi,
             decimal_loss,
@@ -449,10 +445,10 @@ fn fold_on_stack(
 }
 
 /// Whether `t` is, or holds as an element, key, value or field, a `time(p)`
-/// below `time(6)`.
+/// below `time(9)` (the carrier's precision).
 fn has_narrow_time(t: &DataType) -> bool {
     match t {
-        DataType::Time { precision } => *precision < 6,
+        DataType::Time { precision } => *precision < DataType::TIME_MAX_PRECISION,
         DataType::Array(a) => has_narrow_time(a.element_type()),
         DataType::Map(m) => has_narrow_time(m.key_type()) || has_narrow_time(m.value_type()),
         DataType::Struct(s) => s.fields().iter().any(|f| has_narrow_time(f.data_type())),
@@ -460,7 +456,45 @@ fn has_narrow_time(t: &DataType) -> bool {
     }
 }
 
+/// A cast to `time(p)` (p < 9) folds as the cast to `time(9)`, the carrier's precision, and then
+/// cuts the value as the executor does: a `time(q)` source, and from Spark 4.3 on a string too, to
+/// `p` digits; a string under Spark 4.2 (whose cast keeps six digits whatever `p`) to
+/// microseconds. A failed cast stays unfolded: the executor raises it naming the written type. A
+/// fold error of the input is raised at the argument.
 fn fold_cast(
+    expr: &Arc<Expr>,
+    to: &DataType,
+    m: CastMode,
+    conf: Conf,
+    memo: &mut Memo,
+    functions: &dyn FunctionRegistry,
+) -> Folded {
+    let DataType::Time { precision } = to else {
+        return fold_cast_any(expr, to, m, conf, memo, functions);
+    };
+    if *precision >= DataType::TIME_MAX_PRECISION {
+        return fold_cast_any(expr, to, m, conf, memo, functions);
+    }
+    let full = DataType::Time {
+        precision: DataType::TIME_MAX_PRECISION,
+    };
+    let from_time = match fold(expr, conf, memo, functions)? {
+        Ok(a) => matches!(a.data_type(), ArrowType::Time64(_)),
+        Err(e) => return Some(Err(e)),
+    };
+    let cuts_to_p = from_time || conf.kernel.spark_version() >= SparkVersion::V4_3;
+    let folded = fold_cast_any(expr, &full, m, conf, memo, functions)?.ok()?;
+    let nanos = folded.as_primitive_opt::<Time64NanosecondType>()?;
+    let unit = if cuts_to_p {
+        10_i64.pow(u32::from(DataType::TIME_MAX_PRECISION - *precision))
+    } else {
+        1_000
+    };
+    let cut: Time64NanosecondArray = nanos.unary(|v| v - v.rem_euclid(unit));
+    Some(Ok(Arc::new(cut)))
+}
+
+fn fold_cast_any(
     expr: &Arc<Expr>,
     to: &DataType,
     m: CastMode,
@@ -477,7 +511,7 @@ fn fold_cast(
     if inner.null_count() > 0 || inner.data_type() == &ArrowType::Null {
         return Some(Ok(new_null_array(&fold_type(to), 1)));
     }
-    // A cast to `time(p)` drops the digits below `p`, but every `TIME` has
+    // A cast to `time(p)` (p < 9) drops the digits below `p`, but every `TIME` has
     // the same Arrow carrier, so the shortcut below would keep them: the
     // executor truncates, so a cast to a narrower time stays unfolded.
     if has_narrow_time(to) {
@@ -534,6 +568,7 @@ fn fold_cast(
             | DataType::Decimal(_)
             | DataType::String
             | DataType::Date
+            | DataType::Time { .. }
     ) {
         return None;
     }
@@ -1918,5 +1953,41 @@ mod tests {
             .unwrap()
             .join()
             .unwrap();
+    }
+    /// A cast to a narrower `TIME` folds to the value the executor gives (R3 review 13).
+    #[test]
+    fn a_cast_to_a_narrow_time_folds_to_the_cut_value() {
+        let fold_to = |text: &str, p: u32| {
+            let e = Arc::new(cast(
+                Literal::String(text.to_owned()),
+                DataType::time(p).unwrap(),
+            ));
+            let conf = Conf::new(true, true, false, (false, false), SparkProfile::V4_2, None);
+            let a = array(&e, conf, &mut Memo::default(), &BuiltinFunctions::new())
+                .expect("folds")
+                .expect("valid");
+            a.as_primitive::<Time64NanosecondType>().value(0)
+        };
+        let noon = 12 * 3_600 * 1_000_000_000_i64;
+        // Spark 4.2: a string cast to `time(p)` keeps six digits whatever `p`
+        // (goldens `cast_str_time`, `cast_str_time6`).
+        assert_eq!(fold_to("12:00:00.123456789", 6), noon + 123_456_000);
+        assert_eq!(fold_to("12:00:00.123456789", 0), noon + 123_456_000);
+        assert_eq!(fold_to("12:00:00.123456789", 9), noon + 123_456_789);
+        assert_eq!(fold_to("01:00:00", 6), 3_600 * 1_000_000_000);
+        // Spark 4.3: the analyzer reads the string as a `time(9)` first, which
+        // a cast to `time(p)` cuts to `p` digits.
+        let via_nanos = |text: &str, p: u32| {
+            let nine = cast(Literal::String(text.to_owned()), DataType::time(9).unwrap());
+            let e = Arc::new(cast_of(nine, DataType::time(p).unwrap()));
+            let conf = Conf::new(true, true, false, (false, false), SparkProfile::V4_3, None);
+            let a = array(&e, conf, &mut Memo::default(), &BuiltinFunctions::new())
+                .expect("folds")
+                .expect("valid");
+            a.as_primitive::<Time64NanosecondType>().value(0)
+        };
+        assert_eq!(via_nanos("12:00:00.123456789", 0), noon);
+        assert_eq!(via_nanos("12:00:00.123456789", 3), noon + 123_000_000);
+        assert_eq!(via_nanos("12:00:00.123456789", 7), noon + 123_456_700);
     }
 }

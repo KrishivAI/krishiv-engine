@@ -1163,6 +1163,54 @@ fn a_predicate_the_estimator_cannot_model_is_a_guess() {
     }
 }
 
+/// `range()` is estimated from its bounds and step (QA-2): its rows, all distinct, from the
+/// first value to the last; a negative step and an empty range too.
+#[test]
+fn a_range_is_estimated_exactly_from_its_bounds_and_step() {
+    let range = |sql: &str| Estimated::of(sql, |p| matches!(p.node, PlanNode::Range { .. }));
+    let r = range("SELECT * FROM range(0, 1000)");
+    close(r.rows(), 1000.0, "rows");
+    let id = r.col("id");
+    close(id.ndv, 1000.0, "ndv");
+    assert!(id.ndv_known());
+    assert_eq!((id.min, id.max), (Some(0.0), Some(999.0)));
+    let r = range("SELECT * FROM range(10, 0, -3)");
+    close(r.rows(), 4.0, "rows of 10, 7, 4, 1");
+    assert_eq!((r.col("id").min, r.col("id").max), (Some(1.0), Some(10.0)));
+    let r = range("SELECT * FROM range(5, 5)");
+    close(r.rows(), 0.0, "an empty range");
+    let r = range("SELECT * FROM range(0, 10, 4)");
+    close(r.rows(), 3.0, "rows of 0, 4, 8");
+    assert_eq!(r.col("id").max, Some(8.0));
+}
+
+/// An equi-join of an expression key with a column divides by the column's distinct count once
+/// it is known: `a.id % 1000 = b.id` over `range(100000)` and `range(1000)` keeps about one `b`
+/// row per `a` row (QA-2: 2e11 rows before, a fifth of the cross product).
+#[test]
+fn an_expression_key_join_with_a_known_column_count_divides_by_it() {
+    let j = join("SELECT * FROM range(0, 100000) a JOIN range(0, 1000) b ON a.id % 1000 = b.id");
+    close(j.rows(), 100_000.0, "rows");
+    // The QA-2 repro, optimized as `EXPLAIN COST` reads it: `a.id > 5` runs below the join and
+    // keeps 99,994 of `a`'s 100,000 values (an unoptimized plan compares with an unfolded
+    // `CAST(5 AS BIGINT)`), each with one `b` row.
+    let plan = resolve(
+        "SELECT * FROM range(0, 100000) a JOIN range(0, 1000) b ON a.id % 1000 = b.id \
+         WHERE a.id > 5",
+    );
+    let stats = fixture();
+    let optimized = optimize_with(&plan, &stats).unwrap();
+    let join = find(optimized.root(), |p| {
+        matches!(p.node, PlanNode::Join { .. })
+    });
+    let estimate = PlanStats::compute(optimized.root(), &stats);
+    close(
+        estimate.get(&join).unwrap().rows,
+        100_000.0 * 99_994.0 / 99_999.0,
+        "filtered rows",
+    );
+}
+
 /// A left as-of join's right columns gain the left rows that find no right row as nulls: those
 /// whose key the right side lacks (`t.a`'s 100 values against `u.k`'s 40: 60%) or whose as-of
 /// value is NULL (`t.a`: 10%); an inner one keeps the right input's fractions.

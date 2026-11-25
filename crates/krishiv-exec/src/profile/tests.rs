@@ -33,6 +33,7 @@ fn env() -> ExprEnv {
         legacy_coding_error_action: false,
         legacy_time_parser: false,
         binary_output_style: None,
+        spark_version: None,
     }
 }
 
@@ -951,6 +952,7 @@ fn lit(v: i64) -> Expr {
 fn scan_of(table: &str, cols: &[(u64, &str)], filter: Option<Expr>) -> PhysNode {
     use crate::physical::{ScanFilter, ScanId, ScanNode};
     PhysNode::Scan(ScanNode {
+        decided: None,
         id: ScanId(0),
         scan: krishiv_plan::Scan {
             source: krishiv_plan::ReadSource::Table {

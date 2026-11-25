@@ -176,9 +176,12 @@ registry! {
     (session_zone_name, SessionZoneName, POST_MIGRATION_READER_VERSION, Semantic, "The configured session time zone name (`spark.sql.session.timeZone`) where it differs from the rendered offset; without it a worker shows the offset in `current_timezone()` and `VV`/`z` patterns."),
     (shared_subplan, SharedSubplan, POST_MIGRATION_READER_VERSION, Semantic, "Subplans run once per query and read by several `SharedRead` nodes (`WITH` bodies computed once)."),
     (sort_merge_join, SortMergeJoin, POST_MIGRATION_READER_VERSION, Semantic, "The `SortMergeJoin` node: a join of its inputs sorted on the keys (a `MERGE` hint or `krishiv.exec.join.strategy`)."),
+    (spark_version, SparkVersion, POST_MIGRATION_READER_VERSION, Semantic, "The `spark_version` expression environment setting (the session's Spark profile when it is not 4.2, which every default 0.3 session sets as 4.3; absent is 4.2, what plans written before the feature ran, so a 0.2 writer's plan keeps its meaning on a 0.3 reader): the kernels and function bindings reproduce that release, e.g. a Spark 4.2 `from_json`/`from_csv`/`from_xml` `TIME(p)` read keeps six fraction digits whatever `p`, and Spark 4.3 cuts a string cast to `TIME(p)` to `p` digits."),
     (struct_field, StructField, POST_MIGRATION_READER_VERSION, Semantic, "A struct field access (`GetStructField`: the analyzer-resolved field of a struct)."),
     (table_write, TableWrite, POST_MIGRATION_READER_VERSION, Semantic, "The `TableWrite` node: rows written into a table provider's sink (its writer, or the rewriter of its row-level table), resolved at instantiation; design P3-PR-DML §7."),
     (tail, Tail, POST_MIGRATION_READER_VERSION, Semantic, "The `Tail` node (the last rows of the input in plan order, Spark's `Dataset.tail`)."),
+    (theta_sketch_aggregates, ThetaSketchAggregates, POST_MIGRATION_READER_VERSION, Semantic, "The DataSketches Theta aggregates (`theta_sketch_agg` and `theta_union_agg` with their folded lgNomEntries, `theta_intersection_agg`): a sketch per group."),
+    (time_precision_nanos, TimePrecisionNanos, POST_MIGRATION_READER_VERSION, Semantic, "A `TIME(p)` type with p in 7..9 (Spark 4.3's nanosecond `TIME`), alone or inside an array, map, struct or user-defined type: a reader that knows only `time_type` (p <= 6) would refuse it as corrupt. Such a type contributes this feature alone, not `time_type`; a `TIME(p <= 6)` elsewhere in the plan still adds `time_type` beside it."),
     (time_type, TimeType, POST_MIGRATION_READER_VERSION, Semantic, "The `TIME` type, with its precision."),
     (udt_type, UdtType, POST_MIGRATION_READER_VERSION, Semantic, "User-defined types (Spark `UserDefinedType`): stored as their SQL type, with the class names in the plan."),
     (union_loop, UnionLoop, POST_MIGRATION_READER_VERSION, Semantic, "The `UnionLoop` and `LoopRef` nodes (recursive common table expressions run as a loop)."),
@@ -249,6 +252,9 @@ pub enum Construct<'a> {
     /// output schema or of an aggregate's result element, or a child field
     /// of an Arrow type): its metadata can name the Spark type.
     ArrowField(&'a arrow_schema::Field),
+    /// The same Arrow field, for the `TIME` precision its metadata names: a
+    /// field can hold both a collated string and a nanosecond `TIME`.
+    ArrowFieldTime(&'a arrow_schema::Field),
     /// A lambda expression or variable: the bound body of a higher-order
     /// function's argument.
     Lambda,
@@ -285,6 +291,9 @@ pub enum Construct<'a> {
 /// mapped there, and classified here.
 fn type_feature(t: &DataType) -> Option<Feature> {
     match t {
+        DataType::Time { precision } if *precision > MICROS_TIME_PRECISION => {
+            Some(Feature::TimePrecisionNanos)
+        }
         DataType::Time { .. } => Some(Feature::TimeType),
         DataType::Geometry { .. } | DataType::Geography { .. } => Some(Feature::GeoTypes),
         DataType::YearMonthInterval { .. }
@@ -298,6 +307,41 @@ fn type_feature(t: &DataType) -> Option<Feature> {
         DataType::Udt(_) => Some(Feature::UdtType),
         _ => t.is_nested().then_some(Feature::NestedTypes),
     }
+}
+
+/// The highest `TIME` precision a reader with only `time_type` decodes.
+const MICROS_TIME_PRECISION: u8 = 6;
+
+/// Whether `t` is or holds a `TIME` with a precision past microseconds.
+fn nanos_time(t: &DataType) -> bool {
+    match t {
+        DataType::Time { precision } => *precision > MICROS_TIME_PRECISION,
+        DataType::Array(a) => nanos_time(a.element_type()),
+        DataType::Map(m) => nanos_time(m.key_type()) || nanos_time(m.value_type()),
+        DataType::Struct(s) => s.fields().iter().any(|x| nanos_time(x.data_type())),
+        DataType::Udt(u) => nanos_time(u.sql_type()),
+        _ => false,
+    }
+}
+
+/// The Spark type an Arrow field's [`SPARK_TYPE_METADATA_KEY`] tag names,
+/// read as `DataType::from_arrow_field` reads it: the engine's JSON form for
+/// a type that is or holds a user-defined type, DDL otherwise. A malformed
+/// tag is the reader's to refuse, not a feature.
+fn tag_type(field: &arrow_schema::Field) -> Option<DataType> {
+    let tag = field.metadata().get(SPARK_TYPE_METADATA_KEY)?;
+    if tag.starts_with('{') {
+        DataType::from_canonical_json(tag).ok()
+    } else {
+        krishiv_types::parse_data_type(tag).ok()
+    }
+}
+
+/// Whether an Arrow field's tag names a type that is or holds a nanosecond
+/// `TIME` (a user-defined type over one included): the carrier
+/// (`Time64(ns)`) is the same at every precision.
+fn nanos_time_field(field: &arrow_schema::Field) -> bool {
+    tag_type(field).is_some_and(|t| nanos_time(&t))
 }
 
 /// Whether `t` is or holds a collated string.
@@ -316,20 +360,31 @@ fn collated(t: &DataType) -> bool {
 /// that is or holds a collated string: the carrier (`Utf8View`) alone says
 /// `string`. A malformed tag is the reader's to refuse, not a feature.
 fn collated_field(field: &arrow_schema::Field) -> bool {
-    field
-        .metadata()
-        .get(SPARK_TYPE_METADATA_KEY)
-        .and_then(|tag| krishiv_types::parse_data_type(tag).ok())
-        .is_some_and(|t| collated(&t))
+    tag_type(field).is_some_and(|t| collated(&t))
 }
 
-/// Whether an Arrow field's tag names the INDETERMINATE collation (`string collate null`, alone or inside
-/// an array, map or struct): `parse_data_type` refuses it, so [`collated_field`] sees no collated type.
+/// Whether `t` is or holds a string of the INDETERMINATE collation.
+fn indeterminate(t: &DataType) -> bool {
+    match t {
+        DataType::CollatedString(c) => c.is_indeterminate(),
+        DataType::Array(a) => indeterminate(a.element_type()),
+        DataType::Map(m) => indeterminate(m.key_type()) || indeterminate(m.value_type()),
+        DataType::Struct(s) => s.fields().iter().any(|x| indeterminate(x.data_type())),
+        DataType::Udt(u) => indeterminate(u.sql_type()),
+        _ => false,
+    }
+}
+
+/// Whether an Arrow field's tag names the INDETERMINATE collation, alone or inside an array, map,
+/// struct or user-defined type. A DDL tag (`string collate null`) is matched as text, since
+/// `parse_data_type` refuses it; a JSON tag is parsed, since its form may be `spark.null` in a
+/// field's `__COLLATIONS` (a user-defined type over a struct) with no `collate null` in the text.
 fn indeterminate_field(field: &arrow_schema::Field) -> bool {
     field
         .metadata()
         .get(SPARK_TYPE_METADATA_KEY)
         .is_some_and(|tag| tag.contains("collate null"))
+        || tag_type(field).is_some_and(|t| indeterminate(&t))
 }
 
 /// The constructs of a source a plan reads or writes: a declared file schema, or the stored
@@ -365,6 +420,7 @@ fn visit_read_source<'a>(source: &'a krishiv_plan::ReadSource, f: &mut impl FnMu
 /// tag of a field at any depth can name a collated type.
 fn visit_arrow_field<'a>(field: &'a arrow_schema::Field, f: &mut impl FnMut(Construct<'a>)) {
     f(Construct::ArrowField(field));
+    f(Construct::ArrowFieldTime(field));
     visit_arrow(field.data_type(), f);
 }
 
@@ -591,6 +647,9 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
                 collated_field(field).then_some(Feature::CollatedStrings)
             }
         }
+        Construct::ArrowFieldTime(field) => {
+            nanos_time_field(field).then_some(Feature::TimePrecisionNanos)
+        }
         Construct::ArrowType(t) => {
             if arrow_time(t) {
                 Some(Feature::TimeType)
@@ -711,6 +770,9 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
             AggregateFunction::HllSketchAgg { .. } | AggregateFunction::HllUnionAgg { .. } => {
                 Some(Feature::HllSketchAggregates)
             }
+            AggregateFunction::ThetaSketchAgg { .. }
+            | AggregateFunction::ThetaUnionAgg { .. }
+            | AggregateFunction::ThetaIntersectionAgg => Some(Feature::ThetaSketchAggregates),
             AggregateFunction::Udf(_) => Some(Feature::RustUdaf),
         },
         // Built-ins and registry functions travel by name; only a
@@ -1014,7 +1076,16 @@ fn exprs_of<'a>(node: &'a PhysNode) -> Vec<&'a Arc<Expr>> {
                     .map(|f| &f.predicate),
             );
         }
-        PhysNode::SortMergeJoin(j) => roots.extend(j.residual.iter().flat_map(|r| &r.conjuncts)),
+        PhysNode::SortMergeJoin(j) => {
+            roots.extend(j.residual.iter().flat_map(|r| &r.conjuncts));
+            // The as-of distance is an expression too: it may carry an `EvalMode`.
+            roots.extend(
+                j.as_of
+                    .iter()
+                    .flat_map(|a| a.distance.iter())
+                    .flat_map(|d| &d.conjuncts),
+            );
+        }
         PhysNode::NestedLoopJoin(j) => roots.extend(j.residual.iter().flat_map(|r| &r.conjuncts)),
         PhysNode::TableWrite { request, .. } => match request {
             TableWriteRequest::Write(w) => {
@@ -1100,6 +1171,9 @@ pub fn plan_features(plan: &PhysicalPlan) -> BTreeSet<Feature> {
     }
     if plan.env().binary_output_style.is_some() {
         out.insert(Feature::BinaryOutputStyle);
+    }
+    if plan.env().spark_version.is_some() {
+        out.insert(Feature::SparkVersion);
     }
     if plan.env().zone_name.is_some() {
         out.insert(Feature::SessionZoneName);

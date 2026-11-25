@@ -29,7 +29,7 @@ use krishiv_common::error::ErrorClass;
 use crate::collation::Collation;
 use crate::error::{self, Result};
 use crate::nested::{ArrayType, MapType, Metadata, StructField, StructType};
-use crate::{DataType, DayTimeField, DecimalType, Srid, YearMonthField};
+use crate::{DataType, DayTimeField, DecimalType, Srid, TypeGrammar, YearMonthField};
 
 /// Parses a Spark DDL type string such as `int`, `DECIMAL(10, 2)` or
 /// `timestamp_ntz`.
@@ -50,6 +50,16 @@ use crate::{DataType, DayTimeField, DecimalType, Srid, YearMonthField};
 /// unknown type and `KRISHIV_UNSUPPORTED_FEATURE` for a Spark type not
 /// supported yet (see [`crate::error`]).
 pub fn parse_data_type(input: &str) -> Result<DataType> {
+    parse_data_type_in(input, TypeGrammar::default())
+}
+
+/// [`parse_data_type`] with the type grammar of `grammar`: under [`TypeGrammar::V4_2`],
+/// `TIME(7..=9)` is `UNSUPPORTED_TIME_PRECISION` and `TIMESTAMP_NTZ(p)` has no precision
+/// (`UNSUPPORTED_DATATYPE`), as in Spark 4.2.
+///
+/// # Errors
+/// As [`parse_data_type`].
+pub fn parse_data_type_in(input: &str, grammar: TypeGrammar) -> Result<DataType> {
     let tokens = Lexer {
         src: input,
         pos: 0,
@@ -64,6 +74,7 @@ pub fn parse_data_type(input: &str) -> Result<DataType> {
         pos: 0,
         deferred: None,
         pinned: false,
+        grammar,
     };
     let data_type = p.data_type(0)?;
     let left = p.tokens.len().saturating_sub(p.pos);
@@ -369,6 +380,8 @@ struct Parser<'a> {
     /// The current syntax error keeps its position inside a complex type,
     /// as Spark reports one after an interval's `TO`.
     pinned: bool,
+    /// The release's type grammar.
+    grammar: TypeGrammar,
 }
 
 impl<'a> Parser<'a> {
@@ -512,7 +525,7 @@ impl<'a> Parser<'a> {
         } else if let Some(e) = error::incomplete_type(&lower) {
             Some(Err(e))
         } else {
-            resolve(&lower, &args)
+            resolve(&lower, &args, self.grammar)
         };
         Ok(
             match resolved.unwrap_or_else(|| Err(unsupported_data_type(&lower, &args))) {
@@ -887,7 +900,7 @@ impl IntervalField {
 }
 
 /// The type named `lower` with `args`, or `None` if there is no such type.
-fn resolve(lower: &str, args: &[String]) -> Option<Result<DataType>> {
+fn resolve(lower: &str, args: &[String], grammar: TypeGrammar) -> Option<Result<DataType>> {
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     let t = match (lower, args.as_slice()) {
         ("void", []) => DataType::Null,
@@ -913,9 +926,13 @@ fn resolve(lower: &str, args: &[String]) -> Option<Result<DataType>> {
         },
         ("time", [p]) => {
             return Some(match p.parse::<u32>() {
-                Ok(p) => DataType::time(p),
-                Err(_) => Err(error::time_precision(&digits(p))),
+                Ok(n) if n <= u32::from(grammar.max_time_precision()) => DataType::time(n),
+                _ => Err(error::time_precision(&digits(p)).in_release(grammar.release())),
             });
+        }
+        // Spark 4.3: 6 is the microsecond type; 7..=9 the nanosecond types Krishiv has not yet.
+        ("timestamp" | "timestamp_ltz" | "timestamp_ntz", [p]) if grammar == TypeGrammar::V4_3 => {
+            return Some(timestamp_with_precision(lower, p));
         }
         ("geometry" | "geography", [srid]) => {
             return Some(match srid.parse::<i32>() {
@@ -927,6 +944,29 @@ fn resolve(lower: &str, args: &[String]) -> Option<Result<DataType>> {
         _ => return None,
     };
     Some(Ok(t))
+}
+
+/// `TIMESTAMP[_NTZ|_LTZ](p)` in Spark 4.3's grammar (`TIMESTAMP` is the session's timestamp type,
+/// taken here as `TIMESTAMP_LTZ` like the bare name).
+fn timestamp_with_precision(lower: &str, p: &str) -> Result<DataType> {
+    let ntz = lower == "timestamp_ntz";
+    match p.parse::<u32>() {
+        Ok(6) if ntz => Ok(DataType::TimestampNtz),
+        Ok(6) => Ok(DataType::Timestamp),
+        Ok(7..=9) => Err(error::unsupported(format!(
+            "the nanosecond-precision timestamp type {}({}) (Krishiv 0.3.1)",
+            lower.to_ascii_uppercase(),
+            digits(p)
+        ))),
+        _ => Err(error::invalid_timestamp_precision(
+            &digits(p),
+            if ntz {
+                "TIMESTAMP_NTZ"
+            } else {
+                "TIMESTAMP_LTZ"
+            },
+        )),
+    }
 }
 
 /// Digits as written, without leading zeros.

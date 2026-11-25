@@ -7,7 +7,8 @@
 //! strings, so it is the same on every platform, toolchain and process.
 //! It leaves out origins (spans, `plan_id`s). It starts with
 //! [`ENCODING_VERSION`] and [`crate::IR_VERSION`]; a change to the layout
-//! bumps the version.
+//! bumps the version. A layout change is a change to an existing node's bytes: a new node kind
+//! takes a new tag and leaves every existing plan's encoding as it was, so it does not bump it.
 //!
 //! It never holds secret plaintext (ADR 0038). A `secret('scope', 'key')`
 //! reference is encoded as its scope and key. An inline secret, given as an
@@ -123,6 +124,8 @@ pub(crate) fn plan_tag(node: &PlanNode) -> u8 {
         PlanNode::Tail { .. } => 43,
         PlanNode::MetricViewRead { .. } => 44,
         PlanNode::AsOfJoin { .. } => 45,
+        PlanNode::SecurityBarrier { .. } => 46,
+        PlanNode::Zip { .. } => 47,
     }
 }
 
@@ -212,6 +215,23 @@ impl Plan {
         self.canonical_encoding() == other.canonical_encoding()
     }
 
+    /// [`structurally_eq`](Self::structurally_eq) with attribute ids
+    /// compared by position, as Spark's `sameResult` does: each id stands
+    /// for the order in which the encoding first meets it, so two
+    /// independently resolved `range(0, 3)` plans are equal.
+    #[must_use]
+    pub fn structurally_eq_modulo_attr_ids(&self, other: &Self) -> bool {
+        let encode = |p: &Self| {
+            let mut keys = Keys {
+                renumber: Some(HashMap::new()),
+                ..Keys::default()
+            };
+            let (root, _) = keys.plan(p.root(), &[], 0);
+            (keys.records, root)
+        };
+        encode(self) == encode(other)
+    }
+
     /// The structural hash of every distinct relation of the main query
     /// (not of subquery plans), in pre-order, root first; a relation shared
     /// by several parents appears once. All are computed in one bottom-up
@@ -280,6 +300,9 @@ struct Keys {
     /// Identity mode (see [`identity_keys`]): `plan_id`s are encoded as
     /// themselves, not by where their carriers are.
     absolute: bool,
+    /// Attribute ids renumbered by first appearance (see
+    /// [`Plan::structurally_eq_modulo_attr_ids`]); `None` keeps them as they are.
+    renumber: Option<HashMap<u64, u64>>,
     /// Whether a relation's subtree (subquery plans included) holds a
     /// `plan_id` reference: only then does its key depend on the enclosing
     /// operators, so a subtree without one is encoded once.
@@ -683,6 +706,23 @@ impl<'k, 'a> Encoder<'k, 'a> {
         }
     }
 
+    /// A barrier's policy reference: the securable (a path as its option value, so a secret
+    /// never enters in plaintext), the principal key and the version.
+    fn policy(&mut self, p: &crate::PolicyRef) {
+        match &p.securable {
+            crate::analyzer::Securable::Path(v) => {
+                self.u8(1);
+                self.option_value(v);
+            }
+            other => {
+                self.u8(0);
+                self.str(&other.to_string());
+            }
+        }
+        self.str(&p.principal.to_string());
+        self.put(&p.version.to_le_bytes());
+    }
+
     /// An option value or path: a plain value as itself, a reference as its
     /// (scope, key), an inline secret (alone or inside a URL) as its keyed
     /// fingerprint, never its plaintext (ADR 0038).
@@ -917,7 +957,7 @@ impl<'k, 'a> Encoder<'k, 'a> {
                 };
                 self.u8(tag);
                 if let JoinKind::Existence(id) = kind {
-                    self.put(&id.0.to_le_bytes());
+                    self.attr_id(id.0);
                 }
                 match condition {
                     JoinCondition::None => self.u8(0),
@@ -975,7 +1015,7 @@ impl<'k, 'a> Encoder<'k, 'a> {
             }) => {
                 self.str(name);
                 self.len(source.len());
-                source.iter().for_each(|id| self.put(&id.0.to_le_bytes()));
+                source.iter().for_each(|id| self.attr_id(id.0));
                 self.len(output.len());
                 output.iter().for_each(|c| self.bound(c));
             }
@@ -989,6 +1029,7 @@ impl<'k, 'a> Encoder<'k, 'a> {
             // Only the tag.
             PlanNode::OneRowRelation
             | PlanNode::PipeOperator { .. }
+            | PlanNode::Zip { .. }
             | PlanNode::Distinct { .. } => {}
             PlanNode::Repartition { exprs, .. } => self.exprs(exprs),
             PlanNode::ColumnNames { op, .. } => match op {
@@ -1074,6 +1115,7 @@ impl<'k, 'a> Encoder<'k, 'a> {
             PlanNode::JoinHint { strategy, .. } => {
                 self.str(strategy.name());
             }
+            PlanNode::SecurityBarrier { policy, .. } => self.policy(policy),
             PlanNode::Union {
                 inputs,
                 by_name,
@@ -1372,8 +1414,20 @@ impl<'k, 'a> Encoder<'k, 'a> {
         }
     }
 
+    /// Encodes an attribute id: raw, or by order of first meeting when ids are compared by position.
+    fn attr_id(&mut self, raw: u64) {
+        let id = match &mut self.keys.renumber {
+            Some(seen) => {
+                let next = seen.len() as u64;
+                *seen.entry(raw).or_insert(next)
+            }
+            None => raw,
+        };
+        self.put(&id.to_le_bytes());
+    }
+
     fn bound(&mut self, c: &BoundColumn) {
-        self.put(&c.id.0.to_le_bytes());
+        self.attr_id(c.id.0);
         self.str(&c.name);
         self.data_type(&c.data_type);
         self.bool(c.nullable);
