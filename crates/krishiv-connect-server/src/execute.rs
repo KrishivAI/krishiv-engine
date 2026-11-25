@@ -393,7 +393,20 @@ pub async fn execute_plan(
                 return Ok(Prepared::Command(answer));
             }
             // `df.show()`: the input runs as a query and its first rows are laid out as text.
-            if let Some(shown) = show_string::of(plan) {
+            // A compressed relation is unpacked first, so a compressed `show_string` takes the same path.
+            let unpacked = match (&plan.op_type, decompressed(plan, limits).await?) {
+                (Some(OpType::CompressedOperation(c)), Some(bytes))
+                    if CompressedOpType::try_from(c.op_type) == Ok(CompressedOpType::Relation) =>
+                {
+                    Some(pb::Plan {
+                        op_type: Some(OpType::Root(Box::new(
+                            (*wire::decode_relation(&bytes)?).clone(),
+                        ))),
+                    })
+                }
+                _ => None,
+            };
+            if let Some(shown) = show_string::of(unpacked.as_ref().unwrap_or(plan)) {
                 if shown.html {
                     return Err(krishiv_common::error::KrishivUnsupportedFeature {
                         feature: "html_string (no Spark golden for its HTML escaping yet)"

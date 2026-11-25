@@ -2342,6 +2342,40 @@ async fn show_string_matches_the_spark_430_fixture() {
     assert!(failures.is_empty(), "{}", failures.join("\n\n"));
 }
 
+/// A compressed `show_string` relation answers as the uncompressed one does.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_compressed_show_string_answers_the_same_text() {
+    let run = start().await;
+    let show = relation(RelType::ShowString(Box::new(pb::ShowString {
+        input: Some(Box::new(sql("SELECT 1 AS x"))),
+        num_rows: 20,
+        truncate: 20,
+        vertical: false,
+    })));
+    let data = zstd::bulk::compress(&show.encode_to_vec(), 3).expect("zstd");
+    let plan = pb::Plan {
+        op_type: Some(OpType::CompressedOperation(Box::new(
+            pb::plan::CompressedOperation {
+                data,
+                op_type: pb::plan::compressed_operation::OpType::Relation as i32,
+                compression_codec: pb::CompressionCodec::Zstd as i32,
+            },
+        ))),
+    };
+    let responses = collect(&run.channel, request(plan)).await.expect("show");
+    let b = batches(&responses);
+    let read = read_ipc(&b[0].data);
+    assert_eq!(read[0].schema().field(0).name(), "show_string");
+    let text = read[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<arrow_array::StringArray>()
+        .expect("string")
+        .value(0)
+        .to_owned();
+    assert_eq!(text, "+---+\n|  x|\n+---+\n|  1|\n+---+\n");
+}
+
 /// Result columns that share a name show by position, as `Dataset.showString` does.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn show_string_binds_duplicate_named_columns_by_position() {
