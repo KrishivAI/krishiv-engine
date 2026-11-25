@@ -14,7 +14,7 @@ Paths are relative to this crate.
 - `src/config/registry/runtime_filter.rs` the core `krishiv.runtimeFilter.*` entries (enabled, IN-list and exact-set sizes, Bloom caps, adaptive pass rate), re-exported by `registry.rs` (same reason)
 - `src/config/registry/runtime_filter_bloom.rs` the at-scale runtime Bloom entries (`krishiv.runtimeFilter.bloom.atScale`, `memoryTier`), re-exported by `registry.rs` (same reason)
 - `src/config/registry/server.rs` the `krishiv.server.*` and Connect listener entries, and `krishiv.workload.resourceGroups.file` (moved here to keep `registry.rs` under 2,000 lines)
-- `src/config/registry_join.rs` join entries re-exported by `config`: hash join (`rowLayout`, `fuseProbeSelect`, `idleSpillAfter`, `coalesceInput`), sort-merge join (`strategy`, `smj.bufferBytes`), Spark 4.3 ASOF JOIN (`spark.sql.join.asofJoin.enabled`, `sortMergeAsOfJoin.enabled`)
+- `src/config/registry_join.rs` join entries re-exported by `config`: hash join (`rowLayout`, `columnPayload`, `fuseProbeSelect`, `idleSpillAfter`, `coalesceInput`), sort-merge join (`strategy`, `smj.bufferBytes`), Spark 4.3 ASOF JOIN (`spark.sql.join.asofJoin.enabled`, `sortMergeAsOfJoin.enabled`)
 - `src/config/mod.rs` configuration types and lookup
 - `src/experimental.rs` `krishiv.experimental.*` gating
 - `src/error/mod.rs` error type carrying a Spark error class and SQLSTATE; `src/error/template.rs` message templates; `src/error/render.rs` `render_with_context` (message plus the SQL span: the summary text is engine-defined, the offsets follow the Spark 4.2.0 goldens)

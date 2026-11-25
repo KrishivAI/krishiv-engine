@@ -8,6 +8,7 @@
 #![expect(clippy::unwrap_used, reason = "test helpers sit outside #[test] fns")]
 
 mod asof;
+mod column_payload;
 mod direct;
 mod existence;
 mod fused_probe;
@@ -99,6 +100,10 @@ struct Case {
     filter: bool,
     /// `krishiv.exec.join.rowLayout` (P2-T158).
     row_layout: bool,
+    /// `krishiv.exec.join.columnPayload` (perf F-H1): the build's `k2`
+    /// string column makes every join that returns build columns keep
+    /// them as Arrow columns when on.
+    column_payload: bool,
 }
 
 impl Case {
@@ -198,6 +203,7 @@ async fn run_case(
     let config = ExecConfig {
         batch_size: if probe.len() < 1000 { 5 } else { 1024 },
         join_row_layout: case.row_layout,
+        join_column_payload: case.column_payload,
         ..ExecConfig::default()
     };
     let q = query(&root, 1, config);
@@ -223,6 +229,7 @@ fn case(join_type: JoinType, keys: usize, null_safe: bool, filter: bool) -> Case
         null_safe: vec![null_safe; keys],
         filter,
         row_layout: false,
+        column_payload: true,
     }
 }
 
@@ -276,6 +283,7 @@ async fn join_types_match_the_oracle_on_edge_cases() {
                     for row_layout in [false, true] {
                         let c = Case {
                             row_layout,
+                            column_payload: true,
                             ..case(jt, keys, safe, filter)
                         };
                         for (p, b) in inputs {
@@ -302,6 +310,7 @@ async fn not_in_follows_spark_null_semantics() {
     for row_layout in [false, true] {
         not_in_cases(Case {
             row_layout,
+            column_payload: true,
             ..case(JoinType::NullAwareAnti, 1, false, false)
         })
         .await;
@@ -344,8 +353,9 @@ fn any_case() -> impl Strategy<Value = Case> {
         prop::collection::vec(any::<bool>(), 2),
         any::<bool>(),
         any::<bool>(),
+        any::<bool>(),
     )
-        .prop_map(|(t, keys, safe, filter, row_layout)| {
+        .prop_map(|(t, keys, safe, filter, row_layout, column_payload)| {
             let join_type = TYPES[t];
             let naaj = join_type == JoinType::NullAwareAnti;
             Case {
@@ -358,6 +368,7 @@ fn any_case() -> impl Strategy<Value = Case> {
                 },
                 filter: filter && !naaj,
                 row_layout,
+                column_payload,
             }
         })
 }
@@ -406,7 +417,12 @@ proptest! {
             .start_paused(true)
             .build()
             .unwrap();
-        let other = Case { row_layout: !c.row_layout, ..c.clone() };
+        // The in-memory path also takes the other payload form.
+        let other = Case {
+            row_layout: !c.row_layout,
+            column_payload: !c.column_payload,
+            ..c.clone()
+        };
         let (expect, _) = rt.block_on(run_case(&other, &probe, &build, batch_rows, threads, 256 * MIB));
         let (got, q) = rt.block_on(run_case(&c, &probe, &build, batch_rows, threads, MIB));
         prop_assert!(got == expect, "grace result differs");
@@ -528,6 +544,7 @@ async fn null_key_build_rows_spill_with_their_partitions() {
         for row_layout in [false, true] {
             let c = Case {
                 row_layout,
+                column_payload: true,
                 ..case(jt, 1, false, false)
             };
             let (got, q) = run_case(&c, &probe, &build, 256, 2, MIB).await;
@@ -627,6 +644,7 @@ async fn small_probe_partitions_join_with_roles_reversed() {
             let keys = if row_layout { 1 } else { 2 };
             let c = Case {
                 row_layout,
+                column_payload: true,
                 ..case(jt, keys, false, filter)
             };
             let expect = c.oracle(&probe, &build);

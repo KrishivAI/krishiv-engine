@@ -71,8 +71,11 @@
 //! small, a salted linear-probing directory above that, both keyed by the
 //! seeded `g = fin(h ^ seed)`. Results are the same in both formats.
 //! Build columns the join returns travel as payload rows of a second
-//! layout (bit for bit, no hash word) when they are all fixed-width, as
-//! arrow rows otherwise; probe output decodes them column by column. Each
+//! layout (bit for bit, no hash word) when they are all fixed-width; when
+//! they are flat and one is a string or binary column, as the build's own
+//! Arrow columns, gathered per match by `interleave` (long views copied out,
+//! `krishiv.exec.join.columnPayload`, perf F-H1); as arrow rows otherwise
+//! (nested columns), which probe output decodes column by column. Each
 //! partition's index is sized from a mergeable distinct-key sketch of the
 //! stored hashes (and grows if the estimate was low), and the build keeps
 //! only the memory its indexes hold. Level-0 partitions are the top
@@ -582,6 +585,9 @@ pub(crate) struct Shared {
     payload: Option<(RowConverter, RowParser)>,
     /// The layout of build columns carried as payload rows (row layout).
     row_payload: Option<Arc<rows::RowLayout>>,
+    /// The row arena's schemas (arrow-row keys, row-layout keys) when the
+    /// build columns may be kept as Arrow columns ([`column_payload`]).
+    column_arenas: Option<(SchemaRef, Option<SchemaRef>)>,
     /// Build column types after decoding (dictionaries decode to values).
     build_fields: Vec<Field>,
     filter: Option<Arc<dyn Predicate>>,
@@ -816,6 +822,23 @@ impl Shared {
         let arrow_format = table::ArenaFormat::Arrow {
             payload: payload.is_some(),
         };
+        let column_arenas = if needs_payload && column_payload(&build_schema, &build_fields) {
+            let with = |s: SchemaRef| flag(table::with_payload_columns(&s, &build_fields));
+            let arrow = with(table::arena_schema(table::ArenaFormat::Arrow {
+                payload: false,
+            })?);
+            let rows = match keys.layout() {
+                Some(l) => Some(with(table::arena_schema(table::ArenaFormat::Rows {
+                    keys: l,
+                    payload: None,
+                    arrow_payload: false,
+                })?)),
+                None => None,
+            };
+            Some((arrow, rows))
+        } else {
+            None
+        };
         Ok(Self {
             join_type,
             single_match,
@@ -826,6 +849,7 @@ impl Shared {
             keys,
             payload,
             row_payload,
+            column_arenas,
             build_fields,
             filter,
             filter_schema,
@@ -841,6 +865,12 @@ impl Shared {
 
     /// The row arena's schema in the key format `hashing` chose.
     fn arena_schema(&self, hashing: &keys::Hashing) -> &SchemaRef {
+        if let Some((arrow, rows)) = self.column_arenas.as_ref().filter(|_| hashing.columns()) {
+            return match (rows, hashing.rows()) {
+                (Some(rows), true) => rows,
+                _ => arrow,
+            };
+        }
         match (&self.row_arena, hashing.rows()) {
             (Some(rows), true) => rows,
             _ => &self.arrow_arena,
@@ -852,7 +882,15 @@ impl Shared {
     /// does every build column the join returns.
     fn hashing(&self, config: &crate::ExecConfig) -> keys::Hashing {
         let rows = config.join_row_layout && self.row_arena.is_some();
-        keys::Hashing::new(config.seed, rows).with_radix(config.join_radix_bits)
+        keys::Hashing::new(config.seed, rows)
+            .with_radix(config.join_radix_bits)
+            .with_columns(config.join_column_payload && self.column_arenas.is_some())
+    }
+
+    /// Whether a join instance hashing with `hashing` keeps its build
+    /// columns as Arrow columns (the column payload).
+    fn columns(&self, hashing: &keys::Hashing) -> bool {
+        hashing.columns() && self.column_arenas.is_some()
     }
 
     /// The layout of the payload rows, when the row layout (`rows`) is in
@@ -869,6 +907,11 @@ impl Shared {
         build: &[(usize, u32)],
         arena: impl Fn(usize) -> Option<&'a table::RowArena>,
     ) -> Result<Vec<ArrayRef>> {
+        if let Some(&(p, _)) = build.first()
+            && arena(p).is_some_and(table::RowArena::has_payload_columns)
+        {
+            return self.gather_columns(build, arena);
+        }
         if let Some(layout) = self.row_payload(rows) {
             let picked: Vec<(&[u8], &[u8])> = build
                 .iter()
@@ -883,6 +926,57 @@ impl Shared {
         )
     }
 
+    /// The build columns of rows `build` (partition, row) gathered from the
+    /// arenas' column payload: one `interleave` per column over the blocks
+    /// the rows are in. A long string or binary view is copied out of the
+    /// block (`gc`), so an output batch never shares a block's buffers: it
+    /// owns its bytes as a decoded one does, and is charged for them alone.
+    fn gather_columns<'a>(
+        &self,
+        build: &[(usize, u32)],
+        arena: impl Fn(usize) -> Option<&'a table::RowArena>,
+    ) -> Result<Vec<ArrayRef>> {
+        const UNSEEN: u32 = u32::MAX;
+        let lost = || internal("a join match outside its build table".to_owned());
+        // (partition, block) -> index into `sources`.
+        let mut slots: Vec<Vec<u32>> = Vec::new();
+        let mut sources: Vec<(&table::RowArena, usize)> = Vec::new();
+        let mut indices = Vec::with_capacity(build.len());
+        for &(p, r) in build {
+            let a = arena(p).ok_or_else(lost)?;
+            let (block, local) = a.locate(r).ok_or_else(lost)?;
+            if slots.len() <= p {
+                slots.resize_with(p + 1, Vec::new);
+            }
+            let part = &mut slots[p];
+            if part.len() <= block {
+                part.resize(a.blocks_len().max(block + 1), UNSEEN);
+            }
+            if part[block] == UNSEEN {
+                part[block] = u32::try_from(sources.len()).map_err(|_| lost())?;
+                sources.push((a, block));
+            }
+            indices.push((part[block] as usize, local as usize));
+        }
+        self.build_fields
+            .iter()
+            .enumerate()
+            .map(|(i, field)| {
+                if sources.is_empty() {
+                    return Ok(arrow_array::new_empty_array(field.data_type()));
+                }
+                let arrays = sources
+                    .iter()
+                    .map(|&(a, b)| a.payload_column(b, i).map(AsRef::as_ref))
+                    .collect::<Option<Vec<&dyn arrow_array::Array>>>()
+                    .ok_or_else(lost)?;
+                let out = arrow_select::interleave::interleave(&arrays, &indices)
+                    .map_err(|e| internal(e.to_string()))?;
+                Ok(own_views(out))
+            })
+            .collect()
+    }
+
     /// Decodes build rows (payload bytes) into build columns.
     fn decode<'a>(&self, rows: impl Iterator<Item = &'a [u8]>) -> Result<Vec<ArrayRef>> {
         let Some((conv, parser)) = &self.payload else {
@@ -890,6 +984,64 @@ impl Shared {
         };
         conv.convert_rows(rows.map(|b| parser.parse(b)))
             .map_err(|e| internal(e.to_string()))
+    }
+}
+
+/// Whether the build columns `fields` (of the build input `schema`) are
+/// kept as Arrow columns when `krishiv.exec.join.columnPayload` is on: each
+/// is a flat type that arrives as declared (no dictionary to decode), and
+/// one at least is a string or binary column, whose arrow-row decode per
+/// match is the cost this form removes (a fixed-width payload keeps the row
+/// layout). Nested columns keep arrow rows: a view inside them would share
+/// a block's buffers after a gather.
+fn column_payload(schema: &SchemaRef, fields: &[Field]) -> bool {
+    let flat = |t: &DataType| {
+        t.is_primitive()
+            || matches!(
+                t,
+                DataType::Boolean
+                    | DataType::FixedSizeBinary(_)
+                    | DataType::Utf8
+                    | DataType::LargeUtf8
+                    | DataType::Utf8View
+                    | DataType::Binary
+                    | DataType::LargeBinary
+                    | DataType::BinaryView
+            )
+    };
+    let var = |t: &DataType| {
+        matches!(
+            t,
+            DataType::Utf8
+                | DataType::LargeUtf8
+                | DataType::Utf8View
+                | DataType::Binary
+                | DataType::LargeBinary
+                | DataType::BinaryView
+        )
+    };
+    schema.fields().len() == fields.len()
+        && schema
+            .fields()
+            .iter()
+            .zip(fields)
+            .all(|(f, b)| f.data_type() == b.data_type() && flat(b.data_type()))
+        && fields.iter().any(|f| var(f.data_type()))
+}
+
+/// `array` owning the bytes of its long views: a string or binary view
+/// array that references data buffers is compacted (`gc`) into buffers of
+/// only its own values; any other array is returned as it is.
+pub(crate) fn own_views(array: ArrayRef) -> ArrayRef {
+    use arrow_array::cast::AsArray;
+    match array.data_type() {
+        DataType::Utf8View if !array.as_string_view().data_buffers().is_empty() => {
+            Arc::new(array.as_string_view().gc())
+        }
+        DataType::BinaryView if !array.as_binary_view().data_buffers().is_empty() => {
+            Arc::new(array.as_binary_view().gc())
+        }
+        _ => array,
     }
 }
 

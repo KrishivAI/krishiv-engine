@@ -21,6 +21,22 @@ pub static EXEC_JOIN_ROW_LAYOUT: ConfigEntry = ConfigEntry {
     spark_alias: None,
 };
 
+/// `krishiv.exec.join.columnPayload` (perf F-H1).
+pub static EXEC_JOIN_COLUMN_PAYLOAD: ConfigEntry = ConfigEntry {
+    key: "krishiv.exec.join.columnPayload",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(true)),
+    doc: "Internal: a hash join whose returned build columns include a string or binary \
+          column (and are all flat: no struct, list or map) keeps them as Arrow columns in its \
+          build table and gathers matched rows from them, instead of encoding each build row \
+          into a row format and decoding it at every match. Results are the same either way; \
+          `false` keeps the row format.",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
+    version_added: "0.3.1",
+    spark_alias: None,
+};
+
 /// Probe a tiny build with one integer key through an array indexed by the key.
 pub static EXEC_JOIN_DIRECT_INDEX: ConfigEntry = ConfigEntry {
     key: "krishiv.exec.join.directIndex",

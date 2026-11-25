@@ -310,6 +310,9 @@ struct Settings {
     /// `krishiv.exec.join.directIndex`; absent: the default.
     #[prost(bool, optional, tag = "19")]
     join_direct_index: Option<bool>,
+    /// `krishiv.exec.join.columnPayload`; absent: the default.
+    #[prost(bool, optional, tag = "20")]
+    join_column_payload: Option<bool>,
 }
 
 fn wide(v: usize) -> u64 {
@@ -335,6 +338,7 @@ impl Settings {
             detailed_metrics,
             join_row_layout,
             join_direct_index,
+            join_column_payload,
             join_radix_bits,
             sort_hash_buckets,
             join_merge_buffer_bytes,
@@ -366,6 +370,7 @@ impl Settings {
             union_output_partitioning: Some(union_output_partitioning),
             coalesce_input: Some(coalesce_input),
             join_direct_index: Some(join_direct_index),
+            join_column_payload: Some(join_column_payload),
         }
     }
 
@@ -386,6 +391,9 @@ impl Settings {
             join_direct_index: self
                 .join_direct_index
                 .unwrap_or(ExecConfig::default().join_direct_index),
+            join_column_payload: self
+                .join_column_payload
+                .unwrap_or(ExecConfig::default().join_column_payload),
             join_radix_bits: self.join_radix_bits,
             sort_hash_buckets: self.sort_hash_buckets,
             join_merge_buffer_bytes: narrow(self.join_merge_buffer_bytes, "merge buffer")?,

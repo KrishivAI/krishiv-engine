@@ -69,6 +69,10 @@ pub(crate) struct Hashing {
     rows: bool,
     /// Level-0 radix bits (row layout).
     radix: u32,
+    /// Returned build columns with a string or binary column are kept as
+    /// Arrow columns (`krishiv.exec.join.columnPayload`), when the join's
+    /// columns allow it (`Shared::columns`).
+    columns: bool,
 }
 
 impl Hashing {
@@ -82,7 +86,20 @@ impl Hashing {
             raw,
             rows,
             radix: PARTITION_BITS,
+            columns: false,
         }
+    }
+
+    /// The same with returned build columns kept as Arrow columns when
+    /// `on` and the join's columns allow it.
+    pub(crate) fn with_columns(mut self, on: bool) -> Self {
+        self.columns = on;
+        self
+    }
+
+    /// Whether returned build columns may be kept as Arrow columns.
+    pub(crate) fn columns(&self) -> bool {
+        self.columns
     }
 
     /// The same with `bits` level-0 radix bits in the row layout (clamped

@@ -27,7 +27,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use arrow_array::cast::AsArray;
 use arrow_array::types::UInt64Type;
-use arrow_array::{Array, LargeBinaryArray, RecordBatch, UInt64Array};
+use arrow_array::{Array, ArrayRef, LargeBinaryArray, RecordBatch, UInt64Array};
 use arrow_buffer::Buffer;
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use krishiv_types::batch::{Batch, Weights};
@@ -96,6 +96,26 @@ pub(crate) fn arena_schema(format: ArenaFormat<'_>) -> Result<SchemaRef> {
         }
     }
     Ok(Arc::new(Schema::new(fields)))
+}
+
+/// The name of build column `i` kept as an Arrow column in the arena
+/// (the column payload, `krishiv.exec.join.columnPayload`).
+pub(crate) fn payload_column_name(i: usize) -> String {
+    format!("build_{i}")
+}
+
+/// `schema` with the build columns `fields` appended as the arena's column
+/// payload ([`payload_column_name`]), nullable as the build's columns are.
+pub(crate) fn with_payload_columns(schema: &SchemaRef, fields: &[Field]) -> SchemaRef {
+    let mut out: Vec<Field> = schema.fields().iter().map(|f| f.as_ref().clone()).collect();
+    out.extend(fields.iter().enumerate().map(|(i, f)| {
+        Field::new(
+            payload_column_name(i),
+            f.data_type().clone(),
+            f.is_nullable(),
+        )
+    }));
+    Arc::new(Schema::new(out))
 }
 
 /// The arena column flagging rows with a NULL `=` key (right anti and
@@ -231,6 +251,9 @@ struct ArenaPart {
     hashes: UInt64Array,
     keys: Cols,
     payload: Option<Cols>,
+    /// The build columns kept as Arrow columns (the column payload; empty
+    /// when the payload is in a row format or there is none).
+    columns: Vec<ArrayRef>,
     /// Rows with a NULL `=` key that a right anti or right outer join
     /// keeps: stored, never indexed (column `null_key`, when present).
     null_key: Option<arrow_array::BooleanArray>,
@@ -247,6 +270,14 @@ impl ArenaPart {
             .clone();
         let keys = Cols::of(&batch, "key")?.ok_or_else(bad)?;
         let payload = Cols::of(&batch, "payload")?;
+        let columns = (0..)
+            .map_while(|i| {
+                batch
+                    .data()
+                    .column_by_name(&payload_column_name(i))
+                    .cloned()
+            })
+            .collect();
         let null_key = match batch.data().column_by_name(NULL_KEY) {
             Some(c) => Some(c.as_boolean_opt().ok_or_else(bad)?.clone()),
             None => None,
@@ -257,6 +288,7 @@ impl ArenaPart {
             hashes,
             keys,
             payload,
+            columns,
             null_key,
         })
     }
@@ -600,6 +632,34 @@ impl RowArena {
             )) => p.row(i),
             _ => (&[], &[]),
         }
+    }
+
+    /// Whether the arena keeps its build columns as Arrow columns (the
+    /// column payload).
+    pub(crate) fn has_payload_columns(&self) -> bool {
+        self.parts.first().is_some_and(|p| !p.columns.is_empty())
+    }
+
+    /// The arena's number of blocks.
+    pub(crate) fn blocks_len(&self) -> usize {
+        self.parts.len()
+    }
+
+    /// The block holding row `row` and the row's index in it (`None` past
+    /// the end).
+    #[inline]
+    pub(crate) fn locate(&self, row: u32) -> Option<(usize, u32)> {
+        let block = (row >> self.shift) as usize;
+        let local = row & ((1u32 << self.shift) - 1);
+        self.parts
+            .get(block)
+            .filter(|p| local < p.rows)
+            .map(|_| (block, local))
+    }
+
+    /// Build column `column` of block `block` (column payload only).
+    pub(crate) fn payload_column(&self, block: usize, column: usize) -> Option<&ArrayRef> {
+        self.parts.get(block)?.columns.get(column)
     }
 
     /// The row's weight.

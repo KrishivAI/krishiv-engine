@@ -821,10 +821,12 @@ fn local_mut(local: &mut LocalState) -> Result<&mut BuildLocal> {
 }
 
 /// The row-arena chunk of `rows` (indices into the encoded batch).
-/// A build batch's payload: arrow rows, or payload rows of the row layout.
+/// A build batch's payload: arrow rows, payload rows of the row layout, or
+/// the batch's own columns (the column payload, `Shared::columns`).
 pub(crate) enum Payload {
     Arrow(Rows),
     Rows(crate::rows::EncodedKeys),
+    Columns(Vec<ArrayRef>),
 }
 
 /// `hashes`: each row's stored hash (its key's, or a spread value for a
@@ -854,6 +856,22 @@ pub(crate) fn arena_chunk(
         }
         (Some(Payload::Rows(_)), None) => {
             return Err(internal("payload rows without a layout".to_owned()));
+        }
+        (Some(Payload::Columns(c)), _) => {
+            // Each chunk owns its long string bytes: a scan's view columns
+            // share decoded pages, which a few kept rows would pin.
+            let idx = arrow_array::UInt32Array::from_iter_values(
+                rows.iter()
+                    .map(|&i| {
+                        u32::try_from(i).map_err(|_| internal("build batch too long".to_owned()))
+                    })
+                    .collect::<Result<Vec<u32>>>()?,
+            );
+            for column in c {
+                let taken = arrow_select::take::take(column.as_ref(), &idx, None)
+                    .map_err(|e| internal(e.to_string()))?;
+                columns.push(super::own_views(taken));
+            }
         }
         (None, _) => {}
     }
@@ -1221,6 +1239,7 @@ impl Sink for BuildSink {
             g.null_key.store(true, Ordering::Release);
         }
         let payload = match (s.row_payload(g.hashing.rows()), &s.payload) {
+            _ if s.columns(&g.hashing) => Some(Payload::Columns(columns.to_vec())),
             (Some(layout), _) => Some(Payload::Rows(layout.encode(columns)?)),
             (None, Some((conv, _))) => Some(Payload::Arrow(
                 conv.convert_columns(columns)

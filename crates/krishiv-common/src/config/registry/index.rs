@@ -140,6 +140,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         "krishiv.memory.spillWaitTimeout",
         &MEMORY_SPILL_WAIT_TIMEOUT,
     ),
+    ("krishiv.exec.join.columnPayload", &EXEC_JOIN_COLUMN_PAYLOAD),
     ("krishiv.sql.legacy.javaCharsets", &LEGACY_JAVA_CHARSETS),
     ("krishiv.system.queries.capacity", &SYSTEM_QUERIES_CAPACITY),
     ("spark.connect.grpc.binding.port", &CONNECT_PORT),

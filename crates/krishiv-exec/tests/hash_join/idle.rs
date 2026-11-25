@@ -191,6 +191,7 @@ async fn an_idle_build_spills_before_the_requester_and_joins_from_disk() {
                 null_safe: vec![false, false],
                 filter: false,
                 row_layout,
+                column_payload: true,
             };
             let (rows, q) = run_held(&case, &probe, &build, 16 * MIB, 512 << 10).await;
             assert_eq!(rows, case.oracle(&probe, &build), "{case:?}");
@@ -219,6 +220,7 @@ async fn an_idle_spilled_build_goes_back_before_the_sink_above_the_probe_finaliz
             null_safe: vec![false, false],
             filter: false,
             row_layout: false,
+            column_payload: true,
         };
         let gate = BlockingGate::new();
         let (rows, q, at) =

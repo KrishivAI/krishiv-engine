@@ -364,6 +364,7 @@ async fn a_partition_that_will_not_split_falls_back_to_sort_merge() {
         {
             let c = Case {
                 row_layout,
+                column_payload: true,
                 ..case(jt, 1, false, filter)
             };
             let (got, q) = super::run_case(&c, &probe, &build, 2048, 2, MIB).await;

@@ -35,7 +35,7 @@ columns from the directories or, `with_file_constants`, from a table format's pe
 End-to-end tests over the mock format: `krishiv-testkit/tests/file_exec.rs`; the conformance suite through the
 executor: `mock_exec` in `krishiv-testkit/tests/file_format_mock.rs`.
 `join/` hash join (P2-T052a): `mod.rs` API + Spark semantics · `keys.rs` row-format keys, seeded foldhash,
-radix partitions · `table.rs` row arena + `JoinTable` (shared `KeyTable`, E02) · `build.rs` build
+radix partitions · `table.rs` row arena + `JoinTable` (shared `KeyTable`, E02; a build whose returned columns are flat with a string or binary one keeps them as Arrow columns `build_<i>` per block, gathered by `Shared::gather_columns` with `interleave`, long views `gc`ed so output owns its bytes: `krishiv.exec.join.columnPayload`, perf F-H1) · `build.rs` build
 sink (also the runtime filter producer, P2-T163: per-driver partials, published at finalize, `Disabled` on drop) ·
 `direct.rs` (perf lever J1, `krishiv.exec.join.directIndex`) the direct index of a tiny build: at most 4,096 rows, one
 non-null-safe `Int32`/`Int64` row-layout key spanning at most four slots a row; each probe driver builds it from the

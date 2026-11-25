@@ -1012,6 +1012,24 @@ fn exec_join_direct_index_defaults_on_and_is_user_settable() {
 }
 
 #[test]
+fn exec_join_column_payload_defaults_on_and_is_user_settable() {
+    let mut c = Config::new();
+    assert_eq!(
+        c.get(&EXEC_JOIN_COLUMN_PAYLOAD)
+            .and_then(ConfigValue::as_bool),
+        Some(true)
+    );
+    assert_eq!(EXEC_JOIN_COLUMN_PAYLOAD.settable_by, SettableBy::User);
+    c.set("krishiv.exec.join.columnPayload", "false").unwrap();
+    assert_eq!(
+        c.get(&EXEC_JOIN_COLUMN_PAYLOAD)
+            .and_then(ConfigValue::as_bool),
+        Some(false)
+    );
+    assert!(c.set("krishiv.exec.join.columnPayload", "maybe").is_err());
+}
+
+#[test]
 fn preserved_side_semi_join_defaults_on_and_is_user_settable() {
     let mut c = Config::new();
     let key = "krishiv.optimizer.preservedSideSemiJoin";
