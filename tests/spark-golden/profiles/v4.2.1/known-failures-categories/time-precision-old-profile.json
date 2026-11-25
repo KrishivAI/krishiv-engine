@@ -1,0 +1,14 @@
+{
+  "category": "time-precision-old-profile",
+  "format_version": 1,
+  "kind": "bug",
+  "owner": "0.3.1",
+  "rules": [
+    {
+      "file": "^(nonansi/)?cast$|^time$",
+      "order": 475,
+      "query": "(?i)time\\s*'|as time\\("
+    }
+  ],
+  "summary": "BUG, 0.3.1: this profile (Spark 4.1/4.2) cuts a TIME literal to 6 fractional digits (time(6), extract(SECOND) decimal(8,6)); the engine keeps 9 digits (time(9)) on every profile, so the schema differs. The golden engine does not yet run on its tag's profile (#978); the values are right."
+}

@@ -30,7 +30,7 @@ Spark data type ↔ Arrow mapping.
 | `date` | `Date32` | |
 | `timestamp` | `Timestamp(Microsecond, "UTC")` | |
 | `timestamp_ntz` | `Timestamp(Microsecond, None)` | |
-| `time(p)` | `Time64(Nanosecond)`, tagged when `p < 6` | |
+| `time(p)` | `Time64(Nanosecond)`, tagged when `p != 6` | |
 | `interval year to month` | `Interval(YearMonth)`, tagged for other fields | |
 | `interval day to second` | `Duration(Microsecond)`, tagged for other fields | |
 | `interval` | `Struct<months: Int32, days: Int32, microseconds: Int64>`, children non-null and marked with [`CALENDAR_CHILD_METADATA_KEY`] (Spark's `CalendarInterval`) | `Interval(MonthDayNano)` (the session edges convert to and from it) |
@@ -2089,6 +2089,12 @@ pub use data_type::DecimalType;
 pub use data_type::Srid;
 ```
 
+### Re-export `TypeGrammar`
+
+```rust
+pub use data_type::TypeGrammar;
+```
+
 ### Re-export `YearMonthField`
 
 ```rust
@@ -2099,6 +2105,12 @@ pub use data_type::YearMonthField;
 
 ```rust
 pub use ddl::parse_data_type;
+```
+
+### Re-export `parse_data_type_in`
+
+```rust
+pub use ddl::parse_data_type_in;
 ```
 
 ### Re-export `parse_metadata`
