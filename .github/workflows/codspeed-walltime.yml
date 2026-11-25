@@ -1,0 +1,84 @@
+name: CodSpeed wall-time
+
+# Wall-clock benchmarks on CodSpeed's Macro Runners (bare-metal Ryzen, vendor-run, not self-hosted:
+# `xtask/src/lint.rs` allows the one label `codspeed-macro`). The free Hobby plan has $50 a month of
+# credits (~780 runner minutes); when they are spent CodSpeed pauses usage and does not bill. The
+# simulation job (codspeed.yml) keeps measuring instruction counts on GitHub runners; this one adds
+# the wall time of the few benchmarks where a cache or memory effect decides.
+#
+# Budget guard, fail closed: the job is advisory (`continue-on-error`, never a required check), it
+# runs only for perf PRs and main, one benchmark set (~15 min), `CODSPEED_WALLTIME_PAUSED=true` (a
+# repository variable) skips it at once, and every run writes its minutes to the job summary so the
+# month's spend can be added up from the runs.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
+    paths:
+      - "crates/krishiv-exec/**"
+      - "crates/krishiv-kernels/**"
+      - "crates/krishiv-io/**"
+      - "crates/krishiv-memory/**"
+      - ".github/workflows/codspeed-walltime.yml"
+  push:
+    branches: [main]
+    paths:
+      - "crates/krishiv-exec/**"
+      - "crates/krishiv-kernels/**"
+      - "crates/krishiv-io/**"
+      - "crates/krishiv-memory/**"
+  workflow_dispatch:
+
+concurrency:
+  group: codspeed-walltime-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  walltime:
+    name: Wall-time benchmarks
+    # A draft, a PR without the `perf` label (or a `p3/perf`, `fix/perf` branch) and a paused budget
+    # skip. Fork PRs cannot get the OIDC token and skip too.
+    if: ${{ vars.CODSPEED_WALLTIME_PAUSED != 'true' && (github.event_name != 'pull_request' || (github.event.pull_request.draft != true && github.event.pull_request.head.repo.full_name == github.repository && (contains(github.event.pull_request.labels.*.name, 'perf') || startsWith(github.event.pull_request.head.ref, 'p3/perf') || startsWith(github.event.pull_request.head.ref, 'fix/perf')))) }}
+    runs-on: codspeed-macro
+    continue-on-error: true
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Record the start
+        run: echo "STARTED_AT=$(date +%s)" >> "$GITHUB_ENV"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: $/.github/actions/setup-rust
+        with:
+          toolchain: 1.99.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: codspeed-walltime
+          cache-on-failure: true
+      - uses: $/.github/actions/install-tool
+        with:
+          tool: cargo-codspeed
+      # Join probe, hash aggregation, sort/spill, and the two scan paths (exec operator, Parquet decode).
+      - name: Build benchmarks
+        run: >-
+          cargo codspeed build -m walltime -p krishiv-exec -p krishiv-io
+          --bench hash_join --bench aggregate --bench sort --bench scan --bench io
+      - name: Run benchmarks
+        uses: CodSpeedHQ/action@821a40cd6c80e3cfe387caf55668287addd808da # v5.5.0
+        with:
+          mode: walltime
+          run: cargo codspeed run -m walltime -p krishiv-exec -p krishiv-io
+      - name: Minutes used
+        if: ${{ always() }}
+        run: |
+          mins=$(( ( $(date +%s) - STARTED_AT + 59 ) / 60 ))
+          echo "CodSpeed Macro Runner minutes this run: ${mins} (plan: about 780 a month)" | tee -a "$GITHUB_STEP_SUMMARY"

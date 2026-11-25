@@ -17,11 +17,17 @@ fn code_lines(text: &str) -> impl Iterator<Item = &str> {
 /// events an outsider controls, so a workflow must never use them here.
 const BANNED_TRIGGERS: &[&str] = &["pull_request_target", "workflow_run", "issue_comment"];
 
-/// Whether `label` names a GitHub-hosted runner image.
+/// Vendor-run runner labels allowed besides GitHub's images: CodSpeed's Macro Runners (bare-metal
+/// machines CodSpeed operates for the wall-time benchmark job, billed against its free-plan credits;
+/// owner 2026-11-24). Not self-hosted: no machine of ours runs the job. Exact labels only.
+const VENDOR_RUNNERS: &[&str] = &["codspeed-macro"];
+
+/// Whether `label` names a GitHub-hosted runner image or an allowed vendor-run runner.
 fn is_github_hosted(label: &str) -> bool {
-    ["ubuntu-", "macos-", "windows-"]
-        .iter()
-        .any(|p| label.starts_with(p))
+    VENDOR_RUNNERS.contains(&label)
+        || ["ubuntu-", "macos-", "windows-"]
+            .iter()
+            .any(|p| label.starts_with(p))
 }
 
 /// Whether `rest` (what follows `uses:`) is pinned: a local action (`./` or `$/`), a Docker

@@ -80,6 +80,19 @@ fn only_github_hosted_runner_labels_pass() {
 }
 
 #[test]
+fn only_the_codspeed_macro_vendor_runner_is_allowed_besides_github_images() {
+    let wf = |l: &str| format!("on:\n  push:\njobs:\n  a:\n    runs-on: {l}\n");
+    assert!(workflow_violations("ok.yml", &wf("codspeed-macro")).is_empty());
+    for bad in [
+        "codspeed-macro-2",
+        "[self-hosted, codspeed-macro]",
+        "codspeed",
+    ] {
+        assert_eq!(workflow_violations("bad.yml", &wf(bad)).len(), 1, "{bad}");
+    }
+}
+
+#[test]
 fn actions_must_be_pinned_to_a_commit_sha() {
     let job = |uses: &str| {
         format!(
