@@ -679,3 +679,110 @@ fn embedded_locations_take_plain_absolute_file_paths_only() {
         Err(LocationRule::SchemeNotAllowed)
     );
 }
+
+/// A read option that would choose another snapshot of a declared Iceberg table (Spark's
+/// `versionAsOf` / `timestampAsOf`, Iceberg's `snapshot-id`, `branch`, ...) is refused, in any
+/// case, rather than ignored: the current snapshot is all a declared table reads yet, and
+/// reading it instead returns the wrong rows (snapshot 1 holds 2 rows, the current one 3).
+#[test]
+fn snapshot_choosing_read_options_are_refused_not_ignored() {
+    let dir = tempfile::tempdir().unwrap();
+    let table = write_table(dir.path()).unwrap();
+    let server = catalog(body(&table, "{}", ""));
+    let s = session(&server, None);
+    let first = table.snapshots[0];
+    let travel = |opt: &str, value: &str| {
+        let q = format!("SELECT id, name FROM lake.db.t WITH ('{opt}' = '{value}')");
+        let e = run(&s, &q).unwrap_err();
+        assert_eq!(
+            e.error_class(),
+            ErrorClass::UnsupportedFeatureTimeTravel,
+            "{q}: {e}"
+        );
+        assert!(e.to_string().contains("`lake`.`db`.`t`"), "{q}: {e}");
+    };
+    travel("versionAsOf", &first.to_string());
+    travel("VERSIONASOF", &first.to_string());
+    travel("timestampAsOf", "1970-01-02 00:00:00");
+    for opt in [
+        "snapshot-id",
+        "Snapshot-Id",
+        "as-of-timestamp",
+        "branch",
+        "tag",
+        "start-snapshot-id",
+        "end-snapshot-id",
+        "start-timestamp",
+        "end-timestamp",
+        "scan-task-set-id",
+    ] {
+        let q = format!("SELECT id, name FROM lake.db.t WITH ('{opt}' = '{first}')");
+        let e = run(&s, &q).unwrap_err();
+        assert_eq!(
+            e.error_class(),
+            ErrorClass::KrishivUnsupportedFeature,
+            "{q}: {e}"
+        );
+        assert!(e.to_string().contains(opt), "{q}: {e}");
+    }
+    // Other options still read the current snapshot.
+    assert_eq!(
+        rows(
+            &s,
+            "SELECT id, name FROM lake.db.t WITH ('split-size' = '1048576')"
+        ),
+        pairs(&[(1, "a"), (2, "b"), (3, "c")])
+    );
+}
+
+/// The SQL clause on a declared table is refused naming the table as written, not as a
+/// `spark_catalog` table.
+#[test]
+fn the_time_travel_clause_names_the_declared_table() {
+    let dir = tempfile::tempdir().unwrap();
+    let table = write_table(dir.path()).unwrap();
+    let server = catalog(body(&table, "{}", ""));
+    let s = session(&server, None);
+    let first = table.snapshots[0];
+    for q in [
+        format!("SELECT id, name FROM lake.db.t VERSION AS OF {first}"),
+        "SELECT id, name FROM lake.db.t TIMESTAMP AS OF '1970-01-02 00:00:00'".to_owned(),
+    ] {
+        let e = run(&s, &q).unwrap_err();
+        assert_eq!(
+            e.error_class(),
+            ErrorClass::UnsupportedFeatureTimeTravel,
+            "{q}: {e}"
+        );
+        assert!(e.to_string().contains("`lake`.`db`.`t`"), "{q}: {e}");
+    }
+}
+
+/// The options are refused by an analysis-only call (`schema`, as Connect's `AnalyzePlan` on a
+/// `NamedTable` with options), not only by an action, and one side of a self-join carrying the
+/// option is enough.
+#[test]
+fn schema_calls_and_one_sided_self_joins_are_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let table = write_table(dir.path()).unwrap();
+    let server = catalog(body(&table, "{}", ""));
+    let s = session(&server, None);
+    let first = table.snapshots[0];
+    for (opt, class) in [
+        ("versionAsOf", ErrorClass::UnsupportedFeatureTimeTravel),
+        ("snapshot-id", ErrorClass::KrishivUnsupportedFeature),
+    ] {
+        let q = format!("SELECT id, name FROM lake.db.t WITH ('{opt}' = '{first}')");
+        let e = block_on(async { s.sql(&q).await?.schema().await }).unwrap_err();
+        assert_eq!(e.error_class(), class, "{opt} schema: {e}");
+    }
+    let q = format!(
+        "SELECT a.id FROM lake.db.t a JOIN lake.db.t WITH ('snapshot-id' = '{first}') b ON a.id = b.id"
+    );
+    let e = run(&s, &q).unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::KrishivUnsupportedFeature,
+        "{e}"
+    );
+}

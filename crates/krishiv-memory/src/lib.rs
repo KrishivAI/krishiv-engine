@@ -91,7 +91,9 @@ pub use clock::{Clock, SystemClock};
 pub use cohort::{Cohort, Seat, SeatState};
 pub use consumer::{ConsumerHandle, GrantCredit, SpillStats, SpillWriting};
 pub use error::MemoryError;
-pub use limit::{DEFAULT_LIMIT_PERCENT, FALLBACK_LIMIT, default_limit, effective_memory_limit};
+pub use limit::{
+    DEFAULT_LIMIT_PERCENT, FALLBACK_LIMIT, default_limit, effective_memory_limit, explicit_limit,
+};
 pub use pool::{
     ArbitrationStats, DEFAULT_PRIORITY, DEFAULT_SPILL_SCRATCH_RESERVE, MAX_PRIORITY, MemoryConfig,
     PoolEntry, PoolSnapshot, TreePool,
