@@ -63,3 +63,14 @@ def test_null_and_nan_float_sums_compare_as_equal_to_themselves_only():
     nan = table(k=[1], m=[float("nan")])
     assert same(checksum(nan), checksum(table(k=[1], m=[float("nan")])))
     assert not same(checksum(nan), checksum(table(k=[1], m=[1.0])))
+
+
+def test_a_decimal_checksum_does_not_depend_on_its_precision():
+    from decimal import Decimal
+
+    vals = [Decimal("1.25"), Decimal("-3.50"), None]
+    narrow = pa.table({"d": pa.array(vals, pa.decimal128(17, 2)), "s": ["a", "b", "c"]})
+    wide = pa.table({"d": pa.array(vals, pa.decimal128(27, 2)), "s": ["a", "b", "c"]})
+    assert checksum(narrow) == checksum(wide)
+    other_scale = pa.table({"d": pa.array(vals, pa.decimal128(17, 3)), "s": ["a", "b", "c"]})
+    assert checksum(other_scale) != checksum(narrow)  # the scale still counts

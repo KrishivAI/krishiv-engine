@@ -2853,6 +2853,7 @@ pub struct ScopedStores {
 
 ###### Trait Implementations
 
+- **Allocation**
 - **Any**
   - ```rust
     fn type_id(self: &Self) -> TypeId { /* ... */ }
@@ -3502,6 +3503,20 @@ pub trait CallerCatalog: fmt::Debug + Send + Sync {
   only: a scan of the table is refused.
 
 - ```rust
+  fn load_procedure<'a>(self: &'a Self, caller: &'a CatalogCaller, inputs: ScanInputs, name: &'a str) -> BoxFuture<'a, Result<Option<Arc<dyn krishiv_plan::procedure::Procedure>>, KrishivError>> { /* ... */ }
+  ```
+  The procedure `name` (lower-case) of the catalog's `system` namespace for `caller`
+  (`CALL cat.system.name(..)`); `None` when there is none. The
+  default is a catalog without procedures: `MISSING_CATALOG_ABILITY.PROCEDURES`.
+
+- ```rust
+  fn invalidate(self: &Self, _caller: &CatalogCaller, _id: &TableIdent) { /* ... */ }
+  ```
+  The cache half of [`Self::refresh`]: drops what the catalog keeps of `id` and moves
+  [`Self::epoch`], with no load (after a `CALL` that changed the table, so a failed load
+  never fails a procedure that is done). The default keeps nothing, so drops nothing.
+
+- ```rust
   fn refresh<'a>(self: &'a Self, caller: &'a CatalogCaller, id: &'a TableIdent) -> BoxFuture<'a, Result<bool, KrishivError>> { /* ... */ }
   ```
   `REFRESH TABLE` of `id` for `caller`: drops what the catalog keeps of the table (its
@@ -3760,6 +3775,10 @@ pub struct QueryRef {
     pub compute_id: String,
     pub trace_id: Option<String>,
     pub tags: Vec<(String, String)>,
+    pub stage_id: Option<u32>,
+    pub task_id: Option<u32>,
+    pub attempt: Option<u32>,
+    pub worker_id: Option<String>,
 }
 ```
 
@@ -3774,6 +3793,10 @@ pub struct QueryRef {
 | `compute_id` | `String` | `krishiv.compute.id`: what the usage is billed to. |
 | `trace_id` | `Option<String>` | The W3C trace id, if the request carried one. |
 | `tags` | `Vec<(String, String)>` | The session's tags and the request's. |
+| `stage_id` | `Option<u32>` | The stage the event is about; `None` for an event of the whole query (every event in-process). |
+| `task_id` | `Option<u32>` | The task (partition) of that stage; `None` as `stage_id`. |
+| `attempt` | `Option<u32>` | The task's attempt; `None` as `stage_id`. |
+| `worker_id` | `Option<String>` | The worker that emitted the event; `None` in-process. |
 
 ##### Implementations
 
@@ -4396,18 +4419,159 @@ The exact figures at the query's end.
 - **UnsafeUnpin**
 - **UnwindSafe**
 - **WithSubscriber**
+#### Struct `UsageRecordId`
+
+**Attributes:**
+
+- `NonExhaustive`
+
+The exactly-once key of a [`UsageRecord`].
+
+```rust
+pub struct UsageRecordId {
+    pub session_id: String,
+    pub query_id: String,
+    pub worker_id: Option<String>,
+    pub seq: u64,
+}
+```
+
+##### Fields
+
+| Name | Type | Documentation |
+|------|------|---------------|
+| `session_id` | `String` | The session (a caller's operation id is unique only per session). |
+| `query_id` | `String` | The query. |
+| `worker_id` | `Option<String>` | The worker whose usage the record counts; `None` in-process, where one record covers the query. |
+| `seq` | `u64` | The `seq` of the event that carries the record: the bus-wide counter of the runtime that emitted it (one per<br>worker once workers report), so `seq`s compare only within one `worker_id`; of the records of one<br>`(session_id, query_id, worker_id)`, the highest is the latest. |
+
+##### Implementations
+
+###### Methods
+
+- ```rust
+  pub fn new(session_id: String, query_id: String, seq: u64) -> Self { /* ... */ }
+  ```
+  A key; `worker_id` starts as `None` (in-process).
+
+- ```rust
+  pub fn with_worker(self: Self, worker_id: Option<String>) -> Self { /* ... */ }
+  ```
+  The key with `worker_id` set.
+
+###### Trait Implementations
+
+- **Allocation**
+- **Any**
+  - ```rust
+    fn type_id(self: &Self) -> TypeId { /* ... */ }
+    ```
+
+- **Borrow**
+  - ```rust
+    fn borrow(self: &Self) -> &T { /* ... */ }
+    ```
+
+- **BorrowMut**
+  - ```rust
+    fn borrow_mut(self: &mut Self) -> &mut T { /* ... */ }
+    ```
+
+- **CastableFrom**
+- **Clone**
+  - ```rust
+    fn clone(self: &Self) -> UsageRecordId { /* ... */ }
+    ```
+
+- **CloneToUninit**
+  - ```rust
+    unsafe fn clone_to_uninit(self: &Self, dest: *mut u8) { /* ... */ }
+    ```
+
+- **Debug**
+  - ```rust
+    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<'_>) -> $crate::fmt::Result { /* ... */ }
+    ```
+
+- **Eq**
+- **Equivalent**
+  - ```rust
+    fn equivalent(self: &Self, key: &K) -> bool { /* ... */ }
+    ```
+
+- **ErasedDestructor**
+- **Freeze**
+- **From**
+  - ```rust
+    fn from(t: T) -> T { /* ... */ }
+    ```
+    Returns the argument unchanged.
+
+- **Hash**
+  - ```rust
+    fn hash<__H: $crate::hash::Hasher>(self: &Self, state: &mut __H) { /* ... */ }
+    ```
+
+- **Instrument**
+- **Into**
+  - ```rust
+    fn into(self: Self) -> U { /* ... */ }
+    ```
+    Calls `U::from(self)`.
+
+- **PartialEq**
+  - ```rust
+    fn eq(self: &Self, other: &UsageRecordId) -> bool { /* ... */ }
+    ```
+
+- **Read**
+- **RefUnwindSafe**
+- **Same**
+- **Send**
+- **StructuralPartialEq**
+- **Sync**
+- **ToOwned**
+  - ```rust
+    fn to_owned(self: &Self) -> T { /* ... */ }
+    ```
+
+  - ```rust
+    fn clone_into(self: &Self, target: &mut T) { /* ... */ }
+    ```
+
+- **TryFrom**
+  - ```rust
+    fn try_from(value: U) -> Result<T, <T as TryFrom<U>>::Error> { /* ... */ }
+    ```
+
+- **TryInto**
+  - ```rust
+    fn try_into(self: Self) -> Result<U, <U as TryFrom<T>>::Error> { /* ... */ }
+    ```
+
+- **Unpin**
+- **UnsafeUnpin**
+- **UnwindSafe**
+- **WithSubscriber**
 #### Struct `UsageRecord`
 
 **Attributes:**
 
 - `NonExhaustive`
 
-What a query used, cumulative since it started (E7): a consumer keeps the record with the highest `seq`
-of its `record_id`, so a lost sample loses nothing.
+What a query used, cumulative since it started (E7). Fold rule: per `(session_id, query_id, worker_id)` of
+its `record_id`, keep the record with the highest `seq`, so a lost sample loses nothing. A query's usage then
+combines those records (one, with `worker_id` `None`, in-process) member by member: the counters `cpu_ns`,
+`bytes_scanned`, `rows_read`, `files_read`, `bytes_written`, `rows_written`, `files_written`, `spill_bytes`
+and `spill_files` are summed; `peak_memory_bytes`, `wall_ns` and `queued_ns` take the maximum (a peak and
+two times of the whole query, which workers' records overlap); `window_start_ms` takes the minimum and
+`window_end_ms` the maximum; `record_id` is per record (the query's key is `(session_id, query_id)`), and
+every other member is the same in all of a query's records. A null member counts as absent. The end
+figures are the usage of a `Finished` event or of a `Cancelled` one, whichever ended the query.
 
 ```rust
 pub struct UsageRecord {
-    pub record_id: (String, String, u64),
+    pub record_id: UsageRecordId,
     pub kind: UsageKind,
     pub principal: String,
     pub delegated_by: Option<String>,
@@ -4438,7 +4602,7 @@ pub struct UsageRecord {
 
 | Name | Type | Documentation |
 |------|------|---------------|
-| `record_id` | `(String, String, u64)` | `(session_id, query_id, seq)`: the exactly-once key (a caller's operation id is unique only per session). |
+| `record_id` | `UsageRecordId` | The exactly-once key. |
 | `kind` | `UsageKind` | Sample or final. |
 | `principal` | `String` | The principal charged. |
 | `delegated_by` | `Option<String>` | The service acting for it. |
@@ -5994,12 +6158,13 @@ pub struct GrantsPolicy {
 
 - `NonExhaustive`
 
-The access provider a server configures (`krishiv.access.provider`).
+An access provider a server configures (`krishiv.access.provider`).
 
 ```rust
 pub enum AccessProvider {
     Roles,
     Grants,
+    External,
 }
 ```
 
@@ -6013,7 +6178,18 @@ No provider beyond the role matrix (or `AllowAll` without authentication).
 
 The `grants` provider.
 
+###### `External`
+
+The `external` provider: a `krishiv.access.v1` policy service.
+
 ##### Implementations
+
+###### Methods
+
+- ```rust
+  pub const fn as_str(self: Self) -> &'static str { /* ... */ }
+  ```
+  The name in `krishiv.access.provider`.
 
 ###### Trait Implementations
 
@@ -6109,15 +6285,28 @@ The `grants` provider.
 
 #### Function `access_provider`
 
-The provider `config` selects. Unset, it is `grants` when the server authenticates and the
-role matrix alone otherwise (owner answer Q1: kept here, in one place). `catalog`, `external`
-and lists (`grants+catalog`) are refused until their units land (G5, G6).
+The single provider `config` selects: [`access_providers`] when it names exactly one.
+
+# Errors
+As [`access_providers`], and `KRISHIV_INVALID_CONFIG_VALUE` for a list.
+
+```rust
+pub fn access_provider(config: &krishiv_common::config::Config, authenticated: bool) -> Result<AccessProvider, krishiv_common::error::KrishivError> { /* ... */ }
+```
+
+#### Function `access_providers`
+
+The providers `config` lists, in order: one name or a `+`-separated list of
+`roles`, `grants`, `external`, each at most once, combined as an intersection
+([`crate::IntersectionPolicy`]). Unset, `grants` when the server authenticates and the role
+matrix alone otherwise (owner answer Q1: kept here, in one place). `catalog` is refused until
+its unit lands.
 
 # Errors
 `KRISHIV_INVALID_CONFIG_VALUE` naming the key for any other value.
 
 ```rust
-pub fn access_provider(config: &krishiv_common::config::Config, authenticated: bool) -> Result<AccessProvider, krishiv_common::error::KrishivError> { /* ... */ }
+pub fn access_providers(config: &krishiv_common::config::Config, authenticated: bool) -> Result<Vec<AccessProvider>, krishiv_common::error::KrishivError> { /* ... */ }
 ```
 
 ### Re-exports
@@ -8050,6 +8239,12 @@ pub use profile_history::StoredProfile;
 pub use profile_history::read_history as read_profile_history;
 ```
 
+### Re-export `IntersectionPolicy`
+
+```rust
+pub use access::IntersectionPolicy;
+```
+
 ### Re-export `PathPrefixPolicy`
 
 ```rust
@@ -8072,6 +8267,12 @@ pub use access::ReadOnlyPolicy;
 
 ```rust
 pub use access::StatementInfo;
+```
+
+### Re-export `SystemOnlyPolicy`
+
+```rust
+pub use access::SystemOnlyPolicy;
 ```
 
 ### Re-export `ResourceGroupDocument`
@@ -8512,6 +8713,18 @@ pub use krishiv_udf_sdk::UdfProperties;
 pub use memory_table::BatchSource;
 ```
 
+### Re-export `PlannedRead`
+
+```rust
+pub use memory_table::PlannedRead;
+```
+
+### Re-export `SourcePlanner`
+
+```rust
+pub use memory_table::SourcePlanner;
+```
+
 ### Re-export `Observation`
 
 ```rust
@@ -8576,6 +8789,24 @@ pub use python_udfs::PythonUdtfDef;
 
 ```rust
 pub use python_udfs::PythonUdtfEntry;
+```
+
+### Re-export `MAX_PYTHON_SOURCE_CALLS`
+
+```rust
+pub use python_udfs::MAX_PYTHON_SOURCE_CALLS;
+```
+
+### Re-export `python_source_call`
+
+```rust
+pub use python_udfs::python_source_call;
+```
+
+### Re-export `run_python_source_call`
+
+```rust
+pub use python_udfs::run_python_source_call;
 ```
 
 ### Re-export `EngineRuntime`

@@ -22,7 +22,8 @@ def test_command_binds_free_ports_and_passes_conf():
     e = KrishivConnectEngine(binary="/x/krishiv", conf=[("krishiv.a", "1"), ("b", "2")])
     assert e.command() == [
         "/x/krishiv", "server", "--port", "0", "--connect-port", "0", "--conf", "krishiv.a=1", "--conf", "b=2",
-    ]  # fmt: skip
+        "--conf", "krishiv.memory.limit=12g", "--conf", "krishiv.sql.session.timeZone=UTC",
+    ]  # fmt: skip  # the runner's memory limit and time zone are the defaults (session_modes)
 
 
 def test_host_server_has_no_path_rewrite_and_no_container():
@@ -103,7 +104,7 @@ def test_version_and_config_name_the_binary():
     e = KrishivConnectEngine(binary="/x/krishiv", conf=[("a", "1")])
     assert "krishiv" in e.version()
     assert e.config()["binary"] == "/x/krishiv"
-    assert e.config()["conf"] == [("a", "1")]
+    assert e.config()["conf"] == [("a", "1"), ("krishiv.memory.limit", "12g"), ("krishiv.sql.session.timeZone", "UTC")]
 
 
 def test_setup_failure_stops_the_server(tmp_path, monkeypatch):

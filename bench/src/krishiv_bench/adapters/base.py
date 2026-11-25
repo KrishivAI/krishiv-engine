@@ -127,6 +127,16 @@ class Engine(ABC):
     def cancel(self) -> None:  # noqa: B027  # optional hook, default no-op
         """Best-effort abort of the in-flight query (called from another thread on timeout)."""
 
+    def release_result(self) -> None:
+        """Drops the result the last ``timed_run`` kept, so it is in no later measurement window."""
+        self._pending = None
+
+    def mark(self, label: str) -> None:  # noqa: B027  # optional hook, default no-op
+        """Runs an untimed marker statement naming the next run (session modes: pairs ``system.queries`` rows)."""
+
+    def flush_query_log(self) -> None:  # noqa: B027  # optional hook, default no-op
+        """Writes the engine's own statement timings gathered since the last flush (see ``query_log``)."""
+
     def begin_measure(self) -> None:  # noqa: B027  # optional hook, default no-op
         pass
 
