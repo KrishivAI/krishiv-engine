@@ -12,16 +12,10 @@ use krishiv_session::Session;
 use serde_json::Value;
 
 /// Cases whose Krishiv result differs from Spark's, with the reason; each must still differ.
-const KNOWN_GAPS: &[(&str, &str)] = &[
-    (
-        "IOD-05-orc",
-        "the engine writes no ORC (KRISHIV_UNSUPPORTED_FEATURE, as df.write.orc); queue-sonnet.md item IOD-05",
-    ),
-    (
-        "IOD-47-json-nested",
-        "the JSON writer does not write arrays yet (df.write.json too); queue-sonnet.md item IOD-47",
-    ),
-];
+const KNOWN_GAPS: &[(&str, &str)] = &[(
+    "IOD-05-orc",
+    "the engine writes no ORC (KRISHIV_UNSUPPORTED_FEATURE, as df.write.orc); queue-sonnet.md item IOD-05",
+)];
 
 /// Cases not replayed by the loop: they need a setup, a configuration, or touch the working
 /// directory or an unknown scheme (whose Spark error has no class).
@@ -256,7 +250,37 @@ fn run_case(case: &Value) -> Result<(), String> {
     if got_files != want_files {
         return Err(format!("files {got_files:?}, Spark: {want_files:?}"));
     }
-    if let Some(read) = expect.get("read_back") {
+    let raw = expect
+        .get("read_back")
+        .filter(|r| r.get("rows").is_none())
+        .and_then(|r| r.get("raw_lines"));
+    if let Some(raw) = raw {
+        // The text of the part files, line by line: what the writer put on disk.
+        let mut got = Vec::new();
+        for e in std::fs::read_dir(&target).map_err(|e| e.to_string())? {
+            let path = e.map_err(|e| e.to_string())?.path();
+            let name = path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned();
+            if name.starts_with("part-") {
+                let text = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+                got.extend(text.lines().map(str::to_owned));
+            }
+        }
+        got.sort();
+        let mut want: Vec<String> = raw
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|l| l.as_str().unwrap().to_owned())
+            .collect();
+        want.sort();
+        if got != want {
+            return Err(format!("lines {got:?}, Spark: {want:?}"));
+        }
+    } else if let Some(read) = expect.get("read_back") {
         let (got, names) = read_back(&s, target.to_str().unwrap(), read)?;
         let want = expected_rows(&read["rows"]);
         if got != want {

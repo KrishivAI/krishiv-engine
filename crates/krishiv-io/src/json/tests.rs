@@ -783,7 +783,6 @@ fn primitives_as_string_reads_scalars_as_text() {
 
 #[test]
 fn nested_values_in_scalar_columns_are_malformed() {
-    use ErrorClass::UnsupportedDataTypeForDatasource;
     let o = options(&serde_json::json!({}));
     // A nested value in a non-string column is a malformed record, not a failed scan:
     // PERMISSIVE keeps the good fields plus the raw record in the corrupt
@@ -857,7 +856,7 @@ fn nested_values_in_scalar_columns_are_malformed() {
     .expect("pruned");
     assert_eq!(rows_of(&got), [vec![Some("1".into())]]);
     // A nested requested schema reads (`golden_tests` holds the cases);
-    // the writer still refuses one at write planning.
+    // the writer writes one too.
     let nested = Arc::new(Schema::new(vec![Field::new(
         "n",
         DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
@@ -872,23 +871,12 @@ fn nested_values_in_scalar_columns_are_malformed() {
     let list = got[0].column(0).as_list::<i32>();
     assert_eq!(list.value(0).len(), 2);
     assert!(list.is_null(1));
+    // The writer takes a nested column too (`nested_values_write_as_jackson_does`).
     let batch = RecordBatch::new_empty(nested);
-    let e = encode(&batch, &o).expect_err("nested write");
-    assert_eq!(e.error_class(), UnsupportedDataTypeForDatasource);
-    let e = JsonFormat
+    assert!(encode(&batch, &o).expect("nested write").is_empty());
+    JsonFormat
         .check_write(&batch.schema(), &o)
-        .expect_err("nested check");
-    assert_eq!(
-        e,
-        crate::error::FormatError::Other(
-            krishiv_common::error::UnsupportedDataTypeForDatasource {
-                format: "JSON".to_owned(),
-                column_name: "`n`".to_owned(),
-                column_type: "\"ARRAY<INT>\"".to_owned(),
-            }
-            .into()
-        )
-    );
+        .expect("nested check");
 }
 
 #[test]
@@ -1918,5 +1906,56 @@ fn failfast_raises_the_json_value_and_record_type_classes() {
         classes_of(&e).contains(&ErrorClass::InvalidJsonRecordType),
         "INVALID_JSON_RECORD_TYPE: {:?}",
         classes_of(&e)
+    );
+}
+
+/// IOD-47: arrays, structs and maps write as Spark's `JacksonGenerator` does. Array elements and
+/// map values that are NULL write `null`; a NULL struct field is left out (written `null` under
+/// `ignoreNullFields=false`); a NULL column value is left out.
+#[test]
+fn nested_values_write_as_jackson_does() {
+    use arrow_array::builder::{Int32Builder, ListBuilder, MapBuilder, StringBuilder};
+    let mut list = ListBuilder::new(Int32Builder::new());
+    list.values().append_value(1);
+    list.values().append_null();
+    list.append(true);
+    list.append(false);
+    let mut map = MapBuilder::new(None, StringBuilder::new(), Int32Builder::new());
+    map.keys().append_value("k");
+    map.values().append_null();
+    map.append(true).unwrap();
+    map.append(false).unwrap();
+    let st = arrow_array::StructArray::from(vec![
+        (
+            Arc::new(Field::new("x", DataType::Int32, true)),
+            Arc::new(arrow_array::Int32Array::from(vec![Some(1), None])) as arrow_array::ArrayRef,
+        ),
+        (
+            Arc::new(Field::new("y", DataType::Utf8, true)),
+            Arc::new(arrow_array::StringArray::from(vec![Some("a"), None])),
+        ),
+    ]);
+    let list = list.finish();
+    let map = map.finish();
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("l", list.data_type().clone(), true),
+        Field::new("m", map.data_type().clone(), true),
+        Field::new("s", st.data_type().clone(), true),
+    ]));
+    let batch =
+        RecordBatch::try_new(schema, vec![Arc::new(list), Arc::new(map), Arc::new(st)]).unwrap();
+    let out = encode(&batch, &options(&serde_json::json!({}))).unwrap();
+    assert_eq!(
+        String::from_utf8(out).unwrap(),
+        "{\"l\":[1,null],\"m\":{\"k\":null},\"s\":{\"x\":1,\"y\":\"a\"}}\n{\"s\":{}}\n"
+    );
+    let out = encode(
+        &batch,
+        &options(&serde_json::json!({"ignoreNullFields": "false"})),
+    )
+    .unwrap();
+    assert_eq!(
+        String::from_utf8(out).unwrap(),
+        "{\"l\":[1,null],\"m\":{\"k\":null},\"s\":{\"x\":1,\"y\":\"a\"}}\n{\"l\":null,\"m\":null,\"s\":{\"x\":null,\"y\":null}}\n"
     );
 }

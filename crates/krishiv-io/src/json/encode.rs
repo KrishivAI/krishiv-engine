@@ -9,7 +9,8 @@ use arrow_array::types::{
     TimestampMicrosecondType,
 };
 use arrow_array::{Array, RecordBatch};
-use arrow_schema::{DataType, Schema};
+use arrow_buffer::ArrowNativeType;
+use arrow_schema::{DataType, Field, Schema};
 use bytes::Bytes;
 use krishiv_kernels::datetime_pattern::Purpose;
 use krishiv_kernels::text::{java_decimal_string, java_double_string, java_float_string32};
@@ -31,7 +32,9 @@ pub(crate) struct JsonEncoder {
     /// Bytes taken.
     taken: u64,
     names: Vec<String>,
-    kinds: Vec<Kind>,
+    /// The leaf kind of each column; `None` for a nested column (array, struct, map).
+    kinds: Vec<Option<Kind>>,
+    fields: Vec<Field>,
     line: Vec<u8>,
     text: String,
 }
@@ -57,6 +60,14 @@ fn push_quoted(out: &mut String, s: &str) {
     out.push('"');
 }
 
+/// Whether `dt` is an array, struct or map.
+fn is_nested(dt: &DataType) -> bool {
+    matches!(
+        dt,
+        DataType::List(_) | DataType::LargeList(_) | DataType::Struct(_) | DataType::Map(..)
+    )
+}
+
 impl JsonEncoder {
     pub(crate) fn new(schema: &Schema, o: &FormatOptions) -> FormatResult<Self> {
         let opts = JsonOptions::new(o, true)?;
@@ -64,7 +75,14 @@ impl JsonEncoder {
         let kinds = schema
             .fields()
             .iter()
-            .map(|f| kind_of(f).map_err(|_| crate::error::unsupported_column("JSON", f)))
+            .map(|f| {
+                if is_nested(f.data_type()) {
+                    return Ok(None);
+                }
+                kind_of(f)
+                    .map(Some)
+                    .map_err(|_| crate::error::unsupported_column("JSON", f))
+            })
             .collect::<FormatResult<Vec<_>>>()?;
         Ok(Self {
             o: opts,
@@ -73,6 +91,7 @@ impl JsonEncoder {
             taken: 0,
             names: schema.fields().iter().map(|f| f.name().clone()).collect(),
             kinds,
+            fields: schema.fields().iter().map(|f| f.as_ref().clone()).collect(),
             line: Vec::new(),
             text: String::new(),
         })
@@ -183,19 +202,138 @@ impl JsonEncoder {
         Ok(Some(()))
     }
 
+    /// One value of any type, nested or not, as JSON in `buf`; `None` for NULL. Spark's
+    /// `JacksonGenerator`: an array writes its NULL elements as `null`, a struct leaves out
+    /// its NULL fields under `ignoreNullFields`, a map writes the text of its key as the
+    /// field name and a NULL value as `null`.
+    fn push_nested(
+        dt: &Datetimes,
+        ignore_null: bool,
+        buf: &mut String,
+        a: &dyn Array,
+        field: &Field,
+        i: usize,
+    ) -> FormatResult<Option<()>> {
+        if a.is_null(i) {
+            return Ok(None);
+        }
+        let item = |buf: &mut String, child: &dyn Array, f: &Field, j: usize| {
+            if is_nested(f.data_type()) {
+                Self::push_nested(dt, ignore_null, buf, child, f, j)
+            } else {
+                let kind = kind_of(f).map_err(|_| crate::error::unsupported_column("JSON", f))?;
+                Self::push_value(dt, buf, child, &kind, j)
+            }
+        };
+        let list =
+            |buf: &mut String, f: &Field, values: &dyn Array, range: std::ops::Range<usize>| {
+                buf.push('[');
+                for (n, j) in range.enumerate() {
+                    if n > 0 {
+                        buf.push(',');
+                    }
+                    if item(buf, values, f, j)?.is_none() {
+                        buf.push_str("null");
+                    }
+                }
+                buf.push(']');
+                Ok::<(), FormatError>(())
+            };
+        match a.data_type() {
+            DataType::List(f) => {
+                let l = a.as_list::<i32>();
+                let o = l.value_offsets();
+                list(
+                    buf,
+                    f,
+                    l.values().as_ref(),
+                    o[i].as_usize()..o[i + 1].as_usize(),
+                )?;
+            }
+            DataType::LargeList(f) => {
+                let l = a.as_list::<i64>();
+                let o = l.value_offsets();
+                list(
+                    buf,
+                    f,
+                    l.values().as_ref(),
+                    o[i].as_usize()..o[i + 1].as_usize(),
+                )?;
+            }
+            DataType::Struct(fields) => {
+                let st = a.as_struct();
+                buf.push('{');
+                let mut first = true;
+                for (f, c) in fields.iter().zip(st.columns()) {
+                    let mut frag = String::new();
+                    let kept = item(&mut frag, c.as_ref(), f, i)?;
+                    if kept.is_none() && ignore_null {
+                        continue;
+                    }
+                    if !first {
+                        buf.push(',');
+                    }
+                    first = false;
+                    push_quoted(buf, f.name());
+                    buf.push(':');
+                    buf.push_str(if kept.is_some() { &frag } else { "null" });
+                }
+                buf.push('}');
+            }
+            DataType::Map(entry, _) => {
+                let m = a.as_map();
+                let o = m.value_offsets();
+                let DataType::Struct(kv) = entry.data_type() else {
+                    return Err(crate::error::unsupported_column("JSON", field));
+                };
+                buf.push('{');
+                for (n, j) in (o[i].as_usize()..o[i + 1].as_usize()).enumerate() {
+                    if n > 0 {
+                        buf.push(',');
+                    }
+                    let mut key = String::new();
+                    item(&mut key, m.keys().as_ref(), &kv[0], j)?;
+                    if key.starts_with('"') {
+                        buf.push_str(&key);
+                    } else {
+                        push_quoted(buf, &key);
+                    }
+                    buf.push(':');
+                    if item(buf, m.values().as_ref(), &kv[1], j)?.is_none() {
+                        buf.push_str("null");
+                    }
+                }
+                buf.push('}');
+            }
+            _ => return Err(crate::error::unsupported_column("JSON", field)),
+        }
+        Ok(Some(()))
+    }
+
     /// One row as a JSON object line.
     fn row(&mut self, batch: &RecordBatch, i: usize) -> FormatResult<()> {
         self.text.clear();
         self.text.push('{');
         let mut first = true;
-        for ((name, kind), a) in self
+        for (((name, kind), field), a) in self
             .names
             .iter()
             .zip(&self.kinds)
+            .zip(&self.fields)
             .zip(batch.columns().iter())
         {
             let mut frag = String::new();
-            let kept = Self::push_value(&self.dt, &mut frag, a.as_ref(), kind, i)?;
+            let kept = match kind {
+                Some(kind) => Self::push_value(&self.dt, &mut frag, a.as_ref(), kind, i)?,
+                None => Self::push_nested(
+                    &self.dt,
+                    self.o.ignore_null_fields,
+                    &mut frag,
+                    a.as_ref(),
+                    field,
+                    i,
+                )?,
+            };
             if kept.is_none() && self.o.ignore_null_fields {
                 continue;
             }
