@@ -64,15 +64,15 @@ use krishiv_common::error::{
     InvalidInlineTableNumColumnsMismatch, InvalidParameterValueDatetimeUnit, InvalidSetSyntax,
     InvalidSqlSyntaxCreateFuncWithColumnConstraints,
     InvalidSqlSyntaxCreateFuncWithGeneratedColumnsAsParameters, InvalidSqlSyntaxEmptyInPredicate,
-    InvalidSqlSyntaxEmptyPartitionValue, InvalidSqlSyntaxInvalidWindowReference,
-    InvalidSqlSyntaxRepetitiveWindowDefinition, InvalidSqlSyntaxShowFunctionsInvalidPattern,
-    InvalidSqlSyntaxUnresolvedWindowReference, InvalidSqlSyntaxVariableTypeOrDefaultRequired,
-    InvalidStatementOrClause, KrishivError, LegacyErrorTemp0035, LegacyErrorTemp0051,
-    LegacyErrorTemp0064, LegacyErrorTemp1292, UnsupportedFeatureContinueExceptionHandler,
-    UnsupportedFeatureDescTableColumnJson, UnsupportedFeatureDescTableColumnPartition,
-    UnsupportedFeatureLateralJoinUsing, UnsupportedFeatureSchemaLevelCollations,
-    UnsupportedFeatureSetPropertiesAndDbproperties, UnsupportedFeatureSqlCursor,
-    UnsupportedFeatureTemporaryViewWithSchemaBindingMode,
+    InvalidSqlSyntaxEmptyPartitionValue, InvalidSqlSyntaxEmptyQuantifiedPattern,
+    InvalidSqlSyntaxInvalidWindowReference, InvalidSqlSyntaxRepetitiveWindowDefinition,
+    InvalidSqlSyntaxShowFunctionsInvalidPattern, InvalidSqlSyntaxUnresolvedWindowReference,
+    InvalidSqlSyntaxVariableTypeOrDefaultRequired, InvalidStatementOrClause, KrishivError,
+    LegacyErrorTemp0035, LegacyErrorTemp0051, LegacyErrorTemp0064, LegacyErrorTemp1292,
+    UnsupportedFeatureContinueExceptionHandler, UnsupportedFeatureDescTableColumnJson,
+    UnsupportedFeatureDescTableColumnPartition, UnsupportedFeatureLateralJoinUsing,
+    UnsupportedFeatureSchemaLevelCollations, UnsupportedFeatureSetPropertiesAndDbproperties,
+    UnsupportedFeatureSqlCursor, UnsupportedFeatureTemporaryViewWithSchemaBindingMode,
 };
 
 pub(crate) use self::types::data_type;
@@ -1787,12 +1787,14 @@ impl Checker<'_> {
                 self.expr(expr)?;
                 if patterns.is_empty() {
                     let start = self.token_after(expr.span.end);
-                    return Err(at(
-                        LegacyErrorTemp0064 {
-                            msg: "Expected something between '(' and ')'.".to_owned(),
-                        },
-                        Span::new(start, e.span.end),
-                    ));
+                    let span = Span::new(start, e.span.end);
+                    // Spark 4.3 gave the empty list its own class.
+                    return Err(if self.opts.spark_4_3 {
+                        at(InvalidSqlSyntaxEmptyQuantifiedPattern {}, span)
+                    } else {
+                        let msg = "Expected something between '(' and ')'.".to_owned();
+                        at(LegacyErrorTemp0064 { msg }, span)
+                    });
                 }
                 patterns.iter().try_for_each(|p| self.expr(p))
             }
