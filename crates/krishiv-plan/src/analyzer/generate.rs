@@ -34,6 +34,32 @@ use crate::{
 /// The most rows `stack` generates: its rows become expressions.
 const STACK_MAX_ROWS: usize = 4096;
 
+/// The error of a generator argument of a type the generator does not take.
+fn generator_input_error(
+    kind: GeneratorKind,
+    outer: bool,
+    shown: &str,
+    ty: Option<&DataType>,
+    origin: Origin,
+) -> AnalysisError {
+    let function = format!("{}{}", kind.name(), if outer { "_outer" } else { "" });
+    let required = match kind {
+        GeneratorKind::Inline => "\"ARRAY<STRUCT>\"",
+        GeneratorKind::VariantExplode => "\"VARIANT\"",
+        _ => "(\"ARRAY\" or \"MAP\")",
+    };
+    AnalysisError::new(
+        DatatypeMismatchUnexpectedInputType {
+            sql_expr: format!("\"{function}({shown})\""),
+            param_index: "first".to_owned(),
+            required_type: required.to_owned(),
+            input_sql: format!("\"{shown}\""),
+            input_type: quoted_type(ty),
+        },
+        origin,
+    )
+}
+
 /// The generated columns' names and types for an argument of type `ty`, or
 /// `None` when the generator does not take the type.
 fn generated(kind: GeneratorKind, ty: &DataType) -> Option<Vec<(String, DataType, bool)>> {
@@ -175,6 +201,22 @@ impl Resolver<'_> {
                 })
                 .cloned()
                 .collect();
+        // `explode(collection => TABLE(v))`: a generator takes no table
+        // argument; Spark types it as the table's row and refuses that.
+        if let ExprNode::Subquery {
+            kind: crate::SubqueryKind::Table(spec),
+            plan,
+        } = &arg.node
+        {
+            let table = self.table_argument(plan, spec, env)?;
+            return Err(generator_input_error(
+                kind,
+                outer,
+                "functiontablesubqueryargumentexpression()",
+                Some(&super::python_udtf::row_type(&table.rel.out)),
+                origin,
+            ));
+        }
         let cx = Self::cx(&scope, &rels, env, "Generate");
         let arg = &self.stack_rows(arg, &cx)?;
         let arg = &self.unnest_rows(arg, &cx)?;
@@ -573,22 +615,12 @@ impl Resolver<'_> {
         b: &Bound,
         names: &[String],
     ) -> Result<Vec<BoundColumn>, AnalysisError> {
-        let function = format!("{}{}", kind.name(), if outer { "_outer" } else { "" });
         let Some(cols) = b.ty.data_type.as_ref().and_then(|ty| generated(kind, ty)) else {
-            let required = match kind {
-                GeneratorKind::Inline => "\"ARRAY<STRUCT>\"".to_owned(),
-                GeneratorKind::VariantExplode => "\"VARIANT\"".to_owned(),
-                _ => "(\"ARRAY\" or \"MAP\")".to_owned(),
-            };
-            let shown = pretty(&b.expr, None);
-            return Err(AnalysisError::new(
-                DatatypeMismatchUnexpectedInputType {
-                    sql_expr: format!("\"{function}({shown})\""),
-                    param_index: "first".to_owned(),
-                    required_type: required,
-                    input_sql: format!("\"{shown}\""),
-                    input_type: quoted_type(b.ty.data_type.as_ref()),
-                },
+            return Err(generator_input_error(
+                kind,
+                outer,
+                &pretty(&b.expr, None),
+                b.ty.data_type.as_ref(),
                 origin,
             ));
         };

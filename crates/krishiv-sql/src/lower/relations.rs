@@ -779,32 +779,17 @@ impl Lowerer {
                 // runs it as the select list `SELECT json_tuple(..)` over one
                 // row, and its alias-count error differs from a subquery's.
                 if let (Some(kind), 1) = (kind, name.parts.len()) {
-                    if let Some(a) = args
-                        .iter()
-                        .find(|a| matches!(a.expr.kind, crate::ast::ExprKind::TableArgument(_)))
-                    {
-                        return Err(unsupported("table-valued functions", a.span));
-                    }
-                    // A generator's one parameter has a name Spark accepts in a
-                    // named call: `collection` (`explode`, `posexplode`, and
-                    // their `_outer` forms), `input` (`inline`, `inline_outer`,
-                    // `variant_explode`). `stack` has none.
-                    let param = match kind {
-                        krishiv_plan::GeneratorKind::Explode
-                        | krishiv_plan::GeneratorKind::PosExplode => Some("collection"),
-                        krishiv_plan::GeneratorKind::Inline if lname != "stack" => Some("input"),
-                        krishiv_plan::GeneratorKind::VariantExplode => Some("input"),
-                        _ => None,
+                    // A `TABLE(...)` argument reaches the analyzer, which
+                    // types it and refuses it as Spark does.
+                    let arg = &match args.as_slice() {
+                        [a] => match &a.expr.kind {
+                            crate::ast::ExprKind::TableArgument(t) => {
+                                arc(self.table_argument(t, a.expr.span)?)
+                            }
+                            _ => self.generator_arg(&name.parts[0], args, tf.span)?,
+                        },
+                        _ => self.generator_arg(&name.parts[0], args, tf.span)?,
                     };
-                    let named = |a: &&crate::ast::FunctionArg| match (&a.name, param) {
-                        (Some(n), Some(p)) => args.len() != 1 || !n.value.eq_ignore_ascii_case(p),
-                        (Some(_), None) => true,
-                        (None, _) => false,
-                    };
-                    if let Some(a) = args.iter().find(named) {
-                        return Err(unsupported("table-valued functions", a.span));
-                    }
-                    let arg = &self.generator_arg(&name.parts[0], args, tf.span)?;
                     let one_row = self.node(PlanNode::OneRowRelation, tf.span);
                     self.node(
                         PlanNode::Generate {

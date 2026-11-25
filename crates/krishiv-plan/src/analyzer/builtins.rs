@@ -188,7 +188,18 @@ pub(super) fn named_signature(name: &str) -> Option<&'static [NamedParam]> {
             default: Bool(true),
         },
     ];
+    // Spark's generator builders declare their one parameter, in a select list as in `FROM`.
+    const COLLECTION: &[NamedParam] = &[NamedParam {
+        name: "collection",
+        default: Required,
+    }];
+    const INPUT: &[NamedParam] = &[NamedParam {
+        name: "input",
+        default: Required,
+    }];
     match name.to_ascii_lowercase().as_str() {
+        "explode" | "explode_outer" | "posexplode" | "posexplode_outer" => Some(COLLECTION),
+        "inline" | "inline_outer" => Some(INPUT),
         "variant_set" | "try_variant_set" => Some(VARIANT_SET),
         "variant_strip_nulls" => Some(VARIANT_STRIP_NULLS),
         "mask" => Some(MASK),
