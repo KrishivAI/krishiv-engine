@@ -208,6 +208,36 @@ impl RowLevelTable for IcebergRowLevel {
                 message: "a row-level Iceberg table without a write target".to_owned(),
             })
         })?);
+        self.cow_sink(request, target, false)
+    }
+}
+
+impl IcebergRowLevel {
+    /// The sink of one `rewrite_data_files` group (36e-2a): `request.touched` are the group's
+    /// files, the rows are theirs unchanged. Validated as Java's `BaseRewriteFiles` (a concurrent
+    /// append is no conflict; a file removed or a delete added for a rewritten file is).
+    #[expect(
+        dead_code,
+        reason = "used by the rewrite_data_files session path (36e-2a)"
+    )]
+    pub(crate) fn group_rewriter(
+        &self,
+        request: &RowLevelWrite,
+    ) -> krishiv_exec::Result<Arc<dyn Sink>> {
+        let target = Arc::clone(self.provider.write_target().ok_or_else(|| {
+            KrishivError::from(krishiv_common::error::InternalError {
+                message: "a rewritten Iceberg table without a write target".to_owned(),
+            })
+        })?);
+        self.cow_sink(request, target, true)
+    }
+
+    fn cow_sink(
+        &self,
+        request: &RowLevelWrite,
+        target: Arc<super::sink::WriteTarget>,
+        rewrite: bool,
+    ) -> krishiv_exec::Result<Arc<dyn Sink>> {
         self.require_lineage(request)?;
         let isolation = self.isolation(target.base.properties())?;
         let touched = self.provider.touched(&request.touched)?;
@@ -229,8 +259,9 @@ impl RowLevelTable for IcebergRowLevel {
             .map_or_else(|| "true".to_owned(), |f| format!("{f:?}"));
         let validation = Validation {
             checks: Checks {
-                added_data_files: true,
+                added_data_files: !rewrite,
                 new_deletes_for_replaced: true,
+                removed_data_files: rewrite,
                 ..Checks::default()
             },
             isolation,
@@ -240,6 +271,11 @@ impl RowLevelTable for IcebergRowLevel {
             // removed-data-files check, which CoW's `OverwriteFiles` does not
             // run (notes 36b2 §1 item 3); the removed files' existence is
             // the filter's missing-files check.
+            removes: if rewrite {
+                data_files.clone()
+            } else {
+                BTreeSet::new()
+            },
             replaced: touched.iter().map(|(e, _)| (**e).clone()).collect(),
             max_intervening: target.max_intervening,
             ..Validation::none()
