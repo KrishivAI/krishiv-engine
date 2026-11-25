@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+import { readdirSync } from "node:fs";
 import { createRequire } from "node:module";
 import { RecordBatchReader, type RecordBatch } from "apache-arrow";
 import type { Backend, ResultStream } from "./backend.js";
@@ -41,14 +42,26 @@ function isGlibc(): boolean {
   // collecting it resolves interface names, which is slow on some hosts (napi-rs's own loader does the same).
   // `excludeNetwork` is in Node 22's report API (v22.13) but not in @types/node 22's declaration of it.
   const report = process.report as (NodeJS.ProcessReport & { excludeNetwork?: boolean }) | undefined;
-  if (report === undefined) return true;
-  const before = report.excludeNetwork;
-  report.excludeNetwork = true;
+  if (report !== undefined) {
+    const before = report.excludeNetwork;
+    report.excludeNetwork = true;
+    try {
+      const header = (report.getReport() as { header?: { glibcVersionRuntime?: string } }).header;
+      if (header?.glibcVersionRuntime !== undefined) return true;
+    } finally {
+      report.excludeNetwork = before;
+    }
+  }
+  // No glibc in the report: on musl, or a runtime whose report does not name it (Bun may not). musl's dynamic
+  // loader is `/lib/ld-musl-<arch>.so.1`; without one the system is taken to be glibc.
+  return !hasMuslLoader();
+}
+
+function hasMuslLoader(): boolean {
   try {
-    const header = (report.getReport() as { header?: { glibcVersionRuntime?: string } }).header;
-    return header?.glibcVersionRuntime !== undefined;
-  } finally {
-    report.excludeNetwork = before;
+    return readdirSync("/lib").some((f) => f.startsWith("ld-musl-"));
+  } catch {
+    return false;
   }
 }
 

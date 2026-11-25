@@ -52,6 +52,7 @@ The engine loads only when a session uses embedded mode, never at import. Withou
 with `--omit=optional`), `getOrCreate()` throws a `KrishivError` with class `KRISHIV_NATIVE_ENGINE_UNAVAILABLE`; use
 remote mode instead. Embedded mode runs on Node 22 and 24, Bun and Deno (`deno run --allow-all`, with the packages
 installed in `node_modules`). To load a local build instead of the package, set `KRISHIV_NATIVE_ENGINE` to the path of
-the `.node` file (`cargo build -p krishiv-node`, then copy `libkrishiv_node.so` to `krishiv.node`).
+the `.node` file (`cargo build -p krishiv-node`, then copy `libkrishiv_node.so` on Linux, or
+`libkrishiv_node.dylib` on macOS, to `krishiv.node`).
 
 Node 22 or newer. Apache-2.0.

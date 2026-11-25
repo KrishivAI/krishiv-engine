@@ -11,7 +11,9 @@
   ],
   "main": "krishiv.node",
   "files": [
-    "krishiv.node"
+    "krishiv.node",
+    "LICENSE",
+    "NOTICE"
   ],
   "engines": {
     "node": ">=22"

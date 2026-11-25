@@ -61,7 +61,7 @@ def canonical(v: Any, t: Any) -> Any:
         return str(v)
     if pa.types.is_decimal(t):
         assert isinstance(v, decimal.Decimal)
-        return str(v.quantize(decimal.Decimal(1).scaleb(-t.scale)))
+        return format(v.quantize(decimal.Decimal(1).scaleb(-t.scale)), "f")
     if pa.types.is_timestamp(t):
         assert isinstance(v, datetime.datetime)
         utc = v.astimezone(datetime.UTC) if v.tzinfo else v

@@ -11,8 +11,8 @@ name: Publish JS (dry run)
 # Python wheels), linux-x64-musl in musllinux_1_2, darwin-arm64 on macos-15 (11.0+). Windows follows #1002.
 #
 # Runs by hand, when called (`workflow_call`), and on pull requests that change the packaging itself (this file,
-# the platform manifests, the pack script, the build script or the smoke test); the engine and js/src are covered
-# by ci.yml's `js` job, which needs no LTO build.
+# the platform manifests, the pack script, the build script, the smoke test, the addon crate or the toolchain and
+# lock files); the rest of the engine and js/src are covered by ci.yml's `js` job, which needs no LTO build.
 on:
   workflow_call:
   workflow_dispatch:
@@ -24,6 +24,12 @@ on:
       - js/scripts/**
       - js/smoke/**
       - .github/scripts/node-smoke.sh
+      # The addon's own build: a change here can break the glibc 2.28, musl or macOS builds, which ci.yml's `js`
+      # job (Linux x64 glibc only) does not build.
+      - crates/krishiv-node/**
+      - Cargo.toml
+      - Cargo.lock
+      - rust-toolchain.toml
 
 permissions:
   contents: read

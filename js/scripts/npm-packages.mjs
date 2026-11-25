@@ -35,8 +35,20 @@ function pack(dir, out) {
     .split("\n")
     .pop();
   const path = join(resolve(out), name);
+  // Apache-2.0 section 4: the License and the NOTICE travel with every redistribution.
+  const entries = execFileSync("tar", ["-tzf", path], { encoding: "utf8" }).split("\n");
+  for (const f of LEGAL) {
+    if (!entries.includes(`package/${f}`)) throw new Error(`${path} has no ${f}`);
+  }
   console.log(path);
   return path;
+}
+
+/** The repository's license files, copied into every package. */
+const LEGAL = ["LICENSE", "NOTICE"];
+
+function copyLegal(dir) {
+  for (const f of LEGAL) copyFileSync(join(js, "..", f), join(dir, f));
 }
 
 function packPlatform(platform, binary, out) {
@@ -49,6 +61,7 @@ function packPlatform(platform, binary, out) {
   pkg.version = version;
   writeJson(join(dir, "package.json"), pkg);
   copyFileSync(binary, join(dir, "krishiv.node"));
+  copyLegal(dir);
   return pack(dir, out);
 }
 
@@ -56,6 +69,7 @@ function packMain(out) {
   if (!existsSync(join(js, "dist", "index.js"))) throw new Error("no js/dist: run `npm run build` first");
   const dir = mkdtempSync(join(tmpdir(), "krishiv-main-"));
   for (const f of ["package.json", "README.md", "dist"]) cpSync(join(js, f), join(dir, f), { recursive: true });
+  copyLegal(dir);
   const pkg = readJson(join(dir, "package.json"));
   // Added only at pack time: the platform packages are not on the registry before the first publish, so a
   // committed entry would break `npm ci` in the repository.

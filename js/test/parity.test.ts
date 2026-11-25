@@ -55,6 +55,8 @@ function int64At(values: ArrayLike<unknown>, at: number): bigint {
 }
 
 const pad = (n: bigint | number, w: number) => String(n).padStart(w, "0");
+/** `a / b` rounded toward negative infinity (`b > 0`). */
+const floorDiv = (a: bigint, b: bigint) => (a < 0n && a % b !== 0n ? a / b - 1n : a / b);
 
 /** A UTC instant `us` microseconds from the epoch as `YYYY-MM-DDTHH:MM:SS.ffffffZ`. */
 function isoMicros(us: bigint): string {
@@ -83,7 +85,8 @@ function canonical(vec: Vector, i: number): unknown {
     const { values, at } = slot(vec, i);
     const scale = [1_000_000n, 1000n, 1n, 0n][t.unit]!;
     const raw = int64At(values, at);
-    return isoMicros(scale === 0n ? raw / 1000n : raw * scale);
+    // Nanoseconds to microseconds by a floor, as the other side's reader does (`/` truncates toward zero).
+    return isoMicros(scale === 0n ? floorDiv(raw, 1000n) : raw * scale);
   }
   if (DataType.isDecimal(t)) {
     const { values, at } = slot(vec, i);

@@ -14,7 +14,7 @@
       "require": "./dist/index.cjs"
     }
   },
-  "files": ["dist", "README.md"],
+  "files": ["dist", "README.md", "LICENSE", "NOTICE"],
   "engines": { "node": ">=22" },
   "scripts": {
     "build": "tsup src/index.ts --format esm,cjs --dts --clean --external @grpc/grpc-js --external protobufjs",
