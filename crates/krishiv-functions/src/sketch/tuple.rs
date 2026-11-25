@@ -89,8 +89,8 @@ impl Value for f64 {
     fn identity(mode: Mode) -> Self {
         match mode {
             Mode::Sum => 0.0,
-            Mode::Min => f64::MAX,
-            Mode::Max => -f64::MAX,
+            Mode::Min => f64::INFINITY,
+            Mode::Max => f64::NEG_INFINITY,
             Mode::AlwaysOne => 1.0,
         }
     }
@@ -343,10 +343,22 @@ pub fn update_long_words<V: Value>(
     }
 }
 
+/// Java's image of an empty sketch.
+const EMPTY_IMAGE: [u8; 8] = [1, 3, 9, 1, 0, 0x0E, 0xCC, 0x93];
+
 /// The compact image Spark stores in a `BINARY` column (unordered, uncompressed).
 #[must_use]
 pub fn to_bytes<V: Value>(sketch: &Compact<V>) -> Vec<u8> {
-    sketch.serialize()
+    if sketch.is_empty() {
+        // Java writes the empty image with the default seed hash and the EMPTY flag (the crate writes seed hash 0).
+        return EMPTY_IMAGE.to_vec();
+    }
+    let mut bytes = sketch.serialize();
+    // Spark's results are never flagged ordered (the crate marks a one-entry set operation result so).
+    if let Some(flags) = bytes.get_mut(5) {
+        *flags &= !0x10;
+    }
+    bytes
 }
 
 /// Compact an updatable sketch.
@@ -408,17 +420,49 @@ pub enum Either<'a, V: Value> {
     Theta(&'a CompactThetaSketch),
 }
 
-/// A Theta sketch's hashes as a tuple sketch whose summaries are `mode`'s default.
+/// A Theta sketch's hashes as a tuple sketch whose summaries are `mode`'s default (Java's `union.union(theta,
+/// defaultSummary)`), built through the compact image.
 fn lift_theta<V: Value>(
     t: &CompactThetaSketch,
     mode: Mode,
     function: &str,
 ) -> Result<Compact<V>, KrishivError> {
-    let _ = (t, mode);
-    Err(builder_failure(
-        function,
-        &"lifting a Theta sketch is not wired yet",
-    ))
+    if t.is_empty() {
+        return from_bytes::<V>(&EMPTY_IMAGE, function);
+    }
+    let n = t.num_retained();
+    let estimation = t.is_estimation_mode();
+    let pre: u8 = if estimation {
+        3
+    } else if n == 1 {
+        1
+    } else {
+        2
+    };
+    let default = Summary::<V> {
+        value: V::identity(mode),
+        mode,
+    };
+    let mut out = SketchBytes::with_capacity(8 * usize::from(pre) + n * (8 + V::SIZE + 1));
+    out.write_u8(pre);
+    out.write_u8(3);
+    out.write_u8(9);
+    out.write_u8(1);
+    out.write_u8(0);
+    out.write_u8(0x0A | if t.is_ordered() { 0x10 } else { 0 });
+    out.write_u16_le(t.seed_hash());
+    if pre > 1 {
+        out.write_u32_le(u32::try_from(n).map_err(|_| invalid_buffer(function))?);
+        out.write_u32_le(0);
+    }
+    if estimation {
+        out.write_u64_le(t.theta64());
+    }
+    for e in t.iter() {
+        out.write_u64_le(e.hash());
+        default.serialize_value(&mut out);
+    }
+    from_bytes::<V>(&out.into_bytes(), function)
 }
 
 /// `tuple_intersection_*` and `tuple_intersection_theta_*`.
@@ -456,10 +500,12 @@ pub fn difference<V: Value>(
         Either::Tuple(t) => TupleANotB::default()
             .compute(a, t, false)
             .map_err(|_| invalid_buffer(function)),
-        Either::Theta(_) => Err(builder_failure(
-            function,
-            &"theta difference is not wired yet",
-        )),
+        Either::Theta(t) => {
+            let lifted = lift_theta::<V>(t, Mode::Sum, function)?;
+            TupleANotB::default()
+                .compute(a, &lifted, false)
+                .map_err(|_| invalid_buffer(function))
+        }
     }
 }
 
@@ -537,5 +583,58 @@ mod tests {
         update_long(&mut s, 1, 2);
         update_long(&mut s, 2, 3);
         assert_eq!(to_bytes(&compact(&s)), unhex(SPARK_INTEGER));
+    }
+
+    fn theta_of_key(k: i64) -> CompactThetaSketch {
+        let mut t = theta::new_sketch(12, "f").unwrap();
+        theta::update_long(&mut t, k);
+        theta::compact(&mut t)
+    }
+
+    #[test]
+    fn theta_variants_match_spark() {
+        // tuple_sketch_agg_double(1, 3.0) with theta_sketch_agg(6)
+        let mut s = new_sketch::<f64>(12, Mode::Sum, "f").unwrap();
+        update_long(&mut s, 1, 3.0);
+        let a = compact(&s);
+        let t = theta_of_key(6);
+        let want = |hex: &str| unhex(hex);
+        let u = union(&a, Either::Theta(&t), 12, Mode::Min, "f").unwrap();
+        assert_eq!(
+            to_bytes(&u),
+            want(
+                "02030901000ACC93020000000000000015F97DCBBD86A105000000000000084000FE162113FB98BC10000000000000F07F01"
+            )
+        );
+        let u = union(&a, Either::Theta(&t), 12, Mode::Max, "f").unwrap();
+        assert_eq!(
+            to_bytes(&u),
+            want(
+                "02030901000ACC93020000000000000015F97DCBBD86A105000000000000084000FE162113FB98BC10000000000000F0FF02"
+            )
+        );
+        let t1 = theta_of_key(1);
+        let i = intersection(&a, Either::Theta(&t1), Mode::Sum, "f").unwrap();
+        assert_eq!(
+            to_bytes(&i),
+            want("01030901000ACC9315F97DCBBD86A105000000000000084000")
+        );
+        let t2 = theta_of_key(2);
+        let d = difference(&a, Either::Theta(&t2), "f").unwrap();
+        assert_eq!(
+            to_bytes(&d),
+            want("01030901000ACC9315F97DCBBD86A105000000000000084000")
+        );
+    }
+
+    #[test]
+    fn empty_image_is_javas() {
+        let s = new_sketch::<f64>(12, Mode::Sum, "f").unwrap();
+        assert_eq!(to_bytes(&compact(&s)), unhex("01030901000ECC93"));
+        assert!(
+            from_bytes::<f64>(&unhex("01030901000ECC93"), "f")
+                .unwrap()
+                .is_empty()
+        );
     }
 }
