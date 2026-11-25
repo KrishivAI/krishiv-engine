@@ -656,6 +656,19 @@ pub(super) fn aggregates() -> Vec<Spec> {
             bitmap_agg,
             Aggregate::HllUnionAgg,
         ),
+        aggregate(
+            "count_min_sketch",
+            // `TypeCollection(IntegralType, StringTypeWithCollation, BinaryType)`, `DoubleType` twice and
+            // `TypeCollection(IntegerType, LongType)`, without implicit casts.
+            Inputs::Expects(vec![
+                InputType::StrictIntegralStringOrBinary,
+                InputType::Strict(DataType::Double),
+                InputType::Strict(DataType::Double),
+                InputType::StrictOneOf(vec![DataType::Integer, DataType::Long]),
+            ]),
+            bitmap_agg,
+            Aggregate::CountMinSketch,
+        ),
         // The Theta sketch aggregates (Spark 4.1): `lgNomEntries` is a constant the analyzer fills in when omitted.
         aggregate(
             "theta_sketch_agg",

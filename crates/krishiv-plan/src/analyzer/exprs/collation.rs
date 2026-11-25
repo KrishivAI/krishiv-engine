@@ -960,6 +960,7 @@ impl Resolver<'_> {
                 e.origin,
             ));
         }
+        self.refuse_collated_sketch_value(&name, e, &kids[..n])?;
         let mut rewrite = None;
         if let Some(c) = chosen
             && !c.is_utf8_binary()

@@ -562,7 +562,7 @@ impl Resolver<'_> {
 
     /// The folding settings of this session, with `ansi` for the
     /// arithmetic.
-    fn fold_conf(&self, ansi: bool) -> fold::Conf {
+    pub(super) fn fold_conf(&self, ansi: bool) -> fold::Conf {
         fold::Conf::new(
             ansi,
             self.ctx.conf.decimal_precision_loss,

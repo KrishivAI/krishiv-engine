@@ -41,6 +41,7 @@ use krishiv_types::batch::Weights;
 
 use super::bitmap::{BitmapAcc, BitmapOp};
 use super::collect::{CollectAcc, VectorAcc};
+use super::count_min::CountMinAcc;
 use super::histogram::HistAcc;
 use super::hll::{self, HllAcc};
 use super::hll_sketch::{HllSketchAcc, HllSketchOp};
@@ -323,6 +324,8 @@ enum Kind {
     Hist(HistAcc),
     /// The bitmap aggregates: one 4,096-byte buffer per group (see `bitmap`).
     Bitmap(BitmapAcc),
+    /// `count_min_sketch` (see `count_min`).
+    CountMin(CountMinAcc),
     /// `hll_sketch_agg` and `hll_union_agg`: DataSketches HLL sketches per group (see `hll_sketch`).
     HllSketch(HllSketchAcc),
     /// The Theta sketch aggregates (see `theta_sketch`).
@@ -504,6 +507,9 @@ impl Accumulator {
             (F::BitmapConstructAgg, _) => Kind::Bitmap(BitmapAcc::new(BitmapOp::Construct)),
             (F::BitmapOrAgg, _) => Kind::Bitmap(BitmapAcc::new(BitmapOp::Or)),
             (F::BitmapAndAgg, _) => Kind::Bitmap(BitmapAcc::new(BitmapOp::And)),
+            (F::CountMinSketch { depth, width, seed }, _) => {
+                Kind::CountMin(CountMinAcc::new(*depth, *width, *seed))
+            }
             (F::HllSketchAgg { lg_k }, _) => {
                 Kind::HllSketch(HllSketchAcc::new(HllSketchOp::Sketch(*lg_k))?)
             }
@@ -674,6 +680,7 @@ impl Accumulator {
             | Kind::Hll(_)
             | Kind::Hist(_)
             | Kind::Bitmap(_)
+            | Kind::CountMin(_)
             | Kind::HllSketch(_)
             | Kind::ThetaSketch(_)
             | Kind::Udf(_) => Vec::new(),
@@ -692,6 +699,7 @@ impl Accumulator {
             Kind::Hll(h) => h.size(),
             Kind::Hist(h) => h.size(),
             Kind::Bitmap(b) => b.size(),
+            Kind::CountMin(c) => c.size(),
             Kind::HllSketch(h) => h.size(),
             Kind::ThetaSketch(h) => h.size(),
             Kind::Udf(u) => u.size(),
@@ -819,6 +827,7 @@ impl Accumulator {
             Kind::Hll(h) => h.projected(new),
             Kind::Hist(h) => h.projected(new, arg),
             Kind::Bitmap(b) => b.projected(new),
+            Kind::CountMin(c) => c.projected(new),
             Kind::HllSketch(h) => h.projected(new, arg.map_or(0, arrow_array::Array::len), states),
             Kind::ThetaSketch(h) => {
                 let state_bytes = if states || h.takes_sketches() {
@@ -906,6 +915,7 @@ impl Accumulator {
             Kind::Hll(h) => h.resize(n),
             Kind::Hist(h) => h.resize(n),
             Kind::Bitmap(b) => b.resize(n),
+            Kind::CountMin(c) => c.resize(n),
             Kind::HllSketch(h) => h.resize(n),
             Kind::ThetaSketch(h) => h.resize(n),
             Kind::Udf(u) => u.resize(n),
@@ -992,6 +1002,7 @@ impl Accumulator {
             Kind::Hll(h) => h.reserve(new),
             Kind::Hist(h) => h.reserve(new),
             Kind::Bitmap(b) => b.reserve(new),
+            Kind::CountMin(c) => c.reserve(new),
             Kind::HllSketch(h) => h.reserve(new),
             Kind::ThetaSketch(h) => h.reserve(new),
             Kind::Udf(_) => {}
@@ -1178,6 +1189,7 @@ impl Accumulator {
             | Kind::Hist(_)
             | Kind::Hll(_)
             | Kind::Bitmap(_)
+            | Kind::CountMin(_)
             | Kind::HllSketch(_)
             | Kind::ThetaSketch(_) => 1,
             Kind::TrySumInt { .. }

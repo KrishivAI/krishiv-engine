@@ -11,7 +11,7 @@ confidence and seed. The result is an array of bytes, which can be deserialized 
 `CountMinSketch` before usage. Count-min sketch is a probabilistic data structure used for
 cardinality estimation using sub-linear space.
 
-**Applies to:** not available in Krishiv yet. Spark: 3.5 and later.
+**Applies to:** Krishiv 0.2.0 and above. Spark: 3.5 and later.
 
 ## Syntax
 
@@ -23,7 +23,7 @@ count_min_sketch(col, eps, confidence, seed)
 
 | | |
 |---|---|
-| Krishiv | Not implemented yet |
+| Krishiv | Implemented |
 | Group | `agg_funcs` |
 | Kind | aggregate (function) |
 | Added in Spark | 2.2.0 |
@@ -42,6 +42,7 @@ Error: KRISHIV_UNSUPPORTED_FEATURE
 ## Version history
 
 - Added in Spark 2.2.0.
+- Added in Krishiv 0.2.0.
 
 ## Related
 

@@ -895,6 +895,9 @@ enum AggregateFunction {
   // `theta_intersection_agg(sketch)`.
   // feature: theta_sketch_aggregates
   AGGREGATE_FUNCTION_THETA_INTERSECTION_AGG = 57;
+  // `count_min_sketch(x, eps, confidence, seed)`: its folded shape and seed are `count_min_*`.
+  // feature: count_min_sketch_aggregate
+  AGGREGATE_FUNCTION_COUNT_MIN_SKETCH = 58;
 }
 
 enum AggregateInput {
@@ -952,6 +955,12 @@ message AggregateExpr {
   // feature: histogram_numeric (`histogram_numeric` only: the folded number of
   // bins, at least 2).
   int32 histogram_bins = 19;
+  // feature: count_min_sketch_aggregate (`count_min_sketch` only: the rows of counters).
+  uint32 count_min_depth = 20;
+  // feature: count_min_sketch_aggregate (`count_min_sketch` only: the counters a row).
+  uint32 count_min_width = 21;
+  // feature: count_min_sketch_aggregate (`count_min_sketch` only: the seed of the row hashes).
+  int32 count_min_seed = 22;
 }
 
 // The call of a session aggregate UDF: its implementation by name and

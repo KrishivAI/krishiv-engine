@@ -1423,6 +1423,11 @@ fn implicit(from: Option<&DataType>, want: &InputType, ansi: bool) -> Option<Opt
         // refused without implicit casts.
         (Some(f), InputType::StrictOneOf(types)) if types.contains(f) => Some(Some(f.clone())),
         (None, InputType::StrictOneOf(types)) => types.first().map(|t| Some(t.clone())),
+        (
+            Some(f @ (T::Byte | T::Short | T::Integer | T::Long | T::String | T::Binary)),
+            InputType::StrictIntegralStringOrBinary,
+        ) => Some(Some(f.clone())),
+        (None, InputType::StrictIntegralStringOrBinary) => Some(Some(T::Integer)),
         (None, InputType::Exact(t) | InputType::Strict(t)) => Some(Some(t.clone())),
         (Some(f), InputType::Strict(t)) => (f == t).then(|| Some(t.clone())),
         (None, InputType::Map) => Some(Some(null_map())),

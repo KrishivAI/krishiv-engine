@@ -58,6 +58,7 @@ use crate::{
     ResolvedExpr, ResolvedFunction, SortDirection, SortOrder, Star, SubqueryKind, TypedLiteralKind,
 };
 
+mod agg_constants;
 mod aggregates;
 mod by_k;
 mod calls;

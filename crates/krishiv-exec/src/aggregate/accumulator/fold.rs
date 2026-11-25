@@ -59,6 +59,7 @@ impl Accumulator {
                     | Kind::Hist(_)
                     | Kind::Hll(_)
                     | Kind::Bitmap(_)
+                    | Kind::CountMin(_)
                     | Kind::HllSketch(_)
                     | Kind::ThetaSketch(_)
             ))
@@ -104,6 +105,7 @@ impl Accumulator {
                     | Kind::Hist(_)
                     | Kind::Hll(_)
                     | Kind::Bitmap(_)
+                    | Kind::CountMin(_)
                     | Kind::HllSketch(_)
                     | Kind::ThetaSketch(_)
                     | Kind::MinMax {
@@ -928,6 +930,20 @@ impl Accumulator {
                     ));
                 };
                 h.merge(groups, states)?;
+            }
+            (Kind::CountMin(c), false) => c.update(groups, args[0], valid)?,
+            (Kind::CountMin(c), true) => {
+                let [states] = args else {
+                    return Err(internal(
+                        "a count-min state of another column than its sketch".to_owned(),
+                    ));
+                };
+                let Some(states) = states.as_any().downcast_ref::<BinaryArray>() else {
+                    return Err(internal(
+                        "a count-min state of another type than binary".to_owned(),
+                    ));
+                };
+                c.merge(groups, states)?;
             }
             (Kind::Bitmap(b), false) => b.update(groups, args[0], valid)?,
             (Kind::Bitmap(b), true) => {

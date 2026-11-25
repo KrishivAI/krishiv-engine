@@ -37,6 +37,26 @@ pub(crate) fn hll_sketch_function(
     }
 }
 
+/// A `count_min_sketch` from its wire form: a shape whose serialized sketch fits a `binary` value.
+pub(crate) fn count_min_function(a: &pb::AggregateExpr) -> Result<AggregateFunction> {
+    let (depth, width) = (a.count_min_depth, a.count_min_width);
+    if !a.percentages.is_empty()
+        || a.percentile_array
+        || a.percentile_reverse
+        || a.percentile_accuracy != 0
+        || a.percentile_legacy
+        || a.hll_precision != 0
+        || !krishiv_exec::aggregate::count_min_shape_fits(depth, width)
+    {
+        return Err(corrupt("a count_min_sketch aggregate of bad parameters"));
+    }
+    Ok(AggregateFunction::CountMinSketch {
+        depth,
+        width,
+        seed: a.count_min_seed,
+    })
+}
+
 /// Which Theta aggregate a wire function names.
 #[derive(Clone, Copy)]
 pub(crate) enum ThetaKind {

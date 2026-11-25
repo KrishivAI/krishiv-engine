@@ -224,6 +224,9 @@ pub enum Aggregate {
     /// `bitmap_and_agg(bitmap)` (Spark 4.1): the bitwise AND of the non-NULL
     /// bitmaps; never NULL (4,096 `0xFF` bytes for no input).
     BitmapAndAgg,
+    /// `count_min_sketch(x, eps, confidence, seed)`: the serialized count-min sketch of the non-NULL values;
+    /// never NULL.
+    CountMinSketch,
     /// `hll_sketch_agg(x[, lgConfigK])`: an HLL sketch of the non-NULL values; never NULL.
     HllSketchAgg,
     /// `hll_union_agg(sketch[, allowDifferentLgConfigK])`: the union of HLL sketches; never NULL.

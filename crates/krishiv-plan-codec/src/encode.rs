@@ -1316,6 +1316,9 @@ fn aggregate_function(a: &AggregateExpr, nested: &Cell<bool>) -> Result<pb::Aggr
         AggregateFunction::ApproxCountDistinct { p } => !(4..=30).contains(p),
         AggregateFunction::HistogramNumeric { nb } => *nb < 2,
         AggregateFunction::HllSketchAgg { lg_k } => !(4..=21).contains(lg_k),
+        AggregateFunction::CountMinSketch { depth, width, .. } => {
+            !krishiv_exec::aggregate::count_min_shape_fits(*depth, *width)
+        }
         AggregateFunction::ThetaSketchAgg { lg_nom }
         | AggregateFunction::ThetaUnionAgg { lg_nom } => !(4..=26).contains(lg_nom),
         _ => false,
@@ -1520,6 +1523,9 @@ fn aggregate_function(a: &AggregateExpr, nested: &Cell<bool>) -> Result<pb::Aggr
                 nested,
             ));
         }
+        AggregateFunction::CountMinSketch { depth, width, seed } => {
+            return Ok(count_min_expr(*depth, *width, *seed, a, nested));
+        }
         AggregateFunction::StddevSamp => (pb::AggregateFunction::StddevSamp, false),
         AggregateFunction::StddevPop => (pb::AggregateFunction::StddevPop, false),
         AggregateFunction::VarSamp => (pb::AggregateFunction::VarSamp, false),
@@ -1589,6 +1595,23 @@ fn udaf_call(call: &UdafCall, nested: &Cell<bool>) -> Result<pb::UdafCall> {
         nullable: call.nullable,
         state: fields(&call.state),
     })
+}
+
+/// A `count_min_sketch` call with its folded shape and seed.
+fn count_min_expr(
+    depth: u32,
+    width: u32,
+    seed: i32,
+    a: &AggregateExpr,
+    nested: &Cell<bool>,
+) -> pb::AggregateExpr {
+    let function = pb::AggregateFunction::CountMinSketch;
+    pb::AggregateExpr {
+        count_min_depth: depth,
+        count_min_width: width,
+        count_min_seed: seed,
+        ..percentile_expr(function, &[], false, false, 0, false, 0, a, nested)
+    }
 }
 
 /// An [`AggregateExpr`] of the percentile family or `approx_count_distinct`,

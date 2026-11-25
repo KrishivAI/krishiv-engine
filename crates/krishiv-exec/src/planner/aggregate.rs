@@ -20,6 +20,7 @@ use std::sync::Arc;
 use arrow_schema::Field;
 use krishiv_functions::registry::{Lookup, builtins};
 use krishiv_functions::signature::SparkProfile;
+use krishiv_functions::sketch::count_min;
 use krishiv_plan::{
     AttrId, BoundColumn, Builtin, Expr, ExprNode, FunctionId, FunctionKind, Grouping, Literal,
     NullOrdering, ResolvedExpr, ResolvedFunction, SortDirection,
@@ -499,7 +500,27 @@ pub(super) fn check_constants(f: &ResolvedFunction) -> Result<()> {
         };
         krishiv_functions::sketch::theta::check_lg_nom(i32::try_from(v).unwrap_or(i32::MAX), name)?;
     }
+    if matches!(f.id, FunctionId::Registry { .. })
+        && f.id.name() == "count_min_sketch"
+        && let (Some(eps), Some(confidence)) = (
+            f.args.get(1).and_then(|a| double_literal(a)),
+            f.args.get(2).and_then(|a| double_literal(a)),
+        )
+        && count_min::serialized_len(count_min::depth(confidence), count_min::width(eps)).is_none()
+    {
+        return Err(crate::aggregate::unsupported(
+            "a count_min_sketch of more than 2 GiB (eps is too small)".to_owned(),
+        ));
+    }
     Ok(())
+}
+
+/// The value of a `double` literal.
+fn double_literal(e: &Expr) -> Option<f64> {
+    match &e.node {
+        ExprNode::Literal(krishiv_plan::Literal::Double(v)) => Some(*v),
+        _ => None,
+    }
 }
 
 /// `None` for a function the executor does not run as an aggregate.
@@ -595,6 +616,19 @@ pub(super) fn lower(f: &ResolvedFunction) -> Option<Lowered> {
         "bit_and" if f.args.len() == 1 => (AggregateFunction::BitAnd, f.args.clone()),
         "bit_or" if f.args.len() == 1 => (AggregateFunction::BitOr, f.args.clone()),
         "bit_xor" if f.args.len() == 1 => (AggregateFunction::BitXor, f.args.clone()),
+        "count_min_sketch" if f.args.len() == 4 => {
+            // The analyzer folded the constants and checked their ranges.
+            let (eps, confidence) = (double_literal(&f.args[1])?, double_literal(&f.args[2])?);
+            let seed = i32::try_from(integer_literal(&f.args[3])?).ok()?;
+            (
+                AggregateFunction::CountMinSketch {
+                    depth: count_min::depth(confidence),
+                    width: count_min::width(eps),
+                    seed,
+                },
+                vec![Arc::clone(&f.args[0])],
+            )
+        }
         "bitmap_construct_agg" if f.args.len() == 1 => {
             (AggregateFunction::BitmapConstructAgg, f.args.clone())
         }

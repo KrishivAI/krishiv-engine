@@ -96,9 +96,8 @@ pub(super) enum NamedDefault {
 }
 
 /// The named-parameter signature of the functions Spark 4.2 documents with
-/// named parameters that the engine accepts named arguments for: `mask`
-/// (implemented) and `count_min_sketch` (known but unimplemented, so its
-/// calls reorder and then fail as unsupported). Any other function rejects
+/// named parameters that the engine accepts named arguments for, such as `mask`
+/// and `count_min_sketch`. Any other function rejects
 /// named arguments with `NAMED_PARAMETERS_NOT_SUPPORTED`.
 pub(super) fn named_signature(name: &str) -> Option<&'static [NamedParam]> {
     use NamedDefault::{Bool, Null, Required, Text};
