@@ -42,6 +42,7 @@ async fn a_busy_loop_counts_a_stall() {
         io_threads: 1,
         blocking_threads: 2,
         io_blocking_threads: 2,
+        release_when_idle: true,
     })
     .unwrap();
     let runner = QueryRunner::new(Arc::clone(&executor));

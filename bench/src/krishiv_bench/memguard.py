@@ -3,6 +3,11 @@
 A balloon on the host can take most of RAM mid-run; a timing taken then measures the host, not the engine. The guard
 reads ``MemAvailable`` from ``/proc/meminfo``: it waits until the value is at least a threshold before each timed
 query, samples it while the query runs, and reports the lowest value seen so the runner can mark the sample invalid.
+
+The engine's own memory lowers MemAvailable too: a query whose resident set grows by more than the slack between
+MemAvailable at the start and the threshold is not a host reclaim. The in-run check therefore adds the engine's RSS
+growth during the run (peak minus baseline, or the whole peak when the adapter has no baseline: an upper bound) back
+to the lowest MemAvailable before comparing it with the threshold.
 """
 
 from __future__ import annotations
@@ -11,6 +16,10 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .adapters.base import Measure
 
 MEMINFO = Path("/proc/meminfo")
 DEFAULT_MIN_FRACTION = 0.75
@@ -98,6 +107,7 @@ class InvalidSample:
     attempt: int
     min_mem_avail_bytes: int
     threshold_bytes: int
+    engine_growth_bytes: int = 0
     reason: str = INVALID_REASON
 
     def as_dict(self) -> dict:
@@ -107,9 +117,19 @@ class InvalidSample:
             "reason": self.reason,
             "min_mem_avail_bytes": self.min_mem_avail_bytes,
             "threshold_bytes": self.threshold_bytes,
+            "engine_growth_bytes": self.engine_growth_bytes,
         }
 
 
-def is_invalid(min_available: int | None, threshold: int) -> bool:
-    """True when the sampler saw MemAvailable below the threshold during the run."""
-    return min_available is not None and min_available < threshold
+def engine_growth_bytes(m: Measure | None) -> int:
+    """How much the engine's resident set grew during the run: peak minus baseline, the whole peak when the adapter
+    measured no baseline (an upper bound), 0 when it measured no peak."""
+    if m is None or not m.peak_rss_bytes:
+        return 0
+    return max(0, m.peak_rss_bytes - (m.baseline_rss_bytes or 0))
+
+
+def is_invalid(min_available: int | None, threshold: int, engine_growth: int = 0) -> bool:
+    """True when the sampler saw MemAvailable below the threshold during the run by more than the engine's own
+    growth (``engine_growth`` bytes) explains."""
+    return min_available is not None and min_available + engine_growth < threshold

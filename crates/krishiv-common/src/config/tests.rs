@@ -863,6 +863,26 @@ fn io_blocking_threads_parses_and_defaults() {
 }
 
 #[test]
+fn release_at_query_end_defaults_on_and_parses() {
+    let mut c = Config::new();
+    let get = |c: &Config| {
+        c.get(&MEMORY_RELEASE_AT_QUERY_END)
+            .and_then(ConfigValue::as_bool)
+    };
+    assert_eq!(get(&c), Some(true));
+    c.set("krishiv.memory.releaseAtQueryEnd", "false").unwrap();
+    assert_eq!(get(&c), Some(false));
+    let e = c
+        .set("krishiv.memory.releaseAtQueryEnd", "sometimes")
+        .unwrap_err();
+    assert!(
+        e.to_string().contains("krishiv.memory.releaseAtQueryEnd"),
+        "{e}"
+    );
+    assert_eq!(get(&c), Some(false), "a rejected value leaves the setting");
+}
+
+#[test]
 fn agent_gate_defaults_to_one_gib_and_parses_sizes() {
     let mut c = Config::new();
     assert_eq!(
@@ -929,53 +949,7 @@ mod connect;
 mod delta;
 mod derived_keys;
 mod iceberg;
-
-#[test]
-fn share_filtered_scans_defaults_on_and_parses() {
-    let mut c = Config::new();
-    assert_eq!(
-        c.get(&SHARE_FILTERED_SCANS).and_then(ConfigValue::as_bool),
-        Some(true)
-    );
-    c.set("krishiv.optimizer.shareFilteredScans", "false")
-        .unwrap();
-    assert_eq!(
-        c.get(&SHARE_FILTERED_SCANS).and_then(ConfigValue::as_bool),
-        Some(false)
-    );
-    assert!(
-        c.set("krishiv.optimizer.shareFilteredScans", "maybe")
-            .is_err()
-    );
-}
-
-#[test]
-fn group_key_code_defaults_off_and_parses() {
-    let mut c = Config::new();
-    assert_eq!(
-        c.get(&GROUP_KEY_CODE).and_then(ConfigValue::as_bool),
-        Some(false)
-    );
-    c.set("krishiv.optimizer.groupKeyCode", "true").unwrap();
-    assert_eq!(
-        c.get(&GROUP_KEY_CODE).and_then(ConfigValue::as_bool),
-        Some(true)
-    );
-    assert!(c.set("krishiv.optimizer.groupKeyCode", "maybe").is_err());
-}
-
-#[test]
-fn group_key_code_force_is_experimental_and_off() {
-    let mut c = Config::new();
-    assert!(!crate::experimental::is_enabled(&c, "groupKeyCodeForce"));
-    c.set("krishiv.experimental.groupKeyCodeForce", "true")
-        .unwrap();
-    assert!(crate::experimental::is_enabled(&c, "groupKeyCodeForce"));
-    assert!(
-        c.set("krishiv.experimental.groupKeyCodeForce", "maybe")
-            .is_err()
-    );
-}
+mod optimizer_sharing;
 
 #[test]
 fn semi_anti_join_order_defaults_on_and_is_user_settable() {
