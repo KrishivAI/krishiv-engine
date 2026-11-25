@@ -127,7 +127,12 @@ fn clocked_session(server: &Server, s3: &S3Server) -> (Session, Arc<VendedClock>
 
 /// [`session`], its catalog's vended answers in a cache of their own on `clock`.
 fn session_on(server: &Server, s3: &S3Server, clock: Arc<VendedClock>) -> Session {
-    let cache = Arc::new(VendedCache::with_clock(clock));
+    session_with(server, s3, Arc::new(VendedCache::with_clock(clock)))
+}
+
+/// [`session`], its catalog's vended answers in `cache` (shared by sessions of different runtimes to show that a
+/// catalog instance never serves another's answer).
+fn session_with(server: &Server, s3: &S3Server, cache: Arc<VendedCache>) -> Session {
     let setup = CatalogSetup::new(DeclMode::Embedded)
         .factory(Arc::new(ClockedFactory(cache)))
         .setting("krishiv.catalog.lake.type", "iceberg-rest")
@@ -641,7 +646,9 @@ fn vended_secrets_never_shown() {
         ),
         None,
     );
-    let s = session(&server, &s3);
+    // One cache for both runtimes, as in a process: only the catalog instance keeps their answers apart.
+    let cache = Arc::new(VendedCache::with_clock(Arc::new(VendedClock::default())));
+    let s = session_with(&server, &s3, Arc::clone(&cache));
     assert_eq!(ids(&s), vec![1, 2, 3]);
     let mut shown = String::new();
     for sql in [
@@ -670,7 +677,7 @@ fn vended_secrets_never_shown() {
         None,
     );
     let e = block_on(async {
-        session(&moved, &s3)
+        session_with(&moved, &s3, cache)
             .sql("SELECT id FROM lake.db.t")
             .await?
             .collect()

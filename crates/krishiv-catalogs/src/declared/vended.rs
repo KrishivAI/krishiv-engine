@@ -210,22 +210,38 @@ impl State {
     }
 }
 
-/// The wall clock of vended answers (fetch time, cache expiry, the refresh skew): the system clock, which a test
-/// moves forward ([`Self::advance`]) instead of sleeping. The store's own credential cache keeps the system clock;
-/// it is built per query, so its first credential of a scope always comes from [`VendedSource`].
-#[derive(Debug, Default)]
+/// The wall clock of vended answers (fetch time, cache expiry, the refresh skew): the system clock. In tests it is
+/// frozen at its creation and moves only when the test moves it ([`Self::advance`]), so a slow runner never expires
+/// an answer early. The store's own credential cache keeps the system clock; it is built per query, so its first
+/// credential of a scope always comes from [`VendedSource`].
+#[derive(Debug)]
+#[cfg_attr(not(test), derive(Default))]
 pub(crate) struct VendedClock {
+    /// The time the test clock was created.
+    #[cfg(test)]
+    start: SystemTime,
     /// How far a test moved the clock ahead, in milliseconds.
     #[cfg(test)]
     ahead_ms: AtomicU64,
 }
 
+#[cfg(test)]
+impl Default for VendedClock {
+    fn default() -> Self {
+        Self {
+            start: SystemTime::now(),
+            ahead_ms: AtomicU64::new(0),
+        }
+    }
+}
+
 impl VendedClock {
     /// Now.
     pub(crate) fn now(&self) -> SystemTime {
-        let now = SystemTime::now();
         #[cfg(test)]
-        let now = now + Duration::from_millis(self.ahead_ms.load(Ordering::Relaxed));
+        let now = self.start + Duration::from_millis(self.ahead_ms.load(Ordering::Relaxed));
+        #[cfg(not(test))]
+        let now = SystemTime::now();
         now
     }
 

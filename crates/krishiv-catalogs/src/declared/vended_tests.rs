@@ -486,10 +486,12 @@ fn token_fixture_refreshing(
     use krishiv_store::egress::PrivateAddresses;
 
     let long = ms(SystemTime::now() + Duration::from_secs(3600));
+    // A refreshed credential expires at `REFRESHED_EXPIRY_MS`, never at the first answer's expiry, so a test can
+    // tell which one it was served (a `ScopedCredential` shows no key id outside krishiv-store).
     let credential = |prefix: &str, key_id: &str| {
         format!(
             r#"{{"prefix": "{prefix}", "config": {{"s3.access-key-id": "{key_id}", "s3.secret-access-key": "s",
-                "s3.session-token-expires-at-ms": "{long}"}}}}"#
+                "s3.session-token-expires-at-ms": "{REFRESHED_EXPIRY_MS}"}}}}"#
         )
     };
     let refreshed = match refreshed {
@@ -573,6 +575,9 @@ fn token_fixture_refreshing(
     loaded.table_token = Some(SecretString::new("table-token"));
     (server, cache, table, loaded)
 }
+
+/// The expiry of every credential the refreshing fixture's `/credentials` endpoint answers (2100-01-01).
+const REFRESHED_EXPIRY_MS: u64 = 4_102_444_800_000;
 
 /// The `/credentials` requests the catalog saw, by bearer.
 fn credential_bearers(server: &crate::http_test_server::Server) -> Vec<Option<String>> {
@@ -694,6 +699,11 @@ fn a_refresh_that_narrows_the_prefix_still_serves_the_scope() {
     let refreshed = futures::executor::block_on(source.current());
     assert!(refreshed.is_ok(), "{:?}", refreshed.err());
     assert_eq!(credential_bearers(&server).len(), 1);
+    // The refreshed credential (`AKIANEWKEY`), not the first answer's `AKIAOLDKEY` again.
+    assert_eq!(
+        refreshed.unwrap().expires_at(),
+        Some(UNIX_EPOCH + Duration::from_millis(REFRESHED_EXPIRY_MS))
+    );
 }
 
 /// Two narrower prefixes with different credentials: no one credential serves the scope, so the read is refused as

@@ -1573,8 +1573,9 @@ fn an_unread_argument_is_still_checked_against_the_group_by() {
         &s,
         "SELECT name FROM people GROUP BY name HAVING seven(id) > 0",
     );
-    assert!(
-        e.error_class().name().starts_with("UNRESOLVED_COLUMN"),
+    assert_eq!(
+        e.error_class().name(),
+        "UNRESOLVED_COLUMN.WITH_SUGGESTION",
         "{e:?}"
     );
 }
@@ -1739,5 +1740,46 @@ fn a_call_s_inputs_are_its_arguments_before_the_parameter_cast() {
     assert_eq!(
         ok(&s, "SELECT fs(id) FROM people GROUP BY fs(id) ORDER BY 1"),
         ["1", "2", "3"]
+    );
+}
+
+/// Spark 4.2.1 and 4.3.0 (probe `probe-sqlfn/p3.py`, `out3-<ver>.txt`, 2026-11-25): an item
+/// computed above the aggregate (a window, a lateral alias) and an item under the DISTINCT
+/// rewrite check a call by its inputs too, and a call over grouped inputs still lifts.
+#[test]
+fn a_call_above_the_aggregate_or_under_the_distinct_rewrite_is_checked_by_its_inputs() {
+    let s = session();
+    for f in [
+        "CREATE TEMPORARY FUNCTION seven_i(x INT) RETURNS INT RETURN 7",
+        "CREATE TEMPORARY FUNCTION first_s(a STRING, b INT) RETURNS STRING RETURN a",
+        "CREATE TEMPORARY FUNCTION first_of(a INT, b INT) RETURNS INT RETURN a",
+    ] {
+        ok(&s, f);
+    }
+    for q in [
+        "SELECT seven_i(id) + row_number() OVER (ORDER BY name) FROM people GROUP BY name",
+        "SELECT length(name) AS l, seven_i(id) + l FROM people GROUP BY name",
+        "SELECT first_s(name, id), count(DISTINCT id), count(DISTINCT name) FROM people GROUP BY name",
+    ] {
+        let e = fails(&s, q);
+        let (class, params) = class_and_params(&e);
+        assert_eq!(class, "MISSING_AGGREGATION", "{q}");
+        assert_eq!(params["expression"], "\"id\"", "{q}");
+    }
+    assert_eq!(
+        ok(
+            &s,
+            "SELECT first_of(id, 1) + row_number() OVER (ORDER BY id) FROM people \
+             GROUP BY id ORDER BY 1"
+        ),
+        ["2", "4", "6"]
+    );
+    assert_eq!(
+        ok(
+            &s,
+            "SELECT first_s(name, 1), count(DISTINCT id), count(DISTINCT name) FROM people \
+             GROUP BY name ORDER BY 1"
+        ),
+        ["NULL\t1\t0", "b\t1\t1", "c\t1\t1"]
     );
 }
