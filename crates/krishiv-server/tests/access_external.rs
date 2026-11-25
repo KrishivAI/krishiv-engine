@@ -36,11 +36,15 @@ enum Mode {
     Slow,
     /// Fail every check with a `PermissionDenied` status whose message is `CANARY`.
     Canary,
+    /// No service: nothing listens on the endpoint (a Unix socket path).
+    Down,
 }
 
 struct Service {
     mode: Mode,
     items: Arc<Mutex<Vec<String>>>,
+    /// The `(statement_class, query_id)` of every check.
+    statements: Arc<Mutex<Vec<(String, String)>>>,
 }
 
 fn name_of(item: &proto::Item) -> String {
@@ -62,9 +66,13 @@ impl AccessPolicyService for Service {
         match self.mode {
             Mode::Slow => tokio::time::sleep(Duration::from_secs(2)).await,
             Mode::Canary => return Err(tonic::Status::permission_denied(CANARY)),
-            Mode::Rule => {}
+            Mode::Rule | Mode::Down => {}
         }
         let message = request.into_inner();
+        self.statements
+            .lock()
+            .unwrap()
+            .push((message.statement_class.clone(), message.query_id.clone()));
         let decisions = message
             .items
             .iter()
@@ -127,6 +135,8 @@ impl World {
             "INSERT INTO secret_t VALUES (3)",
             "CREATE VIEW secret_v AS SELECT a FROM t",
             "CREATE VIEW v AS SELECT a FROM t",
+            // A definer view over a table the service refuses (review r4).
+            "CREATE VIEW dv SQL SECURITY DEFINER AS SELECT a FROM secret_t",
         ] {
             w.run(&admin, sql).unwrap_or_else(|e| panic!("{sql}: {e}"));
         }
@@ -150,12 +160,35 @@ impl World {
         role: Role,
         roles_decide_data: bool,
     ) -> (Session, Arc<Mutex<Vec<String>>>) {
+        let (session, items, _) = self.ana_seen(mode, role, roles_decide_data);
+        (session, items)
+    }
+
+    /// [`Self::ana`], and the statements the service was told of.
+    #[expect(clippy::type_complexity, reason = "a test helper's tuple")]
+    fn ana_seen(
+        &self,
+        mode: Mode,
+        role: Role,
+        roles_decide_data: bool,
+    ) -> (
+        Session,
+        Arc<Mutex<Vec<String>>>,
+        Arc<Mutex<Vec<(String, String)>>>,
+    ) {
         let items = Arc::new(Mutex::new(Vec::new()));
+        let statements = Arc::new(Mutex::new(Vec::new()));
         let service = Service {
             mode,
             items: Arc::clone(&items),
+            statements: Arc::clone(&statements),
         };
-        let addr = self.tokio.block_on(async {
+        let endpoint = self.tokio.block_on(async {
+            if mode == Mode::Down {
+                // A Unix socket path nothing listens on: refused at once, and no other process
+                // can be on the other end (a freed TCP port could be taken meanwhile).
+                return format!("unix:{}", self.dir.path().join("no-service.sock").display());
+            }
             let incoming =
                 tonic::transport::server::TcpIncoming::bind("127.0.0.1:0".parse().unwrap())
                     .unwrap();
@@ -166,7 +199,7 @@ impl World {
                     .serve_with_incoming(incoming)
                     .await;
             });
-            addr
+            format!("http://{addr}")
         });
         // Only the slow service has to miss its deadline. The others answer at once, and a short
         // one would turn a loaded machine into a denial, since the session fails closed.
@@ -177,10 +210,7 @@ impl World {
         };
         let access = {
             let _guard = self.tokio.enter();
-            let channel = Endpoint::parse(&format!("http://{addr}"))
-                .unwrap()
-                .channel()
-                .unwrap();
+            let channel = Endpoint::parse(&endpoint).unwrap().channel().unwrap();
             ExternalAccess::over(AccessPolicyClient::new(channel), deadline, None, false)
         };
         // Server mode confines local paths to the configured roots: the warehouse here.
@@ -209,7 +239,11 @@ impl World {
             Some(role),
             Method::Token,
         );
-        (factory(&caller, Transport::Connect).unwrap(), items)
+        (
+            factory(&caller, Transport::Connect).unwrap(),
+            items,
+            statements,
+        )
     }
 
     fn run(&self, s: &Session, sql: &str) -> Result<usize, KrishivError> {
@@ -334,12 +368,104 @@ fn a_service_error_refuses_without_its_message() {
 #[test]
 fn a_slow_or_absent_service_refuses_everything() {
     let w = World::new();
-    let (ana, _) = w.ana(Mode::Slow, Role::Admin, false);
-    for sql in [
-        "SELECT * FROM t",
-        "SELECT * FROM v",
-        "INSERT INTO t VALUES (9, 9)",
-    ] {
-        refused(w.run(&ana, sql), sql);
+    for mode in [Mode::Slow, Mode::Down] {
+        let (ana, _) = w.ana(mode, Role::Admin, false);
+        for sql in [
+            "SELECT * FROM t",
+            "SELECT * FROM v",
+            "INSERT INTO t VALUES (9, 9)",
+        ] {
+            refused(w.run(&ana, sql), sql);
+        }
     }
+}
+
+/// Review r4: a definer view the service allows over a table it refuses is refused, whether the
+/// list holds the role matrix for data or not, and the refusal names neither the table nor the
+/// service. (A column-level refusal needs a column-level member, `grants`, which `krishiv server`
+/// does not wire yet; `krishiv-session` `access::intersection` tests cover the list's column pass.)
+#[test]
+fn a_definer_view_over_a_refused_table_is_refused() {
+    let w = World::new();
+    for roles_decide_data in [false, true] {
+        let (ana, items) = w.ana(Mode::Rule, Role::Operator, roles_decide_data);
+        let sql = "SELECT * FROM dv";
+        let e = w.run(&ana, sql).unwrap_err();
+        assert_eq!(e.error_class().name(), DENIED, "{sql}: {e}");
+        assert!(!e.to_string().contains("secret_t"), "{sql}: {e}");
+        // The service was asked about the view and, for its definer, the table.
+        let asked = items.lock().unwrap().clone();
+        assert!(asked.iter().any(|n| n == "dv"), "{asked:?}");
+        assert!(asked.iter().any(|n| n == "secret_t"), "{asked:?}");
+        // The view itself is not what was refused: an allowed definer view reads.
+        assert_eq!(w.run(&ana, "SELECT * FROM v").unwrap(), 1);
+    }
+}
+
+/// ADR 0049 §3, queue row 75: each check carries the statement's class and, with the caller's
+/// operation id, its query id; checks of the frame's action and of the queries a command runs
+/// carry them too.
+#[test]
+fn a_check_names_the_statement_it_is_asked_for() {
+    let w = World::new();
+    let (ana, _, seen) = w.ana_seen(Mode::Rule, Role::Operator, false);
+    let run = |sql: &str, op: &str| {
+        let options = krishiv_session::QueryOptions::new().operation_id(op);
+        let r = w
+            .tokio
+            .block_on(async { ana.sql_with(sql, options).await?.collect().await });
+        let checks = std::mem::take(&mut *seen.lock().unwrap());
+        assert!(!checks.is_empty(), "{sql}: the service was asked");
+        (r, checks)
+    };
+    let op = "6f1d2c1e-8b8a-4c55-9a8e-2f6a3c1b7d90";
+    let (read, checks) = run("SELECT a, b FROM t", op);
+    assert_eq!(read.unwrap().len(), 1);
+    assert!(
+        checks.iter().all(|(c, id)| c == "READ" && id == op),
+        "{checks:?}"
+    );
+    let op = "0b7e4f3a-2d51-4e6b-8f0c-9a1d3e5b7c22";
+    let (write, checks) = run("INSERT INTO t VALUES (5, 6)", op);
+    write.unwrap();
+    assert!(
+        checks.iter().all(|(c, id)| c == "WRITE" && id == op),
+        "{checks:?}"
+    );
+    let op = "4c2a9e1b-7f3d-4a8c-b6e5-1d0f2a3b4c5d";
+    let (drop, checks) = run("DROP TABLE secret_t", op);
+    refused(drop.map(|b| b.len()), "drop");
+    assert!(
+        checks.iter().all(|(c, id)| c == "DDL" && id == op),
+        "{checks:?}"
+    );
+    // Without an operation id the class is still sent; the id only once the query's row exists,
+    // so the first analysis (before the row) sends none.
+    w.run(&ana, "SELECT a FROM t").unwrap();
+    let checks = std::mem::take(&mut *seen.lock().unwrap());
+    assert!(
+        !checks.is_empty() && checks.iter().all(|(c, _)| c == "READ"),
+        "{checks:?}"
+    );
+    assert_eq!(checks[0].1, "", "{checks:?}");
+    // A DataFrame action is no SQL statement: its checks send neither, even right after one
+    // (review of 2a46d63f4, finding 1: nothing of the statement carries over).
+    let op = "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d";
+    let (read, _) = run("SELECT a, b FROM t", op);
+    read.unwrap();
+    let rows = w
+        .tokio
+        .block_on(async { ana.table("t").collect().await })
+        .unwrap();
+    assert_eq!(
+        rows.iter()
+            .map(arrow_array::RecordBatch::num_rows)
+            .sum::<usize>(),
+        2
+    );
+    let checks = std::mem::take(&mut *seen.lock().unwrap());
+    assert!(
+        !checks.is_empty() && checks.iter().all(|(c, id)| c.is_empty() && id.is_empty()),
+        "{checks:?}"
+    );
 }
