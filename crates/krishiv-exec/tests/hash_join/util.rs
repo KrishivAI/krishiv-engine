@@ -169,6 +169,7 @@ pub(crate) fn cell(a: &ArrayRef, i: usize) -> String {
         DataType::Float64 => format!("{:.4}", a.as_primitive::<Float64Type>().value(i)),
         DataType::Decimal128(_, _) => a.as_primitive::<Decimal128Type>().value_as_string(i),
         DataType::Utf8 => a.as_string::<i32>().value(i).to_owned(),
+        DataType::Utf8View => a.as_string_view().value(i).to_owned(),
         DataType::Boolean => a.as_boolean().value(i).to_string(),
         t => format!("<{t}>"),
     }

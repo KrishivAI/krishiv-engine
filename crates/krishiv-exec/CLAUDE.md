@@ -38,15 +38,17 @@ executor: `mock_exec` in `krishiv-testkit/tests/file_format_mock.rs`.
 radix partitions · `table.rs` row arena + `JoinTable` (shared `KeyTable`, E02) · `build.rs` build
 sink (also the runtime filter producer, P2-T163: per-driver partials, published at finalize, `Disabled` on drop) ·
 `direct.rs` (perf lever J1, `krishiv.exec.join.directIndex`) the direct index of a tiny build: at most 4,096 rows, one
-non-null-safe `Int32`/`Int64` row-layout key spanning at most four slots a row; each probe driver builds it from the
-level-0 tables it holds (none spilled), and `Cursor::new` then finds each row's partition and newest row by `key - min`
-(no encode, no hash; null-aware anti, grace partitions and detailed metrics keep the hashed probe; `direct_probe_rows`) ·
+non-null-safe `Int32`/`Int64` row-layout key spanning at most four slots a row; the first probe driver builds it from the
+level-0 tables (none spilled) into `build.rs` `Level0::direct`, shared by every driver and dropped with the tables; with lever
+P3 a build whose tables hold at most 256 KiB also has its payload decoded once (`DirectPayload`, reserved for the index's life, one copy per
+build; probes `take` build columns from it, sparse view columns `gc`'d; `direct_payload_rows`), and `Cursor::new` then finds each row's partition and newest row by `key - min`
+(no encode, no hash; null-aware anti, grace partitions and detailed metrics keep the hashed probe; `direct_probe_rows`); lever C: an unweighted inner join without a filter or single-match check over unique build keys and a decoded payload emits its pairs in one pass (`Cursor::next_direct_inner`: no chain walk, no match state; `direct_inner_rows`) ·
 `probe.rs` probe operator + match cursor (its first read of the build, `BuildGlobal::built`, ends the build's idle
 window: until then a finished build's tables are an `OutputSpill` written partition by partition, largest first, and
 idle after `krishiv.exec.join.idleSpillAfter`, so the arbitrator asks them before a running consumer self-spills; study
 30. Each probe driver then holds the build's level-0 tables, `build.rs` `Level0`, whose memory includes the per-partition
 reservations moved at the seal; the last probe driver done after the flush barrier releases them, so a downstream
-sink's final phase gets that memory; a `Prebuilt` broadcast build is never released) · `grace.rs` spill partitions,
+sink's final phase gets that memory; a `Prebuilt` broadcast build is never released) · `probe/held.rs` (K1, design `P3-0.3.1-probe-empty-batches.md` §3): the survivors of a fused row stage that keeps under a quarter of a batch, copied into one held buffer (uncharged, bounded like `InputCoalesce`: a batch of rows, `held_max_bytes`) and probed once a full batch: predicate, lookups and output once per batch of survivors; only while no build partition spilled, unweighted input, not null-aware anti or a build-preserving join, and under `krishiv.exec.coalesceInput`; the last held rows are probed in `finish`; metric `probe_held_rows` · `grace.rs` spill partitions,
 flush-phase grace join · `block.rs` a
 partition's chunks kept few: the probe side's tiered merge, the build side's cut into the arena's 2^14-row blocks · `broadcast.rs`
 (P2-T177 unit 3) `BroadcastTables`, a worker resource (`WorkerContext::with_broadcasts`): a broadcast join over a cut
