@@ -2,6 +2,11 @@
   "cases": {
     "other-version": [
       54
+    ],
+    "v35-ansi-default": [
+      34,
+      35,
+      36
     ]
   },
   "file": "postgreSQL/float8",

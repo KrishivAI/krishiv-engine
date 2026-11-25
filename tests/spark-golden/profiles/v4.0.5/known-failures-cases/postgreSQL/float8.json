@@ -1,5 +1,10 @@
 {
   "cases": {
+    "divergence-ceil-floor-ansi-overflow": [
+      34,
+      35,
+      36
+    ],
     "other-version": [
       54
     ]

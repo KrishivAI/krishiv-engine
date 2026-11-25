@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Cast kernel benchmarks (64K rows, one thread; CodSpeed in CI): the
 //! TPC-H load and DataFrame casts — string to int/decimal/date, decimal
-//! rescale, int to decimal, decimal to string, and double to decimal and to string (fares).
+//! rescale, int to decimal, decimal to string, double to decimal and to string (fares), and the
+//! widening integral casts (ClickBench's `CAST(smallint AS INT)`).
 
 #![expect(
     missing_docs,
@@ -14,7 +15,10 @@
 
 use std::hint::black_box;
 
-use arrow_array::{Decimal128Array, Float64Array, Int64Array, StringArray, Time64NanosecondArray};
+use arrow_array::{
+    Decimal128Array, Float64Array, Int16Array, Int32Array, Int64Array, StringArray,
+    Time64NanosecondArray,
+};
 use arrow_schema::DataType;
 use criterion::{Criterion, criterion_group, criterion_main};
 use krishiv_kernels::cast::{CastMode, CastOptions, FixedOffset, cast};
@@ -82,6 +86,15 @@ fn casts(c: &mut Criterion) {
     let t: Time64NanosecondArray = (0..ROWS).map(|i| Some(i * 1_319_000)).collect();
     bench("time_to_string", &t, DataType::Utf8);
     bench("time_to_bigint", &t, DataType::Int64);
+    // ClickBench's `CAST(smallint AS INT)` (q30, q02, q08), with one NULL in 16.
+    let shorts: Int16Array = (0..ROWS)
+        .map(|i| (i % 16 != 0).then_some(i16::try_from(i * 7919 % 2_000).unwrap()))
+        .collect();
+    bench("smallint_to_int", &shorts, DataType::Int32);
+    let ints: Int32Array = (0..ROWS)
+        .map(|i| Some(i32::try_from(i * 7919).unwrap()))
+        .collect();
+    bench("int_to_bigint", &ints, DataType::Int64);
 }
 
 criterion_group!(benches, casts);

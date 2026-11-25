@@ -88,7 +88,7 @@ impl Graph {
         let mut out = Vec::new();
         let mut child = |c: &Arc<LogicalPlan>, d: Option<Attrs>| out.push((self.id(c), d));
         match &p.node {
-            PlanNode::Project { input, exprs } if placeholder(exprs, req) => {
+            PlanNode::Project { input, exprs } if placeholder(input, exprs, req) => {
                 child(input, Some(Attrs::default()));
             }
             PlanNode::Project { input, exprs } => child(input, Some(refs(&keep(exprs, req)))),
@@ -298,7 +298,7 @@ impl Rewrite<'_> {
             // a join narrows the input again (otherwise the next run, after
             // CSE left the old column unread below, picks another one).
             // The rebuilt projection keeps the old one's origin.
-            PlanNode::Project { input, exprs } if placeholder(exprs, req) => {
+            PlanNode::Project { input, exprs } if placeholder(input, exprs, req) => {
                 narrow_as(input, &Attrs::default(), rebuilt.origin)
             }
             PlanNode::Project { input, exprs } => {
@@ -551,13 +551,23 @@ fn has_required_cse(exprs: &[Arc<Expr>], req: &Attrs) -> bool {
 
 /// Whether a projection is read for its row count alone: nothing above reads
 /// its output and every entry is a bare column, so dropping it changes no
-/// value and raises nothing.
-fn placeholder(exprs: &[Arc<Expr>], req: &Attrs) -> bool {
+/// value and raises nothing. Directly over a scan, a rename of a bare column
+/// counts too (a view's projection: `SELECT * FROM parquet.`...``, so
+/// `count(*)` through it reads only Parquet footers). Not above any other
+/// input: join ordering does not look through a rename, so dropping one over a
+/// join would let the next run merge that join into the tree above it (the
+/// plan would not be a fixed point); a scan is a leaf either way.
+fn placeholder(input: &LogicalPlan, exprs: &[Arc<Expr>], req: &Attrs) -> bool {
+    let over_scan = matches!(input.node, PlanNode::Scan(_));
     req.is_empty()
         && !exprs.is_empty()
-        && exprs
-            .iter()
-            .all(|e| matches!(e.node, ExprNode::Resolved(ResolvedExpr::Column(_))))
+        && exprs.iter().all(|e| match &e.node {
+            ExprNode::Resolved(ResolvedExpr::Column(_)) => true,
+            ExprNode::Resolved(ResolvedExpr::Alias { expr, .. }) => {
+                over_scan && matches!(expr.node, ExprNode::Resolved(ResolvedExpr::Column(_)))
+            }
+            _ => false,
+        })
 }
 
 /// The output entries of a projection or aggregate that are read, keeping
