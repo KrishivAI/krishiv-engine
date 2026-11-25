@@ -412,12 +412,12 @@ def test_print_schema_nested_and_level(spark: SparkSession, capsys: pytest.Captu
     assert capsys.readouterr().out.splitlines() == [
         "root",
         " |-- c: array (nullable = false)",
-        " |    |-- element: integer (containsNull = true)",
+        " |    |-- element: integer (containsNull = false)",
         " |-- m: map (nullable = false)",
         " |    |-- key: string",
-        " |    |-- value: integer (valueContainsNull = true)",
+        " |    |-- value: integer (valueContainsNull = false)",
         " |-- s: struct (nullable = false)",
-        " |    |-- x: integer (nullable = true)",
+        " |    |-- x: integer (nullable = false)",
         "",
     ]
     df.printSchema(1)
