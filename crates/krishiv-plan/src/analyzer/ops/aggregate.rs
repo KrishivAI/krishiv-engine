@@ -104,6 +104,11 @@ impl Resolver<'_> {
             for b in &mut bounds {
                 an.check_late_call(&b.expr)?;
                 b.expr = self.resolve_grouping(&b.expr, an, env)?;
+                // Spark binds an `ORDER BY` aggregate over grouping sets to
+                // the keys' copies (`HAVING` reads the input columns).
+                if op == "Sort" {
+                    b.expr = an.over_copies(&b.expr)?;
+                }
             }
         }
         let mut st = Grouped {

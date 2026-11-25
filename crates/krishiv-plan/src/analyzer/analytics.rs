@@ -41,8 +41,8 @@ use super::ops::{col_expr, contains_aggregate, contains_bare, has_generator, out
 use super::resolve::{Attr, Env, Rel, Resolver};
 use super::{AnalysisError, ArgType};
 use crate::{
-    BoundColumn, CastMode, Expr, ExprNode, FunctionCall, FunctionId, FunctionKind, Grouping,
-    Literal, LogicalPlan, Origin, PlanNode, ResolvedExpr,
+    AttrId, BoundColumn, CastMode, Expr, ExprNode, FunctionCall, FunctionId, FunctionKind,
+    Grouping, Literal, LogicalPlan, Origin, PlanNode, ResolvedExpr,
 };
 
 /// The most grouping expressions one `GROUP BY` takes: the grouping id is a
@@ -90,6 +90,8 @@ impl GroupingFn {
 pub(super) struct GroupExpr {
     /// Its semantic key.
     key: u128,
+    /// The input column it copies, when it is a bare column.
+    column: Option<AttrId>,
     /// Its attribute in the expansion: a nullable copy.
     pub(super) attr: Attr,
 }
@@ -123,6 +125,26 @@ impl Analytics {
             .map(|g| g.attr.clone())
             .chain(self.gid.iter().cloned())
             .collect()
+    }
+
+    /// `e` with every aggregate call's reads of a grouping column pointed
+    /// at the column's copy, which is NULL in the sets that leave it out:
+    /// Spark's `ORDER BY sum(b)` over `ROLLUP(a, b)`.
+    pub(super) fn over_copies(&self, e: &Arc<Expr>) -> Result<Arc<Expr>, AnalysisError> {
+        Arc::clone(e).transform_down(&mut |x: Arc<Expr>| match &x.node {
+            ExprNode::Resolved(ResolvedExpr::Function(f)) if f.kind == FunctionKind::Aggregate => {
+                Arc::clone(&x).transform_down(&mut |y: Arc<Expr>| {
+                    let ExprNode::Resolved(ResolvedExpr::Column(c)) = &y.node else {
+                        return Ok(y);
+                    };
+                    Ok(match self.exprs.iter().find(|g| g.column == Some(c.id)) {
+                        Some(g) => col_expr(&g.attr.col, y.origin),
+                        None => y,
+                    })
+                })
+            }
+            _ => Ok(x),
+        })
     }
 
     /// `HAVING` and `ORDER BY` over numbered sets: Spark reads the last
@@ -527,6 +549,7 @@ impl Resolver<'_> {
             self.carry_column_meta(v.id, copy.id);
             copies.push(GroupExpr {
                 key: keys_of[j],
+                column: column.as_ref().map(|a| a.col.id),
                 attr: Attr {
                     col: copy,
                     qual: column

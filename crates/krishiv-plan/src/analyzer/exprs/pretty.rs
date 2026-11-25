@@ -686,6 +686,8 @@ pub(super) fn call(
             let d = if distinct { "DISTINCT " } else { "" };
             format!("{}({d}{}, 0)", name.to_lowercase(), k[0])
         }
+        // `random` is an alias Spark names as `rand`.
+        _ if name.eq_ignore_ascii_case("random") => format!("rand({})", k.join(", ")),
         _ if name.eq_ignore_ascii_case("ceil") && k.len() == 1 => {
             let d = if distinct { "DISTINCT " } else { "" };
             format!("CEIL({d}{})", k[0])

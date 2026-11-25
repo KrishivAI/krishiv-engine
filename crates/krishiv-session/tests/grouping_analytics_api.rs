@@ -436,3 +436,67 @@ fn grouping_retype_keeps_distinct_and_filter() -> R {
     );
     Ok(())
 }
+
+/// The rows in the order the query returns them.
+fn in_order(s: &Session, query: &str) -> R<Vec<String>> {
+    Ok(block_on(async { s.sql(query).await?.collect().await })
+        .map(|batches| row_strings(&batches))?)
+}
+
+#[test]
+fn order_by_aggregates_read_the_grouping_copies_and_having_does_not() -> R {
+    // Spark 4.2.0: over grouping sets, `sum(b)` in `ORDER BY` is NULL on the
+    // rows that roll `b` up (they sort first); `HAVING` sums the input.
+    let s = session()?;
+    let from = "FROM t GROUP BY ROLLUP(a, b)";
+    for order in ["sum(b), a, b", "sum(t.b) + 0, a, b"] {
+        assert_eq!(
+            in_order(
+                &s,
+                &format!("SELECT a, b, sum(b) AS sb {from} ORDER BY {order}")
+            )?,
+            [
+                "NULL\tNULL\t4",
+                "1\tNULL\t3",
+                "2\tNULL\t1",
+                "1\t1\t1",
+                "2\t1\t1",
+                "1\t2\t2",
+            ],
+            "{order}"
+        );
+    }
+    // The alias is the select list's sum, and `sum(v)` reads no key.
+    assert_eq!(
+        in_order(
+            &s,
+            &format!("SELECT a, b, sum(b) AS sb {from} ORDER BY sb, a, b")
+        )?,
+        [
+            "1\t1\t1",
+            "2\tNULL\t1",
+            "2\t1\t1",
+            "1\t2\t2",
+            "1\tNULL\t3",
+            "NULL\tNULL\t4",
+        ]
+    );
+    assert_eq!(
+        in_order(
+            &s,
+            &format!("SELECT a, b {from} HAVING sum(b) > 1 ORDER BY a, b")
+        )?,
+        ["NULL\tNULL", "1\tNULL", "1\t2"]
+    );
+    Ok(())
+}
+
+#[test]
+fn the_random_alias_is_named_rand() -> R {
+    // Spark 4.2.0 column names.
+    let s = session()?;
+    let (schema, _) = sql(&s, "SELECT random(1), RANDOM() + 1")?;
+    let names: Vec<_> = schema.fields().iter().map(|f| f.name().as_str()).collect();
+    assert_eq!(names, ["rand(1)", "(rand() + 1)"]);
+    Ok(())
+}
