@@ -4,7 +4,7 @@ name: Release artifacts
 # no registry upload, no tag, no GitHub Release (RELEASING.md, ADR 0031; xtask/tests/policy.rs
 # `release_publishing_is_manual_and_gated` keeps publish steps out of this file).
 #
-# Manual only, on main or a `v*` tag. Produces one workflow artifact, `release-bundle`, holding:
+# Manual only, on main, a `release/*` branch (the RC dry run) or a `v*` tag. Produces one workflow artifact, `release-bundle`, holding:
 #   - the wheels (krishiv and krishiv-compat) from wheels.yml,
 #   - the Linux CLI binaries from binaries.yml and a macOS arm64 binary built here,
 #   - SHA256SUMS over all of them,
@@ -29,7 +29,7 @@ env:
 
 jobs:
   nightly-green:
-    if: github.repository == 'KrishivAI/krishiv-engine' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+    if: github.repository == 'KrishivAI/krishiv-engine' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/') || startsWith(github.ref, 'refs/tags/v'))
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
