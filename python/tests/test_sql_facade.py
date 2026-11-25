@@ -139,7 +139,7 @@ def test_withcolumn_argument_errors(df: DataFrame) -> None:
     with pytest.raises(errors.PySparkTypeError):
         df.limit("3")  # ty: ignore[invalid-argument-type]
     with pytest.raises(errors.PySparkValueError):
-        F.col("a").alias("a", "b")
+        F.col("a").alias()
     with pytest.raises(errors.PySparkValueError):
         F.col("a").alias("a", metadata={})
     with pytest.raises(errors.PySparkTypeError):
@@ -261,8 +261,7 @@ def test_session_tables_and_reader(spark: SparkSession, df: DataFrame, tmp_path:
         spark.sql(1)  # ty: ignore[invalid-argument-type]
     with pytest.raises(errors.PySparkNotImplementedError):
         spark.sql("SELECT :a", args={"a": 1})
-    with pytest.raises(errors.PySparkNotImplementedError):
-        spark.createDataFrame(pa.table({"a": [1]}), schema="a int")
+    assert spark.createDataFrame(pa.table({"a": [1]}), schema="a int").dtypes == [("a", "int")]
     assert spark.createDataFrame([(1, "a")], ["x", "y"]).orderBy("x").collect() == [Row(x=1, y="a")]
     with pytest.raises(errors.PySparkTypeError):
         spark.read.load()
@@ -301,7 +300,7 @@ def test_row() -> None:
     assert "a" not in positional
     with pytest.raises(errors.PySparkValueError):
         Row(1, a=2)
-    with pytest.raises(errors.PySparkValueError):
+    with pytest.raises(errors.PySparkTypeError, match="CANNOT_CONVERT_TYPE"):
         positional.asDict()
     with pytest.raises(KeyError):
         r["zz"]
@@ -413,12 +412,12 @@ def test_print_schema_nested_and_level(spark: SparkSession, capsys: pytest.Captu
     assert capsys.readouterr().out.splitlines() == [
         "root",
         " |-- c: array (nullable = false)",
-        " |    |-- element: integer (containsNull = true)",
+        " |    |-- element: integer (containsNull = false)",
         " |-- m: map (nullable = false)",
         " |    |-- key: string",
-        " |    |-- value: integer (valueContainsNull = true)",
+        " |    |-- value: integer (valueContainsNull = false)",
         " |-- s: struct (nullable = false)",
-        " |    |-- x: integer (nullable = true)",
+        " |    |-- x: integer (nullable = false)",
         "",
     ]
     df.printSchema(1)
