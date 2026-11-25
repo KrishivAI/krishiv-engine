@@ -869,7 +869,25 @@ impl DataFrame {
             return Ok(a);
         }
         env.set_quiet_denials(quiet_denials, &self.session.state.policy);
-        self.analyzed_in_with_text(env, text.as_deref()).await
+        // A fresh analysis of a SQL statement's frame (an action after `sql`) asks the policy
+        // for that statement: its class and query id reach a provider's questions (ADR 0049).
+        let context = match (
+            env.statement_class,
+            crate::access::StatementContext::current(),
+        ) {
+            (Some(class), None) => Some(crate::access::StatementContext::new(
+                class,
+                self.session.operation_id().map(crate::QueryId::as_str),
+                Arc::clone(&env.row),
+            )),
+            _ => None,
+        };
+        match context {
+            Some(context) => {
+                Box::pin(context.scope(self.analyzed_in_with_text(env, text.as_deref()))).await
+            }
+            None => self.analyzed_in_with_text(env, text.as_deref()).await,
+        }
     }
 
     /// [`Self::analysis`] for an action that runs the query: a re-analysis
@@ -987,6 +1005,38 @@ impl DataFrame {
 
     async fn schema_here(&self) -> Result<SchemaRef, KrishivError> {
         Ok(client_schema_of(&self.analysis().await?.analyzed))
+    }
+
+    /// The result's schema from the analysis this frame already holds, without revalidating it:
+    /// no fresh analysis even when the plan reads files (which [`Self::schema`] analyzes again
+    /// every call), so a catalog, configuration or file change since that analysis is not seen.
+    /// Only for a caller that analyzed the frame a moment ago in the same request, as Arrow
+    /// Flight SQL does right after [`crate::Session::sql_query_with`] (MODES-4 F1). A frame that
+    /// holds no analysis yet gets [`Self::schema`]. Not covered by semver.
+    ///
+    /// ```
+    /// # let s = krishiv_session::Session::new()?;
+    /// use krishiv_session::{QueryOptions, SqlQuery};
+    /// let q = futures::executor::block_on(s.sql_query_with("SELECT 1 AS a", QueryOptions::default()))?;
+    /// let SqlQuery::Query(df) = q else { unreachable!() };
+    /// let schema = futures::executor::block_on(df.held_schema())?;
+    /// assert_eq!(schema.field(0).name(), "a");
+    /// # Ok::<(), krishiv_common::error::KrishivError>(())
+    /// ```
+    ///
+    /// # Errors
+    /// As [`Self::schema`], when the frame holds no analysis.
+    #[cfg(feature = "unstable-ir")]
+    pub async fn held_schema(&self) -> Result<SchemaRef, KrishivError> {
+        let held = self
+            .analysis
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        match held {
+            Some(a) => Ok(client_schema_of(&a.analyzed)),
+            None => self.schema().await,
+        }
     }
 
     /// Runs the query; its result rows, in batches. Dropping the stream

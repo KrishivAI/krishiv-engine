@@ -305,7 +305,11 @@ async fn h2_channel(addr: SocketAddr, origin: &str) -> tonic::transport::Channel
         .with_no_client_auth();
     config.alpn_protocols = vec![b"h2".to_vec()];
     let connector = TlsConnector::from(Arc::new(config));
-    tonic::transport::Endpoint::from_shared(origin.to_owned())
+    // The connector below does the TLS itself. With tonic's TLS features on (all-features builds), an `https`
+    // endpoint without a tonic TLS config is refused (`HttpsUriWithoutTlsSupport`), so the endpoint says `http`;
+    // only its authority matters to the test (it becomes `:authority`).
+    let endpoint = origin.replacen("https://", "http://", 1);
+    tonic::transport::Endpoint::from_shared(endpoint)
         .expect("endpoint")
         .connect_with_connector(tower::service_fn(move |_| {
             let connector = connector.clone();

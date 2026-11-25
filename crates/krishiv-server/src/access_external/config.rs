@@ -147,7 +147,7 @@ fn is_loopback(authority: &str) -> bool {
 }
 
 /// The `external` provider's settings.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExternalConfig {
     /// The service.
     pub endpoint: Endpoint,
