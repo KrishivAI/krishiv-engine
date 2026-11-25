@@ -6,17 +6,20 @@ scripts read ``SRC_DATANAME``, ``MACHINE_TYPE`` and ``SPILL_DIR`` from the envir
 ``data/<SRC_DATANAME>.csv``, time every question twice and append rows to ``time.csv`` through
 ``_helpers/helpers.py`` (``write_log``).
 
-This module writes that directory for Krishiv, so the benchmark's own runner (``run.sh``,
-``_run/partitioned_run.sh``) drives Krishiv unchanged::
+This module writes that directory for Krishiv and names the solution in the benchmark's own files (its launcher
+has a fixed list of solutions), so the benchmark's own runner (``run.sh``) drives Krishiv unchanged::
 
-    python -m krishiv_bench.dbbench_solution --out /path/to/db-benchmark/krishiv
+    python -m krishiv_bench.dbbench_solution --checkout /path/to/db-benchmark   # krishiv/ and the launcher's files
+    python -m krishiv_bench.dbbench_solution --out /path/to/db-benchmark/krishiv   # the directory only
 
 The question SQL is ``bench/queries/h2o-{groupby,join}/qNN.sql`` (one text for this harness and for the solution),
 the checksum columns are ``h2o.CHK_COLUMNS``. Everything goes through the Python session
 (``krishiv.sql.SparkSession``): the CSV is converted once to Parquet in ``$SPILL_DIR`` (untimed, like the other
-solutions' load), every question reads that Parquet through a view, and its result is consumed batch by batch
-through the Arrow stream, so no result is ever materialised in Python. ``cache`` is ``FALSE`` in the log because
-each question re-reads the Parquet.
+solutions' load) and every question reads that Parquet through a view. As in the other solutions, the timed part
+ends with the answer held (an Arrow table) and its shape read, and the ``chk`` sums are computed over that held
+answer in a second, separately timed step. At 1e9 rows, where an answer can be larger than memory, the answer is
+written to a Parquet file instead and ``on_disk`` is ``TRUE`` in the log. ``cache`` is ``FALSE`` because each
+question re-reads the Parquet.
 """
 
 from __future__ import annotations
@@ -86,38 +89,51 @@ _TEMPLATE = '''#!/usr/bin/env python3
 print("# {task}-krishiv.py", flush=True)
 
 import gc
+import json
 import os
+import shutil
 import timeit
 
+import krishiv
 import pyarrow as pa
+import pyarrow.compute as pc
 from krishiv.sql import SparkSession
 
 exec(open("./_helpers/helpers.py").read())
 
+ver = krishiv.__version__
+git = krishiv.build_info().get("commit", "")
 task = "{task}"
 solution = "krishiv"
 fun = "spark.sql"
 cache = "FALSE"
-git = open("krishiv/REVISION").read().strip() if os.path.isfile("krishiv/REVISION") else ""
 
 data_name = os.environ["SRC_DATANAME"]
 machine_type = os.environ["MACHINE_TYPE"]
-spill_dir = os.path.join(os.environ["SPILL_DIR"], "krishiv-{task}")
-os.makedirs(spill_dir, exist_ok=True)
+# The engine refuses a spill directory that group or others can write, so this one is private and fresh.
+spill_dir = os.path.join(os.environ.get("SPILL_DIR", "."), "krishiv-{task}-" + data_name)
+shutil.rmtree(spill_dir, ignore_errors=True)
+os.makedirs(spill_dir)
+os.chmod(spill_dir, 0o700)
 
 QUESTIONS = json.loads({questions_json!r})
 SCHEMAS = json.loads({schemas_json!r})
 {tables_code}
-scale_factor = data_name.replace("{prefix}_", "")[:4].replace("_", "")
-on_disk = "TRUE" if (machine_type == "c6id.4xlarge" and float(scale_factor) >= 1e9) else "FALSE"
+# At 1e9 rows an answer can be larger than memory (question 10 and the joins return up to 1e9 rows), so it is
+# written to a Parquet file instead of being held as an Arrow table. KRISHIV_ON_DISK=true forces that at any size.
+on_disk = float(data_name.split("_")[1]) >= 1e9 or os.environ.get("KRISHIV_ON_DISK", "").lower() == "true"
+ans_path = os.path.join(spill_dir, "ans.parquet")
 
 builder = SparkSession.builder.config("krishiv.spill.dir", spill_dir)
 if os.environ.get("KRISHIV_MEMORY_LIMIT"):
     builder = builder.config("krishiv.memory.limit", os.environ["KRISHIV_MEMORY_LIMIT"])
 spark = builder.getOrCreate()
-ver = open("krishiv/VERSION").read().strip()
 
 print("loading dataset " + data_name, flush=True)
+if on_disk:
+    print("answers are written to disk", flush=True)
+# The CSV is loaded once into the engine's own storage (a Parquet file), untimed, as the other solutions load
+# theirs into a table; every question then reads that file (cache = FALSE).
 for name, (src, ddl) in TABLES.items():
     parquet = os.path.join(spill_dir, name + ".parquet")
     spark.read.csv(src, header=True, schema=ddl).write.mode("overwrite").parquet(parquet)
@@ -126,38 +142,48 @@ in_rows = spark.sql("SELECT COUNT(*) FROM x").collect()[0][0]
 print(in_rows, flush=True)
 
 
-def consume(sql):
-    """Run the query and count its rows from the Arrow stream; nothing is kept."""
-    rows = 0
-    for batch in pa.RecordBatchReader.from_stream(spark.sql(sql)):
-        rows += batch.num_rows
-    return rows
+def answer(sql):
+    """Run the question and keep its answer: an Arrow table, or the Parquet file when on_disk. Timed."""
+    if on_disk:
+        spark.sql(sql).write.mode("overwrite").parquet(ans_path)
+        ans = spark.read.parquet(ans_path)
+        return None, ans.count(), len(ans.columns)
+    ans = pa.RecordBatchReader.from_stream(spark.sql(sql)).read_all()
+    return ans, ans.num_rows, ans.num_columns
 
 
-def checksum(sql, columns):
-    """The benchmark's ``chk``: the sums of the checked columns over the answer (untimed, like the other solutions')."""
-    sums = ", ".join("SUM(%s) AS %s" % (c, c) for c in columns)
-    row = spark.sql("SELECT COUNT(*) AS n_rows, %s FROM (%s) AS ans" % (sums, sql)).collect()[0]
-    return [row[c] for c in columns], row["n_rows"]
+def checksum(ans, columns):
+    """The benchmark's chk: the sum of each checked column over the kept answer. Not timed as the question."""
+    if on_disk:
+        sums = ", ".join("SUM(%s) AS %s" % (c, c) for c in columns)
+        row = spark.sql("SELECT %s FROM parquet.`%s`" % (sums, ans_path)).collect()[0]
+        return [row[c] for c in columns]
+    return [pc.sum(ans[c]).as_py() for c in columns]
 
 
+task_init = timeit.default_timer()
 print("{verb}...", flush=True)
-for q in QUESTIONS:
-    for run in (1, 2):
-        gc.collect()
-        t_start = timeit.default_timer()
-        out_rows = consume(q["sql"])
-        t = timeit.default_timer() - t_start
-        m = memory_usage()
-        t_start = timeit.default_timer()
-        chk, n_rows = checksum(q["sql"], q["chk"])
-        chkt = timeit.default_timer() - t_start
-        assert n_rows == out_rows, (q["id"], n_rows, out_rows)
-        print(q["id"], out_rows, flush=True)
-        write_log(task=task, data=data_name, in_rows=in_rows, question=q["question"], out_rows=out_rows,
-                  out_cols=len(q["chk"]), solution=solution, version=ver, git=git, fun=fun, run=run,
-                  time_sec=t, mem_gb=m, cache=cache,
-                  chk=make_chk(chk), chk_time_sec=chkt, on_disk=on_disk, machine_type=machine_type)
+try:
+    for q in QUESTIONS:
+        for run in (1, 2):
+            gc.collect()
+            t_start = timeit.default_timer()
+            ans, out_rows, out_cols = answer(q["sql"])
+            t = timeit.default_timer() - t_start
+            m = memory_usage()
+            t_start = timeit.default_timer()
+            chk = checksum(ans, q["chk"])
+            chkt = timeit.default_timer() - t_start
+            del ans
+            print(q["id"], [out_rows, out_cols], flush=True)
+            write_log(task=task, data=data_name, in_rows=in_rows, question=q["question"], out_rows=out_rows,
+                      out_cols=out_cols, solution=solution, version=ver, git=git, fun=fun, run=run,
+                      time_sec=t, mem_gb=m, cache=cache, chk=make_chk(chk), chk_time_sec=chkt,
+                      on_disk="TRUE" if on_disk else "FALSE", machine_type=machine_type)
+    print("{verb} finished, took %0.fs" % (timeit.default_timer() - task_init), flush=True)
+finally:
+    spark.stop()
+    shutil.rmtree(spill_dir, ignore_errors=True)
 '''
 
 _GROUPBY_TABLES = """TABLES = {"x": (os.path.join("data", data_name + ".csv"), SCHEMAS["x"])}
@@ -183,25 +209,34 @@ def render_task_script(task: str) -> str:
         prefix="G1" if task == "groupby" else "J1",
         verb="grouping" if task == "groupby" else "joining",
     )
-    return text.replace("import gc\n", "import gc\nimport json\n", 1)
+    return text
 
 
 SETUP_SH = """#!/bin/bash
 set -e
 
-# install dependencies: Krishiv's Python package (a wheel from KRISHIV_WHEEL, else the index) and pyarrow
+# install dependencies
+# sudo apt-get update -qq
+
 mkdir -p krishiv/py-krishiv
 
 virtualenv krishiv/py-krishiv --python=python3
 source krishiv/py-krishiv/bin/activate
 
-python3 -m pip install --upgrade psutil pyarrow
+# the latest released krishiv Python package (a wheel file from KRISHIV_WHEEL instead, when set) plus runtime deps
+python3 -m pip install --upgrade psutil pyarrow "${KRISHIV_WHEEL:-krishiv}"
 
 deactivate
 
-./krishiv/upg-krishiv.sh
-
 ./krishiv/ver-krishiv.sh
+
+# check
+# source krishiv/py-krishiv/bin/activate
+# python3
+# import krishiv
+# krishiv.__version__
+# quit()
+# deactivate
 """
 
 UPG_SH = """#!/bin/bash
@@ -220,8 +255,9 @@ VER_SH = """#!/bin/bash
 set -e
 
 source ./krishiv/py-krishiv/bin/activate
-python3 -c 'import importlib.metadata as m, os; open("krishiv/VERSION","w").write(m.version("krishiv")); \\
-open("krishiv/REVISION","w").write(os.environ.get("KRISHIV_REVISION",""));' > /dev/null
+python3 -c "import krishiv; open('krishiv/VERSION','w').write(krishiv.__version__); \\
+open('krishiv/REVISION','w').write(krishiv.build_info().get('commit',''));" > /dev/null
+deactivate
 """
 
 
@@ -245,10 +281,108 @@ def write_solution(out: Path) -> list[Path]:
     return written
 
 
+# ---------------------------------------------------------------- registering the solution in a checkout
+#
+# A new solution is named in a handful of the benchmark's own files (its launcher has a fixed list of solutions).
+# ``register`` makes those edits in a checkout; each is one line or one block placed next to an existing solution's,
+# and each is skipped when already there. An anchor that is missing means the benchmark changed: it is an error,
+# never a silent skip.
+
+_SYNTAX_BLOCK = '  "krishiv" = {{c(\n{rows}\n  )}},\n'
+_COLOR = '  "krishiv" = list(name=c(short="krishiv", long="Krishiv"), color=c(strong="#1b7837", light="#5aae61")),\n'
+# The seven lists of _benchplot/benchplot-dict.R, in file order; every one has a "haskell" entry, ours goes before it.
+_DICT_BLOCKS = ("color", "groupby", "empty", "data", "join", "empty", "data")
+
+
+class RegisterError(RuntimeError):
+    """A file of the checkout does not have the text an edit is placed next to."""
+
+
+def _syntax_block(task: str) -> str:
+    rows = ",\n".join("    {} = {}".format(json.dumps(q["question"]), json.dumps(q["sql"])) for q in questions(task))
+    return _SYNTAX_BLOCK.format(rows=rows)
+
+
+def _edit(path: Path, marker: str, anchor: str, replacement: str) -> bool:
+    """Replace the one ``anchor`` in ``path`` unless ``marker`` is already there; True when the file changed."""
+    text = path.read_text()
+    if marker in text:
+        return False
+    if text.count(anchor) != 1:
+        raise RegisterError(f"{path}: expected exactly one {anchor!r}, found {text.count(anchor)}")
+    path.write_text(text.replace(anchor, replacement))
+    return True
+
+
+def _edit_benchplot_dict(path: Path) -> bool:
+    text = path.read_text()
+    if '"krishiv"' in text:
+        return False
+    blocks = {
+        "color": _COLOR,
+        "groupby": _syntax_block("groupby"),
+        "join": _syntax_block("join"),
+        "empty": '  "krishiv" = list(),\n',
+        "data": '  "krishiv" = {list(\n  )},\n',
+    }
+    lines = text.splitlines(keepends=True)
+    at = [i for i, line in enumerate(lines) if line.startswith('  "haskell" =')]
+    if len(at) != len(_DICT_BLOCKS):
+        raise RegisterError(f"{path}: expected {len(_DICT_BLOCKS)} haskell entries, found {len(at)}")
+    for i, kind in reversed(list(zip(at, _DICT_BLOCKS, strict=True))):
+        lines.insert(i, blocks[kind])
+    path.write_text("".join(lines))
+    return True
+
+
+def register(checkout: Path) -> list[Path]:
+    """Name the krishiv solution in the benchmark's own files; returns the files changed."""
+    py = '"datafusion"=, "polars"="py",'
+    ver = 'if [[ "$RUN_SOLUTIONS" =~ "datafusion" ]]; then ./datafusion/ver-datafusion.sh; fi;\n'
+    edits = [
+        ("_launcher/launcher.R", '"krishiv"=', py, '"datafusion"=, "krishiv"=, "polars"="py",'),
+        ("_launcher/solution.R", '"krishiv"=', py, '"datafusion"=, "krishiv"=, "polars"="py",'),
+        (
+            "run.sh",
+            "ver-krishiv.sh",
+            ver,
+            ver
+            + 'if [[ "$DO_UPGRADE" == true && "$RUN_SOLUTIONS" =~ "krishiv" ]]; then ./krishiv/upg-krishiv.sh; fi;\n'
+            + 'if [[ "$RUN_SOLUTIONS" =~ "krishiv" ]]; then ./krishiv/ver-krishiv.sh; fi;\n',
+        ),
+        ("_report/report.R", '"krishiv"', '"chdb", "haskell")', '"chdb", "haskell", "krishiv")'),
+        (".github/workflows/regression.yml", "krishiv", "chdb, haskell, spark]", "chdb, haskell, spark, krishiv]"),
+        (
+            "README.md",
+            "KrishivAI/krishiv",
+            "  - [x] [(haskell)dataframe](https://github.com/mchav/dataframe)\n",
+            "  - [x] [(haskell)dataframe](https://github.com/mchav/dataframe)\n"
+            "  - [x] [Krishiv](https://github.com/KrishivAI/krishiv)\n",
+        ),
+    ]
+    changed = [checkout / f for f, marker, anchor, new in edits if _edit(checkout / f, marker, anchor, new)]
+    solutions = checkout / "_control" / "solutions.csv"
+    text = solutions.read_text()
+    if "krishiv," not in text:
+        solutions.write_text(text + ("" if text.endswith("\n") else "\n") + "krishiv,groupby\nkrishiv,join\n")
+        changed.append(solutions)
+    if _edit_benchplot_dict(checkout / "_benchplot" / "benchplot-dict.R"):
+        changed.append(checkout / "_benchplot" / "benchplot-dict.R")
+    return changed
+
+
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description="write the krishiv solution directory of a db-benchmark checkout")
-    ap.add_argument("--out", type=Path, required=True, help="<db-benchmark>/krishiv")
-    for path in write_solution(ap.parse_args(argv).out):
+    ap = argparse.ArgumentParser(description="write the krishiv solution into a db-benchmark checkout")
+    where = ap.add_mutually_exclusive_group(required=True)
+    where.add_argument("--out", type=Path, help="<db-benchmark>/krishiv: write the solution directory only")
+    where.add_argument(
+        "--checkout", type=Path, help="<db-benchmark>: write krishiv/ and name the solution in the launcher's files"
+    )
+    args = ap.parse_args(argv)
+    paths = write_solution(args.out or args.checkout / SOLUTION)
+    if args.checkout:
+        paths += register(args.checkout)
+    for path in paths:
         print(path)
     return 0
 

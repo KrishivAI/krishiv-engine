@@ -6,12 +6,20 @@ second run's time (the benchmark's headline: ``run == 2``) per solution, a ``*``
 (``on_disk == TRUE``), ``FAIL`` where the question has no row, and Krishiv's time as a ratio to each other solution's.
 
     python -m krishiv_bench.dbbench_report --ours time.csv --published upstream-time.csv [--data G1_1e7_1e2_0_0]
+
+``--check <solution>`` compares answers instead, within one ``time.csv`` that holds both solutions' rows from the
+same data files (a launcher run of ``krishiv`` and, say, ``duckdb``): for every task, data set, question and run,
+``out_rows``, ``out_cols`` and every sum of ``chk`` must agree (sums within a relative 1e-6). It exits 1 on any
+difference or on a question only one of the two answered.
+
+    python -m krishiv_bench.dbbench_report --ours time.csv --check duckdb [--batch 1795616032]
 """
 
 from __future__ import annotations
 
 import argparse
 import csv
+import math
 from collections import defaultdict
 from pathlib import Path
 
@@ -93,13 +101,45 @@ def to_markdown(rows: list[dict[str, object]]) -> str:
     return "\n".join(lines)
 
 
+def check_answers(path: Path, other: str, batch: str | None = None) -> tuple[int, list[str]]:
+    """Compare Krishiv's answers in ``path`` with ``other``'s; returns (answers compared, one line per problem)."""
+    rows: dict[tuple[str, str, str, str, str], dict[str, str]] = {}
+    with path.open(newline="") as f:
+        for row in csv.DictReader(f):
+            if batch is not None and row.get("batch") != batch:
+                continue
+            rows[(row["solution"], row["task"], row["data"], row["question"], row["run"])] = row
+    keys = sorted({k[1:] for k in rows if k[0] in (OURS, other)})
+    problems = []
+    for key in keys:
+        a, b = rows.get((other, *key)), rows.get((OURS, *key))
+        where = " ".join(key)
+        if a is None or b is None:
+            problems.append(f"{where}: no row from {OURS if b is None else other}")
+            continue
+        sums_a, sums_b = a["chk"].split(";"), b["chk"].split(";")
+        same = (a["out_rows"], a["out_cols"], len(sums_a)) == (b["out_rows"], b["out_cols"], len(sums_b)) and all(
+            math.isclose(float(x), float(y), rel_tol=1e-6, abs_tol=1e-6) for x, y in zip(sums_a, sums_b, strict=True)
+        )
+        if not same:
+            ours = f"{b['out_rows']}x{b['out_cols']} chk {b['chk']}"
+            problems.append(f"{where}: {other} {a['out_rows']}x{a['out_cols']} chk {a['chk']}, {OURS} {ours}")
+    return len(keys), problems
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Krishiv's db-benchmark time.csv next to the published solutions")
     ap.add_argument("--ours", type=Path, required=True)
-    ap.add_argument("--published", type=Path, required=True)
+    what = ap.add_mutually_exclusive_group(required=True)
+    what.add_argument("--published", type=Path, help="the published time.csv to print our times next to")
+    what.add_argument("--check", metavar="SOLUTION", help="compare our answers with this solution's in --ours")
     ap.add_argument("--data", help="one data set, e.g. G1_1e7_1e2_0_0")
     ap.add_argument("--batch", help="only this batch of our file")
     args = ap.parse_args(argv)
+    if args.check:
+        compared, problems = check_answers(args.ours, args.check, args.batch)
+        print("\n".join([*problems, f"{compared} answers compared with {args.check}, {len(problems)} differ"]))
+        return 1 if problems or not compared else 0
     ours = {k: v for k, v in read_times(args.ours, args.batch).items() if k[3] == OURS}
     print(to_markdown(build_table(ours, read_times(args.published), args.data)))
     return 0

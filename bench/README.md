@@ -733,17 +733,23 @@ Results and Spark goldens stay tied to the dataset they were produced from (reco
 
 `krishiv_bench.dbbench_solution` writes the `krishiv/` solution directory of a checkout of
 <https://github.com/duckdblabs/db-benchmark> (`groupby-krishiv.py`, `join-krishiv.py`, `setup-`, `upg-` and
-`ver-krishiv.sh`), so the benchmark's own runner (`run.sh`, `_run/partitioned_run.sh`) runs Krishiv through the Python
-session and writes `time.csv` / `logs.csv` rows the way every other solution does. The question SQL and the checksum
-columns are the ones of the `h2o-*` suites above (one text for both harnesses); the CSV is loaded once to Parquet in
-`$SPILL_DIR` (untimed), each question is run twice (the benchmark's `run` 1 and 2) and its result is consumed through the
-Arrow stream, never materialised. Nothing here has been run against the real checkout yet: the first run needs a
-Krishiv wheel (`KRISHIV_WHEEL`) and the bench lock.
+`ver-krishiv.sh`) and, with `--checkout`, names the solution in the benchmark's own files (`_launcher/launcher.R`,
+`_launcher/solution.R`, `run.sh`, `_control/solutions.csv`, `_report/report.R`, `_benchplot/benchplot-dict.R`, the
+regression workflow and the README), so the benchmark's own runner (`run.sh`) runs Krishiv through the Python session
+and writes `time.csv` / `logs.csv` rows the way every other solution does. An edit whose anchor text is missing is an
+error: the benchmark changed and the edit needs a look. The question SQL and the checksum columns are the ones of the
+`h2o-*` suites above (one text for both harnesses); the CSV is loaded once to Parquet in `$SPILL_DIR` (untimed), each
+question is run twice (the benchmark's `run` 1 and 2), the timed part ends with the answer held as an Arrow table, and
+`chk` is summed over that table in a separately timed step. At 1e9 rows (or with `KRISHIV_ON_DISK=true`) the answer
+is written to a Parquet file instead and the log says `on_disk` `TRUE`. `setup-krishiv.sh` installs the released
+package, or the wheel named by `KRISHIV_WHEEL`; `KRISHIV_MEMORY_LIMIT` sets `krishiv.memory.limit`.
 
 ```bash
-uv run python -m krishiv_bench.dbbench_solution --out ~/db-benchmark/krishiv
+uv run python -m krishiv_bench.dbbench_solution --checkout ~/db-benchmark
+uv run python -m krishiv_bench.dbbench_report --ours ~/db-benchmark/time.csv --check duckdb
 uv run python -m krishiv_bench.dbbench_report --ours time.csv --published upstream/time.csv --data G1_1e7_1e2_0_0
 ```
 
-`dbbench_report` prints the second-run times next to the published solutions (`*` = spilled, `FAIL` = no row) and
+`--check` compares Krishiv's answers with another solution's from the same launcher run (row and column counts and the
+`chk` sums) and exits 1 on any difference. `dbbench_report --published` prints the second-run times next to the published solutions (`*` = spilled, `FAIL` = no row) and
 Krishiv's ratio to each. Step 2 (the PR to the benchmark repository) waits for the owner's go.
