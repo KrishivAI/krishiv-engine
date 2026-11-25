@@ -875,7 +875,7 @@ fn run(
                 config
                     .get(&SHARE_LITERAL_INSTANCES)
                     .and_then(ConfigValue::as_bool)
-                    .unwrap_or(false)
+                    .unwrap_or(true)
             });
         let root = if literals {
             let after = t.once("ShareLiteralInstances", &root, |r| {
@@ -890,11 +890,32 @@ fn run(
                 let tidied = batch(after, "Tidy", &mut t)?;
                 // The shared definition's filter now admits every literal
                 // (q64's `d_year IN (1999, 2000)`), which changes the
-                // estimates its joins were ordered on: order them again and
-                // prune, as a second optimization would.
+                // estimates its joins were ordered on: order them again, then
+                // run what a second optimization runs right after its join
+                // order (eager aggregation, the group-key code), and prune.
+                // A re-ordered join can land directly under the definition's
+                // aggregate, the shape `eager::rewrite` reads.
                 match stats {
                     Some(stats) => {
-                        let ordered = order_and_restrict(tidied, stats, options, joins, &mut t)?;
+                        let mut ordered =
+                            order_and_restrict(tidied, stats, options, joins, &mut t)?;
+                        if eager {
+                            ordered = eager_pass(&ordered, stats, options, expand, joins, &mut t)?;
+                        }
+                        if let Some(min_dimensions) = min_dimensions {
+                            let (after, notes) = group_code::rewrite(
+                                Arc::clone(&ordered),
+                                stats,
+                                options.stats_propagation,
+                                forced,
+                                min_dimensions,
+                            )?;
+                            t.step("GroupKeyCode", 1, "GroupKeyCode", &ordered, &after);
+                            t.notes("GroupKeyCode", &after, notes);
+                            if !Arc::ptr_eq(&after, &ordered) {
+                                ordered = order_and_restrict(after, stats, options, joins, &mut t)?;
+                            }
+                        }
                         prune_and_tidy(&ordered, Some(stats), &mut t)?
                     }
                     None => tidied,
