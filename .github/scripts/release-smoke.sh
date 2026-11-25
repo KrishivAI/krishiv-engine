@@ -27,6 +27,19 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# macOS has no GNU `timeout`: use it, else Homebrew's `gtimeout`, else perl's alarm (which survives exec).
+limit() {
+  local secs=$1
+  shift
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "$secs" "$@"
+  elif command -v gtimeout >/dev/null 2>&1; then
+    gtimeout "$secs" "$@"
+  else
+    perl -e 'alarm shift; exec @ARGV or die "exec: $!"' "$secs" "$@"
+  fi
+}
+
 "$bin" server --port 0 --connect-port 0 >"$work/out" 2>"$work/err" &
 pid=$!
 
@@ -51,7 +64,7 @@ code=$(curl --silent --max-time 10 -o /dev/null -w '%{http_code}' "$base/")
 [ "$code" = 200 ] || { echo "::error::GET / on the UI port answered $code"; exit 1; }
 
 repo=$(cd "$(dirname "$0")/../.." && pwd)
-SMOKE_REMOTE=${connect%%\?*} SMOKE_DIR="$work" timeout 300 uv run --quiet --frozen --project "$repo/bench" python -I - <<'PY'
+SMOKE_REMOTE=${connect%%\?*} SMOKE_DIR="$work" limit 300 uv run --quiet --frozen --project "$repo/bench" python -I - <<'PY'
 import os
 from pyspark.sql import SparkSession
 
