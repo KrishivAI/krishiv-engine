@@ -6,3 +6,4 @@
 pub mod hll;
 pub mod kll;
 pub mod theta;
+pub mod tuple;
