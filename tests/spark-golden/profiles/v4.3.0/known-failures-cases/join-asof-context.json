@@ -1,0 +1,9 @@
+{
+  "cases": {
+    "s43-asof-join": [
+      17
+    ]
+  },
+  "file": "join-asof-context",
+  "format_version": 1
+}
