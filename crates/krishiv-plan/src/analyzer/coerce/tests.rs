@@ -705,4 +705,26 @@ fn try_cast_of_a_nested_value_to_string_may_be_null() {
     assert!(try_nullable(&t("array<array<int>>"), &t("array<string>")));
     assert!(!try_nullable(&t("array<int>"), &t("array<string>")));
     assert!(!try_nullable(&t("array<int>"), &t("array<int>")));
+    // A map value and a struct field are compared the same way (Spark 4.2.0 and 4.3.0:
+    // `TRY_CAST(map(1, array(2)) AS MAP<INT, STRING>)` and of `named_struct('a', array(1))` to
+    // `STRUCT<a: STRING>` are nullable).
+    assert!(try_nullable(
+        &t("map<int,array<int>>"),
+        &t("map<int,string>")
+    ));
+    assert!(try_nullable(
+        &t("struct<a:array<int>>"),
+        &t("struct<a:string>")
+    ));
+    assert!(!try_nullable(&t("map<int,int>"), &t("map<int,string>")));
+}
+
+/// `TRY_CAST` of a variant may be NULL whatever the target: Spark's `canUpCast` has no variant arm
+/// (Spark 4.2.0 and 4.3.0: `TRY_CAST(parse_json('1') AS STRING)` and `AS INT` are nullable).
+#[test]
+fn try_cast_of_a_variant_may_be_null() {
+    for to in [T::String, T::Integer, T::Binary] {
+        assert!(try_nullable(&T::Variant, &to), "{to:?}");
+    }
+    assert!(!try_nullable(&T::Variant, &T::Variant));
 }
