@@ -40,7 +40,7 @@ fn a_collated_if_condition_gives_the_result_no_collation() {
         filter: None,
         within_group: Vec::new(),
     })));
-    let got = strength_of(&call, &mut Memo::new());
+    let got = strength_of(&call, &mut Memo::with_default(Collation::UTF8_BINARY));
     assert_eq!(got, Some((Collation::UTF8_BINARY, Strength::Default)));
 }
 
@@ -62,12 +62,12 @@ fn a_decode_takes_its_collation_from_its_results() {
     // Spark 4.2.0: a collated expr is no result; a collated default is.
     let plain = decode(vec![leaf(lcase), lit("a"), lit("x"), lit("y")]);
     assert_eq!(
-        strength_of(&plain, &mut Memo::new()),
+        strength_of(&plain, &mut Memo::with_default(Collation::UTF8_BINARY)),
         Some((Collation::UTF8_BINARY, Strength::Default))
     );
     let dflt = decode(vec![lit("a"), lit("a"), lit("x"), leaf(lcase)]);
     assert_eq!(
-        strength_of(&dflt, &mut Memo::new()),
+        strength_of(&dflt, &mut Memo::with_default(Collation::UTF8_BINARY)),
         Some((lcase, Strength::Implicit))
     );
 }
@@ -89,7 +89,7 @@ fn strength_of_a_shared_expression_dag_is_linear() {
             within_group: Vec::new(),
         })));
     }
-    let got = strength_of(&e, &mut Memo::new());
+    let got = strength_of(&e, &mut Memo::with_default(Collation::UTF8_BINARY));
     assert_eq!(got, Some((lcase, Strength::Implicit)));
 }
 
@@ -98,7 +98,7 @@ fn collation_and_typeof_end_the_propagation() {
     let lcase = Collation::parse("UTF8_LCASE").unwrap();
     for name in ["collation", "typeof"] {
         let call = Expr::function(name, vec![Expr::clone(&leaf(lcase))]);
-        let got = strength_of(&call, &mut Memo::new());
+        let got = strength_of(&call, &mut Memo::with_default(Collation::UTF8_BINARY));
         assert_eq!(
             got,
             Some((Collation::UTF8_BINARY, Strength::Default)),

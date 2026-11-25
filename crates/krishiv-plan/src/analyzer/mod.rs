@@ -463,6 +463,10 @@ pub struct ResolutionConf {
     /// nanosecond timestamp types when on. Krishiv has none yet, so `current_timestamp(7..=9)` is
     /// `KRISHIV_UNSUPPORTED_FEATURE` then instead of `FEATURE_NOT_ENABLED`.
     pub timestamp_nanos_types: bool,
+    /// The `DEFAULT COLLATION` of the view whose text is analysed (not a session config: a view
+    /// stores it, and the analysis of its text sets it). String literals and plain string casts
+    /// take it at `Default` strength; `UTF8_BINARY` outside such a view.
+    pub default_collation: krishiv_types::Collation,
 }
 
 impl Default for ResolutionConf {
@@ -504,6 +508,7 @@ impl Default for ResolutionConf {
             decorrelate_inner_query: true,
             char_varchar_as_string: false,
             timestamp_nanos_types: false,
+            default_collation: krishiv_types::Collation::UTF8_BINARY,
         }
     }
 }
@@ -620,6 +625,7 @@ impl ResolutionConf {
                 .is_none_or(|s| s.trim().eq_ignore_ascii_case("true")),
             char_varchar_as_string: on(Self::KEYS[33]),
             timestamp_nanos_types: on(Self::KEYS[34]),
+            default_collation: d.default_collation,
         }
     }
 
@@ -811,6 +817,8 @@ impl ContextFingerprint {
                 CtePrecedencePolicy::Exception => 2,
             },
         );
+        // The default collation of the view being analysed.
+        num(&mut b, u64::from(c.default_collation.id()));
         // The session zone: its id (or offset) is one input.
         match c.session_zone {
             Some(SessionZone::Fixed(v)) => {

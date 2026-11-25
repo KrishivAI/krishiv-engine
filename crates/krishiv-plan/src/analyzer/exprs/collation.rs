@@ -407,7 +407,21 @@ fn is_string(t: Option<&DataType>) -> bool {
 
 /// Strengths already computed, by expression address: plans are DAGs, and a shared child must
 /// not be walked once per parent (`shared_expressions_stay_linear`).
-type Memo = std::collections::HashMap<usize, Option<(Collation, Strength)>>;
+/// What `strength_of` has settled per node, and the collation a default-strength string takes (the
+/// `DEFAULT COLLATION` of the view being analysed; `UTF8_BINARY` elsewhere).
+struct Memo {
+    done: std::collections::HashMap<usize, Option<(Collation, Strength)>>,
+    default: Collation,
+}
+
+impl Memo {
+    fn with_default(default: Collation) -> Self {
+        Self {
+            done: std::collections::HashMap::new(),
+            default,
+        }
+    }
+}
 
 /// `k`'s display cast to `want` (SQL-41: Spark names a literal of another collation as
 /// `'x' collate C` when the call's collation differs from the literal's).
@@ -449,11 +463,11 @@ fn shown_literal_cast(
 /// The collation and strength `e` carries, when it is a string.
 fn strength_of(e: &Expr, memo: &mut Memo) -> Option<(Collation, Strength)> {
     let key = std::ptr::from_ref(e) as usize;
-    if let Some(done) = memo.get(&key) {
+    if let Some(done) = memo.done.get(&key) {
         return *done;
     }
     let out = strength_of_uncached(e, memo);
-    memo.insert(key, out);
+    memo.done.insert(key, out);
     out
 }
 
@@ -467,7 +481,7 @@ fn strength_of_uncached(e: &Expr, memo: &mut Memo) -> Option<(Collation, Strengt
                 _ => None,
             }
         }
-        ExprNode::Literal(Literal::String(_)) => Some((Collation::UTF8_BINARY, Strength::Default)),
+        ExprNode::Literal(Literal::String(_)) => Some((memo.default, Strength::Default)),
         ExprNode::Alias { expr, .. } => strength_of(expr, memo),
         // A written `CAST(x AS STRING COLLATE c)` (bound, so never in `Default` mode) is
         // explicit; the analyzer's own implicit cast, shown in `Default` mode, takes its
@@ -484,7 +498,7 @@ fn strength_of_uncached(e: &Expr, memo: &mut Memo) -> Option<(Collation, Strengt
             to: DataType::String,
             mode,
         } if *mode != CastMode::Default => Some((
-            Collation::UTF8_BINARY,
+            memo.default,
             match strength_of(expr, memo) {
                 Some(_) => Strength::Implicit,
                 None => Strength::Default,
@@ -500,7 +514,7 @@ fn strength_of_uncached(e: &Expr, memo: &mut Memo) -> Option<(Collation, Strengt
             // `collation(x)` and `typeof(x)` return an ordinary string, and so do the
             // binary-result functions (`soundex`, `md5`, ...): the collation of the arguments
             // stops here.
-            Some((Collation::UTF8_BINARY, Strength::Default))
+            Some((memo.default, Strength::Default))
         }
         ExprNode::Resolved(ResolvedExpr::Function(f))
             if INSPECTS.contains(&f.id.name()) || {
@@ -509,7 +523,7 @@ fn strength_of_uncached(e: &Expr, memo: &mut Memo) -> Option<(Collation, Strengt
                 binary_result(f.id.name(), count)
             } =>
         {
-            Some((Collation::UTF8_BINARY, Strength::Default))
+            Some((memo.default, Strength::Default))
         }
         ExprNode::Function(_) | ExprNode::Resolved(ResolvedExpr::Function(_)) => {
             let name = match &e.node {
@@ -850,7 +864,7 @@ impl Resolver<'_> {
                 e.origin,
             ));
         }
-        let mut memo = Memo::new();
+        let mut memo = Memo::with_default(self.ctx.conf.default_collation);
         let (chosen, indeterminate) = self.choose_collation(e, kids, n, &name)?;
         if indeterminate && RUNTIME_INDETERMINATE.contains(&name.as_str()) {
             // Spark raises `INDETERMINATE_COLLATION` while evaluating the call, not at analysis.
@@ -1324,7 +1338,10 @@ impl Resolver<'_> {
             // A literal of another collation is shown cast to the call's, as in the plain path.
             if let Some(c) = search
                 && matches!(
-                    strength_of(&k.shown(), &mut Memo::new()),
+                    strength_of(
+                        &k.shown(),
+                        &mut Memo::with_default(self.ctx.conf.default_collation)
+                    ),
                     Some((_, Strength::Default))
                 )
                 && k.ty.data_type != Some(DataType::collated_string(c))
@@ -1683,7 +1700,7 @@ impl Resolver<'_> {
         let mut b = self.expr_node_inner(&Arc::new(call), &plain, in_agg, window_fn, cx)?;
         let (chosen, _) = self.choose_collation(e, kids, 2, name)?;
         let c = chosen.unwrap_or(Collation::UTF8_LCASE);
-        let mut memo = Memo::default();
+        let mut memo = Memo::with_default(self.ctx.conf.default_collation);
         let shown = kids
             .iter()
             .enumerate()
@@ -1745,7 +1762,7 @@ impl Resolver<'_> {
         let mut b = self.expr_node_inner(&Arc::new(call), &keyed, in_agg, window_fn, cx)?;
         // A literal of another collation is shown cast to the call's by `shown_cast`
         // (SQL-41: `instr(c COLLATE UTF8_LCASE, 'PL')` is `.., 'PL' collate UTF8_LCASE)`).
-        let mut memo = Memo::default();
+        let mut memo = Memo::with_default(self.ctx.conf.default_collation);
         let shown = kids
             .iter()
             .enumerate()
@@ -1897,7 +1914,7 @@ impl Resolver<'_> {
                 _ => {}
             }
         }
-        let mut memo = Memo::new();
+        let mut memo = Memo::with_default(self.ctx.conf.default_collation);
         let items: Vec<(Collation, Strength)> = kids
             [selector_args(name).min(n)..collation_args(name, n).max(selector_args(name).min(n))]
             .iter()

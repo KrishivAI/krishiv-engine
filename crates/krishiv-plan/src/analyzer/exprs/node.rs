@@ -67,6 +67,15 @@ impl Resolver<'_> {
                     e.origin,
                 ));
             }
+            // A string literal in the text of a view with a `DEFAULT COLLATION` takes it.
+            ExprNode::Literal(Literal::String(_))
+                if !self.ctx.conf.default_collation.is_utf8_binary() =>
+            {
+                keep(ArgType {
+                    nullable: false,
+                    data_type: Some(DataType::collated_string(self.ctx.conf.default_collation)),
+                })
+            }
             ExprNode::Literal(v) => keep(ArgType {
                 nullable: matches!(v, Literal::Null(_)),
                 data_type: literal_type(v),
