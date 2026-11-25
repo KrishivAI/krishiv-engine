@@ -511,6 +511,7 @@ fn bind_from_csv(args: &[BindArg], opts: &BindOptions) -> Result<Binding, Krishi
         timestamp_pattern,
         ntz_pattern,
         fallback: parsed.fallback,
+        time_micros_only: opts.kernel.spark_version() < krishiv_kernels::SparkVersion::V4_3,
     };
     // A time-only timestamp (`12:30:00`) is today's, in the session zone.
     let today = krishiv_kernels::datetime::current_date(opts.query_start_micros, zone.as_ref())

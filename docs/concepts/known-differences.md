@@ -660,7 +660,7 @@ observed node has its own, so the count can exceed `n` (P3-T084c).
   not, completes it.
 - **`Observation.get` blocks** a thread; do not call it from async code on a runtime thread.
 - **Result cache:** a plan that observes is never served from the result cache (every action runs it).
-- **`spark.sql.timestampType = TIMESTAMP_NTZ`:** a bare `TIMESTAMP` literal, `to_timestamp` and the numeric `make_timestamp` forms follow the setting; a bare `TIMESTAMP` cast target or column type still means `TIMESTAMP_LTZ`.
+- **`spark.sql.timestampType = TIMESTAMP_NTZ`:** a bare `TIMESTAMP` literal, `to_timestamp` and the numeric `make_timestamp` forms follow the setting; a bare `TIMESTAMP` cast target or column type still means `TIMESTAMP_LTZ`. Under the Spark 4.3 profile `TIMESTAMP(6)` is refused with `KRISHIV_UNSUPPORTED_FEATURE` while the setting is `TIMESTAMP_NTZ` (Spark types it `TIMESTAMP_NTZ`).
 
 ## Delta Lake writes
 
@@ -783,6 +783,34 @@ reads the tables back, `merge/krishiv-written/`). It differs in:
   `MERGE_CARDINALITY_VIOLATION` (no oracle yet) are refused by name.
 - **Deletion vectors.** Never written (as for `DELETE` and `UPDATE`); delta-spark's default
   `merge.deletionVectors.persistent = true` marks rows in vectors on a table with them on.
+
+## Spark 4.3's nanosecond timestamps and nanosecond clocks
+
+Spark 4.3.0 previews `TIMESTAMP_NTZ(7..9)` and `TIMESTAMP_LTZ(7..9)` behind the internal
+`spark.sql.timestampNanosTypes.enabled` (off). With the key off Krishiv answers as Spark does:
+`FEATURE_NOT_ENABLED` for a precision of 7 to 9 (also `current_timestamp(p)`, `now(p)`,
+`localtimestamp(p)`), `INVALID_TIMESTAMP_PRECISION` for any precision but 6. Krishiv has no
+nanosecond timestamp type yet (planned for 0.3.1), so:
+
+- With `spark.sql.timestampNanosTypes.enabled=true`, a `TIMESTAMP*(7..9)` type is
+  `KRISHIV_UNSUPPORTED_FEATURE` where Spark builds the type. `SET` and `RESET` of the key work under
+  every profile; under the Spark 4.2 profile it changes nothing, as in Spark 4.2.
+- A schema in Spark's JSON form naming `timestamp_ntz(p)` or `timestamp_ltz(p)` is
+  `KRISHIV_UNSUPPORTED_FEATURE` (Spark's `DataType.fromJson` builds the type with the key off too).
+  `timestamp_ntz(6)` and `timestamp_ltz(6)` there are the microsecond types under every profile;
+  Spark 4.2's `DataType.fromJson` has no such names and refuses them.
+- Spark Connect's `timestamp_ntz_nanos` and `timestamp_ltz_nanos` types and literals are refused
+  as every arm Krishiv does not translate (`CONNECT_INVALID_PLAN.INVALID_ONE_OF_FIELD_NOT_SUPPORTED`).
+
+`TIME(p)` takes `p` up to 9 under the Spark 4.3 profile and keeps nanoseconds, but the query clock
+is in microseconds: `current_time(7..9)` and `LOCALTIME(7..9)` have zero digits below the
+microsecond, where Spark 4.3 reads a nanosecond clock.
+
+Also not matched yet under the Spark 4.3 profile:
+
+- The CSV and JSON file readers have no `TIME` columns: a read with one in its schema is
+  `KRISHIV_UNSUPPORTED_FEATURE` (`from_csv`, `from_json` and `from_xml` read them). Spark 4.2 reads
+  such a column with six fraction digits; Spark 4.3 keeps every digit of the file, whatever `p`.
 
 ## HLL sketches: the compact form (`hll_sketch_agg`, `hll_union_agg`, `hll_union`)
 

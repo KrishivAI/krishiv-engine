@@ -459,6 +459,10 @@ pub struct ResolutionConf {
     /// `spark.sql.legacy.charVarcharAsString`: `CHAR`/`VARCHAR` behave as `STRING` at analysis (no read-side
     /// padding, no padding rule on comparisons, no write-side length check). The declared type is still kept.
     pub char_varchar_as_string: bool,
+    /// `spark.sql.timestampNanosTypes.enabled` (internal in Spark 4.3, off): Spark builds the
+    /// nanosecond timestamp types when on. Krishiv has none yet, so `current_timestamp(7..=9)` is
+    /// `KRISHIV_UNSUPPORTED_FEATURE` then instead of `FEATURE_NOT_ENABLED`.
+    pub timestamp_nanos_types: bool,
 }
 
 impl Default for ResolutionConf {
@@ -499,13 +503,14 @@ impl Default for ResolutionConf {
             legacy_count_bug: false,
             decorrelate_inner_query: true,
             char_varchar_as_string: false,
+            timestamp_nanos_types: false,
         }
     }
 }
 
 impl ResolutionConf {
     /// The session configs [`Self::from_conf`] reads: the only ones.
-    pub const KEYS: [&'static str; 34] = [
+    pub const KEYS: [&'static str; 35] = [
         "spark.sql.caseSensitive",
         "spark.sql.ansi.enabled",
         "spark.sql.groupByAliases",
@@ -540,6 +545,7 @@ impl ResolutionConf {
         "spark.sql.legacy.scalarSubqueryCountBugBehavior",
         "spark.sql.optimizer.decorrelateInnerQuery.enabled",
         "spark.sql.legacy.charVarcharAsString",
+        "spark.sql.timestampNanosTypes.enabled",
     ];
 
     /// The flags from session configs; `conf` returns a config's value if
@@ -613,6 +619,7 @@ impl ResolutionConf {
             decorrelate_inner_query: conf(Self::KEYS[32])
                 .is_none_or(|s| s.trim().eq_ignore_ascii_case("true")),
             char_varchar_as_string: on(Self::KEYS[33]),
+            timestamp_nanos_types: on(Self::KEYS[34]),
         }
     }
 
@@ -789,6 +796,7 @@ impl ContextFingerprint {
             c.legacy_count_bug,
             c.decorrelate_inner_query,
             c.char_varchar_as_string,
+            c.timestamp_nanos_types,
         ];
         num(
             &mut b,
@@ -1188,7 +1196,18 @@ async fn analyze_with(
             .and_then(|e| e.verified.as_ref()),
         ctx.conf.time_type,
     );
-    unexecutable::check_known(&root, ctx.conf.time_type, &mut verified.unexecutable)?;
+    let max_time_precision = if ctx.profile >= SparkProfile::V4_3 {
+        krishiv_types::TypeGrammar::V4_3
+    } else {
+        krishiv_types::TypeGrammar::V4_2
+    }
+    .max_time_precision();
+    unexecutable::check_known(
+        &root,
+        ctx.conf.time_type,
+        max_time_precision,
+        &mut verified.unexecutable,
+    )?;
     input_file::check(plan.root(), &bindings, ctx)?;
     let resolved = Plan::try_new_known(Arc::clone(&root), &mut verified.heights)
         .map_err(|e| AnalysisError::new(e, plan.root().origin))?;
