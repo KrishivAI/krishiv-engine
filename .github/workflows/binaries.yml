@@ -192,7 +192,7 @@ jobs:
     if: ${{ !cancelled() && (needs.nightly-green.result == 'success' || needs.nightly-green.result == 'skipped') }}
     name: cli (krishiv-macos-arm64)
     runs-on: macos-15
-    timeout-minutes: 60
+    timeout-minutes: 120
     env:
       ARTIFACT: krishiv-macos-arm64
     steps:
