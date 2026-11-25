@@ -659,6 +659,11 @@ fn a_cast_between_string_collations_is_never_forced_nullable() {
     assert!(!force_nullable(&T::String, &lcase));
     assert!(!force_nullable(&lcase, &T::String));
     assert!(!force_nullable(&T::Integer, &lcase));
-    // Other casts from a string keep their rule.
-    assert!(force_nullable(&T::String, &T::Integer));
+    // From a collated string the string rules hold too: a binary is never NULL, any other
+    // target may be (`CAST('apple' COLLATE UTF8_LCASE AS INT)` with ANSI off).
+    assert!(!force_nullable(&lcase, &T::Binary));
+    for to in [T::Integer, T::Boolean, T::Double, T::Timestamp, T::Date] {
+        assert!(force_nullable(&lcase, &to), "{to:?}");
+        assert!(force_nullable(&T::String, &to), "{to:?}");
+    }
 }

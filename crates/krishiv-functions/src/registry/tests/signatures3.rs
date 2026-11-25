@@ -1004,3 +1004,17 @@ fn time_functions_are_nullable_whatever_their_arguments() {
     .unwrap();
     assert_eq!(got, ty(DataType::Integer));
 }
+
+/// `make_timestamp_ntz(date, time)` is Spark's `MakeTimestampNTZ` (a `StaticInvoke`, `returnNullable = true`):
+/// nullable over NOT NULL arguments, and so is its `try_` form (`TryEval`). `make_timestamp_ltz(date, time)` is
+/// `MakeTimestampFromDateTime`, whose `returnNullable` is its children's (Spark 4.2.0/4.3.0 `datetimeExpressions.scala`).
+#[test]
+fn the_date_time_forms_of_make_timestamp_follow_their_spark_expressions() {
+    let args = [ty(DataType::Date), ty(DataType::Time { precision: 6 })];
+    for name in ["make_timestamp_ntz", "try_make_timestamp_ntz"] {
+        let got = result(name, &args, &[None, None]).unwrap();
+        assert_eq!(got, nullable(DataType::TimestampNtz), "{name}");
+    }
+    let got = result("make_timestamp_ltz", &args, &[None, None]).unwrap();
+    assert_eq!(got, ty(DataType::Timestamp));
+}
