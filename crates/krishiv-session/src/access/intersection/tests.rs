@@ -12,6 +12,8 @@ struct Member {
     version: u64,
     /// Added to `version`, for a version that changes after the member is shared.
     bump: AtomicU64,
+    /// Added to `bump` by every `check`: a policy that changes while it answers.
+    bump_per_check: u64,
     column_level: bool,
     decides: fn(&Securable) -> bool,
     answer: fn(&Securable, Privilege) -> Result<AccessDecision, KrishivError>,
@@ -25,6 +27,7 @@ impl Member {
         Self {
             version: 1,
             bump: AtomicU64::new(0),
+            bump_per_check: 0,
             column_level: false,
             decides: |_| true,
             answer,
@@ -58,6 +61,7 @@ impl AccessPolicy for Member {
             .lock()
             .unwrap()
             .push((securable.clone(), privilege));
+        self.bump.fetch_add(self.bump_per_check, Ordering::Relaxed);
         Box::pin(std::future::ready((self.answer)(securable, privilege)))
     }
 
@@ -512,6 +516,33 @@ fn a_table_level_member_is_asked_each_relation_once_per_stage() {
         &run(p.check(&ana, &columns[0], Privilege::Select)).unwrap()
     ));
     assert_eq!(selects(&external), 4);
+}
+
+#[test]
+fn an_answer_given_while_the_version_changed_serves_no_other_column() {
+    // CodeRabbit on #1023: the answer is kept under the version it was decided at, and not at
+    // all when the member's version moved during the check.
+    let mut grants = Member::new(allow);
+    grants.column_level = true;
+    let grants = Arc::new(grants);
+    let mut external = Member::new(allow);
+    external.bump_per_check = 1;
+    let external = Arc::new(external);
+    let p = list(vec![Arc::clone(&grants), Arc::clone(&external)]);
+    let ana = principal();
+    run(p.prefetch(&ana, &[(table("t"), Privilege::Browse)]));
+    run(p.check(&ana, &table("t"), Privilege::Browse)).unwrap();
+    for c in [column("t", "a"), column("t", "b")] {
+        assert!(is_allow(
+            &run(p.check(&ana, &c, Privilege::Select)).unwrap()
+        ));
+    }
+    let selects = external
+        .asked()
+        .into_iter()
+        .filter(|(_, p)| *p == Privilege::Select)
+        .count();
+    assert_eq!(selects, 2, "each column asks the member again");
 }
 
 #[test]

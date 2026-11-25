@@ -117,6 +117,9 @@ impl PathPrefixPolicy {
         mut self,
         prefixes: impl IntoIterator<Item = S>,
     ) -> Result<Self, KrishivError> {
+        // Another confinement keeps its own refusal records: a clone of this policy extended
+        // here must never consume a record the original made.
+        self.own = OwnRefusals::default();
         for prefix in prefixes {
             let prefix = prefix.as_ref();
             let parsed = parse_object_prefix(prefix)
@@ -434,5 +437,34 @@ mod tests {
         // A path told again without a refusal of its own here goes to the provider.
         policy.denied(&ana, &outside, Privilege::Select);
         assert_eq!(inner.told.load(Ordering::Relaxed), 2);
+    }
+
+    /// CodeRabbit on #1023: a clone given other prefixes keeps refusal records of its own, so it
+    /// never takes a record the original made and the provider behind it is still told.
+    #[test]
+    fn a_clone_with_other_prefixes_never_takes_the_originals_records() {
+        let root = tempfile::tempdir().unwrap();
+        let inner = Arc::new(Labelled::default());
+        let original = PathPrefixPolicy::new([root.path()], Arc::clone(&inner) as _).unwrap();
+        let ana = Principal::new("ana", PrincipalKind::User);
+        let object = Securable::Path(OptionValue::Plain("s3://bucket/data/x".to_owned()));
+        let d = futures::executor::block_on(original.check(&ana, &object, Privilege::Select));
+        assert!(matches!(d, Ok(AccessDecision::Deny { .. })), "{d:?}");
+        let extended = original
+            .clone()
+            .with_object_prefixes(["s3://bucket/data"])
+            .unwrap();
+        let d = futures::executor::block_on(extended.check(&ana, &object, Privilege::Select));
+        assert!(matches!(d, Ok(AccessDecision::Deny { .. })), "{d:?}");
+        assert_eq!(extended.refusal_label(), Some("external"));
+        extended.denied(&ana, &object, Privilege::Select);
+        assert_eq!(
+            inner.told.load(Ordering::Relaxed),
+            1,
+            "the inner provider refused it"
+        );
+        // The original's own record is still its own.
+        original.denied(&ana, &object, Privilege::Select);
+        assert_eq!(inner.told.load(Ordering::Relaxed), 1);
     }
 }

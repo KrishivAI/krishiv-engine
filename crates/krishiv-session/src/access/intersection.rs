@@ -166,10 +166,15 @@ impl IntersectionPolicy {
             {
                 continue;
             }
+            // The version the answer was decided under: read before and after the check, and kept
+            // only when both agree (a policy changed during the check is asked again next time).
+            let before = member.version();
             match member.check(principal, asked, privilege).await? {
                 AccessDecision::Allow => {
-                    if let Some(key) = key {
-                        self.note_answer(key, member.version());
+                    if let Some(key) = key
+                        && member.version() == before
+                    {
+                        self.note_answer(key, before);
                     }
                 }
                 AccessDecision::AllowWith(policy) => {
