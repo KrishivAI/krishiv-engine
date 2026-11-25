@@ -472,6 +472,8 @@ fn a_process_killed_in_the_middle_of_ddl_leaves_a_loadable_catalog() {
         assert!(Instant::now() < deadline, "the child made no tables");
         std::thread::sleep(Duration::from_millis(20));
     }
+    // The child is the last connection when it dies, so the reopen below takes SQLite's last-connection recovery path.
+    drop(observer);
     victim.0.kill().unwrap();
     victim.0.wait().unwrap();
     let c = open(&path);

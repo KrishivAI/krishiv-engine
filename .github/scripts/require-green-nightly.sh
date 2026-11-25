@@ -13,7 +13,7 @@ set -euo pipefail
 # equal to) $GITHUB_SHA, and EVERY job of it that is not named must have succeeded or been skipped. The named jobs may
 # fail. The waiver is printed into the job summary. Without the input nothing below changes.
 if [ -n "${NIGHTLY_WAIVER:-}" ]; then
-  if [[ ! "$NIGHTLY_WAIVER" =~ ^run=([0-9]+)[[:space:]]+jobs=([A-Za-z0-9_.,/\ -]+)[[:space:]]+reason=(.+)$ ]]; then
+  if [[ ! "$NIGHTLY_WAIVER" =~ ^run=([0-9]+)[[:space:]]+jobs=([A-Za-z0-9_.,/() -]+)[[:space:]]+reason=(.+)$ ]]; then
     echo "::error::nightly_waiver must read: run=<id> jobs=<a,b> reason=<text>"
     exit 1
   fi
