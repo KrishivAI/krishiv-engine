@@ -74,3 +74,13 @@ the same length as the file above and the same bytes at three sampled 1 MB range
 now downloads that URL too. The driver's `drop_caches` needs `sudo` and was stubbed here, so the cold path is still
 not exercised (the dry run on the board's machine does that). `queries.sql` upstream is unchanged (same SHA-256 as
 the pinned commit).
+
+Checked (2026-11-25, perf-1): the 0.3.0 wheel (built from `release/0.3.0`) in a fresh `ubuntu:24.04` container on the
+same server, through ClickBench's own driver at upstream `dc112044` (the only driver change since `b4468bb` is the
+opt-in `BENCH_QUERY_TIMEOUT`, set to 600 here): `install` recovered from the missing `python3-venv`, all 43 queries x 3
+tries return with no `null`, `Startup time: 0.120`. A results file built from the log and `template.json` passes
+ClickBench's `validate-results.py --base`. Every query's answer equals DuckDB 2.0.0's (the harness's `compare_rows`, with
+the tie-break keys; q42 differs only inside the tie group cut by its LIMIT/OFFSET). `template.json` follows today's
+README: a new system starts in category `enthusiast` (Challenger also asks for aarch64 results and the randomized
+benchmark in `random/`), and tags must already exist in the repository (`Spark-compatible` did not; the board's CI
+rejects it). The page-cache drop was stubbed again (an unprivileged container), so the cold path is still not exercised.
