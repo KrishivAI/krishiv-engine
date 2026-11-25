@@ -93,7 +93,7 @@ pub static SHARE_FILTERED_SCANS: ConfigEntry = ConfigEntry {
 pub static SHARE_LITERAL_INSTANCES: ConfigEntry = ConfigEntry {
     key: "krishiv.optimizer.shareLiteralInstances",
     value_type: ValueType::Bool,
-    default: Some(ConfigValue::Bool(false)),
+    default: Some(ConfigValue::Bool(true)),
     doc: "Internal. Compute a CTE read several times with a different literal on one of its group \
           keys (TPC-DS q31's `d_qoy = 1`, `2`, `3`) once for all the literals (`d_qoy IN (1, 2, 3)`), \
           each reader keeping the groups of its own literal. Needs \

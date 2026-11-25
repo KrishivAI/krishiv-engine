@@ -140,12 +140,14 @@ fn an_expression_key_keeps_the_instances() {
     assert_eq!(scans(on.root(), "store_sales"), 2, "{}", on.root());
 }
 
-/// Off by default.
+/// On by default; `false` keeps the instances.
 #[test]
-fn off_by_default() {
+fn on_by_default() {
     let plan = support::resolve(BY_KEY, &support::ctx_over(tpcds::catalog()));
     let out = optimize_with_udfs(&plan, &NoStatistics, &UdfLibrary::new(), &Config::new()).unwrap();
-    assert_eq!(scans(out.root(), "store_sales"), 2, "{}", out.root());
+    assert_eq!(scans(out.root(), "store_sales"), 1, "{}", out.root());
+    let off = optimize(BY_KEY, false);
+    assert_eq!(scans(off.root(), "store_sales"), 2, "{}", off.root());
 }
 
 /// An aggregate only one instance reads would run on the other literal's

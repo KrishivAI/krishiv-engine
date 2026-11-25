@@ -950,19 +950,19 @@ fn share_filtered_scans_defaults_on_and_parses() {
 }
 
 #[test]
-fn share_literal_instances_defaults_off_and_parses() {
+fn share_literal_instances_defaults_on_and_parses() {
     let mut c = Config::new();
     assert_eq!(
         c.get(&SHARE_LITERAL_INSTANCES)
             .and_then(ConfigValue::as_bool),
-        Some(false)
+        Some(true)
     );
-    c.set("krishiv.optimizer.shareLiteralInstances", "true")
+    c.set("krishiv.optimizer.shareLiteralInstances", "false")
         .unwrap();
     assert_eq!(
         c.get(&SHARE_LITERAL_INSTANCES)
             .and_then(ConfigValue::as_bool),
-        Some(true)
+        Some(false)
     );
     assert!(
         c.set("krishiv.optimizer.shareLiteralInstances", "maybe")
