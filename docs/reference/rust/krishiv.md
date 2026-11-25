@@ -17,6 +17,9 @@ process. Results are Arrow record batches ([`arrow`]). Errors are
 
 # Cargo features
 
+**Reserved features (no effect yet):** `kafka`, `iceberg`, `cdc`, `connect`, `flight-sql`, `mcp`,
+`python`, `celeborn` and `mimalloc`. They are wired in 0.3.x.
+
 `kafka`, `iceberg`, `cdc`, `connect`, `flight-sql`, `mcp`, `python`, `wasm-udf`,
 `celeborn` and `mimalloc` are reserved names: they enable no code in this crate
 yet (features are additive, so they can gain code later without breaking
