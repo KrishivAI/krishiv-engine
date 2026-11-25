@@ -1292,14 +1292,62 @@ async fn sql_creates_and_drops_a_persisted_udf() {
         .await
         .expect_err("exists");
         assert_eq!(error_class(&e), "ROUTINE_ALREADY_EXISTS", "{e:?}");
-        for text in [
-            "CREATE FUNCTION IF NOT EXISTS plus_one AS 'python' USING PYTHON 'plus_one'",
-            "CREATE OR REPLACE FUNCTION plus_one AS 'python' USING PYTHON 'plus_one'",
-        ] {
-            execute(&run.channel, command(text), ADMIN)
-                .await
-                .expect(text);
-        }
+        // A second, different registration under the name: `IF NOT EXISTS` keeps the stored one.
+        execute(
+            &run.channel,
+            register(udf(
+                None,
+                "plus_one",
+                "def f(x):\n    return x > 0",
+                boolean(),
+                Vec::new(),
+            )),
+            ADMIN,
+        )
+        .await
+        .expect("registered again");
+        execute(
+            &run.channel,
+            command("CREATE FUNCTION IF NOT EXISTS plus_one AS 'python' USING PYTHON 'plus_one'"),
+            ADMIN,
+        )
+        .await
+        .expect("if not exists");
+    }
+    {
+        let run = start_store(
+            None,
+            Some(Arc::new(Spy::default())),
+            Some(file_store(&file)),
+        )
+        .await;
+        let kept = analyze_schema(&run.channel, query(), ADMIN)
+            .await
+            .expect("typed after IF NOT EXISTS");
+        assert!(
+            format!("{kept:?}").contains("Long") && !format!("{kept:?}").contains("Boolean"),
+            "IF NOT EXISTS kept the stored long function: {kept:?}"
+        );
+        execute(
+            &run.channel,
+            register(udf(
+                None,
+                "plus_one",
+                "def f(x):\n    return x > 0",
+                boolean(),
+                Vec::new(),
+            )),
+            ADMIN,
+        )
+        .await
+        .expect("registered boolean");
+        execute(
+            &run.channel,
+            command("CREATE OR REPLACE FUNCTION plus_one AS 'python' USING PYTHON 'plus_one'"),
+            ADMIN,
+        )
+        .await
+        .expect("or replace");
     }
     let run = start_store(
         None,
@@ -1307,9 +1355,13 @@ async fn sql_creates_and_drops_a_persisted_udf() {
         Some(file_store(&file)),
     )
     .await;
-    analyze_schema(&run.channel, query(), ADMIN)
+    let replaced = analyze_schema(&run.channel, query(), ADMIN)
         .await
         .expect("typed in a new session of a restarted server");
+    assert!(
+        format!("{replaced:?}").contains("Boolean"),
+        "OR REPLACE stored the new function: {replaced:?}"
+    );
     // Another principal neither sees it nor drops it.
     let e = execute(&run.channel, command("DROP FUNCTION plus_one"), ADMIN2)
         .await
