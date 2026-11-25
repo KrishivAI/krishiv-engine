@@ -35,9 +35,10 @@ case "$(uname -s)" in
     lib=libkrishiv_node.so
     # A cdylib needs the dynamic C runtime; the musl target links it statically by default. The host
     # triple decides `crt-static` (musl's `ldd --version` exits 1, which `pipefail` would turn into a miss).
-    if rustc -vV | grep -q '^host:.*-musl'; then
-      export RUSTFLAGS="${RUSTFLAGS:-} -C target-feature=-crt-static"
-    fi
+    # `sed` reads rustc's whole output, so no early exit can end the pipe with EPIPE.
+    case "$(rustc -vV | sed -n 's/^host: //p')" in
+      *-musl) export RUSTFLAGS="${RUSTFLAGS:-} -C target-feature=-crt-static" ;;
+    esac
     ;;
 esac
 
