@@ -375,6 +375,12 @@ impl Lowerer {
                     j.span,
                 ));
             }
+            JoinKind::Inner if matches!(j.constraint, JoinConstraint::NearestBy(_)) => {
+                IrJoin::LateralInner
+            }
+            JoinKind::Left if matches!(j.constraint, JoinConstraint::NearestBy(_)) => {
+                IrJoin::LateralLeft
+            }
             JoinKind::Inner => IrJoin::Inner,
             JoinKind::Cross => IrJoin::Cross,
             JoinKind::Left => IrJoin::LeftOuter,
@@ -383,7 +389,10 @@ impl Lowerer {
             JoinKind::LeftSemi => IrJoin::LeftSemi,
             JoinKind::LeftAnti => IrJoin::LeftAnti,
         };
-        let right = self.factor(&j.right)?;
+        let mut right = self.factor(&j.right)?;
+        if let JoinConstraint::NearestBy(n) = &j.constraint {
+            right = self.nearest_by_right(right, n)?;
+        }
         let condition = if j.natural {
             // `NATURAL JOIN` has no condition in the syntax tree (the
             // parser leaves it empty); the analyzer computes the
@@ -391,13 +400,10 @@ impl Lowerer {
             JoinCondition::Natural
         } else {
             match &j.constraint {
-                JoinConstraint::None => JoinCondition::None,
+                JoinConstraint::None | JoinConstraint::NearestBy(_) => JoinCondition::None,
                 JoinConstraint::On(e) => JoinCondition::On(arc(self.expr(e)?)),
                 JoinConstraint::Using(cols) => {
                     JoinCondition::Using(cols.iter().map(|c| c.value.clone()).collect())
-                }
-                JoinConstraint::NearestBy(n) => {
-                    return Err(unsupported("NEAREST BY joins", n.span));
                 }
                 JoinConstraint::AsOf(c) => return self.as_of_join(plan, right, kind, c, j.span),
             }
@@ -410,6 +416,48 @@ impl Lowerer {
                 condition,
             },
             j.span,
+        ))
+    }
+
+    /// The right side of `left [LEFT] JOIN right [APPROX | EXACT] NEAREST [k] BY DISTANCE | SIMILARITY
+    /// ranking`, as a lateral subquery over the left row: the `k` right rows with the smallest
+    /// distance (largest similarity), `ORDER BY ranking LIMIT k`. A null ranking never matches
+    /// (Spark's `MaxMinByK` skips null orderings); ties break arbitrarily, as in Spark.
+    fn nearest_by_right(&mut self, right: LogicalPlan, n: &NearestBy) -> R<LogicalPlan> {
+        let sp = n.span;
+        let ranking = arc(self.expr(&n.ranking)?);
+        let not_null = arc(self.call(Builtin::IsNotNull.name(), vec![Arc::clone(&ranking)], sp));
+        let k = n
+            .num_results
+            .as_deref()
+            .map_or(Ok(1), str::parse::<i32>)
+            .map_err(|_| unsupported("this NEAREST BY result count", sp))?;
+        let order = match n.direction {
+            NearestDirection::Distance => SortOrder::asc(ranking),
+            NearestDirection::Similarity => SortOrder::desc(ranking),
+        };
+        let filtered = self.node(
+            PlanNode::Filter {
+                input: arc(right),
+                predicate: not_null,
+            },
+            sp,
+        );
+        let sorted = self.node(
+            PlanNode::Sort {
+                input: arc(filtered),
+                order: vec![order],
+                global: true,
+            },
+            sp,
+        );
+        let limit = arc(self.ex(ExprNode::Literal(IrLiteral::Integer(k)), sp));
+        Ok(self.node(
+            PlanNode::Limit {
+                input: arc(sorted),
+                limit,
+            },
+            sp,
         ))
     }
 

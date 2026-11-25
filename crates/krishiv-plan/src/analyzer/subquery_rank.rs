@@ -28,7 +28,7 @@ impl Rewriter {
     ) -> R<(Arc<LogicalPlan>, Vec<Arc<Expr>>)> {
         let unsupported_limit =
             || unsupported("a correlated subquery's LIMIT of this form", plan.origin);
-        let (below, order, layers) = peel_limit(plan, &b.below)?;
+        let (below, order, layers) = peel_limit(plan, &b.below, false)?;
         let (inner, corr) = self.pull(&below, true)?;
         let mut partition_by = Vec::new();
         for c in &corr {
@@ -69,8 +69,16 @@ impl Rewriter {
         distinct: &Arc<LogicalPlan>,
         domain: &[BoundColumn],
     ) -> R<(Arc<LogicalPlan>, Renumber)> {
-        let (below, order, layers) = peel_limit(plan, &b.below)?;
+        let (below, order, layers) = peel_limit(plan, &b.below, true)?;
         let (inner, renumber) = self.domained(&below, distinct, domain)?;
+        // A sort key may read the outer row (`NEAREST BY`'s ranking): it reads the domain's copy.
+        let order: Vec<SortOrder> = order
+            .into_iter()
+            .map(|o| SortOrder {
+                expr: renumber.outer(&o.expr),
+                ..o
+            })
+            .collect();
         let extra = domain_columns(domain, renumber);
         let partition_by = extra.iter().map(|c| col_expr(c, Origin::UNKNOWN)).collect();
         let out_plan = self.rank(plan, inner, partition_by, order, b, &layers, &extra)?;

@@ -39,10 +39,10 @@ use crate::ast::{
     Alias, AsOfCriteria, AsOfFilter, BinaryOp, Expr, ExprKind, FrameBound, FrameBoundKind,
     FrameUnits, FromClause, FromStatement, GroupBy, GroupItem, GroupItemKind, GroupWith,
     GroupingSet, Hint, Ident, Join, JoinConstraint, JoinKind, LateralView, Limit, Literal,
-    NamedWindow, NullTreatment, NumKind, Pipe, PipeAggregate, PipeOp, PipeOpKind, Pivot, Query,
-    Relation, RelationExt, SampleMethodKind, SampleType, Select, SelectItem, SetExpr, SetExprKind,
-    SetOperator, SetQuantifier, SortItem, Span, TableAlias, TableFactor, TableFactorKind,
-    TableSample, Truth, UnaryOp, Unpivot, WindowRef, WindowSpec,
+    NamedWindow, NearestBy, NearestDirection, NullTreatment, NumKind, Pipe, PipeAggregate, PipeOp,
+    PipeOpKind, Pivot, Query, Relation, RelationExt, SampleMethodKind, SampleType, Select,
+    SelectItem, SetExpr, SetExprKind, SetOperator, SetQuantifier, SortItem, Span, TableAlias,
+    TableFactor, TableFactorKind, TableSample, Truth, UnaryOp, Unpivot, WindowRef, WindowSpec,
 };
 use crate::validate::literal::{self, Number, TypedKind};
 use crate::{ParseError, ParserOptions, parse_named_expression, parse_query};

@@ -292,14 +292,18 @@ pub(super) fn over_no_rows(e: &Arc<Expr>) -> R<Arc<Expr>> {
 /// the sort, outermost first, which rebuild above the ranking.
 pub(super) type PeeledLimit = (Arc<LogicalPlan>, Vec<SortOrder>, Vec<Arc<LogicalPlan>>);
 
-pub(super) fn peel_limit(plan: &Arc<LogicalPlan>, input: &Arc<LogicalPlan>) -> R<PeeledLimit> {
+pub(super) fn peel_limit(
+    plan: &Arc<LogicalPlan>,
+    input: &Arc<LogicalPlan>,
+    outer_order: bool,
+) -> R<PeeledLimit> {
     let unsupported_limit =
         || unsupported("a correlated subquery's LIMIT of this form", plan.origin);
     // The analyzer puts a Project between the Limit and the Sort when
     // the sort columns are not selected: the window ranks below it.
     let ordered = |sort: &Arc<LogicalPlan>| match &sort.node {
         PlanNode::Sort { input, order, .. }
-            if !order.iter().any(|o| has_outer(Node::Expr(&o.expr))) =>
+            if outer_order || !order.iter().any(|o| has_outer(Node::Expr(&o.expr))) =>
         {
             Some((Arc::clone(input), order.clone()))
         }

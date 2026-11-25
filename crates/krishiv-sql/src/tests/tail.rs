@@ -631,9 +631,9 @@ fn nearest_by_joins() {
         &defaults(),
     )
     .unwrap();
-    assert!(
-        unsupported("SELECT * FROM u JOIN p APPROX NEAREST BY DISTANCE x").contains("NEAREST BY")
-    );
+    // It lowers to a lateral top-k over the right side.
+    let q = ok("SELECT * FROM u JOIN p APPROX NEAREST BY DISTANCE x");
+    assert!(lower(&q, krishiv_plan::SourceId(0)).is_ok());
 }
 
 fn table_function_args(sql: &str) -> Vec<ast::FunctionArg> {
