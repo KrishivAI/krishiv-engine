@@ -251,16 +251,17 @@ pub(super) async fn uses_commit_log(
     // write goes through the root. The ancestors are probed through the store as the path names
     // it (`at.store`), not the one anchored at the target, which cannot see above it; the root
     // may be the store's own root (an empty path).
-    let mut parts: Vec<String> = at.path.parts().map(|p| p.as_ref().to_owned()).collect();
-    while parts
-        .last()
-        .is_some_and(|name| name.split_once('=').is_some_and(|(k, _)| !k.is_empty()))
-    {
+    let mut parts: Vec<object_store::path::PathPart<'_>> = at.path.parts().collect();
+    while parts.last().is_some_and(|name| {
+        name.as_ref()
+            .split_once('=')
+            .is_some_and(|(k, _)| !k.is_empty())
+    }) {
         parts.pop();
         let parent = krishiv_io::commit_log::CommitLog::new(
             io,
             at.store.clone(),
-            object_store::path::Path::from_iter(parts.iter().map(String::as_str)),
+            object_store::path::Path::from_iter(parts.iter().cloned()),
             at.display.clone(),
         );
         if parent.exists().await? {

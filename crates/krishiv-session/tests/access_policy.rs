@@ -895,15 +895,30 @@ fn a_file_in_the_way_of_the_target_is_handled_as_before() {
     assert!(target.is_dir());
 }
 
-/// A directory above the target whose name object paths would encode cannot
-/// be addressed: refused up front (it used to write into a differently named
-/// sibling directory).
+/// A directory above the target whose name object paths used to encode
+/// (non-ASCII, `~`, `%`) is written into under its own name, never into a
+/// differently named sibling.
 #[cfg(unix)]
 #[test]
-fn a_special_character_in_an_ancestor_name_is_refused() {
+fn a_special_character_in_an_ancestor_name_is_written_into() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().canonicalize().unwrap();
-    let dir = root.join("jos\u{e9}");
+    for name in ["jos\u{e9}", "RUNNER~1", "a%7Eb"] {
+        let dir = root.join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        let s = session(Arc::new(AllowAll));
+        let df = block_on(s.sql("SELECT 1 AS a")).unwrap();
+        let out = dir.join("out");
+        block_on(df.write().parquet(out.to_str().unwrap())).unwrap();
+        assert!(out.join("_SUCCESS").exists(), "{name}");
+    }
+    assert_eq!(
+        std::fs::read_dir(&root).unwrap().count(),
+        3,
+        "no sibling was created"
+    );
+    // A control character is a name no object path holds: refused up front.
+    let dir = root.join("a\u{1}b");
     std::fs::create_dir_all(&dir).unwrap();
     let s = session(Arc::new(AllowAll));
     let df = block_on(s.sql("SELECT 1 AS a")).unwrap();
@@ -913,11 +928,6 @@ fn a_special_character_in_an_ancestor_name_is_refused() {
         "KRISHIV_UNSUPPORTED_FEATURE"
     );
     assert!(!out.exists());
-    assert_eq!(
-        std::fs::read_dir(&root).unwrap().count(),
-        1,
-        "no sibling was created"
-    );
 }
 
 /// A file where a directory of the path should be fails as a failed write with the OS reason

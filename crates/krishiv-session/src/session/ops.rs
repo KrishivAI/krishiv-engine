@@ -650,8 +650,8 @@ impl Session {
                 Err(krishiv_io::AnchorError::UnsupportedName(name)) => {
                     return Err(KrishivUnsupportedFeature {
                         feature: format!(
-                            "writing below the directory {name:?} (a name with non-ASCII or \
-                             reserved characters above the target)"
+                            "writing below the directory {name:?} (a name with a control \
+                             character above the target)"
                         ),
                     }
                     .into());

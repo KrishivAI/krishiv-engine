@@ -44,6 +44,7 @@ target `fuzz/fuzz_targets/parquet_read.rs` (seeds: `tests/scripts/fuzz_seed_parq
 
 ## Key files
 Paths are relative to this crate.
+- `src/local_path.rs` `local_object_path`: the object path of a local file with every name kept as written (`Path::parse`); `Path::from`/`from_iter` percent-encode `~`, `%`, `#` and non-ASCII names, which the local stores would read as other files
 - `src/format.rs` `FileFormat`, `Decoder`, `Encoder`, `Capabilities`; `src/request.rs` scan request and pushdown types
 - `src/stats.rs` statistics and sound pruning (`TriState`); `src/split.rs` Spark split planner
 - `src/scan.rs` `ScanStream`; `src/write.rs` `FileWriter`; `src/commit.rs` save modes and `_SUCCESS`
