@@ -4,7 +4,7 @@
 use super::*;
 
 /// The parser's configs (`ParserOptions::from_conf` reads these).
-pub(super) const PARSER_KEYS: [&str; 19] = [
+pub(super) const PARSER_KEYS: [&str; 20] = [
     "spark.sql.ansi.enabled",
     "spark.sql.ansi.enforceReservedKeywords",
     "spark.sql.ansi.doubleQuotedIdentifiers",
@@ -12,6 +12,7 @@ pub(super) const PARSER_KEYS: [&str; 19] = [
     "spark.sql.parser.escapedStringLiterals",
     "spark.sql.legacy.bangEqualsNot",
     "spark.sql.legacy.identifierClause",
+    "spark.sql.legacy.interval.enabled",
     "spark.sql.legacy.consecutiveStringLiterals.enabled",
     "spark.sql.sources.bucketing.maxBuckets",
     "spark.sql.parser.singleCharacterPipeOperator.enabled",

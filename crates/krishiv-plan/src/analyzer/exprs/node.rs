@@ -59,13 +59,48 @@ impl Resolver<'_> {
         let args: Vec<Arc<Expr>> = kids.iter().map(|k| Arc::clone(&k.expr)).collect();
         let mut b = match &e.node {
             ExprNode::Column(c) => self.column(c, e.origin, in_agg, cx)?,
-            ExprNode::Literal(
-                Literal::YearMonthInterval { .. } | Literal::DayTimeInterval { .. },
-            ) if self.ctx.conf.legacy_interval => {
-                return Err(unsupported(
-                    "interval literals under spark.sql.legacy.interval.enabled",
-                    e.origin,
-                ));
+            // Under `spark.sql.legacy.interval.enabled` an interval literal is a calendar interval
+            // (Spark's `Literal(CalendarInterval)`): months, whole days only when the leading field
+            // is `DAY`, and the rest as microseconds.
+            ExprNode::Literal(Literal::YearMonthInterval { months, .. })
+                if self.ctx.conf.legacy_interval =>
+            {
+                let lit = Literal::CalendarInterval {
+                    months: *months,
+                    days: 0,
+                    micros: 0,
+                };
+                let ty = literal_type(&lit);
+                Bound {
+                    expr: rebuilt(ExprNode::Literal(lit)),
+                    ..keep(ArgType {
+                        nullable: false,
+                        data_type: ty,
+                    })
+                }
+            }
+            ExprNode::Literal(Literal::DayTimeInterval { micros, start, .. })
+                if self.ctx.conf.legacy_interval =>
+            {
+                const DAY: i64 = 86_400_000_000;
+                let (days, micros) = if *start == krishiv_types::DayTimeField::Day {
+                    (micros / DAY, micros % DAY)
+                } else {
+                    (0, *micros)
+                };
+                let lit = Literal::CalendarInterval {
+                    months: 0,
+                    days: i32::try_from(days).unwrap_or(i32::MAX),
+                    micros,
+                };
+                let ty = literal_type(&lit);
+                Bound {
+                    expr: rebuilt(ExprNode::Literal(lit)),
+                    ..keep(ArgType {
+                        nullable: false,
+                        data_type: ty,
+                    })
+                }
             }
             ExprNode::Literal(v) => keep(ArgType {
                 nullable: matches!(v, Literal::Null(_)),
