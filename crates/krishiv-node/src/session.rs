@@ -57,6 +57,10 @@ impl NativeSession {
             })
     }
 
+    pub(crate) fn conf_value(&self, key: &str) -> Result<Option<String>, KrishivError> {
+        Ok(self.session()?.conf().get(key))
+    }
+
     pub(crate) fn shut(&self) {
         let taken = self
             .inner
@@ -89,6 +93,13 @@ impl NativeSession {
     pub fn set_conf(&self, key: String, value: String) -> napi::Result<()> {
         let session = self.session().map_err(|e| to_napi(&e))?;
         session.conf().set(&key, &value).map_err(|e| to_napi(&e))
+    }
+
+    /// The session configuration value of `key`, or `undefined` when it is not set and has no
+    /// default, as `SET key` reads it.
+    #[napi]
+    pub fn get_conf(&self, key: String) -> napi::Result<Option<String>> {
+        self.conf_value(&key).map_err(|e| to_napi(&e))
     }
 
     /// Closes the session: its running queries end and its state is freed. Idempotent.

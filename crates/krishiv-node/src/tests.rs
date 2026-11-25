@@ -103,3 +103,31 @@ fn configuration_reaches_the_session_and_close_is_final() {
     session.shut();
     assert!(session.session().is_err());
 }
+
+#[test]
+fn get_conf_reads_set_values_and_defaults() {
+    let session = open();
+    session
+        .session()
+        .unwrap()
+        .conf()
+        .set("spark.sql.session.timeZone", "Asia/Kolkata")
+        .unwrap();
+    assert_eq!(
+        session
+            .conf_value("spark.sql.session.timeZone")
+            .unwrap()
+            .as_deref(),
+        Some("Asia/Kolkata")
+    );
+    assert_eq!(
+        session
+            .conf_value("spark.sql.ansi.enabled")
+            .unwrap()
+            .as_deref(),
+        Some("true")
+    );
+    assert_eq!(session.conf_value("my.app.flag").unwrap(), None);
+    session.shut();
+    assert!(session.conf_value("spark.sql.ansi.enabled").is_err());
+}
