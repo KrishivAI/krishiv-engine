@@ -12,7 +12,9 @@
 //!   of that table's `loadCredentials` and reload only (the declared catalog host; a 401 or 419 falls back to the caller's
 //!   token), never to the token endpoint or to storage (§4.1).
 //! - **Refresh.** [`VendedSource`] is the `CredentialSource` of one scope of one query: the cached credential of the
-//!   longest prefix covering the scope while it is valid for longer than the refresh skew, else a new answer from
+//!   longest prefix covering the scope (after a refresh that narrowed the prefix below the scope's root, the one
+//!   credential of the prefixes inside it; storage decides each file, the read's confinement is unchanged) while it
+//!   is valid for longer than the refresh skew, else a new answer from
 //!   `loadCredentials` with the same caller, or a reload of the table when the catalog does not advertise the endpoint
 //!   or answers it 404. A second fetch while the cache still holds the answer this source last served means the
 //!   store refused that credential (`CredentialCache::invalidate`), so it fetches a new answer instead of serving it
@@ -43,7 +45,7 @@ use krishiv_store::{
 
 use crate::iceberg_rest::types::StorageCredential;
 use crate::iceberg_rest::vended::{
-    VendedPrefix, answer_expires_at, covering, credential, keep_credentials, table_token,
+    VendedPrefix, answer_expires_at, covering, credential, keep_credentials, narrowed, table_token,
 };
 use crate::iceberg_rest::{LoadedTable, RestCaller, RestClient};
 use crate::location::{LocationRule, refused};
@@ -534,7 +536,8 @@ impl VendedTable {
             .put_if_newer(self.key.clone(), answer, self.default_ttl, self.max_entries);
     }
 
-    /// The credential `answer` gives `url`, `None` when it gives none.
+    /// The credential `answer` gives `url`: the longest prefix covering it, else the one credential of the prefixes
+    /// inside it (a refresh that narrowed the prefix); `None` when it gives none.
     fn pick(
         &self,
         answer: &VendedAnswer,
@@ -544,10 +547,16 @@ impl VendedTable {
             tracing::warn!(target: "krishiv::catalog", catalog = self.refetch.catalog.as_str(), table = self.refetch.relation.as_str(), detail, "an Iceberg REST catalog vended a credential Krishiv cannot use");
             self.refetch.refused(LocationRule::NoVendedCredential)
         };
-        let Some((_, config)) =
-            covering(&answer.credentials, &answer.config, &answer.location, url)
-                .map_err(|f| fault(f.0))?
-        else {
+        let covered = covering(&answer.credentials, &answer.config, &answer.location, url)
+            .map_err(|f| fault(f.0))?
+            .map(|(_, config)| config);
+        // A refresh may narrow the prefix below the scope's root: its credential still serves the scope.
+        let config = match covered {
+            Some(c) => Some(c),
+            None => narrowed(&answer.credentials, &answer.config, &answer.location, url)
+                .map_err(|f| fault(f.0))?,
+        };
+        let Some(config) = config else {
             return Ok(None);
         };
         credential(config, url, answer.fetched, self.default_ttl).map_err(|f| fault(f.0))
