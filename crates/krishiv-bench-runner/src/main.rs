@@ -38,6 +38,10 @@ fn main() -> ExitCode {
 
 #[inline(never)]
 fn run() -> ExitCode {
+    // An invalid cap is ignored by the kernels; a per-target run must not pass for a capped one.
+    if let Err(e) = krishiv_kernels::Target::cap_from_env() {
+        let _ = writeln!(std::io::stderr(), "krishiv-bench-runner: {e}");
+    }
     if std::env::args().nth(1).as_deref() == Some("--build-info") {
         return match writeln!(std::io::stdout(), "{}", krishiv_bench_runner::BUILD_INFO) {
             Ok(()) => ExitCode::SUCCESS,
