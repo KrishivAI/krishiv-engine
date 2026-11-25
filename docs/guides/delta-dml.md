@@ -25,9 +25,10 @@ id,region,amount
 3,east,60.0
 ```
 
-Each statement returns `num_affected_rows`. The statements work on a table named in a catalog and on one addressed by
-path, ``UPDATE delta.`/data/trips` SET ...``; a path needs the modify privilege on the path when
-[access control](access-control.md) is on.
+Each statement returns `num_affected_rows`. `UPDATE`, `DELETE` and `MERGE INTO` work on a table named in a catalog and
+on one addressed by path, ``UPDATE delta.`/data/trips` SET ...``; a path needs the modify privilege on the path when
+[access control](access-control.md) is on. `INSERT INTO` does not take the path form in 0.3: insert into a named table,
+or append with `df.write.format("delta").mode("append").save(path)`.
 
 ## Merge a batch of changes
 
