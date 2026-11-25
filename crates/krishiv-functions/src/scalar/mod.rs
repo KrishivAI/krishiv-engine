@@ -48,6 +48,7 @@ mod hll;
 mod interval;
 mod json;
 mod json_tuple;
+mod kll;
 mod map;
 mod math;
 mod mersenne;
@@ -515,6 +516,7 @@ const FAMILIES: &[(&[&str], Binder)] = &[
     (bitmap::NAMES, bitmap::bind),
     (hll::NAMES, hll::bind),
     (theta::NAMES, theta::bind),
+    (kll::NAMES, kll::bind),
     (interval::NAMES, interval::bind),
     (avro::NAMES, avro::bind),
     (protobuf::NAMES, protobuf::bind),

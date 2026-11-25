@@ -35,6 +35,7 @@ mod hashing;
 mod hll;
 mod hof;
 mod json;
+mod kll;
 mod leakproof;
 mod map;
 mod math;
