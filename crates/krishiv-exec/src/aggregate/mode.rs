@@ -438,20 +438,17 @@ impl ModeAcc {
         count_offsets.push(0);
         for &g in ids {
             let group = &self.groups[g as usize];
-            let mut taking: Vec<ArrayRef> = Vec::with_capacity(group.loc.len());
+            // Every group's one-row slices go into one concatenation, so a
+            // buffer list the groups share is added to the state once.
             for &(c, r) in &group.loc {
-                taking.push(group.chunks[c].slice(r, 1));
+                children.push(group.chunks[c].slice(r, 1));
             }
-            if !taking.is_empty() {
-                let refs: Vec<&dyn Array> = taking.iter().map(AsRef::as_ref).collect();
-                children.push(concat(&refs).map_err(|e| internal(e.to_string()))?);
-                key_total = key_total
-                    .checked_add(
-                        i32::try_from(taking.len())
-                            .map_err(|_| internal("a mode group past 2^31 values".to_owned()))?,
-                    )
-                    .ok_or_else(|| internal("a mode group past 2^31 values".to_owned()))?;
-            }
+            key_total = key_total
+                .checked_add(
+                    i32::try_from(group.loc.len())
+                        .map_err(|_| internal("a mode group past 2^31 values".to_owned()))?,
+                )
+                .ok_or_else(|| internal("a mode group past 2^31 values".to_owned()))?;
             key_offsets.push(key_total);
             let array: ArrayRef = Arc::new(
                 group
@@ -468,12 +465,7 @@ impl ModeAcc {
                     + i32::try_from(group.counts.len()).unwrap_or(i32::MAX),
             );
         }
-        let key_values = if children.is_empty() {
-            arrow_array::new_empty_array(&self.arg_type)
-        } else {
-            let refs: Vec<&dyn Array> = children.iter().map(AsRef::as_ref).collect();
-            concat(&refs).map_err(|e| internal(e.to_string()))?
-        };
+        let key_values = super::chunks::concat_chunks(&children, &self.arg_type)?;
         let count_values = if counts.is_empty() {
             Arc::new(arrow_array::Int64Array::new_null(0)) as ArrayRef
         } else {
@@ -511,8 +503,7 @@ impl ModeAcc {
                 None => arrow_array::new_null_array(&self.arg_type, 1),
             });
         }
-        let refs: Vec<&dyn Array> = out.iter().map(AsRef::as_ref).collect();
-        concat(&refs).map_err(|e| internal(e.to_string()))
+        super::chunks::concat_chunks(&out, &self.arg_type)
     }
 
     /// The winning sample `(chunk, row)` of `group`, if it has a value.
@@ -768,6 +759,67 @@ mod tests {
         b.snapshot(0, 1);
         let out = b.evaluate(&[1]).unwrap();
         assert_eq!(out.as_primitive::<Int64Type>().value(0), 7);
+    }
+
+    /// The data buffers of a string mode state's key column: its list's
+    /// child.
+    fn key_buffers(states: &[ArrayRef]) -> usize {
+        states[0]
+            .as_list::<i32>()
+            .values()
+            .as_string_view()
+            .data_buffers()
+            .len()
+    }
+
+    /// A mode state over many groups keeps the buffer lists its groups
+    /// share once, through two merge rounds (a per-group concatenation
+    /// gave one buffer per group, then every group's whole list again).
+    #[test]
+    fn string_states_keep_their_buffer_count_through_merge_rounds() {
+        let groups = 500_u32;
+        let ids: Vec<u32> = (0..groups).collect();
+        let mut a = ModeAcc::new(DataType::Utf8View, &AggregateFunction::Mode).unwrap();
+        a.resize(groups as usize);
+        a.reserve(1);
+        let mut rows: Vec<u32> = Vec::new();
+        let mut values: Vec<String> = Vec::new();
+        for g in 0..groups {
+            for k in 0..3 {
+                rows.push(g);
+                values.push(format!("group-{g:04}-value-{}-long-enough", k % 2));
+            }
+        }
+        let col: ArrayRef = Arc::new(arrow_array::StringViewArray::from_iter_values(values));
+        let bound = col.as_string_view().data_buffers().len();
+        a.fold(&rows, &col, &|_| true).unwrap();
+        let mut states = a.state(&ids).unwrap();
+        let want = a.evaluate(&ids).unwrap();
+        assert!(key_buffers(&states) <= bound, "{}", key_buffers(&states));
+        for round in 0..2 {
+            let mut next = ModeAcc::new(DataType::Utf8View, &AggregateFunction::Mode).unwrap();
+            next.resize(groups as usize);
+            let refs: Vec<&ArrayRef> = states.iter().collect();
+            next.merge(&ids, &refs).unwrap();
+            states = next.state(&ids).unwrap();
+            assert!(
+                key_buffers(&states) <= bound,
+                "round {round}: {} buffers",
+                key_buffers(&states)
+            );
+            assert_eq!(
+                texts(&next.evaluate(&ids).unwrap()),
+                texts(&want),
+                "round {round}"
+            );
+        }
+    }
+
+    fn texts(a: &ArrayRef) -> Vec<Option<String>> {
+        a.as_string_view()
+            .iter()
+            .map(|v| v.map(str::to_owned))
+            .collect()
     }
 
     /// Misshapen folds and states are refused, not misread; an untyped NULL

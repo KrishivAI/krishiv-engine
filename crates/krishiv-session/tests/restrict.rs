@@ -320,6 +320,16 @@ fn correlated_rewrites_keep_per_row_results() {
             "SELECT id FROM lt WHERE id IN (SELECT count(*) + 3L FROM lc WHERE lc.g = lt.id)",
             vec!["3", "4"],
         ),
+        // The comparison casts the count (a projection over the global aggregate): the rewrite
+        // still keeps the count 0 of id 3 (Spark 4.3.0 run: id 2, then ids 3 and 4).
+        (
+            "SELECT id FROM lt WHERE CAST(id AS DECIMAL(10,0)) IN (SELECT count(*) FROM lc WHERE lc.g = lt.id)",
+            vec!["2"],
+        ),
+        (
+            "SELECT id FROM lt WHERE CAST(id - 3 AS DECIMAL(10,0)) IN (SELECT count(*) FROM lc WHERE lc.g = lt.id)",
+            vec!["3", "4"],
+        ),
         // EXISTS: a grouped aggregate or a LIMIT has a row when its input has.
         (
             "SELECT id FROM lt WHERE EXISTS (SELECT max(y) FROM lc WHERE lc.g = lt.id GROUP BY lc.g)",

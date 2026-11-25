@@ -26,6 +26,7 @@ prost = { workspace = true, features = ["derive", "std"] }
 thiserror.workspace = true
 
 [dev-dependencies]
+krishiv-kernels = { path = "../krishiv-kernels" }
 krishiv-optimizer = { path = "../krishiv-optimizer" }
 krishiv-plan = { path = "../krishiv-plan", features = ["testing"] }
 krishiv-sql = { path = "../krishiv-sql" }

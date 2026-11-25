@@ -64,6 +64,23 @@ impl SparkVersion {
     pub const fn has_remainder_by_zero(self) -> bool {
         !matches!(self, Self::V4_0)
     }
+
+    /// The release line, as `"4.2"`.
+    #[must_use]
+    pub const fn line(self) -> &'static str {
+        match self {
+            Self::V4_0 => "4.0",
+            Self::V4_1 => "4.1",
+            Self::V4_2 => "4.2",
+            Self::V4_3 => "4.3",
+        }
+    }
+
+    /// The version of a release line (`"4.2"`); `None` for any other text.
+    #[must_use]
+    pub fn from_line(line: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|v| v.line() == line)
+    }
 }
 
 #[cfg(test)]
