@@ -77,12 +77,6 @@ const KNOWN_GAPS: &[(&str, &str, &str)] = &[
         "date_format",
         "[KRISHIV_UNSUPPORTED_FEATURE] The feature date_format of a TIME value (Spark 4.3) is not supported by Krishiv yet.",
     ),
-    // No cast from TIME to TIMESTAMP_NTZ yet.
-    (
-        "4.3.0",
-        "to_timestamp_ntz",
-        "[KRISHIV_UNSUPPORTED_FEATURE] The feature a cast from TIME to TIMESTAMP_NTZ (Spark 4.3) is not supported by Krishiv yet.",
-    ),
     // A bare TIMESTAMP does not follow `spark.sql.timestampType` yet.
     (
         "4.3.0",

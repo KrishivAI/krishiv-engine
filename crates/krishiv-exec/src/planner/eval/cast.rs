@@ -157,6 +157,8 @@ fn needs_zone(from: &ArrowType, to: &ArrowType) -> bool {
     (zoned(from) && !matches!(to, ArrowType::Int64 | ArrowType::Timestamp(_, Some(_))))
         || (zoned(to) && !matches!(from, ArrowType::Int64 | ArrowType::Timestamp(_, Some(_))))
         || (wall_clock(from) && zoned(to))
+        // A time of day cast to `TIMESTAMP_NTZ` takes today's date in the session zone.
+        || (matches!(from, ArrowType::Time64(_)) && wall_clock(to))
 }
 
 /// Whether `t` is, or holds at any depth, a timestamp with a zone.
@@ -193,8 +195,8 @@ pub(super) struct CastParts {
     /// here.
     pub(super) precision: Precision,
     /// Whether a cast to `time(p)` from a non-time source cuts to `p` digits (Spark 4.3 on); before
-    /// 4.3 it keeps six whatever `p`. Today the only non-time source of a `Time64` target is a
-    /// string: a later source (a timestamp-to-time cast) must be checked against Spark 4.2 too.
+    /// 4.3 it keeps six whatever `p`. The non-time sources are a string and (Spark 4.3 only, the
+    /// analyzer refuses it before) a timestamp, which `Cast.castToTime` cuts to `p` too.
     pub(super) strings_cut_to_p: bool,
 }
 

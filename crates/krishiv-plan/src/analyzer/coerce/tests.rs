@@ -629,12 +629,12 @@ fn nested_casts_follow_spark() {
     ];
     for (from, to, ansi, legacy) in cases {
         assert_eq!(
-            can_cast(Some(&from), &to, CastMode::Ansi),
+            can_cast(Some(&from), &to, CastMode::Ansi, false),
             ansi,
             "{from} -> {to} (ANSI)"
         );
         assert_eq!(
-            can_cast(Some(&from), &to, CastMode::Legacy),
+            can_cast(Some(&from), &to, CastMode::Legacy, false),
             legacy,
             "{from} -> {to}"
         );
@@ -643,7 +643,8 @@ fn nested_casts_follow_spark() {
         can_cast(
             Some(&t("array<boolean>")),
             &t("array<timestamp>"),
-            CastMode::Try
+            CastMode::Try,
+            false
         ),
         Ok(())
     );
