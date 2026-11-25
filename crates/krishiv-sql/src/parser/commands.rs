@@ -139,7 +139,7 @@ impl Parser<'_> {
             &[
                 "ALTER", "SHOW", "DESC", "DESCRIBE", "INSERT", "DELETE", "UPDATE", "MERGE",
                 "TRUNCATE", "CACHE", "UNCACHE", "CLEAR", "REFRESH", "ANALYZE", "MSCK", "REPAIR",
-                "ADD", "LIST", "COMMENT", "LOAD",
+                "ADD", "LIST", "COMMENT", "LOAD", "CALL",
             ],
         ) {
             self.command_statement()?

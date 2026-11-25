@@ -21,7 +21,9 @@ use std::time::Instant;
 use crate::{BoxFuture, MemoryError};
 
 /// Time source and sleeps for arbitration deadlines.
-pub trait Clock: Send + Sync + fmt::Debug {
+pub trait Clock:
+    Send + Sync + std::panic::UnwindSafe + std::panic::RefUnwindSafe + fmt::Debug
+{
     /// The current time.
     fn now(&self) -> Instant;
     /// Makes sure sleeps can be served. Arbitration calls this before it

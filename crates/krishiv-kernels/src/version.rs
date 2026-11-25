@@ -5,11 +5,11 @@
 //! messages are not. Each difference below was observed by running the
 //! listed Spark releases:
 //!
-//! | Situation | 4.0 | 4.1 | 4.2 |
-//! |---|---|---|---|
-//! | `ARITHMETIC_OVERFLOW` text of `int`/`bigint` `+ - *`, unary `-`, `abs` | `integer overflow` / `long overflow` (`byte`/`short` for unary) | as 4.0 | `overflow` |
-//! | `%`, `pmod`, `try_mod` by zero | `DIVIDE_BY_ZERO` | `REMAINDER_BY_ZERO` | `REMAINDER_BY_ZERO` |
-//! | `upper`/`lower` of the 56 code points that gained a case mapping in Unicode 17 | unchanged | unchanged | mapped |
+//! | Situation | 4.0 | 4.1 | 4.2 | 4.3 |
+//! |---|---|---|---|---|
+//! | `ARITHMETIC_OVERFLOW` text of `int`/`bigint` `+ - *`, unary `-`, `abs` | `integer overflow` / `long overflow` (`byte`/`short` for unary) | as 4.0 | `overflow` | as 4.2 |
+//! | `%`, `pmod`, `try_mod` by zero | `DIVIDE_BY_ZERO` | `REMAINDER_BY_ZERO` | `REMAINDER_BY_ZERO` | as 4.2 |
+//! | `upper`/`lower` of the 56 code points that gained a case mapping in Unicode 17 | unchanged | unchanged | mapped | mapped |
 
 /// A supported Spark release line.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, PartialOrd, Ord)]
@@ -19,9 +19,12 @@ pub enum SparkVersion {
     V4_0,
     /// Spark 4.1.x.
     V4_1,
-    /// Spark 4.2.x (the default; the vendored error registry's version).
-    #[default]
+    /// Spark 4.2.x.
     V4_2,
+    /// Spark 4.3.x (the default). No kernel behaves differently from 4.2 yet; the line exists so
+    /// a difference can be keyed by it.
+    #[default]
+    V4_3,
 }
 
 /// The width of a Spark integral type, for version-specific messages.
@@ -39,7 +42,7 @@ pub enum IntWidth {
 
 impl SparkVersion {
     /// Every supported version, oldest first.
-    pub const ALL: [Self; 3] = [Self::V4_0, Self::V4_1, Self::V4_2];
+    pub const ALL: [Self; 4] = [Self::V4_0, Self::V4_1, Self::V4_2, Self::V4_3];
 
     /// The `ARITHMETIC_OVERFLOW` message of an exact integral operation on
     /// `width` (`MathUtils.*Exact` / `Math.*Exact`): the JDK's text before
@@ -47,7 +50,7 @@ impl SparkVersion {
     #[must_use]
     pub const fn overflow_message(self, width: IntWidth) -> &'static str {
         match (self, width) {
-            (Self::V4_2, _) => "overflow",
+            (Self::V4_2 | Self::V4_3, _) => "overflow",
             (_, IntWidth::Byte) => "byte overflow",
             (_, IntWidth::Short) => "short overflow",
             (_, IntWidth::Int) => "integer overflow",
@@ -87,6 +90,6 @@ mod tests {
         let rbz: Vec<_> = SparkVersion::ALL
             .map(SparkVersion::has_remainder_by_zero)
             .into();
-        assert_eq!(rbz, [false, true, true]);
+        assert_eq!(rbz, [false, true, true, true]);
     }
 }

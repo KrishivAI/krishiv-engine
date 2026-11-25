@@ -26,6 +26,9 @@ enforcement of design P2-T171 invariant I1 (plans are pure data) and the wire fo
   (`Limits`), and every reference must point to an earlier entry.
 - A plan carries `secret(scope, key)` references only (ADR 0038): an inline secret or a URL with credentials fails
   to encode, and error messages never name a value.
+- `PhysicalPlan::guarded` (the E14 security barrier's guarded scans) is coordinator-side and never encoded: access
+  policies are enforced at analysis on the coordinator, and their row filters and column masks are ordinary plan
+  nodes, so a worker needs no policy provider (test `ratchet` `a_barrier_plan_round_trips_without_its_guarded_scans`).
 - A new `PhysNode` variant fails to compile in `encode.rs`, `decode.rs`, `features.rs` and
   `tests/roundtrip.rs` (`variant_of`), and the inventory test fails until a case of it exists; a new case gets its
   golden file with `KRISHIV_BLESS_GOLDEN=1` (then rerun the tests). The decoder maps protobuf enums without
@@ -42,3 +45,5 @@ enforcement of design P2-T171 invariant I1 (plans are pure data) and the wire fo
 
 ## Vector carrier (P3-T075)
 Feature `fixed_size_list_carrier` (Semantic, legacy level `POST_MIGRATION_READER_VERSION`): a plan with a vector carrier column lists it, so a reader without the vector guard refuses the plan. `arrow_type_is_nested` excludes it from `nested_types`. Goldens: `tests/golden/fixed_size_list_carrier/`.
+
+Feature `theta_sketch_aggregates` (proto `AggregateFunction` values 55 to 57): a plan with a Theta aggregate needs it, an older reader refuses; golden `tests/golden/theta_sketch_aggregates/`.

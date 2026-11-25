@@ -2,7 +2,7 @@ name: CI
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
   merge_group:
     types: [checks_requested]
   # No push and no schedule trigger (owner 2026-11-08: run each gate once). A push to main only measures
@@ -50,6 +50,10 @@ env:
 jobs:
   # Decides whether the Rust jobs run. Docs/bench/plan-only PRs skip them.
   changes:
+    # A draft pull request skips every heavy job below (they need this one, or carry the same test);
+    # marking it ready starts the full run (`ready_for_review`). A skipped job satisfies a required check,
+    # so a draft's green skips are NOT a pass: on a draft this job fails at once, which keeps the PR red
+    # (a draft cannot merge) until `ready_for_review` re-runs it.
     runs-on: ubuntu-latest
     outputs:
       rust: ${{ steps.filter.outputs.rust }}
@@ -59,6 +63,11 @@ jobs:
         uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:
           egress-policy: audit
+      - name: Refuse a draft
+        if: github.event.pull_request.draft == true
+        run: |
+          echo "::error::draft: mark the pull request ready for review to run CI"
+          exit 1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -96,7 +105,7 @@ jobs:
 
   # Formatting and spelling of non-Rust files; no Rust toolchain needed.
   text-lint:
-    if: github.event_name != 'merge_group'
+    if: github.event_name != 'merge_group' && github.event.pull_request.draft != true
     runs-on: ubuntu-latest
     steps:
       - name: Harden the runner (audit egress)
@@ -130,7 +139,7 @@ jobs:
   # crates/krishiv-ui-assets/assets (ADR 0024: cargo build never needs Node), and the
   # Playwright page check (ui/tests/check_pages.py) against that build. No Rust toolchain.
   ui:
-    if: github.event_name != 'push'
+    if: github.event_name != 'push' && github.event.pull_request.draft != true
     runs-on: ubuntu-24.04 # Playwright has no chromium build for ubuntu-latest (26.04)
     steps:
       - name: Harden the runner (audit egress)
@@ -166,7 +175,7 @@ jobs:
   # runs on every PR instead of being gated by `changes`. Required check (a maintainer
   # adds `python-quality` to branch protection). Versions come from each uv.lock.
   python-quality:
-    if: github.event_name != 'merge_group'
+    if: github.event_name != 'merge_group' && github.event.pull_request.draft != true
     runs-on: ubuntu-latest
     steps:
       - name: Harden the runner (audit egress)
@@ -294,12 +303,45 @@ jobs:
             -r tests/udf-worker/requirements.txt
       # Every GitHub-hosted x64 runner has x86-64-v3, so the kernel tests must
       # run that clone, not skip it (AVX-512 varies by runner: not required).
-      - run: cargo nextest run --workspace --locked --no-tests=pass
+      # One workspace run built all ~560 test executables at once (116 GB of target on 2026-11-24, then "No space left
+      # on device" in the merge queue). The run is split by target so each stage's executables are deleted before
+      # the next: the package selection stays `--workspace`, so feature unification is the one a single run had.
+      # A `--test` glob that matches a target whose `required-features` are off is an error (a whole-workspace run
+      # skips it), so the stages name their targets: every integration test whose `required-features` the workspace
+      # resolve has on (`cargo metadata` resolve), grouped by first letter.
+      - name: Workspace tests, in stages
         env:
           KRISHIV_REQUIRE_TARGETS: baseline,x86_64v3
           KRISHIV_SIM_TPCH_DIR: ${{ runner.temp }}/tpch-sf0.1
           KRISHIV_TEST_UDF_PYTHON: ${{ runner.temp }}/udf-python/bin/python
           KRISHIV_UDF_POOL_REQUIRED: "1"
+        run: |
+          stage() {
+            echo "::group::nextest stage ($# args)"
+            cargo nextest run --workspace --locked --no-tests=pass "$@"
+            echo "::endgroup::"
+            find target/debug/deps -maxdepth 1 -type f -perm -u+x ! -name '*.so' -delete
+            df -h /
+          }
+          df -h /
+          stage --lib --bins
+          cargo metadata --format-version 1 --locked > "$RUNNER_TEMP/meta.json"
+          for range in a-c d-l m-r s t-z; do
+            args=$(python3 -I - "$range" "$RUNNER_TEMP/meta.json" << 'PY'
+          import json, re, sys
+          rng, path = sys.argv[1], sys.argv[2]
+          meta = json.load(open(path))
+          on = {n["id"]: set(n["features"]) for n in meta["resolve"]["nodes"]}
+          names = sorted({t["name"] for p in meta["packages"] if p["id"] in meta["workspace_members"] for t in p["targets"]
+                          if "test" in t["kind"] and set(t.get("required-features") or []) <= on[p["id"]]
+                          and re.match("[" + rng + "]", t["name"])})
+          print(" ".join("--test " + n for n in names))
+          PY
+            )
+            [ -n "$args" ] || { echo "no test targets in $range"; continue; }
+            # shellcheck disable=SC2086
+            stage $args
+          done
       - run: cargo test --workspace --doc --locked
       # The workspace run's test executables are not reused by the feature runs below (other features, other
       # hashes); libraries and build-script outputs stay, so those runs still reuse what they can.
@@ -309,6 +351,8 @@ jobs:
           find target/debug/deps -maxdepth 1 -type f -perm -u+x ! -name '*.so' -delete
           du -sh target 2> /dev/null || true
           df -h /
+      # krishiv-python turns `delta` on for the whole workspace run above, so the build without it is tested alone.
+      - run: cargo nextest run -p krishiv-session --test delta_disabled --locked
       - run: cargo nextest run -p krishiv-session --features telemetry-otlp --test otlp_collector --locked
       # Server TLS (`tls`) and OIDC (`oidc`), both off by default: the in-memory rustls handshakes,
       # and the JWT verifier against keys generated per run.
@@ -480,8 +524,12 @@ jobs:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          workspaces: tools/admin-protogen
+          workspaces: |
+            tools/admin-protogen
+            tools/access-protogen
       - run: cargo run --locked --manifest-path tools/admin-protogen/Cargo.toml -- --check
+      # `krishiv.access.v1` (ADR 0049): the messages in krishiv-access-proto, the stubs in krishiv-server.
+      - run: cargo run --locked --manifest-path tools/access-protogen/Cargo.toml -- --check
       - uses: $/.github/actions/setup-mold
       # The label is read now, from the API, as the budget gate does.
       - name: Snapshots and the additive-only check
@@ -620,7 +668,7 @@ jobs:
   miri-kernels:
     # Not in the merge queue (about 33 minutes; it ran on the pull request, and the nightly
     # run covers main). The check still reports there: a skipped job satisfies it.
-    if: github.event_name != 'merge_group'
+    if: github.event_name != 'merge_group' && github.event.pull_request.draft != true
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -661,7 +709,7 @@ jobs:
   miri-bridges:
     # Not in the merge queue (about 8 minutes; it ran on the pull request, and the nightly
     # run covers main). The check still reports there: a skipped job satisfies it.
-    if: github.event_name != 'merge_group'
+    if: github.event_name != 'merge_group' && github.event.pull_request.draft != true
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -839,7 +887,7 @@ jobs:
             coverage: true
           - name: cp314t
             python: "3.14t"
-            maturin_args: "--no-default-features --features mimalloc,cloud,ui"
+            maturin_args: "--no-default-features --features mimalloc,cloud,ui,delta"
             wheel_tag: cp314t
             coverage: false
     name: wheels (${{ matrix.name }})
@@ -995,7 +1043,7 @@ jobs:
   # the `wheel-sizes` job below (label-aware), which is required too.
   wheels-ok:
     needs: [changes, wheels, wheels-targets]
-    if: always()
+    if: always() && github.event.pull_request.draft != true
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions: {}
@@ -1046,7 +1094,7 @@ jobs:
   # re-runs both gates with it. It does nothing itself.
   gates-ready:
     needs: [changes, budgets-measure, wheels-targets, wheels-ok]
-    if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+    if: ${{ !cancelled() && github.event_name == 'pull_request' && github.event.pull_request.draft != true }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions: {}
@@ -1060,7 +1108,7 @@ jobs:
   budgets:
     # Starts when the measurement has finished (never before), so no runner polls for it.
     needs: [changes, gates-ready]
-    if: ${{ !cancelled() && github.event_name == 'pull_request' && needs.changes.result == 'success' }}
+    if: ${{ !cancelled() && github.event_name == 'pull_request' && needs.changes.result == 'success' && github.event.pull_request.draft != true }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -1212,7 +1260,7 @@ jobs:
   wheel-sizes:
     # Starts when the measurement has finished (never before), so no runner polls for it.
     needs: [changes, gates-ready]
-    if: ${{ !cancelled() && github.event_name == 'pull_request' && needs.changes.result == 'success' }}
+    if: ${{ !cancelled() && github.event_name == 'pull_request' && needs.changes.result == 'success' && github.event.pull_request.draft != true }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:

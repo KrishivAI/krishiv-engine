@@ -63,7 +63,11 @@ fn loads(server: &Server) -> usize {
         .count()
 }
 
-fn session_with(mode: DeclMode, pairs: &[(&str, &str)], config: &[(&str, &str)]) -> Session {
+pub(super) fn session_with(
+    mode: DeclMode,
+    pairs: &[(&str, &str)],
+    config: &[(&str, &str)],
+) -> Session {
     let mut setup = CatalogSetup::new(mode).factory(Arc::new(IcebergRestFactory));
     for (k, v) in pairs {
         setup = setup.setting(*k, *v);

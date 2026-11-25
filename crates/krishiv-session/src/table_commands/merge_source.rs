@@ -167,6 +167,17 @@ impl Session {
             rx.await.map_err(|_| {
                 internal("a MERGE source write ended without a result".to_owned())
             })??;
+            #[cfg(test)]
+            {
+                let armed = AFTER_FIRST_WRITE
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .take();
+                if let Some((reached, resume)) = armed {
+                    let _sent = reached.send(());
+                    drop(resume.await);
+                }
+            }
         }
         let empty = match canonical {
             Some(_) => None,
@@ -196,6 +207,19 @@ impl Session {
         Ok(SpilledTable::new(file))
     }
 }
+
+/// Test hook: told once a spilled source's first batch is written; the copy then waits for the
+/// second channel (the test cancels in between) and goes on, so the cancel falls right after the
+/// first spill write, not wherever a time limit falls (#962 review).
+#[cfg(test)]
+pub(crate) type AfterFirstWrite = (
+    tokio::sync::oneshot::Sender<()>,
+    tokio::sync::oneshot::Receiver<()>,
+);
+
+/// The armed [`AfterFirstWrite`] hook, taken by the first spill write that finds it.
+#[cfg(test)]
+pub(crate) static AFTER_FIRST_WRITE: Mutex<Option<AfterFirstWrite>> = Mutex::new(None);
 
 /// A writer in a new scope of the runtime's spill directory (opened on first use).
 fn open_writer(

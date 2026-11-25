@@ -55,7 +55,7 @@ pub(super) fn capability_rows() -> Vec<[String; 4]> {
     let state = |on: bool| if on { "enabled" } else { "disabled" };
     let mut rows = vec![
         row("build", "engine", "krishiv", env!("CARGO_PKG_VERSION")),
-        row("build", "spark_versions", "3.5,4.0,4.1,4.2", ""),
+        row("build", "spark_versions", "3.5,4.0,4.1,4.2,4.3", ""),
         row("surface", "system_tables", SCHEMA_VERSION, ""),
         row("surface", "agent_result", "1", ""),
         row("feature", "cloud", state(cfg!(feature = "cloud")), ""),

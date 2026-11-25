@@ -200,7 +200,11 @@ fn touched_paths(table: &DeltaTable, files: &[Vec<u8>]) -> Result<HashSet<String
 
 impl RowLevelTable for DeltaRowLevel {
     fn capabilities(&self) -> RowLevelCapabilities {
-        RowLevelCapabilities::copy_on_write(CardinalityRule::DeltaWithUnconditionalDeleteExemption)
+        let mut c = RowLevelCapabilities::copy_on_write(
+            CardinalityRule::DeltaWithUnconditionalDeleteExemption,
+        );
+        c.idempotent_commit = true;
+        c
     }
 
     fn scan(&self) -> krishiv_exec::Result<Arc<dyn ScanPushdown>> {
@@ -527,6 +531,17 @@ pub(crate) struct RowLevelPlan {
 }
 
 impl RowLevelPlan {
+    /// The commit was deduplicated (E34: an earlier attempt of the statement made the change): the
+    /// result row reports 0 rows, not this attempt's scan count, which describes a change that was
+    /// not made now.
+    pub(crate) fn deduplicated(&self) {
+        *self.outcome.lock().unwrap_or_else(PoisonError::into_inner) = Some(Outcome {
+            removed_files: 0,
+            rows: Some(0),
+            merge: None,
+        });
+    }
+
     /// The refusal of a written row, before it is written.
     pub(crate) fn check_rows(&self) -> Result<(), KrishivError> {
         match &self.refuse_rows {
@@ -588,6 +603,7 @@ pub(super) async fn stage(
     plan: &RowLevelPlan,
     written: Written,
     write_id: &str,
+    query: &krishiv_exec::QueryContext,
 ) -> Result<Option<StagedCommit>, Failure> {
     let (snapshot, name, partitions) = (
         Arc::clone(table.snapshot()),
@@ -710,6 +726,7 @@ pub(super) async fn stage(
     }
     let rewrite_ms = millis(started.elapsed());
     if let Some(info) = &plan.merge {
+        let info = &info.with_observed(query).map_err(Failure::NotCommitted)?;
         *plan.outcome.lock().unwrap_or_else(PoisonError::into_inner) = Some(Outcome {
             removed_files: removed.files,
             rows: None,

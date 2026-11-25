@@ -50,7 +50,18 @@ pub(crate) fn to_py_for_sql(py: Python<'_>, error: &KrishivError, sql: &str) -> 
     convert(py, error, Some(rendered))
 }
 
+/// The `str` of a failed write (PY-075): Spark's message names only the path, the reason (the OS error:
+/// `Permission denied`, `No space left on device`) is the cause. A client of this process sees both.
+fn with_write_cause(error: &KrishivError) -> Option<String> {
+    if error.error_class() != krishiv_common::error::ErrorClass::TaskWriteFailed {
+        return None;
+    }
+    let cause = error.cause()?;
+    Some(format!("{error}\nCaused by: {}", cause.message()))
+}
+
 fn convert(py: Python<'_>, error: &KrishivError, rendered: Option<String>) -> PyErr {
+    let rendered = rendered.or_else(|| with_write_cause(error));
     let build = || -> PyResult<PyErr> {
         let parameters = PyDict::new(py);
         for (key, value) in error.message_parameters() {
@@ -87,7 +98,17 @@ fn convert(py: Python<'_>, error: &KrishivError, rendered: Option<String>) -> Py
                 contexts,
                 rendered,
             ))?;
-        Ok(PyErr::from_value(exception))
+        let err = PyErr::from_value(exception);
+        // The causes become the `__cause__` chain, so the traceback shows Spark's `Caused by:` lines.
+        let texts: Vec<String> = error.causes().map(ToString::to_string).collect();
+        let mut cause: Option<PyErr> = None;
+        for text in texts.into_iter().rev() {
+            let next = pyo3::exceptions::PyRuntimeError::new_err(text);
+            next.set_cause(py, cause.take());
+            cause = Some(next);
+        }
+        err.set_cause(py, cause);
+        Ok(err)
     };
     build().unwrap_or_else(|cause| {
         // Keep why the conversion failed (a bug in `krishiv.errors`) as the cause.
