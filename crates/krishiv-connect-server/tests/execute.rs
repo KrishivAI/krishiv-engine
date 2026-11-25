@@ -2355,3 +2355,17 @@ async fn show_string_binds_duplicate_named_columns_by_position() {
         "+---+---+\n|  x|  x|\n+---+---+\n|  1|  2|\n+---+---+\n"
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn html_string_is_refused_until_it_has_goldens() {
+    let run = start().await;
+    let html = relation(RelType::HtmlString(Box::new(pb::HtmlString {
+        input: Some(Box::new(sql("SELECT 1 AS x"))),
+        num_rows: 5,
+        truncate: 20,
+    })));
+    let err = collect(&run.channel, request(root(html)))
+        .await
+        .expect_err("html_string is refused");
+    assert!(err.to_string().contains("html_string"), "{err}");
+}

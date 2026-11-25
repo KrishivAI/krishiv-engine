@@ -394,6 +394,25 @@ pub async fn execute_plan(
             }
             // `df.show()`: the input runs as a query and its first rows are laid out as text.
             if let Some(shown) = show_string::of(plan) {
+                if shown.html {
+                    return Err(krishiv_common::error::KrishivUnsupportedFeature {
+                        feature: "html_string (no Spark golden for its HTML escaping yet)"
+                            .to_owned(),
+                    }
+                    .into());
+                }
+                if let Some(style) = session.conf().get("spark.sql.binaryOutputStyle")
+                    && !style.is_empty()
+                {
+                    {
+                        return Err(krishiv_common::error::KrishivUnsupportedFeature {
+                            feature: format!(
+                                "show_string with spark.sql.binaryOutputStyle = {style}"
+                            ),
+                        }
+                        .into());
+                    }
+                }
                 let Executed::Relation(requested) =
                     Box::pin(execution_plan(entry, &shown.plan, limits, &query_options)).await?
                 else {
@@ -405,7 +424,7 @@ pub async fn execute_plan(
                 let df = requested.frame(session, query_options).await?;
                 return Ok(Prepared::Text(
                     shown.html,
-                    show_string::render(&df, &shown).await?,
+                    show_string::render(&df, &shown, limits.max_batch_size).await?,
                 ));
             }
             // Decompression (up to `maxPlanSize`) runs off the async workers.

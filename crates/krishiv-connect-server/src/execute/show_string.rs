@@ -13,7 +13,7 @@ use std::sync::Arc;
 use arrow_array::{Array, BinaryArray, LargeBinaryArray, RecordBatch, StringArray};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use futures::StreamExt;
-use krishiv_common::error::{InternalError, KrishivError};
+use krishiv_common::error::{InternalError, KrishivError, KrishivUnsupportedFeature};
 use krishiv_connect::proto::v4_3 as pb;
 use krishiv_connect::proto::v4_3::plan::OpType;
 use krishiv_connect::proto::v4_3::relation::RelType;
@@ -90,7 +90,11 @@ pub(super) fn answer_batch(html: bool, text: String) -> Result<RecordBatch, Kris
 ///
 /// # Errors
 /// The query's errors.
-pub(super) async fn render(df: &DataFrame, request: &Request) -> Result<String, KrishivError> {
+pub(super) async fn render(
+    df: &DataFrame,
+    request: &Request,
+    max_batch_size: usize,
+) -> Result<String, KrishivError> {
     let num_rows = i64::from(request.num_rows).clamp(0, MAX_ROWS);
     let schema = df.schema_boxed().await?;
     let names: Vec<String> = schema.fields().iter().map(|f| escape(f.name())).collect();
@@ -108,6 +112,16 @@ pub(super) async fn render(df: &DataFrame, request: &Request) -> Result<String, 
             dt => format!("{} AS `c{i}`", pretty(&quoted, dt, 0)),
         });
     }
+    let truncate = usize::try_from(request.truncate).unwrap_or(0);
+    // Spark's (maxBatchSize * 0.7) cap bounds what is held; cells are cut as they are read.
+    #[expect(
+        clippy::cast_precision_loss,
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "Spark's (maxBatchSize * 0.7).toLong on a positive size"
+    )]
+    let cap = (max_batch_size as f64 * 0.7) as usize;
+    let mut held = 0usize;
     let mut rows: Vec<Vec<String>> = Vec::new();
     {
         // An input with no columns still has rows to count.
@@ -123,18 +137,24 @@ pub(super) async fn render(df: &DataFrame, request: &Request) -> Result<String, 
             for r in 0..batch.num_rows() {
                 let mut row = Vec::with_capacity(batch.num_columns());
                 for c in 0..batch.num_columns() {
-                    row.push(cell_text(batch.column(c).as_ref(), r)?);
+                    let cell = cut(&escape(&cell_text(batch.column(c).as_ref(), r)?), truncate);
+                    held = held.saturating_add(cell.len());
+                    row.push(cell);
+                }
+                if held > cap {
+                    return Err(KrishivUnsupportedFeature {
+                        feature: format!(
+                            "a show_string result over the {cap}-byte cap \
+                             (0.7 x spark.connect.grpc.arrow.maxBatchSize)"
+                        ),
+                    }
+                    .into());
                 }
                 rows.push(row);
             }
         }
     }
     rows.truncate(usize::try_from(num_rows + 1).unwrap_or(usize::MAX));
-    let truncate = usize::try_from(request.truncate).unwrap_or(0);
-    let rows: Vec<Vec<String>> = rows
-        .into_iter()
-        .map(|row| row.iter().map(|c| cut(&escape(c), truncate)).collect())
-        .collect();
     let n = usize::try_from(num_rows).unwrap_or(usize::MAX);
     Ok(if request.html {
         html_table(&names, &rows, n)
