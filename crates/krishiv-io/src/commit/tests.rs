@@ -13,11 +13,10 @@ use object_store::memory::InMemory;
 use object_store::path::Path;
 
 use super::{DirectoryWrite, SUCCESS_MARKER, SaveMode};
-use crate::LocalDirsAsMissing;
 use crate::parquet::ParquetFormat;
 use crate::{
-    FileFormat, FileWriter, FormatOptions, IoConfig, IoContext, IoScheduler, StoreId,
-    WrittenFileInfo,
+    FileFormat, FileWriter, FormatOptions, IoConfig, IoContext, IoScheduler, LocalDirsAsMissing,
+    StoreId, WrittenFileInfo,
 };
 
 mod escaped;
@@ -790,8 +789,7 @@ fn listing_and_head_requests_are_retried_then_fail_as_store_failures() {
     assert_eq!(e.error_class(), ErrorClass::KrishivObjectStoreRequestFailed);
 }
 
-// Unix only: Windows answers a path under a file as "not found" (ERROR_PATH_NOT_FOUND), so no
-// request fails there.
+// Unix only: Windows answers a path under a file as "not found", so no request fails.
 #[cfg(unix)]
 #[test]
 fn a_failing_store_request_is_not_retried() {

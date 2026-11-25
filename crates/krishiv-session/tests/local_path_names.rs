@@ -21,6 +21,19 @@ const NAMES: [&str; 8] = [
     "a b",
 ];
 
+/// [`NAMES`] a file system can hold: Windows refuses `<`, `>`, `"` and `|` in a name.
+fn names() -> Vec<&'static str> {
+    NAMES
+        .into_iter()
+        .filter(|n| !(cfg!(windows) && n.contains(['<', '>', '"', '|'])))
+        .collect()
+}
+
+/// `path` as SQL text takes it: `/` for `\` (a backslash in a string literal is an escape).
+fn sql_text(path: &std::path::Path) -> String {
+    path.display().to_string().replace('\\', "/")
+}
+
 fn count(s: &Session, sql: &str) -> i64 {
     let batches = block_on(block_on(s.sql(sql)).unwrap().collect()).unwrap();
     let c = batches[0]
@@ -36,7 +49,7 @@ fn count(s: &Session, sql: &str) -> i64 {
 fn a_write_and_a_read_use_the_directory_the_path_names() {
     let base = tempfile::tempdir().unwrap();
     let s = Session::new().unwrap();
-    for name in NAMES {
+    for name in names() {
         let dir = base.path().join(name).join("t");
         let path = dir.display().to_string();
         let df = block_on(s.sql("SELECT id FROM range(0, 50, 1, 2)")).unwrap();
@@ -53,13 +66,16 @@ fn a_write_and_a_read_use_the_directory_the_path_names() {
             .count();
         assert!(written > 0, "{name}: no data file in {path}");
         assert_eq!(
-            count(&s, &format!("SELECT count(*) FROM parquet.`{path}`")),
+            count(
+                &s,
+                &format!("SELECT count(*) FROM parquet.`{}`", sql_text(&dir))
+            ),
             50,
             "{name}"
         );
         // A path relative to the parent with `..` reaches the same directory.
         let dotted = base.path().join(name).join("t").join("..").join("t");
-        let dotted = dotted.display().to_string();
+        let dotted = sql_text(&dotted);
         assert_eq!(
             count(&s, &format!("SELECT sum(id) FROM parquet.`{dotted}`")),
             (0..50).sum::<i64>(),
@@ -83,13 +99,13 @@ fn a_write_and_a_read_use_the_directory_the_path_names() {
 fn a_table_located_below_such_a_directory_takes_inserts_and_reads_them() {
     let base = tempfile::tempdir().unwrap();
     let s = Session::new().unwrap();
-    for (i, name) in NAMES.iter().enumerate() {
+    for (i, name) in names().iter().enumerate() {
         let dir = base.path().join(name).join("loc");
         let path = dir.display().to_string();
         let t = format!("t{i}");
         block_on(s.sql(&format!(
             "CREATE TABLE {t} (id BIGINT) USING parquet LOCATION '{}'",
-            path.replace('\'', "\\'")
+            sql_text(&dir).replace('\'', "\\'")
         )))
         .unwrap();
         block_on(
