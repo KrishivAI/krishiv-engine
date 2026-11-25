@@ -134,6 +134,7 @@ Each row links to the full description in [known differences](../concepts/known-
 | [Python table functions (UDTFs)](../concepts/known-differences.md#python-table-functions-udtfs) |
 | [`schema_of_variant` with `spark.sql.caseSensitive=true`](../concepts/known-differences.md#schema_of_variant-with-sparksqlcasesensitivetrue) |
 | [`PIVOT` cases Spark answers from undefined state are refused](../concepts/known-differences.md#pivot-cases-spark-answers-from-undefined-state-are-refused) |
+| [`describe`, `summary`, `freqItems` and sampling in Python](../concepts/known-differences.md#describe-summary-freqitems-and-sampling-in-python) |
 | [Inferred join filters differ from Spark's](../concepts/known-differences.md#inferred-join-filters-differ-from-sparks) |
 | [A multi-table `INSERT` that fails while it runs keeps the clauses written before](../concepts/known-differences.md#a-multi-table-insert-that-fails-while-it-runs-keeps-the-clauses-written-before) |
 | [Correlated subqueries with `spark.sql.optimizer.decorrelateInnerQuery.enabled` off](../concepts/known-differences.md#correlated-subqueries-with-sparksqloptimizerdecorrelateinnerqueryenabled-off) |

@@ -480,11 +480,19 @@ def _tree_type_name(dt: DataType) -> str:
     return name if isinstance(name, str) else dt.typeName()
 
 
+def _escape_label(label: str) -> str:
+    """``label`` with control characters escaped, so a field name never splits the tree across lines."""
+    return "".join(
+        c if c.isprintable() or c == " " else {"\n": "\\n", "\t": "\\t", "\r": "\\r"}.get(c, f"\\x{ord(c):02x}")
+        for c in label
+    )
+
+
 def _tree_line(
     prefix: str, name: str, dt: DataType, flag: str | None, depth: int, level: int | None, out: list[str]
 ) -> None:
     suffix = "" if flag is None else f" ({flag})"
-    out.append(f"{prefix}|-- {name}: {_tree_type_name(dt)}{suffix}")
+    out.append(f"{prefix}|-- {_escape_label(name)}: {_tree_type_name(dt)}{suffix}")
     if level is not None and depth >= level:
         return
     inner = prefix + "|    "
@@ -610,15 +618,6 @@ class StructType(DataType):
 
     def __hash__(self) -> int:
         return hash(tuple(self.fields))
-
-
-def _struct_from_columns(columns: list[tuple[str, str, bool]]) -> StructType:
-    """The ``StructType`` of the engine's ``(name, simple type, nullable)`` columns."""
-
-    def of(text: str) -> DataType:
-        return _parse_datatype_string(text) if "<" in text else _from_simple_string(text)
-
-    return StructType([StructField(n, of(t), nullable) for n, t, nullable in columns])
 
 
 def _simple_string_of(data_type: DataType | str) -> str:

@@ -378,6 +378,68 @@ impl SettledLocalFileSystem {
     }
 }
 
+impl super::staging::StagingSweep for SettledLocalFileSystem {
+    /// Walks the directory by name with no link followed below it; with `roots`, a directory that
+    /// does not resolve into one of them is refused.
+    fn sweep_staging(
+        &self,
+        dir: &Path,
+        doomed: &super::staging::StagingDoomed<'_>,
+    ) -> std::io::Result<()> {
+        let root = self
+            .inner
+            .path_to_filesystem(dir)
+            .map_err(|e| std::io::Error::other(e.to_string()))?;
+        if let Some(roots) = &self.roots {
+            let inside =
+                std::fs::canonicalize(&root).is_ok_and(|t| roots.iter().any(|r| t.starts_with(r)));
+            if !inside {
+                return Err(std::io::Error::new(
+                    ErrorKind::PermissionDenied,
+                    "the directory is outside the allowed roots",
+                ));
+            }
+        }
+        let mut failure = None;
+        let mut pending = vec![root];
+        while let Some(dir) = pending.pop() {
+            let entries = match std::fs::read_dir(&dir) {
+                Ok(entries) => entries,
+                Err(e) if gone(&e) => continue,
+                Err(e) => {
+                    failure.get_or_insert(e);
+                    continue;
+                }
+            };
+            for entry in entries {
+                let step = entry.and_then(|entry| {
+                    let kind = entry.file_type()?;
+                    let name = entry.file_name();
+                    if kind.is_dir() {
+                        pending.push(entry.path());
+                    } else if kind.is_file()
+                        && let Some(name) = name.to_str()
+                        && is_staging(name)
+                    {
+                        let modified = entry.metadata()?.modified()?;
+                        if doomed(name, DateTime::<Utc>::from(modified)) {
+                            std::fs::remove_file(entry.path())?;
+                        }
+                    }
+                    Ok(())
+                });
+                match step {
+                    Err(e) if !gone(&e) => {
+                        failure.get_or_insert(e);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        failure.map_or(Ok(()), Err)
+    }
+}
+
 #[async_trait]
 impl ObjectStore for SettledLocalFileSystem {
     async fn put_opts(

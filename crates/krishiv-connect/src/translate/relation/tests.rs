@@ -914,6 +914,65 @@ fn with_columns_errors() {
     assert_eq!(code(&metadata), ErrorClass::KrishivUnsupportedFeature);
 }
 
+// ---- generators in select lists and withColumn ----------------------------------------------
+
+#[test]
+fn a_project_lifts_its_generators_like_the_dataframe_api() {
+    let r = project(vec![attr("a"), func("explode", vec![attr("b")])]);
+    let PlanNode::Project { input, exprs } = node(&r) else {
+        panic!("not Project")
+    };
+    assert!(matches!(input.node, PlanNode::Generate { .. }), "{input:?}");
+    assert_eq!(exprs.len(), 2);
+    // Two generators chain, a cross product.
+    let two = project(vec![
+        func("explode", vec![attr("b")]),
+        func("posexplode", vec![attr("b")]),
+    ]);
+    let PlanNode::Project { input, .. } = node(&two) else {
+        panic!("not Project")
+    };
+    let PlanNode::Generate { input: below, .. } = &input.node else {
+        panic!("not Generate")
+    };
+    assert!(matches!(below.node, PlanNode::Generate { .. }));
+    // Beside an aggregate the list is a global aggregation, whose generators the analyzer extracts.
+    let agg = project(vec![
+        func("explode", vec![attr("b")]),
+        func("count", vec![lit(LiteralType::Integer(1))]),
+    ]);
+    assert!(matches!(node(&agg), PlanNode::Aggregate { .. }));
+    // No generator: the plain projection.
+    assert!(matches!(
+        node(&project(vec![attr("a")])),
+        PlanNode::Project { .. }
+    ));
+}
+
+#[test]
+fn with_columns_lifts_a_generator_column() {
+    let mut generated = alias_of(&["x"], None);
+    generated.expr = Some(Box::new(func("explode", vec![attr("b")])));
+    let r = with_columns(vec![generated]);
+    let PlanNode::Project { input, .. } = node(&r) else {
+        panic!("not Project")
+    };
+    let PlanNode::WithColumns { input: below, .. } = &input.node else {
+        panic!("not WithColumns")
+    };
+    assert!(matches!(below.node, PlanNode::Generate { .. }));
+}
+
+#[test]
+fn with_columns_refuses_a_generator_beside_an_alias_reading_a_replaced_column() {
+    let mut generated = alias_of(&["x"], None);
+    generated.expr = Some(Box::new(func("explode", vec![attr("b")])));
+    let mut reader = alias_of(&["y"], None);
+    reader.expr = Some(Box::new(attr("x")));
+    let r = with_columns(vec![generated, reader]);
+    assert_eq!(code(&r), ErrorClass::KrishivUnsupportedFeature);
+}
+
 // ---- plan ids, unsupported relations ---------------------------------------------------------
 
 #[test]
