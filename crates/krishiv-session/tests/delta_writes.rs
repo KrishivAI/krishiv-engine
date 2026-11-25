@@ -1167,3 +1167,56 @@ fn insert_into_overwrite_mode_follows_the_session_config_only() {
     run(&s, "RESET spark.sql.sources.partitionOverwriteMode").unwrap();
     assert_eq!(rows(), rows_after("option_static_conf_dynamic"));
 }
+
+/// A table root reached through a symlinked directory (macOS `/var` -> `/private/var`) writes and
+/// reads: every location is compared in one form.
+#[cfg(unix)]
+#[test]
+fn a_new_table_under_a_symlinked_directory_round_trips() {
+    let tmp = tempfile::tempdir().unwrap();
+    let real = tmp.path().join("real");
+    std::fs::create_dir(&real).unwrap();
+    let link = tmp.path().join("link");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    let path = link.join("delta-table").to_string_lossy().into_owned();
+    let s = Session::new().unwrap();
+    run(
+        &s,
+        &format!("CREATE TABLE n (id BIGINT) USING delta LOCATION '{path}'"),
+    )
+    .unwrap();
+    run(&s, "INSERT INTO n VALUES (1), (2)").unwrap();
+    assert_eq!(
+        query(&s, &format!("SELECT count(*) FROM delta.`{path}`")),
+        serde_json::json!([[2]])
+    );
+    run(&s, "INSERT INTO n VALUES (3)").unwrap();
+    assert_eq!(
+        query(&s, "SELECT count(*) FROM n"),
+        serde_json::json!([[3]])
+    );
+}
+
+/// A Parquet directory written and read through a symlinked directory.
+#[cfg(unix)]
+#[test]
+fn a_parquet_write_under_a_symlinked_directory_round_trips() {
+    let tmp = tempfile::tempdir().unwrap();
+    let real = tmp.path().join("real");
+    std::fs::create_dir(&real).unwrap();
+    let link = tmp.path().join("link");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    let path = link.join("out").to_string_lossy().into_owned();
+    let s = Session::new().unwrap();
+    run(
+        &s,
+        &format!(
+            "INSERT OVERWRITE DIRECTORY '{path}' USING parquet SELECT 1 AS id UNION ALL SELECT 2"
+        ),
+    )
+    .unwrap();
+    assert_eq!(
+        query(&s, &format!("SELECT count(*) FROM parquet.`{path}`")),
+        serde_json::json!([[2]])
+    );
+}
