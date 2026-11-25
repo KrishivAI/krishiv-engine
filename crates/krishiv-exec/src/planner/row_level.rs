@@ -278,6 +278,20 @@ pub trait RowLevelTable: Send + Sync + fmt::Debug {
     /// `UNSUPPORTED_FEATURE.TABLE_OPERATION` for an operation the table refuses.
     fn rewriter(&self, request: &RowLevelWrite) -> Result<Arc<dyn Sink>>;
 
+    /// The sink of one file-compaction group (`rewrite_data_files`): `request.touched` are the
+    /// group's files and the sink's rows are theirs unchanged, committed as a rewrite (a
+    /// concurrent append is no conflict). A table that cannot compact refuses.
+    ///
+    /// # Errors
+    /// `UNSUPPORTED_FEATURE.TABLE_OPERATION` unless the table overrides it.
+    fn group_rewriter(&self, request: &RowLevelWrite) -> Result<Arc<dyn Sink>> {
+        let _ = request;
+        Err(krishiv_common::error::KrishivUnsupportedFeature {
+            feature: "rewriting data files of this table".to_owned(),
+        }
+        .into())
+    }
+
     /// The statement's result rows from its counts; `None` gives an empty result, as Spark does
     /// for a v2 table.
     fn output(&self, counts: &RowLevelCounts) -> Option<RecordBatch> {

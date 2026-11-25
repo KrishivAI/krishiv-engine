@@ -210,20 +210,11 @@ impl RowLevelTable for IcebergRowLevel {
         })?);
         self.cow_sink(request, target, false)
     }
-}
 
-impl IcebergRowLevel {
     /// The sink of one `rewrite_data_files` group (36e-2a): `request.touched` are the group's
     /// files, the rows are theirs unchanged. Validated as Java's `BaseRewriteFiles` (a concurrent
     /// append is no conflict; a file removed or a delete added for a rewritten file is).
-    #[expect(
-        dead_code,
-        reason = "used by the rewrite_data_files session path (36e-2a)"
-    )]
-    pub(crate) fn group_rewriter(
-        &self,
-        request: &RowLevelWrite,
-    ) -> krishiv_exec::Result<Arc<dyn Sink>> {
+    fn group_rewriter(&self, request: &RowLevelWrite) -> krishiv_exec::Result<Arc<dyn Sink>> {
         let target = Arc::clone(self.provider.write_target().ok_or_else(|| {
             KrishivError::from(krishiv_common::error::InternalError {
                 message: "a rewritten Iceberg table without a write target".to_owned(),
@@ -231,7 +222,9 @@ impl IcebergRowLevel {
         })?);
         self.cow_sink(request, target, true)
     }
+}
 
+impl IcebergRowLevel {
     fn cow_sink(
         &self,
         request: &RowLevelWrite,
