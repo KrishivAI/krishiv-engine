@@ -92,6 +92,7 @@ mod repartition;
 mod restrict;
 mod semi_order;
 mod share_cte;
+mod share_literal;
 mod share_scan;
 mod stats;
 mod sum_rewrite;
@@ -101,10 +102,11 @@ use std::sync::Arc;
 
 use krishiv_common::config::{
     ANSI_ENABLED, AUTO_BROADCAST_JOIN_THRESHOLD, Config, ConfigValue, DERIVED_KEYS_ABOVE,
-    EAGER_AGGREGATION, GROUP_KEY_CODE, JOIN_COST, JOIN_DP_LIMIT, JOIN_ENUMERATOR, JOIN_PRUNE_FIRST,
-    LATE_PAYLOAD_JOIN, PAYLOAD_ABOVE_AGGREGATE, PRE_AGGREGATE_EXPAND, PRESERVED_SIDE_SEMI_JOIN,
-    SEMI_ANTI_JOIN_ORDER, SESSION_TIME_ZONE, SHARE_CTE_INSTANCES, SHARE_FILTERED_SCANS,
-    SHARE_REPEATED_SUBTREES, SUBQUERY_AS_WINDOW,
+    EAGER_AGGREGATION, GROUP_KEY_CODE, GROUP_KEY_CODE_MULTI_DIMENSION, JOIN_COST, JOIN_DP_LIMIT,
+    JOIN_ENUMERATOR, JOIN_PRUNE_FIRST, LATE_PAYLOAD_JOIN, PAYLOAD_ABOVE_AGGREGATE,
+    PRE_AGGREGATE_EXPAND, PRESERVED_SIDE_SEMI_JOIN, SEMI_ANTI_JOIN_ORDER, SESSION_TIME_ZONE,
+    SHARE_CTE_INSTANCES, SHARE_FILTERED_SCANS, SHARE_LITERAL_INSTANCES, SHARE_REPEATED_SUBTREES,
+    SUBQUERY_AS_WINDOW,
 };
 use krishiv_common::error::{InternalError, KrishivError};
 use krishiv_plan::{
@@ -648,21 +650,42 @@ fn run(
         let forced = udfs.is_some_and(|(_, config)| {
             krishiv_common::experimental::is_enabled(config, "groupKeyCodeForce")
         });
-        let coded = options.group_key_code
-            && (forced
-                || udfs.is_none_or(|(_, config)| {
-                    config
-                        .get(&GROUP_KEY_CODE)
-                        .and_then(ConfigValue::as_bool)
-                        .unwrap_or(false)
-                }));
+        // How many qualifying dimensions an aggregate needs to be coded:
+        // one with the key on (or forced, or without a session
+        // configuration), two in the multi-dimension mode
+        // (`krishiv.optimizer.groupKeyCodeMultiDimension`, design §8).
+        let min_dimensions = if !options.group_key_code {
+            None
+        } else if forced {
+            Some(1)
+        } else {
+            match udfs {
+                None => Some(1),
+                Some((_, config)) => {
+                    let on = |entry| {
+                        config
+                            .get(entry)
+                            .and_then(ConfigValue::as_bool)
+                            .unwrap_or(false)
+                    };
+                    if on(&GROUP_KEY_CODE) {
+                        Some(1)
+                    } else if on(&GROUP_KEY_CODE_MULTI_DIMENSION) {
+                        Some(2)
+                    } else {
+                        None
+                    }
+                }
+            }
+        };
         let root = match stats {
-            Some(stats) if coded => {
+            Some(stats) if let Some(min_dimensions) = min_dimensions => {
                 let (after, notes) = group_code::rewrite(
                     Arc::clone(&root),
                     stats,
                     options.stats_propagation,
                     forced,
+                    min_dimensions,
                 )?;
                 t.step("GroupKeyCode", 1, "GroupKeyCode", &root, &after);
                 t.notes("GroupKeyCode", &after, notes);
@@ -738,12 +761,13 @@ fn run(
                     if eager {
                         ordered = eager_pass(&ordered, stats, options, expand, joins, &mut t)?;
                     }
-                    if coded {
+                    if let Some(min_dimensions) = min_dimensions {
                         let (after, notes) = group_code::rewrite(
                             Arc::clone(&ordered),
                             stats,
                             options.stats_propagation,
                             forced,
+                            min_dimensions,
                         )?;
                         t.step("GroupKeyCode", 1, "GroupKeyCode", &ordered, &after);
                         t.notes("GroupKeyCode", &after, notes);
@@ -845,6 +869,62 @@ fn run(
                     .and_then(ConfigValue::as_bool)
                     .unwrap_or(SHARE_REPEATED_SUBTREES_DEFAULT)
             });
+        // Instances that differ only in a group key's literal read one
+        // definition over all the literals (`share_literal`, TPC-DS q31).
+        let literals = share
+            && udfs.is_some_and(|(_, config)| {
+                config
+                    .get(&SHARE_LITERAL_INSTANCES)
+                    .and_then(ConfigValue::as_bool)
+                    .unwrap_or(true)
+            });
+        let root = if literals {
+            let after = t.once("ShareLiteralInstances", &root, |r| {
+                share_literal::share(Arc::clone(r), direct)
+            })?;
+            // A reader's own filters (q11's `year_total > 0`) sit above the
+            // projection over its `g = k` filter: tidied here, as a second
+            // optimization would, so the plan stays a fixed point.
+            if Arc::ptr_eq(&after, &root) {
+                after
+            } else {
+                let tidied = batch(after, "Tidy", &mut t)?;
+                // The shared definition's filter now admits every literal
+                // (q64's `d_year IN (1999, 2000)`), which changes the
+                // estimates its joins were ordered on: order them again, then
+                // run what a second optimization runs right after its join
+                // order (eager aggregation, the group-key code), and prune.
+                // A re-ordered join can land directly under the definition's
+                // aggregate, the shape `eager::rewrite` reads.
+                match stats {
+                    Some(stats) => {
+                        let mut ordered =
+                            order_and_restrict(tidied, stats, options, joins, &mut t)?;
+                        if eager {
+                            ordered = eager_pass(&ordered, stats, options, expand, joins, &mut t)?;
+                        }
+                        if let Some(min_dimensions) = min_dimensions {
+                            let (after, notes) = group_code::rewrite(
+                                Arc::clone(&ordered),
+                                stats,
+                                options.stats_propagation,
+                                forced,
+                                min_dimensions,
+                            )?;
+                            t.step("GroupKeyCode", 1, "GroupKeyCode", &ordered, &after);
+                            t.notes("GroupKeyCode", &after, notes);
+                            if !Arc::ptr_eq(&after, &ordered) {
+                                ordered = order_and_restrict(after, stats, options, joins, &mut t)?;
+                            }
+                        }
+                        prune_and_tidy(&ordered, Some(stats), &mut t)?
+                    }
+                    None => tidied,
+                }
+            }
+        } else {
+            root
+        };
         let root = if share {
             t.once("ShareCte", &root, |r| {
                 share_cte::share(Arc::clone(r), direct)
@@ -1249,6 +1329,14 @@ pub(crate) fn groups_by_columns(g: &Grouping) -> bool {
         }
         _ => false,
     }
+}
+
+/// Whether the `WITH` definition `name` is one `ShareLiteralInstances`
+/// added (perf-1 lever A): computed for several literals at once, it is read
+/// from one shared plan even where a runtime filter reaches a reference.
+#[must_use]
+pub fn is_literal_shared(name: &str) -> bool {
+    name.starts_with(share_literal::LITERAL_PREFIX)
 }
 
 /// Whether every expression of `plan` (subquery plans included) and every Python relation UDF it runs is

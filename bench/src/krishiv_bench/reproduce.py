@@ -106,9 +106,9 @@ def _status_of(e: Exception) -> str:
 # failed cast (`CAST('x' AS INT)`), a narrowing cast out of range, a string compared with a number, arithmetic on a
 # string, a scalar subquery returning several rows, an invalid regex. Those are errors in the query or the data (or a
 # coercion Polars does not do), which the other engines report as errors too; calling them "unsupported" would hide a
-# failure to investigate. The planning errors that stay: recursive CTEs, LATERAL, unknown functions and tables and
-# window frames Polars lacks are `SQLInterfaceError`; a parse error is `SQLInterfaceError` as well; an unknown column is
-# `ColumnNotFoundError`.
+# failure to investigate. The planning errors that stay: unknown functions and tables and window frames Polars lacks
+# are `SQLInterfaceError`; a parse error is `SQLInterfaceError` as well; an unknown column is `ColumnNotFoundError`.
+# (Polars 2.2 runs recursive CTEs, LATERAL, ROLLUP, CUBE, GROUPING SETS and QUALIFY.)
 POLARS_UNSUPPORTED = frozenset(
     {
         "SQLInterfaceError",

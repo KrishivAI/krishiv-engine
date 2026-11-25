@@ -46,3 +46,14 @@ def bench_root() -> Path:
 
 def queries_dir(suite: str) -> Path:
     return bench_root() / "queries" / suite
+
+
+def require_queries_dir(suite: str) -> Path:
+    """``queries_dir(suite)``, exiting when it is missing so a suite never times 0 queries.
+
+    A non-editable install resolves ``bench_root()`` into site-packages, where no ``queries/`` directory exists.
+    """
+    d = queries_dir(suite)
+    if not d.is_dir():
+        raise SystemExit(f"{suite} queries directory {d} is missing; install the harness editable (uv pip install -e)")
+    return d

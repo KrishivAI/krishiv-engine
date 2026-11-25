@@ -2,8 +2,7 @@
   "cases": {
     "sql-commands": [
       214,
-      215,
-      259
+      215
     ]
   },
   "file": "sql-session-variables",
