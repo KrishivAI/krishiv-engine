@@ -477,3 +477,14 @@ fn a_literal_factorial_folds_where_a_constant_is_required() {
     let want = DataType::Decimal(krishiv_types::DecimalType::try_new(4, 2).unwrap());
     assert_eq!(r.unwrap().output[0].data_type, want);
 }
+
+#[test]
+fn a_generator_takes_its_one_named_parameter_in_a_call() {
+    // `explode(collection => ..)` has a signature, so its named call is not
+    // `NAMED_PARAMETERS_NOT_SUPPORTED` (the generator itself is handled
+    // before the analyzer; here it is an unimplemented scalar call).
+    let r = analyze(vec![named("explode", &[(Some("collection"), c("a"))])]);
+    assert_ne!(class_and_params(&r).0, "NAMED_PARAMETERS_NOT_SUPPORTED");
+    let r = analyze(vec![named("explode", &[(Some("input"), c("a"))])]);
+    assert_eq!(class_and_params(&r).0, "UNRECOGNIZED_PARAMETER_NAME");
+}

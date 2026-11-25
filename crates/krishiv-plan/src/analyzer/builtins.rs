@@ -189,7 +189,19 @@ pub(super) fn named_signature(name: &str) -> Option<&'static [NamedParam]> {
             default: Bool(true),
         },
     ];
+    // The generators' one parameter (Spark's `ExplodeExpressionBuilder` and
+    // `InlineExpressionBuilder` signatures).
+    const COLLECTION: &[NamedParam] = &[NamedParam {
+        name: "collection",
+        default: Required,
+    }];
+    const INPUT: &[NamedParam] = &[NamedParam {
+        name: "input",
+        default: Required,
+    }];
     match name.to_ascii_lowercase().as_str() {
+        "explode" | "explode_outer" | "posexplode" | "posexplode_outer" => Some(COLLECTION),
+        "inline" | "inline_outer" | "variant_explode" | "variant_explode_outer" => Some(INPUT),
         "variant_set" | "try_variant_set" => Some(VARIANT_SET),
         "variant_strip_nulls" => Some(VARIANT_STRIP_NULLS),
         "mask" => Some(MASK),
