@@ -753,3 +753,17 @@ uv run python -m krishiv_bench.dbbench_report --ours time.csv --published upstre
 `--check` compares Krishiv's answers with another solution's from the same launcher run (row and column counts and the
 `chk` sums) and exits 1 on any difference. `dbbench_report --published` prints the second-run times next to the published solutions (`*` = spilled, `FAIL` = no row) and
 Krishiv's ratio to each. Step 2 (the PR to the benchmark repository) waits for the owner's go.
+
+`bench/dbbench/dryrun.sh <work dir> <1e7|1e8|1e9> [groupby|join]...` is the whole dry run in a container
+(`bench/dbbench/Dockerfile`): it clones the benchmark at a pinned commit, registers the solution, installs duckdb and
+krishiv with the benchmark's own setup scripts, moves the published `time.csv` and `logs.csv` aside
+(`*.published.csv`) and then, one data set at a time, generates the CSVs with the
+benchmark's R generator, runs the benchmark's `run.sh` for both solutions and deletes the CSVs. It exits 1 if a
+generator or a solution failed; the answers are compared afterwards with `dbbench_report --check duckdb`. The header
+of the script lists its environment variables (`KRISHIV_WHEEL`, `KRISHIV_MEMORY_LIMIT`, container memory, a data-set
+filter). The R generator holds the whole table in memory, which at 1e9 rows is more than a 64 GB machine has. There,
+generate with `datasets/gen.sh h2o-groupby --size 1e9` (chunked; the same columns, not the same values), write each
+Parquet file as a CSV under the benchmark's file name (`G1_1e9_1e2_0_0.csv`; for join `J1_1e9_NA_0_0.csv` and the
+three right-hand tables `J1_1e9_1e3_0_0.csv`, `J1_1e9_1e6_0_0.csv`, `J1_1e9_1e9_0_0.csv`) and pass the directory as
+`DBB_DATA_DIR`: nothing is generated or deleted then. The container is not the benchmark's machine, so its times
+are ours, not the published ones.
