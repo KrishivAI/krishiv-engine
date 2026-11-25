@@ -247,9 +247,15 @@ fn a_finished_query_leaves_a_profile_that_reads_back() {
     let q = &stored[0];
     assert_eq!(q.state, "finished");
     assert!(q.sql.as_deref().unwrap().contains("range"));
-    assert_eq!((q.profile_version, q.profile_minor), (1, 7));
+    assert_eq!((q.profile_version, q.profile_minor), (1, 8));
     let profile = QueryProfile::from_json(&q.profile).unwrap();
     assert!(!profile.metrics.operators.is_empty());
+    // Minor 8 (MODES-2): the stored profile has the planning time of the query's row.
+    assert!(
+        profile.planning_ns.is_some_and(|p| p > 0),
+        "{:?}",
+        profile.planning_ns
+    );
     assert_eq!(profile.identity.unwrap().principal, q.principal);
     assert_eq!(rt.profile_history.as_ref().unwrap().failures(), 0);
 }
@@ -1020,6 +1026,7 @@ fn stored_keeps_hints_only_for_a_finished_entry() {
             message: "skew".to_owned(),
             evidence: Vec::new(),
         }],
+        planning_ns: Some(42),
     };
     for (state, kept) in [
         ("finished", 1),
@@ -1031,6 +1038,8 @@ fn stored_keeps_hints_only_for_a_finished_entry() {
             let row = super::stored(entry(state), mask).unwrap();
             let back = QueryProfile::from_json(&row.profile).unwrap();
             assert_eq!(back.hints.len(), kept, "{state}, mask {mask}");
+            // MODES-2: the stored profile keeps the query's planning time whatever its state.
+            assert_eq!(back.planning_ns, Some(42), "{state}, mask {mask}");
         }
     }
 }

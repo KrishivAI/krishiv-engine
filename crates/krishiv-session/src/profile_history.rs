@@ -76,6 +76,8 @@ pub(crate) struct HistoryEntry {
     pub(crate) scans: Vec<krishiv_exec::profile::ProfileScan>,
     /// The advisor's hints (minor 7 of the profile).
     pub(crate) hints: Vec<krishiv_exec::profile::Hint>,
+    /// `system.queries.planning_ns` of the query (minor 8 of the profile).
+    pub(crate) planning_ns: Option<u64>,
 }
 
 /// Where a file write's entry waits for its commit: the query ends before the commit does, and a commit that
@@ -413,6 +415,7 @@ fn stored(e: HistoryEntry, mask: bool) -> Option<StoredProfile> {
     profile.trace = e.trace;
     profile.identity = Some(e.identity.clone());
     profile.scans = e.scans;
+    profile.planning_ns = e.planning_ns;
     // `system.queries.hints` shows succeeded queries only; a failed, cancelled or denied one keeps none.
     profile.hints = kept_hints(e.state, e.hints);
     let mut sql = e.sql;
