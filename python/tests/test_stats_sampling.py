@@ -28,7 +28,7 @@ def spark() -> Iterator[SparkSession]:
     yield session
     session.stop()
     del session
-    gc.collect()  # the session and its frames form cycles; free the runtime now, not at some later collection
+    gc.collect()  # the session and its frames form cycles; collect it so its runtime threads are freed
 
 
 @pytest.fixture
