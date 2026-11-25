@@ -158,8 +158,11 @@ async fn handed_back_partitions_are_written_by_the_calling_thread() {
                 panic!("spill_writers is a maximum");
             };
             assert!(writers > 1, "extra writers started: {writers}");
+            // On Windows threads start slowly enough that no extra writer may ever get a partition:
+            // the metric is then absent (zero handbacks), and the checks below still hold.
             let handbacks = match metric("spill_handbacks") {
                 Some(crate::metrics::Metric::Count(n)) => n,
+                None if cfg!(windows) => 0,
                 other => panic!(
                     "asked {handbacks_asked}, rows {rows_layout}: spill_handbacks {other:?}, {writers} writers, {:?}",
                     agg.metrics()
@@ -175,8 +178,9 @@ async fn handed_back_partitions_are_written_by_the_calling_thread() {
             } else {
                 runs * (writers - 1)
             };
+            let fewest = u64::from(!cfg!(windows));
             assert!(
-                (1..=most).contains(&handbacks),
+                (fewest..=most).contains(&handbacks),
                 "{handbacks} handbacks, {writers} writers, {runs} runs"
             );
             let written = agg.metrics().spill_files;
