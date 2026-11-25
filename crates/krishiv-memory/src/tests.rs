@@ -54,6 +54,20 @@ fn usage(pool: &TreePool, id: ConsumerId) -> Usage {
         .map_or_else(|_| Usage::default(), |c| *sync::lock(&c.usage))
 }
 
+/// A limit no machine has is above the effective limit wherever that can be
+/// read, so the pool gets the derived default instead of a limit the kernel
+/// would enforce first by killing the process.
+#[test]
+fn a_limit_above_the_machine_becomes_the_default() {
+    let (c, _) = Config::from_pairs([("krishiv.memory.limit", "1000000g")]).unwrap();
+    let limit = MemoryConfig::from_config(&c).limit;
+    if crate::effective_memory_limit().is_some() {
+        assert_eq!(limit, default_limit());
+    } else {
+        assert_eq!(limit, Some(1_000_000 << 30));
+    }
+}
+
 #[test]
 fn config_entries_feed_memory_config() {
     let (c, _) = Config::from_pairs([
