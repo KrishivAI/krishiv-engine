@@ -980,6 +980,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0
+      - name: The base ref for docs-analyze (a branch run has no origin/main)
+        run: git fetch --no-tags origin main:refs/remotes/origin/main
       - name: Nightly toolchain (rustdoc JSON)
         run: rustup toolchain install nightly-2026-08-12 --profile minimal
       - name: Pinned tools (sccache, rustdoc-md)
