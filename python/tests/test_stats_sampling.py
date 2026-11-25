@@ -8,7 +8,9 @@ The expected values are the Spark outputs; the sampling ids are the ones of ``sa
 
 from __future__ import annotations
 
+import gc
 import math
+from collections.abc import Iterator
 from typing import Any
 
 import pytest
@@ -19,8 +21,14 @@ from krishiv.sql import functions as F
 
 
 @pytest.fixture
-def spark() -> SparkSession:
-    return SparkSession.builder.create()
+def spark() -> Iterator[SparkSession]:
+    # Stopped after each test: an unstopped session keeps its runtime threads, and hundreds of them
+    # exhaust the thread limit of the macOS runners (tokio "OS can't spawn worker thread", os error 35).
+    session = SparkSession.builder.create()
+    yield session
+    session.stop()
+    del session
+    gc.collect()  # the session and its frames form cycles; free the runtime now, not at some later collection
 
 
 @pytest.fixture
