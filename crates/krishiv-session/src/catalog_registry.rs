@@ -332,7 +332,7 @@ pub trait CallerCatalog: fmt::Debug + Send + Sync {
     }
 
     /// The procedure `name` (lower-case) of the catalog's `system` namespace for `caller`
-    /// (`CALL cat.system.name(..)`, design P3-T027 PR-36e §3); `None` when there is none. The
+    /// (`CALL cat.system.name(..)`); `None` when there is none. The
     /// default is a catalog without procedures: `MISSING_CATALOG_ABILITY.PROCEDURES`.
     ///
     /// # Errors
