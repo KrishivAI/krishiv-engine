@@ -117,13 +117,13 @@ impl Session {
     /// Connect server that parses `Expression.expression_string` while it translates a plan.
     #[cfg(feature = "unstable-ir")]
     pub fn parser_options(&self) -> ParserOptions {
-        parser_options(&self.state.conf.snapshot())
+        parser_options(&self.state.conf.snapshot(), self.state.profile)
     }
 
     /// This session's parser options, from its configuration.
     #[cfg(not(feature = "unstable-ir"))]
     pub(crate) fn parser_options(&self) -> ParserOptions {
-        parser_options(&self.state.conf.snapshot())
+        parser_options(&self.state.conf.snapshot(), self.state.profile)
     }
 
     /// The directory a write of `text` goes to, as it physically is (links in
@@ -629,9 +629,11 @@ impl Session {
             match krishiv_io::BeneathStore::anchor(std::path::Path::new(local)) {
                 Ok(anchored) => {
                     let id = at.store.private_to(job);
+                    let anchored = Arc::new(anchored);
                     self.state
                         .io
-                        .register_store(id.clone(), Arc::new(anchored) as Arc<dyn ObjectStore>);
+                        .register_store(id.clone(), Arc::clone(&anchored) as Arc<dyn ObjectStore>);
+                    self.state.io.register_staging_sweeper(id.clone(), anchored);
                     let registration = StoreRegistration {
                         io: Arc::clone(&self.state.io),
                         id: id.clone(),

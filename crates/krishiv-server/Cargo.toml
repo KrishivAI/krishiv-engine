@@ -17,7 +17,9 @@ arrow-array = { workspace = true, optional = true }
 arrow-cast = { workspace = true, optional = true }
 arrow-schema = { workspace = true, optional = true }
 krishiv-common = { path = "../krishiv-common", version = "=0.2.1" }
+krishiv-access-proto = { path = "../krishiv-access-proto", version = "=0.2.1", optional = true }
 krishiv-exec = { path = "../krishiv-exec", version = "=0.2.1", optional = true }
+krishiv-plan = { path = "../krishiv-plan", version = "=0.2.1", optional = true }
 krishiv-session = { path = "../krishiv-session", version = "=0.2.1", optional = true }
 krishiv-ui-assets = { path = "../krishiv-ui-assets", version = "=0.2.1" }
 utoipa = { workspace = true, features = ["macros"] }
@@ -32,6 +34,8 @@ sha2.workspace = true
 serde_json = { workspace = true, features = ["std"] }
 tokio = { workspace = true, features = ["rt-multi-thread", "net", "time", "sync"] }
 tokio-rustls = { workspace = true, optional = true }
+tower = { workspace = true, features = ["util"], optional = true }
+hyper-util = { workspace = true, features = ["tokio"], optional = true }
 tracing.workspace = true
 
 [features]
@@ -43,17 +47,37 @@ metrics-prometheus = ["dep:krishiv-exec"]
 session = ["dep:krishiv-session", "dep:arrow-array", "dep:arrow-cast", "dep:arrow-schema"]
 # `krishiv.admin.v1` (design P3-T066): the control API over gRPC and REST, from one descriptor.
 admin-api = ["dep:prost", "dep:prost-types", "dep:prost-reflect", "dep:tonic", "dep:tonic-prost", "axum/http2"]
+# The `external` access-policy provider (ADR 0049 §3): a `krishiv.access.v1` gRPC client (HTTPS through
+# rustls with the platform's roots, loopback HTTP, or a Unix socket).
+access-external = [
+    "session",
+    "dep:krishiv-access-proto",
+    "dep:krishiv-plan",
+    "dep:prost",
+    "dep:tonic",
+    "dep:tonic-prost",
+    "dep:tower",
+    "dep:hyper-util",
+    "tonic/channel",
+    "tonic/codegen",
+    "tonic/tls-aws-lc",
+    "tonic/tls-native-roots",
+]
 # The admin listener over TLS (`tls::serve_capped_tls`, P3-T002 design §3.5).
 tls = ["dep:tokio-rustls", "krishiv-session?/tls"]
 
 [dev-dependencies]
 # Turns on `session` for this package's own test targets, so the UI page tests (`tests/ui_pages.rs`) run
 # under default features too (the coverage gate runs them; without this they were compiled out).
-krishiv-server = { path = ".", features = ["session"] }
+krishiv-server = { path = ".", features = ["session", "access-external"] }
 krishiv-session = { path = "../krishiv-session" }
+# The end-to-end test of the `external` provider builds sessions through `provider_sessions`.
+krishiv-connect-server = { path = "../krishiv-connect-server" }
 krishiv-exec = { path = "../krishiv-exec" }
 tempfile.workspace = true
 tower = { workspace = true, features = ["util"] }
+# The HTTP/2 client of the TLS console test (tonic's channel over a `tokio-rustls` stream).
+hyper-util = { workspace = true, features = ["tokio"] }
 tonic = { workspace = true, features = ["channel", "server", "router", "codegen"] }
 tonic-prost.workspace = true
 prost = { workspace = true, features = ["derive", "std"] }

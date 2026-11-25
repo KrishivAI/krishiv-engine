@@ -115,6 +115,8 @@ struct LogState {
     /// Data files of an overwrite's directory that no log entry lists and that are older than
     /// [`UNLOGGED_GRACE`]: what a killed earlier write left (PY-054). Deleted after the commit.
     stale: Vec<Path>,
+    /// The records of writes whose process is gone (PY-054), deleted with the commit.
+    dead_records: Vec<Path>,
 }
 
 /// How old an unlogged data file must be before an overwrite sweeps it: a younger one may be the
@@ -138,18 +140,28 @@ impl DirectoryWrite {
         job_uuid: impl Into<String>,
         dynamic_overwrite: bool,
     ) -> Result<Option<Self>> {
-        let file = io.head(&store, &dir).await?;
+        let shown = shown_path(&store, &dir);
+        let file = io
+            .head(&store, &dir)
+            .await
+            .map_err(|e| as_write_failure(e, &shown))?;
         // An append needs no listing: only a file at the path blocks it. A
         // dynamic overwrite lists what it wrote at commit time instead.
         let listed = match mode {
             SaveMode::Append => Vec::new(),
             SaveMode::Overwrite if dynamic_overwrite => Vec::new(),
-            _ => io.list(&store, &dir).await?,
+            _ => io
+                .list(&store, &dir)
+                .await
+                .map_err(|e| as_write_failure(e, &shown))?,
         };
         let exists = file.is_some()
             || !listed.is_empty()
             || (matches!(mode, SaveMode::ErrorIfExists | SaveMode::Ignore)
-                && io.is_directory(&store, &dir).await?);
+                && io
+                    .is_directory(&store, &dir)
+                    .await
+                    .map_err(|e| as_write_failure(e, &shown))?);
         let replaced = match mode {
             SaveMode::ErrorIfExists if exists => {
                 return Err(PathAlreadyExists {
@@ -240,35 +252,103 @@ impl DirectoryWrite {
             .retain(|p| !p.prefix_matches(&log_dir) && *p != log_dir);
         let visible: Vec<String> = snap.files.into_keys().collect();
         let mut stale = Vec::new();
-        if self.overwrite {
-            // The old marker goes first: a run killed before its commit must not leave the
-            // `_SUCCESS` of the data it began to replace (readers take it for complete).
-            let marker = self.dir.clone().join(SUCCESS_MARKER);
-            // Best effort: a marker that stays is rewritten by this write's commit.
-            if matches!(io.head(&self.store, &marker).await, Ok(Some(_))) {
-                let _ = io.delete(&self.store, &marker).await;
+        // Writes whose process died before their commit: their unlogged files are swept at once.
+        let (dead_jobs, dead_records) = self.dead_writers(io).await?;
+        if let Some(me) = writers::current() {
+            // Best effort: without the record a killed write is swept after the grace only.
+            let _ = io
+                .put_object(
+                    &self.store,
+                    &writers::record_path(&self.dir, &self.job_uuid),
+                    Bytes::from(me),
+                )
+                .await;
+        }
+        // The staging files of an upload that never completed are hidden from listings (PY-054):
+        // the store that staged them deletes those of a dead writer at once, and on an overwrite
+        // those older than the grace, whichever job they name (a writer killed with its container
+        // leaves a record nobody can judge).
+        let cutoff = chrono::Utc::now() - self.grace;
+        let clean = if dead_jobs.is_empty() && !self.overwrite {
+            true
+        } else {
+            let (dead, overwrite) = (dead_jobs.clone(), self.overwrite);
+            io.sweep_staging(&self.store, &self.dir, move |name, modified| {
+                let base = name.split_once('#').map_or(name, |(base, _)| base);
+                dead.iter().any(|j| is_job_file(base, j)) || (overwrite && modified <= cutoff)
+            })
+            .await
+        };
+        // A record stays while its job's files may remain: the next write looks again.
+        let dead_records = if clean { dead_records } else { Vec::new() };
+        if self.overwrite || !dead_jobs.is_empty() {
+            if self.overwrite {
+                // The old marker goes first: a run killed before its commit must not leave the
+                // `_SUCCESS` of the data it began to replace (readers take it for complete).
+                let marker = self.dir.clone().join(SUCCESS_MARKER);
+                // Best effort: a marker that stays is rewritten by this write's commit.
+                if matches!(io.head(&self.store, &marker).await, Ok(Some(_))) {
+                    let _ = io.delete(&self.store, &marker).await;
+                }
             }
             let seen: std::collections::HashSet<&str> =
                 visible.iter().map(String::as_str).collect();
-            let cutoff = chrono::Utc::now() - self.grace;
             for meta in io.list(&self.store, &self.dir).await? {
                 let rel = self.relative(&meta.location);
-                if rel.is_empty()
-                    || rel.split('/').any(is_hidden)
-                    || seen.contains(rel.as_str())
-                    || meta.last_modified > cutoff
-                {
+                if rel.is_empty() || rel.split('/').any(is_hidden) || seen.contains(rel.as_str()) {
                     continue;
                 }
-                stale.push(meta.location);
+                let of_dead = meta
+                    .location
+                    .filename()
+                    .is_some_and(|n| dead_jobs.iter().any(|j| is_job_file(n, j)));
+                if of_dead || (self.overwrite && meta.last_modified <= cutoff) {
+                    stale.push(meta.location);
+                }
             }
         }
         self.log = Some(LogState {
             base: snap.version,
             visible,
             stale,
+            dead_records,
         });
         Ok(self)
+    }
+
+    /// The jobs whose writer process is gone, and their records (PY-054).
+    async fn dead_writers(&self, io: &IoContext) -> Result<(Vec<String>, Vec<Path>)> {
+        let (mut jobs, mut records) = (Vec::new(), Vec::new());
+        for meta in io.list(&self.store, &writers::log_dir(&self.dir)).await? {
+            let Some(job) = writers::job_of(&meta.location) else {
+                continue;
+            };
+            if job == self.job_uuid {
+                continue;
+            }
+            // A record that cannot be read is not judged.
+            let Ok(Some(body)) = io.get_object(&self.store, &meta.location).await else {
+                continue;
+            };
+            if writers::is_dead(&body) {
+                jobs.push(job.to_owned());
+                records.push(meta.location);
+            }
+        }
+        Ok((jobs, records))
+    }
+
+    /// Removes this write's record and the dead writers' (best effort: a record that stays is
+    /// judged again by the next write).
+    async fn drop_records(&self, io: &IoContext) {
+        if self.log.is_none() {
+            return;
+        }
+        let own = writers::record_path(&self.dir, &self.job_uuid);
+        let dead = self.log.iter().flat_map(|l| l.dead_records.iter());
+        for p in std::iter::once(&own).chain(dead) {
+            let _ = io.delete(&self.store, p).await;
+        }
     }
 
     /// The age an unlogged file must have for an overwrite to sweep it.
@@ -522,6 +602,7 @@ impl DirectoryWrite {
                         .await;
                     after_publish(true, "restoring the success marker", marker)?;
                 }
+                self.drop_records(io).await;
                 return Ok(Vec::new());
             }
         }
@@ -577,6 +658,7 @@ impl DirectoryWrite {
             )
             .await;
         after_publish(logged, "writing the success marker", marker)?;
+        self.drop_records(io).await;
         Ok(files)
     }
 
@@ -696,6 +778,24 @@ fn shown_path(store: &StoreId, dir: &Path) -> String {
     }
 }
 
+/// A storage failure while a write starts (`HEAD` or listing of its path) is a failed write, not
+/// "Reading the file" (PY-075): `TASK_WRITE_FAILED` carrying the store's reason (the OS error) as its
+/// cause. Any other error is returned as it is.
+fn as_write_failure(
+    e: krishiv_common::error::KrishivError,
+    shown: &str,
+) -> krishiv_common::error::KrishivError {
+    if e.error_class() != krishiv_common::error::ErrorClass::KrishivObjectStoreRequestFailed {
+        return e;
+    }
+    let reason = e
+        .message_parameters()
+        .iter()
+        .find(|(k, _)| *k == "reason")
+        .map(|(_, v)| v.clone());
+    reason.map_or(e, |r| crate::error::write_failed(shown, &r))
+}
+
 /// Spark's hidden-name rule for one path component.
 fn is_hidden(name: &str) -> bool {
     // The same rule as the reads' (`krishiv-exec` `hidden`), or adopted files would vanish from them.
@@ -764,6 +864,7 @@ fn is_job_file(name: &str, job: &str) -> bool {
 
 #[cfg(test)]
 mod tests;
+mod writers;
 
 /// Files with repeated paths (one task result reported twice) commit once, in first-seen order.
 fn dedupe_by_path(files: Vec<WrittenFileInfo>) -> Vec<WrittenFileInfo> {

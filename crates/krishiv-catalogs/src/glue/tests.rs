@@ -661,8 +661,10 @@ fn the_declaration_is_checked_at_construction() {
         ..super::GlueLimits::default()
     };
     assert!(limits.validate().is_err());
-    let mut limits = super::GlueLimits::default();
-    limits.max_depth = 128;
+    let mut limits = super::GlueLimits {
+        max_depth: 128,
+        ..super::GlueLimits::default()
+    };
     assert!(limits.validate().is_err());
     limits.max_depth = 127;
     assert!(limits.validate().is_ok());

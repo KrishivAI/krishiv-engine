@@ -226,7 +226,18 @@ pub(crate) struct Planner<'a> {
     /// The next runtime filter's id.
     pub(crate) next_filter: u64,
     /// The next scan's id.
-    next_scan: u64,
+    pub(super) next_scan: u64,
+    /// The scans planned under a security barrier.
+    pub(super) guarded: HashSet<ScanId>,
+    /// Per shared plan, every scan it reads (its own and those of the shared plans it reads), so
+    /// a barrier that reads a shared plan planned earlier from outside still guards them.
+    pub(super) shared_scans: HashMap<SharedId, Vec<ScanId>>,
+    /// One entry per barrier or shared plan being planned: the scans of already planned shared
+    /// plans read inside it (scans numbered inside it are its id range).
+    pub(super) scan_reads: Vec<Vec<ScanId>>,
+    /// How many security barriers enclose the plan being planned: under one, a scan that decides
+    /// once is not asked (its user code would take the policy's conjuncts out of the plan).
+    pub(super) barriers: usize,
     /// The next subquery's id.
     next_subquery: u64,
     /// The next exchange's id.
@@ -266,6 +277,7 @@ impl<'a> Planner<'a> {
     fn new(cx: &'a PlanningContext, root: &Arc<LogicalPlan>) -> Self {
         let next_id = max_id(root).saturating_add(1).max(1 << 62);
         let mut env = EvalEnv::new(&cx.config, Arc::clone(&cx.user));
+        env.kernels = env.kernels.with_spark_version(cx.spark_version);
         if let Some(micros) = cx.query_start_micros {
             env.set_query_start_micros(micros);
         }
@@ -291,6 +303,10 @@ impl<'a> Planner<'a> {
             rf: Settings::new(&cx.config),
             next_filter: 1,
             next_scan: 0,
+            guarded: HashSet::new(),
+            shared_scans: HashMap::new(),
+            scan_reads: Vec::new(),
+            barriers: 0,
             next_subquery: next_id.saturating_add(SUBQUERY_GAP),
             next_exchange: 0,
             scan_filters: HashMap::new(),
@@ -540,6 +556,7 @@ impl<'a> Planner<'a> {
                 let input = self.plan(input)?;
                 self.sort(input, order, *global)
             }
+            PlanNode::SecurityBarrier { input, .. } => self.barrier(input),
             PlanNode::JoinHint { input, strategy } => {
                 if !self.consumed_hints.contains(&(Arc::as_ptr(p) as usize)) {
                     self.warnings.push(format!(
@@ -785,6 +802,11 @@ impl<'a> Planner<'a> {
     /// planned on first use (so inner shared plans come first).
     fn shared_plan(&mut self, source: &[AttrId], name: &str) -> Result<(SharedId, SchemaRef)> {
         if let Some(&id) = self.shared_ids.get(source) {
+            if let (Some(top), Some(scans)) =
+                (self.scan_reads.last_mut(), self.shared_scans.get(&id))
+            {
+                top.extend(scans.iter().copied());
+            }
             let schema = self
                 .shared
                 .iter()
@@ -807,7 +829,7 @@ impl<'a> Planner<'a> {
         // such reads reach it, the nodes are stripped afterwards (`SharedReads::strip_dead`).
         let outer = std::mem::take(&mut self.unobserved);
         self.shared_reads.begin();
-        let planned = self.plan(&def);
+        let (planned, scans) = self.planned_with_scans(&def);
         self.unobserved = outer;
         let reads = self.shared_reads.finish();
         let planned = planned?;
@@ -826,6 +848,7 @@ impl<'a> Planner<'a> {
             ordered,
         });
         self.shared_reads.record(id, reads);
+        self.shared_scans.insert(id, scans);
         self.shared_ids.insert(source.to_vec(), id);
         self.shared_schemas.insert(id, Arc::clone(&schema));
         Ok((id, schema))
@@ -1237,13 +1260,19 @@ impl<'a> Planner<'a> {
         // A scan that decides once (a Python data source) sees every conjunct at once; a plan that
         // is only looked at, or a row-level probe, keeps the whole filter above the scan instead.
         let deciding = filter.is_some() && factory.decides_once();
+        // Under a security barrier the filter over the scan is the policy's (design E14 §6): it is
+        // not offered to the source's code, which could take it out of the plan, and the scan reads
+        // with no filter pushed, so it needs no decision (fail closed).
+        let withheld = deciding && self.barriers > 0;
         let mut decision = None;
-        if let (true, Some(predicate)) = (deciding, filter) {
-            if self.decide && !row_id {
-                decision =
-                    Some(self.decide_scan(&*factory, &table, scan, predicate, &projection)?);
-            } else if self.cx.decisions && !row_id {
-                self.deferred = true;
+        if deciding {
+            if let (false, Some(predicate)) = (withheld, filter) {
+                if self.decide && !row_id {
+                    decision =
+                        Some(self.decide_scan(&*factory, &table, scan, predicate, &projection)?);
+                } else if self.cx.decisions && !row_id {
+                    self.deferred = true;
+                }
             }
         } else if let Some(predicate) = filter {
             // The scan evaluates pushed filters over its table schema.
@@ -1328,7 +1357,7 @@ impl<'a> Planner<'a> {
                 row_id,
                 decided: match &decision {
                     Some(d) => Some(Box::new(d.decided.clone())),
-                    None if deciding && !self.decide => {
+                    None if deciding && !withheld && !self.decide => {
                         Some(Box::new(crate::operators::DecidedScan::undecided()))
                     }
                     None => None,

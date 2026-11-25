@@ -8,13 +8,20 @@
 //! Only deterministic predicates move, and only the deterministic prefix of
 //! a conjunction (a nondeterministic predicate must see the rows it saw
 //! before).
+//!
+//! A security barrier (design `P3-E14-security-barrier.md` §5) takes a conjunct in only when it
+//! is leakproof and a trial push brings it to rest in a `Filter` directly over a scan; anything
+//! else stays above the barrier as written. Inside a barrier the push runs **guarded**: a conjunct
+//! leaves the node it sits above only in a leakproof form ([`Guard::admit`], checked on the form
+//! after each hand-off's rewrite), so nothing that is not leakproof moves below or joins the
+//! policy's filter. A new arm that moves a conjunct calls `admit`.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use krishiv_plan::{
     AttrId, Builtin, Expr, ExprNode, Grouping, JoinCondition, JoinKind, Literal, LogicalPlan, Plan,
-    PlanNode, ResolvedExpr,
+    PlanNode, ResolvedExpr, leakproof,
 };
 
 use crate::dag::with_input;
@@ -26,21 +33,90 @@ use crate::fold::fold;
 use crate::stats::{cse_definitions, reads_cse, resolve_cse};
 use krishiv_types::DataType;
 
+/// How a push treats the conjuncts it moves.
+#[derive(Default)]
+struct Guard {
+    /// Guarded (under a security barrier): a conjunct leaves the node it sits above only in a
+    /// leakproof form.
+    on: bool,
+    /// A barrier's trial: the forms the tried conjunct took on its way down (by address).
+    moving: Vec<Arc<Expr>>,
+    /// Whether the tried conjunct came to rest anywhere but in a `Filter` directly over a scan.
+    residue: bool,
+}
+
+impl Guard {
+    fn guarded() -> Self {
+        Self {
+            on: true,
+            ..Self::default()
+        }
+    }
+
+    fn trial(c: &Arc<Expr>) -> Self {
+        Self {
+            on: true,
+            moving: vec![Arc::clone(c)],
+            residue: false,
+        }
+    }
+
+    /// Whether `e`, the form a conjunct takes after a hand-off, may leave the node it sits above.
+    /// Rules have no configuration, so ANSI on: the conservative side.
+    fn admit(&self, e: &Expr) -> bool {
+        !self.on || leakproof(e, true)
+    }
+
+    fn is_moving(&self, e: &Arc<Expr>) -> bool {
+        self.moving.iter().any(|m| Arc::ptr_eq(m, e))
+    }
+
+    /// `to` is a form of `from` (rewritten at a hand-off, or implied by it).
+    fn carry(&mut self, from: &Arc<Expr>, to: &Arc<Expr>) {
+        if self.is_moving(from) && !self.is_moving(to) {
+            self.moving.push(Arc::clone(to));
+        }
+    }
+
+    /// `preds` come to rest in a `Filter` over `below`.
+    fn rest(&mut self, below: &LogicalPlan, preds: &[Arc<Expr>]) {
+        if !matches!(below.node, PlanNode::Scan(_)) && preds.iter().any(|p| self.is_moving(p)) {
+            self.residue = true;
+        }
+    }
+
+    /// `p` comes to rest in a join condition.
+    fn rest_in_join(&mut self, p: &Arc<Expr>) {
+        if self.is_moving(p) {
+            self.residue = true;
+        }
+    }
+}
+
 /// The rule at a `Filter`: pushes its conjuncts down; drops true and
 /// duplicate conjuncts.
 pub(crate) fn push_filter(node: Arc<LogicalPlan>) -> Arc<LogicalPlan> {
+    push_filter_with(node, &mut Guard::default())
+}
+
+/// [`push_filter`] on a `Filter` under a security barrier: guarded.
+pub(crate) fn push_filter_guarded(node: Arc<LogicalPlan>) -> Arc<LogicalPlan> {
+    push_filter_with(node, &mut Guard::guarded())
+}
+
+fn push_filter_with(node: Arc<LogicalPlan>, g: &mut Guard) -> Arc<LogicalPlan> {
     let PlanNode::Filter { input, predicate } = &node.node else {
         return node;
     };
     let original = conjuncts(predicate);
-    let (below, rest) = push(input, conjuncts(&null_to_false(predicate)));
+    let (below, rest) = push(input, conjuncts(&null_to_false(predicate)), g);
     let rest = dedupe(rest);
     let same_preds =
         rest.len() == original.len() && rest.iter().zip(&original).all(|(a, b)| Arc::ptr_eq(a, b));
     if Arc::ptr_eq(&below, input) && same_preds {
         return node;
     }
-    wrap(below, rest, &node)
+    wrap(below, rest, &node, g)
 }
 
 /// The rule at a `Filter`: the outer join under a chain of filters becomes the join type those
@@ -157,8 +233,8 @@ pub(crate) fn push_as_of_condition(node: Arc<LogicalPlan>) -> Arc<LogicalPlan> {
     let condition = and_all(stay).map_or(JoinCondition::None, JoinCondition::On);
     Arc::new(LogicalPlan {
         node: PlanNode::AsOfJoin {
-            left: into(left, l),
-            right: into(right, r),
+            left: into(left, l, &mut Guard::default()),
+            right: into(right, r, &mut Guard::default()),
             kind: *kind,
             condition,
             as_of: Arc::clone(as_of),
@@ -170,6 +246,15 @@ pub(crate) fn push_as_of_condition(node: Arc<LogicalPlan>) -> Arc<LogicalPlan> {
 /// The rule at a `Join`: moves one-sided condition conjuncts into the side
 /// they read, where the join type allows.
 pub(crate) fn push_join_condition(node: Arc<LogicalPlan>) -> Arc<LogicalPlan> {
+    push_join_condition_with(node, &mut Guard::default())
+}
+
+/// [`push_join_condition`] on a join under a security barrier: guarded.
+pub(crate) fn push_join_condition_guarded(node: Arc<LogicalPlan>) -> Arc<LogicalPlan> {
+    push_join_condition_with(node, &mut Guard::guarded())
+}
+
+fn push_join_condition_with(node: Arc<LogicalPlan>, g: &mut Guard) -> Arc<LogicalPlan> {
     let PlanNode::Join {
         left,
         right,
@@ -192,7 +277,7 @@ pub(crate) fn push_join_condition(node: Arc<LogicalPlan>) -> Arc<LogicalPlan> {
     let (mut l, mut r, mut stay) = (Vec::new(), Vec::new(), Vec::new());
     for c in conjuncts(&simplified) {
         let refs = local(&c, &lo, &ro);
-        if !is_deterministic(&c) {
+        if !is_deterministic(&c) || !g.admit(&c) {
             stay.push(c);
         } else if to_left && refs.is_subset(&lo) {
             l.push(c);
@@ -205,7 +290,7 @@ pub(crate) fn push_join_condition(node: Arc<LogicalPlan>) -> Arc<LogicalPlan> {
     if l.is_empty() && r.is_empty() && Arc::ptr_eq(&simplified, cond) {
         return node;
     }
-    let (left, right) = (into(left, l), into(right, r));
+    let (left, right) = (into(left, l, g), into(right, r, g));
     join(&node, left, right, *kind, stay)
 }
 
@@ -238,9 +323,10 @@ pub(crate) fn imply_join_condition(node: Arc<LogicalPlan>) -> Arc<LogicalPlan> {
     // A side that already holds what is implied stays the same relation:
     // rebuilt, it would no longer be shared with its other readers, and pruning
     // could then narrow the copies apart.
+    let g = &mut Guard::default();
     let (new_left, new_right) = (
-        unless_equal(left, into(left, l)),
-        unless_equal(right, into(right, r)),
+        unless_equal(left, into(left, l, g)),
+        unless_equal(right, into(right, r, g)),
     );
     if Arc::ptr_eq(&new_left, left) && Arc::ptr_eq(&new_right, right) {
         return node;
@@ -254,7 +340,7 @@ pub(crate) fn imply_join_condition(node: Arc<LogicalPlan>) -> Arc<LogicalPlan> {
 /// the result differs (a duplicate the pushdown drops leaves a structurally
 /// equal copy, which the caller must tolerate).
 pub(crate) fn into_side_new(side: &Arc<LogicalPlan>, preds: Vec<Arc<Expr>>) -> Arc<LogicalPlan> {
-    into(side, preds)
+    into(side, preds, &mut Guard::default())
 }
 
 /// `node`, a join, over new inputs with the condition `cond`.
@@ -282,7 +368,11 @@ fn unless_equal(before: &Arc<LogicalPlan>, after: Arc<LogicalPlan>) -> Arc<Logic
 
 /// Pushes `preds` (over `plan`'s output) into `plan` as far as legal.
 /// Returns the new plan and the predicates that stay above it, in order.
-fn push(plan: &Arc<LogicalPlan>, preds: Vec<Arc<Expr>>) -> (Arc<LogicalPlan>, Vec<Arc<Expr>>) {
+fn push(
+    plan: &Arc<LogicalPlan>,
+    preds: Vec<Arc<Expr>>,
+    g: &mut Guard,
+) -> (Arc<LogicalPlan>, Vec<Arc<Expr>>) {
     let split = preds
         .iter()
         .position(|p| !is_deterministic(p))
@@ -294,11 +384,18 @@ fn push(plan: &Arc<LogicalPlan>, preds: Vec<Arc<Expr>>) -> (Arc<LogicalPlan>, Ve
     }
     let (out, mut stay) = match &plan.node {
         PlanNode::Filter { input, predicate } if is_deterministic(predicate) => {
-            let mut all = conjuncts(predicate);
-            all.extend(movable);
-            let (below, rest) = push(input, all);
-            (wrap(below, dedupe(rest), plan), Vec::new())
+            // Guarded, a conjunct that is not leakproof neither joins this filter nor crosses it.
+            let (admitted, held): (Vec<_>, Vec<_>) = movable.into_iter().partition(|p| g.admit(p));
+            if admitted.is_empty() {
+                (Arc::clone(plan), held)
+            } else {
+                let mut all = conjuncts(predicate);
+                all.extend(admitted);
+                let (below, rest) = push(input, all, g);
+                (wrap(below, dedupe(rest), plan, g), held)
+            }
         }
+        PlanNode::SecurityBarrier { input, .. } => barrier(plan, input, movable),
         PlanNode::Project { input, exprs } if exprs.iter().all(|e| is_deterministic(e)) => {
             // A common-subexpression projection is opaque to predicate
             // pushdown: pushing anything below it would evaluate the
@@ -307,7 +404,7 @@ fn push(plan: &Arc<LogicalPlan>, preds: Vec<Arc<Expr>>) -> (Arc<LogicalPlan>, Ve
             // run would return a different plan.
             if cse_outputs(exprs).is_empty() {
                 let aliases = alias_map(exprs);
-                through(plan, input, movable, |p| {
+                through(plan, input, movable, g, |p| {
                     let refs = references(p);
                     let hits = refs.iter().any(|id| aliases.contains_key(id));
                     (!(hits && has_subquery(p))).then(|| substitute(p, &aliases))
@@ -364,7 +461,7 @@ fn push(plan: &Arc<LogicalPlan>, preds: Vec<Arc<Expr>>) -> (Arc<LogicalPlan>, Ve
                 .into_iter()
                 .filter(|(_, e)| !has_aggregate(e))
                 .collect();
-            through(plan, input, movable, |p| {
+            through(plan, input, movable, g, |p| {
                 let refs: Attrs = references(p)
                     .into_iter()
                     .filter(|id| own.contains(id))
@@ -392,9 +489,9 @@ fn push(plan: &Arc<LogicalPlan>, preds: Vec<Arc<Expr>>) -> (Arc<LogicalPlan>, Ve
         // would fail on). A repartition never changes rows, so the filter
         // moves whatever its expressions are.
         | PlanNode::Repartition { input, .. } => {
-            through(plan, input, movable, |p| Some(Arc::clone(p)))
+            through(plan, input, movable, g, |p| Some(Arc::clone(p)))
         }
-        PlanNode::Shift { input, offset } => through(plan, input, movable, |p| {
+        PlanNode::Shift { input, offset } => through(plan, input, movable, g, |p| {
             // The subtree under a shift holds no outer references.
             if has_subquery(p) || has_outer_reference(p) {
                 None
@@ -407,7 +504,7 @@ fn push(plan: &Arc<LogicalPlan>, preds: Vec<Arc<Expr>>) -> (Arc<LogicalPlan>, Ve
             right,
             kind,
             condition,
-        } => push_join(plan, left, right, *kind, condition, movable),
+        } => push_join(plan, left, right, *kind, condition, movable, g),
         // A filter on the left input only: an as-of join's left row keeps or loses its match
         // whatever the other left rows are, so it filters below as above (inner or left outer).
         // Anything reading the right side stays: it would change which row is nearest.
@@ -420,15 +517,16 @@ fn push(plan: &Arc<LogicalPlan>, preds: Vec<Arc<Expr>>) -> (Arc<LogicalPlan>, Ve
         } => {
             let lo = ids(left);
             let ro = ids(right);
+            // Guarded, a conjunct that is not leakproof stays above (as in `push_join`).
             let (l, stay): (Vec<_>, Vec<_>) = movable
                 .into_iter()
-                .partition(|p| local(p, &lo, &ro).is_subset(&lo));
+                .partition(|p| g.admit(p) && local(p, &lo, &ro).is_subset(&lo));
             if l.is_empty() {
                 (Arc::clone(plan), stay)
             } else {
                 let out = Arc::new(LogicalPlan {
                     node: PlanNode::AsOfJoin {
-                        left: into(left, l),
+                        left: into(left, l, g),
                         right: Arc::clone(right),
                         kind: *kind,
                         condition: condition.clone(),
@@ -445,7 +543,7 @@ fn push(plan: &Arc<LogicalPlan>, preds: Vec<Arc<Expr>>) -> (Arc<LogicalPlan>, Ve
             inputs,
             by_name: false,
             ..
-        } => push_union(plan, inputs, movable),
+        } => push_union(plan, inputs, movable, g),
         // A predicate on partitioning columns only keeps or drops whole
         // partitions: it filters below the window (Spark's
         // `PushPredicateThroughNonJoin`, when every partitioning
@@ -456,7 +554,7 @@ fn push(plan: &Arc<LogicalPlan>, preds: Vec<Arc<Expr>>) -> (Arc<LogicalPlan>, Ve
             ..
         } if partition_by.iter().all(|e| column_id(e).is_some()) => {
             let keys: Attrs = partition_by.iter().filter_map(|e| column_id(e)).collect();
-            through(plan, input, movable, |p| {
+            through(plan, input, movable, g, |p| {
                 let refs = references(p);
                 (!refs.is_empty() && refs.is_subset(&keys) && !has_subquery(p))
                     .then(|| Arc::clone(p))
@@ -468,12 +566,44 @@ fn push(plan: &Arc<LogicalPlan>, preds: Vec<Arc<Expr>>) -> (Arc<LogicalPlan>, Ve
     (out, stay)
 }
 
+/// `movable` at a security barrier: each conjunct moves into `input` only if it is leakproof and
+/// a guarded trial push brings it to rest in a `Filter` directly over a scan; any other stays
+/// above the barrier in its original form (a stop part-way, above an inner aggregate or the mask
+/// projection, too). Whether the push outside is guarded does not matter: the trial always is.
+fn barrier(
+    plan: &Arc<LogicalPlan>,
+    input: &Arc<LogicalPlan>,
+    movable: Vec<Arc<Expr>>,
+) -> (Arc<LogicalPlan>, Vec<Arc<Expr>>) {
+    let mut inner = Arc::clone(input);
+    let mut stay = Vec::new();
+    for c in movable {
+        if !leakproof(&c, true) {
+            stay.push(c);
+            continue;
+        }
+        let mut trial = Guard::trial(&c);
+        let out = into(&inner, vec![Arc::clone(&c)], &mut trial);
+        if trial.residue {
+            stay.push(c);
+        } else {
+            inner = out;
+        }
+    }
+    if Arc::ptr_eq(&inner, input) {
+        return (Arc::clone(plan), stay);
+    }
+    (with_input(plan, inner), stay)
+}
+
 /// `movable` pushed into each input of a positional union; a predicate with a
-/// subquery or an outer reference stays above (it would run once per input).
+/// subquery or an outer reference stays above (it would run once per input),
+/// and, guarded, one whose form for some input is not leakproof.
 fn push_union(
     plan: &Arc<LogicalPlan>,
     inputs: &[Arc<LogicalPlan>],
     movable: Vec<Arc<Expr>>,
+    g: &mut Guard,
 ) -> (Arc<LogicalPlan>, Vec<Arc<Expr>>) {
     let (down, mut stay): (Vec<_>, Vec<_>) = movable
         .into_iter()
@@ -488,10 +618,10 @@ fn push_union(
         stay.extend(down);
         return (Arc::clone(plan), stay);
     }
-    let pushed = inputs
+    // Each conjunct's form per input.
+    let forms: Vec<Vec<Arc<Expr>>> = outs
         .iter()
-        .zip(&outs)
-        .map(|(input, cols)| {
+        .map(|cols| {
             let map: HashMap<AttrId, Arc<Expr>> = out
                 .iter()
                 .zip(cols)
@@ -502,11 +632,27 @@ fn push_union(
                     (o.id, col)
                 })
                 .collect();
-            into(
-                input,
-                down.iter().map(|p| fold(&substitute(p, &map))).collect(),
-            )
+            down.iter().map(|p| fold(&substitute(p, &map))).collect()
         })
+        .collect();
+    let mut kept = Vec::new();
+    for (j, p) in down.into_iter().enumerate() {
+        if forms.iter().all(|f| g.admit(&f[j])) {
+            for f in &forms {
+                g.carry(&p, &f[j]);
+            }
+            kept.push(j);
+        } else {
+            stay.push(p);
+        }
+    }
+    if kept.is_empty() {
+        return (Arc::clone(plan), stay);
+    }
+    let pushed = inputs
+        .iter()
+        .zip(&forms)
+        .map(|(input, f)| into(input, kept.iter().map(|&j| Arc::clone(&f[j])).collect(), g))
         .collect::<Vec<_>>();
     // The same node with the new inputs (its origin kept).
     let mut next = pushed.into_iter();
@@ -532,28 +678,33 @@ fn through(
     plan: &Arc<LogicalPlan>,
     input: &Arc<LogicalPlan>,
     preds: Vec<Arc<Expr>>,
+    g: &mut Guard,
     mut map: impl FnMut(&Arc<Expr>) -> Option<Arc<Expr>>,
 ) -> (Arc<LogicalPlan>, Vec<Arc<Expr>>) {
     let (mut down, mut stay) = (Vec::new(), Vec::new());
     for p in preds {
-        match map(&p) {
-            Some(q) => down.push(fold(&q)),
-            None => stay.push(p),
+        // Guarded, the form after the rewrite decides (`mask(x) = '123'`, not `x = '123'`).
+        match map(&p).map(|q| fold(&q)) {
+            Some(q) if g.admit(&q) => {
+                g.carry(&p, &q);
+                down.push(q);
+            }
+            _ => stay.push(p),
         }
     }
     if down.is_empty() {
         return (Arc::clone(plan), stay);
     }
-    (with_input(plan, into(input, down)), stay)
+    (with_input(plan, into(input, down, g)), stay)
 }
 
 /// `input` with `preds` pushed into it, the rest filtering on top.
-fn into(input: &Arc<LogicalPlan>, preds: Vec<Arc<Expr>>) -> Arc<LogicalPlan> {
+fn into(input: &Arc<LogicalPlan>, preds: Vec<Arc<Expr>>, g: &mut Guard) -> Arc<LogicalPlan> {
     if preds.is_empty() {
         return Arc::clone(input);
     }
-    let (below, rest) = push(input, preds);
-    wrap(below, dedupe(rest), input)
+    let (below, rest) = push(input, preds, g);
+    wrap(below, dedupe(rest), input, g)
 }
 
 fn push_join(
@@ -563,6 +714,7 @@ fn push_join(
     kind: JoinKind,
     condition: &JoinCondition,
     preds: Vec<Arc<Expr>>,
+    g: &mut Guard,
 ) -> (Arc<LogicalPlan>, Vec<Arc<Expr>>) {
     let (lo, ro) = (ids(left), ids(right));
     let original = kind;
@@ -570,6 +722,12 @@ fn push_join(
     let (mut l, mut r, mut on, mut stay) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
     for p in preds {
         let refs = local(&p, &lo, &ro);
+        // Guarded, a conjunct that is not leakproof stays above the join (it neither enters a
+        // side nor joins the condition, where a policy's semi-join may sit).
+        if !g.admit(&p) {
+            stay.push(p);
+            continue;
+        }
         match kind {
             JoinKind::Inner | JoinKind::Cross => {
                 if refs.is_subset(&lo) {
@@ -580,8 +738,15 @@ fn push_join(
                     // A join condition holds no subquery: it stays a filter.
                     stay.push(p);
                 } else {
-                    l.extend(implied_by_input(&p, left));
-                    r.extend(implied_by_input(&p, right));
+                    for (side, out) in [(left, &mut l), (right, &mut r)] {
+                        for d in implied_by_input(&p, side) {
+                            if g.admit(&d) {
+                                g.carry(&p, &d);
+                                out.push(d);
+                            }
+                        }
+                    }
+                    g.rest_in_join(&p);
                     on.push(p);
                 }
             }
@@ -609,7 +774,7 @@ fn push_join(
     } else {
         dedupe(cond)
     };
-    let out = join(plan, into(left, l), into(right, r), kind, cond);
+    let out = join(plan, into(left, l, g), into(right, r, g), kind, cond);
     (out, stay)
 }
 
@@ -886,12 +1051,18 @@ fn same_conjunct(p: &Expr, q: &Expr) -> bool {
 
 /// `plan` filtered by `preds` (none: `plan` itself), with `like`'s origin.
 /// Duplicate conjuncts meet however they are spelled (see [`dedupe_in`]).
-fn wrap(plan: Arc<LogicalPlan>, preds: Vec<Arc<Expr>>, like: &LogicalPlan) -> Arc<LogicalPlan> {
+fn wrap(
+    plan: Arc<LogicalPlan>,
+    preds: Vec<Arc<Expr>>,
+    like: &LogicalPlan,
+    g: &mut Guard,
+) -> Arc<LogicalPlan> {
     let preds = if preds.iter().any(|p| reads_cse(p)) {
         dedupe_in(preds, &cse_definitions(&plan))
     } else {
         dedupe(preds)
     };
+    g.rest(&plan, &preds);
     match and_all(preds) {
         None => plan,
         Some(predicate) => Arc::new(LogicalPlan {

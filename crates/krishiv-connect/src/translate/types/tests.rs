@@ -320,7 +320,13 @@ fn time_and_spatial_kinds() {
         data_type(&time(Some(0))),
         Ok(DataType::Time { precision: 0 })
     );
-    for bad in [7, -1] {
+    // The wire type takes Spark 4.3's 0..=9; under an older profile the analyzer refuses 7..=9
+    // (`unexecutable::check_known`, `UNSUPPORTED_TIME_PRECISION`), as the SQL path does.
+    assert_eq!(
+        data_type(&time(Some(9))),
+        Ok(DataType::Time { precision: 9 })
+    );
+    for bad in [10, -1] {
         let e = data_type(&time(Some(bad))).expect_err("out of range");
         assert_eq!(e.error_class(), ErrorClass::UnsupportedTimePrecision);
         assert_eq!(e.message_parameters()[0].1, bad.to_string());

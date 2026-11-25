@@ -21,7 +21,9 @@ use krishiv_common::error::{
     InvalidOptionsNonMapFunction, InvalidOptionsNonStringType, InvalidSchemaNonStringLiteral,
     KrishivError, KrishivUnsupportedFeature,
 };
-use krishiv_types::{ArrayType, DataType, StructField, StructType, parse_data_type};
+use krishiv_types::{
+    ArrayType, DataType, StructField, StructType, TypeGrammar, parse_data_type_in,
+};
 
 use super::Execution;
 use super::defs::Spec;
@@ -178,7 +180,7 @@ fn from_json(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
             .into());
         }
     };
-    let parsed = parse_json_schema(&schema)?;
+    let parsed = parse_json_schema_in(&schema, grammar_of(c.profile()))?;
     if holds_variant(&parsed) {
         // Spark reads a JSON value as a variant there; the reader does not yet.
         return Err(KrishivUnsupportedFeature {
@@ -243,6 +245,21 @@ fn has_non_string_map_key(t: &DataType) -> bool {
 /// (which Spark accepts without `struct<...>`). The direct parse's error
 /// is reported when the wrapped parse fails too.
 pub(crate) fn parse_json_schema(schema: &str) -> Result<DataType, KrishivError> {
+    parse_json_schema_in(schema, TypeGrammar::default())
+}
+
+/// The type grammar of `profile` (Spark 4.3's from 4.3 on).
+pub(crate) fn grammar_of(profile: crate::signature::SparkProfile) -> TypeGrammar {
+    TypeGrammar::new(profile >= crate::signature::SparkProfile::V4_3)
+}
+
+/// [`parse_json_schema`] under `grammar` (Spark 4.2 refuses `TIME(7..=9)` and has no
+/// `TIMESTAMP_NTZ(p)`).
+pub(crate) fn parse_json_schema_in(
+    schema: &str,
+    grammar: TypeGrammar,
+) -> Result<DataType, KrishivError> {
+    let parse_data_type = |s: &str| parse_data_type_in(s, grammar);
     match parse_data_type(schema).and_then(DataType::refuse_collations) {
         Ok(parsed) => Ok(parsed),
         Err(first) => {

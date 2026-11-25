@@ -400,10 +400,12 @@ impl EngineRuntime {
             } else {
                 krishiv_io::SettledLocalFileSystem::confined(roots)
             };
+            let local = Arc::new(local);
             io.register_whole_listing_store(
                 StoreId::new(crate::session::LOCAL_STORE),
-                Arc::new(local) as Arc<dyn ObjectStore>,
+                Arc::clone(&local) as Arc<dyn ObjectStore>,
             );
+            io.register_staging_sweeper(StoreId::new(crate::session::LOCAL_STORE), local);
         }
         #[cfg(not(unix))]
         io.register_store(

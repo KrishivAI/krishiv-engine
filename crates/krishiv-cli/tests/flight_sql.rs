@@ -736,8 +736,13 @@ async fn counts_by_rust_client(addr: &str, sql: &str) -> (usize, usize) {
         .try_collect()
         .await
         .expect("rows");
-    let columns = batches.first().map_or(0, |b| b.num_columns());
-    (batches.iter().map(|b| b.num_rows()).sum(), columns)
+    let columns = batches
+        .first()
+        .map_or(0, arrow_array::RecordBatch::num_columns);
+    (
+        batches.iter().map(arrow_array::RecordBatch::num_rows).sum(),
+        columns,
+    )
 }
 
 /// `(rows, columns)` of each `TPCH q<n> <rows> <columns>` line, in order.

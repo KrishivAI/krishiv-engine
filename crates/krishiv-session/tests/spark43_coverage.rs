@@ -20,40 +20,28 @@ use krishiv_session::Session;
 use serde_json::Value;
 
 /// Cases that differ from Spark today: `(id, how)`. They are the 4.3 work the golden tail (plan row GT) takes, by area:
-/// new functions (`fn_*`), the nanosecond and TIME(p) types,
-/// `SHOW ... AS JSON`, and `counter_diff` (the window function of P3-T031, PR #898).
+/// the nanosecond and TIME(p) types (`fn_*`) and a by-position struct insert under the legacy policy.
 const PENDING: &[(&str, &str)] = &[
-    ("fn_localtime", "UNRESOLVED_ROUTINE"),
-    ("fn_localtime_precision_error", "UNRESOLVED_ROUTINE"),
-    ("fn_time_precision_9_disabled", "UNSUPPORTED_TIME_PRECISION"),
-    (
-        "fn_timestamp_nanos_disabled",
-        "WRONG_NUM_ARGS.WITHOUT_SUGGESTION",
-    ),
-    ("fn_time_precision_9", "UNSUPPORTED_TIME_PRECISION"),
-    ("fn_time_typeof_precisions", "UNSUPPORTED_TIME_PRECISION"),
     (
         "fn_timestamp_ntz_to_time",
         "DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION",
     ),
-    ("fn_timestamp_ntz_to_time_9", "UNSUPPORTED_TIME_PRECISION"),
-    ("fn_time_to_timestamp_ntz_nanos", "UNSUPPORTED_DATATYPE"),
     (
-        "fn_current_timestamp_precision",
-        "WRONG_NUM_ARGS.WITHOUT_SUGGESTION",
+        "fn_timestamp_ntz_to_time_9",
+        "DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION",
+    ),
+    (
+        "fn_time_to_timestamp_ntz_nanos",
+        "KRISHIV_UNSUPPORTED_FEATURE",
     ),
     (
         "fn_current_timestamp_precision_9",
-        "WRONG_NUM_ARGS.WITHOUT_SUGGESTION",
+        "KRISHIV_UNSUPPORTED_FEATURE",
     ),
-    ("fn_localtime_9", "UNRESOLVED_ROUTINE"),
     (
         "fix_insert_struct_by_position_legacy",
         "setup: INCOMPATIBLE_DATA_FOR_TABLE.CANNOT_SAFELY_CAST",
     ),
-    ("syn_show_tables_as_json", "PARSE_SYNTAX_ERROR"),
-    ("syn_show_table_extended_as_json", "PARSE_SYNTAX_ERROR"),
-    ("syn_show_partitions_as_json", "PARSE_SYNTAX_ERROR"),
 ];
 
 fn fixture() -> Value {

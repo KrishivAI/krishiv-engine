@@ -369,13 +369,13 @@ impl Resolver<'_> {
         // GROUP BY aliases and outer references.
         if let [name] = &c.name[..]
             && !(self.ctx.conf.udf_parameter_shadows_function && self.has_parameter(name))
-            && let Some(function) = LITERAL_FUNCTIONS
+            && let Some((written, function)) = LITERAL_FUNCTIONS
                 .iter()
                 .find(|(n, _)| n.eq_ignore_ascii_case(name))
-                .map(|(_, f)| *f)
+                .copied()
             // A release without the function reads the name as a column.
             && matches!(
-                self.ctx.functions.lookup(&[function.to_owned()], self.ctx.profile),
+                self.ctx.functions.lookup(&[written.to_owned()], self.ctx.profile),
                 FunctionLookup::Found(_) | FunctionLookup::KnownUnsupported
             )
         {
