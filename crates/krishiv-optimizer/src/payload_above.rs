@@ -164,6 +164,36 @@ pub(crate) fn rewrite(
     Ok((out, ctx.notes))
 }
 
+/// Asks, without rewriting, whether this rule would move a payload above an
+/// aggregate: eager aggregation runs first and yields such an aggregate
+/// (the rule's single aggregate then needs no merge above the join). A
+/// candidate awaiting a key count is not taken, and its request is made as
+/// the rule itself would make it.
+pub(crate) struct Probe<'a> {
+    ctx: Context<'a>,
+}
+
+impl<'a> Probe<'a> {
+    /// A probe over the plan `root`.
+    pub(crate) fn new(root: &Arc<LogicalPlan>, stats: &'a dyn Statistics) -> Self {
+        Self {
+            ctx: Context {
+                next: max_id(root, &mut crate::expr::AddrMap::default()).saturating_add(1),
+                notes: Vec::new(),
+                shared: shared_nodes(root),
+                stats,
+            },
+        }
+    }
+
+    /// Whether the rule moves a payload above `agg`.
+    pub(crate) fn takes(&mut self, agg: &Arc<LogicalPlan>, est: &mut Estimator<'_>) -> bool {
+        let taken = at_aggregate(agg, est, &mut self.ctx, 1).is_some();
+        self.ctx.notes.clear();
+        taken
+    }
+}
+
 /// What one pass carries between aggregates.
 struct Context<'a> {
     /// The next free attribute id.

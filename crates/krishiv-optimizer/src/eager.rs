@@ -51,6 +51,9 @@
 //! - every key's distinct count is known (never [`StatSource::Guess`]): Umbra
 //!   measured this rewrite over 10× slower on TPC-H Q17 when it fires blind.
 //!
+//! An aggregate that `PayloadAboveAggregate` or `GroupKeyCode` takes later in
+//! the same optimization is left to them ([`Yield`]).
+//!
 //! The upper aggregate stays even when its keys are unique: states are local
 //! to each task, so equal groups of different tasks still have to merge.
 
@@ -70,6 +73,8 @@ use crate::expr::{
     Attrs, builtin, column, conjuncts, data_type, has_outer_reference, has_subquery,
     is_deterministic, lit, output_of, references, references_into, same,
 };
+use crate::group_code;
+use crate::payload_above;
 use crate::restrict::{MAX_ID, max_id};
 use crate::stats::{RelStats, Statistics};
 
@@ -98,12 +103,28 @@ pub(crate) fn rewrite(
     stats: &dyn Statistics,
     propagate: bool,
     expand: bool,
+    yields: Yield,
 ) -> Result<(Arc<LogicalPlan>, Vec<String>), KrishivError> {
     let mut memo = Default::default();
     let mut next = max_id(&root, &mut memo).saturating_add(1);
     let mut est = Estimator::with_propagation(stats, propagate);
     let mut notes = Vec::new();
+    let mut probe = yields
+        .payload_above
+        .then(|| payload_above::Probe::new(&root, stats));
     let out = dag::rewrite_up(root, &mut |p| {
+        // A later rule that takes the aggregate goes first ([`Yield`]).
+        if probe.as_mut().is_some_and(|pr| pr.takes(&p, &mut est)) {
+            notes.push("not applied: PayloadAboveAggregate takes the aggregate".to_owned());
+            return Ok(p);
+        }
+        if yields
+            .group_code
+            .is_some_and(|force| group_code::takes(&p, &mut est, force))
+        {
+            notes.push("not applied: GroupKeyCode takes the aggregate".to_owned());
+            return Ok(p);
+        }
         let tried = match Shape::of(&p) {
             Some(shape) => shape.push(shape.join, &mut est, &mut next).or_else(|why| {
                 // The dimension the keys need may sit below another one.
@@ -145,6 +166,19 @@ pub(crate) fn rewrite(
         }
     })?;
     Ok((out, notes))
+}
+
+/// The rules after this one that an aggregate goes to first: where
+/// `PayloadAboveAggregate` moves the dimension above it, one aggregate below
+/// the join does the work and nothing merges above it; where `GroupKeyCode`
+/// codes its keys, its measured win (design P2b D2) stays. Both were measured
+/// while this rule never fired on TPC-DS (study 54).
+#[derive(Clone, Copy, Default)]
+pub(crate) struct Yield {
+    /// `PayloadAboveAggregate` runs later in this optimization.
+    pub(crate) payload_above: bool,
+    /// `GroupKeyCode` runs later, and whether it is forced.
+    pub(crate) group_code: Option<bool>,
 }
 
 /// An aggregate over projections and expansions over a join.

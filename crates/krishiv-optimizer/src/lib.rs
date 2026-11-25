@@ -636,13 +636,6 @@ fn run(
                     .and_then(ConfigValue::as_bool)
                     .unwrap_or(true)
             });
-        let root = match stats {
-            Some(stats) if eager => eager_pass(&root, stats, options, expand, joins, &mut t)?,
-            _ => root,
-        };
-        // After eager aggregation (which may pre-empt it) and the final join
-        // order, before pruning: an aggregate's dimension keys travel as one
-        // code (design P2b D2).
         // `krishiv.experimental.groupKeyCodeForce` (measurement only) also
         // switches it on, without the statistics test.
         let forced = udfs.is_some_and(|(_, config)| {
@@ -656,6 +649,28 @@ fn run(
                         .and_then(ConfigValue::as_bool)
                         .unwrap_or(false)
                 }));
+        let above = options.payload_above_aggregate
+            && udfs.is_some_and(|(_, config)| {
+                config
+                    .get(&PAYLOAD_ABOVE_AGGREGATE)
+                    .and_then(ConfigValue::as_bool)
+                    .unwrap_or(false)
+            });
+        // Eager aggregation leaves an aggregate to those two rules when they
+        // take it (`eager::Yield`).
+        let yields = eager::Yield {
+            payload_above: above,
+            group_code: coded.then_some(forced),
+        };
+        let root = match stats {
+            Some(stats) if eager => {
+                eager_pass(&root, stats, options, expand, yields, joins, &mut t)?
+            }
+            _ => root,
+        };
+        // After eager aggregation (which leaves it what it codes) and the final join
+        // order, before pruning: an aggregate's dimension keys travel as one
+        // code (design P2b D2).
         let root = match stats {
             Some(stats) if coded => {
                 let (after, notes) = group_code::rewrite(
@@ -703,13 +718,6 @@ fn run(
         // ordering cannot undo it), eager aggregation and the group-key code
         // see the new aggregate, and the plan is pruned and tidied again
         // (design P2b A5).
-        let above = options.payload_above_aggregate
-            && udfs.is_some_and(|(_, config)| {
-                config
-                    .get(&PAYLOAD_ABOVE_AGGREGATE)
-                    .and_then(ConfigValue::as_bool)
-                    .unwrap_or(false)
-            });
         let root = match stats {
             Some(stats) if above => {
                 // To a fixed point: a move gives a new aggregate, which the
@@ -736,7 +744,8 @@ fn run(
                     }
                     let mut ordered = order_and_restrict(after, stats, options, joins, &mut t)?;
                     if eager {
-                        ordered = eager_pass(&ordered, stats, options, expand, joins, &mut t)?;
+                        ordered =
+                            eager_pass(&ordered, stats, options, expand, yields, joins, &mut t)?;
                     }
                     if coded {
                         let (after, notes) = group_code::rewrite(
@@ -785,7 +794,15 @@ fn run(
                     // the shape eager aggregation reads (where its gates allow,
                     // the aggregate then runs by the dimension's key below it).
                     if eager {
-                        ordered = eager_pass(&ordered, stats, options, expand, joins, &mut t)?;
+                        ordered = eager_pass(
+                            &ordered,
+                            stats,
+                            options,
+                            expand,
+                            eager::Yield::default(),
+                            joins,
+                            &mut t,
+                        )?;
                     }
                     prune_and_tidy(&ordered, Some(stats), &mut t)?
                 }
@@ -993,11 +1010,17 @@ fn eager_pass(
     stats: &dyn Statistics,
     options: &Options,
     expand: bool,
+    yields: eager::Yield,
     joins: join_order::Settings,
     t: &mut Trace,
 ) -> Result<Arc<LogicalPlan>, KrishivError> {
-    let (after, notes) =
-        eager::rewrite(Arc::clone(root), stats, options.stats_propagation, expand)?;
+    let (after, notes) = eager::rewrite(
+        Arc::clone(root),
+        stats,
+        options.stats_propagation,
+        expand,
+        yields,
+    )?;
     t.notes("EagerAggregate", &after, notes);
     // The moved aggregate changes what its join's inputs estimate, and so
     // their canonical order.

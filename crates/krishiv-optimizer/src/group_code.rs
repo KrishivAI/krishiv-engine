@@ -131,6 +131,22 @@ pub(crate) fn rewrite(
     Ok((out, notes))
 }
 
+/// Whether the rule codes the keys of the aggregate `agg`, asked without
+/// rewriting: eager aggregation runs first and yields such an aggregate.
+pub(crate) fn takes(agg: &Arc<LogicalPlan>, est: &mut Estimator<'_>, force: bool) -> bool {
+    let Some(row_number) = row_number() else {
+        return false;
+    };
+    if collated_key(agg).is_some() {
+        return false;
+    }
+    let Some(shape) = Shape::of(agg) else {
+        return false;
+    };
+    let mut next = max_id(agg, &mut Default::default()).saturating_add(1);
+    matches!(shape.code(est, &mut next, &row_number, force), Ok(Some(_)))
+}
+
 /// The column under a `__collation_key` group key of the aggregate `p`, if
 /// any: such a key groups by the collation (condition 3), not by bytes.
 fn collated_key(p: &LogicalPlan) -> Option<String> {
