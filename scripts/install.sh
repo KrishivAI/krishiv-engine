@@ -11,10 +11,13 @@
 # build otherwise.
 #
 # Environment:
+# Flags: --version X.Y.Z (same as KRISHIV_VERSION), --dry-run (say what would happen, change nothing), --help.
+#
 #   KRISHIV_VERSION      release to install, e.g. 0.3.1 or v0.3.1 (default: the latest release)
 #   KRISHIV_INSTALL_DIR  where to put `krishiv` (default: $HOME/.local/bin)
 #   KRISHIV_COMPAT=1     install the compat build even when the CPU could run the fast one
 #   KRISHIV_BASE_URL     where release files are served (default: the GitHub Release; for mirrors and tests)
+#   KRISHIV_NO_ATTEST=1  skip the build attestation check that runs when `gh` is installed
 #   KRISHIV_CPU_FLAGS    override the CPU flag list read from /proc/cpuinfo (tests)
 set -eu
 
@@ -80,7 +83,26 @@ pick_artifact() {
   esac
 }
 
+usage() {
+  cat >&2 <<'USAGE'
+usage: install.sh [--version X.Y.Z] [--dry-run]
+  --version X.Y.Z  install that release (default: the latest)
+  --dry-run        print what would be downloaded and installed; change nothing
+Environment: KRISHIV_VERSION, KRISHIV_INSTALL_DIR, KRISHIV_COMPAT=1, KRISHIV_NO_ATTEST=1, KRISHIV_BASE_URL
+USAGE
+}
+
 main() {
+  dry=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --version) [ $# -ge 2 ] || die "--version needs a value"; KRISHIV_VERSION=$2; shift 2 ;;
+      --version=*) KRISHIV_VERSION=${1#--version=}; shift ;;
+      --dry-run) dry=1; shift ;;
+      -h | --help) usage; exit 0 ;;
+      *) usage; die "unknown argument: $1" ;;
+    esac
+  done
   artifact=$(pick_artifact)
 
   if [ -n "${KRISHIV_BASE_URL:-}" ]; then
@@ -92,6 +114,10 @@ main() {
   fi
 
   dir="${KRISHIV_INSTALL_DIR:-$HOME/.local/bin}"
+  if [ "$dry" = 1 ]; then
+    say "dry run: would download $base/$artifact and $base/SHA256SUMS, verify the checksum, and install $dir/krishiv"
+    return 0
+  fi
   tmp=$(mktemp -d)
   trap 'rm -rf "$tmp"' EXIT INT TERM
 
@@ -105,12 +131,18 @@ main() {
   [ "$want" = "$got" ] || die "checksum mismatch for $artifact (expected $want, got $got); nothing installed"
   say "checksum ok"
 
+  if have gh && [ "${KRISHIV_NO_ATTEST:-}" != 1 ]; then
+    gh attestation verify "$tmp/$artifact" --repo "$REPO" >/dev/null 2>&1 \
+      || die "build attestation check failed for $artifact; nothing installed (set KRISHIV_NO_ATTEST=1 to skip it)"
+    say "attestation ok"
+  fi
+
   mkdir -p "$dir"
   chmod +x "$tmp/$artifact"
   # Move within the target directory first so a running `krishiv` is replaced atomically.
   cp "$tmp/$artifact" "$dir/.krishiv.new"
   mv -f "$dir/.krishiv.new" "$dir/krishiv"
-  say "installed $dir/krishiv"
+  say "installed $dir/krishiv ($("$dir/krishiv" --version 2>/dev/null || echo 'version check failed'))"
 
   case ":$PATH:" in
     *":$dir:"*) ;;
