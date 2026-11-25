@@ -1,11 +1,9 @@
 {
   "cases": {
     "query-features": [
-      14,
       18,
       19,
-      20,
-      22
+      20
     ]
   },
   "file": "join-nearest-by",
