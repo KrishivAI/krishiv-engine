@@ -25,7 +25,7 @@ const nativeError = (
  * A fake addon: each query answers `ipc` in chunks of 7 bytes with its 8-byte end-of-stream marker as a chunk of its
  * own (as the addon sends it), or fails with `fail`.
  */
-function fake(opts: { ipc?: Uint8Array; fail?: Error; hang?: boolean } = {}) {
+function fake(opts: { ipc?: Uint8Array; fail?: Error; hang?: boolean; closeFails?: Error } = {}) {
   const log = { sql: [] as string[], cancels: 0, closes: 0, conf: new Map<string, string>() };
   const addon: NativeAddon = {
     version: () => "0.0.0-test",
@@ -66,6 +66,7 @@ function fake(opts: { ipc?: Uint8Array; fail?: Error; hang?: boolean } = {}) {
           getConf: (k) => log.conf.get(k) ?? null,
           close() {
             log.closes++;
+            if (opts.closeFails) throw opts.closeFails;
           },
         };
       },
@@ -162,6 +163,14 @@ describe("embedded backend (fake addon)", () => {
     await b.close();
     await b.close();
     expect(log.closes).toBe(1);
+  });
+
+  it("a failing close is a KrishivError", async () => {
+    const { addon } = fake({ closeFails: nativeError("INTERNAL_ERROR", "XX000", "krishiv-node: panic: boom") });
+    const b = await embeddedBackend({}, addon);
+    const e = await b.close().catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(KrishivError);
+    expect((e as KrishivError).errorClass).toBe("INTERNAL_ERROR");
   });
 });
 

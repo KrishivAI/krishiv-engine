@@ -31,7 +31,6 @@ pub(crate) fn to_napi(error: &KrishivError) -> napi::Error {
     napi::Error::new(napi::Status::GenericFailure, to_json(error))
 }
 
-/// An `INTERNAL_ERROR` for a failure of the binding itself (Arrow IPC encoding).
 /// `INTERNAL_ERROR` for a panic caught at the Node-API boundary, with its message.
 pub(crate) fn panicked(payload: &(dyn Any + Send)) -> KrishivError {
     let message = payload
@@ -64,6 +63,7 @@ pub(crate) fn napi_guarded<T>(f: impl FnOnce() -> Result<T, KrishivError>) -> na
     guarded(f).map_err(|e| to_napi(&e))
 }
 
+/// An `INTERNAL_ERROR` for a failure of the binding itself (Arrow IPC encoding).
 pub(crate) fn internal(context: &str, cause: impl std::fmt::Display) -> KrishivError {
     InternalError {
         message: format!("krishiv-node: {context}: {cause}"),

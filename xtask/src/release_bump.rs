@@ -71,7 +71,6 @@ fn bump_manifest(text: &str, new: &str, root: bool) -> Option<String> {
     changed.then_some(out)
 }
 
-/// Every `Cargo.toml` under `dir`, skipping build output and worktrees.
 /// `text` with its root `"version": "X"` lines set to `new` (the first one, and in a lockfile the one of
 /// `packages[""]`, the first after `"packages"`), or `None` when they already are. Dependency entries are untouched.
 fn bump_js(text: &str, new: &str) -> Result<Option<String>, String> {
@@ -105,6 +104,7 @@ fn bump_js(text: &str, new: &str) -> Result<Option<String>, String> {
     Ok((out != text).then_some(out))
 }
 
+/// Every `Cargo.toml` under `dir`, skipping build output and worktrees.
 fn manifests(dir: &Path, found: &mut Vec<PathBuf>) -> Result<(), String> {
     for entry in std::fs::read_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))? {
         let entry = entry.map_err(|e| e.to_string())?;

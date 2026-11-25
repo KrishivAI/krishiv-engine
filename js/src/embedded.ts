@@ -156,7 +156,14 @@ function native<T>(f: () => T): T {
  * the query (a cancel after the end would be a no-op anyway).
  */
 async function* chunks(query: NativeQuery, signal?: AbortSignal): AsyncGenerator<Uint8Array> {
-  const onAbort = () => query.cancel();
+  // Runs in an event listener, where a throw (only a panic in the addon) would be uncaught.
+  const onAbort = () => {
+    try {
+      query.cancel();
+    } catch {
+      // The query ends on its next step anyway.
+    }
+  };
   signal?.addEventListener("abort", onAbort, { once: true });
   // An abort between `execute` and here fired no event.
   if (signal?.aborted) query.cancel();
@@ -225,7 +232,7 @@ export class EmbeddedBackend implements Backend {
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
-    this.session.close();
+    native(() => this.session.close());
   }
 }
 

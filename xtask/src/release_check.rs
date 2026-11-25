@@ -38,7 +38,6 @@ pub(crate) fn is_version(v: &str) -> bool {
         })
 }
 
-/// The workspace version from the root manifest.
 /// The npm package's own version and its lockfile's two root entries (`version`, `packages[""].version`), which
 /// follow the workspace version: the package refuses an engine binary of another version.
 pub(crate) const JS_VERSION_FILES: &[&str] = &["js/package.json", "js/package-lock.json"];
@@ -66,6 +65,7 @@ pub(crate) fn js_versions(text: &str) -> Result<Vec<String>, String> {
     Ok(out)
 }
 
+/// The workspace version from the root manifest.
 pub(crate) fn workspace_version(root_manifest: &str) -> Result<String, String> {
     let doc: toml::Table = toml::from_str(root_manifest).map_err(|e| format!("Cargo.toml: {e}"))?;
     doc.get("workspace")
