@@ -286,6 +286,7 @@ fn range_collects_in_slice_order_under_load() {
         io_threads: 1,
         blocking_threads: 8,
         io_blocking_threads: 2,
+        release_when_idle: true,
     })
     .unwrap();
     let session = Session::builder().executor(executor).build().unwrap();

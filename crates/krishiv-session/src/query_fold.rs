@@ -289,6 +289,8 @@ pub(crate) struct HistoryJob {
     pub(crate) trace: Option<serde_json::Value>,
     /// The tables the query scanned and the columns it compared with values, with their statistics.
     pub(crate) scans: Vec<krishiv_exec::profile::ProfileScan>,
+    /// The query's `system.queries.planning_ns`, stamped on its row before the job is made.
+    pub(crate) planning_ns: Option<u64>,
 }
 
 impl crate::session::QueryEnv {
@@ -352,6 +354,7 @@ impl HistoryJob {
             },
             trace: Some(trace),
             scans,
+            planning_ns: state.queries.row_planning_ns(row_id),
         }
     }
 }
@@ -488,6 +491,7 @@ impl QueryFold {
             trace: job.trace,
             scans: job.scans,
             hints,
+            planning_ns: job.planning_ns,
         };
         match &job.hold {
             Some(hold) => hold.offer(entry, store),

@@ -439,3 +439,58 @@ async fn an_unspecified_table_save_method_is_invalid_enum() {
     .expect_err("unspecified");
     assert_eq!(error_class(&status), "CONNECT_INVALID_PLAN.INVALID_ENUM");
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn create_dataframe_view_registers_a_temp_view() {
+    let run = start().await;
+    let view_of = |rows: &str, name: &str, is_global: bool, replace: bool| {
+        command(pb::command::CommandType::CreateDataframeView(Box::new(
+            pb::CreateDataFrameViewCommand {
+                input: Some(sql(rows)),
+                name: name.to_owned(),
+                is_global,
+                replace,
+            },
+        )))
+    };
+    let view = |name: &str, is_global: bool, replace: bool| view_of(ROWS, name, is_global, replace);
+    // Rows that differ from `ROWS`, so a replace that does nothing is seen.
+    let other = "SELECT * FROM VALUES (7, 'g'), (8, 'h') AS t(id, name)";
+    collect(&run.channel, view("tv", false, false))
+        .await
+        .expect("createTempView");
+    assert_eq!(ids(&run, "SELECT id FROM tv").await, [1, 2, 3]);
+    let again = collect(&run.channel, view("tv", false, false))
+        .await
+        .expect_err("the name is taken");
+    assert_eq!(error_class(&again), "TEMP_TABLE_OR_VIEW_ALREADY_EXISTS");
+    collect(&run.channel, view_of(other, "tv", false, true))
+        .await
+        .expect("createOrReplaceTempView");
+    assert_eq!(ids(&run, "SELECT id FROM tv").await, [7, 8]);
+    collect(&run.channel, view("gv", true, false))
+        .await
+        .expect("createGlobalTempView");
+    assert_eq!(ids(&run, "SELECT id FROM global_temp.gv").await, [1, 2, 3]);
+    collect(&run.channel, view_of(other, "gv", true, true))
+        .await
+        .expect("createOrReplaceGlobalTempView");
+    assert_eq!(ids(&run, "SELECT id FROM global_temp.gv").await, [7, 8]);
+    // Spark Connect keeps the last part of a two-part name, local or global.
+    for (name, global, read) in [
+        ("db.`two.parts`", false, "`two.parts`"),
+        ("db.gv2", true, "global_temp.gv2"),
+    ] {
+        collect(&run.channel, view(name, global, false))
+            .await
+            .expect(name);
+        let query = format!("SELECT id FROM {read}");
+        assert_eq!(ids(&run, &query).await, [1, 2, 3], "{name}");
+    }
+    for name in ["a.b.v", "a b", "a-b", "db.", ""] {
+        let refused = collect(&run.channel, view(name, false, false))
+            .await
+            .expect_err(name);
+        assert_eq!(error_class(&refused), "_LEGACY_ERROR_TEMP_1321", "{name}");
+    }
+}

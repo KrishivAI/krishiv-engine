@@ -16,7 +16,7 @@
 //! after each hand-off's rewrite), so nothing that is not leakproof moves below or joins the
 //! policy's filter. A new arm that moves a conjunct calls `admit`.
 
-use std::collections::HashMap;
+use crate::expr::AttrMap;
 use std::sync::Arc;
 
 use krishiv_plan::{
@@ -457,7 +457,7 @@ fn push(
             aggregates,
         } if !keys.is_empty() && aggregates.iter().all(|e| is_deterministic(e)) => {
             let (own, child) = (ids(plan), ids(input));
-            let aliases: HashMap<AttrId, Arc<Expr>> = alias_map(aggregates)
+            let aliases: AttrMap<Arc<Expr>> = alias_map(aggregates)
                 .into_iter()
                 .filter(|(_, e)| !has_aggregate(e))
                 .collect();
@@ -622,7 +622,7 @@ fn push_union(
     let forms: Vec<Vec<Arc<Expr>>> = outs
         .iter()
         .map(|cols| {
-            let map: HashMap<AttrId, Arc<Expr>> = out
+            let map: AttrMap<Arc<Expr>> = out
                 .iter()
                 .zip(cols)
                 .map(|(o, c)| {
@@ -841,7 +841,7 @@ fn rejects_nulls(pred: &Arc<Expr>, side: &LogicalPlan, ids: &Attrs) -> bool {
     let Some(out) = side.resolved_output() else {
         return false;
     };
-    let nulls: HashMap<AttrId, Arc<Expr>> = out
+    let nulls: AttrMap<Arc<Expr>> = out
         .into_iter()
         .filter(|c| refs.contains(&c.id))
         .map(|c| (c.id, lit(Literal::Null(Some(c.data_type)))))
@@ -955,7 +955,7 @@ fn local(p: &Expr, lo: &Attrs, ro: &Attrs) -> Attrs {
 }
 
 /// Output id → the expression an alias computes.
-pub(crate) fn alias_map(exprs: &[Arc<Expr>]) -> HashMap<AttrId, Arc<Expr>> {
+pub(crate) fn alias_map(exprs: &[Arc<Expr>]) -> AttrMap<Arc<Expr>> {
     exprs
         .iter()
         .filter_map(|e| match &e.node {
@@ -969,7 +969,7 @@ pub(crate) fn alias_map(exprs: &[Arc<Expr>]) -> HashMap<AttrId, Arc<Expr>> {
 
 /// A common-subexpression projection's definitions: each `cse_*` output id
 /// and the expression it names.
-pub(crate) fn cse_defs(exprs: &[Arc<Expr>]) -> HashMap<AttrId, Arc<Expr>> {
+pub(crate) fn cse_defs(exprs: &[Arc<Expr>]) -> AttrMap<Arc<Expr>> {
     exprs
         .iter()
         .filter_map(|e| match &e.node {
@@ -1001,14 +1001,14 @@ fn cse_outputs(exprs: &[Arc<Expr>]) -> Attrs {
 
 /// Drops literal-true and repeated deterministic conjuncts.
 fn dedupe(preds: Vec<Arc<Expr>>) -> Vec<Arc<Expr>> {
-    dedupe_in(preds, &HashMap::new())
+    dedupe_in(preds, &AttrMap::default())
 }
 
 /// As [`dedupe`], comparing predicates with common-subexpression columns
 /// replaced by their definitions (see [`cse_definitions`]): a predicate the
 /// pass derived and one it already holds meet however they are spelled.
 /// Keeps the first spelling (the one already in the plan).
-fn dedupe_in(preds: Vec<Arc<Expr>>, defs: &HashMap<AttrId, Arc<Expr>>) -> Vec<Arc<Expr>> {
+fn dedupe_in(preds: Vec<Arc<Expr>>, defs: &AttrMap<Arc<Expr>>) -> Vec<Arc<Expr>> {
     let mut out: Vec<Arc<Expr>> = Vec::with_capacity(preds.len());
     for p in preds {
         if matches!(p.node, ExprNode::Literal(Literal::Boolean(true))) {

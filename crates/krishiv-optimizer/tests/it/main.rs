@@ -28,6 +28,7 @@ mod qerror;
 mod rule_differential;
 mod rules;
 mod semi_order;
+mod share_literal;
 mod share_scan;
 mod share_subtree;
 mod sum_rewrite;

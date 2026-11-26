@@ -3,10 +3,11 @@
 //! aggregate below), and a projection that passes its input through
 //! unchanged disappears, as does an alias that renames nothing.
 
-use std::collections::{HashMap, HashSet};
+use crate::expr::AddrSet;
+use crate::expr::AttrMap;
 use std::sync::Arc;
 
-use krishiv_plan::{AttrId, Expr, ExprNode, Grouping, LogicalPlan, PlanNode, ResolvedExpr};
+use krishiv_plan::{Expr, ExprNode, Grouping, LogicalPlan, PlanNode, ResolvedExpr};
 
 use crate::expr::{has_subquery, is_deterministic, references, strip_alias, substitute};
 
@@ -66,7 +67,7 @@ pub(crate) fn collapse(node: Arc<LogicalPlan>) -> Arc<LogicalPlan> {
 /// either cheap or used once. A subquery that reads an inlined alias, and
 /// (into an aggregate) any subquery, blocks it.
 fn inline(outer: &[Arc<Expr>], inner: &[Arc<Expr>], aggregate: bool) -> Option<Vec<Arc<Expr>>> {
-    let producers: HashMap<AttrId, Arc<Expr>> = inner
+    let producers: AttrMap<Arc<Expr>> = inner
         .iter()
         .filter_map(|e| match &e.node {
             ExprNode::Resolved(ResolvedExpr::Alias { output, .. }) => {
@@ -75,8 +76,8 @@ fn inline(outer: &[Arc<Expr>], inner: &[Arc<Expr>], aggregate: bool) -> Option<V
             _ => None,
         })
         .collect();
-    let mut uses: HashMap<AttrId, usize> = HashMap::new();
-    let mut seen = HashSet::new();
+    let mut uses: AttrMap<usize> = AttrMap::default();
+    let mut seen = AddrSet::default();
     for e in outer {
         let hits = references(e).iter().any(|id| producers.contains_key(id));
         if has_subquery(e) && (hits || aggregate) {
@@ -118,7 +119,7 @@ fn inline(outer: &[Arc<Expr>], inner: &[Arc<Expr>], aggregate: bool) -> Option<V
 /// Adds to `uses` how often each column is read by `e`. A subexpression
 /// shared through `Arc` is walked once; its columns then count as read
 /// twice.
-fn count_uses(e: &Arc<Expr>, uses: &mut HashMap<AttrId, usize>, seen: &mut HashSet<*const Expr>) {
+fn count_uses(e: &Arc<Expr>, uses: &mut AttrMap<usize>, seen: &mut AddrSet<Expr>) {
     let mut stack = vec![e];
     while let Some(x) = stack.pop() {
         if !seen.insert(Arc::as_ptr(x)) {

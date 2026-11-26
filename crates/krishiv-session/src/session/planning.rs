@@ -97,6 +97,8 @@ impl Session {
         Ok((optimized, physical))
     }
 
+    /// A plan made to run adds its planning time to the query's clock (`system.queries.planning_ns`,
+    /// MODES-2); one only inspected (EXPLAIN, estimates) does not, nor does a planning that fails.
     async fn physical_with(
         &self,
         analyzed: &AnalyzedPlan,
@@ -106,6 +108,7 @@ impl Session {
         inspected: bool,
         decisions: bool,
     ) -> Result<(Plan, PhysicalPlan, Vec<krishiv_optimizer::RuleStep>), KrishivError> {
+        let began = std::time::Instant::now();
         let start = self.query_start.unwrap_or_else(query_start_micros);
         // A metric-view read no aggregate rewrote, or a `measure(..)` left over, is analyzable but
         // never plannable (design note `P3-metric-views.md` §4).
@@ -213,6 +216,9 @@ impl Session {
         // warnings; `DataFrame::warnings` returns them too.
         for w in analyzed.warnings.iter().chain(physical.warnings()) {
             tracing::warn!(target: "krishiv::session::warnings", "{w}");
+        }
+        if !inspected {
+            env.planning.add(began.elapsed());
         }
         Ok((optimized, physical, steps))
     }
