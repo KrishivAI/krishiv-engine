@@ -246,6 +246,18 @@ fn an_exact_decimal_argument_under_coalesce_moves() {
     );
 }
 
+/// A product whose type Spark adjusts for precision loss (`decimal(38,10) * decimal(38,10)`) is
+/// not exact decimal arithmetic: it can round or overflow, so under `coalesce` too it stays above
+/// the expansion. `min`, so the refusal is the argument's and not a `sum` buffer's precision.
+#[test]
+fn an_adjusted_decimal_product_under_coalesce_stays() {
+    assert_refuses(
+        "SELECT c, min(coalesce(CAST(c AS decimal(38,10)) * CAST(w AS decimal(38,10)), 0)) \
+         FROM h GROUP BY ROLLUP(c)",
+        "can raise",
+    );
+}
+
 /// Integer `*` raises on overflow under ANSI: it stays above the expansion.
 #[test]
 fn an_integer_product_stays() {
