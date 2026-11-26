@@ -485,7 +485,9 @@ fn a_scripts_statements_are_checked_as_themselves() {
     let (ana, _, seen) = w.ana_seen(Mode::Rule, Role::Operator, false);
     let op = "3e7a1c5b-9d2f-4b8e-a6c4-5f1e2d3c4b5a";
     let options = krishiv_session::QueryOptions::new().operation_id(op);
-    let script = "BEGIN INSERT INTO t VALUES (7, 8); SELECT a FROM t; END";
+    let script = "BEGIN DECLARE n INT; SET n = (SELECT count(*) FROM t); \
+                  IF (SELECT count(*) FROM t) > 0 THEN INSERT INTO t VALUES (7, 8); END IF; \
+                  SELECT a FROM t; END";
     let rows = w
         .tokio
         .block_on(async { ana.sql_with(script, options).await?.collect().await })
@@ -497,19 +499,16 @@ fn a_scripts_statements_are_checked_as_themselves() {
         2
     );
     let checks = std::mem::take(&mut *seen.lock().unwrap());
-    // The SELECT's checks are its own (before the fix every check named the script: `WRITE`).
-    assert!(checks.iter().any(|(c, _)| c == "READ"), "{checks:?}");
+    // Each statement's checks are its own: the SET (`SESSION`), the condition and
+    // the SELECT (`READ`), the INSERT (`WRITE`); before, every check named the script (`WRITE`).
     // A statement's checks carry its own id, never the script's operation id.
-    let leaf = |(c, id): &&(String, String)| (c == "WRITE" || c == "READ") && id != op;
-    assert!(
-        checks.iter().filter(|(c, _)| c == "READ").all(|x| leaf(&x)),
-        "{checks:?}"
-    );
+    let own = |class: &str| checks.iter().any(|(c, id)| c == class && id != op);
+    assert!(own("SESSION") && own("READ") && own("WRITE"), "{checks:?}");
     assert!(
         checks
             .iter()
-            .filter(|(c, _)| c == "WRITE")
-            .any(|x| leaf(&x)),
+            .filter(|(c, _)| c == "SESSION" || c == "READ")
+            .all(|(_, id)| id != op),
         "{checks:?}"
     );
     // What the script itself is asked carries its class and operation id.

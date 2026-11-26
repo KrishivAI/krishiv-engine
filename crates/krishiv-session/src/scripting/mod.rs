@@ -143,6 +143,22 @@ const SESSION: &str = krishiv_sql::StatementClass::Session.name();
 /// The class the query of a condition or of a `FOR` is listed under.
 const READ: &str = krishiv_sql::StatementClass::Read.name();
 
+/// What a policy provider is told a statement of the script is (ADR 0049 §3): `class`, as
+/// `system.queries` lists the statement, and `row`, the slot its query's id goes to. The script's
+/// handle carries no operation id (that names the script), so the id is the statement's minted
+/// row's, never the script's.
+fn statement_context(
+    handle: &Session,
+    class: &'static str,
+    row: &std::sync::Arc<std::sync::Mutex<Option<String>>>,
+) -> crate::access::StatementContext {
+    crate::access::StatementContext::new(
+        class,
+        handle.operation_id().map(crate::QueryId::as_str),
+        std::sync::Arc::clone(row),
+    )
+}
+
 fn unsupported(feature: &str) -> KrishivError {
     KrishivUnsupportedFeature {
         feature: feature.to_owned(),
@@ -307,7 +323,8 @@ impl Run<'_> {
             S::Declare(d) => {
                 let own = self.redacted.fragment(d.span.start..d.span.end);
                 let lister = self.handle();
-                let run = self.declare(d);
+                let context = statement_context(&lister, SESSION, &std::sync::Arc::default());
+                let run = context.scope(Box::pin(self.declare(d)));
                 Box::pin(crate::session::as_listed_script_statement(
                     &lister, own, SESSION, run,
                 ))
@@ -321,7 +338,8 @@ impl Run<'_> {
             S::Assign(set) => {
                 let own = self.redacted.fragment(set.span.start..set.span.end);
                 let lister = self.handle();
-                let run = self.assign(set);
+                let context = statement_context(&lister, SESSION, &std::sync::Arc::default());
+                let run = context.scope(Box::pin(self.assign(set)));
                 Box::pin(crate::session::as_listed_script_statement(
                     &lister, own, SESSION, run,
                 ))
@@ -411,7 +429,13 @@ impl Run<'_> {
             .unwrap_or_default();
         let sql = padded_select("", inner, f.query.span.start, "");
         let handle = self.handle();
-        let analysis = handle.analyze_variable_query(&sql).await?;
+        // The loop's query is checked as the read it is listed as.
+        let env = handle.query_env();
+        let context = statement_context(&handle, READ, &env.row);
+        let analysis = context
+            .clone()
+            .scope(Box::pin(handle.analyze_variable_query_in(&sql, env)))
+            .await?;
         let names: Vec<String> = analysis
             .analyzed
             .output
@@ -433,7 +457,7 @@ impl Run<'_> {
         // Spark reads the query lazily; the rows are held, in the script's pool, for the whole loop.
         // The loop's query is listed under its own text, as a read.
         let own = self.redacted.fragment(f.query.span.start..f.query.span.end);
-        let run = handle.run_analyzed_variable_query(&analysis);
+        let run = context.scope(Box::pin(handle.run_analyzed_variable_query(&analysis)));
         let batches = Box::pin(crate::session::as_script_statement(own, READ, run)).await?;
         let held = self.control.hold(&batches)?;
         let flow = self.for_rows(&batches, &names, &label, &variable, f).await;
@@ -513,14 +537,7 @@ impl Run<'_> {
         let span = statement.span();
         let own = self.redacted.fragment(span.start..span.end);
         let lister = handle.clone();
-        // A policy provider is asked for this statement, as `system.queries` lists it (ADR 0049
-        // §3): its own class and the row its query begins. The handle carries no operation id (that
-        // names the script), so the statement's id is its minted row's, never the script's.
-        let context = crate::access::StatementContext::new(
-            class.name(),
-            handle.operation_id().map(crate::QueryId::as_str),
-            std::sync::Arc::clone(&env.row),
-        );
+        let context = statement_context(&handle, class.name(), &env.row);
         let run = context.scope(async {
             handle.authorize_statement(statement, class, &env).await?;
             self.run_leaf(statement, handle, env).await
@@ -634,7 +651,13 @@ impl Run<'_> {
 
     async fn boolean(&self, sql: &str, shown: &Expr) -> Result<bool, KrishivError> {
         let handle = self.handle();
-        let analysis = handle.analyze_variable_query(sql).await?;
+        // The condition's query is checked as the read it is listed as.
+        let env = handle.query_env();
+        let context = statement_context(&handle, READ, &env.row);
+        let analysis = context
+            .clone()
+            .scope(Box::pin(handle.analyze_variable_query_in(sql, env)))
+            .await?;
         let output = &analysis.analyzed.output;
         let not_boolean = || -> KrishivError {
             InvalidBooleanStatement {
@@ -653,7 +676,7 @@ impl Run<'_> {
         }
         // The condition's query is listed under the condition's text, as a read.
         let own = self.redacted.fragment(shown.span.start..shown.span.end);
-        let run = handle.run_analyzed_variable_query(&analysis);
+        let run = context.scope(Box::pin(handle.run_analyzed_variable_query(&analysis)));
         let batches = Box::pin(crate::session::as_script_statement(own, READ, run)).await?;
         let rows: usize = batches.iter().map(RecordBatch::num_rows).sum();
         if rows == 0 {
