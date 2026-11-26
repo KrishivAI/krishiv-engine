@@ -13,7 +13,8 @@
   "files": [
     "krishiv.node",
     "LICENSE",
-    "NOTICE"
+    "NOTICE",
+    "THIRD-PARTY-NOTICES.txt"
   ],
   "engines": {
     "node": ">=22"

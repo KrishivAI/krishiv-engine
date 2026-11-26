@@ -44,6 +44,11 @@ const NOTICES_USES: &[(&str, &str, &str)] = &[
         "the CLI binaries",
     ),
     (
+        ".github/workflows/publish-js.yml",
+        "third_party_notices.py",
+        "the npm engine packages",
+    ),
+    (
         "docker/Dockerfile",
         "third_party_notices.py",
         "the container image",

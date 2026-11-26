@@ -118,8 +118,11 @@ crates.io keywords and description (drop `datafusion`), the PyPI classifier, the
 - **Third-party notices:** every artifact that links third-party crates carries their license and notice texts,
   written by `.github/scripts/third_party_notices.py` from `cargo metadata` for the artifact's package, features and
   targets: each wheel holds `krishiv/THIRD-PARTY-NOTICES.txt` (the `notices` job in `wheels.yml`), each CLI binary
-  ships beside `<binary>.THIRD-PARTY-NOTICES.txt` (`binaries.yml`), and the image has
-  `/usr/share/doc/krishiv/{LICENSE,NOTICE,THIRD-PARTY-NOTICES.txt}`. The bundle step of `release.yml` fails without
+  ships beside `<binary>.THIRD-PARTY-NOTICES.txt` (`binaries.yml`), each npm engine package
+  `@krishiv/engine-<platform>` holds `THIRD-PARTY-NOTICES.txt` beside `krishiv.node` (`publish-js.yml`; the pack
+  script refuses a package without it), and the image has
+  `/usr/share/doc/krishiv/{LICENSE,NOTICE,THIRD-PARTY-NOTICES.txt}`. A project that publishes its crates without a
+  license file gets its own license file vendored in `.github/scripts/notices/` (napi-rs). The bundle step of `release.yml` fails without
   them, and `cargo xtask release-check` checks that each workflow writes them. Attach the binaries' notices to the
   GitHub Release with the binaries.
 - **PyPI:** trusted publishing over OIDC, no token (`publish-pypi.yml`, `publish-testpypi.yml`).

@@ -11,7 +11,7 @@ name: Publish JS (dry run)
 # Python wheels), linux-x64-musl in musllinux_1_2, darwin-arm64 on macos-15 (11.0+). Windows follows #1002.
 #
 # Runs by hand, when called (`workflow_call`), and on pull requests that change the packaging itself (this file,
-# the platform manifests, the pack script, the build script, the smoke test, the addon crate or the toolchain and
+# the platform manifests, the pack script, the build and notices scripts, the smoke test, the addon crate or the toolchain and
 # lock files); the rest of the engine and js/src are covered by ci.yml's `js` job, which needs no LTO build.
 on:
   workflow_call:
@@ -24,6 +24,7 @@ on:
       - js/scripts/**
       - js/smoke/**
       - .github/scripts/node-smoke.sh
+      - .github/scripts/third_party_notices.py
       # The addon's own build: a change here can break the glibc 2.28, musl or macOS builds, which ci.yml's `js`
       # job (Linux x64 glibc only) does not build.
       - crates/krishiv-node/**
@@ -91,8 +92,10 @@ jobs:
       matrix:
         include:
           - platform: linux-x64-gnu
+            target: x86_64-unknown-linux-gnu
             image: quay.io/pypa/manylinux_2_28_x86_64:2026.10.03-1@sha256:39df0042d5cc900b085aa25a0659368b42a0006c54c474299b785b44c1b4ff82
           - platform: linux-x64-musl
+            target: x86_64-unknown-linux-musl
             image: quay.io/pypa/musllinux_1_2_x86_64:2026.10.03-1@sha256:ff786af69d772d7ac3e318c00a2b682428a352cc822d6175f6a0d4b431c0d44d
     name: addon (${{ matrix.platform }})
     steps:
@@ -112,6 +115,12 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "22"
+      - name: Third-party notices (the crates linked into the addon, with their license texts)
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          python3 -I .github/scripts/third_party_notices.py --package krishiv-node --target "$TARGET" \
+            --title "the krishiv Node-API addon ($TARGET)" --out addon-out/THIRD-PARTY-NOTICES.txt
       - name: Pack
         env:
           PLATFORM: ${{ matrix.platform }}
@@ -143,6 +152,12 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "22"
+      - name: Third-party notices (the crates linked into the addon, with their license texts)
+        env:
+          TARGET: aarch64-unknown-linux-gnu
+        run: |
+          python3 -I .github/scripts/third_party_notices.py --package krishiv-node --target "$TARGET" \
+            --title "the krishiv Node-API addon ($TARGET)" --out addon-out/THIRD-PARTY-NOTICES.txt
       - name: Pack
         env:
           PLATFORM: linux-arm64-gnu
@@ -170,6 +185,12 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "22"
+      - name: Third-party notices (the crates linked into the addon, with their license texts)
+        env:
+          TARGET: aarch64-apple-darwin
+        run: |
+          python3 -I .github/scripts/third_party_notices.py --package krishiv-node --target "$TARGET" \
+            --title "the krishiv Node-API addon ($TARGET)" --out addon-out/THIRD-PARTY-NOTICES.txt
       - name: Pack
         env:
           PLATFORM: darwin-arm64

@@ -177,3 +177,29 @@ def test_the_workspace_cli_resolves(tmp_path: Path) -> None:
     text = out.read_text()
     assert "- arrow-array " in text
     assert "- krishiv-" not in text  # workspace crates are Krishiv's own
+
+
+def test_a_project_without_any_license_file_uses_its_vendored_one(tmp_path: Path) -> None:
+    def crate(name: str, repo: str) -> object:
+        root = tmp_path / name
+        root.mkdir()
+        return tpn.Crate(name, "1", "MIT", repo, root)
+
+    crates = [
+        crate("napi", "https://github.com/napi-rs/napi-rs"),
+        crate("napi-sys", "https://github.com/napi-rs/napi-rs/"),
+        crate("napi-derive", "https://elsewhere/napi-derive"),  # not the repository the file came from
+    ]
+    out = tpn.render("x", crates)
+    assert out.without_files == ["napi-derive 1"]
+    assert "(the package carries no license file: the project's own LICENSE file)" in out.text
+    assert out.text.count("Copyright (c) 2020-present LongYinan") == 1
+    assert "napi 1: napi-rs.LICENSE (the project's LICENSE, kept by Krishiv)" in out.text
+
+
+def test_every_vendored_file_is_there() -> None:
+    for source in tpn.SAME_TEXTS_AS.values():
+        if source.startswith("vendored:"):
+            name = source.removeprefix("vendored:")
+            assert name in tpn.VENDORED_FROM
+            assert (tpn.VENDORED_DIR / name).is_file()

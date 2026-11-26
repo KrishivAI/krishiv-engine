@@ -2,7 +2,8 @@
 // Packs the npm packages of `krishiv` (design/node-engine-napi.md; publish-js.yml). Nothing is published here.
 //
 //   node scripts/npm-packages.mjs platform <platform> <krishiv.node> <out dir>
-//       packs `@krishiv/engine-<platform>` (js/npm/<platform>) with the given addon binary
+//       packs `@krishiv/engine-<platform>` (js/npm/<platform>) with the given addon binary and the
+//       THIRD-PARTY-NOTICES.txt beside it (.github/scripts/third_party_notices.py for krishiv-node)
 //   node scripts/npm-packages.mjs main <out dir>
 //       packs `krishiv` itself (run `npm run build` first), its optionalDependencies naming every platform package
 //
@@ -11,7 +12,7 @@
 import { execFileSync } from "node:child_process";
 import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const js = resolve(fileURLToPath(new URL("..", import.meta.url)));
@@ -28,7 +29,7 @@ function platforms() {
 }
 
 /** `npm pack` of `dir` into `out`; prints and returns the tarball's path. */
-function pack(dir, out) {
+function pack(dir, out, legal = LEGAL) {
   mkdirSync(out, { recursive: true });
   const name = execFileSync("npm", ["pack", "--pack-destination", resolve(out)], { cwd: dir, encoding: "utf8" })
     .trim()
@@ -37,7 +38,7 @@ function pack(dir, out) {
   const path = join(resolve(out), name);
   // Apache-2.0 section 4: the License and the NOTICE travel with every redistribution.
   const entries = execFileSync("tar", ["-tzf", path], { encoding: "utf8" }).split("\n");
-  for (const f of LEGAL) {
+  for (const f of legal) {
     if (!entries.includes(`package/${f}`)) throw new Error(`${path} has no ${f}`);
   }
   console.log(path);
@@ -46,6 +47,8 @@ function pack(dir, out) {
 
 /** The repository's license files, copied into every package. */
 const LEGAL = ["LICENSE", "NOTICE"];
+/** The third-party notices of an addon, in every platform package. */
+const NOTICES = "THIRD-PARTY-NOTICES.txt";
 
 function copyLegal(dir) {
   for (const f of LEGAL) copyFileSync(join(js, "..", f), join(dir, f));
@@ -55,14 +58,18 @@ function packPlatform(platform, binary, out) {
   const src = join(js, "npm", platform);
   if (!existsSync(join(src, "package.json"))) throw new Error(`unknown platform ${platform} (no js/npm/${platform})`);
   if (!existsSync(binary)) throw new Error(`no addon binary at ${binary}`);
+  // The addon links third-party crates statically: their licenses travel with it.
+  const notices = join(dirname(binary), NOTICES);
+  if (!existsSync(notices)) throw new Error(`no ${NOTICES} beside ${binary}`);
   const dir = mkdtempSync(join(tmpdir(), `krishiv-${platform}-`));
   cpSync(src, dir, { recursive: true });
   const pkg = readJson(join(dir, "package.json"));
   pkg.version = version;
   writeJson(join(dir, "package.json"), pkg);
   copyFileSync(binary, join(dir, "krishiv.node"));
+  copyFileSync(notices, join(dir, NOTICES));
   copyLegal(dir);
-  return pack(dir, out);
+  return pack(dir, out, [...LEGAL, NOTICES]);
 }
 
 function packMain(out) {
