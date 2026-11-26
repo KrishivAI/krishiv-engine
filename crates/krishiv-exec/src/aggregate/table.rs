@@ -15,7 +15,9 @@ use super::rowtable::{RowPrepared, RowTable};
 use super::udf::{UdfAcc, check_state, resolve};
 use super::{AggregateExpr, AggregateFunction, AggregateOutput, AggregateSpec};
 use crate::error::{Result, internal};
-use crate::hash::{HashSeed, KeyEncoder, KeyTable, ProbeCount, ProbeTotals, spill_partition};
+use crate::hash::{
+    HashSeed, KeyEncoder, KeyTable, ProbeCount, ProbeTotals, partitions_at, spill_partition_at,
+};
 use crate::rows::RowLayout;
 
 /// What every table of one aggregate shares.
@@ -99,19 +101,21 @@ impl AggCore {
         Ok(Accumulator::new(a, self.spec.ansi)?.legacy_statistical(self.spec.legacy_statistical))
     }
 
-    /// Row indices of a state batch per spill partition at `level`.
+    /// Row indices of a state batch per spill partition at `level` (level 0
+    /// `level0_bits` wide).
     pub(crate) fn partitions_of(
         &self,
         batch: &RecordBatch,
         seed: &HashSeed,
         level: u32,
+        level0_bits: u32,
     ) -> Result<Vec<Vec<u32>>> {
-        let mut parts = vec![Vec::new(); crate::hash::PARTITIONS];
+        let mut parts = vec![Vec::new(); partitions_at(level, level0_bits)];
         let rows = self.encode(&batch.columns()[..self.keys()], batch.num_rows())?;
         for (i, r) in rows.iter().enumerate() {
             let p = rows
                 .as_ref()
-                .map_or(0, |_| spill_partition(seed.hash(r), level));
+                .map_or(0, |_| spill_partition_at(seed.hash(r), level, level0_bits));
             parts[p].push(u32::try_from(i).map_err(|_| internal("batch too large".to_owned()))?);
         }
         Ok(parts)
@@ -400,15 +404,15 @@ impl AggTable {
         self::batch(&core.state_schema, out, n)
     }
 
-    /// Group ids per spill partition at `level`.
-    pub(crate) fn ids_by_partition(&self, level: u32) -> Vec<Vec<u32>> {
-        let mut parts = vec![Vec::new(); crate::hash::PARTITIONS];
+    /// Group ids per spill partition at `level` (level 0 `level0_bits` wide).
+    pub(crate) fn ids_by_partition(&self, level: u32, level0_bits: u32) -> Vec<Vec<u32>> {
+        let mut parts = vec![Vec::new(); partitions_at(level, level0_bits)];
         if self.core.keys() == 0 {
             parts[0].push(0);
             return parts;
         }
         for (id, &h) in (0u32..).zip(self.keys.hashes()) {
-            parts[spill_partition(h, level)].push(id);
+            parts[spill_partition_at(h, level, level0_bits)].push(id);
         }
         parts
     }
@@ -624,27 +628,38 @@ impl Table {
         }
     }
 
-    /// Group ids per spill partition at `level`, of the groups at
-    /// positions `from..` (ids are positions only for an `AggTable`).
-    pub(crate) fn ids_by_partition(&self, level: u32, from: usize) -> Vec<Vec<u32>> {
+    /// Group ids per spill partition at `level` (level 0 `level0_bits`
+    /// wide), of the groups at positions `from..` (ids are positions only
+    /// for an `AggTable`).
+    pub(crate) fn ids_by_partition(
+        &self,
+        level: u32,
+        level0_bits: u32,
+        from: usize,
+    ) -> Vec<Vec<u32>> {
         match self {
             Self::Keys(t) => {
-                let mut parts = t.ids_by_partition(level);
+                let mut parts = t.ids_by_partition(level, level0_bits);
                 for ids in &mut parts {
                     ids.retain(|&i| i as usize >= from);
                 }
                 parts
             }
-            Self::Rows(t) => t.ids_by_partition(level, from),
+            Self::Rows(t) => t.ids_by_partition(level, level0_bits, from),
         }
     }
 
     /// Row indices of a state batch per spill partition at `level`, by the
     /// same function as [`ids_by_partition`](Self::ids_by_partition).
-    pub(crate) fn partitions_of(&self, b: &RecordBatch, level: u32) -> Result<Vec<Vec<u32>>> {
+    pub(crate) fn partitions_of(
+        &self,
+        b: &RecordBatch,
+        level: u32,
+        level0_bits: u32,
+    ) -> Result<Vec<Vec<u32>>> {
         match self {
-            Self::Keys(t) => t.core.partitions_of(b, &t.seed, level),
-            Self::Rows(t) => t.partitions_of(b, level),
+            Self::Keys(t) => t.core.partitions_of(b, &t.seed, level, level0_bits),
+            Self::Rows(t) => t.partitions_of(b, level, level0_bits),
         }
     }
 }

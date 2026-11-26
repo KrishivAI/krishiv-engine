@@ -110,8 +110,8 @@ pub(super) fn append(env: &Env, catalog: &Arc<Catalog>, batch: RecordBatch) {
 
 /// One row-level statement against the table as the provider pinned it.
 pub(super) struct Dml<'a> {
-    env: &'a Env,
-    table: Arc<dyn RowLevelTable>,
+    pub(super) env: &'a Env,
+    pub(super) table: Arc<dyn RowLevelTable>,
     op: RowLevelOperation,
     lineage: bool,
     key: Option<String>,
@@ -152,7 +152,7 @@ impl<'a> Dml<'a> {
         StructType::new(fields)
     }
 
-    fn query(&self, scan: Arc<dyn ScanPushdown>, sql: &str) -> Vec<RecordBatch> {
+    pub(super) fn query(&self, scan: Arc<dyn ScanPushdown>, sql: &str) -> Vec<RecordBatch> {
         session(vec![("t", self.columns(), Arc::new(Over(scan)))])
             .run(sql)
             .unwrap_or_else(|e| panic!("{sql}: {e}"))
@@ -181,7 +181,7 @@ impl<'a> Dml<'a> {
     }
 
     /// The schema the rewriter takes.
-    fn input(&self) -> SchemaRef {
+    pub(super) fn input(&self) -> SchemaRef {
         let mut fields: Vec<_> = input_schema().fields().iter().cloned().collect();
         if self.lineage {
             fields.extend(lineage_fields());
