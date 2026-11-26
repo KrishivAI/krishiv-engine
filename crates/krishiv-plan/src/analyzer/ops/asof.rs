@@ -35,6 +35,13 @@ impl Resolver<'_> {
         };
         let first = operand(self, &m.left)?;
         let second = operand(self, &m.right)?;
+        // Spark's `ResolveAsOfJoin` waits for the `ON` condition to resolve
+        // (`condition.forall(_.resolved)`), so a condition that does not resolve (an unknown
+        // name or function, a type mismatch) is reported before any as-of check.
+        let on = match on {
+            Some(c) => Some(self.bind(c, &Self::cx(&scope, &rels, env, "Join"))?),
+            None => None,
+        };
         let shown = |b: &Bound| format!("\"{}\"", pretty(&b.shown(), zone));
         // A side's columns include what an earlier `USING` or `NATURAL` join merged away (its
         // hidden output, reachable by qualified name): Spark's `AddMetadataColumns` adds those to
@@ -54,14 +61,8 @@ impl Resolver<'_> {
         if both(&refs1) || both(&refs2) {
             // Spark runs this check in the first pass that resolves the `ON` condition, before
             // the operands resolve, so it names them as they stand then (`as_checked_in`).
-            let pass = match on {
-                Some(c) => self
-                    .bind(c, &Self::cx(&scope, &rels, env, "Join"))
-                    .map_or(1, |b| resolved_pass(&b.shown())),
-                None => 1,
-            };
-            let checked =
-                |b: &Bound| format!("\"{}\"", pretty(&as_checked_in(&b.shown(), pass), zone));
+            let pass = on.as_ref().map_or(1, resolved_pass);
+            let checked = |b: &Bound| format!("\"{}\"", pretty(&as_checked_in(b, pass), zone));
             return Err(AnalysisError::new(
                 AsofJoinMatchConditionTableReference {
                     refs1: checked(&first),
@@ -113,7 +114,6 @@ impl Resolver<'_> {
                 None
             }
         };
-        let (written_first, written_second) = (Arc::clone(&first.expr), Arc::clone(&second.expr));
         let (left, right, direction) = match (side(&refs1, true), side(&refs2, false)) {
             (Some(true), Some(false)) => (first, second, m.direction),
             (Some(false), Some(true)) => (second, first, m.direction.flip()),
@@ -153,22 +153,24 @@ impl Resolver<'_> {
         } else {
             (&left.expr, &right.expr)
         };
-        // Spark's `CheckAnalysis` then checks the comparison as written: a pair the as-of rule
-        // accepts and the operator does not (an interval against a STRING) is the operator's
-        // own error, `"(dti <= s)"`.
-        let written = match (m.direction, m.allow_exact) {
-            // Nearest is Connect only, which writes no operator.
-            (crate::AsOfDirection::Backward, true) | (crate::AsOfDirection::Nearest, _) => ">=",
-            (crate::AsOfDirection::Backward, false) => ">",
-            (crate::AsOfDirection::Forward, true) => "<=",
-            (crate::AsOfDirection::Forward, false) => "<",
+        // Spark's `CheckAnalysis` then checks the as-of condition `buildMatchExpressions` built
+        // (`makeAsOfCond` on Connect): the operator of the normalized direction over the
+        // normalized operands, structs rebuilt field by field (`alignOperandsForComparison`). A
+        // pair the as-of rule accepts and the operator does not (an interval against a STRING) is
+        // the operator's own error, `"(dti <= s)"` for `s >= dti` written right side first.
+        let condition = match (direction, m.allow_exact) {
+            (crate::AsOfDirection::Backward, true) => Some(">="),
+            (crate::AsOfDirection::Backward, false) => Some(">"),
+            (crate::AsOfDirection::Forward, true) => Some("<="),
+            (crate::AsOfDirection::Forward, false) => Some("<"),
+            // Connect's nearest match: `true` with exact matches, else `NOT (l = r)`.
+            (crate::AsOfDirection::Nearest, true) => None,
+            (crate::AsOfDirection::Nearest, false) => Some("="),
         };
-        self.call(
-            written,
-            vec![Arc::clone(&written_first), Arc::clone(&written_second)],
-            env,
-            origin,
-        )?;
+        if let Some(op) = condition {
+            let (l, r) = self.aligned(&left.expr, &right.expr, env, origin)?;
+            self.call(op, vec![l, r], env, origin)?;
+        }
         // The two values meet at the type a comparison of them casts both to.
         let compared = self.call(
             ">=",
@@ -206,7 +208,34 @@ impl Resolver<'_> {
                 origin,
             ));
         };
-        let (left, right) = (Arc::clone(left), Arc::clone(right));
+        // An untyped `NULL` value stays `NullType` in the comparison and matches no row: it
+        // takes the other value's type, so both sides of the merge have one type. Against an
+        // array or a struct, which the merge does not sort yet (design unit 1), both values are
+        // an `INT` NULL instead: the rows the join returns are the same, none matched.
+        let (left, right) = match (null_type(left), null_type(right)) {
+            (true, false) | (false, true) => {
+                let (null, other) = if null_type(left) {
+                    (left, right)
+                } else {
+                    (right, left)
+                };
+                match other.resolved_type() {
+                    Some(t) if !t.is_nested() => {
+                        let cast = cast_null(null, t);
+                        if null_type(left) {
+                            (cast, Arc::clone(right))
+                        } else {
+                            (Arc::clone(left), cast)
+                        }
+                    }
+                    _ => (
+                        cast_null(left, DataType::Integer),
+                        cast_null(right, DataType::Integer),
+                    ),
+                }
+            }
+            _ => (Arc::clone(left), Arc::clone(right)),
+        };
         let tolerance = match &m.tolerance {
             None => None,
             Some(t) => Some(self.bind(t, &Self::cx(&[], &[], env, "Join"))?.expr),
@@ -222,6 +251,104 @@ impl Resolver<'_> {
             as_written: false,
         })
     }
+
+    /// Spark's `alignOperandsForComparison`: two structs of one field count are compared as
+    /// structs rebuilt from their fields (`CreateStruct`, field pairs aligned the same way), so
+    /// the comparison and its error name them `named_struct(d, d)` whatever names were written.
+    fn aligned(
+        &mut self,
+        l: &Arc<Expr>,
+        r: &Arc<Expr>,
+        env: &Arc<Env>,
+        origin: Origin,
+    ) -> Result<(Arc<Expr>, Arc<Expr>), AnalysisError> {
+        let (Some(DataType::Struct(a)), Some(DataType::Struct(b))) =
+            (l.resolved_type(), r.resolved_type())
+        else {
+            return Ok((Arc::clone(l), Arc::clone(r)));
+        };
+        if a.fields().is_empty() || a.fields().len() != b.fields().len() {
+            return Ok((Arc::clone(l), Arc::clone(r)));
+        }
+        let (left_fields, right_fields) = (struct_fields(l, &a), struct_fields(r, &b));
+        let (mut ls, mut rs) = (Vec::new(), Vec::new());
+        for (i, (x, y)) in left_fields.iter().zip(&right_fields).enumerate() {
+            let (x, y) = self.aligned(x, y, env, origin)?;
+            ls.extend([field_name(&x, i), x]);
+            rs.extend([field_name(&y, i), y]);
+        }
+        Ok((
+            self.call("named_struct", ls, env, origin)?,
+            self.call("named_struct", rs, env, origin)?,
+        ))
+    }
+}
+
+/// The field values of the struct `e` of type `t` (Spark's `structFieldExprs`): a
+/// `named_struct`'s values, else each field read from `e` (`GetStructField`).
+fn struct_fields(e: &Arc<Expr>, t: &krishiv_types::StructType) -> Vec<Arc<Expr>> {
+    if let ExprNode::Resolved(ResolvedExpr::Function(f)) = &e.node
+        && matches!(f.id, FunctionId::Registry { .. })
+        && f.id.name() == "named_struct"
+        && f.args.len() == 2 * t.fields().len()
+    {
+        return f.args.iter().skip(1).step_by(2).cloned().collect();
+    }
+    let base_nullable = nullable(e);
+    t.fields()
+        .iter()
+        .enumerate()
+        .map(|(ordinal, field)| {
+            Arc::new(
+                Expr::new(ExprNode::Resolved(ResolvedExpr::Field {
+                    base: Arc::clone(e),
+                    ordinal,
+                    name: field.name().to_owned(),
+                    data_type: field.data_type().clone(),
+                    nullable: base_nullable || field.nullable(),
+                }))
+                .with_origin(e.origin),
+            )
+        })
+        .collect()
+}
+
+/// The name `CreateStruct` gives the value `e` at `i`: a column's, an alias's or a field's
+/// name, else `col<i + 1>`.
+fn field_name(e: &Arc<Expr>, i: usize) -> Arc<Expr> {
+    let name = match &e.node {
+        ExprNode::Resolved(
+            ResolvedExpr::Column(c) | ResolvedExpr::OuterColumn(c) | ResolvedExpr::LambdaVar(c),
+        ) => c.name.clone(),
+        ExprNode::Resolved(ResolvedExpr::Alias { output, .. }) => output.name.clone(),
+        ExprNode::Resolved(ResolvedExpr::Field { name, .. }) => name.clone(),
+        _ => format!("col{}", i + 1),
+    };
+    Arc::new(Expr::new(ExprNode::Literal(Literal::String(name))).with_origin(e.origin))
+}
+
+/// Whether the resolved value `e` may be null (true when it cannot tell).
+fn nullable(e: &Expr) -> bool {
+    match &e.node {
+        ExprNode::Resolved(
+            ResolvedExpr::Column(c) | ResolvedExpr::OuterColumn(c) | ResolvedExpr::LambdaVar(c),
+        ) => c.nullable,
+        ExprNode::Resolved(ResolvedExpr::Function(f)) => f.nullable,
+        ExprNode::Resolved(ResolvedExpr::Field { nullable, .. }) => *nullable,
+        ExprNode::Resolved(ResolvedExpr::Alias { output, .. }) => output.nullable,
+        ExprNode::Literal(l) => matches!(l, Literal::Null(_)),
+        _ => true,
+    }
+}
+
+/// Whether the resolved value `e` is an untyped `NULL` (Spark's `NullType`).
+fn null_type(e: &Expr) -> bool {
+    matches!(e.resolved_type(), None | Some(DataType::Null))
+}
+
+/// A `NULL` of type `to`, at `at`'s origin (a `NULL` of any type is the same value).
+fn cast_null(at: &Arc<Expr>, to: DataType) -> Arc<Expr> {
+    Arc::new(Expr::new(ExprNode::Literal(Literal::Null(Some(to)))).with_origin(at.origin))
 }
 
 /// An operand as Spark's table-reference check names it. `ResolveAsOfJoin` checks the operands
@@ -229,64 +356,165 @@ impl Resolver<'_> {
 /// (`condition.forall(_.resolved)`), pass `pass` (`resolved_pass` of the condition, 1 without
 /// one). Each node resolves in some pass: a leaf in pass 1; any other node is built (by the one
 /// bottom-up `ResolveBinaryArithmetic` of a pass) in the pass its children are all resolved, and
-/// resolves in that pass, or one later for the datetime nodes that need a time zone
-/// (`TimeAdd`, `TimestampAddYMInterval`, `DateAddInterval`, `DatetimeSub`, `SubtractTimestamps`,
-/// a comparison that casts a side to TIMESTAMP): `ResolveTimeZone` runs before the rewrite. A node
-/// built by `pass` shows as rewritten, `trade_time + (quote_time - trade_time)`; a later one as
-/// the operator written, `(trade_time + (quote_time - trade_time))`. Explicit casts already have
-/// their zone (Spark 4.3.0 runs, `opus1-asof-ref`, `rev-f2-asof-ref`, `opus1-f5`).
-fn as_checked_in(e: &Arc<Expr>, pass: u32) -> Arc<Expr> {
-    spark_passes(e, Some(pass)).0
+/// resolves in that pass, or one later when it needs a time zone: the datetime nodes
+/// (`TimeAdd`, `TimestampAddYMInterval`, `DateAddInterval`, `DatetimeSub`, `SubtractTimestamps`)
+/// and any node whose coercion adds an implicit cast that needs one (`Cast.needsTimeZone`: a
+/// comparison, `IN`, `coalesce`, `hour(string)`, ...), since `ResolveTimeZone` runs before the
+/// rewrite and the coercion rules. A node built by `pass` shows as rewritten,
+/// `trade_time + (quote_time - trade_time)`; a later one as the operator written,
+/// `(trade_time + (quote_time - trade_time))`. Explicit casts already have their zone (Spark
+/// 4.3.0 runs, `opus1-asof-ref`, `rev-f2-asof-ref`, `opus1-f5`, `rev-f1-spark/delta8c9`).
+fn as_checked_in(b: &Bound, pass: u32) -> Arc<Expr> {
+    spark_passes(b, Some(pass)).0
 }
 
-/// The analyzer pass in which Spark resolves the shown expression `e` (see `as_checked_in`).
-fn resolved_pass(e: &Arc<Expr>) -> u32 {
-    spark_passes(e, None).1
+/// The analyzer pass in which Spark resolves `b` (see `as_checked_in`).
+fn resolved_pass(b: &Bound) -> u32 {
+    spark_passes(b, None).1
 }
 
-/// `e` with each node built after `pass` shown as the operator written (unchanged without a
-/// pass), and the pass in which `e` resolves.
-fn spark_passes(e: &Arc<Expr>, pass: Option<u32>) -> (Arc<Expr>, u32) {
-    // The pass each output resolves in, by address; `kept` holds each alive so no address is
-    // reused while the map is read.
-    let mut resolved: HashMap<*const Expr, u32> = HashMap::new();
-    let mut kept: Vec<Arc<Expr>> = Vec::new();
-    let out = Arc::clone(e).transform_up(&mut |x: Arc<Expr>| {
-        let mut built = 1;
-        x.for_each_child(&mut |c| {
-            built = built.max(resolved.get(&Arc::as_ptr(c)).copied().unwrap_or(1));
-        });
-        let call = match &x.node {
-            ExprNode::Resolved(ResolvedExpr::Function(f)) => match f.id {
-                FunctionId::Builtin(id) => Some((id, f)),
-                _ => None,
-            },
-            _ => None,
-        };
-        let (zoned, plain) = call.map_or((false, None), |(id, f)| {
-            (zoned_rewrite(id, f), plain_operator(id))
-        });
-        let x = match (call, plain) {
-            // Not rewritten: Spark's `Add`/`Subtract` over the operands, `(l + r)`.
-            (Some((_, f)), Some(op)) if pass.is_some_and(|p| built > p) => {
-                let mut g = f.clone();
-                g.id = FunctionId::Builtin(op);
-                Arc::new(
-                    Expr::new(ExprNode::Resolved(ResolvedExpr::Function(g))).with_origin(x.origin),
-                )
-            }
-            _ => x,
-        };
-        resolved.insert(Arc::as_ptr(&x), built + u32::from(zoned));
-        kept.push(Arc::clone(&x));
+/// `b` as shown, with each node built after `pass` shown as the operator written (unchanged
+/// without a pass), and the pass in which `b` resolves.
+fn spark_passes(b: &Bound, pass: Option<u32>) -> (Arc<Expr>, u32) {
+    let shown = b.shown();
+    let zoned_casts = zoned_implicit_casts(&b.expr, &shown);
+    // Keyed by the address of a node of `shown`, which stays alive for the walk.
+    let mut memo = HashMap::new();
+    passes(&shown, pass, &zoned_casts, &mut memo)
+}
+
+/// One node of `spark_passes`: `e` rewritten and the pass it resolves in. Recurses once per
+/// level, as `Expr::transform_up` does (operands are within `MAX_DEPTH`).
+fn passes(
+    e: &Arc<Expr>,
+    pass: Option<u32>,
+    zoned_casts: &HashSet<*const Expr>,
+    memo: &mut HashMap<*const Expr, (Arc<Expr>, u32)>,
+) -> (Arc<Expr>, u32) {
+    if let Some((x, p)) = memo.get(&Arc::as_ptr(e)) {
+        return (Arc::clone(x), *p);
+    }
+    let mut built = 1;
+    let rebuilt = Arc::clone(e).map_children(|c| {
+        let (x, p) = passes(&c, pass, zoned_casts, memo);
+        built = built.max(p);
         Ok::<_, std::convert::Infallible>(x)
     });
-    let out = match out {
+    let rebuilt = match rebuilt {
         Ok(x) => x,
         Err(never) => match never {},
     };
-    let pass = resolved.get(&Arc::as_ptr(&out)).copied().unwrap_or(1);
-    (out, pass)
+    let call = match &rebuilt.node {
+        ExprNode::Resolved(ResolvedExpr::Function(f)) => match f.id {
+            FunctionId::Builtin(id) => Some((id, f)),
+            _ => None,
+        },
+        _ => None,
+    };
+    let zoned = zoned_casts.contains(&Arc::as_ptr(e))
+        || call.is_some_and(|(id, f)| zoned_rewrite(id, f))
+        || matches!(
+            &rebuilt.node,
+            ExprNode::Resolved(ResolvedExpr::Function(f)) if casts_to_timestamp(f)
+        );
+    let x = match call.and_then(|(id, f)| plain_operator(id).map(|op| (op, f))) {
+        // Not rewritten: Spark's `Add`/`Subtract` over the operands, `(l + r)`.
+        Some((op, f)) if pass.is_some_and(|p| built > p) => {
+            let mut g = f.clone();
+            g.id = FunctionId::Builtin(op);
+            Arc::new(
+                Expr::new(ExprNode::Resolved(ResolvedExpr::Function(g)))
+                    .with_origin(rebuilt.origin),
+            )
+        }
+        _ => Arc::clone(&rebuilt),
+    };
+    let p = built + u32::from(zoned);
+    memo.insert(Arc::as_ptr(e), (Arc::clone(&x), p));
+    (x, p)
+}
+
+/// The nodes of `shown` whose bound form `bound` casts a child implicitly to or from a type that
+/// needs a time zone (`Cast.needsTimeZone`). The shown form is the bound one without the implicit
+/// casts, so the two are walked side by side: a bound cast the shown node has not (with its target
+/// type) is implicit. Where the two differ in shape (a shown rewrite) the walk stops.
+fn zoned_implicit_casts(bound: &Arc<Expr>, shown: &Arc<Expr>) -> HashSet<*const Expr> {
+    let mut zoned = HashSet::new();
+    let mut seen = HashSet::new();
+    let mut stack = vec![(Arc::clone(bound), Arc::clone(shown))];
+    while let Some((b, s)) = stack.pop() {
+        if !seen.insert((Arc::as_ptr(&b), Arc::as_ptr(&s))) {
+            continue;
+        }
+        let mut bound_kids = Vec::new();
+        b.for_each_child(&mut |c| bound_kids.push(Arc::clone(c)));
+        let mut shown_kids = Vec::new();
+        s.for_each_child(&mut |c| shown_kids.push(Arc::clone(c)));
+        if bound_kids.len() != shown_kids.len() {
+            // A shown call over another shape (`between(x, lo, hi)` bound as two comparisons):
+            // a zoned cast of the bound form the shown form does not write is implicit.
+            if zoned_casts(&b) > zoned_casts(&s) {
+                zoned.insert(Arc::as_ptr(&s));
+            }
+            continue;
+        }
+        for (mut bk, sk) in bound_kids.into_iter().zip(shown_kids) {
+            // A bound cast the shown node has not (with its target type) is implicit.
+            while let ExprNode::Cast { expr, to, .. } = &bk.node
+                && !matches!(&sk.node, ExprNode::Cast { to: t, .. } if t == to)
+            {
+                if shown_type(expr).is_some_and(|from| needs_time_zone(&from, to)) {
+                    zoned.insert(Arc::as_ptr(&s));
+                }
+                let inner = Arc::clone(expr);
+                bk = inner;
+            }
+            stack.push((bk, sk));
+        }
+    }
+    zoned
+}
+
+/// How many casts that need a time zone `e` holds (outside subqueries).
+fn zoned_casts(e: &Arc<Expr>) -> usize {
+    let mut n = 0;
+    let _ = crate::walk::visit_distinct(crate::walk::Node::Expr(e), |node| {
+        if let crate::walk::Node::Expr(x) = node
+            && let ExprNode::Cast { expr, to, .. } = &x.node
+            && shown_type(expr).is_some_and(|from| needs_time_zone(&from, to))
+        {
+            n += 1;
+        }
+        std::ops::ControlFlow::<()>::Continue(())
+    });
+    n
+}
+
+/// Spark's `Cast.needsTimeZone(from, to)` over Krishiv's types.
+fn needs_time_zone(from: &DataType, to: &DataType) -> bool {
+    use DataType as T;
+    match (from, to) {
+        (T::Variant, _)
+        | (T::String | T::CollatedString(_) | T::Date | T::TimestampNtz, T::Timestamp)
+        | (
+            T::Timestamp,
+            T::String | T::CollatedString(_) | T::Date | T::TimestampNtz | T::Time { .. },
+        )
+        | (T::Time { .. }, T::TimestampNtz | T::Timestamp) => true,
+        (T::Array(a), T::Array(b)) => needs_time_zone(a.element_type(), b.element_type()),
+        (T::Map(a), T::Map(b)) => {
+            needs_time_zone(a.key_type(), b.key_type())
+                || needs_time_zone(a.value_type(), b.value_type())
+        }
+        (T::Struct(a), T::Struct(b)) => {
+            a.fields().len() == b.fields().len()
+                && a.fields()
+                    .iter()
+                    .zip(b.fields())
+                    .any(|(f, g)| needs_time_zone(f.data_type(), g.data_type()))
+        }
+        _ => false,
+    }
 }
 
 /// Whether Spark's node for the shown call `f` needs a time zone, so it resolves one pass after
@@ -310,29 +538,27 @@ fn zoned_rewrite(id: Builtin, f: &ResolvedFunction) -> bool {
         // `SubtractTimestamps` shows as `-` already; a timestamp on either side makes one.
         Builtin::Subtract => (0..f.args.len())
             .any(|i| matches!(arg(i), Some(DataType::Timestamp | DataType::TimestampNtz))),
-        // A comparison whose coercion casts a side to TIMESTAMP (`Cast.needsTimeZone`): the
-        // implicit cast is added after `ResolveTimeZone` of its pass.
-        Builtin::Eq
-        | Builtin::EqNullSafe
-        | Builtin::Lt
-        | Builtin::LtEq
-        | Builtin::Gt
-        | Builtin::GtEq => {
-            let zoned_with_timestamp = |t: Option<DataType>| {
-                matches!(
-                    t,
-                    Some(DataType::String | DataType::Date | DataType::TimestampNtz)
-                )
-            };
-            match (arg(0), arg(1)) {
-                (Some(DataType::Timestamp), other) | (other, Some(DataType::Timestamp)) => {
-                    zoned_with_timestamp(other)
-                }
-                _ => false,
-            }
-        }
         _ => false,
     }
+}
+
+/// Whether Spark casts an argument of `f` to TIMESTAMP that Krishiv's kernel reads as written,
+/// so the bound form has no cast to find: Spark's `inputTypes` take TIMESTAMP there
+/// (`DateFormatClass`, `TruncTimestamp`; `GetTimeField`'s `AnyTimestampType` defaults a DATE or
+/// STRING to TIMESTAMP), and that implicit cast needs a time zone (Spark 4.3.0 source,
+/// `datetimeExpressions.scala`; `date_format(t.d, 'yyyy')` run in `opus1-r3`).
+fn casts_to_timestamp(f: &ResolvedFunction) -> bool {
+    let (at, ntz) = match f.id.name() {
+        "date_format" => (0, true),
+        "date_trunc" => (1, true),
+        "hour" | "minute" | "second" => (0, false),
+        _ => return false,
+    };
+    let t = f.args.get(at).and_then(|a| shown_type(a));
+    matches!(
+        t,
+        Some(DataType::Date | DataType::String | DataType::CollatedString(_))
+    ) || (ntz && matches!(t, Some(DataType::TimestampNtz)))
 }
 
 /// The operator a datetime call is written as.
@@ -480,10 +706,10 @@ fn operands_compatible(a: Option<&DataType>, b: Option<&DataType>, case_sensitiv
             if x.equals_structurally(y, true) {
                 super::super::coerce::orderable(x)
             } else {
-                positional_structs(x, y)
+                positional_structs(x, y, case_sensitive)
             }
         }
-        (Some(x), Some(y)) if positional_structs(x, y) => true,
+        (Some(x), Some(y)) if positional_structs(x, y, case_sensitive) => true,
         _ => {
             let (x, y) = (
                 super::super::coerce::Arg {
@@ -503,14 +729,15 @@ fn operands_compatible(a: Option<&DataType>, b: Option<&DataType>, case_sensitiv
     }
 }
 
-/// Structs of one field count, each field pair compatible (names may differ).
-fn positional_structs(a: &DataType, b: &DataType) -> bool {
+/// Structs of one field count, each field pair compatible (names may differ; a wider type of a
+/// nested pair matches its names under `case_sensitive`, as Spark's session resolver does).
+fn positional_structs(a: &DataType, b: &DataType, case_sensitive: bool) -> bool {
     match (a, b) {
         (DataType::Struct(x), DataType::Struct(y)) => {
             !x.fields().is_empty()
                 && x.fields().len() == y.fields().len()
                 && x.fields().iter().zip(y.fields()).all(|(f, g)| {
-                    operands_compatible(Some(f.data_type()), Some(g.data_type()), true)
+                    operands_compatible(Some(f.data_type()), Some(g.data_type()), case_sensitive)
                 })
         }
         _ => false,

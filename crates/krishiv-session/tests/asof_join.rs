@@ -567,6 +567,122 @@ fn match_condition_errors_are_sparks() {
             "{sql}"
         );
     }
+    on_condition_passes_and_errors(&s);
+}
+
+/// Any implicit cast that needs a time zone delays the `ON` condition one pass, whatever node adds
+/// it (`IN`, `BETWEEN`, `coalesce`, `CASE`, a function's argument), and an `ON` condition that does
+/// not resolve is reported before any as-of check (Spark 4.3.0 runs, `rev-f1-spark/delta8c9`
+/// p11-p22, `opus1-r3` r3 and r4; review of 8c9ab3fba findings 3 and 4).
+fn on_condition_passes_and_errors(s: &Session) {
+    for sql in [
+        "CREATE OR REPLACE TEMP VIEW trades_d AS SELECT * FROM VALUES (1, \
+         TIMESTAMP'2024-01-01 10:00:00', '2024-01-01 10:00:00', DATE'2024-01-01') \
+         AS t(k, trade_time, s, d)",
+        "CREATE OR REPLACE TEMP VIEW quotes_d AS SELECT * FROM VALUES (1, \
+         TIMESTAMP'2024-01-01 09:00:00', '2024-01-01 09:00:00', DATE'2024-01-01') \
+         AS q(k, quote_time, s, d)",
+    ] {
+        block_on(async { s.sql(sql).await?.collect().await }).unwrap();
+    }
+    let rewritten = "trade_time + (quote_time - trade_time)";
+    let written = "(trade_time + (quote_time - trade_time))";
+    for (on, named) in [
+        ("t.k = q.k AND hour(q.s) > 3", rewritten),
+        ("t.k = q.k AND t.trade_time IN (q.s)", rewritten),
+        (
+            "t.k = q.k AND coalesce(t.trade_time, q.s) > q.quote_time",
+            rewritten,
+        ),
+        (
+            "t.k = q.k AND coalesce(t.trade_time, q.s) IS NOT NULL",
+            rewritten,
+        ),
+        ("t.k = q.k AND t.trade_time BETWEEN q.s AND q.s", rewritten),
+        (
+            "t.k = q.k AND datediff(t.trade_time, q.quote_time) = 0",
+            rewritten,
+        ),
+        ("t.k = q.k AND date_add(t.trade_time, 1) > q.d", rewritten),
+        ("t.k = q.k AND hour(t.s) = 1", rewritten),
+        ("t.k = q.k AND date_format(t.d, 'yyyy') = q.s", rewritten),
+        (
+            "t.k = q.k AND CASE WHEN t.k = 1 THEN t.trade_time ELSE q.d END IS NOT NULL",
+            rewritten,
+        ),
+        // Controls: no implicit zoned cast, so the check runs in pass 1.
+        ("t.k = q.k AND hour(q.quote_time) > 3", written),
+        // A condition that resolves and is not a boolean fails a later check, after the as-of one.
+        ("t.k + q.k", written),
+    ] {
+        let sql = format!(
+            "SELECT * FROM trades_d t ASOF JOIN quotes_d q \
+             MATCH_CONDITION (t.trade_time + (q.quote_time - t.trade_time) >= q.quote_time) ON {on}"
+        );
+        let (class, params) = failure(s, &sql);
+        assert_eq!(class, "ASOF_JOIN_MATCH_CONDITION_TABLE_REFERENCE", "{sql}");
+        assert_eq!(
+            params,
+            vec![
+                ("refs1".to_owned(), format!("\"{named}\"")),
+                ("refs2".to_owned(), "\"quote_time\"".to_owned()),
+            ],
+            "{sql}"
+        );
+    }
+    // An `ON` condition that does not resolve is the error, before the as-of checks.
+    for (condition, on, class, sql_expr) in [
+        (
+            "t.trade_time >= q.s",
+            "t.k = q.nope",
+            "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+            None,
+        ),
+        (
+            "t.trade_time + (q.quote_time - t.trade_time) >= q.quote_time",
+            "t.k = q.k AND t.k + t.trade_time > 1",
+            "DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES",
+            Some("(k + trade_time)"),
+        ),
+        (
+            "t.trade_time >= q.quote_time",
+            "t.k = array(q.k)",
+            "DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES",
+            Some("(k = array(k))"),
+        ),
+        (
+            "t.trade_time >= q.quote_time",
+            "t.k = q.k AND t.d - q.d > 0",
+            "DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES",
+            Some("((d - d) > 0)"),
+        ),
+        // The match condition alone would be `ASOF_JOIN_MATCH_CONDITION_INVALID_TYPE`.
+        (
+            "t.trade_time >= q.s",
+            "t.k = q.k AND t.k + t.trade_time > 1",
+            "DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES",
+            Some("(k + trade_time)"),
+        ),
+        (
+            "t.k >= q.d",
+            "t.k = q.nope",
+            "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+            None,
+        ),
+    ] {
+        let sql = format!(
+            "SELECT * FROM trades_d t ASOF JOIN quotes_d q MATCH_CONDITION ({condition}) ON {on}"
+        );
+        let (got, params) = failure(s, &sql);
+        assert_eq!(got, class, "{sql}");
+        if let Some(e) = sql_expr {
+            let shown = params
+                .iter()
+                .find(|(k, _)| k == "sqlExpr")
+                .map(|(_, v)| v.as_str());
+            assert_eq!(shown, Some(format!("\"{e}\"").as_str()), "{sql}");
+        }
+    }
 }
 
 /// A floating-point distance ranks unlike the values at the infinities: Spark's forward scan over
@@ -722,9 +838,19 @@ fn the_distance_resolves_for_every_comparable_pair() {
         let sql = format!("SELECT a.k FROM a ASOF JOIN b MATCH_CONDITION ({cond}) ON a.k = b.k");
         assert_eq!(rows(&s, &sql).len(), n, "{cond}");
     }
-    // A left as-of join keeps the row, with no match (Spark 4.3.0, `rev-f2-asof-ref`).
-    let sql = "SELECT a.k, b.k FROM a LEFT ASOF JOIN b MATCH_CONDITION (a.i >= NULL) ON a.k = b.k";
-    assert_eq!(rows(&s, sql).len(), 1);
+    // A left as-of join keeps the row, with no match, scalar or composite (Spark 4.3.0,
+    // `rev-f2-asof-ref`, `rev-f2-asof-ref2` k.out).
+    for cond in [
+        "a.i >= NULL",
+        "array(a.i) >= NULL",
+        "array(a.i) <= NULL",
+        "(a.i, a.k) >= NULL",
+    ] {
+        let sql = format!(
+            "SELECT a.k, b.k FROM a LEFT ASOF JOIN b MATCH_CONDITION ({cond}) ON a.k = b.k"
+        );
+        assert_eq!(rows(&s, &sql), ["1|NULL"], "{cond}");
+    }
     // An interval meets a STRING at STRING, so the as-of rule accepts the pair and the comparison
     // as written refuses it (Spark 4.3.0, `rev-f2-asof-ref` `outc.txt`).
     rows(
@@ -732,12 +858,66 @@ fn the_distance_resolves_for_every_comparable_pair() {
         "CREATE TEMPORARY VIEW c AS SELECT * FROM VALUES \
          (1, INTERVAL '3' HOUR, INTERVAL '1' MONTH, '7', '0-2') AS c(k, dti, ymi, s, sy)",
     );
+    // Nothing compares to an untyped `NULL` (Spark 4.3.0, `rev-f2-asof-ref2` k.out).
+    for cond in ["NULL >= NULL", "c.dti >= NULL", "NULL >= e.dti"] {
+        let sql =
+            format!("SELECT c.k FROM c ASOF JOIN c AS e MATCH_CONDITION ({cond}) ON c.k = e.k");
+        assert!(rows(&s, &sql).is_empty(), "{cond}");
+    }
+    // The comparison is the normalized one: the left input's operand first, the operator flipped
+    // with it (Spark 4.3.0, `rev-f1-spark/delta8c9` p1, p2).
     for (cond, shown, types) in [
         ("c.dti <= e.s", "(dti <= s)", ("INTERVAL HOUR", "STRING")),
         ("c.dti >= e.s", "(dti >= s)", ("INTERVAL HOUR", "STRING")),
         ("c.s >= e.dti", "(s >= dti)", ("STRING", "INTERVAL HOUR")),
         ("c.ymi <= e.sy", "(ymi <= sy)", ("INTERVAL MONTH", "STRING")),
         ("c.ymi >= e.sy", "(ymi >= sy)", ("INTERVAL MONTH", "STRING")),
+        ("e.s >= c.dti", "(dti <= s)", ("INTERVAL HOUR", "STRING")),
+        ("e.s < c.dti", "(dti > s)", ("INTERVAL HOUR", "STRING")),
+        // Structs are compared rebuilt from their fields, named as `CreateStruct` names them
+        // (Spark 4.3.0, `rev-f2-asof-ref2` k.out, `opus1-r3` r4.out).
+        (
+            "named_struct('x', c.dti) >= named_struct('x', e.s)",
+            "(named_struct(dti, dti) >= named_struct(s, s))",
+            (
+                "STRUCT<dti: INTERVAL HOUR NOT NULL>",
+                "STRUCT<s: STRING NOT NULL>",
+            ),
+        ),
+        (
+            "named_struct('x', e.s) <= named_struct('y', c.dti)",
+            "(named_struct(dti, dti) >= named_struct(s, s))",
+            (
+                "STRUCT<dti: INTERVAL HOUR NOT NULL>",
+                "STRUCT<s: STRING NOT NULL>",
+            ),
+        ),
+        (
+            "(c.dti, c.k) >= (e.s, e.k)",
+            "(named_struct(dti, dti, k, k) >= named_struct(s, s, k, k))",
+            (
+                "STRUCT<dti: INTERVAL HOUR NOT NULL, k: INT NOT NULL>",
+                "STRUCT<s: STRING NOT NULL, k: INT NOT NULL>",
+            ),
+        ),
+        (
+            "(c.dti, c.k + 1) >= (e.s, e.k)",
+            "(named_struct(dti, dti, col2, (k + 1)) >= named_struct(s, s, k, k))",
+            (
+                "STRUCT<dti: INTERVAL HOUR NOT NULL, col2: INT NOT NULL>",
+                "STRUCT<s: STRING NOT NULL, k: INT NOT NULL>",
+            ),
+        ),
+        (
+            "named_struct('x', c.k, 'y', named_struct('z', c.dti)) >= \
+             named_struct('x', e.k, 'y', named_struct('w', e.s))",
+            "(named_struct(k, k, col2, named_struct(dti, dti)) >= \
+             named_struct(k, k, col2, named_struct(s, s)))",
+            (
+                "STRUCT<k: INT NOT NULL, col2: STRUCT<dti: INTERVAL HOUR NOT NULL> NOT NULL>",
+                "STRUCT<k: INT NOT NULL, col2: STRUCT<s: STRING NOT NULL> NOT NULL>",
+            ),
+        ),
     ] {
         let sql =
             format!("SELECT c.k FROM c ASOF JOIN c AS e MATCH_CONDITION ({cond}) ON c.k = e.k");
@@ -754,4 +934,41 @@ fn the_distance_resolves_for_every_comparable_pair() {
         let sql = format!("SELECT a.k FROM a ASOF JOIN b MATCH_CONDITION ({cond}) ON a.k = b.k");
         assert_eq!(error(&s, &sql), "KRISHIV_UNSUPPORTED_FEATURE", "{cond}");
     }
+}
+
+/// A nested struct field's wider type matches names as the session does: `A` meets `a` unless
+/// `spark.sql.caseSensitive` is on (Spark 4.3.0, `rev-f1-spark/delta8c9` p3 and p5; review of
+/// 8c9ab3fba finding 2).
+#[test]
+fn nested_struct_fields_match_names_as_the_session_does() {
+    let s = session();
+    for sql in [
+        "CREATE TEMPORARY VIEW ca AS SELECT 1 AS k, \
+         array(named_struct('f', named_struct('A', '2024-01-02'))) AS x",
+        "CREATE TEMPORARY VIEW cb AS SELECT 1 AS k, \
+         array(named_struct('f', named_struct('a', DATE'2024-01-01'))) AS y",
+    ] {
+        rows(&s, sql);
+    }
+    let sql = "SELECT ca.k FROM ca ASOF JOIN cb MATCH_CONDITION (ca.x >= cb.y) ON ca.k = cb.k";
+    let types = (
+        "\"ARRAY<STRUCT<f: STRUCT<A: STRING NOT NULL> NOT NULL>>\"",
+        "\"ARRAY<STRUCT<f: STRUCT<a: DATE NOT NULL> NOT NULL>>\"",
+    );
+    let (class, params) = failure(&s, sql);
+    assert_eq!(class, "DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES");
+    let get = |k: &str| params.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone());
+    assert_eq!(get("sqlExpr").as_deref(), Some("\"(x >= y)\""));
+    assert_eq!(get("left").as_deref(), Some(types.0));
+    assert_eq!(get("right").as_deref(), Some(types.1));
+    rows(&s, "SET spark.sql.caseSensitive=true");
+    let (class, params) = failure(&s, sql);
+    assert_eq!(class, "ASOF_JOIN_MATCH_CONDITION_INVALID_TYPE");
+    assert_eq!(
+        params,
+        vec![
+            ("type1".to_owned(), types.0.to_owned()),
+            ("type2".to_owned(), types.1.to_owned()),
+        ]
+    );
 }
