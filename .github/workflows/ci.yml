@@ -209,6 +209,12 @@ jobs:
           uv run --frozen --no-sync --project ../../python ruff check .
           uv run --frozen --no-sync --project ../../python ruff format --check .
           uv run --frozen --no-sync --project ../../python ty check .
+      # Unit tests of the third-party notices script the wheels, binaries and image ship with.
+      - name: tests/scripts/ (third-party notices tests)
+        working-directory: tests/scripts
+        env:
+          TPN_NO_CARGO: "1"
+        run: uv run --frozen --no-sync --project ../../python pytest -q -p no:cacheprovider test_third_party_notices.py
       # The public Python API is a checked-in snapshot (docs/concepts/stability.md); source only, no wheel.
       - name: python/public-api.txt
         run: python3 -I tests/scripts/python_public_api.py --check

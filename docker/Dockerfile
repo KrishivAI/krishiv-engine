@@ -17,14 +17,24 @@ ARG KRISHIV_GIT_SHA=unknown
 ENV KRISHIV_GIT_SHA=${KRISHIV_GIT_SHA} \
     CARGO_INCREMENTAL=0 \
     CARGO_TERM_COLOR=never
+# The image's cargo features: the build and its third-party notices read the same list.
+ARG KRISHIV_FEATURES=server,connect,flight-sql,cloud,ui,delta,iceberg,catalog-iceberg-rest
 WORKDIR /src
+# python3: .github/scripts/third_party_notices.py writes the image's third-party notices.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends python3 \
+    && rm -rf /var/lib/apt/lists/*
 COPY . .
 # The generic x86-64 / armv8 baseline (no target-cpu), so the image runs on any host of its arch.
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/src/target \
     cargo build --profile dist --locked -p krishiv-cli \
-        --features server,connect,flight-sql,cloud,ui,delta,iceberg,catalog-iceberg-rest \
-    && install -D target/dist/krishiv /out/krishiv
+        --features "$KRISHIV_FEATURES" \
+    && install -D target/dist/krishiv /out/krishiv \
+    && python3 -I .github/scripts/third_party_notices.py --package krishiv-cli \
+        --cargo-args "--features $KRISHIV_FEATURES" --target "$(rustc -vV | sed -n 's/^host: //p')" \
+        --title "the krishiv container image" --out /out/doc/THIRD-PARTY-NOTICES.txt \
+    && cp LICENSE NOTICE /out/doc/
 
 FROM debian:bookworm-slim AS runtime
 # ca-certificates: TLS to object stores; curl: the health check; openssl: the first-start certificate.
@@ -36,6 +46,8 @@ RUN apt-get update \
     && install -d -o 10001 -g 10001 /data /var/lib/krishiv/tls
 VOLUME /data
 COPY --from=build /out/krishiv /usr/local/bin/krishiv
+# Krishiv's license and notice, and the third-party crates linked into the binary with their license texts.
+COPY --from=build /out/doc/ /usr/share/doc/krishiv/
 COPY docker/entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 USER 10001:10001
 WORKDIR /var/lib/krishiv
