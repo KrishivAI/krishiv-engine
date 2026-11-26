@@ -50,7 +50,12 @@ fn errors_match_spark() {
     let doc = fixture();
     for row in doc["errors"].as_array().unwrap() {
         let sql = row["sql"].as_str().unwrap();
-        let e = err(sql, &ParserOptions::default());
+        // The fixture is Spark 4.2.0's: 4.3 names the fraction check `INVALID_TABLESAMPLE_FRACTION`.
+        let opts = ParserOptions {
+            spark_4_3: false,
+            ..ParserOptions::default()
+        };
+        let e = err(sql, &opts);
         let message = row["message"].as_str().unwrap();
         let Some(class) = row["condition"].as_str() else {
             // Spark's unclassified `NumberFormatException` for a seed past
@@ -124,4 +129,22 @@ fn quirks_parse_as_spark() {
     assert!(p.contains("Sample 0.0, 0.0, false\n"), "{p}");
     // The quirk rows the fixture pins are all here.
     assert_eq!(fixture()["quirks"].as_array().unwrap().len(), 6);
+}
+
+#[test]
+fn fraction_out_of_range_is_its_own_class_in_4_3() {
+    for (sql, fraction) in [
+        ("SELECT * FROM t TABLESAMPLE (-1 PERCENT)", "-0.01"),
+        ("SELECT * FROM t TABLESAMPLE (101 PERCENT)", "1.01"),
+    ] {
+        let e = err(sql, &ParserOptions::default());
+        assert_eq!(e.error.error_class().name(), "INVALID_TABLESAMPLE_FRACTION");
+        assert!(
+            e.error.to_string().contains(&format!(
+                "Sampling fraction ({fraction}) must be on interval [0, 1]."
+            )),
+            "{}",
+            e.error
+        );
+    }
 }
