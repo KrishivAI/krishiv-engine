@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The default memory limit: 80% of the effective memory limit of this
-//! process, so a query engine embedded in a notebook or container spills
-//! instead of being OOM-killed.
+//! process, at least [`MIN_HEADROOM`] below it (but never under half of it),
+//! so a query engine embedded in a notebook or container spills instead of
+//! being OOM-killed.
 //!
 //! The effective limit is the smallest of the cgroup limits on the
 //! process's cgroup path (v2 `memory.max`, else v1
@@ -15,6 +16,15 @@ use std::path::Path;
 /// Percentage of the effective memory limit used by default.
 pub const DEFAULT_LIMIT_PERCENT: u64 = 80;
 
+/// Memory the default limit leaves outside the pool, at least: what the
+/// process holds beyond its reservations (the resident-set guard allows a
+/// limit's eighth plus 64 MiB: decode and I/O buffers, allocator retention)
+/// and the page cache a cgroup also counts. 20% alone is too little on a
+/// small container: in a 1 GiB cgroup an 819 MiB pool let the process hold
+/// up to 985 MiB, and a 41M-row self-join or a high-cardinality group-by was
+/// OOM-killed (0.3.0 acceptance QA2-12).
+pub const MIN_HEADROOM: u64 = 512 << 20;
+
 /// Default limit when the effective memory limit cannot be determined.
 pub const FALLBACK_LIMIT: usize = 2 << 30;
 
@@ -22,15 +32,22 @@ pub const FALLBACK_LIMIT: usize = 2 << 30;
 const V1_UNLIMITED_FROM: u64 = 1 << 62;
 
 /// The default root-pool limit: [`DEFAULT_LIMIT_PERCENT`] of
-/// [`effective_memory_limit`], else [`FALLBACK_LIMIT`]. Always `Some`; pass
+/// [`effective_memory_limit`], at least [`MIN_HEADROOM`] below it but not
+/// under half of it, else [`FALLBACK_LIMIT`]. Always `Some`; pass
 /// `limit: None` in [`crate::MemoryConfig`] for an unbounded pool.
 pub fn default_limit() -> Option<usize> {
     Some(effective_memory_limit().map_or(FALLBACK_LIMIT, share_of))
 }
 
-/// [`DEFAULT_LIMIT_PERCENT`] of an effective limit of `bytes`.
+/// The pool's share of an effective limit of `bytes`:
+/// [`DEFAULT_LIMIT_PERCENT`] of it, lowered to leave [`MIN_HEADROOM`]
+/// (from 2.5 GiB up the percentage already does), but never under half.
 fn share_of(bytes: u64) -> usize {
-    usize::try_from(bytes / 100 * DEFAULT_LIMIT_PERCENT).unwrap_or(usize::MAX)
+    let percent = bytes / 100 * DEFAULT_LIMIT_PERCENT;
+    let share = percent
+        .min(bytes.saturating_sub(MIN_HEADROOM))
+        .max(bytes / 2);
+    usize::try_from(share).unwrap_or(usize::MAX)
 }
 
 /// The root-pool limit for an explicit `krishiv.memory.limit` of `explicit`
@@ -46,7 +63,7 @@ pub fn explicit_limit(explicit: usize) -> usize {
             requested = explicit,
             limit = fitted,
             "krishiv.memory.limit is above the memory this process may use (cgroup limit or \
-             physical memory); using {DEFAULT_LIMIT_PERCENT}% of that instead"
+             physical memory); using the default share of that instead"
         );
     }
     fitted
@@ -185,6 +202,24 @@ mod tests {
             Some(16 << 30)
         );
         assert_eq!(effective_memory_limit_at(&fixture("does-not-exist")), None);
+    }
+
+    #[test]
+    fn the_share_leaves_headroom_on_small_limits() {
+        let mib = 1_usize << 20;
+        let gib = 1_u64 << 30;
+        // 1 GiB (QA2-12): 512 MiB, not 819 MiB.
+        assert_eq!(share_of(gib), 512 * mib);
+        // 2 GiB: 1.5 GiB, the headroom binds.
+        assert_eq!(share_of(2 * gib), 1536 * mib);
+        // From 2.5 GiB the 20% is at least the headroom: 80% as before.
+        let eighty = |b: u64| usize::try_from(b / 100 * 80).unwrap();
+        assert_eq!(share_of(5 * gib / 2), eighty(5 * gib / 2));
+        assert_eq!(share_of(16 * gib), eighty(16 * gib));
+        // Small limits keep half rather than nothing.
+        assert_eq!(share_of(512 << 20), 256 * mib);
+        assert_eq!(share_of(768 << 20), 384 * mib);
+        assert_eq!(share_of(0), 0);
     }
 
     #[test]

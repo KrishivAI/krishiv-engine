@@ -22,7 +22,8 @@ disk when the limit is reached.
 
 ### The memory limit in a container
 
-`krishiv.memory.limit` is the limit of the process's memory pool. Left unset, it is 80% of the effective memory limit:
+`krishiv.memory.limit` is the limit of the process's memory pool. Left unset, it is 80% of the effective memory limit (lowered to leave at least 512 MiB outside the pool, but never
+under half of it: 512 MiB in a 1 GiB container, 1.5 GiB in 2 GiB):
 the tightest cgroup limit that applies to the process (a Docker `--memory`, a Kubernetes memory limit, a systemd
 `MemoryMax`), else the machine's physical memory, or 2 GiB where neither can be read; when both a cgroup limit and the
 physical memory are known, the smaller of the two. A 4 GiB container on a 62 GB host therefore gets a pool of about
