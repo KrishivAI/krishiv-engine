@@ -65,9 +65,14 @@ DISTRIBUTE BY`) places a hash exchange on the expressions' values, so they are e
 on every row as Spark's shuffle evaluates them. Two things differ:
 
 - On one worker the exchange runs inside each driver's pipeline, so a `LIMIT` above it stops reading
-  after the rows it needs: `SELECT * FROM (SELECT x FROM t DISTRIBUTE BY CAST(x AS INT)) LIMIT 1`
-  returns a row where Spark's shuffle first evaluates every row and raises `CAST_INVALID_INPUT`. A
-  distributed run's map stage reads every row, so there it raises as Spark does.
+  once it has its rows, and a value in a batch that was never read is never evaluated:
+  `SELECT * FROM (SELECT x FROM t DISTRIBUTE BY CAST(x AS INT)) LIMIT 1` can return a row where
+  Spark's shuffle first evaluates every row and raises `CAST_INVALID_INPUT`. Do not count on it to
+  skip a bad value. The expressions are evaluated a batch at a time and several batches are read at
+  once, so a bad value in any batch that was read raises as in Spark: over a one-file Parquet table
+  with the bad value in its last row, the query raises with 10,000 rows and returns a row with
+  100,000 (measured on 0.3.0). A distributed run's map stage reads every row, so there it always
+  raises as Spark does.
 - Rows go to partitions by Krishiv's routing hash, not Spark's `pmod(murmur3(exprs), n)`, so what
   depends on the partition numbers (`spark_partition_id()`) can differ.
 
@@ -178,10 +183,20 @@ and differs from it, and so from Krishiv, in these cases (checked on PySpark 4.2
 With `spark.sql.execution.arrow.pyspark.validateSchema.enabled` set (Spark 4.1 and later), Krishiv checks each
 result batch as Spark does and raises `ARROW_TYPE_MISMATCH` with Spark's message. With it off (the default, and on
 Spark 3.5 and 4.0, which have no such setting), Spark does not check the result's types and reads the batch as if it
-had the declared ones. Krishiv refuses such a result instead, with `PYTHON_EXCEPTION` ("The Python worker returned an
-invalid result"), and refuses a null in a column declared non-nullable when a null is present. A `mapInArrow`
-result with more columns than declared is refused too (Spark reads the declared columns and ignores the rest when
-the setting is off; with it on, both raise `ARROW_TYPE_MISMATCH`). Krishiv does not know the client's Spark version
+had the declared ones. Krishiv refuses such a result instead, and the error depends on where the UDF runs:
+
+- **Server mode (the Python worker pool).** `PYTHON_EXCEPTION` ("The Python worker returned an invalid result"),
+  also for a null in a column declared non-nullable.
+- **Embedded (`krishiv.session()`).** A `mapInArrow` column of another type is `KRISHIV_INVALID_ARROW_DATA`
+  (SQLSTATE 22000), which names the returned and the declared type. `mapInPandas` converts each column to its
+  declared type as PySpark's worker does (a `long` column declared `int` is returned as `int`) and raises
+  `PYTHON_EXCEPTION` with the conversion's traceback when it cannot (a `long` column declared `string`). A null in
+  a column declared `NOT NULL` is accepted: see the last paragraph of
+  [Several grouped-aggregate pandas UDFs in one `agg`](#several-grouped-aggregate-pandas-udfs-in-one-agg).
+
+A `mapInArrow` result with more columns than declared is refused too, in server mode as above and embedded with
+`INTERNAL_ERROR` (Spark reads the declared columns and ignores the rest when the setting is off; with it on, both
+raise `ARROW_TYPE_MISMATCH`). Krishiv does not know the client's Spark version
 here, so the setting is honoured whatever the version: under a Spark 3.5 or 4.0 client, which has no such setting,
 setting it still turns the check on.
 
@@ -436,9 +451,9 @@ and the token in the connection string.
 
 `spark.read.schema(..).format("delta").load(path)` (and the same read through Spark Connect) is refused with
 `KRISHIV_UNSUPPORTED_FEATURE` when the table is opened, because what delta-spark 4.4.1 does with a declared schema is
-not pinned by the Delta oracle yet. A Delta table's schema always comes from its log. Until then, a call that only
-asks for the schema (`df.schema`, `printSchema`, Connect `AnalyzePlan`) returns the declared schema without opening
-the table, and the first action fails.
+not pinned by the Delta oracle yet. A Delta table's schema always comes from its log. No call on such a read
+answers with the declared schema: embedded, `load` itself raises; through Spark Connect, where `load` sends
+nothing to the server, the first call that does raises, `df.schema` and `printSchema` included.
 
 ## Tags and global views
 
@@ -867,8 +882,10 @@ these differences:
   `SHOW CREATE TABLE .. AS SERDE` are plain JVM exceptions in Spark, with no error class: Spark Connect clients
   see `UnknownException` or `IllegalArgumentException`. Krishiv raises `INTERNAL_ERROR` with Spark's text, and its
   Connect server withholds the text of internal errors, as for any other.
-- **4.3 missing clause.** Krishiv has no Spark 4.3 profile yet, so a missing `WITH METRICS` or `LANGUAGE` is 4.2's
-  internal error on every release from 4.2 (Spark 4.3 raises `MISSING_CLAUSES_FOR_OPERATION`).
+- **4.3 missing clause.** A missing `WITH METRICS` or `LANGUAGE` is 4.2's internal error under every Spark
+  version, the default 4.3 included: `INTERNAL_ERROR` (`XX000`) with the text
+  `Cannot find main error class 'MISSING_CLAUSES_FOR_OPERATION'`. Spark 4.3.0 raises
+  `MISSING_CLAUSES_FOR_OPERATION` (`42601`) and names the missing clause.
 - **`CANNOT_UP_CAST_DATATYPE` after a source column changed type.** The class, SQLSTATE and types are Spark's;
   the `expression` parameter is Krishiv's form of the dimension, where Spark qualifies its columns
   (`spark_catalog.default.t.k`).
