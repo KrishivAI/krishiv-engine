@@ -879,6 +879,16 @@ impl EncodedKeys {
         &mut self.hashes
     }
 
+    /// Bytes of one row.
+    pub fn stride(&self) -> usize {
+        self.stride
+    }
+
+    /// Every row's bytes, back to back.
+    pub fn rows(&self) -> &[u8] {
+        &self.rows
+    }
+
     /// Row `i`'s bytes (empty if out of range).
     #[inline]
     pub fn row(&self, i: usize) -> &[u8] {

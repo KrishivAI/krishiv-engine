@@ -1625,3 +1625,61 @@ fn a_restored_index_holds_the_recurring_working_set() {
     assert_eq!(RowTable::restored_limit(21_845, RECUR_KEYS), RECUR_KEYS);
     assert_eq!(RowTable::restored_limit(1, usize::MAX / 2), RECUR_KEYS);
 }
+
+/// The append loop specialized by stride (E2) gives the rows and refs of
+/// the general loop, for strides 24 and 32, with and without runs and
+/// NULL keys.
+#[test]
+fn the_fixed_stride_append_loop_matches_the_general_one() {
+    let shape = |fields: Vec<Field>| {
+        let n = fields.len();
+        let spec = AggregateSpec {
+            input: Arc::new(Schema::new(fields)),
+            group_by: (0..n).collect(),
+            aggregates: vec![AggregateExpr::count_star("c")],
+            ..core().spec.clone()
+        };
+        Arc::new(AggCore::new(spec).unwrap())
+    };
+    let cores = [
+        shape(vec![Field::new("a", DataType::Int64, true)]),
+        shape(vec![
+            Field::new("a", DataType::Int64, true),
+            Field::new("b", DataType::Int64, true),
+        ]),
+    ];
+    let seed = HashSeed::new(Some(5));
+    let mut strides = Vec::new();
+    for core in &cores {
+        let n = core.spec.input.fields().len();
+        let nullable = core.spec.input.field(0).is_nullable();
+        // Runs of 1-3 equal keys; the second batch has no runs.
+        let runs: Vec<i64> = (0..3000_i64).map(|i| i / (1 + i % 3)).collect();
+        let plain: Vec<i64> = (0..3000_i64).map(|i| i * 7).collect();
+        for keys in [runs, plain] {
+            let col = |shift: i64| -> ArrayRef {
+                Arc::new(Int64Array::from_iter(
+                    keys.iter()
+                        .map(|&k| (!nullable || k % 11 != 5).then_some(k + shift)),
+                ))
+            };
+            let cols: Vec<ArrayRef> = (0..n).map(|c| col(c as i64)).collect();
+            let encoded = layout(core).unwrap().encode(&cols).unwrap();
+            let mut fast = RowTable::new(core, &seed, Mode::Append, true, RADIX_BITS).unwrap();
+            let mut general = RowTable::new(core, &seed, Mode::Append, true, RADIX_BITS).unwrap();
+            strides.push(fast.stride);
+            let (mut a, mut b) = (Vec::new(), Vec::new());
+            fast.lookup(&encoded, &mut a).unwrap();
+            general.append_rows(&encoded, &mut b).unwrap();
+            assert_eq!(a, b);
+            assert_eq!(fast.len(), general.len());
+            assert!(fast.len() < keys.len() || keys.windows(2).all(|w| w[0] != w[1]));
+            for (i, &r) in a.iter().enumerate() {
+                let row = row_at(&fast.parts, fast.stride, fast.refs, r);
+                assert_eq!(row, encoded.row(i), "row {i}");
+            }
+        }
+    }
+    strides.dedup();
+    assert_eq!(strides, [24, 32]);
+}
