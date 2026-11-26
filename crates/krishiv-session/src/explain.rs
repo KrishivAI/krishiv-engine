@@ -443,22 +443,24 @@ impl DataFrame {
             Err(e) if lenient => return Ok(failed(mode, &parsed, None, &e)),
             Err(e) => return Err(e),
         }
-        let (optimized, physical, scanned) = match self
-            .session
-            .physical_inspected(&analysis.analyzed, &analysis.env)
-            .await
-        {
-            Ok((optimized, physical)) => {
-                let scanned: Vec<String> =
-                    krishiv_exec::profile::profile_scans(&physical, &|_| None)
-                        .into_iter()
-                        .map(|s| s.table)
-                        .collect();
-                (optimized, physical.explain_all(), scanned)
-            }
-            Err(e) if lenient => return Ok(failed(mode, &parsed, Some(&analysis), &e)),
-            Err(e) => return Err(e),
-        };
+        // A cached relation with data shows as Spark's `InMemoryTableScan` (PY-036): the plan
+        // that would run, its cached subplans replaced by scans of their snapshots.
+        self.session.register_pending_caches().await;
+        let (substituted, _lease) = self.cache_substituted(&analysis)?;
+        let shown = substituted.as_ref().unwrap_or(&analysis.analyzed);
+        let (optimized, physical, scanned) =
+            match self.session.physical_inspected(shown, &analysis.env).await {
+                Ok((optimized, physical)) => {
+                    let scanned: Vec<String> =
+                        krishiv_exec::profile::profile_scans(&physical, &|_| None)
+                            .into_iter()
+                            .map(|s| s.table)
+                            .collect();
+                    (optimized, physical.explain_all(), scanned)
+                }
+                Err(e) if lenient => return Ok(failed(mode, &parsed, Some(&analysis), &e)),
+                Err(e) => return Err(e),
+            };
         let planned = Planned {
             analysis,
             optimized,
@@ -468,6 +470,9 @@ impl DataFrame {
             Arc::clone(&planned.analysis.env.catalog) as Arc<dyn TableProviderResolver>
         );
         let mut text = krishiv_exec::profile::dense_ids(&render(mode, &parsed, &planned, &stats));
+        if substituted.is_some() {
+            text = in_memory_table_scans(&text);
+        }
         // Which estimates came from distinct-value samples and which stayed
         // the defaults (only when a table was sampled, so a query that
         // samples nothing prints Spark's text).
@@ -771,4 +776,28 @@ fn f64_to_u64(v: f64) -> u64 {
     )]
     let n = v.max(0.0).min(u64::MAX as f64) as u64;
     n
+}
+
+/// Renames the scans of hidden cache snapshots (`__krishiv_cache_<n>`) to Spark's
+/// `InMemoryTableScan` in a rendered plan.
+fn in_memory_table_scans(text: &str) -> String {
+    text.lines()
+        .map(|line| {
+            let lower = line.to_ascii_lowercase();
+            match lower.find(crate::cache::CACHE_PREFIX) {
+                Some(at) => {
+                    let end = line[at..]
+                        .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                        .map_or(line.len(), |n| at + n);
+                    let head = &line[..at];
+                    // `... Scan <provider> __krishiv_cache_1` -> `... InMemoryTableScan`.
+                    let cut = head.rfind("Scan").unwrap_or(head.len());
+                    format!("{}InMemoryTableScan{}", &line[..cut], &line[end..])
+                }
+                None => line.to_owned(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        + if text.ends_with('\n') { "\n" } else { "" }
 }

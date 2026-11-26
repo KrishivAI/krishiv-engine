@@ -1087,3 +1087,15 @@ fn a_cached_frame_follows_a_replaced_view() {
     );
     assert!(block_on(cached.cache().is_cached()).unwrap());
 }
+
+/// PY-036: after an action fills the cache, EXPLAIN shows Spark's `InMemoryTableScan` where the
+/// cached plan was, and no hidden snapshot name.
+#[test]
+fn explain_shows_a_cache_node_once_the_cache_holds_data() {
+    let s = int_session(vec![1, 2]);
+    let df = s.table("t").cache();
+    let _ = block_on(df.collect()).unwrap();
+    let text = block_on(df.explain(krishiv_session::ExplainMode::Simple)).unwrap();
+    assert!(text.contains("InMemoryTableScan"), "{text}");
+    assert!(!text.contains("__krishiv_cache"), "{text}");
+}
