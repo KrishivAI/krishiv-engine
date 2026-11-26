@@ -629,24 +629,34 @@ pub(crate) fn infer<'a>(
                 })
                 .collect();
             let parts = plan(&split_config(o)?, &listing);
-            for p in &parts {
-                let mut sampler = (ratio <= 0.99).then(|| Sampler::new(ratio, p.index));
-                let mut part = None;
-                for s in &p.splits {
-                    let file = &files[s.file];
-                    let ctx = ctx_of(file);
-                    for_each_line(&ctx, s.range, syntax, |rec| {
-                        if let Some(sm) = &mut sampler
-                            && !sm.take()
-                        {
-                            return Ok(true);
-                        }
-                        part = rm.absorb(&inf, part.take(), rec)?;
-                        Ok(true)
-                    })
-                    .await?;
+            let run_part = |p: &crate::split::FilePartition| {
+                let p = p.clone();
+                let (inf, rm, ctx_of) = (&inf, rm, &ctx_of);
+                async move {
+                    let mut sampler = (ratio <= 0.99).then(|| Sampler::new(ratio, p.index));
+                    let mut part = None;
+                    for s in &p.splits {
+                        let file = &files[s.file];
+                        let ctx = ctx_of(file);
+                        for_each_line(&ctx, s.range, syntax, |rec| {
+                            if let Some(sm) = &mut sampler
+                                && !sm.take()
+                            {
+                                return Ok(true);
+                            }
+                            part = rm.absorb(inf, part.take(), rec)?;
+                            Ok(true)
+                        })
+                        .await?;
+                    }
+                    FormatResult::Ok(part)
                 }
-                root = rm.fold(std::mem::replace(&mut root, Ty::Null), part)?;
+            };
+            // Each partition is independent (Spark's per-partition reduce), so they run on
+            // threads of their own, at most one per core, and fold in partition order.
+            let results = run_partitions(&parts, &run_part)?;
+            for part in results {
+                root = rm.fold(std::mem::replace(&mut root, Ty::Null), part?)?;
             }
         }
         // Fields are sorted by name, as Spark's inference sorts them.
@@ -674,4 +684,54 @@ pub(crate) fn infer<'a>(
         }
         Ok(Arc::new(Schema::new(fields)))
     })
+}
+
+/// Runs `run` over `parts` on up to `available_parallelism` scoped threads, each driving its futures to
+/// completion (inside the caller's runtime context, which the I/O reads may need); results in `parts` order.
+fn run_partitions<P: Sync, F, Fut>(
+    parts: &[P],
+    run: &F,
+) -> FormatResult<Vec<FormatResult<Option<Ty>>>>
+where
+    F: Fn(&P) -> Fut + Sync,
+    Fut: std::future::Future<Output = FormatResult<Option<Ty>>>,
+{
+    let threads = std::thread::available_parallelism()
+        .map_or(1, std::num::NonZero::get)
+        .min(parts.len());
+    if threads <= 1 {
+        return Ok(parts
+            .iter()
+            .map(|p| futures::executor::block_on(run(p)))
+            .collect());
+    }
+    let handle = tokio::runtime::Handle::try_current().ok();
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let mut out: Vec<(usize, FormatResult<Option<Ty>>)> = std::thread::scope(|scope| {
+        let workers: Vec<_> = (0..threads)
+            .map(|_| {
+                scope.spawn(|| {
+                    let _guard = handle.as_ref().map(tokio::runtime::Handle::enter);
+                    let mut done = Vec::new();
+                    loop {
+                        let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        let Some(p) = parts.get(i) else { break };
+                        done.push((i, futures::executor::block_on(run(p))));
+                    }
+                    done
+                })
+            })
+            .collect();
+        workers
+            .into_iter()
+            .flat_map(|w| w.join().unwrap_or_default())
+            .collect()
+    });
+    out.sort_by_key(|(i, _)| *i);
+    if out.len() != parts.len() {
+        return Err(FormatError::Other(internal(
+            "a JSON inference thread panicked",
+        )));
+    }
+    Ok(out.into_iter().map(|(_, r)| r).collect())
 }
