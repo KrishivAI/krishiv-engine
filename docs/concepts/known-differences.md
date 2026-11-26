@@ -893,8 +893,9 @@ Two smaller differences in `UTF8_LCASE` `LIKE`: case folding uses Rust's Unicode
 
 Spark rewrites `JOIN ... (APPROX | EXACT) NEAREST [k] BY ...` to a `max_by`/`min_by` of `k` rows over a cross
 join. Krishiv ranks the cross join's rows per left row with `row_number()` and keeps the first `k`; `APPROX` and `EXACT`
-return the same exact rows. The results match Spark's, but `EXPLAIN` shows a window over a cross join, not Spark's
-`Generate`/`Aggregate` shape, and `spark.sql.crossJoin.enabled=false` does not make the join fail with
-`NEAREST_BY_JOIN.CROSS_JOIN_NOT_ENABLED`. A ranking expression of a map type fails when the query runs, not with
-`NEAREST_BY_JOIN.NON_ORDERABLE_RANKING_EXPRESSION` when it is analysed. Rows with a NULL ranking come last, so they
-fill the `k` only when there are fewer than `k` ranked rows.
+return the same exact rows. The results match Spark's, including NULL rankings (never a match; a left outer join pads
+a left row left with none) and the `NEAREST_BY_JOIN.*` errors. `EXPLAIN` shows a window over a join, not Spark's
+`Generate`/`Aggregate` shape, and the rewrite materialises every left-right pair before ranking, where Spark keeps a
+top-k per left row. The `CROSS_JOIN_NOT_ENABLED` check runs when the statement is parsed, where Spark's runs in the
+optimizer, so `CREATE VIEW v AS SELECT ... NEAREST BY ...` under `spark.sql.crossJoin.enabled=false` fails here and
+succeeds in Spark.

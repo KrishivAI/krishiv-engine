@@ -243,35 +243,26 @@ pub(super) fn special_kind(kind: TypedLiteralKind, timestamp_ntz: bool) -> Speci
 }
 
 /// The clock expression Spark's special value `now`, `today`, `tomorrow` or
-/// `yesterday` stands for, of the literal's type.
-///
-/// With a `zone` (`tomorrow EST`) the day is that zone's today, and a timestamp
-/// is that day's midnight in the zone.
-pub(super) fn special_clock(special: &str, zone: Option<&str>, kind: SpecialKind) -> Expr {
-    let today = || match zone {
-        None => Expr::function("current_date", Vec::new()),
-        Some(z) => Expr::new(ExprNode::Cast {
-            expr: Arc::new(Expr::function(
-                "from_utc_timestamp",
-                vec![
-                    Expr::function("current_timestamp", Vec::new()),
-                    Expr::literal(Literal::String(z.to_owned())),
-                ],
-            )),
-            to: DataType::Date,
-            mode: CastMode::Ansi,
-        }),
-    };
+/// `yesterday` stands for, of the literal's type. A zone written after the word
+/// is checked by `special_value` and changes nothing: the day is the session
+/// zone's, as in Spark's `DateTimeUtils.convertSpecial*`.
+pub(super) fn special_clock(special: &str, kind: SpecialKind) -> Expr {
     let day = |offset: &str| match offset {
         "tomorrow" => Expr::function(
             "date_add",
-            vec![today(), Expr::literal(Literal::Integer(1))],
+            vec![
+                Expr::function("current_date", Vec::new()),
+                Expr::literal(Literal::Integer(1)),
+            ],
         ),
         "yesterday" => Expr::function(
             "date_sub",
-            vec![today(), Expr::literal(Literal::Integer(1))],
+            vec![
+                Expr::function("current_date", Vec::new()),
+                Expr::literal(Literal::Integer(1)),
+            ],
         ),
-        _ => today(),
+        _ => Expr::function("current_date", Vec::new()),
     };
     let cast = |expr: Expr, to: DataType| {
         Expr::new(ExprNode::Cast {
@@ -284,17 +275,7 @@ pub(super) fn special_clock(special: &str, zone: Option<&str>, kind: SpecialKind
         (SpecialKind::Date, d) => day(d),
         (SpecialKind::Instant, "now") => Expr::function("current_timestamp", Vec::new()),
         (SpecialKind::Local, "now") => Expr::function("localtimestamp", Vec::new()),
-        (SpecialKind::Instant, d) => match zone {
-            // Midnight of the zone's day: the session-zone midnight read as the zone's wall clock.
-            Some(z) => Expr::function(
-                "to_utc_timestamp",
-                vec![
-                    cast(day(d), DataType::Timestamp),
-                    Expr::literal(Literal::String(z.to_owned())),
-                ],
-            ),
-            None => cast(day(d), DataType::Timestamp),
-        },
+        (SpecialKind::Instant, d) => cast(day(d), DataType::Timestamp),
         (SpecialKind::Local, d) => cast(day(d), DataType::TimestampNtz),
     }
 }

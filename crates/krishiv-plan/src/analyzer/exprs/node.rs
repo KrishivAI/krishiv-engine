@@ -90,6 +90,7 @@ impl Resolver<'_> {
                 };
                 let lit = Literal::CalendarInterval {
                     months: 0,
+                    // At most about 1.07e8 days (the day-time interval range), far inside `i32`.
                     days: i32::try_from(days).unwrap_or(i32::MAX),
                     micros,
                 };
@@ -124,9 +125,9 @@ impl Resolver<'_> {
             // the clock; they bind as the clock calls they stand for (the
             // query-start instant), `epoch` as a constant.
             ExprNode::TypedLiteral { kind, value }
-                if *kind != TypedLiteralKind::Time && is_special(value) =>
+                if *kind != TypedLiteralKind::Time
+                    && let Some(special) = special_value(value) =>
             {
-                let (special, zone) = special_value(value).unwrap_or(("today", None));
                 if special == "epoch" {
                     let text = match special_kind(*kind, self.ctx.conf.timestamp_ntz) {
                         SpecialKind::Date => "1970-01-01",
@@ -143,12 +144,8 @@ impl Resolver<'_> {
                         ..keep(ty)
                     });
                 }
-                let call = special_clock(
-                    special,
-                    zone,
-                    special_kind(*kind, self.ctx.conf.timestamp_ntz),
-                )
-                .with_origin(e.origin);
+                let call = special_clock(special, special_kind(*kind, self.ctx.conf.timestamp_ntz))
+                    .with_origin(e.origin);
                 return self.expr(&Arc::new(call), cx);
             }
             // `TIMESTAMP '11:00'`: that time today, in the session zone (Spark reads a time of day alone

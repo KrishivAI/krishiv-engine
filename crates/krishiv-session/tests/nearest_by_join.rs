@@ -39,12 +39,16 @@ fn cell(c: &dyn Array, row: usize) -> String {
 fn run(s: &Session, sql: &str) -> (Vec<String>, Vec<String>) {
     let batches = block_on(async { s.sql(sql).await?.collect().await })
         .unwrap_or_else(|e| panic!("{sql}: {e}"));
-    let names = batches[0]
-        .schema()
-        .fields()
-        .iter()
-        .map(|f| f.name().clone())
-        .collect();
+    let names = batches
+        .first()
+        .map(|b| {
+            b.schema()
+                .fields()
+                .iter()
+                .map(|f| f.name().clone())
+                .collect()
+        })
+        .unwrap_or_default();
     let mut out: Vec<String> = batches
         .iter()
         .flat_map(|b| {
@@ -88,20 +92,33 @@ fn k_defaults_to_one_and_a_repeated_left_row_gets_its_own_matches() {
 }
 
 #[test]
-fn a_null_ranking_is_the_farthest_and_a_left_join_keeps_a_row_without_matches() {
+fn a_null_ranking_never_matches_and_a_left_join_keeps_a_row_without_matches() {
     let s = session();
-    // k above the number of right rows: every right row, the NULL ranking included.
+    // k above the number of right rows: every right row but the one ranked NULL (Spark skips those).
     let (_, rows) = run(
         &s,
         "SELECT p.name FROM u JOIN p APPROX NEAREST 9 BY DISTANCE abs(u.s - p.s) WHERE u.id = 1",
     );
-    assert_eq!(rows, ["A", "B", "C", "D"]);
+    assert_eq!(rows, ["A", "B", "C"]);
     let (_, left) = run(
         &s,
         "SELECT u.id, q.name FROM u LEFT OUTER JOIN (SELECT * FROM p WHERE false) q \
          APPROX NEAREST 1 BY DISTANCE abs(u.s - q.s) WHERE u.id = 3",
     );
     assert_eq!(left, ["3|NULL"]);
+    // Every candidate ranked NULL: an inner join drops the left row, a left outer join pads it.
+    let (_, inner) = run(
+        &s,
+        "SELECT u.id, q.name FROM u JOIN (SELECT * FROM p WHERE name = 'D') q \
+         APPROX NEAREST 1 BY DISTANCE abs(u.s - q.s)",
+    );
+    assert!(inner.is_empty(), "{inner:?}");
+    let (_, outer) = run(
+        &s,
+        "SELECT u.id, q.name FROM u LEFT OUTER JOIN (SELECT * FROM p WHERE name = 'D') q \
+         APPROX NEAREST 1 BY DISTANCE abs(u.s - q.s) WHERE u.id = 3",
+    );
+    assert_eq!(outer, ["3|NULL"]);
 }
 
 #[test]

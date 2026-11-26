@@ -429,12 +429,15 @@ impl Lowerer {
         n: &crate::ast::NearestBy,
         span: Span,
     ) -> R<LogicalPlan> {
-        const QID: &str = "__nearest_qid__";
+        const QID: &str = krishiv_plan::NEAREST_BY_ID_COLUMN;
         const RANK: &str = "__nearest_rank__";
-        let k: i64 = n
-            .num_results
-            .as_deref()
-            .map_or(1, |k| k.parse().unwrap_or(1));
+        // `validate` has checked the range; a count that still fails to read is refused, never read as 1.
+        let k: i64 = match n.num_results.as_deref() {
+            None => 1,
+            Some(k) => k
+                .parse()
+                .map_err(|_| unsupported("this NEAREST BY result count", span))?,
+        };
         let star = |this: &Self, except: Vec<Vec<String>>| {
             arc(this.ex(
                 ExprNode::Star(Star {
@@ -458,16 +461,37 @@ impl Lowerer {
             },
             span,
         );
-        let joined = self.node(
+        // Spark's `MaxMinByK` skips a NULL ranking, so a right row ranked NULL is never a match. An inner
+        // join drops those rows in a filter (a filter may hold a non-deterministic ranking, `rand() + x`).
+        // A left outer join drops them in its condition, so a left row left with none is still padded; a
+        // join condition refuses a non-deterministic ranking, so `LEFT OUTER ... NEAREST BY rand()` fails.
+        let ranking = arc(self.expr(&n.ranking)?);
+        let not_null = arc(self.call("isnotnull", vec![Arc::clone(&ranking)], span));
+        let outer = matches!(kind, IrJoin::LeftOuter);
+        let crossed = self.node(
             PlanNode::Join {
                 left: arc(left),
                 right: arc(right),
                 kind,
-                condition: JoinCondition::None,
+                condition: if outer {
+                    JoinCondition::On(Arc::clone(&not_null))
+                } else {
+                    JoinCondition::None
+                },
             },
             span,
         );
-        let ranking = arc(self.expr(&n.ranking)?);
+        let joined = if outer {
+            crossed
+        } else {
+            self.node(
+                PlanNode::Filter {
+                    input: arc(crossed),
+                    predicate: not_null,
+                },
+                span,
+            )
+        };
         let order = match n.direction {
             crate::ast::NearestDirection::Similarity => SortOrder::desc(ranking),
             _ => SortOrder {

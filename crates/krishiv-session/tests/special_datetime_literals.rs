@@ -55,16 +55,16 @@ fn under_ntz_a_plain_timestamp_special_is_local() {
 }
 
 #[test]
-fn a_special_value_may_name_the_zone_whose_day_it_is() {
+fn a_special_value_zone_is_checked_and_changes_nothing() {
     let s = Session::builder()
         .config("spark.sql.session.timeZone", "UTC")
         .build()
         .unwrap();
     for sql in [
-        // EST is -05:00: that zone's midnight is 05:00 UTC.
-        "select hour(timestamp 'tomorrow EST') = 5",
-        "select minute(timestamp 'yesterday EST') = 0 and hour(timestamp 'yesterday EST') = 5",
-        "select timestamp 'tomorrow Zulu' = cast(date_add(current_date(), 1) as timestamp)",
+        // Spark ignores the zone: the day is the session zone's (postgreSQL/timestamp.sql).
+        "select timestamp 'tomorrow EST' = timestamp 'tomorrow'",
+        "select timestamp 'yesterday Zulu' = timestamp 'yesterday'",
+        "select timestamp 'today\tEST' = timestamp 'today'",
         "select date 'today Zulu' = current_date()",
         "select timestamp_ntz 'today Zulu' = cast(current_date() as timestamp_ntz)",
         "select timestamp 'epoch EST' = timestamp 'epoch'",

@@ -290,6 +290,11 @@ fn other_error_classes() {
         class("SELECT ) /* never closed"),
         ErrorClass::ParseSyntaxError
     );
+    // `SELECT FROM WHERE` now parses (the column `FROM` aliased `WHERE`), so the comment is what Spark reports.
+    assert_eq!(
+        class("SELECT FROM WHERE /* never closed"),
+        ErrorClass::UnclosedBracketedComment
+    );
     assert_eq!(
         class("SELECT ab\u{e9} FROM t"),
         ErrorClass::InvalidIdentifier

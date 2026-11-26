@@ -70,25 +70,26 @@ pub fn timestamp_text(s: &str) -> TimestampText {
 
 /// Spark's special date/timestamp value in `s` (`DateTimeUtils.extractSpecialValue`):
 /// `epoch`, `now`, `today`, `yesterday` or `tomorrow` (any case, trimmed),
-/// optionally followed by a time-zone id (`tomorrow EST`) whose "today" it
-/// is. `None` for anything else, for a zone the database does not know,
+/// optionally followed by a time-zone id (`tomorrow EST`). The zone is only
+/// checked, as Spark does: it never changes the value (the day is the session
+/// zone's). `None` for anything else, for a zone the database does not know,
 /// and for `now` with a zone.
+///
+/// Spark's pattern is `(\p{Alpha}+)\p{Blank}*(.*)`: the leading letters are the
+/// word, blanks (space or tab) are skipped, the rest is the zone.
 #[must_use]
-pub fn special_value(s: &str) -> Option<(&'static str, Option<&str>)> {
+pub fn special_value(s: &str) -> Option<&'static str> {
     let t = s.trim();
-    let (word, zone) = match t.split_once(' ') {
-        Some((w, z)) => (w, Some(z.trim())),
-        None => (t, None),
-    };
+    let end = t.find(|c: char| !c.is_alphabetic()).unwrap_or(t.len());
+    let (word, rest) = t.split_at(end);
+    let zone = rest.trim_start_matches([' ', '\t']).trim();
     let word = ["epoch", "now", "today", "yesterday", "tomorrow"]
         .into_iter()
         .find(|k| word.eq_ignore_ascii_case(k))?;
-    if let Some(z) = zone
-        && (word == "now" || crate::datetime::resolve_zone(z).is_err())
-    {
+    if !zone.is_empty() && (word == "now" || crate::datetime::resolve_zone(zone).is_err()) {
         return None;
     }
-    Some((word, zone))
+    Some(word)
 }
 
 /// Whether `s` names an explicit zone (an offset or region id after the
@@ -366,9 +367,11 @@ mod tests {
     #[test]
     fn special_values_with_a_zone() {
         use super::special_value;
-        assert_eq!(special_value(" Tomorrow "), Some(("tomorrow", None)));
-        assert_eq!(special_value("today EST"), Some(("today", Some("EST"))));
-        assert_eq!(special_value("epoch Zulu"), Some(("epoch", Some("Zulu"))));
+        assert_eq!(special_value(" Tomorrow "), Some("tomorrow"));
+        assert_eq!(special_value("today EST"), Some("today"));
+        assert_eq!(special_value("today\tEST"), Some("today"));
+        assert_eq!(special_value("today+05:00"), Some("today"));
+        assert_eq!(special_value("epoch Zulu"), Some("epoch"));
         assert_eq!(special_value("now EST"), None);
         assert_eq!(special_value("today Not/AZone"), None);
         assert_eq!(special_value("2020-01-01"), None);

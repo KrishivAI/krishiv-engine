@@ -808,7 +808,7 @@ impl Resolver<'_> {
         // by the ranking): a ranking that does not order is the join's own error.
         if spec.order_by.len() == 1
             && spec.partition_by.len() == 1
-            && matches!(&spec.partition_by[0].node, ExprNode::Column(c) if c.name == ["__nearest_qid__"])
+            && matches!(&spec.partition_by[0].node, ExprNode::Column(c) if c.name == [crate::NEAREST_BY_ID_COLUMN])
             && let Some(key) = rest.get(1)
             && let Some(t) = key.ty.data_type.as_ref().filter(|t| !orderable(t))
         {
