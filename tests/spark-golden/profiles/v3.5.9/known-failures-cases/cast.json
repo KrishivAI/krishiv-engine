@@ -1,9 +1,5 @@
 {
   "cases": {
-    "sql-commands": [
-      37,
-      38
-    ],
     "v35-ansi-default": [
       0,
       1,

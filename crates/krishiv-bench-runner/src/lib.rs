@@ -354,6 +354,8 @@ impl Runner {
                 .map_err(|e| RunnerError::Io(format!("cannot read {}: {e}", config.data)))?
                 .collect()
         };
+        // A file stem or a `--table` name is the whole view name, dots included.
+        use krishiv_common::names::quote_parts;
         for entry in entries {
             let path = entry
                 .map_err(|e| RunnerError::Io(format!("cannot list {}: {e}", config.data)))?
@@ -366,7 +368,7 @@ impl Runner {
                 session
                     .read()
                     .parquet([path_str])
-                    .create_or_replace_temp_view(&name),
+                    .create_or_replace_temp_view(&quote_parts(std::slice::from_ref(&name))),
             )?;
             tables.push(name);
         }
@@ -375,7 +377,7 @@ impl Runner {
                 session
                     .read()
                     .parquet(urls.iter().map(String::as_str))
-                    .create_or_replace_temp_view(name),
+                    .create_or_replace_temp_view(&quote_parts(std::slice::from_ref(name))),
             )?;
             tables.push(name.clone());
         }

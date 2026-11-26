@@ -66,10 +66,15 @@ class SparkConnectEngine(Engine):
             p = str(dataset.root / f"{t}.parquet")
             if self.cdata:
                 p = p.replace(host_root, self.cdata, 1)
-            self.spark.read.parquet(p).createOrReplaceTempView(t)
+            self.register_view(t, p)
         if self.container:
             self._p = DockerProc(self.container)
             self._p.check()
+
+    def register_view(self, table: str, path: str) -> None:
+        """Makes ``table`` a temporary view over the Parquet at ``path`` in the session."""
+        assert self.spark is not None, "setup() not called"
+        self.spark.read.parquet(path).createOrReplaceTempView(table)
 
     def run(self, query: Query) -> list[tuple]:
         assert self.spark is not None, "setup() not called"

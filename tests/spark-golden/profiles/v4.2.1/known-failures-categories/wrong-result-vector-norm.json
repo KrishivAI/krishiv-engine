@@ -1,0 +1,14 @@
+{
+  "category": "wrong-result-vector-norm",
+  "format_version": 1,
+  "kind": "bug",
+  "owner": "0.3.1",
+  "rules": [
+    {
+      "detail": "rows differ",
+      "file": "^vector-norm$",
+      "order": 9080
+    }
+  ],
+  "summary": "WRONG RESULT, 0.3.1: vector_norm / vector_normalize return a number (0.0, 5.0, Infinity, 16.0) or NULL where Spark 4.2.1 returns NaN; the 4.2.1 oracle changed NaN propagation (the 12 additive 4.2.1 statements)."
+}
