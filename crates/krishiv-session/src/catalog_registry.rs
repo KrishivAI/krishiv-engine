@@ -591,6 +591,7 @@ fn check_vended_ttl(config: &Config) -> Result<(), KrishivError> {
         .and_then(ConfigValue::as_duration);
     if ttl.is_some_and(|t| t.is_zero()) {
         return Err(krishiv_common::error::KrishivInvalidConfigValue {
+            // `Config` keeps the parsed value only, not how it was written: zero in the key's default unit.
             value: "'0s'".to_owned(),
             key: format!("\"{}\"", CATALOG_VENDED_DEFAULT_TTL.key),
             reason: "a catalog with storage = vended needs a positive default credential lifetime"
@@ -861,8 +862,9 @@ impl CatalogRegistry {
     /// # Errors
     /// Every refusal of [`CatalogDeclarations::parse`] (a type without a factory in this build
     /// is `KRISHIV_UNSUPPORTED_FEATURE` naming the type and the catalog); a secret reference
-    /// that does not resolve (`KRISHIV_INVALID_CONFIG_VALUE` naming the key); a factory's own
-    /// refusal ([`CatalogFactory::validate`]).
+    /// that does not resolve (`KRISHIV_INVALID_CONFIG_VALUE` naming the key); a zero
+    /// `krishiv.catalog.vendedDefaultTtl` with a `storage = vended` catalog
+    /// (`KRISHIV_INVALID_CONFIG_VALUE`); a factory's own refusal ([`CatalogFactory::validate`]).
     pub(crate) fn build(
         setup: CatalogSetup,
         config: &Config,

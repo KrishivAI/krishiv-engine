@@ -27,7 +27,7 @@ use crate::walk::{Node, children, visit_distinct};
 
 /// The rewrite of each node already rewritten, by address. It holds the
 /// original `Arc` too, so no address is reused while the rewrite runs.
-pub(crate) type Memo<T> = HashMap<*const T, (Arc<T>, Arc<T>)>;
+pub(crate) type Memo<T> = crate::walk::PtrMap<*const T, (Arc<T>, Arc<T>)>;
 
 type Pair = (*const (), *const ());
 

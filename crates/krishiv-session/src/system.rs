@@ -238,6 +238,7 @@ fn layout(table: &str) -> Option<Vec<(&'static str, Kind, bool)>> {
             ("partial", Flag, false),
             ("delegated_by", Text, true),
             ("hints", Hints, true),
+            ("planning_ns", Long, true),
         ],
         "partition_advice" => crate::partition_advice::layout(),
         "resource_groups" => crate::system_groups::layout(),
@@ -546,6 +547,7 @@ fn values(table: &str, sources: &Sources) -> Vec<ArrayRef> {
             Arc::new(BooleanArray::from_iter(rows.iter().map(|_| Some(false)))),
             text(rows.iter().map(|r| r.delegated_by.as_deref())),
             columns::hints_column(&rows.iter().map(|r| r.hints.as_deref()).collect::<Vec<_>>()),
+            long(rows.iter().map(|r| r.planning_ns)),
         ];
     }
     let rows = capability_rows();
@@ -658,6 +660,15 @@ pub(crate) struct QueryRow {
     /// submit-to-end time of a query that reached admission (a statement refused earlier misses its parse and
     /// analysis there).
     pub(crate) wall_ns: Option<i64>,
+    /// `system.queries.planning_ns` (MODES-2): for a query that ran, the time it spent planning before
+    /// its run, outside `wall_ns` and the queue: its parse and analysis (once, in the first run of
+    /// the analysis) and the optimization and physical planning of this run, file listing included.
+    /// `None` for a row that never ran; a result-cache replay counts as not run. Known limits (review
+    /// of 5aad51d3c): the parse-to-analysis window includes the access checks and any `IDENTIFIER(..)`
+    /// query it evaluates; a command that runs a query (INSERT, CTAS, MERGE, a write) times that
+    /// query's analysis and planning, not the command's own parse; two actions running at once on
+    /// one DataFrame share its clock, so one row may take the other's physical planning.
+    pub(crate) planning_ns: Option<i64>,
     pub(crate) peak_memory_bytes: Option<i64>,
     pub(crate) error_class: Option<String>,
     /// The failure's message, cut and masked like the text.
@@ -974,6 +985,7 @@ impl QueryLog {
             submitted_at: std::time::Instant::now(),
             ended_ms: None,
             wall_ns: None,
+            planning_ns: None,
             peak_memory_bytes: None,
             error_class: None,
             error_message: None,
@@ -1118,6 +1130,13 @@ impl QueryLog {
     pub(crate) fn set_group(&self, id: &str, group: &str) {
         self.history.update(&self.session_id, id, |row| {
             row.resource_group = Some(group.to_owned());
+        });
+    }
+
+    /// Stamps live row `id` with the time its query spent planning (`system.queries.planning_ns`).
+    pub(crate) fn set_planning_ns(&self, id: &str, ns: i64) {
+        self.history.update(&self.session_id, id, |row| {
+            row.planning_ns = Some(ns);
         });
     }
 

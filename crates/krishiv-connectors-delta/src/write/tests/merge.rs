@@ -83,17 +83,7 @@ fn merge(
         input: Arc::new(Leaf(input)),
         sink,
     }));
-    // As in `Env::write_as`: an ended driver's row groups are shipped by a background flush that returns its
-    // memory a moment after the query finished.
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    while env.query_pool.reserved() != 0 && std::time::Instant::now() < deadline {
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
-    assert_eq!(
-        env.query_pool.reserved(),
-        0,
-        "the rewrite gave its memory back"
-    );
+    env.assert_memory_returned("the rewrite");
     out.map(|_| rl)
 }
 

@@ -712,6 +712,10 @@ fn session_time_zone_is_validated() {
         "+8:0",
         "1/2",
         "a//b",
+        " UTC ",
+        "UTC ",
+        " +01:00",
+        "Europe/Paris\t",
     ] {
         let e = c.set("spark.sql.session.timeZone", bad).unwrap_err();
         assert_eq!(
@@ -860,6 +864,26 @@ fn io_blocking_threads_parses_and_defaults() {
         );
     }
     assert_eq!(get(&c), Some(3), "a rejected value leaves the setting");
+}
+
+#[test]
+fn release_at_query_end_defaults_on_and_parses() {
+    let mut c = Config::new();
+    let get = |c: &Config| {
+        c.get(&MEMORY_RELEASE_AT_QUERY_END)
+            .and_then(ConfigValue::as_bool)
+    };
+    assert_eq!(get(&c), Some(true));
+    c.set("krishiv.memory.releaseAtQueryEnd", "false").unwrap();
+    assert_eq!(get(&c), Some(false));
+    let e = c
+        .set("krishiv.memory.releaseAtQueryEnd", "sometimes")
+        .unwrap_err();
+    assert!(
+        e.to_string().contains("krishiv.memory.releaseAtQueryEnd"),
+        "{e}"
+    );
+    assert_eq!(get(&c), Some(false), "a rejected value leaves the setting");
 }
 
 #[test]

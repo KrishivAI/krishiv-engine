@@ -6875,7 +6875,7 @@
   "vector_cosine_similarity#1": {
     "ok": true,
     "rows": [
-      "0.9746319"
+      "0.97463185"
     ]
   },
   "vector_inner_product#1": {

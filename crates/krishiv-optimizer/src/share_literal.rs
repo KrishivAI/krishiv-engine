@@ -102,7 +102,7 @@ pub(crate) fn share(
     if groups.is_empty() {
         return Ok(root);
     }
-    let mut replace: HashMap<*const LogicalPlan, Arc<LogicalPlan>> = HashMap::new();
+    let mut replace: crate::expr::AddrMap<LogicalPlan, Arc<LogicalPlan>> = Default::default();
     // Each definition's output ids, and the definition.
     let mut expected: Vec<(Vec<AttrId>, Arc<LogicalPlan>)> = Vec::new();
     for group in &groups {
@@ -122,7 +122,7 @@ pub(crate) fn share(
     }
     let mut sharer = Sharer {
         replace: &replace,
-        done: HashMap::new(),
+        done: Default::default(),
     };
     let rewritten = sharer.go(Arc::clone(&root))?;
     // The rewrite pays only where `ShareCte` shares the definition with

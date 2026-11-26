@@ -72,6 +72,7 @@ pub(crate) fn runner(threads: usize) -> QueryRunner {
         io_threads: 1,
         blocking_threads: threads,
         io_blocking_threads: 2,
+        release_when_idle: true,
     });
     QueryRunner::new(executor.unwrap())
 }

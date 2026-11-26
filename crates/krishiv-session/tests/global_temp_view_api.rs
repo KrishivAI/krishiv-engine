@@ -58,3 +58,27 @@ async fn a_tagged_handle_runs_queries_and_a_closed_session_refuses() {
     s.close();
     assert!(s.with_request_tags(["etl"]).is_err());
 }
+
+/// Spark's `Dataset.createTempView` parses the name as a multipart identifier (Spark v4.3.0
+/// `classic/Dataset.scala:1679-1712`): backquotes are stripped, two parts are `TEMP_VIEW_NAME_TOO_MANY_NAME_PARTS`,
+/// an unparsable name is `_LEGACY_ERROR_TEMP_1321`.
+#[tokio::test]
+async fn a_view_name_is_parsed_as_spark_does() {
+    let s = Session::new().expect("session");
+    let df = s.sql("SELECT * FROM range(3)").await.expect("sql");
+    df.create_or_replace_temp_view("`qv`")
+        .await
+        .expect("quoted");
+    assert_eq!(count(&s, "qv").await, 3);
+    df.create_or_replace_global_temp_view("`g`")
+        .await
+        .expect("quoted global");
+    assert_eq!(count(&s, "global_temp.g").await, 3);
+    for name in ["db.v", "global_temp.v"] {
+        let e = df.create_temp_view(name).await.expect_err(name);
+        assert_eq!(e.error_class().name(), "TEMP_VIEW_NAME_TOO_MANY_NAME_PARTS");
+        assert!(e.to_string().contains(name), "{e}");
+    }
+    let e = df.create_temp_view("a..b").await.expect_err("bad");
+    assert_eq!(e.error_class().name(), "_LEGACY_ERROR_TEMP_1321");
+}

@@ -237,10 +237,15 @@ fn run_where(keep: impl Fn(&str, &str) -> bool) -> Vec<(Value, Run)> {
     out
 }
 
-fn cdf_refused(run: &Run) -> bool {
+/// Whether step `step` of `scenario` is one Krishiv refuses on a change-data-feed table.
+fn is_cdf_refused(scenario: &str, step: &str) -> bool {
     CDF_REFUSED
         .iter()
-        .any(|(s, n)| *s == run.scenario && *n == run.step)
+        .any(|(s, n)| *s == scenario && *n == step)
+}
+
+fn cdf_refused(run: &Run) -> bool {
+    is_cdf_refused(&run.scenario, &run.step)
 }
 
 fn refused_by_name(run: &Run) -> Option<&'static str> {
@@ -470,11 +475,7 @@ fn delta_merge_cardinality() {
 #[test]
 fn delta_cdf_merge_refused() {
     let mut refusals = 0;
-    for (step, run) in run_where(|scenario, step| {
-        CDF_REFUSED
-            .iter()
-            .any(|(s, n)| *s == scenario && *n == step)
-    }) {
+    for (step, run) in run_where(is_cdf_refused) {
         let name = format!("{}/{}", run.scenario, run.step);
         // delta-spark commits these with change data files; Krishiv refuses them before any
         // file is written.
@@ -997,6 +998,99 @@ fn a_merge_insert_column_takes_the_target_s_qualifier() {
             assert_eq!(rows, serde_json::json!([[1, "a"]]), "{statement}");
         }
     }
+}
+
+/// A `SET` column of a `MERGE` takes the target's qualifiers as an `INSERT` column does: a
+/// delta-spark 4.4.1 run (`UPDATE SET <key> = 'u'` over `t (id, v, st STRUCT<x>)`) updates the
+/// row for `t.v`, `default.t.v`, `spark_catalog.default.t.v`, `DEFAULT.T.V` and, under the alias
+/// `x`, `x.v`; under that alias `t.v` and `default.t.v`, and the source's `s.v` or another
+/// namespace's `other.t.v` anywhere, are `DELTA_MERGE_UNRESOLVED_EXPRESSION` (4.4.1's
+/// `INTERNAL_ERROR` form) and leave the table as it was.
+#[test]
+fn a_merge_set_column_takes_the_target_s_qualifier() {
+    let src = "(SELECT CAST(1 AS BIGINT) AS id, 'b' AS v) s";
+    let plain = |k: &str| {
+        format!("MERGE INTO t USING {src} ON t.id = s.id WHEN MATCHED THEN UPDATE SET {k} = 'u'")
+    };
+    let aliased = |k: &str| {
+        format!(
+            "MERGE INTO t AS x USING {src} ON x.id = s.id WHEN MATCHED THEN UPDATE SET {k} = 'u'"
+        )
+    };
+    let accepted = [
+        plain("t.v"),
+        plain("default.t.v"),
+        plain("spark_catalog.default.t.v"),
+        plain("DEFAULT.T.V"),
+        aliased("x.v"),
+    ];
+    let refused = [
+        aliased("t.v"),
+        aliased("default.t.v"),
+        aliased("spark_catalog.default.t.v"),
+        plain("s.v"),
+        plain("other.t.v"),
+    ];
+    for (i, (statement, ok)) in accepted
+        .iter()
+        .map(|q| (q, true))
+        .chain(refused.iter().map(|q| (q, false)))
+        .enumerate()
+    {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join(format!("t{i}"));
+        let session = Session::new().unwrap();
+        sql(
+            &session,
+            &format!(
+                "CREATE TABLE t (id BIGINT, v STRING, st STRUCT<x: INT>) USING delta LOCATION '{}'",
+                dir.display()
+            ),
+        )
+        .unwrap();
+        sql(
+            &session,
+            "INSERT INTO t VALUES (1, 'a', named_struct('x', 1))",
+        )
+        .unwrap();
+        let ran = sql(&session, statement);
+        let (_, rows) = sql(&session, "SELECT id, v FROM t ORDER BY id").unwrap();
+        if ok {
+            let (_, out) = ran.unwrap();
+            assert_eq!(out, serde_json::json!([[1, 1, 0, 0]]), "{statement}");
+            assert_eq!(rows, serde_json::json!([[1, "u"]]), "{statement}");
+        } else {
+            let e = ran.unwrap_err();
+            assert_eq!(e.error_class().name(), "INTERNAL_ERROR", "{statement}: {e}");
+            assert!(
+                e.to_string().contains("DELTA_MERGE_UNRESOLVED_EXPRESSION"),
+                "{statement}: {e}"
+            );
+            assert_eq!(rows, serde_json::json!([[1, "a"]]), "{statement}");
+        }
+    }
+    // A nested key keeps its qualifier stripping too: `default.t.st.x` reaches the nested-field
+    // refusal (Spark updates the field; Krishiv does not write nested fields yet), not the
+    // unresolved name it was before.
+    let tmp = tempfile::tempdir().unwrap();
+    let session = Session::new().unwrap();
+    sql(
+        &session,
+        &format!(
+            "CREATE TABLE t (id BIGINT, v STRING, st STRUCT<x: INT>) USING delta LOCATION '{}'",
+            tmp.path().join("nested").display()
+        ),
+    )
+    .unwrap();
+    let e = sql(
+        &session,
+        &format!(
+            "MERGE INTO t USING {src} ON t.id = s.id WHEN MATCHED THEN UPDATE SET default.t.st.x = 9"
+        ),
+    )
+    .unwrap_err();
+    assert_eq!(e.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE", "{e}");
+    assert!(e.to_string().contains("nested field st.x"), "{e}");
 }
 
 /// A `MERGE` whose source reads the target again under another spelling of its root (the path

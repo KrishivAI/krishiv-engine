@@ -85,6 +85,7 @@ fn threaded() -> QueryRunner {
         io_threads: 1,
         blocking_threads: 2,
         io_blocking_threads: 2,
+        release_when_idle: true,
     };
     QueryRunner::new(TokioExecutor::new(&config).unwrap())
 }
@@ -959,6 +960,7 @@ async fn bucket_readers_race_on_threads() {
             io_threads: 1,
             blocking_threads: 4,
             io_blocking_threads: 2,
+            release_when_idle: true,
         })
         .unwrap(),
     );
