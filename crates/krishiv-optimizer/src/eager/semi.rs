@@ -403,5 +403,11 @@ mod tests {
         assert!(exact(&DataType::String));
         assert!(!exact(&DataType::Double));
         assert!(!exact(&DataType::Float));
+        assert!(!exact(&DataType::CollatedString(
+            krishiv_types::Collation::UTF8_LCASE
+        )));
+        assert!(!exact(&DataType::Array(std::sync::Arc::new(
+            krishiv_types::ArrayType::new(DataType::Long, true)
+        ))));
     }
 }

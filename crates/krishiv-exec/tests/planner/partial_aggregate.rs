@@ -237,6 +237,34 @@ pub(super) fn tables(dir: &Path, rows: &[Row], keys: &[i64], rt: &tokio::runtime
     parquet_files(dir, &sources, true, rt)
 }
 
+/// As [`tables`], with a nullable non-key column `w.wa` beside each key.
+pub(super) fn tables_with_attribute(
+    dir: &Path,
+    rows: &[Row],
+    keys: &[(i64, Option<i64>)],
+    rt: &tokio::runtime::Runtime,
+) -> Tpch {
+    write(dir, "f.parquet", &facts(rows));
+    let schema = Schema::new(vec![
+        Field::new("wk", DataType::Int64, false),
+        Field::new("wa", DataType::Int64, true),
+    ]);
+    let w = RecordBatch::try_new(
+        Arc::new(schema),
+        vec![
+            Arc::new(Int64Array::from_iter_values(keys.iter().map(|k| k.0))),
+            Arc::new(Int64Array::from_iter(keys.iter().map(|k| k.1))),
+        ],
+    )
+    .unwrap();
+    write(dir, "w.parquet", &w);
+    let sources = [
+        ("f", vec!["f.parquet".to_owned()]),
+        ("w", vec!["w.parquet".to_owned()]),
+    ];
+    parquet_files(dir, &sources, true, rt)
+}
+
 /// As [`tables`], with `w.wk` nullable: `None` is a NULL key, which the join
 /// drops and `InferJoinFilters` filters out of `w` with `isnotnull(wk)`.
 pub(super) fn tables_with_null_keys(

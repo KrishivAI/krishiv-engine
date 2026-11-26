@@ -806,14 +806,20 @@ fn run(
                 // The joins eager aggregation left to the rule and the rule
                 // refused: none moved, so the plan is the rule-off one (the
                 // rule's notes kept); some moved, so eager runs on what is left.
+                // Either way eager, group-key code, InferJoinFilters and the
+                // prune/tidy pass run a second time: measure planning time
+                // before `payloadAboveAggregate` defaults on (F-I).
                 if deferred && !moved {
                     let notes: Vec<RuleStep> = t
                         .steps
                         .drain(mark..)
                         .filter(|s| s.rule == "PayloadAboveAggregate")
                         .collect();
+                    // The rule ran before the rule-off re-run: its notes come
+                    // first, so `EXPLAIN VERBOSE` keeps the order things ran in.
+                    let at = t.steps.len();
                     root = before_payload(pre, false, &mut t)?.0;
-                    t.steps.extend(notes);
+                    t.steps.splice(at..at, notes);
                 } else if deferred {
                     let (pushed, _) =
                         eager_pass(&root, stats, options, expand, joins, false, &mut t)?;
