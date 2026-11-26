@@ -21,7 +21,8 @@
 //! - once none runs (it is alone), a waiting task that still does not fit
 //!   is *split*: its table and the input it has not merged are
 //!   re-partitioned by the next hash bits into tasks of the next level (up
-//!   to [`MAX_LEVEL`]). A split runs alone, so tasks refused at once never
+//!   to [`max_level`](crate::hash::max_level) of the runs' width). A split
+//!   runs alone, so tasks refused at once never
 //!   mean as many re-partition rewrites at once.
 //!
 //! A spill request ([`Sink::spill_global`](crate::Sink::spill_global))
@@ -36,8 +37,16 @@
 //! and when none can the query fails with `UNABLE_TO_ACQUIRE_MEMORY`, as
 //! the serial phase did.
 //!
+//! **Width.** Level 0 has `2^level0_bits` partitions, 8 to 64 by the
+//! executor's parallelism ([`level0_bits`](crate::hash::level0_bits),
+//! design `0.4-agg-disk-overpartition`), so every thread takes several
+//! tasks and few stall or split; a split's runs are 8 wide at every level.
+//!
 //! The groups' order across partitions is the tasks' key order, not the
 //! order the serial phase produced; inside a partition it is unchanged.
+//! The width, and so the order, follows the thread count, also with
+//! `krishiv.exec.seed` set; under `krishiv.deterministicOrder` it is 8,
+//! whatever the thread count.
 //!
 //! **Cancellation and errors.** The driver checks for cancellation between
 //! task completions and each task between batches; a task's error fails
@@ -63,7 +72,7 @@ use super::{
 };
 use crate::context::TaskContext;
 use crate::error::{Result, internal};
-use crate::hash::{MAX_LEVEL, PARTITIONS};
+use crate::hash::partitions_at;
 use crate::sync::lock;
 
 /// Where a task's output file goes in the result: its position among the
@@ -76,6 +85,8 @@ type Key = Vec<u32>;
 struct DiskTask {
     key: Key,
     level: u32,
+    /// The deepest level at the runs' width ([`Spiller::max_level`]).
+    max_level: u32,
     table: Table,
     reservation: Reservation,
     /// Input files not opened yet, the next one last.
@@ -118,6 +129,7 @@ impl DiskTask {
     fn new(
         key: Key,
         level: u32,
+        max_level: u32,
         table: Table,
         reservation: Reservation,
         files: Vec<SpillFile>,
@@ -125,6 +137,7 @@ impl DiskTask {
         Self {
             key,
             level,
+            max_level,
             table,
             reservation,
             files,
@@ -142,7 +155,7 @@ impl DiskTask {
     /// Whether a split can free its memory: it has groups, is not yet
     /// emitting them, and the hash bits are not used up.
     fn splittable(&self) -> bool {
-        self.emit.is_none() && self.level < MAX_LEVEL && !self.table.not_worth_spilling()
+        self.emit.is_none() && self.level < self.max_level && !self.table.not_worth_spilling()
     }
 
     /// Whether all its input is merged: what is left is writing its groups,
@@ -300,9 +313,10 @@ impl DiskTask {
         lend(&mut reservation, HEADROOM);
         let first = s.write_run(&table, 0, level, u32::MAX)?;
         drop((table, reservation));
-        let mut writers: Vec<Option<SpillWriter>> = (0..PARTITIONS).map(|_| None).collect();
+        let width = partitions_at(level, s.level0_bits);
+        let mut writers: Vec<Option<SpillWriter>> = (0..width).map(|_| None).collect();
         let mut write = |batch: &Batch| -> Result<()> {
-            let parts = fresh.partitions_of(batch.data(), level)?;
+            let parts = fresh.partitions_of(batch.data(), level, s.level0_bits)?;
             for (rows, slot) in parts.into_iter().zip(writers.iter_mut()) {
                 if rows.is_empty() {
                     continue;
@@ -328,7 +342,7 @@ impl DiskTask {
                 None => break,
             }
         }
-        let mut rest = Vec::with_capacity(PARTITIONS);
+        let mut rest = Vec::with_capacity(width);
         for w in writers {
             rest.push(w.map(|w| s.finish(w)).transpose()?);
         }
@@ -496,7 +510,14 @@ impl HashAggregate {
                     };
                     bump(&self.counters.disk_tasks, 1);
                     let table = self.new_table(g, false)?;
-                    let t = DiskTask::new(key, level, table, ctx.consumer().reservation(), files);
+                    let t = DiskTask::new(
+                        key,
+                        level,
+                        s.max_level(),
+                        table,
+                        ctx.consumer().reservation(),
+                        files,
+                    );
                     running.push(self.launch(ctx, s, t));
                 }
                 self.counters
@@ -575,7 +596,7 @@ impl HashAggregate {
                 Ended::Split(key, level, runs) => {
                     splitting = false;
                     let mut children = Vec::new();
-                    tasks_of(runs, level, &mut children);
+                    tasks_of(runs, level, &mut children)?;
                     // The children run next, in their order.
                     let mut next = VecDeque::new();
                     push_tasks(&mut next, &key, children)?;

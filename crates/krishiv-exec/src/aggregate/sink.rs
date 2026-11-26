@@ -13,7 +13,8 @@
 //!   whose results go to an output spill file of its own. Tasks run in
 //!   parallel on the blocking pool ([`disk`]). A task whose table does not
 //!   fit is split: the table and the rest of its input are re-partitioned by
-//!   the next hash bits into new tasks (up to `MAX_LEVEL`).
+//!   the next hash bits into new tasks (up to `max_level` of the runs'
+//!   width: level 0 is 8 to 64 partitions by the parallelism, `disk.rs`).
 //!
 //! `finalize` keeps all of this in the global state between steps and
 //! yields after each, so [`Sink::spill_global`] can free memory at any
@@ -44,7 +45,7 @@ use crate::ExchangeStats;
 use crate::context::{QueryContext, TaskContext};
 use crate::error::{Result, cancelled, internal};
 use crate::executor::{Executor, run_blocking};
-use crate::hash::{HashSeed, PARTITIONS, ProbeTotals};
+use crate::hash::{HashSeed, ProbeTotals, level0_bits, max_level};
 use crate::operator::{GlobalState, LocalState, Sink, SinkStatus, Source};
 use crate::output_spill::{OutputSpill, SpillUnread, Unfinished, refused};
 use crate::sync::{Event, Mutex, lock};
@@ -207,6 +208,10 @@ pub struct HashAggregate {
     /// pool at that point).
     #[cfg(test)]
     disk_merged_gate: Option<Arc<crate::testing::BlockingGate>>,
+    /// Tests: the width of level 0 of the spill runs, whatever the
+    /// parallelism ([`with_spill_bits`](Self::with_spill_bits)).
+    #[cfg(test)]
+    spill_bits: Option<u32>,
 }
 
 impl HashAggregate {
@@ -229,6 +234,8 @@ impl HashAggregate {
             disk_gate: None,
             #[cfg(test)]
             disk_merged_gate: None,
+            #[cfg(test)]
+            spill_bits: None,
         }))
     }
 
@@ -253,6 +260,8 @@ impl HashAggregate {
             disk_gate: None,
             #[cfg(test)]
             disk_merged_gate: None,
+            #[cfg(test)]
+            spill_bits: None,
         }))
     }
 
@@ -278,6 +287,7 @@ impl HashAggregate {
             output_gate: None,
             disk_gate: None,
             disk_merged_gate: None,
+            spill_bits: None,
         }))
     }
 
@@ -300,7 +310,17 @@ impl HashAggregate {
             output_gate: None,
             disk_gate: None,
             disk_merged_gate: None,
+            spill_bits: None,
         }))
+    }
+
+    /// `self` (unshared) writing level 0 of its spill runs `bits` wide,
+    /// whatever the parallelism.
+    #[cfg(test)]
+    pub(crate) fn with_spill_bits(self: Arc<Self>, bits: u32) -> Arc<Self> {
+        let mut me = Arc::into_inner(self).expect("an unshared aggregate");
+        me.spill_bits = Some(bits);
+        Arc::new(me)
     }
 
     /// [`new`](Self::new) whose result's spill waits at `gate` before it
@@ -320,6 +340,7 @@ impl HashAggregate {
             output_gate: Some(gate),
             disk_gate: None,
             disk_merged_gate: None,
+            spill_bits: None,
         }))
     }
 
@@ -340,6 +361,7 @@ impl HashAggregate {
             output_gate: None,
             disk_gate: Some(gate),
             disk_merged_gate: None,
+            spill_bits: None,
         }))
     }
 
@@ -362,6 +384,7 @@ impl HashAggregate {
             output_gate: None,
             disk_gate: Some(done),
             disk_merged_gate: Some(merged),
+            spill_bits: None,
         }))
     }
 
@@ -492,9 +515,19 @@ impl HashAggregate {
         self.spiller_for(ctx, Arc::clone(ctx.consumer().consumer()))
     }
 
-    /// A [`Spiller`] whose writers' scratch is `consumer`'s.
+    /// A [`Spiller`] whose writers' scratch is `consumer`'s. Every spiller of
+    /// one aggregate writes level 0 at one width (design
+    /// `0.4-agg-disk-overpartition` §2): the executor's parallelism and the
+    /// deterministic mode are the query's.
     fn spiller_for(&self, ctx: &TaskContext, consumer: Arc<ConsumerHandle>) -> Option<Spiller> {
+        let bits = level0_bits(
+            ctx.executor().parallelism(),
+            ctx.query().config().deterministic_order,
+        );
+        #[cfg(test)]
+        let bits = self.spill_bits.unwrap_or(bits);
         Some(Spiller {
+            level0_bits: bits,
             core: Arc::clone(&self.core),
             counters: Arc::clone(&self.counters),
             query: Arc::clone(ctx.query()),
@@ -514,9 +547,16 @@ struct Spiller {
     scope: SpillScope,
     consumer: Arc<ConsumerHandle>,
     batch_size: usize,
+    /// Width in bits of level 0 of the runs it writes (3..=6).
+    level0_bits: u32,
 }
 
 impl Spiller {
+    /// The deepest level a split may reach at this spiller's width.
+    pub(super) fn max_level(&self) -> u32 {
+        max_level(self.level0_bits)
+    }
+
     /// A writer for one spill run, finished before the spill returns: its
     /// scratch may use the pool's spill-scratch floor, so a spill of a full
     /// pool does not fail for want of its writer's buffers.
@@ -537,7 +577,7 @@ impl Spiller {
     /// Writes groups `from..` of `table` as one run of partition files at
     /// `level` (blocking I/O).
     fn write_run(&self, table: &Table, from: usize, level: u32, partition: u32) -> Result<Run> {
-        let parts = table.ids_by_partition(level, from);
+        let parts = table.ids_by_partition(level, self.level0_bits, from);
         let chunk = spill_chunk(table.memory_size(), table.len());
         self.write_parts(
             &parts,
@@ -1111,9 +1151,18 @@ fn held(inner: &Inner) -> usize {
 /// Makes the per-partition tasks of `runs` at `level`: runs of one
 /// partition merge in partition-index order (stable), so order-sensitive
 /// aggregates merge deterministically whatever thread spilled first.
-fn tasks_of(mut runs: Vec<Run>, level: u32, tasks: &mut Vec<(u32, Vec<SpillFile>)>) {
+///
+/// # Errors
+/// `INTERNAL_ERROR` when the runs of one level differ in width.
+fn tasks_of(mut runs: Vec<Run>, level: u32, tasks: &mut Vec<(u32, Vec<SpillFile>)>) -> Result<()> {
     runs.sort_by_key(|r| r.partition);
-    let mut by_part: Vec<Vec<SpillFile>> = (0..PARTITIONS).map(|_| Vec::new()).collect();
+    let width = runs.first().map_or(0, |r| r.files.len());
+    if runs.iter().any(|r| r.files.len() != width) {
+        return Err(internal(format!(
+            "aggregate spill runs of level {level} differ in width"
+        )));
+    }
+    let mut by_part: Vec<Vec<SpillFile>> = (0..width).map(|_| Vec::new()).collect();
     for run in runs {
         for (p, f) in run.files.into_iter().enumerate() {
             if let Some(f) = f {
@@ -1127,6 +1176,7 @@ fn tasks_of(mut runs: Vec<Run>, level: u32, tasks: &mut Vec<(u32, Vec<SpillFile>
             .filter(|f| !f.is_empty())
             .map(|f| (level, f)),
     );
+    Ok(())
 }
 
 impl HashAggregate {
@@ -1156,7 +1206,7 @@ impl HashAggregate {
                 // drivers' earlier spills, then the tables.
                 let mut all = std::mem::take(&mut inner.runs);
                 all.extend(runs);
-                tasks_of(all, 0, &mut inner.tasks);
+                tasks_of(all, 0, &mut inner.tasks)?;
                 Ok(())
             }) as Apply)
         }))

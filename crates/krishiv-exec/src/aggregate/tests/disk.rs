@@ -88,6 +88,8 @@ struct DiskRun {
     rows: Vec<String>,
     /// The output source's parallelism once finalized.
     parallel: usize,
+    /// Rows in output order.
+    ordered: Vec<String>,
 }
 
 /// Runs `agg` by hand under a pool of `limit` bytes: `drivers` drivers sink
@@ -103,11 +105,23 @@ async fn disk_by_hand(
     limit: usize,
     rows_layout: bool,
 ) -> DiskRun {
-    let root = pool(limit);
     let config = ExecConfig {
         agg_row_layout: rows_layout,
         ..ExecConfig::default()
     };
+    disk_by_hand_in(agg, s, b, executor, limit, config).await
+}
+
+/// [`disk_by_hand`] under `config`.
+async fn disk_by_hand_in(
+    agg: &Arc<HashAggregate>,
+    s: &SchemaRef,
+    b: &[Vec<ArrayRef>],
+    executor: Arc<dyn Executor>,
+    limit: usize,
+    config: ExecConfig,
+) -> DiskRun {
+    let root = pool(limit);
     let q = QueryContext::new(
         QueryId(12),
         WorkloadClass::Batch,
@@ -162,6 +176,7 @@ async fn disk_by_hand(
     DiskRun {
         rows: rows(&out),
         parallel,
+        ordered: ordered_rows(&out),
     }
 }
 
@@ -212,7 +227,9 @@ async fn disk_tasks_in_parallel_equal_one_at_a_time() {
 /// refused memory while others run waits for one of them to finish; only
 /// a task alone splits, so no split ever runs beside another task or
 /// split (the blocking pool has real threads here). The rows are those of
-/// the in-memory aggregate.
+/// the in-memory aggregate. Level 0 is 8 wide (at the 32 partitions 4
+/// threads now get, the tasks fit and none waits); 64 wide the rows are
+/// the same and no split overlaps either.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_refused_task_waits_for_the_others_before_it_splits() {
     let (s, b) = wide_input(80_000, 20_000);
@@ -227,11 +244,11 @@ async fn a_refused_task_waits_for_the_others_before_it_splits() {
     let mut waits = 0;
     let mut splits = 0;
     for layout in [false, true] {
-        for limit in [3 << 20, 2 << 20] {
+        for (limit, bits) in [(3 << 20, 3), (2 << 20, 3), (3 << 20, 6), (2 << 20, 6)] {
             let (_m, scope) = spill_dir();
             let mut sp = spec(&s, vec![0], wide_aggs(&s));
             sp.spill = Some(scope);
-            let agg = HashAggregate::new(sp).unwrap();
+            let agg = HashAggregate::new(sp).unwrap().with_spill_bits(bits);
             let executor: Arc<dyn Executor> = TokioExecutor::new(&crate::ExecutorConfig {
                 compute_threads: 4,
                 io_threads: 1,
@@ -241,10 +258,13 @@ async fn a_refused_task_waits_for_the_others_before_it_splits() {
             })
             .unwrap();
             let got = disk_by_hand(&agg, &s, &b, executor, limit, layout).await;
-            assert_eq!(canonical(&got.rows), expected, "layout {layout}, {limit} B");
-            assert_eq!(agg.disk_split_overlaps(), 0, "layout {layout}, {limit} B");
-            waits += sink_metric(&agg, "disk_stalls");
-            splits += agg.metrics().repartitions;
+            let at = format!("layout {layout}, {limit} B, {bits} bits");
+            assert_eq!(canonical(&got.rows), expected, "{at}");
+            assert_eq!(agg.disk_split_overlaps(), 0, "{at}");
+            if bits == 3 {
+                waits += sink_metric(&agg, "disk_stalls");
+                splits += agg.metrics().repartitions;
+            }
         }
     }
     // The case under test happened: tasks were refused beside others, and
@@ -812,4 +832,140 @@ async fn a_result_frees_each_partition_as_it_is_read() {
     };
     let (got, _) = exec_with(unread_plan(20_000, None), o, true).await.unwrap();
     assert_eq!(rows(&got), want);
+}
+
+/// Rows as `a|b|c` in output order.
+fn ordered_rows(batches: &[Batch]) -> Vec<String> {
+    batches
+        .iter()
+        .flat_map(|b| {
+            let d = b.data();
+            (0..d.num_rows()).map(move |r| {
+                let cells: Vec<String> = d.columns().iter().map(|c| cell(c, r)).collect();
+                cells.join("|")
+            })
+        })
+        .collect()
+}
+
+/// A 4-thread executor with real blocking threads.
+fn four_threads() -> Arc<dyn Executor> {
+    TokioExecutor::new(&crate::ExecutorConfig {
+        compute_threads: 4,
+        io_threads: 1,
+        blocking_threads: 4,
+        io_blocking_threads: 2,
+        release_when_idle: true,
+    })
+    .unwrap()
+}
+
+/// Design `0.4-agg-disk-overpartition` §3: where an 8-wide level 0 leaves
+/// partitions that do not fit beside each other (tasks wait or split), a
+/// 64-wide one gives every task a 64th of the groups: none waits, none
+/// splits, and the rows are the same.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_64_wide_level_0_needs_no_wait_or_split_where_8_does() {
+    let (s, b) = wide_input(80_000, 20_000);
+    let mut expected: Vec<String> = (0..20_000).map(|k| format!("{k}|4")).collect();
+    expected.sort();
+    let canonical = |rows: &[String]| {
+        let mut v: Vec<String> = rows.iter().map(|r| without_list(r).to_owned()).collect();
+        v.sort();
+        v
+    };
+    for layout in [false, true] {
+        let mut by_bits = Vec::new();
+        for bits in [3, 6] {
+            let (_m, scope) = spill_dir();
+            let mut sp = spec(&s, vec![0], wide_aggs(&s));
+            sp.spill = Some(scope);
+            let agg = HashAggregate::new(sp).unwrap().with_spill_bits(bits);
+            let got = disk_by_hand(&agg, &s, &b, four_threads(), 3 << 20, layout).await;
+            assert_eq!(
+                canonical(&got.rows),
+                expected,
+                "layout {layout}, {bits} bits"
+            );
+            let waited = sink_metric(&agg, "disk_stalls") + agg.metrics().repartitions;
+            by_bits.push((waited, sink_metric(&agg, "disk_tasks")));
+        }
+        let [(waited8, _), (waited64, tasks64)] = by_bits[..] else {
+            unreachable!()
+        };
+        assert!(waited8 > 0, "layout {layout}: 8 wide never waited or split");
+        assert_eq!(waited64, 0, "layout {layout}: 64 wide waited or split");
+        assert!(tasks64 > 8, "layout {layout}: {tasks64} tasks");
+    }
+}
+
+/// Every level-0 run is 64 partitions wide at 6 bits (drivers' spills and
+/// the spill of the tables left at the end; 40,000 groups fill every
+/// partition, so the disk phase has 64 tasks). The rows are the unspilled ones, and equal those of an
+/// 8-wide level 0 with `collect_list` order included (runs of one
+/// partition still merge in partition order).
+#[tokio::test]
+async fn level_0_runs_at_6_bits_are_64_wide_and_give_the_unspilled_rows() {
+    let (s, b) = grouped_input(120_000, 40_000);
+    let expected = run_rows(single(&s, &b)).await;
+    for layout in [false, true] {
+        for limit in [8 << 20, 3 << 20] {
+            let mut by_bits = Vec::new();
+            for bits in [3, 6] {
+                let (_m, scope) = spill_dir();
+                let mut sp = spec(&s, vec![0], disk_aggs(&s));
+                sp.spill = Some(scope);
+                let agg = HashAggregate::new(sp).unwrap().with_spill_bits(bits);
+                let executor: Arc<dyn Executor> = TokioExecutor::deterministic(4).unwrap();
+                let got = disk_by_hand(&agg, &s, &b, executor, limit, layout).await;
+                let at = format!("layout {layout}, {limit} B, {bits} bits");
+                let plain: Vec<&str> = got.rows.iter().map(|r| without_list(r)).collect();
+                assert_eq!(plain, expected, "{at}");
+                let m = agg.metrics();
+                assert!(m.spill_runs > 0, "{at}");
+                if m.repartitions == 0 {
+                    // One disk task per level-0 partition.
+                    assert_eq!(sink_metric(&agg, "disk_tasks"), 1 << bits, "{at}");
+                }
+                by_bits.push(got.rows);
+            }
+            assert_eq!(by_bits[0], by_bits[1], "layout {layout}, {limit} B");
+        }
+    }
+}
+
+/// Under `krishiv.deterministicOrder` level 0 stays 8 wide at any slot
+/// count: with 8 slots the spilled output is, row for row and in order,
+/// the output of a level 0 forced to 8 wide, from 8 disk tasks.
+#[tokio::test]
+async fn deterministic_mode_keeps_level_0_8_wide() {
+    let (s, b) = grouped_input(120_000, 40_000);
+    for layout in [false, true] {
+        let mut outs = Vec::new();
+        for forced in [None, Some(3)] {
+            let (_m, scope) = spill_dir();
+            let mut sp = spec(&s, vec![0], disk_aggs(&s));
+            sp.spill = Some(scope);
+            let mut agg = HashAggregate::new(sp).unwrap();
+            if let Some(bits) = forced {
+                agg = agg.with_spill_bits(bits);
+            }
+            let executor: Arc<dyn Executor> = TokioExecutor::deterministic(8).unwrap();
+            let config = ExecConfig {
+                agg_row_layout: layout,
+                deterministic_order: true,
+                // A fixed hash seed: the partitions are the same each run.
+                seed: Some(42),
+                ..ExecConfig::default()
+            };
+            let got = disk_by_hand_in(&agg, &s, &b, executor, 3 << 20, config).await;
+            let m = agg.metrics();
+            assert!(m.spill_runs > 0, "layout {layout}");
+            if m.repartitions == 0 {
+                assert_eq!(sink_metric(&agg, "disk_tasks"), 8, "layout {layout}");
+            }
+            outs.push(got.ordered);
+        }
+        assert_eq!(outs[0], outs[1], "layout {layout}");
+    }
 }
