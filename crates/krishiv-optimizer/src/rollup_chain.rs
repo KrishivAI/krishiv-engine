@@ -75,7 +75,7 @@ use krishiv_types::DataType;
 use crate::dag;
 use crate::eager::MIN_REDUCTION;
 use crate::estimate::Estimator;
-use crate::expr::{Attrs, column, data_type, is_deterministic, references, substitute};
+use crate::expr::{AttrMap, Attrs, column, data_type, is_deterministic, references, substitute};
 use crate::restrict::{MAX_ID, max_id};
 use crate::stats::Statistics;
 
@@ -250,7 +250,7 @@ fn rewrite(
     // Each projection: its items (in `P`'s ids) and the keys it keeps.
     let mut items: Vec<Vec<Arc<Expr>>> = Vec::with_capacity(projections.len());
     let mut sets: Vec<Vec<AttrId>> = Vec::with_capacity(projections.len());
-    let to_p: HashMap<AttrId, Arc<Expr>> = rename
+    let to_p: AttrMap<Arc<Expr>> = rename
         .iter()
         .filter_map(|(above, id)| {
             p_out
@@ -425,7 +425,7 @@ fn rewrite(
     let mut branches = Vec::with_capacity(items.len());
     for (j, row) in items.iter().enumerate() {
         let (read, cols) = read_of(&mut built, branch_set[j], next, ctes)?;
-        let map: HashMap<AttrId, Arc<Expr>> = cols.iter().map(|(id, c)| (*id, column(c))).collect();
+        let map: AttrMap<Arc<Expr>> = cols.iter().map(|(id, c)| (*id, column(c))).collect();
         let mut exprs = Vec::with_capacity(row.len());
         for (e, o) in row.iter().zip(output) {
             let id = if j == 0 {

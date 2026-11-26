@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # The official Krishiv image: `krishiv` with the server, Spark Connect, Arrow Flight SQL, the web
-# console, Delta and Iceberg tables and the cloud object stores (S3, GCS, Azure).
+# console, Delta and Iceberg tables (with Iceberg REST catalogs) and the cloud object stores (S3, GCS, Azure).
 #
 #   docker buildx build -f docker/Dockerfile -t krishiv .          (context: the repository root)
 #   docker run --rm -p 15002:15002 -p 8080:8080 krishiv ...         (see docker/README.md)
@@ -23,7 +23,7 @@ COPY . .
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/src/target \
     cargo build --profile dist --locked -p krishiv-cli \
-        --features server,connect,flight-sql,cloud,ui,delta,iceberg \
+        --features server,connect,flight-sql,cloud,ui,delta,iceberg,catalog-iceberg-rest \
     && install -D target/dist/krishiv /out/krishiv
 
 FROM debian:bookworm-slim AS runtime

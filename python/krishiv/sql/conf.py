@@ -4,9 +4,13 @@
 from __future__ import annotations
 
 import warnings
+from typing import TYPE_CHECKING
 
 from krishiv import _native
-from krishiv.errors import SparkNoSuchElementException, not_expected_type
+from krishiv.errors import SparkNoSuchElementException, not_expected_type, not_implemented
+
+if TYPE_CHECKING:
+    from krishiv.sql.session import SparkSession
 
 _UNSET = object()
 
@@ -33,10 +37,14 @@ def _warn_if_cluster_setting(key: str, value: str, stacklevel: int) -> None:
 
 
 class RuntimeConfig:
-    def __init__(self, session: _native.Session) -> None:
+    """``spark.conf``: get, set and unset the session's configuration."""
+
+    def __init__(self, session: _native.Session, spark: SparkSession | None = None) -> None:
         self._session = session
+        self._spark = spark
 
     def get(self, key: str, default: object = _UNSET) -> str | None:
+        """The value of ``key``, or ``default`` when it is unset (fails when there is no default)."""
         value = self._session.conf_get(key)
         if value is not None:
             return value
@@ -51,6 +59,7 @@ class RuntimeConfig:
         return None if default is None else str(default)
 
     def set(self, key: str, value: str | int | bool) -> None:
+        """Sets the configuration ``key`` for this session."""
         if not isinstance(value, str | int | bool):
             raise not_expected_type("value", "str, int or bool", value)
         text = ("true" if value else "false") if isinstance(value, bool) else str(value)
@@ -61,4 +70,19 @@ class RuntimeConfig:
         self._session.conf_set(key, text)
 
     def unset(self, key: str) -> None:
+        """Resets ``key`` to its default."""
         self._session.conf_unset(key)
+
+    def isModifiable(self, key: str) -> bool:
+        """Whether the configuration ``key`` is a known setting that can be changed at run time
+        (``spark.conf.set``); static and unknown keys are ``False``, as in Spark."""
+        if not isinstance(key, str):
+            raise not_expected_type("key", "str", key)
+        return self._session.conf_is_registered(key) and self._session.conf_is_modifiable(key)
+
+    @property
+    def getAll(self) -> dict[str, str]:
+        """Every configuration set in this session, under the names the engine uses (a property, as in PySpark)."""
+        if self._spark is None:
+            raise not_implemented("RuntimeConfig.getAll on a configuration without a session")
+        return {row[0]: row[1] for row in self._spark.sql("SET").collect()}

@@ -452,8 +452,14 @@ fn csv_distinguishes_null_from_empty_and_zone_is_checked() {
         ],
         None,
     );
+    // `spark-sql --conf` with this zone fails building the session (Spark
+    // 4.2.0 run): `INVALID_CONF_VALUE.TIME_ZONE`.
     assert_eq!(o.status.code(), Some(1));
-    assert!(err(&o).contains("INVALID_TIMEZONE"), "{}", err(&o));
+    assert!(
+        err(&o).contains("INVALID_CONF_VALUE.TIME_ZONE"),
+        "{}",
+        err(&o)
+    );
     let o = krishiv(
         &[
             "sql",

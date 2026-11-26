@@ -8,13 +8,14 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use arrow_array::{Array, ArrayRef, BooleanArray, Int64Array, UInt32Array, new_null_array};
+use arrow_buffer::BooleanBuffer;
 use futures::future::BoxFuture;
 use krishiv_common::error::{ArithmeticOverflow, KrishivError, ScalarSubqueryTooManyRows};
 use krishiv_memory::SpillSignal;
 use krishiv_types::batch::{Batch, Weights};
 
 use super::build::{BuildGlobal, Built, Level0, nanos};
-use super::direct::Direct;
+use super::direct::{Direct, DirectPayload, arena_of};
 use super::grace::{self, Flush, Part, WRITE_SLICE, choose, reserve_chunks, spill_parts};
 use super::keys::{Hashing, MAX_RADIX_BITS};
 use super::table::{JoinTable, NONE, RowArena};
@@ -26,6 +27,10 @@ use crate::operator::{FlushOutput, LocalState, Operator, OperatorOutput};
 use crate::operators::compact_sparse_views;
 use crate::operators::select::{RowSelect, Selection, batch_rows};
 use crate::sync::lock;
+
+mod held;
+
+use held::Held;
 
 /// The probe operator.
 #[derive(Debug)]
@@ -103,6 +108,15 @@ pub(crate) struct Cursor {
     matches: usize,
     /// Build rows are in the row layout (payload rows).
     rows: bool,
+    /// The build's payload decoded once (a direct probe of a small build,
+    /// perf lever P3): build columns are taken from it, not decoded.
+    payload: Option<Arc<DirectPayload>>,
+    /// An unweighted inner join without a filter or a single-match check
+    /// over a direct build whose keys are unique, with its payload decoded
+    /// (perf lever C): each probe row has at most one pair and nothing
+    /// reads the match state, so [`Self::next_direct_inner`] emits the
+    /// pairs in one pass, taking build rows from the payload by id.
+    direct_inner: bool,
 }
 
 impl Cursor {
@@ -149,6 +163,17 @@ impl Cursor {
                     .add(Counter::ProbeTableNs, nanos(started.elapsed()));
                 shared.counters.add(Counter::DirectProbeRows, n as u64);
                 let matches = heads.iter().filter(|&&h| h != NONE).count();
+                let payload = d.payload().cloned();
+                let direct_inner = payload.is_some()
+                    && shared.join_type == JoinType::Inner
+                    && shared.filter.is_none()
+                    && !shared.single_match
+                    && batch.is_unweighted()
+                    && tables
+                        .by_part()
+                        .iter()
+                        .flatten()
+                        .all(|t| t.is_unique() && t.arena().is_unweighted());
                 let cursor = Self {
                     batch,
                     sel,
@@ -159,6 +184,8 @@ impl Cursor {
                     pos: 0,
                     chain: NONE,
                     rows: hashing.rows(),
+                    payload,
+                    direct_inner,
                 };
                 return Ok((cursor, Vec::new()));
             }
@@ -229,6 +256,8 @@ impl Cursor {
             pos: 0,
             chain: NONE,
             rows: hashing.rows(),
+            payload: None,
+            direct_inner: false,
         };
         Ok((cursor, deferred))
     }
@@ -241,6 +270,11 @@ impl Cursor {
         limit: usize,
         partition: u32,
     ) -> Result<(Option<Batch>, bool)> {
+        if self.direct_inner
+            && let Some(payload) = self.payload.clone()
+        {
+            return self.next_direct_inner(shared, tables, &payload, limit, partition);
+        }
         let n = self.state.len();
         let quick = !shared.join_type.emits_build() && shared.filter.is_none();
         // Semi / anti candidates produce no rows, so they need no output
@@ -297,6 +331,60 @@ impl Cursor {
         Ok((self.tail(shared)?, true))
     }
 
+    /// [`next`](Self::next) of a [`direct_inner`](Self::direct_inner)
+    /// cursor: one pass over the heads, each match one pair whose build row
+    /// is taken from the payload, no chain walk and no match state (an
+    /// inner join emits no tail). A head the payload does not hold (never
+    /// expected) hands the rest of the batch, from this call's first row,
+    /// to the general path.
+    fn next_direct_inner(
+        &mut self,
+        shared: &Shared,
+        tables: &Tables<'_>,
+        payload: &DirectPayload,
+        limit: usize,
+        partition: u32,
+    ) -> Result<(Option<Batch>, bool)> {
+        let n = self.heads.len();
+        let start = self.pos;
+        let room = limit.min(self.matches);
+        let mut probe = Vec::with_capacity(room);
+        let mut ids = Vec::with_capacity(room);
+        let started = Instant::now();
+        while probe.len() < limit && self.pos < n {
+            let i = self.pos;
+            let head = self.heads[i];
+            if head != NONE {
+                let Some(id) = payload.id(usize::from(self.parts[i]), head) else {
+                    self.direct_inner = false;
+                    self.pos = start;
+                    return self.next(shared, tables, limit, partition);
+                };
+                probe.push(u32::try_from(i).unwrap_or(u32::MAX));
+                ids.push(id);
+            }
+            self.pos += 1;
+        }
+        shared
+            .counters
+            .add(Counter::ProbeTableNs, nanos(started.elapsed()));
+        if probe.is_empty() {
+            return Ok((None, true));
+        }
+        shared
+            .counters
+            .add(Counter::DirectInnerRows, probe.len() as u64);
+        let build_cols = payload.take(&UInt32Array::from(ids))?;
+        let taken = take_batch(&self.batch, &batch_rows(self.sel.as_ref(), &probe)?)?;
+        let taken = self.compact_selected(taken)?;
+        let m = probe.len();
+        let mut columns: Vec<ArrayRef> = taken.data().columns().to_vec();
+        columns.extend(build_cols);
+        let out = Batch::with_weights(record(&shared.schema, columns, m)?, Weights::Const(1))
+            .map_err(|e| internal(e.to_string()))?;
+        Ok((Some(out), false))
+    }
+
     /// Joins candidate pairs: applies the filter, marks matches and builds
     /// the inner / left outer output.
     fn pairs(
@@ -308,7 +396,14 @@ impl Cursor {
         partition: u32,
     ) -> Result<Option<Batch>> {
         let arena = |p: usize| tables.get(p).map(JoinTable::arena);
-        let build_cols = shared.build_columns(self.rows, build, arena)?;
+        let decoded = match &self.payload {
+            Some(payload) => payload.columns(build)?,
+            None => None,
+        };
+        let build_cols = match decoded {
+            Some(cols) => cols,
+            None => shared.build_columns(self.rows, build, arena)?,
+        };
         let taken = take_batch(&self.batch, &batch_rows(self.sel.as_ref(), probe)?)?;
         let taken = self.compact_selected(taken)?;
         let m = probe.len();
@@ -551,11 +646,10 @@ struct ProbeLocal {
     flushing: bool,
     /// Count probe lengths (`ExecConfig::detailed_metrics`).
     detailed: bool,
-    /// The direct index of the level-0 tables (perf lever J1): `None` until
-    /// this driver first holds them, then whether the build qualifies;
-    /// `Some(None)` from the start when `krishiv.exec.join.directIndex` is
+    /// Probe through the build's direct index when it has one (perf lever
+    /// J1, `Level0::direct`): off when `krishiv.exec.join.directIndex` is
     /// off or detailed metrics count probe lengths.
-    direct: Option<Option<Direct>>,
+    direct: bool,
     cursor: Option<Cursor>,
     /// Rows of spilled partitions.
     parts: Vec<Part>,
@@ -570,6 +664,48 @@ struct ProbeLocal {
     /// retry joins the same rows without evaluating (and counting) the row
     /// stage again.
     selected: Option<Option<Selection>>,
+    /// The row stage's survivors of sparse input batches, held until a
+    /// batch is full (K1, [`held`]). Only while no build partition spilled,
+    /// so probing them never defers rows or asks for memory, and
+    /// [`Operator::finish`] can probe the last of them.
+    held: Held,
+}
+
+/// The direct index of a tiny build (perf lever J1) and, with lever P3, its
+/// payload decoded once: made by the first probe driver that asks and shared
+/// through `Level0::direct`; `None` when `on` (`krishiv.exec.join.directIndex`)
+/// is off or the build does not qualify. The held path (K1) reads it too.
+fn direct_index<'a>(
+    on: bool,
+    s: &Shared,
+    hashing: &Hashing,
+    level0: &'a Level0,
+    built: &Built,
+) -> Option<&'a Direct> {
+    if !on {
+        return None;
+    }
+    level0
+        .direct
+        .get_or_init(|| {
+            let memory = lock(&level0.direct_memory).take()?;
+            Direct::of(&level0.tables, built.spilled, &s.keys, memory).map(|d| {
+                // A payload that fails to decode here fails the same
+                // way per pair, on the path that does not use it.
+                let d = d.with_payload_of(|| {
+                    DirectPayload::of(&level0.tables, |pairs| {
+                        s.build_columns(hashing.rows(), pairs, |p| arena_of(&level0.tables, p))
+                    })
+                    .ok()
+                    .flatten()
+                });
+                if let Some(p) = d.payload() {
+                    s.counters.add(Counter::DirectPayloadRows, p.rows() as u64);
+                }
+                d
+            })
+        })
+        .as_ref()
 }
 
 /// The build's level-0 tables as one driver holds them: taken from `built`
@@ -634,32 +770,68 @@ impl ProbeOp {
         // A new input batch: its fused selection first (design P2-E3 U2),
         // over the batch received, kept across a `NeedMemory` retry; then
         // the columns the probe reads of it.
+        let mut full = None;
         let sel = if l.cursor.is_none() && received.num_rows() > 0 {
             match l.selected.take() {
                 Some(sel) => sel,
                 None => match &mut l.select {
-                    Some(select) => select.select(received, l.partition)?,
+                    Some(select) => {
+                        let runtime = select.stage(received)?;
+                        let kept = runtime.as_ref().map(BooleanBuffer::count_set_bits);
+                        match (runtime, kept) {
+                            // A sparse batch's survivors wait for a full
+                            // batch (K1): the predicate, the lookups and
+                            // the output then run once for all of them.
+                            // A weighted batch is never held and does not
+                            // flush the held rows first (the design's
+                            // order): a row stage comes only from a file
+                            // scan's runtime filters in this pipeline, and
+                            // a file scan's rows are unweighted, so no
+                            // change stream reaches a probe that holds.
+                            (Some(mask), Some(kept))
+                                if built.spilled == 0
+                                    && received.is_unweighted()
+                                    && l.held.takes(received.data(), kept) =>
+                            {
+                                match l.held.push(received.data(), &mask, kept)? {
+                                    Some(rows) => full = Some(rows),
+                                    None => return Ok(OperatorOutput::NeedMoreInput(None)),
+                                }
+                                None
+                            }
+                            (runtime, _) => select.select_after(received, l.partition, runtime)?,
+                        }
+                    }
                     None => None,
                 },
             }
         } else {
             None
         };
+        if let Some(rows) = full {
+            let level0 = held_level0(&mut l.level0, built)?;
+            let tables = Tables::Level0(&level0.tables, built.spilled);
+            let direct = direct_index(l.direct, s, &g.hashing, level0, built);
+            let select = l.select.as_ref();
+            let held = held_cursor(
+                s,
+                &g.hashing,
+                select,
+                rows,
+                &tables,
+                l.detailed,
+                direct,
+                l.partition,
+            )?;
+            let Some(cursor) = held else {
+                return Ok(OperatorOutput::NeedMoreInput(None));
+            };
+            l.cursor = Some(cursor);
+        }
         let projected;
         let input = match s.select.as_ref().and_then(|x| x.columns.as_deref()) {
             Some(columns) if l.cursor.is_none() => {
-                let data = arrow_array::RecordBatch::try_new_with_options(
-                    Arc::clone(&s.probe_schema),
-                    columns
-                        .iter()
-                        .map(|&c| Arc::clone(received.data().column(c)))
-                        .collect(),
-                    &arrow_array::RecordBatchOptions::new()
-                        .with_row_count(Some(received.num_rows())),
-                )
-                .map_err(|e| internal(e.to_string()))?;
-                projected = Batch::with_weights(data, received.weights().clone())
-                    .map_err(|e| internal(e.to_string()))?;
+                projected = probe_input(s, columns, received)?;
                 &projected
             }
             _ => received,
@@ -689,10 +861,7 @@ impl ProbeOp {
         }
         let level0 = held_level0(&mut l.level0, built)?;
         let tables = Tables::Level0(&level0.tables, built.spilled);
-        let direct = l
-            .direct
-            .get_or_insert_with(|| Direct::of(&level0.tables, built.spilled, &s.keys))
-            .as_ref();
+        let direct = direct_index(l.direct, s, &g.hashing, level0, built);
         if l.cursor.is_none() {
             if input.num_rows() == 0 {
                 return Ok(OperatorOutput::NeedMoreInput(None));
@@ -749,6 +918,62 @@ impl ProbeOp {
     }
 }
 
+/// The columns `columns` of `received` as the probe's input (a fused
+/// projection, design P2-E3 U2).
+fn probe_input(s: &Shared, columns: &[usize], received: &Batch) -> Result<Batch> {
+    let data = arrow_array::RecordBatch::try_new_with_options(
+        Arc::clone(&s.probe_schema),
+        columns
+            .iter()
+            .map(|&c| Arc::clone(received.data().column(c)))
+            .collect(),
+        &arrow_array::RecordBatchOptions::new().with_row_count(Some(received.num_rows())),
+    )
+    .map_err(|e| internal(e.to_string()))?;
+    Batch::with_weights(data, received.weights().clone()).map_err(|e| internal(e.to_string()))
+}
+
+/// A cursor over held rows `rows` (K1, [`held`]): the fused predicate over
+/// them, then the probe of those it keeps (`None`: it keeps none). Only
+/// held while no partition spilled, so no row is deferred.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the parts of the probe's state a held batch reads"
+)]
+fn held_cursor(
+    s: &Shared,
+    hashing: &Hashing,
+    select: Option<&RowSelect>,
+    rows: arrow_array::RecordBatch,
+    tables: &Tables<'_>,
+    detailed: bool,
+    direct: Option<&Direct>,
+    partition: u32,
+) -> Result<Option<Cursor>> {
+    let sel = match select {
+        Some(select) => select.select_kept(&rows, partition)?,
+        None => None,
+    };
+    if sel.as_ref().is_some_and(Selection::is_empty) {
+        return Ok(None);
+    }
+    let received = Batch::new(rows);
+    let input = match s.select.as_ref().and_then(|x| x.columns.as_deref()) {
+        Some(columns) => probe_input(s, columns, &received)?,
+        None => received,
+    };
+    let n = sel.as_ref().map_or(input.num_rows(), Selection::len);
+    let (cursor, deferred) = Cursor::new(s, hashing, input, sel, tables, detailed, direct)?;
+    if deferred.iter().any(|d| !d.is_empty()) {
+        return Err(internal(
+            "held probe rows routed to a spilled partition".to_owned(),
+        ));
+    }
+    s.counters.add(Counter::ProbeRows, n as u64);
+    s.counters.add(Counter::ProbeHeldRows, n as u64);
+    Ok(Some(cursor))
+}
+
 impl Operator for ProbeOp {
     // The same pairs whatever the batches; only a left outer join's
     // unmatched rows move with them, an order Spark leaves open (J1). A
@@ -803,6 +1028,26 @@ impl Operator for ProbeOp {
         if releases {
             build.probe_joined();
         }
+        // Rows are held (K1) only where the driver would join small input
+        // batches too (`krishiv.exec.coalesceInput`), under its byte cap,
+        // and not for a join that returns its build rows by their marks: a
+        // row stage reaches a probe only in the scan's pipeline, and those
+        // joins are planned over an exchange, so none would hold; holding
+        // there would have to finish before every driver's flush barrier.
+        // The pipeline sink's `Sink::coalesce_input` is not asked (the
+        // driver's coalescer asks it): the probe is never lane-safe
+        // (`lane_safe`), so an ordered result sink's positions never
+        // interleave drivers; a lane-safe probe would have to ask it, or
+        // held rows would move past later position reports.
+        let held_bytes = if ctx.query().config().coalesce_input
+            && self.0.join_type != JoinType::NullAwareAnti
+            && !self.0.join_type.builds_preserved()
+            && select.as_ref().is_some_and(RowSelect::has_stage)
+        {
+            crate::input_coalesce::held_max_bytes(ctx.query().pool().effective_limit())
+        } else {
+            0
+        };
         let memory = ctx.consumer();
         let fanout = build.hashing.fanout0();
         Ok(Box::new(ProbeLocal {
@@ -811,9 +1056,8 @@ impl Operator for ProbeOp {
             releases,
             flushing: false,
             detailed: ctx.query().config().detailed_metrics,
-            direct: (!ctx.query().config().join_direct_index
-                || ctx.query().config().detailed_metrics)
-                .then_some(None),
+            direct: ctx.query().config().join_direct_index
+                && !ctx.query().config().detailed_metrics,
             cursor: None,
             parts: (0..fanout)
                 .map(|_| Part::with_memory(memory.reservation()))
@@ -823,6 +1067,7 @@ impl Operator for ProbeOp {
             batch_size: ctx.query().config().batch_size.max(1),
             // Spark's partition index (a `UNION ALL` branch numbers its own).
             partition: ctx.partition().wrapping_sub(ctx.numbering_base()),
+            held: Held::new(ctx.query().config().batch_size, held_bytes),
             select,
             selected: None,
         }))
@@ -870,6 +1115,51 @@ impl Operator for ProbeOp {
 
     fn extra_metrics(&self) -> crate::metrics::ExtraMetrics {
         self.0.counters.probe()
+    }
+
+    // The held rows (K1) are probed here, before `end_input` and the flush
+    // barrier (no join that emits build rows by marks holds any).
+    fn finish(&self, local: &mut LocalState) -> Result<Option<Batch>> {
+        let s = &*self.0;
+        let l = local_mut(local)?;
+        let build = Arc::clone(&l.build);
+        loop {
+            let Some(built) = build.built() else {
+                return Ok(None);
+            };
+            let level0 = held_level0(&mut l.level0, built)?;
+            let tables = Tables::Level0(&level0.tables, built.spilled);
+            if l.cursor.is_none() {
+                let Some(rows) = l.held.rest()? else {
+                    return Ok(None);
+                };
+                let direct = direct_index(l.direct, s, &build.hashing, level0, built);
+                let select = l.select.as_ref();
+                let held = held_cursor(
+                    s,
+                    &build.hashing,
+                    select,
+                    rows,
+                    &tables,
+                    l.detailed,
+                    direct,
+                    l.partition,
+                )?;
+                l.cursor = held;
+                continue;
+            }
+            let cursor = l
+                .cursor
+                .as_mut()
+                .ok_or_else(|| internal("no probe cursor".to_owned()))?;
+            let (out, done) = cursor.next(s, &tables, l.batch_size, l.partition)?;
+            if done {
+                l.cursor = None;
+            }
+            if out.is_some() {
+                return Ok(out);
+            }
+        }
     }
 
     fn needs_flush(&self) -> bool {

@@ -104,7 +104,7 @@
 //! rule again until it moves nothing, so a second optimization finds nothing
 //! the first left.
 
-use std::collections::HashSet;
+use crate::expr::AddrSet;
 use std::sync::Arc;
 
 use krishiv_common::error::KrishivError;
@@ -207,7 +207,7 @@ struct Context<'a> {
     /// `EXPLAIN VERBOSE` lines, a refusal once.
     notes: Vec<String>,
     /// Nodes read by more than one parent in the input plan.
-    shared: HashSet<*const LogicalPlan>,
+    shared: AddrSet<LogicalPlan>,
     /// Where key facts come from.
     stats: &'a dyn Statistics,
 }

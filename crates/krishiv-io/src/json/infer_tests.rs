@@ -192,3 +192,31 @@ fn permissive_and_dropmalformed_schemas_follow_the_reduce() {
         &arrow_schema::DataType::Int64
     );
 }
+
+#[test]
+fn each_partition_meets_an_empty_root_before_the_others() {
+    // Partition 0 holds `5` then `{"_corrupt_record":1}` (a BIGINT field
+    // the scalar keeps), partition 1 only `5`. Spark 4.2.0 folds each
+    // partition into `StructType(Nil)` first, so partition 1 adds the
+    // corrupt column as a STRING and the merge widens to STRING:
+    // `struct<_corrupt_record:string>` (one partition gives BIGINT).
+    let (rt, sched, refs) = stage(&[
+        ("a.json", b"5\n{\"_corrupt_record\":1}\n"),
+        ("b.json", b"5\n"),
+    ]);
+    let io = sched.context();
+    let o = options(&serde_json::json!({
+        "inferenceMaxPartitionBytes": "8",
+        "inferenceOpenCostInBytes": "8",
+    }));
+    let schema = rt
+        .block_on(JsonFormat.infer_schema(&io, &refs, &o))
+        .map_err(|e| e.into_error("f.json"))
+        .expect("schema");
+    assert_eq!(schema.fields().len(), 1);
+    assert_eq!(schema.field(0).name(), "_corrupt_record");
+    assert_eq!(
+        schema.field(0).data_type(),
+        &arrow_schema::DataType::Utf8View
+    );
+}

@@ -104,7 +104,7 @@ pub fn to_message(plan: &PhysicalPlan) -> Result<pb::PhysicalPlan> {
         explain,
         explain_root,
         warnings: plan.warnings().to_vec(),
-        env: Some(env(plan.env())),
+        env: Some(env(plan.env())?),
         exprs: e.exprs,
         features: features.iter().map(|f| f.id().to_owned()).collect(),
         epoch: EPOCH,
@@ -154,8 +154,17 @@ fn index(n: usize) -> Result<u32> {
     u32::try_from(n).map_err(|_| CodecError::Unsupported("more than 2^32 entries".to_owned()))
 }
 
-fn env(env: &ExprEnv) -> pb::ExprEnv {
-    pb::ExprEnv {
+/// The wire form of `env`. A Spark version the decoder does not accept (`decode.rs`: 4.0, 4.1
+/// and 4.3; absent is 4.2) is refused here, so no writer sends bytes its reader calls corrupt.
+fn env(env: &ExprEnv) -> Result<pb::ExprEnv> {
+    if let Some(line) = env.spark_version.as_deref()
+        && !matches!(line, "4.0" | "4.1" | "4.3")
+    {
+        return Err(CodecError::Unsupported(format!(
+            "the Spark version {line:?} in the expression environment"
+        )));
+    }
+    Ok(pb::ExprEnv {
         ansi: env.ansi,
         zone: env.zone,
         zone_name: env.zone_name.as_deref().map(str::to_owned),
@@ -167,7 +176,8 @@ fn env(env: &ExprEnv) -> pb::ExprEnv {
         legacy_coding_error_action: env.legacy_coding_error_action.then_some(true),
         legacy_time_parser: env.legacy_time_parser.then_some(true),
         binary_output_style: env.binary_output_style.as_deref().map(str::to_owned),
-    }
+        spark_version: env.spark_version.as_deref().map(str::to_owned),
+    })
 }
 
 #[derive(Default)]

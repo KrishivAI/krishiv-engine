@@ -15,7 +15,7 @@ about `krishiv.exec.batchSize` rows before the sink and each operator that asks 
 probe), uncharged like a batch in flight but held to one batch and 1 MiB (`HELD_MAX_BYTES`), or a sixty-fourth of the query's memory limit when less (`held_max_bytes`), and handed on before the operator's `finish` / the sink's `combine`
 (`krishiv.exec.coalesceInput`) · `runner.rs` QueryRunner /
 Scheduler (coordinator, first error wins) · `channel.rs` bounded result stream · `executor.rs` Executor seam +
-TokioExecutor · `context.rs` QueryContext/TaskContext/MemoryHandle · `morsel.rs` cursor + finalize countdown ·
+TokioExecutor · `idle.rs` (design `0.4-memory-query-end-release`) `QueryRun` (held by a session's admission permit; the last one to end calls `Executor::queries_idle`) and the `krishiv-release` thread: after 1 s without a query it starts an idle epoch and runs one closure on every worker and idle blocking thread of both runtimes, each releasing its freed memory (workers also release when they park; `krishiv.memory.releaseAtQueryEnd`) · `context.rs` QueryContext/TaskContext/MemoryHandle · `morsel.rs` cursor + finalize countdown ·
 `testing.rs` test operators (also used by benches) · `numbering.rs` the partition index each operator of a `UNION ALL` group sees (`Pipeline::origins`/`fans`: a branch numbers its own partitions from 0, above a plain union the union's, above a union of Spark `SinglePartition` inputs (`Source::single_partition`: a range asking for one slice, a global aggregate; through `Operator::keeps_partitioning`: project, filter, sample, generate, replicate rows, limit, union align; not Expand, which Spark shuffles after; known gaps from Spark 4.2.0 runs: a LIMIT or a sort over several partitions, a grouped aggregate over a one-partition input (EXCEPT ALL), an AQE-coalesced shuffle and equal hash partitionings are one partition in Spark, not here) index 0 for every branch, run in turn, under `krishiv.sql.unionOutputPartitioning`; only in a group whose members run in turn: under a shared flush, e.g. a hash-join probe above the union, the plain numbering stays, a known gap); `PartitionState::index` gives an expression-evaluating operator its index · `output_spill.rs` spill hook of finished breaker output · `cohort.rs` `reserve_in_cohort`: a request the pool refuses waits while another member of a query cohort holds memory it frees on its own (nested-loop chunks; sort merge budgets, `operators/sort/budget.rs` `MERGE_COHORT`; grace joins' partition loads and tables, `join/grace.rs` `TABLE_COHORT`, holding seats only) · `loom_model.rs`.
 `operators/` (P2-T051) stateless operators: `scan.rs` MemoryScan + `ScanPushdown` (pushdowns decided once as an
 immutable `ScanPushdowns`; implemented by scan factories: MemoryScan, FileScan) ·
@@ -38,15 +38,17 @@ executor: `mock_exec` in `krishiv-testkit/tests/file_format_mock.rs`.
 radix partitions · `table.rs` row arena + `JoinTable` (shared `KeyTable`, E02) · `build.rs` build
 sink (also the runtime filter producer, P2-T163: per-driver partials, published at finalize, `Disabled` on drop) ·
 `direct.rs` (perf lever J1, `krishiv.exec.join.directIndex`) the direct index of a tiny build: at most 4,096 rows, one
-non-null-safe `Int32`/`Int64` row-layout key spanning at most four slots a row; each probe driver builds it from the
-level-0 tables it holds (none spilled), and `Cursor::new` then finds each row's partition and newest row by `key - min`
-(no encode, no hash; null-aware anti, grace partitions and detailed metrics keep the hashed probe; `direct_probe_rows`) ·
+non-null-safe `Int32`/`Int64` row-layout key spanning at most four slots a row; the first probe driver builds it from the
+level-0 tables (none spilled) into `build.rs` `Level0::direct`, shared by every driver and dropped with the tables; with lever
+P3 a build whose tables hold at most 256 KiB also has its payload decoded once (`DirectPayload`, reserved for the index's life, one copy per
+build; probes `take` build columns from it, sparse view columns `gc`'d; `direct_payload_rows`), and `Cursor::new` then finds each row's partition and newest row by `key - min`
+(no encode, no hash; null-aware anti, grace partitions and detailed metrics keep the hashed probe; `direct_probe_rows`); lever C: an unweighted inner join without a filter or single-match check over unique build keys and a decoded payload emits its pairs in one pass (`Cursor::next_direct_inner`: no chain walk, no match state; `direct_inner_rows`) ·
 `probe.rs` probe operator + match cursor (its first read of the build, `BuildGlobal::built`, ends the build's idle
 window: until then a finished build's tables are an `OutputSpill` written partition by partition, largest first, and
 idle after `krishiv.exec.join.idleSpillAfter`, so the arbitrator asks them before a running consumer self-spills; study
 30. Each probe driver then holds the build's level-0 tables, `build.rs` `Level0`, whose memory includes the per-partition
 reservations moved at the seal; the last probe driver done after the flush barrier releases them, so a downstream
-sink's final phase gets that memory; a `Prebuilt` broadcast build is never released) · `grace.rs` spill partitions,
+sink's final phase gets that memory; a `Prebuilt` broadcast build is never released) · `probe/held.rs` (K1, design `P3-0.3.1-probe-empty-batches.md` §3): the survivors of a fused row stage that keeps under a quarter of a batch, copied into one held buffer (uncharged, bounded like `InputCoalesce`: a batch of rows, `held_max_bytes`) and probed once a full batch: predicate, lookups and output once per batch of survivors; only while no build partition spilled, unweighted input, not null-aware anti or a build-preserving join, and under `krishiv.exec.coalesceInput`; the last held rows are probed in `finish`; metric `probe_held_rows` · `grace.rs` spill partitions,
 flush-phase grace join · `block.rs` a
 partition's chunks kept few: the probe side's tiered merge, the build side's cut into the arena's 2^14-row blocks · `broadcast.rs`
 (P2-T177 unit 3) `BroadcastTables`, a worker resource (`WorkerContext::with_broadcasts`): a broadcast join over a cut
@@ -176,7 +178,7 @@ Paths are relative to this crate.
   (`output_spill.rs`: aggregate and sort results, an aggregate's combined driver tables until `finalize` (`aggregate/sink/combined.rs`), and a hash join build's finished tables until the first probe driver
   reads them, `join/build.rs` `IdleBuild`); the coordinator drops a finalized state after its last reader.
 - At query end (success, error, cancel) the query pool is empty: tests assert it.
-- Cancellation-safe, no blocking in async; metrics feed EXPLAIN ANALYZE.
+- Cancellation-safe, no blocking in async; metrics feed EXPLAIN ANALYZE. Exception: the idle round's closures (`idle.rs`) wait up to 5 ms on a worker for their peers, only while no query runs, and end within 1 ms of a query start.
 - New operators follow skill `krishiv-operator`.
 - Physical plans are serializable data: plan types in `physical/` hold no `Arc<dyn …>`, locks, atomics or cells
   (`PlanData`, `cargo xtask source-guard`); scan sources, spill scopes, runtime-filter and subquery cells are

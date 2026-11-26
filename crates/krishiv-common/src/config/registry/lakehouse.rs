@@ -198,8 +198,8 @@ pub static CATALOG_VENDED_MAX_ENTRIES: ConfigEntry = ConfigEntry {
           hold a credential for each storage prefix of the table. The least recently used answer \
           is dropped first and fetched again \
           from the catalog on its next use. An expired entry is never used again, but it leaves \
-          memory only at the next lookup or insert of the cache: while no query uses a vended \
-          catalog, an expired credential can stay in memory.",
+          memory at the next insert into the cache (a lookup drops only the entry it reads): \
+          while no new answer is fetched, an expired credential can stay in memory.",
     scope: Scope::Cluster,
     settable_by: SettableBy::Startup,
     version_added: "0.2.0",

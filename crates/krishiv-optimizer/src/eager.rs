@@ -121,7 +121,7 @@ pub(crate) fn rewrite(
         }
         if yields
             .group_code
-            .is_some_and(|force| group_code::takes(&p, &mut est, force))
+            .is_some_and(|(force, min)| group_code::takes(&p, &mut est, force, min))
         {
             notes.push("not applied: GroupKeyCode takes the aggregate".to_owned());
             return Ok(p);
@@ -178,8 +178,9 @@ pub(crate) fn rewrite(
 pub(crate) struct Yield {
     /// `PayloadAboveAggregate` runs later in this optimization.
     pub(crate) payload_above: bool,
-    /// `GroupKeyCode` runs later, and whether it is forced.
-    pub(crate) group_code: Option<bool>,
+    /// `GroupKeyCode` runs later: whether it is forced, and how many
+    /// qualifying dimensions it codes at least.
+    pub(crate) group_code: Option<(bool, usize)>,
 }
 
 /// An aggregate over projections and expansions over a join.

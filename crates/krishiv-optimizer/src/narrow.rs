@@ -25,7 +25,7 @@
 //! a column (`substr(x, 1, 2) IN (..)`, `upper(x) = ..`, `year(d) < ..`) also
 //! answers a fixed fraction (a follow-up).
 
-use std::collections::HashSet;
+use crate::expr::{AttrMap, Attrs};
 
 use krishiv_plan::{AttrId, Builtin, Expr, ExprNode, Literal, ResolvedExpr};
 
@@ -36,9 +36,9 @@ use crate::stats::{AttrStats, DEFAULT_SELECTIVITY, RelStats, number, to_f64};
 /// under the columns the predicate narrowed.
 #[derive(Clone)]
 pub(crate) struct View<'a> {
-    base: &'a std::collections::HashMap<AttrId, AttrStats>,
+    base: &'a AttrMap<AttrStats>,
     /// The columns the predicate changed, by attribute.
-    pub(crate) over: std::collections::HashMap<AttrId, AttrStats>,
+    pub(crate) over: AttrMap<AttrStats>,
     /// The predicate proves the relation empty.
     pub(crate) empty: bool,
     /// Whether to record what the predicate leaves known (off: only the
@@ -50,13 +50,10 @@ pub(crate) struct View<'a> {
 }
 
 impl<'a> View<'a> {
-    pub(crate) fn new(
-        base: &'a std::collections::HashMap<AttrId, AttrStats>,
-        narrow: bool,
-    ) -> Self {
+    pub(crate) fn new(base: &'a AttrMap<AttrStats>, narrow: bool) -> Self {
         Self {
             base,
-            over: std::collections::HashMap::new(),
+            over: AttrMap::default(),
             empty: false,
             narrow,
             guessed: false,
@@ -186,7 +183,7 @@ fn or(a: &Expr, b: &Expr, v: &mut View<'_>) -> f64 {
     v.guessed |= x.guessed || y.guessed;
     if v.narrow {
         v.empty |= x.empty && y.empty;
-        let ids: HashSet<AttrId> = x.over.keys().chain(y.over.keys()).copied().collect();
+        let ids: Attrs = x.over.keys().chain(y.over.keys()).copied().collect();
         for id in ids {
             let (Some(p), Some(q)) = (x.get(id), y.get(id)) else {
                 continue;
@@ -245,7 +242,7 @@ fn leaf(op: Builtin, args: &[std::sync::Arc<Expr>], v: &mut View<'_>) -> f64 {
 /// answer comes from the walk the estimator (`apply`) makes, so the two agree.
 #[must_use]
 pub fn selectivity_is_guessed(predicate: &Expr) -> bool {
-    let none = std::collections::HashMap::new();
+    let none = AttrMap::default();
     let mut v = View::new(&none, false);
     apply(predicate, &mut v);
     v.guessed

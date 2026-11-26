@@ -10,5 +10,7 @@
   "query-profile-v1.schema": "Query profile schema",
   "result-cache": "Result cache",
   "python-package": "Python package",
-  "rust-udfs": "Rust UDFs"
+  "rust-udfs": "Rust UDFs",
+  "admin-api": "Admin API",
+  "system-tables": "System tables"
 }
