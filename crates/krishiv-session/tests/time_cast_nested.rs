@@ -159,7 +159,7 @@ fn nested_timestamps_cast_to_time_under_spark_4_3() {
 /// mismatch, wherever the arguments stand: Spark inserts the cast, keeps the
 /// mismatched argument as it is, and CheckAnalysis (`foreachUp`) reaches the
 /// child cast before the call. Spark 4.2.0 and 4.3.0 runs, ANSI on and off.
-/// (`date_add`/`date_sub` take no such cast in Spark: queued separately.)
+/// (`date_add`/`date_sub` take no such cast: the next test.)
 #[test]
 fn a_refused_time_cast_is_reported_before_an_earlier_mismatch() {
     const CAST: &str = "DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION";
@@ -193,6 +193,48 @@ fn a_refused_time_cast_is_reported_before_an_earlier_mismatch() {
                 };
                 assert_eq!(got.as_deref(), Some(want), "{profile:?} ansi={ansi}: {sql}");
             }
+        }
+    }
+}
+
+/// `date_add` and `date_sub` never take the implicit TIME cast: Spark's
+/// `DateAdd`/`DateSub` are `ExpectsInputTypes` and only `DateTimeOperations`
+/// casts their start (from a timestamp or string), so a TIME start is
+/// `UNEXPECTED_INPUT_TYPE` on parameter 1, not `CAST_WITHOUT_SUGGESTION`.
+/// Spark 4.2.0 and 4.3.0 runs, ANSI on and off.
+#[test]
+fn date_add_and_date_sub_refuse_a_time_start_as_a_type_mismatch() {
+    for profile in [SparkProfile::V4_2, SparkProfile::V4_3] {
+        for ansi in ["true", "false"] {
+            let s = Session::builder().profile(profile).build().unwrap();
+            block_on(s.sql("SET spark.sql.timeType.enabled = true")).unwrap();
+            block_on(s.sql(&format!("SET spark.sql.ansi.enabled = {ansi}"))).unwrap();
+            for sql in [
+                "SELECT date_add(TIME'12:00:00', 1)",
+                "SELECT date_sub(TIME'12:00:00', 1)",
+                "SELECT dateadd(TIME'12:00:00', 1)",
+                "SELECT date_add(array(1), TIME'12:00:00')",
+                "SELECT date_add(TIME'12:00:00', array(1))",
+            ] {
+                let e = match block_on(s.sql(sql)) {
+                    Ok(df) => block_on(df.collect()).err(),
+                    Err(e) => Some(e),
+                };
+                let e = e.unwrap_or_else(|| panic!("{profile:?} ansi={ansi}: {sql} passed"));
+                let ctx = format!("{profile:?} ansi={ansi}: {sql}: {e}");
+                assert_eq!(
+                    e.error_class().name(),
+                    "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
+                    "{ctx}"
+                );
+                assert!(
+                    e.to_string().contains(r#"requires the "DATE" type"#),
+                    "{ctx}"
+                );
+            }
+            // A timestamp start is still cast to DATE.
+            let df = block_on(s.sql("SELECT date_add(TIMESTAMP'2020-01-01 10:00:00', 1)")).unwrap();
+            assert!(block_on(df.collect()).is_ok());
         }
     }
 }

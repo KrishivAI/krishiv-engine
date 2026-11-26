@@ -1060,7 +1060,7 @@ fn current_timezone_result(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
 
 fn datetime() -> Vec<Spec> {
     let days = InputType::OneOf(vec![DataType::Integer, DataType::Short, DataType::Byte]);
-    let day_inputs = Inputs::Expects(vec![exact(DataType::Date), days]);
+    let day_inputs = Inputs::Expects(vec![InputType::StartDate, days]);
     let mut out = scalar(&["date_add", "dateadd"], &day_inputs, date_add);
     out.extend(scalar(&["date_sub"], &day_inputs, date_sub));
     out.extend(scalar(

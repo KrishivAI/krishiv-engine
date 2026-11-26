@@ -1484,6 +1484,9 @@ fn implicit(from: Option<&DataType>, want: &InputType, ansi: bool) -> Option<Opt
         (None, InputType::Exact(t) | InputType::Strict(t)) => Some(Some(t.clone())),
         (Some(f), InputType::Strict(t)) => (f == t).then(|| Some(t.clone())),
         (None, InputType::Map) => Some(Some(null_map())),
+        // `date_add`/`date_sub` cast their start as a `DATE` parameter does, except a `TIME`.
+        (Some(T::Time { .. }), InputType::StartDate) => None,
+        (_, InputType::StartDate) => implicit(from, &InputType::Exact(T::Date), ansi),
         (None, InputType::Array) => Some(Some(null_array())),
         // A geometry or geography reaches only a spatial parameter, by the
         // cast rules of `CAST` (never a string).
