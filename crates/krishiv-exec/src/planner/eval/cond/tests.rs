@@ -1736,3 +1736,50 @@ fn case_binds_whole_batch_only_when_no_branch_may_raise() {
     let q59 = bound(&q59);
     assert!(q59.contains("whole: true"), "{q59}");
 }
+
+/// A `CASE` of the `Decimal64` carrier over a column on `Decimal128` (a Connect `LocalRelation`) plans and
+/// answers on the `CASE`'s carrier.
+#[test]
+fn case_over_a_wide_carrier_decimal_column() {
+    use arrow_array::Decimal128Array;
+    let env = env(true);
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("c", ArrowType::Boolean, true),
+        Field::new("d", ArrowType::Decimal128(7, 2), true),
+    ]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            Arc::new(arrow_array::BooleanArray::from(vec![
+                Some(true),
+                Some(false),
+            ])),
+            Arc::new(
+                Decimal128Array::from(vec![Some(150), Some(275)])
+                    .with_precision_and_scale(7, 2)
+                    .unwrap(),
+            ),
+        ],
+    )
+    .unwrap();
+    let out = ArrowType::Decimal64(7, 2);
+    let e = when(
+        vec![
+            column(0, ArrowType::Boolean, true),
+            lit(&Literal::Null(None)),
+            column(1, ArrowType::Decimal128(7, 2), true),
+        ],
+        out.clone(),
+        &env,
+        false,
+    )
+    .unwrap();
+    let got = values(&e, &batch);
+    assert_eq!(got.data_type(), &out);
+    assert_eq!(
+        got.as_primitive::<Decimal64Type>(),
+        &Decimal64Array::from(vec![None, Some(275)])
+            .with_precision_and_scale(7, 2)
+            .unwrap(),
+    );
+}

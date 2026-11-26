@@ -119,7 +119,7 @@ impl PhysExpr for Recarried {
     }
 }
 
-fn on_carrier(e: Arc<dyn PhysExpr>, to: ArrowType) -> Arc<dyn PhysExpr> {
+pub(super) fn on_carrier(e: Arc<dyn PhysExpr>, to: ArrowType) -> Arc<dyn PhysExpr> {
     if e.data_type() == &to {
         e
     } else {

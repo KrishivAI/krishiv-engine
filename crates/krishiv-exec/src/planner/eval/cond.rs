@@ -664,9 +664,30 @@ fn coerce_branch(v: &mut Arc<dyn PhysExpr>, out: &ArrowType, env: &EvalEnv) -> R
         *v = super::cast::coerce_to(Arc::clone(v), out, env)?;
         return Ok(());
     }
+    if is_decimal(&t) && is_decimal(out) && decimal_shape(&t) == decimal_shape(out) {
+        *v = super::func::on_carrier(Arc::clone(v), out.clone());
+        return Ok(());
+    }
     Err(internal(&format!(
         "a CASE value of type {t} in a CASE of type {out}"
     )))
+}
+
+fn is_decimal(t: &ArrowType) -> bool {
+    matches!(
+        t,
+        ArrowType::Decimal32(..) | ArrowType::Decimal64(..) | ArrowType::Decimal128(..)
+    )
+}
+
+/// A decimal's precision and scale, whatever its carrier.
+fn decimal_shape(t: &ArrowType) -> Option<(u8, i8)> {
+    match t {
+        ArrowType::Decimal32(p, s) | ArrowType::Decimal64(p, s) | ArrowType::Decimal128(p, s) => {
+            Some((*p, *s))
+        }
+        _ => None,
+    }
 }
 
 impl PhysExpr for When {
