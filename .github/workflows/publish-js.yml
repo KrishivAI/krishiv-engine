@@ -25,6 +25,7 @@ on:
       - js/smoke/**
       - .github/scripts/node-smoke.sh
       - .github/scripts/third_party_notices.py
+      - .github/notices/**
       # The addon's own build: a change here can break the glibc 2.28, musl or macOS builds, which ci.yml's `js`
       # job (Linux x64 glibc only) does not build.
       - crates/krishiv-node/**

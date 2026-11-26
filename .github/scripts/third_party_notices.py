@@ -57,14 +57,14 @@ _SKIP_DIRS = {
 # Packages published without a license file, and where their license text comes from: a crate of
 # the same project (same repository, same license), for a bare SPDX id the standard text as
 # another crate in the set carries it, or (`vendored:<file>`) the project's own license file kept
-# in `notices/` beside this script, for a project none of whose crates carries one. A sibling
+# in `.github/notices/`, for a project none of whose crates carries one. A sibling
 # counts only with the same repository and license field, a vendored file only for a crate of the
 # repository it was copied from; otherwise the crate stays listed as carrying no license file.
 SAME_TEXTS_AS = {
     "alloc-stdlib": "alloc-no-stdlib",  # dropbox/rust-alloc-no-stdlib, BSD-3-Clause
     "tonic-prost": "tonic",  # grpc/grpc-rust, MIT
     "flatbuffers": "spdx:Apache-2.0",  # google/flatbuffers, the Apache License 2.0 alone
-    # napi-rs/napi-rs, MIT: no crate of the project ships its LICENSE (notices/README.md).
+    # napi-rs/napi-rs, MIT: no crate of the project ships its LICENSE (.github/notices/README.md).
     "napi": "vendored:napi-rs.LICENSE",
     "napi-sys": "vendored:napi-rs.LICENSE",
     "napi-derive": "vendored:napi-rs.LICENSE",
@@ -72,7 +72,7 @@ SAME_TEXTS_AS = {
 }
 # The repository each vendored file was copied from: a crate borrows it only from there.
 VENDORED_FROM = {"napi-rs.LICENSE": "https://github.com/napi-rs/napi-rs"}
-VENDORED_DIR = Path(__file__).resolve().parent / "notices"
+VENDORED_DIR = Path(__file__).resolve().parent.parent / "notices"
 # The first words of the standard Apache License 2.0 text.
 _APACHE_2 = "Apache License Version 2.0, January 2004"
 # How deep below the package root nested license files are looked for.
