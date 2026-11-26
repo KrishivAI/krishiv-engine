@@ -211,7 +211,7 @@ fn error_context_shows_redacted_text() {
 
 #[test]
 fn caret_line_counts_from_the_file_start() {
-    let o = krishiv(&["sql", "-e", "select 1;\n\nselect  from x"], None);
+    let o = krishiv(&["sql", "-e", "select 1;\n\nselect  ) from x"], None);
     assert_eq!(o.status.code(), Some(1));
     assert!(err(&o).contains("(line 3, pos 8)"), "{}", err(&o));
 }
