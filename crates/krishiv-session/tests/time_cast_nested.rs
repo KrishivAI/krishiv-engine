@@ -154,3 +154,45 @@ fn nested_timestamps_cast_to_time_under_spark_4_3() {
         Some("DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION")
     );
 }
+
+/// A refused implicit TIME cast is reported before an ordinary argument
+/// mismatch, wherever the arguments stand: Spark inserts the cast, keeps the
+/// mismatched argument as it is, and CheckAnalysis (`foreachUp`) reaches the
+/// child cast before the call. Spark 4.2.0 and 4.3.0 runs, ANSI on and off.
+/// (`date_add`/`date_sub` take no such cast in Spark: queued separately.)
+#[test]
+fn a_refused_time_cast_is_reported_before_an_earlier_mismatch() {
+    const CAST: &str = "DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION";
+    const UNEXPECTED: &str = "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE";
+    for (profile, to_timestamp) in [(SparkProfile::V4_2, CAST), (SparkProfile::V4_3, UNEXPECTED)] {
+        for ansi in ["true", "false"] {
+            let s = Session::builder().profile(profile).build().unwrap();
+            block_on(s.sql("SET spark.sql.timeType.enabled = true")).unwrap();
+            block_on(s.sql(&format!("SET spark.sql.ansi.enabled = {ansi}"))).unwrap();
+            for (sql, want) in [
+                ("SELECT datediff(array(1), TIME'12:00:00')", CAST),
+                ("SELECT datediff(TIME'12:00:00', array(1))", CAST),
+                ("SELECT add_months(array(1), TIME'12:00:00')", UNEXPECTED),
+                ("SELECT next_day(array(1), TIME'12:00:00')", UNEXPECTED),
+                (
+                    "SELECT months_between(array(1), TIME'12:00:00')",
+                    to_timestamp,
+                ),
+                (
+                    "SELECT months_between(TIME'12:00:00', array(1))",
+                    to_timestamp,
+                ),
+                ("SELECT date_format(TIME'12:00:00', array(1))", to_timestamp),
+                ("SELECT datediff(TIME'12:00:00', TIME'13:00:00')", CAST),
+            ] {
+                let got = match block_on(s.sql(sql)) {
+                    Ok(df) => block_on(df.collect())
+                        .err()
+                        .map(|e| e.error_class().name().to_owned()),
+                    Err(e) => Some(e.error_class().name().to_owned()),
+                };
+                assert_eq!(got.as_deref(), Some(want), "{profile:?} ansi={ansi}: {sql}");
+            }
+        }
+    }
+}

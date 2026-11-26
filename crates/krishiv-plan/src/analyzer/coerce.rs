@@ -1368,20 +1368,31 @@ fn declared(
 ) -> Result<Vec<Option<DataType>>, Mismatch> {
     let ansi = call.ansi();
     let mut casts = Vec::new();
+    // An ordinary mismatch waits for the later arguments: Spark inserts the
+    // implicit casts it can (a refused datetime cast among them) and keeps a
+    // mismatched argument as it is, and CheckAnalysis (`foreachUp`) reaches a
+    // child cast before the call, so a refused cast anywhere is reported
+    // first (Spark 4.2.0/4.3.0 run: `datediff(array(1), TIME'12:00:00')`).
+    let mut unexpected = None;
     for (i, a) in args.iter().enumerate() {
         let want = types.get(i).or(types.last()).unwrap_or(&InputType::Any);
-        let to = implicit(a.ty, want, ansi).ok_or_else(|| {
-            refused_datetime_cast(a.ty, want, call).map_or_else(
-                || Mismatch::Unexpected {
+        match implicit(a.ty, want, ansi) {
+            Some(to) => casts.push(cast_to(a.ty, to.as_ref())),
+            None => {
+                if let Some((from, to)) = refused_datetime_cast(a.ty, want, call) {
+                    return Err(Mismatch::ImplicitCast { arg: i, from, to });
+                }
+                unexpected.get_or_insert_with(|| Mismatch::Unexpected {
                     arg: i,
                     param: i,
                     ty: a.ty.cloned(),
                     required: want.sql(),
-                },
-                |(from, to)| Mismatch::ImplicitCast { arg: i, from, to },
-            )
-        })?;
-        casts.push(cast_to(a.ty, to.as_ref()));
+                });
+            }
+        }
+    }
+    if let Some(m) = unexpected {
+        return Err(m);
     }
     Ok(casts)
 }
