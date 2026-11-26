@@ -129,7 +129,13 @@ impl Resolver<'_> {
         let rels = [&l, &r];
         // Spark binds the match before its `CheckAnalysis` checks the condition.
         let as_of = match as_of {
-            Some(m) => Some(Arc::new(self.as_of_match(p.origin, m, &l, &r, env)?)),
+            Some(m) => {
+                let on = match condition {
+                    JoinCondition::On(e) => Some(e),
+                    _ => None,
+                };
+                Some(Arc::new(self.as_of_match(p.origin, m, &l, &r, on, env)?))
+            }
             None => None,
         };
         let mut keys = None;

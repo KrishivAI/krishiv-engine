@@ -8,18 +8,22 @@ use krishiv_common::error::{
     AsofJoinMatchConditionTableReference, InternalError, KrishivUnsupportedFeature,
 };
 
+use std::collections::HashMap;
+
 use super::*;
 use crate::function::{Builtin, FunctionId};
 
 impl Resolver<'_> {
     /// The match `m` of an as-of join of `l` and `r` at `origin`, resolved: `left` reads only
-    /// `l`, `right` only `r`, both of one orderable type.
+    /// `l`, `right` only `r`, both of one orderable type. `on` is the join's `ON` condition as
+    /// written, which decides how a table-reference error names the operands.
     pub(in crate::analyzer) fn as_of_match(
         &mut self,
         origin: Origin,
         m: &AsOfMatch,
         l: &Rel,
         r: &Rel,
+        on: Option<&Arc<Expr>>,
         env: &Arc<Env>,
     ) -> Result<AsOfMatch, AnalysisError> {
         let scope: Vec<Attr> = l.out.iter().chain(r.out.iter()).cloned().collect();
@@ -48,10 +52,16 @@ impl Resolver<'_> {
             refs.iter().any(|i| left_ids.contains(i)) && refs.iter().any(|i| right_ids.contains(i))
         };
         if both(&refs1) || both(&refs2) {
-            // Spark runs this check before the operands resolve, so it names them as they stand
-            // then (`as_first_checked`).
+            // Spark runs this check in the first pass that resolves the `ON` condition, before
+            // the operands resolve, so it names them as they stand then (`as_checked_in`).
+            let pass = match on {
+                Some(c) => self
+                    .bind(c, &Self::cx(&scope, &rels, env, "Join"))
+                    .map_or(1, |b| resolved_pass(&b.shown())),
+                None => 1,
+            };
             let checked =
-                |b: &Bound| format!("\"{}\"", pretty(&as_first_checked(&b.shown()), zone));
+                |b: &Bound| format!("\"{}\"", pretty(&as_checked_in(&b.shown(), pass), zone));
             return Err(AnalysisError::new(
                 AsofJoinMatchConditionTableReference {
                     refs1: checked(&first),
@@ -81,10 +91,11 @@ impl Resolver<'_> {
                 origin,
             )
         };
-        let (Some(t1), Some(t2)) = (&first.ty.data_type, &second.ty.data_type) else {
-            return Err(type_error());
-        };
-        if !operands_compatible(t1, t2) {
+        // Spark's `areOperandsCompatible` alone decides this error; an untyped `NULL` is
+        // `NullType`, which meets any type.
+        let case_sensitive = self.ctx.conf.case_sensitive;
+        let (t1, t2) = (first.ty.data_type.as_ref(), second.ty.data_type.as_ref());
+        if !operands_compatible(t1, t2, case_sensitive) {
             return Err(type_error());
         }
         // Spark's `normalizeMatchOperands`: the operand that reads the left input goes first (a
@@ -102,6 +113,7 @@ impl Resolver<'_> {
                 None
             }
         };
+        let (written_first, written_second) = (Arc::clone(&first.expr), Arc::clone(&second.expr));
         let (left, right, direction) = match (side(&refs1, true), side(&refs2, false)) {
             (Some(true), Some(false)) => (first, second, m.direction),
             (Some(false), Some(true)) => (second, first, m.direction.flip()),
@@ -141,15 +153,29 @@ impl Resolver<'_> {
         } else {
             (&left.expr, &right.expr)
         };
+        // Spark's `CheckAnalysis` then checks the comparison as written: a pair the as-of rule
+        // accepts and the operator does not (an interval against a STRING) is the operator's
+        // own error, `"(dti <= s)"`.
+        let written = match (m.direction, m.allow_exact) {
+            // Nearest is Connect only, which writes no operator.
+            (crate::AsOfDirection::Backward, true) | (crate::AsOfDirection::Nearest, _) => ">=",
+            (crate::AsOfDirection::Backward, false) => ">",
+            (crate::AsOfDirection::Forward, true) => "<=",
+            (crate::AsOfDirection::Forward, false) => "<",
+        };
+        self.call(
+            written,
+            vec![Arc::clone(&written_first), Arc::clone(&written_second)],
+            env,
+            origin,
+        )?;
         // The two values meet at the type a comparison of them casts both to.
-        let compared = self
-            .call(
-                ">=",
-                vec![Arc::clone(&left.expr), Arc::clone(&right.expr)],
-                env,
-                origin,
-            )
-            .map_err(|_| type_error())?;
+        let compared = self.call(
+            ">=",
+            vec![Arc::clone(&left.expr), Arc::clone(&right.expr)],
+            env,
+            origin,
+        )?;
         // Spark's `CheckAnalysis` reaches the distance after the comparison, so a comparison
         // type error wins; a subtraction that does not resolve is reported as Spark reports it.
         let distance = if subtracts(left.ty.data_type.as_ref()) {
@@ -199,59 +225,50 @@ impl Resolver<'_> {
 }
 
 /// An operand as Spark's table-reference check names it. `ResolveAsOfJoin` checks the operands
-/// in the first analyzer pass that resolves both inputs, after `ResolveTimeZone` and the one
-/// bottom-up `ResolveBinaryArithmetic` of that pass. The datetime nodes that rewrite creates
-/// (`TimeAdd`, `TimestampAddYMInterval`, `DateAddInterval`, `DatetimeSub`, `SubtractTimestamps`)
-/// have no time zone yet, so they are unresolved, and an operator over one is left as written:
-/// `(trade_time + (quote_time - trade_time))`, not the timestamp addition. Explicit casts already
-/// have their zone (Spark 4.3.0 runs, `opus1-asof-ref`).
-fn as_first_checked(e: &Arc<Expr>) -> Arc<Expr> {
-    // The outputs whose Spark form is unresolved, by address; `kept` holds each alive so no
-    // address is reused while the set is read.
-    let mut pending: HashSet<*const Expr> = HashSet::new();
+/// in the first analyzer pass that resolves both inputs and the `ON` condition
+/// (`condition.forall(_.resolved)`), pass `pass` (`resolved_pass` of the condition, 1 without
+/// one). Each node resolves in some pass: a leaf in pass 1; any other node is built (by the one
+/// bottom-up `ResolveBinaryArithmetic` of a pass) in the pass its children are all resolved, and
+/// resolves in that pass, or one later for the datetime nodes that need a time zone
+/// (`TimeAdd`, `TimestampAddYMInterval`, `DateAddInterval`, `DatetimeSub`, `SubtractTimestamps`,
+/// a comparison that casts a side to TIMESTAMP): `ResolveTimeZone` runs before the rewrite. A node
+/// built by `pass` shows as rewritten, `trade_time + (quote_time - trade_time)`; a later one as
+/// the operator written, `(trade_time + (quote_time - trade_time))`. Explicit casts already have
+/// their zone (Spark 4.3.0 runs, `opus1-asof-ref`, `rev-f2-asof-ref`, `opus1-f5`).
+fn as_checked_in(e: &Arc<Expr>, pass: u32) -> Arc<Expr> {
+    spark_passes(e, Some(pass)).0
+}
+
+/// The analyzer pass in which Spark resolves the shown expression `e` (see `as_checked_in`).
+fn resolved_pass(e: &Arc<Expr>) -> u32 {
+    spark_passes(e, None).1
+}
+
+/// `e` with each node built after `pass` shown as the operator written (unchanged without a
+/// pass), and the pass in which `e` resolves.
+fn spark_passes(e: &Arc<Expr>, pass: Option<u32>) -> (Arc<Expr>, u32) {
+    // The pass each output resolves in, by address; `kept` holds each alive so no address is
+    // reused while the map is read.
+    let mut resolved: HashMap<*const Expr, u32> = HashMap::new();
     let mut kept: Vec<Arc<Expr>> = Vec::new();
     let out = Arc::clone(e).transform_up(&mut |x: Arc<Expr>| {
-        let mut over_pending = false;
-        x.for_each_child(&mut |c| over_pending |= pending.contains(&Arc::as_ptr(c)));
-        let ExprNode::Resolved(ResolvedExpr::Function(f)) = &x.node else {
-            if over_pending {
-                pending.insert(Arc::as_ptr(&x));
-                kept.push(Arc::clone(&x));
-            }
-            return Ok::<_, std::convert::Infallible>(x);
-        };
-        let FunctionId::Builtin(id) = f.id else {
-            if over_pending {
-                pending.insert(Arc::as_ptr(&x));
-                kept.push(Arc::clone(&x));
-            }
-            return Ok(x);
-        };
-        let zoned_rewrite = match id {
-            Builtin::TimestampAddInterval
-            | Builtin::TimestampAddYmInterval
-            | Builtin::DateAddInterval
-            | Builtin::DatetimeSub => true,
-            // `SubtractTimestamps` shows as `-` already; a timestamp on either side makes one.
-            Builtin::Subtract => f.args.iter().any(|a| {
-                matches!(
-                    a.resolved_type(),
-                    Some(DataType::Timestamp | DataType::TimestampNtz)
-                )
-            }),
-            _ => false,
-        };
-        let plain = match id {
-            Builtin::TimestampAddInterval
-            | Builtin::TimestampAddYmInterval
-            | Builtin::DateAddInterval
-            | Builtin::DateAddYmInterval => Some(Builtin::Add),
-            Builtin::DatetimeSub => Some(Builtin::Subtract),
+        let mut built = 1;
+        x.for_each_child(&mut |c| {
+            built = built.max(resolved.get(&Arc::as_ptr(c)).copied().unwrap_or(1));
+        });
+        let call = match &x.node {
+            ExprNode::Resolved(ResolvedExpr::Function(f)) => match f.id {
+                FunctionId::Builtin(id) => Some((id, f)),
+                _ => None,
+            },
             _ => None,
         };
-        let x = match plain {
+        let (zoned, plain) = call.map_or((false, None), |(id, f)| {
+            (zoned_rewrite(id, f), plain_operator(id))
+        });
+        let x = match (call, plain) {
             // Not rewritten: Spark's `Add`/`Subtract` over the operands, `(l + r)`.
-            Some(op) if over_pending => {
+            (Some((_, f)), Some(op)) if pass.is_some_and(|p| built > p) => {
                 let mut g = f.clone();
                 g.id = FunctionId::Builtin(op);
                 Arc::new(
@@ -260,15 +277,83 @@ fn as_first_checked(e: &Arc<Expr>) -> Arc<Expr> {
             }
             _ => x,
         };
-        if zoned_rewrite || over_pending {
-            pending.insert(Arc::as_ptr(&x));
-            kept.push(Arc::clone(&x));
-        }
-        Ok(x)
+        resolved.insert(Arc::as_ptr(&x), built + u32::from(zoned));
+        kept.push(Arc::clone(&x));
+        Ok::<_, std::convert::Infallible>(x)
     });
-    match out {
+    let out = match out {
         Ok(x) => x,
         Err(never) => match never {},
+    };
+    let pass = resolved.get(&Arc::as_ptr(&out)).copied().unwrap_or(1);
+    (out, pass)
+}
+
+/// Whether Spark's node for the shown call `f` needs a time zone, so it resolves one pass after
+/// it is built.
+fn zoned_rewrite(id: Builtin, f: &ResolvedFunction) -> bool {
+    let arg = |i: usize| f.args.get(i).and_then(|a| shown_type(a));
+    match id {
+        Builtin::TimestampAddInterval
+        | Builtin::TimestampAddYmInterval
+        | Builtin::DateAddInterval => true,
+        // `date - <year-month interval>` is Spark's `DateAddYMInterval(l, -r)`, which has no
+        // zone: it resolves at once and an operator over it is rewritten. The interval is
+        // often a literal, whose type only `interval_type` knows.
+        Builtin::DatetimeSub => !matches!(
+            (arg(0), arg(1)),
+            (
+                Some(DataType::Date),
+                Some(DataType::YearMonthInterval { .. })
+            )
+        ),
+        // `SubtractTimestamps` shows as `-` already; a timestamp on either side makes one.
+        Builtin::Subtract => (0..f.args.len())
+            .any(|i| matches!(arg(i), Some(DataType::Timestamp | DataType::TimestampNtz))),
+        // A comparison whose coercion casts a side to TIMESTAMP (`Cast.needsTimeZone`): the
+        // implicit cast is added after `ResolveTimeZone` of its pass.
+        Builtin::Eq
+        | Builtin::EqNullSafe
+        | Builtin::Lt
+        | Builtin::LtEq
+        | Builtin::Gt
+        | Builtin::GtEq => {
+            let zoned_with_timestamp = |t: Option<DataType>| {
+                matches!(
+                    t,
+                    Some(DataType::String | DataType::Date | DataType::TimestampNtz)
+                )
+            };
+            match (arg(0), arg(1)) {
+                (Some(DataType::Timestamp), other) | (other, Some(DataType::Timestamp)) => {
+                    zoned_with_timestamp(other)
+                }
+                _ => false,
+            }
+        }
+        _ => false,
+    }
+}
+
+/// The operator a datetime call is written as.
+fn plain_operator(id: Builtin) -> Option<Builtin> {
+    match id {
+        Builtin::TimestampAddInterval
+        | Builtin::TimestampAddYmInterval
+        | Builtin::DateAddInterval
+        | Builtin::DateAddYmInterval => Some(Builtin::Add),
+        Builtin::DatetimeSub => Some(Builtin::Subtract),
+        _ => None,
+    }
+}
+
+/// The type of a shown expression, literals of datetime and interval types included.
+fn shown_type(e: &Expr) -> Option<DataType> {
+    match &e.node {
+        ExprNode::Literal(Literal::Date(_)) => Some(DataType::Date),
+        ExprNode::Literal(Literal::Timestamp(_)) => Some(DataType::Timestamp),
+        ExprNode::Literal(Literal::TimestampNtz(_)) => Some(DataType::TimestampNtz),
+        _ => e.interval_type().or_else(|| e.resolved_type()),
     }
 }
 
@@ -370,25 +455,27 @@ fn invalid_expression_of(err: AnalysisError, origin: Origin) -> AnalysisError {
     err
 }
 
-/// Spark's `MatchConditionTypes.areOperandsCompatible`, short of the wider type (the comparison's
-/// coercion decides that): both orderable without an empty struct, never a string against a
-/// datetime, arrays of one orderable element type or positionally compatible structs.
-fn operands_compatible(a: &DataType, b: &DataType) -> bool {
-    if !valid_operand(a) || !valid_operand(b) {
+/// Spark's `MatchConditionTypes.areOperandsCompatible` (`None` is an untyped `NULL`, Spark's
+/// `NullType`): both orderable without an empty struct, never a string against a datetime, arrays
+/// of one orderable element type or positionally compatible structs, otherwise a wider type of
+/// the two under the legacy rules (`TypeCoercion.findWiderTypeForTwo`, whatever the ANSI mode).
+fn operands_compatible(a: Option<&DataType>, b: Option<&DataType>, case_sensitive: bool) -> bool {
+    if !a.is_none_or(valid_operand) || !b.is_none_or(valid_operand) {
         return false;
     }
-    let datetime = |t: &DataType| {
+    let datetime = |t: Option<&DataType>| {
         matches!(
             t,
-            DataType::Date | DataType::Timestamp | DataType::TimestampNtz
+            Some(DataType::Date | DataType::Timestamp | DataType::TimestampNtz)
         )
     };
-    let string = |t: &DataType| matches!(t, DataType::String | DataType::CollatedString(_));
+    let string =
+        |t: Option<&DataType>| matches!(t, Some(DataType::String | DataType::CollatedString(_)));
     if (datetime(a) && string(b)) || (string(a) && datetime(b)) {
         return false;
     }
     match (a, b) {
-        (DataType::Array(x), DataType::Array(y)) => {
+        (Some(DataType::Array(x)), Some(DataType::Array(y))) => {
             let (x, y) = (x.element_type(), y.element_type());
             if x.equals_structurally(y, true) {
                 super::super::coerce::orderable(x)
@@ -396,10 +483,23 @@ fn operands_compatible(a: &DataType, b: &DataType) -> bool {
                 positional_structs(x, y)
             }
         }
-        (DataType::Struct(_), DataType::Struct(_)) => {
-            a.equals_structurally(b, true) || positional_structs(a, b)
+        (Some(x), Some(y)) if positional_structs(x, y) => true,
+        _ => {
+            let (x, y) = (
+                super::super::coerce::Arg {
+                    ty: a,
+                    nullable: true,
+                    literal: None,
+                },
+                super::super::coerce::Arg {
+                    ty: b,
+                    nullable: true,
+                    literal: None,
+                },
+            );
+            let rules = super::super::coerce::Rules::new(false, case_sensitive);
+            super::super::coerce::wider_type(&x, &y, rules).is_some()
         }
-        _ => true,
     }
 }
 
@@ -409,10 +509,9 @@ fn positional_structs(a: &DataType, b: &DataType) -> bool {
         (DataType::Struct(x), DataType::Struct(y)) => {
             !x.fields().is_empty()
                 && x.fields().len() == y.fields().len()
-                && x.fields()
-                    .iter()
-                    .zip(y.fields())
-                    .all(|(f, g)| operands_compatible(f.data_type(), g.data_type()))
+                && x.fields().iter().zip(y.fields()).all(|(f, g)| {
+                    operands_compatible(Some(f.data_type()), Some(g.data_type()), true)
+                })
         }
         _ => false,
     }
