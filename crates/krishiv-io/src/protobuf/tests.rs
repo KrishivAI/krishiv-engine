@@ -501,6 +501,7 @@ fn two_malformed_embedded_pieces_do_not_merge_into_a_valid_message() {
     assert_eq!(err.error_class().name(), "MALFORMED_PROTOBUF_MESSAGE");
 }
 
+#[cfg(unix)]
 #[test]
 fn a_descriptor_file_that_is_a_symbolic_link_is_read_as_spark_reads_it() {
     let dir = std::env::temp_dir().join(format!("krishiv-pb-link-{}", std::process::id()));
@@ -757,4 +758,18 @@ fn an_any_with_an_unknown_type_is_malformed_and_a_struct_inside_is_refused() {
         )
         .is_err()
     );
+}
+
+#[test]
+fn a_drive_loses_the_slashes_before_it() {
+    assert_eq!(
+        super::without_slashes_before_drive("/C:/x/g.desc"),
+        "C:/x/g.desc"
+    );
+    assert_eq!(super::without_slashes_before_drive("///d:"), "d:");
+    assert_eq!(
+        super::without_slashes_before_drive("/tmp/g.desc"),
+        "/tmp/g.desc"
+    );
+    assert_eq!(super::without_slashes_before_drive("/ab:/x"), "/ab:/x");
 }

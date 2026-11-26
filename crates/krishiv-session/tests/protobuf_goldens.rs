@@ -81,10 +81,11 @@ struct Case {
     output: String,
 }
 
+/// With `/` separators: it is spliced into SQL string literals, where a Windows `\` is an escape.
 fn golden_root() -> String {
     format!(
         "{}/../../tests/spark-golden/functions",
-        env!("CARGO_MANIFEST_DIR")
+        env!("CARGO_MANIFEST_DIR").replace('\\', "/")
     )
 }
 

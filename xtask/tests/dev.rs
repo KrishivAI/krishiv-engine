@@ -38,6 +38,10 @@ fn xtask_with_path(args: &[&str], path: &Path) -> Output {
 }
 
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "repo tooling test: runs shell-script stand-ins and sh, Unix only"
+)]
 fn doctor_fails_with_a_named_fix_per_missing_prerequisite() {
     let empty = tmp("empty-path");
     let out = xtask_with_path(&["doctor"], &empty);
@@ -99,6 +103,10 @@ fn stack_only_addresses_the_bench_project() {
 }
 
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "repo tooling test: runs shell-script stand-ins and sh, Unix only"
+)]
 fn stack_without_docker_names_the_fix() {
     let out = xtask_with_path(&["stack", "up"], &tmp("no-docker"));
     assert!(!out.status.success());
