@@ -133,6 +133,31 @@ def test_identical_texts_are_written_once_and_missing_files_named(tmp_path: Path
     assert "The test artifact also contains the 3 third-party Rust" in out.text
 
 
+def test_a_package_without_files_borrows_its_projects_texts(tmp_path: Path) -> None:
+    def crate(name: str, lic: str, repo: str, text: str | None) -> object:
+        root = tmp_path / name
+        root.mkdir()
+        if text is not None:
+            (root / "LICENSE").write_text(text)
+        return tpn.Crate(name, "1", lic, repo, root)
+
+    apache = "Apache License\n  Version 2.0, January 2004\n\n  terms"
+    crates = [
+        crate("alloc-no-stdlib", "BSD-3-Clause", "https://r/alloc", "bsd text"),
+        crate("alloc-stdlib", "BSD-3-Clause", "https://r/alloc", None),
+        crate("tonic", "MIT", "https://r/tonic", "mit text"),
+        crate("tonic-prost", "MIT", "https://elsewhere/tonic-prost", None),  # another repository
+        crate("arrow", "Apache-2.0", "https://r/arrow", apache),
+        crate("flatbuffers", "Apache-2.0", "https://r/fb", None),
+    ]
+    out = tpn.render("x", crates)
+    assert out.without_files == ["tonic-prost 1"]
+    assert "alloc-stdlib 1, BSD-3-Clause, https://r/alloc [" in out.text
+    assert "(the package carries no license file: the texts of alloc-no-stdlib, the same project)" in out.text
+    assert "(the package carries no license file: the standard Apache License 2.0 text)" in out.text
+    assert out.text.count("bsd text") == 1
+
+
 def test_the_workspace_cli_resolves(tmp_path: Path) -> None:
     """End to end on this repository: needs cargo and the registry sources.
 

@@ -54,6 +54,17 @@ _SKIP_DIRS = {
     "docs",
     "doc",
 }
+# Packages published without a license file, and where their license text comes from: a crate of
+# the same project (same repository, same license) or, for a bare SPDX id, the standard text as
+# another crate in the set carries it. A sibling counts only with the same repository and license
+# field; without one in the set the crate stays listed as carrying no license file.
+SAME_TEXTS_AS = {
+    "alloc-stdlib": "alloc-no-stdlib",  # dropbox/rust-alloc-no-stdlib, BSD-3-Clause
+    "tonic-prost": "tonic",  # grpc/grpc-rust, MIT
+    "flatbuffers": "spdx:Apache-2.0",  # google/flatbuffers, the Apache License 2.0 alone
+}
+# The first words of the standard Apache License 2.0 text.
+_APACHE_2 = "Apache License Version 2.0, January 2004"
 # How deep below the package root nested license files are looked for.
 _MAX_DEPTH = 3
 
@@ -204,7 +215,6 @@ def render(title: str, crates: list[Crate]) -> Notices:
         str, tuple[str, list[str]]
     ] = {}  # digest -> (text, ["crate version: path", ...])
     refs: dict[Crate, list[str]] = {}
-    without: list[str] = []
     for c in crates:
         ids = []
         for f in notice_files(c):
@@ -216,8 +226,33 @@ def render(title: str, crates: list[Crate]) -> Notices:
             if digest not in ids:
                 ids.append(digest)
         refs[c] = ids
-        if not ids:
-            without.append(f"{c.name} {c.version}")
+    borrowed: dict[Crate, str] = {}
+    for c in crates:
+        source = SAME_TEXTS_AS.get(c.name)
+        if refs[c] or source is None:
+            continue
+        if source == "spdx:Apache-2.0":
+            apache = sorted(
+                d
+                for d, (body, _) in texts.items()
+                if " ".join(body.split()[:6]) == _APACHE_2
+            )
+            if apache:
+                refs[c] = apache[:1]
+                borrowed[c] = "the standard Apache License 2.0 text"
+        else:
+            sibling = [
+                o
+                for o in crates
+                if o.name == source
+                and refs[o]
+                and o.repository == c.repository
+                and o.license == c.license
+            ]
+            if sibling:
+                refs[c] = refs[sibling[-1]]
+                borrowed[c] = f"the texts of {source}, the same project"
+    without = [f"{c.name} {c.version}" for c in crates if not refs[c]]
     lines = [
         f"Third-party software in {title}",
         "",
@@ -235,6 +270,8 @@ def render(title: str, crates: list[Crate]) -> Notices:
             ", ".join(f"[{i}]" for i in refs[c])
             or "(the package carries no license file)"
         )
+        if c in borrowed:
+            ids += f" (the package carries no license file: {borrowed[c]})"
         repo = f" {c.repository}" if c.repository else ""
         lines.append(f"- {c.name} {c.version}, {c.license},{repo} {ids}")
     lines += ["", "License and notice texts:", ""]
@@ -252,7 +289,9 @@ def render(title: str, crates: list[Crate]) -> Notices:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
+    ap = argparse.ArgumentParser(
+        description="Write the third-party notices file of a binary artifact."
+    )
     ap.add_argument(
         "--package", required=True, help="workspace package the artifact is built from"
     )
