@@ -757,7 +757,13 @@ fn zone_text_is_resolved_or_refused() {
         "a b",
         "/Seoul",
     ] {
-        let e = bind_zone(bad).unwrap_err();
+        // Spark evaluates the literal zone per row: the call binds, no row is no error, a row raises.
+        let f = bind_zone(bad).unwrap();
+        let r = f.invoke(&[col(&ltz(&[])), lit(&strs(&[Some(bad)]))], 0);
+        assert!(r.is_ok(), "{bad:?}: {:?}", r.err());
+        let e = f
+            .invoke(&[col(&t), lit(&strs(&[Some(bad)]))], 1)
+            .unwrap_err();
         assert_eq!(class(&e), ErrorClass::InvalidTimezone, "{bad:?}");
         assert!(
             e.to_string().contains(bad.trim_matches(['\n', ' ', '\t'])) || bad.trim().is_empty(),

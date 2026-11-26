@@ -252,7 +252,16 @@ fn unit_arg(args: &[BindArg]) -> Result<TimestampUnit, KrishivError> {
 /// a NULL zone), a column at each invocation.
 enum ZoneArg {
     Literal(Option<ZoneRef>),
+    /// A literal the zone database rejects: the error is raised on the first row.
+    Unknown(String),
     Column,
+}
+
+/// The error a zone name the database rejects raises.
+fn unknown_zone(name: &str) -> KrishivError {
+    resolve_zone(name)
+        .err()
+        .unwrap_or_else(|| internal(format!("zone {name} resolved after it was refused")))
 }
 
 fn zone_arg(args: &[BindArg], i: usize) -> Result<ZoneArg, KrishivError> {
@@ -1139,6 +1148,7 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                         Some(ZoneArg::Literal(None)) => {
                             return Ok(Arc::new(null_instants(x.rows())) as ArrayRef);
                         }
+                        Some(ZoneArg::Unknown(n)) => return Err(unknown_zone(n)),
                         Some(ZoneArg::Column) => {
                             names = column_zones(&x.strings(2)?)?;
                             Some(Zones::PerRow(&names))
@@ -1197,6 +1207,7 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                         Some(ZoneArg::Literal(None)) => {
                             return Ok(Arc::new(null_instants(x.rows())) as ArrayRef);
                         }
+                        Some(ZoneArg::Unknown(n)) => return Err(unknown_zone(n)),
                         Some(ZoneArg::Column) => {
                             names = column_zones(&x.strings(6)?)?;
                             Some(Zones::PerRow(&names))
@@ -1276,9 +1287,20 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
             })
         }
         ("from_utc_timestamp" | "to_utc_timestamp", [t, z]) if is_timestamp(t) && is_string(z) => {
+            // A literal zone the database does not know raises when a row is read (Spark evaluates the
+            // zone per row), so an empty input is not an error.
             let zone = match zone_arg(args, 1) {
                 Ok(z) => z,
-                Err(e) => return Some((listed, Err(e))),
+                Err(e) => match args.get(1) {
+                    Some(BindArg::Literal(a)) => {
+                        let name = to_utf8(a.as_ref()).ok().map(|t| t.value(0).to_owned());
+                        match name {
+                            Some(name) => ZoneArg::Unknown(name),
+                            None => return Some((listed, Err(e))),
+                        }
+                    }
+                    _ => return Some((listed, Err(e))),
+                },
             };
             let (ntz, from) = (*t == ntz_type(), listed == "from_utc_timestamp");
             let ansi = opts.ansi;
@@ -1288,6 +1310,12 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                 // resolves each row (runs of equal names once).
                 let out = match &zone {
                     ZoneArg::Literal(None) => null_instants(x.rows()),
+                    ZoneArg::Unknown(name) => {
+                        if x.rows() > 0 {
+                            return Err(unknown_zone(name));
+                        }
+                        null_instants(x.rows())
+                    }
                     ZoneArg::Literal(Some(one)) => {
                         let zones = Zones::One(one);
                         (if from {
@@ -1338,6 +1366,7 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                     ZoneArg::Literal(None) => {
                         return Ok(Arc::new(null_wall_clocks(x.rows())) as ArrayRef);
                     }
+                    ZoneArg::Unknown(n) => return Err(unknown_zone(n)),
                     ZoneArg::Column => {
                         target_vec = column_zones(&x.strings(target_index)?)?;
                         Zones::PerRow(&target_vec)
@@ -1350,6 +1379,7 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                         ZoneArg::Literal(None) => {
                             return Ok(Arc::new(null_wall_clocks(x.rows())) as ArrayRef);
                         }
+                        ZoneArg::Unknown(n) => return Err(unknown_zone(n)),
                         ZoneArg::Column => {
                             source_vec = column_zones(&x.strings(0)?)?;
                             Zones::PerRow(&source_vec)

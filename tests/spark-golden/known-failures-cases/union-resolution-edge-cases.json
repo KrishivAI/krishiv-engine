@@ -1,9 +1,0 @@
-{
-  "cases": {
-    "depends-on-command": [
-      3
-    ]
-  },
-  "file": "union-resolution-edge-cases",
-  "format_version": 1
-}

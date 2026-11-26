@@ -678,9 +678,9 @@ fn region_zones_convert_across_dst() {
         stamps(&f.invoke(&[col(&utc_midnight), lit(&zone)], 1).unwrap()),
         [Some(1_577_836_800_000_000)]
     );
-    // An unknown zone is INVALID_TIMEZONE, at bind and per row.
+    // An unknown zone is INVALID_TIMEZONE on the first row (Spark reads a literal zone per row), not at bind.
     let bad = strs(&[Some("America/Nope")]);
-    let e = bind_scalar(
+    let f_bad = bind_scalar(
         "from_utc_timestamp",
         &[
             utc_midnight.data_type().clone().into(),
@@ -688,7 +688,10 @@ fn region_zones_convert_across_dst() {
         ],
         &utc(),
     )
-    .unwrap_err();
+    .unwrap();
+    let e = f_bad
+        .invoke(&[col(&utc_midnight), lit(&bad)], 1)
+        .unwrap_err();
     assert_eq!(class(&e), ErrorClass::InvalidTimezone);
     let cols = strs(&[Some("America/Nope")]);
     let f = bind("from_utc_timestamp", &[&utc_midnight, &cols]);
