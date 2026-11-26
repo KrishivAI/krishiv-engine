@@ -176,3 +176,67 @@ fn a_view_keeps_the_timestamp_type_of_its_create() {
         }
     }
 }
+
+/// The type strings of `from_json` / `from_csv` / `from_xml` and `variant_get` /
+/// `try_variant_get` read a bare `TIMESTAMP` as the session's timestamp type, and the column
+/// names never show it (Spark 4.2.0 run, `spark.sql.timestampType = TIMESTAMP_NTZ`).
+#[test]
+fn function_type_strings_follow_the_session_timestamp_type() {
+    let s = ntz();
+    let cases = [
+        (
+            r#"from_json('{"a":"2020-01-01 00:00:00"}', 'a timestamp')"#,
+            r#"from_json({"a":"2020-01-01 00:00:00"})"#,
+            "struct<a:timestamp_ntz>",
+        ),
+        (
+            "from_csv('2020-01-01 00:00:00', 'a timestamp')",
+            "from_csv(2020-01-01 00:00:00)",
+            "struct<a:timestamp_ntz>",
+        ),
+        (
+            "from_xml('<row><a>2020-01-01 00:00:00</a></row>', 'a timestamp')",
+            "from_xml(<row><a>2020-01-01 00:00:00</a></row>)",
+            "struct<a:timestamp_ntz>",
+        ),
+        (
+            r#"variant_get(parse_json('"2020-01-01 00:00:00"'), '$', 'timestamp')"#,
+            r#"variant_get(parse_json("2020-01-01 00:00:00"), $)"#,
+            "timestamp_ntz",
+        ),
+        (
+            r#"try_variant_get(parse_json('"2020-01-01 00:00:00"'), '$', 'array<timestamp>')"#,
+            r#"try_variant_get(parse_json("2020-01-01 00:00:00"), $)"#,
+            "array<timestamp_ntz>",
+        ),
+        (
+            r#"from_json('{"a":"2020-01-01 00:00:00"}', 'struct<a: timestamp>')"#,
+            r#"from_json({"a":"2020-01-01 00:00:00"})"#,
+            "struct<a:timestamp_ntz>",
+        ),
+    ];
+    for (call, name, ty) in cases {
+        assert_eq!(type_of(&s, call), ty, "{call}");
+        let (shown, _, _) = cell(&s, &format!("select {call}"));
+        assert_eq!(shown, name, "{call}");
+    }
+    // The value is read as the zoneless wall clock.
+    let (_, _, v) = cell(
+        &s,
+        r#"select variant_get(parse_json('"2020-01-01 00:00:00"'), '$', 'timestamp')"#,
+    );
+    assert_eq!(v, "1577836800000000 false");
+    // The default session keeps `TIMESTAMP_LTZ`, and an explicit type is never changed.
+    let plain = Session::new().unwrap();
+    assert_eq!(
+        type_of(
+            &plain,
+            r#"from_json('{"a":"2020-01-01 00:00:00"}', 'a timestamp')"#
+        ),
+        "struct<a:timestamp>"
+    );
+    assert_eq!(
+        type_of(&s, r#"from_json('{"a":"x"}', 'a timestamp_ltz, b int')"#),
+        "struct<a:timestamp,b:int>"
+    );
+}
