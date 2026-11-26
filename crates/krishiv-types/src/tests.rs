@@ -204,8 +204,10 @@ fn the_type_grammar_follows_the_release() {
     let ntz = DataType::from_json(&field("timestamp_ntz(6)")).unwrap();
     assert_eq!(ntz.simple_string(), "struct<a:timestamp_ntz>");
     assert_eq!(
-        class(DataType::from_json(&field("timestamp_ltz(9)"))),
-        Some(ErrorClass::KrishivUnsupportedFeature)
+        DataType::from_json(&field("timestamp_ltz(9)"))
+            .unwrap()
+            .simple_string(),
+        "struct<a:timestamp>"
     );
     assert_eq!(
         class(DataType::from_json(&field("timestamp_ntz(2)"))),
@@ -233,13 +235,7 @@ fn the_type_grammar_follows_the_release() {
     }
     let ntz = DataType::from_json_in(&field("timestamp_ntz(6)"), TypeGrammar::V4_2).unwrap();
     assert_eq!(ntz.simple_string(), "struct<a:timestamp_ntz>");
-    assert_eq!(
-        class(DataType::from_json_in(
-            &field("timestamp_ntz(9)"),
-            TypeGrammar::V4_3
-        )),
-        Some(ErrorClass::KrishivUnsupportedFeature)
-    );
+    assert!(DataType::from_json_in(&field("timestamp_ntz(9)"), TypeGrammar::V4_3).is_ok());
     // A `time(9)` read under 4.2 is refused with 4.2's text.
     let t9 = DataType::from_json_in(&field("time(9)"), TypeGrammar::V4_2).unwrap_err();
     assert!(t9.to_string().contains("range [0, 6]"));
@@ -471,11 +467,11 @@ fn timestamps_distinguish_ltz_and_ntz() {
     }
     assert_eq!(normalize_ingest_type(&none), none);
     assert_eq!(normalize_ingest_type(&ArrowType::Utf8), ArrowType::Utf8);
-    for unit in [
-        TimeUnit::Second,
-        TimeUnit::Millisecond,
-        TimeUnit::Nanosecond,
-    ] {
+    assert_eq!(
+        DataType::from_arrow(&ArrowType::Timestamp(TimeUnit::Nanosecond, None)),
+        Ok(DataType::TimestampNtzNanos { precision: 9 })
+    );
+    for unit in [TimeUnit::Second, TimeUnit::Millisecond] {
         let e = DataType::from_arrow(&ArrowType::Timestamp(unit, None));
         assert_eq!(
             e.map_err(|e| e.error_class()),
