@@ -290,3 +290,148 @@ fn a_scans_row_stage_runs_in_the_probe_with_the_scans_counters() {
         }
     }
 }
+
+/// One run's sorted rows and the probes' `probe_held_rows`, with
+/// `krishiv.exec.coalesceInput` `coalesce` and batch size `batch`.
+fn held_run(plan: &Runnable, coalesce: bool, batch: Option<usize>) -> (Vec<String>, u64) {
+    super::COALESCE_INPUT.set(coalesce);
+    super::BATCH_SIZE.set(batch);
+    let (rows, ..) = counters(plan);
+    let root = TreePool::new(&MemoryConfig::default());
+    let (_, query) = super::run_in(plan, &root);
+    super::COALESCE_INPUT.set(true);
+    super::BATCH_SIZE.set(None);
+    let held = query
+        .metrics()
+        .operators
+        .values()
+        .flat_map(|e| e.extra.iter())
+        .filter(|(name, _)| name.as_ref() == "probe_held_rows")
+        .map(|(_, v)| v.value().unwrap_or(0))
+        .sum();
+    (rows, held)
+}
+
+/// K1 (design `P3-0.3.1-probe-empty-batches.md` §3): a probe whose row
+/// stage keeps under a quarter of a batch holds the kept rows and probes
+/// them as full batches (inner and left semi joins, with a fused filter or
+/// a residual), and a dense stage holds nothing. The rows are those of the
+/// unfused plan and of the same plan holding nothing, at the default batch
+/// size and at one a push fills partway (its tail stays held).
+#[test]
+fn sparse_batches_rows_are_held_and_join_the_same_rows() {
+    let (tpch, _rt) = tpch();
+    for (sql, holds) in [
+        // A Bloom or set from `part` keeps about 8% of `lineitem`.
+        (
+            "SELECT l_orderkey, p_brand FROM lineitem JOIN part ON l_partkey = p_partkey \
+             WHERE p_size < 5",
+            true,
+        ),
+        // With a fused filter too: it runs over the held rows.
+        (
+            "SELECT l_orderkey, p_brand FROM lineitem JOIN part ON l_partkey = p_partkey \
+             WHERE l_quantity < 30 AND p_size < 5",
+            true,
+        ),
+        // A left semi join (`IN`).
+        (
+            "SELECT l_orderkey FROM lineitem WHERE l_partkey IN \
+             (SELECT p_partkey FROM part WHERE p_size < 5)",
+            true,
+        ),
+        // A residual over the held pairs.
+        (
+            "SELECT l_orderkey, p_brand FROM lineitem JOIN part ON l_partkey = p_partkey \
+             AND l_suppkey <> p_partkey WHERE p_size < 5",
+            true,
+        ),
+        // A dense stage (`p_size < 45` keeps 90%): nothing held.
+        (
+            "SELECT l_orderkey, p_brand FROM lineitem JOIN part ON l_partkey = p_partkey \
+             WHERE p_size < 45",
+            false,
+        ),
+    ] {
+        let plan = tpch.plan_sql(sql).unwrap();
+        let text = plan.to_string();
+        let (want, ..) = counters(&unfused(&plan));
+        assert!(!want.is_empty(), "{sql}");
+        for batch in [None, Some(500)] {
+            let (got, held) = held_run(&plan, true, batch);
+            assert_eq!(got, want, "{sql} batch {batch:?}\n{text}");
+            assert_eq!(
+                held > 0,
+                holds,
+                "held {held}: {sql} batch {batch:?}\n{text}"
+            );
+            let (off, none) = held_run(&plan, false, batch);
+            assert_eq!(off, want, "{sql} batch {batch:?}\n{text}");
+            assert_eq!(none, 0, "{sql}");
+        }
+    }
+}
+
+/// The sums of the named operator metrics of one run of `plan`.
+fn metric_sums(plan: &Runnable, batch: Option<usize>, names: &[&str]) -> (Vec<String>, Vec<u64>) {
+    super::BATCH_SIZE.set(batch);
+    let (rows, ..) = counters(plan);
+    let root = TreePool::new(&MemoryConfig::default());
+    let (_, query) = super::run_in(plan, &root);
+    super::BATCH_SIZE.set(None);
+    let sums = names
+        .iter()
+        .map(|n| {
+            query
+                .metrics()
+                .operators
+                .values()
+                .flat_map(|e| e.extra.iter())
+                .filter(|(name, _)| name.as_ref() == *n)
+                .map(|(_, v)| v.value().unwrap_or(0))
+                .sum()
+        })
+        .collect();
+    (rows, sums)
+}
+
+/// K1 over a direct index (P3 + lever C): a one-row build (`nation` kept to
+/// GERMANY) qualifies for the direct index and decoded payload, and its
+/// runtime filter keeps about 4% of `customer`, so the probe holds rows.
+/// The held rows go through the same shared direct index as the main path:
+/// the payload is decoded once per build (not again when `finish` probes
+/// the held tail), and the rows match the unfused plan and the plan without
+/// a direct index.
+#[test]
+fn held_rows_probe_through_the_shared_direct_index() {
+    let (tpch, _rt) = tpch();
+    let sql = "SELECT c_custkey, n_name FROM customer JOIN nation \
+               ON c_nationkey = n_nationkey WHERE n_name = 'GERMANY'";
+    let names = [
+        "probe_held_rows",
+        "direct_probe_rows",
+        "direct_payload_rows",
+        "direct_inner_rows",
+    ];
+    let plan = tpch.plan_sql(sql).unwrap();
+    let text = plan.to_string();
+    let (want, ..) = counters(&unfused(&plan));
+    assert!(!want.is_empty(), "{text}");
+    let build_rows = 1;
+    for batch in [None, Some(500)] {
+        let (got, m) = metric_sums(&plan, batch, &names);
+        assert_eq!(got, want, "batch {batch:?}\n{text}");
+        let [held, direct, payload, inner] = m[..] else {
+            unreachable!()
+        };
+        assert!(held > 0, "held {held}, batch {batch:?}\n{text}");
+        assert!(direct > 0, "direct {direct}, batch {batch:?}\n{text}");
+        assert_eq!(payload, build_rows, "payload rows, batch {batch:?}\n{text}");
+        assert!(inner > 0, "inner {inner}, batch {batch:?}\n{text}");
+    }
+    super::DIRECT_INDEX.set(false);
+    let (got, m) = metric_sums(&plan, None, &names);
+    super::DIRECT_INDEX.set(true);
+    assert_eq!(got, want, "direct index off\n{text}");
+    assert_eq!(m[1..], [0, 0, 0], "direct index off\n{text}");
+}

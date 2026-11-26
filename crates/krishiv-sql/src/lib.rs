@@ -143,23 +143,36 @@ pub struct ParserOptions {
     /// `DEFAULT COLLATION`; off, `ALTER SCHEMA .. DEFAULT COLLATION` is
     /// `UNSUPPORTED_FEATURE.SCHEMA_LEVEL_COLLATIONS`.
     pub schema_level_collations: bool,
-    /// `spark.sql.join.asofJoin.enabled` (Spark 4.3, off by default):
-    /// `ASOF JOIN` after a relation starts an as-of join; off, an as-of join
-    /// is `UNSUPPORTED_FEATURE.ASOF_JOIN` and `ASOF` stays a name.
+    /// Spark 4.3's type grammar (the session's profile is Spark 4.3 or later; not a Spark
+    /// config): `TIME(p)` takes `p` up to 9, `TIMESTAMP[_NTZ|_LTZ](p)` is read (6 is the
+    /// microsecond type, 7..=9 the nanosecond types, refused as Spark's default refuses them),
+    /// and a `TIME` literal keeps up to 9 fractional digits. Off, the Spark 4.2 grammar.
+    pub spark_4_3: bool,
+    /// `spark.sql.timestampNanosTypes.enabled` (internal in Spark 4.3, off): Spark builds the
+    /// nanosecond timestamp types when on; Krishiv has none yet, so under [`Self::spark_4_3`]
+    /// a nanosecond type is `KRISHIV_UNSUPPORTED_FEATURE` instead of `FEATURE_NOT_ENABLED`.
+    pub timestamp_nanos_types: bool,
+    /// `spark.sql.join.asofJoin.enabled` (Spark 4.3, off by default): an as-of
+    /// join runs; off, it is `UNSUPPORTED_FEATURE.ASOF_JOIN`. Without
+    /// [`spark_4_3_grammar`](Self::spark_4_3_grammar) it also decides the grammar:
+    /// `ASOF JOIN` after a relation starts an as-of join only with it on.
     pub asof_join: bool,
     /// `spark.sql.timeTravel.atSyntax.enabled` (on by default): a table name may carry an `@v123` or
     /// `@yyyyMMddHHmmssSSS` time travel suffix.
     pub time_travel_at_syntax: bool,
     /// Spark 4.3 grammar: `UNNEST(..)` in `FROM` (off, it is an ordinary table function),
     /// `SHOW TABLES | TABLE EXTENDED | PARTITIONS ... AS JSON` (off, `PARSE_SYNTAX_ERROR`) and
-    /// `INSERT INTO t (columns) REPLACE ...` takes a column list before `REPLACE`.
+    /// `INSERT INTO t (columns) REPLACE ...` takes a column list before `REPLACE`; the as-of branch of
+    /// `joinRelation` is there whatever `asof_join` says, so `t ASOF JOIN q MATCH_CONDITION (t.a >= q.a)` is an
+    /// as-of join (refused while `asof_join` is off) where Spark 4.2 reads `ASOF` as `t`'s alias, and `| ASOF`
+    /// starts a pipe operator.
     /// Off (Spark 4.2), the list is the insert's own and the statement fails at `REPLACE` with
     /// `PARSE_SYNTAX_ERROR`. Not a Spark config: the session sets it from its profile.
     pub spark_4_3_grammar: bool,
 }
 
 impl Default for ParserOptions {
-    /// Spark 4.2's defaults.
+    /// Spark's default configs, with the grammar of the default profile (Spark 4.3).
     fn default() -> Self {
         Self::from_conf(|_| None)
     }
@@ -167,7 +180,8 @@ impl Default for ParserOptions {
 
 impl ParserOptions {
     /// Options from Spark session configs; `conf` returns a config's value
-    /// if it is set. Unset configs take Spark 4.2's defaults.
+    /// if it is set. Unset configs take Spark's defaults; the grammar is the default profile's
+    /// (Spark 4.3: [`Self::spark_4_3`] is on; a session of an older profile turns it off).
     pub fn from_conf<'a>(conf: impl Fn(&str) -> Option<&'a str>) -> Self {
         let on = |key: &str, default: bool| {
             conf(key).map_or(default, |v| v.trim().eq_ignore_ascii_case("true"))
@@ -203,6 +217,8 @@ impl ParserOptions {
                 false,
             ),
             schema_level_collations: on("spark.sql.collation.schemaLevel.enabled", false),
+            spark_4_3: true,
+            timestamp_nanos_types: on("spark.sql.timestampNanosTypes.enabled", false),
             asof_join: on("spark.sql.join.asofJoin.enabled", false),
             time_travel_at_syntax: on("spark.sql.timeTravel.atSyntax.enabled", true),
             spark_4_3_grammar: false,

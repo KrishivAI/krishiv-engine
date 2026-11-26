@@ -32,7 +32,8 @@ use pyo3::prelude::*;
 pub(crate) type Job = Box<dyn FnOnce(Python<'_>) + Send>;
 
 enum Message {
-    Run(Job),
+    /// A job; `scalar` jobs take the pool's scalar gate, if it has one.
+    Run(Job, bool),
     Stop,
 }
 
@@ -90,11 +91,19 @@ pub(crate) struct Pool {
     /// keeps its pin instead of releasing it, because the interpreter may be
     /// finalizing by the time it gets there (review M1).
     abandoned: Arc<AtomicBool>,
+    /// One relation task slot per thread (see `slots`).
+    slots: Arc<super::slots::SlotHandle>,
 }
 
 impl Pool {
-    /// Starts `size` pinned threads (at least one). Called attached or not;
-    /// a new thread pins once the GIL (if any) is free.
+    /// The relation task slots of this pool's threads.
+    pub(crate) fn slots(&self) -> &Arc<super::slots::SlotHandle> {
+        &self.slots
+    }
+
+    /// Starts `size` pinned threads (at least one; a pool of one gets a spare thread, but still runs
+    /// one scalar UDF job at a time).
+    /// Called attached or not; a new thread pins once the GIL (if any) is free.
     ///
     /// # Errors
     /// A thread that cannot be spawned (the pool started so far is stopped).
@@ -102,12 +111,20 @@ impl Pool {
         let (jobs, queue) = channel::<Message>();
         let queue = Arc::new(Mutex::new(queue));
         let abandoned = Arc::new(AtomicBool::new(false));
-        let mut threads = Vec::with_capacity(size.max(1));
-        for i in 0..size.max(1) {
+        // A one-thread pool has no thread to keep for the scalar UDF jobs that feed a relation task (which holds
+        // its thread for its whole life), so it gets one spare thread: the relation task still has its one slot,
+        // and a scalar call of another query or pipeline queued behind it runs on the spare instead of waiting
+        // for it. Scalar calls still run one at a time (the gate), so the configured one thread's no-overlap
+        // guarantee holds.
+        let scalar_gate = (size <= 1).then(|| Arc::new(Mutex::new(())));
+        let spawn = if size <= 1 { 2 } else { size };
+        let mut threads = Vec::with_capacity(spawn);
+        for i in 0..spawn {
             let (queue, abandoned) = (Arc::clone(&queue), Arc::clone(&abandoned));
+            let gate = scalar_gate.clone();
             let spawned = std::thread::Builder::new()
                 .name(format!("krishiv-python-udf-{i}"))
-                .spawn(move || worker(&queue, &abandoned));
+                .spawn(move || worker(&queue, &abandoned, gate.as_deref()));
             match spawned {
                 Ok(t) => threads.push(t),
                 Err(e) => {
@@ -124,6 +141,7 @@ impl Pool {
             threads: Mutex::new(threads),
             pid: std::process::id(),
             abandoned,
+            slots: super::slots::SlotHandle::new(size),
         })
     }
 
@@ -133,11 +151,16 @@ impl Pool {
         self.pid == std::process::id()
     }
 
-    /// Queues `job`. A pool that has stopped drops it (its result channel
+    /// Queues a scalar UDF `job`: on a pool configured as one thread it waits for the other scalar jobs.
+    pub(crate) fn submit_scalar(&self, job: Job) {
+        let _ = self.jobs.send(Message::Run(job, true));
+    }
+
+    /// Queues `job` (a relation task: never gated). A pool that has stopped drops it (its result channel
     /// with it, so the caller sees the call fail): its threads have ended,
     /// so the queue has no receiver left.
     pub(crate) fn submit(&self, job: Job) {
-        let _ = self.jobs.send(Message::Run(job));
+        let _ = self.jobs.send(Message::Run(job, false));
     }
 
     /// Stops every thread, which releases its pin; waits at most `limit`
@@ -199,7 +222,7 @@ fn inherit_thread_hooks(py: Python<'_>) {
 }
 
 /// A pool thread: pins, runs jobs until told to stop, releases the pin.
-fn worker(queue: &Mutex<Receiver<Message>>, abandoned: &AtomicBool) {
+fn worker(queue: &Mutex<Receiver<Message>>, abandoned: &AtomicBool, gate: Option<&Mutex<()>>) {
     let pin = Pin::new();
     Python::attach(inherit_thread_hooks);
     loop {
@@ -207,8 +230,17 @@ fn worker(queue: &Mutex<Receiver<Message>>, abandoned: &AtomicBool) {
         match next {
             // Past the exit deadline no job starts: the interpreter may be
             // finalizing (T098b I2); dropping it fails its call.
-            Ok(Message::Run(_)) if abandoned.load(Ordering::SeqCst) => break,
-            Ok(Message::Run(job)) => {
+            Ok(Message::Run(..)) if abandoned.load(Ordering::SeqCst) => break,
+            Ok(Message::Run(job, scalar)) => {
+                // Taken detached from Python: a waiter that held the GIL would block the job it waits for.
+                let _turn = gate
+                    .filter(|_| scalar)
+                    .map(|g| g.lock().unwrap_or_else(PoisonError::into_inner));
+                // The wait above can outlast the exit deadline: check again so no job
+                // starts once the interpreter may be finalizing (T098b I2).
+                if abandoned.load(Ordering::SeqCst) {
+                    break;
+                }
                 // A panicking job is contained: the thread keeps serving.
                 let _ = catch_unwind(AssertUnwindSafe(|| Python::attach(job)));
             }

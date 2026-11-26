@@ -1453,6 +1453,7 @@ impl Session {
             quiet: QuietDenials::default(),
             udtfs,
             spill_failure: Arc::default(),
+            planning: Arc::default(),
         }
     }
 
@@ -1684,9 +1685,12 @@ impl Session {
         &self,
         physical: &PhysicalPlan,
         env: &QueryEnv,
-    ) -> Result<(RecordBatchStream, Arc<QueryContext>), KrishivError> {
-        self.run_on_query(physical, self.worker(env), env, true)
-            .await
+    ) -> Result<(RecordBatchStream, Arc<QueryContext>, String), KrishivError> {
+        // The row id too: the profile reads the query's `planning_ns` from its row (MODES-2).
+        let (stream, query, log_id) = self
+            .run_on_query_logged(physical, self.worker(env), env, true, None)
+            .await?;
+        Ok((crate::run_site::resolve_sites(stream, env), query, log_id))
     }
 
     /// The session's relation store (tests): every registered memory
@@ -1831,6 +1835,10 @@ impl Session {
                 .await?
                 .into_parts(),
         };
+        // The plan is made: what the statement spent planning, the queue excluded (MODES-2).
+        self.state
+            .queries
+            .set_planning_ns(&log_id, env.planning.take());
         self.state.activity.query_started();
         let id = QueryId(self.state.runtime.reserve_tagged(
             self.state.number,

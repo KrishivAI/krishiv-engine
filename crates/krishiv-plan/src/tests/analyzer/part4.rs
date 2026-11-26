@@ -949,6 +949,74 @@ fn time_literals_and_casts_with_the_type_enabled() {
     assert!(cast(Expr::from(Literal::Double(1.0)), DataType::time(6).unwrap()).is_err());
 }
 
+/// Under Spark 4.3 a `TIME '..'` literal of 7 to 9 digits binds to the casts `time_literal` builds
+/// (a string read as `TIME(9)`, cut to `TIME(7|8)`); with `spark.sql.timeType.enabled` off the
+/// analyzed plan analyzes to itself, as the `TIME(6)` one does.
+#[test]
+fn nanosecond_time_literals_analyze_to_themselves_with_the_gate_off() {
+    let ctx = AnalysisContext {
+        profile: crate::analyzer::SparkProfile::V4_3,
+        ..ctx()
+    };
+    for (value, precision) in [
+        ("12:00:00.123456789", 9),
+        ("12:00:00.1234567", 7),
+        ("12:00:00.12345678", 8),
+        ("12:00:00.123", 6),
+    ] {
+        let literal = Expr::new(ExprNode::TypedLiteral {
+            kind: crate::TypedLiteralKind::Time,
+            value: value.to_owned(),
+        });
+        let plan = LogicalPlan::new(PlanNode::OneRowRelation).project(vec![literal]);
+        let once = run(plan, &ctx).unwrap_or_else(|e| panic!("{value}: {e:?}"));
+        assert_eq!(
+            once.output[0].data_type,
+            DataType::time(precision).unwrap(),
+            "{value}"
+        );
+        let again = block_on(DefaultAnalyzer.analyze(&once.plan, &ctx))
+            .unwrap_or_else(|e| panic!("{value} again: {e:?}"));
+        assert_eq!(again.plan, once.plan, "{value}");
+    }
+    // A cast the user wrote stays gated, whatever its precision.
+    let user =
+        Expr::from(Literal::String("12:00:00.1234567".to_owned())).cast(DataType::time(7).unwrap());
+    let r = run(
+        LogicalPlan::new(PlanNode::OneRowRelation).project(vec![user]),
+        &ctx,
+    );
+    assert_eq!(
+        summary(&r),
+        serde_json::json!(["UNSUPPORTED_TIME_TYPE", {}])
+    );
+}
+
+/// A plan from a front end that reads the 4.3 grammar (Connect) may cast to `TIME(7..9)`: under
+/// the 4.2 profile the cast's target is refused by its precision, as Spark 4.2 refuses the type.
+#[test]
+fn a_cast_to_a_nanosecond_time_is_refused_under_spark_4_2() {
+    let ctx = AnalysisContext {
+        profile: crate::analyzer::SparkProfile::V4_2,
+        ..context(
+            catalog(),
+            ResolutionConf {
+                time_type: true,
+                ..ResolutionConf::default()
+            },
+        )
+    };
+    let cast = Expr::from(Literal::String("12:00:00".to_owned())).cast(DataType::time(7).unwrap());
+    let r = run(
+        LogicalPlan::new(PlanNode::OneRowRelation).project(vec![cast]),
+        &ctx,
+    );
+    assert_eq!(
+        summary(&r),
+        serde_json::json!(["UNSUPPORTED_TIME_PRECISION", {"precision": "7"}])
+    );
+}
+
 /// Spark's strength reduction for an integral expression compared with a
 /// decimal literal (`DecimalPrecisionTypeCoercion.integralAndDecimalLiteral`
 /// in Spark 4.2): the comparison narrows the literal to the `BIGINT` bound

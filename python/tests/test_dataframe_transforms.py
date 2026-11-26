@@ -376,18 +376,16 @@ def test_except_all(spark: SparkSession, capsys: pytest.CaptureFixture[str]) -> 
 # sample ----------------------------------------------------------------------------------------
 
 
-def test_sample_is_unsupported(spark: SparkSession) -> None:
+def test_sample_runs_and_refuses_replacement(spark: SparkSession) -> None:
     df = make(spark, {"age": [14], "name": ["Tom"]})
+    assert df.sample(1.0, 3).count() == 1
+    assert df.sample(fraction=0.0, seed=3).count() == 0
+    assert df.sample(withReplacement=False, fraction=1.0).count() == 1
+    assert df.sample(1.0, 3).columns == ["age", "name"]
     with pytest.raises(errors.UnsupportedOperationException) as bad:
-        df.sample(0.5, 3).count()
+        df.sample(True, 0.5, 3)
     assert bad.value.getCondition() == "KRISHIV_UNSUPPORTED_FEATURE"
     assert bad.value.getSqlState() == "0A000"
-    with pytest.raises(errors.UnsupportedOperationException):
-        df.sample(fraction=0.5, seed=3).count()
-    with pytest.raises(errors.UnsupportedOperationException):
-        df.sample(True, 0.5, 3).count()
-    with pytest.raises(errors.UnsupportedOperationException):
-        df.sample(withReplacement=False, fraction=0.5).count()
 
 
 def test_sample_rejects_bad_arguments(spark: SparkSession) -> None:
@@ -567,9 +565,10 @@ def test_to_local_iterator(people: DataFrame) -> None:
     ]
 
 
-def test_to_json_is_unsupported(people: DataFrame) -> None:
-    with pytest.raises(errors.UnsupportedOperationException, match="KRISHIV_UNSUPPORTED_FEATURE"):
-        people.toJSON()
+def test_to_json_is_a_dataframe_of_json_documents(spark: SparkSession) -> None:
+    out = spark.createDataFrame([(14, 1.5), (23, 2.5)], "age long, h double").sort("age").toJSON()
+    assert out.columns == ["value"]
+    assert [r.value for r in out.collect()] == ['{"age":14,"h":1.5}', '{"age":23,"h":2.5}']
 
 
 def test_drop_duplicates_on_every_column(spark: SparkSession) -> None:

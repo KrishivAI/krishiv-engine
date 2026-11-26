@@ -69,7 +69,7 @@ const RUNNER_KEYS: [&str; 8] = [
 ];
 
 /// The values of [`RUNNER_KEYS`] one query prepared its calls with.
-type RunnerConf = Vec<(&'static str, String)>;
+pub(super) type RunnerConf = Vec<(&'static str, String)>;
 
 /// The process's unregistered UDFs, by version (top bit set).
 static ANONYMOUS: LazyLock<RwLock<HashMap<u32, Arc<Registered>>>> =
@@ -140,13 +140,13 @@ pub(crate) fn refuse_inside_udf(py: Python<'_>) -> PyResult<()> {
 
 /// The runner conf and row count of the call running on this thread, set
 /// for the scope's life; the previous ones come back on drop.
-struct RunnerScope {
+pub(super) struct RunnerScope {
     previous: Option<Arc<RunnerConf>>,
     previous_rows: usize,
 }
 
 impl RunnerScope {
-    fn enter(conf: Arc<RunnerConf>, rows: usize) -> Self {
+    pub(super) fn enter(conf: Arc<RunnerConf>, rows: usize) -> Self {
         Self {
             previous: RUNNER.with(|r| r.borrow_mut().replace(conf)),
             previous_rows: ROWS.with(|c| c.replace(rows)),
@@ -163,10 +163,10 @@ impl Drop for RunnerScope {
 }
 
 /// One registered UDF.
-struct Registered {
-    wrapper: Py<PyAny>,
+pub(super) struct Registered {
+    pub(super) wrapper: Py<PyAny>,
     /// `thread_safe=false`: the lock its calls take, so at most one runs.
-    lock: Option<Arc<Mutex<()>>>,
+    pub(super) lock: Option<Arc<Mutex<()>>>,
 }
 
 /// The Python UDFs of one session and the size of the pool their calls run
@@ -182,13 +182,13 @@ pub(crate) struct PyUdfRuntime {
 /// pool lock only when there is none yet or it is a fork's copy (review N1:
 /// that lock, inherited held by a fork, would hang the child; and every
 /// batch would wait on it).
-struct PoolCache {
+pub(super) struct PoolCache {
     size: usize,
     cached: Mutex<Option<Arc<Pool>>>,
 }
 
 impl PoolCache {
-    fn get(&self) -> Result<Arc<Pool>, KrishivError> {
+    pub(super) fn get(&self) -> Result<Arc<Pool>, KrishivError> {
         let mut cached = self.cached.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some(p) = cached.as_ref()
             && p.is_local()
@@ -233,31 +233,63 @@ impl PyUdfRuntime {
     }
 }
 
-impl UdfRuntime for PyUdfRuntime {
-    fn prepare(&self, spec: &UdfCallSpec) -> krishiv_exec::Result<Arc<dyn PreparedUdf>> {
-        let registered = if spec.version & krishiv_session::ANONYMOUS_VERSION_BIT == 0 {
+impl PyUdfRuntime {
+    /// The registered wrapper of `(name, version)`.
+    ///
+    /// # Errors
+    /// `KRISHIV_UDF_NOT_AVAILABLE` when there is none.
+    pub(super) fn lookup(&self, name: &str, version: u32) -> Result<Arc<Registered>, KrishivError> {
+        let registered = if version & krishiv_session::ANONYMOUS_VERSION_BIT == 0 {
             self.udfs
                 .read()
                 .unwrap_or_else(PoisonError::into_inner)
-                .get(&(spec.name.clone(), spec.version))
+                .get(&(name.to_owned(), version))
                 .cloned()
         } else {
             ANONYMOUS
                 .read()
                 .unwrap_or_else(PoisonError::into_inner)
-                .get(&spec.version)
+                .get(&version)
                 .cloned()
         };
-        let registered = registered.ok_or_else(|| {
-            KrishivError::from(KrishivUdfNotAvailable {
-                name: spec.name.clone(),
-                version: spec.version.to_string(),
-            })
-        })?;
-        let runner: RunnerConf = RUNNER_KEYS
+        registered.ok_or_else(|| {
+            KrishivUdfNotAvailable {
+                name: name.to_owned(),
+                version: version.to_string(),
+            }
+            .into()
+        })
+    }
+
+    /// The values of [`RUNNER_KEYS`] the session sets now.
+    pub(super) fn runner_conf(&self) -> RunnerConf {
+        RUNNER_KEYS
             .iter()
             .filter_map(|k| self.conf.get(k).map(|v| (*k, v)))
-            .collect();
+            .collect()
+    }
+
+    /// One setting of the session, as it is now.
+    pub(super) fn conf_value(&self, key: &str) -> Option<String> {
+        self.conf.get(key)
+    }
+
+    pub(super) fn pool(&self) -> Arc<PoolCache> {
+        Arc::clone(&self.pool)
+    }
+}
+
+impl UdfRuntime for PyUdfRuntime {
+    fn prepare_relation(
+        &self,
+        spec: &krishiv_exec::python_relation::RelationCallSpec,
+    ) -> krishiv_exec::Result<Arc<dyn krishiv_exec::python_relation::PreparedRelationUdf>> {
+        self.prepare_relation_call(spec)
+    }
+
+    fn prepare(&self, spec: &UdfCallSpec) -> krishiv_exec::Result<Arc<dyn PreparedUdf>> {
+        let registered = self.lookup(&spec.name, spec.version)?;
+        let runner = self.runner_conf();
         Ok(Arc::new(Prepared {
             registered,
             declared: spec.return_arrow.clone(),
@@ -286,7 +318,7 @@ impl PreparedUdf for Prepared {
         let runner = Arc::clone(&self.runner);
         let call = Call::new();
         let cancel = CancelOnDrop(Arc::clone(&call));
-        pool.submit(Box::new(move |py| {
+        pool.submit_scalar(Box::new(move |py| {
             // A call whose future was dropped (its query cancelled or
             // failed) is skipped: it would hold the pool thread and its input
             // for a result nobody reads (T098b I2).
@@ -320,13 +352,13 @@ impl PreparedUdf for Prepared {
 /// cleared with it), so neither reaches the thread's next call; a panic left
 /// between `start` and `finish` would otherwise let a later cancel interrupt
 /// that next call.
-struct Running<'a, 'py> {
+pub(super) struct Running<'a, 'py> {
     call: &'a Call,
     py: Python<'py>,
 }
 
 impl<'a, 'py> Running<'a, 'py> {
-    fn enter(call: &'a Call, py: Python<'py>) -> Self {
+    pub(super) fn enter(call: &'a Call, py: Python<'py>) -> Self {
         IN_UDF.with(|f| f.set(true));
         Self { call, py }
     }
@@ -357,14 +389,7 @@ fn invoke(
         .map_err(|e| python_error(py, &e))?;
     let mut columns = Vec::with_capacity(args.num_columns());
     for column in args.columns() {
-        let (schema, array) = export_column(column)?;
-        let imported = PyCapsule::new_with_value(py, schema, SCHEMA_CAPSULE)
-            .and_then(|s| {
-                PyCapsule::new_with_value(py, array, ARRAY_CAPSULE).and_then(|a| {
-                    array_type.call_method1(intern!(py, "_import_from_c_capsule"), (s, a))
-                })
-            })
-            .map_err(|e| python_error(py, &e))?;
+        let imported = to_pyarrow(py, array_type, column)?;
         columns.push(imported);
     }
     let call_args = PyTuple::new(py, columns).map_err(|e| python_error(py, &e))?;
@@ -389,6 +414,18 @@ fn invoke(
         r
     }
     .map_err(|e| python_error(py, &e))?;
+    from_pyarrow(py, array_type, &returned, declared, args.num_rows())
+}
+
+/// A `pyarrow.Array` a UDF returned as one engine column of `declared` with `rows` values: only pyarrow's
+/// arrays are accepted, imported with full validation.
+pub(super) fn from_pyarrow(
+    py: Python<'_>,
+    array_type: &Bound<'_, PyType>,
+    returned: &Bound<'_, PyAny>,
+    declared: &DataType,
+    rows: usize,
+) -> Result<ArrayRef, KrishivError> {
     // Only pyarrow's arrays are imported (§2.5 "Trusted producer").
     if !returned
         .is_instance(array_type)
@@ -415,14 +452,7 @@ fn invoke(
     // capsules `schema` and `array`, which this frame holds until the import
     // returns; the schema is only borrowed, the array moved out of once (the
     // capsule's destructor then sees a released array).
-    let imported = unsafe {
-        import_column(
-            schema_ptr.cast(),
-            array_ptr.cast(),
-            declared,
-            args.num_rows(),
-        )
-    }?;
+    let imported = unsafe { import_column(schema_ptr.cast(), array_ptr.cast(), declared, rows) }?;
     // The engine gets Rust-owned buffers; `imported` (and so the producer's
     // release, which may take the GIL for numpy-owned memory) is dropped here,
     // on this attached pool thread (design P2-T059 unit 3b, review M3).
@@ -431,12 +461,28 @@ fn invoke(
     crate::stream::ffi::catch_panic(|| arrow_array::make_array(owned))
 }
 
+/// `column` as a `pyarrow.Array` (its capsules handed over).
+pub(super) fn to_pyarrow<'py>(
+    py: Python<'py>,
+    array_type: &Bound<'py, PyType>,
+    column: &ArrayRef,
+) -> Result<Bound<'py, PyAny>, KrishivError> {
+    let (schema, array) = export_column(column)?;
+    PyCapsule::new_with_value(py, schema, SCHEMA_CAPSULE)
+        .and_then(|s| {
+            PyCapsule::new_with_value(py, array, ARRAY_CAPSULE).and_then(|a| {
+                array_type.call_method1(intern!(py, "_import_from_c_capsule"), (s, a))
+            })
+        })
+        .map_err(|e| python_error(py, &e))
+}
+
 /// A Python exception raised by a UDF (or by the conversion around it) as
 /// Spark's `PYTHON_EXCEPTION` (SQLSTATE 38000) for every eval type, its
 /// `traceback` parameter the Python traceback ending with the exception
 /// line, as Spark 4.2.0 gives it (`research/spark-notes/python-udf-errors.md`:
 /// `PythonRunner.scala:661-670`).
-fn python_error(py: Python<'_>, err: &PyErr) -> KrishivError {
+pub(super) fn python_error(py: Python<'_>, err: &PyErr) -> KrishivError {
     let traceback = err
         .traceback(py)
         .and_then(|t| t.format().ok())

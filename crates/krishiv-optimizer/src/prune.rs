@@ -9,7 +9,8 @@
 //! extra columns get a projection. The root's output never changes; CTE
 //! definitions and scalar and `IN` subquery plans keep their whole output.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use crate::expr::{AddrMap, AddrSet};
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 
 use krishiv_plan::{
@@ -38,7 +39,7 @@ pub(crate) fn prune(root: &Arc<LogicalPlan>, stats: Option<&dyn Statistics>) -> 
 /// `root` is alive): the columns pruning would keep at the node's output,
 /// the union over its consumers. Join ordering reads it to cost a tree by
 /// the columns read above it (`krishiv.optimizer.joinCost=bytes`).
-pub(crate) fn requirements(root: &Arc<LogicalPlan>) -> HashMap<*const LogicalPlan, Attrs> {
+pub(crate) fn requirements(root: &Arc<LogicalPlan>) -> AddrMap<LogicalPlan, Attrs> {
     let graph = Graph::new(root);
     let req = graph.requirements();
     graph
@@ -87,7 +88,7 @@ impl Graph {
         let mut out = Vec::new();
         let mut child = |c: &Arc<LogicalPlan>, d: Option<Attrs>| out.push((self.id(c), d));
         match &p.node {
-            PlanNode::Project { input, exprs } if placeholder(exprs, req) => {
+            PlanNode::Project { input, exprs } if placeholder(input, exprs, req) => {
                 child(input, Some(Attrs::default()));
             }
             PlanNode::Project { input, exprs } => child(input, Some(refs(&keep(exprs, req)))),
@@ -297,7 +298,7 @@ impl Rewrite<'_> {
             // a join narrows the input again (otherwise the next run, after
             // CSE left the old column unread below, picks another one).
             // The rebuilt projection keeps the old one's origin.
-            PlanNode::Project { input, exprs } if placeholder(exprs, req) => {
+            PlanNode::Project { input, exprs } if placeholder(input, exprs, req) => {
                 narrow_as(input, &Attrs::default(), rebuilt.origin)
             }
             PlanNode::Project { input, exprs } => {
@@ -510,7 +511,7 @@ fn narrow_as(input: &Arc<LogicalPlan>, need: &Attrs, origin: Origin) -> Arc<Logi
 /// Whether `p` holds a common-subexpression projection (an alias named
 /// `cse_*`, see `crate::cse`) on its main plan, subquery plans excluded.
 fn contains_cse(p: &LogicalPlan) -> bool {
-    let mut seen_plans: HashSet<*const LogicalPlan> = HashSet::new();
+    let mut seen_plans: AddrSet<LogicalPlan> = Default::default();
     let mut plans = vec![p];
     while let Some(q) = plans.pop() {
         if !seen_plans.insert(std::ptr::from_ref(q)) {
@@ -518,7 +519,7 @@ fn contains_cse(p: &LogicalPlan) -> bool {
         }
         let mut stack: Vec<&Expr> = Vec::new();
         q.for_each_expr(&mut |e| stack.push(e));
-        let mut seen: HashSet<*const Expr> = HashSet::new();
+        let mut seen: AddrSet<Expr> = Default::default();
         while let Some(e) = stack.pop() {
             if !seen.insert(std::ptr::from_ref(e)) {
                 continue;
@@ -550,13 +551,23 @@ fn has_required_cse(exprs: &[Arc<Expr>], req: &Attrs) -> bool {
 
 /// Whether a projection is read for its row count alone: nothing above reads
 /// its output and every entry is a bare column, so dropping it changes no
-/// value and raises nothing.
-fn placeholder(exprs: &[Arc<Expr>], req: &Attrs) -> bool {
+/// value and raises nothing. Directly over a scan, a rename of a bare column
+/// counts too (a view's projection: `SELECT * FROM parquet.`...``, so
+/// `count(*)` through it reads only Parquet footers). Not above any other
+/// input: join ordering does not look through a rename, so dropping one over a
+/// join would let the next run merge that join into the tree above it (the
+/// plan would not be a fixed point); a scan is a leaf either way.
+fn placeholder(input: &LogicalPlan, exprs: &[Arc<Expr>], req: &Attrs) -> bool {
+    let over_scan = matches!(input.node, PlanNode::Scan(_));
     req.is_empty()
         && !exprs.is_empty()
-        && exprs
-            .iter()
-            .all(|e| matches!(e.node, ExprNode::Resolved(ResolvedExpr::Column(_))))
+        && exprs.iter().all(|e| match &e.node {
+            ExprNode::Resolved(ResolvedExpr::Column(_)) => true,
+            ExprNode::Resolved(ResolvedExpr::Alias { expr, .. }) => {
+                over_scan && matches!(expr.node, ExprNode::Resolved(ResolvedExpr::Column(_)))
+            }
+            _ => false,
+        })
 }
 
 /// The output entries of a projection or aggregate that are read, keeping
@@ -665,7 +676,7 @@ fn output_ids(p: &LogicalPlan) -> Attrs {
 fn subqueries<'a>(p: &'a LogicalPlan, f: &mut impl FnMut(&'a SubqueryKind, &'a Arc<LogicalPlan>)) {
     let mut stack: Vec<&'a Arc<Expr>> = Vec::new();
     p.for_each_expr(&mut |e| stack.push(e));
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = crate::expr::AddrSet::default();
     while let Some(e) = stack.pop() {
         if !seen.insert(Arc::as_ptr(e)) {
             continue;
