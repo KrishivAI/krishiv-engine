@@ -1546,6 +1546,18 @@ impl Resolver<'_> {
                         })?);
                         continue;
                     }
+                    if matches!(bt, T::Date | T::Timestamp | T::TimestampNtz) {
+                        // A datetime bound is neither numeric nor an interval: Spark rejects its type.
+                        return Err(AnalysisError::new(
+                            DatatypeMismatchSpecifiedWindowFrameUnacceptedType {
+                                sql_expr: frame_sql(shown),
+                                location: location.to_owned(),
+                                expr_type: quoted(&bt),
+                                expected_type: RANGE_BOUND_TYPES.to_owned(),
+                            },
+                            origin,
+                        ));
+                    }
                     if !numeric(&bt) && !matches!(bt, T::DayTimeInterval { .. }) {
                         return Err(unsupported("interval RANGE window frame bounds", origin));
                     }
