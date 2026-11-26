@@ -201,70 +201,81 @@ impl Resolver<'_> {
         }
         let mut changed = false;
         let out = Arc::clone(e)
-            .transform_down(&mut |x: Arc<Expr>| -> Result<Arc<Expr>, Infallible> {
-                // Leaves resolve by name; aggregate calls and the rest of
-                // the output are bound by the caller.
-                // A dotted name (`s.a`) may be a field of a grouped struct,
-                // which is a grouping expression, so it is probed.
-                let dotted = matches!(&x.node, ExprNode::Column(c) if c.name.len() > 1);
-                if !dotted
-                    && matches!(
-                        x.node,
-                        ExprNode::Column(_) | ExprNode::Literal(_) | ExprNode::Star(_)
-                    )
-                {
-                    return Ok(x);
-                }
-                let Ok(b) = self.expr(&x, &probe) else {
-                    return Ok(x);
-                };
-                if b.agg.is_some() || b.outer.is_some() || !b.lateral.is_empty() {
-                    return Ok(x);
-                }
-                // The probe's expressions are dropped on return: their
-                // addresses must not outlive them in a memo.
-                let key = semantic_key(&b.expr, &mut HashMap::new());
-                if !grouping.contains(&key) && !st.known.iter().any(|(k, _)| *k == key) {
-                    return Ok(x);
-                }
-                let a = match st.known.iter().find(|(k, _)| *k == key) {
-                    Some((_, a)) => a.clone(),
-                    None => {
-                        let output = self.attr(&pretty(&b.expr, self.ctx.conf.session_zone), &b.ty);
-                        // The aggregate computes the grouping expression
-                        // as written in `GROUP BY`: a commuted spelling
-                        // (`1 + a` for `a + 1`) would read `a` ungrouped.
-                        let computed = info
-                            .grouping
-                            .iter()
-                            .find(|g| semantic_key(g, st.memo) == key)
-                            .map_or_else(|| Arc::clone(&b.expr), Arc::clone);
-                        st.grown
-                            .aggregates
-                            .push(Arc::new(Expr::new(ExprNode::Resolved(
-                                ResolvedExpr::Alias {
-                                    expr: computed,
-                                    output: output.clone(),
-                                },
-                            ))));
-                        let a = Attr {
-                            col: output,
-                            qual: no_qual(),
-                            source: None,
-                            duplicate: false,
-                        };
-                        st.grown.out.push(a.clone());
-                        st.known.push((key, a.clone()));
-                        a
+            .transform_down_pruned(
+                &mut |x: Arc<Expr>| -> Result<(Arc<Expr>, bool), Infallible> {
+                    // Leaves resolve by name; aggregate calls and the rest of
+                    // the output are bound by the caller.
+                    // A dotted name (`s.a`) may be a field of a grouped struct,
+                    // which is a grouping expression, so it is probed.
+                    let dotted = matches!(&x.node, ExprNode::Column(c) if c.name.len() > 1);
+                    if !dotted
+                        && matches!(
+                            x.node,
+                            ExprNode::Column(_) | ExprNode::Literal(_) | ExprNode::Star(_)
+                        )
+                    {
+                        return Ok((x, true));
                     }
-                };
-                if !st.visible.contains(&a.col.id) && !st.pass.iter().any(|p| p.col.id == a.col.id)
-                {
-                    st.pass.push(a.clone());
-                }
-                changed = true;
-                Ok(col_expr(&a.col, x.origin))
-            })
+                    let Ok(b) = self.expr(&x, &probe) else {
+                        return Ok((x, true));
+                    };
+                    if b.agg.is_some() || b.outer.is_some() || !b.lateral.is_empty() {
+                        // An aggregate call's arguments read the input rows: a
+                        // grouping expression inside them stays as written.
+                        let call = matches!(
+                            &b.expr.node,
+                            ExprNode::Resolved(ResolvedExpr::Function(f))
+                                if f.kind == FunctionKind::Aggregate
+                        );
+                        return Ok((x, !call));
+                    }
+                    // The probe's expressions are dropped on return: their
+                    // addresses must not outlive them in a memo.
+                    let key = semantic_key(&b.expr, &mut HashMap::new());
+                    if !grouping.contains(&key) && !st.known.iter().any(|(k, _)| *k == key) {
+                        return Ok((x, true));
+                    }
+                    let a = match st.known.iter().find(|(k, _)| *k == key) {
+                        Some((_, a)) => a.clone(),
+                        None => {
+                            let output =
+                                self.attr(&pretty(&b.expr, self.ctx.conf.session_zone), &b.ty);
+                            // The aggregate computes the grouping expression
+                            // as written in `GROUP BY`: a commuted spelling
+                            // (`1 + a` for `a + 1`) would read `a` ungrouped.
+                            let computed = info
+                                .grouping
+                                .iter()
+                                .find(|g| semantic_key(g, st.memo) == key)
+                                .map_or_else(|| Arc::clone(&b.expr), Arc::clone);
+                            st.grown
+                                .aggregates
+                                .push(Arc::new(Expr::new(ExprNode::Resolved(
+                                    ResolvedExpr::Alias {
+                                        expr: computed,
+                                        output: output.clone(),
+                                    },
+                                ))));
+                            let a = Attr {
+                                col: output,
+                                qual: no_qual(),
+                                source: None,
+                                duplicate: false,
+                            };
+                            st.grown.out.push(a.clone());
+                            st.known.push((key, a.clone()));
+                            a
+                        }
+                    };
+                    if !st.visible.contains(&a.col.id)
+                        && !st.pass.iter().any(|p| p.col.id == a.col.id)
+                    {
+                        st.pass.push(a.clone());
+                    }
+                    changed = true;
+                    Ok((col_expr(&a.col, x.origin), false))
+                },
+            )
             .unwrap_or_else(|never| match never {});
         changed.then_some(out)
     }

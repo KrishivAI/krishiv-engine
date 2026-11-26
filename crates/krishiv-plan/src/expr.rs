@@ -1023,6 +1023,38 @@ impl Expr {
     }
 }
 
+impl Expr {
+    /// As [`Self::transform_down`], where `f` also says whether to visit the
+    /// children of the node it returns (`false` keeps them as they are).
+    ///
+    /// # Errors
+    /// The first error `f` returns.
+    pub fn transform_down_pruned<E>(
+        self: Arc<Self>,
+        f: &mut impl FnMut(Arc<Self>) -> Result<(Arc<Self>, bool), E>,
+    ) -> Result<Arc<Self>, E> {
+        self.down_pruned(f, &mut Memo::default())
+    }
+
+    fn down_pruned<E>(
+        self: Arc<Self>,
+        f: &mut impl FnMut(Arc<Self>) -> Result<(Arc<Self>, bool), E>,
+        done: &mut Memo<Self>,
+    ) -> Result<Arc<Self>, E> {
+        if let Some((_, out)) = done.get(&Arc::as_ptr(&self)) {
+            return Ok(Arc::clone(out));
+        }
+        let (mid, descend) = f(Arc::clone(&self))?;
+        let out = if descend {
+            mid.map_children(|c| c.down_pruned(f, done))?
+        } else {
+            mid
+        };
+        done.insert(Arc::as_ptr(&self), (self, Arc::clone(&out)));
+        Ok(out)
+    }
+}
+
 /// The operand of `-(x)` (the canonical `negative`, unresolved or
 /// resolved): a frame bound written `x PRECEDING`.
 impl Expr {

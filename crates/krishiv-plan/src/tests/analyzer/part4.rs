@@ -660,6 +660,21 @@ fn order_by_second_duplicate_key_is_unresolved() {
     assert_eq!(params.get("objectName").map(String::as_str), Some("`x`"));
 }
 
+/// A grouping expression inside an aggregate call of the `HAVING` stays as
+/// written (it reads the input rows): `GROUP BY a + 1 HAVING sum(a + 1) >
+/// (a + 1) * 2` is not `sum(<the grouping output>)` (golden outer-join#2).
+#[test]
+fn having_aggregate_over_a_grouping_expression_reads_the_input() {
+    let ctx = ctx();
+    let plan = LogicalPlan::table(["t"])
+        .aggregate(
+            vec![add(c("a"), int(1))],
+            vec![f("sum", vec![add(c("a"), int(1))])],
+        )
+        .filter(gt(f("sum", vec![add(c("a"), int(1))]), add(c("a"), int(1))));
+    assert!(run(plan, &ctx).is_ok());
+}
+
 /// `ORDER BY` through a `HAVING` filter also resolves a grouping
 /// expression written out in full: with no growth the sort retries
 /// against the aggregate below the filter, where the expression is the
