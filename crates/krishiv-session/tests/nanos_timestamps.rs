@@ -347,3 +347,69 @@ fn date_format_prints_nanoseconds() {
         "00.123456789"
     );
 }
+
+/// Spark 4.3's `current_timestamp(p)` / `now(p)` / `localtimestamp(p)` for `p` in 7..=9 with
+/// `spark.sql.timestampNanosTypes.enabled`: `CurrentTimestampNanos` / `LocalTimestampNanos`, named
+/// `current_timestamp()` / `localtimestamp()` whatever the spelling, one value per query; 3 and 10 are
+/// `INVALID_TIMESTAMP_PRECISION` (Spark 4.3.0 `timestamp-ltz-nanos.sql`, `timestamp-ntz-nanos.sql`).
+#[test]
+fn clocks_at_nanosecond_precision_are_spark_43s() {
+    let s = session();
+    s.conf()
+        .set("spark.sql.timestampNanosTypes.enabled", "true")
+        .unwrap();
+    let q = "SELECT current_timestamp(9), now(8), localtimestamp(7 + 2), current_timestamp(6), now(6), \
+             current_timestamp(9) = current_timestamp(9), now(9) = current_timestamp(9), \
+             localtimestamp(9) = localtimestamp(9), \
+             CAST(current_timestamp(9) AS TIMESTAMP) = current_timestamp()";
+    let batches = futures::executor::block_on(async { s.sql(q).await?.collect().await }).unwrap();
+    let schema = batches[0].schema();
+    let names: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
+    assert_eq!(
+        names,
+        [
+            "current_timestamp()",
+            "current_timestamp()",
+            "localtimestamp()",
+            "current_timestamp()",
+            "now()",
+            "(current_timestamp() = current_timestamp())",
+            "(current_timestamp() = current_timestamp())",
+            "(localtimestamp() = localtimestamp())",
+            "(CAST(current_timestamp() AS TIMESTAMP) = current_timestamp())",
+        ]
+    );
+    let utc = Some(Arc::from("UTC"));
+    assert_eq!(
+        schema.field(0).data_type(),
+        &DataType::Timestamp(TimeUnit::Nanosecond, utc.clone())
+    );
+    assert_eq!(
+        schema.field(2).data_type(),
+        &DataType::Timestamp(TimeUnit::Nanosecond, None)
+    );
+    assert_eq!(
+        schema.field(3).data_type(),
+        &DataType::Timestamp(TimeUnit::Microsecond, utc)
+    );
+    assert!(!schema.field(0).is_nullable());
+    assert_eq!(
+        rows(
+            &s,
+            "SELECT current_timestamp(9) = current_timestamp(9), now(9) = current_timestamp(9), \
+             localtimestamp(9) = localtimestamp(9), \
+             CAST(current_timestamp(9) AS TIMESTAMP) = current_timestamp()"
+        ),
+        "true true true true"
+    );
+    for (q, p, ty) in [
+        ("SELECT current_timestamp(3)", "3", "TIMESTAMP_LTZ"),
+        ("SELECT now(10)", "10", "TIMESTAMP_LTZ"),
+        ("SELECT localtimestamp(3)", "3", "TIMESTAMP_NTZ"),
+        ("SELECT localtimestamp(10)", "10", "TIMESTAMP_NTZ"),
+    ] {
+        let e = error(&s, q);
+        assert!(e.contains("INVALID_TIMESTAMP_PRECISION"), "{q}: {e}");
+        assert!(e.contains(p) && e.contains(ty), "{q}: {e}");
+    }
+}

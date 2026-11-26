@@ -1502,6 +1502,11 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                 Ok(Arc::new(Date32Array::from(vec![day; x.rows()])) as ArrayRef)
             })
         }
+        // Spark 4.3's `current_timestamp(7..=9)` / `localtimestamp(7..=9)` (the analyzer keeps
+        // only such a precision).
+        ("current_timestamp" | "now" | "localtimestamp", [DataType::Int32]) => {
+            return Some((listed, super::nanos::clock(listed, opts)));
+        }
         ("current_timestamp" | "now", []) => {
             let now = opts.query_start_micros;
             Binding::new(timestamp(), move |x: &Inputs<'_>| {

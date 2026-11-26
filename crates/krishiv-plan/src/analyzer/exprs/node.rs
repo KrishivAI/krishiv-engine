@@ -1465,6 +1465,17 @@ impl Resolver<'_> {
                 if is_builtin_entry(&entry) && entry.id.name() == "mask" {
                     self.check_mask_replacements(lookup_name, &kids[..n], &call_kids[..n])?;
                 }
+                let nanos_clock = (is_builtin_entry(&entry)
+                    && matches!(
+                        ty.data_type,
+                        Some(DataType::TimestampNanos { .. } | DataType::TimestampNtzNanos { .. })
+                    ))
+                .then(|| match entry.id.name() {
+                    "current_timestamp" | "now" => Some("current_timestamp"),
+                    "localtimestamp" => Some("localtimestamp"),
+                    _ => None,
+                })
+                .flatten();
                 let data_type = ty.data_type.clone().unwrap_or(DataType::Null);
                 call_kids.extend(kids.get(n).cloned());
                 // `typeof(x)` is Spark's `RuntimeReplaceable`; its type
@@ -1579,6 +1590,14 @@ impl Resolver<'_> {
                     expr,
                     ..keep(ty)
                 };
+                // Spark 4.3's `CurrentTimestampNanos` / `LocalTimestampNanos` carry the
+                // precision outside their children, so `now(9)` is named
+                // `current_timestamp()` and `localtimestamp(9)` `localtimestamp()`.
+                if let Some(name) = nanos_clock {
+                    bound.shown = Some(Arc::new(
+                        Expr::function(name, Vec::new()).with_origin(e.origin),
+                    ));
+                }
                 // `schema_of_csv(lit)` resolves during analysis (Spark's
                 // `SchemaOfCsv` evaluates its foldable child): the DDL
                 // literal, shown as the call.

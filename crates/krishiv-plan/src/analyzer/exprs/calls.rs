@@ -77,6 +77,18 @@ pub(super) fn literal_map_pairs(e: &Expr) -> Option<Vec<(String, String)>> {
         .collect()
 }
 
+/// What a Spark 4.3 clock call's precision argument asks for
+/// (`Resolver::timestamp_precision_call`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ClockPrecision {
+    /// Not such a call: the arity check decides.
+    None,
+    /// `p = 6`: the plain call.
+    Micros,
+    /// `p` in `7..=9` with the nanosecond types on.
+    Nanos(u8),
+}
+
 impl Resolver<'_> {
     /// The origin Spark's `time_bucket` builder writes: 1970-01-01 00:00:00 in the session zone for a `TIMESTAMP` (or anything that
     /// is not a `TIMESTAMP_NTZ`), the epoch for a `TIMESTAMP_NTZ`.
@@ -107,20 +119,21 @@ impl Resolver<'_> {
     /// `intValue()` (a long wraps);
     /// 7..=9 asks for the nanosecond types, which Spark keeps behind
     /// `spark.sql.timestampNanosTypes.enabled` (off): `FEATURE_NOT_ENABLED`; any other value is
-    /// `INVALID_TIMESTAMP_PRECISION`. Before 4.3 (and for other calls) `false`: the arity check
-    /// refuses the argument.
+    /// `INVALID_TIMESTAMP_PRECISION`. With the flag on, 7..=9 is `ClockPrecision::Nanos`: Spark's
+    /// `CurrentTimestampNanos` / `LocalTimestampNanos`. Before 4.3 (and for other calls)
+    /// `ClockPrecision::None`: the arity check refuses the argument.
     fn timestamp_precision_call(
         &self,
         entry: &FunctionEntry,
         e: &Arc<Expr>,
         arg: &Bound,
-    ) -> Result<bool, AnalysisError> {
+    ) -> Result<ClockPrecision, AnalysisError> {
         let name = entry.id.name();
         if self.ctx.profile < crate::analyzer::SparkProfile::V4_3
             || !is_builtin_entry(entry)
             || !matches!(name, "current_timestamp" | "now" | "localtimestamp")
         {
-            return Ok(false);
+            return Ok(ClockPrecision::None);
         }
         let zone = self.ctx.conf.session_zone;
         let sql_type = |t: Option<&DataType>| {
@@ -186,15 +199,11 @@ impl Resolver<'_> {
             }
         };
         match p {
-            6 => Ok(true),
-            7..=9 if self.ctx.conf.timestamp_nanos_types => Err(AnalysisError::new(
-                krishiv_common::error::KrishivUnsupportedFeature {
-                    feature: format!(
-                        "`{name}({p})`: the nanosecond-precision timestamp types (Krishiv 0.3.1)"
-                    ),
-                },
-                e.origin,
-            )),
+            6 => Ok(ClockPrecision::Micros),
+            // `7..=9` fits a `u8`.
+            7..=9 if self.ctx.conf.timestamp_nanos_types => {
+                Ok(ClockPrecision::Nanos(u8::try_from(p).unwrap_or(9)))
+            }
             7..=9 => Err(AnalysisError::new(
                 krishiv_common::error::FeatureNotEnabled {
                     feature_name: "Nanosecond-precision timestamp types".to_owned(),
@@ -230,9 +239,31 @@ impl Resolver<'_> {
         kids: &[Bound],
     ) -> Result<(Vec<Bound>, ArgType), AnalysisError> {
         let n = kids.len();
-        if n == 1 && self.timestamp_precision_call(entry, e, &kids[0])? {
-            // `current_timestamp(6)` is the call without its argument, and so named.
-            return self.typed_call(entry, e, &[]);
+        if n == 1 {
+            match self.timestamp_precision_call(entry, e, &kids[0])? {
+                ClockPrecision::None => {}
+                // `current_timestamp(6)` is the call without its argument, and so named.
+                ClockPrecision::Micros => return self.typed_call(entry, e, &[]),
+                // `current_timestamp(9)`: the call keeps the folded precision as an `INT`
+                // literal, which the executor's bind reads; `node.rs` names it as Spark does.
+                ClockPrecision::Nanos(p) => {
+                    let precision = Bound {
+                        expr: Arc::new(
+                            Expr::new(ExprNode::Literal(Literal::Integer(i32::from(p))))
+                                .with_origin(kids[0].expr.origin),
+                        ),
+                        ty: arg_type(DataType::Integer, false),
+                        shown: Some(kids[0].shown()),
+                        ..kids[0].clone()
+                    };
+                    let ty = if entry.id.name() == "localtimestamp" {
+                        DataType::TimestampNtzNanos { precision: p }
+                    } else {
+                        DataType::TimestampNanos { precision: p }
+                    };
+                    return Ok((vec![precision], ArgType::new(ty, false)));
+                }
+            }
         }
         if !entry.arity.accepts(n) {
             return Err(AnalysisError::new(
