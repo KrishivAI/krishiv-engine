@@ -91,3 +91,51 @@ fn an_outer_join_key_and_an_unshared_sum_keep_the_rows() {
         assert!(!off.is_empty(), "{sql}");
     }
 }
+
+/// TPC-DS q04/q11/q74's shape (F-A L1): a `UNION ALL` of channel aggregates tagged by a literal,
+/// grouped by customer and year, read per channel and year and self-joined on the customer.
+fn year_over_year(readers: &str) -> String {
+    format!(
+        "WITH yt AS (\
+         SELECT b % 50 AS c, a AS y, sum(b) AS tot, 'x' AS tag FROM t GROUP BY b % 50, a \
+         UNION ALL SELECT b % 50 AS c, a AS y, count(*) AS tot, 'z' AS tag FROM t WHERE b > 0 \
+         GROUP BY b % 50, a) {readers}"
+    )
+}
+
+/// One channel's two years: the reader's tag drops the other channel's input
+/// (`DropEmptyUnionInputs`) and its year is a literal on a group key, so both years read one
+/// shared definition; the rows are those of one computation per reader.
+#[test]
+fn a_channel_read_per_year_shares_one_definition() {
+    let env = env_of(200);
+    let sql = year_over_year(
+        "SELECT f.c, f.tot, n.tot FROM yt f, yt n \
+         WHERE f.c = n.c AND f.tag = 'x' AND f.y = 1 AND n.tag = 'x' AND n.y = 6",
+    );
+    let (off, shared_off) = rows_under(&env, &sql, false, None);
+    let (on, shared_on) = rows_under(&env, &sql, true, Some(2));
+    assert_eq!(off, on);
+    // Customer 10 has a row in both years: `a` 1 and 6 (`b` 10 and 60).
+    assert_eq!(off, vec!["10|10|60".to_owned()], "{off:?}");
+    assert_eq!((shared_off, shared_on), (0, 1));
+}
+
+/// Both channels' two years: whether the rule shares them or not (here it does not: after
+/// `DropEmptyUnionInputs` both channels' definitions output the union's ids, so `ShareCte` could
+/// not tell them apart and the rule keeps the plan), the rows are those of one computation per
+/// reader.
+#[test]
+fn both_channels_read_per_year_keep_the_rows() {
+    let env = env_of(200);
+    let sql = year_over_year(
+        "SELECT f.c, f.tot, n.tot, wf.tot, wn.tot FROM yt f, yt n, yt wf, yt wn \
+         WHERE f.c = n.c AND f.c = wf.c AND f.c = wn.c \
+         AND f.tag = 'x' AND f.y = 1 AND n.tag = 'x' AND n.y = 6 \
+         AND wf.tag = 'z' AND wf.y = 1 AND wn.tag = 'z' AND wn.y = 6",
+    );
+    let (off, _) = rows_under(&env, &sql, false, None);
+    let (on, _) = rows_under(&env, &sql, true, None);
+    assert_eq!(off, on);
+    assert_eq!(off, vec!["10|10|60|1|1".to_owned()], "{off:?}");
+}

@@ -229,11 +229,9 @@ fn year_over_year_scans_each_fact_once() {
             "q{q}: {}",
             on.root()
         );
-        // q74 is not yet a fixed point: a second run's join ordering
-        // estimates a reader's `CteRef` as the whole two-year definition
+        // q74 included: a second run's join ordering estimates a reader as
+        // the instance it replaced, not as the whole two-year definition
         // (design P3-perf031-FA, open item 1).
-        if q != 74 {
-            fixed_point(&on);
-        }
+        fixed_point(&on);
     }
 }
