@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import os
 import statistics
+import sys
 import time
 from typing import Any
 
@@ -131,3 +132,18 @@ def test_startup_to_first_row_is_measured() -> None:
     print(f"start_local to first row: {summary}, load {os.getloadavg()}")
     if os.environ.get("KRISHIV_ENFORCE_START_LOCAL") == "1":
         assert median < 1.0
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="UDF workers are Linux only")
+def test_python_udfs_run_through_start_local() -> None:
+    """QA2-4: ``F.udf`` and ``F.pandas_udf`` ran into 'no UDF worker pool' before."""
+    from pyspark.sql import functions as PF
+
+    with krishiv.start_local({"krishiv.python.worker.memoryLimit": "8g"}) as server:
+        spark = _remote(server.url)
+        df = spark.range(4).withColumnRenamed("id", "x")
+        doubled = df.select(PF.udf(lambda x: (x or 0) * 2, "long")("x")).collect()
+        assert [r[0] for r in doubled] == [0, 2, 4, 6]
+        tripled = df.select(PF.pandas_udf(lambda x: x * 3, "long")("x")).collect()
+        assert [r[0] for r in tripled] == [0, 3, 6, 9]
+        spark.stop()
