@@ -804,7 +804,10 @@ impl Session {
         if let Some(row) = command.as_ref().and_then(|c| c.row.as_ref()) {
             *row.lock().unwrap_or_else(PoisonError::into_inner) = Some(log_id.clone());
         }
-        let permit = self.admit(&log_id, env, exempt, fallback).await?;
+        let permit = self
+            .admit(&log_id, env, exempt, fallback)
+            .await?
+            .with_run(krishiv_exec::query_run(&self.state.runtime.executor));
         Ok(Admitted::new(Arc::clone(&self.state), log_id, permit))
     }
 }

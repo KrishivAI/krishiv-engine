@@ -248,6 +248,7 @@ fn hint_skew_raised() {
         io_threads: 1,
         blocking_threads: 4,
         io_blocking_threads: 2,
+        release_when_idle: true,
     })
     .unwrap();
     let (s, _d) = base(Session::builder().executor(executor));

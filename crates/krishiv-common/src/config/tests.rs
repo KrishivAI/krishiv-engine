@@ -863,6 +863,26 @@ fn io_blocking_threads_parses_and_defaults() {
 }
 
 #[test]
+fn release_at_query_end_defaults_on_and_parses() {
+    let mut c = Config::new();
+    let get = |c: &Config| {
+        c.get(&MEMORY_RELEASE_AT_QUERY_END)
+            .and_then(ConfigValue::as_bool)
+    };
+    assert_eq!(get(&c), Some(true));
+    c.set("krishiv.memory.releaseAtQueryEnd", "false").unwrap();
+    assert_eq!(get(&c), Some(false));
+    let e = c
+        .set("krishiv.memory.releaseAtQueryEnd", "sometimes")
+        .unwrap_err();
+    assert!(
+        e.to_string().contains("krishiv.memory.releaseAtQueryEnd"),
+        "{e}"
+    );
+    assert_eq!(get(&c), Some(false), "a rejected value leaves the setting");
+}
+
+#[test]
 fn agent_gate_defaults_to_one_gib_and_parses_sizes() {
     let mut c = Config::new();
     assert_eq!(

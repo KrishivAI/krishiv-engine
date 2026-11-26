@@ -981,7 +981,7 @@ impl Expr {
         self: Arc<Self>,
         f: &mut impl FnMut(Arc<Self>) -> Result<Arc<Self>, E>,
     ) -> Result<Arc<Self>, E> {
-        self.up(f, &mut Memo::new())
+        self.up(f, &mut Memo::default())
     }
 
     fn up<E>(
@@ -1006,7 +1006,7 @@ impl Expr {
         self: Arc<Self>,
         f: &mut impl FnMut(Arc<Self>) -> Result<Arc<Self>, E>,
     ) -> Result<Arc<Self>, E> {
-        self.down(f, &mut Memo::new())
+        self.down(f, &mut Memo::default())
     }
 
     fn down<E>(
