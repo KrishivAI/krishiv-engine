@@ -87,6 +87,7 @@ async fn a_sort_spills_and_merges_under_the_cut() {
             io_threads: 1,
             blocking_threads: 2,
             io_blocking_threads: 2,
+            release_when_idle: true,
         })
         .unwrap(),
     );

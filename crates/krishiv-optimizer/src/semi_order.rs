@@ -30,20 +30,24 @@ use krishiv_common::error::KrishivError;
 use krishiv_plan::{JoinCondition, JoinKind, LogicalPlan, PlanNode, runs_on_any_row};
 
 use crate::dag;
-use crate::estimate::Estimator;
+use crate::estimate::{Estimator, Memo};
 use crate::stats::Statistics;
 
 /// Sorts every semi/anti stack of `root` (subquery plans included) by estimated survivors.
+/// Estimates start from `memo` and are left in it.
 pub(crate) fn reorder(
     root: Arc<LogicalPlan>,
     stats: &dyn Statistics,
     propagate: bool,
+    memo: &mut Memo,
 ) -> Result<Arc<LogicalPlan>, KrishivError> {
-    let mut est = Estimator::with_propagation(stats, propagate);
+    let mut est = Estimator::resume(stats, propagate, std::mem::take(memo));
     // Every `WITH` definition is known before a stack reads it, so a `CteRef` in a stack is
     // estimated from its definition (as join ordering does).
     est.plan(&root);
-    dag::rewrite_up(root, &mut |p| Ok(order_stack(p, &mut est)))
+    let out = dag::rewrite_up(root, &mut |p| Ok(order_stack(p, &mut est)));
+    *memo = est.into_memo();
+    out
 }
 
 /// A semi or anti join whose condition may run on any row of its left input.

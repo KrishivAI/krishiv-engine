@@ -184,6 +184,12 @@ impl DescriptorSet {
             .strip_prefix("file://")
             .or_else(|| local.strip_prefix("file:"))
             .unwrap_or(local);
+        // `file:/C:/x` is `C:/x` on Windows: `/C:/x` does not open there.
+        let local = if cfg!(windows) {
+            without_slashes_before_drive(local)
+        } else {
+            local
+        };
         // A descriptor set is kilobytes; a file past the cap is not one (and is never read whole).
         const MAX_BYTES: u64 = 64 << 20;
         let fail = |e: &std::io::Error| -> KrishivError {
@@ -201,12 +207,28 @@ impl DescriptorSet {
         let before = std::fs::metadata(local).map_err(|e| fail(&e))?;
         let file = std::fs::File::open(local).map_err(|e| fail(&e))?;
         let opened = file.metadata().map_err(|e| fail(&e))?;
+        // Unix: the same device and inode. Windows' file identity (volume serial and file index) is not in
+        // stable std: there the handle's creation time (100 ns ticks), last write time and size must be
+        // the path's, so a file swapped in between the check and the open is refused unless it matches all
+        // three (Windows port, 0.3.0).
+        #[cfg(unix)]
         {
             use std::os::unix::fs::MetadataExt;
             if opened.dev() != before.dev() || opened.ino() != before.ino() {
                 return Err(CannotParseProtobufDescriptor {}.into());
             }
         }
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt;
+            let stamp =
+                |m: &std::fs::Metadata| (m.creation_time(), m.last_write_time(), m.file_size());
+            if stamp(&opened) != stamp(&before) {
+                return Err(CannotParseProtobufDescriptor {}.into());
+            }
+        }
+        #[cfg(not(any(unix, windows)))]
+        let _ = (&before, &opened);
         let mut bytes = Vec::new();
         std::io::Read::read_to_end(&mut std::io::Read::take(file, MAX_BYTES + 1), &mut bytes)
             .map_err(|e| fail(&e))?;
@@ -237,4 +259,15 @@ impl DescriptorSet {
     pub(crate) fn message_by_full_name(&self, name: &str) -> Option<MessageDescriptor> {
         self.pool.message_by_full_name(name)
     }
+}
+
+/// `text` without the slashes before a leading drive (`/C:/x` is `C:/x`); other text as it is.
+fn without_slashes_before_drive(text: &str) -> &str {
+    let rest = text.trim_start_matches('/');
+    let b = rest.as_bytes();
+    let drive = b.len() >= 2
+        && b[0].is_ascii_alphabetic()
+        && b[1] == b':'
+        && (b.len() == 2 || matches!(b[2], b'/' | b'\\'));
+    if drive { rest } else { text }
 }

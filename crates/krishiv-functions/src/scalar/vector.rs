@@ -8,6 +8,12 @@
 //! `float('inf')` (`INVALID_VECTOR_NORM_DEGREE` otherwise), and vectors of
 //! two dimensions do not combine (`VECTOR_DIMENSION_MISMATCH`). The sums are
 //! `krishiv_kernels::vector`'s: blocks of 8 in `f32`, in Spark's order.
+//!
+//! Spark 4.2 and 4.3 differ here (the infinity norm's NaN, the norm's
+//! normalizability, `double` accumulation); `bind` reads the version from
+//! `BindOptions::kernel`, which the executor builds from the session's
+//! profile (a plan carries it as `ExprEnv::spark_version`, codec feature
+//! `spark_version`).
 
 use std::sync::Arc;
 
@@ -36,7 +42,9 @@ fn is_vector(t: &DataType) -> bool {
 }
 
 /// Binds the vector function `name` to `args`.
-pub(super) fn bind(name: &str, args: &[BindArg], _opts: &BindOptions) -> FamilyResult {
+pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyResult {
+    // Spark 4.3.0's infinity norm propagates a NaN element; 4.2.0's skips it.
+    let nan = opts.kernel.spark_version() >= krishiv_kernels::SparkVersion::V4_3;
     let listed = listed(NAMES, name)?;
     let types: Vec<DataType> = args.iter().map(BindArg::data_type).collect();
     let norm = matches!(listed, "vector_norm" | "vector_normalize");
@@ -56,7 +64,7 @@ pub(super) fn bind(name: &str, args: &[BindArg], _opts: &BindOptions) -> FamilyR
             let (v, d) = norm_inputs(x, with_degree)?;
             let mut out = Float32Builder::with_capacity(x.rows());
             for row in 0..x.rows() {
-                out.append_option(row_norm(&v, &d, row, "vector_norm")?);
+                out.append_option(row_norm(&v, &d, row, "vector_norm", nan)?);
             }
             Ok(Arc::new(out.finish()) as ArrayRef)
         }),
@@ -68,7 +76,7 @@ pub(super) fn bind(name: &str, args: &[BindArg], _opts: &BindOptions) -> FamilyR
                 let mut out = ListBuilder::with_capacity(Float32Builder::new(), x.rows())
                     .with_field(Arc::clone(&item));
                 for row in 0..x.rows() {
-                    match row_normalized(&v, &d, row)? {
+                    match row_normalized(&v, &d, row, nan)? {
                         Some(values) => {
                             out.values().append_slice(&values);
                             out.append(true);
@@ -93,7 +101,7 @@ pub(super) fn bind(name: &str, args: &[BindArg], _opts: &BindOptions) -> FamilyR
                 let mut out = Float32Builder::with_capacity(x.rows());
                 for row in 0..x.rows() {
                     let rows = (if a_lit { 0 } else { row }, if b_lit { 0 } else { row });
-                    out.append_option(pair(kind, listed, a, b, rows)?);
+                    out.append_option(pair(kind, listed, a, b, rows, nan)?);
                 }
                 Ok(Arc::new(out.finish()) as ArrayRef)
             })
@@ -129,7 +137,7 @@ fn row_values(list: &arrow_array::ListArray, row: usize) -> Option<(ArrayRef, bo
 }
 
 #[derive(Clone, Copy)]
-enum Degree {
+pub(crate) enum Degree {
     One,
     Two,
     Infinity,
@@ -171,11 +179,31 @@ fn degree_of(name: &str, d: f32) -> Result<Degree, KrishivError> {
     Ok(degree)
 }
 
-fn norm_of(v: &[f32], degree: Degree) -> f32 {
+/// Spark 4.3's double sum: blocks of 8 (each block added left to right, then added to the accumulator), then
+/// the tail one element at a time. Double addition is not associative, so the order is observable.
+fn block_sum_f64(v: &[f32], term: impl Fn(f32) -> f64) -> f64 {
+    let (blocks, tail) = v.as_chunks::<8>();
+    let mut acc = 0.0_f64;
+    for b in blocks {
+        let t = b.map(&term);
+        acc += t[0] + t[1] + t[2] + t[3] + t[4] + t[5] + t[6] + t[7];
+    }
+    for &x in tail {
+        acc += term(x);
+    }
+    acc
+}
+
+/// The norm in double precision. Spark 4.3 (`nan_propagates`) accumulates the L1 and L2 norms in `double` and
+/// divides by the double norm; 4.2 and earlier accumulate in `float` (the kernels), so their norm widens exactly.
+pub(crate) fn norm_of(v: &[f32], degree: Degree, nan_propagates: bool) -> f64 {
     match degree {
-        Degree::One => krishiv_kernels::vector::l1_norm(v),
-        Degree::Two => krishiv_kernels::vector::l2_norm(v),
-        Degree::Infinity => krishiv_kernels::vector::inf_norm(v),
+        Degree::One if nan_propagates => block_sum_f64(v, |x| f64::from(x).abs()),
+        Degree::Two if nan_propagates => block_sum_f64(v, |x| f64::from(x) * f64::from(x)).sqrt(),
+        Degree::One => f64::from(krishiv_kernels::vector::l1_norm(v)),
+        Degree::Two => f64::from(krishiv_kernels::vector::l2_norm(v)),
+        Degree::Infinity if nan_propagates => f64::from(krishiv_kernels::vector::inf_norm_nan(v)),
+        Degree::Infinity => f64::from(krishiv_kernels::vector::inf_norm(v)),
     }
 }
 
@@ -186,6 +214,7 @@ fn row_norm(
     d: &Float32Array,
     row: usize,
     name: &str,
+    nan: bool,
 ) -> Result<Option<f32>, KrishivError> {
     let Some((values, has_null)) = row_values(v.as_list::<i32>(), row) else {
         return Ok(None);
@@ -197,18 +226,22 @@ fn row_norm(
     if has_null {
         return Ok(None);
     }
-    Ok(Some(norm_of(
-        values.as_primitive::<Float32Type>().values(),
-        degree,
-    )))
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "the result column is FLOAT"
+    )]
+    Ok(Some(
+        norm_of(values.as_primitive::<Float32Type>().values(), degree, nan) as f32,
+    ))
 }
 
-/// The row's vector divided by its norm: NULL for a norm below
-/// `Float.MIN_NORMAL`.
+/// The row's vector divided by its norm: NULL for a norm below `Float.MIN_NORMAL` (4.2 and earlier) or
+/// zero (4.3, `nan`).
 fn row_normalized(
     v: &ArrayRef,
     d: &Float32Array,
     row: usize,
+    nan: bool,
 ) -> Result<Option<Vec<f32>>, KrishivError> {
     let Some((values, has_null)) = row_values(v.as_list::<i32>(), row) else {
         return Ok(None);
@@ -224,11 +257,34 @@ fn row_normalized(
     if values.is_empty() {
         return Ok(Some(Vec::new()));
     }
-    let norm = norm_of(values, degree);
-    if !krishiv_kernels::vector::is_normalizable(norm) {
+    let norm = norm_of(values, degree, nan);
+    // Spark 4.3 rejects only a zero norm (a subnormal one divides) and divides in double; 4.2 and earlier
+    // reject below `Float.MIN_NORMAL` (`VectorFunctionImplUtils`) and divide in float.
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "a 4.2 norm is a widened float"
+    )]
+    let normalizable = if nan {
+        norm != 0.0
+    } else {
+        krishiv_kernels::vector::is_normalizable(norm as f32)
+    };
+    if !normalizable {
         return Ok(None);
     }
-    Ok(Some(values.iter().map(|x| x / norm).collect()))
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "the result elements are FLOAT"
+    )]
+    Ok(Some(if nan {
+        values
+            .iter()
+            .map(|&x| (f64::from(x) / norm) as f32)
+            .collect()
+    } else {
+        let norm = norm as f32;
+        values.iter().map(|x| x / norm).collect()
+    }))
 }
 
 #[derive(Clone, Copy)]
@@ -247,6 +303,7 @@ fn pair(
     a: &arrow_array::ListArray,
     b: &arrow_array::ListArray,
     (a_row, b_row): (usize, usize),
+    double: bool,
 ) -> Result<Option<f32>, KrishivError> {
     let (Some((x, x_null)), Some((y, y_null))) = (row_values(a, a_row), row_values(b, b_row))
     else {
@@ -273,9 +330,48 @@ fn pair(
         x.as_primitive::<Float32Type>().values(),
         y.as_primitive::<Float32Type>().values(),
     );
+    if double {
+        return Ok(pair_f64(kind, x, y));
+    }
     Ok(match kind {
         Pair::Inner => Some(krishiv_kernels::vector::inner_product(x, y)),
         Pair::L2 => Some(krishiv_kernels::vector::l2_distance(x, y)),
         Pair::Cosine => krishiv_kernels::vector::cosine_similarity(x, y),
     })
+}
+
+/// Spark 4.3's pair functions: every sum is in `double` (blocks of 8, as `block_sum_f64`) and the result is
+/// cast to float. Cosine similarity is NULL for a zero norm product, where 4.2 compares with `Float.MIN_NORMAL`.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "the result column is FLOAT, as Spark casts the double"
+)]
+fn pair_f64(kind: Pair, x: &[f32], y: &[f32]) -> Option<f32> {
+    let sum = |term: &dyn Fn(f64, f64) -> f64| {
+        let (xb, xt) = x.as_chunks::<8>();
+        let (yb, yt) = y.as_chunks::<8>();
+        let mut acc = 0.0_f64;
+        for (a, b) in xb.iter().zip(yb) {
+            let t: [f64; 8] = std::array::from_fn(|i| term(f64::from(a[i]), f64::from(b[i])));
+            acc += t[0] + t[1] + t[2] + t[3] + t[4] + t[5] + t[6] + t[7];
+        }
+        for (&a, &b) in xt.iter().zip(yt) {
+            acc += term(f64::from(a), f64::from(b));
+        }
+        acc
+    };
+    match kind {
+        Pair::Inner => Some(sum(&|a, b| a * b) as f32),
+        Pair::L2 => Some(sum(&|a, b| (a - b) * (a - b)).sqrt() as f32),
+        Pair::Cosine => {
+            let dot = sum(&|a, b| a * b);
+            let norm_a = sum(&|a, _| a * a);
+            let norm_b = sum(&|_, b| b * b);
+            let norm_product = (norm_a * norm_b).sqrt();
+            if norm_product == 0.0 {
+                return None;
+            }
+            Some((dot / norm_product) as f32)
+        }
+    }
 }

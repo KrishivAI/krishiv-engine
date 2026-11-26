@@ -56,7 +56,7 @@ use super::{
 };
 use crate::context::{QueryContext, TaskContext};
 use crate::error::{Result, internal};
-use crate::hash::PARTITIONS;
+use crate::hash::partitions_at;
 use crate::sync::lock;
 
 /// One final-phase task.
@@ -506,7 +506,7 @@ impl HashAggregate {
         let mut inner = lock(&g.inner);
         inner.busy = false;
         inner.disk = true;
-        tasks_of(runs, 0, &mut inner.tasks);
+        tasks_of(runs, 0, &mut inner.tasks)?;
         Ok(())
     }
 
@@ -656,7 +656,7 @@ impl HashAggregate {
         inner.spill_asked = false;
         inner.disk = true;
         inner.out = out;
-        tasks_of(runs, 0, &mut inner.tasks);
+        tasks_of(runs, 0, &mut inner.tasks)?;
         Ok(())
     }
 }
@@ -787,7 +787,15 @@ impl Spiller {
                 tasks
                     .into_iter()
                     .enumerate()
-                    .map(|(i, t)| (i, t, (0..PARTITIONS).map(|_| None).collect()))
+                    .map(|(i, t)| {
+                        (
+                            i,
+                            t,
+                            (0..partitions_at(0, self.level0_bits))
+                                .map(|_| None)
+                                .collect(),
+                        )
+                    })
                     .collect(),
             ),
             runs: Mutex::new((0..n).map(|_| None).collect()),

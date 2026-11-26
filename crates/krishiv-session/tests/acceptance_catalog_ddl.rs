@@ -4,11 +4,13 @@
 //! a column list read the schema from the files).
 #![cfg(test)]
 
+mod literal_path;
 use arrow_array::cast::AsArray;
 use arrow_array::{Array, RecordBatch};
 use futures::executor::block_on;
 use krishiv_common::error::ErrorClass;
 use krishiv_session::Session;
+use literal_path::sql_path;
 
 fn session(dir: &std::path::Path) -> Session {
     let s = Session::new().unwrap();
@@ -109,7 +111,7 @@ fn sql_19_create_table_over_partitioned_files_reads_the_schema_and_the_partition
     );
     run(&s, "INSERT INTO src VALUES (1, 'x'), (2, 'y')");
     let location = dir.path().join("src");
-    let l = location.to_str().unwrap();
+    let l = sql_path(&location);
     run(&s, &format!("CREATE TABLE pt USING parquet LOCATION '{l}'"));
     // `p` is the table's partition column: it is listed after the data columns, and the partition commands work
     let described = rows(&s, "DESCRIBE pt");
@@ -153,7 +155,7 @@ fn rs_8_a_view_over_a_csv_file_infers_its_schema() {
     let s = session(dir.path());
     let f = dir.path().join("zones.csv");
     std::fs::write(&f, "LocationID,Borough\n1,Queens\n2,Manhattan\n3,Queens\n").unwrap();
-    let p = f.to_str().unwrap();
+    let p = sql_path(&f);
     run(
         &s,
         &format!(
@@ -199,7 +201,7 @@ fn rs_8_a_view_over_parquet_files_infers_its_schema_and_a_missing_path_is_still_
         &s,
         &format!(
             "CREATE TEMPORARY VIEW pv USING parquet OPTIONS (path '{}')",
-            l.to_str().unwrap()
+            sql_path(&l)
         ),
     );
     assert_eq!(rows(&s, "SELECT count(*) FROM pv"), [vec![some("2")]]);
@@ -227,7 +229,7 @@ fn rs_8_a_view_over_a_partitioned_directory_reads_every_row_with_its_partition_c
         &s,
         &format!(
             "CREATE TEMPORARY VIEW pv USING parquet OPTIONS (path '{}')",
-            l.to_str().unwrap()
+            sql_path(&l)
         ),
     );
     assert_eq!(rows(&s, "SELECT count(*) FROM pv"), [vec![some("2")]]);
@@ -248,7 +250,7 @@ fn sql_19_a_table_without_columns_does_not_take_partitioning_or_bucketing_and_a_
     );
     run(&s, "INSERT INTO src VALUES (1, 10)");
     let l = dir.path().join("src");
-    let l = l.to_str().unwrap();
+    let l = sql_path(&l);
     let e = block_on(s.sql(&format!(
         "CREATE TABLE a USING parquet PARTITIONED BY (p) LOCATION '{l}'"
     )))
@@ -278,10 +280,7 @@ fn sql_19_hidden_and_underscore_directories_are_not_partition_columns() {
     std::fs::create_dir_all(l.join("_temporary").join("0")).unwrap();
     run(
         &s,
-        &format!(
-            "CREATE TABLE pt USING parquet LOCATION '{}'",
-            l.to_str().unwrap()
-        ),
+        &format!("CREATE TABLE pt USING parquet LOCATION '{}'", sql_path(&l)),
     );
     run(&s, "MSCK REPAIR TABLE pt");
     assert_eq!(rows(&s, "SHOW PARTITIONS pt").len(), 1);
@@ -301,7 +300,7 @@ fn rs_8_a_view_with_declared_columns_over_a_partitioned_directory_reads_every_ro
         &s,
         &format!(
             "CREATE TEMPORARY VIEW dv (id BIGINT, p INT) USING parquet OPTIONS (path '{}')",
-            l.to_str().unwrap()
+            sql_path(&l)
         ),
     );
     assert_eq!(
@@ -344,10 +343,7 @@ fn sql_19_an_underscore_prefixed_key_value_directory_is_a_partition() {
     let l = dir.path().join("src");
     run(
         &s,
-        &format!(
-            "CREATE TABLE pt USING parquet LOCATION '{}'",
-            l.to_str().unwrap()
-        ),
+        &format!("CREATE TABLE pt USING parquet LOCATION '{}'", sql_path(&l)),
     );
     let c = rows(&s, "DESCRIBE TABLE EXTENDED pt");
     assert!(
@@ -379,7 +375,7 @@ fn rs_8_a_view_with_declared_columns_over_an_empty_directory_reads_no_rows() {
         &s,
         &format!(
             "CREATE OR REPLACE TEMPORARY VIEW ev (id INT) USING parquet OPTIONS (path '{}')",
-            empty.to_str().unwrap()
+            sql_path(&empty)
         ),
     );
     assert!(rows(&s, "SELECT * FROM ev").is_empty());

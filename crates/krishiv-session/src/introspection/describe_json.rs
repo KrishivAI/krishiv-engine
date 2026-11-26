@@ -123,7 +123,7 @@ pub(super) fn describe_json(
     };
     f.push(format!(
         r#""location":{}"#,
-        json_str(&format!("file:{}", location.display()))
+        json_str(&krishiv_exec::files::file_display(location))
     ));
     let options = &t.options;
     if !options.is_empty() {

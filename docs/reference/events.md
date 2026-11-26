@@ -23,7 +23,7 @@ A write whose commit fails after its result stream ended gets a second `finished
 Every event has `schema` (`krishiv.event.v1`), `minor`, `seq` (bus-wide: one counter per runtime, so interleaved queries see gaps and a reused operation id never repeats a `seq`; order the events of a query by `seq`), `emitted_at_ms`, `kind` and
 `query` (`query_id`, `session_id`, `principal`, `delegated_by`, `compute_id`, `trace_id`, `tags`, and `stage_id`, `task_id`,
 `attempt`, `worker_id`: always null in 0.3, where every event is about the whole query and comes from one process).
-Consumers ignore unknown members and unknown kinds: minor versions only add.
+Consumers ignore unknown members and unknown kinds: minor versions only add (minor 1: `usage.planning_ns`).
 
 ## Usage record
 
@@ -39,7 +39,7 @@ is the same in all of a query's records. A null member counts as absent. The end
 `finished` or `cancelled` event. The event schema is experimental until the design note's review findings are
 settled; do not treat `record_id` as a billing-grade key yet. Members: `kind` (`final`), `fidelity` (`exact`), `principal`, `delegated_by`, `session_id`,
 `compute_id`, `workload_class`, `resource_group`, `statement_class`, `window_start_ms`, `window_end_ms`,
-`wall_ns` (queue time excluded for a query that started; a query cancelled before it started reports the time since its submission), `queued_ns`, `cpu_ns`, `bytes_scanned`, `rows_read`, `files_read`, `bytes_written`,
+`wall_ns` (queue time excluded for a query that started; a query cancelled before it started reports the time since its submission), `queued_ns`, `planning_ns` (the parse, analysis, optimization and physical planning before the run, outside `wall_ns` and the queue; null for a query that never ran or was answered from the result cache; for a write, the analysis and planning of the query it runs; minor 1), `cpu_ns`, `bytes_scanned`, `rows_read`, `files_read`, `bytes_written`,
 `rows_written`, `files_written`, `spill_bytes`, `spill_files`, `peak_memory_bytes`, `result_cache_hit`.
 The figures are the `system.queries` row's.
 

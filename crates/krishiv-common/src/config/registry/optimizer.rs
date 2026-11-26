@@ -56,6 +56,26 @@ pub static PRESERVED_SIDE_SEMI_JOIN: ConfigEntry = ConfigEntry {
     spark_alias: None,
 };
 
+/// Whether the join orderer plans the block across a clustered composite-key edge before the
+/// largest input, when that costs at most a few times the cheapest order.
+pub static JOIN_PRUNE_FIRST: ConfigEntry = ConfigEntry {
+    key: "krishiv.optimizer.joinPruneFirst",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(true)),
+    doc: "In an inner-join tree whose largest input joins another input on two or more columns, \
+          one of them clustered in the largest input's files (each row group spans at most a \
+          sixteenth of the column's range), plan the inputs on the other side of that join \
+          first and join the largest input to their result last, when the estimated cost is \
+          at most 4 times the cheapest order's (TPC-DS q17, q25, q29). A composite-key \
+          estimate cannot tell a foreign key from a many-to-many match, and the runtime filter \
+          from the planned side then skips most of the largest input's row groups. Results \
+          are the same either way; `false` turns it off.",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
+    version_added: "0.3.1",
+    spark_alias: None,
+};
+
 /// Whether a subtree the main block and a subquery both read is computed once.
 pub static SHARE_REPEATED_SUBTREES: ConfigEntry = ConfigEntry {
     key: "krishiv.optimizer.shareRepeatedSubtrees",
@@ -84,6 +104,42 @@ pub static SHARE_FILTERED_SCANS: ConfigEntry = ConfigEntry {
     scope: Scope::Session,
     settable_by: SettableBy::User,
     version_added: "0.3.0",
+    spark_alias: None,
+};
+
+/// The grouping sets of a pre-aggregated expansion are each computed from
+/// a computed parent set (`krishiv.optimizer.rollupFromParent`,
+/// perf lever F-C2).
+pub static ROLLUP_FROM_PARENT: ConfigEntry = ConfigEntry {
+    key: "krishiv.optimizer.rollupFromParent",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(true)),
+    doc: "Compute each grouping set of a `ROLLUP`, `CUBE` or `GROUPING SETS` aggregate from the \
+          already aggregated states of a finer set, instead of from every input row \
+          (TPC-DS q67), when statistics say the finest set barely reduces its input. The sets read \
+          by more than one coarser set are stored, charged to the query's memory and spilled to \
+          disk under pressure. Needs `krishiv.sql.optimizer.shareCteInstances`. Results are the \
+          same either way; `false` turns it off.",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
+    version_added: "0.3.1",
+    spark_alias: None,
+};
+
+/// Instances of one CTE that differ only in a group key compared with a
+/// literal share one computation over all the literals
+/// (`krishiv.optimizer.shareLiteralInstances`, perf-1 lever A).
+pub static SHARE_LITERAL_INSTANCES: ConfigEntry = ConfigEntry {
+    key: "krishiv.optimizer.shareLiteralInstances",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(true)),
+    doc: "Internal. Compute a CTE read several times with a different literal on one of its group \
+          keys (TPC-DS q31's `d_qoy = 1`, `2`, `3`) once for all the literals (`d_qoy IN (1, 2, 3)`), \
+          each reader keeping the groups of its own literal. Needs \
+          `krishiv.sql.optimizer.shareCteInstances`. Results are the same either way; `false` turns it off.",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
+    version_added: "0.3.1",
     spark_alias: None,
 };
 
@@ -183,11 +239,32 @@ pub static GROUP_KEY_CODE: ConfigEntry = ConfigEntry {
           table (TPC-H q16's `p_brand, p_type, p_size`) group by one integer code made on the \
           dimension's side, and read the columns back from the dimension's distinct values above \
           the aggregate, so the joins below it carry the code instead of the columns. Applies only \
-          when statistics say it pays. Results are the same either way. Off until its timed \
-          A/B passes.",
+          when statistics say it pays. Results are the same either way. Off by default (one \
+          coded dimension can cost more than it saves); \
+          `krishiv.optimizer.groupKeyCodeMultiDimension` codes only aggregates with keys of two \
+          or more dimensions.",
     scope: Scope::Session,
     settable_by: SettableBy::User,
     version_added: "0.2.0",
+    spark_alias: None,
+};
+
+/// Whether, with `krishiv.optimizer.groupKeyCode` off, the group-key code applies to an aggregate whose
+/// keys come from two or more dimensions that qualify (P2b D2 §8).
+pub static GROUP_KEY_CODE_MULTI_DIMENSION: ConfigEntry = ConfigEntry {
+    key: "krishiv.optimizer.groupKeyCodeMultiDimension",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(false)),
+    doc: "Internal. With `krishiv.optimizer.groupKeyCode` off, still code the group keys of an \
+          aggregate whose keys come from two or more dimension tables that each qualify (TPC-DS \
+          q47's `item` and `store`), all of them in one pass; an aggregate with keys of one \
+          dimension is left as it is, and so are dimensions with more than 100,000 groups or \
+          inputs too small to pay. Has no effect when `krishiv.optimizer.groupKeyCode` is on. \
+          Results are the same either way. Off until its default is decided (TPC-DS q47, q57 \
+          about 0.8x wall; q24, q72 about 1.05x).",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
+    version_added: "0.3.0",
     spark_alias: None,
 };
 

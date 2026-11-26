@@ -737,13 +737,69 @@ impl Resolver<'_> {
         Ok(col_expr(&a.col, x.origin))
     }
 
+    /// The inputs of the inlined SQL function calls of `items` outside
+    /// aggregate calls and subqueries, checked as [`Self::check_aggregation`]
+    /// checks them (a call grouped as a whole passes). Only the items that
+    /// skip that check (windows, lateral aliases) are walked, or every item
+    /// when the DISTINCT rewrite (`all`) would replace a call's body by a
+    /// grouping column first.
+    pub(in crate::analyzer) fn check_call_inputs(
+        &self,
+        items: &[Bound],
+        group: &[Bound],
+        all: bool,
+        origin: Origin,
+        global: bool,
+    ) -> Result<(), AnalysisError> {
+        if self.inlined_calls.is_empty() {
+            return Ok(());
+        }
+        let mut memo = HashMap::new();
+        let calls = self.call_keys(&mut memo);
+        let keys: HashSet<u128> = group
+            .iter()
+            .map(|b| semantic_key(&b.expr, &mut memo))
+            .collect();
+        let mut roots = Vec::new();
+        let mut seen = HashSet::new();
+        for b in items
+            .iter()
+            .filter(|b| all || !b.lateral.is_empty() || b.win.is_some())
+        {
+            let mut stack = vec![Arc::clone(&b.expr)];
+            while let Some(x) = stack.pop() {
+                let at = super::super::bind::addr(&*x);
+                if !seen.insert(at) {
+                    continue;
+                }
+                if calls.contains_key(&at) {
+                    roots.push(Bound {
+                        expr: x,
+                        ..b.clone()
+                    });
+                    continue;
+                }
+                match &x.node {
+                    ExprNode::Resolved(ResolvedExpr::Function(f))
+                        if f.kind == FunctionKind::Aggregate => {}
+                    ExprNode::Subquery { .. } => {}
+                    _ => x.for_each_child(&mut |c| stack.push(Arc::clone(c))),
+                }
+            }
+        }
+        self.check_aggregation(&roots, &keys, &mut memo, &calls, origin, global)
+    }
+
     /// Spark's `MISSING_AGGREGATION` / `MISSING_GROUP_BY`: outside
-    /// aggregate calls, an item may use only grouping expressions.
+    /// aggregate calls, an item may use only grouping expressions. `calls`
+    /// are the inlined SQL function calls with their arguments
+    /// ([`Resolver::call_keys`], seeded into `memo`).
     pub(in crate::analyzer) fn check_aggregation(
         &self,
         items: &[Bound],
         keys: &HashSet<u128>,
         memo: &mut HashMap<usize, u128>,
+        calls: &HashMap<usize, Vec<Arc<Expr>>>,
         origin: Origin,
         global: bool,
     ) -> Result<(), AnalysisError> {
@@ -764,6 +820,12 @@ impl Resolver<'_> {
                 if let ExprNode::Resolved(ResolvedExpr::Column(c)) = &x.node
                     && aliases.contains(&c.id)
                 {
+                    continue;
+                }
+                // A SQL function call that is not grouped as a whole: Spark
+                // checks its inputs, never its body.
+                if let Some(args) = calls.get(&super::super::bind::addr(&*x)) {
+                    stack.extend(args.iter().cloned());
                     continue;
                 }
                 match &x.node {

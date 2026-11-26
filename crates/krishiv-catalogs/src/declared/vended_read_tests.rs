@@ -10,13 +10,15 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use arrow_array::cast::AsArray;
 use arrow_array::types::Int64Type;
 use futures::executor::block_on;
+use krishiv_common::error::KrishivError;
 use krishiv_connectors_iceberg::testing::WrittenTable;
-use krishiv_session::catalog_decl::DeclMode;
-use krishiv_session::catalog_registry::CatalogSetup;
+use krishiv_session::catalog_decl::{CatalogDecl, CatalogType, DeclMode};
+use krishiv_session::catalog_registry::{CallerCatalog, CatalogDeps, CatalogFactory, CatalogSetup};
 use krishiv_session::{EngineRuntime, Session};
 
 use super::IcebergRestFactory;
 use super::tests::path;
+use super::vended::{VendedCache, VendedClock};
 use crate::iceberg_rest::test_server::{Reply, Server, serve};
 use crate::s3_test_server::{S3Server, serve_s3, write_s3_table};
 
@@ -34,25 +36,24 @@ fn s3_table(s3: &S3Server) -> WrittenTable {
     table
 }
 
-fn ms_from_now(d: Duration) -> u128 {
-    (SystemTime::now() + d)
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_millis()
-}
-
 /// An S3 credential for `prefix` signed as `key_id`, expiring `ttl` from now.
 fn vended(prefix: &str, key_id: &str, ttl: Duration) -> String {
+    vended_until(prefix, key_id, SystemTime::now() + ttl)
+}
+
+/// An S3 credential for `prefix` signed as `key_id`, expiring at `expiry`.
+fn vended_until(prefix: &str, key_id: &str, expiry: SystemTime) -> String {
     format!(
         r#"{{"prefix": "{prefix}", "config": {{"s3.access-key-id": "{key_id}", "s3.secret-access-key": "secret-of-{key_id}",
             "s3.session-token": "session-of-{key_id}", "s3.session-token-expires-at-ms": "{}"}}}}"#,
-        ms_from_now(ttl)
+        expiry.duration_since(UNIX_EPOCH).unwrap().as_millis()
     )
 }
 
-/// A short-lived credential's lifetime, and how long to wait until it is past half of it: a credential is used for
-/// at most half its lifetime when that is shorter than the refresh skew (review c27440b53 F1), so a test that needs
-/// a credential "about to expire" reads once while it is fresh, waits [`AGE`], and reads again.
+/// A short-lived credential's lifetime, and how far to move the catalog's clock to get past half of it: a credential
+/// is used for at most half its lifetime when that is shorter than the refresh skew (review c27440b53 F1), so a test
+/// that needs a credential "about to expire" reads once while it is fresh, advances the clock [`AGE`]
+/// ([`clocked_session`]) and reads again.
 const SHORT: Duration = Duration::from_secs(10);
 const AGE: Duration = Duration::from_secs(6);
 
@@ -90,11 +91,50 @@ fn catalog(load: String, credentials: Option<String>) -> Server {
     })
 }
 
+/// The `iceberg-rest` factory keeping vended answers in a cache of its own, whose clock the test moves.
+#[derive(Debug)]
+struct ClockedFactory(Arc<VendedCache>);
+
+impl CatalogFactory for ClockedFactory {
+    fn kind(&self) -> CatalogType {
+        IcebergRestFactory.kind()
+    }
+
+    fn validate(&self, decl: &CatalogDecl, deps: &CatalogDeps) -> Result<(), KrishivError> {
+        IcebergRestFactory.validate(decl, deps)
+    }
+
+    fn build(
+        &self,
+        decl: &CatalogDecl,
+        deps: &CatalogDeps,
+    ) -> Result<Arc<dyn CallerCatalog>, KrishivError> {
+        IcebergRestFactory::build_with(decl, deps, super::table::METADATA_TTL, Arc::clone(&self.0))
+    }
+}
+
 /// An embedded session with the vended catalog `lake` on `server`, `fs.s3a.endpoint` pointing at `s3` and no S3
 /// key of its own.
 fn session(server: &Server, s3: &S3Server) -> Session {
+    clocked_session(server, s3).0
+}
+
+/// [`session`], its catalog's vended answers in a cache of their own, with that cache's clock.
+fn clocked_session(server: &Server, s3: &S3Server) -> (Session, Arc<VendedClock>) {
+    let clock = Arc::new(VendedClock::default());
+    (session_on(server, s3, Arc::clone(&clock)), clock)
+}
+
+/// [`session`], its catalog's vended answers in a cache of their own on `clock`.
+fn session_on(server: &Server, s3: &S3Server, clock: Arc<VendedClock>) -> Session {
+    session_with(server, s3, Arc::new(VendedCache::with_clock(clock)))
+}
+
+/// [`session`], its catalog's vended answers in `cache` (shared by sessions of different runtimes to show that a
+/// catalog instance never serves another's answer).
+fn session_with(server: &Server, s3: &S3Server, cache: Arc<VendedCache>) -> Session {
     let setup = CatalogSetup::new(DeclMode::Embedded)
-        .factory(Arc::new(IcebergRestFactory))
+        .factory(Arc::new(ClockedFactory(cache)))
         .setting("krishiv.catalog.lake.type", "iceberg-rest")
         .setting("krishiv.catalog.lake.uri", server.base.as_str())
         .setting("krishiv.catalog.lake.storage", "vended");
@@ -212,12 +252,12 @@ fn vended_credential_refreshed_via_credentials_endpoint() {
             Duration::from_secs(3600),
         )),
     );
-    let s = session(&server, &s3);
+    let (s, clock) = clocked_session(&server, &s3);
     s3.deny(WRITER);
     // Fresh: read with the `loadTable` credential, no `loadCredentials`.
     assert_eq!(ids(&s), vec![1, 2, 3]);
     assert_eq!(count(&server, "/v1/namespaces/db/tables/t/credentials"), 0);
-    std::thread::sleep(AGE);
+    clock.advance(AGE);
     s3.deny("AKIAOLDKEY");
     s3.clear_seen();
     assert_eq!(ids(&s), vec![1, 2, 3]);
@@ -263,6 +303,9 @@ fn vended_table_token_refused_falls_back_to_caller_token() {
     let config = r#"{"defaults": {}, "overrides": {}, "endpoints": ["GET /v1/{prefix}/namespaces/{namespace}/tables/{table}",
         "GET /v1/{prefix}/namespaces/{namespace}/tables/{table}/credentials"]}"#;
     // The first credential answered is itself short-lived, so a read past half its life refreshes a second time.
+    // Answers expire by the test's clock, which stands `AGE` ahead of the system clock after the first advance.
+    let clock = Arc::new(VendedClock::default());
+    let now = Arc::clone(&clock);
     let mut answered = 0_usize;
     let server = serve(move |r| match path(r) {
         "/v1/config" => Reply::Json(200, config.into()),
@@ -285,7 +328,7 @@ fn vended_table_token_refused_falls_back_to_caller_token() {
                 200,
                 format!(
                     r#"{{"storage-credentials": [{}]}}"#,
-                    vended("s3://bucket/wh", key, ttl)
+                    vended_until("s3://bucket/wh", key, now.now() + ttl)
                 ),
             )
         }
@@ -294,15 +337,15 @@ fn vended_table_token_refused_falls_back_to_caller_token() {
             r#"{"error": {"message": "no", "type": "NoSuchTableException", "code": 404}}"#.into(),
         ),
     });
-    let s = session(&server, &s3);
+    let s = session_on(&server, &s3, Arc::clone(&clock));
     s3.deny(WRITER);
     assert_eq!(ids(&s), vec![1, 2, 3]);
     // Past half the `loadTable` credential's life: the refresh sends the table token, refused, then the caller's.
-    std::thread::sleep(AGE);
+    clock.advance(AGE);
     s3.deny("AKIAOLDKEY");
     assert_eq!(ids(&s), vec![1, 2, 3]);
     // Past half the refreshed credential's life: the next refresh goes straight to the caller's token.
-    std::thread::sleep(AGE);
+    clock.advance(AGE);
     s3.deny("AKIAMIDKEY");
     s3.clear_seen();
     assert_eq!(ids(&s), vec![1, 2, 3]);
@@ -406,10 +449,10 @@ fn vended_credential_refreshed_by_table_reload() {
             },
             mode,
         );
-        let s = session(&server, &s3);
+        let (s, clock) = clocked_session(&server, &s3);
         s3.deny(WRITER);
         assert_eq!(ids(&s), vec![1, 2, 3]);
-        std::thread::sleep(AGE);
+        clock.advance(AGE);
         s3.deny("AKIAOLDKEY");
         s3.clear_seen();
         assert_eq!(ids(&s), vec![1, 2, 3]);
@@ -590,7 +633,10 @@ fn vended_secrets_never_shown() {
     let credential = format!(
         r#"{{"prefix": "s3://bucket/wh", "config": {{"s3.access-key-id": "AKIACANARYKEY", "s3.secret-access-key": "{SECRET}",
             "s3.session-token": "{SESSION}", "s3.session-token-expires-at-ms": "{}"}}}}"#,
-        ms_from_now(Duration::from_secs(3600))
+        (SystemTime::now() + Duration::from_secs(3600))
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis()
     );
     let server = catalog(
         load_body(
@@ -600,7 +646,9 @@ fn vended_secrets_never_shown() {
         ),
         None,
     );
-    let s = session(&server, &s3);
+    // One cache for both runtimes, as in a process: only the catalog instance keeps their answers apart.
+    let cache = Arc::new(VendedCache::with_clock(Arc::new(VendedClock::default())));
+    let s = session_with(&server, &s3, Arc::clone(&cache));
     assert_eq!(ids(&s), vec![1, 2, 3]);
     let mut shown = String::new();
     for sql in [
@@ -629,7 +677,7 @@ fn vended_secrets_never_shown() {
         None,
     );
     let e = block_on(async {
-        session(&moved, &s3)
+        session_with(&moved, &s3, cache)
             .sql("SELECT id FROM lake.db.t")
             .await?
             .collect()

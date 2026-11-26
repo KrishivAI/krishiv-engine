@@ -29,6 +29,7 @@ fn session(view_strings: bool) -> Session {
         io_threads: 1,
         blocking_threads: 1,
         io_blocking_threads: 2,
+        release_when_idle: true,
     })
     .unwrap();
     let s = Session::builder().executor(executor).build().unwrap();

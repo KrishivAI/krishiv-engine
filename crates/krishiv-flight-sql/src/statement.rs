@@ -495,7 +495,8 @@ impl FlightSqlServer {
         };
         let (schema, kind, bytes) = match outcome {
             SqlOutcome::Query(df) => {
-                let schema = df.schema().await.map_err(|e| op_failed(&op, &e))?;
+                // The analysis `sql_query_with` just made, under the gate: no second one (MODES-4).
+                let schema = df.held_schema().await.map_err(|e| op_failed(&op, &e))?;
                 drop(gate);
                 let tz = time_zone(session);
                 let schema = spark_schema(&schema, tz.as_ref()).map_err(|e| op_failed(&op, &e))?;
@@ -682,7 +683,8 @@ impl FlightSqlServer {
                     .await
                     .and_then(SqlQuery::into_query)
                     .map_err(|e| op_failed(&op, &e))?;
-                let schema = df.schema().await.map_err(|e| op_failed(&op, &e))?;
+                // This call's own analysis, just made: a change since `GetFlightInfo` still shows.
+                let schema = df.held_schema().await.map_err(|e| op_failed(&op, &e))?;
                 drop(gate);
                 let tz = time_zone(session);
                 let shaped = spark_schema(&schema, tz.as_ref()).map_err(|e| op_failed(&op, &e))?;

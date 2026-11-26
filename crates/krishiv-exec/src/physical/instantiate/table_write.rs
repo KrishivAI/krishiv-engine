@@ -62,17 +62,21 @@ impl Instantiation<'_> {
         let provider = self.worker.tables.provider(table)?;
         let sink = match request {
             TableWriteRequest::Write(w) => provider.writer(w)?,
-            TableWriteRequest::RowLevel(r) => provider
-                .row_level(r.op)
-                .ok_or_else(|| {
+            TableWriteRequest::RowLevel(r) => {
+                let table = provider.row_level(r.op).ok_or_else(|| {
                     krishiv_common::error::KrishivError::from(
                         krishiv_common::error::UnsupportedFeatureTableOperation {
                             table_name: r.table_name.clone(),
                             operation: r.op.name().to_owned(),
                         },
                     )
-                })?
-                .rewriter(r)?,
+                })?;
+                if r.options.contains_key(crate::planner::REWRITE_GROUP_OPTION) {
+                    table.group_rewriter(r)?
+                } else {
+                    table.rewriter(r)?
+                }
+            }
         };
         Ok(Built {
             schema: crate::operators::table_write::written_schema(),
