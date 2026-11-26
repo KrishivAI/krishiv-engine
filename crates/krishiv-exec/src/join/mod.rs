@@ -161,8 +161,10 @@
 //! tiny build's direct index, `direct.rs`), `direct_payload_rows` (its
 //! build rows decoded once, `DirectPayload`) and `direct_inner_rows` (rows
 //! an inner join over unique direct keys emitted in one pass, perf lever C)
-//! and `probe_passthrough_rows` (probe rows output as their own batch, with
-//! no gather: every row of a batch without a selection matched once, in order).
+//! and `probe_passthrough_rows` (rows of an inner or outer join's pairs output
+//! as their probe batch, with no gather: every row of a batch without a
+//! selection matched once, in order, and no residual filter applies; the
+//! semi, anti and outer tails are not counted).
 
 mod block;
 mod broadcast;

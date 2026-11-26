@@ -521,6 +521,27 @@ async fn whole_matched_probe_batches_pass_through() {
             }
         }
     }
+    // The counter belongs to the inner pairs' output: a residual filter (its
+    // mask may drop pairs) and the semi and anti tails count nothing.
+    for (join_type, filter) in [
+        (JoinType::Inner, true),
+        (JoinType::LeftSemi, false),
+        (JoinType::LeftSemi, true),
+        (JoinType::LeftAnti, false),
+    ] {
+        let mut c = case(join_type, 1, false, filter);
+        c.row_layout = true;
+        for on in [true, false] {
+            let run_as = Run {
+                on,
+                ..Run::default()
+            };
+            let what = format!("{join_type:?} filter {filter} {run_as:?}");
+            let (got, _, _, _, passed) = run_counted(&c, &probe, &unique, run_as).await;
+            assert_eq!(got, want(&c, &probe, &unique, run_as), "{what}");
+            assert_eq!(passed, 0, "{what}: passed through");
+        }
+    }
 }
 
 /// A weighted probe batch or build side keeps the general path (each pair

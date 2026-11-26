@@ -376,7 +376,12 @@ impl Cursor {
             .add(Counter::DirectInnerRows, probe.len() as u64);
         let build_cols = payload.take(&UInt32Array::from(ids))?;
         // `probe` is ascending and distinct: all the batch's rows is the batch.
-        let taken = self.gather(shared, &probe)?;
+        if self.passes_whole(probe.len()) {
+            shared
+                .counters
+                .add(Counter::ProbePassthroughRows, probe.len() as u64);
+        }
+        let taken = self.gather(&probe)?;
         let m = probe.len();
         let mut columns: Vec<ArrayRef> = taken.data().columns().to_vec();
         columns.extend(build_cols);
@@ -406,8 +411,10 @@ impl Cursor {
         };
         // Pairs repeat a probe row with several matches: the batch passes
         // through only when the pairs are its rows in order (study 39 (a)).
-        let taken = if probe.iter().enumerate().all(|(i, &r)| r as usize == i) {
-            self.gather(shared, probe)?
+        let whole = self.passes_whole(probe.len())
+            && probe.iter().enumerate().all(|(i, &r)| r as usize == i);
+        let taken = if whole {
+            self.gather(probe)?
         } else {
             let taken = take_batch(&self.batch, &batch_rows(self.sel.as_ref(), probe)?)?;
             self.compact_selected(taken)?
@@ -480,18 +487,29 @@ impl Cursor {
             .map_err(|e| internal(e.to_string()))?;
         let out = match &mask {
             Some(k) => out.filter(k).map_err(|e| internal(e.to_string()))?,
-            None => out,
+            None => {
+                // Counted only where the batch is output whole: no filter
+                // dropped a pair, and the join emits these pairs.
+                if whole {
+                    shared.counters.add(Counter::ProbePassthroughRows, m as u64);
+                }
+                out
+            }
         };
         Ok((out.num_rows() > 0).then_some(out))
     }
 
+    /// Whether `n` ascending, distinct rows of the batch are all of its rows
+    /// (no selection), so the batch itself stands for them.
+    fn passes_whole(&self, n: usize) -> bool {
+        self.sel.is_none() && n == self.batch.num_rows()
+    }
+
     /// The cursor's rows `rows` (ascending and distinct) of the batch: the
-    /// batch itself when they are all of its rows, with no gather.
-    fn gather(&self, shared: &Shared, rows: &[u32]) -> Result<Batch> {
-        if self.sel.is_none() && rows.len() == self.batch.num_rows() {
-            shared
-                .counters
-                .add(Counter::ProbePassthroughRows, rows.len() as u64);
+    /// batch itself when they are all of its rows, with no gather. Callers
+    /// that output the batch count `probe_passthrough_rows` themselves.
+    fn gather(&self, rows: &[u32]) -> Result<Batch> {
+        if self.passes_whole(rows.len()) {
             return Ok(self.batch.clone());
         }
         let taken = take_batch(&self.batch, &batch_rows(self.sel.as_ref(), rows)?)?;
@@ -534,7 +552,7 @@ impl Cursor {
         if rows.is_empty() {
             return Ok(None);
         }
-        let taken = self.gather(shared, &rows)?;
+        let taken = self.gather(&rows)?;
         if !shared.join_type.pads_probe() {
             return Ok(Some(taken));
         }
@@ -568,7 +586,7 @@ impl Cursor {
         if rows.is_empty() {
             return Ok(None);
         }
-        let taken = self.gather(shared, &rows)?;
+        let taken = self.gather(&rows)?;
         let (data, weights) = taken.into_parts();
         let mut columns = data.columns().to_vec();
         columns.push(Arc::new(BooleanArray::from(marks)) as ArrayRef);
