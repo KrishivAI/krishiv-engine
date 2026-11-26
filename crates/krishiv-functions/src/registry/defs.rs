@@ -236,6 +236,7 @@ fn time6_nullable(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     Ok(ArgType::new(DataType::Time { precision: 6 }, true))
 }
 
+/// The cast-named `time(x)`: a `CAST`, nullable as its argument.
 fn time6(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     typed(DataType::Time { precision: 6 }, c)
 }
@@ -249,8 +250,26 @@ fn time_seconds_input() -> InputType {
     exact(time_decimal())
 }
 
-fn time_seconds_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
-    typed(time_decimal(), c)
+// Spark's `TIME` functions are `RuntimeReplaceable` by a `StaticInvoke` or `Invoke` whose
+// `returnNullable` is the default `true`, so their results are nullable whatever the
+// arguments (4.2.0 and 4.3.0 `timeExpressions.scala`); only `current_time` is not.
+
+fn time_seconds_result(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    Ok(ArgType::new(time_decimal(), true))
+}
+
+/// `time_to_millis`, `time_to_micros` and `time_diff`: a nullable `BIGINT`.
+fn time_long(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    Ok(ArgType::new(DataType::Long, true))
+}
+
+/// `hour`, `minute`, `second`: an `INT`, nullable whatever the argument when it is a `TIME`
+/// (Spark's `HoursOfTime` and siblings), else as the argument (`Hour` of a timestamp).
+fn time_field(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    if matches!(c.data_type(0), Some(DataType::Time { .. })) {
+        return Ok(ArgType::new(DataType::Integer, true));
+    }
+    int(c)
 }
 
 /// `time_trunc(unit, time)`: the time's own type.
@@ -260,7 +279,7 @@ fn time_trunc_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
         .get(1)
         .and_then(|a| a.data_type.clone())
         .unwrap_or(DataType::Time { precision: 6 });
-    typed(t, c)
+    Ok(ArgType::new(t, true))
 }
 
 pub(super) fn double(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
@@ -579,7 +598,12 @@ fn extract_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     if let Some(t) = c.data_type(1).filter(|t| is_interval(t)) {
         return interval_extract_result(c, t);
     }
-    let nullable = c.args().get(1).is_some_and(|a| a.nullable);
+    // A field of a `TIME` is nullable whatever the argument (Spark's `HoursOfTime` and
+    // siblings, `SecondsOfTimeWithFraction`).
+    let nullable = c
+        .args()
+        .get(1)
+        .is_some_and(|a| a.nullable || matches!(a.data_type, Some(DataType::Time { .. })));
     Ok(match extract_field(c)? {
         // `date_part(NULL, x)` is a NULL `double`.
         None => ArgType::new(DataType::Double, true),
@@ -1105,7 +1129,7 @@ fn datetime() -> Vec<Spec> {
     out.extend(scalar(
         &["hour", "minute", "second"],
         &Inputs::Expects(vec![any_timestamp]),
-        int,
+        time_field,
     ));
     out.extend(scalar(&["monthname", "dayname"], &date_only, string));
     out.extend(scalar(
@@ -1138,17 +1162,17 @@ fn datetime() -> Vec<Spec> {
             exact(DataType::Integer),
             seconds_input(),
         ]),
-        time6,
+        time6_nullable,
     ));
     out.extend(scalar(
         &["time_from_seconds"],
         &Inputs::Expects(vec![time_seconds_input()]),
-        time6,
+        time6_nullable,
     ));
     out.extend(scalar(
         &["time_from_millis", "time_from_micros"],
         &Inputs::Expects(vec![exact(DataType::Long)]),
-        time6,
+        time6_nullable,
     ));
     out.extend(scalar(
         &["time_to_seconds"],
@@ -1158,12 +1182,12 @@ fn datetime() -> Vec<Spec> {
     out.extend(scalar(
         &["time_to_millis", "time_to_micros"],
         &Inputs::Built(InputBuilder(one_time_input)),
-        long,
+        time_long,
     ));
     out.extend(scalar(
         &["to_time"],
         &Inputs::Expects(vec![InputType::Strict(DataType::String)]),
-        time6,
+        time6_nullable,
     ));
     out.extend(scalar(
         &["try_to_time"],
@@ -1173,7 +1197,7 @@ fn datetime() -> Vec<Spec> {
     out.extend(scalar(
         &["time_diff"],
         &Inputs::Built(InputBuilder(time_diff_inputs)),
-        long,
+        time_long,
     ));
     out.extend(scalar(
         &["timestampadd"],
