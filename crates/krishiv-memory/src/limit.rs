@@ -248,10 +248,10 @@ mod tests {
     }
 
     #[test]
-    fn default_limit_is_eighty_percent_or_the_fallback() {
+    fn default_limit_is_the_share_or_the_fallback() {
         let limit = default_limit().unwrap_or(0);
         match effective_memory_limit() {
-            Some(b) => assert_eq!(limit as u64, b / 100 * DEFAULT_LIMIT_PERCENT),
+            Some(b) => assert_eq!(limit, share_of(b)),
             None => assert_eq!(limit, FALLBACK_LIMIT),
         }
     }

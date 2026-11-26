@@ -128,7 +128,7 @@ fn main() -> std::process::ExitCode {
 /// limit that is not generous, mimalloc also purges promptly (set before
 /// `main`, see `krishiv_alloc`). Every limited root pool keeps the resident
 /// set within its reservations plus an allowance, the default limit (80% of
-/// the container) included: without the probe, memory the pools do not
+/// the container, at least 512 MiB below it) included: without the probe, memory the pools do not
 /// track took a 4 GB container over its cgroup (acceptance SQL-34).
 #[cfg(feature = "mimalloc")]
 fn install_allocator_policy() {
