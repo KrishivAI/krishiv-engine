@@ -596,3 +596,79 @@ async fn as_of_joins_on_non_integral_values_run_without_ansi() {
         }
     }
 }
+
+/// The Connect form checks `makeAsOfCond`'s comparison over the values as given (no struct
+/// alignment), then `makeOrderingExpr`'s subtraction, which Spark builds for every type and does
+/// not coerce: values it cannot subtract are that subtraction's `DATATYPE_MISMATCH` (Spark 4.3.0,
+/// PySpark's `_joinAsOf` with an exact match allowed).
+#[tokio::test]
+async fn a_connect_as_of_join_reports_sparks_comparison_and_subtraction_errors() {
+    let s = start().await;
+    let interval = "(named_struct('x', INTERVAL '1' HOUR))";
+    let x_int = "(named_struct('x', 1))";
+    for (left, right, direction, class, sql_expr) in [
+        // The comparison fails first: an interval field against a STRING field.
+        (
+            interval,
+            "(named_struct('x', 'abc'))",
+            "backward",
+            "DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES",
+            "\"(lt >= rt)\"",
+        ),
+        (
+            interval,
+            "(named_struct('x', 'abc'))",
+            "forward",
+            "DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES",
+            "\"(lt <= rt)\"",
+        ),
+        // Field names do not stop the comparison; the subtraction needs one type.
+        (
+            x_int,
+            "(named_struct('y', 1))",
+            "backward",
+            "DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES",
+            "\"(lt - rt)\"",
+        ),
+        (
+            x_int,
+            "(named_struct('y', 1))",
+            "forward",
+            "DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES",
+            "\"(rt - lt)\"",
+        ),
+        // One type that does not subtract.
+        (
+            x_int,
+            "(named_struct('x', 2))",
+            "backward",
+            "DATATYPE_MISMATCH.BINARY_OP_WRONG_TYPE",
+            "\"(lt - rt)\"",
+        ),
+        (
+            "('b')",
+            "('a')",
+            "forward",
+            "DATATYPE_MISMATCH.BINARY_OP_WRONG_TYPE",
+            "\"(rt - lt)\"",
+        ),
+        (
+            "(true)",
+            "(false)",
+            "backward",
+            "DATATYPE_MISMATCH.BINARY_OP_WRONG_TYPE",
+            "\"(lt - rt)\"",
+        ),
+    ] {
+        let rel = keyless_as_of(left, right, direction);
+        let Err(e) = execute(&s.channel, rel).await else {
+            panic!("{left} {right} {direction} ran");
+        };
+        assert_eq!(error_class(&e), class, "{left} {right} {direction}: {e}");
+        assert!(
+            e.message().contains(sql_expr),
+            "{left} {right} {direction}: {}",
+            e.message()
+        );
+    }
+}

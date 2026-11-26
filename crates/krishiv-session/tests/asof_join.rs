@@ -577,11 +577,11 @@ fn match_condition_errors_are_sparks() {
 fn on_condition_passes_and_errors(s: &Session) {
     for sql in [
         "CREATE OR REPLACE TEMP VIEW trades_d AS SELECT * FROM VALUES (1, \
-         TIMESTAMP'2024-01-01 10:00:00', '2024-01-01 10:00:00', DATE'2024-01-01') \
-         AS t(k, trade_time, s, d)",
+         TIMESTAMP'2024-01-01 10:00:00', '2024-01-01 10:00:00', DATE'2024-01-01', \
+         TIMESTAMP_NTZ'2024-01-01 10:00:00') AS t(k, trade_time, s, d, n)",
         "CREATE OR REPLACE TEMP VIEW quotes_d AS SELECT * FROM VALUES (1, \
-         TIMESTAMP'2024-01-01 09:00:00', '2024-01-01 09:00:00', DATE'2024-01-01') \
-         AS q(k, quote_time, s, d)",
+         TIMESTAMP'2024-01-01 09:00:00', '2024-01-01 09:00:00', DATE'2024-01-01', \
+         TIMESTAMP_NTZ'2024-01-01 09:00:00') AS q(k, quote_time, s, d, n)",
     ] {
         block_on(async { s.sql(sql).await?.collect().await }).unwrap();
     }
@@ -610,8 +610,33 @@ fn on_condition_passes_and_errors(s: &Session) {
             "t.k = q.k AND CASE WHEN t.k = 1 THEN t.trade_time ELSE q.d END IS NOT NULL",
             rewritten,
         ),
+        // An NTZ argument Spark casts to TIMESTAMP (`MonthsBetween`, `UTCTimestamp`,
+        // `TimestampDiff`) and Krishiv's kernel reads as written (Spark 4.3.0 runs).
+        (
+            "t.k = q.k AND months_between(t.n, q.quote_time) > 0",
+            rewritten,
+        ),
+        (
+            "t.k = q.k AND from_utc_timestamp(t.n, 'UTC') > q.quote_time",
+            rewritten,
+        ),
+        (
+            "t.k = q.k AND to_utc_timestamp(q.n, 'UTC') > t.trade_time",
+            rewritten,
+        ),
+        (
+            "t.k = q.k AND timestampdiff(HOUR, t.n, q.quote_time) > 0",
+            rewritten,
+        ),
+        ("t.k = q.k AND timestampdiff(HOUR, t.n, q.n) > 0", rewritten),
         // Controls: no implicit zoned cast, so the check runs in pass 1.
         ("t.k = q.k AND hour(q.quote_time) > 3", written),
+        (
+            "t.k = q.k AND months_between(t.trade_time, q.quote_time) > 0",
+            written,
+        ),
+        // `timestampadd` takes any timestamp: the NTZ stays one in Spark too.
+        ("t.k = q.k AND timestampadd(HOUR, 1, t.n) > q.n", written),
         // A condition that resolves and is not a boolean fails a later check, after the as-of one.
         ("t.k + q.k", written),
     ] {

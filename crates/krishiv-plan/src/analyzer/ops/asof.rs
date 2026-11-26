@@ -5,7 +5,8 @@
 
 use krishiv_common::error::{
     AsofJoinMatchConditionInvalidExpression, AsofJoinMatchConditionInvalidType,
-    AsofJoinMatchConditionTableReference, InternalError, KrishivUnsupportedFeature,
+    AsofJoinMatchConditionTableReference, DatatypeMismatchBinaryOpDiffTypes,
+    DatatypeMismatchBinaryOpWrongType, InternalError, KrishivUnsupportedFeature,
 };
 
 use std::collections::HashMap;
@@ -153,23 +154,65 @@ impl Resolver<'_> {
         } else {
             (&left.expr, &right.expr)
         };
-        // Spark's `CheckAnalysis` then checks the as-of condition `buildMatchExpressions` built
-        // (`makeAsOfCond` on Connect): the operator of the normalized direction over the
-        // normalized operands, structs rebuilt field by field (`alignOperandsForComparison`). A
-        // pair the as-of rule accepts and the operator does not (an interval against a STRING) is
-        // the operator's own error, `"(dti <= s)"` for `s >= dti` written right side first.
-        let condition = match (direction, m.allow_exact) {
-            (crate::AsOfDirection::Backward, true) => Some(">="),
-            (crate::AsOfDirection::Backward, false) => Some(">"),
-            (crate::AsOfDirection::Forward, true) => Some("<="),
-            (crate::AsOfDirection::Forward, false) => Some("<"),
-            // Connect's nearest match: `true` with exact matches, else `NOT (l = r)`.
-            (crate::AsOfDirection::Nearest, true) => None,
-            (crate::AsOfDirection::Nearest, false) => Some("="),
+        // Spark's `CheckAnalysis` then checks the as-of condition: in SQL the one
+        // `buildMatchExpressions` built, the operator of the normalized direction over the
+        // normalized operands, structs rebuilt field by field (`alignOperandsForComparison`); on
+        // Connect `AsOfJoin.apply`'s `makeAsOfCond`, the operator over the operands as given (no
+        // alignment), then `makeOrderingExpr`'s `If(l > r, ..)` for nearest. A pair the as-of
+        // rule accepts and the operator does not (an interval against a STRING) is the
+        // operator's own error, `"(dti <= s)"` for `s >= dti` written right side first, `"(a >=
+        // b)"` on Connect for structs of such fields (Spark 4.3.0 `_joinAsOf` runs, `opus1-r4`).
+        let condition: &[&str] = match (direction, m.allow_exact) {
+            (crate::AsOfDirection::Backward, true) => &[">="],
+            // Connect's nearest match is `true` with exact matches, else `NOT (l = r)`; its
+            // ordering compares `l > r`.
+            (crate::AsOfDirection::Backward, false) | (crate::AsOfDirection::Nearest, true) => {
+                &[">"]
+            }
+            (crate::AsOfDirection::Forward, true) => &["<="],
+            (crate::AsOfDirection::Forward, false) => &["<"],
+            (crate::AsOfDirection::Nearest, false) => &["=", ">"],
         };
-        if let Some(op) = condition {
-            let (l, r) = self.aligned(&left.expr, &right.expr, env, origin)?;
+        for op in condition {
+            let (l, r) = if m.as_written {
+                self.aligned(&left.expr, &right.expr, env, origin)?
+            } else {
+                (Arc::clone(&left.expr), Arc::clone(&right.expr))
+            };
             self.call(op, vec![l, r], env, origin)?;
+        }
+        // Connect's ordering subtraction (`makeOrderingExpr`) is built for every type and is not
+        // coerced: a value Spark cannot subtract (a STRING, BOOLEAN, BINARY, array or struct) is
+        // its `DATATYPE_MISMATCH`, `"(a - b)"` backward and nearest, `"(b - a)"` forward; values
+        // of two types (structs whose field names differ) are `BINARY_OP_DIFF_TYPES` (Spark
+        // 4.3.0 runs, `opus1-r4`). The SQL form builds none for these types.
+        if !m.as_written && !subtracts(left.ty.data_type.as_ref()) {
+            let (a, b) = operands;
+            let (ta, tb) = (a.resolved_type(), b.resolved_type());
+            let sql_expr = format!("\"({} - {})\"", pretty(a, zone), pretty(b, zone));
+            // Spark's `DataTypeUtils.sameType`.
+            let case_sensitive = self.ctx.conf.case_sensitive;
+            let same = match (&ta, &tb) {
+                (Some(x), Some(y)) if case_sensitive => x.equals_ignore_nullability(y),
+                (Some(x), Some(y)) => x.equals_ignore_case_and_nullability(y),
+                _ => false,
+            };
+            let error: krishiv_common::error::KrishivError = if same {
+                DatatypeMismatchBinaryOpWrongType {
+                    sql_expr,
+                    input_type: SUBTRACT_TYPES.to_owned(),
+                    actual_data_type: quoted_type(ta.as_ref()),
+                }
+                .into()
+            } else {
+                DatatypeMismatchBinaryOpDiffTypes {
+                    sql_expr,
+                    left: quoted_type(ta.as_ref()),
+                    right: quoted_type(tb.as_ref()),
+                }
+                .into()
+            };
+            return Err(AnalysisError::new(error, origin));
         }
         // The two values meet at the type a comparison of them casts both to.
         let compared = self.call(
@@ -341,9 +384,14 @@ fn nullable(e: &Expr) -> bool {
     }
 }
 
-/// Whether the resolved value `e` is an untyped `NULL` (Spark's `NullType`).
+/// Whether the resolved value `e` is an untyped `NULL` (Spark's `NullType`): a `NULL` literal
+/// without a type (whose `resolved_type` is `None`) or a value typed `NULL`. Any other operand
+/// whose type is unknown is not one, so it is never turned into a typed `NULL`.
 fn null_type(e: &Expr) -> bool {
-    matches!(e.resolved_type(), None | Some(DataType::Null))
+    matches!(
+        &e.node,
+        ExprNode::Literal(Literal::Null(None | Some(DataType::Null)))
+    ) || matches!(e.resolved_type(), Some(DataType::Null))
 }
 
 /// A `NULL` of type `to`, at `at`'s origin (a `NULL` of any type is the same value).
@@ -546,19 +594,31 @@ fn zoned_rewrite(id: Builtin, f: &ResolvedFunction) -> bool {
 /// so the bound form has no cast to find: Spark's `inputTypes` take TIMESTAMP there
 /// (`DateFormatClass`, `TruncTimestamp`; `GetTimeField`'s `AnyTimestampType` defaults a DATE or
 /// STRING to TIMESTAMP), and that implicit cast needs a time zone (Spark 4.3.0 source,
-/// `datetimeExpressions.scala`; `date_format(t.d, 'yyyy')` run in `opus1-r3`).
+/// `datetimeExpressions.scala`; `date_format(t.d, 'yyyy')` run in `opus1-r3`). A
+/// `TIMESTAMP_NTZ` is kept by Krishiv's `instant_input` where Spark's input type is
+/// `TimestampType` (`MonthsBetween`, `UTCTimestamp`, `TimestampDiff`: Spark 4.3.0 runs of
+/// `months_between`, `from_utc_timestamp`, `to_utc_timestamp` and `timestampdiff` over an NTZ
+/// argument delay the check); `timestampadd` takes `AnyTimestampType` and keeps it in Spark too.
+/// A DATE or STRING there is cast in the bound form, so `zoned_implicit_casts` finds it.
 fn casts_to_timestamp(f: &ResolvedFunction) -> bool {
-    let (at, ntz) = match f.id.name() {
-        "date_format" => (0, true),
-        "date_trunc" => (1, true),
-        "hour" | "minute" | "second" => (0, false),
+    let (at, ntz_only): (&[usize], bool) = match f.id.name() {
+        "date_format" | "hour" | "minute" | "second" => (&[0], false),
+        "date_trunc" => (&[1], false),
+        "months_between" => (&[0, 1], true),
+        "from_utc_timestamp" | "to_utc_timestamp" => (&[0], true),
+        "timestampdiff" => (&[1, 2], true),
         _ => return false,
     };
-    let t = f.args.get(at).and_then(|a| shown_type(a));
-    matches!(
-        t,
-        Some(DataType::Date | DataType::String | DataType::CollatedString(_))
-    ) || (ntz && matches!(t, Some(DataType::TimestampNtz)))
+    let ntz = !matches!(f.id.name(), "hour" | "minute" | "second");
+    at.iter().any(|&i| {
+        let t = f.args.get(i).and_then(|a| shown_type(a));
+        (!ntz_only
+            && matches!(
+                t,
+                Some(DataType::Date | DataType::String | DataType::CollatedString(_))
+            ))
+            || (ntz && matches!(t, Some(DataType::TimestampNtz)))
+    })
 }
 
 /// The operator a datetime call is written as.
@@ -582,6 +642,10 @@ fn shown_type(e: &Expr) -> Option<DataType> {
         _ => e.interval_type().or_else(|| e.resolved_type()),
     }
 }
+
+/// `Subtract`'s `inputType`, as Spark's `BINARY_OP_WRONG_TYPE` names it.
+const SUBTRACT_TYPES: &str =
+    "(\"NUMERIC\" or \"INTERVAL DAY TO SECOND\" or \"INTERVAL YEAR TO MONTH\" or \"INTERVAL\")";
 
 /// Whether Spark subtracts values of `t` for an as-of distance (`AsOfJoin.supportsSubtract`).
 fn subtracts(t: Option<&DataType>) -> bool {
