@@ -46,10 +46,16 @@ impl LocalDirsAsMissing {
             return e;
         }
         let is_dir = match self.inner.path_to_filesystem(location) {
-            // The metadata call blocks, so it runs off the async worker.
-            Ok(path) => tokio::task::spawn_blocking(move || path.is_dir())
-                .await
-                .unwrap_or(false),
+            // The metadata call blocks, so it runs off the async worker; with no Tokio runtime
+            // (a caller driving the store with `futures::executor::block_on`) it runs inline,
+            // where `spawn_blocking` would panic (review of #1002).
+            Ok(path) => match tokio::runtime::Handle::try_current() {
+                Ok(runtime) => runtime
+                    .spawn_blocking(move || path.is_dir())
+                    .await
+                    .unwrap_or(false),
+                Err(_) => path.is_dir(),
+            },
             Err(_) => false,
         };
         if is_dir {
@@ -187,6 +193,27 @@ mod tests {
             .directory_is_missing(&Path::from("nothing"), denied())
             .await;
         assert!(matches!(e, object_store::Error::Generic { .. }), "{e}");
+    }
+
+    /// With no Tokio runtime (a caller driving the store with `futures::executor::block_on`) the
+    /// directory check runs inline instead of panicking in `spawn_blocking` (review of #1002):
+    /// polled once outside any runtime, it is ready.
+    #[test]
+    fn a_directory_is_found_missing_outside_a_runtime() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("d")).unwrap();
+        let store = LocalDirsAsMissing::new(LocalFileSystem::new_with_prefix(dir.path()).unwrap());
+        let denied = object_store::Error::Generic {
+            store: "LocalFileSystem",
+            source: Box::new(std::io::Error::from(std::io::ErrorKind::PermissionDenied)),
+        };
+        let at = Path::from("d");
+        let check = std::pin::pin!(store.directory_is_missing(&at, denied));
+        let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
+        let std::task::Poll::Ready(e) = check.poll(&mut cx) else {
+            panic!("the check waited outside a runtime");
+        };
+        assert!(matches!(e, object_store::Error::NotFound { .. }), "{e}");
     }
 
     #[tokio::test]
