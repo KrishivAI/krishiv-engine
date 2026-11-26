@@ -36,7 +36,11 @@ export function col(name: string): Column {
   return new Column(name === "*" ? "*" : name.split(".").map(q).join("."));
 }
 
-/** A literal; strings are quoted and escaped, `null` is NULL. */
+/**
+ * A literal; strings are quoted and escaped, `null` is NULL. Escaping follows the default parser
+ * (`spark.sql.parser.escapedStringLiterals=false`); with that setting on, build the text yourself,
+ * since a backslash there is kept as written and the server refuses quote and backslash values.
+ */
 export function lit(v: Column | string | number | boolean | bigint | null): Column {
   if (v instanceof Column) return v;
   if (v === null) return new Column("NULL");
