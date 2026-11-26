@@ -513,10 +513,18 @@ impl Run<'_> {
         let span = statement.span();
         let own = self.redacted.fragment(span.start..span.end);
         let lister = handle.clone();
-        let run = async {
+        // A policy provider is asked for this statement, as `system.queries` lists it (ADR 0049
+        // §3): its own class and the row its query begins. The handle carries no operation id (that
+        // names the script), so the statement's id is its minted row's, never the script's.
+        let context = crate::access::StatementContext::new(
+            class.name(),
+            handle.operation_id().map(crate::QueryId::as_str),
+            std::sync::Arc::clone(&env.row),
+        );
+        let run = context.scope(async {
             handle.authorize_statement(statement, class, &env).await?;
             self.run_leaf(statement, handle, env).await
-        };
+        });
         Box::pin(crate::session::as_listed_script_statement(
             &lister,
             own,

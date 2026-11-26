@@ -475,3 +475,49 @@ fn a_check_names_the_statement_it_is_asked_for() {
         "{checks:?}"
     );
 }
+
+/// ADR 0049 §3: a SQL script's statements are listed in `system.queries` under their own class
+/// and minted ids (the operation id names the script), so each one's checks name its own class,
+/// not the script's, and never the script's operation id.
+#[test]
+fn a_scripts_statements_are_checked_as_themselves() {
+    let w = World::new();
+    let (ana, _, seen) = w.ana_seen(Mode::Rule, Role::Operator, false);
+    let op = "3e7a1c5b-9d2f-4b8e-a6c4-5f1e2d3c4b5a";
+    let options = krishiv_session::QueryOptions::new().operation_id(op);
+    let script = "BEGIN INSERT INTO t VALUES (7, 8); SELECT a FROM t; END";
+    let rows = w
+        .tokio
+        .block_on(async { ana.sql_with(script, options).await?.collect().await })
+        .unwrap_or_else(|e| panic!("{script}: {e}"));
+    assert_eq!(
+        rows.iter()
+            .map(arrow_array::RecordBatch::num_rows)
+            .sum::<usize>(),
+        2
+    );
+    let checks = std::mem::take(&mut *seen.lock().unwrap());
+    // The SELECT's checks are its own (before the fix every check named the script: `WRITE`).
+    assert!(checks.iter().any(|(c, _)| c == "READ"), "{checks:?}");
+    // A statement's checks carry its own id, never the script's operation id.
+    let leaf = |(c, id): &&(String, String)| (c == "WRITE" || c == "READ") && id != op;
+    assert!(
+        checks.iter().filter(|(c, _)| c == "READ").all(|x| leaf(&x)),
+        "{checks:?}"
+    );
+    assert!(
+        checks
+            .iter()
+            .filter(|(c, _)| c == "WRITE")
+            .any(|x| leaf(&x)),
+        "{checks:?}"
+    );
+    // What the script itself is asked carries its class and operation id.
+    assert!(
+        checks
+            .iter()
+            .filter(|(_, id)| id == op)
+            .all(|(c, _)| c == "WRITE"),
+        "{checks:?}"
+    );
+}
