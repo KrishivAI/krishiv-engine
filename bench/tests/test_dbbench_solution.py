@@ -1,4 +1,4 @@
-"""The krishiv solution directory for the db-benchmark repository (P3-T094)."""
+"""The krishiv solution directory for the db-benchmark repository."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""A db-benchmark ``time.csv`` as a table next to the published solutions (P3-T094 step 1).
+"""A db-benchmark ``time.csv`` as a table next to the published solutions.
 
 Reads the ``time.csv`` the ``krishiv`` solution wrote (``dbbench_solution``) and the upstream repository's published
 ``time.csv`` (any file in that layout; nothing is downloaded here). For each task, data set and question it shows the
@@ -101,19 +101,43 @@ def to_markdown(rows: list[dict[str, object]]) -> str:
     return "\n".join(lines)
 
 
+# The benchmark writes each ``chk`` sum rounded to three decimals, so two equal sums can differ by one unit of the
+# third decimal; a little slack on top for the rounding of each side.
+_CHK_ABS_TOL = 1.1e-3
+
+
+def _same_sum(x: str, y: str) -> bool:
+    """Whether two ``chk`` fields are the same sum. A field that is not a number equals only the same text."""
+    if x == y:
+        return True
+    try:
+        a, b = float(x), float(y)
+    except ValueError:
+        return False
+    return math.isclose(a, b, rel_tol=1e-6, abs_tol=_CHK_ABS_TOL)
+
+
 def check_answers(path: Path, other: str, batch: str | None = None, data: str | None = None) -> tuple[int, list[str]]:
     """Compare Krishiv's answers in ``path`` with ``other``'s; returns (answers compared, one line per problem).
 
-    ``batch`` and ``data`` narrow the comparison to one launcher run and one data set.
+    ``batch`` and ``data`` narrow the comparison to one launcher run and one data set. Without ``batch``, only the
+    rows of the newest batch (the last one in the file) of each solution, task and data set are read: the launcher
+    appends every run to one file, and a question the newest run did not answer must count as missing.
     """
     rows: dict[tuple[str, str, str, str, str], dict[str, str]] = {}
+    newest: dict[tuple[str, str, str], str | None] = {}
     with path.open(newline="") as f:
         for row in csv.DictReader(f):
             if batch is not None and row.get("batch") != batch:
                 continue
             if data is not None and row["data"] != data:
                 continue
-            rows[(row["solution"], row["task"], row["data"], row["question"], row["run"])] = row
+            group = (row["solution"], row["task"], row["data"])
+            if group not in newest or newest[group] != row.get("batch"):
+                newest[group] = row.get("batch")
+                for stale in [k for k in rows if k[:3] == group]:
+                    del rows[stale]
+            rows[(*group, row["question"], row["run"])] = row
     keys = sorted({k[1:] for k in rows if k[0] in (OURS, other)})
     problems = []
     for key in keys:
@@ -124,7 +148,7 @@ def check_answers(path: Path, other: str, batch: str | None = None, data: str | 
             continue
         sums_a, sums_b = a["chk"].split(";"), b["chk"].split(";")
         same = (a["out_rows"], a["out_cols"], len(sums_a)) == (b["out_rows"], b["out_cols"], len(sums_b)) and all(
-            math.isclose(float(x), float(y), rel_tol=1e-6, abs_tol=1e-6) for x, y in zip(sums_a, sums_b, strict=True)
+            _same_sum(x, y) for x, y in zip(sums_a, sums_b, strict=True)
         )
         if not same:
             ours = f"{b['out_rows']}x{b['out_cols']} chk {b['chk']}"

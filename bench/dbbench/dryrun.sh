@@ -84,10 +84,15 @@ one() {
   if [[ -n ${DBB_DATA:-} && ! $name =~ $DBB_DATA ]]; then return 0; fi
   echo "=== $name $(date +%H:%M:%S), free $(df -BG --output=avail "$work" | tail -1 | tr -d ' ')"
   if [[ -n ${DBB_DATA_DIR:-} ]]; then
-    if [[ ! -f $DBB_DATA_DIR/$name.csv ]]; then
-      echo "SKIPPED: no $name.csv in $DBB_DATA_DIR"
-      return 0
-    fi
+    # A join reads three more tables, named as the benchmark's helpers name them (rows / 1e6, / 1e3 and rows).
+    local need=("$name") e=${rows#1e} f
+    if [[ $task == join ]]; then need+=("${name/NA/1e$((e - 6))}" "${name/NA/1e$((e - 3))}" "${name/NA/$rows}"); fi
+    for f in "${need[@]}"; do
+      if [[ ! -f $DBB_DATA_DIR/$f.csv ]]; then
+        echo "SKIPPED: no $f.csv in $DBB_DATA_DIR"
+        return 0
+      fi
+    done
   elif ! box "${DBB_GEN_MEMORY:-24g}" bash -c "cd data && Rscript ../_data/$gen $*"; then
     echo "GENERATOR FAILED: $name"
     rm -f "$board"/data/*_"${rows}"_*.csv
@@ -96,7 +101,9 @@ one() {
   fi
   sed -i "s/^export RUN_TASKS=.*/export RUN_TASKS=\"$task\"/" "$board/run.conf"
   printf 'task,data,nrow,k,na,sort,active\n%s,%s,%s,1\n' "$task" "$name" "$fields" >"$board/_control/data.csv"
-  rm -f "$board/run.lock"
+  # The launcher removes a solution's .ret only when it starts that solution, and the checkout outlives this run:
+  # a .ret of an earlier run must not stand in for a solution that never started.
+  rm -f "$board/run.lock" "$board"/out/run_*_"${task}"_"${name}".ret
   box "${DBB_RUN_MEMORY:-16g}" ./run.sh 2>&1 | grep -E '^(start|finish|# Bench)|error|Error|timed out|Killed' || true
   for s in duckdb krishiv; do
     if [[ $(cat "$board/out/run_${s}_${task}_${name}.ret" 2>/dev/null) != 0 ]]; then

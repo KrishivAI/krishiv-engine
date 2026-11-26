@@ -1,4 +1,4 @@
-"""The ``krishiv`` solution directory of the db-benchmark repository (P3-T094 step 1).
+"""The ``krishiv`` solution directory of the db-benchmark repository.
 
 db-benchmark (https://github.com/duckdblabs/db-benchmark, MPL-2.0) runs a solution through ``<name>/setup-<name>.sh``,
 ``ver-<name>.sh``, ``upg-<name>.sh`` and one script per task, ``groupby-<name>.py`` / ``join-<name>.py``. Those
@@ -206,7 +206,6 @@ def render_task_script(task: str) -> str:
         questions_json=json.dumps(qs),
         schemas_json=json.dumps(SCHEMAS[task]),
         tables_code=_GROUPBY_TABLES if task == "groupby" else _JOIN_TABLES,
-        prefix="G1" if task == "groupby" else "J1",
         verb="grouping" if task == "groupby" else "joining",
     )
     return text

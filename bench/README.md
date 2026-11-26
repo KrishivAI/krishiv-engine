@@ -738,7 +738,7 @@ Results and Spark goldens stay tied to the dataset they were produced from (reco
   int64 column) stays a plain `mismatch` until the overflow can be checked against an independent expected value. Checked on TPC-H SF1 (all 22: 21 `ok`, q08 `mismatch-dialect`) and a 2M-row slice of
   `hits.parquet` (40 of 43 `ok`, q28/q29 `mismatch-dialect`, q04 `mismatch`); the full 100M-row file needs the benchmark server.
 
-## db-benchmark's own scripts (P3-T094 step 1)
+## db-benchmark's own scripts
 
 `krishiv_bench.dbbench_solution` writes the `krishiv/` solution directory of a checkout of
 <https://github.com/duckdblabs/db-benchmark> (`groupby-krishiv.py`, `join-krishiv.py`, `setup-`, `upg-` and
@@ -759,9 +759,11 @@ uv run python -m krishiv_bench.dbbench_report --ours ~/db-benchmark/time.csv --c
 uv run python -m krishiv_bench.dbbench_report --ours time.csv --published upstream/time.csv --data G1_1e7_1e2_0_0
 ```
 
-`--check` compares Krishiv's answers with another solution's from the same launcher run (row and column counts and the
-`chk` sums) and exits 1 on any difference. `dbbench_report --published` prints the second-run times next to the published solutions (`*` = spilled, `FAIL` = no row) and
-Krishiv's ratio to each. Step 2 (the PR to the benchmark repository) waits for the owner's go.
+`--check` compares Krishiv's answers with another solution's (row and column counts and the `chk` sums, which the
+benchmark writes rounded to three decimals) and exits 1 on any difference or missing row. A `time.csv` grows with every
+launcher run: for each solution and data set only the rows of its newest run are read, so an answer from an earlier run
+never stands in for one the newest run did not give (`--batch` names one run instead). `dbbench_report --published` prints the second-run times next to the published solutions (`*` = spilled, `FAIL` = no row) and
+Krishiv's ratio to each.
 
 `bench/dbbench/dryrun.sh <work dir> <1e7|1e8|1e9> [groupby|join]...` is the whole dry run in a container
 (`bench/dbbench/Dockerfile`): it clones the benchmark at a pinned commit, registers the solution, installs duckdb and

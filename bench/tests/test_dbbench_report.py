@@ -1,4 +1,4 @@
-"""db-benchmark time.csv comparison (P3-T094)."""
+"""db-benchmark time.csv comparison."""
 
 from __future__ import annotations
 
@@ -128,6 +128,60 @@ def test_check_of_one_data_set_ignores_the_others(tmp_path: Path) -> None:
     )
     assert dr.main(["--ours", str(f), "--check", "duckdb"]) == 1
     assert dr.main(["--ours", str(f), "--check", "duckdb", "--data", "J1"]) == 0
+
+
+def test_check_reads_only_the_newest_batch_of_a_data_set(tmp_path: Path) -> None:
+    # The launcher appends: batch b1 answered q1 and q2, the rerun b2 died after q1. q2 of b1 must not stand in.
+    f = write_check(
+        tmp_path / "t.csv",
+        [
+            ["b1", "join", "J1", "q1", "duckdb", 1, 5, 1, "1"],
+            ["b1", "join", "J1", "q2", "duckdb", 1, 5, 1, "2"],
+            ["b1", "join", "J1", "q1", "krishiv", 1, 5, 1, "1"],
+            ["b1", "join", "J1", "q2", "krishiv", 1, 5, 1, "2"],
+            ["b1", "join", "J2", "q1", "duckdb", 1, 5, 1, "1"],
+            ["b1", "join", "J2", "q1", "krishiv", 1, 5, 1, "1"],
+            ["b2", "join", "J1", "q1", "duckdb", 1, 5, 1, "1"],
+            ["b2", "join", "J1", "q2", "duckdb", 1, 5, 1, "2"],
+            ["b2", "join", "J1", "q1", "krishiv", 1, 5, 1, "1"],
+        ],
+    )
+    assert dr.check_answers(f, "duckdb") == (3, ["join J1 q2 1: no row from krishiv"])
+    assert dr.main(["--ours", str(f), "--check", "duckdb"]) == 1
+    # The earlier batch is still there to be named, and the data set that was not rerun keeps its only batch.
+    assert dr.check_answers(f, "duckdb", "b1") == (3, [])
+    assert dr.check_answers(f, "duckdb", data="J2") == (1, [])
+
+
+def test_check_allows_the_rounding_of_chk_to_three_decimals(tmp_path: Path) -> None:
+    # Two sums that agree far below the third decimal can be written on either side of a rounding boundary.
+    f = write_check(
+        tmp_path / "t.csv",
+        [
+            ["b1", "groupby", "G1", "q9", "duckdb", 1, 10, 3, "0.123"],
+            ["b1", "groupby", "G1", "q9", "krishiv", 1, 10, 3, "0.124"],
+            ["b1", "groupby", "G1", "q8", "duckdb", 1, 10, 3, "0.123"],
+            ["b1", "groupby", "G1", "q8", "krishiv", 1, 10, 3, "0.126"],
+        ],
+    )
+    assert dr.check_answers(f, "duckdb") == (2, ["groupby G1 q8 1: duckdb 10x3 chk 0.123, krishiv 10x3 chk 0.126"])
+
+
+def test_check_reports_a_sum_that_is_not_a_number(tmp_path: Path) -> None:
+    f = write_check(
+        tmp_path / "t.csv",
+        [
+            ["b1", "groupby", "G1", "q1", "duckdb", 1, 10, 3, "5.0;7.0"],
+            ["b1", "groupby", "G1", "q1", "krishiv", 1, 10, 3, "5.0;None"],
+            ["b1", "groupby", "G1", "q2", "duckdb", 1, 10, 3, "nan"],
+            ["b1", "groupby", "G1", "q2", "krishiv", 1, 10, 3, "nan"],
+            ["b1", "groupby", "G1", "q3", "duckdb", 1, 10, 3, "1.0"],
+            ["b1", "groupby", "G1", "q3", "krishiv", 1, 10, 3, "nan"],
+        ],
+    )
+    compared, problems = dr.check_answers(f, "duckdb")
+    assert compared == 3
+    assert [p.split(":")[0] for p in problems] == ["groupby G1 q1 1", "groupby G1 q3 1"]
 
 
 def test_check_of_an_empty_file_fails(tmp_path: Path) -> None:
