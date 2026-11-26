@@ -385,6 +385,41 @@ pub fn to_bytes<V: Value>(sketch: &Compact<V>) -> Vec<u8> {
     bytes
 }
 
+/// [`to_bytes`] for a sketch of `lg_nom`: below the library's smallest size (5) the sketch is built at 5, so a result
+/// of more than 16 entries is cut to the 16 smallest hashes with theta the 17th, as Java's `lgNomEntries` 4 sketch is.
+/// Entries come out in hash order (Java's are in table order).
+#[must_use]
+pub fn to_bytes_at<V: Value>(sketch: &Compact<V>, lg_nom: i32) -> Vec<u8> {
+    const K: usize = 16;
+    let bytes = to_bytes(sketch);
+    if lg_nom >= 5 || sketch.num_retained() <= K {
+        return bytes;
+    }
+    let pre = usize::from(bytes.first().copied().unwrap_or(0)) * 8;
+    let n = sketch.num_retained();
+    let Some(body) = bytes.get(pre..).filter(|b| b.len() % n == 0) else {
+        return bytes;
+    };
+    let width = body.len() / n;
+    let mut entries: Vec<&[u8]> = body.chunks_exact(width).collect();
+    let hash = |e: &[u8]| {
+        e.get(..8)
+            .map_or(0, |h| u64::from_le_bytes(h.try_into().unwrap_or([0; 8])))
+    };
+    entries.sort_unstable_by_key(|e| hash(e));
+    let theta = hash(entries[K]);
+    let mut out = bytes[..8].to_vec();
+    out[0] = 3;
+    out[5] |= 0x10;
+    out.extend_from_slice(&16u32.to_le_bytes());
+    out.extend_from_slice(&0u32.to_le_bytes());
+    out.extend_from_slice(&theta.to_le_bytes());
+    for e in &entries[..K] {
+        out.extend_from_slice(e);
+    }
+    out
+}
+
 /// Compact an updatable sketch.
 #[must_use]
 pub fn compact<V: Value>(sketch: &TupleSketch<Policy<V>>) -> Compact<V> {
@@ -610,6 +645,41 @@ mod tests {
         assert_eq!(summary_double(&d, Mode::Sum), 6.0);
         let i = from_bytes::<i32>(&unhex(SPARK_INTEGER), "f").unwrap();
         assert_eq!(summary_integer(&i, Mode::Sum), 6);
+    }
+
+    #[test]
+    fn lg_4_results_are_cut_to_sixteen_entries_with_theta_the_next_hash() {
+        let build = |n: i64| {
+            let mut s = new_sketch::<f64>(4, Mode::Sum, "f").unwrap();
+            for v in 0..n {
+                update_long(&mut s, v, 1.0);
+            }
+            compact(&s)
+        };
+        // 16 or fewer entries: untouched.
+        let small = build(10);
+        assert_eq!(to_bytes_at(&small, 4), to_bytes(&small));
+        // More: the 16 smallest hashes of the retained set, estimation mode.
+        for n in [20, 1000] {
+            let c = build(n);
+            let mut all: Vec<u64> = c
+                .iter()
+                .map(datasketches::tuple::TupleEntry::hash)
+                .collect();
+            all.sort_unstable();
+            let cut = from_bytes::<f64>(&to_bytes_at(&c, 4), "f").unwrap();
+            assert_eq!(cut.num_retained(), 16);
+            assert_eq!(cut.theta64(), all[16]);
+            let mut kept: Vec<u64> = cut
+                .iter()
+                .map(datasketches::tuple::TupleEntry::hash)
+                .collect();
+            kept.sort_unstable();
+            assert_eq!(kept, all[..16]);
+        }
+        // lgNom 5 and up: no cut.
+        let c = build(1000);
+        assert_eq!(to_bytes_at(&c, 5), to_bytes(&c));
     }
 
     #[test]

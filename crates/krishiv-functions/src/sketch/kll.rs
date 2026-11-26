@@ -21,19 +21,6 @@ pub const MIN_K: i32 = 8;
 /// Largest `k` Spark accepts.
 pub const MAX_K: i32 = 65_535;
 
-/// An upper bound of the bytes a sketch of `k` holds: its levels keep at most about `3k` items of 8 bytes, plus the
-/// level bookkeeping (a slack of 512 items) and a header.
-#[must_use]
-pub fn capacity_bytes(k: u16) -> usize {
-    (3 * usize::from(k) + 512) * 8 + 256
-}
-
-/// The `k` in the preamble of a serialized sketch (bytes 4 and 5, little endian); `None` when too short.
-#[must_use]
-pub fn k_of_bytes(bytes: &[u8]) -> Option<u16> {
-    Some(u16::from_le_bytes([*bytes.get(4)?, *bytes.get(5)?]))
-}
-
 /// The element type of a KLL function.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KllType {

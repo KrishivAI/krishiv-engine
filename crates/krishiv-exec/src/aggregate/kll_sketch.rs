@@ -113,6 +113,7 @@ impl KllSketchAcc {
 
     fn fresh(&self) -> Option<Kll> {
         if self.op.starts_full() {
+            // `k` was range-checked when the aggregate was planned, so this cannot fail; a bad one leaves no sketch.
             Kll::new(self.op.ty(), self.op.k(), self.op.name()).ok()
         } else {
             None
@@ -326,7 +327,7 @@ impl KllSketchAcc {
             .map(|&g| self.bytes(g))
             .collect::<Result<Vec<_>>>()?;
         Ok(vec![
-            Arc::new(BinaryArray::from_iter_values(rows)) as ArrayRef
+            Arc::new(super::theta_sketch::binary_array(rows)?) as ArrayRef
         ])
     }
 

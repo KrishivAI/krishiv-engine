@@ -78,7 +78,10 @@ fn set_row<V: Value>(
         Op::Intersection => tuple::intersection::<V>(&a, b, mode, function)?,
         _ => tuple::difference::<V>(&a, b, function)?,
     };
-    Ok(tuple::to_bytes(&r))
+    Ok(match op {
+        Op::Union => tuple::to_bytes_at(&r, lg_nom),
+        _ => tuple::to_bytes(&r),
+    })
 }
 
 fn mode_at(

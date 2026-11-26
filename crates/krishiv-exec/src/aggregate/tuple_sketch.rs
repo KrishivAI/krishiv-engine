@@ -465,7 +465,7 @@ impl<V: Value> Acc<V> {
     fn bytes(&self, g: u32) -> Result<Vec<u8>> {
         Ok(self
             .compact(g)?
-            .map(|c| tuple::to_bytes(&c))
+            .map(|c| tuple::to_bytes_at(&c, i32::from(self.lg)))
             .unwrap_or_default())
     }
 
@@ -641,7 +641,7 @@ impl TupleSketchAcc {
     pub(crate) fn state(&self, ids: &[u32]) -> Result<Vec<ArrayRef>> {
         let rows = each_acc!(self, a => a.state_rows(ids))?;
         Ok(vec![
-            Arc::new(BinaryArray::from_iter_values(rows)) as ArrayRef
+            Arc::new(super::theta_sketch::binary_array(rows)?) as ArrayRef
         ])
     }
 
