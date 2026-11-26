@@ -32,7 +32,11 @@ downloads one for you:
 ```bash
 uv venv --python 3.12
 uv pip install krishiv
+source .venv/bin/activate
 ```
+
+`uv venv` creates the environment in the folder `.venv` and `uv pip install` installs into it; without activating it,
+run `.venv/bin/python`.
 
 ### Older x86-64 CPUs: `krishiv-compat`
 
@@ -41,8 +45,10 @@ names the missing features. Install `krishiv-compat` instead: it is the same pac
 imports as `krishiv`. It exists for glibc Linux x86-64 only.
 
 Install one of the two, never both. They install the same folder, and pip does not refuse the second one: the package
-installed last replaces the files of the first, and `pip uninstall` of either removes the files of both while
-`pip list` still shows the other. `import krishiv` warns when it finds both. To change from one to the
+installed last replaces the files it shares with the first, and `pip uninstall` of either removes the files of both
+while `pip list` still shows the other. The result is a mix: with `krishiv-compat` installed over `krishiv`, the CPU
+check of `krishiv` stays in place, so on an older CPU `import krishiv` still raises the `ImportError` although
+`krishiv-compat` is installed. `import krishiv` warns when it finds both. To change from one to the
 other, or to repair an environment that has both, remove both and install one:
 
 ```bash
