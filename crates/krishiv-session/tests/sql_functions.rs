@@ -1532,3 +1532,254 @@ fn a_stored_function_body_may_reference_no_object_of_the_session() {
     );
     assert_eq!(ok(&s, "SELECT r8_tmp()"), ["9"]);
 }
+
+/// Spark 4.2.1 (run 2026-11-22; `SQLFunctionExpression`'s children): an argument the body never
+/// reads is still checked against the GROUP BY. Probe: `probe-sqlfn/p.py` (`out-4.2.1.txt`).
+#[test]
+fn an_unread_argument_is_still_checked_against_the_group_by() {
+    let s = session();
+    ok(
+        &s,
+        "CREATE TEMPORARY FUNCTION seven(x BIGINT) RETURNS BIGINT RETURN 7",
+    );
+    let e = fails(&s, "SELECT name, seven(id) FROM people GROUP BY name");
+    let (class, params) = class_and_params(&e);
+    assert_eq!(class, "MISSING_AGGREGATION");
+    assert_eq!(params["expression"], "\"id\"");
+    let e = fails(&s, "SELECT seven(id), count(*) FROM people");
+    assert_eq!(e.error_class().name(), "MISSING_GROUP_BY");
+    // A grouped or aggregated argument is fine, and so is a call that is itself grouped.
+    assert_eq!(
+        ok(
+            &s,
+            "SELECT id, seven(id) FROM people GROUP BY id ORDER BY id"
+        ),
+        ["1\t7", "2\t7", "3\t7"]
+    );
+    assert_eq!(ok(&s, "SELECT seven(sum(id)) FROM people"), ["7"]);
+    assert_eq!(
+        ok(&s, "SELECT seven(id) FROM people GROUP BY seven(id)"),
+        ["7"]
+    );
+    // Nested: the unread argument of an inner call inside an outer one.
+    ok(
+        &s,
+        "CREATE TEMPORARY FUNCTION wrap(y BIGINT) RETURNS BIGINT RETURN y + 1",
+    );
+    let e = fails(&s, "SELECT name, wrap(seven(id)) FROM people GROUP BY name");
+    assert_eq!(e.error_class().name(), "MISSING_AGGREGATION");
+    // HAVING reads the aggregate's output, where `id` is not a column.
+    let e = fails(
+        &s,
+        "SELECT name FROM people GROUP BY name HAVING seven(id) > 0",
+    );
+    assert_eq!(
+        e.error_class().name(),
+        "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+        "{e:?}"
+    );
+}
+
+/// Spark 4.2.1 (run 2026-11-22, probe `probe-sqlfn/p2.py`, `out2-4.2.1.txt`): a call is grouped
+/// only as the whole call `f(a, b)`. A body shared by every call (no cast needed) or one that is
+/// the caller's argument itself does not stand in for the call, whatever the order of the calls.
+#[test]
+fn a_call_with_an_unread_argument_is_grouped_only_as_a_whole() {
+    let s = session();
+    for f in [
+        "CREATE TEMPORARY FUNCTION seven_i(x INT) RETURNS INT RETURN 7",
+        "CREATE TEMPORARY FUNCTION seven_n(x INT) RETURN 7",
+        "CREATE TEMPORARY FUNCTION first_s(a STRING, b INT) RETURNS STRING RETURN a",
+        "CREATE TEMPORARY FUNCTION first_of(a INT, b INT) RETURNS INT RETURN a",
+    ] {
+        ok(&s, f);
+    }
+    for q in [
+        "SELECT name, seven_i(id), seven_i(1) FROM people GROUP BY name",
+        "SELECT name, seven_i(1), seven_i(id) FROM people GROUP BY name",
+        "SELECT name, seven_n(id), seven_n(1) FROM people GROUP BY name",
+        "SELECT name, first_s(name, id) FROM people GROUP BY name",
+        "SELECT seven_i(id) FROM people GROUP BY seven_i(1)",
+        "SELECT seven_i(id) + 1 FROM people GROUP BY seven_i(1) + 1",
+    ] {
+        let e = fails(&s, q);
+        let (class, params) = class_and_params(&e);
+        assert_eq!(class, "MISSING_AGGREGATION", "{q}");
+        assert_eq!(params["expression"], "\"id\"", "{q}");
+    }
+    assert_eq!(
+        ok(
+            &s,
+            "SELECT name, first_s(name, 1) FROM people GROUP BY name ORDER BY name"
+        ),
+        ["NULL\tNULL", "b\tb", "c\tc"]
+    );
+    assert_eq!(
+        ok(&s, "SELECT seven_i(id) FROM people GROUP BY seven_i(id)"),
+        ["7"]
+    );
+    assert_eq!(
+        ok(
+            &s,
+            "SELECT seven_i(id) + 1 FROM people GROUP BY seven_i(id) + 1"
+        ),
+        ["8"]
+    );
+    assert_eq!(
+        ok(
+            &s,
+            "SELECT first_of(id, id + 0) FROM people GROUP BY id ORDER BY 1"
+        ),
+        ["1", "2", "3"]
+    );
+}
+
+/// Spark 4.2.0 and 4.3.0 (review of 364760722, 2026-11-22; the outcomes are the asserts below):
+/// a call that is not grouped as a whole is checked by its inputs, never by its body, and a call
+/// is keyed by its function and its inputs (Spark's canonicalized `SQLFunctionExpression`), so a
+/// body equal to a grouping expression, or two functions with the same body, never match.
+#[test]
+fn a_call_is_checked_by_its_inputs_never_its_body() {
+    let s = session();
+    for f in [
+        "CREATE TEMPORARY FUNCTION up1(a STRING) RETURN upper(a)",
+        "CREATE TEMPORARY FUNCTION up2(a STRING, b INT) RETURN upper(a)",
+        "CREATE TEMPORARY FUNCTION first_s(a STRING, b INT) RETURNS STRING RETURN a",
+        "CREATE TEMPORARY FUNCTION plus1(a INT, b INT) RETURN a + 1",
+        "CREATE TEMPORARY FUNCTION inc_a(a INT) RETURN a + 1",
+        "CREATE TEMPORARY FUNCTION inc_b(a INT) RETURN a + 1",
+    ] {
+        ok(&s, f);
+    }
+    for (q, expression) in [
+        ("SELECT plus1(id, 1) FROM people GROUP BY id + 1", "\"id\""),
+        (
+            "SELECT up2(name, 1) FROM people GROUP BY upper(name)",
+            "\"name\"",
+        ),
+        (
+            "SELECT up1(name) FROM people GROUP BY upper(name)",
+            "\"name\"",
+        ),
+        (
+            "SELECT upper(name) FROM people GROUP BY up1(name)",
+            "\"name\"",
+        ),
+        (
+            "SELECT first_s(first_s(name, id), id) FROM people GROUP BY first_s(name, id)",
+            "\"id\"",
+        ),
+        ("SELECT inc_b(id) FROM people GROUP BY inc_a(id)", "\"id\""),
+    ] {
+        let e = fails(&s, q);
+        let (class, params) = class_and_params(&e);
+        assert_eq!(class, "MISSING_AGGREGATION", "{q}");
+        assert_eq!(params["expression"], expression, "{q}");
+    }
+    assert_eq!(
+        ok(
+            &s,
+            "SELECT plus1(id + 0, 1) FROM people GROUP BY id + 0 ORDER BY 1"
+        ),
+        ["2", "3", "4"]
+    );
+    assert_eq!(
+        ok(
+            &s,
+            "SELECT first_s(first_s(name, id), 1) FROM people \
+             GROUP BY first_s(name, id) ORDER BY 1"
+        ),
+        ["NULL", "b", "c"]
+    );
+    assert_eq!(
+        ok(
+            &s,
+            "SELECT up1(name) FROM people GROUP BY up1(name) ORDER BY 1"
+        ),
+        ["NULL", "B", "C"]
+    );
+    // HAVING matches the call against the aggregate's outputs as before.
+    assert_eq!(
+        ok(
+            &s,
+            "SELECT up1(name) FROM people GROUP BY up1(name) HAVING up1(name) > 'B'"
+        ),
+        ["C"]
+    );
+}
+
+/// A call's inputs are its arguments as written, before the cast to the parameter type
+/// (Spark's `SQLFunctionExpression.inputs`; the cast comes later, in `makeSQLFunctionPlan`):
+/// `fs(id)` with `id INT` is not grouped by `CAST(id AS STRING)` (Spark 4.3.0 probe, review of
+/// 1c2627c64).
+#[test]
+fn a_call_s_inputs_are_its_arguments_before_the_parameter_cast() {
+    let s = session();
+    ok(
+        &s,
+        "CREATE TEMPORARY FUNCTION fs(a STRING) RETURNS STRING RETURN a",
+    );
+    ok(
+        &s,
+        "CREATE TEMPORARY FUNCTION fl(a BIGINT) RETURNS BIGINT RETURN a",
+    );
+    for q in [
+        "SELECT fs(id) FROM people GROUP BY CAST(id AS STRING)",
+        "SELECT fs(id) FROM people GROUP BY fs(CAST(id AS STRING))",
+        "SELECT fl(id) FROM people GROUP BY fl(CAST(id AS BIGINT))",
+    ] {
+        let e = fails(&s, q);
+        let (class, params) = class_and_params(&e);
+        assert_eq!(class, "MISSING_AGGREGATION", "{q}");
+        assert_eq!(params["expression"], "\"id\"", "{q}");
+    }
+    assert_eq!(
+        ok(&s, "SELECT fl(id) FROM people GROUP BY id ORDER BY 1"),
+        ["1", "2", "3"]
+    );
+    assert_eq!(
+        ok(&s, "SELECT fs(id) FROM people GROUP BY fs(id) ORDER BY 1"),
+        ["1", "2", "3"]
+    );
+}
+
+/// Spark 4.2.1 and 4.3.0 (probe `probe-sqlfn/p3.py`, `out3-<ver>.txt`, 2026-11-25): an item
+/// computed above the aggregate (a window, a lateral alias) and an item under the DISTINCT
+/// rewrite check a call by its inputs too, and a call over grouped inputs still lifts.
+#[test]
+fn a_call_above_the_aggregate_or_under_the_distinct_rewrite_is_checked_by_its_inputs() {
+    let s = session();
+    for f in [
+        "CREATE TEMPORARY FUNCTION seven_i(x INT) RETURNS INT RETURN 7",
+        "CREATE TEMPORARY FUNCTION first_s(a STRING, b INT) RETURNS STRING RETURN a",
+        "CREATE TEMPORARY FUNCTION first_of(a INT, b INT) RETURNS INT RETURN a",
+    ] {
+        ok(&s, f);
+    }
+    for q in [
+        "SELECT seven_i(id) + row_number() OVER (ORDER BY name) FROM people GROUP BY name",
+        "SELECT length(name) AS l, seven_i(id) + l FROM people GROUP BY name",
+        "SELECT first_s(name, id), count(DISTINCT id), count(DISTINCT name) FROM people GROUP BY name",
+    ] {
+        let e = fails(&s, q);
+        let (class, params) = class_and_params(&e);
+        assert_eq!(class, "MISSING_AGGREGATION", "{q}");
+        assert_eq!(params["expression"], "\"id\"", "{q}");
+    }
+    assert_eq!(
+        ok(
+            &s,
+            "SELECT first_of(id, 1) + row_number() OVER (ORDER BY id) FROM people \
+             GROUP BY id ORDER BY 1"
+        ),
+        ["2", "4", "6"]
+    );
+    assert_eq!(
+        ok(
+            &s,
+            "SELECT first_s(name, 1), count(DISTINCT id), count(DISTINCT name) FROM people \
+             GROUP BY name ORDER BY 1"
+        ),
+        ["NULL\t1\t0", "b\t1\t1", "c\t1\t1"]
+    );
+}

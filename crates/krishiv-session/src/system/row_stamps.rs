@@ -16,6 +16,16 @@ impl QueryLog {
         tags
     }
 
+    /// The `planning_ns` of row `id` (MODES-2), for the profile of its query; `None` when the row is gone or
+    /// was never planned.
+    pub(crate) fn row_planning_ns(&self, id: &str) -> Option<u64> {
+        let mut ns = None;
+        self.history.update(&self.session_id, id, |row| {
+            ns = row.planning_ns.and_then(|p| u64::try_from(p).ok());
+        });
+        ns
+    }
+
     /// Sets the trace id of row `id` (a statement with a trace of its own).
     pub(crate) fn set_row_trace(&self, id: &str, trace_id: Option<String>) {
         self.history.update(&self.session_id, id, |row| {

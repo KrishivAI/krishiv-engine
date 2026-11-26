@@ -11,10 +11,14 @@
 //! A member that decides whole tables only is then asked as it would be alone: a column read is
 //! asked as `Select` on the column's relation, as every kind (table, view) the list has seen that
 //! name asked as. Kinds only accumulate, so a later hint never turns a view's question into a
-//! table's; a column whose relation was never asked about (or was forgotten) is refused.
+//! table's; a column whose relation was never asked about (or was forgotten) is refused. Such a
+//! member is asked each relation question once per analysis stage (review m3): an allowed answer
+//! serves the stage's other columns of that relation, for the same principal and member version,
+//! until the next [`AccessPolicy::prefetch`] (a new stage), or for 2 s at most.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use futures::future::BoxFuture;
 use krishiv_common::error::KrishivError;
@@ -37,6 +41,13 @@ const AS_VIEW: u8 = 2;
 /// The most refusals waiting for [`AccessPolicy::denied`]; the oldest goes first.
 const REFUSALS: usize = 64;
 
+/// How long an allowed relation answer serves a stage's other columns (review m3): the
+/// `external` provider's prefetched answers live as long.
+const STAGE_ANSWER_LIFETIME: Duration = Duration::from_secs(2);
+
+/// The most relation answers one stage keeps; past it, the oldest is asked again.
+const STAGE_ANSWERS: usize = 1024;
+
 /// Several providers, all of which must allow (ADR 0049 §1).
 pub struct IntersectionPolicy {
     members: Vec<Arc<dyn AccessPolicy>>,
@@ -53,7 +64,13 @@ struct State {
     refused_by: Vec<(Securable, Privilege, usize)>,
     /// The [`AccessPolicy::refusal_label`] of the member behind the latest refusal.
     last_label: Option<&'static str>,
+    /// The relation questions a table-level member allowed in this stage (review m3), keyed by
+    /// member, principal, question (debug form: `Securable` is not `Hash`) and privilege, with
+    /// the member's version and when it answered. Cleared by every prefetch.
+    stage_answers: HashMap<StageKey, (PolicyVersion, Instant)>,
 }
+
+type StageKey = (usize, Principal, String, Privilege);
 
 impl std::fmt::Debug for IntersectionPolicy {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -127,6 +144,7 @@ impl IntersectionPolicy {
     /// What `member` says about `securable`: every question it is asked must be allowed.
     async fn ask(
         &self,
+        index: usize,
         member: &dyn AccessPolicy,
         principal: &Principal,
         securable: &Securable,
@@ -137,10 +155,28 @@ impl IntersectionPolicy {
                 reason: "the column's relation was not checked before its columns".to_owned(),
             });
         };
+        // A column asked as its relation: the stage's earlier allowed answer serves it.
+        let translated = matches!(securable, Securable::Column { .. }) && !member.column_level();
         let mut with = None;
         for asked in &questions {
+            let key =
+                translated.then(|| (index, principal.clone(), format!("{asked:?}"), privilege));
+            if let Some(key) = &key
+                && self.answered(key, member.version())
+            {
+                continue;
+            }
+            // The version the answer was decided under: read before and after the check, and kept
+            // only when both agree (a policy changed during the check is asked again next time).
+            let before = member.version();
             match member.check(principal, asked, privilege).await? {
-                AccessDecision::Allow => {}
+                AccessDecision::Allow => {
+                    if let Some(key) = key
+                        && member.version() == before
+                    {
+                        self.note_answer(key, before);
+                    }
+                }
                 AccessDecision::AllowWith(policy) => {
                     with.get_or_insert(policy);
                 }
@@ -154,6 +190,28 @@ impl IntersectionPolicy {
             }
         }
         Ok(with.map_or(AccessDecision::Allow, AccessDecision::AllowWith))
+    }
+
+    /// Whether `key` was allowed in this stage, at `version`, within [`STAGE_ANSWER_LIFETIME`].
+    fn answered(&self, key: &StageKey, version: PolicyVersion) -> bool {
+        self.state()
+            .stage_answers
+            .get(key)
+            .is_some_and(|(v, at)| *v == version && at.elapsed() < STAGE_ANSWER_LIFETIME)
+    }
+
+    fn note_answer(&self, key: StageKey, version: PolicyVersion) {
+        let mut state = self.state();
+        if state.stage_answers.len() >= STAGE_ANSWERS
+            && let Some(oldest) = state
+                .stage_answers
+                .iter()
+                .min_by_key(|(_, (_, at))| *at)
+                .map(|(k, _)| k.clone())
+        {
+            state.stage_answers.remove(&oldest);
+        }
+        state.stage_answers.insert(key, (version, Instant::now()));
     }
 
     fn note_kind(&self, securable: &Securable) {
@@ -241,7 +299,10 @@ impl AccessPolicy for IntersectionPolicy {
                     continue;
                 }
                 decided = true;
-                match self.ask(&**member, principal, securable, privilege).await {
+                match self
+                    .ask(i, &**member, principal, securable, privilege)
+                    .await
+                {
                     Ok(AccessDecision::Allow) => {}
                     Ok(AccessDecision::AllowWith(policy)) => {
                         with.get_or_insert(policy);
@@ -291,6 +352,8 @@ impl AccessPolicy for IntersectionPolicy {
         items: &'a [(Securable, Privilege)],
     ) -> BoxFuture<'a, ()> {
         Box::pin(async move {
+            // A new stage: the previous stage's relation answers serve none of its columns.
+            self.state().stage_answers.clear();
             for item in items {
                 self.note_kind(&item.0);
             }

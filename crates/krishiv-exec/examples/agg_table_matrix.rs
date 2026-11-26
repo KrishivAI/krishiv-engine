@@ -1377,6 +1377,7 @@ fn run_op(x: &Ctx<'_>) -> Timing {
                 io_threads: 1,
                 blocking_threads: x.threads,
                 io_blocking_threads: 2,
+                release_when_idle: true,
             })
             .expect("executor"),
         )

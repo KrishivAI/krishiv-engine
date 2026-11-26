@@ -1075,3 +1075,73 @@ fn a_same_scale_widening_cast_shares_the_values() {
             .ptr_eq(a.as_primitive::<Decimal128Type>().values().inner())
     );
 }
+
+/// A widening integral cast (TINYINT, SMALLINT, INT to a wider integral
+/// type) keeps every value and NULL in every mode, and agrees with the same
+/// cast taken through text (the per-row string path).
+fn check_widening(a: &dyn Array) {
+    let wider: &[DataType] = match a.data_type() {
+        DataType::Int8 => &[DataType::Int16, DataType::Int32, DataType::Int64],
+        DataType::Int16 => &[DataType::Int32, DataType::Int64],
+        _ => &[DataType::Int64],
+    };
+    let text = run(a, &DataType::Utf8, Ansi).unwrap();
+    for to in wider {
+        let via_text = run(&text, to, Ansi).unwrap();
+        for mode in [Ansi, Legacy, Try] {
+            let out = run(a, to, mode).unwrap();
+            assert_eq!(out.data_type(), to);
+            assert_eq!(out.as_ref(), via_text.as_ref(), "{to:?} {mode:?}");
+        }
+    }
+}
+
+#[test]
+fn widening_integral_casts_keep_the_extremes() {
+    let a = Int16Array::from(vec![
+        Some(i16::MIN),
+        None,
+        Some(-1),
+        Some(0),
+        Some(i16::MAX),
+    ]);
+    let out = run(&a, &DataType::Int32, Ansi).unwrap();
+    assert_eq!(
+        out.as_ref(),
+        &Int32Array::from(vec![Some(-32_768), None, Some(-1), Some(0), Some(32_767)]) as &dyn Array
+    );
+    let a = Int32Array::from(vec![Some(i32::MIN), Some(i32::MAX), None]);
+    let out = run(&a, &DataType::Int64, Legacy).unwrap();
+    assert_eq!(
+        out.as_ref(),
+        &Int64Array::from(vec![Some(-2_147_483_648), Some(2_147_483_647), None]) as &dyn Array
+    );
+    let a = Int8Array::from(vec![i8::MIN, i8::MAX]);
+    let out = run(&a, &DataType::Int16, Try).unwrap();
+    assert_eq!(
+        out.as_ref(),
+        &Int16Array::from(vec![-128, 127]) as &dyn Array
+    );
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig { cases: if cfg!(miri) { 2 } else { 256 }, failure_persistence: None, ..ProptestConfig::default() })]
+
+    #[test]
+    fn widening_integral_casts_match_the_text_path(
+        b in prop::collection::vec(any::<Option<i8>>(), 0..80),
+        h in prop::collection::vec(any::<Option<i16>>(), 0..80),
+        i in prop::collection::vec(any::<Option<i32>>(), 0..80),
+        skip in 0_usize..8,
+    ) {
+        let b = Int8Array::from(b);
+        let h = Int16Array::from(h);
+        let i = Int32Array::from(i);
+        for a in [&b as &dyn Array, &h, &i] {
+            check_widening(a);
+            // A sliced input: the offset is applied to values and NULLs.
+            let off = skip.min(a.len());
+            check_widening(a.slice(off, a.len() - off).as_ref());
+        }
+    }
+}

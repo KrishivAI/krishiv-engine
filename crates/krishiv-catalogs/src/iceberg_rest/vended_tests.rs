@@ -7,7 +7,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use krishiv_common::secret::SecretString;
 use krishiv_store::parse_object_url;
 
-use super::{VendedFault, VendedPrefix, answer_expires_at, covering, credential, keep_credentials};
+use super::{
+    VendedFault, VendedPrefix, answer_expires_at, covering, credential, keep_credentials, narrowed,
+};
 use crate::iceberg_rest::types::StorageCredential;
 
 const TTL: Duration = Duration::from_secs(900);
@@ -260,4 +262,70 @@ fn answer_expiry_counts_a_credential_without_an_expiry_key() {
         ("adls.sas-token.b.dfs.core.windows.net", "sas"),
     ]);
     assert_eq!(answer_expires_at([&azure], fetched, TTL), fetched + TTL);
+}
+
+#[test]
+fn a_narrower_prefix_serves_a_wider_scope_only_with_one_credential() {
+    let entry = |prefix: &str, key: &str| StorageCredential {
+        prefix: prefix.to_owned(),
+        config: map(&[("s3.access-key-id", key)]),
+    };
+    let config = map(&[("s3.access-key-id", "config")]);
+    let scope = parse_object_url("s3://b/wh").unwrap();
+    let key = |creds: &[StorageCredential], location: &str| {
+        narrowed(creds, &config, location, &scope)
+            .unwrap()
+            .map(|c| c["s3.access-key-id"].expose_secret().to_owned())
+    };
+    // One prefix inside the scope, or several naming the same keys: that credential.
+    assert_eq!(
+        key(&[entry("s3://b/wh/t", "t")], "s3://b/wh/t").as_deref(),
+        Some("t")
+    );
+    assert_eq!(
+        key(
+            &[
+                entry("s3://b/wh/t/data", "t"),
+                entry("s3://b/wh/t/metadata", "t")
+            ],
+            "s3://b/wh/t"
+        )
+        .as_deref(),
+        Some("t")
+    );
+    // Two that differ: none.
+    assert_eq!(
+        key(
+            &[
+                entry("s3://b/wh/t/data", "d"),
+                entry("s3://b/wh/t/metadata", "m")
+            ],
+            "s3://b/wh/t"
+        ),
+        None
+    );
+    // Outside the scope, another bucket, a segment that only shares a stem, the scope itself, a wider one: none.
+    assert_eq!(key(&[entry("s3://b/other/t", "o")], "s3://b/wh/t"), None);
+    assert_eq!(key(&[entry("s3://c/wh/t", "c")], "s3://b/wh/t"), None);
+    assert_eq!(key(&[entry("s3://b/wh2/t", "w")], "s3://b/wh/t"), None);
+    assert_eq!(key(&[entry("s3://b/wh", "same")], "s3://b/wh/t"), None);
+    assert_eq!(
+        key(
+            &[entry("s3://b", "bucket"), entry("s3", "scheme")],
+            "s3://b/wh/t"
+        ),
+        None
+    );
+    // A prefix outside the scope next to one inside does not count against it.
+    assert_eq!(
+        key(
+            &[entry("s3://b/other", "o"), entry("s3://b/wh/t", "t")],
+            "s3://b/wh/t"
+        )
+        .as_deref(),
+        Some("t")
+    );
+    // No storage-credentials: `config` when the table's own location is inside the scope.
+    assert_eq!(key(&[], "s3://b/wh/t").as_deref(), Some("config"));
+    assert_eq!(key(&[], "s3://b/other/t"), None);
 }

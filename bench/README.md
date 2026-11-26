@@ -63,10 +63,14 @@ published on Docker Hub (verified 2026-10-16 via `docker manifest inspect`); the
 Interface (`base.Engine`): `setup(dataset)` registers Parquet tables as views (no pre-loading, for parity), `run(query)`
 returns all rows, `teardown()`; optional `begin_measure()/end_measure()` bracket each timed run for peak RSS / CPU / spill.
 - `duckdb` (in-process, `memory_limit` 12GB to match Spark's container cap): peak RSS = `/proc/self` VmHWM reset with `clear_refs` before each run
-  (whole harness process; its pre-run RSS is recorded as `baseline_rss_bytes`); spill = null.
+  (whole harness process; its pre-run RSS is recorded as `baseline_rss_bytes`, as every adapter does); spill = null.
 - `spark-connect`: same VmHWM/`clear_refs` method on the server JVM (`pgrep -x java` + `docker exec`, failures raise); CPU-s from `/proc/<pid>/stat`;
   spill = null (Spark spill is available via the REST API :14040 but not collected yet). Host data path is rewritten to `/data`.
-- `krishiv-connect`: starts `krishiv server --port 0 --connect-port 0` on loopback (binary: `--runner`, `$KRISHIV_BENCH_SERVER`, else `<target>/dist/krishiv`), reads the bound `sc://` address from its stdout and drives it with the pinned pyspark client like `spark-connect` (Arrow results, no path rewrite). Peak RSS, CPU-s and I/O are those of the server process tree, so against `krishiv` it shows the Connect round-trip cost (P3-PR-53a). Needs a `krishiv` build with the `server` feature.
+- `krishiv-connect`: starts `krishiv server --port 0 --connect-port 0` on loopback (binary: `--runner`, `$KRISHIV_BENCH_SERVER`, else `<target>/dist/krishiv`), reads the bound `sc://` address from its stdout and drives it with the pinned pyspark client like `spark-connect` (Arrow results, no path rewrite). Peak RSS, CPU-s and I/O are those of the server process tree, so against `krishiv` it shows the Connect round-trip cost (P3-PR-53a). Needs a `krishiv` build with the `server` feature. The server starts from the runner's settings (`krishiv.memory.limit=12g`, session time zone UTC) unless `--krishiv-conf` sets them.
+- `krishiv-flightsql`: the same server, driven over Arrow Flight SQL with `adbc-driver-flightsql` (not a bench dependency: install `adbc-driver-flightsql==1.13.0` in the environment that runs it; the server needs the `flight-sql` feature, `cargo build --profile dist -p krishiv-cli --features flight-sql`). One connection (one server session, the driver's cookie middleware on), each run timed around `execute` + `fetch_arrow_table`. A timeout cancels the statements in flight with `adbc_cancel` and keeps the session; if that fails, the next statement opens a new connection, and the old one is closed when its last statement returns.
+- The three session modes (`krishiv-python`, `krishiv-connect`, `krishiv-flightsql`) register each table as `CREATE TABLE IF NOT EXISTS t USING parquet LOCATION '...'`, so they plan the same scans (the server reads no temporary view over Spark Connect on main: see `adapters/session_modes.py`).
+- `krishiv-python`: the `krishiv` wheel in the harness's own process (install the wheel under test in the environment that runs it): `sql(..).toArrow()`, the runner's settings by default. Peak RSS, CPU-s and I/O are the harness process's (the peak includes the harness itself).
+- Mode comparison (embedded vs server): `run --timed-run` times every run with the engine's Arrow `timed_run` (for `krishiv` the runner's own seconds), then one untimed `run` gives the rows the answer checks read; a failure of that run keeps the timings and marks the answer check `error`. The result also records `setup_s` (the runner or server start and the table registration; `krishiv-python` imports the wheel before it) and each query's `warmup_times_s` (the first run of a fresh session when `--warmup 1`). `--krishiv-conf KEY=VALUE` (repeatable) reaches all four Krishiv modes. The session modes use every core the process may run on (no config key sets their compute threads), so `--duckdb-threads` other than that count is refused for them; use `taskset`. Without `--duckdb-threads`, `krishiv` (the runner) gets the same count, the cores this process may run on, not `os.cpu_count()`, so all four modes run alike under `taskset`. With `$KRISHIV_BENCH_QUERY_LOG` set to a directory, the session modes write the new rows of `system.queries` there after every query (`<engine>-<start ms>-<seq>.parquet`), and before each run an untimed marker statement `SELECT '<query> <warmup|run> <i> attempt <n>' AS krishiv_bench_mark` names the statement that follows, so the engine's `wall_ns` pairs with the harness's seconds per run. `run --suite clickbench` reads `$KRISHIV_DATA/clickbench` (no scale factor directory).
   Spark runs with Spark 4 defaults (ANSI mode on) and `spark.sql.shuffle.partitions=24`. The JVM retains its heap, so Spark peaks are cumulative/order-dependent.
   Probes run outside the timed region (a few ms; no sampler thread).
 - `krishiv`: drives `krishiv-bench-runner` (`dist`-profile build of `krishiv-session` like the shipped artifacts and DuckDB's optimized build, bench-only crate, not the public CLI) over a stdin/stdout
@@ -615,9 +619,12 @@ timed run; `ab` and the `theirs` method of `reproduce` do not.
 **Memory guard (`krishiv-bench run`).** Before every run, warm-up included, the harness waits until `MemAvailable` in
 `/proc/meminfo` is at least `--min-mem-avail` of `MemTotal` (default 0.75; 0 turns it off; it gives up after 10
 minutes and fails the query). A sampler tracks the lowest `MemAvailable` during the run; if it dips below the
-threshold (a host balloon took the memory) the run is discarded, recorded under the query's `invalid_samples` with
-`"reason": "memory reclaimed"`, and retried up to `--mem-retries` times (default 2). If every attempt dips, the
-query fails. `report` lists the invalid runs in an "Invalid samples" section. The h2o suites, `ab`, `abba` and
+threshold by more than the engine's own resident-set growth during the run (peak minus baseline RSS, or the whole
+peak when the adapter has no baseline), a host balloon took the memory: the run is discarded, recorded under the
+query's `invalid_samples` with `"reason": "memory reclaimed"` and its `engine_growth_bytes`, and retried up to
+`--mem-retries` times (default 2). If every attempt dips, the query fails. Every adapter records a baseline: the
+process tree's summed RSS at the start of the run for Krishiv, Polars, DataFusion and Spark local mode, the process
+RSS for DuckDB, ClickHouse and Spark Connect, so memory an engine already held before the run is not credited. `report` lists the invalid runs in an "Invalid samples" section. The h2o suites, `ab`, `abba` and
 `reproduce` do not use the guard yet.
 
 `krishiv-bench report --suite tpch --ladder [result.json ...]` takes results at two or more scale factors (newest per
@@ -682,7 +689,7 @@ The report never prints "all agree" if any check was skipped: skipped checks are
   standard query set with the default substitution parameters; expected row counts come from DuckDB's `tpch_answers()`. DuckDB is MIT-licensed;
   the benchmark specifications and query templates are (c) Transaction Processing Performance Council, whose end-user licence permits their use for
   benchmarking. Results from this harness are *TPC-derived* and not audited TPC results; they must not be published as official TPC-H/TPC-DS numbers.
-  The harness pins `duckdb==2.0.0` (`pyproject.toml`). TPC-H `dbgen` text columns differ between DuckDB versions, and `tpch_answers()`
+  The harness pins `duckdb==2.0.1` (`pyproject.toml`). TPC-H `dbgen` text columns differ between DuckDB versions, and `tpch_answers()`
   matches the `dbgen` of the same version, so `tpch-dbgen` reference datasets are versioned by generator (see below); answer checks
   run only when the dataset's generator version matches the running DuckDB.
 * **Nested TPC-H** (`queries/tpch-nested/`): the 22 queries are Apache DataFusion Comet's `benchmarks/nested/queries/q01..q22.sql`
@@ -704,12 +711,14 @@ The report never prints "all agree" if any check was skipped: skipped checks are
   and q29's `REGEXP_REPLACE` is written per dialect (`REGEX_Q29`) so every engine except ClickHouse (which runs its own upstream text, see below) computes Spark's answer: Spark-dialect engines (Krishiv, Spark, Sail) get
   `'$1'` and `'\\.'` (Spark reads `'\1'` as the string `1`), RE2 engines a pattern with Java's line-terminator semantics for `.` and `$` spelled out.
 
-The harness pins `duckdb==2.0.0` (`pyproject.toml`). TPC-H `dbgen` output differs between DuckDB versions (text columns in every
+The harness pins `duckdb==2.0.1` (`pyproject.toml`). TPC-H `dbgen` output differs between DuckDB versions (text columns in every
 table), and `tpch_answers()` matches only the `dbgen` output of the same version. Datasets are versioned by generator:
 
 - `tpch-dbgen/sf1` (and `sf10`): unversioned, generated by DuckDB 1.5.6. Answer checks apply only under 1.5.6.
 - `tpch-dbgen/sf1-dbgen-2.0.0`: generated by DuckDB 2.0.0 `dbgen` (`uv run krishiv-datasets tpch-dbgen`). All 22 answer checks
-  pass with the pinned version. Select it with `--dataset tpch-dbgen@2.0.0`.
+  passed under DuckDB 2.0.0. Under the 2.0.1 pin its answers are not checked (the run prints "answers not checked"):
+  generate `tpch-dbgen@2.0.1` with `uv run krishiv-datasets tpch-dbgen` for answer-checked TPC-H runs. Select a
+  dataset with `--dataset tpch-dbgen@<version>`.
 
 A dataset is never regenerated in place. A new generator version gets a new versioned directory, and the existing one stays.
 Results and Spark goldens stay tied to the dataset they were produced from (recorded in each result JSON and its manifest under
