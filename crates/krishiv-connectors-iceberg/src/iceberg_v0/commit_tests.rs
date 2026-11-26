@@ -176,7 +176,7 @@ impl State {
             self.version
         );
         std::fs::write(
-            path.strip_prefix("file://").unwrap(),
+            super::sink_tests::local_path(&path),
             serde_json::to_vec(&next).unwrap(),
         )
         .unwrap();
@@ -731,7 +731,7 @@ impl Case {
 }
 
 pub(super) fn exists(url: &str) -> bool {
-    std::path::Path::new(url.strip_prefix("file://").unwrap()).exists()
+    super::sink_tests::local_path(url).exists()
 }
 
 pub(super) const INIT: &str = "1|1|init.parquet";

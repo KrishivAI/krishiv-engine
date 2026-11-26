@@ -13,7 +13,7 @@
 )]
 
 use std::collections::BTreeSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Instant;
 
@@ -150,7 +150,13 @@ pub fn parse_packages(json: &str, root: &Path) -> Result<Vec<Pkg>, String> {
         .get("packages")
         .and_then(serde_json::Value::as_array)
         .ok_or("cargo metadata has no packages")?;
-    let root = root.to_string_lossy().replace('\\', "/");
+    // cargo's own `workspace_root` is spelled as its manifest paths are: on Windows a given root
+    // may be an 8.3 short name (`RUNNER~1`) that cargo reports by its long name.
+    let root = v
+        .get("workspace_root")
+        .and_then(serde_json::Value::as_str)
+        .map_or_else(|| root.to_string_lossy().into_owned(), str::to_owned)
+        .replace('\\', "/");
     let mut out = Vec::new();
     for p in pkgs {
         let name = p.get("name").and_then(serde_json::Value::as_str);
@@ -1120,12 +1126,16 @@ pub fn cap_prefix(cap: &str) -> Vec<String> {
 /// Whether `bin` is an executable file on `PATH`.
 #[must_use]
 pub fn on_path(bin: &str) -> bool {
-    std::env::var_os("PATH").is_some_and(|p| {
-        std::env::split_paths(&p).any(|d| {
-            let f = d.join(bin);
-            f.is_file()
-        })
-    })
+    std::env::var_os("PATH")
+        .is_some_and(|p| on_path_in(bin, &std::env::split_paths(&p).collect::<Vec<_>>()))
+}
+
+/// Whether `bin` is a file in one of `dirs`; on Windows `bin.exe` counts too (an installed tool is
+/// `cargo-nextest.exe`, never the bare name).
+#[must_use]
+pub fn on_path_in(bin: &str, dirs: &[PathBuf]) -> bool {
+    dirs.iter()
+        .any(|d| d.join(bin).is_file() || (cfg!(windows) && d.join(format!("{bin}.exe")).is_file()))
 }
 
 fn git_lines(root: &Path, args: &[&str]) -> Result<Vec<String>, String> {

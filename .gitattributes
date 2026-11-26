@@ -1,0 +1,3 @@
+# Every file is checked out byte for byte as committed, on every platform: goldens, fixtures and
+# scripts are compared and hashed as bytes (a Windows checkout would otherwise turn LF into CRLF).
+* -text

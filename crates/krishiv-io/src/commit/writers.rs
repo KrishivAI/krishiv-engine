@@ -59,6 +59,17 @@ pub(super) fn is_dead(record: &[u8]) -> bool {
     if pid == std::process::id() {
         return false;
     }
+    judged_dead_pid(pid, started)
+}
+
+/// Windows has no `kill(pid, 0)` or `/proc`: a record is never judged dead, the grace applies.
+#[cfg(not(unix))]
+fn judged_dead_pid(_pid: u32, _started: &str) -> bool {
+    false
+}
+
+#[cfg(unix)]
+fn judged_dead_pid(pid: u32, started: &str) -> bool {
     let exists = rustix::process::Pid::from_raw(i32::try_from(pid).unwrap_or(0))
         .map(rustix::process::test_kill_process);
     let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok();
@@ -69,6 +80,7 @@ pub(super) fn is_dead(record: &[u8]) -> bool {
 /// `/proc` shows (`hidepid=2` hides another user's live process): `ESRCH` is death, any other
 /// answer (`EPERM` included) is a live process. Only a live process whose start time can be read
 /// and differs from the record's is a recycled PID. An unreadable stat counts as alive.
+#[cfg(unix)]
 fn judged_dead(exists: Option<rustix::io::Result<()>>, stat: Option<&str>, started: &str) -> bool {
     match exists {
         None => false,
@@ -94,7 +106,7 @@ fn start_of(stat: &str) -> Option<&str> {
     stat.rsplit_once(')')?.1.split_whitespace().nth(19)
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 

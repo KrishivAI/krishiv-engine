@@ -56,8 +56,9 @@
 //! reference really reads the buffer is decided by the physical planner, as for every shared definition (copies
 //! are kept when a runtime filter reaches one of them).
 
-use crate::expr::{AddrMap, AddrSet};
+use crate::expr::{AddrHasher, AddrMap, AddrSet};
 use std::collections::HashSet;
+use std::hash::BuildHasherDefault;
 use std::sync::Arc;
 
 use krishiv_common::error::KrishivError;
@@ -225,10 +226,14 @@ fn filters_only(readers: &[Parent]) -> Option<Vec<Arc<LogicalPlan>>> {
 fn parents(root: &Arc<LogicalPlan>) -> (Vec<Arc<LogicalPlan>>, AddrMap<LogicalPlan, Vec<Parent>>) {
     let mut order = Vec::new();
     let mut parents: AddrMap<LogicalPlan, Vec<Parent>> = Default::default();
-    let mut edges: HashSet<(*const LogicalPlan, *const LogicalPlan)> = HashSet::new();
+    let mut edges: HashSet<
+        (*const LogicalPlan, *const LogicalPlan),
+        BuildHasherDefault<AddrHasher>,
+    > = HashSet::default();
     // Visited per (relation, under a barrier): a relation met outside first is walked again
     // when it is also reached inside one, so its whole subtree is marked.
-    let mut seen: HashSet<(*const LogicalPlan, bool)> = HashSet::new();
+    let mut seen: HashSet<(*const LogicalPlan, bool), BuildHasherDefault<AddrHasher>> =
+        HashSet::default();
     let mut listed: AddrSet<LogicalPlan> = Default::default();
     let mut stack = vec![(Arc::clone(root), false)];
     while let Some((p, inside)) = stack.pop() {

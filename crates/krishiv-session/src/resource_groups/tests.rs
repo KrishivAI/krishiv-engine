@@ -787,6 +787,7 @@ fn a_replace_with_a_stale_etag_or_an_edited_file_changes_nothing() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn a_replace_refuses_a_link_a_read_only_file_and_an_invalid_document() {
     let (dir, path) = group_file(&two_leaves(1));
@@ -838,6 +839,7 @@ fn queries_queued_on_a_group_that_gains_subgroups_still_start() {
     assert_eq!(rg.counts("root.a"), Some((1, 0)));
 }
 
+#[cfg(unix)]
 #[test]
 fn a_replace_in_a_directory_that_cannot_be_written_is_read_only() {
     use std::os::unix::fs::PermissionsExt as _;

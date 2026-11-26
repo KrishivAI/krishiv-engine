@@ -5,7 +5,7 @@ expression: tpch.plan(q).to_string()
 Sort [s_name#1 ASC NULLS FIRST]
 +- Exchange rangepartitioning(s_name#1 ASC NULLS FIRST)
    +- Project [s_name#1, s_address#2]
-      +- HashJoin LeftSemi, [s_suppkey#0] = [ps_suppkey#12], RuntimeFilter #8: s_suppkey#0 -> spark_catalog.default.supplier.s_suppkey
+      +- HashJoin LeftSemi, [s_suppkey#0] = [ps_suppkey#12], RuntimeFilter #9: s_suppkey#0 -> spark_catalog.default.supplier.s_suppkey
          :- Project [s_suppkey#0, s_name#1, s_address#2]
          :  +- HashJoin Inner, [s_nationkey#3] = [n_nationkey#7], RuntimeFilter #1: s_nationkey#3 -> spark_catalog.default.supplier.s_nationkey, probe filter: (isnotnull(s_nationkey#3) and isnotnull(s_suppkey#0))
          :     :- Scan spark_catalog.default.supplier [s_suppkey#0, s_name#1, s_address#2, s_nationkey#3], PushedFilters: [(isnotnull(s_nationkey#3) and isnotnull(s_suppkey#0))]
@@ -15,7 +15,7 @@ Sort [s_name#1 ASC NULLS FIRST]
          :              +- Scan spark_catalog.default.nation [n_nationkey#7, n_name#8], PushedFilters: [((n_name#8 == 'CANADA') and isnotnull(n_nationkey#7))]
          +- BroadcastExchange
             +- Project [ps_suppkey#12]
-               +- HashJoin Inner, [ps_partkey#11, ps_suppkey#12] = [l_partkey#26, l_suppkey#27], residual: (CAST(ps_availqty#13 AS DECIMAL(27,3)) > (0.5 * sum(l_quantity))#41), RuntimeFilter #6: ps_partkey#11 -> spark_catalog.default.partsupp.ps_partkey, RuntimeFilter #7: ps_suppkey#12 -> spark_catalog.default.partsupp.ps_suppkey
+               +- HashJoin Inner, [ps_partkey#11, ps_suppkey#12] = [l_partkey#26, l_suppkey#27], residual: (CAST(ps_availqty#13 AS DECIMAL(27,3)) > (0.5 * sum(l_quantity))#41), RuntimeFilter #6: ps_partkey#11 -> spark_catalog.default.partsupp.ps_partkey, RuntimeFilter #7: ps_suppkey#12 -> spark_catalog.default.partsupp.ps_suppkey, RuntimeFilter #8: CAST(ps_availqty#13 AS DECIMAL(27,3)) >= min((0.5 * sum(l_quantity))) -> spark_catalog.default.partsupp.ps_availqty
                   :- HashJoin LeftSemi, [ps_partkey#11] = [p_partkey#16], RuntimeFilter #2: ps_partkey#11 -> spark_catalog.default.partsupp.ps_partkey, probe filter: (isnotnull(ps_partkey#11) and isnotnull(ps_suppkey#12))
                   :  :- Scan spark_catalog.default.partsupp [ps_partkey#11, ps_suppkey#12, ps_availqty#13], PushedFilters: [(isnotnull(ps_partkey#11) and isnotnull(ps_suppkey#12))]
                   :  +- BroadcastExchange

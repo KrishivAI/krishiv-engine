@@ -73,6 +73,10 @@ impl TestDir {
 }
 
 impl SpillConfig {
+    #[cfg_attr(
+        not(unix),
+        expect(dead_code, reason = "its test plants a symbolic link (Unix only)")
+    )]
     fn with_dir(self, dir: &Path) -> Self {
         Self {
             dir: dir.to_owned(),
@@ -1411,7 +1415,10 @@ fn config_keys_drive_the_spill_config() {
     // `.../krishiv/spill` under the user cache dir, or `krishiv-spill-<uid>`.
     let d = defaults.dir.to_string_lossy().into_owned();
     assert!(
-        d.contains("krishiv/spill") || d.contains("krishiv-spill-"),
+        defaults
+            .dir
+            .ends_with(std::path::Path::new("krishiv").join("spill"))
+            || d.contains("krishiv-spill-"),
         "{d}"
     );
 

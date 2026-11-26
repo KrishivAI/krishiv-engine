@@ -2,6 +2,8 @@
 //! Read options on a table reference (`FROM t WITH ('k' = 'v')`) apply to that reference alone
 //! (Spark 4.3 fixed two references to one table with different options sharing the first's).
 #![cfg(test)]
+mod literal_path;
+use literal_path::sql_path;
 
 use arrow_array::Array;
 use arrow_array::cast::AsArray;
@@ -28,7 +30,7 @@ fn csv_table() -> (tempfile::TempDir, Session) {
     let s = Session::new().unwrap();
     block_on(s.sql(&format!(
         "CREATE TABLE c (a STRING, b STRING) USING csv LOCATION '{}'",
-        dir.path().display()
+        sql_path(dir.path())
     )))
     .unwrap();
     (dir, s)
@@ -68,7 +70,7 @@ fn an_empty_table_still_reads_with_reference_options() {
     let s = Session::new().unwrap();
     block_on(s.sql(&format!(
         "CREATE TABLE e (a STRING, b STRING) USING csv LOCATION '{}'",
-        dir.path().display()
+        sql_path(dir.path())
     )))
     .unwrap();
     // The table's columns are declared: no file is needed to know them.
@@ -87,7 +89,7 @@ fn a_reference_option_that_contradicts_the_tables_is_refused() {
     let s = Session::new().unwrap();
     block_on(s.sql(&format!(
         "CREATE TABLE h (a STRING, b STRING) USING csv OPTIONS ('header' = 'false') LOCATION '{}'",
-        dir.path().display()
+        sql_path(dir.path())
     )))
     .unwrap();
     assert_eq!(column(&s, "SELECT a FROM h ORDER BY a"), ["1", "a"]);
@@ -144,7 +146,7 @@ fn a_sql_temporary_views_reference_options_are_ignored() {
     block_on(s.sql(&format!(
         "CREATE TEMPORARY VIEW w (a STRING, b STRING) USING csv \
          OPTIONS (path '{}', header 'false')",
-        dir.path().display()
+        sql_path(dir.path())
     )))
     .unwrap();
     let plain = column(&s, "SELECT a FROM w ORDER BY 1");
@@ -166,7 +168,7 @@ fn tables_over_the_same_files_keep_their_own_columns() {
     for (name, cols) in [("t1", "a STRING, b STRING"), ("t2", "x STRING, y STRING")] {
         block_on(s.sql(&format!(
             "CREATE TABLE {name} ({cols}) USING csv LOCATION '{}'",
-            dir.path().display()
+            sql_path(dir.path())
         )))
         .unwrap();
     }

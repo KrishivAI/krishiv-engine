@@ -8,6 +8,8 @@
 //! decided to differ on; they must still differ too.
 #![expect(clippy::unwrap_used, reason = "test code")]
 
+mod file_url;
+use file_url::file_url;
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -1178,13 +1180,12 @@ fn outcome(s: &Session, root: &Path, r: &Read) -> Value {
                 .map(|v| v.as_ref().map_or((0, String::new()), |v| (1, v.clone())))
                 .collect::<Vec<_>>()
         });
-        let root = root.to_str().unwrap();
         let rows: Vec<Value> = rows
             .into_iter()
             .map(|r| {
                 Value::from(
                     r.into_iter()
-                        .map(|v| v.map_or(Value::Null, |v| Value::from(v.replace(root, "<root>"))))
+                        .map(|v| v.map_or(Value::Null, |v| Value::from(rooted(&v, root))))
                         .collect::<Vec<_>>(),
                 )
             })
@@ -1198,14 +1199,7 @@ fn outcome(s: &Session, root: &Path, r: &Read) -> Value {
                 .message_parameters()
                 .iter()
                 // Spark prints discovered base paths lower-cased; its temporary root is lower case.
-                .map(|(k, v)| {
-                    let root = root.to_str().unwrap();
-                    (
-                        *k,
-                        v.replace(root, "<root>")
-                            .replace(&root.to_lowercase(), "<root>"),
-                    )
-                })
+                .map(|(k, v)| (*k, rooted(v, root)))
                 .collect();
             let chain: Vec<String> = std::iter::once(&e)
                 .chain(e.causes())
@@ -1330,4 +1324,18 @@ fn reads_with_a_user_schema_match_spark() {
         want.len(),
         failures.join("\n")
     );
+}
+
+/// `text` with the temporary root as `<root>`: as written, and in the `file:` URL form the engine
+/// prints (`/C:/x` on Windows), each also lower-cased (Spark prints discovered base paths lower-cased).
+fn rooted(text: &str, root: &std::path::Path) -> String {
+    let url = file_url(root);
+    let written = root.to_str().unwrap();
+    let mut out = text.to_owned();
+    for form in [url.strip_prefix("file:").unwrap_or(&url), written] {
+        out = out
+            .replace(form, "<root>")
+            .replace(&form.to_lowercase(), "<root>");
+    }
+    out
 }
