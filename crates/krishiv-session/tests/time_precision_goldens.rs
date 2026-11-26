@@ -45,12 +45,6 @@ const KNOWN_GAPS: &[(&str, &str, &str)] = &[
         "ts_ltz7_nanos_on",
         "[KRISHIV_UNSUPPORTED_FEATURE] The feature nanosecond-precision timestamp types (Krishiv 0.3.1) is not supported by Krishiv yet.",
     ),
-    // A bare TIMESTAMP does not follow `spark.sql.timestampType` yet.
-    (
-        "4.3.0",
-        "ts6_ntz_default",
-        "[KRISHIV_UNSUPPORTED_FEATURE] The feature TIMESTAMP(6) with spark.sql.timestampType=TIMESTAMP_NTZ is not supported by Krishiv yet.",
-    ),
     // Spark 4.2 adds `: missing ')'` to the syntax error for some shapes; the hint is not reproduced.
     (
         "4.2.0",
