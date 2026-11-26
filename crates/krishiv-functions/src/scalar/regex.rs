@@ -35,11 +35,16 @@
 //! that: it only follows the pattern (`(a+)+$` stays linear on a near miss
 //! ending in a line terminator; pinned in the tests).
 //!
+//! `regexp_replace` and `regexp_extract` place the groups of a pattern whose last group is
+//! followed by a capture-free tail (`^https?://([^/]+)/.*$`) without running the capture
+//! engine over that tail: see [`cut`]. The results are those of the full capture search.
+//!
 //! Positions (`regexp_replace`'s `position`, `regexp_instr`'s result) count
 //! UTF-16 units, as Java's `Matcher` does; the goldens only pin ASCII, so
 //! supplementary characters stay unverified against Spark 4.2.0.
 
 use std::cell::RefCell;
+use std::ops::Deref;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -57,6 +62,7 @@ use krishiv_common::error::{
 use super::args::{Inputs, Prim, Str, internal, is_string};
 use super::{BindArg, BindOptions, Binding, FamilyResult, bad_types, listed};
 
+mod cut;
 mod java;
 mod memo;
 
@@ -223,7 +229,7 @@ impl Compiled {
     /// The regex for an input ending (or not) in a line terminator.
     fn for_input(&self, text: &str) -> &Regex {
         match &self.terminated {
-            Some(t) if text.ends_with(['\n', '\r', '\u{85}', '\u{2028}', '\u{2029}']) => t,
+            Some(t) if ends_terminated(text) => t,
             _ => &self.plain,
         }
     }
@@ -257,6 +263,84 @@ impl Compiled {
                 group_index: idx.to_string(),
             }
             .into()),
+        }
+    }
+}
+
+/// Whether `text` ends in one of Java's line terminators.
+fn ends_terminated(text: &str) -> bool {
+    text.ends_with(['\n', '\r', '\u{85}', '\u{2028}', '\u{2029}'])
+}
+
+/// A compiled pattern as a thread keeps it: with the cut of its capture searches
+/// ([`cut::Cut`]) when the pattern has one.
+struct Kept {
+    compiled: Compiled,
+    /// For the `plain` variant only: the other one ends in a look-ahead.
+    cut: Option<cut::Cut>,
+}
+
+impl Deref for Kept {
+    type Target = Compiled;
+
+    fn deref(&self) -> &Compiled {
+        &self.compiled
+    }
+}
+
+impl Kept {
+    fn new(pattern: &str, function: &'static str) -> Result<Self, KrishivError> {
+        let compiled = Compiled::new(pattern, function)?;
+        // A cut that counts other groups than the engine is not the engine's pattern.
+        let groups = compiled.plain.captures_len().saturating_sub(1);
+        let cut = cut::delegated(&compiled.plain)
+            .and_then(|text| cut::Cut::new(&text))
+            .filter(|c| c.groups() == groups);
+        Ok(Self { compiled, cut })
+    }
+
+    /// The first match in `text[from..]` with its groups (Java `find` from `from`).
+    fn captures_at<'t>(
+        &self,
+        text: &'t str,
+        from: usize,
+    ) -> Result<Option<Groups<'_, 't>>, KrishivError> {
+        let terminated = self.compiled.terminated.is_some() && ends_terminated(text);
+        if let Some(cut) = self.cut.as_ref().filter(|c| !terminated && c.is_on()) {
+            let found = cut.search(text, from);
+            #[cfg(test)]
+            cut::tests::agrees(&self.compiled.plain, text, from, found.as_ref());
+            return Ok(found.map(|f| Groups::Cut(text, f)));
+        }
+        let found = self
+            .compiled
+            .for_input(text)
+            .captures_from_pos(text, from)
+            .map_err(|e| self.compiled.backtrack(e))?;
+        Ok(found.map(Groups::Engine))
+    }
+}
+
+/// The groups of one match, from the engine or from the cut.
+enum Groups<'k, 't> {
+    Engine(fancy_regex::Captures<'t, str>),
+    Cut(&'t str, cut::Found<'k>),
+}
+
+impl<'t> Groups<'_, 't> {
+    /// The byte span of the whole match.
+    fn whole(&self) -> Option<(usize, usize)> {
+        match self {
+            Self::Engine(caps) => caps.get(0).map(|m| (m.start(), m.end())),
+            Self::Cut(_, found) => found.span(0),
+        }
+    }
+
+    /// The text of group `group`, `None` when it took no part in the match.
+    fn get(&self, group: usize) -> Option<&'t str> {
+        match self {
+            Self::Engine(caps) => caps.get(group).map(|m| m.as_str()),
+            Self::Cut(text, found) => found.span(group).and_then(|(s, e)| text.get(s..e)),
         }
     }
 }
@@ -349,15 +433,16 @@ thread_local! {
     /// Per thread, so each regex's search caches stay with the one thread that uses it.
     ///
     /// The patterns stay on the thread after the query ends and are not charged to the memory
-    /// pool: at most [`THREAD_PATTERNS`] of them, each with its search caches. A column of
+    /// pool: at most [`THREAD_PATTERNS`] of them, each with its search caches and, for a
+    /// pattern with a cut, the three parts of [`cut::Cut`]. A column of
     /// patterns passes through here too and can push a constant pattern out, which then
     /// compiles again on its next batch.
-    static THREAD_COMPILED: RefCell<Vec<(&'static str, String, Rc<Compiled>)>> =
+    static THREAD_COMPILED: RefCell<Vec<(&'static str, String, Rc<Kept>)>> =
         const { RefCell::new(Vec::new()) };
 }
 
 /// `pattern` compiled for `function`, from this thread's cache when it is there.
-fn compiled_on_thread(pattern: &str, function: &'static str) -> Result<Rc<Compiled>, KrishivError> {
+fn compiled_on_thread(pattern: &str, function: &'static str) -> Result<Rc<Kept>, KrishivError> {
     let cached = THREAD_COMPILED.with_borrow_mut(|held| {
         let at = held
             .iter()
@@ -370,7 +455,7 @@ fn compiled_on_thread(pattern: &str, function: &'static str) -> Result<Rc<Compil
     if let Some(compiled) = cached {
         return Ok(compiled);
     }
-    let compiled = Rc::new(Compiled::new(pattern, function)?);
+    let compiled = Rc::new(Kept::new(pattern, function)?);
     THREAD_COMPILED.with_borrow_mut(|held| {
         held.truncate(THREAD_PATTERNS - 1);
         held.insert(0, (function, pattern.to_owned(), Rc::clone(&compiled)));
@@ -382,15 +467,11 @@ fn compiled_on_thread(pattern: &str, function: &'static str) -> Result<Rc<Compil
 /// compiles once per thread, a column pattern once per distinct value.
 #[derive(Default)]
 struct Cache {
-    pattern: Option<(String, Rc<Compiled>)>,
+    pattern: Option<(String, Rc<Kept>)>,
 }
 
 impl Cache {
-    fn compiled(
-        &mut self,
-        pattern: &str,
-        function: &'static str,
-    ) -> Result<&Compiled, KrishivError> {
+    fn compiled(&mut self, pattern: &str, function: &'static str) -> Result<&Kept, KrishivError> {
         if self.pattern.as_ref().is_none_or(|(p, _)| p != pattern) {
             self.pattern = Some((pattern.to_owned(), compiled_on_thread(pattern, function)?));
         }
@@ -522,18 +603,14 @@ fn extract(x: &Inputs<'_>, with_idx: bool) -> Result<ArrayRef, KrishivError> {
 }
 
 /// `regexp_extract` of one value: group `idx` of the first match, `""` without one.
-fn extract_one(compiled: &Compiled, source: &str, idx: i32) -> Result<String, KrishivError> {
-    let re = compiled.for_input(source);
-    let found = re
-        .captures_from_pos(source, 0)
-        .map_err(|e| compiled.backtrack(e))?;
+fn extract_one(compiled: &Kept, source: &str, idx: i32) -> Result<String, KrishivError> {
+    let found = compiled.captures_at(source, 0)?;
     // The index is validated only once the pattern matched (as in
     // Spark): a non-matching input never raises.
     Ok(match found.as_ref() {
-        Some(caps) => {
+        Some(groups) => {
             let group = compiled.group(idx)?;
-            caps.get(group)
-                .map_or_else(String::new, |m| m.as_str().to_owned())
+            groups.get(group).map_or_else(String::new, str::to_owned)
         }
         None => String::new(),
     })
@@ -1013,12 +1090,12 @@ fn byte_offset(text: &str, units: usize) -> Option<usize> {
 /// The memo of the compiled pattern and replacement of the last row.
 #[derive(Default)]
 struct ReplaceCache {
-    pattern: Option<(String, Rc<Compiled>)>,
+    pattern: Option<(String, Rc<Kept>)>,
     replacement: Option<(String, Vec<Part>)>,
 }
 
 impl ReplaceCache {
-    fn compiled(&mut self, pattern: &str) -> Result<&Compiled, KrishivError> {
+    fn compiled(&mut self, pattern: &str) -> Result<&Kept, KrishivError> {
         const FUNCTION: &str = "`regexp_replace`";
         if self.pattern.as_ref().is_none_or(|(p, _)| p != pattern) {
             self.pattern = Some((pattern.to_owned(), compiled_on_thread(pattern, FUNCTION)?));
@@ -1130,16 +1207,17 @@ fn replace_row(
     };
     let (head, tail) = source.split_at(start);
     let re = compiled.for_input(tail);
-    let at = |e: fancy_regex::Error| compiled.backtrack(e);
     let mut out = String::with_capacity(source.len());
     out.push_str(head);
     let (mut last, mut from) = (0, 0);
     let mut parts: Option<&[Part]> = None;
     while from <= tail.len() {
-        let Some(caps) = re.captures_from_pos(tail, from).map_err(at)? else {
+        let Some(caps) = compiled.captures_at(tail, from)? else {
             break;
         };
-        let Some(whole) = caps.get(0) else { break };
+        let Some((whole_start, whole_end)) = caps.whole() else {
+            break;
+        };
         let parts = match parts {
             Some(p) => p,
             None => {
@@ -1162,25 +1240,25 @@ fn replace_row(
                 p
             }
         };
-        out.push_str(&tail[last..whole.start()]);
+        out.push_str(&tail[last..whole_start]);
         for part in parts {
             match part {
                 Part::Text(t) => out.push_str(t),
                 Part::Group(g) => {
                     if let Some(m) = caps.get(*g) {
-                        out.push_str(m.as_str());
+                        out.push_str(m);
                     }
                 }
             }
         }
-        last = whole.end();
-        from = if whole.end() == whole.start() {
-            match tail[whole.end()..].chars().next() {
-                Some(c) => whole.end() + c.len_utf8(),
+        last = whole_end;
+        from = if whole_end == whole_start {
+            match tail[whole_end..].chars().next() {
+                Some(c) => whole_end + c.len_utf8(),
                 None => break,
             }
         } else {
-            whole.end()
+            whole_end
         };
     }
     out.push_str(&tail[last..]);

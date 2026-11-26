@@ -45,8 +45,5 @@ datasketches = { workspace = true, features = ["hll", "theta", "tuple", "kll"] }
 [dev-dependencies]
 arrow-buffer.workspace = true
 
-[package.metadata.cargo-machete]
-ignored = ["regex-automata", "regex-syntax"]
-
 [lints]
 workspace = true
