@@ -561,7 +561,10 @@ pub static MEMORY_LIMIT: ConfigEntry = ConfigEntry {
           When unset: 80% of the effective memory limit (the tightest cgroup limit, else \
           physical memory), or 2 GiB where that cannot be determined. A value above that \
           effective limit is not honoured (the kernel would kill the process before the engine \
-          spills): the default is used instead, with a warning.",
+          spills): the default is used instead, with a warning. A value at or just under the \
+          effective limit is honoured but leaves no room for the memory the process uses \
+          outside the pool (allocator overhead, memory used without a reservation), so the \
+          kernel can still kill the process: leave headroom, as the default does.",
     scope: Scope::Cluster,
     settable_by: SettableBy::Startup,
     version_added: "0.1.0",

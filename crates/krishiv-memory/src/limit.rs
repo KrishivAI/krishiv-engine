@@ -11,6 +11,7 @@
 //! conservative fixed size, documented on `krishiv.memory.limit`.
 
 use std::path::Path;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// Percentage of the effective memory limit used by default.
 pub const DEFAULT_LIMIT_PERCENT: u64 = 80;
@@ -37,10 +38,16 @@ fn share_of(bytes: u64) -> usize {
 /// bytes: `explicit` itself, unless it is above [`effective_memory_limit`].
 /// Then the pool could grow past what the kernel allows and the process would
 /// be OOM-killed without an error before the engine ever spills, so the limit
-/// is [`default_limit`] instead, with a warning.
+/// is [`default_limit`] instead, with a warning (logged once per requested
+/// value, not on every call: the setting is read again by each admin check).
+///
+/// A value at or just under the effective limit stands as given. It leaves
+/// no room for what the process holds outside the pool (the allocator's
+/// overhead, memory used without a reservation), so the kernel can still
+/// kill such a process; `krishiv.memory.limit` says so.
 pub fn explicit_limit(explicit: usize) -> usize {
     let fitted = fitted_limit(explicit, effective_memory_limit());
-    if fitted != explicit {
+    if fitted != explicit && first_warning(explicit) {
         tracing::warn!(
             target: "krishiv::memory",
             requested = explicit,
@@ -50,6 +57,15 @@ pub fn explicit_limit(explicit: usize) -> usize {
         );
     }
     fitted
+}
+
+/// The requested limit the over-limit warning was last logged for (0: none).
+static LAST_WARNED: AtomicUsize = AtomicUsize::new(0);
+
+/// Whether the over-limit warning for `requested` is not a repeat of the
+/// last one logged; records `requested` as logged.
+fn first_warning(requested: usize) -> bool {
+    LAST_WARNED.swap(requested, Ordering::Relaxed) != requested
 }
 
 /// [`explicit_limit`] against an `effective` memory limit (tests).
@@ -142,6 +158,15 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
+
+    #[test]
+    fn the_over_limit_warning_is_logged_once_per_requested_value() {
+        // No other test logs for these values, and an over-limit value on a real host is far larger.
+        assert!(first_warning(7));
+        assert!(!first_warning(7));
+        assert!(first_warning(9));
+        assert!(first_warning(7));
+    }
 
     fn fixture(name: &str) -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR"))
