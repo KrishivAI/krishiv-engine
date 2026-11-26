@@ -284,3 +284,25 @@ panic = "unwind"
 inherits = "release"
 lto = "thin"
 codegen-units = 1
+
+# parquet 60.2.0 with one change: `Vec<T>::pad_nulls` moves a run of valid values with one copy
+# (offered upstream to apache/arrow-rs). Tag 60.2.0 plus that commit, on the KrishivAI fork
+# (ADR 0028 update 2026-11-22). The Arrow 60.2.0 crates come from the same commit, which holds
+# their 60.2.0 sources unchanged, so there is one copy of each. Remove the whole table at the
+# first parquet release that carries the change.
+[patch.crates-io]
+arrow-arith = { git = "https://github.com/KrishivAI/arrow-rs", rev = "db75bd43e7977ffbf8e6a610297d5c3c8116941f" }
+arrow-array = { git = "https://github.com/KrishivAI/arrow-rs", rev = "db75bd43e7977ffbf8e6a610297d5c3c8116941f" }
+arrow-buffer = { git = "https://github.com/KrishivAI/arrow-rs", rev = "db75bd43e7977ffbf8e6a610297d5c3c8116941f" }
+arrow-cast = { git = "https://github.com/KrishivAI/arrow-rs", rev = "db75bd43e7977ffbf8e6a610297d5c3c8116941f" }
+arrow-cmp = { git = "https://github.com/KrishivAI/arrow-rs", rev = "db75bd43e7977ffbf8e6a610297d5c3c8116941f" }
+arrow-data = { git = "https://github.com/KrishivAI/arrow-rs", rev = "db75bd43e7977ffbf8e6a610297d5c3c8116941f" }
+arrow-flight = { git = "https://github.com/KrishivAI/arrow-rs", rev = "db75bd43e7977ffbf8e6a610297d5c3c8116941f" }
+arrow-ipc = { git = "https://github.com/KrishivAI/arrow-rs", rev = "db75bd43e7977ffbf8e6a610297d5c3c8116941f" }
+arrow-json = { git = "https://github.com/KrishivAI/arrow-rs", rev = "db75bd43e7977ffbf8e6a610297d5c3c8116941f" }
+arrow-ord = { git = "https://github.com/KrishivAI/arrow-rs", rev = "db75bd43e7977ffbf8e6a610297d5c3c8116941f" }
+arrow-row = { git = "https://github.com/KrishivAI/arrow-rs", rev = "db75bd43e7977ffbf8e6a610297d5c3c8116941f" }
+arrow-schema = { git = "https://github.com/KrishivAI/arrow-rs", rev = "db75bd43e7977ffbf8e6a610297d5c3c8116941f" }
+arrow-select = { git = "https://github.com/KrishivAI/arrow-rs", rev = "db75bd43e7977ffbf8e6a610297d5c3c8116941f" }
+arrow-string = { git = "https://github.com/KrishivAI/arrow-rs", rev = "db75bd43e7977ffbf8e6a610297d5c3c8116941f" }
+parquet = { git = "https://github.com/KrishivAI/arrow-rs", rev = "db75bd43e7977ffbf8e6a610297d5c3c8116941f" }
