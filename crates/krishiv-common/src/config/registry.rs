@@ -565,10 +565,12 @@ pub static MEMORY_LIMIT: ConfigEntry = ConfigEntry {
           physical memory), lowered so the pool plus what the process may hold beyond it (an \
           eighth of the pool and 64 MiB) leaves at least 384 MiB, but never under half of it \
           (so 512 MiB in a 1 GiB container, about 1.39 GiB in 2 GiB, 80% from about 4.4 GiB), \
-          or 2 GiB where that \
-          cannot be determined. A value above that \
-          effective limit is not honoured (the kernel would kill the process before the engine \
-          spills): the default is used instead, with a warning.",
+          or 2 GiB where that cannot be determined. A value above that effective limit is not \
+          honoured (the kernel would kill the process before the engine spills): the default is \
+          used instead, with a warning. A value at or just under the effective limit is honoured \
+          but leaves no room for the memory the process uses \
+          outside the pool (allocator overhead, memory used without a reservation), so the \
+          kernel can still kill the process: leave headroom, as the default does.",
     scope: Scope::Cluster,
     settable_by: SettableBy::Startup,
     version_added: "0.1.0",
