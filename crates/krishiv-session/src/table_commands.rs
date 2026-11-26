@@ -705,6 +705,7 @@ impl Session {
                 definer: definer.then(|| self.state.principal.name.clone()),
                 // Spark captures the session's SQL configs with the view (`views.scala` line 557).
                 cte_precedence: Some(cte_precedence),
+                timestamp_ntz: Some(env.parser.timestamp_ntz),
                 functions,
                 // The store sets the version (review r10 M10).
                 revision: 0,
@@ -1188,6 +1189,7 @@ impl Session {
                     definer: definer.then(|| self.state.principal.name.clone()),
                     // Captured again with the new query, as Spark's `ALTER VIEW .. AS` does.
                     cte_precedence: Some(cte_precedence),
+                    timestamp_ntz: Some(env.parser.timestamp_ntz),
                     functions,
                     // A new text: the store gives it a new version (review r10 M10).
                     revision: 0,

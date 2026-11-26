@@ -924,7 +924,7 @@ async fn build_local_relation(
             let Some(bytes) = entry.artifacts().cached(&hash) else {
                 return Err(ConnectInvalidPlanCannotFindCachedLocalRelation { hash }.into());
             };
-            cached_request(&bytes)?
+            cached_request(&bytes, &entry.session().parser_options())?
         }
         LocalRequest::Catalog(call) => return catalog_call::run(entry.session(), call).await,
     };

@@ -137,3 +137,42 @@ fn a_table_column_keeps_the_type_its_create_resolved() {
         &arrow_schema::DataType::Timestamp(arrow_schema::TimeUnit::Microsecond, None)
     );
 }
+
+/// A permanent view's text parses under the timestamp type of its CREATE, never the reader's
+/// (Spark 4.2.0 run, `spark-sql`: `v_ntz` created under `TIMESTAMP_NTZ` reads `timestamp_ntz`
+/// under either setting; `v_ltz` and `v_def`, created under `TIMESTAMP_LTZ` and the default,
+/// read `timestamp` under either).
+#[test]
+fn a_view_keeps_the_timestamp_type_of_its_create() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = Session::new().unwrap();
+    s.conf()
+        .set("spark.sql.warehouse.dir", dir.path().to_str().unwrap())
+        .unwrap();
+    let run = |sql: &str| {
+        block_on(s.sql(sql)).unwrap_or_else(|e| panic!("{sql}: {e}"));
+    };
+    run("create table t (s string) using parquet");
+    run("insert into t values ('2020-01-01 00:00:00')");
+    run("create view v_def as select cast(s as timestamp) as c from t");
+    run("set spark.sql.timestampType = TIMESTAMP_NTZ");
+    run("create view v_ntz as select cast(s as timestamp) as c from t");
+    run("set spark.sql.timestampType = TIMESTAMP_LTZ");
+    run("create view v_ltz as select cast(s as timestamp) as c from t");
+    // `ALTER VIEW .. AS` captures the setting of its own statement.
+    run("create view v_alt as select cast(s as timestamp) as c from t");
+    run("set spark.sql.timestampType = TIMESTAMP_NTZ");
+    run("alter view v_alt as select cast(s as timestamp) as c from t");
+    for reader in ["TIMESTAMP_LTZ", "TIMESTAMP_NTZ"] {
+        run(&format!("set spark.sql.timestampType = {reader}"));
+        for (view, want) in [
+            ("v_def", "timestamp"),
+            ("v_ltz", "timestamp"),
+            ("v_ntz", "timestamp_ntz"),
+            ("v_alt", "timestamp_ntz"),
+        ] {
+            let got = type_of(&s, &format!("c) from {view} --"));
+            assert_eq!(got, want, "{view} read under {reader}");
+        }
+    }
+}

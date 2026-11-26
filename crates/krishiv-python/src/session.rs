@@ -185,7 +185,14 @@ impl PySession {
                 "unsupported Python UDF eval type {eval_type}"
             ))
         })?;
-        let return_type = krishiv_types::parse_data_type(return_type).map_err(|e| to_py(py, &e))?;
+        // A registered UDF's type string reads a bare `TIMESTAMP` as the session's timestamp type.
+        let opts = self.inner.parser_options();
+        let return_type = krishiv_types::parse_data_type_with(
+            return_type,
+            krishiv_types::TypeGrammar::new(opts.spark_4_3),
+            opts.timestamp_ntz,
+        )
+        .map_err(|e| to_py(py, &e))?;
         let runtime = self.udf_runtime(py)?;
         let entry = self
             .inner

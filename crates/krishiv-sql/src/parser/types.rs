@@ -622,7 +622,12 @@ impl Parser<'_> {
         // Spark does (4.2: `UNSUPPORTED_DATATYPE` "TIMESTAMP(6)").
         if name == "timestamp"
             && self.opts.timestamp_ntz
-            && (args.is_empty() || (self.opts.spark_4_3 && args.len() == 1 && args[0] == "6"))
+            && match args.as_slice() {
+                [] => true,
+                // As a number, as the validator reads it: `TIMESTAMP(06)` too.
+                [p] => self.opts.spark_4_3 && p.parse::<u32>() == Ok(6),
+                _ => false,
+            }
         {
             name = "timestamp_ntz".to_owned();
         }

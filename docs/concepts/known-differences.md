@@ -660,6 +660,7 @@ observed node has its own, so the count can exceed `n` (P3-T084c).
   not, completes it.
 - **`Observation.get` blocks** a thread; do not call it from async code on a runtime thread.
 - **Result cache:** a plan that observes is never served from the result cache (every action runs it).
+- **`spark.sql.timestampType = TIMESTAMP_NTZ`:** a bare `TIMESTAMP` follows the setting in SQL (literals, casts, column types, views as of their `CREATE`), in Spark Connect cast targets and schema strings, and in the return type of a UDF registered on a session. It still means `TIMESTAMP_LTZ` in the schema string of `from_json`, `from_csv` and `from_xml`, in the type string of `variant_get` / `try_variant_get`, and in the return type of an unregistered Python `udf(...)` (built without a session): Spark parses those with the session's setting too.
 
 ## Delta Lake writes
 
