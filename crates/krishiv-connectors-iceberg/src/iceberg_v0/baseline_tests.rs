@@ -47,7 +47,7 @@ async fn planning_baseline() {
         .unwrap()
         .build()
         .unwrap();
-    let at = |n: &str| format!("file://{}/{n}", dir.path().display());
+    let at = |n: &str| format!("{}/{n}", krishiv_exec::files::file_url(dir.path()));
 
     // 1,000 manifests of 100 files: manifest m holds partition x = m, file f
     // the ids f*1000 .. f*1000+999.

@@ -9,7 +9,7 @@
   "properties": {
     "format": { "const": "krishiv.query-profile" },
     "version": { "const": 1 },
-    "minor": { "$ref": "#/$defs/u64", "description": "Additive revisions within version 1 (absent = 0). 1 adds `usage`, 2 adds `query.scan_reads_in_flight_mean` and the `scan_read*` operator extras, 3 adds each pipeline's `max_slice_ns` and `stalls`, 4 adds `trace`, 5 adds `usage.principal` and `usage.tags`, 6 adds `scans`, 7 adds `hints` and each plan node's `facts`. A reader ignores members it does not know." },
+    "minor": { "$ref": "#/$defs/u64", "description": "Additive revisions within version 1 (absent = 0). 1 adds `usage`, 2 adds `query.scan_reads_in_flight_mean` and the `scan_read*` operator extras, 3 adds each pipeline's `max_slice_ns` and `stalls`, 4 adds `trace`, 5 adds `usage.principal` and `usage.tags`, 6 adds `scans`, 7 adds `hints` and each plan node's `facts`, 8 adds `usage.planning_ns`. A reader ignores members it does not know." },
     "planning": { "$ref": "#/$defs/planning", "description": "Present for EXPLAIN ANALYZE VERBOSE (added in minor 1)." },
     "trace": {
       "type": "object",
@@ -70,6 +70,7 @@
         "rows_out": { "$ref": "#/$defs/u64", "description": "Rows the sinks received." },
         "peak_memory_bytes": { "$ref": "#/$defs/u64", "description": "Summed over workers: an upper bound." },
         "spill_bytes": { "$ref": "#/$defs/u64" },
+        "planning_ns": { "$ref": "#/$defs/u64", "description": "The time the query spent planning before its run (minor 8): parse, analysis, optimization and physical planning, outside `wall_ns`; as `system.queries.planning_ns`. Absent outside a session." },
         "principal": { "type": "string", "description": "Who ran the query (minor 5). Absent outside a session and in a shared profile." },
         "tags": { "type": "object", "additionalProperties": { "type": "string" }, "description": "The session's tags (minor 5). Absent with `principal`." },
         "scan": {

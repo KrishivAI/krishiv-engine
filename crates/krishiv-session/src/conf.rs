@@ -79,11 +79,30 @@ const UNSUPPORTED_CHAR_VARCHAR_SWITCHES: &[(&str, &str)] = &[
     ("spark.sql.legacy.noCharPaddingInPredicate", "true"),
 ];
 
-/// The builder's initial settings, checked as `SET` checks a runtime one.
+/// The builder's initial settings, checked as `SET` checks a runtime one: the
+/// refused switches, and a time zone resolved against the time zone database
+/// (the registry checks only its form), so an unknown or padded zone fails
+/// when the session is built, as Spark's `SQLConf` check fails it.
 pub(crate) fn check_pairs(pairs: &[(String, String)]) -> Result<(), KrishivError> {
-    pairs
-        .iter()
-        .try_for_each(|(k, v)| refuse_unsupported_switch(k, v))
+    pairs.iter().try_for_each(|(k, v)| {
+        refuse_unsupported_switch(k, v)?;
+        check_time_zone(k, v)
+    })
+}
+
+/// `INVALID_CONF_VALUE.TIME_ZONE` when `key` is a time zone setting (its
+/// canonical key or the Spark alias) and `value`, as given, is no zone.
+fn check_time_zone(key: &str, value: &str) -> Result<(), KrishivError> {
+    if lookup(key).is_some_and(|e| e.value_type == ValueType::TimeZone)
+        && resolve_zone(value).is_err()
+    {
+        return Err(InvalidConfValueTimeZone {
+            conf_name: key.to_owned(),
+            conf_value: value.to_owned(),
+        }
+        .into());
+    }
+    Ok(())
 }
 
 /// Spark switches for collation features the engine refuses (ADR 0043 Decision 7 and 9): the
@@ -458,18 +477,10 @@ impl RuntimeConf {
         // Collation switches the engine does not honour yet (ADR 0043): turning one on would
         // change results silently, so it is refused.
         refuse_unsupported_switch(key, value)?;
-        // A time zone setting (under its canonical key or the Spark alias)
-        // is resolved against the time zone database, which `krishiv-common`
-        // has not: the text as given, as Spark's `ZoneId.of` takes it.
-        if lookup(key).is_some_and(|e| e.value_type == ValueType::TimeZone)
-            && resolve_zone(value).is_err()
-        {
-            return Err(InvalidConfValueTimeZone {
-                conf_name: key.to_owned(),
-                conf_value: value.to_owned(),
-            }
-            .into());
-        }
+        // A time zone setting is resolved against the time zone database,
+        // which `krishiv-common` has not: the text as given, as Spark's
+        // `ZoneId.of` takes it.
+        check_time_zone(key, value)?;
         if lookup(key).is_some_and(|e| std::ptr::eq(e, &krishiv_common::config::SQL_DEFAULT_PATH))
             && krishiv_common::sql_path::parse_conf(value).is_none()
         {

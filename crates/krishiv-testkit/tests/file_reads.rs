@@ -453,7 +453,8 @@ fn local_files() {
     let store = StoreId::new("file");
     sched.register_store(
         store.clone(),
-        Arc::new(LocalFileSystem::new()) as Arc<dyn ObjectStore>,
+        Arc::new(krishiv_io::LocalDirsAsMissing::new(LocalFileSystem::new()))
+            as Arc<dyn ObjectStore>,
     );
     let r = FileReads::new(
         sched.context(),
@@ -472,7 +473,10 @@ fn local_files() {
     let got = rt.block_on(r.infer("parquet", &paths(&["nope"]), &none));
     assert_eq!(
         class(got),
-        (ErrorClass::PathNotFound, format!("file:{root}/nope"))
+        (
+            ErrorClass::PathNotFound,
+            format!("file:{}/nope", shown(&root))
+        )
     );
     let got = rt.block_on(r.infer("parquet", &paths(&[&format!("file://{root}/empty")]), &none));
     assert_eq!(class(got).0, ErrorClass::UnableToInferSchema);
@@ -484,6 +488,15 @@ fn write_parquet(path: &std::path::Path, batch: &RecordBatch) {
     let mut w = parquet::arrow::ArrowWriter::try_new(file, batch.schema(), None).unwrap();
     w.write(batch).unwrap();
     w.close().unwrap();
+}
+
+/// A local directory as the engine prints it in a location: as it is on Unix, `/C:/dir` for `C:\dir` on Windows.
+fn shown(root: &str) -> String {
+    if cfg!(windows) {
+        format!("/{}", root.replace('\\', "/"))
+    } else {
+        root.to_owned()
+    }
 }
 
 /// The tree `gen_file_read_probe.py` lays out under its root.
@@ -541,7 +554,8 @@ fn agrees_with_spark_on_the_file_read_probe() {
     let store = StoreId::new("file");
     sched.register_store(
         store.clone(),
-        Arc::new(LocalFileSystem::new()) as Arc<dyn ObjectStore>,
+        Arc::new(krishiv_io::LocalDirsAsMissing::new(LocalFileSystem::new()))
+            as Arc<dyn ObjectStore>,
     );
     let mut checked = 0;
     for case in fixture["cases"].as_array().unwrap() {
@@ -608,7 +622,7 @@ fn agrees_with_spark_on_the_file_read_probe() {
             // Suggestions are ordered by their distance to the name, which
             // holds the root: compare them as a set.
             let normalize = |k: &str, v: &str| {
-                let v = v.replace(&root, "<root>");
+                let v = v.replace(&shown(&root), "<root>").replace(&root, "<root>");
                 if k == "proposal" {
                     let mut parts: Vec<&str> = v.split(", ").collect();
                     parts.sort_unstable();

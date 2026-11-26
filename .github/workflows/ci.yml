@@ -956,7 +956,7 @@ jobs:
             coverage: true
           - name: cp314t
             python: "3.14t"
-            maturin_args: "--no-default-features --features mimalloc,cloud,ui,delta"
+            maturin_args: "--no-default-features --features mimalloc,cloud,ui,delta,catalog-iceberg-rest"
             wheel_tag: cp314t
             coverage: false
     name: wheels (${{ matrix.name }})

@@ -805,7 +805,7 @@ fn external_checks_are_ci_only() {
 
 // ---- the I/O wrappers, against throwaway repositories and fake commands ----
 
-use xtask::precheck::{Cmd, collect_changes, execute, on_path, run_step, verdict};
+use xtask::precheck::{Cmd, collect_changes, execute, on_path, on_path_in, run_step, verdict};
 
 fn cmd(program: &str, args: &[&str], dir: &str) -> Cmd {
     Cmd {
@@ -1000,11 +1000,33 @@ fn notes_make_a_passing_step_partial() {
 }
 
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "repo tooling test: runs shell-script stand-ins and sh, Unix only"
+)]
 fn on_path_finds_installed_binaries_only() {
     assert!(on_path("sh"));
     assert!(!on_path("definitely-not-a-program-xyz"));
 }
 
+/// The lookup of an installed tool: the bare name everywhere, `name.exe` only on Windows. Runs on
+/// every platform (the directories are made here, `PATH` is not touched).
+#[test]
+fn on_path_in_finds_exe_files_on_windows_only() {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(d.path().join("plain"), b"").unwrap();
+    std::fs::write(d.path().join("tool.exe"), b"").unwrap();
+    std::fs::create_dir(d.path().join("dir-not-file")).unwrap();
+    let dirs = [d.path().join("missing"), d.path().to_path_buf()];
+    assert!(on_path_in("plain", &dirs));
+    assert!(on_path_in("tool.exe", &dirs));
+    assert_eq!(on_path_in("tool", &dirs), cfg!(windows));
+    assert!(!on_path_in("dir-not-file", &dirs));
+    assert!(!on_path_in("absent", &dirs));
+    assert!(!on_path_in("plain", &[]));
+}
+
+#[cfg(unix)]
 #[test]
 fn text_lint_reads_only_git_tracked_files() {
     use std::os::unix::fs::PermissionsExt;
@@ -1052,6 +1074,7 @@ fn text_lint_reads_only_git_tracked_files() {
     assert!(!seen.exists(), "the linter must not run with no files");
 }
 
+#[cfg(unix)]
 #[test]
 fn tracked_files_cmd_skips_deleted_tracked_files() {
     use std::os::unix::fs::PermissionsExt;
@@ -1098,6 +1121,7 @@ fn tracked_files_cmd_skips_deleted_tracked_files() {
     assert!(!seen.exists(), "the linter must not run with no files");
 }
 
+#[cfg(unix)]
 #[test]
 fn markdownlint_paths_are_passed_as_literal_paths() {
     use std::os::unix::fs::PermissionsExt;
@@ -1197,6 +1221,10 @@ fn coverage_is_scoped_to_touched_crates_in_a_dedicated_target_dir() {
 }
 
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "repo tooling test: runs shell-script stand-ins and sh, Unix only"
+)]
 fn staleness_and_attribution_are_checked_unless_allowed() {
     let ch = detect(&["crates/common/src/lib.rs"]);
     let fresh = make_plan(&ch, &opts(&["--base", "main"]), true);
@@ -1333,7 +1361,8 @@ fn coverage_dir_is_a_sibling_of_the_target_dir() {
     );
     assert_eq!(
         xtask::precheck::cov_dir_for(root, None),
-        "/w/target/precheck-cov"
+        // Joined as a path: `/w\target/precheck-cov` on Windows.
+        root.join("target/precheck-cov").display().to_string()
     );
 }
 

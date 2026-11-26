@@ -15,6 +15,8 @@ export interface RemoteOptions {
   headers?: Record<string, string>;
   /** Milliseconds to wait for a call; 0 or unset: no deadline. */
   timeoutMs?: number;
+  /** Largest gRPC message accepted, in bytes (default 256 MiB; grpc-js alone allows 4 MiB). */
+  maxReceiveBytes?: number;
 }
 
 /** Parse `krishiv://host:port` (plaintext) or `krishivs://host:port` (TLS). */
@@ -74,8 +76,9 @@ export class RemoteBackend implements Backend {
     this.w ??= await loadWire();
     const { grpc } = this.w;
     this.client ??= new grpc.Client(
-      `${this.opts.host}:${this.opts.port}`,
+      this.opts.host.includes(":") ? `[${this.opts.host}]:${this.opts.port}` : `${this.opts.host}:${this.opts.port}`,
       this.opts.tls ? grpc.credentials.createSsl() : grpc.credentials.createInsecure(),
+      { "grpc.max_receive_message_length": this.opts.maxReceiveBytes ?? 256 * 1024 * 1024 },
     );
     return { w: this.w, client: this.client };
   }
@@ -123,6 +126,8 @@ export class RemoteBackend implements Backend {
     const Req_ = w.root.lookupType(reqT);
     const Res_ = w.root.lookupType(resT);
     return new Promise<Res>((resolve, reject) => {
+      if (signal?.aborted) return reject(new KrishivError("query cancelled"));
+      const onAbort = () => call.cancel();
       const call = client.makeUnaryRequest<Req, Res>(
         method,
         (m: Req) => Buffer.from(Req_.encode(Req_.create(m as object)).finish()),
@@ -130,10 +135,13 @@ export class RemoteBackend implements Backend {
         req as Req,
         this.metadata(w.grpc),
         this.options(),
-        (err, value) => (err ? reject(this.fail(err)) : resolve(value as Res)),
+        (err, value) => {
+          signal?.removeEventListener("abort", onAbort);
+          return err ? reject(this.fail(err)) : resolve(value as Res);
+        },
       );
       call.on("metadata", (md) => this.remember(md));
-      signal?.addEventListener("abort", () => call.cancel(), { once: true });
+      signal?.addEventListener("abort", onAbort, { once: true });
     });
   }
 
@@ -172,6 +180,7 @@ export class RemoteBackend implements Backend {
   }
 
   private async *doGet(w: Wire, client: import("@grpc/grpc-js").Client, ticket: Uint8Array, signal?: AbortSignal): AsyncGenerator<Uint8Array> {
+    if (signal?.aborted) throw new KrishivError("query cancelled");
     const Ticket = w.root.lookupType("Ticket");
     const FD = w.root.lookupType("FlightData");
     const call = client.makeServerStreamRequest<object, { data_header: Uint8Array; data_body: Uint8Array }>(
@@ -183,14 +192,19 @@ export class RemoteBackend implements Backend {
       this.options(),
     );
     call.on("metadata", (md) => this.remember(md));
-    signal?.addEventListener("abort", () => call.cancel(), { once: true });
+    const onAbort = () => call.cancel();
+    signal?.addEventListener("abort", onAbort, { once: true });
     try {
       for await (const fd of call) {
+        // Application-metadata-only messages carry no IPC header; framing one would read as end-of-stream.
+        if (fd.data_header.length === 0) continue;
         for (const part of frame({ header: fd.data_header, body: fd.data_body })) yield part;
       }
       yield new Uint8Array([0xff, 0xff, 0xff, 0xff, 0, 0, 0, 0]);
     } catch (e) {
       throw this.fail(e);
+    } finally {
+      signal?.removeEventListener("abort", onAbort);
     }
   }
 

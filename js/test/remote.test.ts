@@ -132,8 +132,8 @@ describe("remote session", () => {
     seen.sql.length = 0;
     const s = await Session.builder().remote(`krishiv://127.0.0.1:${port}`).token("good").getOrCreate();
     await s.sql("SELECT * FROM t").filter(col("id").gt(1)).groupBy("name").agg(count().alias("n"), sum("id")).orderBy(col("n").desc()).limit(5).collect();
-    expect(seen.sql[0]).toMatch(/GROUP BY name/);
-    expect(seen.sql[0]).toMatch(/WHERE \(id > 1\)/);
+    expect(seen.sql[0]).toMatch(/GROUP BY `name`/);
+    expect(seen.sql[0]).toMatch(/WHERE \(`id` > 1\)/);
     expect(seen.sql[0]).toMatch(/LIMIT 5/);
     await s.close();
   });

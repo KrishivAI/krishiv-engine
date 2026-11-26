@@ -81,12 +81,14 @@ first_other_push_after_label() {
 # head reached the PR after the label. Prints its `name value` lines.
 recorded_values() {
   local created b64 body head arrived later
+  # Here-strings, not `printf | grep -q`: grep -q exits at the first match and, under pipefail, the writer's SIGPIPE
+  # made a matching record look absent (about 1 run in 40 under load).
   while IFS=$'\t' read -r created b64; do
     body=$(printf '%s' "$b64" | base64 -d)
-    printf '%s\n' "$body" | grep -qx "label=$label" || continue
-    printf '%s\n' "$body" | grep -qx "scope=$scope" || continue
-    printf '%s\n' "$body" | grep -qx "labeled_at=$labeled_at" || continue
-    head=$(printf '%s\n' "$body" | sed -n 's/^head=//p' | head -n1)
+    grep -qx "label=$label" <<<"$body" || continue
+    grep -qx "scope=$scope" <<<"$body" || continue
+    grep -qx "labeled_at=$labeled_at" <<<"$body" || continue
+    head=$(sed -n '/^head=/{s///p;q}' <<<"$body")
     [ -n "$head" ] || continue
     arrived=$(arrival_of "$head")
     [ -n "$arrived" ] && [[ "$labeled_at" > "$arrived" ]] || continue

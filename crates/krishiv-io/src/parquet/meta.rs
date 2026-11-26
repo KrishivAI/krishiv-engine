@@ -689,9 +689,14 @@ fn file_statistics(row_groups: &[RowGroup]) -> FileStatistics {
     for (i, rg) in row_groups.iter().enumerate() {
         for c in &rg.statistics.columns {
             match columns.iter_mut().find(|m| m.path == c.path) {
-                None if i == 0 => columns.push(c.clone()),
+                None if i == 0 => {
+                    let mut c = c.clone();
+                    c.unit_width_sum = unit_width(&c);
+                    columns.push(c);
+                }
                 None => {}
                 Some(m) => {
+                    m.unit_width_sum = m.unit_width_sum.zip(unit_width(c)).map(|(a, b)| a + b);
                     m.null_count = sum(&m.null_count, &c.null_count);
                     m.nan_count = sum(&m.nan_count, &c.nan_count);
                     m.min = bound(&m.min, &c.min, std::cmp::Ordering::Less);
@@ -711,6 +716,24 @@ fn file_statistics(row_groups: &[RowGroup]) -> FileStatistics {
         bytes: Precision::Exact(bytes),
         columns,
     }
+}
+
+/// A unit's `max - min` for an integer or date column with exact bounds.
+fn unit_width(c: &ColumnStatistics) -> Option<f64> {
+    let (lo, hi) = (integral(c.min.exact()?)?, integral(c.max.exact()?)?);
+    #[expect(clippy::cast_precision_loss, reason = "a costing statistic")]
+    Some(hi.saturating_sub(lo).max(0) as f64)
+}
+
+/// An integer or date bound as an integer.
+fn integral(v: &ScalarValue) -> Option<i128> {
+    Some(match v {
+        ScalarValue::Int8(x) => i128::from(*x),
+        ScalarValue::Int16(x) => i128::from(*x),
+        ScalarValue::Int32(x) | ScalarValue::Date32(x) => i128::from(*x),
+        ScalarValue::Int64(x) => i128::from(*x),
+        _ => return None,
+    })
 }
 
 fn sum(a: &Precision<u64>, b: &Precision<u64>) -> Precision<u64> {

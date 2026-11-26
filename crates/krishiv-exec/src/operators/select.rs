@@ -135,6 +135,7 @@ impl RowSelect {
         }
     }
 
+    #[cfg(test)]
     /// The rows of `batch` kept, as a mask without NULLs (`None`: every
     /// row), evaluated in driver partition `partition`.
     ///
@@ -142,15 +143,42 @@ impl RowSelect {
     /// The predicate's errors; `INTERNAL_ERROR` for a mask of the wrong
     /// length.
     pub(crate) fn mask(&mut self, batch: &Batch, partition: u32) -> Result<Option<BooleanArray>> {
-        let n = batch.num_rows();
-        let runtime = match &self.runtime {
-            Some(stage) if n > 0 => stage.mask(batch.data())?.map(|m| m.values().clone()),
+        let runtime = self.stage(batch)?;
+        self.mask_after(batch.data(), partition, runtime)
+    }
+
+    /// The rows of `batch` the row stage keeps (`None`: every row, or no
+    /// stage), counted in the stage's measurement window as the scan
+    /// would count them. The first half of [`Self::mask`].
+    ///
+    /// # Errors
+    /// The row stage's errors.
+    pub(crate) fn stage(&mut self, batch: &Batch) -> Result<Option<BooleanBuffer>> {
+        Ok(match &self.runtime {
+            Some(stage) if batch.num_rows() > 0 => {
+                stage.mask(batch.data())?.map(|m| m.values().clone())
+            }
             _ => None,
-        };
+        })
+    }
+
+    /// The second half of [`Self::mask`]: the rows of `data` the predicate
+    /// is TRUE for among those the row stage kept (`runtime`, from
+    /// [`Self::stage`]), as a mask without NULLs (`None`: every row).
+    ///
+    /// # Errors
+    /// As [`Self::mask`].
+    pub(crate) fn mask_after(
+        &self,
+        data: &RecordBatch,
+        partition: u32,
+        runtime: Option<BooleanBuffer>,
+    ) -> Result<Option<BooleanArray>> {
+        let n = data.num_rows();
         let all = predicate_after(
             self.predicate.as_deref(),
             self.narrow.as_ref(),
-            batch.data(),
+            data,
             partition,
             runtime,
         )?;
@@ -159,6 +187,29 @@ impl RowSelect {
             .map(|m| BooleanArray::new(m, None)))
     }
 
+    /// The rows of `data` kept by the predicate alone (`None`: every row),
+    /// for rows the row stage already kept ([`Self::stage`]): the rows a
+    /// hash probe held (`join/probe.rs`, K1).
+    ///
+    /// # Errors
+    /// As [`Self::mask`].
+    pub(crate) fn select_kept(
+        &self,
+        data: &RecordBatch,
+        partition: u32,
+    ) -> Result<Option<Selection>> {
+        self.mask_after(data, partition, None)?
+            .map(|m| Selection::of_mask(&m))
+            .transpose()
+    }
+
+    /// Whether this selection has a row stage (only its rows are held,
+    /// `join/probe.rs`, K1).
+    pub(crate) fn has_stage(&self) -> bool {
+        self.runtime.is_some()
+    }
+
+    #[cfg(test)]
     /// The rows of `batch` kept (`None`: every row), evaluated in driver
     /// partition `partition`.
     ///
@@ -166,6 +217,22 @@ impl RowSelect {
     /// As [`Self::mask`].
     pub(crate) fn select(&mut self, batch: &Batch, partition: u32) -> Result<Option<Selection>> {
         self.mask(batch, partition)?
+            .map(|m| Selection::of_mask(&m))
+            .transpose()
+    }
+
+    /// [`Self::select`] after the row stage already ran (`runtime`, from
+    /// [`Self::stage`]).
+    ///
+    /// # Errors
+    /// As [`Self::mask`].
+    pub(crate) fn select_after(
+        &self,
+        batch: &Batch,
+        partition: u32,
+        runtime: Option<BooleanBuffer>,
+    ) -> Result<Option<Selection>> {
+        self.mask_after(batch.data(), partition, runtime)?
             .map(|m| Selection::of_mask(&m))
             .transpose()
     }

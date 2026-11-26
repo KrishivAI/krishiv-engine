@@ -283,7 +283,8 @@ fn ddl_prints_nothing_in_csv_and_for_create_table_as() {
     let loc = dir.path().join("t");
     let sql = format!(
         "CREATE TABLE t USING parquet LOCATION '{}' AS SELECT 1 AS a; SELECT a FROM t",
-        loc.to_str().expect("utf-8")
+        // `/` separators: a Windows path's `\` would be read as a SQL escape.
+        loc.to_str().expect("utf-8").replace('\\', "/")
     );
     let o = krishiv(&["sql", "-o", "table", "-e", &sql], None);
     assert!(o.status.success(), "{}", err(&o));
@@ -452,8 +453,14 @@ fn csv_distinguishes_null_from_empty_and_zone_is_checked() {
         ],
         None,
     );
+    // `spark-sql --conf` with this zone fails building the session (Spark
+    // 4.2.0 run): `INVALID_CONF_VALUE.TIME_ZONE`.
     assert_eq!(o.status.code(), Some(1));
-    assert!(err(&o).contains("INVALID_TIMEZONE"), "{}", err(&o));
+    assert!(
+        err(&o).contains("INVALID_CONF_VALUE.TIME_ZONE"),
+        "{}",
+        err(&o)
+    );
     let o = krishiv(
         &[
             "sql",

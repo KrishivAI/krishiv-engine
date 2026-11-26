@@ -3538,6 +3538,7 @@ dependencies = [
  "arrow-data 60.2.0",
  "arrow-schema 60.2.0",
  "futures",
+ "krishiv-catalogs",
  "krishiv-common",
  "krishiv-connect-server",
  "krishiv-exec",

@@ -261,12 +261,13 @@ fn files_under(dir: &Path) -> Vec<String> {
             if p.is_dir() {
                 stack.push(p);
             } else {
-                out.push(
-                    p.strip_prefix(dir)
-                        .expect("under")
-                        .to_string_lossy()
-                        .into_owned(),
-                );
+                // Joined with `/` on every platform, so the expected lists hold on Windows.
+                let rel = p.strip_prefix(dir).expect("under");
+                let parts: Vec<_> = rel
+                    .components()
+                    .map(|c| c.as_os_str().to_string_lossy().into_owned())
+                    .collect();
+                out.push(parts.join("/"));
             }
         }
     }
@@ -334,11 +335,14 @@ async fn add_artifacts_batch_and_chunked() {
     let used = run.entry().artifacts().used_bytes();
     // One block per segment: 2 + 3 + 2 + 2.
     assert_eq!(used, 9 * ARTIFACT_OVERHEAD + 18 + 5 + 4 + 100_000);
-    // Private directories.
-    use std::os::unix::fs::PermissionsExt;
-    for d in [run.root().expect("root"), dir.clone(), dir.join("files")] {
-        let mode = std::fs::metadata(&d).expect("meta").permissions().mode() & 0o777;
-        assert_eq!(mode, 0o700, "{}", d.display());
+    // Private directories (mode bits: Unix only).
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        for d in [run.root().expect("root"), dir.clone(), dir.join("files")] {
+            let mode = std::fs::metadata(&d).expect("meta").permissions().mode() & 0o777;
+            assert_eq!(mode, 0o700, "{}", d.display());
+        }
     }
     // Only a cached blob exists for ArtifactStatus.
     let s: pb::ArtifactStatusesResponse = unary(
@@ -453,6 +457,43 @@ async fn artifact_names() {
     let dir = run.session_dir();
     eventually("the staged file to go", || files_under(&dir).is_empty()).await;
     assert_eq!(run.entry().artifacts().used_bytes(), 0);
+}
+
+/// On Windows a segment with a `:` is a drive-relative path (`C:x` replaces the directory it is
+/// joined to) or an alternate data stream (`a:s`), and `< > " | ? *` name no file: all refused before
+/// anything is written (`INVALID_ARTIFACT_PATH`, not a storage error), so nothing lands in the
+/// server's current directory.
+#[cfg(windows)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn windows_reserved_segments_are_refused() {
+    let run = start().await;
+    let cwd = std::env::current_dir().expect("cwd");
+    for name in [
+        "files/C:x",
+        "files/C:/x",
+        "files/C:../x",
+        "files/a:s",
+        "pyfiles/C:evil.py",
+        "files/a?b",
+        "files/a*b",
+        "files/a|b",
+        "files/a\"b",
+        "files/a<b",
+        "files/a>b",
+    ] {
+        let status = add(&run, vec![batch(vec![single(name, b"x")])])
+            .await
+            .unwrap_err();
+        assert_eq!(error_class(&status), "INVALID_ARTIFACT_PATH", "{name:?}");
+    }
+    assert!(run.root().is_none());
+    assert_eq!(run.entry().artifacts().used_bytes(), 0);
+    for leaf in ["x", "evil.py", "s"] {
+        assert!(
+            !cwd.join(leaf).exists(),
+            "{leaf} written to the current directory"
+        );
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -822,6 +863,7 @@ async fn released_sessions_remove_their_artifacts() {
     assert!(run.root().is_some());
 }
 
+#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn planted_links_in_the_session_directory_are_not_followed() {
     let run = start().await;

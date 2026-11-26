@@ -22,16 +22,20 @@
 //! More than one distinct window call in one node is `_LEGACY_ERROR_TEMP_1039`; a window call in a
 //! `HAVING` or `ORDER BY` over an aggregate cannot find its input there
 //! (`MISSING_ATTRIBUTES.RESOLVED_ATTRIBUTE_MISSING_FROM_INPUT`). A window call whose time column is itself
-//! a window, `window_time(..)` and the DataFrame form stay unsupported.
+//! a window (a nested call, or a column a derived table took from an inner `window(..)`), `window_time(..)` over
+//! anything else and the DataFrame form stay unsupported.
 
 use std::ops::ControlFlow;
 use std::sync::Arc;
+
+use krishiv_types::equals_ignore_case;
 
 use krishiv_common::error::{
     CannotParseInterval, DatatypeMismatchParameterConstraintViolation,
     DatatypeMismatchValueOutOfRange, InternalError, LegacyErrorTemp1006, LegacyErrorTemp1039,
     LegacyErrorTemp1207, LegacyErrorTemp3231, MissingAggregation,
-    MissingAttributesResolvedAttributeMissingFromInput, WrongNumArgsWithoutSuggestion,
+    MissingAttributesResolvedAttributeMissingFromInput, UnresolvedColumnWithSuggestion,
+    WrongNumArgsWithoutSuggestion,
 };
 use krishiv_types::DataType;
 use krishiv_types::interval_parse::parse_string;
@@ -48,6 +52,10 @@ use crate::{
 
 const WINDOW: &str = "window";
 const SESSION: &str = "session_window";
+/// The column the inner window of `window(window(..), ..)` is read from.
+const INNER: &str = "__tw_inner";
+/// The added window column's name when the input has a column `window` that must stay readable.
+const OUTER: &str = "__tw_outer";
 const MICROS_PER_DAY: i64 = 86_400_000_000;
 
 /// Whether `e` is an unqualified call of `name` (`window` or `session_window`).
@@ -79,12 +87,27 @@ fn has_calls(root: &Arc<LogicalPlan>) -> bool {
     .is_break()
 }
 
+/// The expressions a walk has entered, so one shared by several parents is walked once. The pointers stay
+/// valid keys because the walked tree stays alive for the whole walk.
+type Seen = std::collections::HashSet<*const Expr>;
+
 /// The window calls in `e`, outside subqueries, outermost first.
-fn collect(e: &Arc<Expr>, out: &mut Vec<Arc<Expr>>) {
+fn collect(e: &Arc<Expr>, seen: &mut Seen, out: &mut Vec<Arc<Expr>>) {
+    if !seen.insert(Arc::as_ptr(e)) {
+        return;
+    }
     if is_window_call(e) {
         out.push(Arc::clone(e));
     }
-    e.for_each_child(&mut |c| collect(c, out));
+    e.for_each_child(&mut |c| collect(c, seen, out));
+}
+
+/// The window calls in the expressions of `p`; see [`collect`].
+fn window_calls(p: &LogicalPlan) -> Vec<Arc<Expr>> {
+    let mut found = Vec::new();
+    let mut seen = Seen::new();
+    p.for_each_expr(&mut |e| collect(e, &mut seen, &mut found));
+    found
 }
 
 /// The structural identity of an expression (origins excluded).
@@ -105,6 +128,18 @@ pub(super) fn rewrite(root: Arc<LogicalPlan>) -> Result<Arc<LogicalPlan>, Analys
 }
 
 fn rewrite_plan(root: Arc<LogicalPlan>) -> Result<Arc<LogicalPlan>, AnalysisError> {
+    // Checked before the rewrite: it replaces the nested window call the check looks for.
+    let mut refused = Ok(());
+    let _ = visit_distinct(Node::Plan(&root), |n| {
+        if let Node::Plan(p) = n
+            && let Err(e) = refuse_inner_window_above_nested(p)
+        {
+            refused = Err(e);
+            return ControlFlow::Break(());
+        }
+        ControlFlow::Continue(())
+    });
+    refused?;
     root.transform_up(&mut |p| {
         let p = p.map_expressions(rewrite_subqueries)?;
         let p = rename_window_time(p)?;
@@ -116,7 +151,8 @@ fn rewrite_plan(root: Arc<LogicalPlan>) -> Result<Arc<LogicalPlan>, AnalysisErro
 /// names it (`window_time(window)`).
 fn rename_window_time(p: Arc<LogicalPlan>) -> Result<Arc<LogicalPlan>, AnalysisError> {
     let mut any = false;
-    p.for_each_expr(&mut |e| any = any || has_window_time(e));
+    let mut seen = Seen::new();
+    p.for_each_expr(&mut |e| any = any || has_window_time(e, &mut seen));
     if !any {
         return Ok(p);
     }
@@ -157,10 +193,13 @@ fn rename_window_time(p: Arc<LogicalPlan>) -> Result<Arc<LogicalPlan>, AnalysisE
     })
 }
 
-fn has_window_time(e: &Arc<Expr>) -> bool {
+fn has_window_time(e: &Arc<Expr>, seen: &mut Seen) -> bool {
+    if !seen.insert(Arc::as_ptr(e)) {
+        return false;
+    }
     call_of(e, WINDOW_TIME).is_some() || {
         let mut any = false;
-        e.for_each_child(&mut |c| any = any || has_window_time(c));
+        e.for_each_child(&mut |c| any = any || has_window_time(c, seen));
         any
     }
 }
@@ -238,7 +277,10 @@ fn qualify_over_project(p: &LogicalPlan) -> Option<(&Arc<LogicalPlan>, &Arc<Expr
 
 /// Whether `e` calls `window_time` (renamed) outside any aggregate function (outside subqueries): inside
 /// `max(window_time(window))` the call reads the group's window, so it is no error.
-fn calls_window_time(e: &Arc<Expr>) -> bool {
+fn calls_window_time(e: &Arc<Expr>, seen: &mut Seen) -> bool {
+    if !seen.insert(Arc::as_ptr(e)) {
+        return false;
+    }
     if let ExprNode::Function(f) = &e.node
         && f.qualifier.is_empty()
         && super::BuiltinFunctions::is_aggregate(&f.name)
@@ -247,9 +289,114 @@ fn calls_window_time(e: &Arc<Expr>) -> bool {
     }
     call_of(e, WINDOW_TIME_SCALAR).is_some_and(|f| f.args.len() == 1) || {
         let mut any = false;
-        e.for_each_child(&mut |c| any = any || calls_window_time(c));
+        e.for_each_child(&mut |c| any = any || calls_window_time(c, seen));
         any
     }
+}
+
+/// The inner window's column as a reference names it: the bare `window`, or one of its fields
+/// (`window.start`, `window.end`). A table qualifier called `window` (`window.ts`) is not the column, and with a
+/// relation aliased `window` in scope the two-part forms are that relation's columns.
+fn inner_window_ref(parts: &[String], alias_window: bool) -> Option<&[String]> {
+    let is_window = |p: &String| p.eq_ignore_ascii_case(WINDOW);
+    match parts {
+        [w] if is_window(w) => Some(parts),
+        [w, field]
+            if !alias_window
+                && is_window(w)
+                && (field.eq_ignore_ascii_case("start") || field.eq_ignore_ascii_case("end")) =>
+        {
+            Some(parts)
+        }
+        _ => None,
+    }
+}
+
+/// Whether `e` is a lambda with a variable called `window`: in its body `window` is that variable, not the
+/// column.
+fn shadows_window(e: &Expr) -> bool {
+    matches!(&e.node, ExprNode::Lambda { params, .. }
+        if params.iter().any(|p| equals_ignore_case(&p.name, WINDOW)))
+}
+
+/// Whether `e` names the inner window's `window` column outside any aggregate call: an aggregate's
+/// arguments are covered (`count(window)`, `any_value(window)`), as in `calls_window_time`. `seen` holds the
+/// expressions already scanned without a match, so a shared one is walked once.
+fn bare_window(e: &Arc<Expr>, alias_window: bool, seen: &mut Seen) -> bool {
+    if shadows_window(e) {
+        return false;
+    }
+    if let ExprNode::Function(f) = &e.node
+        && f.qualifier.is_empty()
+        && super::BuiltinFunctions::is_aggregate(&f.name)
+    {
+        return false;
+    }
+    if matches!(&e.node, ExprNode::Column(c) if inner_window_ref(&c.name, alias_window).is_some()) {
+        return true;
+    }
+    // The pointer is the key: `e` stays alive for the whole scan, so no address is reused.
+    if !seen.insert(Arc::as_ptr(e)) {
+        return false;
+    }
+    let mut any = false;
+    e.for_each_child(&mut |c| any = any || bare_window(c, alias_window, seen));
+    any
+}
+
+/// In a grouped `window(window(ts, ..), ..)`, a `window` (or `window.start` / `window.end`) inside an aggregate's
+/// arguments is the inner window (Spark's inner expansion), not the outer window column that grouping adds:
+/// `any_value(window)` is the inner struct and `max(window.start)` its latest start. The reference is read from
+/// `__tw_inner`; the aggregate keeps the name Spark gives it (`any_value(window)`).
+fn inner_window_in_aggregates(
+    e: &Arc<Expr>,
+    alias_window: bool,
+) -> Result<Arc<Expr>, AnalysisError> {
+    let rewritten = Arc::clone(e).transform_up(&mut |x| {
+        let is_aggregate = matches!(&x.node, ExprNode::Function(f)
+            if f.qualifier.is_empty() && super::BuiltinFunctions::is_aggregate(&f.name));
+        if !is_aggregate {
+            return Ok(x);
+        }
+        read_inner_window(x, alias_window, &mut Rewritten::new())
+    })?;
+    if matches!(&e.node, ExprNode::Alias { .. }) || *rewritten == **e {
+        return Ok(rewritten);
+    }
+    Ok(alias(
+        (*rewritten).clone(),
+        &crate::display::identity_string(e),
+        e.origin,
+    ))
+}
+
+/// Each expression a rewrite has been through, with its result. The entry holds the source too, so its
+/// address is not reused while it is a key.
+type Rewritten = std::collections::HashMap<*const Expr, (Arc<Expr>, Arc<Expr>)>;
+
+/// `e` with its references to the inner window's column read from [`INNER`], except under a lambda that
+/// shadows `window`. A shared expression is rewritten once.
+fn read_inner_window(
+    e: Arc<Expr>,
+    alias_window: bool,
+    done: &mut Rewritten,
+) -> Result<Arc<Expr>, AnalysisError> {
+    if shadows_window(&e) {
+        return Ok(e);
+    }
+    if let ExprNode::Column(c) = &e.node
+        && inner_window_ref(&c.name, alias_window).is_some()
+    {
+        let mut parts = c.name.clone();
+        INNER.clone_into(&mut parts[0]);
+        return Ok(Arc::new(Expr::column(parts).with_origin(e.origin)));
+    }
+    if let Some((_, out)) = done.get(&Arc::as_ptr(&e)) {
+        return Ok(Arc::clone(out));
+    }
+    let out = Arc::clone(&e).map_children(|c| read_inner_window(c, alias_window, done))?;
+    done.insert(Arc::as_ptr(&e), (e, Arc::clone(&out)));
+    Ok(out)
 }
 
 /// The distinct window calls of `found` that are not the time column of another: the operator's windows.
@@ -278,6 +425,131 @@ fn outermost(
     Ok((calls, keys))
 }
 
+/// Whether `agg` is an aggregate that groups by `window(window(ts, ..), ..)`.
+fn is_nested_grouped_window(agg: &LogicalPlan) -> bool {
+    if !matches!(agg.node, PlanNode::Aggregate { .. }) {
+        return false;
+    }
+    window_calls(agg).iter().any(|c| {
+        call_of(c, WINDOW)
+            .and_then(|f| f.args.first())
+            .is_some_and(|a| call_of(a, WINDOW).is_some())
+    })
+}
+
+/// In a `HAVING` or `ORDER BY` over an aggregate grouped by a nested window, `window`, `window.start` and
+/// `window.end` inside an aggregate do not resolve (Spark 4.3: `UNRESOLVED_COLUMN.WITH_SUGGESTION`, where the
+/// select list reads the inner window). The proposal is the aggregate's output names, closest first. An aggregate
+/// whose own list reads the window outside an aggregate is left to the `MISSING_AGGREGATION` check, which Spark
+/// raises first.
+///
+/// The plan shapes the analyzer produces over the aggregate are `Filter` (HAVING), `Sort` and `Sort -> Filter`
+/// (ORDER BY with HAVING); a `Project` between them is not produced.
+fn refuse_inner_window_above_nested(p: &LogicalPlan) -> Result<(), AnalysisError> {
+    fn through_filter(input: &Arc<LogicalPlan>) -> &LogicalPlan {
+        match &input.node {
+            PlanNode::Filter { input, .. } => input,
+            _ => input,
+        }
+    }
+    let below: &LogicalPlan = match &p.node {
+        PlanNode::Filter { input, .. } => input,
+        PlanNode::Sort { input, .. } => through_filter(input),
+        _ => return Ok(()),
+    };
+    let PlanNode::Aggregate {
+        input, aggregates, ..
+    } = &below.node
+    else {
+        return Ok(());
+    };
+    if !is_nested_grouped_window(below) {
+        return Ok(());
+    }
+    let alias_window = matches!(&input.node, PlanNode::SubqueryAlias { alias, .. }
+        if alias.eq_ignore_ascii_case(WINDOW));
+    let mut seen = std::collections::HashSet::new();
+    if aggregates
+        .iter()
+        .any(|e| bare_window(e, alias_window, &mut seen))
+    {
+        return Ok(());
+    }
+    let mut hit: Option<(Vec<String>, crate::Origin)> = None;
+    p.for_each_expr(&mut |e| {
+        visit_aggregate_args(e, &mut |c, o| {
+            if hit.is_none() && inner_window_ref(c, alias_window).is_some() {
+                hit = Some((c.to_vec(), o));
+            }
+        });
+    });
+    let Some((name, origin)) = hit else {
+        return Ok(());
+    };
+    let outputs = aggregates
+        .iter()
+        .map(|e| match &e.node {
+            ExprNode::Alias { name, .. } => vec![name.clone()],
+            ExprNode::Column(c) => vec![c.name.last().cloned().unwrap_or_default()],
+            _ => vec![super::exprs::pretty(&count_star_as_one(e), None)],
+        })
+        .collect();
+    let proposal = super::suggest::closest(&name.join("."), outputs)
+        .iter()
+        .map(|n| super::catalog::quoted(n))
+        .collect::<Vec<_>>()
+        .join(", ");
+    Err(AnalysisError::new(
+        UnresolvedColumnWithSuggestion {
+            object_name: super::catalog::quoted(&name),
+            proposal,
+        },
+        origin,
+    ))
+}
+
+/// `e` with a plain `count(*)` as `count(1)`, which is how Spark names it (the star is still unresolved here).
+fn count_star_as_one(e: &Arc<Expr>) -> Arc<Expr> {
+    match &e.node {
+        ExprNode::Function(f)
+            if !f.distinct
+                && call_of(e, "count").is_some()
+                && matches!(&f.args[..], [a] if matches!(&a.node, ExprNode::Star(s) if s.qualifier.is_empty())) =>
+        {
+            let mut f = f.clone();
+            f.args = vec![Arc::new(Expr::literal(Literal::Integer(1)))];
+            Arc::new(Expr {
+                node: ExprNode::Function(f),
+                ..(**e).clone()
+            })
+        }
+        _ => Arc::clone(e),
+    }
+}
+
+/// Calls `f` with every column reference inside an aggregate call of `e`.
+fn visit_aggregate_args(e: &Arc<Expr>, f: &mut dyn FnMut(&[String], crate::Origin)) {
+    let mut seen = std::collections::HashSet::new();
+    fn go(
+        e: &Arc<Expr>,
+        in_agg: bool,
+        seen: &mut std::collections::HashSet<(*const Expr, bool)>,
+        f: &mut dyn FnMut(&[String], crate::Origin),
+    ) {
+        if shadows_window(e) || !seen.insert((Arc::as_ptr(e), in_agg)) {
+            return;
+        }
+        let agg = in_agg
+            || matches!(&e.node, ExprNode::Function(c)
+                if c.qualifier.is_empty() && super::BuiltinFunctions::is_aggregate(&c.name));
+        if agg && let ExprNode::Column(c) = &e.node {
+            f(&c.name, e.origin);
+        }
+        e.for_each_child(&mut |c| go(c, agg, seen, f));
+    }
+    go(e, false, &mut seen, f);
+}
+
 /// `p` with its window calls read from a new input (see the module documentation).
 fn node(p: Arc<LogicalPlan>) -> Result<Arc<LogicalPlan>, AnalysisError> {
     if !matches!(
@@ -290,8 +562,7 @@ fn node(p: Arc<LogicalPlan>) -> Result<Arc<LogicalPlan>, AnalysisError> {
     ) {
         return Ok(p);
     }
-    let mut found = Vec::new();
-    p.for_each_expr(&mut |e| collect(e, &mut found));
+    let found = window_calls(&p);
     if found.is_empty() {
         return Ok(p);
     }
@@ -321,7 +592,8 @@ fn node(p: Arc<LogicalPlan>) -> Result<Arc<LogicalPlan>, AnalysisError> {
     // `window_time(window)` of a grouped window is not a grouping key or an aggregate.
     let mut grouped_window_time = false;
     if let PlanNode::Aggregate { aggregates, .. } = &p.node {
-        grouped_window_time = aggregates.iter().any(calls_window_time);
+        let mut seen = Seen::new();
+        grouped_window_time = aggregates.iter().any(|a| calls_window_time(a, &mut seen));
     }
     if grouped_window_time {
         return Err(AnalysisError::new(
@@ -359,7 +631,26 @@ fn node(p: Arc<LogicalPlan>) -> Result<Arc<LogicalPlan>, AnalysisError> {
         ));
     }
     let is_time = call_of(&call, WINDOW).is_some();
-    let name = if is_time { WINDOW } else { SESSION };
+    // The relation the window is added to: the `QUALIFY` filter's window goes below the select list's
+    // projection (Spark adds it below the filter, and the projection's outputs follow it).
+    let qualify = qualify_over_project(&p).map(|(project, _)| Arc::clone(project));
+    let base = match &qualify {
+        Some(project) => only_input(project),
+        None => only_input(&p),
+    }
+    .ok_or_else(|| unsupported("a window over several inputs", origin))?;
+    // Spark tells the two `window` columns apart by attribute id; names are all there is here.
+    let clash = is_time
+        && qualify.is_none()
+        && forwarded_window(base, f).is_some()
+        && output_names(base)
+            .iter()
+            .any(|n| n.eq_ignore_ascii_case(WINDOW));
+    let name = match (is_time, clash) {
+        (true, true) => OUTER,
+        (true, false) => WINDOW,
+        (false, _) => SESSION,
+    };
     let replace = |e: Arc<Expr>| -> Result<Arc<Expr>, AnalysisError> {
         e.transform_up(&mut |x| {
             if is_window_call(&x) && key(&x, origin)? == wkey {
@@ -369,29 +660,76 @@ fn node(p: Arc<LogicalPlan>) -> Result<Arc<LogicalPlan>, AnalysisError> {
             }
         })
     };
-    // The relation the window is added to: the `QUALIFY` filter's window goes below the select list's
-    // projection (Spark adds it below the filter, and the projection's outputs follow it).
-    let qualify = qualify_over_project(&p).map(|(project, _)| Arc::clone(project));
-    let base = match &qualify {
-        Some(project) => only_input(project),
-        None => only_input(&p),
-    }
-    .ok_or_else(|| unsupported("a window over several inputs", origin))?;
-    let input = if is_time {
-        time_window_input(base, f, origin)?
+    let (input, inner_added) = if is_time {
+        time_window_input(base, f, name, origin)?
     } else {
-        session_input(&p, base, f, wkey, origin)?
+        (session_input(&p, base, f, wkey, origin)?, false)
     };
+    // The columns the rewrite adds, which a bare `*` does not stand for.
+    let added: &[&str] = if inner_added { &[name, INNER] } else { &[name] };
+    // `window(window(ts, ..), ..)` grouped: a bare `window` in the select list names the inner window's
+    // column (Spark's inner expansion), which the outer grouping does not cover. Inside an aggregate it reads the
+    // inner window.
+    let alias_window = matches!(&base.node, PlanNode::SubqueryAlias { alias, .. }
+        if alias.eq_ignore_ascii_case(WINDOW));
+    let mut p = if clash {
+        name_selected_window(&p, wkey, origin)?
+    } else {
+        p
+    };
+    if let PlanNode::Aggregate { aggregates, .. } = &p.node
+        && call_of(&call, WINDOW)
+            .is_some_and(|w| w.args.first().is_some_and(|a| call_of(a, WINDOW).is_some()))
+    {
+        let mut seen = std::collections::HashSet::new();
+        if aggregates
+            .iter()
+            .any(|a| bare_window(a, alias_window, &mut seen))
+        {
+            return Err(AnalysisError::new(
+                MissingAggregation {
+                    expression: "\"window\"".to_owned(),
+                    expression_any_value: "\"any_value(window)\"".to_owned(),
+                },
+                origin,
+            ));
+        }
+        if let PlanNode::Aggregate {
+            input: agg_input,
+            grouping,
+            aggregates,
+        } = &p.node
+        {
+            let rewritten = aggregates
+                .iter()
+                .map(|a| inner_window_in_aggregates(a, alias_window))
+                .collect::<Result<Vec<_>, _>>()?;
+            if rewritten
+                .iter()
+                .zip(aggregates)
+                .any(|(r, a)| !Arc::ptr_eq(r, a))
+            {
+                p = Arc::new(
+                    LogicalPlan::new(PlanNode::Aggregate {
+                        input: Arc::clone(agg_input),
+                        grouping: grouping.clone(),
+                        aggregates: rewritten,
+                    })
+                    .with_origin(p.origin),
+                );
+            }
+        }
+    }
     let Some(project) = qualify else {
         let with_input = p.map_children(|_| Ok::<_, AnalysisError>(Arc::clone(&input)))?;
-        let with_input = except_added_column(with_input, name);
+        let with_input = except_added_columns(with_input, added);
         return with_input.map_expressions(replace);
     };
     let PlanNode::Project { exprs, .. } = &project.node else {
         return Ok(p);
     };
     let mut selected = vec![col(name, origin)];
-    selected.extend(exprs.iter().map(|e| except_star(e, name)));
+    selected.extend(exprs.iter().map(|e| except_star(e, added)));
     let widened = Arc::new(
         LogicalPlan::new(PlanNode::Project {
             input,
@@ -406,11 +744,11 @@ fn node(p: Arc<LogicalPlan>) -> Result<Arc<LogicalPlan>, AnalysisError> {
 /// A select list's bare `*` stands for the input's columns as the query wrote them: Spark expands it before
 /// it adds the window column, so `SELECT *, window(ts, ..)` has `window` once. A table that has a column of
 /// the same name makes the reference ambiguous.
-fn except_added_column(p: Arc<LogicalPlan>, name: &str) -> Arc<LogicalPlan> {
+fn except_added_columns(p: Arc<LogicalPlan>, added: &[&str]) -> Arc<LogicalPlan> {
     let PlanNode::Project { input, exprs } = &p.node else {
         return p;
     };
-    let exprs = exprs.iter().map(|e| except_star(e, name)).collect();
+    let exprs = exprs.iter().map(|e| except_star(e, added)).collect();
     Arc::new(
         LogicalPlan::new(PlanNode::Project {
             input: Arc::clone(input),
@@ -420,14 +758,15 @@ fn except_added_column(p: Arc<LogicalPlan>, name: &str) -> Arc<LogicalPlan> {
     )
 }
 
-/// `e`, a bare `*`, without the column `name` the rewrite added; any other expression as it is.
-fn except_star(e: &Arc<Expr>, name: &str) -> Arc<Expr> {
+/// `e`, a bare `*`, without the columns the rewrite added; any other expression as it is.
+fn except_star(e: &Arc<Expr>, added: &[&str]) -> Arc<Expr> {
     match &e.node {
         ExprNode::Star(s)
             if s.qualifier.is_empty() && s.regex.is_none() && s.position.is_none() =>
         {
             let mut s = s.clone();
-            s.except.push(vec![name.to_owned()]);
+            s.except
+                .extend(added.iter().map(|name| vec![(*name).to_owned()]));
             Arc::new(Expr::new(ExprNode::Star(s)).with_origin(e.origin))
         }
         _ => Arc::clone(e),
@@ -488,12 +827,13 @@ fn duration(e: &Expr, origin: crate::Origin) -> Result<i64, AnalysisError> {
 }
 
 /// `LATERAL VIEW explode(__time_windows(ts, window, slide, start)) t AS window` over `base`, for the
-/// window call `f`.
+/// window call `f`. The flag says whether the input also holds the column [`INNER`].
 fn time_window_input(
     base: &Arc<LogicalPlan>,
     f: &FunctionCall,
+    output: &str,
     origin: crate::Origin,
-) -> Result<Arc<LogicalPlan>, AnalysisError> {
+) -> Result<(Arc<LogicalPlan>, bool), AnalysisError> {
     if !(2..=4).contains(&f.args.len()) {
         return Err(AnalysisError::new(
             WrongNumArgsWithoutSuggestion {
@@ -522,11 +862,210 @@ fn time_window_input(
                 ));
             }
         };
-        let inner_input = single_window(base, inner, "__tw_inner", inner_time, origin)?;
-        let time = Expr::function(WINDOW_TIME_SCALAR, vec![Expr::column(["__tw_inner"])]);
-        return single_window(&inner_input, f, WINDOW, time, origin);
+        let inner_input = single_window(base, inner, INNER, inner_time, origin)?;
+        let time = Expr::function(WINDOW_TIME_SCALAR, vec![Expr::column([INNER])]);
+        return Ok((single_window(&inner_input, f, output, time, origin)?, true));
     }
-    single_window(base, f, WINDOW, (*f.args[0]).clone(), origin)
+    // `window(w, ..)` where `w` is a column a derived table took from an inner `window(..)`: Spark reads the
+    // window's `window_time`, as for the nested call above.
+    if let Some(name) = forwarded_window(base, f) {
+        // The column is read under the name the `window_time` check accepts for a window column.
+        let renamed = project(
+            Arc::clone(base),
+            vec![star(origin), alias(Expr::column([name]), INNER, origin)],
+            origin,
+        );
+        let time = Expr::function(WINDOW_TIME_SCALAR, vec![Expr::column([INNER])]);
+        return Ok((single_window(&renamed, f, output, time, origin)?, true));
+    }
+    let input = single_window(base, f, output, (*f.args[0]).clone(), origin)?;
+    Ok((input, false))
+}
+
+/// The column the window call `f` reads, when it is a derived table's window column.
+fn forwarded_window<'a>(base: &Arc<LogicalPlan>, f: &'a FunctionCall) -> Option<&'a str> {
+    let ExprNode::Column(c) = &f.args.first()?.node else {
+        return None;
+    };
+    derived_column_name(base, &c.name).filter(|name| is_window_column(base, name))
+}
+
+/// `p` with each select item that is the window call itself named `window`, as Spark names it.
+fn name_selected_window(
+    p: &Arc<LogicalPlan>,
+    wkey: crate::StructuralHash,
+    origin: crate::Origin,
+) -> Result<Arc<LogicalPlan>, AnalysisError> {
+    let named = |exprs: &[Arc<Expr>]| -> Result<Vec<Arc<Expr>>, AnalysisError> {
+        exprs
+            .iter()
+            .map(|e| {
+                Ok(if is_window_call(e) && key(e, origin)? == wkey {
+                    alias((**e).clone(), WINDOW, e.origin)
+                } else {
+                    Arc::clone(e)
+                })
+            })
+            .collect()
+    };
+    let node = match &p.node {
+        PlanNode::Project { input, exprs } => PlanNode::Project {
+            input: Arc::clone(input),
+            exprs: named(exprs)?,
+        },
+        PlanNode::Aggregate {
+            input,
+            grouping,
+            aggregates,
+        } => PlanNode::Aggregate {
+            input: Arc::clone(input),
+            grouping: grouping.clone(),
+            aggregates: named(aggregates)?,
+        },
+        _ => return Ok(Arc::clone(p)),
+    };
+    Ok(Arc::new(LogicalPlan::new(node).with_origin(p.origin)))
+}
+
+/// The input of a node whose output has its input's columns, with the same names, in the same places.
+fn kept_columns_input(node: &PlanNode) -> Option<&Arc<LogicalPlan>> {
+    match node {
+        PlanNode::Filter { input, .. }
+        | PlanNode::Sort { input, .. }
+        | PlanNode::Limit { input, .. }
+        | PlanNode::Offset { input, .. }
+        | PlanNode::Tail { input, .. }
+        | PlanNode::Distinct { input }
+        | PlanNode::Hint { input, .. }
+        | PlanNode::JoinHint { input, .. }
+        | PlanNode::Repartition { input, .. }
+        | PlanNode::Sample { input, .. } => Some(input),
+        _ => None,
+    }
+}
+
+/// The column name of a one-part reference, or of a two-part one whose qualifier is the derived table's alias.
+fn derived_column_name<'a>(base: &Arc<LogicalPlan>, parts: &'a [String]) -> Option<&'a str> {
+    // A `WHERE` or an `ORDER BY` over the derived table leaves its alias in scope.
+    let mut under = base;
+    while let Some(input) = kept_columns_input(&under.node) {
+        under = input;
+    }
+    match parts {
+        [name] => Some(name),
+        [qualifier, name] if matches!(&under.node, PlanNode::SubqueryAlias { alias, .. } if equals_ignore_case(alias, qualifier)) => {
+            Some(name)
+        }
+        _ => None,
+    }
+}
+
+/// Whether the output column `name` of `p` is the window column an inner `window(..)` added.
+fn is_window_column(p: &Arc<LogicalPlan>, name: &str) -> bool {
+    if let Some(input) = kept_columns_input(&p.node) {
+        return is_window_column(input, name);
+    }
+    match &p.node {
+        PlanNode::SubqueryAlias { input, columns, .. } if columns.is_empty() => {
+            is_window_column(input, name)
+        }
+        PlanNode::Project { input, exprs }
+        | PlanNode::Aggregate {
+            input,
+            aggregates: exprs,
+            ..
+        } => match output_names(p)
+            .iter()
+            .position(|n| equals_ignore_case(n, name))
+        {
+            Some(at) => exprs.get(at).is_some_and(|e| is_window_item(input, e)),
+            // No item is written with the name: it comes through a `*`.
+            None => {
+                exprs.iter().any(|e| matches!(e.node, ExprNode::Star(_)))
+                    && is_window_column(input, name)
+            }
+        },
+        // A renamed column list names its columns by position.
+        _ => output_names(p)
+            .iter()
+            .position(|n| equals_ignore_case(n, name))
+            .is_some_and(|at| is_window_output(p, at)),
+    }
+}
+
+/// Whether the output column at `at` of `p` is that window column: `window`, under any alias, over the
+/// time-window generator. By position, since two output columns may share a name.
+fn is_window_output(p: &Arc<LogicalPlan>, at: usize) -> bool {
+    if let Some(input) = kept_columns_input(&p.node) {
+        return is_window_output(input, at);
+    }
+    match &p.node {
+        // A derived table may rename its columns; they keep their places.
+        PlanNode::SubqueryAlias { input, .. } => is_window_output(input, at),
+        PlanNode::Project { input, exprs }
+        | PlanNode::Aggregate {
+            input,
+            aggregates: exprs,
+            ..
+        } => {
+            // A `*` at or before `at` stands for an unknown number of columns.
+            let Some(upto) = exprs.get(..=at) else {
+                return false;
+            };
+            if upto.iter().any(|e| matches!(e.node, ExprNode::Star(_))) {
+                return false;
+            }
+            is_window_item(input, &exprs[at])
+        }
+        _ => false,
+    }
+}
+
+/// Whether the select item `e` over `input` is that window column.
+fn is_window_item(input: &Arc<LogicalPlan>, e: &Expr) -> bool {
+    let read = match &e.node {
+        ExprNode::Alias { expr, .. } => &expr.node,
+        node => node,
+    };
+    let ExprNode::Column(c) = read else {
+        return false;
+    };
+    let over_generator = matches!(
+        &input.node,
+        PlanNode::Generate { names, arg, .. }
+            if matches!(names.as_slice(), [n] if n == WINDOW || n == OUTER)
+                && call_of(arg, "__time_windows").is_some()
+    );
+    if over_generator {
+        return c.name == [WINDOW] || c.name == [OUTER];
+    }
+    // A projection that forwards a column (`SELECT a.iw AS w FROM (..) a`). The whole reference
+    // counts: `a.payload.iw` is a struct field, not the column `iw`.
+    derived_column_name(input, &c.name).is_some_and(|inner| is_window_column(input, inner))
+}
+
+/// The output column names of a projection or aggregate (an alias, or a bare column's own name; `""` for an
+/// expression with neither), seen through derived-table aliases; empty for any other node.
+fn output_names(p: &Arc<LogicalPlan>) -> Vec<String> {
+    if let Some(input) = kept_columns_input(&p.node) {
+        return output_names(input);
+    }
+    match &p.node {
+        PlanNode::SubqueryAlias { input, columns, .. } if columns.is_empty() => output_names(input),
+        PlanNode::SubqueryAlias { columns, .. } => columns.clone(),
+        PlanNode::Project { exprs, .. }
+        | PlanNode::Aggregate {
+            aggregates: exprs, ..
+        } => exprs
+            .iter()
+            .map(|e| match &e.node {
+                ExprNode::Alias { name, .. } => name.clone(),
+                ExprNode::Column(c) => c.name.last().cloned().unwrap_or_default(),
+                _ => String::new(),
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
 }
 
 /// One window column `name` over `base`: the windows of `time` under the durations of `f`.

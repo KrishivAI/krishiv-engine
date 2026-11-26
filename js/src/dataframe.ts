@@ -3,7 +3,8 @@ import type { Table, Schema, RecordBatch } from "apache-arrow";
 import type { Backend, ResultStream } from "./backend.js";
 import { collectTable, toObjects, type ObjectOptions, type Row } from "./result.js";
 
-const q = (name: string): string => (/^[A-Za-z_][A-Za-z0-9_]*$/.test(name) ? name : "`" + name.replaceAll("`", "``") + "`");
+// Always backtick-quoted, so reserved words (`select`, `order`) work as column names.
+const q = (name: string): string => "`" + name.replaceAll("`", "``") + "`";
 
 /** A SQL expression. Built with `col`, `lit` and the functions; combine with the methods. */
 export class Column {
@@ -35,7 +36,11 @@ export function col(name: string): Column {
   return new Column(name === "*" ? "*" : name.split(".").map(q).join("."));
 }
 
-/** A literal; strings are quoted and escaped, `null` is NULL. */
+/**
+ * A literal; strings are quoted and escaped, `null` is NULL. Escaping follows the default parser
+ * (`spark.sql.parser.escapedStringLiterals=false`); with that setting on, build the text yourself,
+ * since a backslash there is kept as written and the server refuses quote and backslash values.
+ */
 export function lit(v: Column | string | number | boolean | bigint | null): Column {
   if (v instanceof Column) return v;
   if (v === null) return new Column("NULL");

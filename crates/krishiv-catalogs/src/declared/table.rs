@@ -154,12 +154,12 @@ impl RestCatalog {
         client: Arc<RestClient>,
         ttl: Duration,
         writes: bool,
+        vended: Arc<VendedCache>,
     ) -> Self {
         let instance = {
             static NEXT: AtomicU64 = AtomicU64::new(0);
             NEXT.fetch_add(1, Ordering::Relaxed)
         };
-        let vended = VendedCache::global();
         vended.register_instance(instance);
         Self {
             name: decl.name.clone(),
@@ -316,7 +316,7 @@ impl RestCatalog {
         };
         let signing = asks_for_signing(&found);
         let vended = (self.storage == CatalogStorage::Vended)
-            .then(|| Arc::new(VendedAnswer::of_table(&found, drops)));
+            .then(|| Arc::new(VendedAnswer::of_table(&found, drops, self.vended.now())));
         let metadata = IcebergMetadata::from_json(found.metadata)
             .map_err(|_| self.fault(&what, "table metadata that does not parse"))?;
         Ok(Loaded {
@@ -603,7 +603,8 @@ impl ProcedureTables for RestProcedureTables {
             };
             if !catalog.writes {
                 return Err(unsupported(format!(
-                    "an Iceberg procedure on the table {} (the catalog is declared read-only:                      set option.write = true)",
+                    "an Iceberg procedure on the table {} (the catalog is declared read-only: \
+                     set option.write = true)",
                     catalog.relation(&namespace, &table)
                 )));
             }

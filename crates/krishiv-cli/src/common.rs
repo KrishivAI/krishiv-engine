@@ -50,7 +50,9 @@ pub(crate) fn build_session(
     let session = builder.build().map_err(|e| e.to_string())?;
     for (name, path) in tables {
         let df = session.read().parquet([path.as_str()]);
-        futures::executor::block_on(df.create_or_replace_temp_view(name))
+        // `--table` takes the table's name as it is, dots included.
+        let quoted = krishiv_common::names::quote_parts(std::slice::from_ref(name));
+        futures::executor::block_on(df.create_or_replace_temp_view(&quoted))
             .map_err(|e| format!("--table {name}={path}: {e}"))?;
     }
     Ok(session)

@@ -130,6 +130,25 @@ impl VendedPrefix {
         }
     }
 
+    /// Whether the prefix lies strictly inside `url`'s location: a path of the same store whose segments extend
+    /// `url`'s. A prefix that covers `url` is not inside it.
+    pub(crate) fn inside(&self, url: &ParsedUrl) -> bool {
+        match self {
+            Self::Path {
+                scheme,
+                store,
+                segments: own,
+            } => {
+                let outer = segments(url);
+                *scheme == url.scheme
+                    && store == url.store_id.key()
+                    && own.len() > outer.len()
+                    && own.starts_with(&outer)
+            }
+            Self::Scheme(_) | Self::Bucket { .. } => false,
+        }
+    }
+
     /// How specific the prefix is: the longest match wins.
     pub(crate) fn depth(&self) -> usize {
         match self {
@@ -171,6 +190,37 @@ pub(crate) fn covering<'a>(
     }
     let own = VendedPrefix::parse(location)?;
     Ok(own.covers(url).then_some((own, config)))
+}
+
+/// The credential entry of an answer whose prefixes are all narrower than the scope `url` (a refresh that narrowed
+/// the prefix, `s3://b/wh` to `s3://b/wh/t`): the config of the prefixes inside `url` when they all name the same
+/// keys, else (none inside, or two that differ, so no one credential serves the scope) `Ok(None)`. With no
+/// `storage-credentials` entry, `config` when the table's own `location` is inside `url`. Storage, not this
+/// choice, decides each file: confinement stays the read's own prefixes.
+///
+/// # Errors
+/// A fault for a prefix that does not parse, as [`covering`].
+pub(crate) fn narrowed<'a>(
+    credentials: &'a [StorageCredential],
+    config: &'a BTreeMap<String, SecretString>,
+    location: &str,
+    url: &ParsedUrl,
+) -> Result<Option<&'a BTreeMap<String, SecretString>>, VendedFault> {
+    if credentials.is_empty() {
+        let own = VendedPrefix::parse(location)?;
+        return Ok(own.inside(url).then_some(config));
+    }
+    let mut found: Option<&BTreeMap<String, SecretString>> = None;
+    for c in credentials {
+        if !VendedPrefix::parse(&c.prefix)?.inside(url) {
+            continue;
+        }
+        match found {
+            Some(f) if f != &c.config => return Ok(None),
+            _ => found = Some(&c.config),
+        }
+    }
+    Ok(found)
 }
 
 fn expiry(

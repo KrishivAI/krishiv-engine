@@ -128,7 +128,7 @@ fn run_cli() -> Result<(), String> {
             &in_dql_scope,
         ),
         "session" => {
-            let mut engine = SessionEngine::new().map_err(|e| e.message)?;
+            let mut engine = SessionEngine::new().map_err(|e| e.message)?.with_tag(&tag);
             run_with(&mut engine as &mut dyn Engine, &set, &manifest, &|_| true)
         }
         _ => run_with(&mut RejectAllEngine, &set, &manifest, &|_| true),

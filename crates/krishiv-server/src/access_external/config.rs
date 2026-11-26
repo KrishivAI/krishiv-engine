@@ -22,6 +22,7 @@ pub enum Endpoint {
     /// `http://` to a loopback address.
     LoopbackHttp(String),
     /// A Unix socket.
+    #[cfg(unix)]
     Unix(PathBuf),
 }
 
@@ -38,15 +39,27 @@ impl Endpoint {
         // echoed in an error, which names the key and the reason only (review m5).
         let raw_shown = "<redacted>";
         if let Some(path) = raw.strip_prefix("unix:") {
-            let path = PathBuf::from(path);
-            if !path.is_absolute() {
+            #[cfg(not(unix))]
+            {
+                let _ = path;
                 return Err(invalid(
                     &ACCESS_EXTERNAL_ENDPOINT,
                     raw_shown,
-                    "a Unix socket path must be absolute",
+                    "a Unix socket endpoint is not supported on this platform",
                 ));
             }
-            return Ok(Self::Unix(path));
+            #[cfg(unix)]
+            {
+                let path = PathBuf::from(path);
+                if !path.is_absolute() {
+                    return Err(invalid(
+                        &ACCESS_EXTERNAL_ENDPOINT,
+                        raw_shown,
+                        "a Unix socket path must be absolute",
+                    ));
+                }
+                return Ok(Self::Unix(path));
+            }
         }
         let (scheme, rest) = raw.split_once("://").ok_or_else(|| {
             invalid(
@@ -106,6 +119,7 @@ impl Endpoint {
             Self::LoopbackHttp(uri) => Ok(tonic::transport::Endpoint::from_shared(uri.clone())
                 .map_err(bad)?
                 .connect_lazy()),
+            #[cfg(unix)]
             Self::Unix(path) => {
                 let path = path.clone();
                 // The URI is not used to connect; the connector dials the socket.
@@ -128,6 +142,7 @@ impl Endpoint {
     fn shown(&self) -> String {
         match self {
             Self::Https(u) | Self::LoopbackHttp(u) => u.clone(),
+            #[cfg(unix)]
             Self::Unix(p) => format!("unix:{}", p.display()),
         }
     }
@@ -147,7 +162,7 @@ fn is_loopback(authority: &str) -> bool {
 }
 
 /// The `external` provider's settings.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExternalConfig {
     /// The service.
     pub endpoint: Endpoint,
