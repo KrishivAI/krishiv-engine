@@ -616,6 +616,36 @@ fn package_args(packages: &[String]) -> Vec<String> {
     }
 }
 
+/// A `--ignore-filename-regex` that keeps only the selected packages' sources in a report, or `None`
+/// when no package is selected (the whole workspace). `llvm-cov export` renders every source file the
+/// profile mentions, and one of them (`krishiv-io/src/io/beneath.rs`) segfaults the lcov exporter on
+/// nightly-2026-08-12, so a `-p` run must not ask for the crates it did not test. A package's directory
+/// under `crates/` is its name.
+fn ignore_other_crates(crate_dirs: &[String], packages: &[String]) -> Option<String> {
+    if packages.is_empty() {
+        return None;
+    }
+    let mut others: Vec<&str> = crate_dirs
+        .iter()
+        .map(String::as_str)
+        .filter(|d| !packages.iter().any(|p| p == d))
+        .collect();
+    others.sort_unstable();
+    (!others.is_empty()).then(|| format!("crates/({})/", others.join("|")))
+}
+
+/// The directory names under `<root>/crates`.
+fn crate_dir_names(root: &Path) -> Vec<String> {
+    std::fs::read_dir(root.join("crates"))
+        .map(|rd| {
+            rd.filter_map(Result::ok)
+                .filter(|e| e.path().is_dir())
+                .filter_map(|e| e.file_name().into_string().ok())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// The nightly toolchain of branch coverage: pinned like the fuzz and ASan jobs, because a floating
 /// `nightly` broke the run (the 2026-10-31 nightly fails to compile `apache-avro` 0.22 with "cycle
 /// detected when computing when `ArraySchema` needs async drop"). `KRISHIV_COVERAGE_TOOLCHAIN` overrides it;
@@ -670,10 +700,14 @@ pub fn run_coverage(root: &Path, flags: &[&str]) -> Result<(), String> {
         test.env("LLVM_PROFILE_FILE_NAME", "krishiv-%8m.profraw");
     }
     run(test, "cargo llvm-cov nextest")?;
+    let ignore = ignore_other_crates(&crate_dir_names(root), &packages);
     let report = |extra: &[&str], out: &Path| {
         let mut c = base(&["report"]);
         if branch {
             c.arg("--branch");
+        }
+        if let Some(re) = &ignore {
+            c.args(["--ignore-filename-regex", re]);
         }
         c.args(extra).arg(out);
         c
@@ -841,6 +875,27 @@ pub fn run_diff_coverage(root: &Path, flags: &[&str]) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+    use super::ignore_other_crates;
+
+    #[test]
+    fn a_package_run_ignores_the_other_crates_sources() {
+        let dirs: Vec<String> = ["krishiv-io", "krishiv-server", "krishiv-cli"]
+            .map(String::from)
+            .to_vec();
+        let pkgs = |p: &[&str]| p.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
+        assert_eq!(ignore_other_crates(&dirs, &[]), None);
+        assert_eq!(
+            ignore_other_crates(&dirs, &pkgs(&["krishiv-server", "krishiv-cli"])),
+            Some("crates/(krishiv-io)/".to_owned())
+        );
+        assert_eq!(
+            ignore_other_crates(
+                &dirs,
+                &pkgs(&["krishiv-io", "krishiv-server", "krishiv-cli"])
+            ),
+            None
+        );
+    }
     #[test]
     fn coverage_flags_collect_packages() {
         let f = super::CoverageFlags::parse(&["--no-branch", "-p", "a", "--package", "b"]).unwrap();
