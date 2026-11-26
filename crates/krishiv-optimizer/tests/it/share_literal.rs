@@ -235,3 +235,43 @@ fn year_over_year_scans_each_fact_once() {
         fixed_point(&on);
     }
 }
+
+/// With statistics (the q-error report's synthetic TPC-DS data) the year-over-year readers share
+/// too: join ordering runs again after the rule and estimates each reader as the instance it
+/// replaced, so each channel's fact table is scanned once and a second optimization changes
+/// nothing. Eager aggregation does not fire on these plans without K5's rule; its state ids are
+/// covered by `canonical_states`' comparison in the TPC-DS runs.
+#[test]
+fn year_over_year_with_statistics_scans_each_fact_once() {
+    let schemas = crate::qerror::tpcds_schemas();
+    let db = crate::qerror::synthetic_tpcds(&schemas, 11, 2 * crate::qerror::scale());
+    let stats = crate::qerror::stats_of(&db);
+    for (q, facts) in [
+        (11, &["store_sales", "web_sales"][..]),
+        (74, &["store_sales", "web_sales"][..]),
+        (4, &["store_sales", "web_sales", "catalog_sales"][..]),
+    ] {
+        let plan = support::resolve(&tpcds::sql(q), &support::ctx_over(tpcds::catalog()));
+        let opt = |p: &Plan, on: bool| {
+            optimize_with_udfs(p, &stats, &UdfLibrary::new(), &config(on)).unwrap()
+        };
+        let (off, on) = (opt(&plan, false), opt(&plan, true));
+        for t in facts {
+            assert_eq!(scans(off.root(), t), 2, "q{q} {t}: {}", off.root());
+            assert_eq!(scans(on.root(), t), 1, "q{q} {t}: {}", on.root());
+        }
+        assert_eq!(
+            scans(on.root(), "customer"),
+            facts.len(),
+            "q{q}: {}",
+            on.root()
+        );
+        let again = opt(&on, true);
+        assert!(
+            again.structurally_eq(&on),
+            "q{q}:\n{}\n{}",
+            on.root(),
+            again.root()
+        );
+    }
+}
