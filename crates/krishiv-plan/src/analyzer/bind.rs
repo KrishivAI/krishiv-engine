@@ -1159,6 +1159,8 @@ async fn load(
                     krishiv_common::error::ErrorClass::KrishivCatalogDelegationUnavailable
                         | krishiv_common::error::ErrorClass::KrishivCatalogLimitExceeded
                         | krishiv_common::error::ErrorClass::KrishivCatalogTableUnsupported
+                        | krishiv_common::error::ErrorClass::KrishivCatalogFailure
+                        | krishiv_common::error::ErrorClass::KrishivCatalogLocationRefused
                 ) {
                     return AnalysisError::new(e, origin);
                 }
@@ -1166,6 +1168,10 @@ async fn load(
                     KrishivCatalogFailure {
                         catalog: quoted(std::slice::from_ref(&ident.catalog)),
                         relation_name: quoted(name),
+                        reason: format!(
+                            "the catalog's answer ({}) is not shown; the server log has the detail",
+                            e.error_class().name()
+                        ),
                     },
                     origin,
                 )

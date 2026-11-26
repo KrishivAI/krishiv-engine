@@ -342,6 +342,7 @@ impl RestCatalog {
         krishiv_common::error::KrishivCatalogFailure {
             catalog: quoted(&self.name),
             relation_name: what.to_owned(),
+            reason: detail.to_owned(),
         }
         .into()
     }
@@ -935,6 +936,7 @@ impl RestCommitTransport for RestCommitter {
             return Err(krishiv_common::error::KrishivCatalogFailure {
                 catalog: quoted(self.client.name()),
                 relation_name: self.relation.clone(),
+                reason: "the catalog has no such table".to_owned(),
             }
             .into());
         };
