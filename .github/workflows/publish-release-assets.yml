@@ -103,4 +103,4 @@ jobs:
         working-directory: assets
         run: |
           gh release view "$TAG" > /dev/null || { echo "::error::create the GitHub Release for $TAG first (RELEASING.md)"; exit 1; }
-          gh release upload "$TAG" -- * --clobber
+          gh release upload "$TAG" --clobber -- *

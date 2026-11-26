@@ -791,7 +791,8 @@ fn security_workflows_are_wired() {
 }
 
 /// Commands and actions that publish or release something.
-const PUBLISH_MARKERS: [&str; 10] = [
+const PUBLISH_MARKERS: [&str; 11] = [
+    "docker/login-action",
     "gh-action-pypi-publish",
     "twine",
     "maturin publish",
@@ -850,10 +851,12 @@ fn release_publishing_is_manual_and_gated() {
         publishers,
         [
             "publish-crates.yml",
+            "publish-docker.yml",
             "publish-pypi.yml",
+            "publish-release-assets.yml",
             "publish-testpypi.yml"
         ],
-        "only the three gated publishing workflows may publish"
+        "only the five gated publishing workflows may publish"
     );
 
     for (file, env) in [
@@ -954,6 +957,64 @@ fn release_publishing_is_manual_and_gated() {
             }
         }
     }
+
+    // The image (owner 2026-11-23): manual dispatch, a `v*` tag only, the `ghcr` environment, after ci.yml.
+    let docker = read(".github/workflows/publish-docker.yml");
+    let triggers: Vec<&str> = docker
+        .lines()
+        .skip_while(|l| *l != "on:")
+        .skip(1)
+        .take_while(|l| l.starts_with(' '))
+        .map(str::trim)
+        .collect();
+    assert_eq!(
+        triggers,
+        ["workflow_dispatch:"],
+        "publish-docker.yml must run on manual dispatch only"
+    );
+    assert!(
+        docker.contains("startsWith(github.ref, 'refs/tags/v')")
+            && !docker.contains("refs/heads/main"),
+        "publish-docker.yml: only a v* tag may publish"
+    );
+    assert!(
+        docker.contains("    uses: $/.github/workflows/ci.yml\n")
+            && docker.contains("    needs: ci\n")
+    );
+    assert!(
+        docker.matches("environment:\n      name: ghcr\n").count() == 3
+            && !docker.contains("secrets."),
+        "publish-docker.yml: every pushing job declares the ghcr environment; the run token is the only credential"
+    );
+
+    // The CLI binaries on the GitHub Release (owner 2026-11-23): manual dispatch, a `v*` tag only, the `release`
+    // environment, after ci.yml, no secret.
+    let assets = read(".github/workflows/publish-release-assets.yml");
+    let triggers: Vec<&str> = assets
+        .lines()
+        .skip_while(|l| *l != "on:")
+        .skip(1)
+        .take_while(|l| l.starts_with(' '))
+        .map(str::trim)
+        .collect();
+    assert_eq!(
+        triggers,
+        ["workflow_dispatch:"],
+        "publish-release-assets.yml must run on manual dispatch only"
+    );
+    assert!(
+        assets.contains("startsWith(github.ref, 'refs/tags/v')")
+            && !assets.contains("refs/heads/main"),
+        "publish-release-assets.yml: only a v* tag may publish"
+    );
+    assert!(
+        assets.contains("    uses: $/.github/workflows/ci.yml\n")
+            && assets.contains("    needs: ci\n")
+    );
+    assert!(
+        assets.contains("environment:\n      name: release\n") && !assets.contains("secrets."),
+        "publish-release-assets.yml: the publish job declares the release environment and holds no secret"
+    );
 
     // release-plz stays a dry run until the owner changes it.
     let plz = read("release-plz.toml");
