@@ -40,6 +40,7 @@ fn session(threads: usize) -> Session {
         io_threads: 1,
         blocking_threads: threads,
         io_blocking_threads: 2,
+        release_when_idle: true,
     })
     .unwrap();
     let s = Session::builder().executor(executor).build().unwrap();

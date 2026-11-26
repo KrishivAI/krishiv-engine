@@ -42,9 +42,9 @@ pub const PROFILE_VERSION: u64 = 1;
 /// The minor version this build writes: it counts additive changes within
 /// [`PROFILE_VERSION`] (0 or absent: the first v1; 1: `usage`; 2: the scan read
 /// costs, `query.scan_reads_in_flight_mean` and the `scan_read*` operator
-/// extras; 3: each pipeline's `max_slice_ns` and `stalls`; 4: `trace`; 5: `usage.principal` and `usage.tags`; 6: `scans`, the tables read and the columns compared with values; 7: `hints` and the plan nodes' `facts`). A reader ignores
+/// extras; 3: each pipeline's `max_slice_ns` and `stalls`; 4: `trace`; 5: `usage.principal` and `usage.tags`; 6: `scans`, the tables read and the columns compared with values; 7: `hints` and the plan nodes' `facts`; 8: `usage.planning_ns`). A reader ignores
 /// members it does not know, so a later minor still loads.
-pub const PROFILE_MINOR: u64 = 7;
+pub const PROFILE_MINOR: u64 = 8;
 
 /// A node of the profiled plan: `EXPLAIN`'s node with its id.
 #[derive(Clone, Debug)]
@@ -286,6 +286,10 @@ pub struct QueryProfile {
     /// The advisor's hints for the finished query (minor 7): the `hints` member; empty when the advisor is
     /// off or none was raised. Filled by [`QueryProfile::with_hints`], never by the executor.
     pub hints: Vec<Hint>,
+    /// The time the query spent planning before its run (minor 8): the `usage.planning_ns` member, as
+    /// `system.queries.planning_ns` (parse, analysis, optimization and physical planning, outside
+    /// `wall_ns`). The session fills it; `None` for a profile built elsewhere.
+    pub planning_ns: Option<u64>,
 }
 
 /// The principal and tags a profile's `usage` names (T136), opaque ids, never credentials.
@@ -310,6 +314,7 @@ impl QueryProfile {
             identity: None,
             scans: profile_scans(plan, &|_| None),
             hints: Vec::new(),
+            planning_ns: None,
         }
     }
 

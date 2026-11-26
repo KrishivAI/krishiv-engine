@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
-//! The `vector_*` functions against Spark 4.2.0, bit for bit
-//! (`tests/fixtures/spark-4.2.0/vector-goldens.json`, made by
+//! The `vector_*` functions against Spark 4.2.0 and 4.3.0, bit for bit
+//! (`tests/fixtures/spark-<version>/vector-goldens.json`, made by
 //! `tests/scripts/gen_vector_goldens.py` from a real Spark run). Spark sums in blocks of 8 in `float`
-//! (`VectorFunctionImplUtils`); a plain fold differs from it from 8 dimensions up, which the
+//! (`VectorFunctionImplUtils`; 4.3 in `double`); a plain fold differs from it from 8 dimensions up, which the
 //! random 768-dimension cases show and the small-integer goldens cannot.
 #![cfg(test)]
 
@@ -14,6 +14,7 @@ use arrow_array::types::Float32Type;
 use arrow_array::{Array, ArrayRef, RecordBatch};
 use arrow_schema::{DataType, Field, Schema};
 use futures::executor::block_on;
+use krishiv_plan::analyzer::SparkProfile;
 use krishiv_session::Session;
 use serde_json::Value;
 
@@ -102,12 +103,29 @@ fn check(name: &str, cell: &str, got: &Got, want: &Value, bad: &mut Vec<String>)
 }
 
 #[test]
-fn every_vector_function_matches_spark_bit_for_bit() {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tests/fixtures/spark-4.2.0/vector-goldens.json");
+fn every_vector_function_matches_spark_4_2_bit_for_bit() {
+    compare(
+        "4.2.0",
+        &Session::builder()
+            .profile(SparkProfile::V4_2)
+            .build()
+            .unwrap(),
+    );
+}
+
+/// The same cells on the default profile (Spark 4.3.0): double-precision L1 and L2 norms summed in blocks of 8,
+/// an infinity norm that propagates NaN, a normalizer that divides by a subnormal norm.
+#[test]
+fn every_vector_function_matches_spark_4_3_bit_for_bit() {
+    compare("4.3.0", &Session::new().unwrap());
+}
+
+fn compare(version: &str, s: &Session) {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
+        "../../tests/fixtures/spark-{version}/vector-goldens.json"
+    ));
     let fixture: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
-    assert_eq!(fixture["spark"], "4.2.0");
-    let s = Session::new().unwrap();
+    assert_eq!(fixture["spark"], version);
     let schema = Arc::new(Schema::new(vec![
         Field::new(
             "a",
@@ -166,7 +184,7 @@ fn every_vector_function_matches_spark_bit_for_bit() {
                 "SELECT vector_normalize(a, CAST('inf' AS FLOAT)) FROM t",
             ),
         ] {
-            check(&name, cell, &run(&s, sql), &case["result"][cell], &mut bad);
+            check(&name, cell, &run(s, sql), &case["result"][cell], &mut bad);
             compared += 1;
         }
     }
@@ -176,5 +194,48 @@ fn every_vector_function_matches_spark_bit_for_bit() {
         "{} of {compared} differ:\n{}",
         bad.len(),
         bad.join("\n")
+    );
+}
+
+/// Spark 4.3 rejects only a zero norm (`VectorFunctionImplUtils`): a subnormal norm divides, so the smallest
+/// subnormal float under the infinity norm normalizes to `[1.0]`. A zero vector is still NULL.
+#[test]
+fn vector_normalize_on_4_3_divides_by_a_subnormal_norm() {
+    let s = Session::new().unwrap();
+    let got = run(
+        &s,
+        "SELECT vector_normalize(array(CAST(1.4E-45 AS FLOAT)), CAST('inf' AS FLOAT))",
+    );
+    assert!(
+        matches!(got, Got::BitsList(ref b) if *b == vec![1.0_f32.to_bits()]),
+        "a subnormal norm divides on 4.3"
+    );
+    let zero = run(
+        &s,
+        "SELECT vector_normalize(array(CAST(0.0 AS FLOAT)), CAST('inf' AS FLOAT))",
+    );
+    assert!(matches!(zero, Got::Null));
+}
+
+/// Spark 4.3 accumulates the L1 and L2 norms in `double`: `[1e-30]` (whose float square underflows) normalizes to
+/// `[1.0]` under degree 2, and `[f32::MAX, f32::MAX]` (whose float sum overflows) to `[0.5, 0.5]` under degree 1.
+#[test]
+fn vector_normalize_on_4_3_accumulates_the_l1_and_l2_norms_in_double() {
+    let s = Session::new().unwrap();
+    let got = run(
+        &s,
+        "SELECT vector_normalize(array(CAST(1E-30 AS FLOAT)), CAST(2.0 AS FLOAT))",
+    );
+    assert!(
+        matches!(got, Got::BitsList(ref b) if *b == vec![1.0_f32.to_bits()]),
+        "the L2 norm of [1e-30] is 1e-30 in double"
+    );
+    let got = run(
+        &s,
+        "SELECT vector_normalize(array(CAST(3.4028235E38 AS FLOAT), CAST(3.4028235E38 AS FLOAT)), CAST(1.0 AS FLOAT))",
+    );
+    assert!(
+        matches!(got, Got::BitsList(ref b) if *b == vec![0.5_f32.to_bits(); 2]),
+        "the L1 norm of [MAX, MAX] is finite in double"
     );
 }

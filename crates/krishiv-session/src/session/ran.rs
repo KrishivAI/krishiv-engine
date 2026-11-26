@@ -38,6 +38,8 @@ pub(crate) struct Listing {
 /// `work` under the command the calling task is running, if any: a task the command starts for a query of
 /// its own (`on_executor`) is still the command's.
 pub(super) fn in_running_command<F: Future>(work: F) -> impl Future<Output = F::Output> {
+    // The statement a policy provider is told of goes with it too.
+    let work = crate::access::StatementContext::carried(work);
     match COMMAND.try_with(Arc::clone) {
         Ok(command) => futures::future::Either::Left(COMMAND.scope(command, work)),
         Err(_) => futures::future::Either::Right(work),
@@ -205,11 +207,15 @@ impl Session {
         queries_only: bool,
     ) -> Result<Ran, KrishivError> {
         let mut env = self.query_env();
+        // Planning starts here: substitution, `IDENTIFIER(..)` clauses and the parse count (MODES-2).
+        env.planning.parse_started(std::time::Instant::now());
         env.row = row;
         let written = query;
         let query = self.substituted(query);
         let query: &str = &query;
         // `IDENTIFIER(expr)` names are evaluated first: parsing, access checks and the run see them.
+        // This runs before the statement's `StatementContext` scope below, so a check it made would
+        // carry an enclosing statement's context; it makes none today (the arguments are constant).
         let resolved = self.identifier_clauses_into(query, &mut env).await?;
         let named_by_clause = matches!(resolved, std::borrow::Cow::Owned(_));
         if !spans.is_empty() && !named_by_clause && query == written {
@@ -248,14 +254,33 @@ impl Session {
         if queries_only && !matches!(statement, Statement::Query(_)) {
             return Ok(Ran::NotAQuery(class));
         }
+        // The statement's class and query id reach a policy provider's questions (ADR 0049).
+        let context = crate::access::StatementContext::new(
+            class.name(),
+            self.operation_id().map(crate::QueryId::as_str),
+            Arc::clone(&env.row),
+        );
+        Box::pin(context.scope(self.sql_here_checked(statement, class, env, query, &redacted)))
+            .await
+    }
+
+    /// [`Self::sql_here_inner`] from the access checks of what `statement` writes on.
+    async fn sql_here_checked(
+        &self,
+        statement: Statement,
+        class: krishiv_sql::StatementClass,
+        mut env: QueryEnv,
+        query: &str,
+        redacted: &RedactedSql,
+    ) -> Result<Ran, KrishivError> {
         self.authorize_statement(&statement, class, &env).await?;
         env.statement_class = Some(class.name());
-        self.refuse_changes_while_draining(class, &redacted, &env)?;
+        self.refuse_changes_while_draining(class, redacted, &env)?;
         let command = !matches!(statement, Statement::Query(_));
         let script = matches!(statement, Statement::Script(_));
         if !command {
-            let df = self.run_statement(statement, env, query, &redacted).await?;
-            df.with_statement(&redacted, class.name());
+            let df = self.run_statement(statement, env, query, redacted).await?;
+            df.with_statement(redacted, class.name());
             return Ok(Ran::Frame(df, false));
         }
         let running = Arc::new(Command {
@@ -266,14 +291,14 @@ impl Session {
             of_script: false,
         });
         // Boxed, as `sql_here_marked`'s future is: the scope is one more nested future level.
-        let run = Box::pin(self.run_statement(statement, env, query, &redacted));
+        let run = Box::pin(self.run_statement(statement, env, query, redacted));
         let df = COMMAND.scope(Arc::clone(&running), run).await?;
         // A command that ran no query (`CREATE TABLE`, `SET`, `SHOW`) is listed when its result frame is
         // read, with the statement's text and class. One that ran a query has its row already: a read of
         // its (empty) result is not the statement again. A script's result holds the rows of its last query:
         // a read of them is listed under the script's text and class, never as a row with neither.
         if script || !running.listed.load(Ordering::Relaxed) {
-            df.with_statement(&redacted, class.name());
+            df.with_statement(redacted, class.name());
         }
         Ok(Ran::Frame(df, true))
     }

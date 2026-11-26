@@ -34,7 +34,8 @@ vector_cosine_similarity(array1, array2)
 ```sql
 -- vector_cosine_similarity, example 1
 > SELECT vector_cosine_similarity(array(1.0F, 2.0F, 3.0F), array(4.0F, 5.0F, 6.0F));
-0.9746319
+0.97463185
+-- Spark documents: 0.9746319
 ```
 
 ## Version history

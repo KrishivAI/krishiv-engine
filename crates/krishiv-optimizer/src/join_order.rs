@@ -27,6 +27,7 @@
 //! below already imply. Estimates count each class's equalities the same
 //! way, so a cycle of them is not counted twice.
 
+use crate::expr::AttrMap;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
@@ -36,7 +37,7 @@ use krishiv_plan::{
 };
 use krishiv_types::DataType;
 
-use crate::estimate::Estimator;
+use crate::estimate::{Estimator, Memo};
 use crate::expr::{
     Attrs, Classes, and_all, call, column, common_equalities, conjuncts, equality, has_subquery,
     implied, is_deterministic, references, substitute,
@@ -218,16 +219,17 @@ impl std::fmt::Display for TreeStats {
 }
 
 /// `root` with every inner-join tree reordered, and a note per tree planned
-/// (when `settings.trace`).
+/// (when `settings.trace`). Estimates start from `memo` and are left in it.
 pub(crate) fn reorder(
     root: &Arc<LogicalPlan>,
     stats: &dyn Statistics,
     propagate: bool,
     settings: Settings,
+    memo: &mut Memo,
 ) -> (Arc<LogicalPlan>, Vec<String>) {
     let mut r = Reorder {
         stats,
-        est: Estimator::with_propagation(stats, propagate),
+        est: Estimator::resume(stats, propagate, std::mem::take(memo)),
         propagate,
         done: Default::default(),
         settings,
@@ -240,6 +242,7 @@ pub(crate) fn reorder(
     // second optimization must order the tree the same way).
     r.est.plan(root);
     let out = r.positional(root);
+    *memo = r.est.into_memo();
     (out, r.notes)
 }
 
@@ -286,9 +289,9 @@ fn selection(p: &LogicalPlan) -> Option<&Arc<LogicalPlan>> {
 
 /// The outputs of a projection `p` that rename an input column
 /// (`a AS c`), by output attribute: the input column's attribute.
-fn renamed_columns(p: &LogicalPlan) -> HashMap<AttrId, AttrId> {
+fn renamed_columns(p: &LogicalPlan) -> AttrMap<AttrId> {
     let PlanNode::Project { exprs, .. } = &p.node else {
-        return HashMap::new();
+        return AttrMap::default();
     };
     exprs
         .iter()
@@ -307,9 +310,9 @@ fn renamed_columns(p: &LogicalPlan) -> HashMap<AttrId, AttrId> {
 /// one the filter pushdown does not cross (a nondeterministic expression, a
 /// common-subexpression output): a conjunct over it stays above, so it is
 /// estimated as written.
-fn computed_outputs(p: &LogicalPlan) -> HashMap<AttrId, Arc<Expr>> {
+fn computed_outputs(p: &LogicalPlan) -> AttrMap<Arc<Expr>> {
     let PlanNode::Project { exprs, .. } = &p.node else {
-        return HashMap::new();
+        return AttrMap::default();
     };
     let crossed = exprs.iter().all(|e| is_deterministic(e))
         && !exprs.iter().any(|e| match &e.node {
@@ -319,7 +322,7 @@ fn computed_outputs(p: &LogicalPlan) -> HashMap<AttrId, Arc<Expr>> {
             _ => false,
         });
     if !crossed {
-        return HashMap::new();
+        return AttrMap::default();
     }
     exprs
         .iter()
@@ -575,7 +578,7 @@ fn deterministic_condition(c: &JoinCondition) -> bool {
 fn composite_keys(
     preds: &mut [Pred],
     all: &RelStats,
-    owner: &HashMap<AttrId, usize>,
+    owner: &AttrMap<usize>,
     at: &HashMap<usize, usize>,
     rows: &[f64],
 ) {
@@ -591,7 +594,7 @@ fn composite_keys(
         }
         // Each side's distinct key columns (a column repeated in several
         // equalities counts once).
-        let mut cols: [HashMap<AttrId, f64>; 2] = [HashMap::new(), HashMap::new()];
+        let mut cols: [AttrMap<f64>; 2] = [AttrMap::default(), AttrMap::default()];
         for &i in &members {
             for (id, n) in equi_columns(&preds[i].expr, all).into_iter().flatten() {
                 let leaf = owner.get(&id).and_then(|o| at.get(o)).copied();
@@ -738,7 +741,7 @@ impl Graph {
         narrow: bool,
         above: Option<&Attrs>,
     ) -> Self {
-        let mut owner: HashMap<AttrId, usize> = HashMap::new();
+        let mut owner: AttrMap<usize> = AttrMap::default();
         for (i, l) in leaves.iter().enumerate() {
             for c in l.resolved_output().unwrap_or_default() {
                 owner.insert(c.id, i);
@@ -751,7 +754,7 @@ impl Graph {
         // estimated before and after that pass runs. The plans keep the
         // columns; only the estimates read the definitions.
         let any_cse = preds.iter().any(|p| reads_cse(p));
-        let mut all_defs: HashMap<AttrId, Arc<Expr>> = HashMap::new();
+        let mut all_defs: AttrMap<Arc<Expr>> = AttrMap::default();
         if any_cse {
             for l in leaves {
                 all_defs.extend(cse_definitions(l));
@@ -808,12 +811,12 @@ impl Graph {
         let mut joins = Vec::new();
         // Each input's projection outputs that compute an expression (not a
         // plain column), by attribute.
-        let projected: Vec<HashMap<AttrId, Arc<Expr>>> =
+        let projected: Vec<AttrMap<Arc<Expr>>> =
             sorted.iter().map(|l| computed_outputs(l)).collect();
         // Definitions per sorted input, so estimates read through
         // common-subexpression projections (built only when a conjunct
         // needs them).
-        let leaf_defs: Vec<HashMap<AttrId, Arc<Expr>>> = if any_cse {
+        let leaf_defs: Vec<AttrMap<Arc<Expr>>> = if any_cse {
             sorted.iter().map(|l| cse_definitions(l)).collect()
         } else {
             Vec::new()
@@ -910,7 +913,7 @@ impl Graph {
             let resolved = if leaf_defs.is_empty() {
                 Arc::clone(&p)
             } else {
-                let mut env = HashMap::new();
+                let mut env = AttrMap::default();
                 for o in &on {
                     if let Some(defs) = leaf_defs.get(*o) {
                         env.extend(defs.iter().map(|(k, v)| (*k, Arc::clone(v))));
@@ -942,7 +945,7 @@ impl Graph {
             // A column is carried while something still reads it: an
             // operator above the tree, or a conjunct over the tree's inputs.
             // One read only by a filter of its own input is not.
-            let mut read_by: HashMap<AttrId, Vec<usize>> = HashMap::new();
+            let mut read_by: AttrMap<Vec<usize>> = AttrMap::default();
             for (k, p) in kept.iter().enumerate() {
                 for id in references(&p.expr) {
                     read_by.entry(id).or_default().push(k);
@@ -1576,7 +1579,7 @@ impl Graph {
 /// places; a written equality that is not canonical is left out (the
 /// canonical ones imply it), and the derived ones follow in the order of
 /// their columns.
-fn canonical_equalities(preds: Vec<Arc<Expr>>, owner: &HashMap<AttrId, usize>) -> Vec<Arc<Expr>> {
+fn canonical_equalities(preds: Vec<Arc<Expr>>, owner: &AttrMap<usize>) -> Vec<Arc<Expr>> {
     let mut classes = Classes::default();
     let mut cols: BTreeMap<AttrId, BoundColumn> = BTreeMap::new();
     // The equalities as written, by their columns (smaller id first).
@@ -1604,7 +1607,7 @@ fn canonical_equalities(preds: Vec<Arc<Expr>>, owner: &HashMap<AttrId, usize>) -
     // Per class (by its smallest column), its columns per input, smallest
     // first. `cols` is in id order, so each list is too.
     let mut members: BTreeMap<AttrId, BTreeMap<usize, Vec<&BoundColumn>>> = BTreeMap::new();
-    let mut first: HashMap<AttrId, AttrId> = HashMap::new();
+    let mut first: AttrMap<AttrId> = AttrMap::default();
     for (id, c) in &cols {
         let root = classes.find(*id);
         let key = *first.entry(root).or_insert(*id);

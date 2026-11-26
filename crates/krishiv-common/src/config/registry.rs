@@ -155,6 +155,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &MEMORY_ABORT_RELEASE_TIMEOUT,
     &MEMORY_SPILL_SCRATCH_RESERVE,
     &MEMORY_RESIDENT_GUARD,
+    &MEMORY_RELEASE_AT_QUERY_END,
     &SESSION_MEMORY_LIMIT,
     &SYSTEM_QUERIES_CAPACITY,
     &HISTORY_PATH,
@@ -611,6 +612,24 @@ pub static MEMORY_SPILL_SCRATCH_RESERVE: ConfigEntry = ConfigEntry {
     scope: Scope::Cluster,
     settable_by: SettableBy::Startup,
     version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// `krishiv.memory.releaseAtQueryEnd`.
+pub static MEMORY_RELEASE_AT_QUERY_END: ConfigEntry = ConfigEntry {
+    key: "krishiv.memory.releaseAtQueryEnd",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(true)),
+    doc: "Whether the executor returns freed memory to the operating system once no query has \
+          run for 1 s: each of its threads releases what its allocator kept from the queries \
+          that ran, so an idle process does not keep the peak of its last query. It needs a \
+          release hook from the program that owns the allocator (the `krishiv` CLI, the Python \
+          module and the bench runner, built with mimalloc, install one); without one the \
+          setting has no effect. While queries run, nothing is released for it. Read when the \
+          session starts its executor.",
+    scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
+    version_added: "0.4.0",
     spark_alias: None,
 };
 
