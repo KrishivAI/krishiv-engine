@@ -160,6 +160,18 @@ fn spatial_fields_need_their_tag() {
 /// timestamp precision; 4.3 takes `TIME(0..=9)` and `TIMESTAMP_NTZ(6)`, refuses 7..=9, and words
 /// the range as `[0, 9]`.
 #[test]
+fn the_nanos_grammar_builds_the_nanosecond_timestamps() {
+    let nanos = |s: &str| parse_data_type_in(s, TypeGrammar::V4_3.with_nanos(true));
+    assert_eq!(nanos("timestamp_ntz(9)"), DataType::timestamp_ntz(9));
+    assert_eq!(nanos("timestamp_ltz(7)"), DataType::timestamp_ltz(7));
+    assert_eq!(nanos("timestamp(8)"), DataType::timestamp_ltz(8));
+    assert_eq!(nanos("timestamp_ntz(6)"), Ok(DataType::TimestampNtz));
+    assert!(nanos("timestamp_ntz(10)").is_err());
+    assert!(parse_data_type_in("timestamp_ntz(9)", TypeGrammar::V4_3).is_err());
+    assert_eq!(TypeGrammar::V4_2.with_nanos(true), TypeGrammar::V4_2);
+}
+
+#[test]
 fn the_type_grammar_follows_the_release() {
     let class = |r: crate::error::Result<DataType>| r.err().map(|e| e.error_class());
     let v42 = |s: &str| parse_data_type_in(s, TypeGrammar::V4_2);

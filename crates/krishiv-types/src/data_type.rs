@@ -202,9 +202,12 @@ pub enum TypeGrammar {
     /// Spark 4.2 and older: `TIME(0..=6)`, no timestamp precision.
     V4_2,
     /// Spark 4.3: `TIME(0..=9)`, `TIMESTAMP[_NTZ|_LTZ](6)` is the microsecond type and 7..=9 the
-    /// nanosecond types (not in Krishiv yet).
+    /// nanosecond types, which the grammar refuses (`FEATURE_NOT_ENABLED` is the session's to raise).
     #[default]
     V4_3,
+    /// Spark 4.3 with `spark.sql.timestampNanosTypes.enabled`: `TIMESTAMP[_NTZ|_LTZ](7..=9)` builds
+    /// the nanosecond types.
+    V4_3Nanos,
 }
 
 impl TypeGrammar {
@@ -214,12 +217,40 @@ impl TypeGrammar {
         if spark_4_3 { Self::V4_3 } else { Self::V4_2 }
     }
 
+    /// `self` with the nanosecond timestamp types on (`spark.sql.timestampNanosTypes.enabled`);
+    /// Spark 4.2 and older never have them.
+    #[must_use]
+    pub const fn with_nanos(self, enabled: bool) -> Self {
+        match self {
+            Self::V4_2 => Self::V4_2,
+            Self::V4_3 | Self::V4_3Nanos => {
+                if enabled {
+                    Self::V4_3Nanos
+                } else {
+                    Self::V4_3
+                }
+            }
+        }
+    }
+
+    /// Whether `TIMESTAMP[_NTZ|_LTZ](p)` is part of the grammar (Spark 4.3).
+    #[must_use]
+    pub const fn has_timestamp_precision(self) -> bool {
+        !matches!(self, Self::V4_2)
+    }
+
+    /// Whether `TIMESTAMP[_NTZ|_LTZ](7..=9)` builds the nanosecond types.
+    #[must_use]
+    pub const fn nanos_types(self) -> bool {
+        matches!(self, Self::V4_3Nanos)
+    }
+
     /// The largest `TIME` precision the grammar takes.
     #[must_use]
     pub const fn max_time_precision(self) -> u8 {
         match self {
             Self::V4_2 => 6,
-            Self::V4_3 => DataType::TIME_MAX_PRECISION,
+            Self::V4_3 | Self::V4_3Nanos => DataType::TIME_MAX_PRECISION,
         }
     }
 
@@ -228,7 +259,7 @@ impl TypeGrammar {
     pub const fn release(self) -> krishiv_common::error::SparkRelease {
         match self {
             Self::V4_2 => krishiv_common::error::SparkRelease::V4_2,
-            Self::V4_3 => krishiv_common::error::SparkRelease::V4_3,
+            Self::V4_3 | Self::V4_3Nanos => krishiv_common::error::SparkRelease::V4_3,
         }
     }
 }

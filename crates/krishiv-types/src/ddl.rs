@@ -931,8 +931,10 @@ fn resolve(lower: &str, args: &[String], grammar: TypeGrammar) -> Option<Result<
             });
         }
         // Spark 4.3: 6 is the microsecond type; 7..=9 the nanosecond types Krishiv has not yet.
-        ("timestamp" | "timestamp_ltz" | "timestamp_ntz", [p]) if grammar == TypeGrammar::V4_3 => {
-            return Some(timestamp_with_precision(lower, p));
+        ("timestamp" | "timestamp_ltz" | "timestamp_ntz", [p])
+            if grammar.has_timestamp_precision() =>
+        {
+            return Some(timestamp_with_precision(lower, p, grammar));
         }
         ("geometry" | "geography", [srid]) => {
             return Some(match srid.parse::<i32>() {
@@ -948,13 +950,15 @@ fn resolve(lower: &str, args: &[String], grammar: TypeGrammar) -> Option<Result<
 
 /// `TIMESTAMP[_NTZ|_LTZ](p)` in Spark 4.3's grammar (`TIMESTAMP` is the session's timestamp type,
 /// taken here as `TIMESTAMP_LTZ` like the bare name).
-fn timestamp_with_precision(lower: &str, p: &str) -> Result<DataType> {
+fn timestamp_with_precision(lower: &str, p: &str, grammar: TypeGrammar) -> Result<DataType> {
     let ntz = lower == "timestamp_ntz";
     match p.parse::<u32>() {
         Ok(6) if ntz => Ok(DataType::TimestampNtz),
         Ok(6) => Ok(DataType::Timestamp),
+        Ok(n @ 7..=9) if grammar.nanos_types() && ntz => DataType::timestamp_ntz(n),
+        Ok(n @ 7..=9) if grammar.nanos_types() => DataType::timestamp_ltz(n),
         Ok(7..=9) => Err(error::unsupported(format!(
-            "the nanosecond-precision timestamp type {}({}) (Krishiv 0.3.1)",
+            "the nanosecond-precision timestamp type {}({}) (spark.sql.timestampNanosTypes.enabled is off)",
             lower.to_ascii_uppercase(),
             digits(p)
         ))),
