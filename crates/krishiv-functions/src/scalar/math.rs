@@ -507,7 +507,7 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                 Err(e) => return Some((listed, Err(e))),
             };
             // Spark 4.3 raises ARITHMETIC_OVERFLOW under ANSI for a double outside BIGINT; 4.2 and
-            // earlier saturate (ADR 0023, `divergence-ceil-floor-ansi-overflow`).
+            // earlier saturate (ADR 0023).
             let raises =
                 opts.ansi && opts.kernel.spark_version() >= krishiv_kernels::SparkVersion::V4_3;
             match ceil_floor(t, scale, listed != "floor", args.len() == 1, raises) {

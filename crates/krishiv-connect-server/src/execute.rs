@@ -586,6 +586,7 @@ impl Translated {
     ) -> Result<Self, KrishivError> {
         let relation = match &command.command_type {
             Some(pb::command::CommandType::CheckpointCommand(c)) => Some(c.relation.as_ref()),
+            Some(pb::command::CommandType::CreateDataframeView(v)) => Some(v.input.as_ref()),
             Some(pb::command::CommandType::WriteOperation(w)) => Some(w.input.as_ref()),
             Some(pb::command::CommandType::WriteOperationV2(w)) => Some(w.input.as_ref()),
             _ => None,
@@ -688,6 +689,13 @@ async fn execution_plan(
                     let source =
                         command_source(entry, input, udfs, &cached, query_options.clone()).await?;
                     Box::pin(write_command::write(session, &source, spec)).await?;
+                }
+                RunCommand::CreateView(spec) => {
+                    // The view's plan is analyzed now, as Spark's `createTempView` does; the frame
+                    // carries this operation's options like a write's.
+                    let source =
+                        command_source(entry, input, udfs, &cached, query_options.clone()).await?;
+                    Box::pin(write_command::create_view(&source, spec)).await?;
                 }
                 RunCommand::WriteV2(spec) => {
                     let source =
