@@ -13,7 +13,7 @@
 )]
 
 use std::collections::BTreeSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Instant;
 
@@ -1126,11 +1126,16 @@ pub fn cap_prefix(cap: &str) -> Vec<String> {
 /// Whether `bin` is an executable file on `PATH`.
 #[must_use]
 pub fn on_path(bin: &str) -> bool {
-    std::env::var_os("PATH").is_some_and(|p| {
-        std::env::split_paths(&p).any(|d| {
-            d.join(bin).is_file() || (cfg!(windows) && d.join(format!("{bin}.exe")).is_file())
-        })
-    })
+    std::env::var_os("PATH")
+        .is_some_and(|p| on_path_in(bin, &std::env::split_paths(&p).collect::<Vec<_>>()))
+}
+
+/// Whether `bin` is a file in one of `dirs`; on Windows `bin.exe` counts too (an installed tool is
+/// `cargo-nextest.exe`, never the bare name).
+#[must_use]
+pub fn on_path_in(bin: &str, dirs: &[PathBuf]) -> bool {
+    dirs.iter()
+        .any(|d| d.join(bin).is_file() || (cfg!(windows) && d.join(format!("{bin}.exe")).is_file()))
 }
 
 fn git_lines(root: &Path, args: &[&str]) -> Result<Vec<String>, String> {

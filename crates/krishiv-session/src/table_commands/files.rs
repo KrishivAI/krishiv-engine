@@ -339,14 +339,10 @@ fn dir_identity(path: &Path) -> Option<(u64, u64)> {
         let meta = std::fs::metadata(path).ok()?;
         meta.is_dir().then(|| (meta.dev(), meta.ino()))
     }
-    // As `OwnedDirectory`: the creation time stands in for Windows' file id.
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::MetadataExt;
-        let meta = std::fs::metadata(path).ok()?;
-        meta.is_dir().then(|| (meta.creation_time(), 0))
-    }
-    #[cfg(not(any(unix, windows)))]
+    // Windows' file id is not in stable std, and a creation time is no identity (anyone may set
+    // it, and two directories made in one tick share it): with none, `remove_made` removes
+    // nothing, and a swapped-in directory is never removed in place of the one made.
+    #[cfg(not(unix))]
     {
         let _ = path;
         None

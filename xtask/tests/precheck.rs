@@ -805,7 +805,7 @@ fn external_checks_are_ci_only() {
 
 // ---- the I/O wrappers, against throwaway repositories and fake commands ----
 
-use xtask::precheck::{Cmd, collect_changes, execute, on_path, run_step, verdict};
+use xtask::precheck::{Cmd, collect_changes, execute, on_path, on_path_in, run_step, verdict};
 
 fn cmd(program: &str, args: &[&str], dir: &str) -> Cmd {
     Cmd {
@@ -1007,6 +1007,23 @@ fn notes_make_a_passing_step_partial() {
 fn on_path_finds_installed_binaries_only() {
     assert!(on_path("sh"));
     assert!(!on_path("definitely-not-a-program-xyz"));
+}
+
+/// The lookup of an installed tool: the bare name everywhere, `name.exe` only on Windows. Runs on
+/// every platform (the directories are made here, `PATH` is not touched).
+#[test]
+fn on_path_in_finds_exe_files_on_windows_only() {
+    let d = tempfile::tempdir().unwrap();
+    std::fs::write(d.path().join("plain"), b"").unwrap();
+    std::fs::write(d.path().join("tool.exe"), b"").unwrap();
+    std::fs::create_dir(d.path().join("dir-not-file")).unwrap();
+    let dirs = [d.path().join("missing"), d.path().to_path_buf()];
+    assert!(on_path_in("plain", &dirs));
+    assert!(on_path_in("tool.exe", &dirs));
+    assert_eq!(on_path_in("tool", &dirs), cfg!(windows));
+    assert!(!on_path_in("dir-not-file", &dirs));
+    assert!(!on_path_in("absent", &dirs));
+    assert!(!on_path_in("plain", &[]));
 }
 
 #[cfg(unix)]

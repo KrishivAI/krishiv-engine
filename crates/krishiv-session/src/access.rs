@@ -1290,7 +1290,15 @@ pub(crate) fn physical(
     let Some(local) = at.display.strip_prefix("file:") else {
         return Ok(Checked { at, shown });
     };
-    let Some(parts) = canonical_parts(&krishiv_exec::files::native_path(local)) else {
+    // On Windows a rooted path (`/data`) is on the working directory's drive: `at.display` keeps
+    // Hadoop's `file:/data`, which has no drive and is not absolute there, while `at.path` is the
+    // drive-qualified located path (`D:/data`), the one to resolve. `shown` stays the caller's text.
+    let native = if cfg!(windows) {
+        krishiv_exec::files::native_path(&format!("file:/{}", at.path))
+    } else {
+        krishiv_exec::files::native_path(local)
+    };
+    let Some(parts) = canonical_parts(&native) else {
         return Err(unresolved(session, class, &shown, privilege));
     };
     Ok(Checked {
