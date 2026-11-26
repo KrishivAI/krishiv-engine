@@ -1152,8 +1152,9 @@ async fn load(
                 // catalog serves in a form Krishiv refuses (`KRISHIV_CATALOG_TABLE_UNSUPPORTED`:
                 // read restrictions, server-side planning, a metadata table, §4.1) are Krishiv's
                 // own text, never the provider's, and tell the user what to do: they stay as they
-                // are. Any other class, `KRISHIV_UNSUPPORTED_FEATURE` included, may carry the
-                // provider's text and is hidden.
+                // are, as does a catalog's own `KRISHIV_CATALOG_FAILURE` (it carries its reason) and a
+                // refused location. Any other class, `KRISHIV_UNSUPPORTED_FEATURE` included, may
+                // carry the provider's text and is hidden; the failure names only its class.
                 if matches!(
                     e.error_class(),
                     krishiv_common::error::ErrorClass::KrishivCatalogDelegationUnavailable

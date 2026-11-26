@@ -2,7 +2,8 @@
 //! What a call to an Iceberg REST catalog can fail with, and the Krishiv error each becomes (design P3-lakehouse
 //! §5.6): a limit is `KRISHIV_CATALOG_LIMIT_EXCEEDED`, anything else `KRISHIV_CATALOG_FAILURE`, both naming the
 //! catalog and the table or namespace, with the detail in the log only (cut short). A server's own message, and an
-//! IdP's `error_description`, never reach the error text: either may carry what it should not.
+//! IdP's `error_description`, never reach the error text: either may carry what it should not. The error text does say the kind of failure: the HTTP status, and an
+//! `ErrorModel.type` only when it is one of the spec's names.
 
 use krishiv_common::error::{
     KrishivCatalogDelegationUnavailable, KrishivCatalogFailure, KrishivCatalogLimitExceeded,
@@ -69,6 +70,28 @@ pub enum RestError {
     },
 }
 
+/// The `ErrorModel.type` names the Iceberg REST spec and the Java client define: the only server text an error shows.
+const SPEC_ERROR_TYPES: &[&str] = &[
+    "BadRequestException",
+    "NotAuthorizedException",
+    "ForbiddenException",
+    "NoSuchNamespaceException",
+    "NoSuchTableException",
+    "NoSuchViewException",
+    "NoSuchIcebergTableException",
+    "AlreadyExistsException",
+    "NamespaceNotEmptyException",
+    "CommitFailedException",
+    "CommitStateUnknownException",
+    "ValidationException",
+    "UnsupportedOperationException",
+    "ServiceFailureException",
+    "ServiceUnavailableException",
+    "InternalServerError",
+    "RESTException",
+    "AuthorizationExpiredException",
+];
+
 /// Longest detail a log line carries.
 const LOGGED_DETAIL_CHARS: usize = 300;
 
@@ -122,11 +145,7 @@ impl RestError {
                 format!("the catalog answered with a redirect (HTTP {s}), which is not followed")
             }
             Self::Status { status, kind, .. } => {
-                let kind = kind.as_deref().filter(|k| {
-                    (1..=80).contains(&k.len())
-                        && k.chars()
-                            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '$'))
-                });
+                let kind = kind.as_deref().filter(|k| SPEC_ERROR_TYPES.contains(k));
                 match kind {
                     Some(k) => format!("the catalog answered HTTP {status} ({k})"),
                     None => format!("the catalog answered HTTP {status}"),
@@ -235,12 +254,15 @@ mod tests {
         let limits = RestLimits::default();
         let text = RestError::Status {
             status: 500,
-            kind: Some("ServiceFailure".into()),
+            kind: Some("ServiceFailureException".into()),
             message: Some("secret=hunter2".into()),
         }
         .into_error("rest", "`db`.`t`", &limits)
         .to_string();
-        assert!(text.contains("HTTP 500 (ServiceFailure)"), "{text}");
+        assert!(
+            text.contains("HTTP 500 (ServiceFailureException)"),
+            "{text}"
+        );
         assert!(!text.contains("hunter2"), "{text}");
         let text = RestError::Status {
             status: 400,

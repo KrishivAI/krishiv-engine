@@ -336,8 +336,9 @@ impl RestCatalog {
             .join(".")
     }
 
-    /// A catalog fault for `what`: the detail in the log, never in the error.
-    fn fault(&self, what: &str, detail: &str) -> KrishivError {
+    /// A catalog fault for `what`: `detail` is Krishiv's own fixed text, in the log and in the error's reason
+    /// (never a server's text).
+    fn fault(&self, what: &str, detail: &'static str) -> KrishivError {
         tracing::warn!(target: "krishiv::catalog", catalog = self.name.as_str(), table = what, detail, "an Iceberg REST catalog returned a table Krishiv cannot read");
         krishiv_common::error::KrishivCatalogFailure {
             catalog: quoted(&self.name),
