@@ -64,6 +64,12 @@ impl Rewriter {
         {
             return self.scalar(base, input);
         }
+        // An order that reads the outer query: Spark's `CORRELATED_REFERENCE`.
+        if let PlanNode::Sort { order, .. } = &plan.node
+            && order.iter().any(|o| has_outer(Node::Expr(&o.expr)))
+        {
+            return Err(correlated_order(order, plan.origin));
+        }
         if let Some((agg, predicate, value)) = having_over_global(plan) {
             return self.scalar_having(base, &agg, &predicate, &value);
         }
