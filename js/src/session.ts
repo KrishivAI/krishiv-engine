@@ -62,7 +62,14 @@ export class SessionBuilder {
       backend = await embeddedBackend(this.confs);
     }
     const s = new Session(backend);
-    for (const [k, v] of Object.entries(this.confs)) if (this.url !== undefined) await s.conf.set(k, v);
+    if (this.url !== undefined) {
+      try {
+        for (const [k, v] of Object.entries(this.confs)) await s.conf.set(k, v);
+      } catch (e) {
+        await s.close();
+        throw e;
+      }
+    }
     return s;
   }
 }

@@ -3,7 +3,8 @@ import type { Table, Schema, RecordBatch } from "apache-arrow";
 import type { Backend, ResultStream } from "./backend.js";
 import { collectTable, toObjects, type ObjectOptions, type Row } from "./result.js";
 
-const q = (name: string): string => (/^[A-Za-z_][A-Za-z0-9_]*$/.test(name) ? name : "`" + name.replaceAll("`", "``") + "`");
+// Always backtick-quoted, so reserved words (`select`, `order`) work as column names.
+const q = (name: string): string => "`" + name.replaceAll("`", "``") + "`";
 
 /** A SQL expression. Built with `col`, `lit` and the functions; combine with the methods. */
 export class Column {

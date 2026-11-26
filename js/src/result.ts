@@ -47,8 +47,8 @@ function isoMicros(us: bigint): string {
 }
 
 function integer(v: bigint | number, o: Required<ObjectOptions>): bigint | number | string {
-  if (o.bigint === "string") return String(v);
   if (typeof v === "number") return v;
+  if (o.bigint === "string") return String(v);
   if (o.bigint === "number") {
     if (v > BigInt(Number.MAX_SAFE_INTEGER) || v < BigInt(Number.MIN_SAFE_INTEGER)) {
       throw new RangeError(`${v} does not fit a JavaScript number; use bigint: "bigint" or "string"`);
@@ -154,8 +154,8 @@ function ddlType(t: DataType): string {
   if (DataType.isInt(t)) return ({ 8: "TINYINT", 16: "SMALLINT", 32: "INT", 64: "BIGINT" } as Record<number, string>)[t.bitWidth] ?? "BIGINT";
   if (DataType.isFloat(t)) return t.precision === 2 ? "DOUBLE" : "FLOAT";
   if (DataType.isDecimal(t)) return `DECIMAL(${t.precision},${t.scale})`;
-  if (DataType.isUtf8(t) || DataType.isLargeUtf8(t) || DataType.isUtf8View(t)) return "STRING";
-  if (DataType.isBinary(t) || DataType.isLargeBinary(t) || DataType.isBinaryView(t)) return "BINARY";
+  if (DataType.isUtf8(t) || DataType.isLargeUtf8(t) || DataType.isUtf8View?.(t)) return "STRING";
+  if (DataType.isBinary(t) || DataType.isLargeBinary(t) || DataType.isBinaryView?.(t)) return "BINARY";
   if (DataType.isDate(t)) return "DATE";
   if (DataType.isTimestamp(t)) return t.timezone ? "TIMESTAMP" : "TIMESTAMP_NTZ";
   if (DataType.isList(t)) return `ARRAY<${ddlType(t.children[0]!.type)}>`;

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 import { describe, expect, it } from "vitest";
-import { DateDay, Decimal, Field, Int64, List, Struct, Table, TimestampMicrosecond, Utf8View, Vector, makeData, makeVector, vectorFromArray } from "apache-arrow";
+import { DateDay, Decimal, Field, Int32, Int64, List, Struct, Table, TimestampMicrosecond, Utf8View, Vector, makeData, makeVector, vectorFromArray } from "apache-arrow";
 import { schemaToDDL, toJSON, toObjects } from "../src/result.js";
 
 const col = <T extends Parameters<typeof makeData>[0]>(init: T): Vector => new Vector([makeData(init)]);
@@ -18,6 +18,12 @@ describe("result conversion", () => {
     });
     expect(toObjects(table)[0]).toEqual({ ts: "2024-01-02T03:04:05.000123Z", dt: "2024-01-02", arr: [1n, 2n], st: { a: 1n } });
     expect(JSON.parse(toJSON(table))).toEqual([{ ts: "2024-01-02T03:04:05.000123Z", dt: "2024-01-02", arr: ["1", "2"], st: { a: "1" } }]);
+  });
+
+  it("keeps narrow integers as numbers under bigint: string", () => {
+    const table = new Table({ i: col({ type: new Int32(), length: 1, data: Int32Array.of(5) }), l: int64s([5n]) });
+    expect(toObjects(table, { bigint: "string" })[0]).toEqual({ i: 5, l: "5" });
+    expect(JSON.parse(toJSON(table))).toEqual([{ i: 5, l: "5" }]);
   });
 
   it("prints a negative decimal with its scale", () => {
