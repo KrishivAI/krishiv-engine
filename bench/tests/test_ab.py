@@ -173,6 +173,19 @@ def test_branch_alignment_is_recorded_when_the_runner_reports_it(tmp_path: Path)
     assert eng.runner_build_info() == {"build_profile": "dist", "target_cpu": "x86-64-v3", "branch_align": "32B"}
 
 
+def test_kernel_target_is_recorded_when_the_runner_reports_it(tmp_path: Path):
+    info = {"profile": "dist", "target-cpu": "x86-64-v3", "branch-align": "32B", "kernel-target": "x86_64v3"}
+    eng = KrishivEngine(binary=make_runner(tmp_path, "capped", info))
+    build = eng.runner_build_info()
+    assert build is not None
+    assert build["kernel_target"] == "x86_64v3"
+    # A capped side and an uncapped one are flagged like any other build difference.
+    uncapped = {**build, "kernel_target": "x86_64v4"}
+    msg = ab.build_mismatch({"a": {"build_info": build}, "b": {"build_info": uncapped}})
+    assert msg is not None
+    assert "kernel_target A=x86_64v3 B=x86_64v4" in msg
+
+
 def test_build_mismatch_names_the_fields_that_differ():
     plain = {"build_profile": "dist", "target_cpu": "x86-64-v3"}
     aligned = {**plain, "branch_align": "32B"}

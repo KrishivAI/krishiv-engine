@@ -40,6 +40,9 @@ fn run_child(cap: &str, expected: Target) {
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
+    // A renamed child test would match nothing and pass with "0 passed".
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("1 passed"), "cap {cap:?}: {stdout}");
 }
 
 #[test]

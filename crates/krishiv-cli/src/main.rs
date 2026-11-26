@@ -129,7 +129,7 @@ fn main() -> std::process::ExitCode {
 #[expect(clippy::print_stderr, reason = "CLI binary: stderr is its interface")]
 fn warn_invalid_kernel_target_cap() {
     if let Err(e) = krishiv_kernels::Target::cap_from_env() {
-        eprintln!("krishiv: {e}");
+        eprintln!("krishiv: {e}; ignored");
     }
 }
 

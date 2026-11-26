@@ -282,7 +282,9 @@ musllinux compat build is provided:
 On x86-64 the vectorised kernels also carry copies for x86-64-v3 and x86-64-v4 (AVX-512) and pick the best one the CPU
 has at start-up. `KRISHIV_KERNEL_TARGET=baseline`, `x86_64v3` or `x86_64v4` caps that choice for the process, for
 example to check whether a problem also happens without AVX-512. It only lowers the choice, never past what the CPU
-has, and never below the level the build was compiled for; results are the same at every level.
+has, and never below the level the build was compiled for; results are the same at every level. The names are exact
+(`x86_64v3`, not `x86-64-v3`; any case): `krishiv` warns about any other value and ignores it, and the benchmark runner
+refuses to start.
 
 ## Follow along and get involved
 
