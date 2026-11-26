@@ -100,6 +100,7 @@ fn retain_last_below_one_and_a_disabled_gc_are_refused() {
             &clock(),
             1 << 30,
             &args(Some(0)),
+            None,
         ))
         .unwrap_err();
     assert_eq!(e.error_class(), ErrorClass::KrishivIcebergProcedureArgument);
@@ -118,6 +119,7 @@ fn retain_last_below_one_and_a_disabled_gc_are_refused() {
                 &clock(),
                 1 << 30,
                 &args(Some(1)),
+                None,
             ))
             .unwrap_err();
         assert_eq!(
@@ -238,6 +240,7 @@ fn a_replaced_table_stops_the_expire() {
                 &clock(),
                 1 << 30,
                 &args(Some(1)),
+                None,
             ))
             .unwrap_err();
         let want = if unknown {
@@ -264,6 +267,7 @@ fn expire_commits_and_deletes_only_what_no_kept_snapshot_reaches() {
             &clock(),
             1 << 30,
             &args(Some(1)),
+            None,
         ))
         .unwrap();
     let after = catalog.metadata();
@@ -286,6 +290,7 @@ fn expire_commits_and_deletes_only_what_no_kept_snapshot_reaches() {
             &clock(),
             1 << 30,
             &args(Some(1)),
+            None,
         ))
         .unwrap();
     assert_eq!(
@@ -306,6 +311,7 @@ fn retain_last_two_keeps_two_snapshots() {
             &clock(),
             1 << 30,
             &args(Some(2)),
+            None,
         ))
         .unwrap();
     // Five snapshots, two kept: exactly the three removed snapshots' manifest lists go.
@@ -465,6 +471,7 @@ fn a_spec_a_kept_manifest_names_is_kept() {
             &clock(),
             1 << 30,
             &cleaning(Some(1), FAR),
+            None,
         ))
         .unwrap();
     let after = catalog.metadata();
@@ -485,6 +492,7 @@ fn an_unreached_spec_is_removed() {
             &clock(),
             1 << 30,
             &cleaning(None, 0),
+            None,
         ))
         .unwrap();
     let after = catalog.metadata();
@@ -545,7 +553,14 @@ fn refusing(catalog: std::sync::Arc<Catalog>, unknown: bool, fail_reload: bool) 
 
 fn run_expire(env: &Env, table: &Refusing, a: &ExpireArgs) -> KrishivError {
     env.rt
-        .block_on(expire(table, &env.reg.file_io(), &clock(), 1 << 30, a))
+        .block_on(expire(
+            table,
+            &env.reg.file_io(),
+            &clock(),
+            1 << 30,
+            a,
+            None,
+        ))
         .unwrap_err()
 }
 
@@ -678,6 +693,7 @@ fn a_snapshot_list_that_differs_from_its_metadata_file_is_refused() {
             &clock(),
             1 << 30,
             &args(Some(1)),
+            None,
         ))
         .unwrap_err();
     assert_eq!(
@@ -703,6 +719,7 @@ fn a_snapshot_list_that_differs_from_its_metadata_file_is_refused() {
             &clock(),
             1 << 30,
             &args(Some(1)),
+            None,
         ))
         .unwrap();
     assert!(done.deleted.manifest_lists >= 1, "{:?}", done.deleted);
@@ -755,6 +772,7 @@ fn an_unknown_answer_that_landed_cleans_up_against_the_reload() {
             &clock(),
             1 << 30,
             &args(Some(1)),
+            None,
         ))
         .unwrap();
     assert_eq!(catalog.metadata().snapshots().count(), 1);
@@ -829,6 +847,7 @@ fn a_conflict_replans_on_the_reload() {
             &clock(),
             1 << 30,
             &args(Some(1)),
+            None,
         ))
         .unwrap();
     let after = catalog.metadata();
@@ -865,6 +884,7 @@ fn a_shared_puffin_file_stays_while_a_kept_snapshot_names_it() {
             &clock(),
             1 << 30,
             &args(Some(1)),
+            None,
         ))
         .unwrap();
     assert_eq!(catalog.metadata().snapshots().count(), 1);
@@ -932,6 +952,7 @@ fn gc_turned_off_during_the_retries_stops_the_expire() {
             &clock(),
             1 << 30,
             &args(Some(1)),
+            None,
         ))
         .unwrap_err();
     assert_eq!(
@@ -989,6 +1010,7 @@ fn the_checked_metadata_file_decides_over_the_answer() {
             &clock(),
             1 << 30,
             &args(Some(1)),
+            None,
         ))
         .unwrap_err();
     assert_eq!(
@@ -1084,6 +1106,7 @@ fn the_cleanup_reads_the_start_and_the_committed_base() {
                 &clock(),
                 1 << 30,
                 &args(Some(1)),
+                None,
             ))
             .unwrap();
         let after = catalog.metadata();
@@ -1143,6 +1166,7 @@ fn an_answer_whose_uuid_is_not_its_files_is_refused() {
             &clock(),
             1 << 30,
             &args(Some(1)),
+            None,
         ))
         .unwrap_err();
     assert_eq!(
@@ -1231,6 +1255,7 @@ fn remove_orphan_files_deletes_only_what_no_snapshot_names() {
                 &clock(),
                 &list,
                 1 << 30,
+                None,
                 &orphan_args(dry),
             ))
             .unwrap()
@@ -1262,6 +1287,7 @@ fn remove_orphan_files_refuses_a_short_interval_and_a_foreign_location() {
                 &clock(),
                 &list,
                 1 << 30,
+                None,
                 a,
             ))
             .unwrap_err()
@@ -1285,6 +1311,7 @@ fn remove_orphan_files_refuses_a_short_interval_and_a_foreign_location() {
             &near,
             &list,
             1 << 30,
+            None,
             &super::maintenance::orphans::OrphanArgs {
                 older_than_ms: Some(900),
                 ..orphan_args(true)
@@ -1293,4 +1320,47 @@ fn remove_orphan_files_refuses_a_short_interval_and_a_foreign_location() {
         .map(|_| ());
     // The default is three days before `near`, which is fine; a given one is not:
     assert!(e.unwrap_err().to_string().contains("less than 24 hours"));
+}
+
+#[test]
+fn the_cleanup_path_sets_are_charged_and_a_refusing_pool_deletes_nothing() {
+    use krishiv_memory::{MemoryConfig, MemoryPool, TreePool};
+    // Roomy pool: the same result as without one, and the charge is released at the end.
+    let env = env();
+    let catalog = five_snapshots(&env);
+    let pool: std::sync::Arc<dyn MemoryPool> = TreePool::new(&MemoryConfig::default());
+    let done = env
+        .rt
+        .block_on(expire(
+            &*catalog,
+            &env.reg.file_io(),
+            &clock(),
+            1 << 30,
+            &args(Some(1)),
+            Some(&pool),
+        ))
+        .unwrap();
+    assert_eq!(done.deleted.manifest_lists, 4);
+    assert!(pool.peak_reserved() > 0, "the path sets were charged");
+    assert_eq!(pool.reserved(), 0, "the charge is released at the end");
+
+    // A pool too small for them: the snapshots are removed, no file is deleted, the memory error.
+    let env = super::provider_tests::env();
+    let catalog = five_snapshots(&env);
+    let small: std::sync::Arc<dyn MemoryPool> = TreePool::new(&MemoryConfig {
+        limit: Some(64),
+        ..MemoryConfig::default()
+    });
+    let e = env
+        .rt
+        .block_on(expire(
+            &*catalog,
+            &env.reg.file_io(),
+            &clock(),
+            1 << 30,
+            &args(Some(1)),
+            Some(&small),
+        ))
+        .unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::UnableToAcquireMemory, "{e}");
 }

@@ -89,6 +89,9 @@ pub enum ProcedureValue {
 pub struct ProcedureContext {
     /// The catalog's name as the statement wrote or resolved it.
     pub catalog: String,
+    /// The pool a procedure charges its working sets to (the session's); `None` leaves them
+    /// uncharged, as a caller without a pool does.
+    pub memory: Option<std::sync::Arc<dyn krishiv_memory::MemoryPool>>,
 }
 
 /// A procedure of a catalog.

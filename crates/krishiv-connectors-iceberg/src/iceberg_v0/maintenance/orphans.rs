@@ -255,11 +255,22 @@ async fn valid_set(
     meta: &TableMetadata,
     metadata_location: &str,
     max_bytes: u64,
+    memory: Option<&std::sync::Arc<dyn krishiv_memory::MemoryPool>>,
 ) -> Result<Vec<(String, String)>, KrishivError> {
+    let mut charge = super::expire::Charge::new(memory);
     let mut cache = ManifestCache::new();
     let mut out: HashMap<String, super::expire::Kind> = HashMap::new();
     for s in meta.snapshots() {
-        reachable(io, meta, s.snapshot_id(), max_bytes, &mut cache, &mut out).await?;
+        reachable(
+            io,
+            meta,
+            s.snapshot_id(),
+            max_bytes,
+            &mut cache,
+            &mut out,
+            &mut charge,
+        )
+        .await?;
     }
     let mut valid: Vec<(String, String)> = out
         .into_keys()
@@ -300,6 +311,7 @@ pub(crate) async fn remove<F, Fut>(
     clock: &dyn CommitClock,
     list: &F,
     max_bytes: u64,
+    memory: Option<&std::sync::Arc<dyn krishiv_memory::MemoryPool>>,
     args: &OrphanArgs,
 ) -> Result<Removed, KrishivError>
 where
@@ -313,7 +325,7 @@ where
     check_gc(&meta)?;
     let older = resolve_older_than(args.older_than_ms, clock.now_ms())?;
     let location = resolve_location(&meta, &name, args.location.as_deref(), &args.equivalences)?;
-    let valid = valid_set(io, &meta, &metadata_location, max_bytes).await?;
+    let valid = valid_set(io, &meta, &metadata_location, max_bytes, memory).await?;
     let listed: Vec<Listed> = list(location)
         .await?
         .into_iter()

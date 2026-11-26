@@ -218,7 +218,7 @@ impl Procedure for Maintenance {
 
     fn call<'a>(
         &'a self,
-        _ctx: &'a ProcedureContext,
+        ctx: &'a ProcedureContext,
         args: Vec<ProcedureValue>,
     ) -> BoxFuture<'a, Result<RecordBatch, KrishivError>> {
         Box::pin(async move {
@@ -235,9 +235,9 @@ impl Procedure for Maintenance {
                 .into());
             }
             match self.name {
-                "expire_snapshots" => self.expire(table, &args).await,
+                "expire_snapshots" => self.expire(table, &args, ctx.memory.as_ref()).await,
                 "rewrite_data_files" => self.open_for_rewrite(table).await,
-                "remove_orphan_files" => self.orphans(table, &args).await,
+                "remove_orphan_files" => self.orphans(table, &args, ctx.memory.as_ref()).await,
                 other => Err(unsupported(other)),
             }
         })
@@ -261,6 +261,7 @@ impl Maintenance {
         &self,
         table: &str,
         args: &[ProcedureValue],
+        memory: Option<&Arc<dyn krishiv_memory::MemoryPool>>,
     ) -> Result<RecordBatch, KrishivError> {
         // The parameters, in the order of `REMOVE_ORPHAN_FILES`.
         let arg = |i: usize| args.get(i).unwrap_or(&ProcedureValue::Null);
@@ -313,6 +314,7 @@ impl Maintenance {
             clock.as_ref(),
             &list,
             t.max_metadata_bytes(),
+            memory,
             &opts,
         )
         .await?;
@@ -337,6 +339,7 @@ impl Maintenance {
         &self,
         table: &str,
         args: &[ProcedureValue],
+        memory: Option<&Arc<dyn krishiv_memory::MemoryPool>>,
     ) -> Result<RecordBatch, KrishivError> {
         // The parameters, in the order of `EXPIRE_SNAPSHOTS`.
         let arg = |i: usize| args.get(i).unwrap_or(&ProcedureValue::Null);
@@ -363,6 +366,7 @@ impl Maintenance {
             clock.as_ref(),
             t.max_metadata_bytes(),
             &opts,
+            memory,
         )
         .await?;
         let d = done.deleted;

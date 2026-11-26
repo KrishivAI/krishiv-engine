@@ -438,6 +438,44 @@ pub(crate) enum Kind {
 /// The decoded manifests of one walk, by manifest path.
 pub(crate) type ManifestCache = HashMap<String, std::sync::Arc<[(String, Kind)]>>;
 
+/// Bytes held per path in a set beyond its text: the `String` header, the `Kind`, the table slot.
+const PATH_OVERHEAD: usize = 64;
+
+/// The memory the path sets of a cleanup hold, charged to the procedure's pool (an estimate: each
+/// path counted once per set that keeps it, so duplicates over-charge, never under). Without a
+/// pool nothing is charged.
+pub(crate) struct Charge {
+    reservation: Option<krishiv_memory::Reservation>,
+}
+
+impl Charge {
+    pub(crate) fn new(pool: Option<&std::sync::Arc<dyn krishiv_memory::MemoryPool>>) -> Self {
+        Self {
+            reservation: pool.map(|p| {
+                krishiv_memory::ConsumerHandle::register(
+                    std::sync::Arc::clone(p),
+                    "iceberg-expire",
+                    None,
+                )
+                .reservation()
+            }),
+        }
+    }
+
+    /// Charges `paths` held once more.
+    async fn paths<'a>(
+        &mut self,
+        paths: impl Iterator<Item = &'a str>,
+    ) -> Result<(), KrishivError> {
+        let Some(r) = self.reservation.as_mut() else {
+            return Ok(());
+        };
+        let bytes = paths.fold(0_usize, |n, p| n.saturating_add(p.len() + PATH_OVERHEAD));
+        r.grow(bytes).await?;
+        Ok(())
+    }
+}
+
 /// Every file a snapshot reaches, by path: its manifest list, its manifests, the live entries
 /// of those (`ADDED`/`EXISTING`), and the statistics files naming it.
 pub(crate) async fn reachable(
@@ -447,14 +485,19 @@ pub(crate) async fn reachable(
     max_bytes: u64,
     manifests: &mut ManifestCache,
     out: &mut HashMap<String, Kind>,
+    charge: &mut Charge,
 ) -> Result<(), KrishivError> {
     let Some(snapshot) = meta.snapshot_by_id(snapshot_id) else {
         return Ok(());
     };
     let list = snapshot.manifest_list().to_owned();
+    charge.paths(std::iter::once(list.as_str())).await?;
     out.insert(list.clone(), Kind::ManifestList);
     let version = format_version(meta);
     for m in read_manifest_files(io, &list, version, max_bytes).await? {
+        charge
+            .paths(std::iter::once(m.manifest_path.as_str()))
+            .await?;
         out.insert(m.manifest_path.clone(), Kind::Manifest);
         let entries = if let Some(hit) = manifests.get(&m.manifest_path) {
             std::sync::Arc::clone(hit)
@@ -482,14 +525,32 @@ pub(crate) async fn reachable(
                     )
                 })
                 .collect();
+            // Held in the cache and (below) again in `out`.
+            charge
+                .paths(entries.iter().map(|(p, _)| p.as_str()))
+                .await?;
             let entries: std::sync::Arc<[(String, Kind)]> = entries.into();
             manifests.insert(m.manifest_path.clone(), std::sync::Arc::clone(&entries));
             entries
         };
+        charge
+            .paths(entries.iter().map(|(p, _)| p.as_str()))
+            .await?;
         for (path, kind) in entries.iter() {
             out.insert(path.clone(), *kind);
         }
     }
+    let stats: Vec<&str> = meta
+        .statistics_iter()
+        .filter(|s| s.snapshot_id == snapshot_id)
+        .map(|s| s.statistics_path.as_str())
+        .chain(
+            meta.partition_statistics_iter()
+                .filter(|s| s.snapshot_id == snapshot_id)
+                .map(|s| s.statistics_path.as_str()),
+        )
+        .collect();
+    charge.paths(stats.into_iter()).await?;
     for s in meta.statistics_iter() {
         if s.snapshot_id == snapshot_id {
             out.insert(s.statistics_path.clone(), Kind::Statistics);
@@ -512,19 +573,22 @@ pub(crate) async fn reachable(
 /// on (snapshots concurrent writers added after the start and this request removed). Up to `concurrency` deletes run at once, each retried three times; one that
 /// fails is logged and not counted, and never fails the expire.
 ///
-/// The path sets are held in memory, uncharged, as Java's `ReachableFileCleanup` holds them
-/// (crate CLAUDE.md, known limits).
+/// The path sets are held in memory, as Java's `ReachableFileCleanup` holds them, and charged to
+/// `memory` (an estimate, [`Charge`]); a pool that refuses fails the cleanup before any delete.
 ///
 /// # Errors
-/// A manifest list or manifest that cannot be read: nothing is deleted then.
+/// A manifest list or manifest that cannot be read, or a charge the pool refuses: nothing is
+/// deleted then.
 pub(crate) async fn cleanup(
     io: &iceberg::io::FileIO,
     bases: &[&TableMetadata],
     after: &TableMetadata,
     max_bytes: u64,
     concurrency: usize,
+    memory: Option<&std::sync::Arc<dyn krishiv_memory::MemoryPool>>,
 ) -> Result<Deleted, KrishivError> {
     use futures::StreamExt as _;
+    let mut charge = Charge::new(memory);
     let kept: HashSet<i64> = after.snapshots().map(|s| s.snapshot_id()).collect();
     let mut cache = HashMap::new();
     let mut candidates: HashMap<String, Kind> = HashMap::new();
@@ -536,7 +600,16 @@ pub(crate) async fn cleanup(
             .filter(|id| !kept.contains(id) && seen.insert(*id))
             .collect();
         for id in removed {
-            reachable(io, base, id, max_bytes, &mut cache, &mut candidates).await?;
+            reachable(
+                io,
+                base,
+                id,
+                max_bytes,
+                &mut cache,
+                &mut candidates,
+                &mut charge,
+            )
+            .await?;
         }
     }
     // Nothing to delete (a spec- or schema-only commit): the kept snapshots are not read, so an
@@ -546,7 +619,16 @@ pub(crate) async fn cleanup(
     }
     let mut valid: HashMap<String, Kind> = HashMap::new();
     for id in &kept {
-        reachable(io, after, *id, max_bytes, &mut cache, &mut valid).await?;
+        reachable(
+            io,
+            after,
+            *id,
+            max_bytes,
+            &mut cache,
+            &mut valid,
+            &mut charge,
+        )
+        .await?;
     }
     let mut counts = Deleted::default();
     let mut doomed: Vec<(String, Kind)> = candidates
@@ -642,6 +724,7 @@ pub(crate) async fn expire(
     clock: &dyn CommitClock,
     max_metadata_bytes: u64,
     args: &ExpireArgs,
+    memory: Option<&std::sync::Arc<dyn krishiv_memory::MemoryPool>>,
 ) -> Result<Expired, KrishivError> {
     let start = checked_load(table, io, max_metadata_bytes).await?;
     check(&start, args)?;
@@ -684,7 +767,15 @@ pub(crate) async fn expire(
             // `meta`, a checked reload of this table, so their files are cleaned as Java's action
             // diffs the start against the refreshed table. On the first attempt `meta` is the
             // start and nothing is read.
-            let deleted = cleanup(io, &[&start], &meta, max_metadata_bytes, concurrency).await?;
+            let deleted = cleanup(
+                io,
+                &[&start],
+                &meta,
+                max_metadata_bytes,
+                concurrency,
+                memory,
+            )
+            .await?;
             return Ok(Expired { deleted });
         }
         let (requirements, updates) = request(&meta, &planned)?;
@@ -712,6 +803,7 @@ pub(crate) async fn expire(
                     &after,
                     max_metadata_bytes,
                     concurrency,
+                    memory,
                 )
                 .await?;
                 return Ok(Expired { deleted });
@@ -741,8 +833,15 @@ pub(crate) async fn expire(
                 if !landed(&meta, &now, &planned) {
                     return Err(unknown(reason));
                 }
-                let deleted =
-                    cleanup(io, &[&start, &meta], &now, max_metadata_bytes, concurrency).await?;
+                let deleted = cleanup(
+                    io,
+                    &[&start, &meta],
+                    &now,
+                    max_metadata_bytes,
+                    concurrency,
+                    memory,
+                )
+                .await?;
                 return Ok(Expired { deleted });
             }
             CommitOutcome::Failed(e) => return Err(e),
