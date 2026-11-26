@@ -30,6 +30,7 @@ use krishiv_plan::{
 use krishiv_types::DataType;
 
 use crate::arrow::{schema_bytes, type_bytes};
+use crate::encode_aggregate::{count_min_expr, percentile_expr};
 use crate::error::{CodecError, Result};
 use crate::features::arrow_type_is_nested;
 use crate::features::{Feature, legacy_level, plan_features};
@@ -200,7 +201,7 @@ fn layout(layout: &[AttrId]) -> Vec<u64> {
     layout.iter().map(|a| a.0).collect()
 }
 
-fn indexes(v: &[usize]) -> Vec<u64> {
+pub(crate) fn indexes(v: &[usize]) -> Vec<u64> {
     v.iter().map(|i| *i as u64).collect()
 }
 
@@ -1607,61 +1608,6 @@ fn udaf_call(call: &UdafCall, nested: &Cell<bool>) -> Result<pb::UdafCall> {
     })
 }
 
-/// A `count_min_sketch` call with its folded shape and seed.
-fn count_min_expr(
-    depth: u32,
-    width: u32,
-    seed: i32,
-    a: &AggregateExpr,
-    nested: &Cell<bool>,
-) -> pb::AggregateExpr {
-    let function = pb::AggregateFunction::CountMinSketch;
-    pb::AggregateExpr {
-        count_min_depth: depth,
-        count_min_width: width,
-        count_min_seed: seed,
-        ..percentile_expr(function, &[], false, false, 0, false, 0, a, nested)
-    }
-}
-
-/// An [`AggregateExpr`] of the percentile family or `approx_count_distinct`,
-/// with its folded parameters.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "one call site, every folded parameter"
-)]
-fn percentile_expr(
-    function: pb::AggregateFunction,
-    percentages: &[f64],
-    array: bool,
-    reverse: bool,
-    accuracy: i64,
-    legacy: bool,
-    precision: u32,
-    a: &AggregateExpr,
-    nested: &Cell<bool>,
-) -> pb::AggregateExpr {
-    pb::AggregateExpr {
-        function: function as i32,
-        ignore_nulls: false,
-        args: indexes(&a.args),
-        input: match a.input {
-            AggInput::Raw => pb::AggregateInput::Raw,
-            AggInput::State => pb::AggregateInput::State,
-        } as i32,
-        arg_type: arrow_bytes(&a.arg_type, nested),
-        name: a.name.clone(),
-        percentages: percentages.to_vec(),
-        percentile_array: array,
-        percentile_reverse: reverse,
-        percentile_accuracy: accuracy,
-        percentile_legacy: legacy,
-        hll_precision: precision,
-        mask: a.mask.map(|m| m as u64),
-        ..Default::default()
-    }
-}
-
 fn read_source(source: &ReadSource, nested: &Cell<bool>) -> Result<pb::ReadSource> {
     use pb::read_source::Kind;
     let options = |options: &std::collections::BTreeMap<String, OptionValue>| {
@@ -1785,7 +1731,7 @@ fn option(key: &str, value: &OptionValue) -> Result<pb::OptionValue> {
 
 /// The IPC bytes of the Arrow type `t`; `nested` is set when it is or holds an
 /// array, map or struct.
-fn arrow_bytes(t: &arrow_schema::DataType, nested: &Cell<bool>) -> Vec<u8> {
+pub(crate) fn arrow_bytes(t: &arrow_schema::DataType, nested: &Cell<bool>) -> Vec<u8> {
     if arrow_type_is_nested(t) {
         nested.set(true);
     }
