@@ -337,6 +337,19 @@ impl Resolver<'_> {
             AnalysisError::new(err, origin)
         })?;
         let mut call_kids = call_kids;
+        // A constant map key cast to the key type: Spark folds the cast before it runs, so a key
+        // that cannot be cast raises even over no rows (`m.field` on `MAP<BIGINT, ..>`).
+        if is_builtin_entry(entry)
+            && matches!(entry.id.name(), "__subscript" | "element_at")
+            && matches!(
+                kids.first().and_then(|k| k.ty.data_type.as_ref()),
+                Some(DataType::Map(_))
+            )
+            && let Some(key) = call_kids.get(1)
+            && let Some(Constant::Error(err)) = self.fold(&key.expr, ansi)
+        {
+            return Err(AnalysisError::new(err, kids[1].expr.origin));
+        }
         if is_builtin_entry(entry)
             && matches!(entry.id.name(), "from_protobuf" | "to_protobuf")
             && Self::descriptor_literal(kids).is_some()

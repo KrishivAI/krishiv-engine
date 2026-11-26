@@ -1,8 +1,5 @@
 {
   "cases": {
-    "depends-on-command": [
-      2
-    ],
     "parser-tail": [
       3
     ]
