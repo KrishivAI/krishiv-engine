@@ -159,6 +159,14 @@ def embed_checks(origin: str, shots: Path | None) -> list[str]:
             problems.append(
                 "deep link: the header's Queries link does not show the query list"
             )
+        # A hash that is not `#/...` is an anchor inside the page, not a route: the page stays the path's.
+        page.goto(f"{origin}/queries/{QID}?token=fixture#operators")
+        try:
+            page.get_by_text("HashJoin").first.wait_for(timeout=5000)
+        except PlaywrightTimeout:
+            problems.append(
+                "deep link /queries/{id}#operators: an anchor was read as a route"
+            )
         page.goto(f"{origin}/sql?token=fixture")
         page.get_by_role("link", name="Environment").first.click()
         try:
@@ -327,6 +335,33 @@ def embed_checks(origin: str, shots: Path | None) -> list[str]:
             )
         if not any("not in krishiv.ui.allowedOrigins" in m for m in log):
             problems.append(f"a message from a disallowed origin was not logged: {log}")
+        ctx.close()
+
+        # 4b. The allowed origins cannot be read: a theme sent as the frame loads is refused and logged, not held.
+        ctx = browser.new_context()
+        log = []
+        ctx.route(
+            "http://parent.test/**",
+            lambda r: r.fulfill(
+                status=200,
+                content_type="text/html",
+                body=parent_html(link, message({"tokens": {"accent": "#00ff00"}})),
+            ),
+        )
+        ctx.route("**/api/internal/embed/config", lambda r: r.fulfill(status=500))
+        page = ctx.new_page()
+        _console(page, log)
+        page.goto("http://parent.test/")
+        page.frame_locator("#f").get_by_text("HashJoin").first.wait_for(timeout=10000)
+        page.wait_for_timeout(500)
+        if accent_of(page) == "#00ff00":
+            problems.append(
+                "a theme was applied although the allowed origins were not read"
+            )
+        if not any("not in krishiv.ui.allowedOrigins" in m for m in log):
+            problems.append(
+                f"a theme message held while the origins read failed was not logged: {log}"
+            )
         ctx.close()
 
         # 5. A theme in the link that is not valid is ignored and logged.
