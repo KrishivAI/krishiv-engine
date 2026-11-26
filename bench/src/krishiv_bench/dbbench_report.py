@@ -101,12 +101,17 @@ def to_markdown(rows: list[dict[str, object]]) -> str:
     return "\n".join(lines)
 
 
-def check_answers(path: Path, other: str, batch: str | None = None) -> tuple[int, list[str]]:
-    """Compare Krishiv's answers in ``path`` with ``other``'s; returns (answers compared, one line per problem)."""
+def check_answers(path: Path, other: str, batch: str | None = None, data: str | None = None) -> tuple[int, list[str]]:
+    """Compare Krishiv's answers in ``path`` with ``other``'s; returns (answers compared, one line per problem).
+
+    ``batch`` and ``data`` narrow the comparison to one launcher run and one data set.
+    """
     rows: dict[tuple[str, str, str, str, str], dict[str, str]] = {}
     with path.open(newline="") as f:
         for row in csv.DictReader(f):
             if batch is not None and row.get("batch") != batch:
+                continue
+            if data is not None and row["data"] != data:
                 continue
             rows[(row["solution"], row["task"], row["data"], row["question"], row["run"])] = row
     keys = sorted({k[1:] for k in rows if k[0] in (OURS, other)})
@@ -137,7 +142,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--batch", help="only this batch of our file")
     args = ap.parse_args(argv)
     if args.check:
-        compared, problems = check_answers(args.ours, args.check, args.batch)
+        compared, problems = check_answers(args.ours, args.check, args.batch, args.data)
         print("\n".join([*problems, f"{compared} answers compared with {args.check}, {len(problems)} differ"]))
         return 1 if problems or not compared else 0
     ours = {k: v for k, v in read_times(args.ours, args.batch).items() if k[3] == OURS}

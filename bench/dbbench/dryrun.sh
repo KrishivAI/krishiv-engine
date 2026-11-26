@@ -13,6 +13,8 @@
 #   KRISHIV_MEMORY_LIMIT  krishiv.memory.limit of the solution (default: the engine's own default)
 #   DBB_RUN_MEMORY        memory of the container that runs the solutions (default 16g); the answer a solution
 #                         holds is outside the engine's limit, so keep the limit well below this
+#                         (measured with 0.3.0: the 1e8 join with an 8g limit reaches 16g and one set is
+#                         killed there; give the 1e8 join 24g)
 #   DBB_GEN_MEMORY        memory of the container that generates data (default 24g; 1e9 needs far more: the R
 #                         generator holds the whole table)
 #   DBB_COMMIT            the benchmark commit to check out (default: the one below)

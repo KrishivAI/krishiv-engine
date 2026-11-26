@@ -112,6 +112,22 @@ def test_check_reports_a_different_or_missing_answer(tmp_path: Path) -> None:
     assert problems[2].endswith("no row from krishiv")
     assert problems[3].endswith("no row from duckdb")
     assert dr.main(["--ours", str(f), "--check", "duckdb"]) == 1
+    # --data narrows the check to one data set: G1's three problems, without J1's.
+    assert dr.check_answers(f, "duckdb", data="G1")[0] == 3
+    assert dr.check_answers(f, "duckdb", data="J1") == (1, ["join J1 q1 2: no row from duckdb"])
+
+
+def test_check_of_one_data_set_ignores_the_others(tmp_path: Path) -> None:
+    f = write_check(
+        tmp_path / "t.csv",
+        [
+            ["b1", "join", "J1", "q1", "duckdb", 1, 5, 1, "1"],
+            ["b1", "join", "J1", "q1", "krishiv", 1, 5, 1, "1"],
+            ["b1", "join", "J2", "q1", "duckdb", 1, 5, 1, "1"],
+        ],
+    )
+    assert dr.main(["--ours", str(f), "--check", "duckdb"]) == 1
+    assert dr.main(["--ours", str(f), "--check", "duckdb", "--data", "J1"]) == 0
 
 
 def test_check_of_an_empty_file_fails(tmp_path: Path) -> None:
