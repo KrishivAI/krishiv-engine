@@ -1,0 +1,197 @@
+// SPDX-License-Identifier: Apache-2.0
+//! Nanosecond timestamps (Spark 4.3 `TIMESTAMP_NTZ(9)` / `TIMESTAMP_LTZ(9)`, Arrow `Timestamp(ns)`) through
+//! the executor: a table of such columns is sorted, grouped, joined, aggregated, hashed, nested, windowed
+//! and printed with every nanosecond. The SQL spellings of the types (`timestamp_ntz(9)`) are the
+//! grammar's; these queries read Arrow columns, so they need none. Values are Spark's (a `TimestampNanosVal`
+//! hash is `hashInt(nanosWithinMicro, hashLong(epochMicros, seed))`).
+#![expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    reason = "a test"
+)]
+use std::sync::Arc;
+
+use arrow_array::{ArrayRef, Int32Array, RecordBatch, TimestampNanosecondArray};
+use arrow_schema::{DataType, Field, Schema, TimeUnit};
+use krishiv_session::Session;
+
+/// `t(k, c timestamp_ntz(9), l timestamp_ltz(9))`: two equal values, one a nanosecond apart, one before the
+/// epoch with nine digits, and a NULL; the session zone is UTC.
+fn session() -> Session {
+    let s = Session::new().unwrap();
+    s.conf().set("spark.sql.session.timeZone", "UTC").unwrap();
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("k", DataType::Int32, false),
+        Field::new("c", DataType::Timestamp(TimeUnit::Nanosecond, None), true),
+        Field::new(
+            "l",
+            DataType::Timestamp(TimeUnit::Nanosecond, Some(Arc::from("UTC"))),
+            true,
+        ),
+    ]));
+    let v = vec![
+        Some(1_577_836_800_000_000_001_i64),
+        Some(1_577_836_800_000_000_999),
+        Some(1_577_836_800_000_000_001),
+        Some(-315_619_200_000_000_000 + 123_456_789),
+        None,
+    ];
+    let cols: Vec<ArrayRef> = vec![
+        Arc::new(Int32Array::from_iter_values(0..5)),
+        Arc::new(TimestampNanosecondArray::from(v.clone())),
+        Arc::new(TimestampNanosecondArray::from(v).with_timezone("UTC")),
+    ];
+    let batch = RecordBatch::try_new(Arc::clone(&schema), cols).unwrap();
+    s.register_batches("t", schema, vec![batch]).unwrap();
+    s
+}
+
+/// The rows of `q`, each column cast to text by the engine (`CAST(.. AS STRING)` is the caller's), cells
+/// joined by spaces and rows by ` | `; NULL is empty.
+fn rows(s: &Session, q: &str) -> String {
+    let batches = futures::executor::block_on(async { s.sql(q).await?.collect().await })
+        .unwrap_or_else(|e| panic!("{q}: {e}"));
+    let mut out = Vec::new();
+    for b in &batches {
+        for r in 0..b.num_rows() {
+            let cells: Vec<String> = b
+                .columns()
+                .iter()
+                .map(|c| arrow_cast::display::array_value_to_string(c, r).expect("display"))
+                .collect();
+            out.push(cells.join(" "));
+        }
+    }
+    out.join(" | ")
+}
+
+const A: &str = "2020-01-01 00:00:00.000000001";
+const B: &str = "2020-01-01 00:00:00.000000999";
+const OLD: &str = "1960-01-01 00:00:00.123456789";
+
+#[test]
+fn values_print_with_every_nanosecond() {
+    let s = session();
+    assert_eq!(
+        rows(
+            &s,
+            "SELECT CAST(c AS STRING), CAST(l AS STRING) FROM t ORDER BY k"
+        ),
+        format!("{A} {A} | {B} {B} | {A} {A} | {OLD} {OLD} |  ")
+    );
+}
+
+#[test]
+fn sort_group_distinct_and_set_operations_see_nanoseconds() {
+    let s = session();
+    let text = |q: &str| rows(&s, &q.replace("c ", "CAST(c AS STRING) "));
+    assert_eq!(
+        rows(&s, "SELECT CAST(c AS STRING) FROM t ORDER BY c"),
+        format!(" | {OLD} | {A} | {A} | {B}")
+    );
+    assert_eq!(
+        rows(
+            &s,
+            "SELECT CAST(c AS STRING), count(*) FROM t GROUP BY c ORDER BY c"
+        ),
+        format!(" 1 | {OLD} 1 | {A} 2 | {B} 1")
+    );
+    assert_eq!(rows(&s, "SELECT count(DISTINCT c) FROM t"), "3");
+    assert_eq!(
+        text("SELECT c FROM (SELECT c FROM t INTERSECT SELECT c FROM t WHERE k <> 1) ORDER BY 1"),
+        format!(" | {OLD} | {A}")
+    );
+    assert_eq!(
+        rows(
+            &s,
+            "SELECT a.k, b.k FROM t a JOIN t b ON a.c = b.c ORDER BY a.k, b.k"
+        ),
+        "0 0 | 0 2 | 1 1 | 2 0 | 2 2 | 3 3"
+    );
+    assert_eq!(
+        rows(
+            &s,
+            "SELECT k FROM t WHERE c IN (SELECT c FROM t WHERE k = 1) ORDER BY k"
+        ),
+        "1"
+    );
+}
+
+#[test]
+fn aggregates_and_windows_keep_nanoseconds() {
+    let s = session();
+    assert_eq!(
+        rows(
+            &s,
+            "SELECT CAST(max(c) AS STRING), CAST(min(c) AS STRING), CAST(max(l) AS STRING) FROM t"
+        ),
+        format!("{B} {OLD} {B}")
+    );
+    assert_eq!(
+        rows(&s, "SELECT k FROM t WHERE c = (SELECT max(c) FROM t)"),
+        "1"
+    );
+    assert_eq!(
+        rows(
+            &s,
+            "SELECT max_by(k, c), min_by(k, c), CAST(min_by(c, k) AS STRING) FROM t"
+        ),
+        format!("1 3 {A}")
+    );
+    assert_eq!(
+        rows(
+            &s,
+            "SELECT CAST(sort_array(collect_set(c)) AS STRING) FROM t"
+        ),
+        format!("[{OLD}, {A}, {B}]")
+    );
+    assert_eq!(
+        rows(
+            &s,
+            "SELECT k, row_number() OVER (ORDER BY c) FROM t ORDER BY k"
+        ),
+        "0 3 | 1 5 | 2 4 | 3 2 | 4 1"
+    );
+    assert_eq!(
+        rows(
+            &s,
+            "SELECT CAST(greatest(c, c) AS STRING), CAST(least(l, l) AS STRING) FROM t WHERE k = 1"
+        ),
+        format!("{B} {B}")
+    );
+}
+
+#[test]
+fn nested_values_and_map_keys_keep_nanoseconds() {
+    let s = session();
+    assert_eq!(
+        rows(
+            &s,
+            "SELECT CAST(map(c, k) AS STRING), CAST(named_struct('f', c) AS STRING) FROM t WHERE k < 2 ORDER BY k"
+        ),
+        format!("{{{A} -> 0}} {{{A}}} | {{{B} -> 1}} {{{B}}}")
+    );
+    assert_eq!(
+        rows(
+            &s,
+            "SELECT CAST(element_at(array(c, c), 2) AS STRING) FROM t WHERE k = 3"
+        ),
+        OLD.to_owned()
+    );
+}
+
+/// `hash` and `xxhash64` of a nanosecond timestamp chain its microseconds (a long) and the
+/// nanoseconds within the microsecond (an int), as Spark's `TimestampNanosVal`.
+#[test]
+fn hashes_follow_timestamp_nanos_val() {
+    let s = session();
+    // The kernel test `hash::nanos_tests` pins these to the long-then-int chain.
+    assert_eq!(
+        rows(
+            &s,
+            "SELECT hash(c), xxhash64(c) FROM t WHERE k IN (0, 4) ORDER BY k"
+        ),
+        "1924051557 8613156613325252680 | 42 42"
+    );
+}

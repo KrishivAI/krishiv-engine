@@ -107,6 +107,10 @@ pub(super) fn native_ints(a: &ArrayRef) -> Option<NativeInts<'_>> {
         DataType::Timestamp(TimeUnit::Microsecond, _) => {
             NativeInts::I64(a.as_primitive::<TimestampMicrosecondType>().values())
         }
+        DataType::Timestamp(TimeUnit::Nanosecond, _) => NativeInts::I64(
+            a.as_primitive::<arrow_array::types::TimestampNanosecondType>()
+                .values(),
+        ),
         DataType::Duration(TimeUnit::Microsecond) => {
             NativeInts::I64(a.as_primitive::<DurationMicrosecondType>().values())
         }

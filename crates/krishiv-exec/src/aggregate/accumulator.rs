@@ -76,7 +76,7 @@ pub(crate) fn min_max_supported(t: &DataType) -> bool {
             | DataType::Decimal64(..)
             | DataType::Decimal128(..)
             | DataType::Date32
-            | DataType::Timestamp(TimeUnit::Microsecond, _)
+            | DataType::Timestamp(TimeUnit::Microsecond | TimeUnit::Nanosecond, _)
             | DataType::Interval(IntervalUnit::YearMonth)
             | DataType::Duration(TimeUnit::Microsecond)
             | DataType::Utf8

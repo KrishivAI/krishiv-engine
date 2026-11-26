@@ -96,6 +96,9 @@ fn equal_null(t: &DataType, ctx: &BindOptions) -> Option<Binding> {
         DataType::Float64 => prim!(Float64Type),
         DataType::Decimal128(..) => prim!(Decimal128Type),
         DataType::Date32 => prim!(Date32Type),
+        DataType::Timestamp(arrow_schema::TimeUnit::Nanosecond, _) => {
+            prim!(arrow_array::types::TimestampNanosecondType)
+        }
         DataType::Timestamp(..) => prim!(TimestampMicrosecondType),
         t if is_string(t) => bytes!(strings),
         t if is_binary(t) => bytes!(binaries),

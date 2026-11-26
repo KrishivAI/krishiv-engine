@@ -338,6 +338,9 @@ fn extremum(t: &DataType, kind: Extremum, n: usize) -> Option<Binding> {
         DataType::Int32 => prim!(Int32Type),
         DataType::Int64 => prim!(Int64Type),
         DataType::Date32 => prim!(Date32Type),
+        DataType::Timestamp(arrow_schema::TimeUnit::Nanosecond, _) => {
+            prim!(arrow_array::types::TimestampNanosecondType)
+        }
         DataType::Timestamp(..) => prim!(TimestampMicrosecondType),
         DataType::Decimal128(..) => prim!(Decimal128Type),
         DataType::Float32 => flt!(Float32Type),
