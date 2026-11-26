@@ -24,6 +24,7 @@ mod plan_stats;
 mod pre_expand;
 mod preserved_side;
 mod props;
+mod prune_first;
 mod python_relations;
 mod qerror;
 mod rollup_chain;

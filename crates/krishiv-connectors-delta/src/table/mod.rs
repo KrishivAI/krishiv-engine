@@ -72,15 +72,36 @@ pub struct OpenOptions {
 /// trailing `/` otherwise (`s3://bucket/key`).
 #[must_use]
 pub fn hadoop_path(url: &url::Url) -> String {
-    if url.scheme() == "file"
-        && url.host_str().is_none_or(str::is_empty)
-        && let Ok(path) = url.to_file_path()
-    {
-        let text = path.to_string_lossy();
+    if url.scheme() == "file" && url.host_str().is_none_or(str::is_empty) {
+        // The URL's own path, decoded, not `Url::to_file_path`: on Windows that is `C:\x\` (and
+        // fails without a drive), while Hadoop's form is `file:/C:/x` there too.
+        let text = percent_decoded(url.path());
         let trimmed = text.trim_end_matches('/');
         return format!("file:{}", if trimmed.is_empty() { "/" } else { trimmed });
     }
     url.as_str().trim_end_matches('/').to_owned()
+}
+
+/// `text` with its `%XX` escapes decoded; a `%` not followed by two hex digits stays as written.
+fn percent_decoded(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let hex = |b: u8| char::from(b).to_digit(16);
+        if bytes[i] == b'%'
+            && let (Some(&h), Some(&l)) = (bytes.get(i + 1), bytes.get(i + 2))
+            && let (Some(h), Some(l)) = (hex(h), hex(l))
+        {
+            // Two hex digits: at most 0xFF, so the cast is exact.
+            out.push(u8::try_from(h * 16 + l).unwrap_or(b'%'));
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// Whether `engine`'s root holds a Delta table: a commit or checkpoint file under `_delta_log/`.

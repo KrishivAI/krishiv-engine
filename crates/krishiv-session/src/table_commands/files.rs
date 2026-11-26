@@ -73,7 +73,7 @@ impl Session {
             Some(text) if !managed && !location.is_absolute() => {
                 let qualified = self.qualify_path(text)?;
                 Ok(match qualified.strip_prefix("file:") {
-                    Some(local) => LocationAsked::Local(PathBuf::from(local)),
+                    Some(local) => LocationAsked::Local(krishiv_exec::files::native_path(local)),
                     None => LocationAsked::Store(qualified),
                 })
             }
@@ -85,7 +85,9 @@ impl Session {
     /// directories above it one level at a time, each verified to still resolve to itself once it exists.
     /// A link swapped in on the way (after the check) is refused with 42501 for `privilege`, and the
     /// directory just made through it is removed: only that directory, found by the identity (device and
-    /// inode) it had right after the mkdir, so a second swap cannot point the removal elsewhere.
+    /// inode) it had right after the mkdir, so a second swap cannot point the removal elsewhere. On Windows
+    /// there is no such identity (a creation time is none), so nothing is removed: the swap is refused and
+    /// an empty directory may stay where the link led.
     ///
     /// Not closed: between the verification of one level and the mkdir of the next, a swap makes one
     /// empty directory outside, which the next verification finds and removes (best effort).
@@ -99,6 +101,14 @@ impl Session {
         let mut at = PathBuf::new();
         for part in checked.components() {
             at.push(part);
+            // A Windows prefix (`\\?\C:`) and the root are not directories to make: `create_dir` on a
+            // bare prefix fails with neither success nor `AlreadyExists`.
+            if matches!(
+                part,
+                std::path::Component::Prefix(_) | std::path::Component::RootDir
+            ) {
+                continue;
+            }
             let made = match std::fs::create_dir(&at) {
                 Ok(()) => dir_identity(&at),
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => None,
@@ -112,7 +122,7 @@ impl Session {
                 }
             };
             match std::fs::canonicalize(&at) {
-                Ok(now) if now == at => {}
+                Ok(now) if crate::access::same_place(&now, &at) => {}
                 now => {
                     if let Ok(now) = now {
                         remove_made(made, &now);
@@ -147,7 +157,8 @@ impl Session {
         }
         std::fs::rename(source, target)
             .map_err(|e| fs_failed("cannot move a directory", source, Some(target), &e))?;
-        let in_place = |p: &Path| std::fs::canonicalize(p).is_ok_and(|now| now == p);
+        let in_place =
+            |p: &Path| std::fs::canonicalize(p).is_ok_and(|now| crate::access::same_place(&now, p));
         if in_place(target) && source.parent().is_none_or(in_place) {
             return Ok(());
         }
@@ -235,7 +246,7 @@ impl Session {
         let checked = self
             .authorize_path(location, &[Privilege::Modify], StatementClass::Write)
             .await?;
-        if checked.path != canonical {
+        if !crate::access::same_place(&checked.path, &canonical) {
             return Err(internal(format!(
                 "refusing to delete {}: it changed while it was checked",
                 location.display()
@@ -330,6 +341,9 @@ fn dir_identity(path: &Path) -> Option<(u64, u64)> {
         let meta = std::fs::metadata(path).ok()?;
         meta.is_dir().then(|| (meta.dev(), meta.ino()))
     }
+    // Windows' file id is not in stable std, and a creation time is no identity (anyone may set
+    // it, and two directories made in one tick share it): with none, `remove_made` removes
+    // nothing, and a swapped-in directory is never removed in place of the one made.
     #[cfg(not(unix))]
     {
         let _ = path;
@@ -376,7 +390,7 @@ fn parent_text(shown: &str) -> &str {
 
 /// The local path of a `file:/...` display.
 fn local_of(display: &str) -> PathBuf {
-    PathBuf::from(display.strip_prefix("file:").unwrap_or(display))
+    krishiv_exec::files::native_path(display)
 }
 
 /// Deletes a managed table's directory; a directory that is already gone
@@ -414,6 +428,9 @@ fn clear_dir(dir: &Path) -> Result<(), KrishivError> {
 mod tests {
     use super::{dir_identity, remove_made};
 
+    // Windows has no stable directory identity in std (creation times of directories made in the
+    // same tick are equal), so a swapped directory cannot be told apart there.
+    #[cfg(unix)]
     #[test]
     fn only_the_directory_made_is_removed() {
         let tmp = tempfile::tempdir().unwrap();

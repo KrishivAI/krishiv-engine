@@ -461,9 +461,9 @@ pub(crate) fn physical_key(key: ObjectKey) -> Option<ObjectKey> {
     if local.contains('%') {
         return None;
     }
-    let resolved = crate::access::resolve_links(std::path::Path::new(local))?;
-    let text = resolved.to_str()?;
-    let normal = model::path_key(text)?;
+    // Links resolved, as the segments `LocalPaths` writes (a Windows drive first: `/C:/x`).
+    let parts = crate::access::canonical_parts(&krishiv_exec::files::native_path(local))?;
+    let normal = model::path_key(&format!("/{}", parts.join("/")))?;
     Some(ObjectKey::new(model::KeyKind::Path, vec![normal]))
 }
 

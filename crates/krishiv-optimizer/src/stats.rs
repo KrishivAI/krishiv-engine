@@ -193,6 +193,16 @@ pub trait Statistics: Send + Sync + fmt::Debug {
         let _ = (scan, columns);
     }
 
+    /// For a column (by `scan`'s output name) of the table `scan` reads, the
+    /// mean scan unit's (Parquet row group's) `max - min` over the table's
+    /// `max - min`, from footer statistics: near 0 for a column written in
+    /// order, so a runtime filter on it skips most units. An estimate, read
+    /// only by the join orderer's prune-first choice. Unknown by default.
+    fn unit_spread(&self, scan: &Scan, column: &str) -> Option<f64> {
+        let _ = (scan, column);
+        None
+    }
+
     /// Whether the table `scan` reads can be read with no column at all and
     /// still return its rows: its reader takes each batch's row count from
     /// the files' own metadata (Parquet row groups), so a `COUNT(*)` reads

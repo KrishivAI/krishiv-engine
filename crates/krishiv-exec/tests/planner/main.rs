@@ -41,6 +41,7 @@ mod plan_stats;
 mod pre_expand;
 mod prefix_cache;
 mod python_relations;
+mod residual_bounds;
 mod rollup_chain;
 mod rule_differential;
 mod runtime_filters;
