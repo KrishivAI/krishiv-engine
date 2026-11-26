@@ -33,13 +33,6 @@ JVM_FAILURES = {None, "UNSUPPORTED_CALL.WITHOUT_SUGGESTION"}
 
 #: Known gaps: (case regex, reason). A matching case must still differ from Spark.
 KNOWN_GAPS: list[tuple[str, str]] = [
-    (
-        r"grouped/(pandas|arrow)/(missing_column|extra_column)|grouped/pandas/(other_names|positional_too_many)"
-        r"|grouped/arrow/wrong_type|map/pandas/(missing_column|other_names|positional_too_few)",
-        "the embedded worker error carries the class name where Spark has the message",
-    ),
-    (r"cogrouped/(?!pandas/one_argument).*", "embedded cogroup refuses sides whose column types differ"),
-    (r"map/arrow/extra_column", "embedded mapInArrow fails with INTERNAL_ERROR on an extra column Spark drops"),
     (r"agg/pandas/two", "two grouped-aggregate UDFs in one agg need two workers on the one-thread default"),
 ]
 

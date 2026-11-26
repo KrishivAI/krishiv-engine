@@ -147,6 +147,80 @@ _TEMPLATES = {
     "INVALID_RETURN_TYPE_FOR_ARROW_UDF": (
         "Grouped and Cogrouped map Arrow UDF should return StructType for <eval_type>, got <return_type>."
     ),
+    "CANNOT_PARSE_DATATYPE": "Unable to parse datatype. <msg>.",
+    "HIGHER_ORDER_FUNCTION_SHOULD_RETURN_COLUMN": "Function `<func_name>` should return Column, got <return_type>.",
+    "INPUT_NOT_FULLY_CONSUMED": "The input iterator must be fully consumed.",
+    "INVALID_ARROW_UDTF_TABLE_ARGUMENT": (
+        "Arrow UDTFs with PARTITION BY must have a TABLE argument that results in a PyArrow RecordBatch, but got "
+        "<actual_type>."
+    ),
+    "INVALID_INTERVAL_CASTING": "Interval <start_field> to <end_field> is invalid.",
+    "INVALID_TYPENAME_CALL": "StructField does not have typeName. Use typeName on its type explicitly instead.",
+    "INVALID_WINDOW_BOUND_TYPE": "Invalid window bound type: <window_bound_type>.",
+    "MALFORMED_GEOGRAPHY": "Geography binary is malformed. Please check the data source is valid.",
+    "MALFORMED_GEOMETRY": "Geometry binary is malformed. Please check the data source is valid.",
+    "NOT_SAME_TYPE": (
+        "Argument `<arg_name1>` and `<arg_name2>` should be the same type, got <arg_type1> and <arg_type2>."
+    ),
+    "OUTPUT_EXCEEDS_INPUT_ROWS": "The number of output rows must not exceed the number of input rows.",
+    "PYTHON_VERSION_MISMATCH": (
+        "Python in worker has different version: <worker_version> than that in driver: <driver_version>, PySpark "
+        "cannot run with different minor versions.\nPlease check environment variables PYSPARK_PYTHON and "
+        "PYSPARK_DRIVER_PYTHON are correctly set."
+    ),
+    "RESULT_COLUMN_NAMES_MISMATCH": "Column names of the returned data do not match specified schema.<missing><extra>",
+    "RESULT_COLUMN_SCHEMA_MISMATCH": (
+        "Number of columns of the returned data doesn't match specified schema. Expected: <expected> Actual: <actual>"
+    ),
+    "RESULT_COLUMN_TYPES_MISMATCH": (
+        "Column types of the returned data do not match specified schema. Mismatch: <mismatch>."
+    ),
+    "SLICE_WITH_STEP": "Slice with step is not supported.",
+    "UDTF_ARROW_DATA_CONVERSION_ERROR": (
+        "Cannot convert UDTF output to Arrow. Data: <data>. Schema: <schema>. Arrow Schema: <arrow_schema>."
+    ),
+    "UDTF_ARROW_TYPE_CONVERSION_ERROR": (
+        "PyArrow UDTF must return an iterator of pyarrow.Table or pyarrow.RecordBatch objects."
+    ),
+    "UDTF_CONSTRUCTOR_INVALID_IMPLEMENTS_ANALYZE_METHOD": (
+        "Failed to evaluate the user-defined table function '<name>' because its constructor is invalid: the "
+        "function implements the 'analyze' method, but its constructor has more than two arguments (including the "
+        "'self' reference). Please update the table function so that its constructor accepts exactly one 'self' "
+        "argument, or one 'self' argument plus another argument for the result of the 'analyze' method, and try "
+        "the query again."
+    ),
+    "UDTF_CONSTRUCTOR_INVALID_NO_ANALYZE_METHOD": (
+        "Failed to evaluate the user-defined table function '<name>' because its constructor is invalid: the "
+        "function does not implement the 'analyze' method, and its constructor has more than one argument "
+        "(including the 'self' reference). Please update the table function so that its constructor accepts "
+        "exactly one 'self' argument, and try the query again."
+    ),
+    "UDTF_EVAL_METHOD_ARGUMENTS_DO_NOT_MATCH_SIGNATURE": (
+        "Failed to evaluate the user-defined table function '<name>' because the function arguments did not match "
+        "the expected signature of the 'eval' method (<reason>). Please update the query so that this table "
+        "function call provides arguments matching the expected signature, or else update the table function so "
+        "that its 'eval' method accepts the provided arguments, and then try the query again."
+    ),
+    "UDTF_EXEC_ERROR": "User defined table function encountered an error in the '<method_name>' method: <error>",
+    "UDTF_INVALID_OUTPUT_ROW_TYPE": (
+        "The type of an individual output row in the '<func>' method of the UDTF is invalid. Each row should be a "
+        "tuple, list, or dict, but got '<type>'. Please make sure that the output rows are of the correct type."
+    ),
+    "UDTF_RETURN_NOT_ITERABLE": (
+        "The return value of the '<func>' method of the UDTF is invalid. It should be an iterable (e.g., generator "
+        "or list), but got '<type>'. Please make sure that the UDTF returns one of these types."
+    ),
+    "UDTF_RETURN_SCHEMA_MISMATCH": (
+        "The number of columns in the result does not match the specified schema. Expected column count: "
+        "<expected>, Actual column count: <actual>. Please make sure the values returned by the '<func>' method "
+        "have the same number of columns as specified in the output schema."
+    ),
+    "UNSUPPORTED_PARAM_TYPE_FOR_HIGHER_ORDER_FUNCTION": (
+        "Function `<func_name>` should use only POSITIONAL or POSITIONAL OR KEYWORD arguments."
+    ),
+    "WRONG_NUM_ARGS_FOR_HIGHER_ORDER_FUNCTION": (
+        "Function `<func_name>` should take between 1 and 3 arguments, but the provided function takes <num_args>."
+    ),
 }
 
 

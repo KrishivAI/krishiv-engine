@@ -672,6 +672,56 @@
      "python_exception": "PySparkValueError"
     }
    }
+  },
+  "not_null/cogrouped/pandas": {
+   "error": {
+    "exception": "Py4JJavaError",
+    "jvm": "Caused by: java.lang.NullPointerException"
+   }
+  },
+  "not_null/grouped/arrow": {
+   "error": {
+    "exception": "Py4JJavaError",
+    "jvm": "Caused by: java.lang.IllegalStateException: Value at index is null"
+   }
+  },
+  "not_null/grouped/pandas": {
+   "error": {
+    "exception": "Py4JJavaError",
+    "jvm": "Caused by: java.lang.IllegalStateException: Value at index is null"
+   }
+  },
+  "not_null/map/arrow": {
+   "error": {
+    "exception": "Py4JJavaError",
+    "jvm": "Caused by: java.lang.IllegalStateException: Value at index is null"
+   }
+  },
+  "not_null/map/arrow_no_null": {
+   "rows": [
+    [
+     1
+    ],
+    [
+     1
+    ],
+    [
+     2
+    ],
+    [
+     2
+    ],
+    [
+     2
+    ]
+   ],
+   "schema": "struct<k:bigint>"
+  },
+  "not_null/map/pandas": {
+   "error": {
+    "exception": "Py4JJavaError",
+    "jvm": "Caused by: java.lang.IllegalStateException: Value at index is null"
+   }
   }
  },
  "conf": {

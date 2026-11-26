@@ -180,8 +180,8 @@ result batch as Spark does and raises `ARROW_TYPE_MISMATCH` with Spark's message
 Spark 3.5 and 4.0, which have no such setting), Spark does not check the result's types and reads the batch as if it
 had the declared ones. Krishiv refuses such a result instead, with `PYTHON_EXCEPTION` ("The Python worker returned an
 invalid result"), and refuses a null in a column declared non-nullable when a null is present. A `mapInArrow`
-result with more columns than declared is refused too (Spark reads the declared columns and ignores the rest when
-the setting is off; with it on, both raise `ARROW_TYPE_MISMATCH`). Krishiv does not know the client's Spark version
+result with more columns than declared is refused too by the server (Spark reads the declared columns and ignores the
+rest when the setting is off, as the embedded runtime does; with it on, all raise `ARROW_TYPE_MISMATCH`). Krishiv does not know the client's Spark version
 here, so the setting is honoured whatever the version: under a Spark 3.5 or 4.0 client, which has no such setting,
 setting it still turns the check on.
 
@@ -778,9 +778,10 @@ call of another query does not wait for a running `mapInPandas` or `applyInPanda
 The embedded `mapInArrow` takes each result batch's columns by position and relabels them with the
 declared schema; `mapInPandas` matches the result's columns to the declared schema by name, as Spark does. With `spark.sql.execution.arrow.pyspark.validateSchema.enabled` set to `true` the embedded
 `mapInArrow` path compares the UDF's own field names with the declared schema and refuses a mismatch of names or
-types with `ARROW_TYPE_MISMATCH`, as the server's worker pool does. A declared
-`NOT NULL` (and a nested `containsNull=false` or `valueContainsNull=false`) is not kept by the embedded runtime, so a
-nullable result is accepted where Spark 4.1+ refuses it.
+types with `ARROW_TYPE_MISMATCH`, as the server's worker pool does. A NULL in a result column declared `NOT NULL`
+fails the query with `PYTHON_EXCEPTION`, where Spark 4.2.0's JVM fails reading the batch with no error class. A
+nested `containsNull=false` or `valueContainsNull=false` is not kept by the embedded runtime, so a NULL element or
+map value is accepted there.
 
 ## Metric views (`CREATE VIEW .. WITH METRICS LANGUAGE YAML`)
 

@@ -621,6 +621,36 @@ fn a_grouped_map_groups_a_collated_key_by_its_collation() {
     );
 }
 
+/// A cogroup whose sides store a string in different Arrow types (`u.s` is
+/// `Utf8`, `t.s` and the other side's NULLs `Utf8View`), as a data column
+/// and as the key.
+#[test]
+fn a_cogroup_runs_sides_that_store_a_string_differently() {
+    let env = super::union::carriers();
+    for (key, expected) in [(0, vec!["1", "2"]), (1, vec!["1", "1", "1"])] {
+        for swapped in [false, true] {
+            let mut sides = [
+                input(&env, "SELECT a, s FROM u"),
+                input(&env, "SELECT a, s FROM t WHERE a = 1"),
+            ];
+            if swapped {
+                sides.reverse();
+            }
+            let [(left, lc), (right, rc)] = sides;
+            let node = LogicalPlan::new(PlanNode::CoGroupMap {
+                left,
+                right,
+                left_keys: vec![col(&lc[key])],
+                right_keys: vec![col(&rc[key])],
+                udf: udf("count", PythonEvalType::CogroupedMapArrow),
+                output: counted(),
+            });
+            let out = run_with(&env, node, Some(Arc::new(Runtime::default()))).unwrap();
+            assert_eq!(lines(&out), expected, "key {key}, swapped {swapped}");
+        }
+    }
+}
+
 /// A cogroup on `UTF8_LCASE` keys: the left side's `K` and the right side's
 /// `k` are one key (Spark's `CoGroupedIterator` compares them by the
 /// collation), so the UDF gets one call with both sides.

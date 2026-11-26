@@ -274,7 +274,32 @@ AGG_CASES: dict[str, Callable[..., Any]] = {
 # ("All aggregate functions must have the same eval type in ArrowAggregatePythonExec"), not a behaviour to copy.
 
 
-CASES: dict[str, Callable[..., Any]] = {**MAP_CASES, **GROUPED_CASES, **COGROUPED_CASES, **AGG_CASES}
+# --- declared NOT NULL -----------------------------------------------------------------------------------------
+
+
+def _null_n(pdf: pd.DataFrame) -> pd.DataFrame:
+    return pd.DataFrame({"k": [pdf["k"].iloc[0]], "n": pd.array([None], dtype="Int64")})
+
+
+def _arrow_null_n(table: pa.Table) -> pa.Table:
+    return pa.table({"k": [table["k"][0].as_py()], "n": pa.array([None], pa.int64())})
+
+
+def _sides_null(left: pd.DataFrame, right: pd.DataFrame) -> pd.DataFrame:
+    return _sides(left, right).assign(sides=None)
+
+
+NOT_NULL_CASES: dict[str, Callable[..., Any]] = {
+    "not_null/map/pandas": _map_pandas(lambda p: p[["v"]], "v double not null"),
+    "not_null/map/arrow": _map_arrow(lambda b: b.select(["v"]), "v double not null"),
+    "not_null/map/arrow_no_null": _map_arrow(lambda b: b.select(["k"]), "k long not null"),
+    "not_null/grouped/pandas": _grouped(_null_n, "k long, n long not null"),
+    "not_null/grouped/arrow": _grouped(_arrow_null_n, "k long, n long not null", arrow=True),
+    "not_null/cogrouped/pandas": _cogrouped(_sides_null, "k long, sides string not null"),
+}
+
+
+CASES: dict[str, Callable[..., Any]] = {**MAP_CASES, **GROUPED_CASES, **COGROUPED_CASES, **AGG_CASES, **NOT_NULL_CASES}
 
 
 def cell(value: Any) -> Any:
