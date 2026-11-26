@@ -1,9 +1,0 @@
-{
-  "cases": {
-    "depends-on-command": [
-      32
-    ]
-  },
-  "file": "timestamp-ntz",
-  "format_version": 1
-}

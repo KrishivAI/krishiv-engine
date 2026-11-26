@@ -1362,6 +1362,34 @@ fn reading_a_partitioned_table_returns_its_partition_values() {
         "INSERT INTO z VALUES (1, TIMESTAMP'2024-01-02 03:04:05')",
     );
     assert_eq!(class(&s, "SELECT a FROM z"), "KRISHIV_UNSUPPORTED_FEATURE");
+    // A timestamp without a zone is the same wall-clock text in every zone: read as written, and filtered on
+    // (golden timestamp-ntz#32).
+    run(
+        &s,
+        "CREATE TABLE n (b INT, a TIMESTAMP_NTZ) USING parquet PARTITIONED BY (a)",
+    );
+    run(
+        &s,
+        "INSERT INTO n PARTITION (a = TIMESTAMP_NTZ'2018-11-17 13:33:33') VALUES (1)",
+    );
+    run(
+        &s,
+        "INSERT INTO n VALUES (2, TIMESTAMP_NTZ'2020-01-01 00:00:00')",
+    );
+    assert_eq!(
+        rows(
+            &s,
+            "SELECT CAST(b AS STRING), CAST(a AS STRING) FROM n ORDER BY b"
+        ),
+        ["1\t2018-11-17 13:33:33", "2\t2020-01-01 00:00:00"]
+    );
+    assert_eq!(
+        rows(
+            &s,
+            "SELECT CAST(b AS STRING) FROM n WHERE a > TIMESTAMP_NTZ'2019-01-01 00:00:00'"
+        ),
+        ["2"]
+    );
 }
 
 /// Spark reads a catalog table's registered partitions (`CatalogFileIndex`), not every directory under its root:

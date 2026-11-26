@@ -1451,9 +1451,9 @@ pub struct KnownPartitions {
 /// as Spark's `CatalogFileIndex` reads only the registered locations), so a
 /// mismatch is left only for an unpartitioned table with partition
 /// directories. A partition column of a type whose directory
-/// value the scan does not read yet is refused (only strings, integers and
-/// dates are: a timestamp is local time in the session zone, which the scan
-/// does not have).
+/// value the scan does not read yet is refused (only strings, integers, dates
+/// and timestamps without a zone are: a timestamp with a zone is local time in
+/// the session zone, which the scan does not have).
 ///
 /// # Errors
 /// `KRISHIV_UNSUPPORTED_FEATURE` in those cases.
@@ -1481,7 +1481,14 @@ fn declared_partitions(
         }
         if !matches!(
             field.data_type(),
-            T::Utf8 | T::Utf8View | T::Int8 | T::Int16 | T::Int32 | T::Int64 | T::Date32
+            T::Utf8
+                | T::Utf8View
+                | T::Int8
+                | T::Int16
+                | T::Int32
+                | T::Int64
+                | T::Date32
+                | T::Timestamp(_, None)
         ) {
             return Err(unsupported(format!(
                 "reading the partition column {} of type {} of a table",
