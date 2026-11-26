@@ -375,8 +375,8 @@ impl Cursor {
             .counters
             .add(Counter::DirectInnerRows, probe.len() as u64);
         let build_cols = payload.take(&UInt32Array::from(ids))?;
-        let taken = take_batch(&self.batch, &batch_rows(self.sel.as_ref(), &probe)?)?;
-        let taken = self.compact_selected(taken)?;
+        // `probe` is ascending and distinct: all the batch's rows is the batch.
+        let taken = self.gather(shared, &probe)?;
         let m = probe.len();
         let mut columns: Vec<ArrayRef> = taken.data().columns().to_vec();
         columns.extend(build_cols);
@@ -404,8 +404,14 @@ impl Cursor {
             Some(cols) => cols,
             None => shared.build_columns(self.rows, build, arena)?,
         };
-        let taken = take_batch(&self.batch, &batch_rows(self.sel.as_ref(), probe)?)?;
-        let taken = self.compact_selected(taken)?;
+        // Pairs repeat a probe row with several matches: the batch passes
+        // through only when the pairs are its rows in order (study 39 (a)).
+        let taken = if probe.iter().enumerate().all(|(i, &r)| r as usize == i) {
+            self.gather(shared, probe)?
+        } else {
+            let taken = take_batch(&self.batch, &batch_rows(self.sel.as_ref(), probe)?)?;
+            self.compact_selected(taken)?
+        };
         let m = probe.len();
         let mut columns: Vec<ArrayRef> = taken.data().columns().to_vec();
         columns.extend(build_cols);
@@ -479,10 +485,13 @@ impl Cursor {
         Ok((out.num_rows() > 0).then_some(out))
     }
 
-    /// The cursor's rows `rows` of the batch (the batch itself when they
-    /// are all of its rows).
-    fn gather(&self, rows: &[u32]) -> Result<Batch> {
+    /// The cursor's rows `rows` (ascending and distinct) of the batch: the
+    /// batch itself when they are all of its rows, with no gather.
+    fn gather(&self, shared: &Shared, rows: &[u32]) -> Result<Batch> {
         if self.sel.is_none() && rows.len() == self.batch.num_rows() {
+            shared
+                .counters
+                .add(Counter::ProbePassthroughRows, rows.len() as u64);
             return Ok(self.batch.clone());
         }
         let taken = take_batch(&self.batch, &batch_rows(self.sel.as_ref(), rows)?)?;
@@ -525,7 +534,7 @@ impl Cursor {
         if rows.is_empty() {
             return Ok(None);
         }
-        let taken = self.gather(&rows)?;
+        let taken = self.gather(shared, &rows)?;
         if !shared.join_type.pads_probe() {
             return Ok(Some(taken));
         }
@@ -559,7 +568,7 @@ impl Cursor {
         if rows.is_empty() {
             return Ok(None);
         }
-        let taken = self.gather(&rows)?;
+        let taken = self.gather(shared, &rows)?;
         let (data, weights) = taken.into_parts();
         let mut columns = data.columns().to_vec();
         columns.push(Arc::new(BooleanArray::from(marks)) as ArrayRef);

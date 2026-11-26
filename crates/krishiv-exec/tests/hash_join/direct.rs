@@ -89,19 +89,20 @@ fn want(case: &Case, probe: &[Row], build: &[Row], run: Run) -> Vec<String> {
 /// Runs `case` (one `k1` key) as `run` says; also returns the probe's
 /// `direct_probe_rows` (absent, so 0, when the index did not run).
 async fn run_direct(case: &Case, probe: &[Row], build: &[Row], run_as: Run) -> (Vec<String>, u64) {
-    let (rows, direct, _, _) = run_counted(case, probe, build, run_as).await;
+    let (rows, direct, _, _, _) = run_counted(case, probe, build, run_as).await;
     (rows, direct)
 }
 
 /// [`run_direct`] with the build rows whose payload was decoded once
 /// (`direct_payload_rows`) and the rows the one-pass inner probe emitted
-/// (`direct_inner_rows`, perf lever C).
+/// (`direct_inner_rows`, perf lever C), and the probe rows output as their
+/// own batch (`probe_passthrough_rows`).
 async fn run_counted(
     case: &Case,
     probe: &[Row],
     build: &[Row],
     run_as: Run,
-) -> (Vec<String>, u64, u64, u64) {
+) -> (Vec<String>, u64, u64, u64, u64) {
     let root = root(64 * MIB);
     let (_manager, scope) = spill();
     let config = ExecConfig {
@@ -139,6 +140,7 @@ async fn run_counted(
         metric(&q, "HashJoinProbe", "direct_probe_rows"),
         metric(&q, "HashJoinProbe", "direct_payload_rows"),
         metric(&q, "HashJoinProbe", "direct_inner_rows"),
+        metric(&q, "HashJoinProbe", "probe_passthrough_rows"),
     )
 }
 
@@ -409,7 +411,7 @@ async fn the_payload_cap_keeps_the_direct_index_either_way() {
             c.row_layout = true;
             for build in [&big, &small] {
                 let what = format!("{join_type:?} filter {filter} view {view} {}", build.len());
-                let (got, direct, payload, inner) = run_counted(
+                let (got, direct, payload, inner, _) = run_counted(
                     &c,
                     &probe,
                     build,
@@ -469,7 +471,7 @@ async fn the_one_pass_inner_probe_needs_unique_build_keys() {
                     view,
                 };
                 let what = format!("{run_as:?} dup {}", build.len() > unique.len());
-                let (got, direct, payload, inner) = run_counted(&c, &probe, build, run_as).await;
+                let (got, direct, payload, inner, _) = run_counted(&c, &probe, build, run_as).await;
                 assert_eq!(got, want(&c, &probe, build, run_as), "{what}");
                 assert!(direct > 0, "{what}: direct");
                 // An inner join keeps no NULL-key build row.
@@ -479,6 +481,43 @@ async fn the_one_pass_inner_probe_needs_unique_build_keys() {
                 let expect = if build.len() == unique.len() { rows } else { 0 };
                 assert!(rows > 0, "{what}: the probe matches");
                 assert_eq!(inner, expect, "{what}: one pass");
+            }
+        }
+    }
+}
+
+/// An inner join whose probe batches (4 rows each) match one build row per
+/// row passes them through with no gather, on the one-pass direct probe and
+/// on the general one; a batch with a probe row of two matches or none, or
+/// under a fused selection, is gathered. Answers match the oracle either way.
+#[tokio::test]
+async fn whole_matched_probe_batches_pass_through() {
+    let unique: Vec<Row> = (-5..30_i64).map(|k| r(Some(k), Some("b"), k)).collect();
+    let mut dup = unique.clone();
+    dup.push(r(Some(7), Some("again"), 2));
+    // 12 rows, three batches; the third holds key 7.
+    let probe = keyed(&[0, 1, 2, 3, 4, 5, 6, 8, 9, 7, 10, 11].map(Some));
+    let mut missing = probe.clone();
+    missing[1].k1 = Some(1_000);
+    let mut c = case(JoinType::Inner, 1, false, false);
+    c.row_layout = true;
+    for on in [true, false] {
+        for fused in [false, true] {
+            for (build, probe, expect) in [
+                (&unique, &probe, 12),
+                (&dup, &probe, 8),
+                (&unique, &missing, 8),
+            ] {
+                let run_as = Run {
+                    on,
+                    fused,
+                    ..Run::default()
+                };
+                let what = format!("{run_as:?} build {} probe {:?}", build.len(), probe[1].k1);
+                let (got, _, _, _, passed) = run_counted(&c, probe, build, run_as).await;
+                assert_eq!(got, want(&c, probe, build, run_as), "{what}");
+                let expect = if fused { 0 } else { expect };
+                assert_eq!(passed, expect, "{what}: passed through");
             }
         }
     }
