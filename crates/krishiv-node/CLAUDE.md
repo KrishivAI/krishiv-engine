@@ -34,8 +34,8 @@ Paths are relative to this crate.
   (that aborts the Node process) nor leave a `next()` promise unsettled.
 - No result is held whole: one batch per `next()`.
 - A `.node` is never unloaded; `close()` frees the session.
-- Features mirror the Python wheel's defaults (`mimalloc`, `cloud`, `delta`); on musl mimalloc uses
-  `local_dynamic_tls` (the addon is `dlopen`ed).
+- Features mirror the Python wheel's defaults (`mimalloc`, `cloud`, `delta`); mimalloc uses `local_dynamic_tls` on
+  every target: the addon is `dlopen`ed, and an initial-exec TLS block past glibc's static-TLS surplus fails to load.
 
 ## Tests
 `cargo nextest run -p krishiv-node --lib` · `cargo clippy -p krishiv-node --all-targets -- -D warnings`;

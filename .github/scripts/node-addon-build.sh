@@ -47,6 +47,13 @@ mkdir -p "$out"
 target=${CARGO_TARGET_DIR:-target}
 cp "$target/dist/$lib" "$out/krishiv.node"
 ls -l "$out/krishiv.node"
+# A dlopen'ed library marked STATIC_TLS (initial-exec TLS somewhere in it) loads only while its whole TLS block fits
+# glibc's small static-TLS surplus, and fails with "cannot allocate memory in static TLS block" once it grows.
+# The PyPA images carry binutils; the macOS runner has no ELF to check.
+if [ "$lib" = libkrishiv_node.so ] && readelf -dW "$out/krishiv.node" | grep -q STATIC_TLS; then
+  echo "krishiv.node is marked STATIC_TLS: a dependency uses initial-exec TLS (mimalloc needs local_dynamic_tls)" >&2
+  exit 1
+fi
 if [ -n "$owner" ]; then
   chown -R "$owner" "$out" "$target"
 fi

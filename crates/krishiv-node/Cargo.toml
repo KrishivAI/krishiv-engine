@@ -31,15 +31,15 @@ arrow-schema.workspace = true
 futures = { workspace = true, features = ["std"] }
 krishiv-common = { path = "../krishiv-common" }
 krishiv-session = { path = "../krishiv-session" }
-mimalloc = { workspace = true, optional = true }
+# An addon is always loaded with dlopen. With mimalloc's default initial-exec TLS the whole TLS block of the
+# addon must fit glibc's small static-TLS surplus (dlopen fails with "cannot allocate memory in static TLS
+# block" once it grows past it) and musl crashes at load (as the wheel found), so every target uses the
+# dynamic model.
+mimalloc = { workspace = true, optional = true, features = ["local_dynamic_tls"] }
 napi = { workspace = true, features = ["napi4", "async"] }
 napi-derive = { workspace = true, features = ["type-def", "strict"] }
 serde_json = { workspace = true, features = ["std"] }
 tokio = { workspace = true, features = ["sync"] }
-
-# An addon is loaded with dlopen: on musl mimalloc's initial-exec TLS crashes at load (as the wheel found).
-[target.'cfg(target_env = "musl")'.dependencies]
-mimalloc = { workspace = true, optional = true, features = ["local_dynamic_tls"] }
 
 [build-dependencies]
 napi-build.workspace = true
