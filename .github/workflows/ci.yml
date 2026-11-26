@@ -98,7 +98,7 @@ jobs:
         run: |
           python=true
           if [ "$EVENT" = "pull_request" ] && ! git diff --name-only "$BASE_SHA...$HEAD_SHA" \
-            | grep -qE '^(crates/krishiv-python/|python/|xtask/|\.github/workflows/ci\.yml$|\.github/workflows/wheels\.yml$|\.github/scripts/(wheel-test|approval-label)\.sh$|Cargo\.(toml|lock)$|rust-toolchain\.toml$|budgets\.json$)'; then
+            | grep -qE '^(crates/krishiv-python/|python/|xtask/|\.github/workflows/ci\.yml$|\.github/workflows/wheels\.yml$|\.github/scripts/(wheel-test|approval-label)\.sh$|\.github/scripts/third_party_notices\.py$|Cargo\.(toml|lock)$|rust-toolchain\.toml$|budgets\.json$)'; then
             python=false
           fi
           echo "python=$python" >> "$GITHUB_OUTPUT"
@@ -278,6 +278,12 @@ jobs:
           uv run --frozen --no-sync --project ../../python ruff check .
           uv run --frozen --no-sync --project ../../python ruff format --check .
           uv run --frozen --no-sync --project ../../python ty check .
+      # Unit tests of the third-party notices script the wheels, binaries and image ship with.
+      - name: tests/scripts/ (third-party notices tests)
+        working-directory: tests/scripts
+        env:
+          TPN_NO_CARGO: "1"
+        run: uv run --frozen --no-sync --project ../../python pytest -q -p no:cacheprovider test_third_party_notices.py
       # The public Python API is a checked-in snapshot (docs/concepts/stability.md); source only, no wheel.
       - name: python/public-api.txt
         run: python3 -I tests/scripts/python_public_api.py --check

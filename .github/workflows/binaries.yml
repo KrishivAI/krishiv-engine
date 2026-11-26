@@ -103,6 +103,10 @@ jobs:
           cargo build --profile dist --locked -p krishiv-cli --features "$RELEASE_FEATURES"
           mkdir -p out
           cp target/dist/krishiv "out/$ARTIFACT"
+          # The crates linked into this binary, with their license texts (shipped beside it).
+          python3 -I .github/scripts/third_party_notices.py --package krishiv-cli --cargo-args "--features $RELEASE_FEATURES" \
+            --target "$(rustc -vV | sed -n 's/^host: //p')" --title "the krishiv CLI binary $ARTIFACT" \
+            --out "out/$ARTIFACT.THIRD-PARTY-NOTICES.txt"
       - name: Smoke test
         env:
           ARTIFACT: ${{ matrix.artifact }}
@@ -136,7 +140,9 @@ jobs:
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ matrix.artifact }}
-          path: out/${{ matrix.artifact }}
+          path: |
+            out/${{ matrix.artifact }}
+            out/${{ matrix.artifact }}.THIRD-PARTY-NOTICES.txt
           if-no-files-found: error
 
   cli-aarch64:
@@ -168,6 +174,10 @@ jobs:
           cargo build --profile dist --locked -p krishiv-cli --features "$RELEASE_FEATURES"
           mkdir -p out
           cp target/dist/krishiv "out/$ARTIFACT"
+          # The crates linked into this binary, with their license texts (shipped beside it).
+          python3 -I .github/scripts/third_party_notices.py --package krishiv-cli --cargo-args "--features $RELEASE_FEATURES" \
+            --target "$(rustc -vV | sed -n 's/^host: //p')" --title "the krishiv CLI binary $ARTIFACT" \
+            --out "out/$ARTIFACT.THIRD-PARTY-NOTICES.txt"
       - name: Smoke test
         run: |
           "out/$ARTIFACT" --version
@@ -176,7 +186,9 @@ jobs:
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: krishiv-linux-aarch64
-          path: out/krishiv-linux-aarch64
+          path: |
+            out/krishiv-linux-aarch64
+            out/krishiv-linux-aarch64.THIRD-PARTY-NOTICES.txt
           if-no-files-found: error
 
   cli-macos-arm64:
@@ -205,6 +217,10 @@ jobs:
           cargo build --profile dist --locked -p krishiv-cli --features "$RELEASE_FEATURES"
           mkdir -p out
           cp target/dist/krishiv "out/$ARTIFACT"
+          # The crates linked into this binary, with their license texts (shipped beside it).
+          python3 -I .github/scripts/third_party_notices.py --package krishiv-cli --cargo-args "--features $RELEASE_FEATURES" \
+            --target "$(rustc -vV | sed -n 's/^host: //p')" --title "the krishiv CLI binary $ARTIFACT" \
+            --out "out/$ARTIFACT.THIRD-PARTY-NOTICES.txt"
       - name: Smoke test
         run: |
           "out/$ARTIFACT" --version
@@ -213,5 +229,7 @@ jobs:
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: krishiv-macos-arm64
-          path: out/krishiv-macos-arm64
+          path: |
+            out/krishiv-macos-arm64
+            out/krishiv-macos-arm64.THIRD-PARTY-NOTICES.txt
           if-no-files-found: error

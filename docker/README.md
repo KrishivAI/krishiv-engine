@@ -21,6 +21,11 @@ docker buildx build -f docker/Dockerfile -t krishiv .
 docker buildx build --platform linux/amd64,linux/arm64 -f docker/Dockerfile -t krishiv .   # multi-arch manifest
 ```
 
+## Licenses
+
+Krishiv's `LICENSE` and `NOTICE`, and `THIRD-PARTY-NOTICES.txt` (every third-party crate linked into the binary,
+with the license and notice texts its package carries), are in `/usr/share/doc/krishiv/` in the image.
+
 ## Running the server
 
 One command, one variable:

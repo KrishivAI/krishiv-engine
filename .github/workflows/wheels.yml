@@ -49,6 +49,33 @@ env:
   ARM_RUSTFLAGS: -C target-cpu=neoverse-n1
 
 jobs:
+  # The third-party notices every wheel carries as krishiv/THIRD-PARTY-NOTICES.txt: the crates
+  # linked into krishiv-python with the default (abi3) features, a superset of the cp314t set, for
+  # all wheel targets (.github/scripts/third_party_notices.py). One file for every wheel.
+  notices:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: $/.github/actions/setup-rust
+      - name: Write the notices
+        run: |
+          python3 -I .github/scripts/third_party_notices.py --package krishiv-python --cargo-args "$ABI3_ARGS" \
+            --target x86_64-unknown-linux-gnu --target x86_64-unknown-linux-musl \
+            --target aarch64-unknown-linux-gnu --target aarch64-apple-darwin \
+            --title "the krishiv Python wheel" --out notices/THIRD-PARTY-NOTICES.txt
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: notices-wheel
+          path: notices/THIRD-PARTY-NOTICES.txt
+          if-no-files-found: error
+
   # manylinux_2_28 and musllinux_1_2 on x86_64. The wheels are built in the
   # PyPA images by maturin-action; the musllinux ones are tested inside the
   # PyPA musllinux image, the manylinux ones on the runner.
@@ -57,6 +84,7 @@ jobs:
   # images are upgraded deliberately, in their own PR, never by drift.
   linux-x86_64:
     runs-on: ubuntu-24.04
+    needs: notices
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -74,6 +102,11 @@ jobs:
           persist-credentials: false
       - name: Record the CPU level the wheel needs (checked by krishiv/_cpu.py)
         run: echo x86-64-v3 > python/krishiv/_cpu_level
+      - name: Third-party notices (from the notices job)
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: notices-wheel
+          path: python/krishiv
       - name: Build
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         env:
@@ -84,6 +117,8 @@ jobs:
           manylinux: ${{ matrix.libc == 'manylinux' && '2_28' || 'musllinux_1_2' }}
           docker-options: -e KRISHIV_GIT_SHA
           args: ${{ matrix.flavour == 'abi3' && env.ABI3_ARGS || format('{0} --interpreter python3.14t', env.FT_ARGS) }} --out ../dist
+      - name: The wheel carries the third-party notices
+        run: for w in dist/*.whl; do unzip -l "$w" | grep -q 'krishiv/THIRD-PARTY-NOTICES.txt$'; done
       - name: The wheel carries the CPU level marker
         run: |
           for w in dist/*.whl; do unzip -l "$w" | grep -q 'krishiv/_cpu_level$'; done
@@ -146,6 +181,7 @@ jobs:
   # import name stays `krishiv`.
   linux-x86_64-compat:
     runs-on: ubuntu-latest
+    needs: notices
     timeout-minutes: 60
     name: wheel (manylinux x86_64 compat)
     steps:
@@ -160,6 +196,11 @@ jobs:
         run: |
           sed -i 's/^name = "krishiv"$/name = "krishiv-compat"/' python/pyproject.toml
           grep -qx 'name = "krishiv-compat"' python/pyproject.toml
+      - name: Third-party notices (from the notices job)
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: notices-wheel
+          path: python/krishiv
       - name: Build
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
@@ -168,6 +209,8 @@ jobs:
           manylinux: 2_28
           docker-options: -e KRISHIV_GIT_SHA
           args: ${{ env.ABI3_ARGS }} --out ../dist
+      - name: The wheel carries the third-party notices
+        run: for w in dist/*.whl; do unzip -l "$w" | grep -q 'krishiv/THIRD-PARTY-NOTICES.txt$'; done
       - name: The compat wheel has no CPU level marker
         run: "! unzip -l dist/*.whl | grep -q '_cpu_level'"
       - uses: $/.github/actions/setup-uv
@@ -187,6 +230,7 @@ jobs:
   # manylinux_2_28 aarch64, built and tested natively on an Arm runner.
   linux-aarch64:
     runs-on: ubuntu-24.04-arm
+    needs: notices
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -203,6 +247,11 @@ jobs:
           persist-credentials: false
       - name: Record the CPU level the wheel needs (checked by krishiv/_cpu.py)
         run: echo neoverse-n1 > python/krishiv/_cpu_level
+      - name: Third-party notices (from the notices job)
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: notices-wheel
+          path: python/krishiv
       - name: Build
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         env:
@@ -213,6 +262,8 @@ jobs:
           manylinux: 2_28
           docker-options: -e KRISHIV_GIT_SHA
           args: ${{ matrix.flavour == 'abi3' && env.ABI3_ARGS || format('{0} --interpreter python3.14t', env.FT_ARGS) }} --out ../dist
+      - name: The wheel carries the third-party notices
+        run: for w in dist/*.whl; do unzip -l "$w" | grep -q 'krishiv/THIRD-PARTY-NOTICES.txt$'; done
       - name: The wheel carries the CPU level marker
         run: |
           for w in dist/*.whl; do unzip -l "$w" | grep -q 'krishiv/_cpu_level$'; done
@@ -235,6 +286,7 @@ jobs:
   # macOS arm64 (11.0+), built and tested natively.
   macos-arm64:
     runs-on: macos-15
+    needs: notices
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -259,12 +311,19 @@ jobs:
           uv python install $versions
           echo "build=$(uv python find "${versions%% *}")" >> "$GITHUB_OUTPUT"
           echo "versions=$versions" >> "$GITHUB_OUTPUT"
+      - name: Third-party notices (from the notices job)
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: notices-wheel
+          path: python/krishiv
       - name: Build
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
           working-directory: python
           target: aarch64-apple-darwin
           args: ${{ matrix.flavour == 'abi3' && env.ABI3_ARGS || env.FT_ARGS }} --interpreter ${{ steps.py.outputs.build }} --out ../dist
+      - name: The wheel carries the third-party notices
+        run: for w in dist/*.whl; do unzip -l "$w" | grep -q 'krishiv/THIRD-PARTY-NOTICES.txt$'; done
       - name: Test
         env:
           FLAVOUR: ${{ matrix.flavour }}

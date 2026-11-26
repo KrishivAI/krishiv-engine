@@ -106,6 +106,12 @@ jobs:
         working-directory: bundle
         run: |
           test "$(ls *.whl | wc -l)" -ge 9
+          for b in krishiv-linux-x86_64 krishiv-compat-linux-x86_64 krishiv-linux-aarch64 krishiv-macos-arm64; do
+            test -s "$b.THIRD-PARTY-NOTICES.txt" || { echo "::error::missing $b.THIRD-PARTY-NOTICES.txt"; exit 1; }
+          done
+          for w in *.whl; do
+            unzip -l "$w" | grep -q 'krishiv/THIRD-PARTY-NOTICES.txt$' || { echo "::error::$w has no third-party notices"; exit 1; }
+          done
           for f in krishiv-linux-x86_64 krishiv-compat-linux-x86_64 krishiv-linux-aarch64 krishiv-macos-arm64 krishiv-sbom.cdx.json krishiv-cli-sbom.cdx.json krishiv-python-sbom.cdx.json; do
             test -s "$f" || { echo "::error::missing $f"; exit 1; }
           done

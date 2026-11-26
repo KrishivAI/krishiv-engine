@@ -4,7 +4,8 @@
 //! It publishes nothing and writes nothing. It checks what can be checked from the checkout: the workspace
 //! version, that every crate inherits it, that `.github/scripts/publish-crates.txt` names real crates in
 //! dependency order, that the changelog has the section (or fragments to assemble it), that the release
-//! workflows and the stability doc exist, and that the tag is not taken. Every line is `ok` or `FAIL`; any
+//! workflows and the stability doc exist, that every binary artifact ships its third-party notices, and that
+//! the tag is not taken. Every line is `ok` or `FAIL`; any
 //! `FAIL` makes the command exit non-zero.
 
 #![expect(clippy::print_stdout, reason = "command output is the interface")]
@@ -23,6 +24,35 @@ const REQUIRED_FILES: &[&str] = &[
     ".github/workflows/publish-crates.yml",
     ".github/workflows/publish-testpypi.yml",
     ".github/scripts/publish-crates.txt",
+    NOTICES_SCRIPT,
+];
+
+/// The script that writes a binary artifact's third-party notices (crates linked in, their license texts).
+const NOTICES_SCRIPT: &str = ".github/scripts/third_party_notices.py";
+
+/// Where each binary artifact gets its third-party notices: (file, text it must contain, artifact).
+/// The release bundle check fails a release whose wheels or CLI binaries lack them.
+const NOTICES_USES: &[(&str, &str, &str)] = &[
+    (
+        ".github/workflows/wheels.yml",
+        "third_party_notices.py",
+        "the wheels",
+    ),
+    (
+        ".github/workflows/binaries.yml",
+        "third_party_notices.py",
+        "the CLI binaries",
+    ),
+    (
+        "docker/Dockerfile",
+        "third_party_notices.py",
+        "the container image",
+    ),
+    (
+        ".github/workflows/release.yml",
+        "THIRD-PARTY-NOTICES.txt",
+        "the release bundle",
+    ),
 ];
 
 /// `X.Y.Z` with an optional `-pre` suffix: the shape cargo and PyPI both accept here.
@@ -298,6 +328,14 @@ fn check(root: &Path, flags: &[&str]) -> Result<(String, Report), String> {
         ),
     );
 
+    for (file, needle, artifact) in NOTICES_USES {
+        let text = read(file).unwrap_or_default();
+        r.check(
+            text.contains(needle),
+            format!("third-party notices in {artifact} ({file} names {needle})"),
+        );
+    }
+
     let tag = format!("v{version}");
     let listed = Command::new("git")
         .args(["tag", "--list", &tag])
@@ -431,6 +469,10 @@ mod tests {
         for f in REQUIRED_FILES {
             w(f, "");
         }
+        for (f, needle, _) in NOTICES_USES {
+            let old = std::fs::read_to_string(d.path().join(f)).unwrap_or_default();
+            w(f, &format!("{old}{needle}\n"));
+        }
         w(".github/scripts/publish-crates.txt", list);
         w("CHANGELOG.md", "## 0.3.0\n");
         std::fs::create_dir_all(d.path().join("changelog.d")).expect("mkdir");
@@ -523,6 +565,9 @@ mod tests {
         )
         .expect("write");
         one(failures(&d), "js/package-lock.json version");
+        let d = fixture("0.3.0", "krishiv-a\nkrishiv-b\n", "krishiv-a = \"1\"");
+        std::fs::write(d.path().join("docker/Dockerfile"), "FROM x\n").expect("write");
+        one(failures(&d), "third-party notices in the container image");
     }
 
     #[test]

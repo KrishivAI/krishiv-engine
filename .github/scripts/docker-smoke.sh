@@ -21,6 +21,12 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# The image carries Krishiv's license and the third-party notices of the crates in the binary.
+for f in LICENSE NOTICE THIRD-PARTY-NOTICES.txt; do
+  docker run --rm --entrypoint test "$image" -s "/usr/share/doc/krishiv/$f" \
+    || { echo "::error::the image has no /usr/share/doc/krishiv/$f"; exit 1; }
+done
+
 token="smoke-$(openssl rand -hex 16)"
 mkdir -m 777 "$work/data"
 
