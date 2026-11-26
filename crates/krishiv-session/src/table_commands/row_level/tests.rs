@@ -1185,15 +1185,15 @@ mod merge {
     fn a_sql_merge_builds_qualified_insert_and_set_columns_before_its_refusal() {
         // `exec_merge` builds every clause from the SQL text (an `INSERT` column qualified by the
         // target's alias, or without one by its name, `namespace.name` or
-        // `spark_catalog.namespace.name`; a `SET` column loses only a first part equal to the alias
-        // or the table name) before it asks the table for a row-level table. A Parquet table has
-        // none, so the statement reaches the old refusal with every clause built: this runs those
-        // paths, it does not check the columns they build.
+        // `spark_catalog.namespace.name`; a `SET` column qualified the same way) before it asks the
+        // table for a row-level table. A Parquet table has none, so the statement reaches the old
+        // refusal with every clause built: this runs those paths, it does not check the columns
+        // they build.
         let dir = tempfile::tempdir().unwrap();
         let session = Session::new().unwrap();
         block_on(session.sql(&format!(
             "CREATE TABLE p (id BIGINT, s STRING) USING parquet LOCATION '{}'",
-            dir.path().display()
+            dir.path().display().to_string().replace('\\', "/")
         )))
         .unwrap();
         for (target, q) in [
@@ -1717,12 +1717,12 @@ mod merge {
 
     /// The class of the refusal of `clauses` over the test table (no table classes of its own,
     /// so the session's own ones), with nothing committed.
-    fn refused_class(clauses: Vec<MergeClause>) -> String {
+    fn refused_class(clauses: Vec<MergeClause>) -> krishiv_common::error::ErrorClass {
         let files = Files::new();
         let (session, _) = session(&files);
         let e = try_merge(&session, statement(SOURCE, clauses)).unwrap_err();
         assert_eq!(files.commits.load(Ordering::Relaxed), 0, "{e}");
-        format!("{:?}", e.error_class())
+        e.error_class()
     }
 
     fn update(assignments: Vec<Assignment>) -> MergeClause {
@@ -1734,7 +1734,7 @@ mod merge {
         // An `UPDATE` setting a column twice (Spark's `DUPLICATE_ASSIGNMENTS`).
         assert_eq!(
             refused_class(vec![update(vec![set("s", "src.s"), set("S", "'x'")])]),
-            "DuplicateAssignments"
+            krishiv_common::error::ErrorClass::DuplicateAssignments
         );
         // An `INSERT` naming a column twice: the test table has no class for it.
         assert_eq!(
@@ -1743,7 +1743,7 @@ mod merge {
                 None,
                 ClauseAction::Insert(vec![set("id", "src.id"), set("id", "1")]),
             )]),
-            "KrishivUnsupportedFeature"
+            krishiv_common::error::ErrorClass::KrishivUnsupportedFeature
         );
         // A nested field, `= DEFAULT`, and a column the table does not have.
         let nested = Assignment {
@@ -1753,7 +1753,7 @@ mod merge {
         };
         assert_eq!(
             refused_class(vec![update(vec![nested])]),
-            "KrishivUnsupportedFeature"
+            krishiv_common::error::ErrorClass::KrishivUnsupportedFeature
         );
         let default = Assignment {
             nested: false,
@@ -1762,16 +1762,16 @@ mod merge {
         };
         assert_eq!(
             refused_class(vec![update(vec![default])]),
-            "KrishivUnsupportedFeature"
+            krishiv_common::error::ErrorClass::KrishivUnsupportedFeature
         );
         assert_eq!(
             refused_class(vec![update(vec![set("nope", "src.s")])]),
-            "UnresolvedColumnWithSuggestion"
+            krishiv_common::error::ErrorClass::UnresolvedColumnWithSuggestion
         );
         // A value ANSI store assignment cannot put in the column (a string into `id BIGINT`).
         assert_eq!(
             refused_class(vec![update(vec![set("id", "src.s")])]),
-            "IncompatibleDataForTableCannotSafelyCast"
+            krishiv_common::error::ErrorClass::IncompatibleDataForTableCannotSafelyCast
         );
         // A clause of each `NOT MATCHED` kind left without a condition before another.
         assert_eq!(
@@ -1783,7 +1783,7 @@ mod merge {
                     ClauseAction::InsertStar
                 ),
             ]),
-            "NonLastNotMatchedByTargetClauseOmitCondition"
+            krishiv_common::error::ErrorClass::NonLastNotMatchedByTargetClauseOmitCondition
         );
         assert_eq!(
             refused_class(vec![
@@ -1794,7 +1794,7 @@ mod merge {
                     ClauseAction::Delete,
                 ),
             ]),
-            "NonLastNotMatchedBySourceClauseOmitCondition"
+            krishiv_common::error::ErrorClass::NonLastNotMatchedBySourceClauseOmitCondition
         );
     }
 

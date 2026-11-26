@@ -794,7 +794,7 @@ fn a_dv_of_a_rewritten_file_is_removed_with_it() {
         let mut bytes = b"PFA1".to_vec();
         bytes.extend_from_slice(&blob);
         let path = env.at("a.puffin");
-        std::fs::write(path.strip_prefix("file://").unwrap(), &bytes).unwrap();
+        std::fs::write(super::sink_tests::local_path(&path), &bytes).unwrap();
         let mut d = DataFileBuilder::default();
         d.content(DataContentType::PositionDeletes)
             .file_path(path)
@@ -1127,7 +1127,7 @@ pub(super) fn dvs_in_one_puffin(
         bytes.extend_from_slice(&blob);
     }
     let path = env.at(name);
-    std::fs::write(path.strip_prefix("file://").unwrap(), &bytes).unwrap();
+    std::fs::write(super::sink_tests::local_path(&path), &bytes).unwrap();
     files
         .iter()
         .enumerate()

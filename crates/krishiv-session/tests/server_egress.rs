@@ -189,6 +189,8 @@ fn table_options_are_checked_where_they_are_given() {
         .build()
         .unwrap();
     let create = |name: &str, options: &str| {
+        // `/` separators: a Windows path's `\` would be read as a SQL escape.
+        let dir = dir.replace('\\', "/");
         format!("CREATE TABLE {name} (a INT) USING csv {options} LOCATION '{dir}'")
     };
     assert_eq!(

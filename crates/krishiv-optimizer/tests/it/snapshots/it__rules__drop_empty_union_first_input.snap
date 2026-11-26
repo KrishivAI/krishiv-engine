@@ -1,0 +1,7 @@
+---
+source: crates/krishiv-optimizer/tests/it/rules.rs
+expression: "SELECT * FROM (SELECT a, 's' AS k FROM t UNION ALL SELECT a, 'u' AS k FROM u) x WHERE k = 'u' AND a > 1"
+---
+Project [a#4 AS a#0, 'u' AS k#3]
++- Filter (a#4 > 1)
+   +- Scan spark_catalog.default.u [a#4]

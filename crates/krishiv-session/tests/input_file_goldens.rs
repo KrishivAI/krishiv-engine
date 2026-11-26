@@ -87,7 +87,7 @@ fn setup(s: &Session, root: &Path) {
         w.write(b).unwrap();
     }
     w.close().unwrap();
-    let path = |d: &str| root.join(d).to_str().unwrap().to_owned();
+    let path = |d: &str| format!("{}/{d}", root_text(root));
     block_on(async {
         s.read()
             .parquet([path("a")])
@@ -308,7 +308,7 @@ const KNOWN_GAPS: &[(usize, &str)] = &[
 ];
 
 fn run_case(s: &Session, root: &Path, case: &Value) -> Result<Vec<RecordBatch>, KrishivError> {
-    let root_s = root.to_str().unwrap();
+    let root_s = &root_text(root);
     let conf = s.conf();
     let settings = case["conf"].as_object().unwrap();
     for (k, v) in settings {
@@ -368,7 +368,7 @@ fn check(s: &Session, root: &Path, sizes: &Sizes, case: &Value, any_of: Option<&
             .err()
             .unwrap_or_default();
     }
-    let root_s = root.to_str().unwrap();
+    let root_s = &root_text(root);
     let mut want: Vec<Vec<String>> = case["rows"]
         .as_array()
         .unwrap()
@@ -469,10 +469,17 @@ fn run_sql(s: &Session, sql: &str) -> Result<(Vec<Vec<String>>, Vec<bool>), Kris
     })
 }
 
+/// The root directory as SQL text and in the engine's `file://` URLs: the path of its `file:` URL
+/// (`/tmp/x`; `/C:/x` on Windows, where a canonical `\\?\C:\x` would not survive a SQL literal).
+fn root_text(root: &Path) -> String {
+    let url = krishiv_exec::files::file_url(root);
+    url.strip_prefix("file://").unwrap_or(&url).to_owned()
+}
+
 fn files(root: &Path, names: &[&str]) -> Vec<Vec<String>> {
     let mut v: Vec<Vec<String>> = names
         .iter()
-        .map(|n| vec![format!("file://{}/{n}", root.display())])
+        .map(|n| vec![format!("file://{}/{n}", root_text(root))])
         .collect();
     v.sort();
     v

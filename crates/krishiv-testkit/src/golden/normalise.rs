@@ -25,8 +25,20 @@ pub struct Masker {
 impl Masker {
     /// Compile the rules; `warehouse` is the engine's warehouse directory (may be empty).
     pub fn new(warehouse: &str) -> Result<Self, regex_lite::Error> {
-        let cls = regex_lite::escape(warehouse.strip_prefix("file:").unwrap_or(warehouse));
-        let has_wh = !cls.is_empty();
+        let bare = warehouse.strip_prefix("file:").unwrap_or(warehouse);
+        // A Windows warehouse (`D:\x\wh`) prints as `file:/D:/x/wh`: either form is the
+        // warehouse (`(?:/?D:/x/wh|D:\x\wh)`); a Unix one has one form.
+        let slashed = bare.replace('\\', "/");
+        let cls = if slashed == bare {
+            regex_lite::escape(bare)
+        } else {
+            format!(
+                "(?:/?{}|{})",
+                regex_lite::escape(&slashed),
+                regex_lite::escape(bare)
+            )
+        };
+        let has_wh = !bare.is_empty();
         let key = |k: &str| format!("\"{k}\":\".*?\"").replace('.', DOT);
         let dot = |s: &str| s.replace('.', DOT);
         // (pattern, replacement), in the order of `replaceNotIncludedMsg`.
@@ -189,6 +201,21 @@ mod tests {
     }
 
     type R = Result<(), Box<dyn std::error::Error>>;
+
+    /// A Windows warehouse matches as written and in the `file:/D:/..` form the engine prints.
+    #[test]
+    fn a_windows_warehouse_matches_in_both_forms() -> R {
+        let m = Masker::new(r"D:\a\wh")?;
+        assert_eq!(
+            m.mask("Location\tfile:/D:/a/wh/char_tbl"),
+            "Location [not included in comparison]/{warehouse_dir}/char_tbl"
+        );
+        assert_eq!(
+            m.mask(r"InMemoryFileIndex(file:D:\a\wh)"),
+            "InMemoryFileIndex(file:[not included in comparison]/{warehouse_dir})"
+        );
+        Ok(())
+    }
 
     /// Each pair is (raw engine text, the masked line as it appears in the vendored goldens).
     #[test]

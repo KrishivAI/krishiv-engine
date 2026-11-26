@@ -54,7 +54,7 @@
 //! into the main join tree. Both reads of `dict` are `Shift`s of one body, so
 //! `ShareCte` computes it once.
 
-use std::collections::HashSet;
+use crate::expr::AttrMap;
 use std::sync::Arc;
 
 use krishiv_common::error::KrishivError;
@@ -217,7 +217,7 @@ struct Candidate {
     /// The group keys it produces, in key order.
     keys: Vec<BoundColumn>,
     /// The keys nothing reads on the way: they leave the payload.
-    dropped: HashSet<AttrId>,
+    dropped: Attrs,
     note: String,
 }
 
@@ -493,7 +493,7 @@ impl<'a> Shape<'a> {
                 calls_read(e, &mut read);
             }
         }
-        let dropped: HashSet<AttrId> = keys
+        let dropped: Attrs = keys
             .iter()
             .map(|k| k.id)
             .filter(|id| !read.contains(id))
@@ -777,7 +777,7 @@ impl<'a> Shape<'a> {
         let mut agg_out: Vec<Arc<Expr>> = std::iter::once(column(&row_code))
             .chain(rest.iter().map(|k| column(k)))
             .collect();
-        let decoded: std::collections::HashMap<AttrId, Arc<Expr>> = c
+        let decoded: AttrMap<Arc<Expr>> = c
             .keys
             .iter()
             .zip(&dict_keys)

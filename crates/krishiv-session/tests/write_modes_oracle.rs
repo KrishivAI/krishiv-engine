@@ -11,10 +11,7 @@ use krishiv_session::Session;
 use serde_json::Value;
 
 /// Cases whose Krishiv result differs from Spark's, with the reason; each must still differ.
-const KNOWN_GAPS: &[(&str, &str)] = &[(
-    "SAT-37-append-string-into-int-legacy-policy",
-    "spark.sql.storeAssignmentPolicy=LEGACY is not honoured by a table write (every write uses ANSI store assignment)",
-)];
+const KNOWN_GAPS: &[(&str, &str)] = &[];
 
 fn fixture() -> Value {
     let path = concat!(

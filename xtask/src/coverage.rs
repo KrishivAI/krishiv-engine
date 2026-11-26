@@ -242,7 +242,21 @@ pub fn parse_lcov(text: &str) -> HashMap<String, BTreeMap<u32, u64>> {
 /// # Errors
 /// Returns an error for an empty path or a prefix containing `..`.
 pub fn parse_lcov_spec(spec: &str) -> Result<(PathBuf, String), String> {
-    let (path, prefix) = spec.split_once(':').unwrap_or((spec, ""));
+    // A leading drive designator (`C:\x`, `C:/x`) is part of the path, not the separator.
+    let b = spec.as_bytes();
+    let skip = if b.len() >= 3
+        && b[0].is_ascii_alphabetic()
+        && b[1] == b':'
+        && matches!(b[2], b'\\' | b'/')
+    {
+        2
+    } else {
+        0
+    };
+    let (path, prefix) = match spec[skip..].split_once(':') {
+        Some((p, prefix)) => (&spec[..skip + p.len()], prefix),
+        None => (spec, ""),
+    };
     if path.is_empty() {
         return Err(format!("--lcov {spec:?} has an empty path"));
     }

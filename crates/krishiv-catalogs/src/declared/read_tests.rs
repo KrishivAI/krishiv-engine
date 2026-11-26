@@ -388,7 +388,13 @@ fn declared_metadata_cache_ttl_and_refresh() {
     )
     .unwrap();
     let ttl = Duration::from_millis(300);
-    let built = super::RestCatalog::new(&d, Arc::new(client), ttl, false);
+    let built = super::RestCatalog::new(
+        &d,
+        Arc::new(client),
+        ttl,
+        false,
+        super::vended::VendedCache::global(),
+    );
     let caller = CatalogCaller::server("lake");
     let t: TableIdent = ident(&["db"], "t");
     let load = || {
@@ -434,6 +440,74 @@ fn declared_metadata_cache_ttl_and_refresh() {
     assert_eq!(e.error_class(), ErrorClass::TableOrViewNotFound);
     let e = run(&s, "REFRESH TABLE lake.db.missing").unwrap_err();
     assert_eq!(e.error_class(), ErrorClass::TableOrViewNotFound);
+}
+
+/// Review 766503696 (#930): a `REFRESH TABLE` that lands while a load is in flight (here: any table's, served inside
+/// the `loadTable` request) keeps that load out of the table cache, so the next load asks the catalog again; a load
+/// with no refresh across it is kept. Fails if `loaded` stops reading `drops` before the request.
+#[test]
+fn a_load_across_a_refresh_table_is_not_kept() {
+    let dir = tempfile::tempdir().unwrap();
+    let table = write_table(dir.path()).unwrap();
+    let load = body(&table, "{}", "");
+    let vended = Arc::new(super::vended::VendedCache::default());
+    let refreshes = Arc::clone(&vended);
+    let mut answered = 0_usize;
+    let server = serve(move |r| match path(r) {
+        "/v1/config" => Reply::Json(200, r#"{"defaults": {}, "overrides": {}}"#.into()),
+        "/v1/namespaces/db/tables/t" => {
+            answered += 1;
+            if answered == 1 {
+                refreshes.drop_table(u64::MAX, &["other".to_owned()], "x");
+            }
+            Reply::Json(200, load.clone())
+        }
+        _ => Reply::Json(404, NO_TABLE.into()),
+    });
+    let d = decl(
+        &[
+            ("krishiv.catalog.lake.type", "iceberg-rest"),
+            ("krishiv.catalog.lake.uri", server.base.as_str()),
+        ],
+        DeclMode::Embedded,
+    );
+    let config =
+        IcebergRestFactory::config(&d, &deps(DeclMode::Embedded, PrivateAddresses::Allow), true)
+            .unwrap();
+    let client = crate::iceberg_rest::RestClient::new(
+        "lake",
+        config,
+        Arc::new(super::table::EmbeddedLocations::default()),
+    )
+    .unwrap();
+    let built = super::RestCatalog::new(
+        &d,
+        Arc::new(client),
+        super::table::METADATA_TTL,
+        false,
+        vended,
+    );
+    let caller = CatalogCaller::server("lake");
+    let t: TableIdent = ident(&["db"], "t");
+    let load = || {
+        block_on(built.load_table(&caller, &t, None, FORM))
+            .unwrap()
+            .unwrap()
+    };
+    load();
+    assert_eq!(loads(&server), 1);
+    load();
+    assert_eq!(
+        loads(&server),
+        2,
+        "the load across the refresh was not kept"
+    );
+    load();
+    assert_eq!(
+        loads(&server),
+        2,
+        "a load with no refresh across it is kept"
+    );
 }
 
 #[test]
