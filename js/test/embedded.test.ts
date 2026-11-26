@@ -201,7 +201,7 @@ describe("loading the addon", () => {
     expect(platformPackage("win32", "x64")).toBe("@krishiv/engine-win32-x64-msvc");
   });
 
-  it("refuses a binary of another version", () => {
+  it("refuses a platform package of another version", () => {
     expect(() => checkVersion("@krishiv/engine-linux-x64-gnu", "0.0.0-test", "0.2.1")).toThrow(
       /is version 0\.0\.0-test but krishiv is 0\.2\.1/,
     );
@@ -212,6 +212,7 @@ describe("loading the addon", () => {
     }
     expect(() => checkVersion("p", "0.2.1", "0.2.1")).not.toThrow();
     expect(() => checkVersion("p", "0.2.1", undefined)).not.toThrow();
+    expect(() => checkVersion("p", undefined, "0.2.1")).not.toThrow();
   });
 
   it("a bad path is KRISHIV_NATIVE_ENGINE_UNAVAILABLE", () => {

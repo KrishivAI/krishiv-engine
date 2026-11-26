@@ -65,20 +65,24 @@ function hasMuslLoader(): boolean {
   }
 }
 
-function packageVersion(req: NodeRequire): string | undefined {
+/** The `version` of the `package.json` that `manifest` resolves to, if it can be read. */
+function packageVersion(req: NodeRequire, manifest: string): string | undefined {
   try {
-    return (req("../package.json") as { version?: string }).version;
+    return (req(manifest) as { version?: string }).version;
   } catch {
     return undefined;
   }
 }
 
 /**
- * Refuses a binary of another version than the package (the platform packages are published in lockstep). The
- * `KRISHIV_NATIVE_ENGINE` override (local builds, CI) is not checked: it names a binary on purpose.
+ * Refuses a platform package of another version than `krishiv`: the packages are published in lockstep, each
+ * platform package stamped with `krishiv`'s version at pack time (js/scripts/npm-packages.mjs). The package
+ * version, not the addon's own crate version, is compared: the crates and the npm packages are versioned apart
+ * between releases. The `KRISHIV_NATIVE_ENGINE` override (local builds, CI) is not checked: it names a binary on
+ * purpose.
  */
-export function checkVersion(pkg: string, got: string, want: string | undefined): void {
-  if (want !== undefined && got !== want) {
+export function checkVersion(pkg: string, got: string | undefined, want: string | undefined): void {
+  if (got !== undefined && want !== undefined && got !== want) {
     throw new KrishivError(`${pkg} is version ${got} but krishiv is ${want}; install the same version of both`, {
       errorClass: "KRISHIV_NATIVE_ENGINE_UNAVAILABLE",
     });
@@ -87,8 +91,9 @@ export function checkVersion(pkg: string, got: string, want: string | undefined)
 
 /** Loads the addon: never at import, only when a session picks embedded mode. */
 export function loadAddon(env: NodeJS.ProcessEnv = process.env): NativeAddon {
-  // `require` in the CommonJS build; in the ES module build it is not defined.
-  const req: NodeRequire = typeof require === "function" ? require : createRequire(import.meta.url);
+  // `__filename` exists only in the CommonJS build. Not `typeof require`: the bundler rewrites `require` in the ES
+  // module build into its own shim, a function that throws "Dynamic require of ... is not supported".
+  const req: NodeRequire = createRequire(typeof __filename === "string" ? __filename : import.meta.url);
   const path = env[NATIVE_ENGINE_ENV];
   if (path !== undefined && path !== "") {
     try {
@@ -112,7 +117,7 @@ export function loadAddon(env: NodeJS.ProcessEnv = process.env): NativeAddon {
       { errorClass: "KRISHIV_NATIVE_ENGINE_UNAVAILABLE", cause: e },
     );
   }
-  checkVersion(pkg, addon.version(), packageVersion(req));
+  checkVersion(pkg, packageVersion(req, `${pkg}/package.json`), packageVersion(req, "../package.json"));
   return addon;
 }
 
