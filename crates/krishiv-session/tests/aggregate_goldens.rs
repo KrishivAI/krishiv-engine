@@ -435,6 +435,22 @@ fn vector_aggregates_match_spark() -> R {
     check(&bad, claimed, 16)
 }
 
+/// A vector with a NULL element is left out whole by `vector_sum` and `vector_avg`: Spark 4.2.0 and
+/// 4.3.0 `VectorAggregate.update` return early on it (review R1-D-14; run against Spark 4.3.0).
+#[test]
+fn a_vector_with_a_null_element_is_left_out_whole() -> R {
+    let case = Case {
+        query: "SELECT vector_avg(v), vector_sum(v) FROM VALUES (array(1f, 2f)), \
+                (array(CAST(NULL AS FLOAT), 1f)) AS t(v)"
+            .to_owned(),
+        schema: "struct<vector_avg(v):array<float>,vector_sum(v):array<float>>".to_owned(),
+        output: "[1.0,2.0]\t[1.0,2.0]".to_owned(),
+    };
+    let bad = run(&Session::new()?, &case)?;
+    assert!(bad.is_none(), "{bad:?}");
+    Ok(())
+}
+
 /// The `collect_list`/`array_agg` statements of `group-by.sql`: Spark names
 /// `array_agg`'s column `collect_list(...)`, so both spellings give the
 /// same column. Inline `VALUES` need no registered table.
