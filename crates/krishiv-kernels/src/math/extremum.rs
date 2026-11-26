@@ -7,7 +7,9 @@
 use std::cmp::Ordering;
 
 use arrow_array::types::ByteArrayType;
-use arrow_array::{Array, ArrowPrimitiveType, BooleanArray, GenericByteArray, PrimitiveArray};
+use arrow_array::{
+    Array, ArrayRef, ArrowPrimitiveType, BooleanArray, GenericByteArray, PrimitiveArray,
+};
 use arrow_buffer::{BooleanBuffer, NullBuffer};
 
 use crate::error::KernelError;
@@ -153,4 +155,75 @@ pub fn extremum_bool(
     let values = BooleanBuffer::from_iter(picked.iter().map(|v| v.unwrap_or(false)));
     let nulls = NullBuffer::from_iter(picked.iter().map(Option::is_some));
     Ok(BooleanArray::new(values, Some(nulls)))
+}
+
+/// `greatest` / `least` over struct or array columns of one type, compared in
+/// Spark's order (field by field, element by element; a NULL field or element
+/// is the smallest value). A NULL argument is skipped, so the result is NULL
+/// only where every argument is; a tie keeps the earlier argument.
+///
+/// # Errors
+/// As [`extremum_primitive`], and for a type the order does not cover.
+pub fn extremum_nested(kind: Extremum, columns: &[ArrayRef]) -> Result<ArrayRef, KernelError> {
+    let rows = rows_of(columns.iter().map(Array::len))?;
+    let refs: Vec<&dyn Array> = columns.iter().map(AsRef::as_ref).collect();
+    let mut picks = Vec::with_capacity(rows);
+    for row in 0..rows {
+        let mut best: Option<usize> = None;
+        for (c, col) in columns.iter().enumerate() {
+            if col.is_null(row) {
+                continue;
+            }
+            best = match best {
+                None => Some(c),
+                Some(b) => {
+                    let ord =
+                        crate::order::cmp_rows(columns[c].as_ref(), row, columns[b].as_ref(), row)?;
+                    Some(if kind.replaces(ord) { c } else { b })
+                }
+            };
+        }
+        picks.push((best.unwrap_or(0), row));
+    }
+    arrow_select::interleave::interleave(&refs, &picks)
+        .map_err(|e| KernelError::internal(e.to_string()))
+}
+
+#[cfg(test)]
+mod nested_tests {
+    use super::*;
+    use arrow_array::builder::{Int32Builder, ListBuilder};
+    use std::sync::Arc;
+
+    fn lists(rows: &[Option<Vec<Option<i32>>>]) -> ArrayRef {
+        let mut b = ListBuilder::new(Int32Builder::new());
+        for r in rows {
+            match r {
+                Some(v) => {
+                    for x in v {
+                        b.values().append_option(*x);
+                    }
+                    b.append(true);
+                }
+                None => b.append(false),
+            }
+        }
+        Arc::new(b.finish())
+    }
+
+    #[test]
+    fn arrays_compare_element_wise_and_skip_nulls() {
+        let a = lists(&[Some(vec![Some(1), Some(2)]), None, None]);
+        let b = lists(&[Some(vec![Some(1), None]), Some(vec![Some(5)]), None]);
+        let g = extremum_nested(Extremum::Greatest, &[Arc::clone(&a), Arc::clone(&b)]).unwrap();
+        assert_eq!(
+            g.as_ref(),
+            lists(&[Some(vec![Some(1), Some(2)]), Some(vec![Some(5)]), None]).as_ref()
+        );
+        let l = extremum_nested(Extremum::Least, &[a, b]).unwrap();
+        assert_eq!(
+            l.as_ref(),
+            lists(&[Some(vec![Some(1), None]), Some(vec![Some(5)]), None]).as_ref()
+        );
+    }
 }

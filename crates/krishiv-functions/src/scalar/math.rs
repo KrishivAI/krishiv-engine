@@ -363,6 +363,14 @@ fn extremum(t: &DataType, kind: Extremum, n: usize) -> Option<Binding> {
             let refs: Vec<_> = cols.iter().collect();
             Ok(Arc::new(math::extremum_bytes(kind, &refs)?) as ArrayRef)
         }),
+        DataType::Struct(_) | DataType::List(_) | DataType::LargeList(_)
+            if krishiv_kernels::r#struct::comparable(t) =>
+        {
+            Binding::new(t.clone(), move |x: &Inputs<'_>| {
+                let cols = (0..n).map(|i| x.column(i)).collect::<Result<Vec<_>, _>>()?;
+                Ok(math::extremum_nested(kind, &cols)?)
+            })
+        }
         _ => return None,
     })
 }
