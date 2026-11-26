@@ -30,7 +30,11 @@
 //! `.init_array` constructor reads the limit from `KRISHIV_MEMORY_LIMIT`
 //! (the documented, reliable way) or the arguments ([`limit_in_args`]:
 //! `--memory-limit`, `krishiv.memory.limit=`), and sets each option the
-//! user has not set through its `MIMALLOC_*` variable. A limit from a
+//! user has not set through its `MIMALLOC_*` variable. With neither, the
+//! limit is the default, a share of the container's memory: the
+//! constructor reads the cgroup and physical memory without allocating
+//! (`container.rs`) and applies the options when that default is not
+//! generous, a container under about 5 GiB (QA2-12). A limit from a
 //! configuration file or a runtime `SET` is still enforced by the memory
 //! pools and uses [`release`], but without these options. On other targets
 //! (musl, macOS) there is no constructor: set the `MIMALLOC_*` variables of
@@ -195,6 +199,8 @@ mod cpu_check {
     pub(super) static CHECK: extern "C" fn() = check;
 }
 
+mod container;
+
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
 mod init {
     use std::ffi::{CStr, c_char, c_int};
@@ -204,6 +210,38 @@ mod init {
     unsafe extern "C" {
         fn getenv(name: *const c_char) -> *const c_char;
         fn mallopt(param: c_int, value: c_int) -> c_int;
+        fn open(path: *const c_char, flags: c_int, ...) -> c_int;
+        fn read(fd: c_int, buf: *mut std::ffi::c_void, count: usize) -> isize;
+        fn close(fd: c_int) -> c_int;
+    }
+
+    /// Reads `path` into `buf` with plain system calls (no allocation):
+    /// the bytes read, `None` if it cannot be opened or read.
+    fn read_file(path: &CStr, buf: &mut [u8]) -> Option<usize> {
+        const O_RDONLY_CLOEXEC: c_int = 0o2_000_000;
+        // SAFETY: `path` is NUL-terminated; `open` only reads it.
+        let fd = unsafe { open(path.as_ptr(), O_RDONLY_CLOEXEC) };
+        if fd < 0 {
+            return None;
+        }
+        let mut n = 0;
+        while n < buf.len() {
+            // SAFETY: `fd` is open, and `buf[n..]` is writable for its
+            // length.
+            let got = unsafe { read(fd, buf[n..].as_mut_ptr().cast(), buf.len() - n) };
+            match usize::try_from(got) {
+                Ok(0) => break,
+                Ok(k) => n += k,
+                Err(_) => {
+                    // SAFETY: `fd` is open and closed once.
+                    unsafe { close(fd) };
+                    return None;
+                }
+            }
+        }
+        // SAFETY: `fd` is open and closed once.
+        unsafe { close(fd) };
+        Some(n)
     }
 
     /// Applies [`super::GLIBC_OPTIONS`] unless the environment already sets
@@ -271,14 +309,20 @@ mod init {
         });
         // A variable that is not a size counts as 0, as in `limit_in_args`.
         let from_var = with_var(LIMIT_VAR, |v| v.map(|v| parse_size(v).unwrap_or(0)));
-        let limit = match (from_var, limit_in_args(args)) {
-            (Some(a), Some(b)) => a.min(b),
-            (a, b) => match a.or(b) {
-                Some(l) => l,
-                None => return keep_freed_c_memory(),
-            },
+        let given = match (from_var, limit_in_args(args)) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
         };
-        if is_generous(limit) {
+        let generous = match given {
+            Some(limit) => is_generous(limit),
+            // No limit given: the default `krishiv.memory.limit` is a share
+            // of the container's, read here without allocating (QA2-12: in
+            // a 2 GiB cgroup mimalloc's defaults held the process 250-300
+            // MiB above what these options do, and filled the cgroup).
+            None => super::container::effective_limit(&mut read_file)
+                .is_none_or(super::container::default_is_generous),
+        };
+        if generous {
             return keep_freed_c_memory();
         }
         super::BOUNDED.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -304,7 +348,12 @@ mod init {
         #[test]
         fn a_null_argv_sets_no_mimalloc_option() {
             // (The test process has no `KRISHIV_MEMORY_LIMIT`, as the other
-            // tests that read mimalloc's defaults assume.)
+            // tests that read mimalloc's defaults assume.) In a container
+            // under about 5 GiB the constructor would set the options from
+            // the container's limit, and change them for the other tests.
+            if super::super::tests::container_is_tight() {
+                return;
+            }
             super::init(0, std::ptr::null(), std::ptr::null());
             // SAFETY: plain getters.
             let got = unsafe {
@@ -450,6 +499,18 @@ mod tests {
         release();
     }
 
+    /// Whether this test process's container is small enough (under about
+    /// 5 GiB) that, with no limit given, the constructor applies the options.
+    pub(super) fn container_is_tight() -> bool {
+        let mut read = |p: &CStr, buf: &mut [u8]| {
+            let text = std::fs::read(p.to_str().ok()?).ok()?;
+            let n = text.len().min(buf.len());
+            buf[..n].copy_from_slice(&text[..n]);
+            Some(n)
+        };
+        container::effective_limit(&mut read).is_some_and(|e| !container::default_is_generous(e))
+    }
+
     /// `(purge_delay, allow_thp, minimal_purge_size)` in force.
     fn read() -> (c_long, c_long, c_long) {
         // SAFETY: plain getters.
@@ -534,7 +595,27 @@ mod tests {
 
     /// The `prefix` line of `child_reports_options` in a child process.
     fn report(arg: Option<&str>, env: &[(&str, &str)], prefix: &str) -> String {
-        let mut c = std::process::Command::new(std::env::current_exe().unwrap());
+        report_in(None, arg, env, prefix)
+    }
+
+    /// [`report`], in a transient systemd scope with `memory_max` when given.
+    fn report_in(
+        memory_max: Option<&str>,
+        arg: Option<&str>,
+        env: &[(&str, &str)],
+        prefix: &str,
+    ) -> String {
+        let exe = std::env::current_exe().unwrap();
+        let mut c = match memory_max {
+            Some(max) => {
+                let mut c = std::process::Command::new("systemd-run");
+                c.args(["--user", "--scope", "-q", "-p"])
+                    .arg(format!("MemoryMax={max}"))
+                    .arg(&exe);
+                c
+            }
+            None => std::process::Command::new(&exe),
+        };
         c.args(["tests::child_reports_options", "--exact", "--nocapture"])
             .env("KRISHIV_ALLOC_CHILD", "1")
             .env_remove("KRISHIV_MEMORY_LIMIT");
@@ -567,7 +648,12 @@ mod tests {
         // state: 1, or 0 on a kernel without transparent huge pages. With a
         // limit it is 0 either way.
         let unlimited = format!("(1000, 1, 0) THP {}", thp_enabled());
-        assert_eq!(child(None, &[]), unlimited);
+        let none = if container_is_tight() {
+            "(10, 0, 64) THP 0".to_owned()
+        } else {
+            unlimited
+        };
+        assert_eq!(child(None, &[]), none);
         assert_eq!(
             child(Some("krishiv.memory.limit=1g"), &[]),
             "(10, 0, 64) THP 0"
@@ -586,7 +672,7 @@ mod tests {
             ),
             "(50, 0, 64) THP 0"
         );
-        assert_eq!(child(None, &[("KRISHIV_MEMORY_LIMIT", "")]), unlimited);
+        assert_eq!(child(None, &[("KRISHIV_MEMORY_LIMIT", "")]), none);
         // The smaller of the variable and the arguments decides.
         assert_eq!(
             child(
@@ -621,7 +707,12 @@ mod tests {
     #[test]
     fn glibc_keeps_c_blocks_unless_bounded_or_configured() {
         let mapped = |arg, env| report(arg, env, "MAPPED ");
-        assert_eq!(mapped(None, &[]), "false");
+        let none = if container_is_tight() {
+            "true"
+        } else {
+            "false"
+        };
+        assert_eq!(mapped(None, &[]), none);
         assert_eq!(mapped(Some("krishiv.memory.limit=24g"), &[]), "false");
         assert_eq!(mapped(Some("krishiv.memory.limit=1g"), &[]), "true");
         assert_eq!(
@@ -641,7 +732,32 @@ mod tests {
                 None,
                 &[("GLIBC_TUNABLES", "glibc.rtld.optional_static_tls=512")]
             ),
-            "false"
+            none
         );
+    }
+
+    /// With no limit given, a container under about 5 GiB applies the
+    /// options (its default limit is not generous) and a larger one does
+    /// not (QA2-12). Needs a user systemd instance; skipped without one.
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    #[test]
+    fn a_small_container_applies_the_options_without_a_limit() {
+        let scopes = std::process::Command::new("systemd-run")
+            .args(["--user", "--scope", "-q", "true"])
+            .output()
+            .is_ok_and(|o| o.status.success());
+        if !scopes {
+            eprintln!("no user systemd scopes: skipped");
+            return;
+        }
+        let limited = "(10, 0, 64) THP 0";
+        assert_eq!(report_in(Some("2G"), None, &[], "OPTIONS "), limited);
+        // The given limit decides over the container's.
+        let generous = report_in(Some("2G"), Some("krishiv.memory.limit=8g"), &[], "OPTIONS ");
+        assert!(generous.starts_with("(1000, 1, 0)"), "{generous}");
+        if !container_is_tight() {
+            let big = report_in(Some("64G"), None, &[], "OPTIONS ");
+            assert!(big.starts_with("(1000, 1, 0)"), "{big}");
+        }
     }
 }
