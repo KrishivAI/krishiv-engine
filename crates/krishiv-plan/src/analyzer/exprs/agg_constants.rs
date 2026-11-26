@@ -177,7 +177,18 @@ impl Resolver<'_> {
         let eps = eps.ok_or_else(|| self.null_constant(e, kids, "eps"))?;
         let confidence = confidence.ok_or_else(|| self.null_constant(e, kids, "confidence"))?;
         let seed = seed.ok_or_else(|| self.null_constant(e, kids, "seed"))?;
-        let shown = |v: f64| format!("{}D", crate::spark_fmt::double(v));
+        // Java prints a non-finite double as `Infinity` / `-Infinity` / `NaN`; `spark_fmt` takes finite values only.
+        let shown = |v: f64| {
+            if v.is_finite() {
+                format!("{}D", crate::spark_fmt::double(v))
+            } else if v.is_nan() {
+                "NaND".to_owned()
+            } else if v > 0.0 {
+                "InfinityD".to_owned()
+            } else {
+                "-InfinityD".to_owned()
+            }
+        };
         if eps <= 0.0 {
             return Err(self.out_of_range(
                 e,
