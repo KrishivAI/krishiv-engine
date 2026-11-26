@@ -814,7 +814,11 @@ async fn child_session(data: &Path) -> Result<Session, KrishivError> {
         .set("spark.sql.variable.substitute", "false")?;
     for (name, path) in data_tables(data)? {
         let df = session.read().parquet([path.as_str()]);
-        df.create_or_replace_temp_view(&name).await?;
+        // The name is a file or directory name, not SQL text: `sales.2025` is one part.
+        df.create_or_replace_temp_view(&krishiv_common::names::quote_parts(std::slice::from_ref(
+            &name,
+        )))
+        .await?;
     }
     lock.lock();
     Ok(session)

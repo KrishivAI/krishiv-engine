@@ -66,8 +66,17 @@ fn literal(q: &[Option<f32>]) -> String {
     format!("array({})", items.join(", "))
 }
 
+/// The Spark 4.2 profile: the goldens are 4.2.0's and the brute force sums in `float` as 4.2 does (4.3 sums in
+/// `double`).
+fn session_42() -> Session {
+    Session::builder()
+        .profile(krishiv_plan::analyzer::SparkProfile::V4_2)
+        .build()
+        .unwrap()
+}
+
 fn session_with(batch: RecordBatch) -> Session {
-    let s = Session::new().unwrap();
+    let s = session_42();
     s.register_batches("vt", schema(), vec![batch]).unwrap();
     s
 }
@@ -187,7 +196,7 @@ fn top_k_matches_spark_4_2_0() {
 /// `ORDER BY` each distance over `n` random vectors of `dim` elements, `LIMIT k`, equals the first `k` rows of a sort
 /// of the kernels' own values (ids and distance bits), for l2, cosine and inner product.
 fn brute_force(n: i32, dim: usize, ks: &[usize]) {
-    let s = Session::new().unwrap();
+    let s = session_42();
     let field = Arc::new(Field::new("element", DataType::Float32, true));
     let mut vectors = ListBuilder::new(Float32Builder::new()).with_field(field);
     let mut all = Vec::new();

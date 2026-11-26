@@ -11,6 +11,10 @@ use krishiv_optimizer::{ColumnStats, NoStatistics, Statistics, TableStats, optim
 use krishiv_plan::{Literal, LogicalPlan, Plan, PlanNode, ReadSource, Scan};
 use krishiv_udf_sdk::UdfLibrary;
 
+use proptest::prelude::*;
+
+use crate::props::Gen;
+use crate::support::{data, eval};
 use crate::{support, tpcds};
 
 /// `store_sales` at TPC-DS SF10 with `ss_quantity` in 1..=100, as the
@@ -309,4 +313,97 @@ fn a_scan_read_inside_a_barrier_is_not_shared() {
     }
     // Control: the same three filters with no barrier share one scan.
     assert_eq!(shared(&guarded(&[])), 3);
+}
+
+/// Every table ten million rows with every column from statistics (`u` of the
+/// generated-query tests at scale).
+#[derive(Debug)]
+struct Large;
+
+impl Statistics for Large {
+    fn table(&self, scan: &Scan) -> Option<TableStats> {
+        let ReadSource::Table { .. } = &scan.source else {
+            return None;
+        };
+        Some(TableStats {
+            rows: 10_000_000,
+            columns: scan
+                .output
+                .iter()
+                .map(|c| {
+                    (
+                        c.name.clone(),
+                        ColumnStats {
+                            distinct: Some(1_000_000),
+                            nulls: Some(100),
+                            min: Some(Literal::Integer(-1_000_000)),
+                            max: Some(Literal::Integer(1_000_000)),
+                            ..ColumnStats::default()
+                        },
+                    )
+                })
+                .collect(),
+        })
+    }
+}
+
+/// Seed 49 of perf-4's generated-query test (D1a): not a fixed point.
+#[test]
+fn a_generated_four_way_self_join_is_a_fixed_point() {
+    let sql = "SELECT x1.d AS c0, x1.a + 1 AS c1 FROM u AS x1 \
+         JOIN u AS x2 ON x1.a = x2.a AND x1.a IS NULL \
+         JOIN u AS x3 ON x2.a = x3.a AND coalesce(x3.a, -2) = -2 \
+         JOIN u AS x4 ON x1.a = x4.a AND NOT (x1.a IS NOT NULL) WHERE x1.a IN (2, 2)";
+    let plan = support::resolve(sql, &support::ctx());
+    let once = optimize_with_udfs(&plan, &Large, &UdfLibrary::new(), &config(true)).unwrap();
+    let again = optimize_with_udfs(&once, &Large, &UdfLibrary::new(), &config(true)).unwrap();
+    assert!(
+        again.structurally_eq(&once),
+        "not a fixed point:\n{}\n{}",
+        once.root(),
+        again.root()
+    );
+    assert!(shared(&once) > 0, "{}", once.root());
+    let db = data::small(49);
+    assert_eq!(eval::rows(&db, once.root()), eval::rows(&db, plan.root()));
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(256))]
+
+    /// Generated queries over large tables, the rule on: a fixed point, the same rows.
+    #[test]
+    fn generated_queries_with_shared_scans_are_fixed_points(seed in any::<u64>()) {
+        let sql = Gen::new(seed).top();
+        let plan = support::resolve(&sql, &support::ctx());
+        let once = optimize_with_udfs(&plan, &Large, &UdfLibrary::new(), &config(true)).unwrap();
+        let again = optimize_with_udfs(&once, &Large, &UdfLibrary::new(), &config(true)).unwrap();
+        prop_assert!(
+            again.structurally_eq(&once),
+            "{sql}: not a fixed point:\n{}\n{}",
+            once.root(),
+            again.root()
+        );
+        let db = data::small(seed);
+        prop_assert_eq!(eval::rows(&db, once.root()), eval::rows(&db, plan.root()), "{}", sql);
+    }
+}
+
+/// The generator gives the proptest above queries the rule shares: without
+/// them it would test nothing. About 3% do (2 of seeds 0..64), so its 256
+/// cases meet several.
+#[test]
+fn generated_queries_share_scans() {
+    let fired = (0..64_u64)
+        .filter(|&seed| {
+            let plan = support::resolve(&Gen::new(seed).top(), &support::ctx());
+            let once =
+                optimize_with_udfs(&plan, &Large, &UdfLibrary::new(), &config(true)).unwrap();
+            shared(&once) > 0
+        })
+        .count();
+    assert!(
+        fired >= 2,
+        "only {fired} of 64 generated queries share a scan"
+    );
 }
