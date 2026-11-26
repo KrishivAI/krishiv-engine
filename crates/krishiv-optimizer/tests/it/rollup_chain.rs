@@ -242,3 +242,26 @@ fn the_multi_distinct_rewrite_keeps_its_rows() {
 fn a_plain_group_by_is_left_alone() {
     assert_stays("SELECT a, b, c, d, sum(w) FROM r GROUP BY a, b, c, d");
 }
+
+/// A rollup inside a `WITH` read twice: `ShareCte` keeps the definition, so the root is its
+/// `WITH`, and the rule's definitions join it (first, as the shared one may read them).
+#[test]
+fn a_shared_cte_root_takes_the_rollup_definitions() {
+    let on = assert_fires(
+        "WITH g AS (SELECT a, b, c, d, sum(w) AS t FROM r GROUP BY ROLLUP(a, b, c, d)) \
+         SELECT * FROM g UNION ALL SELECT * FROM g",
+    );
+    let text = on.root().to_string();
+    assert_eq!(text.matches("WithCte").count(), 1, "{text}");
+    assert!(text.contains("__shared_0"), "{text}");
+}
+
+/// An expression over the merged states, in the aggregate and in a projection above it.
+#[test]
+fn expressions_over_the_merges_keep_their_rows() {
+    assert_fires("SELECT a, b, c, d, sum(w) + count(w) AS t FROM r GROUP BY ROLLUP(a, b, c, d)");
+    assert_fires(
+        "SELECT a, b, c, d, t + 1 FROM (SELECT a, b, c, d, sum(w) AS t, count(*) AS n FROM r \
+         GROUP BY ROLLUP(a, b, c, d))",
+    );
+}
