@@ -699,11 +699,31 @@ mod tests {
     #[test]
     fn spill_partition_at_three_bits_is_the_join_layout() {
         assert_eq!(max_level(PARTITION_BITS), MAX_LEVEL);
-        for h in hashes().chain([0, u64::MAX]) {
+        // The join's fixed-width layout before level 0 could widen: the
+        // three bits below the 7-bit tag per level, from the top down.
+        let legacy = |h: u64, level: u32| {
+            let shift = 64 - 7 - 3 * (level.min(18) + 1);
+            usize::try_from((h >> shift) & 7).unwrap_or(usize::MAX)
+        };
+        for h in hashes().chain([0, u64::MAX, 1 << 56, 1, 0b111 << 54]) {
             for level in 0..=MAX_LEVEL + 2 {
-                assert_eq!(spill_partition(h, level), spill_partition_at(h, level, 3));
+                assert_eq!(
+                    spill_partition(h, level),
+                    legacy(h, level),
+                    "{h:#x} {level}"
+                );
+                assert_eq!(
+                    spill_partition_at(h, level, 3),
+                    legacy(h, level),
+                    "{h:#x} {level}"
+                );
             }
         }
+        // Exact values: level 0 reads bits 56..54, the deepest level 2..0.
+        assert_eq!(spill_partition(0b101 << 54, 0), 5);
+        assert_eq!(spill_partition(0b101 << 54, 1), 0);
+        assert_eq!(spill_partition(0b110, MAX_LEVEL), 6);
+        assert_eq!(spill_partition(0b110, MAX_LEVEL - 1), 0);
     }
 
     #[test]
