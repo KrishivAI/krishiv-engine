@@ -346,7 +346,8 @@ fn vendored_spark_sql_inputs_report_at_least_95_percent_of_not_yet_calls() {
             }
         }
     }
-    assert!(want.len() > 100, "only {} expected calls", want.len());
+    // Corpus-size sanity check only (the vendored inputs now mostly call supported functions); the 95% recall below is the real gate.
+    assert!(want.len() > 10, "only {} expected calls", want.len());
     let hit = want.iter().filter(|w| reported.contains(*w)).count();
     let pct = hit * 100 / want.len();
     assert!(pct >= 95, "recall {pct}% ({hit}/{})", want.len());

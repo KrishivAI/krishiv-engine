@@ -1647,7 +1647,7 @@ Calls the registry function `json_tuple`.
 def kll_merge_agg_bigint(col: ColumnOrName, k: Column | int | None=None) -> Column
 ```
 
-Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+Calls the registry function `kll_merge_agg_bigint`.
 
 ### `kll_merge_agg_double`
 
@@ -1655,7 +1655,7 @@ Not supported by the engine yet: calling it raises `UnsupportedOperationExceptio
 def kll_merge_agg_double(col: ColumnOrName, k: Column | int | None=None) -> Column
 ```
 
-Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+Calls the registry function `kll_merge_agg_double`.
 
 ### `kll_merge_agg_float`
 
@@ -1663,7 +1663,7 @@ Not supported by the engine yet: calling it raises `UnsupportedOperationExceptio
 def kll_merge_agg_float(col: ColumnOrName, k: Column | int | None=None) -> Column
 ```
 
-Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+Calls the registry function `kll_merge_agg_float`.
 
 ### `kll_sketch_agg_bigint`
 
@@ -1671,7 +1671,7 @@ Not supported by the engine yet: calling it raises `UnsupportedOperationExceptio
 def kll_sketch_agg_bigint(col: ColumnOrName, k: Column | int | None=None) -> Column
 ```
 
-Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+Calls the registry function `kll_sketch_agg_bigint`.
 
 ### `kll_sketch_agg_double`
 
@@ -1679,7 +1679,7 @@ Not supported by the engine yet: calling it raises `UnsupportedOperationExceptio
 def kll_sketch_agg_double(col: ColumnOrName, k: Column | int | None=None) -> Column
 ```
 
-Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+Calls the registry function `kll_sketch_agg_double`.
 
 ### `kll_sketch_agg_float`
 
@@ -1687,7 +1687,7 @@ Not supported by the engine yet: calling it raises `UnsupportedOperationExceptio
 def kll_sketch_agg_float(col: ColumnOrName, k: Column | int | None=None) -> Column
 ```
 
-Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+Calls the registry function `kll_sketch_agg_float`.
 
 ### `kll_sketch_get_n_bigint`
 
@@ -1695,7 +1695,7 @@ Not supported by the engine yet: calling it raises `UnsupportedOperationExceptio
 def kll_sketch_get_n_bigint(col: ColumnOrName) -> Column
 ```
 
-Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+Calls the registry function `kll_sketch_get_n_bigint`.
 
 ### `kll_sketch_get_n_double`
 
@@ -1703,7 +1703,7 @@ Not supported by the engine yet: calling it raises `UnsupportedOperationExceptio
 def kll_sketch_get_n_double(col: ColumnOrName) -> Column
 ```
 
-Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+Calls the registry function `kll_sketch_get_n_double`.
 
 ### `kll_sketch_get_n_float`
 
@@ -1711,7 +1711,7 @@ Not supported by the engine yet: calling it raises `UnsupportedOperationExceptio
 def kll_sketch_get_n_float(col: ColumnOrName) -> Column
 ```
 
-Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+Calls the registry function `kll_sketch_get_n_float`.
 
 ### `kll_sketch_get_quantile_bigint`
 
@@ -1719,7 +1719,7 @@ Not supported by the engine yet: calling it raises `UnsupportedOperationExceptio
 def kll_sketch_get_quantile_bigint(sketch: ColumnOrName, rank: ColumnOrName) -> Column
 ```
 
-Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+Calls the registry function `kll_sketch_get_quantile_bigint`.
 
 ### `kll_sketch_get_quantile_double`
 
@@ -1727,7 +1727,7 @@ Not supported by the engine yet: calling it raises `UnsupportedOperationExceptio
 def kll_sketch_get_quantile_double(sketch: ColumnOrName, rank: ColumnOrName) -> Column
 ```
 
-Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+Calls the registry function `kll_sketch_get_quantile_double`.
 
 ### `kll_sketch_get_quantile_float`
 
@@ -1735,7 +1735,7 @@ Not supported by the engine yet: calling it raises `UnsupportedOperationExceptio
 def kll_sketch_get_quantile_float(sketch: ColumnOrName, rank: ColumnOrName) -> Column
 ```
 
-Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+Calls the registry function `kll_sketch_get_quantile_float`.
 
 ### `kll_sketch_get_rank_bigint`
 
@@ -1743,7 +1743,7 @@ Not supported by the engine yet: calling it raises `UnsupportedOperationExceptio
 def kll_sketch_get_rank_bigint(sketch: ColumnOrName, quantile: ColumnOrName) -> Column
 ```
 
-Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+Calls the registry function `kll_sketch_get_rank_bigint`.
 
 ### `kll_sketch_get_rank_double`
 
@@ -1751,7 +1751,7 @@ Not supported by the engine yet: calling it raises `UnsupportedOperationExceptio
 def kll_sketch_get_rank_double(sketch: ColumnOrName, quantile: ColumnOrName) -> Column
 ```
 
-Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+Calls the registry function `kll_sketch_get_rank_double`.
 
 ### `kll_sketch_get_rank_float`
 
@@ -1759,7 +1759,7 @@ Not supported by the engine yet: calling it raises `UnsupportedOperationExceptio
 def kll_sketch_get_rank_float(sketch: ColumnOrName, quantile: ColumnOrName) -> Column
 ```
 
-Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+Calls the registry function `kll_sketch_get_rank_float`.
 
 ### `kll_sketch_merge_bigint`
 
@@ -1767,7 +1767,7 @@ Not supported by the engine yet: calling it raises `UnsupportedOperationExceptio
 def kll_sketch_merge_bigint(left: ColumnOrName, right: ColumnOrName) -> Column
 ```
 
-Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+Calls the registry function `kll_sketch_merge_bigint`.
 
 ### `kll_sketch_merge_double`
 
@@ -1775,7 +1775,7 @@ Not supported by the engine yet: calling it raises `UnsupportedOperationExceptio
 def kll_sketch_merge_double(left: ColumnOrName, right: ColumnOrName) -> Column
 ```
 
-Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+Calls the registry function `kll_sketch_merge_double`.
 
 ### `kll_sketch_merge_float`
 
@@ -1783,7 +1783,7 @@ Not supported by the engine yet: calling it raises `UnsupportedOperationExceptio
 def kll_sketch_merge_float(left: ColumnOrName, right: ColumnOrName) -> Column
 ```
 
-Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+Calls the registry function `kll_sketch_merge_float`.
 
 ### `kll_sketch_to_string_bigint`
 
@@ -1791,7 +1791,7 @@ Not supported by the engine yet: calling it raises `UnsupportedOperationExceptio
 def kll_sketch_to_string_bigint(col: ColumnOrName) -> Column
 ```
 
-Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+Calls the registry function `kll_sketch_to_string_bigint`.
 
 ### `kll_sketch_to_string_double`
 
@@ -1799,7 +1799,7 @@ Not supported by the engine yet: calling it raises `UnsupportedOperationExceptio
 def kll_sketch_to_string_double(col: ColumnOrName) -> Column
 ```
 
-Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+Calls the registry function `kll_sketch_to_string_double`.
 
 ### `kll_sketch_to_string_float`
 
@@ -1807,7 +1807,7 @@ Not supported by the engine yet: calling it raises `UnsupportedOperationExceptio
 def kll_sketch_to_string_float(col: ColumnOrName) -> Column
 ```
 
-Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+Calls the registry function `kll_sketch_to_string_float`.
 
 ### `kurtosis`
 
@@ -3856,7 +3856,7 @@ Calls the registry function `try_variant_set`.
 def tuple_difference_double(col1: ColumnOrName, col2: ColumnOrName) -> Column
 ```
 
-Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+Calls the registry function `tuple_difference_double`.
 
 ### `tuple_difference_integer`
 
@@ -3864,7 +3864,7 @@ Not supported by the engine yet: calling it raises `UnsupportedOperationExceptio
 def tuple_difference_integer(col1: ColumnOrName, col2: ColumnOrName) -> Column
 ```
 
-Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+Calls the registry function `tuple_difference_integer`.
 
 ### `tuple_difference_theta_double`
 
@@ -3872,7 +3872,7 @@ Not supported by the engine yet: calling it raises `UnsupportedOperationExceptio
 def tuple_difference_theta_double(col1: ColumnOrName, col2: ColumnOrName) -> Column
 ```
 
-Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+Calls the registry function `tuple_difference_theta_double`.
 
 ### `tuple_difference_theta_integer`
 
@@ -3880,7 +3880,7 @@ Not supported by the engine yet: calling it raises `UnsupportedOperationExceptio
 def tuple_difference_theta_integer(col1: ColumnOrName, col2: ColumnOrName) -> Column
 ```
 
-Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+Calls the registry function `tuple_difference_theta_integer`.
 
 ### `tuple_intersection_agg_double`
 
@@ -3888,7 +3888,7 @@ Not supported by the engine yet: calling it raises `UnsupportedOperationExceptio
 def tuple_intersection_agg_double(col: ColumnOrName, mode: Column | str | None=None) -> Column
 ```
 
-Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+Calls the registry function `tuple_intersection_agg_double`.
 
 ### `tuple_intersection_agg_integer`
 
@@ -3896,7 +3896,7 @@ Not supported by the engine yet: calling it raises `UnsupportedOperationExceptio
 def tuple_intersection_agg_integer(col: ColumnOrName, mode: Column | str | None=None) -> Column
 ```
 
-Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+Calls the registry function `tuple_intersection_agg_integer`.
 
 ### `tuple_intersection_double`
 
@@ -3904,7 +3904,7 @@ Not supported by the engine yet: calling it raises `UnsupportedOperationExceptio
 def tuple_intersection_double(col1: ColumnOrName, col2: ColumnOrName, mode: Column | str | None=None) -> Column
 ```
 
-Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+Calls the registry function `tuple_intersection_double`.
 
 ### `tuple_intersection_integer`
 
@@ -3912,7 +3912,7 @@ Not supported by the engine yet: calling it raises `UnsupportedOperationExceptio
 def tuple_intersection_integer(col1: ColumnOrName, col2: ColumnOrName, mode: Column | str | None=None) -> Column
 ```
 
-Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+Calls the registry function `tuple_intersection_integer`.
 
 ### `tuple_intersection_theta_double`
 
@@ -3920,7 +3920,7 @@ Not supported by the engine yet: calling it raises `UnsupportedOperationExceptio
 def tuple_intersection_theta_double(col1: ColumnOrName, col2: ColumnOrName, mode: Column | str | None=None) -> Column
 ```
 
-Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+Calls the registry function `tuple_intersection_theta_double`.
 
 ### `tuple_intersection_theta_integer`
 
@@ -3928,7 +3928,7 @@ Not supported by the engine yet: calling it raises `UnsupportedOperationExceptio
 def tuple_intersection_theta_integer(col1: ColumnOrName, col2: ColumnOrName, mode: Column | str | None=None) -> Column
 ```
 
-Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+Calls the registry function `tuple_intersection_theta_integer`.
 
 ### `tuple_sketch_agg_double`
 
@@ -3936,7 +3936,7 @@ Not supported by the engine yet: calling it raises `UnsupportedOperationExceptio
 def tuple_sketch_agg_double(key: ColumnOrName, summary: ColumnOrName, lgNomEntries: Column | int | None=None, mode: Column | str | None=None) -> Column
 ```
 
-Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+Calls the registry function `tuple_sketch_agg_double`.
 
 ### `tuple_sketch_agg_integer`
 
@@ -3944,7 +3944,7 @@ Not supported by the engine yet: calling it raises `UnsupportedOperationExceptio
 def tuple_sketch_agg_integer(key: ColumnOrName, summary: ColumnOrName, lgNomEntries: Column | int | None=None, mode: Column | str | None=None) -> Column
 ```
 
-Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+Calls the registry function `tuple_sketch_agg_integer`.
 
 ### `tuple_sketch_estimate_double`
 
@@ -3952,7 +3952,7 @@ Not supported by the engine yet: calling it raises `UnsupportedOperationExceptio
 def tuple_sketch_estimate_double(col: ColumnOrName) -> Column
 ```
 
-Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+Calls the registry function `tuple_sketch_estimate_double`.
 
 ### `tuple_sketch_estimate_integer`
 
@@ -3960,7 +3960,7 @@ Not supported by the engine yet: calling it raises `UnsupportedOperationExceptio
 def tuple_sketch_estimate_integer(col: ColumnOrName) -> Column
 ```
 
-Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+Calls the registry function `tuple_sketch_estimate_integer`.
 
 ### `tuple_sketch_summary_double`
 
@@ -3968,7 +3968,7 @@ Not supported by the engine yet: calling it raises `UnsupportedOperationExceptio
 def tuple_sketch_summary_double(col: ColumnOrName, mode: Column | str | None=None) -> Column
 ```
 
-Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+Calls the registry function `tuple_sketch_summary_double`.
 
 ### `tuple_sketch_summary_integer`
 
@@ -3976,7 +3976,7 @@ Not supported by the engine yet: calling it raises `UnsupportedOperationExceptio
 def tuple_sketch_summary_integer(col: ColumnOrName, mode: Column | str | None=None) -> Column
 ```
 
-Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+Calls the registry function `tuple_sketch_summary_integer`.
 
 ### `tuple_sketch_theta_double`
 
@@ -3984,7 +3984,7 @@ Not supported by the engine yet: calling it raises `UnsupportedOperationExceptio
 def tuple_sketch_theta_double(col: ColumnOrName) -> Column
 ```
 
-Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+Calls the registry function `tuple_sketch_theta_double`.
 
 ### `tuple_sketch_theta_integer`
 
@@ -3992,7 +3992,7 @@ Not supported by the engine yet: calling it raises `UnsupportedOperationExceptio
 def tuple_sketch_theta_integer(col: ColumnOrName) -> Column
 ```
 
-Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+Calls the registry function `tuple_sketch_theta_integer`.
 
 ### `tuple_union_agg_double`
 
@@ -4000,7 +4000,7 @@ Not supported by the engine yet: calling it raises `UnsupportedOperationExceptio
 def tuple_union_agg_double(col: ColumnOrName, lgNomEntries: Column | int | None=None, mode: Column | str | None=None) -> Column
 ```
 
-Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+Calls the registry function `tuple_union_agg_double`.
 
 ### `tuple_union_agg_integer`
 
@@ -4008,7 +4008,7 @@ Not supported by the engine yet: calling it raises `UnsupportedOperationExceptio
 def tuple_union_agg_integer(col: ColumnOrName, lgNomEntries: Column | int | None=None, mode: Column | str | None=None) -> Column
 ```
 
-Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+Calls the registry function `tuple_union_agg_integer`.
 
 ### `tuple_union_double`
 
@@ -4016,7 +4016,7 @@ Not supported by the engine yet: calling it raises `UnsupportedOperationExceptio
 def tuple_union_double(col1: ColumnOrName, col2: ColumnOrName, lgNomEntries: Column | int | None=None, mode: Column | str | None=None) -> Column
 ```
 
-Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+Calls the registry function `tuple_union_double`.
 
 ### `tuple_union_integer`
 
@@ -4024,7 +4024,7 @@ Not supported by the engine yet: calling it raises `UnsupportedOperationExceptio
 def tuple_union_integer(col1: ColumnOrName, col2: ColumnOrName, lgNomEntries: Column | int | None=None, mode: Column | str | None=None) -> Column
 ```
 
-Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+Calls the registry function `tuple_union_integer`.
 
 ### `tuple_union_theta_double`
 
@@ -4032,7 +4032,7 @@ Not supported by the engine yet: calling it raises `UnsupportedOperationExceptio
 def tuple_union_theta_double(col1: ColumnOrName, col2: ColumnOrName, lgNomEntries: Column | int | None=None, mode: Column | str | None=None) -> Column
 ```
 
-Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+Calls the registry function `tuple_union_theta_double`.
 
 ### `tuple_union_theta_integer`
 
@@ -4040,7 +4040,7 @@ Not supported by the engine yet: calling it raises `UnsupportedOperationExceptio
 def tuple_union_theta_integer(col1: ColumnOrName, col2: ColumnOrName, lgNomEntries: Column | int | None=None, mode: Column | str | None=None) -> Column
 ```
 
-Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+Calls the registry function `tuple_union_theta_integer`.
 
 ### `typeof`
 
