@@ -2,8 +2,8 @@
 //! The checks Spark's `AstBuilder.withSample` makes on a `TABLESAMPLE`.
 
 use krishiv_common::error::{
-    KrishivError, LegacyErrorTemp0014, LegacyErrorTemp0015, LegacyErrorTemp0016,
-    LegacyErrorTemp0064, UnsupportedFeatureTablesampleSystemRepeatable,
+    InvalidTablesampleFraction, KrishivError, LegacyErrorTemp0014, LegacyErrorTemp0015,
+    LegacyErrorTemp0016, LegacyErrorTemp0064, UnsupportedFeatureTablesampleSystemRepeatable,
     UnsupportedFeatureTablesampleSystemSampleMethod,
 };
 
@@ -109,15 +109,18 @@ impl Checker<'_> {
         if (-ROUNDING_EPSILON..=1.0 + ROUNDING_EPSILON).contains(&fraction) {
             return Ok(());
         }
-        Err(at(
+        let shown = java_double(fraction);
+        // Spark 4.3 gave the check its own class (`INVALID_TABLESAMPLE_FRACTION`); 4.2 and older
+        // report `_LEGACY_ERROR_TEMP_0064` with the message in `msg`.
+        let error: KrishivError = if self.opts.spark_4_3 {
+            InvalidTablesampleFraction { fraction: shown }.into()
+        } else {
             LegacyErrorTemp0064 {
-                msg: format!(
-                    "Sampling fraction ({}) must be on interval [0, 1]",
-                    java_double(fraction)
-                ),
-            },
-            s.span,
-        ))
+                msg: format!("Sampling fraction ({shown}) must be on interval [0, 1]"),
+            }
+            .into()
+        };
+        Err(at(error, s.span))
     }
 }
 

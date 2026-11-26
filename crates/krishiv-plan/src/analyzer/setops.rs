@@ -31,7 +31,7 @@ use krishiv_common::error::{
     InvalidInlineTableFailedSqlExpressionEvaluation,
     InvalidInlineTableIncompatibleTypesInInlineTable, KrishivInvalidPartitionNumber,
     LegacyErrorTemp1047, LegacyErrorTemp1048, NumColumnsMismatch, UnresolvedColumnAmongFieldNames,
-    UnsupportedFeatureSetOperationOnMapType,
+    UnsupportedFeatureSetOperationOnMapType, UnsupportedFeatureSetOperationOnVariantType,
 };
 use krishiv_common::names::check_column_name_duplication;
 use krishiv_functions::signature::Constant;
@@ -1079,17 +1079,49 @@ fn alias(e: Arc<Expr>, name: &str) -> Arc<Expr> {
 /// session compares names; Spark reports it in lower case unless names
 /// are case-sensitive).
 /// Spark's check that no column of a `DISTINCT`, `INTERSECT` or `EXCEPT`
-/// holds a map (`UNSUPPORTED_FEATURE.SET_OPERATION_ON_MAP_TYPE`).
+/// holds a map (`UNSUPPORTED_FEATURE.SET_OPERATION_ON_MAP_TYPE`) or a variant
+/// (`SET_OPERATION_ON_VARIANT_TYPE`; a column with both reports the map).
 fn no_map_columns(k: &Rel, origin: Origin) -> Result<(), AnalysisError> {
-    match k.out.iter().find(|a| !coerce::orderable(&a.col.data_type)) {
-        Some(a) => Err(AnalysisError::new(
-            UnsupportedFeatureSetOperationOnMapType {
-                col_name: quoted(std::slice::from_ref(&a.col.name)),
-                data_type: quoted_type(Some(&a.col.data_type)),
+    let Some(a) = k.out.iter().find(|a| !coerce::orderable(&a.col.data_type)) else {
+        return Ok(());
+    };
+    let col_name = quoted(std::slice::from_ref(&a.col.name));
+    let data_type = quoted_type(Some(&a.col.data_type));
+    if holds_variant(&a.col.data_type) && !holds_map(&a.col.data_type) {
+        return Err(AnalysisError::new(
+            UnsupportedFeatureSetOperationOnVariantType {
+                col_name,
+                data_type,
             },
             origin,
-        )),
-        None => Ok(()),
+        ));
+    }
+    Err(AnalysisError::new(
+        UnsupportedFeatureSetOperationOnMapType {
+            col_name,
+            data_type,
+        },
+        origin,
+    ))
+}
+
+/// Whether `t` is, or nests, a map.
+fn holds_map(t: &DataType) -> bool {
+    match t {
+        DataType::Map(_) => true,
+        DataType::Array(a) => holds_map(a.element_type()),
+        DataType::Struct(s) => s.fields().iter().any(|f| holds_map(f.data_type())),
+        _ => false,
+    }
+}
+
+/// Whether `t` is, or nests, a variant.
+fn holds_variant(t: &DataType) -> bool {
+    match t {
+        DataType::Variant => true,
+        DataType::Array(a) => holds_variant(a.element_type()),
+        DataType::Struct(s) => s.fields().iter().any(|f| holds_variant(f.data_type())),
+        _ => false,
     }
 }
 
