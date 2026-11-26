@@ -311,6 +311,29 @@ impl Resolver<'_> {
                 if !session_qualified && let Some(which) = GroupingFn::from_name(lookup_name) {
                     return self.grouping_call(which, e, &kids[..n], cx);
                 }
+                // Before 4.3 `date_format` and its aliases cast a `TIME` to `TIMESTAMP`
+                // implicitly, and Spark refuses that cast, quoting the argument.
+                if !session_qualified
+                    && n == 2
+                    && self.ctx.profile < crate::analyzer::SparkProfile::V4_3
+                    && ["date_format", "to_char", "to_varchar"]
+                        .iter()
+                        .any(|f| lookup_name.eq_ignore_ascii_case(f))
+                    && matches!(kids[0].ty.data_type, Some(DataType::Time { .. }))
+                {
+                    return Err(AnalysisError::new(
+                        cast_mismatch(
+                            BadCast::Without,
+                            format!(
+                                "\"{}\"",
+                                pretty(&kids[0].shown(), self.ctx.conf.session_zone)
+                            ),
+                            quoted_type(kids[0].ty.data_type.as_ref()),
+                            quoted_type(Some(&DataType::Timestamp)),
+                        ),
+                        e.origin,
+                    ));
+                }
                 // `to_char(datetime, fmt)` and `to_varchar` are `date_format` to
                 // Spark (`ToCharacterBuilder`), which names them so; a number or
                 // a binary keeps `to_char`.
@@ -321,7 +344,12 @@ impl Resolver<'_> {
                         || lookup_name.eq_ignore_ascii_case("to_varchar"))
                     && matches!(
                         kids[0].ty.data_type,
-                        Some(DataType::Date | DataType::Timestamp | DataType::TimestampNtz)
+                        Some(
+                            DataType::Date
+                                | DataType::Timestamp
+                                | DataType::TimestampNtz
+                                | DataType::Time { .. }
+                        )
                     )
                 {
                     // Spark builds `date_format` first, so its clauses are

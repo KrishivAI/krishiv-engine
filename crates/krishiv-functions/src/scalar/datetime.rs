@@ -436,6 +436,49 @@ impl PatternCache {
     }
 }
 
+/// `date_format` of a `TIME`: a pattern that reads a field a `TIME` lacks raises
+/// `INVALID_PARAMETER_VALUE.PATTERN` for the first row that has both a value and a pattern.
+fn format_times(
+    x: &Inputs<'_>,
+    pattern: &PatternArg,
+    literal: Option<&str>,
+) -> Result<ArrayRef, KrishivError> {
+    let times = x.array::<Time64NanosecondType>(0)?;
+    let fmts = match pattern {
+        PatternArg::Column => Some(x.strings(1)?),
+        PatternArg::Null => return Ok(Arc::new(StringArray::new_null(x.rows()))),
+        PatternArg::Literal(_) => None,
+    };
+    let mut cache = PatternCache::new(Purpose::Format, false);
+    let mut out = reserve::<Option<String>>(x.rows())?;
+    for i in 0..x.rows() {
+        if times.is_null(i) || fmts.as_ref().is_some_and(|f| f.is_null(i)) {
+            out.push(None);
+            continue;
+        }
+        let at_row = |e| krishiv_kernels::KernelError::with_row(Some(i), e);
+        let (compiled, text) = match (pattern, &fmts) {
+            (PatternArg::Literal(p), _) => (p, literal),
+            (_, Some(f)) => (cache.get(f.value(i)).map_err(at_row)?, Some(f.value(i))),
+            _ => return Err(internal("a TIME pattern without a column".to_owned())),
+        };
+        let printed = compiled.format_time_of_day(times.value(i)).map_err(|_| {
+            at_row(
+                krishiv_common::error::InvalidParameterValuePattern {
+                    function_name: "`date_format`".to_owned(),
+                    parameter: "`format`".to_owned(),
+                    value: format!("'{}'", text.unwrap_or_default()),
+                }
+                .into(),
+            )
+        })?;
+        out.push(Some(printed));
+    }
+    Ok(Arc::new(StringArray::from_iter(
+        out.iter().map(|s| s.as_deref()),
+    )))
+}
+
 /// `time_bucket(size, ts, origin)` over a batch: a NULL in any argument is NULL; `ts` and `origin` are
 /// instants (a `TIMESTAMP` buckets on the session zone's calendar, a `TIMESTAMP_NTZ` in UTC).
 fn time_bucket(
@@ -1556,6 +1599,22 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                     )
                 },
             )
+        }
+        ("date_format", [DataType::Time64(TimeUnit::Nanosecond), s]) if is_string(s) => {
+            // Spark's `TimeFormatter` does not follow `spark.sql.legacy.timeParserPolicy`.
+            let pat = match pattern_arg(args, 1, Purpose::Format, false) {
+                Ok(p) => p,
+                Err(e) => return Some((listed, Err(e))),
+            };
+            let literal = match args.get(1) {
+                Some(BindArg::Literal(a)) => {
+                    to_utf8(a.as_ref()).ok().map(|t| t.value(0).to_owned())
+                }
+                _ => None,
+            };
+            Binding::new(DataType::Utf8, move |x: &Inputs<'_>| {
+                format_times(x, &pat, literal.as_deref())
+            })
         }
         ("date_format", [t, s]) if is_string(s) && is_date_or_timestamp_or_string(t) => {
             let pat = match pattern_arg(args, 1, Purpose::Format, opts.legacy_time_parser) {

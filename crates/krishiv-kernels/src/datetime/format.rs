@@ -25,7 +25,7 @@ use crate::datetime_pattern::legacy::{LegacyPattern, Unmatched};
 use crate::datetime_pattern::parse::Fail;
 use crate::datetime_pattern::{DateTimePattern, Purpose, Zone};
 use crate::error::{KernelError, with_capacity};
-use krishiv_common::error::KrishivError;
+use krishiv_common::error::{KrishivError, KrishivUnsupportedFeature};
 
 /// A compiled pattern of either time parser: Spark's `DateTimeFormatter`
 /// one (`spark.sql.legacy.timeParserPolicy` `CORRECTED`/`EXCEPTION`) or the
@@ -59,6 +59,22 @@ impl TimePattern {
         match self {
             Self::Corrected(p) => p.format_timestamp(micros, zone),
             Self::Legacy(p) => p.format_timestamp(micros, zone),
+        }
+    }
+}
+
+impl TimePattern {
+    /// `nanos_of_day` (a `TIME`).
+    ///
+    /// # Errors
+    /// As [`DateTimePattern::format_time_of_day`]; a `LEGACY` pattern never formats a `TIME`.
+    pub fn format_time_of_day(&self, nanos_of_day: i64) -> Result<String, KrishivError> {
+        match self {
+            Self::Corrected(p) => p.format_time_of_day(nanos_of_day),
+            Self::Legacy(_) => Err(KrishivUnsupportedFeature {
+                feature: "a LEGACY pattern that formats a TIME".to_owned(),
+            }
+            .into()),
         }
     }
 }

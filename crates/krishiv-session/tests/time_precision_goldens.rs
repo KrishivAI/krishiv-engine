@@ -66,17 +66,6 @@ const KNOWN_GAPS: &[(&str, &str, &str)] = &[
         "ts_ltz7_nanos_on",
         "[KRISHIV_UNSUPPORTED_FEATURE] The feature nanosecond-precision timestamp types (Krishiv 0.3.1) is not supported by Krishiv yet.",
     ),
-    // `date_format` refuses a TIME before the implicit cast Spark tries (4.2: the class differs).
-    (
-        "4.2.0",
-        "date_format",
-        "[DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE] Cannot resolve \"date_format(TIME '12:00:00.123456789', HH:mm:ss.SSSSSSSSS)\" due to data type mismatch: The first parameter requires the (\"STRING\" or \"DATE\" or \"TIMESTAMP\" or \"TIMESTAMP_NTZ\") type, however \"TIME '12:00:00.123456'\" has the type \"TIME(6)\".",
-    ),
-    (
-        "4.3.0",
-        "date_format",
-        "[KRISHIV_UNSUPPORTED_FEATURE] The feature date_format of a TIME value (Spark 4.3) is not supported by Krishiv yet.",
-    ),
     // A bare TIMESTAMP does not follow `spark.sql.timestampType` yet.
     (
         "4.3.0",

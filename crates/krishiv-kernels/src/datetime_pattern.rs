@@ -350,6 +350,19 @@ impl DateTimePattern {
         format::format_days(&self.items, i64::from(days))
     }
 
+    /// `nanos_of_day` (a `TIME`). A `TIME` is printed by Spark's own formatter whatever
+    /// `spark.sql.legacy.timeParserPolicy` says, so compile the pattern without `LEGACY`.
+    ///
+    /// # Errors
+    /// A pattern with a date, era, zone or offset field outside an optional section (a `TIME`
+    /// has none), or a pattern compiled for `LEGACY`.
+    pub fn format_time_of_day(&self, nanos_of_day: i64) -> Result<String, KrishivError> {
+        if self.legacy.is_some() {
+            return Err(unsupported("a LEGACY pattern that formats a TIME"));
+        }
+        format::format_time(&self.items, nanos_of_day)
+    }
+
     /// `s` as an instant: its zone or offset, else `session`. `Ok(None)`
     /// when `s` does not match, or names a zone id the database cannot
     /// resolve (Spark's lenient readers read it as no timestamp at all).
