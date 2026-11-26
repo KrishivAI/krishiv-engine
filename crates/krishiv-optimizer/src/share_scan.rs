@@ -45,12 +45,19 @@
 //!
 //! Runs once, after `ShareCte`, only with a session configuration and
 //! `krishiv.optimizer.shareFilteredScans` on. The scan is then read by one
-//! filter only (the definition's), so a second run finds nothing: the plan
-//! stays a fixed point. Whether a reference really reads the buffer is
-//! decided by the physical planner, as for every shared definition (copies
+//! filter only (the definition's), so a second run finds nothing. Two things
+//! keep the whole of `optimize` a fixed point as well: the disjunction goes
+//! through common-subexpression elimination at once (its readers' predicates
+//! repeat conjuncts, which a second run's CSE would extract), and the
+//! estimator reads a reference to a definition of this rule as the scan
+//! (`estimate.rs`), since each reader's predicate implies the disjunction:
+//! read as the definition, a reader would count the disjunction's
+//! selectivity twice and a second join ordering would differ. Whether a
+//! reference really reads the buffer is decided by the physical planner, as for every shared definition (copies
 //! are kept when a runtime filter reaches one of them).
 
-use std::collections::{HashMap, HashSet};
+use crate::expr::{AddrMap, AddrSet};
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use krishiv_common::error::KrishivError;
@@ -87,7 +94,7 @@ pub(crate) fn share(
 ) -> Result<Arc<LogicalPlan>, KrishivError> {
     let (order, parents) = parents(&root);
     let mut est = Estimator::new(stats);
-    let mut replace: HashMap<*const LogicalPlan, Arc<LogicalPlan>> = HashMap::new();
+    let mut replace: AddrMap<LogicalPlan, Arc<LogicalPlan>> = Default::default();
     let mut ctes = Vec::new();
     for scan in &order {
         let PlanNode::Scan(s) = &scan.node else {
@@ -172,7 +179,7 @@ pub(crate) fn share(
     }
     let mut sharer = Sharer {
         replace: &replace,
-        done: HashMap::new(),
+        done: Default::default(),
     };
     // Into the root's `WITH` when `ShareCte` added one: `InlineCTE` keeps the
     // generated definitions it finds there (a second optimization finds them
@@ -215,19 +222,14 @@ fn filters_only(readers: &[Parent]) -> Option<Vec<Arc<LogicalPlan>>> {
 
 /// Every relation under `root` (subquery plans included) in a stable
 /// pre-order, and for each one its distinct parents in the order first met.
-fn parents(
-    root: &Arc<LogicalPlan>,
-) -> (
-    Vec<Arc<LogicalPlan>>,
-    HashMap<*const LogicalPlan, Vec<Parent>>,
-) {
+fn parents(root: &Arc<LogicalPlan>) -> (Vec<Arc<LogicalPlan>>, AddrMap<LogicalPlan, Vec<Parent>>) {
     let mut order = Vec::new();
-    let mut parents: HashMap<*const LogicalPlan, Vec<Parent>> = HashMap::new();
+    let mut parents: AddrMap<LogicalPlan, Vec<Parent>> = Default::default();
     let mut edges: HashSet<(*const LogicalPlan, *const LogicalPlan)> = HashSet::new();
     // Visited per (relation, under a barrier): a relation met outside first is walked again
     // when it is also reached inside one, so its whole subtree is marked.
     let mut seen: HashSet<(*const LogicalPlan, bool)> = HashSet::new();
-    let mut listed: HashSet<*const LogicalPlan> = HashSet::new();
+    let mut listed: AddrSet<LogicalPlan> = Default::default();
     let mut stack = vec![(Arc::clone(root), false)];
     while let Some((p, inside)) = stack.pop() {
         if !seen.insert((Arc::as_ptr(&p), inside)) {

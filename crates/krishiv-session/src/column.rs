@@ -75,6 +75,14 @@ impl Column {
         Self::new(self.expr.alias(name))
     }
 
+    /// `self AS (a, b, ..)`: one name per output column of a generator
+    /// (`explode(m) AS (k, v)`); any other expression fails at analysis with
+    /// `MULTI_ALIAS_WITHOUT_GENERATOR`.
+    #[must_use]
+    pub fn alias_all(self, names: Vec<String>) -> Self {
+        Self::new(self.expr.multi_alias(names))
+    }
+
     /// `CAST(self AS to)`.
     ///
     /// ```

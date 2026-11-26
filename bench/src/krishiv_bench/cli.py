@@ -135,13 +135,22 @@ def add_reference_cache_args(p: argparse.ArgumentParser) -> None:
     )
 
 
+def _key_value(ap: argparse.ArgumentParser, text: str) -> tuple[str, str]:
+    k, sep, v = text.partition("=")
+    if not sep or not k:
+        ap.error(f"--krishiv-conf takes KEY=VALUE (got {text!r})")
+    return k, v
+
+
 def main(argv=None) -> None:
     ap = argparse.ArgumentParser(prog="krishiv-bench")
     sub = ap.add_subparsers(dest="cmd", required=True)
     r = sub.add_parser("run", help="run a suite on an engine, write JSON to $KRISHIV_DATA/results")
     r.add_argument("--engine", required=True, choices=[*ENGINES, "spark"])
     r.add_argument(
-        "--suite", default="tpch", choices=["tpch", "tpch-nested", "tpcds", "dsb", "memcap", "asof", *H2O_SUITES]
+        "--suite",
+        default="tpch",
+        choices=["tpch", "tpch-nested", "tpcds", "clickbench", "dsb", "memcap", "asof", *H2O_SUITES],
     )
     add_h2o_args(r)
     r.add_argument("--sf", type=float, default=1)
@@ -167,6 +176,20 @@ def main(argv=None) -> None:
     r.add_argument("--timeout", type=float, default=600, help="per-query timeout seconds (0 = none)")
     r.add_argument("--runner", help=RUNNER_HELP)
     r.add_argument(
+        "--timed-run",
+        action="store_true",
+        help="time each run with the engine's Arrow `timed_run` (for krishiv: the runner's seconds), then one untimed "
+        "run for the answer checks; the mode comparison's setting",
+    )
+    r.add_argument(
+        "--krishiv-conf",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        help="engine setting for krishiv, krishiv-connect, krishiv-flightsql and krishiv-python (repeatable); for "
+        "the server modes it goes to `krishiv server --conf`, for krishiv-python to the session builder",
+    )
+    r.add_argument(
         "--cold",
         action="store_true",
         help="evict the dataset from the page cache before every run (results are not comparable with warm runs)",
@@ -176,7 +199,7 @@ def main(argv=None) -> None:
         type=float,
         default=memguard.DEFAULT_MIN_FRACTION,
         help="wait before each timed run until MemAvailable is this fraction of MemTotal, and mark runs that dip "
-        "below it 'invalid: memory reclaimed' (0 = off)",
+        "below it by more than the engine's own RSS growth 'invalid: memory reclaimed' (0 = off)",
     )
     r.add_argument(
         "--mem-retries",
@@ -674,8 +697,19 @@ def main(argv=None) -> None:
             kw["container_data_root"] = a.spark_data_root or None
         if a.engine == "krishiv":
             kw["threads"] = a.duckdb_threads
-        if a.engine == "krishiv-connect" and a.runner:
+        if a.engine in ("krishiv-connect", "krishiv-flightsql") and a.runner:
             kw["binary"] = a.runner  # the `krishiv` binary (it runs `krishiv server`)
+        if a.engine in ("krishiv", "krishiv-connect", "krishiv-flightsql", "krishiv-python") and a.krishiv_conf:
+            kw["conf"] = [_key_value(ap, c) for c in a.krishiv_conf]
+        if a.engine in ("krishiv-connect", "krishiv-flightsql", "krishiv-python") and a.duckdb_threads:
+            from .adapters.session_modes import usable_cores
+
+            # No config key sets a session's compute threads: it uses every core the process may run on.
+            if a.duckdb_threads != usable_cores():
+                ap.error(
+                    f"--duckdb-threads {a.duckdb_threads}: {a.engine} uses every core this process may run on "
+                    f"({usable_cores()}); set the CPU affinity (taskset) instead"
+                )
         if a.engine == "duckdb":
             kw["memory_limit"] = a.duckdb_memory_limit
             if a.duckdb_threads:
@@ -711,6 +745,7 @@ def main(argv=None) -> None:
             a.cold,
             min_mem_avail=a.min_mem_avail or None,
             mem_retries=a.mem_retries,
+            timed_run=a.timed_run,
         )
         print(f"result: {f}")
     elif a.suite == "micro":

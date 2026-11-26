@@ -484,19 +484,21 @@ def _batches_of(pa: Any, output: Any, schema: StructType, session: SparkSession,
     the first element decides between the Arrow path, which only checks the schema, and the row path)."""
     from itertools import chain, islice
 
+    from krishiv.sql import _convert, _rowconv
     from krishiv.sql.row import Row
-    from krishiv.sql.session import _cell, _pa_schema, _pa_type, _verify_row
+    from krishiv.sql.session import _pa_schema, _session_zone
 
     arrow_schema = _pa_schema(schema, pa)
     names = schema.fieldNames()
     width = len(names)
     position = {name: i for i, name in enumerate(names)}
+    zone = lambda: _convert.session_zone(_session_zone(session))  # noqa: E731
 
     def flush(rows: list[tuple[Any, ...]]) -> Any:
         columns = []
         for i, field in enumerate(schema.fields):
-            values = [_cell(r[i], field.dataType, session) for r in rows]
-            columns.append(pa.array(values, type=_pa_type(field.dataType, pa)))
+            values = [_rowconv.convert(r[i], field.dataType, zone) for r in rows]
+            columns.append(pa.array(values, type=_rowconv.pa_type(field.dataType, pa)))
         if not columns:
             # No array carries a length, so a batch without columns would lose its rows.
             return pa.RecordBatch.from_struct_array(pa.array([{} for _ in rows], type=pa.struct([])))
@@ -544,7 +546,7 @@ def _batches_of(pa: Any, output: Any, schema: StructType, session: SparkSession,
                     values[position[name]] = item[name]
             else:
                 values = list(item)
-            _verify_row(schema, values)
+            _rowconv.verify(values, schema)
             rows.append(tuple(values))
         yield flush(rows)
 

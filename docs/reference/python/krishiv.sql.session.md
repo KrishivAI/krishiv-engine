@@ -36,6 +36,24 @@ def clearCache(self) -> None
 
 Drops every cached relation: later actions run uncached.
 
+### `createExternalTable`
+
+```python
+def createExternalTable(self, tableName: str, path: str | None=None, source: str | None=None, schema: StructType | None=None, **options: str) -> DataFrame
+```
+
+Deprecated alias of `createTable` (deprecated since Spark 2.2).
+
+### `createTable`
+
+```python
+def createTable(self, tableName: str, path: str | None=None, source: str | None=None, schema: StructType | None=None, description: str | None=None, **options: str) -> DataFrame
+```
+
+Creates a table over the data at `path` (an external table) or, with no `path`, an empty managed
+one, and returns it as a DataFrame. `source` defaults to `spark.sql.sources.default`; `schema`
+gives the columns, else the source infers them. An existing table fails as `CREATE TABLE` does.
+
 ### `currentCatalog`
 
 ```python
@@ -59,6 +77,14 @@ def databaseExists(self, dbName: str) -> bool
 ```
 
 Whether the database `dbName` exists.
+
+### `dropGlobalTempView`
+
+```python
+def dropGlobalTempView(self, viewName: str) -> bool
+```
+
+Drops the global temporary view `viewName` (of `global_temp`); whether it existed.
 
 ### `dropTempView`
 
@@ -156,6 +182,14 @@ The tables and views of `dbName` (default: the current database), filtered by `p
 Local temporary views are included in the current database, as in Spark; the tables that hold
 `createDataFrame` data are not.
 
+### `recoverPartitions`
+
+```python
+def recoverPartitions(self, tableName: str) -> None
+```
+
+Recovers all the partitions of the table found in its location (`MSCK REPAIR TABLE`).
+
 ### `refreshByPath`
 
 ```python
@@ -224,6 +258,23 @@ class SparkSession
 
 An embedded session. Create one with `SparkSession.builder.getOrCreate()`.
 
+### `active`
+
+```python
+@classmethod
+def active(cls) -> SparkSession
+```
+
+The active session; fails with `NO_ACTIVE_OR_DEFAULT_SESSION` when there is none, as PySpark.
+
+### `addArtifacts`
+
+```python
+def addArtifacts(self, *path: str, pyfile: bool=False, archive: bool=False, file: bool=False) -> None
+```
+
+Not available: artifacts belong to Spark Connect sessions (`NOT_IMPLEMENTED`).
+
 ### `addTag`
 
 ```python
@@ -261,6 +312,14 @@ Removes every tag of this thread.
 @property
 def conf(self) -> RuntimeConfig
 ```
+
+### `copyFromLocalToFs`
+
+```python
+def copyFromLocalToFs(self, local_path: str, dest_path: str) -> None
+```
+
+Not available: artifacts belong to Spark Connect sessions (`NOT_IMPLEMENTED`).
 
 ### `createDataFrame`
 
@@ -343,6 +402,15 @@ root
 >>> df.count()
 0
 ```
+
+### `getActiveSession`
+
+```python
+@classmethod
+def getActiveSession(cls) -> SparkSession | None
+```
+
+The session `getOrCreate` made and `stop` has not ended, or `None`.
 
 ### `getTags`
 
@@ -439,6 +507,15 @@ accepted and ignored (one node has nothing to partition).
 def read(self) -> DataFrameReader
 ```
 
+### `readStream`
+
+```python
+@property
+def readStream(self) -> Any
+```
+
+Not available: streaming reads are not part of 0.2 (`NOT_IMPLEMENTED`).
+
 ### `removeTag`
 
 ```python
@@ -472,11 +549,29 @@ def stop(self) -> None
 
 Ends this session; the next `getOrCreate` makes a new one.
 
+### `streams`
+
+```python
+@property
+def streams(self) -> Any
+```
+
+Not available: streaming queries are not part of 0.2 (`NOT_IMPLEMENTED`).
+
 ### `table`
 
 ```python
 def table(self, tableName: str) -> DataFrame
 ```
+
+### `tvf`
+
+```python
+@property
+def tvf(self) -> Any
+```
+
+Not available: the `TableValuedFunction` namespace (`NOT_IMPLEMENTED`).
 
 ### `udf`
 
@@ -486,6 +581,15 @@ def udf(self) -> UDFRegistration
 ```
 
 The `UDFRegistration` of this session (`spark.udf.register(name, f, returnType)`).
+
+### `udtf`
+
+```python
+@property
+def udtf(self) -> Any
+```
+
+Not available: user-defined table functions (`NOT_IMPLEMENTED`).
 
 ### `version`
 

@@ -280,6 +280,7 @@ fn distinct_count_at_merge_false_is_honoured_on_every_path() {
         io_threads: 1,
         blocking_threads: 2,
         io_blocking_threads: 2,
+        release_when_idle: true,
     };
     let counted = |plan: &Runnable| {
         let root = TreePool::new(&MemoryConfig::default());

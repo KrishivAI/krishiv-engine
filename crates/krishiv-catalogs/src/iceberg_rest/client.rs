@@ -346,7 +346,7 @@ impl RestClient {
     }
 
     /// [`Self::get`] with the token of `tokens`, or first with `table_token` (a catalog-supplied table token, design
-    /// P3-T067 §4.1: it replaces the caller's token for that table's requests). A 401 for the table token (it
+    /// P3-T067 §4.1: it replaces the caller's token for that table's requests). A 401 or 419 for the table token (it
     /// expired) retries once with the caller's token and sets `table_token` to `None`, so the caller can drop it.
     #[expect(
         clippy::too_many_arguments,
@@ -672,7 +672,7 @@ impl RestClient {
     }
 
     /// [`load_table_as`](Self::load_table_as), sent with the catalog-supplied `table_token` of this table when given
-    /// (design P3-T067 §4.1; a 401 for it falls back to the caller's token and sets `table_token` to `None`).
+    /// (design P3-T067 §4.1; a 401 or 419 for it falls back to the caller's token and sets `table_token` to `None`).
     pub(crate) fn load_table_for(
         &self,
         caller: &RestCaller,
@@ -897,7 +897,7 @@ impl RestClient {
     }
 
     /// [`load_credentials_as`](Self::load_credentials_as), sent with the catalog-supplied `table_token` of this table
-    /// when given (design P3-T067 §4.1; a 401 for it falls back to the caller's token and sets `table_token` to
+    /// when given (design P3-T067 §4.1; a 401 or 419 for it falls back to the caller's token and sets `table_token` to
     /// `None`).
     pub(crate) fn load_credentials_for(
         &self,

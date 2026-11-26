@@ -462,13 +462,18 @@ fn a_process_killed_in_the_middle_of_ddl_leaves_a_loadable_catalog() {
             let _ = self.0.wait();
         }
     }
+    // One observer, opened before the writer starts: a catalog opened in the poll loop competes with the unbounded
+    // writer for the setup lock and starves past the busy timeout on a loaded runner. A WAL reader is never blocked.
+    let observer = open(&path);
     let mut victim = Victim(child(&path, "k", None));
     let deadline = Instant::now() + Duration::from_secs(60);
     // Let it make some tables, then kill -9 it while it is making the next.
-    while tables(&open(&path), "default").len() < 5 {
+    while tables(&observer, "default").len() < 5 {
         assert!(Instant::now() < deadline, "the child made no tables");
         std::thread::sleep(Duration::from_millis(20));
     }
+    // The child is the last connection when it dies, so the reopen below takes SQLite's last-connection recovery path.
+    drop(observer);
     victim.0.kill().unwrap();
     victim.0.wait().unwrap();
     let c = open(&path);

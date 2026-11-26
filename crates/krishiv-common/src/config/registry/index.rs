@@ -188,6 +188,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         "krishiv.io.maxConcurrentRequests",
         &IO_MAX_CONCURRENT_REQUESTS,
     ),
+    (
+        "krishiv.memory.releaseAtQueryEnd",
+        &MEMORY_RELEASE_AT_QUERY_END,
+    ),
     ("krishiv.optimizer.joinEnumerator", &JOIN_ENUMERATOR),
     (
         "krishiv.server.readiness.timeout",
@@ -624,6 +628,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &PRESERVED_SIDE_SEMI_JOIN,
     ),
     (
+        "krishiv.optimizer.shareLiteralInstances",
+        &SHARE_LITERAL_INSTANCES,
+    ),
+    (
         "krishiv.optimizer.shareRepeatedSubtrees",
         &SHARE_REPEATED_SUBTREES,
     ),
@@ -790,6 +798,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.flightSql.maxHandleBytesPerPrincipal",
         &FLIGHT_SQL_MAX_HANDLE_BYTES_PER_PRINCIPAL,
+    ),
+    (
+        "krishiv.optimizer.groupKeyCodeMultiDimension",
+        &GROUP_KEY_CODE_MULTI_DIMENSION,
     ),
     (
         "krishiv.sql.execution.arrow.useLargeVarTypes",

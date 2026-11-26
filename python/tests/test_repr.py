@@ -179,10 +179,10 @@ def test_html_preview_reruns_the_query(spark: SparkSession, monkeypatch: pytest.
     calls = 0
     original = _DataFrame._arrow
 
-    def counting(self: _DataFrame) -> Any:
+    def counting(self: _DataFrame, *args: Any) -> Any:
         nonlocal calls
         calls += 1
-        return original(self)
+        return original(self, *args)
 
     monkeypatch.setattr(_DataFrame, "_arrow", counting)
     first: Any = df._repr_html_()

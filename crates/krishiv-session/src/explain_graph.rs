@@ -177,6 +177,7 @@ pub fn dot_of_plan(root: &ExplainNode) -> String {
 ///     identity: None,
 ///     scans: Vec::new(),
 ///     hints: Vec::new(),
+///     planning_ns: None,
 /// };
 /// let text = mermaid_of_profile(&profile);
 /// assert!(text.starts_with("flowchart TD\n"));
@@ -770,6 +771,7 @@ mod tests {
             identity: None,
             scans: Vec::new(),
             hints: Vec::new(),
+            planning_ns: None,
         };
         let text = mermaid_of_profile(&profile);
         assert!(text.contains("Scan t"), "{text}");
@@ -822,6 +824,7 @@ mod tests {
             identity: None,
             scans: Vec::new(),
             hints: Vec::new(),
+            planning_ns: None,
         };
         let text = dot_of_profile(&with_sink);
         assert!(text.contains("Result:"), "{text}");
@@ -855,6 +858,7 @@ mod tests {
             identity: None,
             scans: Vec::new(),
             hints: Vec::new(),
+            planning_ns: None,
         };
         assert_eq!(
             mermaid_of_profile(&profile),
@@ -875,6 +879,7 @@ mod tests {
             identity: None,
             scans: Vec::new(),
             hints: Vec::new(),
+            planning_ns: None,
         };
         assert_eq!(
             mermaid_of_profile(&profile),

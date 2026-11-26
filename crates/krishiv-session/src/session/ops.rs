@@ -629,9 +629,11 @@ impl Session {
             match krishiv_io::BeneathStore::anchor(std::path::Path::new(local)) {
                 Ok(anchored) => {
                     let id = at.store.private_to(job);
+                    let anchored = Arc::new(anchored);
                     self.state
                         .io
-                        .register_store(id.clone(), Arc::new(anchored) as Arc<dyn ObjectStore>);
+                        .register_store(id.clone(), Arc::clone(&anchored) as Arc<dyn ObjectStore>);
+                    self.state.io.register_staging_sweeper(id.clone(), anchored);
                     let registration = StoreRegistration {
                         io: Arc::clone(&self.state.io),
                         id: id.clone(),
@@ -802,7 +804,10 @@ impl Session {
         if let Some(row) = command.as_ref().and_then(|c| c.row.as_ref()) {
             *row.lock().unwrap_or_else(PoisonError::into_inner) = Some(log_id.clone());
         }
-        let permit = self.admit(&log_id, env, exempt, fallback).await?;
+        let permit = self
+            .admit(&log_id, env, exempt, fallback)
+            .await?
+            .with_run(krishiv_exec::query_run(&self.state.runtime.executor));
         Ok(Admitted::new(Arc::clone(&self.state), log_id, permit))
     }
 }

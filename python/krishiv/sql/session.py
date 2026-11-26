@@ -3,27 +3,29 @@
 
 from __future__ import annotations
 
-import datetime
 import sys
 import threading
 import warnings
-from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
 from krishiv import _native
 from krishiv.errors import (
     AnalysisException,
+    PySparkRuntimeError,
+    PySparkTypeError,
     PySparkValueError,
     not_expected_type,
     not_implemented,
+    not_implemented_attribute,
     unsupported_attribute,
     unsupported_feature,
 )
+from krishiv.sql import _rowconv
 from krishiv.sql.catalog import CatalogMetadata, Column, Database, Function, Table
 from krishiv.sql.conf import RuntimeConfig, _warn_if_cluster_setting
 from krishiv.sql.dataframe import DataFrame
 from krishiv.sql.readwriter import DataFrameReader
-from krishiv.sql.types import DataType, StructType
+from krishiv.sql.types import DataType, StructField, StructType, TimestampNTZType, TimestampType
 from krishiv.storagelevel import StorageLevel
 
 # The class's `_native` property hides the module in annotations written inside it.
@@ -123,7 +125,7 @@ class SparkSession:
         self._base_native = native
         # `addTag`'s tags are per thread, as in Spark: each thread's frames carry its own.
         self._tag_state = threading.local()
-        self._conf = RuntimeConfig(native)
+        self._conf = RuntimeConfig(native, self)
         from krishiv._udf.profiler import Registry
 
         self._profile_registry = Registry()
@@ -373,44 +375,114 @@ class SparkSession:
             # an explicit schema applies, as in PySpark.
             return self._from_pandas(data, schema)
         if hasattr(data, "__arrow_c_stream__") or hasattr(data, "__arrow_c_array__"):
-            if schema is not None:
-                raise not_implemented("createDataFrame with a schema (for Arrow-producing objects)")
-            return DataFrame(self._native.create_dataframe(data), self)
+            from krishiv.sql import _convert
+
+            pa = _convert.require_pyarrow("createDataFrame")
+            return self._from_arrow(pa.table(data), schema, pa)
         rows = list(data)
         if schema is None or isinstance(schema, list | tuple):
             return self._create_from_rows(rows, schema, verifySchema)
-        return self._from_rows(rows, schema, verifySchema, Row)
+        return self._from_rows(rows, schema, verifySchema, Row, null_on_error=not verifySchema)
 
     def _from_pandas(self, data: Any, schema: Any) -> DataFrame:
         from krishiv.sql import _convert
 
         pa = _convert.require_pyarrow("createDataFrame")
+        explicit = schema is not None and not isinstance(schema, list | tuple)
+        if (data.shape[0] == 0 and not explicit) or data.shape[1] == 0:
+            raise PySparkValueError(errorClass="CANNOT_INFER_EMPTY_SCHEMA")
         table = pa.Table.from_pandas(data, preserve_index=False)
+        # Column labels that are not strings (``0``, ``1``) are named by their text.
+        table = table.rename_columns([str(n) for n in table.column_names])
+        return self._from_arrow(table, schema, pa)
+
+    def _from_arrow(self, table: Any, schema: Any, pa: Any) -> DataFrame:
+        """A DataFrame of an Arrow table: its columns taken as Spark types (see
+        :func:`krishiv.sql._rowconv.normalize_arrow_table`), then renamed by a list of
+        names or cast to an explicit schema."""
+        ntz = (self._conf.get("spark.sql.timestampType", "TIMESTAMP_LTZ") or "").strip().upper() == "TIMESTAMP_NTZ"
+        # With ``spark.sql.timestampType=TIMESTAMP_NTZ`` a naive column is inferred as wall-clock time, but
+        # an explicit ``TimestampType`` target localizes it in the session zone (and an explicit NTZ one never).
+        wall_clock: frozenset[int] = frozenset(range(table.num_columns)) if ntz else frozenset()
+        if schema is not None and not isinstance(schema, list | tuple):
+            targets = self._explicit_schema(schema).fields
+            wall_clock |= frozenset(i for i, f in enumerate(targets) if isinstance(f.dataType, TimestampNTZType))
+            wall_clock -= frozenset(i for i, f in enumerate(targets) if isinstance(f.dataType, TimestampType))
+        if schema is not None and not isinstance(schema, list | tuple):
+            # An explicit target is applied to an unsigned source column first (Spark casts to the target's Arrow
+            # type without inferring the source); with no target an unsigned column is refused.
+            struct = self._explicit_schema(schema)
+            if len(struct.fields) == table.num_columns:
+                target = _pa_schema(struct, pa)
+                table = pa.table(
+                    [
+                        c.cast(target.field(i).type) if pa.types.is_unsigned_integer(c.type) else c
+                        for i, c in enumerate(table.columns)
+                    ],
+                    names=table.column_names,
+                )
+        table = _rowconv.normalize_arrow_table(table, pa, _session_zone(self), wall_clock)
+        if isinstance(schema, list | tuple):
+            _refuse_duplicate_names([str(n) for n in schema])
+        elif schema is None:
+            _refuse_duplicate_names(table.column_names)
         if schema is None:
             return DataFrame(self._native.create_dataframe(table), self)
         if isinstance(schema, list | tuple):
             if len(schema) != table.num_columns or not all(isinstance(n, str) for n in schema):
                 raise not_expected_type("schema", "list of str", schema)
             return DataFrame(self._native.create_dataframe(table.rename_columns(list(schema))), self)
-        target = _pa_schema(self._explicit_schema(schema), pa)
-        return DataFrame(self._native.create_dataframe(table.cast(target)), self)
+        struct = self._explicit_schema(schema)
+        if len(struct.fields) == table.num_columns:
+            table = table.rename_columns([f.name for f in struct.fields])
+        try:
+            return DataFrame(self._native.create_dataframe(table.cast(_pa_schema(struct, pa))), self)
+        except pa.ArrowNotImplementedError:
+            # e.g. a column of dicts for a ``map`` (Arrow reads them as structs): through Python values.
+            from krishiv.sql.row import Row
 
-    def _from_rows(self, rows: list[Any], schema: Any, verify: bool, Row: Any) -> DataFrame:
+            columns = [[_arrow_map_to_dict(v, column.type, pa) for v in column.to_pylist()] for column in table.columns]
+            rows = list(zip(*columns, strict=True)) if columns else [() for _ in range(table.num_rows)]
+            return self._from_rows(rows, struct, False, Row)
+
+    def _from_rows(
+        self, rows: list[Any], schema: Any, verify: bool, Row: Any, null_on_error: bool = False
+    ) -> DataFrame:
         from krishiv.sql import _convert
 
         pa = _convert.require_pyarrow("createDataFrame")
         struct = self._explicit_schema(schema)
+        if not _is_struct_schema(schema):
+            rows = [(row,) for row in rows]  # an atomic schema: one ``value`` column, one value per row
+        elif verify:
+            for row in rows:
+                if not isinstance(row, dict | list | tuple):
+                    raise _rowconv.unacceptable(None, struct, row)
         named = [f.name for f in struct.fields]
+        _refuse_duplicate_names(named)
         width = len(named)
-        valued = [_row_values(row, named, width, Row) for row in rows]
+        valued = [_row_values(row, named, Row) for row in rows]
         if verify:
             for values in valued:
-                _verify_row(struct, values)
+                _rowconv.verify(values, struct)
+        for values in valued:
+            if len(values) != width:
+                raise _axis_length_mismatch(width, len(values))
+        zone = lambda: _convert.session_zone(_session_zone(self))  # noqa: E731
         columns = []
         for i, field in enumerate(struct.fields):
-            arrow_type = _pa_type(field.dataType, pa)
-            values = [_cell(v[i], field.dataType, self) for v in valued]
-            columns.append(pa.array(values, type=arrow_type))
+            arrow_type = _rowconv.pa_type(field.dataType, pa)
+            values = []
+            for v in valued:
+                try:
+                    values.append(_rowconv.convert(v[i], field.dataType, zone))
+                except (TypeError, ValueError, OverflowError):
+                    # An unexpected container (``42`` for an array) is NULL when verification is off, as the
+                    # JVM conversion of classic PySpark leaves it.
+                    if not null_on_error:
+                        raise
+                    values.append(None)
+            columns.append(_rowconv.arrow_array(values, arrow_type, pa, null_on_error))
         table = pa.table(columns, schema=_pa_schema(struct, pa))
         return DataFrame(self._native.create_dataframe(table), self)
 
@@ -457,7 +529,9 @@ class SparkSession:
         """A DataFrame of Python rows with column names, or none: names come from ``schema``,
         else the first ``Row`` or dict, else ``_1``, ``_2``, ...; the types are PySpark's
         inference over every row (see :mod:`krishiv.sql._infer`), converted like an explicit schema."""
-        from krishiv.sql._infer import infer_schema
+        from functools import reduce
+
+        from krishiv.sql._infer import has_nulltype, infer_row, merge_type
         from krishiv.sql.row import Row
 
         names: list[str] | None = None
@@ -468,36 +542,101 @@ class SparkSession:
                     raise not_expected_type("schema", "list of str", name)
         for row in data:
             if not isinstance(row, Row | tuple | list | dict):
-                raise not_expected_type("data", "list of Row, tuple, list or dict", row)
+                raise PySparkTypeError(
+                    errorClass="CANNOT_INFER_SCHEMA_FOR_TYPE",
+                    messageParameters={"data_type": type(row).__name__},
+                    sqlState="42K09",
+                )
         if not data:
             raise PySparkValueError(errorClass="CANNOT_INFER_EMPTY_SCHEMA")
-        first = data[0]
-        if isinstance(first, Row) and hasattr(first, "__fields__"):
-            inferred_names = list(first.__fields__)
-        elif isinstance(first, dict):
-            inferred_names = list(names if names is not None else first)
-        else:
-            inferred_names = [f"_{i + 1}" for i in range(len(first))]
-        width = len(inferred_names)
-        # Spark infers the row type first, then renames its fields by position:
-        # fewer names keep the inferred ones for the rest, more names fail.
-        if names is None:
-            names = inferred_names
-        elif len(names) > width:
-            raise _axis_length_mismatch(len(names), width)
-        else:
-            names = names + inferred_names[len(names) :]
+        timestamp_type = self._conf.get("spark.sql.timestampType", "TIMESTAMP_LTZ") or "TIMESTAMP_LTZ"
+        timestamp_ntz = timestamp_type.strip().upper() == "TIMESTAMP_NTZ"
+        # PySpark's ``_infer_schema`` per row (a dict by its sorted keys, a ``Row`` or named tuple by its
+        # fields, any other tuple by ``names`` then ``_1``, ``_2``, ...), the rows merged as ``_merge_type``.
+        inferred: list[DataType] = []
+        for row in data:
+            if isinstance(row, dict):
+                row_names = sorted(row)
+                values = [row[k] for k in row_names]
+            else:
+                values = list(row)
+                row_names = list(getattr(row, "__fields__", None) or getattr(row, "_fields", None) or [])
+                if not row_names:
+                    given = (names or [])[: len(values)]
+                    row_names = given + [f"_{i + 1}" for i in range(len(given), len(values))]
+            inferred.append(infer_row(values, row_names, timestamp_ntz))
+        merged = reduce(merge_type, inferred)
+        if not isinstance(merged, StructType) or has_nulltype(merged):
+            raise PySparkValueError(errorClass="CANNOT_DETERMINE_TYPE")
+        # The merged row type is renamed by position: fewer names keep the inferred ones for the rest,
+        # more names fail.
+        pre = [f.name for f in merged.fields]
+        width = len(pre)
+        final = pre
+        if names is not None:
+            if len(names) > width:
+                raise _axis_length_mismatch(len(names), width)
+            final = names + pre[len(names) :]
         valued: list[list[Any]] = []
         for row in data:
             if isinstance(row, dict):
-                valued.append([row.get(name) for name in names])
-            else:
-                if len(row) != width:
-                    raise _axis_length_mismatch(width, len(row))
-                valued.append(list(row))
-        timestamp_type = self._conf.get("spark.sql.timestampType", "TIMESTAMP_LTZ") or "TIMESTAMP_LTZ"
-        timestamp_ntz = timestamp_type.strip().upper() == "TIMESTAMP_NTZ"
-        return self._from_rows(valued, infer_schema(valued, names, timestamp_ntz), verify, Row)
+                valued.append([row.get(name) for name in pre])
+                continue
+            if len(row) != width:
+                if hasattr(row, "__fields__"):
+                    raise PySparkValueError(
+                        errorClass="STRUCT_ARRAY_LENGTH_MISMATCH",
+                        messageParameters={"expected": str(width), "actual": str(len(row))},
+                        sqlState="2201E",
+                    )
+                raise _axis_length_mismatch(width, len(row))
+            valued.append(list(row))
+        struct = StructType([StructField(n, f.dataType, f.nullable) for n, f in zip(final, merged.fields, strict=True)])
+        return self._from_rows(valued, struct, False, Row, null_on_error=not verify)
+
+    @classmethod
+    def getActiveSession(cls) -> SparkSession | None:
+        """The session ``getOrCreate`` made and ``stop`` has not ended, or ``None``."""
+        with _lock:
+            return _active
+
+    @classmethod
+    def active(cls) -> SparkSession:
+        """The active session; fails with ``NO_ACTIVE_OR_DEFAULT_SESSION`` when there is none, as PySpark."""
+        session = cls.getActiveSession()
+        if session is None:
+            raise PySparkRuntimeError(errorClass="NO_ACTIVE_OR_DEFAULT_SESSION", messageParameters={})
+        return session
+
+    @property
+    def readStream(self) -> Any:
+        """Not available: streaming reads are not part of 0.2 (``NOT_IMPLEMENTED``)."""
+        raise not_implemented_attribute("SparkSession.readStream (streaming)")
+
+    @property
+    def streams(self) -> Any:
+        """Not available: streaming queries are not part of 0.2 (``NOT_IMPLEMENTED``)."""
+        raise not_implemented_attribute("SparkSession.streams (streaming)")
+
+    @property
+    def tvf(self) -> Any:
+        """Not available: the ``TableValuedFunction`` namespace (``NOT_IMPLEMENTED``)."""
+        raise not_implemented_attribute("SparkSession.tvf")
+
+    @property
+    def udtf(self) -> Any:
+        """Not available: user-defined table functions (``NOT_IMPLEMENTED``)."""
+        raise not_implemented_attribute("SparkSession.udtf")
+
+    def addArtifacts(self, *path: str, pyfile: bool = False, archive: bool = False, file: bool = False) -> None:
+        """Not available: artifacts belong to Spark Connect sessions (``NOT_IMPLEMENTED``)."""
+        raise not_implemented("SparkSession.addArtifacts")
+
+    addArtifact = addArtifacts
+
+    def copyFromLocalToFs(self, local_path: str, dest_path: str) -> None:
+        """Not available: artifacts belong to Spark Connect sessions (``NOT_IMPLEMENTED``)."""
+        raise not_implemented("SparkSession.copyFromLocalToFs")
 
     def stop(self) -> None:
         """Ends this session; the next ``getOrCreate`` makes a new one."""
@@ -517,80 +656,60 @@ def _is_pandas(data: Any) -> bool:
     return pd is not None and isinstance(data, pd.DataFrame)
 
 
-def _pa_type(data_type: DataType, pa: Any) -> Any:
-    """The Arrow type holding ``data_type`` values when ``createDataFrame`` converts rows."""
-    from krishiv.sql.types import (
-        BinaryType,
-        BooleanType,
-        ByteType,
-        DateType,
-        DecimalType,
-        DoubleType,
-        FloatType,
-        IntegerType,
-        LongType,
-        NullType,
-        ShortType,
-        StringType,
-        TimestampNTZType,
-        TimestampType,
-    )
+_pa_type = _rowconv.pa_type
 
-    if isinstance(data_type, NullType):
-        return pa.null()
-    if isinstance(data_type, BooleanType):
-        return pa.bool_()
-    if isinstance(data_type, ByteType):
-        return pa.int8()
-    if isinstance(data_type, ShortType):
-        return pa.int16()
-    if isinstance(data_type, IntegerType):
-        return pa.int32()
-    if isinstance(data_type, LongType):
-        return pa.int64()
-    if isinstance(data_type, FloatType):
-        return pa.float32()
-    if isinstance(data_type, DoubleType):
-        return pa.float64()
-    if isinstance(data_type, StringType):
-        if data_type._collated():
-            raise unsupported_feature(f"createDataFrame with {data_type.simpleString()} columns")
-        return pa.string()
-    if isinstance(data_type, BinaryType):
-        return pa.binary()
-    if isinstance(data_type, DecimalType):
-        return pa.decimal128(data_type.precision, data_type.scale)
-    if isinstance(data_type, DateType):
-        return pa.date32()
-    if isinstance(data_type, TimestampType):
-        return pa.timestamp("us", tz="UTC")
-    if isinstance(data_type, TimestampNTZType):
-        return pa.timestamp("us")
-    raise unsupported_feature(f"createDataFrame with {data_type.simpleString()} columns")
+
+def _arrow_map_to_dict(value: Any, arrow_type: Any, pa: Any) -> Any:
+    """``value`` (from ``to_pylist``) with each Arrow map, which Python reads as a list of key/value pairs, turned
+    into a ``dict``, at any depth; nulls stay ``None``."""
+    if value is None:
+        return None
+    if pa.types.is_map(arrow_type):
+        return {
+            _arrow_map_to_dict(k, arrow_type.key_type, pa): _arrow_map_to_dict(v, arrow_type.item_type, pa)
+            for k, v in value
+        }
+    if pa.types.is_list(arrow_type) or pa.types.is_large_list(arrow_type):
+        return [_arrow_map_to_dict(v, arrow_type.value_type, pa) for v in value]
+    if pa.types.is_struct(arrow_type):
+        return {f.name: _arrow_map_to_dict(value[f.name], f.type, pa) for f in arrow_type}
+    return value
 
 
 def _pa_schema(struct: StructType, pa: Any) -> Any:
-    import pyarrow as _pa
-
-    return _pa.schema([_pa.field(f.name, _pa_type(f.dataType, pa), nullable=f.nullable) for f in struct.fields])
+    return _rowconv.pa_schema(struct, pa)
 
 
-def _row_values(row: Any, names: list[str] | None, width: int, Row: Any) -> list[Any]:
-    """One row of ``createDataFrame`` data as ``width`` values: a tuple, list
-    or ``Row`` (named or not) in order, as PySpark converts rows against an
-    explicit schema; a dict by field name (missing keys are NULL); any other
-    value is a single-column row."""
+def _refuse_duplicate_names(names: list[str]) -> None:
+    """The engine reads a registered table's columns by name, so duplicate names (which Spark
+    allows) are refused up front instead of failing at the first action."""
+    seen: set[str] = set()
+    for name in names:
+        if name.lower() in seen:
+            raise unsupported_feature(f"createDataFrame with the duplicate column name `{name}`")
+        seen.add(name.lower())
+
+
+def _is_struct_schema(schema: Any) -> bool:
+    """Whether ``schema`` (a ``StructType`` or a DDL string) describes rows rather than one value."""
+    if isinstance(schema, StructType):
+        return True
+    if isinstance(schema, str):
+        return isinstance(DataType.fromDDL(schema), StructType)
+    return False
+
+
+def _row_values(row: Any, names: list[str] | None, Row: Any) -> list[Any]:
+    """One row of ``createDataFrame`` data as its values: a tuple, list or ``Row`` (named or
+    not) in order, as PySpark converts rows against an explicit schema; a dict by field name
+    (missing keys are NULL); any other value is a single-column row."""
     if isinstance(row, Row):
-        values = list(row)
-    elif isinstance(row, dict):
-        values = list(row.values()) if names is None else [row.get(n) for n in names]
-    elif isinstance(row, list | tuple):
-        values = list(row)
-    else:
-        values = [row]
-    if len(values) != width:
-        raise ValueError(f"Row has {len(values)} values, schema has {width} fields")
-    return values
+        return list(row)
+    if isinstance(row, dict):
+        return list(row.values()) if names is None else [row.get(n) for n in names]
+    if isinstance(row, list | tuple):
+        return list(row)
+    return [row]
 
 
 def _axis_length_mismatch(expected: int, actual: int) -> PySparkValueError:
@@ -601,74 +720,8 @@ def _axis_length_mismatch(expected: int, actual: int) -> PySparkValueError:
     )
 
 
-def _cell(value: Any, data_type: DataType, session: SparkSession) -> Any:
-    """One ``createDataFrame`` value as pyarrow takes it: a naive datetime for a
-    ``timestamp`` column is read in the Python process's local time zone, as
-    PySpark reads it."""
-    from krishiv.sql import _convert
-    from krishiv.sql.types import TimestampNTZType, TimestampType
-
-    if isinstance(value, datetime.datetime):
-        if isinstance(data_type, TimestampType):
-            if value.tzinfo is None:
-                return value.astimezone(datetime.UTC)
-            return value
-        if isinstance(data_type, TimestampNTZType):
-            zone = _convert.session_zone(_session_zone(session))
-            return value.astimezone(zone).replace(tzinfo=None) if value.tzinfo is not None else value
-    if isinstance(value, datetime.date) and not isinstance(value, datetime.datetime):
-        return value
-    return value
-
-
 def _session_zone(session: SparkSession) -> str:
     return session.conf.get("spark.sql.session.timeZone", "UTC") or "UTC"
-
-
-def _verify_row(struct: StructType, values: list[Any]) -> None:
-    """Checks one row against ``struct``, as ``verifySchema`` does."""
-    from krishiv.errors import PySparkTypeError
-    from krishiv.sql.types import (
-        BinaryType,
-        BooleanType,
-        DateType,
-        DecimalType,
-        FractionalType,
-        IntegralType,
-        StringType,
-        TimestampNTZType,
-        TimestampType,
-    )
-
-    for field, value in zip(struct.fields, values, strict=True):
-        if value is None:
-            if not field.nullable:
-                raise PySparkTypeError(f"field {field.name}: This field is not nullable, but got None")
-            continue
-        ok = False
-        t = field.dataType
-        if isinstance(t, BooleanType):
-            ok = isinstance(value, bool)
-        elif isinstance(t, IntegralType):
-            ok = isinstance(value, int) and not isinstance(value, bool)
-        elif isinstance(t, DecimalType):
-            ok = isinstance(value, Decimal)
-        elif isinstance(t, FractionalType):
-            ok = isinstance(value, float)
-        elif isinstance(t, StringType):
-            ok = isinstance(value, str)
-        elif isinstance(t, BinaryType):
-            ok = isinstance(value, bytes | bytearray)
-        elif isinstance(t, DateType):
-            ok = isinstance(value, datetime.date)
-        elif isinstance(t, TimestampType | TimestampNTZType):
-            ok = isinstance(value, datetime.datetime)
-        else:
-            ok = True  # nested and other types: the Arrow conversion reports them
-        if not ok:
-            raise PySparkTypeError(
-                f"field {field.name}: {t.simpleString()} can not accept object {value!r} in type {type(value).__name__}"
-            )
 
 
 def _qualified(name: str, db: str | None) -> str:
@@ -815,6 +868,78 @@ class Catalog:
         if not isinstance(viewName, str):
             raise not_expected_type("viewName", "str", viewName)
         return self._session._native.drop_temp_view(viewName)
+
+    def dropGlobalTempView(self, viewName: str) -> bool:
+        """Drops the global temporary view ``viewName`` (of ``global_temp``); whether it existed."""
+        if not isinstance(viewName, str):
+            raise not_expected_type("viewName", "str", viewName)
+        qualified = f"global_temp.{viewName}"
+        if not self._session.catalog.tableExists(qualified):
+            return False
+        self._session.sql(f"DROP VIEW {qualified}")
+        return True
+
+    def createTable(
+        self,
+        tableName: str,
+        path: str | None = None,
+        source: str | None = None,
+        schema: StructType | None = None,
+        description: str | None = None,
+        **options: str,
+    ) -> DataFrame:
+        """Creates a table over the data at ``path`` (an external table) or, with no ``path``, an empty managed
+        one, and returns it as a DataFrame. ``source`` defaults to ``spark.sql.sources.default``; ``schema``
+        gives the columns, else the source infers them. An existing table fails as ``CREATE TABLE`` does."""
+        if not isinstance(tableName, str):
+            raise not_expected_type("tableName", "str", tableName)
+        if path is not None and not isinstance(path, str):
+            raise not_expected_type("path", "str", path)
+        if source is not None and not isinstance(source, str):
+            raise not_expected_type("source", "str", source)
+        if schema is not None and not isinstance(schema, StructType):
+            raise not_expected_type("schema", "StructType", schema)
+        if description is not None and not isinstance(description, str):
+            raise not_expected_type("description", "str", description)
+
+        def quote(text: str) -> str:
+            return "'" + text.replace("\\", "\\\\").replace("'", "\\'") + "'"
+
+        fmt = source or self._session.conf.get("spark.sql.sources.default", "parquet")
+        columns = ""
+        if schema is not None:
+            cols = ", ".join(
+                "`" + f.name.replace("`", "``") + "` " + f.dataType.simpleString() + ("" if f.nullable else " NOT NULL")
+                for f in schema.fields
+            )
+            columns = f" ({cols})"
+        opts = ""
+        if options:
+            opts = " OPTIONS (" + ", ".join(f"{quote(str(k))} {quote(str(v))}" for k, v in options.items()) + ")"
+        location = f" LOCATION {quote(path)}" if path is not None else ""
+        comment = f" COMMENT {quote(description)}" if description is not None else ""
+        self._session.sql(f"CREATE TABLE {tableName}{columns} USING {fmt}{opts}{comment}{location}")
+        return self._session.table(tableName)
+
+    def createExternalTable(
+        self,
+        tableName: str,
+        path: str | None = None,
+        source: str | None = None,
+        schema: StructType | None = None,
+        **options: str,
+    ) -> DataFrame:
+        """Deprecated alias of :meth:`createTable` (deprecated since Spark 2.2)."""
+        warnings.warn(
+            "createExternalTable is deprecated since Spark 2.2, use createTable instead.", FutureWarning, stacklevel=2
+        )
+        return self.createTable(tableName, path, source, schema, None, **options)
+
+    def recoverPartitions(self, tableName: str) -> None:
+        """Recovers all the partitions of the table found in its location (``MSCK REPAIR TABLE``)."""
+        if not isinstance(tableName, str):
+            raise not_expected_type("tableName", "str", tableName)
+        self._session.sql(f"MSCK REPAIR TABLE {tableName}")
 
     def registerFunction(self, name: str, f: Any, returnType: Any = None) -> Any:
         """An alias for ``spark.udf.register`` (deprecated since 2.3.0, ``pyspark/sql/catalog.py:1272``)."""
