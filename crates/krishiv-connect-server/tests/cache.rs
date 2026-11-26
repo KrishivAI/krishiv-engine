@@ -525,3 +525,33 @@ async fn analyzing_a_lazy_checkpoint_takes_its_rows() {
     .expect("schema");
     assert_eq!(spill_files(&cp_dir), 1, "the analysis took the rows");
 }
+
+/// GraphFrames' loop over Connect: each round is a lazy local checkpoint of the previous round's
+/// held frame, and the client removes the one before last (PySpark does that when a `DataFrame`
+/// is collected). Fifty rounds finish at once, the rows stay right, the latest two ids still read
+/// and every removed id is `DATAFRAME_NOT_FOUND`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fifty_lazy_checkpoints_leave_only_the_frames_the_client_still_holds() {
+    let run = start(None).await;
+    let mut ids_held: Vec<String> = Vec::new();
+    let mut input = range(5);
+    for _ in 0..50 {
+        let answered = execute(&run, checkpoint(limit(input, 10), true, false))
+            .await
+            .expect("checkpoints");
+        let id = relation_id(&answered);
+        input = remote(&id);
+        ids_held.push(id);
+        if ids_held.len() > 2 {
+            let old = ids_held.remove(0);
+            execute(&run, remove(&old)).await.expect("removes");
+            let e = execute(&run, root(remote(&old))).await.unwrap_err();
+            assert_eq!(error_class(&e), "CONNECT_INVALID_PLAN.DATAFRAME_NOT_FOUND");
+        }
+    }
+    assert_eq!(ids_held.len(), 2);
+    for id in &ids_held {
+        let r = execute(&run, root(remote(id))).await.expect("reads");
+        assert_eq!(ids(&r), (0..5).collect::<Vec<_>>());
+    }
+}

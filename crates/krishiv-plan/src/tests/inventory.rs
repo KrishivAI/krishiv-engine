@@ -57,6 +57,7 @@ fn kinds_of_node(plan: &LogicalPlan, out: &mut BTreeSet<&'static str>) {
         PlanNode::Union { .. } => "PlanNode::Union",
         PlanNode::Distinct { .. } => "PlanNode::Distinct",
         PlanNode::SetOp { .. } => "PlanNode::SetOp",
+        PlanNode::Zip { .. } => "PlanNode::Zip",
         PlanNode::ReplicateRows { .. } => "PlanNode::ReplicateRows",
         PlanNode::Sample { .. } => "PlanNode::Sample",
         PlanNode::Expand { .. } => "PlanNode::Expand",
@@ -236,6 +237,13 @@ fn slice_ops() -> Vec<(&'static str, LogicalPlan)> {
         ("sort", df(1).sort(vec![SortOrder::asc(c("a"))])),
         ("limit", df(1).limit(int(1))),
         ("offset", df(1).offset(int(1))),
+        (
+            "zip",
+            LogicalPlan::new(PlanNode::Zip {
+                left: Arc::new(df(1)),
+                right: Arc::new(df(2)),
+            }),
+        ),
         ("df.alias", df(1).alias("x")),
         ("col", df(1).project(vec![c("a")])),
         ("df[\"a\"]", df(1).project(vec![df_col])),

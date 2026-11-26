@@ -857,6 +857,7 @@ fn split_scan_plan(source: ReadSource) -> PhysicalPlan {
             legacy_coding_error_action: false,
             legacy_time_parser: false,
             binary_output_style: None,
+            spark_version: None,
         },
     )
 }
@@ -1096,14 +1097,14 @@ fn a_view_expansion_carries_the_keeps_of_the_entry_it_inlined() {
     let first: Keep = Arc::new(1_u8);
     let second: Keep = Arc::new(2_u8);
     let put = |keep: &Keep| {
-        catalog.put_view(
-            "v",
-            Arc::new(LogicalPlan::table(["base"])),
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            ViewKeeps(vec![Arc::clone(keep)]),
-        );
+        let view = TempTable::View {
+            plan: Arc::new(LogicalPlan::table(["base"])),
+            columns: Vec::new(),
+            pins: Vec::new(),
+            text: None,
+            keeps: ViewKeeps(vec![Arc::clone(keep)]),
+        };
+        assert!(catalog.put_with_pins("v", view, Vec::new(), None));
     };
     let read = Arc::new(LogicalPlan::table(["v"]));
     let keeps_of = |e: &Expansion| -> Vec<u8> {
@@ -1242,4 +1243,20 @@ fn task_specs_refuse_a_delta_scan_anywhere_in_the_plan() {
         drop(analysis);
         drop(df);
     }
+}
+
+/// A create that must not replace tests the name as it publishes: the second of two creates that
+/// both saw a free name fails, and its pins are not kept.
+#[test]
+fn a_create_only_put_keeps_the_entry_it_finds() {
+    let catalog = SessionCatalog::default();
+    let view =
+        |table: &str| TempTable::sql_view(Arc::new(LogicalPlan::table([table])), Vec::new(), None);
+    assert!(catalog.put_new("V", view("first"), false));
+    let first = catalog.get("v", false).unwrap();
+    assert!(!catalog.put_new("v", view("second"), false));
+    let pin = vec![("pin".to_owned(), Arc::new(view("pinned")))];
+    assert!(!catalog.put_with_pins("v", view("second"), pin, Some(false)));
+    assert!(Arc::ptr_eq(&first, &catalog.get("v", false).unwrap()));
+    assert_eq!(catalog.entry_count(), 1);
 }

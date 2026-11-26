@@ -9,7 +9,13 @@ use std::path::PathBuf;
 
 use arrow_schema::DataType as ArrowType;
 use krishiv_common::error::{ErrorClass, KrishivError};
-use krishiv_types::{DataType, DecimalType, Srid, parse_data_type};
+use krishiv_types::{DataType, DecimalType, Srid, TypeGrammar, parse_data_type_in};
+
+/// The fixture is a Spark 4.2.0 run: its strings are read under Spark 4.2's grammar (the default
+/// is 4.3's, which takes `TIME(7..=9)` and `TIMESTAMP(p)`).
+fn parse_data_type(input: &str) -> Result<DataType, KrishivError> {
+    parse_data_type_in(input, TypeGrammar::V4_2)
+}
 use serde_json::Value;
 
 /// Spark types that parse in Spark but are out of scope here; Krishiv

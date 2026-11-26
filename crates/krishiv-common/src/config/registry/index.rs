@@ -188,6 +188,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         "krishiv.io.maxConcurrentRequests",
         &IO_MAX_CONCURRENT_REQUESTS,
     ),
+    (
+        "krishiv.memory.releaseAtQueryEnd",
+        &MEMORY_RELEASE_AT_QUERY_END,
+    ),
     ("krishiv.optimizer.joinEnumerator", &JOIN_ENUMERATOR),
     (
         "krishiv.server.readiness.timeout",
@@ -624,6 +628,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &PRESERVED_SIDE_SEMI_JOIN,
     ),
     (
+        "krishiv.optimizer.shareLiteralInstances",
+        &SHARE_LITERAL_INSTANCES,
+    ),
+    (
         "krishiv.optimizer.shareRepeatedSubtrees",
         &SHARE_REPEATED_SUBTREES,
     ),
@@ -792,6 +800,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &FLIGHT_SQL_MAX_HANDLE_BYTES_PER_PRINCIPAL,
     ),
     (
+        "krishiv.optimizer.groupKeyCodeMultiDimension",
+        &GROUP_KEY_CODE_MULTI_DIMENSION,
+    ),
+    (
         "krishiv.sql.execution.arrow.useLargeVarTypes",
         &ARROW_USE_LARGE_VAR_TYPES,
     ),
@@ -936,12 +948,20 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &CONNECT_EXECUTE_SENDER_MAX_STREAM_SIZE,
     ),
     (
+        "spark.sql.execution.arrow.pyspark.selfDestruct.enabled",
+        &ARROW_PYSPARK_SELF_DESTRUCT_ENABLED,
+    ),
+    (
         "krishiv.sql.session.localRelationBatchOfChunksSizeBytes",
         &LOCAL_RELATION_BATCH_OF_CHUNKS_SIZE_BYTES,
     ),
     (
         "krishiv.catalog.delegation.maxDistinctExchangesPerMinute",
         &CATALOG_DELEGATION_MAX_DISTINCT_EXCHANGES_PER_MINUTE,
+    ),
+    (
+        "krishiv.sql.execution.arrow.pyspark.selfDestruct.enabled",
+        &ARROW_PYSPARK_SELF_DESTRUCT_ENABLED,
     ),
     (
         "spark.sql.execution.arrow.pyspark.validateSchema.enabled",

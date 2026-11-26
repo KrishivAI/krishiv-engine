@@ -15,6 +15,7 @@ publish = false
 prost = "0.14.4"
 prost-build = "0.14.4"
 protox = "0.9"
+tempfile = "3"
 tonic-prost-build = "0.14"
 
 [workspace]

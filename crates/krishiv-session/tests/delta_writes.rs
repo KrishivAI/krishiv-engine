@@ -966,6 +966,56 @@ fn a_retried_insert_with_the_same_idempotency_key_appends_once() {
     );
 }
 
+/// E34: a retried `UPDATE` or `DELETE` under the same `krishiv.write.idempotencyKey` changes the
+/// table once, even when the statement is not idempotent (`a = a + 1`); a new key applies again.
+#[test]
+fn a_retried_update_and_delete_with_the_same_idempotency_key_apply_once() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("k");
+    let path = dir.to_string_lossy().into_owned();
+    let s = Session::new().unwrap();
+    run(
+        &s,
+        &format!("CREATE TABLE k (a INT) USING delta LOCATION '{path}'"),
+    )
+    .unwrap();
+    run(&s, "INSERT INTO k VALUES (1), (2), (3)").unwrap();
+    s.conf()
+        .set("krishiv.write.idempotencyKey", "upd-1")
+        .unwrap();
+    run(&s, "UPDATE k SET a = a + 10").unwrap();
+    let after_first = versions(&dir);
+    run(&s, "UPDATE k SET a = a + 10").unwrap();
+    assert_eq!(versions(&dir), after_first, "the retry committed nothing");
+    assert_eq!(
+        query(&s, "SELECT a FROM k ORDER BY a"),
+        serde_json::json!([[11], [12], [13]])
+    );
+    assert!(
+        last_commit(&dir)
+            .iter()
+            .any(|a| a["txn"]["appId"] == "krishiv.idempotency:upd-1")
+    );
+    s.conf()
+        .set("krishiv.write.idempotencyKey", "del-1")
+        .unwrap();
+    assert_eq!(
+        query(&s, "DELETE FROM k WHERE a = 11"),
+        serde_json::json!([[1]])
+    );
+    let after_delete = versions(&dir);
+    // The retry changed nothing: its result row claims no rows (not the scan's count of 1).
+    assert_eq!(
+        query(&s, "DELETE FROM k WHERE a = 12"),
+        serde_json::json!([[0]])
+    );
+    assert_eq!(versions(&dir), after_delete, "the retried key is a no-op");
+    assert_eq!(
+        query(&s, "SELECT a FROM k ORDER BY a"),
+        serde_json::json!([[12], [13]])
+    );
+}
+
 /// E34: a keyed `save` whose key the table records succeeds under `errorifexists` and `overwrite`
 /// and writes nothing (as a directory write does); without the key the path still exists.
 #[test]
@@ -1116,4 +1166,57 @@ fn insert_into_overwrite_mode_follows_the_session_config_only() {
     overwrite(5, "static");
     run(&s, "RESET spark.sql.sources.partitionOverwriteMode").unwrap();
     assert_eq!(rows(), rows_after("option_static_conf_dynamic"));
+}
+
+/// A table root reached through a symlinked directory (macOS `/var` -> `/private/var`) writes and
+/// reads: every location is compared in one form.
+#[cfg(unix)]
+#[test]
+fn a_new_table_under_a_symlinked_directory_round_trips() {
+    let tmp = tempfile::tempdir().unwrap();
+    let real = tmp.path().join("real");
+    std::fs::create_dir(&real).unwrap();
+    let link = tmp.path().join("link");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    let path = link.join("delta-table").to_string_lossy().into_owned();
+    let s = Session::new().unwrap();
+    run(
+        &s,
+        &format!("CREATE TABLE n (id BIGINT) USING delta LOCATION '{path}'"),
+    )
+    .unwrap();
+    run(&s, "INSERT INTO n VALUES (1), (2)").unwrap();
+    assert_eq!(
+        query(&s, &format!("SELECT count(*) FROM delta.`{path}`")),
+        serde_json::json!([[2]])
+    );
+    run(&s, "INSERT INTO n VALUES (3)").unwrap();
+    assert_eq!(
+        query(&s, "SELECT count(*) FROM n"),
+        serde_json::json!([[3]])
+    );
+}
+
+/// A Parquet directory written and read through a symlinked directory.
+#[cfg(unix)]
+#[test]
+fn a_parquet_write_under_a_symlinked_directory_round_trips() {
+    let tmp = tempfile::tempdir().unwrap();
+    let real = tmp.path().join("real");
+    std::fs::create_dir(&real).unwrap();
+    let link = tmp.path().join("link");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    let path = link.join("out").to_string_lossy().into_owned();
+    let s = Session::new().unwrap();
+    run(
+        &s,
+        &format!(
+            "INSERT OVERWRITE DIRECTORY '{path}' USING parquet SELECT 1 AS id UNION ALL SELECT 2"
+        ),
+    )
+    .unwrap();
+    assert_eq!(
+        query(&s, &format!("SELECT count(*) FROM parquet.`{path}`")),
+        serde_json::json!([[2]])
+    );
 }

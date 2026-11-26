@@ -506,7 +506,11 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                 Ok(s) => s,
                 Err(e) => return Some((listed, Err(e))),
             };
-            match ceil_floor(t, scale, listed != "floor", args.len() == 1, opts.ansi) {
+            // Spark 4.3 raises ARITHMETIC_OVERFLOW under ANSI for a double outside BIGINT; 4.2 and
+            // earlier saturate (ADR 0023).
+            let raises =
+                opts.ansi && opts.kernel.spark_version() >= krishiv_kernels::SparkVersion::V4_3;
+            match ceil_floor(t, scale, listed != "floor", args.len() == 1, raises) {
                 Some(b) => b,
                 None => return Some((listed, Err(bad_types(listed, args)))),
             }

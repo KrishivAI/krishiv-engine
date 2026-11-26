@@ -11,7 +11,21 @@ Krishiv: a Spark-compatible query engine, embedded.
 A [`Session`] runs Spark SQL ([`Session::sql`]) and DataFrames
 ([`DataFrame`], built with [`functions`] and [`Column`]) in this
 process. Results are Arrow record batches ([`arrow`]). Errors are
-[`Error`]s carrying Spark's error class and SQLSTATE.
+[`Error`]s carrying Spark's error class and SQLSTATE: match on
+[`Error::error_class`] against [`ErrorClass`] variants, or compare
+`error_class().name()` with Spark's class name.
+
+# Cargo features
+
+**Reserved features (no effect yet):** `kafka`, `iceberg`, `cdc`, `connect`, `flight-sql`, `mcp`,
+`python`, `celeborn` and `mimalloc`. They are wired in 0.3.x.
+
+`kafka`, `iceberg`, `cdc`, `connect`, `flight-sql`, `mcp`, `python`, `wasm-udf`,
+`celeborn` and `mimalloc` are reserved names: they enable no code in this crate
+yet (features are additive, so they can gain code later without breaking
+anyone who names them). The ones that do something are `delta`, `cloud`,
+`collations-icu` (on by default), `ui`, `unstable-ir`, `tokio-console`, `telemetry-logs` and
+`telemetry-otlp`; `full` turns on the reserved names and the optional backends together.
 
 ```
 fn example() -> Result<(), krishiv::Error> {
@@ -75,6 +89,18 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 ```
 
 ## Re-exports
+
+### Re-export `ErrorClass`
+
+```rust
+pub use krishiv_common::error::ErrorClass;
+```
+
+### Re-export `ErrorQueryContext`
+
+```rust
+pub use krishiv_common::error::ErrorQueryContext;
+```
 
 ### Re-export `KrishivError`
 

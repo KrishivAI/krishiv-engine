@@ -50,6 +50,7 @@ mod analyze;
 mod arrow_values;
 pub mod auth;
 mod cache;
+mod call;
 mod cancel;
 mod carrier;
 mod catalog;
@@ -127,8 +128,8 @@ mod view_session_refs;
 mod window;
 
 pub use access::{
-    IntersectionPolicy, PathPrefixPolicy, READ_ONLY_PRIVILEGES, ReadOnlyPolicy, StatementInfo,
-    SystemOnlyPolicy,
+    IntersectionPolicy, PathPrefixPolicy, READ_ONLY_PRIVILEGES, ReadOnlyPolicy, StatementContext,
+    StatementInfo, SystemOnlyPolicy,
 };
 pub use admin_groups::{ResourceGroupDocument, ResourceGroupInfo};
 pub use admin_view::{QueryInfo, SessionInfo};

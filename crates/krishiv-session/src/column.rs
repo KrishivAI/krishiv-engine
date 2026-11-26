@@ -75,6 +75,14 @@ impl Column {
         Self::new(self.expr.alias(name))
     }
 
+    /// `self AS (a, b, ..)`: one name per output column of a generator
+    /// (`explode(m) AS (k, v)`); any other expression fails at analysis with
+    /// `MULTI_ALIAS_WITHOUT_GENERATOR`.
+    #[must_use]
+    pub fn alias_all(self, names: Vec<String>) -> Self {
+        Self::new(self.expr.multi_alias(names))
+    }
+
     /// `CAST(self AS to)`.
     ///
     /// ```
@@ -95,6 +103,17 @@ impl Column {
             expr: Arc::new(self.expr),
             to,
             mode: CastMode::Ansi,
+        }))
+    }
+
+    /// `CAST(self AS to)` non-ANSI whatever `spark.sql.ansi.enabled` says: invalid input becomes `NULL`. Store
+    /// assignment under `spark.sql.storeAssignmentPolicy=LEGACY`.
+    #[must_use]
+    pub(crate) fn cast_legacy(self, to: DataType) -> Self {
+        Self::new(Expr::new(ExprNode::Cast {
+            expr: Arc::new(self.expr),
+            to,
+            mode: CastMode::Legacy,
         }))
     }
 

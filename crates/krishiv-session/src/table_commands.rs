@@ -58,27 +58,6 @@ use crate::store::{
 /// The file formats a table can have.
 pub(crate) const PROVIDERS: &[&str] = &["parquet", "csv", "json", "text", "orc", "avro"];
 
-/// The short name of a data source written fully qualified, as Spark maps its built-in classes
-/// (`org.apache.spark.sql.parquet`, `com.databricks.spark.csv`); other names stay as written.
-fn short_provider(written: &str) -> String {
-    let lower = written.to_lowercase();
-    for prefix in [
-        "org.apache.spark.sql.execution.datasources.",
-        "org.apache.spark.sql.",
-    ] {
-        if let Some(rest) = lower.strip_prefix(prefix) {
-            let name = rest.split('.').next().unwrap_or(rest);
-            if PROVIDERS.contains(&name) {
-                return name.to_owned();
-            }
-        }
-    }
-    if lower == "com.databricks.spark.csv" {
-        return "csv".to_owned();
-    }
-    lower
-}
-
 /// Whether `name` is a name Spark accepts for a new table or namespace: letters, digits and `_`.
 fn valid_name(name: &str) -> bool {
     !name.is_empty() && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
@@ -1692,11 +1671,22 @@ enum ColumnChange {
     DropDefault,
 }
 
-/// The writer of `df` into `table` with `mode`; into a bucketed table each row goes to its bucket's file.
+fn explicit_key<'a, V: 'a>(
+    options: impl IntoIterator<Item = (&'a String, &'a V)>,
+    plain: impl Fn(&'a V) -> Option<&'a str>,
+) -> Option<&'a str> {
+    options
+        .into_iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case(krishiv_exec::planner::IDEMPOTENCY_KEY_OPTION))
+        .and_then(|(_, v)| plain(v))
+}
+
+/// The writer of `df` into `table` with `mode` and the write's own idempotency `key` (never the stored options'); into a bucketed table each row goes to its bucket's file.
 fn table_writer(
     table: &CatalogTable,
     df: &DataFrame,
     mode: &str,
+    key: Option<&str>,
 ) -> Result<crate::dataframe::DataFrameWriter, KrishivError> {
     let mut writer = df.write().format(&table.provider).mode(mode);
     if let Some(bucket) = &table.layout.bucket {
@@ -1711,6 +1701,9 @@ fn table_writer(
             continue;
         }
         writer = writer.option(k, v);
+    }
+    if let Some(key) = key {
+        writer = writer.option(krishiv_exec::planner::IDEMPOTENCY_KEY_OPTION, key);
     }
     // Stored when an admin (or a `Manage` holder) created or altered the table: not asked again.
     Ok(writer.options_are_the_tables())
@@ -1771,11 +1764,7 @@ struct InsertTarget<'a> {
     /// Checked through to the rows it would write, not written.
     dry: bool,
     /// The writer's options (`writeTo(..).option(..)`, `saveAsTable`'s): a Delta append reads
-    /// `maxRecordsPerFile` from them; `None` for SQL.
-    #[cfg_attr(
-        not(feature = "delta"),
-        expect(dead_code, reason = "read by the Delta write path only")
-    )]
+    /// `maxRecordsPerFile` from them, a file table's write the idempotency key; `None` for SQL.
     options: Option<&'a BTreeMap<String, OptionValue>>,
 }
 
@@ -1949,6 +1938,8 @@ pub(crate) fn now_ms() -> i64 {
         .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
 }
 
+mod provider;
+pub(crate) use provider::short_provider;
 mod assign;
 use assign::{Source, assign, can_store, overflow_in_table_insert};
 

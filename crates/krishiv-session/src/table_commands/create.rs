@@ -525,6 +525,13 @@ impl Session {
                     "bucketBy",
                 ));
             }
+            // The kernel's create writes no `description`, where delta-spark writes the comment.
+            if table.comment.is_some() {
+                return Err(super::delta::delta_write_refused(
+                    quoted(&table.namespace, &table.name),
+                    "CREATE TABLE ... COMMENT on a new Delta table",
+                ));
+            }
             // Version 0 of a new Delta table with the rows (design section 4.1, "CTAS").
             drop(pre.take());
             let source =
@@ -583,7 +590,11 @@ impl Session {
         } else {
             "errorifexists"
         };
-        let dirs = self.write_table_rows(&table, &df, write_mode, pre).await?;
+        let key =
+            super::explicit_key(&table.options, |v: &String| Some(v.as_str())).map(str::to_owned);
+        let dirs = self
+            .write_table_rows(&table, &df, write_mode, key.as_deref(), pre)
+            .await?;
         if let Some(owned) = owned {
             owned.keep();
         }

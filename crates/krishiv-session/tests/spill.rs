@@ -378,11 +378,21 @@ fn an_invalid_spill_setting_keeps_its_own_error_class() {
         err.to_string().contains("krishiv.spill.zstd.level"),
         "{err}"
     );
-    assert_eq!(
-        err.cause()
-            .map(krishiv_common::error::KrishivError::error_class),
-        Some(krishiv_common::error::ErrorClass::UnableToAcquireMemory),
-        "{err}"
+    // The cause is the memory refusal that asked for the spill. Which arbitration path refuses
+    // first (the operator's own reservation or the query-wide abort) depends on task timing, so
+    // either memory class is accepted; the class and message above are what the test pins.
+    let cause = err
+        .cause()
+        .map(krishiv_common::error::KrishivError::error_class);
+    assert!(
+        matches!(
+            cause,
+            Some(
+                krishiv_common::error::ErrorClass::UnableToAcquireMemory
+                    | krishiv_common::error::ErrorClass::KrishivQueryAbortedOutOfMemory
+            )
+        ),
+        "{cause:?}: {err}"
     );
 }
 

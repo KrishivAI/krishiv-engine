@@ -91,15 +91,18 @@ pub use clock::{Clock, SystemClock};
 pub use cohort::{Cohort, Seat, SeatState};
 pub use consumer::{ConsumerHandle, GrantCredit, SpillStats, SpillWriting};
 pub use error::MemoryError;
-pub use limit::{DEFAULT_LIMIT_PERCENT, FALLBACK_LIMIT, default_limit, effective_memory_limit};
+pub use limit::{
+    DEFAULT_LIMIT_PERCENT, FALLBACK_LIMIT, default_limit, effective_memory_limit, explicit_limit,
+};
 pub use pool::{
     ArbitrationStats, DEFAULT_PRIORITY, DEFAULT_SPILL_SCRATCH_RESERVE, MAX_PRIORITY, MemoryConfig,
     PoolEntry, PoolSnapshot, TreePool,
 };
 pub use relation::{RelationHash, RelationLease, RelationRef, RelationStore};
 pub use release::{
-    EPOCH_INTERVAL, pressure_epoch, release_hook_installed, release_if_pressured,
-    release_if_pressured_here, set_release_hook,
+    EPOCH_INTERVAL, idle_epoch, note_idle, pressure_epoch, release_hook_installed,
+    release_if_due_here, release_if_idle_here, release_if_pressured, release_if_pressured_here,
+    set_release_hook,
 };
 pub use reservation::Reservation;
 pub use resident::{

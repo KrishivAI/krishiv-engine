@@ -64,6 +64,7 @@ use crate::variables::SessionVariables;
 
 mod context;
 mod lifecycle;
+mod procedure_inputs;
 mod traits;
 #[cfg(feature = "unstable-ir")]
 pub use lifecycle::{SqlOutcome, SqlQuery};
@@ -170,7 +171,7 @@ pub(crate) struct SessionState {
     pub(crate) memory: Arc<dyn MemoryPool>,
     /// Whether a store creates objects only if absent (the commit log's
     /// probe), by store id; per session, never process-wide.
-    commit_log_probes: Mutex<HashMap<String, bool>>,
+    pub(crate) commit_log_probes: Mutex<HashMap<String, bool>>,
     pub(crate) io: Arc<IoScheduler>,
     /// The session's content-addressed relations: every memory table's
     /// batches as Arrow IPC, so workers resolve a batch range through it
@@ -592,6 +593,7 @@ impl Session {
                 Box::pin(self.exec_cache(&c, query, &env.identifier_spans)).await
             }
             Statement::Refresh(r) => self.exec_refresh(&r).await,
+            Statement::Call(c) => Box::pin(self.exec_call(&c, query)).await,
             Statement::DeclareVariable(v) => self.exec_declare(&v, query, redacted).await,
             Statement::SetVariable(v) => self.exec_set_variable(&v, query, redacted).await,
             Statement::DropVariable(v) => self.exec_drop_variable(&v, redacted).await,
@@ -785,7 +787,7 @@ impl Session {
         // first action's error.
         match krishiv_sql::parse_multipart_identifier(
             name,
-            &parser_options(&self.state.conf.snapshot()),
+            &parser_options(&self.state.conf.snapshot(), self.state.profile),
         ) {
             Ok(id) => {
                 let parts = id.parts.into_iter().map(|p| p.value);
@@ -1326,7 +1328,7 @@ impl Session {
             let values = conf_values(&config, &ResolutionConf::KEYS);
             ResolutionConf::from_conf(|k| values.get(k).map(String::as_str))
         };
-        let parser = parser_options(&config);
+        let parser = parser_options(&config, self.state.profile);
         // The cache cap is the query's own configuration snapshot.
         let cache_cap = RelationCache::cap_of(&config);
         // One snapshot of the variables per query, like the configuration
@@ -1415,6 +1417,7 @@ impl Session {
             quiet: QuietDenials::default(),
             udtfs,
             spill_failure: Arc::default(),
+            planning: Arc::default(),
         }
     }
 
@@ -1646,9 +1649,12 @@ impl Session {
         &self,
         physical: &PhysicalPlan,
         env: &QueryEnv,
-    ) -> Result<(RecordBatchStream, Arc<QueryContext>), KrishivError> {
-        self.run_on_query(physical, self.worker(env), env, true)
-            .await
+    ) -> Result<(RecordBatchStream, Arc<QueryContext>, String), KrishivError> {
+        // The row id too: the profile reads the query's `planning_ns` from its row (MODES-2).
+        let (stream, query, log_id) = self
+            .run_on_query_logged(physical, self.worker(env), env, true, None)
+            .await?;
+        Ok((crate::run_site::resolve_sites(stream, env), query, log_id))
     }
 
     /// The session's relation store (tests): every registered memory
@@ -1793,6 +1799,10 @@ impl Session {
                 .await?
                 .into_parts(),
         };
+        // The plan is made: what the statement spent planning, the queue excluded (MODES-2).
+        self.state
+            .queries
+            .set_planning_ns(&log_id, env.planning.take());
         self.state.activity.query_started();
         let id = QueryId(self.state.runtime.reserve_tagged(
             self.state.number,
@@ -1951,7 +1961,7 @@ pub(crate) use env::*;
 mod spill;
 pub(crate) use spill::*;
 
-mod writes;
+pub(crate) mod writes;
 pub(crate) use writes::partition_overwrite_is_dynamic;
 use writes::*;
 

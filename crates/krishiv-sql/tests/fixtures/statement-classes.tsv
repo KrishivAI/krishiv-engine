@@ -122,6 +122,7 @@ Refresh::Path	ADMIN	REFRESH '/data/x'
 Analyze	WRITE	ANALYZE TABLE t COMPUTE STATISTICS
 Repair	DDL	MSCK REPAIR TABLE t
 AddResource	ADMIN	ADD JAR '/tmp/a.jar'
+Call	ADMIN	CALL cat.system.expire_snapshots(table => 'db.t', retain_last => 1)
 ListResource	READ	LIST JARS
 ExecuteImmediate	READ	EXECUTE IMMEDIATE 'SELECT 1'
 ExecuteImmediate	DDL	EXECUTE IMMEDIATE 'DROP TABLE t'

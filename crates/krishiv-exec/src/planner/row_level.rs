@@ -69,6 +69,9 @@ pub struct RowLevelCapabilities {
     /// Changed rows can be recorded as deletes (Delta deletion vectors, Iceberg position deletes)
     /// instead of rewriting their files.
     pub merge_on_read: bool,
+    /// The table's commit records the write's `krishiv.write.idempotencyKey` and a commit whose key
+    /// the snapshot already has writes nothing (E34); a table without it refuses a key.
+    pub idempotent_commit: bool,
     /// `MERGE`'s multiple-match check.
     pub cardinality: CardinalityRule,
 }
@@ -79,6 +82,7 @@ impl RowLevelCapabilities {
     pub fn copy_on_write(cardinality: CardinalityRule) -> Self {
         Self {
             merge_on_read: false,
+            idempotent_commit: false,
             cardinality,
         }
     }

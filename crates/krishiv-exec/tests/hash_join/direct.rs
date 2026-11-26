@@ -4,9 +4,13 @@
 //! rows with it on and off, over negative, sparse, duplicate and NULL keys
 //! and probe keys outside the build's span, with `Int64` and `Int32` keys
 //! (the TPC-DS surrogate keys), sliced key arrays with NULLs and a probe
-//! filter fused into the join; it runs only where it applies.
+//! filter fused into the join; it runs only where it applies, and a build
+//! past the payload cap (perf lever P3) decodes its columns per pair while
+//! a smaller one decodes them once (`direct_payload_rows`), `Utf8` and
+//! `Utf8View` payloads, with a residual filter and the build-preserving
+//! join types.
 
-use arrow_array::Int32Array;
+use arrow_array::{Int32Array, StringViewArray};
 use krishiv_exec::{FnPredicate, HashJoin, HashJoinNode};
 
 use super::*;
@@ -20,6 +24,27 @@ struct Run {
     int32: bool,
     /// [`keep`] fused into the probe (a selection of the probe batch).
     fused: bool,
+    /// `k2` as `Utf8View` on both sides (not with `int32`).
+    view: bool,
+}
+
+/// `k2` as `Utf8View`, the other columns as [`schema`].
+fn schema_view() -> SchemaRef {
+    let mut fields: Vec<Field> = schema()
+        .fields()
+        .iter()
+        .map(|f| f.as_ref().clone())
+        .collect();
+    fields[1] = Field::new("k2", DataType::Utf8View, true);
+    Arc::new(Schema::new(fields))
+}
+
+/// [`data`] with `k2` as `Utf8View`.
+fn data_view(rows: &[Row]) -> RecordBatch {
+    let wide = data(rows);
+    let mut cols = wide.columns().to_vec();
+    cols[1] = Arc::new(rows.iter().map(|r| r.k2).collect::<StringViewArray>());
+    RecordBatch::try_new(schema_view(), cols).unwrap()
 }
 
 /// `k1` as `Int32`, the other columns as [`schema`].
@@ -64,6 +89,19 @@ fn want(case: &Case, probe: &[Row], build: &[Row], run: Run) -> Vec<String> {
 /// Runs `case` (one `k1` key) as `run` says; also returns the probe's
 /// `direct_probe_rows` (absent, so 0, when the index did not run).
 async fn run_direct(case: &Case, probe: &[Row], build: &[Row], run_as: Run) -> (Vec<String>, u64) {
+    let (rows, direct, _, _) = run_counted(case, probe, build, run_as).await;
+    (rows, direct)
+}
+
+/// [`run_direct`] with the build rows whose payload was decoded once
+/// (`direct_payload_rows`) and the rows the one-pass inner probe emitted
+/// (`direct_inner_rows`, perf lever C).
+async fn run_counted(
+    case: &Case,
+    probe: &[Row],
+    build: &[Row],
+    run_as: Run,
+) -> (Vec<String>, u64, u64, u64) {
     let root = root(64 * MIB);
     let (_manager, scope) = spill();
     let config = ExecConfig {
@@ -75,6 +113,8 @@ async fn run_direct(case: &Case, probe: &[Row], build: &[Row], run_as: Run) -> (
     let q = query(&root, 1, config);
     let (schema, data): (SchemaRef, fn(&[Row]) -> RecordBatch) = if run_as.int32 {
         (schema32(), data32)
+    } else if run_as.view {
+        (schema_view(), data_view)
     } else {
         (schema(), data)
     };
@@ -97,6 +137,8 @@ async fn run_direct(case: &Case, probe: &[Row], build: &[Row], run_as: Run) -> (
     (
         render(&out),
         metric(&q, "HashJoinProbe", "direct_probe_rows"),
+        metric(&q, "HashJoinProbe", "direct_payload_rows"),
+        metric(&q, "HashJoinProbe", "direct_inner_rows"),
     )
 }
 
@@ -255,6 +297,7 @@ async fn int32_keys_match_the_oracle_with_the_direct_index() {
                 on: true,
                 int32: true,
                 fused: false,
+                view: false,
             };
             let (on, direct) = run_direct(&c, &probe, &build, run_as).await;
             let (off, _) = run_direct(
@@ -308,6 +351,7 @@ async fn a_fused_probe_selection_matches_the_oracle_with_the_direct_index() {
                 on: true,
                 int32,
                 fused: true,
+                view: false,
             };
             let (on, direct) = run_direct(&c, &probe, &build, run_as).await;
             let (off, _) = run_direct(
@@ -323,15 +367,186 @@ async fn a_fused_probe_selection_matches_the_oracle_with_the_direct_index() {
             let want = want(&c, &probe, &build, run_as);
             assert_eq!(on, want, "{join_type:?} int32 {int32}");
             assert_eq!(off, want, "{join_type:?} int32 {int32}");
-            assert!(direct > 0, "{join_type:?} int32 {int32}: the index ran");
+            // The index reads exactly the rows the fused filter keeps.
+            let kept = probe.iter().filter(|r| r.v % 3 != 0).count() as u64;
+            assert_eq!(direct, kept, "{join_type:?} int32 {int32}: the index ran");
         }
+    }
+}
+
+/// A long payload string: 3,000 build rows of it hold more than the
+/// 256 KiB a direct build may hold for its payload to be decoded once.
+const LONG: &str = "a payload string long enough that three thousand rows of it are \
+                    well past the decoded payload cap of a direct build index";
+
+/// A direct build too large to decode its payload once (perf lever P3)
+/// keeps the direct index and decodes its build columns per pair; a small
+/// one takes them from the payload decoded once (`direct_payload_rows`
+/// counts its rows). Both match the oracle, with `Utf8` and `Utf8View`
+/// payloads, a residual filter and the build-preserving join types.
+#[tokio::test]
+async fn the_payload_cap_keeps_the_direct_index_either_way() {
+    let big: Vec<Row> = (0..3_000_i64)
+        .map(|k| r(Some(k), Some(LONG), k % 7))
+        .collect();
+    let small: Vec<Row> = (0..40_i64).map(|k| r(Some(k), Some(LONG), k)).collect();
+    let probe = keyed(
+        &(0..60)
+            .map(|i| Some((i * 53) % 3_100 - 20))
+            .chain([None])
+            .collect::<Vec<_>>(),
+    );
+    let cases = [
+        (JoinType::Inner, false),
+        (JoinType::LeftOuter, false),
+        (JoinType::Inner, true),
+        (JoinType::RightOuter, true),
+        (JoinType::FullOuter, true),
+    ];
+    for view in [false, true] {
+        for (join_type, filter) in cases {
+            let mut c = case(join_type, 1, false, filter);
+            c.row_layout = true;
+            for build in [&big, &small] {
+                let what = format!("{join_type:?} filter {filter} view {view} {}", build.len());
+                let (got, direct, payload, inner) = run_counted(
+                    &c,
+                    &probe,
+                    build,
+                    Run {
+                        on: true,
+                        view,
+                        ..Run::default()
+                    },
+                )
+                .await;
+                assert_eq!(got, c.oracle(&probe, build), "{what}");
+                assert_eq!(direct, probe.len() as u64, "{what}");
+                let want = if build.len() == small.len() {
+                    small.len() as u64
+                } else {
+                    0
+                };
+                assert_eq!(payload, want, "{what}: rows decoded once");
+                // Only the unique, decoded build of an inner join without a
+                // filter takes the one-pass probe, for each output row.
+                let one_pass = want > 0 && join_type == JoinType::Inner && !filter;
+                let rows = got.len() as u64;
+                assert_eq!(inner, if one_pass { rows } else { 0 }, "{what}: one pass");
+                assert!(!one_pass || rows > 0, "{what}: the probe matches");
+            }
+        }
+    }
+}
+
+/// The one-pass inner probe (perf lever C) runs only over unique build
+/// keys: a decoded build with a duplicate key walks its chains, and both
+/// match the oracle, with and without a fused probe selection, `Int32` keys
+/// and `Utf8View` payloads.
+#[tokio::test]
+async fn the_one_pass_inner_probe_needs_unique_build_keys() {
+    let unique: Vec<Row> = (-5..30_i64)
+        .map(|k| r(Some(k), Some(LONG), k))
+        .chain([r(None, Some("n"), 1)])
+        .collect();
+    let mut dup = unique.clone();
+    dup.push(r(Some(7), Some("again"), 2));
+    let probe = keyed(
+        &(0..80)
+            .map(|i| Some((i * 7) % 45 - 10))
+            .chain([None, Some(1_000)])
+            .collect::<Vec<_>>(),
+    );
+    let mut c = case(JoinType::Inner, 1, false, false);
+    c.row_layout = true;
+    for fused in [false, true] {
+        for (int32, view) in [(false, false), (true, false), (false, true)] {
+            for build in [&unique, &dup] {
+                let run_as = Run {
+                    on: true,
+                    int32,
+                    fused,
+                    view,
+                };
+                let what = format!("{run_as:?} dup {}", build.len() > unique.len());
+                let (got, direct, payload, inner) = run_counted(&c, &probe, build, run_as).await;
+                assert_eq!(got, want(&c, &probe, build, run_as), "{what}");
+                assert!(direct > 0, "{what}: direct");
+                // An inner join keeps no NULL-key build row.
+                let keyed = build.iter().filter(|r| r.k1.is_some()).count();
+                assert_eq!(payload, keyed as u64, "{what}: decoded once");
+                let rows = got.len() as u64;
+                let expect = if build.len() == unique.len() { rows } else { 0 };
+                assert!(rows > 0, "{what}: the probe matches");
+                assert_eq!(inner, expect, "{what}: one pass");
+            }
+        }
+    }
+}
+
+/// A weighted probe batch or build side keeps the general path (each pair
+/// multiplies the weights there); unweighted ones take the one pass, whose
+/// output rows weigh one.
+#[tokio::test]
+async fn weighted_inputs_keep_the_general_inner_probe() {
+    let probe = [
+        r(Some(1), None, 1),
+        r(Some(2), None, 2),
+        r(Some(9), None, 3),
+    ];
+    let build = [r(Some(1), None, 3), r(Some(2), None, 4)];
+    let plain = |rows: &[Row]| vec![Batch::new(data(rows))];
+    let weighted = |rows: &[Row], w: Weights| vec![Batch::with_weights(data(rows), w).unwrap()];
+    let cases = [
+        (
+            plain(&probe),
+            plain(&build),
+            vec!["1|∅|1|1|∅|3", "2|∅|2|2|∅|4"],
+            true,
+        ),
+        (
+            weighted(&probe, Weights::Column(Int64Array::from(vec![-2, 5, 7]))),
+            plain(&build),
+            vec!["1|∅|1|1|∅|3|*-2", "2|∅|2|2|∅|4|*5"],
+            false,
+        ),
+        (
+            plain(&probe),
+            weighted(&build, Weights::Const(3)),
+            vec!["1|∅|1|1|∅|3|*3", "2|∅|2|2|∅|4|*3"],
+            false,
+        ),
+    ];
+    for (probe_side, build_side, expect, one_pass) in cases {
+        let root = root(64 * MIB);
+        let config = ExecConfig {
+            join_row_layout: true,
+            join_direct_index: true,
+            ..ExecConfig::default()
+        };
+        let q = query(&root, 1, config);
+        let mut c = case(JoinType::Inner, 1, false, false);
+        c.row_layout = true;
+        let plan = join(
+            c.spec(None),
+            scan(&schema(), build_side),
+            scan(&schema(), probe_side),
+        );
+        let out = run(&runner(2), plan, &q).await.unwrap();
+        assert_eq!(render(&out), expect, "one pass {one_pass}");
+        assert!(metric(&q, "HashJoinProbe", "direct_probe_rows") > 0);
+        let inner = metric(&q, "HashJoinProbe", "direct_inner_rows");
+        assert_eq!(inner, if one_pass { 2 } else { 0 }, "one pass {one_pass}");
+        assert_released(&root);
     }
 }
 
 proptest! {
     #![proptest_config(ProptestConfig { cases: 32, ..ProptestConfig::default() })]
     /// Random one-key joins over small key spans (so the index applies):
-    /// the oracle's answer either way.
+    /// the oracle's answer, every probe row through the index when the build
+    /// qualifies (a non-NULL key, not a null-aware anti join) and none
+    /// otherwise.
     #[test]
     fn random_direct_joins_match_the_oracle(
         t in 0usize..TYPES.len(),
@@ -343,7 +558,9 @@ proptest! {
         let mut c = case(join_type, 1, false, filter && join_type != JoinType::NullAwareAnti);
         c.row_layout = true;
         let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
-        let (got, _) = rt.block_on(run_direct(&c, &probe, &build, Run { on: true, ..Run::default() }));
+        let (got, direct) = rt.block_on(run_direct(&c, &probe, &build, Run { on: true, ..Run::default() }));
         prop_assert_eq!(got, c.oracle(&probe, &build));
+        let qualifies = join_type != JoinType::NullAwareAnti && build.iter().any(|r| r.k1.is_some());
+        prop_assert_eq!(direct, if qualifies { probe.len() as u64 } else { 0 });
     }
 }

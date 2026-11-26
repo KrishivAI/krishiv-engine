@@ -87,3 +87,30 @@ fn known_zones_and_offsets_are_accepted() {
         assert_eq!(s.conf().get(KEY).as_deref(), Some(ok));
     }
 }
+
+#[test]
+fn the_builder_refuses_what_set_refuses() {
+    // The builder's settings are checked as `SET` checks one: a padded zone
+    // stored by the registry would read back padded (`conf.get` returns a
+    // value as set), and an unknown region would fail only at first use.
+    for bad in [" UTC ", "UTC ", " +01:00", "Mars/Base", "Europe/Pariss"] {
+        for key in [KEY, CANONICAL] {
+            let e = Session::builder().config(key, bad).build().unwrap_err();
+            assert_eq!(
+                e.error_class(),
+                ErrorClass::InvalidConfValueTimeZone,
+                "{key} {bad:?}: {e}"
+            );
+            assert_eq!(
+                e.message_parameters(),
+                [("confValue", bad.to_owned()), ("confName", key.to_owned())],
+                "{key} {bad:?}"
+            );
+        }
+    }
+    let s = Session::builder()
+        .config(KEY, "Europe/Paris")
+        .build()
+        .unwrap();
+    assert_eq!(s.conf().get(KEY).as_deref(), Some("Europe/Paris"));
+}

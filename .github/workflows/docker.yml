@@ -2,7 +2,8 @@ name: Docker
 
 # The official image (docker/Dockerfile) on both architectures, each built natively (no QEMU:
 # the release profile uses fat LTO), then smoke-tested: start the container, connect PySpark over
-# TLS with a token, run one query. Nothing is published here; the release workflow pushes the
+# TLS with a token, run one query; on amd64 the compose quickstart's notebook runs too
+# (examples/docker-compose). Nothing is published here; the release workflow pushes the
 # multi-arch manifest to ghcr.io on the tag.
 on:
   workflow_call:
@@ -13,6 +14,7 @@ on:
       - .dockerignore
       - .github/workflows/docker.yml
       - .github/scripts/docker-smoke.sh
+      - examples/docker-compose/**
       - crates/krishiv-cli/Cargo.toml
 
 permissions:
@@ -48,6 +50,10 @@ jobs:
           docker run --rm krishiv:ci --version
           docker run --rm krishiv:ci sql -e "SELECT 1"
           .github/scripts/docker-smoke.sh krishiv:ci
+      # The compose quickstart (examples/docker-compose): Krishiv, MinIO and JupyterLab up, its
+      # notebook run headless (a Delta table written to and read from MinIO).
+      - name: Compose quickstart
+        run: examples/docker-compose/smoke.sh krishiv:ci
 
   image-arm64:
     name: image (linux/arm64)
@@ -62,10 +68,23 @@ jobs:
         with:
           persist-credentials: false
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      # The fat-LTO link of `krishiv` needs more memory than this runner has: without swap the
+      # runner is shut down during the link.
+      - name: Add swap for the release link
+        run: |
+          sudo fallocate -l 8G /swap-link
+          sudo chmod 600 /swap-link
+          sudo mkswap /swap-link
+          sudo swapon /swap-link
+          free -h
+          df -h /
       - name: Build
         env:
           SHA: ${{ github.sha }}
         run: |
+          # Memory and swap use once a minute, so a failed link shows what it ran out of.
+          (while sleep 60; do free -m | sed -n '2,3p'; done) &
+          trap 'kill $!' EXIT
           docker buildx build --platform linux/arm64 -f docker/Dockerfile \
             --build-arg "KRISHIV_GIT_SHA=$SHA" --load -t krishiv:ci .
       - name: Smoke test

@@ -404,6 +404,7 @@ pub enum Method {
     Mtls,
     Throttle,
     None,
+    Basic,
 }
 ```
 
@@ -429,6 +430,11 @@ Refused before any method ran (the peer is throttled).
 
 No credential was presented.
 
+###### `Basic`
+
+`Authorization: Basic` on the Flight SQL surface: a bearer token as the password, its
+principal's name as the user name.
+
 ##### Implementations
 
 ###### Methods
@@ -436,7 +442,7 @@ No credential was presented.
 - ```rust
   pub fn as_str(self: Self) -> &'static str { /* ... */ }
   ```
-  The label value: `token`, `oidc`, `mtls` or `none`.
+  The label value: `token`, `oidc`, `mtls`, `throttle`, `none` or `basic`.
 
 ###### Trait Implementations
 
@@ -548,6 +554,7 @@ pub struct Credentials<'a> {
     pub peer: std::net::SocketAddr,
     pub surface: Surface,
     pub malformed: bool,
+    pub basic_user: Option<&'a str>,
 }
 ```
 
@@ -559,7 +566,8 @@ pub struct Credentials<'a> {
 | `peer_leaf` | `Option<&'a [u8]>` | The client's leaf certificate (DER), which the TLS layer verified against the client<br>CA at the handshake. Only the verified leaf may be passed here. |
 | `peer` | `std::net::SocketAddr` | The peer's address (the throttle's key). |
 | `surface` | `Surface` | The listener. |
-| `malformed` | `bool` | An `Authorization` header was present but not a usable `Bearer` token (`Basic ..`,<br>`Bearer` with no token): Spark answers "Invalid authentication token", not "missing". |
+| `malformed` | `bool` | An `Authorization` header was present but not a usable `Bearer` token (`Basic ..` off the<br>Flight SQL surface, `Bearer` with no token): Spark answers "Invalid authentication<br>token", not "missing". |
+| `basic_user` | `Option<&'a str>` | The user name of an `Authorization: Basic` credential (its password is `bearer`): the<br>token's principal must have this name. Only the Flight SQL surface sets it<br>([`Self::with_basic`]); on any other surface it is refused. |
 
 ##### Implementations
 
@@ -579,6 +587,13 @@ pub struct Credentials<'a> {
   pub fn with_authorization_header(self: Self, value: &'a str) -> Self { /* ... */ }
   ```
   The same credentials with the bearer token of an `Authorization` header value.
+
+- ```rust
+  pub fn with_basic(self: Self, basic: &'a BasicCredentials) -> Self { /* ... */ }
+  ```
+  The same credentials carrying a decoded `Basic` credential: its password as the bearer
+  token and its user name to check against the token's principal. The
+  transport decodes `Basic` only on `Surface::FlightSql`.
 
 ###### Trait Implementations
 
@@ -1001,6 +1016,24 @@ pub fn bearer_token(value: &str) -> Option<&str> { /* ... */ }
 
 ### Re-exports
 
+#### Re-export `BasicCredentials`
+
+```rust
+pub use basic::BasicCredentials;
+```
+
+#### Re-export `BasicHeader`
+
+```rust
+pub use basic::BasicHeader;
+```
+
+#### Re-export `basic_header`
+
+```rust
+pub use basic::basic_header;
+```
+
 #### Re-export `AuthConfig`
 
 ```rust
@@ -1229,6 +1262,7 @@ krishiv.catalog.<name>.tenants         = acme, globex                         (a
 krishiv.catalog.<name>.allowConfigKeys = s3.endpoint
 krishiv.catalog.<name>.allowInsecure   = true                                  (an http:// uri, server mode)
 krishiv.catalog.<name>.option.<key>    = <value>                               (per type, fixed list)
+krishiv.catalog.<name>.option.write    = true | false                          (iceberg-rest; default false: read-only)
 krishiv.catalog.default                = <name>
 ```
 
@@ -2666,6 +2700,342 @@ pub struct CatalogCaller {
 - **UnsafeUnpin**
 - **UnwindSafe**
 - **WithSubscriber**
+#### Struct `ScanInputs`
+
+**Attributes:**
+
+- `NonExhaustive`
+
+What a declared catalog's table is read with in one query: the query's I/O, its path
+placement (the session's stores; in server mode confined to `krishiv.io.local.allowedRoots`
+and `krishiv.io.objectStore.allowedPrefixes`), its configuration and the
+worker slots splits are cut for.
+
+```rust
+pub struct ScanInputs {
+    pub io: krishiv_io::IoContext,
+    pub paths: std::sync::Arc<dyn PathLocator>,
+    pub config: std::sync::Arc<krishiv_common::config::Config>,
+    pub worker_slots: u64,
+    pub stores: ScopedStores,
+}
+```
+
+##### Fields
+
+| Name | Type | Documentation |
+|------|------|---------------|
+| `io` | `krishiv_io::IoContext` | The query's I/O. |
+| `paths` | `std::sync::Arc<dyn PathLocator>` | Where the table's files live. |
+| `config` | `std::sync::Arc<krishiv_common::config::Config>` | The query's configuration. |
+| `worker_slots` | `u64` | The drivers splits are planned for. |
+| `stores` | `ScopedStores` | What a table read with credentials of its own builds its stores from (vended). |
+
+##### Implementations
+
+###### Methods
+
+- ```rust
+  pub fn new(io: IoContext, paths: Arc<dyn PathLocator>, config: Arc<Config>, worker_slots: u64, stores: ScopedStores) -> Self { /* ... */ }
+  ```
+  The inputs of one query.
+
+###### Trait Implementations
+
+- **Any**
+  - ```rust
+    fn type_id(self: &Self) -> TypeId { /* ... */ }
+    ```
+
+- **Borrow**
+  - ```rust
+    fn borrow(self: &Self) -> &T { /* ... */ }
+    ```
+
+- **BorrowMut**
+  - ```rust
+    fn borrow_mut(self: &mut Self) -> &mut T { /* ... */ }
+    ```
+
+- **CastableFrom**
+- **Clone**
+  - ```rust
+    fn clone(self: &Self) -> ScanInputs { /* ... */ }
+    ```
+
+- **CloneToUninit**
+  - ```rust
+    unsafe fn clone_to_uninit(self: &Self, dest: *mut u8) { /* ... */ }
+    ```
+
+- **Debug**
+  - ```rust
+    fn fmt(self: &Self, f: &mut fmt::Formatter<'_>) -> fmt::Result { /* ... */ }
+    ```
+
+- **ErasedDestructor**
+- **Freeze**
+- **From**
+  - ```rust
+    fn from(t: T) -> T { /* ... */ }
+    ```
+    Returns the argument unchanged.
+
+- **Instrument**
+- **Into**
+  - ```rust
+    fn into(self: Self) -> U { /* ... */ }
+    ```
+    Calls `U::from(self)`.
+
+- **Read**
+- **RefUnwindSafe**
+- **Same**
+- **Send**
+- **Sync**
+- **ToOwned**
+  - ```rust
+    fn to_owned(self: &Self) -> T { /* ... */ }
+    ```
+
+  - ```rust
+    fn clone_into(self: &Self, target: &mut T) { /* ... */ }
+    ```
+
+- **TryFrom**
+  - ```rust
+    fn try_from(value: U) -> Result<T, <T as TryFrom<U>>::Error> { /* ... */ }
+    ```
+
+- **TryInto**
+  - ```rust
+    fn try_into(self: Self) -> Result<U, <U as TryFrom<T>>::Error> { /* ... */ }
+    ```
+
+- **Unpin**
+- **UnsafeUnpin**
+- **UnwindSafe**
+- **WithSubscriber**
+#### Struct `ScopedStores`
+
+What a table read with credentials of its own (vended) builds its stores from: the query's
+configuration and the runtime's I/O scheduler. It holds no credential.
+
+```rust
+pub struct ScopedStores {
+    // Some fields omitted
+}
+```
+
+##### Fields
+
+| Name | Type | Documentation |
+|------|------|---------------|
+| *private fields* | ... | *Some fields have been omitted* |
+
+##### Implementations
+
+###### Methods
+
+- ```rust
+  pub fn new(config: Arc<Config>, sched: Arc<krishiv_io::IoScheduler>, cwd: impl Into<String>) -> Self { /* ... */ }
+  ```
+  The stores of one query: `config` its snapshot, `sched` the runtime's scheduler, `cwd` where relative local
+  paths resolve.
+
+- ```rust
+  pub fn paths(self: &Self, cache_scope: krishiv_io::CacheScope, sources: Vec<(krishiv_io::CredentialScope, Arc<dyn krishiv_io::CredentialSource>)>) -> Arc<dyn PathLocator> { /* ... */ }
+  ```
+  A path locator whose stores under each scope of `sources` sign with that scope's source, registered under
+  `cache_scope`, and connect through the runtime's (egress policy) HTTP clients. A location outside every scope
+  would use the query's static store configuration, so the caller refuses those before it locates them. The
+  scoped stores are unregistered when the locator is dropped.
+
+###### Trait Implementations
+
+- **Allocation**
+- **Any**
+  - ```rust
+    fn type_id(self: &Self) -> TypeId { /* ... */ }
+    ```
+
+- **Borrow**
+  - ```rust
+    fn borrow(self: &Self) -> &T { /* ... */ }
+    ```
+
+- **BorrowMut**
+  - ```rust
+    fn borrow_mut(self: &mut Self) -> &mut T { /* ... */ }
+    ```
+
+- **CastableFrom**
+- **Clone**
+  - ```rust
+    fn clone(self: &Self) -> ScopedStores { /* ... */ }
+    ```
+
+- **CloneToUninit**
+  - ```rust
+    unsafe fn clone_to_uninit(self: &Self, dest: *mut u8) { /* ... */ }
+    ```
+
+- **Debug**
+  - ```rust
+    fn fmt(self: &Self, f: &mut fmt::Formatter<'_>) -> fmt::Result { /* ... */ }
+    ```
+
+- **ErasedDestructor**
+- **Freeze**
+- **From**
+  - ```rust
+    fn from(t: T) -> T { /* ... */ }
+    ```
+    Returns the argument unchanged.
+
+- **Instrument**
+- **Into**
+  - ```rust
+    fn into(self: Self) -> U { /* ... */ }
+    ```
+    Calls `U::from(self)`.
+
+- **Read**
+- **RefUnwindSafe**
+- **Same**
+- **Send**
+- **Sync**
+- **ToOwned**
+  - ```rust
+    fn to_owned(self: &Self) -> T { /* ... */ }
+    ```
+
+  - ```rust
+    fn clone_into(self: &Self, target: &mut T) { /* ... */ }
+    ```
+
+- **TryFrom**
+  - ```rust
+    fn try_from(value: U) -> Result<T, <T as TryFrom<U>>::Error> { /* ... */ }
+    ```
+
+- **TryInto**
+  - ```rust
+    fn try_into(self: Self) -> Result<U, <U as TryFrom<T>>::Error> { /* ... */ }
+    ```
+
+- **Unpin**
+- **UnsafeUnpin**
+- **UnwindSafe**
+- **WithSubscriber**
+#### Struct `LoadedDeclared`
+
+**Attributes:**
+
+- `NonExhaustive`
+
+What [`CallerCatalog::load_declared`] found: the analyzer's metadata and, when the catalog
+can read the table, the [`DeclaredTable`] its scans open.
+
+```rust
+pub struct LoadedDeclared {
+    pub meta: krishiv_plan::analyzer::TableMeta,
+    pub table: Option<std::sync::Arc<dyn DeclaredTable>>,
+}
+```
+
+##### Fields
+
+| Name | Type | Documentation |
+|------|------|---------------|
+| `meta` | `krishiv_plan::analyzer::TableMeta` | The table's metadata. |
+| `table` | `Option<std::sync::Arc<dyn DeclaredTable>>` | What a scan opens; `None` for a catalog that resolves names only. |
+
+##### Implementations
+
+###### Methods
+
+- ```rust
+  pub fn new(meta: TableMeta, table: Option<Arc<dyn DeclaredTable>>) -> Self { /* ... */ }
+  ```
+  `meta`, read through `table`.
+
+###### Trait Implementations
+
+- **Any**
+  - ```rust
+    fn type_id(self: &Self) -> TypeId { /* ... */ }
+    ```
+
+- **Borrow**
+  - ```rust
+    fn borrow(self: &Self) -> &T { /* ... */ }
+    ```
+
+- **BorrowMut**
+  - ```rust
+    fn borrow_mut(self: &mut Self) -> &mut T { /* ... */ }
+    ```
+
+- **CastableFrom**
+- **Clone**
+  - ```rust
+    fn clone(self: &Self) -> LoadedDeclared { /* ... */ }
+    ```
+
+- **CloneToUninit**
+  - ```rust
+    unsafe fn clone_to_uninit(self: &Self, dest: *mut u8) { /* ... */ }
+    ```
+
+- **Debug**
+  - ```rust
+    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<'_>) -> $crate::fmt::Result { /* ... */ }
+    ```
+
+- **ErasedDestructor**
+- **Freeze**
+- **From**
+  - ```rust
+    fn from(t: T) -> T { /* ... */ }
+    ```
+    Returns the argument unchanged.
+
+- **Instrument**
+- **Into**
+  - ```rust
+    fn into(self: Self) -> U { /* ... */ }
+    ```
+    Calls `U::from(self)`.
+
+- **Read**
+- **RefUnwindSafe**
+- **Same**
+- **Send**
+- **Sync**
+- **ToOwned**
+  - ```rust
+    fn to_owned(self: &Self) -> T { /* ... */ }
+    ```
+
+  - ```rust
+    fn clone_into(self: &Self, target: &mut T) { /* ... */ }
+    ```
+
+- **TryFrom**
+  - ```rust
+    fn try_from(value: U) -> Result<T, <T as TryFrom<U>>::Error> { /* ... */ }
+    ```
+
+- **TryInto**
+  - ```rust
+    fn try_into(self: Self) -> Result<U, <U as TryFrom<T>>::Error> { /* ... */ }
+    ```
+
+- **Unpin**
+- **UnsafeUnpin**
+- **UnwindSafe**
+- **WithSubscriber**
 #### Struct `ServerIdentity`
 
 A catalog that answers every caller as the server: any analyzer `Catalog` as a
@@ -3086,9 +3456,26 @@ pub struct CatalogRegistry {
 - **WithSubscriber**
 ### Traits
 
+#### Trait `DeclaredTable`
+
+A table a declared catalog loaded for one caller at one version: what a scan of it opens.
+Opened before planning, on the executor's I/O runtime.
+
+```rust
+pub trait DeclaredTable: fmt::Debug + Send + Sync {
+    /* Associated items */
+}
+```
+
+##### Required Items
+
+###### Required Methods
+
+- `open`: The table's provider, read with `inputs`.
+
 #### Trait `CallerCatalog`
 
-A built declared catalog: the analyzer's `Catalog` with the caller of each call.
+A built declared catalog: the analyzer's `Catalog` with the caller of each call (§3.2).
 
 ```rust
 pub trait CallerCatalog: fmt::Debug + Send + Sync {
@@ -3108,6 +3495,46 @@ pub trait CallerCatalog: fmt::Debug + Send + Sync {
   fn epoch(self: &Self) -> u64 { /* ... */ }
   ```
   As `Catalog::epoch`.
+
+- ```rust
+  fn load_declared<'a>(self: &'a Self, caller: &'a CatalogCaller, id: &'a TableIdent, version: Option<TableVersion>, form: NameForm) -> BoxFuture<'a, Result<Option<LoadedDeclared>, KrishivError>> { /* ... */ }
+  ```
+  [`Self::load_table`] with what a scan of the table opens. The default resolves the name
+  only: a scan of the table is refused.
+
+- ```rust
+  fn load_procedure<'a>(self: &'a Self, caller: &'a CatalogCaller, inputs: ScanInputs, name: &'a str) -> BoxFuture<'a, Result<Option<Arc<dyn krishiv_plan::procedure::Procedure>>, KrishivError>> { /* ... */ }
+  ```
+  The procedure `name` (lower-case) of the catalog's `system` namespace for `caller`
+  (`CALL cat.system.name(..)`); `None` when there is none. The
+  default is a catalog without procedures: `MISSING_CATALOG_ABILITY.PROCEDURES`.
+
+- ```rust
+  fn invalidate(self: &Self, _caller: &CatalogCaller, _id: &TableIdent) { /* ... */ }
+  ```
+  The cache half of [`Self::refresh`]: drops what the catalog keeps of `id` and moves
+  [`Self::epoch`], with no load (after a `CALL` that changed the table, so a failed load
+  never fails a procedure that is done). The default keeps nothing, so drops nothing.
+
+- ```rust
+  fn refresh<'a>(self: &'a Self, caller: &'a CatalogCaller, id: &'a TableIdent) -> BoxFuture<'a, Result<bool, KrishivError>> { /* ... */ }
+  ```
+  `REFRESH TABLE` of `id` for `caller`: drops what the catalog keeps of the table (its
+  metadata cache entries, for every caller) and moves [`Self::epoch`], so plans and frames
+  that read it are analyzed again. Whether the table exists. The default keeps nothing and
+  only looks the table up.
+
+- ```rust
+  fn list_namespaces<'a>(self: &'a Self, caller: &'a CatalogCaller, parent: &'a [String]) -> BoxFuture<'a, Result<Option<Vec<Vec<String>>>, KrishivError>> { /* ... */ }
+  ```
+  The namespaces directly under `parent` (top level when empty), for `caller`; `None` when
+  `parent` does not exist. The default lists nothing: `KRISHIV_UNSUPPORTED_FEATURE`.
+
+- ```rust
+  fn list_tables<'a>(self: &'a Self, caller: &'a CatalogCaller, namespace: &'a [String]) -> BoxFuture<'a, Result<Option<Vec<String>>, KrishivError>> { /* ... */ }
+  ```
+  The table names in `namespace`, for `caller`; `None` when the namespace does not exist.
+  The default lists nothing: `KRISHIV_UNSUPPORTED_FEATURE`.
 
 ##### Implementations
 
@@ -3191,6 +3618,1687 @@ literal address the rule refuses even with the exemption (link-local, special-pu
 
 ```rust
 pub fn store_scope(policy: &std::sync::Arc<krishiv_io::egress::EgressPolicy>, config: &krishiv_common::config::Config) -> Result<krishiv_io::egress::EgressScope, krishiv_common::error::KrishivError> { /* ... */ }
+```
+
+## Module `events`
+
+The query event stream (P3 E9) and the usage records it carries (E7); design `P3-E9-query-events.md`.
+
+Every transition of a `system.queries` row (submitted, queued, started, finished, cancelled, failed after
+its stream) is turned into one [`QueryEvent`] by `QueryHistory`, the one choke point under `QueryLog`, so no
+row changes without an event or the reverse. Events go to an [`EventBus`]: per registered [`EventSink`] a
+bounded queue and one delivery thread. [`EventBus::emit`] never blocks and never fails; a full queue drops
+events (`Progress` first, then the oldest non-terminal one) and counts them per sink and kind. With no sink
+registered the bus is inactive and `QueryHistory` builds no event at all.
+
+What is not carried: error messages and credentials (the error *class* only), and statement literals:
+the text is always masked (`krishiv_sql::mask_literals`), whatever `krishiv.system.queryText.literals`
+says for `system.queries`, then cut to `krishiv.events.textMaxBytes`.
+
+Not built yet (design §6, §3.2, §4.2): `Progress` samples, `AuditEvent`s, the OTLP logs sink, `reads` /
+`writes` / `profile` on a finished query, store request counters in the usage record.
+
+```rust
+pub mod events { /* ... */ }
+```
+
+### Types
+
+#### Struct `SchemaVersion`
+
+**Attributes:**
+
+- `NonExhaustive`
+
+The version of the event schema: additive fields bump `minor`; anything else is a new `major`.
+
+```rust
+pub struct SchemaVersion {
+    pub major: u32,
+    pub minor: u32,
+}
+```
+
+##### Fields
+
+| Name | Type | Documentation |
+|------|------|---------------|
+| `major` | `u32` | Incompatible changes. |
+| `minor` | `u32` | Added optional fields and kinds. |
+
+##### Implementations
+
+###### Trait Implementations
+
+- **Allocation**
+- **Any**
+  - ```rust
+    fn type_id(self: &Self) -> TypeId { /* ... */ }
+    ```
+
+- **Borrow**
+  - ```rust
+    fn borrow(self: &Self) -> &T { /* ... */ }
+    ```
+
+- **BorrowMut**
+  - ```rust
+    fn borrow_mut(self: &mut Self) -> &mut T { /* ... */ }
+    ```
+
+- **CastableFrom**
+- **Clone**
+  - ```rust
+    fn clone(self: &Self) -> SchemaVersion { /* ... */ }
+    ```
+
+- **CloneToUninit**
+  - ```rust
+    unsafe fn clone_to_uninit(self: &Self, dest: *mut u8) { /* ... */ }
+    ```
+
+- **Copy**
+- **Debug**
+  - ```rust
+    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<'_>) -> $crate::fmt::Result { /* ... */ }
+    ```
+
+- **Eq**
+- **Equivalent**
+  - ```rust
+    fn equivalent(self: &Self, key: &K) -> bool { /* ... */ }
+    ```
+
+- **ErasedDestructor**
+- **Freeze**
+- **From**
+  - ```rust
+    fn from(t: T) -> T { /* ... */ }
+    ```
+    Returns the argument unchanged.
+
+- **Instrument**
+- **Into**
+  - ```rust
+    fn into(self: Self) -> U { /* ... */ }
+    ```
+    Calls `U::from(self)`.
+
+- **PartialEq**
+  - ```rust
+    fn eq(self: &Self, other: &SchemaVersion) -> bool { /* ... */ }
+    ```
+
+- **Read**
+- **RefUnwindSafe**
+- **Same**
+- **Send**
+- **StructuralPartialEq**
+- **Sync**
+- **ToOwned**
+  - ```rust
+    fn to_owned(self: &Self) -> T { /* ... */ }
+    ```
+
+  - ```rust
+    fn clone_into(self: &Self, target: &mut T) { /* ... */ }
+    ```
+
+- **TryFrom**
+  - ```rust
+    fn try_from(value: U) -> Result<T, <T as TryFrom<U>>::Error> { /* ... */ }
+    ```
+
+- **TryInto**
+  - ```rust
+    fn try_into(self: Self) -> Result<U, <U as TryFrom<T>>::Error> { /* ... */ }
+    ```
+
+- **Unpin**
+- **UnsafeUnpin**
+- **UnwindSafe**
+- **WithSubscriber**
+#### Struct `QueryRef`
+
+**Attributes:**
+
+- `NonExhaustive`
+
+Who and what a query event is about.
+
+```rust
+pub struct QueryRef {
+    pub query_id: String,
+    pub session_id: String,
+    pub principal: String,
+    pub delegated_by: Option<String>,
+    pub compute_id: String,
+    pub trace_id: Option<String>,
+    pub tags: Vec<(String, String)>,
+    pub stage_id: Option<u32>,
+    pub task_id: Option<u32>,
+    pub attempt: Option<u32>,
+    pub worker_id: Option<String>,
+}
+```
+
+##### Fields
+
+| Name | Type | Documentation |
+|------|------|---------------|
+| `query_id` | `String` | The query's id (the caller's operation id when it gave one). |
+| `session_id` | `String` | The session it ran in. |
+| `principal` | `String` | The principal that ran it. |
+| `delegated_by` | `Option<String>` | The service principal acting for `principal`, if any. |
+| `compute_id` | `String` | `krishiv.compute.id`: what the usage is billed to. |
+| `trace_id` | `Option<String>` | The W3C trace id, if the request carried one. |
+| `tags` | `Vec<(String, String)>` | The session's tags and the request's. |
+| `stage_id` | `Option<u32>` | The stage the event is about; `None` for an event of the whole query (every event in-process). |
+| `task_id` | `Option<u32>` | The task (partition) of that stage; `None` as `stage_id`. |
+| `attempt` | `Option<u32>` | The task's attempt; `None` as `stage_id`. |
+| `worker_id` | `Option<String>` | The worker that emitted the event; `None` in-process. |
+
+##### Implementations
+
+###### Trait Implementations
+
+- **Allocation**
+- **Any**
+  - ```rust
+    fn type_id(self: &Self) -> TypeId { /* ... */ }
+    ```
+
+- **Borrow**
+  - ```rust
+    fn borrow(self: &Self) -> &T { /* ... */ }
+    ```
+
+- **BorrowMut**
+  - ```rust
+    fn borrow_mut(self: &mut Self) -> &mut T { /* ... */ }
+    ```
+
+- **CastableFrom**
+- **Clone**
+  - ```rust
+    fn clone(self: &Self) -> QueryRef { /* ... */ }
+    ```
+
+- **CloneToUninit**
+  - ```rust
+    unsafe fn clone_to_uninit(self: &Self, dest: *mut u8) { /* ... */ }
+    ```
+
+- **Debug**
+  - ```rust
+    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<'_>) -> $crate::fmt::Result { /* ... */ }
+    ```
+
+- **Eq**
+- **Equivalent**
+  - ```rust
+    fn equivalent(self: &Self, key: &K) -> bool { /* ... */ }
+    ```
+
+- **ErasedDestructor**
+- **Freeze**
+- **From**
+  - ```rust
+    fn from(t: T) -> T { /* ... */ }
+    ```
+    Returns the argument unchanged.
+
+- **Instrument**
+- **Into**
+  - ```rust
+    fn into(self: Self) -> U { /* ... */ }
+    ```
+    Calls `U::from(self)`.
+
+- **PartialEq**
+  - ```rust
+    fn eq(self: &Self, other: &QueryRef) -> bool { /* ... */ }
+    ```
+
+- **Read**
+- **RefUnwindSafe**
+- **Same**
+- **Send**
+- **StructuralPartialEq**
+- **Sync**
+- **ToOwned**
+  - ```rust
+    fn to_owned(self: &Self) -> T { /* ... */ }
+    ```
+
+  - ```rust
+    fn clone_into(self: &Self, target: &mut T) { /* ... */ }
+    ```
+
+- **TryFrom**
+  - ```rust
+    fn try_from(value: U) -> Result<T, <T as TryFrom<U>>::Error> { /* ... */ }
+    ```
+
+- **TryInto**
+  - ```rust
+    fn try_into(self: Self) -> Result<U, <U as TryFrom<T>>::Error> { /* ... */ }
+    ```
+
+- **Unpin**
+- **UnsafeUnpin**
+- **UnwindSafe**
+- **WithSubscriber**
+#### Struct `QueryEvent`
+
+**Attributes:**
+
+- `NonExhaustive`
+
+One event of one query.
+
+```rust
+pub struct QueryEvent {
+    pub version: SchemaVersion,
+    pub seq: u64,
+    pub emitted_at_ms: i64,
+    pub query: QueryRef,
+    pub kind: QueryEventKind,
+}
+```
+
+##### Fields
+
+| Name | Type | Documentation |
+|------|------|---------------|
+| `version` | `SchemaVersion` | The schema version. |
+| `seq` | `u64` | Bus-wide and increasing: one counter per runtime, so the events of one query are ordered by it but<br>interleaved queries leave gaps in each other's, and a reused operation id never repeats a `seq`. |
+| `emitted_at_ms` | `i64` | When the event was emitted, milliseconds since the epoch. |
+| `query` | `QueryRef` | The query. |
+| `kind` | `QueryEventKind` | What happened. |
+
+##### Implementations
+
+###### Methods
+
+- ```rust
+  pub fn to_json(self: &Self) -> Value { /* ... */ }
+  ```
+  The event as the `krishiv.event.v1` JSON document.
+
+###### Trait Implementations
+
+- **Allocation**
+- **Any**
+  - ```rust
+    fn type_id(self: &Self) -> TypeId { /* ... */ }
+    ```
+
+- **Borrow**
+  - ```rust
+    fn borrow(self: &Self) -> &T { /* ... */ }
+    ```
+
+- **BorrowMut**
+  - ```rust
+    fn borrow_mut(self: &mut Self) -> &mut T { /* ... */ }
+    ```
+
+- **CastableFrom**
+- **Clone**
+  - ```rust
+    fn clone(self: &Self) -> QueryEvent { /* ... */ }
+    ```
+
+- **CloneToUninit**
+  - ```rust
+    unsafe fn clone_to_uninit(self: &Self, dest: *mut u8) { /* ... */ }
+    ```
+
+- **Debug**
+  - ```rust
+    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<'_>) -> $crate::fmt::Result { /* ... */ }
+    ```
+
+- **ErasedDestructor**
+- **Freeze**
+- **From**
+  - ```rust
+    fn from(t: T) -> T { /* ... */ }
+    ```
+    Returns the argument unchanged.
+
+- **Instrument**
+- **Into**
+  - ```rust
+    fn into(self: Self) -> U { /* ... */ }
+    ```
+    Calls `U::from(self)`.
+
+- **PartialEq**
+  - ```rust
+    fn eq(self: &Self, other: &QueryEvent) -> bool { /* ... */ }
+    ```
+
+- **Read**
+- **RefUnwindSafe**
+- **Same**
+- **Send**
+- **StructuralPartialEq**
+- **Sync**
+- **ToOwned**
+  - ```rust
+    fn to_owned(self: &Self) -> T { /* ... */ }
+    ```
+
+  - ```rust
+    fn clone_into(self: &Self, target: &mut T) { /* ... */ }
+    ```
+
+- **TryFrom**
+  - ```rust
+    fn try_from(value: U) -> Result<T, <T as TryFrom<U>>::Error> { /* ... */ }
+    ```
+
+- **TryInto**
+  - ```rust
+    fn try_into(self: Self) -> Result<U, <U as TryFrom<T>>::Error> { /* ... */ }
+    ```
+
+- **Unpin**
+- **UnsafeUnpin**
+- **UnwindSafe**
+- **WithSubscriber**
+#### Enum `QueryEventKind`
+
+**Attributes:**
+
+- `NonExhaustive`
+
+What happened to a query.
+
+```rust
+pub enum QueryEventKind {
+    Submitted {
+        statement_class: Option<String>,
+        text: Option<String>,
+    },
+    Queued,
+    Started {
+        resource_group: Option<String>,
+        queued_ns: u64,
+    },
+    Progress(UsageRecord),
+    Finished(Box<FinishedEvent>),
+    Cancelled {
+        reason: Option<String>,
+        usage: UsageRecord,
+    },
+}
+```
+
+##### Variants
+
+###### `Submitted`
+
+The statement was recorded (a refused one too: it gets a `Finished` at once).
+
+Fields:
+
+| Name | Type | Documentation |
+|------|------|---------------|
+| `statement_class` | `Option<String>` | `READ`, `WRITE`, `DDL`, `SESSION` or `ADMIN`; `None` when refused before it was classified. |
+| `text` | `Option<String>` | The masked, cut statement text; `None` when the policy omits it. |
+
+###### `Queued`
+
+Admission holds the query in its queue.
+
+###### `Started`
+
+Admission let it run.
+
+Fields:
+
+| Name | Type | Documentation |
+|------|------|---------------|
+| `resource_group` | `Option<String>` | The resource group the controller placed it in. |
+| `queued_ns` | `u64` | How long it waited in the queue. |
+
+###### `Progress`
+
+Usage so far (not emitted yet: design §6).
+
+Fields:
+
+| Index | Type | Documentation |
+|-------|------|---------------|
+| 0 | `UsageRecord` |  |
+
+###### `Finished`
+
+The query ended: finished, failed or denied. A query that failed after its stream (a write whose
+commit failed) gets a second `Finished` with a higher `seq` when its history row is still there (a row evicted meanwhile gets none); a consumer keeps the highest.
+
+Fields:
+
+| Index | Type | Documentation |
+|-------|------|---------------|
+| 0 | `Box<FinishedEvent>` |  |
+
+###### `Cancelled`
+
+The query was cancelled.
+
+Fields:
+
+| Name | Type | Documentation |
+|------|------|---------------|
+| `reason` | `Option<String>` | Why: `user`, `timeout`, `admin`, `quota`, `drain` or `client_gone`; `None` when unknown. |
+| `usage` | `UsageRecord` | What it used before it ended. |
+
+##### Implementations
+
+###### Methods
+
+- ```rust
+  pub const fn tag(self: &Self) -> EventKindTag { /* ... */ }
+  ```
+  The tag of this kind.
+
+###### Trait Implementations
+
+- **Allocation**
+- **Any**
+  - ```rust
+    fn type_id(self: &Self) -> TypeId { /* ... */ }
+    ```
+
+- **Borrow**
+  - ```rust
+    fn borrow(self: &Self) -> &T { /* ... */ }
+    ```
+
+- **BorrowMut**
+  - ```rust
+    fn borrow_mut(self: &mut Self) -> &mut T { /* ... */ }
+    ```
+
+- **CastableFrom**
+- **Clone**
+  - ```rust
+    fn clone(self: &Self) -> QueryEventKind { /* ... */ }
+    ```
+
+- **CloneToUninit**
+  - ```rust
+    unsafe fn clone_to_uninit(self: &Self, dest: *mut u8) { /* ... */ }
+    ```
+
+- **Debug**
+  - ```rust
+    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<'_>) -> $crate::fmt::Result { /* ... */ }
+    ```
+
+- **ErasedDestructor**
+- **Freeze**
+- **From**
+  - ```rust
+    fn from(t: T) -> T { /* ... */ }
+    ```
+    Returns the argument unchanged.
+
+- **Instrument**
+- **Into**
+  - ```rust
+    fn into(self: Self) -> U { /* ... */ }
+    ```
+    Calls `U::from(self)`.
+
+- **PartialEq**
+  - ```rust
+    fn eq(self: &Self, other: &QueryEventKind) -> bool { /* ... */ }
+    ```
+
+- **Read**
+- **RefUnwindSafe**
+- **Same**
+- **Send**
+- **StructuralPartialEq**
+- **Sync**
+- **ToOwned**
+  - ```rust
+    fn to_owned(self: &Self) -> T { /* ... */ }
+    ```
+
+  - ```rust
+    fn clone_into(self: &Self, target: &mut T) { /* ... */ }
+    ```
+
+- **TryFrom**
+  - ```rust
+    fn try_from(value: U) -> Result<T, <T as TryFrom<U>>::Error> { /* ... */ }
+    ```
+
+- **TryInto**
+  - ```rust
+    fn try_into(self: Self) -> Result<U, <U as TryFrom<T>>::Error> { /* ... */ }
+    ```
+
+- **Unpin**
+- **UnsafeUnpin**
+- **UnwindSafe**
+- **WithSubscriber**
+#### Struct `FinishedEvent`
+
+**Attributes:**
+
+- `NonExhaustive`
+
+The end of a query that was not cancelled.
+
+```rust
+pub struct FinishedEvent {
+    pub state: String,
+    pub usage: UsageRecord,
+    pub error_class: Option<String>,
+    pub statement_class: Option<String>,
+    pub result_cache_hit: bool,
+}
+```
+
+##### Fields
+
+| Name | Type | Documentation |
+|------|------|---------------|
+| `state` | `String` | `finished`, `failed` or `denied`. |
+| `usage` | `UsageRecord` | The final usage. |
+| `error_class` | `Option<String>` | The error class's name; never the message, which can hold literals. |
+| `statement_class` | `Option<String>` | The statement class, when known. |
+| `result_cache_hit` | `bool` | Answered from the result cache, with no execution. |
+
+##### Implementations
+
+###### Trait Implementations
+
+- **Allocation**
+- **Any**
+  - ```rust
+    fn type_id(self: &Self) -> TypeId { /* ... */ }
+    ```
+
+- **Borrow**
+  - ```rust
+    fn borrow(self: &Self) -> &T { /* ... */ }
+    ```
+
+- **BorrowMut**
+  - ```rust
+    fn borrow_mut(self: &mut Self) -> &mut T { /* ... */ }
+    ```
+
+- **CastableFrom**
+- **Clone**
+  - ```rust
+    fn clone(self: &Self) -> FinishedEvent { /* ... */ }
+    ```
+
+- **CloneToUninit**
+  - ```rust
+    unsafe fn clone_to_uninit(self: &Self, dest: *mut u8) { /* ... */ }
+    ```
+
+- **Debug**
+  - ```rust
+    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<'_>) -> $crate::fmt::Result { /* ... */ }
+    ```
+
+- **ErasedDestructor**
+- **Freeze**
+- **From**
+  - ```rust
+    fn from(t: T) -> T { /* ... */ }
+    ```
+    Returns the argument unchanged.
+
+- **Instrument**
+- **Into**
+  - ```rust
+    fn into(self: Self) -> U { /* ... */ }
+    ```
+    Calls `U::from(self)`.
+
+- **PartialEq**
+  - ```rust
+    fn eq(self: &Self, other: &FinishedEvent) -> bool { /* ... */ }
+    ```
+
+- **Read**
+- **RefUnwindSafe**
+- **Same**
+- **Send**
+- **StructuralPartialEq**
+- **Sync**
+- **ToOwned**
+  - ```rust
+    fn to_owned(self: &Self) -> T { /* ... */ }
+    ```
+
+  - ```rust
+    fn clone_into(self: &Self, target: &mut T) { /* ... */ }
+    ```
+
+- **TryFrom**
+  - ```rust
+    fn try_from(value: U) -> Result<T, <T as TryFrom<U>>::Error> { /* ... */ }
+    ```
+
+- **TryInto**
+  - ```rust
+    fn try_into(self: Self) -> Result<U, <U as TryFrom<T>>::Error> { /* ... */ }
+    ```
+
+- **Unpin**
+- **UnsafeUnpin**
+- **UnwindSafe**
+- **WithSubscriber**
+#### Enum `UsageKind`
+
+**Attributes:**
+
+- `NonExhaustive`
+
+Whether a usage record is a sample or the exact end figure.
+
+```rust
+pub enum UsageKind {
+    Progress,
+    Final,
+}
+```
+
+##### Variants
+
+###### `Progress`
+
+A sample while the query runs.
+
+###### `Final`
+
+The exact figures at the query's end.
+
+##### Implementations
+
+###### Trait Implementations
+
+- **Allocation**
+- **Any**
+  - ```rust
+    fn type_id(self: &Self) -> TypeId { /* ... */ }
+    ```
+
+- **Borrow**
+  - ```rust
+    fn borrow(self: &Self) -> &T { /* ... */ }
+    ```
+
+- **BorrowMut**
+  - ```rust
+    fn borrow_mut(self: &mut Self) -> &mut T { /* ... */ }
+    ```
+
+- **CastableFrom**
+- **Clone**
+  - ```rust
+    fn clone(self: &Self) -> UsageKind { /* ... */ }
+    ```
+
+- **CloneToUninit**
+  - ```rust
+    unsafe fn clone_to_uninit(self: &Self, dest: *mut u8) { /* ... */ }
+    ```
+
+- **Copy**
+- **Debug**
+  - ```rust
+    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<'_>) -> $crate::fmt::Result { /* ... */ }
+    ```
+
+- **Eq**
+- **Equivalent**
+  - ```rust
+    fn equivalent(self: &Self, key: &K) -> bool { /* ... */ }
+    ```
+
+- **ErasedDestructor**
+- **Freeze**
+- **From**
+  - ```rust
+    fn from(t: T) -> T { /* ... */ }
+    ```
+    Returns the argument unchanged.
+
+- **Instrument**
+- **Into**
+  - ```rust
+    fn into(self: Self) -> U { /* ... */ }
+    ```
+    Calls `U::from(self)`.
+
+- **PartialEq**
+  - ```rust
+    fn eq(self: &Self, other: &UsageKind) -> bool { /* ... */ }
+    ```
+
+- **Read**
+- **RefUnwindSafe**
+- **Same**
+- **Send**
+- **StructuralPartialEq**
+- **Sync**
+- **ToOwned**
+  - ```rust
+    fn to_owned(self: &Self) -> T { /* ... */ }
+    ```
+
+  - ```rust
+    fn clone_into(self: &Self, target: &mut T) { /* ... */ }
+    ```
+
+- **TryFrom**
+  - ```rust
+    fn try_from(value: U) -> Result<T, <T as TryFrom<U>>::Error> { /* ... */ }
+    ```
+
+- **TryInto**
+  - ```rust
+    fn try_into(self: Self) -> Result<U, <U as TryFrom<T>>::Error> { /* ... */ }
+    ```
+
+- **Unpin**
+- **UnsafeUnpin**
+- **UnwindSafe**
+- **WithSubscriber**
+#### Struct `UsageRecordId`
+
+**Attributes:**
+
+- `NonExhaustive`
+
+The exactly-once key of a [`UsageRecord`].
+
+```rust
+pub struct UsageRecordId {
+    pub session_id: String,
+    pub query_id: String,
+    pub worker_id: Option<String>,
+    pub seq: u64,
+}
+```
+
+##### Fields
+
+| Name | Type | Documentation |
+|------|------|---------------|
+| `session_id` | `String` | The session (a caller's operation id is unique only per session). |
+| `query_id` | `String` | The query. |
+| `worker_id` | `Option<String>` | The worker whose usage the record counts; `None` in-process, where one record covers the query. |
+| `seq` | `u64` | The `seq` of the event that carries the record: the bus-wide counter of the runtime that emitted it (one per<br>worker once workers report), so `seq`s compare only within one `worker_id`; of the records of one<br>`(session_id, query_id, worker_id)`, the highest is the latest. |
+
+##### Implementations
+
+###### Methods
+
+- ```rust
+  pub fn new(session_id: String, query_id: String, seq: u64) -> Self { /* ... */ }
+  ```
+  A key; `worker_id` starts as `None` (in-process).
+
+- ```rust
+  pub fn with_worker(self: Self, worker_id: Option<String>) -> Self { /* ... */ }
+  ```
+  The key with `worker_id` set.
+
+###### Trait Implementations
+
+- **Allocation**
+- **Any**
+  - ```rust
+    fn type_id(self: &Self) -> TypeId { /* ... */ }
+    ```
+
+- **Borrow**
+  - ```rust
+    fn borrow(self: &Self) -> &T { /* ... */ }
+    ```
+
+- **BorrowMut**
+  - ```rust
+    fn borrow_mut(self: &mut Self) -> &mut T { /* ... */ }
+    ```
+
+- **CastableFrom**
+- **Clone**
+  - ```rust
+    fn clone(self: &Self) -> UsageRecordId { /* ... */ }
+    ```
+
+- **CloneToUninit**
+  - ```rust
+    unsafe fn clone_to_uninit(self: &Self, dest: *mut u8) { /* ... */ }
+    ```
+
+- **Debug**
+  - ```rust
+    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<'_>) -> $crate::fmt::Result { /* ... */ }
+    ```
+
+- **Eq**
+- **Equivalent**
+  - ```rust
+    fn equivalent(self: &Self, key: &K) -> bool { /* ... */ }
+    ```
+
+- **ErasedDestructor**
+- **Freeze**
+- **From**
+  - ```rust
+    fn from(t: T) -> T { /* ... */ }
+    ```
+    Returns the argument unchanged.
+
+- **Hash**
+  - ```rust
+    fn hash<__H: $crate::hash::Hasher>(self: &Self, state: &mut __H) { /* ... */ }
+    ```
+
+- **Instrument**
+- **Into**
+  - ```rust
+    fn into(self: Self) -> U { /* ... */ }
+    ```
+    Calls `U::from(self)`.
+
+- **PartialEq**
+  - ```rust
+    fn eq(self: &Self, other: &UsageRecordId) -> bool { /* ... */ }
+    ```
+
+- **Read**
+- **RefUnwindSafe**
+- **Same**
+- **Send**
+- **StructuralPartialEq**
+- **Sync**
+- **ToOwned**
+  - ```rust
+    fn to_owned(self: &Self) -> T { /* ... */ }
+    ```
+
+  - ```rust
+    fn clone_into(self: &Self, target: &mut T) { /* ... */ }
+    ```
+
+- **TryFrom**
+  - ```rust
+    fn try_from(value: U) -> Result<T, <T as TryFrom<U>>::Error> { /* ... */ }
+    ```
+
+- **TryInto**
+  - ```rust
+    fn try_into(self: Self) -> Result<U, <U as TryFrom<T>>::Error> { /* ... */ }
+    ```
+
+- **Unpin**
+- **UnsafeUnpin**
+- **UnwindSafe**
+- **WithSubscriber**
+#### Struct `UsageRecord`
+
+**Attributes:**
+
+- `NonExhaustive`
+
+What a query used, cumulative since it started (E7). Fold rule: per `(session_id, query_id, worker_id)` of
+its `record_id`, keep the record with the highest `seq`, so a lost sample loses nothing. A query's usage then
+combines those records (one, with `worker_id` `None`, in-process) member by member: the counters `cpu_ns`,
+`bytes_scanned`, `rows_read`, `files_read`, `bytes_written`, `rows_written`, `files_written`, `spill_bytes`
+and `spill_files` are summed; `peak_memory_bytes`, `wall_ns` and `queued_ns` take the maximum (a peak and
+two times of the whole query, which workers' records overlap); `window_start_ms` takes the minimum and
+`window_end_ms` the maximum; `record_id` is per record (the query's key is `(session_id, query_id)`), and
+every other member is the same in all of a query's records. A null member counts as absent. The end
+figures are the usage of a `Finished` event or of a `Cancelled` one, whichever ended the query.
+
+```rust
+pub struct UsageRecord {
+    pub record_id: UsageRecordId,
+    pub kind: UsageKind,
+    pub principal: String,
+    pub delegated_by: Option<String>,
+    pub session_id: String,
+    pub compute_id: String,
+    pub workload_class: Option<String>,
+    pub resource_group: Option<String>,
+    pub statement_class: Option<String>,
+    pub window_start_ms: i64,
+    pub window_end_ms: i64,
+    pub wall_ns: Option<i64>,
+    pub queued_ns: Option<i64>,
+    pub cpu_ns: Option<i64>,
+    pub bytes_scanned: Option<i64>,
+    pub rows_read: Option<i64>,
+    pub files_read: Option<i64>,
+    pub bytes_written: Option<i64>,
+    pub rows_written: Option<i64>,
+    pub files_written: Option<i64>,
+    pub spill_bytes: Option<i64>,
+    pub spill_files: Option<i64>,
+    pub peak_memory_bytes: Option<i64>,
+    pub result_cache_hit: bool,
+}
+```
+
+##### Fields
+
+| Name | Type | Documentation |
+|------|------|---------------|
+| `record_id` | `UsageRecordId` | The exactly-once key. |
+| `kind` | `UsageKind` | Sample or final. |
+| `principal` | `String` | The principal charged. |
+| `delegated_by` | `Option<String>` | The service acting for it. |
+| `session_id` | `String` | The session. |
+| `compute_id` | `String` | What the usage is billed to. |
+| `workload_class` | `Option<String>` | `interactive`, `batch` and so on, once the query ran. |
+| `resource_group` | `Option<String>` | The resource group. |
+| `statement_class` | `Option<String>` | The statement class. |
+| `window_start_ms` | `i64` | The start of the window: the start of the run, the submission for a query that never ran. |
+| `window_end_ms` | `i64` | The end of the window. |
+| `wall_ns` | `Option<i64>` | Execution time, queue excluded (as `system.queries.wall_ns`). |
+| `queued_ns` | `Option<i64>` | Time held in the admission queue. |
+| `cpu_ns` | `Option<i64>` | Busy time of the query's drivers. |
+| `bytes_scanned` | `Option<i64>` | Bytes its scans read. |
+| `rows_read` | `Option<i64>` | Rows its scans produced. |
+| `files_read` | `Option<i64>` | Files its scans opened. |
+| `bytes_written` | `Option<i64>` | Bytes it wrote. |
+| `rows_written` | `Option<i64>` | Rows its write sinks took. |
+| `files_written` | `Option<i64>` | Files it wrote. |
+| `spill_bytes` | `Option<i64>` | Bytes spilled. |
+| `spill_files` | `Option<i64>` | Spill files. |
+| `peak_memory_bytes` | `Option<i64>` | Peak reserved memory. |
+| `result_cache_hit` | `bool` | Billed as zero compute. |
+
+##### Implementations
+
+###### Methods
+
+- ```rust
+  pub fn to_json(self: &Self) -> Value { /* ... */ }
+  ```
+  The record as JSON.
+
+###### Trait Implementations
+
+- **Allocation**
+- **Any**
+  - ```rust
+    fn type_id(self: &Self) -> TypeId { /* ... */ }
+    ```
+
+- **Borrow**
+  - ```rust
+    fn borrow(self: &Self) -> &T { /* ... */ }
+    ```
+
+- **BorrowMut**
+  - ```rust
+    fn borrow_mut(self: &mut Self) -> &mut T { /* ... */ }
+    ```
+
+- **CastableFrom**
+- **Clone**
+  - ```rust
+    fn clone(self: &Self) -> UsageRecord { /* ... */ }
+    ```
+
+- **CloneToUninit**
+  - ```rust
+    unsafe fn clone_to_uninit(self: &Self, dest: *mut u8) { /* ... */ }
+    ```
+
+- **Debug**
+  - ```rust
+    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<'_>) -> $crate::fmt::Result { /* ... */ }
+    ```
+
+- **ErasedDestructor**
+- **Freeze**
+- **From**
+  - ```rust
+    fn from(t: T) -> T { /* ... */ }
+    ```
+    Returns the argument unchanged.
+
+- **Instrument**
+- **Into**
+  - ```rust
+    fn into(self: Self) -> U { /* ... */ }
+    ```
+    Calls `U::from(self)`.
+
+- **PartialEq**
+  - ```rust
+    fn eq(self: &Self, other: &UsageRecord) -> bool { /* ... */ }
+    ```
+
+- **Read**
+- **RefUnwindSafe**
+- **Same**
+- **Send**
+- **StructuralPartialEq**
+- **Sync**
+- **ToOwned**
+  - ```rust
+    fn to_owned(self: &Self) -> T { /* ... */ }
+    ```
+
+  - ```rust
+    fn clone_into(self: &Self, target: &mut T) { /* ... */ }
+    ```
+
+- **TryFrom**
+  - ```rust
+    fn try_from(value: U) -> Result<T, <T as TryFrom<U>>::Error> { /* ... */ }
+    ```
+
+- **TryInto**
+  - ```rust
+    fn try_into(self: Self) -> Result<U, <U as TryFrom<T>>::Error> { /* ... */ }
+    ```
+
+- **Unpin**
+- **UnsafeUnpin**
+- **UnwindSafe**
+- **WithSubscriber**
+#### Enum `EventKindTag`
+
+**Attributes:**
+
+- `NonExhaustive`
+
+The kinds of event, for a sink's `accept` filter.
+
+```rust
+pub enum EventKindTag {
+    Submitted,
+    Queued,
+    Started,
+    Progress,
+    Finished,
+    Cancelled,
+}
+```
+
+##### Variants
+
+###### `Submitted`
+
+[`QueryEventKind::Submitted`]
+
+###### `Queued`
+
+[`QueryEventKind::Queued`]
+
+###### `Started`
+
+[`QueryEventKind::Started`]
+
+###### `Progress`
+
+[`QueryEventKind::Progress`]
+
+###### `Finished`
+
+[`QueryEventKind::Finished`]
+
+###### `Cancelled`
+
+[`QueryEventKind::Cancelled`]
+
+##### Implementations
+
+###### Methods
+
+- ```rust
+  pub const fn name(self: Self) -> &'static str { /* ... */ }
+  ```
+  The kind's name as the JSON and the drop counters spell it.
+
+###### Trait Implementations
+
+- **Allocation**
+- **Any**
+  - ```rust
+    fn type_id(self: &Self) -> TypeId { /* ... */ }
+    ```
+
+- **Borrow**
+  - ```rust
+    fn borrow(self: &Self) -> &T { /* ... */ }
+    ```
+
+- **BorrowMut**
+  - ```rust
+    fn borrow_mut(self: &mut Self) -> &mut T { /* ... */ }
+    ```
+
+- **CastableFrom**
+- **Clone**
+  - ```rust
+    fn clone(self: &Self) -> EventKindTag { /* ... */ }
+    ```
+
+- **CloneToUninit**
+  - ```rust
+    unsafe fn clone_to_uninit(self: &Self, dest: *mut u8) { /* ... */ }
+    ```
+
+- **Copy**
+- **Debug**
+  - ```rust
+    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<'_>) -> $crate::fmt::Result { /* ... */ }
+    ```
+
+- **Eq**
+- **Equivalent**
+  - ```rust
+    fn equivalent(self: &Self, key: &K) -> bool { /* ... */ }
+    ```
+
+- **ErasedDestructor**
+- **Freeze**
+- **From**
+  - ```rust
+    fn from(t: T) -> T { /* ... */ }
+    ```
+    Returns the argument unchanged.
+
+- **Hash**
+  - ```rust
+    fn hash<__H: $crate::hash::Hasher>(self: &Self, state: &mut __H) { /* ... */ }
+    ```
+
+- **Instrument**
+- **Into**
+  - ```rust
+    fn into(self: Self) -> U { /* ... */ }
+    ```
+    Calls `U::from(self)`.
+
+- **PartialEq**
+  - ```rust
+    fn eq(self: &Self, other: &EventKindTag) -> bool { /* ... */ }
+    ```
+
+- **Read**
+- **RefUnwindSafe**
+- **Same**
+- **Send**
+- **StructuralPartialEq**
+- **Sync**
+- **ToOwned**
+  - ```rust
+    fn to_owned(self: &Self) -> T { /* ... */ }
+    ```
+
+  - ```rust
+    fn clone_into(self: &Self, target: &mut T) { /* ... */ }
+    ```
+
+- **TryFrom**
+  - ```rust
+    fn try_from(value: U) -> Result<T, <T as TryFrom<U>>::Error> { /* ... */ }
+    ```
+
+- **TryInto**
+  - ```rust
+    fn try_into(self: Self) -> Result<U, <U as TryFrom<T>>::Error> { /* ... */ }
+    ```
+
+- **Unpin**
+- **UnsafeUnpin**
+- **UnwindSafe**
+- **WithSubscriber**
+#### Enum `EngineEvent`
+
+**Attributes:**
+
+- `NonExhaustive`
+
+Everything the bus carries (design §3.2 adds `Audit`).
+
+```rust
+pub enum EngineEvent {
+    Query(QueryEvent),
+}
+```
+
+##### Variants
+
+###### `Query`
+
+An event of one query.
+
+Fields:
+
+| Index | Type | Documentation |
+|-------|------|---------------|
+| 0 | `QueryEvent` |  |
+
+##### Implementations
+
+###### Methods
+
+- ```rust
+  pub fn tag(self: &Self) -> EventKindTag { /* ... */ }
+  ```
+  The tag of the event's kind.
+
+- ```rust
+  pub fn to_json(self: &Self) -> Value { /* ... */ }
+  ```
+  The event as the `krishiv.event.v1` JSON document: a stable schema, one object.
+
+###### Trait Implementations
+
+- **Allocation**
+- **Any**
+  - ```rust
+    fn type_id(self: &Self) -> TypeId { /* ... */ }
+    ```
+
+- **Borrow**
+  - ```rust
+    fn borrow(self: &Self) -> &T { /* ... */ }
+    ```
+
+- **BorrowMut**
+  - ```rust
+    fn borrow_mut(self: &mut Self) -> &mut T { /* ... */ }
+    ```
+
+- **CastableFrom**
+- **Clone**
+  - ```rust
+    fn clone(self: &Self) -> EngineEvent { /* ... */ }
+    ```
+
+- **CloneToUninit**
+  - ```rust
+    unsafe fn clone_to_uninit(self: &Self, dest: *mut u8) { /* ... */ }
+    ```
+
+- **Debug**
+  - ```rust
+    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<'_>) -> $crate::fmt::Result { /* ... */ }
+    ```
+
+- **ErasedDestructor**
+- **Freeze**
+- **From**
+  - ```rust
+    fn from(t: T) -> T { /* ... */ }
+    ```
+    Returns the argument unchanged.
+
+- **Instrument**
+- **Into**
+  - ```rust
+    fn into(self: Self) -> U { /* ... */ }
+    ```
+    Calls `U::from(self)`.
+
+- **PartialEq**
+  - ```rust
+    fn eq(self: &Self, other: &EngineEvent) -> bool { /* ... */ }
+    ```
+
+- **Read**
+- **RefUnwindSafe**
+- **Same**
+- **Send**
+- **StructuralPartialEq**
+- **Sync**
+- **ToOwned**
+  - ```rust
+    fn to_owned(self: &Self) -> T { /* ... */ }
+    ```
+
+  - ```rust
+    fn clone_into(self: &Self, target: &mut T) { /* ... */ }
+    ```
+
+- **TryFrom**
+  - ```rust
+    fn try_from(value: U) -> Result<T, <T as TryFrom<U>>::Error> { /* ... */ }
+    ```
+
+- **TryInto**
+  - ```rust
+    fn try_into(self: Self) -> Result<U, <U as TryFrom<T>>::Error> { /* ... */ }
+    ```
+
+- **Unpin**
+- **UnsafeUnpin**
+- **UnwindSafe**
+- **WithSubscriber**
+#### Struct `EventBus`
+
+The runtime's event bus: sinks, their queues and threads. See the module documentation.
+
+```rust
+pub struct EventBus {
+    // Some fields omitted
+}
+```
+
+##### Fields
+
+| Name | Type | Documentation |
+|------|------|---------------|
+| *private fields* | ... | *Some fields have been omitted* |
+
+##### Implementations
+
+###### Methods
+
+- ```rust
+  pub fn new(compute_id: String, text_max: usize, capacity: usize) -> Self { /* ... */ }
+  ```
+  A bus with no sink: `compute_id` names what usage is billed to, `text_max` cuts statement text,
+  `capacity` bounds every sink's queue.
+
+- ```rust
+  pub fn register(self: &Self, sink: Arc<dyn EventSink>) { /* ... */ }
+  ```
+  Adds a sink, started on its own thread.
+
+- ```rust
+  pub fn is_active(self: &Self) -> bool { /* ... */ }
+  ```
+  Whether any sink is registered: when not, callers build no event.
+
+- ```rust
+  pub fn compute_id(self: &Self) -> &str { /* ... */ }
+  ```
+  The `krishiv.compute.id` of this runtime.
+
+- ```rust
+  pub fn emit(self: &Self, event: EngineEvent) { /* ... */ }
+  ```
+  Hands `event` to every sink that accepts its kind. Never blocks on a sink, never fails.
+
+- ```rust
+  pub fn dropped(self: &Self, sink: &str, kind: EventKindTag) -> u64 { /* ... */ }
+  ```
+  Events of `kind` the sink named `sink` dropped.
+
+- ```rust
+  pub fn dropped_total(self: &Self) -> u64 { /* ... */ }
+  ```
+  Events dropped by every sink, all kinds (`krishiv_events_dropped`).
+
+- ```rust
+  pub fn queue_depth(self: &Self) -> usize { /* ... */ }
+  ```
+  Events waiting across all sinks (`krishiv_events_queue_depth`).
+
+- ```rust
+  pub fn shutdown(self: &Self, bound: Duration) { /* ... */ }
+  ```
+  Stops every sink, each given `bound` to drain.
+
+###### Trait Implementations
+
+- **Allocation**
+- **Any**
+  - ```rust
+    fn type_id(self: &Self) -> TypeId { /* ... */ }
+    ```
+
+- **Borrow**
+  - ```rust
+    fn borrow(self: &Self) -> &T { /* ... */ }
+    ```
+
+- **BorrowMut**
+  - ```rust
+    fn borrow_mut(self: &mut Self) -> &mut T { /* ... */ }
+    ```
+
+- **CastableFrom**
+- **Debug**
+  - ```rust
+    fn fmt(self: &Self, f: &mut fmt::Formatter<'_>) -> fmt::Result { /* ... */ }
+    ```
+
+- **Default**
+  - ```rust
+    fn default() -> Self { /* ... */ }
+    ```
+
+- **Drop**
+  - ```rust
+    fn drop(self: &mut Self) { /* ... */ }
+    ```
+
+- **ErasedDestructor**
+- **Freeze**
+- **From**
+  - ```rust
+    fn from(t: T) -> T { /* ... */ }
+    ```
+    Returns the argument unchanged.
+
+- **Instrument**
+- **Into**
+  - ```rust
+    fn into(self: Self) -> U { /* ... */ }
+    ```
+    Calls `U::from(self)`.
+
+- **Read**
+- **RefUnwindSafe**
+- **Same**
+- **Send**
+- **Sync**
+- **TryFrom**
+  - ```rust
+    fn try_from(value: U) -> Result<T, <T as TryFrom<U>>::Error> { /* ... */ }
+    ```
+
+- **TryInto**
+  - ```rust
+    fn try_into(self: Self) -> Result<U, <U as TryFrom<T>>::Error> { /* ... */ }
+    ```
+
+- **Unpin**
+- **UnsafeUnpin**
+- **UnwindSafe**
+- **WithSubscriber**
+#### Struct `JsonLinesSink`
+
+A sink that appends one JSON document per line to `<prefix>.<n>.jsonl`, moving to the next segment past
+`max_bytes` and keeping the newest `max_files`. A segment is complete lines only; a failed write is
+logged and counted in [`JsonLinesSink::failures`], never raised.
+
+```rust
+pub struct JsonLinesSink {
+    // Some fields omitted
+}
+```
+
+##### Fields
+
+| Name | Type | Documentation |
+|------|------|---------------|
+| *private fields* | ... | *Some fields have been omitted* |
+
+##### Implementations
+
+###### Methods
+
+- ```rust
+  pub fn new(prefix: PathBuf, max_bytes: u64, max_files: usize) -> Self { /* ... */ }
+  ```
+  A sink writing under `prefix` (a directory is created for its parent).
+
+- ```rust
+  pub fn failures(self: &Self) -> u64 { /* ... */ }
+  ```
+  Events lost to failed writes.
+
+###### Trait Implementations
+
+- **Allocation**
+- **Any**
+  - ```rust
+    fn type_id(self: &Self) -> TypeId { /* ... */ }
+    ```
+
+- **Borrow**
+  - ```rust
+    fn borrow(self: &Self) -> &T { /* ... */ }
+    ```
+
+- **BorrowMut**
+  - ```rust
+    fn borrow_mut(self: &mut Self) -> &mut T { /* ... */ }
+    ```
+
+- **CastableFrom**
+- **Debug**
+  - ```rust
+    fn fmt(self: &Self, f: &mut $crate::fmt::Formatter<'_>) -> $crate::fmt::Result { /* ... */ }
+    ```
+
+- **ErasedDestructor**
+- **EventSink**
+  - ```rust
+    fn name(self: &Self) -> &str { /* ... */ }
+    ```
+
+  - ```rust
+    fn deliver(self: &Self, batch: &[Arc<EngineEvent>]) { /* ... */ }
+    ```
+
+  - ```rust
+    fn lost(self: &Self) -> u64 { /* ... */ }
+    ```
+
+  - ```rust
+    fn flush(self: &Self) { /* ... */ }
+    ```
+
+- **Freeze**
+- **From**
+  - ```rust
+    fn from(t: T) -> T { /* ... */ }
+    ```
+    Returns the argument unchanged.
+
+- **Instrument**
+- **Into**
+  - ```rust
+    fn into(self: Self) -> U { /* ... */ }
+    ```
+    Calls `U::from(self)`.
+
+- **Read**
+- **RefUnwindSafe**
+- **Same**
+- **Send**
+- **Sync**
+- **TryFrom**
+  - ```rust
+    fn try_from(value: U) -> Result<T, <T as TryFrom<U>>::Error> { /* ... */ }
+    ```
+
+- **TryInto**
+  - ```rust
+    fn try_into(self: Self) -> Result<U, <U as TryFrom<T>>::Error> { /* ... */ }
+    ```
+
+- **Unpin**
+- **UnsafeUnpin**
+- **UnwindSafe**
+- **WithSubscriber**
+### Traits
+
+#### Trait `EventSink`
+
+A consumer of the event stream: the self-hosted platform links its own, the engine ships a JSON-lines one.
+
+```rust
+pub trait EventSink: Send + Sync + 'static {
+    /* Associated items */
+}
+```
+
+##### Required Items
+
+###### Required Methods
+
+- `name`: The sink's name, a label of its metrics.
+- `deliver`: Handles events, in order, on the sink's own thread (never the query's).
+
+##### Provided Methods
+
+- ```rust
+  fn accept(self: &Self, _kind: EventKindTag) -> bool { /* ... */ }
+  ```
+  Whether the sink wants events of `kind`. It is asked on the sink's own thread after an event is dequeued, so a
+  queue holds (and its drops count) events the sink would reject; keep it cheap, a panic here costs the batch.
+
+- ```rust
+  fn flush(self: &Self) { /* ... */ }
+  ```
+  Writes out anything buffered.
+
+- ```rust
+  fn lost(self: &Self) -> u64 { /* ... */ }
+  ```
+  Events this sink accepted but could not deliver (a failed write); counted with the drops.
+
+##### Implementations
+
+This trait is implemented for the following types:
+
+- `JsonLinesSink`
+
+### Constants and Statics
+
+#### Constant `SCHEMA_NAME`
+
+The `schema` member of a serialized event.
+
+```rust
+pub const SCHEMA_NAME: &str = "krishiv.event.v1";
+```
+
+#### Constant `SCHEMA_VERSION`
+
+The version this build writes.
+
+```rust
+pub const SCHEMA_VERSION: SchemaVersion = _;
+```
+
+#### Constant `SHUTDOWN_FLUSH`
+
+How long dropping a bus waits for each sink to drain.
+
+```rust
+pub const SHUTDOWN_FLUSH: std::time::Duration = _;
 ```
 
 ## Module `functions`
@@ -4050,12 +6158,13 @@ pub struct GrantsPolicy {
 
 - `NonExhaustive`
 
-The access provider a server configures (`krishiv.access.provider`).
+An access provider a server configures (`krishiv.access.provider`).
 
 ```rust
 pub enum AccessProvider {
     Roles,
     Grants,
+    External,
 }
 ```
 
@@ -4069,7 +6178,18 @@ No provider beyond the role matrix (or `AllowAll` without authentication).
 
 The `grants` provider.
 
+###### `External`
+
+The `external` provider: a `krishiv.access.v1` policy service.
+
 ##### Implementations
+
+###### Methods
+
+- ```rust
+  pub const fn as_str(self: Self) -> &'static str { /* ... */ }
+  ```
+  The name in `krishiv.access.provider`.
 
 ###### Trait Implementations
 
@@ -4165,15 +6285,28 @@ The `grants` provider.
 
 #### Function `access_provider`
 
-The provider `config` selects. Unset, it is `grants` when the server authenticates and the
-role matrix alone otherwise (owner answer Q1: kept here, in one place). `catalog`, `external`
-and lists (`grants+catalog`) are refused until their units land (G5, G6).
+The single provider `config` selects: [`access_providers`] when it names exactly one.
+
+# Errors
+As [`access_providers`], and `KRISHIV_INVALID_CONFIG_VALUE` for a list.
+
+```rust
+pub fn access_provider(config: &krishiv_common::config::Config, authenticated: bool) -> Result<AccessProvider, krishiv_common::error::KrishivError> { /* ... */ }
+```
+
+#### Function `access_providers`
+
+The providers `config` lists, in order: one name or a `+`-separated list of
+`roles`, `grants`, `external`, each at most once, combined as an intersection
+([`crate::IntersectionPolicy`]). Unset, `grants` when the server authenticates and the role
+matrix alone otherwise (owner answer Q1: kept here, in one place). `catalog` is refused until
+its unit lands.
 
 # Errors
 `KRISHIV_INVALID_CONFIG_VALUE` naming the key for any other value.
 
 ```rust
-pub fn access_provider(config: &krishiv_common::config::Config, authenticated: bool) -> Result<AccessProvider, krishiv_common::error::KrishivError> { /* ... */ }
+pub fn access_providers(config: &krishiv_common::config::Config, authenticated: bool) -> Result<Vec<AccessProvider>, krishiv_common::error::KrishivError> { /* ... */ }
 ```
 
 ### Re-exports
@@ -4244,13 +6377,14 @@ pub struct ResourceGroups {
   The etag of the file at `path` as it is on disk now, or `None` when it cannot be read.
 
 - ```rust
-  pub fn replace_file(self: &Self, path: &str, document: &str, etag: &str) -> Result<(), KrishivError> { /* ... */ }
+  pub fn replace_file(self: &Self, path: &str, document: &str, etag: &str) -> Result<(String, String, u64), KrishivError> { /* ... */ }
   ```
   Replaces the group file at `path` with `document` and swaps the tree for it. In order:
   a stale `etag`, then a file edited since it was loaded, then a target that is a link or not
   writable are refused; the document is validated; the file is written beside itself,
   synced, renamed over the original (mode kept) and the directory synced; then the tree is
-  swapped as [`ResourceGroups::reload_json`] does. Nothing changes on a refusal.
+  swapped as [`ResourceGroups::reload_json`] does; returns the document, etag and load time
+  installed. Nothing changes on a refusal.
 
 - ```rust
   pub fn from_json(json: &str, total_memory: usize) -> Result<Self, KrishivError> { /* ... */ }
@@ -4269,14 +6403,21 @@ pub struct ResourceGroups {
   Checks a candidate document without changing anything (`ValidateResourceGroupConfig`).
 
 - ```rust
+  pub fn problems(json: &str, total_memory: usize) -> Vec<KrishivError> { /* ... */ }
+  ```
+  Every problem of `json` (empty when it is valid): one per bad group, selector or
+  reference, each with its path.
+
+- ```rust
   pub fn reload_json(self: &Self, json: &str) -> Result<(), KrishivError> { /* ... */ }
   ```
   Swaps the group tree for the one `json` describes.
 
 - ```rust
-  pub fn reload_file(self: &Self, path: &str) -> Result<(), KrishivError> { /* ... */ }
+  pub fn reload_file(self: &Self, path: &str) -> Result<(String, String, u64), KrishivError> { /* ... */ }
   ```
-  As [`ResourceGroups::reload_json`], from the file at `path`.
+  As [`ResourceGroups::reload_json`], from the file at `path`; returns the document, etag and
+  load time it installed.
 
 - ```rust
   pub fn document(self: &Self) -> String { /* ... */ }
@@ -4317,6 +6458,10 @@ pub struct ResourceGroups {
 
   - ```rust
     fn uses_estimate(self: &Self) -> bool { /* ... */ }
+    ```
+
+  - ```rust
+    fn queued_group(self: &Self, request: &QueryRequest) -> Option<String> { /* ... */ }
     ```
 
 - **Any**
@@ -4911,6 +7056,68 @@ pub struct Catalog<'a> {
 ###### Methods
 
 - ```rust
+  pub fn qualified(database: &str, name: &str) -> String { /* ... */ }
+  ```
+  `database.name` as one name for the one-name calls: the database is read as a (possibly
+  dotted) namespace and the name as a single part, as Spark's two-argument overloads do.
+
+- ```rust
+  pub fn list_catalogs_matching(self: &Self, pattern: Option<&str>) -> Vec<String> { /* ... */ }
+  ```
+  The catalogs matching the `*`/`|` pattern, sorted (`listCatalogs(pattern)`).
+
+- ```rust
+  pub async fn drop_table(self: &Self, name: &str, if_exists: bool, purge: bool) -> Result<(), KrishivError> { /* ... */ }
+  ```
+  `DROP TABLE [IF EXISTS] name [PURGE]`.
+
+- ```rust
+  pub async fn drop_view(self: &Self, name: &str, if_exists: bool) -> Result<(), KrishivError> { /* ... */ }
+  ```
+  `DROP VIEW [IF EXISTS] name` (a temporary view too).
+
+- ```rust
+  pub async fn create_database(self: &Self, name: &str, if_not_exists: bool, properties: &BTreeMap<String, String>) -> Result<(), KrishivError> { /* ... */ }
+  ```
+  `CREATE DATABASE [IF NOT EXISTS] name [WITH DBPROPERTIES (...)]`.
+
+- ```rust
+  pub async fn drop_database(self: &Self, name: &str, if_exists: bool, cascade: bool) -> Result<(), KrishivError> { /* ... */ }
+  ```
+  `DROP DATABASE [IF EXISTS] name [CASCADE]`.
+
+- ```rust
+  pub async fn truncate_table(self: &Self, name: &str) -> Result<(), KrishivError> { /* ... */ }
+  ```
+  `TRUNCATE TABLE name`.
+
+- ```rust
+  pub async fn analyze_table(self: &Self, name: &str, no_scan: bool) -> Result<(), KrishivError> { /* ... */ }
+  ```
+  `ANALYZE TABLE name COMPUTE STATISTICS [NOSCAN]`.
+
+- ```rust
+  pub async fn list_partitions(self: &Self, name: &str) -> Result<Vec<String>, KrishivError> { /* ... */ }
+  ```
+  The partitions of the table (`SHOW PARTITIONS`: `k=v/k2=v2`), in the statement's order.
+
+- ```rust
+  pub async fn list_views(self: &Self, database: Option<&str>, pattern: Option<&str>) -> Result<Vec<Table>, KrishivError> { /* ... */ }
+  ```
+  The views (permanent and temporary) of `database` (the current one for `None`) matching
+  `pattern`: [`Catalog::list_tables`] kept to views, as Spark's `SHOW VIEWS` lists them.
+
+- ```rust
+  pub async fn get_table_properties(self: &Self, name: &str) -> Result<BTreeMap<String, String>, KrishivError> { /* ... */ }
+  ```
+  The table's properties as `SHOW TBLPROPERTIES` lists them, by key.
+
+- ```rust
+  pub async fn get_create_table_string(self: &Self, name: &str, as_serde: bool) -> Result<String, KrishivError> { /* ... */ }
+  ```
+  `SHOW CREATE TABLE name [AS SERDE]`: the statement text (empty when the statement answers no row).
+
+- ```rust
   pub fn current_catalog(self: &Self) -> String { /* ... */ }
   ```
   The current catalog's name.
@@ -4939,6 +7146,13 @@ pub struct Catalog<'a> {
   pub async fn list_databases(self: &Self, pattern: Option<&str>) -> Result<Vec<Database>, KrishivError> { /* ... */ }
   ```
   The namespaces of the current catalog, sorted by name.
+
+- ```rust
+  pub async fn list_embedded_databases(self: &Self) -> Result<Vec<Database>, KrishivError> { /* ... */ }
+  ```
+  The namespaces of the embedded catalog `spark_catalog` whatever the current catalog is,
+  sorted by name: the Arrow Flight SQL `GetDbSchemas` listing, which
+  names its catalog rather than following `USE`.
 
 - ```rust
   pub async fn get_database(self: &Self, name: &str) -> Result<Database, KrishivError> { /* ... */ }
@@ -4977,6 +7191,12 @@ pub struct Catalog<'a> {
   The functions visible to the session, sorted by name.
 
 - ```rust
+  pub async fn list_functions_in(self: &Self, database: Option<&str>, pattern: Option<&str>) -> Result<Vec<Function>, KrishivError> { /* ... */ }
+  ```
+  `spark.catalog.listFunctions(db, pattern)`: the built-in and session functions, and the stored
+  functions of `database` (the current one for `None`). The session's current database is not changed.
+
+- ```rust
   pub async fn get_function(self: &Self, name: &str) -> Result<Function, KrishivError> { /* ... */ }
   ```
   The function `name`.
@@ -4992,9 +7212,17 @@ pub struct Catalog<'a> {
   Drops the local temporary view; whether it existed.
 
 - ```rust
-  pub fn drop_global_temp_view(self: &Self, name: &str) -> bool { /* ... */ }
+  pub async fn drop_global_temp_view(self: &Self, name: &str) -> Result<bool, KrishivError> { /* ... */ }
   ```
-  Drops the global temporary view; whether it existed.
+  Drops the global temporary view; whether it existed. Makes the access check of
+  `DROP VIEW global_temp.name` (`Drop` on the view) first, so the API removes no more than the SQL does.
+
+- ```rust
+  pub async fn check_cache_target(self: &Self, name: &str) -> Result<(), KrishivError> { /* ... */ }
+  ```
+  Checks that `name` can be cached (`CACHE TABLE name`): the access check of the statement, then the
+  name is analysed, so a missing table is `TABLE_OR_VIEW_NOT_FOUND` here and not a failure that only a
+  later query would meet. For a cache entry registered another way, such as at a storage level.
 
 - ```rust
   pub async fn cache_table(self: &Self, name: &str) -> Result<(), KrishivError> { /* ... */ }
@@ -5021,7 +7249,7 @@ pub struct Catalog<'a> {
   `UNCACHE TABLE name`.
 
 - ```rust
-  pub fn clear_cache(self: &Self) { /* ... */ }
+  pub async fn clear_cache(self: &Self) -> Result<(), KrishivError> { /* ... */ }
   ```
   `CLEAR CACHE`.
 
@@ -6011,6 +8239,12 @@ pub use profile_history::StoredProfile;
 pub use profile_history::read_history as read_profile_history;
 ```
 
+### Re-export `IntersectionPolicy`
+
+```rust
+pub use access::IntersectionPolicy;
+```
+
 ### Re-export `PathPrefixPolicy`
 
 ```rust
@@ -6033,6 +8267,24 @@ pub use access::ReadOnlyPolicy;
 
 ```rust
 pub use access::StatementInfo;
+```
+
+### Re-export `SystemOnlyPolicy`
+
+```rust
+pub use access::SystemOnlyPolicy;
+```
+
+### Re-export `ResourceGroupDocument`
+
+```rust
+pub use admin_groups::ResourceGroupDocument;
+```
+
+### Re-export `ResourceGroupInfo`
+
+```rust
+pub use admin_groups::ResourceGroupInfo;
 ```
 
 ### Re-export `QueryInfo`
@@ -6087,6 +8339,18 @@ pub use analyze::AnalysisWarning;
 
 ```rust
 pub use analyze::OutputColumn;
+```
+
+### Re-export `ConfigListing`
+
+```rust
+pub use config_defaults::ConfigListing;
+```
+
+### Re-export `ConfigSource`
+
+```rust
+pub use config_defaults::ConfigSource;
 ```
 
 ### Re-export `Transport`
@@ -6443,6 +8707,24 @@ pub use krishiv_udf_sdk::UdfLibrary;
 pub use krishiv_udf_sdk::UdfProperties;
 ```
 
+### Re-export `BatchSource`
+
+```rust
+pub use memory_table::BatchSource;
+```
+
+### Re-export `PlannedRead`
+
+```rust
+pub use memory_table::PlannedRead;
+```
+
+### Re-export `SourcePlanner`
+
+```rust
+pub use memory_table::SourcePlanner;
+```
+
 ### Re-export `Observation`
 
 ```rust
@@ -6507,6 +8789,24 @@ pub use python_udfs::PythonUdtfDef;
 
 ```rust
 pub use python_udfs::PythonUdtfEntry;
+```
+
+### Re-export `MAX_PYTHON_SOURCE_CALLS`
+
+```rust
+pub use python_udfs::MAX_PYTHON_SOURCE_CALLS;
+```
+
+### Re-export `python_source_call`
+
+```rust
+pub use python_udfs::python_source_call;
+```
+
+### Re-export `run_python_source_call`
+
+```rust
+pub use python_udfs::run_python_source_call;
 ```
 
 ### Re-export `EngineRuntime`

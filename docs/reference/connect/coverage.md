@@ -9,7 +9,7 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 
 ## Relation.rel_type
 
-62 arms: 20 done, 19 partial, 19 missing, 4 out of scope.
+62 arms: 21 done, 19 partial, 18 missing, 4 out of scope.
 
 | # | Arm | Status | Refused fields | IR target | Task | Group |
 |---:|---|---|---|---|---|---:|
@@ -59,7 +59,7 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 | 45 | chunked_cached_local_relation | missing |  | as #36, from chunked artifacts (4.1+); CHUNKED_CACHED_LOCAL_RELATION_WITHOUT_DATA | P3-T083 | 7 |
 | 46 | relation_changes | missing |  | CDC read (DataFrameReader.changes()): Delta change data feed through table_changes; the Iceberg changelog and is_streaming come later | P3-T021b | 8 |
 | 47 | nearest_by_join | missing |  | top-k per left row by a ranking expression: new NearestByJoin, planned on T077's top-k (num_results 1–100,000) | P3-T077 | 8 |
-| 48 | zip | missing |  | new Zip (columns of two inputs side by side, by row position) | P3-T012 | 3 |
+| 48 | zip | done |  | PlanNode::Zip; the analyzer merges the two projection chains over their shared base (Spark's ResolveZip), ZIP_PLANS_NOT_MERGEABLE otherwise | P3-T012 | 3 |
 | 90 | fill_na | done |  | ColumnNames(FillNa): the analyzer projects coalesce / nanvl of the cast value in the columns the value's type reaches; NA_FILL_VALUES_EMPTY, NA_FILL_VALUES_LENGTH_MISMATCH; several values are Spark's fillMap (every named column, the last value of a repeated name); a BYTE, SHORT, INT, FLOAT or DECIMAL value is accepted where Spark's one-value fill takes only Long, Double, String, Boolean | P3-T012 | 5 |
 | 91 | drop_na | done |  | ColumnNames(DropNa): the analyzer filters on the count of values that are neither NULL nor NaN (min_non_nulls, else every column of the subset); a nested field in the subset (`s.a`) is UNRESOLVED_COLUMN where Spark resolves it | P3-T012 | 5 |
 | 92 | replace | done |  | ColumnNames(Replace): the analyzer projects CASE WHEN col = old THEN new per column the first old value's kind reaches (a Spark 4.0 run); a NULL or mixed-type old value is refused; the last pair of a repeated old value wins; named columns are resolved even with no pairs | P3-T012 | 5 |
@@ -107,13 +107,13 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 
 ## Command.command_type
 
-20 arms: 2 done, 5 partial, 7 missing, 6 out of scope.
+20 arms: 3 done, 5 partial, 6 missing, 6 out of scope.
 
 | # | Arm | Status | Refused fields | IR target | Task | Group |
 |---:|---|---|---|---|---|---:|
 | 1 | register_function | partial | scalar_scala_udf and java_udf (56K00: no JVM code; T081), Python eval types other than 100/101/200/250, additional_includes | Session::register_python_udf plus the payload on the session's UDF workers (translate_command; run by the server) | P3-T014 | 6 |
 | 2 | write_operation | partial | clustering_columns, with_schema_evolution | krishiv-session's DataFrameWriter (write_to_with: save; write_table_with: saveAsTable, insertInto), the facade's path; save() without a path takes the path option (_LEGACY_ERROR_TEMP_2050 without one); run by the server after the Write class check | P3-T012 | 11 |
-| 3 | create_dataframe_view | missing |  | create_or_replace_temp_view (exists), global temp views | P3-T012 | 4 |
+| 3 | create_dataframe_view | done |  | DataFrame::create_temp_view, create_or_replace_temp_view and the global forms (the server runs it: `execute/write_command.rs` `create_view`) | P3-T012 | 4 |
 | 4 | write_operation_v2 | partial | with_schema_evolution, partition transforms (partitioning_columns other than a column), overwrite_condition (overwrite is refused by the session) | krishiv-session's DataFrameWriterV2 (write_to_table_with), the facade's path; run by the server after the Write class check | P3-T012 | 11 |
 | 5 | sql_command | partial | input of WithRelations form (group 4; the plain SQL input is supported); named and positional arguments (the analyzer refuses SQL parameters) | spark.sql() sends this. Run commands at once; for queries return sql_command_result.relation (Spark returns a SQL or LocalRelation relation the client re-sends). Translated here as the SQL relation of a query; the server runs commands (execute.rs) | P3-T012 | 1 |
 | 6 | write_stream_operation_start | out of scope |  | P4 |  | 0 |

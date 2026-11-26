@@ -33,6 +33,7 @@ fn env() -> ExprEnv {
         legacy_coding_error_action: false,
         legacy_time_parser: false,
         binary_output_style: None,
+        spark_version: None,
     }
 }
 
@@ -718,6 +719,7 @@ fn schema_matches_the_writer() {
             distinct: Some(3),
         }],
     }];
+    profile.planning_ns = Some(1_500);
     let doc = profile.to_json_value();
     let keys = |v: &Value| -> Vec<String> {
         let mut k: Vec<String> = v
@@ -1237,4 +1239,30 @@ fn a_malformed_join_input_drops_all_inputs_rather_than_shifting_them() {
     let mixed = serde_json::json!({"inputs": [bad, good]});
     let facts = super::facts_json::facts_of(&mixed).expect("facts");
     assert!(facts.inputs.is_empty());
+}
+
+#[test]
+fn planning_ns_round_trips_and_is_absent_when_unknown() {
+    let mut profile = QueryProfile::new(&plan(with_facts()), metrics(), false);
+    let doc = profile.to_json_value();
+    assert!(doc["usage"].get("planning_ns").is_none());
+    assert_eq!(
+        QueryProfile::from_json(&profile.to_json())
+            .unwrap()
+            .planning_ns,
+        None
+    );
+    profile.planning_ns = Some(35_100_000);
+    let doc = profile.to_json_value();
+    assert_eq!(doc["usage"]["planning_ns"], 35_100_000);
+    assert_eq!(
+        QueryProfile::from_json(&profile.to_json())
+            .unwrap()
+            .planning_ns,
+        Some(35_100_000)
+    );
+    // A mistyped member is refused, as for the other usage members a reader knows.
+    let mut bad = doc;
+    bad["usage"]["planning_ns"] = "x".into();
+    assert!(QueryProfile::from_json(&bad.to_string()).is_err());
 }

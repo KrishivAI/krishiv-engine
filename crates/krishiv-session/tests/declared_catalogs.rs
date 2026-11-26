@@ -185,6 +185,26 @@ fn declared_catalog_resolves_through_its_factory() {
     assert_eq!(strings(&s, "SHOW CURRENT NAMESPACE", 0), ["lake"]);
 }
 
+/// A declared catalog whose factory serves no procedures refuses `CALL` with Spark's class,
+/// naming the catalog as Spark's `plugin.name` does (the declared path: the catalog is
+/// built, so the call reached its `load_procedure`).
+#[test]
+fn a_declared_catalog_without_procedures_refuses_call() {
+    let rt = runtime(DeclMode::Server, &LAKE);
+    let s = session_as(&rt, None, Role::Admin);
+    assert_eq!(schema_of(&s, "SELECT * FROM lake.db.t").unwrap(), ["x"]);
+    let e = run(&s, "CALL lake.system.expire_snapshots('db.t')").unwrap_err();
+    assert_eq!(
+        e.error_class(),
+        krishiv_common::error::ErrorClass::MissingCatalogAbilityProcedures
+    );
+    assert!(
+        e.to_string()
+            .contains("Catalog lake does not support procedures"),
+        "{e}"
+    );
+}
+
 #[test]
 fn type_without_a_factory_fails_startup() {
     let e = EngineRuntime::builder()
@@ -458,6 +478,34 @@ fn queries_under_a_declared_catalog_never_read_embedded_views_or_functions() {
         assert!(text.contains("`lake`"), "{sql}: {text}");
     }
     assert_eq!(schema_of(&s, "SELECT * FROM db.t").unwrap(), ["x"]);
+    // No write statement reaches a declared catalog's table in 0.3 (docs/guides/lakehouse-tables.md says so): it is
+    // refused, whatever the catalog's `option.write`, and nothing of the embedded catalog changes.
+    for (sql, expected) in [
+        (
+            "INSERT INTO lake.db.t VALUES (1)",
+            "REQUIRES_SINGLE_PART_NAMESPACE",
+        ),
+        (
+            "INSERT OVERWRITE lake.db.t VALUES (1)",
+            "REQUIRES_SINGLE_PART_NAMESPACE",
+        ),
+        (
+            "DELETE FROM lake.db.t WHERE x = 1",
+            "REQUIRES_SINGLE_PART_NAMESPACE",
+        ),
+        (
+            "UPDATE lake.db.t SET x = 2",
+            "REQUIRES_SINGLE_PART_NAMESPACE",
+        ),
+        (
+            "MERGE INTO lake.db.t USING default.e ON x = a WHEN MATCHED THEN DELETE",
+            "REQUIRES_SINGLE_PART_NAMESPACE",
+        ),
+    ] {
+        // `error` panics when the statement succeeds; the class says which refusal it is.
+        let (class, text) = error(sql);
+        assert_eq!(class, expected, "{sql}: {text}");
+    }
     // The embedded catalog's objects by their full names.
     assert_eq!(
         strings(

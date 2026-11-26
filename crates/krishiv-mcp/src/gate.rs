@@ -127,6 +127,15 @@ impl SetupLock {
         }
     }
 
+    /// The policy asked now: `inner` until [`Self::lock`], then the read-only one over it.
+    fn active(&self) -> &dyn AccessPolicy {
+        if self.locked.load(Ordering::Acquire) {
+            &self.read_only
+        } else {
+            &*self.inner
+        }
+    }
+
     /// From now on only [`READ_ONLY_PRIVILEGES`] are allowed.
     pub fn lock(&self) {
         self.locked.store(true, Ordering::Release);
@@ -144,11 +153,34 @@ impl AccessPolicy for SetupLock {
         securable: &'a Securable,
         privilege: Privilege,
     ) -> BoxFuture<'a, Result<AccessDecision, KrishivError>> {
-        if self.locked.load(Ordering::Acquire) {
-            self.read_only.check(principal, securable, privilege)
-        } else {
-            self.inner.check(principal, securable, privilege)
-        }
+        self.active().check(principal, securable, privilege)
+    }
+
+    // The rest is forwarded to the policy `check` asks, as the trait asks of a wrapper (G6
+    // review n4): without it a column-level or remote `inner` is asked table-level questions,
+    // one at a time, and its refusals are counted under the default label.
+    fn column_level(&self) -> bool {
+        self.active().column_level()
+    }
+
+    fn denied(&self, principal: &Principal, securable: &Securable, privilege: Privilege) {
+        self.active().denied(principal, securable, privilege);
+    }
+
+    fn prefetch<'a>(
+        &'a self,
+        principal: &'a Principal,
+        items: &'a [(Securable, Privilege)],
+    ) -> BoxFuture<'a, ()> {
+        self.active().prefetch(principal, items)
+    }
+
+    fn decides(&self, securable: &Securable) -> bool {
+        self.active().decides(securable)
+    }
+
+    fn refusal_label(&self) -> Option<&'static str> {
+        self.active().refusal_label()
     }
 }
 
@@ -169,6 +201,14 @@ mod tests {
     use krishiv_session::{Privilege, StatementClass};
 
     use super::allows_parts;
+
+    /// The gate parses with the default profile's grammar (Spark 4.3): a `TIME(9)` cast is a read,
+    /// not a parse error (R3 review finding 12).
+    #[test]
+    fn the_gate_reads_the_default_profiles_grammar() {
+        assert!(super::check_read("SELECT CAST(c AS TIME(9)) FROM t").is_ok());
+        assert!(super::check_read("SELECT CAST(c AS TIMESTAMP_NTZ(6)) FROM t").is_ok());
+    }
 
     /// The analyze layer refuses `Monitor` and `Usage` (others' `system.*` rows, sending code the server
     /// runs), and anything that is not a complete read; it allows `Select` and `Browse`. A unit test: no
@@ -192,5 +232,76 @@ mod tests {
         assert!(allows_parts(read, false, [], true).is_err());
         let e = allows_parts(StatementClass::Write, false, [], false).unwrap_err();
         assert!(e.to_string().contains("WRITE"), "{e}");
+    }
+
+    /// G6 review n4: the lock forwards the trait's other methods, before and after `lock`.
+    #[test]
+    fn the_setup_lock_forwards_to_the_policy_it_asks() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        use futures::future::BoxFuture;
+        use krishiv_common::error::KrishivError;
+        use krishiv_plan::analyzer::{
+            AccessDecision, AccessPolicy, PolicyVersion, Principal, PrincipalKind, Securable,
+        };
+
+        use super::SetupLock;
+
+        #[derive(Default)]
+        struct Remote {
+            prefetched: AtomicUsize,
+            told: AtomicUsize,
+        }
+        impl AccessPolicy for Remote {
+            fn version(&self) -> PolicyVersion {
+                PolicyVersion(3)
+            }
+            fn check<'a>(
+                &'a self,
+                _: &'a Principal,
+                _: &'a Securable,
+                _: Privilege,
+            ) -> BoxFuture<'a, Result<AccessDecision, KrishivError>> {
+                Box::pin(std::future::ready(Ok(AccessDecision::Allow)))
+            }
+            fn column_level(&self) -> bool {
+                true
+            }
+            fn denied(&self, _: &Principal, _: &Securable, _: Privilege) {
+                self.told.fetch_add(1, Ordering::Relaxed);
+            }
+            fn prefetch<'a>(
+                &'a self,
+                _: &'a Principal,
+                _: &'a [(Securable, Privilege)],
+            ) -> BoxFuture<'a, ()> {
+                self.prefetched.fetch_add(1, Ordering::Relaxed);
+                Box::pin(std::future::ready(()))
+            }
+            fn decides(&self, securable: &Securable) -> bool {
+                !matches!(securable, Securable::System(_))
+            }
+            fn refusal_label(&self) -> Option<&'static str> {
+                Some("external")
+            }
+        }
+
+        let remote = Arc::new(Remote::default());
+        let lock = SetupLock::new(Arc::clone(&remote) as Arc<dyn AccessPolicy>);
+        let ana = Principal::new("ana", PrincipalKind::User);
+        let system = Securable::System("cluster".to_owned());
+        for locked in [false, true] {
+            if locked {
+                lock.lock();
+            }
+            assert!(lock.column_level(), "locked: {locked}");
+            assert!(!lock.decides(&system), "locked: {locked}");
+            assert_eq!(lock.refusal_label(), Some("external"));
+            futures::executor::block_on(lock.prefetch(&ana, &[]));
+            lock.denied(&ana, &system, Privilege::Select);
+        }
+        assert_eq!(remote.prefetched.load(Ordering::Relaxed), 2);
+        assert_eq!(remote.told.load(Ordering::Relaxed), 2);
     }
 }

@@ -22,5 +22,6 @@ class Row(tuple[Any, ...])
 def asDict(self, recursive: bool=False) -> dict[str, Any]
 ```
 
-The row as a `dict`; `recursive=True` also converts nested rows, as PySpark does
-(inside lists and dict values too).
+The row as a dict; `recursive` also turns nested rows (in lists, dicts and rows) into dicts.
+
+With duplicate field names one of the duplicates is picked (the last), as PySpark.

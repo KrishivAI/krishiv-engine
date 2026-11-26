@@ -51,7 +51,8 @@ Status per surface. Anything not listed here is unknown and not supported.
 | --- | --- | --- |
 | Rust UDFs | supported |  |
 | Python `@udf` and scalar `pandas_udf` / `arrow_udf` | supported |  |
-| Grouped-aggregate and iterator `pandas_udf`, `applyInPandas`, `mapInPandas` | not yet | The two `pandas_udf` forms fail with NOT_IMPLEMENTED (eval types 202 and 204); `applyInPandas` and `mapInPandas` do not exist on `DataFrame` and raise `AttributeError`. |
+| Grouped-aggregate `pandas_udf`, `applyInPandas`, `mapInPandas`, `cogroup` | supported | Embedded relation UDFs run on the Python pool, one pool thread per task (`krishiv.python.udf.threads`). `barrier=True` is refused. Grouped-aggregate UDFs over a window (`.over(window)`) are refused. |
+| Scalar-iterator `pandas_udf` / `arrow_udf` | not yet | Refused as NOT_IMPLEMENTED when embedded. |
 
 ## Not covered
 
@@ -67,10 +68,10 @@ Status per surface. Anything not listed here is unknown and not supported.
 
 ## Spark golden suite
 
-Measured against Apache Spark v4.2.0's own SQL test files (19284 statements in 349 files).
+Measured against Apache Spark v4.3.0's own SQL test files (20779 statements in 366 files).
 
 | Check | Passed | Total | Rate |
 | --- | --- | --- | --- |
-| Parse | 18796 | 18827 | 99.8% |
-| Error class of negative cases | 3458 | 3857 | 89.6% |
-| Result rows | 13674 | 15363 | 89.0% |
+| Parse | 19758 | 20308 | 97.2% |
+| Error class of negative cases | 3752 | 4049 | 92.6% |
+| Result rows | 15035 | 16686 | 90.1% |

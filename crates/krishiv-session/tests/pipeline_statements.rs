@@ -138,7 +138,10 @@ fn insert_overwrite_directory_hive_form_is_refused_by_name() {
         &s,
         "INSERT OVERWRITE DIRECTORY '/tmp/o1' STORED AS parquet SELECT a FROM nat",
     );
-    assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::NotSupportedCommandWithoutHiveSupport
+    );
 }
 
 #[test]

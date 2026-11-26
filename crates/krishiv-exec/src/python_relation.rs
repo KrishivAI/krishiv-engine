@@ -59,8 +59,10 @@ use crate::error::Result;
 mod admit;
 mod lane;
 mod pair;
+mod schema_check;
 pub(crate) mod sink;
 
+pub use schema_check::{SchemaCheck, VALIDATE_SCHEMA};
 pub use sink::{
     DEFAULT_WINDOW, InputColumn, RelationLane, RelationLimits, RelationShape, RelationSink,
 };
@@ -164,6 +166,10 @@ pub trait PreparedRelationUdf: Send + Sync {
     /// lane together ([`RelationSlots::poll_take`]), or parks until slots
     /// free: a task that waits for a slot while its peers wait for frames
     /// would hang the driver.
+    ///
+    /// Identity contract: call sites that share slots return clones of the
+    /// same `Arc`; the operator groups a driver's lanes by its pointer, so a
+    /// fresh `Arc` per call splits one driver into groups of one.
     fn capacity(&self) -> Option<Arc<dyn RelationSlots>> {
         None
     }
