@@ -33,40 +33,40 @@ WithCte [__shared_lit_0, __shared_lit_1]
          :     +- Project [ca_county#58, d_year#29, store_sales#64]
          :        +- Filter (d_qoy#33 == 1)
          :           +- CteRef __shared_lit_0 [ca_county#58, d_year#29, store_sales#64, d_qoy#33] (shared #1)
-         +- Project [web_sales#156, ca_county#145, store_sales#148, web_sales#164, web_sales#160, store_sales#152]
+         +- Project [web_sales#156, ca_county#145, store_sales#148, web_sales#164, store_sales#152, web_sales#160]
             +- Join Inner, (ca_county#145 == ca_county#153)
                :- Project [ca_county#368 AS ca_county#153, web_sales#374 AS web_sales#156]
                :  +- Shift +234
                :     +- Project [ca_county#134, web_sales#140]
                :        +- Filter (d_qoy#109 == 1)
                :           +- CteRef __shared_lit_1 [ca_county#134, web_sales#140, d_qoy#109] (shared #2)
-               +- Project [ca_county#145, store_sales#148, web_sales#164, web_sales#160, store_sales#152]
+               +- Project [ca_county#145, store_sales#148, web_sales#164, store_sales#152, web_sales#160]
                   +- Join Inner, ((CASE WHEN (web_sales#160 > 0.00) THEN ((web_sales#164 * 1.0000) / web_sales#160) ELSE CAST(NULL AS DECIMAL(38,19)) END > CASE WHEN (store_sales#148 > 0.00) THEN ((store_sales#152 * 1.0000) / store_sales#148) ELSE CAST(NULL AS DECIMAL(38,19)) END) and (ca_county#145 == ca_county#149))
-                     :- Project [ca_county#145, store_sales#148, web_sales#164, web_sales#160]
-                     :  +- Join Inner, (ca_county#145 == ca_county#157)
-                     :     :- Project [ca_county#145, store_sales#148, web_sales#164]
-                     :     :  +- Join Inner, (ca_county#145 == ca_county#161)
-                     :     :     :- Shift +4
-                     :     :     :  +- Project [ca_county#227 AS ca_county#141, store_sales#233 AS store_sales#144]
-                     :     :     :     +- Shift +169
-                     :     :     :        +- Project [ca_county#58, store_sales#64]
-                     :     :     :           +- Filter (d_qoy#33 == 2)
-                     :     :     :              +- Shared #1, printed above
-                     :     :     +- Shift +8
-                     :     :        +- Project [ca_county#368 AS ca_county#153, web_sales#374 AS web_sales#156]
-                     :     :           +- Shift +234
-                     :     :              +- Project [ca_county#134, web_sales#140]
-                     :     :                 +- Filter (d_qoy#109 == 3)
-                     :     :                    +- Shared #2, printed above
-                     :     +- Shift +4
+                     :- Project [ca_county#145, store_sales#148, web_sales#164]
+                     :  +- Join Inner, (ca_county#145 == ca_county#161)
+                     :     :- Shift +4
+                     :     :  +- Project [ca_county#227 AS ca_county#141, store_sales#233 AS store_sales#144]
+                     :     :     +- Shift +169
+                     :     :        +- Project [ca_county#58, store_sales#64]
+                     :     :           +- Filter (d_qoy#33 == 2)
+                     :     :              +- Shared #1, printed above
+                     :     +- Shift +8
                      :        +- Project [ca_county#368 AS ca_county#153, web_sales#374 AS web_sales#156]
                      :           +- Shift +234
                      :              +- Project [ca_county#134, web_sales#140]
-                     :                 +- Filter (d_qoy#109 == 2)
+                     :                 +- Filter (d_qoy#109 == 3)
                      :                    +- Shared #2, printed above
-                     +- Shift +8
-                        +- Project [ca_county#227 AS ca_county#141, store_sales#233 AS store_sales#144]
-                           +- Shift +169
-                              +- Project [ca_county#58, store_sales#64]
-                                 +- Filter (d_qoy#33 == 3)
-                                    +- Shared #1, printed above
+                     +- Project [ca_county#149, store_sales#152, web_sales#160]
+                        +- Join Inner, (ca_county#149 == ca_county#157)
+                           :- Shift +8
+                           :  +- Project [ca_county#227 AS ca_county#141, store_sales#233 AS store_sales#144]
+                           :     +- Shift +169
+                           :        +- Project [ca_county#58, store_sales#64]
+                           :           +- Filter (d_qoy#33 == 3)
+                           :              +- Shared #1, printed above
+                           +- Shift +4
+                              +- Project [ca_county#368 AS ca_county#153, web_sales#374 AS web_sales#156]
+                                 +- Shift +234
+                                    +- Project [ca_county#134, web_sales#140]
+                                       +- Filter (d_qoy#109 == 2)
+                                          +- Shared #2, printed above

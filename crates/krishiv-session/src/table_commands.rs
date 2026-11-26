@@ -1978,3 +1978,4 @@ mod merge_checks;
 mod merge_source;
 mod pipeline;
 mod row_level;
+pub(crate) use row_level::rewrite_files::RewriteArgs;
