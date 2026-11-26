@@ -1440,7 +1440,7 @@ fn implicit(from: Option<&DataType>, want: &InputType, ansi: bool) -> Option<Opt
         // A nested type casts to another only element by element, where a
         // target that may not hold NULL needs a source that has none.
         (Some(f), InputType::Exact(t)) if f.is_nested() && t.is_nested() => {
-            nested_cast(f, t, CastMode::Ansi).then(|| Some(t.clone()))
+            nested_cast(f, t, CastMode::Ansi, false).then(|| Some(t.clone()))
         }
         (Some(f), InputType::Exact(t)) => {
             // A string becomes a BOOLEAN parameter only under ANSI
@@ -1477,19 +1477,22 @@ pub(super) enum BadCast {
 /// what a lowering can check before the analyzer runs (the most lenient mode refuses it).
 #[must_use]
 pub fn cast_always_refused(from: &DataType, to: &DataType) -> bool {
+    // The most lenient profile too: Spark 4.3 casts more (`TIME` to and from a timestamp).
     matches!(
-        can_cast(Some(from), to, CastMode::Legacy),
+        can_cast(Some(from), to, CastMode::Legacy, true),
         Err(BadCast::Without)
     )
 }
 
 /// Whether Spark casts `from` to `to` in `mode` (`Cast.canCast`,
 /// `canAnsiCast`, `canTryCast`), checked against a Spark 4.2 run of every
-/// pair of the types here in each mode.
+/// pair of the types here in each mode. `spark_4_3`: the Spark 4.3 rules, which also cast a `TIME` to
+/// and from `TIMESTAMP` and `TIMESTAMP_NTZ` (in every mode; nested ones element by element).
 pub(super) fn can_cast(
     from: Option<&DataType>,
     to: &DataType,
     mode: CastMode,
+    spark_4_3: bool,
 ) -> Result<(), BadCast> {
     use DataType as T;
     let Some(from) = from else {
@@ -1525,9 +1528,9 @@ pub(super) fn can_cast(
         } else {
             mode
         };
-        return if nested_cast(from, to, mode) {
+        return if nested_cast(from, to, mode, spark_4_3) {
             Ok(())
-        } else if mode == CastMode::Ansi && nested_cast(from, to, CastMode::Legacy) {
+        } else if mode == CastMode::Ansi && nested_cast(from, to, CastMode::Legacy, spark_4_3) {
             Err(BadCast::Func("`try_cast`"))
         } else {
             Err(BadCast::Without)
@@ -1563,13 +1566,20 @@ pub(super) fn can_cast(
         _ => {}
     }
     // A time casts to another time, to the integral types (whole seconds)
-    // and to `decimal` (seconds with the fraction).
+    // and to `decimal` (seconds with the fraction); from Spark 4.3 on to and
+    // from either timestamp too (`Cast.canCast`, `canAnsiCast`).
     if matches!(from, T::Time { .. }) || matches!(to, T::Time { .. }) {
         return match (from, to) {
             (
                 T::Time { .. },
                 T::Time { .. } | T::Byte | T::Short | T::Integer | T::Long | T::Decimal(_),
             ) => Ok(()),
+            (T::Time { .. }, T::Timestamp | T::TimestampNtz)
+            | (T::Timestamp | T::TimestampNtz, T::Time { .. })
+                if spark_4_3 =>
+            {
+                Ok(())
+            }
             _ => Err(BadCast::Without),
         };
     }
@@ -1623,11 +1633,11 @@ fn spatial_cast(from: &DataType, to: &DataType) -> bool {
 /// a source that has none. Without ANSI a cast that may make a NULL counts
 /// as one too, and a map key cast must never make one (checked against
 /// Spark 4.2: `CAST(map('1', 1) AS map<int,int>)` resolves only with ANSI).
-fn nested_cast(from: &DataType, to: &DataType, mode: CastMode) -> bool {
+fn nested_cast(from: &DataType, to: &DataType, mode: CastMode, spark_4_3: bool) -> bool {
     use DataType as T;
     // `resolvableNullability`.
     let fits = |from_null: bool, to_null: bool| !from_null || to_null;
-    let ok = |f: &DataType, t: &DataType| can_cast(Some(f), t, mode).is_ok();
+    let ok = |f: &DataType, t: &DataType| can_cast(Some(f), t, mode, spark_4_3).is_ok();
     let legacy = mode == CastMode::Legacy;
     let force_nullable = |f: &DataType, t: &DataType| legacy && force_nullable(f, t);
     match (from, to) {

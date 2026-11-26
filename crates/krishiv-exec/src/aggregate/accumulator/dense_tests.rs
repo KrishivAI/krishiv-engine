@@ -10,7 +10,8 @@
 
 use super::*;
 use arrow_array::types::{
-    Decimal64Type, DurationMicrosecondType, IntervalYearMonthType, TimestampMicrosecondType,
+    Decimal64Type, DurationMicrosecondType, IntervalYearMonthType, Time64NanosecondType,
+    TimestampMicrosecondType,
 };
 use arrow_array::{
     Date32Array, Float64Array, Int8Array, Int16Array, Int32Array, PrimitiveArray, UInt64Array,
@@ -36,7 +37,7 @@ fn rows(groups: u32) -> impl Strategy<Value = Vec<Row>> {
 }
 
 /// The argument types: each integer-like carrier `dense::native_ints` reads.
-const TYPES: [DataType; 11] = [
+const TYPES: [DataType; 12] = [
     DataType::Int64,
     DataType::Int16,
     DataType::Duration(TimeUnit::Microsecond),
@@ -45,6 +46,7 @@ const TYPES: [DataType; 11] = [
     DataType::Int8,
     DataType::Date32,
     DataType::Timestamp(TimeUnit::Microsecond, None),
+    DataType::Time64(TimeUnit::Nanosecond),
     DataType::Interval(IntervalUnit::YearMonth),
     DataType::Decimal64(18, 2),
     DataType::Decimal128(38, 0),
@@ -95,6 +97,10 @@ fn column(t: &DataType, junk: &[Row], rows: &[Row]) -> ArrayRef {
             Some(nulls),
         )),
         DataType::Timestamp(..) => Arc::new(PrimitiveArray::<TimestampMicrosecondType>::new(
+            all.iter().map(|r| r.1).collect(),
+            Some(nulls),
+        )),
+        DataType::Time64(_) => Arc::new(PrimitiveArray::<Time64NanosecondType>::new(
             all.iter().map(|r| r.1).collect(),
             Some(nulls),
         )),

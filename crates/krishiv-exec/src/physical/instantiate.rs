@@ -49,7 +49,6 @@ use krishiv_io::{
 use krishiv_memory::SpillScope;
 use krishiv_plan::{AttrId, Expr};
 use krishiv_udf_sdk::UdfLibrary;
-use object_store::path::Path;
 
 use super::{
     AggregatePlan, ExchangeId, ExchangePlan, HashJoinPlan, NestedLoopPlan, Partitioning, PhysNode,
@@ -1494,7 +1493,7 @@ impl Instantiation<'_> {
             options,
             WriteOptions {
                 store: StoreId::new(&write.store),
-                dir: Path::from(write.dir.as_str()),
+                dir: krishiv_io::local_object_path(&[write.dir.as_str()])?,
                 task: self.task.partition,
                 job_uuid: effective_job_uuid(&write.job_uuid, self.task.attempt),
                 max_records_per_file: write.max_records_per_file,

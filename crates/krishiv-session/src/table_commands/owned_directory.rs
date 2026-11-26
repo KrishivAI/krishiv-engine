@@ -55,7 +55,15 @@ impl OwnedDirectory {
             let meta = std::fs::symlink_metadata(path).ok()?;
             meta.is_dir().then(|| (meta.dev(), meta.ino()))
         }
-        #[cfg(not(unix))]
+        // Windows' file id (volume serial, file index) is not in stable std: the creation time
+        // (100 ns ticks) tells a directory made later at the same path apart.
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt;
+            let meta = std::fs::symlink_metadata(path).ok()?;
+            meta.is_dir().then(|| (meta.creation_time(), 0))
+        }
+        #[cfg(not(any(unix, windows)))]
         {
             let meta = std::fs::symlink_metadata(path).ok()?;
             meta.is_dir().then_some((0, 0))

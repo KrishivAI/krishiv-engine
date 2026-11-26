@@ -195,6 +195,38 @@ fn sorted_key_ranges_skip_most_row_groups() {
     assert_eq!(first, 41_000);
 }
 
+/// The file statistics sum each row group's `max - min` of an integer column: a sorted column
+/// spans a slice of its range per unit, a shuffled one all of it.
+#[test]
+fn unit_widths_sum_over_row_groups() {
+    let env = Env::new();
+    let props = || {
+        WriterProperties::builder()
+            .set_max_row_group_row_count(Some(1000))
+            .build()
+    };
+    let width = |name: &str, values: Vec<i32>| {
+        let file = env.put(name, write(&[ints("k", values)], props()));
+        let o = env.options(&[]);
+        let meta = env
+            .rt
+            .block_on(
+                env.io
+                    .read_metadata(&ParquetFormat, &file, MetadataNeeds::default(), &o),
+            )
+            .unwrap();
+        meta.statistics().columns[0].unit_width_sum
+    };
+    // 10 row groups of 1000 sorted values: each spans 999.
+    assert_eq!(
+        width("sorted.parquet", (0..10_000).collect()),
+        Some(9_990.0)
+    );
+    // Interleaved: row group g holds 100g ..= 9099 + 100g.
+    let shuffled = (0..10_000).map(|i| (i % 10) * 1000 + i / 10).collect();
+    assert_eq!(width("shuffled.parquet", shuffled), Some(10.0 * 9_099.0));
+}
+
 /// `TIMESTAMP(MILLIS)` columns (Spark's `outputTimestampType=TIMESTAMP_MILLIS`)
 /// read as Spark reads them: microsecond timestamps, with and without a
 /// zone; their statistics prune in microseconds too.

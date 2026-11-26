@@ -390,8 +390,12 @@ fn cross_stage_filters(root: &mut PhysNode) -> BTreeSet<FilterId> {
             let build_keys = j.build_keys.clone();
             let null_safe = j.null_safe.clone();
             j.runtime_filters.retain(|f| {
-                let (Some(key_type), Some(&column)) = (types.get(&f.id), build_keys.get(f.key))
-                else {
+                // A residual bound is collected from its own build column
+                // (`JoinFilterPlan::column`), not the key; a NULL there
+                // matches nothing, so the exchange leaves it out as the
+                // local build does.
+                let column = f.column.or_else(|| build_keys.get(f.key).copied());
+                let (Some(key_type), Some(column)) = (types.get(&f.id), column) else {
                     return true;
                 };
                 if local.contains(&f.id) {
@@ -402,7 +406,7 @@ fn cross_stage_filters(root: &mut PhysNode) -> BTreeSet<FilterId> {
                     column,
                     key_type: key_type.clone(),
                     options: without_fixed_bloom(f.options),
-                    null_safe: null_safe.get(f.key).copied().unwrap_or(false),
+                    null_safe: f.column.is_none() && null_safe.get(f.key).copied().unwrap_or(false),
                 });
                 moved.insert(f.id);
                 false

@@ -349,10 +349,13 @@ fn files_under(dir: &Path) -> Vec<String> {
                 stack.push(p);
             } else {
                 out.push(
+                    // Joined with `/` on every platform.
                     p.strip_prefix(dir)
                         .expect("under")
-                        .to_string_lossy()
-                        .into_owned(),
+                        .components()
+                        .map(|c| c.as_os_str().to_string_lossy().into_owned())
+                        .collect::<Vec<_>>()
+                        .join("/"),
                 );
             }
         }

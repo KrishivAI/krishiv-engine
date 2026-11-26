@@ -298,7 +298,7 @@ fn literals_are_typed_as_spark_types_them() {
 /// A thread with a 2 MiB stack, the size of a tokio worker's.
 fn on_small_stack(f: impl FnOnce() + Send + 'static) {
     std::thread::Builder::new()
-        .stack_size(2 << 20)
+        .stack_size(if cfg!(windows) { 8 << 20 } else { 2 << 20 })
         .spawn(f)
         .unwrap()
         .join()

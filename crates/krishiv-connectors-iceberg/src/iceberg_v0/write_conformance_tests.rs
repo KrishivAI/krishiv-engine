@@ -144,7 +144,7 @@ fn krishiv_writes_the_warehouse() {
         let t = create(&env, name, version, partitioned);
         assert_eq!(
             t.metadata().location(),
-            format!("file://{}/db/{name}", wh.display()),
+            format!("{}/db/{name}", krishiv_exec::files::file_url(&wh)),
             "the catalog lays the table out as a Hadoop catalog does"
         );
         let catalog = Catalog::new(&t);
@@ -169,7 +169,7 @@ fn krishiv_writes_the_warehouse() {
         // The final metadata as the Hadoop catalog names it.
         let meta_dir = wh.join("db").join(name).join("metadata");
         std::fs::copy(
-            catalog.location().strip_prefix("file://").unwrap(),
+            super::sink_tests::local_path(&catalog.location()),
             meta_dir.join("v1.metadata.json"),
         )
         .unwrap();

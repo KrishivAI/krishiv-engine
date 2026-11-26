@@ -122,11 +122,11 @@
     },
     {
       "id": "time#7836878b7e2e/ansi_on",
-      "reason": "SELECT time(TIMESTAMP_NTZ'2024-02-29 12:34:56.123456') | DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION where Spark has UNSUPPORTED_TIME_TYPE"
+      "reason": "SELECT time(TIMESTAMP_NTZ'2024-02-29 12:34:56.123456') | resolves to time(6) where Spark has UNSUPPORTED_TIME_TYPE"
     },
     {
       "id": "time#7836878b7e2e/ansi_off",
-      "reason": "SELECT time(TIMESTAMP_NTZ'2024-02-29 12:34:56.123456') | DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION where Spark has UNSUPPORTED_TIME_TYPE"
+      "reason": "SELECT time(TIMESTAMP_NTZ'2024-02-29 12:34:56.123456') | resolves to time(6) where Spark has UNSUPPORTED_TIME_TYPE"
     },
     {
       "id": "time#7be75b52ccf3/ansi_on",
@@ -194,11 +194,11 @@
     },
     {
       "id": "time#d7f4bdb18895/ansi_on",
-      "reason": "SELECT time(TIMESTAMP'2024-02-29 12:34:56.123456') | DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION where Spark has UNSUPPORTED_TIME_TYPE"
+      "reason": "SELECT time(TIMESTAMP'2024-02-29 12:34:56.123456') | resolves to time(6) where Spark has UNSUPPORTED_TIME_TYPE"
     },
     {
       "id": "time#d7f4bdb18895/ansi_off",
-      "reason": "SELECT time(TIMESTAMP'2024-02-29 12:34:56.123456') | DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION where Spark has UNSUPPORTED_TIME_TYPE"
+      "reason": "SELECT time(TIMESTAMP'2024-02-29 12:34:56.123456') | resolves to time(6) where Spark has UNSUPPORTED_TIME_TYPE"
     },
     {
       "id": "time#da2bf9387744/ansi_on",
