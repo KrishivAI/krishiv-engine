@@ -953,7 +953,12 @@ async fn a_64_wide_level_0_splits_a_partition_that_does_not_fit() {
     // all 64 and take minutes in a debug build).
     let limit = 1 << 20;
     for layout in [false, true] {
-        let (_m, scope) = spill_dir();
+        // The window off: each file's forced writeback and sync at finish
+        // would make this test's time the disk's, not the splits'.
+        let (_m, scope) = spill_dir_with(&SpillConfig {
+            drop_behind: 0,
+            ..SpillConfig::default()
+        });
         let mut sp = spec(&s, vec![0], wide_aggs(&s));
         sp.spill = Some(scope);
         let agg = HashAggregate::new(sp).unwrap().with_spill_bits(6);

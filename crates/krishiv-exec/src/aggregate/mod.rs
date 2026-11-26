@@ -14,7 +14,7 @@
 //!   tables to the global state and `finalize` merges them. Under memory
 //!   pressure a driver spills its table as one *run*: its groups, as
 //!   partial states, split into 8 to 64 files by hash (by the
-//!   parallelism and the memory limit, [`capped_level0_bits`](crate::hash::capped_level0_bits)). `finalize` then merges partition by partition (a
+//!   parallelism and the memory limit, `hash::capped_level0_bits`). `finalize` then merges partition by partition (a
 //!   partition that still does not fit is split again by the next hash bits),
 //!   and answers spill requests through [`Sink::spill_global`](crate::Sink::spill_global).
 //! - [`PartialAggregate`] is the streaming first phase (before an exchange):
