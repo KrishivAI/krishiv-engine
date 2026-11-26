@@ -1800,6 +1800,474 @@ fn a_rename_whose_move_fails_puts_the_log_back() {
     );
 }
 
+/// Under LEGACY a map written into a map column is not refused up front for its key type: the
+/// original review example, `map(CAST(1 AS DOUBLE), 7)` into `MAP<INT,INT>`, stores `{1:7}`.
+#[test]
+fn legacy_store_admits_a_map_with_a_numeric_key_conversion() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(&s, "create table mk(m map<int,int>) using parquet");
+    s.conf()
+        .set("spark.sql.storeAssignmentPolicy", "LEGACY")
+        .unwrap();
+    run(&s, "insert into mk select map(cast(1 as double), 7)");
+    assert_eq!(rows(&s, "select cast(m[1] as string) from mk"), ["7"]);
+}
+
+/// Under LEGACY each map key and value is cast on its own with a non-ANSI cast, as Spark's
+/// `TableOutputResolver.resolveMapType` does: a value that fails an ANSI cast stores NULL or saturates.
+#[test]
+fn legacy_store_casts_map_values_one_by_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(&s, "create table mv(m map<int,int>) using parquet");
+    s.conf()
+        .set("spark.sql.storeAssignmentPolicy", "LEGACY")
+        .unwrap();
+    run(&s, "insert into mv select map(1, 'x')");
+    // One entry, key 1, value NULL (the cast of `'x'`): not a dropped key and not a NULL map.
+    assert_eq!(
+        rows(
+            &s,
+            "select concat(cast(size(m) as string), '|', cast(map_keys(m)[0] as string), '|', \
+             cast(map_values(m)[0] is null as string)) from mv"
+        ),
+        ["1|1|true"]
+    );
+    run(&s, "create table mv2(m map<int,int>) using parquet");
+    run(&s, "insert into mv2 select map(1, 1e20d)");
+    assert_eq!(
+        rows(&s, "select cast(m[1] as string) from mv2"),
+        ["2147483647"]
+    );
+}
+
+/// `INSERT .. BY NAME` pairs the fields of a nested struct by name under LEGACY too: the source's `b` goes to
+/// the target's `b`, not to its second field by position.
+#[test]
+fn legacy_store_by_name_pairs_nested_struct_fields_by_name() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(&s, "create table bn(s struct<a:int,b:int>) using parquet");
+    s.conf()
+        .set("spark.sql.storeAssignmentPolicy", "LEGACY")
+        .unwrap();
+    run(
+        &s,
+        "insert into bn by name select named_struct('b', '2', 'a', '1') as s",
+    );
+    assert_eq!(
+        rows(
+            &s,
+            "select concat(cast(s.a as string), '|', cast(s.b as string)) from bn"
+        ),
+        ["1|2"]
+    );
+}
+
+/// Under the default (ANSI) policy `INSERT .. BY NAME` pairs nested struct fields by name too, at any depth.
+#[test]
+fn ansi_store_by_name_pairs_nested_struct_fields_by_name() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(&s, "create table bna(s struct<a:int,b:int>) using parquet");
+    run(
+        &s,
+        "insert into bna by name select named_struct('b', 2, 'a', 1) as s",
+    );
+    assert_eq!(
+        rows(
+            &s,
+            "select concat(cast(s.a as string), '|', cast(s.b as string)) from bna"
+        ),
+        ["1|2"]
+    );
+    run(
+        &s,
+        "create table bnr(v array<struct<a:int,b:int>>) using parquet",
+    );
+    run(
+        &s,
+        "insert into bnr by name select array(named_struct('b', 2, 'a', 1)) as v",
+    );
+    assert_eq!(
+        rows(
+            &s,
+            "select concat(cast(v[0].a as string), '|', cast(v[0].b as string)) from bnr"
+        ),
+        ["1|2"]
+    );
+}
+
+/// The class and the `colName` / `extraFields` parameters of a failed statement.
+fn class_and_params(s: &Session, sql: &str) -> (String, Vec<String>) {
+    (class(s, sql), params(s, sql))
+}
+
+/// A struct that does not pair by name under `INSERT .. BY NAME` fails as Spark's `reorderColumnsByName`
+/// does, under every store policy, inside arrays and map values: a missing field, extra fields, an
+/// ambiguous name.
+#[test]
+fn by_name_struct_mismatches_report_spark_classes_and_paths() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(&s, "create table bne(s struct<a:int,b:int>) using parquet");
+    run(
+        &s,
+        "create table bna2(s array<struct<a:int,b:int>>) using parquet",
+    );
+    run(
+        &s,
+        "create table bnm(s map<string,struct<a:int,b:int>>) using parquet",
+    );
+    for policy in ["ANSI", "LEGACY"] {
+        s.conf()
+            .set("spark.sql.storeAssignmentPolicy", policy)
+            .unwrap();
+        let cases = [
+            (
+                "insert into bne by name select named_struct('a', 1, 'c', 2) as s",
+                "INCOMPATIBLE_DATA_FOR_TABLE.CANNOT_FIND_DATA",
+                "`s`.`b`",
+            ),
+            (
+                "insert into bne by name select named_struct('a', 1, 'b', 2, 'c', 3) as s",
+                "INCOMPATIBLE_DATA_FOR_TABLE.EXTRA_STRUCT_FIELDS",
+                "`s`",
+            ),
+            (
+                "insert into bne by name select named_struct('a', 1, 'A', 2, 'b', 3) as s",
+                "INCOMPATIBLE_DATA_FOR_TABLE.AMBIGUOUS_COLUMN_NAME",
+                "`s`.`a`",
+            ),
+            (
+                "insert into bna2 by name select array(named_struct('a', 1, 'c', 2)) as s",
+                "INCOMPATIBLE_DATA_FOR_TABLE.CANNOT_FIND_DATA",
+                "`s`.`element`.`b`",
+            ),
+            (
+                "insert into bnm by name select map('k', named_struct('a', 1, 'c', 2)) as s",
+                "INCOMPATIBLE_DATA_FOR_TABLE.CANNOT_FIND_DATA",
+                "`s`.`value`.`b`",
+            ),
+        ];
+        for (sql, want, path) in cases {
+            let (class, params) = class_and_params(&s, sql);
+            assert_eq!(class, want, "{policy}: {sql}");
+            assert!(
+                params
+                    .iter()
+                    .any(|p| p.split_once('=').is_some_and(|(_, v)| v == path)),
+                "{policy}: {sql}: {params:?} lacks {path}"
+            );
+        }
+        // The extra fields are listed in source order.
+        let (_, params) = class_and_params(
+            &s,
+            "insert into bne by name select named_struct('a', 1, 'b', 2, 'x', 3, 'c', 4) as s",
+        );
+        assert!(
+            params.iter().any(|p| p.ends_with("=`x`, `c`")),
+            "{params:?}"
+        );
+    }
+    // With `caseSensitive`, `a` and `A` are two names: `A` is an extra field, not an ambiguity.
+    s.conf().set("spark.sql.caseSensitive", "true").unwrap();
+    assert_eq!(
+        class(
+            &s,
+            "insert into bne by name select named_struct('a', 1, 'A', 2, 'b', 3) as s"
+        ),
+        "INCOMPATIBLE_DATA_FOR_TABLE.EXTRA_STRUCT_FIELDS"
+    );
+}
+
+/// `INSERT .. BY NAME` over the top-level columns fails in Spark's order: more data columns than table columns,
+/// then each table column in turn (two data columns matching it, named as the table spells it, before its type
+/// check), then the data columns the table does not have.
+#[test]
+fn by_name_columns_report_arity_then_ambiguity_then_extra_columns() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(
+        &s,
+        "create table bt(a int, `\u{e9}` int, c int) using parquet",
+    );
+    assert_eq!(
+        class(
+            &s,
+            "insert into bt by name select 1 as a, 2 as A, 3 as x, 4 as y"
+        ),
+        "INSERT_COLUMN_ARITY_MISMATCH.TOO_MANY_DATA_COLUMNS"
+    );
+    for (select, column) in [
+        ("select array(1) as A, 2 as a", "`a`"),
+        ("select 1 as `\u{c9}`, 2 as `\u{e9}`, 3 as zz", "`\u{e9}`"),
+    ] {
+        let sql = format!("insert into bt by name {select}");
+        assert_eq!(
+            class(&s, &sql),
+            "INCOMPATIBLE_DATA_FOR_TABLE.AMBIGUOUS_COLUMN_NAME",
+            "{sql}"
+        );
+        let got = params(&s, &sql);
+        assert!(got.contains(&format!("colName={column}")), "{sql}: {got:?}");
+    }
+    // A table column's store cast comes before a later column's ambiguity and before the extra columns.
+    for select in [
+        "select array(1) as a, 1 as c, 2 as C",
+        "select array(1) as a, 2 as zz",
+    ] {
+        let sql = format!("insert into bt by name {select}");
+        assert_eq!(
+            class(&s, &sql),
+            "INCOMPATIBLE_DATA_FOR_TABLE.CANNOT_SAFELY_CAST",
+            "{sql}"
+        );
+        let got = params(&s, &sql);
+        assert!(got.contains(&"colName=`a`".to_owned()), "{sql}: {got:?}");
+    }
+    let sql = "insert into bt by name select 1 as a, 2 as zz, 3 as `x y`";
+    assert_eq!(class(&s, sql), "INCOMPATIBLE_DATA_FOR_TABLE.EXTRA_COLUMNS");
+    let got = params(&s, sql);
+    assert!(
+        got.contains(&"extraColumns=`zz`, `x y`".to_owned()),
+        "{got:?}"
+    );
+    // A table column's name is quoted with a backquote doubled.
+    run(&s, "create table btq(`a``b` int) using parquet");
+    let sql = "insert into btq by name select array(1) as `a``b`";
+    assert_eq!(
+        class(&s, sql),
+        "INCOMPATIBLE_DATA_FOR_TABLE.CANNOT_SAFELY_CAST"
+    );
+    let got = params(&s, sql);
+    assert!(got.contains(&"colName=`a``b`".to_owned()), "{got:?}");
+    // The default profile (4.3) quotes an extra name as one part, as Spark 4.3.0 does.
+    for (select, quoted) in [
+        ("2 as zz, 3 as `y``y`", "`zz`, `y``y`"),
+        ("3 as `a.b`", "`a.b`"),
+    ] {
+        let sql = format!("insert into bt by name select 1 as a, {select}");
+        assert_eq!(class(&s, &sql), "INCOMPATIBLE_DATA_FOR_TABLE.EXTRA_COLUMNS");
+        let got = params(&s, &sql);
+        assert!(got.contains(&format!("extraColumns={quoted}")), "{got:?}");
+    }
+    // Spark 4.2.0 parses the name first: one that does not parse is that error, and a dot splits it.
+    let old = tempfile::tempdir().unwrap();
+    let s = Session::builder()
+        .profile(krishiv_plan::analyzer::SparkProfile::V4_2)
+        .build()
+        .unwrap();
+    s.conf()
+        .set("spark.sql.warehouse.dir", old.path().to_str().unwrap())
+        .unwrap();
+    run(&s, "create table bt(a int, b int, c int) using parquet");
+    let sql = "insert into bt by name select 1 as a, 2 as zz, 3 as `y``y`";
+    assert_eq!(class(&s, sql), "INVALID_ATTRIBUTE_NAME_SYNTAX");
+    let got = params(&s, sql);
+    assert!(got.contains(&"name=y`y".to_owned()), "{got:?}");
+    let sql = "insert into bt by name select 1 as a, 3 as `a.b`";
+    let got = params(&s, sql);
+    assert!(got.contains(&"extraColumns=`a`.`b`".to_owned()), "{got:?}");
+}
+
+/// `INSERT .. BY NAME` pairs struct fields under Spark's `equalsIgnoreCase` (per code point, upper then lower
+/// case: `\u{e9}` = `\u{c9}`, `\u{130}` = `i`), reports two fields equal under that rule as ambiguous, and
+/// quotes a field name with a backquote by doubling it.
+#[test]
+fn by_name_struct_fields_pair_by_unicode_case_and_quote_backquotes() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(
+        &s,
+        "create table bnu(s struct<`\u{e9}`:int,i:int>) using parquet",
+    );
+    run(&s, "create table bnq(s struct<`a``b`:int>) using parquet");
+    // Pairs under the default (case-insensitive) rule, by name and not by position.
+    run(
+        &s,
+        "insert into bnu by name select named_struct('\u{130}', 2, '\u{c9}', 1) as s",
+    );
+    assert_eq!(
+        rows(
+            &s,
+            "select concat(cast(s.`\u{e9}` as string), '|', cast(s.i as string)) from bnu"
+        ),
+        ["1|2"]
+    );
+    // Two source fields equal under the rule are ambiguous.
+    let (got, params) = class_and_params(
+        &s,
+        "insert into bnu by name select named_struct('\u{e9}', 1, '\u{c9}', 2, 'i', 3) as s",
+    );
+    assert_eq!(got, "INCOMPATIBLE_DATA_FOR_TABLE.AMBIGUOUS_COLUMN_NAME");
+    assert!(
+        params.iter().any(|p| p.ends_with("=`s`.`\u{e9}`")),
+        "{params:?}"
+    );
+    // A missing field is quoted with the backquote doubled.
+    let (got, params) = class_and_params(
+        &s,
+        "insert into bnq by name select named_struct('c', 1) as s",
+    );
+    assert_eq!(got, "INCOMPATIBLE_DATA_FOR_TABLE.CANNOT_FIND_DATA");
+    assert!(
+        params.iter().any(|p| p.ends_with("=`s`.`a``b`")),
+        "{params:?}"
+    );
+    // Case sensitive: the same names no longer pair.
+    s.conf().set("spark.sql.caseSensitive", "true").unwrap();
+    assert_eq!(
+        class(
+            &s,
+            "insert into bnu by name select named_struct('\u{c9}', 1, '\u{130}', 2) as s"
+        ),
+        "INCOMPATIBLE_DATA_FOR_TABLE.CANNOT_FIND_DATA"
+    );
+}
+
+/// Under ANSI the first failing field wins (Spark checks each leaf as it pairs the fields); under LEGACY the
+/// struct errors do.
+#[test]
+fn by_name_ansi_checks_a_leaf_before_a_later_missing_field() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(&s, "create table bnl(s struct<a:int,b:int>) using parquet");
+    let sql = "insert into bnl by name select named_struct('a', array(1), 'c', 2) as s";
+    let (class, params) = class_and_params(&s, sql);
+    assert_eq!(class, "INCOMPATIBLE_DATA_FOR_TABLE.CANNOT_SAFELY_CAST");
+    assert!(params.iter().any(|p| p.ends_with("=`s`.`a`")), "{params:?}");
+    s.conf()
+        .set("spark.sql.storeAssignmentPolicy", "LEGACY")
+        .unwrap();
+    assert_eq!(
+        class_and_params(&s, sql).0,
+        "INCOMPATIBLE_DATA_FOR_TABLE.CANNOT_FIND_DATA"
+    );
+}
+
+/// Map keys that collide after the LEGACY store cast follow `spark.sql.mapKeyDedupPolicy` (the map is rebuilt
+/// with `MapFromArrays`): `EXCEPTION` fails with `DUPLICATED_MAP_KEY`, `LAST_WIN` keeps the last value.
+#[test]
+fn legacy_store_applies_the_map_key_dedup_policy_to_keys_that_collide_after_the_cast() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(&s, "create table dd(m map<int,int>) using parquet");
+    s.conf()
+        .set("spark.sql.storeAssignmentPolicy", "LEGACY")
+        .unwrap();
+    // `'1'` and `'01'` both cast to 1.
+    let insert = "insert into dd select map('1', 7, '01', 8)";
+    assert_eq!(class(&s, insert), "DUPLICATED_MAP_KEY");
+    assert_eq!(rows(&s, "select cast(count(*) as string) from dd"), ["0"]);
+    s.conf()
+        .set("spark.sql.mapKeyDedupPolicy", "LAST_WIN")
+        .unwrap();
+    run(&s, insert);
+    assert_eq!(rows(&s, "select cast(size(m) as string) from dd"), ["1"]);
+    assert_eq!(rows(&s, "select cast(m[1] as string) from dd"), ["8"]);
+}
+
+/// Under ANSI, `INSERT .. BY NAME` into a struct holding a map applies the key dedup policy to keys that collide
+/// after the cast the same way whatever the order of the struct's fields (`1.25` and `1.75` both cast to 1).
+#[test]
+fn ansi_by_name_applies_the_map_key_dedup_policy_in_either_field_order() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(
+        &s,
+        "create table dn(s struct<m:map<int,int>,x:int>) using parquet",
+    );
+    let in_order =
+        "insert into dn by name select named_struct('m', map(1.25D, 1, 1.75D, 2), 'x', 1) as s";
+    let reordered =
+        "insert into dn by name select named_struct('x', 1, 'm', map(1.25D, 1, 1.75D, 2)) as s";
+    for sql in [in_order, reordered] {
+        assert_eq!(class(&s, sql), "DUPLICATED_MAP_KEY", "{sql}");
+    }
+    s.conf()
+        .set("spark.sql.mapKeyDedupPolicy", "LAST_WIN")
+        .unwrap();
+    for sql in [in_order, reordered] {
+        run(&s, sql);
+    }
+    assert_eq!(
+        rows(
+            &s,
+            "select concat(cast(s.x as string), '|', cast(size(s.m) as string), '|', cast(s.m[1] as string)) from dn"
+        ),
+        ["1|1|2", "1|1|2"]
+    );
+}
+
+/// The LEGACY store cast recurses through array elements and struct fields into a nested map.
+#[test]
+fn legacy_store_casts_a_map_nested_in_an_array_and_a_struct() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(
+        &s,
+        "create table nm(a array<map<int,int>>, st struct<m:map<int,int>>) using parquet",
+    );
+    s.conf()
+        .set("spark.sql.storeAssignmentPolicy", "LEGACY")
+        .unwrap();
+    run(
+        &s,
+        "insert into nm select array(map(cast(1 as double), 7)), named_struct('m', map(cast(2 as double), 8))",
+    );
+    assert_eq!(rows(&s, "select cast(a[0][1] as string) from nm"), ["7"]);
+    assert_eq!(rows(&s, "select cast(st.m[2] as string) from nm"), ["8"]);
+}
+
+/// A source struct whose field names repeat (or differ only in case) is stored by position, as Spark does.
+#[test]
+fn legacy_store_reads_struct_fields_by_position() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(
+        &s,
+        "create table sp(st struct<a:bigint,b:bigint>) using parquet",
+    );
+    s.conf()
+        .set("spark.sql.storeAssignmentPolicy", "LEGACY")
+        .unwrap();
+    run(&s, "insert into sp select named_struct('a', 1, 'a', 2)");
+    run(&s, "insert into sp select named_struct('A', 3, 'a', 4)");
+    assert_eq!(
+        rows(
+            &s,
+            "select concat_ws('|', st.a, st.b) from sp order by st.a"
+        ),
+        ["1|2", "3|4"]
+    );
+}
+
+/// A non-map source into a map column, and a map whose key type no cast reaches, are refused before anything
+/// is written, even under LEGACY (Spark recurses only through a map-to-map pair).
+#[test]
+fn legacy_store_refuses_a_non_map_source_and_a_refused_map_key() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(&s, "create table rf(m map<int,int>) using parquet");
+    s.conf()
+        .set("spark.sql.storeAssignmentPolicy", "LEGACY")
+        .unwrap();
+    assert_eq!(
+        class(&s, "insert into rf select 1"),
+        "INCOMPATIBLE_DATA_FOR_TABLE.CANNOT_SAFELY_CAST"
+    );
+    assert_eq!(
+        class(&s, "insert into rf select array(1)"),
+        "INCOMPATIBLE_DATA_FOR_TABLE.CANNOT_SAFELY_CAST"
+    );
+    assert_eq!(
+        class(&s, "insert into rf select map(array(1), 1)"),
+        "INCOMPATIBLE_DATA_FOR_TABLE.CANNOT_SAFELY_CAST"
+    );
+}
+
 /// The rows below are a real Spark 4.2.0 run's: `castPartitionSpec` casts with ANSI on under the default
 /// `spark.sql.storeAssignmentPolicy`, whatever `spark.sql.ansi.enabled` says, and the value is re-rendered.
 #[test]

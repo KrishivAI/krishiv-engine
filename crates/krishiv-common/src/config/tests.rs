@@ -712,6 +712,10 @@ fn session_time_zone_is_validated() {
         "+8:0",
         "1/2",
         "a//b",
+        " UTC ",
+        "UTC ",
+        " +01:00",
+        "Europe/Paris\t",
     ] {
         let e = c.set("spark.sql.session.timeZone", bad).unwrap_err();
         assert_eq!(

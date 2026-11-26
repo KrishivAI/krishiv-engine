@@ -9,10 +9,12 @@
 //!   on `REFRESH TABLE`, when its catalog is dropped, or on eviction. Not when the last session of its identity
 //!   ends: the expiry bounds it (design §4.3 as amended in unit 3).
 //! - **Table token.** A `token` in the `loadTable` answer's `config` is kept with the answer and sent as the bearer
-//!   of that table's `loadCredentials` and reload only (the declared catalog host; a 401 falls back to the caller's
+//!   of that table's `loadCredentials` and reload only (the declared catalog host; a 401 or 419 falls back to the caller's
 //!   token), never to the token endpoint or to storage (§4.1).
 //! - **Refresh.** [`VendedSource`] is the `CredentialSource` of one scope of one query: the cached credential of the
-//!   longest prefix covering the scope while it is valid for longer than the refresh skew, else a new answer from
+//!   longest prefix covering the scope (after a refresh that narrowed the prefix below the scope's root, the one
+//!   credential of the prefixes inside it; storage decides each file, the read's confinement is unchanged) while it
+//!   is valid for longer than the refresh skew, else a new answer from
 //!   `loadCredentials` with the same caller, or a reload of the table when the catalog does not advertise the endpoint
 //!   or answers it 404. A second fetch while the cache still holds the answer this source last served means the
 //!   store refused that credential (`CredentialCache::invalidate`), so it fetches a new answer instead of serving it
@@ -43,7 +45,7 @@ use krishiv_store::{
 
 use crate::iceberg_rest::types::StorageCredential;
 use crate::iceberg_rest::vended::{
-    VendedPrefix, answer_expires_at, covering, credential, keep_credentials, table_token,
+    VendedPrefix, answer_expires_at, covering, credential, keep_credentials, narrowed, table_token,
 };
 use crate::iceberg_rest::{LoadedTable, RestCaller, RestClient};
 use crate::location::{LocationRule, refused};
@@ -79,22 +81,35 @@ impl std::fmt::Debug for VendedAnswer {
 
 impl VendedAnswer {
     /// The vended part of a `loadTable` answer requested after `drops` `REFRESH TABLE` drops
-    /// ([`VendedCache::drops`] read before the request).
-    pub(crate) fn of_table(t: &LoadedTable, drops: u64) -> Self {
-        let mut answer = Self::new(
+    /// ([`VendedCache::drops`] read before the request), received at `fetched` ([`VendedClock::now`]).
+    pub(crate) fn of_table(t: &LoadedTable, drops: u64, fetched: SystemTime) -> Self {
+        let mut answer = Self::at(
             t.storage_credentials.clone(),
             t.config.clone(),
             t.location.clone(),
+            fetched,
         );
         answer.table_token = table_token(&t.config);
         answer.drops = drops;
         answer
     }
 
-    fn new(
+    /// An answer fetched now by the system clock (tests that build answers by hand).
+    #[cfg(test)]
+    pub(crate) fn new(
         credentials: Vec<StorageCredential>,
         config: BTreeMap<String, SecretString>,
         location: String,
+    ) -> Self {
+        Self::at(credentials, config, location, SystemTime::now())
+    }
+
+    /// An answer received at `fetched`.
+    fn at(
+        credentials: Vec<StorageCredential>,
+        config: BTreeMap<String, SecretString>,
+        location: String,
+        fetched: SystemTime,
     ) -> Self {
         Self {
             table_token: None,
@@ -108,7 +123,7 @@ impl VendedAnswer {
                 .collect(),
             config: keep_credentials(config),
             location,
-            fetched: SystemTime::now(),
+            fetched,
             received: {
                 static NEXT: AtomicU64 = AtomicU64::new(0);
                 NEXT.fetch_add(1, Ordering::Relaxed)
@@ -159,11 +174,17 @@ impl State {
         self.entries.retain(|_, (_, _, expires)| *expires > now);
     }
 
-    fn put(&mut self, key: Key, answer: Arc<VendedAnswer>, expires: SystemTime, max: usize) {
+    fn put(
+        &mut self,
+        key: Key,
+        answer: Arc<VendedAnswer>,
+        expires: SystemTime,
+        max: usize,
+        now: SystemTime,
+    ) {
         if !self.live.contains(&key.0) {
             return;
         }
-        let now = SystemTime::now();
         self.drop_expired(now);
         if expires <= now {
             // Already expired: the next `get` would drop it, so it must not evict a live entry when full. It still
@@ -189,10 +210,54 @@ impl State {
     }
 }
 
+/// The wall clock of vended answers (fetch time, cache expiry, the refresh skew): the system clock. In tests it is
+/// frozen at its creation and moves only when the test moves it ([`Self::advance`]), so a slow runner never expires
+/// an answer early. The store's own credential cache keeps the system clock; it is built per query, so its first
+/// credential of a scope always comes from [`VendedSource`].
+#[derive(Debug)]
+#[cfg_attr(not(test), derive(Default))]
+pub(crate) struct VendedClock {
+    /// The time the test clock was created.
+    #[cfg(test)]
+    start: SystemTime,
+    /// How far a test moved the clock ahead, in milliseconds.
+    #[cfg(test)]
+    ahead_ms: AtomicU64,
+}
+
+#[cfg(test)]
+impl Default for VendedClock {
+    fn default() -> Self {
+        Self {
+            start: SystemTime::now(),
+            ahead_ms: AtomicU64::new(0),
+        }
+    }
+}
+
+impl VendedClock {
+    /// Now.
+    pub(crate) fn now(&self) -> SystemTime {
+        #[cfg(test)]
+        let now = self.start + Duration::from_millis(self.ahead_ms.load(Ordering::Relaxed));
+        #[cfg(not(test))]
+        let now = SystemTime::now();
+        now
+    }
+
+    /// Moves the clock `by` ahead.
+    #[cfg(test)]
+    pub(crate) fn advance(&self, by: Duration) {
+        let ms = u64::try_from(by.as_millis()).unwrap_or(u64::MAX);
+        self.ahead_ms.fetch_add(ms, Ordering::Relaxed);
+    }
+}
+
 /// The vended answers of every declared catalog of the process (module docs).
 #[derive(Debug, Default)]
 pub(crate) struct VendedCache {
     inner: Mutex<State>,
+    clock: Arc<VendedClock>,
 }
 
 impl VendedCache {
@@ -206,13 +271,32 @@ impl VendedCache {
         self.inner.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
+    /// An empty cache on `clock`.
+    #[cfg(test)]
+    pub(crate) fn with_clock(clock: Arc<VendedClock>) -> Self {
+        Self {
+            inner: Mutex::default(),
+            clock,
+        }
+    }
+
+    /// The cache's clock.
+    pub(crate) fn clock(&self) -> &Arc<VendedClock> {
+        &self.clock
+    }
+
+    /// Now by the cache's clock.
+    pub(crate) fn now(&self) -> SystemTime {
+        self.clock.now()
+    }
+
     /// The answer held for `key` unless it expired (an expired one is dropped).
     pub(crate) fn get(&self, key: &Key) -> Option<Arc<VendedAnswer>> {
         let mut state = self.lock();
         state.tick += 1;
         let now = state.tick;
         match state.entries.get_mut(key) {
-            Some((_, _, expires)) if *expires <= SystemTime::now() => {
+            Some((_, _, expires)) if *expires <= self.clock.now() => {
                 state.entries.remove(key);
                 None
             }
@@ -236,7 +320,8 @@ impl VendedCache {
         max: usize,
     ) {
         let expires = answer.expires_at(default_ttl);
-        self.lock().put(key, answer, expires, max);
+        let now = self.now();
+        self.lock().put(key, answer, expires, max, now);
     }
 
     /// Keeps the `loadTable` answer `answer` for `key` unless the entry held was fetched later (an answer that raced
@@ -262,7 +347,7 @@ impl VendedCache {
             .get(&key)
             .is_none_or(|(held, _, _)| held.received < answer.received);
         if newer {
-            state.put(key, answer, expires, max);
+            state.put(key, answer, expires, max, self.clock.now());
         }
     }
 
@@ -299,14 +384,14 @@ impl VendedCache {
         if state.drops != drops {
             return answer;
         }
-        let now = SystemTime::now();
+        let now = self.clock.now();
         if let Some((held, _, held_expires)) = state.entries.get(&key)
             && *held_expires > now
             && held.received > answer.received
         {
             return Arc::clone(held);
         }
-        state.put(key, Arc::clone(&answer), expires, max);
+        state.put(key, Arc::clone(&answer), expires, max, now);
         answer
     }
 
@@ -355,9 +440,14 @@ impl Refetch {
 
     /// A new answer: `loadCredentials`, or the table reloaded when the catalog does not advertise it or answers it
     /// 404 (the reload tells whether the table is really gone). Both are sent with the table's own `token` when the
-    /// last answer carried one; a `loadCredentials` answer keeps that token unless the catalog refused it (401), in
+    /// last answer carried one; a `loadCredentials` answer keeps that token unless the catalog refused it (401 or 419), in
     /// which case neither the reload nor the new answer carries it.
-    fn fetch_blocking(&self, token: Option<&SecretString>) -> Result<VendedAnswer, KrishivError> {
+    /// `clock` stamps the new answer's fetch time.
+    fn fetch_blocking(
+        &self,
+        token: Option<&SecretString>,
+        clock: &VendedClock,
+    ) -> Result<VendedAnswer, KrishivError> {
         let (ns, t) = (&self.namespace, self.table.as_str());
         let mut token = token;
         let reload = |mut token: Option<&SecretString>| match self.client.load_table_for(
@@ -367,7 +457,7 @@ impl Refetch {
             t,
         )? {
             // A refresh's answer: `publish` checks the drops it read.
-            Some(table) => Ok(VendedAnswer::of_table(&table, 0)),
+            Some(table) => Ok(VendedAnswer::of_table(&table, 0, clock.now())),
             None => Err(self.refused(LocationRule::NoVendedCredential)),
         };
         match self
@@ -375,8 +465,12 @@ impl Refetch {
             .load_credentials_for(&self.caller, &mut token, ns, t)
         {
             Ok(Some(credentials)) => {
-                let mut answer =
-                    VendedAnswer::new(credentials, BTreeMap::new(), self.location.clone());
+                let mut answer = VendedAnswer::at(
+                    credentials,
+                    BTreeMap::new(),
+                    self.location.clone(),
+                    clock.now(),
+                );
                 answer.table_token = token.cloned();
                 Ok(answer)
             }
@@ -390,18 +484,19 @@ impl Refetch {
     pub(crate) async fn fetch(
         &self,
         token: Option<SecretString>,
+        clock: Arc<VendedClock>,
     ) -> Result<VendedAnswer, KrishivError> {
         let this = self.clone();
         match tokio::runtime::Handle::try_current() {
             Ok(handle) => handle
-                .spawn_blocking(move || this.fetch_blocking(token.as_ref()))
+                .spawn_blocking(move || this.fetch_blocking(token.as_ref(), &clock))
                 .await
                 .map_err(|e| {
                     // A panic or cancellation of the blocking fetch: a Krishiv fault, logged as one (no secrets).
                     tracing::warn!(target: "krishiv::catalog", catalog = self.catalog.as_str(), table = self.relation.as_str(), panicked = e.is_panic(), "the vended credential fetch did not finish");
                     self.refused(LocationRule::NoVendedCredential)
                 })?,
-            Err(_) => this.fetch_blocking(token.as_ref()),
+            Err(_) => this.fetch_blocking(token.as_ref(), &clock),
         }
     }
 }
@@ -437,7 +532,11 @@ impl VendedTable {
     ) -> Result<Arc<VendedAnswer>, KrishivError> {
         let token = previous.and_then(|p| p.table_token.clone());
         let drops = self.cache.drops();
-        let fresh = Arc::new(self.refetch.fetch(token).await?);
+        let fresh = Arc::new(
+            self.refetch
+                .fetch(token, Arc::clone(self.cache.clock()))
+                .await?,
+        );
         Ok(self.cache.publish(
             self.key.clone(),
             fresh,
@@ -453,7 +552,8 @@ impl VendedTable {
             .put_if_newer(self.key.clone(), answer, self.default_ttl, self.max_entries);
     }
 
-    /// The credential `answer` gives `url`, `None` when it gives none.
+    /// The credential `answer` gives `url`: the longest prefix covering it, else the one credential of the prefixes
+    /// inside it (a refresh that narrowed the prefix); `None` when it gives none.
     fn pick(
         &self,
         answer: &VendedAnswer,
@@ -463,10 +563,16 @@ impl VendedTable {
             tracing::warn!(target: "krishiv::catalog", catalog = self.refetch.catalog.as_str(), table = self.refetch.relation.as_str(), detail, "an Iceberg REST catalog vended a credential Krishiv cannot use");
             self.refetch.refused(LocationRule::NoVendedCredential)
         };
-        let Some((_, config)) =
-            covering(&answer.credentials, &answer.config, &answer.location, url)
-                .map_err(|f| fault(f.0))?
-        else {
+        let covered = covering(&answer.credentials, &answer.config, &answer.location, url)
+            .map_err(|f| fault(f.0))?
+            .map(|(_, config)| config);
+        // A refresh may narrow the prefix below the scope's root: its credential still serves the scope.
+        let config = match covered {
+            Some(c) => Some(c),
+            None => narrowed(&answer.credentials, &answer.config, &answer.location, url)
+                .map_err(|f| fault(f.0))?,
+        };
+        let Some(config) = config else {
             return Ok(None);
         };
         credential(config, url, answer.fetched, self.default_ttl).map_err(|f| fault(f.0))
@@ -567,7 +673,7 @@ impl VendedSource {
             && !served_before
             && let Some(c) = t.pick(a, &self.url)?
             && c.expires_at()
-                .is_none_or(|e| e > SystemTime::now() + effective_skew(t.skew, a.fetched, e))
+                .is_none_or(|e| e > t.cache.now() + effective_skew(t.skew, a.fetched, e))
         {
             self.serve(a);
             return Ok(c);
