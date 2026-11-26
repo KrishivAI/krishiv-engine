@@ -201,15 +201,17 @@ impl World {
             });
             format!("http://{addr}")
         });
+        // Only the slow service has to miss its deadline. The others answer at once, and a short
+        // one would turn a loaded machine into a denial, since the session fails closed.
+        let deadline = if mode == Mode::Slow {
+            Duration::from_millis(300)
+        } else {
+            Duration::from_secs(60)
+        };
         let access = {
             let _guard = self.tokio.enter();
             let channel = Endpoint::parse(&endpoint).unwrap().channel().unwrap();
-            ExternalAccess::over(
-                AccessPolicyClient::new(channel),
-                Duration::from_millis(300),
-                None,
-                false,
-            )
+            ExternalAccess::over(AccessPolicyClient::new(channel), deadline, None, false)
         };
         // Server mode confines local paths to the configured roots: the warehouse here.
         let mut config = Config::new();

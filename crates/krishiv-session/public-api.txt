@@ -1259,6 +1259,7 @@ pub krishiv_session::events::UsageRecord::files_read: core::option::Option<i64>
 pub krishiv_session::events::UsageRecord::files_written: core::option::Option<i64>
 pub krishiv_session::events::UsageRecord::kind: krishiv_session::events::UsageKind
 pub krishiv_session::events::UsageRecord::peak_memory_bytes: core::option::Option<i64>
+pub krishiv_session::events::UsageRecord::planning_ns: core::option::Option<i64>
 pub krishiv_session::events::UsageRecord::principal: alloc::string::String
 pub krishiv_session::events::UsageRecord::queued_ns: core::option::Option<i64>
 pub krishiv_session::events::UsageRecord::record_id: krishiv_session::events::UsageRecordId

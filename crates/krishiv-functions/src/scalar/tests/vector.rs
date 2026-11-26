@@ -77,6 +77,36 @@ fn norms_follow_the_degree() {
     );
 }
 
+/// `vector_norm` / `vector_normalize` of `[NaN, 5]` with degree `inf` on `version`.
+fn nan_inf(name: &str, version: krishiv_kernels::SparkVersion) -> Vec<f32> {
+    let v = plain(&[f32::NAN, 5.0]);
+    let d = floats(&[Some(f32::INFINITY)]);
+    let opts = BindOptions::new()
+        .with_kernel(krishiv_kernels::KernelCtx::new().with_spark_version(version));
+    let args = [&v, &d];
+    let f = super::bind_with(name, &args, &opts);
+    let out = f
+        .invoke(&args.iter().map(|a| col(a)).collect::<Vec<_>>(), 1)
+        .unwrap();
+    if name == "vector_norm" {
+        out.as_primitive::<Float32Type>().values().to_vec()
+    } else {
+        let list = out.as_list::<i32>().value(0);
+        list.as_primitive::<Float32Type>().values().to_vec()
+    }
+}
+
+#[test]
+fn a_nan_element_is_skipped_by_the_infinity_norm_in_42_and_propagated_in_43() {
+    use krishiv_kernels::SparkVersion::{V4_2, V4_3};
+    assert_eq!(nan_inf("vector_norm", V4_2), vec![5.0]);
+    assert!(nan_inf("vector_norm", V4_3)[0].is_nan());
+    // normalize divides by the norm: 4.2 by 5.0, 4.3 by NaN.
+    assert!(nan_inf("vector_normalize", V4_2)[0].is_nan());
+    assert_eq!(nan_inf("vector_normalize", V4_2)[1], 1.0);
+    assert!(nan_inf("vector_normalize", V4_3).iter().all(|x| x.is_nan()));
+}
+
 #[test]
 fn null_inputs_are_null_and_a_null_vector_skips_the_degree_check() {
     let two = floats(&[Some(2.0)]);
@@ -185,7 +215,9 @@ fn pairs_combine_equal_dimensions() {
     assert_eq!(one("vector_l2_distance", &[&a, &b]), Some(5.196_152));
     assert_eq!(
         one("vector_cosine_similarity", &[&a, &b]),
-        Some(0.974_631_9)
+        // Spark 4.3 sums in double: the float of 32 / sqrt(14 * 77). 4.2's float sums give 0.9746319 (pinned by
+        // the 4.2.0 goldens in krishiv-session).
+        Some(0.974_631_85)
     );
     // A zero vector has no direction; empty vectors have no distance.
     assert_eq!(
@@ -302,4 +334,87 @@ fn a_literal_query_vector_gives_the_same_as_its_broadcast() {
             "{name}"
         );
     }
+}
+
+/// `vector_norm` (`norm`) or `vector_normalize` of `values` with degree `degree` on `version`.
+fn run_on(
+    name: &str,
+    values: &[f32],
+    degree: f32,
+    version: krishiv_kernels::SparkVersion,
+) -> Option<Vec<f32>> {
+    let v = plain(values);
+    let d = floats(&[Some(degree)]);
+    let opts = BindOptions::new()
+        .with_kernel(krishiv_kernels::KernelCtx::new().with_spark_version(version));
+    let args = [&v, &d];
+    let f = super::bind_with(name, &args, &opts);
+    let out = f
+        .invoke(&args.iter().map(|a| col(a)).collect::<Vec<_>>(), 1)
+        .unwrap();
+    if name == "vector_norm" {
+        out.as_primitive::<Float32Type>()
+            .iter()
+            .next()
+            .flatten()
+            .map(|x| vec![x])
+    } else {
+        let list = out.as_list::<i32>();
+        (!list.is_null(0)).then(|| {
+            list.value(0)
+                .as_primitive::<Float32Type>()
+                .values()
+                .to_vec()
+        })
+    }
+}
+
+/// Spark 4.3 accumulates the L1 and L2 norms in `double` and divides by the double norm: a float square that
+/// underflows or a float sum that overflows is still a normal double. 4.2 keeps the float result.
+#[test]
+fn the_l1_and_l2_norms_are_double_precision_in_43_and_float_in_42() {
+    use krishiv_kernels::SparkVersion::{V4_2, V4_3};
+    // 1e-30 squared is 1e-60: zero as a float, normal as a double.
+    assert_eq!(
+        run_on("vector_normalize", &[1e-30], 2.0, V4_3),
+        Some(vec![1.0])
+    );
+    assert_eq!(run_on("vector_normalize", &[1e-30], 2.0, V4_2), None);
+    // f32::MAX + f32::MAX overflows a float sum, not a double one.
+    assert_eq!(
+        run_on("vector_normalize", &[f32::MAX, f32::MAX], 1.0, V4_3),
+        Some(vec![0.5, 0.5])
+    );
+    assert_eq!(
+        run_on("vector_normalize", &[f32::MAX, f32::MAX], 1.0, V4_2),
+        Some(vec![0.0, 0.0])
+    );
+    // The norm itself, cast to float at the end.
+    assert_eq!(
+        run_on("vector_norm", &[f32::MAX, f32::MAX], 1.0, V4_3),
+        Some(vec![f32::INFINITY])
+    );
+    assert_eq!(
+        run_on("vector_norm", &[3.0, -4.0], 2.0, V4_3),
+        Some(vec![5.0])
+    );
+}
+
+/// Spark 4.3 adds the double terms in blocks of 8 and then the accumulator (`VectorFunctionImplUtils`): the
+/// second block of `[1, tiny x 15]` sums to `2^-51` before it meets the `1`, where a left-to-right fold
+/// rounds every `tiny` away and stays at `1.0`.
+#[test]
+fn the_43_double_norms_sum_in_blocks_of_eight() {
+    use crate::scalar::vector::{Degree, norm_of};
+    let mut l1 = vec![2.0_f32.powi(-54); 16];
+    l1[0] = 1.0;
+    assert_eq!(norm_of(&l1, Degree::One, true), 1.0 + 2.0_f64.powi(-51));
+    let mut l2 = vec![2.0_f32.powi(-27); 16];
+    l2[0] = 1.0;
+    assert_eq!(
+        norm_of(&l2, Degree::Two, true),
+        (1.0 + 2.0_f64.powi(-51)).sqrt()
+    );
+    // Under eight elements the block loop is empty: the tail is the plain fold.
+    assert_eq!(norm_of(&[3.0, 4.0], Degree::Two, true), 5.0);
 }

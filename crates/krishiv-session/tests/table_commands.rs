@@ -817,7 +817,7 @@ fn insert_column_lists_by_name_and_conflicts() {
     );
     assert_eq!(
         class(&s, "INSERT INTO t BY NAME SELECT 1 AS zzz"),
-        "INSERT_COLUMN_ARITY_MISMATCH.TOO_MANY_DATA_COLUMNS"
+        "INCOMPATIBLE_DATA_FOR_TABLE.EXTRA_COLUMNS"
     );
     assert_eq!(
         class(&s, "INSERT INTO t REPLACE WHERE a = 1 VALUES (1, 'x')"),
