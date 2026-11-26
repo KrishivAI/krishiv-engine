@@ -311,7 +311,7 @@ impl Resolver<'_> {
                 if !session_qualified && let Some(which) = GroupingFn::from_name(lookup_name) {
                     return self.grouping_call(which, e, &kids[..n], cx);
                 }
-                // `to_char(datetime, fmt)` and `to_varchar` are `date_format` to
+                // `to_char(datetime, fmt)` and `to_varchar` (nanosecond timestamps too, 4.3) are `date_format` to
                 // Spark (`ToCharacterBuilder`), which names them so; a number or
                 // a binary keeps `to_char`.
                 if !session_qualified
@@ -321,7 +321,13 @@ impl Resolver<'_> {
                         || lookup_name.eq_ignore_ascii_case("to_varchar"))
                     && matches!(
                         kids[0].ty.data_type,
-                        Some(DataType::Date | DataType::Timestamp | DataType::TimestampNtz)
+                        Some(
+                            DataType::Date
+                                | DataType::Timestamp
+                                | DataType::TimestampNtz
+                                | DataType::TimestampNanos { .. }
+                                | DataType::TimestampNtzNanos { .. }
+                        )
                     )
                 {
                     // Spark builds `date_format` first, so its clauses are

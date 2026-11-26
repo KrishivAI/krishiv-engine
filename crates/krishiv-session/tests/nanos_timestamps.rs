@@ -326,3 +326,24 @@ fn unix_nanos_and_timestamp_nanos_are_spark_43s() {
         );
     }
 }
+
+/// `date_format` (and `to_char`/`to_varchar`, its aliases) prints the nanoseconds of a nanosecond timestamp
+/// with up to nine `S`; fewer `S` cut them (Spark 4.3 `timestamp-ntz-nanos.sql`).
+#[test]
+fn date_format_prints_nanoseconds() {
+    let s = session();
+    assert_eq!(
+        rows(
+            &s,
+            "SELECT date_format(c, 'yyyy-MM-dd HH:mm:ss.SSSSSSSSS'), to_char(l, 'HH:mm:ss.SSSSSSSS'), to_varchar(c, 'ss.SSSSSSS'), date_format(c, 'SSS') FROM t WHERE k IN (1, 3, 4) ORDER BY k"
+        ),
+        "2020-01-01 00:00:00.000000999 00:00:00.00000099 00.0000009 000 | 1960-01-01 00:00:00.123456789 00:00:00.12345678 00.1234567 123 |    "
+    );
+    assert_eq!(
+        rows(
+            &s,
+            "SELECT date_format(c, f) FROM (SELECT c, 'ss.SSSSSSSSS' AS f FROM t WHERE k = 3)"
+        ),
+        "00.123456789"
+    );
+}

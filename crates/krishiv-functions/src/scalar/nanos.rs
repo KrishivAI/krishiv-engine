@@ -146,6 +146,39 @@ fn timestamp_nanos(a: &ArrayRef, scale: i8) -> Result<ArrayRef, KrishivError> {
     ))
 }
 
+/// Whether `t` is a nanosecond timestamp carrier.
+pub(super) const fn is_nanos(t: &DataType) -> bool {
+    matches!(t, DataType::Timestamp(TimeUnit::Nanosecond, _))
+}
+
+/// The arguments with the first, a nanosecond timestamp, as a column of its microseconds (floor), and the
+/// nanoseconds within the microsecond of each row (`date_format` prints them).
+pub(super) fn split_first(x: &Inputs<'_>) -> Result<(Vec<Arg>, Vec<u16>), KrishivError> {
+    let first = x.column(0)?;
+    let DataType::Timestamp(TimeUnit::Nanosecond, zone) = first.data_type() else {
+        return Err(internal(format!(
+            "a nanosecond timestamp of type {}",
+            first.data_type()
+        )));
+    };
+    let rest = first
+        .as_primitive::<TimestampNanosecondType>()
+        .values()
+        .iter()
+        .map(|v| u16::try_from(v.rem_euclid(NANOS_PER_MICRO)).unwrap_or_default())
+        .collect();
+    let mut args = vec![Arg::Array(floor(&first, &zone.clone()))];
+    for i in 1..x.arity() {
+        let (a, literal) = x.operand(i)?;
+        args.push(if literal {
+            Arg::Scalar(a)
+        } else {
+            Arg::Array(a)
+        });
+    }
+    Ok((args, rest))
+}
+
 /// The functions that read a nanosecond timestamp's microseconds.
 const FLOORED: &[&str] = &[
     "hour",
