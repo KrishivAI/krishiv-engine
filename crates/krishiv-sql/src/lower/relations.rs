@@ -751,6 +751,9 @@ impl Lowerer {
                     .map(|a| {
                         let value = match &a.expr.kind {
                             crate::ast::ExprKind::TableArgument(t) => {
+                                if !name.parts[0].value.eq_ignore_ascii_case("stack") {
+                                    Self::check_generator_param(&name.parts[0], a)?;
+                                }
                                 arc(self.table_argument(t, a.expr.span)?)
                             }
                             _ => self.arg(&a.expr)?,

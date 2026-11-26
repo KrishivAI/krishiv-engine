@@ -618,11 +618,12 @@ impl Accumulator {
         self
     }
 
-    /// An upper bound of group `g`'s partial-state bytes where a state can be large (the Theta sketches, whose
+    /// An upper bound of group `g`'s partial-state bytes where a state can be large (the Theta and count-min sketches, whose
     /// `binary` column must stay under 2 GiB); 0 for the other accumulators. See [`state_prefix`].
     pub(crate) fn state_bound(&self, g: u32) -> usize {
         match &self.kind {
             Kind::ThetaSketch(h) => h.state_bound(g),
+            Kind::CountMin(c) => c.state_bound(),
             _ => 0,
         }
     }
@@ -1224,7 +1225,10 @@ pub(crate) fn state_prefix(
     used: &mut usize,
     cap: usize,
 ) -> usize {
-    if !accs.iter().any(|a| matches!(a.kind, Kind::ThetaSketch(_))) {
+    if !accs
+        .iter()
+        .any(|a| matches!(a.kind, Kind::ThetaSketch(_) | Kind::CountMin(_)))
+    {
         return ids.len();
     }
     for (n, &g) in ids.iter().enumerate() {

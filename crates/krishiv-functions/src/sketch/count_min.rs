@@ -96,6 +96,12 @@ impl Shape {
         }
     }
 
+    /// The number of rows (hash coefficients) of the sketch.
+    #[must_use]
+    pub fn depth(&self) -> usize {
+        self.coefficients.len()
+    }
+
     /// The number of counters of one sketch.
     #[must_use]
     pub fn cells(&self) -> usize {

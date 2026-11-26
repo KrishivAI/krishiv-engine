@@ -42,13 +42,14 @@ fn a_named_argument_names_the_generators_one_parameter() {
 #[test]
 fn another_name_is_still_refused() {
     let s = Session::new().unwrap();
-    let r = block_on(async {
-        s.sql("SELECT * FROM explode(input => array(1))")
-            .await?
-            .collect()
-            .await
-    });
-    assert!(r.is_err());
+    assert_eq!(
+        class(&s, "SELECT * FROM explode(input => array(1))"),
+        "UNRECOGNIZED_PARAMETER_NAME"
+    );
+    assert_eq!(
+        class(&s, "SELECT * FROM explode(foo => TABLE(SELECT 1 AS v))"),
+        "UNRECOGNIZED_PARAMETER_NAME"
+    );
 }
 
 /// The error class `sql` fails with.

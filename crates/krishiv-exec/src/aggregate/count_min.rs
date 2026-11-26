@@ -51,27 +51,43 @@ impl CountMinAcc {
             .reserve(new.saturating_mul(self.shape.cells()));
     }
 
+    /// The shape's coefficient buffer, one `i64` per row.
+    fn coefficient_bytes(&self) -> usize {
+        self.shape.depth().saturating_mul(size_of::<i64>())
+    }
+
     /// Bytes held.
     pub(crate) fn size(&self) -> usize {
         self.totals
             .capacity()
             .saturating_add(self.counters.capacity())
             .saturating_mul(size_of::<i64>())
+            .saturating_add(self.coefficient_bytes())
     }
 
-    /// The size after adding `new` groups.
+    /// The size after adding `new` groups, counting the capacity `Vec::reserve` may grow to (twice the current
+    /// one, or the length needed).
     pub(crate) fn projected(&self, new: usize) -> usize {
-        let after = self
-            .totals
+        let grown = |len: usize, cap: usize| len.max(cap.saturating_mul(2));
+        let totals = self.totals.len().saturating_add(new);
+        let counters = self
+            .counters
             .len()
-            .saturating_add(new)
-            .saturating_add(
-                self.counters
-                    .len()
-                    .saturating_add(new.saturating_mul(self.shape.cells())),
-            )
-            .saturating_mul(size_of::<i64>());
+            .saturating_add(new.saturating_mul(self.shape.cells()));
+        let after = grown(totals, self.totals.capacity())
+            .saturating_add(grown(counters, self.counters.capacity()))
+            .saturating_mul(size_of::<i64>())
+            .saturating_add(self.coefficient_bytes());
         self.size().max(after)
+    }
+
+    /// An upper bound of the serialized partial state of one group.
+    pub(crate) fn state_bound(&self) -> usize {
+        self.shape
+            .cells()
+            .saturating_add(self.shape.depth())
+            .saturating_mul(size_of::<i64>())
+            .saturating_add(24)
     }
 
     /// The shape beside group `g`'s total and counters.
