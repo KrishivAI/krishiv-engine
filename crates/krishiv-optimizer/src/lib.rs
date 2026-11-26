@@ -821,8 +821,27 @@ fn run(
                     root = before_payload(pre, false, &mut t)?.0;
                     t.steps.splice(at..at, notes);
                 } else if deferred {
-                    let (pushed, _) =
+                    let (mut pushed, _) =
                         eager_pass(&root, stats, options, expand, joins, false, &mut t)?;
+                    // The group-key code as the other eager paths run it: an
+                    // aggregate this pass made may qualify, and a second
+                    // optimization would code it (fixed point).
+                    if !Arc::ptr_eq(&pushed, &root)
+                        && let Some(min_dimensions) = min_dimensions
+                    {
+                        let (after, notes) = group_code::rewrite(
+                            Arc::clone(&pushed),
+                            stats,
+                            options.stats_propagation,
+                            forced,
+                            min_dimensions,
+                        )?;
+                        t.step("GroupKeyCode", 1, "GroupKeyCode", &pushed, &after);
+                        t.notes("GroupKeyCode", &after, notes);
+                        if !Arc::ptr_eq(&after, &pushed) {
+                            pushed = order_and_restrict(after, stats, options, joins, &mut t)?;
+                        }
+                    }
                     if !Arc::ptr_eq(&pushed, &root) {
                         root = prune_and_tidy(&pushed, Some(stats), &mut t)?;
                     }

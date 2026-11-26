@@ -237,8 +237,11 @@ fn is_distinct_on(p: &LogicalPlan, keys: &[BoundColumn]) -> bool {
                 .collect();
             inner.is_some_and(|inner| is_distinct_on(input, &inner))
         }
+        // The same set of columns both ways: a repeated key (`[a, a]`) is not
+        // the distinct's `[a, b]`.
         _ => distinct_keys(p).is_some_and(|have| {
-            have.len() == keys.len() && keys.iter().all(|k| have.iter().any(|h| h.id == k.id))
+            keys.iter().all(|k| have.iter().any(|h| h.id == k.id))
+                && have.iter().all(|h| keys.iter().any(|k| k.id == h.id))
         }),
     }
 }
@@ -395,7 +398,38 @@ fn exact(t: &DataType) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use krishiv_plan::Expr;
+
     use super::*;
+
+    fn bound(id: u64, name: &str) -> BoundColumn {
+        BoundColumn {
+            id: AttrId(id),
+            name: name.to_owned(),
+            data_type: DataType::Long,
+            nullable: true,
+        }
+    }
+
+    fn column(c: &BoundColumn) -> Expr {
+        Expr::new(ExprNode::Resolved(ResolvedExpr::Column(c.clone())))
+    }
+
+    /// A distinct on `(a, b)` is not one on `(a, a)`, nor on `(a)`: the key
+    /// sets must be equal both ways, so the outer distinct stays.
+    #[test]
+    fn a_repeated_key_is_not_the_distinct_on_two_columns() {
+        let (a, b) = (bound(1, "a"), bound(2, "b"));
+        let distinct = LogicalPlan::table(["t"])
+            .aggregate(vec![column(&a), column(&b)], vec![column(&a), column(&b)]);
+        assert!(is_distinct_on(&distinct, &[a.clone(), b.clone()]));
+        assert!(is_distinct_on(&distinct, &[b.clone(), a.clone()]));
+        assert!(!is_distinct_on(&distinct, &[a.clone(), a.clone()]));
+        assert!(!is_distinct_on(&distinct, std::slice::from_ref(&a)));
+        let on_a = LogicalPlan::table(["t"]).aggregate(vec![column(&a)], vec![column(&a)]);
+        assert!(is_distinct_on(&on_a, &[a.clone(), a]));
+        assert!(!is_distinct_on(&on_a, &[bound(1, "a"), b]));
+    }
 
     #[test]
     fn floating_point_collated_and_nested_types_are_not_exact() {

@@ -250,12 +250,23 @@ fn null_dimension_keys_keep_their_groups() {
     let dir = tempfile::tempdir().unwrap();
     let t = null_tables(dir.path(), &rt);
     let stats = null_stats();
-    for q in [
-        "SELECT g1, g2, count(*), sum(x) FROM f JOIN d ON fk = dk GROUP BY g1, g2",
-        "SELECT upper(g1), g2, count(DISTINCT g2), sum(x) FROM f JOIN d ON fk = dk \
-         GROUP BY g1, g2",
-        "SELECT g1, g2, count(*), count(f2.x) FROM f JOIN d ON f.fk = dk \
-         LEFT JOIN f AS f2 ON f.x = f2.fk GROUP BY g1, g2",
+    // Whether eager aggregation takes the joins: not for a `DISTINCT` call, nor for a call
+    // over the null-supplying side of the outer join above `D`.
+    for (q, eager_fires) in [
+        (
+            "SELECT g1, g2, count(*), sum(x) FROM f JOIN d ON fk = dk GROUP BY g1, g2",
+            true,
+        ),
+        (
+            "SELECT upper(g1), g2, count(DISTINCT g2), sum(x) FROM f JOIN d ON fk = dk \
+             GROUP BY g1, g2",
+            false,
+        ),
+        (
+            "SELECT g1, g2, count(*), count(f2.x) FROM f JOIN d ON f.fk = dk \
+             LEFT JOIN f AS f2 ON f.x = f2.fk GROUP BY g1, g2",
+            false,
+        ),
     ] {
         for s in [Session::None, Session::Config] {
             let on = optimized_eager(&t, q, &stats, true, false, s);
@@ -265,6 +276,14 @@ fn null_dimension_keys_keep_their_groups() {
             let want = sorted(&run(&physical(&t, &off).unwrap()).unwrap());
             assert_eq!(got, want, "{q} {s:?}\n{}", on.root());
             let eager = optimized(&t, q, &stats, true, s);
+            // The null-only `isnotnull(dk)` filter on `d` must not stop eager
+            // aggregation: rows alone would also match a refused rule.
+            assert_eq!(
+                eager.root().to_string().contains("PartialAggregate"),
+                eager_fires,
+                "{q} {s:?}: eager aggregation\n{}",
+                eager.root()
+            );
             let rows = sorted(&run(&physical(&t, &eager).unwrap()).unwrap());
             assert_eq!(rows, want, "{q} {s:?} eager\n{}", eager.root());
             assert!(
