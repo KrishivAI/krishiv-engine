@@ -85,7 +85,9 @@ impl Session {
     /// directories above it one level at a time, each verified to still resolve to itself once it exists.
     /// A link swapped in on the way (after the check) is refused with 42501 for `privilege`, and the
     /// directory just made through it is removed: only that directory, found by the identity (device and
-    /// inode) it had right after the mkdir, so a second swap cannot point the removal elsewhere.
+    /// inode) it had right after the mkdir, so a second swap cannot point the removal elsewhere. On Windows
+    /// there is no such identity (a creation time is none), so nothing is removed: the swap is refused and
+    /// an empty directory may stay where the link led.
     ///
     /// Not closed: between the verification of one level and the mkdir of the next, a swap makes one
     /// empty directory outside, which the next verification finds and removes (best effort).
