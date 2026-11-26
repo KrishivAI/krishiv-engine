@@ -1037,11 +1037,9 @@ fn date_format_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
 }
 
 fn date_format_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    // Spark 4.3 formats a `TIME` as it is (no cast): nullable as the arguments.
     if matches!(c.data_type(0), Some(DataType::Time { .. })) {
-        return Err(krishiv_common::error::KrishivUnsupportedFeature {
-            feature: "date_format of a TIME value (Spark 4.3)".to_owned(),
-        }
-        .into());
+        return Ok(ArgType::new(DataType::String, c.any_nullable()));
     }
     let nullable = c.any_nullable()
         || match c.data_type(0) {
