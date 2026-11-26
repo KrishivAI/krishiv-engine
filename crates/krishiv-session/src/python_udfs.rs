@@ -21,7 +21,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError, RwLock};
 
-use krishiv_common::error::{InternalError, KrishivError};
+use krishiv_common::error::{InternalError, KrishivError, KrishivInvalidPythonRelation};
 use krishiv_plan::analyzer::{ArgType, Arity, CallTypes, FunctionEntry, Inputs};
 use krishiv_plan::{FunctionId, FunctionKind, PythonEvalType, PythonUdfKind};
 use krishiv_types::DataType;
@@ -145,24 +145,10 @@ impl PythonUdfLibrary {
     /// version.
     ///
     /// # Errors
-    /// `KRISHIV_INTERNAL_ERROR` when `def.eval_type` is not a table kind or
+    /// `KRISHIV_INVALID_PYTHON_RELATION` when `def.eval_type` is not a table kind or
     /// its return type is not a struct.
     pub fn register_udtf(&self, def: PythonUdtfDef) -> Result<PythonUdtfEntry, KrishivError> {
-        if def.eval_type.kind() != PythonUdfKind::Udtf
-            || def
-                .return_type
-                .as_ref()
-                .is_some_and(|t| !matches!(t, DataType::Struct(_)))
-        {
-            return Err(InternalError {
-                message: format!(
-                    "a Python UDTF registration needs a table eval type (300, 301, 302) and a struct result (got {} for {})",
-                    def.eval_type.code(),
-                    def.name
-                ),
-            }
-            .into());
-        }
+        check_udtf_shape(&def)?;
         let key = def.name.to_lowercase();
         let mut inner = self.inner.write().unwrap_or_else(PoisonError::into_inner);
         let version = {
@@ -438,30 +424,48 @@ impl krishiv_plan::analyzer::TableFunctionRegistry for SessionTableFunctions {
     }
 }
 
+/// A UDTF's eval type must be a table kind and its declared result a struct: a user's mistake, so
+/// `KRISHIV_INVALID_PYTHON_RELATION`.
+fn check_udtf_shape(def: &PythonUdtfDef) -> Result<(), KrishivError> {
+    if def.eval_type.kind() != PythonUdfKind::Udtf {
+        return Err(KrishivInvalidPythonRelation {
+            reason: format!(
+                "the Python UDTF {} has eval type {}, not a table eval type (300, 301, 302)",
+                def.name,
+                def.eval_type.code()
+            ),
+        }
+        .into());
+    }
+    if def
+        .return_type
+        .as_ref()
+        .is_some_and(|t| !matches!(t, DataType::Struct(_)))
+    {
+        return Err(KrishivInvalidPythonRelation {
+            reason: format!("the Python UDTF {} must return a struct", def.name),
+        }
+        .into());
+    }
+    Ok(())
+}
+
 /// What starts an unregistered UDTF's encoded name, and separates its fields.
 const ANONYMOUS_UDTF_TAG: &str = "krishiv.python_udtf";
 
 /// The encoded name of an unregistered (inline) UDTF's call: `def` at `version` (whose
 /// [`ANONYMOUS_VERSION_BIT`] must be set), the return type as Spark's JSON (empty without one).
 fn anonymous_udtf_name(def: &PythonUdtfDef, version: u32) -> Result<String, KrishivError> {
-    if version & ANONYMOUS_VERSION_BIT == 0
-        || def.name.contains(ANONYMOUS_MARK)
-        || def.eval_type.kind() != PythonUdfKind::Udtf
-        || def
-            .return_type
-            .as_ref()
-            .is_some_and(|t| !matches!(t, DataType::Struct(_)))
-    {
+    if version & ANONYMOUS_VERSION_BIT == 0 || def.name.contains(ANONYMOUS_MARK) {
         return Err(InternalError {
             message: format!(
-                "an unregistered Python UDTF call needs a version with the top bit, a table eval type, a struct \
-                 result and a name without NUL (got {version:#x}, {}, {:?})",
-                def.eval_type.code(),
+                "an unregistered Python UDTF call needs a version with the top bit and a name without NUL (got {version:#x}, {:?})",
                 def.name
             ),
         }
         .into());
     }
+    check_udtf_shape(def)?;
     let m = ANONYMOUS_MARK;
     Ok(format!(
         "{m}{ANONYMOUS_UDTF_TAG}{m}{version}{m}{}{m}{}{m}{}{m}{}",
