@@ -232,3 +232,31 @@ fn datetime_functions_read_nanosecond_timestamps() {
         "-315619200 -315619199877 -315619199876544 -315619199"
     );
 }
+
+/// `ts ± interval` keeps the start's nanoseconds; `ts - ts` and `ts - date` are the difference of the
+/// microseconds (Spark 4.3: `.123456789 - .000000111` is `1 00:00:00.123456000`).
+#[test]
+fn interval_arithmetic_keeps_or_drops_nanoseconds_as_spark() {
+    let s = session();
+    assert_eq!(
+        rows(
+            &s,
+            "SELECT CAST(c + INTERVAL '2 00:03:00.000456' DAY TO SECOND AS STRING), CAST(c - INTERVAL '1 00:04:00.000321' DAY TO SECOND AS STRING) FROM t WHERE k = 3"
+        ),
+        "1960-01-03 00:03:00.123912789 1959-12-30 23:56:00.123135789"
+    );
+    assert_eq!(
+        rows(
+            &s,
+            "SELECT CAST(c + INTERVAL '1' MONTH AS STRING), CAST(INTERVAL '1' YEAR + c AS STRING), CAST(c - INTERVAL '1-2' YEAR TO MONTH AS STRING), CAST(l + make_interval(0, 1, 0, 2, 0, 0, 0) AS STRING) FROM t WHERE k = 3"
+        ),
+        "1960-02-01 00:00:00.123456789 1961-01-01 00:00:00.123456789 1958-11-01 00:00:00.123456789 1960-02-03 00:00:00.123456789"
+    );
+    assert_eq!(
+        rows(
+            &s,
+            "SELECT CAST(a.c - b.c AS STRING), CAST(b.l - a.l AS STRING), CAST(b.c - DATE '1960-01-01' AS STRING) FROM t a, t b WHERE a.k = 1 AND b.k = 3"
+        ),
+        "INTERVAL '21914 23:59:59.876544' DAY TO SECOND INTERVAL '-21914 23:59:59.876544' DAY TO SECOND INTERVAL '0 00:00:00.123456' DAY TO SECOND"
+    );
+}

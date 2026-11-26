@@ -149,8 +149,92 @@ fn micros(v: &Value) -> Value {
     }
 }
 
+/// The microseconds (floor) of a nanosecond timestamp value; anything else as it is.
+fn floor_nanos(v: &Value) -> Value {
+    let floor = |a: &ArrayRef| -> ArrayRef {
+        match a.data_type() {
+            ArrowType::Timestamp(arrow_schema::TimeUnit::Nanosecond, zone) => Arc::new(
+                a.as_primitive::<arrow_array::types::TimestampNanosecondType>()
+                    .unary::<_, arrow_array::types::TimestampMicrosecondType>(|v| {
+                        v.div_euclid(1_000)
+                    })
+                    .with_timezone_opt(zone.clone()),
+            ),
+            _ => Arc::clone(a),
+        }
+    };
+    match v {
+        Value::Array(a) => Value::Array(floor(a)),
+        Value::Scalar(a) => Value::Scalar(floor(a)),
+    }
+}
+
+/// Whether `v` holds a nanosecond timestamp.
+fn is_nanos(v: &Value) -> bool {
+    matches!(
+        v.array().data_type(),
+        ArrowType::Timestamp(arrow_schema::TimeUnit::Nanosecond, _)
+    )
+}
+
 impl Binary {
+    /// A nanosecond timestamp operand (Spark 4.3 `TIMESTAMP_LTZ/NTZ(7..=9)`) is its microseconds and
+    /// the nanoseconds within the microsecond: the operator runs on the microseconds (so `ts - ts` is the
+    /// difference of the floors, `1 00:00:00.123456` for `.123456789 - .000000111`), and a timestamp
+    /// result gets its start's nanoseconds back.
     fn apply(&self, l: &Value, r: &Value) -> Result<ArrayRef> {
+        if !is_nanos(l) && !is_nanos(r) {
+            return self.apply_with(l, r, &self.out);
+        }
+        let out = match &self.out {
+            ArrowType::Timestamp(arrow_schema::TimeUnit::Nanosecond, zone) => {
+                ArrowType::Timestamp(arrow_schema::TimeUnit::Microsecond, zone.clone())
+            }
+            t => t.clone(),
+        };
+        let micros = self.apply_with(&floor_nanos(l), &floor_nanos(r), &out)?;
+        let ArrowType::Timestamp(arrow_schema::TimeUnit::Nanosecond, zone) = &self.out else {
+            return Ok(micros);
+        };
+        if !is_nanos(l) {
+            return Err(internal(&format!(
+                "{}: a nanosecond result from a {} start",
+                self.op.name(),
+                l.array().data_type()
+            )));
+        }
+        let start = l
+            .array()
+            .as_primitive::<arrow_array::types::TimestampNanosecondType>();
+        let scalar = matches!(l, Value::Scalar(_));
+        let micros = micros.as_primitive::<arrow_array::types::TimestampMicrosecondType>();
+        let mut values = Vec::with_capacity(micros.len());
+        for (i, m) in micros.iter().enumerate() {
+            let rest = start
+                .values()
+                .get(if scalar { 0 } else { i })
+                .map_or(0, |v| v.rem_euclid(1_000));
+            match m.map(|m| m.checked_mul(1_000).and_then(|n| n.checked_add(rest))) {
+                None => values.push(None),
+                Some(Some(v)) => values.push(Some(v)),
+                // The nanosecond carrier ends in 1677 and 2262 (Spark's in years 1 and 9999).
+                Some(None) => {
+                    return Err(krishiv_common::error::DatetimeOverflow {
+                        operation: "nanosecond timestamp + interval".to_owned(),
+                    }
+                    .into());
+                }
+            }
+        }
+        Ok(Arc::new(
+            arrow_array::PrimitiveArray::<arrow_array::types::TimestampNanosecondType>::from(
+                values,
+            )
+            .with_timezone_opt(zone.clone()),
+        ))
+    }
+
+    fn apply_with(&self, l: &Value, r: &Value, out: &ArrowType) -> Result<ArrayRef> {
         let zone = self
             .zone
             .as_ref()
@@ -184,12 +268,12 @@ impl Binary {
                 let r = months(r);
                 Arc::new(
                     timestamp_add_months(prim(l), prim(&r), false, zone, false)?
-                        .with_data_type(self.out.clone()),
+                        .with_data_type(out.clone()),
                 )
             }
             Builtin::TimestampAddInterval if is_calendar(r.array().data_type()) => Arc::new(
                 timestamp_add_calendar(prim(l), &calendars(r.array())?, zone)?
-                    .with_data_type(self.out.clone()),
+                    .with_data_type(out.clone()),
             ),
             Builtin::DateAddInterval => Arc::new(date_add_calendar(
                 prim(l),
@@ -218,12 +302,12 @@ impl Binary {
                 let r = micros(r);
                 Arc::new(
                     timestamp_add_day_time(prim(l), prim(&r), false, zone, false)?
-                        .with_data_type(self.out.clone()),
+                        .with_data_type(out.clone()),
                 )
             }
             Builtin::SubtractDates => Arc::new(subtract_dates(prim(l), prim(r))?),
             Builtin::SubtractTimestamps => Arc::new(subtract_timestamps(prim(l), prim(r), zone)?),
-            b @ (Builtin::Add | Builtin::Subtract) => match self.out {
+            b @ (Builtin::Add | Builtin::Subtract) => match out {
                 ArrowType::Interval(_) => Arc::new(add_year_month(
                     prim(l),
                     prim(r),
@@ -237,7 +321,7 @@ impl Binary {
                     self.null_on_overflow,
                 )?),
             },
-            b @ (Builtin::Multiply | Builtin::Divide) => match self.out {
+            b @ (Builtin::Multiply | Builtin::Divide) => match out {
                 ArrowType::Interval(_) => Arc::new(scale_year_month(
                     l.array().as_primitive(),
                     r.array().as_ref(),
