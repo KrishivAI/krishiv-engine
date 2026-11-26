@@ -105,12 +105,14 @@ reviews:
         Report only correctness, security, licence and reproducibility issues.
         Do not comment on style, naming or other nitpicks.
   auto_review:
-    enabled: true
+    # Paced, not automatic (owner 2026-11-26): the plan allows about 5 reviews an hour and 1 an hour after 60 in 7 days,
+    # every reviewed push counting. A keeper script (keeper/bin/coderabbit-pacer.sh) asks for ONE review an hour with
+    # `@coderabbitai review` on the most important open PR whose head it has not reviewed, so we never hit the limit.
+    # The old label gate made it skip almost every PR because nobody added the label.
+    enabled: false
     drafts: false
     base_branches: ["main"]
-    # Every PR to main is reviewed automatically, and every later push incrementally (owner 2026-11-26: the paid plan
-    # is the primary routine reviewer; the earlier label gate made it skip almost every PR). Drafts stay skipped.
-    auto_incremental_review: true
+    auto_incremental_review: false
   finishing_touches:
     docstrings:
       enabled: false
