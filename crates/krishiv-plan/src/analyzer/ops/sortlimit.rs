@@ -171,6 +171,32 @@ impl Resolver<'_> {
         } else {
             order
         };
+        // With `spark.sql.prioritizeOrdinalResolutionInSort.enabled` off, Spark resolves the other keys' missing
+        // references first, so an ordinal also counts the columns they added to the select list
+        // (`SELECT a FROM t ORDER BY 2, b` sorts by `b`).
+        let is_ordinal =
+            |o: &SortOrder| matches!(o.expr.node, ExprNode::Literal(Literal::Integer(_)));
+        let widened;
+        let ordinal_out = if !self.ctx.conf.prioritize_ordinal_in_sort
+            && self.ctx.conf.order_by_ordinal
+            && c.agg.is_none()
+            && order.iter().any(is_ordinal)
+        {
+            let others: Vec<_> = order
+                .iter()
+                .filter(|o| !is_ordinal(o))
+                .map(|o| Arc::clone(&o.expr))
+                .collect();
+            match self.bind_missing(&c, &others, env, "Sort", true) {
+                Ok((_, wide)) => {
+                    widened = wide.out;
+                    &widened[..]
+                }
+                Err(_) => &c.out[..],
+            }
+        } else {
+            &c.out[..]
+        };
         let mut exprs = Vec::new();
         for o in order {
             exprs.push(match &o.expr.node {
@@ -178,17 +204,17 @@ impl Resolver<'_> {
                 ExprNode::Literal(Literal::Integer(n)) if self.ctx.conf.order_by_ordinal => {
                     let i = usize::try_from(*n)
                         .ok()
-                        .filter(|i| (1..=c.out.len()).contains(i));
+                        .filter(|i| (1..=ordinal_out.len()).contains(i));
                     let Some(i) = i else {
                         return Err(AnalysisError::new(
                             OrderByPosOutOfRange {
                                 index: n.to_string(),
-                                size: c.out.len().to_string(),
+                                size: ordinal_out.len().to_string(),
                             },
                             o.expr.origin,
                         ));
                     };
-                    col_expr(&c.out[i - 1].col, o.expr.origin)
+                    col_expr(&ordinal_out[i - 1].col, o.expr.origin)
                 }
                 _ => Arc::clone(&o.expr),
             });

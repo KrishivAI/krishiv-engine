@@ -278,6 +278,33 @@ fn order_by_ordinals_follow_their_config() {
     .unwrap();
 }
 
+/// With `spark.sql.prioritizeOrdinalResolutionInSort.enabled` off, an `ORDER BY` ordinal also counts the
+/// columns the sort's other keys added to the select list; on, only the select list.
+#[test]
+fn order_by_ordinal_counts_missing_columns_when_legacy() {
+    let sorted = || {
+        LogicalPlan::table(["t"]).project(vec![c("a")]).sort(vec![
+            crate::SortOrder::asc(int(2)),
+            crate::SortOrder::asc(c("b")),
+        ])
+    };
+    assert_eq!(class(&run(sorted(), &ctx())), "ORDER_BY_POS_OUT_OF_RANGE");
+    let legacy = context(
+        catalog(),
+        ResolutionConf {
+            prioritize_ordinal_in_sort: false,
+            ..ResolutionConf::default()
+        },
+    );
+    run(sorted(), &legacy).unwrap();
+    // Nothing was added: still out of range.
+    let none = LogicalPlan::table(["t"]).project(vec![c("a")]).sort(vec![
+        crate::SortOrder::asc(c("a")),
+        crate::SortOrder::asc(int(2)),
+    ]);
+    assert_eq!(class(&run(none, &legacy)), "ORDER_BY_POS_OUT_OF_RANGE");
+}
+
 /// `GROUP BY` attribute precedence and `HAVING`/`ORDER BY` over the
 /// aggregate: an input column wins over select-list aliases of that name,
 /// and later clauses resolve to the grouping column rather than either

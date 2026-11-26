@@ -757,6 +757,9 @@ fn every_context_input_changes_the_key() {
     v("groupByAliases", &|c| c.conf.group_by_aliases ^= true);
     v("groupByOrdinal", &|c| c.conf.group_by_ordinal ^= true);
     v("orderByOrdinal", &|c| c.conf.order_by_ordinal ^= true);
+    v("prioritizeOrdinalInSort", &|c| {
+        c.conf.prioritize_ordinal_in_sort ^= true;
+    });
     v("lateralColumnAlias", &|c| {
         c.conf.lateral_column_alias ^= true;
     });

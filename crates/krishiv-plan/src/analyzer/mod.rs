@@ -463,6 +463,9 @@ pub struct ResolutionConf {
     /// nanosecond timestamp types when on. Krishiv has none yet, so `current_timestamp(7..=9)` is
     /// `KRISHIV_UNSUPPORTED_FEATURE` then instead of `FEATURE_NOT_ENABLED`.
     pub timestamp_nanos_types: bool,
+    /// `spark.sql.prioritizeOrdinalResolutionInSort.enabled`: off, an `ORDER BY` ordinal counts the columns
+    /// the sort's other keys added to the select list (Spark's legacy order of the two rules).
+    pub prioritize_ordinal_in_sort: bool,
 }
 
 impl Default for ResolutionConf {
@@ -504,13 +507,14 @@ impl Default for ResolutionConf {
             decorrelate_inner_query: true,
             char_varchar_as_string: false,
             timestamp_nanos_types: false,
+            prioritize_ordinal_in_sort: true,
         }
     }
 }
 
 impl ResolutionConf {
     /// The session configs [`Self::from_conf`] reads: the only ones.
-    pub const KEYS: [&'static str; 35] = [
+    pub const KEYS: [&'static str; 36] = [
         "spark.sql.caseSensitive",
         "spark.sql.ansi.enabled",
         "spark.sql.groupByAliases",
@@ -546,6 +550,7 @@ impl ResolutionConf {
         "spark.sql.optimizer.decorrelateInnerQuery.enabled",
         "spark.sql.legacy.charVarcharAsString",
         "spark.sql.timestampNanosTypes.enabled",
+        "spark.sql.prioritizeOrdinalResolutionInSort.enabled",
     ];
 
     /// The flags from session configs; `conf` returns a config's value if
@@ -620,6 +625,8 @@ impl ResolutionConf {
                 .is_none_or(|s| s.trim().eq_ignore_ascii_case("true")),
             char_varchar_as_string: on(Self::KEYS[33]),
             timestamp_nanos_types: on(Self::KEYS[34]),
+            prioritize_ordinal_in_sort: conf(Self::KEYS[35])
+                .is_none_or(|s| s.trim().eq_ignore_ascii_case("true")),
         }
     }
 
@@ -797,6 +804,7 @@ impl ContextFingerprint {
             c.decorrelate_inner_query,
             c.char_varchar_as_string,
             c.timestamp_nanos_types,
+            c.prioritize_ordinal_in_sort,
         ];
         num(
             &mut b,
