@@ -139,7 +139,9 @@ fn walk_limits(
             return best;
         }
         // Up one directory, never above the mount.
-        let cut = dir.bytes[..dir.len].iter().rposition(|&b| b == b'/')?;
+        let Some(cut) = dir.bytes[..dir.len].iter().rposition(|&b| b == b'/') else {
+            return best;
+        };
         dir.len = cut.max(mount.len());
     }
 }

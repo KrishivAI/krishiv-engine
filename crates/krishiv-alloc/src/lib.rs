@@ -738,16 +738,20 @@ mod tests {
 
     /// With no limit given, a container under about 5 GiB applies the
     /// options (its default limit is not generous) and a larger one does
-    /// not (QA2-12). Needs a user systemd instance; skipped without one.
+    /// not (QA2-12). Needs a user systemd instance that limits a scope's
+    /// memory (the memory controller delegated); skipped without one.
     #[cfg(all(target_os = "linux", target_env = "gnu"))]
     #[test]
     fn a_small_container_applies_the_options_without_a_limit() {
-        let scopes = std::process::Command::new("systemd-run")
-            .args(["--user", "--scope", "-q", "true"])
+        let max = std::process::Command::new("systemd-run")
+            .args(["--user", "--scope", "-q", "-p", "MemoryMax=2G", "sh", "-c"])
+            .arg("cat /sys/fs/cgroup$(cut -d: -f3 /proc/self/cgroup | tail -n1)/memory.max")
             .output()
-            .is_ok_and(|o| o.status.success());
-        if !scopes {
-            eprintln!("no user systemd scopes: skipped");
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned());
+        if max.as_deref() != Some("2147483648") {
+            eprintln!("no user systemd scope with a memory limit ({max:?}): skipped");
             return;
         }
         let limited = "(10, 0, 64) THP 0";
