@@ -352,3 +352,6 @@ fn absorb(slot: &mut Option<Kll>, input: Kll, name: &str) -> Result<()> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

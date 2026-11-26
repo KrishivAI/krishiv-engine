@@ -651,3 +651,6 @@ impl TupleSketchAcc {
         Ok(Arc::new(BinaryViewArray::from_iter_values(rows)) as ArrayRef)
     }
 }
+
+#[cfg(test)]
+mod tests;
