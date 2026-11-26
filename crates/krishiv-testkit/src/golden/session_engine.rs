@@ -374,6 +374,13 @@ impl Engine for SessionEngine {
                 session
                     .register_batches(&table.name, schema, vec![batch])
                     .map_err(|e| engine_error(&e))?;
+            } else if let Some(ddl) = nested_view_ddl(table) {
+                // A table with array or map columns is a temporary view over literals cast to
+                // the declared types (the batch builder above holds flat columns only).
+                self.block_on(async {
+                    let df = session.sql(&ddl).await?;
+                    df.collect_engine().await.map(drop)
+                })?;
             } else if let Some(ddl) = empty_table_ddl(table) {
                 // An empty table of declared types (`CHAR(n)`, `VARCHAR(n)`) is a table the session creates,
                 // as Spark's suite does for the TPC-DS schemas `pipe-operators` queries.
@@ -887,6 +894,51 @@ fn binary_value(col: &ArrayRef, row: usize) -> Option<Vec<u8>> {
     })
 }
 
+/// A SQL literal for a fixture cell of the kinds nested fixtures hold, or `None` for others.
+fn cell_literal(cell: &Cell) -> Option<String> {
+    Some(match cell {
+        Cell::Null => "NULL".to_owned(),
+        Cell::Bool(b) => b.to_string(),
+        Cell::Int(i) => i.to_string(),
+        Cell::Str(s) => format!("'{}'", s.replace('\\', "\\\\").replace('\'', "\\'")),
+        Cell::Array(items) => {
+            let parts: Option<Vec<String>> = items.iter().map(cell_literal).collect();
+            format!("array({})", parts?.join(", "))
+        }
+        Cell::Map(entries) => {
+            let mut parts = Vec::with_capacity(entries.len() * 2);
+            for (k, v) in entries {
+                parts.push(cell_literal(k)?);
+                parts.push(cell_literal(v)?);
+            }
+            format!("map({})", parts.join(", "))
+        }
+        _ => return None,
+    })
+}
+
+/// `CREATE OR REPLACE TEMPORARY VIEW` for a fixture table with nested columns and rows: one
+/// `SELECT` per row, each cell a literal cast to its declared type.
+fn nested_view_ddl(table: &Table) -> Option<String> {
+    if table.rows.is_empty() || table.columns.is_empty() {
+        return None;
+    }
+    let mut selects = Vec::with_capacity(table.rows.len());
+    for row in &table.rows {
+        let mut cols = Vec::with_capacity(table.columns.len());
+        for (i, c) in table.columns.iter().enumerate() {
+            let lit = cell_literal(row.get(i).unwrap_or(&Cell::Null))?;
+            cols.push(format!("CAST({lit} AS {}) AS `{}`", c.spark_type, c.name));
+        }
+        selects.push(format!("SELECT {}", cols.join(", ")));
+    }
+    Some(format!(
+        "CREATE OR REPLACE TEMPORARY VIEW `{}` AS {}",
+        table.name,
+        selects.join(" UNION ALL ")
+    ))
+}
+
 /// `CREATE TABLE` for a fixture table without rows, from its Spark column types as written.
 fn empty_table_ddl(table: &Table) -> Option<String> {
     if !table.rows.is_empty() || table.columns.is_empty() {
@@ -1255,9 +1307,9 @@ mod tests {
             .execute("SELECT sum(a), max(b) FROM aggtest")
             .map_err(err)?;
         assert_eq!(out.rows, [["198", "324.78"]]);
-        // `arraydata` has array columns, which the harness does not build yet.
-        let got = e.execute("SELECT * FROM arraydata").map(drop).unwrap_err();
-        assert_eq!(got.class.as_deref(), Some("TABLE_OR_VIEW_NOT_FOUND"));
+        // `arraydata` has array columns: a temporary view over literals.
+        let out = e.execute("SELECT * FROM arraydata LIMIT 2").map_err(err)?;
+        assert_eq!(out.rows.len(), 2);
         Ok(())
     }
 
