@@ -77,7 +77,7 @@ const KEYWORDS: &[(&str, u8)] = &[
     ("LEFT", R | S),
     ("LIMIT", C),
     // Spark 4.3 keyword (`#currentLike`); a primary only under the 4.3 grammar, an identifier
-    // under 4.2. Not reserved here: the 4.2 fixture has no `LOCALTIME`.
+    // under 4.2. Reserved only under 4.3 with enforced keywords ([`RESERVED_IN_4_3`]).
     ("LOCALTIME", P),
     ("MINUS", C | N | S),
     ("NATURAL", R | N | S),
@@ -623,15 +623,51 @@ pub const SQL_KEYWORDS: &[(&str, bool)] = &[
     ("ZONE", false),
 ];
 
-/// The rows of `sql_keywords()`: `(keyword, reserved)` with `reserved`
-/// honoring `enforce_reserved` (as Spark's `SqlKeywords` does: reserved
-/// only when ANSI reserved keywords are enforced).
+/// The keywords Spark 4.3's grammar lists beyond [`SQL_KEYWORDS`] (its
+/// `keywords*.sql` goldens). Sorted.
+const ADDED_IN_4_3: &[&str] = &[
+    "ALIGN",
+    "APPLY",
+    "ASOF",
+    "AUTO",
+    "BIN",
+    "BIN_DISTRIBUTE_RATIO",
+    "BIN_END",
+    "BIN_START",
+    "CDC",
+    "ERROR",
+    "HISTORY",
+    "JSON_TABLE",
+    "LOCALTIME",
+    "MATCH_CONDITION",
+    "ORDINALITY",
+    "SCD",
+    "SEQUENCE",
+    "TRACK",
+    "UNIFORM",
+    "UNNEST",
+    "WIDTH",
+];
+
+/// The one of [`ADDED_IN_4_3`] that Spark 4.3 reserves (the parser then
+/// refuses it as an identifier under enforced reserved keywords).
+pub(crate) const RESERVED_IN_4_3: &str = "LOCALTIME";
+
+/// The rows of `sql_keywords()`: `(keyword, reserved)` of the profile's
+/// grammar, sorted, with `reserved` honoring `enforce_reserved` (as Spark's
+/// `SqlKeywords` does: reserved only when ANSI reserved keywords are
+/// enforced).
 #[must_use]
-pub fn sql_keywords(enforce_reserved: bool) -> Vec<(String, bool)> {
-    SQL_KEYWORDS
+pub fn sql_keywords(enforce_reserved: bool, spark_4_3: bool) -> Vec<(String, bool)> {
+    let added: &[&str] = if spark_4_3 { ADDED_IN_4_3 } else { &[] };
+    let mut rows: Vec<(String, bool)> = SQL_KEYWORDS
         .iter()
-        .map(|(k, r)| ((*k).to_owned(), *r && enforce_reserved))
-        .collect()
+        .copied()
+        .chain(added.iter().map(|k| (*k, *k == RESERVED_IN_4_3)))
+        .map(|(k, r)| (k.to_owned(), r && enforce_reserved))
+        .collect();
+    rows.sort_unstable();
+    rows
 }
 
 #[cfg(test)]
@@ -683,6 +719,19 @@ mod tests {
                 "{text}"
             );
         }
+    }
+
+    #[test]
+    fn spark_4_3_adds_keywords_and_reserves_localtime() {
+        let old = sql_keywords(true, false);
+        let new = sql_keywords(true, true);
+        assert_eq!((old.len(), new.len()), (423, 444));
+        assert!(new.windows(2).all(|w| w[0].0 < w[1].0));
+        let added: Vec<_> = new.iter().filter(|r| !old.contains(r)).collect();
+        assert_eq!(added.len(), 21);
+        let reserved: Vec<_> = added.iter().filter(|r| r.1).map(|r| r.0.as_str()).collect();
+        assert_eq!(reserved, ["LOCALTIME"]);
+        assert!(sql_keywords(false, true).iter().all(|r| !r.1));
     }
 
     #[test]

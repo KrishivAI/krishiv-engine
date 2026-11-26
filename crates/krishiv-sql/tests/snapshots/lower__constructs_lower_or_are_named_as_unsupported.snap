@@ -69,7 +69,7 @@ SELECT f(a).b FROM t
 SELECT transform(a, x -> x) FROM t
   => Project [transform(a, (x) -> x)] | +- Read t | 
 SELECT (a, b) FROM t
-  => Project [struct(a, b)] | +- Read t | 
+  => Project [named_struct('a', a, 'b', b)] | +- Read t | 
 SELECT a LIKE ANY ('x', 'y') FROM t
   => Project [a LIKE ANY ('x', 'y')] | +- Read t | 
 SELECT ? FROM t

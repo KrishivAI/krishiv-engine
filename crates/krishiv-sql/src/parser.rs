@@ -50,7 +50,7 @@ use crate::ast::{
     TransformSelect, Unpivot, UnpivotColumns, Use, UsingArgument, Values, ViewColumn, With,
 };
 use crate::error::{self, ParseError};
-use crate::keywords::{CLAUSE_WORD, RESERVED_WORD, STRICT_WORD, classify, is_kw};
+use crate::keywords::{CLAUSE_WORD, RESERVED_IN_4_3, RESERVED_WORD, STRICT_WORD, classify, is_kw};
 use crate::lexer::{Sym, Token, TokenKind, tokenize, unescape_string, unquote_ident};
 use crate::{MAX_DEPTH, ParserOptions, validate};
 use krishiv_common::sql_path::PathElement as PathEl;
@@ -882,6 +882,14 @@ impl<'s> Parser<'s> {
         self.classes.get(self.pos + n).copied().unwrap_or(0)
     }
 
+    /// Whether token `n` is the word only Spark 4.3 reserves, with reserved
+    /// keywords enforced.
+    fn reserved_in_4_3(&self, n: usize) -> bool {
+        self.opts.enforce_reserved_keywords
+            && self.opts.spark_4_3
+            && is_kw(self.text(n), RESERVED_IN_4_3)
+    }
+
     fn text(&self, n: usize) -> &'s str {
         self.tok(n).map_or("", |t| t.span.text(self.src))
     }
@@ -1075,7 +1083,7 @@ impl<'s> Parser<'s> {
         let (value, quoted) = match t.kind {
             TokenKind::Word => {
                 let keyword_ok = strong && !self.opts.enforce_reserved_keywords;
-                if !keyword_ok && self.class(n) & RESERVED_WORD != 0 {
+                if (!keyword_ok && self.class(n) & RESERVED_WORD != 0) || self.reserved_in_4_3(n) {
                     return None;
                 }
                 (text.to_owned(), false)
@@ -1101,8 +1109,9 @@ impl<'s> Parser<'s> {
     fn is_ident_at(&self, n: usize, strong: bool) -> bool {
         match self.kind(n) {
             Some(TokenKind::Word) => {
-                (strong && !self.opts.enforce_reserved_keywords)
-                    || self.class(n) & RESERVED_WORD == 0
+                ((strong && !self.opts.enforce_reserved_keywords)
+                    || self.class(n) & RESERVED_WORD == 0)
+                    && !self.reserved_in_4_3(n)
             }
             Some(TokenKind::QuotedIdent) => true,
             Some(TokenKind::DoubleQuoted) => self.opts.double_quoted_identifiers,

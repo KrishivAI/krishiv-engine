@@ -1641,8 +1641,8 @@ impl Lowerer {
                     sp,
                 )
             }
-            // `(a, b)` is `struct(a, b)` to Spark's `AstBuilder`.
-            ExprKind::Row(items) | ExprKind::Struct(items) => self.struct_ctor(items, sp)?,
+            ExprKind::Row(items) => self.row_ctor(items, sp)?,
+            ExprKind::Struct(items) => self.struct_ctor(items, sp)?,
             // Every variant is lowered above; the wildcard stays because
             // `ExprKind` is non-exhaustive.
             #[expect(unreachable_patterns, reason = "every ExprKind variant is lowered")]
@@ -1668,6 +1668,35 @@ impl Lowerer {
     /// keeping `struct(...)` as the shown form. A `*` item passes through
     /// for the analyzer to expand, and a multi-name alias is not a field
     /// name.
+    /// `(a, b)`: Spark's `AstBuilder` builds the struct from it, which shows
+    /// as `named_struct(a, a, b, b)` where a written `struct(a, b)` keeps its
+    /// call. A column or field names its field by its written name, an alias
+    /// by the alias, anything else is `colN`. With a `*` the field names are
+    /// known only to the analyzer, so it stays a `struct` call.
+    fn row_ctor(&mut self, items: &[SelectItem], sp: Span) -> R<IrExpr> {
+        let call = self.struct_ctor(items, sp)?;
+        let ExprNode::Function(f) = &call.node else {
+            return Ok(call);
+        };
+        if items
+            .iter()
+            .any(|i| matches!(i.expr.kind, ExprKind::Wildcard { .. }))
+        {
+            return Ok(call);
+        }
+        let mut args = Vec::with_capacity(2 * items.len());
+        for (i, (item, value)) in items.iter().zip(&f.args).enumerate() {
+            let name = match &item.alias {
+                Some(Alias::Name(id)) => id.value.clone(),
+                _ => row_field_name(&item.expr).unwrap_or_else(|| format!("col{}", i + 1)),
+            };
+            let name = ExprNode::Literal(IrLiteral::String(name));
+            args.push(arc(self.ex(name, sp)));
+            args.push(Arc::clone(value));
+        }
+        Ok(self.call("named_struct", args, sp))
+    }
+
     fn struct_ctor(&mut self, items: &[SelectItem], sp: Span) -> R<IrExpr> {
         let mut args = Vec::with_capacity(items.len());
         for item in items.iter() {
@@ -1691,6 +1720,17 @@ impl Lowerer {
             });
         }
         Ok(self.call("struct", args, sp))
+    }
+}
+
+/// The field name a row constructor takes from a column or field written in
+/// it, through parentheses.
+fn row_field_name(e: &Expr) -> Option<String> {
+    match &e.kind {
+        ExprKind::Column(parts) => parts.last().map(|p| p.value.clone()),
+        ExprKind::Field(_, name) => Some(name.value.clone()),
+        ExprKind::Nested(inner) => row_field_name(inner),
+        _ => None,
     }
 }
 
