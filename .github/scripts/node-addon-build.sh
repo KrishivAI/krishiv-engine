@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Apache-2.0
 # Builds the embedded engine's Node-API addon (crates/krishiv-node) with the `dist` profile and copies it to
-# OUT/krishiv.node (publish-js.yml). On Linux it runs inside the PyPA manylinux_2_28 / musllinux_1_2 image, so the
+# OUT/krishiv.node (publish-js.yml), with OUT/THIRD-PARTY-NOTICES.txt beside it (the pack script requires it). On Linux it runs inside the PyPA manylinux_2_28 / musllinux_1_2 image, so the
 # glibc floor is the Python wheels' (2.28); it installs the pinned toolchain (rust-toolchain.toml) when the image has
 # none. On macOS it runs on the runner.
 #
@@ -49,11 +49,20 @@ cp "$target/dist/$lib" "$out/krishiv.node"
 ls -l "$out/krishiv.node"
 # A dlopen'ed library marked STATIC_TLS (initial-exec TLS somewhere in it) loads only while its whole TLS block fits
 # glibc's small static-TLS surplus, and fails with "cannot allocate memory in static TLS block" once it grows.
-# The PyPA images carry binutils; the macOS runner has no ELF to check.
-if [ "$lib" = libkrishiv_node.so ] && readelf -dW "$out/krishiv.node" | grep -q STATIC_TLS; then
-  echo "krishiv.node is marked STATIC_TLS: a dependency uses initial-exec TLS (mimalloc needs local_dynamic_tls)" >&2
-  exit 1
+# Checked on glibc (the manylinux images carry readelf; musllinux has none, and macOS has no ELF to check).
+host=$(rustc -vV | sed -n 's/^host: //p')
+if [[ $host == *-linux-gnu ]]; then
+  # Read first, so a missing readelf fails the build (`set -e`) instead of passing the check.
+  dynamic=$(readelf -dW "$out/krishiv.node")
+  if grep -q STATIC_TLS <<<"$dynamic"; then
+    echo "krishiv.node is marked STATIC_TLS: a dependency uses initial-exec TLS (mimalloc needs local_dynamic_tls)" >&2
+    exit 1
+  fi
 fi
+# The crates linked into the addon, with their license texts. Written here, where cargo is known to be: on Linux
+# the runner outside the PyPA image may have none.
+python3 -I .github/scripts/third_party_notices.py --package krishiv-node --target "$host" \
+  --title "the krishiv Node-API addon ($host)" --out "$out/THIRD-PARTY-NOTICES.txt"
 if [ -n "$owner" ]; then
   chown -R "$owner" "$out" "$target"
 fi
