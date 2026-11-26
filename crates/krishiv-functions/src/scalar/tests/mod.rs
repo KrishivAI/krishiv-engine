@@ -612,6 +612,7 @@ mod families;
 mod hll;
 mod json;
 mod json_tuple;
+mod kll;
 mod legacy_fast;
 mod map;
 mod misc;
