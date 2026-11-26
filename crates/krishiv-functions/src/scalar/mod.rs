@@ -508,6 +508,7 @@ const FAMILIES: &[(&[&str], Binder)] = &[
     (collection::NAMES, collection::bind),
     (string::NAMES, string::bind),
     (datetime::NAMES, datetime::bind),
+    (nanos::NAMES, nanos::bind_family),
     (math::NAMES, math::bind),
     (regex::NAMES, regex::bind),
     (arith::NAMES, arith::bind),

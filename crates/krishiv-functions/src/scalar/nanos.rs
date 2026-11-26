@@ -9,17 +9,142 @@
 //! kernels over the floor of the value; `date_trunc` gives its result back as a nanosecond timestamp of
 //! the argument's kind, and `extract(SECOND ..)` adds the nanoseconds to the microsecond seconds as a
 //! `decimal(11, 9)`.
+//!
+//! It is also the family of Spark 4.3's `unix_nanos` (a nanosecond timestamp's nanoseconds since the
+//! epoch, a `DECIMAL(21, 0)`) and `timestamp_nanos` (an integral or decimal count, floored, to a
+//! `TIMESTAMP_LTZ(9)`). The carrier is Arrow's 64-bit nanoseconds, so a count outside 1677-09-21 ..
+//! 2262-04-11 is `DATETIME_OVERFLOW`, where Spark's range reaches year 9999.
 use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
-    Decimal64Type, Decimal128Type, TimestampMicrosecondType, TimestampNanosecondType,
+    Decimal32Type, Decimal64Type, Decimal128Type, Int8Type, Int16Type, Int32Type, Int64Type,
+    TimestampMicrosecondType, TimestampNanosecondType,
 };
-use arrow_array::{Array, ArrayRef, Decimal128Array};
+use arrow_array::{Array, ArrayRef, Decimal128Array, TimestampNanosecondArray};
 use arrow_schema::{DataType, TimeUnit};
-use krishiv_common::error::KrishivError;
+use krishiv_common::error::{DatetimeOverflow, KrishivError};
 
-use super::{Arg, BindArg, BindOptions, ScalarFunction, bind_scalar, internal};
+use super::args::Inputs;
+use super::{
+    Arg, BindArg, BindOptions, Binding, FamilyResult, ScalarFunction, bind_scalar, internal,
+};
+
+/// The family's own functions (Spark 4.3).
+pub(super) const NAMES: &[&str] = &["unix_nanos", "timestamp_nanos"];
+
+/// `unix_nanos` over a nanosecond timestamp; `timestamp_nanos` over an integral or decimal count.
+pub(super) fn bind_family(name: &str, args: &[BindArg], _opts: &BindOptions) -> FamilyResult {
+    let listed = NAMES.iter().copied().find(|n| *n == name)?;
+    let types: Vec<DataType> = args.iter().map(BindArg::data_type).collect();
+    let binding = match (listed, types.as_slice()) {
+        ("unix_nanos", [DataType::Timestamp(TimeUnit::Nanosecond, _)]) => Ok(Binding::new(
+            DataType::Decimal128(21, 0),
+            |x: &Inputs<'_>| unix_nanos(&x.column(0)?),
+        )),
+        ("timestamp_nanos", [t]) if count_scale(t).is_some() => {
+            let scale = count_scale(t).unwrap_or_default();
+            Ok(Binding::new(
+                DataType::Timestamp(TimeUnit::Nanosecond, Some(Arc::from("UTC"))),
+                move |x: &Inputs<'_>| timestamp_nanos(&x.column(0)?, scale),
+            ))
+        }
+        (_, types) => Err(internal(format!("{listed} over {types:?}"))),
+    };
+    Some((listed, binding))
+}
+
+/// The scale of a count `timestamp_nanos` takes: 0 for an integral type, a decimal's own.
+fn count_scale(t: &DataType) -> Option<i8> {
+    match t {
+        DataType::Int8 | DataType::Int16 | DataType::Int32 | DataType::Int64 => Some(0),
+        DataType::Decimal32(_, s) | DataType::Decimal64(_, s) | DataType::Decimal128(_, s) => {
+            Some(*s)
+        }
+        _ => None,
+    }
+}
+
+/// The nanoseconds since the epoch of each value, as a `DECIMAL(21, 0)`.
+fn unix_nanos(a: &ArrayRef) -> Result<ArrayRef, KrishivError> {
+    let out: Decimal128Array = a
+        .as_primitive::<TimestampNanosecondType>()
+        .iter()
+        .map(|v| v.map(i128::from))
+        .collect();
+    Ok(Arc::new(
+        out.with_precision_and_scale(21, 0)
+            .map_err(|e| internal(e.to_string()))?,
+    ))
+}
+
+/// The unscaled values of an integral or decimal column, widened.
+fn unscaled(a: &ArrayRef) -> Result<Vec<Option<i128>>, KrishivError> {
+    Ok(match a.data_type() {
+        DataType::Int8 => a
+            .as_primitive::<Int8Type>()
+            .iter()
+            .map(|v| v.map(i128::from))
+            .collect(),
+        DataType::Int16 => a
+            .as_primitive::<Int16Type>()
+            .iter()
+            .map(|v| v.map(i128::from))
+            .collect(),
+        DataType::Int32 => a
+            .as_primitive::<Int32Type>()
+            .iter()
+            .map(|v| v.map(i128::from))
+            .collect(),
+        DataType::Int64 => a
+            .as_primitive::<Int64Type>()
+            .iter()
+            .map(|v| v.map(i128::from))
+            .collect(),
+        DataType::Decimal32(..) => a
+            .as_primitive::<Decimal32Type>()
+            .iter()
+            .map(|v| v.map(i128::from))
+            .collect(),
+        DataType::Decimal64(..) => a
+            .as_primitive::<Decimal64Type>()
+            .iter()
+            .map(|v| v.map(i128::from))
+            .collect(),
+        DataType::Decimal128(..) => a.as_primitive::<Decimal128Type>().iter().collect(),
+        t => return Err(internal(format!("timestamp_nanos over {t}"))),
+    })
+}
+
+/// A count of nanoseconds (at `scale`, floored to a whole nanosecond, as Spark's `RoundingMode.FLOOR`) as a
+/// `TIMESTAMP_LTZ(9)`; a count the carrier cannot hold is `DATETIME_OVERFLOW`.
+fn timestamp_nanos(a: &ArrayRef, scale: i8) -> Result<ArrayRef, KrishivError> {
+    // Spark's decimals have a scale of 0..=38, so the divisor is at most 10^38 (an `i128`).
+    let divisor = u32::try_from(scale)
+        .ok()
+        .and_then(|s| 10_i128.checked_pow(s))
+        .ok_or_else(|| internal(format!("timestamp_nanos at scale {scale}")))?;
+    let mut out = Vec::with_capacity(a.len());
+    for v in unscaled(a)? {
+        let Some(v) = v else {
+            out.push(None);
+            continue;
+        };
+        let whole = v.div_euclid(divisor);
+        let Ok(n) = i64::try_from(whole) else {
+            return Err(DatetimeOverflow {
+                operation: format!(
+                    "create a TIMESTAMP_LTZ(9) from {whole} nanoseconds since the epoch"
+                ),
+            }
+            .into());
+        };
+        out.push(Some(n));
+    }
+    Ok(Arc::new(
+        TimestampNanosecondArray::from(out).with_timezone("UTC"),
+    ))
+}
 
 /// The functions that read a nanosecond timestamp's microseconds.
 const FLOORED: &[&str] = &[
@@ -255,6 +380,61 @@ mod tests {
             ty: a.data_type().clone(),
             nullable: true,
         }
+    }
+
+    #[test]
+    fn unix_nanos_and_timestamp_nanos_round_trip() {
+        let ts: ArrayRef = Arc::new(TimestampNanosecondArray::from(vec![
+            Some(-1_i64),
+            None,
+            Some(i64::MAX),
+        ]));
+        let n = unix_nanos(&ts).unwrap();
+        let n = n.as_primitive::<Decimal128Type>();
+        assert_eq!(n.data_type(), &DataType::Decimal128(21, 0));
+        assert_eq!(
+            n.iter().collect::<Vec<_>>(),
+            vec![Some(-1), None, Some(i128::from(i64::MAX))]
+        );
+        let small: ArrayRef = Arc::new(Int32Array::from(vec![Some(-7), None]));
+        let back = timestamp_nanos(&small, 0).unwrap();
+        let back = back.as_primitive::<TimestampNanosecondType>();
+        assert_eq!(back.iter().collect::<Vec<_>>(), vec![Some(-7), None]);
+        // 1.9 and -1.1 at scale 1 floor to 1 and -2; a Decimal64 carrier reads the same.
+        let dec: ArrayRef = Arc::new(
+            arrow_array::Decimal64Array::from(vec![Some(19_i64), Some(-11)])
+                .with_precision_and_scale(2, 1)
+                .unwrap(),
+        );
+        let floored = timestamp_nanos(&dec, 1).unwrap();
+        assert_eq!(
+            floored
+                .as_primitive::<TimestampNanosecondType>()
+                .values()
+                .to_vec(),
+            vec![1, -2]
+        );
+        let huge: ArrayRef = Arc::new(
+            Decimal128Array::from(vec![Some(i128::from(i64::MAX) * 10 + 15)])
+                .with_precision_and_scale(38, 1)
+                .unwrap(),
+        );
+        let e = timestamp_nanos(&huge, 1).unwrap_err();
+        assert!(e.to_string().contains("DATETIME_OVERFLOW"), "{e}");
+        assert!(
+            e.to_string()
+                .contains("from 9223372036854775808 nanoseconds"),
+            "{e}"
+        );
+        for t in [
+            DataType::Int8,
+            DataType::Int16,
+            DataType::Int64,
+            DataType::Decimal32(3, 2),
+        ] {
+            assert!(count_scale(&t).is_some(), "{t}");
+        }
+        assert_eq!(count_scale(&DataType::Float64), None);
     }
 
     #[test]

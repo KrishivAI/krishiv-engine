@@ -626,6 +626,16 @@ fn nanos_arg(c: &CallTypes<'_>, i: usize) -> Option<InputType> {
         .map(|t| InputType::Strict(t.clone()))
 }
 
+/// `unix_nanos`: a `DECIMAL(21, 0)`, which holds the nanoseconds of years 1 to 9999.
+fn unix_nanos_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    typed(DataType::Decimal(DecimalType::try_new(21, 0)?), c)
+}
+
+/// `timestamp_nanos`: a `TIMESTAMP_LTZ(9)`.
+fn timestamp_nanos_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    typed(DataType::TimestampNanos { precision: 9 }, c)
+}
+
 fn date_trunc_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
     vec![
         exact(DataType::String),
@@ -1128,6 +1138,18 @@ fn datetime() -> Vec<Spec> {
         &["unix_seconds", "unix_millis", "unix_micros"],
         &Inputs::Built(InputBuilder(unix_part_inputs)),
         long,
+    ));
+    // Spark 4.3: `unix_nanos` reads a nanosecond timestamp only; `timestamp_nanos` takes an integral or a
+    // decimal count (a decimal is floored) and is a `TIMESTAMP_LTZ(9)`.
+    out.extend(scalar(
+        &["unix_nanos"],
+        &Inputs::Expects(vec![InputType::StrictTimestampNanos]),
+        unix_nanos_result,
+    ));
+    out.extend(scalar(
+        &["timestamp_nanos"],
+        &Inputs::Expects(vec![InputType::StrictIntegralOrDecimal]),
+        timestamp_nanos_result,
     ));
     out.extend(scalar(
         &["date_from_unix_date"],

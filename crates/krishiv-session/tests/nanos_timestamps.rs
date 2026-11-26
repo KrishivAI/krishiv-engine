@@ -260,3 +260,69 @@ fn interval_arithmetic_keeps_or_drops_nanoseconds_as_spark() {
         "INTERVAL '21914 23:59:59.876544' DAY TO SECOND INTERVAL '-21914 23:59:59.876544' DAY TO SECOND INTERVAL '0 00:00:00.123456' DAY TO SECOND"
     );
 }
+
+/// The error class and message of `q`.
+fn error(s: &Session, q: &str) -> String {
+    let e = futures::executor::block_on(async { s.sql(q).await?.collect().await })
+        .err()
+        .unwrap_or_else(|| panic!("{q}: no error"));
+    e.to_string()
+}
+
+/// Spark 4.3's `unix_nanos` (a `DECIMAL(21, 0)`) and `timestamp_nanos` (a `TIMESTAMP_LTZ(9)`, a decimal count
+/// floored), values and refusals from a Spark 4.3.0 run (`timestamp-ltz-nanos.sql` and a probe).
+#[test]
+fn unix_nanos_and_timestamp_nanos_are_spark_43s() {
+    let s = session();
+    assert_eq!(
+        rows(
+            &s,
+            "SELECT unix_nanos(c), unix_nanos(l), typeof(unix_nanos(c)) FROM t WHERE k IN (0, 3, 4) ORDER BY k"
+        ),
+        "1577836800000000001 1577836800000000001 decimal(21,0) | -315619199876543211 -315619199876543211 decimal(21,0) |   decimal(21,0)"
+    );
+    assert_eq!(
+        rows(
+            &s,
+            "SELECT CAST(timestamp_nanos(1230219000123456789) AS STRING), CAST(timestamp_nanos(-1) AS STRING), CAST(timestamp_nanos(1.9BD) AS STRING), CAST(timestamp_nanos(-1.1BD) AS STRING), CAST(timestamp_nanos(CAST(7 AS TINYINT)) AS STRING)"
+        ),
+        "2008-12-25 15:30:00.123456789 1969-12-31 23:59:59.999999999 1970-01-01 00:00:00.000000001 1969-12-31 23:59:59.999999998 1970-01-01 00:00:00.000000007"
+    );
+    // `typeof(timestamp_nanos(NULL))` is `timestamp_ltz(9)` in Spark; the type's printed name is the types
+    // half of the row (`DataType::sql`), not checked here.
+    assert_eq!(
+        rows(
+            &s,
+            "SELECT CAST(timestamp_nanos(NULL) AS STRING), CAST(timestamp_nanos(CAST(NULL AS BIGINT)) AS STRING), unix_nanos(NULL), unix_nanos(timestamp_nanos(9223372036854775807))"
+        ),
+        "   9223372036854775807"
+    );
+    let overflow = error(&s, "SELECT timestamp_nanos(10000000000000000000000000BD)");
+    assert!(
+        overflow.contains("DATETIME_OVERFLOW")
+            && overflow.contains(
+                "create a TIMESTAMP_LTZ(9) from 10000000000000000000000000 nanoseconds since the epoch"
+            ),
+        "{overflow}"
+    );
+    let double = error(&s, "SELECT timestamp_nanos(1.0D)");
+    assert!(
+        double.contains("DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE")
+            && double.contains(r#"requires the ("INTEGRAL" or "DECIMAL") type"#),
+        "{double}"
+    );
+    for q in [
+        "SELECT unix_nanos(TIMESTAMP '2020-01-01 00:00:00')",
+        "SELECT unix_nanos('2020-01-01 00:00:00')",
+        "SELECT unix_nanos(DATE '2020-01-01')",
+    ] {
+        let e = error(&s, q);
+        assert!(
+            e.contains("DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE")
+                && e.contains(
+                    r#"requires the "(TIMESTAMP_LTZ(P) OR TIMESTAMP_NTZ(P) WITH P IN [7, 9])" type"#
+                ),
+            "{q}: {e}"
+        );
+    }
+}

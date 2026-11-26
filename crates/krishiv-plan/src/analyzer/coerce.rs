@@ -1385,6 +1385,18 @@ fn implicit(from: Option<&DataType>, want: &InputType, ansi: bool) -> Option<Opt
         {
             Some(Some(t.clone()))
         }
+        (Some(t), InputType::StrictIntegralOrDecimal)
+            if matches!(t, T::Byte | T::Short | T::Integer | T::Long | T::Decimal(_)) =>
+        {
+            Some(Some(t.clone()))
+        }
+        (None, InputType::StrictIntegralOrDecimal) => Some(Some(T::Long)),
+        (Some(t), InputType::StrictTimestampNanos)
+            if matches!(t, T::TimestampNanos { .. } | T::TimestampNtzNanos { .. }) =>
+        {
+            Some(Some(t.clone()))
+        }
+        (None, InputType::StrictTimestampNanos) => Some(Some(T::TimestampNanos { precision: 9 })),
         (Some(T::Timestamp), InputType::NumericOrTimestamp)
         | (None | Some(T::String), InputType::NumericOrTemporal) => Some(Some(T::Double)),
         (Some(t), InputType::NumericOrTemporal)
