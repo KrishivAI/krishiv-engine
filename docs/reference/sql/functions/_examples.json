@@ -2287,100 +2287,148 @@
     ]
   },
   "kll_merge_agg_bigint#1": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "6"
+    ]
   },
   "kll_merge_agg_double#1": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "6"
+    ]
   },
   "kll_merge_agg_float#1": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "6"
+    ]
   },
   "kll_sketch_agg_bigint#1": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "true"
+    ]
   },
   "kll_sketch_agg_bigint#2": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "true"
+    ]
   },
   "kll_sketch_agg_double#1": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "true"
+    ]
   },
   "kll_sketch_agg_double#2": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "true"
+    ]
   },
   "kll_sketch_agg_float#1": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "true"
+    ]
   },
   "kll_sketch_agg_float#2": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "true"
+    ]
   },
   "kll_sketch_get_n_bigint#1": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "5"
+    ]
   },
   "kll_sketch_get_n_double#1": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "5"
+    ]
   },
   "kll_sketch_get_n_float#1": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "5"
+    ]
   },
   "kll_sketch_get_quantile_bigint#1": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "true"
+    ]
   },
   "kll_sketch_get_quantile_double#1": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "true"
+    ]
   },
   "kll_sketch_get_quantile_float#1": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "true"
+    ]
   },
   "kll_sketch_get_rank_bigint#1": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "true"
+    ]
   },
   "kll_sketch_get_rank_double#1": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "true"
+    ]
   },
   "kll_sketch_get_rank_float#1": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "true"
+    ]
   },
   "kll_sketch_merge_bigint#1": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "true"
+    ]
   },
   "kll_sketch_merge_double#1": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "true"
+    ]
   },
   "kll_sketch_merge_float#1": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "true"
+    ]
   },
   "kll_sketch_to_string_bigint#1": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "true"
+    ]
   },
   "kll_sketch_to_string_double#1": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "true"
+    ]
   },
   "kll_sketch_to_string_float#1": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "true"
+    ]
   },
   "kurtosis#1": {
     "ok": true,
@@ -6497,100 +6545,148 @@
     ]
   },
   "tuple_difference_double#1": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "2.0"
+    ]
   },
   "tuple_difference_integer#1": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "2.0"
+    ]
   },
   "tuple_difference_theta_double#1": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "2.0"
+    ]
   },
   "tuple_difference_theta_integer#1": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "2.0"
+    ]
   },
   "tuple_intersection_agg_double#1": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "2.0"
+    ]
   },
   "tuple_intersection_agg_integer#1": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "2.0"
+    ]
   },
   "tuple_intersection_double#1": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "2.0"
+    ]
   },
   "tuple_intersection_integer#1": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "2.0"
+    ]
   },
   "tuple_intersection_theta_double#1": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "2.0"
+    ]
   },
   "tuple_intersection_theta_integer#1": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "2.0"
+    ]
   },
   "tuple_sketch_agg_double#1": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "3.0"
+    ]
   },
   "tuple_sketch_agg_integer#1": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "3.0"
+    ]
   },
   "tuple_sketch_estimate_double#1": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "2.0"
+    ]
   },
   "tuple_sketch_estimate_integer#1": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "2.0"
+    ]
   },
   "tuple_sketch_summary_double#1": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "6.0"
+    ]
   },
   "tuple_sketch_summary_integer#1": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "6"
+    ]
   },
   "tuple_sketch_theta_double#1": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "1.0"
+    ]
   },
   "tuple_sketch_theta_integer#1": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "1.0"
+    ]
   },
   "tuple_union_agg_double#1": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "3.0"
+    ]
   },
   "tuple_union_agg_integer#1": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "3.0"
+    ]
   },
   "tuple_union_double#1": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "6.0"
+    ]
   },
   "tuple_union_integer#1": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "6.0"
+    ]
   },
   "tuple_union_theta_double#1": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "6.0"
+    ]
   },
   "tuple_union_theta_integer#1": {
-    "class": "KRISHIV_UNSUPPORTED_FEATURE",
-    "ok": false
+    "ok": true,
+    "rows": [
+      "6.0"
+    ]
   },
   "typeof#1": {
     "ok": true,

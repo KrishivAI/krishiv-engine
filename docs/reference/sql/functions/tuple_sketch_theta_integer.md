@@ -35,7 +35,7 @@ tuple_sketch_theta_integer(child)
 ```sql
 -- tuple_sketch_theta_integer, example 1
 > SELECT tuple_sketch_theta_integer(tuple_sketch_agg_integer(key, summary)) FROM VALUES (1, 1), (2, 2), (3, 3) tab(key, summary);
-Error: KRISHIV_UNSUPPORTED_FEATURE
+1.0
 ```
 
 ## Version history

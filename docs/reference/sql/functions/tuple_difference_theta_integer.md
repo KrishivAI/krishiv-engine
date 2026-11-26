@@ -35,7 +35,7 @@ tuple_difference_theta_integer(tupleSketch, thetaSketch)
 ```sql
 -- tuple_difference_theta_integer, example 1
 > SELECT tuple_sketch_estimate_integer(tuple_difference_theta_integer(tuple_sketch_agg_integer(col1, val1), theta_sketch_agg(col2))) FROM VALUES (5, 5, 4), (1, 1, 4), (2, 2, 5), (3, 3, 1) tab(col1, val1, col2);
-Error: KRISHIV_UNSUPPORTED_FEATURE
+2.0
 ```
 
 ## Version history

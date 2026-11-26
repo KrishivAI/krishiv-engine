@@ -35,7 +35,7 @@ tuple_sketch_summary_double(child, mode)
 ```sql
 -- tuple_sketch_summary_double, example 1
 > SELECT tuple_sketch_summary_double(tuple_sketch_agg_double(key, summary)) FROM VALUES (1, 1.0D), (1, 2.0D), (2, 3.0D) tab(key, summary);
-Error: KRISHIV_UNSUPPORTED_FEATURE
+6.0
 ```
 
 ## Version history

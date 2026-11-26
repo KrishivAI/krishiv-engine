@@ -36,7 +36,7 @@ kll_merge_agg_bigint(expr[, k])
 ```sql
 -- kll_merge_agg_bigint, example 1
 > SELECT kll_sketch_get_n_bigint(kll_merge_agg_bigint(sketch)) FROM (SELECT kll_sketch_agg_bigint(col) as sketch FROM VALUES (1), (2), (3) tab(col) UNION ALL SELECT kll_sketch_agg_bigint(col) as sketch FROM VALUES (4), (5), (6) tab(col)) t;
-Error: KRISHIV_UNSUPPORTED_FEATURE
+6
 ```
 
 ## Version history

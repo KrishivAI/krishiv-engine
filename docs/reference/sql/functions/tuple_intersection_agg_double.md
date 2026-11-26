@@ -35,7 +35,7 @@ tuple_intersection_agg_double(child, mode)
 ```sql
 -- tuple_intersection_agg_double, example 1
 > SELECT tuple_sketch_estimate_double(tuple_intersection_agg_double(sketch)) FROM (SELECT tuple_sketch_agg_double(key, summary) as sketch FROM VALUES (1, 5.0D), (2, 10.0D), (3, 15.0D) tab(key, summary) UNION ALL SELECT tuple_sketch_agg_double(key, summary) as sketch FROM VALUES (2, 3.0D), (3, 7.0D), (4, 12.0D) tab(key, summary));
-Error: KRISHIV_UNSUPPORTED_FEATURE
+2.0
 ```
 
 ## Version history

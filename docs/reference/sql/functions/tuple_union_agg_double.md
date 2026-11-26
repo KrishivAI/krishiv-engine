@@ -36,7 +36,7 @@ tuple_union_agg_double(child, lgNomEntries, mode)
 ```sql
 -- tuple_union_agg_double, example 1
 > SELECT tuple_sketch_estimate_double(tuple_union_agg_double(sketch)) FROM (SELECT tuple_sketch_agg_double(key, summary) as sketch FROM VALUES (1, 5.0D), (2, 10.0D) tab(key, summary) UNION ALL SELECT tuple_sketch_agg_double(key, summary) as sketch FROM VALUES (2, 3.0D), (3, 7.0D) tab(key, summary));
-Error: KRISHIV_UNSUPPORTED_FEATURE
+3.0
 ```
 
 ## Version history

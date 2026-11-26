@@ -39,7 +39,7 @@ tuple_union_theta_double(tupleSketch, thetaSketch, lgNomEntries, mode)
 ```sql
 -- tuple_union_theta_double, example 1
 > SELECT tuple_sketch_estimate_double(tuple_union_theta_double(tuple_sketch_agg_double(col1, val1), theta_sketch_agg(col2))) FROM VALUES (1, 1.0D, 4), (2, 2.0D, 5), (3, 3.0D, 6) tab(col1, val1, col2);
-Error: KRISHIV_UNSUPPORTED_FEATURE
+6.0
 ```
 
 ## Version history

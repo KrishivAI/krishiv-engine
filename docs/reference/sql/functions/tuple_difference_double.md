@@ -35,7 +35,7 @@ tuple_difference_double(tupleSketch1, tupleSketch2)
 ```sql
 -- tuple_difference_double, example 1
 > SELECT tuple_sketch_estimate_double(tuple_difference_double(tuple_sketch_agg_double(col1, val1), tuple_sketch_agg_double(col2, val2))) FROM VALUES (5, 5.0D, 4, 4.0D), (1, 1.0D, 4, 4.0D), (2, 2.0D, 5, 5.0D), (3, 3.0D, 1, 1.0D) tab(col1, val1, col2, val2);
-Error: KRISHIV_UNSUPPORTED_FEATURE
+2.0
 ```
 
 ## Version history

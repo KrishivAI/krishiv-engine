@@ -33,7 +33,7 @@ kll_sketch_to_string_double(expr)
 ```sql
 -- kll_sketch_to_string_double, example 1
 > SELECT LENGTH(kll_sketch_to_string_double(kll_sketch_agg_double(col))) > 0 FROM VALUES (CAST(1.0 AS DOUBLE)), (CAST(2.0 AS DOUBLE)), (CAST(3.0 AS DOUBLE)), (CAST(4.0 AS DOUBLE)), (CAST(5.0 AS DOUBLE)) tab(col);
-Error: KRISHIV_UNSUPPORTED_FEATURE
+true
 ```
 
 ## Version history

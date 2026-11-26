@@ -134,3 +134,30 @@ fn bad_constants_are_analysis_errors() -> R {
     }
     Ok(())
 }
+
+#[test]
+fn a_bad_buffer_and_a_theta_buffer_are_runtime_errors() -> R {
+    let s = Session::new()?;
+    for (call, class) in [
+        (
+            "tuple_sketch_estimate_double(X'616263')",
+            "TUPLE_INVALID_INPUT_SKETCH_BUFFER",
+        ),
+        (
+            "tuple_sketch_estimate_double(theta_sketch_agg(id))",
+            "TUPLE_INVALID_INPUT_SKETCH_BUFFER_FAMILY",
+        ),
+    ] {
+        let e = block_on(async {
+            s.sql(&format!("SELECT {call} FROM range(0, 3)"))
+                .await?
+                .collect()
+                .await
+        })
+        .err()
+        .map(|e| e.to_string())
+        .unwrap_or_default();
+        assert!(e.contains(class), "{call}: {e}");
+    }
+    Ok(())
+}

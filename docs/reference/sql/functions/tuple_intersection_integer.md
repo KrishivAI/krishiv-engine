@@ -35,7 +35,7 @@ tuple_intersection_integer(tupleSketch1, tupleSketch2, mode)
 ```sql
 -- tuple_intersection_integer, example 1
 > SELECT tuple_sketch_estimate_integer(tuple_intersection_integer(tuple_sketch_agg_integer(col1, val1), tuple_sketch_agg_integer(col2, val2))) FROM VALUES (1, 1, 1, 4), (2, 2, 2, 5), (3, 3, 4, 6) tab(col1, val1, col2, val2);
-Error: KRISHIV_UNSUPPORTED_FEATURE
+2.0
 ```
 
 ## Version history

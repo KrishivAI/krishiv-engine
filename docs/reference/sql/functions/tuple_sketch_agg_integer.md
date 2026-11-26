@@ -38,7 +38,7 @@ tuple_sketch_agg_integer(key, summary, lgNomEntries, mode)
 ```sql
 -- tuple_sketch_agg_integer, example 1
 > SELECT tuple_sketch_estimate_integer(tuple_sketch_agg_integer(key, summary, 12, 'sum')) FROM VALUES (1, 5), (1, 1), (2, 2), (2, 3), (3, 2) tab(key, summary);
-Error: KRISHIV_UNSUPPORTED_FEATURE
+3.0
 ```
 
 ## Version history

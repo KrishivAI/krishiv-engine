@@ -36,7 +36,7 @@ tuple_union_integer(tupleSketch1, tupleSketch2, lgNomEntries, mode)
 ```sql
 -- tuple_union_integer, example 1
 > SELECT tuple_sketch_estimate_integer(tuple_union_integer(tuple_sketch_agg_integer(col1, val1), tuple_sketch_agg_integer(col2, val2))) FROM VALUES (1, 1, 4, 4), (2, 2, 5, 5), (3, 3, 6, 6) tab(col1, val1, col2, val2);
-Error: KRISHIV_UNSUPPORTED_FEATURE
+6.0
 ```
 
 ## Version history

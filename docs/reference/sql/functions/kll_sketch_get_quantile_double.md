@@ -36,7 +36,7 @@ kll_sketch_get_quantile_double(left, right)
 ```sql
 -- kll_sketch_get_quantile_double, example 1
 > SELECT kll_sketch_get_quantile_double(kll_sketch_agg_double(col), 0.5) > 1 FROM VALUES (CAST(1.0 AS DOUBLE)), (CAST(2.0 AS DOUBLE)), (CAST(3.0 AS DOUBLE)), (CAST(4.0 AS DOUBLE)), (CAST(5.0 AS DOUBLE)) tab(col);
-Error: KRISHIV_UNSUPPORTED_FEATURE
+true
 ```
 
 ## Version history

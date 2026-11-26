@@ -36,7 +36,7 @@ kll_sketch_get_quantile_float(left, right)
 ```sql
 -- kll_sketch_get_quantile_float, example 1
 > SELECT kll_sketch_get_quantile_float(kll_sketch_agg_float(col), 0.5) > 1 FROM VALUES (CAST(1.0 AS FLOAT)), (CAST(2.0 AS FLOAT)), (CAST(3.0 AS FLOAT)), (CAST(4.0 AS FLOAT)), (CAST(5.0 AS FLOAT)) tab(col);
-Error: KRISHIV_UNSUPPORTED_FEATURE
+true
 ```
 
 ## Version history

@@ -36,7 +36,7 @@ kll_merge_agg_float(expr[, k])
 ```sql
 -- kll_merge_agg_float, example 1
 > SELECT kll_sketch_get_n_float(kll_merge_agg_float(sketch)) FROM (SELECT kll_sketch_agg_float(col) as sketch FROM VALUES (CAST(1.0 AS FLOAT)), (CAST(2.0 AS FLOAT)), (CAST(3.0 AS FLOAT)) tab(col) UNION ALL SELECT kll_sketch_agg_float(col) as sketch FROM VALUES (CAST(4.0 AS FLOAT)), (CAST(5.0 AS FLOAT)), (CAST(6.0 AS FLOAT)) tab(col)) t;
-Error: KRISHIV_UNSUPPORTED_FEATURE
+6
 ```
 
 ## Version history

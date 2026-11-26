@@ -33,7 +33,7 @@ kll_sketch_merge_bigint(left, right)
 ```sql
 -- kll_sketch_merge_bigint, example 1
 > SELECT LENGTH(kll_sketch_to_string_bigint(kll_sketch_merge_bigint(kll_sketch_agg_bigint(col), kll_sketch_agg_bigint(col)))) > 0 FROM VALUES (1), (2), (3), (4), (5) tab(col);
-Error: KRISHIV_UNSUPPORTED_FEATURE
+true
 ```
 
 ## Version history

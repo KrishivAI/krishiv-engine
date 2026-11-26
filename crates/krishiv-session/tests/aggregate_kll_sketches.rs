@@ -114,3 +114,30 @@ fn a_k_out_of_range_is_an_analysis_error() -> R {
     }
     Ok(())
 }
+
+#[test]
+fn a_bad_buffer_and_a_rank_outside_zero_one_are_runtime_errors() -> R {
+    let s = Session::new()?;
+    for (call, class) in [
+        (
+            "kll_sketch_get_n_bigint(X'616263')",
+            "KLL_INVALID_INPUT_SKETCH_BUFFER",
+        ),
+        (
+            "kll_sketch_get_quantile_bigint(kll_sketch_agg_bigint(id), CAST(1.5 AS DOUBLE))",
+            "KLL_SKETCH_INVALID_QUANTILE_RANGE",
+        ),
+    ] {
+        let e = block_on(async {
+            s.sql(&format!("SELECT {call} FROM range(0, 3)"))
+                .await?
+                .collect()
+                .await
+        })
+        .err()
+        .map(|e| e.to_string())
+        .unwrap_or_default();
+        assert!(e.contains(class), "{call}: {e}");
+    }
+    Ok(())
+}
