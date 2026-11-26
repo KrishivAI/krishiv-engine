@@ -112,7 +112,14 @@ pub(crate) fn share(
         let Some(out) = def.resolved_output() else {
             continue;
         };
-        expected.push((out.iter().map(|c| c.id).collect(), Arc::clone(&def)));
+        let ids: Vec<AttrId> = out.iter().map(|c| c.id).collect();
+        // Two definitions with the same output ids (a union's channels each aliased to the
+        // union's ids once its other inputs were dropped) are one definition to `ShareCte`,
+        // which would then share neither: the later group keeps its instances.
+        if expected.iter().any(|(e, _)| *e == ids) {
+            continue;
+        }
+        expected.push((ids, Arc::clone(&def)));
         for (ptr, plan) in readers {
             replace.insert(ptr, plan);
         }
@@ -518,14 +525,21 @@ fn rewrite_group(
             input: Arc::clone(&def),
             predicate: pred,
         }));
-        let same_output =
-            out.len() == def_out.len() && out.iter().zip(&def_out).all(|(a, b)| a.id == b.id);
-        let new_top = if same_output {
+        // Every output resolved by what it computes; the definition read as it is only when that
+        // gives each of its columns, bare and in order (equal ids alone are not enough: once
+        // `DropEmptyUnionInputs` dropped a union's first input, two instances can use one id for
+        // different aggregates).
+        let exprs = reader_exprs(top, &out, &def, &def_out)?;
+        let as_is = exprs.len() == def_out.len()
+            && exprs.iter().zip(&def_out).all(|(e, d)| {
+                matches!(&e.node, ExprNode::Resolved(ResolvedExpr::Column(c)) if c.id == d.id)
+            });
+        let new_top = if as_is {
             filtered
         } else {
             Arc::new(LogicalPlan::new(PlanNode::Project {
                 input: filtered,
-                exprs: reader_exprs(top, &out, &def, &def_out)?,
+                exprs,
             }))
         };
         let body = replace_core(&m.body, top, &new_top)?;
@@ -650,10 +664,12 @@ fn item_key(e: &Arc<Expr>, states: &HashMap<AttrId, AttrId>) -> Arc<Expr> {
 }
 
 /// The projection that gives an instance its own output over the
-/// definition: a column the definition outputs under the same id is read as
-/// it is; an aggregate item the definition computes under another id is read
-/// from that column under the instance's id. `None` when an output is
-/// neither.
+/// definition: an aggregate item of the instance is read from the definition's
+/// item that computes the same (`item_key`), bare when the ids agree, else
+/// under the instance's id (never by id alone: two instances can use one id
+/// for different aggregates); any other output (the core is no aggregate) is
+/// read as the definition's column of the same id. `None` when an output has
+/// no match.
 fn reader_exprs(
     top: &Arc<LogicalPlan>,
     out: &[BoundColumn],
@@ -670,15 +686,18 @@ fn reader_exprs(
     let def_states = canonical_states(def).1;
     out.iter()
         .map(|o| {
-            if def_out.iter().any(|d| d.id == o.id) {
-                return Some(column(o));
-            }
-            let mine = own
+            let Some(mine) = own
                 .iter()
-                .find(|e| output_of(e).is_some_and(|c| c.id == o.id))?;
+                .find(|e| output_of(e).is_some_and(|c| c.id == o.id))
+            else {
+                return def_out.iter().any(|d| d.id == o.id).then(|| column(o));
+            };
             let k = item_key(mine, &own_states);
             let source = theirs.iter().find(|e| item_key(e, &def_states) == k)?;
             let from = output_of(source)?;
+            if from.id == o.id {
+                return Some(column(o));
+            }
             Some(Arc::new(Expr::new(ExprNode::Resolved(
                 ResolvedExpr::Alias {
                     expr: column(from),
@@ -1120,17 +1139,20 @@ pub(crate) fn instance_of(
     (!lift.found.is_empty()).then_some(instance)
 }
 
-/// The reader's own conjunct `g = k` on one of `outputs` (a column against a non-null literal):
-/// the conjunct, the column and the literal.
-pub(crate) fn reader_key(
+/// The reader's conjuncts `g = k` on one of `outputs` (a column against a non-null literal), in
+/// conjunct order: each conjunct with its column and literal.
+pub(crate) fn reader_keys(
     predicate: &Arc<Expr>,
     outputs: &[AttrId],
-) -> Option<(Arc<Expr>, AttrId, Literal)> {
-    conjuncts(predicate).into_iter().find_map(|c| {
-        outputs
-            .iter()
-            .find_map(|&g| key_literal(&c, g).map(|(_, l)| (Arc::clone(&c), g, l.clone())))
-    })
+) -> Vec<(Arc<Expr>, AttrId, Literal)> {
+    conjuncts(predicate)
+        .into_iter()
+        .filter_map(|c| {
+            outputs
+                .iter()
+                .find_map(|&g| key_literal(&c, g).map(|(_, l)| (Arc::clone(&c), g, l.clone())))
+        })
+        .collect()
 }
 
 /// `plan` with its one child replaced.

@@ -121,10 +121,9 @@ fn a_channel_read_per_year_shares_one_definition() {
     assert_eq!((shared_off, shared_on), (0, 1));
 }
 
-/// Both channels' two years: whether the rule shares them or not (here it does not: after
-/// `DropEmptyUnionInputs` both channels' definitions output the union's ids, so `ShareCte` could
-/// not tell them apart and the rule keeps the plan), the rows are those of one computation per
-/// reader.
+/// Both channels' two years: after `DropEmptyUnionInputs` both channels' definitions output the
+/// union's ids, which `ShareCte` cannot tell apart, so the first channel shares and the second
+/// keeps its instances; the rows are those of one computation per reader.
 #[test]
 fn both_channels_read_per_year_keep_the_rows() {
     let env = env_of(200);
@@ -134,8 +133,31 @@ fn both_channels_read_per_year_keep_the_rows() {
          AND f.tag = 'x' AND f.y = 1 AND n.tag = 'x' AND n.y = 6 \
          AND wf.tag = 'z' AND wf.y = 1 AND wn.tag = 'z' AND wn.y = 6",
     );
-    let (off, _) = rows_under(&env, &sql, false, None);
-    let (on, _) = rows_under(&env, &sql, true, None);
+    let (off, shared_off) = rows_under(&env, &sql, false, None);
+    let (on, shared_on) = rows_under(&env, &sql, true, Some(2));
     assert_eq!(off, on);
     assert_eq!(off, vec!["10|10|60|1|1".to_owned()], "{off:?}");
+    assert_eq!((shared_off, shared_on), (0, 1));
+}
+
+/// Two channels whose aggregates sit in swapped positions (`sum` then `count`, then `count` then
+/// `sum`), each read for another year: once the first input is dropped the second channel's
+/// aggregate takes the union's ids, so both instances use one id for different aggregates. Each
+/// reader takes its columns by what they compute, never by id (review B1 of F-A L1: matched by id,
+/// the second reader's two columns came out swapped).
+#[test]
+fn readers_take_their_columns_by_computation_not_by_id() {
+    let env = env_of(200);
+    let sql = "WITH y AS (\
+         SELECT b % 50 AS c, a AS d, sum(b) AS x, count(*) AS z, 's' AS tag FROM t GROUP BY b % 50, a \
+         UNION ALL SELECT b % 50, a, count(*), sum(b), 'w' FROM t GROUP BY b % 50, a) \
+         SELECT p.c, p.x, p.z, q.x, q.z FROM y p JOIN y q ON p.c = q.c \
+         WHERE p.tag = 's' AND p.d = 1 AND q.tag = 'w' AND q.d = 6";
+    let (off, _) = rows_under(&env, sql, false, None);
+    let (on, shared_on) = rows_under(&env, sql, true, Some(2));
+    // Customer 10: year 1 (`b` 10) sums 10 over 1 row; year 6 (`b` 60) counts 1 and sums 60.
+    assert_eq!(off, vec!["10|10|1|1|60".to_owned()], "{off:?}");
+    assert_eq!(on, off);
+    // Both readers read the one shared definition, so the swapped ids are exercised.
+    assert_eq!(shared_on, 1);
 }

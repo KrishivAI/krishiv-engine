@@ -17,8 +17,23 @@ use krishiv_plan::{
 use crate::dag;
 use crate::limit::limit_value;
 
-/// Whether `plan` is proven to return no rows at planning time, by Spark's rules.
+/// The most nodes `proven_empty` looks at below one relation. `DropEmptyUnionInputs` asks it for
+/// every input of every union in every round of the rewrite batch, and the walk follows every
+/// path to a shared subtree; past the budget a relation is not proven empty (it stays).
+const EMPTY_BUDGET: usize = 512;
+
+/// Whether `plan` is proven to return no rows at planning time, by Spark's rules (within
+/// [`EMPTY_BUDGET`] nodes).
 pub(crate) fn proven_empty(plan: &LogicalPlan) -> bool {
+    empty_within(plan, &mut { EMPTY_BUDGET })
+}
+
+fn empty_within(plan: &LogicalPlan, budget: &mut usize) -> bool {
+    if *budget == 0 {
+        return false;
+    }
+    *budget -= 1;
+    let mut proven_empty = |p: &LogicalPlan| empty_within(p, budget);
     match &plan.node {
         PlanNode::Filter { input, predicate } => {
             matches!(

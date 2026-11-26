@@ -36,7 +36,7 @@ use krishiv_types::{DataType, DecimalType};
 use crate::expr::{and_all, builtin, conjuncts, output_of, references, strip_alias};
 use crate::limit::limit_value;
 use crate::narrow::{View, apply};
-use crate::share_literal::{LITERAL_PREFIX, instance_of, reader_key};
+use crate::share_literal::{LITERAL_PREFIX, instance_of, reader_keys};
 use crate::share_scan::SHARED_SCAN_PREFIX;
 use crate::stats::{
     AttrStats, DEFAULT_ROWS, RelStats, StatSource, Statistics, cap, cse_definitions, number,
@@ -468,10 +468,16 @@ impl<'a> Estimator<'a> {
             return None;
         }
         let outputs: Vec<AttrId> = r.output.iter().map(|o| o.id).collect();
-        let (own, g, k) = reader_key(predicate, &outputs)?;
-        let source = *r.source.get(outputs.iter().position(|&o| o == g)?)?;
         let def = self.ctes.get(&r.source).cloned()?;
-        let instance = instance_of(&def, source, &k)?;
+        // The first conjunct that narrows the definition back is the reader's own key (another
+        // literal comparison of the reader's may come first).
+        let (own, instance) =
+            reader_keys(predicate, &outputs)
+                .into_iter()
+                .find_map(|(c, g, k)| {
+                    let source = *r.source.get(outputs.iter().position(|&o| o == g)?)?;
+                    instance_of(&def, source, &k).map(|i| (c, i))
+                })?;
         self.open.insert(r.source.clone());
         let est = self.plan(&instance);
         self.open.remove(&r.source);
