@@ -64,6 +64,18 @@ pub enum DataType {
     Timestamp,
     /// `TIMESTAMP_NTZ`: microseconds since the epoch, no time zone.
     TimestampNtz,
+    /// `TIMESTAMP_LTZ(p)`, `7 ≤ p ≤ 9` (Spark 4.3, behind
+    /// `spark.sql.timestampNanosTypes.enabled`): nanoseconds since the epoch, a UTC instant
+    /// shown in the session time zone. Lower precisions are [`Self::Timestamp`].
+    TimestampNanos {
+        /// Fractional digits of seconds, in `7..=9`.
+        precision: u8,
+    },
+    /// `TIMESTAMP_NTZ(p)`, `7 ≤ p ≤ 9`: as [`Self::TimestampNanos`] without a time zone.
+    TimestampNtzNanos {
+        /// Fractional digits of seconds, in `7..=9`.
+        precision: u8,
+    },
     /// `TIME(p)`: nanoseconds since midnight, `0 ≤ p ≤ 6` fractional
     /// digits of seconds. The precision is part of the type only: as in
     /// Spark, a value may carry more digits than `p`.
@@ -123,7 +135,12 @@ impl PartialEq for DataType {
                 c.is_utf8_binary()
             }
             (Self::Decimal(a), Self::Decimal(b)) => a == b,
-            (Self::Time { precision: a }, Self::Time { precision: b }) => a == b,
+            (Self::Time { precision: a }, Self::Time { precision: b })
+            | (Self::TimestampNanos { precision: a }, Self::TimestampNanos { precision: b })
+            | (
+                Self::TimestampNtzNanos { precision: a },
+                Self::TimestampNtzNanos { precision: b },
+            ) => a == b,
             (Self::Geometry { srid: a }, Self::Geometry { srid: b })
             | (Self::Geography { srid: a }, Self::Geography { srid: b }) => a == b,
             (
@@ -156,7 +173,9 @@ impl std::hash::Hash for DataType {
         match this {
             Self::CollatedString(c) => c.hash(state),
             Self::Decimal(d) => d.hash(state),
-            Self::Time { precision } => precision.hash(state),
+            Self::Time { precision }
+            | Self::TimestampNanos { precision }
+            | Self::TimestampNtzNanos { precision } => precision.hash(state),
             Self::Geometry { srid } | Self::Geography { srid } => srid.hash(state),
             Self::YearMonthInterval { start, end } => {
                 start.hash(state);
@@ -237,6 +256,8 @@ impl DataType {
             Self::CollatedString(_)
             | Self::Decimal(_)
             | Self::Time { .. }
+            | Self::TimestampNanos { .. }
+            | Self::TimestampNtzNanos { .. }
             | Self::Geometry { .. }
             | Self::Geography { .. }
             | Self::YearMonthInterval { .. }
@@ -584,6 +605,34 @@ impl DataType {
         }
     }
 
+    /// `TIMESTAMP_LTZ(precision)`: [`Self::Timestamp`] up to 6, [`Self::TimestampNanos`] for 7-9.
+    ///
+    /// # Errors
+    /// `UNSUPPORTED_TIME_PRECISION` when `precision > 9`.
+    pub fn timestamp_ltz(precision: u32) -> Result<Self> {
+        match precision {
+            0..=6 => Ok(Self::Timestamp),
+            7..=9 => Ok(Self::TimestampNanos {
+                precision: u8::try_from(precision).unwrap_or(Self::TIME_MAX_PRECISION),
+            }),
+            _ => Err(error::time_precision(&precision.to_string())),
+        }
+    }
+
+    /// `TIMESTAMP_NTZ(precision)`: [`Self::TimestampNtz`] up to 6, [`Self::TimestampNtzNanos`] for 7-9.
+    ///
+    /// # Errors
+    /// `UNSUPPORTED_TIME_PRECISION` when `precision > 9`.
+    pub fn timestamp_ntz(precision: u32) -> Result<Self> {
+        match precision {
+            0..=6 => Ok(Self::TimestampNtz),
+            7..=9 => Ok(Self::TimestampNtzNanos {
+                precision: u8::try_from(precision).unwrap_or(Self::TIME_MAX_PRECISION),
+            }),
+            _ => Err(error::time_precision(&precision.to_string())),
+        }
+    }
+
     /// `GEOMETRY(srid)`.
     ///
     /// # Errors
@@ -750,8 +799,8 @@ impl DataType {
             Self::Binary => "binary",
             Self::Decimal(_) => "decimal",
             Self::Date => "date",
-            Self::Timestamp => "timestamp",
-            Self::TimestampNtz => "timestamp_ntz",
+            Self::Timestamp | Self::TimestampNanos { .. } => "timestamp",
+            Self::TimestampNtz | Self::TimestampNtzNanos { .. } => "timestamp_ntz",
             Self::Time { .. } => "time",
             Self::Geometry { .. } => "geometry",
             Self::Geography { .. } => "geography",

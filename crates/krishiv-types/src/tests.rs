@@ -1543,3 +1543,21 @@ fn a_udt_over_an_indeterminate_collation_reads_back_from_its_arrow_field() {
     let field = t.to_arrow_field("p", true);
     assert_eq!(DataType::from_arrow_field(&field).unwrap(), t);
 }
+
+#[test]
+fn nanosecond_timestamps_follow_the_precision() {
+    assert_eq!(DataType::timestamp_ntz(6).unwrap(), DataType::TimestampNtz);
+    assert_eq!(DataType::timestamp_ltz(0).unwrap(), DataType::Timestamp);
+    let ntz = DataType::timestamp_ntz(8).unwrap();
+    assert_eq!(ntz, DataType::TimestampNtzNanos { precision: 8 });
+    assert_ne!(ntz, DataType::timestamp_ntz(9).unwrap());
+    assert_eq!(
+        ntz.to_arrow(),
+        ArrowType::Timestamp(TimeUnit::Nanosecond, None)
+    );
+    assert!(ntz.is_valid_storage(&ntz.to_arrow()));
+    let ltz = DataType::timestamp_ltz(9).unwrap();
+    assert!(ltz.is_valid_storage(&ltz.to_arrow()));
+    assert!(!ltz.is_valid_storage(&ntz.to_arrow()));
+    assert!(DataType::timestamp_ltz(10).is_err());
+}

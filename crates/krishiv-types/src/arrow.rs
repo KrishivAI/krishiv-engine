@@ -312,6 +312,11 @@ impl DataType {
                 Some(Arc::from(TIMESTAMP_ARROW_TIME_ZONE)),
             ),
             Self::TimestampNtz => ArrowType::Timestamp(TimeUnit::Microsecond, None),
+            Self::TimestampNanos { .. } => ArrowType::Timestamp(
+                TimeUnit::Nanosecond,
+                Some(Arc::from(TIMESTAMP_ARROW_TIME_ZONE)),
+            ),
+            Self::TimestampNtzNanos { .. } => ArrowType::Timestamp(TimeUnit::Nanosecond, None),
             Self::Time { .. } => ArrowType::Time64(TimeUnit::Nanosecond),
             Self::YearMonthInterval { .. } => ArrowType::Interval(IntervalUnit::YearMonth),
             Self::DayTimeInterval { .. } => ArrowType::Duration(TimeUnit::Microsecond),
@@ -383,6 +388,14 @@ impl DataType {
             ArrowType::Date32 => Self::Date,
             ArrowType::Timestamp(TimeUnit::Microsecond, Some(_)) => Self::Timestamp,
             ArrowType::Timestamp(TimeUnit::Microsecond, None) => Self::TimestampNtz,
+            // An Arrow nanosecond timestamp is the widest precision: a narrower one is not
+            // recoverable from the Arrow type, so the plan keeps the SQL type.
+            ArrowType::Timestamp(TimeUnit::Nanosecond, Some(_)) => Self::TimestampNanos {
+                precision: Self::TIME_MAX_PRECISION,
+            },
+            ArrowType::Timestamp(TimeUnit::Nanosecond, None) => Self::TimestampNtzNanos {
+                precision: Self::TIME_MAX_PRECISION,
+            },
             ArrowType::Time64(TimeUnit::Nanosecond) => Self::Time {
                 precision: Self::TIME_DEFAULT_PRECISION,
             },
@@ -442,6 +455,8 @@ impl DataType {
             (Self::Timestamp, ArrowType::Timestamp(..))
             | (
                 Self::Time { .. }
+                | Self::TimestampNanos { .. }
+                | Self::TimestampNtzNanos { .. }
                 | Self::Geometry { .. }
                 | Self::Geography { .. }
                 | Self::Variant
