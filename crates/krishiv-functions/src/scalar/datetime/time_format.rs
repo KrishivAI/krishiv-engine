@@ -5,6 +5,7 @@
 
 use std::sync::Arc;
 
+use arrow_array::builder::StringBuilder;
 use arrow_array::types::Time64NanosecondType;
 use arrow_array::{Array, ArrayRef, StringArray};
 use arrow_schema::DataType;
@@ -14,7 +15,7 @@ use krishiv_kernels::datetime_pattern::Purpose;
 
 use super::super::Binding;
 use super::super::args::{Inputs, internal};
-use super::{PatternArg, PatternCache, reserve};
+use super::{PatternArg, PatternCache};
 
 /// The binding of `date_format(time, pattern)` for a compiled pattern argument.
 pub(super) fn binding(pat: PatternArg) -> Binding {
@@ -33,10 +34,12 @@ pub(super) fn binding(pat: PatternArg) -> Binding {
             Some(x.strings(1)?)
         };
         let mut cache = PatternCache::new(Purpose::FormatTime, false);
-        let mut out = reserve::<Option<String>>(x.rows())?;
+        // One builder and one scratch buffer for the column: no `String` per row.
+        let mut out = StringBuilder::with_capacity(x.rows(), 0);
+        let mut text = String::new();
         for i in 0..x.rows() {
             if times.is_null(i) || fmts.as_ref().is_some_and(|f| f.is_null(i)) {
-                out.push(None);
+                out.append_null();
                 continue;
             }
             let row = |e| krishiv_kernels::KernelError::with_row(Some(i), e);
@@ -47,19 +50,22 @@ pub(super) fn binding(pat: PatternArg) -> Binding {
                     return Err(internal("date_format: no pattern".to_owned()));
                 }
             };
-            out.push(Some(format_time(p, times.value(i)).map_err(row)?));
+            text.clear();
+            write_time(p, times.value(i), &mut text).map_err(row)?;
+            out.append_value(&text);
         }
-        Ok(Arc::new(StringArray::from_iter(out.iter().map(|s| s.as_deref()))) as ArrayRef)
+        Ok(Arc::new(out.finish()) as ArrayRef)
     })
 }
 
-/// `nanos` (a `TIME`) printed with `p`, as Spark 4.3's `DateFormatClass.formatTimeWithError`.
-fn format_time(p: &TimePattern, nanos: i64) -> Result<String, KrishivError> {
+/// `nanos` (a `TIME`) printed with `p` into `out`, as Spark 4.3's
+/// `DateFormatClass.formatTimeWithError`.
+fn write_time(p: &TimePattern, nanos: i64, out: &mut String) -> Result<(), KrishivError> {
     let printed = match p {
-        TimePattern::Corrected(p) => p.format_time_of_day(nanos)?,
-        TimePattern::Legacy(_) => None,
+        TimePattern::Corrected(p) => p.write_time_of_day(nanos, out)?,
+        TimePattern::Legacy(_) => false,
     };
-    printed.ok_or_else(|| {
+    printed.then_some(()).ok_or_else(|| {
         let pattern = match p {
             TimePattern::Corrected(p) => p.pattern().to_owned(),
             TimePattern::Legacy(l) => l.pattern().to_owned(),
