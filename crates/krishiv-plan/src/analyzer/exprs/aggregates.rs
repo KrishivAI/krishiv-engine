@@ -454,8 +454,25 @@ impl Resolver<'_> {
         if f.distinct && !orders.is_empty() {
             // Structural equality, ignoring source spans (either side may
             // be written elsewhere).
+            // Without inner aliases, as Spark's `trimAliases` (a variant path names its
+            // extraction). The trimmed trees live as long as the memo, which keys by address.
             let mut memo = std::collections::HashMap::new();
-            let mut key = |e: &Arc<Expr>| semantic_key(e, &mut memo);
+            let mut trimmed = Vec::new();
+            let mut key = |e: &Arc<Expr>| {
+                let bare = Arc::clone(e)
+                    .transform_up(&mut |x: Arc<Expr>| {
+                        Ok::<_, AnalysisError>(match &x.node {
+                            ExprNode::Resolved(ResolvedExpr::Alias { expr, .. }) => {
+                                Arc::clone(expr)
+                            }
+                            _ => x,
+                        })
+                    })
+                    .unwrap_or_else(|_| Arc::clone(e));
+                let k = semantic_key(&bare, &mut memo);
+                trimmed.push(bare);
+                k
+            };
             let value = &call_kids[0].expr;
             // A collated value reads through the carrier cast of the signature: the written value
             // is what `DISTINCT` and the ordering compare. Only a collated one: a `DOUBLE`,
@@ -668,6 +685,9 @@ impl Resolver<'_> {
                 | DataType::Date
                 | DataType::Time { .. }
                 | DataType::TimestampNtz
+                | DataType::CalendarInterval
+                | DataType::YearMonthInterval { .. }
+                | DataType::DayTimeInterval { .. }
                 | DataType::Boolean
                 | DataType::Binary
                 | DataType::String,

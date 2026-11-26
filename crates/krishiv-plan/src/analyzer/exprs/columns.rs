@@ -731,6 +731,10 @@ impl Resolver<'_> {
         let cs = self.ctx.conf.case_sensitive;
         let mut ty = &k.col.data_type;
         for part in rest {
+            // A field of a `NULL` (`void`) column is `NULL`.
+            if matches!(ty, krishiv_types::DataType::Null) {
+                return true;
+            }
             let krishiv_types::DataType::Struct(s) = ty else {
                 return false;
             };

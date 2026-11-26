@@ -71,6 +71,24 @@ impl Resolver<'_> {
         for e in exprs {
             match self.bind(e, &cx) {
                 Ok(b) => bounds.push(b),
+                // An `ORDER BY` path or subscript the output of that name cannot serve
+                // (`SELECT 'a' AS c ... GROUP BY c ORDER BY c.f`) reads the grouping column,
+                // as in Spark; when that fails too, the first error stands. `HAVING` reads the
+                // grouping column first and has no such retry.
+                Err(err)
+                    if op == "Sort"
+                        && matches!(
+                            err.error.error_class().name(),
+                            "INVALID_EXTRACT_BASE_FIELD_TYPE" | "FIELD_NOT_FOUND"
+                        ) =>
+                {
+                    let mut below = Self::cx(&info.keys, &rels, env, op);
+                    below.extra = Some(&agg.out);
+                    below.lenient = true;
+                    below.agg_scope = cx.agg_scope;
+                    below.grouping = cx.grouping;
+                    bounds.push(self.bind(e, &below).map_err(|_| err)?);
+                }
                 // A grouping expression written out in full (`GROUP BY x + 1
                 // ORDER BY x + 1`) is the aggregate's output, wherever it
                 // appears in the expression; names it does not cover stay
