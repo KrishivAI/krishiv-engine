@@ -157,6 +157,8 @@ fn needs_zone(from: &ArrowType, to: &ArrowType) -> bool {
     (zoned(from) && !matches!(to, ArrowType::Int64 | ArrowType::Timestamp(_, Some(_))))
         || (zoned(to) && !matches!(from, ArrowType::Int64 | ArrowType::Timestamp(_, Some(_))))
         || (wall_clock(from) && zoned(to))
+        // A time of day cast to `TIMESTAMP_NTZ` takes today's date in the session zone.
+        || (matches!(from, ArrowType::Time64(_)) && wall_clock(to))
 }
 
 /// Whether `t` is, or holds at any depth, a timestamp with a zone.
@@ -193,9 +195,9 @@ pub(super) struct CastParts {
     /// here.
     pub(super) precision: Precision,
     /// Whether a cast to `time(p)` from a non-time source cuts to `p` digits (Spark 4.3 on); before
-    /// 4.3 it keeps six whatever `p`. Today the only non-time source of a `Time64` target is a
-    /// string: a later source (a timestamp-to-time cast) must be checked against Spark 4.2 too.
-    pub(super) strings_cut_to_p: bool,
+    /// 4.3 it keeps six whatever `p`. The non-time sources are a string and (Spark 4.3 only, the
+    /// analyzer refuses it before) a timestamp, which `Cast.castToTime` cuts to `p` too.
+    pub(super) non_time_cut_to_p: bool,
 }
 
 /// Nanoseconds per microsecond: the `TIME(6)` unit a Spark 4.2 string cast
@@ -313,7 +315,7 @@ pub(super) fn parts(
         zone,
         query_start: env.query_start_micros,
         precision: Precision::None,
-        strings_cut_to_p: env.kernels.spark_version() >= krishiv_kernels::SparkVersion::V4_3,
+        non_time_cut_to_p: env.kernels.spark_version() >= krishiv_kernels::SparkVersion::V4_3,
     })
 }
 
@@ -333,7 +335,7 @@ impl CastParts {
             zone: self.zone.clone(),
             query_start: self.query_start,
             precision,
-            strings_cut_to_p: self.strings_cut_to_p,
+            non_time_cut_to_p: self.non_time_cut_to_p,
         }
     }
 }
@@ -394,7 +396,7 @@ pub(super) fn apply(p: &CastParts, a: &ArrayRef) -> Result<ArrayRef> {
     let out = match (input.data_type(), out.data_type()) {
         (from, ArrowType::Time64(_)) if p.precision.unit() > 1 => {
             use arrow_array::types::Time64NanosecondType;
-            let unit = if p.strings_cut_to_p || matches!(from, ArrowType::Time64(_)) {
+            let unit = if p.non_time_cut_to_p || matches!(from, ArrowType::Time64(_)) {
                 p.precision.unit()
             } else {
                 MICROS_UNIT

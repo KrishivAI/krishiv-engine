@@ -1,0 +1,55 @@
+{
+  "name": "krishiv",
+  "version": "0.3.1",
+  "description": "Krishiv for JavaScript and TypeScript: SQL and DataFrames over Arrow, embedded or against a remote Krishiv server.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsup src/index.ts --format esm,cjs --dts --clean --external @grpc/grpc-js --external protobufjs",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "optionalDependencies": {
+    "@grpc/grpc-js": "^1.14.0",
+    "protobufjs": "^7.5.0"
+  },
+  "overrides": {
+    "esbuild": "^0.28.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "apache-arrow": "^21.0.0",
+    "tsup": "^8.5.0",
+    "typescript": "^5.9.0",
+    "vitest": "^5.1.2"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/KrishivAI/krishiv-engine.git",
+    "directory": "js"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "peerDependencies": {
+    "apache-arrow": ">=15 <22"
+  }
+}

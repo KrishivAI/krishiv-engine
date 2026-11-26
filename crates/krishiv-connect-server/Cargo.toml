@@ -32,7 +32,6 @@ krishiv-udf-pool = { path = "../krishiv-udf-pool", version = "=0.2.1" }
 getrandom.workspace = true
 prost = { workspace = true, features = ["derive", "std"] }
 prost-types = { workspace = true, features = ["std"] }
-rustix.workspace = true
 serde_json = { workspace = true, features = ["std"] }
 sha2.workspace = true
 tokio = { workspace = true, features = ["net", "rt", "sync", "time", "macros"] }
@@ -62,3 +61,6 @@ tonic-prost.workspace = true
 function-catalog = ["dep:krishiv-catalogs"]
 # Signed act-as assertions (`x-krishiv-act-as-token`, P3-T061 I3): `krishiv-session`'s verifier.
 oidc = ["krishiv-session/oidc"]
+
+[target.'cfg(unix)'.dependencies]
+rustix.workspace = true

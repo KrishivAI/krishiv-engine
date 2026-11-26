@@ -173,7 +173,7 @@ impl Session {
     ) -> Result<(), KrishivError> {
         match qualified.strip_prefix("file:") {
             Some(local) => {
-                self.authorize_path(Path::new(local), privileges, class)
+                self.authorize_path(&krishiv_exec::files::native_path(local), privileges, class)
                     .await?;
             }
             None => {
@@ -492,7 +492,7 @@ impl Session {
             }
         };
         let root = match &checked {
-            Some(dir) => format!("file:{}", dir.path.display()),
+            Some(dir) => krishiv_exec::files::file_display(&dir.path),
             None => qualified.clone(),
         };
         let source = super::delta_source(&root);

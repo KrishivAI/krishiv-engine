@@ -872,11 +872,10 @@ impl Session {
         }
         if let Some(path) = paths.first().and_then(OptionValue::as_plain) {
             let local = path.strip_prefix("file:").unwrap_or(path);
-            if !path.contains("://") && !std::path::Path::new(local).exists() {
-                return Err(krishiv_common::error::PathNotFound {
-                    path: format!("file:{local}"),
-                }
-                .into());
+            let native = krishiv_exec::files::native_path(local);
+            if !path.contains("://") && !native.exists() {
+                let path = krishiv_exec::files::file_display(&native);
+                return Err(krishiv_common::error::PathNotFound { path }.into());
             }
         }
         let columns = if infer {

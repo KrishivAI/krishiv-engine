@@ -2,6 +2,8 @@
 //! The advisor hints (P3-T073) on planted and clean queries: the profile `EXPLAIN ANALYZE` prints and the
 //! `system.queries.hints` row of the same run carry the same hints.
 #![cfg(test)]
+mod literal_path;
+use literal_path::sql_path;
 
 use std::sync::Arc;
 
@@ -192,7 +194,7 @@ fn hint_missing_stats_raised() {
     std::fs::write(dir.path().join("f.csv"), format!("k,v\n{rows}")).unwrap();
     block_on(s.sql(&format!(
         "CREATE TABLE sales_csv (k INT, v INT) USING csv LOCATION '{}' OPTIONS (header 'true')",
-        dir.path().display()
+        sql_path(dir.path())
     )))
     .unwrap();
     register(

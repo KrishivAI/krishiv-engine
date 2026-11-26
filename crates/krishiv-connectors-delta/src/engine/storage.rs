@@ -160,7 +160,9 @@ impl StorageHandler for KrishivStorageHandler {
                 .iter()
                 .filter(|m| m.location.path().ends_with(".json"))
             {
-                seen.insert(m.location.as_str().to_owned(), (m.size, m.last_modified));
+                if let Some(key) = super::log_key(&m.location) {
+                    seen.insert(key.to_owned(), (m.size, m.last_modified));
+                }
             }
         }
         Ok(Box::new(metas.into_iter().map(Ok)))

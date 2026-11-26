@@ -7,6 +7,8 @@
 
 mod common;
 
+mod file_url;
+use file_url::file_url;
 use std::fmt::Write as _;
 
 use futures::executor::block_on;
@@ -121,7 +123,7 @@ fn reads_by_path_are_qualified_paths() {
     let sql = format!("SELECT * FROM parquet.`{}/../out`", out.display());
     let text = reads(&s, &sql);
     assert!(
-        text.starts_with(&format!("SELECT path 'file:{}'", out.display())),
+        text.starts_with(&format!("SELECT path '{}'", file_url(&out))),
         "{text}"
     );
 }
