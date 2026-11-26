@@ -25,7 +25,8 @@ use krishiv_exec::{ROW_FILE_COLUMN, ROW_POSITION_COLUMN};
 use krishiv_plan::analyzer::TableColumn;
 use krishiv_types::DataType;
 
-use super::{Target, first_scan, ident};
+use super::rewrite_scan::GroupTarget;
+use super::{first_scan, ident};
 use crate::session::{Session, internal};
 
 /// The arguments of the call, as the procedure's parameters hold them.
@@ -179,10 +180,10 @@ impl Session {
         });
         let (part, entry) = self.state.catalog.put_hidden_provider(
             with_row_id.clone(),
-            Arc::new(Target {
+            Arc::new(GroupTarget {
                 table: Arc::clone(table),
-                op: RowLevelOperation::Delete,
-                files: Some(group.files.clone()),
+                files: group.files.clone(),
+                tasks: group.expected_output_files,
             }),
         );
         let select = columns

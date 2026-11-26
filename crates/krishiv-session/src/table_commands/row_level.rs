@@ -803,6 +803,7 @@ fn the_delta_connector_reads_the_same_option_keys() {
 }
 
 pub(crate) mod rewrite_files;
+mod rewrite_scan;
 
 #[cfg(test)]
 pub(crate) mod tests;

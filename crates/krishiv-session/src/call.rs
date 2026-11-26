@@ -150,8 +150,16 @@ impl Session {
             let mut quoted = vec![id.catalog.clone()];
             quoted.extend(id.namespace.iter().cloned());
             quoted.push(id.name.clone());
-            self.run_rewrite_data_files(&quote_all(&quoted), &rewrite_args(&args))
-                .await
+            // The procedure opens the table for maintenance (its catalog's refusals), then the
+            // session runs the rewrite.
+            let rewrite = rewrite_args(&args);
+            match loaded.call(&ctx, args).await {
+                Ok(_) => {
+                    self.run_rewrite_data_files(&quote_all(&quoted), &rewrite)
+                        .await
+                }
+                Err(e) => Err(e),
+            }
         } else {
             loaded.call(&ctx, args).await
         };

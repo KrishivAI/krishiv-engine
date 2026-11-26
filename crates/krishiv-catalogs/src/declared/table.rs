@@ -603,7 +603,8 @@ impl ProcedureTables for RestProcedureTables {
             };
             if !catalog.writes {
                 return Err(unsupported(format!(
-                    "an Iceberg procedure on the table {} (the catalog is declared read-only:                      set option.write = true)",
+                    "an Iceberg procedure on the table {} (the catalog is declared read-only: \
+                     set option.write = true)",
                     catalog.relation(&namespace, &table)
                 )));
             }

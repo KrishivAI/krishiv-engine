@@ -234,6 +234,7 @@ impl Procedure for Maintenance {
             }
             match self.name {
                 "expire_snapshots" => self.expire(table, &args).await,
+                "rewrite_data_files" => self.open_for_rewrite(table).await,
                 other => Err(unsupported(other)),
             }
         })
@@ -241,6 +242,17 @@ impl Procedure for Maintenance {
 }
 
 impl Maintenance {
+    /// `rewrite_data_files` runs in the session, which has the query context its scans and
+    /// writes need (`krishiv-session` `table_commands/row_level/rewrite_files.rs`); this call only
+    /// opens the table for maintenance first, so the call gets the catalog's own refusals (a
+    /// read-only catalog, vended credentials, a table the catalog does not know) exactly as
+    /// `expire_snapshots` does, before any file is planned. No rows.
+    async fn open_for_rewrite(&self, table: &str) -> Result<RecordBatch, KrishivError> {
+        let t = self.tables.open(table).await?;
+        t.maintenance_parts(io_clock)?;
+        Ok(RecordBatch::new_empty(Arc::new(Schema::empty())))
+    }
+
     async fn expire(
         &self,
         table: &str,
