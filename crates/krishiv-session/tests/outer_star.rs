@@ -146,3 +146,18 @@ fn a_null_in_subquery_keeps_its_written_column_name() -> R {
     assert!(!name.contains("exists"), "{name}");
     Ok(())
 }
+
+/// A star of the enclosing relation as a call's argument expands to the
+/// outer columns (golden selectExcept#41).
+#[test]
+fn an_outer_star_as_a_call_argument_reads_the_enclosing_relation() -> R {
+    let s = Session::new()?;
+    let batches = block_on(async {
+        s.sql("select (select coalesce(t1.*)) from values (7) as t1(c)")
+            .await?
+            .collect()
+            .await
+    })?;
+    assert_eq!(batches[0].column(0).as_primitive::<Int32Type>().value(0), 7);
+    Ok(())
+}

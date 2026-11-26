@@ -131,6 +131,14 @@ impl Resolver<'_> {
                         arg_names.push(None);
                     }
                 }
+                ExprNode::Star(s) if self.outer_star(s, cx, a.origin)?.is_some() => {
+                    // `COALESCE(t.*)` in a subquery where `t` is the
+                    // enclosing query's: the outer references to its columns.
+                    for b in self.outer_star(s, cx, a.origin)?.unwrap_or_default() {
+                        args.push(b.expr);
+                        arg_names.push(None);
+                    }
+                }
                 ExprNode::Star(s) => {
                     for attr in self.expand(s, cx, a.origin)? {
                         args.push(Arc::new(
