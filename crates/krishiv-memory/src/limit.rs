@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The default memory limit: 80% of the effective memory limit of this
-//! process, at least [`MIN_HEADROOM`] below it (but never under half of it),
+//! process, lowered so the resident-set guard's ceiling stays at least
+//! [`MIN_HEADROOM`] below it (but never under half of it),
 //! so a query engine embedded in a notebook or container spills instead of
 //! being OOM-killed.
 //!
@@ -13,17 +14,22 @@
 
 use std::path::Path;
 
+use crate::resident::ALLOWANCE_BASE;
+
 /// Percentage of the effective memory limit used by default.
 pub const DEFAULT_LIMIT_PERCENT: u64 = 80;
 
-/// Memory the default limit leaves outside the pool, at least: what the
-/// process holds beyond its reservations (the resident-set guard allows a
-/// limit's eighth plus 64 MiB: decode and I/O buffers, allocator retention)
-/// and the page cache a cgroup also counts. 20% alone is too little on a
-/// small container: in a 1 GiB cgroup an 819 MiB pool let the process hold
-/// up to 985 MiB, and a 41M-row self-join or a high-cardinality group-by was
-/// OOM-killed (0.3.0 acceptance QA2-12).
-pub const MIN_HEADROOM: u64 = 512 << 20;
+/// Memory the default limit leaves below the effective limit beyond the
+/// resident-set guard's ceiling (the limit plus its
+/// [`allowance`](crate::allowance): decode and I/O buffers, allocator
+/// retention), at least: the page cache, dirty spill pages and kernel memory
+/// a cgroup also counts. 20% alone is too little on a small container
+/// (0.3.0 acceptance QA2-12): in a 1 GiB cgroup an 819 MiB pool let the
+/// process hold up to 985 MiB, and a 41M-row self-join or a high-cardinality
+/// group-by was OOM-killed; in a 2 GiB cgroup a 1.5 GiB pool (a 1.75 GiB
+/// ceiling) filled the cgroup on every run of that group-by and was killed
+/// once, while a 1.39 GiB pool peaked at 1.5-1.7 GiB.
+pub const MIN_HEADROOM: u64 = 384 << 20;
 
 /// Default limit when the effective memory limit cannot be determined.
 pub const FALLBACK_LIMIT: usize = 2 << 30;
@@ -32,21 +38,25 @@ pub const FALLBACK_LIMIT: usize = 2 << 30;
 const V1_UNLIMITED_FROM: u64 = 1 << 62;
 
 /// The default root-pool limit: [`DEFAULT_LIMIT_PERCENT`] of
-/// [`effective_memory_limit`], at least [`MIN_HEADROOM`] below it but not
-/// under half of it, else [`FALLBACK_LIMIT`]. Always `Some`; pass
+/// [`effective_memory_limit`], lowered so the guard's ceiling stays
+/// [`MIN_HEADROOM`] below it but not under half of it, else
+/// [`FALLBACK_LIMIT`]. Always `Some`; pass
 /// `limit: None` in [`crate::MemoryConfig`] for an unbounded pool.
 pub fn default_limit() -> Option<usize> {
     Some(effective_memory_limit().map_or(FALLBACK_LIMIT, share_of))
 }
 
 /// The pool's share of an effective limit of `bytes`:
-/// [`DEFAULT_LIMIT_PERCENT`] of it, lowered to leave [`MIN_HEADROOM`]
-/// (from 2.5 GiB up the percentage already does), but never under half.
+/// [`DEFAULT_LIMIT_PERCENT`] of it, lowered so that the limit `L` plus the
+/// guard's allowance (`L / 8` + [`ALLOWANCE_BASE`]) leaves [`MIN_HEADROOM`]
+/// (from about 4.4 GiB up the percentage already does), but never under
+/// half.
 fn share_of(bytes: u64) -> usize {
     let percent = bytes / 100 * DEFAULT_LIMIT_PERCENT;
-    let share = percent
-        .min(bytes.saturating_sub(MIN_HEADROOM))
-        .max(bytes / 2);
+    let base = u64::try_from(ALLOWANCE_BASE).unwrap_or(u64::MAX);
+    // L + L / 8 + base <= bytes - MIN_HEADROOM.
+    let guarded = bytes.saturating_sub(MIN_HEADROOM).saturating_sub(base) / 9 * 8;
+    let share = percent.min(guarded).max(bytes / 2);
     usize::try_from(share).unwrap_or(usize::MAX)
 }
 
@@ -208,13 +218,23 @@ mod tests {
     fn the_share_leaves_headroom_on_small_limits() {
         let mib = 1_usize << 20;
         let gib = 1_u64 << 30;
+        // The guard's ceiling (the limit, an eighth more and 64 MiB) stays
+        // at least the headroom below the effective limit.
+        let ceiling = |l: usize| l + crate::allowance(l);
+        for b in [gib, 2 * gib, 5 * gib / 2, 4 * gib, 16 * gib] {
+            let room = usize::try_from(b - (MIN_HEADROOM)).unwrap();
+            assert!(ceiling(share_of(b)) <= room, "{b}");
+        }
         // 1 GiB (QA2-12): 512 MiB, not 819 MiB.
         assert_eq!(share_of(gib), 512 * mib);
-        // 2 GiB: 1.5 GiB, the headroom binds.
-        assert_eq!(share_of(2 * gib), 1536 * mib);
-        // From 2.5 GiB the 20% is at least the headroom: 80% as before.
+        // 2 GiB: about 1.39 GiB, not 1.6 GiB; 2.5 GiB: about 1.83 GiB.
+        assert_eq!(share_of(2 * gib), (1600 * mib) / 9 * 8);
+        assert_eq!(share_of(5 * gib / 2), (2112 * mib) / 9 * 8);
+        // From about 4.4 GiB the 20% is at least the guard's room: 80% as
+        // before.
         let eighty = |b: u64| usize::try_from(b / 100 * 80).unwrap();
-        assert_eq!(share_of(5 * gib / 2), eighty(5 * gib / 2));
+        assert!(share_of(4 * gib) < eighty(4 * gib));
+        assert_eq!(share_of(5 * gib), eighty(5 * gib));
         assert_eq!(share_of(16 * gib), eighty(16 * gib));
         // Small limits keep half rather than nothing.
         assert_eq!(share_of(512 << 20), 256 * mib);

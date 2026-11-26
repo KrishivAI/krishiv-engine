@@ -61,7 +61,8 @@ pub const DEFAULT_SPILL_SCRATCH_RESERVE: usize = 512 << 10;
 pub struct MemoryConfig {
     /// Limit of the root pool; `None` is unbounded. From
     /// `krishiv.memory.limit`, else [`crate::default_limit`]: 80% of the
-    /// effective memory limit, at least 512 MiB below it, never under half.
+    /// effective memory limit, lowered on small limits so the guard's ceiling
+    /// stays `MIN_HEADROOM` below it, never under half.
     pub limit: Option<usize>,
     /// Reservation granularity (`krishiv.memory.reservationQuantum`).
     pub quantum: usize,

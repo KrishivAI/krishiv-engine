@@ -98,7 +98,7 @@ Every `--conf KEY=VALUE` is an engine setting; the keys are in the [configuratio
 ## Memory
 
 With no `krishiv.memory.limit`, the server's pool is 80% of the container's memory limit (`docker run --memory 4g` gives
-about 3.2 GiB; a smaller container keeps at least 512 MiB outside the pool, so `--memory 1g` gives 512 MiB), and operators spill to disk past it. Set a memory limit on the container; without one the pool is sized
+about 3.2 GiB; a smaller container keeps more outside the pool, so `--memory 2g` gives about 1.39 GiB and `--memory 1g` 512 MiB), and operators spill to disk past it. Set a memory limit on the container; without one the pool is sized
 from the host's memory. See [the memory limit in a container](deploy.md#the-memory-limit-in-a-container).
 
 ## Volumes

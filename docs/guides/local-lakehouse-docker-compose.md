@@ -114,7 +114,7 @@ file next to `compose.yaml`. The example's `README.md` lists them.
 The example is for one machine: default secrets, a self-signed certificate, every port published on `127.0.0.1` only.
 Change the token and the MinIO keys before anything else can reach those ports; for a server other machines reach,
 see [Deployment](deploy.md) and [Securing a single-node server](single-node-server-security.md). Give the `krishiv`
-service a memory limit (`mem_limit`): its pool is 80% of it, leaving at least 512 MiB outside the pool.
+service a memory limit (`mem_limit`): its pool is 80% of it, less on a small limit (512 MiB at 1 GiB, about 1.39 GiB at 2 GiB).
 
 ## Stop and clean up
 

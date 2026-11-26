@@ -8,7 +8,7 @@
 //!   pipelines and operators, and capped pools for external consumers
 //!   ([`TreePool::external`]: a UDF worker pool's RSS, scan prefetch).
 //!   Every pool may have a limit; the root's defaults to
-//!   [`default_limit`] (80% of the cgroup or physical memory limit, leaving at least 512 MiB outside the pool, never under half).
+//!   [`default_limit`] (80% of the cgroup or physical memory limit, lowered so the pool and the resident-set guard's allowance leave at least 384 MiB, never under half).
 //! - **Reserve, then allocate.** Consumers [`register`](MemoryPool::register)
 //!   (optionally as [`Spillable`]) and hold [`Reservation`]s, which release on
 //!   drop.
