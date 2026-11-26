@@ -195,3 +195,40 @@ fn hashes_follow_timestamp_nanos_val() {
         "1924051557 8613156613325252680 | 42 42"
     );
 }
+
+/// The functions that read a nanosecond timestamp's microseconds (Spark 4.3 goldens
+/// `timestamp-ntz-nanos.sql`: `hour(.. 13:24:35.123456789)` is 13, `extract(SECOND ..)` is the
+/// `decimal(11,9)` `35.123456789`, `date_trunc('SECOND', ..)` keeps the type, `unix_*` drop the rest: `unix_seconds` floors, `unix_timestamp`
+/// divides toward zero, as for microseconds).
+#[test]
+fn datetime_functions_read_nanosecond_timestamps() {
+    let s = session();
+    assert_eq!(
+        rows(
+            &s,
+            "SELECT hour(c), minute(c), second(c), hour(l) FROM t WHERE k = 3"
+        ),
+        "0 0 0 0"
+    );
+    assert_eq!(
+        rows(
+            &s,
+            "SELECT CAST(extract(SECOND FROM c) AS STRING), typeof(date_part('SECOND', l)) FROM t WHERE k IN (0, 3) ORDER BY k"
+        ),
+        "0.000000001 decimal(11,9) | 0.123456789 decimal(11,9)"
+    );
+    assert_eq!(
+        rows(
+            &s,
+            "SELECT CAST(date_trunc('SECOND', c) AS STRING), CAST(date_trunc('MICROSECOND', l) AS STRING), date_trunc('NANOSECOND', c) IS NULL FROM t WHERE k = 3"
+        ),
+        "1960-01-01 00:00:00 1960-01-01 00:00:00.123456 true"
+    );
+    assert_eq!(
+        rows(
+            &s,
+            "SELECT unix_seconds(l), unix_millis(l), unix_micros(l), unix_timestamp(c) FROM t WHERE k = 3"
+        ),
+        "-315619200 -315619199877 -315619199876544 -315619199"
+    );
+}

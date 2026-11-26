@@ -52,6 +52,7 @@ mod map;
 mod math;
 mod mersenne;
 mod misc;
+mod nanos;
 mod number;
 mod predicate;
 mod protobuf;
@@ -629,6 +630,9 @@ pub fn bind_scalar(
             "{lower}: a literal argument of {} rows",
             a.len()
         )));
+    }
+    if let Some(bound) = nanos::bind(&lower, args, opts) {
+        return bound;
     }
     let Some((name, binding)) = FAMILIES
         .iter()
