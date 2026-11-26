@@ -33,27 +33,6 @@ type Rows = Vec<Vec<Option<String>>>;
 /// must be exactly `how` (`Mismatch::got`); a fixed gap, or one that differs in another way, fails
 /// the test.
 const KNOWN_GAPS: &[(&str, &str, &str)] = &[
-    // `min`/`max` have no `Time64` accumulator yet.
-    (
-        "4.2.0",
-        "max_distinct",
-        "[KRISHIV_UNSUPPORTED_FEATURE] The feature Max of Time64(ns) is not supported by Krishiv yet.",
-    ),
-    (
-        "4.3.0",
-        "max_distinct",
-        "[KRISHIV_UNSUPPORTED_FEATURE] The feature Max of Time64(ns) is not supported by Krishiv yet.",
-    ),
-    (
-        "4.2.0",
-        "max_only",
-        "[KRISHIV_UNSUPPORTED_FEATURE] The feature Max of Time64(ns) is not supported by Krishiv yet.",
-    ),
-    (
-        "4.3.0",
-        "max_only",
-        "[KRISHIV_UNSUPPORTED_FEATURE] The feature Max of Time64(ns) is not supported by Krishiv yet.",
-    ),
     // The nanosecond timestamp types are Krishiv 0.3.1 (scope note P3-R3): with
     // `spark.sql.timestampNanosTypes.enabled` on, Spark 4.3 builds them; Krishiv refuses by name.
     (
