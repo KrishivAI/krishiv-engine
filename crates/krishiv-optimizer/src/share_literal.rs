@@ -855,6 +855,9 @@ enum Mode<'a> {
     Mark,
     /// `g' IN (literals)`.
     In(&'a [Literal]),
+    /// The reverse, for estimates: a definition's `g' IN (.., k, ..)` back to the instance's
+    /// `g' = k` ([`instance_of`]).
+    Narrow(&'a Literal),
 }
 
 /// The walk down a group key's lineage.
@@ -899,7 +902,7 @@ impl<'a> Lift<'a> {
                     // Instances whose aggregates output different columns
                     // still share: the definition outputs their union.
                     Mode::Mark => Vec::new(),
-                    Mode::In(_) => aggregates.clone(),
+                    Mode::In(_) | Mode::Narrow(_) => aggregates.clone(),
                 };
                 Some(Arc::new(
                     LogicalPlan::new(PlanNode::Aggregate {
@@ -946,11 +949,11 @@ impl<'a> Lift<'a> {
                 let mut here = false;
                 let parts: Vec<Arc<Expr>> = conjuncts(predicate)
                     .into_iter()
-                    .map(|c| match key_literal(&c, g) {
+                    .map(|c| match self.key_conjunct(&c, g) {
                         Some((col, l)) => {
                             here = true;
-                            self.found.push((l.clone(), Arc::clone(&c)));
-                            self.rewrite(&c, col)
+                            self.found.push((l, Arc::clone(&c)));
+                            self.rewrite(&c, &col)
                         }
                         None => c,
                     })
@@ -1061,9 +1064,34 @@ impl<'a> Lift<'a> {
         }
     }
 
+    /// The conjunct on key `g` this walk rewrites, with its column and literal: `g' = literal`,
+    /// or in `Narrow(k)` mode `g' IN (..)` whose list holds `k`.
+    fn key_conjunct(&self, c: &Arc<Expr>, g: AttrId) -> Option<(BoundColumn, Literal)> {
+        match self.mode {
+            Mode::Narrow(k) => {
+                let (Builtin::In, [col, list @ ..], _) = builtin(c)? else {
+                    return None;
+                };
+                let ExprNode::Resolved(ResolvedExpr::Column(col)) = &col.node else {
+                    return None;
+                };
+                let holds_k = list
+                    .iter()
+                    .any(|e| matches!(&e.node, ExprNode::Literal(l) if l == k));
+                (col.id == g && holds_k).then(|| (col.clone(), k.clone()))
+            }
+            Mode::Mark | Mode::In(_) => key_literal(c, g).map(|(col, l)| (col.clone(), l.clone())),
+        }
+    }
+
     /// The conjunct `c` (`g' = literal`) as this walk's mode writes it.
     fn rewrite(&self, c: &Arc<Expr>, col: &BoundColumn) -> Arc<Expr> {
         match self.mode {
+            Mode::Narrow(k) => call(
+                Builtin::Eq,
+                vec![column(col), lit(k.clone())],
+                DataType::Boolean,
+            ),
             Mode::Mark => call(Builtin::In, vec![column(col)], DataType::Boolean),
             Mode::In(literals) => {
                 let mut args = vec![column(col)];
@@ -1075,6 +1103,34 @@ impl<'a> Lift<'a> {
             }
         }
     }
+}
+
+/// The instance a reader `Filter(g = k)` of the shared definition `def` replaced, for
+/// estimates: `def` with the conjunct `g' IN (.., k, ..)` on the lineage of its output `g`
+/// narrowed back to `g' = k`; `None` when no such conjunct is found. The join order of a
+/// second optimization estimates the reader as this, as the first one estimated the instance,
+/// so the plan stays a fixed point (read as `def`, a reader holds every literal's groups).
+pub(crate) fn instance_of(
+    def: &Arc<LogicalPlan>,
+    g: AttrId,
+    k: &Literal,
+) -> Option<Arc<LogicalPlan>> {
+    let mut lift = Lift::new(Mode::Narrow(k));
+    let instance = lift.core(def, g)?;
+    (!lift.found.is_empty()).then_some(instance)
+}
+
+/// The reader's own conjunct `g = k` on one of `outputs` (a column against a non-null literal):
+/// the conjunct, the column and the literal.
+pub(crate) fn reader_key(
+    predicate: &Arc<Expr>,
+    outputs: &[AttrId],
+) -> Option<(Arc<Expr>, AttrId, Literal)> {
+    conjuncts(predicate).into_iter().find_map(|c| {
+        outputs
+            .iter()
+            .find_map(|&g| key_literal(&c, g).map(|(_, l)| (Arc::clone(&c), g, l.clone())))
+    })
 }
 
 /// `plan` with its one child replaced.

@@ -113,6 +113,10 @@ fn tpcds_trees_are_planned_exactly() {
         let (_, exact) = plan_with(&plan, &NoStatistics, &[]);
         let (_, greedy) = plan_with(&plan, &NoStatistics, GREEDY);
         assert_eq!(exact.len(), greedy.len(), "q{q:02}");
+        // The two runs order the same trees until their enumerators pick different shapes
+        // (equal costs included: q74's 4-input tree); later trees are built over plans that
+        // differ, so their costs no longer compare.
+        let mut same_inputs = true;
         for (e, g) in exact.iter().zip(&greedy) {
             if e.inputs > 10 {
                 assert_eq!(e.fallback, "inputs", "q{q:02}");
@@ -120,8 +124,11 @@ fn tpcds_trees_are_planned_exactly() {
             } else {
                 assert_eq!(e.fallback, "none", "q{q:02}");
                 assert!(e.considered >= e.pairs, "q{q:02}");
-                assert!(g.cost >= e.cost, "q{q:02}: {g:?} {e:?}");
+                if same_inputs {
+                    assert!(g.cost >= e.cost, "q{q:02}: {g:?} {e:?}");
+                }
             }
+            same_inputs &= e.shape == g.shape;
             planned += 1;
         }
     }
