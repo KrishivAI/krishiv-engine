@@ -963,7 +963,9 @@ async fn a_64_wide_level_0_splits_a_partition_that_does_not_fit() {
         assert_eq!(agg.disk_split_overlaps(), 0, "{at}");
         let splits = agg.metrics().repartitions;
         assert!(splits > 0, "{at}: no 64-wide partition split");
-        // 64 level-0 tasks, and 8 children per split.
+        // 64 level-0 tasks, and 8 children per split (exact while no
+        // partition or child is empty, which `tasks_of` would skip: at 40,000
+        // keys an empty one is vanishingly unlikely).
         assert_eq!(sink_metric(&agg, "disk_tasks"), 64 + 8 * splits, "{at}");
     }
 }
