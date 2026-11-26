@@ -26,7 +26,8 @@ use std::sync::Arc;
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
     Date32Type, Decimal64Type, Decimal128Type, DurationMicrosecondType, Float32Type, Float64Type,
-    Int8Type, Int16Type, Int32Type, Int64Type, IntervalYearMonthType, TimestampMicrosecondType,
+    Int8Type, Int16Type, Int32Type, Int64Type, IntervalYearMonthType, Time64NanosecondType,
+    TimestampMicrosecondType,
 };
 use arrow_array::{
     Array, ArrayRef, BinaryArray, BinaryViewArray, BooleanArray, Decimal128Array, Float32Array,
@@ -79,6 +80,7 @@ pub(crate) fn min_max_supported(t: &DataType) -> bool {
             | DataType::Decimal128(..)
             | DataType::Date32
             | DataType::Timestamp(TimeUnit::Microsecond, _)
+            | DataType::Time64(TimeUnit::Nanosecond)
             | DataType::Interval(IntervalUnit::YearMonth)
             | DataType::Duration(TimeUnit::Microsecond)
             | DataType::Utf8
@@ -100,7 +102,7 @@ pub(crate) fn struct_min_max_supported(t: &DataType) -> bool {
 /// `min`/`max` values, by physical kind.
 #[derive(Debug)]
 enum Values {
-    /// Integral, boolean, decimal, date and timestamp values.
+    /// Integral, boolean, decimal, date, time and timestamp values.
     Int(Vec<i128>),
     Float(Vec<f64>),
     Bytes(Vec<Box<[u8]>>),

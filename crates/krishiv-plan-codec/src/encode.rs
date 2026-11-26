@@ -14,15 +14,15 @@ use krishiv_exec::aggregate::{
     AggInput, AggregateExpr, AggregateFunction, AggregateOutput, UdafCall,
 };
 use krishiv_exec::physical::{
-    AggregatePlan, ExchangeFilterPlan, ExchangePlan, ExprEnv, HashJoinPlan, HashScheme,
-    JoinDistribution, JoinFilterPlan, NestedLoopPlan, Partitioning, PhysNode, PhysicalPlan,
-    ProbeSelect, ProjectItemPlan, Residual, ScanFilter, ScanNode, ScanRuntimeFilter,
-    SortMergeJoinPlan, SubqueryPlan, SubqueryValueKind, TableWriteRequest, WritePlan,
+    AggregatePlan, ExchangePlan, ExprEnv, HashJoinPlan, HashScheme, JoinDistribution,
+    NestedLoopPlan, Partitioning, PhysNode, PhysicalPlan, ProbeSelect, ProjectItemPlan, Residual,
+    ScanFilter, ScanNode, SortMergeJoinPlan, SubqueryPlan, SubqueryValueKind, TableWriteRequest,
+    WritePlan,
 };
 use krishiv_exec::planner::{ExplainNode, RowLevelOperation, WriteMode};
 use krishiv_exec::window::{FrameBound, FrameUnits, RankLike, WindowFunction, WindowFunctionPlan};
 use krishiv_exec::{FetchSlot, RowStageSettings, SortKey};
-use krishiv_io::{ColumnPath, KeyFilterOptions};
+use krishiv_io::ColumnPath;
 use krishiv_plan::{
     AttrId, BoundColumn, CastMode, DayTimeField, Expr, ExprNode, FunctionId, FunctionKind, Literal,
     Origin, ReadSource, ResolvedExpr, ResolvedFunction, Scan, YearMonthField,
@@ -30,6 +30,7 @@ use krishiv_plan::{
 use krishiv_types::DataType;
 
 use crate::arrow::{schema_bytes, type_bytes};
+use crate::encode_filter::{exchange_filter, join_filter, scan_filter};
 use crate::error::{CodecError, Result};
 use crate::features::arrow_type_is_nested;
 use crate::features::{Feature, legacy_level, plan_features};
@@ -1061,7 +1062,7 @@ fn bound_column(c: &BoundColumn, nested: &Cell<bool>) -> Result<pb::BoundColumn>
     })
 }
 
-fn column_path(p: &ColumnPath) -> pb::ColumnPath {
+pub(crate) fn column_path(p: &ColumnPath) -> pb::ColumnPath {
     pb::ColumnPath { parts: p.0.clone() }
 }
 
@@ -1124,60 +1125,6 @@ fn partitioning(p: &Partitioning) -> pb::Partitioning {
                 keys: keys.iter().map(sort_key).collect(),
             }),
         }),
-    }
-}
-
-fn join_filter(f: &JoinFilterPlan) -> pb::JoinFilter {
-    let KeyFilterOptions {
-        max_values,
-        exact_max_values,
-        bloom,
-        scan_waits,
-        bloom_max_items,
-        bloom_max_bytes,
-        bloom_fpp,
-        bloom_max_fpp,
-        bloom_bytes,
-        bloom_spill_bytes,
-    } = f.options;
-    pb::JoinFilter {
-        id: f.id.0,
-        key: f.key as u64,
-        options: Some(pb::KeyFilterOptions {
-            max_values: max_values as u64,
-            exact_max_values: exact_max_values as u64,
-            bloom,
-            scan_waits,
-            bloom_max_items,
-            bloom_max_bytes: bloom_max_bytes as u64,
-            bloom_fpp,
-            bloom_max_fpp,
-            bloom_bytes,
-            bloom_spill_bytes,
-        }),
-    }
-}
-
-fn exchange_filter(f: &ExchangeFilterPlan, nested: &Cell<bool>) -> pb::ExchangeFilter {
-    pb::ExchangeFilter {
-        id: f.id.0,
-        column: u64::try_from(f.column).unwrap_or(u64::MAX),
-        key_type: arrow_bytes(&f.key_type, nested),
-        options: join_filter(&JoinFilterPlan {
-            id: f.id,
-            key: 0,
-            options: f.options,
-        })
-        .options,
-        null_safe: f.null_safe,
-    }
-}
-
-fn scan_filter(f: &ScanRuntimeFilter, nested: &Cell<bool>) -> pb::ScanRuntimeFilter {
-    pb::ScanRuntimeFilter {
-        id: f.id.0,
-        column: Some(column_path(&f.column)),
-        key_type: arrow_bytes(&f.key_type, nested),
     }
 }
 
@@ -1706,7 +1653,7 @@ fn option(key: &str, value: &OptionValue) -> Result<pb::OptionValue> {
 
 /// The IPC bytes of the Arrow type `t`; `nested` is set when it is or holds an
 /// array, map or struct.
-fn arrow_bytes(t: &arrow_schema::DataType, nested: &Cell<bool>) -> Vec<u8> {
+pub(crate) fn arrow_bytes(t: &arrow_schema::DataType, nested: &Cell<bool>) -> Vec<u8> {
     if arrow_type_is_nested(t) {
         nested.set(true);
     }

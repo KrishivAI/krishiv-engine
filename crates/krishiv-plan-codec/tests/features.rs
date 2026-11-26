@@ -148,6 +148,7 @@ fn the_header_lists_exactly_the_features_in_use() {
     assert!(plan_features(&zero).is_empty());
     assert_eq!(message("aggregate_filter").features, ["aggregate_filter"]);
     assert_eq!(message("fused_probe").features, ["fused_probe"]);
+    assert_eq!(message("join_filter_bound").features, ["join_filter_bound"]);
     assert_eq!(message("session_zone_name").features, ["session_zone_name"]);
     assert_eq!(
         message("legacy_charset_switches").features,
@@ -796,6 +797,23 @@ fn a_reader_without_a_feature_refuses_the_plan_naming_it() {
         err,
         CodecError::UnsupportedFeatures {
             missing: vec!["fused_probe".to_owned()]
+        }
+    );
+    // A reader without `join_filter_bound` refuses a join that collects a
+    // bound from a build column (it would collect the key's values).
+    let bytes = encode(
+        &cases()
+            .into_iter()
+            .find(|(n, _)| n == "join_filter_bound")
+            .unwrap()
+            .1,
+    )
+    .unwrap();
+    let err = decode_with(&bytes, &Limits::default(), &ReaderFeatures::only([])).unwrap_err();
+    assert_eq!(
+        err,
+        CodecError::UnsupportedFeatures {
+            missing: vec!["join_filter_bound".to_owned()]
         }
     );
     // A reader without `shared_subplan` refuses a plan with shared plans.
