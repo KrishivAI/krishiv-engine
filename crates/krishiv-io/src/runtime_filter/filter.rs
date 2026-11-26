@@ -63,6 +63,27 @@ pub struct KeyFilterOptions {
     /// `bloom_bytes`; a build of one producer uses this one and never the
     /// planned size, several producers the planned size and never this.
     pub bloom_spill_bytes: Option<u32>,
+    /// Which end of the min/max range drops rows. `Both` for an equality
+    /// key; a bound from a join's comparison residual keeps one end
+    /// (`probe < build`: [`RangeSide::Upper`], the build's largest value),
+    /// and the other end is opened to the key type's limit at
+    /// [`KeyFilterBuilder::finish`].
+    pub side: RangeSide,
+}
+
+/// Which end of a [`KeyFilter`]'s min/max range a producer keeps.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RangeSide {
+    /// Both: the keys lie in `[min, max]` (an equality key).
+    #[default]
+    Both,
+    /// Only the largest value: a probe value above it cannot match
+    /// (`probe < build` or `probe <= build`).
+    Upper,
+    /// Only the smallest value: a probe value below it cannot match
+    /// (`probe > build` or `probe >= build`). Not for floats (a NaN probe
+    /// value is larger than every value in Spark): their range is dropped.
+    Lower,
 }
 
 impl Default for KeyFilterOptions {
@@ -78,6 +99,7 @@ impl Default for KeyFilterOptions {
             bloom_max_fpp: 0.05,
             bloom_bytes: None,
             bloom_spill_bytes: None,
+            side: RangeSide::Both,
         }
     }
 }
@@ -163,12 +185,17 @@ impl KeyFilterBuilder {
         if !supported_key_type(&key_type) {
             return None;
         }
+        // A one-sided range keeps every value up to (or from) the bound, so
+        // no membership form (value list, exact set, Bloom) may test it.
+        let members = options.side == RangeSide::Both;
         Some(Self {
             class: Class::of(&key_type)?,
-            hashes: options.bloom.then(Vec::new),
+            hashes: (options.bloom && members).then(Vec::new),
             drained: false,
             owned: false,
-            distinct: Some(Distinct::default()),
+            // No value form (a bound): nothing to hash.
+            distinct: (members && options.max_values.max(options.exact_max_values) > 0)
+                .then(Distinct::default),
             key_type,
             options,
             range: None,
@@ -504,7 +531,11 @@ impl KeyFilterBuilder {
     /// would miss keys.
     #[must_use]
     pub fn finish_with(self, drained: Option<RuntimeBloom>) -> KeyFilter {
-        let range = self.range.filter(|_| !self.nan);
+        let side = self.options.side;
+        let range = self
+            .range
+            .filter(|_| !self.nan)
+            .and_then(|r| r.opened(side, &self.key_type));
         let members: Option<Vec<(u64, KeyValue)>> =
             self.distinct.map(|d| d.table.into_iter().collect());
         let values = members

@@ -699,7 +699,7 @@ impl Session {
         };
         let external = t.location.is_some();
         let location = match &t.location {
-            Some(l) => PathBuf::from(l.strip_prefix("file:").unwrap_or(l)),
+            Some(l) => krishiv_exec::files::native_path(l),
             None => managed_location(&warehouse, &name.namespace, &name.name),
         };
         let table = CatalogTable {
@@ -1235,7 +1235,7 @@ pub(super) fn new_table_location(
             }
             .into());
         }
-        Some(l) => PathBuf::from(l.strip_prefix("file:").unwrap_or(l)),
+        Some(l) => krishiv_exec::files::native_path(l),
         None => managed_location(warehouse, &name.namespace, &name.name),
     };
     Ok((external, location))

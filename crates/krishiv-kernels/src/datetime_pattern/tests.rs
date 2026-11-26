@@ -475,3 +475,37 @@ fn localized_offsets_print_minutes_and_seconds_only_when_set() {
     assert_eq!(fmt("OOOO", 0, "-08:00", -28_800), "GMT-08:00");
     assert_eq!(fmt("OOOO", 0, "Z", 0), "GMT");
 }
+
+/// A `TIME` (nanoseconds since midnight) prints its time fields at full nanosecond precision; a
+/// date or zone field outside an optional section has no value (Spark 4.3.0: `DateTimeException`,
+/// raised by the caller as `INVALID_PARAMETER_VALUE.PATTERN`); a legacy pattern is refused.
+#[test]
+fn a_time_of_day_prints_its_time_fields_only() {
+    let nanos = 12 * 3_600_000_000_000 + 34 * 60_000_000_000 + 56 * 1_000_000_000 + 123_456_789;
+    let time = |p: &str| {
+        DateTimePattern::new(p, Purpose::FormatTime)
+            .unwrap()
+            .format_time_of_day(nanos)
+            .unwrap()
+    };
+    assert_eq!(
+        time("HH:mm:ss.SSSSSSSSS").as_deref(),
+        Some("12:34:56.123456789")
+    );
+    assert_eq!(time("h:mm a, k K").as_deref(), Some("12:34 PM, 12 0"));
+    assert_eq!(time("HH[ yyyy]").as_deref(), Some("12"));
+    for p in ["yyyy HH", "MMM", "EEE", "HH qqq", "D", "HH Z", "HH VV"] {
+        assert_eq!(time(p), None, "{p}");
+    }
+    let legacy = DateTimePattern::new_with("HH", Purpose::Format, true).unwrap();
+    assert!(legacy.format_time_of_day(nanos).is_err());
+    // A pattern the new formatter rejects is the one class, with no legacy check.
+    for p in ["HH YYYY", "HHH", "HH A"] {
+        let e = DateTimePattern::new(p, Purpose::FormatTime).unwrap_err();
+        assert_eq!(
+            e.error_class(),
+            ErrorClass::InvalidDatetimePatternWithSuggestion,
+            "{p}"
+        );
+    }
+}

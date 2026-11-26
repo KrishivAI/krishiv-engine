@@ -82,7 +82,15 @@ impl Checker<'_> {
 /// The scheme of a path as Hadoop's `new Path(s).toUri` reads it (`CatalogUtils.stringToURI`): the text before a
 /// colon, when it is a valid scheme (`s3` of `s3://bucket/p`); none for a plain path.
 fn uri_scheme(path: &str) -> Option<&str> {
-    let (scheme, _) = path.split_once(':')?;
+    let (scheme, rest) = path.split_once(':')?;
+    // On Windows Hadoop's `Path` reads `C:` or `C:/x` as a drive, not a scheme.
+    if cfg!(windows)
+        && scheme.len() == 1
+        && scheme.as_bytes()[0].is_ascii_alphabetic()
+        && (rest.is_empty() || rest.starts_with(['/', '\\']))
+    {
+        return None;
+    }
     let mut chars = scheme.chars();
     let first = chars.next()?;
     (first.is_ascii_alphabetic()

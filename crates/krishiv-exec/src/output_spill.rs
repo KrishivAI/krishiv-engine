@@ -35,7 +35,7 @@ use futures::future::BoxFuture;
 use krishiv_common::error::{ErrorClass, KrishivError};
 use krishiv_memory::{ConsumerHandle, OwnerId, SpillSignal, SpillTicket, Spillable};
 
-use crate::context::{OperatorId, QueryContext, TaskContext};
+use crate::context::{InFlight, OperatorId, QueryContext, TaskContext};
 use crate::error::Result;
 use crate::executor::Executor;
 use crate::sync::{Event, Mutex, lock};
@@ -166,12 +166,17 @@ impl OutputSpill {
         // Always alive here: `self` is borrowed from the `Arc`.
         if let Some(me) = self.me.upgrade() {
             *running = true;
+            // Counted from here, not from the task's first poll: on a busy
+            // runtime the task may start after the query's coordinator saw
+            // no blocking work and finished, and the task would then hold
+            // the output (and its memory) past the query's end.
+            let in_flight = self.query.blocking_started();
             drop(crate::console::spawn_named(
                 &self.executor,
                 &self.query,
                 self.query.class(),
                 &crate::console::io_task_name("spill"),
-                Box::pin(me.serve()),
+                Box::pin(me.serve(in_flight)),
             ));
         }
     }
@@ -179,8 +184,7 @@ impl OutputSpill {
     /// The spill task: serves requests until none is pending. It counts as
     /// the query's blocking work for its whole run, so the query does not
     /// end while it holds the output, its memory or a file.
-    async fn serve(self: Arc<Self>) {
-        let _in_flight = self.query.blocking_started();
+    async fn serve(self: Arc<Self>, _in_flight: InFlight) {
         loop {
             self.service().await;
             let mut running = lock(&self.running);

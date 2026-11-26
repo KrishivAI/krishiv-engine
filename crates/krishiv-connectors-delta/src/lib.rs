@@ -62,3 +62,12 @@ pub mod error;
 pub mod features;
 pub mod table;
 pub mod write;
+
+/// The local store the tests read through: the settled listing store on Unix, the plain one
+/// elsewhere (as the session registers it; Windows port).
+#[cfg(all(test, unix))]
+pub(crate) use krishiv_io::SettledLocalFileSystem as TestLocalStore;
+/// The local store the tests read through: the settled listing store on Unix, the plain one
+/// elsewhere (as the session registers it; Windows port).
+#[cfg(all(test, not(unix)))]
+pub(crate) use object_store::local::LocalFileSystem as TestLocalStore;

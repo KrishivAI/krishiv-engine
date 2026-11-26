@@ -329,7 +329,8 @@ pub(super) fn files_ending(env: &Env, suffix: &str) -> Vec<String> {
             if p.is_dir() {
                 walk(&p, suffix, out);
             } else if p.display().to_string().ends_with(suffix) {
-                out.push(p.display().to_string());
+                // `/` separators on every platform, so the tests' `/x=1/` checks hold on Windows.
+                out.push(p.display().to_string().replace('\\', "/"));
             }
         }
     }
@@ -542,12 +543,7 @@ fn a_v3_delete_writes_one_puffin_file_per_task() {
     for d in &deletes {
         assert_eq!(d.format, DataFileFormat::Puffin);
         assert!(d.referenced.is_some());
-        let local = d
-            .file
-            .file_path()
-            .strip_prefix("file://")
-            .unwrap()
-            .to_owned();
+        let local = super::sink_tests::local_path(d.file.file_path());
         let bytes = std::fs::read(local).unwrap();
         assert_eq!(d.file.file_size_in_bytes(), bytes.len() as u64);
         assert_eq!(&bytes[..4], b"PFA1");

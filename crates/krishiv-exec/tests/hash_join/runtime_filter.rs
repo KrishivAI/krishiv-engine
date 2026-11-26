@@ -29,6 +29,7 @@ fn filter(id: u64, key: usize, options: KeyFilterOptions) -> JoinRuntimeFilter {
             types[key].clone(),
         )),
         options,
+        column: None,
     }
 }
 

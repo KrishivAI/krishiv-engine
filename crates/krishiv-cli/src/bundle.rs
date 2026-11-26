@@ -215,7 +215,10 @@ fn config_paths(session: &krishiv::Session, conf_args: &[(String, String)]) -> V
     let mut out: Vec<String> = Vec::new();
     for value in values {
         for part in value.split(',').map(str::trim) {
-            if std::path::Path::new(part).is_absolute() && !out.iter().any(|p| p == part) {
+            // A rooted `/x` counts on Windows too, where it is not `is_absolute` (no drive) but
+            // still names a file the plans print.
+            let rooted = part.starts_with('/') || std::path::Path::new(part).is_absolute();
+            if rooted && !out.iter().any(|p| p == part) {
                 out.push(part.to_owned());
             }
         }
