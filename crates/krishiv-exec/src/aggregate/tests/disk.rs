@@ -925,14 +925,46 @@ async fn level_0_runs_at_6_bits_are_64_wide_and_give_the_unspilled_rows() {
                 assert_eq!(plain, expected, "{at}");
                 let m = agg.metrics();
                 assert!(m.spill_runs > 0, "{at}");
-                if m.repartitions == 0 {
-                    // One disk task per level-0 partition.
-                    assert_eq!(sink_metric(&agg, "disk_tasks"), 1 << bits, "{at}");
-                }
+                // One disk task per level-0 partition, and 8 per split.
+                let want = (1 << bits) + 8 * m.repartitions;
+                assert_eq!(sink_metric(&agg, "disk_tasks"), want, "{at}");
                 by_bits.push(got.rows);
             }
             assert_eq!(by_bits[0], by_bits[1], "layout {layout}, {limit} B");
         }
+    }
+}
+
+/// A 64-wide level 0 still splits a partition that does not fit: its
+/// children are 8 wide at level 1 (the next 3 hash bits below level 0's
+/// 6), and the rows equal the unspilled ones (design
+/// `0.4-agg-disk-overpartition` §3).
+#[tokio::test]
+async fn a_64_wide_level_0_splits_a_partition_that_does_not_fit() {
+    let (s, b) = wide_input(160_000, 40_000);
+    let canonical = |rows: &[String]| {
+        let mut v: Vec<String> = rows.iter().map(|r| without_list(r).to_owned()).collect();
+        v.sort();
+        v
+    };
+    let mut expected: Vec<String> = (0..40_000).map(|k| format!("{k}|4")).collect();
+    expected.sort();
+    // 1 MiB: 12 to 15 of the 64 partitions split (smaller limits split
+    // all 64 and take minutes in a debug build).
+    let limit = 1 << 20;
+    for layout in [false, true] {
+        let (_m, scope) = spill_dir();
+        let mut sp = spec(&s, vec![0], wide_aggs(&s));
+        sp.spill = Some(scope);
+        let agg = HashAggregate::new(sp).unwrap().with_spill_bits(6);
+        let got = disk_by_hand(&agg, &s, &b, four_threads(), limit, layout).await;
+        let at = format!("layout {layout}, {limit} B");
+        assert_eq!(canonical(&got.rows), expected, "{at}");
+        assert_eq!(agg.disk_split_overlaps(), 0, "{at}");
+        let splits = agg.metrics().repartitions;
+        assert!(splits > 0, "{at}: no 64-wide partition split");
+        // 64 level-0 tasks, and 8 children per split.
+        assert_eq!(sink_metric(&agg, "disk_tasks"), 64 + 8 * splits, "{at}");
     }
 }
 
@@ -965,21 +997,26 @@ async fn the_drop_behind_window_caps_level_0_under_a_limited_root() {
 
 /// Under `krishiv.deterministicOrder` level 0 stays 8 wide at any slot
 /// count: with 8 slots the spilled output is, row for row and in order,
-/// the output of a level 0 forced to 8 wide, from 8 disk tasks.
+/// the output of a level 0 forced to 8 wide and of 1 slot, from 8 disk
+/// tasks. The drop-behind window is off, so its cap (which would also give
+/// 8 wide at this limit) cannot hide a width taken from the slots.
 #[tokio::test]
 async fn deterministic_mode_keeps_level_0_8_wide() {
     let (s, b) = grouped_input(120_000, 40_000);
     for layout in [false, true] {
         let mut outs = Vec::new();
-        for forced in [None, Some(3)] {
-            let (_m, scope) = spill_dir();
+        for (slots, forced) in [(8, None), (8, Some(3)), (1, None)] {
+            let (_m, scope) = spill_dir_with(&SpillConfig {
+                drop_behind: 0,
+                ..SpillConfig::default()
+            });
             let mut sp = spec(&s, vec![0], disk_aggs(&s));
             sp.spill = Some(scope);
             let mut agg = HashAggregate::new(sp).unwrap();
             if let Some(bits) = forced {
                 agg = agg.with_spill_bits(bits);
             }
-            let executor: Arc<dyn Executor> = TokioExecutor::deterministic(8).unwrap();
+            let executor: Arc<dyn Executor> = TokioExecutor::deterministic(slots).unwrap();
             let config = ExecConfig {
                 agg_row_layout: layout,
                 deterministic_order: true,
@@ -990,11 +1027,14 @@ async fn deterministic_mode_keeps_level_0_8_wide() {
             let got = disk_by_hand_in(&agg, &s, &b, executor, 3 << 20, config).await;
             let m = agg.metrics();
             assert!(m.spill_runs > 0, "layout {layout}");
-            if m.repartitions == 0 {
-                assert_eq!(sink_metric(&agg, "disk_tasks"), 8, "layout {layout}");
-            }
+            let want = 8 + 8 * m.repartitions;
+            assert_eq!(sink_metric(&agg, "disk_tasks"), want, "layout {layout}");
             outs.push(got.ordered);
         }
-        assert_eq!(outs[0], outs[1], "layout {layout}");
+        assert_eq!(
+            outs[0], outs[1],
+            "layout {layout}: 8 slots vs forced 8 wide"
+        );
+        assert_eq!(outs[0], outs[2], "layout {layout}: 8 slots vs 1 slot");
     }
 }

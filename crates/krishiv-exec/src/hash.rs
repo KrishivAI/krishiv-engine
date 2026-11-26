@@ -115,10 +115,18 @@ pub(crate) const fn max_level(level0_bits: u32) -> u32 {
     (64 - 7 - level0_bits) / PARTITION_BITS
 }
 
-/// Partitions at `level` when level 0 is `level0_bits` wide.
+/// Partitions at `level` when level 0 is `level0_bits` wide (clamped to
+/// 3..=6, as [`spill_partition_at`] clamps it).
 pub(crate) const fn partitions_at(level: u32, level0_bits: u32) -> usize {
     if level == 0 {
-        1 << level0_bits
+        let bits = if level0_bits < PARTITION_BITS {
+            PARTITION_BITS
+        } else if level0_bits > MAX_LEVEL0_BITS {
+            MAX_LEVEL0_BITS
+        } else {
+            level0_bits
+        };
+        1 << bits
     } else {
         PARTITIONS
     }
@@ -738,6 +746,20 @@ mod tests {
         for (p, bits) in want {
             assert_eq!(level0_bits(p, false), bits, "parallelism {p}");
             assert_eq!(level0_bits(p, true), 3, "deterministic, parallelism {p}");
+        }
+    }
+
+    #[test]
+    fn partitions_at_clamps_as_spill_partition_at_does() {
+        for bits in 0..=9 {
+            let width = partitions_at(0, bits);
+            assert!((8..=64).contains(&width), "{bits} bits");
+            for h in [0, u64::MAX, 0x9e37_79b9_7f4a_7c15] {
+                assert!(
+                    spill_partition_at(h, 0, bits) < width,
+                    "{bits} bits, hash {h:#x}"
+                );
+            }
         }
     }
 
