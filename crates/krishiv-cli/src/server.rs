@@ -284,6 +284,14 @@ pub(crate) fn load_settings(conf: &[(String, String)]) -> Result<Settings, Strin
         }
         engine.push((k.to_owned(), v.clone()));
     }
+    // Server mode serves `/metrics` unless told otherwise (T125 decision 3): the default is on
+    // here, off embedded; an explicit `krishiv.metrics.enabled` wins.
+    if !conf.iter().any(|(k, _)| k == METRICS_ENABLED.key) {
+        config
+            .set(METRICS_ENABLED.key, "true")
+            .map_err(|e| e.to_string())?;
+        engine.push((METRICS_ENABLED.key.to_owned(), "true".to_owned()));
+    }
     Ok(Settings {
         config,
         auth,
@@ -1306,6 +1314,22 @@ mod tests {
         assert!(!metrics_need_token(&public, lo));
         assert!(metrics_need_token(&public, any));
         assert!(!metrics_need_token(&config(&[]), lo));
+    }
+
+    #[test]
+    fn server_metrics_default_on_and_explicit_off_wins() {
+        let on = load_settings(&[]).unwrap();
+        assert!(flag(&on.config, &METRICS_ENABLED, false));
+        assert!(
+            on.engine
+                .iter()
+                .any(|(k, v)| k == "krishiv.metrics.enabled" && v == "true")
+        );
+        let off =
+            load_settings(&[("krishiv.metrics.enabled".to_owned(), "false".to_owned())]).unwrap();
+        assert!(!flag(&off.config, &METRICS_ENABLED, true));
+        let lo: SocketAddr = "127.0.0.1:8080".parse().unwrap();
+        assert!(metrics_need_token(&on.config, lo));
     }
 
     /// G6 review r3: one runtime asked with other `external` settings gets a provider of its own;

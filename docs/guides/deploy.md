@@ -48,7 +48,8 @@ curl -s http://127.0.0.1:8080/readyz      # 200
 
 `/metrics` answers `401` without the admin token. For local use on a loopback address,
 `--conf krishiv.server.metrics.public=true` lets it answer without one (aggregate counters only), and
-`krishiv.metrics.enabled=true` folds each query's metrics into it. The [web console](#the-web-console) is served on
+`krishiv server` folds each query's metrics into it by default (`krishiv.metrics.enabled` is true in server mode;
+`--conf krishiv.metrics.enabled=false` turns `/metrics` off). The [web console](#the-web-console) is served on
 the admin port.
 
 ### Authentication, roles and TLS
