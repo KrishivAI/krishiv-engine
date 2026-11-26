@@ -42,7 +42,18 @@ from pathlib import Path
 # File names (upper-cased, before any extension) that hold license or notice text.
 _STEMS = ("LICENSE", "LICENCE", "COPYING", "COPYRIGHT", "NOTICE", "UNLICENSE")
 # Directories never searched for nested license files: they are not linked.
-_SKIP_DIRS = {".git", "target", "tests", "test", "benches", "bench", "examples", "fuzz", "docs", "doc"}
+_SKIP_DIRS = {
+    ".git",
+    "target",
+    "tests",
+    "test",
+    "benches",
+    "bench",
+    "examples",
+    "fuzz",
+    "docs",
+    "doc",
+}
 # How deep below the package root nested license files are looked for.
 _MAX_DEPTH = 3
 
@@ -71,7 +82,9 @@ class Notices:
 def is_notice_name(name: str) -> bool:
     """Whether a file name holds license or notice text (LICENSE-MIT, COPYING.txt, NOTICE, ...)."""
     upper = name.upper()
-    return any(upper == s or upper.startswith((s + "-", s + ".", s + "_")) for s in _STEMS)
+    return any(
+        upper == s or upper.startswith((s + "-", s + ".", s + "_")) for s in _STEMS
+    )
 
 
 def notice_files(crate: Crate) -> list[Path]:
@@ -85,11 +98,19 @@ def notice_files(crate: Crate) -> list[Path]:
         rel = Path(dirpath).relative_to(crate.root)
         depth = len(rel.parts)
         in_licenses_dir = any(p.upper() in ("LICENSES", "LICENCES") for p in rel.parts)
-        dirnames[:] = sorted(d for d in dirnames if d.lower() not in _SKIP_DIRS and depth < _MAX_DEPTH)
+        dirnames[:] = sorted(
+            d for d in dirnames if d.lower() not in _SKIP_DIRS and depth < _MAX_DEPTH
+        )
         for f in filenames:
             if in_licenses_dir or is_notice_name(f):
                 found.add(Path(dirpath) / f)
-    return sorted(found, key=lambda p: (len(p.relative_to(crate.root).parts), str(p.relative_to(crate.root))))
+    return sorted(
+        found,
+        key=lambda p: (
+            len(p.relative_to(crate.root).parts),
+            str(p.relative_to(crate.root)),
+        ),
+    )
 
 
 def parse_cargo_args(args: str) -> list[str]:
@@ -131,7 +152,11 @@ def cargo_metadata(manifest: Path, feature_flags: list[str], target: str) -> dic
 def linked_crates(metadata: dict, package: str) -> list[Crate]:
     """The third-party packages `package` reaches through normal dependencies."""
     packages = {p["id"]: p for p in metadata["packages"]}
-    roots = [p["id"] for p in metadata["packages"] if p["name"] == package and p.get("source") is None]
+    roots = [
+        p["id"]
+        for p in metadata["packages"]
+        if p["name"] == package and p.get("source") is None
+    ]
     if not roots:
         raise SystemExit(f"error: no workspace package named {package!r}")
     nodes = {n["id"]: n for n in metadata["resolve"]["nodes"]}
@@ -164,13 +189,20 @@ def linked_crates(metadata: dict, package: str) -> list[Crate]:
 
 
 def _normal(text: str) -> str:
-    return "\n".join(line.rstrip() for line in text.replace("\r\n", "\n").strip().split("\n")) + "\n"
+    return (
+        "\n".join(
+            line.rstrip() for line in text.replace("\r\n", "\n").strip().split("\n")
+        )
+        + "\n"
+    )
 
 
 def render(title: str, crates: list[Crate]) -> Notices:
     """The notices file: a crate list, then every distinct license or notice text once."""
     crates = sorted(set(crates), key=lambda c: (c.name, c.version))
-    texts: dict[str, tuple[str, list[str]]] = {}  # digest -> (text, ["crate version: path", ...])
+    texts: dict[
+        str, tuple[str, list[str]]
+    ] = {}  # digest -> (text, ["crate version: path", ...])
     refs: dict[Crate, list[str]] = {}
     without: list[str] = []
     for c in crates:
@@ -178,7 +210,9 @@ def render(title: str, crates: list[Crate]) -> Notices:
         for f in notice_files(c):
             body = _normal(f.read_text(encoding="utf-8", errors="replace"))
             digest = hashlib.sha256(body.encode()).hexdigest()[:12]
-            texts.setdefault(digest, (body, []))[1].append(f"{c.name} {c.version}: {f.relative_to(c.root)}")
+            texts.setdefault(digest, (body, []))[1].append(
+                f"{c.name} {c.version}: {f.relative_to(c.root)}"
+            )
             if digest not in ids:
                 ids.append(digest)
         refs[c] = ids
@@ -197,7 +231,10 @@ def render(title: str, crates: list[Crate]) -> Notices:
         "",
     ]
     for c in crates:
-        ids = ", ".join(f"[{i}]" for i in refs[c]) or "(the package carries no license file)"
+        ids = (
+            ", ".join(f"[{i}]" for i in refs[c])
+            or "(the package carries no license file)"
+        )
         repo = f" {c.repository}" if c.repository else ""
         lines.append(f"- {c.name} {c.version}, {c.license},{repo} {ids}")
     lines += ["", "License and notice texts:", ""]
@@ -207,20 +244,43 @@ def render(title: str, crates: list[Crate]) -> Notices:
         lines += [f"  {u}" for u in used]
         lines.append("-" * 78)
         lines.append(body)
-    return Notices(text="\n".join(lines).rstrip("\n") + "\n", crates=len(crates), without_files=without)
+    return Notices(
+        text="\n".join(lines).rstrip("\n") + "\n",
+        crates=len(crates),
+        without_files=without,
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
-    ap.add_argument("--package", required=True, help="workspace package the artifact is built from")
-    ap.add_argument("--cargo-args", default="", help="the build's flag string; feature flags are read")
-    ap.add_argument("--target", action="append", required=True, help="target triple (repeatable: union)")
-    ap.add_argument("--title", required=True, help='what the artifact is, e.g. "the krishiv CLI"')
+    ap.add_argument(
+        "--package", required=True, help="workspace package the artifact is built from"
+    )
+    ap.add_argument(
+        "--cargo-args",
+        default="",
+        help="the build's flag string; feature flags are read",
+    )
+    ap.add_argument(
+        "--target",
+        action="append",
+        required=True,
+        help="target triple (repeatable: union)",
+    )
+    ap.add_argument(
+        "--title", required=True, help='what the artifact is, e.g. "the krishiv CLI"'
+    )
     ap.add_argument("--out", required=True, type=Path)
-    ap.add_argument("--root", type=Path, default=Path.cwd(), help="repository root (default: cwd)")
+    ap.add_argument(
+        "--root", type=Path, default=Path.cwd(), help="repository root (default: cwd)"
+    )
     a = ap.parse_args(argv)
     meta0 = cargo_metadata(a.root / "Cargo.toml", [], a.target[0])
-    members = {p["name"]: Path(p["manifest_path"]) for p in meta0["packages"] if p.get("source") is None}
+    members = {
+        p["name"]: Path(p["manifest_path"])
+        for p in meta0["packages"]
+        if p.get("source") is None
+    }
     if a.package not in members:
         raise SystemExit(f"error: no workspace package named {a.package!r}")
     flags = parse_cargo_args(a.cargo_args)
@@ -229,12 +289,20 @@ def main(argv: list[str] | None = None) -> int:
         crates += linked_crates(cargo_metadata(members[a.package], flags, t), a.package)
     notices = render(a.title, crates)
     if notices.crates == 0:
-        raise SystemExit("error: no third-party crates found; the dependency walk is broken")
+        raise SystemExit(
+            "error: no third-party crates found; the dependency walk is broken"
+        )
     a.out.parent.mkdir(parents=True, exist_ok=True)
     a.out.write_text(notices.text, encoding="utf-8")
-    print(f"{a.out}: {notices.crates} crates, {len(notices.text.encode()):,} bytes", file=sys.stderr)
+    print(
+        f"{a.out}: {notices.crates} crates, {len(notices.text.encode()):,} bytes",
+        file=sys.stderr,
+    )
     if notices.without_files:
-        print(f"no license file in {len(notices.without_files)}: {', '.join(notices.without_files)}", file=sys.stderr)
+        print(
+            f"no license file in {len(notices.without_files)}: {', '.join(notices.without_files)}",
+            file=sys.stderr,
+        )
     return 0
 
 
