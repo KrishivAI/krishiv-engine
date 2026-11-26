@@ -35,8 +35,8 @@
 //! scan is selective enough (q58's seven dates of `date_dim`). So is one
 //! whose value is transitive (lever R, study 58): the scan feeds the build
 //! of a join whose filter a scan at least 20 times that build waits for,
-//! and the filter's build reads the table through a predicate the scan
-//! does not have (q59: the inlined `wss` copy's `date_dim` builds the
+//! and the filter's build, at most a twentieth of the scan, reads the
+//! table through a predicate the scan does not have (q59: the inlined `wss` copy's `date_dim` builds the
 //! filter on `store_sales`; the reader's `date_dim` keeps 12 months). Not
 //! waiting, the copy raced the reader's build and, when it won, aggregated
 //! all of `store_sales` (26.9M rows at SF10, not 5.5M).
@@ -456,6 +456,7 @@ impl Planner<'_> {
                 let reads_scan_table = reads_source(build, &site.source);
                 let waits = scan_waits(site.scan_rows, build_rows, reads_scan_table)
                     || (reads_scan_table
+                        && site.scan_rows >= FEEDING_BUILD * build_rows.max(1.0)
                         && self.selective_feeds.contains(&site.scan)
                         && narrows(build, &site.source)
                         && !scan_has_filter(&probe.node, site.scan));

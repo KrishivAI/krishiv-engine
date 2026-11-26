@@ -987,8 +987,8 @@ fn a_scan_feeding_a_selective_build_waits_for_a_narrower_build_of_its_table() {
         .unwrap();
     let dir = tempfile::tempdir().unwrap();
     let mut rng = 13;
-    write(dir.path(), "big.parquet", &table(&mut rng, 8000, 100, 0));
-    write(dir.path(), "small.parquet", &table(&mut rng, 100, 100, 0));
+    write(dir.path(), "big.parquet", &table(&mut rng, 16_000, 100, 0));
+    write(dir.path(), "small.parquet", &table(&mut rng, 400, 100, 0));
     let sources = [
         ("big", vec!["big.parquet".to_owned()]),
         ("small", vec!["small.parquet".to_owned()]),
@@ -1016,6 +1016,9 @@ fn a_scan_feeding_a_selective_build_waits_for_a_narrower_build_of_its_table() {
     // A build of the whole table: its keys are one domain with the scan's.
     let whole = waits(&q("", ""));
     assert!(whole.iter().any(|w| !w), "{whole:?}");
+    // A build keeping most of the table: no wait (TPC-DS q04's `customer`).
+    let most = waits(&q("WHERE d.v < 300", ""));
+    assert!(most.iter().any(|w| !w), "{most:?}");
     // The scan has a predicate of its own (TPC-DS q64's copies).
     let both = waits(&q("WHERE d.v < 5", "WHERE s.v < 50"));
     assert!(both.iter().any(|w| !w), "{both:?}");
