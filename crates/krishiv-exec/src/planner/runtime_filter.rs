@@ -611,16 +611,28 @@ fn feeding_scans(node: &PhysNode, out: &mut HashSet<ScanId>) {
 /// of its own: a build that keeps only part of the table, whose filter can
 /// drop most of another scan of it.
 fn narrows(node: &PhysNode, source: &ReadSource) -> bool {
-    matches!(node, PhysNode::Scan(s) if s.scan.source == *source && s.filter.is_some())
+    matches!(node, PhysNode::Scan(s) if s.scan.source == *source && scan_restricts(s))
         || node.children().into_iter().any(|c| narrows(c, source))
 }
 
 /// Whether the scan `id` in `node`'s plan has a predicate pushed into it.
 fn scan_has_filter(node: &PhysNode, id: ScanId) -> bool {
     match node {
-        PhysNode::Scan(s) if s.id == id => s.filter.is_some(),
+        PhysNode::Scan(s) if s.id == id => scan_restricts(s),
         _ => node.children().into_iter().any(|c| scan_has_filter(c, id)),
     }
+}
+
+/// Whether a scan's pushed predicate keeps part of the table by its
+/// values: a conjunct other than the `isnotnull` checks every join key
+/// infers (both `date_dim` scans of q59 carry those).
+fn scan_restricts(s: &crate::physical::ScanNode) -> bool {
+    s.filter.as_ref().is_some_and(|f| {
+        krishiv_plan::conjuncts(&f.predicate).into_iter().any(|c| {
+            !matches!(&c.node, ExprNode::Resolved(ResolvedExpr::Function(f))
+                if f.id == krishiv_plan::FunctionId::Builtin(krishiv_plan::Builtin::IsNotNull))
+        })
+    })
 }
 
 /// Whether `node`'s plan scans `source`.

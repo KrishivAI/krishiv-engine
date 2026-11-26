@@ -1010,7 +1010,8 @@ fn a_scan_feeding_a_selective_build_waits_for_a_narrower_build_of_its_table() {
     let narrowed = waits(&q("WHERE d.v < 5", ""));
     assert!(
         narrowed.len() >= 2 && narrowed.iter().all(|w| *w),
-        "{narrowed:?}"
+        "{narrowed:?}\n{}",
+        t.plan_sql(&q("WHERE d.v < 5", "")).unwrap()
     );
     // A build of the whole table: its keys are one domain with the scan's.
     let whole = waits(&q("", ""));
