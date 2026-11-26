@@ -18,6 +18,7 @@
   "python-udf-profiler": "Profile a Python UDF",
   "observability": "Observability from Rust",
   "migrating-jvm-udfs": "Migrating JVM UDFs",
+  "javascript-typescript": "JavaScript and TypeScript",
   "session-settings": "Session settings: time zone and ANSI mode",
   "access-control": "Access control with grants",
   "flight-sql": "Arrow Flight SQL",

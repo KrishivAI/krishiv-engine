@@ -25,6 +25,9 @@ list there. Choosing where Krishiv runs: [Deployment](deploy.md)
 - [Python data sources](python-data-sources.md): your own formats through `spark.read.format`.
 - [Streaming: what works today](streaming.md): Structured Streaming is not available yet; what to run in batch instead.
 
+**Use Krishiv from your language**
+- [JavaScript and TypeScript](javascript-typescript.md): the `krishiv` npm package against a server.
+
 **SQL features**
 - [Session settings: time zone, ANSI mode and Spark version](session-settings.md).
 - [As-of joins](asof-join.md), [Metric views](metric-views.md), [The TIME type](time-types.md),
