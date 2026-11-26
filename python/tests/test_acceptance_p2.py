@@ -65,7 +65,6 @@ def test_not_expected_type_state_comes_from_the_class(spark: SparkSession) -> No
 
 def test_print_schema_is_sparks_tree(spark: SparkSession, capsys: pytest.CaptureFixture[str]) -> None:
     """PY-040: ``integer``/``long`` names, nested types as a tree, a trailing empty line."""
-    from krishiv.sql import _convert
     from krishiv.sql.types import StructType
 
     spark.sql("select 1 i, cast(2 as bigint) l").printSchema()
@@ -74,7 +73,9 @@ def test_print_schema_is_sparks_tree(spark: SparkSession, capsys: pytest.Capture
         "i int not null, l bigint, d decimal(10,2), s struct<a: int not null>, "
         "arr array<struct<c: string>>, m map<string, bigint>"
     )
-    assert _convert.tree_string(StructType.fromDDL(ddl)).split("\n") == [
+    schema = StructType.fromDDL(ddl)
+    assert isinstance(schema, StructType)
+    assert schema.treeString().split("\n") == [
         "root",
         " |-- i: integer (nullable = false)",
         " |-- l: long (nullable = true)",
@@ -89,6 +90,20 @@ def test_print_schema_is_sparks_tree(spark: SparkSession, capsys: pytest.Capture
         " |    |-- value: long (valueContainsNull = true)",
         "",
     ]
+
+
+def test_print_schema_keeps_nested_nullability(spark: SparkSession, capsys: pytest.CaptureFixture[str]) -> None:
+    """Spark prints ``containsNull = false`` for ``array(1)`` and ``valueContainsNull = false`` for ``map('a', 1)``."""
+    spark.sql("select array(1) a, map('a', 1) m").printSchema()
+    assert capsys.readouterr().out == (
+        "root\n"
+        " |-- a: array (nullable = false)\n"
+        " |    |-- element: integer (containsNull = false)\n"
+        " |-- m: map (nullable = false)\n"
+        " |    |-- key: string\n"
+        " |    |-- value: integer (valueContainsNull = false)\n"
+        "\n"
+    )
 
 
 def test_spark_context_is_an_unsupported_name() -> None:

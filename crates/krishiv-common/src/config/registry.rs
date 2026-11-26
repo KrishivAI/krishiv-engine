@@ -67,8 +67,9 @@ pub use lakehouse::{
 };
 pub use optimizer::{
     DERIVED_KEYS_ABOVE, DISCOVER_KEYS, DISCOVER_KEYS_TIMEOUT, EXPERIMENTAL_GROUP_KEY_CODE_FORCE,
-    GROUP_KEY_CODE, LATE_PAYLOAD_JOIN, PAYLOAD_ABOVE_AGGREGATE, PRESERVED_SIDE_SEMI_JOIN,
-    SEMI_ANTI_JOIN_ORDER, SHARE_FILTERED_SCANS, SHARE_REPEATED_SUBTREES, SUBQUERY_AS_WINDOW,
+    GROUP_KEY_CODE, GROUP_KEY_CODE_MULTI_DIMENSION, JOIN_PRUNE_FIRST, LATE_PAYLOAD_JOIN,
+    PAYLOAD_ABOVE_AGGREGATE, PRESERVED_SIDE_SEMI_JOIN, ROLLUP_FROM_PARENT, SEMI_ANTI_JOIN_ORDER,
+    SHARE_FILTERED_SCANS, SHARE_LITERAL_INSTANCES, SHARE_REPEATED_SUBTREES, SUBQUERY_AS_WINDOW,
 };
 pub use result_cache::{RESULT_CACHE_ENABLED, RESULT_CACHE_MAX_BYTES, RESULT_CACHE_TTL};
 pub use runtime_filter::{
@@ -79,6 +80,7 @@ pub use runtime_filter::{
 };
 pub use runtime_filter_bloom::{
     RUNTIME_FILTER_BLOOM_AT_SCALE, RUNTIME_FILTER_BLOOM_MEMORY_TIER, RUNTIME_FILTER_EQUATED_SITES,
+    RUNTIME_FILTER_RESIDUAL_BOUNDS,
 };
 // Every public item of `server` is a config entry (Connect, Flight SQL, server).
 pub use server::*;
@@ -153,6 +155,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &MEMORY_ABORT_RELEASE_TIMEOUT,
     &MEMORY_SPILL_SCRATCH_RESERVE,
     &MEMORY_RESIDENT_GUARD,
+    &MEMORY_RELEASE_AT_QUERY_END,
     &SESSION_MEMORY_LIMIT,
     &SYSTEM_QUERIES_CAPACITY,
     &HISTORY_PATH,
@@ -199,12 +202,16 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &DISCOVER_KEYS,
     &DISCOVER_KEYS_TIMEOUT,
     &GROUP_KEY_CODE,
+    &GROUP_KEY_CODE_MULTI_DIMENSION,
     &DERIVED_KEYS_ABOVE,
     &EXPERIMENTAL_GROUP_KEY_CODE_FORCE,
     &SHARE_REPEATED_SUBTREES,
     &SHARE_FILTERED_SCANS,
+    &ROLLUP_FROM_PARENT,
+    &SHARE_LITERAL_INSTANCES,
     &SEMI_ANTI_JOIN_ORDER,
     &PRESERVED_SIDE_SEMI_JOIN,
+    &JOIN_PRUNE_FIRST,
     &SPILL_DIR,
     &WORKLOAD_RESOURCE_GROUPS_FILE,
     &CONNECT_PYTHON_FUNCTIONS_CATALOG,
@@ -217,6 +224,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &RUNTIME_FILTER_BLOOM_AT_SCALE,
     &RUNTIME_FILTER_BLOOM_MEMORY_TIER,
     &RUNTIME_FILTER_EQUATED_SITES,
+    &RUNTIME_FILTER_RESIDUAL_BOUNDS,
     &IO_STRICT_OPTIONS,
     &FILES_MAX_PARTITION_BYTES,
     &FILES_OPEN_COST_IN_BYTES,
@@ -555,7 +563,9 @@ pub static MEMORY_LIMIT: ConfigEntry = ConfigEntry {
     doc: "Memory available to query execution in this process: the limit of the root memory \
           pool. Operators reserve memory before allocating and spill when the limit is reached. \
           When unset: 80% of the effective memory limit (the tightest cgroup limit, else \
-          physical memory), or 2 GiB where that cannot be determined.",
+          physical memory), or 2 GiB where that cannot be determined. A value above that \
+          effective limit is not honoured (the kernel would kill the process before the engine \
+          spills): the default is used instead, with a warning.",
     scope: Scope::Cluster,
     settable_by: SettableBy::Startup,
     version_added: "0.1.0",
@@ -603,6 +613,24 @@ pub static MEMORY_SPILL_SCRATCH_RESERVE: ConfigEntry = ConfigEntry {
     scope: Scope::Cluster,
     settable_by: SettableBy::Startup,
     version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// `krishiv.memory.releaseAtQueryEnd`.
+pub static MEMORY_RELEASE_AT_QUERY_END: ConfigEntry = ConfigEntry {
+    key: "krishiv.memory.releaseAtQueryEnd",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(true)),
+    doc: "Whether the executor returns freed memory to the operating system once no query has \
+          run for 1 s: each of its threads releases what its allocator kept from the queries \
+          that ran, so an idle process does not keep the peak of its last query. It needs a \
+          release hook from the program that owns the allocator (the `krishiv` CLI, the Python \
+          module and the bench runner, built with mimalloc, install one); without one the \
+          setting has no effect. While queries run, nothing is released for it. Read when the \
+          session starts its executor.",
+    scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
+    version_added: "0.4.0",
     spark_alias: None,
 };
 

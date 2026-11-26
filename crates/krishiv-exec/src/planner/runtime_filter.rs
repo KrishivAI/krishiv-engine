@@ -97,7 +97,7 @@ use krishiv_common::config::{
     RUNTIME_FILTER_BLOOM_MAX_BYTES, RUNTIME_FILTER_BLOOM_MAX_ITEMS,
     RUNTIME_FILTER_BLOOM_MEMORY_TIER, RUNTIME_FILTER_BLOOM_MIN_APPLICATION_ROWS,
     RUNTIME_FILTER_ENABLED, RUNTIME_FILTER_EQUATED_SITES, RUNTIME_FILTER_EXACT_SET_MAX_VALUES,
-    RUNTIME_FILTER_IN_LIST_MAX_VALUES, SESSION_MEMORY_LIMIT,
+    RUNTIME_FILTER_IN_LIST_MAX_VALUES, RUNTIME_FILTER_RESIDUAL_BOUNDS, SESSION_MEMORY_LIMIT,
 };
 use krishiv_io::runtime_filter::RuntimeBloom;
 use krishiv_io::{ColumnPath, FilterId, KeyFilterOptions};
@@ -145,6 +145,9 @@ pub(crate) struct Settings {
     /// `krishiv.runtimeFilter.equatedSites`: an inner join's key
     /// equalities add sites ([`equated_sites`]).
     pub(crate) equated_sites: bool,
+    /// `krishiv.runtimeFilter.residualBounds`: a join's comparison
+    /// conjuncts publish a bound (`residual_bound.rs`).
+    pub(crate) residual_bounds: bool,
     row: RowStageSettings,
 }
 
@@ -206,6 +209,7 @@ impl Settings {
                 .then(|| memory_tier(query_memory_limit(config)))
                 .flatten(),
             equated_sites: flag(&RUNTIME_FILTER_EQUATED_SITES),
+            residual_bounds: flag(&RUNTIME_FILTER_RESIDUAL_BOUNDS),
             row: RowStageSettings {
                 min_rows: count(&RUNTIME_FILTER_ADAPTIVE_MIN_ROWS, 65_536).max(1),
                 max_pass_rate,
@@ -480,7 +484,12 @@ impl Planner<'_> {
                 options.bloom_spill_bytes = (bloom && guessed)
                     .then(|| s.spill_bloom_bytes(site.scan_rows, options.bloom_fpp))
                     .flatten();
-                out.filters.push(JoinFilterPlan { id, key, options });
+                out.filters.push(JoinFilterPlan {
+                    id,
+                    key,
+                    options,
+                    column: None,
+                });
             }
         }
         out
@@ -551,12 +560,12 @@ const SELECTIVE_BUILD: f64 = 1_000.0;
 /// Whether a scan of `scan_rows` estimated rows starts after a build of
 /// `build_rows`, given whether the build reads the scan's table (see the
 /// module docs).
-fn scan_waits(scan_rows: f64, build_rows: f64, build_reads_scan_table: bool) -> bool {
+pub(crate) fn scan_waits(scan_rows: f64, build_rows: f64, build_reads_scan_table: bool) -> bool {
     !build_reads_scan_table || scan_rows >= SELECTIVE_BUILD * build_rows.max(1.0)
 }
 
 /// Whether `node`'s plan scans `source`.
-fn reads_source(node: &PhysNode, source: &ReadSource) -> bool {
+pub(crate) fn reads_source(node: &PhysNode, source: &ReadSource) -> bool {
     matches!(node, PhysNode::Scan(s) if s.scan.source == *source)
         || node.children().into_iter().any(|c| reads_source(c, source))
 }

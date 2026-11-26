@@ -349,6 +349,11 @@ pub struct ExprEnv {
     /// prints): `to_csv` and `to_xml` print binary fields in that style. A plan that sets it
     /// needs the `binary_output_style` codec feature.
     pub binary_output_style: Option<Arc<str>>,
+    /// The Spark release line (`"4.3"`) whose behaviour the kernels and function bindings
+    /// reproduce. `None` is Spark 4.2: what every plan written before the field existed ran,
+    /// so such a plan keeps its meaning. A plan that sets it needs the `spark_version` codec
+    /// feature.
+    pub spark_version: Option<Arc<str>>,
 }
 
 impl ExprEnv {
@@ -831,6 +836,12 @@ pub struct JoinFilterPlan {
     pub key: usize,
     /// What the build collects.
     pub options: KeyFilterOptions,
+    /// A build column (an index into the build input) the filter is
+    /// collected from instead of a key: a bound from a comparison conjunct
+    /// of the residual (`probe_col < build_col`, design P3-0.3.1 D2), whose
+    /// [`KeyFilterOptions::side`] keeps one end. `key` is then unused (0).
+    /// Codec feature `join_filter_bound`.
+    pub column: Option<usize>,
 }
 
 /// One output column of a [`PhysNode::Project`].
@@ -1171,7 +1182,8 @@ plan_data!(struct ExprEnv {
     legacy_java_charsets,
     legacy_coding_error_action,
     legacy_time_parser,
-    binary_output_style
+    binary_output_style,
+    spark_version
 });
 /// What a [`PhysNode::TableWrite`] asks of its table.
 #[derive(Debug, Clone, PartialEq)]
@@ -1294,7 +1306,7 @@ plan_data!(
 plan_data!(struct RangeNode { start, end, step, num_slices, output });
 plan_data!(struct ScanFilter { layout, predicate, exact });
 plan_data!(struct ScanRuntimeFilter { id, column, key_type });
-plan_data!(struct JoinFilterPlan { id, key, options });
+plan_data!(struct JoinFilterPlan { id, key, options, column });
 plan_data!(enum ProjectItemPlan { Column { index, name }, Expr { name, expr }, NullOf { index, name } });
 plan_data!(
     enum SubqueryValueKind {

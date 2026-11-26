@@ -3,6 +3,8 @@
 
 use super::{OwnedDirectory, OwnedDirectoryError};
 
+// Unix only: Windows has no stable directory identity in std (see `identity_of`).
+#[cfg(unix)]
 #[test]
 fn a_dropped_guard_removes_only_the_directory_it_made() {
     let tmp = tempfile::tempdir().unwrap();

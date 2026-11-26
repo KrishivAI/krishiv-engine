@@ -48,6 +48,7 @@ pub(crate) fn env() -> ExprEnv {
         legacy_coding_error_action: false,
         legacy_time_parser: false,
         binary_output_style: None,
+        spark_version: None,
     }
 }
 
@@ -848,7 +849,9 @@ pub(crate) fn join_plan(join_type: JoinType) -> HashJoinPlan {
                 bloom_max_fpp: 0.05,
                 bloom_bytes: None,
                 bloom_spill_bytes: None,
+                side: krishiv_io::RangeSide::Both,
             },
+            column: None,
         }],
         distribution: JoinDistribution::Broadcast,
         select: None,
@@ -1649,6 +1652,27 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
                     ]),
                 }),
                 ..join_plan(JoinType::Inner)
+            }),
+        ),
+        (
+            // A bound from the residual's `a < b` (design P3-0.3.1 D2): the
+            // build's column 1, the upper end only.
+            "join_filter_bound",
+            PhysNode::HashJoin({
+                let mut j = join_plan(JoinType::Inner);
+                j.runtime_filters.push(JoinFilterPlan {
+                    id: FilterId(4),
+                    key: 0,
+                    options: KeyFilterOptions {
+                        max_values: 0,
+                        exact_max_values: 0,
+                        bloom: false,
+                        side: krishiv_io::RangeSide::Upper,
+                        ..KeyFilterOptions::default()
+                    },
+                    column: Some(1),
+                });
+                j
             }),
         ),
         (
@@ -2509,6 +2533,7 @@ pub(crate) fn cases() -> Vec<(String, PhysicalPlan)> {
     ));
     out.push(("legacy_time_parser".to_owned(), legacy_time_parser()));
     out.push(("binary_output_style".to_owned(), binary_output_style()));
+    out.push(("spark_version".to_owned(), spark_version()));
     out.push(("session_zone_name".to_owned(), session_zone_name()));
     out.push(("shared_subplan".to_owned(), shared_subplan()));
     out.extend(
@@ -2581,6 +2606,7 @@ fn legacy_charset_switches() -> PhysicalPlan {
         legacy_coding_error_action: true,
         legacy_time_parser: false,
         binary_output_style: None,
+        spark_version: None,
         ..env()
     };
     let explain = ExplainNode::new("Root", "details", vec![]);
@@ -2592,6 +2618,7 @@ fn legacy_time_parser() -> PhysicalPlan {
     let env = ExprEnv {
         legacy_time_parser: true,
         binary_output_style: None,
+        spark_version: None,
         ..env()
     };
     let explain = ExplainNode::new("Root", "details", vec![]);
@@ -2602,6 +2629,17 @@ fn legacy_time_parser() -> PhysicalPlan {
 fn binary_output_style() -> PhysicalPlan {
     let env = ExprEnv {
         binary_output_style: Some(Arc::from("HEX")),
+        spark_version: None,
+        ..env()
+    };
+    let explain = ExplainNode::new("Root", "details", vec![]);
+    PhysicalPlan::new(PhysNode::OneRow, schema(), explain, env)
+}
+
+/// A plan whose environment reproduces Spark 4.3 (`spark_version` set; absent is 4.2).
+fn spark_version() -> PhysicalPlan {
+    let env = ExprEnv {
+        spark_version: Some(Arc::from("4.3")),
         ..env()
     };
     let explain = ExplainNode::new("Root", "details", vec![]);
@@ -2779,6 +2817,26 @@ pub(crate) fn typed() -> Vec<(&'static str, PhysNode)> {
                 krishiv_types::ArrayType::new(time3, true).into(),
             )))),
         }],
+        nullable: None,
+        subqueries: Vec::new(),
+    };
+    // Spark 4.3's nanosecond TIME, alone and inside an array: `time_precision_nanos`.
+    let time9 = DataType::Time { precision: 9 };
+    let nanos_times = PhysNode::Project {
+        input: boxed(scan()),
+        layout: vec![AttrId(1), AttrId(2)],
+        items: vec![
+            ProjectItemPlan::Expr {
+                name: "time9".to_owned(),
+                expr: lit(Literal::Null(Some(time9.clone()))),
+            },
+            ProjectItemPlan::Expr {
+                name: "times9".to_owned(),
+                expr: lit(Literal::Null(Some(DataType::Array(
+                    krishiv_types::ArrayType::new(time9, true).into(),
+                )))),
+            },
+        ],
         nullable: None,
         subqueries: Vec::new(),
     };
@@ -3019,6 +3077,7 @@ pub(crate) fn typed() -> Vec<(&'static str, PhysNode)> {
         ),
         ("time_nested", nested_times),
         ("time_project", times),
+        ("time_nanos", nanos_times),
         ("geo_scan", PhysNode::Scan(spatial)),
         ("geo_join_residual", residual_join),
         ("udt_scan", PhysNode::Scan(udts)),

@@ -1,0 +1,2020 @@
+{
+ "format_version": 2,
+ "generator": "tests/scripts/gen_time_precision_goldens.py",
+ "spark_version": "4.2.0",
+ "session_time_zone": "UTC",
+ "cases": [
+  {
+   "id": "time9_null",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "sql": "SELECT CAST(NULL AS TIME(9)) AS c",
+   "clock": false,
+   "error": "UNSUPPORTED_TIME_PRECISION",
+   "message": "[UNSUPPORTED_TIME_PRECISION] The seconds precision 9 of the TIME data type is out of the supported range [0, 6].",
+   "sql_state": "0A001",
+   "parameters": {
+    "precision": "9"
+   }
+  },
+  {
+   "id": "time7_null_key_off",
+   "conf": {},
+   "sql": "SELECT CAST(NULL AS TIME(7)) AS c",
+   "clock": false,
+   "error": "UNSUPPORTED_TIME_PRECISION",
+   "message": "[UNSUPPORTED_TIME_PRECISION] The seconds precision 7 of the TIME data type is out of the supported range [0, 6].",
+   "sql_state": "0A001",
+   "parameters": {
+    "precision": "7"
+   }
+  },
+  {
+   "id": "time10",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "sql": "SELECT CAST(NULL AS TIME(10))",
+   "clock": false,
+   "error": "UNSUPPORTED_TIME_PRECISION",
+   "message": "[UNSUPPORTED_TIME_PRECISION] The seconds precision 10 of the TIME data type is out of the supported range [0, 6].",
+   "sql_state": "0A001",
+   "parameters": {
+    "precision": "10"
+   }
+  },
+  {
+   "id": "time10_key_off",
+   "conf": {},
+   "sql": "SELECT CAST(NULL AS TIME(10))",
+   "clock": false,
+   "error": "UNSUPPORTED_TIME_PRECISION",
+   "message": "[UNSUPPORTED_TIME_PRECISION] The seconds precision 10 of the TIME data type is out of the supported range [0, 6].",
+   "sql_state": "0A001",
+   "parameters": {
+    "precision": "10"
+   }
+  },
+  {
+   "id": "time_huge",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "sql": "SELECT CAST(NULL AS TIME(99999999999))",
+   "clock": false,
+   "error": null,
+   "message": "For input string: \"99999999999\"",
+   "sql_state": null,
+   "parameters": {}
+  },
+  {
+   "id": "cast_str_time9",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "sql": "SELECT CAST(CAST('12:00:00.123456789' AS TIME(9)) AS STRING) AS c",
+   "clock": false,
+   "error": "UNSUPPORTED_TIME_PRECISION",
+   "message": "[UNSUPPORTED_TIME_PRECISION] The seconds precision 9 of the TIME data type is out of the supported range [0, 6].",
+   "sql_state": "0A001",
+   "parameters": {
+    "precision": "9"
+   }
+  },
+  {
+   "id": "cast_str_time7",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "sql": "SELECT CAST(CAST('12:00:00.123456789' AS TIME(7)) AS STRING) AS c",
+   "clock": false,
+   "error": "UNSUPPORTED_TIME_PRECISION",
+   "message": "[UNSUPPORTED_TIME_PRECISION] The seconds precision 7 of the TIME data type is out of the supported range [0, 6].",
+   "sql_state": "0A001",
+   "parameters": {
+    "precision": "7"
+   }
+  },
+  {
+   "id": "cast_str_time6",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "sql": "SELECT CAST(CAST('12:00:00.123456789' AS TIME(6)) AS STRING) AS c",
+   "clock": false,
+   "names": [
+    "c"
+   ],
+   "schema": [
+    [
+     "string",
+     true
+    ]
+   ],
+   "values": [
+    [
+     "12:00:00.123456"
+    ]
+   ]
+  },
+  {
+   "id": "cast_str_time",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "sql": "SELECT CAST(CAST('12:00:00.123456789' AS TIME) AS STRING) AS c",
+   "clock": false,
+   "names": [
+    "c"
+   ],
+   "schema": [
+    [
+     "string",
+     true
+    ]
+   ],
+   "values": [
+    [
+     "12:00:00.123456"
+    ]
+   ]
+  },
+  {
+   "id": "cast_time9_time3",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "sql": "SELECT CAST(CAST(TIME'12:00:00.123456789' AS TIME(3)) AS STRING) AS c",
+   "clock": false,
+   "names": [
+    "c"
+   ],
+   "schema": [
+    [
+     "string",
+     false
+    ]
+   ],
+   "values": [
+    [
+     "12:00:00.123"
+    ]
+   ]
+  },
+  {
+   "id": "cast_time9_time6",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "sql": "SELECT CAST(CAST(TIME'12:00:00.123456789' AS TIME(6)) AS STRING) AS c",
+   "clock": false,
+   "names": [
+    "c"
+   ],
+   "schema": [
+    [
+     "string",
+     false
+    ]
+   ],
+   "values": [
+    [
+     "12:00:00.123456"
+    ]
+   ]
+  },
+  {
+   "id": "coalesce_time3_str",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "sql": "SELECT typeof(c), CAST(c AS STRING) FROM (SELECT coalesce(CAST(NULL AS TIME(3)), '12:00:00.123456789') AS c)",
+   "clock": false,
+   "names": [
+    "typeof(c)",
+    "c"
+   ],
+   "schema": [
+    [
+     "string",
+     false
+    ],
+    [
+     "string",
+     true
+    ]
+   ],
+   "values": [
+    [
+     "time(3)",
+     "12:00:00.123456"
+    ]
+   ]
+  },
+  {
+   "id": "eq_time3_str",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "sql": "SELECT CAST(TIME'12:00:00.123' AS TIME(3)) = '12:00:00.1234' AS c",
+   "clock": false,
+   "names": [
+    "c"
+   ],
+   "schema": [
+    [
+     "boolean",
+     true
+    ]
+   ],
+   "values": [
+    [
+     "false"
+    ]
+   ]
+  },
+  {
+   "id": "in_time3_str",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "sql": "SELECT CAST(TIME'12:00:00.123' AS TIME(3)) IN ('12:00:00.1234', '01:00:00') AS c",
+   "clock": false,
+   "names": [
+    "c"
+   ],
+   "schema": [
+    [
+     "boolean",
+     true
+    ]
+   ],
+   "values": [
+    [
+     "false"
+    ]
+   ]
+  },
+  {
+   "id": "case_time3_str",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "sql": "SELECT CAST(CASE WHEN rand() >= 0 THEN '12:00:00.123456789' ELSE CAST(NULL AS TIME(3)) END AS STRING) AS c",
+   "clock": false,
+   "names": [
+    "c"
+   ],
+   "schema": [
+    [
+     "string",
+     true
+    ]
+   ],
+   "values": [
+    [
+     "12:00:00.123456"
+    ]
+   ]
+  },
+  {
+   "id": "nested_array_time3_str",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "sql": "SELECT CAST(CAST(array('12:00:00.123456789') AS array<time(3)>)[0] AS STRING) AS c",
+   "clock": false,
+   "names": [
+    "c"
+   ],
+   "schema": [
+    [
+     "string",
+     true
+    ]
+   ],
+   "values": [
+    [
+     "12:00:00.123456"
+    ]
+   ]
+  },
+  {
+   "id": "lit_types",
+   "conf": {},
+   "sql": "SELECT typeof(TIME'12:00:00'), typeof(TIME'12:00:00.1'), typeof(TIME'12:00:00.1234567'), typeof(TIME'12:00:00.123456789')",
+   "clock": false,
+   "names": [
+    "typeof(TIME '12:00:00')",
+    "typeof(TIME '12:00:00.1')",
+    "typeof(TIME '12:00:00.123456')",
+    "typeof(TIME '12:00:00.123456')"
+   ],
+   "schema": [
+    [
+     "string",
+     false
+    ],
+    [
+     "string",
+     false
+    ],
+    [
+     "string",
+     false
+    ],
+    [
+     "string",
+     false
+    ]
+   ],
+   "values": [
+    [
+     "time(6)",
+     "time(6)",
+     "time(6)",
+     "time(6)"
+    ]
+   ]
+  },
+  {
+   "id": "lit_name9",
+   "conf": {},
+   "sql": "SELECT TIME'12:00:00.123456789'",
+   "clock": false,
+   "names": [
+    "TIME '12:00:00.123456'"
+   ],
+   "schema": [
+    [
+     "time(6)",
+     false
+    ]
+   ],
+   "values": [
+    [
+     "12:00:00.123456"
+    ]
+   ]
+  },
+  {
+   "id": "lit_trailing_zeros",
+   "conf": {},
+   "sql": "SELECT CAST(TIME'12:00:00.123456700' AS STRING) AS c, typeof(TIME'12:00:00.123456700') AS t",
+   "clock": false,
+   "names": [
+    "c",
+    "t"
+   ],
+   "schema": [
+    [
+     "string",
+     false
+    ],
+    [
+     "string",
+     false
+    ]
+   ],
+   "values": [
+    [
+     "12:00:00.123456",
+     "time(6)"
+    ]
+   ]
+  },
+  {
+   "id": "lit_to_string",
+   "conf": {},
+   "sql": "SELECT CAST(TIME'12:00:00.123456789' AS STRING) AS c",
+   "clock": false,
+   "names": [
+    "c"
+   ],
+   "schema": [
+    [
+     "string",
+     false
+    ]
+   ],
+   "values": [
+    [
+     "12:00:00.123456"
+    ]
+   ]
+  },
+  {
+   "id": "lit_10_digits",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "sql": "SELECT TIME'12:00:00.1234567890'",
+   "clock": false,
+   "names": [
+    "TIME '12:00:00.123456'"
+   ],
+   "schema": [
+    [
+     "time(6)",
+     false
+    ]
+   ],
+   "values": [
+    [
+     "12:00:00.123456"
+    ]
+   ]
+  },
+  {
+   "id": "lit_name9_on",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "sql": "SELECT TIME'12:00:00.123456789'",
+   "clock": false,
+   "names": [
+    "TIME '12:00:00.123456'"
+   ],
+   "schema": [
+    [
+     "time(6)",
+     false
+    ]
+   ],
+   "values": [
+    [
+     "12:00:00.123456"
+    ]
+   ]
+  },
+  {
+   "id": "lit_trailing_zeros_on",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "sql": "SELECT TIME'12:00:00.123456700', typeof(TIME'12:00:00.123456700')",
+   "clock": false,
+   "names": [
+    "TIME '12:00:00.123456'",
+    "typeof(TIME '12:00:00.123456')"
+   ],
+   "schema": [
+    [
+     "time(6)",
+     false
+    ],
+    [
+     "string",
+     false
+    ]
+   ],
+   "values": [
+    [
+     "12:00:00.123456",
+     "time(6)"
+    ]
+   ]
+  },
+  {
+   "id": "lit_two_digits_on",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "sql": "SELECT TIME'12:00:00.10', typeof(TIME'12:00:00.10')",
+   "clock": false,
+   "names": [
+    "TIME '12:00:00.1'",
+    "typeof(TIME '12:00:00.1')"
+   ],
+   "schema": [
+    [
+     "time(6)",
+     false
+    ],
+    [
+     "string",
+     false
+    ]
+   ],
+   "values": [
+    [
+     "12:00:00.1",
+     "time(6)"
+    ]
+   ]
+  },
+  {
+   "id": "lit_seven_digits_on",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "sql": "SELECT TIME'12:00:00.1234567', typeof(TIME'12:00:00.1234567')",
+   "clock": false,
+   "names": [
+    "TIME '12:00:00.123456'",
+    "typeof(TIME '12:00:00.123456')"
+   ],
+   "schema": [
+    [
+     "time(6)",
+     false
+    ],
+    [
+     "string",
+     false
+    ]
+   ],
+   "values": [
+    [
+     "12:00:00.123456",
+     "time(6)"
+    ]
+   ]
+  },
+  {
+   "id": "lit_second_key_off",
+   "conf": {},
+   "sql": "SELECT second(TIME'12:00:00.123456789')",
+   "clock": false,
+   "error": "UNSUPPORTED_TIME_TYPE",
+   "message": "[UNSUPPORTED_TIME_TYPE] The data type TIME is not supported.",
+   "sql_state": "0A000",
+   "parameters": {}
+  },
+  {
+   "id": "current_time9",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "sql": "SELECT current_time(9), typeof(current_time(9)), typeof(current_time(7))",
+   "clock": true,
+   "error": "DATATYPE_MISMATCH.VALUE_OUT_OF_RANGE",
+   "message": "[DATATYPE_MISMATCH.VALUE_OUT_OF_RANGE] Cannot resolve \"current_time(9)\" due to data type mismatch: The `precision` must be between [0, 6] (current value = 9).",
+   "sql_state": "42K09",
+   "parameters": {
+    "currentValue": "9",
+    "exprName": "`precision`",
+    "sqlExpr": "\"current_time(9)\"",
+    "valueRange": "[0, 6]"
+   }
+  },
+  {
+   "id": "current_time10",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "sql": "SELECT current_time(10)",
+   "clock": false,
+   "error": "DATATYPE_MISMATCH.VALUE_OUT_OF_RANGE",
+   "message": "[DATATYPE_MISMATCH.VALUE_OUT_OF_RANGE] Cannot resolve \"current_time(10)\" due to data type mismatch: The `precision` must be between [0, 6] (current value = 10).",
+   "sql_state": "42K09",
+   "parameters": {
+    "currentValue": "10",
+    "exprName": "`precision`",
+    "sqlExpr": "\"current_time(10)\"",
+    "valueRange": "[0, 6]"
+   }
+  },
+  {
+   "id": "localtime_bare",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "sql": "SELECT localtime, typeof(localtime)",
+   "clock": true,
+   "error": "UNRESOLVED_COLUMN.WITHOUT_SUGGESTION",
+   "message": "[UNRESOLVED_COLUMN.WITHOUT_SUGGESTION] A column, variable, or function parameter with name `localtime` cannot be resolved.",
+   "sql_state": "42703",
+   "parameters": {
+    "objectName": "`localtime`"
+   }
+  },
+  {
+   "id": "localtime_call",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "sql": "SELECT localtime(), localtime(3), typeof(localtime(9))",
+   "clock": true,
+   "error": "UNRESOLVED_ROUTINE",
+   "message": "[UNRESOLVED_ROUTINE] Cannot resolve routine `localtime` on search path [`system`.`builtin`, `system`.`session`, `spark_catalog`.`default`].",
+   "sql_state": "42883",
+   "parameters": {
+    "routineName": "`localtime`",
+    "searchPath": "[`system`.`builtin`, `system`.`session`, `spark_catalog`.`default`]"
+   }
+  },
+  {
+   "id": "localtime_key_off",
+   "conf": {},
+   "sql": "SELECT localtime(9)",
+   "clock": true,
+   "error": "UNRESOLVED_ROUTINE",
+   "message": "[UNRESOLVED_ROUTINE] Cannot resolve routine `localtime` on search path [`system`.`builtin`, `system`.`session`, `spark_catalog`.`default`].",
+   "sql_state": "42883",
+   "parameters": {
+    "routineName": "`localtime`",
+    "searchPath": "[`system`.`builtin`, `system`.`session`, `spark_catalog`.`default`]"
+   }
+  },
+  {
+   "id": "localtime_negative",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "sql": "SELECT localtime(-1)",
+   "clock": false,
+   "error": "UNRESOLVED_ROUTINE",
+   "message": "[UNRESOLVED_ROUTINE] Cannot resolve routine `localtime` on search path [`system`.`builtin`, `system`.`session`, `spark_catalog`.`default`].",
+   "sql_state": "42883",
+   "parameters": {
+    "routineName": "`localtime`",
+    "searchPath": "[`system`.`builtin`, `system`.`session`, `spark_catalog`.`default`]"
+   }
+  },
+  {
+   "id": "localtime_10",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "sql": "SELECT localtime(10)",
+   "clock": false,
+   "error": "UNRESOLVED_ROUTINE",
+   "message": "[UNRESOLVED_ROUTINE] Cannot resolve routine `localtime` on search path [`system`.`builtin`, `system`.`session`, `spark_catalog`.`default`].",
+   "sql_state": "42883",
+   "parameters": {
+    "routineName": "`localtime`",
+    "searchPath": "[`system`.`builtin`, `system`.`session`, `spark_catalog`.`default`]"
+   }
+  },
+  {
+   "id": "localtime_multi_alias",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "sql": "SELECT localtime(n) FROM VALUES (6) t(n)",
+   "clock": false,
+   "error": "UNRESOLVED_ROUTINE",
+   "message": "[UNRESOLVED_ROUTINE] Cannot resolve routine `localtime` on search path [`system`.`builtin`, `system`.`session`, `spark_catalog`.`default`].",
+   "sql_state": "42883",
+   "parameters": {
+    "routineName": "`localtime`",
+    "searchPath": "[`system`.`builtin`, `system`.`session`, `spark_catalog`.`default`]"
+   }
+  },
+  {
+   "id": "current_date_multi_alias",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "sql": "SELECT current_date(n) FROM VALUES (6) t(n)",
+   "clock": false,
+   "error": "MULTI_ALIAS_WITHOUT_GENERATOR",
+   "message": "[MULTI_ALIAS_WITHOUT_GENERATOR] Multi part aliasing (n) is not supported with \"current_date()\" as it is not a generator function.",
+   "sql_state": "42K0E",
+   "parameters": {
+    "expr": "\"current_date()\"",
+    "names": "n"
+   }
+  },
+  {
+   "id": "compare",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "sql": "SELECT TIME'12:00:00.123456789' = TIME'12:00:00.123456', TIME'12:00:00.123456789' > TIME'12:00:00.123456'",
+   "clock": false,
+   "names": [
+    "(TIME '12:00:00.123456' = TIME '12:00:00.123456')",
+    "(TIME '12:00:00.123456' > TIME '12:00:00.123456')"
+   ],
+   "schema": [
+    [
+     "boolean",
+     false
+    ],
+    [
+     "boolean",
+     false
+    ]
+   ],
+   "values": [
+    [
+     "true",
+     "false"
+    ]
+   ]
+  },
+  {
+   "id": "common_types",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "sql": "SELECT typeof(coalesce(TIME'12:00:00.1', TIME'12:00:00.123456789')), typeof(array(TIME'12:00:00.1', TIME'12:00:00.123456789')), typeof(CASE WHEN true THEN TIME'12:00:00.1' ELSE CAST(NULL AS TIME(8)) END)",
+   "clock": false,
+   "error": "UNSUPPORTED_TIME_PRECISION",
+   "message": "[UNSUPPORTED_TIME_PRECISION] The seconds precision 8 of the TIME data type is out of the supported range [0, 6].",
+   "sql_state": "0A001",
+   "parameters": {
+    "precision": "8"
+   }
+  },
+  {
+   "id": "max_distinct",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "sql": "SELECT CAST(max(c) AS STRING), typeof(max(c)), count(DISTINCT c) FROM VALUES (TIME'01:00:00.000000001'), (TIME'01:00:00.000000002') t(c)",
+   "clock": false,
+   "names": [
+    "CAST(max(c) AS STRING)",
+    "typeof(max(c))",
+    "count(DISTINCT c)"
+   ],
+   "schema": [
+    [
+     "string",
+     true
+    ],
+    [
+     "string",
+     false
+    ],
+    [
+     "bigint",
+     false
+    ]
+   ],
+   "values": [
+    [
+     "01:00:00",
+     "time(6)",
+     "1"
+    ]
+   ]
+  },
+  {
+   "id": "max_only",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "sql": "SELECT CAST(max(c) AS STRING), typeof(max(c)) FROM VALUES (TIME'01:00:00.000000001'), (TIME'01:00:00.000000002') t(c)",
+   "clock": false,
+   "names": [
+    "CAST(max(c) AS STRING)",
+    "typeof(max(c))"
+   ],
+   "schema": [
+    [
+     "string",
+     true
+    ],
+    [
+     "string",
+     false
+    ]
+   ],
+   "values": [
+    [
+     "01:00:00",
+     "time(6)"
+    ]
+   ]
+  },
+  {
+   "id": "count_distinct_only",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "sql": "SELECT count(DISTINCT c) FROM VALUES (TIME'01:00:00.000000001'), (TIME'01:00:00.000000002') t(c)",
+   "clock": false,
+   "names": [
+    "count(DISTINCT c)"
+   ],
+   "schema": [
+    [
+     "bigint",
+     false
+    ]
+   ],
+   "values": [
+    [
+     "1"
+    ]
+   ]
+  },
+  {
+   "id": "hash",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "sql": "SELECT hash(TIME'12:00:00.123456789'), hash(TIME'12:00:00.123456')",
+   "clock": false,
+   "names": [
+    "hash(TIME '12:00:00.123456')",
+    "hash(TIME '12:00:00.123456')"
+   ],
+   "schema": [
+    [
+     "int",
+     false
+    ],
+    [
+     "int",
+     false
+    ]
+   ],
+   "values": [
+    [
+     "30631834",
+     "30631834"
+    ]
+   ]
+  },
+  {
+   "id": "extract_second",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "sql": "SELECT extract(SECOND FROM TIME'12:00:01.123456789'), typeof(extract(SECOND FROM CAST('12:00:01.1234567' AS TIME(7)))), typeof(extract(SECOND FROM TIME'12:00:01.123'))",
+   "clock": false,
+   "error": "UNSUPPORTED_TIME_PRECISION",
+   "message": "[UNSUPPORTED_TIME_PRECISION] The seconds precision 7 of the TIME data type is out of the supported range [0, 6].",
+   "sql_state": "0A001",
+   "parameters": {
+    "precision": "7"
+   }
+  },
+  {
+   "id": "date_part_second",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "sql": "SELECT date_part('SECOND', TIME'12:00:01.123456789') AS c",
+   "clock": false,
+   "names": [
+    "c"
+   ],
+   "schema": [
+    [
+     "decimal(8,6)",
+     true
+    ]
+   ],
+   "values": [
+    [
+     "1.123456"
+    ]
+   ]
+  },
+  {
+   "id": "fields",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "sql": "SELECT hour(TIME'01:02:03.123456789'), minute(TIME'01:02:03.123456789'), second(TIME'01:02:03.123456789'), typeof(second(TIME'01:02:03.123456789'))",
+   "clock": false,
+   "names": [
+    "hour(TIME '01:02:03.123456')",
+    "minute(TIME '01:02:03.123456')",
+    "second(TIME '01:02:03.123456')",
+    "typeof(second(TIME '01:02:03.123456'))"
+   ],
+   "schema": [
+    [
+     "int",
+     true
+    ],
+    [
+     "int",
+     true
+    ],
+    [
+     "int",
+     true
+    ],
+    [
+     "string",
+     false
+    ]
+   ],
+   "values": [
+    [
+     "1",
+     "2",
+     "3",
+     "int"
+    ]
+   ]
+  },
+  {
+   "id": "to_decimal",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "sql": "SELECT CAST(TIME'12:00:01.123456789' AS DECIMAL(20,9)) AS c, CAST(TIME'12:00:01.123456789' AS BIGINT) AS b",
+   "clock": false,
+   "names": [
+    "c",
+    "b"
+   ],
+   "schema": [
+    [
+     "decimal(20,9)",
+     true
+    ],
+    [
+     "bigint",
+     false
+    ]
+   ],
+   "values": [
+    [
+     "43201.123456000",
+     "43201"
+    ]
+   ]
+  },
+  {
+   "id": "plus_interval",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "sql": "SELECT CAST(TIME'12:00:00.123456789' + INTERVAL '1' SECOND AS STRING) AS c, typeof(TIME'12:00:00.123456789' + INTERVAL '1' SECOND) AS t",
+   "clock": false,
+   "names": [
+    "c",
+    "t"
+   ],
+   "schema": [
+    [
+     "string",
+     true
+    ],
+    [
+     "string",
+     false
+    ]
+   ],
+   "values": [
+    [
+     "12:00:01.123456",
+     "time(6)"
+    ]
+   ]
+  },
+  {
+   "id": "minus_time",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "sql": "SELECT CAST(TIME'12:00:00.123456789' - TIME'12:00:00' AS STRING) AS c",
+   "clock": false,
+   "names": [
+    "c"
+   ],
+   "schema": [
+    [
+     "string",
+     true
+    ]
+   ],
+   "values": [
+    [
+     "INTERVAL '00:00:00.123456' HOUR TO SECOND"
+    ]
+   ]
+  },
+  {
+   "id": "time_diff",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "sql": "SELECT time_diff('MICROSECOND', TIME'12:00:00', TIME'12:00:00.000000999') AS c",
+   "clock": false,
+   "names": [
+    "c"
+   ],
+   "schema": [
+    [
+     "bigint",
+     true
+    ]
+   ],
+   "values": [
+    [
+     "0"
+    ]
+   ]
+  },
+  {
+   "id": "time_diff_nanos",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "sql": "SELECT time_diff('NANOSECOND', TIME'12:00:00', TIME'12:00:00.000000123')",
+   "clock": false,
+   "error": "INVALID_PARAMETER_VALUE.TIME_UNIT",
+   "message": "[INVALID_PARAMETER_VALUE.TIME_UNIT] The value of parameter(s) `unit` in `time_diff` is invalid: expects one of the units 'HOUR', 'MINUTE', 'SECOND', 'MILLISECOND', 'MICROSECOND', but got ''NANOSECOND''.",
+   "sql_state": "22023",
+   "parameters": {
+    "functionName": "`time_diff`",
+    "invalidValue": "'NANOSECOND'",
+    "parameter": "`unit`"
+   }
+  },
+  {
+   "id": "time_trunc",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "sql": "SELECT CAST(time_trunc('MICROSECOND', TIME'12:00:00.123456789') AS STRING) AS a, CAST(time_trunc('SECOND', TIME'12:00:00.123456789') AS STRING) AS b, typeof(time_trunc('SECOND', TIME'12:00:00.123456789')) AS t",
+   "clock": false,
+   "names": [
+    "a",
+    "b",
+    "t"
+   ],
+   "schema": [
+    [
+     "string",
+     true
+    ],
+    [
+     "string",
+     true
+    ],
+    [
+     "string",
+     false
+    ]
+   ],
+   "values": [
+    [
+     "12:00:00.123456",
+     "12:00:00",
+     "time(6)"
+    ]
+   ]
+  },
+  {
+   "id": "string_col_to_time1",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "sql": "SELECT CAST(CAST(s AS TIME(1)) AS STRING) AS a, time_to_micros(CAST(s AS TIME(1))) AS b FROM VALUES ('09:08:01.987654') t(s)",
+   "clock": false,
+   "names": [
+    "a",
+    "b"
+   ],
+   "schema": [
+    [
+     "string",
+     true
+    ],
+    [
+     "bigint",
+     true
+    ]
+   ],
+   "values": [
+    [
+     "09:08:01.987654",
+     "32881987654"
+    ]
+   ]
+  },
+  {
+   "id": "string_lit_to_time3",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "sql": "SELECT CAST(CAST('09:08:01.987654' AS TIME(3)) AS STRING) AS c",
+   "clock": false,
+   "names": [
+    "c"
+   ],
+   "schema": [
+    [
+     "string",
+     true
+    ]
+   ],
+   "values": [
+    [
+     "09:08:01.987654"
+    ]
+   ]
+  },
+  {
+   "id": "time6_to_time0",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "sql": "SELECT CAST(CAST(TIME'09:08:01.987654' AS TIME(0)) AS STRING) AS c",
+   "clock": false,
+   "names": [
+    "c"
+   ],
+   "schema": [
+    [
+     "string",
+     false
+    ]
+   ],
+   "values": [
+    [
+     "09:08:01"
+    ]
+   ]
+  },
+  {
+   "id": "extract_second_low_precision",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "sql": "SELECT CAST(extract(SECOND FROM CAST('09:08:01.987654' AS TIME(0))) AS STRING) AS a, typeof(extract(SECOND FROM CAST('09:08:01.987654' AS TIME(0)))) AS ta, CAST(extract(SECOND FROM CAST('09:08:01.987654' AS TIME(3))) AS STRING) AS b, typeof(extract(SECOND FROM CAST('09:08:01.987654' AS TIME(3)))) AS tb, typeof(extract(SECOND FROM CAST('09:08:01.987654' AS TIME(6)))) AS tc",
+   "clock": false,
+   "names": [
+    "a",
+    "ta",
+    "b",
+    "tb",
+    "tc"
+   ],
+   "schema": [
+    [
+     "string",
+     true
+    ],
+    [
+     "string",
+     false
+    ],
+    [
+     "string",
+     true
+    ],
+    [
+     "string",
+     false
+    ],
+    [
+     "string",
+     false
+    ]
+   ],
+   "values": [
+    [
+     "1.000000",
+     "decimal(8,6)",
+     "1.987000",
+     "decimal(8,6)",
+     "decimal(8,6)"
+    ]
+   ]
+  },
+  {
+   "id": "time_to_micros",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "sql": "SELECT time_to_micros(TIME'12:00:01.123456789') AS c",
+   "clock": false,
+   "names": [
+    "c"
+   ],
+   "schema": [
+    [
+     "bigint",
+     true
+    ]
+   ],
+   "values": [
+    [
+     "43201123456"
+    ]
+   ]
+  },
+  {
+   "id": "to_time",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "sql": "SELECT CAST(to_time('12:00:00.123456789') AS STRING) AS a, CAST(to_time('12:00:00.123456789', 'HH:mm:ss.SSSSSSSSS') AS STRING) AS b, typeof(to_time('12:00:00.123456789')) AS t",
+   "clock": false,
+   "names": [
+    "a",
+    "b",
+    "t"
+   ],
+   "schema": [
+    [
+     "string",
+     true
+    ],
+    [
+     "string",
+     true
+    ],
+    [
+     "string",
+     false
+    ]
+   ],
+   "values": [
+    [
+     "12:00:00.123456",
+     "12:00:00.123456789",
+     "time(6)"
+    ]
+   ]
+  },
+  {
+   "id": "make_time",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "sql": "SELECT CAST(make_time(1, 2, 3.123456789) AS STRING) AS c",
+   "clock": false,
+   "names": [
+    "c"
+   ],
+   "schema": [
+    [
+     "string",
+     true
+    ]
+   ],
+   "values": [
+    [
+     "01:02:03.123457"
+    ]
+   ]
+  },
+  {
+   "id": "to_timestamp_ntz",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "sql": "SELECT CAST(CAST(TIME'12:00:01.123456789' AS TIMESTAMP_NTZ) AS STRING) LIKE '% 12:00:01.123456' AS c",
+   "clock": false,
+   "error": "DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION",
+   "message": "[DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION] Cannot resolve \"CAST(TIME '12:00:01.123456' AS TIMESTAMP_NTZ)\" due to data type mismatch: cannot cast \"TIME(6)\" to \"TIMESTAMP_NTZ\".",
+   "sql_state": "42K09",
+   "parameters": {
+    "sqlExpr": "\"CAST(TIME '12:00:01.123456' AS TIMESTAMP_NTZ)\"",
+    "srcType": "\"TIME(6)\"",
+    "targetType": "\"TIMESTAMP_NTZ\""
+   }
+  },
+  {
+   "id": "make_timestamp",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "sql": "SELECT CAST(make_timestamp(DATE'2020-01-01', TIME'12:00:00.123456789') AS STRING) AS c",
+   "clock": false,
+   "names": [
+    "c"
+   ],
+   "schema": [
+    [
+     "string",
+     false
+    ]
+   ],
+   "values": [
+    [
+     "2020-01-01 12:00:00.123456"
+    ]
+   ]
+  },
+  {
+   "id": "date_format",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "sql": "SELECT date_format(TIME'12:00:00.123456789', 'HH:mm:ss.SSSSSSSSS') AS c",
+   "clock": false,
+   "error": "DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION",
+   "message": "[DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION] Cannot resolve \"TIME '12:00:00.123456'\" due to data type mismatch: cannot cast \"TIME(6)\" to \"TIMESTAMP\".",
+   "sql_state": "42K09",
+   "parameters": {
+    "sqlExpr": "\"TIME '12:00:00.123456'\"",
+    "srcType": "\"TIME(6)\"",
+    "targetType": "\"TIMESTAMP\""
+   }
+  },
+  {
+   "id": "ts_ntz6",
+   "conf": {},
+   "sql": "SELECT CAST(NULL AS TIMESTAMP_NTZ(6))",
+   "clock": false,
+   "error": "UNSUPPORTED_DATATYPE",
+   "message": "[UNSUPPORTED_DATATYPE] Unsupported data type \"TIMESTAMP_NTZ(6)\".",
+   "sql_state": "0A000",
+   "parameters": {
+    "typeName": "\"TIMESTAMP_NTZ(6)\""
+   }
+  },
+  {
+   "id": "ts_ntz06",
+   "conf": {},
+   "sql": "SELECT CAST(NULL AS TIMESTAMP_NTZ(06)) AS c",
+   "clock": false,
+   "error": "UNSUPPORTED_DATATYPE",
+   "message": "[UNSUPPORTED_DATATYPE] Unsupported data type \"TIMESTAMP_NTZ(6)\".",
+   "sql_state": "0A000",
+   "parameters": {
+    "typeName": "\"TIMESTAMP_NTZ(6)\""
+   }
+  },
+  {
+   "id": "ts_ltz6",
+   "conf": {},
+   "sql": "SELECT typeof(CAST(NULL AS TIMESTAMP_LTZ(6))) AS c",
+   "clock": false,
+   "error": "UNSUPPORTED_DATATYPE",
+   "message": "[UNSUPPORTED_DATATYPE] Unsupported data type \"TIMESTAMP_LTZ(6)\".",
+   "sql_state": "0A000",
+   "parameters": {
+    "typeName": "\"TIMESTAMP_LTZ(6)\""
+   }
+  },
+  {
+   "id": "ts6",
+   "conf": {},
+   "sql": "SELECT typeof(CAST(NULL AS TIMESTAMP(6))) AS c",
+   "clock": false,
+   "error": "UNSUPPORTED_DATATYPE",
+   "message": "[UNSUPPORTED_DATATYPE] Unsupported data type \"TIMESTAMP(6)\".",
+   "sql_state": "0A000",
+   "parameters": {
+    "typeName": "\"TIMESTAMP(6)\""
+   }
+  },
+  {
+   "id": "ts6_ntz_default",
+   "conf": {
+    "spark.sql.timestampType": "TIMESTAMP_NTZ"
+   },
+   "sql": "SELECT typeof(CAST(NULL AS TIMESTAMP(6))) AS c",
+   "clock": false,
+   "error": "UNSUPPORTED_DATATYPE",
+   "message": "[UNSUPPORTED_DATATYPE] Unsupported data type \"TIMESTAMP(6)\".",
+   "sql_state": "0A000",
+   "parameters": {
+    "typeName": "\"TIMESTAMP(6)\""
+   }
+  },
+  {
+   "id": "ts_ntz9",
+   "conf": {},
+   "sql": "SELECT CAST(NULL AS TIMESTAMP_NTZ(9))",
+   "clock": false,
+   "error": "UNSUPPORTED_DATATYPE",
+   "message": "[UNSUPPORTED_DATATYPE] Unsupported data type \"TIMESTAMP_NTZ(9)\".",
+   "sql_state": "0A000",
+   "parameters": {
+    "typeName": "\"TIMESTAMP_NTZ(9)\""
+   }
+  },
+  {
+   "id": "ts_ltz7",
+   "conf": {},
+   "sql": "SELECT CAST(NULL AS TIMESTAMP_LTZ(7))",
+   "clock": false,
+   "error": "UNSUPPORTED_DATATYPE",
+   "message": "[UNSUPPORTED_DATATYPE] Unsupported data type \"TIMESTAMP_LTZ(7)\".",
+   "sql_state": "0A000",
+   "parameters": {
+    "typeName": "\"TIMESTAMP_LTZ(7)\""
+   }
+  },
+  {
+   "id": "ts9",
+   "conf": {},
+   "sql": "SELECT CAST(NULL AS TIMESTAMP(9))",
+   "clock": false,
+   "error": "UNSUPPORTED_DATATYPE",
+   "message": "[UNSUPPORTED_DATATYPE] Unsupported data type \"TIMESTAMP(9)\".",
+   "sql_state": "0A000",
+   "parameters": {
+    "typeName": "\"TIMESTAMP(9)\""
+   }
+  },
+  {
+   "id": "ts_ntz0",
+   "conf": {},
+   "sql": "SELECT CAST(NULL AS TIMESTAMP_NTZ(0))",
+   "clock": false,
+   "error": "UNSUPPORTED_DATATYPE",
+   "message": "[UNSUPPORTED_DATATYPE] Unsupported data type \"TIMESTAMP_NTZ(0)\".",
+   "sql_state": "0A000",
+   "parameters": {
+    "typeName": "\"TIMESTAMP_NTZ(0)\""
+   }
+  },
+  {
+   "id": "ts_ntz3",
+   "conf": {},
+   "sql": "SELECT CAST(NULL AS TIMESTAMP_NTZ(3))",
+   "clock": false,
+   "error": "UNSUPPORTED_DATATYPE",
+   "message": "[UNSUPPORTED_DATATYPE] Unsupported data type \"TIMESTAMP_NTZ(3)\".",
+   "sql_state": "0A000",
+   "parameters": {
+    "typeName": "\"TIMESTAMP_NTZ(3)\""
+   }
+  },
+  {
+   "id": "ts_ltz5",
+   "conf": {},
+   "sql": "SELECT CAST(NULL AS TIMESTAMP_LTZ(5))",
+   "clock": false,
+   "error": "UNSUPPORTED_DATATYPE",
+   "message": "[UNSUPPORTED_DATATYPE] Unsupported data type \"TIMESTAMP_LTZ(5)\".",
+   "sql_state": "0A000",
+   "parameters": {
+    "typeName": "\"TIMESTAMP_LTZ(5)\""
+   }
+  },
+  {
+   "id": "ts0",
+   "conf": {},
+   "sql": "SELECT CAST(NULL AS TIMESTAMP(0))",
+   "clock": false,
+   "error": "UNSUPPORTED_DATATYPE",
+   "message": "[UNSUPPORTED_DATATYPE] Unsupported data type \"TIMESTAMP(0)\".",
+   "sql_state": "0A000",
+   "parameters": {
+    "typeName": "\"TIMESTAMP(0)\""
+   }
+  },
+  {
+   "id": "ts3_ntz_default",
+   "conf": {
+    "spark.sql.timestampType": "TIMESTAMP_NTZ"
+   },
+   "sql": "SELECT CAST(NULL AS TIMESTAMP(3))",
+   "clock": false,
+   "error": "UNSUPPORTED_DATATYPE",
+   "message": "[UNSUPPORTED_DATATYPE] Unsupported data type \"TIMESTAMP(3)\".",
+   "sql_state": "0A000",
+   "parameters": {
+    "typeName": "\"TIMESTAMP(3)\""
+   }
+  },
+  {
+   "id": "ts_ntz10",
+   "conf": {},
+   "sql": "SELECT CAST(NULL AS TIMESTAMP_NTZ(10))",
+   "clock": false,
+   "error": "UNSUPPORTED_DATATYPE",
+   "message": "[UNSUPPORTED_DATATYPE] Unsupported data type \"TIMESTAMP_NTZ(10)\".",
+   "sql_state": "0A000",
+   "parameters": {
+    "typeName": "\"TIMESTAMP_NTZ(10)\""
+   }
+  },
+  {
+   "id": "ts_ntz_huge",
+   "conf": {},
+   "sql": "SELECT CAST(NULL AS TIMESTAMP_NTZ(99999999999))",
+   "clock": false,
+   "error": null,
+   "message": "For input string: \"99999999999\"",
+   "sql_state": null,
+   "parameters": {}
+  },
+  {
+   "id": "ts6_with_local",
+   "conf": {},
+   "sql": "SELECT typeof(CAST(NULL AS TIMESTAMP(6) WITH LOCAL TIME ZONE)) AS c",
+   "clock": false,
+   "error": "PARSE_SYNTAX_ERROR",
+   "message": "[PARSE_SYNTAX_ERROR] Syntax error at or near 'WITH'.",
+   "sql_state": "42601",
+   "parameters": {
+    "error": "'WITH'",
+    "hint": ""
+   }
+  },
+  {
+   "id": "ts3_with_local",
+   "conf": {},
+   "sql": "SELECT CAST(NULL AS TIMESTAMP(3) WITH LOCAL TIME ZONE)",
+   "clock": false,
+   "error": "PARSE_SYNTAX_ERROR",
+   "message": "[PARSE_SYNTAX_ERROR] Syntax error at or near 'WITH': missing ')'.",
+   "sql_state": "42601",
+   "parameters": {
+    "error": "'WITH'",
+    "hint": ": missing ')'"
+   }
+  },
+  {
+   "id": "ts9_without",
+   "conf": {},
+   "sql": "SELECT CAST(NULL AS TIMESTAMP(9) WITHOUT TIME ZONE)",
+   "clock": false,
+   "error": "PARSE_SYNTAX_ERROR",
+   "message": "[PARSE_SYNTAX_ERROR] Syntax error at or near 'WITHOUT': missing ')'.",
+   "sql_state": "42601",
+   "parameters": {
+    "error": "'WITHOUT'",
+    "hint": ": missing ')'"
+   }
+  },
+  {
+   "id": "ts6_without",
+   "conf": {},
+   "sql": "SELECT typeof(CAST(NULL AS TIMESTAMP(6) WITHOUT TIME ZONE)) AS c",
+   "clock": false,
+   "error": "PARSE_SYNTAX_ERROR",
+   "message": "[PARSE_SYNTAX_ERROR] Syntax error at or near 'WITHOUT'.",
+   "sql_state": "42601",
+   "parameters": {
+    "error": "'WITHOUT'",
+    "hint": ""
+   }
+  },
+  {
+   "id": "ts_ntz9_nanos_on",
+   "conf": {
+    "spark.sql.timestampNanosTypes.enabled": "true"
+   },
+   "sql": "SELECT typeof(CAST(NULL AS TIMESTAMP_NTZ(9))) AS c",
+   "clock": false,
+   "error": "UNSUPPORTED_DATATYPE",
+   "message": "[UNSUPPORTED_DATATYPE] Unsupported data type \"TIMESTAMP_NTZ(9)\".",
+   "sql_state": "0A000",
+   "parameters": {
+    "typeName": "\"TIMESTAMP_NTZ(9)\""
+   }
+  },
+  {
+   "id": "ts_ltz7_nanos_on",
+   "conf": {
+    "spark.sql.timestampNanosTypes.enabled": "true"
+   },
+   "sql": "SELECT typeof(CAST(NULL AS TIMESTAMP_LTZ(7))) AS c",
+   "clock": false,
+   "error": "UNSUPPORTED_DATATYPE",
+   "message": "[UNSUPPORTED_DATATYPE] Unsupported data type \"TIMESTAMP_LTZ(7)\".",
+   "sql_state": "0A000",
+   "parameters": {
+    "typeName": "\"TIMESTAMP_LTZ(7)\""
+   }
+  },
+  {
+   "id": "ts_ntz6_nanos_on",
+   "conf": {
+    "spark.sql.timestampNanosTypes.enabled": "true"
+   },
+   "sql": "SELECT typeof(CAST(NULL AS TIMESTAMP_NTZ(6))) AS c",
+   "clock": false,
+   "error": "UNSUPPORTED_DATATYPE",
+   "message": "[UNSUPPORTED_DATATYPE] Unsupported data type \"TIMESTAMP_NTZ(6)\".",
+   "sql_state": "0A000",
+   "parameters": {
+    "typeName": "\"TIMESTAMP_NTZ(6)\""
+   }
+  },
+  {
+   "id": "ddl_ts_ntz9",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "sql": "SELECT from_json('{\"a\":1}', 'a timestamp_ntz(9)')",
+   "clock": false,
+   "error": "PARSE_SYNTAX_ERROR",
+   "message": "[PARSE_SYNTAX_ERROR] Syntax error at or near 'timestamp_ntz'.",
+   "sql_state": "42601",
+   "parameters": {
+    "error": "'timestamp_ntz'",
+    "hint": ""
+   }
+  },
+  {
+   "id": "ddl_ts9",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "sql": "SELECT from_json('{\"a\":1}', 'a timestamp(9)')",
+   "clock": false,
+   "error": "PARSE_SYNTAX_ERROR",
+   "message": "[PARSE_SYNTAX_ERROR] Syntax error at or near 'timestamp'.",
+   "sql_state": "42601",
+   "parameters": {
+    "error": "'timestamp'",
+    "hint": ""
+   }
+  },
+  {
+   "id": "ddl_ts_ntz3",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "sql": "SELECT from_json('{\"a\":1}', 'a timestamp_ntz(3)')",
+   "clock": false,
+   "error": "PARSE_SYNTAX_ERROR",
+   "message": "[PARSE_SYNTAX_ERROR] Syntax error at or near 'timestamp_ntz'.",
+   "sql_state": "42601",
+   "parameters": {
+    "error": "'timestamp_ntz'",
+    "hint": ""
+   }
+  },
+  {
+   "id": "ddl_time10",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "sql": "SELECT from_json('{\"a\":1}', 'a time(10)')",
+   "clock": false,
+   "error": "PARSE_SYNTAX_ERROR",
+   "message": "[PARSE_SYNTAX_ERROR] Syntax error at or near 'time'.",
+   "sql_state": "42601",
+   "parameters": {
+    "error": "'time'",
+    "hint": ""
+   }
+  },
+  {
+   "id": "ddl_ts_ltz6",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "sql": "SELECT typeof(from_json('{\"a\":1}', 'a timestamp_ltz(6)')) AS c",
+   "clock": false,
+   "error": "PARSE_SYNTAX_ERROR",
+   "message": "[PARSE_SYNTAX_ERROR] Syntax error at or near 'timestamp_ltz'.",
+   "sql_state": "42601",
+   "parameters": {
+    "error": "'timestamp_ltz'",
+    "hint": ""
+   }
+  },
+  {
+   "id": "ddl_ts6",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "sql": "SELECT typeof(from_json('{\"a\":1}', 'a timestamp(6)')) AS c",
+   "clock": false,
+   "error": "PARSE_SYNTAX_ERROR",
+   "message": "[PARSE_SYNTAX_ERROR] Syntax error at or near 'timestamp'.",
+   "sql_state": "42601",
+   "parameters": {
+    "error": "'timestamp'",
+    "hint": ""
+   }
+  },
+  {
+   "id": "ddl_time3_value",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "sql": "SELECT CAST(from_json('{\"a\":\"12:00:00.123456789\"}', 'a time(3)').a AS STRING) AS c",
+   "clock": false,
+   "names": [
+    "c"
+   ],
+   "schema": [
+    [
+     "string",
+     true
+    ]
+   ],
+   "values": [
+    [
+     "12:00:00.123456"
+    ]
+   ]
+  },
+  {
+   "id": "ddl_time9",
+   "conf": {
+    "spark.sql.timeType.enabled": "true"
+   },
+   "sql": "SELECT typeof(from_json('{\"a\":\"12:00:00.123456789\"}', 'a time(9)')) AS c",
+   "clock": false,
+   "error": "PARSE_SYNTAX_ERROR",
+   "message": "[PARSE_SYNTAX_ERROR] Syntax error at or near 'time'.",
+   "sql_state": "42601",
+   "parameters": {
+    "error": "'time'",
+    "hint": ""
+   }
+  },
+  {
+   "id": "current_timestamp6",
+   "conf": {},
+   "sql": "SELECT current_timestamp(6), now(6), localtimestamp(6), typeof(current_timestamp(6)), typeof(localtimestamp(6))",
+   "clock": true,
+   "error": "WRONG_NUM_ARGS.WITHOUT_SUGGESTION",
+   "message": "[WRONG_NUM_ARGS.WITHOUT_SUGGESTION] The `current_timestamp` requires 0 parameters but the actual number is 1. Please, refer to 'https://spark.apache.org/docs/latest/sql-ref-functions.html' for a fix.",
+   "sql_state": "42605",
+   "parameters": {
+    "actualNum": "1",
+    "docroot": "https://spark.apache.org/docs/latest",
+    "expectedNum": "0",
+    "functionName": "`current_timestamp`"
+   }
+  },
+  {
+   "id": "current_timestamp_bigint",
+   "conf": {},
+   "sql": "SELECT typeof(current_timestamp(CAST(6 AS BIGINT)))",
+   "clock": true,
+   "error": "WRONG_NUM_ARGS.WITHOUT_SUGGESTION",
+   "message": "[WRONG_NUM_ARGS.WITHOUT_SUGGESTION] The `current_timestamp` requires 0 parameters but the actual number is 1. Please, refer to 'https://spark.apache.org/docs/latest/sql-ref-functions.html' for a fix.",
+   "sql_state": "42605",
+   "parameters": {
+    "actualNum": "1",
+    "docroot": "https://spark.apache.org/docs/latest",
+    "expectedNum": "0",
+    "functionName": "`current_timestamp`"
+   }
+  },
+  {
+   "id": "current_timestamp9",
+   "conf": {},
+   "sql": "SELECT current_timestamp(9)",
+   "clock": false,
+   "error": "WRONG_NUM_ARGS.WITHOUT_SUGGESTION",
+   "message": "[WRONG_NUM_ARGS.WITHOUT_SUGGESTION] The `current_timestamp` requires 0 parameters but the actual number is 1. Please, refer to 'https://spark.apache.org/docs/latest/sql-ref-functions.html' for a fix.",
+   "sql_state": "42605",
+   "parameters": {
+    "actualNum": "1",
+    "docroot": "https://spark.apache.org/docs/latest",
+    "expectedNum": "0",
+    "functionName": "`current_timestamp`"
+   }
+  },
+  {
+   "id": "current_timestamp_null",
+   "conf": {},
+   "sql": "SELECT current_timestamp(CAST(NULL AS INT))",
+   "clock": false,
+   "error": "WRONG_NUM_ARGS.WITHOUT_SUGGESTION",
+   "message": "[WRONG_NUM_ARGS.WITHOUT_SUGGESTION] The `current_timestamp` requires 0 parameters but the actual number is 1. Please, refer to 'https://spark.apache.org/docs/latest/sql-ref-functions.html' for a fix.",
+   "sql_state": "42605",
+   "parameters": {
+    "actualNum": "1",
+    "docroot": "https://spark.apache.org/docs/latest",
+    "expectedNum": "0",
+    "functionName": "`current_timestamp`"
+   }
+  },
+  {
+   "id": "localtimestamp7",
+   "conf": {},
+   "sql": "SELECT localtimestamp(7)",
+   "clock": false,
+   "error": "WRONG_NUM_ARGS.WITHOUT_SUGGESTION",
+   "message": "[WRONG_NUM_ARGS.WITHOUT_SUGGESTION] The `localtimestamp` requires 0 parameters but the actual number is 1. Please, refer to 'https://spark.apache.org/docs/latest/sql-ref-functions.html' for a fix.",
+   "sql_state": "42605",
+   "parameters": {
+    "actualNum": "1",
+    "docroot": "https://spark.apache.org/docs/latest",
+    "expectedNum": "0",
+    "functionName": "`localtimestamp`"
+   }
+  },
+  {
+   "id": "current_timestamp3",
+   "conf": {},
+   "sql": "SELECT current_timestamp(3)",
+   "clock": false,
+   "error": "WRONG_NUM_ARGS.WITHOUT_SUGGESTION",
+   "message": "[WRONG_NUM_ARGS.WITHOUT_SUGGESTION] The `current_timestamp` requires 0 parameters but the actual number is 1. Please, refer to 'https://spark.apache.org/docs/latest/sql-ref-functions.html' for a fix.",
+   "sql_state": "42605",
+   "parameters": {
+    "actualNum": "1",
+    "docroot": "https://spark.apache.org/docs/latest",
+    "expectedNum": "0",
+    "functionName": "`current_timestamp`"
+   }
+  },
+  {
+   "id": "now10",
+   "conf": {},
+   "sql": "SELECT now(10)",
+   "clock": false,
+   "error": "WRONG_NUM_ARGS.WITHOUT_SUGGESTION",
+   "message": "[WRONG_NUM_ARGS.WITHOUT_SUGGESTION] The `now` requires 0 parameters but the actual number is 1. Please, refer to 'https://spark.apache.org/docs/latest/sql-ref-functions.html' for a fix.",
+   "sql_state": "42605",
+   "parameters": {
+    "actualNum": "1",
+    "docroot": "https://spark.apache.org/docs/latest",
+    "expectedNum": "0",
+    "functionName": "`now`"
+   }
+  },
+  {
+   "id": "localtimestamp_negative",
+   "conf": {},
+   "sql": "SELECT localtimestamp(-1)",
+   "clock": false,
+   "error": "WRONG_NUM_ARGS.WITHOUT_SUGGESTION",
+   "message": "[WRONG_NUM_ARGS.WITHOUT_SUGGESTION] The `localtimestamp` requires 0 parameters but the actual number is 1. Please, refer to 'https://spark.apache.org/docs/latest/sql-ref-functions.html' for a fix.",
+   "sql_state": "42605",
+   "parameters": {
+    "actualNum": "1",
+    "docroot": "https://spark.apache.org/docs/latest",
+    "expectedNum": "0",
+    "functionName": "`localtimestamp`"
+   }
+  },
+  {
+   "id": "current_timestamp_decimal",
+   "conf": {},
+   "sql": "SELECT current_timestamp(6.0)",
+   "clock": false,
+   "error": "WRONG_NUM_ARGS.WITHOUT_SUGGESTION",
+   "message": "[WRONG_NUM_ARGS.WITHOUT_SUGGESTION] The `current_timestamp` requires 0 parameters but the actual number is 1. Please, refer to 'https://spark.apache.org/docs/latest/sql-ref-functions.html' for a fix.",
+   "sql_state": "42605",
+   "parameters": {
+    "actualNum": "1",
+    "docroot": "https://spark.apache.org/docs/latest",
+    "expectedNum": "0",
+    "functionName": "`current_timestamp`"
+   }
+  },
+  {
+   "id": "current_timestamp_string",
+   "conf": {},
+   "sql": "SELECT current_timestamp('6')",
+   "clock": false,
+   "error": "WRONG_NUM_ARGS.WITHOUT_SUGGESTION",
+   "message": "[WRONG_NUM_ARGS.WITHOUT_SUGGESTION] The `current_timestamp` requires 0 parameters but the actual number is 1. Please, refer to 'https://spark.apache.org/docs/latest/sql-ref-functions.html' for a fix.",
+   "sql_state": "42605",
+   "parameters": {
+    "actualNum": "1",
+    "docroot": "https://spark.apache.org/docs/latest",
+    "expectedNum": "0",
+    "functionName": "`current_timestamp`"
+   }
+  },
+  {
+   "id": "now_double_column",
+   "conf": {},
+   "sql": "SELECT now(p) FROM VALUES (6D) AS t(p)",
+   "clock": false,
+   "error": "WRONG_NUM_ARGS.WITHOUT_SUGGESTION",
+   "message": "[WRONG_NUM_ARGS.WITHOUT_SUGGESTION] The `now` requires 0 parameters but the actual number is 1. Please, refer to 'https://spark.apache.org/docs/latest/sql-ref-functions.html' for a fix.",
+   "sql_state": "42605",
+   "parameters": {
+    "actualNum": "1",
+    "docroot": "https://spark.apache.org/docs/latest",
+    "expectedNum": "0",
+    "functionName": "`now`"
+   }
+  },
+  {
+   "id": "now_int_column",
+   "conf": {},
+   "sql": "SELECT now(p) FROM VALUES (6) AS t(p)",
+   "clock": false,
+   "error": "WRONG_NUM_ARGS.WITHOUT_SUGGESTION",
+   "message": "[WRONG_NUM_ARGS.WITHOUT_SUGGESTION] The `now` requires 0 parameters but the actual number is 1. Please, refer to 'https://spark.apache.org/docs/latest/sql-ref-functions.html' for a fix.",
+   "sql_state": "42605",
+   "parameters": {
+    "actualNum": "1",
+    "docroot": "https://spark.apache.org/docs/latest",
+    "expectedNum": "0",
+    "functionName": "`now`"
+   }
+  },
+  {
+   "id": "current_timestamp_wraps",
+   "conf": {},
+   "sql": "SELECT typeof(current_timestamp(4294967302L))",
+   "clock": true,
+   "error": "WRONG_NUM_ARGS.WITHOUT_SUGGESTION",
+   "message": "[WRONG_NUM_ARGS.WITHOUT_SUGGESTION] The `current_timestamp` requires 0 parameters but the actual number is 1. Please, refer to 'https://spark.apache.org/docs/latest/sql-ref-functions.html' for a fix.",
+   "sql_state": "42605",
+   "parameters": {
+    "actualNum": "1",
+    "docroot": "https://spark.apache.org/docs/latest",
+    "expectedNum": "0",
+    "functionName": "`current_timestamp`"
+   }
+  },
+  {
+   "id": "current_timestamp_wraps_to_0",
+   "conf": {},
+   "sql": "SELECT current_timestamp(4294967296L)",
+   "clock": false,
+   "error": "WRONG_NUM_ARGS.WITHOUT_SUGGESTION",
+   "message": "[WRONG_NUM_ARGS.WITHOUT_SUGGESTION] The `current_timestamp` requires 0 parameters but the actual number is 1. Please, refer to 'https://spark.apache.org/docs/latest/sql-ref-functions.html' for a fix.",
+   "sql_state": "42605",
+   "parameters": {
+    "actualNum": "1",
+    "docroot": "https://spark.apache.org/docs/latest",
+    "expectedNum": "0",
+    "functionName": "`current_timestamp`"
+   }
+  },
+  {
+   "id": "current_timestamp_dayofweek",
+   "conf": {},
+   "sql": "SELECT typeof(current_timestamp(dayofweek(DATE '1970-01-02')))",
+   "clock": true,
+   "error": "WRONG_NUM_ARGS.WITHOUT_SUGGESTION",
+   "message": "[WRONG_NUM_ARGS.WITHOUT_SUGGESTION] The `current_timestamp` requires 0 parameters but the actual number is 1. Please, refer to 'https://spark.apache.org/docs/latest/sql-ref-functions.html' for a fix.",
+   "sql_state": "42605",
+   "parameters": {
+    "actualNum": "1",
+    "docroot": "https://spark.apache.org/docs/latest",
+    "expectedNum": "0",
+    "functionName": "`current_timestamp`"
+   }
+  },
+  {
+   "id": "instr_collated",
+   "conf": {},
+   "sql": "SELECT instr(name COLLATE UTF8_LCASE, 'PL') FROM VALUES ('apple') t(name)",
+   "clock": false,
+   "names": [
+    "instr(collate(name, UTF8_LCASE), 'PL' collate UTF8_LCASE)"
+   ],
+   "schema": [
+    [
+     "int",
+     false
+    ]
+   ],
+   "values": [
+    [
+     "3"
+    ]
+   ]
+  },
+  {
+   "id": "instr_literal_collated",
+   "conf": {},
+   "sql": "SELECT instr(name, 'pl' COLLATE UTF8_LCASE) FROM VALUES ('apple') t(name)",
+   "clock": false,
+   "names": [
+    "instr(name, collate(pl, UTF8_LCASE))"
+   ],
+   "schema": [
+    [
+     "int",
+     false
+    ]
+   ],
+   "values": [
+    [
+     "3"
+    ]
+   ]
+  },
+  {
+   "id": "locate_collated",
+   "conf": {},
+   "sql": "SELECT locate('PL', name COLLATE UTF8_LCASE) FROM VALUES ('apple') t(name)",
+   "clock": false,
+   "names": [
+    "locate('PL' collate UTF8_LCASE, collate(name, UTF8_LCASE), 1)"
+   ],
+   "schema": [
+    [
+     "int",
+     false
+    ]
+   ],
+   "values": [
+    [
+     "3"
+    ]
+   ]
+  },
+  {
+   "id": "eq_collated",
+   "conf": {},
+   "sql": "SELECT name COLLATE UTF8_LCASE = 'APPLE' FROM VALUES ('apple') t(name)",
+   "clock": false,
+   "names": [
+    "(collate(name, UTF8_LCASE) = 'APPLE' collate UTF8_LCASE)"
+   ],
+   "schema": [
+    [
+     "boolean",
+     false
+    ]
+   ],
+   "values": [
+    [
+     "true"
+    ]
+   ]
+  }
+ ]
+}

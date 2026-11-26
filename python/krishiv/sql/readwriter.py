@@ -46,6 +46,11 @@ def _schema_type_error(schema: object) -> PySparkTypeError:
 
 
 class DataFrameReader:
+    """Reads files and tables into DataFrames.
+
+    ``spark.read.format(...).option(...).load(path)``, or the ``csv``, ``json`` and ``parquet`` shorthands.
+    """
+
     def __init__(self, session: SparkSession) -> None:
         self._session = session
         self._format = "parquet"
@@ -54,13 +59,10 @@ class DataFrameReader:
         self._schema: tuple[str | None, str | None] = (None, None)
 
     def format(self, source: str) -> DataFrameReader:
+        """Sets the data source format (``parquet``, ``csv``, ``json`` ...)."""
         _refuse_jdbc(source)
         self._format = source
         return self
-
-    def jdbc(self, *args: object, **kwargs: object) -> DataFrame:
-        """Not supported: Krishiv has no JDBC source (``KRISHIV_UNSUPPORTED_FEATURE``)."""
-        raise unsupported_feature("DataFrameReader.jdbc (there is no JDBC data source)")
 
     def schema(self, schema: StructType | str) -> DataFrameReader:
         """The input schema: a :class:`StructType` or a DDL string (``"a INT,
@@ -76,15 +78,18 @@ class DataFrameReader:
         return self
 
     def option(self, key: str, value: object) -> DataFrameReader:
+        """Adds one reader option."""
         self._options.append((key, _option_text(value)))
         return self
 
     def options(self, **options: object) -> DataFrameReader:
+        """Adds several reader options."""
         for key, value in options.items():
             self.option(key, value)
         return self
 
     def load(self, path: str | list[str] | None = None, format: str | None = None, **options: object) -> DataFrame:
+        """Reads ``path`` in the configured format."""
         if format is not None:
             self.format(format)
         schema = options.pop("schema", None)
@@ -116,23 +121,59 @@ class DataFrameReader:
         return DataFrame(native, self._session)
 
     def parquet(self, *paths: str) -> DataFrame:
+        """Reads Parquet file(s) at ``paths``."""
         return self.load(list(paths), format="parquet")
 
     def csv(self, path: str | list[str], **options: object) -> DataFrame:
+        """Reads CSV file(s) at ``path``."""
         return self.load(path, format="csv", **options)
 
     def json(self, path: str | list[str], **options: object) -> DataFrame:
+        """Reads JSON-lines file(s) at ``path``."""
         return self.load(path, format="json", **options)
 
     def text(
-        self, paths: str | list[str], wholetext: bool = False, lineSep: str | None = None, **options: object
+        self,
+        paths: str | list[str],
+        wholetext: bool = False,
+        lineSep: str | None = None,
+        pathGlobFilter: str | None = None,
+        recursiveFileLookup: bool | None = None,
+        modifiedBefore: str | None = None,
+        modifiedAfter: str | None = None,
     ) -> DataFrame:
-        """Reads text files into a ``value`` string column, a row per line (``wholetext=True``: a row
-        per file), as ``pyspark.sql.DataFrameReader.text``."""
-        options["wholetext"] = wholetext  # always set, as PySpark: it overrides an earlier option
-        if lineSep is not None:
-            options["lineSep"] = lineSep
-        return self.load(paths, format="text", **options)
+        """Reads text files into a DataFrame with one string column ``value`` per line (the whole
+        file per row with ``wholetext``)."""
+        options: dict[str, object] = {
+            "wholetext": wholetext,
+            "lineSep": lineSep,
+            "pathGlobFilter": pathGlobFilter,
+            "recursiveFileLookup": recursiveFileLookup,
+            "modifiedBefore": modifiedBefore,
+            "modifiedAfter": modifiedAfter,
+        }
+        # As PySpark's shortcuts: an option given as ``None`` is not set; ``wholetext=False`` is forwarded so it
+        # resets an earlier ``True`` on a reused reader.
+        given = {k: v for k, v in options.items() if v is not None}
+        return self.load(paths, format="text", **given)
+
+    def table(self, tableName: str) -> DataFrame:
+        """The table or view ``tableName`` as a DataFrame (as ``spark.table``)."""
+        if not isinstance(tableName, str):
+            raise not_expected_type("tableName", "str", tableName)
+        return self._session.table(tableName)
+
+    def orc(self, path: str | list[str], **options: object) -> DataFrame:
+        """Not supported: the engine reads no ORC (``KRISHIV_UNSUPPORTED_FEATURE``)."""
+        return self.load(path, format="orc", **options)
+
+    def xml(self, path: str | list[str], **options: object) -> DataFrame:
+        """Not supported: the engine reads no XML (``KRISHIV_UNSUPPORTED_FEATURE``)."""
+        raise unsupported_feature("reading the xml format")
+
+    def jdbc(self, *args: object, **kwargs: object) -> DataFrame:
+        """Not supported: there is no JDBC (``KRISHIV_UNSUPPORTED_FEATURE``)."""
+        raise unsupported_feature("reading from JDBC")
 
 
 class DataFrameWriter:
@@ -157,16 +198,13 @@ class DataFrameWriter:
         self._partition_by: list[str] = []
         self._bucket_by: tuple[int, list[str]] | None = None
         self._sort_by: list[str] | None = None
+        self._cluster_by: list[str] = []
 
     def format(self, source: str) -> DataFrameWriter:
         _refuse_jdbc(source)
         self._format = source
         self._format_set = True
         return self
-
-    def jdbc(self, *args: object, **kwargs: object) -> None:
-        """Not supported: Krishiv has no JDBC sink (``KRISHIV_UNSUPPORTED_FEATURE``)."""
-        raise unsupported_feature("DataFrameWriter.jdbc (there is no JDBC data source)")
 
     def mode(self, saveMode: str) -> DataFrameWriter:
         self._mode = saveMode
@@ -231,6 +269,24 @@ class DataFrameWriter:
         code = "_LEGACY_ERROR_TEMP_1312" if self._sort_by is None else "_LEGACY_ERROR_TEMP_1313"
         raise AnalysisException(errorClass=code, messageParameters={"operation": operation})
 
+    def clusterBy(self, col: str | list[str] | tuple[str, ...], *cols: str) -> DataFrameWriter:
+        """Clusters the output by ``col`` (and ``cols``); each call replaces the columns of the one
+        before. The engine has no clustered tables: ``save`` and ``saveAsTable`` then fail with
+        ``KRISHIV_UNSUPPORTED_FEATURE``."""
+        if isinstance(col, list | tuple):
+            if cols:
+                raise PySparkValueError(
+                    errorClass="CANNOT_SET_TOGETHER", messageParameters={"arg_list": "col and cols"}
+                )
+            names = list(col)
+        else:
+            names = [col, *cols]
+        for n in names:
+            if not isinstance(n, str):
+                raise not_expected_type("col", "str", n)
+        self._cluster_by = names
+        return self
+
     def sortBy(self, col: str | list[str] | tuple[str, ...], *cols: str) -> DataFrameWriter:
         """Sorts each bucket by ``col`` (and ``cols``); needs ``bucketBy``."""
         if isinstance(col, list | tuple):
@@ -283,6 +339,7 @@ class DataFrameWriter:
         if partitionBy is not None:
             self.partitionBy(partitionBy)
         self.options(**{k: v for k, v in options.items() if v is not None})
+        self._refuse_cluster_by()
         self._df._df.write_table(
             insert_into,
             name,
@@ -313,6 +370,7 @@ class DataFrameWriter:
         from krishiv.sql import datasource
         from krishiv.sql.datasource import CaseInsensitiveDict
 
+        self._refuse_cluster_by()
         entry = datasource.registered(self._df._session, self._format) if self._format_set else None
         if entry is not None:
             opts = CaseInsensitiveDict(self._options)
@@ -328,6 +386,7 @@ class DataFrameWriter:
             return
         if path is None:
             raise not_expected_type("path", "str", path)
+        self._refuse_cluster_by()
         self._df._df.write(
             self._format,
             self._mode,
@@ -337,6 +396,28 @@ class DataFrameWriter:
             self._bucket_by,
             self._sort_by,
         )
+
+    def _refuse_cluster_by(self) -> None:
+        if self._cluster_by:
+            raise unsupported_feature("DataFrameWriter.clusterBy (clustered tables)")
+
+    def orc(
+        self,
+        path: str,
+        mode: str | None = None,
+        partitionBy: str | list[str] | tuple[str, ...] | None = None,
+        compression: str | None = None,
+    ) -> None:
+        """Not supported: the engine writes no ORC (``KRISHIV_UNSUPPORTED_FEATURE``)."""
+        self.save(path, format="orc", mode=mode, partitionBy=partitionBy, compression=compression)
+
+    def xml(self, path: str, **options: object) -> None:
+        """Not supported: the engine writes no XML (``KRISHIV_UNSUPPORTED_FEATURE``)."""
+        raise unsupported_feature("writing the xml format")
+
+    def jdbc(self, *args: object, **kwargs: object) -> None:
+        """Not supported: there is no JDBC (``KRISHIV_UNSUPPORTED_FEATURE``)."""
+        raise unsupported_feature("writing to JDBC")
 
     def parquet(
         self,

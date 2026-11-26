@@ -620,9 +620,8 @@ fn a_source_with_a_repeated_column_name_reads_its_measures() {
 /// `MISSING_AGGREGATION` for it (a real run, 2026-11-21: `[MISSING_AGGREGATION] The
 /// non-aggregating expression "total" is based on columns which are not participating in the GROUP
 /// BY clause.`, for both qualified forms), as it does for such a function over a plain table's
-/// non-grouped column; Krishiv inlines a SQL function's body
-/// before that check, so a parameter the body never reads is not checked (a general SQL-function
-/// gap, queued apart): here the call's argument is then the view's measure column, unresolved.
+/// non-grouped column. Krishiv checks a SQL function's arguments against the grouping before it
+/// inlines the body, so a parameter the body never reads raises the same class.
 #[test]
 fn a_qualified_function_named_measure_is_not_the_built_in() {
     let (s, _dir) = session();
@@ -636,7 +635,7 @@ fn a_qualified_function_named_measure_is_not_the_built_in() {
         "SELECT region, spark_catalog.default.measure(total) FROM mv GROUP BY region",
     ] {
         let e = run(&s, q).unwrap_err();
-        assert!(class(&e).starts_with("UNRESOLVED_COLUMN"), "{q}: {e}");
+        assert_eq!(class(&e), "MISSING_AGGREGATION", "{q}: {e}");
     }
     let out = run(&s, "SELECT region, measure(total) FROM mv GROUP BY region").unwrap();
     assert_eq!(longs(&out, 1), vec![3, 5]);

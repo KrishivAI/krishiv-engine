@@ -26,7 +26,7 @@ from . import compare, h2o_data
 from .adapters import Dataset, Engine, Query, make_engine
 from .adapters.base import check_query
 from .errors import error_fields
-from .paths import data_root, fmt_sf, queries_dir, results_dir
+from .paths import data_root, fmt_sf, require_queries_dir, results_dir
 from .report import cache_mode_lines
 
 SUITES = {"h2o-groupby": "groupby", "h2o-join": "join"}
@@ -68,7 +68,7 @@ def load_queries(suite: str, engine: str, only: list[str] | None = None) -> list
     """``bench/queries/<suite>/qNN.sql`` (override: ``<engine>/qNN.sql``) with the checksum SQL attached."""
     if suite not in CHK_COLUMNS:
         raise ValueError(f"not an h2o suite: {suite!r}")
-    d = queries_dir(suite)
+    d = require_queries_dir(suite)
     out = []
     for f in sorted(d.glob("q*.sql")):
         if only and f.stem not in only:

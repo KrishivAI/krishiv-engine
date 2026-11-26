@@ -40,6 +40,7 @@
 //! physical planner, which keeps the copies when a runtime filter reaches
 //! one of them.
 
+use crate::expr::{AddrMap, AddrSet};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -57,13 +58,13 @@ use crate::restrict::subquery_plans;
 pub(crate) const SHARED_PREFIX: &str = "__shared_";
 
 /// One instance: the `Shift` node, its body and offset.
-struct Member {
-    shift: Arc<LogicalPlan>,
-    body: Arc<LogicalPlan>,
-    offset: u64,
+pub(crate) struct Member {
+    pub(crate) shift: Arc<LogicalPlan>,
+    pub(crate) body: Arc<LogicalPlan>,
+    pub(crate) offset: u64,
     /// How many paths from the root reach it: a `Shift` shared through
     /// `Arc` (both sides of a `UNION ALL` of one CTE) is read that many times.
-    uses: u64,
+    pub(crate) uses: u64,
 }
 
 /// `root` with its groups of equal instances shared. With `direct`, the
@@ -82,7 +83,7 @@ pub(crate) fn share(
     if groups.is_empty() {
         return Ok(root);
     }
-    let mut replace: HashMap<*const LogicalPlan, Arc<LogicalPlan>> = HashMap::new();
+    let mut replace: AddrMap<LogicalPlan, Arc<LogicalPlan>> = Default::default();
     let mut bodies: Vec<(String, Arc<LogicalPlan>)> = Vec::new();
     let mut keys: HashSet<Vec<AttrId>> = HashSet::new();
     for group in groups {
@@ -149,7 +150,7 @@ pub(crate) fn share(
     }
     let mut sharer = Sharer {
         replace: &replace,
-        done: HashMap::new(),
+        done: Default::default(),
     };
     let input = sharer.go(Arc::clone(&root))?;
     // Each definition is its body with the groups nested inside it shared too.
@@ -222,12 +223,12 @@ fn dependencies_first(ctes: Vec<Cte>) -> Vec<Cte> {
 /// number of paths that reach it; with `direct`, also one member per shifted
 /// body that is reached other than through a `Shift` (offset 0, `shift` is
 /// the body itself).
-fn shifts(root: &Arc<LogicalPlan>, direct: bool) -> Vec<Member> {
+pub(crate) fn shifts(root: &Arc<LogicalPlan>, direct: bool) -> Vec<Member> {
     // The relations in post-order (children before parents), each with its
     // children, then path counts from the root down.
     let mut order: Vec<Arc<LogicalPlan>> = Vec::new();
-    let mut kids: HashMap<*const LogicalPlan, Vec<Arc<LogicalPlan>>> = HashMap::new();
-    let mut seen: HashSet<*const LogicalPlan> = HashSet::new();
+    let mut kids: AddrMap<LogicalPlan, Vec<Arc<LogicalPlan>>> = Default::default();
+    let mut seen: AddrSet<LogicalPlan> = Default::default();
     let mut stack: Vec<(Arc<LogicalPlan>, bool)> = vec![(Arc::clone(root), false)];
     while let Some((p, expanded)) = stack.pop() {
         if expanded {
@@ -249,7 +250,7 @@ fn shifts(root: &Arc<LogicalPlan>, direct: bool) -> Vec<Member> {
         }
         kids.insert(Arc::as_ptr(&p), children);
     }
-    let mut paths: HashMap<*const LogicalPlan, u64> = HashMap::new();
+    let mut paths: AddrMap<LogicalPlan, u64> = Default::default();
     paths.insert(Arc::as_ptr(root), 1);
     let mut out = Vec::new();
     for p in order.iter().rev() {
@@ -278,8 +279,8 @@ fn shifts(root: &Arc<LogicalPlan>, direct: bool) -> Vec<Member> {
 /// A member per shifted body that some path reaches without a `Shift`:
 /// `paths(B) - sum of paths(Shift over B)`. A structurally equal body in
 /// another `Arc` is not counted, which is safe.
-fn direct_members(members: &[Member], paths: &HashMap<*const LogicalPlan, u64>) -> Vec<Member> {
-    let mut through_shift: HashMap<*const LogicalPlan, (Arc<LogicalPlan>, u64)> = HashMap::new();
+fn direct_members(members: &[Member], paths: &AddrMap<LogicalPlan, u64>) -> Vec<Member> {
+    let mut through_shift: AddrMap<LogicalPlan, (Arc<LogicalPlan>, u64)> = Default::default();
     for m in members {
         let e = through_shift
             .entry(Arc::as_ptr(&m.body))
@@ -409,7 +410,7 @@ fn walk_all(plan: &Arc<LogicalPlan>, f: &mut impl FnMut(&Arc<LogicalPlan>)) {
 }
 
 fn walk_fenced(plan: &Arc<LogicalPlan>, fence: bool, f: &mut impl FnMut(&Arc<LogicalPlan>)) {
-    let mut seen = HashSet::new();
+    let mut seen = crate::expr::AddrSet::default();
     let mut stack = vec![Arc::clone(plan)];
     while let Some(p) = stack.pop() {
         if !seen.insert(Arc::as_ptr(&p)) {
@@ -427,10 +428,10 @@ fn walk_fenced(plan: &Arc<LogicalPlan>, fence: bool, f: &mut impl FnMut(&Arc<Log
 /// A top-down rewrite that replaces the members and rebuilds what is above
 /// (also `share_scan`'s).
 pub(crate) struct Sharer<'a> {
-    pub(crate) replace: &'a HashMap<*const LogicalPlan, Arc<LogicalPlan>>,
+    pub(crate) replace: &'a AddrMap<LogicalPlan, Arc<LogicalPlan>>,
     /// Original → rewritten; the original is kept alive so its address stays
     /// unique.
-    pub(crate) done: HashMap<*const LogicalPlan, (Arc<LogicalPlan>, Arc<LogicalPlan>)>,
+    pub(crate) done: AddrMap<LogicalPlan, (Arc<LogicalPlan>, Arc<LogicalPlan>)>,
 }
 
 impl Sharer<'_> {

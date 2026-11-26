@@ -2,11 +2,13 @@
 //! `DESCRIBE` and `SHOW` on the catalog through `Session::sql`; the expected rows are Spark 4.2.0's.
 #![cfg(test)]
 
+mod literal_path;
 use arrow_array::Array;
 use arrow_array::cast::AsArray;
 use arrow_schema::DataType as ArrowType;
 use futures::executor::block_on;
 use krishiv_session::Session;
+use literal_path::sql_path;
 
 fn session(dir: &std::path::Path) -> Session {
     let s = Session::new().unwrap();
@@ -371,7 +373,7 @@ fn describe_modes_secrets_and_quoting() {
         &s,
         &format!(
             "CREATE TABLE e (x INT) USING parquet LOCATION '{}'",
-            odd.display().to_string().replace('\'', "\\'")
+            sql_path(&odd).replace('\'', "\\'")
         ),
     );
     let text = table(&s, "SHOW CREATE TABLE e").1[0][0].clone();
@@ -845,5 +847,47 @@ fn show_namespaces_in_a_name() {
     assert_eq!(
         rows(&s, "SHOW NAMESPACES IN spark_catalog"),
         [["d1"], ["default"]]
+    );
+}
+
+/// `Created By` names the release of the reading session's profile (a Spark 4.3.0 run prints
+/// `Created By Spark 4.3.0`; 4.2.0 prints `Spark 4.2.0`).
+#[test]
+fn created_by_names_the_profile_release() {
+    for (profile, want) in [
+        (krishiv_plan::analyzer::SparkProfile::V4_3, "Spark 4.3.0"),
+        (krishiv_plan::analyzer::SparkProfile::V4_2, "Spark 4.2.0"),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let s = Session::builder().profile(profile).build().unwrap();
+        s.conf()
+            .set("spark.sql.warehouse.dir", dir.path().to_str().unwrap())
+            .unwrap();
+        run(&s, "CREATE TABLE c (a INT) USING parquet");
+        let ext = rows(&s, "DESCRIBE TABLE EXTENDED c");
+        let created = ext
+            .iter()
+            .find(|r| r[0] == "Created By")
+            .unwrap_or_else(|| panic!("no Created By row: {ext:?}"));
+        assert_eq!(created[1], want, "{profile:?}");
+    }
+}
+
+/// Spark 4.3.0 (lane probe of 2026-11-24): `SHOW CREATE TABLE` of a `STRING` column prints its
+/// `UTF8_BINARY` collation, as 4.2 does.
+#[test]
+fn show_create_table_names_the_string_collation_under_spark_4_3() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = Session::builder()
+        .profile(krishiv_plan::analyzer::SparkProfile::V4_3)
+        .build()
+        .unwrap();
+    s.conf()
+        .set("spark.sql.warehouse.dir", dir.path().to_str().unwrap())
+        .unwrap();
+    run(&s, "CREATE TABLE t (s STRING, i INT) USING parquet");
+    assert_eq!(
+        rows(&s, "SHOW CREATE TABLE t")[0][0],
+        "CREATE TABLE spark_catalog.default.t (\n  s STRING COLLATE UTF8_BINARY,\n  i INT)\nUSING parquet\n"
     );
 }

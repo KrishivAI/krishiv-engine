@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Plan-time distinct-value samples of the file columns a query compares
 //! with values (P2-T164 unit U6), and of its group keys while
-//! `krishiv.optimizer.groupKeyCode` is on (design P2b D2): which columns
+//! `krishiv.optimizer.groupKeyCode` is on, or, in the multi-dimension mode
+//! (`krishiv.optimizer.groupKeyCodeMultiDimension`), those of aggregates
+//! with keys of two or more dimensions (design P2b D2 §8): which columns
 //! ([`compared_columns`], [`grouped_columns`]) and the call into each opened
 //! [`FileTable`](krishiv_exec::planner::FileTable).
 
@@ -52,15 +54,33 @@ impl QueryCatalog {
         compared_columns(plan, &mut compared);
         // `GroupKeyCode` (design P2b D2) codes an aggregate's dimension keys
         // only on known distinct counts: while it is on, the group keys it
-        // could code are sampled too.
-        if group_key_code(config) {
+        // could code are sampled too, in the multi-dimension mode only those of
+        // aggregates where enough dimensions could qualify.
+        if let Some(min_dimensions) = group_key_code(config) {
             let rows = |id: krishiv_plan::AttrId| {
                 let scan = scans.iter().find(|s| s.3.iter().any(|(i, _)| *i == id))?;
                 Some(self.opened(&scan.0)?.statistics()?.rows)
             };
-            for g in grouped_columns(plan) {
-                if dimension_may_pay(rows(g.scan), g.others.iter().map(|id| rows(*id))) {
-                    compared.extend(g.keys);
+            // The rule refuses a dimension whose group keys include its own
+            // join's key (condition 1: TPC-H q10's `customer`, q18's
+            // `orders`). The sampler approximates that from above: a
+            // dimension with a group key in any column `=` / `<=>` of the plan
+            // (any join or filter) is neither sampled nor counted. That can
+            // only sample less (and, in the multi-dimension mode, count fewer
+            // dimensions), never change rows.
+            let joined = equated_columns(plan);
+            let may_pay: Vec<GroupKeys> = grouped_columns(plan)
+                .into_iter()
+                .filter(|g| !g.keys.iter().any(|k| joined.contains(k)))
+                .filter(|g| dimension_may_pay(rows(g.scan), g.others.iter().map(|id| rows(*id))))
+                .collect();
+            for g in &may_pay {
+                let dimensions = may_pay
+                    .iter()
+                    .filter(|o| o.aggregate == g.aggregate)
+                    .count();
+                if dimensions >= min_dimensions {
+                    compared.extend(g.keys.iter().copied());
                 }
             }
         }
@@ -141,18 +161,30 @@ pub(super) fn files_label(key: &super::FilesKey) -> String {
     }
 }
 
-/// Whether the optimizer may code group keys (`krishiv.optimizer.groupKeyCode`,
-/// or `krishiv.experimental.groupKeyCodeForce`, which also switches it on).
-fn group_key_code(config: &krishiv_common::config::Config) -> bool {
-    use krishiv_common::config::{ConfigValue, GROUP_KEY_CODE};
-    config.get(&GROUP_KEY_CODE).and_then(ConfigValue::as_bool) == Some(true)
-        || krishiv_common::experimental::is_enabled(config, "groupKeyCodeForce")
+/// How many dimensions an aggregate needs for the optimizer to code its group
+/// keys, as the optimizer decides it: one with `krishiv.optimizer.groupKeyCode`
+/// (or `krishiv.experimental.groupKeyCodeForce`, which also switches it on),
+/// two with only `krishiv.optimizer.groupKeyCodeMultiDimension`, `None`
+/// when it codes nothing (the default).
+fn group_key_code(config: &krishiv_common::config::Config) -> Option<usize> {
+    use krishiv_common::config::{ConfigValue, GROUP_KEY_CODE, GROUP_KEY_CODE_MULTI_DIMENSION};
+    let on = |entry| config.get(entry).and_then(ConfigValue::as_bool) == Some(true);
+    if on(&GROUP_KEY_CODE) || krishiv_common::experimental::is_enabled(config, "groupKeyCodeForce")
+    {
+        Some(1)
+    } else if on(&GROUP_KEY_CODE_MULTI_DIMENSION) {
+        Some(2)
+    } else {
+        None
+    }
 }
 
 /// The column group keys of one aggregate that come from one scan below it
 /// and that `GroupKeyCode` could code by their types
 /// ([`krishiv_optimizer::could_code_group_keys`]).
 struct GroupKeys {
+    /// Which aggregate of the plan they group (its visit order).
+    aggregate: usize,
     /// The keys.
     keys: Vec<krishiv_plan::AttrId>,
     /// A column of their scan.
@@ -185,6 +217,7 @@ fn grouped_columns(plan: &LogicalPlan) -> Vec<GroupKeys> {
     let mut seen = std::collections::HashSet::new();
     let mut stack: Vec<Arc<LogicalPlan>> = Vec::new();
     let mut out = Vec::new();
+    let mut aggregates = 0_usize;
     let mut visit = |p: &LogicalPlan, stack: &mut Vec<Arc<LogicalPlan>>| {
         if !seen.insert(std::ptr::from_ref(p)) {
             return;
@@ -195,7 +228,8 @@ fn grouped_columns(plan: &LogicalPlan) -> Vec<GroupKeys> {
             ..
         } = &p.node
         {
-            aggregate_keys(input, keys, &mut out);
+            aggregate_keys(aggregates, input, keys, &mut out);
+            aggregates += 1;
         }
         p.for_each_expr(&mut |e| subquery_plans(e, stack));
         p.for_each_child(&mut |c| stack.push(Arc::clone(c)));
@@ -208,7 +242,12 @@ fn grouped_columns(plan: &LogicalPlan) -> Vec<GroupKeys> {
 }
 
 /// [`grouped_columns`] of one aggregate over `input` grouped by `keys`.
-fn aggregate_keys(input: &LogicalPlan, keys: &[Arc<Expr>], out: &mut Vec<GroupKeys>) {
+fn aggregate_keys(
+    aggregate: usize,
+    input: &LogicalPlan,
+    keys: &[Arc<Expr>],
+    out: &mut Vec<GroupKeys>,
+) {
     let scans = scans_below(input);
     if scans.len() < 2 {
         return;
@@ -228,6 +267,7 @@ fn aggregate_keys(input: &LogicalPlan, keys: &[Arc<Expr>], out: &mut Vec<GroupKe
             continue;
         }
         out.push(GroupKeys {
+            aggregate,
             keys: ids,
             scan: first.id,
             others: scans
@@ -281,6 +321,51 @@ fn subquery_plans(e: &Arc<Expr>, out: &mut Vec<Arc<LogicalPlan>>) {
         }
         x.for_each_child(&mut |c| stack.push(Arc::clone(c)));
     }
+}
+
+/// The columns of `plan` (subquery plans left out) that an `=` or `<=>`
+/// between two columns reads, in a filter or a join condition: the equi-join
+/// keys, whatever form the query wrote the join in.
+fn equated_columns(plan: &LogicalPlan) -> std::collections::HashSet<krishiv_plan::AttrId> {
+    use krishiv_plan::{Builtin, FunctionId, ResolvedExpr, ResolvedFunction};
+    let mut out = std::collections::HashSet::new();
+    let mut plans = std::collections::HashSet::new();
+    let mut exprs = std::collections::HashSet::new();
+    let mut stack = vec![plan];
+    while let Some(p) = stack.pop() {
+        if !plans.insert(std::ptr::from_ref(p)) {
+            continue;
+        }
+        let mut roots = Vec::new();
+        match &p.node {
+            PlanNode::Filter { predicate, .. } => roots.push(Arc::clone(predicate)),
+            PlanNode::Join {
+                condition: krishiv_plan::JoinCondition::On(c),
+                ..
+            } => roots.push(Arc::clone(c)),
+            _ => {}
+        }
+        while let Some(x) = roots.pop() {
+            if !exprs.insert(Arc::as_ptr(&x)) {
+                continue;
+            }
+            if let ExprNode::Resolved(ResolvedExpr::Function(ResolvedFunction {
+                id: FunctionId::Builtin(Builtin::Eq | Builtin::EqNullSafe),
+                args,
+                ..
+            })) = &x.node
+                && let [a, b] = args.as_slice()
+                && let (Some(a), Some(b)) = (column_of(a), column_of(b))
+            {
+                out.extend([a, b]);
+            }
+            if !matches!(x.node, ExprNode::Subquery { .. }) {
+                x.for_each_child(&mut |c| roots.push(Arc::clone(c)));
+            }
+        }
+        p.for_each_child(&mut |c| stack.push(c.as_ref()));
+    }
+    out
 }
 
 /// The attribute ids an equality or `IN` in a `Filter` condition of `plan`

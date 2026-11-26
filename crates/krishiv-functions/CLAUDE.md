@@ -63,7 +63,8 @@ Paths are relative to this crate.
   `unix_date`, `add_months`, `last_day`, `next_day`, `trunc`, `date_trunc`, `months_between`, `make_date`, `from_utc_timestamp`/
   `to_utc_timestamp` and `convert_timezone`, plus the pattern-driven functions `date_format`, `to_date`/`try_to_date`,
   `to_timestamp`/`try_to_timestamp`/`to_timestamp_ltz`/`to_timestamp_ntz`, `unix_timestamp`/`to_unix_timestamp`,
-  `from_unixtime` and `current_timezone`. Zones resolve through the kernels' `resolve_zone` (fixed offsets without the
+  `from_unixtime` and `current_timezone`; `scalar/datetime/time_format.rs` is `date_format` of a `TIME` (Spark 4.3:
+  `TimeFormatter` over the nanoseconds, `Purpose::FormatTime`, a date or zone field `INVALID_PARAMETER_VALUE.PATTERN`). Zones resolve through the kernels' `resolve_zone` (fixed offsets without the
   database, region and short ids against `jiff`'s bundled TZDB); anything else (`xx`, `abc`,
   `etc/utc`, `Etc/GMT+05`) is `INVALID_TIMEZONE`. Region zones work as function arguments, in patterns and as the session zone (`spark.sql.session.timeZone`, whose
   default is the machine's zone, as in Spark: `krishiv-session/src/conf.rs`). The

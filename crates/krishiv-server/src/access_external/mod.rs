@@ -217,6 +217,13 @@ impl ExternalAccess {
         let mut version: Option<u64> = None;
         let mut one_version = true;
         let who = convert::principal(principal);
+        // The SQL statement the check is asked for, if any (ADR 0049 §3).
+        let statement = krishiv_session::StatementContext::current();
+        let statement_class = statement
+            .as_ref()
+            .map(|s| s.class().to_owned())
+            .unwrap_or_default();
+        let query_id = statement.and_then(|s| s.query_id()).unwrap_or_default();
         for chunk in items.chunks(MAX_ITEMS_PER_CHECK) {
             let message = pb::CheckRequest {
                 principal: Some(who.clone()),
@@ -227,8 +234,8 @@ impl ExternalAccess {
                         privilege: convert::privilege(*p).into(),
                     })
                     .collect(),
-                statement_class: String::new(),
-                query_id: String::new(),
+                statement_class: statement_class.clone(),
+                query_id: query_id.clone(),
             };
             self.calls.fetch_add(1, Ordering::Relaxed);
             let seq = self.begin_call();

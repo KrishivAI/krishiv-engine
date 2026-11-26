@@ -17,7 +17,9 @@ use delta_kernel::{
 };
 use krishiv_common::error::{ErrorClass, KrishivError};
 use krishiv_exec::CancellationToken;
-use krishiv_io::{IoConfig, IoScheduler, SettledLocalFileSystem, StoreId};
+use krishiv_io::{IoConfig, IoScheduler, StoreId};
+
+use crate::TestLocalStore as SettledLocalFileSystem;
 use object_store::ObjectStore;
 use url::Url;
 
@@ -1119,6 +1121,12 @@ fn symlinks_out_of_a_local_root_are_refused() {
     assert!(root.confine(&inside).is_ok());
     let not_yet = Url::from_file_path(via.join("_delta_log/00000000000000000009.json")).unwrap();
     assert!(root.confine(&not_yet).is_ok());
+    // The same file spelled through the link's target (macOS `/var` against `/private/var`) is
+    // inside too, and a sibling of the target is not.
+    let real = Url::from_file_path(f.dir.join("_delta_log/00000000000000000000.json")).unwrap();
+    assert!(root.confine(&real).is_ok());
+    let sibling = Url::from_file_path(format!("{}2/_delta_log/0.json", f.dir.display())).unwrap();
+    assert!(root.confine(&sibling).is_err());
 }
 
 #[test]

@@ -315,6 +315,14 @@ fn plan(m: &pb::PhysicalPlan, limits: &Limits) -> Result<PhysicalPlan> {
     {
         return Err(corrupt("an unknown binary output style"));
     }
+    // Likewise the version: absent means Spark 4.2 (every plan written before the feature), so
+    // an encoder never sends "4.2". The lines are `krishiv_kernels::SparkVersion::ALL` but 4.2
+    // (`spark_version_lines_match_the_kernels` keeps them equal).
+    if let Some(line) = env.spark_version.as_deref()
+        && !matches!(line, "4.0" | "4.1" | "4.3")
+    {
+        return Err(corrupt("an unknown Spark version"));
+    }
     let env = ExprEnv {
         ansi: env.ansi,
         // The wire carries the flag for the `legacy_statistical_aggregate`
@@ -332,6 +340,7 @@ fn plan(m: &pb::PhysicalPlan, limits: &Limits) -> Result<PhysicalPlan> {
         legacy_coding_error_action: env.legacy_coding_error_action.unwrap_or(false),
         legacy_time_parser: env.legacy_time_parser.unwrap_or(false),
         binary_output_style: env.binary_output_style.as_deref().map(std::sync::Arc::from),
+        spark_version: env.spark_version.as_deref().map(std::sync::Arc::from),
     };
     if !env.zone_name_matches_zone() {
         return Err(corrupt("a session zone name that is not its offset"));
@@ -976,6 +985,7 @@ impl Decoder {
                         id: f.id,
                         key: 0,
                         options: f.options,
+                        bound_column: None,
                     })?
                     .options;
                     Ok(ExchangeFilterPlan {
@@ -1514,6 +1524,11 @@ fn partitioning(p: &pb::Partitioning) -> Result<Partitioning> {
 
 fn join_filter(f: &pb::JoinFilter) -> Result<JoinFilterPlan> {
     let o = required(&f.options, "filter options")?;
+    // A bound column is one side of a residual's comparison: a two-sided
+    // range over it would drop probe rows the residual keeps.
+    if f.bound_column.is_some() && o.side == pb::RangeSide::Both as i32 {
+        return Err(corrupt("a bound column on a two-sided range"));
+    }
     Ok(JoinFilterPlan {
         id: FilterId(f.id),
         key: usize_of(f.key)?,
@@ -1528,7 +1543,14 @@ fn join_filter(f: &pb::JoinFilter) -> Result<JoinFilterPlan> {
             bloom_max_fpp: o.bloom_max_fpp,
             bloom_bytes: o.bloom_bytes,
             bloom_spill_bytes: o.bloom_spill_bytes,
+            side: match pb::RangeSide::try_from(o.side) {
+                Ok(pb::RangeSide::Both) => krishiv_io::RangeSide::Both,
+                Ok(pb::RangeSide::Upper) => krishiv_io::RangeSide::Upper,
+                Ok(pb::RangeSide::Lower) => krishiv_io::RangeSide::Lower,
+                Err(_) => return Err(corrupt("an unknown range side")),
+            },
         },
+        column: f.bound_column.map(usize_of).transpose()?,
     })
 }
 

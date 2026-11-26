@@ -935,22 +935,12 @@ impl Session {
             ),
             _ => return Err(internal("a MERGE source of an unknown form".to_owned())),
         };
-        let key = |target: &krishiv_sql::ast::ObjectName| -> (String, bool) {
-            // `SET t.c = ..`: the qualifier names the target (its alias or table name).
-            let mut parts: Vec<&str> = target.parts.iter().map(|p| p.value.as_str()).collect();
-            if parts.len() > 1
-                && (parts[0].eq_ignore_ascii_case(&target_alias)
-                    || parts[0].eq_ignore_ascii_case(&name.name))
-            {
-                parts.remove(0);
-            }
-            (parts.join("."), parts.len() > 1)
-        };
-        // An `INSERT` column resolves against the target as delta-spark resolves it (a delta-spark
-        // 4.4.1 run): under an alias only the alias qualifies it, else the table's name,
-        // `namespace.name` or `spark_catalog.namespace.name` (any case).
+        // A `SET` or `INSERT` column resolves against the target as delta-spark resolves it (a
+        // delta-spark 4.4.1 run): under an alias only the alias qualifies it, else the table's
+        // name, `namespace.name` or `spark_catalog.namespace.name` (any case). Any other first part
+        // stays, so it is a nested field or, naming no target column, an unresolved name.
         let explicit_alias = m.target_alias.is_some();
-        let insert_key = |parts: &[krishiv_sql::ast::Ident]| -> (String, bool) {
+        let target_key = |parts: &[krishiv_sql::ast::Ident]| -> (String, bool) {
             let parts: Vec<&str> = parts.iter().map(|p| p.value.as_str()).collect();
             let qualifiers: Vec<Vec<&str>> = if explicit_alias {
                 vec![vec![target_alias.as_str()]]
@@ -983,7 +973,7 @@ impl Session {
                     assignments
                         .iter()
                         .map(|a| {
-                            let (column, nested) = key(&a.target);
+                            let (column, nested) = target_key(&a.target.parts);
                             Assignment {
                                 column,
                                 nested,
@@ -1003,7 +993,7 @@ impl Session {
                         .iter()
                         .zip(values)
                         .map(|(c, v)| {
-                            let (column, nested) = insert_key(&c.parts);
+                            let (column, nested) = target_key(&c.parts);
                             Assignment {
                                 nested,
                                 column,

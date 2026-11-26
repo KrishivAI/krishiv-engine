@@ -272,7 +272,7 @@ impl Session {
                 .exists(&key, env.analysis.conf.case_sensitive)
         {
             return Err(TempTableOrViewAlreadyExists {
-                relation_name: shown,
+                relation_name: shown.clone(),
             }
             .into());
         }
@@ -358,16 +358,22 @@ impl Session {
         } else {
             Arc::clone(&df.plan)
         };
-        self.state.catalog.put(
-            &key,
-            TempTable::sql_view(
-                plan,
-                columns,
-                original
-                    .and_then(|o| o.get(v.query.span.start..v.query.span.end))
-                    .map(str::to_owned),
-            ),
+        let table = TempTable::sql_view(
+            plan,
+            columns,
+            original
+                .and_then(|o| o.get(v.query.span.start..v.query.span.end))
+                .map(str::to_owned),
         );
+        if v.or_replace {
+            self.state.catalog.put(&key, table);
+        } else if !self.state.catalog.put_new(&key, table, case_sensitive) {
+            // Another statement created the name while this one analyzed its query.
+            return Err(TempTableOrViewAlreadyExists {
+                relation_name: shown,
+            }
+            .into());
+        }
         self.state.cache.forget_table(&v.name.value);
         self.empty_frame().await
     }

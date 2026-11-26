@@ -4,17 +4,37 @@
 use super::*;
 use krishiv_kernels::cast::{TimestampText, timestamp_text};
 
-/// The cast a `TIME '..'` literal binds to (an explicit `Ansi` string cast to `TIME(6)`, never what the parser
-/// writes): it passes the `spark.sql.timeType.enabled` gate again, so a plan analyzed once analyzes to itself.
+/// A cast a `TIME '..'` literal binds to (`time.rs` `time_literal`; an explicit `Ansi` cast, never what
+/// the parser writes for a user's cast): a string read as `TIME(6)` (`parse_time`) or as `TIME(9)`
+/// (`parse_time_nanos`), or such a `TIME(9)` cast cut to `TIME(7|8)`. It passes the
+/// `spark.sql.timeType.enabled` gate again, so a plan analyzed once analyzes to itself under every
+/// precision.
 pub(in crate::analyzer) fn is_time_literal_cast(
     inner: &Expr,
     to: &DataType,
     mode: CastMode,
 ) -> bool {
-    mode == CastMode::Ansi
-        && *to == (DataType::Time { precision: 6 })
-        && matches!(&inner.node, ExprNode::Literal(Literal::String(v))
-            if krishiv_kernels::cast::parse_time(v).is_some())
+    use krishiv_kernels::cast::{parse_time, parse_time_nanos};
+    if mode != CastMode::Ansi {
+        return false;
+    }
+    match (to, &inner.node) {
+        (DataType::Time { precision: 6 }, ExprNode::Literal(Literal::String(v))) => {
+            parse_time(v).is_some()
+        }
+        (DataType::Time { precision: 9 }, ExprNode::Literal(Literal::String(v))) => {
+            parse_time_nanos(v).is_some()
+        }
+        (
+            DataType::Time { precision: 7 | 8 },
+            ExprNode::Cast {
+                expr,
+                to: nine @ DataType::Time { precision: 9 },
+                mode,
+            },
+        ) => is_time_literal_cast(expr, nine, *mode),
+        _ => false,
+    }
 }
 
 pub(in crate::analyzer) fn literal_type(v: &Literal) -> Option<DataType> {

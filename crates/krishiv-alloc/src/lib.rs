@@ -528,11 +528,13 @@ mod tests {
     }
 
     /// Runs `child_reports_options` in a child process with `arg` and `env`.
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
     fn child(arg: Option<&str>, env: &[(&str, &str)]) -> String {
         report(arg, env, "OPTIONS ")
     }
 
     /// The `prefix` line of `child_reports_options` in a child process.
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
     fn report(arg: Option<&str>, env: &[(&str, &str)], prefix: &str) -> String {
         let mut c = std::process::Command::new(std::env::current_exe().unwrap());
         c.args(["tests::child_reports_options", "--exact", "--nocapture"])

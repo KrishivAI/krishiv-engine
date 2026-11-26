@@ -182,6 +182,27 @@ const CASES: &[(&str, &str)] = &[
         "push_union_widened_branch",
         "SELECT * FROM (SELECT a FROM t UNION ALL SELECT c FROM t) x WHERE a > 1",
     ),
+    // `DropEmptyUnionInputs` (Spark's `PropagateEmptyRelation` union case): the first input
+    // dropped, so a projection gives the rest the union's ids.
+    (
+        "drop_empty_union_first_input",
+        "SELECT * FROM (SELECT a, 's' AS k FROM t UNION ALL SELECT a, 'u' AS k FROM u) x WHERE k = 'u' AND a > 1",
+    ),
+    // The kept input's column is not nullable, the union's is: the projection keeps it nullable.
+    (
+        "drop_empty_union_keeps_nullability",
+        "SELECT * FROM (SELECT a, 1 AS n, 's' AS k FROM t UNION ALL SELECT a, CAST(NULL AS INT), 'u' AS k FROM u) x WHERE k = 's'",
+    ),
+    // Every input empty: the union stays (the empty relation is another rule's).
+    (
+        "drop_empty_union_all_empty",
+        "SELECT * FROM (SELECT a, 's' AS k FROM t UNION ALL SELECT a, 'u' AS k FROM u) x WHERE k = 'z'",
+    ),
+    // A distinct `UNION` of three inputs: the two left stay a union under the distinct.
+    (
+        "drop_empty_union_distinct",
+        "SELECT * FROM (SELECT a, 's' AS k FROM t UNION SELECT a, 'u' AS k FROM u UNION SELECT a, 's' AS k FROM u) x WHERE k = 's'",
+    ),
     (
         "push_constant_through_aggregate",
         "SELECT * FROM (SELECT a, 'g' AS k, count(*) AS n FROM t GROUP BY a) x WHERE k = 'h'",
@@ -976,4 +997,56 @@ fn a_file_scan_may_read_no_column() {
     }
     // A text read keeps its column.
     assert_eq!(read_as("text"), 1, "text");
+}
+
+/// A view over files (`CREATE TEMPORARY VIEW hits AS SELECT * FROM
+/// parquet.`...``, ClickBench's entry) puts a projection that renames each
+/// column above the scan. `count(*)` through it still reads no column: a
+/// rename of a bare column changes no value and raises nothing. A projection
+/// computing anything (here a cast that could raise) keeps its column.
+#[test]
+fn a_renaming_projection_lets_a_file_scan_read_no_column() {
+    let ctx = support::ctx();
+    let width = |sql: &str| {
+        let plan = support::resolve(sql, &ctx);
+        let root = Arc::clone(plan.root())
+            .transform_up(&mut |n: Arc<LogicalPlan>| {
+                Ok::<_, std::convert::Infallible>(match &n.node {
+                    PlanNode::Scan(s) => Arc::new(LogicalPlan {
+                        node: PlanNode::Scan(Scan {
+                            source: krishiv_plan::ReadSource::files(
+                                "parquet",
+                                Vec::new(),
+                                std::collections::BTreeMap::new(),
+                            ),
+                            ..s.clone()
+                        }),
+                        origin: n.origin,
+                    }),
+                    _ => n,
+                })
+            })
+            .unwrap();
+        let plan = Plan::try_new(root).unwrap();
+        let optimized = optimize(&plan).unwrap();
+        assert!(
+            optimize(&optimized).unwrap().structurally_eq(&optimized),
+            "{sql} is a fixed point"
+        );
+        let mut node = Arc::clone(optimized.root());
+        loop {
+            if let PlanNode::Scan(s) = &node.node {
+                return (s.output.len(), optimized.root().to_string());
+            }
+            let mut next = None;
+            node.for_each_child(&mut |c| next = Some(Arc::clone(c)));
+            node = next.expect("a scan below");
+        }
+    };
+    let (n, plan) = width("SELECT count(*) AS n FROM (SELECT a AS x, b AS y FROM t)");
+    assert_eq!(n, 0, "renames:\n{plan}");
+    let (n, plan) = width("SELECT count(*) AS n FROM (SELECT a AS x, b FROM t)");
+    assert_eq!(n, 0, "renames and a bare column:\n{plan}");
+    let (n, plan) = width("SELECT count(*) AS n FROM (SELECT a + 1 AS x FROM t)");
+    assert_eq!(n, 1, "a computed entry keeps its column:\n{plan}");
 }

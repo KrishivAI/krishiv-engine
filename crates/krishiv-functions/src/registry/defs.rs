@@ -17,7 +17,7 @@ use super::collection::collect_set;
 use super::math::is_ansi_interval;
 use super::{Aggregate, Execution};
 use crate::signature::{
-    ArgType, CallTypes, Constant, FunctionKind, InputBuilder, InputType, Inputs,
+    ArgType, CallTypes, Constant, FunctionKind, InputBuilder, InputType, Inputs, SparkProfile,
 };
 
 /// A function's signature before the catalog adds arity, determinism and
@@ -207,15 +207,28 @@ fn always_null_timestamp(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     Ok(ArgType::new(DataType::Timestamp, true))
 }
 
-/// The `TIME` types a time function takes: the first is what an untyped
-/// `NULL` becomes.
-fn any_time() -> InputType {
+/// The `TIME` types a time function takes: `TIME(6)` first (what an untyped `NULL` becomes),
+/// then every other precision of the profile's `TIME` (`[0, 6]` before Spark 4.3, `[0, 9]` from it).
+fn any_time(c: &CallTypes<'_>) -> InputType {
+    let max = if c.profile() >= SparkProfile::V4_3 {
+        DataType::TIME_MAX_PRECISION
+    } else {
+        6
+    };
     InputType::StrictOneOf(
-        [6, 0, 1, 2, 3, 4, 5]
-            .into_iter()
+        std::iter::once(6)
+            .chain((0..=max).filter(|p| *p != 6))
             .map(|precision| DataType::Time { precision })
             .collect(),
     )
+}
+
+fn one_time_input(c: &CallTypes<'_>) -> Vec<InputType> {
+    vec![any_time(c)]
+}
+
+fn time_diff_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
+    vec![exact(DataType::String), any_time(c), any_time(c)]
 }
 
 /// A `TIME(6)` that is NULL for any row that does not parse.
@@ -223,6 +236,7 @@ fn time6_nullable(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     Ok(ArgType::new(DataType::Time { precision: 6 }, true))
 }
 
+/// The cast-named `time(x)`: a `CAST`, nullable as its argument.
 fn time6(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     typed(DataType::Time { precision: 6 }, c)
 }
@@ -236,8 +250,26 @@ fn time_seconds_input() -> InputType {
     exact(time_decimal())
 }
 
-fn time_seconds_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
-    typed(time_decimal(), c)
+// Spark's `TIME` functions are `RuntimeReplaceable` by a `StaticInvoke` or `Invoke` whose
+// `returnNullable` is the default `true`, so their results are nullable whatever the
+// arguments (4.2.0 and 4.3.0 `timeExpressions.scala`); only `current_time` is not.
+
+fn time_seconds_result(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    Ok(ArgType::new(time_decimal(), true))
+}
+
+/// `time_to_millis`, `time_to_micros` and `time_diff`: a nullable `BIGINT`.
+fn time_long(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    Ok(ArgType::new(DataType::Long, true))
+}
+
+/// `hour`, `minute`, `second`: an `INT`, nullable whatever the argument when it is a `TIME`
+/// (Spark's `HoursOfTime` and siblings), else as the argument (`Hour` of a timestamp).
+fn time_field(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    if matches!(c.data_type(0), Some(DataType::Time { .. })) {
+        return Ok(ArgType::new(DataType::Integer, true));
+    }
+    int(c)
 }
 
 /// `time_trunc(unit, time)`: the time's own type.
@@ -247,7 +279,7 @@ fn time_trunc_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
         .get(1)
         .and_then(|a| a.data_type.clone())
         .unwrap_or(DataType::Time { precision: 6 });
-    typed(t, c)
+    Ok(ArgType::new(t, true))
 }
 
 pub(super) fn double(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
@@ -277,17 +309,22 @@ fn clock_timestamp_ntz(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     Ok(ArgType::new(DataType::TimestampNtz, false))
 }
 
-/// `current_time([p])`: `TIME(p)`, `p` a foldable integer in `[0, 6]`
-/// (`TIME(6)` without it); never NULL.
+/// `current_time([p])`: `TIME(p)`, `p` a foldable integer in `[0, 6]` before Spark 4.3 and
+/// `[0, 9]` from it (`TimeType.MAX_PRECISION`; `TIME(6)` without it); never NULL.
 fn clock_time(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    let max: i64 = if c.profile() >= SparkProfile::V4_3 {
+        9
+    } else {
+        6
+    };
     let precision = match c.constant(0) {
         None if c.args().is_empty() => 6,
-        Some(Constant::Integral(n)) if (0..=6).contains(n) => u8::try_from(*n).unwrap_or(6),
+        Some(Constant::Integral(n)) if (0..=max).contains(n) => u8::try_from(*n).unwrap_or(6),
         Some(Constant::Integral(n)) => {
             return Err(DatatypeMismatchValueOutOfRange {
                 sql_expr: format!("\"current_time({n})\""),
-                expr_name: "precision".to_owned(),
-                value_range: "[0, 6]".to_owned(),
+                expr_name: "`precision`".to_owned(),
+                value_range: format!("[0, {max}]"),
                 current_value: n.to_string(),
             }
             .into());
@@ -544,7 +581,10 @@ fn extract_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
         Ok(Some(part)) if is_time_field(part) => InputType::OneOf(
             [DataType::Timestamp, DataType::TimestampNtz]
                 .into_iter()
-                .chain((0..=6).map(|precision| DataType::Time { precision }))
+                .chain(
+                    (0..=DataType::TIME_MAX_PRECISION)
+                        .map(|precision| DataType::Time { precision }),
+                )
                 .collect(),
         ),
         Ok(Some(_)) => exact(DataType::Date),
@@ -558,13 +598,31 @@ fn extract_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     if let Some(t) = c.data_type(1).filter(|t| is_interval(t)) {
         return interval_extract_result(c, t);
     }
-    let nullable = c.args().get(1).is_some_and(|a| a.nullable);
+    // A field of a `TIME` is nullable whatever the argument (Spark's `HoursOfTime` and
+    // siblings, `SecondsOfTimeWithFraction`).
+    let nullable = c
+        .args()
+        .get(1)
+        .is_some_and(|a| a.nullable || matches!(a.data_type, Some(DataType::Time { .. })));
     Ok(match extract_field(c)? {
         // `date_part(NULL, x)` is a NULL `double`.
         None => ArgType::new(DataType::Double, true),
-        Some(DatePart::Second) => {
-            ArgType::new(DataType::Decimal(DecimalType::try_new(8, 6)?), nullable)
-        }
+        // Spark 4.3: the seconds of a `time(p)` are a `decimal(p + 2, p)` (SPARK-57850);
+        // Spark 4.2: a `decimal(8, 6)` (its `time(p)` has `p <= 6`).
+        Some(DatePart::Second) => match c.data_type(1) {
+            Some(DataType::Time { precision })
+                if *precision > 6 || c.profile() >= SparkProfile::V4_3 =>
+            {
+                ArgType::new(
+                    DataType::Decimal(DecimalType::try_new(
+                        u32::from(*precision) + 2,
+                        u32::from(*precision),
+                    )?),
+                    nullable,
+                )
+            }
+            _ => ArgType::new(DataType::Decimal(DecimalType::try_new(8, 6)?), nullable),
+        },
         Some(_) => ArgType::new(DataType::Integer, nullable),
     })
 }
@@ -621,7 +679,7 @@ fn seconds_input() -> InputType {
 /// The `(date[, time[, zone]])` forms of `make_timestamp`.
 fn make_timestamp_date_inputs(n: usize) -> Vec<InputType> {
     let time = InputType::OneOf(
-        (0..=6)
+        (0..=DataType::TIME_MAX_PRECISION)
             .map(|precision| DataType::Time { precision })
             .collect(),
     );
@@ -966,9 +1024,23 @@ fn unix_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     Ok(ArgType::new(DataType::Long, !c.ansi() || c.any_nullable()))
 }
 
+/// `date_format`: a date-like value and a pattern; under the Spark 4.3 profile also a `TIME`,
+/// formatted as it is.
+fn date_format_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
+    let first = match c.data_type(0) {
+        Some(t @ DataType::Time { .. }) if c.profile() >= SparkProfile::V4_3 => exact(t.clone()),
+        _ => strict_date_like(),
+    };
+    vec![first, exact(DataType::String)]
+}
+
 /// `date_format`: NULL when an argument may be, or when the value's
 /// implicit cast to `TIMESTAMP` may yield NULL.
 fn date_format_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    // Spark 4.3 formats a `TIME` as it is (no cast): nullable as the arguments.
+    if matches!(c.data_type(0), Some(DataType::Time { .. })) {
+        return Ok(ArgType::new(DataType::String, c.any_nullable()));
+    }
     let nullable = c.any_nullable()
         || match c.data_type(0) {
             Some(DataType::Boolean | DataType::Binary) => {
@@ -1049,13 +1121,13 @@ fn datetime() -> Vec<Spec> {
     let any_timestamp = InputType::OneOf(
         [DataType::Timestamp, DataType::TimestampNtz]
             .into_iter()
-            .chain((0..=6).map(|precision| DataType::Time { precision }))
+            .chain((0..=DataType::TIME_MAX_PRECISION).map(|precision| DataType::Time { precision }))
             .collect(),
     );
     out.extend(scalar(
         &["hour", "minute", "second"],
         &Inputs::Expects(vec![any_timestamp]),
-        int,
+        time_field,
     ));
     out.extend(scalar(&["monthname", "dayname"], &date_only, string));
     out.extend(scalar(
@@ -1088,32 +1160,32 @@ fn datetime() -> Vec<Spec> {
             exact(DataType::Integer),
             seconds_input(),
         ]),
-        time6,
+        time6_nullable,
     ));
     out.extend(scalar(
         &["time_from_seconds"],
         &Inputs::Expects(vec![time_seconds_input()]),
-        time6,
+        time6_nullable,
     ));
     out.extend(scalar(
         &["time_from_millis", "time_from_micros"],
         &Inputs::Expects(vec![exact(DataType::Long)]),
-        time6,
+        time6_nullable,
     ));
     out.extend(scalar(
         &["time_to_seconds"],
-        &Inputs::Expects(vec![any_time()]),
+        &Inputs::Built(InputBuilder(one_time_input)),
         time_seconds_result,
     ));
     out.extend(scalar(
         &["time_to_millis", "time_to_micros"],
-        &Inputs::Expects(vec![any_time()]),
-        long,
+        &Inputs::Built(InputBuilder(one_time_input)),
+        time_long,
     ));
     out.extend(scalar(
         &["to_time"],
         &Inputs::Expects(vec![InputType::Strict(DataType::String)]),
-        time6,
+        time6_nullable,
     ));
     out.extend(scalar(
         &["try_to_time"],
@@ -1122,8 +1194,8 @@ fn datetime() -> Vec<Spec> {
     ));
     out.extend(scalar(
         &["time_diff"],
-        &Inputs::Expects(vec![exact(DataType::String), any_time(), any_time()]),
-        long,
+        &Inputs::Built(InputBuilder(time_diff_inputs)),
+        time_long,
     ));
     out.extend(scalar(
         &["timestampadd"],
@@ -1197,7 +1269,7 @@ fn datetime() -> Vec<Spec> {
     ));
     out.extend(scalar(
         &["date_format"],
-        &Inputs::Expects(vec![strict_date_like(), exact(DataType::String)]),
+        &Inputs::Built(InputBuilder(date_format_inputs)),
         date_format_result,
     ));
     out.extend(scalar(
