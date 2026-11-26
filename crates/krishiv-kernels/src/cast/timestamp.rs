@@ -81,6 +81,12 @@ pub fn timestamp_has_zone(s: &str) -> bool {
 
 /// Parses one string.
 pub(crate) fn parse(s: &[u8]) -> Parsed {
+    parse_nanos(s).0
+}
+
+/// Parses one string, with the nanoseconds within the microsecond of its fraction (its digits 7 to 9;
+/// later digits are dropped), which [`Parsed::At`] does not hold.
+pub(crate) fn parse_nanos(s: &[u8]) -> (Parsed, u16) {
     let s = trim_all(s);
     // A time of day without a date (`T10:00`, `10:00:00`) is today's.
     let first_non_digit = s.iter().position(|b| !b.is_ascii_digit());
@@ -90,11 +96,11 @@ pub(crate) fn parse(s: &[u8]) -> Parsed {
         c.eat(b'T');
         // The time must be well formed; its zone is checked, not applied.
         return match time_of_day(&mut c) {
-            Some((_, zone)) => Parsed::NeedsClock(zone),
-            None => Parsed::Malformed,
+            Some((_, zone, _)) => (Parsed::NeedsClock(zone), 0),
+            None => (Parsed::Malformed, 0),
         };
     }
-    datetime(s).unwrap_or(Parsed::Malformed)
+    datetime(s).unwrap_or((Parsed::Malformed, 0))
 }
 
 /// A read position in the text.
@@ -132,7 +138,7 @@ impl Cursor<'_> {
     }
 }
 
-fn datetime(s: &[u8]) -> Option<Parsed> {
+fn datetime(s: &[u8]) -> Option<(Parsed, u16)> {
     let mut c = Cursor { s, at: 0 };
     let sign = if c.eat(b'-') {
         -1
@@ -160,19 +166,20 @@ fn datetime(s: &[u8]) -> Option<Parsed> {
     let date = i128::from(days) * i128::from(MICROS_PER_DAY);
     let at_micros = |time: i128| i64::try_from(date + time).ok();
     if c.done() {
-        return Some(Parsed::At(at_micros(0)?, Zone::Session));
+        return Some((Parsed::At(at_micros(0)?, Zone::Session), 0));
     }
     // A time needs the whole date and a separator.
     if parts < 3 || !(c.eat(b' ') || c.eat(b'T')) {
         return None;
     }
-    let (time, zone) = time_of_day(&mut c)?;
-    Some(Parsed::At(at_micros(time)?, zone))
+    let (time, zone, nanos) = time_of_day(&mut c)?;
+    Some((Parsed::At(at_micros(time)?, zone), nanos))
 }
 
 /// The time of day and zone at the cursor: `h[:m[:s[.f]]]`, then a zone
 /// (only after the seconds), up to the end of the text.
-fn time_of_day(c: &mut Cursor<'_>) -> Option<(i128, Zone)> {
+fn time_of_day(c: &mut Cursor<'_>) -> Option<(i128, Zone, u16)> {
+    let mut nanos = 0;
     let mut time = i128::from(c.number(1, 2).filter(|h| *h <= 23)? * 3600 * MICROS_PER_SECOND);
     if !c.done() {
         if !c.eat(b':') {
@@ -185,7 +192,9 @@ fn time_of_day(c: &mut Cursor<'_>) -> Option<(i128, Zone)> {
             }
             time += i128::from(c.number(1, 2).filter(|s| *s <= 59)? * MICROS_PER_SECOND);
             if c.eat(b'.') {
-                time += i128::from(fraction(c)?);
+                let (micros, sub) = fraction(c)?;
+                time += i128::from(micros);
+                nanos = sub;
             }
         }
     }
@@ -195,17 +204,23 @@ fn time_of_day(c: &mut Cursor<'_>) -> Option<(i128, Zone)> {
         // Only the seconds (or their fraction) may be followed by a zone.
         zone(c.s.get(c.at..)?)?
     };
-    Some((time, zone))
+    Some((time, zone, nanos))
 }
 
-/// The digits after `.` (any number; the first 6 are kept) as microseconds.
-fn fraction(c: &mut Cursor<'_>) -> Option<i64> {
+/// The digits after `.` (any number; the first 6 are kept) as microseconds, and digits 7 to 9 as the
+/// nanoseconds within the microsecond.
+fn fraction(c: &mut Cursor<'_>) -> Option<(i64, u16)> {
     let run = c.s.get(c.at..)?;
     let n = run.iter().take_while(|b| b.is_ascii_digit()).count();
     c.at += n;
     let kept = run.get(..n.min(6))?;
     let micros = kept.iter().fold(0_i64, |v, b| v * 10 + i64::from(b - b'0'));
-    Some(micros * 10_i64.pow(u32::try_from(6 - kept.len()).ok()?))
+    let sub = run.get(n.min(6)..n.min(9))?;
+    let nanos = sub.iter().fold(0_u16, |v, b| v * 10 + u16::from(b - b'0'));
+    Some((
+        micros * 10_i64.pow(u32::try_from(6 - kept.len()).ok()?),
+        nanos * 10_u16.pow(u32::try_from(3 - sub.len()).ok()?),
+    ))
 }
 
 /// The zone text after the seconds: `Z`, ` +05:30`, `UTC+8`, a region id.

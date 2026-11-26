@@ -193,7 +193,7 @@ pub(crate) fn format_date(days: i64, out: &mut String) {
 /// A timestamp rendering of local `micros`: the date, `HH:mm:ss`, and the
 /// fraction without trailing zeros.
 pub(crate) fn format_timestamp(micros: i64, out: &mut String) {
-    format_wide(i128::from(micros), out);
+    format_wide(i128::from(micros), 0, out);
 }
 
 /// Appends the UTC instant `utc` as local text in `tz` (or as is when `tz`
@@ -205,11 +205,30 @@ pub(crate) fn format_timestamp_in_zone(utc: i64, tz: Option<&dyn TimeZoneRules>,
     let offset = tz.map_or(0, |tz| tz.offset_at_utc(utc.div_euclid(MICROS_PER_SECOND)));
     format_wide(
         i128::from(utc) + i128::from(offset) * i128::from(MICROS_PER_SECOND),
+        0,
         out,
     );
 }
 
-fn format_wide(micros: i128, out: &mut String) {
+/// [`format_timestamp_in_zone`] of a nanosecond timestamp (`TIMESTAMP[_NTZ](7..=9)`): the fraction
+/// keeps up to nine digits, trailing zeros dropped.
+pub(crate) fn format_timestamp_nanos_in_zone(
+    utc_nanos: i64,
+    tz: Option<&dyn TimeZoneRules>,
+    out: &mut String,
+) {
+    let utc = utc_nanos.div_euclid(1_000);
+    let sub = u16::try_from(utc_nanos.rem_euclid(1_000)).unwrap_or(0);
+    let offset = tz.map_or(0, |tz| tz.offset_at_utc(utc.div_euclid(MICROS_PER_SECOND)));
+    format_wide(
+        i128::from(utc) + i128::from(offset) * i128::from(MICROS_PER_SECOND),
+        sub,
+        out,
+    );
+}
+
+/// `micros` as local text; `sub` (`0..1000`) are the nanoseconds within the last microsecond.
+fn format_wide(micros: i128, sub: u16, out: &mut String) {
     use std::fmt::Write as _;
     let per_day = i128::from(MICROS_PER_DAY);
     let days = micros.div_euclid(per_day);
@@ -225,8 +244,12 @@ fn format_wide(micros: i128, out: &mut String) {
         secs / 60 % 60,
         secs % 60
     );
-    if frac != 0 {
-        let digits = format!("{frac:06}");
+    if frac != 0 || sub != 0 {
+        let digits = if sub == 0 {
+            format!("{frac:06}")
+        } else {
+            format!("{frac:06}{sub:03}")
+        };
         let _ = write!(out, ".{}", digits.trim_end_matches('0'));
     }
 }
