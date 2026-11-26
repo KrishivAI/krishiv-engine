@@ -244,6 +244,9 @@ pub(crate) struct Planner<'a> {
     pub(crate) next_exchange: u64,
     /// The runtime filters each scan receives, by scan.
     pub(crate) scan_filters: HashMap<ScanId, Vec<ScanRuntimeFilter>>,
+    /// The scans that feed the build of a join whose runtime filter is
+    /// worth a large scan's wait (`runtime_filter.rs` `feeds_selective_build`).
+    pub(crate) selective_feeds: HashSet<ScanId>,
     /// The estimates of every relation of the plan, computed once.
     pub(crate) stats: PlanStats,
     /// The schema of each loop being planned, by id, for its `LoopRef`s.
@@ -310,6 +313,7 @@ impl<'a> Planner<'a> {
             next_subquery: next_id.saturating_add(SUBQUERY_GAP),
             next_exchange: 0,
             scan_filters: HashMap::new(),
+            selective_feeds: HashSet::new(),
             loops: HashMap::new(),
             moves: super::build_project::Moves::default(),
             unseeded_samples: 0,

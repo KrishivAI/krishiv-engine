@@ -975,6 +975,51 @@ fn a_scan_waits_only_for_a_filter_from_another_table() {
     );
 }
 
+/// Lever R (study 58, TPC-DS q59): a scan feeding the build of a join that
+/// filters a far larger scan waits for a filter from its own table when
+/// that filter's build keeps part of the table by a predicate the scan does
+/// not have: the filter's value is the larger scan's rows it cuts.
+#[test]
+fn a_scan_feeding_a_selective_build_waits_for_a_narrower_build_of_its_table() {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let mut rng = 13;
+    write(dir.path(), "big.parquet", &table(&mut rng, 8000, 100, 0));
+    write(dir.path(), "small.parquet", &table(&mut rng, 100, 100, 0));
+    let sources = [
+        ("big", vec!["big.parquet".to_owned()]),
+        ("small", vec!["small.parquet".to_owned()]),
+    ];
+    let t = parquet_files(dir.path(), &sources, true, &rt);
+    let waits = |q: &str| {
+        let mut out = Vec::new();
+        scan_waits(t.plan_sql(q).unwrap().plan.root(), &mut out);
+        out
+    };
+    let q = |reader: &str, copy: &str| {
+        format!(
+            "SELECT d.v, w.t FROM small d JOIN (SELECT s.k32 AS wk, sum(b.v) AS t \
+             FROM big b JOIN small s ON b.k64 = s.k64 {copy} GROUP BY s.k32) w \
+             ON d.k32 = w.wk {reader}"
+        )
+    };
+    // q59's shape: every scan waits, the copy's `small` too.
+    let narrowed = waits(&q("WHERE d.v < 5", ""));
+    assert!(
+        narrowed.len() >= 2 && narrowed.iter().all(|w| *w),
+        "{narrowed:?}"
+    );
+    // A build of the whole table: its keys are one domain with the scan's.
+    let whole = waits(&q("", ""));
+    assert!(whole.iter().any(|w| !w), "{whole:?}");
+    // The scan has a predicate of its own (TPC-DS q64's copies).
+    let both = waits(&q("WHERE d.v < 5", "WHERE s.v < 50"));
+    assert!(both.iter().any(|w| !w), "{both:?}");
+}
+
 /// `ORDER BY ... LIMIT` queries whose rows have one right answer: `v` breaks
 /// every tie. The first key is what a top-N bounds: NULLs on either side,
 /// NaN and signed zeros, decimals, strings, an `OFFSET`, a filter, and more

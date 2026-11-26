@@ -32,7 +32,14 @@
 //! q81, q64 and q74 ran 1.12–1.30x slower waiting). Estimates cannot tell
 //! that case apart alone: q95 and q30 have the same ratio of scan to build
 //! rows, and only q95's filter pays. Even then a build far smaller than the
-//! scan is selective enough (q58's seven dates of `date_dim`).
+//! scan is selective enough (q58's seven dates of `date_dim`). So is one
+//! whose value is transitive (lever R, study 58): the scan feeds the build
+//! of a join whose filter a scan at least 20 times that build waits for,
+//! and the filter's build reads the table through a predicate the scan
+//! does not have (q59: the inlined `wss` copy's `date_dim` builds the
+//! filter on `store_sales`; the reader's `date_dim` keeps 12 months). Not
+//! waiting, the copy raced the reader's build and, when it won, aggregated
+//! all of `store_sales` (26.9M rows at SF10, not 5.5M).
 //!
 //! # Cost model
 //! min/max and the distinct keys (up to the larger of
@@ -86,6 +93,7 @@
 //! waits for the filter ([`scan_waits`]) still reads the uncapped
 //! estimate. Spark's size guards are not used: they are tuned for clusters.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use super::explain::{FilterGap, FilterGapReason};
@@ -404,6 +412,7 @@ impl Planner<'_> {
             reason,
         };
         let input_type = |id: AttrId| column_type(probe, id);
+        let mut selective = false;
         for (key, (e, key_type)) in probe_exprs.iter().zip(key_types).enumerate() {
             if !krishiv_io::runtime_filter::supported_key_type(key_type) {
                 continue;
@@ -445,6 +454,16 @@ impl Planner<'_> {
                     && rows <= s.bloom_max_items as f64
                     && site.scan_rows >= (4.0 * rows).max(s.min_application_rows as f64);
                 let reads_scan_table = reads_source(build, &site.source);
+                let waits = scan_waits(site.scan_rows, build_rows, reads_scan_table)
+                    || (reads_scan_table
+                        && self.selective_feeds.contains(&site.scan)
+                        && narrows(build, &site.source)
+                        && !scan_has_filter(&probe.node, site.scan));
+                // A large scan waits for this build: whatever feeds the
+                // build is worth a wait of its own (lever R).
+                selective |= waits
+                    && !reads_scan_table
+                    && site.scan_rows >= FEEDING_BUILD * build_rows.max(1.0);
                 let id = FilterId(self.next_filter);
                 self.next_filter += 1;
                 self.scan_filters
@@ -465,7 +484,7 @@ impl Planner<'_> {
                     max_values: s.max_values,
                     exact_max_values: s.exact_max_values,
                     bloom,
-                    scan_waits: scan_waits(site.scan_rows, build_rows, reads_scan_table),
+                    scan_waits: waits,
                     bloom_max_items: s.bloom_max_items,
                     bloom_max_bytes: s.bloom_max_bytes,
                     ..KeyFilterOptions::default()
@@ -491,6 +510,9 @@ impl Planner<'_> {
                     column: None,
                 });
             }
+        }
+        if selective {
+            feeding_scans(build, &mut self.selective_feeds);
         }
         out
     }
@@ -562,6 +584,43 @@ const SELECTIVE_BUILD: f64 = 1_000.0;
 /// module docs).
 pub(crate) fn scan_waits(scan_rows: f64, build_rows: f64, build_reads_scan_table: bool) -> bool {
     !build_reads_scan_table || scan_rows >= SELECTIVE_BUILD * build_rows.max(1.0)
+}
+
+/// How many times a scan must be larger than a build it waits for before
+/// the scans feeding that build wait for filters of their own table
+/// (lever R, study 58: TPC-DS q59's `date_dim` copy feeds a build that
+/// filters `store_sales`, 394 times its rows at SF10).
+const FEEDING_BUILD: f64 = 20.0;
+
+/// The scans whose rows `node` is, through filters, projections and
+/// exchanges: the scans feeding a build.
+fn feeding_scans(node: &PhysNode, out: &mut HashSet<ScanId>) {
+    match node {
+        PhysNode::Scan(s) => {
+            out.insert(s.id);
+        }
+        PhysNode::Filter { input, .. } | PhysNode::Project { input, .. } => {
+            feeding_scans(input, out);
+        }
+        PhysNode::Exchange(e) => feeding_scans(&e.input, out),
+        _ => {}
+    }
+}
+
+/// Whether `node`'s plan reads `source` through a scan with a predicate
+/// of its own: a build that keeps only part of the table, whose filter can
+/// drop most of another scan of it.
+fn narrows(node: &PhysNode, source: &ReadSource) -> bool {
+    matches!(node, PhysNode::Scan(s) if s.scan.source == *source && s.filter.is_some())
+        || node.children().into_iter().any(|c| narrows(c, source))
+}
+
+/// Whether the scan `id` in `node`'s plan has a predicate pushed into it.
+fn scan_has_filter(node: &PhysNode, id: ScanId) -> bool {
+    match node {
+        PhysNode::Scan(s) if s.id == id => s.filter.is_some(),
+        _ => node.children().into_iter().any(|c| scan_has_filter(c, id)),
+    }
 }
 
 /// Whether `node`'s plan scans `source`.
