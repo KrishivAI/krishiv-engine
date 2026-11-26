@@ -24,6 +24,9 @@ SELECT region, sum(amount) FROM delta.`s3://bucket/trips` GROUP BY region;
 | `DELETE`, `UPDATE` and `MERGE INTO` | yes, copy-on-write (a changed file is rewritten); see [Delta DML](delta-dml.md) |
 | Deletion vectors on write | not written; rows are rewritten |
 | Change data feed read | not yet |
+| Time travel (`versionAsOf`, `timestampAsOf`, `VERSION AS OF`, `TIMESTAMP AS OF`) | not yet; refused with `UNSUPPORTED_FEATURE.TIME_TRAVEL` |
+| `DESCRIBE HISTORY`, `DESCRIBE DETAIL` | not yet; the statement is read as a table name and fails with `TABLE_OR_VIEW_NOT_FOUND` |
+| `VACUUM`, `OPTIMIZE` | not yet; a `PARSE_SYNTAX_ERROR` |
 
 Delta support is the `delta` cargo feature. Of the release artifacts, the Docker image and the Python wheel are built
 with it; the release `krishiv` binary is not (see [What each artifact

@@ -24,6 +24,10 @@ The host name is `localhost` on purpose: `pyspark-client` sends a token over a p
 
 `spark.sql(...)` through the client works, and so does the DataFrame API (`range`, `select`, `join`, `groupBy`, `agg`).
 
+## Which clients connect
+
+`start_local()` is tested with `pyspark-client` 4.1 and later. A PySpark 3.5 client forces TLS when the connection string carries a token, so it fails the handshake against `start_local()`, which has no TLS. To use a 3.5 client, run `krishiv server --connect-port <port>` on loopback without a token and connect to `sc://localhost:<port>`; that combination returns the right results (`version`, `range(5).collect()`, `toPandas()`). Do not run a tokenless server on an address other machines can reach: see [Securing a single-node server](single-node-server-security.md).
+
 ## Stop it
 
 `server.stop()` closes the listener and waits for the server's thread, so the port is free when it returns. Leaving the `with` block does the same, and so does the end of the interpreter if you forget. Stopping a stopped server does nothing.
