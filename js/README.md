@@ -29,6 +29,8 @@ views between calls (the server's session cookie). Remote mode needs no native b
 - `df.toArrow()` an Apache Arrow `Table`; `df.stream()` the record batches as they arrive.
 - `df.collect()` plain objects. 64-bit integers are `bigint`; pass `{ bigint: "number" | "string" }` to change that, and
   `{ decimal: "number" }` for decimals (strings by default, so nothing is rounded).
+  Dates are `YYYY-MM-DD` strings and timestamps `YYYY-MM-DDTHH:MM:SS.ffffffZ` strings (microsecond-exact; a timestamp
+  without a zone is read as UTC). Lists and structs become arrays and objects, recursively.
 - `toRows`, `toColumns`, `toJSON` (bigint-safe), `schemaToDDL` work on any Arrow table.
 
 ## Errors

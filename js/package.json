@@ -28,11 +28,12 @@
     "@grpc/grpc-js": "^1.14.0",
     "protobufjs": "^7.5.0"
   },
+  "overrides": { "esbuild": "^0.28.2" },
   "devDependencies": {
     "@types/node": "^22.0.0",
     "tsup": "^8.5.0",
     "typescript": "^5.9.0",
-    "vitest": "^3.2.0"
+    "vitest": "^5.1.2"
   },
   "repository": { "type": "git", "url": "git+https://github.com/KrishivAI/krishiv-engine.git", "directory": "js" },
   "publishConfig": { "access": "public", "provenance": true }
