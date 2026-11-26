@@ -1025,10 +1025,12 @@ fn unix_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
 }
 
 /// `date_format`: a date-like value and a pattern; under the Spark 4.3 profile also a `TIME`,
-/// formatted as it is.
+/// formatted as it is. Before 4.3 a `TIME` takes Spark's declared `TIMESTAMP` parameter
+/// (`DateFormatClass.inputTypes`), whose implicit cast the analyzer reports as refused.
 fn date_format_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
     let first = match c.data_type(0) {
         Some(t @ DataType::Time { .. }) if c.profile() >= SparkProfile::V4_3 => exact(t.clone()),
+        Some(DataType::Time { .. }) => exact(DataType::Timestamp),
         _ => strict_date_like(),
     };
     vec![first, exact(DataType::String)]

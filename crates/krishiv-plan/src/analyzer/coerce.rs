@@ -33,6 +33,7 @@
 
 use krishiv_types::{ArrayType, DataType, DecimalType, MapType, StructField, StructType};
 
+use super::SparkProfile;
 use super::catalog::{CallTypes, InputType, Inputs, Operator};
 use crate::{Builtin, CastMode};
 
@@ -135,6 +136,16 @@ pub(super) enum Mismatch {
     MapConcatDiffTypes(Vec<Option<DataType>>),
     /// `INVALID_ORDERING_TYPE`: a type that does not order (a map).
     InvalidOrdering(DataType),
+    /// `CAST_WITHOUT_SUGGESTION`: Spark inserts the implicit cast of the argument (a datetime type
+    /// to another), and the cast itself is refused (`TIME` to `TIMESTAMP` before Spark 4.3).
+    ImplicitCast {
+        /// The argument (0-based).
+        arg: usize,
+        /// Its type.
+        from: DataType,
+        /// The type Spark casts it to.
+        to: DataType,
+    },
     /// A coercion Krishiv does not implement.
     Unsupported(&'static str),
 }
@@ -1081,7 +1092,7 @@ pub(super) fn inputs(
         }
         Inputs::Leading(types) => {
             let n = types.len().min(args.len());
-            let mut casts = declared(types, &args[..n], call.ansi())?;
+            let mut casts = declared(types, &args[..n], call)?;
             casts.extend(common_casts(&args[n..], &args[n..], Rules::of(call))?);
             Ok(casts)
         }
@@ -1131,7 +1142,7 @@ pub(super) fn inputs(
         .map(|t| t.casts),
         _ => match inputs.expected(call) {
             Some(types) => {
-                let casts = declared(&types, args, call.ansi())?;
+                let casts = declared(&types, args, call)?;
                 legacy_string_counts(&types, args, call)?;
                 Ok(casts)
             }
@@ -1353,20 +1364,56 @@ fn hidden_zero() -> Arg<'static> {
 fn declared(
     types: &[InputType],
     args: &[Arg<'_>],
-    ansi: bool,
+    call: &CallTypes<'_>,
 ) -> Result<Vec<Option<DataType>>, Mismatch> {
+    let ansi = call.ansi();
     let mut casts = Vec::new();
     for (i, a) in args.iter().enumerate() {
         let want = types.get(i).or(types.last()).unwrap_or(&InputType::Any);
-        let to = implicit(a.ty, want, ansi).ok_or_else(|| Mismatch::Unexpected {
-            arg: i,
-            param: i,
-            ty: a.ty.cloned(),
-            required: want.sql(),
+        let to = implicit(a.ty, want, ansi).ok_or_else(|| {
+            refused_datetime_cast(a.ty, want, call).map_or_else(
+                || Mismatch::Unexpected {
+                    arg: i,
+                    param: i,
+                    ty: a.ty.cloned(),
+                    required: want.sql(),
+                },
+                |(from, to)| Mismatch::ImplicitCast { arg: i, from, to },
+            )
         })?;
         casts.push(cast_to(a.ty, to.as_ref()));
     }
     Ok(casts)
+}
+
+/// Spark's implicit cast between datetime types (`TypeCoercion` and `AnsiTypeCoercion`:
+/// `DatetimeType` to a `DatetimeType` parameter, `Cast.canANSIStoreAssign`), which it inserts even
+/// where the cast itself is refused: a `TIME` where a `DATE`, `TIMESTAMP` or `TIMESTAMP_NTZ` is
+/// declared, or one of those where a `TIME` is, gives `CAST_WITHOUT_SUGGESTION` on the argument
+/// (Spark 4.2.0 run: `date_format(TIME'12:00:00', ..)`). Returns the refused cast, if this is one.
+/// A cast the profile allows (Spark 4.3's `TIME` to and from the timestamps) is not reported here.
+fn refused_datetime_cast(
+    from: Option<&DataType>,
+    want: &InputType,
+    call: &CallTypes<'_>,
+) -> Option<(DataType, DataType)> {
+    use DataType as T;
+    let (Some(f), InputType::Exact(t)) = (from, want) else {
+        return None;
+    };
+    let datetime = |d: &DataType| matches!(d, T::Date | T::Timestamp | T::TimestampNtz);
+    let time = |d: &DataType| matches!(d, T::Time { .. });
+    if !((time(f) && datetime(t)) || (datetime(f) && time(t))) {
+        return None;
+    }
+    let mode = if call.ansi() {
+        CastMode::Ansi
+    } else {
+        CastMode::Legacy
+    };
+    let spark_4_3 = call.profile() >= SparkProfile::V4_3;
+    matches!(can_cast(Some(f), t, mode, spark_4_3), Err(BadCast::Without))
+        .then(|| (f.clone(), t.clone()))
 }
 
 /// The type an argument of type `from` takes for `want`, if it may.
