@@ -1,0 +1,1 @@
+With the `external` access provider, each statement of a SQL script is now checked as itself: the policy service receives that statement's class (`READ`, `WRITE`, ...) and its own query id, as `system.queries` lists it, instead of the class and operation id of the whole script.
