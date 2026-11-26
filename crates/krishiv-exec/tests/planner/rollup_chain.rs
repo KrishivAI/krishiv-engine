@@ -73,9 +73,12 @@ const FIRES: [&str; 7] = [
     // Decimal states (q67's `sum` of a decimal: the state is the sum and whether a value was
     // seen), merged through every level: `d` is NULL on some rows, and the CASE column is NULL on
     // every row of some groups, so a set's sum is NULL there, never 0.
+    // The CASE conditions are comparisons that cannot raise (a `%` may, so the pre-aggregate
+    // refuses it) and share no subexpression, which CSE would compute above the expansion, where
+    // the pre-aggregate refuses an argument.
     "SELECT a % 7 AS p, b % 3 AS q, s, CAST(sum(d) AS STRING), CAST(avg(d) AS STRING), \
-     CAST(sum(CASE WHEN a % 7 = 0 THEN NULL ELSE d END) AS STRING), \
-     CAST(avg(CASE WHEN a % 7 = 0 THEN NULL ELSE d END) AS STRING), count(d) FROM t \
+     CAST(sum(CASE WHEN a < 50 THEN NULL ELSE d END) AS STRING), \
+     CAST(avg(CASE WHEN a >= 120 THEN NULL ELSE d END) AS STRING), count(d) FROM t \
      GROUP BY ROLLUP(a % 7, b % 3, s)",
     // A set whose every input `d` is NULL (`a` is NULL on every fourth row and `d` then too).
     "SELECT a, s, CAST(sum(d) AS STRING), CAST(avg(d) AS STRING) FROM t \
@@ -84,15 +87,16 @@ const FIRES: [&str; 7] = [
     "SELECT a % 7 AS p, s, CAST(sum(coalesce(d * a, 0)) AS STRING) FROM t GROUP BY ROLLUP(a % 7, s)",
 ];
 
-/// `t` as [`env_of`]'s table plus `d decimal(7,2)`, NULL where `a` is NULL and on every fifth
-/// row. A decimal `sum` that overflows cannot reach this rule: eager aggregation moves only a
-/// `sum` of precision 28 or less, whose `decimal(38)` state holds at least 10^10 summed values,
-/// and every set merges a split of the same rows as the unsplit sum.
+/// `t` as [`env_of`]'s table plus `d decimal(7,2)` (on its canonical `Decimal64` carrier), NULL
+/// where `a` is NULL and on every fifth row. A decimal `sum` that overflows cannot reach this
+/// rule: eager aggregation moves only a `sum` of precision 28 or less, whose `decimal(38)` state
+/// holds at least 10^10 summed values, and every set merges a split of the same rows as the
+/// unsplit sum.
 fn env_with_decimal(n: i32) -> Env {
-    use arrow_array::Decimal128Array;
+    use arrow_array::Decimal64Array;
     let (schema, batches) = table(n);
     let mut fields: Vec<Field> = schema.fields().iter().map(|f| f.as_ref().clone()).collect();
-    fields.push(Field::new("d", ArrowType::Decimal128(7, 2), true));
+    fields.push(Field::new("d", ArrowType::Decimal64(7, 2), true));
     let schema = Arc::new(Schema::new(fields));
     let mut row = 0;
     let batches: Vec<Batch> = batches
@@ -100,12 +104,12 @@ fn env_with_decimal(n: i32) -> Env {
         .map(|b| {
             let b = b.data();
             let a = b.column(0).as_primitive::<arrow_array::types::Int32Type>();
-            let d: Decimal128Array = (0..b.num_rows())
+            let d: Decimal64Array = (0..b.num_rows())
                 .map(|r| {
-                    let v = i128::from(row + i32::try_from(r).unwrap());
+                    let v = i64::from(row + i32::try_from(r).unwrap());
                     (!a.is_null(r) && v % 5 != 4).then_some(v * 137 - 4_000)
                 })
-                .collect::<Decimal128Array>()
+                .collect::<Decimal64Array>()
                 .with_precision_and_scale(7, 2)
                 .unwrap();
             row += i32::try_from(b.num_rows()).unwrap();
