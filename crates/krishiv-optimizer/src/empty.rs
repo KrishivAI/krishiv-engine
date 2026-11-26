@@ -149,10 +149,15 @@ pub(crate) fn drop_empty_union_inputs(node: Arc<LogicalPlan>) -> Arc<LogicalPlan
         .iter()
         .zip(output.iter())
         .map(|(p, o)| {
+            let column = Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Column(
+                p.clone(),
+            ))));
+            // A column the rest already produces as the union did passes through bare.
+            if p == o {
+                return column;
+            }
             Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Alias {
-                expr: Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Column(
-                    p.clone(),
-                )))),
+                expr: column,
                 output: o.clone(),
             })))
         })
