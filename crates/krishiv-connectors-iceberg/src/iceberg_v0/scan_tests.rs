@@ -101,7 +101,7 @@ async fn manifest_inheritance_matches_spec() {
     let io = reg.file_io();
     let schema = Arc::new(schema());
     let spec = spec(&schema);
-    let at = |n: &str| format!("file://{}/{n}", dir.path().display());
+    let at = |n: &str| format!("{}/{n}", krishiv_exec::files::file_url(dir.path()));
 
     // v2: an added file with no sequence number, an existing one, a deleted one
     // and an added one with an explicit data sequence number.
@@ -396,7 +396,7 @@ async fn plan_prunes_and_time_travels() {
             "mem",
             [(
                 iceberg::memory::MEMORY_CATALOG_WAREHOUSE.to_owned(),
-                format!("file://{}", dir.path().display()),
+                krishiv_exec::files::file_url(dir.path()),
             )]
             .into(),
         )
@@ -416,7 +416,12 @@ async fn plan_prunes_and_time_travels() {
         )
         .await
         .unwrap();
-    let at = |n: &str| format!("file://{}/db/t/data/{n}", dir.path().display());
+    let at = |n: &str| {
+        format!(
+            "{}/db/t/data/{n}",
+            krishiv_exec::files::file_url(dir.path())
+        )
+    };
     let mut table = table;
     let mut snapshots = Vec::new();
     for files in [

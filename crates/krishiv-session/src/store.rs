@@ -1008,7 +1008,7 @@ impl Warehouse {
 /// `spark.sql.warehouse.dir` as a path, when set and not empty.
 fn configured_dir(configured: Option<&str>) -> Option<PathBuf> {
     let dir = configured.filter(|d| !d.is_empty())?;
-    Some(PathBuf::from(dir.strip_prefix("file:").unwrap_or(dir)))
+    Some(krishiv_exec::files::native_path(dir))
 }
 
 impl OwnDir {

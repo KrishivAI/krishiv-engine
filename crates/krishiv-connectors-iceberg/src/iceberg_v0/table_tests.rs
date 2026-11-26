@@ -59,7 +59,7 @@ impl Env {
 }
 
 fn local_size(location: &str) -> u64 {
-    std::fs::metadata(location.strip_prefix("file://").unwrap())
+    std::fs::metadata(super::sink_tests::local_path(location))
         .unwrap()
         .len()
 }

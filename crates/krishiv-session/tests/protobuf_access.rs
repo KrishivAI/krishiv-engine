@@ -49,6 +49,8 @@ fn run(s: &Session, sql: &str) -> Result<usize, krishiv_common::error::KrishivEr
 }
 
 fn calls(path: &str) -> [String; 4] {
+    // `/` separators: a Windows path's `\` would be read as a SQL escape.
+    let path = path.replace('\\', "/");
     [
         format!("SELECT from_protobuf(X'0801', 'krishiv.golden.Scalars', '{path}')"),
         format!("SELECT from_protobuf(X'0801', 'krishiv.golden.Scalars', '{path}', map())"),

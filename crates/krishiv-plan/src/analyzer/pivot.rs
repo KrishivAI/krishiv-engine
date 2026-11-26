@@ -168,7 +168,14 @@ impl Resolver<'_> {
                 ));
             };
             let from = t.ty.data_type.as_ref();
-            if can_cast(from, &pivot_type, mode).is_err() {
+            if can_cast(
+                from,
+                &pivot_type,
+                mode,
+                self.ctx.profile >= crate::analyzer::SparkProfile::V4_3,
+            )
+            .is_err()
+            {
                 let (value, value_type) = value_render(v, parts, trimmed, self);
                 return Err(pivot_type_mismatch(
                     value,

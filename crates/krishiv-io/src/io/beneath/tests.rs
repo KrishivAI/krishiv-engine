@@ -58,7 +58,7 @@ fn obj_in(dir: &FsPath, rel: &str) -> Path {
         })
         .collect();
     parts.extend(rel.split('/').filter(|s| !s.is_empty()).map(str::to_owned));
-    Path::from_iter(parts.iter().map(String::as_str))
+    crate::local_object_path(&parts).unwrap()
 }
 
 fn tree(dir: &FsPath) -> Vec<(PathBuf, Vec<u8>)> {
@@ -757,18 +757,20 @@ fn staging_names_are_recognized() {
 }
 
 #[test]
-fn a_directory_name_object_paths_would_encode_is_refused_up_front() {
+fn only_a_directory_name_no_object_path_holds_is_refused_up_front() {
     let f = fixture();
-    for name in ["jos\u{e9}", "a~b", "a#b", "a%b"] {
+    let name = "a\u{1}b";
+    std::fs::create_dir_all(f.root.join(name)).unwrap();
+    let e = BeneathStore::anchor(&f.root.join(name).join("out"));
+    assert!(
+        matches!(e, Err(AnchorError::UnsupportedName(ref n)) if n == name),
+        "{name}: {e:?}"
+    );
+    // Names object paths used to percent-encode are kept as they are.
+    for name in ["jos\u{e9}", "a~b", "a#b", "a%b", "RUNNER~1"] {
         std::fs::create_dir_all(f.root.join(name)).unwrap();
-        let e = BeneathStore::anchor(&f.root.join(name).join("out"));
-        assert!(
-            matches!(e, Err(AnchorError::UnsupportedName(ref n)) if n == name),
-            "{name}: {e:?}"
-        );
+        BeneathStore::anchor(&f.root.join(name).join("out")).unwrap();
     }
-    // The target's own name is not checked: it is encoded like any part name.
-    BeneathStore::anchor(&f.root.join("a/jos\u{e9}")).unwrap();
 }
 
 // Counts this process's descriptors through procfs, so Linux only; the

@@ -300,6 +300,7 @@ pub(crate) fn narrow(it: impl Iterator<Item = Option<i128>>, t: &DataType) -> Re
             prim::<arrow_array::types::TimestampNanosecondType>(it, t)
         }
         DataType::Timestamp(..) => prim::<TimestampMicrosecondType>(it, t),
+        DataType::Time64(_) => prim::<Time64NanosecondType>(it, t),
         DataType::Interval(_) => prim::<IntervalYearMonthType>(it, t),
         DataType::Duration(_) => prim::<DurationMicrosecondType>(it, t),
         DataType::Decimal64(..) => prim::<Decimal64Type>(it, t),

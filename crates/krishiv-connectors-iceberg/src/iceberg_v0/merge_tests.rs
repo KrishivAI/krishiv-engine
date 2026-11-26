@@ -231,7 +231,7 @@ fn raw(env: &Env, path: &str) -> Vec<Raw> {
 }
 
 fn exists(url: &str) -> bool {
-    std::path::Path::new(url.strip_prefix("file://").unwrap()).exists()
+    super::sink_tests::local_path(url).exists()
 }
 
 #[test]

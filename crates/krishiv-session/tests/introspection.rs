@@ -2,11 +2,13 @@
 //! `DESCRIBE` and `SHOW` on the catalog through `Session::sql`; the expected rows are Spark 4.2.0's.
 #![cfg(test)]
 
+mod literal_path;
 use arrow_array::Array;
 use arrow_array::cast::AsArray;
 use arrow_schema::DataType as ArrowType;
 use futures::executor::block_on;
 use krishiv_session::Session;
+use literal_path::sql_path;
 
 fn session(dir: &std::path::Path) -> Session {
     let s = Session::new().unwrap();
@@ -371,7 +373,7 @@ fn describe_modes_secrets_and_quoting() {
         &s,
         &format!(
             "CREATE TABLE e (x INT) USING parquet LOCATION '{}'",
-            odd.display().to_string().replace('\'', "\\'")
+            sql_path(&odd).replace('\'', "\\'")
         ),
     );
     let text = table(&s, "SHOW CREATE TABLE e").1[0][0].clone();

@@ -95,7 +95,7 @@ pub(super) fn env_in(
                 "mem",
                 [(
                     iceberg::memory::MEMORY_CATALOG_WAREHOUSE.to_owned(),
-                    format!("file://{}", dir.path().display()),
+                    krishiv_exec::files::file_url(dir.path()),
                 )]
                 .into(),
             )
@@ -119,7 +119,7 @@ pub(super) fn env_in(
 impl Env {
     /// `file://<dir>/<name>`.
     pub(super) fn at(&self, name: &str) -> String {
-        format!("file://{}/{name}", self.dir.path().display())
+        format!("{}/{name}", krishiv_exec::files::file_url(self.dir.path()))
     }
 
     pub(super) fn create(
@@ -182,8 +182,8 @@ impl Env {
 
 /// `batch` written as Parquet at `path` (a local path); its size.
 pub(super) fn write_parquet(path: &str, batch: &RecordBatch) -> u64 {
-    let local = path.strip_prefix("file://").unwrap();
-    let file = std::fs::File::create(local).unwrap();
+    let local = super::sink_tests::local_path(path);
+    let file = std::fs::File::create(&local).unwrap();
     let mut w = parquet::arrow::ArrowWriter::try_new(file, batch.schema(), None).unwrap();
     w.write(batch).unwrap();
     w.close().unwrap();
@@ -798,7 +798,7 @@ fn tpch_over_iceberg_equals_tpch_over_parquet() {
     let mut without_ids = 0;
     for name in TABLES {
         let path = data.join(format!("{name}.parquet"));
-        let location = format!("file://{}", path.display());
+        let location = krishiv_exec::files::file_url(&path);
         let at = env
             .reg
             .registered()

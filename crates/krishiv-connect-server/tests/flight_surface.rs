@@ -93,10 +93,14 @@ const ALICE: &str = "alice-token-0123456789abcdefghijklmnopqrstuv";
 const SESSION: &str = "8f0e4c55-5ad0-4d1e-9a3c-3a1b0b2c7d10";
 
 fn secret(dir: &Path, name: &str, token: &str) -> String {
-    use std::os::unix::fs::PermissionsExt;
     let path = dir.join(name);
     std::fs::write(&path, token).expect("write secret");
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).expect("chmod");
+    // A secret file readable by group or others refuses startup on Unix.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).expect("chmod");
+    }
     format!("file:{}", path.display())
 }
 
