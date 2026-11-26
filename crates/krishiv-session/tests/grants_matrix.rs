@@ -16,6 +16,8 @@
 //! `grants_views.rs`), and a generator over the IR node kinds (`PlanNode` is `#[non_exhaustive]`
 //! outside `krishiv-plan`).
 #![cfg(test)]
+mod literal_path;
+use literal_path::sql_path;
 
 use std::fmt::Write as _;
 use std::sync::{Arc, Mutex};
@@ -187,7 +189,7 @@ fn no_row_reads_the_canary_and_none_shows_the_vault() {
     let path_read = format!("SELECT * FROM parquet.`{canary_path}`");
     let directory = format!(
         "INSERT OVERWRITE DIRECTORY '{}' USING parquet SELECT * FROM canary",
-        dir.path().join("out").display()
+        sql_path(&dir.path().join("out"))
     );
     // design §6: one row per cell (the unauthorised case of the `grants` column).
     let mut refused: Vec<Row<'_>> = vec![

@@ -569,13 +569,10 @@ pub(crate) async fn create_local_root(source: &ReadSource) -> Result<(), Krishiv
     let ReadSource::Files { paths, .. } = source else {
         return Ok(());
     };
-    let locals: Vec<String> = paths
+    let locals: Vec<std::path::PathBuf> = paths
         .iter()
-        .filter_map(|p| {
-            p.as_plain()
-                .and_then(|t| t.strip_prefix("file:"))
-                .map(str::to_owned)
-        })
+        .filter_map(|p| p.as_plain().filter(|t| t.starts_with("file:")))
+        .map(krishiv_exec::files::native_path)
         .collect();
     if locals.is_empty() {
         return Ok(());
@@ -583,7 +580,7 @@ pub(crate) async fn create_local_root(source: &ReadSource) -> Result<(), Krishiv
     tokio::task::spawn_blocking(move || {
         for local in &locals {
             std::fs::create_dir_all(local)
-                .map_err(|e| internal(format!("cannot create {local}: {e}")))?;
+                .map_err(|e| internal(format!("cannot create {}: {e}", local.display())))?;
         }
         Ok(())
     })

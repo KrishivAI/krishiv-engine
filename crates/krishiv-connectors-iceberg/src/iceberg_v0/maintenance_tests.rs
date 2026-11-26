@@ -872,7 +872,7 @@ fn a_shared_puffin_file_stays_while_a_kept_snapshot_names_it() {
     // The rewritten data file went with the old snapshots.
     assert_eq!(done.deleted.data_files, 1, "{:?}", done.deleted);
     let shared = env.at("shared.puffin");
-    assert!(std::path::Path::new(super::sink_tests::local_path(&shared)).exists());
+    assert!(super::sink_tests::local_path(&shared).exists());
     assert_eq!(read_back(&env, &catalog), rows);
 }
 
@@ -1095,7 +1095,7 @@ fn the_cleanup_reads_the_start_and_the_committed_base() {
         );
         let kept = after.current_snapshot().unwrap().manifest_list().to_owned();
         assert!(
-            std::path::Path::new(super::sink_tests::local_path(&kept)).exists(),
+            super::sink_tests::local_path(&kept).exists(),
             "{land_first}: {kept}"
         );
     }
