@@ -183,9 +183,9 @@ def test_missing_engine_functions_raise_not_implemented(name: str, args: tuple[A
         getattr(F, name)(*args)
 
 
-def test_catalog_only_functions_raise_unsupported_when_called() -> None:
-    with pytest.raises(errors.UnsupportedOperationException, match="KRISHIV_UNSUPPORTED_FEATURE"):
-        F.count_min_sketch("n", 0.01, 0.99, 1)
+def test_count_min_sketch_is_an_aggregate_over_binary(df: DataFrame) -> None:
+    row = df.agg(F.count_min_sketch(F.col("n").cast("int"), 0.01, 0.99, 1)).collect()[0]
+    assert isinstance(row[0], bytes | bytearray)
 
 
 def test_udtf_stubs_take_pysparks_keywords() -> None:
