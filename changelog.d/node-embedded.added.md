@@ -1,1 +1,0 @@
-Krishiv for JavaScript and TypeScript, embedded: `Session.builder().getOrCreate()` in the npm package `krishiv` runs queries in-process on the engine (Node-API addon `@krishiv/engine-<platform>`), streams results as Arrow batches, cancels on an `AbortSignal` and reports failures as `KrishivError` with the Spark error class and SQLSTATE.
