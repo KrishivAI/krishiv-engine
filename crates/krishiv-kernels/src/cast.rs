@@ -1367,6 +1367,9 @@ fn temporal(
         // a `TIMESTAMP_NTZ` and in the session zone for a `TIMESTAMP`
         // (`timestampNTZToNanosOfDay`, `timestampToNanosOfDay`). The caller
         // cuts it to the target's precision.
+        // Known difference: an instant within one zone offset of the
+        // microsecond range has no local time here and raises
+        // `DATETIME_OVERFLOW` in every mode; Spark's `LocalDateTime` covers it.
         (
             DataType::Timestamp(TimeUnit::Microsecond, from_zone),
             DataType::Time64(TimeUnit::Nanosecond),

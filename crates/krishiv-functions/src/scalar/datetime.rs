@@ -519,7 +519,6 @@ fn is_date_or_timestamp(t: &DataType) -> bool {
     matches!(t, DataType::Date32) || is_timestamp(t)
 }
 
-/// Whether `t` is a date, a timestamp or a string carrier.
 /// `nanos` (a `TIME`) printed with `p`, as Spark 4.3's `DateFormatClass.formatTimeWithError`.
 fn format_time(p: &TimePattern, nanos: i64) -> Result<String, KrishivError> {
     let printed = match p {
@@ -540,6 +539,7 @@ fn format_time(p: &TimePattern, nanos: i64) -> Result<String, KrishivError> {
     })
 }
 
+/// Whether `t` is a date, a timestamp or a string carrier.
 fn is_date_or_timestamp_or_string(t: &DataType) -> bool {
     is_date_or_timestamp(t) || is_string(t)
 }

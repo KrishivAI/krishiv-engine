@@ -649,3 +649,30 @@ fn nested_casts_follow_spark() {
         Ok(())
     );
 }
+
+/// TIME <-> TIMESTAMP / TIMESTAMP_NTZ, plain and nested, casts only under the Spark 4.3 rules
+/// (Spark 4.3.0 `Cast.canCast`; Spark 4.2 refuses them), in every mode.
+#[test]
+fn time_and_timestamps_cast_only_under_spark_4_3() {
+    let time = T::Time { precision: 6 };
+    let arr = |t: T| T::Array(std::sync::Arc::new(krishiv_types::ArrayType::new(t, true)));
+    let pairs = [
+        (time.clone(), T::Timestamp),
+        (time.clone(), T::TimestampNtz),
+        (T::Timestamp, time.clone()),
+        (T::TimestampNtz, time.clone()),
+        (arr(time), arr(T::TimestampNtz)),
+    ];
+    for (from, to) in &pairs {
+        for mode in [CastMode::Ansi, CastMode::Legacy, CastMode::Try] {
+            assert!(
+                can_cast(Some(from), to, mode, true).is_ok(),
+                "{from:?} -> {to:?} {mode:?} under 4.3"
+            );
+            assert!(
+                matches!(can_cast(Some(from), to, mode, false), Err(BadCast::Without)),
+                "{from:?} -> {to:?} {mode:?} under 4.2"
+            );
+        }
+    }
+}

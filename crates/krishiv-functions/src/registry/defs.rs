@@ -1024,10 +1024,8 @@ fn unix_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     Ok(ArgType::new(DataType::Long, !c.ansi() || c.any_nullable()))
 }
 
-/// `date_format`: NULL when an argument may be, or when the value's
-/// implicit cast to `TIMESTAMP` may yield NULL.
-/// `date_format`: a date-like value and a pattern. Spark 4.3 also formats a `TIME`, which reaches
-/// [`date_format_result`] so it is refused as not yet supported, not as a type mismatch.
+/// `date_format`: a date-like value and a pattern; under the Spark 4.3 profile also a `TIME`,
+/// formatted as it is.
 fn date_format_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
     let first = match c.data_type(0) {
         Some(t @ DataType::Time { .. }) if c.profile() >= SparkProfile::V4_3 => exact(t.clone()),
@@ -1036,6 +1034,8 @@ fn date_format_inputs(c: &CallTypes<'_>) -> Vec<InputType> {
     vec![first, exact(DataType::String)]
 }
 
+/// `date_format`: NULL when an argument may be, or when the value's
+/// implicit cast to `TIMESTAMP` may yield NULL.
 fn date_format_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     // Spark 4.3 formats a `TIME` as it is (no cast): nullable as the arguments.
     if matches!(c.data_type(0), Some(DataType::Time { .. })) {
