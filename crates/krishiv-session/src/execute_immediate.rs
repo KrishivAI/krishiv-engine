@@ -576,9 +576,37 @@ fn render_literal(value: &Literal, escaped_strings: bool) -> Result<String, Kris
         // `INTERVAL '3' DAY`: the literal's own SQL keeps the interval's fields.
         | Literal::YearMonthInterval { .. }
         | Literal::DayTimeInterval { .. } => Ok(value.to_string()),
-        Literal::Array { .. } | Literal::KeyValueMap { .. } | Literal::Struct { .. } => {
-            Err(unsupported("an array, map or struct type"))
+        Literal::Array {
+            data_type,
+            elements,
+        } => {
+            let items = elements
+                .iter()
+                .map(|e| render_literal(e, escaped_strings))
+                .collect::<Result<Vec<_>, _>>()?;
+            let text = format!("ARRAY({})", items.join(", "));
+            if elements.is_empty() {
+                let t = DataType::Array(std::sync::Arc::clone(data_type));
+                Ok(format!("CAST({text} AS {})", t.simple_string()))
+            } else {
+                Ok(text)
+            }
         }
+        Literal::KeyValueMap { data_type, entries } => {
+            let mut parts = Vec::with_capacity(entries.len() * 2);
+            for (k, v) in entries {
+                parts.push(render_literal(k, escaped_strings)?);
+                parts.push(render_literal(v, escaped_strings)?);
+            }
+            let text = format!("MAP({})", parts.join(", "));
+            if entries.is_empty() {
+                let t = DataType::Map(std::sync::Arc::clone(data_type));
+                Ok(format!("CAST({text} AS {})", t.simple_string()))
+            } else {
+                Ok(text)
+            }
+        }
+        Literal::Struct { .. } => Err(unsupported("a struct type")),
         _ => Err(unsupported("this type")),
     }
 }
