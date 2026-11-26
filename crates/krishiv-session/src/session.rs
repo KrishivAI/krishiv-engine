@@ -1064,7 +1064,7 @@ impl Session {
     #[cfg(feature = "unstable-ir")]
     #[must_use]
     pub fn from_plan(&self, plan: &Plan) -> DataFrame {
-        self.plan_frame(self.clone(), Arc::clone(plan.root()))
+        Self::plan_frame(self.clone(), Arc::clone(plan.root()))
     }
 
     /// A frame of `root` on `session`. A plan over a `spark.sql` relation (`PlanNode::Sql`, what
@@ -1075,7 +1075,19 @@ impl Session {
     /// with none stays without text. A statement that does not parse keeps none: its analysis
     /// reports the error.
     #[cfg(feature = "unstable-ir")]
-    fn plan_frame(&self, session: Session, root: Arc<LogicalPlan>) -> DataFrame {
+    fn plan_frame(session: Session, root: Arc<LogicalPlan>) -> DataFrame {
+        let statement = session.plan_statement(&root);
+        let df = DataFrame::new(session, root);
+        match statement {
+            Some(env) => df.with_first_statement(env),
+            None => df,
+        }
+    }
+
+    /// The statement a frame of `root` lists its runs under (see [`Self::plan_frame`]): the text
+    /// and class of the first `spark.sql` relation in `root`, in this session's environment.
+    #[cfg(feature = "unstable-ir")]
+    fn plan_statement(&self, root: &LogicalPlan) -> Option<QueryEnv> {
         fn first_sql(plan: &LogicalPlan) -> Option<&str> {
             if let PlanNode::Sql { query, .. } = &plan.node {
                 return Some(query);
@@ -1088,22 +1100,13 @@ impl Session {
             });
             found
         }
-        let statement = first_sql(&root).and_then(|query| {
-            let mut env = session.query_env();
-            let redacted = krishiv_sql::redact_sql(query);
-            krishiv_sql::parse_statement(query, &env.parser)
-                .ok()
-                .map(|parsed| {
-                    env.set_text(&redacted);
-                    env.statement_class = Some(self.statement_class(&parsed, &env).name());
-                    env
-                })
-        });
-        let df = DataFrame::new(session, root);
-        match statement {
-            Some(env) => df.with_first_statement(env),
-            None => df,
-        }
+        let query = first_sql(root)?;
+        let mut env = self.query_env();
+        let redacted = krishiv_sql::redact_sql(query);
+        let parsed = krishiv_sql::parse_statement(query, &env.parser).ok()?;
+        env.set_text(&redacted);
+        env.statement_class = Some(self.statement_class(&parsed, &env).name());
+        Some(env)
     }
 
     /// As [`Self::from_plan`], with per-statement options, as
@@ -1134,7 +1137,10 @@ impl Session {
         plan: &Plan,
         options: crate::QueryOptions,
     ) -> Result<DataFrame, KrishivError> {
-        Ok(self.plan_frame(self.with_options(options)?, Arc::clone(plan.root())))
+        Ok(Self::plan_frame(
+            self.with_options(options)?,
+            Arc::clone(plan.root()),
+        ))
     }
 
     /// As [`Self::from_plan_with`], with each read of a table named in `frames` replaced by that
@@ -1155,8 +1161,11 @@ impl Session {
     ) -> Result<DataFrame, KrishivError> {
         let session = self.with_options(options)?;
         if frames.is_empty() {
-            return Ok(self.plan_frame(session, Arc::clone(plan.root())));
+            return Ok(Self::plan_frame(session, Arc::clone(plan.root())));
         }
+        // The statement comes from the client's plan, before the cached frames' own plans
+        // (which may hold `spark.sql` relations of their own) are spliced in.
+        let statement = session.plan_statement(plan.root());
         let frames = frames.to_vec();
         let root = Arc::clone(plan.root());
         let (root, keep) = self
@@ -1185,7 +1194,11 @@ impl Session {
                 Ok((root.unwrap_or_else(|e| match e {}), keep))
             })
             .await?;
-        Ok(DataFrame::over_plan(session, root, keep))
+        let df = DataFrame::over_plan(session, root, keep);
+        Ok(match statement {
+            Some(env) => df.with_first_statement(env),
+            None => df,
+        })
     }
 
     /// Runs `work` on the session's executor, so that it finds the
