@@ -30,6 +30,7 @@ pub mod fault;
 pub mod inferred;
 pub mod key_facts;
 pub mod latency;
+pub mod local_dirs;
 #[cfg(unix)]
 pub mod local_listing;
 mod pace;

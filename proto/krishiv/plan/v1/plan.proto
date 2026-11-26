@@ -1131,6 +1131,18 @@ message JoinFilter {
   uint64 id = 1;
   uint64 key = 2;
   KeyFilterOptions options = 3;
+  // feature: join_filter_bound
+  // A build column the filter is collected from instead of the key `key`
+  // (a bound from a comparison conjunct of the join's residual).
+  optional uint64 bound_column = 4;
+}
+
+// feature: join_filter_bound
+// Which end of the collected min/max range drops rows.
+enum RangeSide {
+  RANGE_SIDE_BOTH = 0;
+  RANGE_SIDE_UPPER = 1;
+  RANGE_SIDE_LOWER = 2;
 }
 
 message KeyFilterOptions {
@@ -1149,6 +1161,8 @@ message KeyFilterOptions {
   // ignorable: a reader that skips it loses the Bloom form of a build past
   // `bloom_max_items` or one that sheds its hashes to spill (a range only).
   optional uint32 bloom_spill_bytes = 10;
+  // feature: join_filter_bound
+  RangeSide side = 11;
 }
 
 message UnionNode {

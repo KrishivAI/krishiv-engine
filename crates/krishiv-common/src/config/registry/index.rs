@@ -193,6 +193,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &MEMORY_RELEASE_AT_QUERY_END,
     ),
     ("krishiv.optimizer.joinEnumerator", &JOIN_ENUMERATOR),
+    ("krishiv.optimizer.joinPruneFirst", &JOIN_PRUNE_FIRST),
     (
         "krishiv.server.readiness.timeout",
         &SERVER_READINESS_TIMEOUT,
@@ -470,6 +471,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.runtimeFilter.bloom.maxItems",
         &RUNTIME_FILTER_BLOOM_MAX_ITEMS,
+    ),
+    (
+        "krishiv.runtimeFilter.residualBounds",
+        &RUNTIME_FILTER_RESIDUAL_BOUNDS,
     ),
     (
         "krishiv.sql.legacy.codingErrorAction",

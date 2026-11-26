@@ -590,7 +590,7 @@ fn replaced_partitions_take_their_deletes_and_others_keep_row_ids() {
         let mut bytes = b"PFA1".to_vec();
         bytes.extend_from_slice(&blob);
         let path = env.at("x1.puffin");
-        std::fs::write(path.strip_prefix("file://").unwrap(), &bytes).unwrap();
+        std::fs::write(super::sink_tests::local_path(&path), &bytes).unwrap();
         let mut d = DataFileBuilder::default();
         d.content(DataContentType::PositionDeletes)
             .file_path(path)
@@ -1035,7 +1035,7 @@ fn a_dynamic_overwrite_under_a_void_only_spec_replaces_every_spec() {
     assert_eq!(m.default_partition_spec_id(), 1);
     let path = env.at("void-spec.metadata.json");
     std::fs::write(
-        path.strip_prefix("file://").unwrap(),
+        super::sink_tests::local_path(&path),
         serde_json::to_vec(&m).unwrap(),
     )
     .unwrap();

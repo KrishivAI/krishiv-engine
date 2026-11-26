@@ -276,6 +276,10 @@ fn read_rss(file: &std::fs::File) -> Option<usize> {
 }
 
 /// The `VmRSS:` value of a `/proc/<pid>/status` text, in bytes.
+#[cfg_attr(
+    all(not(target_os = "linux"), not(test)),
+    expect(dead_code, reason = "/proc is read on Linux only")
+)]
 fn vm_rss(status: &[u8]) -> Option<usize> {
     const KEY: &[u8] = b"VmRSS:";
     let at = status.windows(KEY.len()).position(|w| w == KEY)?;

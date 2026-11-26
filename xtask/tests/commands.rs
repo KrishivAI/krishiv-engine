@@ -432,6 +432,10 @@ fn big_fixture_diff_does_not_count() {
 }
 
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "repo tooling test: runs shell-script stand-ins and sh, Unix only"
+)]
 fn diff_coverage_gate_passes_and_fails_on_a_real_repo() {
     let dir = init_repo("diffcov");
     let repo = dir.to_str().unwrap();
@@ -487,6 +491,10 @@ fn diff_coverage_gate_passes_and_fails_on_a_real_repo() {
 }
 
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "repo tooling test: runs shell-script stand-ins and sh, Unix only"
+)]
 fn diff_coverage_merges_rust_and_python_tracefiles() {
     let dir = init_repo("diffcov-py");
     let repo = dir.to_str().unwrap();
@@ -549,6 +557,10 @@ fn diff_coverage_merges_rust_and_python_tracefiles() {
 }
 
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "repo tooling test: runs shell-script stand-ins and sh, Unix only"
+)]
 fn diff_coverage_ignores_what_the_base_gained_after_the_branch_point() {
     let dir = init_repo("diffcov-behind");
     let repo = dir.to_str().unwrap();
