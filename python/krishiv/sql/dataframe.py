@@ -163,6 +163,7 @@ class DataFrame:
 
     @property
     def sparkSession(self) -> SparkSession:
+        """The session that created this DataFrame."""
         return self._session
 
     # Analysis (no execution).
@@ -175,10 +176,12 @@ class DataFrame:
 
     @property
     def columns(self) -> list[str]:
+        """The column names, in order."""
         return [name for name, _, _ in self._df.schema()]
 
     @property
     def dtypes(self) -> list[tuple[str, str]]:
+        """The ``(name, type)`` pair of each column, the type as its SQL name."""
         return [(name, type_) for name, type_, _ in self._df.schema()]
 
     def printSchema(self, level: int | None = None) -> None:
