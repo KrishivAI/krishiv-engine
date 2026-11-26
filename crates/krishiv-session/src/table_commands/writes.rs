@@ -359,6 +359,7 @@ impl Session {
             &output,
             env.analysis.conf.case_sensitive,
             legacy_store,
+            self.state.profile,
         )?;
         let renamed: Vec<String> = (0..output.len())
             .map(|i| format!("__krishiv_c{i}"))

@@ -230,6 +230,38 @@ fn a_window_over_a_derived_window_column_follows_the_column_it_names() -> R {
             "SELECT CAST(window(q.iw, '5 minutes') AS STRING) \
              FROM (SELECT * FROM (SELECT window(ts, '1 minute') AS iw FROM {v}) a) q"
         ),
+        // The outer query's own `WHERE`, with and without the qualifier.
+        format!(
+            "SELECT CAST(window(q.iw, '5 minutes') AS STRING) \
+             FROM (SELECT window(ts, '1 minute') AS iw FROM {v}) q WHERE true"
+        ),
+        format!(
+            "SELECT CAST(window(iw, '5 minutes') AS STRING) \
+             FROM (SELECT window(ts, '1 minute') AS iw FROM {v}) q WHERE true"
+        ),
+        // A `WHERE`, a `LIMIT`, a repartition or a `DISTINCT` between them keeps the column.
+        format!(
+            "SELECT CAST(window(q.iw, '5 minutes') AS STRING) \
+             FROM (SELECT * FROM (SELECT window(ts, '1 minute') AS iw FROM {v}) a WHERE true) q"
+        ),
+        format!(
+            "SELECT CAST(window(q.w, '5 minutes') AS STRING) \
+             FROM (SELECT a.iw AS w FROM (SELECT window(ts, '1 minute') AS iw FROM {v}) a WHERE true) q"
+        ),
+        format!(
+            "SELECT CAST(window(q.w, '5 minutes') AS STRING) \
+             FROM (SELECT a.iw AS w FROM (SELECT window(ts, '1 minute') AS iw FROM {v}) a \
+                   WHERE true LIMIT 5) q"
+        ),
+        format!(
+            "SELECT CAST(window(q.w, '5 minutes') AS STRING) \
+             FROM (SELECT a.iw AS w FROM (SELECT window(ts, '1 minute') AS iw FROM {v}) a \
+                   DISTRIBUTE BY a.iw) q"
+        ),
+        format!(
+            "SELECT CAST(window(q.w, '5 minutes') AS STRING) \
+             FROM (SELECT DISTINCT a.iw AS w FROM (SELECT window(ts, '1 minute') AS iw FROM {v}) a) q"
+        ),
     ] {
         assert_eq!(rows(&s, &sql)?, want, "{sql}");
     }

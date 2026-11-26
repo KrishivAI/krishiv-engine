@@ -9,7 +9,7 @@ use krishiv_common::error::{
     InsertColumnArityMismatchNotEnoughDataColumns, InsertColumnArityMismatchTooManyDataColumns,
     KrishivError, UnresolvedColumnWithSuggestion,
 };
-use krishiv_plan::analyzer::TableColumn;
+use krishiv_plan::analyzer::{SparkProfile, TableColumn};
 use krishiv_types::DataType;
 
 use super::{CatalogTable, quoted};
@@ -32,6 +32,7 @@ pub(super) fn assign(
     output: &[TableColumn],
     case_sensitive: bool,
     legacy_store: bool,
+    profile: SparkProfile,
 ) -> Result<Vec<Source>, KrishivError> {
     // `INSERT .. BY NAME` also matches the fields of a nested struct by name (Spark's `reorderColumnsByName`).
     let names = by_name.then_some(case_sensitive);
@@ -74,7 +75,7 @@ pub(super) fn assign(
                 return Err(KrishivError::from(
                     IncompatibleDataForTableCannotSafelyCast {
                         table_name: table_name.clone(),
-                        col_name: format!("`{}`", column.name),
+                        col_name: format!("`{}`", column.name.replace('`', "``")),
                         src_type: format!("\"{}\"", data.data_type.catalog_string().to_uppercase()),
                         target_type: format!(
                             "\"{}\"",
@@ -117,14 +118,18 @@ pub(super) fn assign(
             taken[i] = true;
             *slot = Source::Position(i);
         }
-        // Spark names each with `toSQLId`, which parses the raw name: one that does not parse is
-        // `INVALID_ATTRIBUTE_NAME_SYNTAX`.
+        // Spark 4.3.0 quotes each raw name as one part (`toSQLId(Seq(name))`). 3.5 to 4.2 parse it first
+        // (`toSQLId(name)`), so one that does not parse is `INVALID_ATTRIBUTE_NAME_SYNTAX`.
         let extra = output
             .iter()
             .zip(&taken)
             .filter(|(_, taken)| !**taken)
             .map(|(o, _)| {
-                let parts = krishiv_common::names::parse_attribute_name(&o.name)?;
+                let parts = if profile >= SparkProfile::V4_3 {
+                    vec![o.name.clone()]
+                } else {
+                    krishiv_common::names::parse_attribute_name(&o.name)?
+                };
                 Ok(quoted_path(
                     &parts.iter().map(String::as_str).collect::<Vec<_>>(),
                 ))
