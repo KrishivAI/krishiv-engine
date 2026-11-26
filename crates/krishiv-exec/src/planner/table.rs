@@ -101,6 +101,15 @@ pub trait TableProvider: Send + Sync + fmt::Debug {
         Vec::new()
     }
 
+    /// For a column of the table, the mean scan unit's (Parquet row group's)
+    /// `max - min` over the table's `max - min`, from footer statistics
+    /// ([`Statistics::unit_spread`]): small for a column written in order.
+    /// Unknown by default.
+    fn unit_spread(&self, column: &str) -> Option<f64> {
+        let _ = column;
+        None
+    }
+
     /// The optimizer wants `columns` (sorted names) proven unique
     /// ([`Statistics::want_unique`]): a request the session may answer with
     /// a key count. Ignored by default; a [`FileTable`] keeps it.
@@ -171,6 +180,10 @@ impl Statistics for ProviderStatistics {
         if let Ok(p) = self.0.provider(scan) {
             p.want_unique(columns);
         }
+    }
+
+    fn unit_spread(&self, scan: &Scan, column: &str) -> Option<f64> {
+        self.0.provider(scan).ok()?.unit_spread(column)
     }
 
     fn reads_rows_without_columns(&self, scan: &Scan) -> bool {
