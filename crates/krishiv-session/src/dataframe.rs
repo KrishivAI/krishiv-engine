@@ -869,7 +869,25 @@ impl DataFrame {
             return Ok(a);
         }
         env.set_quiet_denials(quiet_denials, &self.session.state.policy);
-        self.analyzed_in_with_text(env, text.as_deref()).await
+        // A fresh analysis of a SQL statement's frame (an action after `sql`) asks the policy
+        // for that statement: its class and query id reach a provider's questions (ADR 0049).
+        let context = match (
+            env.statement_class,
+            crate::access::StatementContext::current(),
+        ) {
+            (Some(class), None) => Some(crate::access::StatementContext::new(
+                class,
+                self.session.operation_id().map(crate::QueryId::as_str),
+                Arc::clone(&env.row),
+            )),
+            _ => None,
+        };
+        match context {
+            Some(context) => {
+                Box::pin(context.scope(self.analyzed_in_with_text(env, text.as_deref()))).await
+            }
+            None => self.analyzed_in_with_text(env, text.as_deref()).await,
+        }
     }
 
     /// [`Self::analysis`] for an action that runs the query: a re-analysis
@@ -917,7 +935,9 @@ impl DataFrame {
         if let Some(e) = &self.invalid {
             return Err(e.clone());
         }
+        // A checkpoint the plan runs first is execution, not planning: the clock starts after it.
         let plan = self.plan_with_checkpoints().await?;
+        let began = std::time::Instant::now();
         let (analyzed, through_views) = self.session.analyze_in(&plan, &env, text).await?;
         // Analysis-only paths (DESCRIBE QUERY, `schema`) never reach `open_files`: refuse a
         // time-travel clause they would otherwise describe as the current table.
@@ -931,6 +951,7 @@ impl DataFrame {
             env.set_text(t);
         }
         env.observers = Arc::new(self.observers_through(through_views));
+        env.planning.analysis_done(began);
         let analysis = Arc::new(Analysis {
             env: Arc::new(env),
             analyzed: Arc::new(analyzed),
