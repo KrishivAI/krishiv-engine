@@ -66,10 +66,10 @@ is also attached.
 
 ```bash
 cargo add krishiv                 # the library
-cargo install krishiv-cli         # the `krishiv` command, from source
+cargo install krishiv-cli --features server,ui   # the `krishiv` command as released: with `krishiv server` and the web console
 ```
 
-Building needs Rust 1.97 or newer. Features are additive; the [Rust reference](../reference/rust/index.md) lists them.
+Without `--features`, `cargo install krishiv-cli` builds the embedded binary (`sql`, `check-compat`, `debug-bundle`; no `krishiv server`, no web console). Other features (`iceberg`, `delta`, `flight-sql`, `catalog-iceberg-rest`) are listed in the crate's `[features]`. Building needs Rust 1.97 or newer. Features are additive; the [Rust reference](../reference/rust/index.md) lists them.
 
 ## Platforms and versions
 

@@ -50,7 +50,7 @@ cargo add krishiv   # needs Rust 1.97 or newer
 **CLI** (the `krishiv` binary):
 
 ```bash
-cargo install krishiv-cli   # needs Rust 1.97 or newer
+cargo install krishiv-cli --features server,ui   # needs Rust 1.97 or newer; the features add `krishiv server` and the web console
 ```
 
 Prebuilt `krishiv` CLI binaries are not available yet; install the CLI from source with the command above.

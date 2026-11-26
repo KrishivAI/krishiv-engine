@@ -15,7 +15,7 @@ Install the package with pyarrow for the Arrow results:
 pip install "krishiv[pyarrow]"
 ```
 
-The command-line tool (the `krishiv` binary) installs from source with Rust 1.97 or newer: `cargo install krishiv-cli`. Prebuilt `krishiv` CLI binaries are not available yet.
+The command-line tool (the `krishiv` binary) installs from source with Rust 1.97 or newer: `cargo install krishiv-cli --features server,ui` (without the features the binary has no `krishiv server`). Prebuilt `krishiv` CLI binaries are not available yet.
 
 Krishiv needs Python 3.11 or newer (the floor of the Spark 4.3 Python client); the examples run on 3.11 to 3.14. The `pyarrow` extra is needed for `collect()` and `toArrow()`, which return Arrow data.
 
