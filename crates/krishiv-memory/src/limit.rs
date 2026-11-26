@@ -38,8 +38,9 @@ fn share_of(bytes: u64) -> usize {
 /// bytes: `explicit` itself, unless it is above [`effective_memory_limit`].
 /// Then the pool could grow past what the kernel allows and the process would
 /// be OOM-killed without an error before the engine ever spills, so the limit
-/// is [`default_limit`] instead, with a warning (logged once per requested
-/// value, not on every call: the setting is read again by each admin check).
+/// is [`default_limit`] instead, with a warning (not logged again while the
+/// requested value stays the same: the setting is read again by each admin
+/// check).
 ///
 /// A value at or just under the effective limit stands as given. It leaves
 /// no room for what the process holds outside the pool (the allocator's
