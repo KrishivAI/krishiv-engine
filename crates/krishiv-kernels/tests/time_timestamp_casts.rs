@@ -113,3 +113,49 @@ fn a_time_without_the_query_clock_is_refused_by_name() {
         "{err}"
     );
 }
+
+/// A `TIME` to `TIMESTAMP` in a region zone is `LocalDateTime.atZone` (Spark 4.3.0
+/// `DateTimeUtils.makeTimestamp(days, nanos, zoneId)`): in a DST gap the local time moves
+/// forward by the gap's length, in an overlap it takes the earlier offset. And back: the
+/// instant's local time of day in the zone (`timestampToNanosOfDay`).
+#[test]
+fn a_time_across_a_dst_change_is_read_as_java_reads_a_local_date_time() {
+    let la = krishiv_kernels::datetime::resolve_zone("America/Los_Angeles").unwrap();
+    let hour = 3_600_000_000_i64;
+    let at = |h: i64, m: i64| (h * 3_600 + m * 60) * 1_000_000_000;
+    // 2020-03-08 (day 18,329): 02:00 PST jumps to 03:00 PDT; the query starts at 18:00 UTC.
+    let gap_day = 18_329 * MICROS_PER_DAY;
+    let zone = Clocked {
+        inner: &la,
+        query_start: gap_day + 18 * hour,
+    };
+    let a = Time64NanosecondArray::from(vec![Some(at(1, 30)), Some(at(2, 30)), Some(at(3, 30))]);
+    assert_eq!(
+        timestamps(&a, &ltz(), &zone),
+        vec![
+            // 01:30 PST = 09:30 UTC; 02:30 does not exist: 03:30 PDT = 10:30 UTC, as 03:30 is.
+            Some(gap_day + 9 * hour + hour / 2),
+            Some(gap_day + 10 * hour + hour / 2),
+            Some(gap_day + 10 * hour + hour / 2),
+        ]
+    );
+    // 2020-11-01 (day 18,567): 02:00 PDT falls back to 01:00 PST; 01:30 happens twice and
+    // takes the earlier offset, PDT: 08:30 UTC.
+    let overlap_day = 18_567 * MICROS_PER_DAY;
+    let zone = Clocked {
+        inner: &la,
+        query_start: overlap_day + 18 * hour,
+    };
+    let a = Time64NanosecondArray::from(vec![Some(at(1, 30))]);
+    assert_eq!(
+        timestamps(&a, &ltz(), &zone),
+        vec![Some(overlap_day + 8 * hour + hour / 2)]
+    );
+    // Both 01:30s come back as 01:30.
+    let both = TimestampMicrosecondArray::from(vec![
+        Some(overlap_day + 8 * hour + hour / 2),
+        Some(overlap_day + 9 * hour + hour / 2),
+    ])
+    .with_timezone("UTC");
+    assert_eq!(time_of(&both, &la), vec![Some(at(1, 30)), Some(at(1, 30))]);
+}
