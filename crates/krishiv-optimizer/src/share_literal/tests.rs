@@ -13,11 +13,13 @@ use krishiv_plan::analyzer::{
     Analyzer as _, DefaultAnalyzer, MemoryCatalog, ResolutionConf, TableColumn,
 };
 use krishiv_plan::{
-    AttrId, Cte, CteRef, ExprNode, Grouping, LogicalPlan, PlanNode, ResolvedExpr, SourceId,
+    AttrId, BoundColumn, Cte, CteRef, Expr, ExprNode, Grouping, LogicalPlan, PlanNode,
+    ResolvedExpr, SourceId,
 };
 use krishiv_types::DataType;
 
-use super::{Lift, Mode, all_shared};
+use super::{Lift, Mode, all_shared, canonical_states, item_key, reader_exprs, reads_any, renamed};
+use crate::expr::{column, strip_alias};
 
 fn columns(names: &[&str]) -> Vec<TableColumn> {
     names
@@ -207,4 +209,123 @@ fn the_rewrite_is_kept_only_when_every_definition_is_shared() {
         allow_missing_columns: false,
     }));
     assert!(!all_shared(&expected, &with(both)));
+}
+
+fn long(id: u64, name: &str) -> BoundColumn {
+    BoundColumn {
+        id: AttrId(id),
+        name: name.to_owned(),
+        data_type: DataType::Long,
+        nullable: true,
+    }
+}
+
+/// `SELECT g, sum(x) FROM t WHERE g = 1L GROUP BY g` as eager aggregation
+/// leaves it (K5): a `PartialAggregate` grouped by `g` whose `sum` state has
+/// id `state`, the aggregate above outputting the state as `out`. The group
+/// key's id is returned too.
+fn eager(state: u64, out: u64) -> (Arc<LogicalPlan>, AttrId) {
+    let (top, g) = aggregate(&resolve("SELECT g, sum(x) FROM t WHERE g = 1L GROUP BY g"));
+    let PlanNode::Aggregate {
+        input,
+        grouping: Grouping::GroupBy(keys),
+        aggregates,
+    } = &top.node
+    else {
+        panic!("not a grouped aggregate: {top}");
+    };
+    let s = long(state, "sum_state");
+    let partial = Arc::new(LogicalPlan::new(PlanNode::PartialAggregate {
+        input: Arc::clone(input),
+        keys: keys.clone(),
+        aggregates: vec![Arc::clone(strip_alias(&aggregates[1]))],
+        states: vec![s.clone()],
+    }));
+    let merged = Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Alias {
+        expr: column(&s),
+        output: long(out, "total"),
+    })));
+    let plan = Arc::new(LogicalPlan::new(PlanNode::Aggregate {
+        input: partial,
+        grouping: Grouping::GroupBy(keys.clone()),
+        aggregates: vec![Arc::clone(&aggregates[0]), merged],
+    }));
+    (plan, g)
+}
+
+/// The walk passes a `PartialAggregate` grouped by the key, as a grouped
+/// aggregate (F-A L1b).
+#[test]
+fn a_partial_aggregate_on_the_key_is_followed() {
+    let (top, g) = eager(1_000, 2_000);
+    let mut lift = Lift::new(Mode::Mark);
+    assert!(lift.core(&top, g).is_some());
+    assert!(
+        lift.single()
+            .is_some_and(|(l, _)| format!("{l:?}").contains('1'))
+    );
+}
+
+/// Two instances that differ only in eager aggregation's fresh state ids
+/// compare equal once the states are renamed canonically, and their items
+/// match by what they compute.
+#[test]
+fn instances_differing_in_state_ids_are_one_computation() {
+    let (a, _) = eager(1_000, 2_000);
+    let (b, _) = eager(1_001, 2_000);
+    assert_ne!(a, b);
+    let (ca, ma) = canonical_states(&a);
+    let (cb, mb) = canonical_states(&b);
+    assert_eq!(ca, cb);
+    assert_eq!(ma.len(), 1);
+    assert_eq!(ma.get(&AttrId(1_000)), mb.get(&AttrId(1_001)));
+
+    let item = |p: &Arc<LogicalPlan>| match &p.node {
+        PlanNode::Aggregate { aggregates, .. } => Arc::clone(&aggregates[1]),
+        _ => panic!("not an aggregate: {p}"),
+    };
+    let (ia, ib) = (item(&a), item(&b));
+    assert!(reads_any(&ia, &ma));
+    assert!(!reads_any(&ia, &mb));
+    assert!(!reads_any(&ia, &std::collections::HashMap::new()));
+    assert_ne!(
+        item_key(&ia, &ma),
+        item_key(&ib, &std::collections::HashMap::new())
+    );
+    assert_eq!(item_key(&ia, &ma), item_key(&ib, &mb));
+    // A column the map does not hold is kept.
+    let g = column(&long(7, "g"));
+    assert!(Arc::ptr_eq(&renamed(&g, &ma), &g));
+}
+
+/// A reader of a definition with other state ids reads the definition's item
+/// that computes the same, under the instance's own id.
+#[test]
+fn a_reader_matches_items_across_state_ids() {
+    let (def, _) = eager(1_000, 2_000);
+    let (own, _) = eager(1_001, 2_001);
+    let def_out = def.resolved_output().unwrap();
+    let out = own.resolved_output().unwrap();
+    let exprs = reader_exprs(&own, &out, &def, &def_out).unwrap();
+    assert_eq!(exprs.len(), 2);
+    // The key keeps its id: a bare column.
+    assert!(matches!(
+        &exprs[0].node,
+        ExprNode::Resolved(ResolvedExpr::Column(c)) if c.id == out[0].id
+    ));
+    // The total: the definition's column under the instance's id.
+    let ExprNode::Resolved(ResolvedExpr::Alias { expr, output }) = &exprs[1].node else {
+        panic!("not an alias: {:?}", exprs[1]);
+    };
+    assert_eq!(output.id, AttrId(2_001));
+    assert!(matches!(
+        &expr.node,
+        ExprNode::Resolved(ResolvedExpr::Column(c)) if c.id == AttrId(2_000)
+    ));
+    // Same ids: read bare.
+    let same = reader_exprs(&def, &def_out, &def, &def_out).unwrap();
+    assert!(matches!(
+        &same[1].node,
+        ExprNode::Resolved(ResolvedExpr::Column(c)) if c.id == AttrId(2_000)
+    ));
 }
