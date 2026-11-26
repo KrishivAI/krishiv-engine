@@ -1341,6 +1341,19 @@ fn writer_scratch_is_reserved_in_full_and_returned() {
 }
 
 #[test]
+fn a_scope_reports_its_drop_behind_window() {
+    let dir = TestDir::new();
+    for window in [0, 8 << 20, 1 << 30] {
+        let manager = SpillManager::open(&SpillConfig {
+            drop_behind: window,
+            ..dir.config(SpillCodec::None)
+        })
+        .unwrap();
+        assert_eq!(manager.scope().unwrap().drop_behind_bytes(), window);
+    }
+}
+
+#[test]
 fn concurrent_writers_never_exceed_the_cap() {
     let dir = TestDir::new();
     let manager = SpillManager::open(&SpillConfig {

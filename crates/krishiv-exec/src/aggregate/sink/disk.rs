@@ -40,7 +40,10 @@
 //! **Width.** Level 0 has `2^level0_bits` partitions, 8 to 64 by the
 //! executor's parallelism ([`level0_bits`](crate::hash::level0_bits),
 //! design `0.4-agg-disk-overpartition`), so every thread takes several
-//! tasks and few stall or split; a split's runs are 8 wide at every level.
+//! tasks and few stall or split; capped so a file holds about one spill
+//! drop-behind window ([`capped_level0_bits`](crate::hash::capped_level0_bits)),
+//! since each file pays a forced writeback; a split's runs are 8 wide at
+//! every level.
 //!
 //! The groups' order across partitions is the tasks' key order, not the
 //! order the serial phase produced; inside a partition it is unchanged.

@@ -359,6 +359,14 @@ impl SpillScope {
         let _ = self.inner.writer_hook.set(WriterHook(hook));
     }
 
+    /// The drop-behind window of this scope's writers in bytes
+    /// (`krishiv.spill.dropBehindBytes`; 0 when disabled). A writer forces
+    /// writeback once per window and at finish, so files much smaller than
+    /// the window each pay that cost alone.
+    pub fn drop_behind_bytes(&self) -> u64 {
+        self.inner.manager().drop_behind
+    }
+
     /// Starts a spill file for batches of `schema`. `reservation` accounts
     /// the writer's scratch memory (see [`SpillWriter`]); when it comes from
     /// a [`ConsumerHandle`](crate::ConsumerHandle), the finished file is

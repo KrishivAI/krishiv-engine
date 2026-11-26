@@ -126,7 +126,9 @@ async fn disk_by_hand_in(
         QueryId(12),
         WorkloadClass::Batch,
         config,
-        root.child("q", Some(limit)),
+        // As a session runs a query: `krishiv.memory.limit` on the root, the
+        // query's own pool unlimited (no admission budget).
+        root.child("q", None),
     );
     let ctx = |id, name| {
         let e = Arc::clone(&executor);
@@ -930,6 +932,33 @@ async fn level_0_runs_at_6_bits_are_64_wide_and_give_the_unspilled_rows() {
                 by_bits.push(got.rows);
             }
             assert_eq!(by_bits[0], by_bits[1], "layout {layout}, {limit} B");
+        }
+    }
+}
+
+/// The width's drop-behind cap reads the query's effective limit, the
+/// root's (design `0.4-agg-disk-overpartition` §2a): at 8 slots and an 8 MiB
+/// limit an 8 MiB window caps level 0 at 8 wide, and with the window off it
+/// is 64 wide. No width override: the bits come from `spiller_for`.
+#[tokio::test]
+async fn the_drop_behind_window_caps_level_0_under_a_limited_root() {
+    let (s, b) = grouped_input(120_000, 40_000);
+    for layout in [false, true] {
+        for (window, want) in [(8 << 20, 8), (0, 64)] {
+            let (_m, scope) = spill_dir_with(&SpillConfig {
+                drop_behind: window,
+                ..SpillConfig::default()
+            });
+            let mut sp = spec(&s, vec![0], disk_aggs(&s));
+            sp.spill = Some(scope);
+            let agg = HashAggregate::new(sp).unwrap();
+            let executor: Arc<dyn Executor> = TokioExecutor::deterministic(8).unwrap();
+            disk_by_hand(&agg, &s, &b, executor, 8 << 20, layout).await;
+            let at = format!("layout {layout}, window {window}");
+            let m = agg.metrics();
+            assert!(m.spill_runs > 0, "{at}");
+            assert_eq!(m.repartitions, 0, "{at}");
+            assert_eq!(sink_metric(&agg, "disk_tasks"), want, "{at}");
         }
     }
 }

@@ -86,6 +86,30 @@ pub(crate) fn level0_bits(parallelism: usize, deterministic: bool) -> u32 {
     (PARTITION_BITS + log).clamp(PARTITION_BITS, MAX_LEVEL0_BITS)
 }
 
+/// [`level0_bits`] capped so a level-0 file holds about one spill
+/// drop-behind window (design `0.4-agg-disk-overpartition` §2a): a writer
+/// forces writeback and syncs each file at finish, so files far under the
+/// window cost a sync each. A run is expected to be `limit / (2 *
+/// parallelism)` bytes (a task spills when its share fills; its table is
+/// between half and all of it), and the cap is `floor(log2(run / window))`,
+/// at least 3. No cap without a limit or with the window off (`0`).
+pub(crate) fn capped_level0_bits(
+    parallelism: usize,
+    deterministic: bool,
+    limit: Option<usize>,
+    window: u64,
+) -> u32 {
+    let bits = level0_bits(parallelism, deterministic);
+    let Some(limit) = limit else { return bits };
+    if window == 0 {
+        return bits;
+    }
+    let run = (limit as u64) / (2 * parallelism.max(1) as u64);
+    let files = run / window;
+    let cap = files.checked_ilog2().unwrap_or(0).max(PARTITION_BITS);
+    bits.min(cap)
+}
+
 /// The deepest level when level 0 is `level0_bits` wide (`MAX_LEVEL` at 3).
 pub(crate) const fn max_level(level0_bits: u32) -> u32 {
     (64 - 7 - level0_bits) / PARTITION_BITS
@@ -714,6 +738,39 @@ mod tests {
         for (p, bits) in want {
             assert_eq!(level0_bits(p, false), bits, "parallelism {p}");
             assert_eq!(level0_bits(p, true), 3, "deterministic, parallelism {p}");
+        }
+    }
+
+    #[test]
+    fn level0_width_is_capped_by_the_drop_behind_window() {
+        const MIB: usize = 1 << 20;
+        const GIB: usize = 1 << 30;
+        let w = 8 << 20;
+        // Design 0.4-agg-disk-overpartition §2a's table (12 threads, 8 MiB).
+        assert_eq!(capped_level0_bits(12, false, Some(8 * GIB), w), 5, "q10 8g");
+        assert_eq!(
+            capped_level0_bits(12, false, Some(12 * GIB), w),
+            6,
+            "q10 12g"
+        );
+        assert_eq!(capped_level0_bits(12, false, Some(2 * GIB), w), 3, "q67 2g");
+        // No cap with the window off or without a limit.
+        assert_eq!(capped_level0_bits(12, false, Some(2 * GIB), 0), 6);
+        assert_eq!(capped_level0_bits(12, false, None, w), 6);
+        // A tiny limit or a window larger than a run: never under 3.
+        assert_eq!(capped_level0_bits(12, false, Some(MIB), w), 3);
+        assert_eq!(capped_level0_bits(0, false, Some(16), u64::MAX), 3);
+        // Never above the parallelism rule, and 3 in deterministic mode.
+        assert_eq!(capped_level0_bits(2, false, Some(1 << 40), w), 4);
+        assert_eq!(capped_level0_bits(12, true, Some(1 << 40), w), 3);
+        for p in [1, 2, 3, 4, 8, 12, 16] {
+            for limit in [MIB, GIB, 8 * GIB, 64 * GIB] {
+                let b = capped_level0_bits(p, false, Some(limit), w);
+                assert!(
+                    (3..=level0_bits(p, false)).contains(&b),
+                    "p {p} limit {limit}"
+                );
+            }
         }
     }
 }

@@ -45,7 +45,7 @@ use crate::ExchangeStats;
 use crate::context::{QueryContext, TaskContext};
 use crate::error::{Result, cancelled, internal};
 use crate::executor::{Executor, run_blocking};
-use crate::hash::{HashSeed, ProbeTotals, level0_bits, max_level};
+use crate::hash::{HashSeed, ProbeTotals, capped_level0_bits, max_level};
 use crate::operator::{GlobalState, LocalState, Sink, SinkStatus, Source};
 use crate::output_spill::{OutputSpill, SpillUnread, Unfinished, refused};
 use crate::sync::{Event, Mutex, lock};
@@ -517,12 +517,16 @@ impl HashAggregate {
 
     /// A [`Spiller`] whose writers' scratch is `consumer`'s. Every spiller of
     /// one aggregate writes level 0 at one width (design
-    /// `0.4-agg-disk-overpartition` §2): the executor's parallelism and the
-    /// deterministic mode are the query's.
+    /// `0.4-agg-disk-overpartition` §2, §2a): the executor's parallelism,
+    /// the deterministic mode and the memory limit are the query's, the
+    /// drop-behind window the spill scope's.
     fn spiller_for(&self, ctx: &TaskContext, consumer: Arc<ConsumerHandle>) -> Option<Spiller> {
-        let bits = level0_bits(
+        let scope = self.core.spec.spill.clone()?;
+        let bits = capped_level0_bits(
             ctx.executor().parallelism(),
             ctx.query().config().deterministic_order,
+            ctx.query().pool().effective_limit(),
+            scope.drop_behind_bytes(),
         );
         #[cfg(test)]
         let bits = self.spill_bits.unwrap_or(bits);
@@ -531,7 +535,7 @@ impl HashAggregate {
             core: Arc::clone(&self.core),
             counters: Arc::clone(&self.counters),
             query: Arc::clone(ctx.query()),
-            scope: self.core.spec.spill.clone()?,
+            scope,
             consumer,
             batch_size: ctx.query().config().batch_size.max(1),
         })
