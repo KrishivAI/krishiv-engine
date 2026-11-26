@@ -46,6 +46,7 @@ pub(crate) mod pushdown;
 mod python_relation;
 mod python_udf;
 mod python_udtf;
+mod residual_bound;
 mod row_level;
 mod runtime_filter;
 mod scan_facts;
