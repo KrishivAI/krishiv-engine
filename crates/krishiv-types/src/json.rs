@@ -121,7 +121,27 @@ impl DataType {
     pub fn from_json(text: &str) -> Result<Self> {
         let value: Value =
             serde_json::from_str(text).map_err(|_| error::invalid_json_type(text))?;
-        Self::from_json_value(&value, 0, false)
+        Self::from_json_value(&value, 0, JsonRead::default())
+    }
+
+    /// [`Self::from_json`] read under `grammar`: Spark 4.2 refuses `time(7..=9)` (as
+    /// `UNSUPPORTED_TIME_PRECISION`), and its `nameToType` knows no `timestamp_ntz(p)` /
+    /// `timestamp_ltz(p)`: every such name but `(6)` is `INVALID_JSON_DATA_TYPE` (`invalidType` the
+    /// name). A 4.3 `timestamp_ntz(6)` name still reads as the microsecond type under 4.2 (only a
+    /// 4.3 writer emits it).
+    ///
+    /// # Errors
+    /// As [`Self::from_json`].
+    pub fn from_json_in(text: &str, grammar: crate::TypeGrammar) -> Result<Self> {
+        let value: Value =
+            serde_json::from_str(text).map_err(|_| error::invalid_json_type(text))?;
+        let read = JsonRead {
+            indeterminate: false,
+            v4_2: grammar == crate::TypeGrammar::V4_2,
+        };
+        Self::from_json_value(&value, 0, read)
+            .map_err(|e| e.in_release(grammar.release()))?
+            .in_grammar(grammar)
     }
 
     /// The inverse of [`Self::json`] for every type it writes: [`Self::from_json`] that also
@@ -134,15 +154,24 @@ impl DataType {
     pub fn from_canonical_json(text: &str) -> Result<Self> {
         let value: Value =
             serde_json::from_str(text).map_err(|_| error::invalid_json_type(text))?;
-        Self::from_json_value(&value, 0, true)
+        let read = JsonRead {
+            indeterminate: true,
+            v4_2: false,
+        };
+        Self::from_json_value(&value, 0, read)
     }
 
-    /// `indeterminate`: the INDETERMINATE collation reads back ([`Self::from_canonical_json`]).
-    fn from_json_value(v: &Value, depth: usize, indeterminate: bool) -> Result<Self> {
+    fn from_json_value(v: &Value, depth: usize, read: JsonRead) -> Result<Self> {
         let invalid = || error::invalid_json_type(&v.to_string());
         let obj = match v {
-            Value::String(name) if indeterminate && name == INDETERMINATE_NAME => {
+            Value::String(name) if read.indeterminate && name == INDETERMINATE_NAME => {
                 return Ok(Self::collated_string(Collation::INDETERMINATE));
+            }
+            // Spark 4.2's `nameToType` has no precision form: only Krishiv's `(6)` leniency reads.
+            Value::String(name)
+                if read.v4_2 && timestamp_from_name(name).is_some_and(|t| t.is_err()) =>
+            {
+                return Err(error::invalid_json_type(name));
             }
             Value::String(name) => return atomic_from_name(name).ok_or_else(invalid)?,
             Value::Object(obj) => obj,
@@ -154,7 +183,7 @@ impl DataType {
         let child = |key: &str| {
             obj.get(key)
                 .ok_or_else(invalid)
-                .and_then(|c| Self::from_json_value(c, depth + 1, indeterminate))
+                .and_then(|c| Self::from_json_value(c, depth + 1, read))
         };
         let flag = |key: &str| obj.get(key).and_then(Value::as_bool).ok_or_else(invalid);
         let keys = |expected: &[&str]| {
@@ -179,7 +208,7 @@ impl DataType {
                     .ok_or_else(invalid)?;
                 let fields = fields
                     .iter()
-                    .map(|f| struct_field(f, depth, indeterminate))
+                    .map(|f| struct_field(f, depth, read))
                     .collect::<Result<Vec<_>>>()?;
                 Ok(StructType::new(fields).into())
             }
@@ -218,7 +247,7 @@ impl DataType {
 
 /// A struct field: `name`, `type` and `nullable`, and `metadata` (optional,
 /// as in Spark).
-fn struct_field(v: &Value, depth: usize, indeterminate: bool) -> Result<StructField> {
+fn struct_field(v: &Value, depth: usize, read: JsonRead) -> Result<StructField> {
     let invalid = || error::invalid_json_type(&v.to_string());
     let obj = v.as_object().ok_or_else(invalid)?;
     let has_metadata = obj.contains_key("metadata");
@@ -234,18 +263,15 @@ fn struct_field(v: &Value, depth: usize, indeterminate: bool) -> Result<StructFi
         .get("nullable")
         .and_then(Value::as_bool)
         .ok_or_else(invalid)?;
-    let data_type = DataType::from_json_value(
-        obj.get("type").ok_or_else(invalid)?,
-        depth + 1,
-        indeterminate,
-    )?;
+    let data_type =
+        DataType::from_json_value(obj.get("type").ok_or_else(invalid)?, depth + 1, read)?;
     let (data_type, metadata) = match obj.get("metadata") {
         None => (data_type, Metadata::empty()),
         Some(Value::Object(m)) => {
             let mut m = m.clone();
             let data_type = match m.remove(COLLATIONS_KEY) {
                 Some(Value::Object(map)) => {
-                    apply_collations(&data_type, name, &map, indeterminate)?
+                    apply_collations(&data_type, name, &map, read.indeterminate)?
                 }
                 Some(_) => return Err(invalid()),
                 None => data_type,
@@ -255,6 +281,14 @@ fn struct_field(v: &Value, depth: usize, indeterminate: bool) -> Result<StructFi
         Some(_) => return Err(invalid()),
     };
     Ok(StructField::new(name, data_type, nullable).with_metadata(metadata))
+}
+
+/// How a JSON type is read: `indeterminate`, the INDETERMINATE collation reads back
+/// ([`DataType::from_canonical_json`]); `v4_2`, Spark 4.2's names ([`DataType::from_json_in`]).
+#[derive(Clone, Copy, Default)]
+struct JsonRead {
+    indeterminate: bool,
+    v4_2: bool,
 }
 
 /// The field-metadata key under which Spark's JSON form records the
@@ -416,6 +450,11 @@ fn atomic_from_name(name: &str) -> Option<Result<DataType>> {
     if let Some(t) = time_from_name(name) {
         return Some(t);
     }
+    // Spark 4.3's nanosecond timestamps (`DataType.fromJson` builds them whatever
+    // `spark.sql.timestampNanosTypes.enabled` says): Krishiv has no such type yet.
+    if let Some(t) = timestamp_from_name(name) {
+        return Some(t);
+    }
     if let Some(t) = geometry_from_name(name) {
         return Some(t);
     }
@@ -469,7 +508,38 @@ fn time_from_name(name: &str) -> Option<Result<DataType>> {
     }
     Some(match inner.parse::<u32>() {
         Ok(p) => DataType::time(p),
-        Err(_) => Err(error::time_precision(&json_digits(inner))),
+        Err(_) => Err(error::time_precision(&json_digits(inner))
+            .in_release(krishiv_common::error::SparkRelease::V4_3)),
+    })
+}
+
+/// `timestamp_ntz(p)` / `timestamp_ltz(p)` in Spark 4.3's JSON form: 6 is the microsecond type,
+/// 7..=9 the nanosecond types (Krishiv has none yet), any other number
+/// `INVALID_TIMESTAMP_PRECISION`; `None` for a name that is no such form.
+fn timestamp_from_name(name: &str) -> Option<Result<DataType>> {
+    let (ntz, inner) = if let Some(rest) = name.strip_prefix("timestamp_ntz(") {
+        (true, rest)
+    } else {
+        (false, name.strip_prefix("timestamp_ltz(")?)
+    };
+    let inner = inner.strip_suffix(')')?.trim();
+    if inner.is_empty() || !inner.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    Some(match inner.parse::<u32>() {
+        Ok(6) if ntz => Ok(DataType::TimestampNtz),
+        Ok(6) => Ok(DataType::Timestamp),
+        Ok(7..=9) => Err(error::unsupported(format!(
+            "the nanosecond-precision timestamp type {name} (Krishiv 0.3.1)"
+        ))),
+        _ => Err(error::invalid_timestamp_precision(
+            &json_digits(inner),
+            if ntz {
+                "TIMESTAMP_NTZ"
+            } else {
+                "TIMESTAMP_LTZ"
+            },
+        )),
     })
 }
 

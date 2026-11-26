@@ -70,7 +70,7 @@ impl QueryProfile {
             "plan": plan_json(&self.plan),
             "hints": super::facts_json::hints_json(&self.hints),
             "operators": m.operators.iter().map(|(id, e)| operator_json(*id, e)).collect::<Vec<_>>(),
-            "usage": usage_json(&QueryUsage::of(m), self.identity.as_ref()),
+            "usage": usage_json(&QueryUsage::of(m), self.identity.as_ref(), self.planning_ns),
             "environment": {
                 "krishiv_version": env!("CARGO_PKG_VERSION"),
                 "os": std::env::consts::OS,
@@ -181,6 +181,14 @@ impl QueryProfile {
             }),
             _ => None,
         };
+        // Optional (minor 8): a profile the session did not plan has none.
+        let planning_ns = match usage.get("planning_ns") {
+            None | Some(Value::Null) => None,
+            Some(v) => Some(
+                v.as_u64()
+                    .ok_or_else(|| ProfileError::new("usage.planning_ns is not a u64"))?,
+            ),
+        };
         let trace = match o.get("trace") {
             None | Some(Value::Null) => None,
             Some(t) if t.is_object() => Some(t.clone()),
@@ -203,6 +211,7 @@ impl QueryProfile {
                 .get("hints")
                 .map(super::facts_json::hints_of)
                 .unwrap_or_default(),
+            planning_ns,
         })
     }
 }
@@ -292,7 +301,11 @@ fn plan_json(root: &ProfileNode) -> Value {
     )
 }
 
-fn usage_json(u: &QueryUsage, who: Option<&super::ProfileIdentity>) -> Value {
+fn usage_json(
+    u: &QueryUsage,
+    who: Option<&super::ProfileIdentity>,
+    planning_ns: Option<u64>,
+) -> Value {
     let mut v = json!({
         "fidelity": u.fidelity,
         "wall_ns": ns(u.wall),
@@ -305,6 +318,9 @@ fn usage_json(u: &QueryUsage, who: Option<&super::ProfileIdentity>) -> Value {
     if let (Some(w), Some(o)) = (who, v.as_object_mut()) {
         o.insert("principal".to_owned(), w.principal.clone().into());
         o.insert("tags".to_owned(), json!(w.tags));
+    }
+    if let (Some(p), Some(o)) = (planning_ns, v.as_object_mut()) {
+        o.insert("planning_ns".to_owned(), p.into());
     }
     v
 }

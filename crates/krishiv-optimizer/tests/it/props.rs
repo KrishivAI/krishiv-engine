@@ -28,6 +28,9 @@ pub(crate) enum Ty {
 pub(crate) struct Gen {
     r: Rng,
     alias: usize,
+    /// Mostly inner joins, on two integer columns where both sides have two (prune first's
+    /// composite-key gate); off, the generator draws exactly as before.
+    composite: bool,
 }
 
 type Scope = Vec<(String, Ty)>;
@@ -37,6 +40,15 @@ impl Gen {
         Self {
             r: Rng(seed | 1),
             alias: 0,
+            composite: false,
+        }
+    }
+
+    /// [`Self::new`] drawing inner joins on composite keys ([`Self::composite`]'s field).
+    pub(crate) fn composite(seed: u64) -> Self {
+        Self {
+            composite: true,
+            ..Self::new(seed)
         }
     }
 
@@ -95,7 +107,11 @@ impl Gen {
     }
 
     fn from(&mut self, depth: u32) -> (String, Scope) {
-        let roll = if depth == 0 { 0 } else { self.r.range(0, 2) };
+        let roll = match depth {
+            0 => 0,
+            _ if self.composite => 2,
+            _ => self.r.range(0, 2),
+        };
         if roll == 2 {
             let (left, ls) = self.from(depth - 1);
             let (right, rs) = self.relation(depth - 1);
@@ -108,12 +124,25 @@ impl Gen {
                 "LEFT SEMI JOIN",
                 "LEFT ANTI JOIN",
             ];
-            let kind = kinds[usize::try_from(self.r.range(0, 6)).unwrap()];
+            let kind = if self.composite && self.chance(80) {
+                "JOIN"
+            } else {
+                kinds[usize::try_from(self.r.range(0, 6)).unwrap()]
+            };
             let both: Scope = ls.iter().chain(&rs).cloned().collect();
             let on = if kind == "CROSS JOIN" {
                 String::new()
             } else {
                 let key = match (self.col(&ls, Some(Ty::Int)), self.col(&rs, Some(Ty::Int))) {
+                    (Some((l, _)), Some((r, _))) if self.composite => {
+                        let second = (self.col(&ls, Some(Ty::Int)), self.col(&rs, Some(Ty::Int)));
+                        match second {
+                            (Some((l2, _)), Some((r2, _))) if l2 != l && r2 != r => {
+                                format!("{l} = {r} AND {l2} = {r2}")
+                            }
+                            _ => format!("{l} = {r}"),
+                        }
+                    }
                     (Some((l, _)), Some((r, _))) => format!("{l} = {r}"),
                     _ => self.pred(&both, 1),
                 };
@@ -952,3 +981,86 @@ fn a_filter_over_a_full_join_aggregate_reaches_a_fixed_point() {
         again.root()
     );
 }
+
+/// [`support::AllDistinct`] with every column clustered in its files (`unit_spread` 0), so the
+/// prune-first gate (perf lever D1a) opens wherever the largest input joins another on a
+/// composite key.
+#[derive(Debug)]
+struct ClusteredEverywhere;
+
+impl krishiv_optimizer::Statistics for ClusteredEverywhere {
+    fn table(&self, scan: &krishiv_plan::Scan) -> Option<krishiv_optimizer::TableStats> {
+        support::AllDistinct.table(scan)
+    }
+
+    fn unit_spread(&self, _: &krishiv_plan::Scan, _: &str) -> Option<f64> {
+        Some(0.0)
+    }
+}
+
+/// Prune first over generated queries (review of D1a, finding 1): with every column clustered,
+/// the blocked enumeration runs on every tree whose largest input has a composite-key edge. Each
+/// plan keeps the unoptimized plan's output and rows and is a fixed point, and the choice is
+/// taken on some of the queries, so the check is not vacuous.
+#[test]
+fn random_queries_keep_their_rows_when_prune_first_is_taken() {
+    use krishiv_common::config::Config;
+    use krishiv_udf_sdk::UdfLibrary;
+
+    let ctx = support::ctx();
+    // A session configuration turns on the config-gated rules too; `ShareFilteredScan` is not a
+    // fixed point on every generated query under these statistics (seed 49, no inner join) and
+    // is not what this test checks.
+    let mut config = Config::new();
+    config
+        .set("krishiv.optimizer.shareFilteredScans", "false")
+        .unwrap_or_else(|e| panic!("{e}"));
+    let udfs = UdfLibrary::new();
+    let mut taken = 0;
+    for seed in 0..PRUNE_FIRST_SEEDS {
+        let sql = Gen::composite(seed).top();
+        let plan = support::resolve(&sql, &ctx);
+        let (optimized, steps) = krishiv_optimizer::optimize_traced_with_udfs(
+            &plan,
+            &ClusteredEverywhere,
+            &udfs,
+            &config,
+        )
+        .unwrap_or_else(|e| panic!("{sql}: {e}"));
+        taken += steps
+            .iter()
+            .filter(|s| s.rule == "JoinOrder" && s.note.contains("prune_first=taken"))
+            .count();
+        assert_eq!(
+            optimized.root().resolved_output(),
+            plan.root().resolved_output(),
+            "{sql}"
+        );
+        let (again, _) = krishiv_optimizer::optimize_traced_with_udfs(
+            &optimized,
+            &ClusteredEverywhere,
+            &udfs,
+            &config,
+        )
+        .unwrap_or_else(|e| panic!("{sql}: {e}"));
+        assert!(
+            again.structurally_eq(&optimized),
+            "{sql}: not a fixed point:\n{}\n{}",
+            optimized.root(),
+            again.root()
+        );
+        let db = data::small(seed);
+        assert_eq!(
+            eval::rows(&db, optimized.root()),
+            eval::rows(&db, plan.root()),
+            "seed {seed}: {sql}"
+        );
+    }
+    assert!(
+        taken > 0,
+        "prune first was taken on none of {PRUNE_FIRST_SEEDS} queries"
+    );
+}
+
+/// The generated queries [`random_queries_keep_their_rows_when_prune_first_is_taken`] plans.
+const PRUNE_FIRST_SEEDS: u64 = 2000;

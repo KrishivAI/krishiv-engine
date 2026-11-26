@@ -76,6 +76,9 @@ const KEYWORDS: &[(&str, u8)] = &[
     ("LEADING", R),
     ("LEFT", R | S),
     ("LIMIT", C),
+    // Spark 4.3 keyword (`#currentLike`); a primary only under the 4.3 grammar, an identifier
+    // under 4.2. Not reserved here: the 4.2 fixture has no `LOCALTIME`.
+    ("LOCALTIME", P),
     ("MINUS", C | N | S),
     ("NATURAL", R | N | S),
     ("NOT", R),

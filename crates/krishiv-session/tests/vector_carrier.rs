@@ -251,7 +251,9 @@ fn a_vector_column_through_parquet_reads_the_same_by_path_and_by_table() {
         &format!("SELECT id, size(v), v FROM parquet.`{path}` ORDER BY id"),
     );
     block_on(s.sql(&format!(
-        "CREATE TABLE vt (id INT, v ARRAY<FLOAT>) USING parquet LOCATION '{path}'"
+        "CREATE TABLE vt (id INT, v ARRAY<FLOAT>) USING parquet LOCATION '{}'",
+        // `/` separators: a Windows path's `\` would be read as a SQL escape.
+        path.replace('\\', "/")
     )))
     .map(|df| block_on(df.collect()))
     .unwrap()

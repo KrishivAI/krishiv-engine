@@ -826,6 +826,7 @@ fn bind_from_xml(args: &[BindArg], opts: &BindOptions) -> Result<Binding, Krishi
     let zone: Arc<dyn TimeZoneRules> = Arc::clone(&opts.time_zone);
     let binary = opts.binary_style;
     let binary_readable = opts.kernel.spark_version() != krishiv_kernels::SparkVersion::V4_0;
+    let time_micros_only = opts.kernel.spark_version() < krishiv_kernels::SparkVersion::V4_3;
     let today = krishiv_kernels::datetime::current_date(opts.query_start_micros, zone.as_ref())
         .map_err(KrishivError::from)?;
     Ok(Binding::new(return_type, move |x: &Inputs<'_>| {
@@ -840,6 +841,7 @@ fn bind_from_xml(args: &[BindArg], opts: &BindOptions) -> Result<Binding, Krishi
                 date: parsed.date.as_ref(),
                 time: parsed.time.as_ref(),
                 fallback: false,
+                time_micros_only,
             },
             zone: zone.as_ref(),
             today,

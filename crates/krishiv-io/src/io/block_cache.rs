@@ -264,6 +264,7 @@ impl BlockCache {
                 SEQUENCE.fetch_add(1, Ordering::Relaxed),
                 random_suffix()
             ));
+            #[cfg_attr(not(unix), expect(unused_mut, reason = "the mode is set on Unix only"))]
             let mut leaf = std::fs::DirBuilder::new();
             #[cfg(unix)]
             std::os::unix::fs::DirBuilderExt::mode(&mut leaf, 0o700);

@@ -85,8 +85,8 @@ pub enum AnchorError {
     /// A component of the path is a link or not a directory: it changed
     /// since the path was checked.
     Swapped(String),
-    /// A directory of the path has a name object paths cannot carry
-    /// unchanged (non-ASCII text or reserved characters).
+    /// A directory of the path has a name no object path segment holds (a
+    /// control character).
     UnsupportedName(String),
     /// Any other failure (permissions, I/O).
     Io(std::io::Error),
@@ -231,12 +231,12 @@ impl BeneathStore {
             }
         }
         names.truncate(depth);
-        // Object paths percent-encode some names (`LocalFileSystem` names
-        // files by the encoded text), so a directory above the target whose
-        // name changes under encoding cannot be addressed by them.
+        // An object path names each file by its own name (`Path::parse`), so
+        // only a name no path segment holds (a control character) cannot be
+        // addressed.
         if let Some(name) = names
             .iter()
-            .find(|n| Path::from_iter([n.as_str()]).as_ref() != n.as_str())
+            .find(|n| object_store::path::PathPart::parse(n).is_err())
         {
             return Err(AnchorError::UnsupportedName(name.clone()));
         }
@@ -247,6 +247,14 @@ impl BeneathStore {
                 walk,
             }),
         })
+    }
+
+    /// The anchor's own object path: its names as they are, which `anchor`
+    /// checked each path segment holds. A name that does not parse fails
+    /// closed (`InvalidPath`), never as the store's root.
+    fn base_path(&self) -> StoreResult<Path> {
+        Path::parse(self.inner.base.join("/"))
+            .map_err(|e| object_store::Error::InvalidPath { source: e })
     }
 
     /// The object-path segments of `location` below the anchor.
@@ -571,6 +579,48 @@ impl BeneathStore {
     }
 }
 
+impl super::staging::StagingSweep for BeneathStore {
+    /// The walk of a listing (descriptor-relative, no link followed, below the anchor), deleting
+    /// the staging files that `doomed` selects with `unlinkat` on the directory it read them in.
+    fn sweep_staging(
+        &self,
+        dir: &Path,
+        doomed: &super::staging::StagingDoomed<'_>,
+    ) -> std::io::Result<()> {
+        let other = |e: object_store::Error| std::io::Error::other(e.to_string());
+        let mut failure = None;
+        let mut pending = vec![self.rel(dir).map_err(other)?];
+        while let Some(rel) = pending.pop() {
+            let step = (|| -> StoreResult<()> {
+                let Some(fd) = self.listing_rel(&rel, dir)? else {
+                    return Ok(());
+                };
+                for (name, st) in entries(&fd)? {
+                    let kind = FileType::from_raw_mode(st.st_mode);
+                    if kind == FileType::Directory {
+                        let mut sub = rel.clone();
+                        sub.push(name);
+                        pending.push(sub);
+                    } else if kind == FileType::RegularFile
+                        && is_staging(&name)
+                        && doomed(&name, modified(&st))
+                    {
+                        match unlinkat(&fd, name.as_str(), AtFlags::empty()) {
+                            Ok(()) | Err(Errno::NOENT) => {}
+                            Err(e) => return Err(io_err(e.into())),
+                        }
+                    }
+                }
+                Ok(())
+            })();
+            if let Err(e) = step {
+                failure.get_or_insert_with(|| other(e));
+            }
+        }
+        failure.map_or(Ok(()), Err)
+    }
+}
+
 #[async_trait]
 impl ObjectStore for BeneathStore {
     async fn put_opts(
@@ -772,9 +822,10 @@ impl ObjectStore for BeneathStore {
 
     fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, StoreResult<ObjectMeta>> {
         let store = self.clone();
-        let prefix = prefix
-            .cloned()
-            .unwrap_or_else(|| Path::from_iter(store.inner.base.iter().map(String::as_str)));
+        let prefix = match prefix.cloned().map_or_else(|| store.base_path(), Ok) {
+            Ok(prefix) => prefix,
+            Err(e) => return futures::stream::once(std::future::ready(Err(e))).boxed(),
+        };
         futures::stream::once(async move { blocking(move || store.list_all(&prefix)).await })
             .flat_map(|r| match r {
                 Ok(v) => futures::stream::iter(v.into_iter().map(Ok)).boxed(),
@@ -785,9 +836,7 @@ impl ObjectStore for BeneathStore {
 
     async fn list_with_delimiter(&self, prefix: Option<&Path>) -> StoreResult<ListResult> {
         let store = self.clone();
-        let prefix = prefix
-            .cloned()
-            .unwrap_or_else(|| Path::from_iter(store.inner.base.iter().map(String::as_str)));
+        let prefix = prefix.cloned().map_or_else(|| store.base_path(), Ok)?;
         blocking(move || store.list_one_level(&prefix)).await
     }
 

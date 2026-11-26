@@ -95,7 +95,11 @@ fn agrees_with_spark_on_the_parse_probe() {
     for case in doc["cases"].as_array().unwrap() {
         let sql = case["sql"].as_str().unwrap();
         let conf = case["conf"].as_object().unwrap();
-        let options = ParserOptions::from_conf(|k| conf.get(k).and_then(|v| v.as_str()));
+        // The fixture is a Spark 4.2.0 run: the 4.2 grammar.
+        let options = ParserOptions {
+            spark_4_3: false,
+            ..ParserOptions::from_conf(|k| conf.get(k).and_then(|v| v.as_str()))
+        };
         let parses = case["parses"].as_bool().unwrap();
         let mode = case["mode"].as_str().unwrap_or("plan");
         if mode != "plan" {
@@ -166,7 +170,11 @@ fn agrees_with_spark_on_the_type_string_fixture() {
     );
     let doc: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
-    let d = ParserOptions::default();
+    // A Spark 4.2.0 fixture: the 4.2 grammar.
+    let d = ParserOptions {
+        spark_4_3: false,
+        ..ParserOptions::default()
+    };
     for case in doc["ddl"].as_array().unwrap() {
         let ddl = case["ddl"].as_str().unwrap();
         if ddl.to_ascii_lowercase().contains(" collate ") {
@@ -255,7 +263,11 @@ const FIELD_ERROR_POSITION_GAPS: &[&str] = &[
 /// with it (the probe fixture holds Spark's runs of these shapes).
 #[test]
 fn post_parse_checks_raise_spark_classes() {
-    let d = ParserOptions::default();
+    // Spark 4.2.0 runs (the probe fixture): the 4.2 grammar.
+    let d = ParserOptions {
+        spark_4_3: false,
+        ..ParserOptions::default()
+    };
     let class = |sql: &str| match parse_statement(sql, &d) {
         Ok(_) => panic!("{sql} parsed"),
         Err(e) => e.error.error_class(),

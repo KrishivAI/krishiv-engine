@@ -172,10 +172,8 @@ fn an_inner_window_without_arguments_is_an_arity_error_not_a_panic() {
     // `window(window(), '5 minutes')`: Spark raises WRONG_NUM_ARGS for the inner call.
     let inner = f("window", vec![]);
     let nested = f("window", vec![inner, s("5 minutes")]);
-    assert_eq!(
-        class(&run(grouped(nested))),
-        "WRONG_NUM_ARGS.WITHOUT_SUGGESTION"
-    );
+    let plan = LogicalPlan::table(["t"]).aggregate(vec![nested], vec![count_star()]);
+    assert_eq!(class(&run(plan)), "WRONG_NUM_ARGS.WITHOUT_SUGGESTION");
 }
 
 #[test]
@@ -327,7 +325,50 @@ fn session_window_errors() {
 fn nested_windows_and_window_time() {
     // `window(window(ts, '1 minute'), '5 minutes')` windows the inner window's `window_time`.
     let nested = f("window", vec![window("ts", &["1 minute"]), s("5 minutes")]);
-    let r = run(grouped(nested));
+    let r = run(LogicalPlan::table(["t"]).aggregate(vec![nested], vec![count_star()]));
+    assert_eq!(class(&r), "OK", "{:?}", r.as_ref().err().map(|e| &e.error));
+    // A bare `window` beside the grouped nested window names the inner window's column.
+    let nested_bare = LogicalPlan::table(["t"]).aggregate(
+        vec![f(
+            "window",
+            vec![window("ts", &["1 minute"]), s("5 minutes")],
+        )],
+        vec![c("window"), count_star()],
+    );
+    assert_eq!(class(&run(nested_bare)), "MISSING_AGGREGATION");
+    // An aggregate over it is the remedy the error names: `any_value(window)` is accepted.
+    let nested_any_value = LogicalPlan::table(["t"]).aggregate(
+        vec![f(
+            "window",
+            vec![window("ts", &["1 minute"]), s("5 minutes")],
+        )],
+        vec![f("any_value", vec![c("window")]), count_star()],
+    );
+    let r = run(nested_any_value);
+    assert_eq!(class(&r), "OK", "{:?}", r.as_ref().err().map(|e| &e.error));
+    // The bare `window` is the outer window's output column (the inner one is `__tw_inner`), so
+    // `any_value(window)` is a struct; the test checks the type only. `count(*)` is a long.
+    assert!(
+        matches!(types(&r)[0], DataType::Struct(_)),
+        "{:?}",
+        types(&r)
+    );
+    assert_eq!(types(&r)[1], DataType::Long);
+    // A table qualifier called `window` is not the inner window's column.
+    let qualified = LogicalPlan::table(["t"]).alias("window").aggregate(
+        vec![f(
+            "window",
+            vec![window("window.ts", &["1 minute"]), s("5 minutes")],
+        )],
+        vec![
+            f(
+                "window",
+                vec![window("window.ts", &["1 minute"]), s("5 minutes")],
+            ),
+            count_star(),
+        ],
+    );
+    let r = run(qualified);
     assert_eq!(class(&r), "OK", "{:?}", r.as_ref().err().map(|e| &e.error));
     // `window_time` over a grouped window is neither a key nor an aggregate.
     let grouped_time = LogicalPlan::table(["t"]).aggregate(
@@ -363,6 +404,164 @@ fn nested_windows_and_window_time() {
     let r = run(over_subquery);
     assert_eq!(class(&r), "OK", "{:?}", r.as_ref().err().map(|e| &e.error));
     assert_eq!(types(&r), vec![DataType::Timestamp]);
+}
+
+#[test]
+fn a_window_over_a_window_column_of_a_derived_table_reads_its_window_time() {
+    // `SELECT window(inner_window, '5 minutes') AS w, sum(cnt) FROM (SELECT window(ts, '1 minute') AS
+    // inner_window, count(*) AS cnt FROM t GROUP BY window(ts, '1 minute')) GROUP BY window(inner_window, ..)`.
+    let inner = LogicalPlan::table(["t"]).aggregate(
+        vec![window("ts", &["1 minute"])],
+        vec![
+            window("ts", &["1 minute"]).alias("inner_window"),
+            count_star().alias("cnt"),
+        ],
+    );
+    let outer = inner.aggregate(
+        vec![f("window", vec![c("inner_window"), s("5 minutes")])],
+        vec![c("window.start"), f("sum", vec![c("cnt")])],
+    );
+    let r = run(outer);
+    assert_eq!(class(&r), "OK", "{:?}", r.as_ref().err().map(|e| &e.error));
+    // `window.start` is a timestamp and `sum(cnt)` a long.
+    assert_eq!(types(&r), vec![DataType::Timestamp, DataType::Long]);
+    // The qualified form, `window(q.inner_window, ..)`, reads the same column; another qualifier is refused.
+    let qualified = |q: &str| {
+        run(LogicalPlan::table(["t"])
+            .aggregate(
+                vec![window("ts", &["1 minute"])],
+                vec![
+                    window("ts", &["1 minute"]).alias("inner_window"),
+                    count_star().alias("cnt"),
+                ],
+            )
+            .alias("q")
+            .aggregate(
+                vec![f(
+                    "window",
+                    vec![c(&format!("{q}.inner_window")), s("5 minutes")],
+                )],
+                vec![c("window.start"), f("sum", vec![c("cnt")])],
+            ))
+    };
+    let r = qualified("q");
+    assert_eq!(class(&r), "OK", "{:?}", r.as_ref().err().map(|e| &e.error));
+    assert_eq!(types(&r), vec![DataType::Timestamp, DataType::Long]);
+    assert_eq!(
+        class(&qualified("other")),
+        "UNRESOLVED_COLUMN.WITH_SUGGESTION"
+    );
+    // A struct that no `window(..)` made is not a window column.
+    let plain = LogicalPlan::table(["t"])
+        .project(vec![
+            f("named_struct", vec![s("start"), c("ts"), s("end"), c("ts")]).alias("inner_window"),
+        ])
+        .aggregate(
+            vec![f("window", vec![c("inner_window"), s("5 minutes")])],
+            vec![c("window.start")],
+        );
+    assert_ne!(class(&run(plain)), "OK");
+}
+
+/// The window column survives a `LIMIT` above the projection, and its name matches whatever the case.
+#[test]
+fn a_window_column_is_found_through_a_limit_and_in_any_case() {
+    let derived = |alias: &str, reference: &str| {
+        run(LogicalPlan::table(["t"])
+            .aggregate(
+                vec![window("ts", &["1 minute"])],
+                vec![
+                    window("ts", &["1 minute"]).alias(alias),
+                    count_star().alias("cnt"),
+                ],
+            )
+            .limit(int(10))
+            .sort(vec![crate::SortOrder::asc(c("cnt"))])
+            .offset(int(1))
+            .aggregate(
+                vec![f("window", vec![c(reference), s("5 minutes")])],
+                vec![c("window.start"), f("sum", vec![c("cnt")])],
+            ))
+    };
+    for (alias, reference) in [
+        ("inner_window", "inner_window"),
+        ("Inner_Window", "inner_window"),
+    ] {
+        let r = derived(alias, reference);
+        assert_eq!(
+            class(&r),
+            "OK",
+            "{alias}: {:?}",
+            r.as_ref().err().map(|e| &e.error)
+        );
+        assert_eq!(types(&r), vec![DataType::Timestamp, DataType::Long]);
+    }
+}
+
+/// A projection that forwards the inner window column (`SELECT a.iw AS w FROM (SELECT window(..) AS iw ..) a`)
+/// keeps it a window column for an outer `window(w, ..)`.
+#[test]
+fn a_forwarded_window_column_of_a_derived_table_is_still_a_window_column() {
+    let inner = LogicalPlan::table(["t"]).aggregate(
+        vec![window("ts", &["1 minute"])],
+        vec![
+            window("ts", &["1 minute"]).alias("iw"),
+            count_star().alias("cnt"),
+        ],
+    );
+    let a = LogicalPlan::new(PlanNode::SubqueryAlias {
+        input: std::sync::Arc::new(inner),
+        alias: "a".to_owned(),
+        columns: vec![],
+    });
+    let middle = a.project(vec![c("a.iw").alias("w"), c("a.cnt").alias("n")]);
+    let outer = LogicalPlan::new(PlanNode::SubqueryAlias {
+        input: std::sync::Arc::new(middle),
+        alias: "q".to_owned(),
+        columns: vec![],
+    })
+    .aggregate(
+        vec![f("window", vec![c("q.w"), s("5 minutes")])],
+        vec![c("window.start"), f("sum", vec![c("n")])],
+    );
+    let r = run(outer);
+    assert_eq!(class(&r), "OK", "{:?}", r.as_ref().err().map(|e| &e.error));
+    assert_eq!(types(&r), vec![DataType::Timestamp, DataType::Long]);
+}
+
+/// A derived table that renames its columns (`AS q(w, n)`) keeps the window identity of the renamed column.
+#[test]
+fn a_renamed_window_column_of_a_derived_table_is_still_a_window_column() {
+    let inner = LogicalPlan::table(["t"]).aggregate(
+        vec![window("ts", &["1 minute"])],
+        vec![
+            window("ts", &["1 minute"]).alias("inner_window"),
+            count_star().alias("cnt"),
+        ],
+    );
+    let renamed = LogicalPlan::new(PlanNode::SubqueryAlias {
+        input: std::sync::Arc::new(inner),
+        alias: "q".to_owned(),
+        columns: vec!["w".to_owned(), "n".to_owned()],
+    });
+    let outer = |col: &str| {
+        run(renamed.clone().aggregate(
+            vec![f("window", vec![c(col), s("5 minutes")])],
+            vec![c("window.start"), f("sum", vec![c("n")])],
+        ))
+    };
+    for col in ["w", "q.w"] {
+        let r = outer(col);
+        assert_eq!(
+            class(&r),
+            "OK",
+            "{col}: {:?}",
+            r.as_ref().err().map(|e| &e.error)
+        );
+        assert_eq!(types(&r), vec![DataType::Timestamp, DataType::Long]);
+    }
+    // The column that is not a window is still refused.
+    assert_ne!(class(&outer("n")), "OK");
 }
 
 #[test]

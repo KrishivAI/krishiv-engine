@@ -6,10 +6,14 @@
 use arrow_array::Array;
 use arrow_array::cast::AsArray;
 use futures::executor::block_on;
+use krishiv_plan::analyzer::SparkProfile;
 use krishiv_session::Session;
 
 fn text(sql: &str) -> String {
-    let s = Session::new().unwrap();
+    let s = Session::builder()
+        .profile(SparkProfile::V4_2)
+        .build()
+        .unwrap();
     block_on(s.sql("SET spark.sql.timeType.enabled = true")).unwrap();
     let df = block_on(s.sql(&format!("SELECT CAST(({sql}) AS STRING)"))).unwrap();
     let b = block_on(df.collect()).unwrap();
@@ -54,7 +58,10 @@ fn a_time_literal_with_a_long_fraction_truncates_to_microseconds() {
 fn listagg_distinct_over_a_time_cast_passes_the_analyzer() {
     let sql = "SELECT listagg(DISTINCT CAST(t AS STRING)) WITHIN GROUP (ORDER BY t) \
                FROM VALUES (TIME '01:00:00'), (TIME '02:00:00') AS v(t)";
-    let s = Session::new().unwrap();
+    let s = Session::builder()
+        .profile(SparkProfile::V4_2)
+        .build()
+        .unwrap();
     block_on(s.sql("SET spark.sql.timeType.enabled = true")).unwrap();
     let df = block_on(s.sql(sql)).unwrap();
     let e = block_on(df.collect()).unwrap_err();
@@ -69,7 +76,10 @@ fn listagg_distinct_over_a_time_cast_passes_the_analyzer() {
 /// map key that may become NULL is refused.
 #[test]
 fn narrowing_time_casts_are_nullable() {
-    let s = Session::new().unwrap();
+    let s = Session::builder()
+        .profile(SparkProfile::V4_2)
+        .build()
+        .unwrap();
     block_on(s.sql("SET spark.sql.timeType.enabled = true")).unwrap();
     block_on(s.sql("SET spark.sql.ansi.enabled = false")).unwrap();
     for (to, nullable) in [
@@ -92,5 +102,55 @@ fn narrowing_time_casts_are_nullable() {
         e.error_class(),
         krishiv_common::error::ErrorClass::InternalError,
         "{e}"
+    );
+}
+
+/// Spark 4.3 casts timestamps to `TIME` inside arrays, structs and maps element by element
+/// (Spark 4.3.0 local run, session zone UTC), and a `TIME` array to `array<timestamp_ntz>`;
+/// Spark 4.2 refuses both.
+#[test]
+fn nested_timestamps_cast_to_time_under_spark_4_3() {
+    let s = Session::builder()
+        .profile(SparkProfile::V4_3)
+        .build()
+        .unwrap();
+    block_on(s.sql("SET spark.sql.timeType.enabled = true")).unwrap();
+    block_on(s.sql("SET spark.sql.session.timeZone = UTC")).unwrap();
+    let one = |sql: &str| -> String {
+        let df = block_on(s.sql(sql)).unwrap();
+        let b = block_on(df.collect()).unwrap();
+        b[0].columns()[0].as_string_view().value(0).to_owned()
+    };
+    for (sql, want) in [
+        (
+            "SELECT CAST(CAST(array(TIMESTAMP_NTZ'2020-05-17 12:34:56.789012', NULL) AS array<time(3)>) AS STRING)",
+            "[12:34:56.789, null]",
+        ),
+        (
+            "SELECT CAST(CAST(named_struct('a', TIMESTAMP'2020-05-17 12:34:56.789012') AS struct<a: time(6)>) AS STRING)",
+            "{12:34:56.789012}",
+        ),
+        (
+            "SELECT CAST(CAST(map('k', TIMESTAMP_NTZ'1969-12-31 23:59:59.5') AS map<string, time(1)>) AS STRING)",
+            "{k -> 23:59:59.5}",
+        ),
+        (
+            "SELECT typeof(CAST(array(TIME'01:02:03') AS array<timestamp_ntz>))",
+            "array<timestamp_ntz>",
+        ),
+    ] {
+        assert_eq!(one(sql), want, "{sql}");
+    }
+    let s42 = Session::builder()
+        .profile(SparkProfile::V4_2)
+        .build()
+        .unwrap();
+    block_on(s42.sql("SET spark.sql.timeType.enabled = true")).unwrap();
+    let e = block_on(s42.sql("SELECT CAST(array(TIME'01:02:03') AS array<timestamp_ntz>)"))
+        .err()
+        .map(|e| e.error_class().name().to_owned());
+    assert_eq!(
+        e.as_deref(),
+        Some("DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION")
     );
 }

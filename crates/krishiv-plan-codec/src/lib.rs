@@ -73,6 +73,7 @@ mod decode_sketch;
 mod decode_tail;
 mod decode_udt;
 mod encode;
+mod encode_filter;
 mod error;
 pub mod features;
 /// The generated protobuf types of `krishiv.plan.v1`.

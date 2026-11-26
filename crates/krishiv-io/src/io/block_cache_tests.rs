@@ -248,7 +248,12 @@ async fn a_corrupt_block_is_a_miss() {
     let f = put(&r, "c", data.clone()).await;
     r.io.get_ranges(&f, &[0..100_000]).await.unwrap();
     for entry in std::fs::read_dir(cache_files(&r)).unwrap() {
-        std::fs::write(entry.unwrap().path(), b"garbage").unwrap();
+        let path = entry.unwrap().path();
+        // The held `.lock` file is locked for the cache's life (a mandatory lock on Windows).
+        if path.extension().is_none_or(|e| e != "blk") {
+            continue;
+        }
+        std::fs::write(path, b"garbage").unwrap();
     }
     let got = r.io.get_ranges(&f, &[0..100_000]).await.unwrap();
     assert_eq!(got[0], Bytes::from(data[..100_000].to_vec()));
@@ -338,6 +343,10 @@ async fn keys_and_files_hold_no_credential() {
         for file in std::fs::read_dir(dir.unwrap().path()).unwrap() {
             let file = file.unwrap();
             let name = file.file_name().to_string_lossy().into_owned();
+            // The `.lock` file is empty and locked while the cache lives (mandatory on Windows).
+            if name == ".lock" {
+                continue;
+            }
             let body = std::fs::read(file.path()).unwrap();
             let text = String::from_utf8_lossy(&body);
             // The display of a store id hides the password of URL credentials (ADR 0038).

@@ -14,15 +14,15 @@ use krishiv_exec::aggregate::{
     AggInput, AggregateExpr, AggregateFunction, AggregateOutput, UdafCall,
 };
 use krishiv_exec::physical::{
-    AggregatePlan, ExchangeFilterPlan, ExchangePlan, ExprEnv, HashJoinPlan, HashScheme,
-    JoinDistribution, JoinFilterPlan, NestedLoopPlan, Partitioning, PhysNode, PhysicalPlan,
-    ProbeSelect, ProjectItemPlan, Residual, ScanFilter, ScanNode, ScanRuntimeFilter,
-    SortMergeJoinPlan, SubqueryPlan, SubqueryValueKind, TableWriteRequest, WritePlan,
+    AggregatePlan, ExchangePlan, ExprEnv, HashJoinPlan, HashScheme, JoinDistribution,
+    NestedLoopPlan, Partitioning, PhysNode, PhysicalPlan, ProbeSelect, ProjectItemPlan, Residual,
+    ScanFilter, ScanNode, SortMergeJoinPlan, SubqueryPlan, SubqueryValueKind, TableWriteRequest,
+    WritePlan,
 };
 use krishiv_exec::planner::{ExplainNode, RowLevelOperation, WriteMode};
 use krishiv_exec::window::{FrameBound, FrameUnits, RankLike, WindowFunction, WindowFunctionPlan};
 use krishiv_exec::{FetchSlot, RowStageSettings, SortKey};
-use krishiv_io::{ColumnPath, KeyFilterOptions};
+use krishiv_io::ColumnPath;
 use krishiv_plan::{
     AttrId, BoundColumn, CastMode, DayTimeField, Expr, ExprNode, FunctionId, FunctionKind, Literal,
     Origin, ReadSource, ResolvedExpr, ResolvedFunction, Scan, YearMonthField,
@@ -30,6 +30,7 @@ use krishiv_plan::{
 use krishiv_types::DataType;
 
 use crate::arrow::{schema_bytes, type_bytes};
+use crate::encode_filter::{exchange_filter, join_filter, scan_filter};
 use crate::error::{CodecError, Result};
 use crate::features::arrow_type_is_nested;
 use crate::features::{Feature, legacy_level, plan_features};
@@ -104,7 +105,7 @@ pub fn to_message(plan: &PhysicalPlan) -> Result<pb::PhysicalPlan> {
         explain,
         explain_root,
         warnings: plan.warnings().to_vec(),
-        env: Some(env(plan.env())),
+        env: Some(env(plan.env())?),
         exprs: e.exprs,
         features: features.iter().map(|f| f.id().to_owned()).collect(),
         epoch: EPOCH,
@@ -154,8 +155,17 @@ fn index(n: usize) -> Result<u32> {
     u32::try_from(n).map_err(|_| CodecError::Unsupported("more than 2^32 entries".to_owned()))
 }
 
-fn env(env: &ExprEnv) -> pb::ExprEnv {
-    pb::ExprEnv {
+/// The wire form of `env`. A Spark version the decoder does not accept (`decode.rs`: 4.0, 4.1
+/// and 4.3; absent is 4.2) is refused here, so no writer sends bytes its reader calls corrupt.
+fn env(env: &ExprEnv) -> Result<pb::ExprEnv> {
+    if let Some(line) = env.spark_version.as_deref()
+        && !matches!(line, "4.0" | "4.1" | "4.3")
+    {
+        return Err(CodecError::Unsupported(format!(
+            "the Spark version {line:?} in the expression environment"
+        )));
+    }
+    Ok(pb::ExprEnv {
         ansi: env.ansi,
         zone: env.zone,
         zone_name: env.zone_name.as_deref().map(str::to_owned),
@@ -167,7 +177,8 @@ fn env(env: &ExprEnv) -> pb::ExprEnv {
         legacy_coding_error_action: env.legacy_coding_error_action.then_some(true),
         legacy_time_parser: env.legacy_time_parser.then_some(true),
         binary_output_style: env.binary_output_style.as_deref().map(str::to_owned),
-    }
+        spark_version: env.spark_version.as_deref().map(str::to_owned),
+    })
 }
 
 #[derive(Default)]
@@ -1051,7 +1062,7 @@ fn bound_column(c: &BoundColumn, nested: &Cell<bool>) -> Result<pb::BoundColumn>
     })
 }
 
-fn column_path(p: &ColumnPath) -> pb::ColumnPath {
+pub(crate) fn column_path(p: &ColumnPath) -> pb::ColumnPath {
     pb::ColumnPath { parts: p.0.clone() }
 }
 
@@ -1114,60 +1125,6 @@ fn partitioning(p: &Partitioning) -> pb::Partitioning {
                 keys: keys.iter().map(sort_key).collect(),
             }),
         }),
-    }
-}
-
-fn join_filter(f: &JoinFilterPlan) -> pb::JoinFilter {
-    let KeyFilterOptions {
-        max_values,
-        exact_max_values,
-        bloom,
-        scan_waits,
-        bloom_max_items,
-        bloom_max_bytes,
-        bloom_fpp,
-        bloom_max_fpp,
-        bloom_bytes,
-        bloom_spill_bytes,
-    } = f.options;
-    pb::JoinFilter {
-        id: f.id.0,
-        key: f.key as u64,
-        options: Some(pb::KeyFilterOptions {
-            max_values: max_values as u64,
-            exact_max_values: exact_max_values as u64,
-            bloom,
-            scan_waits,
-            bloom_max_items,
-            bloom_max_bytes: bloom_max_bytes as u64,
-            bloom_fpp,
-            bloom_max_fpp,
-            bloom_bytes,
-            bloom_spill_bytes,
-        }),
-    }
-}
-
-fn exchange_filter(f: &ExchangeFilterPlan, nested: &Cell<bool>) -> pb::ExchangeFilter {
-    pb::ExchangeFilter {
-        id: f.id.0,
-        column: u64::try_from(f.column).unwrap_or(u64::MAX),
-        key_type: arrow_bytes(&f.key_type, nested),
-        options: join_filter(&JoinFilterPlan {
-            id: f.id,
-            key: 0,
-            options: f.options,
-        })
-        .options,
-        null_safe: f.null_safe,
-    }
-}
-
-fn scan_filter(f: &ScanRuntimeFilter, nested: &Cell<bool>) -> pb::ScanRuntimeFilter {
-    pb::ScanRuntimeFilter {
-        id: f.id.0,
-        column: Some(column_path(&f.column)),
-        key_type: arrow_bytes(&f.key_type, nested),
     }
 }
 
@@ -1752,7 +1709,7 @@ fn option(key: &str, value: &OptionValue) -> Result<pb::OptionValue> {
 
 /// The IPC bytes of the Arrow type `t`; `nested` is set when it is or holds an
 /// array, map or struct.
-fn arrow_bytes(t: &arrow_schema::DataType, nested: &Cell<bool>) -> Vec<u8> {
+pub(crate) fn arrow_bytes(t: &arrow_schema::DataType, nested: &Cell<bool>) -> Vec<u8> {
     if arrow_type_is_nested(t) {
         nested.set(true);
     }

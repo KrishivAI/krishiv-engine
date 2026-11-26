@@ -16,6 +16,14 @@ impl fmt::Display for DataTypeSpec {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.kind {
             DataTypeKind::Primitive { name, args } if args.is_empty() => f.write_str(name),
+            // Spark 4.3's `TIMESTAMP[_NTZ|_LTZ](6)` is the microsecond type itself (the
+            // validator refuses every other precision, and the form before 4.3).
+            DataTypeKind::Primitive { name, args }
+                if name.starts_with("timestamp")
+                    && matches!(args.as_slice(), [p] if p.parse::<u32>() == Ok(6)) =>
+            {
+                f.write_str(name)
+            }
             DataTypeKind::Primitive { name, args } => {
                 // `time(6) without time zone`: arguments follow the first word.
                 let (head, tail) = name.split_once(' ').unwrap_or((name, ""));

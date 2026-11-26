@@ -45,6 +45,13 @@ impl FunctionRegistry for BuiltinFunctions {
         let [name] = name else {
             return FunctionLookup::NotFound;
         };
+        // Spark 4.3's `LOCALTIME[(p)]` is `current_time` (`SqlBaseParser.g4` `currentLike`), and
+        // so named.
+        let name = if profile >= SparkProfile::V4_3 && name.eq_ignore_ascii_case("localtime") {
+            "current_time"
+        } else {
+            name.as_str()
+        };
         match self.0.lookup(name, profile) {
             Lookup::Found(def) => FunctionLookup::Found(FunctionEntry {
                 id: FunctionId::Registry {
