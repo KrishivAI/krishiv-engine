@@ -74,6 +74,7 @@ fn filter() -> JoinRuntimeFilter {
             max_values: 0,
             ..KeyFilterOptions::default()
         },
+        column: None,
     }
 }
 
@@ -1236,4 +1237,58 @@ async fn spill_global_moving_hashes_into_a_fixed_filter_updates_the_signal() {
     assert_eq!(pass.true_count(), 2000);
     drop((g, sink, join, ctx));
     assert_eq!(query.pool().reserved(), 0, "the query pool is not empty");
+}
+
+/// A bound from a residual (design P3-0.3.1 D2) is collected from its
+/// build column, not the key, over the rows the build stores (`valid`) and
+/// only their non-NULL values: a NULL never lets NULL probe values pass.
+#[test]
+fn a_residual_bound_collects_the_non_null_values_of_its_column() {
+    let options = KeyFilterOptions {
+        max_values: 0,
+        exact_max_values: 0,
+        bloom: false,
+        side: krishiv_io::RangeSide::Upper,
+        ..KeyFilterOptions::default()
+    };
+    let f = JoinRuntimeFilter {
+        key: 0,
+        filter: Arc::new(RuntimeFilter::new(
+            FilterId(1),
+            ColumnPath::new("q"),
+            DataType::Int64,
+        )),
+        options,
+        column: Some(1),
+    };
+    let shared = vec![f.clone()];
+    let mut p = Partials {
+        builders: vec![krishiv_io::KeyFilterBuilder::new(DataType::Int64, options)],
+        memory: vec![reservation(1 << 20)],
+        bloom_lost: Arc::default(),
+        spilled: Arc::default(),
+    };
+    // Keys far above the column's values: a filter fed the key would keep
+    // them. The third row is not stored (a NULL `=` key), the fourth's
+    // value is NULL.
+    let keys: ArrayRef = Arc::new(Int64Array::from(vec![1_000, 2_000, 3_000, 4_000]));
+    let columns: Vec<ArrayRef> = vec![
+        Arc::clone(&keys),
+        Arc::new(Int64Array::from(vec![Some(7), Some(9), Some(50), None])),
+    ];
+    let stored = arrow_buffer::NullBuffer::from(vec![true, true, false, true]);
+    p.add_sources(&shared, (&[Arc::clone(&keys)], &columns), Some(&stored));
+    publish(&publisher(&f), &shared, p, &mut reservation(1 << 20));
+    let FilterSnapshot::Final(k) = f.filter.published().snapshot.clone() else {
+        unreachable!("not published")
+    };
+    assert!(!k.nulls_pass());
+    let probe = Int64Array::from(vec![Some(i64::MIN), Some(9), Some(10), Some(50), None]);
+    let pass: Vec<bool> = k
+        .evaluate(&probe)
+        .unwrap()
+        .iter()
+        .map(|b| b == Some(true))
+        .collect();
+    assert_eq!(pass, [true, true, false, false, false]);
 }

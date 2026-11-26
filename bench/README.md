@@ -737,3 +737,44 @@ Results and Spark goldens stay tied to the dataset they were produced from (reco
   DuckDB counts characters; the byte mean must be larger for at least one key, and at most 4 times the character mean). ClickBench q04 (`avg` of an
   int64 column) stays a plain `mismatch` until the overflow can be checked against an independent expected value. Checked on TPC-H SF1 (all 22: 21 `ok`, q08 `mismatch-dialect`) and a 2M-row slice of
   `hits.parquet` (40 of 43 `ok`, q28/q29 `mismatch-dialect`, q04 `mismatch`); the full 100M-row file needs the benchmark server.
+
+## db-benchmark's own scripts
+
+`krishiv_bench.dbbench_solution` writes the `krishiv/` solution directory of a checkout of
+<https://github.com/duckdblabs/db-benchmark> (`groupby-krishiv.py`, `join-krishiv.py`, `setup-`, `upg-` and
+`ver-krishiv.sh`) and, with `--checkout`, names the solution in the benchmark's own files (`_launcher/launcher.R`,
+`_launcher/solution.R`, `run.sh`, `_control/solutions.csv`, `_report/report.R`, `_benchplot/benchplot-dict.R`, the
+regression workflow and the README), so the benchmark's own runner (`run.sh`) runs Krishiv through the Python session
+and writes `time.csv` / `logs.csv` rows the way every other solution does. An edit whose anchor text is missing is an
+error: the benchmark changed and the edit needs a look. The question SQL and the checksum columns are the ones of the
+`h2o-*` suites above (one text for both harnesses); the CSV is loaded once to Parquet in `$SPILL_DIR` (untimed), each
+question is run twice (the benchmark's `run` 1 and 2), the timed part ends with the answer held as an Arrow table, and
+`chk` is summed over that table in a separately timed step. At 1e9 rows (or with `KRISHIV_ON_DISK=true`) the answer
+is written to a Parquet file instead and the log says `on_disk` `TRUE`. `setup-krishiv.sh` installs the released
+package, or the wheel named by `KRISHIV_WHEEL`; `KRISHIV_MEMORY_LIMIT` sets `krishiv.memory.limit`.
+
+```bash
+uv run python -m krishiv_bench.dbbench_solution --checkout ~/db-benchmark
+uv run python -m krishiv_bench.dbbench_report --ours ~/db-benchmark/time.csv --check duckdb
+uv run python -m krishiv_bench.dbbench_report --ours time.csv --published upstream/time.csv --data G1_1e7_1e2_0_0
+```
+
+`--check` compares Krishiv's answers with another solution's (row and column counts and the `chk` sums, which the
+benchmark writes rounded to three decimals) and exits 1 on any difference or missing row. A `time.csv` grows with every
+launcher run: for each solution and data set only the rows of its newest run are read, so an answer from an earlier run
+never stands in for one the newest run did not give (`--batch` names one run instead). `dbbench_report --published` prints the second-run times next to the published solutions (`*` = spilled, `FAIL` = no row) and
+Krishiv's ratio to each.
+
+`bench/dbbench/dryrun.sh <work dir> <1e7|1e8|1e9> [groupby|join]...` is the whole dry run in a container
+(`bench/dbbench/Dockerfile`): it clones the benchmark at a pinned commit, registers the solution, installs duckdb and
+krishiv with the benchmark's own setup scripts, moves the published `time.csv` and `logs.csv` aside
+(`*.published.csv`) and then, one data set at a time, generates the CSVs with the
+benchmark's R generator, runs the benchmark's `run.sh` for both solutions and deletes the CSVs. It exits 1 if a
+generator or a solution failed; the answers are compared afterwards with `dbbench_report --check duckdb`. The header
+of the script lists its environment variables (`KRISHIV_WHEEL`, `KRISHIV_MEMORY_LIMIT`, container memory, a data-set
+filter). The R generator holds the whole table in memory, which at 1e9 rows is more than a 64 GB machine has. There,
+generate with `datasets/gen.sh h2o-groupby --size 1e9` (chunked; the same columns, not the same values), write each
+Parquet file as a CSV under the benchmark's file name (`G1_1e9_1e2_0_0.csv`; for join `J1_1e9_NA_0_0.csv` and the
+three right-hand tables `J1_1e9_1e3_0_0.csv`, `J1_1e9_1e6_0_0.csv`, `J1_1e9_1e9_0_0.csv`) and pass the directory as
+`DBB_DATA_DIR`: nothing is generated or deleted then. The container is not the benchmark's machine, so its times
+are ours, not the published ones.

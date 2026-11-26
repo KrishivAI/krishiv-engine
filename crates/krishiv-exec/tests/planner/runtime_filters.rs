@@ -106,9 +106,9 @@ fn limited(bytes: usize) -> MemoryConfig {
 
 #[derive(Debug, Default, Clone, Copy)]
 pub(super) struct Counters {
-    rows_dropped: u64,
-    units_pruned: u64,
-    splits_skipped: u64,
+    pub(super) rows_dropped: u64,
+    pub(super) units_pruned: u64,
+    pub(super) splits_skipped: u64,
 }
 
 /// All 22 TPC-H queries return Spark's answers in every mode.
@@ -283,7 +283,7 @@ const JOINS: [&str; 14] = [
     "SELECT b.v, s.v FROM big b JOIN small s ON b.k32 = s.k32 AND b.s = s.s",
 ];
 
-fn sorted(batches: &[RecordBatch]) -> Vec<String> {
+pub(super) fn sorted(batches: &[RecordBatch]) -> Vec<String> {
     let mut r = rows(batches);
     r.sort_unstable();
     r
