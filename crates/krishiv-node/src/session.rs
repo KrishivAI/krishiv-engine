@@ -1,19 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 //! [`NativeSession`]: an embedded engine session (its own engine runtime, as an
 //! embedded Python session has).
-// The `#[napi]` attribute moves method attributes, so the exception is the module's.
-#![expect(
-    clippy::needless_pass_by_value,
-    reason = "napi hands JavaScript strings to `set_conf` as owned `String`s"
-)]
 
 use krishiv_common::error::{InvalidHandleSessionClosed, KrishivError};
 use krishiv_session::Session;
 use napi_derive::napi;
 use std::collections::HashMap;
-
-use crate::error::napi_guarded;
-use crate::query::NativeQuery;
 
 /// The session behind a JavaScript `NativeSession`. Kept after `close()`, so a later call
 /// is refused with the engine's own `INVALID_HANDLE.SESSION_CLOSED`, as in remote mode.
@@ -60,42 +52,5 @@ impl NativeSession {
 
     pub(crate) fn shut(&self) {
         self.inner.close();
-    }
-}
-
-#[napi]
-impl NativeSession {
-    /// Opens an embedded session with the configuration `conf` (`krishiv.*` and Spark keys).
-    #[napi(factory)]
-    pub fn open(conf: HashMap<String, String>) -> napi::Result<Self> {
-        napi_guarded(|| Self::build(conf))
-    }
-
-    /// Starts the SQL statement `sql`; its result is read with `NativeQuery.next()`.
-    #[napi]
-    pub fn execute(&self, sql: String) -> napi::Result<NativeQuery> {
-        napi_guarded(|| Ok(NativeQuery::new(self.session()?, sql)))
-    }
-
-    /// Sets the session configuration `key` to `value`, as SQL `SET` does.
-    #[napi]
-    pub fn set_conf(&self, key: String, value: String) -> napi::Result<()> {
-        napi_guarded(|| self.session()?.conf().set(&key, &value))
-    }
-
-    /// The session configuration value of `key`, or `undefined` when it is not set and has no
-    /// default, as `SET key` reads it.
-    #[napi]
-    pub fn get_conf(&self, key: String) -> napi::Result<Option<String>> {
-        napi_guarded(|| self.conf_value(&key))
-    }
-
-    /// Closes the session: its running queries end and its state is freed. Idempotent.
-    #[napi]
-    pub fn close(&self) -> napi::Result<()> {
-        napi_guarded(|| {
-            self.shut();
-            Ok(())
-        })
     }
 }

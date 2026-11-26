@@ -14,15 +14,13 @@ use futures::StreamExt;
 use futures::future::{Either, select};
 use krishiv_common::error::{KrishivError, OperationCanceled};
 use krishiv_session::{RecordBatchStream, Session};
-use napi::bindgen_prelude::Buffer;
 use napi_derive::napi;
 use tokio::sync::{Mutex, Notify};
 
-use crate::error::{guarded_async, napi_guarded, to_napi};
 use crate::ipc::Encoder;
 
 /// Where a query is.
-enum State {
+pub(crate) enum State {
     /// Not analyzed yet: the statement text.
     Pending(String),
     /// Running: the batches still to come and their encoder.
@@ -34,7 +32,7 @@ enum State {
 }
 
 /// A running query's stream and encoder.
-struct Running {
+pub(crate) struct Running {
     stream: RecordBatchStream,
     encoder: Encoder,
 }
@@ -47,7 +45,7 @@ pub(crate) struct Cancel {
 }
 
 impl Cancel {
-    fn trip(&self) {
+    pub(crate) fn trip(&self) {
         self.set.store(true, Ordering::Release);
         self.wake.notify_waiters();
     }
@@ -132,7 +130,10 @@ impl NativeQuery {
 }
 
 /// One step of `state`.
-async fn advance(session: &Session, state: &mut State) -> Result<Option<Vec<u8>>, KrishivError> {
+pub(crate) async fn advance(
+    session: &Session,
+    state: &mut State,
+) -> Result<Option<Vec<u8>>, KrishivError> {
     match std::mem::replace(state, State::Done) {
         State::Pending(sql) => {
             let frame = session.sql_boxed(&sql).await?;
@@ -151,28 +152,5 @@ async fn advance(session: &Session, state: &mut State) -> Result<Option<Vec<u8>>
             None => Ok(Some(running.encoder.finish()?)),
         },
         State::Cancelled | State::Done => Ok(None),
-    }
-}
-
-#[napi]
-impl NativeQuery {
-    /// The next Arrow IPC chunk of the result (schema first, then one per batch, then the
-    /// end-of-stream marker), or `null` once the stream has ended.
-    #[napi]
-    pub async fn next(&self) -> napi::Result<Option<Buffer>> {
-        guarded_async(self.step())
-            .await
-            .map(|chunk| chunk.map(Buffer::from))
-            .map_err(|e| to_napi(&e))
-    }
-
-    /// Cancels the query, before or while it streams: the next `next()` rejects with
-    /// `OPERATION_CANCELED` unless the stream had already ended.
-    #[napi]
-    pub fn cancel(&self) -> napi::Result<()> {
-        napi_guarded(|| {
-            self.stop();
-            Ok(())
-        })
     }
 }

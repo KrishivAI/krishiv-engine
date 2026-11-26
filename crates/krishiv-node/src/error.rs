@@ -26,11 +26,6 @@ pub(crate) fn to_json(error: &KrishivError) -> String {
     .to_string()
 }
 
-/// The napi error for `error`.
-pub(crate) fn to_napi(error: &KrishivError) -> napi::Error {
-    napi::Error::new(napi::Status::GenericFailure, to_json(error))
-}
-
 /// `INTERNAL_ERROR` for a panic caught at the Node-API boundary, with its message.
 pub(crate) fn panicked(payload: &(dyn Any + Send)) -> KrishivError {
     let message = payload
@@ -56,11 +51,6 @@ pub(crate) async fn guarded_async<T>(
         .catch_unwind()
         .await
         .unwrap_or_else(|p| Err(panicked(&*p)))
-}
-
-/// [`guarded`], then the error as the JSON a JavaScript `Error` carries.
-pub(crate) fn napi_guarded<T>(f: impl FnOnce() -> Result<T, KrishivError>) -> napi::Result<T> {
-    guarded(f).map_err(|e| to_napi(&e))
 }
 
 /// An `INTERNAL_ERROR` for a failure of the binding itself (Arrow IPC encoding).

@@ -97,5 +97,6 @@ mod tests {
         let reader = StreamReader::try_new(bytes.as_slice(), None).unwrap();
         assert_eq!(reader.schema().as_ref(), &schema);
         assert_eq!(reader.count(), 0);
+        assert_eq!(format!("{encoder:?}"), "Encoder { .. }");
     }
 }

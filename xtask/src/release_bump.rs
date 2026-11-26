@@ -213,6 +213,39 @@ mod tests {
     }
 
     #[test]
+    fn a_root_version_not_on_its_own_line_is_refused() {
+        let one_line = "{\"name\": \"krishiv\", \"version\": \"0.2.1\"}\n";
+        assert_eq!(
+            bump_js(one_line, "0.3.1"),
+            Err("found 0 of 1 root version lines".to_owned())
+        );
+    }
+
+    #[test]
+    fn the_npm_files_move_with_the_workspace() {
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("js")).unwrap_or_default();
+        let write = |p: &str, t: &str| std::fs::write(root.join(p), t).unwrap_or_default();
+        let read = |p: &str| std::fs::read_to_string(root.join(p)).unwrap_or_default();
+        write("Cargo.toml", "[workspace.package]\nversion = \"0.3.0\"\n");
+        write(
+            "js/package.json",
+            "{\n  \"name\": \"krishiv\",\n  \"version\": \"0.2.1\"\n}\n",
+        );
+        // Only the npm file is behind: `--check` fails and writes nothing, the bump moves it.
+        assert!(run(root, &["0.3.0", "--check"]).is_err());
+        assert!(read("js/package.json").contains("\"0.2.1\""));
+        assert!(run(root, &["0.3.0"]).is_ok());
+        assert!(read("js/package.json").contains("\"version\": \"0.3.0\""));
+        assert!(run(root, &["0.3.0", "--check"]).is_ok());
+        // A malformed npm file names itself.
+        write("js/package-lock.json", "{\"version\": \"0.2.1\"}");
+        let e = run(root, &["0.3.0"]).unwrap_err();
+        assert!(e.starts_with("js/package-lock.json: "), "{e}");
+    }
+
+    #[test]
     fn the_root_version_and_the_pins_move() {
         let root = "[workspace.package]\nversion = \"0.2.1\"\n[workspace.dependencies]\nlibc = { version = \"0.2.1\" }\n";
         let out = bump_manifest(root, "0.3.0", true).unwrap_or_default();

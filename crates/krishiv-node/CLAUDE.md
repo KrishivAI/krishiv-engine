@@ -20,9 +20,12 @@ Paths are relative to this crate.
   returns the IPC schema message, then one chunk per batch, then the end-of-stream marker, then `null`; `Cancel`
   races every step against a cancel (dropping the step's future or the stream cancels the engine query); a failure
   or cancel ends the query
+- `src/exports.rs` the `#[napi]` methods of both classes: thin shells (panic guard, error to a JS `Error`) over
+  the Rust side; built only outside `cfg(test)`, since a `napi::Error` or `Buffer` drops through Node-API and a test
+  binary cannot link it. The JS tests and the package smoke run it; keep logic out of it
 - `src/ipc.rs` `Encoder`: one Arrow IPC stream handed out a message at a time (`StreamWriter` over a drained `Vec`)
-- `src/error.rs` engine errors as a JS `Error` whose message is JSON `{errorClass, sqlState, messageParameters, message}`;
-  `guarded` / `guarded_async` / `napi_guarded`: a panic becomes `INTERNAL_ERROR` (`krishiv-node: panic: <message>`)
+- `src/error.rs` engine errors as the JSON `{errorClass, sqlState, messageParameters, message}` a JS `Error` carries;
+  `guarded` / `guarded_async` (`napi_guarded` is in `exports.rs`): a panic becomes `INTERNAL_ERROR` (`krishiv-node: panic: <message>`)
 - `src/tests.rs` the Rust side without Node (stream, errors, cancel, conf, close). Tests never build a `napi::Error`:
   its `Drop` calls Node-API, which a test binary cannot link; assert on `error::to_json` instead
 

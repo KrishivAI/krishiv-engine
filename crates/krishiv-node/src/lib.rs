@@ -12,6 +12,10 @@ mod error;
 mod ipc;
 mod query;
 mod session;
+// The `#[napi]` shells, after the structs napi-derive must see first; outside the test
+// binary, which cannot link Node-API (exports.rs).
+#[cfg(not(test))]
+mod exports;
 
 pub use query::NativeQuery;
 pub use session::NativeSession;

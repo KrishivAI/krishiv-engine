@@ -133,3 +133,52 @@ fn get_conf_reads_set_values_and_defaults() {
     let e = session.conf_value("spark.sql.ansi.enabled").unwrap_err();
     assert_eq!(e.error_class().name(), "INVALID_HANDLE.SESSION_CLOSED");
 }
+
+#[test]
+fn the_handles_debug_without_their_state() {
+    let session = open();
+    assert_eq!(format!("{session:?}"), "NativeSession { .. }");
+    let query = NativeQuery::new(session.session().unwrap(), "SELECT 1".to_owned());
+    assert_eq!(format!("{query:?}"), "NativeQuery { cancelled: false, .. }");
+    query.stop();
+    assert_eq!(format!("{query:?}"), "NativeQuery { cancelled: true, .. }");
+}
+
+#[test]
+fn the_version_is_the_crate_version() {
+    assert_eq!(crate::version(), env!("CARGO_PKG_VERSION"));
+}
+
+#[test]
+fn the_cancel_guard_refuses_before_and_during_the_work() {
+    use crate::query::Cancel;
+
+    let cancel = Cancel::default();
+    assert_eq!(run(cancel.guard(async { Ok(3) })).unwrap(), 3);
+    // Tripped while the work waits: the work is dropped.
+    let during = run(async {
+        let work = cancel.guard(futures::future::pending::<Result<(), KrishivError>>());
+        let trip = async { cancel.trip() };
+        futures::future::join(work, trip).await.0
+    });
+    assert_eq!(
+        during.unwrap_err().error_class().name(),
+        "OPERATION_CANCELED"
+    );
+    // Already tripped: the work never starts.
+    let before = run(cancel.guard(async { Ok(()) })).unwrap_err();
+    assert_eq!(before.error_class().name(), "OPERATION_CANCELED");
+}
+
+#[test]
+fn an_ended_state_advances_to_nothing() {
+    let session = open();
+    let inner = session.session().unwrap();
+    for mut state in [crate::query::State::Done, crate::query::State::Cancelled] {
+        assert!(
+            run(crate::query::advance(&inner, &mut state))
+                .unwrap()
+                .is_none()
+        );
+    }
+}
