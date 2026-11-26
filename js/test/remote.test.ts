@@ -144,7 +144,7 @@ describe("remote session", () => {
     await s.close();
   });
 
-  it("refuses the embedded engine with a clear error when no binary is installed", async () => {
+  it("refuses the embedded engine with a clear error", async () => {
     await expect(Session.builder().getOrCreate()).rejects.toThrow(/embedded engine is not available/);
   });
 });

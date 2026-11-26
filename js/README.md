@@ -1,6 +1,6 @@
 # krishiv
 
-Krishiv for JavaScript and TypeScript: SQL and DataFrames over Apache Arrow, against a Krishiv server or embedded in Node.
+Krishiv for JavaScript and TypeScript: SQL and DataFrames over Apache Arrow, against a Krishiv server.
 
 ```ts
 import { Session, col, count } from "krishiv";
@@ -40,7 +40,6 @@ Every failure is a `KrishivError` with `errorClass` and `sqlState` (the Spark er
 
 ## Embedded engine
 
-`Session.builder().getOrCreate()` runs the engine in your process through the optional package
-`@krishiv/engine-<os>-<arch>`. Without a binary for your platform it throws a `KrishivError`; use remote mode instead.
+Not yet available. `Session.builder().getOrCreate()` without `remote()` throws a `KrishivError`; connect to a server with `remote("krishiv://host:port")`.
 
-Node 20 or newer. Apache-2.0.
+Node 22 or newer. Apache-2.0.

@@ -110,11 +110,12 @@ export function toObjects(table: Table, options: ObjectOptions = {}): Row[] {
   const o: Required<ObjectOptions> = { bigint: options.bigint ?? "bigint", decimal: options.decimal ?? "string" };
   const fields = table.schema.fields;
   const rows: Row[] = [];
+  const cols = fields.map((_, c) => table.getChildAt(c)!);
   for (let i = 0; i < table.numRows; i++) {
     const row: Row = {};
     for (let c = 0; c < fields.length; c++) {
       const f = fields[c]!;
-      row[f.name] = convert(table.getChildAt(c)!, i, o);
+      row[f.name] = convert(cols[c]!, i, o);
     }
     rows.push(row);
   }
