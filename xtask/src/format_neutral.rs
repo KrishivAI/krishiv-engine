@@ -46,6 +46,15 @@ pub fn is_exempt_path(rel: &str) -> bool {
     if rel.contains("/tests/") || rel.ends_with("/tests.rs") || rel.ends_with("tests.rs") {
         return true;
     }
+    // Iceberg v0 data and delete files are Parquet by the table format's
+    // own spec (v1/v2 data files may be Avro/ORC, which v0 does not read),
+    // so the connector names the format. The profile history is the engine's
+    // own Parquet store, not a user-selected format.
+    if rel.starts_with("crates/krishiv-connectors-iceberg/src/iceberg_v0/")
+        || rel == "crates/krishiv-session/src/profile_history.rs"
+    {
+        return true;
+    }
     if rel.starts_with("crates/krishiv-io/benches/") {
         return true;
     }

@@ -20,6 +20,7 @@ extend-exclude = [
     # PySpark 4.2.0 modules vendored unchanged but for their imports (NOTICE)
     "python/krishiv/_udf/conversion.py",
     "python/krishiv/_udf/pandas_types.py",
+    "crates/krishiv-udf-pool/worker/krishiv/_udf/**",
     "python/krishiv/_udf/pandas_utils.py",
     "python/krishiv/_udf/typehints.py",
     "python/krishiv/_udf/loose_version.py",
