@@ -54,18 +54,6 @@ const KNOWN_GAPS: &[(&str, &str, &str)] = &[
         "max_only",
         "[KRISHIV_UNSUPPORTED_FEATURE] The feature Max of Time64(ns) is not supported by Krishiv yet.",
     ),
-    // The nanosecond timestamp types are Krishiv 0.3.1 (scope note P3-R3): with
-    // `spark.sql.timestampNanosTypes.enabled` on, Spark 4.3 builds them; Krishiv refuses by name.
-    (
-        "4.3.0",
-        "ts_ntz9_nanos_on",
-        "[KRISHIV_UNSUPPORTED_FEATURE] The feature nanosecond-precision timestamp types (Krishiv 0.3.1) is not supported by Krishiv yet.",
-    ),
-    (
-        "4.3.0",
-        "ts_ltz7_nanos_on",
-        "[KRISHIV_UNSUPPORTED_FEATURE] The feature nanosecond-precision timestamp types (Krishiv 0.3.1) is not supported by Krishiv yet.",
-    ),
     // `date_format` refuses a TIME before the implicit cast Spark tries (4.2: the class differs).
     (
         "4.2.0",

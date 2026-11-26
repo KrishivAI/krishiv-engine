@@ -5,7 +5,7 @@
 
 use std::fmt;
 
-use krishiv_types::{DataType, parse_data_type};
+use krishiv_types::DataType;
 
 use crate::ast::{DataTypeKind, DataTypeSpec, StructField};
 
@@ -137,6 +137,7 @@ impl DataTypeSpec {
             kind,
             collation: self.collation.clone(),
             span: self.span,
+            nanos_types: self.nanos_types,
         }
     }
 
@@ -171,7 +172,10 @@ impl DataTypeSpec {
     /// bound errors, and `KRISHIV_UNSUPPORTED_FEATURE` for Spark types not
     /// supported yet.
     pub fn to_data_type(&self) -> Result<DataType, krishiv_common::error::KrishivError> {
-        parse_data_type(&self.to_string())
+        krishiv_types::parse_data_type_in(
+            &self.to_string(),
+            krishiv_types::TypeGrammar::V4_3.with_nanos(self.nanos_types),
+        )
     }
 }
 

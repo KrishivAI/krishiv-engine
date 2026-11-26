@@ -711,6 +711,8 @@ impl DataType {
             Self::Decimal(_)
             | Self::CollatedString(_)
             | Self::Time { .. }
+            | Self::TimestampNanos { .. }
+            | Self::TimestampNtzNanos { .. }
             | Self::Geometry { .. }
             | Self::Geography { .. }
             | Self::YearMonthInterval { .. }
@@ -725,6 +727,8 @@ impl DataType {
             Self::Decimal(d) => format!("decimal({},{})", d.precision, d.scale),
             Self::CollatedString(c) => format!("string collate {c}"),
             Self::Time { precision } => format!("time({precision})"),
+            Self::TimestampNanos { precision } => format!("timestamp_ltz({precision})"),
+            Self::TimestampNtzNanos { precision } => format!("timestamp_ntz({precision})"),
             Self::Geometry { srid } => format!("geometry({srid})"),
             Self::Geography { srid } => format!("geography({srid})"),
             Self::YearMonthInterval { start, end } => interval_string(start.name(), end.name()),

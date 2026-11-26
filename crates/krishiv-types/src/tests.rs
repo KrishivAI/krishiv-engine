@@ -219,7 +219,7 @@ fn the_type_grammar_follows_the_release() {
         DataType::from_json(&field("timestamp_ltz(9)"))
             .unwrap()
             .simple_string(),
-        "struct<a:timestamp>"
+        "struct<a:timestamp_ltz(9)>"
     );
     assert_eq!(
         class(DataType::from_json(&field("timestamp_ntz(2)"))),

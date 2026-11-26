@@ -208,12 +208,7 @@ fn timestamp_precision(
             span,
         )),
         Ok(6) => Ok(()),
-        Ok(7..=9) if opts.timestamp_nanos_types => Err(at(
-            KrishivUnsupportedFeature {
-                feature: "nanosecond-precision timestamp types (Krishiv 0.3.1)".to_owned(),
-            },
-            span,
-        )),
+        Ok(7..=9) if opts.timestamp_nanos_types => Ok(()),
         Ok(7..=9) => Err(at(
             FeatureNotEnabled {
                 feature_name: "Nanosecond-precision timestamp types".to_owned(),
