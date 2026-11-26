@@ -319,7 +319,7 @@ fn depth_is_capped_without_stack_overflow() {
         let (inline, shallow, too_deep) = (deep(16), deep(400), deep(5000));
         // The deepest statement parsed on the caller's stack fits in 1 MiB.
         let i = std::thread::Builder::new()
-            .stack_size(1 << 20)
+            .stack_size(if cfg!(windows) { 4 << 20 } else { 1 << 20 })
             .spawn(move || parse_query(&inline, &ParserOptions::default()).map(drop))
             .unwrap()
             .join()

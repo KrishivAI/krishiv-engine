@@ -68,10 +68,23 @@ jobs:
         with:
           persist-credentials: false
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      # The fat-LTO link of `krishiv` needs more memory than this runner has: without swap the
+      # runner is shut down during the link.
+      - name: Add swap for the release link
+        run: |
+          sudo fallocate -l 8G /swap-link
+          sudo chmod 600 /swap-link
+          sudo mkswap /swap-link
+          sudo swapon /swap-link
+          free -h
+          df -h /
       - name: Build
         env:
           SHA: ${{ github.sha }}
         run: |
+          # Memory and swap use once a minute, so a failed link shows what it ran out of.
+          (while sleep 60; do free -m | sed -n '2,3p'; done) &
+          trap 'kill $!' EXIT
           docker buildx build --platform linux/arm64 -f docker/Dockerfile \
             --build-arg "KRISHIV_GIT_SHA=$SHA" --load -t krishiv:ci .
       - name: Smoke test

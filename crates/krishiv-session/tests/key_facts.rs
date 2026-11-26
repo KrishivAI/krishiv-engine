@@ -4,6 +4,8 @@
 //! count the dimension's key once, so `PayloadAboveAggregate` fires; a
 //! repeated key never fires it; the answers equal the rule off.
 #![cfg(test)]
+mod literal_path;
+use literal_path::sql_path;
 
 use arrow_array::Array as _;
 use futures::executor::block_on;
@@ -47,7 +49,7 @@ fn session(dir: &std::path::Path, rule: bool, discover: bool) -> Session {
     for t in ["customer", "orders"] {
         block_on(s.sql(&format!(
             "CREATE TEMPORARY VIEW {t} USING parquet OPTIONS (path '{}')",
-            dir.join(t).display()
+            sql_path(&dir.join(t))
         )))
         .unwrap();
     }
@@ -244,7 +246,7 @@ fn a_count_past_the_session_memory_limit_proves_nothing() {
     for t in ["customer", "orders"] {
         block_on(s.sql(&format!(
             "CREATE TEMPORARY VIEW {t} USING parquet OPTIONS (path '{}')",
-            dir.path().join(t).display()
+            sql_path(&dir.path().join(t))
         )))
         .unwrap();
     }
@@ -274,7 +276,7 @@ fn refresh_of_a_path_forgets_the_facts() {
     assert!(note().contains("cached unique"));
     block_on(on.sql(&format!(
         "REFRESH '{}'",
-        dir.path().join("customer").display()
+        sql_path(&dir.path().join("customer"))
     )))
     .unwrap();
     assert!(note().contains("discovered unique"));

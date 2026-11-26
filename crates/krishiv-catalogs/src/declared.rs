@@ -167,6 +167,16 @@ impl IcebergRestFactory {
         deps: &CatalogDeps,
         ttl: std::time::Duration,
     ) -> Result<Arc<dyn CallerCatalog>, KrishivError> {
+        Self::build_with(decl, deps, ttl, vended::VendedCache::global())
+    }
+
+    /// [`Self::build_with_ttl`] keeping vended answers in `vended` (the process's cache, or a test's own).
+    pub(crate) fn build_with(
+        decl: &CatalogDecl,
+        deps: &CatalogDeps,
+        ttl: std::time::Duration,
+        vended: Arc<vended::VendedCache>,
+    ) -> Result<Arc<dyn CallerCatalog>, KrishivError> {
         let config = Self::config(decl, deps, true)?;
         // Embedded use reads local tables too (as reads by path are not confined there); a
         // server never reads its own disk for a catalog (`FileFromRemoteCatalog`).
@@ -182,6 +192,7 @@ impl IcebergRestFactory {
             Arc::new(client),
             ttl,
             writes(decl)?,
+            vended,
         )))
     }
 }

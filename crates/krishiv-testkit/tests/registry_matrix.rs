@@ -197,7 +197,7 @@ fn registered_functions_analyze_as_spark_does() {
         }
     }
     // Every registered function has matrix cases: in the 4.2 matrix, or, for a function Spark added
-    // in 4.3 (no `SparkProfile::V4_3` yet, T090), in the 4.3.0 matrix, which the 4.3 ratchet owns.
+    // in 4.3, in the 4.3.0 matrix, which the 4.3 ratchet owns.
     let since_4_3 =
         FnMatrix::load(krishiv_testkit::tests_dir().join("fixtures/spark-4.3.0/function-matrix"))
             .unwrap();

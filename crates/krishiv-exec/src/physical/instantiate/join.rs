@@ -79,6 +79,7 @@ pub(crate) fn hash_join(
                 key: f.key,
                 filter: values.filter(f.id)?,
                 options,
+                column: f.column,
             })
         })
         .collect::<Result<Vec<_>>>()?;

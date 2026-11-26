@@ -1026,7 +1026,6 @@ impl JoinTable {
     }
 
     /// Whether every key occurs once (no chain is longer than one row).
-    #[cfg(test)]
     pub(crate) fn is_unique(&self) -> bool {
         self.unique
     }

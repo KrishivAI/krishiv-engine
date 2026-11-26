@@ -646,10 +646,11 @@ fn endpoints_are_checked() {
         "https://policy.example.com:8443/",
         "http://127.0.0.1:9000",
         "http://[::1]:9000",
-        "unix:/run/krishiv/policy.sock",
     ] {
         Endpoint::parse(ok).unwrap_or_else(|e| panic!("{ok}: {e}"));
     }
+    #[cfg(unix)]
+    Endpoint::parse("unix:/run/krishiv/policy.sock").unwrap();
     for bad in [
         "http://policy.example.com",
         "http://10.0.0.1:9000",
@@ -795,6 +796,7 @@ fn a_zero_timeout_is_refused() {
 
 /// The token is read from its reference when the header is made, trimmed, and marked sensitive;
 /// a token that is not header text is refused without echoing it.
+#[cfg(unix)]
 #[test]
 fn the_bearer_header_comes_from_the_token_reference() {
     let dir = tempfile::tempdir().unwrap();
@@ -840,6 +842,7 @@ async fn an_https_endpoint_makes_a_lazy_channel() {
 
 /// A `unix:` endpoint dials the socket: a service that closes the connection is a denial, and so
 /// is a socket nobody listens on.
+#[cfg(unix)]
 #[tokio::test]
 async fn a_unix_endpoint_dials_the_socket() {
     let dir = tempfile::tempdir().unwrap();
@@ -872,4 +875,166 @@ async fn a_unix_endpoint_dials_the_socket() {
         assert!(!allowed(&d), "{}: {d:?}", socket.display());
     }
     assert!(accepted.load(std::sync::atomic::Ordering::Relaxed) >= 1);
+}
+
+/// A fake answering by the rule, as `serve` builds it.
+fn rule_fake() -> (Fake, Seen) {
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let fake = Fake {
+        mode: Mode::Rule,
+        version: 41,
+        requests: Arc::clone(&requests),
+        calls: std::sync::atomic::AtomicU64::new(0),
+    };
+    (fake, requests)
+}
+
+/// Review m9: the `unix:` endpoint's connector reaches a service on a Unix socket.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_unix_socket_endpoint_reaches_the_service() {
+    let dir = tempfile::tempdir().unwrap();
+    let socket = dir.path().join("policy.sock");
+    let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+    let incoming = futures::stream::unfold(listener, |l| async move {
+        let accepted = l.accept().await.map(|(stream, _)| stream);
+        Some((accepted, l))
+    });
+    let (fake, requests) = rule_fake();
+    let _server = tokio::spawn(async move {
+        let _ = tonic::transport::Server::builder()
+            .add_service(AccessPolicyServer::new(fake))
+            .serve_with_incoming(incoming)
+            .await;
+    });
+    let endpoint = Endpoint::parse(&format!("unix:{}", socket.display())).unwrap();
+    let access = ExternalAccess::over(
+        AccessPolicyClient::new(endpoint.channel().unwrap()),
+        Duration::from_secs(5),
+        None,
+        false,
+    );
+    let policy = access.policy();
+    assert!(allowed(
+        &policy
+            .check(&ana(), &table("t"), Privilege::Select)
+            .await
+            .unwrap()
+    ));
+    assert!(!allowed(
+        &policy
+            .check(&ana(), &table("secret"), Privilege::Select)
+            .await
+            .unwrap()
+    ));
+    assert_eq!(requests.lock().unwrap().len(), 2);
+}
+
+/// Review m9: an `https://` endpoint to a service that speaks no TLS is a denial, not an error.
+#[tokio::test]
+async fn an_https_endpoint_to_a_service_without_tls_denies() {
+    let (fake, requests) = rule_fake();
+    let incoming =
+        tonic::transport::server::TcpIncoming::bind("127.0.0.1:0".parse().unwrap()).unwrap();
+    let addr = incoming.local_addr().unwrap();
+    let _server = tokio::spawn(async move {
+        let _ = tonic::transport::Server::builder()
+            .add_service(AccessPolicyServer::new(fake))
+            .serve_with_incoming(incoming)
+            .await;
+    });
+    let endpoint = Endpoint::parse(&format!("https://{addr}")).unwrap();
+    let access = ExternalAccess::over(
+        AccessPolicyClient::new(endpoint.channel().unwrap()),
+        Duration::from_secs(2),
+        None,
+        false,
+    );
+    let d = access
+        .policy()
+        .check(&ana(), &table("t"), Privilege::Select)
+        .await
+        .unwrap();
+    assert!(!allowed(&d));
+    assert!(requests.lock().unwrap().is_empty());
+}
+
+/// The private test CA's files (`krishiv-session/tests/fixtures/tls`, see its README).
+fn tls_fixture(name: &str) -> Vec<u8> {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../krishiv-session/tests/fixtures/tls")
+        .join(name);
+    std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
+}
+
+/// Review m9 (and of 7f535d472, finding 1): a service over TLS whose certificate the platform
+/// roots do not trust (one of a private CA) is a denial, and no request reaches it. A client that
+/// trusts that CA reaches the same service, so the refusal is the certificate's alone.
+#[tokio::test]
+async fn an_https_service_with_an_untrusted_certificate_denies() {
+    use tonic::transport::{
+        Certificate, ClientTlsConfig, Identity, ServerTlsConfig, server::TcpIncoming,
+    };
+    let (fake, requests) = rule_fake();
+    let incoming = TcpIncoming::bind("127.0.0.1:0".parse().unwrap()).unwrap();
+    let addr = incoming.local_addr().unwrap();
+    let identity = Identity::from_pem(tls_fixture("server.pem"), tls_fixture("server.key"));
+    let _server = tokio::spawn(async move {
+        let _ = tonic::transport::Server::builder()
+            .tls_config(ServerTlsConfig::new().identity(identity))
+            .unwrap()
+            .add_service(AccessPolicyServer::new(fake))
+            .serve_with_incoming(incoming)
+            .await;
+    });
+    // The certificate names 127.0.0.1, so only the trust in its CA differs below.
+    let uri = format!("https://127.0.0.1:{}", addr.port());
+
+    let trusting = tonic::transport::Endpoint::from_shared(uri.clone())
+        .unwrap()
+        .tls_config(
+            ClientTlsConfig::new().ca_certificate(Certificate::from_pem(tls_fixture("ca.pem"))),
+        )
+        .unwrap()
+        .connect_lazy();
+    let control = ExternalAccess::over(
+        AccessPolicyClient::new(trusting),
+        Duration::from_secs(5),
+        None,
+        false,
+    );
+    let d = control
+        .policy()
+        .check(&ana(), &table("t"), Privilege::Select)
+        .await
+        .unwrap();
+    assert!(allowed(&d), "a client trusting the test CA is answered");
+    assert_eq!(requests.lock().unwrap().len(), 1);
+
+    let endpoint = Endpoint::parse(&uri).unwrap();
+    let access = ExternalAccess::over(
+        AccessPolicyClient::new(endpoint.channel().unwrap()),
+        Duration::from_secs(5),
+        None,
+        false,
+    );
+    let d = access
+        .policy()
+        .check(&ana(), &table("t"), Privilege::Select)
+        .await
+        .unwrap();
+    assert!(!allowed(&d));
+    assert_eq!(
+        requests.lock().unwrap().len(),
+        1,
+        "the untrusted handshake reached no handler"
+    );
+}
+
+/// Review m9: the provider's `Debug` form never shows its bearer token.
+#[tokio::test]
+async fn the_debug_form_hides_the_token() {
+    let s = serve(Mode::Rule, Some("Canary-token-91c2")).await;
+    let shown = format!("{:?} {:?}", s.access, s.access.policy());
+    assert!(!shown.contains("Canary-token-91c2"), "{shown}");
 }

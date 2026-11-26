@@ -95,7 +95,7 @@
 //! is not raised. This is a documented divergence from Spark, which
 //! computes every group and every row.
 
-use std::collections::{HashMap, HashSet};
+use crate::expr::AttrMap;
 use std::sync::Arc;
 
 use krishiv_common::error::KrishivError;
@@ -106,7 +106,7 @@ use krishiv_plan::{
 use krishiv_types::DataType;
 
 use crate::dag::{self, with_input};
-use crate::estimate::Estimator;
+use crate::estimate::{Estimator, Memo};
 use crate::expr::{
     Attrs, and_all, builtin, column, conjuncts, has_outer_reference, has_subquery,
     is_deterministic, recall, references, same, strip_alias, substitute,
@@ -134,20 +134,25 @@ const PRESERVED_FLIP: f64 = 2.0;
 
 /// Restricts the aggregates below joins in `root` (see the module docs);
 /// with `preserved`, also the preserved sides of outer joins below them
-/// (`krishiv.optimizer.preservedSideSemiJoin`, module docs).
+/// (`krishiv.optimizer.preservedSideSemiJoin`, module docs). Estimates start
+/// from `memo` and are left in it.
 pub(crate) fn restrict(
     root: Arc<LogicalPlan>,
     stats: &dyn Statistics,
     propagate: bool,
     preserved: bool,
+    memo: &mut Memo,
 ) -> Result<Arc<LogicalPlan>, KrishivError> {
     let mut r = Restrict {
-        est: Estimator::with_propagation(stats, propagate),
+        est: Estimator::resume(stats, propagate, std::mem::take(memo)),
         root: Arc::clone(&root),
         next: None,
         preserved,
+        reaches: Default::default(),
     };
-    dag::rewrite_up(root, &mut |p| Ok(r.join(p)))
+    let out = dag::rewrite_up(root, &mut |p| Ok(r.join(p)));
+    *memo = r.est.into_memo();
+    out
 }
 
 struct Restrict<'a> {
@@ -159,6 +164,9 @@ struct Restrict<'a> {
     next: Option<u64>,
     /// Whether the preserved side of an outer join is a target too.
     preserved: bool,
+    /// Per relation (kept alive, so its address stays unique): whether
+    /// [`Self::side`]'s descent can reach a target from it.
+    reaches: crate::expr::AddrMap<LogicalPlan, (Arc<LogicalPlan>, bool)>,
 }
 
 /// One restricting equality: `agg = other`, each over its own side.
@@ -191,6 +199,13 @@ impl Restrict<'_> {
             JoinKind::RightOuter => (true, false),
             _ => (false, false),
         };
+        // Most sides hold no aggregate the descent reaches: those skip
+        // collecting either side's outputs.
+        let r = r && self.reaches(right);
+        let l = l && self.reaches(left);
+        if !l && !r {
+            return p;
+        }
         let conj = conjuncts(cond);
         let mut out_left = Arc::clone(left);
         let mut out_right = Arc::clone(right);
@@ -209,6 +224,33 @@ impl Restrict<'_> {
             *right = out_right;
         }
         Arc::new(node)
+    }
+
+    /// Whether [`Self::side`]'s descent from `p` can reach a target: an
+    /// aggregate or, when [`Self::preserved`], an outer join, through
+    /// filters, projections and inner joins only (either input of a join,
+    /// so a superset of what the descent follows).
+    fn reaches(&mut self, p: &Arc<LogicalPlan>) -> bool {
+        if let Some((_, r)) = self.reaches.get(&Arc::as_ptr(p)) {
+            return *r;
+        }
+        let r = match &p.node {
+            PlanNode::Aggregate { .. } => true,
+            PlanNode::Join {
+                kind: JoinKind::LeftOuter | JoinKind::RightOuter,
+                ..
+            } => self.preserved,
+            PlanNode::Filter { input, .. } | PlanNode::Project { input, .. } => self.reaches(input),
+            PlanNode::Join {
+                left,
+                right,
+                kind: JoinKind::Inner | JoinKind::Cross,
+                ..
+            } => self.reaches(left) || self.reaches(right),
+            _ => false,
+        };
+        self.reaches.insert(Arc::as_ptr(p), (Arc::clone(p), r));
+        r
     }
 
     /// `side` with the aggregate at its top restricted to `other`'s keys
@@ -326,7 +368,7 @@ impl Restrict<'_> {
                     at = next;
                 }
                 PlanNode::Project { input, exprs } => {
-                    let map: HashMap<AttrId, Arc<Expr>> = exprs
+                    let map: AttrMap<Arc<Expr>> = exprs
                         .iter()
                         .filter_map(|e| {
                             let out = crate::expr::output_of(e)?;
@@ -351,7 +393,7 @@ impl Restrict<'_> {
             _ => return None,
         };
         // Each grouping key's output attribute, to its expression.
-        let by_output: HashMap<AttrId, Arc<Expr>> = aggregates
+        let by_output: AttrMap<Arc<Expr>> = aggregates
             .iter()
             .filter_map(|a| {
                 let g = groups.iter().find(|g| same(strip_alias(a), g))?;
@@ -497,7 +539,7 @@ impl Restrict<'_> {
         inner: Vec<Arc<Expr>>,
         domain: Arc<LogicalPlan>,
         want: &Attrs,
-        rename: &HashMap<AttrId, Arc<Expr>>,
+        rename: &AttrMap<Arc<Expr>>,
     ) -> Option<Arc<LogicalPlan>> {
         // Fresh ids for the domain's instance.
         let offset = match self.next {
@@ -555,9 +597,11 @@ impl Restrict<'_> {
         loop {
             // The subtrees the domain may move into, each with the columns
             // an equality of the join renames `want` to there.
-            let mut next: Vec<(Arc<LogicalPlan>, HashMap<AttrId, BoundColumn>)> = Vec::new();
+            let mut next: Vec<(Arc<LogicalPlan>, AttrMap<BoundColumn>)> = Vec::new();
             match &at.node {
-                PlanNode::Filter { input, .. } => next.push((Arc::clone(input), HashMap::new())),
+                PlanNode::Filter { input, .. } => {
+                    next.push((Arc::clone(input), AttrMap::default()));
+                }
                 // Only columns passed through unchanged.
                 PlanNode::Project { input, exprs } => {
                     let through: Attrs = exprs
@@ -568,7 +612,7 @@ impl Restrict<'_> {
                         })
                         .collect();
                     if want.is_subset(&through) {
-                        next.push((Arc::clone(input), HashMap::new()));
+                        next.push((Arc::clone(input), AttrMap::default()));
                     }
                 }
                 // A side's columns hold its values or NULL, which matches
@@ -585,9 +629,9 @@ impl Restrict<'_> {
                         JoinKind::LeftSemi | JoinKind::LeftAnti | JoinKind::Existence(_)
                     ) && output_ids(right).is_some_and(|o| want.is_subset(&o));
                     if in_left {
-                        next.push((Arc::clone(left), HashMap::new()));
+                        next.push((Arc::clone(left), AttrMap::default()));
                     } else if in_right {
-                        next.push((Arc::clone(right), HashMap::new()));
+                        next.push((Arc::clone(right), AttrMap::default()));
                     }
                     // Through an inner join's equalities into the other
                     // input: a row of the join has `w = y`, so the join's
@@ -648,7 +692,7 @@ impl Restrict<'_> {
 
     /// The estimated rows the scans of `p` read.
     fn scanned(&mut self, p: &Arc<LogicalPlan>) -> f64 {
-        let mut seen = HashSet::new();
+        let mut seen = crate::expr::AddrSet::default();
         let mut stack = vec![Arc::clone(p)];
         let mut total = 0.0;
         while let Some(x) = stack.pop() {
@@ -701,7 +745,7 @@ fn rebuild(
 struct Domain {
     plan: Arc<LogicalPlan>,
     want: Attrs,
-    rename: HashMap<AttrId, Arc<Expr>>,
+    rename: AttrMap<Arc<Expr>>,
 }
 
 /// For every column of `want` (none of them in `side`), a column of `side`
@@ -712,7 +756,7 @@ fn partners(
     cond: &Arc<Expr>,
     want: &Attrs,
     side: &Arc<LogicalPlan>,
-) -> Option<HashMap<AttrId, BoundColumn>> {
+) -> Option<AttrMap<BoundColumn>> {
     let cols = output(side)?;
     if want.iter().any(|w| cols.iter().any(|c| c.id == *w)) {
         return None;
@@ -721,7 +765,7 @@ fn partners(
         ExprNode::Resolved(ResolvedExpr::Column(c)) => Some(c.clone()),
         _ => None,
     };
-    let mut map = HashMap::new();
+    let mut map = AttrMap::default();
     for c in conjuncts(cond) {
         let Some((Builtin::Eq, [a, b], _)) = builtin(&c) else {
             continue;
@@ -893,7 +937,7 @@ fn node_exprs_deterministic(p: &LogicalPlan) -> bool {
 /// shift does not renumber), deterministic expressions (subquery plans
 /// included) and no outer references.
 pub(crate) fn repeatable(p: &Arc<LogicalPlan>) -> bool {
-    let mut seen = HashSet::new();
+    let mut seen = crate::expr::AddrSet::default();
     let mut stack = vec![Arc::clone(p)];
     while let Some(x) = stack.pop() {
         if seen.insert(Arc::as_ptr(&x)) {
@@ -1010,7 +1054,7 @@ pub(crate) fn max_id(
 pub(crate) fn subquery_plans(e: &Arc<Expr>) -> Vec<Arc<LogicalPlan>> {
     let mut out = Vec::new();
     let mut stack = vec![Arc::clone(e)];
-    let mut seen = HashSet::new();
+    let mut seen = crate::expr::AddrSet::default();
     while let Some(x) = stack.pop() {
         if !seen.insert(Arc::as_ptr(&x)) {
             continue;

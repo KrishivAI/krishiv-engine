@@ -111,12 +111,27 @@ pub fn l2_norm(v: &[f32]) -> f32 {
 }
 
 /// The infinity norm. A NaN element never exceeds the running maximum, so
-/// it is skipped (4.2.0; 4.3.0 propagates it).
+/// it is skipped (4.2.0).
 #[must_use]
 pub fn inf_norm(v: &[f32]) -> f32 {
     v.iter().fold(0.0_f32, |m, &x| {
         let a = x.abs();
         if a > m { a } else { m }
+    })
+}
+
+/// The infinity norm as Spark 4.3.0's `vectorInfNorm` computes it:
+/// `Math.max(maxAbs, Math.abs(x))`, which propagates a NaN element.
+#[must_use]
+pub fn inf_norm_nan(v: &[f32]) -> f32 {
+    // `f32::max` ignores a NaN; Java's `Math.max` returns it.
+    v.iter().fold(0.0_f32, |m, &x| {
+        let a = x.abs();
+        if m.is_nan() || a.is_nan() {
+            f32::NAN
+        } else {
+            m.max(a)
+        }
     })
 }
 
@@ -170,6 +185,14 @@ mod tests {
         let v = [1.0, f32::NAN, 2.0];
         assert_eq!(inf_norm(&v), 2.0);
         assert!(l2_norm(&v).is_nan() && l1_norm(&v).is_nan());
+    }
+
+    #[test]
+    fn the_43_infinity_norm_propagates_nan() {
+        assert!(inf_norm_nan(&[1.0, f32::NAN, 2.0]).is_nan());
+        assert!(inf_norm_nan(&[f32::NAN, 5.0]).is_nan());
+        assert_eq!(inf_norm_nan(&[1.0, -3.0, 2.0]), 3.0);
+        assert_eq!(inf_norm_nan(&[]), 0.0);
     }
 
     #[test]

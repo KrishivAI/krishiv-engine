@@ -12,7 +12,7 @@ import numpy as np
 import pyarrow.parquet as pq
 import pytest
 
-from krishiv_bench import ab, cli, datasets, h2o, reproduce
+from krishiv_bench import ab, cli, datasets, h2o, paths, reproduce
 from krishiv_bench import h2o_data as hd
 from krishiv_bench.adapters import Dataset, Query, make_engine
 from krishiv_bench.adapters.base import check_query, result_rows
@@ -72,7 +72,7 @@ def test_an_engine_override_wins(monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     (d / "polars").mkdir(parents=True)
     (d / "q01.sql").write_text("SELECT id1, SUM(v1) AS v1 FROM x GROUP BY id1")
     (d / "polars" / "q01.sql").write_text("SELECT id1, SUM(v1) AS v1 FROM x GROUP BY 1")
-    monkeypatch.setattr(h2o, "queries_dir", lambda suite: tmp_path / "queries" / suite)
+    monkeypatch.setattr(paths, "queries_dir", lambda suite: tmp_path / "queries" / suite)
     assert h2o.load_queries("h2o-groupby", "duckdb")[0].sql.endswith("GROUP BY id1")
     assert h2o.load_queries("h2o-groupby", "polars")[0].sql.endswith("GROUP BY 1")
 
@@ -81,7 +81,7 @@ def test_a_question_without_checksum_columns_is_refused(monkeypatch: pytest.Monk
     d = tmp_path / "h2o-join"
     d.mkdir()
     (d / "q09.sql").write_text("SELECT 1")
-    monkeypatch.setattr(h2o, "queries_dir", lambda suite: d)
+    monkeypatch.setattr(paths, "queries_dir", lambda suite: d)
     with pytest.raises(ValueError, match="q09: no checksum columns"):
         h2o.load_queries("h2o-join", "duckdb")
 
@@ -234,7 +234,7 @@ def test_reference_checksums_use_the_duckdb_question_not_the_engine_override(
     (d / "wrapped").mkdir(parents=True)
     (d / "q01.sql").write_text("SELECT id1, SUM(v1) AS v1 FROM x GROUP BY id1")
     (d / "wrapped" / "q01.sql").write_text("SELECT id1, SUM(v1) + 1 AS v1 FROM x GROUP BY id1")
-    monkeypatch.setattr(h2o, "queries_dir", lambda suite: tmp_path / "queries" / suite)
+    monkeypatch.setattr(paths, "queries_dir", lambda suite: tmp_path / "queries" / suite)
     rec, failed = run_with(monkeypatch, tiny["h2o-groupby"], Wrapped(), ["q01"])
     assert failed == 1
     assert "!=" in rec["queries"]["q01"]["answer_check"]["detail"]

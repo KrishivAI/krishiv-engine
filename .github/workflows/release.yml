@@ -15,6 +15,11 @@ name: Release artifacts
 # jobs consuming this bundle (environment `release`, OIDC trusted publishing, no tokens).
 on:
   workflow_dispatch:
+    inputs:
+      nightly_waiver:
+        description: 'One-time owner waiver: "run=<id> jobs=<a,b> reason=<text>" (the run must be a Nightly (heavy) on an ancestor of this commit on a release/ branch; every job not named must be green). Empty = no waiver.'
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -46,6 +51,7 @@ jobs:
       - name: Latest scheduled CI run is green on this commit
         env:
           GH_TOKEN: ${{ github.token }}
+          NIGHTLY_WAIVER: ${{ inputs.nightly_waiver }}
         run: .github/scripts/require-green-nightly.sh
 
   wheels:
@@ -61,6 +67,8 @@ jobs:
       contents: read
       actions: read
     uses: $/.github/workflows/binaries.yml
+    with:
+      nightly_waiver: ${{ inputs.nightly_waiver }}
 
   bundle:
     needs: [wheels, binaries]

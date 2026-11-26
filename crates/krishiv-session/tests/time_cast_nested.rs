@@ -104,3 +104,53 @@ fn narrowing_time_casts_are_nullable() {
         "{e}"
     );
 }
+
+/// Spark 4.3 casts timestamps to `TIME` inside arrays, structs and maps element by element
+/// (Spark 4.3.0 local run, session zone UTC), and a `TIME` array to `array<timestamp_ntz>`;
+/// Spark 4.2 refuses both.
+#[test]
+fn nested_timestamps_cast_to_time_under_spark_4_3() {
+    let s = Session::builder()
+        .profile(SparkProfile::V4_3)
+        .build()
+        .unwrap();
+    block_on(s.sql("SET spark.sql.timeType.enabled = true")).unwrap();
+    block_on(s.sql("SET spark.sql.session.timeZone = UTC")).unwrap();
+    let one = |sql: &str| -> String {
+        let df = block_on(s.sql(sql)).unwrap();
+        let b = block_on(df.collect()).unwrap();
+        b[0].columns()[0].as_string_view().value(0).to_owned()
+    };
+    for (sql, want) in [
+        (
+            "SELECT CAST(CAST(array(TIMESTAMP_NTZ'2020-05-17 12:34:56.789012', NULL) AS array<time(3)>) AS STRING)",
+            "[12:34:56.789, null]",
+        ),
+        (
+            "SELECT CAST(CAST(named_struct('a', TIMESTAMP'2020-05-17 12:34:56.789012') AS struct<a: time(6)>) AS STRING)",
+            "{12:34:56.789012}",
+        ),
+        (
+            "SELECT CAST(CAST(map('k', TIMESTAMP_NTZ'1969-12-31 23:59:59.5') AS map<string, time(1)>) AS STRING)",
+            "{k -> 23:59:59.5}",
+        ),
+        (
+            "SELECT typeof(CAST(array(TIME'01:02:03') AS array<timestamp_ntz>))",
+            "array<timestamp_ntz>",
+        ),
+    ] {
+        assert_eq!(one(sql), want, "{sql}");
+    }
+    let s42 = Session::builder()
+        .profile(SparkProfile::V4_2)
+        .build()
+        .unwrap();
+    block_on(s42.sql("SET spark.sql.timeType.enabled = true")).unwrap();
+    let e = block_on(s42.sql("SELECT CAST(array(TIME'01:02:03') AS array<timestamp_ntz>)"))
+        .err()
+        .map(|e| e.error_class().name().to_owned());
+    assert_eq!(
+        e.as_deref(),
+        Some("DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION")
+    );
+}

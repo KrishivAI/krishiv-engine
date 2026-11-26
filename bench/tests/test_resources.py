@@ -471,6 +471,25 @@ def test_a_cpu_delta_needs_a_reading_taken_after_the_baseline():
         p.wait()
 
 
+def test_tree_measure_records_the_trees_rss_at_start_as_the_baseline():
+    from krishiv_bench.adapters.proc_mem import tree_measure
+
+    p = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    try:
+        for sample in (True, False):
+            tree = TreeProc(p.pid, interval_s=0.01, sample=sample)
+            tree.start()
+            assert tree.baseline is not None
+            assert tree.baseline > 0
+            m = tree_measure(tree)
+            assert m.baseline_rss_bytes == tree.baseline
+            assert m.peak_rss_bytes is not None
+            assert m.peak_rss_bytes >= m.baseline_rss_bytes
+    finally:
+        p.kill()
+        p.wait()
+
+
 def test_workers_spill_to_the_data_root_unless_told_otherwise(monkeypatch, tmp_path):
     from krishiv_bench.adapters.process import worker_env
 

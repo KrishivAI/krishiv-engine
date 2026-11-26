@@ -70,7 +70,9 @@ mod mor_fault_tests;
 mod mor_sink_tests;
 #[cfg(test)]
 mod mor_tests;
+// The fixtures name `file:/wh/...`, a rooted path that on Windows is on the working drive, not under the fixture directory.
 #[cfg(test)]
+#[cfg(unix)]
 mod oracle_tests;
 #[cfg(test)]
 mod overwrite_tests;

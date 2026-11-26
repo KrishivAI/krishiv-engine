@@ -19,11 +19,17 @@ string through unchanged.
 class DataFrameReader
 ```
 
+Reads files and tables into DataFrames.
+
+`spark.read.format(...).option(...).load(path)`, or the `csv`, `json` and `parquet` shorthands.
+
 ### `csv`
 
 ```python
 def csv(self, path: str | list[str], **options: object) -> DataFrame
 ```
+
+Reads CSV file(s) at `path`.
 
 ### `format`
 
@@ -31,13 +37,15 @@ def csv(self, path: str | list[str], **options: object) -> DataFrame
 def format(self, source: str) -> DataFrameReader
 ```
 
+Sets the data source format (`parquet`, `csv`, `json` ...).
+
 ### `jdbc`
 
 ```python
 def jdbc(self, *args: object, **kwargs: object) -> DataFrame
 ```
 
-Not supported: Krishiv has no JDBC source (`KRISHIV_UNSUPPORTED_FEATURE`).
+Not supported: there is no JDBC (`KRISHIV_UNSUPPORTED_FEATURE`).
 
 ### `json`
 
@@ -45,11 +53,15 @@ Not supported: Krishiv has no JDBC source (`KRISHIV_UNSUPPORTED_FEATURE`).
 def json(self, path: str | list[str], **options: object) -> DataFrame
 ```
 
+Reads JSON-lines file(s) at `path`.
+
 ### `load`
 
 ```python
 def load(self, path: str | list[str] | None=None, format: str | None=None, **options: object) -> DataFrame
 ```
+
+Reads `path` in the configured format.
 
 ### `option`
 
@@ -57,17 +69,31 @@ def load(self, path: str | list[str] | None=None, format: str | None=None, **opt
 def option(self, key: str, value: object) -> DataFrameReader
 ```
 
+Adds one reader option.
+
 ### `options`
 
 ```python
 def options(self, **options: object) -> DataFrameReader
 ```
 
+Adds several reader options.
+
+### `orc`
+
+```python
+def orc(self, path: str | list[str], **options: object) -> DataFrame
+```
+
+Not supported: the engine reads no ORC (`KRISHIV_UNSUPPORTED_FEATURE`).
+
 ### `parquet`
 
 ```python
 def parquet(self, *paths: str) -> DataFrame
 ```
+
+Reads Parquet file(s) at `paths`.
 
 ### `schema`
 
@@ -80,14 +106,30 @@ b STRING"`). The files are read as its columns, never inferred; as in
 Spark, partition columns found under the path come last (one the schema
 names takes its type) and every column reads as nullable.
 
+### `table`
+
+```python
+def table(self, tableName: str) -> DataFrame
+```
+
+The table or view `tableName` as a DataFrame (as `spark.table`).
+
 ### `text`
 
 ```python
-def text(self, paths: str | list[str], wholetext: bool=False, lineSep: str | None=None, **options: object) -> DataFrame
+def text(self, paths: str | list[str], wholetext: bool=False, lineSep: str | None=None, pathGlobFilter: str | None=None, recursiveFileLookup: bool | None=None, modifiedBefore: str | None=None, modifiedAfter: str | None=None) -> DataFrame
 ```
 
-Reads text files into a `value` string column, a row per line (`wholetext=True`: a row
-per file), as `pyspark.sql.DataFrameReader.text`.
+Reads text files into a DataFrame with one string column `value` per line (the whole
+file per row with `wholetext`).
+
+### `xml`
+
+```python
+def xml(self, path: str | list[str], **options: object) -> DataFrame
+```
+
+Not supported: the engine reads no XML (`KRISHIV_UNSUPPORTED_FEATURE`).
 
 ## `DataFrameWriter`
 
@@ -117,6 +159,16 @@ Buckets the output by `col` (and `cols`) into `numBuckets`
 buckets. Only `saveAsTable` accepts it in Spark, and the engine has
 no bucketed tables (see the class doc).
 
+### `clusterBy`
+
+```python
+def clusterBy(self, col: str | list[str] | tuple[str, ...], *cols: str) -> DataFrameWriter
+```
+
+Clusters the output by `col` (and `cols`); each call replaces the columns of the one
+before. The engine has no clustered tables: `save` and `saveAsTable` then fail with
+`KRISHIV_UNSUPPORTED_FEATURE`.
+
 ### `csv`
 
 ```python
@@ -143,7 +195,7 @@ Inserts the rows into the existing table `tableName` by position.
 def jdbc(self, *args: object, **kwargs: object) -> None
 ```
 
-Not supported: Krishiv has no JDBC sink (`KRISHIV_UNSUPPORTED_FEATURE`).
+Not supported: there is no JDBC (`KRISHIV_UNSUPPORTED_FEATURE`).
 
 ### `json`
 
@@ -168,6 +220,14 @@ def option(self, key: str, value: object) -> DataFrameWriter
 ```python
 def options(self, **options: object) -> DataFrameWriter
 ```
+
+### `orc`
+
+```python
+def orc(self, path: str, mode: str | None=None, partitionBy: str | list[str] | tuple[str, ...] | None=None, compression: str | None=None) -> None
+```
+
+Not supported: the engine writes no ORC (`KRISHIV_UNSUPPORTED_FEATURE`).
 
 ### `parquet`
 
@@ -218,6 +278,14 @@ def text(self, path: str, compression: str | None=None, lineSep: str | None=None
 ```
 
 Writes the rows as text files: one string column, as in Spark.
+
+### `xml`
+
+```python
+def xml(self, path: str, **options: object) -> None
+```
+
+Not supported: the engine writes no XML (`KRISHIV_UNSUPPORTED_FEATURE`).
 
 ## `DataFrameWriterV2`
 

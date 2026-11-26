@@ -22,7 +22,6 @@
 use std::collections::{BTreeMap, HashMap};
 use std::fs::File;
 use std::io::Write as _;
-use std::os::unix::fs::FileExt as _;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -374,8 +373,7 @@ impl LocalReader {
                     usize::try_from(*len)
                         .map_err(|_| internal(format!("a frame of {len} bytes")))?
                 ];
-                file.read_exact_at(&mut buf, *offset)
-                    .map_err(|e| io("read", &f.path, &e))?;
+                read_exact_at(file, &mut buf, *offset).map_err(|e| io("read", &f.path, &e))?;
                 read = buf;
                 &read
             }
@@ -465,4 +463,31 @@ fn corrupt(o: &MapOutput, reduce: u32, reason: String) -> KrishivError {
         |f| f.path.display().to_string(),
     );
     KrishivSpillFileCorrupt { path, reason }.into()
+}
+
+/// Fills `buf` from `file` at `offset` without moving a shared cursor (positional read).
+#[cfg(unix)]
+fn read_exact_at(file: &std::fs::File, buf: &mut [u8], offset: u64) -> std::io::Result<()> {
+    use std::os::unix::fs::FileExt as _;
+    file.read_exact_at(buf, offset)
+}
+
+/// Fills `buf` from `file` at `offset` (Windows port): `seek_read` takes the offset with each
+/// call, so concurrent readers of one handle each read their own range. It does move the
+/// handle's cursor, so no sequential reader may share a handle with these reads.
+#[cfg(windows)]
+fn read_exact_at(file: &std::fs::File, mut buf: &mut [u8], mut offset: u64) -> std::io::Result<()> {
+    use std::os::windows::fs::FileExt as _;
+    while !buf.is_empty() {
+        match file.seek_read(buf, offset) {
+            Ok(0) => return Err(std::io::ErrorKind::UnexpectedEof.into()),
+            Ok(n) => {
+                buf = &mut buf[n..];
+                offset += n as u64;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(())
 }

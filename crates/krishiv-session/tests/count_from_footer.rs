@@ -131,10 +131,12 @@ fn count_star_over_a_temporary_view_and_a_table_reads_no_column() {
         "CREATE TEMPORARY VIEW hits AS SELECT * FROM parquet.`{path}`"
     )))
     .unwrap();
-    // A SQL view keeps a projection above the scan, and pruning keeps one
-    // entry of a projection, so this form still reads a column (follow-up).
-    let (n, _) = count(&s, "SELECT COUNT(*) FROM hits");
+    // A SQL view keeps a projection renaming each column above the scan;
+    // pruning drops it, so this form reads no column either (ClickBench's
+    // entry defines `hits` this way).
+    let (n, plan) = count(&s, "SELECT COUNT(*) FROM hits");
     assert_eq!(n, 500);
+    assert!(scans_no_column(&plan), "{plan}");
     let df = s.read().parquet([path.as_str()]);
     block_on(df.create_or_replace_temp_view("hits2")).unwrap();
     let (n, plan) = count(&s, "SELECT COUNT(*) FROM hits2");

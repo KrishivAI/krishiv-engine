@@ -19,17 +19,27 @@ service AccessPolicy {
   rpc Check(CheckRequest) returns (CheckResponse);
 
   // The policy's current version. Krishiv asks at most once a second; a change makes every cached
-  // plan analyzed under an older version miss.
+  // plan analyzed under an older version miss. Versions are compared for equality only, so any
+  // change (downwards too: a restarted service, hash-style versions) invalidates. A version is
+  // trusted for 3 s after the latest answer that reported it (a `Version` or `Check` answer); past
+  // that, or after a failed call, Krishiv reuses no cached analysis until the service answers again,
+  // so a cached plan outlives a policy change by at most 3 s plus one call's timeout. 0 means
+  // unknown, and so does a value with the top bit set (reserved): neither is ever trusted.
   rpc Version(VersionRequest) returns (VersionResponse);
 }
 
 message CheckRequest {
   Principal principal = 1;
   repeated Item items = 2;
-  // The statement's class as the server's role matrix names it (`query`, `ddl`, `dml`, `admin`,
-  // `session`, `metadata`), or empty when the check is not made for a statement.
+  // The class of the SQL statement the check is made for, as `system.queries.statement_class`
+  // names it (`READ`, `WRITE`, `DDL`, `SESSION`, `ADMIN`), or empty when the check is not made
+  // for a SQL statement (a DataFrame or Spark Connect plan). A DataFrame derived from a SQL
+  // statement's result (`sql(..).limit(1)`) is checked as that statement, as `system.queries`
+  // lists its action.
   string statement_class = 3;
-  // The query id of the statement, or empty.
+  // The statement's query id as `system.queries.query_id` shows it: the caller's operation id
+  // (Spark Connect sends one), else the id of the row the statement's query began; empty when
+  // neither is known yet (a statement's first analysis comes before its row).
   string query_id = 4;
 }
 
@@ -109,7 +119,8 @@ message CheckResponse {
   // One decision per request item, in order. Fewer or more decisions than items, or any value but
   // DECISION_ALLOW, deny.
   repeated Decision decisions = 1;
-  // The policy version these decisions were made under (0: unknown).
+  // The policy version these decisions were made under (0 or the top bit set: unknown; see
+  // `AccessPolicy.Version`).
   uint64 policy_version = 2;
 }
 
@@ -122,5 +133,6 @@ enum Decision {
 message VersionRequest {}
 
 message VersionResponse {
+  // The current version (0 or the top bit set: unknown; see `AccessPolicy.Version`).
   uint64 policy_version = 1;
 }

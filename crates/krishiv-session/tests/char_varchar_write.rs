@@ -3,6 +3,10 @@
 //! trimmed, anything else longer fails with `EXCEED_LIMIT_LENGTH`
 //! (Spark 4.2.0 `CharVarcharUtils.stringLengthCheck`); the legacy flag turns the check off.
 #![expect(clippy::unwrap_used, reason = "test code")]
+mod file_url;
+mod literal_path;
+use file_url::file_url;
+use literal_path::sql_path;
 
 use arrow_array::cast::AsArray;
 use futures::executor::block_on;
@@ -209,20 +213,26 @@ fn view_properties_serde_properties_and_partition_locations() {
         &s,
         &format!(
             "alter table tp add partition (v='ke', c='nt') location '{}'",
-            loc1.display()
+            sql_path(&loc1)
         ),
     )
     .unwrap();
-    assert_eq!(location(), format!("file:{}", loc1.display()));
+    assert_eq!(
+        same_form(&location()),
+        same_form(&format!("file:{}", loc1.display()))
+    );
     run(
         &s,
         &format!(
             "alter table tp partition (v='ke', c='nt') set location '{}'",
-            loc2.display()
+            sql_path(&loc2)
         ),
     )
     .unwrap();
-    assert_eq!(location(), format!("file:{}", loc2.display()));
+    assert_eq!(
+        same_form(&location()),
+        same_form(&format!("file:{}", loc2.display()))
+    );
     // An empty location is refused (Spark: Hadoop cannot make a path of it).
     for sql in [
         "alter table tp partition (v='ke', c='nt') set location ''",
@@ -242,18 +252,18 @@ fn view_properties_serde_properties_and_partition_locations() {
             &s,
             &format!(
                 "alter table tp partition (v='ke', c='nt') set location '{}'",
-                target.display()
+                sql_path(target)
             ),
         )
         .unwrap_err();
         assert_eq!(e.error_class().name(), "KRISHIV_UNSUPPORTED_FEATURE");
     }
-    assert_eq!(location(), format!("file:{}", loc2.display()));
+    assert_eq!(location(), file_url(&loc2));
     let e = run(
         &s,
         &format!(
             "alter table tp partition (v='no', c='pe') set location '{}'",
-            dir.path().join("loc3").display()
+            sql_path(&dir.path().join("loc3"))
         ),
     )
     .unwrap_err();
@@ -289,7 +299,7 @@ fn msck_repair_of_a_missing_directory_fails() {
         &s,
         &format!(
             "create table pm(a string, k string) using parquet partitioned by (k) location '{}'",
-            root.display()
+            sql_path(&root)
         ),
     )
     .unwrap();
@@ -307,7 +317,7 @@ fn msck_repair_registers_the_partition_directories_it_finds() {
         &s,
         &format!(
             "create table pr(a string, v varchar(2), c char(2)) using parquet partitioned by (v, c) location '{}'",
-            dir.path().display()
+            sql_path(dir.path())
         ),
     )
     .unwrap();
@@ -814,6 +824,7 @@ fn equal_null_and_lateral_aliases_pad_char_comparisons() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn stored_cte_references_wide_chars_and_linked_partitions() {
     let s = fresh();
@@ -839,7 +850,7 @@ fn stored_cte_references_wide_chars_and_linked_partitions() {
         &s,
         &format!(
             "create table pl(a string, k string) using parquet partitioned by (k) location '{}'",
-            dir.path().display()
+            sql_path(dir.path())
         ),
     )
     .unwrap();
@@ -1274,5 +1285,15 @@ fn a_collated_char_or_varchar_keeps_its_limit_and_collation() {
                 assert_eq!(count(&s, "select 1 from k5"), 0, "{ddl} {value}");
             }
         }
+    }
+}
+
+/// A partition location's text with `/` separators and the `file:` slashes before a drive folded
+/// (`file:/C:/x`, `file:C:\x` alike), so the row compares with the directory on every platform.
+fn same_form(text: &str) -> String {
+    let slashed = text.replace('\\', "/");
+    match slashed.strip_prefix("file:") {
+        Some(rest) if cfg!(windows) => format!("file:{}", rest.trim_start_matches('/')),
+        _ => slashed,
     }
 }

@@ -7,11 +7,16 @@ pub struct CheckRequest {
     pub principal: ::core::option::Option<Principal>,
     #[prost(message, repeated, tag = "2")]
     pub items: ::prost::alloc::vec::Vec<Item>,
-    /// The statement's class as the server's role matrix names it (`query`, `ddl`, `dml`, `admin`,
-    /// `session`, `metadata`), or empty when the check is not made for a statement.
+    /// The class of the SQL statement the check is made for, as `system.queries.statement_class`
+    /// names it (`READ`, `WRITE`, `DDL`, `SESSION`, `ADMIN`), or empty when the check is not made
+    /// for a SQL statement (a DataFrame or Spark Connect plan). A DataFrame derived from a SQL
+    /// statement's result (`sql(..).limit(1)`) is checked as that statement, as `system.queries`
+    /// lists its action.
     #[prost(string, tag = "3")]
     pub statement_class: ::prost::alloc::string::String,
-    /// The query id of the statement, or empty.
+    /// The statement's query id as `system.queries.query_id` shows it: the caller's operation id
+    /// (Spark Connect sends one), else the id of the row the statement's query began; empty when
+    /// neither is known yet (a statement's first analysis comes before its row).
     #[prost(string, tag = "4")]
     pub query_id: ::prost::alloc::string::String,
 }
@@ -102,7 +107,8 @@ pub struct CheckResponse {
     /// DECISION_ALLOW, deny.
     #[prost(enumeration = "Decision", repeated, tag = "1")]
     pub decisions: ::prost::alloc::vec::Vec<i32>,
-    /// The policy version these decisions were made under (0: unknown).
+    /// The policy version these decisions were made under (0 or the top bit set: unknown; see
+    /// `AccessPolicy.Version`).
     #[prost(uint64, tag = "2")]
     pub policy_version: u64,
 }
@@ -110,6 +116,7 @@ pub struct CheckResponse {
 pub struct VersionRequest {}
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct VersionResponse {
+    /// The current version (0 or the top bit set: unknown; see `AccessPolicy.Version`).
     #[prost(uint64, tag = "1")]
     pub policy_version: u64,
 }
