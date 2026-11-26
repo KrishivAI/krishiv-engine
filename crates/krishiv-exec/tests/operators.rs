@@ -201,6 +201,7 @@ async fn limit_is_exact_with_parallel_drivers() {
         io_threads: 1,
         blocking_threads: 2,
         io_blocking_threads: 2,
+        release_when_idle: true,
     })
     .unwrap();
     let runner = QueryRunner::new(executor);

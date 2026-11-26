@@ -237,6 +237,7 @@ async fn a_refused_task_waits_for_the_others_before_it_splits() {
                 io_threads: 1,
                 blocking_threads: 4,
                 io_blocking_threads: 2,
+                release_when_idle: true,
             })
             .unwrap();
             let got = disk_by_hand(&agg, &s, &b, executor, limit, layout).await;
@@ -269,6 +270,7 @@ async fn a_cancel_during_the_disk_phase_releases_everything() {
         io_threads: 1,
         blocking_threads: 2,
         io_blocking_threads: 2,
+        release_when_idle: true,
     })
     .unwrap();
     let runner = QueryRunner::new(executor);
@@ -355,6 +357,7 @@ async fn a_spill_request_during_the_disk_phase_is_taken_between_tasks() {
         io_threads: 1,
         blocking_threads: 4,
         io_blocking_threads: 2,
+        release_when_idle: true,
     })
     .unwrap();
     // After the executor: dropped first, so no blocking thread stays
@@ -514,6 +517,7 @@ async fn a_requested_merged_task_writes_instead_of_splitting() {
         io_threads: 1,
         blocking_threads: 4,
         io_blocking_threads: 2,
+        release_when_idle: true,
     })
     .unwrap();
     // After the executor: dropped first, so no blocking thread stays
@@ -704,6 +708,7 @@ async fn a_task_error_fails_the_query_and_frees_everything() {
         io_threads: 1,
         blocking_threads: 2,
         io_blocking_threads: 2,
+        release_when_idle: true,
     })
     .unwrap();
     let runner = QueryRunner::new(executor);

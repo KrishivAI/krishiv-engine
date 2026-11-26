@@ -32,6 +32,7 @@ import tempfile
 import urllib.parse
 from pathlib import Path
 
+from . import session_modes
 from .base import Dataset, Engine, Measure, Query
 from .proc_mem import TreeProc, tree_measure
 
@@ -73,7 +74,9 @@ class KrishivEngine(Engine):
         tables: dict[str, list[str]] | None = None,
         checksum_in_run: bool = False,
     ):
-        self.threads = threads or os.cpu_count() or 1
+        # The cores this process may run on (affinity, cgroup v2 quota), as the session modes use: under `taskset`,
+        # os.cpu_count() would give the runner more threads than cores and the mode comparison would not be alike.
+        self.threads = threads or session_modes.usable_cores()
         self.memory_limit = memory_limit
         # Time with ``RUN_CHECKED``: the runner also returns the result's checksum, taken after the seconds, so the
         # timed run itself is verified (see ``timed_run``). Off by default: it holds the result a little longer.

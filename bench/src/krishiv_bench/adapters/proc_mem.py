@@ -205,6 +205,7 @@ class TreeProc:
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._peak = 0
+        self.baseline: int | None = None  # the tree's summed RSS right after ``start``'s VmHWM reset
         self._cpu0: dict[int, float] = {}
         self._io0: dict[int, IoCounters] = {}
         self._cpu: dict[int, float] = {}
@@ -248,6 +249,7 @@ class TreeProc:
                 LocalProc(str(pid)).reset()
         self._cpu, self._io, self._ppid = {}, {}, {}
         self._peak = self._sample()
+        self.baseline = self._peak
         self._cpu0, self._io0 = dict(self._cpu), dict(self._io)
         self._cpu_fresh = False  # set again by the first successful CPU read after the baseline
         self.cpu_seconds, self.io = None, None
@@ -283,13 +285,15 @@ class TreeProc:
 
 
 def tree_measure(tree: TreeProc | None) -> Measure:
-    """The ``Measure`` of a stopped window (peak RSS, CPU seconds, I/O); empty when there was no window."""
+    """The ``Measure`` of a stopped window (peak RSS, the tree's RSS at ``start`` as the baseline, CPU seconds, I/O);
+    empty when there was no window."""
     if tree is None:
         return Measure()
     peak = tree.stop()
     io = tree.io
     return Measure(
         peak_rss_bytes=peak,
+        baseline_rss_bytes=tree.baseline,
         cpu_seconds=tree.cpu_seconds,
         rchar=io.rchar if io else None,
         read_bytes=io.read_bytes if io else None,

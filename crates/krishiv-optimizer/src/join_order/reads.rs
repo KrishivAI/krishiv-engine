@@ -12,7 +12,7 @@
 //! after pruning has the same requirements, so the cost, and the plan, is
 //! the same when the optimized plan is optimized again.
 
-use std::collections::HashMap;
+use crate::expr::AddrMap;
 use std::sync::Arc;
 
 use krishiv_plan::LogicalPlan;
@@ -21,7 +21,7 @@ use crate::expr::Attrs;
 
 /// What the query reads of each of its relations, by address.
 pub(super) struct Reads {
-    req: HashMap<*const LogicalPlan, Attrs>,
+    req: AddrMap<LogicalPlan, Attrs>,
 }
 
 impl Reads {

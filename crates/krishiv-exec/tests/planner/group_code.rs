@@ -275,6 +275,40 @@ fn null_dimension_keys_keep_their_groups() {
     }
 }
 
+/// Two dimensions in one aggregate (TPC-DS q47's `item` and `store`) are both
+/// coded in one pass, null tuples on either side included, and the rows are
+/// those of the plan with the rule off.
+#[test]
+fn two_dimensions_keep_their_groups() {
+    let rt = runtime();
+    let dir = tempfile::tempdir().unwrap();
+    let t = null_tables(dir.path(), &rt);
+    let stats = null_stats();
+    let q = "SELECT a.g1, a.g2, b.g1, b.g2, count(*), sum(f.x) FROM f \
+             JOIN d AS a ON f.fk = a.dk JOIN d AS b ON f.x = b.dk \
+             GROUP BY a.g1, a.g2, b.g1, b.g2";
+    for s in [Session::None, Session::Config] {
+        let on = optimized(&t, q, &stats, true, s);
+        let text = on.root().to_string();
+        let agg = text
+            .lines()
+            .find(|l| l.contains("Aggregate [krishiv_group_code"))
+            .unwrap_or_else(|| panic!("{s:?}: not coded\n{text}"));
+        assert!(
+            agg.matches("krishiv_group_code#").count() >= 2,
+            "{s:?}: {agg}"
+        );
+        let off = optimized(&t, q, &stats, false, s);
+        let got = sorted(&run(&physical(&t, &on).unwrap()).unwrap());
+        let want = sorted(&run(&physical(&t, &off).unwrap()).unwrap());
+        assert_eq!(got, want, "{s:?}\n{text}");
+        assert!(
+            want.iter().any(|r| r.starts_with("NULL|NULL|NULL|NULL|")),
+            "the data has a null group on both sides: {want:?}"
+        );
+    }
+}
+
 /// The encoding join (`D` joined to `dict` by `<=>` on the keys, the join
 /// under the `D_c` fence, `Shift +0`, printed `(ids +0)`) publishes no runtime
 /// filter onto `D`: `dict` holds every key `D` has, so the filter would drop

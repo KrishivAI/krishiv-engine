@@ -599,7 +599,9 @@ pub trait AccessPolicy: Send + Sync {
     /// one round trip (ADR 0049 §3: Bind's table reads, then the column pass). A hint only:
     /// every pair is still asked through [`Self::check`], which may answer from what this call
     /// fetched; pairs it never asks may be listed, and asked ones may be missing. Never an
-    /// error (a failed fetch leaves each check to ask on its own). The default does nothing; a
+    /// error: a failed fetch is the provider's to settle, fail closed (the `external` provider
+    /// keeps its pairs' denials for their checks; another may leave each check to ask on its
+    /// own). The default does nothing; a
     /// wrapper that forwards `check` forwards this too.
     fn prefetch<'a>(
         &'a self,
