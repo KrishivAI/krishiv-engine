@@ -121,6 +121,37 @@ class _AggregateCall(Column):
         )
 
 
+#: The scalar iterator kinds and the scalar kind each runs as (one batch per call).
+_SCALAR_ITER_TO_SCALAR = {
+    PythonEvalType.SQL_SCALAR_PANDAS_ITER_UDF: PythonEvalType.SQL_SCALAR_PANDAS_UDF,
+    PythonEvalType.SQL_SCALAR_ARROW_ITER_UDF: PythonEvalType.SQL_SCALAR_ARROW_UDF,
+}
+
+
+def _scalar_iterator_adapter(func: Callable[..., Any]) -> Callable[..., Any]:
+    """``func`` (an iterator of batches in, an iterator of batches out) as a function of one batch's
+    columns: one column is passed as itself, several as a tuple, as Spark passes them. The results
+    of the iterator are joined; their total length must be the batch's."""
+
+    def run(*columns: Any) -> Any:
+        batch = columns[0] if len(columns) == 1 else columns
+        out = list(func(iter([batch])))
+        if len(out) == 1:
+            return out[0]
+        if not out:
+            raise RuntimeError("The iterator UDF returned no batch for its input batch")
+        first = out[0]
+        if hasattr(first, "to_pandas") or type(first).__module__.startswith("pyarrow"):
+            import pyarrow as pa
+
+            return pa.concat_arrays(out) if hasattr(pa, "concat_arrays") else pa.chunked_array(out)
+        import pandas as pd
+
+        return pd.concat(out, ignore_index=True)
+
+    return run
+
+
 def _engine_ddl(dt: DataType) -> str:
     """``dt`` as a DDL string the engine parses (struct field names backquoted)."""
     if isinstance(dt, StructType):
@@ -146,6 +177,12 @@ def _engine_registration(
 
         ddl = _engine_ddl(return_type)
         return eval_type, ddl, make_relation(func, eval_type, _parse_datatype_string(ddl))
+
+    if eval_type in _SCALAR_ITER_TO_SCALAR:
+        # A scalar iterator UDF (Iterator[Series] -> Iterator[Series]) runs one batch at a time: the
+        # engine hands the scalar path a batch, the adapter feeds the function a one-batch iterator.
+        func = _scalar_iterator_adapter(func)
+        eval_type = _SCALAR_ITER_TO_SCALAR[eval_type]
 
     run = _RUNNABLE.get(eval_type)
     if run is None:

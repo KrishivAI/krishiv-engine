@@ -546,3 +546,21 @@ def test_vectorized_udfs_see_timestamps_in_the_session_time_zone(
         spark.conf.unset("spark.sql.session.timeZone")
         monkeypatch.undo()
         time.tzset()
+
+
+def test_a_scalar_iterator_pandas_udf_runs_batch_by_batch(spark: SparkSession) -> None:
+    """QA2-8: Spark's `Iterator[pd.Series] -> Iterator[pd.Series]` and `Iterator[Tuple[..]]` forms run."""
+
+    @F.pandas_udf("long")  # type: ignore[call-overload]
+    def plus_one(batches: Iterator[pd.Series]) -> Iterator[pd.Series]:
+        for s in batches:
+            yield s + 1
+
+    @F.pandas_udf("long")  # type: ignore[call-overload]
+    def multiply(batches: Iterator[tuple[pd.Series, pd.Series]]) -> Iterator[pd.Series]:
+        for a, b in batches:
+            yield a * b
+
+    df = spark.createDataFrame([(1, 10), (2, 20), (3, 30)], "a long, b long")
+    rows = df.select(plus_one("a").alias("p"), multiply("a", "b").alias("m")).orderBy("p").collect()
+    assert [(r["p"], r["m"]) for r in rows] == [(2, 10), (3, 40), (4, 90)]
