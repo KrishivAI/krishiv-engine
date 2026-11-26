@@ -347,6 +347,11 @@ thread_local! {
     /// This thread's compiled patterns (function, pattern, compiled), newest first: a constant
     /// pattern compiles once per thread instead of once per batch, and its lazy DFA stays warm.
     /// Per thread, so each regex's search caches stay with the one thread that uses it.
+    ///
+    /// The patterns stay on the thread after the query ends and are not charged to the memory
+    /// pool: at most [`THREAD_PATTERNS`] of them, each with its search caches. A column of
+    /// patterns passes through here too and can push a constant pattern out, which then
+    /// compiles again on its next batch.
     static THREAD_COMPILED: RefCell<Vec<(&'static str, String, Rc<Compiled>)>> =
         const { RefCell::new(Vec::new()) };
 }

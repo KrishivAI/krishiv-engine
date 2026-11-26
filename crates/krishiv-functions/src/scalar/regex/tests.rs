@@ -1592,4 +1592,63 @@ mod constant_pattern {
         // A batch of one row never builds the index.
         assert!(Memo::<usize>::new(1).is_off());
     }
+
+    /// A thread's compiled patterns are kept by function and pattern: one pattern under two
+    /// functions raises each function's own error, whichever compiled it first.
+    #[test]
+    fn a_kept_pattern_keeps_its_function() {
+        let values = [Some("ab"), Some("ab")];
+        let consts = [s("(a)(b)"), i(Some(3))];
+        for (f, name) in [
+            ("regexp_extract", "`regexp_extract`"),
+            ("regexp_extract_all", "`regexp_extract_all`"),
+            ("regexp_extract", "`regexp_extract`"),
+        ] {
+            let (memo, rows) = both(f, &values, &consts);
+            let memo = memo.err().unwrap_or_else(|| panic!("{f}: no error"));
+            assert!(memo.contains("REGEX_GROUP_INDEX"), "{memo}");
+            assert!(memo.contains(&format!("{name} ")), "{f}: {memo}");
+            assert_eq!(Some(memo), rows.err());
+        }
+    }
+
+    /// More patterns than a thread keeps: a pattern that was dropped compiles again and one
+    /// that stayed is found, each with its own results (a `$` pattern on a value ending in a
+    /// line terminator among them).
+    #[test]
+    fn dropped_and_kept_patterns_match_as_compiled() {
+        use crate::scalar::regex::THREAD_PATTERNS;
+
+        let owned: Vec<String> = (0..THREAD_PATTERNS + 2).map(|n| format!("a{n}")).collect();
+        let mut values: Vec<Option<&str>> = owned.iter().map(|v| Some(v.as_str())).collect();
+        values.push(Some("x/path\n"));
+        let last = values.len() - 1;
+        let check = |pattern: &str, hit: usize| {
+            let (memo, rows) = both("rlike", &values, &[s(pattern)]);
+            let want: Vec<Option<bool>> = (0..values.len()).map(|row| Some(row == hit)).collect();
+            assert_eq!(
+                bools(&memo.unwrap_or_else(|e| panic!("{e}"))),
+                want,
+                "{pattern}"
+            );
+            assert_eq!(
+                bools(&rows.unwrap_or_else(|e| panic!("{e}"))),
+                want,
+                "{pattern}"
+            );
+        };
+        check("path$", last);
+        for round in 0..2 {
+            for n in 0..owned.len() {
+                check(&format!("^a{n}$"), n);
+                if round == 1 {
+                    // Kept since the row before, then moved to the front again.
+                    check(&format!("^a{n}$"), n);
+                    check("path$", last);
+                }
+            }
+            // Dropped in the first round, kept in the second.
+            check("path$", last);
+        }
+    }
 }
