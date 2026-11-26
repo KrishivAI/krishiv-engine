@@ -52,7 +52,7 @@ use arrow_schema::{DataType, Schema};
 
 pub use self::bloom::{BLOCK_BYTES, RuntimeBloom, xxh64};
 pub use self::codec::{FORMAT_VERSION, NORMALIZATION_VERSION};
-pub use self::filter::{KeyFilter, KeyFilterBuilder, KeyFilterOptions};
+pub use self::filter::{KeyFilter, KeyFilterBuilder, KeyFilterOptions, RangeSide};
 pub use self::hash::{RowHash, xxh64_fixed};
 pub use self::key::{NormalizedKeys, normalize_key_bytes, supported_key_type, widens_to};
 pub use self::member::{EXACT_SET_MAX, FilterForm, SMALL_SET_MAX};
@@ -458,3 +458,6 @@ mod tests;
 
 #[cfg(test)]
 mod form_tests;
+
+#[cfg(test)]
+mod side_tests;
