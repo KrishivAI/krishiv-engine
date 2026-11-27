@@ -24,6 +24,8 @@ mod artifacts;
 #[cfg(target_os = "linux")]
 mod calls;
 #[cfg(target_os = "linux")]
+mod inspection;
+#[cfg(target_os = "linux")]
 mod interpreter;
 #[cfg(target_os = "linux")]
 mod package;

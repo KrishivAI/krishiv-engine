@@ -550,7 +550,9 @@ async fn run_listeners(
     };
     // One Python UDF worker pool per server (P3-T014): every Connect session's UDFs run on it, in
     // workers of their own owner, once the session passed the `Usage` check on `System("udf")`.
-    // Starting it runs each listed interpreter once and writes the worker package: off the async workers.
+    // Starting it writes the worker package (off the async workers); the listed interpreters are inspected
+    // on a thread of the pool's, so the listeners below open without waiting for Python to import its
+    // libraries; the first UDF call waits for that inspection.
     #[cfg(not(target_os = "linux"))]
     let udf_workers: Option<UdfWorkersProvider> = None;
     #[cfg(target_os = "linux")]

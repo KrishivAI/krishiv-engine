@@ -75,6 +75,10 @@ Paths are relative to this crate.
   extra read path; `py/` and each zip or egg go on `sys.path` (index 1, Spark's `add_path`) after the worker's own
   imports, an unpacked archive does not (as Spark); each entry of `py/` is linked into the worker's own working
   directory (`pool.rs` `link_files`); the pool key carries the set's id (a worker never serves another set)
+- `src/inspection.rs` `Inspection`: the listed interpreters inspected on a thread of their own, started by
+  `Pool::new` so the server's listeners open before Python has imported its libraries; `checkout` waits for it
+  (cancellably), `Pool::interpreters` and `Pool::refusal` wait for it; a thread that unwinds leaves an
+  `INTERNAL_ERROR` refusal, never a waiter waiting for ever
 - `src/interpreter.rs` the startup record of each listed interpreter (version, read paths, packages) and `choose`;
   the inspection runs in a process group of its own, its output read while it runs (capped, under the timeout)
 - `src/package.rs` the embedded worker package and the `-c` bootstrap (`bootstrap_for`: the worker with its

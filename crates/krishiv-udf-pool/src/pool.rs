@@ -27,6 +27,7 @@ use rustix::process::{Pid, PidfdFlags, Resource, getrlimit};
 use crate::WORKER_SUBCOMMAND;
 use crate::artifacts::{self, ArtifactSet, Failure};
 use crate::calls::{CallThreads, Job, Refused};
+use crate::inspection::Inspection;
 use crate::interpreter::{Interpreter, choose};
 use crate::package::{self, BootstrapLimits};
 use crate::worker::{Started, Worker, kill_via};
@@ -229,9 +230,8 @@ pub(crate) struct Inner {
     state: Mutex<State>,
     freed: Condvar,
     config: PoolConfig,
-    interpreters: Vec<Interpreter>,
-    /// Why every call is refused, when the pool cannot run workers at all.
-    refusal: Option<KrishivError>,
+    /// The interpreters and the pool's refusal, found on a thread of their own (the server listens first).
+    inspection: Arc<Inspection>,
     /// Declared before `root`: dropping it makes its directories writable, so `root` can then be removed.
     package: package::Package,
     fd_limit: u64,
@@ -338,16 +338,19 @@ pub struct Pool {
 impl std::fmt::Debug for Pool {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Pool")
-            .field("interpreters", &self.inner.interpreters.len())
+            .field(
+                "interpreters",
+                &self.inner.inspection.get().map(|i| i.interpreters.len()),
+            )
             .field("sandbox", &self.inner.config.sandbox)
             .finish_non_exhaustive()
     }
 }
 
 impl Pool {
-    /// Starts the pool: records the interpreters, writes the worker package, starts the spawner thread and
-    /// checks the sandbox. Runs at server startup, so the interpreters' inspection (one run each) does not
-    /// delay a query.
+    /// Starts the pool: writes the worker package, starts the spawner thread, checks the sandbox and starts
+    /// the interpreters' inspection (one run each) on a thread of its own, so it delays neither the server's
+    /// listeners nor, once it ended, a query. The first worker start waits for it.
     ///
     /// A pool that cannot run workers (no usable interpreter, or the sandbox on and the kernel unable to
     /// enforce it) still starts: its calls fail with the reason, which the startup log also gives.
@@ -361,32 +364,12 @@ impl Pool {
             .map_err(|e| internal(format!("cannot make the UDF worker directory: {e}")))?;
         let package = package::extract(&root.path().join("package"))
             .map_err(|e| internal(format!("cannot write the UDF worker package: {e}")))?;
-        let mut interpreters = Vec::new();
-        let mut rejected = Vec::new();
-        for exe in &config.executables {
-            match Interpreter::inspect(exe) {
-                Ok(i) => match i.unusable_reason() {
-                    None => interpreters.push(i),
-                    Some(why) => rejected.push(why),
-                },
-                Err(why) => rejected.push(why),
-            }
-        }
-        for why in &rejected {
-            tracing::warn!("Python UDF worker interpreter not used: {why}");
-        }
-        let mut refusal = interpreters.is_empty().then(|| {
-            internal(format!(
-                "no usable Python interpreter for UDF workers (\"krishiv.python.worker.executables\"): {}",
-                if rejected.is_empty() { "none listed".to_owned() } else { rejected.join("; ") }
-            ))
-        });
+        let mut sandbox_refusal = None;
         if config.sandbox {
             let caps = config.capabilities.unwrap_or_else(probe);
             let spec = SandboxSpec::new("/", root.path());
             if let Err(e) = caps.require(&spec) {
-                tracing::warn!("Python UDFs are refused: {e}");
-                refusal.get_or_insert_with(|| KrishivError::from(&e));
+                sandbox_refusal = Some(KrishivError::from(&e));
             }
         } else {
             tracing::warn!(
@@ -394,6 +377,7 @@ impl Pool {
                  resource limits, a clean environment and closed descriptors apply"
             );
         }
+        let inspection = Inspection::start(config.executables.clone(), sandbox_refusal)?;
         let fd_limit = getrlimit(Resource::Nofile).current.unwrap_or(1 << 20);
         let (sender, requests) = mpsc::channel::<SpawnRequest>();
         // The trampoline's parent-death signal follows the thread that started it, so every worker is
@@ -416,8 +400,7 @@ impl Pool {
             state: Mutex::new(State::default()),
             freed: Condvar::new(),
             config,
-            interpreters,
-            refusal,
+            inspection,
             package,
             fd_limit,
             spawner: Mutex::new(sender),
@@ -428,14 +411,15 @@ impl Pool {
         Ok(Pool { inner })
     }
 
-    /// The usable interpreters, in the listed order.
+    /// The usable interpreters, in the listed order. Waits for their inspection to end.
     pub fn interpreters(&self) -> &[Interpreter] {
-        &self.inner.interpreters
+        &self.inner.inspection.wait().interpreters
     }
 
     /// Why this pool refuses every call, if it does (no usable interpreter, or the sandbox unavailable).
+    /// Waits for the interpreters' inspection to end.
     pub fn refusal(&self) -> Option<&KrishivError> {
-        self.inner.refusal.as_ref()
+        self.inner.inspection.wait().refusal.as_ref()
     }
 
     /// The largest result a worker may return, in bytes: what it can write at all (its `RLIMIT_FSIZE`
@@ -578,13 +562,16 @@ impl Pool {
         artifacts: &ArtifactSet,
         watch: &dyn CallWatch,
     ) -> Result<Lease, KrishivError> {
-        if let Some(refusal) = &self.inner.refusal {
+        let Some(inspected) = self.inner.inspection.wait_until(&|| watch.cancelled()) else {
+            return Err(OperationCanceled {}.into());
+        };
+        if let Some(refusal) = &inspected.refusal {
             return Err(refusal.clone());
         }
         if let Some(refused) = artifacts.refused() {
             return Err(refused.clone());
         }
-        let Some((index, interpreter)) = choose(&self.inner.interpreters, python_ver) else {
+        let Some((index, interpreter)) = choose(&inspected.interpreters, python_ver) else {
             return Err(internal(
                 "no usable Python interpreter for UDF workers".to_owned(),
             ));
@@ -1221,6 +1208,75 @@ fn internal(message: String) -> KrishivError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An interpreter that answers its inspection only after `release` exists, then fails it.
+    fn slow_interpreter(dir: &Path, release: &Path) -> String {
+        use std::os::unix::fs::PermissionsExt;
+        let exe = dir.join("python3");
+        let script = format!(
+            "#!/bin/sh\nwhile [ ! -e '{}' ]; do sleep 0.05; done\necho broken >&2\nexit 3\n",
+            release.display()
+        );
+        std::fs::write(&exe, script).expect("script");
+        std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        exe.display().to_string()
+    }
+
+    struct Never;
+    impl CallWatch for Never {
+        fn cancelled(&self) -> bool {
+            false
+        }
+        fn starting(&self, _pidfd: &Arc<OwnedFd>) -> bool {
+            true
+        }
+    }
+
+    #[test]
+    fn the_pool_starts_before_its_interpreters_answer_and_a_call_waits_for_them() {
+        let dir = tempfile::tempdir().expect("dir");
+        let release = dir.path().join("release");
+        let config = PoolConfig {
+            executables: vec![slow_interpreter(dir.path(), &release)],
+            sandbox: false,
+            ..PoolConfig::default()
+        };
+        let pool = Pool::new(config).expect("pool");
+        assert!(
+            pool.inner.inspection.get().is_none(),
+            "Pool::new waited for the interpreter"
+        );
+        let owner = Owner {
+            principal: "ana".to_owned(),
+            session: "s1".to_owned(),
+            tenant: None,
+            capped: false,
+        };
+        let call = {
+            let pool = pool.clone();
+            std::thread::spawn(move || {
+                pool.checkout(
+                    &owner,
+                    "3.12",
+                    &ArtifactSet::new(Vec::new(), Vec::new()),
+                    &Never,
+                )
+                .map(drop)
+            })
+        };
+        std::thread::sleep(Duration::from_millis(200));
+        assert!(
+            !call.is_finished(),
+            "the call did not wait for the inspection"
+        );
+        std::fs::write(&release, b"").expect("release");
+        let why = call.join().expect("call").expect_err("refused").to_string();
+        assert!(
+            why.contains("no usable Python interpreter") && why.contains("broken"),
+            "{why}"
+        );
+        assert!(pool.interpreters().is_empty());
+    }
 
     #[test]
     fn a_snapshot_counts_each_owners_idle_workers_over_all_its_keys() {
