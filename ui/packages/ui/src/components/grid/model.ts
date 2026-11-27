@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 import {
+  constructSortFn,
   constructTable,
   createSortedRowModel,
   rowSortingFeature,
@@ -56,12 +57,41 @@ const features = tableFeatures({
   coreReactivityFeature: storeReactivityBindings(),
   rowSortingFeature,
   sortedRowModel: createSortedRowModel(),
-  sortFns: { alphanumeric: sortFn_alphanumeric, basic: sortFn_basic, datetime: sortFn_datetime, text: sortFn_text },
+  sortFns: {
+    alphanumeric: sortFn_alphanumeric,
+    basic: sortFn_basic,
+    datetime: sortFn_datetime,
+    text: sortFn_text,
+    number: constructSortFn({ sort: (a: unknown, b: unknown) => compareNumber(a, b) }),
+  },
 });
 
 /**
+ * Spark's order of numbers: NaN is larger than every other value, +Infinity included, and equal to itself.
+ * TanStack's `basic` comparator answers -1 both ways for NaN, which leaves `Array.prototype.sort` an inconsistent
+ * comparator and can misorder the numbers around a NaN, not only the NaN rows.
+ */
+export function compareNumber(a: unknown, b: unknown): number {
+  const nanA = typeof a === "number" && Number.isNaN(a);
+  const nanB = typeof b === "number" && Number.isNaN(b);
+  if (nanA || nanB) return nanA === nanB ? 0 : nanA ? 1 : -1;
+  return a === b ? 0 : (a as number) > (b as number) ? 1 : -1;
+}
+
+/** A column sorts as numbers when it says `num`, or when its first value that is not null is a number. */
+function numeric<Row>(c: GridColumn<Row>, rows: readonly Row[]): boolean {
+  if (c.num) return true;
+  for (const r of rows) {
+    const v = c.value(r);
+    if (v !== null && v !== undefined) return typeof v === "number" || typeof v === "bigint";
+  }
+  return false;
+}
+
+/**
  * The headers and the sorted rows of a grid, through TanStack Table's core (its sorted row model). A value that
- * is null or undefined sorts last in both directions.
+ * is null or undefined sorts last in both directions; a numeric column orders NaN above every number, as Spark
+ * does. `rowId` must give each row a different id (the shell keys its rows on it).
  */
 export function gridModel<Row>(
   rows: readonly Row[],
@@ -81,6 +111,7 @@ export function gridModel<Row>(
       header: c.header,
       enableSorting: c.sortable !== false,
       sortUndefined: "last" as const,
+      ...(numeric(c, rows) ? { sortFn: "number" as const } : {}),
     })),
     getRowId: (it: { i: number }) => rowId(rows[it.i], it.i),
     state: { sorting: known ? [known] : [] },

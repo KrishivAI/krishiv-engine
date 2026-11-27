@@ -1,6 +1,6 @@
 <script lang="ts" generics="Row">
   import { Virtualizer, elementScroll, observeElementOffset, observeElementRect } from "@tanstack/virtual-core";
-  import type { Snippet } from "svelte";
+  import { tick, type Snippet } from "svelte";
   import { cn } from "../../utils";
   import { gridModel, nextSort, spacers, virtualises, VIRTUAL_AFTER, type GridColumn, type GridSort } from "./model";
 
@@ -27,6 +27,7 @@
   }: {
     columns: GridColumn<Row>[];
     rows: Row[];
+    /** A different id for each row: the shell keys its rows on it (a repeated id stops the grid rendering). */
     rowId: (row: Row, index: number) => string;
     /** The grid's accessible name (the region and the table). */
     label: string;
@@ -48,6 +49,7 @@
   let box: HTMLDivElement | undefined = $state();
   let visible = $state<{ index: number; start: number; end: number }[]>([]);
   let total = $state(0);
+  let scroller: Virtualizer<HTMLDivElement, HTMLTableRowElement> | undefined;
 
   $effect(() => {
     const count = model.rows.length;
@@ -67,25 +69,62 @@
         total = inst.getTotalSize();
       },
     });
+    scroller = v;
     const cleanup = v._didMount();
     v._willUpdate();
     visible = v.getVirtualItems().map((i) => ({ index: i.index, start: i.start, end: i.end }));
     total = v.getTotalSize();
-    return cleanup;
+    return () => {
+      scroller = undefined;
+      cleanup();
+    };
   });
 
   const shown = $derived(virtual ? visible.map((w) => ({ at: w.index, r: model.rows[w.index] })).filter((x) => x.r) : model.rows.map((r, at) => ({ at, r })));
   const pad = $derived(virtual ? spacers(visible, total) : { top: 0, bottom: 0 });
 
-  // A selectable row takes focus, and Enter or Space selects it, so selection does not need a mouse. A key
+  // Selectable rows are one tab stop (a roving tabindex): the selected row, else the last row focused, else the
+  // first. ArrowUp and ArrowDown move between rows, Home and End to the ends; Enter or Space selects. A key
   // pressed on a link or button inside the row is left to that control.
-  function pick(e: KeyboardEvent, id: string, row: Row) {
-    if (e.target !== e.currentTarget || (e.key !== "Enter" && e.key !== " ")) return;
+  let active = $state(0);
+  const stop = $derived.by(() => {
+    const at = selected === undefined ? -1 : model.rows.findIndex((r) => r.id === selected);
+    const want = at >= 0 ? at : Math.min(active, model.rows.length - 1);
+    return shown.some((x) => x.at === want) ? want : (shown[0]?.at ?? 0);
+  });
+
+  async function pick(e: KeyboardEvent, at: number, id: string, row: Row) {
+    if (e.target !== e.currentTarget) return;
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      active = at;
+      onselect?.(id, row);
+      return;
+    }
+    const last = model.rows.length - 1;
+    const to = e.key === "ArrowDown" ? at + 1 : e.key === "ArrowUp" ? at - 1 : e.key === "Home" ? 0 : e.key === "End" ? last : -1;
+    if (to < 0 || to > last || (to === at && e.key !== "Home" && e.key !== "End")) return;
     e.preventDefault();
-    onselect?.(id, row);
+    active = to;
+    scroller?.scrollToIndex(to, { align: "auto" });
+    // A virtual row is drawn after the scroll reaches it: wait a few frames for it.
+    for (let i = 0; i < 10; i++) {
+      await tick();
+      const tr = box?.querySelector<HTMLTableRowElement>(`tbody tr[aria-rowindex="${to + 2}"]`);
+      if (tr) return tr.focus();
+      await new Promise((ok) => requestAnimationFrame(ok));
+    }
   }
 
+  // A struct, array or map is shown as its JSON until the SQL editor view brings typed cells (README).
   function text(v: unknown): string {
+    if (Array.isArray(v) || (v !== null && typeof v === "object" && Object.getPrototypeOf(v) === Object.prototype)) {
+      try {
+        return JSON.stringify(v, (_, x) => (typeof x === "bigint" ? x.toString() : x));
+      } catch {
+        return String(v);
+      }
+    }
     return typeof v === "string" ? v : String(v);
   }
 </script>
@@ -141,14 +180,14 @@
       {#each shown as { at, r } (r.id)}
         <tr
           aria-rowindex={at + 2}
-          aria-selected={selected === undefined ? undefined : selected === r.id}
+          aria-current={selected !== undefined && selected === r.id ? "true" : undefined}
           class={cn(
-            "group hover:[&>td]:bg-accent aria-selected:[&>td]:bg-accent aria-selected:[&>td:first-child]:shadow-[inset_2px_0_0_var(--color-primary)]",
+            "group hover:[&>td]:bg-accent aria-[current=true]:[&>td]:bg-accent aria-[current=true]:[&>td:first-child]:shadow-[inset_2px_0_0_var(--color-primary)]",
             onselect && "cursor-pointer focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring",
           )}
-          tabindex={onselect ? 0 : undefined}
-          onclick={onselect ? () => onselect(r.id, r.row) : undefined}
-          onkeydown={onselect ? (e) => pick(e, r.id, r.row) : undefined}
+          tabindex={onselect ? (at === stop ? 0 : -1) : undefined}
+          onclick={onselect ? () => ((active = at), onselect(r.id, r.row)) : undefined}
+          onkeydown={onselect ? (e) => pick(e, at, r.id, r.row) : undefined}
         >
           {#each columns as c (c.id)}
             {@const v = c.value(r.row)}

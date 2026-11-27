@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 import { describe, expect, test } from "vitest";
-import { gridModel, nextSort, spacers, virtualises, type GridColumn } from "./model";
+import { compareNumber, gridModel, nextSort, spacers, virtualises, type GridColumn } from "./model";
 
 interface Compute {
   name: string;
@@ -41,6 +41,22 @@ describe("gridModel", () => {
       ["size", "Size", undefined, false, undefined],
       ["queries", "Queries now", "int", true, "descending"],
     ]);
+  });
+  test("a numeric column orders NaN above every number, +Infinity included, and null last (Spark's order)", () => {
+    const temps = [3, NaN, 1, null, 2, NaN, Infinity, 0];
+    const rows = temps.map((t, i) => ({ i, t }));
+    const run = (desc: boolean, num: boolean) =>
+      gridModel(rows, [{ id: "t", header: "t", num, value: (r) => r.t }], (r) => String(r.i), { id: "t", desc }).rows.map(
+        (r) => r.row.t,
+      );
+    for (const num of [true, false]) {
+      expect(run(false, num)).toEqual([0, 1, 2, 3, Infinity, NaN, NaN, null]);
+      expect(run(true, num)).toEqual([NaN, NaN, Infinity, 3, 2, 1, 0, null]);
+    }
+  });
+  test("compareNumber is a consistent comparator with NaN", () => {
+    expect([compareNumber(NaN, 1), compareNumber(1, NaN), compareNumber(NaN, NaN)]).toEqual([1, -1, 0]);
+    expect([compareNumber(Infinity, NaN), compareNumber(-0, 0), compareNumber(2n, 1n)]).toEqual([-1, 0, 1]);
   });
   test("a repeated natural key does not merge rows", () => {
     const rows = [...ROWS, ROWS[0]];

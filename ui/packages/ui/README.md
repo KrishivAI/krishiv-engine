@@ -43,11 +43,11 @@ axe, and opens every popover kind (part of `check_pages.py`).
 | Component | What |
 |---|---|
 | `button` | Variants `default` (the one gold action), `outline`, `ghost`, `destructive`; `size="icon"`; disabled; busy is `aria-busy="true"` with a `Spinner` (from `loading-state`) |
-| `field` | `Field`: label above, help below, the error in words with an icon; draws a text input, or hands `FieldControl` attributes to the `control` snippet (a `Select`) |
+| `field` | `Field`: label above, help below, the error in words with an icon; draws a text input, or hands `FieldControl` attributes to the `control` snippet (a `Select`), which then takes its own `name`, `required` and value |
 | `select` | `Select`: one choice of `items` in a Bits UI listbox |
 | `callout` | `Callout`: `note`, `warning`, `error`, `success`, `plain`; a title, a body and an `actions` snippet |
 | `dialog` | `Dialog`, `DialogTrigger`, `DialogContent`, `DialogTitle`, `DialogDescription`, `DialogFooter`, `DialogClose` |
 | `tabs` | `Tabs`, `TabsList`, `TabsTrigger`, `TabsContent`; the active tab is underlined in gold |
 | `menu` | `Menu`, `MenuTrigger`, `MenuContent`, `MenuGroup`, `MenuLabel`, `MenuItem` (`variant="danger"`), `MenuSeparator` |
-| `grid` | `GridShell`: TanStack Table (core) sorts, TanStack Virtual draws only the visible rows past 200; sticky header, column type under the name, numbers in mono, `null` in italics, a selected row; `gridModel` and the virtual-window helpers are plain functions |
-| `empty-state`, `error-state`, `loading-state` | Empty (what will be here, the action that fills it), error (class, SQLSTATE, what to do, support id), loading (skeleton, then a `<progress>` with the stage) |
+| `grid` | `GridShell`: TanStack Table (core) sorts, TanStack Virtual draws only the visible rows past 200; sticky header, column type under the name, numbers in mono, `null` in italics, NaN above every number when sorted (Spark's order), a selected row (`aria-current`; the rows are one tab stop, arrows, Home and End move between them); `rowId` must be unique; a struct, array or map shows as its JSON until the SQL editor view brings typed cells; `gridModel` and the virtual-window helpers are plain functions |
+| `empty-state`, `error-state`, `loading-state` | Empty (what will be here, the action that fills it), error (class, SQLSTATE, what to do, support id with a copy button), loading (skeleton, then a `<progress>` with the stage) |

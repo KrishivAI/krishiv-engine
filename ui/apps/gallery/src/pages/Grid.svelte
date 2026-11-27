@@ -25,6 +25,7 @@
   const VARIANT: Record<string, "success" | "warning" | "default"> = { Running: "success", Starting: "warning" };
   let selected = $state("etl-m");
   let sort: GridSort = $state(null);
+  let reading = $state<string | undefined>(undefined);
 
   // A result grid: 10,000 rows, the column type under each name; only the visible window is in the page.
   interface Reading {
@@ -54,12 +55,12 @@
   </GridShell>
 </Section>
 <Section title="Result grid, 10,000 rows">
-  <GridShell class="w-full max-h-96" label="Readings" rowHeight={40} columns={RESULT} rows={READINGS} rowId={(r) => String(r.id)}>
+  <GridShell class="w-full max-h-96" label="Readings" rowHeight={40} columns={RESULT} rows={READINGS} rowId={(r) => String(r.id)} selected={reading} onselect={(id) => (reading = id)}>
     {#snippet foot()}<span data-count>10,000 rows</span>{/snippet}
   </GridShell>
 </Section>
 <Section title="Empty">
-  <GridShell class="w-full" label="No rows" columns={RESULT} rows={[]} rowId={(r) => String(r.id)}>
+  <GridShell class="w-full" label="No rows" columns={RESULT} rows={[]} rowId={(r) => String(r.id)} selected={reading} onselect={(id) => (reading = id)}>
     {#snippet empty()}No readings in this range.{/snippet}
   </GridShell>
 </Section>

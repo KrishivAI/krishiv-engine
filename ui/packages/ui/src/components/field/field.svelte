@@ -6,7 +6,9 @@
   import { cn } from "../../utils";
 
   // Label above, help below, the error in words with an icon (the wireframe's k-field). Without `control` the
-  // field draws a text input; with it, the caller draws its own control and spreads the attributes it is given.
+  // field draws a text input; with it, the caller draws its own control and spreads the attributes it is given
+  // (`id` and the `aria-*` links). A `control` takes its own `name`, `required`, `autocomplete` and value: the
+  // field's `value` and other input attributes apply only to the text input it draws.
   let {
     id,
     label,

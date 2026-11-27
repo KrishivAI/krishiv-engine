@@ -244,8 +244,47 @@ def grid(page: Page, origin: str) -> list[str]:
     row = computes.locator("tbody tr", has_text="default")
     row.focus()
     page.keyboard.press("Enter")
-    if row.get_attribute("aria-selected") != "true":
+    if row.get_attribute("aria-current") != "true":
         problems.append("grid: Enter on a focused row does not select it")
+    # One tab stop for the rows (a roving tabindex), and the arrows move between them.
+    stops = computes.locator("tbody tr[tabindex='0']").count()
+    if stops != 1:
+        problems.append(f"grid: {stops} rows are tab stops (expected 1)")
+    page.keyboard.press("ArrowDown")
+    after = page.evaluate("document.activeElement?.getAttribute('aria-rowindex')")
+    if after != str(int(row.get_attribute("aria-rowindex") or "0") + 1):
+        problems.append(f"grid: ArrowDown from the selected row focuses row {after}")
+    # The 10,000-row grid: End reaches the last row even though it is not drawn yet.
+    first_row = box.locator("tbody tr:not([aria-hidden])").first
+    box.evaluate("e => { e.scrollTop = 0; }")
+    page.wait_for_timeout(200)
+    first_row.focus()
+    page.keyboard.press("End")
+    page.wait_for_timeout(300)
+    if (
+        page.evaluate("document.activeElement?.getAttribute('aria-rowindex')")
+        != "10001"
+    ):
+        problems.append("grid: End on a virtual grid does not focus the last row")
+    return problems
+
+
+def support_id(page: Page, origin: str) -> list[str]:
+    """The error state's support id is copyable (console-00 section 3, 4): the button copies it and says so."""
+    problems: list[str] = []
+    page.goto(f"{origin}/#/states")
+    button = page.get_by_role("button", name="Copy support id")
+    button.click()
+    copied = page.evaluate("navigator.clipboard.readText()")
+    if copied != "req_8c1f2a90":
+        problems.append(
+            f"states: the copy button put {copied!r} on the clipboard, not the support id"
+        )
+    live = page.locator("[aria-live=polite]", has_text="Copied")
+    if live.count() != 1 or page.get_by_role("button", name="Copied").count() != 1:
+        problems.append(
+            "states: copying the support id does not show and announce Copied"
+        )
     return problems
 
 
@@ -274,7 +313,9 @@ def gallery_checks() -> list[str]:
         for scheme in ("dark", "light"):
             for width, height in ((390, 844), (1440, 900)):
                 ctx = browser.new_context(
-                    color_scheme=scheme, viewport={"width": width, "height": height}
+                    color_scheme=scheme,
+                    viewport={"width": width, "height": height},
+                    permissions=["clipboard-read", "clipboard-write"],
                 )
                 page = ctx.new_page()
                 page.add_init_script(LISTEN)
@@ -300,6 +341,7 @@ def gallery_checks() -> list[str]:
                 if width == 1440:
                     problems += popovers(page, origin, scheme)
                     problems += grid(page, origin) if scheme == "dark" else []
+                    problems += support_id(page, origin) if scheme == "dark" else []
                 problems += [f"CSP ({view}): {v}" for v in violations(page)]
                 problems += [f"console ({view}): {e}" for e in errors]
                 ctx.close()
@@ -314,6 +356,6 @@ if __name__ == "__main__":
         "\n".join(found)
         if found
         else f"ui gallery: ok ({len(PAGES)} pages x dark/light x 390/1440 px, CSP style-src 'self' with select, "
-        "dialog and menu open, axe closed and open, keyboard, 10,000-row virtual grid)"
+        "dialog and menu open, axe closed and open, keyboard, 10,000-row virtual grid, support id copy)"
     )
     sys.exit(1 if found else 0)

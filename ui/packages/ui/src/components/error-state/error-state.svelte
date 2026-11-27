@@ -2,6 +2,7 @@
   import type { Snippet } from "svelte";
   import type { HTMLAttributes } from "svelte/elements";
   import { cn } from "../../utils";
+  import { Button } from "../button";
 
   // An error says what happened, what to do, and carries a support id. The error class and SQLSTATE are the
   // engine's (its registry), shown as they came: never rewritten here.
@@ -12,6 +13,8 @@
     sqlstate,
     message,
     supportId,
+    copyLabel = "Copy support id",
+    copiedLabel = "Copied",
     children,
     actions,
     ...rest
@@ -21,8 +24,27 @@
     sqlstate?: string;
     message?: string;
     supportId?: string;
+    /** The copy button's text (its accessible name) and its confirmation; a console passes its own catalog's text. */
+    copyLabel?: string;
+    copiedLabel?: string;
     actions?: Snippet;
   } = $props();
+
+  // console-00 §3, §4: the support id is copyable. "Copied" is shown and announced (aria-live) for 2 s.
+  let copied = $state(false);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  async function copy() {
+    if (!supportId) return;
+    try {
+      await navigator.clipboard.writeText(supportId);
+    } catch {
+      return; // no clipboard (an insecure origin, or the permission refused): the id stays selectable text
+    }
+    copied = true;
+    clearTimeout(timer);
+    timer = setTimeout(() => (copied = false), 2000);
+  }
+  $effect(() => () => clearTimeout(timer));
 </script>
 
 <div role="alert" class={cn("grid max-w-[72ch] gap-2.5 rounded-xl border border-error bg-error-bg p-4", className)} {...rest}>
@@ -40,7 +62,13 @@
   {#if actions || supportId}
     <div class="flex flex-wrap items-center gap-x-4 gap-y-2">
       {@render actions?.()}
-      {#if supportId}<span class="text-muted-foreground">Support id <code class="text-foreground">{supportId}</code></span>{/if}
+      {#if supportId}
+        <span class="inline-flex items-center gap-2 text-muted-foreground">
+          Support id <code class="text-foreground select-all">{supportId}</code>
+          <Button variant="outline" onclick={copy}>{copied ? copiedLabel : copyLabel}</Button>
+          <span class="sr-only" aria-live="polite">{copied ? copiedLabel : ""}</span>
+        </span>
+      {/if}
     </div>
   {/if}
 </div>
