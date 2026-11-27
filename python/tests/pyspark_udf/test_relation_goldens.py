@@ -31,6 +31,11 @@ GOLDENS = json.loads((Path(__file__).resolve().parent / "relation" / "goldens.js
 #: Conditions Spark raises from inside the JVM when it reads a result the worker let through.
 JVM_FAILURES = {None, "UNSUPPORTED_CALL.WITHOUT_SUGGESTION"}
 
+#: Krishiv's own condition where Spark's JVM fails (the golden keeps Spark's failure as provenance).
+KRISHIV_REFUSALS: dict[str, str] = {
+    "not_null/map/arrow": "PYTHON_EXCEPTION",
+}
+
 #: Known gaps: (case regex, reason). A matching case must still differ from Spark.
 KNOWN_GAPS: list[tuple[str, str]] = []
 
@@ -66,6 +71,10 @@ def difference(spark: Any, case: str) -> str | None:
             return f"raised {type(e).__name__}: {e}"
         err = want["error"]
         if err.get("condition") in JVM_FAILURES:
+            # Spark fails inside the JVM; Krishiv's own refusal is pinned here.
+            expected = KRISHIV_REFUSALS.get(case)
+            if expected is not None and e.getCondition() != expected:
+                return f"condition {e.getCondition()!r}, Krishiv refuses with {expected!r}: {e}"
             return None
         condition = e.getCondition()
         if condition != err["condition"]:
