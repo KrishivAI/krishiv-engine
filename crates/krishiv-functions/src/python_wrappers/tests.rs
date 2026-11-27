@@ -260,3 +260,25 @@ fn dict_options_use_the_map_literal_conversion() {
     );
     assert!(g.py.contains("    _opts,\n"), "{}", g.py);
 }
+
+/// `F.tuple_union_integer("a", "b", mode="max")` leaves `lgNomEntries` out: the wrapper sends Spark's default 12
+/// in its place, so `mode` is not read as the sketch size (review of #1037).
+#[test]
+fn a_tuple_wrapper_given_only_a_mode_sends_the_default_sketch_size_first() {
+    let g = generate_for_registry().expect("generates");
+    for name in [
+        "tuple_union_integer",
+        "tuple_sketch_agg_double",
+        "tuple_union_agg_integer",
+    ] {
+        let at =
+            g.py.find(&format!("def {name}("))
+                .expect("the wrapper exists");
+        let body = &g.py[at..];
+        let body = &body[..body.find("\n\n\n").unwrap_or(body.len())];
+        assert!(
+            body.contains("(_lit(12, \"lgNomEntries\"),)\n        if lgNomEntries is None and (mode is not None)"),
+            "{name}: {body}"
+        );
+    }
+}

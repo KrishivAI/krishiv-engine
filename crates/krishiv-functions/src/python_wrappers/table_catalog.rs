@@ -251,11 +251,13 @@ pub(super) fn rows() -> Vec<Row> {
         Row::new(
             "tuple_sketch_agg_double",
             "key: ColumnOrName, summary: ColumnOrName, lgNomEntries: Column | int = None, mode: Column | str = None",
-        ),
+        )
+        .filled(&[("lgNomEntries", "12")]),
         Row::new(
             "tuple_sketch_agg_integer",
             "key: ColumnOrName, summary: ColumnOrName, lgNomEntries: Column | int = None, mode: Column | str = None",
-        ),
+        )
+        .filled(&[("lgNomEntries", "12")]),
         Row::new("tuple_sketch_estimate_double", "col: ColumnOrName"),
         Row::new("tuple_sketch_estimate_integer", "col: ColumnOrName"),
         Row::new(
@@ -271,27 +273,33 @@ pub(super) fn rows() -> Vec<Row> {
         Row::new(
             "tuple_union_agg_double",
             "col: ColumnOrName, lgNomEntries: Column | int = None, mode: Column | str = None",
-        ),
+        )
+        .filled(&[("lgNomEntries", "12")]),
         Row::new(
             "tuple_union_agg_integer",
             "col: ColumnOrName, lgNomEntries: Column | int = None, mode: Column | str = None",
-        ),
+        )
+        .filled(&[("lgNomEntries", "12")]),
         Row::new(
             "tuple_union_double",
             "col1: ColumnOrName, col2: ColumnOrName, lgNomEntries: Column | int = None, mode: Column | str = None",
-        ),
+        )
+        .filled(&[("lgNomEntries", "12")]),
         Row::new(
             "tuple_union_integer",
             "col1: ColumnOrName, col2: ColumnOrName, lgNomEntries: Column | int = None, mode: Column | str = None",
-        ),
+        )
+        .filled(&[("lgNomEntries", "12")]),
         Row::new(
             "tuple_union_theta_double",
             "col1: ColumnOrName, col2: ColumnOrName, lgNomEntries: Column | int = None, mode: Column | str = None",
-        ),
+        )
+        .filled(&[("lgNomEntries", "12")]),
         Row::new(
             "tuple_union_theta_integer",
             "col1: ColumnOrName, col2: ColumnOrName, lgNomEntries: Column | int = None, mode: Column | str = None",
-        ),
+        )
+        .filled(&[("lgNomEntries", "12")]),
         Row::new("xpath", "xml: ColumnOrName, path: ColumnOrName"),
         Row::new("xpath_boolean", "xml: ColumnOrName, path: ColumnOrName"),
         Row::new("xpath_double", "xml: ColumnOrName, path: ColumnOrName"),

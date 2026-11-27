@@ -593,7 +593,7 @@ def aes_encrypt(
         if padding is None and (iv is not None or aad is not None)
         else _opt(_named, padding, "padding")
     )
-    _iv = (_lit("", "iv"),) if iv is None and (aad is not None) else _opt(_named, iv, "iv")
+    _iv = (_lit(, "iv"),) if iv is None and (aad is not None) else _opt(_named, iv, "iv")
     return _call(
         "aes_encrypt", _named(input, "input"), _named(key, "key"), *_mode, *_padding, *_iv, *_opt(_named, aad, "aad")
     )
@@ -2865,11 +2865,16 @@ def tuple_sketch_agg_double(
     key: ColumnOrName, summary: ColumnOrName, lgNomEntries: Column | int | None = None, mode: Column | str | None = None
 ) -> Column:
     """Calls the registry function ``tuple_sketch_agg_double``."""
+    _lgNomEntries = (
+        (_lit(12, "lgNomEntries"),)
+        if lgNomEntries is None and (mode is not None)
+        else _opt(_lit, lgNomEntries, "lgNomEntries")
+    )
     return _call(
         "tuple_sketch_agg_double",
         _named(key, "key"),
         _named(summary, "summary"),
-        *_opt(_lit, lgNomEntries, "lgNomEntries"),
+        *_lgNomEntries,
         *_opt(_lit, mode, "mode"),
     )
 
@@ -2878,11 +2883,16 @@ def tuple_sketch_agg_integer(
     key: ColumnOrName, summary: ColumnOrName, lgNomEntries: Column | int | None = None, mode: Column | str | None = None
 ) -> Column:
     """Calls the registry function ``tuple_sketch_agg_integer``."""
+    _lgNomEntries = (
+        (_lit(12, "lgNomEntries"),)
+        if lgNomEntries is None and (mode is not None)
+        else _opt(_lit, lgNomEntries, "lgNomEntries")
+    )
     return _call(
         "tuple_sketch_agg_integer",
         _named(key, "key"),
         _named(summary, "summary"),
-        *_opt(_lit, lgNomEntries, "lgNomEntries"),
+        *_lgNomEntries,
         *_opt(_lit, mode, "mode"),
     )
 
@@ -2921,36 +2931,37 @@ def tuple_union_agg_double(
     col: ColumnOrName, lgNomEntries: Column | int | None = None, mode: Column | str | None = None
 ) -> Column:
     """Calls the registry function ``tuple_union_agg_double``."""
-    return _call(
-        "tuple_union_agg_double",
-        _named(col, "col"),
-        *_opt(_lit, lgNomEntries, "lgNomEntries"),
-        *_opt(_lit, mode, "mode"),
+    _lgNomEntries = (
+        (_lit(12, "lgNomEntries"),)
+        if lgNomEntries is None and (mode is not None)
+        else _opt(_lit, lgNomEntries, "lgNomEntries")
     )
+    return _call("tuple_union_agg_double", _named(col, "col"), *_lgNomEntries, *_opt(_lit, mode, "mode"))
 
 
 def tuple_union_agg_integer(
     col: ColumnOrName, lgNomEntries: Column | int | None = None, mode: Column | str | None = None
 ) -> Column:
     """Calls the registry function ``tuple_union_agg_integer``."""
-    return _call(
-        "tuple_union_agg_integer",
-        _named(col, "col"),
-        *_opt(_lit, lgNomEntries, "lgNomEntries"),
-        *_opt(_lit, mode, "mode"),
+    _lgNomEntries = (
+        (_lit(12, "lgNomEntries"),)
+        if lgNomEntries is None and (mode is not None)
+        else _opt(_lit, lgNomEntries, "lgNomEntries")
     )
+    return _call("tuple_union_agg_integer", _named(col, "col"), *_lgNomEntries, *_opt(_lit, mode, "mode"))
 
 
 def tuple_union_double(
     col1: ColumnOrName, col2: ColumnOrName, lgNomEntries: Column | int | None = None, mode: Column | str | None = None
 ) -> Column:
     """Calls the registry function ``tuple_union_double``."""
+    _lgNomEntries = (
+        (_lit(12, "lgNomEntries"),)
+        if lgNomEntries is None and (mode is not None)
+        else _opt(_lit, lgNomEntries, "lgNomEntries")
+    )
     return _call(
-        "tuple_union_double",
-        _named(col1, "col1"),
-        _named(col2, "col2"),
-        *_opt(_lit, lgNomEntries, "lgNomEntries"),
-        *_opt(_lit, mode, "mode"),
+        "tuple_union_double", _named(col1, "col1"), _named(col2, "col2"), *_lgNomEntries, *_opt(_lit, mode, "mode")
     )
 
 
@@ -2958,12 +2969,13 @@ def tuple_union_integer(
     col1: ColumnOrName, col2: ColumnOrName, lgNomEntries: Column | int | None = None, mode: Column | str | None = None
 ) -> Column:
     """Calls the registry function ``tuple_union_integer``."""
+    _lgNomEntries = (
+        (_lit(12, "lgNomEntries"),)
+        if lgNomEntries is None and (mode is not None)
+        else _opt(_lit, lgNomEntries, "lgNomEntries")
+    )
     return _call(
-        "tuple_union_integer",
-        _named(col1, "col1"),
-        _named(col2, "col2"),
-        *_opt(_lit, lgNomEntries, "lgNomEntries"),
-        *_opt(_lit, mode, "mode"),
+        "tuple_union_integer", _named(col1, "col1"), _named(col2, "col2"), *_lgNomEntries, *_opt(_lit, mode, "mode")
     )
 
 
@@ -2971,11 +2983,16 @@ def tuple_union_theta_double(
     col1: ColumnOrName, col2: ColumnOrName, lgNomEntries: Column | int | None = None, mode: Column | str | None = None
 ) -> Column:
     """Calls the registry function ``tuple_union_theta_double``."""
+    _lgNomEntries = (
+        (_lit(12, "lgNomEntries"),)
+        if lgNomEntries is None and (mode is not None)
+        else _opt(_lit, lgNomEntries, "lgNomEntries")
+    )
     return _call(
         "tuple_union_theta_double",
         _named(col1, "col1"),
         _named(col2, "col2"),
-        *_opt(_lit, lgNomEntries, "lgNomEntries"),
+        *_lgNomEntries,
         *_opt(_lit, mode, "mode"),
     )
 
@@ -2984,11 +3001,16 @@ def tuple_union_theta_integer(
     col1: ColumnOrName, col2: ColumnOrName, lgNomEntries: Column | int | None = None, mode: Column | str | None = None
 ) -> Column:
     """Calls the registry function ``tuple_union_theta_integer``."""
+    _lgNomEntries = (
+        (_lit(12, "lgNomEntries"),)
+        if lgNomEntries is None and (mode is not None)
+        else _opt(_lit, lgNomEntries, "lgNomEntries")
+    )
     return _call(
         "tuple_union_theta_integer",
         _named(col1, "col1"),
         _named(col2, "col2"),
-        *_opt(_lit, lgNomEntries, "lgNomEntries"),
+        *_lgNomEntries,
         *_opt(_lit, mode, "mode"),
     )
 
