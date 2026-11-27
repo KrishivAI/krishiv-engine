@@ -350,7 +350,9 @@ fn import_batch(
         .getattr("num_columns")
         .and_then(|n| n.extract())
         .map_err(|e| python_error(py, &e))?;
-    if width != declared.fields().len() {
+    // Spark reads the declared columns by position and ignores any extra ones (the schema check, when on,
+    // has refused such a batch above).
+    if width < declared.fields().len() {
         return Err(InternalError {
             message: format!(
                 "a Python relation UDF produced {width} columns where its declared result has {}",
@@ -359,7 +361,7 @@ fn import_batch(
         }
         .into());
     }
-    let mut columns = Vec::with_capacity(width);
+    let mut columns = Vec::with_capacity(declared.fields().len());
     for (i, field) in declared.fields().iter().enumerate() {
         let column = batch
             .call_method1("column", (i,))

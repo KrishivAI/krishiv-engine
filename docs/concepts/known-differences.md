@@ -180,8 +180,8 @@ result batch as Spark does and raises `ARROW_TYPE_MISMATCH` with Spark's message
 Spark 3.5 and 4.0, which have no such setting), Spark does not check the result's types and reads the batch as if it
 had the declared ones. Krishiv refuses such a result instead, with `PYTHON_EXCEPTION` ("The Python worker returned an
 invalid result"), and refuses a null in a column declared non-nullable when a null is present. A `mapInArrow`
-result with more columns than declared is refused too (Spark reads the declared columns and ignores the rest when
-the setting is off; with it on, both raise `ARROW_TYPE_MISMATCH`). Krishiv does not know the client's Spark version
+result with more columns than declared is read as Spark reads it: the declared columns by position, the rest
+ignored when the setting is off; with it on, both raise `ARROW_TYPE_MISMATCH`. Krishiv does not know the client's Spark version
 here, so the setting is honoured whatever the version: under a Spark 3.5 or 4.0 client, which has no such setting,
 setting it still turns the check on.
 

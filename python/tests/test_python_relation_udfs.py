@@ -543,3 +543,19 @@ def test_a_windowed_grouped_aggregate_pandas_udf_in_sql_is_refused() -> None:
     spark.range(4).createOrReplaceTempView("t")
     with pytest.raises(Exception, match=r"KRISHIV_UNSUPPORTED_FEATURE|NOT_IMPLEMENTED"):
         spark.sql("SELECT total_udf(id) OVER (PARTITION BY id % 2) FROM t").collect()
+
+
+def _extra_column(batches):
+    for b in batches:
+        yield pa.RecordBatch.from_pydict({"id": b.column("id").to_pylist(), "more": b.column("id").to_pylist()})
+
+
+def test_map_in_arrow_with_an_extra_column_ignores_it_as_spark_does() -> None:
+    df = _spark().range(3).mapInArrow(_extra_column, "id long")
+    assert _rows(df) == [(0,), (1,), (2,)]
+
+
+def test_map_in_arrow_with_validate_schema_refuses_an_extra_column() -> None:
+    df = _spark_validating(_VALIDATE_KEYS[0]).range(3).mapInArrow(_extra_column, "id long")
+    with pytest.raises(Exception, match=r"ARROW_TYPE_MISMATCH"):
+        df.collect()
