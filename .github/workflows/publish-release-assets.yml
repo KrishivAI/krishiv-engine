@@ -70,7 +70,7 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$GITHUB_REF" == refs/tags/v* ]] || { echo "::error::only a v* tag publishes release assets"; exit 1; }
-          cargo cyclonedx --features server,ui --format json --spec-version 1.5 --override-filename krishiv-sbom.cdx
+          cargo cyclonedx --features server,ui --target all --format json --spec-version 1.5 --override-filename krishiv-sbom.cdx
           cp crates/krishiv-cli/krishiv-sbom.cdx.json assets/krishiv-cli-sbom.cdx.json
           cp crates/krishiv/krishiv-sbom.cdx.json assets/krishiv-sbom.cdx.json
           cd assets
@@ -87,13 +87,13 @@ jobs:
       - name: Attest build provenance
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
-          subject-checksums: assets/SHA256SUMS
+          subject-path: assets/*
       - name: Verify the attestations before uploading
         env:
           GH_TOKEN: ${{ github.token }}
         working-directory: assets
         run: |
-          for f in $(ls | grep -v -e '\.sha256$' -e '^SHA256SUMS$'); do
+          for f in *; do
             gh attestation verify "$f" --repo "$GITHUB_REPOSITORY" > /dev/null || { echo "::error::no valid attestation for $f"; exit 1; }
           done
       - name: Upload to the release
