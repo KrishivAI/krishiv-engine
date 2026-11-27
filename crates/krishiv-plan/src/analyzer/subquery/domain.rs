@@ -439,7 +439,13 @@ impl Rewriter {
             {
                 (true, true)
             }
-            JoinKind::LeftOuter | JoinKind::LeftSemi | JoinKind::LeftAnti if !in_right => {
+            JoinKind::LeftOuter
+            | JoinKind::LeftSemi
+            | JoinKind::LeftAnti
+            | JoinKind::Single
+            | JoinKind::Existence(_)
+                if !in_right =>
+            {
                 (true, false)
             }
             JoinKind::RightOuter if !in_left => (false, true),
