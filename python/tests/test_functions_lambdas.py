@@ -188,6 +188,11 @@ def test_count_min_sketch_is_an_aggregate_over_binary(df: DataFrame) -> None:
     assert isinstance(row[0], bytes | bytearray)
 
 
+def test_count_min_sketch_draws_a_seed_when_none_is_given(df: DataFrame) -> None:
+    row = df.agg(F.count_min_sketch(F.col("n").cast("int"), 0.01, 0.99)).collect()[0]
+    assert isinstance(row[0], bytes | bytearray)
+
+
 def test_udtf_stubs_take_pysparks_keywords() -> None:
     with pytest.raises(NotImplementedError):
         F.udtf(returnType="a int")
