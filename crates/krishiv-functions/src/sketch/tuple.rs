@@ -51,10 +51,6 @@ impl Mode {
         }
     }
 
-    fn sum_for_count(self) -> Self {
-        self
-    }
-
     fn byte(self) -> u8 {
         match self {
             Self::Sum => 0,
@@ -414,7 +410,7 @@ pub fn to_bytes_at<V: Value>(sketch: &Compact<V>, lg_nom: i32) -> Vec<u8> {
     let theta = hash(entries[K]);
     let mut out = bytes[..8].to_vec();
     out[0] = 3;
-    out[5] |= 0x10;
+    out[5] &= !0x10;
     out.extend_from_slice(&16u32.to_le_bytes());
     out.extend_from_slice(&0u32.to_le_bytes());
     out.extend_from_slice(&theta.to_le_bytes());
@@ -605,9 +601,9 @@ pub fn summary_double<V: Value>(sketch: &Compact<V>, mode: Mode) -> f64 {
         // Spark's `aggregateNumericSummaries` returns zero for an empty MIN or MAX.
         return 0.0;
     }
-    let mut acc = f64::identity(mode.sum_for_count());
+    let mut acc = f64::identity(mode);
     for e in sketch.iter() {
-        acc = acc.fold(mode.sum_for_count(), e.summary().value.as_f64());
+        acc = acc.fold(mode, e.summary().value.as_f64());
     }
     if matches!(mode, Mode::AlwaysOne) {
         // Spark adds a 1 per entry.

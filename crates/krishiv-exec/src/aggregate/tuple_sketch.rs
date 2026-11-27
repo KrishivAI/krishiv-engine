@@ -12,8 +12,8 @@
 //!   state is the empty byte string (a merge skips it) and its final result is the empty sketch.
 //!
 //! A row whose key or summary is NULL is skipped, as are empty strings, binaries and arrays. A group is charged by the
-//! library's `estimated_size` plus a header, recomputed for each group a batch touched; an updatable sketch is trimmed
-//! to its nominal size after each batch. The partial state is the compact sketch's bytes.
+//! library's `estimated_size` plus a header, recomputed for each group a batch touched; an updatable sketch is not cut
+//! (Spark's `compact` keeps every retained entry; the library rebuilds it at its own threshold). The partial state is the compact sketch's bytes.
 
 use std::sync::Arc;
 
@@ -262,10 +262,11 @@ impl<V: Value> Acc<V> {
             let (Some(s), Some(c)) = (self.slots.get_mut(g), self.charges.get_mut(g)) else {
                 continue;
             };
-            match s {
-                Slot::Updatable(sketch) => sketch.trim(),
-                Slot::Union(_, Some(sketch)) => sketch.trim(),
-                _ => {}
+            // An updatable sketch is never cut: Spark's `compact` keeps every retained entry (the library
+            // rebuilds it at its own threshold, so memory stays bounded). Only a pending sketch, whose union
+            // result is the same either way, is trimmed.
+            if let Slot::Union(_, Some(sketch)) = s {
+                sketch.trim();
             }
             let now = s.charge();
             self.total = self.total.saturating_sub(*c).saturating_add(now);
@@ -480,9 +481,17 @@ impl<V: Value> Acc<V> {
     }
 
     fn bytes(&self, g: u32) -> Result<Vec<u8>> {
+        let updatable = matches!(self.slots.get(g as usize), Some(Slot::Updatable(_)));
         Ok(self
             .compact(g)?
-            .map(|c| tuple::to_bytes_at(&c, i32::from(self.lg)))
+            .map(|c| {
+                if updatable {
+                    // Spark's `compact` of a never-merged sketch keeps every entry.
+                    tuple::to_bytes(&c)
+                } else {
+                    tuple::to_bytes_at(&c, i32::from(self.lg))
+                }
+            })
             .unwrap_or_default())
     }
 

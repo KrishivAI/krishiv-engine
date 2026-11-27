@@ -117,7 +117,7 @@ fn partials_merge_and_the_union_and_intersection_aggregates_read_sketches() {
 }
 
 #[test]
-fn an_intersection_that_saw_nothing_is_empty_bytes_and_lg_4_is_cut() {
+fn an_intersection_that_saw_nothing_is_empty_bytes_and_a_sketch_group_is_not_cut() {
     let mut i = TupleSketchAcc::new(TupleSketchOp::Intersection, false, 12, Mode::Sum).unwrap();
     i.resize(1);
     assert!(state_of(&i).value(0).is_empty());
@@ -133,7 +133,26 @@ fn an_intersection_that_saw_nothing_is_empty_bytes_and_lg_4_is_cut() {
         .unwrap()
         .value(0);
     let c = tuple::from_bytes::<f64>(bytes, "t").unwrap();
-    assert_eq!(c.num_retained(), 16);
+    // Spark's `compact` keeps every retained entry (its lg 4 table keeps 23 here, the crate's lg 5 minimum more:
+    // a documented divergence); a result is never cut to 2^lgNomEntries.
+    assert!(c.num_retained() > 16, "{}", c.num_retained());
+}
+
+#[test]
+fn a_never_merged_sketch_keeps_its_estimation_mode_entries() {
+    // Spark 4.3.0: tuple_sketch_agg_double(id, 1.0D, 5) over range(100) keeps 51 entries (more than 2^5).
+    let mut acc = sketch_acc(5);
+    let ks: Vec<i64> = (0..100).collect();
+    acc.update(&[0; 100], &[&keys(&ks), &doubles(&[1.0; 100])], |_| true)
+        .unwrap();
+    let out = acc.evaluate(&[0]).unwrap();
+    let bytes = out
+        .as_any()
+        .downcast_ref::<BinaryViewArray>()
+        .unwrap()
+        .value(0);
+    let c = tuple::from_bytes::<f64>(bytes, "t").unwrap();
+    assert!(c.num_retained() > 32, "{}", c.num_retained());
 }
 
 #[test]

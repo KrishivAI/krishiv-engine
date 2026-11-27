@@ -76,7 +76,8 @@ fn size_text_and_merge_keep_null_rows() {
             "{text}"
         );
         assert!(
-            text.contains("   N                      : 10\n   Retained Items         : 10\n"),
+            text.contains("   N                      : 10\n")
+                && text.contains("   Retained Items         : 10\n"),
             "{text}"
         );
         assert!(text.contains("Estimation Mode        : false"), "{text}");
