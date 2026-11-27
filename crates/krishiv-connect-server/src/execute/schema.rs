@@ -122,6 +122,18 @@ pub fn proto_type(t: &DataType) -> Result<pb::DataType, KrishivError> {
         DataType::TimestampNtz => kind(Kind::TimestampNtz(dt::TimestampNtz {
             type_variation_reference: v,
         })),
+        DataType::TimestampNtzNanos { precision } => {
+            kind(Kind::TimestampNtzNanos(dt::TimestampNtzNanos {
+                precision: Some(i32::from(*precision)),
+                type_variation_reference: v,
+            }))
+        }
+        DataType::TimestampNanos { precision } => {
+            kind(Kind::TimestampLtzNanos(dt::TimestampLtzNanos {
+                precision: Some(i32::from(*precision)),
+                type_variation_reference: v,
+            }))
+        }
         DataType::Time { precision } => kind(Kind::Time(dt::Time {
             precision: Some(i32::from(*precision)),
             type_variation_reference: v,
@@ -230,5 +242,21 @@ mod tests {
         assert_eq!(u.serialized_python_class, None);
         let sql = u.sql_type.expect("storage type");
         assert!(matches!(sql.kind, Some(Kind::Integer(_))));
+    }
+
+    /// The nanosecond timestamps go out as Spark 4.3's `TimestampNTZNanos` / `TimestampLTZNanos` with
+    /// their precision (`TimestampNanosTypeConnectOps.toConnectProtoType`).
+    #[test]
+    fn nanosecond_timestamps_are_written_with_their_precision() {
+        let ntz = proto_type(&DataType::TimestampNtzNanos { precision: 7 }).unwrap();
+        assert!(
+            matches!(ntz.kind, Some(Kind::TimestampNtzNanos(t)) if t.precision == Some(7)),
+            "{ntz:?}"
+        );
+        let ltz = proto_type(&DataType::TimestampNanos { precision: 9 }).unwrap();
+        assert!(
+            matches!(ltz.kind, Some(Kind::TimestampLtzNanos(t)) if t.precision == Some(9)),
+            "{ltz:?}"
+        );
     }
 }

@@ -431,3 +431,54 @@ fn a_connect_udt_maps_with_its_classes_and_storage_type() {
         ErrorClass::ConnectInvalidPlanInvalidOneOfFieldNotSet
     );
 }
+
+/// As Spark 4.3's `TimestampNanosTypeConnectOps`: no precision is 9, 7 to 9 make the type, anything else
+/// is `INVALID_TIMESTAMP_PRECISION` naming the precision and the type.
+#[test]
+fn nanosecond_timestamp_kinds() {
+    let ntz = |precision| {
+        proto_type(Kind::TimestampNtzNanos(dt::TimestampNtzNanos {
+            precision,
+            ..dt::TimestampNtzNanos::default()
+        }))
+    };
+    let ltz = |precision| {
+        proto_type(Kind::TimestampLtzNanos(dt::TimestampLtzNanos {
+            precision,
+            ..dt::TimestampLtzNanos::default()
+        }))
+    };
+    assert_eq!(
+        data_type(&ntz(None)),
+        Ok(DataType::TimestampNtzNanos { precision: 9 })
+    );
+    assert_eq!(
+        data_type(&ltz(None)),
+        Ok(DataType::TimestampNanos { precision: 9 })
+    );
+    for p in 7..=9_u8 {
+        assert_eq!(
+            data_type(&ntz(Some(i32::from(p)))),
+            Ok(DataType::TimestampNtzNanos { precision: p })
+        );
+        assert_eq!(
+            data_type(&ltz(Some(i32::from(p)))),
+            Ok(DataType::TimestampNanos { precision: p })
+        );
+    }
+    for bad in [6, 10, -1, 0] {
+        for (t, name) in [
+            (ntz(Some(bad)), "TIMESTAMP_NTZ"),
+            (ltz(Some(bad)), "TIMESTAMP_LTZ"),
+        ] {
+            let e = data_type(&t).expect_err("out of range");
+            assert_eq!(e.error_class(), ErrorClass::InvalidTimestampPrecision);
+            let params = e.message_parameters();
+            assert!(
+                params.contains(&("precision", bad.to_string()))
+                    && params.contains(&("type", name.to_owned())),
+                "{params:?}"
+            );
+        }
+    }
+}

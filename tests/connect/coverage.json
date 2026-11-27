@@ -161,8 +161,8 @@
   {"oneof": "Expression.Literal.literal_type", "field": "struct", "number": 24, "status": "done", "refused": "", "target": "Literal::{Array,KeyValueMap,Struct}; the type is the root data_type, else the message's own type fields", "task": "P3-T012a", "group": 1},
   {"oneof": "Expression.Literal.literal_type", "field": "specialized_array", "number": 25, "status": "done", "refused": "", "target": "Literal::{Array,KeyValueMap,Struct}; the type is the root data_type, else the message's own type fields", "task": "P3-T012a", "group": 1},
   {"oneof": "Expression.Literal.literal_type", "field": "time", "number": 26, "status": "missing", "refused": "", "target": "TIME literals wait for an IR value", "task": "P3-T012", "group": 1},
-  {"oneof": "Expression.Literal.literal_type", "field": "timestamp_ntz_nanos", "number": 29, "status": "missing", "refused": "", "target": "no IR type for nanosecond timestamps", "task": "P3-T012", "group": 1},
-  {"oneof": "Expression.Literal.literal_type", "field": "timestamp_ltz_nanos", "number": 30, "status": "missing", "refused": "", "target": "no IR type for nanosecond timestamps", "task": "P3-T012", "group": 1},
+  {"oneof": "Expression.Literal.literal_type", "field": "timestamp_ntz_nanos", "number": 29, "status": "missing", "refused": "", "target": "nanosecond timestamp literals wait for an IR value", "task": "P3-T012", "group": 1},
+  {"oneof": "Expression.Literal.literal_type", "field": "timestamp_ltz_nanos", "number": 30, "status": "missing", "refused": "", "target": "nanosecond timestamp literals wait for an IR value", "task": "P3-T012", "group": 1},
   {"oneof": "DataType.kind", "field": "null", "number": 1, "status": "missing", "refused": "", "target": "no IR type", "task": "P3-T012", "group": 1},
   {"oneof": "DataType.kind", "field": "binary", "number": 2, "status": "done", "refused": "", "target": "DataType", "task": "P2-T091a", "group": 1},
   {"oneof": "DataType.kind", "field": "boolean", "number": 3, "status": "done", "refused": "", "target": "DataType", "task": "P2-T091a", "group": 1},
@@ -191,6 +191,6 @@
   {"oneof": "DataType.kind", "field": "geometry", "number": 26, "status": "done", "refused": "", "target": "DataType", "task": "P2-T091a", "group": 1},
   {"oneof": "DataType.kind", "field": "geography", "number": 27, "status": "done", "refused": "", "target": "DataType", "task": "P2-T091a", "group": 1},
   {"oneof": "DataType.kind", "field": "time", "number": 28, "status": "done", "refused": "", "target": "DataType", "task": "P2-T091a", "group": 1},
-  {"oneof": "DataType.kind", "field": "timestamp_ntz_nanos", "number": 29, "status": "missing", "refused": "", "target": "no IR type for nanosecond timestamps", "task": "P3-T012", "group": 1},
-  {"oneof": "DataType.kind", "field": "timestamp_ltz_nanos", "number": 30, "status": "missing", "refused": "", "target": "no IR type for nanosecond timestamps", "task": "P3-T012", "group": 1}
+  {"oneof": "DataType.kind", "field": "timestamp_ntz_nanos", "number": 29, "status": "done", "refused": "", "target": "DataType::TimestampNtzNanos / TimestampNanos (no precision is 9; 7..9, else INVALID_TIMESTAMP_PRECISION)", "task": "P3-T090", "group": 1},
+  {"oneof": "DataType.kind", "field": "timestamp_ltz_nanos", "number": 30, "status": "done", "refused": "", "target": "DataType::TimestampNtzNanos / TimestampNanos (no precision is 9; 7..9, else INVALID_TIMESTAMP_PRECISION)", "task": "P3-T090", "group": 1}
 ]

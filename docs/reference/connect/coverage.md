@@ -203,12 +203,12 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 | 24 | struct | done |  | Literal::{Array,KeyValueMap,Struct}; the type is the root data_type, else the message's own type fields | P3-T012a | 1 |
 | 25 | specialized_array | done |  | Literal::{Array,KeyValueMap,Struct}; the type is the root data_type, else the message's own type fields | P3-T012a | 1 |
 | 26 | time | missing |  | TIME literals wait for an IR value | P3-T012 | 1 |
-| 29 | timestamp_ntz_nanos | missing |  | no IR type for nanosecond timestamps | P3-T012 | 1 |
-| 30 | timestamp_ltz_nanos | missing |  | no IR type for nanosecond timestamps | P3-T012 | 1 |
+| 29 | timestamp_ntz_nanos | missing |  | nanosecond timestamp literals wait for an IR value | P3-T012 | 1 |
+| 30 | timestamp_ltz_nanos | missing |  | nanosecond timestamp literals wait for an IR value | P3-T012 | 1 |
 
 ## DataType.kind
 
-30 arms: 23 done, 1 partial, 6 missing, 0 out of scope.
+30 arms: 25 done, 1 partial, 4 missing, 0 out of scope.
 
 | # | Arm | Status | Refused fields | IR target | Task | Group |
 |---:|---|---|---|---|---|---:|
@@ -240,5 +240,5 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 | 26 | geometry | done |  | DataType | P2-T091a | 1 |
 | 27 | geography | done |  | DataType | P2-T091a | 1 |
 | 28 | time | done |  | DataType | P2-T091a | 1 |
-| 29 | timestamp_ntz_nanos | missing |  | no IR type for nanosecond timestamps | P3-T012 | 1 |
-| 30 | timestamp_ltz_nanos | missing |  | no IR type for nanosecond timestamps | P3-T012 | 1 |
+| 29 | timestamp_ntz_nanos | done |  | DataType::TimestampNtzNanos / TimestampNanos (no precision is 9; 7..9, else INVALID_TIMESTAMP_PRECISION) | P3-T090 | 1 |
+| 30 | timestamp_ltz_nanos | done |  | DataType::TimestampNtzNanos / TimestampNanos (no precision is 9; 7..9, else INVALID_TIMESTAMP_PRECISION) | P3-T090 | 1 |
