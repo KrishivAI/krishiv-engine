@@ -15,8 +15,8 @@ use std::sync::Arc;
 use krishiv_common::secret::OptionValue;
 use krishiv_plan::{
     ALIAS_PART_SEP, AsOfDirection, AsOfMatch, Builtin, CastMode, ColumnNamesOp, Expr, ExprNode,
-    Grouping, JoinCondition, JoinKind, Literal, LogicalPlan, Origin, PlanId, PlanNode, ReadSource,
-    SampleBounds, SetOperation, SqlArgs, UnpivotColumnSet,
+    Grouping, JoinCondition, JoinKind, Literal, LogicalPlan, Origin, PivotValue, PlanId, PlanNode,
+    ReadSource, SampleBounds, SetOperation, SqlArgs, UnpivotColumnSet,
 };
 
 use super::errors::{
@@ -965,9 +965,7 @@ impl Translator<'_> {
                     })
                     .collect::<Result<_>>()?,
             },
-            Ok(GroupType::Pivot) => {
-                return Err(unsupported("pivots (spark.connect.Aggregate.pivot)"));
-            }
+            Ok(GroupType::Pivot) => return self.pivot(a, &input, &keys, aggregates),
             Ok(GroupType::Unspecified) => {
                 return Err(invalid_enum(
                     "spark.connect.Aggregate.GroupType",
@@ -988,6 +986,48 @@ impl Translator<'_> {
             grouping,
             aggregates: keys.into_iter().chain(aggregates).collect(),
         })
+    }
+
+    /// `Aggregate` with `GROUP_TYPE_PIVOT` (`groupBy(...).pivot(col, values).agg(...)`): the
+    /// session's pivot ([`krishiv_plan::grouped_pivot`]). Spark computes the values of a pivot
+    /// without any by running a query before planning; the translator runs none, so that case is
+    /// refused.
+    fn pivot(
+        &mut self,
+        a: &pb::Aggregate,
+        input: &Arc<LogicalPlan>,
+        keys: &[Arc<Expr>],
+        aggregates: Vec<Arc<Expr>>,
+    ) -> Result<PlanNode> {
+        let Some(pivot) = &a.pivot else {
+            return Err(assertion("Aggregate with GROUP_TYPE_PIVOT needs a pivot"));
+        };
+        let column = self.required_expression(pivot.col.as_ref())?;
+        if pivot.values.is_empty() {
+            return Err(unsupported(
+                "a pivot without values (Spark runs a query for the distinct values)",
+            ));
+        }
+        let values = pivot
+            .values
+            .iter()
+            .map(|v| {
+                Ok(PivotValue {
+                    exprs: vec![self.literal_expression(v)?],
+                    alias: None,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let keys: Vec<Expr> = keys.iter().map(|k| (**k).clone()).collect();
+        krishiv_plan::grouped_pivot(
+            input,
+            &keys,
+            &column,
+            values,
+            aggregates,
+            self.conf.case_sensitive,
+            || Origin::UNKNOWN,
+        )
     }
 
     /// `Range`: `range(start, end, step, numPartitions)`, as Spark builds

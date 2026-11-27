@@ -530,7 +530,6 @@ fn unsupported_expression_kinds_are_named() {
         ),
         (ExprType::SortOrder(Box::default()), "sort_order"),
         (ExprType::Window(Box::default()), "window"),
-        (ExprType::LambdaFunction(Box::default()), "lambda_function"),
         (
             ExprType::UnresolvedExtractValue(Box::default()),
             "unresolved_extract_value",
@@ -727,4 +726,70 @@ fn text_of_sql(sql: &str) -> String {
     )
     .unwrap()
     .to_string()
+}
+
+fn lambda_variable(name: &str) -> Expression {
+    expr(ExprType::UnresolvedNamedLambdaVariable(
+        expression::UnresolvedNamedLambdaVariable {
+            name_parts: vec![name.to_owned()],
+        },
+    ))
+}
+
+fn lambda(params: &[&str], body: Expression) -> Expression {
+    expr(ExprType::LambdaFunction(Box::new(
+        expression::LambdaFunction {
+            function: Some(Box::new(body)),
+            arguments: params
+                .iter()
+                .map(|p| expression::UnresolvedNamedLambdaVariable {
+                    name_parts: vec![(*p).to_owned()],
+                })
+                .collect(),
+        },
+    )))
+}
+
+#[test]
+fn a_lambda_is_a_lambda_over_its_variables() {
+    // F.transform(xs, lambda x, i: x + i)
+    let body = func("+", vec![lambda_variable("x"), lambda_variable("i")]);
+    let e = translate_expression(&lambda(&["x", "i"], body), &conf()).unwrap();
+    let ExprNode::Lambda { params, body } = &e.node else {
+        panic!("not a lambda: {e:?}")
+    };
+    assert_eq!(
+        params.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(),
+        ["x", "i"]
+    );
+    assert_eq!(body.to_string(), "(x + i)");
+    // As the argument of the call, the way the client sends it.
+    let call = func(
+        "transform",
+        vec![attr("xs"), lambda(&["x"], lambda_variable("x"))],
+    );
+    assert_eq!(text(&call), "transform(xs, (x) -> x)");
+}
+
+#[test]
+fn a_lambda_variable_needs_a_name_and_a_parameter_a_plain_one() {
+    let nameless = expr(ExprType::UnresolvedNamedLambdaVariable(
+        expression::UnresolvedNamedLambdaVariable { name_parts: vec![] },
+    ));
+    assert_eq!(
+        err(&nameless).error_class(),
+        ErrorClass::ConnectInvalidPlanUnresolvedNamedLambdaVariableRequiresNamePart
+    );
+    let qualified = expr(ExprType::LambdaFunction(Box::new(
+        expression::LambdaFunction {
+            function: Some(Box::new(lambda_variable("x"))),
+            arguments: vec![expression::UnresolvedNamedLambdaVariable {
+                name_parts: vec!["a".into(), "b".into()],
+            }],
+        },
+    )));
+    assert_eq!(
+        err(&qualified).error_class(),
+        ErrorClass::KrishivUnsupportedFeature
+    );
 }

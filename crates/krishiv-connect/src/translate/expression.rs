@@ -79,6 +79,35 @@ impl Translator<'_> {
                 })
             }
             ExprType::UnresolvedFunction(f) => self.function(f)?,
+            ExprType::LambdaFunction(l) => {
+                // `F.transform(col, lambda x: ...)`: the client names the variables and the body
+                // reads them as `UnresolvedNamedLambdaVariable`, which are plain names to the
+                // analyzer's lambda binding, as the SQL front end's lambdas are.
+                let mut params = Vec::with_capacity(l.arguments.len());
+                for a in &l.arguments {
+                    let [name] = a.name_parts.as_slice() else {
+                        return Err(super::errors::unsupported(
+                            "a lambda parameter with a qualified or empty name",
+                        ));
+                    };
+                    params.push(name.clone());
+                }
+                let body = self.required_expression(l.function.as_deref())?;
+                return Ok(Arc::new(Expr::lambda(params, (*body).clone())));
+            }
+            ExprType::UnresolvedNamedLambdaVariable(v) => {
+                if v.name_parts.is_empty() {
+                    return Err(
+                        krishiv_common::error::ConnectInvalidPlanUnresolvedNamedLambdaVariableRequiresNamePart {}
+                            .into(),
+                    );
+                }
+                ExprNode::Column(ColumnRef {
+                    name: v.name_parts.clone(),
+                    plan_id: None,
+                    by_identifier: false,
+                })
+            }
             ExprType::CallFunction(c) => self.call_function(c)?,
             ExprType::CommonInlineUserDefinedFunction(f) => self.inline_udf(f)?,
             ExprType::NamedArgumentExpression(_) => {

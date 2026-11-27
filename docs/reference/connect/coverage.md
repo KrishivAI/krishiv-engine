@@ -20,7 +20,7 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 | 6 | set_op | done |  | SetOp / Union (by name, allow missing) / Distinct | P3-T012 | 1 |
 | 7 | sort | done |  | Sort | P2-T091a | 0 |
 | 8 | limit | done |  | Limit | P2-T091a | 0 |
-| 9 | aggregate | partial | GROUP_TYPE_PIVOT | Aggregate; pivot → Pivot (exists) | P3-T012 | 2 |
+| 9 | aggregate | partial | a pivot without values (Spark runs a query for the distinct values) | Aggregate; pivot → Project (grouping keys, the pivot column's copy, the columns the aggregates read) under Pivot (krishiv_plan::grouped_pivot, as the DataFrame API) | P3-T012 | 2 |
 | 10 | sql | partial | DataFrame arguments (with_relations) | Sql; the with_relations form (#41) for DataFrame arguments | P3-T012 | 4 |
 | 11 | local_relation | done |  | Read(ReadSource::Local) from the Arrow IPC data plus the DDL or JSON schema (createDataFrame), built by the host before translation (TranslateConf::local_relations); no data and no schema is SCHEMA_REQUIRED_FOR_LOCAL_RELATION; the inline size is bounded by the gRPC message limit | P3-T012a | 1 |
 | 12 | sample | partial | with_replacement (Poisson) and deterministic_order (randomSplit) | Sample (Bernoulli, seed or one drawn per plan, Spark's XORShiftRandom order); Poisson needs a new IR field; deterministic_order needs the per-partition sort | P3-T012 | 3 |
@@ -78,7 +78,7 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 
 ## Expression.expr_type
 
-22 arms: 4 done, 7 partial, 10 missing, 1 out of scope.
+22 arms: 5 done, 8 partial, 8 missing, 1 out of scope.
 
 | # | Arm | Status | Refused fields | IR target | Task | Group |
 |---:|---|---|---|---|---|---:|
@@ -91,11 +91,11 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 | 7 | cast | done |  | Cast | P2-T091a | 0 |
 | 8 | unresolved_regex | missing |  | Star { regex } (the field exists) | P3-T012 | 2 |
 | 9 | sort_order | missing |  | SortOrder, only inside Sort and Window | P3-T012 | 2 |
-| 10 | lambda_function | missing |  | Lambda | P3-T012 | 2 |
+| 10 | lambda_function | partial | a parameter with a qualified name | Lambda (the analyzer binds it as the argument of a higher-order function) | P3-T012 | 2 |
 | 11 | window | missing |  | ExprNode::Window (frames: LOWER_BOUND_REQUIRED_IN_WINDOW_FRAME, UPPER_BOUND_…, WINDOW_FUNCTION_REQUIRED) | P3-T012 | 2 |
 | 12 | unresolved_extract_value | missing |  | Field | P3-T012 | 2 |
 | 13 | update_fields | missing |  | UpdateFields | P3-T012 | 2 |
-| 14 | unresolved_named_lambda_variable | missing |  | lambda-scoped Column (UNRESOLVED_NAMED_LAMBDA_VARIABLE_REQUIRES_NAME_PART) | P3-T012 | 2 |
+| 14 | unresolved_named_lambda_variable | done |  | Column read by the lambda's binding (CONNECT_INVALID_PLAN.UNRESOLVED_NAMED_LAMBDA_VARIABLE_REQUIRES_NAME_PART without a name) | P3-T012 | 2 |
 | 15 | common_inline_user_defined_function | partial | scalar_scala_udf and java_udf (56K00: no JVM code; T081), Python eval types other than 100/101/200/250, additional_includes | Function over the session's encoded name of an unregistered Python UDF (PythonUdf), its payload registered with the session's UDF workers; Usage on System(udf) before any worker starts | P3-T014 | 6 |
 | 16 | call_function | done |  | Function (as #3, by name) | P3-T012 | 1 |
 | 17 | named_argument_expression | partial | outside a function call's arguments | FunctionCall.arg_names | P3-T012 | 1 |

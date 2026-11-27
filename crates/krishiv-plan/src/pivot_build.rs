@@ -1,0 +1,227 @@
+// SPDX-License-Identifier: Apache-2.0
+//! The grouped pivot the DataFrame front ends build (PySpark's `groupBy(...).pivot(col, values).agg(...)`,
+//! the native `GroupedData::pivot` and the Connect `Aggregate` with `GROUP_TYPE_PIVOT`): the same
+//! [`PlanNode::Pivot`] the SQL `PIVOT` clause lowers to, so values, naming, casts and errors are the
+//! analyzer's.
+//!
+//! The node groups by every input column neither the pivot column nor an aggregate reads, so the
+//! input is first narrowed to the grouping keys, a copy of the pivot column and the columns the
+//! aggregates read. The copy keeps an aggregate that reads the pivot column itself
+//! (`count("course")`) from taking it out of the grouping; a grouping key an aggregate reads is
+//! grouped by a hidden copy and renamed back.
+
+use std::collections::HashSet;
+use std::sync::Arc;
+
+use krishiv_common::error::{InvalidUsageOfStarOrRegex, KrishivError, KrishivUnsupportedFeature};
+
+use crate::{ColumnRef, Expr, ExprNode, Literal, LogicalPlan, Origin, PivotValue, PlanNode, Star};
+
+fn refuse(feature: &str) -> KrishivError {
+    KrishivUnsupportedFeature {
+        feature: feature.to_owned(),
+    }
+    .into()
+}
+
+/// The name the pivot column's copy has in the narrowed input (never an output column).
+const PIVOT_COPY: &str = "__krishiv_pivot";
+
+/// The unresolved column references under `e`, and whether a `*` is under it. Each distinct node is
+/// visited once: expressions are DAGs, and a shared child would otherwise be walked once per path.
+fn references(e: &Expr, out: &mut Vec<Expr>, star: &mut bool) {
+    let mut seen: HashSet<*const Expr> = HashSet::new();
+    let mut stack: Vec<&Expr> = vec![e];
+    while let Some(e) = stack.pop() {
+        if !seen.insert(std::ptr::from_ref(e)) {
+            continue;
+        }
+        match &e.node {
+            ExprNode::Column(_) => out.push(e.clone()),
+            ExprNode::Star(_) => *star = true,
+            _ => {}
+        }
+        e.for_each_child(&mut |child| stack.push(child));
+    }
+}
+
+/// The last name part of a bare or aliased column, the name its output has.
+fn output_name(e: &Expr) -> Option<String> {
+    match &e.node {
+        ExprNode::Column(c) => c.name.last().cloned(),
+        ExprNode::Alias { name, .. } => Some(name.clone()),
+        _ => None,
+    }
+}
+
+/// The column named `name` (one name part, so dots in it are kept).
+fn named(name: &str) -> Arc<Expr> {
+    Arc::new(Expr::new(ExprNode::Column(ColumnRef::new(vec![
+        name.to_owned(),
+    ]))))
+}
+
+/// The pivot of `aggregates` over `input` grouped by `keys`, on `column` with `values`. `origin`
+/// names the nodes this builds under the returned one (the returned node is the caller's to wrap).
+///
+/// # Errors
+/// A `*` in an aggregate (`INVALID_USAGE_OF_STAR_OR_REGEX`), or a shape the narrowing cannot keep
+/// exact (a nested field or qualified column an aggregate reads, a column named like the internal
+/// copy, same-named columns of different DataFrames, an unnamed key beside a clash, a value named
+/// like a key an aggregate reads): `KRISHIV_UNSUPPORTED_FEATURE`.
+pub fn grouped_pivot(
+    input: &Arc<LogicalPlan>,
+    keys: &[Expr],
+    column: &Expr,
+    values: Vec<PivotValue>,
+    aggregates: Vec<Arc<Expr>>,
+    case_sensitive: bool,
+    mut origin: impl FnMut() -> Origin,
+) -> Result<PlanNode, KrishivError> {
+    let mut read = Vec::new();
+    let mut star = false;
+    for a in &aggregates {
+        references(a, &mut read, &mut star);
+    }
+    if star {
+        // Spark's DataFrame pivot does not expand `count(*)` (SQL's PIVOT clause does).
+        return Err(InvalidUsageOfStarOrRegex {
+            elem: "'*'".to_owned(),
+            pretty_name: "Pivot".to_owned(),
+        }
+        .into());
+    }
+    if read
+        .iter()
+        .any(|r| matches!(&r.node, ExprNode::Column(c) if c.name.len() > 1))
+    {
+        // Narrowing the input by a dotted name would flatten `s.x` and drop the struct `s`.
+        return Err(refuse(
+            "a pivot aggregate that reads a nested field or qualified column",
+        ));
+    }
+    let fold = |n: String| if case_sensitive { n } else { n.to_lowercase() };
+    let read_names: Vec<String> = read.iter().filter_map(output_name).map(fold).collect();
+    if read_names.contains(&fold(PIVOT_COPY.to_owned())) {
+        return Err(refuse(
+            "a pivot aggregate that reads a column named like the internal pivot copy",
+        ));
+    }
+    // Two references of one name from different DataFrames (a cross join's `left["v"]`, `right["v"]`)
+    // cannot both survive a narrowing that keeps one column of each name.
+    let source = |r: &Expr| match &r.node {
+        ExprNode::Column(c) => c.plan_id.map(|id| id.0),
+        _ => None,
+    };
+    for (i, a) in read.iter().enumerate() {
+        let same_name = |b: &&Expr| output_name(b).map(fold) == output_name(a).map(fold);
+        if read[..i]
+            .iter()
+            .filter(same_name)
+            .any(|b| source(b) != source(a))
+        {
+            return Err(refuse(
+                "a pivot aggregate that reads same-named columns of different DataFrames",
+            ));
+        }
+    }
+    let names: Vec<Option<String>> = keys.iter().map(output_name).collect();
+    let clash: Vec<bool> = names
+        .iter()
+        .map(|n| {
+            n.as_ref()
+                .is_some_and(|n| read_names.contains(&fold(n.clone())))
+        })
+        .collect();
+    let any_clash = clash.iter().any(|c| *c);
+    if any_clash && names.iter().any(Option::is_none) {
+        return Err(refuse(
+            "a pivot aggregate that reads a grouping column beside an unnamed grouping expression",
+        ));
+    }
+    let value_text: Vec<String> = values
+        .iter()
+        .filter_map(|v| match v.exprs.first().map(|e| &e.node) {
+            Some(ExprNode::Literal(Literal::String(t))) => Some(fold(t.clone())),
+            _ => None,
+        })
+        .collect();
+    if names.iter().zip(&clash).any(|(n, c)| {
+        *c && n
+            .as_ref()
+            .is_some_and(|n| value_text.contains(&fold(n.clone())))
+    }) {
+        // The restored key `h` would sit beside a pivot output named `h`, and a bare lookup of it is ambiguous.
+        return Err(refuse(
+            "a pivot value named like a grouping column an aggregate also reads",
+        ));
+    }
+    let copy = |i: usize| format!("__krishiv_key_{i}");
+    let mut kept: Vec<Arc<Expr>> = Vec::new();
+    for (i, key) in keys.iter().enumerate() {
+        if clash[i] {
+            let inner = match &key.node {
+                ExprNode::Alias { expr, .. } => (**expr).clone(),
+                _ => key.clone(),
+            };
+            kept.push(Arc::new(inner.alias(copy(i))));
+        } else {
+            kept.push(Arc::new(key.clone()));
+        }
+    }
+    kept.push(Arc::new(column.clone().alias(PIVOT_COPY)));
+    let mut seen: Vec<String> = Vec::new();
+    for r in read {
+        let Some(name) = output_name(&r).map(fold) else {
+            continue;
+        };
+        if !seen.contains(&name) {
+            seen.push(name);
+            kept.push(Arc::new(r));
+        }
+    }
+    let wrap =
+        |node: PlanNode, origin: Origin| Arc::new(LogicalPlan::new(node).with_origin(origin));
+    let narrowed = wrap(
+        PlanNode::Project {
+            input: Arc::clone(input),
+            exprs: kept,
+        },
+        origin(),
+    );
+    let pivot = PlanNode::Pivot {
+        input: narrowed,
+        pivot_columns: vec![named(PIVOT_COPY)],
+        values,
+        aggregates,
+    };
+    if !any_clash {
+        return Ok(pivot);
+    }
+    let pivoted = wrap(pivot, origin());
+    // The keys back under their names, then the pivoted columns.
+    let mut out: Vec<Arc<Expr>> = Vec::new();
+    let mut except: Vec<Vec<String>> = Vec::new();
+    for (i, name) in names.iter().enumerate() {
+        let Some(name) = name else { continue };
+        if clash[i] {
+            out.push(Arc::new(Expr::clone(&named(&copy(i))).alias(name)));
+            except.push(vec![copy(i)]);
+        } else {
+            out.push(named(name));
+            except.push(vec![name.clone()]);
+        }
+    }
+    out.push(Arc::new(Expr::new(ExprNode::Star(Star {
+        qualifier: Vec::new(),
+        except,
+        replace: Vec::new(),
+        position: None,
+        regex: None,
+        plan_id: None,
+    }))));
+    Ok(PlanNode::Project {
+        input: pivoted,
+        exprs: out,
+    })
+}

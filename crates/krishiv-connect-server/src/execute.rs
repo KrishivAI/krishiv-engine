@@ -678,6 +678,10 @@ fn translate_conf(session: &krishiv_session::Session) -> TranslateConf {
             .get("spark.sql.sources.default")
             .unwrap_or_else(|| TranslateConf::default().default_data_source),
         parser: session.parser_options(),
+        case_sensitive: session
+            .conf()
+            .get("spark.sql.caseSensitive")
+            .is_some_and(|v| v.eq_ignore_ascii_case("true")),
         local_relations: LocalRelations::default(),
         cached_remote: CachedRemoteIds::default(),
     }

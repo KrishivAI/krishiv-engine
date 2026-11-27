@@ -1,4 +1,10 @@
 ---
 source: crates/krishiv-connect/tests/goldens.rs
 ---
-[KRISHIV_UNSUPPORTED_FEATURE] The feature pivots (spark.connect.Aggregate.pivot) is not supported by Krishiv yet. SQLSTATE: 0A000
+Pivot [__krishiv_pivot], [[1], [2]], [sum(c)]
++- Project [a, b@plan0 AS __krishiv_pivot, c]
+   +- Read parquet [/data/t.parquet]
+-- plan ids --
+Pivot plan_id=1
+  Project plan_id=-
+    Read plan_id=0
