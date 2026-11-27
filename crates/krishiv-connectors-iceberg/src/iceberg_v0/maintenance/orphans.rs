@@ -486,6 +486,11 @@ mod tests {
             &Equivalences::defaults(),
         )
         .unwrap_err();
+        assert_eq!(
+            e.error_class(),
+            krishiv_common::error::ErrorClass::KrishivIcebergOrphanPathUnreadable,
+            "{e}"
+        );
         assert!(e.to_string().contains("relative/a.parquet"), "{e}");
         assert!(e.to_string().contains("v1.metadata.json"), "{e}");
     }
