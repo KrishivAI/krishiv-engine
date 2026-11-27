@@ -207,7 +207,7 @@ def _key_sides(key: Any, left: pd.DataFrame, right: pd.DataFrame) -> pd.DataFram
 
 
 def _arrow_sides(left: pa.Table, right: pa.Table) -> pa.Table:
-    k = pc.min(left["k"] if left.num_rows else right["k"]).as_py()
+    k = pc.min(left["k"] if left.num_rows else right["k"]).as_py()  # ty: ignore[unresolved-attribute]
     return pa.table({"k": [k], "sides": [f"{left.num_rows}:{right.num_rows}"]})
 
 
@@ -243,7 +243,7 @@ def _aggs(api: Api) -> dict[str, Any]:
 
     @F.arrow_udf("double")
     def arrow_total(v: pa.Array) -> float:
-        return pc.sum(v).as_py()
+        return pc.sum(v).as_py()  # ty: ignore[unresolved-attribute]
 
     return {"total": total, "count": count, "not_a_scalar": not_a_scalar, "arrow_total": arrow_total}
 

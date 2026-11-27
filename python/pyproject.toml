@@ -142,7 +142,7 @@ allowed-unresolved-imports = ["krishiv._native", "pandas"]
 
 # pyspark-client is optional: this test skips without it, so ty may not resolve its imports.
 [[tool.ty.overrides]]
-include = ["tests/test_start_local_pyspark.py", "tests/test_pyspark_relation_arms.py"]
+include = ["tests/test_start_local_pyspark.py", "tests/test_pyspark_relation_arms.py", "tests/pyspark_udf/relation/cases.py", "tests/pyspark_udf/relation/gen_goldens.py"]
 
 [tool.ty.overrides.rules]
 unresolved-import = "ignore"
