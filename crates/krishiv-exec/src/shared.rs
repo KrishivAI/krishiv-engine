@@ -23,8 +23,9 @@
 //! larger) that a spill of the segment reports freed: that is what a reader's
 //! drivers keep outside the pool, about `drivers x RUN_BYTES` a reader plus
 //! the batch each has in flight. "About": a run is sized by the segment's
-//! average batch, so a segment of uneven batches, or one whose reservation a
-//! spill is lowering while it writes, can give a longer run.
+//! average batch, by its own bytes (a slice counts only its rows, though it
+//! keeps its parent's buffers alive), so a segment of uneven batches can give
+//! a longer run.
 //!
 //! The coordinator keeps the sink's finalized state and drops it when the
 //! last reading pipeline ended (or the query failed), which drops the list,
@@ -60,17 +61,45 @@ enum Segment {
         batches: Vec<Batch>,
         /// The memory the batches are charged to.
         reservation: Reservation,
+        /// The batches' own bytes (a slice counts its rows, not the buffers it
+        /// shares with its parent): what sizes a claimed run (`run_length`).
+        own: usize,
     },
     File(Arc<SpillFile>),
 }
 
 impl Segment {
+    fn memory(batches: Vec<Batch>, reservation: Reservation) -> Self {
+        let own = batches.iter().map(own_bytes).sum();
+        Self::Memory {
+            batches,
+            reservation,
+            own,
+        }
+    }
+
     fn len(&self) -> u64 {
         match self {
             Self::Memory { batches, .. } => batches.len() as u64,
             Self::File(f) => f.num_batches(),
         }
     }
+}
+
+/// A batch's own bytes: a column sliced from a larger one counts only its
+/// rows' part of the shared buffers (`get_array_memory_size` counts them
+/// whole, so a slice of 300 rows from an 8,192-row batch looks 27 times as
+/// large and its runs would shrink to one batch).
+fn own_bytes(b: &Batch) -> usize {
+    b.data()
+        .columns()
+        .iter()
+        .map(|c| {
+            c.to_data()
+                .get_slice_memory_size()
+                .unwrap_or_else(|_| c.get_array_memory_size())
+        })
+        .sum()
 }
 
 /// The rows of a finalized shared plan's list held in memory; `None` before
@@ -217,10 +246,7 @@ impl Output {
                 break;
             }
         }
-        lock(&self.state).push(Segment::Memory {
-            batches,
-            reservation,
-        });
+        lock(&self.state).push(Segment::memory(batches, reservation));
         if let Some((hook, _, _)) = &self.spill {
             hook.set_spillable_bytes(self.memory_bytes());
         }
@@ -239,19 +265,16 @@ impl Output {
     /// Where the batch `idx` of segment `seg` is; in memory, it and the
     /// batches after it in the segment, `run(left, bytes)` of them in all,
     /// where `left` counts the batches from `idx` to the segment's end and
-    /// `bytes` is the segment's average batch size.
+    /// `bytes` is the segment's average batch by its own bytes ([`own_bytes`]).
     fn at(&self, seg: usize, idx: u64, run: impl FnOnce(u64, usize) -> usize) -> Place {
         match lock(&self.state).get(seg) {
             None => Place::End,
             Some(s) if idx >= s.len() => Place::NextSegment,
-            Some(Segment::Memory {
-                batches,
-                reservation,
-            }) => {
+            Some(Segment::Memory { batches, own, .. }) => {
                 let Ok(i) = usize::try_from(idx) else {
                     return Place::NextSegment;
                 };
-                let average = reservation.size() / batches.len().max(1);
+                let average = own / batches.len().max(1);
                 let n = run(batches.len().saturating_sub(i) as u64, average).max(1);
                 let taken: Vec<Batch> = batches.iter().skip(i).take(n).cloned().collect();
                 if taken.is_empty() {
@@ -438,10 +461,7 @@ impl SharedSink {
             return Ok(());
         }
         let g = global_ref::<SinkGlobal>(global, "SharedSink")?;
-        lock(&g.parts).push(Segment::Memory {
-            batches,
-            reservation,
-        });
+        lock(&g.parts).push(Segment::memory(batches, reservation));
         Ok(())
     }
 
@@ -546,10 +566,7 @@ impl Sink for SharedSink {
         let mut parts = lock(&g.parts);
         parts.extend(segments);
         if !batches.is_empty() {
-            parts.push(Segment::Memory {
-                batches,
-                reservation,
-            });
+            parts.push(Segment::memory(batches, reservation));
         }
         Ok(())
     }
@@ -1173,6 +1190,23 @@ mod tests {
         let first = source.get_data(&mut locals[0], &g).await.unwrap().unwrap();
         assert_eq!(values(&first)[0], 0);
         assert_eq!(cursor_index(&g), 2);
+    }
+
+    #[tokio::test]
+    async fn a_claim_of_slices_is_sized_by_their_own_rows() {
+        // 64 slices of 2,000 rows of one 128,000-row batch: each slice holds
+        // the whole 1 MiB buffer alive but owns 16 KB of it, so a claim takes
+        // the even share (8), not the two a buffer-sized average would give.
+        let whole = batch(0, 128_000);
+        let batches: Vec<Batch> = (0..64)
+            .map(|i| whole.slice(i * 2_000, 2_000).unwrap())
+            .collect();
+        let (_sink, global, query, _ctx, _dir) = finalized(batches, false).await;
+        let source = SharedSource::new(schema());
+        let (g, mut locals) = drivers(&source, &query, &global, 4);
+        let first = source.get_data(&mut locals[0], &g).await.unwrap().unwrap();
+        assert_eq!(values(&first), (0..2_000).collect::<Vec<i64>>());
+        assert_eq!(cursor_index(&g), 8);
     }
 
     #[tokio::test]
