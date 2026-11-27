@@ -25,6 +25,8 @@
 mod arith;
 mod between;
 mod cast;
+#[cfg(test)]
+mod compile_tests;
 mod cond;
 mod conjunction;
 #[cfg(test)]
@@ -946,9 +948,6 @@ fn builtin(
     })
 }
 
-/// Whether argument `i` of `f` may run on rows Spark would not evaluate it
-/// on: it raises on no row ([`krishiv_plan::may_raise`]) and is
-/// deterministic, so evaluating it there cannot be observed.
 /// A chain of `AND`s as one [`conjunction::conjunction`] of its conjuncts, in written order.
 fn conjunction_of(f: &ResolvedFunction, input: Input<'_>) -> Result<Arc<dyn PhysExpr>> {
     fn flatten<'e>(e: &'e Expr, out: &mut Vec<&'e Expr>) {
@@ -979,6 +978,9 @@ fn conjunction_of(f: &ResolvedFunction, input: Input<'_>) -> Result<Arc<dyn Phys
     Ok(conjunction::conjunction(parts))
 }
 
+/// Whether argument `i` of `f` may run on rows Spark would not evaluate it
+/// on: it raises on no row ([`krishiv_plan::may_raise`]) and is
+/// deterministic, so evaluating it there cannot be observed.
 fn runs_anywhere(f: &ResolvedFunction, i: usize, ansi: bool) -> bool {
     f.args
         .get(i)
