@@ -17,9 +17,9 @@ use futures::StreamExt;
 use krishiv_common::error::{DivideByZero, ErrorClass};
 use krishiv_exec::testing::{Break, Buffer, Count, Pipe, RangeSource, Scan, schema};
 use krishiv_exec::{
-    DEFAULT_BATCH_SIZE, ExecConfig, ExecNode, ExecutorConfig, GlobalState, LocalState, Operator,
-    OperatorOutput, PipelineBuilder, QueryContext, QueryId, QueryRunner, Result, Sink, Source,
-    TaskContext, TokioClock, TokioExecutor, WorkloadClass,
+    DEFAULT_BATCH_SIZE, ExecConfig, ExecNode, ExecutorConfig, FlushOutput, GlobalState, LocalState,
+    Operator, OperatorOutput, PipelineBuilder, QueryContext, QueryId, QueryRunner, Result, Sink,
+    Source, TaskContext, TokioClock, TokioExecutor, WorkloadClass,
 };
 use krishiv_memory::{BoxFuture, MemoryConfig, MemoryPool, TreePool};
 use krishiv_types::batch::Batch;
@@ -285,23 +285,151 @@ async fn the_wave_runner_holds_the_chain_until_its_wave_ends() {
     assert_released(&root);
 }
 
-/// A failing group while another is still running: the first error wins,
-/// nothing else starts, the running group is drained and every byte is
-/// released (the held pipeline holds batches in its buffer when it stops).
+/// `UNION ALL` fan-in: several inputs into one pipeline group.
+struct FanIn(Vec<Arc<dyn ExecNode>>);
+
+impl ExecNode for FanIn {
+    fn build_pipelines(self: Arc<Self>, b: &mut PipelineBuilder) -> Result<()> {
+        b.fan_in(&self.0)
+    }
+}
+
+/// A pass-through operator with a (trivial) cross-driver flush: above a
+/// fan-in it makes the members one concurrent group, not one run in turn.
+struct Flushed;
+
+impl Operator for Flushed {
+    fn schema(&self) -> SchemaRef {
+        schema()
+    }
+
+    fn local_state(&self, _ctx: &TaskContext) -> Result<LocalState> {
+        Ok(Box::new(()))
+    }
+
+    fn execute(&self, input: &Batch, _local: &mut LocalState) -> Result<OperatorOutput> {
+        Ok(OperatorOutput::NeedMoreInput(Some(input.clone())))
+    }
+
+    fn needs_flush(&self) -> bool {
+        true
+    }
+
+    fn flush<'a>(
+        &'a self,
+        _local: &'a mut LocalState,
+        _ctx: &'a TaskContext,
+    ) -> BoxFuture<'a, Result<FlushOutput>> {
+        Box::pin(std::future::ready(Ok(FlushOutput::Done)))
+    }
+}
+
+/// A pass-through operator counting the drivers that started its pipeline.
+struct Started(Arc<AtomicU64>);
+
+impl Operator for Started {
+    fn schema(&self) -> SchemaRef {
+        schema()
+    }
+
+    fn local_state(&self, _ctx: &TaskContext) -> Result<LocalState> {
+        self.0.fetch_add(1, Ordering::AcqRel);
+        Ok(Box::new(()))
+    }
+
+    fn execute(&self, input: &Batch, _local: &mut LocalState) -> Result<OperatorOutput> {
+        Ok(OperatorOutput::NeedMoreInput(Some(input.clone())))
+    }
+}
+
+/// A fan-in into `sink` whose first member reads a breaker (so under waves
+/// it starts only after the wave holding the held pipeline) and whose
+/// second is a plain scan; `flushed` puts a flushing operator above it.
+/// `sink`'s rows: the inner count's two (3,000 and 4,498,500) and 0..4,000.
+fn fan_in(sink: &Arc<Count>, flushed: bool) -> Arc<dyn ExecNode> {
+    let members: Arc<dyn ExecNode> = Arc::new(FanIn(vec![
+        Arc::new(Break(scan(3_000), Count::new(), false)),
+        scan(4_000),
+    ]));
+    let input = if flushed {
+        Arc::new(Pipe(members, Arc::new(Flushed)))
+    } else {
+        members
+    };
+    Arc::new(Break(input, Arc::clone(sink), false))
+}
+
+/// `[count, sum]` of [`fan_in`]'s sink.
+const FAN_IN_RESULT: [i64; 2] = [4_002, 3_000 + 4_498_500 + 7_998_000];
+
+/// A fan-in group (run in turn, or concurrent under a shared flush) whose
+/// member reads a breaker: under dataflow it runs and finalizes while the
+/// held pipeline still waits, and its rows equal the wave runner's.
+async fn fan_in_runs_beside_the_held_group(flushed: bool) {
+    let runner = runner();
+    let root = root();
+    let mut results = Vec::new();
+    for (id, dataflow) in [(1, false), (2, true)] {
+        let c = Count::new();
+        let (plan, gate, held) = two(8, 0, fan_in(&c, flushed));
+        let q = query(&root, id, dataflow);
+        let mut stream = runner.execute(plan, Arc::clone(&q)).await.unwrap();
+        if dataflow {
+            assert!(
+                finalizes(&c, Duration::from_secs(30)).await,
+                "the fan-in's sink finalizes before the held pipeline ends"
+            );
+            assert_eq!(held.finalized.load(Ordering::Acquire), 0);
+        }
+        gate.send(true).unwrap();
+        let mut out = Vec::new();
+        while let Some(b) = stream.next().await {
+            out.push(b.unwrap());
+        }
+        drop(stream);
+        q.finished().await;
+        assert_eq!(c.finalized.load(Ordering::Acquire), 1);
+        results.push(values(&out));
+    }
+    assert_eq!(results[0], results[1]);
+    assert_eq!(results[1], FAN_IN_RESULT);
+    assert_released(&root);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_fan_in_run_in_turn_starts_when_its_inputs_end() {
+    fan_in_runs_beside_the_held_group(false).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_concurrent_fan_in_starts_when_its_inputs_end() {
+    fan_in_runs_beside_the_held_group(true).await;
+}
+
+/// A fan-in member fails while the held group still runs (it starts only
+/// under dataflow: its other member reads a breaker): the first error wins,
+/// the root pipeline never starts, the held group is drained and every byte
+/// is released (the held pipeline holds batches in its buffer when it stops).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_failure_drains_the_running_groups() {
     let runner = runner();
     let root = root();
-    let failing: Arc<dyn ExecNode> =
-        Arc::new(Pipe(scan(DEFAULT_BATCH_SIZE as u64), Arc::new(Fail)));
+    let failing: Arc<dyn ExecNode> = Arc::new(FanIn(vec![
+        Arc::new(Break(scan(3_000), Count::new(), false)),
+        Arc::new(Pipe(scan(DEFAULT_BATCH_SIZE as u64), Arc::new(Fail))),
+    ]));
     let (gated, gate) = GatedScan::new(64 * DEFAULT_BATCH_SIZE as u64, 4);
     let held_buffer = Buffer::new(false, None);
-    let plan = Arc::new(Two {
-        held: Arc::new(Scan(gated)),
-        held_sink: Arc::clone(&held_buffer) as Arc<dyn Sink>,
-        read: failing,
-        buffer: Buffer::new(false, None),
-    });
+    let started = Arc::new(AtomicU64::new(0));
+    let plan = Arc::new(Pipe(
+        Arc::new(Two {
+            held: Arc::new(Scan(gated)),
+            held_sink: Arc::clone(&held_buffer) as Arc<dyn Sink>,
+            read: failing,
+            buffer: Buffer::new(false, None),
+        }),
+        Arc::new(Started(Arc::clone(&started))),
+    ));
     let q = query(&root, 1, true);
     let mut stream = runner.execute(plan, Arc::clone(&q)).await.unwrap();
     let mut error = None;
@@ -313,7 +441,13 @@ async fn a_failure_drains_the_running_groups() {
     drop(stream);
     q.finished().await;
     assert_eq!(error.unwrap().error_class(), ErrorClass::DivideByZero);
+    assert_eq!(
+        started.load(Ordering::Acquire),
+        0,
+        "the root pipeline never starts"
+    );
     assert_released(&root);
+    // Shut until here: the failure came while the held group ran.
     drop(gate);
 }
 

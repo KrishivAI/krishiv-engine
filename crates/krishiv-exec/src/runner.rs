@@ -472,12 +472,14 @@ async fn run_dataflow(
         let Some((g, runs, ok)) = running.next().await else {
             break;
         };
+        // Before the stop, as the wave runner records a failed wave's: a
+        // failed or cancelled query's profile keeps these counters.
+        record_extra_metrics(query, &runs);
         if !ok || query.is_cancelled() {
             // Keep draining the running groups; their states are dropped on return.
             stopped = true;
             continue;
         }
-        record_extra_metrics(query, &runs);
         for &m in &g {
             finished[m] = true;
         }
@@ -870,19 +872,24 @@ fn member_barriers(
         .ok_or_else(|| internal("an operator without a barrier".to_owned()))
 }
 
-/// One driver per index of `member`: the scheduler-assigned partition ids
+/// The scheduler-assigned partition ids of a member's drivers,
 /// `base..base + count`. Rejects an id past `u32` instead of wrapping it.
-fn drivers(run: &Arc<PipelineRun>, base: u32, count: usize) -> Result<Vec<TaskHandle>> {
-    let mut out = Vec::with_capacity(count);
-    for i in 0..count {
-        let offset = u32::try_from(i)
-            .map_err(|_| internal("too many drivers for u32 partition ids".to_owned()))?;
-        let partition = base
-            .checked_add(offset)
-            .ok_or_else(|| internal("too many drivers for u32 partition ids".to_owned()))?;
-        out.push(spawn_driver(Arc::clone(run), partition, base));
-    }
-    Ok(out)
+/// Checked before any driver is spawned: a driver spawned before an error
+/// would be detached (a dropped [`TaskHandle`]) and never awaited.
+fn partitions(base: u32, count: usize) -> Result<std::ops::Range<u32>> {
+    let too_many = || internal("too many drivers for u32 partition ids".to_owned());
+    let end = u32::try_from(count)
+        .ok()
+        .and_then(|n| base.checked_add(n))
+        .ok_or_else(too_many)?;
+    Ok(base..end)
+}
+
+/// One driver per partition id of `ids` (from [`partitions`]).
+fn drivers(run: &Arc<PipelineRun>, ids: std::ops::Range<u32>) -> Vec<TaskHandle> {
+    let base = ids.start;
+    ids.map(|partition| spawn_driver(Arc::clone(run), partition, base))
+        .collect()
 }
 
 /// Starts every member of `group` together, sharing the sink's state.
@@ -905,10 +912,16 @@ fn spawn_group(
         && members.len() > 1
         && members.iter().all(|m| m.drivers == 1))
     .then(|| Arc::new(Baton::new(members.len())));
-    let mut runs = Vec::with_capacity(members.len());
-    let mut handles = Vec::with_capacity(total);
-    for (member, m) in members.into_iter().enumerate() {
+    // Every check first, so an error spawns no driver (see [`partitions`]).
+    let mut planned = Vec::with_capacity(members.len());
+    for m in members {
         let member_barriers = member_barriers(&m, &barriers)?;
+        let ids = partitions(m.base_partition, m.drivers)?;
+        planned.push((m, member_barriers, ids));
+    }
+    let mut runs = Vec::with_capacity(planned.len());
+    let mut handles = Vec::with_capacity(total);
+    for (member, (m, member_barriers, ids)) in planned.into_iter().enumerate() {
         let run = Arc::new(PipelineRun {
             pipeline: m.pipeline,
             operator_deps: m.operator_deps,
@@ -923,7 +936,7 @@ fn spawn_group(
             query: Arc::clone(query),
             executor: Arc::clone(executor),
         });
-        handles.extend(drivers(&run, m.base_partition, m.drivers)?);
+        handles.extend(drivers(&run, ids));
         runs.push(run);
     }
     Ok((runs, handles))
@@ -947,6 +960,7 @@ async fn run_group_sequential(
     let mut runs = Vec::with_capacity(members.len());
     for m in members {
         let member_barriers = member_barriers(&m, &barriers)?;
+        let ids = partitions(m.base_partition, m.drivers)?;
         let run = Arc::new(PipelineRun {
             pipeline: m.pipeline,
             operator_deps: m.operator_deps,
@@ -962,9 +976,7 @@ async fn run_group_sequential(
             executor: Arc::clone(executor),
         });
         let mut handles = Drivers(FuturesUnordered::new());
-        handles
-            .0
-            .extend(drivers(&run, m.base_partition, m.drivers)?);
+        handles.0.extend(drivers(&run, ids));
         await_drivers(query, &mut handles).await;
         record_extra_metrics(query, std::slice::from_ref(&run));
         query.check_cancelled()?;
