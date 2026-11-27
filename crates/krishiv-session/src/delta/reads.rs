@@ -435,7 +435,8 @@ pub(super) fn table_key(store: &StoreId, root: &Url) -> String {
 
 /// The absolute local directory path for a store-relative `path`: a POSIX path gains its root `/`;
 /// a Windows drive path (`C:/Users/t`) is already absolute and `Url::from_directory_path` takes it
-/// as is (a leading `/` would make it `/C:/...`, which Windows refuses).
+/// as is (a leading `/` would make it `/C:/...`, which Windows refuses). A UNC location
+/// (`//server/share/t`) is not handled: it still becomes `///server/share/t`.
 fn local_dir_path(path: &str) -> String {
     let drive =
         cfg!(windows) && matches!(path.as_bytes(), [d, b':', ..] if d.is_ascii_alphabetic());

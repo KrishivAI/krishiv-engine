@@ -209,13 +209,20 @@ def session_zone(name: str) -> tzinfo:
 def _local_naive(value: datetime) -> datetime:
     """``value`` (an aware datetime) as a naive datetime in the client's local time zone.
 
-    Windows' C runtime cannot convert an instant before 1970 (``astimezone()`` raises ``OSError``);
-    there the zone's offset at 1970-01-01 stands in, as no earlier rule is available."""
+    Windows' C runtime cannot convert an instant before 1970 (``astimezone()`` raises ``OSError``). There the
+    instant is moved forward by whole 400-year Gregorian cycles (146097 days, which keep the weekday and the
+    calendar date) to 1970 or later, the zone's offset is read there, and that offset applies to the original
+    instant. Windows applies its current rules to every year, so this is the answer its own conversion would give."""
     try:
         return value.astimezone().replace(tzinfo=None)
     except (OSError, OverflowError):
-        offset = datetime.fromtimestamp(0, UTC).astimezone().utcoffset() or timedelta(0)
-        return (value.astimezone(UTC) + offset).replace(tzinfo=None)
+        instant = value.astimezone(UTC)
+        cycles = -(-(1970 - instant.year) // 400)
+        offset = (instant + timedelta(days=146097 * max(cycles, 0))).astimezone().utcoffset() or timedelta(0)
+        try:
+            return (instant + offset).replace(tzinfo=None)
+        except OverflowError:  # within a day of datetime.min or max
+            return instant.replace(tzinfo=None)
 
 
 def cell(value: Any, arrow_type: Any, zone: tzinfo = UTC) -> str:

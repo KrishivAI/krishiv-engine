@@ -65,8 +65,7 @@ def test_a_raising_udf_fails_with_python_exception_and_its_traceback() -> None:
     assert "ValueError: boom" in text, text
 
 
-@WINDOWS_POOL
-@pytest.mark.parametrize("thread_safe", [False, True])
+@pytest.mark.parametrize("thread_safe", [False, pytest.param(True, marks=WINDOWS_POOL)])
 def test_thread_safe_false_never_runs_two_calls_at_once(thread_safe: bool) -> None:
     lock = threading.Lock()
     state = {"active": 0, "peak": 0}
