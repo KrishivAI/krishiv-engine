@@ -42,13 +42,18 @@
 //! - the groups, the product of the keys' distinct counts, are at most
 //!   `1 / `[`MIN_REDUCTION`] of `S`'s rows;
 //! - at most one key beyond the join's own;
-//! - the other side is a table read whole. A filtered dimension prunes the
-//!   aggregated side through a runtime filter, which pays more than grouping
-//!   and which a smaller aggregate could take away by becoming the join's build
-//!   side; estimates cannot see this, as they read a key's matches from its
-//!   distinct counts (TPC-DS q12, q43 and q63 ran 1.2–1.4x slower);
+//! - the other side is a table read whole (only filters that a join key is
+//!   not NULL, as inferred join filters add them, may sit on it). A filtered
+//!   dimension prunes the aggregated side through a runtime filter, which pays
+//!   more than grouping and which a smaller aggregate could take away by
+//!   becoming the join's build side; estimates cannot see this, as they read a
+//!   key's matches from its distinct counts (TPC-DS q12, q43 and q63 ran
+//!   1.2–1.4x slower);
 //! - every key's distinct count is known (never [`StatSource::Guess`]): Umbra
 //!   measured this rewrite over 10× slower on TPC-H Q17 when it fires blind.
+//!
+//! An aggregate that `PayloadAboveAggregate` or `GroupKeyCode` takes later in
+//! the same optimization is left to them ([`Yield`]).
 //!
 //! The upper aggregate stays even when its keys are unique: states are local
 //! to each task, so equal groups of different tasks still have to merge.
@@ -57,9 +62,9 @@ use std::sync::Arc;
 
 use krishiv_common::error::KrishivError;
 use krishiv_plan::{
-    AttrId, BoundColumn, Builtin, Expr, ExprNode, FunctionKind, Grouping, JoinCondition, JoinKind,
-    Literal, LogicalPlan, PlanNode, ResolvedExpr, ResolvedFunction, may_raise,
-    partial_state_columns,
+    AttrId, BoundColumn, Builtin, Expr, ExprNode, FunctionId, FunctionKind, Grouping,
+    JoinCondition, JoinKind, Literal, LogicalPlan, PlanNode, ResolvedExpr, ResolvedFunction,
+    exact_decimal, may_raise, partial_state_columns,
 };
 use krishiv_types::DataType;
 
@@ -69,6 +74,8 @@ use crate::expr::{
     Attrs, builtin, column, conjuncts, data_type, has_outer_reference, has_subquery,
     is_deterministic, lit, output_of, references, references_into, same,
 };
+use crate::group_code;
+use crate::payload_above;
 use crate::restrict::{MAX_ID, max_id};
 use crate::stats::{RelStats, Statistics};
 
@@ -97,12 +104,28 @@ pub(crate) fn rewrite(
     stats: &dyn Statistics,
     propagate: bool,
     expand: bool,
+    yields: Yield,
 ) -> Result<(Arc<LogicalPlan>, Vec<String>), KrishivError> {
     let mut memo = Default::default();
     let mut next = max_id(&root, &mut memo).saturating_add(1);
     let mut est = Estimator::with_propagation(stats, propagate);
     let mut notes = Vec::new();
+    let mut probe = yields
+        .payload_above
+        .then(|| payload_above::Probe::new(&root, stats));
     let out = dag::rewrite_up(root, &mut |p| {
+        // A later rule that takes the aggregate goes first ([`Yield`]).
+        if probe.as_mut().is_some_and(|pr| pr.takes(&p, &mut est)) {
+            notes.push("not applied: PayloadAboveAggregate takes the aggregate".to_owned());
+            return Ok(p);
+        }
+        if yields
+            .group_code
+            .is_some_and(|(force, min)| group_code::takes(&p, &mut est, force, min))
+        {
+            notes.push("not applied: GroupKeyCode takes the aggregate".to_owned());
+            return Ok(p);
+        }
         let tried = match Shape::of(&p) {
             Some(shape) => shape.push(shape.join, &mut est, &mut next).or_else(|why| {
                 // The dimension the keys need may sit below another one.
@@ -144,6 +167,20 @@ pub(crate) fn rewrite(
         }
     })?;
     Ok((out, notes))
+}
+
+/// The rules after this one that an aggregate goes to first: where
+/// `PayloadAboveAggregate` moves the dimension above it, one aggregate below
+/// the join does the work and nothing merges above it; where `GroupKeyCode`
+/// codes its keys, its measured win (design P2b D2) stays. Both were measured
+/// while this rule never fired on TPC-DS (study 54).
+#[derive(Clone, Copy, Default)]
+pub(crate) struct Yield {
+    /// `PayloadAboveAggregate` runs later in this optimization.
+    pub(crate) payload_above: bool,
+    /// `GroupKeyCode` runs later: whether it is forced, and how many
+    /// qualifying dimensions it codes at least.
+    pub(crate) group_code: Option<(bool, usize)>,
 }
 
 /// An aggregate over projections and expansions over a join.
@@ -244,7 +281,7 @@ impl<'a> Shape<'a> {
             (right, &right_cols)
         };
         let other = if left_side { right } else { left };
-        if !plain_scan(other) {
+        if !read_whole(other, &equi_keys(on, &attrs_of(other)?)) {
             return Err("the other side is filtered or joined: its runtime filter is worth more than the aggregate".to_owned());
         }
         let null_supplying = matches!(
@@ -254,7 +291,7 @@ impl<'a> Shape<'a> {
 
         let side_est = est.plan(side);
         for (_, f) in &calls {
-            refusal_of_call(f, &side_est, null_supplying)?;
+            refusal_of_call(f, &side_est, null_supplying, false)?;
         }
 
         // The columns of `S` that stay readable: the join condition's and
@@ -478,13 +515,54 @@ fn states_of(
     Ok((states, merged))
 }
 
-/// Whether `p` is a table read whole, under projections.
-fn plain_scan(p: &LogicalPlan) -> bool {
+/// Whether `p` is a table read whole, under projections and under filters
+/// that only say a key of the join is not NULL (`keys`, from [`equi_keys`]).
+///
+/// Such a filter is what inferred join filters add to a dimension (#598). It
+/// keeps every row the inner equi-join can match, so its runtime filter
+/// prunes nothing a NULL key would not lose anyway, and the reason to refuse
+/// a filtered dimension does not hold (study 54, TPC-DS q22).
+fn read_whole(p: &LogicalPlan, keys: &Attrs) -> bool {
     match &p.node {
-        PlanNode::Project { input, .. } => plain_scan(input),
+        PlanNode::Project { input, .. } => read_whole(input, keys),
+        PlanNode::Filter { input, predicate } => {
+            conjuncts(predicate)
+                .iter()
+                .all(|c| not_null_of(c).is_some_and(|id| keys.contains(&id)))
+                && read_whole(input, keys)
+        }
         PlanNode::Scan(_) => true,
         _ => false,
     }
+}
+
+/// The column `isnotnull(c)` tests.
+fn not_null_of(e: &Expr) -> Option<AttrId> {
+    match builtin(e) {
+        Some((Builtin::IsNotNull, [a], _)) => match &a.node {
+            ExprNode::Resolved(ResolvedExpr::Column(c)) => Some(c.id),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// The columns of `cols` that a plain (not null-safe) equality conjunct of
+/// `on` compares directly: a NULL there never matches.
+fn equi_keys(on: &Arc<Expr>, cols: &[BoundColumn]) -> Attrs {
+    let mut out = Attrs::default();
+    for c in conjuncts(on) {
+        if let Some((Builtin::Eq, args, _)) = builtin(&c) {
+            for a in args {
+                if let ExprNode::Resolved(ResolvedExpr::Column(col)) = &a.node
+                    && contains(cols, col.id)
+                {
+                    out.insert(col.id);
+                }
+            }
+        }
+    }
+    out
 }
 
 /// The inputs and condition of an inner join on a deterministic condition
@@ -678,11 +756,38 @@ fn groups_of(keys: &[BoundColumn], side: &RelStats) -> Result<f64, String> {
     Ok(groups.min(side.rows))
 }
 
+/// Whether `e` may raise under ANSI, where exact decimal arithmetic
+/// ([`exact_decimal`]), alone or as an argument of `coalesce`, raises on no
+/// row.
+fn raises_beyond_exact_decimal(e: &Expr) -> bool {
+    if exact_decimal(e) {
+        return false;
+    }
+    match &e.node {
+        ExprNode::Resolved(ResolvedExpr::Alias { expr, .. }) => raises_beyond_exact_decimal(expr),
+        ExprNode::Resolved(ResolvedExpr::Function(f))
+            if f.kind == FunctionKind::Scalar
+                && f.filter.is_none()
+                && matches!(&f.id, FunctionId::Registry { name, .. } if name == "coalesce") =>
+        {
+            f.args.iter().any(|a| raises_beyond_exact_decimal(a))
+        }
+        _ => may_raise(e, true),
+    }
+}
+
 /// Why `f` cannot run below the join, on a side with these statistics.
+///
+/// With `same_rows` the call runs on exactly the rows the aggregate above
+/// reads (below an `Expand`, which drops none), so an argument may also be
+/// exact decimal arithmetic ([`exact_decimal`], under `coalesce` too: q67's
+/// `coalesce(price * quantity, 0)`), which raises on no row. Below a join it
+/// stays [`may_raise`] alone, the rule this aggregation was measured with.
 pub(crate) fn refusal_of_call(
     f: &ResolvedFunction,
     side: &RelStats,
     null_supplying: bool,
+    same_rows: bool,
 ) -> Result<(), String> {
     let name = f.id.name();
     if f.args.iter().any(|a| {
@@ -690,7 +795,11 @@ pub(crate) fn refusal_of_call(
             || has_subquery(a)
             || has_outer_reference(a)
             || is_state(a)
-            || may_raise(a, true)
+            || if same_rows {
+                raises_beyond_exact_decimal(a)
+            } else {
+                may_raise(a, true)
+            }
     }) {
         return Err(format!("{name}'s argument can raise or is not plain"));
     }
@@ -796,7 +905,7 @@ fn is_column(e: &Expr, id: AttrId) -> bool {
     matches!(&e.node, ExprNode::Resolved(ResolvedExpr::Column(c)) if c.id == id)
 }
 
-fn is_state(e: &Expr) -> bool {
+pub(crate) fn is_state(e: &Expr) -> bool {
     matches!(&e.node, ExprNode::Resolved(ResolvedExpr::StateInput { .. }))
 }
 

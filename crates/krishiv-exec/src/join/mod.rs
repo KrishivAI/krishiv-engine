@@ -160,7 +160,11 @@
 //! and, only when above zero, `direct_probe_rows` (rows probed through a
 //! tiny build's direct index, `direct.rs`), `direct_payload_rows` (its
 //! build rows decoded once, `DirectPayload`) and `direct_inner_rows` (rows
-//! an inner join over unique direct keys emitted in one pass, perf lever C).
+//! an inner join over unique direct keys emitted in one pass, perf lever C)
+//! and `probe_passthrough_rows` (rows of an inner or outer join's pairs output
+//! as their probe batch, with no gather: every row of a batch without a
+//! selection matched once, in order, and no residual filter applies; the
+//! semi, anti and outer tails are not counted).
 
 mod block;
 mod broadcast;
@@ -439,6 +443,10 @@ pub(crate) enum Counter {
     /// Probe rows the row stage kept of sparse batches, held and probed as
     /// full batches (`probe/held.rs`, K1).
     ProbeHeldRows,
+    /// Probe rows output as their own batch, with no gather: every row of
+    /// a batch without a selection, in order (`probe.rs` `Cursor::gather`,
+    /// study 39 lever (a)).
+    ProbePassthroughRows,
 }
 
 /// The build sink's counters, by name.
@@ -485,7 +493,7 @@ const PROBE_DETAIL_COUNTERS: [(Counter, &str); 3] = [
 pub(crate) struct Counters([std::sync::atomic::AtomicU64; COUNTERS]);
 
 /// One counter per [`Counter`]: the last one's index plus one.
-const COUNTERS: usize = Counter::ProbeHeldRows as usize + 1;
+const COUNTERS: usize = Counter::ProbePassthroughRows as usize + 1;
 
 impl Default for Counters {
     fn default() -> Self {
@@ -573,6 +581,10 @@ impl Counters {
         // Only a probe that held sparse batches' rows (`probe/held.rs`) reports it.
         if self.get(Counter::ProbeHeldRows) > 0 {
             out.extend(self.report(&[(Counter::ProbeHeldRows, "probe_held_rows")]));
+        }
+        // Only a probe that passed whole batches through reports it.
+        if self.get(Counter::ProbePassthroughRows) > 0 {
+            out.extend(self.report(&[(Counter::ProbePassthroughRows, "probe_passthrough_rows")]));
         }
         // Only a grace join that had a partition load refused reports it.
         if self.get(Counter::GraceLoadsRefused) > 0 {

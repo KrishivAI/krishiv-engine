@@ -176,6 +176,14 @@ fn spill_dir() -> (TestSpill, SpillScope) {
 
 /// [`spill_dir`] holding at most `max_bytes` of spill files.
 fn spill_dir_capped(max_bytes: u64) -> (TestSpill, SpillScope) {
+    spill_dir_with(&SpillConfig {
+        max_bytes,
+        ..SpillConfig::default()
+    })
+}
+
+/// [`spill_dir`] with `config`'s settings (its `dir` is replaced).
+fn spill_dir_with(config: &SpillConfig) -> (TestSpill, SpillScope) {
     let dir = tempfile::Builder::new()
         .prefix("krishiv-agg-")
         .tempdir()
@@ -184,8 +192,7 @@ fn spill_dir_capped(max_bytes: u64) -> (TestSpill, SpillScope) {
         // A path inside the temporary directory: the manager creates it
         // private (0700), whatever the umask.
         dir: dir.path().join("spill"),
-        max_bytes,
-        ..SpillConfig::default()
+        ..config.clone()
     })
     .unwrap();
     let scope = manager.scope().unwrap();

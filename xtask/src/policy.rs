@@ -317,6 +317,18 @@ pub fn run_workflow_lint(dir: &Path) -> Result<(), String> {
     }
 }
 
+/// `file` relative to `root`, its components joined with `/` on every platform:
+/// the rules match prefixes such as `crates/krishiv-exec/src/`, and reports name
+/// files the same way on Windows.
+fn repo_rel(root: &Path, file: &Path) -> String {
+    file.strip_prefix(root)
+        .unwrap_or(file)
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
 /// `xtask spdx`: `.rs` files under `crates/` and `xtask/` and `.py` files under
 /// `python/` need the SPDX header. (`bench/` and `tests/` join once their
 /// owners have added headers.)
@@ -332,7 +344,7 @@ pub fn run_spdx(root: &Path) -> Result<(), String> {
     let missing: Vec<String> = files
         .iter()
         .filter(|f| !std::fs::read_to_string(f).is_ok_and(|t| lint::has_spdx_header(&t)))
-        .map(|f| f.strip_prefix(root).unwrap_or(f).display().to_string())
+        .map(|f| repo_rel(root, f))
         .collect();
     if missing.is_empty() {
         println!("spdx: OK ({} files)", files.len());
@@ -365,11 +377,7 @@ pub fn run_source_guard(root: &Path) -> Result<(), String> {
         let Ok(text) = std::fs::read_to_string(file) else {
             continue;
         };
-        let rel = file
-            .strip_prefix(root)
-            .unwrap_or(file)
-            .display()
-            .to_string();
+        let rel = repo_rel(root, file);
         if rel.starts_with("crates/krishiv-exec/src/") {
             exec_sources.push((rel, text));
         }
@@ -387,11 +395,7 @@ pub fn run_source_guard(root: &Path) -> Result<(), String> {
         let Ok(text) = std::fs::read_to_string(file) else {
             continue;
         };
-        let rel = file
-            .strip_prefix(root)
-            .unwrap_or(file)
-            .display()
-            .to_string();
+        let rel = repo_rel(root, file);
         for (line, ident) in lint::banned_idents_in(&text) {
             hits.push(format!(
                 "{rel}:{line}: `{ident}` is banned (parquet's object_store feature is off; ADR 0028)"

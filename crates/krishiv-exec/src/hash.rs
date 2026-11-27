@@ -67,8 +67,84 @@ pub const MAX_LEVEL: u32 = (64 - 7) / PARTITION_BITS - 1;
 
 /// The partition of `hash` at re-partitioning `level` (`0..=MAX_LEVEL`).
 pub fn spill_partition(hash: u64, level: u32) -> usize {
-    let shift = 64 - 7 - PARTITION_BITS * (level.min(MAX_LEVEL) + 1);
-    usize::try_from((hash >> shift) & (PARTITIONS as u64 - 1)).unwrap_or(0)
+    spill_partition_at(hash, level, PARTITION_BITS)
+}
+
+/// The widest level 0 of an aggregate's spill runs (64 partitions; the
+/// join's `MAX_RADIX_BITS`).
+pub(crate) const MAX_LEVEL0_BITS: u32 = 6;
+
+/// The width in bits of level 0 of an aggregate's spill runs: enough
+/// partitions for every thread to take several in the disk phase,
+/// `clamp(3 + ceil_log2(parallelism), 3, 6)`, and 3 (8) in deterministic
+/// mode, so the output order never depends on the thread count.
+pub(crate) fn level0_bits(parallelism: usize, deterministic: bool) -> u32 {
+    if deterministic {
+        return PARTITION_BITS;
+    }
+    let log = parallelism.max(1).next_power_of_two().trailing_zeros();
+    (PARTITION_BITS + log).clamp(PARTITION_BITS, MAX_LEVEL0_BITS)
+}
+
+/// [`level0_bits`] capped so a level-0 file holds about one spill
+/// drop-behind window (design `0.4-agg-disk-overpartition` §2a): a writer
+/// forces writeback and syncs each file at finish, so files far under the
+/// window cost a sync each. A run is expected to be `limit / (2 *
+/// parallelism)` bytes (a task spills when its share fills; its table is
+/// between half and all of it), and the cap is `floor(log2(run / window))`,
+/// at least 3. No cap without a limit or with the window off (`0`).
+pub(crate) fn capped_level0_bits(
+    parallelism: usize,
+    deterministic: bool,
+    limit: Option<usize>,
+    window: u64,
+) -> u32 {
+    let bits = level0_bits(parallelism, deterministic);
+    let Some(limit) = limit else { return bits };
+    if window == 0 {
+        return bits;
+    }
+    let run = (limit as u64) / (2 * parallelism.max(1) as u64);
+    let files = run / window;
+    let cap = files.checked_ilog2().unwrap_or(0).max(PARTITION_BITS);
+    bits.min(cap)
+}
+
+/// The deepest level when level 0 is `level0_bits` wide (`MAX_LEVEL` at 3).
+pub(crate) const fn max_level(level0_bits: u32) -> u32 {
+    (64 - 7 - level0_bits) / PARTITION_BITS
+}
+
+/// Partitions at `level` when level 0 is `level0_bits` wide (clamped to
+/// 3..=6, as [`spill_partition_at`] clamps it).
+pub(crate) const fn partitions_at(level: u32, level0_bits: u32) -> usize {
+    if level == 0 {
+        let bits = if level0_bits < PARTITION_BITS {
+            PARTITION_BITS
+        } else if level0_bits > MAX_LEVEL0_BITS {
+            MAX_LEVEL0_BITS
+        } else {
+            level0_bits
+        };
+        1 << bits
+    } else {
+        PARTITIONS
+    }
+}
+
+/// The partition of `hash` at `level` when level 0 is `level0_bits` wide
+/// (3..=6): level 0 takes the top `level0_bits` below hashbrown's 7-bit
+/// tag, each deeper level the next [`PARTITION_BITS`]. At 3 bits this is
+/// [`spill_partition`] bit for bit.
+pub(crate) fn spill_partition_at(hash: u64, level: u32, level0_bits: u32) -> usize {
+    let bits0 = level0_bits.clamp(PARTITION_BITS, MAX_LEVEL0_BITS);
+    let level = level.min(max_level(bits0));
+    let (shift, bits) = if level == 0 {
+        (64 - 7 - bits0, bits0)
+    } else {
+        (64 - 7 - bits0 - PARTITION_BITS * level, PARTITION_BITS)
+    };
+    usize::try_from((hash >> shift) & ((1u64 << bits) - 1)).unwrap_or(0)
 }
 
 /// Encodes key columns as binary-comparable rows with Spark's key
@@ -607,5 +683,136 @@ mod tests {
         );
         let ints = arrow_schema::Field::new("i", DataType::Int32, true);
         assert!(KeyEncoder::new(&[DataType::List(Arc::new(ints))]).is_ok());
+    }
+
+    /// A spread of hashes: every bit pattern near the top and bottom.
+    fn hashes() -> impl Iterator<Item = u64> {
+        let mut x = 0x9e37_79b9_7f4a_7c15u64;
+        (0..4096).map(move |_| {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            x
+        })
+    }
+
+    #[test]
+    fn spill_partition_at_three_bits_is_the_join_layout() {
+        assert_eq!(max_level(PARTITION_BITS), MAX_LEVEL);
+        // The join's fixed-width layout before level 0 could widen: the
+        // three bits below the 7-bit tag per level, from the top down.
+        let legacy = |h: u64, level: u32| {
+            let shift = 64 - 7 - 3 * (level.min(18) + 1);
+            usize::try_from((h >> shift) & 7).unwrap_or(usize::MAX)
+        };
+        for h in hashes().chain([0, u64::MAX, 1 << 56, 1, 0b111 << 54]) {
+            for level in 0..=MAX_LEVEL + 2 {
+                assert_eq!(
+                    spill_partition(h, level),
+                    legacy(h, level),
+                    "{h:#x} {level}"
+                );
+                assert_eq!(
+                    spill_partition_at(h, level, 3),
+                    legacy(h, level),
+                    "{h:#x} {level}"
+                );
+            }
+        }
+        // Exact values: level 0 reads bits 56..54, the deepest level 2..0.
+        assert_eq!(spill_partition(0b101 << 54, 0), 5);
+        assert_eq!(spill_partition(0b101 << 54, 1), 0);
+        assert_eq!(spill_partition(0b110, MAX_LEVEL), 6);
+        assert_eq!(spill_partition(0b110, MAX_LEVEL - 1), 0);
+    }
+
+    #[test]
+    fn spill_partition_at_each_width_is_in_range_and_levels_are_disjoint() {
+        for bits in PARTITION_BITS..=MAX_LEVEL0_BITS {
+            let top = max_level(bits);
+            assert_eq!(top, if bits == 3 { 18 } else { 17 });
+            for h in hashes() {
+                for level in 0..=top {
+                    assert!(spill_partition_at(h, level, bits) < partitions_at(level, bits));
+                }
+            }
+            // A bit of level 0 never moves level 1, and the other way round.
+            let low = 64 - 7 - bits;
+            let one = 1u64 << low; // lowest bit of level 0
+            let below = 1u64 << (low - 1); // highest bit of level 1
+            assert_eq!(spill_partition_at(one, 0, bits), 1);
+            assert_eq!(spill_partition_at(one, 1, bits), 0);
+            assert_eq!(spill_partition_at(below, 0, bits), 0);
+            assert_eq!(spill_partition_at(below, 1, bits), 4);
+            // The deepest level reads the last bits and needs no shift past 0.
+            assert!(spill_partition_at(u64::MAX, top, bits) < PARTITIONS);
+        }
+    }
+
+    #[test]
+    fn level0_width_follows_the_parallelism() {
+        let want = [
+            (0, 3),
+            (1, 3),
+            (2, 4),
+            (3, 5),
+            (4, 5),
+            (5, 6),
+            (8, 6),
+            (12, 6),
+            (16, 6),
+            (256, 6),
+        ];
+        for (p, bits) in want {
+            assert_eq!(level0_bits(p, false), bits, "parallelism {p}");
+            assert_eq!(level0_bits(p, true), 3, "deterministic, parallelism {p}");
+        }
+    }
+
+    #[test]
+    fn partitions_at_clamps_as_spill_partition_at_does() {
+        for bits in 0..=9 {
+            let width = partitions_at(0, bits);
+            assert!((8..=64).contains(&width), "{bits} bits");
+            for h in [0, u64::MAX, 0x9e37_79b9_7f4a_7c15] {
+                assert!(
+                    spill_partition_at(h, 0, bits) < width,
+                    "{bits} bits, hash {h:#x}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn level0_width_is_capped_by_the_drop_behind_window() {
+        const MIB: usize = 1 << 20;
+        const GIB: usize = 1 << 30;
+        let w = 8 << 20;
+        // Design 0.4-agg-disk-overpartition §2a's table (12 threads, 8 MiB).
+        assert_eq!(capped_level0_bits(12, false, Some(8 * GIB), w), 5, "q10 8g");
+        assert_eq!(
+            capped_level0_bits(12, false, Some(12 * GIB), w),
+            6,
+            "q10 12g"
+        );
+        assert_eq!(capped_level0_bits(12, false, Some(2 * GIB), w), 3, "q67 2g");
+        // No cap with the window off or without a limit.
+        assert_eq!(capped_level0_bits(12, false, Some(2 * GIB), 0), 6);
+        assert_eq!(capped_level0_bits(12, false, None, w), 6);
+        // A tiny limit or a window larger than a run: never under 3.
+        assert_eq!(capped_level0_bits(12, false, Some(MIB), w), 3);
+        assert_eq!(capped_level0_bits(0, false, Some(16), u64::MAX), 3);
+        // Never above the parallelism rule, and 3 in deterministic mode.
+        assert_eq!(capped_level0_bits(2, false, Some(1 << 40), w), 4);
+        assert_eq!(capped_level0_bits(12, true, Some(1 << 40), w), 3);
+        for p in [1, 2, 3, 4, 8, 12, 16] {
+            for limit in [MIB, GIB, 8 * GIB, 64 * GIB] {
+                let b = capped_level0_bits(p, false, Some(limit), w);
+                assert!(
+                    (3..=level0_bits(p, false)).contains(&b),
+                    "p {p} limit {limit}"
+                );
+            }
+        }
     }
 }

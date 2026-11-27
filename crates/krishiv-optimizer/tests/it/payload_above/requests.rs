@@ -67,8 +67,8 @@ fn want(t: &str, cols: &[&str]) -> (String, Vec<String>) {
 fn a_missing_key_is_requested_once_every_other_gate_passes() {
     let stats = Asking::default();
     let plan = resolve(PLAIN);
-    let (on, notes) = optimized(&plan, &stats, true);
-    let (off, _) = optimized(&plan, &Asking::default(), false);
+    let (on, notes) = optimized_alone(&plan, &stats, true);
+    let (off, _) = optimized_alone(&plan, &Asking::default(), false);
     assert!(moved(&notes).is_empty(), "{notes:?}");
     assert!(on.structurally_eq(&off), "a request never changes the plan");
     assert_eq!(stats.wanted(), vec![want("d", &["dk"])]);
@@ -105,7 +105,7 @@ fn nothing_is_requested_when_another_gate_refuses() {
         ),
     ] {
         let stats = Asking::default();
-        let (_, notes) = optimized(&resolve(sql), &stats, true);
+        let (_, notes) = optimized_alone(&resolve(sql), &stats, true);
         assert!(stats.wanted().is_empty(), "{sql}: {:?}", stats.wanted());
         assert!(notes.iter().any(|n| n.contains(why)), "{sql}: {notes:?}");
     }
@@ -160,4 +160,18 @@ fn only_the_missing_key_is_requested() {
     stats.keys.lock().unwrap().push(want("d", &["dk"]));
     let (_, notes) = optimized(&resolve(sql), &stats, true);
     assert_eq!(stats.wanted(), vec![want("e", &["ek"])], "{notes:?}");
+}
+
+#[test]
+fn with_eager_aggregation_on_the_key_is_still_requested_and_the_rule_fires_next() {
+    // Eager aggregation takes the aggregate while the key is not counted; its
+    // probe makes the rule's request, so the next optimization moves the
+    // payload and eager aggregation yields to it.
+    let stats = Asking::default();
+    let plan = resolve(PLAIN);
+    let _ = optimized(&plan, &stats, true);
+    assert_eq!(stats.wanted(), vec![want("d", &["dk"])]);
+    stats.answer_all();
+    let (_, notes) = optimized(&plan, &stats, true);
+    assert_eq!(moved(&notes).len(), 1, "{notes:?}");
 }

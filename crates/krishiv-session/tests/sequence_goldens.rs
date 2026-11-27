@@ -23,17 +23,6 @@ const FILES: &[&str] = &[
 const KNOWN_GAPS: &[&str] = &[
     // TIMESTAMP beside TIMESTAMP_NTZ: Spark casts the NTZ bound; the registry's input rule does not yet.
     "sequence_timestamps#49",
-    // `spark.sql.legacy.interval.enabled` interval literals (`interval 1 month 2 days`, `interval 6 hours` as CALENDAR): a parser feature.
-    "sequence_calendar#68",
-    "sequence_calendar#69",
-    "sequence_calendar#70",
-    "sequence_calendar#71",
-    "sequence_calendar#72",
-    "sequence_calendar#73",
-    "sequence_calendar#74",
-    // The same legacy-interval mode with a DAY TO SECOND or zero-month step over dates: the literal is refused before the step is checked.
-    "sequence_calendar#75",
-    "sequence_calendar#76",
 ];
 
 struct Case {

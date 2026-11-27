@@ -123,7 +123,7 @@ use std::collections::HashMap;
 use super::theta_sketch::{largest_array_bytes, sketch_bytes, sketch_row_bytes};
 use super::{AggregateOutput, unsupported};
 use crate::error::{Result, internal};
-use crate::hash::{HashSeed, PARTITIONS, ProbeCount, ProbeTotals, grown, spill_partition};
+use crate::hash::{HashSeed, ProbeCount, ProbeTotals, grown, partitions_at, spill_partition_at};
 use crate::rows::{EncodedKeys, FLAT_MAX_BYTES, Hll, RowLayout};
 
 mod direct;
@@ -1410,32 +1410,43 @@ impl RowTable {
         rows.map(|i| self.refs.make(p, i)).collect()
     }
 
-    /// Row references per spill partition at `level` (by `g`) of the rows
-    /// at positions `from..` of the partition order (see [`ids`](Self::ids)).
-    pub(crate) fn ids_by_partition(&self, level: u32, from: usize) -> Vec<Vec<u32>> {
-        let mut out = vec![Vec::new(); PARTITIONS];
+    /// Row references per spill partition at `level` (by `g`; level 0
+    /// `level0_bits` wide) of the rows at positions `from..` of the
+    /// partition order (see [`ids`](Self::ids)).
+    pub(crate) fn ids_by_partition(
+        &self,
+        level: u32,
+        level0_bits: u32,
+        from: usize,
+    ) -> Vec<Vec<u32>> {
+        let mut out = vec![Vec::new(); partitions_at(level, level0_bits)];
         let mut start = 0;
         for (p, part) in self.parts.iter().enumerate() {
             let skip = from.saturating_sub(start);
             start += self.part_len(p);
             for (i, row) in part.rows.chunks_exact(self.stride).enumerate().skip(skip) {
                 let g = fin(word(row, 0), self.gseed);
-                out[spill_partition(g, level)].push(self.refs.make(p, i));
+                out[spill_partition_at(g, level, level0_bits)].push(self.refs.make(p, i));
             }
         }
         out
     }
 
     /// Row indices of a state batch per spill partition at `level`.
-    pub(crate) fn partitions_of(&self, b: &RecordBatch, level: u32) -> Result<Vec<Vec<u32>>> {
+    pub(crate) fn partitions_of(
+        &self,
+        b: &RecordBatch,
+        level: u32,
+        level0_bits: u32,
+    ) -> Result<Vec<Vec<u32>>> {
         let keys = b
             .columns()
             .get(..self.core.spec.group_by.len())
             .ok_or_else(|| internal("state batch without its keys".to_owned()))?;
         let keys = layout(&self.core)?.encode(keys)?;
-        let mut parts = vec![Vec::new(); PARTITIONS];
+        let mut parts = vec![Vec::new(); partitions_at(level, level0_bits)];
         for (i, &h) in (0u32..).zip(keys.hashes()) {
-            parts[spill_partition(fin(h, self.gseed), level)].push(i);
+            parts[spill_partition_at(fin(h, self.gseed), level, level0_bits)].push(i);
         }
         Ok(parts)
     }

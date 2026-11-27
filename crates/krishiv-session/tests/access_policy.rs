@@ -12,6 +12,10 @@
 //! * a filtered reader cannot write; denials do not reveal existence;
 //! * `PathPrefixPolicy` keeps reads and writes under its roots.
 #![cfg(test)]
+mod file_url;
+mod literal_path;
+use file_url::file_url;
+use literal_path::sql_path;
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -474,7 +478,7 @@ fn names_are_checked_as_written_and_folded() {
     // Every change asks about the read first (a filtered reader may not
     // change the securable).
     let cwd = std::env::current_dir().unwrap();
-    let loc = format!("path 'file:{}/loc'", cwd.display());
+    let loc = format!("path '{}/loc'", file_url(&cwd));
     assert_eq!(
         asked("CREATE TABLE x.y USING parquet LOCATION 'loc' AS SELECT 1"),
         [
@@ -891,15 +895,30 @@ fn a_file_in_the_way_of_the_target_is_handled_as_before() {
     assert!(target.is_dir());
 }
 
-/// A directory above the target whose name object paths would encode cannot
-/// be addressed: refused up front (it used to write into a differently named
-/// sibling directory).
+/// A directory above the target whose name object paths used to encode
+/// (non-ASCII, `~`, `%`) is written into under its own name, never into a
+/// differently named sibling.
 #[cfg(unix)]
 #[test]
-fn a_special_character_in_an_ancestor_name_is_refused() {
+fn a_special_character_in_an_ancestor_name_is_written_into() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().canonicalize().unwrap();
-    let dir = root.join("jos\u{e9}");
+    for name in ["jos\u{e9}", "RUNNER~1", "a%7Eb"] {
+        let dir = root.join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        let s = session(Arc::new(AllowAll));
+        let df = block_on(s.sql("SELECT 1 AS a")).unwrap();
+        let out = dir.join("out");
+        block_on(df.write().parquet(out.to_str().unwrap())).unwrap();
+        assert!(out.join("_SUCCESS").exists(), "{name}");
+    }
+    assert_eq!(
+        std::fs::read_dir(&root).unwrap().count(),
+        3,
+        "no sibling was created"
+    );
+    // A control character is a name no object path holds: refused up front.
+    let dir = root.join("a\u{1}b");
     std::fs::create_dir_all(&dir).unwrap();
     let s = session(Arc::new(AllowAll));
     let df = block_on(s.sql("SELECT 1 AS a")).unwrap();
@@ -909,11 +928,6 @@ fn a_special_character_in_an_ancestor_name_is_refused() {
         "KRISHIV_UNSUPPORTED_FEATURE"
     );
     assert!(!out.exists());
-    assert_eq!(
-        std::fs::read_dir(&root).unwrap().count(),
-        1,
-        "no sibling was created"
-    );
 }
 
 /// A file where a directory of the path should be fails as a failed write with the OS reason
@@ -998,11 +1012,11 @@ fn a_temporary_table_location_is_checked() {
     for sql in [
         format!(
             "CREATE TEMPORARY TABLE x USING parquet LOCATION '{}' AS SELECT 1 AS a",
-            loc.display()
+            sql_path(&loc)
         ),
         format!(
             "CREATE TEMPORARY TABLE x USING parquet LOCATION '{}'",
-            dir.path().display()
+            sql_path(dir.path())
         ),
     ] {
         assert_eq!(class(block_on(s.sql(&sql))), DENIED, "{sql}");

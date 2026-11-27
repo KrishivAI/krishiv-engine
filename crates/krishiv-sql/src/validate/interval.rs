@@ -10,9 +10,8 @@ use krishiv_common::error::{
     IntervalArithmeticOverflowWithoutSuggestion, InvalidIntervalFormatIntervalParsing,
     InvalidIntervalFormatTimezoneIntervalOutOfRange, InvalidIntervalFormatUnmatchedFormatString,
     InvalidIntervalFormatUnmatchedFormatStringWithNotice,
-    InvalidIntervalFormatUnsupportedFromToExpression, KrishivError, KrishivUnsupportedFeature,
-    LegacyErrorTemp0024, LegacyErrorTemp0026, LegacyErrorTemp0027, LegacyErrorTemp0029,
-    LegacyErrorTemp0063,
+    InvalidIntervalFormatUnsupportedFromToExpression, KrishivError, LegacyErrorTemp0024,
+    LegacyErrorTemp0026, LegacyErrorTemp0027, LegacyErrorTemp0029, LegacyErrorTemp0063,
 };
 
 use krishiv_plan::Literal as IrLiteral;
@@ -48,12 +47,13 @@ fn plan_literal(c: Calendar, named: Named) -> Result<IrLiteral, KrishivError> {
             start,
             end,
         }),
-        // Only `spark.sql.legacy.interval.enabled` lets these through the
-        // checks, and its calendar literals are not supported.
-        _ => Err(KrishivUnsupportedFeature {
-            feature: "an interval literal mixing year-month and day-time fields".to_owned(),
-        }
-        .into()),
+        // Only `spark.sql.legacy.interval.enabled` lets these through the checks: a calendar
+        // interval, as Spark's `Literal(CalendarInterval)`.
+        _ => Ok(IrLiteral::CalendarInterval {
+            months: c.months,
+            days: c.days,
+            micros: c.micros,
+        }),
     }
 }
 

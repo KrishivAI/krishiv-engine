@@ -70,7 +70,7 @@ impl Env {
             .unwrap();
         let sched = IoScheduler::new(IoConfig::default());
         let id = StoreId::new("file");
-        let hooks = HookStore::new(Arc::new(krishiv_io::SettledLocalFileSystem::new()));
+        let hooks = HookStore::new(Arc::new(crate::TestLocalStore::new()));
         sched.register_whole_listing_store(id.clone(), Arc::clone(&hooks) as _);
         let token = Arc::new(CancellationToken::new());
         let process: Arc<dyn MemoryPool> = TreePool::new(&MemoryConfig::default());

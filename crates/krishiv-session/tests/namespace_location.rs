@@ -28,6 +28,18 @@ fn location(s: &Session, name: &str) -> String {
     panic!("no Location row");
 }
 
+/// The `file:` URI of the canonical directory `dir`: `file:/a/b`, and on Windows `file:/C:/a/b`
+/// (the verbatim `\\?\` prefix `canonicalize` gives dropped, separators `/`).
+fn qualified(dir: &std::path::Path) -> String {
+    let text = dir.display().to_string();
+    if cfg!(windows) {
+        let slashed = text.replace('\\', "/");
+        format!("file:/{}", slashed.trim_start_matches("//?/"))
+    } else {
+        format!("file:{text}")
+    }
+}
+
 #[test]
 fn a_created_namespace_stores_the_qualified_normalised_location() {
     let wh = tempfile::tempdir().unwrap();
@@ -37,12 +49,9 @@ fn a_created_namespace_stores_the_qualified_normalised_location() {
         .set("spark.sql.warehouse.dir", wh_path.to_str().unwrap())
         .unwrap();
     let cases = [
-        (
-            "rel/dir//x/",
-            format!("file:{}/rel/dir/x", wh_path.display()),
-        ),
-        ("rel/./y", format!("file:{}/rel/y", wh_path.display())),
-        ("a/../b", format!("file:{}/b", wh_path.display())),
+        ("rel/dir//x/", format!("{}/rel/dir/x", qualified(&wh_path))),
+        ("rel/./y", format!("{}/rel/y", qualified(&wh_path))),
+        ("a/../b", format!("{}/b", qualified(&wh_path))),
         ("/abs//z/", "file:/abs/z".to_owned()),
         ("file:/abs2//w/", "file:/abs2/w".to_owned()),
         // The root slash stays (Hadoop Path, Spark 4.2.0 JVM).
@@ -78,7 +87,7 @@ fn set_location_qualifies_and_an_empty_location_is_refused() {
     run("ALTER NAMESPACE n1 SET LOCATION 'rel//a/./b/'").unwrap();
     assert_eq!(
         location(&s, "n1"),
-        format!("file:{}/rel/a/b", wh_path.display())
+        format!("{}/rel/a/b", qualified(&wh_path))
     );
     run("ALTER NAMESPACE n1 SET LOCATION 's3a://b/'").unwrap();
     assert_eq!(location(&s, "n1"), "s3a://b/");

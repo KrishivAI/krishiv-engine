@@ -6,10 +6,6 @@
     "s43-other": [
       24,
       26
-    ],
-    "sql-commands": [
-      6,
-      7
     ]
   },
   "file": "postgreSQL/timestamp",

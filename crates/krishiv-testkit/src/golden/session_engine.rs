@@ -193,7 +193,12 @@ impl SessionEngine {
     }
 
     fn options(&self) -> ParserOptions {
-        ParserOptions::from_conf(|k| self.conf_value(k))
+        let mut options = ParserOptions::from_conf(|k| self.conf_value(k));
+        // As the session does (`session/env.rs`): grammar that differs by Spark version follows the
+        // profile, not a conf, so the parse check reads `UNNEST(..) WITH ORDINALITY` as the run does.
+        options.spark_4_3_grammar =
+            self.profile.unwrap_or_default() >= krishiv_plan::analyzer::SparkProfile::V4_3;
+        options
     }
 
     /// Mirrors a `SET key=value` or `RESET [key]` statement into the session configuration.

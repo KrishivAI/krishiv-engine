@@ -53,3 +53,28 @@ fn under_ntz_a_plain_timestamp_special_is_local() {
         .unwrap();
     assert!(truth(&s, "select timestamp 'now' = localtimestamp()"));
 }
+
+#[test]
+fn a_special_value_zone_is_checked_and_changes_nothing() {
+    let s = Session::builder()
+        .config("spark.sql.session.timeZone", "UTC")
+        .build()
+        .unwrap();
+    for sql in [
+        // Spark ignores the zone: the day is the session zone's (postgreSQL/timestamp.sql).
+        "select timestamp 'tomorrow EST' = timestamp 'tomorrow'",
+        "select timestamp 'yesterday Zulu' = timestamp 'yesterday'",
+        "select timestamp 'today\tEST' = timestamp 'today'",
+        "select date 'today Zulu' = current_date()",
+        "select timestamp_ntz 'today Zulu' = cast(current_date() as timestamp_ntz)",
+        "select timestamp 'epoch EST' = timestamp 'epoch'",
+    ] {
+        assert!(truth(&s, sql), "{sql}");
+    }
+    for sql in [
+        "select timestamp 'now EST'",
+        "select timestamp 'tomorrow Not/AZone'",
+    ] {
+        assert!(block_on(s.sql(sql)).is_err(), "{sql}");
+    }
+}
