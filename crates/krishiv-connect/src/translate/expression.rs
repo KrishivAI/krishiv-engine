@@ -131,7 +131,7 @@ impl Translator<'_> {
                 let to = match &c.cast_to_type {
                     Some(CastToType::Type(t)) => data_type(t)?.refuse_collations()?,
                     Some(CastToType::TypeStr(s)) => {
-                        krishiv_types::parse_data_type(s)?.refuse_collations()?
+                        super::schema::parse_user_type(s, &self.conf.parser)?.refuse_collations()?
                     }
                     None => {
                         return Err(not_set(

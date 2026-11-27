@@ -213,11 +213,25 @@ pub(super) fn format_time_of_day(
     items: &[Item],
     nanos: i64,
 ) -> Result<Option<String>, KrishivError> {
-    let f = Fields::time_of_day(nanos);
     let mut out = String::new();
-    match write_items(items, &f, &mut out) {
-        Ok(()) => Ok(Some(out)),
-        Err(Fail::Absent(_)) => Ok(None),
+    Ok(write_time_of_day(items, nanos, &mut out)?.then_some(out))
+}
+
+/// [`format_time_of_day`] appended to `out`: `Ok(false)`, with `out` as it was, where that gives
+/// `Ok(None)`.
+pub(super) fn write_time_of_day(
+    items: &[Item],
+    nanos: i64,
+    out: &mut String,
+) -> Result<bool, KrishivError> {
+    let f = Fields::time_of_day(nanos);
+    let start = out.len();
+    match write_items(items, &f, out) {
+        Ok(()) => Ok(true),
+        Err(Fail::Absent(_)) => {
+            out.truncate(start);
+            Ok(false)
+        }
         Err(Fail::Err(e)) => Err(e),
     }
 }
