@@ -4,7 +4,7 @@
 //! `timestampNTZFormat` / `timeFormat` patterns.
 
 use krishiv_common::error::KrishivError;
-use krishiv_kernels::cast::{format_time, parse_time};
+use krishiv_kernels::cast::{format_time, parse_time_nanos};
 use krishiv_kernels::datetime::{ZoneRef, resolve_zone, zone_id};
 use krishiv_kernels::datetime_pattern::{DateTimePattern, Purpose, Zone};
 use krishiv_kernels::text::{
@@ -17,10 +17,6 @@ use crate::options::FormatOptions;
 const DATE_PATTERN: &str = "yyyy-MM-dd";
 const TIMESTAMP_PATTERN: &str = "yyyy-MM-dd'T'HH:mm:ss[.SSS][XXX]";
 const NTZ_PATTERN: &str = "yyyy-MM-dd'T'HH:mm:ss[.SSS]";
-
-/// Microseconds in a day, and nanoseconds in a microsecond.
-const MICROS_PER_DAY: i64 = 86_400_000_000;
-const NANOS_PER_MICRO: i64 = 1_000;
 
 /// Dates and timestamps as text in one session time zone.
 #[derive(Debug)]
@@ -37,6 +33,10 @@ pub(crate) struct Datetimes {
     /// Spark builds the formatter lazily, so a pattern that does not compile
     /// fails each value it meets (a malformed record on read, the write on
     /// writing), never the reader itself; the error is kept for that.
+    /// Known difference: a pattern with a field Spark's timestamp checks
+    /// refuse (`Q`, `E`, `F`, ...) fails here as a whole, where java.time
+    /// could still parse a time from some texts (the fixture's `qqq HH`
+    /// parses nothing).
     time: Option<Result<DateTimePattern, KrishivError>>,
     /// Today in the session zone, for a bare time of day.
     today: i32,
@@ -51,42 +51,6 @@ fn clean(s: &str) -> std::borrow::Cow<'_, str> {
     } else {
         std::borrow::Cow::Borrowed(s)
     }
-}
-
-/// `compiled` as a `TIME` pattern. Writing: java.time's `LocalTime` has only
-/// the time-of-day fields, so a pattern with any other letter (a year, a day,
-/// a zone) fails to format; reading resolves a date-time to its time of day.
-/// Known difference: a pattern with a field Spark's timestamp checks refuse
-/// (`Q`, `E`, `F`, ...) fails here as a whole, where java.time could still
-/// parse a time from some texts (the fixture's `qqq HH` parses nothing).
-fn time_pattern(
-    text: &str,
-    compiled: DateTimePattern,
-    purpose: Purpose,
-) -> Result<DateTimePattern, KrishivError> {
-    // The second gate: `DateTimePattern::new` already refused what Spark's
-    // timestamp checks refuse (so `n`, `N`, `A` never reach here, and the
-    // pad modifier `p`, which `LocalTime` would format, is refused there).
-    if matches!(purpose, Purpose::Format)
-        && let Some(c) = unquoted_letters(text).find(|c| !"HhKkmsSnNAa".contains(*c))
-    {
-        return Err(crate::error::unsupported(format!(
-            "a TIME written with the timeFormat letter '{c}'"
-        )));
-    }
-    Ok(compiled)
-}
-
-/// The pattern letters of `text` outside quotes.
-fn unquoted_letters(text: &str) -> impl Iterator<Item = char> + '_ {
-    let mut quoted = false;
-    text.chars().filter(move |c| {
-        if *c == '\'' {
-            quoted = !quoted;
-            return false;
-        }
-        !quoted && c.is_ascii_alphabetic()
-    })
 }
 
 impl Datetimes {
@@ -114,7 +78,7 @@ impl Datetimes {
         let ntz = pattern("timestampNTZFormat", NTZ_PATTERN)?;
         let time = o
             .str("timeFormat")
-            .map(|p| DateTimePattern::new(p, purpose).and_then(|c| time_pattern(p, c, purpose)));
+            .map(|p| DateTimePattern::new(p, purpose));
         let explicit = o.bool("enableDateTimeParsingFallback");
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -198,7 +162,8 @@ impl Datetimes {
 
     /// A `TIME` (nanoseconds since midnight) from text: `timeFormat` exactly
     /// when set (no fallback to the default grammar), else Spark's `TIME`
-    /// grammar, as `CAST(text AS TIME)`.
+    /// grammar. Up to nine fraction digits are kept whatever the column's
+    /// precision (Spark 4.3.0: a `TIME(3)` column reads `12:34:56.123456789`).
     ///
     /// # Errors
     /// A text the pattern refuses with an error of its own.
@@ -206,10 +171,8 @@ impl Datetimes {
         match &self.time {
             // Spark's formatter fails to build on this value: not a time.
             Some(Err(_)) => Ok(None),
-            Some(Ok(p)) => Ok(p
-                .parse_local(s, false)?
-                .map(|m| m.rem_euclid(MICROS_PER_DAY).wrapping_mul(NANOS_PER_MICRO))),
-            None => Ok(parse_time(s)),
+            Some(Ok(p)) => p.parse_time_of_day_nanos(s),
+            None => Ok(parse_time_nanos(s)),
         }
     }
 
@@ -217,13 +180,18 @@ impl Datetimes {
     /// the fraction's own digits.
     ///
     /// # Errors
-    /// A `timeFormat` that does not compile or names a field a time of day
-    /// has not (a date, a zone): Spark fails the write at the first non-NULL
-    /// `TIME` (`TASK_WRITE_FAILED`).
+    /// A `timeFormat` that does not compile, or names a field a time of day
+    /// has not (a date, a zone) outside an optional section: Spark fails the
+    /// write at the first non-NULL `TIME` (`TASK_WRITE_FAILED`). Every
+    /// fraction digit is kept (`SSSSSSSSS` prints nine).
     pub(crate) fn format_time(&self, nanos: i64) -> Result<String, KrishivError> {
         match &self.time {
             Some(Err(e)) => Err(e.clone()),
-            Some(Ok(p)) => p.format_local(nanos.div_euclid(NANOS_PER_MICRO)),
+            Some(Ok(p)) => p.format_time_of_day(nanos)?.ok_or_else(|| {
+                crate::error::unsupported(
+                    "a TIME written with a timeFormat field a time of day has not (a date or a zone)",
+                )
+            }),
             None => Ok(format_time(nanos)),
         }
     }

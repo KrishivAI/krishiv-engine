@@ -114,10 +114,8 @@ pub(crate) fn formatted_json() -> Vec<u8> {
     s.into_bytes()
 }
 
-/// A DDL schema as Arrow. Every `TIME(p)` is `Time64(ns)`, so `TIME(9)` is
-/// read as `TIME` (the engine's `TIME` precision above 6 arrives with #981).
+/// A DDL schema as Arrow (every `TIME(p)` is `Time64(ns)`).
 pub(crate) fn schema(ddl: &str) -> SchemaRef {
-    let ddl = ddl.replace("TIME(9)", "TIME").replace("TIME(0)", "TIME");
     let t = krishiv_types::parse_data_type(&format!("struct<{ddl}>")).expect("ddl");
     let DataType::Struct(fields) = t.to_arrow() else {
         panic!("struct");
@@ -153,25 +151,8 @@ pub(crate) fn rows(batches: &[RecordBatch]) -> Vec<Vec<Option<String>>> {
     out
 }
 
-/// A `TIME` text with its fraction cut to microseconds: what the engine's
-/// `TIME` grammar reads until #981 takes it to nanoseconds.
-fn micros(s: &str) -> String {
-    match s.split_once('.') {
-        Some((clock, frac)) if frac.len() > 6 && frac.bytes().all(|b| b.is_ascii_digit()) => {
-            let kept = frac[..6].trim_end_matches('0');
-            if kept.is_empty() {
-                clock.to_owned()
-            } else {
-                format!("{clock}.{kept}")
-            }
-        }
-        _ => s.to_owned(),
-    }
-}
-
-/// The expected rows of `case`; with `until_981`, the `TIME` column (index
-/// 1) cut to microseconds.
-pub(crate) fn expected(case: &Value, until_981: bool) -> Vec<Vec<Option<String>>> {
+/// The expected rows of `case`, sorted.
+pub(crate) fn expected(case: &Value) -> Vec<Vec<Option<String>>> {
     let mut out: Vec<Vec<Option<String>>> = case["rows"]
         .as_array()
         .unwrap_or_else(|| panic!("rows of {}", case["name"]))
@@ -180,16 +161,7 @@ pub(crate) fn expected(case: &Value, until_981: bool) -> Vec<Vec<Option<String>>
             r.as_array()
                 .expect("row")
                 .iter()
-                .enumerate()
-                .map(|(i, v)| {
-                    v.as_str().map(|s| {
-                        if until_981 && i == 1 {
-                            micros(s)
-                        } else {
-                            s.to_owned()
-                        }
-                    })
-                })
+                .map(|v| v.as_str().map(str::to_owned))
                 .collect()
         })
         .collect();
@@ -223,13 +195,13 @@ pub(crate) fn check_reads(fmt: &str, read: Reader<'_>) {
         let c = case(&doc, &format!("texts {fmt} {ty} PERMISSIVE"));
         let ddl = format!("id INT, t {ty}, _corrupt_record STRING");
         let got = rows(&read(&texts, &serde_json::json!({}), schema(&ddl)).expect(&ddl));
-        assert_eq!(got, expected(c, true), "{fmt} {ty} PERMISSIVE");
+        assert_eq!(got, expected(c), "{fmt} {ty} PERMISSIVE");
         checked += 1;
     }
     let c = case(&doc, &format!("texts {fmt} TIME(3) no corrupt column"));
     let got =
         rows(&read(&texts, &serde_json::json!({}), schema("id INT, t TIME(3)")).expect("read"));
-    assert_eq!(got, expected(c, true), "{fmt} no corrupt column");
+    assert_eq!(got, expected(c), "{fmt} no corrupt column");
     let c = case(&doc, &format!("texts {fmt} TIME(3) DROPMALFORMED"));
     let got = rows(
         &read(
@@ -239,7 +211,7 @@ pub(crate) fn check_reads(fmt: &str, read: Reader<'_>) {
         )
         .expect("read"),
     );
-    assert_eq!(got, expected(c, true), "{fmt} DROPMALFORMED");
+    assert_eq!(got, expected(c), "{fmt} DROPMALFORMED");
     let c = case(&doc, &format!("texts {fmt} TIME FAILFAST"));
     let e = read(
         &texts,
@@ -292,7 +264,7 @@ pub(crate) fn check_reads(fmt: &str, read: Reader<'_>) {
             )
             .expect(pattern),
         );
-        assert_eq!(got, expected(c, true), "{fmt} timeFormat {pattern}");
+        assert_eq!(got, expected(c), "{fmt} timeFormat {pattern}");
         checked += 1;
     }
     // A pattern Spark's formatter cannot build fails each value, not the read.
@@ -306,7 +278,7 @@ pub(crate) fn check_reads(fmt: &str, read: Reader<'_>) {
         )
         .expect("invalid pattern"),
     );
-    assert_eq!(got, expected(c, false), "{fmt} timeFormat invalid pattern");
+    assert_eq!(got, expected(c), "{fmt} timeFormat invalid pattern");
     let c = case(&doc, &format!("timeFormat {fmt} FAILFAST"));
     let e = read(
         &formatted,

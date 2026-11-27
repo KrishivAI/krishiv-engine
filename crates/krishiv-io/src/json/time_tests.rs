@@ -54,7 +54,7 @@ fn time_reads_only_strings() {
     );
     assert_eq!(
         got,
-        crate::text::time_golden::expected(case(&doc, "json tokens TIME"), false)
+        crate::text::time_golden::expected(case(&doc, "json tokens TIME"))
     );
 }
 
@@ -182,7 +182,7 @@ fn time_inference_matches_spark() {
         if spark_t(c) == "time(6)" {
             let got_rows =
                 rows(&read(INFER_JSON.as_bytes(), &opts, &ScanRequest::all(got)).expect(name));
-            assert_eq!(got_rows, expected(c, false), "{name} rows");
+            assert_eq!(got_rows, expected(c), "{name} rows");
         }
     }
 }

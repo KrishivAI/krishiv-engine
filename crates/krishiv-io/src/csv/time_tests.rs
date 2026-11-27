@@ -156,7 +156,7 @@ fn time_null_and_empty_values_match_spark() {
             )
             .expect(name),
         );
-        assert_eq!(got, expected(case(&doc, name), false), "{name}");
+        assert_eq!(got, expected(case(&doc, name)), "{name}");
     }
 }
 
@@ -200,7 +200,7 @@ fn time_inference_matches_spark() {
         if spark_t(c) == "time(6)" {
             let rows =
                 rows(&read(file.as_bytes(), &options(&opts), &ScanRequest::all(got)).expect(name));
-            assert_eq!(rows, expected(c, false), "{name} rows");
+            assert_eq!(rows, expected(c), "{name} rows");
         }
     }
 }
@@ -216,4 +216,53 @@ fn a_time_column_needs_the_gate_to_be_written() {
     );
     let e = encode(&written(), &options(&serde_json::json!({}))).expect_err("gate off");
     assert_eq!(e.error_class(), ErrorClass::UnsupportedTimeType, "{e}");
+}
+
+/// `timeFormat` keeps every fraction digit both ways, and a date or zone
+/// field inside an optional section is left out on writing (Spark 4.3.0's
+/// `TimeFormatter`, as `date_format` of a `TIME`: kernels'
+/// `a_time_of_day_prints_its_time_fields_only`).
+#[test]
+fn time_format_keeps_nanoseconds_and_optional_sections() {
+    use crate::text::Datetimes;
+    use krishiv_kernels::datetime_pattern::Purpose;
+    let nanos = 45_296_123_456_789; // 12:34:56.123456789
+    let dt = |p: &str, purpose| {
+        Datetimes::new(&options(&serde_json::json!({"timeFormat": p})), purpose).expect(p)
+    };
+    let nine = "HH:mm:ss.SSSSSSSSS";
+    assert_eq!(
+        dt(nine, Purpose::Parse)
+            .parse_time("12:34:56.123456789")
+            .expect("parse"),
+        Some(nanos)
+    );
+    assert_eq!(
+        dt(nine, Purpose::Format)
+            .format_time(nanos)
+            .expect("format"),
+        "12:34:56.123456789"
+    );
+    for (p, want) in [("HH[ yyyy]", "12"), ("HH:mm:ss[XXX]", "12:34:56")] {
+        assert_eq!(
+            dt(p, Purpose::Format).format_time(nanos).expect(p),
+            want,
+            "{p}"
+        );
+    }
+    let e = dt("yyyy HH", Purpose::Format)
+        .format_time(nanos)
+        .expect_err("a year");
+    assert_eq!(
+        e.error_class(),
+        ErrorClass::KrishivUnsupportedFeature,
+        "{e}"
+    );
+    // The default grammar keeps nine digits too.
+    let default =
+        Datetimes::new(&options(&serde_json::json!({})), Purpose::Parse).expect("default");
+    assert_eq!(
+        default.parse_time("12:34:56.123456789").expect("parse"),
+        Some(nanos)
+    );
 }
