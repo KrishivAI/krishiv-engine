@@ -116,6 +116,7 @@ static SPECS: LazyLock<Vec<OptionSpec>> = LazyLock::new(|| {
         flag("preferDate", Some(true), "Inference: try a DATE (and a TIME) before a TIMESTAMP.");
         conf(crate::text::TIME_TYPE_CONF, OptionKind::Bool, OptionDefault::Bool(false), crate::text::TIME_TYPE_CONF, "The session's `spark.sql.timeType.enabled`: inference may give `TIME`.");
         string("timeFormat", "The pattern of TIME values (default: Spark's TIME grammar to read, the value's own digits to write).");
+        conf(crate::text::TIME_NANOS_CONF, OptionKind::Bool, OptionDefault::Bool(true), crate::text::TIME_NANOS_CONF, "The session's `krishiv.io.text.timeNanos` (from its Spark profile): a `TIME` read keeps nine fraction digits, else six.");
         conf("timeZone", OptionKind::String, OptionDefault::Str("UTC"), "spark.sql.session.timeZone", "The time zone of timestamps without an offset.");
         conf("binaryOutputStyle", OptionKind::String, OptionDefault::Str("HEX_DISCRETE"), "spark.sql.binaryOutputStyle", "Write: how a BINARY value prints (UTF-8, BASIC, BASE64, HEX or HEX_DISCRETE).");
         string("encoding", "The charset: UTF-8, ISO-8859-1 or US-ASCII.");

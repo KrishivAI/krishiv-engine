@@ -32,6 +32,20 @@ pub static SESSION_TIME_ZONE: ConfigEntry = ConfigEntry {
     spark_alias: Some("spark.sql.session.timeZone"),
 };
 
+/// How many fraction digits a `TIME` read from a CSV or JSON file keeps.
+pub static IO_TEXT_TIME_NANOS: ConfigEntry = ConfigEntry {
+    key: "krishiv.io.text.timeNanos",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(true)),
+    doc: "Whether a `TIME` value read from a CSV or JSON file keeps nine fraction digits (Spark \
+          4.3.0) or is cut to six (Spark 4.2: every `TIME` reads as microseconds). The session \
+          sets it from its Spark profile: `true` under the 4.3 profile, `false` under older ones.",
+    scope: Scope::Session,
+    settable_by: SettableBy::Admin,
+    version_added: "0.3.1",
+    spark_alias: None,
+};
+
 /// Whether `SET PATH` is allowed.
 pub static SQL_PATH_ENABLED: ConfigEntry = ConfigEntry {
     key: "krishiv.sql.path.enabled",

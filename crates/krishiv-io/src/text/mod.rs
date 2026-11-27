@@ -35,6 +35,11 @@ pub(crate) use self::datetime::Datetimes;
 /// `CSVInferSchema` / `JsonInferSchema` read `SQLConf.isTimeTypeEnabled`.
 pub(crate) const TIME_TYPE_CONF: &str = "spark.sql.timeType.enabled";
 
+/// The session's `krishiv.io.text.timeNanos`, read as an option named as the
+/// conf: a `TIME` read keeps nine fraction digits (Spark 4.3.0) or six (Spark
+/// 4.2, which reads every `TIME` as microseconds).
+pub(crate) const TIME_NANOS_CONF: &str = "krishiv.io.text.timeNanos";
+
 /// Spark 4.3.0 refuses to write a `TIME` column (at any depth) to a text
 /// file while [`TIME_TYPE_CONF`] is off: `UNSUPPORTED_TIME_TYPE`.
 ///

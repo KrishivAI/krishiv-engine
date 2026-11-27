@@ -806,12 +806,6 @@ nanosecond timestamp type yet (planned for 0.3.1), so:
 is in microseconds: `current_time(7..9)` and `LOCALTIME(7..9)` have zero digits below the
 microsecond, where Spark 4.3 reads a nanosecond clock.
 
-Also not matched yet under the Spark 4.3 profile:
-
-- The CSV and JSON file readers have no `TIME` columns: a read with one in its schema is
-  `KRISHIV_UNSUPPORTED_FEATURE` (`from_csv`, `from_json` and `from_xml` read them). Spark 4.2 reads
-  such a column with six fraction digits; Spark 4.3 keeps every digit of the file, whatever `p`.
-
 ## HLL sketches: the compact form (`hll_sketch_agg`, `hll_union_agg`, `hll_union`)
 
 `hll_sketch_agg` returns the sketch in the compact serialized form; Spark returns the updatable one

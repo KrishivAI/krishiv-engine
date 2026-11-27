@@ -303,7 +303,7 @@ pub fn make_time(
 
 /// `nanos` cut to whole microseconds when `micros_only` (Spark 4.2's `TIME`), else unchanged.
 #[must_use]
-pub(crate) fn cut_to_micros(nanos: i64, micros_only: bool) -> i64 {
+pub fn cut_to_micros(nanos: i64, micros_only: bool) -> i64 {
     if micros_only {
         nanos.wrapping_sub(nanos.rem_euclid(1_000))
     } else {

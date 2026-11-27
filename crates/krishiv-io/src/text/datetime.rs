@@ -4,7 +4,7 @@
 //! `timestampNTZFormat` / `timeFormat` patterns.
 
 use krishiv_common::error::KrishivError;
-use krishiv_kernels::cast::{format_time, parse_time_nanos};
+use krishiv_kernels::cast::{cut_to_micros, format_time, parse_time, parse_time_nanos};
 use krishiv_kernels::datetime::{ZoneRef, resolve_zone, zone_id};
 use krishiv_kernels::datetime_pattern::{DateTimePattern, Purpose, Zone};
 use krishiv_kernels::text::{
@@ -38,6 +38,9 @@ pub(crate) struct Datetimes {
     /// could still parse a time from some texts (the fixture's `qqq HH`
     /// parses nothing).
     time: Option<Result<DateTimePattern, KrishivError>>,
+    /// A `TIME` read keeps six fraction digits, not nine (the Spark 4.2
+    /// profile, `krishiv.io.text.timeNanos` off).
+    time_micros_only: bool,
     /// Today in the session zone, for a bare time of day.
     today: i32,
     fallback_date: bool,
@@ -95,6 +98,7 @@ impl Datetimes {
             timestamp,
             ntz,
             time,
+            time_micros_only: !o.bool(crate::text::TIME_NANOS_CONF).unwrap_or(true),
         })
     }
 
@@ -163,7 +167,8 @@ impl Datetimes {
     /// A `TIME` (nanoseconds since midnight) from text: `timeFormat` exactly
     /// when set (no fallback to the default grammar), else Spark's `TIME`
     /// grammar. Up to nine fraction digits are kept whatever the column's
-    /// precision (Spark 4.3.0: a `TIME(3)` column reads `12:34:56.123456789`).
+    /// precision (Spark 4.3.0: a `TIME(3)` column reads `12:34:56.123456789`);
+    /// six under the Spark 4.2 profile (`12:34:56.123456`).
     ///
     /// # Errors
     /// A text the pattern refuses with an error of its own.
@@ -171,7 +176,10 @@ impl Datetimes {
         match &self.time {
             // Spark's formatter fails to build on this value: not a time.
             Some(Err(_)) => Ok(None),
-            Some(Ok(p)) => p.parse_time_of_day_nanos(s),
+            Some(Ok(p)) => Ok(p
+                .parse_time_of_day_nanos(s)?
+                .map(|n| cut_to_micros(n, self.time_micros_only))),
+            None if self.time_micros_only => Ok(parse_time(s)),
             None => Ok(parse_time_nanos(s)),
         }
     }

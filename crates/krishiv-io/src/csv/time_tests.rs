@@ -265,4 +265,17 @@ fn time_format_keeps_nanoseconds_and_optional_sections() {
         default.parse_time("12:34:56.123456789").expect("parse"),
         Some(nanos)
     );
+    // The Spark 4.2 profile (`krishiv.io.text.timeNanos` off) reads six digits, pattern or not.
+    let micros = 45_296_123_456_000;
+    for o in [
+        serde_json::json!({"krishiv.io.text.timeNanos": "false"}),
+        serde_json::json!({"krishiv.io.text.timeNanos": "false", "timeFormat": nine}),
+    ] {
+        let dt = Datetimes::new(&options(&o), Purpose::Parse).expect("micros");
+        assert_eq!(
+            dt.parse_time("12:34:56.123456789").expect("parse"),
+            Some(micros),
+            "{o}"
+        );
+    }
 }
