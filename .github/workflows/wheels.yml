@@ -4,7 +4,7 @@ name: Wheels
 # clean environment and tested. Two flavours per target: abi3 (one wheel for
 # CPython >= 3.11, tested on 3.11 and 3.14) and the free-threaded cp314t.
 # Targets: manylinux_2_28 x86_64 and aarch64, musllinux_1_2 x86_64, macOS
-# arm64. mimalloc is linked into every wheel (P2-T012). Nothing is published
+# arm64, Windows x86_64 (MSVC, the plain x86-64 baseline: no CPU level marker, abi3 only). mimalloc is linked into every wheel (P2-T012). Nothing is published
 # (P2-T147).
 #
 # CPU level: the x86_64 wheels are built for x86-64-v3 and the Linux aarch64
@@ -286,6 +286,47 @@ jobs:
           path: dist/*.whl
           if-no-files-found: error
 
+  # Windows x86_64 (MSVC), built and tested natively on the Windows runner (P3 Windows port, 0.3.1). The abi3
+  # flavour only (Python 3.11 and 3.14); the free-threaded flavour has no Windows leg yet. Built for the plain
+  # x86-64 baseline, so there is no CPU level marker and no compat twin. The scripts run in Git Bash.
+  windows-x86_64:
+    runs-on: windows-2025
+    timeout-minutes: 90
+    name: wheel (Windows x86_64 abi3)
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: $/.github/actions/setup-uv
+      - name: Interpreters
+        id: py
+        run: |
+          uv python install 3.11 3.14
+          echo "build=$(uv python find 3.11)" >> "$GITHUB_OUTPUT"
+      - name: Build
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+        with:
+          working-directory: python
+          target: x86_64-pc-windows-msvc
+          args: ${{ env.ABI3_ARGS }} --interpreter ${{ steps.py.outputs.build }} --out ../dist
+      - name: Test
+        run: |
+          for v in 3.11 3.14; do
+            .github/scripts/wheel-test.sh "$(uv python find "$v")" dist abi3
+          done
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: wheels-windows-x86_64-abi3
+          path: dist/*.whl
+          if-no-files-found: error
+
   # Every wheel's size, measured (artifact `wheel-sizes`; from main-measure.yml
   # `wheel-sizes-main`). On a pull request the measurement also records the main
   # commit it was made against (`measured-base-sha`). Elsewhere the sizes are
@@ -298,7 +339,7 @@ jobs:
     # request, already measured and gated there (`wheel-sizes` in pr-policy.yml).
     # A skipped job does not fail the `wheels-targets` caller or `wheels-ok`.
     if: github.event_name != 'merge_group'
-    needs: [linux-x86_64, linux-aarch64, macos-arm64]
+    needs: [linux-x86_64, linux-aarch64, macos-arm64, windows-x86_64]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:

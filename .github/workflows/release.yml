@@ -6,7 +6,7 @@ name: Release artifacts
 #
 # Manual only, on main or a `v*` tag. Produces one workflow artifact, `release-bundle`, holding:
 #   - the wheels (krishiv and krishiv-compat) from wheels.yml,
-#   - the Linux CLI binaries from binaries.yml and a macOS arm64 binary built here,
+#   - the Linux, macOS arm64 and Windows x86_64 CLI binaries from binaries.yml,
 #   - SHA256SUMS over all of them,
 #   - CycloneDX SBOMs of the facade, the CLI and the Python extension,
 #   - a GitHub build-provenance attestation for every file above (verify with
@@ -105,8 +105,8 @@ jobs:
       - name: Contents and checksums
         working-directory: bundle
         run: |
-          test "$(ls *.whl | wc -l)" -ge 9
-          for f in krishiv-linux-x86_64 krishiv-compat-linux-x86_64 krishiv-linux-aarch64 krishiv-macos-arm64 krishiv-sbom.cdx.json krishiv-cli-sbom.cdx.json krishiv-python-sbom.cdx.json; do
+          test "$(ls *.whl | wc -l)" -ge 10
+          for f in krishiv-linux-x86_64 krishiv-compat-linux-x86_64 krishiv-linux-aarch64 krishiv-macos-arm64 krishiv-windows-x86_64.exe krishiv-sbom.cdx.json krishiv-cli-sbom.cdx.json krishiv-python-sbom.cdx.json; do
             test -s "$f" || { echo "::error::missing $f"; exit 1; }
           done
           sha256sum -- * | grep -v SHA256SUMS > ../SHA256SUMS
