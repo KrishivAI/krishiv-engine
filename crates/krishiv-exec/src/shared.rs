@@ -17,7 +17,11 @@
 //! reader has claimed" of a sort's output). Each reader ([`SharedSource`])
 //! has its own cursor over the segments and, for a segment on disk, its own
 //! [`SpillReader`] charged to the reader. A batch a reader holds stays alive
-//! through its `Arc` when the segment it came from is spilled.
+//! through its `Arc` when the segment it came from is spilled. A driver
+//! claims a run of batches in memory at a time, so it can hold up to
+//! [`MAX_RUN`] batches and about [`RUN_BYTES`] (or one batch, when one is
+//! larger) that a spill of the segment reports freed: that is what a reader's
+//! drivers keep outside the pool, at most `drivers x RUN_BYTES` a reader.
 //!
 //! The coordinator keeps the sink's finalized state and drops it when the
 //! last reading pipeline ended (or the query failed), which drops the list,
@@ -230,17 +234,22 @@ impl Output {
     }
 
     /// Where the batch `idx` of segment `seg` is; in memory, it and the
-    /// batches after it in the segment, `run(left)` of them in all, where
-    /// `left` counts the batches from `idx` to the segment's end.
-    fn at(&self, seg: usize, idx: u64, run: impl FnOnce(u64) -> usize) -> Place {
+    /// batches after it in the segment, `run(left, bytes)` of them in all,
+    /// where `left` counts the batches from `idx` to the segment's end and
+    /// `bytes` is the segment's average batch size.
+    fn at(&self, seg: usize, idx: u64, run: impl FnOnce(u64, usize) -> usize) -> Place {
         match lock(&self.state).get(seg) {
             None => Place::End,
             Some(s) if idx >= s.len() => Place::NextSegment,
-            Some(Segment::Memory { batches, .. }) => {
+            Some(Segment::Memory {
+                batches,
+                reservation,
+            }) => {
                 let Ok(i) = usize::try_from(idx) else {
                     return Place::NextSegment;
                 };
-                let n = run(batches.len().saturating_sub(i) as u64).max(1);
+                let average = reservation.size() / batches.len().max(1);
+                let n = run(batches.len().saturating_sub(i) as u64, average).max(1);
                 let taken: Vec<Batch> = batches.iter().skip(i).take(n).cloned().collect();
                 if taken.is_empty() {
                     Place::NextSegment
@@ -700,7 +709,8 @@ struct ReaderGlobal {
     file_gate: tokio::sync::Mutex<()>,
     batches: u64,
     /// The drivers reading: a claim in memory takes a run of batches sized
-    /// so every driver still gets some of the segment's rest.
+    /// so every driver still gets some of the segment's rest. A sizing hint
+    /// only: it counts the local states made and never goes down.
     drivers: AtomicUsize,
 }
 
@@ -709,12 +719,19 @@ struct ReaderGlobal {
 /// batches) spin on the cursor and list locks.
 const MAX_RUN: u64 = 16;
 
-/// The batches a claim takes from the `left` of a segment in memory with
-/// `drivers` reading: half of an even share, at least 1, at most
+/// The most bytes one claim takes (by the segment's average batch size):
+/// the batches a driver queues stay alive when the segment is spilled, but
+/// the spill reports them freed. 2 MiB keeps q28's 283-row batches at
 /// [`MAX_RUN`].
-fn run_length(left: u64, drivers: usize) -> usize {
+const RUN_BYTES: usize = 2 << 20;
+
+/// The batches a claim takes from the `left` of a segment in memory with
+/// `drivers` reading and batches of `batch_bytes` on average: half of an
+/// even share, at least 1, at most [`MAX_RUN`] and [`RUN_BYTES`].
+fn run_length(left: u64, drivers: usize, batch_bytes: usize) -> usize {
     let share = left / (2 * drivers.max(1) as u64);
-    usize::try_from(share.clamp(1, MAX_RUN)).unwrap_or(1)
+    let by_bytes = u64::try_from(RUN_BYTES / batch_bytes.max(1)).unwrap_or(MAX_RUN);
+    usize::try_from(share.clamp(1, MAX_RUN.min(by_bytes.max(1)))).unwrap_or(1)
 }
 
 /// One driver of a reader.
@@ -810,10 +827,9 @@ impl Source for SharedSource {
                 g.output.query.check_cancelled()?;
                 let claimed = {
                     let mut c = lock(&g.cursor);
-                    match g
-                        .output
-                        .at(c.segment, c.index, |left| run_length(left, drivers))
-                    {
+                    match g.output.at(c.segment, c.index, |left, bytes| {
+                        run_length(left, drivers, bytes)
+                    }) {
                         Place::End => return Ok(None),
                         Place::NextSegment => {
                             c.segment += 1;
@@ -890,7 +906,18 @@ mod tests {
 
     use super::*;
     use crate::context::{ExecConfig, OperatorId, QueryId};
-    use crate::executor::{TokioExecutor, WorkloadClass};
+    use crate::executor::{ExecutorConfig, TokioExecutor, WorkloadClass};
+
+    /// The deterministic executor on a current-thread test runtime, else
+    /// one of its own (a multi-thread test runs its readers on threads).
+    fn test_executor() -> Arc<TokioExecutor> {
+        match tokio::runtime::Handle::current().runtime_flavor() {
+            tokio::runtime::RuntimeFlavor::CurrentThread => {
+                TokioExecutor::deterministic(1).unwrap()
+            }
+            _ => TokioExecutor::new(&ExecutorConfig::default()).unwrap(),
+        }
+    }
 
     fn schema() -> SchemaRef {
         Arc::new(Schema::new(vec![Field::new("v", DataType::Int64, false)]))
@@ -929,7 +956,7 @@ mod tests {
             ExecConfig::default(),
             pool.child("q", None),
         );
-        let executor = TokioExecutor::deterministic(1).unwrap();
+        let executor = test_executor();
         let ctx = TaskContext::new(
             Arc::clone(&query),
             executor,
@@ -1015,7 +1042,7 @@ mod tests {
     fn reader_ctx(query: &Arc<QueryContext>, dep: &GlobalState) -> TaskContext {
         TaskContext::new(
             Arc::clone(query),
-            TokioExecutor::deterministic(1).unwrap(),
+            test_executor(),
             SpillOwner::new(),
             OperatorId(2),
             "shared read",
@@ -1104,11 +1131,39 @@ mod tests {
 
     #[test]
     fn a_claim_takes_half_an_even_share_of_the_rest_capped() {
-        assert_eq!(run_length(200, 4), 16);
-        assert_eq!(run_length(40, 4), 5);
-        assert_eq!(run_length(7, 4), 1);
-        assert_eq!(run_length(0, 4), 1);
-        assert_eq!(run_length(5, 0), 2);
+        assert_eq!(run_length(200, 4, 1), 16);
+        assert_eq!(run_length(40, 4, 1), 5);
+        assert_eq!(run_length(7, 4, 1), 1);
+        assert_eq!(run_length(0, 4, 1), 1);
+        assert_eq!(run_length(5, 0, 1), 2);
+        assert_eq!(run_length(5, 0, 0), 2);
+    }
+
+    #[test]
+    fn a_claim_takes_at_most_run_bytes_and_at_least_one_batch() {
+        // 512 KiB batches: four make 2 MiB.
+        assert_eq!(run_length(200, 4, 512 << 10), 4);
+        // 300 KiB: six whole batches fit.
+        assert_eq!(run_length(200, 4, 300 << 10), 6);
+        // A batch past RUN_BYTES is still claimed alone.
+        assert_eq!(run_length(200, 4, 8 << 20), 1);
+        // The even share stays the cap when it is lower.
+        assert_eq!(run_length(16, 4, 512 << 10), 2);
+        // q28's batches (283 rows of a few columns) keep the count cap.
+        assert_eq!(run_length(7_032, 12, 283 * 40), 16);
+    }
+
+    #[tokio::test]
+    async fn a_claim_of_wide_batches_is_bounded_by_bytes() {
+        // 64 batches of 120,000 eight-byte values (under 1 MiB each), so a
+        // claim takes two though the even share is eight.
+        let batches: Vec<Batch> = (0..64).map(|i| batch(i * 120_000, 120_000)).collect();
+        let (_sink, global, query, _ctx, _dir) = finalized(batches, false).await;
+        let source = SharedSource::new(schema());
+        let (g, mut locals) = drivers(&source, &query, &global, 4);
+        let first = source.get_data(&mut locals[0], &g).await.unwrap().unwrap();
+        assert_eq!(values(&first)[0], 0);
+        assert_eq!(cursor_index(&g), 2);
     }
 
     #[tokio::test]
@@ -1160,5 +1215,81 @@ mod tests {
         }
         read.sort_unstable();
         assert_eq!(read, (0..120).collect::<Vec<i64>>());
+    }
+
+    /// A driver parked on the file gate looks at the cursor again once it
+    /// holds the gate: here the cursor moved one batch while it waited (as a
+    /// read by another driver moves it), so it returns the batch at the new
+    /// place, and no batch is read twice.
+    #[tokio::test]
+    async fn a_driver_parked_on_the_file_gate_reads_at_the_cursor_it_finds_under_it() {
+        let (_sink, global, query, _ctx, _dir) =
+            finalized(vec![batch(0, 2), batch(2, 2), batch(4, 2)], false).await;
+        let sink_g = global_ref::<SinkGlobal>(&global, "test").unwrap();
+        let output = Arc::clone(sink_g.done.get().unwrap());
+        assert!(output.spill_unread(usize::MAX).await.unwrap() > 0);
+        let source = SharedSource::new(schema());
+        let (g, mut locals) = drivers(&source, &query, &global, 2);
+        let reader = global_ref::<ReaderGlobal>(&g, "test").unwrap();
+        let held = reader.file_gate.lock().await;
+        let mut cx = std::task::Context::from_waker(futures::task::noop_waker_ref());
+        let mut parked = source.get_data(&mut locals[0], &g);
+        assert!(parked.as_mut().poll(&mut cx).is_pending());
+        assert_eq!(cursor_index(&g), 0, "nothing was read without the gate");
+        // Another driver's read of batch 0 moves the cursor past it.
+        lock(&reader.cursor).index = 1;
+        drop(held);
+        let got = parked.await.unwrap().unwrap();
+        assert_eq!(values(&got), vec![2, 3]);
+        let mut read = vec![0, 1];
+        read.extend(values(&got));
+        for local in &mut locals {
+            while let Some(b) = source.get_data(local, &g).await.unwrap() {
+                read.extend(values(&b));
+            }
+        }
+        assert_eq!(read, (0..6).collect::<Vec<i64>>());
+    }
+
+    /// Drivers on several threads read a list of a file segment and a memory
+    /// segment while the list is spilled under them (queued runs and the
+    /// gate both in play): every batch is read exactly once.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn drivers_on_threads_read_every_batch_once_while_the_list_spills() {
+        for round in 0..8_u64 {
+            let batches: Vec<Batch> = (0..400).map(|i| batch(i, 1)).collect();
+            // The first batch goes to a file: a file segment, then memory.
+            let (_sink, global, query, _ctx, _dir) = finalized(batches, true).await;
+            let sink_g = global_ref::<SinkGlobal>(&global, "test").unwrap();
+            let output = Arc::clone(sink_g.done.get().unwrap());
+            let source = Arc::new(SharedSource::new(schema()));
+            let (g, locals) = drivers(&source, &query, &global, 6);
+            let mut tasks = Vec::new();
+            for mut local in locals {
+                let source = Arc::clone(&source);
+                let g = Arc::clone(&g);
+                tasks.push(tokio::spawn(async move {
+                    let mut read = Vec::new();
+                    while let Some(b) = source.get_data(&mut local, &g).await.unwrap() {
+                        read.extend(values(&b));
+                        tokio::task::yield_now().await;
+                    }
+                    read
+                }));
+            }
+            let spill = tokio::spawn(async move {
+                for _ in 0..=round {
+                    tokio::task::yield_now().await;
+                }
+                output.spill_unread(usize::MAX).await.unwrap()
+            });
+            let mut read = Vec::new();
+            for t in tasks {
+                read.extend(t.await.unwrap());
+            }
+            spill.await.unwrap();
+            read.sort_unstable();
+            assert_eq!(read, (0..400).collect::<Vec<i64>>(), "round {round}");
+        }
     }
 }
