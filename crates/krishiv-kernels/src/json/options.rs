@@ -89,6 +89,9 @@ pub struct JsonOptions {
     /// is on under `timeParserPolicy=LEGACY` and when the option names no
     /// pattern, off otherwise.
     pub datetime_fallback: bool,
+    /// Spark 4.2 reads six fraction digits of a `TIME` (a `from_json` reader flag set from the
+    /// profile); 4.3 (`false`, the default) keeps nine.
+    pub time_micros_only: bool,
 }
 
 impl JsonOptions {

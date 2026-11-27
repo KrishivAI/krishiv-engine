@@ -1251,7 +1251,7 @@ fn a_moved_branch_after_an_unknown_answer_is_validated() {
 
 /// Removes the file at `url`.
 fn remove(url: &str) {
-    std::fs::remove_file(url.strip_prefix("file://").unwrap()).unwrap();
+    std::fs::remove_file(super::sink_tests::local_path(url)).unwrap();
 }
 
 /// `f`, whose snapshot's manifest list is removed once it is built: the

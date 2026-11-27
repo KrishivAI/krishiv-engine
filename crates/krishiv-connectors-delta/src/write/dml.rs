@@ -200,7 +200,11 @@ fn touched_paths(table: &DeltaTable, files: &[Vec<u8>]) -> Result<HashSet<String
 
 impl RowLevelTable for DeltaRowLevel {
     fn capabilities(&self) -> RowLevelCapabilities {
-        RowLevelCapabilities::copy_on_write(CardinalityRule::DeltaWithUnconditionalDeleteExemption)
+        let mut c = RowLevelCapabilities::copy_on_write(
+            CardinalityRule::DeltaWithUnconditionalDeleteExemption,
+        );
+        c.idempotent_commit = true;
+        c
     }
 
     fn scan(&self) -> krishiv_exec::Result<Arc<dyn ScanPushdown>> {
@@ -527,6 +531,17 @@ pub(crate) struct RowLevelPlan {
 }
 
 impl RowLevelPlan {
+    /// The commit was deduplicated (E34: an earlier attempt of the statement made the change): the
+    /// result row reports 0 rows, not this attempt's scan count, which describes a change that was
+    /// not made now.
+    pub(crate) fn deduplicated(&self) {
+        *self.outcome.lock().unwrap_or_else(PoisonError::into_inner) = Some(Outcome {
+            removed_files: 0,
+            rows: Some(0),
+            merge: None,
+        });
+    }
+
     /// The refusal of a written row, before it is written.
     pub(crate) fn check_rows(&self) -> Result<(), KrishivError> {
         match &self.refuse_rows {
@@ -886,7 +901,7 @@ fn internal(message: &str) -> KrishivError {
 }
 
 /// The partition values of scan metadata row `i`, by physical name.
-fn partition_values_of(
+pub(crate) fn partition_values_of(
     batch: &RecordBatch,
     i: usize,
 ) -> Result<crate::commit::PartitionValues, KrishivError> {

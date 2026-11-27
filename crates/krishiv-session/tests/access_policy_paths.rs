@@ -5,6 +5,8 @@
 //! of the same table (allow and deny), with the warehouse given with `file:` or without, and `CREATE
 //! TABLE`, CTAS, `saveAsTable`, `ALTER TABLE .. RENAME` and partition DDL under a `PathPrefixPolicy` of
 //! the warehouse run. `path_confinement.rs` covers the admin role matrix of the same directories.
+// Unix only: the cases plant symbolic links and mode-000 directories and use Unix path forms.
+#![cfg(unix)]
 #![cfg(test)]
 
 use std::path::Path;

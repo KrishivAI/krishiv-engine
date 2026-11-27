@@ -2234,3 +2234,193 @@ async fn other_ml_commands_stay_unsupported() {
         .expect("session");
     assert!(entry.operations().is_empty());
 }
+
+/// CON-RC-3: a temporary view made by `spark.sql` over Connect reads back through the SQL
+/// relation the client sends again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_temp_view_made_by_spark_sql_can_be_read() {
+    let run = start().await;
+    collect(
+        &run.channel,
+        request(sql_command_input(
+            "CREATE OR REPLACE TEMP VIEW t AS SELECT id, id % 7 AS k FROM range(300)",
+            1,
+        )),
+    )
+    .await
+    .expect("creates the view");
+    let r = collect(
+        &run.channel,
+        request(sql_command_input("SELECT count(*) AS n FROM t", 2)),
+    )
+    .await
+    .expect("analyzes the query");
+    let rel = sql_result(&r);
+    let r = collect(&run.channel, request(root(rel)))
+        .await
+        .expect("reads the view");
+    let got = rows(&r);
+    assert_eq!(
+        got.column(0)
+            .as_primitive::<arrow_array::types::Int64Type>()
+            .value(0),
+        300
+    );
+}
+
+/// The `show_string` text a ROOT `ShowString` answers for `input`.
+async fn shown(input: pb::Relation, num_rows: i32, truncate: i32, vertical: bool) -> String {
+    let run = start().await;
+    let show = relation(RelType::ShowString(Box::new(pb::ShowString {
+        input: Some(Box::new(input)),
+        num_rows,
+        truncate,
+        vertical,
+    })));
+    let responses = collect(&run.channel, request(root(show)))
+        .await
+        .expect("show_string");
+    let b = batches(&responses);
+    assert_eq!(b.len(), 1, "one batch");
+    let read = read_ipc(&b[0].data);
+    assert_eq!(read[0].num_rows(), 1);
+    assert_eq!(read[0].schema().field(0).name(), "show_string");
+    read[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<arrow_array::StringArray>()
+        .expect("string")
+        .value(0)
+        .to_owned()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn show_string_lays_out_the_first_rows_like_dataset_show() {
+    let text = shown(
+        sql("SELECT id, CAST(NULL AS STRING) AS s, X'0102' AS b FROM range(3)"),
+        2,
+        20,
+        false,
+    )
+    .await;
+    assert_eq!(
+        text,
+        "+---+----+-------+\n| id|   s|      b|\n+---+----+-------+\n|  0|NULL|[01 02]|\n|  1|NULL|[01 02]|\n+---+----+-------+\nonly showing top 2 rows"
+    );
+}
+
+/// Every case of the Spark 4.3.0 `show_string` fixture (`tests/scripts/gen_show_string_goldens.py`, a real
+/// Spark run) answers the same text.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn show_string_matches_the_spark_430_fixture() {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tests/fixtures/spark-4.3.0/show-string.json"
+    );
+    let fixture: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(path).expect("fixture")).expect("json");
+    let mut failures = Vec::new();
+    for case in fixture["cases"].as_array().expect("cases") {
+        let Some(expected) = case["expected"].as_str() else {
+            // The fixture lists no refusals today; an oracle error is a regenerated-fixture surprise.
+            panic!("fixture case without an expected text (oracle error?): {case}");
+        };
+        let got = shown(
+            sql(case["sql"].as_str().expect("sql")),
+            i32::try_from(case["num_rows"].as_i64().expect("n")).expect("i32"),
+            i32::try_from(case["truncate"].as_i64().expect("t")).expect("i32"),
+            case["vertical"].as_bool().expect("v"),
+        )
+        .await;
+        if got != expected {
+            failures.push(format!(
+                "{}:\n--- spark\n{expected}\n--- krishiv\n{got}",
+                case["name"]
+            ));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n\n"));
+}
+
+/// A compressed `show_string` relation answers as the uncompressed one does.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_compressed_show_string_answers_the_same_text() {
+    let run = start().await;
+    let show = relation(RelType::ShowString(Box::new(pb::ShowString {
+        input: Some(Box::new(sql("SELECT 1 AS x"))),
+        num_rows: 20,
+        truncate: 20,
+        vertical: false,
+    })));
+    let data = zstd::bulk::compress(&show.encode_to_vec(), 3).expect("zstd");
+    let plan = pb::Plan {
+        op_type: Some(OpType::CompressedOperation(Box::new(
+            pb::plan::CompressedOperation {
+                data,
+                op_type: pb::plan::compressed_operation::OpType::Relation as i32,
+                compression_codec: pb::CompressionCodec::Zstd as i32,
+            },
+        ))),
+    };
+    let responses = collect(&run.channel, request(plan)).await.expect("show");
+    let b = batches(&responses);
+    let read = read_ipc(&b[0].data);
+    assert_eq!(read[0].schema().field(0).name(), "show_string");
+    let text = read[0]
+        .column(0)
+        .as_any()
+        .downcast_ref::<arrow_array::StringArray>()
+        .expect("string")
+        .value(0)
+        .to_owned();
+    assert_eq!(text, "+---+\n|  x|\n+---+\n|  1|\n+---+\n");
+}
+
+/// Result columns that share a name show by position, as `Dataset.showString` does.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn show_string_binds_duplicate_named_columns_by_position() {
+    let text = shown(sql("SELECT 1 AS x, 2 AS x"), 20, 20, false).await;
+    assert_eq!(
+        text,
+        "+---+---+\n|  x|  x|\n+---+---+\n|  1|  2|\n+---+---+\n"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn html_string_is_refused_until_it_has_goldens() {
+    let run = start().await;
+    let html = relation(RelType::HtmlString(Box::new(pb::HtmlString {
+        input: Some(Box::new(sql("SELECT 1 AS x"))),
+        num_rows: 5,
+        truncate: 20,
+    })));
+    let err = collect(&run.channel, request(root(html)))
+        .await
+        .expect_err("html_string is refused");
+    assert!(err.to_string().contains("html_string"), "{err}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_show_string_result_over_the_byte_cap_is_refused() {
+    let run = start_with(ExecuteLimits {
+        max_batch_size: 1024,
+        ..ExecuteLimits::default()
+    })
+    .await;
+    // Empty cells still cost their headers, so many rows pass the cap without any text.
+    for input in [
+        "SELECT '' AS x FROM range(100000)",
+        "SELECT repeat('a', 5000) AS x",
+    ] {
+        let show = relation(RelType::ShowString(Box::new(pb::ShowString {
+            input: Some(Box::new(sql(input))),
+            num_rows: 1_000_000,
+            truncate: 0,
+            vertical: false,
+        })));
+        let e = collect(&run.channel, request(root(show)))
+            .await
+            .unwrap_err();
+        assert_eq!(error_class(&e), "KRISHIV_UNSUPPORTED_FEATURE", "{input}");
+    }
+}

@@ -10,6 +10,8 @@
 //! (`spark_reads_tables_after_krishiv_merge`). The session's own memory pool is back to zero after
 //! each statement, and a source larger than it spills (`a_merge_source_larger_than_memory_spills`).
 #![cfg(test)]
+mod literal_path;
+use literal_path::sql_path;
 
 use std::path::{Path, PathBuf};
 
@@ -832,7 +834,7 @@ fn a_target_or_source_column_named_like_a_presence_marker_keeps_its_values() {
             "CREATE TABLE t USING delta LOCATION '{}' AS SELECT * FROM VALUES \
              (CAST(1 AS BIGINT), false, 'a'), (CAST(2 AS BIGINT), CAST(NULL AS BOOLEAN), 'b') \
              AS x(id, __KRISHIV_MERGE_TARGET_PRESENT, v)",
-            dir.display()
+            sql_path(&dir)
         ),
     )
     .unwrap();
@@ -903,7 +905,7 @@ fn a_quoted_column_name_with_a_dot_is_a_top_level_column() {
         &session,
         &format!(
             "CREATE TABLE t (id BIGINT, `a.b` STRING, st STRUCT<x: INT>) USING delta LOCATION '{}'",
-            dir.display()
+            sql_path(&dir)
         ),
     )
     .unwrap();
@@ -1145,7 +1147,7 @@ fn a_merge_in_a_script_reads_the_script_s_locals() {
         &format!(
             "CREATE TABLE t USING delta LOCATION '{}' AS SELECT * FROM VALUES \
              (CAST(1 AS BIGINT), 'a') AS x(id, v)",
-            dir.display()
+            sql_path(&dir)
         ),
     )
     .unwrap();

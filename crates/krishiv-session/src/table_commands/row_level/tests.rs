@@ -40,6 +40,10 @@ struct Files {
     mor: AtomicBool,
     /// Each rewrite request's `read_filter`, printed (`None`: every row).
     reads: Mutex<Vec<Option<String>>>,
+    /// The table's commit records an idempotency key (E34).
+    idempotent: AtomicBool,
+    /// The idempotency key each rewrite request carried.
+    keys: Mutex<Vec<Option<String>>>,
 }
 
 fn schema() -> SchemaRef {
@@ -71,6 +75,8 @@ impl Files {
             next: AtomicUsize::new(3),
             mor: AtomicBool::new(false),
             reads: Mutex::new(Vec::new()),
+            idempotent: AtomicBool::new(false),
+            keys: Mutex::new(Vec::new()),
         })
     }
 
@@ -151,6 +157,7 @@ impl RowLevelTable for RowLevel {
             CardinalityRule::DeltaWithUnconditionalDeleteExemption,
         );
         c.merge_on_read = self.0.mor.load(Ordering::Relaxed);
+        c.idempotent_commit = self.0.idempotent.load(Ordering::Relaxed);
         c
     }
 
@@ -163,6 +170,11 @@ impl RowLevelTable for RowLevel {
     }
 
     fn rewriter(&self, request: &RowLevelWrite) -> krishiv_exec::Result<Arc<dyn Sink>> {
+        self.0
+            .keys
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(request.idempotency_key());
         if self.0.mor.load(Ordering::Relaxed) {
             return Ok(Arc::new(Swap {
                 files: Arc::clone(&self.0),
@@ -511,6 +523,49 @@ fn a_session_idempotency_key_is_refused_on_row_level_writes() {
     .expect_err("refused");
     assert!(e.message().contains("idempotencyKey"), "{e}");
     assert_eq!(files.commits.load(Ordering::Relaxed), 0);
+}
+
+/// E34: a table whose commit records a key gets the session's key in a copy-on-write request.
+#[test]
+fn a_session_idempotency_key_reaches_a_copy_on_write_rewrite_of_a_keyed_table() {
+    let files = Files::new();
+    files.idempotent.store(true, Ordering::Relaxed);
+    let (session, name) = session(&files);
+    session
+        .conf()
+        .set("krishiv.write.idempotencyKey", "job-1")
+        .unwrap();
+    run(
+        &session,
+        &name,
+        RowLevelOperation::Delete,
+        Some("id = 1"),
+        vec![],
+    );
+    let keys = files.keys.lock().unwrap().clone();
+    assert_eq!(keys, vec![Some("job-1".to_owned())]);
+}
+
+/// E34: the same through merge-on-read.
+#[test]
+fn a_session_idempotency_key_reaches_a_merge_on_read_rewrite_of_a_keyed_table() {
+    let files = Files::new();
+    files.mor.store(true, Ordering::Relaxed);
+    files.idempotent.store(true, Ordering::Relaxed);
+    let (session, name) = session(&files);
+    session
+        .conf()
+        .set("krishiv.write.idempotencyKey", "job-2")
+        .unwrap();
+    run(
+        &session,
+        &name,
+        RowLevelOperation::Delete,
+        Some("id = 1"),
+        vec![],
+    );
+    let keys = files.keys.lock().unwrap().clone();
+    assert_eq!(keys, vec![Some("job-2".to_owned())]);
 }
 
 #[test]
@@ -1094,7 +1149,7 @@ mod merge {
         let session = Session::new().unwrap();
         block_on(session.sql(&format!(
             "CREATE TABLE p (id BIGINT, s STRING) USING parquet LOCATION '{}'",
-            dir.path().display()
+            dir.path().display().to_string().replace('\\', "/")
         )))
         .unwrap();
         for (target, q) in [

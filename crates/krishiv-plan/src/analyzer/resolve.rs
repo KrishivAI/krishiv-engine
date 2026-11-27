@@ -243,6 +243,12 @@ pub(super) struct Resolver<'a> {
     pub(super) in_stored_view: bool,
     /// SQL function calls inlined so far in this analysis (a budget).
     pub(super) sql_calls: usize,
+    /// The inlined SQL function calls in the order they were inlined (an inner call before the
+    /// call around it): each call's own node, kept alive here, its function's qualified name
+    /// and its arguments. Spark checks the arguments as the call's children
+    /// (`SQLFunctionExpression`) and compares the whole call with the grouping expressions
+    /// (`Resolver::call_keys`).
+    pub(super) inlined_calls: Vec<(Arc<Expr>, String, Vec<Arc<Expr>>)>,
     /// The first aggregate over a nondeterministic argument: Spark checks
     /// it after the operators' other rules, so any other error wins.
     pub(super) pending_nondeterministic: Option<AnalysisError>,
@@ -314,6 +320,7 @@ pub(super) fn resolve(
         view_nodes: HashSet::new(),
         in_stored_view: false,
         sql_calls: 0,
+        inlined_calls: Vec::new(),
         pending_nondeterministic: None,
         built_ids: std::collections::HashSet::new(),
         declared: HashMap::new(),
@@ -990,6 +997,7 @@ impl Resolver<'_> {
             } => self.set_op(p, left, right, *op, *all, env),
             PlanNode::InlineTable { rows, columns } => self.inline_table(p, rows, columns, env),
             PlanNode::WithColumns { input, columns } => self.with_columns(p, input, columns, env),
+            PlanNode::Zip { left, right } => self.zip_relations(p, left, right, env),
             PlanNode::Limit { input, limit } => {
                 self.limit_node(p, input, limit, LimitKind::Limit, env)
             }
@@ -1072,6 +1080,7 @@ impl Resolver<'_> {
             | PlanNode::Expand { .. }
             | PlanNode::Range { .. }
             | PlanNode::PythonTableFunction { .. }
+            | PlanNode::SecurityBarrier { .. }
             | PlanNode::JoinHint { .. } => self.leaf_node(p, env),
             PlanNode::MapPartitions {
                 input,
@@ -1219,6 +1228,17 @@ impl Resolver<'_> {
                 r.widen = Some(Arc::new(Widen::Through { child: c }));
                 Ok(r)
             }
+            PlanNode::SecurityBarrier { input, policy } => {
+                let c = self.child(input, env)?;
+                let node = PlanNode::SecurityBarrier {
+                    input: Arc::clone(&c.plan),
+                    policy: policy.clone(),
+                };
+                // No widen: a parent sees only the barrier's output, never a
+                // column its input's projection dropped (sorting by a hidden
+                // column would reveal it through the row order).
+                Ok(self.make(o, node, c.out.to_vec(), &[&c]))
+            }
             PlanNode::JoinHint { input, strategy } => {
                 let c = self.child(input, env)?;
                 let node = PlanNode::JoinHint {
@@ -1291,6 +1311,7 @@ impl Resolver<'_> {
             | PlanNode::Pivot { .. }
             | PlanNode::Unpivot { .. }
             | PlanNode::SetOp { .. }
+            | PlanNode::Zip { .. }
             | PlanNode::TableFunction { .. }
             | PlanNode::InlineTable { .. }
             | PlanNode::Generate { .. }

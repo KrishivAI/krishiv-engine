@@ -21,16 +21,25 @@ with `EngineRuntimeBuilder::event_sink`. With no sink registered no event is bui
 A write whose commit fails after its result stream ended gets a second `finished` (state `failed`) with a higher
 `seq`: keep the highest. Error messages are never carried, only the error class; no credential is.
 Every event has `schema` (`krishiv.event.v1`), `minor`, `seq` (bus-wide: one counter per runtime, so interleaved queries see gaps and a reused operation id never repeats a `seq`; order the events of a query by `seq`), `emitted_at_ms`, `kind` and
-`query` (`query_id`, `session_id`, `principal`, `delegated_by`, `compute_id`, `trace_id`, `tags`).
-Consumers ignore unknown members and unknown kinds: minor versions only add.
+`query` (`query_id`, `session_id`, `principal`, `delegated_by`, `compute_id`, `trace_id`, `tags`, and `stage_id`, `task_id`,
+`attempt`, `worker_id`: always null in 0.3, where every event is about the whole query and comes from one process).
+Consumers ignore unknown members and unknown kinds: minor versions only add (minor 1: `usage.planning_ns`).
 
 ## Usage record
 
-`usage` is cumulative since the query started and keyed by `record_id = (session_id, query_id, seq)` (a caller's operation id is unique only per session). The
-event schema is experimental until the design note's review findings are settled; do not treat `record_id` as a
-billing-grade key yet. Members: `kind` (`final`), `fidelity` (`exact`), `principal`, `delegated_by`, `session_id`,
+`usage` is cumulative since the query started and keyed by `record_id`, an object with `session_id`, `query_id`,
+`worker_id` (null in 0.3) and `seq` (a caller's operation id is unique only per session). To fold records: per
+`session_id`, `query_id` and `worker_id`, keep the one with the highest `seq` (`seq` is per emitting runtime, so it
+compares only within one `worker_id`). Then combine those records (in 0.3 one, with `worker_id` null) member by member:
+sum the counters `cpu_ns`, `bytes_scanned`, `rows_read`, `files_read`, `bytes_written`, `rows_written`, `files_written`,
+`spill_bytes` and `spill_files`; take the maximum of `peak_memory_bytes`, `wall_ns` and `queued_ns` (a peak and two
+times of the whole query, which workers' records overlap); take the minimum of `window_start_ms` and the maximum of
+`window_end_ms`; `record_id` is per record (the query's key is `session_id` and `query_id`), and every other member
+is the same in all of a query's records. A null member counts as absent. The end figures are the usage of the
+`finished` or `cancelled` event. The event schema is experimental until the design note's review findings are
+settled; do not treat `record_id` as a billing-grade key yet. Members: `kind` (`final`), `fidelity` (`exact`), `principal`, `delegated_by`, `session_id`,
 `compute_id`, `workload_class`, `resource_group`, `statement_class`, `window_start_ms`, `window_end_ms`,
-`wall_ns` (queue time excluded for a query that started; a query cancelled before it started reports the time since its submission), `queued_ns`, `cpu_ns`, `bytes_scanned`, `rows_read`, `files_read`, `bytes_written`,
+`wall_ns` (queue time excluded for a query that started; a query cancelled before it started reports the time since its submission), `queued_ns`, `planning_ns` (the parse, analysis, optimization and physical planning before the run, outside `wall_ns` and the queue; null for a query that never ran or was answered from the result cache; for a write, the analysis and planning of the query it runs; minor 1), `cpu_ns`, `bytes_scanned`, `rows_read`, `files_read`, `bytes_written`,
 `rows_written`, `files_written`, `spill_bytes`, `spill_files`, `peak_memory_bytes`, `result_cache_hit`.
 The figures are the `system.queries` row's.
 

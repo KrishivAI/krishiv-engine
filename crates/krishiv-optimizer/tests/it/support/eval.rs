@@ -5,14 +5,22 @@
 //! trees are enumerated by backtracking, checking each predicate as soon as
 //! the columns it reads are bound, so unoptimised comma joins stay
 //! tractable on small data. Unsupported constructs panic.
+//!
+//! Security barriers (design `P3-E14-security-barrier.md` §7.3): [`rows_guarded`] runs a plan
+//! whose guarded scans' key columns are given. A scan inside a barrier **tags** each row its
+//! policy rejects (the test UDF `policy(k)`: false when `k` is a multiple of 7) with a hidden
+//! trailing column; the values stay real. Evaluating an expression on a tagged row panics unless
+//! it is leakproof or the policy's own call, a `Filter` inside a barrier evaluates every conjunct
+//! (no short circuit), `Filter` and `Project` carry the tag, and a tagged row that reaches the
+//! barrier's output or any other operator panics.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use krishiv_plan::{
     AttrId, Builtin, CastMode, Expr, ExprNode, FrameBound, FunctionId, FunctionKind, Grouping,
     JoinCondition, JoinKind, Literal, LogicalPlan, NullOrdering, PlanNode, ReadSource,
-    ResolvedExpr, ResolvedFunction, SortDirection, SubqueryKind, WindowSpecRef,
+    ResolvedExpr, ResolvedFunction, SortDirection, SubqueryKind, WindowSpecRef, leakproof,
 };
 use krishiv_types::DataType;
 
@@ -81,20 +89,60 @@ pub(crate) fn rows(db: &Db, plan: &LogicalPlan) -> Vec<Vec<V>> {
 
 /// Runs `plan` over `db`.
 pub(crate) fn run(db: &Db, plan: &LogicalPlan) -> Rel {
+    run_guarded(db, plan, &HashSet::new())
+}
+
+/// The rows `plan` returns over `db`, sorted, with the scans that read one of `keys` inside a
+/// barrier tagging the rows their policy rejects (module docs).
+pub(crate) fn rows_guarded(db: &Db, plan: &LogicalPlan, keys: &HashSet<AttrId>) -> Vec<Vec<V>> {
+    let mut rows = run_guarded(db, plan, keys).rows;
+    rows.sort();
+    rows
+}
+
+fn run_guarded(db: &Db, plan: &LogicalPlan, keys: &HashSet<AttrId>) -> Rel {
     Interp {
         db,
         ctes: HashMap::new(),
         cache: HashMap::new(),
+        keys,
+        depth: 0,
+        accept: false,
     }
     .plan(plan, &Env::new())
 }
 
+/// The hidden column of a row's tag: `true` when a barrier's policy rejects the row.
+const TAG: AttrId = AttrId(u64::MAX);
+
+/// Whether the policy test UDF `policy(k)` keeps a row with key `k`.
+fn policy_keeps(k: &V) -> bool {
+    match k {
+        V::Num(x) => (x / SCALE) % 7 != 0,
+        V::Str(s) => s.bytes().map(u64::from).sum::<u64>() % 7 != 0,
+        V::Date(d) => d % 7 != 0,
+        V::Null | V::Bool(_) => true,
+    }
+}
+
+fn is_policy(e: &Expr) -> bool {
+    matches!(&e.node, ExprNode::Resolved(ResolvedExpr::Function(f))
+        if matches!(&f.id, FunctionId::Udf { name, .. } if name == "policy"))
+}
+
 struct Interp<'a> {
     db: &'a Db,
+    /// The key columns of the guarded scans (their policy's argument).
+    keys: &'a HashSet<AttrId>,
+    /// How many barriers the current node is inside.
+    depth: usize,
+    /// Whether the node being run may return tagged rows (its parent carries the tag).
+    accept: bool,
     ctes: HashMap<Vec<AttrId>, Rel>,
-    /// Subquery results by plan address and the values of its outer
+    /// Subquery results by plan address, whether it ran inside a barrier (a guarded run tags
+    /// and checks its scans' rows, an unguarded one does not) and the values of its outer
     /// references.
-    cache: HashMap<(*const LogicalPlan, Vec<V>), Rel>,
+    cache: HashMap<(*const LogicalPlan, bool, Vec<V>), Rel>,
 }
 
 /// Where each attribute sits in a row.
@@ -144,6 +192,7 @@ fn conjuncts(e: &Arc<Expr>, out: &mut Vec<Arc<Expr>>) {
 
 impl Interp<'_> {
     fn plan(&mut self, p: &LogicalPlan, outer: &Env) -> Rel {
+        let accept = std::mem::take(&mut self.accept);
         match &p.node {
             PlanNode::Scan(s) => {
                 let ReadSource::Table { name, .. } = &s.source else {
@@ -156,26 +205,71 @@ impl Interp<'_> {
                     .iter()
                     .map(|c| cols.iter().position(|n| *n == c.name).unwrap())
                     .collect();
-                Rel {
+                let mut rel = Rel {
                     cols: s.output.iter().map(|c| c.id).collect(),
                     rows: rows
                         .iter()
                         .map(|r| pick.iter().map(|i| r[*i].clone()).collect())
                         .collect(),
+                };
+                let key = rel.cols.iter().position(|c| self.keys.contains(c));
+                if self.depth > 0
+                    && let Some(key) = key
+                {
+                    for r in &mut rel.rows {
+                        let rejected = !policy_keeps(&r[key]);
+                        assert!(
+                            accept || !rejected,
+                            "a row the policy rejects reaches an operator that does not carry \
+                             the tag: {:?}",
+                            p.node
+                        );
+                        if accept {
+                            r.push(V::Bool(rejected));
+                        }
+                    }
+                    // A parent that does not carry the tag gets the scan's own row shape.
+                    if accept {
+                        rel.cols.push(TAG);
+                    }
                 }
+                rel
+            }
+            PlanNode::SecurityBarrier { input, .. } => {
+                self.depth += 1;
+                self.accept = true;
+                let mut rel = self.plan(input, outer);
+                self.depth -= 1;
+                if let Some(t) = rel.cols.iter().position(|c| *c == TAG) {
+                    for r in &mut rel.rows {
+                        assert!(
+                            r[t] == V::Bool(false),
+                            "a row the policy rejects reaches the barrier's output: {r:?}"
+                        );
+                        r.remove(t);
+                    }
+                    rel.cols.remove(t);
+                }
+                rel
             }
             PlanNode::Project { input, exprs } => {
+                self.accept = accept;
                 let rel = self.plan(input, outer);
                 let ix = index(&rel.cols);
+                let tag = ix.get(&TAG).copied();
                 let rows = rel
                     .rows
                     .iter()
-                    .map(|r| exprs.iter().map(|e| self.eval(e, &ix, r, outer)).collect())
+                    .map(|r| {
+                        let mut out: Vec<V> =
+                            exprs.iter().map(|e| self.eval(e, &ix, r, outer)).collect();
+                        out.extend(tag.map(|t| r[t].clone()));
+                        out
+                    })
                     .collect();
-                Rel {
-                    cols: exprs.iter().map(|e| output(e)).collect(),
-                    rows,
-                }
+                let mut cols: Vec<AttrId> = exprs.iter().map(|e| output(e)).collect();
+                cols.extend(tag.map(|_| TAG));
+                Rel { cols, rows }
             }
             PlanNode::Expand {
                 input,
@@ -209,12 +303,23 @@ impl Interp<'_> {
                 {
                     return self.inner_joins(input, preds, outer);
                 }
+                self.accept = accept;
                 let rel = self.plan(input, outer);
                 let ix = index(&rel.cols);
+                let inside = self.depth > 0;
                 let rows = rel
                     .rows
                     .into_iter()
-                    .filter(|r| self.eval(predicate, &ix, r, outer) == V::Bool(true))
+                    .filter(|r| {
+                        if inside {
+                            // Every conjunct on every row, no short circuit (§7.3).
+                            let all: Vec<V> =
+                                preds.iter().map(|c| self.eval(c, &ix, r, outer)).collect();
+                            all.iter().all(|v| *v == V::Bool(true))
+                        } else {
+                            self.eval(predicate, &ix, r, outer) == V::Bool(true)
+                        }
+                    })
                     .collect();
                 Rel {
                     cols: rel.cols,
@@ -275,6 +380,11 @@ impl Interp<'_> {
                         groups.len() - 1
                     });
                     groups[g].1.push(r);
+                }
+                // As the executor's: a keyless partial aggregate yields its
+                // empty states over empty input.
+                if keys.is_empty() && groups.is_empty() {
+                    groups.push((Vec::new(), Vec::new()));
                 }
                 let rows = groups
                     .iter()
@@ -337,6 +447,7 @@ impl Interp<'_> {
                 rel
             }
             PlanNode::SubqueryAlias { input, .. } | PlanNode::Repartition { input, .. } => {
+                self.accept = accept;
                 self.plan(input, outer)
             }
             PlanNode::WithCte { input, ctes } => {
@@ -632,6 +743,47 @@ impl Interp<'_> {
         let ExprNode::Resolved(ResolvedExpr::Function(f)) = &e.node else {
             panic!("not a partial aggregate call: {e}")
         };
+        // A partial merge (`rollup_chain`): each state column merged as its
+        // own state, a NULL state empty.
+        if let Some(ExprNode::Resolved(ResolvedExpr::StateInput { columns, .. })) =
+            f.args.first().map(|a| &a.node)
+        {
+            let name = f.id.name();
+            // A decimal `sum`'s state is (sum, nonempty): a NULL sum with
+            // `nonempty` set overflowed, and the merged sum is NULL too.
+            if name == "sum" && columns.len() == 2 {
+                let overflowed = g.iter().any(|r| {
+                    self.eval(&columns[0], ix, r, outer) == V::Null
+                        && self.eval(&columns[1], ix, r, outer) == V::Bool(true)
+                });
+                if overflowed {
+                    return vec![V::Null, V::Bool(true)];
+                }
+            }
+            return columns
+                .iter()
+                .enumerate()
+                .map(|(i, c)| {
+                    let vals: Vec<V> = g
+                        .iter()
+                        .map(|r| self.eval(c, ix, r, outer))
+                        .filter(|v| *v != V::Null)
+                        .collect();
+                    let num = |v: &V| match v {
+                        V::Num(n) => *n,
+                        v => panic!("not a number: {v:?}"),
+                    };
+                    match (name, i) {
+                        ("min", _) => vals.iter().min().cloned().unwrap_or(V::Null),
+                        ("max", _) => vals.iter().max().cloned().unwrap_or(V::Null),
+                        ("count", _) | ("avg" | "mean", 1) => V::Num(vals.iter().map(num).sum()),
+                        ("sum", 1) => V::Bool(vals.contains(&V::Bool(true))),
+                        _ if vals.is_empty() => V::Null,
+                        _ => V::Num(vals.iter().map(num).sum()),
+                    }
+                })
+                .collect();
+        }
         let as_call = |this: &mut Self, name: &str| {
             let mut c = f.clone();
             c.id = FunctionId::Registry {
@@ -789,6 +941,14 @@ impl Interp<'_> {
     }
 
     fn eval(&mut self, e: &Expr, ix: &HashMap<AttrId, usize>, row: &[V], outer: &Env) -> V {
+        if let Some(t) = ix.get(&TAG)
+            && row[*t] == V::Bool(true)
+        {
+            assert!(
+                leakproof(e, true) || is_policy(e),
+                "an expression that is not leakproof runs on a row the policy rejects: {e}"
+            );
+        }
         match &e.node {
             ExprNode::Literal(l) => literal(l),
             ExprNode::Resolved(ResolvedExpr::Column(c)) => match ix.get(&c.id) {
@@ -846,7 +1006,11 @@ impl Interp<'_> {
                 let values = refs
                     .iter()
                     .map(|id| env.get(id).cloned().unwrap_or(V::Null));
-                let key = (std::ptr::from_ref(&**plan), values.collect());
+                let key = (
+                    std::ptr::from_ref(&**plan),
+                    self.depth > 0,
+                    values.collect(),
+                );
                 if !self.cache.contains_key(&key) {
                     let rel = self.plan(plan, &env);
                     self.cache.insert(key.clone(), rel);
@@ -1133,6 +1297,18 @@ fn apply(name: &str, a: &[V]) -> V {
                 let len = usize::try_from((l / SCALE).max(0)).unwrap();
                 V::Str(s.chars().skip(start).take(len).collect::<String>().into())
             }
+            _ => V::Null,
+        },
+        // The barrier tests' UDFs: `leak` stands for the query's `abs`; `mask` changes every
+        // number and string it masks, so a plan that dropped a mask gives other rows.
+        "policy" => V::Bool(policy_keeps(&a[0])),
+        "mask" => match &a[0] {
+            V::Num(x) => V::Num(x + 1000 * SCALE),
+            V::Str(s) => V::Str(format!("#{s}").into()),
+            v => v.clone(),
+        },
+        "leak" => match &a[0] {
+            V::Num(x) => V::Num(x.abs()),
             _ => V::Null,
         },
         other => panic!("function {other}"),

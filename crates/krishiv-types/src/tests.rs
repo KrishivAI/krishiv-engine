@@ -11,7 +11,7 @@ use crate::arrow::{
 };
 use crate::{
     ArrayType, DataType, DecimalStorage, DecimalType, MapType, Metadata, Srid, StructField,
-    StructType, UdtType, parse_data_type,
+    StructType, TypeGrammar, UdtType, parse_data_type, parse_data_type_in,
 };
 
 fn dec(p: u32, s: u32) -> DataType {
@@ -156,21 +156,159 @@ fn spatial_fields_need_their_tag() {
     );
 }
 
+/// A user's type string under `spark.sql.timestampType = TIMESTAMP_NTZ` (Spark
+/// `DataTypeAstBuilder.visitPrimitiveDataType`): a bare `TIMESTAMP`, at any depth, and 4.3's
+/// `TIMESTAMP(6)` (`06` too) are `TIMESTAMP_NTZ`; `TIMESTAMP_LTZ` and the multi-word forms keep
+/// their type; the canonical parse keeps `timestamp` LTZ.
+#[test]
+fn a_bare_timestamp_follows_the_session_timestamp_type() {
+    let ntz = |s: &str, g| crate::parse_data_type_with(s, g, true);
+    assert_eq!(
+        ntz("timestamp", TypeGrammar::V4_2),
+        Ok(DataType::TimestampNtz)
+    );
+    assert_eq!(
+        ntz("TIMESTAMP(6)", TypeGrammar::V4_3),
+        Ok(DataType::TimestampNtz)
+    );
+    assert_eq!(
+        ntz("timestamp(06)", TypeGrammar::V4_3),
+        Ok(DataType::TimestampNtz)
+    );
+    assert_eq!(
+        ntz("timestamp_ltz", TypeGrammar::V4_3),
+        Ok(DataType::Timestamp)
+    );
+    assert_eq!(
+        ntz("timestamp with local time zone", TypeGrammar::V4_3),
+        Ok(DataType::Timestamp)
+    );
+    assert_eq!(
+        ntz("array<timestamp>", TypeGrammar::V4_3),
+        parse_data_type("array<timestamp_ntz>")
+    );
+    assert_eq!(
+        ntz("struct<a: map<string, timestamp>>", TypeGrammar::V4_3),
+        parse_data_type("struct<a: map<string, timestamp_ntz>>")
+    );
+    assert!(ntz("timestamp(6)", TypeGrammar::V4_2).is_err());
+    assert_eq!(
+        crate::parse_data_type_with("timestamp", TypeGrammar::V4_3, false),
+        Ok(DataType::Timestamp)
+    );
+    assert_eq!(parse_data_type("timestamp"), Ok(DataType::Timestamp));
+}
+
+/// The type grammar of a release (R3 review findings 7, 14, 15): 4.2 caps `TIME` at 6 and has no
+/// timestamp precision; 4.3 takes `TIME(0..=9)` and `TIMESTAMP_NTZ(6)`, refuses 7..=9, and words
+/// the range as `[0, 9]`.
+#[test]
+fn the_type_grammar_follows_the_release() {
+    let class = |r: crate::error::Result<DataType>| r.err().map(|e| e.error_class());
+    let v42 = |s: &str| parse_data_type_in(s, TypeGrammar::V4_2);
+    let v43 = |s: &str| parse_data_type_in(s, TypeGrammar::V4_3);
+    assert_eq!(v43("time(9)"), Ok(DataType::Time { precision: 9 }));
+    assert_eq!(
+        class(v42("time(7)")),
+        Some(ErrorClass::UnsupportedTimePrecision)
+    );
+    assert!(
+        v42("time(7)")
+            .unwrap_err()
+            .to_string()
+            .contains("range [0, 6]")
+    );
+    assert!(
+        v43("time(10)")
+            .unwrap_err()
+            .to_string()
+            .contains("range [0, 9]")
+    );
+    assert_eq!(v43("timestamp_ntz(6)"), Ok(DataType::TimestampNtz));
+    assert_eq!(v43("timestamp_ltz(06)"), Ok(DataType::Timestamp));
+    assert_eq!(
+        class(v43("timestamp_ntz(9)")),
+        Some(ErrorClass::KrishivUnsupportedFeature)
+    );
+    assert_eq!(
+        class(v43("timestamp_ntz(3)")),
+        Some(ErrorClass::InvalidTimestampPrecision)
+    );
+    assert_eq!(
+        class(v42("timestamp_ntz(6)")),
+        Some(ErrorClass::UnsupportedDatatype)
+    );
+    // Schema JSON: 6 is the microsecond type, 7..=9 refused, anything else malformed.
+    let field = |t: &str| {
+        format!(
+            r#"{{"type":"struct","fields":[{{"name":"a","type":"{t}","nullable":true,"metadata":{{}}}}]}}"#
+        )
+    };
+    let ntz = DataType::from_json(&field("timestamp_ntz(6)")).unwrap();
+    assert_eq!(ntz.simple_string(), "struct<a:timestamp_ntz>");
+    assert_eq!(
+        class(DataType::from_json(&field("timestamp_ltz(9)"))),
+        Some(ErrorClass::KrishivUnsupportedFeature)
+    );
+    assert_eq!(
+        class(DataType::from_json(&field("timestamp_ntz(2)"))),
+        Some(ErrorClass::InvalidTimestampPrecision)
+    );
+    assert_eq!(
+        class(DataType::from_json(&field("timestamp_ntz(x)"))),
+        Some(ErrorClass::InvalidJsonDataType)
+    );
+    // Spark 4.2.0's `nameToType` has no `timestamp_ntz(p)` / `timestamp_ltz(p)`: under 4.2 every
+    // such name is `INVALID_JSON_DATA_TYPE` naming it, but `(6)`, which Krishiv still reads.
+    for name in [
+        "timestamp_ntz(9)",
+        "timestamp_ltz(7)",
+        "timestamp_ntz(3)",
+        "timestamp_ltz(0)",
+    ] {
+        let e = DataType::from_json_in(&field(name), TypeGrammar::V4_2).unwrap_err();
+        assert_eq!(e.error_class(), ErrorClass::InvalidJsonDataType, "{name}");
+        assert_eq!(
+            e.message_parameters(),
+            [("invalidType", name.to_owned())],
+            "{name}"
+        );
+    }
+    let ntz = DataType::from_json_in(&field("timestamp_ntz(6)"), TypeGrammar::V4_2).unwrap();
+    assert_eq!(ntz.simple_string(), "struct<a:timestamp_ntz>");
+    assert_eq!(
+        class(DataType::from_json_in(
+            &field("timestamp_ntz(9)"),
+            TypeGrammar::V4_3
+        )),
+        Some(ErrorClass::KrishivUnsupportedFeature)
+    );
+    // A `time(9)` read under 4.2 is refused with 4.2's text.
+    let t9 = DataType::from_json_in(&field("time(9)"), TypeGrammar::V4_2).unwrap_err();
+    assert!(t9.to_string().contains("range [0, 6]"));
+    assert!(DataType::from_json_in(&field("time(9)"), TypeGrammar::V4_3).is_ok());
+    // A `time(10)` parse error is worded as the selected release words it.
+    let t10 = DataType::from_json_in(&field("time(10)"), TypeGrammar::V4_2).unwrap_err();
+    assert!(t10.to_string().contains("range [0, 6]"), "{t10}");
+    let t10 = DataType::from_json_in(&field("time(10)"), TypeGrammar::V4_3).unwrap_err();
+    assert!(t10.to_string().contains("range [0, 9]"), "{t10}");
+}
+
 #[test]
 fn time_precision_bounds_follow_spark() {
-    for p in 0..=6 {
+    for p in 0..=9 {
         let t = DataType::time(p);
         assert_eq!(
             t.as_ref().map(DataType::simple_string),
             Ok(format!("time({p})"))
         );
     }
-    let e = DataType::time(7).err();
+    let e = DataType::time(10).err();
     assert_eq!(
         e.map(|e| e.to_string()).as_deref(),
         Some(
-            "[UNSUPPORTED_TIME_PRECISION] The seconds precision 7 of the TIME data type is out \
-             of the supported range [0, 6]. SQLSTATE: 0A001"
+            "[UNSUPPORTED_TIME_PRECISION] The seconds precision 10 of the TIME data type is out \
+             of the supported range [0, 9]. SQLSTATE: 0A001"
         )
     );
     assert!(DataType::time(u32::MAX).is_err());
@@ -286,8 +424,10 @@ fn time_and_spatial_types_round_trip_through_json() {
     .into();
     assert_eq!(DataType::from_json(&nested.json()).as_ref(), Ok(&nested));
     let class = |s: &str| DataType::from_json(s).map_err(|e| e.error_class());
+    // `time(7)` is Spark 4.3's (the default grammar); Spark 4.2 refuses it.
+    assert_eq!(class("\"time(7)\""), Ok(DataType::Time { precision: 7 }));
     assert_eq!(
-        class("\"time(7)\""),
+        DataType::from_json_in("\"time(7)\"", TypeGrammar::V4_2).map_err(|e| e.error_class()),
         Err(ErrorClass::UnsupportedTimePrecision)
     );
     assert_eq!(
@@ -581,10 +721,15 @@ fn parser_error_classes() {
         class("array<char(3)>"),
         Err(ErrorClass::KrishivUnsupportedFeature)
     );
-    let e = parse_data_type("timestamp(3)").err();
+    // Spark 4.2 has no timestamp precision; 4.3 (the default grammar) takes only 6 and 7..=9.
+    let e = parse_data_type_in("timestamp(3)", TypeGrammar::V4_2).err();
     assert_eq!(
         e.map(|e| e.to_string()).as_deref(),
         Some("[UNSUPPORTED_DATATYPE] Unsupported data type \"TIMESTAMP(3)\". SQLSTATE: 0A000")
+    );
+    assert_eq!(
+        parse_data_type("timestamp(3)").map_err(|e| e.error_class()),
+        Err(ErrorClass::InvalidTimestampPrecision)
     );
 }
 

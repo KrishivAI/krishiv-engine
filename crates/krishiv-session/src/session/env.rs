@@ -4,7 +4,7 @@
 use super::*;
 
 /// The parser's configs (`ParserOptions::from_conf` reads these).
-pub(super) const PARSER_KEYS: [&str; 17] = [
+pub(super) const PARSER_KEYS: [&str; 21] = [
     "spark.sql.ansi.enabled",
     "spark.sql.ansi.enforceReservedKeywords",
     "spark.sql.ansi.doubleQuotedIdentifiers",
@@ -12,6 +12,7 @@ pub(super) const PARSER_KEYS: [&str; 17] = [
     "spark.sql.parser.escapedStringLiterals",
     "spark.sql.legacy.bangEqualsNot",
     "spark.sql.legacy.identifierClause",
+    "spark.sql.legacy.interval.enabled",
     "spark.sql.legacy.consecutiveStringLiterals.enabled",
     "spark.sql.sources.bucketing.maxBuckets",
     "spark.sql.parser.singleCharacterPipeOperator.enabled",
@@ -20,8 +21,11 @@ pub(super) const PARSER_KEYS: [&str; 17] = [
     "spark.sql.parser.quotedRegexColumnNames",
     "spark.sql.legacy.parser.havingWithoutGroupByAsWhere",
     "spark.sql.collation.schemaLevel.enabled",
+    "spark.sql.timestampNanosTypes.enabled",
+    "spark.sql.timestampType",
     "spark.sql.join.asofJoin.enabled",
     "spark.sql.timeTravel.atSyntax.enabled",
+    "spark.sql.crossJoin.enabled",
 ];
 
 /// `KRISHIV_UNSUPPORTED_FEATURE` for a statement `Session::sql` cannot run yet.
@@ -68,10 +72,16 @@ pub(super) fn attach_analysis(e: AnalysisError, text: Option<&RedactedSql>) -> K
     }
 }
 
-/// The parser options `config` sets.
-pub(super) fn parser_options(config: &Config) -> ParserOptions {
+/// The parser options `config` sets, with the grammar of `profile`: from Spark 4.3 on, its type grammar
+/// ([`ParserOptions::spark_4_3`]) and its query and command grammar ([`ParserOptions::spark_4_3_grammar`]).
+pub(super) fn parser_options(config: &Config, profile: SparkProfile) -> ParserOptions {
     let values = conf_values(config, &PARSER_KEYS);
-    ParserOptions::from_conf(|k| values.get(k).map(String::as_str))
+    let spark_4_3 = profile >= SparkProfile::V4_3;
+    ParserOptions {
+        spark_4_3,
+        spark_4_3_grammar: spark_4_3,
+        ..ParserOptions::from_conf(|k| values.get(k).map(String::as_str))
+    }
 }
 
 /// The values of `keys` that are set or have a default.
@@ -153,6 +163,52 @@ pub(crate) struct QueryEnv {
     /// Why this query's spill directory could not be set up, if it could not (PY-078): the query
     /// then reports its memory error as that failure. Shared by the clones of one statement's env.
     pub(crate) spill_failure: Arc<std::sync::Mutex<Option<KrishivError>>>,
+    /// How long the query took to plan (MODES-2): shared by the clones of one statement's env, so the
+    /// parse, the analysis and an action's physical planning add to one clock that the run reads
+    /// into `system.queries.planning_ns`.
+    pub(crate) planning: Arc<PlanningClock>,
+}
+
+/// The planning time of one statement's query: from the start of its parse (or of its analysis, for
+/// a query no SQL text started) to the end of its analysis, plus the optimization and physical
+/// planning of each run (file listing and footers included). A run takes what has accumulated
+/// since the previous run ([`Self::take`]): the analysis counts once, in the first run that uses it.
+#[derive(Debug, Default)]
+pub(crate) struct PlanningClock {
+    /// When the statement's text began to parse; unset for a query no SQL text started.
+    parse_started: std::sync::OnceLock<std::time::Instant>,
+    /// Nanoseconds planned and not yet taken by a run.
+    pending_ns: std::sync::atomic::AtomicU64,
+}
+
+impl PlanningClock {
+    /// Marks the start of the statement's parse; a later call (a statement the first one runs)
+    /// leaves the first start.
+    pub(crate) fn parse_started(&self, at: std::time::Instant) {
+        let _ = self.parse_started.set(at);
+    }
+
+    /// Adds the analysis that began at `began` and ends now: from the statement's parse when it had
+    /// one (the parse and the access checks before the analysis count too), else from `began`.
+    pub(crate) fn analysis_done(&self, began: std::time::Instant) {
+        let from = self.parse_started.get().copied().unwrap_or(began);
+        self.add(from.elapsed());
+    }
+
+    /// Adds `spent` (one physical planning of a run).
+    pub(crate) fn add(&self, spent: std::time::Duration) {
+        let ns = u64::try_from(spent.as_nanos()).unwrap_or(u64::MAX);
+        self.pending_ns
+            .fetch_add(ns, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// The planning time accumulated since the previous run, as `system.queries.planning_ns`.
+    pub(crate) fn take(&self) -> i64 {
+        let ns = self
+            .pending_ns
+            .swap(0, std::sync::atomic::Ordering::Relaxed);
+        i64::try_from(ns).unwrap_or(i64::MAX)
+    }
 }
 
 /// Whether a [`QueryEnv`] is a trial analysis; its flag is private to this module, so it is set only
@@ -361,5 +417,42 @@ mod quiet_tests {
         let kept = block_on(df.trial_analysis()).unwrap();
         assert!(kept.env.asks_policy(policy));
         assert!(block_on(df.analysis()).unwrap().env.asks_policy(policy));
+    }
+}
+
+#[cfg(test)]
+mod planning_clock_tests {
+    use super::PlanningClock;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn a_run_takes_what_was_planned_since_the_previous_run() {
+        let clock = PlanningClock::default();
+        clock.add(Duration::from_nanos(7));
+        clock.add(Duration::from_nanos(5));
+        assert_eq!(clock.take(), 12);
+        // A second run of the same analysis planned nothing more.
+        assert_eq!(clock.take(), 0);
+    }
+
+    #[test]
+    fn the_analysis_counts_from_the_start_of_the_parse() {
+        let clock = PlanningClock::default();
+        let parsed = Instant::now();
+        clock.parse_started(parsed);
+        // A nested statement's start leaves the outer one.
+        clock.parse_started(parsed + Duration::from_secs(60));
+        std::thread::sleep(Duration::from_millis(2));
+        clock.analysis_done(Instant::now());
+        assert!(clock.take() >= 2_000_000);
+    }
+
+    #[test]
+    fn without_a_parse_the_analysis_counts_from_its_own_start() {
+        let clock = PlanningClock::default();
+        let began = Instant::now();
+        std::thread::sleep(Duration::from_millis(2));
+        clock.analysis_done(began);
+        assert!(clock.take() >= 2_000_000);
     }
 }

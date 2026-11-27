@@ -73,6 +73,10 @@ impl TestDir {
 }
 
 impl SpillConfig {
+    #[cfg_attr(
+        not(unix),
+        expect(dead_code, reason = "its test plants a symbolic link (Unix only)")
+    )]
     fn with_dir(self, dir: &Path) -> Self {
         Self {
             dir: dir.to_owned(),
@@ -1341,6 +1345,19 @@ fn writer_scratch_is_reserved_in_full_and_returned() {
 }
 
 #[test]
+fn a_scope_reports_its_drop_behind_window() {
+    let dir = TestDir::new();
+    for window in [0, 8 << 20, 1 << 30] {
+        let manager = SpillManager::open(&SpillConfig {
+            drop_behind: window,
+            ..dir.config(SpillCodec::None)
+        })
+        .unwrap();
+        assert_eq!(manager.scope().unwrap().drop_behind_bytes(), window);
+    }
+}
+
+#[test]
 fn concurrent_writers_never_exceed_the_cap() {
     let dir = TestDir::new();
     let manager = SpillManager::open(&SpillConfig {
@@ -1411,7 +1428,10 @@ fn config_keys_drive_the_spill_config() {
     // `.../krishiv/spill` under the user cache dir, or `krishiv-spill-<uid>`.
     let d = defaults.dir.to_string_lossy().into_owned();
     assert!(
-        d.contains("krishiv/spill") || d.contains("krishiv-spill-"),
+        defaults
+            .dir
+            .ends_with(std::path::Path::new("krishiv").join("spill"))
+            || d.contains("krishiv-spill-"),
         "{d}"
     );
 

@@ -131,6 +131,14 @@ pub struct ExprEnv {
     /// feature: binary_output_style
     #[prost(string, optional, tag = "11")]
     pub binary_output_style: ::core::option::Option<::prost::alloc::string::String>,
+    /// The Spark release line ("4.0", "4.1", "4.3") whose behaviour the kernels and function
+    /// bindings reproduce (the session's profile). Absent means Spark 4.2, what every plan
+    /// written before the feature ran, so a 0.2 writer's plan keeps its meaning; a 0.3 session
+    /// on its default 4.3 profile sets "4.3", and a worker without the feature (which would run
+    /// it as Spark 4.2) refuses it.
+    /// feature: spark_version
+    #[prost(string, optional, tag = "12")]
+    pub spark_version: ::core::option::Option<::prost::alloc::string::String>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ExplainNode {
@@ -1238,6 +1246,11 @@ pub struct JoinFilter {
     pub key: u64,
     #[prost(message, optional, tag = "3")]
     pub options: ::core::option::Option<KeyFilterOptions>,
+    /// feature: join_filter_bound
+    /// A build column the filter is collected from instead of the key `key`
+    /// (a bound from a comparison conjunct of the join's residual).
+    #[prost(uint64, optional, tag = "4")]
+    pub bound_column: ::core::option::Option<u64>,
 }
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct KeyFilterOptions {
@@ -1266,6 +1279,9 @@ pub struct KeyFilterOptions {
     /// `bloom_max_items` or one that sheds its hashes to spill (a range only).
     #[prost(uint32, optional, tag = "10")]
     pub bloom_spill_bytes: ::core::option::Option<u32>,
+    /// feature: join_filter_bound
+    #[prost(enumeration = "RangeSide", tag = "11")]
+    pub side: i32,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct UnionNode {
@@ -1741,7 +1757,8 @@ pub struct PythonUdfFunction {
 pub struct DataType {
     #[prost(enumeration = "data_type::Kind", tag = "1")]
     pub kind: i32,
-    /// `KIND_DECIMAL` and `KIND_TIME` only.
+    /// `KIND_DECIMAL` and `KIND_TIME` only. A `KIND_TIME` precision of 7 to 9
+    /// (Spark 4.3's nanosecond TIME) needs feature: time_precision_nanos.
     #[prost(uint32, tag = "2")]
     pub precision: u32,
     /// `KIND_DECIMAL` only.
@@ -2743,6 +2760,37 @@ impl JoinDistribution {
             "JOIN_DISTRIBUTION_UNSPECIFIED" => Some(Self::Unspecified),
             "JOIN_DISTRIBUTION_BROADCAST" => Some(Self::Broadcast),
             "JOIN_DISTRIBUTION_PARTITIONED" => Some(Self::Partitioned),
+            _ => None,
+        }
+    }
+}
+/// feature: join_filter_bound
+/// Which end of the collected min/max range drops rows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum RangeSide {
+    Both = 0,
+    Upper = 1,
+    Lower = 2,
+}
+impl RangeSide {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Both => "RANGE_SIDE_BOTH",
+            Self::Upper => "RANGE_SIDE_UPPER",
+            Self::Lower => "RANGE_SIDE_LOWER",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "RANGE_SIDE_BOTH" => Some(Self::Both),
+            "RANGE_SIDE_UPPER" => Some(Self::Upper),
+            "RANGE_SIDE_LOWER" => Some(Self::Lower),
             _ => None,
         }
     }

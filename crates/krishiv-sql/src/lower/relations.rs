@@ -397,7 +397,7 @@ impl Lowerer {
                     JoinCondition::Using(cols.iter().map(|c| c.value.clone()).collect())
                 }
                 JoinConstraint::NearestBy(n) => {
-                    return Err(unsupported("NEAREST BY joins", n.span));
+                    return self.nearest_by_join(plan, right, kind, n, j.span);
                 }
                 JoinConstraint::AsOf(c) => return self.as_of_join(plan, right, kind, c, j.span),
             }
@@ -410,6 +410,134 @@ impl Lowerer {
                 condition,
             },
             j.span,
+        ))
+    }
+
+    /// `left [INNER | LEFT OUTER] JOIN right (APPROX | EXACT) NEAREST [k] BY (DISTANCE | SIMILARITY) ranking`:
+    /// the `k` right rows nearest to each left row. Spark rewrites it to a `max_by`/`min_by` of
+    /// `k` rows over a cross join (`RewriteNearestByJoin`); here the same rows are the first `k`
+    /// of a `row_number()` over the left row's id, ordered by the ranking (largest first for
+    /// `SIMILARITY`, smallest first for `DISTANCE`, nulls last), over the cross join. A left
+    /// outer join keeps a left row with no right row as one row of NULLs (the join's padding).
+    /// The two internal columns are dropped again. `k` and the join type were checked by
+    /// `validate`.
+    fn nearest_by_join(
+        &mut self,
+        left: LogicalPlan,
+        right: LogicalPlan,
+        kind: IrJoin,
+        n: &crate::ast::NearestBy,
+        span: Span,
+    ) -> R<LogicalPlan> {
+        const QID: &str = krishiv_plan::NEAREST_BY_ID_COLUMN;
+        const RANK: &str = "__nearest_rank__";
+        // `validate` has checked the range; a count that still fails to read is refused, never read as 1.
+        let k: i64 = match n.num_results.as_deref() {
+            None => 1,
+            Some(k) => k
+                .parse()
+                .map_err(|_| unsupported("this NEAREST BY result count", span))?,
+        };
+        let star = |this: &Self, except: Vec<Vec<String>>| {
+            arc(this.ex(
+                ExprNode::Star(Star {
+                    qualifier: Vec::new(),
+                    except,
+                    replace: Vec::new(),
+                    position: None,
+                    regex: None,
+                    plan_id: None,
+                }),
+                span,
+            ))
+        };
+        let id = self
+            .call("monotonically_increasing_id", Vec::new(), span)
+            .alias(QID);
+        let left = self.node(
+            PlanNode::Project {
+                input: arc(left),
+                exprs: vec![star(self, Vec::new()), arc(id)],
+            },
+            span,
+        );
+        // Spark's `MaxMinByK` skips a NULL ranking, so a right row ranked NULL is never a match. An inner
+        // join drops those rows in a filter (a filter may hold a non-deterministic ranking, `rand() + x`).
+        // A left outer join drops them in its condition, so a left row left with none is still padded; a
+        // join condition refuses a non-deterministic ranking, so `LEFT OUTER ... NEAREST BY rand()` fails.
+        let ranking = arc(self.expr(&n.ranking)?);
+        let not_null = arc(self.call("isnotnull", vec![Arc::clone(&ranking)], span));
+        let outer = matches!(kind, IrJoin::LeftOuter);
+        let crossed = self.node(
+            PlanNode::Join {
+                left: arc(left),
+                right: arc(right),
+                kind,
+                condition: if outer {
+                    JoinCondition::On(Arc::clone(&not_null))
+                } else {
+                    JoinCondition::None
+                },
+            },
+            span,
+        );
+        let joined = if outer {
+            crossed
+        } else {
+            self.node(
+                PlanNode::Filter {
+                    input: arc(crossed),
+                    predicate: not_null,
+                },
+                span,
+            )
+        };
+        let order = match n.direction {
+            crate::ast::NearestDirection::Similarity => SortOrder::desc(ranking),
+            _ => SortOrder {
+                nulls: krishiv_plan::NullOrdering::NullsLast,
+                ..SortOrder::asc(ranking)
+            },
+        };
+        let qid = arc(self.column(vec![QID.to_owned()], span));
+        let row_number = self.call("row_number", Vec::new(), span);
+        let windowed = self.ex(
+            ExprNode::Window(WindowExpr {
+                function: arc(row_number),
+                window: WindowSpecRef::Spec(IrWindowSpec {
+                    partition_by: vec![qid],
+                    order_by: vec![order],
+                    frame: None,
+                }),
+            }),
+            span,
+        );
+        let ranked = self.node(
+            PlanNode::Project {
+                input: arc(joined),
+                exprs: vec![star(self, Vec::new()), arc(windowed.alias(RANK))],
+            },
+            span,
+        );
+        let limit = arc(self.ex(ExprNode::Literal(IrLiteral::Long(k)), span));
+        let rank = arc(self.column(vec![RANK.to_owned()], span));
+        let predicate = arc(self.call("<=", vec![rank, limit], span));
+        let kept = self.node(
+            PlanNode::Filter {
+                input: arc(ranked),
+                predicate,
+            },
+            span,
+        );
+        Ok(self.node(
+            PlanNode::Project {
+                input: arc(kept),
+                exprs: vec![star(
+                    self,
+                    vec![vec![QID.to_owned()], vec![RANK.to_owned()]],
+                )],
+            },
+            span,
         ))
     }
 
@@ -706,6 +834,30 @@ impl Lowerer {
             }
             TableFactorKind::Values(rows) => self.inline_table(rows, tf.alias.as_ref(), tf.span)?,
             TableFactorKind::JsonTable(t) => self.json_table(t, tf.span)?,
+            TableFactorKind::Unnest { args, ordinality } => {
+                // Spark's `Generate(Unnest(..))` over one row; the analyzer types the arrays and
+                // expands them as `inline` of an array of structs (as `stack`).
+                let lowered = args.iter().map(|a| self.arg(a)).collect::<R<Vec<_>>>()?;
+                let name = if *ordinality {
+                    krishiv_plan::UNNEST_ORDINALITY_FUNCTION
+                } else {
+                    krishiv_plan::UNNEST_FUNCTION
+                };
+                let call = self.call(name, lowered, tf.span);
+                let one_row = self.node(PlanNode::OneRowRelation, tf.span);
+                self.node(
+                    PlanNode::Generate {
+                        input: arc(one_row),
+                        kind: krishiv_plan::GeneratorKind::Inline,
+                        outer: false,
+                        arg: Arc::new(call),
+                        output: Vec::new(),
+                        names: Vec::new(),
+                        qualifier: None,
+                    },
+                    tf.span,
+                )
+            }
             TableFactorKind::TableFunction {
                 name,
                 dynamic_name,

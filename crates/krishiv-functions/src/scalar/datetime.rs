@@ -50,6 +50,8 @@ use krishiv_kernels::interval::{interval_part, interval_part_type};
 use super::args::{Inputs, internal, is_string, is_timestamp, to_utf8, unsupported};
 use super::{BindArg, BindOptions, Binding, FamilyResult, bad_types, listed};
 
+mod time_format;
+
 /// Every name this family binds.
 pub(super) const NAMES: &[&str] = &[
     "date_add",
@@ -919,7 +921,19 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
             let fail = name == "to_time";
             Binding::new(
                 DataType::Time64(TimeUnit::Nanosecond),
-                move |x: &Inputs<'_>| Ok(Arc::new(to_time(&x.strings(0)?, None, fail)?) as ArrayRef),
+                move |x: &Inputs<'_>| {
+                    Ok(Arc::new(to_time(&x.strings(0)?, None, fail, true)?) as ArrayRef)
+                },
+            )
+        }
+        // Before Spark 4.3 (the analyzer's trailing `false`): six fraction digits.
+        ("to_time" | "try_to_time", [s, DataType::Boolean]) if is_string(s) => {
+            let fail = name == "to_time";
+            Binding::new(
+                DataType::Time64(TimeUnit::Nanosecond),
+                move |x: &Inputs<'_>| {
+                    Ok(Arc::new(to_time(&x.strings(0)?, None, fail, false)?) as ArrayRef)
+                },
             )
         }
         ("to_time" | "try_to_time", [s, f]) if is_string(s) && is_string(f) => {
@@ -928,7 +942,7 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                 DataType::Time64(TimeUnit::Nanosecond),
                 move |x: &Inputs<'_>| {
                     let formats = x.strings(1)?;
-                    Ok(Arc::new(to_time(&x.strings(0)?, Some(&formats), fail)?) as ArrayRef)
+                    Ok(Arc::new(to_time(&x.strings(0)?, Some(&formats), fail, true)?) as ArrayRef)
                 },
             )
         }
@@ -986,15 +1000,20 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                 DataType::Int64
             };
             Binding::new(result, move |x: &Inputs<'_>| {
-                let out = time_to_units(&x.array::<Time64NanosecondType>(0)?, per);
+                let times = x.array::<Time64NanosecondType>(0)?;
                 Ok(if seconds {
+                    // Spark 4.3 rounds the seconds half up to six digits (`43201.123456789` is
+                    // `43201.123457`); the integral units truncate.
+                    let micros: arrow_array::PrimitiveArray<Int64Type> =
+                        times.unary(|n| n.saturating_add(500) / 1_000);
                     Arc::new(
-                        out.unary::<_, Decimal128Type>(i128::from)
+                        micros
+                            .unary::<_, Decimal128Type>(i128::from)
                             .with_precision_and_scale(14, 6)
                             .map_err(|e| internal(e.to_string()))?,
                     ) as ArrayRef
                 } else {
-                    Arc::new(out) as ArrayRef
+                    Arc::new(time_to_units(&times, per)) as ArrayRef
                 })
             })
         }
@@ -1362,11 +1381,20 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
         (
             "extract" | "date_part" | "datepart",
             [f, DataType::Time64(TimeUnit::Nanosecond)]
-            | [f, DataType::Time64(TimeUnit::Nanosecond), DataType::Int32],
+            | [f, DataType::Time64(TimeUnit::Nanosecond), DataType::Int32]
+            | [
+                f,
+                DataType::Time64(TimeUnit::Nanosecond),
+                DataType::Int32,
+                DataType::Boolean,
+            ],
         ) if is_string(f) => {
             // A third argument is the declared precision of a `time(p)`
-            // below 6, a literal the analyzer appends; it cuts the seconds'
-            // fraction.
+            // other than 6, a literal the analyzer appends: below 6 it cuts the
+            // seconds' fraction; 7..=9 (Spark 4.3) reads `p` digits into a
+            // `decimal(p + 2, p)`. A fourth, `true` (Spark 4.3), reads `p`
+            // digits into a `decimal(p + 2, p)` below 6 too.
+            let scaled = matches!(args.get(3), Some(BindArg::Literal(_)));
             let precision = match args.get(2) {
                 None => None,
                 Some(BindArg::Literal(a)) => {
@@ -1374,7 +1402,7 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                         .as_primitive_opt::<Int32Type>()
                         .filter(|p| p.len() == 1 && p.is_valid(0))
                     {
-                        Some(p) => Some(p.value(0).clamp(0, 6).unsigned_abs()),
+                        Some(p) => Some(p.value(0).clamp(0, 9).unsigned_abs()),
                         None => {
                             return Some((
                                 listed,
@@ -1399,6 +1427,26 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                 Ok(None) => Binding::new(DataType::Float64, |x: &Inputs<'_>| {
                     Ok(arrow_array::new_null_array(&DataType::Float64, x.rows()))
                 }),
+                Ok(Some(DatePart::Second)) if precision.is_some_and(|p| p > 6 || scaled) => {
+                    let p = precision.unwrap_or(9);
+                    let scale = i8::try_from(p).unwrap_or(9);
+                    let digits = u8::try_from(p).unwrap_or(9) + 2;
+                    let unit = 10_i64.pow(9 - p);
+                    Binding::new(
+                        DataType::Decimal128(digits, scale),
+                        move |x: &Inputs<'_>| {
+                            let times = x.array::<Time64NanosecondType>(1)?;
+                            // Nanoseconds within the minute, cut to `p` digits.
+                            let v = times.unary::<_, Decimal128Type>(|n| {
+                                i128::from(n.rem_euclid(60_000_000_000) / unit)
+                            });
+                            Ok(Arc::new(
+                                v.with_precision_and_scale(digits, scale)
+                                    .map_err(|e| internal(e.to_string()))?,
+                            ) as ArrayRef)
+                        },
+                    )
+                }
                 Ok(Some(part @ (DatePart::Hour | DatePart::Minute | DatePart::Second))) => {
                     Binding::new(part.result_type(), move |x: &Inputs<'_>| {
                         let times = x.array::<Time64NanosecondType>(1)?;
@@ -1510,6 +1558,16 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                     )
                 },
             )
+        }
+        // Spark 4.3: a `TIME` prints through `TimeFormatter` (the `java.time` pattern under any
+        // parser policy) over its nanoseconds; a pattern with a date or zone field the time
+        // cannot fill is `INVALID_PARAMETER_VALUE.PATTERN` (`DateFormatClass.formatTimeWithError`).
+        ("date_format", [DataType::Time64(TimeUnit::Nanosecond), s]) if is_string(s) => {
+            let pat = match pattern_arg(args, 1, Purpose::FormatTime, false) {
+                Ok(p) => p,
+                Err(e) => return Some((listed, Err(e))),
+            };
+            time_format::binding(pat)
         }
         ("date_format", [t, s]) if is_string(s) && is_date_or_timestamp_or_string(t) => {
             let pat = match pattern_arg(args, 1, Purpose::Format, opts.legacy_time_parser) {

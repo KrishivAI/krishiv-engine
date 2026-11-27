@@ -188,10 +188,12 @@
     {#if session === "checking"}
       <p class="text-muted-foreground">Opening the session…</p>
     {:else if session === "no"}
-      <h1 class="mb-4">Open the address Krishiv printed</h1>
+      <h1 class="mb-4">Open the address with the token</h1>
       <p class="text-muted-foreground">
-        The console needs the token in the <code>http://…/?token=…</code> address that <code>krishiv server</code>,
-        <code>krishiv ui</code> or <code>krishiv.ui()</code> printed when it started: open that address.
+        The console needs a token in its address. <code>krishiv ui</code>, <code>krishiv.ui()</code> and a
+        <code>krishiv server</code> without configured tokens print an address ending in <code>?token=…</code> when
+        they start: open that address. On a server with configured tokens (<code>krishiv.auth.*</code>, the Docker
+        image) nothing is printed: add <code>?token=</code> and your token to this page's address.
       </p>
     {:else if session === "failed"}
       <h1 class="mb-4">The console did not load</h1>

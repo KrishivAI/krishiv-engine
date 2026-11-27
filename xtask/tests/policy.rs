@@ -83,6 +83,7 @@ fn notice_skeleton_exists() {
 }
 
 #[test]
+#[cfg(unix)] // runs a shell script: on Windows `bash` is WSL's, `sh` absent
 fn pre_push_hook_refuses_main_and_force_pushes() {
     let script = root().join(".githooks/test-pre-push.sh");
     let out = Command::new("sh").arg(&script).output().unwrap();
@@ -95,6 +96,7 @@ fn pre_push_hook_refuses_main_and_force_pushes() {
 }
 
 #[test]
+#[cfg(unix)] // runs a shell script: on Windows `bash` is WSL's, `sh` absent
 fn commit_msg_hook_adds_the_sign_off_and_still_refuses_ai_attribution() {
     let script = root().join(".githooks/test-commit-msg.sh");
     let out = Command::new("sh").arg(&script).output().unwrap();
@@ -493,6 +495,7 @@ fn ci_policy_wiring() {
 }
 
 #[test]
+#[cfg(unix)] // runs a shell script: on Windows `bash` is WSL's, `sh` absent
 fn budgets_measurement_script_waits_and_fetches() {
     let script = root().join(".github/scripts/test-budgets-measurement.sh");
     let out = Command::new("bash").arg(&script).output().unwrap();
@@ -505,6 +508,7 @@ fn budgets_measurement_script_waits_and_fetches() {
 }
 
 #[test]
+#[cfg(unix)] // runs a shell script: on Windows `bash` is WSL's, `sh` absent
 fn main_baseline_script_selects_the_merge_base_measurement() {
     let script = root().join(".github/scripts/test-main-baseline.sh");
     let out = Command::new("bash").arg(&script).output().unwrap();
@@ -519,6 +523,7 @@ fn main_baseline_script_selects_the_merge_base_measurement() {
 /// An approval label stays valid across pushes while the measured value stays within the margin
 /// recorded when it was applied; the shell test covers the rule, this the wiring.
 #[test]
+#[cfg(unix)] // runs a shell script: on Windows `bash` is WSL's, `sh` absent
 fn approval_labels_survive_pushes_within_the_recorded_margin() {
     let script = root().join(".github/scripts/test-approval-label.sh");
     let out = Command::new("bash").arg(&script).output().unwrap();
@@ -573,6 +578,7 @@ fn approval_labels_survive_pushes_within_the_recorded_margin() {
 }
 
 #[test]
+#[cfg(unix)] // runs a shell script: on Windows `bash` is WSL's, `sh` absent
 fn large_file_guard_rejects_new_large_files() {
     let script = root().join(".github/scripts/test-check-large-files.sh");
     let out = Command::new("bash").arg(&script).output().unwrap();
@@ -588,6 +594,7 @@ fn large_file_guard_rejects_new_large_files() {
 }
 
 #[test]
+#[cfg(unix)] // runs a shell script: on Windows `bash` is WSL's, `sh` absent
 fn ai_attribution_guard_passes_its_tests_and_is_wired() {
     let script = root().join(".github/scripts/test-check-ai-attribution.sh");
     let out = Command::new("bash").arg(&script).output().unwrap();
@@ -998,8 +1005,9 @@ fn release_publishing_is_manual_and_gated() {
     // krishiv-catalogs (the binary's declared catalogs); the Delta connector is published
     // because krishiv-session depends on it (owner 2026-11-17); P3-T101 adds krishiv-flight-sql
     // (krishiv-cli depends on it); P3-T067 PR-58b adds krishiv-connectors-iceberg and
-    // krishiv-arrow-bridge (krishiv-catalogs' declared-table reads depend on them).
-    assert_eq!(listed.len(), 29, "the release publishes 29 crates");
+    // krishiv-arrow-bridge (krishiv-catalogs' declared-table reads depend on them); R1 (G5/G6)
+    // adds krishiv-access-proto (krishiv-server's external access provider depends on it).
+    assert_eq!(listed.len(), 30, "the release publishes 30 crates");
     let mut manifests = vec![root().join("xtask/Cargo.toml")];
     for entry in std::fs::read_dir(root().join("crates")).unwrap() {
         manifests.push(entry.unwrap().path().join("Cargo.toml"));

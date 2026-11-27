@@ -208,9 +208,9 @@ checked by `iceberg_v0/type_golden_tests.rs`; column defaults are a documented r
 Spark 4.1.0 + Iceberg 1.12.0 (`gen_iceberg_write_readback.py`) reads and appends on top, Krishiv compares and reads Spark's
 result. `roundtrip_tests.rs`: two `#[ignore]`d steps of `tests/scripts/iceberg_roundtrip.sh` (nightly `iceberg-roundtrip`):
 Spark makes `mor2`/`mor3`/`evolved` (position deletes, a DV, a promoted and a renamed column, a spec added), Krishiv
-reads them, appends and runs copy-on-write DELETE/UPDATE (`cow_tests`' `Dml`, over `sink_tests`' `Catalog::with_metadata` on
-Spark's metadata), Spark time travels to Krishiv's snapshots and runs merge-on-read DML on top, Krishiv reads the
-result. Pending, not stubbed: MERGE through SQL. See
+reads them, appends, runs copy-on-write DELETE/UPDATE and, on `mor2`/`mor3`, merge-on-read DELETE (v2 also UPDATE) (`cow_tests`' `Dml`, over `sink_tests`' `Catalog::with_metadata` on
+Spark's metadata), Spark lists Krishiv's delete files and time travels to Krishiv's snapshots and runs merge-on-read DML on top, Krishiv reads the
+result. Pending, not stubbed: MERGE through SQL. Concurrent writers: `race_k` (two Krishiv writers pinned at one base) and `race_s` (Krishiv pinned before Spark's `DELETE`, committing onto it; `Dml::open_at`), `race_tables`/`check_races`. See
 `tests/scripts/iceberg_write_conformance.README.md`.
 
 ## Invariants
@@ -309,6 +309,23 @@ result. Pending, not stubbed: MERGE through SQL. See
 - **Merge-on-read drops (review 36c1 M3):** a `MorTask::finish` dropped midway deletes its delete files and finished
   data files in the background, and a `put` dropped in flight deletes its file once the store is done; a data file
   whose close is dropped after the store completed it is `write.rs`'s documented limit (an unreferenced file).
+- **Expire cleanup memory (PR-36e, review of #983):** `maintenance/expire.rs` `cleanup` holds the paths every
+  removed snapshot reached, every kept snapshot reached and the decoded manifests' paths in memory, uncharged to any
+  pool (each manifest is capped by `krishiv.catalog.maxMetadataBytes`, the sum is not), as Java's
+  `ReachableFileCleanup` holds its sets. Follow-up: charge the sets to the procedure's pool or walk in bounded batches.
+- **Expire and concurrent refs (review of #983):** a snapshot removal asserts every ref as planned, `main` included
+  (`maintenance/expire.rs` `request`), so a concurrent rollback or a ref moved onto a removed snapshot conflicts and the
+  expire plans again. Two costs: a concurrent append to `main` conflicts too, so a busy table can use up
+  `commit.retry.num-retries` (`KRISHIV_ICEBERG_EXPIRE_FAILED`); and a ref created after planning under a new name is not
+  covered (no REST requirement names a ref that did not exist), so the server drops that new ref with the snapshot and
+  its files are deleted. Iceberg 1.12.0 has the same window: `UpdateRequirements` asserts nothing for
+  `remove-snapshots`.
+- **Expire and gzip metadata (review of #983):** `maintenance/expire.rs` `checked_load` parses the `metadata.json` an
+  answer names as plain JSON, so a table written with `write.metadata.compression-codec=gzip` (`*.gz.metadata.json`) is
+  refused with the "snapshot list that differs from its metadata file" text until gzip metadata is read. Refused at
+  the first load, nothing is committed or deleted. A table switched to gzip after that load can still take the commit:
+  the reload after it is then refused, so the snapshots are gone, no file is deleted (orphans for
+  `remove_orphan_files`) and the procedure returns that error.
 - `statistics()` takes no filter: the row estimate sums every live file, not the files left after pruning.
 - A deletion vector is read at the length its manifest declares (`deletes.rs` `read_dv`) without the
   `krishiv.catalog.maxMetadataBytes` cap the metadata files get; its memory is charged to the query (the decode's transient copy aside; review of the

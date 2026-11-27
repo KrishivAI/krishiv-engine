@@ -149,8 +149,18 @@ impl Session {
         let Some(table) = provider.row_level(op) else {
             return Ok(None);
         };
-        // Refused here, before any scan or path split and for merge-on-read tables alike (E34).
-        refuse_idempotency_key(&probe.env.config)?;
+        // A table whose commit records the key takes it; any other refuses it here, before any scan or
+        // path split (E34).
+        let caps = table.capabilities();
+        // The validated key travels with the statement: the rewrite's own config snapshot is never read
+        // for it, so a `conf().set` between the two cannot commit under another key.
+        let mut key_options = std::collections::BTreeMap::new();
+        if caps.idempotent_commit {
+            // An empty key is refused here, before the find scan.
+            apply_idempotency_key(&probe.env.config, &mut key_options)?;
+        } else {
+            refuse_idempotency_key(&probe.env.config)?;
+        }
         // The texts are read again under the statement's parser options (as MERGE does), so a
         // double-quoted name under `spark.sql.ansi.doubleQuotedIdentifiers` stays a column.
         let parser = &probe.env.parser;
@@ -269,6 +279,7 @@ impl Session {
                     &with_row_id,
                     assignments,
                     parser,
+                    &key_options,
                 )
                 .await;
         }
@@ -379,6 +390,9 @@ impl Session {
                 .options
                 .insert(CONDITION_OPTION.to_owned(), c.to_owned());
         }
+        request
+            .options
+            .extend(key_options.iter().map(|(k, v)| (k.clone(), v.clone())));
         let plan = physical.into_table_write(target, TableWriteRequest::RowLevel(request));
         let written = async {
             let mut stream = self.run(&plan, &analysis.env).await?;
@@ -423,6 +437,7 @@ impl Session {
         with_row_id: &[TableColumn],
         assignments: &[Assignment],
         parser: &krishiv_sql::ParserOptions,
+        key_options: &std::collections::BTreeMap<String, String>,
     ) -> Result<Option<DataFrame>, KrishivError> {
         let (whole, whole_entry) = self.state.catalog.put_hidden_provider(
             with_row_id.to_vec(),
@@ -464,6 +479,9 @@ impl Session {
         let mut request =
             RowLevelWrite::new(op, quoted, Arc::clone(physical.schema()), Vec::new(), None);
         request.write_id = Some(crate::session::job_uuid());
+        request
+            .options
+            .extend(key_options.iter().map(|(k, v)| (k.clone(), v.clone())));
         let plan = physical.into_table_write(target, TableWriteRequest::RowLevel(request));
         let mut stream = self.run(&plan, &analysis.env).await?;
         while let Some(batch) = stream.next().await {
@@ -784,11 +802,15 @@ fn the_delta_connector_reads_the_same_option_keys() {
     assert_eq!(ALIAS_OPTION, d::ROW_LEVEL_ALIAS_OPTION);
 }
 
+pub(crate) mod rewrite_files;
+mod rewrite_scan;
+
 #[cfg(test)]
 pub(crate) mod tests;
 
-/// Row-level (DML) writes do not take `krishiv.write.idempotencyKey` yet (E34): a set key is refused
-/// instead of deduplicating on some table formats only.
+/// A table whose commit records no key (`idempotent_commit` false) does not take
+/// `krishiv.write.idempotencyKey` (E34): a set key is refused instead of deduplicating on some table
+/// formats only.
 ///
 /// # Errors
 /// `KRISHIV_UNSUPPORTED_FEATURE` when the session setting names a key.
@@ -813,7 +835,6 @@ pub(super) fn refuse_idempotency_key(
 ///
 /// # Errors
 /// `INVALID_CONF_VALUE` for an empty key.
-#[cfg(feature = "delta")]
 pub(super) fn apply_idempotency_key(
     config: &krishiv_common::config::Config,
     options: &mut std::collections::BTreeMap<String, String>,

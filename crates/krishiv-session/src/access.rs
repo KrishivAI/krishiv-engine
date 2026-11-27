@@ -10,7 +10,7 @@
 //! `KRISHIV_INSUFFICIENT_PERMISSIONS` and never revealing the policy's
 //! reason or whether the object exists.
 
-use std::path::{Component, Path};
+use std::path::{Component, Path, Prefix};
 use std::sync::Arc;
 
 use krishiv_common::error::{ErrorClass, KrishivError, KrishivUnsupportedFeature};
@@ -29,10 +29,15 @@ use krishiv_sql::{
     statement_targets,
 };
 
+mod intersection;
+mod own_refusals;
 mod path_prefix;
+mod statement_context;
 
+pub use intersection::{IntersectionPolicy, SystemOnlyPolicy};
 pub use path_prefix::PathPrefixPolicy;
-pub(crate) use path_prefix::{allowed_roots, resolve_links};
+pub(crate) use path_prefix::{allowed_roots, resolve_links, same_place};
+pub use statement_context::StatementContext;
 
 use crate::dataframe::DataFrame;
 use crate::session::{QueryEnv, Session, sql_context};
@@ -356,11 +361,15 @@ fn log_denial(session: &Session, class: StatementClass, e: &KrishivError) {
     // ADR 0046 §5: the client's own `user_id` is recorded, marked unverified, never used.
     let client_user_id = session.state.activity.client_user_id();
     let provider = if session.state.grants.is_some() {
-        crate::grants::denial_provider(e)
+        crate::grants::denial_provider(e).as_str()
     } else {
-        crate::grants::DecidedBy::Roles
-    }
-    .as_str();
+        // Another provider in a list (`external`, ADR 0049 §3) names itself; the role matrix otherwise.
+        session
+            .state
+            .policy
+            .refusal_label()
+            .unwrap_or(crate::grants::DecidedBy::Roles.as_str())
+    };
     // A refusal of a principal acting for this one (the definer of a `SQL SECURITY DEFINER` view
     // the session read, P3-T062 §2.4) names it: the record shows both.
     let own =
@@ -411,7 +420,16 @@ impl Session {
         class: StatementClass,
         env: &QueryEnv,
     ) -> Result<(), KrishivError> {
+        self.fresh_access_stage().await;
         self.check_targets(statement, env, Some(class)).await
+    }
+
+    /// Ends whatever prefetch stage an earlier statement left (one cancelled before its checks
+    /// consumed the answers it prefetched): an empty [`AccessPolicy::prefetch`] clears a
+    /// provider's stage state without asking anything, so the checks that follow, made outside
+    /// any analysis stage, ask the provider rather than reuse an earlier answer.
+    async fn fresh_access_stage(&self) {
+        self.state.policy.prefetch(&self.state.principal, &[]).await;
     }
 
     /// Whether [`Self::authorize_statement`] of `statement` would pass, asked as it asks (the same
@@ -940,6 +958,7 @@ impl Session {
         privilege: Privilege,
         class: StatementClass,
     ) -> Result<(), KrishivError> {
+        self.fresh_access_stage().await;
         let r = authorize(
             &*self.state.policy,
             &self.state.principal,
@@ -960,6 +979,7 @@ impl Session {
         privilege: Privilege,
         env: &QueryEnv,
     ) -> Result<(), KrishivError> {
+        self.fresh_access_stage().await;
         let parts = [
             crate::catalog::CATALOG.to_owned(),
             namespace.to_owned(),
@@ -984,6 +1004,7 @@ impl Session {
         table: &str,
         env: &QueryEnv,
     ) -> Result<Vec<(String, krishiv_types::DataType)>, KrishivError> {
+        self.fresh_access_stage().await;
         let parts = ["system".to_owned(), table.to_owned()];
         let ident = table_ident(&*env.analysis.catalogs, &parts)
             .ok_or_else(|| unplaceable("an empty name"))?;
@@ -1269,13 +1290,22 @@ pub(crate) fn physical(
     let Some(local) = at.display.strip_prefix("file:") else {
         return Ok(Checked { at, shown });
     };
-    let Some(parts) = canonical_parts(Path::new(local)) else {
+    // On Windows a rooted path (`/data`) is on the working directory's drive: `at.display` keeps
+    // Hadoop's `file:/data`, which has no drive and is not absolute there, while `at.path` is the
+    // drive-qualified located path (`D:/data`), the one to resolve. `shown` stays the caller's text.
+    let native = if cfg!(windows) {
+        krishiv_exec::files::native_path(&format!("file:/{}", at.path))
+    } else {
+        krishiv_exec::files::native_path(local)
+    };
+    let Some(parts) = canonical_parts(&native) else {
         return Err(unresolved(session, class, &shown, privilege));
     };
     Ok(Checked {
         at: LocatedPath {
             store: at.store,
-            path: object_store::path::Path::from_iter(parts.iter().map(String::as_str)),
+            path: krishiv_io::local_object_path(&parts)
+                .map_err(|_| unresolved(session, class, &shown, privilege))?,
             display: format!("file:/{}", parts.join("/")),
         },
         shown,
@@ -1305,6 +1335,15 @@ pub(crate) fn canonical_dir(
 /// # Errors
 /// `KRISHIV_UNSUPPORTED_FEATURE` for a relative or non-UTF-8 path.
 pub(crate) fn lexical_dir(path: &Path) -> Result<LocatedPath, KrishivError> {
+    // On Windows `\x` (or `/x`) has a root but no drive: it is on the current drive, as Windows
+    // opens it, and checked there.
+    let on_drive;
+    let path = if cfg!(windows) && path.has_root() && !path.is_absolute() {
+        on_drive = std::path::absolute(path).map_err(|_| unplaceable("relative paths"))?;
+        on_drive.as_path()
+    } else {
+        path
+    };
     let text = path
         .to_str()
         .ok_or_else(|| unplaceable("non-UTF-8 paths"))?;
@@ -1323,6 +1362,7 @@ pub(crate) async fn authorize_checked(
     privileges: &[Privilege],
     class: StatementClass,
 ) -> Result<(), KrishivError> {
+    session.fresh_access_stage().await;
     let asked = Securable::Path(OptionValue::from_user("path", checked.at.display.clone()));
     for privilege in privileges {
         let r = authorize(
@@ -1374,7 +1414,7 @@ pub(crate) fn unresolved(
 /// it that exists, and the part that does not exist yet appended as written (see [`resolve_links`]).
 /// `None` for a relative path, one that cannot be resolved (an I/O error, a link loop, a dangling link,
 /// a `..` in its missing part) and a non-UTF-8 one. Callers fold `..` in the text first.
-fn canonical_parts(local: &Path) -> Option<Vec<String>> {
+pub(crate) fn canonical_parts(local: &Path) -> Option<Vec<String>> {
     if !local.is_absolute() {
         return None;
     }
@@ -1382,6 +1422,12 @@ fn canonical_parts(local: &Path) -> Option<Vec<String>> {
         .components()
         .filter_map(|c| match c {
             Component::Normal(p) => Some(p.to_str().map(str::to_owned)),
+            // A drive is the first segment, as `LocalPaths` writes it (`file:/C:/x`); a UNC share or
+            // device path is not resolved here (fails closed).
+            Component::Prefix(p) => Some(match p.kind() {
+                Prefix::Disk(d) | Prefix::VerbatimDisk(d) => Some(format!("{}:", char::from(d))),
+                _ => None,
+            }),
             _ => None,
         })
         .collect()
@@ -1402,7 +1448,7 @@ pub(crate) fn still_physical(session: &Session, checked: &Checked) -> Result<(),
     let Some(local) = checked.at.display.strip_prefix("file:") else {
         return Ok(());
     };
-    match canonical_parts(Path::new(local)) {
+    match canonical_parts(&krishiv_exec::files::native_path(local)) {
         Some(parts) if format!("file:/{}", parts.join("/")) == checked.at.display => Ok(()),
         _ => Err(deny()),
     }
@@ -1431,6 +1477,8 @@ pub const READ_ONLY_PRIVILEGES: [Privilege; 2] = [Privilege::Select, Privilege::
 #[derive(Clone)]
 pub struct ReadOnlyPolicy {
     inner: Arc<dyn AccessPolicy>,
+    /// Its own read-only refusals: never told to `inner`, labelled `roles` (G6 review of 7f535d472).
+    own: own_refusals::OwnRefusals,
 }
 
 impl std::fmt::Debug for ReadOnlyPolicy {
@@ -1443,7 +1491,10 @@ impl ReadOnlyPolicy {
     /// Read-only over `inner`, which decides every `Select` and `Browse`.
     #[must_use]
     pub fn new(inner: Arc<dyn AccessPolicy>) -> Self {
-        Self { inner }
+        Self {
+            inner,
+            own: own_refusals::OwnRefusals::default(),
+        }
     }
 }
 
@@ -1460,10 +1511,12 @@ impl AccessPolicy for ReadOnlyPolicy {
     ) -> BoxFuture<'a, Result<AccessDecision, KrishivError>> {
         // `Browse` (metadata) reads nothing a `Select` would not; the inner policy decides both.
         if !READ_ONLY_PRIVILEGES.contains(&privilege) {
+            self.own.refused(securable, privilege);
             return Box::pin(std::future::ready(Ok(AccessDecision::Deny {
                 reason: "the session is read-only".to_owned(),
             })));
         }
+        self.own.passed_on();
         self.inner.check(principal, securable, privilege)
     }
 
@@ -1472,7 +1525,30 @@ impl AccessPolicy for ReadOnlyPolicy {
     }
 
     fn denied(&self, principal: &Principal, securable: &Securable, privilege: Privilege) {
+        // A read-only refusal is this policy's own, not `inner`'s.
+        if self.own.take(securable, privilege) {
+            return;
+        }
         self.inner.denied(principal, securable, privilege);
+    }
+
+    fn prefetch<'a>(
+        &'a self,
+        principal: &'a Principal,
+        items: &'a [(Securable, Privilege)],
+    ) -> BoxFuture<'a, ()> {
+        self.inner.prefetch(principal, items)
+    }
+
+    fn decides(&self, securable: &Securable) -> bool {
+        self.inner.decides(securable)
+    }
+
+    fn refusal_label(&self) -> Option<&'static str> {
+        if self.own.latest() {
+            return None;
+        }
+        self.inner.refusal_label()
     }
 }
 
@@ -1510,6 +1586,22 @@ impl AccessPolicy for QuietPolicy {
     }
 
     // `denied` keeps the default: told nothing.
+
+    fn prefetch<'a>(
+        &'a self,
+        principal: &'a Principal,
+        items: &'a [(Securable, Privilege)],
+    ) -> BoxFuture<'a, ()> {
+        self.inner.prefetch(principal, items)
+    }
+
+    fn decides(&self, securable: &Securable) -> bool {
+        self.inner.decides(securable)
+    }
+
+    fn refusal_label(&self) -> Option<&'static str> {
+        self.inner.refusal_label()
+    }
 }
 
 /// `KRISHIV_RESERVED_NAME` for a statement that creates, replaces, drops or
@@ -1653,9 +1745,11 @@ mod canonical_path_tests {
     fn canonical(path: &Path) -> Option<String> {
         let lexical = lexical_dir(path).ok()?;
         let local = lexical.display.strip_prefix("file:")?.to_owned();
-        canonical_parts(Path::new(&local)).map(|p| format!("file:/{}", p.join("/")))
+        canonical_parts(&krishiv_exec::files::native_path(&local))
+            .map(|p| format!("file:/{}", p.join("/")))
     }
 
+    #[cfg(unix)]
     #[test]
     fn folds_dot_dot_in_the_text_then_resolves_links_and_appends_the_rest() {
         let tmp = tempfile::tempdir().unwrap();
@@ -1683,6 +1777,7 @@ mod canonical_path_tests {
         }
     }
 
+    #[cfg(unix)]
     #[test]
     fn refuses_paths_it_cannot_make_canonical() {
         let tmp = tempfile::tempdir().unwrap();

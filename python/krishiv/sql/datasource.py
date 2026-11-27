@@ -22,8 +22,10 @@ How it runs here:
   acceptance of this API stays open.
 * Interim embedded path: the read is materialised in memory when a scan runs (capped by
   ``KRISHIV_PYTHON_DATA_SOURCE_LIMIT``), not streamed per partition as the design's read operator will.
-* The ``DataSource`` instance is created once by ``load`` and reused by every plan of the DataFrame (Spark
-  re-creates it from the pickled class for each planning), so state a reader keeps on it lasts across actions.
+* The ``DataSource`` instance is created once by ``load`` and reused by every plan of the DataFrame. Spark
+  pickles the instance after ``schema()`` and unpickles that copy for each planning, so state set in
+  ``__init__`` or ``schema()`` reaches the reader, but state set during one planning or action does not
+  reach the next. Do not rely on such state: a reader that runs on a worker will not see it.
 * The streaming classes (``DataSourceStreamReader``, ``SimpleDataSourceStreamReader``,
   ``DataSourceStreamWriter``, ``DataSourceStreamArrowWriter``) are P4: ``streamReader`` and
   ``streamWriter`` raise ``NOT_IMPLEMENTED``.
@@ -482,19 +484,21 @@ def _batches_of(pa: Any, output: Any, schema: StructType, session: SparkSession,
     the first element decides between the Arrow path, which only checks the schema, and the row path)."""
     from itertools import chain, islice
 
+    from krishiv.sql import _convert, _rowconv
     from krishiv.sql.row import Row
-    from krishiv.sql.session import _cell, _pa_schema, _pa_type, _verify_row
+    from krishiv.sql.session import _pa_schema, _session_zone
 
     arrow_schema = _pa_schema(schema, pa)
     names = schema.fieldNames()
     width = len(names)
     position = {name: i for i, name in enumerate(names)}
+    zone = lambda: _convert.session_zone(_session_zone(session))  # noqa: E731
 
     def flush(rows: list[tuple[Any, ...]]) -> Any:
         columns = []
         for i, field in enumerate(schema.fields):
-            values = [_cell(r[i], field.dataType, session) for r in rows]
-            columns.append(pa.array(values, type=_pa_type(field.dataType, pa)))
+            values = [_rowconv.convert(r[i], field.dataType, zone) for r in rows]
+            columns.append(pa.array(values, type=_rowconv.pa_type(field.dataType, pa)))
         if not columns:
             # No array carries a length, so a batch without columns would lose its rows.
             return pa.RecordBatch.from_struct_array(pa.array([{} for _ in rows], type=pa.struct([])))
@@ -542,7 +546,7 @@ def _batches_of(pa: Any, output: Any, schema: StructType, session: SparkSession,
                     values[position[name]] = item[name]
             else:
                 values = list(item)
-            _verify_row(schema, values)
+            _rowconv.verify(values, schema)
             rows.append(tuple(values))
         yield flush(rows)
 

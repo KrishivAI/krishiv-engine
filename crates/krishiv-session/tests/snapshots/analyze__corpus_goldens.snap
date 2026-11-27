@@ -622,6 +622,17 @@ error KRISHIV_UNSUPPORTED_FEATURE
 "filters":[],
 "warnings":[]}
 
+-- CreatePersistedFunction: CREATE FUNCTION f AS 'python' USING PYTHON 'f'
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"DDL",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"namespace","name":["spark_catalog","default"],"display":"namespace `spark_catalog`.`default`","privilege":"CREATE","columns":[]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
 -- DropFunction: DROP FUNCTION f
 {"schema_version":"krishiv.analyze.v1",
 "statement_class":"DDL",
@@ -1405,6 +1416,17 @@ error KRISHIV_UNSUPPORTED_FEATURE
 "warnings":[]}
 
 -- AddResource: ADD JAR '/tmp/a.jar'
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"ADMIN",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"system","name":["cluster"],"display":"system `cluster`","privilege":"MANAGE","columns":[]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
+-- Call: CALL cat.system.expire_snapshots(table => 'db.t', retain_last => 1)
 {"schema_version":"krishiv.analyze.v1",
 "statement_class":"ADMIN",
 "explain":null,

@@ -27,6 +27,7 @@
 //! below already imply. Estimates count each class's equalities the same
 //! way, so a cycle of them is not counted twice.
 
+use crate::expr::AttrMap;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
@@ -36,7 +37,7 @@ use krishiv_plan::{
 };
 use krishiv_types::DataType;
 
-use crate::estimate::Estimator;
+use crate::estimate::{Estimator, Memo};
 use crate::expr::{
     Attrs, Classes, and_all, call, column, common_equalities, conjuncts, equality, has_subquery,
     implied, is_deterministic, references, substitute,
@@ -45,6 +46,7 @@ use crate::narrow::{conjunct_selectivities, equi_columns, selectivity};
 use crate::stats::{RelStats, Statistics, cse_definitions, reads_cse, resolve_cse};
 
 mod dp;
+mod prune_first;
 mod reads;
 
 /// An original relation (kept alive) and its rewrite.
@@ -144,6 +146,9 @@ pub(crate) struct Settings {
     /// Whether restriction also reduces the preserved side of an outer join
     /// ([`crate::restrict`], `krishiv.optimizer.preservedSideSemiJoin`).
     pub(crate) preserved_side: bool,
+    /// Whether the block across a clustered composite-key edge of the largest input may be
+    /// planned first ([`prune_first`], `krishiv.optimizer.joinPruneFirst`).
+    pub(crate) prune_first: bool,
 }
 
 impl Default for Settings {
@@ -155,6 +160,7 @@ impl Default for Settings {
             trace: false,
             semi_anti_order: true,
             preserved_side: true,
+            prune_first: true,
         }
     }
 }
@@ -185,13 +191,15 @@ pub(crate) struct TreeStats {
     measure: JoinCost,
     cost: f64,
     shape: String,
+    /// What the prune-first choice did, when its gate held ([`prune_first::Choice`]).
+    prune_first: Option<prune_first::Choice>,
 }
 
 impl std::fmt::Display for TreeStats {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "tree inputs={} edges={} hyperedges={} enumerator={} fallback={} pairs={} considered={} measure={} cost={:.6e} shape={}",
+            "tree inputs={} edges={} hyperedges={} enumerator={} fallback={} pairs={} considered={} measure={} cost={:.6e} ",
             self.inputs,
             self.edges,
             self.hyperedges,
@@ -201,21 +209,27 @@ impl std::fmt::Display for TreeStats {
             self.considered,
             self.measure.name(),
             self.cost,
-            self.shape
-        )
+        )?;
+        // The shape stays last: it is the rest of the line.
+        if let Some(c) = &self.prune_first {
+            write!(f, "prune_first={c} ")?;
+        }
+        write!(f, "shape={}", self.shape)
     }
 }
 
 /// `root` with every inner-join tree reordered, and a note per tree planned
-/// (when `settings.trace`).
+/// (when `settings.trace`). Estimates start from `memo` and are left in it.
 pub(crate) fn reorder(
     root: &Arc<LogicalPlan>,
     stats: &dyn Statistics,
     propagate: bool,
     settings: Settings,
+    memo: &mut Memo,
 ) -> (Arc<LogicalPlan>, Vec<String>) {
     let mut r = Reorder {
-        est: Estimator::with_propagation(stats, propagate),
+        stats,
+        est: Estimator::resume(stats, propagate, std::mem::take(memo)),
         propagate,
         done: Default::default(),
         settings,
@@ -228,10 +242,13 @@ pub(crate) fn reorder(
     // second optimization must order the tree the same way).
     r.est.plan(root);
     let out = r.positional(root);
+    *memo = r.est.into_memo();
     (out, r.notes)
 }
 
 struct Reorder<'a> {
+    /// What the estimator reads; also asked how clustered a scan's columns are.
+    stats: &'a dyn Statistics,
     est: Estimator<'a>,
     /// Whether estimates narrow ranges within a conjunct
     /// ([`crate::Options::stats_propagation`]).
@@ -272,9 +289,9 @@ fn selection(p: &LogicalPlan) -> Option<&Arc<LogicalPlan>> {
 
 /// The outputs of a projection `p` that rename an input column
 /// (`a AS c`), by output attribute: the input column's attribute.
-fn renamed_columns(p: &LogicalPlan) -> HashMap<AttrId, AttrId> {
+fn renamed_columns(p: &LogicalPlan) -> AttrMap<AttrId> {
     let PlanNode::Project { exprs, .. } = &p.node else {
-        return HashMap::new();
+        return AttrMap::default();
     };
     exprs
         .iter()
@@ -293,9 +310,9 @@ fn renamed_columns(p: &LogicalPlan) -> HashMap<AttrId, AttrId> {
 /// one the filter pushdown does not cross (a nondeterministic expression, a
 /// common-subexpression output): a conjunct over it stays above, so it is
 /// estimated as written.
-fn computed_outputs(p: &LogicalPlan) -> HashMap<AttrId, Arc<Expr>> {
+fn computed_outputs(p: &LogicalPlan) -> AttrMap<Arc<Expr>> {
     let PlanNode::Project { exprs, .. } = &p.node else {
-        return HashMap::new();
+        return AttrMap::default();
     };
     let crossed = exprs.iter().all(|e| is_deterministic(e))
         && !exprs.iter().any(|e| match &e.node {
@@ -305,7 +322,7 @@ fn computed_outputs(p: &LogicalPlan) -> HashMap<AttrId, Arc<Expr>> {
             _ => false,
         });
     if !crossed {
-        return HashMap::new();
+        return AttrMap::default();
     }
     exprs
         .iter()
@@ -405,6 +422,11 @@ impl Reorder<'_> {
 
     /// `p` with its inputs and subquery plans reordered.
     fn children(&mut self, p: &Arc<LogicalPlan>) -> Arc<LogicalPlan> {
+        // A security barrier is a leaf: its input is not reordered (an optimization that has not
+        // opted in to run there, design `P3-E14-security-barrier.md` G3').
+        if matches!(p.node, PlanNode::SecurityBarrier { .. }) {
+            return Arc::clone(p);
+        }
         // CTE definitions (named by their exact columns), the input of a
         // renaming alias and the inputs of a union or the terms of a
         // recursive CTE (their output is the first input's columns, and the
@@ -528,7 +550,8 @@ impl Reorder<'_> {
         }
         graph.trace = self.settings.trace;
         graph.by_bytes = self.settings.cost == JoinCost::Bytes;
-        let (plan, stats) = graph.plan(self.settings);
+        let clustered = self.settings.prune_first.then_some(self.stats);
+        let (plan, stats) = graph.plan(self.settings, clustered);
         if self.settings.trace {
             self.notes.push(stats.to_string());
         }
@@ -555,7 +578,7 @@ fn deterministic_condition(c: &JoinCondition) -> bool {
 fn composite_keys(
     preds: &mut [Pred],
     all: &RelStats,
-    owner: &HashMap<AttrId, usize>,
+    owner: &AttrMap<usize>,
     at: &HashMap<usize, usize>,
     rows: &[f64],
 ) {
@@ -571,7 +594,7 @@ fn composite_keys(
         }
         // Each side's distinct key columns (a column repeated in several
         // equalities counts once).
-        let mut cols: [HashMap<AttrId, f64>; 2] = [HashMap::new(), HashMap::new()];
+        let mut cols: [AttrMap<f64>; 2] = [AttrMap::default(), AttrMap::default()];
         for &i in &members {
             for (id, n) in equi_columns(&preds[i].expr, all).into_iter().flatten() {
                 let leaf = owner.get(&id).and_then(|o| at.get(o)).copied();
@@ -718,7 +741,7 @@ impl Graph {
         narrow: bool,
         above: Option<&Attrs>,
     ) -> Self {
-        let mut owner: HashMap<AttrId, usize> = HashMap::new();
+        let mut owner: AttrMap<usize> = AttrMap::default();
         for (i, l) in leaves.iter().enumerate() {
             for c in l.resolved_output().unwrap_or_default() {
                 owner.insert(c.id, i);
@@ -731,7 +754,7 @@ impl Graph {
         // estimated before and after that pass runs. The plans keep the
         // columns; only the estimates read the definitions.
         let any_cse = preds.iter().any(|p| reads_cse(p));
-        let mut all_defs: HashMap<AttrId, Arc<Expr>> = HashMap::new();
+        let mut all_defs: AttrMap<Arc<Expr>> = AttrMap::default();
         if any_cse {
             for l in leaves {
                 all_defs.extend(cse_definitions(l));
@@ -788,12 +811,12 @@ impl Graph {
         let mut joins = Vec::new();
         // Each input's projection outputs that compute an expression (not a
         // plain column), by attribute.
-        let projected: Vec<HashMap<AttrId, Arc<Expr>>> =
+        let projected: Vec<AttrMap<Arc<Expr>>> =
             sorted.iter().map(|l| computed_outputs(l)).collect();
         // Definitions per sorted input, so estimates read through
         // common-subexpression projections (built only when a conjunct
         // needs them).
-        let leaf_defs: Vec<HashMap<AttrId, Arc<Expr>>> = if any_cse {
+        let leaf_defs: Vec<AttrMap<Arc<Expr>>> = if any_cse {
             sorted.iter().map(|l| cse_definitions(l)).collect()
         } else {
             Vec::new()
@@ -890,7 +913,7 @@ impl Graph {
             let resolved = if leaf_defs.is_empty() {
                 Arc::clone(&p)
             } else {
-                let mut env = HashMap::new();
+                let mut env = AttrMap::default();
                 for o in &on {
                     if let Some(defs) = leaf_defs.get(*o) {
                         env.extend(defs.iter().map(|(k, v)| (*k, Arc::clone(v))));
@@ -922,7 +945,7 @@ impl Graph {
             // A column is carried while something still reads it: an
             // operator above the tree, or a conjunct over the tree's inputs.
             // One read only by a filter of its own input is not.
-            let mut read_by: HashMap<AttrId, Vec<usize>> = HashMap::new();
+            let mut read_by: AttrMap<Vec<usize>> = AttrMap::default();
             for (k, p) in kept.iter().enumerate() {
                 for id in references(&p.expr) {
                     read_by.entry(id).or_default().push(k);
@@ -1207,13 +1230,19 @@ impl Graph {
             .collect()
     }
 
-    /// The tree planned by `settings`' enumerator, and what it did.
-    fn plan(&self, settings: Settings) -> (Arc<LogicalPlan>, TreeStats) {
+    /// The tree planned by `settings`' enumerator, and its note. `clustered`: where the prune-first
+    /// choice reads which columns are clustered in the largest input's files (`None`: the choice
+    /// is off).
+    fn plan(
+        &self,
+        settings: Settings,
+        clustered: Option<&dyn Statistics>,
+    ) -> (Arc<LogicalPlan>, TreeStats) {
         let n = self.n();
         let masks = self.masks();
         let enumerator = settings.enumerator;
-        let (table, mut fallback, work) = match enumerator {
-            Enumerator::Greedy => (None, Some("forced"), dp::Work::default()),
+        let (table, mut fallback, mut work, blocked) = match enumerator {
+            Enumerator::Greedy => (None, Some("forced"), dp::Work::default(), None),
             Enumerator::DpSub if n <= settings.dp_limit.min(MAX_DP_LIMIT) => {
                 let bit = |s: Set| move |i: usize| s & (1 << i) != 0;
                 let rows_of = |s: Set| self.rows_of(&bit(s));
@@ -1251,13 +1280,24 @@ impl Graph {
                     ties: !self.by_bytes && self.widths.is_some(),
                     tie_result: &tie_result,
                     tie_bytes: &tie_bytes,
+                    blocks: [0, 0],
                 };
                 let (table, work) = dp::dpsub(n, &masks, &shape);
-                (Some(table), None, work)
+                // The same enumeration with the prune-first block planned on its own first.
+                let blocked = clustered.and_then(|stats| self.prune_block(stats)).map(
+                    |(block, with_largest)| {
+                        let shape = dp::Shape {
+                            blocks: [block, with_largest],
+                            ..shape
+                        };
+                        (block, dp::dpsub(n, &masks, &shape))
+                    },
+                );
+                (Some(table), None, work, blocked)
             }
-            Enumerator::DpSub => (None, Some("inputs"), dp::Work::default()),
+            Enumerator::DpSub => (None, Some("inputs"), dp::Work::default(), None),
         };
-        let built = match table.and_then(|t| self.table_plan(&t, &masks)) {
+        let mut built = match table.and_then(|t| self.table_plan(&t, &masks)) {
             Some(b) => b,
             None => {
                 // A part held together only by a conjunct over three or more
@@ -1266,6 +1306,24 @@ impl Graph {
                 self.greedy()
             }
         };
+        let mut choice = None;
+        if let Some((_, (_, w))) = &blocked {
+            // The note's planning work counts both enumerations.
+            work.pairs += w.pairs;
+            work.considered += w.considered;
+        }
+        if fallback.is_none()
+            && let Some((block, (t, _))) = blocked
+        {
+            let other = self.table_plan(&t, &masks);
+            let c = prune_first::Choice::new(block, built.cost, other.as_ref().map(|b| b.cost));
+            if c.taken
+                && let Some(b) = other
+            {
+                built = b;
+            }
+            choice = Some(c);
+        }
         let mut pairs_seen = std::collections::BTreeSet::new();
         let mut hyperedges = 0;
         for p in self.preds.iter().filter(|p| p.edge) {
@@ -1288,6 +1346,7 @@ impl Graph {
             measure: settings.cost,
             cost: built.cost,
             shape: built.shape,
+            prune_first: choice,
         };
         (built.plan, stats)
     }
@@ -1520,7 +1579,7 @@ impl Graph {
 /// places; a written equality that is not canonical is left out (the
 /// canonical ones imply it), and the derived ones follow in the order of
 /// their columns.
-fn canonical_equalities(preds: Vec<Arc<Expr>>, owner: &HashMap<AttrId, usize>) -> Vec<Arc<Expr>> {
+fn canonical_equalities(preds: Vec<Arc<Expr>>, owner: &AttrMap<usize>) -> Vec<Arc<Expr>> {
     let mut classes = Classes::default();
     let mut cols: BTreeMap<AttrId, BoundColumn> = BTreeMap::new();
     // The equalities as written, by their columns (smaller id first).
@@ -1548,7 +1607,7 @@ fn canonical_equalities(preds: Vec<Arc<Expr>>, owner: &HashMap<AttrId, usize>) -
     // Per class (by its smallest column), its columns per input, smallest
     // first. `cols` is in id order, so each list is too.
     let mut members: BTreeMap<AttrId, BTreeMap<usize, Vec<&BoundColumn>>> = BTreeMap::new();
-    let mut first: HashMap<AttrId, AttrId> = HashMap::new();
+    let mut first: AttrMap<AttrId> = AttrMap::default();
     for (id, c) in &cols {
         let root = classes.find(*id);
         let key = *first.entry(root).or_insert(*id);

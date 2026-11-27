@@ -419,6 +419,7 @@ fn a_join_publishes_only_into_its_services_cells() {
         key: 0,
         filter: cell,
         options: KeyFilterOptions::default(),
+        column: None,
     };
     // A cell of its own is not the service's.
     let foreign = Arc::new(krishiv_io::RuntimeFilter::new(

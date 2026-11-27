@@ -22,7 +22,9 @@ disk when the limit is reached.
 
 ### The memory limit in a container
 
-`krishiv.memory.limit` is the limit of the process's memory pool. Left unset, it is 80% of the effective memory limit:
+`krishiv.memory.limit` is the limit of the process's memory pool. Left unset, it is 80% of the effective memory limit (lowered so the pool plus what the process may hold beyond it, an
+eighth of the pool and 64 MiB, leaves at least 384 MiB for the page cache, but never under half of it: 512 MiB in a 1 GiB
+container, about 1.39 GiB in 2 GiB, 80% from about 4.4 GiB):
 the tightest cgroup limit that applies to the process (a Docker `--memory`, a Kubernetes memory limit, a systemd
 `MemoryMax`), else the machine's physical memory, or 2 GiB where neither can be read; when both a cgroup limit and the
 physical memory are known, the smaller of the two. A 4 GiB container on a 62 GB host therefore gets a pool of about
@@ -36,7 +38,8 @@ not print the derived value. `EXPLAIN ANALYZE` prints the limit the query ran un
 The 0.2.0 command line has no `server` subcommand: it lists only `sql` and `debug-bundle`. In builds after 0.2.0,
 `krishiv server` (a binary built with the `server` feature) starts one process that serves Spark Connect, by default on
 `127.0.0.1` port `15002` (`--connect-port`, `krishiv.connect.port`), and the admin API on port `8080` (`--port`).
-Settings are given as `--conf KEY=VALUE`. See [configuration](../reference/config/index.md) and
+Settings are given as `--conf KEY=VALUE`. The server is standalone: one process plans and runs every query
+itself, and there is no coordinator or worker mode yet (see [distributed](#distributed)). See [configuration](../reference/config/index.md) and
 [known differences](../concepts/known-differences.md#krishiv-server-spark-connect).
 
 ```bash
@@ -166,4 +169,5 @@ has been idle for `krishiv.python.worker.idleTimeout`, so an idle server lists n
 
 ## Distributed
 
-A scheduler and workers run one query across machines. It is in development; the mode is not available yet.
+A scheduler and workers run one query across machines. It is in development; the mode is not available yet, and
+`krishiv server` has no setting or subcommand that selects a coordinator or worker role.

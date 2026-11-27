@@ -84,6 +84,7 @@ mod exchange_stats;
 mod executor;
 pub mod files;
 pub mod hash;
+pub mod idle;
 mod input_coalesce;
 mod join;
 mod loops;
@@ -123,6 +124,7 @@ pub use exchange_stats::{EXCHANGE_HLL_BITS, ExchangeStats, PartitionStats};
 pub use executor::{
     Executor, ExecutorConfig, TaskHandle, TokioClock, TokioExecutor, WorkloadClass,
 };
+pub use idle::{QueryRun, queries_running, query_run};
 pub use join::{
     AsOfDistance, AsOfMergeDirection, AsOfMergeSpec, BroadcastKey, BroadcastTables, HashJoin,
     HashJoinNode, JoinRuntimeFilter, JoinSpec, JoinType, NestedLoopJoin, NestedLoopJoinNode,

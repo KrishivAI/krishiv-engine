@@ -72,6 +72,7 @@ fn dirs() -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf) {
     (tmp, allowed, secret)
 }
 
+#[cfg(unix)]
 #[test]
 fn path_confinement() {
     let (_tmp, allowed, secret) = dirs();

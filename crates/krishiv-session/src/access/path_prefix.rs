@@ -2,7 +2,7 @@
 //! [`PathPrefixPolicy`]: local paths only under allowed roots (links resolved), object-store paths only under
 //! allowed prefixes, every other decision delegated; and the `krishiv.io.*` allowlist settings it reads.
 
-use std::path::{Component, Path, PathBuf};
+use std::path::{Component, Path, PathBuf, Prefix};
 use std::sync::Arc;
 
 use krishiv_common::config::{
@@ -11,6 +11,8 @@ use krishiv_common::config::{
 use krishiv_common::error::{KrishivError, KrishivInvalidConfigValue, PathNotFound};
 use krishiv_common::secret::OptionValue;
 use krishiv_io::{StoreId, parse_object_url};
+
+use super::own_refusals::OwnRefusals;
 use krishiv_plan::analyzer::{
     AccessDecision, AccessPolicy, BoxFuture, PolicyVersion, Principal, Privilege, Securable,
 };
@@ -52,6 +54,8 @@ pub struct PathPrefixPolicy {
     roots: Vec<PathBuf>,
     prefixes: Vec<ObjectPrefix>,
     inner: Arc<dyn AccessPolicy>,
+    /// The path refusals this policy made itself (G6 review: not `inner`'s to count or label).
+    own: OwnRefusals,
 }
 
 /// One allowed object-store prefix: a store and the whole key segments under it.
@@ -85,7 +89,7 @@ impl PathPrefixPolicy {
             .map(|r| {
                 std::fs::canonicalize(r.as_ref()).map_err(|_| {
                     KrishivError::from(PathNotFound {
-                        path: format!("file:{}", r.as_ref().display()),
+                        path: krishiv_exec::files::file_display(r.as_ref()),
                     })
                 })
             })
@@ -94,6 +98,7 @@ impl PathPrefixPolicy {
             roots,
             prefixes: Vec::new(),
             inner,
+            own: OwnRefusals::default(),
         })
     }
 
@@ -112,6 +117,9 @@ impl PathPrefixPolicy {
         mut self,
         prefixes: impl IntoIterator<Item = S>,
     ) -> Result<Self, KrishivError> {
+        // Another confinement keeps its own refusal records: a clone of this policy extended
+        // here must never consume a record the original made.
+        self.own = OwnRefusals::default();
         for prefix in prefixes {
             let prefix = prefix.as_ref();
             let parsed = parse_object_prefix(prefix)
@@ -156,6 +164,7 @@ impl PathPrefixPolicy {
             roots: allowed_roots(config)?,
             prefixes: Vec::new(),
             inner,
+            own: OwnRefusals::default(),
         }
         .with_object_prefixes(config_list(config, &IO_OBJECT_STORE_ALLOWED_PREFIXES))
     }
@@ -180,12 +189,8 @@ impl PathPrefixPolicy {
         let Some(local) = text.strip_prefix("file:") else {
             return self.allows_object(text);
         };
-        let local = Path::new(local);
-        let normal = local.is_absolute()
-            && local
-                .components()
-                .all(|c| matches!(c, Component::RootDir | Component::Normal(_)));
-        if !normal || text.contains('%') {
+        let local = &krishiv_exec::files::native_path(local);
+        if !plain_absolute(local) || text.contains('%') {
             return false;
         }
         resolve_links(local).is_some_and(|p| self.roots.iter().any(|r| p.starts_with(r)))
@@ -201,6 +206,22 @@ impl PathPrefixPolicy {
                 .any(|a| a.store == p.store && p.segments.starts_with(&a.segments))
         })
     }
+}
+
+/// Whether `local` is absolute and holds only plain names after its root: no `.`, no `..`. On
+/// Windows it may start with a drive (`C:\`, or verbatim `\\?\C:\`), and nothing else: a UNC share
+/// or device path is refused (fails closed).
+fn plain_absolute(local: &Path) -> bool {
+    let mut parts = local.components().peekable();
+    if let Some(Component::Prefix(p)) = parts.peek() {
+        if !matches!(p.kind(), Prefix::Disk(_) | Prefix::VerbatimDisk(_)) {
+            return false;
+        }
+        parts.next();
+    }
+    local.is_absolute()
+        && parts.next() == Some(Component::RootDir)
+        && parts.all(|c| matches!(c, Component::Normal(_)))
 }
 
 /// The comma-separated entries of the string setting `entry` (blank entries dropped).
@@ -297,6 +318,33 @@ pub(crate) fn resolve_links(path: &Path) -> Option<PathBuf> {
     }
 }
 
+/// Whether `a` and `b` name the same place, a drive written plain (`C:\x`) or verbatim (`\\?\C:\x`) alike:
+/// `std::fs::canonicalize` gives the verbatim form on Windows, while a path made from a `file:/C:/x`
+/// location is plain. Any other prefix (a UNC share, a device) must match as written.
+pub(crate) fn same_place(a: &Path, b: &Path) -> bool {
+    fn drive(c: Component<'_>) -> Option<u8> {
+        match c {
+            Component::Prefix(p) => match p.kind() {
+                Prefix::Disk(d) | Prefix::VerbatimDisk(d) => Some(d.to_ascii_uppercase()),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+    let (mut x, mut y) = (a.components(), b.components());
+    loop {
+        match (x.next(), y.next()) {
+            (None, None) => return true,
+            (Some(p), Some(q)) if p == q => {}
+            (Some(p), Some(q)) => match (drive(p), drive(q)) {
+                (Some(d), Some(e)) if d == e => {}
+                _ => return false,
+            },
+            _ => return false,
+        }
+    }
+}
+
 /// Whether `e` says the entry is not there: missing, or below a file.
 fn absent(e: &std::io::Error) -> bool {
     matches!(
@@ -319,10 +367,12 @@ impl AccessPolicy for PathPrefixPolicy {
         if let Securable::Path(path) = securable
             && !self.allows(path)
         {
+            self.own.refused(securable, privilege);
             return Box::pin(std::future::ready(Ok(AccessDecision::Deny {
                 reason: "path outside the allowed roots".to_owned(),
             })));
         }
+        self.own.passed_on();
         self.inner.check(principal, securable, privilege)
     }
 
@@ -331,6 +381,204 @@ impl AccessPolicy for PathPrefixPolicy {
     }
 
     fn denied(&self, principal: &Principal, securable: &Securable, privilege: Privilege) {
+        // A refusal of this policy's own is not `inner`'s: it never decided it.
+        if self.own.take(securable, privilege) {
+            return;
+        }
         self.inner.denied(principal, securable, privilege);
+    }
+
+    fn prefetch<'a>(
+        &'a self,
+        principal: &'a Principal,
+        items: &'a [(Securable, Privilege)],
+    ) -> BoxFuture<'a, ()> {
+        self.inner.prefetch(principal, items)
+    }
+
+    fn decides(&self, securable: &Securable) -> bool {
+        self.inner.decides(securable)
+    }
+
+    fn refusal_label(&self) -> Option<&'static str> {
+        // The confinement is the server's own rule (ADR 0046 §3a): its refusals read as `roles`.
+        if self.own.latest() {
+            return None;
+        }
+        self.inner.refusal_label()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use krishiv_common::secret::OptionValue;
+    use krishiv_plan::analyzer::{AllowAll, PrincipalKind, TableIdent};
+
+    use super::*;
+    use super::{PathPrefixPolicy, plain_absolute, same_place};
+
+    #[test]
+    fn plain_absolute_paths() {
+        assert!(!plain_absolute(Path::new("data/x")));
+        // `/data/x` has no drive, so it is not absolute on Windows.
+        if cfg!(unix) {
+            assert!(plain_absolute(Path::new("/data/x")));
+            assert!(!plain_absolute(Path::new("/data/../x")));
+        }
+        #[cfg(windows)]
+        {
+            assert!(plain_absolute(Path::new(r"C:\data\x")));
+            assert!(plain_absolute(Path::new("C:/data/x")));
+            assert!(plain_absolute(Path::new(r"\\?\C:\data\x")));
+            // Drive-relative, a share and a device path are refused.
+            assert!(!plain_absolute(Path::new("C:data")));
+            assert!(!plain_absolute(Path::new(r"\\srv\share\x")));
+            assert!(!plain_absolute(Path::new(r"\\.\COM1")));
+            assert!(!plain_absolute(Path::new(r"C:\data\..\x")));
+        }
+    }
+
+    /// An allowed root admits the files under it in every spelling a local path takes on this
+    /// platform, and refuses a sibling and a `..` escape.
+    #[test]
+    fn an_allowed_root_admits_its_files_and_nothing_beside_it() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let root = tmp.path().join("allowed");
+        let sibling = tmp.path().join("other");
+        std::fs::create_dir(&root).expect("root");
+        std::fs::create_dir(&sibling).expect("sibling");
+        std::fs::write(root.join("a.csv"), "x").expect("file");
+        let policy = PathPrefixPolicy {
+            roots: vec![std::fs::canonicalize(&root).expect("canonical")],
+            prefixes: Vec::new(),
+            inner: Arc::new(AllowAll),
+            own: OwnRefusals::default(),
+        };
+        let allows = |text: String| policy.allows(&OptionValue::Plain(text));
+        let slashed = |p: &Path| p.display().to_string().replace('\\', "/");
+        let file = root.join("a.csv");
+        let mut admitted = vec![format!("file:{}", slashed(&file))];
+        if cfg!(windows) {
+            // `LocalPaths` writes a drive path as `file:/C:/x`; `C:\x` text is accepted too.
+            admitted.push(format!("file:/{}", slashed(&file)));
+            admitted.push(format!("file:{}", file.display()));
+        }
+        for text in admitted {
+            assert!(allows(text.clone()), "{text}");
+        }
+        assert!(!allows(format!("file:{}", slashed(&sibling.join("b.csv")))));
+        assert!(!allows(format!("file:{}/../other/b.csv", slashed(&root))));
+    }
+
+    /// A canonical path is the same place as the path it came from, so the directory checks hold where
+    /// `canonicalize` writes a drive verbatim (Windows).
+    #[test]
+    fn a_canonical_path_is_the_same_place() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let canonical = std::fs::canonicalize(tmp.path()).expect("canonical");
+        assert!(same_place(&canonical, &canonical));
+        assert!(!same_place(&canonical, &canonical.join("x")));
+        assert!(!same_place(&canonical.join("x"), &canonical.join("y")));
+        #[cfg(windows)]
+        {
+            assert!(same_place(Path::new(r"\\?\C:\a\b"), Path::new(r"C:\a\b")));
+            assert!(same_place(Path::new(r"\\?\c:\a"), Path::new(r"C:\a")));
+            assert!(!same_place(Path::new(r"\\?\D:\a"), Path::new(r"C:\a")));
+            assert!(!same_place(Path::new(r"\\srv\share\a"), Path::new(r"C:\a")));
+        }
+    }
+
+    /// A provider that allows, names itself `external` and counts what it is told.
+    #[derive(Default)]
+    struct Labelled {
+        told: AtomicUsize,
+    }
+
+    impl AccessPolicy for Labelled {
+        fn version(&self) -> PolicyVersion {
+            PolicyVersion(1)
+        }
+
+        fn check<'a>(
+            &'a self,
+            _: &'a Principal,
+            _: &'a Securable,
+            _: Privilege,
+        ) -> BoxFuture<'a, Result<AccessDecision, KrishivError>> {
+            Box::pin(std::future::ready(Ok(AccessDecision::Deny {
+                reason: "no".to_owned(),
+            })))
+        }
+
+        fn denied(&self, _: &Principal, _: &Securable, _: Privilege) {
+            self.told.fetch_add(1, Ordering::Relaxed);
+        }
+
+        fn refusal_label(&self) -> Option<&'static str> {
+            Some("external")
+        }
+    }
+
+    /// G6 review: a path refused by the confinement itself is labelled as the server's rule and
+    /// never told to the provider behind it; a refusal of that provider still is.
+    #[test]
+    fn its_own_refusals_are_not_the_inner_providers() {
+        let root = tempfile::tempdir().unwrap();
+        let inner = Arc::new(Labelled::default());
+        let policy = PathPrefixPolicy::new([root.path()], Arc::clone(&inner) as _).unwrap();
+        let ana = Principal::new("ana", PrincipalKind::User);
+        let outside = Securable::Path(OptionValue::Plain("file:/etc".to_owned()));
+        let d = futures::executor::block_on(policy.check(&ana, &outside, Privilege::Select));
+        assert!(matches!(d, Ok(AccessDecision::Deny { .. })), "{d:?}");
+        assert_eq!(policy.refusal_label(), None);
+        policy.denied(&ana, &outside, Privilege::Select);
+        assert_eq!(inner.told.load(Ordering::Relaxed), 0);
+
+        let table = Securable::Table(TableIdent {
+            catalog: "spark_catalog".to_owned(),
+            namespace: vec!["default".to_owned()],
+            name: "t".to_owned(),
+        });
+        let d = futures::executor::block_on(policy.check(&ana, &table, Privilege::Select));
+        assert!(matches!(d, Ok(AccessDecision::Deny { .. })), "{d:?}");
+        assert_eq!(policy.refusal_label(), Some("external"));
+        policy.denied(&ana, &table, Privilege::Select);
+        assert_eq!(inner.told.load(Ordering::Relaxed), 1);
+        // A path told again without a refusal of its own here goes to the provider.
+        policy.denied(&ana, &outside, Privilege::Select);
+        assert_eq!(inner.told.load(Ordering::Relaxed), 2);
+    }
+
+    /// CodeRabbit on #1023: a clone given other prefixes keeps refusal records of its own, so it
+    /// never takes a record the original made and the provider behind it is still told.
+    #[test]
+    fn a_clone_with_other_prefixes_never_takes_the_originals_records() {
+        let root = tempfile::tempdir().unwrap();
+        let inner = Arc::new(Labelled::default());
+        let original = PathPrefixPolicy::new([root.path()], Arc::clone(&inner) as _).unwrap();
+        let ana = Principal::new("ana", PrincipalKind::User);
+        let object = Securable::Path(OptionValue::Plain("s3://bucket/data/x".to_owned()));
+        let d = futures::executor::block_on(original.check(&ana, &object, Privilege::Select));
+        assert!(matches!(d, Ok(AccessDecision::Deny { .. })), "{d:?}");
+        let extended = original
+            .clone()
+            .with_object_prefixes(["s3://bucket/data"])
+            .unwrap();
+        let d = futures::executor::block_on(extended.check(&ana, &object, Privilege::Select));
+        assert!(matches!(d, Ok(AccessDecision::Deny { .. })), "{d:?}");
+        assert_eq!(extended.refusal_label(), Some("external"));
+        extended.denied(&ana, &object, Privilege::Select);
+        assert_eq!(
+            inner.told.load(Ordering::Relaxed),
+            1,
+            "the inner provider refused it"
+        );
+        // The original's own record is still its own.
+        original.denied(&ana, &object, Privilege::Select);
+        assert_eq!(inner.told.load(Ordering::Relaxed), 1);
     }
 }

@@ -117,13 +117,13 @@ impl Session {
     /// Connect server that parses `Expression.expression_string` while it translates a plan.
     #[cfg(feature = "unstable-ir")]
     pub fn parser_options(&self) -> ParserOptions {
-        parser_options(&self.state.conf.snapshot())
+        parser_options(&self.state.conf.snapshot(), self.state.profile)
     }
 
     /// This session's parser options, from its configuration.
     #[cfg(not(feature = "unstable-ir"))]
     pub(crate) fn parser_options(&self) -> ParserOptions {
-        parser_options(&self.state.conf.snapshot())
+        parser_options(&self.state.conf.snapshot(), self.state.profile)
     }
 
     /// The directory a write of `text` goes to, as it physically is (links in
@@ -571,7 +571,7 @@ impl Session {
                 self.state
                     .runtime
                     .results
-                    .invalidate_path(std::path::Path::new(local));
+                    .invalidate_path(&krishiv_exec::files::native_path(local));
             }
             let mut dirs = std::collections::BTreeSet::new();
             for f in &committed {
@@ -629,9 +629,11 @@ impl Session {
             match krishiv_io::BeneathStore::anchor(std::path::Path::new(local)) {
                 Ok(anchored) => {
                     let id = at.store.private_to(job);
+                    let anchored = Arc::new(anchored);
                     self.state
                         .io
-                        .register_store(id.clone(), Arc::new(anchored) as Arc<dyn ObjectStore>);
+                        .register_store(id.clone(), Arc::clone(&anchored) as Arc<dyn ObjectStore>);
+                    self.state.io.register_staging_sweeper(id.clone(), anchored);
                     let registration = StoreRegistration {
                         io: Arc::clone(&self.state.io),
                         id: id.clone(),
@@ -650,8 +652,8 @@ impl Session {
                 Err(krishiv_io::AnchorError::UnsupportedName(name)) => {
                     return Err(KrishivUnsupportedFeature {
                         feature: format!(
-                            "writing below the directory {name:?} (a name with non-ASCII or \
-                             reserved characters above the target)"
+                            "writing below the directory {name:?} (a name with a control \
+                             character above the target)"
                         ),
                     }
                     .into());
@@ -802,7 +804,10 @@ impl Session {
         if let Some(row) = command.as_ref().and_then(|c| c.row.as_ref()) {
             *row.lock().unwrap_or_else(PoisonError::into_inner) = Some(log_id.clone());
         }
-        let permit = self.admit(&log_id, env, exempt, fallback).await?;
+        let permit = self
+            .admit(&log_id, env, exempt, fallback)
+            .await?
+            .with_run(krishiv_exec::query_run(&self.state.runtime.executor));
         Ok(Admitted::new(Arc::clone(&self.state), log_id, permit))
     }
 }

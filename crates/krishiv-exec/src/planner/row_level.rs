@@ -69,6 +69,9 @@ pub struct RowLevelCapabilities {
     /// Changed rows can be recorded as deletes (Delta deletion vectors, Iceberg position deletes)
     /// instead of rewriting their files.
     pub merge_on_read: bool,
+    /// The table's commit records the write's `krishiv.write.idempotencyKey` and a commit whose key
+    /// the snapshot already has writes nothing (E34); a table without it refuses a key.
+    pub idempotent_commit: bool,
     /// `MERGE`'s multiple-match check.
     pub cardinality: CardinalityRule,
 }
@@ -79,6 +82,7 @@ impl RowLevelCapabilities {
     pub fn copy_on_write(cardinality: CardinalityRule) -> Self {
         Self {
             merge_on_read: false,
+            idempotent_commit: false,
             cardinality,
         }
     }
@@ -241,6 +245,26 @@ pub(super) fn bound_columns(e: &Expr, out: &mut Vec<krishiv_plan::BoundColumn>) 
     }
 }
 
+/// The `RowLevelWrite` option carrying a compaction group's output file size ceiling in bytes.
+pub const REWRITE_WRITE_MAX_OPTION: &str = "__krishiv_rewrite_write_max_file_size";
+
+/// The `RowLevelWrite` option marking a `rewrite_data_files` group: the write goes to the table's
+/// [`RowLevelTable::group_rewriter`], not its statement rewriter.
+pub const REWRITE_GROUP_OPTION: &str = "__krishiv_rewrite_group";
+
+/// One file group of a `rewrite_data_files` plan.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RewriteGroup {
+    /// The group's files (values of `_krishiv_row_file`, for [`RowLevelTable::scan_files`]).
+    pub files: Vec<Vec<u8>>,
+    /// The group's input bytes.
+    pub input_bytes: i64,
+    /// The size ceiling of an output file.
+    pub write_max_file_size: i64,
+    /// How many files the group is expected to write.
+    pub expected_output_files: usize,
+}
+
 /// One table, at the version a row-level statement read, that the statement can change.
 pub trait RowLevelTable: Send + Sync + fmt::Debug {
     /// What the table can do.
@@ -273,6 +297,46 @@ pub trait RowLevelTable: Send + Sync + fmt::Debug {
     /// # Errors
     /// `UNSUPPORTED_FEATURE.TABLE_OPERATION` for an operation the table refuses.
     fn rewriter(&self, request: &RowLevelWrite) -> Result<Arc<dyn Sink>>;
+
+    /// The sink of one file-compaction group (`rewrite_data_files`): `request.touched` are the
+    /// group's files and the sink's rows are theirs unchanged, committed as a rewrite (a
+    /// concurrent append is no conflict). A table that cannot compact refuses.
+    ///
+    /// # Errors
+    /// `UNSUPPORTED_FEATURE.TABLE_OPERATION` unless the table overrides it.
+    fn group_rewriter(&self, request: &RowLevelWrite) -> Result<Arc<dyn Sink>> {
+        let _ = request;
+        Err(krishiv_common::error::KrishivUnsupportedFeature {
+            feature: "rewriting data files of this table".to_owned(),
+        }
+        .into())
+    }
+
+    /// The file groups a `rewrite_data_files` call with `options` compacts, planned over the
+    /// table's snapshot (nothing is read or written).
+    ///
+    /// # Errors
+    /// `KRISHIV_ICEBERG_PROCEDURE_ARGUMENT` for a bad option; `UNSUPPORTED_FEATURE` unless the
+    /// table overrides it.
+    fn plan_rewrite(&self, options: &BTreeMap<String, String>) -> Result<Vec<RewriteGroup>> {
+        let _ = options;
+        Err(krishiv_common::error::KrishivUnsupportedFeature {
+            feature: "rewriting data files of this table".to_owned(),
+        }
+        .into())
+    }
+
+    /// How many live data files the table holds now (what a `rewrite_data_files` result's added
+    /// count is read from: files after, less files before, plus the files it replaced).
+    ///
+    /// # Errors
+    /// `UNSUPPORTED_FEATURE` unless the table supports `rewrite_data_files`.
+    fn live_data_files(&self) -> Result<usize> {
+        Err(krishiv_common::error::KrishivUnsupportedFeature {
+            feature: "rewriting data files of this table".to_owned(),
+        }
+        .into())
+    }
 
     /// The statement's result rows from its counts; `None` gives an empty result, as Spark does
     /// for a v2 table.

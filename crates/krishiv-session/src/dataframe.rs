@@ -16,27 +16,30 @@ use arrow_schema::{Schema, SchemaRef};
 use futures::StreamExt;
 use krishiv_common::error::{KrishivError, KrishivUnsupportedFeature};
 use krishiv_common::secret::OptionValue;
-use krishiv_plan::analyzer::{AnalyzedPlan, TableColumn};
+use krishiv_plan::analyzer::AnalyzedPlan;
 use krishiv_plan::{
-    Expr, Grouping, JoinCondition, JoinKind, Literal, LogicalPlan, Origin, PlanId, PlanNode,
-    ReadSource, SetOperation,
+    Expr, Grouping, JoinCondition, JoinKind, LogicalPlan, Origin, PlanId, PlanNode, ReadSource,
+    SetOperation,
 };
 
 use crate::cache::SnapshotLease;
-use crate::catalog::TempTable;
 use crate::column::Column;
 use crate::run_site::DF_SOURCE;
 use crate::session::{QueryEnv, RecordBatchStream, Session, WriteTarget, read_files, typed_paths};
 
 pub(crate) mod checkpoint;
 mod fill_stream;
+mod generators;
 mod geo_gate;
 mod observe;
+mod python_relations;
 pub use observe::ObservedSink;
 pub(crate) use observe::{Observers, PendingObservations, deliver};
 mod boxed;
 mod count;
 mod metadata;
+mod pivot;
+mod temp_view;
 mod traced;
 
 pub(crate) use fill_stream::{CacheFill, FillKind};
@@ -326,10 +329,7 @@ impl DataFrame {
     /// ```
     #[must_use]
     pub fn select(&self, cols: impl IntoIterator<Item = impl Into<Column>>) -> Self {
-        self.derive(PlanNode::Project {
-            input: Arc::clone(&self.plan),
-            exprs: exprs(cols),
-        })
+        self.select_lifting_generators(exprs(cols))
     }
 
     /// `SELECT` of SQL expression strings (PySpark's `selectExpr`): each
@@ -358,10 +358,7 @@ impl DataFrame {
                     .map_err(|e| e.error)?,
             );
         }
-        Ok(self.derive(PlanNode::Project {
-            input: Arc::clone(&self.plan),
-            exprs: lowered,
-        }))
+        Ok(self.select_lifting_generators(lowered))
     }
 
     /// Rows where `condition` is true (PySpark's `filter`).
@@ -430,6 +427,9 @@ impl DataFrame {
     /// ```
     #[must_use]
     pub fn with_column(&self, name: &str, value: Column) -> Self {
+        if let Some(generated) = self.with_column_generator(name, &Arc::new(value.expr.clone())) {
+            return generated;
+        }
         self.derive(PlanNode::WithColumns {
             input: Arc::clone(&self.plan),
             columns: vec![(name.to_owned(), Arc::new(value.expr))],
@@ -514,6 +514,7 @@ impl DataFrame {
             df: self.clone(),
             keys: keys.into_iter().map(|k| k.into().expr).collect(),
             sets,
+            pivot: None,
         }
     }
 
@@ -642,206 +643,9 @@ impl DataFrame {
         })
     }
 
-    /// The same as [`Self::order_by`] (PySpark's `sort`).
-    ///
-    /// ```
-    /// # let s = krishiv_session::Session::new()?;
-    /// let df = s.table("t").sort(["a"]);
-    /// # Ok::<(), krishiv_common::error::KrishivError>(())
-    /// ```
-    #[must_use]
-    pub fn sort(&self, keys: impl IntoIterator<Item = impl Into<Column>>) -> Self {
-        self.order_by(keys)
-    }
-
-    /// The first `n` rows (PySpark's `limit`).
-    ///
-    /// ```
-    /// # let s = krishiv_session::Session::new()?;
-    /// let df = s.table("t").limit(10);
-    /// # Ok::<(), krishiv_common::error::KrishivError>(())
-    /// ```
-    #[must_use]
-    pub fn limit(&self, n: i32) -> Self {
-        self.derive(PlanNode::Limit {
-            input: Arc::clone(&self.plan),
-            limit: Arc::new(Expr::literal(Literal::Integer(n))),
-        })
-    }
-
-    /// This DataFrame without its first `n` rows (PySpark's `offset`);
-    /// `df.offset(m).limit(n)` is `LIMIT n OFFSET m`.
-    ///
-    /// ```
-    /// # let s = krishiv_session::Session::new()?;
-    /// let df = s.table("t").offset(10).limit(5);
-    /// # Ok::<(), krishiv_common::error::KrishivError>(())
-    /// ```
-    #[must_use]
-    pub fn offset(&self, n: i32) -> Self {
-        self.derive(PlanNode::Offset {
-            input: Arc::clone(&self.plan),
-            offset: Arc::new(Expr::literal(Literal::Integer(n))),
-        })
-    }
-
-    /// The distinct rows (PySpark's `distinct`).
-    ///
-    /// ```
-    /// # let s = krishiv_session::Session::new()?;
-    /// let df = s.table("t").distinct();
-    /// # Ok::<(), krishiv_common::error::KrishivError>(())
-    /// ```
-    #[must_use]
-    pub fn distinct(&self) -> Self {
-        self.derive(PlanNode::Distinct {
-            input: Arc::clone(&self.plan),
-        })
-    }
-
-    /// Every row of this DataFrame and `other`, columns matched by
-    /// position (PySpark's `union` and `unionAll`; SQL's `UNION ALL`).
-    /// Column types widen per position; a different column count fails
-    /// analysis.
-    ///
-    /// ```
-    /// # let s = krishiv_session::Session::new()?;
-    /// let df = s.table("l").union(&s.table("r"));
-    /// # Ok::<(), krishiv_common::error::KrishivError>(())
-    /// ```
-    #[must_use]
-    pub fn union(&self, other: &Self) -> Self {
-        self.pair(
-            other,
-            PlanNode::Union {
-                inputs: vec![Arc::clone(&self.plan), Arc::clone(&other.plan)],
-                by_name: false,
-                allow_missing_columns: false,
-            },
-        )
-    }
-
-    /// Every row of this DataFrame and `other`, columns matched by name
-    /// (PySpark's `unionByName`): `other`'s columns are reordered to this
-    /// frame's, and with `allow_missing_columns` a column one side lacks
-    /// reads NULL there.
-    ///
-    /// ```
-    /// # let s = krishiv_session::Session::new()?;
-    /// let df = s.table("l").union_by_name(&s.table("r"), true);
-    /// # Ok::<(), krishiv_common::error::KrishivError>(())
-    /// ```
-    #[must_use]
-    pub fn union_by_name(&self, other: &Self, allow_missing_columns: bool) -> Self {
-        self.pair(
-            other,
-            PlanNode::Union {
-                inputs: vec![Arc::clone(&self.plan), Arc::clone(&other.plan)],
-                by_name: true,
-                allow_missing_columns,
-            },
-        )
-    }
-
-    /// The rows of this DataFrame the `other` one has too, without
-    /// duplicates (PySpark's `intersect`; SQL's `INTERSECT`).
-    ///
-    /// ```
-    /// # let s = krishiv_session::Session::new()?;
-    /// let df = s.table("l").intersect(&s.table("r"));
-    /// # Ok::<(), krishiv_common::error::KrishivError>(())
-    /// ```
-    #[must_use]
-    pub fn intersect(&self, other: &Self) -> Self {
-        self.set_op(other, SetOperation::Intersect, false)
-    }
-
-    /// The rows of this DataFrame the `other` one has too, duplicates kept
-    /// (PySpark's `intersectAll`; SQL's `INTERSECT ALL`).
-    ///
-    /// ```
-    /// # let s = krishiv_session::Session::new()?;
-    /// let df = s.table("l").intersect_all(&s.table("r"));
-    /// # Ok::<(), krishiv_common::error::KrishivError>(())
-    /// ```
-    #[must_use]
-    pub fn intersect_all(&self, other: &Self) -> Self {
-        self.set_op(other, SetOperation::Intersect, true)
-    }
-
-    /// The rows of this DataFrame the `other` one lacks, without
-    /// duplicates (PySpark's `subtract`; SQL's `EXCEPT`).
-    ///
-    /// ```
-    /// # let s = krishiv_session::Session::new()?;
-    /// let df = s.table("l").subtract(&s.table("r"));
-    /// # Ok::<(), krishiv_common::error::KrishivError>(())
-    /// ```
-    #[must_use]
-    pub fn subtract(&self, other: &Self) -> Self {
-        self.set_op(other, SetOperation::Except, false)
-    }
-
-    /// The rows of this DataFrame the `other` one lacks, duplicates kept
-    /// (PySpark's `exceptAll`; SQL's `EXCEPT ALL`).
-    ///
-    /// ```
-    /// # let s = krishiv_session::Session::new()?;
-    /// let df = s.table("l").except_all(&s.table("r"));
-    /// # Ok::<(), krishiv_common::error::KrishivError>(())
-    /// ```
-    #[must_use]
-    pub fn except_all(&self, other: &Self) -> Self {
-        self.set_op(other, SetOperation::Except, true)
-    }
-
-    /// This DataFrame with the hint `name` and `params` (PySpark's
-    /// `hint`): a join strategy hint wraps the relations `params` name
-    /// (columns and string literals name relations); an unknown hint and
-    /// a hint naming no relation come back as warnings, and a
-    /// partitioning hint (`COALESCE`, `REPARTITION`, ...) is checked and
-    /// otherwise dropped: a single-node plan has no partitions to set.
-    /// The hint never changes the rows.
-    ///
-    /// ```
-    /// # use krishiv_session::functions::lit;
-    /// # let s = krishiv_session::Session::new()?;
-    /// let df = s.table("t").hint("BROADCAST", [lit("t")]);
-    /// # Ok::<(), krishiv_common::error::KrishivError>(())
-    /// ```
-    #[must_use]
-    pub fn hint(&self, name: &str, params: impl IntoIterator<Item = impl Into<Column>>) -> Self {
-        self.derive(PlanNode::Hint {
-            input: Arc::clone(&self.plan),
-            name: name.to_owned(),
-            params: params
-                .into_iter()
-                .map(|c| Arc::new(c.into().expr))
-                .collect(),
-        })
-    }
-
-    /// This DataFrame with its columns renamed to `names`, in order
-    /// (PySpark's `toDF`; SQL's `AS (columns)`). A different count fails
-    /// analysis.
-    ///
-    /// ```
-    /// # let s = krishiv_session::Session::new()?;
-    /// let df = s.table("t").to_df(["x", "y"]);
-    /// # Ok::<(), krishiv_common::error::KrishivError>(())
-    /// ```
-    #[must_use]
-    pub fn to_df(&self, names: impl IntoIterator<Item = impl AsRef<str>>) -> Self {
-        self.derive(PlanNode::SubqueryAlias {
-            input: Arc::clone(&self.plan),
-            alias: String::new(),
-            columns: names.into_iter().map(|n| n.as_ref().to_owned()).collect(),
-        })
-    }
-
-    /// A sample of the rows (PySpark's `sample`). The engine cannot
-    /// sample yet: the returned frame fails its first action with
-    /// `KRISHIV_UNSUPPORTED_FEATURE`, as do the schema and the plans.
+    /// A sample of the rows (PySpark's `sample`). The engine has no sample plan node, so this
+    /// frame fails its first action with `KRISHIV_UNSUPPORTED_FEATURE`; the Python layer builds
+    /// sampling from `rand(seed)` (a filter on the draw) and does not call this.
     ///
     /// ```
     /// # let s = krishiv_session::Session::new()?;
@@ -850,7 +654,7 @@ impl DataFrame {
     /// ```
     ///
     /// # Errors
-    /// `KRISHIV_UNSUPPORTED_FEATURE`: sampling is not supported yet.
+    /// `KRISHIV_UNSUPPORTED_FEATURE`: there is no sample plan node.
     #[must_use]
     pub fn sample(&self, _with_replacement: bool, _fraction: f64, _seed: i64) -> Self {
         Self::invalid(
@@ -1065,7 +869,25 @@ impl DataFrame {
             return Ok(a);
         }
         env.set_quiet_denials(quiet_denials, &self.session.state.policy);
-        self.analyzed_in_with_text(env, text.as_deref()).await
+        // A fresh analysis of a SQL statement's frame (an action after `sql`) asks the policy
+        // for that statement: its class and query id reach a provider's questions (ADR 0049).
+        let context = match (
+            env.statement_class,
+            crate::access::StatementContext::current(),
+        ) {
+            (Some(class), None) => Some(crate::access::StatementContext::new(
+                class,
+                self.session.operation_id().map(crate::QueryId::as_str),
+                Arc::clone(&env.row),
+            )),
+            _ => None,
+        };
+        match context {
+            Some(context) => {
+                Box::pin(context.scope(self.analyzed_in_with_text(env, text.as_deref()))).await
+            }
+            None => self.analyzed_in_with_text(env, text.as_deref()).await,
+        }
     }
 
     /// [`Self::analysis`] for an action that runs the query: a re-analysis
@@ -1113,7 +935,9 @@ impl DataFrame {
         if let Some(e) = &self.invalid {
             return Err(e.clone());
         }
+        // A checkpoint the plan runs first is execution, not planning: the clock starts after it.
         let plan = self.plan_with_checkpoints().await?;
+        let began = std::time::Instant::now();
         let (analyzed, through_views) = self.session.analyze_in(&plan, &env, text).await?;
         // Analysis-only paths (DESCRIBE QUERY, `schema`) never reach `open_files`: refuse a
         // time-travel clause they would otherwise describe as the current table.
@@ -1127,6 +951,7 @@ impl DataFrame {
             env.set_text(t);
         }
         env.observers = Arc::new(self.observers_through(through_views));
+        env.planning.analysis_done(began);
         let analysis = Arc::new(Analysis {
             env: Arc::new(env),
             analyzed: Arc::new(analyzed),
@@ -1183,6 +1008,38 @@ impl DataFrame {
 
     async fn schema_here(&self) -> Result<SchemaRef, KrishivError> {
         Ok(client_schema_of(&self.analysis().await?.analyzed))
+    }
+
+    /// The result's schema from the analysis this frame already holds, without revalidating it:
+    /// no fresh analysis even when the plan reads files (which [`Self::schema`] analyzes again
+    /// every call), so a catalog, configuration or file change since that analysis is not seen.
+    /// Only for a caller that analyzed the frame a moment ago in the same request, as Arrow
+    /// Flight SQL does right after [`crate::Session::sql_query_with`] (MODES-4 F1). A frame that
+    /// holds no analysis yet gets [`Self::schema`]. Not covered by semver.
+    ///
+    /// ```
+    /// # let s = krishiv_session::Session::new()?;
+    /// use krishiv_session::{QueryOptions, SqlQuery};
+    /// let q = futures::executor::block_on(s.sql_query_with("SELECT 1 AS a", QueryOptions::default()))?;
+    /// let SqlQuery::Query(df) = q else { unreachable!() };
+    /// let schema = futures::executor::block_on(df.held_schema())?;
+    /// assert_eq!(schema.field(0).name(), "a");
+    /// # Ok::<(), krishiv_common::error::KrishivError>(())
+    /// ```
+    ///
+    /// # Errors
+    /// As [`Self::schema`], when the frame holds no analysis.
+    #[cfg(feature = "unstable-ir")]
+    pub async fn held_schema(&self) -> Result<SchemaRef, KrishivError> {
+        let held = self
+            .analysis
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        match held {
+            Some(a) => Ok(client_schema_of(&a.analyzed)),
+            None => self.schema().await,
+        }
     }
 
     /// Runs the query; its result rows, in batches. Dropping the stream
@@ -1783,134 +1640,6 @@ impl DataFrame {
             writer.save_as_table(table).await
         }
     }
-
-    /// Registers this DataFrame as the temporary view `name`, replacing any
-    /// table or view of that name (PySpark's `createOrReplaceTempView`).
-    /// A view over a read by path lists its files again at every query;
-    /// any other view inlines its plan as a subquery wherever it is read.
-    ///
-    /// ```
-    /// # let s = krishiv_session::Session::new()?;
-    /// let e = futures::executor::block_on(s.table("t").create_or_replace_temp_view("v")).unwrap_err();
-    /// assert_eq!(e.error_class().name(), "TABLE_OR_VIEW_NOT_FOUND");
-    /// # Ok::<(), krishiv_common::error::KrishivError>(())
-    /// ```
-    ///
-    /// # Errors
-    /// Analysis errors, and `KRISHIV_RESERVED_TEMP_VIEW_NAME` when `name`
-    /// starts with the reserved snapshot prefix `` `__krishiv_snapshot_` ``
-    /// or the cache prefix `` `__krishiv_cache_` `` (in any letter case),
-    /// which [`Session::sql`] cannot spell either.
-    pub async fn create_or_replace_temp_view(&self, name: &str) -> Result<(), KrishivError> {
-        self.temp_view(name, false, true).await
-    }
-
-    /// Registers this frame as the global temporary view `global_temp.name`, kept in this
-    /// session's catalog, as `CREATE GLOBAL TEMPORARY VIEW` keeps it (PySpark's `createGlobalTempView`). It
-    /// fails with `TEMP_TABLE_OR_VIEW_ALREADY_EXISTS` when the view exists.
-    ///
-    /// # Errors
-    /// As [`Self::create_or_replace_temp_view`], and `TEMP_TABLE_OR_VIEW_ALREADY_EXISTS`.
-    pub async fn create_global_temp_view(&self, name: &str) -> Result<(), KrishivError> {
-        self.temp_view(name, true, false).await
-    }
-
-    /// Registers this frame as the global temporary view `global_temp.name`, replacing one of that
-    /// name (PySpark's `createOrReplaceGlobalTempView`).
-    ///
-    /// # Errors
-    /// As [`Self::create_or_replace_temp_view`].
-    pub async fn create_or_replace_global_temp_view(&self, name: &str) -> Result<(), KrishivError> {
-        self.temp_view(name, true, true).await
-    }
-
-    async fn temp_view(&self, name: &str, global: bool, replace: bool) -> Result<(), KrishivError> {
-        let (df, name) = (self.clone(), name.to_owned());
-        self.session
-            .on_executor(async move { df.temp_view_here(&name, global, replace).await })
-            .await
-    }
-
-    async fn temp_view_here(
-        &self,
-        view: &str,
-        global: bool,
-        replace: bool,
-    ) -> Result<(), KrishivError> {
-        if crate::catalog::is_reserved_view_name(view) {
-            return Err(crate::catalog::reserved_temp_view_name(view));
-        }
-        let key = if global {
-            crate::catalog::global_key(view)
-        } else {
-            view.to_owned()
-        };
-        let name = key.as_str();
-        // Spark analyzes the view's plan first: its errors come first.
-        let analysis = self.analysis().await?;
-        // After the analysis, as Spark: a bad query is reported before an existing name.
-        if !replace
-            && self
-                .session
-                .state
-                .catalog
-                .exists(name, self.session.query_env().analysis.conf.case_sensitive)
-        {
-            let shown = if global {
-                format!("`{}`.`{view}`", crate::catalog::GLOBAL_NAMESPACE)
-            } else {
-                format!("`{view}`")
-            };
-            return Err(krishiv_common::error::TempTableOrViewAlreadyExists {
-                relation_name: shown,
-            }
-            .into());
-        }
-        let columns: Vec<TableColumn> =
-            crate::char_write::refuse_indeterminate_schema(&analysis.analyzed)?
-                .output
-                .iter()
-                .map(|c| TableColumn::new(c.name.clone(), c.data_type.clone(), c.nullable))
-                .collect();
-        // A view over files keeps listing them: files added or changed
-        // later show up in the next query.
-        if let PlanNode::Read(source @ ReadSource::Files { .. }) = &self.plan.node {
-            self.session.state.catalog.put(
-                name,
-                TempTable::Files {
-                    source: source.clone(),
-                    columns,
-                    known: false,
-                    permanent: false,
-                    partitions: Some(Default::default()),
-                },
-            );
-            self.session.state.cache.forget_table(view);
-            return Ok(());
-        }
-        // Any other view snapshots its input: the analyzed plan is stored,
-        // with the temporary tables it reads pinned under hidden names, so
-        // a view built from itself reads the old definition, as in Spark.
-        // (SQL `CREATE VIEW` keeps the unresolved query instead, so it
-        // follows the tables it reads.)
-        let (expanded, pins, new_pins) = crate::catalog::pin_temp_tables(
-            &self.session.state.catalog,
-            analysis.analyzed.plan.root(),
-            analysis.env.analysis.conf.case_sensitive,
-        )?;
-        self.session.state.catalog.put_view(
-            name,
-            expanded,
-            columns,
-            pins,
-            new_pins,
-            // A query that reads the view runs its observed nodes: it completes the same
-            // observations. Published with the entry, under the same lock.
-            crate::catalog::ViewKeeps(self.observation_handles_with(&analysis.env.observers)),
-        );
-        self.session.state.cache.forget_table(view);
-        Ok(())
-    }
 }
 
 /// Which groups of its keys a [`GroupedData`] aggregates.
@@ -1933,6 +1662,8 @@ pub struct GroupedData {
     df: DataFrame,
     keys: Vec<Expr>,
     sets: Sets,
+    /// Set by [`GroupedData::pivot`].
+    pivot: Option<pivot::Pivoting>,
 }
 
 impl GroupedData {
@@ -1948,6 +1679,9 @@ impl GroupedData {
     #[must_use]
     pub fn agg(&self, aggregates: impl IntoIterator<Item = Column>) -> DataFrame {
         use krishiv_plan::ExprNode;
+        if let Some(p) = &self.pivot {
+            return self.pivot_agg(p, aggregates.into_iter().collect());
+        }
         // The output keeps `expr AS name`; the grouping expressions are the bare
         // `expr`, as `GROUP BY expr` in SQL: an alias is not an input column.
         let mut output: Vec<Arc<Expr>> = self.keys.iter().cloned().map(Arc::new).collect();

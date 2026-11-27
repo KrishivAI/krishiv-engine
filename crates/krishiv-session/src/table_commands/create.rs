@@ -590,7 +590,11 @@ impl Session {
         } else {
             "errorifexists"
         };
-        let dirs = self.write_table_rows(&table, &df, write_mode, pre).await?;
+        let key =
+            super::explicit_key(&table.options, |v: &String| Some(v.as_str())).map(str::to_owned);
+        let dirs = self
+            .write_table_rows(&table, &df, write_mode, key.as_deref(), pre)
+            .await?;
         if let Some(owned) = owned {
             owned.keep();
         }
@@ -695,7 +699,7 @@ impl Session {
         };
         let external = t.location.is_some();
         let location = match &t.location {
-            Some(l) => PathBuf::from(l.strip_prefix("file:").unwrap_or(l)),
+            Some(l) => krishiv_exec::files::native_path(l),
             None => managed_location(&warehouse, &name.namespace, &name.name),
         };
         let table = CatalogTable {
@@ -1071,7 +1075,7 @@ impl Session {
         let by_path = match crate::access::ddl_parts(table, env)?.as_slice() {
             [format, path]
                 if format.eq_ignore_ascii_case("delta")
-                    && path.contains('/')
+                    && super::delta_writes::is_delta_path(path)
                     && self
                         .state
                         .catalog
@@ -1231,7 +1235,7 @@ pub(super) fn new_table_location(
             }
             .into());
         }
-        Some(l) => PathBuf::from(l.strip_prefix("file:").unwrap_or(l)),
+        Some(l) => krishiv_exec::files::native_path(l),
         None => managed_location(warehouse, &name.namespace, &name.name),
     };
     Ok((external, location))

@@ -86,9 +86,11 @@
 //! | `PlanNode::CollectMetrics` | U, R | - | `observe` |
 //! | `PlanNode::MetricViewRead` | U, R | - | - |
 //! | `PlanNode::JoinHint` | R | - | - |
+//! | `PlanNode::SecurityBarrier` | R | - | - |
 //! | `PlanNode::Union` | U, R | - | - |
 //! | `PlanNode::Distinct` | U | - | - |
 //! | `PlanNode::SetOp` | U | - | - |
+//! | `PlanNode::Zip` | U | - | `zip` |
 //! | `PlanNode::ReplicateRows` | R | - | - |
 //! | `PlanNode::Sample` | U, R | - | - |
 //! | `PlanNode::Pivot` | U | - | - |
@@ -131,6 +133,7 @@
 #![forbid(unsafe_code)]
 
 pub mod analyzer;
+mod barrier;
 pub mod cache;
 mod dag;
 mod display;
@@ -142,19 +145,26 @@ mod local;
 mod origin;
 mod partial;
 mod plan;
+pub mod procedure;
 mod python;
 mod raises;
+mod select_generators;
 pub(crate) mod spark_fmt;
 #[cfg(test)]
 mod tests;
 pub mod udtf;
 mod walk;
 
+/// The helper column a `NEAREST BY` join's lowering gives each left row (its id); the analyzer finds the
+/// join's ranking window by it.
+pub const NEAREST_BY_ID_COLUMN: &str = "__nearest_qid__";
+
 /// The option key under which a table reference's time-travel clause (`VERSION AS OF`, `@v1`, ...)
 /// rides on its read: no table reads an older version yet, so the session refuses it when the
 /// relation resolves.
 pub const TIME_TRAVEL_OPTION: &str = "__krishiv.timeTravel";
 
+pub use barrier::PolicyRef;
 pub use cache::{CacheKey, normalized_plan_hash, normalized_subtree_hash, semantic_plan_hash};
 pub use display::Annotated;
 #[doc(hidden)]
@@ -173,6 +183,12 @@ pub use literal::{DayTimeField, Literal, YearMonthField};
 pub use local::LocalRelation;
 pub use origin::{Origin, PlanId, SourceId, Span};
 pub use partial::partial_state_columns;
+pub use select_generators::{select_with_generators, with_column_generator};
+/// The call lowering gives a generator for `UNNEST(arrays)` in `FROM`; the analyzer expands it
+/// into `inline` over an array of structs (as it does `stack`). Not a function a query can name.
+pub const UNNEST_FUNCTION: &str = "__krishiv_unnest";
+/// As [`UNNEST_FUNCTION`], for `UNNEST(arrays) WITH ORDINALITY`.
+pub const UNNEST_ORDINALITY_FUNCTION: &str = "__krishiv_unnest_ordinality";
 /// The qualifier prefix of the columns a select-list generator adds: an
 /// unqualified `*` skips them (the generator's own star reads them).
 pub const GENERATE_QUALIFIER_PREFIX: &str = "__krishiv_generate_";
@@ -199,6 +215,6 @@ pub use python::{
     plan_is_deterministic, python_relation_is_deterministic,
 };
 pub use raises::{
-    conjuncts, exact_decimal, has_subquery, is_deterministic, may_raise, runs_on_any_row,
+    conjuncts, exact_decimal, has_subquery, is_deterministic, leakproof, may_raise, runs_on_any_row,
 };
 pub use walk::{MAX_DEPTH, check_depth};

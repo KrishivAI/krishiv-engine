@@ -59,9 +59,10 @@ use self::spans::{context_children_text, property_list_span};
 use krishiv_common::error::{
     CreateTableColumnDescriptorDuplicate, DescribeJsonNotExtended, DuplicateClauses,
     DuplicatedCteNames, FeatureNotEnabled, IdentityColumnsDuplicatedSequenceGeneratorOption,
-    IdentityColumnsIllegalStep, IncompatibleJoinTypes, InsertReplaceWhereTableAliasNotAllowed,
-    InvalidBucketCount, InvalidInlineTableNumColumnsMismatch, InvalidParameterValueDatetimeUnit,
-    InvalidSetSyntax, InvalidSqlSyntaxCreateFuncWithColumnConstraints,
+    IdentityColumnsIllegalStep, IncompatibleJoinTypes, InsertReplaceOnColumnListNotAllowed,
+    InsertReplaceWhereTableAliasNotAllowed, InvalidBucketCount,
+    InvalidInlineTableNumColumnsMismatch, InvalidParameterValueDatetimeUnit, InvalidSetSyntax,
+    InvalidSqlSyntaxCreateFuncWithColumnConstraints,
     InvalidSqlSyntaxCreateFuncWithGeneratedColumnsAsParameters, InvalidSqlSyntaxEmptyInPredicate,
     InvalidSqlSyntaxEmptyPartitionValue, InvalidSqlSyntaxInvalidWindowReference,
     InvalidSqlSyntaxRepetitiveWindowDefinition, InvalidSqlSyntaxShowFunctionsInvalidPattern,
@@ -122,6 +123,7 @@ pub(crate) fn statement(mut s: &Statement, sql: &str, opts: ParserOptions) -> R 
             | Statement::Reset(_)
             | Statement::DropView(_)
             | Statement::DropFunction(_)
+            | Statement::CreatePersistedFunction(_)
             | Statement::DropTable(_)
             | Statement::DropNamespace(_)
             | Statement::Use(_)
@@ -129,6 +131,15 @@ pub(crate) fn statement(mut s: &Statement, sql: &str, opts: ParserOptions) -> R 
             | Statement::AddResource(_)
             | Statement::ListResource(_)
             | Statement::AccessControl(_) => return Ok(()),
+            // A procedure's name, and each argument as the expression it is.
+            Statement::Call(c) => {
+                let checker = Checker { sql, opts };
+                checker.ddl_name(&c.name)?;
+                for arg in &c.args {
+                    checker.expr(&arg.expr)?;
+                }
+                return Ok(());
+            }
             Statement::CreateNamespace(n) => return Checker { sql, opts }.create_namespace(n),
             Statement::DropPermanentView(v) => return Checker { sql, opts }.ddl_name(&v.name),
             Statement::AlterNamespace(a) => {
@@ -223,7 +234,7 @@ pub(crate) fn statement(mut s: &Statement, sql: &str, opts: ParserOptions) -> R 
                     return Err(at(InvalidSqlSyntaxVariableTypeOrDefaultRequired {}, v.span));
                 }
                 if let Some(t) = &v.data_type {
-                    data_type(t)?;
+                    data_type(t, opts)?;
                 }
                 if let Some(e) = &v.default {
                     Checker { sql, opts }.expr(e)?;
@@ -269,8 +280,10 @@ pub(crate) fn query(q: &Query, sql: &str, opts: ParserOptions) -> R {
 }
 
 /// Checks the column types of a table schema.
-pub(crate) fn columns(columns: &[StructField]) -> R {
-    columns.iter().try_for_each(|c| data_type(&c.data_type))
+pub(crate) fn columns(columns: &[StructField], opts: ParserOptions) -> R {
+    columns
+        .iter()
+        .try_for_each(|c| data_type(&c.data_type, opts))
 }
 
 /// Checks one named-expression string (`F.expr`, `selectExpr` once per
@@ -319,9 +332,11 @@ impl Checker<'_> {
             }
         }
         match f.returns.as_ref().map(|r| &r.kind) {
-            Some(FunctionReturnsKind::Type(t)) => data_type(t)?,
+            Some(FunctionReturnsKind::Type(t)) => data_type(t, self.opts)?,
             Some(FunctionReturnsKind::Table(Some(columns))) => {
-                columns.iter().try_for_each(|c| data_type(&c.data_type))?;
+                columns
+                    .iter()
+                    .try_for_each(|c| data_type(&c.data_type, self.opts))?;
             }
             _ => {}
         }
@@ -376,7 +391,7 @@ impl Checker<'_> {
             match &field.kind {
                 PartitionFieldKind::Column(c) => {
                     self.column_name(&c.name)?;
-                    data_type(&c.data_type)?;
+                    data_type(&c.data_type, self.opts)?;
                 }
                 PartitionFieldKind::Transform(f) => {
                     self.ddl_name(&f.name)?;
@@ -640,7 +655,7 @@ impl Checker<'_> {
         for c in &v.columns {
             self.column_name(&c.name)?;
             if let Some(t) = &c.data_type {
-                data_type(t)?;
+                data_type(t, self.opts)?;
             }
         }
         if v.query.is_none() {
@@ -719,7 +734,7 @@ impl Checker<'_> {
             AlterTableAction::ChangeColumn { name, action, .. } => {
                 self.column_name(name)?;
                 match action {
-                    ChangeColumnAction::Type(t) => data_type(t),
+                    ChangeColumnAction::Type(t) => data_type(t, self.opts),
                     ChangeColumnAction::After(c) => self.column_name(c),
                     _ => Ok(()),
                 }
@@ -861,6 +876,13 @@ impl Checker<'_> {
                     c.head_span,
                 ));
             }
+        }
+        // Only `REPLACE WHERE` takes a column list; `REPLACE ON` shares its grammar rule.
+        if c.replace_on.is_some() && !c.columns.is_empty() {
+            return Err(at(
+                InsertReplaceOnColumnListNotAllowed {},
+                c.columns_span.unwrap_or(c.head_span),
+            ));
         }
         // Spark rejects a `REPLACE WHERE` alias before it reads the options.
         if c.replace_where.is_some() && c.target_alias.is_some() {
@@ -1161,7 +1183,7 @@ impl Checker<'_> {
     /// its default, generation and constraint expressions.
     fn column_def(&self, c: &ColumnDef, statement: Span) -> R {
         self.column_name(&c.name)?;
-        data_type(&c.data_type)?;
+        data_type(&c.data_type, self.opts)?;
         if let Some(option) = c.duplicate_descriptor {
             return Err(at(
                 CreateTableColumnDescriptorDuplicate {
@@ -1489,6 +1511,7 @@ impl Checker<'_> {
             TableFactorKind::Subquery(q) => self.query(q),
             TableFactorKind::Nested(r) => self.relation(r),
             TableFactorKind::Values(rows) => self.inline_table(rows, f.alias.as_ref(), f.span),
+            TableFactorKind::Unnest { args, .. } => args.iter().try_for_each(|a| self.expr(a)),
             TableFactorKind::TableFunction {
                 dynamic_name, args, ..
             } => {
@@ -1503,7 +1526,7 @@ impl Checker<'_> {
                     crate::ast::JsonTableColumnKind::Ordinality => Ok(()),
                     crate::ast::JsonTableColumnKind::Value { data_type: ty, .. }
                     | crate::ast::JsonTableColumnKind::Exists { data_type: ty, .. } => {
-                        data_type(ty)
+                        data_type(ty, self.opts)
                     }
                 })
             }
@@ -1778,7 +1801,7 @@ impl Checker<'_> {
             ExprKind::Cast {
                 expr, data_type: t, ..
             } => {
-                data_type(t)?;
+                data_type(t, self.opts)?;
                 self.expr(expr)
             }
             ExprKind::Case {
@@ -1903,7 +1926,7 @@ fn script(c: &crate::ast::Compound, sql: &str, opts: ParserOptions) -> R {
                     return Err(at(InvalidSqlSyntaxVariableTypeOrDefaultRequired {}, d.span));
                 }
                 if let Some(t) = &d.data_type {
-                    data_type(t)?;
+                    data_type(t, opts)?;
                 }
                 d.default.as_ref().map_or(Ok(()), |e| checker.expr(e))
             }

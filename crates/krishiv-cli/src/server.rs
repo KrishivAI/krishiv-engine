@@ -40,8 +40,8 @@ use krishiv_common::config::{
     UI_EMBED_HIDE_ATTRIBUTION, UI_EMBED_LINK_TTL, UI_ENABLED,
 };
 use krishiv_connect_server::{
-    ConnectAuth, ConnectServer, ConnectServerConfig, SessionLimits, SessionManager, host,
-    role_sessions,
+    ConnectAuth, ConnectServer, ConnectServerConfig, ExtraProvider, SessionFactory, SessionLimits,
+    SessionManager, host, provider_sessions,
 };
 use krishiv_server::guard::{Guard, TokenGuard};
 use krishiv_server::session_guard::SessionGuard;
@@ -54,6 +54,94 @@ use krishiv_session::catalog_registry::CatalogSetup;
 use krishiv_session::{EngineRuntime, Session, Transport};
 use tokio::net::TcpListener;
 use tokio::sync::watch;
+
+/// Each authenticated caller's session factory: the role matrix, joined by the `external`
+/// provider when `krishiv.access.provider` lists it (ADR 0049 §1: `external`, `roles+external`).
+/// Unset, the role matrix alone (the server's caller sessions carry no grants). `grants` is not
+/// wired into the server yet, so any list naming it is refused at startup rather than run without
+/// the grants it asks for.
+fn caller_sessions(
+    base: Session,
+    config: &Config,
+    denials: Arc<krishiv_session::auth::DeniedCounts>,
+) -> Result<Box<SessionFactory>, String> {
+    use krishiv_server::access_external::{ExternalAccess, ExternalConfig};
+    use krishiv_session::grants::{AccessProvider, access_providers};
+    // Unset is `roles` here (not the authenticated default `grants`): that is what the sessions
+    // below enforce.
+    let providers = access_providers(config, false).map_err(|e| e.to_string())?;
+    if providers.contains(&AccessProvider::Grants) {
+        return Err(
+            "krishiv.access.provider: the grants provider is not available in `krishiv server` yet, so \
+             a list naming grants is refused; use `roles`, `external` or `roles+external`"
+                .to_owned(),
+        );
+    }
+    if !providers.contains(&AccessProvider::External) {
+        return provider_sessions(base, config, denials, None).map_err(|e| e.to_string());
+    }
+    // One provider per engine runtime: the Connect sessions and the UI editor of one server share
+    // its channel, version and counts (review m8). The configuration is read and checked on every
+    // call; a second server in the process (another runtime) gets its own provider (review D6).
+    let external = ExternalConfig::from_config(config).map_err(|e| e.to_string())?;
+    let access = shared_external(base.runtime(), &external, || {
+        ExternalAccess::new(&external).map_err(|e| e.to_string())
+    })?;
+    let extra = ExtraProvider {
+        policy: Arc::new(move || {
+            Arc::new(access.policy()) as Arc<dyn krishiv_session::AccessPolicy>
+        }),
+        roles_decide_data: providers.contains(&AccessProvider::Roles),
+    };
+    provider_sessions(base, config, denials, Some(extra)).map_err(|e| e.to_string())
+}
+
+/// The `external` provider of `runtime` with the settings `config`, made by `make` the first
+/// time that runtime asks with them: one runtime asked with other settings (another server over
+/// it) gets a provider of its own (G6 review r3). Entries of dropped runtimes go at the next call.
+fn shared_external(
+    runtime: &Arc<krishiv_session::EngineRuntime>,
+    config: &krishiv_server::access_external::ExternalConfig,
+    make: impl FnOnce() -> Result<Arc<krishiv_server::access_external::ExternalAccess>, String>,
+) -> Result<Arc<krishiv_server::access_external::ExternalAccess>, String> {
+    type Entry = (
+        std::sync::Weak<krishiv_session::EngineRuntime>,
+        krishiv_server::access_external::ExternalConfig,
+        Arc<krishiv_server::access_external::ExternalAccess>,
+    );
+    static SHARED: std::sync::Mutex<Vec<Entry>> = std::sync::Mutex::new(Vec::new());
+    let mut shared = SHARED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    shared.retain(|(r, _, _)| r.strong_count() > 0);
+    if let Some((_, _, access)) = shared
+        .iter()
+        .find(|(r, c, _)| c == config && r.upgrade().is_some_and(|r| Arc::ptr_eq(&r, runtime)))
+    {
+        return Ok(Arc::clone(access));
+    }
+    let access = make()?;
+    shared.push((Arc::downgrade(runtime), config.clone(), Arc::clone(&access)));
+    Ok(access)
+}
+
+/// A server without authentication has no principal for a policy service to decide about.
+fn refuse_unauthenticated_providers(config: &Config) -> Result<(), String> {
+    use krishiv_session::grants::{AccessProvider, access_providers};
+    let providers = access_providers(config, false).map_err(|e| e.to_string())?;
+    // `grants` and `external` both decide about a principal; without authentication the server
+    // would run every caller as the base session and enforce neither (review: grants on an
+    // unauthenticated server started silently).
+    for provider in [AccessProvider::Grants, AccessProvider::External] {
+        if providers.contains(&provider) {
+            return Err(format!(
+                "krishiv.access.provider: the {} provider needs authentication (krishiv.auth.*)",
+                provider.as_str()
+            ));
+        }
+    }
+    Ok(())
+}
 
 /// The command's arguments.
 #[derive(Debug, clap::Args)]
@@ -455,11 +543,9 @@ async fn run_listeners(
     let denials = auth.denials();
     let limits = SessionLimits::from_config(config);
     let manager = if authenticated {
-        SessionManager::new(
-            role_sessions(base, config, Arc::clone(&denials)).map_err(|e| e.to_string())?,
-            limits,
-        )
+        SessionManager::new(caller_sessions(base, config, Arc::clone(&denials))?, limits)
     } else {
+        refuse_unauthenticated_providers(config)?;
         SessionManager::from_base(base, limits)
     };
     // One Python UDF worker pool per server (P3-T014): every Connect session's UDFs run on it, in
@@ -809,7 +895,7 @@ fn admin_router(
                 .map_err(|e| e.to_string())?;
             // The editor's sessions are UI sessions: their denials count under the `ui` surface, where the
             // statement arrived (P3-T101 §2 H3).
-            let factory = role_sessions(base, config, denials).map_err(|e| e.to_string())?;
+            let factory = caller_sessions(base, config, denials)?;
             source = source.with_caller_sessions(Arc::new(move |caller: &Authenticated| {
                 let session = factory(caller, Transport::Ui)?;
                 // `system.sessions` shows the transport the denials count under.
@@ -1220,6 +1306,36 @@ mod tests {
         assert!(!metrics_need_token(&public, lo));
         assert!(metrics_need_token(&public, any));
         assert!(!metrics_need_token(&config(&[]), lo));
+    }
+
+    /// G6 review r3: one runtime asked with other `external` settings gets a provider of its own;
+    /// the same settings share one.
+    #[tokio::test]
+    async fn the_external_provider_is_shared_per_runtime_and_settings() {
+        use krishiv_server::access_external::{ExternalAccess, ExternalConfig};
+        let runtime = EngineRuntime::builder().build().unwrap();
+        let settings = |endpoint: &str| {
+            ExternalConfig::from_config(&config(&[("krishiv.access.external.endpoint", endpoint)]))
+                .unwrap()
+        };
+        let a = settings("http://127.0.0.1:1");
+        let b = settings("http://127.0.0.1:2");
+        let get = |c: &ExternalConfig| {
+            shared_external(&runtime, c, || {
+                ExternalAccess::new(c).map_err(|e| e.to_string())
+            })
+            .unwrap()
+        };
+        let first = get(&a);
+        assert!(Arc::ptr_eq(&first, &get(&a)));
+        assert!(!Arc::ptr_eq(&first, &get(&b)));
+        // Another runtime with the same settings gets its own too.
+        let other = EngineRuntime::builder().build().unwrap();
+        let theirs = shared_external(&other, &a, || {
+            ExternalAccess::new(&a).map_err(|e| e.to_string())
+        })
+        .unwrap();
+        assert!(!Arc::ptr_eq(&first, &theirs));
     }
 
     /// Design P3-T066 §5.1: a drain refuses new queries at once, gives a stuck one the grace

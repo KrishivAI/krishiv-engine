@@ -11,6 +11,7 @@ pub(crate) mod eq_deletes;
 pub(crate) mod filter;
 pub(crate) mod lazy;
 pub(crate) mod lineage;
+pub(crate) mod maintenance;
 pub(crate) mod manifest_cache;
 pub(crate) mod merge;
 pub(crate) mod mor_sink;
@@ -60,6 +61,8 @@ mod filter_tests;
 #[cfg(test)]
 mod lineage_tests;
 #[cfg(test)]
+mod maintenance_tests;
+#[cfg(test)]
 mod merge_tests;
 #[cfg(test)]
 mod mor_fault_tests;
@@ -67,7 +70,9 @@ mod mor_fault_tests;
 mod mor_sink_tests;
 #[cfg(test)]
 mod mor_tests;
+// The fixtures name `file:/wh/...`, a rooted path that on Windows is on the working drive, not under the fixture directory.
 #[cfg(test)]
+#[cfg(unix)]
 mod oracle_tests;
 #[cfg(test)]
 mod overwrite_tests;
@@ -77,6 +82,8 @@ mod provider_tests;
 mod puffin_stats_tests;
 #[cfg(test)]
 mod rest_commit_tests;
+#[cfg(test)]
+mod rewrite_group_tests;
 #[cfg(test)]
 mod rolling_tests;
 #[cfg(test)]

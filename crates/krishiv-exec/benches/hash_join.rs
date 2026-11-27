@@ -139,6 +139,7 @@ fn plan_with(
                 key: 0,
                 filter: Arc::new(filter),
                 options: krishiv_io::KeyFilterOptions::default(),
+                column: None,
             }])
             .expect("runtime filter");
     }

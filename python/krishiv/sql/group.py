@@ -3,16 +3,16 @@
 
 Aggregations reuse the group-by aggregation the engine already runs; the
 shortcuts and the dict form of ``agg`` build the same expressions the SQL
-equivalents build. The engine has no pivot, so ``pivot`` fails with the
-engine's own ``KRISHIV_UNSUPPORTED_FEATURE`` error instead of emulating it.
+equivalents build. ``pivot`` builds the plan node SQL's ``PIVOT`` lowers to.
 """
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING, Any
 
 from krishiv import _native
-from krishiv.errors import not_expected_type, unsupported_feature
+from krishiv.errors import UnsupportedOperationException, not_expected_type, not_implemented
 from krishiv.sql import functions as F
 from krishiv.sql.column import Column
 
@@ -53,14 +53,72 @@ def _truncated(items: list[str], more: str) -> str:
 
 
 class GroupedData:
-    def __init__(self, native: _native.GroupedData, df: DataFrame) -> None:
+    """The result of :meth:`DataFrame.groupBy`, :meth:`DataFrame.rollup` or :meth:`DataFrame.cube`.
+
+    Apply aggregates with :meth:`agg` or the shorthands (``count``, ``sum``, ``avg`` ...).
+    """
+
+    def __init__(self, native: _native.GroupedData, df: DataFrame, keys: list[Any] | None = None) -> None:
         self._grouped = native
         self._source = df
-        self._keys: tuple[Any, ...] = ()  # the grouping expressions, for ``repr``
+        self._pivoted = False
+        self._multi_grouping = False  # rollup, cube or groupingSets: pivot is refused after it
+        # The grouping columns, which a cogroup needs again (the native handle keeps them to itself).
+        self._keys = [] if keys is None else keys
+        self._key_cols: tuple[Any, ...] = ()  # the grouping expressions, for ``repr``
+
+    def applyInPandas(self, func: Any, schema: Any) -> DataFrame:
+        """Maps each group of the current :class:`DataFrame` using a pandas UDF and returns the result as a
+        :class:`DataFrame` (``pyspark/sql/pandas/group_ops.py`` 4.2.1 ``applyInPandas``).
+
+        ``func`` takes a ``pandas.DataFrame`` (or ``(key, pandas.DataFrame)``, or an iterator of them) and
+        returns a ``pandas.DataFrame``; ``schema`` is its result's :class:`StructType` or DDL string.
+        """
+        import warnings
+
+        from krishiv._udf.typehints import infer_group_pandas_eval_type_from_func
+        from krishiv.sql.pandas.functions import pandas_udf
+        from krishiv.sql.udf import PythonEvalType
+
+        eval_type: int | None = None
+        try:
+            eval_type = infer_group_pandas_eval_type_from_func(func)
+        except Exception as e:
+            warnings.warn(f"Cannot infer the eval type from type hints: {e}", UserWarning, stacklevel=2)
+        if eval_type is None:
+            eval_type = PythonEvalType.SQL_GROUPED_MAP_PANDAS_UDF
+        return self._apply(pandas_udf(func, returnType=schema, functionType=eval_type))
+
+    def applyInArrow(self, func: Any, schema: Any) -> DataFrame:
+        """Maps each group using a ``pyarrow.Table`` function (``group_ops.py`` ``applyInArrow``)."""
+        import warnings
+
+        from krishiv._udf.typehints import infer_group_arrow_eval_type_from_func
+        from krishiv.sql.pandas.functions import pandas_udf
+        from krishiv.sql.udf import PythonEvalType
+
+        eval_type: int | None = None
+        try:
+            eval_type = infer_group_arrow_eval_type_from_func(func)
+        except Exception:
+            warnings.warn("Cannot infer the eval type from type hints. ", UserWarning, stacklevel=2)
+        if eval_type is None:
+            eval_type = PythonEvalType.SQL_GROUPED_MAP_ARROW_UDF
+        return self._apply(pandas_udf(func, returnType=schema, functionType=eval_type))
+
+    def _apply(self, udf: Any) -> DataFrame:
+        from krishiv.sql.dataframe import DataFrame
+
+        # PySpark builds the call over every column of the frame; the engine's task sees the frame itself.
+        return DataFrame(self._grouped.apply_in_python(udf._unwrapped._handle), self._source._session)
+
+    def cogroup(self, other: GroupedData) -> PandasCogroupedOps:
+        """Cogroups this group with another by common keys, for ``applyInPandas``/``applyInArrow``."""
+        return PandasCogroupedOps(self, other)
 
     def __repr__(self) -> str:
         """``GroupedData[grouping expressions: [name], value: [name: string, age: bigint], type: GroupBy]``."""
-        names = [k._text if isinstance(k, Column) and k._text is not None else str(k) for k in self._keys]
+        names = [k._text if isinstance(k, Column) and k._text is not None else str(k) for k in self._key_cols]
         fields = [f"{name}: {type_}" for name, type_ in self._source.dtypes]
         keys = _truncated(names, "field(s)")
         values = _truncated(fields, "field" if len(fields) == 3 else "fields")
@@ -92,6 +150,30 @@ class GroupedData:
         |  Bob|       5|
         +-----+--------+
         """
+        result = self._agg(*exprs)
+        if self._pivoted:
+            self._analyze_now(result)
+        return result
+
+    def _analyze_now(self, result: DataFrame) -> None:
+        """Spark analyses a pivot when ``agg`` is called, so its errors come from there; the message of the
+        non-aggregate error names the column as written (the engine's relation name is not Spark's)."""
+        from krishiv.errors import PySparkException
+
+        try:
+            _ = result.schema
+        except PySparkException as error:
+            if error.getCondition() == "_LEGACY_ERROR_TEMP_1006":
+                text = re.sub(r"'__krishiv_\w+?\.", "'", error.getMessage())
+                raise type(error)(
+                    text,
+                    errorClass=error.getCondition(),
+                    messageParameters=error.getMessageParameters(),
+                    sqlState=error.getSqlState(),
+                ) from None
+            raise
+
+    def _agg(self, *exprs: Column | dict[str, str]) -> DataFrame:
         from krishiv.sql.dataframe import DataFrame
 
         if not exprs:
@@ -129,7 +211,7 @@ class GroupedData:
         |  Bob|    1|
         +-----+-----+
         """
-        return self.agg(F.count("*").alias("count"))
+        return self.agg(F.count(F.lit(1)).alias("count"))
 
     def _shortcut(self, func: Any, cols: tuple[str, ...]) -> DataFrame:
         for c in cols:
@@ -213,18 +295,140 @@ class GroupedData:
         return self._shortcut(F.max, cols)
 
     def pivot(self, pivot_col: str, values: list[Any] | None = None) -> GroupedData:
-        """Pivots a column of the DataFrame, as ``pyspark.sql.GroupedData.pivot``.
+        """Pivots a column of the DataFrame and performs the specified aggregation, as
+        ``pyspark.sql.GroupedData.pivot``.
 
-        .. note:: The engine has no pivot: this always fails with the
-            engine's ``KRISHIV_UNSUPPORTED_FEATURE`` error instead of
-            emulating it.
+        Parameters
+        ----------
+        pivot_col : str
+            Name of the column to pivot.
+        values : list, optional
+            List of values that will be translated to columns in the output DataFrame. When omitted
+            the distinct values are read from the DataFrame first, sorted ascending with NULL first
+            (at most ``spark.sql.pivotMaxValues``, default 10000).
+
+        Notes
+        -----
+        An output column is named by the value (``2012``), or, with several aggregates, by the value and the
+        aggregate (``2012_sum(x)``, ``2012_s`` for an alias). A group with no row for a value has NULL there
+        (``count`` too) when every aggregate is a numeric one; a pivot that also holds an aggregate such as
+        ``collect_list`` is computed per value with a conditional aggregate, where ``count`` gives 0 and
+        ``collect_list`` an empty array.
+
+        Examples
+        --------
+        >>> df = spark.createDataFrame([(2012, "Java", 20000), (2012, "dotNET", 5000), (2013, "Java", 30000)],
+        ...     ["year", "course", "earnings"])
+        >>> df.groupBy("year").pivot("course", ["Java", "dotNET"]).sum("earnings").sort("year").show()
+        +----+-----+------+
+        |year| Java|dotNET|
+        +----+-----+------+
+        |2012|20000|  5000|
+        |2013|30000|  NULL|
+        +----+-----+------+
         """
+        from krishiv.errors import AnalysisException
+
+        if self._multi_grouping:
+            raise UnsupportedOperationException(
+                "[UNSUPPORTED_FEATURE.PIVOT_AFTER_GROUP_BY] The feature is not supported: PIVOT clause following a "
+                "GROUP BY clause. Consider pushing the GROUP BY into a subquery. SQLSTATE: 0A000",
+                errorClass="UNSUPPORTED_FEATURE.PIVOT_AFTER_GROUP_BY",
+                messageParameters={},
+                sqlState="0A000",
+            )
         if not isinstance(pivot_col, str):
             raise not_expected_type("pivot_col", "str", pivot_col)
         if values is not None:
             if not isinstance(values, list):
                 raise not_expected_type("values", "list", values)
             for v in values:
-                if not isinstance(v, bool | int | float | str):
+                if v is not None and not isinstance(v, bool | int | float | str):
                     raise not_expected_type("values", "list of bool, int, float or str", v)
-        raise unsupported_feature("GroupedData.pivot")
+        if self._pivoted:
+            raise AnalysisException(
+                "[REPEATED_CLAUSE] The PIVOT clause may be used at most once per SUBQUERY operation. SQLSTATE: 42614",
+                errorClass="REPEATED_CLAUSE",
+                messageParameters={"clause": "PIVOT", "operation": "SUBQUERY"},
+                sqlState="42614",
+            )
+        column = F.col(pivot_col)
+        literals = self._distinct_values(pivot_col) if values is None else [F.lit(v) for v in values]
+        pivoted = GroupedData(self._grouped.pivot(column._c, [v._c for v in literals]), self._source)
+        pivoted._pivoted = True
+        return pivoted
+
+    def _distinct_values(self, pivot_col: str) -> list[Column]:
+        """The values of ``pivot_col``, ascending with NULL first, as Spark's ``collectPivotValues``."""
+        from krishiv.errors import AnalysisException
+        from krishiv.sql.stat import PIVOT_MAX_VALUES_KEY, _pivot_max_values
+
+        df = self._source
+        limit = _pivot_max_values(df.sparkSession)
+        column = F.col(pivot_col)
+        # Sorted by the projected column's own name, so a qualified ``s.p`` still resolves after DISTINCT.
+        name = "__krishiv_pivot_value"
+        rows = df.select(column.alias(name)).distinct().limit(limit + 1).sort(F.col(name)).collect()
+        if len(rows) > limit:
+            raise AnalysisException(
+                f"[_LEGACY_ERROR_TEMP_1324] The pivot column {pivot_col} has more than {limit} distinct values, "
+                f"this could indicate an error. If this was intended, set {PIVOT_MAX_VALUES_KEY} to at least "
+                "the number of distinct values of the pivot column.",
+                errorClass="_LEGACY_ERROR_TEMP_1324",
+                messageParameters={"pivotColumn": pivot_col, "maxValues": str(limit), "config": PIVOT_MAX_VALUES_KEY},
+            )
+        out: list[Column] = []
+        seen_zero = seen_nan = False
+        for (value,) in rows:
+            # -0.0 and 0.0 are one value, and so are the NaNs.
+            if isinstance(value, float) and value == 0.0:
+                if seen_zero:
+                    continue
+                seen_zero = True
+                value = 0.0
+            elif isinstance(value, float) and value != value:
+                if seen_nan:
+                    continue
+                seen_nan = True
+            out.append(F.lit(value))
+        return out
+
+    def apply(self, udf: Any) -> DataFrame:
+        """Not available: the deprecated grouped-map ``pandas_udf`` form (``NOT_IMPLEMENTED``)."""
+        raise not_implemented("GroupedData.apply (needs the Python UDF worker pool, planned)")
+
+
+class PandasCogroupedOps:
+    """Two :class:`GroupedData` cogrouped by their keys (``pyspark/sql/pandas/group_ops.py``)."""
+
+    def __init__(self, gd1: GroupedData, gd2: GroupedData) -> None:
+        self._gd1 = gd1
+        self._gd2 = gd2
+
+    def applyInPandas(self, func: Any, schema: Any) -> DataFrame:
+        """Applies ``func(left, right)`` (or ``func(key, left, right)``) to each key's two ``pandas.DataFrame``s."""
+        from krishiv.sql.pandas.functions import pandas_udf
+        from krishiv.sql.udf import PythonEvalType
+
+        return self._apply(
+            pandas_udf(func, returnType=schema, functionType=PythonEvalType.SQL_COGROUPED_MAP_PANDAS_UDF)
+        )
+
+    def applyInArrow(self, func: Any, schema: Any) -> DataFrame:
+        """Applies ``func(left, right)`` (or ``func(key, left, right)``) to each key's two ``pyarrow.Table``s."""
+        from krishiv.sql.pandas.functions import pandas_udf
+        from krishiv.sql.udf import PythonEvalType
+
+        return self._apply(pandas_udf(func, returnType=schema, functionType=PythonEvalType.SQL_COGROUPED_MAP_ARROW_UDF))
+
+    def _apply(self, udf: Any) -> DataFrame:
+        from krishiv.sql.dataframe import DataFrame
+
+        left, right = self._gd1, self._gd2
+        native = left._source._df.cogroup_apply_in_python(
+            right._source._df,
+            list(left._keys),
+            list(right._keys),
+            udf._unwrapped._handle,
+        )
+        return DataFrame(native, left._source._session)

@@ -28,8 +28,8 @@ doctest = false
 [features]
 # Default wheel: one abi3 wheel for CPython >= 3.11. The free-threaded (cp314t)
 # build cannot use abi3, so it builds with
-# `--no-default-features --features mimalloc,cloud,ui`.
-default = ["abi3-py311", "mimalloc", "cloud", "ui"]
+# `--no-default-features --features mimalloc,cloud,ui,delta,catalog-iceberg-rest`.
+default = ["abi3-py311", "mimalloc", "cloud", "ui", "delta", "catalog-iceberg-rest"]
 abi3-py311 = ["pyo3/abi3-py311"]
 # mimalloc is the global allocator of the extension module (P2-T012).
 mimalloc = ["dep:mimalloc", "dep:libmimalloc-sys"]
@@ -38,12 +38,18 @@ mimalloc = ["dep:mimalloc", "dep:libmimalloc-sys"]
 cloud = ["krishiv-session/cloud"]
 # The web console of a session, served in-process by `krishiv.ui()` (ADR 0024). In every wheel.
 ui = ["dep:krishiv-server"]
+# Declared `iceberg-rest` catalogs on the session builder (`krishiv.catalog.<name>.*`, design P3-T067 §2.3). In every wheel.
+catalog-iceberg-rest = ["dep:krishiv-catalogs", "krishiv-catalogs/session"]
+# Delta tables (`USING delta`, `format("delta")`, DML, MERGE, the idempotency key) in every wheel: without it
+# every Delta statement fails with DATA_SOURCE_NOT_FOUND. A wheel smoke test pins it.
+delta = ["krishiv-session/delta"]
 
 [dependencies]
 arrow-array = { workspace = true, features = ["ffi"] }
 arrow-buffer.workspace = true
 arrow-data = { workspace = true, features = ["ffi"] }
 arrow-schema = { workspace = true, features = ["ffi"] }
+krishiv-catalogs = { path = "../krishiv-catalogs", optional = true }
 krishiv-common = { path = "../krishiv-common" }
 krishiv-connect-server = { path = "../krishiv-connect-server" }
 krishiv-exec = { path = "../krishiv-exec" }

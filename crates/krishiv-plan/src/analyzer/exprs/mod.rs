@@ -3,6 +3,7 @@
 //! names (Spark's `toPrettySQL`) and semantic keys.
 
 use super::SessionZone;
+use krishiv_kernels::cast::special_value;
 use krishiv_kernels::datetime::TimeZoneRules;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -74,6 +75,7 @@ mod patterns;
 mod pretty;
 mod semantic;
 mod star;
+mod time;
 
 use calls::*;
 pub(super) use columns::*;
@@ -204,11 +206,13 @@ fn extract_function(function: &str, call: &Expr) -> Option<&'static str> {
 }
 
 /// Functions Spark resolves from a bare name no column matches, with the
-/// function each calls (`USER` and `SESSION_USER` are `current_user`).
+/// function each calls (`USER` and `SESSION_USER` are `current_user`; Spark 4.3's `LOCALTIME`
+/// is `current_time`, a column name before 4.3, where the registry has no `localtime`).
 const LITERAL_FUNCTIONS: &[(&str, &str)] = &[
     ("current_date", "current_date"),
     ("current_timestamp", "current_timestamp"),
     ("current_time", "current_time"),
+    ("localtime", "current_time"),
     ("current_user", "current_user"),
     ("user", "current_user"),
     ("session_user", "current_user"),

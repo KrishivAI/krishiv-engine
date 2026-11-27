@@ -1,0 +1,138 @@
+// SPDX-License-Identifier: Apache-2.0
+//
+// krishiv.access.v1: the external access-policy service that `krishiv.access.provider = external`
+// asks (ADR 0049 §3, design P3-T062 §4). Krishiv is the client; an adapter (OPA, Ranger, Cedar or
+// your own) implements the service. Every decision fails closed: a missing, extra or unknown value,
+// a timeout or a transport error is a denial.
+//
+// A public surface (ADR 0026, ADR 0049): fields and enum values are only added, never renumbered,
+// renamed, retyped or removed; enums start with *_UNSPECIFIED = 0, which always reads as a denial; a
+// breaking change is a `v2` package beside this one. `tools/access-protogen` generates the Rust code.
+syntax = "proto3";
+
+package krishiv.access.v1;
+
+service AccessPolicy {
+  // Decides a batch of (securable, privilege) pairs for one principal: one call per analysis of a
+  // statement (a definer view's or a function body's analysis is a call of its own), at most 4,096
+  // items per call.
+  rpc Check(CheckRequest) returns (CheckResponse);
+
+  // The policy's current version. Krishiv asks at most once a second; a change makes every cached
+  // plan analyzed under an older version miss. Versions are compared for equality only, so any
+  // change (downwards too: a restarted service, hash-style versions) invalidates. A version is
+  // trusted for 3 s after the latest answer that reported it (a `Version` or `Check` answer); past
+  // that, or after a failed call, Krishiv reuses no cached analysis until the service answers again,
+  // so a cached plan outlives a policy change by at most 3 s plus one call's timeout. 0 means
+  // unknown, and so does a value with the top bit set (reserved): neither is ever trusted.
+  rpc Version(VersionRequest) returns (VersionResponse);
+}
+
+message CheckRequest {
+  Principal principal = 1;
+  repeated Item items = 2;
+  // The class of the SQL statement the check is made for, as `system.queries.statement_class`
+  // names it (`READ`, `WRITE`, `DDL`, `SESSION`, `ADMIN`), or empty when the check is not made
+  // for a SQL statement (a DataFrame or Spark Connect plan). A DataFrame derived from a SQL
+  // statement's result (`sql(..).limit(1)`) is checked as that statement, as `system.queries`
+  // lists its action.
+  string statement_class = 3;
+  // The statement's query id as `system.queries.query_id` shows it: the caller's operation id
+  // (Spark Connect sends one), else the id of the row the statement's query began; empty when
+  // neither is known yet (a statement's first analysis comes before its row).
+  string query_id = 4;
+}
+
+message Principal {
+  string name = 1;
+  repeated string groups = 2;
+  // Empty when the principal has no tenant.
+  string tenant = 3;
+  // The service principal that impersonates this one, or empty.
+  string delegated_by = 4;
+  PrincipalKind kind = 5;
+  // Set while the reads of a `SQL SECURITY DEFINER` view are checked for its owner (this
+  // principal): the reader the view is read for.
+  string definer_for = 6;
+}
+
+enum PrincipalKind {
+  PRINCIPAL_KIND_UNSPECIFIED = 0;
+  PRINCIPAL_KIND_USER = 1;
+  PRINCIPAL_KIND_SERVICE = 2;
+}
+
+message Item {
+  Securable securable = 1;
+  Privilege privilege = 2;
+}
+
+// A table, view, function or namespace by its parts as the catalog resolves them.
+message ObjectName {
+  string catalog = 1;
+  repeated string namespace = 2;
+  string name = 3;
+}
+
+message Securable {
+  oneof kind {
+    ObjectName table = 1;
+    ObjectName view = 2;
+    Column column = 3;
+    // The function's name parts (`catalog`, namespace parts, name; a built-in has one part).
+    NameParts function = 4;
+    // A storage location, with any credential (user info, query parameters) removed.
+    string path = 5;
+    NameParts namespace = 6;
+    // One of the server's own objects (`sessions`, `queries`, `config`, ...).
+    string system = 7;
+    // A secret scope.
+    string secret_scope = 8;
+    string connection = 9;
+  }
+}
+
+message NameParts {
+  repeated string parts = 1;
+}
+
+message Column {
+  ObjectName table = 1;
+  string column = 2;
+}
+
+enum Privilege {
+  PRIVILEGE_UNSPECIFIED = 0;
+  PRIVILEGE_SELECT = 1;
+  PRIVILEGE_MODIFY = 2;
+  PRIVILEGE_CREATE = 3;
+  PRIVILEGE_DROP = 4;
+  PRIVILEGE_MONITOR = 5;
+  PRIVILEGE_USAGE = 6;
+  PRIVILEGE_BROWSE = 7;
+  PRIVILEGE_OPERATE = 8;
+  PRIVILEGE_MANAGE = 9;
+  PRIVILEGE_IMPERSONATE = 10;
+}
+
+message CheckResponse {
+  // One decision per request item, in order. Fewer or more decisions than items, or any value but
+  // DECISION_ALLOW, deny.
+  repeated Decision decisions = 1;
+  // The policy version these decisions were made under (0 or the top bit set: unknown; see
+  // `AccessPolicy.Version`).
+  uint64 policy_version = 2;
+}
+
+enum Decision {
+  DECISION_UNSPECIFIED = 0;
+  DECISION_ALLOW = 1;
+  DECISION_DENY = 2;
+}
+
+message VersionRequest {}
+
+message VersionResponse {
+  // The current version (0 or the top bit set: unknown; see `AccessPolicy.Version`).
+  uint64 policy_version = 1;
+}

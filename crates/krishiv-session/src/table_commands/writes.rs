@@ -106,6 +106,24 @@ impl Session {
         Err(name.not_found(path))
     }
 
+    /// The table an `INSERT` into `written` (resolved as `name`) writes: a Delta table by path
+    /// (`` delta.`/p` ``, with the name delta-spark's errors give it), else the permanent table
+    /// [`Self::table_for_write`] allows.
+    async fn insert_target(
+        &self,
+        written: &krishiv_sql::ast::DdlName,
+        name: &TableName,
+        env: &QueryEnv,
+    ) -> Result<(Arc<CatalogTable>, Option<String>), KrishivError> {
+        #[cfg(feature = "delta")]
+        if let Some((table, shown)) = self.delta_path_table(written, name, env).await? {
+            return Ok((table, Some(shown)));
+        }
+        #[cfg(not(feature = "delta"))]
+        let _ = written;
+        Ok((self.table_for_write(name, "INSERT", env)?, None))
+    }
+
     /// `INSERT INTO|OVERWRITE [TABLE] name [(columns)] [BY NAME] query`, or the multi-table
     /// `FROM source INSERT ... SELECT ... [INSERT ... SELECT ...]`.
     ///
@@ -129,6 +147,7 @@ impl Session {
             // Spark resolves every target before any clause's columns: a missing table is the
             // error even when an earlier clause names an unknown column.
             let env = self.query_env();
+            let mut targets = Vec::with_capacity(clauses.len());
             for clause in &clauses {
                 let name = self.table_name(&clause.name, &env)?;
                 if clause.replace_where.is_some()
@@ -137,14 +156,17 @@ impl Session {
                 {
                     self.refuse_replace_into_view(&name, &env)?;
                 }
-                self.table_for_write(&name, "INSERT", &env)?;
+                targets.push(self.insert_target(&clause.name, &name, &env).await?);
             }
-            for clause in &clauses {
-                self.insert_clause(clause, original, ids, true).await?;
+            // The checks reuse those targets (one access check and one log read a clause); each
+            // write below resolves its own again, after the clauses written before it.
+            for (clause, target) in clauses.iter().zip(targets) {
+                self.insert_clause(clause, original, ids, Some(target))
+                    .await?;
             }
         }
         for clause in &clauses {
-            self.insert_clause(clause, original, ids, false).await?;
+            self.insert_clause(clause, original, ids, None).await?;
         }
         self.empty_frame().await
     }
@@ -171,14 +193,16 @@ impl Session {
         Ok(())
     }
 
-    /// `c` checked through to the rows it would write (`dry`), or written.
+    /// `c` checked through to the rows it would write (a dry run, given the target it resolved
+    /// to), or written (`target` `None`: resolved here).
     pub(super) async fn insert_clause(
         &self,
         c: &InsertClause,
         original: &str,
         ids: &[krishiv_sql::ast::Span],
-        dry: bool,
+        target: Option<(Arc<CatalogTable>, Option<String>)>,
     ) -> Result<(), KrishivError> {
+        let dry = target.is_some();
         let env = self.query_env();
         let replace =
             c.replace_where.is_some() || c.replace_on.is_some() || c.replace_using.is_some();
@@ -186,15 +210,29 @@ impl Session {
         if replace {
             self.refuse_replace_into_view(&name, &env)?;
         }
-        let table = self.table_for_write(&name, "INSERT", &env)?;
+        let (table, delta_name) = match target {
+            Some(target) => target,
+            None => self.insert_target(&c.name, &name, &env).await?,
+        };
         if replace {
+            if c.replace_where.is_some() {
+                // Spark 4.3.0 runs REPLACE WHERE on DSv2 tables only; a Parquet or Hive table (every table
+                // here) fails with this class, with or without a column list
+                // (`tests/fixtures/spark-4.3.0/write-semantics/replace_where.json`). 4.2 reaches the V1
+                // write and refuses there.
+                return Err(
+                    if self.state.profile >= krishiv_plan::analyzer::SparkProfile::V4_3 {
+                        table_operation(&name, "INSERT INTO ... REPLACE WHERE")
+                    } else {
+                        krishiv_common::error::LegacyErrorTemp1012 {
+                            identifier: name.quoted(),
+                        }
+                        .into()
+                    },
+                );
+            }
             // A session-catalog table has no replace-by-condition write (Spark: the table lacks the capability).
-            let operation = if c.replace_where.is_some() {
-                "INSERT INTO ... REPLACE WHERE"
-            } else {
-                "INSERT INTO ... REPLACE ON/USING"
-            };
-            return Err(table_operation(&name, operation));
+            return Err(table_operation(&name, "INSERT INTO ... REPLACE ON/USING"));
         }
         let statics = match &c.partition {
             None => Vec::new(),
@@ -265,6 +303,7 @@ impl Session {
                 statics: &statics,
                 dry,
                 options: None,
+                delta_name: delta_name.as_deref(),
             },
         )
         .await
@@ -300,6 +339,23 @@ impl Session {
             &name.name,
             crate::catalog::NAMESPACE,
         );
+        // A Delta target is also read by any spelling of its root (`delta.`/t``, `/t/`,
+        // `file:/t`, a catalog table over it); an unresolvable root counts as a read.
+        #[cfg(feature = "delta")]
+        let reads_target = reads_target
+            || (delta
+                && analysis
+                    .env
+                    .catalog
+                    .delta
+                    .hadoop_root(&crate::catalog::table_source(table))
+                    .map_or(true, |root| {
+                        crate::catalog::reads_delta_root(
+                            analysis.analyzed.plan.root(),
+                            &root,
+                            &analysis.env.catalog,
+                        )
+                    }));
         // delta-spark overwrites a table the query reads (it reads the snapshot it commits on).
         if overwrite
             && !delta
@@ -336,12 +392,50 @@ impl Session {
                 .retain(|c| !statics.iter().any(|(k, _)| *k == c.name));
             t
         };
+        // delta-spark's arity check of an insert by position (`DeltaAnalysis`), before Spark's.
+        #[cfg(feature = "delta")]
+        if delta && listed.is_empty() && !by_name {
+            let shown = target.delta_name.map_or_else(
+                || {
+                    format!(
+                        "{}.{}.{}",
+                        crate::catalog::CATALOG,
+                        table.namespace,
+                        table.name
+                    )
+                },
+                str::to_owned,
+            );
+            // Spark adds a static partition's values to the query before delta-spark's check, so
+            // they count as data columns (`INSERT-PATH.json` `static_partition_arity*`).
+            if let Some(refusal) = super::delta_writes::delta_insert_arity(
+                &shown,
+                table.columns.len(),
+                output.len() + statics.len(),
+            ) {
+                return Err(refusal);
+            }
+        }
+        // Spark's own errors name a Delta table by path as its v2 identifier, the two parts
+        // quoted (`INSERT-PATH.json` `arity_column_list`): `delta`.`file:/p`.
+        let spark_name = target
+            .delta_name
+            .and_then(|d| d.strip_prefix("delta.`")?.strip_suffix('`'))
+            .map(|root| format!("`delta`.`{}`", root.replace('`', "``")));
+        let legacy_store = env
+            .config
+            .get(&krishiv_common::config::STORE_ASSIGNMENT_POLICY)
+            .and_then(krishiv_common::config::ConfigValue::as_str)
+            .is_some_and(|p| p.eq_ignore_ascii_case("LEGACY"));
         let assignment = assign(
             &assigned,
+            spark_name.as_deref(),
             listed,
             by_name,
             &output,
             env.analysis.conf.case_sensitive,
+            legacy_store,
+            self.state.profile,
         )?;
         let renamed: Vec<String> = (0..output.len())
             .map(|i| format!("__krishiv_c{i}"))
@@ -368,8 +462,27 @@ impl Session {
                     if output[*i].data_type == column.data_type {
                         value
                     } else {
-                        // Store assignment is ANSI whatever `spark.sql.ansi.enabled` says.
-                        value.cast_ansi(column.data_type.clone())
+                        // Store assignment is ANSI whatever `spark.sql.ansi.enabled` says, and non-ANSI under
+                        // `storeAssignmentPolicy=LEGACY`, where Spark casts each map key, map value, array
+                        // element and struct field on its own.
+                        if legacy_store {
+                            super::assign::legacy_store_cast(
+                                value,
+                                &output[*i].data_type,
+                                &column.data_type,
+                                0,
+                                by_name.then_some(env.analysis.conf.case_sensitive),
+                            )
+                        } else if by_name {
+                            super::assign::ansi_store_cast_by_name(
+                                value,
+                                &output[*i].data_type,
+                                &column.data_type,
+                                env.analysis.conf.case_sensitive,
+                            )
+                        } else {
+                            value.cast_ansi(column.data_type.clone())
+                        }
                     }
                 }
                 Source::Default => match &column.default {
@@ -422,9 +535,16 @@ impl Session {
                 .map_err(|e| overflow_in_table_insert(e, &assigned, &output, &assignment));
         }
         let _ = reads_target;
+        let key = target
+            .options
+            .and_then(|o| super::explicit_key(o, |v: &OptionValue| v.as_plain()));
+        // A key given as a secret is refused, as on a write to a path, never dropped.
+        if let Some(o) = target.options {
+            crate::session::writes::write_idempotency_key(&self.state.runtime.config, o)?;
+        }
         if dry {
             // Every check of the write, without writing.
-            return self.check_table_write(table, &df, overwrite).await;
+            return self.check_table_write(table, &df, overwrite, key).await;
         }
         let mode = if overwrite { "overwrite" } else { "append" };
         // A RENAME or DROP PARTITION waits until these rows are written and their partitions registered (it could
@@ -440,7 +560,9 @@ impl Session {
         } else {
             None
         };
-        let written = self.write_table_rows(table, &df, mode, &mut None).await;
+        let written = self
+            .write_table_rows(table, &df, mode, key, &mut None)
+            .await;
         // Data may have changed even when the write failed late.
         self.state.catalog.store.bump();
         self.forget_column_stats(name);
@@ -523,6 +645,66 @@ impl Session {
         TableName::resolve(&parts, &self.namespace_for_stored(&parts, env)?, env)
     }
 
+    /// Whether this keyed `saveAsTable` is the retry of a write the managed file table's commit log
+    /// already holds: it then writes nothing, as a path `save` with the same key does (an overwrite
+    /// must not drop what a later write added, an `errorifexists` retry must not fail on the table the
+    /// first try created). The dedup window of a managed table ends at its next overwrite under another
+    /// key: that drop deletes the directory and its log (a path `save` overwrite keeps the log).
+    ///
+    /// What the skipped arm asks of the policy is asked first (an overwrite: `DROP TABLE`, the table
+    /// write, the options and the table's directory; a create: the same without the drop), before the
+    /// log is read or the key checked, so a denial does not depend on the table's log.
+    async fn keyed_retry_is_done(
+        &self,
+        name: &TableName,
+        spec: &V2WriteSpec,
+        mode: krishiv_io::SaveMode,
+        env: &QueryEnv,
+    ) -> Result<bool, KrishivError> {
+        let Some(table) = self.state.catalog.store.table(&name.namespace, &name.name) else {
+            return Ok(false);
+        };
+        if !table.managed {
+            return Ok(false);
+        }
+        // A Delta table's overwrite is a data overwrite in place and its writer handles the key
+        // itself: the shortcut would ask the policy more than that arm does.
+        #[cfg(feature = "delta")]
+        if super::delta::is_delta_table(&table) {
+            return Ok(false);
+        }
+        // A write without a key never takes the shortcut: the arm it falls to asks for itself. An
+        // invalid key counts as keyed, so its error comes after the checks.
+        let keyed = crate::session::writes::write_idempotency_key(&env.config, &spec.options)
+            .map_or(true, |key| key.is_some());
+        if !keyed {
+            return Ok(false);
+        }
+        if mode == krishiv_io::SaveMode::Overwrite {
+            self.authorize_equivalent(name, "DROP TABLE {}", env)
+                .await?;
+        }
+        self.authorize_table_write(name, true, env).await?;
+        let location = managed_location(&self.warehouse_dir()?, &name.namespace, &name.name);
+        self.authorize_write_options(&spec.options, &BTreeMap::new())
+            .await?;
+        let at = self.locate_write_path(&location.display().to_string(), &spec.options, env)?;
+        self.authorize_write_path(&at).await?;
+        let checked =
+            self.locate_write_path(&table.location.display().to_string(), &spec.options, env)?;
+        // The table's own location can differ from the warehouse's (it moved), and its commit log is
+        // read below: the policy is asked of that path too.
+        self.authorize_write_path(&checked).await?;
+        crate::session::writes::key_already_committed(
+            &env.config,
+            &spec.options,
+            &env.io,
+            &checked.at.store,
+            &checked.at,
+        )
+        .await
+    }
+
     /// `DataFrameWriter.saveAsTable`: Spark's V1 save modes over a table. The
     /// table is created from the DataFrame's schema (an existing one in
     /// `errorifexists` mode fails with `TABLE_OR_VIEW_ALREADY_EXISTS`),
@@ -549,6 +731,14 @@ impl Session {
             .store
             .table(&name.namespace, &name.name)
             .is_some();
+        // A keyed retry of a write the table's commit log already holds writes nothing.
+        if exists
+            && matches!(mode, SaveMode::Overwrite | SaveMode::ErrorIfExists)
+            && !self.temp_entry_of(&name, &env)
+            && self.keyed_retry_is_done(&name, &spec, mode, &env).await?
+        {
+            return Ok(());
+        }
         match (mode, exists) {
             (SaveMode::Ignore, true) => {
                 // A no-op create is still authorized, as the SQL path does, so a denial
@@ -827,6 +1017,14 @@ impl Session {
                 let at =
                     self.locate_write_path(&location.display().to_string(), &spec.options, &env)?;
                 self.authorize_write_path(&at).await?;
+                // A key the new table's write would refuse (empty, secret, no commit log): not
+                // after the drop.
+                crate::session::writes::refuse_unkeyable_fresh_write(
+                    &env.config,
+                    &spec.options,
+                    &self.state.commit_log_probes,
+                    &at.at,
+                )?;
                 // A managed table's own directory goes with it; any other one in the way stays.
                 let own = self
                     .state
@@ -917,6 +1115,7 @@ impl Session {
             statics: &[],
             dry: false,
             options: Some(options),
+            delta_name: None,
         };
         self.insert_rows(&name, &found, df, &target).await
     }
@@ -951,6 +1150,7 @@ impl Session {
                     statics: &[],
                     dry: false,
                     options: Some(&spec.options),
+                    delta_name: None,
                 };
                 return self.insert_rows(&name, &table, df, &target).await;
             }
@@ -1030,9 +1230,10 @@ impl Session {
         table: &CatalogTable,
         df: &DataFrame,
         mode: &str,
+        key: Option<&str>,
         pre: &mut Option<Admitted>,
     ) -> Result<Vec<String>, KrishivError> {
-        table_writer(table, df, mode)?
+        table_writer(table, df, mode, key)?
             .save_reporting(&table.location.display().to_string(), pre.take())
             .await
     }
@@ -1043,9 +1244,10 @@ impl Session {
         table: &CatalogTable,
         df: &DataFrame,
         overwrite: bool,
+        key: Option<&str>,
     ) -> Result<(), KrishivError> {
         let mode = if overwrite { "overwrite" } else { "append" };
-        table_writer(table, df, mode)?
+        table_writer(table, df, mode, key)?
             .check_save(&table.location.display().to_string())
             .await
     }

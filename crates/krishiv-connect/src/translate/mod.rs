@@ -89,8 +89,8 @@ mod udf;
 mod write;
 
 pub use udf::{
-    CheckpointSpec, Command, PythonUdf, SQL_BATCHED_UDF, UdfCallName, UdfHost, python_udf,
-    translate_command,
+    CheckpointSpec, Command, PythonUdf, SQL_BATCHED_UDF, UdfCallName, UdfHost, ViewSpec,
+    python_udf, translate_command,
 };
 
 pub use write::{WriteSpec, WriteTarget, WriteV2Spec, write_spec, write_v2_spec};
@@ -98,7 +98,7 @@ pub use write::{WriteSpec, WriteTarget, WriteV2Spec, write_spec, write_v2_spec};
 pub use cached::{CACHED_REMOTE_NAMESPACE, CachedRemoteIds, cached_remote_table};
 pub use catalog::{CatalogCall, CreateTable, catalog_call};
 pub use local::{LocalRelations, LocalRequest, cached_request};
-pub use schema::{parse_datatype_string, parse_local_schema, parse_table_schema};
+pub use schema::{parse_datatype_string, parse_local_schema, parse_table_schema, parse_user_type};
 
 use krishiv_common::error::{FailedToParseTooComplex, KrishivError};
 use krishiv_plan::{Expr, MAX_DEPTH, Plan};
@@ -326,8 +326,10 @@ pub(crate) struct Translator<'c> {
 /// one per subtree that reaches [`INLINE_LEVELS`] levels and is itself
 /// composite (a plan with a thousand such columns is unusual), and the cap
 /// keeps a hostile plan of millions of them from spending its time on
-/// thread creation.
-const MAX_HOPS: usize = 10_000;
+/// thread creation. The cap was 10,000 when the first hop came at 32 levels;
+/// a hop now comes at [`INLINE_LEVELS`] levels, so the cap scales with it and
+/// a plan that translated then still does.
+const MAX_HOPS: usize = 10_000 * 32 / INLINE_LEVELS;
 
 impl<'c> Translator<'c> {
     const fn new(conf: &'c TranslateConf) -> Self {

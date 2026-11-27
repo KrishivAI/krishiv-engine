@@ -134,6 +134,7 @@ Each row links to the full description in [known differences](../concepts/known-
 | [Python table functions (UDTFs)](../concepts/known-differences.md#python-table-functions-udtfs) |
 | [`schema_of_variant` with `spark.sql.caseSensitive=true`](../concepts/known-differences.md#schema_of_variant-with-sparksqlcasesensitivetrue) |
 | [`PIVOT` cases Spark answers from undefined state are refused](../concepts/known-differences.md#pivot-cases-spark-answers-from-undefined-state-are-refused) |
+| [`describe`, `summary`, `freqItems` and sampling in Python](../concepts/known-differences.md#describe-summary-freqitems-and-sampling-in-python) |
 | [Inferred join filters differ from Spark's](../concepts/known-differences.md#inferred-join-filters-differ-from-sparks) |
 | [A multi-table `INSERT` that fails while it runs keeps the clauses written before](../concepts/known-differences.md#a-multi-table-insert-that-fails-while-it-runs-keeps-the-clauses-written-before) |
 | [Correlated subqueries with `spark.sql.optimizer.decorrelateInnerQuery.enabled` off](../concepts/known-differences.md#correlated-subqueries-with-sparksqloptimizerdecorrelateinnerqueryenabled-off) |
@@ -149,9 +150,12 @@ Each row links to the full description in [known differences](../concepts/known-
 | [Declared catalogs (`krishiv.catalog.<name>.*`, `spark.sql.catalog.<name>`)](../concepts/known-differences.md#declared-catalogs-krishivcatalogname-sparksqlcatalogname) |
 | [`Dataset.observe`: where the counts differ from Spark's (follow-up P3-T084c)](../concepts/known-differences.md#datasetobserve-where-the-counts-differ-from-sparks-follow-up-p3-t084c) |
 | [Delta Lake writes](../concepts/known-differences.md#delta-lake-writes) |
+| [Spark 4.3's nanosecond timestamps and nanosecond clocks](../concepts/known-differences.md#spark-43s-nanosecond-timestamps-and-nanosecond-clocks) |
 | [HLL sketches: the compact form (`hll_sketch_agg`, `hll_union_agg`, `hll_union`)](../concepts/known-differences.md#hll-sketches-the-compact-form-hll_sketch_agg-hll_union_agg-hll_union) |
+| [Several grouped-aggregate pandas UDFs in one `agg`](../concepts/known-differences.md#several-grouped-aggregate-pandas-udfs-in-one-agg) |
 | [Metric views (`CREATE VIEW .. WITH METRICS LANGUAGE YAML`)](../concepts/known-differences.md#metric-views-create-view--with-metrics-language-yaml) |
 | [Pattern matching over collated strings (`LIKE`, `RLIKE`)](../concepts/known-differences.md#pattern-matching-over-collated-strings-like-rlike) |
+| [`NEAREST BY` joins run as a ranked cross join](../concepts/known-differences.md#nearest-by-joins-run-as-a-ranked-cross-join) |
 
 ## Where it runs
 

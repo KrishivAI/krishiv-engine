@@ -163,6 +163,7 @@ impl RowLevelTable for IcebergRowLevel {
     fn capabilities(&self) -> RowLevelCapabilities {
         let mut c = RowLevelCapabilities::copy_on_write(CardinalityRule::SparkMergeCardinality);
         // A mode that cannot be read is the statement's error, raised by `scan` (`check_mode`).
+        c.idempotent_commit = true;
         c.merge_on_read = self.provider.write_target().is_some_and(|t| {
             matches!(
                 super::row_delta::row_level_mode(t.base.properties(), self.op),
@@ -196,6 +197,7 @@ impl RowLevelTable for IcebergRowLevel {
                 self.op,
                 request.read_filter_pushdown(),
                 request.write_id.clone(),
+                request.idempotency_key(),
             )?;
             return Ok(Arc::new(super::mor_sink::MergeOnReadSink::new(
                 write, self.op,
@@ -206,6 +208,83 @@ impl RowLevelTable for IcebergRowLevel {
                 message: "a row-level Iceberg table without a write target".to_owned(),
             })
         })?);
+        self.cow_sink(request, target, false)
+    }
+
+    fn plan_rewrite(
+        &self,
+        options: &std::collections::BTreeMap<String, String>,
+    ) -> krishiv_exec::Result<Vec<krishiv_exec::planner::RewriteGroup>> {
+        use super::maintenance::{rewrite_options::RewriteOptions, rewrite_plan};
+        let target = self.provider.write_target().ok_or_else(|| {
+            KrishivError::from(krishiv_common::error::InternalError {
+                message: "a rewritten Iceberg table without a write target".to_owned(),
+            })
+        })?;
+        let table_target = target
+            .base
+            .properties()
+            .get(super::write::TARGET_FILE_SIZE)
+            .and_then(|v| v.parse::<i64>().ok());
+        let opts = RewriteOptions::parse(options, table_target)?;
+        let (candidates, keys): (Vec<_>, Vec<_>) = self
+            .provider
+            .rewrite_candidates(target.base.default_partition_spec_id())?
+            .into_iter()
+            .unzip();
+        let by_path: std::collections::HashMap<String, Vec<u8>> = candidates
+            .iter()
+            .map(|c| c.path.clone())
+            .zip(keys)
+            .collect();
+        Ok(rewrite_plan::plan(candidates, &opts)
+            .groups
+            .into_iter()
+            .map(|g| krishiv_exec::planner::RewriteGroup {
+                input_bytes: g.input_bytes(),
+                write_max_file_size: g.write_max_file_size,
+                expected_output_files: g.expected_output_files,
+                files: g
+                    .files
+                    .iter()
+                    .filter_map(|f| by_path.get(&f.path).cloned())
+                    .collect(),
+            })
+            .collect())
+    }
+
+    fn live_data_files(&self) -> krishiv_exec::Result<usize> {
+        let target = self.provider.write_target().ok_or_else(|| {
+            KrishivError::from(krishiv_common::error::InternalError {
+                message: "a rewritten Iceberg table without a write target".to_owned(),
+            })
+        })?;
+        Ok(self
+            .provider
+            .rewrite_candidates(target.base.default_partition_spec_id())?
+            .len())
+    }
+
+    /// The sink of one `rewrite_data_files` group (36e-2a): `request.touched` are the group's
+    /// files, the rows are theirs unchanged. Validated as Java's `BaseRewriteFiles` (a concurrent
+    /// append is no conflict; a file removed or a delete added for a rewritten file is).
+    fn group_rewriter(&self, request: &RowLevelWrite) -> krishiv_exec::Result<Arc<dyn Sink>> {
+        let target = Arc::clone(self.provider.write_target().ok_or_else(|| {
+            KrishivError::from(krishiv_common::error::InternalError {
+                message: "a rewritten Iceberg table without a write target".to_owned(),
+            })
+        })?);
+        self.cow_sink(request, target, true)
+    }
+}
+
+impl IcebergRowLevel {
+    fn cow_sink(
+        &self,
+        request: &RowLevelWrite,
+        target: Arc<super::sink::WriteTarget>,
+        rewrite: bool,
+    ) -> krishiv_exec::Result<Arc<dyn Sink>> {
         self.require_lineage(request)?;
         let isolation = self.isolation(target.base.properties())?;
         let touched = self.provider.touched(&request.touched)?;
@@ -227,8 +306,9 @@ impl RowLevelTable for IcebergRowLevel {
             .map_or_else(|| "true".to_owned(), |f| format!("{f:?}"));
         let validation = Validation {
             checks: Checks {
-                added_data_files: true,
+                added_data_files: !rewrite,
                 new_deletes_for_replaced: true,
+                removed_data_files: rewrite,
                 ..Checks::default()
             },
             isolation,
@@ -238,6 +318,11 @@ impl RowLevelTable for IcebergRowLevel {
             // removed-data-files check, which CoW's `OverwriteFiles` does not
             // run (notes 36b2 §1 item 3); the removed files' existence is
             // the filter's missing-files check.
+            removes: if rewrite {
+                data_files.clone()
+            } else {
+                BTreeSet::new()
+            },
             replaced: touched.iter().map(|(e, _)| (**e).clone()).collect(),
             max_intervening: target.max_intervening,
             ..Validation::none()
@@ -251,15 +336,22 @@ impl RowLevelTable for IcebergRowLevel {
             validation,
             lineage: self.lineage,
         };
-        Ok(Arc::new(
-            IcebergWriteSink::try_rewrite(
-                target,
-                &request.input_schema,
-                &request.table_name,
-                request.write_id.clone(),
-                overwrite,
-            )?
-            .with_idempotency_key(request.idempotency_key()),
-        ))
+        let mut sink = IcebergWriteSink::try_rewrite(
+            target,
+            &request.input_schema,
+            &request.table_name,
+            request.write_id.clone(),
+            overwrite,
+        )?
+        .with_idempotency_key(request.idempotency_key());
+        if rewrite
+            && let Some(bytes) = request
+                .options
+                .get(krishiv_exec::planner::REWRITE_WRITE_MAX_OPTION)
+                .and_then(|v| v.parse::<u64>().ok())
+        {
+            sink = sink.with_target_file_bytes(bytes);
+        }
+        Ok(Arc::new(sink))
     }
 }

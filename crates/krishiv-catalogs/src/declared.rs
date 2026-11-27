@@ -6,7 +6,7 @@
 //! `none`, `token` (a reference resolved when the catalog is built), `client-credentials` at the
 //! declared token endpoint or `delegated` (the caller's own token or an RFC 8693 exchange of it,
 //! design P3-T067 §3.3; each call carries the session's caller), every request on the egress policy client scoped to the catalog's
-//! declared hosts with no redirect followed (§5.2). [`table`] maps a loaded table to the
+//! declared hosts with no redirect followed (§5.2). `table` maps a loaded table to the
 //! analyzer's metadata and opens its scans through the Iceberg connector (PR-58b), and, with
 //! `option.write = true` (default `false`), commits its writes through the catalog (PR-36c
 //! part 2).
@@ -167,6 +167,16 @@ impl IcebergRestFactory {
         deps: &CatalogDeps,
         ttl: std::time::Duration,
     ) -> Result<Arc<dyn CallerCatalog>, KrishivError> {
+        Self::build_with(decl, deps, ttl, vended::VendedCache::global())
+    }
+
+    /// [`Self::build_with_ttl`] keeping vended answers in `vended` (the process's cache, or a test's own).
+    pub(crate) fn build_with(
+        decl: &CatalogDecl,
+        deps: &CatalogDeps,
+        ttl: std::time::Duration,
+        vended: Arc<vended::VendedCache>,
+    ) -> Result<Arc<dyn CallerCatalog>, KrishivError> {
         let config = Self::config(decl, deps, true)?;
         // Embedded use reads local tables too (as reads by path are not confined there); a
         // server never reads its own disk for a catalog (`FileFromRemoteCatalog`).
@@ -182,6 +192,7 @@ impl IcebergRestFactory {
             Arc::new(client),
             ttl,
             writes(decl)?,
+            vended,
         )))
     }
 }
@@ -255,6 +266,8 @@ mod vended;
 
 pub(crate) use table::RestCatalog;
 
+#[cfg(test)]
+mod call_tests;
 #[cfg(test)]
 mod read_tests;
 #[cfg(test)]

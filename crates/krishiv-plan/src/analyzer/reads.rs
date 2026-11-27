@@ -236,6 +236,7 @@ impl Walk {
                 | PlanNode::Tail { .. }
                 | PlanNode::SubqueryAlias { .. }
                 | PlanNode::WithCte { .. }
+                | PlanNode::SecurityBarrier { .. }
                 | PlanNode::JoinHint { .. }
                 | PlanNode::Repartition { .. }
                 | PlanNode::Sample { .. }
@@ -324,6 +325,7 @@ impl Walk {
                 | PlanNode::PipeOperator { .. }
                 | PlanNode::Distinct { .. }
                 | PlanNode::SetOp { .. }
+                | PlanNode::Zip { .. }
                 | PlanNode::Pivot { .. }
                 | PlanNode::Unpivot { .. }
                 | PlanNode::InlineTable { .. }

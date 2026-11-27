@@ -56,6 +56,7 @@ DropVariable	SESSION	DROP TEMPORARY VARIABLE v
 CreateFunction	SESSION	CREATE TEMPORARY FUNCTION f(a INT) RETURNS INT RETURN a + 1
 CreateFunction	DDL	CREATE FUNCTION f(a INT) RETURNS INT RETURN a + 1
 DropFunction	SESSION	DROP TEMPORARY FUNCTION f
+CreatePersistedFunction	DDL	CREATE FUNCTION f AS 'python' USING PYTHON 'f'
 DropFunction	DDL	DROP FUNCTION f
 CreatePermanentView	DDL	CREATE VIEW db.v AS SELECT * FROM t
 CreatePermanentView::temporary	SESSION	CREATE TEMPORARY VIEW v USING parquet OPTIONS (path '/data/x')
@@ -122,6 +123,7 @@ Refresh::Path	ADMIN	REFRESH '/data/x'
 Analyze	WRITE	ANALYZE TABLE t COMPUTE STATISTICS
 Repair	DDL	MSCK REPAIR TABLE t
 AddResource	ADMIN	ADD JAR '/tmp/a.jar'
+Call	ADMIN	CALL cat.system.expire_snapshots(table => 'db.t', retain_last => 1)
 ListResource	READ	LIST JARS
 ExecuteImmediate	READ	EXECUTE IMMEDIATE 'SELECT 1'
 ExecuteImmediate	DDL	EXECUTE IMMEDIATE 'DROP TABLE t'

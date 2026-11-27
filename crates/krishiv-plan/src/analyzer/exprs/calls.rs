@@ -100,6 +100,124 @@ impl Resolver<'_> {
         )
     }
 
+    /// Spark 4.3's `current_timestamp(p)`, `now(p)` and `localtimestamp(p)`
+    /// (`CurrentTimestampPrecision.validate`, `datetimeExpressions.scala`): `true` when the call
+    /// is one with `p = 6`, the plain call. A non-foldable argument is `NON_FOLDABLE_ARGUMENT` (with
+    /// its own type), then a non-integral one `UNEXPECTED_INPUT_TYPE`; the value is read as Java's
+    /// `intValue()` (a long wraps);
+    /// 7..=9 asks for the nanosecond types, which Spark keeps behind
+    /// `spark.sql.timestampNanosTypes.enabled` (off): `FEATURE_NOT_ENABLED`; any other value is
+    /// `INVALID_TIMESTAMP_PRECISION`. Before 4.3 (and for other calls) `false`: the arity check
+    /// refuses the argument.
+    fn timestamp_precision_call(
+        &self,
+        entry: &FunctionEntry,
+        e: &Arc<Expr>,
+        arg: &Bound,
+    ) -> Result<bool, AnalysisError> {
+        let name = entry.id.name();
+        if self.ctx.profile < crate::analyzer::SparkProfile::V4_3
+            || !is_builtin_entry(entry)
+            || !matches!(name, "current_timestamp" | "now" | "localtimestamp")
+        {
+            return Ok(false);
+        }
+        let zone = self.ctx.conf.session_zone;
+        let sql_type = |t: Option<&DataType>| {
+            t.map_or_else(|| "\"VOID\"".to_owned(), |t| format!("\"{}\"", t.sql()))
+        };
+        // Spark 4.3's `CurrentTimestampPrecision.validate` checks foldability first, naming the
+        // argument's own type (`now(p)` over a DOUBLE column: "DOUBLE"), then the type.
+        if crate::analyzer::ops::not_constant(&arg.expr) {
+            return Err(AnalysisError::new(
+                krishiv_common::error::NonFoldableArgument {
+                    func_name: format!("`{name}`"),
+                    param_name: "`precision`".to_owned(),
+                    param_type: sql_type(arg.ty.data_type.as_ref()),
+                },
+                e.origin,
+            ));
+        }
+        let integral = matches!(
+            arg.ty.data_type,
+            Some(DataType::Byte | DataType::Short | DataType::Integer | DataType::Long)
+        );
+        if !integral {
+            return Err(AnalysisError::new(
+                krishiv_common::error::UnexpectedInputType {
+                    param_index: "first".to_owned(),
+                    function_name: format!("`{name}`"),
+                    required_type: "\"INT\"".to_owned(),
+                    input_sql: format!("\"{}\"", pretty(&arg.shown(), zone)),
+                    input_type: sql_type(arg.ty.data_type.as_ref()),
+                },
+                e.origin,
+            ));
+        }
+        let p = match self.fold(&arg.expr, self.ctx.conf.ansi) {
+            // Spark reads the value's `Number.intValue()`: a long wraps
+            // (`current_timestamp(4294967302L)` is 6).
+            Some(Constant::Integral(p)) => {
+                let [a, b, c, d, ..] = p.to_le_bytes();
+                i32::from_le_bytes([a, b, c, d])
+            }
+            // `now(CAST(NULL AS INT))` (Spark 4.3: `DATATYPE_MISMATCH.UNEXPECTED_NULL`).
+            Some(Constant::Null) => {
+                return Err(AnalysisError::new(
+                    krishiv_common::error::DatatypeMismatchUnexpectedNull {
+                        sql_expr: format!("\"{}\"", pretty(&arg.shown(), zone)),
+                        expr_name: "`precision`".to_owned(),
+                    },
+                    e.origin,
+                ));
+            }
+            // A foldable precision the folder cannot evaluate (`dayofweek(DATE '1970-01-02')`):
+            // Spark evaluates it; Krishiv refuses it by name (an explicit divergence).
+            _ => {
+                return Err(AnalysisError::new(
+                    krishiv_common::error::KrishivUnsupportedFeature {
+                        feature: format!(
+                            "`{name}({})` with a precision Krishiv cannot fold",
+                            pretty(&arg.shown(), zone)
+                        ),
+                    },
+                    e.origin,
+                ));
+            }
+        };
+        match p {
+            6 => Ok(true),
+            7..=9 if self.ctx.conf.timestamp_nanos_types => Err(AnalysisError::new(
+                krishiv_common::error::KrishivUnsupportedFeature {
+                    feature: format!(
+                        "`{name}({p})`: the nanosecond-precision timestamp types (Krishiv 0.3.1)"
+                    ),
+                },
+                e.origin,
+            )),
+            7..=9 => Err(AnalysisError::new(
+                krishiv_common::error::FeatureNotEnabled {
+                    feature_name: "Nanosecond-precision timestamp types".to_owned(),
+                    config_key: "spark.sql.timestampNanosTypes.enabled".to_owned(),
+                    config_value: "true".to_owned(),
+                },
+                e.origin,
+            )),
+            _ => Err(AnalysisError::new(
+                krishiv_common::error::InvalidTimestampPrecision {
+                    precision: p.to_string(),
+                    r#type: if name == "localtimestamp" {
+                        "TIMESTAMP_NTZ"
+                    } else {
+                        "TIMESTAMP_LTZ"
+                    }
+                    .to_owned(),
+                },
+                e.origin,
+            )),
+        }
+    }
+
     /// A registry call's arguments after their implicit casts, and its
     /// result type: Spark's arity check, then the function's input types
     /// and result rule. Out of line: it keeps the recursive `expr` frame
@@ -112,6 +230,10 @@ impl Resolver<'_> {
         kids: &[Bound],
     ) -> Result<(Vec<Bound>, ArgType), AnalysisError> {
         let n = kids.len();
+        if n == 1 && self.timestamp_precision_call(entry, e, &kids[0])? {
+            // `current_timestamp(6)` is the call without its argument, and so named.
+            return self.typed_call(entry, e, &[]);
+        }
         if !entry.arity.accepts(n) {
             return Err(AnalysisError::new(
                 WrongNumArgsWithoutSuggestion {
@@ -161,6 +283,11 @@ impl Resolver<'_> {
                 });
             }
         }
+        // A type string argument reads a bare `TIMESTAMP` as `spark.sql.timestampType` names it.
+        let session_typed = self.session_type_argument(entry, kids, &constants);
+        if let Some((i, text)) = &session_typed {
+            constants[*i] = Some(Constant::String(text.clone()));
+        }
         let literals: Vec<bool> = kids.iter().map(|k| fold::is_literal(&k.expr)).collect();
         let foldable: Vec<bool> = kids
             .iter()
@@ -176,6 +303,7 @@ impl Resolver<'_> {
             .with_literals(&literals)
             .with_sql(&sql)
             .with_ansi(ansi)
+            .with_profile(self.ctx.profile)
             .with_decimal_loss(loss)
             .with_case_sensitive(self.ctx.conf.case_sensitive)
             .with_concat_binary_as_string(self.ctx.conf.concat_binary_as_string);
@@ -197,6 +325,7 @@ impl Resolver<'_> {
             .with_sql(&sql)
             .with_bound_sql(&bound_sql)
             .with_ansi(ansi)
+            .with_profile(self.ctx.profile)
             .with_decimal_loss(loss)
             .with_case_sensitive(self.ctx.conf.case_sensitive)
             .with_concat_binary_as_string(self.ctx.conf.concat_binary_as_string);
@@ -227,7 +356,58 @@ impl Resolver<'_> {
             );
             k.ty = arg_type(DataType::Binary, false);
         }
+        if let Some((i, text)) = session_typed
+            && let Some(k) = call_kids.get_mut(i)
+        {
+            // The call binds from the resolved type, shown as written (its name never shows it).
+            k.shown = Some(Arc::clone(&k.expr));
+            k.expr = Arc::new(
+                Expr::new(ExprNode::Literal(Literal::String(text))).with_origin(k.expr.origin),
+            );
+        }
         Ok((Self::folded_ntile(entry, &constants, call_kids), ty))
+    }
+
+    /// Under `spark.sql.timestampType = TIMESTAMP_NTZ`, the type string argument of `from_json`,
+    /// `from_csv`, `from_xml` (the schema) or `variant_get` / `try_variant_get` (the target type)
+    /// whose bare `TIMESTAMP` that setting changes: its position and the resolved type as SQL
+    /// text. Spark parses these strings with the session's `DataTypeAstBuilder` (a Spark 4.2.0 run:
+    /// `from_json(j, 'a timestamp')` is `struct<a:timestamp_ntz>`, named `from_json(j)`). The call
+    /// then carries the resolved text, so its result rule and the executor's bind read the same
+    /// type; a string the setting leaves alone (or that does not parse) is kept as written.
+    fn session_type_argument(
+        &self,
+        entry: &FunctionEntry,
+        kids: &[Bound],
+        constants: &[Option<Constant>],
+    ) -> Option<(usize, String)> {
+        if !self.ctx.conf.timestamp_ntz || !is_builtin_entry(entry) {
+            return None;
+        }
+        let i = match entry.id.name() {
+            "from_json" | "from_csv" | "from_xml" => 1,
+            "variant_get" | "try_variant_get" => 2,
+            _ => return None,
+        };
+        let Some(Some(Constant::String(text))) = constants.get(i) else {
+            return None;
+        };
+        if !fold::is_literal(&kids.get(i)?.expr) {
+            return None;
+        }
+        let grammar = krishiv_types::TypeGrammar::new(
+            self.ctx.profile >= crate::analyzer::SparkProfile::V4_3,
+        );
+        // A schema may be a bare field list (`a INT, b TIMESTAMP`): read as a struct of them.
+        let parse = |ntz: bool| {
+            krishiv_types::parse_data_type_with(text, grammar, ntz).or_else(|_| {
+                krishiv_types::parse_data_type_with(&format!("STRUCT<{text}>"), grammar, ntz)
+            })
+        };
+        match (parse(true), parse(false)) {
+            (Ok(session), Ok(plain)) if session != plain => Some((i, session.sql())),
+            _ => None,
+        }
     }
 
     /// The non-empty string literal path in the descriptor position of a `from_protobuf` / `to_protobuf` call (the third of three

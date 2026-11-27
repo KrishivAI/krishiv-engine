@@ -12,6 +12,10 @@
 //! * a filtered reader cannot write; denials do not reveal existence;
 //! * `PathPrefixPolicy` keeps reads and writes under its roots.
 #![cfg(test)]
+mod file_url;
+mod literal_path;
+use file_url::file_url;
+use literal_path::sql_path;
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -474,7 +478,7 @@ fn names_are_checked_as_written_and_folded() {
     // Every change asks about the read first (a filtered reader may not
     // change the securable).
     let cwd = std::env::current_dir().unwrap();
-    let loc = format!("path 'file:{}/loc'", cwd.display());
+    let loc = format!("path '{}/loc'", file_url(&cwd));
     assert_eq!(
         asked("CREATE TABLE x.y USING parquet LOCATION 'loc' AS SELECT 1"),
         [
@@ -891,15 +895,30 @@ fn a_file_in_the_way_of_the_target_is_handled_as_before() {
     assert!(target.is_dir());
 }
 
-/// A directory above the target whose name object paths would encode cannot
-/// be addressed: refused up front (it used to write into a differently named
-/// sibling directory).
+/// A directory above the target whose name object paths used to encode
+/// (non-ASCII, `~`, `%`) is written into under its own name, never into a
+/// differently named sibling.
 #[cfg(unix)]
 #[test]
-fn a_special_character_in_an_ancestor_name_is_refused() {
+fn a_special_character_in_an_ancestor_name_is_written_into() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().canonicalize().unwrap();
-    let dir = root.join("jos\u{e9}");
+    for name in ["jos\u{e9}", "RUNNER~1", "a%7Eb"] {
+        let dir = root.join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        let s = session(Arc::new(AllowAll));
+        let df = block_on(s.sql("SELECT 1 AS a")).unwrap();
+        let out = dir.join("out");
+        block_on(df.write().parquet(out.to_str().unwrap())).unwrap();
+        assert!(out.join("_SUCCESS").exists(), "{name}");
+    }
+    assert_eq!(
+        std::fs::read_dir(&root).unwrap().count(),
+        3,
+        "no sibling was created"
+    );
+    // A control character is a name no object path holds: refused up front.
+    let dir = root.join("a\u{1}b");
     std::fs::create_dir_all(&dir).unwrap();
     let s = session(Arc::new(AllowAll));
     let df = block_on(s.sql("SELECT 1 AS a")).unwrap();
@@ -909,15 +928,11 @@ fn a_special_character_in_an_ancestor_name_is_refused() {
         "KRISHIV_UNSUPPORTED_FEATURE"
     );
     assert!(!out.exists());
-    assert_eq!(
-        std::fs::read_dir(&root).unwrap().count(),
-        1,
-        "no sibling was created"
-    );
 }
 
-/// A file where a directory of the path should be fails as a storage error,
-/// not an internal one.
+/// A file where a directory of the path should be fails as a failed write with the OS reason
+/// as its cause, not an internal error; the file is left as it was (the classes and modes are
+/// in `write_under_file.rs`).
 #[cfg(unix)]
 #[test]
 fn a_file_on_the_path_is_a_storage_failure() {
@@ -929,7 +944,7 @@ fn a_file_on_the_path_is_a_storage_failure() {
     let out = root.join("f/sub/out");
     assert_eq!(
         class(block_on(df.write().parquet(out.to_str().unwrap()))),
-        "KRISHIV_OBJECT_STORE_REQUEST_FAILED"
+        "TASK_WRITE_FAILED"
     );
     assert_eq!(std::fs::read(root.join("f")).unwrap(), b"x");
 }
@@ -997,11 +1012,11 @@ fn a_temporary_table_location_is_checked() {
     for sql in [
         format!(
             "CREATE TEMPORARY TABLE x USING parquet LOCATION '{}' AS SELECT 1 AS a",
-            loc.display()
+            sql_path(&loc)
         ),
         format!(
             "CREATE TEMPORARY TABLE x USING parquet LOCATION '{}'",
-            dir.path().display()
+            sql_path(dir.path())
         ),
     ] {
         assert_eq!(class(block_on(s.sql(&sql))), DENIED, "{sql}");
@@ -1722,6 +1737,64 @@ fn dataframe_overwrites_need_drop_and_modify() {
     );
 }
 
+/// E34 (review of #966): a keyed overwrite retry is asked what the overwrite asks, `Drop` first, so a
+/// denial does not depend on whether the table's commit log holds the key.
+#[test]
+fn a_keyed_overwrite_retry_is_denied_like_the_first_try() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(Policy::new(no_drop));
+    s.conf()
+        .set("spark.sql.warehouse.dir", dir.path().to_str().unwrap())
+        .unwrap();
+    let write = |mode: &str, key: &str| {
+        class(block_on(
+            s.table("t")
+                .write()
+                .mode(mode)
+                .option("krishiv.write.idempotencyKey", key)
+                .save_as_table("keyed"),
+        ))
+    };
+    assert_eq!(write("errorifexists", "k1"), "OK");
+    // A key the log holds and one it does not: the same denial.
+    assert_eq!(write("overwrite", "k1"), DENIED);
+    assert_eq!(write("overwrite", "k2"), DENIED);
+    assert_eq!(block_on(s.table("keyed").count()).unwrap(), 3);
+    // An invalid key is reported after the denial, not before it.
+    assert_eq!(write("overwrite", ""), DENIED);
+}
+
+/// E34 (second review of #966): a Delta overwrite is a data overwrite that asks no `Drop`, keyed or not.
+#[cfg(feature = "delta")]
+#[test]
+fn a_keyed_delta_overwrite_is_allowed_like_the_unkeyed_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(Policy::new(no_drop));
+    s.conf()
+        .set("spark.sql.warehouse.dir", dir.path().to_str().unwrap())
+        .unwrap();
+    block_on(s.table("t").write().format("delta").save_as_table("d")).unwrap();
+    let unkeyed = class(block_on(
+        s.table("t")
+            .write()
+            .format("delta")
+            .mode("overwrite")
+            .save_as_table("d"),
+    ));
+    let keyed = class(block_on(
+        s.table("t")
+            .write()
+            .format("delta")
+            .mode("overwrite")
+            .option("krishiv.write.idempotencyKey", "k")
+            .save_as_table("d"),
+    ));
+    assert_eq!(unkeyed, "OK");
+    assert_eq!(keyed, "OK");
+    // Each overwrite replaced the table with the source's rows.
+    assert_eq!(block_on(s.table("d").count()).unwrap(), 3);
+}
+
 /// `ignore` on an existing table is still authorized: a denial must not tell an existing table
 /// from a missing one.
 #[test]
@@ -2122,4 +2195,27 @@ fn browse_on_a_view_shows_its_schema_not_its_text_or_rows() {
     ] {
         assert_eq!(class(block_on(s.sql(sql))), DENIED, "{sql}");
     }
+}
+
+/// E14 (design `P3-E14-security-barrier.md` §7.5): `AllowWith` stays refused (ADR 0036:
+/// `KRISHIV_UNSUPPORTED_FEATURE`), and no barrier
+/// reaches a production plan; the planner's barrier exists only for P5-T045 to place.
+#[test]
+fn a_row_column_policy_is_still_refused_and_no_plan_holds_a_barrier() {
+    let s = session(Policy::new(filtered_reads));
+    assert_eq!(
+        class(block_on(s.sql("SELECT * FROM t")).and_then(|df| block_on(df.collect()))),
+        "KRISHIV_UNSUPPORTED_FEATURE"
+    );
+    let s = session(Policy::new(allow));
+    let explained = block_on(async {
+        let df = s
+            .sql("EXPLAIN EXTENDED SELECT a FROM t WHERE a > 1")
+            .await?;
+        df.collect().await
+    })
+    .unwrap();
+    let text = format!("{explained:?}");
+    assert!(text.contains("Filter"), "{text}");
+    assert!(!text.contains("SecurityBarrier"), "{text}");
 }

@@ -287,7 +287,6 @@ fn replace_where_and_target_options_are_refused_by_the_table() {
     for sql in [
         "insert into tbl (id, name) replace where id = 1 values (1, 'a')",
         "insert into tbl replace on tbl.id = 1 values (1, 'a')",
-        "insert into tbl as x with ('k' = 'v') (id, name) replace on x.id = 1 values (1, 'a')",
         "update tbl with ('k' = 'v') set name = 'x'",
         "update tbl t with ('k' = 'v') set name = 'x'",
         "delete from tbl with ('k' = 'v')",
@@ -301,6 +300,14 @@ fn replace_where_and_target_options_are_refused_by_the_table() {
             "{sql}"
         );
     }
+    // A column list with `REPLACE ON` is refused before the table is looked at (4.3.0 oracle).
+    assert_eq!(
+        run(
+            &s,
+            "insert into tbl as x with ('k' = 'v') (id, name) replace on x.id = 1 values (1, 'a')"
+        ),
+        Err("INSERT_REPLACE_ON_COLUMN_LIST_NOT_ALLOWED".to_owned())
+    );
     for (sql, operation) in [
         (
             "insert into tbl (id, name) replace where id = 1 values (1, 'a')",

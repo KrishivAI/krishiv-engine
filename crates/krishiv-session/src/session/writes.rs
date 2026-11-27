@@ -41,7 +41,7 @@ pub(crate) fn partition_overwrite_is_dynamic(
 ///
 /// # Errors
 /// `INVALID_CONF_VALUE` for an empty key.
-pub(super) fn write_idempotency_key(
+pub(crate) fn write_idempotency_key(
     config: &Config,
     options: &std::collections::BTreeMap<String, krishiv_common::secret::OptionValue>,
 ) -> Result<Option<String>, KrishivError> {
@@ -94,7 +94,7 @@ pub(super) fn unlogged_key(display: &str) -> KrishivError {
 ///
 /// # Errors
 /// An invalid key, or the log's read errors.
-pub(super) async fn key_already_committed(
+pub(crate) async fn key_already_committed(
     config: &Config,
     options: &std::collections::BTreeMap<String, krishiv_common::secret::OptionValue>,
     io: &krishiv_io::IoContext,
@@ -164,6 +164,36 @@ pub(super) async fn refuse_unlogged_key_early(
     Ok(())
 }
 
+/// What [`refuse_unlogged_key_early`] decides for a write to a directory that does not exist yet
+/// (`errorifexists`), from the configuration and the store's cached probe alone: no I/O, so an
+/// overwrite can ask it before it drops the table it replaces.
+///
+/// Only a store already probed is known to lack put-if-absent; for one not probed yet the refusal
+/// still comes after the drop. Not reachable while managed tables live in the local warehouse.
+///
+/// # Errors
+/// An invalid key; `KRISHIV_UNSUPPORTED_FEATURE` for a key on `commitProtocol=NONE` or on a store
+/// known to lack put-if-absent.
+pub(crate) fn refuse_unkeyable_fresh_write(
+    config: &Config,
+    options: &std::collections::BTreeMap<String, krishiv_common::secret::OptionValue>,
+    probes: &Mutex<HashMap<String, bool>>,
+    at: &krishiv_exec::files::LocatedPath,
+) -> Result<(), KrishivError> {
+    if write_idempotency_key(config, options)?.is_none() {
+        return Ok(());
+    }
+    let known_unsupported = probes
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .get(at.store.key())
+        == Some(&false);
+    if commit_protocol(config).as_deref() == Some("NONE") || known_unsupported {
+        return Err(unlogged_key(&at.display));
+    }
+    Ok(())
+}
+
 /// `write`, through the commit log when the directory uses one (with the write's idempotency key,
 /// E34), else as it is.
 ///
@@ -221,16 +251,17 @@ pub(super) async fn uses_commit_log(
     // write goes through the root. The ancestors are probed through the store as the path names
     // it (`at.store`), not the one anchored at the target, which cannot see above it; the root
     // may be the store's own root (an empty path).
-    let mut parts: Vec<String> = at.path.parts().map(|p| p.as_ref().to_owned()).collect();
-    while parts
-        .last()
-        .is_some_and(|name| name.split_once('=').is_some_and(|(k, _)| !k.is_empty()))
-    {
+    let mut parts: Vec<object_store::path::PathPart<'_>> = at.path.parts().collect();
+    while parts.last().is_some_and(|name| {
+        name.as_ref()
+            .split_once('=')
+            .is_some_and(|(k, _)| !k.is_empty())
+    }) {
         parts.pop();
         let parent = krishiv_io::commit_log::CommitLog::new(
             io,
             at.store.clone(),
-            object_store::path::Path::from_iter(parts.iter().map(String::as_str)),
+            object_store::path::Path::from_iter(parts.iter().cloned()),
             at.display.clone(),
         );
         if parent.exists().await? {
@@ -316,14 +347,15 @@ pub(super) fn max_records_per_file(
 }
 
 /// A write directory that could not be opened, as the path-based store
-/// reports it (`KRISHIV_OBJECT_STORE_REQUEST_FAILED`).
+/// reports it: `TASK_WRITE_FAILED` with the OS reason as its cause (PY-075).
+#[cfg(unix)]
 pub(super) fn anchor_failed(at: &krishiv_exec::files::LocatedPath, reason: &str) -> KrishivError {
-    krishiv_common::error::KrishivObjectStoreRequestFailed {
+    KrishivError::from(krishiv_common::error::TaskWriteFailed {
         path: at.display.clone(),
-        attempts: "1".to_owned(),
-        reason: reason.to_owned(),
-    }
-    .into()
+    })
+    .with_cause(KrishivError::from(krishiv_common::error::InternalError {
+        message: reason.to_owned(),
+    }))
 }
 
 /// Removes a write's private store registration when the write is over.

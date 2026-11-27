@@ -170,6 +170,9 @@ pub(crate) struct IcebergWriteSink {
     sketch_columns: Option<Arc<[SketchColumn]>>,
     /// `None`: an append.
     overwrite: Option<Overwrite>,
+    /// Files roll over at this size instead of the table's `write.target-file-size-bytes`
+    /// (`rewrite_data_files`' `write-max-file-size`).
+    target_file_bytes: Option<u64>,
 }
 
 impl std::fmt::Debug for IcebergWriteSink {
@@ -301,6 +304,13 @@ impl IcebergWriteSink {
         .map(|s| s.with_idempotency_key(request.idempotency_key()))
     }
 
+    /// This sink's files rolling over at `bytes` (a `rewrite_data_files` group's size ceiling).
+    #[must_use]
+    pub(crate) fn with_target_file_bytes(mut self, bytes: u64) -> Self {
+        self.target_file_bytes = Some(bytes);
+        self
+    }
+
     /// Records the caller's idempotency key in the snapshot's summary; a table that already has a
     /// snapshot with it gets no commit (E34).
     #[must_use]
@@ -372,6 +382,7 @@ impl IcebergWriteSink {
             clock: Arc::new(IoClock { handle }),
             sketch_columns,
             overwrite,
+            target_file_bytes: None,
         })
     }
 
@@ -681,6 +692,9 @@ impl Sink for IcebergWriteSink {
         .with_sketches(sketches);
         if self.overwrite.as_ref().is_some_and(|o| o.lineage) {
             writer = writer.with_lineage()?;
+        }
+        if let Some(bytes) = self.target_file_bytes {
+            writer = writer.with_target_file_bytes(bytes)?;
         }
         let (batches_tx, batches_rx) = mpsc::channel(QUEUED_BATCHES);
         let (commit_tx, commit_rx) = oneshot::channel();

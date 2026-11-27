@@ -400,7 +400,12 @@ async fn analyze_input_files_lists_file_scans() {
     };
     // The path qualified as the scan lists it, not the files under it (a
     // recorded difference).
-    assert_eq!(f.files, vec![format!("file:{out}")]);
+    assert_eq!(
+        f.files,
+        vec![krishiv_exec::files::file_display(std::path::Path::new(
+            &out
+        ))]
+    );
     let AResult::InputFiles(f) = analyzed(
         &run,
         Analyze::InputFiles(Box::new(areq::InputFiles {
@@ -584,6 +589,40 @@ fn kv(key: &str, value: Option<&str>) -> pb::KeyValue {
 
 fn keys(k: &[&str]) -> Vec<String> {
     k.iter().map(|s| (*s).to_owned()).collect()
+}
+
+/// The batch of reads a pyspark-client 4.3.0 `toPandas()` makes before it fetches (`client/core.py`,
+/// `to_pandas`): a missing key is an error there, so each must answer with Spark 4.3's default.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_answers_a_to_pandas_client_batch() {
+    let run = start().await;
+    let get = config(
+        &run,
+        OpType::Get(creq::Get {
+            keys: keys(&[
+                "spark.sql.session.timeZone",
+                "spark.sql.execution.pandas.structHandlingMode",
+                "spark.sql.execution.arrow.pyspark.selfDestruct.enabled",
+            ]),
+        }),
+    )
+    .await
+    .expect("get");
+    assert_eq!(get.pairs.len(), 3);
+    assert_eq!(
+        get.pairs[1],
+        kv(
+            "spark.sql.execution.pandas.structHandlingMode",
+            Some("legacy")
+        )
+    );
+    assert_eq!(
+        get.pairs[2],
+        kv(
+            "spark.sql.execution.arrow.pyspark.selfDestruct.enabled",
+            Some("false")
+        )
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

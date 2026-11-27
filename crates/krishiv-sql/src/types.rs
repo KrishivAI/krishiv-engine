@@ -16,6 +16,14 @@ impl fmt::Display for DataTypeSpec {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.kind {
             DataTypeKind::Primitive { name, args } if args.is_empty() => f.write_str(name),
+            // Spark 4.3's `TIMESTAMP[_NTZ|_LTZ](6)` is the microsecond type itself (the
+            // validator refuses every other precision, and the form before 4.3).
+            DataTypeKind::Primitive { name, args }
+                if name.starts_with("timestamp")
+                    && matches!(args.as_slice(), [p] if p.parse::<u32>() == Ok(6)) =>
+            {
+                f.write_str(name)
+            }
             DataTypeKind::Primitive { name, args } => {
                 // `time(6) without time zone`: arguments follow the first word.
                 let (head, tail) = name.split_once(' ').unwrap_or((name, ""));
@@ -225,5 +233,40 @@ mod tests {
             spec("string").to_column_type().unwrap(),
             (DataType::String, None)
         );
+    }
+
+    /// A bare `TIMESTAMP` is the type `spark.sql.timestampType` names, resolved while parsing
+    /// (Spark's `DataTypeAstBuilder.visitPrimitiveDataType`); the explicit forms keep theirs.
+    #[test]
+    fn a_bare_timestamp_follows_the_timestamp_type_setting() {
+        let ntz = ParserOptions {
+            timestamp_ntz: true,
+            ..ParserOptions::default()
+        };
+        let ty = |text: &str, opts: &ParserOptions| {
+            parse_data_type(text, opts).unwrap().to_data_type().unwrap()
+        };
+        assert_eq!(ty("timestamp", &ntz), DataType::TimestampNtz);
+        assert_eq!(ty("TIMESTAMP(6)", &ntz), DataType::TimestampNtz);
+        assert_eq!(
+            ty("array<timestamp>", &ntz),
+            ty("array<timestamp_ntz>", &ntz)
+        );
+        assert_eq!(ty("timestamp_ltz", &ntz), DataType::Timestamp);
+        assert_eq!(
+            ty("timestamp with local time zone", &ntz),
+            DataType::Timestamp
+        );
+        assert_eq!(
+            ty("timestamp", &ParserOptions::default()),
+            DataType::Timestamp
+        );
+        // Before 4.3 `TIMESTAMP(6)` is no type: the error names it as written.
+        let v42 = ParserOptions {
+            spark_4_3: false,
+            ..ntz
+        };
+        let e = parse_data_type("timestamp(6)", &v42).unwrap_err();
+        assert!(e.to_string().contains("TIMESTAMP(6)"), "{e}");
     }
 }

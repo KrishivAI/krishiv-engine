@@ -43,15 +43,18 @@
 //!    Parquet stores no distinct counts for strings, so while the rule is on the
 //!    session samples the group keys the rule could code before optimizing (when
 //!    `krishiv.optimizer.ndvSampling.enabled` is on and its time budget lasts).
-//! 6. Exactly one input of the aggregate qualifies, and no key is already a
-//!    code: a second optimization then finds nothing new.
+//! 6. No key is already a code. Every input that qualifies is coded in the
+//!    same pass (TPC-DS q47's `item` and `store`): the first as drawn above,
+//!    each next one on the aggregate the step before made, whose decode join
+//!    then sits under the earlier ones. A second optimization finds only codes
+//!    and changes nothing.
 //!
 //! The fence: `D_c` is a `Shift` (offset 0, so every column above keeps its id),
 //! which join ordering treats as one input, so `D` and `dict` are never folded
 //! into the main join tree. Both reads of `dict` are `Shift`s of one body, so
 //! `ShareCte` computes it once.
 
-use std::collections::HashSet;
+use crate::expr::AttrMap;
 use std::sync::Arc;
 
 use krishiv_common::error::KrishivError;
@@ -88,17 +91,34 @@ const MIN_INPUT_RATIO: f64 = 2.0;
 /// [`MAX_GROUPS`] rows by estimate, far below `2^31`).
 const CODE_NAME: &str = "krishiv_group_code";
 
+/// In the multi-dimension mode (two or more dimensions,
+/// `krishiv.optimizer.groupKeyCodeMultiDimension`, design §8) a coded
+/// dimension holds at most this many groups: `dict`'s numbering is one
+/// sorted partition, run on one thread, and with as many groups as a large
+/// dimension has rows (TPC-DS q24's `customer`, 500,000) it costs more than
+/// the code saves (q24 1.28x cycles at SF10).
+const MULTI_MAX_GROUPS: f64 = 100_000.0;
+
+/// In the multi-dimension mode the joins must stop carrying at least this many key
+/// bytes, gross (input rows times the dropped width; the code itself adds back
+/// [`CODE_WIDTH`] bytes per row, so the net saving is smaller): the rewrite adds a fixed set
+/// of operators, which a small input does not pay for (TPC-DS q40, 2,328
+/// input rows, 1.14x wall at SF10).
+const MULTI_MIN_DROPPED_BYTES: f64 = 256.0 * 1024.0;
+
 /// The dropped keys must be wider than this many bytes (the code's width).
 const CODE_WIDTH: u64 = 8;
 
 /// Codes the dimension group keys of every aggregate where the statistics say
-/// it pays, entering subquery plans. Also returns one line per aggregate with
+/// it pays and at least `min_dimensions` dimensions qualify (2 in the
+/// multi-dimension mode, design §8), entering subquery plans. Also returns one line per aggregate with
 /// keys from a dimension: what was coded, or why not (`EXPLAIN VERBOSE`).
 pub(crate) fn rewrite(
     root: Arc<LogicalPlan>,
     stats: &dyn Statistics,
     propagate: bool,
     force: bool,
+    min_dimensions: usize,
 ) -> Result<(Arc<LogicalPlan>, Vec<String>), KrishivError> {
     let Some(row_number) = row_number() else {
         return Ok((root, Vec::new()));
@@ -116,7 +136,7 @@ pub(crate) fn rewrite(
         let Some(shape) = Shape::of(&p) else {
             return Ok(p);
         };
-        match shape.code(&mut est, &mut next, &row_number, force) {
+        match shape.code(&mut est, &mut next, &row_number, force, min_dimensions) {
             Ok(None) => Ok(p),
             Ok(Some((coded, note))) => {
                 notes.push(note);
@@ -129,6 +149,41 @@ pub(crate) fn rewrite(
         }
     })?;
     Ok((out, notes))
+}
+
+/// Whether the rule codes the keys of the aggregate `agg`, asked without
+/// rewriting: eager aggregation runs first and yields such an aggregate.
+pub(crate) fn takes(
+    agg: &Arc<LogicalPlan>,
+    est: &mut Estimator<'_>,
+    force: bool,
+    min_dimensions: usize,
+) -> bool {
+    let Some(row_number) = row_number() else {
+        return false;
+    };
+    if collated_key(agg).is_some() {
+        return false;
+    }
+    let Some(shape) = Shape::of(agg) else {
+        return false;
+    };
+    let mut next = max_id(agg, &mut Default::default()).saturating_add(1);
+    matches!(
+        shape.code(est, &mut next, &row_number, force, min_dimensions),
+        Ok(Some(_))
+    )
+}
+
+/// Why an aggregate with `n` qualifying dimensions stays in a mode that codes
+/// `min` or more.
+fn few_dimensions(n: usize, min: usize) -> String {
+    let what = if n == 1 {
+        "dimension qualifies"
+    } else {
+        "dimensions qualify"
+    };
+    format!("{n} {what} (krishiv.optimizer.groupKeyCodeMultiDimension codes {min} or more)")
 }
 
 /// The column under a `__collation_key` group key of the aggregate `p`, if
@@ -186,7 +241,7 @@ struct Candidate {
     /// The group keys it produces, in key order.
     keys: Vec<BoundColumn>,
     /// The keys nothing reads on the way: they leave the payload.
-    dropped: HashSet<AttrId>,
+    dropped: Attrs,
     note: String,
 }
 
@@ -223,13 +278,16 @@ impl<'a> Shape<'a> {
     }
 
     /// The coded plan and what was decided, `None` when no key comes from a
-    /// dimension, or why it stays.
+    /// dimension, or why it stays. With `min_dimensions` above 1 (the
+    /// multi-dimension mode) each dimension also meets the mode's cost lines
+    /// ([`MULTI_MAX_GROUPS`], [`MULTI_MIN_DROPPED_BYTES`]).
     fn code(
         &self,
         est: &mut Estimator<'_>,
         next: &mut u64,
         row_number: &FunctionId,
         force: bool,
+        min_dimensions: usize,
     ) -> Result<Option<(Arc<LogicalPlan>, String)>, String> {
         let mut leaves = Vec::new();
         walk(self.input, true, &mut Vec::new(), &mut leaves);
@@ -248,7 +306,7 @@ impl<'a> Shape<'a> {
                 continue;
             }
             coded |= is_code(&leaf.plan);
-            match self.qualify(leaf, keys, est, force) {
+            match self.qualify(leaf, keys, est, force, min_dimensions > 1) {
                 Ok(c) => found.push(c),
                 Err(why) => refusals.push(why),
             }
@@ -256,21 +314,111 @@ impl<'a> Shape<'a> {
         if coded {
             return Err("a key is already a code".to_owned());
         }
-        if found.len() > 1 {
-            return Err(format!(
-                "{} dimensions qualify (one per aggregate)",
-                found.len()
-            ));
+        if !found.is_empty() && found.len() < min_dimensions {
+            return Err(few_dimensions(found.len(), min_dimensions));
         }
-        let Some(c) = found.pop() else {
+        let mut found = found.into_iter();
+        let Some(c) = found.next() else {
             return match refusals.into_iter().next() {
                 Some(why) => Err(why),
                 None => Ok(None),
             };
         };
-        let note = c.note.clone();
-        let plan = self.build(&c, next, row_number)?;
-        Ok(Some((plan, note)))
+        let mut notes = vec![c.note.clone()];
+        let mut plan = self.build(&c, next, row_number)?;
+        // Every further dimension that qualified is coded in this pass, on the
+        // aggregate the last step made (condition 6): its other leaves are as
+        // they were, so each still qualifies unless the estimates moved, and a
+        // second optimization sees only codes.
+        for _ in found {
+            let Some(stacked) =
+                self.code_next(&plan, est, next, row_number, force, min_dimensions > 1)?
+            else {
+                break;
+            };
+            notes.push(stacked.1);
+            plan = stacked.0;
+        }
+        // A stacked step that stopped qualifying (the estimates moved) leaves
+        // fewer coded than the mode asks: the aggregate stays as it was.
+        // (No test reaches this: with fixture statistics a dimension that
+        // qualified on the original aggregate also qualifies on the coded
+        // one, whose input rows and the dimension's estimates are the same.)
+        if notes.len() < min_dimensions {
+            return Err(few_dimensions(notes.len(), min_dimensions));
+        }
+        Ok(Some((plan, notes.join("; "))))
+    }
+
+    /// Codes one more dimension of the aggregate under `coded`'s decode join
+    /// (the shape [`Self::build`] returns), `None` when none qualifies there.
+    fn code_next(
+        &self,
+        coded: &Arc<LogicalPlan>,
+        est: &mut Estimator<'_>,
+        next: &mut u64,
+        row_number: &FunctionId,
+        force: bool,
+        strict: bool,
+    ) -> Result<Option<(Arc<LogicalPlan>, String)>, String> {
+        let PlanNode::Project {
+            input: decode,
+            exprs,
+        } = &coded.node
+        else {
+            return Ok(None);
+        };
+        let PlanNode::Join {
+            left: aggregate,
+            right,
+            kind,
+            condition,
+        } = &decode.node
+        else {
+            return Ok(None);
+        };
+        let Some(inner) = Shape::of(aggregate) else {
+            return Ok(None);
+        };
+        let mut leaves = Vec::new();
+        walk(inner.input, true, &mut Vec::new(), &mut leaves);
+        let mut found = None;
+        for leaf in leaves {
+            if is_code(&leaf.plan) {
+                continue;
+            }
+            let out = leaf.plan.resolved_output().unwrap_or_default();
+            let keys: Vec<BoundColumn> = inner
+                .keys
+                .iter()
+                .filter(|k| out.iter().any(|c| c.id == k.id))
+                .cloned()
+                .collect();
+            if keys.is_empty() {
+                continue;
+            }
+            if let Ok(c) = inner.qualify(leaf, keys, est, force, strict) {
+                found = Some(c);
+                break;
+            }
+        }
+        let Some(c) = found else {
+            return Ok(None);
+        };
+        let below = inner.build(&c, next, row_number)?;
+        let decode = LogicalPlan::new(PlanNode::Join {
+            left: below,
+            right: Arc::clone(right),
+            kind: *kind,
+            condition: condition.clone(),
+        })
+        .with_origin(decode.origin);
+        let top = LogicalPlan::new(PlanNode::Project {
+            input: Arc::new(decode),
+            exprs: exprs.clone(),
+        })
+        .with_origin(coded.origin);
+        Ok(Some((Arc::new(top), c.note)))
     }
 
     /// Whether `leaf` qualifies as the dimension of `keys` (conditions 1-5).
@@ -280,6 +428,7 @@ impl<'a> Shape<'a> {
         keys: Vec<BoundColumn>,
         est: &mut Estimator<'_>,
         force: bool,
+        strict: bool,
     ) -> Result<Candidate, String> {
         let names = keys
             .iter()
@@ -368,7 +517,7 @@ impl<'a> Shape<'a> {
                 calls_read(e, &mut read);
             }
         }
-        let dropped: HashSet<AttrId> = keys
+        let dropped: Attrs = keys
             .iter()
             .map(|k| k.id)
             .filter(|id| !read.contains(id))
@@ -430,6 +579,23 @@ impl<'a> Shape<'a> {
         }
         if rows_i < MIN_INPUT_RATIO * rows_d {
             return Err(format!("[{names}]: the dimension is too large ({gates})"));
+        }
+        // The multi-dimension mode's two cost lines (`strict`, design §8).
+        if strict && groups > MULTI_MAX_GROUPS {
+            return Err(format!(
+                "[{names}]: more than {MULTI_MAX_GROUPS:.0} groups in the multi-dimension mode ({gates})"
+            ));
+        }
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "a key width in bytes, far below 2^52"
+        )]
+        let dropped_bytes = rows_i * width as f64;
+        if strict && dropped_bytes < MULTI_MIN_DROPPED_BYTES {
+            return Err(format!(
+                "[{names}]: the joins would stop carrying {dropped_bytes:.0} key bytes, \
+                 below {MULTI_MIN_DROPPED_BYTES:.0} in the multi-dimension mode ({gates})"
+            ));
         }
         let note = format!("coded [{names}]: {gates}, {width} key bytes dropped");
         Ok(Candidate {
@@ -635,7 +801,7 @@ impl<'a> Shape<'a> {
         let mut agg_out: Vec<Arc<Expr>> = std::iter::once(column(&row_code))
             .chain(rest.iter().map(|k| column(k)))
             .collect();
-        let decoded: std::collections::HashMap<AttrId, Arc<Expr>> = c
+        let decoded: AttrMap<Arc<Expr>> = c
             .keys
             .iter()
             .zip(&dict_keys)

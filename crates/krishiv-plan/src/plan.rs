@@ -407,6 +407,16 @@ pub enum PlanNode {
         /// The strategy.
         strategy: JoinStrategy,
     },
+    /// A policy fence (design `P3-E14-security-barrier.md`): the rows of `input`, unchanged, with
+    /// its attribute ids. The optimizer moves no expression that is not leakproof into `input`,
+    /// nothing out of it, and reads `input`'s rows only through this node; the physical planner
+    /// plans `input` with no node of its own.
+    SecurityBarrier {
+        /// The guarded subtree: the policy's mask projection over its filter over the scan.
+        input: Arc<LogicalPlan>,
+        /// The policy applied.
+        policy: crate::PolicyRef,
+    },
     /// `UNION ALL`, `df.union`, `df.unionByName`: the rows of every input.
     /// Columns match by position, or by name with `by_name` (then a column
     /// some input lacks reads NULL there if `allow_missing_columns`).
@@ -447,6 +457,16 @@ pub enum PlanNode {
         /// times on the right appears `min(m, n)` times (intersect) or
         /// `max(m - n, 0)` times (except).
         all: bool,
+    },
+    /// DataFrame `zip` (Spark 4.3's `Zip`): the columns of `left` followed by those of `right`, row
+    /// by row. Both sides derive from one base through projection chains; the analyzer merges them
+    /// into one [`PlanNode::Project`] chain over that base (`ZIP_PLANS_NOT_MERGEABLE` when they
+    /// do not). Unresolved plans only.
+    Zip {
+        /// The columns that come first.
+        left: Arc<LogicalPlan>,
+        /// The columns that follow.
+        right: Arc<LogicalPlan>,
     },
     /// Window functions over `input` (Spark's `Window`): every input row,
     /// with one column per window expression after the input's. Resolved
@@ -1109,6 +1129,15 @@ impl LogicalPlan {
         })
     }
 
+    /// `input` behind a policy barrier (design `P3-E14-security-barrier.md`).
+    #[must_use]
+    pub fn security_barrier(self, policy: crate::PolicyRef) -> Self {
+        Self::new(PlanNode::SecurityBarrier {
+            input: Arc::new(self),
+            policy,
+        })
+    }
+
     /// Calls `f` on each child relation, in order: CTE definitions before
     /// the main query. Plans inside subquery expressions are not children.
     pub fn for_each_child<'a>(&'a self, f: &mut impl FnMut(&'a Arc<Self>)) {
@@ -1144,6 +1173,7 @@ impl LogicalPlan {
             | PlanNode::PipeOperator { input }
             | PlanNode::Repartition { input, .. }
             | PlanNode::CollectMetrics { input, .. }
+            | PlanNode::SecurityBarrier { input, .. }
             | PlanNode::MetricViewRead { input, .. }
             | PlanNode::JoinHint { input, .. }
             | PlanNode::Distinct { input }
@@ -1159,6 +1189,7 @@ impl LogicalPlan {
             PlanNode::Join { left, right, .. }
             | PlanNode::AsOfJoin { left, right, .. }
             | PlanNode::SetOp { left, right, .. }
+            | PlanNode::Zip { left, right }
             | PlanNode::CoGroupMap { left, right, .. } => {
                 f(left);
                 f(right);
@@ -1214,6 +1245,7 @@ impl LogicalPlan {
             | PlanNode::PipeOperator { input }
             | PlanNode::Repartition { input, .. }
             | PlanNode::CollectMetrics { input, .. }
+            | PlanNode::SecurityBarrier { input, .. }
             | PlanNode::MetricViewRead { input, .. }
             | PlanNode::JoinHint { input, .. }
             | PlanNode::Distinct { input }
@@ -1229,6 +1261,7 @@ impl LogicalPlan {
             PlanNode::Join { left, right, .. }
             | PlanNode::AsOfJoin { left, right, .. }
             | PlanNode::SetOp { left, right, .. }
+            | PlanNode::Zip { left, right }
             | PlanNode::CoGroupMap { left, right, .. } => {
                 f(left);
                 f(right);
@@ -1266,9 +1299,11 @@ impl LogicalPlan {
             | PlanNode::UnionLoopRef { .. }
             | PlanNode::Shift { .. }
             | PlanNode::PipeOperator { .. }
+            | PlanNode::SecurityBarrier { .. }
             | PlanNode::JoinHint { .. }
             | PlanNode::Union { .. }
             | PlanNode::SetOp { .. }
+            | PlanNode::Zip { .. }
             | PlanNode::Sample { .. }
             | PlanNode::MapPartitions { .. }
             | PlanNode::Distinct { .. }
@@ -1391,9 +1426,11 @@ impl LogicalPlan {
             | PlanNode::UnionLoopRef { .. }
             | PlanNode::Shift { .. }
             | PlanNode::PipeOperator { .. }
+            | PlanNode::SecurityBarrier { .. }
             | PlanNode::JoinHint { .. }
             | PlanNode::Union { .. }
             | PlanNode::SetOp { .. }
+            | PlanNode::Zip { .. }
             | PlanNode::Sample { .. }
             | PlanNode::MapPartitions { .. }
             | PlanNode::Distinct { .. }
@@ -1534,6 +1571,7 @@ impl LogicalPlan {
                 | PlanNode::Offset { input, .. }
                 | PlanNode::Tail { input, .. }
                 | PlanNode::WithCte { input, .. }
+                | PlanNode::SecurityBarrier { input, .. }
                 | PlanNode::JoinHint { input, .. }
                 | PlanNode::Repartition { input, .. }
                 | PlanNode::Sample { input, .. }
@@ -1700,6 +1738,7 @@ impl LogicalPlan {
                 | PlanNode::ColumnNames { .. }
                 | PlanNode::PipeOperator { .. }
                 | PlanNode::SetOp { .. }
+                | PlanNode::Zip { .. }
                 | PlanNode::Pivot { .. }
                 | PlanNode::Unpivot { .. }
                 | PlanNode::InlineTable { .. }
@@ -1758,7 +1797,7 @@ impl LogicalPlan {
         self: Arc<Self>,
         f: &mut impl FnMut(Arc<Self>) -> Result<Arc<Self>, E>,
     ) -> Result<Arc<Self>, E> {
-        self.up(f, &mut Memo::new())
+        self.up(f, &mut Memo::default())
     }
 
     fn up<E>(
@@ -1784,7 +1823,7 @@ impl LogicalPlan {
         self: Arc<Self>,
         f: &mut impl FnMut(Arc<Self>) -> Result<Arc<Self>, E>,
     ) -> Result<Arc<Self>, E> {
-        self.down(f, &mut Memo::new())
+        self.down(f, &mut Memo::default())
     }
 
     fn down<E>(

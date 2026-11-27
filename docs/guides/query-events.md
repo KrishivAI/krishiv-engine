@@ -4,6 +4,9 @@ description: "Record every query's lifecycle and usage in a JSON-lines file: tur
 
 # Query events
 
+Stability: experimental since 0.3. The event names and the `krishiv.event.v1` envelope stay; fields may be added in a
+minor release.
+
 A server can write one event for each step of every query (submitted, queued, started, finished or cancelled) to a
 file. The final event carries the query's usage: wall time, CPU time, bytes and rows read and written, spill and peak
 memory. Use it to feed a usage report, an audit trail or a dashboard without polling `system.queries`.
@@ -42,10 +45,11 @@ several lines here (the file has one line per event), shows the masked text:
 
 ```json
 {
-  "schema": "krishiv.event.v1", "minor": 0, "seq": 0, "kind": "submitted",
+  "schema": "krishiv.event.v1", "minor": 1, "seq": 0, "kind": "submitted",
   "emitted_at_ms": 1795384799099,
   "query": {"query_id": "01a20545-ef7b-7001-95bd-056f047eeaf5", "session_id": "01a20545-ef26-7000-aa66-d5ab0940f24d",
-            "principal": "krishiv", "compute_id": "krishiv2", "tags": {}, "delegated_by": null, "trace_id": null},
+            "principal": "krishiv", "compute_id": "krishiv2", "tags": {}, "delegated_by": null, "trace_id": null,
+            "stage_id": null, "task_id": null, "attempt": null, "worker_id": null},
   "statement_class": "READ",
   "text": "SELECT ? AS x , ? AS s"
 }

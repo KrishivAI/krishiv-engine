@@ -715,7 +715,7 @@ impl Session {
         if location.exists() || !location.is_absolute() || !policy.is_creating(&relation) {
             return;
         }
-        let text = format!("file:{}", location.display());
+        let text = krishiv_exec::files::file_display(location);
         let path = Securable::Path(krishiv_common::secret::OptionValue::from_user("path", text));
         if let Some(key) = ObjectKey::of(&path).and_then(super::physical_key) {
             policy.also_creating(key);

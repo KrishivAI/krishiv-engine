@@ -155,6 +155,7 @@ impl<'a> Mor<'a> {
             self.op,
             None,
             Some(format!("mor-{}", super::sink::unique_u64())),
+            None,
         )
         .unwrap()
     }
@@ -328,7 +329,8 @@ pub(super) fn files_ending(env: &Env, suffix: &str) -> Vec<String> {
             if p.is_dir() {
                 walk(&p, suffix, out);
             } else if p.display().to_string().ends_with(suffix) {
-                out.push(p.display().to_string());
+                // `/` separators on every platform, so the tests' `/x=1/` checks hold on Windows.
+                out.push(p.display().to_string().replace('\\', "/"));
             }
         }
     }
@@ -415,7 +417,7 @@ fn a_v1_table_refuses_merge_on_read() {
     });
     let catalog = Catalog::new(&t);
     let p = provider(&env, &catalog.location(), &catalog);
-    let e = MergeOnReadWrite::new(&p, RowLevelOperation::Delete, None, None).unwrap_err();
+    let e = MergeOnReadWrite::new(&p, RowLevelOperation::Delete, None, None, None).unwrap_err();
     assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
     assert!(
         e.to_string()
@@ -541,12 +543,7 @@ fn a_v3_delete_writes_one_puffin_file_per_task() {
     for d in &deletes {
         assert_eq!(d.format, DataFileFormat::Puffin);
         assert!(d.referenced.is_some());
-        let local = d
-            .file
-            .file_path()
-            .strip_prefix("file://")
-            .unwrap()
-            .to_owned();
+        let local = super::sink_tests::local_path(d.file.file_path());
         let bytes = std::fs::read(local).unwrap();
         assert_eq!(d.file.file_size_in_bytes(), bytes.len() as u64);
         assert_eq!(&bytes[..4], b"PFA1");
@@ -1113,7 +1110,8 @@ fn a_replayed_write_on_a_head_holding_it_commits_nothing() {
     let catalog = Catalog::new(&t);
     append(&env, &catalog, range(0, 3));
     let first = Mor::open(&env, &catalog, RowLevelOperation::Update);
-    let w = MergeOnReadWrite::new(&first.p, first.op, None, Some("replayed".to_owned())).unwrap();
+    let w =
+        MergeOnReadWrite::new(&first.p, first.op, None, Some("replayed".to_owned()), None).unwrap();
     let outputs = first
         .write(
             &w,
@@ -1127,7 +1125,14 @@ fn a_replayed_write_on_a_head_holding_it_commits_nothing() {
     let snapshots = catalog.metadata().snapshots().count();
     let files = sorted(files_ending(&env, ""));
     let replay = Mor::open(&env, &catalog, RowLevelOperation::Update);
-    let w = MergeOnReadWrite::new(&replay.p, replay.op, None, Some("replayed".to_owned())).unwrap();
+    let w = MergeOnReadWrite::new(
+        &replay.p,
+        replay.op,
+        None,
+        Some("replayed".to_owned()),
+        None,
+    )
+    .unwrap();
     let outputs = replay
         .write(
             &w,
@@ -1141,6 +1146,47 @@ fn a_replayed_write_on_a_head_holding_it_commits_nothing() {
     assert_eq!(catalog.metadata().snapshots().count(), snapshots);
     assert_eq!(read_back(&env, &catalog), expected((0..3).chain(10..12)));
     // The replay's own data files are deleted, not orphaned.
+    assert_eq!(sorted(files_ending(&env, "")), files);
+}
+
+/// E34: a retry (a new write id, the same `krishiv.write.idempotencyKey`) of a statement that
+/// committed publishes nothing and leaves no orphan files.
+#[test]
+fn a_retry_with_the_same_idempotency_key_commits_nothing() {
+    let env = env();
+    let t = create(&env, 2, false, &[]);
+    let catalog = Catalog::new(&t);
+    append(&env, &catalog, range(0, 3));
+    let key = Some("job-1".to_owned());
+    let first = Mor::open(&env, &catalog, RowLevelOperation::Update);
+    let w = MergeOnReadWrite::new(&first.p, first.op, None, Some("w1".to_owned()), key.clone())
+        .unwrap();
+    let outputs = first
+        .write(
+            &w,
+            vec![Task {
+                deletes: Vec::new(),
+                inserts: vec![first.new_rows(10, 12)],
+            }],
+        )
+        .unwrap();
+    env.rt.block_on(w.commit(outputs, Some("q"))).unwrap();
+    let snapshots = catalog.metadata().snapshots().count();
+    let files = sorted(files_ending(&env, ""));
+    let retry = Mor::open(&env, &catalog, RowLevelOperation::Update);
+    let w = MergeOnReadWrite::new(&retry.p, retry.op, None, Some("w2".to_owned()), key).unwrap();
+    let outputs = retry
+        .write(
+            &w,
+            vec![Task {
+                deletes: Vec::new(),
+                inserts: vec![retry.new_rows(10, 12)],
+            }],
+        )
+        .unwrap();
+    env.rt.block_on(w.commit(outputs, Some("q"))).unwrap();
+    assert_eq!(catalog.metadata().snapshots().count(), snapshots);
+    assert_eq!(read_back(&env, &catalog), expected((0..3).chain(10..12)));
     assert_eq!(sorted(files_ending(&env, "")), files);
 }
 

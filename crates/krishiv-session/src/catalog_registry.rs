@@ -159,9 +159,9 @@ impl CatalogCaller {
     }
 }
 
-/// What a declared catalog's table is read with in one query (PR-58b): the query's I/O, its path
+/// What a declared catalog's table is read with in one query: the query's I/O, its path
 /// placement (the session's stores; in server mode confined to `krishiv.io.local.allowedRoots`
-/// and `krishiv.io.objectStore.allowedPrefixes`, ADR 0046 §3a), its configuration and the
+/// and `krishiv.io.objectStore.allowedPrefixes`), its configuration and the
 /// worker slots splits are cut for.
 #[derive(Clone)]
 #[non_exhaustive]
@@ -174,11 +174,11 @@ pub struct ScanInputs {
     pub config: Arc<Config>,
     /// The drivers splits are planned for.
     pub worker_slots: u64,
-    /// What a table read with credentials of its own builds its stores from (vended, design P3-T067 §4.1).
+    /// What a table read with credentials of its own builds its stores from (vended).
     pub stores: ScopedStores,
 }
 
-/// What a table read with credentials of its own (vended, design P3-T067 §4.1) builds its stores from: the query's
+/// What a table read with credentials of its own (vended) builds its stores from: the query's
 /// configuration and the runtime's I/O scheduler. It holds no credential.
 #[derive(Clone)]
 pub struct ScopedStores {
@@ -265,8 +265,8 @@ impl ScanInputs {
     }
 }
 
-/// A table a declared catalog loaded for one caller at one version: what a scan of it opens
-/// (PR-58b). Opened before planning, on the executor's I/O runtime.
+/// A table a declared catalog loaded for one caller at one version: what a scan of it opens.
+/// Opened before planning, on the executor's I/O runtime.
 pub trait DeclaredTable: fmt::Debug + Send + Sync {
     /// The table's provider, read with `inputs`.
     ///
@@ -330,6 +330,33 @@ pub trait CallerCatalog: fmt::Debug + Send + Sync {
                 .map(|meta| LoadedDeclared::new(meta, None)))
         })
     }
+
+    /// The procedure `name` (lower-case) of the catalog's `system` namespace for `caller`
+    /// (`CALL cat.system.name(..)`); `None` when there is none. The
+    /// default is a catalog without procedures: `MISSING_CATALOG_ABILITY.PROCEDURES`.
+    ///
+    /// # Errors
+    /// The catalog's failure; the default's refusal.
+    fn load_procedure<'a>(
+        &'a self,
+        caller: &'a CatalogCaller,
+        inputs: ScanInputs,
+        name: &'a str,
+    ) -> BoxFuture<'a, Result<Option<Arc<dyn krishiv_plan::procedure::Procedure>>, KrishivError>>
+    {
+        let _ = (caller, inputs, name);
+        Box::pin(async move {
+            Err(krishiv_common::error::MissingCatalogAbilityProcedures {
+                plugin: "this catalog".to_owned(),
+            }
+            .into())
+        })
+    }
+
+    /// The cache half of [`Self::refresh`]: drops what the catalog keeps of `id` and moves
+    /// [`Self::epoch`], with no load (after a `CALL` that changed the table, so a failed load
+    /// never fails a procedure that is done). The default keeps nothing, so drops nothing.
+    fn invalidate(&self, _caller: &CatalogCaller, _id: &TableIdent) {}
 
     /// `REFRESH TABLE` of `id` for `caller`: drops what the catalog keeps of the table (its
     /// metadata cache entries, for every caller) and moves [`Self::epoch`], so plans and frames
@@ -564,6 +591,7 @@ fn check_vended_ttl(config: &Config) -> Result<(), KrishivError> {
         .and_then(ConfigValue::as_duration);
     if ttl.is_some_and(|t| t.is_zero()) {
         return Err(krishiv_common::error::KrishivInvalidConfigValue {
+            // `Config` keeps the parsed value only, not how it was written: zero in the key's default unit.
             value: "'0s'".to_owned(),
             key: format!("\"{}\"", CATALOG_VENDED_DEFAULT_TTL.key),
             reason: "a catalog with storage = vended needs a positive default credential lifetime"
@@ -674,7 +702,7 @@ struct DeclaredCatalog(Arc<Declared>, CatalogCaller, Arc<DeclaredLoads>);
 /// table, as the catalog spells them) and the version it was loaded at.
 pub(crate) type DeclaredKey = (Vec<String>, Option<TableVersion>);
 
-/// The declared tables one query loaded and opened (PR-58b): the analysis records each table a
+/// The declared tables one query loaded and opened: the analysis records each table a
 /// declared catalog loaded; before planning each scanned one is opened once, so every scan of it
 /// in the query reads one provider.
 #[derive(Default)]
@@ -834,8 +862,9 @@ impl CatalogRegistry {
     /// # Errors
     /// Every refusal of [`CatalogDeclarations::parse`] (a type without a factory in this build
     /// is `KRISHIV_UNSUPPORTED_FEATURE` naming the type and the catalog); a secret reference
-    /// that does not resolve (`KRISHIV_INVALID_CONFIG_VALUE` naming the key); a factory's own
-    /// refusal ([`CatalogFactory::validate`]).
+    /// that does not resolve (`KRISHIV_INVALID_CONFIG_VALUE` naming the key); a zero
+    /// `krishiv.catalog.vendedDefaultTtl` with a `storage = vended` catalog
+    /// (`KRISHIV_INVALID_CONFIG_VALUE`); a factory's own refusal ([`CatalogFactory::validate`]).
     pub(crate) fn build(
         setup: CatalogSetup,
         config: &Config,
@@ -1047,7 +1076,7 @@ pub(crate) struct CatalogRow {
     pub(crate) kind: &'static str,
     pub(crate) auth: &'static str,
     pub(crate) storage: &'static str,
-    /// The delegation form of a `delegated` catalog (PR-58b); `None` otherwise.
+    /// The delegation form of a `delegated` catalog; `None` otherwise.
     pub(crate) delegation: Option<&'static str>,
     pub(crate) default: bool,
 }
@@ -1065,6 +1094,12 @@ impl DeclaredView {
             inbound,
             loads: Arc::default(),
         }
+    }
+
+    /// Whether what a declared catalog's tables read is confined to the server's roots and
+    /// prefixes (server mode).
+    pub(crate) fn confines(&self) -> bool {
+        self.registry.mode() == DeclMode::Server
     }
 
     /// This view for one query reading with `inputs`.

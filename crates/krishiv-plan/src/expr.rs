@@ -759,6 +759,16 @@ impl Expr {
         })
     }
 
+    /// `self AS (a, b, ..)`: several output names, valid only over a generator
+    /// (`MULTI_ALIAS_WITHOUT_GENERATOR` otherwise).
+    #[must_use]
+    pub fn multi_alias(self, names: Vec<String>) -> Self {
+        Self::new(ExprNode::MultiAlias {
+            expr: Arc::new(self),
+            names,
+        })
+    }
+
     /// `CAST(self AS to)` in the default mode.
     #[must_use]
     pub fn cast(self, to: DataType) -> Self {
@@ -971,7 +981,7 @@ impl Expr {
         self: Arc<Self>,
         f: &mut impl FnMut(Arc<Self>) -> Result<Arc<Self>, E>,
     ) -> Result<Arc<Self>, E> {
-        self.up(f, &mut Memo::new())
+        self.up(f, &mut Memo::default())
     }
 
     fn up<E>(
@@ -996,7 +1006,7 @@ impl Expr {
         self: Arc<Self>,
         f: &mut impl FnMut(Arc<Self>) -> Result<Arc<Self>, E>,
     ) -> Result<Arc<Self>, E> {
-        self.down(f, &mut Memo::new())
+        self.down(f, &mut Memo::default())
     }
 
     fn down<E>(

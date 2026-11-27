@@ -45,14 +45,19 @@ impl Translator<'_> {
         let node = match kind {
             RelType::Read(r) => self.read(r)?,
             RelType::Sql(s) => self.sql(s)?,
-            RelType::Project(p) => PlanNode::Project {
+            RelType::Project(p) => {
                 // Spark reads a missing input as `OneRowRelation`.
-                input: match &p.input {
+                let input = match &p.input {
                     Some(input) => self.relation(input)?,
                     None => Arc::new(LogicalPlan::new(PlanNode::OneRowRelation)),
-                },
-                exprs: self.expressions(&p.expressions)?,
-            },
+                };
+                // Generators in the list are lifted as the native DataFrame API does.
+                krishiv_plan::select_with_generators(
+                    input,
+                    self.expressions(&p.expressions)?,
+                    || Origin::UNKNOWN,
+                )
+            }
             RelType::Filter(f) => PlanNode::Filter {
                 input: self.input("Filter", f.input.as_deref())?,
                 predicate: self.required_expression(f.condition.as_ref())?,
@@ -98,9 +103,12 @@ impl Translator<'_> {
             RelType::MapPartitions(m) => self.map_partitions(m)?,
             RelType::GroupMap(g) => self.group_map(g)?,
             RelType::CoGroupMap(g) => self.cogroup_map(g)?,
-            RelType::LocalRelation(l) => PlanNode::Read(ReadSource::Local(
-                self.local_relation(|| super::local::inline_request(l))?,
-            )),
+            RelType::LocalRelation(l) => {
+                let opts = self.conf.parser;
+                PlanNode::Read(ReadSource::Local(
+                    self.local_relation(|| super::local::inline_request(l, &opts))?,
+                ))
+            }
             RelType::CachedLocalRelation(c) => {
                 PlanNode::Read(ReadSource::Local(self.local_relation(|| {
                     Ok(super::LocalRequest::Cached {
@@ -183,6 +191,9 @@ impl Translator<'_> {
             },
             RelType::WithColumnsRenamed(w) => self.with_columns_renamed(w)?,
             RelType::Drop(d) => self.drop_columns(d)?,
+            // Spark 4.3's `Zip`: the columns of two DataFrames side by side (the analyzer merges the two
+            // projection chains over their shared base, or refuses with `ZIP_PLANS_NOT_MERGEABLE`).
+            RelType::Zip(z) => self.zip(z)?,
             RelType::Extension(any) => match resolve(any, Slot::Relation)? {
                 // One row, one string column: `SELECT '<message>' AS message`.
                 Extension::Echo(echo) => PlanNode::Project {
@@ -492,6 +503,16 @@ impl Translator<'_> {
         })
     }
 
+    /// Its own function, not inline in the relation match: that frame is recursed through, and a
+    /// deep relation tree must still translate on a small stack.
+    #[inline(never)]
+    fn zip(&mut self, z: &pb::Zip) -> Result<PlanNode> {
+        Ok(PlanNode::Zip {
+            left: self.input("Zip", z.left.as_deref())?,
+            right: self.input("Zip", z.right.as_deref())?,
+        })
+    }
+
     /// `Drop` by name, or by column expressions that are plain one-part column names (resolved
     /// over the input, so an ambiguous one is an error as in Spark). A qualified column or one
     /// tied to a DataFrame (`df["a"]`) drops by attribute in Spark and is refused.
@@ -711,7 +732,9 @@ impl Translator<'_> {
             ReadType::DataSource(d) => {
                 // Spark: a set and non-empty schema is the reader's schema.
                 let schema = match d.schema.as_deref() {
-                    Some(s) if !s.is_empty() => Some(super::schema::parse_table_schema(s)?),
+                    Some(s) if !s.is_empty() => {
+                        Some(super::schema::parse_table_schema(s, &self.conf.parser)?)
+                    }
                     _ => None,
                 };
                 if !d.predicates.is_empty() {
@@ -1034,15 +1057,62 @@ impl Translator<'_> {
                 self.required_expression(alias.expr.as_deref())?,
             ));
         }
-        Ok(PlanNode::WithColumns {
-            input: self.input("WithColumns", w.input.as_deref())?,
-            columns,
-        })
+        let input = self.input("WithColumns", w.input.as_deref())?;
+        // Generator columns are lifted as the native DataFrame API does (one column at a time,
+        // each reading the ones before it).
+        if columns.iter().any(|(n, e)| {
+            krishiv_plan::with_column_generator(&input, n, e, || Origin::UNKNOWN).is_some()
+        }) {
+            // Spark binds every alias to the input; the one-at-a-time lift below would let an alias read a
+            // column an earlier alias of the same call has just replaced (`x = y, y = x`).
+            for (i, (_, value)) in columns.iter().enumerate() {
+                if columns[..i]
+                    .iter()
+                    .any(|(earlier, _)| reads_column(value, earlier))
+                {
+                    return Err(unsupported_field(
+                        "WithColumns",
+                        "aliases",
+                        "a generator column beside an alias that reads a column an earlier alias replaces",
+                    ));
+                }
+            }
+            let mut plan = input;
+            let last = columns.len() - 1;
+            for (i, (name, value)) in columns.into_iter().enumerate() {
+                let node =
+                    krishiv_plan::with_column_generator(&plan, &name, &value, || Origin::UNKNOWN)
+                        .unwrap_or_else(|| PlanNode::WithColumns {
+                            input: Arc::clone(&plan),
+                            columns: vec![(name, value)],
+                        });
+                if i == last {
+                    return Ok(node);
+                }
+                plan = Arc::new(LogicalPlan::new(node));
+            }
+            return Err(assertion("'aliases' must contain elements."));
+        }
+        Ok(PlanNode::WithColumns { input, columns })
     }
 }
 
 #[cfg(test)]
 mod tests;
+
+/// Whether `e` reads a column whose last name part is `name` (case-insensitively, as the resolver's default).
+fn reads_column(e: &krishiv_plan::Expr, name: &str) -> bool {
+    let mut stack = vec![e];
+    while let Some(e) = stack.pop() {
+        if let krishiv_plan::ExprNode::Column(c) = &e.node
+            && c.name.last().is_some_and(|n| n.eq_ignore_ascii_case(name))
+        {
+            return true;
+        }
+        e.for_each_child(&mut |child| stack.push(child));
+    }
+    false
+}
 
 /// The alias of a `SubqueryAlias`: `qualifier ++ [alias]` joined by [`ALIAS_PART_SEP`], as the IR
 /// holds a multi-part alias (Spark's `AliasIdentifier(alias, qualifier)`). A part holding the

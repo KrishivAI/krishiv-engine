@@ -37,7 +37,9 @@ mod server;
 mod sql_session;
 mod ui_embed;
 pub use access::{
-    ACCESS_PROVIDER, IO_EGRESS_ALLOWED_CIDRS, IO_EGRESS_PRIVATE_ADDRESSES, IO_EGRESS_PROXY,
+    ACCESS_EXTERNAL_ENDPOINT, ACCESS_EXTERNAL_SECURABLES, ACCESS_EXTERNAL_TIMEOUT,
+    ACCESS_EXTERNAL_TOKEN, ACCESS_PROVIDER, IO_EGRESS_ALLOWED_CIDRS, IO_EGRESS_PRIVATE_ADDRESSES,
+    IO_EGRESS_PROXY,
 };
 pub use advisor::{
     ADVISOR_ENABLED, ADVISOR_MAX_HINTS, ADVISOR_MEMORY_WAIT_FACTOR, ADVISOR_MEMORY_WAIT_MIN_TIME,
@@ -47,9 +49,9 @@ pub use advisor::{
     ADVISOR_SPILL_MIN_PERCENT,
 };
 pub use connect_client::{
-    ARROW_USE_LARGE_VAR_TYPES, LOCAL_RELATION_BATCH_OF_CHUNKS_SIZE_BYTES,
-    LOCAL_RELATION_CACHE_THRESHOLD, LOCAL_RELATION_CHUNK_SIZE_BYTES,
-    LOCAL_RELATION_CHUNK_SIZE_ROWS, LOCAL_RELATION_SIZE_LIMIT,
+    ARROW_PYSPARK_SELF_DESTRUCT_ENABLED, ARROW_USE_LARGE_VAR_TYPES,
+    LOCAL_RELATION_BATCH_OF_CHUNKS_SIZE_BYTES, LOCAL_RELATION_CACHE_THRESHOLD,
+    LOCAL_RELATION_CHUNK_SIZE_BYTES, LOCAL_RELATION_CHUNK_SIZE_ROWS, LOCAL_RELATION_SIZE_LIMIT,
     PANDAS_CONVERT_TO_ARROW_ARRAY_SAFELY, PANDAS_INFER_DICT_AS_MAP, PANDAS_STRUCT_HANDLING_MODE,
     PYSPARK_INFER_NESTED_DICT_AS_STRUCT, PYSPARK_LEGACY_INFER_ARRAY_FROM_FIRST,
     PYSPARK_LEGACY_INFER_MAP_FROM_FIRST, REPL_EAGER_EVAL_ENABLED, REPL_EAGER_EVAL_MAX_NUM_ROWS,
@@ -65,8 +67,9 @@ pub use lakehouse::{
 };
 pub use optimizer::{
     DERIVED_KEYS_ABOVE, DISCOVER_KEYS, DISCOVER_KEYS_TIMEOUT, EXPERIMENTAL_GROUP_KEY_CODE_FORCE,
-    GROUP_KEY_CODE, LATE_PAYLOAD_JOIN, PAYLOAD_ABOVE_AGGREGATE, PRESERVED_SIDE_SEMI_JOIN,
-    SEMI_ANTI_JOIN_ORDER, SHARE_FILTERED_SCANS, SHARE_REPEATED_SUBTREES, SUBQUERY_AS_WINDOW,
+    GROUP_KEY_CODE, GROUP_KEY_CODE_MULTI_DIMENSION, JOIN_PRUNE_FIRST, LATE_PAYLOAD_JOIN,
+    PAYLOAD_ABOVE_AGGREGATE, PRESERVED_SIDE_SEMI_JOIN, ROLLUP_FROM_PARENT, SEMI_ANTI_JOIN_ORDER,
+    SHARE_FILTERED_SCANS, SHARE_LITERAL_INSTANCES, SHARE_REPEATED_SUBTREES, SUBQUERY_AS_WINDOW,
 };
 pub use result_cache::{RESULT_CACHE_ENABLED, RESULT_CACHE_MAX_BYTES, RESULT_CACHE_TTL};
 pub use runtime_filter::{
@@ -77,6 +80,7 @@ pub use runtime_filter::{
 };
 pub use runtime_filter_bloom::{
     RUNTIME_FILTER_BLOOM_AT_SCALE, RUNTIME_FILTER_BLOOM_MEMORY_TIER, RUNTIME_FILTER_EQUATED_SITES,
+    RUNTIME_FILTER_RESIDUAL_BOUNDS,
 };
 // Every public item of `server` is a config entry (Connect, Flight SQL, server).
 pub use server::*;
@@ -110,6 +114,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &PYSPARK_LEGACY_INFER_ARRAY_FROM_FIRST,
     &PYSPARK_LEGACY_INFER_MAP_FROM_FIRST,
     &ARROW_USE_LARGE_VAR_TYPES,
+    &ARROW_PYSPARK_SELF_DESTRUCT_ENABLED,
     &SESSION_TIME_ZONE,
     &SQL_PATH_ENABLED,
     &SCHEMA_LEVEL_COLLATIONS_ENABLED,
@@ -150,6 +155,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &MEMORY_ABORT_RELEASE_TIMEOUT,
     &MEMORY_SPILL_SCRATCH_RESERVE,
     &MEMORY_RESIDENT_GUARD,
+    &MEMORY_RELEASE_AT_QUERY_END,
     &SESSION_MEMORY_LIMIT,
     &SYSTEM_QUERIES_CAPACITY,
     &HISTORY_PATH,
@@ -196,12 +202,16 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &DISCOVER_KEYS,
     &DISCOVER_KEYS_TIMEOUT,
     &GROUP_KEY_CODE,
+    &GROUP_KEY_CODE_MULTI_DIMENSION,
     &DERIVED_KEYS_ABOVE,
     &EXPERIMENTAL_GROUP_KEY_CODE_FORCE,
     &SHARE_REPEATED_SUBTREES,
     &SHARE_FILTERED_SCANS,
+    &ROLLUP_FROM_PARENT,
+    &SHARE_LITERAL_INSTANCES,
     &SEMI_ANTI_JOIN_ORDER,
     &PRESERVED_SIDE_SEMI_JOIN,
+    &JOIN_PRUNE_FIRST,
     &SPILL_DIR,
     &WORKLOAD_RESOURCE_GROUPS_FILE,
     &CONNECT_PYTHON_FUNCTIONS_CATALOG,
@@ -214,6 +224,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &RUNTIME_FILTER_BLOOM_AT_SCALE,
     &RUNTIME_FILTER_BLOOM_MEMORY_TIER,
     &RUNTIME_FILTER_EQUATED_SITES,
+    &RUNTIME_FILTER_RESIDUAL_BOUNDS,
     &IO_STRICT_OPTIONS,
     &FILES_MAX_PARTITION_BYTES,
     &FILES_OPEN_COST_IN_BYTES,
@@ -256,6 +267,10 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &IO_CACHE_PATH,
     &IO_LOCAL_ALLOWED_ROOTS,
     &ACCESS_PROVIDER,
+    &ACCESS_EXTERNAL_ENDPOINT,
+    &ACCESS_EXTERNAL_TIMEOUT,
+    &ACCESS_EXTERNAL_TOKEN,
+    &ACCESS_EXTERNAL_SECURABLES,
     &IO_OBJECT_STORE_ALLOWED_PREFIXES,
     &IO_EGRESS_PRIVATE_ADDRESSES,
     &IO_EGRESS_ALLOWED_CIDRS,
@@ -548,7 +563,15 @@ pub static MEMORY_LIMIT: ConfigEntry = ConfigEntry {
     doc: "Memory available to query execution in this process: the limit of the root memory \
           pool. Operators reserve memory before allocating and spill when the limit is reached. \
           When unset: 80% of the effective memory limit (the tightest cgroup limit, else \
-          physical memory), or 2 GiB where that cannot be determined.",
+          physical memory), lowered so the pool plus what the process may hold beyond it (an \
+          eighth of the pool and 64 MiB) leaves at least 384 MiB, but never under half of it \
+          (so 512 MiB in a 1 GiB container, about 1.39 GiB in 2 GiB, 80% from about 4.4 GiB), \
+          or 2 GiB where that cannot be determined. A value above that effective limit is not \
+          honoured (the kernel would kill the process before the engine spills): the default is \
+          used instead, with a warning. A value at or just under the effective limit is honoured \
+          but leaves no room for the memory the process uses \
+          outside the pool (allocator overhead, memory used without a reservation), so the \
+          kernel can still kill the process: leave headroom, as the default does.",
     scope: Scope::Cluster,
     settable_by: SettableBy::Startup,
     version_added: "0.1.0",
@@ -596,6 +619,24 @@ pub static MEMORY_SPILL_SCRATCH_RESERVE: ConfigEntry = ConfigEntry {
     scope: Scope::Cluster,
     settable_by: SettableBy::Startup,
     version_added: "0.1.0",
+    spark_alias: None,
+};
+
+/// `krishiv.memory.releaseAtQueryEnd`.
+pub static MEMORY_RELEASE_AT_QUERY_END: ConfigEntry = ConfigEntry {
+    key: "krishiv.memory.releaseAtQueryEnd",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(true)),
+    doc: "Whether the executor returns freed memory to the operating system once no query has \
+          run for 1 s: each of its threads releases what its allocator kept from the queries \
+          that ran, so an idle process does not keep the peak of its last query. It needs a \
+          release hook from the program that owns the allocator (the `krishiv` CLI, the Python \
+          module and the bench runner, built with mimalloc, install one); without one the \
+          setting has no effect. While queries run, nothing is released for it. Read when the \
+          session starts its executor.",
+    scope: Scope::Cluster,
+    settable_by: SettableBy::Startup,
+    version_added: "0.4.0",
     spark_alias: None,
 };
 
