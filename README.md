@@ -209,7 +209,7 @@ Spark.
 | 🔁 | **One engine: batch, streaming, incremental** | The same SQL and the same semantics everywhere. A batch query is just a bounded stream. |
 | 📦 | **Embedded → single-node → distributed** | Start in-process with `pip install krishiv`, then scale out without rewriting your code. |
 | ⚡ | **Always-fresh materialized views** | Views update incrementally as data changes, and streaming state is directly queryable. |
-| 🤖 | **Built for the agentic era** | A built-in MCP server lets AI agents explore and query your data; Arrow-native interop with pandas, Polars and PyArrow. |
+| 🤖 | **Built for the agentic era** | A read-only MCP server for AI agents is in the source tree (`krishiv mcp`, the `mcp` feature of `krishiv-cli`); the release binaries, the Docker image and the wheels do not include it yet. Arrow-native interop with pandas, Polars and PyArrow. |
 | ✅ | **Open and correctness-first** | Apache-2.0. Tested against real Spark behaviour with golden fixtures and differential testing. |
 
 ```mermaid
@@ -219,7 +219,7 @@ flowchart LR
         A2["SQL"]
         A3["Python DataFrames"]
         A4["Rust"]
-        A5["MCP for AI agents"]
+        A5["MCP for AI agents (source builds)"]
         A6["Arrow Flight SQL"]
     end
     subgraph Engine["One Krishiv engine"]
