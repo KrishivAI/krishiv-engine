@@ -95,6 +95,7 @@ impl CatalogFactory for Fake {
         if n < self.fail_first {
             return Err(krishiv_common::error::KrishivCatalogFailure {
                 catalog: decl.name.clone(),
+                reason: "test".to_owned(),
                 relation_name: "the catalog".to_owned(),
             }
             .into());
