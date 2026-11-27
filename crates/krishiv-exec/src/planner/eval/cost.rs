@@ -60,3 +60,58 @@ fn costly_at(e: &Expr, depth: usize) -> bool {
         _ => false,
     }
 }
+
+/// What evaluating a predicate costs per row, from cheapest: the order a
+/// [`super::conjunction`] runs its movable conjuncts in, before their kept fractions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) enum Cost {
+    /// Comparisons and arithmetic over fixed-width values.
+    Cheap,
+    /// A comparison of strings (`SearchPhrase <> ''`): a byte compare per row,
+    /// still cheaper than copying the open rows out unless very few are open.
+    String,
+    /// See [`costly`].
+    Costly,
+}
+
+/// The cost class of `e`.
+pub(super) fn class(e: &Expr) -> Cost {
+    if costly(e) {
+        Cost::Costly
+    } else if compares_strings(e, 0) {
+        Cost::String
+    } else {
+        Cost::Cheap
+    }
+}
+
+fn compares_strings(e: &Expr, depth: usize) -> bool {
+    if depth > MAX_DEPTH {
+        return false;
+    }
+    let next = depth + 1;
+    match &e.node {
+        ExprNode::Resolved(ResolvedExpr::Function(f)) => {
+            let here = matches!(
+                f.id,
+                FunctionId::Builtin(
+                    Builtin::Eq
+                        | Builtin::EqNullSafe
+                        | Builtin::Lt
+                        | Builtin::LtEq
+                        | Builtin::Gt
+                        | Builtin::GtEq
+                )
+            ) && f
+                .args
+                .iter()
+                .any(|a| a.resolved_type().is_some_and(|t| t.is_string_type()));
+            here || f.args.iter().any(|a| compares_strings(a, next))
+        }
+        ExprNode::Resolved(
+            ResolvedExpr::Alias { expr, .. } | ResolvedExpr::EvalMode { expr, .. },
+        )
+        | ExprNode::Cast { expr, .. } => compares_strings(expr, next),
+        _ => false,
+    }
+}
