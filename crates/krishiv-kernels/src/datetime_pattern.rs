@@ -62,6 +62,10 @@ pub enum Purpose {
     /// formatter for it, so a pattern the new one rejects is always `INVALID_DATETIME_PATTERN`
     /// (`validatePatternString(checkLegacy = !forTimestampNTZ)`).
     ParseNtz,
+    /// `date_format` of a `TIME` (Spark 4.3's `TimeFormatter`): compiled as [`Self::Format`], but
+    /// with no legacy check, so every pattern it rejects is `INVALID_DATETIME_PATTERN.WITH_SUGGESTION`
+    /// (Spark 4.3.0 run: `HH YYYY`, `HH c`, `HH A`, `HHH` all give that class over a `TIME`).
+    FormatTime,
 }
 
 /// A zone a timestamp is shown in: its id (for `VV` and `z`) and its rules.
@@ -339,6 +343,20 @@ impl DateTimePattern {
         format::format(&self.items, local, None, true)
     }
 
+    /// `nanos` since midnight (a `TIME`), as Spark's `TimeFormatter` prints it: the
+    /// `java.time` pattern even under `timeParserPolicy=LEGACY`, so a legacy pattern
+    /// should not reach here (build one with [`Self::new`]). `Ok(None)` when the pattern
+    /// has a date or zone field outside an optional section (Spark: `DateTimeException`).
+    ///
+    /// # Errors
+    /// A legacy pattern (`KRISHIV_UNSUPPORTED_FEATURE`).
+    pub fn format_time_of_day(&self, nanos: i64) -> Result<Option<String>, KrishivError> {
+        if self.legacy.is_some() {
+            return Err(unsupported("a legacy datetime pattern formatting a TIME"));
+        }
+        format::format_time_of_day(&self.items, nanos)
+    }
+
     /// `days` (a `DATE`).
     ///
     /// # Errors
@@ -461,6 +479,13 @@ fn unsupported(what: &str) -> KrishivError {
 }
 
 fn spark_error(pattern: &str, reject: &Reject, purpose: Purpose) -> KrishivError {
+    if purpose == Purpose::FormatTime {
+        return InvalidDatetimePatternWithSuggestion {
+            pattern: format!("'{pattern}'"),
+            docroot: DOC_ROOT.to_owned(),
+        }
+        .into();
+    }
     let ntz = purpose == Purpose::ParseNtz;
     if !ntz && legacy_accepts(pattern) {
         return InconsistentBehaviorCrossVersionDatetimePatternRecognition {

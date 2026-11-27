@@ -5,6 +5,10 @@
 //! `describe`, `describe-part-after-analyze`, `change-column`, `explain`, `identifier-clause` and
 //! `show-create-table` (rows as `SQLQueryTestSuite` prints them, cells joined by a tab and trimmed).
 #![cfg(test)]
+mod file_url;
+mod literal_path;
+use file_url::file_url;
+use literal_path::sql_path;
 
 use arrow_array::Array;
 use arrow_array::cast::AsArray;
@@ -774,7 +778,7 @@ fn add_partition_locations() {
         &s,
         &format!(
             "ALTER TABLE t ADD PARTITION (p = 'x') LOCATION '{}'",
-            elsewhere.display()
+            sql_path(&elsewhere)
         ),
     );
     assert!(elsewhere.is_dir());
@@ -782,8 +786,8 @@ fn add_partition_locations() {
     run(
         &s,
         &format!(
-            "ALTER TABLE t ADD PARTITION (p = 'y') LOCATION 'file:{}'",
-            other.display()
+            "ALTER TABLE t ADD PARTITION (p = 'y') LOCATION '{}'",
+            file_url(&other)
         ),
     );
     assert!(other.is_dir());
@@ -795,11 +799,11 @@ fn add_partition_locations() {
     };
     assert_eq!(
         location("p = 'x'"),
-        format!("Location\tfile:{}", elsewhere.display())
+        format!("Location\t{}", shown_location(&elsewhere))
     );
     assert_eq!(
         location("p = 'y'"),
-        format!("Location\tfile:{}", other.display())
+        format!("Location\t{}", shown_location(&other))
     );
     // A relative location is made absolute against the working directory (Spark's `makeQualified`). The
     // directory `ADD PARTITION` creates there has a name of its own and is removed even if an assertion fails.
@@ -817,7 +821,7 @@ fn add_partition_locations() {
     );
     assert_eq!(
         location("p = 'z'"),
-        format!("Location\tfile:{}", created.0.display())
+        format!("Location\t{}", shown_location(&created.0))
     );
     assert!(created.0.is_dir());
     assert_eq!(rows(&s, "SHOW PARTITIONS t"), ["p=x", "p=y", "p=z"]);
@@ -872,7 +876,7 @@ fn add_partition_outside_the_policy_is_denied() {
             &s,
             &format!(
                 "ALTER TABLE t ADD PARTITION (p = 'x') LOCATION '{}'",
-                outside.display()
+                sql_path(&outside)
             )
         ),
         "KRISHIV_INSUFFICIENT_PERMISSIONS"
@@ -1395,7 +1399,7 @@ fn reads_follow_the_registered_partitions() {
         &s,
         &format!(
             "ALTER TABLE g ADD PARTITION (b = 'z') LOCATION '{}'",
-            elsewhere.path().display()
+            sql_path(elsewhere.path())
         ),
     );
     assert_eq!(class(&s, "SELECT a FROM g"), "KRISHIV_UNSUPPORTED_FEATURE");
@@ -1449,7 +1453,7 @@ fn a_table_over_foreign_files_skips_directories_the_catalog_does_not_know() {
         &s,
         &format!(
             "CREATE TABLE e (x INT, p INT) USING parquet PARTITIONED BY (p) LOCATION '{}'",
-            loc.path().display()
+            sql_path(loc.path())
         ),
     );
     let read = "SELECT CAST(x AS STRING), CAST(p AS STRING) FROM e ORDER BY x";
@@ -1488,8 +1492,8 @@ fn a_base_path_above_the_location_of_a_partitioned_table_is_refused() {
         &s,
         &format!(
             "CREATE TABLE e (x INT, p INT) USING parquet OPTIONS (basePath '{}') PARTITIONED BY (p) LOCATION '{}'",
-            data.path().display(),
-            data.path().join("q=1").display()
+            sql_path(data.path()),
+            sql_path(&data.path().join("q=1"))
         ),
     );
     run(&s, "ALTER TABLE e ADD PARTITION (p = 2)");
@@ -1522,7 +1526,7 @@ fn an_unpartitioned_table_over_foreign_files_skips_a_subdirectory() {
         &s,
         &format!(
             "CREATE TABLE u (x INT) USING parquet LOCATION '{}'",
-            loc.path().display()
+            sql_path(loc.path())
         ),
     );
     assert_eq!(rows(&s, "SELECT CAST(x AS STRING) FROM u"), ["1"]);
@@ -2599,14 +2603,14 @@ fn drop_partition_refuses_a_partition_outside_its_default_directory() {
         &s,
         &format!(
             "alter table o add partition (p=2) location '{}'",
-            elsewhere.path().display()
+            sql_path(elsewhere.path())
         ),
     );
     run(
         &s,
         &format!(
             "alter table o add partition (p=3) location '{}'",
-            root.display()
+            sql_path(&root)
         ),
     );
     for p in [2, 3] {
@@ -2733,7 +2737,7 @@ fn rename_partition_refuses_a_partition_outside_its_default_directory() {
         &s,
         &format!(
             "alter table ro add partition (p=2) location '{}'",
-            other.display()
+            sql_path(&other)
         ),
     );
     assert_eq!(
@@ -2764,7 +2768,7 @@ fn drop_partition_of_an_external_table_forgets_it_and_keeps_its_files() {
         &s,
         &format!(
             "create table e(x int, p int) using parquet partitioned by (p) location '{}'",
-            ext.path().display()
+            sql_path(ext.path())
         ),
     );
     run(&s, "insert into e values (1,1),(2,2)");
@@ -2928,7 +2932,7 @@ fn set_location_casts_its_partition_spec() {
         &s,
         &format!(
             "alter table c partition (p='007', s='a') set location '{}'",
-            new1.display()
+            sql_path(&new1)
         ),
     );
     assert_eq!(rows(&s, "show partitions c"), ["p=7/s=a"]);
@@ -2943,7 +2947,7 @@ fn set_location_casts_its_partition_spec() {
             &s,
             &format!(
                 "alter table c partition (p='abc', s='a') set location '{}'",
-                other.display()
+                sql_path(&other)
             )
         ),
         "CAST_INVALID_INPUT"
@@ -2953,7 +2957,7 @@ fn set_location_casts_its_partition_spec() {
             &s,
             &format!(
                 "alter table c partition (p='8', s='a') set location '{}'",
-                other.display()
+                sql_path(&other)
             )
         ),
         [
@@ -2973,7 +2977,7 @@ fn set_location_casts_its_partition_spec() {
                 &s,
                 &format!(
                     "alter table c partition (p='{value}', s='a') set location '{}'",
-                    other.display()
+                    sql_path(&other)
                 )
             ),
             [
@@ -3009,7 +3013,7 @@ fn partition_errors_list_a_spec_as_written() {
             &s,
             &format!(
                 "alter table c partition (s='a', p=8) set location '{}'",
-                n1.display()
+                sql_path(&n1)
             )
         ),
         missing("`s` = a, `p` = 8")
@@ -3427,4 +3431,15 @@ fn a_scan_that_prunes_every_partition_shows_its_pruned_units() {
         .collect();
     assert_eq!(pruned, "2", "{plan}");
     assert!(plan.contains("scan_rows_decoded=0"), "{plan}");
+}
+
+/// A partition location as Spark prints it: `file:` and the path, a Windows drive path as
+/// `file:/D:/a/b`.
+fn shown_location(path: &std::path::Path) -> String {
+    let text = path.display().to_string();
+    if cfg!(windows) {
+        format!("file:/{}", text.replace('\\', "/"))
+    } else {
+        format!("file:{text}")
+    }
 }

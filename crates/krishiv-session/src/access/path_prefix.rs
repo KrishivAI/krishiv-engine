@@ -2,7 +2,7 @@
 //! [`PathPrefixPolicy`]: local paths only under allowed roots (links resolved), object-store paths only under
 //! allowed prefixes, every other decision delegated; and the `krishiv.io.*` allowlist settings it reads.
 
-use std::path::{Component, Path, PathBuf};
+use std::path::{Component, Path, PathBuf, Prefix};
 use std::sync::Arc;
 
 use krishiv_common::config::{
@@ -89,7 +89,7 @@ impl PathPrefixPolicy {
             .map(|r| {
                 std::fs::canonicalize(r.as_ref()).map_err(|_| {
                     KrishivError::from(PathNotFound {
-                        path: format!("file:{}", r.as_ref().display()),
+                        path: krishiv_exec::files::file_display(r.as_ref()),
                     })
                 })
             })
@@ -189,12 +189,8 @@ impl PathPrefixPolicy {
         let Some(local) = text.strip_prefix("file:") else {
             return self.allows_object(text);
         };
-        let local = Path::new(local);
-        let normal = local.is_absolute()
-            && local
-                .components()
-                .all(|c| matches!(c, Component::RootDir | Component::Normal(_)));
-        if !normal || text.contains('%') {
+        let local = &krishiv_exec::files::native_path(local);
+        if !plain_absolute(local) || text.contains('%') {
             return false;
         }
         resolve_links(local).is_some_and(|p| self.roots.iter().any(|r| p.starts_with(r)))
@@ -210,6 +206,22 @@ impl PathPrefixPolicy {
                 .any(|a| a.store == p.store && p.segments.starts_with(&a.segments))
         })
     }
+}
+
+/// Whether `local` is absolute and holds only plain names after its root: no `.`, no `..`. On
+/// Windows it may start with a drive (`C:\`, or verbatim `\\?\C:\`), and nothing else: a UNC share
+/// or device path is refused (fails closed).
+fn plain_absolute(local: &Path) -> bool {
+    let mut parts = local.components().peekable();
+    if let Some(Component::Prefix(p)) = parts.peek() {
+        if !matches!(p.kind(), Prefix::Disk(_) | Prefix::VerbatimDisk(_)) {
+            return false;
+        }
+        parts.next();
+    }
+    local.is_absolute()
+        && parts.next() == Some(Component::RootDir)
+        && parts.all(|c| matches!(c, Component::Normal(_)))
 }
 
 /// The comma-separated entries of the string setting `entry` (blank entries dropped).
@@ -306,6 +318,33 @@ pub(crate) fn resolve_links(path: &Path) -> Option<PathBuf> {
     }
 }
 
+/// Whether `a` and `b` name the same place, a drive written plain (`C:\x`) or verbatim (`\\?\C:\x`) alike:
+/// `std::fs::canonicalize` gives the verbatim form on Windows, while a path made from a `file:/C:/x`
+/// location is plain. Any other prefix (a UNC share, a device) must match as written.
+pub(crate) fn same_place(a: &Path, b: &Path) -> bool {
+    fn drive(c: Component<'_>) -> Option<u8> {
+        match c {
+            Component::Prefix(p) => match p.kind() {
+                Prefix::Disk(d) | Prefix::VerbatimDisk(d) => Some(d.to_ascii_uppercase()),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+    let (mut x, mut y) = (a.components(), b.components());
+    loop {
+        match (x.next(), y.next()) {
+            (None, None) => return true,
+            (Some(p), Some(q)) if p == q => {}
+            (Some(p), Some(q)) => match (drive(p), drive(q)) {
+                (Some(d), Some(e)) if d == e => {}
+                _ => return false,
+            },
+            _ => return false,
+        }
+    }
+}
+
 /// Whether `e` says the entry is not there: missing, or below a file.
 fn absent(e: &std::io::Error) -> bool {
     matches!(
@@ -372,11 +411,86 @@ impl AccessPolicy for PathPrefixPolicy {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+    use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use krishiv_plan::analyzer::{PrincipalKind, TableIdent};
+    use krishiv_common::secret::OptionValue;
+    use krishiv_plan::analyzer::{AllowAll, PrincipalKind, TableIdent};
 
     use super::*;
+    use super::{PathPrefixPolicy, plain_absolute, same_place};
+
+    #[test]
+    fn plain_absolute_paths() {
+        assert!(!plain_absolute(Path::new("data/x")));
+        // `/data/x` has no drive, so it is not absolute on Windows.
+        if cfg!(unix) {
+            assert!(plain_absolute(Path::new("/data/x")));
+            assert!(!plain_absolute(Path::new("/data/../x")));
+        }
+        #[cfg(windows)]
+        {
+            assert!(plain_absolute(Path::new(r"C:\data\x")));
+            assert!(plain_absolute(Path::new("C:/data/x")));
+            assert!(plain_absolute(Path::new(r"\\?\C:\data\x")));
+            // Drive-relative, a share and a device path are refused.
+            assert!(!plain_absolute(Path::new("C:data")));
+            assert!(!plain_absolute(Path::new(r"\\srv\share\x")));
+            assert!(!plain_absolute(Path::new(r"\\.\COM1")));
+            assert!(!plain_absolute(Path::new(r"C:\data\..\x")));
+        }
+    }
+
+    /// An allowed root admits the files under it in every spelling a local path takes on this
+    /// platform, and refuses a sibling and a `..` escape.
+    #[test]
+    fn an_allowed_root_admits_its_files_and_nothing_beside_it() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let root = tmp.path().join("allowed");
+        let sibling = tmp.path().join("other");
+        std::fs::create_dir(&root).expect("root");
+        std::fs::create_dir(&sibling).expect("sibling");
+        std::fs::write(root.join("a.csv"), "x").expect("file");
+        let policy = PathPrefixPolicy {
+            roots: vec![std::fs::canonicalize(&root).expect("canonical")],
+            prefixes: Vec::new(),
+            inner: Arc::new(AllowAll),
+            own: OwnRefusals::default(),
+        };
+        let allows = |text: String| policy.allows(&OptionValue::Plain(text));
+        let slashed = |p: &Path| p.display().to_string().replace('\\', "/");
+        let file = root.join("a.csv");
+        let mut admitted = vec![format!("file:{}", slashed(&file))];
+        if cfg!(windows) {
+            // `LocalPaths` writes a drive path as `file:/C:/x`; `C:\x` text is accepted too.
+            admitted.push(format!("file:/{}", slashed(&file)));
+            admitted.push(format!("file:{}", file.display()));
+        }
+        for text in admitted {
+            assert!(allows(text.clone()), "{text}");
+        }
+        assert!(!allows(format!("file:{}", slashed(&sibling.join("b.csv")))));
+        assert!(!allows(format!("file:{}/../other/b.csv", slashed(&root))));
+    }
+
+    /// A canonical path is the same place as the path it came from, so the directory checks hold where
+    /// `canonicalize` writes a drive verbatim (Windows).
+    #[test]
+    fn a_canonical_path_is_the_same_place() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let canonical = std::fs::canonicalize(tmp.path()).expect("canonical");
+        assert!(same_place(&canonical, &canonical));
+        assert!(!same_place(&canonical, &canonical.join("x")));
+        assert!(!same_place(&canonical.join("x"), &canonical.join("y")));
+        #[cfg(windows)]
+        {
+            assert!(same_place(Path::new(r"\\?\C:\a\b"), Path::new(r"C:\a\b")));
+            assert!(same_place(Path::new(r"\\?\c:\a"), Path::new(r"C:\a")));
+            assert!(!same_place(Path::new(r"\\?\D:\a"), Path::new(r"C:\a")));
+            assert!(!same_place(Path::new(r"\\srv\share\a"), Path::new(r"C:\a")));
+        }
+    }
 
     /// A provider that allows, names itself `external` and counts what it is told.
     #[derive(Default)]

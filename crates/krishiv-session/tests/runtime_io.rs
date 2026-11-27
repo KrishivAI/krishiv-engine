@@ -4,6 +4,8 @@
 //! reads, never another session's running at the same time.
 #![cfg(test)]
 
+mod literal_path;
+use literal_path::sql_path;
 use std::sync::Arc;
 
 use arrow_array::{Array, Int64Array, RecordBatch};
@@ -57,10 +59,10 @@ fn the_bytes_of_a_query_are_its_own() {
     let (big_bytes, small_bytes) = (size(&big), size(&small));
     assert!(big_bytes > 20 * small_bytes);
     // Session B scans the big files while session A reads the small ones.
-    let big_sql = format!("SELECT * FROM parquet.`{}`", big.display());
+    let big_sql = format!("SELECT * FROM parquet.`{}`", sql_path(&big));
     let mut scan = block_on(block_on(b.sql(&big_sql)).unwrap().execute_stream()).unwrap();
     assert!(block_on(scan.next()).unwrap().is_ok());
-    let small_sql = format!("SELECT * FROM parquet.`{}`", small.display());
+    let small_sql = format!("SELECT * FROM parquet.`{}`", sql_path(&small));
     assert_eq!(
         run(&a, &small_sql)
             .iter()

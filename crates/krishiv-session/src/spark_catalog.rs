@@ -111,7 +111,7 @@ fn parts(name: &str) -> Vec<String> {
 /// `key=value` directories, following the first one at each level. Empty for a path that is not a local
 /// directory.
 fn partition_keys(location: &str) -> Vec<String> {
-    let mut dir = std::path::PathBuf::from(location.strip_prefix("file:").unwrap_or(location));
+    let mut dir = krishiv_exec::files::native_path(location);
     let mut keys: Vec<String> = Vec::new();
     loop {
         let Ok(entries) = std::fs::read_dir(&dir) else {
@@ -328,7 +328,7 @@ impl Catalog<'_> {
                 } else {
                     wh.join(format!("{name}.db"))
                 };
-                format!("file:{}", dir.display())
+                krishiv_exec::files::file_display(&dir)
             }),
         }
     }
