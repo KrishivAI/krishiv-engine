@@ -112,6 +112,8 @@ fn compares_strings(e: &Expr, depth: usize) -> bool {
             ResolvedExpr::Alias { expr, .. } | ResolvedExpr::EvalMode { expr, .. },
         )
         | ExprNode::Cast { expr, .. } => compares_strings(expr, next),
+        // As `costly_at`: a field of a compared struct.
+        ExprNode::Resolved(ResolvedExpr::Field { base, .. }) => compares_strings(base, next),
         _ => false,
     }
 }

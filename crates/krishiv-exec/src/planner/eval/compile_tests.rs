@@ -137,6 +137,15 @@ fn each_kind_of_call_has_its_cost_class() {
     assert_eq!(cost::class(&not_like), Cost::Costly);
     let not_eq = call(Builtin::Not, vec![cast(&s_is_a(), DataType::Boolean)]);
     assert_eq!(cost::class(&not_eq), Cost::String);
+    // Through a field access too, as the costly walk goes (the walk only, not a typed plan).
+    let field = Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Field {
+        base: s_is_a(),
+        ordinal: 0,
+        name: "x".to_owned(),
+        data_type: DataType::Boolean,
+        nullable: true,
+    })));
+    assert_eq!(cost::class(&field), Cost::String);
     // Past the depth limit the walk stops and calls it cheap (the old path).
     let mut deep = like_a();
     let mut deep_eq = s_is_a();

@@ -9,7 +9,7 @@ use arrow_array::cast::AsArray;
 use arrow_array::{ArrayRef, BooleanArray, RecordBatch};
 use arrow_schema::{DataType as ArrowType, Field, Schema};
 
-use super::conjunction::{Part, conjunction};
+use super::conjunction::{Part, conjunction, order_of};
 use super::cost::Cost;
 use super::{Column, PhysExpr, Value};
 use crate::error::Result;
@@ -207,4 +207,120 @@ fn a_conjunction_of_literals_is_one_value() {
         assert!(v.is_scalar(), "{a} AND {b}");
         assert_eq!(answers(e.as_ref(), &data), vec![Some(a && b); 27]);
     }
+}
+
+fn part(column: usize, movable: bool, cost: Cost) -> Part {
+    Part {
+        expr: Counted::new(column) as Arc<dyn PhysExpr>,
+        movable,
+        cost,
+    }
+}
+
+/// The order of a snapshot of measures: each run between barriers by cost class, then kept
+/// fraction, ties and unmeasured conjuncts (fraction 1) in written order; barriers stay put.
+#[test]
+fn the_order_sorts_each_run_by_cost_then_kept_fraction() {
+    let parts = vec![
+        part(0, true, Cost::Costly), // 0: kept 1/2
+        part(0, true, Cost::Cheap),  // 1: kept 9/10
+        part(0, true, Cost::Costly), // 2: kept 1/10
+        part(0, false, Cost::Cheap), // 3: barrier
+        part(0, true, Cost::String), // 4: unmeasured
+        part(0, true, Cost::String), // 5: kept 1/4
+        part(0, true, Cost::String), // 6: kept 2/8, a tie with 5
+    ];
+    let measures = [(1, 2), (9, 10), (1, 10), (0, 0), (0, 0), (1, 4), (2, 8)];
+    assert_eq!(order_of(&parts, &measures), vec![1, 2, 0, 3, 5, 6, 4]);
+}
+
+/// A long run of movable conjuncts (more than the 20 an insertion sort handles) whose order is
+/// fixed while other drivers still add to its measures: every driver's answers stay Kleene and
+/// the sort sees one consistent snapshot (a comparator over live measures may panic).
+#[test]
+fn a_long_run_is_ordered_while_other_drivers_measure() {
+    let width = 32;
+    let rows = 1_024;
+    let columns: Vec<Vec<Option<bool>>> = (0..width)
+        .map(|c| {
+            (0..rows)
+                .map(|r| Some((r * 7 + c * 13) % (c + 2) != 0))
+                .collect()
+        })
+        .collect();
+    let expected: Vec<Option<bool>> = (0..rows)
+        .map(|r| kleene_and(&columns.iter().map(|c| c[r]).collect::<Vec<_>>()))
+        .collect();
+    let data = batch(columns);
+    for _ in 0..8 {
+        let parts = (0..width).map(|c| part(c, true, Cost::Costly)).collect();
+        let e = conjunction(parts);
+        std::thread::scope(|s| {
+            for _ in 0..4 {
+                s.spawn(|| {
+                    for _ in 0..40 {
+                        assert_eq!(answers(e.as_ref(), &data), expected);
+                    }
+                });
+            }
+        });
+    }
+}
+
+/// A movable conjunct that keeps few rows, written after one that keeps most, moves in front of
+/// it once measured; the barrier after them still sees exactly the rows neither makes FALSE, and
+/// the answers stay Kleene with NULLs in both.
+#[test]
+fn a_barrier_sees_the_open_rows_after_a_real_reorder() {
+    let rows = 4_096;
+    let most: Vec<Option<bool>> = (0..rows)
+        .map(|r| match r % 10 {
+            0 => None,
+            1 => Some(false),
+            _ => Some(true),
+        })
+        .collect();
+    let few: Vec<Option<bool>> = (0..rows)
+        .map(|r| match r % 50 {
+            0 | 3 => Some(true),
+            7 => None,
+            _ => Some(false),
+        })
+        .collect();
+    let other: Vec<Option<bool>> = (0..rows).map(|r| (r % 3 != 0).then_some(true)).collect();
+    let expected: Vec<Option<bool>> = (0..rows)
+        .map(|r| kleene_and(&[most[r], few[r], other[r]]))
+        .collect();
+    let open = (0..rows)
+        .filter(|&r| most[r] != Some(false) && few[r] != Some(false))
+        .count();
+    let data = batch(vec![most, few, other]);
+    let counted: Vec<Arc<Counted>> = (0..3).map(Counted::new).collect();
+    let parts = counted
+        .iter()
+        .enumerate()
+        .map(|(i, c)| Part {
+            expr: Arc::clone(c) as Arc<dyn PhysExpr>,
+            movable: i != 2,
+            cost: Cost::Costly,
+        })
+        .collect();
+    let e = conjunction(parts);
+    for _ in 0..16 {
+        assert_eq!(answers(e.as_ref(), &data), expected);
+    }
+    counted.iter().for_each(|c| {
+        c.take();
+    });
+    assert_eq!(answers(e.as_ref(), &data), expected);
+    // Reordered: `few` first over every row, then `most` over the few rows it leaves open.
+    assert_eq!(counted[1].take(), rows);
+    let after_few = data
+        .column(1)
+        .as_boolean()
+        .iter()
+        .filter(|v| *v != Some(false))
+        .count();
+    assert_eq!(counted[0].take(), after_few);
+    assert_eq!(counted[2].take(), open);
 }

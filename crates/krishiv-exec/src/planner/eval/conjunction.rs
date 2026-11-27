@@ -16,6 +16,10 @@
 //! order). A movable conjunct runs over the open rows only when they are few: at most a quarter of
 //! the batch for a costly one, a sixty-fourth for a string comparison; a cheap one always runs
 //! over the whole batch, which costs less than copying the open rows out and back.
+//!
+//! `compile` builds one for every scalar `AND` chain, not only a `Filter`'s predicate: projections,
+//! `CASE` branches, join conditions and an `OR`'s sides too. The barrier rules keep each correct;
+//! each instance measures its own first [`MEASURE_ROWS`] rows.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
@@ -87,34 +91,50 @@ impl Conjunction {
     /// The order the measures give: each run of movable conjuncts between barriers sorted by
     /// cost class, then kept fraction (ties in written order); barriers keep their place.
     fn measured_order(&self) -> Vec<usize> {
-        let fraction = |i: usize| {
-            let m = &self.measures[i];
-            let seen = m.seen.load(Ordering::Relaxed);
-            let kept = m.kept.load(Ordering::Relaxed);
-            if seen == 0 { (1, 1) } else { (kept, seen) }
-        };
-        let mut order = Vec::with_capacity(self.parts.len());
-        let mut run: Vec<usize> = Vec::new();
-        let flush = |run: &mut Vec<usize>, order: &mut Vec<usize>| {
-            run.sort_by(|&a, &b| {
-                let ((ka, sa), (kb, sb)) = (fraction(a), fraction(b));
-                self.parts[a].cost.cmp(&self.parts[b].cost).then_with(|| {
-                    (u128::from(ka) * u128::from(sb)).cmp(&(u128::from(kb) * u128::from(sa)))
-                })
-            });
-            order.append(run);
-        };
-        for (i, p) in self.parts.iter().enumerate() {
-            if p.movable {
-                run.push(i);
-            } else {
-                flush(&mut run, &mut order);
-                order.push(i);
-            }
-        }
-        flush(&mut run, &mut order);
-        order
+        // One load of each measure: other drivers may still be adding to them, and a comparator
+        // over live values is not a total order (`slice::sort_by` may panic on one).
+        let snapshot: Vec<(u64, u64)> = self
+            .measures
+            .iter()
+            .map(|m| {
+                (
+                    m.kept.load(Ordering::Relaxed),
+                    m.seen.load(Ordering::Relaxed),
+                )
+            })
+            .collect();
+        order_of(&self.parts, &snapshot)
     }
+}
+
+/// Each run of movable `parts` between barriers sorted by cost class, then by kept fraction
+/// `kept / seen` from `measures` (unmeasured: 1; ties in written order); barriers keep their place.
+pub(super) fn order_of(parts: &[Part], measures: &[(u64, u64)]) -> Vec<usize> {
+    let fraction = |i: usize| match measures.get(i) {
+        Some(&(kept, seen)) if seen > 0 => (kept, seen),
+        _ => (1, 1),
+    };
+    let mut order = Vec::with_capacity(parts.len());
+    let mut run: Vec<usize> = Vec::new();
+    let flush = |run: &mut Vec<usize>, order: &mut Vec<usize>| {
+        run.sort_by(|&a, &b| {
+            let ((ka, sa), (kb, sb)) = (fraction(a), fraction(b));
+            parts[a].cost.cmp(&parts[b].cost).then_with(|| {
+                (u128::from(ka) * u128::from(sb)).cmp(&(u128::from(kb) * u128::from(sa)))
+            })
+        });
+        order.append(run);
+    };
+    for (i, p) in parts.iter().enumerate() {
+        if p.movable {
+            run.push(i);
+        } else {
+            flush(&mut run, &mut order);
+            order.push(i);
+        }
+    }
+    flush(&mut run, &mut order);
+    order
 }
 
 impl PhysExpr for Conjunction {
@@ -153,17 +173,20 @@ impl PhysExpr for Conjunction {
             let values = values
                 .as_boolean_opt()
                 .ok_or_else(|| internal("AND of a non-boolean"))?;
-            let valid = values
-                .nulls()
-                .map_or_else(|| BooleanBuffer::new_set(rows), |n| n.inner().clone());
-            let is_false = &valid & &!values.values();
+            // Without a null buffer every value is valid: no NULL to record, FALSE where unset.
+            let is_false = match values.nulls() {
+                Some(n) => {
+                    nulled = &nulled | &(&!n.inner() & &open);
+                    n.inner() & &!values.values()
+                }
+                None => !values.values(),
+            };
             if measuring && part.movable && whole {
                 let m = &self.measures[i];
                 m.seen.fetch_add(count(rows), Ordering::Relaxed);
                 m.kept
                     .fetch_add(count(rows - is_false.count_set_bits()), Ordering::Relaxed);
             }
-            nulled = &nulled | &(&!&valid & &open);
             open = &open & &!&is_false;
         }
         if measuring
