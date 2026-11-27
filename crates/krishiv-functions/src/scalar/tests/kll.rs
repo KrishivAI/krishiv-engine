@@ -120,3 +120,44 @@ fn bigint_and_float_quantiles_and_ranks() {
     let rk = run("kll_sketch_get_rank_float", &[&sk, &v]);
     assert!(rk.as_primitive::<Float64Type>().value(0) > 0.0);
 }
+
+#[test]
+fn a_null_operand_wins_over_a_malformed_sketch() {
+    let good = sketch(KllType::Double, 4);
+    let junk: &[u8] = b"not a sketch";
+    let x = bytes(&[Some(junk), None]);
+    let y = bytes(&[None, Some(&good)]);
+    let m = run("kll_sketch_merge_double", &[&x, &y]);
+    assert!(m.is_null(0) && m.is_null(1), "{m:?}");
+}
+
+#[test]
+fn a_null_rank_element_makes_the_row_null() {
+    let a = sketch(KllType::Double, 10);
+    let sk = bytes(&[Some(&a), Some(&a)]);
+    let mut b = ListBuilder::new(Float64Builder::new());
+    b.values().append_null();
+    b.append(true);
+    b.values().append_value(0.5);
+    b.append(true);
+    let ranks: ArrayRef = Arc::new(b.finish());
+    let q = run("kll_sketch_get_quantile_double", &[&sk, &ranks]);
+    assert!(q.is_null(0) && q.is_valid(1), "{q:?}");
+}
+
+#[test]
+fn a_second_argument_of_the_wrong_shape_is_refused_at_bind_time() {
+    use crate::scalar::{BindOptions, bind_scalar};
+    let a = sketch(KllType::Double, 3);
+    let sk = bytes(&[Some(&a)]);
+    let double: ArrayRef = Arc::new(Float64Array::from(vec![0.5]));
+    let long: ArrayRef = Arc::new(Int64Array::from(vec![1]));
+    let opts = BindOptions::new();
+    for (name, second) in [
+        ("kll_sketch_get_rank_bigint", &double),
+        ("kll_sketch_get_quantile_double", &long),
+    ] {
+        let got = bind_scalar(name, &super::types(&[&sk, second]), &opts);
+        assert!(got.is_err(), "{name} bound a mismatched argument");
+    }
+}

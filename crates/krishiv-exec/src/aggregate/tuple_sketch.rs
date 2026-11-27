@@ -222,8 +222,16 @@ impl<V: Value> Acc<V> {
         } else {
             rows.saturating_mul(RAW_ROW)
         };
+        // `reserve(new)` on the slot and charge vectors can double their capacity, which `size()` counts.
+        let slot = std::mem::size_of::<Slot<V>>().saturating_add(std::mem::size_of::<usize>());
+        let vectors = if new == 0 {
+            0
+        } else {
+            new.max(self.slots.capacity()).saturating_mul(slot)
+        };
         self.size()
             .saturating_add(new.saturating_mul(self.new_group))
+            .saturating_add(vectors)
             .saturating_add(growth.min(cap))
             .saturating_add(full.min(growth))
     }

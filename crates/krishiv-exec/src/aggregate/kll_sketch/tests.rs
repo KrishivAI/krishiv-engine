@@ -85,7 +85,20 @@ fn the_memory_projection_grows_with_new_groups_and_rows() {
     acc.update(&[0; 100], &longs(&[7; 100]), |_| true).unwrap();
     assert!(acc.state_bound(0) > 0);
     assert!(acc.projected(10, 1000, false, 0) > acc.projected(0, 10, false, 0));
-    acc.reserve(5);
+    // The projection made before the groups and rows arrive covers what `size()` then reports.
+    let mut grown = KllSketchAcc::new(KllSketchOp::Sketch(KllType::Bigint, 200)).unwrap();
+    let rows = 5000;
+    let bound = grown.projected(64, rows, false, 0);
+    grown.reserve(64);
+    grown.resize(64);
+    let groups: Vec<u32> = (0..rows).map(|i| u32::try_from(i % 64).unwrap()).collect();
+    let values: Vec<i64> = (0..i64::try_from(rows).unwrap()).collect();
+    grown.update(&groups, &longs(&values), |_| true).unwrap();
+    assert!(
+        bound >= grown.size(),
+        "projected {bound} < size {}",
+        grown.size()
+    );
 }
 
 #[test]
@@ -94,5 +107,9 @@ fn a_mismatched_column_length_and_bad_state_bytes_are_errors() {
     acc.resize(1);
     assert!(acc.update(&[0], &longs(&[1, 2]), |_| true).is_err());
     let junk = BinaryArray::from_iter_values([vec![1u8, 2, 3]]);
-    assert!(acc.merge(&[0], &junk).is_err());
+    let err = acc.merge(&[0], &junk).unwrap_err();
+    assert!(
+        err.to_string().contains("KLL_INVALID_INPUT_SKETCH_BUFFER"),
+        "{err}"
+    );
 }

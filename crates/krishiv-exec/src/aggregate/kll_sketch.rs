@@ -190,7 +190,18 @@ impl KllSketchAcc {
         } else {
             rows.saturating_mul(RAW_ROW)
         };
-        self.size().saturating_add(fresh).saturating_add(growth)
+        // The per-group vectors (`groups`, `charges`) grow by doubling: new groups need their slots and a
+        // regrow can add up to the current capacity again, which `size()` counts.
+        let slot = std::mem::size_of::<Option<Kll>>().saturating_add(std::mem::size_of::<usize>());
+        let vectors = if new == 0 {
+            0
+        } else {
+            new.max(self.groups.capacity()).saturating_mul(slot)
+        };
+        self.size()
+            .saturating_add(fresh)
+            .saturating_add(vectors)
+            .saturating_add(growth)
     }
 
     fn slot(&mut self, g: u32) -> Result<&mut Option<Kll>> {
@@ -303,6 +314,11 @@ impl KllSketchAcc {
                 continue;
             }
             let input = Kll::from_bytes(self.op.ty(), states.value(row), name)?;
+            // An empty partial (a group that saw no input) must not fix the merged `k`: the first non-empty
+            // input defines it, whatever order the partitions arrive in.
+            if input.n() == 0 {
+                continue;
+            }
             absorb(self.slot(g)?, input, name)?;
         }
         self.recharge(groups);

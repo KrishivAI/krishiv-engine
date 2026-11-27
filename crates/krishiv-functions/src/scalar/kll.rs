@@ -13,7 +13,7 @@ use arrow_array::{Array, ArrayRef, BinaryArray, Int64Array};
 use arrow_schema::{DataType, Field};
 use krishiv_common::error::KrishivError;
 
-use super::args::Inputs;
+use super::args::{Bin, Inputs};
 use super::{BindArg, BindOptions, Binding, FamilyResult, bad_types, listed};
 use crate::sketch::kll::{Kll, KllType, Quantile};
 
@@ -110,10 +110,29 @@ impl QuantileSink for DoubleSink<'_> {
     }
 }
 
-fn decode(t: KllType, a: &BinaryArray, i: usize, name: &str) -> Result<Option<Kll>, KrishivError> {
-    a.is_valid(i)
-        .then(|| Kll::from_bytes(t, a.value(i), name))
-        .transpose()
+/// Row `i`'s sketch bytes; a literal is held once and read at every row (no per-row copy).
+fn bytes(b: &Bin, i: usize) -> Option<&[u8]> {
+    match b {
+        Bin::Array(a) => a.is_valid(i).then(|| a.value(i)),
+        Bin::Scalar(s) => s.as_deref(),
+    }
+}
+
+fn decode(t: KllType, a: &Bin, i: usize, name: &str) -> Result<Option<Kll>, KrishivError> {
+    bytes(a, i).map(|b| Kll::from_bytes(t, b, name)).transpose()
+}
+
+/// `true` when the row-`i` second argument (a rank or a value) is a plain `Float64`/the element type, or a list of it.
+fn second_ok(t: KllType, quantile: bool, d: &DataType) -> bool {
+    let want = if quantile {
+        DataType::Float64
+    } else {
+        elem_type(t)
+    };
+    match d {
+        DataType::List(f) => f.data_type() == &want,
+        d => d == &want,
+    }
 }
 
 pub(super) fn bind(name: &str, args: &[BindArg], _opts: &BindOptions) -> FamilyResult {
@@ -123,7 +142,7 @@ pub(super) fn bind(name: &str, args: &[BindArg], _opts: &BindOptions) -> FamilyR
     let binding = match (listed, types.as_slice()) {
         (n, [b]) if n.starts_with("kll_sketch_to_string_") && super::args::is_binary(b) => {
             Ok(Binding::new(DataType::Utf8, move |x: &Inputs<'_>| {
-                let a = x.binaries(0)?;
+                let a = x.bin(0)?;
                 let mut out = StringBuilder::new();
                 for i in 0..x.rows() {
                     match decode(t, &a, i, n)? {
@@ -136,7 +155,7 @@ pub(super) fn bind(name: &str, args: &[BindArg], _opts: &BindOptions) -> FamilyR
         }
         (n, [b]) if n.starts_with("kll_sketch_get_n_") && super::args::is_binary(b) => {
             Ok(Binding::new(DataType::Int64, move |x: &Inputs<'_>| {
-                let a = x.binaries(0)?;
+                let a = x.bin(0)?;
                 let mut out = Vec::with_capacity(x.rows());
                 for i in 0..x.rows() {
                     out.push(
@@ -152,9 +171,13 @@ pub(super) fn bind(name: &str, args: &[BindArg], _opts: &BindOptions) -> FamilyR
                 && super::args::is_binary(b) =>
         {
             Ok(Binding::new(DataType::Binary, move |x: &Inputs<'_>| {
-                let (l, r) = (x.binaries(0)?, x.binaries(1)?);
+                let (l, r) = (x.bin(0)?, x.bin(1)?);
                 let mut out: Vec<Option<Vec<u8>>> = Vec::with_capacity(x.rows());
                 for i in 0..x.rows() {
+                    if bytes(&l, i).is_none() || bytes(&r, i).is_none() {
+                        out.push(None);
+                        continue;
+                    }
                     let (Some(mut left), Some(right)) =
                         (decode(t, &l, i, n)?, decode(t, &r, i, n)?)
                     else {
@@ -167,7 +190,11 @@ pub(super) fn bind(name: &str, args: &[BindArg], _opts: &BindOptions) -> FamilyR
                 Ok(Arc::new(BinaryArray::from_iter(out)) as ArrayRef)
             }))
         }
-        (n, [b, r]) if n.starts_with("kll_sketch_get_quantile_") && super::args::is_binary(b) => {
+        (n, [b, r])
+            if n.starts_with("kll_sketch_get_quantile_")
+                && super::args::is_binary(b)
+                && second_ok(t, true, r) =>
+        {
             let is_list = matches!(r, DataType::List(_));
             let out_ty = if is_list {
                 DataType::List(item(t))
@@ -175,12 +202,16 @@ pub(super) fn bind(name: &str, args: &[BindArg], _opts: &BindOptions) -> FamilyR
                 elem_type(t)
             };
             Ok(Binding::new(out_ty, move |x: &Inputs<'_>| {
-                let sketches = x.binaries(0)?;
+                let sketches = x.bin(0)?;
                 let ranks = x.column(1)?;
                 quantiles(t, n, x.rows(), &sketches, &ranks, is_list)
             }))
         }
-        (n, [b, r]) if n.starts_with("kll_sketch_get_rank_") && super::args::is_binary(b) => {
+        (n, [b, r])
+            if n.starts_with("kll_sketch_get_rank_")
+                && super::args::is_binary(b)
+                && second_ok(t, false, r) =>
+        {
             let is_list = matches!(r, DataType::List(_));
             let out_ty = if is_list {
                 DataType::List(Arc::new(Field::new("element", DataType::Float64, false)))
@@ -188,7 +219,7 @@ pub(super) fn bind(name: &str, args: &[BindArg], _opts: &BindOptions) -> FamilyR
                 DataType::Float64
             };
             Ok(Binding::new(out_ty, move |x: &Inputs<'_>| {
-                let sketches = x.binaries(0)?;
+                let sketches = x.bin(0)?;
                 let values = x.column(1)?;
                 ranks(t, n, x.rows(), &sketches, &values, is_list)
             }))
@@ -202,7 +233,7 @@ fn quantiles(
     t: KllType,
     name: &str,
     rows: usize,
-    sketches: &BinaryArray,
+    sketches: &Bin,
     ranks: &ArrayRef,
     is_list: bool,
 ) -> Result<ArrayRef, KrishivError> {
@@ -214,8 +245,11 @@ fn quantiles(
         let sketch = decode(t, sketches, i, name)?;
         let row_ranks: Option<Vec<f64>> = if is_list {
             let l = ranks.as_list::<i32>();
+            // A NULL element has no defined rank (its slot holds an arbitrary value), so the row is NULL.
             l.is_valid(i)
-                .then(|| l.value(i).as_primitive::<Float64Type>().values().to_vec())
+                .then(|| l.value(i))
+                .filter(|v| v.null_count() == 0)
+                .map(|v| v.as_primitive::<Float64Type>().values().to_vec())
         } else {
             let p = ranks.as_primitive::<Float64Type>();
             p.is_valid(i).then(|| vec![p.value(i)])
@@ -281,7 +315,7 @@ fn ranks(
     t: KllType,
     name: &str,
     rows: usize,
-    sketches: &BinaryArray,
+    sketches: &Bin,
     values: &ArrayRef,
     is_list: bool,
 ) -> Result<ArrayRef, KrishivError> {
@@ -310,6 +344,10 @@ fn ranks(
                 continue;
             }
             let v = l.value(i);
+            if v.null_count() > 0 {
+                lists.push(None);
+                continue;
+            }
             for j in 0..v.len() {
                 out.append_value(rank_of(&sketch, &v, j));
             }
