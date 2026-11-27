@@ -9,6 +9,7 @@ use arrow_schema::{DataType, Field, Schema, SchemaRef, TimeUnit};
 use bytes::Bytes;
 use futures::future::BoxFuture;
 use futures::{StreamExt, TryStreamExt};
+use krishiv_common::error::KrishivError;
 use krishiv_kernels::datetime_pattern::{DateTimePattern, Purpose};
 use krishiv_kernels::text::{java_parse_double, java_parse_long};
 
@@ -107,7 +108,8 @@ struct Infer<'a> {
     o: &'a CsvOptions,
     dt: &'a Datetimes,
     /// The strict date pattern (`dateFormat`, else `yyyy-MM-dd`).
-    date: &'a DateTimePattern,
+    /// `None` under `timeParserPolicy=LEGACY`: Spark infers no `DATE` there.
+    date: Option<&'a DateTimePattern>,
 }
 
 impl Infer<'_> {
@@ -165,7 +167,10 @@ impl Infer<'_> {
     }
 
     fn date_time(&self, f: &str) -> T {
-        if matches!(self.date.parse_date(f), Ok(Some(_))) {
+        if self
+            .date
+            .is_some_and(|p| matches!(p.parse_date(f), Ok(Some(_))))
+        {
             T::Date
         } else {
             self.timestamp(f)
@@ -173,7 +178,7 @@ impl Infer<'_> {
     }
 
     fn timestamp(&self, f: &str) -> T {
-        if matches!(self.dt.parse_timestamp(f), Ok(Some(_))) {
+        if matches!(self.dt.parse_timestamp_unaided(f), Ok(Some(_))) {
             T::Timestamp
         } else {
             Self::boolean(f)
@@ -257,6 +262,17 @@ pub(crate) fn ddl_type(t: &DataType) -> FormatResult<String> {
     })
 }
 
+/// The pattern inference tries a `DATE` with: `dateFormat` (default
+/// `yyyy-MM-dd`); none under `timeParserPolicy=LEGACY`, where Spark 4.3.0
+/// infers no `DATE` column (run: `2020-01-01` is a string there).
+fn date_pattern(o: &FormatOptions) -> Result<Option<DateTimePattern>, KrishivError> {
+    if crate::text::legacy_time_parser(o) {
+        return Ok(None);
+    }
+    let format = o.str("dateFormat").unwrap_or("yyyy-MM-dd");
+    DateTimePattern::new(format, Purpose::Parse).map(Some)
+}
+
 /// The DDL of a CSV literal (Spark's `schema_of_csv`): the literal parsed
 /// as one record under `options` (the CSV reader's options, as Spark adds
 /// `lineSep` `\uFFFF` so the literal is one record), its fields named
@@ -282,14 +298,11 @@ pub fn ddl_of_string(csv: &str, options: &FormatOptions) -> FormatResult<String>
     }
     let opts = CsvOptions::new(options, false)?;
     let dt = Datetimes::new(options, Purpose::Parse)?;
-    let date = DateTimePattern::new(
-        options.str("dateFormat").unwrap_or("yyyy-MM-dd"),
-        Purpose::Parse,
-    )?;
+    let date = date_pattern(options)?;
     let inf = Infer {
         o: &opts,
         dt: &dt,
-        date: &date,
+        date: date.as_ref(),
     };
     let mut syntax = opts.syntax.clone();
     // The lines are not split already (as for file lines): the whole
@@ -366,7 +379,7 @@ fn line_reader(file: &FileRef, range: ByteRange, o: &CsvOptions) -> LineReader {
 struct Shared {
     opts: CsvOptions,
     dt: Datetimes,
-    date: DateTimePattern,
+    date: Option<DateTimePattern>,
     /// Tokenizes one line (a line is a whole record without `multiLine`).
     tok: Tokenizer,
     /// The first line, dropped wherever it repeats when `header` is on.
@@ -378,7 +391,7 @@ impl Shared {
         Infer {
             o: &self.opts,
             dt: &self.dt,
-            date: &self.date,
+            date: self.date.as_ref(),
         }
     }
 }
@@ -605,12 +618,11 @@ pub(crate) fn infer<'a>(
         }
         let opts = CsvOptions::new(o, false)?;
         let dt = Datetimes::new(o, Purpose::Parse)?;
-        let date =
-            DateTimePattern::new(o.str("dateFormat").unwrap_or("yyyy-MM-dd"), Purpose::Parse)?;
+        let date = date_pattern(o)?;
         let inf = Infer {
             o: &opts,
             dt: &dt,
-            date: &date,
+            date: date.as_ref(),
         };
         let infer_types = o.bool("inferSchema").unwrap_or(false);
         let ratio = sampling_ratio(o)?;

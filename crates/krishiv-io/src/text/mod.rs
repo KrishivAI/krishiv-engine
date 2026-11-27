@@ -25,7 +25,7 @@ use std::sync::Arc;
 
 use arrow_schema::{Schema, SchemaRef};
 
-pub(crate) use self::datetime::Datetimes;
+pub(crate) use self::datetime::{Datetimes, TIME_PARSER_POLICY, legacy_time_parser};
 use crate::error::unsupported;
 use crate::format::FileMetadata;
 use crate::stats::{FileStatistics, Precision};

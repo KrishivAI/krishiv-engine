@@ -83,7 +83,8 @@ static SPECS: LazyLock<Vec<OptionSpec>> = LazyLock::new(|| {
         flag("dropFieldIfAllNull", false, "Inference drops columns that are null in every record.");
         conf("ignoreNullFields", OptionKind::Bool, OptionDefault::Bool(true), "spark.sql.jsonGenerator.ignoreNullFields", "Write: omit fields whose value is null (default: the session conf, true).");
         flag("inferTimestamp", false, "Inference reads timestamp-like strings as timestamps.");
-        flag("enableDateTimeParsingFallback", false, "Parse with the lenient grammar when the pattern fails.");
+        conf(crate::text::TIME_PARSER_POLICY, OptionKind::String, OptionDefault::None, crate::text::TIME_PARSER_POLICY, "The session's `spark.sql.legacy.timeParserPolicy`: `LEGACY` reads and writes `DATE` and `TIMESTAMP` fields with commons-lang `FastDateFormat` patterns (Spark's defaults `yyyy-MM-dd` and `yyyy-MM-dd'T'HH:mm:ss.SSSXXX` when none is named) and the lenient fallback on; a nanosecond `TIMESTAMP_LTZ(p)` then reads as NULL and fails to write. Known divergence: given as a read option it applies (Spark ignores a conf key among read options).");
+        OptionSpec { name: "enableDateTimeParsingFallback", kind: OptionKind::Bool, default: OptionDefault::None, conf_fallback: None, metadata_key: false, doc: "Parse with the lenient grammar when the pattern fails (default: on under `timeParserPolicy=LEGACY` or when no pattern is named)." };
         string("compression", "Write codec: none, uncompressed, bzip2, deflate, gzip, lz4 or snappy.");
         string("codec", "Alias of `compression`.");
         conf("inferenceMaxPartitionBytes", OptionKind::String, OptionDefault::None, "spark.sql.files.maxPartitionBytes", "Sampling: the split planning conf.");

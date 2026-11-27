@@ -17,6 +17,24 @@ use crate::options::FormatOptions;
 const DATE_PATTERN: &str = "yyyy-MM-dd";
 const TIMESTAMP_PATTERN: &str = "yyyy-MM-dd'T'HH:mm:ss[.SSS][XXX]";
 const NTZ_PATTERN: &str = "yyyy-MM-dd'T'HH:mm:ss[.SSS]";
+/// Spark's date and timestamp patterns under `timeParserPolicy=LEGACY`
+/// (`JSONOptions` / `CSVOptions`), read and write alike.
+const LEGACY_DATE_PATTERN: &str = "yyyy-MM-dd";
+const LEGACY_TIMESTAMP_PATTERN: &str = "yyyy-MM-dd'T'HH:mm:ss.SSSXXX";
+
+/// The option carrying the session's `spark.sql.legacy.timeParserPolicy` to
+/// the JSON and CSV readers and writers (named as the conf, so a plan sent
+/// to a worker keeps it apart from the user's options).
+pub(crate) const TIME_PARSER_POLICY: &str = "spark.sql.legacy.timeParserPolicy";
+
+/// Whether `o` carries `timeParserPolicy=LEGACY`: the `DATE` and zoned
+/// `TIMESTAMP` fields then use commons-lang `FastDateFormat` patterns
+/// (Spark's defaults when none is named) and the lenient fallback is on.
+/// `TIMESTAMP_NTZ` never takes the legacy formatter (`forTimestampNTZ`).
+pub(crate) fn legacy_time_parser(o: &FormatOptions) -> bool {
+    o.str(TIME_PARSER_POLICY)
+        .is_some_and(|p| p.trim().eq_ignore_ascii_case("LEGACY"))
+}
 
 /// Dates and timestamps as text in one session time zone.
 #[derive(Debug)]
@@ -34,7 +52,8 @@ pub(crate) struct Datetimes {
     fallback_timestamp: bool,
 }
 
-/// Spark's `cleanLegacyTimestampStr`: the legacy fallback drops `GMT`.
+/// Spark's `cleanLegacyTimestampStr`: the fallback (only) drops `GMT`, after
+/// the pattern or the default grammar read the text as written.
 fn clean(s: &str) -> std::borrow::Cow<'_, str> {
     if s.contains("GMT") {
         std::borrow::Cow::Owned(s.replace("GMT", ""))
@@ -63,18 +82,35 @@ impl Datetimes {
                 (None, Purpose::Parse | Purpose::ParseNtz) => Ok(None),
             }
         };
-        let date = pattern("dateFormat", DATE_PATTERN)?;
-        let timestamp = pattern("timestampFormat", TIMESTAMP_PATTERN)?;
+        let legacy = legacy_time_parser(o);
+        // Under LEGACY a pattern Spark cannot build fails only when a value
+        // is written (`DateTimePattern::new_fast`); reading, it matches nothing.
+        let fast = |opt: &str, default: &str| {
+            Some(DateTimePattern::new_fast(o.str(opt).unwrap_or(default)))
+        };
+        let (date, timestamp) = if legacy {
+            (
+                fast("dateFormat", LEGACY_DATE_PATTERN),
+                fast("timestampFormat", LEGACY_TIMESTAMP_PATTERN),
+            )
+        } else {
+            (
+                pattern("dateFormat", DATE_PATTERN)?,
+                pattern("timestampFormat", TIMESTAMP_PATTERN)?,
+            )
+        };
         let ntz = pattern("timestampNTZFormat", NTZ_PATTERN)?;
         let explicit = o.bool("enableDateTimeParsingFallback");
+        let named = |opt: &str| o.str(opt).is_some();
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .ok()
             .and_then(|d| i64::try_from(d.as_micros()).ok())
             .unwrap_or(0);
         Ok(Self {
-            fallback_date: explicit.unwrap_or(date.is_none()),
-            fallback_timestamp: explicit.unwrap_or(timestamp.is_none() && ntz.is_none()),
+            fallback_date: explicit.unwrap_or(legacy || !named("dateFormat")),
+            fallback_timestamp: explicit
+                .unwrap_or(legacy || !(named("timestampFormat") || named("timestampNTZFormat"))),
             today: rules.as_ref().map_or(0, |r| today_in(now, r)),
             zone_id,
             rules,
@@ -102,30 +138,47 @@ impl Datetimes {
     pub(crate) fn parse_date(&self, s: &str) -> Result<Option<i32>, KrishivError> {
         let parsed = match &self.date {
             Some(p) => p.parse_date(s)?,
-            None => spark_string_to_date(&clean(s)),
+            None => spark_string_to_date(s),
         };
         match parsed {
-            None if self.fallback_date && self.date.is_some() => {
-                Ok(spark_string_to_date(&clean(s)))
-            }
+            None if self.fallback_date => Ok(spark_string_to_date(&clean(s))),
             other => Ok(other),
         }
     }
 
-    /// A `TIMESTAMP` (microseconds since the epoch) from text.
+    /// A `TIMESTAMP` (microseconds since the epoch) from text: the pattern,
+    /// else the default grammar, on the text as written; then, when the
+    /// fallback is on, the default grammar without `GMT` (Spark 4.3.0 run:
+    /// `... 10:00:00 Etc/GMT+1` is 11:00 UTC, `... 10:00:00 GMT` 10:00 UTC
+    /// unless the legacy pattern missed it, when it is local time).
     ///
     /// # Errors
     /// A region zone id in the text.
     pub(crate) fn parse_timestamp(&self, s: &str) -> Result<Option<i64>, KrishivError> {
         let rules = self.rules()?;
-        let default = || spark_string_to_timestamp(&clean(s), rules, self.today);
         let parsed = match &self.timestamp {
             Some(p) => p.parse_timestamp(s, rules)?,
-            None => default()?,
+            None => spark_string_to_timestamp(s, rules, self.today)?,
         };
         match parsed {
-            None if self.fallback_timestamp && self.timestamp.is_some() => default(),
+            None if self.fallback_timestamp => {
+                spark_string_to_timestamp(&clean(s), rules, self.today)
+            }
             other => Ok(other),
+        }
+    }
+
+    /// [`Self::parse_timestamp`] without the fallback: the pattern, else the
+    /// default grammar, on the text as written, as Spark's CSV schema
+    /// inference reads a timestamp (`CSVInferSchema.tryParseTimestamp`).
+    ///
+    /// # Errors
+    /// A region zone id in the text.
+    pub(crate) fn parse_timestamp_unaided(&self, s: &str) -> Result<Option<i64>, KrishivError> {
+        let rules = self.rules()?;
+        match &self.timestamp {
+            Some(p) => p.parse_timestamp(s, rules),
+            None => spark_string_to_timestamp(s, rules, self.today),
         }
     }
 

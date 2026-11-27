@@ -425,3 +425,339 @@ fn file_reads_take_a_trailing_zone_as_written() {
         "2020-01-01 02:00:00.123456789"
     );
 }
+
+/// The probe texts of the legacy tests (Spark 4.3.0 run, session zone `America/Los_Angeles`).
+const LEGACY_TS: [&str; 10] = [
+    "2020-01-01T10:00:00.123Z",
+    "2020-01-01 10:00:00.123456",
+    "2020-01-01T10:00:00.123+01:00",
+    "2020-01-01 10:00:00 GMT",
+    "2020-01-01 10:00:00 Etc/GMT+1",
+    "2020-01-01T10:00:00GMT+01:00",
+    "2020-1-1 1:2:3",
+    "2020-01-01",
+    "T10:00:00",
+    "2020-01-32T10:00:00.000Z",
+];
+const LEGACY_PAT: [&str; 4] = [
+    "2020-01-01 10:00:00.123456",
+    "2020-01-01 10:00:00.1",
+    "2020-01-01 10:00:61.000000",
+    "2020-01-01T10:00:00",
+];
+const LEGACY_DATES: [&str; 5] = [
+    "2020-01-01",
+    "2020-1-1",
+    "32/01/2020",
+    "2020-01-01T10:00:00",
+    "2020-01-01 GMT",
+];
+
+/// Writes `values` into `dir/<name>.<format>` (one JSON record `{"s": ..}` or CSV line each).
+fn text_file(dir: &Path, name: &str, format: &str, values: &[&str]) -> std::path::PathBuf {
+    let path = dir.join(format!("{name}.{format}"));
+    let body: String = values
+        .iter()
+        .map(|v| {
+            if format == "json" {
+                format!("{{\"s\":\"{v}\"}}\n")
+            } else {
+                format!("{v}\n")
+            }
+        })
+        .collect();
+    std::fs::write(&path, body).unwrap();
+    path
+}
+
+/// `CAST(s AS STRING)` of `path` read as `format` with column `s <ty>` and `options` (a NULL
+/// shows empty).
+fn read_text(s: &Session, path: &Path, format: &str, ty: &str, options: &str) -> String {
+    let q = format!(
+        "CREATE OR REPLACE TEMPORARY VIEW v (s {ty}) USING {format} OPTIONS (path '{}'{options})",
+        path.display()
+    );
+    assert_eq!(run(s, &q), "", "{q}");
+    run(s, "SELECT CAST(s AS STRING) FROM v")
+}
+
+/// JSON and CSV file reads under `spark.sql.legacy.timeParserPolicy` (Spark 4.3.0 run, session zone
+/// `America/Los_Angeles`): CORRECTED reads the text as written, so a trailing ` GMT` is UTC and
+/// `Etc/GMT+1` an hour behind; LEGACY reads with `FastDateFormat` `yyyy-MM-dd'T'HH:mm:ss.SSSXXX`
+/// (lenient: January 32 is February 1), then the default grammar on the text without `GMT` (local
+/// time; `Etc/+1` reads as nothing). A named pattern under LEGACY scales its `S` run and rolls
+/// seconds over; the fallback is on unless `enableDateTimeParsingFallback` is false. A
+/// `TIMESTAMP_LTZ(9)` reads as NULL under LEGACY, a `TIMESTAMP_NTZ(9)` as under CORRECTED.
+#[test]
+fn file_reads_follow_the_time_parser_policy() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session("America/Los_Angeles");
+    let today = run(&s, "SELECT cast(current_date() as string)");
+    let corrected_ts = format!(
+        "2020-01-01 02:00:00.123 ; 2020-01-01 10:00:00.123456 ; 2020-01-01 01:00:00.123 ; \
+         2020-01-01 02:00:00 ; 2020-01-01 03:00:00 ; 2020-01-01 01:00:00 ; 2020-01-01 01:02:03 ; \
+         2020-01-01 00:00:00 ; {today} 10:00:00 ; "
+    );
+    let legacy_ts = format!(
+        "2020-01-01 02:00:00.123 ; 2020-01-01 10:00:00.123456 ; 2020-01-01 01:00:00.123 ; \
+         2020-01-01 10:00:00 ;  ; 2020-01-01 01:00:00 ; 2020-01-01 01:02:03 ; \
+         2020-01-01 00:00:00 ; {today} 10:00:00 ; 2020-02-01 02:00:00"
+    );
+    let ntz = " ; 2020-01-01 10:00:00.123456 ;  ;  ;  ;  ; 2020-01-01 01:02:03 ; 2020-01-01 00:00:00 ;  ; ";
+    let six = ", timestampFormat 'yyyy-MM-dd HH:mm:ss.SSSSSS'";
+    let six_on =
+        ", timestampFormat 'yyyy-MM-dd HH:mm:ss.SSSSSS', enableDateTimeParsingFallback 'true'";
+    let six_off =
+        ", timestampFormat 'yyyy-MM-dd HH:mm:ss.SSSSSS', enableDateTimeParsingFallback 'false'";
+    let dmy = ", dateFormat 'dd/MM/yyyy'";
+    for format in ["json", "csv"] {
+        let ts = text_file(dir.path(), "ts", format, &LEGACY_TS);
+        let pat = text_file(dir.path(), "pat", format, &LEGACY_PAT);
+        let dates = text_file(dir.path(), "dates", format, &LEGACY_DATES);
+        for (policy, want_ts, want_ltz9) in [
+            ("CORRECTED", corrected_ts.as_str(), corrected_ts.as_str()),
+            ("LEGACY", legacy_ts.as_str(), " ;  ;  ;  ;  ;  ;  ;  ;  ; "),
+        ] {
+            s.conf()
+                .set("spark.sql.legacy.timeParserPolicy", policy)
+                .unwrap();
+            let legacy = policy == "LEGACY";
+            let cases: [(&Path, &str, &str, String); 9] = [
+                (&ts, "TIMESTAMP", "", want_ts.to_owned()),
+                (&ts, "TIMESTAMP_NTZ", "", ntz.to_owned()),
+                (&ts, "TIMESTAMP_LTZ(9)", "", want_ltz9.to_owned()),
+                (&ts, "TIMESTAMP_NTZ(9)", "", ntz.to_owned()),
+                (
+                    &pat,
+                    "TIMESTAMP",
+                    six,
+                    if legacy {
+                        "2020-01-01 10:00:00.123456 ; 2020-01-01 10:00:00.000001 ; 2020-01-01 10:01:01 ; 2020-01-01 10:00:00"
+                    } else {
+                        "2020-01-01 10:00:00.123456 ; 2020-01-01 10:00:00.1 ;  ; "
+                    }
+                    .to_owned(),
+                ),
+                (
+                    &pat,
+                    "TIMESTAMP",
+                    six_on,
+                    if legacy {
+                        "2020-01-01 10:00:00.123456 ; 2020-01-01 10:00:00.000001 ; 2020-01-01 10:01:01 ; 2020-01-01 10:00:00"
+                    } else {
+                        "2020-01-01 10:00:00.123456 ; 2020-01-01 10:00:00.1 ;  ; 2020-01-01 10:00:00"
+                    }
+                    .to_owned(),
+                ),
+                (
+                    &pat,
+                    "TIMESTAMP",
+                    six_off,
+                    if legacy {
+                        "2020-01-01 10:00:00.123456 ; 2020-01-01 10:00:00.000001 ; 2020-01-01 10:01:01 ; "
+                    } else {
+                        "2020-01-01 10:00:00.123456 ; 2020-01-01 10:00:00.1 ;  ; "
+                    }
+                    .to_owned(),
+                ),
+                (
+                    &dates,
+                    "DATE",
+                    "",
+                    "2020-01-01 ; 2020-01-01 ;  ; 2020-01-01 ; 2020-01-01".to_owned(),
+                ),
+                (
+                    &dates,
+                    "DATE",
+                    dmy,
+                    if legacy {
+                        "2020-01-01 ; 2020-01-01 ; 2020-02-01 ; 2020-01-01 ; 2020-01-01"
+                    } else {
+                        " ;  ;  ;  ; "
+                    }
+                    .to_owned(),
+                ),
+            ];
+            for (path, ty, options, want) in cases {
+                assert_eq!(
+                    read_text(&s, path, format, ty, options),
+                    want,
+                    "{policy} {format} {ty} {options}"
+                );
+            }
+        }
+    }
+}
+
+/// JSON and CSV file writes under `timeParserPolicy=LEGACY` (Spark 4.3.0 run, session zone
+/// `America/Los_Angeles`): the default patterns print as CORRECTED's do; a named pattern is a
+/// `FastDateFormat` one (`u` the day number of the week, which CORRECTED refuses); a
+/// `TIMESTAMP_LTZ(9)` value fails the write, a `TIMESTAMP_NTZ(9)` one prints as under CORRECTED.
+#[test]
+fn file_writes_follow_the_legacy_time_parser() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session("America/Los_Angeles");
+    s.conf()
+        .set("spark.sql.legacy.timeParserPolicy", "LEGACY")
+        .unwrap();
+    let src = "SELECT timestamp'2020-01-01 10:00:00.123456' t, timestamp'2020-01-01 10:00:00' t0, \
+               date'2020-01-01' d, timestamp_ntz'2020-01-01 10:00:00.123456' n";
+    let write = |name: &str, format: &str, options: &str, cols: &str| {
+        let path = dir.path().join(name);
+        let q = format!(
+            "INSERT OVERWRITE DIRECTORY '{}' USING {format} {options} SELECT {cols} FROM ({src})",
+            path.display()
+        );
+        (run(&s, &q), path)
+    };
+    for (format, defaults, patterned) in [
+        (
+            "json",
+            r#"{"t":"2020-01-01T10:00:00.123-08:00","t0":"2020-01-01T10:00:00.000-08:00","d":"2020-01-01","n":"2020-01-01T10:00:00.123"}"#,
+            r#"{"t":"2020-01-01 10:00:00.123456 3","d":"01/01/20 3"}"#,
+        ),
+        (
+            "csv",
+            "2020-01-01T10:00:00.123-08:00,2020-01-01T10:00:00.000-08:00,2020-01-01,2020-01-01T10:00:00.123",
+            "2020-01-01 10:00:00.123456 3,01/01/20 3",
+        ),
+    ] {
+        let (out, path) = write(&format!("{format}-m"), format, "", "t, t0, d, n");
+        assert_eq!(out, "");
+        assert_eq!(lines(&path), [defaults], "{format}");
+        let (out, path) = write(
+            &format!("{format}-p"),
+            format,
+            "OPTIONS (timestampFormat 'yyyy-MM-dd HH:mm:ss.SSSSSS u', dateFormat 'dd/MM/yy u')",
+            "t, d",
+        );
+        assert_eq!(out, "");
+        assert_eq!(lines(&path), [patterned], "{format}");
+        let (out, path) = write(
+            &format!("{format}-n9"),
+            format,
+            "",
+            "CAST(n AS TIMESTAMP_NTZ(9)) n9",
+        );
+        assert_eq!(out, "");
+        let n9 = if format == "json" {
+            r#"{"n9":"2020-01-01T10:00:00.123"}"#
+        } else {
+            "2020-01-01T10:00:00.123"
+        };
+        assert_eq!(lines(&path), [n9], "{format}");
+        let (out, _) = write(
+            &format!("{format}-l9"),
+            format,
+            "",
+            "CAST(t AS TIMESTAMP_LTZ(9)) l9",
+        );
+        assert!(
+            out.contains("TIMESTAMP_NANOS_WITH_LEGACY_TIME_PARSER"),
+            "{format}: {out}"
+        );
+    }
+}
+
+/// A FAILFAST read under LEGACY fails on a text neither the legacy pattern nor the fallback reads
+/// and keeps one the lenient pattern reads (Spark 4.3.0: `... Etc/GMT+1` is
+/// `FAILED_READ_FILE.NO_HINT`; January 32 is February 1, which CORRECTED refuses).
+#[test]
+fn a_failfast_read_under_the_legacy_time_parser_fails_on_an_unread_zone() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session("America/Los_Angeles");
+    s.conf()
+        .set("spark.sql.legacy.timeParserPolicy", "LEGACY")
+        .unwrap();
+    let failfast = ", mode 'FAILFAST'";
+    for format in ["json", "csv"] {
+        let zone = text_file(dir.path(), "zone", format, &[LEGACY_TS[4]]);
+        let got = read_text(&s, &zone, format, "TIMESTAMP", failfast);
+        assert!(
+            got.starts_with("ERR [FAILED_READ_FILE.NO_HINT]"),
+            "{format}: {got}"
+        );
+        let lenient = text_file(dir.path(), "lenient", format, &[LEGACY_TS[9]]);
+        assert_eq!(
+            read_text(&s, &lenient, format, "TIMESTAMP", failfast),
+            "2020-02-01 02:00:00",
+            "{format}"
+        );
+    }
+}
+
+/// Schema inference under `timeParserPolicy` (Spark 4.3.0 run, session zone `America/Los_Angeles`):
+/// CSV under LEGACY infers no `DATE` and reads timestamps with the legacy pattern alone (no
+/// fallback); JSON's `inferTimestamp` takes the lenient legacy pattern and the zone-less grammar.
+#[test]
+fn inference_follows_the_time_parser_policy() {
+    let dir = tempfile::tempdir().unwrap();
+    let csv = dir.path().join("inf.csv");
+    std::fs::write(
+        &csv,
+        "2020-01-01T10:00:00.123Z,2020-01-01,2020-01-01 10:00:00,32/01/2020\n\
+         2020-01-02T10:00:00.000-08:00,2020-01-02,2020-01-02 10:00:00,01/02/2020\n",
+    )
+    .unwrap();
+    let json = dir.path().join("inf.json");
+    std::fs::write(
+        &json,
+        "{\"a\":\"2020-01-01T10:00:00.123Z\",\"b\":\"2020-01-01 10:00:00\",\"c\":\"2020-01-32T10:00:00.000Z\"}\n",
+    )
+    .unwrap();
+    let s = session("America/Los_Angeles");
+    let types = |format: &str, path: &Path, options: &str| {
+        let q = format!(
+            "CREATE OR REPLACE TEMPORARY VIEW v USING {format} OPTIONS (path '{}'{options})",
+            path.display()
+        );
+        assert_eq!(run(&s, &q), "", "{q}");
+        run(&s, "SELECT * FROM v LIMIT 0");
+        let cols = run(&s, "DESCRIBE v");
+        cols.split(" ; ")
+            .map(|r| r.split('|').take(2).collect::<Vec<_>>().join(":"))
+            .collect::<Vec<_>>()
+            .join(",")
+    };
+    for (policy, csv_plain, csv_dmy, csv_ts, json_ts) in [
+        (
+            "CORRECTED",
+            "_c0:timestamp,_c1:date,_c2:timestamp,_c3:string",
+            "_c0:timestamp,_c1:timestamp,_c2:timestamp,_c3:string",
+            "_c0:string,_c1:date,_c2:timestamp,_c3:string",
+            "a:timestamp,b:timestamp,c:string",
+        ),
+        (
+            "LEGACY",
+            "_c0:timestamp,_c1:string,_c2:string,_c3:string",
+            "_c0:timestamp,_c1:string,_c2:string,_c3:string",
+            "_c0:string,_c1:string,_c2:timestamp,_c3:string",
+            "a:timestamp,b:timestamp,c:timestamp",
+        ),
+    ] {
+        s.conf()
+            .set("spark.sql.legacy.timeParserPolicy", policy)
+            .unwrap();
+        let infer = ", inferSchema 'true'";
+        assert_eq!(types("csv", &csv, infer), csv_plain, "{policy}");
+        assert_eq!(
+            types("csv", &csv, &format!("{infer}, dateFormat 'dd/MM/yyyy'")),
+            csv_dmy,
+            "{policy}"
+        );
+        assert_eq!(
+            types(
+                "csv",
+                &csv,
+                &format!("{infer}, timestampFormat 'yyyy-MM-dd HH:mm:ss'")
+            ),
+            csv_ts,
+            "{policy}"
+        );
+        assert_eq!(
+            types("json", &json, ", inferTimestamp 'true'"),
+            json_ts,
+            "{policy}"
+        );
+    }
+}

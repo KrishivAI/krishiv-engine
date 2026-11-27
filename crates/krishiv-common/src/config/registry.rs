@@ -1652,8 +1652,8 @@ pub static LEGACY_TIME_PARSER_POLICY: ConfigEntry = ConfigEntry {
           `unix_timestamp`, `from_unixtime`) and the JSON, CSV and XML functions read and print \
           patterns. `LEGACY` is the pre-3.0 behaviour: `SimpleDateFormat` for the datetime \
           functions, and a lenient commons-lang `FastDateFormat` for the `DATE` and `TIMESTAMP` \
-          fields of the JSON, CSV and XML functions; `CORRECTED` and `EXCEPTION` use the \
-          `DateTimeFormatter` patterns.",
+          fields of the JSON, CSV and XML functions and of JSON and CSV files; `CORRECTED` and \
+          `EXCEPTION` use the `DateTimeFormatter` patterns.",
     scope: Scope::Session,
     settable_by: SettableBy::User,
     version_added: "0.1.0",

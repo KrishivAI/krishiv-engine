@@ -130,7 +130,8 @@ static SPECS: LazyLock<Vec<OptionSpec>> = LazyLock::new(|| {
         int("maxColumns", 1, i64::from(i32::MAX), 20480, "Most columns of a record.");
         int("maxCharsPerColumn", -1, i64::from(i32::MAX), -1, "Most characters of a value (-1: any).");
         unescaped_spec();
-        flag("enableDateTimeParsingFallback", None, "Parse with the lenient grammar when the pattern fails.");
+        conf(crate::text::TIME_PARSER_POLICY, OptionKind::String, OptionDefault::None, crate::text::TIME_PARSER_POLICY, "The session's `spark.sql.legacy.timeParserPolicy`: `LEGACY` reads and writes `DATE` and `TIMESTAMP` fields with commons-lang `FastDateFormat` patterns (Spark's defaults `yyyy-MM-dd` and `yyyy-MM-dd'T'HH:mm:ss.SSSXXX` when none is named) and the lenient fallback on; a nanosecond `TIMESTAMP_LTZ(p)` then reads as NULL and fails to write. Known divergence: given as a read option it applies (Spark ignores a conf key among read options).");
+        flag("enableDateTimeParsingFallback", None, "Parse with the lenient grammar when the pattern fails (default: on under `timeParserPolicy=LEGACY` or when no pattern is named).");
         conf("ignoreCorruptFiles", OptionKind::Bool, OptionDefault::Bool(false), "spark.sql.files.ignoreCorruptFiles", "Inference: a compressed file that breaks counts the lines decoded before the break, as the scan does (`spark.sql.files.ignoreCorruptFiles`).");
         flag("columnPruning", None, "Parse only the requested columns (default: `spark.sql.csv.parser.columnPruning.enabled`, off under `multiLine`).");
         conf(COLUMN_PRUNING_CONF, OptionKind::Bool, OptionDefault::None, COLUMN_PRUNING_CONF, "The session's `spark.sql.csv.parser.columnPruning.enabled`, carried apart from `columnPruning` (Spark ANDs it with `!multiLine`).");
