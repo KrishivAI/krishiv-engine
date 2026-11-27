@@ -8,6 +8,7 @@
 import os
 import random
 import shutil
+import sys
 import tempfile
 import time
 import unittest
@@ -2052,6 +2053,7 @@ class ScalarPandasUDFTestsMixin:
             self.assertEqual(expected, result)
 
 
+@unittest.skipIf(sys.platform == "win32", "setUpClass needs time.tzset, which Windows lacks")
 class ScalarPandasUDFTests(ScalarPandasUDFTestsMixin, ReusedSQLTestCase):
     @classmethod
     def setUpClass(cls):

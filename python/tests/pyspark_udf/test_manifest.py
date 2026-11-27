@@ -23,7 +23,7 @@ CATEGORIES = {
 def _methods() -> set[tuple[str, str, str]]:
     found = set()
     for file in FILES:
-        for node in ast.parse((HERE / file).read_text()).body:
+        for node in ast.parse((HERE / file).read_text(encoding="utf-8")).body:
             if isinstance(node, ast.ClassDef):
                 for m in node.body:
                     if isinstance(m, ast.FunctionDef) and m.name.startswith("test"):
