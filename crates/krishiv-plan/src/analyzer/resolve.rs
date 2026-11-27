@@ -1407,6 +1407,21 @@ impl Resolver<'_> {
                 // are: a missing relation fails the query even though no
                 // column error of the definition does.
                 self.check_unused_cte(c)?;
+                // Spark names a scalar subquery after its outer references,
+                // an unused definition's included (`scalarsubquery(id)` for
+                // `(WITH u AS (SELECT id) SELECT 1)`): keep such a
+                // definition in the plan when it resolves and reads one.
+                if !env.outer.is_empty() {
+                    let e = self.env(visible.clone(), scope, env.outer.clone());
+                    if let Ok(r) = self.rel(&c.plan, &e)
+                        && !super::exprs::outer_names(&r.plan).is_empty()
+                    {
+                        defs.push(Cte {
+                            name: c.name.clone(),
+                            plan: Arc::clone(&r.plan),
+                        });
+                    }
+                }
                 continue;
             }
             let e = self.env(visible.clone(), scope, env.outer.clone());

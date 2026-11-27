@@ -56,7 +56,7 @@ pub(in crate::analyzer) fn pretty(e: &Expr, zone: Option<SessionZone>) -> String
 /// reference: Spark's `getOuterReferences` keeps repeats
 /// (`WHERE y1 = x1 AND y2 = x1 + 1` is `scalarsubquery(x1, x1)` in Spark
 /// 4.2.0).
-pub(super) fn outer_names(plan: &crate::LogicalPlan) -> String {
+pub(in crate::analyzer) fn outer_names(plan: &crate::LogicalPlan) -> String {
     use crate::walk::{Node, visit_distinct};
     let mut names: Vec<String> = Vec::new();
     let _ = visit_distinct(Node::Plan(plan), |n| {

@@ -73,6 +73,7 @@ mod node;
 mod operators;
 mod patterns;
 mod pretty;
+pub(in crate::analyzer) use pretty::outer_names;
 mod semantic;
 mod star;
 mod time;
