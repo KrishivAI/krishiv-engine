@@ -985,9 +985,28 @@ fn release_publishing_is_manual_and_gated() {
         "publish-docker.yml: only a v* tag may publish"
     );
     assert!(
-        docker.contains("    uses: $/.github/workflows/ci.yml\n")
-            && docker.contains("    needs: ci\n")
+        job(&docker, "ci").contains("    uses: $/.github/workflows/ci.yml\n"),
+        "publish-docker.yml: the `ci` job must call ci.yml on this ref"
     );
+    for build in ["build-amd64", "build-arm64"] {
+        let body = job(&docker, build);
+        assert!(
+            body.contains("    needs: ci\n"),
+            "publish-docker.yml: {build} must need the `ci` job"
+        );
+        // The digest is kept under the runner's temp dir and uploaded from the same place.
+        assert!(
+            body.contains("mkdir -p \"$RUNNER_TEMP/digests\"")
+                && body.contains("touch \"$RUNNER_TEMP/digests/${DIGEST#sha256:}\"")
+                && body.contains("path: ${{ runner.temp }}/digests/*"),
+            "publish-docker.yml: {build} must keep and upload its digest under RUNNER_TEMP/digests"
+        );
+        // Attestation permissions belong to the publish job only.
+        assert!(
+            !body.contains("id-token:") && !body.contains("attestations:"),
+            "publish-docker.yml: {build} needs no attestation permissions"
+        );
+    }
     assert!(
         docker.matches("environment:\n      name: ghcr\n").count() == 3
             && !docker.contains("secrets."),

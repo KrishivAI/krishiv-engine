@@ -70,7 +70,7 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$GITHUB_REF" == refs/tags/v* ]] || { echo "::error::only a v* tag publishes release assets"; exit 1; }
-          cargo cyclonedx --format json --spec-version 1.5 --override-filename krishiv-sbom.cdx
+          cargo cyclonedx --features server,ui --format json --spec-version 1.5 --override-filename krishiv-sbom.cdx
           cp crates/krishiv-cli/krishiv-sbom.cdx.json assets/krishiv-cli-sbom.cdx.json
           cp crates/krishiv/krishiv-sbom.cdx.json assets/krishiv-sbom.cdx.json
           cd assets
@@ -103,4 +103,5 @@ jobs:
         working-directory: assets
         run: |
           gh release view "$TAG" > /dev/null || { echo "::error::create the GitHub Release for $TAG first (RELEASING.md)"; exit 1; }
+          # If this upload fails, clobbered assets may be missing: re-dispatch this workflow for the same tag (it rebuilds and re-uploads every asset).
           gh release upload "$TAG" --clobber -- *
