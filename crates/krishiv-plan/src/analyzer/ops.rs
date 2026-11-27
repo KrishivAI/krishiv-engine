@@ -1267,6 +1267,16 @@ impl Resolver<'_> {
             }
             let child = match cur.widen.as_deref() {
                 Some(Widen::Through { child }) => child.clone(),
+                // The projection `restore` puts over a `HAVING` that read a
+                // grouping column its select list drops (`SELECT 1 AS a, 2 AS a
+                // ... GROUP BY a HAVING a > 1 ORDER BY a`).
+                Some(Widen::Project { input, .. })
+                    if matches!(cur.plan.node, PlanNode::Project { .. })
+                        && matches!(input.widen.as_deref(), Some(Widen::Through { .. }))
+                        && input.agg.is_none() =>
+                {
+                    input.clone()
+                }
                 _ => return None,
             };
             layers.push(cur);
@@ -1279,6 +1289,11 @@ impl Resolver<'_> {
     fn rewrapped(&self, layers: &[Rel], inner: Rel) -> Rel {
         let mut built = inner;
         for rel in layers.iter().rev() {
+            // A `restore` projection is dropped: the caller restores the
+            // columns it widened past.
+            if matches!(rel.widen.as_deref(), Some(Widen::Project { .. })) {
+                continue;
+            }
             let child = built;
             let plan = Arc::clone(&rel.plan)
                 .map_children(|_| Ok::<_, Infallible>(Arc::clone(&child.plan)))

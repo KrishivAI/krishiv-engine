@@ -324,6 +324,12 @@ impl Resolver<'_> {
                     else {
                         return Err(reported(e));
                     };
+                    // A `restore` projection among the layers hides what the
+                    // keys read: the sort goes below it.
+                    let extended = extended
+                        || layers
+                            .iter()
+                            .any(|l| matches!(l.widen.as_deref(), Some(Widen::Project { .. })));
                     let top = if extended {
                         self.rewrapped(&layers, grown)
                     } else {
