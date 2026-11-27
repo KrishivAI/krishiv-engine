@@ -210,37 +210,24 @@ mod init {
     unsafe extern "C" {
         fn getenv(name: *const c_char) -> *const c_char;
         fn mallopt(param: c_int, value: c_int) -> c_int;
-        fn open(path: *const c_char, flags: c_int, ...) -> c_int;
-        fn read(fd: c_int, buf: *mut std::ffi::c_void, count: usize) -> isize;
-        fn close(fd: c_int) -> c_int;
     }
 
-    /// Reads `path` into `buf` with plain system calls (no allocation):
-    /// the bytes read, `None` if it cannot be opened or read.
+    /// Reads `path` into `buf` with plain system calls through `rustix`
+    /// (no allocation: a `&CStr` path is passed as it is, and the file is
+    /// closed when its descriptor drops): the bytes read, `None` if it
+    /// cannot be opened or read.
     fn read_file(path: &CStr, buf: &mut [u8]) -> Option<usize> {
-        const O_RDONLY_CLOEXEC: c_int = 0o2_000_000;
-        // SAFETY: `path` is NUL-terminated; `open` only reads it.
-        let fd = unsafe { open(path.as_ptr(), O_RDONLY_CLOEXEC) };
-        if fd < 0 {
-            return None;
-        }
+        use rustix::fs::{Mode, OFlags, open};
+        let fd = open(path, OFlags::RDONLY | OFlags::CLOEXEC, Mode::empty()).ok()?;
         let mut n = 0;
         while n < buf.len() {
-            // SAFETY: `fd` is open, and `buf[n..]` is writable for its
-            // length.
-            let got = unsafe { read(fd, buf[n..].as_mut_ptr().cast(), buf.len() - n) };
-            match usize::try_from(got) {
+            match rustix::io::read(&fd, &mut buf[n..]) {
                 Ok(0) => break,
                 Ok(k) => n += k,
-                Err(_) => {
-                    // SAFETY: `fd` is open and closed once.
-                    unsafe { close(fd) };
-                    return None;
-                }
+                Err(rustix::io::Errno::INTR) => {}
+                Err(_) => return None,
             }
         }
-        // SAFETY: `fd` is open and closed once.
-        unsafe { close(fd) };
         Some(n)
     }
 
@@ -343,6 +330,26 @@ mod init {
 
     #[cfg(test)]
     mod tests {
+        /// `read_file` reads a whole file, stops at a full buffer, and
+        /// answers `None` for a file it cannot open.
+        #[test]
+        fn read_file_reads_a_file_into_the_buffer() {
+            let dir = std::env::temp_dir().join(format!("krishiv-alloc-{}", std::process::id()));
+            std::fs::create_dir_all(&dir).unwrap();
+            let path = dir.join("memory.max");
+            std::fs::write(&path, b"1073741824\n").unwrap();
+            let c = std::ffi::CString::new(path.to_str().unwrap()).unwrap();
+            let mut buf = [0_u8; 64];
+            assert_eq!(super::read_file(&c, &mut buf), Some(11));
+            assert_eq!(&buf[..11], b"1073741824\n");
+            let mut short = [0_u8; 4];
+            assert_eq!(super::read_file(&c, &mut short), Some(4));
+            assert_eq!(&short, b"1073");
+            let missing = std::ffi::CString::new(dir.join("none").to_str().unwrap()).unwrap();
+            assert_eq!(super::read_file(&missing, &mut buf), None);
+            std::fs::remove_dir_all(&dir).unwrap();
+        }
+
         /// Without arguments (a null `argv`) and without the variable, the
         /// constructor sets nothing and does not read `argv`.
         #[test]
@@ -487,10 +494,17 @@ mod tests {
     }
 
     /// The option numbers belong to the linked mimalloc (version 3); this
-    /// test process has no limit, so mimalloc's defaults are in force.
+    /// test process has no limit, so mimalloc's defaults are in force, or,
+    /// in a container under about 5 GiB, the options the constructor read
+    /// the container's limit for (`MemoryMax=1G` runs this case).
     #[test]
     fn the_option_numbers_are_the_linked_mimalloc_s() {
-        assert_eq!(read(), (1000, 1, 0));
+        let want = if container_is_tight() {
+            (10, 0, 64)
+        } else {
+            (1000, 1, 0)
+        };
+        assert_eq!(read(), want);
         // SAFETY: plain getter.
         let version = unsafe { libmimalloc_sys::mi_version() };
         // `major * 10000 + minor * 100 + patch` (3.3.2 is 30302).

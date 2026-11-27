@@ -20,7 +20,7 @@ Paths are relative to this crate.
 - `install` links the constructor and returns `release` for `krishiv_memory::set_release_hook`
 - `src/heap.rs` (feature `heap-stats`) `Counting<A>`, a global-allocator wrapper that counts live and peak heap bytes for memory measurements; `tests/heap_stats.rs` covers it
 - `cpu_check` (x86-64 glibc, `.preinit_array`) runs `krishiv_common::cpu::check_cpuid_or_exit` before `init`, which is compiled for the build's CPU level
-- `Cargo.toml` depends on `libmimalloc-sys` (`extended`) and `krishiv-common`
+- `Cargo.toml` depends on `libmimalloc-sys` (`extended`) and `krishiv-common`, and on Linux glibc on `rustix` (the constructor's file reads)
 
 ## Extension points
 - A new glibc malloc parameter: add a row to `GLIBC_OPTIONS` (its `mallopt` number from glibc's `malloc.h`) and a case to `glibc_keeps_c_blocks_unless_bounded_or_configured`.
@@ -35,7 +35,7 @@ numbers to the linked mimalloc and check the argument detection and the null-`ar
 
 ## Invariants
 - The options must be in force before mimalloc reserves its first arena, so they are applied by the constructor, not from `main`.
-- They apply only when the limit at process start is not generous and the user has not set the `MIMALLOC_*` variable; with no limit given, the default limit is a share of the container's memory, so a container under about 5 GiB gets them and a larger one (or a host without a limit) keeps mimalloc's defaults. The constructor reads `/proc` and `/sys` with `open`/`read` into stack buffers: nothing may allocate before the options are set.
+- They apply only when the limit at process start is not generous and the user has not set the `MIMALLOC_*` variable; with no limit given, the default limit is a share of the container's memory, so a container under about 5 GiB gets them and a larger one (or a host without a limit) keeps mimalloc's defaults. The constructor reads `/proc` and `/sys` with `rustix` `open`/`read` (safe, no allocation for a `&CStr` path; ADR 0028) into stack buffers: nothing may allocate before the options are set.
 - With no limit or a generous one the constructor sets `GLIBC_OPTIONS` (glibc's mmap and trim thresholds) unless the user set the `MALLOC_*_` variable or a `glibc.malloc.` tunable; a tight limit keeps glibc's defaults. The test reads `mallinfo2` (glibc 2.33 and later; tests only).
 - A limit from a configuration file or a runtime `SET` is enforced by the memory pools and uses `release`, without the options.
 - Its `unsafe` blocks (the constructor, the mimalloc calls) each carry a `// SAFETY:` comment.
