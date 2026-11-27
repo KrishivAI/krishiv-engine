@@ -20,7 +20,7 @@ READ	EXPLAIN
 READ	EXPLAIN
 READ	EXPLAIN
 SESSION	SET spark.sql.crossJoin.enabled = false
-READ	SELECT u.user_id, p.product
+PARSE_ERROR	SELECT u.user_id, p.product
 SESSION	SET spark.sql.crossJoin.enabled = true
 SESSION	CREATE OR REPLACE TEMP VIEW tied_products(product, pscore)
 READ	SELECT u.user_id, COUNT(*) AS num_matches

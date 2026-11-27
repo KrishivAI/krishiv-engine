@@ -346,6 +346,30 @@ fn casts_take_a_type_or_a_ddl_string() {
     assert_eq!(text(&cast(Some(decimal), 0)), "CAST(a AS DECIMAL(10,2))");
 }
 
+/// A cast's type string reads a bare `TIMESTAMP` as `spark.sql.timestampType` names it (Spark
+/// Connect parses it with the session's `DataTypeAstBuilder`), at any depth; a typed cast and
+/// `TIMESTAMP_LTZ` keep their type.
+#[test]
+fn a_cast_type_string_follows_the_session_timestamp_type() {
+    let mut conf = TranslateConf::default();
+    conf.parser.timestamp_ntz = true;
+    let under = |ddl: &str, conf: &TranslateConf| {
+        translate_expression(&cast(Some(CastToType::TypeStr(ddl.into())), 0), conf)
+            .unwrap()
+            .to_string()
+    };
+    assert_eq!(under("timestamp", &conf), "CAST(a AS TIMESTAMP_NTZ)");
+    assert_eq!(
+        under("array<timestamp>", &conf),
+        "CAST(a AS ARRAY<TIMESTAMP_NTZ>)"
+    );
+    assert_eq!(under("timestamp_ltz", &conf), "CAST(a AS TIMESTAMP)");
+    assert_eq!(
+        under("timestamp", &TranslateConf::default()),
+        "CAST(a AS TIMESTAMP)"
+    );
+}
+
 #[test]
 fn cast_eval_modes() {
     let to = || Some(CastToType::TypeStr("int".into()));

@@ -182,6 +182,27 @@ const CASES: &[(&str, &str)] = &[
         "push_union_widened_branch",
         "SELECT * FROM (SELECT a FROM t UNION ALL SELECT c FROM t) x WHERE a > 1",
     ),
+    // `DropEmptyUnionInputs` (Spark's `PropagateEmptyRelation` union case): the first input
+    // dropped, so a projection gives the rest the union's ids.
+    (
+        "drop_empty_union_first_input",
+        "SELECT * FROM (SELECT a, 's' AS k FROM t UNION ALL SELECT a, 'u' AS k FROM u) x WHERE k = 'u' AND a > 1",
+    ),
+    // The kept input's column is not nullable, the union's is: the projection keeps it nullable.
+    (
+        "drop_empty_union_keeps_nullability",
+        "SELECT * FROM (SELECT a, 1 AS n, 's' AS k FROM t UNION ALL SELECT a, CAST(NULL AS INT), 'u' AS k FROM u) x WHERE k = 's'",
+    ),
+    // Every input empty: the union stays (the empty relation is another rule's).
+    (
+        "drop_empty_union_all_empty",
+        "SELECT * FROM (SELECT a, 's' AS k FROM t UNION ALL SELECT a, 'u' AS k FROM u) x WHERE k = 'z'",
+    ),
+    // A distinct `UNION` of three inputs: the two left stay a union under the distinct.
+    (
+        "drop_empty_union_distinct",
+        "SELECT * FROM (SELECT a, 's' AS k FROM t UNION SELECT a, 'u' AS k FROM u UNION SELECT a, 's' AS k FROM u) x WHERE k = 's'",
+    ),
     (
         "push_constant_through_aggregate",
         "SELECT * FROM (SELECT a, 'g' AS k, count(*) AS n FROM t GROUP BY a) x WHERE k = 'h'",

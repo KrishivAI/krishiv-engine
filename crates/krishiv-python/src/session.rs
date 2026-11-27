@@ -3,6 +3,7 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use krishiv_common::error::KrishivError;
 use krishiv_exec::SourceFilter;
 use krishiv_session::{PlannedRead, Session, SourcePlanner};
 use pyo3::prelude::*;
@@ -95,17 +96,72 @@ impl PySession {
     }
 }
 
+/// The session of a builder's options. Catalog declarations (`krishiv.catalog.<name>.*`,
+/// `spark.sql.catalog.<name>[.*]`, `krishiv.catalog.default`) are not configuration: they go to
+/// an embedded catalog registry of the session's runtime (design P3-T067 §2), as `krishiv
+/// server` passes its own, with the `iceberg-rest` factory when the module is built with it;
+/// `spark.sql.defaultCatalog` names the default there and stays configuration under its one
+/// spelling, as `krishiv server` keeps it. `spark.sql.catalog.spark_catalog[.*]` configures the
+/// session catalog (delta-spark's `DeltaCatalog`, Iceberg's `SparkSessionCatalog`), not a declared
+/// one, so it stays configuration, listed with the unknown-key warning as before. Without a
+/// declaration the session is built as before, on a private runtime; with one it runs on a runtime
+/// of its own, so it has a result cache of its own rather than the process-wide one (ADR 0037 §6).
+fn build_session(config: Vec<(String, String)>) -> Result<Session, KrishivError> {
+    use krishiv_session::catalog_decl::DeclMode;
+    use krishiv_session::catalog_registry::CatalogSetup;
+
+    let builder = Session::builder().source("krishiv-python");
+    if !config.iter().any(|(k, _)| declares(k)) {
+        return config
+            .into_iter()
+            .fold(builder, |b, (k, v)| b.config(k, v))
+            .build();
+    }
+    let mut setup = CatalogSetup::new(DeclMode::Embedded);
+    #[cfg(feature = "catalog-iceberg-rest")]
+    {
+        setup = setup.factory(std::sync::Arc::new(
+            krishiv_catalogs::declared::IcebergRestFactory,
+        ));
+    }
+    let mut runtime = krishiv_session::EngineRuntime::builder();
+    for (key, value) in config {
+        if declares(&key) {
+            setup = setup.setting(key, value);
+            continue;
+        }
+        if key.eq_ignore_ascii_case(SPARK_DEFAULT_CATALOG) {
+            setup = setup.setting(key, value.clone());
+            runtime = runtime.config(SPARK_DEFAULT_CATALOG, value);
+            continue;
+        }
+        runtime = runtime.config(key, value);
+    }
+    builder.runtime(runtime.catalogs(setup).build()?).build()
+}
+
+/// Spark's default-catalog key, the one spelling configuration keeps.
+const SPARK_DEFAULT_CATALOG: &str = "spark.sql.defaultCatalog";
+
+/// Whether `key` declares a catalog to the registry: a declaration key that does not configure
+/// the session catalog `spark_catalog`.
+fn declares(key: &str) -> bool {
+    const SESSION_CATALOG: &str = "spark.sql.catalog.spark_catalog";
+    let lower = key.to_ascii_lowercase();
+    let session_catalog = lower == SESSION_CATALOG
+        || lower
+            .strip_prefix(SESSION_CATALOG)
+            .is_some_and(|rest| rest.starts_with('.'));
+    !session_catalog && krishiv_session::catalog_decl::is_declaration_key(key)
+}
+
 #[pymethods]
 impl PySession {
     /// A session with the configuration `config` (`(key, value)` pairs).
     #[new]
     #[pyo3(signature = (config=None))]
     fn new(py: Python<'_>, config: Option<Vec<(String, String)>>) -> PyResult<Self> {
-        let mut builder = Session::builder().source("krishiv-python");
-        for (key, value) in config.unwrap_or_default() {
-            builder = builder.config(key, value);
-        }
-        let inner = builder.build().map_err(|e| to_py(py, &e))?;
+        let inner = build_session(config.unwrap_or_default()).map_err(|e| to_py(py, &e))?;
         let live = std::sync::Arc::new(inner.clone());
         crate::errors::register_session(&live);
         let session = Self {
@@ -185,7 +241,14 @@ impl PySession {
                 "unsupported Python UDF eval type {eval_type}"
             ))
         })?;
-        let return_type = krishiv_types::parse_data_type(return_type).map_err(|e| to_py(py, &e))?;
+        // A registered UDF's type string reads a bare `TIMESTAMP` as the session's timestamp type.
+        let opts = self.inner.parser_options();
+        let return_type = krishiv_types::parse_data_type_with(
+            return_type,
+            krishiv_types::TypeGrammar::new(opts.spark_4_3),
+            opts.timestamp_ntz,
+        )
+        .map_err(|e| to_py(py, &e))?;
         let runtime = self.udf_runtime(py)?;
         let entry = self
             .inner

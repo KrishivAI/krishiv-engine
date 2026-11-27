@@ -3,6 +3,7 @@
 //! names (Spark's `toPrettySQL`) and semantic keys.
 
 use super::SessionZone;
+use krishiv_kernels::cast::special_value;
 use krishiv_kernels::datetime::TimeZoneRules;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
