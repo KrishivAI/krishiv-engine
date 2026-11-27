@@ -1028,7 +1028,17 @@ impl Resolver<'_> {
                     })
                     .with_origin(origin);
                 }
-                return self.expr(&Arc::new(chain), cx);
+                let mut bound = self.expr(&Arc::new(chain), cx)?;
+                // Spark names the path by its last part (`col1.field` over a map is `field`,
+                // so a later item reads it as a lateral alias), spelled in full in other names.
+                let text = pretty(&bound.shown(), None);
+                bound.shown = Some(named_as(
+                    &parts[parts.len() - 1],
+                    text,
+                    &crate::ColumnRef::new(Vec::new()),
+                    origin,
+                ));
+                return Ok(bound);
             }
             let st = match &ty.data_type {
                 Some(DataType::Struct(st)) => st.clone(),
