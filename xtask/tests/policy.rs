@@ -1001,6 +1001,15 @@ fn release_publishing_is_manual_and_gated() {
                 && body.contains("path: ${{ runner.temp }}/digests/*"),
             "publish-docker.yml: {build} must keep and upload its digest under RUNNER_TEMP/digests"
         );
+        // The image reports the release commit, and the arm64 fat-LTO link needs swap (docker.yml's image-arm64).
+        assert!(
+            body.contains("build-args: KRISHIV_GIT_SHA=${{ github.sha }}\n"),
+            "publish-docker.yml: {build} passes KRISHIV_GIT_SHA"
+        );
+        assert!(
+            build != "build-arm64" || body.contains("sudo swapon /swap-link"),
+            "publish-docker.yml: build-arm64 provisions swap before the link"
+        );
         // Attestation permissions belong to the publish job only.
         assert!(
             !body.contains("id-token:") && !body.contains("attestations:"),

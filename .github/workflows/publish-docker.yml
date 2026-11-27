@@ -67,6 +67,7 @@ jobs:
           context: .
           file: docker/Dockerfile
           platforms: linux/amd64
+          build-args: KRISHIV_GIT_SHA=${{ github.sha }}
           sbom: true
           provenance: mode=max
           outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
@@ -106,6 +107,16 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ github.token }}
+      # The fat-LTO link of `krishiv` needs more memory than this runner has: without swap the
+      # runner is shut down during the link (same step as docker.yml's image-arm64).
+      - name: Add swap for the release link
+        run: |
+          sudo fallocate -l 8G /swap-link
+          sudo chmod 600 /swap-link
+          sudo mkswap /swap-link
+          sudo swapon /swap-link
+          free -h
+          df -h /
       - name: Build and push this platform by digest
         id: build
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
@@ -113,6 +124,7 @@ jobs:
           context: .
           file: docker/Dockerfile
           platforms: linux/arm64
+          build-args: KRISHIV_GIT_SHA=${{ github.sha }}
           sbom: true
           provenance: mode=max
           outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
