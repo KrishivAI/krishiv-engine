@@ -9,6 +9,9 @@ Runs a REAL Spark (never from memory) in a throw-away container and prints one J
 - `read`: `12:34:56.123456789` read from a CSV file into `TIME(6)` with the gate on, under the default grammar and
   under `timeFormat=HH:mm:ss.SSSSSSSSS`, cast to STRING. Spark 4.2 cuts the default grammar to microseconds and
   keeps every digit a pattern reads (`krishiv.io.text.timeNanos`).
+- `schema_of_json`: `schema_of_json(text, options)` over string values that read as times and timestamps, per
+  setting (`spark.sql.timeType.enabled`, `spark.sql.timestampType`, `spark.sql.legacy.timeParserPolicy`): the
+  `inferTimestamp` arm of `JsonInferSchema` (TIME only in 4.3.0, NTZ only by default type, the legacy fallback).
 
 Usage (from repo root), once per version:
 
@@ -18,7 +21,8 @@ Usage (from repo root), once per version:
         > "$out.tmp" && python3 -m json.tool "$out.tmp" > /dev/null && mv "$out.tmp" "$out"
 
 Checked by `krishiv-session/tests/time_file_reads.rs` (`text_time_follows_the_profile_runs`) and
-`krishiv-io/src/csv/time_tests.rs` (the 4.2 profile rows).
+`krishiv-io/src/csv/time_tests.rs` (the 4.2 profile rows); the `schema_of_json` section by
+`krishiv-session/tests/schema_of_json_time.rs`.
 """
 
 import json
@@ -27,6 +31,44 @@ import sys
 import tempfile
 
 from pyspark.sql import SparkSession
+
+SOJ_SETTINGS = [
+    ("default", {}),
+    ("time", {"spark.sql.timeType.enabled": "true"}),
+    ("ntz", {"spark.sql.timestampType": "TIMESTAMP_NTZ"}),
+    ("time ntz", {"spark.sql.timeType.enabled": "true", "spark.sql.timestampType": "TIMESTAMP_NTZ"}),
+    ("legacy", {"spark.sql.legacy.timeParserPolicy": "LEGACY"}),
+]
+
+ON = {"inferTimestamp": "true"}
+
+SOJ_CASES = [
+    ('{"t":"12:34:56"}', {}),
+    ('{"t":"12:34:56"}', ON),
+    ('{"t":"12:34:56.123456789"}', ON),
+    ('{"t":"12:34"}', ON),
+    ('{"t":"2024-01-02 03:04:05"}', {}),
+    ('{"t":"2024-01-02 03:04:05"}', ON),
+    ('{"t":"2024-01-02T03:04:05+01:00"}', ON),
+    ('{"t":"2024-01-02"}', ON),
+    ('{"t":"2024-1-2 3:4:5"}', ON),
+    ('{"t":"not a time"}', ON),
+    ('[{"t":"12:34:56"},{"t":"2024-01-02 03:04:05"}]', ON),
+    ('[{"t":"2024-01-02 03:04:05"},{"t":"2024-01-02T03:04:05Z"}]', ON),
+    ('[{"t":"2024-01-02 03:04:05"},{"t":"abc"}]', ON),
+    ('[{"t":"12:34:56"},{"t":null}]', ON),
+    ('{"t":"02/01/2024"}', {"inferTimestamp": "true", "timestampFormat": "dd/MM/yyyy"}),
+    ('{"t":"2024-01-02 03:04:05"}', {"inferTimestamp": "true", "timestampFormat": "dd/MM/yyyy"}),
+    ('{"t":"02/01/2024 03:04"}', {"inferTimestamp": "true", "timestampNTZFormat": "dd/MM/yyyy HH:mm"}),
+    ('{"t":"12.34"}', {"inferTimestamp": "true", "timeFormat": "HH.mm"}),
+    ('{"t":"12:34:56","n":1}', {"inferTimestamp": "true", "primitivesAsString": "true"}),
+    ('{"t":"1.5"}', {"inferTimestamp": "true", "prefersDecimal": "true"}),
+    ('{"t":"12:34:56"}', {"inferTimestamp": "true", "prefersDecimal": "true"}),
+]
+
+
+def lit(s: str) -> str:
+    return "'" + s.replace("\\", "\\\\").replace("'", "\\'") + "'"
 
 
 def main() -> None:
@@ -61,7 +103,28 @@ def main() -> None:
         df = spark.read.option("header", "true").options(**opts).schema("t TIME(6)").csv(nine)
         read[name] = df.selectExpr("CAST(t AS STRING) AS s").collect()[0].s
 
-    json.dump({"spark": spark.version, "infer": infer, "read": read}, sys.stdout, indent=2, sort_keys=True)
+    spark.conf.set("spark.sql.timeType.enabled", "false")
+    sojson = {}
+    for setting, confs in SOJ_SETTINGS:
+        for k, v in confs.items():
+            spark.conf.set(k, v)
+        rows = []
+        for text, opts in SOJ_CASES:
+            pairs = ", ".join(lit(x) for kv in opts.items() for x in kv)
+            arg = f", map({pairs})" if opts else ""
+            sql = f"SELECT schema_of_json({lit(text)}{arg}) AS s"
+            try:
+                got = spark.sql(sql).collect()[0].s
+            # The error class is the result.
+            except Exception as e:
+                got = "ERROR " + (getattr(e, "getErrorClass", lambda: None)() or type(e).__name__)
+            rows.append({"text": text, "options": opts, "schema": got})
+        sojson[setting] = rows
+        for k in confs:
+            spark.conf.unset(k)
+
+    out = {"spark": spark.version, "infer": infer, "read": read, "schema_of_json": sojson}
+    json.dump(out, sys.stdout, indent=2, sort_keys=True)
     sys.stdout.write("\n")
     spark.stop()
 

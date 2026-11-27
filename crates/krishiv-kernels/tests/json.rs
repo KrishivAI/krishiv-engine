@@ -571,6 +571,57 @@ fn infer_types_primitives_nesting_and_options() {
     assert!(matches!(got[0], Some(DataType::Struct(_))), "{got:?}");
 }
 
+/// `inferTimestamp` types strings as Spark's `JsonInferSchema` does (the
+/// session-level goldens are `krishiv-session/tests/schema_of_json_time.rs`):
+/// `TIME` only with the session's gate, NTZ only by default type, NTZ with
+/// `TIMESTAMP` merges to `TIMESTAMP`, `TIME` with anything else to `STRING`;
+/// an escaped string is read unescaped.
+#[test]
+fn infer_timestamp_types_strings_by_the_session() {
+    use arrow_schema::TimeUnit;
+    use krishiv_kernels::json::{InferSession, infer_json_with};
+    let mut opts = JsonOptions::new();
+    opts.infer_timestamp = true;
+    let one = |text: &str, session: &InferSession<'_>| {
+        infer_json_with(&strs(&[Some(text)]), &opts, session).unwrap()[0].clone()
+    };
+    let ts_type = DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into()));
+    let ts = Some(ts_type.clone());
+    let ntz = Some(DataType::Timestamp(TimeUnit::Microsecond, None));
+    let time = Some(DataType::Time64(TimeUnit::Nanosecond));
+    let off = InferSession::default();
+    let on = InferSession {
+        time_type: true,
+        ..InferSession::default()
+    };
+    let by_ntz = InferSession {
+        default_ntz: true,
+        ..InferSession::default()
+    };
+    assert_eq!(one("\"12:34:56\"", &off), ts);
+    assert_eq!(one("\"12:34:56\"", &on), time);
+    assert_eq!(one("\"12\\u003a34:56\"", &on), time);
+    assert_eq!(one("\"2024-01-02 03:04:05\"", &by_ntz), ntz);
+    assert_eq!(one("\"2024-01-02T03:04:05+01:00\"", &by_ntz), ts);
+    assert_eq!(
+        one(
+            "[\"2024-01-02 03:04:05\", \"2024-01-02T03:04:05Z\"]",
+            &by_ntz
+        ),
+        Some(DataType::List(
+            arrow_schema::Field::new("element", ts_type, true).into()
+        ))
+    );
+    let utf8 = Some(DataType::List(
+        arrow_schema::Field::new("element", DataType::Utf8View, true).into(),
+    ));
+    assert_eq!(one("[\"12:34:56\", \"2024-01-02 03:04:05\"]", &on), utf8);
+    assert_eq!(one("\"not a time\"", &on), Some(DataType::Utf8View));
+    // Without `inferTimestamp` a string stays a string.
+    let plain = infer_json_with(&strs(&[Some("\"12:34:56\"")]), &JsonOptions::new(), &on).unwrap();
+    assert_eq!(plain[0], Some(DataType::Utf8View));
+}
+
 #[test]
 fn options_parse_booleans_and_reject_bad_patterns() {
     use std::collections::BTreeMap;
