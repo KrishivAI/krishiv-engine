@@ -108,6 +108,27 @@ fn a_plan_over_sql_relations_shows_the_first_ones_text() {
     assert!(texts(&s, "SELECT id AS other%right-marker%").is_empty());
 }
 
+/// A plan whose subtrees are shared (each level a union of the level below with itself: 41 nodes,
+/// 2^40 paths) is searched for its `spark.sql` relation once per node, not once per path.
+#[cfg(feature = "unstable-ir")]
+#[test]
+fn a_plan_of_shared_subtrees_is_searched_once_per_node() {
+    use krishiv_plan::{LogicalPlan, Plan, PlanNode};
+    use std::sync::Arc;
+    let s = Session::new().unwrap();
+    let mut level = Arc::new(LogicalPlan::table(["absent_table"]));
+    for _ in 0..40 {
+        level = Arc::new(LogicalPlan::new(PlanNode::Union {
+            inputs: vec![Arc::clone(&level), Arc::clone(&level)],
+            by_name: false,
+            allow_missing_columns: false,
+        }));
+    }
+    let plan = Plan::try_new(level).unwrap();
+    // Building the frame is the search; the frame is never analyzed or run.
+    let _frame = s.from_plan(&plan);
+}
+
 /// A plan that also reads a frame the host holds (Spark Connect's cached relation, a checkpoint) is
 /// listed under its own `spark.sql` relation, not under a statement of the frame spliced in.
 #[cfg(feature = "unstable-ir")]

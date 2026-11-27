@@ -490,7 +490,7 @@ impl Session {
                     .into());
                 }
             }
-        } else if self.names_a_system_namespace(&parts) {
+        } else if self.names_a_system_namespace() {
             return Err(SchemaNotFound {
                 schema_name: quoted(&[vec!["system".to_owned()], parts].concat()),
             }
@@ -504,6 +504,9 @@ impl Session {
             // and `USE NAMESPACE a.b.c` name `spark_catalog`.`dummy`.`x` and
             // `spark_catalog`.`a`.`b`.`c`; `USE SCHEMA spark_catalog.default` names
             // `spark_catalog`.`spark_catalog`.`default`, though `USE spark_catalog.default` works.
+            // Under a declared catalog the name is a namespace of that catalog: refused, as the
+            // one-part form is.
+            self.refuse_declared_current()?;
             return Err(SchemaNotFound {
                 schema_name: quoted(&[vec![crate::catalog::CATALOG.to_owned()], parts].concat()),
             }

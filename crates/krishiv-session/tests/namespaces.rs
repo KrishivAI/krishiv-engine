@@ -539,6 +539,27 @@ fn a_missing_schema_is_named_with_its_catalog() {
             block_on(c.get_database("`a.b`")).unwrap_err(),
             "`spark_catalog`.`a.b`",
         ),
+        // `getDatabase` is catalog-first at every length.
+        (
+            block_on(c.get_database("spark_catalog.a.b")).unwrap_err(),
+            "`spark_catalog`.`a`.`b`",
+        ),
+        (
+            block_on(c.get_database("SPARK_CATALOG.a.b")).unwrap_err(),
+            "`spark_catalog`.`a`.`b`",
+        ),
+        (
+            block_on(c.get_database("nocat.a.b")).unwrap_err(),
+            "`spark_catalog`.`nocat`.`a`.`b`",
+        ),
+        (
+            block_on(c.get_database("spark_catalog.`a.b`")).unwrap_err(),
+            "`spark_catalog`.`a.b`",
+        ),
+        (
+            block_on(c.get_database("spark_catalog.dummy")).unwrap_err(),
+            "`spark_catalog`.`dummy`",
+        ),
         (
             block_on(c.set_current_database("a.b")).unwrap_err(),
             "`spark_catalog`.`a`.`b`",

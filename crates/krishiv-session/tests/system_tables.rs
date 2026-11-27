@@ -1353,7 +1353,7 @@ fn a_view_over_a_system_table_and_global_temp_views_work_under_system() {
 }
 
 #[test]
-fn show_databases_lists_nothing_under_system_and_use_namespace_can_name_the_session_catalog() {
+fn show_databases_lists_nothing_under_system_and_use_reaches_the_session_catalog() {
     let s = Session::new().unwrap();
     run(&s, "CREATE DATABASE other_db").unwrap();
     run(&s, "USE system").unwrap();
@@ -1364,6 +1364,25 @@ fn show_databases_lists_nothing_under_system_and_use_namespace_can_name_the_sess
             .unwrap_err()
             .contains("SCHEMA_NOT_FOUND")
     );
+    // With a keyword no part is a catalog: every part is a namespace of `system`, which has none.
+    for (sql, name) in [
+        (
+            "USE NAMESPACE spark_catalog.other_db",
+            "`system`.`spark_catalog`.`other_db`",
+        ),
+        (
+            "USE SCHEMA spark_catalog.other_db",
+            "`system`.`spark_catalog`.`other_db`",
+        ),
+        ("USE DATABASE a.b", "`system`.`a`.`b`"),
+    ] {
+        let e = run(&s, sql).unwrap_err();
+        assert!(
+            e.contains("SCHEMA_NOT_FOUND") && e.contains(name),
+            "{sql}: {e}"
+        );
+    }
+    assert_eq!(column_of(&s, "SELECT current_catalog()", 0), ["system"]);
     run(&s, "USE spark_catalog.other_db").unwrap();
     assert_eq!(
         column_of(&s, "SELECT current_catalog()", 0),

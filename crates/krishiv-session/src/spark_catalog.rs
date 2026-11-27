@@ -445,24 +445,30 @@ impl Catalog<'_> {
         }
     }
 
-    /// `SCHEMA_NOT_FOUND` for the namespace `name`. A name of several parts keeps every part
-    /// (Spark 4.3.0: `getDatabase("a.b")` names `` `spark_catalog`.`a`.`b` ``, and
-    /// `` getDatabase("`a.b`") `` names `` `spark_catalog`.`a.b` ``).
+    /// `SCHEMA_NOT_FOUND` for the namespace `name`. A leading `spark_catalog` of a name of two or
+    /// more parts is the catalog, at every length; every other part is kept (Spark 4.3.0:
+    /// `getDatabase("a.b")` names `` `spark_catalog`.`a`.`b` ``, `getDatabase("spark_catalog.a.b")`
+    /// the same, `getDatabase("nocat.a.b")` `` `spark_catalog`.`nocat`.`a`.`b` `` and
+    /// `` getDatabase("`a.b`") `` `` `spark_catalog`.`a.b` ``).
     fn database_not_found(name: &str) -> KrishivError {
         let p = parts(name);
-        match p.as_slice() {
-            [_] => {}
-            [cat, _] if cat.eq_ignore_ascii_case(crate::catalog::CATALOG) => {}
-            _ => {
-                let mut all = vec![quote(crate::catalog::CATALOG)];
-                all.extend(p.iter().map(|part| quote(part)));
-                return krishiv_common::error::SchemaNotFound {
-                    schema_name: all.join("."),
-                }
-                .into();
+        let namespace = match p.as_slice() {
+            [cat, rest @ ..]
+                if !rest.is_empty() && cat.eq_ignore_ascii_case(crate::catalog::CATALOG) =>
+            {
+                rest
             }
+            all => all,
+        };
+        if let [one] = namespace {
+            return crate::catalog::schema_not_found(one);
         }
-        crate::catalog::schema_not_found(&Self::bare_database(name))
+        let mut all = vec![quote(crate::catalog::CATALOG)];
+        all.extend(namespace.iter().map(|part| quote(part)));
+        krishiv_common::error::SchemaNotFound {
+            schema_name: all.join("."),
+        }
+        .into()
     }
 
     fn lookup_database(&self, name: &str) -> Result<Database, KrishivError> {

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Frames over a caller's plan (`from_plan` and its variants): the statement such a frame lists its runs under.
 
+use std::collections::HashSet;
+
 use super::*;
 
 impl Session {
@@ -23,19 +25,27 @@ impl Session {
     /// The statement a frame of `root` lists its runs under (see [`Self::plan_frame`]): the text
     /// and class of the first `spark.sql` relation in `root`, in this session's environment.
     pub(super) fn plan_statement(&self, root: &LogicalPlan) -> Option<QueryEnv> {
-        fn first_sql(plan: &LogicalPlan) -> Option<&str> {
+        /// `seen` holds the nodes already searched: a plan is a DAG, and a subtree shared by
+        /// many parents is searched once (a node searched earlier held no such relation).
+        fn first_sql<'a>(
+            plan: &'a LogicalPlan,
+            seen: &mut HashSet<*const LogicalPlan>,
+        ) -> Option<&'a str> {
+            if !seen.insert(std::ptr::from_ref(plan)) {
+                return None;
+            }
             if let PlanNode::Sql { query, .. } = &plan.node {
                 return Some(query);
             }
             let mut found = None;
             plan.for_each_child(&mut |child| {
                 if found.is_none() {
-                    found = first_sql(child);
+                    found = first_sql(child, seen);
                 }
             });
             found
         }
-        let query = first_sql(root)?;
+        let query = first_sql(root, &mut HashSet::new())?;
         let mut env = self.query_env();
         let redacted = krishiv_sql::redact_sql(query);
         let parsed = krishiv_sql::parse_statement(query, &env.parser).ok()?;
