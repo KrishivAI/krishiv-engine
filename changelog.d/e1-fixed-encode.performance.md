@@ -1,2 +1,4 @@
 Group-by and COUNT(DISTINCT) over one or two fixed-width keys without NULLs encode their rows in one pass: ClickBench
 q09 uses 0.94x the CPU cycles and 0.83x the instructions, q10 and q16 0.86x and 0.89x the instructions (scale factor 10).
+A high-cardinality group-by that stops looking keys up (append-only partial tables) walks its fixed-width key rows
+without per-row bounds checks: a further 0.93x the instructions on ClickBench q16 and 0.88x on q09.

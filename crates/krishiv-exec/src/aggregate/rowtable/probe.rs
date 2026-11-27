@@ -75,12 +75,12 @@ impl RowTable {
     }
 
     /// [`append_rows`](Self::append_rows) for fixed-width rows of stride `S`
-    /// (no views; 24 and 32 are one or two keys of up to 8 bytes, as the
-    /// aggregate's key layouts are nullable): the rows walked as `[u8; S]` and a run compared as one
-    /// array, with no per-row bounds check or word loop (study 53, lever E2:
-    /// in ClickBench q16 the generic loop's row slicing and word compare
-    /// were a third of the partial sink's `apply`). Rows that do not cover
-    /// every hash take the general loop.
+    /// (no views; 24 and 32 hold one or two keys of up to 8 bytes, as the
+    /// aggregate's key layouts are nullable): the rows walked as `[u8; S]`
+    /// and a run compared as one array, with no per-row bounds check or
+    /// word loop (study 53, lever E2: in ClickBench q16 the generic loop's
+    /// row slicing and word compare were a third of the partial sink's
+    /// `apply`). Rows that do not cover every hash take the general loop.
     fn append_fixed<const S: usize>(
         &mut self,
         keys: &EncodedKeys,
