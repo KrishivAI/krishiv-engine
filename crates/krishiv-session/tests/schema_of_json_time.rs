@@ -14,11 +14,6 @@ use futures::executor::block_on;
 use krishiv_plan::analyzer::SparkProfile;
 use krishiv_session::Session;
 
-/// The cases not matched yet: Spark reads a string as a decimal first under
-/// `prefersDecimal` (`{"t":"1.5"}` is `DECIMAL(2,1)`), Krishiv keeps `STRING`.
-/// Each must still differ, so a fix removes it from here.
-const KNOWN_GAPS: &[&str] = &[r#"{"t":"1.5"}"#];
-
 /// The settings of the run, as `SET` statements.
 fn settings(name: &str) -> &'static [&'static str] {
     match name {
@@ -82,16 +77,7 @@ fn schema_of_json_infers_times_as_spark_runs() {
                 })
                 .map(|b| first_text(&b));
                 let got = got.unwrap_or_else(|e| panic!("{version} {setting} {sql}: {e}"));
-                let gap = KNOWN_GAPS.contains(&text) && opts.contains_key("prefersDecimal");
-                if gap {
-                    assert_ne!(
-                        got.as_deref(),
-                        Some(want),
-                        "{version} {setting} {sql}: a known gap now matches; remove it from KNOWN_GAPS"
-                    );
-                } else {
-                    assert_eq!(got.as_deref(), Some(want), "{version} {setting} {sql}");
-                }
+                assert_eq!(got.as_deref(), Some(want), "{version} {setting} {sql}");
             }
         }
     }

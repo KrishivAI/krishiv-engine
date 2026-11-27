@@ -4,14 +4,16 @@
 //!
 //! Integral numbers infer `BIGINT` (past `i64` a `DECIMAL(p, 0)`, past
 //! precision 38 a `DOUBLE`), floating-point numbers `DOUBLE` (or
-//! `DECIMAL(p, s)` with `prefersDecimal`), strings `STRING` (other
-//! primitives too with `primitivesAsString`), an empty string JSON `null`, booleans
+//! `DECIMAL(max(p, s), s)` with `prefersDecimal`, where a negative scale
+//! fails with `NEGATIVE_SCALE_DISALLOWED`), strings `STRING`
+//! (`primitivesAsString` makes numbers and booleans `STRING` too), an empty string JSON `null`, booleans
 //! `BOOLEAN`, JSON `null` `VOID`, arrays the merge of their elements
 //! (always nullable) and objects structs of their fields (all nullable,
-//! sorted by name as Spark's `JsonInferSchema` sorts them). Merging absorbs
-//! `NULL`, widens integral pairs to `BIGINT`, mixes floating-point in as
-//! `DOUBLE` (or the wider decimal with `prefersDecimal`) and falls back to
-//! `STRING` for anything incompatible. An empty array infers `ARRAY<VOID>`
+//! sorted by name as Spark's `JsonInferSchema` sorts them). Merging is
+//! Spark's `compatibleType`: it absorbs `NULL`, `BIGINT` with `DOUBLE` is
+//! `DOUBLE`, a decimal with `DOUBLE` is `DOUBLE`, two decimals (a `BIGINT`
+//! as `DECIMAL(20, 0)`) the wider range plus the wider scale (`DOUBLE` past
+//! 38 digits, [`super::decimal`]), and anything incompatible `STRING`. An empty array infers `ARRAY<VOID>`
 //! and empty input `VOID`. Nesting past 1000 (Jackson's default
 //! `MAX_JSON_DEPTH`) infers `NULL` (no DDL string could name it back);
 //! malformed text fails the query with `KRISHIV_MALFORMED_JSON`, as Spark
@@ -19,21 +21,23 @@
 //! returning `NULL`.
 //!
 //! A string is typed by its text as Spark's `VALUE_STRING` arm does: under
-//! `inferTimestamp` a `TIME(6)`
+//! `prefersDecimal` a `DECIMAL(p, s)` when it reads as a decimal (commas
+//! dropped, [`super::decimal::string_decimal`]; this arm also applies under
+//! `primitivesAsString`), then under `inferTimestamp` a `TIME(6)`
 //! (only with [`InferSession::time_type`], Spark 4.3.0), a `TIMESTAMP_NTZ`
 //! (only when the session's default timestamp type is NTZ), a `TIMESTAMP`,
 //! and under `timeParserPolicy=LEGACY` a `TIMESTAMP` for any zone-less
 //! timestamp text (SPARK-46769). `TIMESTAMP_NTZ` and `TIMESTAMP` merge to
 //! `TIMESTAMP`; a `TIME` and any other type to `STRING`. Goldens: the
-//! `schema_of_json` section of `tests/fixtures/spark-{4.2.1,4.3.0}/time-text-profiles.json`.
-//! Not implemented: Spark's first try, a string read as a decimal under
-//! `prefersDecimal` (it stays `STRING`).
+//! `schema_of_json` section of `tests/fixtures/spark-{4.2.1,4.3.0}/time-text-profiles.json`
+//! and `tests/fixtures/spark-{4.2.1,4.3.0}/json-prefers-decimal.json`.
 
 use arrow_array::Array;
 use arrow_schema::DataType as ArrowType;
 use krishiv_common::error::{KrishivError, KrishivMalformedJson};
 
 use super::JsonOptions;
+use super::decimal::{LONG_DECIMAL, NumberDecimal, merge_decimals, number_decimal, string_decimal};
 use super::parse::{Error as ParseError, Lexer, RawKey, RawStr, Token};
 use crate::cast::datetime::{FixedOffset, TimeZoneRules};
 
@@ -102,25 +106,41 @@ pub fn infer_json_with(
         let mut lexer = Lexer::new(text, opts.lexer());
         match infer_top(&mut lexer, &cx) {
             Ok(ty) => out.push(Some(ty)),
-            Err(ParseError::TooDeep) => out.push(None),
-            Err(ParseError::Malformed) => {
+            Err(WalkError::Parse(ParseError::TooDeep)) => out.push(None),
+            Err(WalkError::Parse(ParseError::Malformed)) => {
                 return Err(KrishivMalformedJson {
                     json: text.to_owned(),
                 }
                 .into());
             }
+            Err(WalkError::Type(e)) => return Err(e),
         }
     }
     Ok(out)
 }
 
+/// Why a walk stops: the text does not parse, or a value has no Spark type.
+#[derive(Debug)]
+enum WalkError {
+    /// Malformed or too deep.
+    Parse(ParseError),
+    /// A type Spark refuses (`NEGATIVE_SCALE_DISALLOWED`).
+    Type(KrishivError),
+}
+
+impl From<ParseError> for WalkError {
+    fn from(e: ParseError) -> Self {
+        Self::Parse(e)
+    }
+}
+
 /// The inferred type of one text: empty input infers `VOID`.
-fn infer_top(lexer: &mut Lexer<'_>, cx: &Cx<'_>) -> Result<ArrowType, ParseError> {
+fn infer_top(lexer: &mut Lexer<'_>, cx: &Cx<'_>) -> Result<ArrowType, WalkError> {
     lexer.skip_trivia()?;
     if lexer.peek()?.is_none() {
         return Ok(ArrowType::Null);
     }
-    infer_value(lexer, 0, cx).map(|inferred| inferred.finish(cx.opts))
+    infer_value(lexer, 0, cx).map(Inferred::finish)
 }
 
 /// What a walk reads: the options and the session settings.
@@ -136,13 +156,12 @@ enum Inferred {
     Null,
     /// A boolean.
     Bool,
-    /// An integral number.
-    Int,
-    /// An integral number past `i64`: its digit precision (past 38 a
-    /// `DOUBLE` finishes it instead of `DECIMAL(p, 0)`).
-    BigInt(u32),
-    /// A floating-point number as written (for `prefersDecimal`).
-    Float(String),
+    /// `BIGINT`.
+    Long,
+    /// `DOUBLE`.
+    Double,
+    /// `DECIMAL(p, s)`.
+    Decimal(u8, i8),
     /// A string.
     Str,
     /// A string that parses as a time of day (`TIME(6)`).
@@ -163,28 +182,17 @@ impl Inferred {
         match (&mut *self, other) {
             (Self::Null, o) => *self = o,
             (_, Self::Null)
-            | (Self::Int | Self::Float(_) | Self::BigInt(_), Self::Int)
-            // A floating-point number absorbs an out-of-range integer, as
-            // Spark's `compatibleType` mixes either into `DOUBLE` (or the
-            // wider decimal with `prefersDecimal`).
-            | (Self::Float(_), Self::BigInt(_))
-            // `TIMESTAMP` absorbs a `TIMESTAMP_NTZ` (`compatibleType`).
+            // `DOUBLE` absorbs `BIGINT` and any decimal; `TIMESTAMP`
+            // absorbs a `TIMESTAMP_NTZ` (`compatibleType`).
+            | (Self::Double, Self::Long | Self::Decimal(..))
             | (Self::Timestamp, Self::Ntz) => {}
-            (Self::Int | Self::BigInt(_), Self::BigInt(p)) => {
-                let wider = match &*self {
-                    Self::BigInt(q) => (*q).max(p),
-                    _ => p,
-                };
-                *self = Self::BigInt(wider);
+            (Self::Long | Self::Decimal(..), Self::Double) => *self = Self::Double,
+            (Self::Long, Self::Decimal(p, s)) => *self = decimal_or_double(LONG_DECIMAL, (p, s)),
+            (Self::Decimal(p, s), Self::Long) => {
+                *self = decimal_or_double((*p, *s), LONG_DECIMAL);
             }
-            (Self::Int | Self::BigInt(_), Self::Float(raw)) => {
-                *self = Self::Float(raw);
-            }
-            (Self::Float(a), Self::Float(b)) => {
-                // The wider decimal wins with `prefersDecimal`.
-                if decimal_shape(&b) > decimal_shape(a) {
-                    *a = b;
-                }
+            (Self::Decimal(p, s), Self::Decimal(q, r)) => {
+                *self = decimal_or_double((*p, *s), (q, r));
             }
             // Spark's `compatibleType`: either timestamp with the other is
             // `TIMESTAMP` (the reverse pair is absorbed above).
@@ -220,20 +228,13 @@ impl Inferred {
     }
 
     /// Finishes the Arrow type.
-    fn finish(self, opts: &JsonOptions) -> ArrowType {
-        // `primitivesAsString` reads every primitive as a string but keeps
-        // the structure; `NULL` stays `VOID` either way.
-        let prim = opts.primitives_as_string;
+    fn finish(self) -> ArrowType {
         match self {
             Self::Null => ArrowType::Null,
-            Self::Bool | Self::Int | Self::BigInt(_) | Self::Float(_) | Self::Str if prim => {
-                ArrowType::Utf8View
-            }
             Self::Bool => ArrowType::Boolean,
-            Self::Int => ArrowType::Int64,
-            Self::BigInt(p) if p > 38 => ArrowType::Float64,
-            Self::BigInt(p) => ArrowType::Decimal128(u8::try_from(p).unwrap_or(u8::MAX), 0),
-            Self::Float(raw) => decimal_or_double(&raw, opts),
+            Self::Long => ArrowType::Int64,
+            Self::Double => ArrowType::Float64,
+            Self::Decimal(p, s) => ArrowType::Decimal128(p, s),
             Self::Str => ArrowType::Utf8View,
             Self::Time => ArrowType::Time64(arrow_schema::TimeUnit::Nanosecond),
             Self::Ntz => ArrowType::Timestamp(arrow_schema::TimeUnit::Microsecond, None),
@@ -241,13 +242,10 @@ impl Inferred {
                 ArrowType::Timestamp(arrow_schema::TimeUnit::Microsecond, Some("UTC".into()))
             }
             Self::Array(None) => list_of(ArrowType::Null),
-            Self::Array(Some(e)) => list_of(e.finish(opts)),
-            Self::Object(fields) => struct_of(
-                fields
-                    .into_iter()
-                    .map(|(n, t)| (n, t.finish(opts)))
-                    .collect(),
-            ),
+            Self::Array(Some(e)) => list_of(e.finish()),
+            Self::Object(fields) => {
+                struct_of(fields.into_iter().map(|(n, t)| (n, t.finish())).collect())
+            }
         }
     }
 }
@@ -258,9 +256,8 @@ fn same_shape(a: &Inferred, b: &Inferred) -> bool {
     matches!(
         (a, b),
         (Inferred::Bool, Inferred::Bool)
-            | (Inferred::Int, Inferred::Int)
-            | (Inferred::BigInt(_), Inferred::BigInt(_))
-            | (Inferred::Float(_), Inferred::Float(_))
+            | (Inferred::Long, Inferred::Long)
+            | (Inferred::Double, Inferred::Double)
             | (Inferred::Str, Inferred::Str)
             | (Inferred::Time, Inferred::Time)
             | (Inferred::Ntz, Inferred::Ntz)
@@ -286,114 +283,41 @@ fn struct_of(fields: Vec<(String, ArrowType)>) -> ArrowType {
     )
 }
 
-/// A floating-point literal as `DECIMAL(p, s)` (`prefersDecimal`) or
-/// `DOUBLE`. Over-wide decimals fall back to `DOUBLE`.
-fn decimal_or_double(raw: &str, opts: &JsonOptions) -> ArrowType {
-    if super::parse::is_non_numeric_number(raw) {
-        // `NaN` and the infinities have no decimal form.
-        return ArrowType::Float64;
-    }
-    if !opts.prefers_decimal || raw.is_empty() {
-        return ArrowType::Float64;
-    }
-    let (p, s) = decimal_shape(raw);
-    let s = if s < 0 {
-        // A negative scale (`1e3`) widens the precision instead.
-        let widen = u32::try_from(s.checked_neg().unwrap_or(0)).unwrap_or(0);
-        match p.checked_add(widen) {
-            Some(p) => {
-                return decimal_or_double_sized(p, 0);
-            }
-            None => return ArrowType::Float64,
-        }
-    } else {
-        u32::try_from(s).unwrap_or(u32::MAX)
-    };
-    // Spark returns `DecimalType(max(precision, scale), scale)`.
-    decimal_or_double_sized(p.max(s), s)
+/// Two decimals merged ([`merge_decimals`]), `DOUBLE` past 38 digits.
+fn decimal_or_double(a: (u8, i8), b: (u8, i8)) -> Inferred {
+    merge_decimals(a, b).map_or(Inferred::Double, |(p, s)| Inferred::Decimal(p, s))
 }
 
-/// A decimal of precision `p` and scale `s`, or `DOUBLE` past the decimal
-/// bounds.
-fn decimal_or_double_sized(p: u32, s: u32) -> ArrowType {
-    if p == 0 || p > 38 || s > 38 {
-        ArrowType::Float64
-    } else {
-        ArrowType::Decimal128(
-            u8::try_from(p).unwrap_or(u8::MAX),
-            i8::try_from(s).unwrap_or(i8::MAX),
-        )
+/// A JSON number's inferred type: `BIGINT` in range, else (an integral past
+/// `Long`, or a floating-point number under `prefersDecimal`) the decimal
+/// of [`number_decimal`]; other floating-point numbers are `DOUBLE`.
+fn infer_number(raw: &str, floating: bool, opts: &JsonOptions) -> Result<Inferred, WalkError> {
+    if !floating && raw.parse::<i64>().is_ok() {
+        return Ok(Inferred::Long);
     }
-}
-
-/// The `(precision, scale)` of a floating-point literal: the significant
-/// digits and the fraction digits minus the exponent. Leading zeros never
-/// count toward the precision, as Spark's `BigDecimal.precision` ignores
-/// them (`0.01` has precision 1); a zero of any shape has precision 1.
-fn decimal_shape(raw: &str) -> (u32, i32) {
-    let bytes = raw.as_bytes();
-    let digits = if bytes.first() == Some(&b'-') {
-        bytes.get(1..).unwrap_or_default()
-    } else {
-        bytes
-    };
-    let (mantissa, exp) = match digits.iter().position(|&b| b == b'e' || b == b'E') {
-        None => (digits, 0_i32),
-        Some(e) => {
-            let magnitude: i32 =
-                core::str::from_utf8(digits.get(e.saturating_add(1)..).unwrap_or_default())
-                    .ok()
-                    .and_then(|s| s.parse().ok())
-                    .unwrap_or(0);
-            (digits.get(..e).unwrap_or_default(), magnitude)
-        }
-    };
-    let (int, frac) = match mantissa.iter().position(|&b| b == b'.') {
-        None => (mantissa, bytes.get(..0).unwrap_or_default()),
-        Some(dot) => (
-            mantissa.get(..dot).unwrap_or_default(),
-            mantissa.get(dot.saturating_add(1)..).unwrap_or_default(),
-        ),
-    };
-    let significant = int
-        .iter()
-        .chain(frac.iter())
-        .filter(|&&b| b != b'.')
-        .skip_while(|&&b| b == b'0')
-        .count();
-    // All zeros: precision 1, like `BigDecimal("0")`.
-    let p = u32::try_from(significant.max(1)).unwrap_or(u32::MAX);
-    let s = i32::try_from(frac.len())
-        .unwrap_or(i32::MAX)
-        .checked_sub(exp)
-        .unwrap_or(i32::MIN);
-    (p, s)
-}
-
-/// One integral literal's inferred type: `BIGINT` in range, else a
-/// `DECIMAL(p, 0)` when the digit precision fits and `DOUBLE` past 38, as
-/// Spark infers for a number past `Long`.
-fn infer_int(raw: &str) -> Inferred {
-    if raw.parse::<i64>().is_ok() {
-        return Inferred::Int;
+    if floating && (!opts.prefers_decimal || super::parse::is_non_numeric_number(raw)) {
+        return Ok(Inferred::Double);
     }
-    let digits = raw.strip_prefix('-').unwrap_or(raw);
-    let precision =
-        u32::try_from(digits.bytes().skip_while(|b| *b == b'0').count().max(1)).unwrap_or(u32::MAX);
-    Inferred::BigInt(precision)
+    match number_decimal(raw).map_err(WalkError::Type)? {
+        NumberDecimal::Decimal(p, s) => Ok(Inferred::Decimal(p, s)),
+        NumberDecimal::Double => Ok(Inferred::Double),
+    }
 }
 
 /// One JSON value's inferred type, nested `depth` deep.
-fn infer_value(lexer: &mut Lexer<'_>, depth: usize, cx: &Cx<'_>) -> Result<Inferred, ParseError> {
+fn infer_value(lexer: &mut Lexer<'_>, depth: usize, cx: &Cx<'_>) -> Result<Inferred, WalkError> {
     if depth > super::parse::MAX_JSON_DEPTH {
-        return Err(ParseError::TooDeep);
+        return Err(ParseError::TooDeep.into());
     }
     let deeper = depth.saturating_add(1);
+    // `primitivesAsString` types numbers and booleans as strings (Spark's
+    // guards before its number and boolean arms; strings keep their arm).
+    let prim = cx.opts.primitives_as_string;
     match lexer.next()? {
         Some(Token::Null) => Ok(Inferred::Null),
+        Some(Token::Bool(_) | Token::Num(..)) if prim => Ok(Inferred::Str),
         Some(Token::Bool(_)) => Ok(Inferred::Bool),
-        Some(Token::Num(raw, false)) => Ok(infer_int(raw)),
-        Some(Token::Num(raw, true)) => Ok(Inferred::Float(raw.to_owned())),
+        Some(Token::Num(raw, floating)) => infer_number(raw, floating, cx.opts),
         Some(Token::Str(raw)) => {
             // An empty string infers as JSON `null`, as Spark's
             // `JsonInferSchema` maps it to `NullType`.
@@ -405,7 +329,7 @@ fn infer_value(lexer: &mut Lexer<'_>, depth: usize, cx: &Cx<'_>) -> Result<Infer
         }
         Some(Token::OpenBracket) => infer_array(lexer, deeper, cx),
         Some(Token::OpenBrace) => infer_object(lexer, deeper, cx),
-        None | Some(_) => Err(ParseError::Malformed),
+        None | Some(_) => Err(ParseError::Malformed.into()),
     }
 }
 
@@ -413,7 +337,7 @@ fn infer_value(lexer: &mut Lexer<'_>, depth: usize, cx: &Cx<'_>) -> Result<Infer
 /// [`infer_value`]'s frame stays small: the walk recurses up to `MAX_JSON_DEPTH` (1000) deep and
 /// must fit the 2 MiB stack of a test or worker thread, also in sanitizer and debug builds.
 #[inline(never)]
-fn infer_array(lexer: &mut Lexer<'_>, deeper: usize, cx: &Cx<'_>) -> Result<Inferred, ParseError> {
+fn infer_array(lexer: &mut Lexer<'_>, deeper: usize, cx: &Cx<'_>) -> Result<Inferred, WalkError> {
     let mut merged: Option<Inferred> = None;
     if lexer.eat(Token::CloseBracket)? {
         return Ok(Inferred::Array(None));
@@ -431,14 +355,14 @@ fn infer_array(lexer: &mut Lexer<'_>, deeper: usize, cx: &Cx<'_>) -> Result<Infe
         if lexer.eat(Token::CloseBracket)? {
             break;
         }
-        return Err(ParseError::Malformed);
+        return Err(ParseError::Malformed.into());
     }
     Ok(Inferred::Array(merged.map(Box::new)))
 }
 
 /// The fields of a JSON object after its `{`, nested `deeper` deep (see [`infer_array`]).
 #[inline(never)]
-fn infer_object(lexer: &mut Lexer<'_>, deeper: usize, cx: &Cx<'_>) -> Result<Inferred, ParseError> {
+fn infer_object(lexer: &mut Lexer<'_>, deeper: usize, cx: &Cx<'_>) -> Result<Inferred, WalkError> {
     let mut fields = Vec::new();
     if lexer.eat_byte(b'}')? {
         return Ok(Inferred::Object(fields));
@@ -450,7 +374,7 @@ fn infer_object(lexer: &mut Lexer<'_>, deeper: usize, cx: &Cx<'_>) -> Result<Inf
         };
         lexer.skip_trivia()?;
         if !lexer.eat(Token::Colon)? {
-            return Err(ParseError::Malformed);
+            return Err(ParseError::Malformed.into());
         }
         let ty = infer_value(lexer, deeper, cx)?;
         match fields.iter_mut().find(|(n, _)| *n == name) {
@@ -464,7 +388,7 @@ fn infer_object(lexer: &mut Lexer<'_>, deeper: usize, cx: &Cx<'_>) -> Result<Inf
         if lexer.eat(Token::CloseBrace)? {
             break;
         }
-        return Err(ParseError::Malformed);
+        return Err(ParseError::Malformed.into());
     }
     // Spark sorts the inferred fields by name (`JsonInferSchema`,
     // `structFieldComparator`); other code relies on the order.
@@ -480,14 +404,21 @@ fn infer_object(lexer: &mut Lexer<'_>, deeper: usize, cx: &Cx<'_>) -> Result<Inf
 #[inline(never)]
 fn infer_string(lexer: &Lexer<'_>, raw: RawStr<'_>, cx: &Cx<'_>) -> Inferred {
     let opts = cx.opts;
-    // Spark tries a decimal first under `prefersDecimal`; that arm is not
-    // implemented (a string stays `STRING` there; queued).
-    if !opts.infer_timestamp {
+    if !opts.prefers_decimal && !opts.infer_timestamp {
         return Inferred::Str;
     }
     let Some(text) = lexer.unescape(raw) else {
         return Inferred::Str;
     };
+    // `prefersDecimal` tries a decimal first.
+    if opts.prefers_decimal
+        && let Some((p, s)) = string_decimal(&text)
+    {
+        return Inferred::Decimal(p, s);
+    }
+    if !opts.infer_timestamp {
+        return Inferred::Str;
+    }
     let session = cx.session;
     // `allCatch opt timeFormatter.parse`: a failure of any kind is no time.
     if session.time_type && matches!(parse_time(&text, opts), Ok(Some(_))) {
