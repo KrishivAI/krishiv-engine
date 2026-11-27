@@ -287,3 +287,30 @@ fn time_format_keeps_nanoseconds_and_optional_sections() {
         );
     }
 }
+
+/// A read or write option named as its own session conf (the `TIME` gate,
+/// `krishiv.io.text.timeNanos`, `krishiv.io.text.inferTime`) is dropped, in any
+/// case, so only the session value decides (Spark reads them from `SQLConf`);
+/// other options stay, and a map without such a name is borrowed as is.
+#[test]
+fn options_named_as_their_session_conf_are_dropped() {
+    use krishiv_common::secret::OptionValue;
+    let schema = super::option_schema();
+    let opt = |k: &str, v: &str| (k.to_owned(), OptionValue::from_user(k, v));
+    let user: std::collections::BTreeMap<_, _> = [
+        opt("Spark.SQL.timeType.Enabled", "true"),
+        opt("krishiv.io.text.timeNanos", "false"),
+        opt("krishiv.io.text.inferTime", "false"),
+        opt("sep", ";"),
+    ]
+    .into_iter()
+    .collect();
+    let kept = schema.without_session_confs(&user);
+    assert!(matches!(kept, std::borrow::Cow::Owned(_)));
+    assert_eq!(kept.keys().collect::<Vec<_>>(), ["sep"]);
+    let plain: std::collections::BTreeMap<_, _> = [opt("sep", ";")].into_iter().collect();
+    assert!(matches!(
+        schema.without_session_confs(&plain),
+        std::borrow::Cow::Borrowed(_)
+    ));
+}
