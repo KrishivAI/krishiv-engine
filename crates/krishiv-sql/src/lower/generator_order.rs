@@ -75,7 +75,8 @@ impl Lowerer {
         };
         // A reserved qualifier (no user table has it) the generated columns are read through.
         let aliased = matches!(item.alias, Some(Alias::Name(_)));
-        let qualifier = krishiv_plan::generate_qualifier(index, aliased);
+        let listed = matches!(item.alias, Some(Alias::List(_)));
+        let qualifier = krishiv_plan::generate_qualifier_listed(index, aliased, listed);
         let plan = self.node(
             PlanNode::Generate {
                 input: arc(plan),

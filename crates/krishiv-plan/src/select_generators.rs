@@ -24,14 +24,15 @@ struct Call {
     arg: Arc<Expr>,
     names: Vec<String>,
     aliased: bool,
+    listed: bool,
 }
 
 /// The generator a select item is, looking through `AS name` / `AS (a, b)`.
 fn generator_call(item: &Expr) -> Option<Call> {
-    let (inner, names, aliased) = match &item.node {
-        ExprNode::Alias { expr, name } => (expr.as_ref(), vec![name.clone()], true),
-        ExprNode::MultiAlias { expr, names } => (expr.as_ref(), names.clone(), false),
-        _ => (item, Vec::new(), false),
+    let (inner, names, aliased, listed) = match &item.node {
+        ExprNode::Alias { expr, name } => (expr.as_ref(), vec![name.clone()], true, false),
+        ExprNode::MultiAlias { expr, names } => (expr.as_ref(), names.clone(), false, true),
+        _ => (item, Vec::new(), false, false),
     };
     let ExprNode::Function(call) = &inner.node else {
         return None;
@@ -49,6 +50,7 @@ fn generator_call(item: &Expr) -> Option<Call> {
         arg: Arc::clone(arg),
         names,
         aliased,
+        listed,
     })
 }
 
@@ -96,7 +98,7 @@ fn generate(
     item_origin: Origin,
     plan_origin: Origin,
 ) -> (Arc<LogicalPlan>, Arc<Expr>) {
-    let qualifier = generate_qualifier(index, call.aliased);
+    let qualifier = crate::generate_qualifier_listed(index, call.aliased, call.listed);
     let plan = LogicalPlan::new(PlanNode::Generate {
         input,
         kind: call.kind,

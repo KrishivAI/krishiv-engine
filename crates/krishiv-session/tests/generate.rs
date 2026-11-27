@@ -966,3 +966,24 @@ fn generator_over_a_missing_column_is_not_a_lateral_alias_error() {
         );
     }
 }
+
+/// A select-list generator's column is no input column yet: an unqualified name that an input column
+/// also carries reads the input column (goldens generators-resolution 50 and 52).
+#[test]
+fn an_input_column_is_read_before_a_generators_column_of_its_name() {
+    let s = Session::new().unwrap();
+    assert_eq!(
+        rows(
+            &s,
+            "SELECT explode(array(10, 20)) AS col, col FROM (VALUES (42)) AS t(col)"
+        ),
+        table(&[&["10", "42"], &["20", "42"]])
+    );
+    assert_eq!(
+        rows(
+            &s,
+            "SELECT posexplode(array(10, 20)) AS (pos, v), pos FROM (VALUES (42)) AS t(pos)"
+        ),
+        table(&[&["0", "10", "42"], &["1", "20", "42"]])
+    );
+}

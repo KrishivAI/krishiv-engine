@@ -196,12 +196,27 @@ pub const GENERATE_QUALIFIER_PREFIX: &str = "__krishiv_generate_";
 /// that alias among the select list's lateral column aliases, a name list or none it does not.
 pub const GENERATE_ALIAS_SUFFIX: &str = "_alias";
 
+/// Ends the qualifier of a generator written with a name list (`posexplode(..) AS (p, v)`): its
+/// columns are named by the query, so an input column of the same name is read first.
+pub const GENERATE_NAMES_SUFFIX: &str = "_names";
+
 /// The qualifier of the columns the select-list generator at `index` adds; `aliased` when it was
 /// written with one alias.
 #[must_use]
 pub fn generate_qualifier(index: usize, aliased: bool) -> String {
     let suffix = if aliased { GENERATE_ALIAS_SUFFIX } else { "" };
     format!("{GENERATE_QUALIFIER_PREFIX}{index}{suffix}")
+}
+
+/// As [`generate_qualifier`], for a generator written with a name list when `listed`.
+#[must_use]
+pub fn generate_qualifier_listed(index: usize, aliased: bool, listed: bool) -> String {
+    let base = generate_qualifier(index, aliased);
+    if listed {
+        format!("{base}{GENERATE_NAMES_SUFFIX}")
+    } else {
+        base
+    }
 }
 
 pub use plan::{
