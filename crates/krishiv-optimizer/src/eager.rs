@@ -59,6 +59,9 @@
 //! - every key's distinct count is known (never [`StatSource::Guess`]): Umbra
 //!   measured this rewrite over 10× slower on TPC-H Q17 when it fires blind.
 //!
+//! An aggregate that `PayloadAboveAggregate` or `GroupKeyCode` takes later in
+//! the same optimization is left to them ([`Yield`]).
+//!
 //! The upper aggregate stays even when its keys are unique: states are local
 //! to each task, so equal groups of different tasks still have to merge.
 
@@ -66,9 +69,9 @@ use std::sync::Arc;
 
 use krishiv_common::error::KrishivError;
 use krishiv_plan::{
-    AttrId, BoundColumn, Builtin, Expr, ExprNode, FunctionKind, Grouping, JoinCondition, JoinKind,
-    Literal, LogicalPlan, PlanNode, ResolvedExpr, ResolvedFunction, decimal_never_raises,
-    may_raise, partial_state_columns,
+    AttrId, BoundColumn, Builtin, Expr, ExprNode, FunctionId, FunctionKind, Grouping,
+    JoinCondition, JoinKind, Literal, LogicalPlan, PlanNode, ResolvedExpr, ResolvedFunction,
+    decimal_never_raises, exact_decimal, may_raise, partial_state_columns,
 };
 use krishiv_types::DataType;
 
@@ -80,7 +83,8 @@ use crate::expr::{
     Attrs, builtin, column, conjuncts, data_type, has_outer_reference, has_subquery,
     is_deterministic, lit, output_of, references, references_into, same,
 };
-use crate::payload_above::keyed;
+use crate::group_code;
+use crate::payload_above;
 use crate::restrict::{MAX_ID, max_id};
 use crate::stats::{RelStats, Statistics};
 
@@ -104,133 +108,146 @@ const ROW_MARGIN: f64 = 8.0;
 /// Pushes aggregates below joins, entering subquery plans. Also returns one
 /// line per aggregate over a join: why it was pushed, or the gate that refused
 /// it (`EXPLAIN VERBOSE`).
-///
-/// With `defer`, a join whose other side's join keys are all group keys of the
-/// aggregate and unique, or could be proven so (by the plan, a key fact or a
-/// key count the rule requests), is left alone: that is the join
-/// `PayloadAboveAggregate` moves, and its plan needs no aggregate above the
-/// join. Leaving it also lets the rule request the count the session answers
-/// on the next optimization. The optimizer runs this pass again without
-/// `defer` after that rule, so a join it refuses is still pushed here.
 pub(crate) fn rewrite(
     root: Arc<LogicalPlan>,
     stats: &dyn Statistics,
     propagate: bool,
-    defer: bool,
     expand: bool,
-) -> Result<Rewritten, KrishivError> {
+    yields: Yield,
+) -> Result<(Arc<LogicalPlan>, Vec<String>), KrishivError> {
     let mut memo = Default::default();
-    let mut next = max_id(&root, &mut memo).saturating_add(1);
+    let mut pass = Pass {
+        next: max_id(&root, &mut memo).saturating_add(1),
+        notes: Vec::new(),
+        probe: yields
+            .payload_above
+            .then(|| payload_above::Probe::new(&root, stats)),
+        group_code: yields.group_code,
+        expand,
+    };
     let mut est = Estimator::with_propagation(stats, propagate);
-    let mut notes = Vec::new();
-    let defer = defer.then_some(stats);
-    let mut deferred = false;
     let out = dag::rewrite_up(root, &mut |p| {
-        let mut pushed = |d: Arc<LogicalPlan>, est: &mut Estimator<'_>| {
-            attempt(d, defer, expand, est, &mut next, &mut notes, &mut deferred)
-        };
-        if let Some(split) = semi::split(&p, &mut est, &mut pushed) {
+        if pass.yielded(&p, &mut est) {
+            return Ok(p);
+        }
+        // The distincts the split moves onto the join's inputs are tried as
+        // any other aggregate.
+        let split = semi::split(&p, &mut est, &mut |d, est| {
+            if pass.yielded(&d, est) {
+                d
+            } else {
+                pass.attempt(d, est)
+            }
+        });
+        if let Some(split) = split {
             return Ok(match split {
                 Ok(s) => {
-                    notes.push(s.note);
+                    pass.notes.push(s.note);
                     s.plan
                 }
                 Err(why) => {
-                    notes.push(format!("distinct not split: {why}"));
+                    pass.notes.push(format!("distinct not split: {why}"));
                     p
                 }
             });
         }
-        Ok(attempt(
-            p,
-            defer,
-            expand,
-            &mut est,
-            &mut next,
-            &mut notes,
-            &mut deferred,
-        ))
+        Ok(pass.attempt(p, &mut est))
     })?;
-    Ok(Rewritten {
-        plan: out,
-        notes,
-        deferred,
-    })
+    Ok((out, pass.notes))
 }
 
-/// `p` with its aggregate pushed below its join, or `p` (the reason in
-/// `notes`).
-fn attempt(
-    p: Arc<LogicalPlan>,
-    defer: Option<&dyn Statistics>,
+/// What one [`rewrite`] carries between aggregates.
+struct Pass<'a> {
+    /// The next free attribute id.
+    next: u64,
+    /// `EXPLAIN VERBOSE` lines.
+    notes: Vec<String>,
+    /// Asks `PayloadAboveAggregate` whether it takes an aggregate ([`Yield`]).
+    probe: Option<payload_above::Probe<'a>>,
+    /// [`Yield::group_code`].
+    group_code: Option<(bool, usize)>,
+    /// Whether an aggregate over an `Expand` is pre-aggregated ([`expand`]).
     expand: bool,
-    est: &mut Estimator<'_>,
-    next: &mut u64,
-    notes: &mut Vec<String>,
-    deferred: &mut bool,
-) -> Arc<LogicalPlan> {
-    let tried = match Shape::of(&p) {
-        Some(shape) => shape.push(shape.join, defer, est, next).or_else(|why| {
-            *deferred |= why.starts_with(DEFERRED);
-            // The dimension the keys need may sit below another one.
-            shape
-                .rotated()
-                .and_then(|join| match shape.push(&join, defer, est, next) {
-                    Ok(pushed) => Some(pushed),
-                    Err(other) => {
-                        *deferred |= other.starts_with(DEFERRED);
-                        None
-                    }
-                })
-                .ok_or(why)
-        }),
-        None => Err(String::new()),
-    };
-    // Where no join takes the calls, grouping sets still aggregate their
-    // input before the expansion repeats it ([`expand`]). A join left to
-    // `PayloadAboveAggregate` is not taken here either: that rule runs first.
-    let tried = match (tried, expand.then(|| Shape::over_expand(&p)).flatten()) {
-        (Err(why), Some(shape)) if !why.starts_with(DEFERRED) => {
-            shape.pre_aggregate(est, next).map_err(|below| {
+}
+
+impl Pass<'_> {
+    /// Whether a later rule takes `p`, which then goes to it first ([`Yield`]).
+    fn yielded(&mut self, p: &Arc<LogicalPlan>, est: &mut Estimator<'_>) -> bool {
+        if self.probe.as_mut().is_some_and(|pr| pr.takes(p, est)) {
+            self.notes
+                .push("not applied: PayloadAboveAggregate takes the aggregate".to_owned());
+            return true;
+        }
+        if self
+            .group_code
+            .is_some_and(|(force, min)| group_code::takes(p, est, force, min))
+        {
+            self.notes
+                .push("not applied: GroupKeyCode takes the aggregate".to_owned());
+            return true;
+        }
+        false
+    }
+
+    /// `p` with its aggregate pushed below its join, or `p` (the reason in
+    /// the notes).
+    fn attempt(&mut self, p: Arc<LogicalPlan>, est: &mut Estimator<'_>) -> Arc<LogicalPlan> {
+        let next = &mut self.next;
+        let tried = match Shape::of(&p) {
+            Some(shape) => shape.push(shape.join, est, next).or_else(|why| {
+                // The dimension the keys need may sit below another one.
+                shape
+                    .rotated()
+                    .and_then(|join| shape.push(&join, est, next).ok())
+                    .ok_or(why)
+            }),
+            None => Err(String::new()),
+        };
+        // Where no join takes the calls, grouping sets still aggregate their
+        // input before the expansion repeats it ([`expand`]).
+        let tried = match (tried, self.expand.then(|| Shape::over_expand(&p)).flatten()) {
+            (Err(why), Some(shape)) => shape.pre_aggregate(est, next).map_err(|below| {
                 if why.is_empty() {
                     format!("below the Expand: {below}")
                 } else {
                     format!("{why}; below the Expand: {below}")
                 }
-            })
-        }
-        (tried, _) => tried,
-    };
-    match tried {
-        Ok((pushed, note)) => {
-            // Out of attribute ids: leave the plan as it is, as CSE and the sum rewrite do.
-            if *next > MAX_ID {
-                notes.push("not applied: the plan has no attribute ids left".to_owned());
-                return p;
+            }),
+            (tried, _) => tried,
+        };
+        match tried {
+            Ok((pushed, note)) => {
+                // Out of attribute ids: leave the plan as it is, as CSE and the sum rewrite do.
+                if self.next > MAX_ID {
+                    self.notes
+                        .push("not applied: the plan has no attribute ids left".to_owned());
+                    return p;
+                }
+                self.notes.push(note);
+                pushed
             }
-            notes.push(note);
-            pushed
-        }
-        // Not an aggregate this rule reads.
-        Err(why) if why.is_empty() => p,
-        Err(why) => {
-            notes.push(format!("not applied: {why}"));
-            p
+            // Not an aggregate this rule reads.
+            Err(why) if why.is_empty() => p,
+            Err(why) => {
+                self.notes.push(format!("not applied: {why}"));
+                p
+            }
         }
     }
 }
 
-/// The start of the refusal of a join left to `PayloadAboveAggregate`.
-const DEFERRED: &str = "deferred:";
-
-/// What [`rewrite`] did.
-pub(crate) struct Rewritten {
-    /// The plan, the input `Arc` when nothing moved.
-    pub(crate) plan: Arc<LogicalPlan>,
-    /// One line per aggregate over a join (`EXPLAIN VERBOSE`).
-    pub(crate) notes: Vec<String>,
-    /// Whether a join was left to `PayloadAboveAggregate` (only with `defer`).
-    pub(crate) deferred: bool,
+/// The rules after this one that an aggregate goes to first: where
+/// `PayloadAboveAggregate` moves the dimension above it, one aggregate below
+/// the join does the work and nothing merges above it; where `GroupKeyCode`
+/// codes its keys, its measured win (design P2b D2) stays. Both were measured
+/// while this rule never fired on TPC-DS (study 54).
+#[derive(Clone, Copy, Default)]
+pub(crate) struct Yield {
+    /// `PayloadAboveAggregate` runs later in this optimization.
+    pub(crate) payload_above: bool,
+    /// `GroupKeyCode` runs later: whether it is forced, and how many
+    /// qualifying dimensions it codes at least.
+    pub(crate) group_code: Option<(bool, usize)>,
 }
 
 /// An aggregate over projections and expansions over a join.
@@ -279,7 +296,6 @@ impl<'a> Shape<'a> {
     fn push(
         &self,
         join: &Arc<LogicalPlan>,
-        defer: Option<&dyn Statistics>,
         est: &mut Estimator<'_>,
         next: &mut u64,
     ) -> Result<(Arc<LogicalPlan>, String), String> {
@@ -331,25 +347,8 @@ impl<'a> Shape<'a> {
             (right, &right_cols)
         };
         let other = if left_side { right } else { left };
-        let other_cols = if left_side { &right_cols } else { &left_cols };
-        if !read_whole(other, &equi_keys(on, other_cols)) {
+        if !read_whole(other, &equi_keys(on, &attrs_of(other)?)) {
             return Err("the other side is filtered or joined: its runtime filter is worth more than the aggregate".to_owned());
-        }
-        if let Some(stats) = defer {
-            let other_keys = equi_columns(on, other_cols);
-            let grouped = |id: &AttrId| {
-                self.keys.iter().any(|k| {
-                    matches!(&k.node, ExprNode::Resolved(ResolvedExpr::Column(c)) if c.id == *id)
-                })
-            };
-            if !other_keys.is_empty()
-                && other_keys.iter().all(grouped)
-                && keyed(other, &other_keys, stats)
-            {
-                return Err(format!(
-                    "{DEFERRED} the other side's join keys are grouped and may be unique (PayloadAboveAggregate first)"
-                ));
-            }
         }
         let null_supplying = matches!(
             (kind, left_side),
@@ -358,7 +357,7 @@ impl<'a> Shape<'a> {
 
         let side_est = est.plan(side);
         for (_, f) in &calls {
-            refusal_of_call(f, &side_est, null_supplying)?;
+            refusal_of_call(f, &side_est, null_supplying, false)?;
         }
 
         // The columns of `S` that stay readable: the join condition's and
@@ -826,11 +825,40 @@ fn groups_of(keys: &[BoundColumn], side: &RelStats) -> Result<f64, String> {
     Ok(groups.min(side.rows))
 }
 
+/// Whether `e` may raise under ANSI, where exact decimal arithmetic
+/// ([`exact_decimal`]), alone or as an argument of `coalesce`, raises on no
+/// row.
+fn raises_beyond_exact_decimal(e: &Expr) -> bool {
+    if exact_decimal(e) {
+        return false;
+    }
+    match &e.node {
+        ExprNode::Resolved(ResolvedExpr::Alias { expr, .. }) => raises_beyond_exact_decimal(expr),
+        ExprNode::Resolved(ResolvedExpr::Function(f))
+            if f.kind == FunctionKind::Scalar
+                && f.filter.is_none()
+                && matches!(&f.id, FunctionId::Registry { name, .. } if name == "coalesce") =>
+        {
+            f.args.iter().any(|a| raises_beyond_exact_decimal(a))
+        }
+        _ => may_raise(e, true),
+    }
+}
+
 /// Why `f` cannot run below the join, on a side with these statistics.
+///
+/// With `same_rows` the call runs on exactly the rows the aggregate above
+/// reads (below an `Expand`, which drops none), so an argument may also be
+/// exact decimal arithmetic ([`exact_decimal`], under `coalesce` too: q67's
+/// `coalesce(price * quantity, 0)`), which raises on no row. Below a join,
+/// where the join may drop rows Spark evaluated the argument on, an argument
+/// that raises on no row is just as safe: [`decimal_never_raises`] (exact
+/// decimal arithmetic and its division by a whole literal, TPC-DS q04).
 pub(crate) fn refusal_of_call(
     f: &ResolvedFunction,
     side: &RelStats,
     null_supplying: bool,
+    same_rows: bool,
 ) -> Result<(), String> {
     let name = f.id.name();
     if f.args.iter().any(|a| {
@@ -838,7 +866,11 @@ pub(crate) fn refusal_of_call(
             || has_subquery(a)
             || has_outer_reference(a)
             || is_state(a)
-            || (may_raise(a, true) && !decimal_never_raises(a))
+            || if same_rows {
+                raises_beyond_exact_decimal(a)
+            } else {
+                may_raise(a, true) && !decimal_never_raises(a)
+            }
     }) {
         return Err(format!("{name}'s argument can raise or is not plain"));
     }
@@ -944,7 +976,7 @@ fn is_column(e: &Expr, id: AttrId) -> bool {
     matches!(&e.node, ExprNode::Resolved(ResolvedExpr::Column(c)) if c.id == id)
 }
 
-fn is_state(e: &Expr) -> bool {
+pub(crate) fn is_state(e: &Expr) -> bool {
     matches!(&e.node, ExprNode::Resolved(ResolvedExpr::StateInput { .. }))
 }
 

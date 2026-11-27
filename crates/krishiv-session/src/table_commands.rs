@@ -41,7 +41,7 @@ use krishiv_sql::ast::{
     AlterView, AlterViewAction, Analyze, AnalyzeColumns, ChangeColumnAction, ColumnName,
     CreateNamespace, CreatePermanentView, CreateTable, CreateTableLike, CreateView, DdlName,
     DropBehavior, DropNamespace, DropPermanentView, DropTable, Ident, Insert, InsertClause, Query,
-    TableElement, TableOption, Truncate, Use, ViewColumn,
+    TableElement, Truncate, Use, ViewColumn,
 };
 use krishiv_types::DataType;
 
@@ -1765,6 +1765,9 @@ struct InsertTarget<'a> {
     /// The writer's options (`writeTo(..).option(..)`, `saveAsTable`'s): a Delta append reads
     /// `maxRecordsPerFile` from them, a file table's write the idempotency key; `None` for SQL.
     options: Option<&'a BTreeMap<String, OptionValue>>,
+    /// The name delta-spark's errors give a Delta table written by path (`` delta.`file:/p` ``);
+    /// `None` for a catalog table.
+    delta_name: Option<&'a str>,
 }
 
 /// A clause of a multi-table insert as a single-table one: its query reads `FROM source`, as
@@ -1897,40 +1900,6 @@ pub(crate) enum V2Mode {
     Append,
 }
 
-/// `OPTIONS (...)` / `TBLPROPERTIES (...)` as text pairs, keys lower-cased
-/// for options as Spark does not (kept as written).
-fn options_of(options: &[TableOption], original: &str) -> BTreeMap<String, String> {
-    options
-        .iter()
-        .map(|o| {
-            let key = o
-                .key
-                .parts
-                .iter()
-                .map(|p| p.value.as_str())
-                .collect::<Vec<_>>()
-                .join(".");
-            let value = o
-                .value
-                .as_ref()
-                .map(|v| literal_text(original.get(v.span.start..v.span.end).unwrap_or_default()))
-                .unwrap_or_default();
-            (key, value)
-        })
-        .collect()
-}
-
-/// A literal's text without its quotes.
-fn literal_text(fragment: &str) -> String {
-    let f = fragment.trim();
-    for q in ['\'', '"'] {
-        if f.len() >= 2 && f.starts_with(q) && f.ends_with(q) {
-            return f[1..f.len() - 1].to_owned();
-        }
-    }
-    f.to_owned()
-}
-
 pub(crate) fn now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -1947,7 +1916,9 @@ pub(crate) use files::CheckedDir;
 mod questions;
 use files::remove_dir;
 mod location;
+mod options;
 use location::qualified_namespace_location;
+use options::options_of;
 
 #[cfg(test)]
 mod tests;

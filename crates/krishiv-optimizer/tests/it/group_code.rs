@@ -275,37 +275,26 @@ fn run(sql: &str, stats: &Stats) -> (String, Vec<String>) {
     run_checked(sql, stats, true)
 }
 
-/// Default options with eager aggregation off.
-fn no_eager() -> Options {
-    support::options(|o| o.eager_aggregation = false)
-}
-
 /// [`run`], comparing rows only when `rows` (the reference interpreter groups
 /// a collated string by its value, not by its collation key).
 fn run_checked(sql: &str, stats: &Stats, rows: bool) -> (String, Vec<String>) {
     let ctx = support::ctx_over(catalog());
     let plan = support::resolve(sql, &ctx);
-    // Eager aggregation runs first and may pre-empt the rule (or code the
-    // merged aggregate above its partial one): off, so these cases test the
-    // rule alone.
-    let on = no_eager();
-    let (optimized, steps) = optimize_traced_with_options(&plan, stats, &on).unwrap();
+    let (optimized, steps) =
+        optimize_traced_with_options(&plan, stats, &Options::default()).unwrap();
     assert_eq!(
         optimized.root().resolved_output(),
         plan.root().resolved_output(),
         "{sql}: the output keeps its attributes"
     );
-    let again = optimize_with_options(&optimized, stats, &on).unwrap();
+    let again = optimize_with(&optimized, stats).unwrap();
     assert!(
         again.structurally_eq(&optimized),
         "{sql}: a fixed point\n{}\nagain:\n{}",
         optimized.root(),
         again.root()
     );
-    let off = support::options(|o| {
-        o.group_key_code = false;
-        o.eager_aggregation = false;
-    });
+    let off = support::options(|o| o.group_key_code = false);
     let without = optimize_with_options(&plan, stats, &off).unwrap();
     if !rows {
         // Unchecked rows only where the rule leaves the plan alone.
@@ -580,10 +569,6 @@ fn shared_dictionaries_stay_a_fixed_point() {
     config
         .set("krishiv.optimizer.groupKeyCode", "true")
         .unwrap();
-    // Eager aggregation would pre-empt the rule on the first query.
-    config
-        .set("krishiv.optimizer.eagerAggregation", "false")
-        .unwrap();
     let udfs = krishiv_udf_sdk::UdfLibrary::new();
     let mut mixed = Stats::new();
     mixed.rows("e", 600_000);
@@ -751,6 +736,85 @@ fn tpch_q16_codes_its_part_keys() {
     insta::assert_snapshot!(text);
 }
 
+/// The notes `EagerAggregate` left and the plan, with every rule on.
+fn eager_notes(sql: &str) -> (Plan, Vec<String>) {
+    let ctx = support::ctx_over(catalog());
+    let plan = support::resolve(sql, &ctx);
+    let (optimized, steps) =
+        optimize_traced_with_options(&plan, &Stats::new(), &Options::default()).unwrap();
+    let notes = steps
+        .into_iter()
+        .filter(|s| s.rule == "EagerAggregate" && !s.note.is_empty())
+        .map(|s| s.note)
+        .collect();
+    (optimized, notes)
+}
+
+/// An aggregate both rules accept (its dimension carries only the inferred `isnotnull` on its
+/// join key, which eager aggregation reads as whole since study 54's F-C1): eager aggregation
+/// yields, `GroupKeyCode` codes it, and the plan is the one optimized with eager aggregation off.
+#[test]
+fn eager_aggregation_yields_an_aggregate_group_key_code_takes() {
+    let sql = "SELECT g1, g2, count(*) AS n, sum(x) AS s FROM f JOIN d ON fk = dk GROUP BY g1, g2";
+    let (on, notes) = eager_notes(sql);
+    assert!(
+        notes
+            .iter()
+            .any(|n| n == "not applied: GroupKeyCode takes the aggregate"),
+        "{notes:?}\n{}",
+        on.root()
+    );
+    let text = on.root().to_string();
+    assert!(coded(&text), "{notes:?}\n{text}");
+    assert!(!text.contains("PartialAggregate"), "{text}");
+    let ctx = support::ctx_over(catalog());
+    let plan = support::resolve(sql, &ctx);
+    let off = optimize_with_options(
+        &plan,
+        &Stats::new(),
+        &support::options(|o| {
+            o.eager_aggregation = false;
+        }),
+    )
+    .unwrap();
+    assert!(
+        off.structurally_eq(&on),
+        "{}\neager off:\n{}",
+        on.root(),
+        off.root()
+    );
+    // And without the yield's beneficiary, eager aggregation takes the same aggregate.
+    let uncoded = optimize_with_options(
+        &plan,
+        &Stats::new(),
+        &support::options(|o| {
+            o.group_key_code = false;
+        }),
+    )
+    .unwrap();
+    assert!(
+        uncoded.root().to_string().contains("PartialAggregate"),
+        "{}",
+        uncoded.root()
+    );
+}
+
+/// Where `GroupKeyCode` refuses (a floating-point key), eager aggregation does not yield and
+/// takes the aggregate below the join.
+#[test]
+fn eager_aggregation_takes_an_aggregate_group_key_code_refuses() {
+    let sql = "SELECT g1, gd, count(*) AS n FROM f JOIN d ON fk = dk GROUP BY g1, gd";
+    let (on, notes) = eager_notes(sql);
+    assert!(
+        !notes.iter().any(|n| n.contains("GroupKeyCode takes")),
+        "{notes:?}"
+    );
+    let text = on.root().to_string();
+    assert!(!coded(&text), "{text}");
+    assert!(text.contains("PartialAggregate"), "{notes:?}\n{text}");
+    run(sql, &Stats::new());
+}
+
 /// The multi-dimension mode (`krishiv.optimizer.groupKeyCode` off,
 /// `krishiv.optimizer.groupKeyCodeMultiDimension` on; design P2b D2 §8)
 /// codes only aggregates where two or more dimensions qualify, then all of
@@ -768,17 +832,17 @@ fn the_multi_dimension_mode_codes_only_aggregates_with_two_dimensions() {
     multi
         .set("krishiv.optimizer.groupKeyCodeMultiDimension", "true")
         .unwrap();
-    // With eager aggregation on, `f` is pre-aggregated below the join of
-    // `one` and the gate then refuses for size; off, the one-dimension
-    // refusal itself is checked.
-    let mut multi_no_eager = multi.clone();
-    multi_no_eager
+    // With one qualifying dimension the mode does not code, so eager aggregation does not
+    // yield (`eager::Yield`) and pre-aggregates below the join, which the code then refuses for
+    // the smaller input instead; off here, the mode's own refusal is the note.
+    let mut multi_alone = multi.clone();
+    multi_alone
         .set("krishiv.optimizer.eagerAggregation", "false")
         .unwrap();
     let off = krishiv_common::config::Config::new();
     for (sql, config, want) in [
         (two, &multi, Some(2)),
-        (one, &multi_no_eager, None),
+        (one, &multi_alone, None),
         (two, &off, Some(0)),
     ] {
         let plan = support::resolve(sql, &ctx);

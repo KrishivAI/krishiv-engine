@@ -83,6 +83,17 @@ fn config_with(on: bool, extra: &[(&str, &str)]) -> Config {
     c
 }
 
+/// [`optimized`] with eager aggregation off: where no fact proves a key,
+/// eager aggregation takes the aggregate first and the rule then sees its
+/// partial aggregate, so tests of the rule's own refusals switch it off.
+fn optimized_alone(plan: &Plan, stats: &dyn Statistics, on: bool) -> (Plan, Vec<String>) {
+    optimized_with(
+        plan,
+        stats,
+        &config_with(on, &[("krishiv.optimizer.eagerAggregation", "false")]),
+    )
+}
+
 /// The plan optimized with the rule on or off, and the rule's notes.
 fn optimized(plan: &Plan, stats: &dyn Statistics, on: bool) -> (Plan, Vec<String>) {
     optimized_with(plan, stats, &config(on))
@@ -375,8 +386,8 @@ fn fires(sql: &str, stats: &dyn Statistics) -> (String, String) {
 /// the plan is the one optimized with the rule off.
 fn refused(sql: &str, stats: &dyn Statistics, why: &str) {
     let plan = resolve(sql);
-    let (on, notes) = optimized(&plan, stats, true);
-    let (off, _) = optimized(&plan, stats, false);
+    let (on, notes) = optimized_alone(&plan, stats, true);
+    let (off, _) = optimized_alone(&plan, stats, false);
     assert!(moved(&notes).is_empty(), "{sql}\n{notes:?}\n{}", on.root());
     assert!(
         on.structurally_eq(&off),
