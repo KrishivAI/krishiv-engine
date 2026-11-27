@@ -171,7 +171,7 @@ oneof! { expression, EXPRESSION_ROWS, expression::ExprType, "Expression.expr_typ
     UnresolvedRegex => ("unresolved_regex", 8, Missing, "", "Star { regex } (the field exists)", "P3-T012", 2),
     SortOrder => ("sort_order", 9, Missing, "", "SortOrder, only inside Sort and Window", "P3-T012", 2),
     LambdaFunction => ("lambda_function", 10, Missing, "", "Lambda", "P3-T012", 2),
-    Window => ("window", 11, Missing, "", "ExprNode::Window (frames: LOWER_BOUND_REQUIRED_IN_WINDOW_FRAME, UPPER_BOUND_…, WINDOW_FUNCTION_REQUIRED)", "P3-T012", 2),
+    Window => ("window", 11, Done, "", "ExprNode::Window", "P3-T012", 0),
     UnresolvedExtractValue => ("unresolved_extract_value", 12, Missing, "", "Field", "P3-T012", 2),
     UpdateFields => ("update_fields", 13, Missing, "", "UpdateFields", "P3-T012", 2),
     UnresolvedNamedLambdaVariable => ("unresolved_named_lambda_variable", 14, Missing, "", "lambda-scoped Column (UNRESOLVED_NAMED_LAMBDA_VARIABLE_REQUIRES_NAME_PART)", "P3-T012", 2),

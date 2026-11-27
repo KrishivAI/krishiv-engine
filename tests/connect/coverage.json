@@ -71,7 +71,7 @@
   {"oneof": "Expression.expr_type", "field": "unresolved_regex", "number": 8, "status": "missing", "refused": "", "target": "Star { regex } (the field exists)", "task": "P3-T012", "group": 2},
   {"oneof": "Expression.expr_type", "field": "sort_order", "number": 9, "status": "missing", "refused": "", "target": "SortOrder, only inside Sort and Window", "task": "P3-T012", "group": 2},
   {"oneof": "Expression.expr_type", "field": "lambda_function", "number": 10, "status": "missing", "refused": "", "target": "Lambda", "task": "P3-T012", "group": 2},
-  {"oneof": "Expression.expr_type", "field": "window", "number": 11, "status": "missing", "refused": "", "target": "ExprNode::Window (frames: LOWER_BOUND_REQUIRED_IN_WINDOW_FRAME, UPPER_BOUND_…, WINDOW_FUNCTION_REQUIRED)", "task": "P3-T012", "group": 2},
+  {"oneof": "Expression.expr_type", "field": "window", "number": 11, "status": "done", "refused": "", "target": "ExprNode::Window", "task": "P3-T012", "group": 0},
   {"oneof": "Expression.expr_type", "field": "unresolved_extract_value", "number": 12, "status": "missing", "refused": "", "target": "Field", "task": "P3-T012", "group": 2},
   {"oneof": "Expression.expr_type", "field": "update_fields", "number": 13, "status": "missing", "refused": "", "target": "UpdateFields", "task": "P3-T012", "group": 2},
   {"oneof": "Expression.expr_type", "field": "unresolved_named_lambda_variable", "number": 14, "status": "missing", "refused": "", "target": "lambda-scoped Column (UNRESOLVED_NAMED_LAMBDA_VARIABLE_REQUIRES_NAME_PART)", "task": "P3-T012", "group": 2},

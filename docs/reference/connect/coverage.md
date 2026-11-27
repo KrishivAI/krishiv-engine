@@ -78,7 +78,7 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 
 ## Expression.expr_type
 
-22 arms: 4 done, 7 partial, 10 missing, 1 out of scope.
+22 arms: 5 done, 7 partial, 9 missing, 1 out of scope.
 
 | # | Arm | Status | Refused fields | IR target | Task | Group |
 |---:|---|---|---|---|---|---:|
@@ -92,7 +92,7 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 | 8 | unresolved_regex | missing |  | Star { regex } (the field exists) | P3-T012 | 2 |
 | 9 | sort_order | missing |  | SortOrder, only inside Sort and Window | P3-T012 | 2 |
 | 10 | lambda_function | missing |  | Lambda | P3-T012 | 2 |
-| 11 | window | missing |  | ExprNode::Window (frames: LOWER_BOUND_REQUIRED_IN_WINDOW_FRAME, UPPER_BOUND_…, WINDOW_FUNCTION_REQUIRED) | P3-T012 | 2 |
+| 11 | window | done |  | ExprNode::Window | P3-T012 | 0 |
 | 12 | unresolved_extract_value | missing |  | Field | P3-T012 | 2 |
 | 13 | update_fields | missing |  | UpdateFields | P3-T012 | 2 |
 | 14 | unresolved_named_lambda_variable | missing |  | lambda-scoped Column (UNRESOLVED_NAMED_LAMBDA_VARIABLE_REQUIRES_NAME_PART) | P3-T012 | 2 |
