@@ -244,9 +244,9 @@ fn tablesample_checks() {
     let check = |sample: &str| class(&format!("SELECT * FROM t TABLESAMPLE {sample}"));
     for (sample, expected) in [
         ("()", "_LEGACY_ERROR_TEMP_0014"),
-        ("(-1 PERCENT)", "_LEGACY_ERROR_TEMP_0064"),
-        ("(101 PERCENT)", "_LEGACY_ERROR_TEMP_0064"),
-        ("(BUCKET 2 OUT OF 1)", "_LEGACY_ERROR_TEMP_0064"),
+        ("(-1 PERCENT)", "INVALID_TABLESAMPLE_FRACTION"),
+        ("(101 PERCENT)", "INVALID_TABLESAMPLE_FRACTION"),
+        ("(BUCKET 2 OUT OF 1)", "INVALID_TABLESAMPLE_FRACTION"),
         ("(200b)", "_LEGACY_ERROR_TEMP_0015"),
         ("(200)", "_LEGACY_ERROR_TEMP_0016"),
         ("(BUCKET 1 OUT OF 2 ON c)", "_LEGACY_ERROR_TEMP_0015"),
@@ -464,7 +464,7 @@ fn pipe_operator_checks() {
         ("TABLE t |> TABLESAMPLE ()", "_LEGACY_ERROR_TEMP_0014"),
         (
             "TABLE t |> TABLESAMPLE (101 PERCENT)",
-            "_LEGACY_ERROR_TEMP_0064",
+            "INVALID_TABLESAMPLE_FRACTION",
         ),
         (
             "TABLE t |> ORDER BY x LIMIT 1",
