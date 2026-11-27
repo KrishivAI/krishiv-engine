@@ -501,7 +501,7 @@ impl CatalogWrite for StoreCatalog {
             let managed = info.location.is_none();
             let location = info.location.as_deref().map_or_else(
                 || managed_location(&self.warehouse, &namespace, &name),
-                |l| PathBuf::from(l.strip_prefix("file:").unwrap_or(l)),
+                krishiv_exec::files::native_path,
             );
             let table = CatalogTable {
                 namespace,

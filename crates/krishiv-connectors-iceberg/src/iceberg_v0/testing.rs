@@ -46,7 +46,7 @@ fn internal(message: String) -> KrishivError {
 /// Any failure of the runtime, the catalog or the writes, as `INTERNAL_ERROR`.
 pub fn write_table(dir: &Path) -> Result<WrittenTable, KrishivError> {
     let root = dir.to_string_lossy().into_owned();
-    write_table_with(&format!("file://{}", dir.display()), move |sched| {
+    write_table_with(&krishiv_exec::files::file_url(dir), move |sched| {
         let id = StoreId::new("file://");
         sched.register_store(
             id.clone(),
@@ -353,12 +353,10 @@ pub fn apply_commit(
         .metadata;
     let json = serde_json::to_value(&next)
         .map_err(|e| bad(500, "ServiceFailureException", format!("metadata: {e}")))?;
-    let local = next_location
-        .strip_prefix("file://")
-        .unwrap_or(next_location);
+    let local = krishiv_exec::files::native_path(next_location);
     let text = serde_json::to_vec(&json)
         .map_err(|e| bad(500, "ServiceFailureException", format!("metadata: {e}")))?;
-    std::fs::write(local, text)
+    std::fs::write(&local, text)
         .map_err(|e| bad(500, "ServiceFailureException", format!("write: {e}")))?;
     Ok(json)
 }

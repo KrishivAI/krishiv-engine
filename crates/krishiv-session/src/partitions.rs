@@ -389,7 +389,7 @@ fn qualified(session: &Session, location: &str) -> Result<PathBuf, KrishivError>
     }
     let display = session.qualify_path(location)?;
     match display.strip_prefix("file:") {
-        Some(path) => Ok(PathBuf::from(path)),
+        Some(path) => Ok(krishiv_exec::files::native_path(path)),
         None => Err(unsupported(
             "partition locations outside the local file system",
         )),
@@ -658,7 +658,7 @@ impl Session {
         // registering nothing.
         if !table.location.is_dir() {
             return Err(krishiv_common::error::PathNotFound {
-                path: format!("file:{}", table.location.display()),
+                path: krishiv_exec::files::file_display(&table.location),
             }
             .into());
         }
@@ -773,8 +773,12 @@ impl Session {
         const RACES: u32 = 32;
         let env = self.query_env();
         let locate = |p: &Path| {
-            self.locate_write_path(&format!("file:{}", p.display()), &BTreeMap::new(), &env)
-                .map(|c| c.at)
+            self.locate_write_path(
+                &krishiv_exec::files::file_display(p),
+                &BTreeMap::new(),
+                &env,
+            )
+            .map(|c| c.at)
         };
         let at = locate(root)?;
         let below = |p: &Path| -> Result<Option<String>, KrishivError> {
@@ -878,7 +882,11 @@ impl Session {
         }
         let env = self.query_env();
         let at = self
-            .locate_write_path(&format!("file:{}", root.display()), &BTreeMap::new(), &env)?
+            .locate_write_path(
+                &krishiv_exec::files::file_display(root),
+                &BTreeMap::new(),
+                &env,
+            )?
             .at;
         let log = CommitLog::new(
             &env.io,

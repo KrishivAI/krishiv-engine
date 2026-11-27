@@ -292,7 +292,7 @@ async fn data_file_round_trips_through_a_manifest() {
     };
     let df = data_file(&written, &schema).unwrap();
 
-    let path = format!("file://{}/m.avro", dir.path().display());
+    let path = format!("{}/m.avro", krishiv_exec::files::file_url(dir.path()));
     let mut w = ManifestWriterBuilder::new(
         reg.file_io().new_output(&path).unwrap(),
         Some(9),

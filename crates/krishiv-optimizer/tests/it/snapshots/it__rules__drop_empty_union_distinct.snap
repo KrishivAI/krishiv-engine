@@ -1,0 +1,11 @@
+---
+source: crates/krishiv-optimizer/tests/it/rules.rs
+expression: "SELECT * FROM (SELECT a, 's' AS k FROM t UNION SELECT a, 'u' AS k FROM u UNION SELECT a, 's' AS k FROM u) x WHERE k = 's'"
+---
+Aggregate [a#0, k#3], [a#0, k#3]
++- Union
+   :- Aggregate [a#0, k#3], [a#0, k#3]
+   :  +- Project [a#0, 's' AS k#3]
+   :     +- Scan spark_catalog.default.t [a#0]
+   +- Project [a#4, 's' AS k#7]
+      +- Scan spark_catalog.default.u [a#4]

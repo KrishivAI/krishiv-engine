@@ -129,6 +129,12 @@
     ],
     "sqlState" : "22005"
   },
+  "DELTA_INSERT_COLUMN_ARITY_MISMATCH" : {
+    "message" : [
+      "Cannot write to '<tableName>', <columnName>; target table has <numColumns> column(s) but the inserted data has <insertColumns> column(s)"
+    ],
+    "sqlState" : "42802"
+  },
   "DELTA_INVALID_ISOLATION_LEVEL" : {
     "message" : [
       "invalid isolation level '<isolationLevel>'"
@@ -239,6 +245,12 @@
       "<message>"
     ],
     "sqlState" : "44000"
+  },
+  "DELTA_TABLE_NOT_FOUND" : {
+    "message" : [
+      "Delta table <tableName> doesn't exist."
+    ],
+    "sqlState" : "42P01"
   },
   "DELTA_TIMESTAMP_EARLIER_THAN_COMMIT_RETENTION" : {
     "message" : [
