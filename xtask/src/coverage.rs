@@ -634,6 +634,19 @@ fn ignore_other_crates(crate_dirs: &[String], packages: &[String]) -> Option<Str
     (!others.is_empty()).then(|| format!("crates/({})/", others.join("|")))
 }
 
+/// The flags of a `cargo llvm-cov report` call before its output path.
+fn report_args<'a>(branch: bool, ignore: Option<&'a str>, extra: &[&'a str]) -> Vec<&'a str> {
+    let mut args = Vec::new();
+    if branch {
+        args.push("--branch");
+    }
+    if let Some(re) = ignore {
+        args.extend(["--ignore-filename-regex", re]);
+    }
+    args.extend_from_slice(extra);
+    args
+}
+
 /// The directory names under `<root>/crates`.
 fn crate_dir_names(root: &Path) -> Vec<String> {
     std::fs::read_dir(root.join("crates"))
@@ -703,13 +716,8 @@ pub fn run_coverage(root: &Path, flags: &[&str]) -> Result<(), String> {
     let ignore = ignore_other_crates(&crate_dir_names(root), &packages);
     let report = |extra: &[&str], out: &Path| {
         let mut c = base(&["report"]);
-        if branch {
-            c.arg("--branch");
-        }
-        if let Some(re) = &ignore {
-            c.args(["--ignore-filename-regex", re]);
-        }
-        c.args(extra).arg(out);
+        c.args(report_args(branch, ignore.as_deref(), extra))
+            .arg(out);
         c
     };
     run(
@@ -875,7 +883,7 @@ pub fn run_diff_coverage(root: &Path, flags: &[&str]) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::ignore_other_crates;
+    use super::{crate_dir_names, ignore_other_crates, report_args};
 
     #[test]
     fn a_package_run_ignores_the_other_crates_sources() {
@@ -896,6 +904,31 @@ mod tests {
             None
         );
     }
+    #[test]
+    fn report_flags_carry_branch_and_the_ignore_regex() {
+        assert_eq!(report_args(false, None, &["--lcov"]), ["--lcov"]);
+        assert_eq!(
+            report_args(true, Some("crates/(a)/"), &["--json"]),
+            [
+                "--branch",
+                "--ignore-filename-regex",
+                "crates/(a)/",
+                "--json"
+            ]
+        );
+    }
+
+    #[test]
+    fn crate_dir_names_lists_only_directories() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let crates = root.path().join("crates");
+        std::fs::create_dir_all(crates.join("krishiv-io")).expect("mkdir");
+        std::fs::write(crates.join("README.md"), "x").expect("write");
+        assert_eq!(crate_dir_names(root.path()), ["krishiv-io"]);
+        let empty = tempfile::tempdir().expect("tempdir");
+        assert!(crate_dir_names(empty.path()).is_empty());
+    }
+
     #[test]
     fn coverage_flags_collect_packages() {
         let f = super::CoverageFlags::parse(&["--no-branch", "-p", "a", "--package", "b"]).unwrap();
