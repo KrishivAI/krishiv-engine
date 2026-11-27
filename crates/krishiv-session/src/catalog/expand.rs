@@ -711,6 +711,10 @@ impl Expander<'_> {
                 LogicalPlan::new(PlanNode::Project { input, exprs }).with_origin(plan.origin),
             );
         }
+        // Spark qualifies a permanent view's columns `spark_catalog.<namespace>.<view>` (it shows in a
+        // lateral join's `outer(..)` name), so the alias is those three parts (see `ALIAS_PART_SEP`).
+        let sep = ALIAS_PART_SEP;
+        let table = format!("spark_catalog{sep}{namespace}{sep}{table}");
         self.views.push(view_read(
             name,
             &table,

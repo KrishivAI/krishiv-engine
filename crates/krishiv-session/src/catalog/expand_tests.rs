@@ -52,7 +52,7 @@ fn views_read_by_a_query_are_recorded_and_located() {
         [
             (
                 "spark_catalog.default.pv".to_owned(),
-                "pv".to_owned(),
+                "spark_catalog\u{1e}default\u{1e}pv".to_owned(),
                 ViewSecurity::Invoker,
                 true
             ),
@@ -118,7 +118,7 @@ fn a_view_read_in_a_sql_function_body_is_recorded() {
         table(&a),
         [(
             "spark_catalog.default.pv".to_owned(),
-            "pv".to_owned(),
+            "spark_catalog\u{1e}default\u{1e}pv".to_owned(),
             ViewSecurity::Invoker,
             true
         )]
