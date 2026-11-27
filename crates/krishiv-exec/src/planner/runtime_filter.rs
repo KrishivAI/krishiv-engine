@@ -36,8 +36,9 @@
 //! whose value is transitive (lever R, study 58): the scan feeds the build
 //! of a join whose filter a scan at least 20 times that build waits for,
 //! and the filter's build, at most a twentieth of the scan, reads the
-//! table through a predicate the scan does not have (q59: the inlined `wss` copy's `date_dim` builds the
-//! filter on `store_sales`; the reader's `date_dim` keeps 12 months). Not
+//! table through a predicate the scan does not have (q59: the inlined
+//! `wss` copy's `date_dim` builds the filter on `store_sales`; the
+//! reader's `date_dim` keeps 12 months). Not
 //! waiting, the copy raced the reader's build and, when it won, aggregated
 //! all of `store_sales` (26.9M rows at SF10, not 5.5M).
 //!
@@ -612,27 +613,50 @@ fn feeding_scans(node: &PhysNode, out: &mut HashSet<ScanId>) {
 /// of its own: a build that keeps only part of the table, whose filter can
 /// drop most of another scan of it.
 fn narrows(node: &PhysNode, source: &ReadSource) -> bool {
-    matches!(node, PhysNode::Scan(s) if s.scan.source == *source && scan_restricts(s))
+    restricted_scan(node).is_some_and(|s| s.scan.source == *source)
         || node.children().into_iter().any(|c| narrows(c, source))
 }
 
-/// Whether the scan `id` in `node`'s plan has a predicate pushed into it.
+/// Whether the scan `id` in `node`'s plan keeps part of its table by a
+/// predicate of its own.
 fn scan_has_filter(node: &PhysNode, id: ScanId) -> bool {
+    restricted_scan(node).is_some_and(|s| s.id == id)
+        || node.children().into_iter().any(|c| scan_has_filter(c, id))
+}
+
+/// The scan `node` is, or the scan directly under the filter `node` is,
+/// when that predicate keeps part of the table by its values. A scan that
+/// decides once (a Python data source) keeps its predicate in a `Filter`
+/// above it with nothing pushed, so the filter counts as the scan's own.
+fn restricted_scan(node: &PhysNode) -> Option<&crate::physical::ScanNode> {
     match node {
-        PhysNode::Scan(s) if s.id == id => scan_restricts(s),
-        _ => node.children().into_iter().any(|c| scan_has_filter(c, id)),
+        PhysNode::Scan(s) => s
+            .filter
+            .as_ref()
+            .is_some_and(|f| restricts(&f.predicate))
+            .then_some(s),
+        PhysNode::Filter {
+            input, predicate, ..
+        } => match &**input {
+            PhysNode::Scan(s)
+                if restricts(predicate)
+                    || s.filter.as_ref().is_some_and(|f| restricts(&f.predicate)) =>
+            {
+                Some(s)
+            }
+            _ => None,
+        },
+        _ => None,
     }
 }
 
-/// Whether a scan's pushed predicate keeps part of the table by its
-/// values: a conjunct other than the `isnotnull` checks every join key
-/// infers (both `date_dim` scans of q59 carry those).
-fn scan_restricts(s: &crate::physical::ScanNode) -> bool {
-    s.filter.as_ref().is_some_and(|f| {
-        krishiv_plan::conjuncts(&f.predicate).into_iter().any(|c| {
-            !matches!(&c.node, ExprNode::Resolved(ResolvedExpr::Function(f))
-                if f.id == krishiv_plan::FunctionId::Builtin(krishiv_plan::Builtin::IsNotNull))
-        })
+/// Whether a predicate keeps part of the table by its values: a conjunct
+/// other than the `isnotnull` checks every join key infers (both `date_dim`
+/// scans of q59 carry those).
+fn restricts(predicate: &Expr) -> bool {
+    krishiv_plan::conjuncts(predicate).into_iter().any(|c| {
+        !matches!(&c.node, ExprNode::Resolved(ResolvedExpr::Function(f))
+            if f.id == krishiv_plan::FunctionId::Builtin(krishiv_plan::Builtin::IsNotNull))
     })
 }
 

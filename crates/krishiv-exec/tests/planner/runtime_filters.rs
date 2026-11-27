@@ -999,6 +999,23 @@ fn a_scan_feeding_a_selective_build_waits_for_a_narrower_build_of_its_table() {
         scan_waits(t.plan_sql(q).unwrap().plan.root(), &mut out);
         out
     };
+    // The waits of the reader's join (the top one): its filter is the one
+    // that reaches the copy's `small` scan through `w.wk`.
+    let reader_waits = |q: &str| {
+        let plan = t.plan_sql(q).unwrap();
+        let mut stack = vec![plan.plan.root()];
+        while let Some(n) = stack.pop() {
+            if let krishiv_exec::physical::PhysNode::HashJoin(j) = n {
+                return j
+                    .runtime_filters
+                    .iter()
+                    .map(|f| f.options.scan_waits)
+                    .collect::<Vec<_>>();
+            }
+            stack.extend(n.children());
+        }
+        Vec::new()
+    };
     let q = |reader: &str, copy: &str| {
         format!(
             "SELECT d.v, w.t FROM small d JOIN (SELECT s.k32 AS wk, sum(b.v) AS t \
@@ -1014,14 +1031,15 @@ fn a_scan_feeding_a_selective_build_waits_for_a_narrower_build_of_its_table() {
         t.plan_sql(&q("WHERE d.v < 5", "")).unwrap()
     );
     // A build of the whole table: its keys are one domain with the scan's.
-    let whole = waits(&q("", ""));
-    assert!(whole.iter().any(|w| !w), "{whole:?}");
+    // The reader's filter is the one R decides; the others do not change.
+    let whole = reader_waits(&q("", ""));
+    assert!(whole.iter().all(|w| !w), "{whole:?}");
     // A build keeping most of the table: no wait (TPC-DS q04's `customer`).
-    let most = waits(&q("WHERE d.v < 300", ""));
-    assert!(most.iter().any(|w| !w), "{most:?}");
+    let most = reader_waits(&q("WHERE d.v < 300", ""));
+    assert!(!most.is_empty() && most.iter().all(|w| !w), "{most:?}");
     // The scan has a predicate of its own (TPC-DS q64's copies).
-    let both = waits(&q("WHERE d.v < 5", "WHERE s.v < 50"));
-    assert!(both.iter().any(|w| !w), "{both:?}");
+    let both = reader_waits(&q("WHERE d.v < 5", "WHERE s.v < 50"));
+    assert!(!both.is_empty() && both.iter().all(|w| !w), "{both:?}");
 }
 
 /// `ORDER BY ... LIMIT` queries whose rows have one right answer: `v` breaks
