@@ -23,7 +23,8 @@
 //! last reading pipeline ended (or the query failed), which drops the list,
 //! its memory and its files.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Weak};
 
 use arrow_schema::SchemaRef;
@@ -228,15 +229,25 @@ impl Output {
         lock(&self.state).iter().map(Segment::len).sum()
     }
 
-    /// Where the batch `idx` of segment `seg` is.
-    fn at(&self, seg: usize, idx: u64) -> Place {
+    /// Where the batch `idx` of segment `seg` is; in memory, it and the
+    /// batches after it in the segment, `run(left)` of them in all, where
+    /// `left` counts the batches from `idx` to the segment's end.
+    fn at(&self, seg: usize, idx: u64, run: impl FnOnce(u64) -> usize) -> Place {
         match lock(&self.state).get(seg) {
             None => Place::End,
             Some(s) if idx >= s.len() => Place::NextSegment,
-            Some(Segment::Memory { batches, .. }) => usize::try_from(idx)
-                .ok()
-                .and_then(|i| batches.get(i))
-                .map_or(Place::NextSegment, |b| Place::Memory(b.clone())),
+            Some(Segment::Memory { batches, .. }) => {
+                let Ok(i) = usize::try_from(idx) else {
+                    return Place::NextSegment;
+                };
+                let n = run(batches.len().saturating_sub(i) as u64).max(1);
+                let taken: Vec<Batch> = batches.iter().skip(i).take(n).cloned().collect();
+                if taken.is_empty() {
+                    Place::NextSegment
+                } else {
+                    Place::Memory(taken)
+                }
+            }
             Some(Segment::File(f)) => Place::File(Arc::clone(f)),
         }
     }
@@ -253,7 +264,8 @@ impl Output {
 }
 
 enum Place {
-    Memory(Batch),
+    /// One batch or more, in order.
+    Memory(Vec<Batch>),
     File(Arc<SpillFile>),
     NextSegment,
     End,
@@ -675,15 +687,41 @@ impl SharedSource {
 }
 
 /// One reader's global state: its cursor over the list.
+///
+/// The cursor is a plain mutex held only to claim a batch, never across an
+/// await: a batch in memory is taken without waiting. A fair async lock here
+/// handed the cursor to a driver still waiting for a worker thread, and
+/// every other driver queued behind it (TPC-DS q14: 12 drivers of one read
+/// waited 4.2 s in total for 8.6M rows already in memory). A segment on disk
+/// is read in order, one driver at a time, under `file_gate`.
 struct ReaderGlobal {
     output: Arc<Output>,
-    cursor: tokio::sync::Mutex<Cursor>,
+    cursor: Mutex<Cursor>,
+    file_gate: tokio::sync::Mutex<()>,
     batches: u64,
+    /// The drivers reading: a claim in memory takes a run of batches sized
+    /// so every driver still gets some of the segment's rest.
+    drivers: AtomicUsize,
+}
+
+/// The most in-memory batches one claim takes: claiming each alone, the
+/// readers of one list (TPC-DS q28: six of twelve drivers each, 7,032
+/// batches) spin on the cursor and list locks.
+const MAX_RUN: u64 = 16;
+
+/// The batches a claim takes from the `left` of a segment in memory with
+/// `drivers` reading: half of an even share, at least 1, at most
+/// [`MAX_RUN`].
+fn run_length(left: u64, drivers: usize) -> usize {
+    let share = left / (2 * drivers.max(1) as u64);
+    usize::try_from(share.clamp(1, MAX_RUN)).unwrap_or(1)
 }
 
 /// One driver of a reader.
 struct ReaderLocal {
     consumer: Arc<ConsumerHandle>,
+    /// Batches claimed in memory and not yet returned, in order.
+    queue: VecDeque<Batch>,
 }
 
 struct Cursor {
@@ -722,12 +760,14 @@ impl Source for SharedSource {
         let batches = output.batches();
         Ok(Arc::new(ReaderGlobal {
             output,
-            cursor: tokio::sync::Mutex::new(Cursor {
+            cursor: Mutex::new(Cursor {
                 segment: 0,
                 index: 0,
                 file: None,
             }),
+            file_gate: tokio::sync::Mutex::new(()),
             batches,
+            drivers: AtomicUsize::new(0),
         }))
     }
 
@@ -740,10 +780,14 @@ impl Source for SharedSource {
         })
     }
 
-    fn local_state(&self, ctx: &TaskContext, _global: &GlobalState) -> Result<LocalState> {
+    fn local_state(&self, ctx: &TaskContext, global: &GlobalState) -> Result<LocalState> {
+        global_ref::<ReaderGlobal>(global, "SharedSource")?
+            .drivers
+            .fetch_add(1, Ordering::Relaxed);
         // A spill file this driver opens is read through the driver's own consumer.
         Ok(Box::new(ReaderLocal {
             consumer: Arc::clone(ctx.consumer().consumer()),
+            queue: VecDeque::new(),
         }))
     }
 
@@ -754,57 +798,78 @@ impl Source for SharedSource {
     ) -> BoxFuture<'a, Result<Option<Batch>>> {
         Box::pin(async move {
             let g = global_ref::<ReaderGlobal>(global, "SharedSource")?;
-            let consumer = Arc::clone(&local_mut::<ReaderLocal>(local, "SharedSource")?.consumer);
-            let mut c = g.cursor.lock().await;
+            let local = local_mut::<ReaderLocal>(local, "SharedSource")?;
+            if let Some(b) = local.queue.pop_front() {
+                return Ok(Some(b));
+            }
+            let consumer = Arc::clone(&local.consumer);
+            let drivers = g.drivers.load(Ordering::Relaxed);
+            // Holds the file gate once a batch on disk was met.
+            let mut gate = None;
             loop {
                 g.output.query.check_cancelled()?;
-                match g.output.at(c.segment, c.index) {
-                    Place::End => return Ok(None),
-                    Place::NextSegment => {
-                        c.segment += 1;
-                        c.index = 0;
-                        c.file = None;
-                    }
-                    Place::Memory(b) => {
-                        c.index += 1;
-                        return Ok(Some(b));
-                    }
-                    Place::File(file) => {
-                        let want = c.index;
-                        let reader = c.file.take();
-                        let reservation = consumer.reservation();
-                        let (batch, reader) = run_blocking(&*g.output.executor, move || {
-                            let mut reader = match reader {
-                                Some(r) => r,
-                                None => {
-                                    let mut r =
-                                        file.reader(reservation).map_err(KrishivError::from)?;
-                                    // A segment spilled under this reader
-                                    // continues where it was.
-                                    for _ in 0..want {
-                                        r.next().transpose().map_err(KrishivError::from)?;
-                                    }
-                                    r
-                                }
-                            };
-                            let batch = reader.next().transpose().map_err(KrishivError::from)?;
-                            Ok((batch, reader))
-                        })
-                        .await?;
-                        c.index += 1;
-                        c.file = Some(reader);
-                        match batch {
-                            Some(b) => return Ok(Some(b)),
-                            // The file ended early: a short result is
-                            // never returned.
-                            None => {
-                                return Err(internal(
-                                    "a shared plan's spill file ended early".to_owned(),
-                                ));
-                            }
+                let claimed = {
+                    let mut c = lock(&g.cursor);
+                    match g
+                        .output
+                        .at(c.segment, c.index, |left| run_length(left, drivers))
+                    {
+                        Place::End => return Ok(None),
+                        Place::NextSegment => {
+                            c.segment += 1;
+                            c.index = 0;
+                            c.file = None;
+                            continue;
                         }
+                        Place::Memory(run) => {
+                            c.index += run.len() as u64;
+                            let mut run = VecDeque::from(run);
+                            let first = run.pop_front();
+                            local.queue = run;
+                            return Ok(first);
+                        }
+                        // No driver moves the cursor past a batch on disk
+                        // without the gate, so the place is looked at again
+                        // once it is held.
+                        Place::File(_) if gate.is_none() => None,
+                        Place::File(file) => Some((file, c.index, c.file.take())),
                     }
+                };
+                let Some((file, want, reader)) = claimed else {
+                    gate = Some(g.file_gate.lock().await);
+                    continue;
+                };
+                let reservation = consumer.reservation();
+                let (batch, reader) = run_blocking(&*g.output.executor, move || {
+                    let mut reader = match reader {
+                        Some(r) => r,
+                        None => {
+                            let mut r = file.reader(reservation).map_err(KrishivError::from)?;
+                            // A segment spilled under this reader
+                            // continues where it was.
+                            for _ in 0..want {
+                                r.next().transpose().map_err(KrishivError::from)?;
+                            }
+                            r
+                        }
+                    };
+                    let batch = reader.next().transpose().map_err(KrishivError::from)?;
+                    Ok((batch, reader))
+                })
+                .await?;
+                {
+                    let mut c = lock(&g.cursor);
+                    c.index += 1;
+                    c.file = Some(reader);
                 }
+                return match batch {
+                    Some(b) => Ok(Some(b)),
+                    // The file ended early: a short result is never
+                    // returned.
+                    None => Err(internal(
+                        "a shared plan's spill file ended early".to_owned(),
+                    )),
+                };
             }
         })
     }
@@ -1016,5 +1081,84 @@ mod tests {
             read.extend(values(&b));
         }
         assert_eq!(read, (0..6).collect::<Vec<i64>>());
+    }
+
+    /// The drivers of one reader, each with its local state.
+    fn drivers(
+        source: &SharedSource,
+        query: &Arc<QueryContext>,
+        dep: &GlobalState,
+        n: usize,
+    ) -> (GlobalState, Vec<LocalState>) {
+        let ctx = reader_ctx(query, dep);
+        let g = source.global_state(&ctx).unwrap();
+        let locals = (0..n)
+            .map(|_| source.local_state(&ctx, &g).unwrap())
+            .collect();
+        (g, locals)
+    }
+
+    fn cursor_index(g: &GlobalState) -> u64 {
+        lock(&global_ref::<ReaderGlobal>(g, "test").unwrap().cursor).index
+    }
+
+    #[test]
+    fn a_claim_takes_half_an_even_share_of_the_rest_capped() {
+        assert_eq!(run_length(200, 4), 16);
+        assert_eq!(run_length(40, 4), 5);
+        assert_eq!(run_length(7, 4), 1);
+        assert_eq!(run_length(0, 4), 1);
+        assert_eq!(run_length(5, 0), 2);
+    }
+
+    #[tokio::test]
+    async fn drivers_claim_runs_in_memory_and_read_every_batch_once() {
+        let batches: Vec<Batch> = (0..200).map(|i| batch(i, 1)).collect();
+        let (_sink, global, query, _ctx, _dir) = finalized(batches, false).await;
+        let source = SharedSource::new(schema());
+        let (g, mut locals) = drivers(&source, &query, &global, 4);
+        let first = source.get_data(&mut locals[0], &g).await.unwrap().unwrap();
+        assert_eq!(values(&first), vec![0]);
+        // 200 left, 4 drivers: one claim took 16 batches.
+        assert_eq!(cursor_index(&g), 16);
+        let mut read = values(&first);
+        let mut open: Vec<bool> = vec![true; locals.len()];
+        while open.iter().any(|o| *o) {
+            for (i, local) in locals.iter_mut().enumerate() {
+                if !open[i] {
+                    continue;
+                }
+                match source.get_data(local, &g).await.unwrap() {
+                    Some(b) => read.extend(values(&b)),
+                    None => open[i] = false,
+                }
+            }
+        }
+        read.sort_unstable();
+        assert_eq!(read, (0..200).collect::<Vec<i64>>());
+    }
+
+    #[tokio::test]
+    async fn drivers_holding_claimed_runs_finish_from_the_file_after_a_spill() {
+        let batches: Vec<Batch> = (0..120).map(|i| batch(i, 1)).collect();
+        let (_sink, global, query, _ctx, _dir) = finalized(batches, false).await;
+        let source = SharedSource::new(schema());
+        let (g, mut locals) = drivers(&source, &query, &global, 3);
+        let mut read = Vec::new();
+        for local in &mut locals {
+            read.extend(values(&source.get_data(local, &g).await.unwrap().unwrap()));
+        }
+        let sink_g = global_ref::<SinkGlobal>(&global, "test").unwrap();
+        let output = Arc::clone(sink_g.done.get().unwrap());
+        assert!(output.spill_unread(usize::MAX).await.unwrap() > 0);
+        // Each driver still returns the batches it claimed, then the rest
+        // comes from the file, one batch a claim.
+        for local in &mut locals {
+            while let Some(b) = source.get_data(local, &g).await.unwrap() {
+                read.extend(values(&b));
+            }
+        }
+        read.sort_unstable();
+        assert_eq!(read, (0..120).collect::<Vec<i64>>());
     }
 }

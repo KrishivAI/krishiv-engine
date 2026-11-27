@@ -366,6 +366,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.optimizer.derivedKeysAbove", &DERIVED_KEYS_ABOVE),
     ("krishiv.optimizer.eagerAggregation", &EAGER_AGGREGATION),
     ("krishiv.optimizer.ndvSampling.rows", &NDV_SAMPLING_ROWS),
+    ("krishiv.optimizer.rollupFromParent", &ROLLUP_FROM_PARENT),
     ("krishiv.optimizer.subqueryAsWindow", &SUBQUERY_AS_WINDOW),
     (
         "krishiv.python.worker.maxPerTenant",

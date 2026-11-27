@@ -48,6 +48,7 @@ fuzz_target!(|data: &[u8]| {
         spark_4_3: rest.get(1).is_none_or(|b| b & 1 == 0),
         timestamp_nanos_types: rest.get(1).is_some_and(|b| b & 2 != 0),
         spark_4_3_grammar: rest.get(1).is_some_and(|b| b & 4 != 0),
+        cross_join: rest.get(1).is_none_or(|b| b & 8 == 0),
     };
     match parse_query(&sql, &options) {
         Ok(q) => {
