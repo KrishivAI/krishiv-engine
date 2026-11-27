@@ -169,7 +169,9 @@ impl Infer<'_> {
             // goes straight to the timestamp, never trying a DATE (Spark's
             // lenient timestamp parser takes a date-only text). Spark also
             // forces `preferDate` off under the LEGACY parser policy
-            // (`CSVOptions.scala:193-198`); that policy is not visible here.
+            // (`CSVOptions.scala:193-198`). Not applied: krishiv-io has no
+            // LEGACY datetime readers for CSV or JSON at all (no lenient
+            // `FastDateFormat` path), and this is one part of that gap.
             self.timestamp(f)
         }
     }

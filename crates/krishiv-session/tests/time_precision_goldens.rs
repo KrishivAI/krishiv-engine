@@ -69,13 +69,6 @@ const KNOWN_GAPS: &[(&str, &str, &str)] = &[
         "eq_collated",
         "names [\"(collate(name, UTF8_LCASE) = APPLE)\"]",
     ),
-    // A foldable precision Krishiv's folder cannot evaluate: Spark evaluates it (6), Krishiv refuses
-    // it by name.
-    (
-        "4.3.0",
-        "current_timestamp_dayofweek",
-        "[KRISHIV_UNSUPPORTED_FEATURE] The feature `current_timestamp(dayofweek(DATE '1970-01-02'))` with a precision Krishiv cannot fold is not supported by Krishiv yet.",
-    ),
     // Spark 4.2 parses a precision past `Int` with `Integer.parseInt` and fails outside its error
     // classes (`NumberFormatException: For input string`); Krishiv raises its own class.
     (
