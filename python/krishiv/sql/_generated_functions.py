@@ -22,6 +22,7 @@ from krishiv.sql._function_support import (
     _one_of,
     _opt,
     _opts,
+    _random_int,
     _unsupported,
 )
 from krishiv.sql.column import Column
@@ -1029,7 +1030,7 @@ def count_min_sketch(
         _named(col, "col"),
         _lit(eps, "eps"),
         _lit(confidence, "confidence"),
-        *_opt(_lit, seed, "seed"),
+        _lit(_random_int() if seed is None else seed, "seed"),
     )
 
 
