@@ -3367,6 +3367,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "krishiv-jose"
+version = "0.2.1"
+dependencies = [
+ "aws-lc-rs",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "krishiv-kernels"
 version = "0.2.1"
 dependencies = [
@@ -3595,6 +3604,7 @@ dependencies = [
  "krishiv-exec",
  "krishiv-functions",
  "krishiv-io",
+ "krishiv-jose",
  "krishiv-kernels",
  "krishiv-memory",
  "krishiv-optimizer",
@@ -3616,7 +3626,6 @@ dependencies = [
  "rustix",
  "rustls",
  "saphyr-parser",
- "serde",
  "serde_json",
  "sha2",
  "tempfile",

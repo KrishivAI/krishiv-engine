@@ -12,10 +12,9 @@ publish = false
 cargo-fuzz = true
 
 # `capsule_import` includes crates/krishiv-python/src/stream/ffi.rs by path (arrow-data,
-# krishiv-common) and `jwt_parse` includes krishiv-session's auth/jose.rs (serde, serde_json);
-# cargo-machete cannot see through a path include.
+# krishiv-common); cargo-machete cannot see through a path include.
 [package.metadata.cargo-machete]
-ignored = ["arrow-data", "krishiv-common", "serde", "serde_json"]
+ignored = ["arrow-data", "krishiv-common"]
 
 [dependencies]
 libfuzzer-sys = "0.4.10"
@@ -33,6 +32,7 @@ krishiv-connectors-delta = { path = "../crates/krishiv-connectors-delta" }
 krishiv-connect = { path = "../crates/krishiv-connect" }
 krishiv-exec = { path = "../crates/krishiv-exec" }
 krishiv-io = { path = "../crates/krishiv-io" }
+krishiv-jose = { path = "../crates/krishiv-jose" }
 krishiv-memory = { path = "../crates/krishiv-memory" }
 krishiv-plan = { path = "../crates/krishiv-plan", features = ["testing"] }
 krishiv-sql = { path = "../crates/krishiv-sql" }
@@ -40,8 +40,6 @@ krishiv-types = { path = "../crates/krishiv-types" }
 krishiv-udf-pool = { path = "../crates/krishiv-udf-pool" }
 krishiv-testkit = { path = "../crates/krishiv-testkit" }
 object_store = { version = "=0.14.2", default-features = false }
-serde = { version = "1.0.229", default-features = false, features = ["std"] }
-serde_json = { version = "1.0.154", default-features = false, features = ["std"] }
 tokio = { version = "1.53", default-features = false, features = ["rt", "rt-multi-thread", "time"] }
 
 [[bin]]

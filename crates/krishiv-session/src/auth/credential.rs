@@ -14,7 +14,7 @@ use std::time::SystemTime;
 
 use krishiv_common::secret::SecretString;
 
-pub use super::jose::ExchangeClaims;
+pub use krishiv_jose::ExchangeClaims;
 
 /// What kind of user token a session presented.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -37,44 +37,33 @@ impl CredentialKind {
     }
 }
 
-impl ExchangeClaims {
-    /// Claims with these audiences and nothing else.
-    #[must_use]
-    pub fn with_audiences(audiences: Vec<String>) -> Self {
-        Self {
-            audiences,
-            ..Self::default()
-        }
-    }
-
-    /// The canonical encoding the exchange cache keys on: every value length-prefixed, groups
-    /// sorted, an absent claim and an empty one encoded differently.
-    fn canonical(&self) -> String {
-        fn list(out: &mut String, tag: &str, values: Option<&[String]>, sort: bool) {
-            out.push_str(tag);
-            match values {
-                None => out.push('-'),
-                Some(v) => {
-                    let mut v: Vec<&str> = v.iter().map(String::as_str).collect();
-                    if sort {
-                        v.sort_unstable();
-                    }
-                    out.push_str(&format!("{}[", v.len()));
-                    for s in v {
-                        out.push_str(&format!("{}:{s}", s.len()));
-                    }
-                    out.push(']');
+/// The canonical encoding the exchange cache keys on: every value length-prefixed, groups
+/// sorted, an absent claim and an empty one encoded differently.
+fn canonical(claims: &ExchangeClaims) -> String {
+    fn list(out: &mut String, tag: &str, values: Option<&[String]>, sort: bool) {
+        out.push_str(tag);
+        match values {
+            None => out.push('-'),
+            Some(v) => {
+                let mut v: Vec<&str> = v.iter().map(String::as_str).collect();
+                if sort {
+                    v.sort_unstable();
                 }
+                out.push_str(&format!("{}[", v.len()));
+                for s in v {
+                    out.push_str(&format!("{}:{s}", s.len()));
+                }
+                out.push(']');
             }
         }
-        let mut out = String::new();
-        list(&mut out, "aud", Some(&self.audiences), true);
-        let scope: Option<Vec<String>> = self.scope.as_ref().map(|s| vec![s.clone()]);
-        list(&mut out, "scope", scope.as_deref(), false);
-        list(&mut out, "scp", self.scp.as_deref(), true);
-        list(&mut out, "groups", self.groups.as_deref(), true);
-        out
     }
+    let mut out = String::new();
+    list(&mut out, "aud", Some(&claims.audiences), true);
+    let scope: Option<Vec<String>> = claims.scope.as_ref().map(|s| vec![s.clone()]);
+    list(&mut out, "scope", scope.as_deref(), false);
+    list(&mut out, "scp", claims.scp.as_deref(), true);
+    list(&mut out, "groups", claims.groups.as_deref(), true);
+    out
 }
 
 /// The user token one RPC authenticated with, kept by the session for its delegated catalogs.
@@ -161,7 +150,7 @@ impl InboundCredential {
     /// equal fingerprints within the process; the claims cannot be read back from it.
     #[must_use]
     pub fn claims_fingerprint(&self) -> [u8; 16] {
-        SecretString::new(self.claims.canonical()).fingerprint()
+        SecretString::new(canonical(&self.claims)).fingerprint()
     }
 }
 
@@ -187,9 +176,10 @@ mod tests {
 
     #[test]
     fn the_claims_fingerprint_sorts_groups_and_tells_absent_from_empty() {
-        let groups = |g: Option<Vec<&str>>| ExchangeClaims {
-            groups: g.map(|g| g.into_iter().map(str::to_owned).collect()),
-            ..ExchangeClaims::default()
+        let groups = |g: Option<Vec<&str>>| {
+            let mut c = ExchangeClaims::default();
+            c.groups = g.map(|g| g.into_iter().map(str::to_owned).collect());
+            c
         };
         let fp = |c| with(c).claims_fingerprint();
         assert_eq!(
@@ -201,9 +191,10 @@ mod tests {
             fp(groups(Some(vec!["ab"]))),
             fp(groups(Some(vec!["a", "b"])))
         );
-        let scope = |s: Option<&str>| ExchangeClaims {
-            scope: s.map(str::to_owned),
-            ..ExchangeClaims::default()
+        let scope = |s: Option<&str>| {
+            let mut c = ExchangeClaims::default();
+            c.scope = s.map(str::to_owned);
+            c
         };
         assert_ne!(fp(scope(None)), fp(scope(Some(""))));
         assert_ne!(fp(scope(Some("read write"))), fp(scope(Some("read"))));

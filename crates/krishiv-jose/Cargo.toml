@@ -1,0 +1,30 @@
+[package]
+name = "krishiv-jose"
+description = "The Krishiv token verifier: strict JWS/JWK parsing, claim rules and signature checks"
+readme = "README.md"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords = ["jwt", "jws", "jwk", "oidc", "krishiv"]
+categories = ["authentication", "cryptography"]
+# Published with the engine: `krishiv-session` (published) depends on it (ADR 0050 §6).
+publish = true
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { workspace = true, features = ["std"] }
+serde_json = { workspace = true, features = ["std"] }
+# Signatures (`verify_signature`): RSA PKCS#1 v1.5 and ECDSA, feature `verify`.
+aws-lc-rs = { workspace = true, optional = true }
+
+[dev-dependencies]
+aws-lc-rs.workspace = true
+
+[features]
+default = []
+# The signature check on aws-lc-rs. `krishiv-session`'s `oidc` feature turns it on.
+verify = ["dep:aws-lc-rs"]

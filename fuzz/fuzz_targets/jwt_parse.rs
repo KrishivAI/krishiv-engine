@@ -1,18 +1,18 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The OIDC token and key-set parsers (P3-T002 PR-14d; design §3.3, threat model §4.9): a JWS
 //! compact token, a JWK set and a discovery document arrive from clients and the identity
-//! provider, before any signature is checked. Each parser must return a value or an error for
-//! any bytes, never panic, loop or allocate without bound. The first byte picks the parser.
+//! provider, before any signature is checked, and a signer converts a key service's DER
+//! signature (ADR 0050). Each parser must return a value or an error for any bytes, never
+//! panic, loop or allocate without bound. The first byte picks the parser.
 #![no_main]
 
-#[path = "../../crates/krishiv-session/src/auth/jose.rs"]
-mod jose;
+use krishiv_jose as jose;
 
 libfuzzer_sys::fuzz_target!(|data: &[u8]| {
     let Some((&which, rest)) = data.split_first() else {
         return;
     };
-    match which % 3 {
+    match which % 4 {
         0 => {
             if let Ok(text) = std::str::from_utf8(rest) {
                 let shaped = jose::looks_like_jws(text);
@@ -40,8 +40,15 @@ libfuzzer_sys::fuzz_target!(|data: &[u8]| {
                 assert!(keys.len() <= jose::MAX_JWKS_KEYS);
             }
         }
-        _ => {
+        2 => {
             let _ = jose::discovered_jwks_uri(rest, "https://idp.test/");
+        }
+        _ => {
+            for curve in [jose::Curve::P256, jose::Curve::P384] {
+                if let Ok(fixed) = jose::ecdsa_der_to_fixed(curve, rest) {
+                    assert_eq!(fixed.len(), 2 * curve.coordinate_len());
+                }
+            }
         }
     }
 });

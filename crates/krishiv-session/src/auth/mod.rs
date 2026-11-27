@@ -33,10 +33,10 @@ mod denials;
 mod der;
 mod impersonation;
 #[cfg_attr(
-    all(not(feature = "oidc"), not(test)),
+    not(feature = "oidc"),
     expect(
-        dead_code,
-        reason = "only the router's shape test and `Alg` are used without the `oidc` verifier"
+        unused_imports,
+        reason = "only `Alg` and the principal-name rule are used without the `oidc` verifier"
     )
 )]
 mod jose;
@@ -60,9 +60,9 @@ mod assertion_tests;
 #[cfg(test)]
 mod impersonation_tests;
 #[cfg(test)]
-mod jose_tests;
-#[cfg(test)]
 mod mtls_tests;
+#[cfg(test)]
+mod oidc_config_tests;
 #[cfg(test)]
 #[cfg(feature = "oidc")]
 mod oidc_http_tests;
@@ -84,7 +84,7 @@ pub use credential::{CredentialKind, ExchangeClaims, InboundCredential};
 pub use denials::{DeniedCount, DeniedCounts};
 pub use der::{CertNames, DerError};
 pub use impersonation::{ActAs, ActAsHint, Denial, ImpersonationConfig};
-pub use jose::Alg;
+pub use krishiv_jose::Alg;
 pub use mtls::{ClientCertificates, MtlsConfig, PrincipalFrom};
 pub use oidc_config::OidcConfig;
 pub use principals::{ImpersonationTarget, PrincipalPrivilege, PrincipalRights, PrincipalTable};

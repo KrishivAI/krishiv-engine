@@ -128,31 +128,8 @@ pub fn krishiv_session::agent::session_zone(core::option::Option<&str>) -> core:
 pub fn krishiv_session::agent::spark_float(f64) -> alloc::string::String
 pub fn krishiv_session::agent::spark_float32(f32) -> alloc::string::String
 pub mod krishiv_session::auth
-#[non_exhaustive] pub enum krishiv_session::auth::Alg
-pub krishiv_session::auth::Alg::Es256
-pub krishiv_session::auth::Alg::Es384
-pub krishiv_session::auth::Alg::Rs256
-pub krishiv_session::auth::Alg::Rs384
-pub krishiv_session::auth::Alg::Rs512
-impl krishiv_session::auth::Alg
-pub const krishiv_session::auth::Alg::ALL: [Self; 5]
-pub fn krishiv_session::auth::Alg::as_str(self) -> &'static str
-pub fn krishiv_session::auth::Alg::parse(&str) -> core::option::Option<Self>
-impl core::clone::Clone for krishiv_session::auth::Alg
-pub fn krishiv_session::auth::Alg::clone(&self) -> krishiv_session::auth::Alg
-impl core::cmp::Eq for krishiv_session::auth::Alg
-impl core::cmp::Ord for krishiv_session::auth::Alg
-pub fn krishiv_session::auth::Alg::cmp(&self, &krishiv_session::auth::Alg) -> core::cmp::Ordering
-impl core::cmp::PartialEq for krishiv_session::auth::Alg
-pub fn krishiv_session::auth::Alg::eq(&self, &krishiv_session::auth::Alg) -> bool
-impl core::cmp::PartialOrd for krishiv_session::auth::Alg
-pub fn krishiv_session::auth::Alg::partial_cmp(&self, &krishiv_session::auth::Alg) -> core::option::Option<core::cmp::Ordering>
-impl core::fmt::Debug for krishiv_session::auth::Alg
-pub fn krishiv_session::auth::Alg::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::hash::Hash for krishiv_session::auth::Alg
-pub fn krishiv_session::auth::Alg::hash<__H: core::hash::Hasher>(&self, &mut __H)
-impl core::marker::Copy for krishiv_session::auth::Alg
-impl core::marker::StructuralPartialEq for krishiv_session::auth::Alg
+pub use krishiv_session::auth::Alg
+pub use krishiv_session::auth::ExchangeClaims
 #[non_exhaustive] pub enum krishiv_session::auth::AuthFailure
 pub krishiv_session::auth::AuthFailure::Expired
 pub krishiv_session::auth::AuthFailure::Invalid
@@ -537,23 +514,6 @@ impl core::default::Default for krishiv_session::auth::DeniedCounts
 pub fn krishiv_session::auth::DeniedCounts::default() -> Self
 impl core::fmt::Debug for krishiv_session::auth::DeniedCounts
 pub fn krishiv_session::auth::DeniedCounts::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-#[non_exhaustive] pub struct krishiv_session::auth::ExchangeClaims
-pub krishiv_session::auth::ExchangeClaims::audiences: alloc::vec::Vec<alloc::string::String>
-pub krishiv_session::auth::ExchangeClaims::groups: core::option::Option<alloc::vec::Vec<alloc::string::String>>
-pub krishiv_session::auth::ExchangeClaims::scope: core::option::Option<alloc::string::String>
-pub krishiv_session::auth::ExchangeClaims::scp: core::option::Option<alloc::vec::Vec<alloc::string::String>>
-impl krishiv_session::auth::ExchangeClaims
-pub fn krishiv_session::auth::ExchangeClaims::with_audiences(alloc::vec::Vec<alloc::string::String>) -> Self
-impl core::clone::Clone for krishiv_session::auth::ExchangeClaims
-pub fn krishiv_session::auth::ExchangeClaims::clone(&self) -> krishiv_session::auth::ExchangeClaims
-impl core::cmp::Eq for krishiv_session::auth::ExchangeClaims
-impl core::cmp::PartialEq for krishiv_session::auth::ExchangeClaims
-pub fn krishiv_session::auth::ExchangeClaims::eq(&self, &krishiv_session::auth::ExchangeClaims) -> bool
-impl core::default::Default for krishiv_session::auth::ExchangeClaims
-pub fn krishiv_session::auth::ExchangeClaims::default() -> krishiv_session::auth::ExchangeClaims
-impl core::fmt::Debug for krishiv_session::auth::ExchangeClaims
-pub fn krishiv_session::auth::ExchangeClaims::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
-impl core::marker::StructuralPartialEq for krishiv_session::auth::ExchangeClaims
 #[non_exhaustive] pub struct krishiv_session::auth::FailureCount
 pub krishiv_session::auth::FailureCount::count: u64
 pub krishiv_session::auth::FailureCount::method: krishiv_session::auth::Method
@@ -604,11 +564,11 @@ impl core::marker::Copy for krishiv_session::auth::ImpersonationCount
 impl core::marker::StructuralPartialEq for krishiv_session::auth::ImpersonationCount
 pub struct krishiv_session::auth::InboundCredential
 impl krishiv_session::auth::InboundCredential
-pub fn krishiv_session::auth::InboundCredential::claims(&self) -> &krishiv_session::auth::ExchangeClaims
+pub fn krishiv_session::auth::InboundCredential::claims(&self) -> &krishiv_jose::ExchangeClaims
 pub fn krishiv_session::auth::InboundCredential::claims_fingerprint(&self) -> [u8; 16]
 pub fn krishiv_session::auth::InboundCredential::expires_at(&self) -> std::time::SystemTime
 pub fn krishiv_session::auth::InboundCredential::kind(&self) -> krishiv_session::auth::CredentialKind
-pub fn krishiv_session::auth::InboundCredential::new(krishiv_session::auth::CredentialKind, krishiv_common::secret::SecretString, krishiv_session::auth::ExchangeClaims, std::time::SystemTime) -> Self
+pub fn krishiv_session::auth::InboundCredential::new(krishiv_session::auth::CredentialKind, krishiv_common::secret::SecretString, krishiv_jose::ExchangeClaims, std::time::SystemTime) -> Self
 pub fn krishiv_session::auth::InboundCredential::token(&self) -> &krishiv_common::secret::SecretString
 impl core::clone::Clone for krishiv_session::auth::InboundCredential
 pub fn krishiv_session::auth::InboundCredential::clone(&self) -> krishiv_session::auth::InboundCredential
@@ -637,7 +597,7 @@ impl core::fmt::Debug for krishiv_session::auth::MtlsConfig
 pub fn krishiv_session::auth::MtlsConfig::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 impl core::marker::StructuralPartialEq for krishiv_session::auth::MtlsConfig
 #[non_exhaustive] pub struct krishiv_session::auth::OidcConfig
-pub krishiv_session::auth::OidcConfig::algorithms: alloc::vec::Vec<krishiv_session::auth::Alg>
+pub krishiv_session::auth::OidcConfig::algorithms: alloc::vec::Vec<krishiv_jose::Alg>
 pub krishiv_session::auth::OidcConfig::allow_insecure_issuer: bool
 pub krishiv_session::auth::OidcConfig::audience: core::option::Option<alloc::string::String>
 pub krishiv_session::auth::OidcConfig::clock_skew: core::time::Duration

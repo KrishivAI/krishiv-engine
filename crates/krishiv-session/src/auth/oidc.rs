@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-//! OIDC access tokens (feature `oidc`; design §3.3): the signature check on aws-lc-rs, the JWK
-//! set cache and the thread that fetches it.
+//! OIDC access tokens (feature `oidc`; design §3.3): the JWK set cache and the thread that
+//! fetches it. The signature check is `krishiv_jose::verify_signature` (feature `verify`).
 //!
 //! - **Signatures.** RSASSA-PKCS1-v1_5 on 2048 to 8192 bit keys, and ECDSA P-256/P-384 with
 //!   fixed-width `r || s` (RFC 7518 §3.4). There is no `none` and no HMAC path, so an HS256
@@ -22,12 +22,11 @@ use std::sync::mpsc;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use aws_lc_rs::signature::{self, RsaPublicKeyComponents, UnparsedPublicKey};
 use krishiv_common::error::KrishivError;
 use tokio::sync::oneshot;
 
 use super::AuthFailure;
-use super::jose::{self, Alg, ClaimRules, Identity, JoseError, Jwk, KeyMaterial};
+use super::jose::{self, Alg, ClaimRules, Identity, JoseError, Jwk, verify_signature};
 use super::oidc_config::OidcConfig;
 use super::secret_ref::invalid;
 
@@ -42,38 +41,6 @@ const READ_TIMEOUT: Duration = Duration::from_secs(5);
 pub(crate) trait KeySource: Send + 'static {
     /// The JWK set document's bytes. The error text is logged (it never holds a token).
     fn fetch(&mut self) -> Result<Vec<u8>, String>;
-}
-
-/// Whether `signature` over `input` verifies with `key` for `alg`. The key must fit `alg`
-/// ([`Jwk::fits`]); a key that does not never verifies.
-#[must_use]
-pub(crate) fn verify_signature(alg: Alg, key: &Jwk, input: &[u8], signature: &[u8]) -> bool {
-    if !key.fits(alg) {
-        return false;
-    }
-    match (&key.material, alg) {
-        (KeyMaterial::Rsa { n, e }, Alg::Rs256 | Alg::Rs384 | Alg::Rs512) => {
-            let params = match alg {
-                Alg::Rs256 => &signature::RSA_PKCS1_2048_8192_SHA256,
-                Alg::Rs384 => &signature::RSA_PKCS1_2048_8192_SHA384,
-                _ => &signature::RSA_PKCS1_2048_8192_SHA512,
-            };
-            RsaPublicKeyComponents { n, e }
-                .verify(params, input, signature)
-                .is_ok()
-        }
-        (KeyMaterial::Ec { point, .. }, Alg::Es256) => {
-            UnparsedPublicKey::new(&signature::ECDSA_P256_SHA256_FIXED, point)
-                .verify(input, signature)
-                .is_ok()
-        }
-        (KeyMaterial::Ec { point, .. }, Alg::Es384) => {
-            UnparsedPublicKey::new(&signature::ECDSA_P384_SHA384_FIXED, point)
-                .verify(input, signature)
-                .is_ok()
-        }
-        _ => false,
-    }
 }
 
 /// The cached keys and when they may be fetched again on demand.
@@ -355,7 +322,8 @@ fn refused(e: JoseError) -> Verified {
     tracing::debug!(target: "krishiv::auth", reason = %e, "OIDC token refused");
     Verified::Failed(match e {
         JoseError::Expired => AuthFailure::Expired,
-        JoseError::Invalid(_) => AuthFailure::Invalid,
+        // `Invalid`, and any refusal a later `krishiv-jose` adds: fail closed.
+        _ => AuthFailure::Invalid,
     })
 }
 

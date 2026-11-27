@@ -2037,6 +2037,7 @@ dependencies = [
  "krishiv-connectors-delta",
  "krishiv-exec",
  "krishiv-io",
+ "krishiv-jose",
  "krishiv-memory",
  "krishiv-plan",
  "krishiv-sql",
@@ -2046,8 +2047,6 @@ dependencies = [
  "libfuzzer-sys",
  "object_store",
  "prost",
- "serde",
- "serde_json",
  "tokio",
  "url",
 ]
@@ -2083,6 +2082,14 @@ dependencies = [
  "tokio",
  "tracing",
  "twox-hash",
+]
+
+[[package]]
+name = "krishiv-jose"
+version = "0.2.1"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -2185,6 +2192,7 @@ dependencies = [
  "krishiv-exec",
  "krishiv-functions",
  "krishiv-io",
+ "krishiv-jose",
  "krishiv-kernels",
  "krishiv-memory",
  "krishiv-optimizer",

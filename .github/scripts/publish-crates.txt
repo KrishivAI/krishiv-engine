@@ -1,4 +1,5 @@
 krishiv-common
+krishiv-jose
 krishiv-arrow-bridge
 krishiv-types
 krishiv-kernels
