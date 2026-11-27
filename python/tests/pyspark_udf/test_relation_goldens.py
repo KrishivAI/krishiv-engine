@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import json
 import re
-import sys
 from pathlib import Path
 from typing import Any
 
@@ -34,7 +33,6 @@ JVM_FAILURES = {None, "UNSUPPORTED_CALL.WITHOUT_SUGGESTION"}
 
 #: Known gaps: (case regex, reason). A matching case must still differ from Spark.
 KNOWN_GAPS: list[tuple[str, str]] = [
-    (r"agg/pandas/two", "two grouped-aggregate UDFs in one agg need two workers on the one-thread default"),
 ]
 
 
@@ -97,8 +95,6 @@ def test_the_case_matches_spark(spark: Any, case: str) -> None:
 
 @pytest.mark.parametrize("case", sorted(c for c in GOLDENS["cases"] if gap(c)))
 def test_every_known_gap_still_differs(spark: Any, case: str) -> None:
-    if case == "agg/pandas/two" and not getattr(sys, "_is_gil_enabled", lambda: True)():
-        pytest.skip("free-threaded build: the default has one worker per executor thread, so this case matches")
     assert difference(spark, case) is not None, f"{case} matches Spark now: drop it from KNOWN_GAPS"
 
 
