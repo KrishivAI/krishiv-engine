@@ -55,6 +55,7 @@
   --color-accent-foreground: var(--accent-foreground);
   --color-destructive: var(--destructive);
   --color-border: var(--border);
+  --color-border-strong: var(--k-border-strong);
   --color-input: var(--input);
   --color-ring: var(--ring);
   --color-text-2: var(--k-text-2);
@@ -75,6 +76,8 @@
   --radius-md: var(--k-radius-md);
   --radius-lg: var(--k-radius-lg);
   --shadow-sm: var(--k-shadow-sm);
+  /* Floating layers (menus, selects, dialogs) are the only things with a large shadow. */
+  --shadow-pop: var(--k-shadow-lg);
 }
 
 @layer base {

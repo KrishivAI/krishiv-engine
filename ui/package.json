@@ -6,11 +6,12 @@
     "dev": "pnpm --filter krishiv-console-app dev",
     "build": "pnpm --filter krishiv-console-app build",
     "check": "pnpm -r check",
-    "test": "pnpm -r test",
-    "sync-assets": "./scripts/sync-assets.sh"
+    "test": "pnpm -r test && pnpm --filter krishiv-ui-gallery build",
+    "sync-assets": "./scripts/sync-assets.sh",
+    "gallery": "pnpm --filter krishiv-ui-gallery dev"
   },
   "devDependencies": {
     "axe-core": "4.14.0"
   },
-  "//": "axe-core is read by tests/check_pages.py from ui/node_modules."
+  "//": "axe-core is read by tests/check_pages.py and tests/check_gallery.py from ui/node_modules. `test` also builds the dev-only gallery (apps/gallery/dist), which check_gallery.py serves under the production CSP."
 }

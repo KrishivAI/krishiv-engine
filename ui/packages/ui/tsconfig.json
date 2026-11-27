@@ -8,7 +8,8 @@
     "isolatedModules": true,
     "skipLibCheck": true,
     "noEmit": true,
-    "types": ["svelte"]
+    "types": ["svelte"],
+    "paths": { "$ui": ["./src"], "$ui/*": ["./src/*"] }
   },
   "include": ["src/**/*.ts", "src/**/*.svelte"]
 }
