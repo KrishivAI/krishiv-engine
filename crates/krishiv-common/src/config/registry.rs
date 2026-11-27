@@ -15,7 +15,7 @@ use super::{
     agg_output_filter::EXEC_AGG_OUTPUT_FILTER, build_projection::EXEC_JOIN_BUILD_PROJECTION,
     direct_keys::EXEC_AGG_DIRECT_KEYS, distinct_count::EXEC_AGG_DISTINCT_COUNT_AT_MERGE,
     join_cost::JOIN_COST, partition_types::LEGACY_SKIP_TYPE_VALIDATION_ON_ALTER_PARTITION,
-    scan_instance::EXEC_SCAN_INSTANCE_PROJECTION,
+    row_slices::EXEC_SCAN_ROW_SLICES, scan_instance::EXEC_SCAN_INSTANCE_PROJECTION,
 };
 
 mod python;
@@ -137,6 +137,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &EXEC_JOIN_BUILD_SIDE,
     &EXEC_JOIN_BUILD_PROJECTION,
     &EXEC_SCAN_INSTANCE_PROJECTION,
+    &EXEC_SCAN_ROW_SLICES,
     &EXEC_JOIN_RADIX_BITS,
     &EXEC_JOIN_STRATEGY,
     &EXEC_JOIN_SMJ_BUFFER_BYTES,

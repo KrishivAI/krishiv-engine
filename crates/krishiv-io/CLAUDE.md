@@ -16,7 +16,7 @@ typed format options, and the scan/write drivers (`ScanStream`, `FileWriter`) th
 values) and `scalar_column` · `stats.rs` statistics and
 sound `prune` (TriState) · `options.rs` OptionSchema/FormatOptions (unknown-option warning, strict mode,
 secrets) · `schema_map.rs` SchemaMapper (case rules, field ids, Delta column mapping, widening, predicate
-re-typing) · `split.rs` Spark split planning (goldens: `tests/fixtures/spark-4.2.0/file-splits.json`) ·
+re-typing) · `split.rs` Spark split planning (goldens: `tests/fixtures/spark-4.2.0/file-splits.json`; `pruned_morsels_sliced` cuts a large kept unit into `RowSlice` morsels, `MIN_SLICE_ROWS`) ·
 `scan.rs` ScanStream · `take.rs` (P2-T063) rows by position for a late fetch: `take`, `TakeRequest`, `TakeStream`, `RowFile` (the versioned row id naming a file); a format offers it through `Capabilities::random_access` · `runtime_filter/bound.rs` (P2-T063) a top-N's bound as a `KeyFilter`, run by the Parquet row filter as its own first pass · `runtime_filter/` (P2-T163): `RuntimeFilter` (snapshots numbered by generation; the
 atomic generation is only a "changed?" hint), `ScanFilter` (lowering cached per scan level), `KeyFilter` and
 `KeyFilterBuilder` (min/max, value set, Bloom filter), `KeyFilterOptions::side` (`RangeSide`: a one-sided range, the other end opened to the key type's limit at `finish`, a join residual's bound; a float or byte-string `Lower` keeps no range; `side_tests.rs`), `merge.rs` `KeyFilter::merge` (the filter of several producer

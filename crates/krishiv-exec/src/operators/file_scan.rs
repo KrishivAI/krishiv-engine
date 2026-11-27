@@ -59,8 +59,9 @@ use krishiv_io::split::{
 };
 use krishiv_io::{
     ByteRange, ColumnPath, FileConstants, FileFormat, FileMetadata, FileRef, FormatOptions,
-    IoContext, MetadataCols, PushdownExpr, ROW_INDEX_COLUMN, RowFile, RowLevel, ScanOptions,
-    ScanRequest, ScanStream, ScanUnitMetrics, SchemaMapper, StoreId, TakeRequest, TakeStream,
+    IoContext, MetadataCols, PushdownExpr, ROW_INDEX_COLUMN, RowFile, RowLevel, RowSelection,
+    ScanOptions, ScanRequest, ScanStream, ScanUnitMetrics, SchemaMapper, StoreId, TakeRequest,
+    TakeStream,
 };
 use krishiv_memory::ConsumerHandle;
 use krishiv_types::batch::Batch;
@@ -1048,9 +1049,15 @@ impl FileScanSource {
             .sum::<usize>() as u64;
         let small = target <= self.min_morsel_bytes
             && splits <= (drivers.max(1) as u64).saturating_mul(MORSELS_PER_DRIVER);
-        if let Some(m) =
-            self.pruned_morsels(request, partition_filters, drivers, &splittable, small)
-        {
+        let slice = small && caps.selection && ctx.query().config().scan_row_slices;
+        if let Some(m) = self.pruned_morsels(
+            request,
+            partition_filters,
+            drivers,
+            &splittable,
+            small,
+            slice,
+        ) {
             return m;
         }
         krishiv_io::split::morsels(&self.partitions, target, splittable)
@@ -1082,6 +1089,7 @@ impl FileScanSource {
         drivers: usize,
         splittable: &impl Fn(usize) -> bool,
         small: bool,
+        slice: bool,
     ) -> Option<Vec<Vec<MorselSplit>>> {
         if !request.row_level.runtime_filters() {
             return None;
@@ -1137,6 +1145,8 @@ impl FileScanSource {
                         kept_rows = kept_rows.saturating_add(u.rows);
                         KeptUnit {
                             start: u.bytes.start,
+                            end: u.bytes.end,
+                            first_row: u.first_row,
                             rows: u.rows,
                         }
                     })
@@ -1150,10 +1160,20 @@ impl FileScanSource {
         }
         let morsels = (drivers.max(1) as u64).saturating_mul(MORSELS_PER_DRIVER);
         let target = kept_rows.div_ceil(morsels);
-        Some(krishiv_io::split::pruned_morsels(
+        // A small scan in fewer kept units than drivers cuts each unit into
+        // up to drivers / units row slices (study 59; `slice`: the format reads
+        // a row selection): a one-row-group table otherwise reads on one driver.
+        let units = kept.iter().flatten().map(Vec::len).sum::<usize>().max(1) as u64;
+        let slices = if slice {
+            (drivers.max(1) as u64).div_ceil(units)
+        } else {
+            1
+        };
+        Some(krishiv_io::split::pruned_morsels_sliced(
             &self.partitions,
             &kept,
             target,
+            slices,
         ))
     }
 
@@ -1197,7 +1217,12 @@ impl FileScanSource {
         partition_filters: &[(usize, ScanFilter)],
         piece: MorselSplit,
     ) -> Result<()> {
-        let MorselSplit { file, range, split } = piece;
+        let MorselSplit {
+            file,
+            range,
+            split,
+            rows,
+        } = piece;
         // Stage 0: a filter that drops every row skips the piece unopened.
         if let Some(f) = request.dynamic.iter().find(|f| f.drops_everything()) {
             f.filter().stats().add_split(range.len());
@@ -1234,10 +1259,17 @@ impl FileScanSource {
             .row_filter
             .and_then(|(last, on)| (last == file).then_some(on));
         let selected;
-        let req = if self.selection.is_some() || row_filter_start.is_some() {
+        let req = if self.selection.is_some() || row_filter_start.is_some() || rows.is_some() {
             let mut r = request.clone();
             if let Some(s) = &self.selection {
                 r.selection = s.selection(&f);
+            }
+            if let Some(slice) = rows {
+                let slice = RowSelection::from_ranges(std::iter::once(slice.start..slice.end));
+                r.selection = Some(match r.selection.take() {
+                    Some(s) => s.intersect(&slice),
+                    None => slice,
+                });
             }
             r.row_filter_start = row_filter_start;
             selected = r;

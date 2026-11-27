@@ -184,7 +184,25 @@ pub struct MorselSplit {
     /// The planned split the piece belongs to (what `_metadata`'s
     /// `file_block_start` and `file_block_length` report).
     pub split: ByteRange,
+    /// Only these file-relative rows of the unit `range` holds, when a
+    /// unit is cut into row slices ([`pruned_morsels_sliced`]); `None`
+    /// reads every row the range owns.
+    pub rows: Option<RowSlice>,
 }
+
+/// File-relative rows `start..end` of one unit, a morsel's share of it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RowSlice {
+    /// The slice's first row in the file.
+    pub start: u64,
+    /// One past its last row.
+    pub end: u64,
+}
+
+/// The fewest rows a row slice of a unit holds: a slice decodes (and
+/// skips) the unit's rows before it, so slices smaller than a batch
+/// cost more decoding than the drivers they add save.
+pub const MIN_SLICE_ROWS: u64 = 4096;
 
 /// The morsel size for `partitions` read by `drivers` drivers:
 /// [`MORSELS_PER_DRIVER`] morsels per driver, never less than `floor` bytes
@@ -242,6 +260,7 @@ pub fn morsels(
                     file: s.file,
                     range,
                     split: s.range,
+                    rows: None,
                 });
             }
         }
@@ -257,6 +276,10 @@ pub fn morsels(
 pub struct KeptUnit {
     /// The unit's first byte in its file.
     pub start: u64,
+    /// One past its last byte.
+    pub end: u64,
+    /// Its first row in the file.
+    pub first_row: u64,
     /// Its rows.
     pub rows: u64,
 }
@@ -278,7 +301,24 @@ pub fn pruned_morsels(
     kept: &[Vec<Vec<KeptUnit>>],
     target_rows: u64,
 ) -> Vec<Vec<MorselSplit>> {
+    pruned_morsels_sliced(partitions, kept, target_rows, 1)
+}
+
+/// [`pruned_morsels`], except that a unit holding more than `target_rows`
+/// is cut into row slices of about `target_rows` (at least
+/// [`MIN_SLICE_ROWS`], at most `max_slices`), each its own morsel over the
+/// unit's bytes with [`MorselSplit::rows`] set, in row order. For a format
+/// that honours [`RowSelection`](crate::RowSelection)s: a small table of
+/// one row group otherwise reads on one driver. `max_slices` 1 cuts none.
+#[must_use]
+pub fn pruned_morsels_sliced(
+    partitions: &[FilePartition],
+    kept: &[Vec<Vec<KeptUnit>>],
+    target_rows: u64,
+    max_slices: u64,
+) -> Vec<Vec<MorselSplit>> {
     let target_rows = target_rows.max(1);
+    let slice_rows = target_rows.max(MIN_SLICE_ROWS);
     let mut out = Vec::new();
     for (i, p) in partitions.iter().enumerate() {
         let kept = kept.get(i).map_or(&[][..], Vec::as_slice);
@@ -287,7 +327,56 @@ pub fn pruned_morsels(
         for (j, s) in p.splits.iter().enumerate() {
             let units = kept.get(j).map_or(&[][..], Vec::as_slice);
             let mut start = s.range.start;
-            for u in units {
+            let mut sliced = false;
+            for (n, u) in units.iter().enumerate() {
+                let slices = u.rows.div_ceil(slice_rows).min(max_slices.max(1));
+                if slices > 1 {
+                    // The bytes before the unit end the open morsel (it may
+                    // hold kept units), or join the first slice when the
+                    // morsel is empty (they hold only pruned units); the last
+                    // slice takes the split's bytes after the split's last
+                    // kept unit. Each slice owns the unit's midpoint, and
+                    // its reader skips a pruned unit it holds again.
+                    let cut = u.start.clamp(start, s.range.end);
+                    if cut > start && (rows > 0 || !current.is_empty()) {
+                        current.push(MorselSplit {
+                            file: s.file,
+                            range: ByteRange::new(start, cut),
+                            split: s.range,
+                            rows: None,
+                        });
+                        start = cut;
+                    }
+                    if !current.is_empty() {
+                        out.push(std::mem::take(&mut current));
+                    }
+                    rows = 0;
+                    let last = n + 1 == units.len();
+                    let own = u.end.max(cut);
+                    let end = if last { own.max(s.range.end) } else { own };
+                    for k in 0..slices {
+                        let at = |k: u64| {
+                            let off = u128::from(u.rows) * u128::from(k) / u128::from(slices);
+                            u.first_row + u64::try_from(off).unwrap_or(u.rows)
+                        };
+                        let range = ByteRange::new(
+                            if k == 0 { start } else { cut },
+                            if k + 1 == slices { end } else { own },
+                        );
+                        out.push(vec![MorselSplit {
+                            file: s.file,
+                            range,
+                            split: s.range,
+                            rows: Some(RowSlice {
+                                start: at(k),
+                                end: at(k + 1),
+                            }),
+                        }]);
+                    }
+                    start = end.min(s.range.end).max(start);
+                    sliced = true;
+                    continue;
+                }
                 if rows > 0 && rows.saturating_add(u.rows) > target_rows {
                     let cut = u.start.clamp(start, s.range.end);
                     if cut > start {
@@ -295,6 +384,7 @@ pub fn pruned_morsels(
                             file: s.file,
                             range: ByteRange::new(start, cut),
                             split: s.range,
+                            rows: None,
                         });
                     }
                     out.push(std::mem::take(&mut current));
@@ -303,11 +393,15 @@ pub fn pruned_morsels(
                 }
                 rows = rows.saturating_add(u.rows);
             }
-            current.push(MorselSplit {
-                file: s.file,
-                range: ByteRange::new(start, s.range.end),
-                split: s.range,
-            });
+            // After a slice, only the bytes left past the sliced unit.
+            if !sliced || start < s.range.end {
+                current.push(MorselSplit {
+                    file: s.file,
+                    range: ByteRange::new(start, s.range.end),
+                    split: s.range,
+                    rows: None,
+                });
+            }
         }
         if !current.is_empty() {
             out.push(current);

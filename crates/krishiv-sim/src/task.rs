@@ -313,6 +313,9 @@ struct Settings {
     /// `krishiv.exec.dataflowScheduling`; absent: the default.
     #[prost(bool, optional, tag = "20")]
     dataflow_scheduling: Option<bool>,
+    /// `krishiv.exec.scan.rowSlices`; absent: the default.
+    #[prost(bool, optional, tag = "21")]
+    scan_row_slices: Option<bool>,
 }
 
 fn wide(v: usize) -> u64 {
@@ -335,6 +338,7 @@ impl Settings {
             seed,
             agg_row_layout,
             agg_direct_keys,
+            scan_row_slices,
             detailed_metrics,
             join_row_layout,
             join_direct_index,
@@ -371,6 +375,7 @@ impl Settings {
             coalesce_input: Some(coalesce_input),
             join_direct_index: Some(join_direct_index),
             dataflow_scheduling: Some(dataflow_scheduling),
+            scan_row_slices: Some(scan_row_slices),
         }
     }
 
@@ -386,6 +391,9 @@ impl Settings {
             agg_direct_keys: self
                 .agg_direct_keys
                 .unwrap_or(ExecConfig::default().agg_direct_keys),
+            scan_row_slices: self
+                .scan_row_slices
+                .unwrap_or(ExecConfig::default().scan_row_slices),
             detailed_metrics: self.detailed_metrics,
             join_row_layout: self.join_row_layout,
             join_direct_index: self
@@ -642,6 +650,20 @@ mod tests {
         let mut old = Settings::of(&on);
         old.dataflow_scheduling = None;
         assert!(!old.config().unwrap().dataflow_scheduling);
+    }
+
+    #[test]
+    fn scan_row_slices_round_trips_and_defaults_when_absent() {
+        let off = ExecConfig {
+            scan_row_slices: false,
+            ..ExecConfig::default()
+        };
+        let (_, got) = decode_task(&encode_task(&TaskSpec::whole(), &off).unwrap()).unwrap();
+        assert!(!got.scan_row_slices);
+        // A descriptor written before tag 21 existed.
+        let mut old = Settings::of(&off);
+        old.scan_row_slices = None;
+        assert!(old.config().unwrap().scan_row_slices);
     }
 
     #[test]

@@ -6,8 +6,9 @@ use krishiv_common::config::Config;
 use serde_json::Value;
 
 use super::{
-    FilePartition, FileSplit, KeptUnit, MORSELS_PER_DRIVER, MorselSplit, SplitConfig, SplitFile,
-    max_split_bytes, morsel_bytes, morsels, plan, pruned_morsels,
+    FilePartition, FileSplit, KeptUnit, MIN_SLICE_ROWS, MORSELS_PER_DRIVER, MorselSplit, RowSlice,
+    SplitConfig, SplitFile, max_split_bytes, morsel_bytes, morsels, plan, pruned_morsels,
+    pruned_morsels_sliced,
 };
 use crate::format::{Capabilities, Splittable};
 use crate::io::ByteRange;
@@ -239,6 +240,7 @@ fn morsels_keep_unsplittable_splits_whole() {
             file: 0,
             range: ByteRange::new(0, 100),
             split: ByteRange::new(0, 100),
+            rows: None,
         }]
     );
     assert_eq!(m.len(), 1 + 4);
@@ -280,7 +282,12 @@ fn morsels_tile_every_split_exactly() {
 fn kept(units: &[(u64, u64)]) -> Vec<KeptUnit> {
     units
         .iter()
-        .map(|&(start, rows)| KeptUnit { start, rows })
+        .map(|&(start, rows)| KeptUnit {
+            start,
+            end: start + 10,
+            first_row: 0,
+            rows,
+        })
         .collect()
 }
 
@@ -363,7 +370,12 @@ fn pruned_morsels_tile_the_splits_and_keep_each_unit_once() {
             per_split.push(
                 units(s.file)
                     .filter(|&(a, b)| range.owns(&(a..b)) && s.file < 20 && a % 30 == 0)
-                    .map(|(a, _)| KeptUnit { start: a, rows: 7 })
+                    .map(|(a, b)| KeptUnit {
+                        start: a,
+                        end: b,
+                        first_row: a / 10 * 7,
+                        rows: 7,
+                    })
                     .collect::<Vec<_>>(),
             );
         }
@@ -406,5 +418,220 @@ fn pruned_morsels_tile_the_splits_and_keep_each_unit_once() {
             })
             .sum();
         assert!(rows <= 50 || rows == 7, "{rows}");
+    }
+}
+
+#[test]
+fn a_large_kept_unit_is_cut_into_row_slices_in_order() {
+    // One 100-byte split of one file: units [0,30) with 1,000 rows, [30,70)
+    // with 40,000 rows (rows 1,000..41,000), [70,100) with 1,000 rows.
+    let parts = [part(0, &[(0, 0, 100)])];
+    let unit = |start, end, first_row, rows| KeptUnit {
+        start,
+        end,
+        first_row,
+        rows,
+    };
+    let k = vec![vec![vec![
+        unit(0, 30, 0, 1_000),
+        unit(30, 70, 1_000, 40_000),
+        unit(70, 100, 41_000, 1_000),
+    ]]];
+    // A target of 9,000 rows: 40,000 rows cut into five slices of 8,000.
+    let m = pruned_morsels_sliced(&parts, &k, 9_000, 12);
+    type Piece = (u64, u64, Option<(u64, u64)>);
+    let shape: Vec<Vec<Piece>> = m
+        .iter()
+        .map(|mo| {
+            mo.iter()
+                .map(|p| (p.range.start, p.range.end, p.rows.map(|r| (r.start, r.end))))
+                .collect()
+        })
+        .collect();
+    let mut want: Vec<Vec<Piece>> = vec![vec![(0, 30, None)]];
+    for i in 0..5 {
+        let first = 1_000 + i * 8_000;
+        want.push(vec![(30, 70, Some((first, first + 8_000)))]);
+    }
+    want.push(vec![(70, 100, None)]);
+    assert_eq!(shape, want);
+    // Every piece belongs to the split.
+    assert!(
+        m.iter()
+            .flatten()
+            .all(|p| p.split == ByteRange::new(0, 100))
+    );
+}
+
+#[test]
+fn row_slices_respect_the_floor_and_the_cap() {
+    let parts = [part(0, &[(0, 0, 100)])];
+    let one = |rows| {
+        vec![vec![vec![KeptUnit {
+            start: 0,
+            end: 100,
+            first_row: 0,
+            rows,
+        }]]]
+    };
+    let slices = |m: &[Vec<MorselSplit>]| -> Vec<RowSlice> {
+        m.iter().flatten().filter_map(|p| p.rows).collect()
+    };
+    // A target under the floor cuts slices of the floor's rows.
+    let m = pruned_morsels_sliced(&parts, &one(3 * MIN_SLICE_ROWS), 100, 64);
+    assert_eq!(slices(&m).len(), 3);
+    // The cap bounds the slices; they tile the unit's rows.
+    let m = pruned_morsels_sliced(&parts, &one(100_000), 100, 4);
+    let s = slices(&m);
+    assert_eq!(s.len(), 4);
+    assert_eq!(s[0].start, 0);
+    assert_eq!(s[3].end, 100_000);
+    assert!(s.windows(2).all(|w| w[0].end == w[1].start));
+    // No slice past the unit: a single piece over the whole split.
+    assert_eq!(m.len(), 4);
+    // A cap of 1 (or a unit within the target) cuts nothing.
+    let m = pruned_morsels_sliced(&parts, &one(100_000), 100, 1);
+    assert!(slices(&m).is_empty());
+    assert_eq!(m, pruned_morsels(&parts, &one(100_000), 100));
+    let m = pruned_morsels_sliced(&parts, &one(5_000), 10_000, 12);
+    assert!(slices(&m).is_empty());
+}
+
+#[test]
+fn a_sliced_unit_takes_the_bytes_around_it() {
+    // A file's one row group at bytes 4..90 of its 100-byte split: the
+    // first slice takes the header bytes, the last the footer bytes.
+    let parts = [part(0, &[(0, 0, 100)])];
+    let k = vec![vec![vec![KeptUnit {
+        start: 4,
+        end: 90,
+        first_row: 0,
+        rows: 3 * MIN_SLICE_ROWS,
+    }]]];
+    let m = pruned_morsels_sliced(&parts, &k, 1, 8);
+    let ranges: Vec<(u64, u64)> = m
+        .iter()
+        .flatten()
+        .map(|p| (p.range.start, p.range.end))
+        .collect();
+    assert_eq!(ranges, vec![(0, 90), (4, 90), (4, 100)]);
+    assert!(m.iter().all(|mo| mo.len() == 1));
+}
+
+#[test]
+fn sliced_morsels_read_every_kept_row_once_in_file_order() {
+    // Files of units of varied rows planned into splits; pruning keeps a
+    // pseudo-random subset. Reading the morsels in order, a piece reads the
+    // units whose midpoint it holds, limited to its row slice: every kept
+    // row is read once, rows come in file order, and every unit is owned.
+    let mut seed = 0x9e37_79b9_7f4a_7c15_u64;
+    let mut next = move || {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        seed
+    };
+    for case in 0..200 {
+        let files: Vec<Vec<(u64, u64, u64)>> = (0..1 + next() % 3)
+            .map(|_| {
+                let (mut at, mut row) = (4, 0);
+                (0..1 + next() % 4)
+                    .map(|_| {
+                        let len = 10 + next() % 50;
+                        let rows = 1 + next() % 30_000;
+                        let u = (at, at + len, row);
+                        at += len;
+                        row += rows;
+                        (u.0, u.1, rows)
+                    })
+                    .collect()
+            })
+            .collect();
+        let sizes: Vec<SplitFile> = files
+            .iter()
+            .map(|us| SplitFile {
+                size: us.last().map_or(10, |u| u.1 + 8),
+                splittable: true,
+            })
+            .collect();
+        let mut cfg = SplitConfig::from_config(&Config::new(), 2);
+        cfg.max_partition_bytes = 60 + next() % 200;
+        cfg.open_cost_in_bytes = 1;
+        let parts = plan(&cfg, &sizes);
+        // (file, start, end, first_row, rows, kept)
+        let mut all = Vec::new();
+        for (f, us) in files.iter().enumerate() {
+            let mut row = 0;
+            for &(a, b, rows) in us {
+                all.push((f, a, b, row, rows, next() % 3 != 0));
+                row += rows;
+            }
+        }
+        let k: Vec<Vec<Vec<KeptUnit>>> = parts
+            .iter()
+            .map(|p| {
+                p.splits
+                    .iter()
+                    .map(|s| {
+                        all.iter()
+                            .filter(|u| u.0 == s.file && s.range.owns(&(u.1..u.2)) && u.5)
+                            .map(|u| KeptUnit {
+                                start: u.1,
+                                end: u.2,
+                                first_row: u.3,
+                                rows: u.4,
+                            })
+                            .collect()
+                    })
+                    .collect()
+            })
+            .collect();
+        let m = pruned_morsels_sliced(&parts, &k, 1 + next() % 20_000, 1 + next() % 12);
+        let mut read: Vec<(usize, u64, u64)> = Vec::new();
+        for piece in m.iter().flatten() {
+            assert!(piece.range.start <= piece.range.end);
+            for u in all
+                .iter()
+                .filter(|u| u.0 == piece.file && piece.range.owns(&(u.1..u.2)))
+            {
+                let (lo, hi) = match piece.rows {
+                    None => (u.3, u.3 + u.4),
+                    Some(r) => (r.start.max(u.3), r.end.min(u.3 + u.4)),
+                };
+                if u.5 && lo < hi {
+                    read.push((u.0, lo, hi));
+                }
+            }
+        }
+        // In order, within each file, and gap-free over the kept rows.
+        let mut want: Vec<(usize, u64, u64)> = all
+            .iter()
+            .filter(|u| u.5)
+            .map(|u| (u.0, u.3, u.3 + u.4))
+            .collect();
+        want.sort_unstable();
+        // Per file, the reads in morsel order join into the kept stretches.
+        let joined = |v: &[(usize, u64, u64)], f: usize| -> Vec<(u64, u64)> {
+            let mut out: Vec<(u64, u64)> = Vec::new();
+            for r in v.iter().filter(|r| r.0 == f) {
+                match out.last_mut() {
+                    Some(l) if l.1 == r.1 => l.1 = r.2,
+                    _ => out.push((r.1, r.2)),
+                }
+            }
+            out
+        };
+        for f in 0..files.len() {
+            assert_eq!(joined(&read, f), joined(&want, f), "case {case}");
+        }
+        // Every unit a split owns is owned by at least one piece of it.
+        for u in &all {
+            assert!(
+                m.iter()
+                    .flatten()
+                    .any(|p| p.file == u.0 && p.range.owns(&(u.1..u.2))),
+                "case {case}: unit {u:?} unowned"
+            );
+        }
     }
 }

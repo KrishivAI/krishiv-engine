@@ -56,6 +56,9 @@ pub struct ExecConfig {
     /// Thread-local row tables find the groups of a batch with one-byte keys
     /// by direct addressing (`krishiv.exec.agg.directKeys`; study 32 D1).
     pub agg_direct_keys: bool,
+    /// A small file scan in fewer units than drivers cuts them into row
+    /// slices (`krishiv.exec.scan.rowSlices`; study 59).
+    pub scan_row_slices: bool,
     /// Collect the costlier metrics of a detailed profile (`EXPLAIN
     /// ANALYZE`): per-lookup hash-table probe lengths. The always-on
     /// counters do not depend on it. A hash join's direct index
@@ -120,6 +123,7 @@ impl Default for ExecConfig {
             seed: None,
             agg_row_layout: true,
             agg_direct_keys: true,
+            scan_row_slices: true,
             detailed_metrics: false,
             join_row_layout: true,
             join_direct_index: true,
@@ -151,6 +155,10 @@ impl ExecConfig {
             .unwrap_or(true);
         let agg_direct_keys = config
             .get(&krishiv_common::config::EXEC_AGG_DIRECT_KEYS)
+            .and_then(krishiv_common::config::ConfigValue::as_bool)
+            .unwrap_or(true);
+        let scan_row_slices = config
+            .get(&krishiv_common::config::EXEC_SCAN_ROW_SLICES)
             .and_then(krishiv_common::config::ConfigValue::as_bool)
             .unwrap_or(true);
         let join_row_layout = config
@@ -216,6 +224,7 @@ impl ExecConfig {
             sort_hash_buckets,
             agg_row_layout,
             agg_direct_keys,
+            scan_row_slices,
             join_row_layout,
             join_direct_index,
             join_radix_bits,

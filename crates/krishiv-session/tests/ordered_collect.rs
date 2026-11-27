@@ -277,6 +277,52 @@ fn pruned_morsels_spread_the_kept_row_groups_in_file_order() {
     repeat_under_load(&s, &plain, &(0..80_000).collect::<Vec<i64>>());
 }
 
+/// A small file of one row group read by 8 drivers is cut into 8 row
+/// slices (`krishiv.exec.scan.rowSlices`, study 59), one morsel each, and
+/// the rows still come back in file order, filtered or not; a filter that
+/// may raise keeps it one morsel, and so does the switch off.
+#[test]
+fn a_one_row_group_file_is_cut_into_row_slices_in_file_order() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("one.parquet");
+    let batch = ids(0..80_000);
+    let props = WriterProperties::builder()
+        .set_max_row_group_row_count(Some(100_000))
+        .build();
+    let file = std::fs::File::create(&path).unwrap();
+    let mut w = ArrowWriter::try_new(file, batch.schema(), Some(props)).unwrap();
+    w.write(&batch).unwrap();
+    w.close().unwrap();
+    let plain = format!("SELECT id FROM parquet.`{}`", path.display());
+    let stretch = format!(
+        "SELECT id FROM parquet.`{}` WHERE id >= 30000 AND id < 50000",
+        path.display()
+    );
+    let raising = format!(
+        "SELECT id FROM parquet.`{}` WHERE id % 3 != 1",
+        path.display()
+    );
+    let s = session(8);
+    assert_eq!(scan_splits(&s, &plain), 8);
+    assert_eq!(scan_splits(&s, &stretch), 8);
+    assert_eq!(scan_splits(&s, &raising), 1);
+    repeat_under_load(&s, &plain, &(0..80_000).collect::<Vec<i64>>());
+    repeat_under_load(&s, &stretch, &(30_000..50_000).collect::<Vec<i64>>());
+    let count = format!("SELECT count(*), sum(id) FROM parquet.`{}`", path.display());
+    let df = block_on(s.sql(&count)).unwrap();
+    let b = block_on(df.collect()).unwrap();
+    assert_eq!(b[0].column(0).as_primitive::<Int64Type>().value(0), 80_000);
+    assert_eq!(
+        b[0].column(1).as_primitive::<Int64Type>().value(0),
+        80_000 * 79_999 / 2
+    );
+    s.conf()
+        .set("krishiv.exec.scan.rowSlices", "false")
+        .unwrap();
+    assert_eq!(scan_splits(&s, &plain), 1);
+    repeat_under_load(&s, &plain, &(0..80_000).collect::<Vec<i64>>());
+}
+
 /// A small table in more files than the morsels it would be cut into is
 /// not cut by rows, so the scan plans no footer before it starts: 12 files
 /// of 2 row groups on 2 drivers keep their byte morsels, one per file (cut

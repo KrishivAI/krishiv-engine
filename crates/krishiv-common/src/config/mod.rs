@@ -33,6 +33,7 @@ mod legacy;
 mod partition_types;
 mod registry;
 mod registry_join;
+mod row_slices;
 mod scan_instance;
 #[cfg(test)]
 mod ui_hosts_tests;
@@ -45,6 +46,7 @@ pub use join_cost::JOIN_COST;
 pub use partition_types::LEGACY_SKIP_TYPE_VALIDATION_ON_ALTER_PARTITION;
 pub use registry::*;
 pub use registry_join::*;
+pub use row_slices::EXEC_SCAN_ROW_SLICES;
 pub use scan_instance::EXEC_SCAN_INSTANCE_PROJECTION;
 
 /// Where a config entry may be set.
