@@ -112,10 +112,14 @@ pub(crate) struct Split {
 /// Splits a merge-on-read rewrite's batch (see the module docs).
 pub(crate) fn split(batch: &RecordBatch) -> Result<Split, KrishivError> {
     let schema = batch.schema();
+    // The row ids and the flag follow the table's columns: the last column of each name, so a
+    // table column of the same name never stands in for them.
     let index_of = |name: &str| {
         schema
-            .index_of(name)
-            .map_err(|_| internal(&format!("a merge-on-read row without {name}")))
+            .fields()
+            .iter()
+            .rposition(|f| f.name() == name)
+            .ok_or_else(|| internal(&format!("a merge-on-read row without {name}")))
     };
     let (file_i, pos_i, write_i) = (
         index_of(ROW_FILE_COLUMN)?,
@@ -482,6 +486,8 @@ pub(crate) async fn write(
             } else {
                 0
             };
+            // What `all` holds for this file; a union's growth is held in `extra`.
+            let marked = m.bound;
             if existing > 0 {
                 // The old vector's rows: loaded at their peak, then added to the marks (whose
                 // bound grows to the union's).
@@ -507,7 +513,7 @@ pub(crate) async fn write(
             let cardinality = m.dv.cardinality();
             let modified = cardinality.saturating_sub(existing);
             if modified == 0 {
-                all.release(m.bound);
+                all.release(marked);
                 extra.shrink(extra.size());
                 continue;
             }
@@ -522,7 +528,7 @@ pub(crate) async fn write(
                 if had_vector {
                     out.removed_vectors += 1;
                 }
-                all.release(m.bound);
+                all.release(marked);
                 extra.shrink(extra.size());
                 continue;
             }
@@ -551,7 +557,7 @@ pub(crate) async fn write(
                 })
                 .await??;
             // The bitmap is gone; the framed bytes stay held until the upload took them.
-            all.release(bound);
+            all.release(marked);
             extra.shrink(extra.size().saturating_sub(framed.len()));
             if file.is_none() {
                 let uuid = super::files::uuid_bytes();
@@ -730,5 +736,38 @@ mod tests {
         assert_eq!(data.num_columns(), 1);
         assert_eq!(data.num_rows(), 2);
         assert_eq!(s.marks, vec![("f1".to_owned(), vec![3, 5])]);
+    }
+    /// A table column named like the write flag (or a row id) never stands in for it: the
+    /// flag and the row ids are the last columns of their names.
+    #[test]
+    fn split_reads_the_flag_after_a_table_column_of_its_name() {
+        use arrow_array::BinaryViewArray;
+        use arrow_schema::{Field, Schema};
+        let schema = Arc::new(Schema::new(vec![
+            Field::new(ROW_WRITE_COLUMN, ArrowType::Boolean, true),
+            Field::new(ROW_FILE_COLUMN, ArrowType::BinaryView, true),
+            Field::new(ROW_POSITION_COLUMN, ArrowType::Int64, true),
+            Field::new(ROW_WRITE_COLUMN, ArrowType::Boolean, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                // The rows' new values of the table column: false and NULL.
+                Arc::new(BooleanArray::from(vec![Some(false), None])),
+                Arc::new(BinaryViewArray::from(vec![
+                    Some(b"f1".as_slice()),
+                    Some(b"f1".as_slice()),
+                ])),
+                Arc::new(Int64Array::from(vec![Some(0), Some(1)])),
+                Arc::new(BooleanArray::from(vec![true, true])),
+            ],
+        )
+        .unwrap();
+        let s = split(&batch).unwrap();
+        let data = s.data.unwrap();
+        assert_eq!(data.num_rows(), 2, "an UPDATE stays an UPDATE");
+        assert_eq!(data.num_columns(), 1);
+        assert_eq!(data.schema().field(0).name(), ROW_WRITE_COLUMN);
+        assert_eq!(s.marks, vec![("f1".to_owned(), vec![0, 1])]);
     }
 }
