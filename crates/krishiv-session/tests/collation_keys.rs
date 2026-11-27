@@ -483,6 +483,28 @@ fn icu_collations_stay_refused_in_every_key_position() {
     }
 }
 
+/// The refusal names the missing feature (R1-D-8: the Python wheel has no `collations-icu`).
+#[cfg(not(feature = "collations-icu"))]
+#[test]
+fn icu_refusals_name_the_missing_feature() {
+    let s = Session::new().unwrap();
+    for sql in [
+        "SELECT c FROM (SELECT 'a' COLLATE unicode_ci AS c) ORDER BY c",
+        "SELECT upper('a' COLLATE de)",
+    ] {
+        let msg = rows_in(&s, sql).unwrap_err().to_string();
+        assert!(msg.contains("collations-icu"), "{sql}: {msg}");
+    }
+    // A non-ICU refusal does not mention it.
+    let msg = rows_in(
+        &s,
+        "SELECT mode(c) FROM (SELECT 'a' COLLATE utf8_lcase AS c)",
+    );
+    if let Err(e) = msg {
+        assert!(!e.to_string().contains("collations-icu"));
+    }
+}
+
 /// `hll_sketch_agg` hashes the collation's sort key in Spark (`HllSketchAgg.update`), so a non-binary collation is
 /// refused rather than run on the raw bytes (the `hll.sql` goldens 11 and 12 count 7, not 10). The refusal is
 /// `KRISHIV_UNSUPPORTED_FEATURE` (`DEPENDS`), not a type mismatch: Spark accepts the type. Hashing the collation key

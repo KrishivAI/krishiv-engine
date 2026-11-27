@@ -115,6 +115,31 @@ fn has_icu(t: Option<&DataType>) -> bool {
     })
 }
 
+/// `what`, with a note that names the build when the plan holds an ICU collation and this build
+/// has no `collations-icu` feature (every Python wheel): without it the message does not say why.
+fn icu_note(what: &str, root: &LogicalPlan) -> String {
+    if cfg!(feature = "collations-icu") {
+        return what.to_owned();
+    }
+    let mut icu = false;
+    let _ = crate::walk::visit_distinct(Node::Plan(root), |n| {
+        if let Node::Expr(e) = n
+            && has_icu(expr_type(e))
+        {
+            icu = true;
+            return ControlFlow::Break(());
+        }
+        ControlFlow::Continue(())
+    });
+    if icu {
+        format!(
+            "{what}: ICU collations need the `collations-icu` feature, which this build does not have"
+        )
+    } else {
+        what.to_owned()
+    }
+}
+
 /// A collated string inside an array, map or struct: it has an equality key but no ordering yet.
 fn nested_order(t: Option<&DataType>) -> bool {
     t.is_some_and(|t| t.contains_collation() && !t.is_collated_string())
@@ -350,7 +375,7 @@ pub(super) fn check_known(
         // `min`/`max` argument; the operators below would compare its
         // internal struct.
         if let Some((what, origin)) = spatial_key(&node).or_else(|| collated_key(&node)) {
-            error = Some(unsupported(what, origin));
+            error = Some(unsupported(icu_note(what, root), origin));
             return ControlFlow::Break(());
         }
         let (types, origin) = match node {

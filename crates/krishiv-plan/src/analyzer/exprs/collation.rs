@@ -1004,8 +1004,13 @@ impl Resolver<'_> {
                         });
                     }
                     _ => {
+                        let why = if cfg!(feature = "collations-icu") {
+                            ""
+                        } else {
+                            ": ICU collations need the `collations-icu` feature, which this build does not have"
+                        };
                         return Err(unsupported(
-                            format!("{name} over a collated string"),
+                            format!("{name} over a collated string{why}"),
                             e.origin,
                         ));
                     }
