@@ -31,7 +31,8 @@ use std::sync::Arc;
 
 use krishiv_common::error::{
     GroupingColumnMismatch, GroupingIdColumnMismatch, GroupingSizeLimitExceeded,
-    UnresolvedAllInGroupBy, UnsupportedGroupingExpression, WrongNumArgsWithoutSuggestion,
+    UnresolvedAllInGroupBy, UnsupportedFeatureLateralColumnAliasInGroupBy,
+    UnsupportedGroupingExpression, WrongNumArgsWithoutSuggestion,
 };
 use krishiv_types::DataType;
 
@@ -960,7 +961,15 @@ impl Resolver<'_> {
                 _ => Arc::clone(&b.expr),
             };
             if contains_aggregate(&expr) {
-                bare = bare || contains_bare(&expr);
+                // A lateral alias reference is not a bare column (Spark).
+                bare = bare || (b.lateral.is_empty() && contains_bare(&expr));
+            } else if !b.lateral.is_empty() {
+                // Grouped by, an item reading a lateral alias is unsupported
+                // (one with an aggregate is computed above the aggregation).
+                return Err(AnalysisError::new(
+                    UnsupportedFeatureLateralColumnAliasInGroupBy {},
+                    Origin::UNKNOWN,
+                ));
             } else {
                 group.push(Bound { expr, ..b.clone() });
             }
