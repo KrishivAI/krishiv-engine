@@ -622,6 +622,17 @@ error KRISHIV_UNSUPPORTED_FEATURE
 "filters":[],
 "warnings":[]}
 
+-- CreatePersistedFunction: CREATE FUNCTION f AS 'python' USING PYTHON 'f'
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"DDL",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"namespace","name":["spark_catalog","default"],"display":"namespace `spark_catalog`.`default`","privilege":"CREATE","columns":[]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
 -- DropFunction: DROP FUNCTION f
 {"schema_version":"krishiv.analyze.v1",
 "statement_class":"DDL",

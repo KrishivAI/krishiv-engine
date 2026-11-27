@@ -24,9 +24,15 @@ pub(super) enum Source {
 }
 
 /// Matches the query's `output` to the columns of `table`: by position, by
-/// the column list, or by name. Spark's arity and store-assignment errors.
+/// the column list, or by name. Spark's arity and store-assignment errors, which name the table
+/// `shown` when given (a Delta table by path: `` `delta`.`file:/p` ``), else by its catalog name.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is one independent input of Spark's column matching; two call sites"
+)]
 pub(super) fn assign(
     table: &CatalogTable,
+    shown: Option<&str>,
     listed: &[String],
     by_name: bool,
     output: &[TableColumn],
@@ -44,7 +50,7 @@ pub(super) fn assign(
             .collect::<Vec<_>>()
             .join(", ")
     };
-    let table_name = quoted(&table.namespace, &table.name);
+    let table_name = shown.map_or_else(|| quoted(&table.namespace, &table.name), str::to_owned);
     let table_cols = || quoted_names(table.columns.iter().map(|c| c.name.as_str()).collect());
     let data_cols = || quoted_names(output.iter().map(|c| c.name.as_str()).collect());
     // What one table column checks about the data column paired with it.

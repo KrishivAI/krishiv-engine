@@ -5,7 +5,9 @@
 
 use proptest::prelude::*;
 
-use super::partial_aggregate::{Row, physical, runtime, sorted, tables};
+use super::partial_aggregate::{
+    Row, physical, runtime, sorted, tables, tables_with_attribute, tables_with_null_keys,
+};
 use super::run;
 use super::tpch::{Order, Tpch};
 
@@ -56,7 +58,7 @@ fn many() -> Vec<Row> {
 /// Every key once, and two keys `f` does not hold.
 const WEIGHTS: [i64; 14] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13];
 
-const FIRES: [&str; 8] = [
+const FIRES: [&str; 10] = [
     // Inner, keyed by the other side's column.
     "SELECT w.wk, count(f.i), count(*), sum(f.i), avg(f.i), sum(f.d), avg(f.d), min(f.i), \
      max(f.d), min(f.s), max(f.s) FROM f JOIN w ON f.k = w.wk GROUP BY w.wk",
@@ -75,12 +77,19 @@ const FIRES: [&str; 8] = [
      GROUP BY ROLLUP(w.wk, w.wk % 2)",
     "SELECT w.wk, grouping(w.wk), count(*), sum(f.i) FROM f JOIN w ON f.k = w.wk \
      GROUP BY CUBE(w.wk)",
+    // Exact decimal arithmetic never raises (TPC-DS q11's `ss_ext_list_price - ss_ext_discount_amt`).
+    "SELECT w.wk, sum(f.d - CAST(f.i AS DECIMAL(10, 0))), avg(f.d + f.d) FROM f JOIN w ON f.k = w.wk \
+     GROUP BY w.wk",
+    // Nor does its division by a whole literal that keeps the integral digits (q04's `(...) / 2`).
+    "SELECT w.wk, sum((f.d + f.d) / 2), avg(f.d / 3) FROM f JOIN w ON f.k = w.wk GROUP BY w.wk",
 ];
 
 /// Each stays above the join, for the reason in its comment.
-const STAYS: [&str; 13] = [
+const STAYS: [&str; 14] = [
     // An argument that can raise on a row the join would drop.
     "SELECT w.wk, sum(f.i + 1) FROM f JOIN w ON f.k = w.wk GROUP BY w.wk",
+    // A decimal divided by less than one: the quotient can outgrow the dividend.
+    "SELECT w.wk, sum(f.d / 0.5) FROM f JOIN w ON f.k = w.wk GROUP BY w.wk",
     // Summation order: floating point.
     "SELECT w.wk, sum(CAST(f.i AS DOUBLE)) FROM f JOIN w ON f.k = w.wk GROUP BY w.wk",
     "SELECT w.wk, avg(CAST(f.i AS DOUBLE)) FROM f JOIN w ON f.k = w.wk GROUP BY w.wk",
@@ -222,6 +231,211 @@ fn the_grouping_dimension_moves_to_the_top_join() {
             plan.root(),
             again.root()
         );
+    }
+}
+
+/// A distinct runs below the join too (no calls: the partial aggregate only
+/// drops repeated groups), and a distinct over a semi or anti join
+/// (`INTERSECT`, `EXCEPT`) moves onto both inputs first (lever K5, TPC-DS
+/// q14's `cross_items`).
+const DISTINCTS: [(&str, bool); 7] = [
+    ("SELECT DISTINCT w.wk FROM f JOIN w ON f.k = w.wk", true),
+    (
+        "SELECT w.wk FROM f JOIN w ON f.k = w.wk GROUP BY w.wk",
+        true,
+    ),
+    (
+        "SELECT w.wk FROM f JOIN w ON f.k = w.wk INTERSECT SELECT f.k FROM f WHERE f.i > 100",
+        true,
+    ),
+    (
+        "SELECT w.wk FROM f JOIN w ON f.k = w.wk EXCEPT SELECT f.k FROM f WHERE f.k < 6",
+        true,
+    ),
+    // Chained: the left of the outer one is distinct already.
+    (
+        "SELECT f.k FROM f INTERSECT SELECT w.wk FROM w INTERSECT SELECT f.k FROM f WHERE f.i < 50",
+        false,
+    ),
+    // Two columns, NULLs on one: `<=>` matches them.
+    (
+        "SELECT f.k, f.s FROM f INTERSECT SELECT f.k, f.s FROM f WHERE f.k > 3",
+        false,
+    ),
+    // A floating-point column stays as written.
+    (
+        "SELECT f.k, CAST(f.i AS DOUBLE) FROM f INTERSECT SELECT f.k, CAST(f.i AS DOUBLE) FROM f",
+        false,
+    ),
+];
+
+#[test]
+fn distincts_move_below_joins_and_return_the_same_rows() {
+    let rt = runtime();
+    let dir = tempfile::tempdir().unwrap();
+    let t = tables(dir.path(), &many(), &WEIGHTS, &rt);
+    for (q, fires_here) in DISTINCTS {
+        if fires_here {
+            assert!(fires(&t, q), "{q}");
+        }
+        let (on, off) = both(&t, q);
+        assert_eq!(on, off, "{q}");
+        assert!(!on.is_empty(), "{q}");
+    }
+}
+
+/// A nullable dimension key gets `InferJoinFilters`' `isnotnull` filter on
+/// the dimension (TPC-DS q11's `customer`): the dimension is still read whole
+/// for the rule, which fires, and the NULL keys the join drops stay dropped.
+#[test]
+fn a_null_only_filter_on_the_dimension_keeps_the_rule() {
+    let rt = runtime();
+    let dir = tempfile::tempdir().unwrap();
+    let keys: Vec<Option<i64>> = WEIGHTS
+        .iter()
+        .copied()
+        .map(Some)
+        .chain([None, None])
+        .collect();
+    let t = tables_with_null_keys(dir.path(), &many(), &keys, &rt);
+    let q = "SELECT w.wk, count(f.i), sum(f.i), sum(f.d - CAST(f.i AS DECIMAL(10, 0))) \
+             FROM f JOIN w ON f.k = w.wk GROUP BY w.wk";
+    let plan = t.optimized(q, Order::Statistics).unwrap();
+    assert!(
+        plan.root().to_string().contains("isnotnull(wk"),
+        "{}",
+        plan.root()
+    );
+    assert!(fires(&t, q), "{}", plan.root());
+    let (on, off) = both(&t, q);
+    assert_eq!(on, off);
+    assert_eq!(on.len(), 12);
+    // Another filter on the dimension still keeps the call above the join.
+    let q = "SELECT w.wk, sum(f.i) FROM f JOIN w ON f.k = w.wk WHERE w.wk < 6 GROUP BY w.wk";
+    assert!(!fires(&t, q));
+    assert_eq!(both(&t, q).0, both(&t, q).1);
+}
+
+/// Only a not-NULL filter on a plain `=` key of the join reads the dimension
+/// whole: one on another column (a sparse attribute prunes the dimension, and
+/// its runtime filter the fact side), or on a null-safe `<=>` key, where a
+/// NULL key does match, keeps the call above the join (review of 37a66474c
+/// finding 1).
+#[test]
+fn a_not_null_filter_off_the_plain_keys_keeps_the_call_above() {
+    let rt = runtime();
+    let dir = tempfile::tempdir().unwrap();
+    let keys: Vec<(i64, Option<i64>)> = WEIGHTS
+        .iter()
+        .map(|&k| (k, (k % 4 == 0).then_some(k)))
+        .collect();
+    let t = tables_with_attribute(dir.path(), &many(), &keys, &rt);
+    let q = "SELECT w.wk, count(f.i), sum(f.i) FROM f JOIN w ON f.k = w.wk \
+             WHERE w.wa IS NOT NULL GROUP BY w.wk";
+    let plan = t.optimized(q, Order::Statistics).unwrap();
+    assert!(
+        plan.root().to_string().contains("isnotnull(wa"),
+        "{}",
+        plan.root()
+    );
+    assert!(!fires(&t, q), "{}", plan.root());
+    let (on, off) = both(&t, q);
+    assert_eq!(on, off);
+    assert_eq!(on.len(), 3);
+    // The same dimension unfiltered still takes the rule.
+    let q = "SELECT w.wk, count(f.i), sum(f.i) FROM f JOIN w ON f.k = w.wk GROUP BY w.wk";
+    assert!(fires(&t, q));
+
+    let dir = tempfile::tempdir().unwrap();
+    let keys: Vec<Option<i64>> = WEIGHTS
+        .iter()
+        .copied()
+        .map(Some)
+        .chain([None, None])
+        .collect();
+    let t = tables_with_null_keys(dir.path(), &many(), &keys, &rt);
+    let q = "SELECT w.wk, count(f.i), sum(f.i) FROM f JOIN w ON f.k <=> w.wk \
+             WHERE w.wk IS NOT NULL GROUP BY w.wk";
+    let plan = t.optimized(q, Order::Statistics).unwrap();
+    assert!(
+        plan.root().to_string().contains("isnotnull(wk"),
+        "{}",
+        plan.root()
+    );
+    assert!(!fires(&t, q), "{}", plan.root());
+    let (on, off) = both(&t, q);
+    assert_eq!(on, off);
+}
+
+/// The notes of `q`'s optimization by statistics.
+fn notes(t: &Tpch, q: &str) -> String {
+    let (_, steps) = t.optimized_in(q, &[]).unwrap();
+    steps
+        .iter()
+        .map(|s| s.note.as_str())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// A distinct over a semi or anti join whose inputs are two instances of one
+/// CTE (`Shift`s of its body) splits onto both, NULL keys included, and
+/// returns the rows it returned unsplit (review of 37a66474c finding 2a).
+#[test]
+fn a_distinct_splits_across_instances_of_one_cte() {
+    let rt = runtime();
+    let dir = tempfile::tempdir().unwrap();
+    // `f.k` 10 and 11 have no `w` row: `x` is NULL for them.
+    let t = tables(dir.path(), &many(), &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9], &rt);
+    let cte = "WITH c AS (SELECT w.wk AS x, f.i FROM f LEFT JOIN w ON f.k = w.wk) ";
+    for (q, kind) in [
+        (
+            format!("{cte}SELECT x FROM c WHERE i > 10 INTERSECT SELECT x FROM c WHERE i < 200"),
+            "LeftSemi",
+        ),
+        (
+            format!("{cte}SELECT x FROM c WHERE i > 10 EXCEPT SELECT x FROM c WHERE x < 4"),
+            "LeftAnti",
+        ),
+    ] {
+        let plan = t.optimized(&q, Order::Statistics).unwrap();
+        let text = plan.root().to_string();
+        assert!(text.contains("Shift"), "{text}");
+        let n = notes(&t, &q);
+        assert!(
+            n.contains(&format!("split across the {kind} join")),
+            "{q}\n{n}\n{text}"
+        );
+        let (on, off) = both(&t, &q);
+        assert_eq!(on, off, "{q}");
+        assert!(on.iter().any(|r| r == "NULL"), "{q}: {on:?}");
+    }
+}
+
+/// The split's refusals, by their notes: a floating-point key, and a
+/// condition that reads a left column the distinct drops (review of
+/// 37a66474c finding 2b).
+#[test]
+fn a_distinct_that_cannot_split_says_why() {
+    let rt = runtime();
+    let dir = tempfile::tempdir().unwrap();
+    let t = tables(dir.path(), &many(), &WEIGHTS, &rt);
+    for (q, why) in [
+        (
+            "SELECT f.k, CAST(f.i AS DOUBLE) FROM f INTERSECT SELECT f.k, CAST(f.i AS DOUBLE) FROM f",
+            "is a floating point, collated or nested column",
+        ),
+        (
+            "SELECT f.k FROM f LEFT SEMI JOIN w ON f.k = w.wk AND f.i > w.wk GROUP BY f.k",
+            "the condition reads a column of the left side the distinct drops",
+        ),
+    ] {
+        let n = notes(&t, q);
+        assert!(
+            n.contains("distinct not split: ") && n.contains(why),
+            "{q}\n{n}"
+        );
+        let (on, off) = both(&t, q);
+        assert_eq!(on, off, "{q}");
     }
 }
 

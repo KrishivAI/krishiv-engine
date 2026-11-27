@@ -9,7 +9,7 @@ description: "Bucketize rows into one or more time windows given a timestamp spe
 Bucketize rows into one or more time windows given a timestamp specifying column.
 Window starts are inclusive but the window ends are exclusive, e.g. 12:05 will be in the window [12:05,12:10) but not in [12:00,12:05).
 Windows can support microsecond precision. Windows in the order of months are not supported.
-See <a href="https://spark.apache.org/docs/latest/structured-streaming-programming-guide.html#window-operations-on-event-time">'Window Operations on Event Time'</a> in Structured Streaming guide doc for detailed explanation and examples.
+See ['Window Operations on Event Time'](https://spark.apache.org/docs/latest/structured-streaming-programming-guide.html#window-operations-on-event-time) in Structured Streaming guide doc for detailed explanation and examples.
 
 **Applies to:** Krishiv 0.2.0 and above. Spark: 3.5 and later.
 

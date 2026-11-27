@@ -389,10 +389,7 @@ impl Session {
         {
             Ok(())
         } else {
-            Err(SchemaNotFound {
-                schema_name: format!("`{namespace}`"),
-            }
-            .into())
+            Err(crate::catalog::schema_not_found(namespace))
         }
     }
 
@@ -1311,11 +1308,7 @@ impl Session {
                     .into_iter()
                     .find(|(n, _)| *n == ns)
                     .map(|(_, m)| m)
-                    .ok_or_else(|| {
-                        KrishivError::from(SchemaNotFound {
-                            schema_name: format!("`{ns}`"),
-                        })
-                    })?;
+                    .ok_or_else(|| crate::catalog::schema_not_found(&ns))?;
                 let mut rows = self.namespace_rows(&ns, &meta)?;
                 if *extended {
                     // Spark 4.2.0 (`research/spark/schema-collation/probe1.out`): the sorted pairs as Scala

@@ -582,8 +582,13 @@ impl Expander<'_> {
             }
             .into());
         }
-        let statement =
-            krishiv_sql::parse_statement(&view.sql, &stored.parser).map_err(|e| e.error)?;
+        // A bare `TIMESTAMP` in the text is the type it was when the view was created, never the
+        // reader's (Spark parses and resolves a view under its captured `view.sqlConfig.*`).
+        let parser = krishiv_sql::ParserOptions {
+            timestamp_ntz: view.timestamp_ntz.unwrap_or(false),
+            ..stored.parser
+        };
+        let statement = krishiv_sql::parse_statement(&view.sql, &parser).map_err(|e| e.error)?;
         let krishiv_sql::ast::Statement::Query(query) = statement else {
             return Err(InternalError {
                 message: format!("the text of view `{key}` is not a query"),

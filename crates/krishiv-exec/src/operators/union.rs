@@ -128,3 +128,58 @@ impl Operator for UnionAlign {
         Ok(OperatorOutput::NeedMoreInput(Some(out)))
     }
 }
+
+/// Relabels a union input whose columns differ from the union's only in field metadata that is
+/// not part of the type (a Delta scan's column-mapping ids and physical names, at any nesting
+/// level; `physical::same_columns`): the arrays are rebuilt over their buffers with the
+/// union's types. Zero-copy; weights pass through.
+#[derive(Debug)]
+pub(crate) struct UnionRelabel {
+    output: SchemaRef,
+}
+
+impl UnionRelabel {
+    /// Relabels batches to `output`.
+    pub(crate) fn new(output: SchemaRef) -> Arc<Self> {
+        Arc::new(Self { output })
+    }
+}
+
+impl Operator for UnionRelabel {
+    fn keeps_partitioning(&self) -> bool {
+        true
+    }
+
+    fn lane_safe(&self) -> bool {
+        true
+    }
+
+    fn name(&self) -> &'static str {
+        "UnionRelabel"
+    }
+
+    fn schema(&self) -> SchemaRef {
+        Arc::clone(&self.output)
+    }
+
+    fn local_state(&self, _ctx: &TaskContext) -> Result<LocalState> {
+        Ok(no_state())
+    }
+
+    fn execute(&self, input: &Batch, _local: &mut LocalState) -> Result<OperatorOutput> {
+        let rows = input.num_rows();
+        let columns = input
+            .data()
+            .columns()
+            .iter()
+            .zip(self.output.fields())
+            .map(|(c, f)| crate::planner::eval::relabeled(c, f.data_type()))
+            .collect::<Result<Vec<_>>>()?;
+        let options = RecordBatchOptions::new().with_row_count(Some(rows));
+        let data =
+            RecordBatch::try_new_with_options(Arc::clone(&self.output), columns, &options)
+                .map_err(|e| internal(format!("union input does not fit the union schema: {e}")))?;
+        let out = Batch::with_weights(data, input.weights().clone())?.with_split(input.split());
+        Ok(OperatorOutput::NeedMoreInput(Some(out)))
+    }
+}

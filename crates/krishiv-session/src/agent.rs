@@ -522,7 +522,10 @@ fn cut_chars(s: &str, cap: usize) -> String {
 /// character (C0, DEL, C1 and the Unicode line and paragraph separators) as `\uXXXX`, `|` as `\|`, and a
 /// leading `--` as `\--`.
 /// Backslashes are literal (only the three escapes above introduce them).
-fn escape_text(s: &str) -> String {
+/// A host that adds a line of its own to an agent answer (a file name, a
+/// reason) passes every value it did not write itself through this.
+#[must_use]
+pub fn escape_text(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
         if c == '|' {

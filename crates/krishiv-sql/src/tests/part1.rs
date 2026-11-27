@@ -218,6 +218,28 @@ fn options_follow_spark_confs() {
 }
 
 #[test]
+fn from_starting_a_select_list_is_its_first_column() {
+    // A select list is never empty, so outside ANSI mode `SELECT FROM t` is
+    // the column `FROM` aliased `t` (postgreSQL/create_view).
+    let d = ParserOptions::default();
+    for sql in [
+        "SELECT FROM view_base_table GROUP BY key HAVING length(data) > 0",
+        "SELECT a, FROM t",
+        "SELECT FROM t FROM u",
+    ] {
+        assert!(parse_query(sql, &d).is_ok(), "{sql}");
+    }
+    // Still the keyword after a column, and under ANSI keywords.
+    let q = parse_query("SELECT a FROM t", &d).unwrap();
+    assert!(format!("{q:?}").contains("from:"), "{q:?}");
+    let all = ParserOptions {
+        enforce_reserved_keywords: true,
+        ..ParserOptions::default()
+    };
+    assert!(parse_query("SELECT FROM t", &all).is_err());
+}
+
+#[test]
 fn syntax_errors_match_spark() {
     let d = ParserOptions::default();
     let cases = [
@@ -265,8 +287,13 @@ fn other_error_classes() {
     // Spark checks the unclosed comment only after the statement parsed, so a
     // syntax error before it wins.
     assert_eq!(
-        class("SELECT FROM WHERE /* never closed"),
+        class("SELECT ) /* never closed"),
         ErrorClass::ParseSyntaxError
+    );
+    // `SELECT FROM WHERE` now parses (the column `FROM` aliased `WHERE`), so the comment is what Spark reports.
+    assert_eq!(
+        class("SELECT FROM WHERE /* never closed"),
+        ErrorClass::UnclosedBracketedComment
     );
     assert_eq!(
         class("SELECT ab\u{e9} FROM t"),
