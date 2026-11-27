@@ -610,6 +610,13 @@ impl Resolver<'_> {
                 nulls: o.nulls,
             })
             .collect();
+        // A collated written value keeps its collation in the result (Spark 4.3 `ListAgg`).
+        let mut ty = ty;
+        if ty.data_type == Some(DataType::String)
+            && let Some(c @ DataType::CollatedString(_)) = kids[0].ty.data_type.clone()
+        {
+            ty.data_type = Some(c);
+        }
         let data_type = ty.data_type.clone().unwrap_or(DataType::Null);
         let call = ResolvedFunction {
             id: entry.id.clone(),
