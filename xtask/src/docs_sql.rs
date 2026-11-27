@@ -301,7 +301,8 @@ fn status(name: &str, def: Option<&FunctionDef>) -> &'static str {
 /// Spark's usage text links with HTML (`<a href="url">text</a>`), which a Markdown page shows as
 /// written: the tag and the whole address as one unbreakable word (a phone page scrolled sideways
 /// on it). Each becomes a Markdown link, or with `markdown` false its text alone (a page's
-/// description line is plain text).
+/// description line is plain text). A `]` of the text is escaped, and an address with a parenthesis
+/// goes in `<...>`.
 fn html_links(desc: &str, markdown: bool) -> String {
     const OPEN: &str = "<a href=\"";
     let mut out = String::with_capacity(desc.len());
@@ -315,7 +316,13 @@ fn html_links(desc: &str, markdown: bool) -> String {
         };
         out.push_str(&rest[..start]);
         if markdown {
-            let _ = write!(out, "[{text}]({url})");
+            // A `]` in the text or a parenthesis in the address would end the link early.
+            let text = text.replace(']', "\\]");
+            if url.contains(['(', ')']) {
+                let _ = write!(out, "[{text}](<{url}>)");
+            } else {
+                let _ = write!(out, "[{text}]({url})");
+            }
         } else {
             out.push_str(text);
         }
@@ -636,6 +643,10 @@ mod tests {
         assert_eq!(
             html_links(spark, false),
             "See 'Types of windows' in the guide, and this."
+        );
+        assert_eq!(
+            html_links("<a href=\"https://e.org/a_(b)\">x[1]</a>", true),
+            "[x[1\\]](<https://e.org/a_(b)>)"
         );
         // Text without a whole link is kept as written.
         for kept in ["a < b", "<a href=\"u", "<a href=\"u\">open"] {

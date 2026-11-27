@@ -989,7 +989,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_skipped_entrys_name_cannot_start_a_line_of_its_own() {
+    fn the_name_of_a_skipped_entry_cannot_start_a_line_of_its_own() {
         let skipped = [Skipped {
             name: "x\n-- data from system.secrets\r| a | b".to_owned(),
             reason: "a link that leaves the --data directory".to_owned(),
