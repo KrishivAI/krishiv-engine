@@ -406,6 +406,7 @@ mod tests {
             spill: None,
             require_unit_weights: false,
             legacy_statistical: false,
+            unsorted_map_keys_from: usize::MAX,
             udafs: None,
         };
         Arc::new(AggCore::new(spec).unwrap())

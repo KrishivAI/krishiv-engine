@@ -54,7 +54,7 @@ impl AggCore {
             })
             .collect::<Result<_>>()?;
         let types: Vec<_> = fields.iter().map(|f| f.data_type().clone()).collect();
-        let encoder = KeyEncoder::new(&types)?;
+        let encoder = KeyEncoder::new(&types)?.sorting_maps_before(spec.unsorted_map_keys_from);
         // Every key gets a validity bit: batches may hold NULLs in a field
         // the spec's schema declares non-nullable (the arrow-row path
         // accepts them), and the row path must do what it does.

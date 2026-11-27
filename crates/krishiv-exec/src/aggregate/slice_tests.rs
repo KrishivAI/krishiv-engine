@@ -87,6 +87,7 @@ pub(super) fn spec(view: bool) -> AggregateSpec {
         spill: None,
         require_unit_weights: false,
         legacy_statistical: false,
+        unsorted_map_keys_from: usize::MAX,
         udafs: None,
     }
 }

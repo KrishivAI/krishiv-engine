@@ -70,6 +70,7 @@ impl Finalizer {
             spill: None,
             require_unit_weights: false,
             legacy_statistical: false,
+            unsorted_map_keys_from: usize::MAX,
             udafs: None,
         };
         let core = Arc::new(AggCore::new(spec)?);
@@ -414,6 +415,7 @@ mod tests {
             spill: None,
             require_unit_weights: false,
             legacy_statistical: false,
+            unsorted_map_keys_from: usize::MAX,
             udafs: None,
         };
         let agg = AggregateExpr::new(

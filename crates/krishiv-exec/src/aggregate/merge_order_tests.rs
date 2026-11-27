@@ -177,6 +177,7 @@ async fn run_parted(
         spill: Some(manager.scope().unwrap()),
         require_unit_weights: false,
         legacy_statistical: false,
+        unsorted_map_keys_from: usize::MAX,
         udafs: None,
     })
     .unwrap();

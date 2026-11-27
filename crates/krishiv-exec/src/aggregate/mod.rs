@@ -1101,6 +1101,11 @@ pub struct AggregateSpec {
     /// the sample moment aggregates (`stddev_samp`, `var_samp`, `covar_samp`,
     /// `corr`, `skewness`, `kurtosis`) give NaN instead of NULL.
     pub legacy_statistical: bool,
+    /// Grouping columns at this position of `group_by` and after it are not
+    /// map-sorted when encoded as keys: the arguments a `DISTINCT` plan
+    /// groups by, where Spark keeps `map('a',1,'b',2)` and
+    /// `map('b',2,'a',1)` apart (`usize::MAX`: sort every key's maps).
+    pub unsorted_map_keys_from: usize,
     /// The session's aggregate UDFs, for [`AggregateFunction::Udf`]
     /// aggregates (`None`: a plan calling one is refused with
     /// `KRISHIV_UDF_NOT_AVAILABLE`).

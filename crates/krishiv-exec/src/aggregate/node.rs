@@ -167,6 +167,7 @@ pub fn distinct_plan_with(
             .collect(),
         output: AggregateOutput::Partial,
         require_unit_weights: true,
+        unsorted_map_keys_from: k,
         ..spec.clone()
     };
     let first_schema = first.output_schema()?;
@@ -231,6 +232,7 @@ pub fn union_distinct(
         spill,
         require_unit_weights: true,
         legacy_statistical: false,
+        unsorted_map_keys_from: usize::MAX,
         udafs: None,
     };
     Ok(AggregateNode::new(input, HashAggregate::new(spec)?))

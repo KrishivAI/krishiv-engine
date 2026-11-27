@@ -153,6 +153,8 @@ pub(crate) fn spill_partition_at(hash: u64, level: u32, level0_bits: u32) -> usi
 pub struct KeyEncoder {
     converter: RowConverter,
     types: Vec<DataType>,
+    /// Key columns from this index on keep their maps' entry order.
+    sort_maps_before: usize,
 }
 
 impl KeyEncoder {
@@ -172,7 +174,16 @@ impl KeyEncoder {
         Ok(Self {
             converter,
             types: types.to_vec(),
+            sort_maps_before: usize::MAX,
         })
+    }
+
+    /// Sorts the maps of the key columns before `n` only (Spark's `DISTINCT`
+    /// arguments keep their entry order, so two orders are two values).
+    #[must_use]
+    pub fn sorting_maps_before(mut self, n: usize) -> Self {
+        self.sort_maps_before = n;
+        self
     }
 
     /// The key types.
@@ -187,7 +198,15 @@ impl KeyEncoder {
     pub fn encode(&self, columns: &[ArrayRef]) -> Result<Rows> {
         let normalized = columns
             .iter()
-            .map(|c| sort_maps(&normalize_key(c)))
+            .enumerate()
+            .map(|(i, c)| {
+                let c = normalize_key(c);
+                if i < self.sort_maps_before {
+                    sort_maps(&c)
+                } else {
+                    Ok(c)
+                }
+            })
             .collect::<Result<Vec<ArrayRef>>>()?;
         self.converter
             .convert_columns(&normalized)

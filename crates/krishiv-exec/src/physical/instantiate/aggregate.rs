@@ -37,6 +37,7 @@ pub(crate) fn aggregate_spec(
         spill,
         require_unit_weights: false,
         legacy_statistical: env.legacy_statistical_aggregate,
+        unsorted_map_keys_from: usize::MAX,
         udafs: UdafEnv::of(env.udfs.as_ref(), env.zone),
     }
 }

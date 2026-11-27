@@ -24,6 +24,7 @@ fn core() -> Arc<AggCore> {
         spill: None,
         require_unit_weights: false,
         legacy_statistical: false,
+        unsorted_map_keys_from: usize::MAX,
         udafs: None,
     };
     Arc::new(AggCore::new(spec).unwrap())
@@ -1024,6 +1025,7 @@ fn gather_bytes_covers_skewed_var_width() {
         spill: None,
         require_unit_weights: false,
         legacy_statistical: false,
+        unsorted_map_keys_from: usize::MAX,
         udafs: None,
     };
     let core = Arc::new(AggCore::new(spec).unwrap());
@@ -1542,6 +1544,7 @@ fn hll_core(output: AggregateOutput) -> Arc<AggCore> {
         spill: None,
         require_unit_weights: false,
         legacy_statistical: false,
+        unsorted_map_keys_from: usize::MAX,
         udafs: None,
     };
     Arc::new(AggCore::new(spec).unwrap())

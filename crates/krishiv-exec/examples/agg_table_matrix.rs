@@ -1360,6 +1360,7 @@ fn run_op(x: &Ctx<'_>) -> Timing {
         spill: None,
         require_unit_weights: false,
         legacy_statistical: false,
+        unsorted_map_keys_from: usize::MAX,
         udafs: None,
     };
     let batches: Vec<Batch> = x.data.batches.iter().cloned().map(Batch::new).collect();
