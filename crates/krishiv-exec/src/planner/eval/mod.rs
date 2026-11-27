@@ -26,6 +26,7 @@ mod arith;
 mod between;
 mod cast;
 mod cond;
+mod cost;
 mod field;
 mod func;
 mod hof;
@@ -824,7 +825,8 @@ fn builtin(
             let r = args.pop().ok_or_else(arity)?;
             let l = args.pop().ok_or_else(arity)?;
             let r_never_raises = runs_anywhere(f, 1, env.ansi);
-            logic::and_or(b == Builtin::And, l, r, r_never_raises)
+            let r_costly = f.args.get(1).is_some_and(|a| cost::costly(a));
+            logic::and_or(b == Builtin::And, l, r, r_never_raises, r_costly)
         }
         (Builtin::Not, 1) => logic::not(args.pop().ok_or_else(arity)?),
         (Builtin::IsNull | Builtin::IsNotNull, 1) => {
@@ -955,7 +957,7 @@ pub(crate) fn is_not_null(e: Arc<dyn PhysExpr>) -> Arc<dyn PhysExpr> {
 
 /// Kleene `l AND r`.
 pub(crate) fn and(l: Arc<dyn PhysExpr>, r: Arc<dyn PhysExpr>) -> Arc<dyn PhysExpr> {
-    logic::and_or(true, l, r, false)
+    logic::and_or(true, l, r, false, false)
 }
 
 fn arity() -> krishiv_common::error::KrishivError {
