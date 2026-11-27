@@ -17,7 +17,7 @@ use krishiv_common::error::{
     CreateViewColumnArityMismatchNotEnoughDataColumns,
     CreateViewColumnArityMismatchTooManyDataColumns, ErrorClass, ErrorQueryContext, InternalError,
     KrishivError, MissingAttributesResolvedAttributeAppearInOperation,
-    MissingAttributesResolvedAttributeMissingFromInput, MissingClausesForOperation, SchemaNotFound,
+    MissingAttributesResolvedAttributeMissingFromInput, MissingClausesForOperation,
     TableOrViewAlreadyExists,
 };
 use krishiv_common::names::check_column_name_duplication;
@@ -299,10 +299,7 @@ impl Session {
             name.name.replace('`', "``")
         );
         if !self.state.catalog.store.has_namespace(&name.namespace) {
-            return Err(SchemaNotFound {
-                schema_name: format!("`spark_catalog`.`{}`", name.namespace.replace('`', "``")),
-            }
-            .into());
+            return Err(crate::catalog::schema_not_found(&name.namespace));
         }
 
         // The create aggregate groups by ordinals, whatever `spark.sql.groupByOrdinal` says.

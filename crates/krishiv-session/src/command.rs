@@ -20,8 +20,8 @@ use krishiv_common::error::{
     DuplicateRoutineReturnsColumns, DuplicateVariableNameInsideDeclare, ErrorClass,
     ErrorQueryContext, InvalidDefaultValueSubqueryExpression, InvalidSqlFunctionDataAccess,
     KrishivError, KrishivUnsupportedFeature, RoutineAlreadyExists, RoutineNotFound,
-    RowSubqueryTooManyRows, SchemaNotFound, TableOrViewNotFound, TempTableOrViewAlreadyExists,
-    UnresolvedVariable, UnsupportedCharOrVarcharAsString, UnsupportedFeatureSetPathWhenDisabled,
+    RowSubqueryTooManyRows, TableOrViewNotFound, TempTableOrViewAlreadyExists, UnresolvedVariable,
+    UnsupportedCharOrVarcharAsString, UnsupportedFeatureSetPathWhenDisabled,
     UnsupportedFeatureSetVariableUsingSet, UserDefinedFunctionsCannotReplaceNonSqlUdfWithSqlUdf,
     UserDefinedFunctionsNotAValidDefaultExpression,
     UserDefinedFunctionsNotAValidDefaultParameterPosition,
@@ -1276,10 +1276,7 @@ impl Session {
             namespace.to_lowercase()
         };
         if !self.state.catalog.store.has_namespace(&namespace) {
-            return Err(SchemaNotFound {
-                schema_name: quote(&namespace),
-            }
-            .into());
+            return Err(crate::catalog::schema_not_found(&namespace));
         }
         Ok((namespace, part))
     }
@@ -1457,10 +1454,7 @@ impl Session {
             // A namespace dropped while the body was checked is not one to
             // store into.
             if !store.has_namespace(namespace) {
-                return Err(SchemaNotFound {
-                    schema_name: quote(namespace),
-                }
-                .into());
+                return Err(crate::catalog::schema_not_found(namespace));
             }
             let current = store.functions();
             if !f.or_replace && current.get(namespace, &entry.def.name).is_some() {

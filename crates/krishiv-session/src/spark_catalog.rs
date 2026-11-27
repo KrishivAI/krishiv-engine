@@ -447,10 +447,7 @@ impl Catalog<'_> {
 
     /// `SCHEMA_NOT_FOUND` for the namespace `name`.
     fn database_not_found(name: &str) -> KrishivError {
-        krishiv_common::error::SchemaNotFound {
-            schema_name: quote(&Self::bare_database(name)),
-        }
-        .into()
+        crate::catalog::schema_not_found(&Self::bare_database(name))
     }
 
     fn lookup_database(&self, name: &str) -> Result<Database, KrishivError> {
