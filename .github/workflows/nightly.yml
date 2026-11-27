@@ -720,11 +720,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { version: "4.3.0", sha: "98bc0212c947", python: "3.12", deps: "pandas numpy pyarrow", min_rate: "", pyspark: "pyspark[connect]" }
-          - { version: "4.2.1", sha: "617618396087", python: "3.12", deps: "pandas numpy pyarrow", min_rate: "", pyspark: "pyspark[connect]" }
-          - { version: "4.1.4", sha: "45b9b176e6e2", python: "3.12", deps: "pandas numpy pyarrow", min_rate: "", pyspark: "pyspark[connect]" }
-          - { version: "4.0.5", sha: "b472a3aa3c4b", python: "3.12", deps: "pandas numpy pyarrow", min_rate: "", pyspark: "pyspark[connect]" }
-          - { version: "3.5.7", sha: "ed00d046951a", python: "3.11", deps: "pandas<2.3 numpy<2 pyarrow<18", min_rate: "", pyspark: "pyspark[connect]", report_only: "1" }
+          - { version: "4.3.0", sha: "98bc0212c947", python: "3.12", deps: "pandas<3 numpy pyarrow", min_rate: "", pyspark: "pyspark[connect]" }
+          - { version: "4.2.1", sha: "617618396087", python: "3.12", deps: "pandas<3 numpy pyarrow", min_rate: "", pyspark: "pyspark[connect]" }
+          - { version: "4.1.4", sha: "45b9b176e6e2", python: "3.12", deps: "pandas<3 numpy pyarrow", min_rate: "", pyspark: "pyspark[connect]" }
+          - { version: "4.0.5", sha: "b472a3aa3c4b", python: "3.12", deps: "pandas<3 numpy pyarrow", min_rate: "", pyspark: "pyspark[connect]" }
+          - { version: "3.5.10", sha: "8ae0c67e04f0", python: "3.11", deps: "pandas<2.3 numpy<2 pyarrow<18", min_rate: "", pyspark: "pyspark[connect]", report_only: "1" }
     steps:
       - name: Harden the runner (audit egress)
         uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
