@@ -149,7 +149,8 @@ Paths are relative to this crate.
   `KRISHIV_PYTHON_WORKER_EXITED`; `INTERNAL_ERROR` is only for the server's own failures (memfd, socket calls).
 - The bootstrap closes every descriptor above 2 before anything else (`close_range` through `ctypes`, or
   `os.closerange` up to the server's `RLIMIT_NOFILE`), and the interpreter runs with `-I` and an environment of
-  `HOME`, `TMPDIR` and `LC_ALL` only. With the sandbox off the bootstrap applies the rlimits itself.
+  `HOME`, `TMPDIR`, `LC_ALL` and the server's `TZ` (when set; `PoolConfig::time_zone`: a PySpark worker inherits
+  the executor's zone) only. With the sandbox off the bootstrap applies the rlimits itself.
 - With the sandbox on and `allow_fork` off, the bootstrap's next statements stack a second seccomp filter that makes
   `execve`/`execveat` `EPERM` (`package::exec_deny_filter`), before `sys.path` changes: the parent-death signal is
   per thread, so an `exec` from any thread but the first (UDF calls run on such threads) would otherwise outlive

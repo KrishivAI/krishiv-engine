@@ -83,6 +83,11 @@ pub struct PoolConfig {
     /// The most bytes one session's artifacts take once copied and unpacked (pyfiles and archives,
     /// [`crate::SessionUdfs::set_artifacts`]); more is `KRISHIV_PYTHON_ARTIFACT_REFUSED`.
     pub artifact_limit: u64,
+    /// The workers' `TZ`: the server's own `TZ` by default, as a PySpark worker inherits the JVM's environment.
+    /// Python renders a `TIMESTAMP` argument as a naive `datetime` in this zone (Spark 4.2.0 does the same with
+    /// the executor's zone, whatever `spark.sql.session.timeZone` says); `None` leaves it to the host's
+    /// `/etc/localtime`.
+    pub time_zone: Option<OsString>,
 }
 
 /// [`PoolConfig::artifact_limit`]'s default: 1 GiB.
@@ -140,6 +145,7 @@ impl PoolConfig {
             launcher: Launcher::default(),
             capabilities: None,
             artifact_limit: DEFAULT_ARTIFACT_LIMIT,
+            time_zone: std::env::var_os("TZ"),
         };
         if pool.tenant_memory_limit_ignored() {
             tracing::warn!(
@@ -745,12 +751,15 @@ impl Pool {
         tenant_memory: Option<u64>,
     ) -> Command {
         let inner = &self.inner;
-        let env: Vec<(OsString, OsString)> = vec![
+        let config = &inner.config;
+        let mut env: Vec<(OsString, OsString)> = vec![
             ("HOME".into(), dir.as_os_str().to_owned()),
             ("TMPDIR".into(), dir.as_os_str().to_owned()),
             ("LC_ALL".into(), "C.UTF-8".into()),
         ];
-        let config = &inner.config;
+        if let Some(zone) = &config.time_zone {
+            env.push(("TZ".into(), zone.clone()));
+        }
         let mut limits = Limits::default();
         limits.address_space = match (config.memory_limit, tenant_memory) {
             (Some(a), Some(b)) => Some(a.min(b)),

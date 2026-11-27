@@ -72,6 +72,8 @@ fn config(python: &std::path::Path) -> PoolConfig {
             .map(OsString::from)
             .to_vec(),
     };
+    // The host's `TZ` would show in the environment checks below; the zone's own test sets one.
+    config.time_zone = None;
     config
 }
 
@@ -483,6 +485,42 @@ fn sandbox_unavailable_refuses() {
     )
     .expect_err("refused");
     assert_eq!(err.error_class(), ErrorClass::KrishivUdfSandboxUnavailable);
+}
+
+/// The worker gets the server's `TZ` (here set on the config, as the server's own `TZ` sets it by default), in
+/// the sandbox and without it, and Python renders local times in that zone (the zone file is readable).
+#[test]
+fn the_worker_runs_in_the_servers_time_zone() {
+    let Some(py) = python() else { return };
+    for sandbox in [true, false] {
+        let mut config = config(&py);
+        config.sandbox = sandbox;
+        config.time_zone = Some("Asia/Kolkata".into());
+        let pool = Pool::new(config).expect("pool");
+        if sandbox && pool.refusal().is_some() {
+            eprintln!("note: no sandbox on this kernel; the zone was checked without it only");
+            continue;
+        }
+        let udfs = SessionUdfs::new(pool, owner("s1"));
+        let body = "import os, time\n\
+            def f(x):\n    \
+            return os.environ['TZ'] + '|' + time.strftime('%z', time.localtime(0))";
+        let out = call(
+            &udfs,
+            command(&py, body, "StringType()"),
+            ARROW_BATCHED,
+            ArrowType::Utf8View,
+            longs(&[Some(1)]),
+        )
+        .expect("runs");
+        let out = out
+            .as_any()
+            .downcast_ref::<StringViewArray>()
+            .expect("string")
+            .value(0)
+            .to_owned();
+        assert_eq!(out, "Asia/Kolkata|+0530", "sandbox {sandbox}");
+    }
 }
 
 #[test]

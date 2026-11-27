@@ -137,6 +137,9 @@ fn pool(python: &Path) -> Pool {
             .map(OsString::from)
             .to_vec(),
     };
+    // The goldens ran in UTC (session and host): Python renders a TIMESTAMP argument in the worker's zone, as
+    // PySpark's worker does in the executor's, so the replay pins it.
+    config.time_zone = Some("UTC".into());
     let pool = Pool::new(config).expect("pool");
     assert!(pool.refusal().is_none(), "{:?}", pool.refusal());
     pool
