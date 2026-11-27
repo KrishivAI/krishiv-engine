@@ -190,6 +190,11 @@ def test_every_wrapper_builds_its_registry_call(name: str, recorded: None) -> No
     sent_nulls = [p for p in params if (name, p.name) in ALWAYS_SENT]
     seeds = 1 if name in RANDOM_SEEDED else 0
     assert len(short[2]) == sum(len(vs) for vs in required) + len(sent_defaults) + len(sent_nulls) + seeds
+    if seeds:
+        seed = short[2][-1]
+        assert seed[0] == "lit", seed
+        assert isinstance(seed[1], int), seed
+        assert not isinstance(seed[1], bool), seed
     if sent_nulls:
         assert short[2][-len(sent_nulls) :] == tuple(("lit", None) for _ in sent_nulls)
 
