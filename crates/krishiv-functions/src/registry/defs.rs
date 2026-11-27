@@ -785,11 +785,24 @@ fn try_make_timestamp_ltz(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     Ok(make_timestamp_result(c, DataType::Timestamp, true))
 }
 
+/// `make_timestamp_ntz(date, time)` is Spark's `MakeTimestampNTZ`, a `StaticInvoke` with the default
+/// `returnNullable = true` (the `try_` form a `TryEval` of it): nullable whatever the arguments. The
+/// `make_timestamp[_ltz](date, time)` forms are `MakeTimestampFromDateTime`, nullable with their arguments.
+fn ntz_date_form(c: &CallTypes<'_>) -> bool {
+    c.args().len() == 2
+}
+
 fn make_timestamp_ntz(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    if ntz_date_form(c) {
+        return Ok(ArgType::new(DataType::TimestampNtz, true));
+    }
     Ok(make_timestamp_result(c, DataType::TimestampNtz, false))
 }
 
 fn try_make_timestamp_ntz(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    if ntz_date_form(c) {
+        return Ok(ArgType::new(DataType::TimestampNtz, true));
+    }
     Ok(make_timestamp_result(c, DataType::TimestampNtz, true))
 }
 
