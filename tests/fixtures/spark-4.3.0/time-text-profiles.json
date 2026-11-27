@@ -15,5 +15,767 @@
     "HH:mm:ss.SSSSSSSSS": "12:34:56.123456789",
     "default": "12:34:56.123456789"
   },
+  "schema_of_json": {
+    "default": [
+      {
+        "options": {},
+        "schema": "STRUCT<t: STRING>",
+        "text": "{\"t\":\"12:34:56\"}"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "STRUCT<t: TIMESTAMP>",
+        "text": "{\"t\":\"12:34:56\"}"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "STRUCT<t: TIMESTAMP>",
+        "text": "{\"t\":\"12:34:56.123456789\"}"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "STRUCT<t: TIMESTAMP>",
+        "text": "{\"t\":\"12:34\"}"
+      },
+      {
+        "options": {},
+        "schema": "STRUCT<t: STRING>",
+        "text": "{\"t\":\"2024-01-02 03:04:05\"}"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "STRUCT<t: TIMESTAMP>",
+        "text": "{\"t\":\"2024-01-02 03:04:05\"}"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "STRUCT<t: TIMESTAMP>",
+        "text": "{\"t\":\"2024-01-02T03:04:05+01:00\"}"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "STRUCT<t: TIMESTAMP>",
+        "text": "{\"t\":\"2024-01-02\"}"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "STRUCT<t: TIMESTAMP>",
+        "text": "{\"t\":\"2024-1-2 3:4:5\"}"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "STRUCT<t: STRING>",
+        "text": "{\"t\":\"not a time\"}"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "ARRAY<STRUCT<t: TIMESTAMP>>",
+        "text": "[{\"t\":\"12:34:56\"},{\"t\":\"2024-01-02 03:04:05\"}]"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "ARRAY<STRUCT<t: TIMESTAMP>>",
+        "text": "[{\"t\":\"2024-01-02 03:04:05\"},{\"t\":\"2024-01-02T03:04:05Z\"}]"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "ARRAY<STRUCT<t: STRING>>",
+        "text": "[{\"t\":\"2024-01-02 03:04:05\"},{\"t\":\"abc\"}]"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "ARRAY<STRUCT<t: TIMESTAMP>>",
+        "text": "[{\"t\":\"12:34:56\"},{\"t\":null}]"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true",
+          "timestampFormat": "dd/MM/yyyy"
+        },
+        "schema": "STRUCT<t: TIMESTAMP>",
+        "text": "{\"t\":\"02/01/2024\"}"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true",
+          "timestampFormat": "dd/MM/yyyy"
+        },
+        "schema": "STRUCT<t: STRING>",
+        "text": "{\"t\":\"2024-01-02 03:04:05\"}"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true",
+          "timestampNTZFormat": "dd/MM/yyyy HH:mm"
+        },
+        "schema": "STRUCT<t: STRING>",
+        "text": "{\"t\":\"02/01/2024 03:04\"}"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true",
+          "timeFormat": "HH.mm"
+        },
+        "schema": "STRUCT<t: STRING>",
+        "text": "{\"t\":\"12.34\"}"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true",
+          "primitivesAsString": "true"
+        },
+        "schema": "STRUCT<n: STRING, t: TIMESTAMP>",
+        "text": "{\"t\":\"12:34:56\",\"n\":1}"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true",
+          "prefersDecimal": "true"
+        },
+        "schema": "STRUCT<t: DECIMAL(2,1)>",
+        "text": "{\"t\":\"1.5\"}"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true",
+          "prefersDecimal": "true"
+        },
+        "schema": "STRUCT<t: TIMESTAMP>",
+        "text": "{\"t\":\"12:34:56\"}"
+      }
+    ],
+    "legacy": [
+      {
+        "options": {},
+        "schema": "STRUCT<t: STRING>",
+        "text": "{\"t\":\"12:34:56\"}"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "STRUCT<t: STRING>",
+        "text": "{\"t\":\"12:34:56\"}"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "STRUCT<t: STRING>",
+        "text": "{\"t\":\"12:34:56.123456789\"}"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "STRUCT<t: STRING>",
+        "text": "{\"t\":\"12:34\"}"
+      },
+      {
+        "options": {},
+        "schema": "STRUCT<t: STRING>",
+        "text": "{\"t\":\"2024-01-02 03:04:05\"}"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "STRUCT<t: TIMESTAMP>",
+        "text": "{\"t\":\"2024-01-02 03:04:05\"}"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "STRUCT<t: STRING>",
+        "text": "{\"t\":\"2024-01-02T03:04:05+01:00\"}"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "STRUCT<t: TIMESTAMP>",
+        "text": "{\"t\":\"2024-01-02\"}"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "STRUCT<t: TIMESTAMP>",
+        "text": "{\"t\":\"2024-1-2 3:4:5\"}"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "STRUCT<t: STRING>",
+        "text": "{\"t\":\"not a time\"}"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "ARRAY<STRUCT<t: STRING>>",
+        "text": "[{\"t\":\"12:34:56\"},{\"t\":\"2024-01-02 03:04:05\"}]"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "ARRAY<STRUCT<t: STRING>>",
+        "text": "[{\"t\":\"2024-01-02 03:04:05\"},{\"t\":\"2024-01-02T03:04:05Z\"}]"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "ARRAY<STRUCT<t: STRING>>",
+        "text": "[{\"t\":\"2024-01-02 03:04:05\"},{\"t\":\"abc\"}]"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "ARRAY<STRUCT<t: STRING>>",
+        "text": "[{\"t\":\"12:34:56\"},{\"t\":null}]"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true",
+          "timestampFormat": "dd/MM/yyyy"
+        },
+        "schema": "STRUCT<t: TIMESTAMP>",
+        "text": "{\"t\":\"02/01/2024\"}"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true",
+          "timestampFormat": "dd/MM/yyyy"
+        },
+        "schema": "STRUCT<t: TIMESTAMP>",
+        "text": "{\"t\":\"2024-01-02 03:04:05\"}"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true",
+          "timestampNTZFormat": "dd/MM/yyyy HH:mm"
+        },
+        "schema": "STRUCT<t: STRING>",
+        "text": "{\"t\":\"02/01/2024 03:04\"}"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true",
+          "timeFormat": "HH.mm"
+        },
+        "schema": "STRUCT<t: STRING>",
+        "text": "{\"t\":\"12.34\"}"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true",
+          "primitivesAsString": "true"
+        },
+        "schema": "STRUCT<n: STRING, t: STRING>",
+        "text": "{\"t\":\"12:34:56\",\"n\":1}"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true",
+          "prefersDecimal": "true"
+        },
+        "schema": "STRUCT<t: DECIMAL(2,1)>",
+        "text": "{\"t\":\"1.5\"}"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true",
+          "prefersDecimal": "true"
+        },
+        "schema": "STRUCT<t: STRING>",
+        "text": "{\"t\":\"12:34:56\"}"
+      }
+    ],
+    "ntz": [
+      {
+        "options": {},
+        "schema": "STRUCT<t: STRING>",
+        "text": "{\"t\":\"12:34:56\"}"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "STRUCT<t: TIMESTAMP>",
+        "text": "{\"t\":\"12:34:56\"}"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "STRUCT<t: TIMESTAMP>",
+        "text": "{\"t\":\"12:34:56.123456789\"}"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "STRUCT<t: TIMESTAMP>",
+        "text": "{\"t\":\"12:34\"}"
+      },
+      {
+        "options": {},
+        "schema": "STRUCT<t: STRING>",
+        "text": "{\"t\":\"2024-01-02 03:04:05\"}"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "STRUCT<t: TIMESTAMP_NTZ>",
+        "text": "{\"t\":\"2024-01-02 03:04:05\"}"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "STRUCT<t: TIMESTAMP>",
+        "text": "{\"t\":\"2024-01-02T03:04:05+01:00\"}"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "STRUCT<t: TIMESTAMP_NTZ>",
+        "text": "{\"t\":\"2024-01-02\"}"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "STRUCT<t: TIMESTAMP_NTZ>",
+        "text": "{\"t\":\"2024-1-2 3:4:5\"}"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "STRUCT<t: STRING>",
+        "text": "{\"t\":\"not a time\"}"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "ARRAY<STRUCT<t: TIMESTAMP>>",
+        "text": "[{\"t\":\"12:34:56\"},{\"t\":\"2024-01-02 03:04:05\"}]"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "ARRAY<STRUCT<t: TIMESTAMP>>",
+        "text": "[{\"t\":\"2024-01-02 03:04:05\"},{\"t\":\"2024-01-02T03:04:05Z\"}]"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "ARRAY<STRUCT<t: STRING>>",
+        "text": "[{\"t\":\"2024-01-02 03:04:05\"},{\"t\":\"abc\"}]"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "ARRAY<STRUCT<t: TIMESTAMP>>",
+        "text": "[{\"t\":\"12:34:56\"},{\"t\":null}]"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true",
+          "timestampFormat": "dd/MM/yyyy"
+        },
+        "schema": "STRUCT<t: TIMESTAMP>",
+        "text": "{\"t\":\"02/01/2024\"}"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true",
+          "timestampFormat": "dd/MM/yyyy"
+        },
+        "schema": "STRUCT<t: TIMESTAMP_NTZ>",
+        "text": "{\"t\":\"2024-01-02 03:04:05\"}"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true",
+          "timestampNTZFormat": "dd/MM/yyyy HH:mm"
+        },
+        "schema": "STRUCT<t: TIMESTAMP_NTZ>",
+        "text": "{\"t\":\"02/01/2024 03:04\"}"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true",
+          "timeFormat": "HH.mm"
+        },
+        "schema": "STRUCT<t: STRING>",
+        "text": "{\"t\":\"12.34\"}"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true",
+          "primitivesAsString": "true"
+        },
+        "schema": "STRUCT<n: STRING, t: TIMESTAMP>",
+        "text": "{\"t\":\"12:34:56\",\"n\":1}"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true",
+          "prefersDecimal": "true"
+        },
+        "schema": "STRUCT<t: DECIMAL(2,1)>",
+        "text": "{\"t\":\"1.5\"}"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true",
+          "prefersDecimal": "true"
+        },
+        "schema": "STRUCT<t: TIMESTAMP>",
+        "text": "{\"t\":\"12:34:56\"}"
+      }
+    ],
+    "time": [
+      {
+        "options": {},
+        "schema": "STRUCT<t: STRING>",
+        "text": "{\"t\":\"12:34:56\"}"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "STRUCT<t: TIME(6)>",
+        "text": "{\"t\":\"12:34:56\"}"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "STRUCT<t: TIME(6)>",
+        "text": "{\"t\":\"12:34:56.123456789\"}"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "STRUCT<t: TIME(6)>",
+        "text": "{\"t\":\"12:34\"}"
+      },
+      {
+        "options": {},
+        "schema": "STRUCT<t: STRING>",
+        "text": "{\"t\":\"2024-01-02 03:04:05\"}"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "STRUCT<t: TIMESTAMP>",
+        "text": "{\"t\":\"2024-01-02 03:04:05\"}"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "STRUCT<t: TIMESTAMP>",
+        "text": "{\"t\":\"2024-01-02T03:04:05+01:00\"}"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "STRUCT<t: TIMESTAMP>",
+        "text": "{\"t\":\"2024-01-02\"}"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "STRUCT<t: TIMESTAMP>",
+        "text": "{\"t\":\"2024-1-2 3:4:5\"}"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "STRUCT<t: STRING>",
+        "text": "{\"t\":\"not a time\"}"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "ARRAY<STRUCT<t: STRING>>",
+        "text": "[{\"t\":\"12:34:56\"},{\"t\":\"2024-01-02 03:04:05\"}]"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "ARRAY<STRUCT<t: TIMESTAMP>>",
+        "text": "[{\"t\":\"2024-01-02 03:04:05\"},{\"t\":\"2024-01-02T03:04:05Z\"}]"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "ARRAY<STRUCT<t: STRING>>",
+        "text": "[{\"t\":\"2024-01-02 03:04:05\"},{\"t\":\"abc\"}]"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "ARRAY<STRUCT<t: TIME(6)>>",
+        "text": "[{\"t\":\"12:34:56\"},{\"t\":null}]"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true",
+          "timestampFormat": "dd/MM/yyyy"
+        },
+        "schema": "STRUCT<t: TIMESTAMP>",
+        "text": "{\"t\":\"02/01/2024\"}"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true",
+          "timestampFormat": "dd/MM/yyyy"
+        },
+        "schema": "STRUCT<t: STRING>",
+        "text": "{\"t\":\"2024-01-02 03:04:05\"}"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true",
+          "timestampNTZFormat": "dd/MM/yyyy HH:mm"
+        },
+        "schema": "STRUCT<t: STRING>",
+        "text": "{\"t\":\"02/01/2024 03:04\"}"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true",
+          "timeFormat": "HH.mm"
+        },
+        "schema": "STRUCT<t: TIME(6)>",
+        "text": "{\"t\":\"12.34\"}"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true",
+          "primitivesAsString": "true"
+        },
+        "schema": "STRUCT<n: STRING, t: TIME(6)>",
+        "text": "{\"t\":\"12:34:56\",\"n\":1}"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true",
+          "prefersDecimal": "true"
+        },
+        "schema": "STRUCT<t: DECIMAL(2,1)>",
+        "text": "{\"t\":\"1.5\"}"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true",
+          "prefersDecimal": "true"
+        },
+        "schema": "STRUCT<t: TIME(6)>",
+        "text": "{\"t\":\"12:34:56\"}"
+      }
+    ],
+    "time ntz": [
+      {
+        "options": {},
+        "schema": "STRUCT<t: STRING>",
+        "text": "{\"t\":\"12:34:56\"}"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "STRUCT<t: TIME(6)>",
+        "text": "{\"t\":\"12:34:56\"}"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "STRUCT<t: TIME(6)>",
+        "text": "{\"t\":\"12:34:56.123456789\"}"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "STRUCT<t: TIME(6)>",
+        "text": "{\"t\":\"12:34\"}"
+      },
+      {
+        "options": {},
+        "schema": "STRUCT<t: STRING>",
+        "text": "{\"t\":\"2024-01-02 03:04:05\"}"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "STRUCT<t: TIMESTAMP_NTZ>",
+        "text": "{\"t\":\"2024-01-02 03:04:05\"}"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "STRUCT<t: TIMESTAMP>",
+        "text": "{\"t\":\"2024-01-02T03:04:05+01:00\"}"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "STRUCT<t: TIMESTAMP_NTZ>",
+        "text": "{\"t\":\"2024-01-02\"}"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "STRUCT<t: TIMESTAMP_NTZ>",
+        "text": "{\"t\":\"2024-1-2 3:4:5\"}"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "STRUCT<t: STRING>",
+        "text": "{\"t\":\"not a time\"}"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "ARRAY<STRUCT<t: STRING>>",
+        "text": "[{\"t\":\"12:34:56\"},{\"t\":\"2024-01-02 03:04:05\"}]"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "ARRAY<STRUCT<t: TIMESTAMP>>",
+        "text": "[{\"t\":\"2024-01-02 03:04:05\"},{\"t\":\"2024-01-02T03:04:05Z\"}]"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "ARRAY<STRUCT<t: STRING>>",
+        "text": "[{\"t\":\"2024-01-02 03:04:05\"},{\"t\":\"abc\"}]"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "ARRAY<STRUCT<t: TIME(6)>>",
+        "text": "[{\"t\":\"12:34:56\"},{\"t\":null}]"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true",
+          "timestampFormat": "dd/MM/yyyy"
+        },
+        "schema": "STRUCT<t: TIMESTAMP>",
+        "text": "{\"t\":\"02/01/2024\"}"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true",
+          "timestampFormat": "dd/MM/yyyy"
+        },
+        "schema": "STRUCT<t: TIMESTAMP_NTZ>",
+        "text": "{\"t\":\"2024-01-02 03:04:05\"}"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true",
+          "timestampNTZFormat": "dd/MM/yyyy HH:mm"
+        },
+        "schema": "STRUCT<t: TIMESTAMP_NTZ>",
+        "text": "{\"t\":\"02/01/2024 03:04\"}"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true",
+          "timeFormat": "HH.mm"
+        },
+        "schema": "STRUCT<t: TIME(6)>",
+        "text": "{\"t\":\"12.34\"}"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true",
+          "primitivesAsString": "true"
+        },
+        "schema": "STRUCT<n: STRING, t: TIME(6)>",
+        "text": "{\"t\":\"12:34:56\",\"n\":1}"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true",
+          "prefersDecimal": "true"
+        },
+        "schema": "STRUCT<t: DECIMAL(2,1)>",
+        "text": "{\"t\":\"1.5\"}"
+      },
+      {
+        "options": {
+          "inferTimestamp": "true",
+          "prefersDecimal": "true"
+        },
+        "schema": "STRUCT<t: TIME(6)>",
+        "text": "{\"t\":\"12:34:56\"}"
+      }
+    ]
+  },
   "spark": "4.3.0"
 }
