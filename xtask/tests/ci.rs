@@ -84,6 +84,9 @@ fn allowlist_matches_expected_paths() {
     assert!(is_size_excluded("tests/sqllogictest/x.snap"));
     assert!(is_size_excluded("ui/pnpm-lock.yaml"));
     assert!(!is_size_excluded("crates/krishiv-sql/src/parser.rs"));
+    // Generated reference pages; the hand-written ones beside them count.
+    assert!(is_size_excluded("docs/reference/errors/d.md"));
+    assert!(!is_size_excluded("docs/reference/index.md"));
     assert!(!is_size_excluded("xtask/src/ci.rs"));
     // Data directories count only at their fixed place under a crate.
     assert!(is_size_excluded("crates/krishiv-common/vendored/x.json"));

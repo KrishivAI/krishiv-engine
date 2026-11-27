@@ -1,15 +1,16 @@
 ---
-description: "Facts to look up: SQL and functions, the Python and Rust APIs, configuration, metrics and profiles."
+description: "Facts to look up: SQL and functions, the Python and Rust APIs, configuration, error classes, metrics and profiles."
 ---
 
 # Reference
 
 Facts to look up, for someone who already knows what they want to do: the SQL language and every function, the Python
-and Rust APIs, configuration settings, metrics and query profiles.
+and Rust APIs, configuration settings, error classes, metrics and query profiles.
 
 - [SQL functions](sql/functions/index.md): one page per built-in function and operator.
 - [Python API](python/index.md) and [Python package](python-package.md)
 - [Rust API](rust/index.md)
+- [Error classes](errors/index.md): the SQLSTATE and message of each.
 - [Metrics](metrics-v1.md)
 - [EXPLAIN ANALYZE](explain-analyze.md)
 - [Query profile schema](query-profile-v1.schema.json)

@@ -70,7 +70,7 @@ fn generated_reference_pages_name_no_internal_documents() {
         .parent()
         .unwrap();
     let mut files = vec![root.join("docs/reference/config/index.md")];
-    for dir in ["sql/functions", "python", "rust"] {
+    for dir in ["sql/functions", "python", "rust", "errors"] {
         let d = root.join("docs/reference").join(dir);
         for e in std::fs::read_dir(&d).unwrap() {
             files.push(e.unwrap().path());

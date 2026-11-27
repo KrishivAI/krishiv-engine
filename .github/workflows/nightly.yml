@@ -989,12 +989,13 @@ jobs:
           tool: sccache@0.18.0
       - name: Install rustdoc-md
         run: cargo install rustdoc-md --version 0.2.0 --locked
-      - name: SQL, Python, Rust and configuration pages match the generators
+      - name: SQL, Python, Rust, error-class and configuration pages match the generators
         run: |
           cargo xtask docs-analyze --check --base origin/main
           cargo xtask docs-sql --check
           cargo xtask docs-examples --check
           cargo xtask docs-python --check
+          cargo xtask docs-errors --check
           cargo xtask docs-rust --check
           cargo xtask docs-config "$RUNNER_TEMP/configuration.md"
           diff -u docs/reference/config/index.md "$RUNNER_TEMP/configuration.md"

@@ -446,7 +446,7 @@ pub fn new_error_id() -> String {
     format!("{:016x}{:016x}", part(0), part(0x9e37_79b9_7f4a_7c15))
 }
 
-/// Renders the error-class reference as Markdown (`cargo xtask docs-errors`).
+/// Renders the error classes as one Markdown table (`cargo xtask docs-errors PATH`).
 pub fn docs_markdown() -> String {
     let mut out = String::from(
         "# Krishiv error classes\n\n\

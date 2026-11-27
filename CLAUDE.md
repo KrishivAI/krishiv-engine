@@ -34,7 +34,7 @@ cargo xtask quarantine [--list|--flaky LOG]     # --flaky: fail on nextest FLAKY
 cargo xtask release-check [VERSION]              # read-only release preflight (version, publish list order, changelog, workflows, tag); RELEASING.md "Release checklist"
 cargo xtask ci-time [--file F | --compare BEFORE AFTER]   # PR-gate wall time (median, p90) from gh run list; save lists before/after a CI change and compare
 cargo xtask connect-coverage [--check]          # docs/reference/connect/coverage.md + tests/connect/coverage.json from crates/krishiv-connect/src/coverage.rs
-cargo xtask docs-config | docs-errors            # regenerate config / error-class docs
+cargo xtask docs-config | docs-errors [--check]   # regenerate the config page / docs/reference/errors/ (committed)
 cargo xtask docs-sql | docs-python | docs-rust [--check]   # docs/reference/{sql/functions,python,rust}/ (docs-rust needs nightly rustdoc + `cargo install rustdoc-md --version 0.2.0 --locked`; the docs-reference nightly job diffs them); docs-config docs/reference/config/index.md
 cargo xtask budgets [--build-time] [--write-baseline]   # crate-count / build-time / size budgets; PRs are gated against CI's measurement of main, `budgets.json` is only a reference record / fallback
 RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --workspace   # docs gate

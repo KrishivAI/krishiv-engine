@@ -16,6 +16,7 @@ pub mod coverage;
 pub mod dev;
 pub mod docs;
 pub mod docs_analyze;
+pub mod docs_errors;
 pub mod docs_examples;
 pub mod docs_ext;
 pub mod docs_sql;

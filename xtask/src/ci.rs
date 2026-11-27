@@ -42,12 +42,13 @@ const EXCLUDED_PREFIXES: &[&str] = &[
     "python/krishiv/_udf/pandas_types.py",
     "python/krishiv/_udf/pandas_utils.py",
     "python/krishiv/_udf/typehints.py",
-    // The API reference pages written by `cargo xtask docs-sql | docs-python | docs-rust` and the
-    // configuration page of `docs-config`; a nightly job diffs them against the generators.
+    // The reference pages written by `cargo xtask docs-sql | docs-python | docs-rust | docs-errors` and
+    // the configuration page of `docs-config`; a CI job diffs them against the generators.
     "docs/reference/sql/",
     "docs/reference/python/",
     "docs/reference/rust/",
     "docs/reference/config/index.md",
+    "docs/reference/errors/",
 ];
 /// Suffixes of machine-written files. Kept specific: a loose suffix such as
 /// `.out` or `.map` would also exclude hand-written files.

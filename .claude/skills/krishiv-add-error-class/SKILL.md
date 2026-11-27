@@ -41,7 +41,8 @@ SQLSTATE there; `DELTA_VERSION_NOT_FOUND` becomes `ErrorClass::DeltaVersionNotFo
 4. **Tests.** The registry tests in `crates/krishiv-common/src/error/tests.rs` (`registry_is_consistent`,
    `krishiv_specific_classes_are_prefixed`) cover shape; add a test at the use site that the right class is raised
    (model: the `ErrorClass::KrishivSpillCapExceeded` assertion in `crates/krishiv-memory/src/spillfile/tests.rs`).
-5. **Reference docs.** `cargo xtask docs-errors` prints the table; check the new row. Not committed.
+5. **Reference docs.** `cargo xtask docs-errors` rewrites `docs/reference/errors/`; check the new entry and commit it
+   (`docs-errors --check` and an xtask test fail when it is stale).
 
 ## Verify
 `cargo nextest run -p krishiv-common --no-tests=pass` plus the crate that raises it; clippy `-D warnings`.
