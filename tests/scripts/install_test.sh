@@ -2,12 +2,15 @@
 # SPDX-License-Identifier: Apache-2.0
 # Tests scripts/install.sh against a fake release directory (file:// URLs): artifact choice per CPU,
 # checksum verification, refusal on a mismatch, version selection. Runs on Linux and macOS.
+# shellcheck disable=SC2015,SC2016 # "A && echo ok || fail" is the test idiom; the sh -c bodies are single-quoted on purpose
 set -eu
 here=$(cd "$(dirname "$0")" && pwd)
 script="$here/../../scripts/install.sh"
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 fails=0
+# The fake binaries run anywhere; pretend glibc so an Alpine host still exercises the other paths.
+export KRISHIV_LIBC=glibc
 
 sum() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1"; else shasum -a 256 "$1"; fi; }
 
@@ -80,6 +83,28 @@ rc=0; env PATH="$work/ghbin:$PATH" KRISHIV_NO_ATTEST= KRISHIV_BASE_URL="file://$
 if [ "$rc" != 0 ] && [ ! -e "$work/bin-att/krishiv" ] && grep -q 'attestation' "$work/log-att"; then echo "ok attestation-refused"; else echo "FAIL attestation-refused"; fails=$((fails + 1)); fi
 rc=0; env PATH="$work/ghbin:$PATH" KRISHIV_NO_ATTEST=1 KRISHIV_BASE_URL="file://$rel" KRISHIV_INSTALL_DIR="$work/bin-att2" KRISHIV_CPU_FLAGS="$v3" sh "$script" >/dev/null 2>&1 || rc=$?
 [ "$rc" = 0 ] && [ -e "$work/bin-att2/krishiv" ] && echo "ok attestation-skipped" || { echo "FAIL attestation-skipped"; fails=$((fails + 1)); }
+
+# --uninstall removes the binary; a second one fails loudly; --dry-run keeps it.
+d="$work/bin-un"; mkdir -p "$d"; printf x > "$d/krishiv"
+KRISHIV_INSTALL_DIR="$d" sh "$script" --uninstall --dry-run >/dev/null 2>&1 && [ -e "$d/krishiv" ] && echo "ok uninstall-dry-run" || { echo "FAIL uninstall-dry-run"; fails=$((fails + 1)); }
+KRISHIV_INSTALL_DIR="$d" sh "$script" --uninstall >/dev/null 2>&1 && [ ! -e "$d/krishiv" ] && echo "ok uninstall" || { echo "FAIL uninstall"; fails=$((fails + 1)); }
+rc=0; KRISHIV_INSTALL_DIR="$d" sh "$script" --uninstall >/dev/null 2>&1 || rc=$?
+[ "$rc" != 0 ] && echo "ok uninstall-missing" || { echo "FAIL uninstall-missing"; fails=$((fails + 1)); }
+
+# musl (Alpine) is refused with the pip/Docker advice on Linux.
+if [ "$os" = Linux ]; then
+  rc=0; env KRISHIV_LIBC=musl KRISHIV_BASE_URL="file://$rel" KRISHIV_INSTALL_DIR="$work/bin-musl" sh "$script" >"$work/log-musl" 2>&1 || rc=$?
+  if [ "$rc" != 0 ] && grep -q 'musl' "$work/log-musl" && [ ! -e "$work/bin-musl/krishiv" ]; then echo "ok musl-refused"; else echo "FAIL musl-refused"; fails=$((fails + 1)); fi
+fi
+
+# On a real musl host (the Alpine container) the script itself must detect it, with no override.
+for f in /lib/ld-musl-*.so.1; do
+  if [ -e "$f" ]; then
+    rc=0; env -u KRISHIV_LIBC KRISHIV_BASE_URL="file://$rel" KRISHIV_INSTALL_DIR="$work/bin-realmusl" sh "$script" >"$work/log-realmusl" 2>&1 || rc=$?
+    if [ "$rc" != 0 ] && grep -q 'musl' "$work/log-realmusl"; then echo "ok musl-detected"; else echo "FAIL musl-detected"; fails=$((fails + 1)); fi
+  fi
+  break
+done
 
 [ "$fails" = 0 ] || { echo "$fails failure(s)"; exit 1; }
 echo "all install tests passed"

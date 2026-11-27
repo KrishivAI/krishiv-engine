@@ -32,6 +32,29 @@ jobs:
         run: dash tests/scripts/install_test.sh
       - name: shellcheck
         run: shellcheck scripts/install.sh tests/scripts/install_test.sh
+  containers:
+    name: install script (${{ matrix.image }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { image: "ubuntu:22.04", pre: "apt-get update -qq && apt-get install -y -qq curl ca-certificates >/dev/null" }
+          - { image: "ubuntu:24.04", pre: "apt-get update -qq && apt-get install -y -qq curl ca-certificates >/dev/null" }
+          - { image: "debian:12", pre: "apt-get update -qq && apt-get install -y -qq curl ca-certificates >/dev/null" }
+          - { image: "fedora:41", pre: "dnf install -y -q curl >/dev/null" }
+          - { image: "alpine:3.21", pre: "apk add --no-cache curl bash >/dev/null" }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Tests in the container (Alpine must refuse: no musl binary)
+        env:
+          IMAGE: ${{ matrix.image }}
+          PRE: ${{ matrix.pre }}
+        run: |
+          docker run --rm -v "$PWD:/src:ro" -e IMAGE "$IMAGE" sh -c "$PRE && cp -r /src /work && cd /work && sh tests/scripts/install_test.sh"
   macos:
     name: install script (macos-15)
     runs-on: macos-15
