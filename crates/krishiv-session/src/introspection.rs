@@ -1708,6 +1708,9 @@ fn create_statement(t: &CatalogTable, binding_enabled: bool) -> Result<String, K
         if let Some(c) = &t.comment {
             out.push_str(&format!("COMMENT {}\n", sql_literal(c)));
         }
+        if !view.collation.is_utf8_binary() {
+            out.push_str(&format!("DEFAULT COLLATION {}\n", view.collation.name()));
+        }
         if !t.properties.is_empty() {
             let props = t
                 .properties

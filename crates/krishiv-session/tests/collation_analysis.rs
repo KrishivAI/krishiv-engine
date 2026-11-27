@@ -552,6 +552,22 @@ fn a_permanent_view_default_collation_types_its_literals() {
         value("SELECT collation(c1) FROM vb"),
         "SYSTEM.BUILTIN.UTF8_BINARY"
     );
+    // SHOW CREATE TABLE prints it before the schema binding line.
+    let shown = value("SHOW CREATE TABLE vd");
+    assert!(
+        shown.contains("\nDEFAULT COLLATION UTF8_LCASE\n"),
+        "{shown}"
+    );
+    // A temporary view takes its default the same way.
+    go("CREATE TEMPORARY VIEW tv DEFAULT COLLATION UTF8_LCASE AS SELECT 'a' AS c1");
+    assert_eq!(
+        value("SELECT collation(c1) FROM tv"),
+        "SYSTEM.BUILTIN.UTF8_LCASE"
+    );
+    assert_eq!(
+        value("SELECT collation('a') FROM tv"),
+        "SYSTEM.BUILTIN.UTF8_BINARY"
+    );
 }
 
 fn class_of(s: &Session, sql: &str) -> ErrorClass {
