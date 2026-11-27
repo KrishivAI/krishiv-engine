@@ -1642,6 +1642,7 @@ impl Lowerer {
                 )
             }
             // `(a, b)` is `struct(a, b)` to Spark's `AstBuilder`.
+            ExprKind::Row(items) if row_is_named_struct(items) => self.row_ctor(items, sp)?,
             ExprKind::Row(items) | ExprKind::Struct(items) => self.struct_ctor(items, sp)?,
             // Every variant is lowered above; the wildcard stays because
             // `ExprKind` is non-exhaustive.
@@ -1668,6 +1669,24 @@ impl Lowerer {
     /// keeping `struct(...)` as the shown form. A `*` item passes through
     /// for the analyzer to expand, and a multi-name alias is not a field
     /// name.
+    /// A row constructor `(a, b)` is Spark's `CreateStruct` built at parse time, so it shows as
+    /// `named_struct(a, a, b, b)`: a column or alias names its field, anything else is `colN`.
+    fn row_ctor(&mut self, items: &[SelectItem], sp: Span) -> R<IrExpr> {
+        let mut args = Vec::with_capacity(items.len() * 2);
+        for (i, item) in items.iter().enumerate() {
+            let name = match (&item.alias, &item.expr.kind) {
+                (Some(Alias::Name(id)), _) => id.value.clone(),
+                (None, ExprKind::Column(parts)) => parts
+                    .last()
+                    .map_or_else(|| format!("col{}", i + 1), |p| p.value.clone()),
+                _ => format!("col{}", i + 1),
+            };
+            args.push(arc(self.ex(ExprNode::Literal(IrLiteral::String(name)), sp)));
+            args.push(self.arg(&item.expr)?);
+        }
+        Ok(self.call("named_struct", args, sp))
+    }
+
     fn struct_ctor(&mut self, items: &[SelectItem], sp: Span) -> R<IrExpr> {
         let mut args = Vec::with_capacity(items.len());
         for item in items.iter() {
@@ -1692,6 +1711,14 @@ impl Lowerer {
         }
         Ok(self.call("struct", args, sp))
     }
+}
+
+/// Whether a row constructor lowers to `named_struct`: no star and no alias list among its items.
+fn row_is_named_struct(items: &[SelectItem]) -> bool {
+    items.iter().all(|i| {
+        !matches!(i.expr.kind, ExprKind::Wildcard { .. })
+            && !matches!(i.alias, Some(Alias::List(_)))
+    })
 }
 
 /// The aggregates that take `IGNORE NULLS` / `RESPECT NULLS` (as their
