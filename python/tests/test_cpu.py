@@ -142,6 +142,16 @@ def test_a_folder_that_cannot_be_listed_is_not_both(tmp_path):
     assert not _cpu.both_builds_installed(tmp_path / "missing")
 
 
+def test_a_listing_that_fails_is_not_both(tmp_path, monkeypatch):
+    site = _site(tmp_path, "krishiv-0.3.0.dist-info", "krishiv_compat-0.3.0.dist-info")
+
+    def refuse(self: Path, pattern: str) -> list[Path]:
+        raise PermissionError(13, "Permission denied", str(self))
+
+    monkeypatch.setattr(Path, "glob", refuse)
+    assert not _cpu.both_builds_installed(site)
+
+
 def test_both_builds_warn_and_name_the_fix(tmp_path):
     site = _site(tmp_path, "krishiv-0.3.0.dist-info", "krishiv_compat-0.3.0.dist-info")
     with pytest.warns(RuntimeWarning, match="pip uninstall krishiv krishiv-compat") as caught:
