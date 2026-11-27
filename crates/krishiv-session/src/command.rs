@@ -987,6 +987,16 @@ impl Session {
             reads_data: reads,
             ..(*entry.def).clone()
         });
+        if f.characteristics.deterministic.is_none() {
+            entry.described = Arc::new(crate::sql_functions::Described {
+                deterministic: crate::sql_functions::body_deterministic(
+                    &*self.query_env().sql_functions,
+                    self.state.profile,
+                    &entry.def,
+                ),
+                ..(*entry.described).clone()
+            });
+        }
         if let Some(namespace) = &namespace {
             entry.def = Arc::new(SqlFunction {
                 qualifier: vec![crate::catalog::CATALOG.to_owned(), namespace.clone()],
@@ -1041,9 +1051,10 @@ impl Session {
             env.analysis.functions = Arc::clone(&candidate) as _;
             env.sql_functions = Arc::clone(&candidate);
             env.functions_version = krishiv_plan::analyzer::FunctionRegistry::version(&*candidate);
-            let output = self.probe(&entry.def, &[], env, redacted).await?;
+            let (output, columns) = self.probe(&entry.def, &[], env, redacted).await?;
             crate::sql_functions::check_return_names(f, &part.value, ids)?;
             let mut entry = entry.clone();
+            entry.described = crate::sql_functions::with_columns(&entry, columns);
             if entry.def.returns.is_none() {
                 let def = SqlFunction {
                     returns: Some(output),
@@ -1230,6 +1241,12 @@ impl Session {
         Ok(Entry {
             def: Arc::new(def),
             text: redacted.clone(),
+            described: Arc::new(crate::sql_functions::Described::declared(
+                f,
+                f.characteristics.deterministic.unwrap_or(true),
+                redacted,
+                &self.state.conf,
+            )),
         })
     }
 
@@ -1242,22 +1259,28 @@ impl Session {
         qualifier: &[String],
         env: QueryEnv,
         redacted: &RedactedSql,
-    ) -> Result<DataType, KrishivError> {
+    ) -> Result<(DataType, Vec<(String, DataType)>), KrishivError> {
         let plan = crate::sql_functions::null_call(def, qualifier);
         let table = def.returns_table.is_some();
         let analysis = DataFrame::new(self.clone(), plan)
             .analyzed_in_with_text(env, Some(redacted))
             .await?;
-        // A table function is probed by reading its rows; only the check matters, its columns
-        // are declared.
+        // A table function is probed by reading its rows; the check matters, and its columns
+        // for `DESCRIBE FUNCTION` when it declares none (`RETURNS TABLE` alone).
         if table {
-            return Ok(DataType::Null);
+            let columns = analysis
+                .analyzed
+                .output
+                .iter()
+                .map(|c| (c.name.clone(), c.data_type.clone()))
+                .collect();
+            return Ok((DataType::Null, columns));
         }
         analysis
             .analyzed
             .output
             .first()
-            .map(|c| c.data_type.clone())
+            .map(|c| (c.data_type.clone(), Vec::new()))
             .ok_or_else(|| crate::session::internal("a function call without a result".to_owned()))
     }
 
@@ -1382,35 +1405,11 @@ impl Session {
                 FunctionLookup::Sql(d) if d.reads_data
             )
         };
-        let mut stack: Vec<&PlanExpr> = std::iter::once(&*def.body)
+        let roots = std::iter::once(&*def.body)
             .chain(def.params.iter().filter_map(|p| p.default.as_deref()))
             .collect();
-        let mut plans = Vec::new();
-        while let Some(e) = stack.pop() {
-            if let ExprNode::Function(call) = &e.node {
-                let mut name = call.qualifier.clone();
-                name.push(call.name.clone());
-                if reads_calls(&name) {
-                    return true;
-                }
-            }
-            if let ExprNode::Subquery { plan, .. } = &e.node {
-                plans.push(plan);
-                while let Some(p) = plans.pop() {
-                    if let PlanNode::TableFunction { name, .. } = &p.node {
-                        let parts: Vec<String> = name
-                            .split(krishiv_plan::TABLE_FUNCTION_NAME_SEP)
-                            .map(str::to_owned)
-                            .collect();
-                        if reads_calls(&parts) {
-                            return true;
-                        }
-                    }
-                    p.for_each_expr(&mut |x| stack.push(x));
-                    p.for_each_child(&mut |c| plans.push(c));
-                }
-            }
-            e.for_each_child(&mut |c| stack.push(c));
+        if crate::sql_functions::any_call(roots, reads_calls) {
+            return true;
         }
         crate::sql_functions::reads_relation(
             &def.body,
@@ -1495,12 +1494,13 @@ impl Session {
             env.sql_functions = Arc::clone(&candidate);
             env.functions_version = krishiv_plan::analyzer::FunctionRegistry::version(&*candidate);
             let unvaried = env.clone();
-            let output = self
+            let (output, columns) = self
                 .probe(&entry.def, &entry.def.qualifier, env, redacted)
                 .await?;
             self.refuse_session_variables(&object, &entry.def, unvaried, redacted)
                 .await?;
             let mut entry = entry.clone();
+            entry.described = crate::sql_functions::with_columns(&entry, columns);
             if entry.def.returns.is_none() {
                 entry.def = Arc::new(SqlFunction {
                     returns: Some(output),

@@ -127,7 +127,7 @@ pub(crate) fn keep(pattern: Option<&ShowPattern>, name: &str) -> bool {
 }
 
 /// `Fri Oct 30 03:13:32 UTC 2026`, as Spark prints a creation time.
-fn created_time(ms: i64) -> String {
+pub(crate) fn created_time(ms: i64) -> String {
     const DAYS: [&str; 7] = ["Thu", "Fri", "Sat", "Sun", "Mon", "Tue", "Wed"];
     const MONTHS: [&str; 12] = [
         "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",

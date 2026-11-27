@@ -29,6 +29,135 @@ pub(crate) struct Entry {
     pub(crate) def: Arc<SqlFunction>,
     /// The `CREATE` statement, redacted: the text the body's spans index.
     pub(crate) text: RedactedSql,
+    /// What `DESCRIBE FUNCTION EXTENDED` shows beyond the definition.
+    pub(crate) described: Arc<Described>,
+}
+
+/// The parts of a function's `DESCRIBE FUNCTION EXTENDED` rows (Spark's `SQLFunction` fields) that
+/// the definition itself does not keep.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Described {
+    /// The function's `COMMENT`.
+    pub(crate) comment: Option<String>,
+    /// Each parameter's `DEFAULT` as written, in parameter order.
+    pub(crate) defaults: Vec<Option<String>>,
+    /// Declared, or else the body's own (Spark: the analyzed body's `deterministic`).
+    pub(crate) deterministic: bool,
+    /// The SQL configuration captured at creation, as Spark's `CapturesConfig` takes it: every set
+    /// `spark.sql.*` key it keeps, and always the session time zone and ANSI mode; sorted by key.
+    pub(crate) configs: Vec<(String, String)>,
+    /// When the function was created, in milliseconds since the epoch.
+    pub(crate) created_ms: i64,
+    /// The columns of a table function that declares none (`RETURNS TABLE` alone): its query's.
+    pub(crate) columns: Vec<(String, krishiv_types::DataType)>,
+}
+
+/// `entry`'s description with the query columns a probe found, kept only for a table function
+/// that declares no columns.
+pub(crate) fn with_columns(
+    entry: &Entry,
+    columns: Vec<(String, krishiv_types::DataType)>,
+) -> Arc<Described> {
+    if entry.def.returns_table.as_ref().is_some_and(Vec::is_empty) {
+        Arc::new(Described {
+            columns,
+            ..(*entry.described).clone()
+        })
+    } else {
+        Arc::clone(&entry.described)
+    }
+}
+
+impl Described {
+    /// What `CREATE FUNCTION` `f` declares, at creation: its comment, its defaults as written,
+    /// `deterministic` (settled later from the body when `f` declares nothing), and the
+    /// configuration it captures now.
+    pub(crate) fn declared(
+        f: &krishiv_sql::ast::CreateFunction,
+        deterministic: bool,
+        redacted: &RedactedSql,
+        conf: &crate::conf::ConfStore,
+    ) -> Self {
+        Self {
+            comment: f.characteristics.comment.clone(),
+            defaults: f
+                .params
+                .iter()
+                .map(|p| {
+                    p.default
+                        .as_ref()
+                        .map(|d| redacted.fragment(d.span.range()).trim().to_owned())
+                })
+                .collect(),
+            deterministic,
+            configs: captured_configs(conf),
+            created_ms: crate::table_commands::now_ms(),
+            columns: Vec::new(),
+        }
+    }
+}
+
+/// Whether the body of `def` calls no nondeterministic function (Spark: the analyzed body's
+/// `deterministic`), for `DESCRIBE FUNCTION` of a function that declares neither.
+pub(crate) fn body_deterministic(
+    registry: &dyn FunctionRegistry,
+    profile: SparkProfile,
+    def: &SqlFunction,
+) -> bool {
+    !any_call(vec![&*def.body], |name: &[String]| {
+        match registry.lookup(name, profile) {
+            FunctionLookup::Sql(d) => !d.deterministic,
+            _ => name
+                .last()
+                .is_some_and(|n| registry.spark_deterministic(n) == Some(false)),
+        }
+    })
+}
+
+/// Keys Spark's `CapturesConfig` never captures (`configPrefixDenyList`, 4.3.0).
+const UNCAPTURED: [&str; 13] = [
+    "spark.sql.view.maxNestedViewDepth",
+    "spark.sql.optimizer.",
+    "spark.sql.codegen.",
+    "spark.sql.execution.",
+    "spark.sql.shuffle.",
+    "spark.sql.adaptive.",
+    "spark.sql.hive.convertMetastoreParquet",
+    "spark.sql.hive.convertMetastoreOrc",
+    "spark.sql.hive.convertInsertingPartitionedTable",
+    "spark.sql.hive.convertInsertingUnpartitionedTable",
+    "spark.sql.hive.convertMetastoreCtas",
+    "spark.sql.additionalRemoteRepositories",
+    "spark.sql.analyzer.singlePassResolver.",
+];
+
+/// The configuration a function created now captures (Spark's `sqlConfigsToProps`): the set
+/// `spark.sql.*` keys outside [`UNCAPTURED`] (`spark.sql.optimizer.disableHints` is kept), then the
+/// time zone and ANSI mode when not set; sorted by key. Values show as `SET` shows them.
+pub(crate) fn captured_configs(conf: &crate::conf::ConfStore) -> Vec<(String, String)> {
+    const ALWAYS: [&str; 2] = ["spark.sql.session.timeZone", "spark.sql.ansi.enabled"];
+    let mut out: BTreeMap<String, String> = conf
+        .explicit_entries()
+        .into_iter()
+        .filter(|(k, _)| {
+            k.starts_with("spark.sql.")
+                && crate::conf::is_modifiable(k)
+                && (k == "spark.sql.optimizer.disableHints"
+                    || !UNCAPTURED.iter().any(|d| k.starts_with(d)))
+        })
+        .map(|(k, v)| {
+            let shown = crate::conf::shown(&k, v);
+            (k, shown)
+        })
+        .collect();
+    for key in ALWAYS {
+        if !out.contains_key(key)
+            && let Some(v) = conf.value(key)
+        {
+            out.insert(key.to_owned(), v);
+        }
+    }
+    out.into_iter().collect()
 }
 
 /// The functions of a session at one version.
@@ -1393,6 +1522,40 @@ pub(crate) fn null_call(def: &SqlFunction, qualifier: &[String]) -> Arc<LogicalP
     one_row_project(vec![Arc::new(call)])
 }
 
+/// Whether `hit` holds for the name of a function the expressions `roots` call, in their
+/// subqueries too (a table function of a subquery's plan included).
+pub(crate) fn any_call(roots: Vec<&Expr>, mut hit: impl FnMut(&[String]) -> bool) -> bool {
+    let mut stack = roots;
+    let mut plans = Vec::new();
+    while let Some(e) = stack.pop() {
+        if let ExprNode::Function(call) = &e.node {
+            let mut name = call.qualifier.clone();
+            name.push(call.name.clone());
+            if hit(&name) {
+                return true;
+            }
+        }
+        if let ExprNode::Subquery { plan, .. } = &e.node {
+            plans.push(plan);
+            while let Some(p) = plans.pop() {
+                if let PlanNode::TableFunction { name, .. } = &p.node {
+                    let parts: Vec<String> = name
+                        .split(krishiv_plan::TABLE_FUNCTION_NAME_SEP)
+                        .map(str::to_owned)
+                        .collect();
+                    if hit(&parts) {
+                        return true;
+                    }
+                }
+                p.for_each_expr(&mut |x| stack.push(x));
+                p.for_each_child(&mut |c| plans.push(c));
+            }
+        }
+        e.for_each_child(&mut |c| stack.push(c));
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use krishiv_plan::analyzer::BuiltinFunctions;
@@ -1417,6 +1580,7 @@ mod tests {
                 ansi: None,
             }),
             text: krishiv_sql::redact_sql("CREATE FUNCTION f() RETURN 1"),
+            described: Arc::default(),
         }
     }
 

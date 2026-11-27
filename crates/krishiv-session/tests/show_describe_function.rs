@@ -170,3 +170,199 @@ fn describe_function_prints_spark_s_rows() -> R {
     assert_eq!(err(&s, "DESCRIBE FUNCTION nosuch.f"), "UNRESOLVED_ROUTINE");
     Ok(())
 }
+
+/// The rows of `DESCRIBE FUNCTION EXTENDED`, with the creation time (a clock reading) checked for its
+/// shape and replaced by `<time>`.
+fn extended(s: &Session, sql: &str) -> R<Vec<String>> {
+    let mut out = rows(s, sql)?;
+    for r in &mut out {
+        if let Some(t) = r.strip_prefix("Create Time:   ") {
+            // `Fri Nov 27 21:03:05 UTC 2026`, as Java's `Date.toString` in UTC.
+            assert_eq!(t.len(), 28, "{t}");
+            assert!(t.contains(" UTC "), "{t}");
+            *r = "Create Time:   <time>".to_owned();
+        }
+    }
+    Ok(out)
+}
+
+/// A SQL function prints Spark 4.3.0's rows (`DescribeFunctionCommand.describeSQLFunction`; the
+/// expected text is from a Spark 4.3.0 Connect run of the same statements, R1-D-9).
+#[test]
+fn describe_function_of_a_sql_function_prints_spark_s_rows() -> R {
+    let s = Session::new()?;
+    s.conf().set("spark.sql.session.timeZone", "Etc/UTC")?;
+    s.conf().set("spark.sql.ansi.enabled", "true")?;
+    block_on(
+        block_on(s.sql("create temporary function tf(x int default 7) returns int return x+1"))?
+            .collect(),
+    )?;
+    assert_eq!(
+        rows(&s, "describe function tf")?,
+        [
+            "Function: tf",
+            "Type:     SCALAR",
+            "Input:    x INT",
+            "Returns:  INT"
+        ]
+    );
+    let configs = [
+        "Configs:       spark.sql.ansi.enabled=true",
+        "               spark.sql.session.timeZone=Etc/UTC",
+    ];
+    let mut expected = vec![
+        "Function:      tf",
+        "Type:          SCALAR",
+        "Input:         x INT DEFAULT 7",
+        "Returns:       INT",
+        "Deterministic: true",
+        "Data Access:   CONTAINS SQL",
+    ];
+    expected.extend(configs);
+    expected.extend(["Create Time:   <time>", "Body:          x+1"]);
+    assert_eq!(extended(&s, "describe function extended tf")?, expected);
+    // The session qualifiers name the same temporary function.
+    assert_eq!(rows(&s, "describe function session.tf")?[0], "Function: tf");
+    assert_eq!(
+        rows(&s, "describe function system.session.tf")?[0],
+        "Function: tf"
+    );
+
+    // Names and types are padded to the longest of each; comments and defaults only with EXTENDED.
+    block_on(block_on(s.sql(
+        "create temporary function c1(alpha int comment 'the a', b decimal(10,2) default  1 + 2, \
+         c array<string> default array('x'), d struct<p:int,q:string> default null) comment 'my fn' return alpha",
+    ))?.collect())?;
+    assert_eq!(
+        rows(&s, "describe function c1")?,
+        [
+            "Function: c1",
+            "Type:     SCALAR",
+            "Input:    alpha INT                      ",
+            "          b     DECIMAL(10,2)            ",
+            "          c     ARRAY<STRING>            ",
+            "          d     STRUCT<p: INT, q: STRING>",
+            "Returns:  INT",
+        ]
+    );
+    let mut expected = vec![
+        "Function:      c1",
+        "Type:          SCALAR",
+        "Input:         alpha INT                       'the a'",
+        "               b     DECIMAL(10,2)             DEFAULT 1 + 2",
+        "               c     ARRAY<STRING>             DEFAULT array('x')",
+        "               d     STRUCT<p: INT, q: STRING> DEFAULT null",
+        "Returns:       INT",
+        "Comment:       my fn",
+        "Deterministic: true",
+        "Data Access:   CONTAINS SQL",
+    ];
+    expected.extend(configs);
+    expected.extend(["Create Time:   <time>", "Body:          alpha"]);
+    assert_eq!(extended(&s, "describe function extended c1")?, expected);
+
+    // Determinism is the body's unless declared; a body that reads a relation reads SQL data; a
+    // body of type NULL has no `Returns:` row.
+    for (sql, deterministic, access) in [
+        (
+            "create temporary function r1() returns double return rand()",
+            "false",
+            "CONTAINS SQL",
+        ),
+        (
+            "create temporary function r2() returns double not deterministic return 1.0",
+            "false",
+            "CONTAINS SQL",
+        ),
+        (
+            "create temporary function rd() return (select max(id) from range(3))",
+            "true",
+            "CONTAINS SQL",
+        ),
+    ] {
+        block_on(block_on(s.sql(sql))?.collect())?;
+        let name = &sql[26..28];
+        let got = extended(&s, &format!("describe function extended {name}"))?;
+        assert_eq!(got[4], format!("Deterministic: {deterministic}"), "{sql}");
+        assert_eq!(got[5], format!("Data Access:   {access}"), "{sql}");
+    }
+    block_on(block_on(s.sql("create temporary view v9 as select 1 as k"))?.collect())?;
+    block_on(
+        block_on(s.sql("create temporary function rv() return (select max(k) from v9)"))?.collect(),
+    )?;
+    assert_eq!(
+        extended(&s, "describe function extended rv")?[5],
+        "Data Access:   READS SQL DATA"
+    );
+    block_on(block_on(s.sql("create temporary function nn() return null"))?.collect())?;
+    assert_eq!(
+        rows(&s, "describe function nn")?,
+        ["Function: nn", "Type:     SCALAR", "Input:    ()"]
+    );
+
+    // A set SQL configuration is captured, an execution one (`spark.sql.shuffle.`) is not.
+    s.conf().set("spark.sql.caseSensitive", "true")?;
+    s.conf().set("spark.sql.shuffle.partitions", "7")?;
+    block_on(block_on(s.sql("create temporary function k1() returns int return 1"))?.collect())?;
+    let got = extended(&s, "describe function extended k1")?;
+    assert_eq!(
+        got[6..9],
+        [
+            "Configs:       spark.sql.ansi.enabled=true",
+            "               spark.sql.caseSensitive=true",
+            "               spark.sql.session.timeZone=Etc/UTC",
+        ]
+    );
+    assert_eq!(got[9], "Create Time:   <time>");
+    Ok(())
+}
+
+/// A stored table function is named by catalog, namespace and name; its columns are padded like
+/// parameters, and a `RETURNS TABLE` without columns shows the query's.
+#[test]
+fn describe_function_of_a_stored_table_function() -> R {
+    let s = Session::new()?;
+    s.conf().set("spark.sql.session.timeZone", "Etc/UTC")?;
+    s.conf().set("spark.sql.ansi.enabled", "true")?;
+    block_on(block_on(s.sql("create database d9db"))?.collect())?;
+    block_on(
+        block_on(s.sql(
+            "create function d9db.tt(a int) returns table(b int, c string) return select a, 'x'",
+        ))?
+        .collect(),
+    )?;
+    assert_eq!(
+        rows(&s, "describe function d9db.tt")?,
+        [
+            "Function: spark_catalog.d9db.tt",
+            "Type:     TABLE",
+            "Input:    a INT",
+            "Returns:  b INT   ",
+            "          c STRING",
+        ]
+    );
+    assert_eq!(
+        extended(&s, "describe function extended spark_catalog.d9db.tt")?,
+        [
+            "Function:      spark_catalog.d9db.tt",
+            "Type:          TABLE",
+            "Input:         a INT",
+            "Returns:       b INT   ",
+            "               c STRING",
+            "Deterministic: true",
+            "Data Access:   CONTAINS SQL",
+            "Configs:       spark.sql.ansi.enabled=true",
+            "               spark.sql.session.timeZone=Etc/UTC",
+            "Create Time:   <time>",
+            "Body:          select a, 'x'",
+        ]
+    );
+    block_on(block_on(s.sql(
+        "create temporary function t2(n int) returns table return select n as m, 'z' as longername",
+    ))?.collect())?;
+    assert_eq!(
+        rows(&s, "describe function t2")?[3..],
+        ["Returns:  m          INT   ", "          longername STRING"]
+    );
+    Ok(())
+}
