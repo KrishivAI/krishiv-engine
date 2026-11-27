@@ -243,6 +243,8 @@ analysis time. They match PySpark 4.2.0's answers (`python/tests/pyspark_udf/udt
   takes any value's text), but where Spark shows a JVM object's own `toString` in a string column (`[B@...` for
   `bytes`, `java.util.GregorianCalendar[...]` for a `date`), Krishiv shows the value's Python `str`; and a `Row`
   inside a result row, which Spark's JVM fails to unpickle (`PickleException`), is NULL in the column.
+- A `cogroup(...).applyInPandas` / `applyInArrow` whose two sides group on keys of different Spark types (`int` against
+  `bigint`) is refused with `KRISHIV_UNSUPPORTED_FEATURE`; the keys must have one type.
 - An `@arrow_udtf` (302) result with a NULL in a column declared `NOT NULL`: Spark 4.2.0's JVM fails reading the
   batch (`IllegalStateException`, no error class); Krishiv refuses it as a result unlike the declared schema
   (`PYTHON_EXCEPTION`).

@@ -122,22 +122,23 @@ class _AggregateCall(Column):
 
 
 def _engine_ddl(dt: DataType, *, not_null: bool = False) -> str:
-    """``dt`` as a DDL string the engine parses (struct field names backquoted). ``not_null`` keeps each struct
-    field's ``NOT NULL``; the DDL has no syntax for ``containsNull=False``."""
+    """``dt`` as a DDL string the engine parses (struct field names backquoted). ``not_null`` keeps ``NOT NULL`` on the
+    top-level struct's fields (a relation's result columns) only: nested fields stay nullable, as Spark's
+    Arrow check does not compare them, and the DDL has no syntax for ``containsNull=False``."""
     if isinstance(dt, StructType):
         fields = ",".join(
             "`"
             + f.name.replace("`", "``")
             + "`:"
-            + _engine_ddl(f.dataType, not_null=not_null)
+            + _engine_ddl(f.dataType)
             + (" not null" if not_null and not f.nullable else "")
             for f in dt.fields
         )
         return f"struct<{fields}>"
     if isinstance(dt, ArrayType):
-        return f"array<{_engine_ddl(dt.elementType, not_null=not_null)}>"
+        return f"array<{_engine_ddl(dt.elementType)}>"
     if isinstance(dt, MapType):
-        return f"map<{_engine_ddl(dt.keyType, not_null=not_null)},{_engine_ddl(dt.valueType, not_null=not_null)}>"
+        return f"map<{_engine_ddl(dt.keyType)},{_engine_ddl(dt.valueType)}>"
     return dt.simpleString()
 
 

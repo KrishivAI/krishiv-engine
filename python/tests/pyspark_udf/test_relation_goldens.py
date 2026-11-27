@@ -33,7 +33,14 @@ JVM_FAILURES = {None, "UNSUPPORTED_CALL.WITHOUT_SUGGESTION"}
 
 #: Krishiv's own condition where Spark's JVM fails (the golden keeps Spark's failure as provenance).
 KRISHIV_REFUSALS: dict[str, str] = {
+    "map/arrow/missing_column": "PYTHON_EXCEPTION",
+    "map/arrow/reordered_by_name": "KRISHIV_INVALID_ARROW_DATA",
+    "map/arrow/wrong_type": "KRISHIV_INVALID_ARROW_DATA",
+    "not_null/cogrouped/pandas": "PYTHON_EXCEPTION",
+    "not_null/grouped/arrow": "PYTHON_EXCEPTION",
+    "not_null/grouped/pandas": "PYTHON_EXCEPTION",
     "not_null/map/arrow": "PYTHON_EXCEPTION",
+    "not_null/map/pandas": "PYTHON_EXCEPTION",
 }
 
 #: Known gaps: (case regex, reason). A matching case must still differ from Spark.
@@ -72,8 +79,8 @@ def difference(spark: Any, case: str) -> str | None:
         err = want["error"]
         if err.get("condition") in JVM_FAILURES:
             # Spark fails inside the JVM; Krishiv's own refusal is pinned here.
-            expected = KRISHIV_REFUSALS.get(case)
-            if expected is not None and e.getCondition() != expected:
+            expected = KRISHIV_REFUSALS[case]
+            if e.getCondition() != expected:
                 return f"condition {e.getCondition()!r}, Krishiv refuses with {expected!r}: {e}"
             return None
         condition = e.getCondition()
@@ -111,3 +118,21 @@ def test_the_goldens_cover_every_case() -> None:
 
     assert sorted(GOLDENS["cases"]) == sorted(cases.CASES), "rerun relation/gen_goldens.py"
     assert GOLDENS["spark"] == "4.2.0"
+
+
+@pytest.mark.parametrize("whole_struct_null", [False, True])
+def test_a_nested_not_null_field_is_not_enforced(spark: Any, whole_struct_null: bool) -> None:
+    """Spark 4.2.0 (a local run of this shape) returns the rows: only the top-level columns' NOT NULL is checked."""
+    import pyarrow as pa
+
+    def f(batches: Any) -> Any:
+        for batch in batches:
+            if whole_struct_null:
+                s = pa.array([None] * batch.num_rows, type=pa.struct([("a", pa.int64())]))
+            else:
+                s = pa.StructArray.from_arrays([batch.column("k")], names=["a"])
+            yield pa.RecordBatch.from_arrays([s], names=["s"])
+
+    df = spark.createDataFrame([(1,), (2,)], "k long").coalesce(1).mapInArrow(f, "s struct<a:long not null>")
+    want = [None, None] if whole_struct_null else [{"a": 1}, {"a": 2}]
+    assert [r["s"].asDict() if r["s"] is not None else None for r in df.collect()] == want
