@@ -793,10 +793,13 @@ impl Session {
                 // A bare `DEFAULT` that is no column of the query reads the target's default.
                 if let Err(e) = &first
                     && e.error_class().name().starts_with("UNRESOLVED_COLUMN")
-                    && let Some(rewritten) = default_row_query(query, inner, &stored)
                 {
-                    inner_sql = padded_select("", &rewritten, query.span.start, "");
-                    first = self.analyze_variable_query(&inner_sql).await;
+                    if let Some(rewritten) = default_row_query(query, inner, &stored) {
+                        inner_sql = padded_select("", &rewritten, query.span.start, "");
+                        first = self.analyze_variable_query(&inner_sql).await;
+                    } else if row_query_has_embedded_default(query) {
+                        return Err(DefaultPlacementInvalid {}.into());
+                    }
                 }
                 let inner_analysis =
                     first.map_err(|e| map_variable_error(e, text, v.span, query.span))?;
@@ -1897,31 +1900,54 @@ fn map_variable_error(
 /// the default of the variable it is assigned to; `None` unless the query is a plain `SELECT` with one
 /// item per target and at least one bare `DEFAULT`.
 fn default_row_query(query: &Query, inner: &str, stored: &[StoredVariable]) -> Option<String> {
-    let SetExprKind::Select(select) = &query.body.kind else {
-        return None;
+    // The expressions that may hold a bare `DEFAULT`: a select list, or the one row of `VALUES`.
+    let exprs: Vec<&Expr> = match &query.body.kind {
+        SetExprKind::Select(select) => select.projection.iter().map(|i| &i.expr).collect(),
+        SetExprKind::Values(values) if values.rows.len() == 1 && stored.len() == 1 => {
+            vec![&values.rows[0]]
+        }
+        _ => return None,
     };
-    if select.projection.len() != stored.len()
-        || !select.projection.iter().any(|i| is_bare_default(&i.expr))
-    {
+    if exprs.len() != stored.len() || !exprs.iter().any(|e| is_bare_default(e)) {
         return None;
     }
     let mut text = inner.to_owned();
-    for (item, var) in select.projection.iter().zip(stored).rev() {
-        if !is_bare_default(&item.expr) {
+    if matches!(query.body.kind, SetExprKind::Values(_)) {
+        // `VALUES` cannot hold the default's scalar subquery: a one-row `SELECT` reads it.
+        let var = &stored[0];
+        return Some(match &var.default_query {
+            Some(q) => format!("SELECT ({q})"),
+            None => format!("SELECT CAST(NULL AS {})", var.data_type.simple_string()),
+        });
+    }
+    for (expr, var) in exprs.into_iter().zip(stored).rev() {
+        if !is_bare_default(expr) {
             continue;
         }
         let replacement = match &var.default_query {
             Some(q) => format!("({q})"),
             None => format!("CAST(NULL AS {})", var.data_type.simple_string()),
         };
-        let start = item.expr.span.start.checked_sub(query.span.start)?;
-        let end = item.expr.span.end.checked_sub(query.span.start)?;
+        let start = expr.span.start.checked_sub(query.span.start)?;
+        let end = expr.span.end.checked_sub(query.span.start)?;
         if !text.is_char_boundary(start) || !text.is_char_boundary(end) || start > end {
             return None;
         }
         text.replace_range(start..end, &replacement);
     }
     Some(text)
+}
+
+/// Whether the row query's select list holds a `DEFAULT` that is part of an expression: Spark
+/// raises `DEFAULT_PLACEMENT_INVALID` for it.
+fn row_query_has_embedded_default(query: &Query) -> bool {
+    let SetExprKind::Select(select) = &query.body.kind else {
+        return false;
+    };
+    select
+        .projection
+        .iter()
+        .any(|i| !is_bare_default(&i.expr) && contains_default(&i.expr))
 }
 
 pub(crate) use krishiv_sql::is_bare_default;
