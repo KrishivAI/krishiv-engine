@@ -382,12 +382,46 @@ impl Rewriter {
                 plan.origin,
             ));
         }
+        // A key that is no column (`WHERE 1 = max(outer)`) is computed by a
+        // projection over the inner query and read as that column.
+        let mut inner = inner;
         let mut key_cols = Vec::new();
+        let mut extra: Vec<Arc<Expr>> = Vec::new();
         for k in &inner_keys {
-            let ExprNode::Resolved(ResolvedExpr::Column(c)) = &k.node else {
-                return Err(unsupported("a correlation key of this form", k.origin));
+            if let ExprNode::Resolved(ResolvedExpr::Column(c)) = &k.node {
+                key_cols.push(c.clone());
+                continue;
+            }
+            let (data_type, nullable) = typed(k);
+            let data_type =
+                data_type.ok_or_else(|| unsupported("a correlation key of this form", k.origin))?;
+            let output = BoundColumn {
+                id: self.fresh(),
+                name: pretty(k, None),
+                data_type,
+                nullable,
             };
-            key_cols.push(c.clone());
+            extra.push(Arc::new(Expr::new(ExprNode::Resolved(
+                ResolvedExpr::Alias {
+                    expr: Arc::clone(k),
+                    output: output.clone(),
+                },
+            ))));
+            key_cols.push(output);
+        }
+        if !extra.is_empty() {
+            let mut exprs: Vec<Arc<Expr>> = output(&inner)?
+                .iter()
+                .map(|c| col_expr(c, Origin::UNKNOWN))
+                .collect();
+            exprs.extend(extra);
+            inner = node(
+                PlanNode::Project {
+                    input: inner,
+                    exprs,
+                },
+                plan.origin,
+            );
         }
         let (right, renumber) = self.disjoint(&base, inner)?;
         let cond = outer_keys
