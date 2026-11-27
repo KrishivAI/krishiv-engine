@@ -35,7 +35,7 @@
   "dependencies": {
     "@internationalized/date": "3.12.4",
     "@tanstack/table-core": "9.3.1",
-    "@tanstack/virtual-core": "3.19.13",
+    "@tanstack/virtual-core": "3.19.11",
     "bits-ui": "2.20.2",
     "clsx": "2.1.1",
     "tailwind-merge": "3.7.0",

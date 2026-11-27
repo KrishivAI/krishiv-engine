@@ -4,6 +4,9 @@ Krishiv's console tokens, components and data helpers, shipped as Svelte source 
 (`ui/apps/console`) and the Krishiv Console compile it with their own Svelte and Tailwind, so a page holds one copy
 of each. Private until its first publication with an engine release; until then a console pins a commit.
 
+Every dependency of the package is an exact version published at least 7 days earlier: the Krishiv Console installs
+it under pnpm's `minimumReleaseAge` of 7 days and refuses a younger one (`@tanstack/virtual-core` 3.19.13 was, at 5 days).
+
 | Import | What |
 |---|---|
 | `@krishiv/ui/tokens.css` | The engine console's tokens (`--k-*`), fonts and Tailwind theme; import it after `tailwindcss` |
