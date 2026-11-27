@@ -55,6 +55,10 @@ pub(crate) struct SchemaOptions {
     /// `datetimeRebaseMode` is `LEGACY`: a file not written by Spark is read
     /// as if in the legacy calendar (`calendar::rebased_datetime_roots`).
     pub(crate) legacy_rebase: bool,
+    /// `spark.sql.legacy.parquet.nanosAsLong`: an `INT64 TIMESTAMP(NANOS)`
+    /// column is a `bigint` of its stored nanoseconds, unless the footer's
+    /// Spark schema types it (a Spark 4.3 file), as Spark reads them.
+    pub(crate) nanos_as_long: bool,
 }
 
 /// One row group as planned and pruned.
@@ -92,6 +96,11 @@ pub struct ParquetMetadata {
     pub(crate) variants: super::variant::Variants,
     /// The top-level columns that are geometries or geographies (see [`super::geo`]).
     pub(crate) geos: super::geo::Geos,
+    /// The footer's Spark schema holds a nanosecond timestamp type (Spark
+    /// 4.3's `timestamp_ntz(p)` / `timestamp_ltz(p)`, `p` 7..=9): a session
+    /// without `spark.sql.timestampNanosTypes.enabled` may not infer it
+    /// (`FEATURE_NOT_ENABLED`, [`super::ParquetFormat`]'s `infer_schema`).
+    pub(crate) footer_nanos: bool,
     statistics: FileStatistics,
     heap: usize,
 }
@@ -248,6 +257,20 @@ fn describe_checked(
     options: SchemaOptions,
 ) -> FormatResult<ParquetMetadata> {
     let row_groups = check(meta, size)?;
+    let footer_nanos = super::intervals::footer_schema(meta.file_metadata().key_value_metadata())
+        .is_some_and(|t| {
+            t.any_type(&|t| {
+                matches!(
+                    t,
+                    krishiv_types::DataType::TimestampNanos { .. }
+                        | krishiv_types::DataType::TimestampNtzNanos { .. }
+                )
+            })
+        });
+    let options = SchemaOptions {
+        nanos_as_long: options.nanos_as_long && !footer_nanos,
+        ..options
+    };
     let inferred = ArrowReaderMetadata::try_new(Arc::clone(meta), ArrowReaderOptions::new())
         .map_err(footer_error)?;
     let descr = meta.file_metadata().schema_descr();
@@ -276,6 +299,11 @@ fn describe_checked(
             .collect::<Vec<FieldRef>>(),
         meta.file_metadata().key_value_metadata(),
     );
+    let typed = if options.nanos_as_long {
+        super::intervals::nanos_as_long(typed, descr)
+    } else {
+        typed
+    };
     let (fields, variants) = super::variant::Variants::engine_fields(
         descr,
         meta.file_metadata().key_value_metadata(),
@@ -338,6 +366,7 @@ fn describe_checked(
         legacy_writer,
         variants,
         geos,
+        footer_nanos,
         statistics,
         heap,
     })

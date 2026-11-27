@@ -42,6 +42,7 @@ pub(super) const HANDLED_IN_CODE: &[&str] = &[
     "spark.sql.legacy.negativeIndexInArrayInsert",
     "spark.sql.legacy.noCharPaddingInPredicate",
     "spark.sql.legacy.nullInEmptyListBehavior",
+    "spark.sql.legacy.parquet.nanosAsLong",
     "spark.sql.legacy.parser.havingWithoutGroupByAsWhere",
     "spark.sql.legacy.pathOptionBehavior.enabled",
     "spark.sql.legacy.percentileDiscCalculation",

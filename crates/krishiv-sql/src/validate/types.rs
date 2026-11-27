@@ -179,12 +179,11 @@ fn primitive(
 }
 
 /// Spark 4.3's `TIMESTAMP[_NTZ|_LTZ](p)` (`AstBuilder.visitPrimitiveDataType`): 6 is the
-/// microsecond type; 7..=9 are the nanosecond types, which Krishiv has not built yet and Spark
-/// 4.3.0 keeps behind `spark.sql.timestampNanosTypes.enabled` (internal, off): `FEATURE_NOT_ENABLED`,
-/// as Spark's default; any other precision is `INVALID_TIMESTAMP_PRECISION`, naming
+/// microsecond type; 7..=9 are the nanosecond types, which Spark 4.3.0 keeps behind
+/// `spark.sql.timestampNanosTypes.enabled` (internal, off): `FEATURE_NOT_ENABLED`, as Spark's
+/// default, and built with the key on; any other precision is `INVALID_TIMESTAMP_PRECISION`, naming
 /// `TIMESTAMP_NTZ` for `_NTZ` and `WITHOUT TIME ZONE`, `TIMESTAMP_LTZ` for `_LTZ` and `WITH LOCAL TIME
-/// ZONE`, and for a bare `TIMESTAMP` the type `spark.sql.timestampType` names. With the key on, Spark
-/// would build the type; Krishiv has none yet (`KRISHIV_UNSUPPORTED_FEATURE`, an explicit divergence).
+/// ZONE`, and for a bare `TIMESTAMP` the type `spark.sql.timestampType` names.
 fn timestamp_precision(
     name: &str,
     arg: &str,

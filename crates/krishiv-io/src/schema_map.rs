@@ -73,6 +73,10 @@ enum Conv {
     Same,
     /// A representation change, widening or narrowing of a leaf.
     Cast,
+    /// A nanosecond timestamp read at a lower precision (a `timestamp_ltz(7)`
+    /// table column over a file's `(9)`): each value floored to a multiple of
+    /// this many nanoseconds, as Spark 4.3 cuts the digits past the precision.
+    FloorNanos(i64),
     /// Per table child: its position in the decoded file struct and its
     /// conversion, or `None` (missing: null).
     Struct(Vec<Option<(usize, Conv)>>),
@@ -520,6 +524,9 @@ impl Resolver {
     ) -> Result<Option<(Conv, Vec<Vec<String>>)>> {
         let (t, f) = (tf.data_type(), ff.data_type());
         let whole = vec![Vec::new()];
+        if let Some(unit) = nanos_cut(tf, ff) {
+            return Ok(Some((Conv::FloorNanos(unit), whole)));
+        }
         if t.equals_datatype(f) && !needs_struct_resolution(t) {
             return Ok(Some((Conv::Same, whole)));
         }
@@ -969,9 +976,42 @@ fn int_scalar(dt: &DataType, n: i128) -> Option<ScalarValue> {
     })
 }
 
+/// The nanoseconds a value of the file field `ff` is floored to when read
+/// as the table field `tf`: both nanosecond timestamps of one Arrow type, the
+/// table's precision (its [`krishiv_types::arrow::SPARK_TYPE_METADATA_KEY`]
+/// tag, else 9) below the file's.
+fn nanos_cut(tf: &Field, ff: &Field) -> Option<i64> {
+    let precision = |f: &Field| match krishiv_types::DataType::from_arrow_field(f) {
+        Ok(
+            krishiv_types::DataType::TimestampNanos { precision }
+            | krishiv_types::DataType::TimestampNtzNanos { precision },
+        ) => Some(precision),
+        _ => None,
+    };
+    if !matches!(tf.data_type(), DataType::Timestamp(TimeUnit::Nanosecond, _))
+        || !tf.data_type().equals_datatype(ff.data_type())
+    {
+        return None;
+    }
+    let (t, f) = (precision(tf)?, precision(ff)?);
+    (t < f).then(|| 10_i64.pow(u32::from(9 - t)))
+}
+
 /// `array` converted by `conv` to `target`.
 fn convert(array: &ArrayRef, conv: &Conv, target: &DataType) -> Result<ArrayRef> {
     match conv {
+        Conv::FloorNanos(unit) => {
+            let DataType::Timestamp(_, tz) = target else {
+                return Err(internal("a nanosecond cut to a non-timestamp type"));
+            };
+            let a = array
+                .as_primitive_opt::<TimestampNanosecondType>()
+                .ok_or_else(|| internal("a nanosecond cut of a non-nanosecond array"))?;
+            Ok(Arc::new(
+                a.unary::<_, TimestampNanosecondType>(|v| v.div_euclid(*unit) * unit)
+                    .with_timezone_opt(tz.clone()),
+            ))
+        }
         Conv::Same if array.data_type() == target => Ok(Arc::clone(array)),
         Conv::Same | Conv::Cast if !is_nested(target) => cast_leaf(array, target),
         Conv::Same | Conv::Cast => convert(array, &same_conv(target), target),

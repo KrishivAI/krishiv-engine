@@ -7,15 +7,23 @@
 //! The decoders still produce those integers, since arrow-rs takes no other
 //! type for them. [`typed`] puts the footer's types on the file schema, and
 //! [`as_intervals`] puts them on each decoded column.
+//!
+//! The footer also gives a nanosecond timestamp (`INT64 TIMESTAMP(NANOS)`,
+//! Spark 4.3) its precision: a `timestamp_ntz(7)` column reads back as
+//! `timestamp_ntz(7)`, not as the `(9)` the Parquet type alone gives.
 
 use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
-use arrow_array::types::{DurationMicrosecondType, Int32Type, Int64Type, IntervalYearMonthType};
+use arrow_array::types::{
+    DurationMicrosecondType, Int32Type, Int64Type, IntervalYearMonthType, TimestampNanosecondType,
+};
 use arrow_array::{Array, ArrayRef, LargeListArray, ListArray, MapArray, StructArray};
 use arrow_schema::{DataType, FieldRef, Fields, IntervalUnit, Schema, TimeUnit};
 use krishiv_types::DataType as SparkType;
+use parquet::basic::Type as PhysicalType;
 use parquet::file::metadata::KeyValue;
+use parquet::schema::types::SchemaDescriptor;
 
 use crate::error::{FormatError, FormatResult};
 
@@ -37,13 +45,7 @@ pub(super) fn row_metadata(schema: &Schema) -> Option<String> {
 /// Footer text that doesn't parse is ignored, as Spark ignores it, and a
 /// footer type that doesn't suit the stored type leaves the column alone.
 pub(super) fn typed(fields: Vec<FieldRef>, footer: Option<&Vec<KeyValue>>) -> Vec<FieldRef> {
-    let spark = footer
-        .into_iter()
-        .flatten()
-        .find(|kv| kv.key == ROW_METADATA_KEY)
-        .and_then(|kv| kv.value.as_deref())
-        .and_then(|json| SparkType::from_json(json).ok());
-    let Some(SparkType::Struct(spark)) = spark else {
+    let Some(SparkType::Struct(spark)) = footer_schema(footer) else {
         return fields;
     };
     fields
@@ -57,6 +59,18 @@ pub(super) fn typed(fields: Vec<FieldRef>, footer: Option<&Vec<KeyValue>>) -> Ve
         .collect()
 }
 
+/// The footer's Spark schema, if it has one that parses (any release's
+/// types, the nanosecond timestamps included: the reader decides what it
+/// may read).
+pub(super) fn footer_schema(footer: Option<&Vec<KeyValue>>) -> Option<SparkType> {
+    footer
+        .into_iter()
+        .flatten()
+        .find(|kv| kv.key == ROW_METADATA_KEY)
+        .and_then(|kv| kv.value.as_deref())
+        .and_then(|json| SparkType::from_json(json).ok())
+}
+
 fn typed_field(f: &FieldRef, spark: &SparkType) -> FieldRef {
     let retyped = |t: DataType| Arc::new(f.as_ref().clone().with_data_type(t));
     match (f.data_type(), spark) {
@@ -66,6 +80,13 @@ fn typed_field(f: &FieldRef, spark: &SparkType) -> FieldRef {
             let mut metadata = f.metadata().clone();
             metadata.extend(tagged.metadata().clone());
             Arc::new(tagged.with_metadata(metadata))
+        }
+        (DataType::Timestamp(TimeUnit::Nanosecond, Some(_)), SparkType::TimestampNanos { .. })
+        | (DataType::Timestamp(TimeUnit::Nanosecond, None), SparkType::TimestampNtzNanos { .. }) => {
+            let tagged = spark.to_arrow_field(f.name(), f.is_nullable());
+            let mut metadata = f.metadata().clone();
+            metadata.extend(tagged.metadata().clone());
+            Arc::new(f.as_ref().clone().with_metadata(metadata))
         }
         (DataType::Struct(children), SparkType::Struct(s)) => {
             let children: Fields = children
@@ -116,13 +137,73 @@ pub(super) fn holds_interval(t: &DataType) -> bool {
     }
 }
 
-/// `a`, decoded as integers, as `target` types its intervals, at any depth.
+/// `fields` with every `INT64 TIMESTAMP(NANOS)` leaf a `bigint`
+/// (`spark.sql.legacy.parquet.nanosAsLong`), at any depth; [`as_intervals`]
+/// retypes the decoded nanoseconds. arrow-rs also decodes an `INT96` as
+/// nanoseconds; a top-level `INT96` is already a microsecond `timestamp`
+/// here, and a nested one has no path, so a file with any `INT96` keeps its
+/// nested nanosecond leaves as they are.
+pub(super) fn nanos_as_long(fields: Vec<FieldRef>, descr: &SchemaDescriptor) -> Vec<FieldRef> {
+    let int96 = descr
+        .columns()
+        .iter()
+        .any(|c| c.physical_type() == PhysicalType::INT96);
+    fields
+        .into_iter()
+        .map(|f| {
+            let top_int64 = descr.columns().iter().any(|c| {
+                c.path().parts().len() == 1
+                    && c.path().parts()[0] == *f.name()
+                    && c.physical_type() == PhysicalType::INT64
+            });
+            match f.data_type() {
+                DataType::Timestamp(TimeUnit::Nanosecond, _) if top_int64 => {
+                    Arc::new(f.as_ref().clone().with_data_type(DataType::Int64))
+                }
+                DataType::Timestamp(..) => f,
+                _ if int96 => f,
+                t => Arc::new(f.as_ref().clone().with_data_type(longs(t))),
+            }
+        })
+        .collect()
+}
+
+fn longs(t: &DataType) -> DataType {
+    let field = |f: &FieldRef| Arc::new(f.as_ref().clone().with_data_type(longs(f.data_type())));
+    match t {
+        DataType::Timestamp(TimeUnit::Nanosecond, _) => DataType::Int64,
+        DataType::Struct(c) => DataType::Struct(c.iter().map(field).collect()),
+        DataType::List(e) => DataType::List(field(e)),
+        DataType::LargeList(e) => DataType::LargeList(field(e)),
+        DataType::Map(e, sorted) => DataType::Map(field(e), *sorted),
+        t => t.clone(),
+    }
+}
+
+/// Whether `t` is or holds a nanosecond timestamp.
+fn holds_nanos(t: &DataType) -> bool {
+    match t {
+        DataType::Struct(f) => f.iter().any(|c| holds_nanos(c.data_type())),
+        DataType::List(e) | DataType::LargeList(e) | DataType::Map(e, _) => {
+            holds_nanos(e.data_type())
+        }
+        t => matches!(t, DataType::Timestamp(TimeUnit::Nanosecond, _)),
+    }
+}
+
+/// `a`, decoded as integers, as `target` types its intervals, at any depth;
+/// and decoded nanosecond timestamps that `target` types `bigint`
+/// ([`nanos_as_long`]).
 pub(super) fn as_intervals(a: &ArrayRef, target: &DataType) -> FormatResult<ArrayRef> {
     let bad = |e: arrow_schema::ArrowError| FormatError::Corrupt(e.to_string());
-    if a.data_type() == target || !holds_interval(target) {
+    if a.data_type() == target || !(holds_interval(target) || holds_nanos(a.data_type())) {
         return Ok(Arc::clone(a));
     }
     Ok(match (a.data_type(), target) {
+        (DataType::Timestamp(TimeUnit::Nanosecond, _), DataType::Int64) => Arc::new(
+            a.as_primitive::<TimestampNanosecondType>()
+                .reinterpret_cast::<Int64Type>(),
+        ),
         (DataType::Int32, &YEAR_MONTH) => Arc::new(
             a.as_primitive::<Int32Type>()
                 .reinterpret_cast::<IntervalYearMonthType>(),

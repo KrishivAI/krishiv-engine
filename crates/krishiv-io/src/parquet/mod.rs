@@ -91,6 +91,24 @@ static OPTIONS: OptionSchema = OptionSchema {
             doc: "Read INT96 columns as timestamps.",
         },
         OptionSpec {
+            name: "nanosAsLong",
+            kind: OptionKind::Bool,
+            default: OptionDefault::Bool(false),
+            conf_fallback: Some("spark.sql.legacy.parquet.nanosAsLong"),
+            metadata_key: true,
+            doc: "Read: INT64 TIMESTAMP(NANOS) columns as bigints of their nanoseconds, unless \
+                  the file's Spark schema gives them a nanosecond timestamp type.",
+        },
+        OptionSpec {
+            name: "timestampNanosTypes",
+            kind: OptionKind::Bool,
+            default: OptionDefault::Bool(false),
+            conf_fallback: Some("spark.sql.timestampNanosTypes.enabled"),
+            metadata_key: false,
+            doc: "Read: infer INT64 TIMESTAMP(NANOS) columns as Spark 4.3's nanosecond timestamp \
+                  types (off: such a file's schema is refused, as Spark refuses it).",
+        },
+        OptionSpec {
             name: "datetimeRebaseMode",
             kind: OptionKind::Enum(REBASE_MODES),
             default: OptionDefault::Str("CORRECTED"),
@@ -231,6 +249,55 @@ impl ParquetFormat {
             legacy_rebase: o
                 .str("datetimeRebaseMode")
                 .is_some_and(|m| m.eq_ignore_ascii_case("LEGACY")),
+            nanos_as_long: o.bool("nanosAsLong").unwrap_or(false),
+        }
+    }
+
+    /// Spark 4.3's refusal of a nanosecond timestamp column in an inferred
+    /// schema while `spark.sql.timestampNanosTypes.enabled` is off: a footer
+    /// whose Spark schema types one is `FEATURE_NOT_ENABLED` (Spark fails
+    /// reading that schema, `nanosAsLong` or not); any other
+    /// `INT64 TIMESTAMP(NANOS)` leaf that `nanosAsLong` left a timestamp is
+    /// `PARQUET_TYPE_ILLEGAL`, named as parquet-mr prints the type (the
+    /// first such leaf, in schema order). A user schema infers nothing, so
+    /// such a column is then a per-column type mismatch.
+    fn refuse_nanos(m: &meta::ParquetMetadata, o: &FormatOptions) -> FormatResult<()> {
+        if o.bool("timestampNanosTypes").unwrap_or(false) {
+            return Ok(());
+        }
+        if m.footer_nanos {
+            return Err(FormatError::Other(
+                krishiv_common::error::FeatureNotEnabled {
+                    feature_name: "Nanosecond-precision timestamp types".to_owned(),
+                    config_key: "spark.sql.timestampNanosTypes.enabled".to_owned(),
+                    config_value: "true".to_owned(),
+                }
+                .into(),
+            ));
+        }
+        if o.bool("nanosAsLong").unwrap_or(false) {
+            return Ok(());
+        }
+        let descr = m.reader.metadata().file_metadata().schema_descr();
+        let nanos =
+            descr
+                .columns()
+                .iter()
+                .find_map(|c| match (c.physical_type(), c.logical_type_ref()) {
+                    (
+                        parquet::basic::Type::INT64,
+                        Some(parquet::basic::LogicalType::Timestamp(t)),
+                    ) if t.unit == parquet::basic::TimeUnit::NANOS => Some(t.is_adjusted_to_u_t_c),
+                    _ => None,
+                });
+        match nanos {
+            Some(adjusted) => Err(FormatError::Other(
+                krishiv_common::error::ParquetTypeIllegal {
+                    parquet_type: format!("INT64 (TIMESTAMP(NANOS,{adjusted}))"),
+                }
+                .into(),
+            )),
+            None => Ok(()),
         }
     }
 
@@ -316,6 +383,27 @@ impl FileFormat for ParquetFormat {
             .map(|s| s.extension())
             .unwrap_or_default();
         format!("{codec}.parquet")
+    }
+
+    fn infer_schema<'a>(
+        &'a self,
+        io: &'a IoContext,
+        files: &'a [FileRef],
+        o: &'a FormatOptions,
+    ) -> BoxFuture<'a, FormatResult<SchemaRef>> {
+        Box::pin(async move {
+            let Some(first) = files.first() else {
+                return Err(FormatError::Other(crate::error::internal(
+                    "schema inference without files",
+                )));
+            };
+            let m = downcast(
+                io.read_metadata(self, first, MetadataNeeds::default(), o)
+                    .await?,
+            )?;
+            Self::refuse_nanos(&m, o)?;
+            Ok(m.schema())
+        })
     }
 
     fn read_metadata<'a>(
