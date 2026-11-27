@@ -229,8 +229,7 @@ fn is_no_break_space(c: char) -> bool {
 /// The special values of `DATE` and `TIMESTAMP` literals (`now`,
 /// `epoch`, ...), which depend on the session's clock and zone.
 fn is_special(value: &str) -> bool {
-    let v = value.trim().to_ascii_lowercase();
-    ["epoch", "now", "today", "yesterday", "tomorrow"].contains(&v.as_str())
+    krishiv_kernels::cast::special_value(value).is_some()
 }
 
 /// Days since 1970-01-01 of a date string as Spark's `stringToDate` reads

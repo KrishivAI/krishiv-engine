@@ -888,3 +888,14 @@ from 4.1 to 4.3 for `'ſ' ILIKE 'S'` over a column (false on 4.0); Krishiv follo
 Krishiv never matches such strings by bytes.
 
 Two smaller differences in `UTF8_LCASE` `LIKE`: case folding uses Rust's Unicode tables, which are newer than the JDK 17/21 tables Spark runs on, so a case pair added after Unicode 15 matches in Krishiv and not in Spark; and a malformed pattern (invalid or trailing escape) is reported with the case-folded pattern text, where Spark reports it as written. Java's matching is one-directional for a few characters (the pattern `ß` matches only `ß`, the pattern `ẞ` matches both), which a folded comparison cannot express: the value `ẞ` against the pattern `ß` matches in Krishiv and not in Spark.
+
+## `NEAREST BY` joins run as a ranked cross join
+
+Spark rewrites `JOIN ... (APPROX | EXACT) NEAREST [k] BY ...` to a `max_by`/`min_by` of `k` rows over a cross
+join. Krishiv ranks the cross join's rows per left row with `row_number()` and keeps the first `k`; `APPROX` and `EXACT`
+return the same exact rows. The results match Spark's, including NULL rankings (never a match; a left outer join pads
+a left row left with none) and the `NEAREST_BY_JOIN.*` errors. `EXPLAIN` shows a window over a join, not Spark's
+`Generate`/`Aggregate` shape, and the rewrite materialises every left-right pair before ranking, where Spark keeps a
+top-k per left row. The `CROSS_JOIN_NOT_ENABLED` check runs when the statement is parsed, where Spark's runs in the
+optimizer, so `CREATE VIEW v AS SELECT ... NEAREST BY ...` under `spark.sql.crossJoin.enabled=false` fails here and
+succeeds in Spark.

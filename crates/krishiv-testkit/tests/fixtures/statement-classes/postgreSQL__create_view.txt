@@ -4,7 +4,7 @@ SESSION	DROP VIEW toyemp
 DDL	DROP TABLE emp
 DDL	CREATE TABLE view_base_table (key int /* PRIMARY KEY */, data varchar(20)) USING PARQUET
 DDL	CREATE VIEW key_dependent_view AS
-PARSE_ERROR	CREATE VIEW key_dependent_view_no_cols AS
+DDL	CREATE VIEW key_dependent_view_no_cols AS
 DDL	CREATE TABLE viewtest_tbl (a int, b int) using parquet
 WRITE	INSERT INTO viewtest_tbl VALUES (5, 10), (10, 15), (15, 20), (20, 25)
 DDL	CREATE OR REPLACE VIEW viewtest AS

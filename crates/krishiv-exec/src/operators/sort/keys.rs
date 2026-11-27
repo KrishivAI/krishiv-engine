@@ -12,9 +12,10 @@
 
 use std::sync::Arc;
 
+use arrow_array::Array;
 use arrow_array::cast::AsArray;
 use arrow_array::types::{Float32Type, Float64Type};
-use arrow_array::{ArrayRef, RecordBatch};
+use arrow_array::{ArrayRef, GenericListArray, RecordBatch, StructArray};
 use arrow_row::{RowConverter, Rows, SortField};
 use arrow_schema::{DataType, IntervalUnit, Schema, SortOptions};
 use krishiv_common::error::KrishivUnsupportedFeature;
@@ -76,7 +77,8 @@ impl KeyEncoder {
     ///
     /// # Errors
     /// `KRISHIV_UNSUPPORTED_FEATURE` for a key type the sort cannot order
-    /// as Spark does yet (nested types, `Float16`, day-time intervals);
+    /// as Spark does yet (maps, unions, `Float16`, day-time intervals, a struct
+    /// or array with a non-default null placement);
     /// `INTERNAL_ERROR` for no keys or an out-of-range column.
     pub(crate) fn new(schema: &Schema, keys: &[SortKey]) -> Result<Arc<Self>> {
         if keys.is_empty() {
@@ -95,7 +97,9 @@ impl KeyEncoder {
                 let field = schema.fields().get(k.column).ok_or_else(|| {
                     internal(format!("sort key column {} is out of range", k.column))
                 })?;
-                if !orderable(field.data_type()) {
+                if !orderable(field.data_type())
+                    || !nested_null_order_is_spark(field.data_type(), k)
+                {
                     return Err(KrishivUnsupportedFeature {
                         feature: format!("ORDER BY on a {} key", field.data_type()),
                     }
@@ -149,9 +153,8 @@ impl KeyEncoder {
     }
 }
 
-/// Whether the sort orders `t` as Spark does. Refused: floats it does not
-/// canonicalize (`Float16`, in dictionaries, in nested types: nested keys
-/// are not implemented) and day-time intervals (not durations).
+/// Whether the sort orders `t` as Spark does. Refused: `Float16`, maps, unions, floats it does not
+/// canonicalize (in dictionaries) and day-time intervals (not durations).
 fn orderable(t: &DataType) -> bool {
     match t {
         DataType::Dictionary(_, values) => {
@@ -159,17 +162,29 @@ fn orderable(t: &DataType) -> bool {
         }
         DataType::Float16
         | DataType::Interval(IntervalUnit::DayTime | IntervalUnit::MonthDayNano)
-        | DataType::List(_)
-        | DataType::LargeList(_)
         | DataType::ListView(_)
         | DataType::LargeListView(_)
         | DataType::FixedSizeList(..)
-        | DataType::Struct(_)
         | DataType::Map(..)
         | DataType::Union(..)
         | DataType::RunEndEncoded(..) => false,
+        DataType::Struct(fields) => fields.iter().all(|f| orderable(f.data_type())),
+        DataType::List(f) | DataType::LargeList(f) => orderable(f.data_type()),
         _ => RowConverter::supports_fields(&[SortField::new(t.clone())]),
     }
+}
+
+/// Whether `key`'s null placement orders a nested `t` as Spark does. Spark
+/// compares a struct's fields and an array's elements with the key's own
+/// direction (a null field is the smallest, then reversed for `DESC`), and
+/// `NULLS FIRST/LAST` moves only a null value of the key itself; the row
+/// encoding applies the placement to the nested nulls as well, so it agrees
+/// only for the default placement (`NULLS FIRST` for `ASC`, `LAST` for `DESC`).
+fn nested_null_order_is_spark(t: &DataType, key: &SortKey) -> bool {
+    !matches!(
+        t,
+        DataType::Struct(_) | DataType::List(_) | DataType::LargeList(_)
+    ) || key.nulls_first != key.descending
 }
 
 /// Spark's float order as `totalOrder`: one positive NaN (`NAN`'s sign is
@@ -186,6 +201,43 @@ fn canonical(column: &ArrayRef) -> ArrayRef {
                 .as_primitive::<Float32Type>()
                 .unary::<_, Float32Type>(|v| if v.is_nan() { f32::NAN.abs() } else { v + 0.0 }),
         ),
+        DataType::Struct(fields) if fields.iter().any(|f| has_float(f.data_type())) => {
+            let array = column.as_struct();
+            let children = array.columns().iter().map(canonical).collect();
+            Arc::new(StructArray::new(
+                fields.clone(),
+                children,
+                array.nulls().cloned(),
+            ))
+        }
+        DataType::List(field) if has_float(field.data_type()) => {
+            let array = column.as_list::<i32>();
+            Arc::new(GenericListArray::<i32>::new(
+                Arc::clone(field),
+                array.offsets().clone(),
+                canonical(array.values()),
+                array.nulls().cloned(),
+            ))
+        }
+        DataType::LargeList(field) if has_float(field.data_type()) => {
+            let array = column.as_list::<i64>();
+            Arc::new(GenericListArray::<i64>::new(
+                Arc::clone(field),
+                array.offsets().clone(),
+                canonical(array.values()),
+                array.nulls().cloned(),
+            ))
+        }
         _ => Arc::clone(column),
+    }
+}
+
+/// Whether a float is anywhere inside `t` (struct fields, list elements).
+fn has_float(t: &DataType) -> bool {
+    match t {
+        DataType::Float32 | DataType::Float64 => true,
+        DataType::Struct(fields) => fields.iter().any(|f| has_float(f.data_type())),
+        DataType::List(f) | DataType::LargeList(f) => has_float(f.data_type()),
+        _ => false,
     }
 }
