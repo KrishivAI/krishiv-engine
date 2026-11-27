@@ -1013,3 +1013,18 @@ fn a_cancelled_query_ends_its_delta_work() {
         );
     }
 }
+
+/// A Variant column carries the engine's type tag (the Arrow extension name), as the engine's
+/// own Variant fields do, so a union of the scan with a column the engine made agrees on its
+/// type (krishiv-exec `physical::same_columns`).
+#[test]
+fn a_variant_column_carries_the_engines_type_tag() {
+    let env = Env::fixture("variant");
+    let table = env.open().unwrap();
+    let schema = table.schema();
+    let v = schema.field_with_name("v").unwrap();
+    let engine = krishiv_types::DataType::Variant.to_arrow_field("v", true);
+    for (k, value) in engine.metadata() {
+        assert_eq!(v.metadata().get(k), Some(value), "{k}");
+    }
+}

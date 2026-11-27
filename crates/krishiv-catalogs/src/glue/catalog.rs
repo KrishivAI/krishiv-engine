@@ -205,6 +205,7 @@ impl Catalog for GlueCatalog {
                     Err(KrishivCatalogFailure {
                         catalog: quoted(&name),
                         relation_name: relation,
+                        reason: "the call did not finish; the server log has the detail (target `krishiv::catalog`)".to_owned(),
                     }
                     .into())
                 }
@@ -356,6 +357,7 @@ fn column(c: &GlueColumn, catalog: &str, relation: &str) -> Result<TableColumn, 
         KrishivError::from(KrishivCatalogFailure {
             catalog: quoted(catalog),
             relation_name: relation.to_owned(),
+            reason: "a column type Krishiv cannot use".to_owned(),
         })
     };
     if declared.starts_with("varchar(") || declared.starts_with("char(") {

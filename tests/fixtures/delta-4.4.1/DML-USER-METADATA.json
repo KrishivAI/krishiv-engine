@@ -1,0 +1,396 @@
+{
+ "cases": {
+  "create_empty.conf": {
+   "commit": {
+    "operation": "CREATE TABLE",
+    "userMetadata": "from-conf"
+   },
+   "conf": {
+    "spark.databricks.delta.commitInfo.userMetadata": "from-conf"
+   },
+   "error": null,
+   "sql": "CREATE TABLE dut (id BIGINT, p INT) USING delta LOCATION <path>",
+   "versions": 1
+  },
+  "create_empty.no_conf": {
+   "commit": {
+    "operation": "CREATE TABLE",
+    "userMetadata": null
+   },
+   "conf": {},
+   "error": null,
+   "sql": "CREATE TABLE dut (id BIGINT, p INT) USING delta LOCATION <path>",
+   "versions": 1
+  },
+  "dv.delete_all.conf": {
+   "commit": {
+    "operation": "DELETE",
+    "userMetadata": "from-conf"
+   },
+   "conf": {
+    "spark.databricks.delta.commitInfo.userMetadata": "from-conf"
+   },
+   "deletion_vectors": true,
+   "error": null,
+   "sql": "DELETE FROM dut",
+   "versions": 3
+  },
+  "dv.delete_all.no_conf": {
+   "commit": {
+    "operation": "DELETE",
+    "userMetadata": null
+   },
+   "conf": {},
+   "deletion_vectors": true,
+   "error": null,
+   "sql": "DELETE FROM dut",
+   "versions": 3
+  },
+  "dv.delete_partition.conf": {
+   "commit": {
+    "operation": "DELETE",
+    "userMetadata": "from-conf"
+   },
+   "conf": {
+    "spark.databricks.delta.commitInfo.userMetadata": "from-conf"
+   },
+   "deletion_vectors": true,
+   "error": null,
+   "sql": "DELETE FROM dut WHERE p = 1",
+   "versions": 3
+  },
+  "dv.delete_partition.no_conf": {
+   "commit": {
+    "operation": "DELETE",
+    "userMetadata": null
+   },
+   "conf": {},
+   "deletion_vectors": true,
+   "error": null,
+   "sql": "DELETE FROM dut WHERE p = 1",
+   "versions": 3
+  },
+  "dv.delete_where.conf": {
+   "commit": {
+    "operation": "DELETE",
+    "userMetadata": "from-conf"
+   },
+   "conf": {
+    "spark.databricks.delta.commitInfo.userMetadata": "from-conf"
+   },
+   "deletion_vectors": true,
+   "error": null,
+   "sql": "DELETE FROM dut WHERE id = 1",
+   "versions": 3
+  },
+  "dv.delete_where.no_conf": {
+   "commit": {
+    "operation": "DELETE",
+    "userMetadata": null
+   },
+   "conf": {},
+   "deletion_vectors": true,
+   "error": null,
+   "sql": "DELETE FROM dut WHERE id = 1",
+   "versions": 3
+  },
+  "dv.merge_all.conf": {
+   "commit": {
+    "operation": "MERGE",
+    "userMetadata": "from-conf"
+   },
+   "conf": {
+    "spark.databricks.delta.commitInfo.userMetadata": "from-conf"
+   },
+   "deletion_vectors": true,
+   "error": null,
+   "sql": "MERGE INTO dut t USING s ON t.id = s.id WHEN MATCHED THEN DELETE WHEN NOT MATCHED THEN INSERT *",
+   "versions": 3
+  },
+  "dv.merge_all.no_conf": {
+   "commit": {
+    "operation": "MERGE",
+    "userMetadata": null
+   },
+   "conf": {},
+   "deletion_vectors": true,
+   "error": null,
+   "sql": "MERGE INTO dut t USING s ON t.id = s.id WHEN MATCHED THEN DELETE WHEN NOT MATCHED THEN INSERT *",
+   "versions": 3
+  },
+  "dv.merge_insert_only.conf": {
+   "commit": {
+    "operation": "MERGE",
+    "userMetadata": "from-conf"
+   },
+   "conf": {
+    "spark.databricks.delta.commitInfo.userMetadata": "from-conf"
+   },
+   "deletion_vectors": true,
+   "error": null,
+   "sql": "MERGE INTO dut t USING (SELECT CAST(7 AS BIGINT) AS id, 7 AS p) s ON t.id = s.id WHEN NOT MATCHED THEN INSERT *",
+   "versions": 3
+  },
+  "dv.merge_insert_only.no_conf": {
+   "commit": {
+    "operation": "MERGE",
+    "userMetadata": null
+   },
+   "conf": {},
+   "deletion_vectors": true,
+   "error": null,
+   "sql": "MERGE INTO dut t USING (SELECT CAST(7 AS BIGINT) AS id, 7 AS p) s ON t.id = s.id WHEN NOT MATCHED THEN INSERT *",
+   "versions": 3
+  },
+  "dv.merge_update.conf": {
+   "commit": {
+    "operation": "MERGE",
+    "userMetadata": "from-conf"
+   },
+   "conf": {
+    "spark.databricks.delta.commitInfo.userMetadata": "from-conf"
+   },
+   "deletion_vectors": true,
+   "error": null,
+   "sql": "MERGE INTO dut t USING s ON t.id = s.id WHEN MATCHED THEN UPDATE SET p = s.p",
+   "versions": 3
+  },
+  "dv.merge_update.no_conf": {
+   "commit": {
+    "operation": "MERGE",
+    "userMetadata": null
+   },
+   "conf": {},
+   "deletion_vectors": true,
+   "error": null,
+   "sql": "MERGE INTO dut t USING s ON t.id = s.id WHEN MATCHED THEN UPDATE SET p = s.p",
+   "versions": 3
+  },
+  "dv.update.conf": {
+   "commit": {
+    "operation": "UPDATE",
+    "userMetadata": "from-conf"
+   },
+   "conf": {
+    "spark.databricks.delta.commitInfo.userMetadata": "from-conf"
+   },
+   "deletion_vectors": true,
+   "error": null,
+   "sql": "UPDATE dut SET p = 9 WHERE id = 2",
+   "versions": 3
+  },
+  "dv.update.no_conf": {
+   "commit": {
+    "operation": "UPDATE",
+    "userMetadata": null
+   },
+   "conf": {},
+   "deletion_vectors": true,
+   "error": null,
+   "sql": "UPDATE dut SET p = 9 WHERE id = 2",
+   "versions": 3
+  },
+  "insert_into_extra": {
+   "error": {
+    "condition": "DELTA_METADATA_MISMATCH",
+    "message": "[DELTA_METADATA_MISMATCH] A metadata mismatch was detected when writing to the Delta table.",
+    "parameters": {},
+    "sqlstate": "42KDG"
+   },
+   "options": {},
+   "schema": [
+    "id",
+    "p"
+   ],
+   "versions": 2
+  },
+  "insert_into_extra_merge_schema": {
+   "error": {
+    "condition": "DELTA_METADATA_MISMATCH",
+    "message": "[DELTA_METADATA_MISMATCH] A metadata mismatch was detected when writing to the Delta table.",
+    "parameters": {},
+    "sqlstate": "42KDG"
+   },
+   "options": {
+    "mergeSchema": "true"
+   },
+   "schema": [
+    "id",
+    "p"
+   ],
+   "versions": 2
+  },
+  "plain.delete_all.conf": {
+   "commit": {
+    "operation": "DELETE",
+    "userMetadata": "from-conf"
+   },
+   "conf": {
+    "spark.databricks.delta.commitInfo.userMetadata": "from-conf"
+   },
+   "deletion_vectors": false,
+   "error": null,
+   "sql": "DELETE FROM dut",
+   "versions": 3
+  },
+  "plain.delete_all.no_conf": {
+   "commit": {
+    "operation": "DELETE",
+    "userMetadata": null
+   },
+   "conf": {},
+   "deletion_vectors": false,
+   "error": null,
+   "sql": "DELETE FROM dut",
+   "versions": 3
+  },
+  "plain.delete_partition.conf": {
+   "commit": {
+    "operation": "DELETE",
+    "userMetadata": "from-conf"
+   },
+   "conf": {
+    "spark.databricks.delta.commitInfo.userMetadata": "from-conf"
+   },
+   "deletion_vectors": false,
+   "error": null,
+   "sql": "DELETE FROM dut WHERE p = 1",
+   "versions": 3
+  },
+  "plain.delete_partition.no_conf": {
+   "commit": {
+    "operation": "DELETE",
+    "userMetadata": null
+   },
+   "conf": {},
+   "deletion_vectors": false,
+   "error": null,
+   "sql": "DELETE FROM dut WHERE p = 1",
+   "versions": 3
+  },
+  "plain.delete_where.conf": {
+   "commit": {
+    "operation": "DELETE",
+    "userMetadata": "from-conf"
+   },
+   "conf": {
+    "spark.databricks.delta.commitInfo.userMetadata": "from-conf"
+   },
+   "deletion_vectors": false,
+   "error": null,
+   "sql": "DELETE FROM dut WHERE id = 1",
+   "versions": 3
+  },
+  "plain.delete_where.no_conf": {
+   "commit": {
+    "operation": "DELETE",
+    "userMetadata": null
+   },
+   "conf": {},
+   "deletion_vectors": false,
+   "error": null,
+   "sql": "DELETE FROM dut WHERE id = 1",
+   "versions": 3
+  },
+  "plain.merge_all.conf": {
+   "commit": {
+    "operation": "MERGE",
+    "userMetadata": "from-conf"
+   },
+   "conf": {
+    "spark.databricks.delta.commitInfo.userMetadata": "from-conf"
+   },
+   "deletion_vectors": false,
+   "error": null,
+   "sql": "MERGE INTO dut t USING s ON t.id = s.id WHEN MATCHED THEN DELETE WHEN NOT MATCHED THEN INSERT *",
+   "versions": 3
+  },
+  "plain.merge_all.no_conf": {
+   "commit": {
+    "operation": "MERGE",
+    "userMetadata": null
+   },
+   "conf": {},
+   "deletion_vectors": false,
+   "error": null,
+   "sql": "MERGE INTO dut t USING s ON t.id = s.id WHEN MATCHED THEN DELETE WHEN NOT MATCHED THEN INSERT *",
+   "versions": 3
+  },
+  "plain.merge_insert_only.conf": {
+   "commit": {
+    "operation": "MERGE",
+    "userMetadata": "from-conf"
+   },
+   "conf": {
+    "spark.databricks.delta.commitInfo.userMetadata": "from-conf"
+   },
+   "deletion_vectors": false,
+   "error": null,
+   "sql": "MERGE INTO dut t USING (SELECT CAST(7 AS BIGINT) AS id, 7 AS p) s ON t.id = s.id WHEN NOT MATCHED THEN INSERT *",
+   "versions": 3
+  },
+  "plain.merge_insert_only.no_conf": {
+   "commit": {
+    "operation": "MERGE",
+    "userMetadata": null
+   },
+   "conf": {},
+   "deletion_vectors": false,
+   "error": null,
+   "sql": "MERGE INTO dut t USING (SELECT CAST(7 AS BIGINT) AS id, 7 AS p) s ON t.id = s.id WHEN NOT MATCHED THEN INSERT *",
+   "versions": 3
+  },
+  "plain.merge_update.conf": {
+   "commit": {
+    "operation": "MERGE",
+    "userMetadata": "from-conf"
+   },
+   "conf": {
+    "spark.databricks.delta.commitInfo.userMetadata": "from-conf"
+   },
+   "deletion_vectors": false,
+   "error": null,
+   "sql": "MERGE INTO dut t USING s ON t.id = s.id WHEN MATCHED THEN UPDATE SET p = s.p",
+   "versions": 3
+  },
+  "plain.merge_update.no_conf": {
+   "commit": {
+    "operation": "MERGE",
+    "userMetadata": null
+   },
+   "conf": {},
+   "deletion_vectors": false,
+   "error": null,
+   "sql": "MERGE INTO dut t USING s ON t.id = s.id WHEN MATCHED THEN UPDATE SET p = s.p",
+   "versions": 3
+  },
+  "plain.update.conf": {
+   "commit": {
+    "operation": "UPDATE",
+    "userMetadata": "from-conf"
+   },
+   "conf": {
+    "spark.databricks.delta.commitInfo.userMetadata": "from-conf"
+   },
+   "deletion_vectors": false,
+   "error": null,
+   "sql": "UPDATE dut SET p = 9 WHERE id = 2",
+   "versions": 3
+  },
+  "plain.update.no_conf": {
+   "commit": {
+    "operation": "UPDATE",
+    "userMetadata": null
+   },
+   "conf": {},
+   "deletion_vectors": false,
+   "error": null,
+   "sql": "UPDATE dut SET p = 9 WHERE id = 2",
+   "versions": 3
+  }
+ },
+ "delta_spark": "4.4.1",
+ "format_version": 1,
+ "generator": "gen_delta_fixtures.py dml-user-metadata",
+ "spark": "4.2.0"
+}
