@@ -163,6 +163,12 @@ pub(crate) struct ViewDef {
     /// resolves its text under them): the view's own `WITH`s resolve under it, never the reader's
     /// (review r4 Y1). `None` (a view stored without it) reads as `CORRECTED`, Spark's default.
     pub(crate) cte_precedence: Option<krishiv_plan::analyzer::CtePrecedencePolicy>,
+    /// Whether `spark.sql.timestampType` was `TIMESTAMP_NTZ` when the view was created or its
+    /// query last replaced: its text parses under it, so a bare `TIMESTAMP` in it keeps the type
+    /// it had then whatever the reader's setting (Spark's `view.sqlConfig.*`; a view created
+    /// with the setting at its default reads `TIMESTAMP_LTZ`, as a Spark 4.2.0 run shows).
+    /// `None` (a view stored without it) reads as `TIMESTAMP_LTZ`.
+    pub(crate) timestamp_ntz: Option<bool>,
     /// For a `SQL SECURITY DEFINER` view (`Some`, `None` for `INVOKER`): its functions, bound
     /// when its query was created or last replaced (review r8 item 1, ADR 0048 A1). Every name
     /// its text calls bare (scalar or table) that no built-in answers was resolved then, through
@@ -1185,6 +1191,7 @@ mod tests {
                 schema_mode: None,
                 definer: None,
                 cte_precedence: None,
+                timestamp_ntz: None,
                 functions: None,
                 revision: 0,
                 author: author.into(),

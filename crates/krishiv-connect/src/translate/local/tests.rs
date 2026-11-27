@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use krishiv_common::error::ErrorClass;
 use krishiv_plan::{LocalRelation, PlanNode, ReadSource};
+use krishiv_sql::ParserOptions;
 
 use super::super::testing::{boxed, fails, relation};
 use super::super::{TranslateConf, translate_relation};
@@ -158,7 +159,7 @@ fn a_cached_relation_is_read_as_the_inline_one_it_holds() {
         schema: Some("a INT".to_owned()),
     }
     .encode_to_vec();
-    let (data, schema) = cached_request(&bytes).expect("decodes");
+    let (data, schema) = cached_request(&bytes, &ParserOptions::default()).expect("decodes");
     assert_eq!(data.as_deref(), Some(&b"ipc"[..]));
     assert_eq!(schema.expect("schema").fields().len(), 1);
 }
@@ -168,13 +169,13 @@ fn a_cached_relation_that_does_not_decode_is_refused() {
     // A field key cut off mid-varint, then a valid tag of an unknown wire type (a group).
     for bytes in [&b"\xff\xff"[..], &b"\x0b"[..]] {
         assert_eq!(
-            fails(cached_request(bytes)).error_class(),
+            fails(cached_request(bytes, &ParserOptions::default())).error_class(),
             ErrorClass::ConnectInvalidPlanCannotParse
         );
     }
     // Neither data nor schema: as an inline relation.
     assert_eq!(
-        fails(cached_request(&[])).error_class(),
+        fails(cached_request(&[], &ParserOptions::default())).error_class(),
         ErrorClass::ConnectInvalidPlanSchemaRequiredForLocalRelation
     );
 }

@@ -33,6 +33,7 @@
 
 use krishiv_types::{ArrayType, DataType, DecimalType, MapType, StructField, StructType};
 
+use super::SparkProfile;
 use super::catalog::{CallTypes, InputType, Inputs, Operator};
 use crate::{Builtin, CastMode};
 
@@ -135,6 +136,16 @@ pub(super) enum Mismatch {
     MapConcatDiffTypes(Vec<Option<DataType>>),
     /// `INVALID_ORDERING_TYPE`: a type that does not order (a map).
     InvalidOrdering(DataType),
+    /// `CAST_WITHOUT_SUGGESTION`: Spark inserts the implicit cast of the argument (a datetime type
+    /// to another), and the cast itself is refused (`TIME` to `TIMESTAMP` before Spark 4.3).
+    ImplicitCast {
+        /// The argument (0-based).
+        arg: usize,
+        /// Its type.
+        from: DataType,
+        /// The type Spark casts it to.
+        to: DataType,
+    },
     /// A coercion Krishiv does not implement.
     Unsupported(&'static str),
 }
@@ -1122,7 +1133,7 @@ pub(super) fn inputs(
         }
         Inputs::Leading(types) => {
             let n = types.len().min(args.len());
-            let mut casts = declared(types, &args[..n], call.ansi())?;
+            let mut casts = declared(types, &args[..n], call)?;
             casts.extend(common_casts(&args[n..], &args[n..], Rules::of(call))?);
             Ok(casts)
         }
@@ -1172,7 +1183,7 @@ pub(super) fn inputs(
         .map(|t| t.casts),
         _ => match inputs.expected(call) {
             Some(types) => {
-                let casts = declared(&types, args, call.ansi())?;
+                let casts = declared(&types, args, call)?;
                 legacy_string_counts(&types, args, call)?;
                 Ok(casts)
             }
@@ -1394,20 +1405,67 @@ fn hidden_zero() -> Arg<'static> {
 fn declared(
     types: &[InputType],
     args: &[Arg<'_>],
-    ansi: bool,
+    call: &CallTypes<'_>,
 ) -> Result<Vec<Option<DataType>>, Mismatch> {
+    let ansi = call.ansi();
     let mut casts = Vec::new();
+    // An ordinary mismatch waits for the later arguments: Spark inserts the
+    // implicit casts it can (a refused datetime cast among them) and keeps a
+    // mismatched argument as it is, and CheckAnalysis (`foreachUp`) reaches a
+    // child cast before the call, so a refused cast anywhere is reported
+    // first (Spark 4.2.0/4.3.0 run: `datediff(array(1), TIME'12:00:00')`).
+    let mut unexpected = None;
     for (i, a) in args.iter().enumerate() {
         let want = types.get(i).or(types.last()).unwrap_or(&InputType::Any);
-        let to = implicit(a.ty, want, ansi).ok_or_else(|| Mismatch::Unexpected {
-            arg: i,
-            param: i,
-            ty: a.ty.cloned(),
-            required: want.sql(),
-        })?;
-        casts.push(cast_to(a.ty, to.as_ref()));
+        match implicit(a.ty, want, ansi) {
+            Some(to) => casts.push(cast_to(a.ty, to.as_ref())),
+            None => {
+                if let Some((from, to)) = refused_datetime_cast(a.ty, want, call) {
+                    return Err(Mismatch::ImplicitCast { arg: i, from, to });
+                }
+                unexpected.get_or_insert_with(|| Mismatch::Unexpected {
+                    arg: i,
+                    param: i,
+                    ty: a.ty.cloned(),
+                    required: want.sql(),
+                });
+            }
+        }
+    }
+    if let Some(m) = unexpected {
+        return Err(m);
     }
     Ok(casts)
+}
+
+/// Spark's implicit cast between datetime types (`TypeCoercion` and `AnsiTypeCoercion`:
+/// `DatetimeType` to a `DatetimeType` parameter, `Cast.canANSIStoreAssign`), which it inserts even
+/// where the cast itself is refused: a `TIME` where a `DATE`, `TIMESTAMP` or `TIMESTAMP_NTZ` is
+/// declared, or one of those where a `TIME` is, gives `CAST_WITHOUT_SUGGESTION` on the argument
+/// (Spark 4.2.0 run: `date_format(TIME'12:00:00', ..)`). Returns the refused cast, if this is one.
+/// A cast the profile allows (Spark 4.3's `TIME` to and from the timestamps) is not reported here.
+fn refused_datetime_cast(
+    from: Option<&DataType>,
+    want: &InputType,
+    call: &CallTypes<'_>,
+) -> Option<(DataType, DataType)> {
+    use DataType as T;
+    let (Some(f), InputType::Exact(t)) = (from, want) else {
+        return None;
+    };
+    let datetime = |d: &DataType| matches!(d, T::Date | T::Timestamp | T::TimestampNtz);
+    let time = |d: &DataType| matches!(d, T::Time { .. });
+    if !((time(f) && datetime(t)) || (datetime(f) && time(t))) {
+        return None;
+    }
+    let mode = if call.ansi() {
+        CastMode::Ansi
+    } else {
+        CastMode::Legacy
+    };
+    let spark_4_3 = call.profile() >= SparkProfile::V4_3;
+    matches!(can_cast(Some(f), t, mode, spark_4_3), Err(BadCast::Without))
+        .then(|| (f.clone(), t.clone()))
 }
 
 /// The type an argument of type `from` takes for `want`, if it may.
@@ -1479,6 +1537,9 @@ fn implicit(from: Option<&DataType>, want: &InputType, ansi: bool) -> Option<Opt
         (None, InputType::Exact(t) | InputType::Strict(t)) => Some(Some(t.clone())),
         (Some(f), InputType::Strict(t)) => (f == t).then(|| Some(t.clone())),
         (None, InputType::Map) => Some(Some(null_map())),
+        // `date_add`/`date_sub` cast their start as a `DATE` parameter does, except a `TIME`.
+        (Some(T::Time { .. }), InputType::StartDate) => None,
+        (_, InputType::StartDate) => implicit(from, &InputType::Exact(T::Date), ansi),
         (None, InputType::Array) => Some(Some(null_array())),
         // A geometry or geography reaches only a spatial parameter, by the
         // cast rules of `CAST` (never a string).

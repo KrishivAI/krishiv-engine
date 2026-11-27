@@ -615,6 +615,23 @@ impl Parser<'_> {
         } else if is("TIMESTAMP") && zone(self, &["WITH", "LOCAL", "TIME", "ZONE"]) {
             push(self, &["WITH", "LOCAL", "TIME", "ZONE"]);
         }
+        // A bare `TIMESTAMP` is the type `spark.sql.timestampType` names, resolved while parsing
+        // (Spark 4.2.0 and 4.3.0 `DataTypeAstBuilder.visitPrimitiveDataType`:
+        // `SqlApiConf.get.timestampType`), so a cast target, a column type and a schema string all
+        // follow the setting and a table stores the concrete type. Spark 4.3's `TIMESTAMP(6)` is the
+        // same type; any other precision keeps the bare name, so the validator's error names it as
+        // Spark does (4.2: `UNSUPPORTED_DATATYPE` "TIMESTAMP(6)").
+        if name == "timestamp"
+            && self.opts.timestamp_ntz
+            && match args.as_slice() {
+                [] => true,
+                // As a number, as the validator reads it: `TIMESTAMP(06)` too.
+                [p] => self.opts.spark_4_3 && p.parse::<u32>() == Ok(6),
+                _ => false,
+            }
+        {
+            name = "timestamp_ntz".to_owned();
+        }
         Ok(DataTypeKind::Primitive { name, args })
     }
 }

@@ -156,6 +156,49 @@ fn spatial_fields_need_their_tag() {
     );
 }
 
+/// A user's type string under `spark.sql.timestampType = TIMESTAMP_NTZ` (Spark
+/// `DataTypeAstBuilder.visitPrimitiveDataType`): a bare `TIMESTAMP`, at any depth, and 4.3's
+/// `TIMESTAMP(6)` (`06` too) are `TIMESTAMP_NTZ`; `TIMESTAMP_LTZ` and the multi-word forms keep
+/// their type; the canonical parse keeps `timestamp` LTZ.
+#[test]
+fn a_bare_timestamp_follows_the_session_timestamp_type() {
+    let ntz = |s: &str, g| crate::parse_data_type_with(s, g, true);
+    assert_eq!(
+        ntz("timestamp", TypeGrammar::V4_2),
+        Ok(DataType::TimestampNtz)
+    );
+    assert_eq!(
+        ntz("TIMESTAMP(6)", TypeGrammar::V4_3),
+        Ok(DataType::TimestampNtz)
+    );
+    assert_eq!(
+        ntz("timestamp(06)", TypeGrammar::V4_3),
+        Ok(DataType::TimestampNtz)
+    );
+    assert_eq!(
+        ntz("timestamp_ltz", TypeGrammar::V4_3),
+        Ok(DataType::Timestamp)
+    );
+    assert_eq!(
+        ntz("timestamp with local time zone", TypeGrammar::V4_3),
+        Ok(DataType::Timestamp)
+    );
+    assert_eq!(
+        ntz("array<timestamp>", TypeGrammar::V4_3),
+        parse_data_type("array<timestamp_ntz>")
+    );
+    assert_eq!(
+        ntz("struct<a: map<string, timestamp>>", TypeGrammar::V4_3),
+        parse_data_type("struct<a: map<string, timestamp_ntz>>")
+    );
+    assert!(ntz("timestamp(6)", TypeGrammar::V4_2).is_err());
+    assert_eq!(
+        crate::parse_data_type_with("timestamp", TypeGrammar::V4_3, false),
+        Ok(DataType::Timestamp)
+    );
+    assert_eq!(parse_data_type("timestamp"), Ok(DataType::Timestamp));
+}
+
 /// The type grammar of a release (R3 review findings 7, 14, 15): 4.2 caps `TIME` at 6 and has no
 /// timestamp precision; 4.3 takes `TIME(0..=9)` and `TIMESTAMP_NTZ(6)`, refuses 7..=9, and words
 /// the range as `[0, 9]`.
