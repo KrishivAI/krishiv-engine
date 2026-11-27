@@ -21,14 +21,40 @@ fn some_null(nulls: Option<&NullBuffer>) -> Option<&NullBuffer> {
     nulls.filter(|n| n.null_count() > 0)
 }
 
+/// An integer carrier `sum` folds into `i64`: `ABS_MAX` bounds `|x|` of
+/// every value.
+pub(super) trait SumInt: Copy + Into<i64> {
+    const ABS_MAX: u64;
+}
+
+impl SumInt for i8 {
+    const ABS_MAX: u64 = 1 << 7;
+}
+impl SumInt for i16 {
+    const ABS_MAX: u64 = 1 << 15;
+}
+impl SumInt for i32 {
+    const ABS_MAX: u64 = 1 << 31;
+}
+impl SumInt for i64 {
+    const ABS_MAX: u64 = 1 << 63;
+}
+
 /// Adds the valid rows of `v` to their groups' `sum` (wrapping) and marks
 /// the groups `seen`. Returns whether any add overflowed `i64`: the
 /// per-row loop's checked add fails at the first such row (ANSI), and its
 /// wrapping fallback gives these sums (non-ANSI). A NULL row adds 0, which
-/// never overflows.
-pub(super) fn sum_i64(
+/// never overflows. Values are read at their own width (no widened copy).
+///
+/// One group: when `|sum| + len * ABS_MAX` fits `i64`, no running sum of the
+/// batch can overflow (every prefix lies within that bound), so the batch is
+/// summed in one reduction the compiler vectorises and added once; else the
+/// per-row overflow-tracking loop runs. Both give the same `i64`. This is a
+/// per-batch range proof in the spirit of DuckDB's `sum_no_overflow`, which
+/// proves the bound from column statistics instead.
+pub(super) fn sum_ints<T: SumInt>(
     groups: &[u32],
-    v: &[i64],
+    v: &[T],
     nulls: Option<&NullBuffer>,
     sum: &mut [i64],
     seen: &mut [bool],
@@ -37,23 +63,36 @@ pub(super) fn sum_i64(
     let nulls = some_null(nulls);
     let mut overflow = false;
     if let ([s], [any]) = (&mut *sum, &mut *seen) {
+        *any |= nulls.map_or(!v.is_empty(), |n| n.null_count() < v.len());
+        let bound = u64::try_from(v.len())
+            .ok()
+            .and_then(|l| l.checked_mul(T::ABS_MAX))
+            .filter(|&b| b <= i64::MAX.unsigned_abs());
+        if let Some(b) = bound
+            && s.unsigned_abs() <= i64::MAX.unsigned_abs() - b
+        {
+            // |batch| <= b and |s| + b <= i64::MAX: neither add overflows.
+            *s += match nulls {
+                None => v.iter().map(|&x| x.into()).sum::<i64>(),
+                Some(n) => masked_sum(v, n),
+            };
+            return false;
+        }
         let mut acc = *s;
         match nulls {
             None => {
                 for &x in v {
-                    let (a, o) = acc.overflowing_add(x);
+                    let (a, o) = acc.overflowing_add(x.into());
                     acc = a;
                     overflow |= o;
                 }
-                *any |= !v.is_empty();
             }
             Some(n) => {
                 for (&x, ok) in v.iter().zip(n.inner().iter()) {
-                    let (a, o) = acc.overflowing_add(if ok { x } else { 0 });
+                    let (a, o) = acc.overflowing_add(if ok { x.into() } else { 0 });
                     acc = a;
                     overflow |= o;
                 }
-                *any |= n.null_count() < v.len();
             }
         }
         *s = acc;
@@ -63,7 +102,7 @@ pub(super) fn sum_i64(
         None => {
             for (&g, &x) in groups.iter().zip(v) {
                 let g = g as usize;
-                let (a, o) = sum[g].overflowing_add(x);
+                let (a, o) = sum[g].overflowing_add(x.into());
                 sum[g] = a;
                 seen[g] = true;
                 overflow |= o;
@@ -72,7 +111,7 @@ pub(super) fn sum_i64(
         Some(n) => {
             for ((&g, &x), ok) in groups.iter().zip(v).zip(n.inner().iter()) {
                 let g = g as usize;
-                let (a, o) = sum[g].overflowing_add(if ok { x } else { 0 });
+                let (a, o) = sum[g].overflowing_add(if ok { x.into() } else { 0 });
                 sum[g] = a;
                 seen[g] |= ok;
                 overflow |= o;
@@ -80,6 +119,29 @@ pub(super) fn sum_i64(
         }
     }
     overflow
+}
+
+/// The sum of the rows of `v` that `n` marks valid, a 64-row word of the
+/// bitmap at a time (a NULL slot's value is masked to 0, branch-free). The
+/// caller proved it cannot overflow.
+fn masked_sum<T: SumInt>(v: &[T], n: &NullBuffer) -> i64 {
+    let chunks = n.inner().bit_chunks();
+    let (body, tail) = v.split_at(chunks.chunk_len() * 64);
+    let word = |xs: &[T], bits: u64| -> i64 {
+        xs.iter()
+            .enumerate()
+            .map(|(j, &x)| x.into() & -i64::from((bits >> j) & 1 == 1))
+            .sum()
+    };
+    let mut t: i64 = body
+        .as_chunks::<64>()
+        .0
+        .iter()
+        .zip(chunks.iter())
+        .map(|(xs, bits)| word(xs, bits))
+        .sum();
+    t += word(tail, chunks.remainder_bits());
+    t
 }
 
 /// The native values of an integer-like column, as `min`/`max` order them

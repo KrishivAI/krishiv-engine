@@ -91,6 +91,35 @@ fn floats_order_as_in_spark() {
     }
 }
 
+/// A float inside a struct or a list orders as a top-level float does: every NaN equal and the
+/// greatest, `-0.0 = 0.0`; the key encoding sees the canonical value, not the stored one.
+#[test]
+fn floats_nested_in_structs_and_lists_order_as_in_spark() {
+    use arrow_array::types::Float64Type;
+    use arrow_array::{ListArray, StructArray};
+    use arrow_schema::Fields;
+    let values = Float64Array::from(vec![f64::NAN, -f64::NAN, 1.0, -0.0, 0.0]);
+    let fields = Fields::from(vec![Field::new("d", DataType::Float64, true)]);
+    let st: ArrayRef = Arc::new(StructArray::new(
+        fields,
+        vec![Arc::new(values.clone())],
+        None,
+    ));
+    let list: ArrayRef = Arc::new(ListArray::from_iter_primitive::<Float64Type, _, _>(
+        values.iter().map(|v| Some(vec![v])),
+    ));
+    for column in [st, list] {
+        let schema = Schema::new(vec![Field::new("k", column.data_type().clone(), true)]);
+        let batch = RecordBatch::try_new(Arc::new(schema.clone()), vec![column]).unwrap();
+        let keys = KeyEncoder::new(&schema, &[SortKey::asc(0)]).unwrap();
+        let rows = keys.encode(&batch).unwrap();
+        assert_eq!(rows.row(0), rows.row(1), "NaN = -NaN");
+        assert!(rows.row(0) > rows.row(2), "NaN is the greatest");
+        assert_eq!(rows.row(3), rows.row(4), "-0.0 = 0.0");
+        assert!(rows.row(2) > rows.row(3));
+    }
+}
+
 /// Decimals by value, binaries by unsigned bytes (orders from Spark 4.2.0).
 #[test]
 fn decimals_and_binaries_order_as_in_spark() {
