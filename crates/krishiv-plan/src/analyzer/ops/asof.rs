@@ -5,8 +5,8 @@
 
 use krishiv_common::error::{
     AsofJoinMatchConditionInvalidExpression, AsofJoinMatchConditionInvalidType,
-    AsofJoinMatchConditionTableReference, DatatypeMismatchBinaryOpDiffTypes,
-    DatatypeMismatchBinaryOpWrongType, InternalError, KrishivUnsupportedFeature,
+    AsofJoinMatchConditionTableReference, InternalError, KrishivUnsupportedFeature,
+    UnsupportedGeneratorOutsideSelect,
 };
 
 use std::collections::HashMap;
@@ -34,15 +34,11 @@ impl Resolver<'_> {
             this.bind(e, &Self::cx(&scope, &rels, env, "Join"))
                 .map_err(|err| invalid_expression_of(err, origin))
         };
-        let first = operand(self, &m.left)?;
-        let second = operand(self, &m.right)?;
-        // Spark's `ResolveAsOfJoin` waits for the `ON` condition to resolve
-        // (`condition.forall(_.resolved)`), so a condition that does not resolve (an unknown
-        // name or function, a type mismatch) is reported before any as-of check.
-        let on = match on {
-            Some(c) => Some(self.bind(c, &Self::cx(&scope, &rels, env, "Join"))?),
-            None => None,
-        };
+        let first = operand(self, &m.left);
+        let second = operand(self, &m.right);
+        let on = on.map(|c| self.bind(c, &Self::cx(&scope, &rels, env, "Join")));
+        let on = self.as_of_bind_order(first.as_ref(), second.as_ref(), on, origin)?;
+        let (first, second) = (first?, second?);
         let shown = |b: &Bound| format!("\"{}\"", pretty(&b.shown(), zone));
         // A side's columns include what an earlier `USING` or `NATURAL` join merged away (its
         // hidden output, reachable by qualified name): Spark's `AddMetadataColumns` adds those to
@@ -171,7 +167,7 @@ impl Resolver<'_> {
             }
             (crate::AsOfDirection::Forward, true) => &["<="],
             (crate::AsOfDirection::Forward, false) => &["<"],
-            (crate::AsOfDirection::Nearest, false) => &["=", ">"],
+            (crate::AsOfDirection::Nearest, false) => &["==", ">"],
         };
         for op in condition {
             let (l, r) = if m.as_written {
@@ -180,39 +176,6 @@ impl Resolver<'_> {
                 (Arc::clone(&left.expr), Arc::clone(&right.expr))
             };
             self.call(op, vec![l, r], env, origin)?;
-        }
-        // Connect's ordering subtraction (`makeOrderingExpr`) is built for every type and is not
-        // coerced: a value Spark cannot subtract (a STRING, BOOLEAN, BINARY, array or struct) is
-        // its `DATATYPE_MISMATCH`, `"(a - b)"` backward and nearest, `"(b - a)"` forward; values
-        // of two types (structs whose field names differ) are `BINARY_OP_DIFF_TYPES` (Spark
-        // 4.3.0 runs, `opus1-r4`). The SQL form builds none for these types.
-        if !m.as_written && !subtracts(left.ty.data_type.as_ref()) {
-            let (a, b) = operands;
-            let (ta, tb) = (a.resolved_type(), b.resolved_type());
-            let sql_expr = format!("\"({} - {})\"", pretty(a, zone), pretty(b, zone));
-            // Spark's `DataTypeUtils.sameType`.
-            let case_sensitive = self.ctx.conf.case_sensitive;
-            let same = match (&ta, &tb) {
-                (Some(x), Some(y)) if case_sensitive => x.equals_ignore_nullability(y),
-                (Some(x), Some(y)) => x.equals_ignore_case_and_nullability(y),
-                _ => false,
-            };
-            let error: krishiv_common::error::KrishivError = if same {
-                DatatypeMismatchBinaryOpWrongType {
-                    sql_expr,
-                    input_type: SUBTRACT_TYPES.to_owned(),
-                    actual_data_type: quoted_type(ta.as_ref()),
-                }
-                .into()
-            } else {
-                DatatypeMismatchBinaryOpDiffTypes {
-                    sql_expr,
-                    left: quoted_type(ta.as_ref()),
-                    right: quoted_type(tb.as_ref()),
-                }
-                .into()
-            };
-            return Err(AnalysisError::new(error, origin));
         }
         // The two values meet at the type a comparison of them casts both to.
         let compared = self.call(
@@ -223,7 +186,12 @@ impl Resolver<'_> {
         )?;
         // Spark's `CheckAnalysis` reaches the distance after the comparison, so a comparison
         // type error wins; a subtraction that does not resolve is reported as Spark reports it.
-        let distance = if subtracts(left.ty.data_type.as_ref()) {
+        // Connect's ordering subtraction (`makeOrderingExpr`) is built for every type and is coerced
+        // like any subtraction: `'2'` against `1` runs, a pair no coercion subtracts (two STRINGs
+        // with ANSI, BOOLEANs, structs) is that subtraction's `DATATYPE_MISMATCH`, `"(a - b)"`
+        // backward and nearest, `"(b - a)"` forward (Spark 4.3.0 `_joinAsOf`, `rev-f1-spark/delta90a`,
+        // `rev-f2-asof-ref4/c3.out`). The SQL form builds it only where the left type subtracts.
+        let distance = if !m.as_written || subtracts(left.ty.data_type.as_ref()) {
             let (a, b) = operands;
             // Resolved whether or not it is kept, so its error is reported either way.
             let subtraction = self.call("-", vec![Arc::clone(a), Arc::clone(b)], env, origin)?;
@@ -325,8 +293,15 @@ impl Resolver<'_> {
         let (mut ls, mut rs) = (Vec::new(), Vec::new());
         for (i, (x, y)) in left_fields.iter().zip(&right_fields).enumerate() {
             let (x, y) = self.aligned(x, y, env, origin)?;
-            ls.extend([field_name(&x, i), x]);
-            rs.extend([field_name(&y, i), y]);
+            // An aliased value gives its name and shows as its child (`named_struct(z, dti, ..)`).
+            let unaliased = |e: Arc<Expr>| {
+                if let ExprNode::Resolved(ResolvedExpr::Alias { expr, .. }) = &e.node {
+                    return Arc::clone(expr);
+                }
+                e
+            };
+            ls.extend([field_name(&x, i), unaliased(x)]);
+            rs.extend([field_name(&y, i), unaliased(y)]);
         }
         Ok((
             self.call("named_struct", ls, env, origin)?,
@@ -608,25 +583,69 @@ fn zoned_rewrite(id: Builtin, f: &ResolvedFunction) -> bool {
 /// `months_between`, `from_utc_timestamp`, `to_utc_timestamp` and `timestampdiff` over an NTZ
 /// argument delay the check); `timestampadd` takes `AnyTimestampType` and keeps it in Spark too.
 /// A DATE or STRING there is cast in the bound form, so `zoned_implicit_casts` finds it.
+/// `convert_timezone` casts its last argument to `TIMESTAMP_NTZ`, a zoned cast from a TIMESTAMP,
+/// which Krishiv's `wall_clock_input` keeps as written (Spark 4.3.0 run, `rev-f2-asof-ref4/n.sql`).
 fn casts_to_timestamp(f: &ResolvedFunction) -> bool {
-    let (at, ntz_only): (&[usize], bool) = match f.id.name() {
-        "date_format" | "hour" | "minute" | "second" => (&[0], false),
-        "date_trunc" => (&[1], false),
-        "months_between" => (&[0, 1], true),
-        "from_utc_timestamp" | "to_utc_timestamp" => (&[0], true),
-        "timestampdiff" => (&[1, 2], true),
+    let last = [f.args.len().saturating_sub(1)];
+    let (at, kinds): (&[usize], ZonedKinds) = match f.id.name() {
+        "hour" | "minute" | "second" => (&[0], ZonedKinds::DATE_OR_STRING),
+        "date_format" => (&[0], ZonedKinds::DATE_STRING_OR_NTZ),
+        "date_trunc" => (&[1], ZonedKinds::DATE_STRING_OR_NTZ),
+        "months_between" => (&[0, 1], ZonedKinds::NTZ),
+        "from_utc_timestamp" | "to_utc_timestamp" => (&[0], ZonedKinds::NTZ),
+        "timestampdiff" => (&[1, 2], ZonedKinds::NTZ),
+        "convert_timezone" => (&last, ZonedKinds::TIMESTAMP),
         _ => return false,
     };
-    let ntz = !matches!(f.id.name(), "hour" | "minute" | "second");
     at.iter().any(|&i| {
-        let t = f.args.get(i).and_then(|a| shown_type(a));
-        (!ntz_only
-            && matches!(
-                t,
-                Some(DataType::Date | DataType::String | DataType::CollatedString(_))
-            ))
-            || (ntz && matches!(t, Some(DataType::TimestampNtz)))
+        f.args
+            .get(i)
+            .and_then(|a| shown_type(a))
+            .is_some_and(|t| kinds.zoned(&t))
     })
+}
+
+/// The argument types of [`casts_to_timestamp`]'s positions whose implicit cast needs a time zone.
+#[derive(Clone, Copy)]
+struct ZonedKinds {
+    /// A DATE or STRING cast to TIMESTAMP.
+    date_or_string: bool,
+    /// A `TIMESTAMP_NTZ` cast to TIMESTAMP.
+    ntz: bool,
+    /// A TIMESTAMP cast to `TIMESTAMP_NTZ`.
+    timestamp: bool,
+}
+
+impl ZonedKinds {
+    const DATE_OR_STRING: Self = Self {
+        date_or_string: true,
+        ntz: false,
+        timestamp: false,
+    };
+    const DATE_STRING_OR_NTZ: Self = Self {
+        date_or_string: true,
+        ntz: true,
+        timestamp: false,
+    };
+    const NTZ: Self = Self {
+        date_or_string: false,
+        ntz: true,
+        timestamp: false,
+    };
+    const TIMESTAMP: Self = Self {
+        date_or_string: false,
+        ntz: false,
+        timestamp: true,
+    };
+
+    fn zoned(self, t: &DataType) -> bool {
+        match t {
+            DataType::Date | DataType::String | DataType::CollatedString(_) => self.date_or_string,
+            DataType::TimestampNtz => self.ntz,
+            DataType::Timestamp => self.timestamp,
+            _ => false,
+        }
+    }
 }
 
 /// The operator a datetime call is written as.
@@ -650,10 +669,6 @@ fn shown_type(e: &Expr) -> Option<DataType> {
         _ => e.interval_type().or_else(|| e.resolved_type()),
     }
 }
-
-/// `Subtract`'s `inputType`, as Spark's `BINARY_OP_WRONG_TYPE` names it.
-const SUBTRACT_TYPES: &str =
-    "(\"NUMERIC\" or \"INTERVAL DAY TO SECOND\" or \"INTERVAL YEAR TO MONTH\" or \"INTERVAL\")";
 
 /// Whether Spark subtracts values of `t` for an as-of distance (`AsOfJoin.supportsSubtract`).
 fn subtracts(t: Option<&DataType>) -> bool {
@@ -735,6 +750,70 @@ fn invalid_expression(b: &Bound, zone: Option<super::super::SessionZone>) -> Opt
     found
 }
 
+impl Resolver<'_> {
+    /// Which error of the operands and the `ON` condition Spark reports first, and the bound
+    /// `ON` condition the as-of checks go on with (`None` when it has none or its error comes
+    /// later). Spark's rules raise an unknown function and a generator outside the SELECT clause
+    /// while they run, operands first; `ResolveAsOfJoin` then waits for the `ON` condition to
+    /// resolve (`condition.forall(_.resolved)`), so an `ON` condition that does not resolve (an
+    /// unknown name, a type mismatch) is reported before an operand's type or window error. A
+    /// window or a scalar subquery of more than one column in `ON` resolves and fails only in
+    /// `CheckAnalysis`, after the as-of checks (Spark 4.3.0 runs, `rev-f2-asof-ref3/e.sql`); the
+    /// join binds the condition again and reports it then.
+    fn as_of_bind_order(
+        &mut self,
+        first: Result<&Bound, &AnalysisError>,
+        second: Result<&Bound, &AnalysisError>,
+        on: Option<Result<Bound, AnalysisError>>,
+        origin: Origin,
+    ) -> Result<Option<Bound>, AnalysisError> {
+        let class = |e: &AnalysisError| e.error.error_class().name();
+        let by_rule = |e: &AnalysisError| {
+            let c = class(e);
+            c.starts_with("UNRESOLVED_ROUTINE") || c.starts_with("UNSUPPORTED_GENERATOR")
+        };
+        for e in [first.err(), second.err()].into_iter().flatten() {
+            if by_rule(e) {
+                return Err(e.clone());
+            }
+        }
+        let generator = |b: &Bound, plan: String| {
+            has_generator(&b.expr)
+                .then(|| AnalysisError::new(UnsupportedGeneratorOutsideSelect { plan }, origin))
+        };
+        let on = match on {
+            None => None,
+            Some(Ok(b)) => {
+                if let Some(e) = generator(&b, format!("'AsOfJoin [{}]", pretty(&b.shown(), None)))
+                {
+                    return Err(e);
+                }
+                Some(b)
+            }
+            Some(Err(e)) if by_rule(&e) => return Err(e),
+            Some(Err(e)) => {
+                let c = class(&e);
+                if c == "UNSUPPORTED_EXPR_FOR_OPERATOR"
+                    || c == "INVALID_SUBQUERY_EXPRESSION.SCALAR_SUBQUERY_RETURN_MORE_THAN_ONE_OUTPUT_COLUMN"
+                {
+                    None
+                } else {
+                    // An operand's generator is raised by its rule before the `ON` condition's
+                    // error.
+                    for b in [first.ok(), second.ok()].into_iter().flatten() {
+                        let shown = pretty(&b.shown(), None);
+                        if let Some(g) = generator(b, format!("'AsOfJoin [{shown}]")) {
+                            return Err(g);
+                        }
+                    }
+                    return Err(e);
+                }
+            }
+        };
+        Ok(on)
+    }
+}
+
 /// A bind error of an operand that Spark reports as an invalid match expression instead: the
 /// operator-level refusals of windows, aggregates and generators.
 fn invalid_expression_of(err: AnalysisError, origin: Origin) -> AnalysisError {
@@ -758,6 +837,11 @@ fn invalid_expression_of(err: AnalysisError, origin: Origin) -> AnalysisError {
 /// of one orderable element type or positionally compatible structs, otherwise a wider type of
 /// the two under the legacy rules (`TypeCoercion.findWiderTypeForTwo`, whatever the ANSI mode).
 fn operands_compatible(a: Option<&DataType>, b: Option<&DataType>, case_sensitive: bool) -> bool {
+    // A struct field of an untyped `NULL` is `NullType` too (`(t.i, NULL)`), which meets any type.
+    let (a, b) = (
+        a.filter(|t| !matches!(t, DataType::Null)),
+        b.filter(|t| !matches!(t, DataType::Null)),
+    );
     if !a.is_none_or(valid_operand) || !b.is_none_or(valid_operand) {
         return false;
     }

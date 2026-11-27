@@ -425,6 +425,16 @@ async fn set_conf(s: &Running, pairs: &[(&str, &str)]) {
 /// A keyless inner Connect as-of join of `SELECT * FROM VALUES <left> AS l(lt)` and the same of
 /// `right` as `r(rt)`, with an exact match allowed.
 fn keyless_as_of(left: &str, right: &str, direction: &str) -> pb::Relation {
+    keyless_as_of_exact(left, right, direction, true)
+}
+
+/// [`keyless_as_of`] with `allow_exact_matches` given.
+fn keyless_as_of_exact(
+    left: &str,
+    right: &str,
+    direction: &str,
+    allow_exact: bool,
+) -> pb::Relation {
     let side = |rows: &str, alias: &str, column: &str| {
         relation(RelType::Sql(pb::Sql {
             query: format!("SELECT * FROM VALUES {rows} AS {alias}({column})"),
@@ -440,7 +450,7 @@ fn keyless_as_of(left: &str, right: &str, direction: &str) -> pb::Relation {
         using_columns: Vec::new(),
         join_type: "inner".to_owned(),
         tolerance: None,
-        allow_exact_matches: true,
+        allow_exact_matches: allow_exact,
         direction: direction.to_owned(),
     })))
 }
@@ -598,20 +608,21 @@ async fn as_of_joins_on_non_integral_values_run_without_ansi() {
 }
 
 /// The Connect form checks `makeAsOfCond`'s comparison over the values as given (no struct
-/// alignment), then `makeOrderingExpr`'s subtraction, which Spark builds for every type and does
-/// not coerce: values it cannot subtract are that subtraction's `DATATYPE_MISMATCH` (Spark 4.3.0,
-/// PySpark's `_joinAsOf` with an exact match allowed).
+/// alignment), then `makeOrderingExpr`'s subtraction, which Spark builds for every type and
+/// coerces like any subtraction: values no coercion subtracts are that subtraction's
+/// `DATATYPE_MISMATCH` (Spark 4.3.0, PySpark's `_joinAsOf` with an exact match allowed).
 #[tokio::test]
 async fn a_connect_as_of_join_reports_sparks_comparison_and_subtraction_errors() {
     let s = start().await;
     let interval = "(named_struct('x', INTERVAL '1' HOUR))";
     let x_int = "(named_struct('x', 1))";
-    for (left, right, direction, class, sql_expr) in [
+    for (left, right, direction, allow_exact, class, sql_expr) in [
         // The comparison fails first: an interval field against a STRING field.
         (
             interval,
             "(named_struct('x', 'abc'))",
             "backward",
+            true,
             "DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES",
             "\"(lt >= rt)\"",
         ),
@@ -619,6 +630,7 @@ async fn a_connect_as_of_join_reports_sparks_comparison_and_subtraction_errors()
             interval,
             "(named_struct('x', 'abc'))",
             "forward",
+            true,
             "DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES",
             "\"(lt <= rt)\"",
         ),
@@ -627,6 +639,7 @@ async fn a_connect_as_of_join_reports_sparks_comparison_and_subtraction_errors()
             x_int,
             "(named_struct('y', 1))",
             "backward",
+            true,
             "DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES",
             "\"(lt - rt)\"",
         ),
@@ -634,6 +647,7 @@ async fn a_connect_as_of_join_reports_sparks_comparison_and_subtraction_errors()
             x_int,
             "(named_struct('y', 1))",
             "forward",
+            true,
             "DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES",
             "\"(rt - lt)\"",
         ),
@@ -642,6 +656,7 @@ async fn a_connect_as_of_join_reports_sparks_comparison_and_subtraction_errors()
             x_int,
             "(named_struct('x', 2))",
             "backward",
+            true,
             "DATATYPE_MISMATCH.BINARY_OP_WRONG_TYPE",
             "\"(lt - rt)\"",
         ),
@@ -649,6 +664,7 @@ async fn a_connect_as_of_join_reports_sparks_comparison_and_subtraction_errors()
             "('b')",
             "('a')",
             "forward",
+            true,
             "DATATYPE_MISMATCH.BINARY_OP_WRONG_TYPE",
             "\"(rt - lt)\"",
         ),
@@ -656,11 +672,45 @@ async fn a_connect_as_of_join_reports_sparks_comparison_and_subtraction_errors()
             "(true)",
             "(false)",
             "backward",
+            true,
             "DATATYPE_MISMATCH.BINARY_OP_WRONG_TYPE",
             "\"(lt - rt)\"",
         ),
+        // Nearest checks `>` with exact matches, `=` then `>` without (`makeAsOfCond`).
+        (
+            interval,
+            "(named_struct('x', 'abc'))",
+            "nearest",
+            true,
+            "DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES",
+            "\"(lt > rt)\"",
+        ),
+        (
+            interval,
+            "(named_struct('x', 'abc'))",
+            "nearest",
+            false,
+            "DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES",
+            "\"(lt = rt)\"",
+        ),
+        (
+            x_int,
+            "(named_struct('y', 1))",
+            "nearest",
+            true,
+            "DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES",
+            "\"(lt - rt)\"",
+        ),
+        (
+            x_int,
+            "(named_struct('y', 1))",
+            "nearest",
+            false,
+            "DATATYPE_MISMATCH.BINARY_OP_DIFF_TYPES",
+            "\"(lt - rt)\"",
+        ),
     ] {
-        let rel = keyless_as_of(left, right, direction);
+        let rel = keyless_as_of_exact(left, right, direction, allow_exact);
         let Err(e) = execute(&s.channel, rel).await else {
             panic!("{left} {right} {direction} ran");
         };
@@ -670,5 +720,48 @@ async fn a_connect_as_of_join_reports_sparks_comparison_and_subtraction_errors()
             "{left} {right} {direction}: {}",
             e.message()
         );
+        // Spark's message names both types (`opus1-r4/c.out`).
+        if right == "(named_struct('y', 1))" {
+            for ty in ["\"STRUCT<x: INT NOT NULL>\"", "\"STRUCT<y: INT NOT NULL>\""] {
+                assert!(e.message().contains(ty), "{direction}: {}", e.message());
+            }
+        }
+    }
+}
+
+/// The ordering subtraction is coerced, so a STRING against an INT runs on the Connect form:
+/// `'2'` against `1` and `2` against `'1'` match backward, and forward finds no row (Spark 4.3.0
+/// `_joinAsOf`, ANSI on, `rev-f1-spark/delta90a/m.out`). Spark's nearest also matches; the
+/// executor has no nearest direction yet, so it passes analysis and is refused by the planner.
+#[tokio::test]
+async fn a_connect_as_of_join_coerces_its_ordering_subtraction() {
+    let s = start().await;
+    let text = |name: &str| {
+        expr(ExprType::Cast(Box::new(expression::Cast {
+            expr: Some(Box::new(attr(name))),
+            eval_mode: 0,
+            cast_to_type: Some(expression::cast::CastToType::TypeStr("string".to_owned())),
+        })))
+    };
+    for (left, right, want) in [("('2')", "(1)", "2|1"), ("(2)", "('1')", "2|1")] {
+        let rel = keyless_as_of(left, right, "nearest");
+        let Err(e) = execute(&s.channel, rel).await else {
+            panic!("{left} {right} nearest ran");
+        };
+        assert!(
+            e.message().contains("KRISHIV_UNSUPPORTED_FEATURE")
+                && e.message().contains("nearest direction"),
+            "{left} {right} nearest: {e}"
+        );
+        for (direction, want) in [("backward", vec![want]), ("forward", Vec::new())] {
+            let rel = relation(RelType::Project(Box::new(pb::Project {
+                input: Some(Box::new(keyless_as_of(left, right, direction))),
+                expressions: vec![text("lt"), text("rt")],
+            })));
+            let got = execute(&s.channel, rel)
+                .await
+                .unwrap_or_else(|e| panic!("{left} {right} {direction}: {e}"));
+            assert_eq!(rows(&got), want, "{left} {right} {direction}");
+        }
     }
 }

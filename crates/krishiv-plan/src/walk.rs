@@ -488,7 +488,8 @@ impl Teardown {
                     self.exprs.extend([m.left, m.right]);
                     self.exprs.extend(m.tolerance);
                     self.exprs.extend(m.distance);
-                    self.exprs.extend(m.sort.into_iter().flat_map(|(l, r)| [l, r]));
+                    self.exprs
+                        .extend(m.sort.into_iter().flat_map(|(l, r)| [l, r]));
                 }
             }
             PlanNode::Sort { input, order, .. } => {

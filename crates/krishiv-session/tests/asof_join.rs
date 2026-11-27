@@ -629,6 +629,16 @@ fn on_condition_passes_and_errors(s: &Session) {
             rewritten,
         ),
         ("t.k = q.k AND timestampdiff(HOUR, t.n, q.n) > 0", rewritten),
+        // `convert_timezone` casts a TIMESTAMP source to TIMESTAMP_NTZ, a zoned cast Krishiv's
+        // `wall_clock_input` reads as written (`rev-f2-asof-ref4/n.sql`).
+        (
+            "t.k = q.k AND convert_timezone('UTC', t.trade_time) > q.n",
+            rewritten,
+        ),
+        (
+            "t.k = q.k AND convert_timezone('UTC', 'UTC', t.trade_time) > q.n",
+            rewritten,
+        ),
         // Controls: no implicit zoned cast, so the check runs in pass 1.
         ("t.k = q.k AND hour(q.quote_time) > 3", written),
         (
@@ -637,6 +647,7 @@ fn on_condition_passes_and_errors(s: &Session) {
         ),
         // `timestampadd` takes any timestamp: the NTZ stays one in Spark too.
         ("t.k = q.k AND timestampadd(HOUR, 1, t.n) > q.n", written),
+        ("t.k = q.k AND convert_timezone('UTC', t.n) > q.n", written),
         // A condition that resolves and is not a boolean fails a later check, after the as-of one.
         ("t.k + q.k", written),
     ] {
@@ -692,6 +703,52 @@ fn on_condition_passes_and_errors(s: &Session) {
             "t.k >= q.d",
             "t.k = q.nope",
             "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+            None,
+        ),
+        // The `ON` error comes before an operand's type or window error; a generator and an
+        // unknown function are raised by their rules first (`rev-f2-asof-ref3/e.sql`).
+        (
+            "t.k + t.trade_time >= q.k",
+            "t.k = q.nope",
+            "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+            None,
+        ),
+        (
+            "row_number() OVER (ORDER BY t.k) >= q.k",
+            "t.k = q.nope",
+            "UNRESOLVED_COLUMN.WITH_SUGGESTION",
+            None,
+        ),
+        (
+            "explode(array(t.k)) >= q.k",
+            "t.k = q.nope",
+            "UNSUPPORTED_GENERATOR.OUTSIDE_SELECT",
+            None,
+        ),
+        (
+            "nofunc(t.k) >= q.k",
+            "t.k = q.nope",
+            "UNRESOLVED_ROUTINE",
+            None,
+        ),
+        // A window or a scalar subquery of two columns in `ON` fails after the as-of checks; a
+        // generator there is raised by its rule first.
+        (
+            "t.trade_time >= q.s",
+            "t.k = q.k AND t.k = (SELECT k, k FROM quotes_d)",
+            "ASOF_JOIN_MATCH_CONDITION_INVALID_TYPE",
+            None,
+        ),
+        (
+            "t.trade_time >= q.s",
+            "t.k = q.k AND row_number() OVER (ORDER BY t.k) = 1",
+            "ASOF_JOIN_MATCH_CONDITION_INVALID_TYPE",
+            None,
+        ),
+        (
+            "t.trade_time >= q.s",
+            "t.k = q.k AND explode(array(t.k)) = 1",
+            "UNSUPPORTED_GENERATOR.OUTSIDE_SELECT",
             None,
         ),
     ] {
@@ -925,6 +982,32 @@ fn the_distance_resolves_for_every_comparable_pair() {
                 "STRUCT<s: STRING NOT NULL, k: INT NOT NULL>",
             ),
         ),
+        // An alias names its field and is not shown; an untyped `NULL` field meets any type
+        // in the as-of check and fails the comparison (`rev-f2-asof-ref3/e.sql`).
+        (
+            "struct(c.dti AS z, c.k) >= struct(e.s, e.k)",
+            "(named_struct(z, dti, k, k) >= named_struct(s, s, k, k))",
+            (
+                "STRUCT<z: INTERVAL HOUR NOT NULL, k: INT NOT NULL>",
+                "STRUCT<s: STRING NOT NULL, k: INT NOT NULL>",
+            ),
+        ),
+        (
+            "(c.dti, NULL) >= (e.s, e.k)",
+            "(named_struct(dti, dti, col2, NULL) >= named_struct(s, s, k, k))",
+            (
+                "STRUCT<dti: INTERVAL HOUR NOT NULL, col2: VOID>",
+                "STRUCT<s: STRING NOT NULL, k: INT NOT NULL>",
+            ),
+        ),
+        (
+            "(c.k, NULL) >= (e.k, e.k)",
+            "(named_struct(k, k, col2, NULL) >= named_struct(k, k, k, k))",
+            (
+                "STRUCT<k: INT NOT NULL, col2: VOID>",
+                "STRUCT<k: INT NOT NULL, k: INT NOT NULL>",
+            ),
+        ),
         (
             "(c.dti, c.k + 1) >= (e.s, e.k)",
             "(named_struct(dti, dti, col2, (k + 1)) >= named_struct(s, s, k, k))",
@@ -1015,37 +1098,47 @@ fn each_side_sorts_by_its_operand_as_written() {
     );
     // U2: per key; 25 stops at '100' after '10'.
     assert_eq!(
-        r("SELECT t.k, t.v, q.w FROM (SELECT * FROM VALUES (1, 11), (1, 3), (1, 25), (1, 1), \
+        r(
+            "SELECT t.k, t.v, q.w FROM (SELECT * FROM VALUES (1, 11), (1, 3), (1, 25), (1, 1), \
            (2, 95) t(k, v)) t LEFT ASOF JOIN (SELECT * FROM VALUES (1, '10'), (1, '2'), (1, '9'), \
            (1, '30'), (1, '100'), (2, '9'), (2, '90'), (2, '100') r(k, w)) q \
-           MATCH_CONDITION (t.v >= q.w) ON t.k = q.k"),
+           MATCH_CONDITION (t.v >= q.w) ON t.k = q.k"
+        ),
         ["1|1|NULL", "1|11|10", "1|25|10", "1|3|2", "2|95|90"]
     );
     // U3: a pair failing the residual neither sets the best row nor ends the scan.
     assert_eq!(
-        r("SELECT t.v, q.w FROM (SELECT * FROM VALUES (11), (25) t(v)) t LEFT ASOF JOIN \
+        r(
+            "SELECT t.v, q.w FROM (SELECT * FROM VALUES (11), (25) t(v)) t LEFT ASOF JOIN \
            (SELECT * FROM VALUES ('10', true), ('2', true), ('20', false), ('21', true), \
-           ('3', true), ('9', false) r(w, ok)) q MATCH_CONDITION (t.v >= q.w) ON q.ok"),
+           ('3', true), ('9', false) r(w, ok)) q MATCH_CONDITION (t.v >= q.w) ON q.ok"
+        ),
         ["11|2", "25|3"]
     );
     // RESC (rule c) and RESC2 (the stop at '20' after '2').
     assert_eq!(
-        r("SELECT t.v, q.w FROM (SELECT * FROM VALUES (11) a(v)) t LEFT ASOF JOIN \
+        r(
+            "SELECT t.v, q.w FROM (SELECT * FROM VALUES (11) a(v)) t LEFT ASOF JOIN \
            (SELECT * FROM VALUES ('10', true), ('2', true), ('3', false), ('9', true) r(w, ok)) q \
-           MATCH_CONDITION (t.v >= q.w) ON q.ok"),
+           MATCH_CONDITION (t.v >= q.w) ON q.ok"
+        ),
         ["11|9"]
     );
     assert_eq!(
-        r("SELECT t.v, q.w FROM (SELECT * FROM VALUES (11) a(v)) t LEFT ASOF JOIN \
+        r(
+            "SELECT t.v, q.w FROM (SELECT * FROM VALUES (11) a(v)) t LEFT ASOF JOIN \
            (SELECT * FROM VALUES ('10', true), ('2', true), ('20', true), ('9', false) r(w, ok)) q \
-           MATCH_CONDITION (t.v >= q.w) ON q.ok"),
+           MATCH_CONDITION (t.v >= q.w) ON q.ok"
+        ),
         ["11|2"]
     );
     // U4: strict.
     assert_eq!(
-        r("SELECT t.v, q.w FROM (SELECT * FROM VALUES (11), (25) t(v)) t LEFT ASOF JOIN \
+        r(
+            "SELECT t.v, q.w FROM (SELECT * FROM VALUES (11), (25) t(v)) t LEFT ASOF JOIN \
            (SELECT * FROM VALUES ('10'), ('2'), ('21'), ('3'), ('9') r(w)) q \
-           MATCH_CONDITION (t.v > q.w)"),
+           MATCH_CONDITION (t.v > q.w)"
+        ),
         ["11|2", "25|9"]
     );
     // U5, U6: widening casts keep the order (the two-pointer walk), both directions.
@@ -1077,9 +1170,11 @@ fn each_side_sorts_by_its_operand_as_written() {
     );
     // STOP: the scan ends at '7' and never casts 'abc'; key 2 has no left row.
     assert_eq!(
-        r("SELECT t.v, q.w FROM (SELECT * FROM VALUES (1, 5) a(k, v)) t ASOF JOIN \
+        r(
+            "SELECT t.v, q.w FROM (SELECT * FROM VALUES (1, 5) a(k, v)) t ASOF JOIN \
            (SELECT * FROM VALUES (1,'1'), (1,'7'), (1,'abc'), (2,'zzz') r(k, w)) q \
-           MATCH_CONDITION (t.v >= q.w) ON t.k = q.k"),
+           MATCH_CONDITION (t.v >= q.w) ON t.k = q.k"
+        ),
         ["5|1"]
     );
     // U7: a left value that does not cast raises, as in Spark.
@@ -1114,26 +1209,34 @@ fn a_null_comparison_ends_the_scan_without_ansi() {
     rows(&s, "SET spark.sql.ansi.enabled=false");
     let r = |sql: &str| rows(&s, sql);
     assert_eq!(
-        r("SELECT t.v, q.w FROM (SELECT * FROM VALUES (11), (25) t(v)) t LEFT ASOF JOIN \
+        r(
+            "SELECT t.v, q.w FROM (SELECT * FROM VALUES (11), (25) t(v)) t LEFT ASOF JOIN \
            (SELECT * FROM VALUES ('10'), ('2'), ('3'), ('x'), ('9') r(w)) q \
-           MATCH_CONDITION (t.v >= q.w)"),
+           MATCH_CONDITION (t.v >= q.w)"
+        ),
         ["11|9", "25|9"]
     );
     assert_eq!(
-        r("SELECT t.v, q.w FROM (SELECT * FROM VALUES ('5'), ('x'), ('30'), (NULL) t(v)) t \
+        r(
+            "SELECT t.v, q.w FROM (SELECT * FROM VALUES ('5'), ('x'), ('30'), (NULL) t(v)) t \
            LEFT ASOF JOIN (SELECT * FROM VALUES (3), (4), (20) r(w)) q \
-           MATCH_CONDITION (t.v >= q.w)"),
+           MATCH_CONDITION (t.v >= q.w)"
+        ),
         ["30|20", "5|4", "NULL|NULL", "x|NULL"]
     );
     assert_eq!(
-        r("SELECT t.v, q.w FROM (SELECT * FROM VALUES (11) t(v)) t ASOF JOIN \
-           (SELECT * FROM VALUES ('x'), ('10'), ('2') r(w)) q MATCH_CONDITION (t.v >= q.w)"),
+        r(
+            "SELECT t.v, q.w FROM (SELECT * FROM VALUES (11) t(v)) t ASOF JOIN \
+           (SELECT * FROM VALUES ('x'), ('10'), ('2') r(w)) q MATCH_CONDITION (t.v >= q.w)"
+        ),
         ["11|2"]
     );
     assert_eq!(
-        r("SELECT t.v, q.w FROM (SELECT * FROM VALUES (1, 5) a(k, v)) t LEFT ASOF JOIN \
+        r(
+            "SELECT t.v, q.w FROM (SELECT * FROM VALUES (1, 5) a(k, v)) t LEFT ASOF JOIN \
            (SELECT * FROM VALUES (1, '1'), (1, '3x'), (1, '4') r(k, w)) q \
-           MATCH_CONDITION (t.v >= q.w) ON t.k = q.k"),
+           MATCH_CONDITION (t.v >= q.w) ON t.k = q.k"
+        ),
         ["5|1"]
     );
 }
@@ -1147,9 +1250,11 @@ fn a_local_time_in_a_daylight_saving_gap_takes_the_scan() {
     rows(&s, "SET spark.sql.session.timeZone=America/Los_Angeles");
     let r = |sql: &str| rows(&s, sql);
     assert_eq!(
-        r("SELECT t.k, CAST(t.v AS STRING), CAST(q.w AS STRING) FROM (SELECT * FROM VALUES \
+        r(
+            "SELECT t.k, CAST(t.v AS STRING), CAST(q.w AS STRING) FROM (SELECT * FROM VALUES \
            (1, TIMESTAMP_NTZ'2024-03-10 02:30:00'), (2, TIMESTAMP_NTZ'2024-03-10 03:00:00') a(k, v)) t \
-           ASOF JOIN (SELECT TIMESTAMP'2024-03-10 03:15:00' w) q MATCH_CONDITION (t.v >= q.w)"),
+           ASOF JOIN (SELECT TIMESTAMP'2024-03-10 03:15:00' w) q MATCH_CONDITION (t.v >= q.w)"
+        ),
         ["1|2024-03-10 02:30:00|2024-03-10 03:15:00"]
     );
     let t = "(SELECT * FROM VALUES (1, TIMESTAMP'2021-03-14 03:15:00') AS t(k, ts)) t";
@@ -1170,5 +1275,42 @@ fn a_local_time_in_a_daylight_saving_gap_takes_the_scan() {
              ON t.k = q.k"
         );
         assert_eq!(r(&sql), [want], "{sql}");
+    }
+}
+
+/// Review 5 finding 2: a typed literal on either side of the comparison is a value, not a NULL
+/// (Spark 4.3.0 rows: `rev-f2-asof-ref3/l.out`, each statement returns `(1, 1)`).
+#[test]
+fn a_typed_literal_operand_keeps_its_type() {
+    let s = session();
+    for sql in [
+        "CREATE TEMPORARY VIEW lt AS SELECT * FROM VALUES (1, TIMESTAMP'2024-01-01 10:00:00', \
+         DATE'2024-01-01') AS lt(k, trade_time, d)",
+        "CREATE TEMPORARY VIEW lq AS SELECT * FROM VALUES (1, TIMESTAMP'2024-01-01 09:00:00', \
+         DATE'2024-01-01') AS lq(k, quote_time, d)",
+        "CREATE TEMPORARY VIEW la AS SELECT * FROM VALUES (1, INTERVAL '3' HOUR, \
+         INTERVAL '1' MONTH, X'01') AS la(k, dti, ymi, bin)",
+        "CREATE TEMPORARY VIEW lb AS SELECT * FROM VALUES (1, INTERVAL '2' HOUR, \
+         INTERVAL '1' YEAR, X'02') AS lb(k, dti, ymi, bin)",
+    ] {
+        block_on(async { s.sql(sql).await?.collect().await })
+            .unwrap_or_else(|e| panic!("{sql}: {e}"));
+    }
+    let tq = "SELECT t.k, q.k FROM lt t ASOF JOIN lq q MATCH_CONDITION";
+    let ab = "SELECT a.k, b.k FROM la a ASOF JOIN lb b MATCH_CONDITION";
+    for (head, cond) in [
+        (tq, "t.trade_time >= TIMESTAMP'2024-01-01 09:30:00'"),
+        (tq, "TIMESTAMP'2024-01-01 09:30:00' >= q.quote_time"),
+        (tq, "t.d >= DATE'2023-12-31'"),
+        (tq, "DATE'2024-01-05' >= q.d"),
+        (ab, "a.dti >= INTERVAL '1' HOUR"),
+        (ab, "INTERVAL '5' HOUR >= b.dti"),
+        (ab, "INTERVAL '5' YEAR >= b.ymi"),
+        (ab, "a.bin >= X'00'"),
+        (ab, "X'05' >= b.bin"),
+    ] {
+        let side = if head == tq { "t.k = q.k" } else { "a.k = b.k" };
+        let sql = format!("{head} ({cond}) ON {side}");
+        assert_eq!(rows(&s, &sql), ["1|1"], "{sql}");
     }
 }

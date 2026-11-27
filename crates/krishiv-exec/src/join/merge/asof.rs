@@ -186,11 +186,13 @@ impl AsOfMerge {
                 "an as-of join out of its sort order other than a SQL backward one".to_owned(),
             ));
         }
-        let sort_columns = spec.sort.map_or((spec.left_column, spec.right_column), |s| {
-            (s.left, s.right)
-        });
+        let sort_columns = spec
+            .sort
+            .map_or((spec.left_column, spec.right_column), |s| (s.left, s.right));
         if sort_columns.0 >= left.fields().len() || sort_columns.1 >= right.fields().len() {
-            return Err(internal("an as-of join's sort columns are missing".to_owned()));
+            return Err(internal(
+                "an as-of join's sort columns are missing".to_owned(),
+            ));
         }
         Ok(Self {
             left_column: spec.left_column,
@@ -711,7 +713,8 @@ impl Merge {
             let r = self.chunks.row;
             let rv = (!right_nulls.as_ref().is_some_and(|n| n.is_null(r)))
                 .then(|| values.row(r - c.start));
-            let passes = |k: usize| rv.is_some_and(|v| a.passes(v.data(), slice.values.row(k).data()));
+            let passes =
+                |k: usize| rv.is_some_and(|v| a.passes(v.data(), slice.values.row(k).data()));
             if !pairs.is_empty() {
                 // A row this right row would decide waits on its pairs' residual; and the batch
                 // stays bounded.

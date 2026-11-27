@@ -133,8 +133,17 @@ impl Planner<'_> {
                         fixed_zone,
                     )
                 };
-                let monotone = keeps(&probe, left, left_column) && keeps(&build, right, right_column);
-                (probe, build, Some(AsOfSortColumns { left, right, monotone }))
+                let monotone =
+                    keeps(&probe, left, left_column) && keeps(&build, right, right_column);
+                (
+                    probe,
+                    build,
+                    Some(AsOfSortColumns {
+                        left,
+                        right,
+                        monotone,
+                    }),
+                )
             }
         };
         if sort.is_some_and(|s| !s.monotone) {
@@ -329,7 +338,11 @@ fn distance_is_floating(d: &Expr) -> bool {
 /// `TIMESTAMP` in a fixed-offset session zone (a region's DST gap moves local times forward). A cast
 /// may map two values to one (a large `BIGINT` to `DOUBLE`) and still keep the order: ties sort as
 /// Spark sorts them, by the value before the cast.
-fn keeps_order(from: &arrow_schema::DataType, to: &arrow_schema::DataType, fixed_zone: bool) -> bool {
+fn keeps_order(
+    from: &arrow_schema::DataType,
+    to: &arrow_schema::DataType,
+    fixed_zone: bool,
+) -> bool {
     use arrow_schema::DataType as A;
     let int_width = |t: &A| match t {
         A::Int8 => Some(1),
@@ -338,7 +351,12 @@ fn keeps_order(from: &arrow_schema::DataType, to: &arrow_schema::DataType, fixed
         A::Int64 => Some(8),
         _ => None,
     };
-    let decimal = |t: &A| matches!(t, A::Decimal32(..) | A::Decimal64(..) | A::Decimal128(..) | A::Decimal256(..));
+    let decimal = |t: &A| {
+        matches!(
+            t,
+            A::Decimal32(..) | A::Decimal64(..) | A::Decimal128(..) | A::Decimal256(..)
+        )
+    };
     if from == to {
         return true;
     }
