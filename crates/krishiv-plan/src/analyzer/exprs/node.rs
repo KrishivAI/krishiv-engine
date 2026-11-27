@@ -1643,7 +1643,12 @@ impl Resolver<'_> {
                     ));
                 }
                 let child = &kids[0].ty;
-                if let Err(bad) = coerce::can_cast(child.data_type.as_ref(), to, mode) {
+                if let Err(bad) = coerce::can_cast(
+                    child.data_type.as_ref(),
+                    to,
+                    mode,
+                    self.ctx.profile >= crate::analyzer::SparkProfile::V4_3,
+                ) {
                     return Err(bad_cast(
                         bad,
                         e.origin,
@@ -1651,7 +1656,6 @@ impl Resolver<'_> {
                         to,
                         mode,
                         self.ctx.conf.session_zone,
-                        self.ctx.profile >= crate::analyzer::SparkProfile::V4_3,
                     ));
                 }
                 let nullable = child.nullable

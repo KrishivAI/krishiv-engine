@@ -130,7 +130,7 @@ fn current_ndv(m: &TableMetadata) -> HashMap<i32, u64> {
 
 /// Checks the file's sizes and that every blob reads back with the estimate its `ndv` names.
 fn check_file(env: &Env, file: &StatisticsFile) {
-    let path = file.statistics_path.strip_prefix("file://").unwrap();
+    let path = super::sink_tests::local_path(&file.statistics_path);
     let bytes = std::fs::read(path).unwrap();
     assert_eq!(bytes.len() as i64, file.file_size_in_bytes);
     let footer = bytes.len() - usize::try_from(file.file_footer_size_in_bytes).unwrap();
@@ -388,7 +388,7 @@ fn a_failed_write_deletes_its_statistics_files() {
 #[test]
 fn a_failed_puffin_write_still_commits_the_data() {
     let mut c = case(Some(0..100), 50..120);
-    std::fs::create_dir_all(c.stats(1).strip_prefix("file://").unwrap()).unwrap();
+    std::fs::create_dir_all(super::sink_tests::local_path(&c.stats(1))).unwrap();
     let m = c.run().unwrap();
     assert!(m.statistics_for_snapshot(OURS).is_none());
     c.check(&[INIT, MINE]);
@@ -404,7 +404,7 @@ fn an_unreadable_parent_file_still_commits_the_data() {
         .unwrap()
         .statistics_path
         .clone();
-    std::fs::remove_file(parent.strip_prefix("file://").unwrap()).unwrap();
+    std::fs::remove_file(super::sink_tests::local_path(&parent)).unwrap();
     let m = c.run().unwrap();
     assert!(m.statistics_for_snapshot(OURS).is_none());
     assert!(!exists(&c.stats(1)));

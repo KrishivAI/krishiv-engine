@@ -50,6 +50,8 @@ use krishiv_kernels::interval::{interval_part, interval_part_type};
 use super::args::{Inputs, internal, is_string, is_timestamp, to_utf8, unsupported};
 use super::{BindArg, BindOptions, Binding, FamilyResult, bad_types, listed};
 
+mod time_format;
+
 /// Every name this family binds.
 pub(super) const NAMES: &[&str] = &[
     "date_add",
@@ -1561,6 +1563,16 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                     )
                 },
             )
+        }
+        // Spark 4.3: a `TIME` prints through `TimeFormatter` (the `java.time` pattern under any
+        // parser policy) over its nanoseconds; a pattern with a date or zone field the time
+        // cannot fill is `INVALID_PARAMETER_VALUE.PATTERN` (`DateFormatClass.formatTimeWithError`).
+        ("date_format", [DataType::Time64(TimeUnit::Nanosecond), s]) if is_string(s) => {
+            let pat = match pattern_arg(args, 1, Purpose::FormatTime, false) {
+                Ok(p) => p,
+                Err(e) => return Some((listed, Err(e))),
+            };
+            time_format::binding(pat)
         }
         ("date_format", [t, s])
             if is_string(s) && (is_date_or_timestamp_or_string(t) || super::nanos::is_nanos(t)) =>

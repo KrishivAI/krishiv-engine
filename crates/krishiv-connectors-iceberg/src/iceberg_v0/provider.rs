@@ -283,6 +283,56 @@ impl IcebergTableProvider {
             .collect()
     }
 
+    /// Every live data file of the pinned snapshot as a `rewrite_data_files` candidate, with the
+    /// `_krishiv_row_file` value that restricts a [`Self::row_level_scan`] to it. `default_spec`
+    /// is the table's default partition spec id.
+    ///
+    /// # Errors
+    /// The delete assignment's errors.
+    pub(super) fn rewrite_candidates(
+        &self,
+        default_spec: i32,
+    ) -> Result<Vec<(super::maintenance::rewrite_plan::CandidateFile, Vec<u8>)>, KrishivError> {
+        use crate::plan::PartitionValue;
+        let mut out = Vec::with_capacity(self.scan.entries.len());
+        for (e, f) in self.scan.entries.iter().zip(self.scan.files.iter()) {
+            let d = self.scan.index.for_data_file(e)?;
+            let file_scoped =
+                |x: &Arc<crate::plan::DeleteFileEntry>| x.entry.file.referenced_data_file.is_some();
+            let dv = d.deletion_vector.iter();
+            let scoped: u64 = dv
+                .chain(d.position_deletes.iter().filter(|x| file_scoped(x)))
+                .map(|x| x.entry.file.record_count)
+                .sum();
+            let partition = e
+                .file
+                .partition
+                .iter()
+                .map(|v| match v {
+                    PartitionValue::Null => "null".to_owned(),
+                    PartitionValue::Value(b) => format!("v{b:?}"),
+                    PartitionValue::Unreadable => "unreadable".to_owned(),
+                })
+                .collect();
+            let saturate = |n: u64| i64::try_from(n).unwrap_or(i64::MAX);
+            out.push((
+                super::maintenance::rewrite_plan::CandidateFile {
+                    path: e.file.path.clone(),
+                    partition,
+                    default_spec: e.file.spec_id == default_spec,
+                    length: saturate(e.file.size),
+                    record_count: saturate(e.file.record_count),
+                    delete_files: d.position_deletes.len()
+                        + d.equality_deletes.len()
+                        + usize::from(d.deletion_vector.is_some()),
+                    file_scoped_deleted_records: saturate(scoped),
+                },
+                RowFile::encode(f),
+            ));
+        }
+        Ok(out)
+    }
+
     /// The scan's ordinals of `files`, sorted, each once.
     fn ordinals_of(&self, files: &[Vec<u8>]) -> Result<Vec<usize>, KrishivError> {
         let mut out = Vec::with_capacity(files.len());

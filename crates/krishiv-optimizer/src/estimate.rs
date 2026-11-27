@@ -33,9 +33,10 @@ use krishiv_plan::{
 };
 use krishiv_types::{DataType, DecimalType};
 
-use crate::expr::{builtin, conjuncts, output_of, references, strip_alias};
+use crate::expr::{and_all, builtin, conjuncts, output_of, references, strip_alias};
 use crate::limit::limit_value;
 use crate::narrow::{View, apply};
+use crate::share_literal::{LITERAL_PREFIX, instance_of, reader_keys};
 use crate::share_scan::SHARED_SCAN_PREFIX;
 use crate::stats::{
     AttrStats, DEFAULT_ROWS, RelStats, StatSource, Statistics, cap, cse_definitions, number,
@@ -449,6 +450,58 @@ impl<'a> Estimator<'a> {
             .is_none_or(|(_, _, r)| *r)
     }
 
+    /// A reader of a `ShareLiteralInstances` definition, `Filter(g = k)` over a `CteRef` of a
+    /// `__shared_lit_*` definition, estimated as the instance it replaced (the definition with
+    /// its `g' IN (..)` narrowed back to `g' = k`, [`instance_of`]), then the reader's other
+    /// conjuncts. Read as the definition, the reader holds every literal's groups before its
+    /// filter, so a second join ordering would pair the instances differently from the first
+    /// (TPC-DS q74). `None` for any other filter.
+    fn literal_reader(
+        &mut self,
+        input: &Arc<LogicalPlan>,
+        predicate: &Arc<Expr>,
+    ) -> Option<RelStats> {
+        let PlanNode::CteRef(r) = &input.node else {
+            return None;
+        };
+        if !r.name.starts_with(LITERAL_PREFIX) || self.open.contains(&r.source) {
+            return None;
+        }
+        let outputs: Vec<AttrId> = r.output.iter().map(|o| o.id).collect();
+        let def = self.ctes.get(&r.source).cloned()?;
+        // The first conjunct that narrows the definition back is the reader's own key (another
+        // literal comparison of the reader's may come first).
+        let (own, instance) =
+            reader_keys(predicate, &outputs)
+                .into_iter()
+                .find_map(|(c, g, k)| {
+                    let source = *r.source.get(outputs.iter().position(|&o| o == g)?)?;
+                    instance_of(&def, source, &k).map(|i| (c, i))
+                })?;
+        self.open.insert(r.source.clone());
+        let est = self.plan(&instance);
+        self.open.remove(&r.source);
+        let read = RelStats {
+            rows: est.rows,
+            cols: r
+                .source
+                .iter()
+                .zip(&r.output)
+                .filter_map(|(s, o)| est.cols.get(s).map(|c| (o.id, c.clone())))
+                .collect(),
+            from_statistics: est.from_statistics,
+            unfiltered_rows: est.unfiltered_rows,
+        };
+        let rest: Vec<Arc<Expr>> = conjuncts(predicate)
+            .into_iter()
+            .filter(|c| !Arc::ptr_eq(c, &own))
+            .collect();
+        Some(match and_all(rest) {
+            Some(p) => filtered(&read, &p, self.propagate),
+            None => read,
+        })
+    }
+
     fn compute(&mut self, p: &LogicalPlan) -> RelStats {
         let ids = || {
             p.resolved_output()
@@ -459,6 +512,9 @@ impl<'a> Estimator<'a> {
         match &p.node {
             PlanNode::Scan(scan) => self.scan(scan),
             PlanNode::Filter { input, predicate } => {
+                if let Some(est) = self.literal_reader(input, predicate) {
+                    return est;
+                }
                 let est = self.plan(input);
                 // Estimates see through common-subexpression projections:
                 // the column holds its definition's values.

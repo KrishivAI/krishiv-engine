@@ -54,6 +54,12 @@ fn connected(masks: &[Set], a: Set, b: Set) -> bool {
         .any(|&m| m & !s == 0 && m & a != 0 && m & b != 0)
 }
 
+/// Whether `s` holds some of `block`'s inputs, not all, and some others.
+fn splits_block(s: Set, block: Set) -> bool {
+    let inside = s & block;
+    inside != 0 && inside != block && s & !block != 0
+}
+
 /// Whether costs `(cost, tie)` are below `(other, other_tie)`: the cost
 /// decides unless the two are equal, up to the rounding of summing the same
 /// numbers in another order (a relative 1e-9, three orders under the
@@ -92,6 +98,10 @@ pub(super) struct Shape<'a> {
     pub(super) tie_result: &'a dyn Fn(f64) -> f64,
     /// The bytes of building a join input of `rows` rows and `width` bytes per row.
     pub(super) tie_bytes: &'a dyn Fn(f64, f64) -> f64,
+    /// Sets of inputs every plan joins on their own first (0: none): a set holding some of
+    /// one's inputs and some others gets no plan, unless it holds all of them
+    /// ([`super::prune_first`]; the sets are nested or disjoint).
+    pub(super) blocks: [Set; 2],
 }
 
 /// A set that has a plan: its rows, its width and the bytes of building it.
@@ -129,7 +139,7 @@ pub(super) fn dpsub(n: usize, masks: &[Set], shape: &Shape<'_>) -> (HashMap<Set,
     }
     let mut work = Work::default();
     for s in 1..=full {
-        if s.count_ones() < 2 {
+        if s.count_ones() < 2 || shape.blocks.iter().any(|&b| splits_block(s, b)) {
             continue;
         }
         let mut found: Option<Best> = None;
@@ -242,7 +252,35 @@ mod tests {
             ties: false,
             tie_result: &|_| 0.0,
             tie_bytes: &|_, _| 0.0,
+            blocks: [0, 0],
         }
+    }
+
+    /// With a block, no planned set holds part of it and anything else, and the full set still
+    /// has a plan whose block is one subtree.
+    #[test]
+    fn a_block_is_planned_on_its_own_first() {
+        // A chain 0-1-2-3 where joining 1 with 2 first is dearest; block {1, 2}.
+        let n = 4;
+        let masks: Vec<Set> = vec![0b0011, 0b0110, 0b1100];
+        let rows_of = estimator(
+            vec![10.0, 1000.0, 1000.0, 10.0],
+            vec![(0b0011, 0.001), (0b0110, 0.1), (0b1100, 0.001)],
+        );
+        let free = by_rows(&rows_of);
+        let (t, _) = dpsub(n, &masks, &free);
+        let blocked = Shape {
+            blocks: [0b0110, 0],
+            ..by_rows(&rows_of)
+        };
+        let (b, _) = dpsub(n, &masks, &blocked);
+        assert!(t.contains_key(&0b0011), "unconstrained plans {{0, 1}}");
+        // The chain's connected sets but {0, 1} and {2, 3}, which split
+        // the block.
+        let mut planned: Vec<Set> = b.keys().copied().collect();
+        planned.sort_unstable();
+        assert_eq!(planned, [1, 2, 4, 6, 7, 8, 14, 15]);
+        assert!(b[&0b1111].cost >= t[&0b1111].cost);
     }
 
     #[test]

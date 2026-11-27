@@ -33,55 +33,11 @@ type Rows = Vec<Vec<Option<String>>>;
 /// must be exactly `how` (`Mismatch::got`); a fixed gap, or one that differs in another way, fails
 /// the test.
 const KNOWN_GAPS: &[(&str, &str, &str)] = &[
-    // `min`/`max` have no `Time64` accumulator yet.
-    (
-        "4.2.0",
-        "max_distinct",
-        "[KRISHIV_UNSUPPORTED_FEATURE] The feature Max of Time64(ns) is not supported by Krishiv yet.",
-    ),
-    (
-        "4.3.0",
-        "max_distinct",
-        "[KRISHIV_UNSUPPORTED_FEATURE] The feature Max of Time64(ns) is not supported by Krishiv yet.",
-    ),
-    (
-        "4.2.0",
-        "max_only",
-        "[KRISHIV_UNSUPPORTED_FEATURE] The feature Max of Time64(ns) is not supported by Krishiv yet.",
-    ),
-    (
-        "4.3.0",
-        "max_only",
-        "[KRISHIV_UNSUPPORTED_FEATURE] The feature Max of Time64(ns) is not supported by Krishiv yet.",
-    ),
-    // The nanosecond timestamp types are Krishiv 0.3.1 (scope note P3-R3): with
-    // `spark.sql.timestampNanosTypes.enabled` on, Spark 4.3 builds them; Krishiv refuses by name.
-    (
-        "4.3.0",
-        "ts_ntz9_nanos_on",
-        "[KRISHIV_UNSUPPORTED_FEATURE] The feature nanosecond-precision timestamp types (Krishiv 0.3.1) is not supported by Krishiv yet.",
-    ),
-    (
-        "4.3.0",
-        "ts_ltz7_nanos_on",
-        "[KRISHIV_UNSUPPORTED_FEATURE] The feature nanosecond-precision timestamp types (Krishiv 0.3.1) is not supported by Krishiv yet.",
-    ),
     // `date_format` refuses a TIME before the implicit cast Spark tries (4.2: the class differs).
     (
         "4.2.0",
         "date_format",
         "[DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE] Cannot resolve \"date_format(TIME '12:00:00.123456789', HH:mm:ss.SSSSSSSSS)\" due to data type mismatch: The first parameter requires the (\"STRING\" or \"DATE\" or \"TIMESTAMP\" or \"TIMESTAMP_NTZ\") type, however \"TIME '12:00:00.123456'\" has the type \"TIME(6)\".",
-    ),
-    (
-        "4.3.0",
-        "date_format",
-        "[KRISHIV_UNSUPPORTED_FEATURE] The feature date_format of a TIME value (Spark 4.3) is not supported by Krishiv yet.",
-    ),
-    // No cast from TIME to TIMESTAMP_NTZ yet.
-    (
-        "4.3.0",
-        "to_timestamp_ntz",
-        "[KRISHIV_UNSUPPORTED_FEATURE] The feature a cast from TIME to TIMESTAMP_NTZ (Spark 4.3) is not supported by Krishiv yet.",
     ),
     // A bare TIMESTAMP does not follow `spark.sql.timestampType` yet.
     (
@@ -120,60 +76,6 @@ const KNOWN_GAPS: &[(&str, &str, &str)] = &[
         "current_timestamp_dayofweek",
         "[KRISHIV_UNSUPPORTED_FEATURE] The feature `current_timestamp(dayofweek(DATE '1970-01-02'))` with a precision Krishiv cannot fold is not supported by Krishiv yet.",
     ),
-    // Nullability (review round 6): Spark's TIME functions over a literal report a nullable result
-    // (`extract`/`date_part`, `hour`/`minute`/`second`, `time_diff`, `time_trunc`, `time_to_micros`,
-    // `to_time`, `make_time`); Krishiv's analysis marks them not nullable.
-    (
-        "4.2.0",
-        "date_part_second",
-        "schema [(\"decimal(8,6)\", false)]",
-    ),
-    (
-        "4.2.0",
-        "fields",
-        "schema [(\"int\", false), (\"int\", false), (\"int\", false), (\"string\", false)]",
-    ),
-    ("4.2.0", "time_diff", "schema [(\"bigint\", false)]"),
-    (
-        "4.2.0",
-        "time_trunc",
-        "schema [(\"string\", false), (\"string\", false), (\"string\", false)]",
-    ),
-    ("4.2.0", "time_to_micros", "schema [(\"bigint\", false)]"),
-    (
-        "4.2.0",
-        "to_time",
-        "schema [(\"string\", false), (\"string\", false), (\"string\", false)]",
-    ),
-    ("4.2.0", "make_time", "schema [(\"string\", false)]"),
-    (
-        "4.3.0",
-        "extract_second",
-        "schema [(\"decimal(11,9)\", false), (\"string\", false), (\"string\", false)]",
-    ),
-    (
-        "4.3.0",
-        "date_part_second",
-        "schema [(\"decimal(11,9)\", false)]",
-    ),
-    (
-        "4.3.0",
-        "fields",
-        "schema [(\"int\", false), (\"int\", false), (\"int\", false), (\"string\", false)]",
-    ),
-    ("4.3.0", "time_diff", "schema [(\"bigint\", false)]"),
-    (
-        "4.3.0",
-        "time_trunc",
-        "schema [(\"string\", false), (\"string\", false), (\"string\", false)]",
-    ),
-    ("4.3.0", "time_to_micros", "schema [(\"bigint\", false)]"),
-    (
-        "4.3.0",
-        "to_time",
-        "schema [(\"string\", false), (\"string\", false), (\"string\", false)]",
-    ),
-    ("4.3.0", "make_time", "schema [(\"string\", false)]"),
     // `instr` and `locate` of a collated column give a NOT NULL result in Spark; Krishiv's is nullable.
     ("4.2.0", "instr_collated", "schema [(\"int\", true)]"),
     (

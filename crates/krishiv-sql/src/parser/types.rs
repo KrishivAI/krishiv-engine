@@ -312,6 +312,7 @@ impl Parser<'_> {
                 kind,
                 collation,
                 span: p.span_from(start),
+                nanos_types: p.opts.spark_4_3 && p.opts.timestamp_nanos_types,
             })
         })
     }

@@ -1046,3 +1046,58 @@ fn an_observation_below_an_exchange_reaches_the_query() {
         .value(0);
     assert_eq!(n, grouped);
 }
+
+/// A residual bound (design P3-0.3.1 D2) collected by the build exchange in
+/// an earlier stage is a bound over the residual's build column, not over
+/// the equality key: `l_suppkey > o_custkey` bounds `l_suppkey` by
+/// `min(o_custkey)`. Over the key it would be `min(o_orderkey)`, above
+/// every `l_suppkey` of these orders, and drop matching rows.
+#[test]
+fn a_residual_bound_crossing_stages_bounds_its_own_column() {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let tpch = tpch(&rt);
+    let executor = TokioExecutor::new(&ExecutorConfig::default()).unwrap();
+    let plain = QueryRunner::new(Arc::clone(&executor) as _);
+    let split = StageRunner::new(Arc::clone(&executor) as _, 4)
+        .unwrap()
+        .with_splits(Arc::new(dealer(&tpch.files)));
+    let root: Arc<dyn MemoryPool> = TreePool::new(&MemoryConfig::default());
+    let worker = WorkerContext::new(Arc::clone(&tpch.tables) as _);
+    let mut config = Config::clone(&tpch.config);
+    config
+        .set("spark.sql.autoBroadcastJoinThreshold", "-1")
+        .unwrap();
+    let mut off = config.clone();
+    off.set("krishiv.runtimeFilter.enabled", "false").unwrap();
+    let sql = "SELECT l_orderkey, l_linenumber, l_suppkey, o_custkey FROM lineitem JOIN orders \
+               ON l_orderkey = o_orderkey AND l_suppkey > o_custkey \
+               WHERE o_orderkey > 1000 AND o_orderdate >= DATE '1998-01-01'";
+    let plan = tpch.plan_sql(sql, Arc::new(config)).unwrap();
+    let schemas = krishiv_exec::physical::exchange_schemas(&plan, &worker).unwrap();
+    let stages = fragment(&plan, &schemas).unwrap();
+    let bounds: usize = stages
+        .iter()
+        .map(|s| match s.plan.root() {
+            krishiv_exec::physical::PhysNode::Exchange(e) => e
+                .filters
+                .iter()
+                .filter(|f| f.options.side != krishiv_io::RangeSide::Both)
+                .count(),
+            _ => 0,
+        })
+        .sum();
+    assert!(bounds > 0, "no residual bound crosses stages:\n{plan}");
+    let sorted = |mut rows: Vec<String>| {
+        rows.sort();
+        rows
+    };
+    let unfiltered = tpch.plan_sql(sql, Arc::new(off)).unwrap();
+    let want = sorted(run(&plain, &unfiltered, &worker, &root, 1).unwrap());
+    assert!(!want.is_empty());
+    let got = sorted(run(&split, &plan, &worker, &root, 2).unwrap());
+    assert_eq!(got, want);
+    assert_eq!(root.reserved(), 0);
+}

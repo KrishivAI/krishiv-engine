@@ -839,6 +839,15 @@ fn a_file_write_is_recorded_once_after_its_commit() {
     assert_eq!(stored[0].state, "finished");
 }
 
+/// Whether any file is under `dir`, at any depth.
+fn has_file(dir: &std::path::Path) -> bool {
+    std::fs::read_dir(dir).is_ok_and(|entries| {
+        entries
+            .flatten()
+            .any(|e| e.file_type().is_ok_and(|t| t.is_file()) || has_file(&e.path()))
+    })
+}
+
 #[test]
 fn a_dropped_file_write_is_recorded_cancelled_or_finished_never_lost_or_doubled() {
     use futures::FutureExt;
@@ -862,6 +871,25 @@ fn a_dropped_file_write_is_recorded_cancelled_or_finished_never_lost_or_doubled(
         drop(write);
         recorded_writes += 1;
     }
+    // The drops above race the query's start, and on a loaded machine all of them can come first. This one waits until
+    // its write has put a file under the target, so its query is under way and the drop has an entry to cancel.
+    let target = out.path().join("under-way");
+    let df = block_on(session.sql("SELECT id FROM range(0, 50000000)")).unwrap();
+    let mut write = Box::pin(df.write().parquet(target.to_str().unwrap()));
+    let started = std::time::Instant::now();
+    while !has_file(&target) {
+        assert!(
+            write.as_mut().now_or_never().is_none(),
+            "the write ended before a file of it was seen"
+        );
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(120),
+            "the write made no file"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    drop(write);
+    recorded_writes += 1;
     // A write dropped before its query was registered has nothing to record, so the count is not fixed; what must hold
     // is that no entry is doubled and none is lost once it exists. Wait until the writer has taken everything (the count
     // holds still for a second), not for a fixed time.

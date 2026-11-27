@@ -37,7 +37,7 @@ impl Spiller {
         let per: Vec<Vec<Vec<u32>>> = sources
             .iter()
             .map(|(t, keep)| {
-                let mut parts = t.ids_by_partition(level, 0);
+                let mut parts = t.ids_by_partition(level, self.level0_bits, 0);
                 for ids in &mut parts {
                     ids.retain(|&r| keep(r));
                 }
@@ -97,5 +97,25 @@ impl Spiller {
         self.counters
             .spill_write_max_ns
             .fetch_max(ns, AtomicOrdering::Relaxed);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::{Run, tasks_of};
+
+    /// Runs of one level are one width; a mismatch is an error, not an
+    /// index out of range.
+    #[test]
+    fn tasks_of_refuses_runs_of_different_widths() {
+        let mut tasks = Vec::new();
+        let wide = Run::new((0..64).map(|_| None).collect(), 0);
+        let narrow = Run::new((0..8).map(|_| None).collect(), 1);
+        assert!(tasks_of(vec![wide, narrow], 0, &mut tasks).is_err());
+        let same = (0..2)
+            .map(|p| Run::new((0..64).map(|_| None).collect(), p))
+            .collect();
+        tasks_of(same, 0, &mut tasks).unwrap();
+        assert!(tasks.is_empty(), "no files, no tasks");
     }
 }

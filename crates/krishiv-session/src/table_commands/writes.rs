@@ -347,12 +347,19 @@ impl Session {
                 .retain(|c| !statics.iter().any(|(k, _)| *k == c.name));
             t
         };
+        let legacy_store = env
+            .config
+            .get(&krishiv_common::config::STORE_ASSIGNMENT_POLICY)
+            .and_then(krishiv_common::config::ConfigValue::as_str)
+            .is_some_and(|p| p.eq_ignore_ascii_case("LEGACY"));
         let assignment = assign(
             &assigned,
             listed,
             by_name,
             &output,
             env.analysis.conf.case_sensitive,
+            legacy_store,
+            self.state.profile,
         )?;
         let renamed: Vec<String> = (0..output.len())
             .map(|i| format!("__krishiv_c{i}"))
@@ -379,8 +386,27 @@ impl Session {
                     if output[*i].data_type == column.data_type {
                         value
                     } else {
-                        // Store assignment is ANSI whatever `spark.sql.ansi.enabled` says.
-                        value.cast_ansi(column.data_type.clone())
+                        // Store assignment is ANSI whatever `spark.sql.ansi.enabled` says, and non-ANSI under
+                        // `storeAssignmentPolicy=LEGACY`, where Spark casts each map key, map value, array
+                        // element and struct field on its own.
+                        if legacy_store {
+                            super::assign::legacy_store_cast(
+                                value,
+                                &output[*i].data_type,
+                                &column.data_type,
+                                0,
+                                by_name.then_some(env.analysis.conf.case_sensitive),
+                            )
+                        } else if by_name {
+                            super::assign::ansi_store_cast_by_name(
+                                value,
+                                &output[*i].data_type,
+                                &column.data_type,
+                                env.analysis.conf.case_sensitive,
+                            )
+                        } else {
+                            value.cast_ansi(column.data_type.clone())
+                        }
                     }
                 }
                 Source::Default => match &column.default {

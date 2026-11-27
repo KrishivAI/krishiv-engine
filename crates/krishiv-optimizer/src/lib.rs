@@ -103,9 +103,10 @@ use std::sync::Arc;
 use krishiv_common::config::{
     ANSI_ENABLED, AUTO_BROADCAST_JOIN_THRESHOLD, Config, ConfigValue, DERIVED_KEYS_ABOVE,
     EAGER_AGGREGATION, GROUP_KEY_CODE, GROUP_KEY_CODE_MULTI_DIMENSION, JOIN_COST, JOIN_DP_LIMIT,
-    JOIN_ENUMERATOR, LATE_PAYLOAD_JOIN, PAYLOAD_ABOVE_AGGREGATE, PRE_AGGREGATE_EXPAND,
-    PRESERVED_SIDE_SEMI_JOIN, SEMI_ANTI_JOIN_ORDER, SESSION_TIME_ZONE, SHARE_CTE_INSTANCES,
-    SHARE_FILTERED_SCANS, SHARE_LITERAL_INSTANCES, SHARE_REPEATED_SUBTREES, SUBQUERY_AS_WINDOW,
+    JOIN_ENUMERATOR, JOIN_PRUNE_FIRST, LATE_PAYLOAD_JOIN, PAYLOAD_ABOVE_AGGREGATE,
+    PRE_AGGREGATE_EXPAND, PRESERVED_SIDE_SEMI_JOIN, SEMI_ANTI_JOIN_ORDER, SESSION_TIME_ZONE,
+    SHARE_CTE_INSTANCES, SHARE_FILTERED_SCANS, SHARE_LITERAL_INSTANCES, SHARE_REPEATED_SUBTREES,
+    SUBQUERY_AS_WINDOW,
 };
 use krishiv_common::error::{InternalError, KrishivError};
 use krishiv_plan::{
@@ -138,11 +139,12 @@ pub const MAX_ITERATIONS: usize = 100;
 type Rule = fn(Arc<LogicalPlan>) -> Arc<LogicalPlan>;
 
 /// The rewrite batch, in order, with the rules' names.
-const REWRITE: [(&str, Rule); 9] = [
+const REWRITE: [(&str, Rule); 10] = [
     ("RemoveAlias", project::remove_alias),
     ("CollapseRepartition", repartition::collapse),
     ("ConstantFolding", fold_node),
     ("PruneObservedEmpty", empty::prune),
+    ("DropEmptyUnionInputs", empty::drop_empty_union_inputs),
     ("PushDownFilter", pushdown::push_filter),
     ("PushDownJoinCondition", pushdown::push_join_condition),
     ("PushDownAsOfCondition", pushdown::push_as_of_condition),
@@ -160,6 +162,7 @@ const REWRITE_INSIDE: [Rule; REWRITE.len()] = [
     repartition::collapse,
     fold_node,
     empty::prune,
+    keep,
     pushdown::push_filter_guarded,
     pushdown::push_join_condition_guarded,
     keep,
@@ -1010,6 +1013,9 @@ fn join_settings(config: Option<&Config>, trace: bool) -> join_order::Settings {
             .and_then(ConfigValue::as_bool)
         {
             s.semi_anti_order = on;
+        }
+        if let Some(on) = config.get(&JOIN_PRUNE_FIRST).and_then(ConfigValue::as_bool) {
+            s.prune_first = on;
         }
         if let Some(on) = config
             .get(&PRESERVED_SIDE_SEMI_JOIN)
