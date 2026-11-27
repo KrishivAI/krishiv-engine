@@ -411,6 +411,11 @@ impl Parser<'_> {
         if self.opts.enforce_reserved_keywords || self.kind(0) != Some(TokenKind::Word) {
             return false;
         }
+        // A select list is never empty: a `FROM` that starts one is its first
+        // column (`SELECT FROM t` is the column `FROM` aliased `t`).
+        if self.kw_at(0, "FROM") && self.in_named > 0 && self.item_start == Some(self.pos) {
+            return true;
+        }
         self.column_follows(1)
     }
 

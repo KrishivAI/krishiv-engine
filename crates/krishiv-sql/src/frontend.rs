@@ -50,6 +50,7 @@ impl SqlFrontend for Frontend {
             o.spark_4_3,
             o.timestamp_nanos_types,
             o.time_travel_at_syntax,
+            o.cross_join,
         ]
         .iter()
         .fold(0, |acc, b| acc << 1 | u64::from(*b));
