@@ -127,6 +127,23 @@ fn there_is_no_nanosecond_or_millisecond_type() {
     assert!(to_kernel_type(&ArrowType::Decimal128(10, -1)).is_err());
 }
 
+/// The engine's narrow decimal carriers (`Decimal64` up to precision 18, `Decimal32`) are
+/// Delta decimals too: a `CREATE TABLE .. (d DECIMAL(10,2)) USING delta` was an internal error.
+#[test]
+fn narrow_decimal_carriers_are_delta_decimals() {
+    for t in [ArrowType::Decimal64(10, 2), ArrowType::Decimal32(5, 1)] {
+        let (ArrowType::Decimal64(p, s) | ArrowType::Decimal32(p, s)) = t else {
+            unreachable!()
+        };
+        assert_eq!(
+            to_kernel_type(&t).unwrap(),
+            DataType::decimal(p, u8::try_from(s).unwrap()).unwrap(),
+            "{t}"
+        );
+    }
+    assert!(to_kernel_type(&ArrowType::Decimal64(10, -1)).is_err());
+}
+
 #[test]
 fn field_ids_and_nested_ids_cross_both_ways() {
     let nested = serde_json::json!({"m.key": 101, "m.value": 102, "m.value.element": 103});

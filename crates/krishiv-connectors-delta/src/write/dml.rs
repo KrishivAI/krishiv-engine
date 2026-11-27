@@ -62,10 +62,15 @@
 //!   removed only when its statistics prove it.
 //! - The read predicates are the conjuncts that translate; delta-spark takes every
 //!   partition-only conjunct, so a conjunct of another form makes Krishiv's read wider (safe).
-//! - Deletion vectors are never written: on a table with `delta.enableDeletionVectors = true`
-//!   delta-spark marks the changed rows in deletion vectors (its default
-//!   `...deletionVectors.persistent = true`); Krishiv rewrites the files (merge-on-read is
-//!   PR-37d). The rewrite drops the old files' vectors with them.
+//! - On a table that takes deletion vectors, a statement whose command's
+//!   `...deletionVectors.persistent` conf is on and whose condition has a data predicate marks
+//!   rows instead of rewriting (merge-on-read, `dv`, PR-37d; `RowLevelTable::
+//!   merge_on_read`): its rewrite receives only the rows it deletes or updates with their row
+//!   ids, the vectors are committed through the kernel's `update_deletion_vectors`, and the
+//!   metrics are delta-spark's vector path's (no bytes removed, no row copied; an `UPDATE`
+//!   counts every file it changed as removed). A vector-only `DELETE` commits on a
+//!   change-data-feed table (no adds). An `UPDATE` without a data predicate on such a table
+//!   rewrites whole files and, as delta-spark's, reports no removed bytes.
 //! - `UPDATE` whose condition names only partition columns rewrites the files that hold a row,
 //!   not every file of the partitions (a file whose rows are all deleted is kept).
 
@@ -83,8 +88,8 @@ use krishiv_common::error::{
     KrishivError, TaskWriteFailed, UnsupportedFeatureTableOperation,
 };
 use krishiv_exec::planner::{
-    CardinalityRule, RowIdScan, RowLevelCapabilities, RowLevelCounts, RowLevelOperation,
-    RowLevelProblem, RowLevelTable, RowLevelWrite,
+    CardinalityRule, MERGE_ON_READ_OPTION, RowIdScan, RowLevelCapabilities, RowLevelCounts,
+    RowLevelOperation, RowLevelProblem, RowLevelTable, RowLevelWrite,
 };
 use krishiv_exec::{ScanPushdown, Sink};
 use krishiv_plan::{Expr, ExprNode};
@@ -112,6 +117,10 @@ pub const ROW_LEVEL_SCAN_MS_OPTION: &str = "__krishiv_row_level_scan_ms";
 /// the table's last name part): a two-part column name of the condition starting with it names
 /// a column of the table (absent: only one-part names do).
 pub const ROW_LEVEL_ALIAS_OPTION: &str = "__krishiv_row_level_alias";
+
+/// The row-level option holding the commit's `commitInfo.userMetadata` (the session's
+/// `spark.databricks.delta.commitInfo.userMetadata`; absent: none). Delta's write option name.
+pub const USER_METADATA_OPTION: &str = "userMetadata";
 
 /// Whether `e` holds a subquery (`IN (SELECT ..)`, `EXISTS`, a scalar subquery) anywhere.
 /// delta-spark refuses a `DELETE` or `UPDATE` whose condition has one
@@ -198,6 +207,22 @@ fn touched_paths(table: &DeltaTable, files: &[Vec<u8>]) -> Result<HashSet<String
         .collect()
 }
 
+impl DeltaRowLevel {
+    /// Whether the statement's command writes deletion vectors on this table: the table takes
+    /// them and the command's `...deletionVectors.persistent` conf is on
+    /// (`DeleteCommand.scala:492-495`, `UpdateCommand.scala:398-401`,
+    /// `MergeIntoCommandBase.scala:61-66`).
+    fn writes_dvs(&self) -> bool {
+        let confs = self.table.persistent_dvs();
+        let on = match self.op {
+            RowLevelOperation::Update => confs.update,
+            RowLevelOperation::Merge => confs.merge,
+            _ => confs.delete,
+        };
+        on && self.table.dv_writable()
+    }
+}
+
 impl RowLevelTable for DeltaRowLevel {
     fn capabilities(&self) -> RowLevelCapabilities {
         let mut c = RowLevelCapabilities::copy_on_write(
@@ -205,6 +230,31 @@ impl RowLevelTable for DeltaRowLevel {
         );
         c.idempotent_commit = true;
         c
+    }
+
+    /// A `MERGE` marks rows whenever the command writes vectors; a `DELETE` or `UPDATE` only
+    /// when its condition has a data predicate: without a condition, or with one on partition
+    /// columns only, delta-spark removes (and an `UPDATE` rewrites) whole files
+    /// (`DeleteCommand.scala:196-251`, `UpdateCommand.scala:147-157, 212-216`). The partition
+    /// test is `filter::partition_predicate`'s, as the whole-file `DELETE`'s.
+    fn merge_on_read(&self, condition: Option<&Expr>, qualifier: Option<&str>) -> bool {
+        if !self.writes_dvs() {
+            return false;
+        }
+        if self.op == RowLevelOperation::Merge {
+            return true;
+        }
+        let Some(c) = condition else {
+            return false;
+        };
+        let qualifiers: Vec<&str> = qualifier.into_iter().collect();
+        partition_predicate(
+            c,
+            &self.table.snapshot().schema(),
+            &self.table.partition_columns(),
+            &qualifiers,
+        )
+        .is_err()
     }
 
     fn scan(&self) -> krishiv_exec::Result<Arc<dyn ScanPushdown>> {
@@ -234,6 +284,13 @@ impl RowLevelTable for DeltaRowLevel {
             .and_then(|v| v.parse::<u64>().ok())
             .unwrap_or(0);
         let condition = option(ROW_LEVEL_CONDITION_OPTION).cloned();
+        let user_metadata = option(USER_METADATA_OPTION).cloned();
+        let merge_on_read = option(MERGE_ON_READ_OPTION).is_some_and(|v| v == "true");
+        if merge_on_read && !self.writes_dvs() {
+            return Err(internal(
+                "a merge-on-read rewrite of a table that takes no deletion vectors",
+            ));
+        }
         let qualifiers: Vec<&str> = option(ROW_LEVEL_ALIAS_OPTION)
             .map(String::as_str)
             .into_iter()
@@ -292,7 +349,10 @@ impl RowLevelTable for DeltaRowLevel {
         } else {
             None
         };
-        if cdf && whole_files.is_none() && merge.is_none() {
+        // A `DELETE` that marks rows commits vector updates and removes only: the kernel takes
+        // that on a change-data-feed table (design section 6.2).
+        let dv_only = merge_on_read && request.op == RowLevelOperation::Delete;
+        if cdf && whole_files.is_none() && merge.is_none() && !dv_only {
             let what = match request.op {
                 RowLevelOperation::Delete => "DELETE of rows (not of whole partitions)",
                 _ => "UPDATE",
@@ -309,7 +369,10 @@ impl RowLevelTable for DeltaRowLevel {
             scan_ms,
             refuse_rows: (cdf && merge.is_none()).then(|| request.table_name.clone()),
             merge,
+            merge_on_read,
+            update_writes_dvs: request.op == RowLevelOperation::Update && self.writes_dvs(),
             outcome: Arc::clone(&self.outcome),
+            user_metadata,
         };
         Ok(row_level_sink(
             &self.table,
@@ -507,6 +570,8 @@ fn cdf_refusal(table: &str, what: &str) -> UnsupportedFeatureTableOperation {
 #[derive(Debug)]
 pub(crate) struct RowLevelPlan {
     op: RowLevelOperation,
+    /// The commit's `commitInfo.userMetadata` ([`USER_METADATA_OPTION`]).
+    user_metadata: Option<String>,
     /// The touched files' paths, as the log names them.
     touched: HashSet<String>,
     /// A whole-file `DELETE`: every file (`Some(None)`) or the files of the partitions the
@@ -527,6 +592,12 @@ pub(crate) struct RowLevelPlan {
     refuse_rows: Option<String>,
     /// A `MERGE`'s counts and clauses.
     merge: Option<super::merge::MergeInfo>,
+    /// The rewrite marks rows in deletion vectors ([`super::dv`]).
+    pub(crate) merge_on_read: bool,
+    /// An `UPDATE` of a table whose command writes vectors: a whole-file rewrite then reports
+    /// no removed bytes (delta-spark's `rewriteFiles` makes no remove action there,
+    /// `UpdateCommand.scala:244-262`).
+    update_writes_dvs: bool,
     outcome: Arc<Mutex<Option<Outcome>>>,
 }
 
@@ -596,6 +667,7 @@ struct Removed {
 }
 
 /// The commit of a row-level change, or `None` when it changes nothing.
+#[expect(clippy::too_many_arguments, reason = "the parts of one staged change")]
 pub(super) async fn stage(
     engine: &DeltaEngine,
     started: Instant,
@@ -604,6 +676,7 @@ pub(super) async fn stage(
     written: Written,
     write_id: &str,
     query: &krishiv_exec::QueryContext,
+    dvs: Option<super::dv::DvOutcome>,
 ) -> Result<Option<StagedCommit>, Failure> {
     let (snapshot, name, partitions) = (
         Arc::clone(table.snapshot()),
@@ -630,9 +703,24 @@ pub(super) async fn stage(
             .collect(),
         _ => HashSet::new(),
     };
-    let touched = plan.touched.clone();
+    // Merge-on-read: the fully replaced files go, the others get their new vector.
+    let (touched, dv_paths): (HashSet<String>, HashSet<String>) = match &dvs {
+        Some(d) => (
+            d.removed
+                .iter()
+                .chain(d.descriptors.keys())
+                .cloned()
+                .collect(),
+            d.descriptors.keys().cloned().collect(),
+        ),
+        None => (plan.touched.clone(), HashSet::new()),
+    };
     let read_predicate = plan.read_predicate.clone();
-    let (removes, actions, also_read) = engine
+    let footer = dvs
+        .as_ref()
+        .map(|d| d.footer_records.clone())
+        .unwrap_or_default();
+    let (removes, dv_updates, actions, dv_actions, also_read) = engine
         .delta_blocking(move |e| {
             let exact = match &whole {
                 Some(Some(p)) => Some(ExactCheck::new(e, &snapshot, &partitions, p, &name)?),
@@ -645,7 +733,9 @@ pub(super) async fn stage(
                 None => None,
             };
             let mut out = Vec::new();
+            let mut dv_out = Vec::new();
             let mut actions = Vec::new();
+            let mut dv_actions = Vec::new();
             let mut also_read = Vec::new();
             let mut found = 0_usize;
             // Batch by batch: only the batches holding a removed file are kept.
@@ -669,6 +759,7 @@ pub(super) async fn stage(
                 };
                 let paths = paths_of(&scan_rows)?;
                 let mut keep = vec![false; selection.len()];
+                let mut dv_keep = vec![false; selection.len()];
                 for (i, k) in keep.iter_mut().enumerate() {
                     let live = selection.get(i).copied().unwrap_or(false);
                     let Some(Some(p)) = paths.get(i) else {
@@ -681,6 +772,16 @@ pub(super) async fn stage(
                     let added = extra.get(i).is_some_and(|x| {
                         *x && (matches!(whole, Some(None)) || empty.contains(p.as_str()))
                     });
+                    if live && dv_paths.contains(p.as_str()) {
+                        if let Some(d) = dv_keep.get_mut(i) {
+                            *d = true;
+                        }
+                        dv_actions.push(FileAction {
+                            path: p.clone(),
+                            partition_values: partition_values_of(&scan_rows, i)?,
+                        });
+                        continue;
+                    }
                     *k = live && (hit || added);
                     if *k {
                         actions.push(FileAction {
@@ -693,6 +794,12 @@ pub(super) async fn stage(
                             partition_values: partition_values_of(&scan_rows, i)?,
                         });
                     }
+                }
+                if dv_keep.iter().any(|k| *k) {
+                    dv_out.push(StagedRemoves {
+                        scan_rows: super::dv::with_footer_stats(scan_rows.clone(), &footer)?,
+                        selection: dv_keep,
+                    });
                 }
                 if keep.iter().any(|k| *k) {
                     out.push(StagedRemoves {
@@ -707,7 +814,7 @@ pub(super) async fn stage(
                     "a touched file of a Delta row-level change is not in the snapshot's scan",
                 ));
             }
-            Ok((out, actions, also_read))
+            Ok((out, dv_out, actions, dv_actions, also_read))
         })
         .await
         .and_then(|r| r)
@@ -719,12 +826,32 @@ pub(super) async fn stage(
         )));
     }
     let removed = totals(table.units(), actions);
-    if removed.files == 0 && written.files == 0 {
+    let dv_changes = dvs.as_ref().map_or(0, |d| d.descriptors.len());
+    if removed.files == 0 && written.files == 0 && dv_changes == 0 {
         // Nothing to commit.
         *plan.outcome.lock().unwrap_or_else(PoisonError::into_inner) = None;
         return Ok(None);
     }
     let rewrite_ms = millis(started.elapsed());
+    // The vector counts as `DESCRIBE HISTORY` shows them: delta-spark adds the updated vectors
+    // into the added and the removed ones (`DeltaOperations.scala:1119-1329`, design section
+    // 2.3; `tests/fixtures/delta-4.4.1/dvs/DVS.json`).
+    let (dv_added, dv_removed, dv_updated) = dvs.as_ref().map_or((0, 0, 0), |d| {
+        (
+            d.added + d.updated,
+            d.removed_vectors + d.updated,
+            d.updated,
+        )
+    });
+    let mut read_set = ReadSet::default();
+    match &plan.read_predicate {
+        Some(p) => read_set.predicates.push(Arc::clone(p)),
+        None => read_set.whole_table = true,
+    }
+    let dv_descriptors = dvs
+        .as_ref()
+        .map(|d| d.descriptors.clone())
+        .unwrap_or_default();
     if let Some(info) = &plan.merge {
         let info = &info.with_observed(query).map_err(Failure::NotCommitted)?;
         *plan.outcome.lock().unwrap_or_else(PoisonError::into_inner) = Some(Outcome {
@@ -732,21 +859,22 @@ pub(super) async fn stage(
             rows: None,
             merge: Some(info.outcome(written.rows)),
         });
+        // With vectors only the fully replaced files count as removed
+        // (`ClassicMergeExecutor.scala:553-573`).
         let metrics = info.metrics(
-            written.rows,
-            written.files,
-            written.bytes,
-            removed.files,
-            removed.bytes,
-            plan.scan_ms,
-            rewrite_ms,
+            &super::merge::Totals {
+                written_rows: written.rows,
+                added_files: written.files,
+                added_bytes: written.bytes,
+                removed_files: removed.files,
+                removed_bytes: removed.bytes,
+                scan_ms: plan.scan_ms,
+                rewrite_ms,
+            },
+            (dv_added, dv_removed, dv_updated),
         );
-        let mut read_set = ReadSet::default();
-        match &plan.read_predicate {
-            Some(p) => read_set.predicates.push(Arc::clone(p)),
-            None => read_set.whole_table = true,
-        }
         read_set.files = removed.actions;
+        read_set.files.extend(dv_actions);
         read_set.files.extend(also_read);
         return Ok(Some(StagedCommit {
             table: table.name().to_owned(),
@@ -760,46 +888,97 @@ pub(super) async fn stage(
                 .collect(),
             adds: written.adds,
             removes,
+            dv_updates,
+            dv_descriptors,
             read_set,
+            user_metadata: plan.user_metadata.clone(),
         }));
     }
     let mut metrics: Vec<(String, u64)> = Vec::new();
     let mut put = |k: &str, v: u64| metrics.push((k.to_owned(), v));
-    put("numRemovedFiles", removed.files);
-    put("numRemovedBytes", removed.bytes);
-    put("numAddedFiles", written.files);
-    put("numAddedBytes", written.bytes);
-    put("numAddedChangeFiles", 0);
-    put("numDeletionVectorsAdded", 0);
-    put("numDeletionVectorsUpdated", 0);
-    put("scanTimeMs", plan.scan_ms);
-    let outcome_rows = match plan.op {
-        RowLevelOperation::Update => {
-            put("numUpdatedRows", plan.affected);
-            put("numCopiedRows", written.rows.saturating_sub(plan.affected));
-            put("numDeletionVectorsRemoved", 0);
-            put("rewriteTimeMs", rewrite_ms);
-            Some(plan.affected)
-        }
-        _ if whole_file => {
-            put("numDeletionVectorsRemoved", removed.with_dv);
-            put("rewriteTimeMs", 0);
-            let deleted = removed.rows.unwrap_or(0);
-            if deleted == 0 && removed.files != 0 {
-                // delta-spark drops these when the count is not known.
-                metrics.retain(|(k, _)| k != "numAddedFiles");
+    let outcome_rows = if let Some(d) = &dvs {
+        // delta-spark's vector path (`DeleteCommand.scala:256-300`, `UpdateCommand.scala:
+        // 212-302`): no bytes removed, no row copied; a `DELETE` removes the fully replaced
+        // files, an `UPDATE` counts every file it changed.
+        let changed = u64::try_from(d.descriptors.len() + d.removed.len()).unwrap_or(u64::MAX);
+        put(
+            "numRemovedFiles",
+            if plan.op == RowLevelOperation::Update {
+                changed
             } else {
-                metrics.push(("numDeletedRows".to_owned(), deleted));
-                metrics.push(("numCopiedRows".to_owned(), 0));
+                removed.files
+            },
+        );
+        put("numRemovedBytes", 0);
+        put("numAddedFiles", written.files);
+        put("numAddedBytes", written.bytes);
+        put("numAddedChangeFiles", 0);
+        put("numDeletionVectorsAdded", dv_added);
+        put("numDeletionVectorsRemoved", dv_removed);
+        put("numDeletionVectorsUpdated", dv_updated);
+        put("numCopiedRows", 0);
+        put("scanTimeMs", plan.scan_ms);
+        put(
+            "rewriteTimeMs",
+            if plan.op == RowLevelOperation::Update {
+                rewrite_ms
+            } else {
+                0
+            },
+        );
+        put(
+            if plan.op == RowLevelOperation::Update {
+                "numUpdatedRows"
+            } else {
+                "numDeletedRows"
+            },
+            d.modified_rows,
+        );
+        Some(d.modified_rows)
+    } else {
+        put("numRemovedFiles", removed.files);
+        put(
+            "numRemovedBytes",
+            if plan.update_writes_dvs {
+                0
+            } else {
+                removed.bytes
+            },
+        );
+        put("numAddedFiles", written.files);
+        put("numAddedBytes", written.bytes);
+        put("numAddedChangeFiles", 0);
+        put("numDeletionVectorsAdded", 0);
+        put("numDeletionVectorsUpdated", 0);
+        put("scanTimeMs", plan.scan_ms);
+        match plan.op {
+            RowLevelOperation::Update => {
+                put("numUpdatedRows", plan.affected);
+                put("numCopiedRows", written.rows.saturating_sub(plan.affected));
+                put("numDeletionVectorsRemoved", 0);
+                put("rewriteTimeMs", rewrite_ms);
+                Some(plan.affected)
             }
-            removed.rows
-        }
-        _ => {
-            put("numDeletedRows", plan.affected);
-            put("numCopiedRows", written.rows);
-            put("numDeletionVectorsRemoved", removed.with_dv);
-            put("rewriteTimeMs", rewrite_ms);
-            Some(plan.affected)
+            _ if whole_file => {
+                put("numDeletionVectorsRemoved", removed.with_dv);
+                put("rewriteTimeMs", 0);
+                let deleted = removed.rows.unwrap_or(0);
+                if deleted == 0 && removed.files != 0 {
+                    // delta-spark drops these when the count is not known.
+                    metrics.retain(|(k, _)| k != "numAddedFiles");
+                } else {
+                    metrics.push(("numDeletedRows".to_owned(), deleted));
+                    metrics.push(("numCopiedRows".to_owned(), 0));
+                }
+                removed.rows
+            }
+            _ => {
+                put("numDeletedRows", plan.affected);
+                put("numCopiedRows", written.rows);
+                put("numDeletionVectorsRemoved", removed.with_dv);
+                put("rewriteTimeMs", rewrite_ms);
+                Some(plan.affected)
+            }
         }
     };
     metrics.push((
@@ -811,12 +990,8 @@ pub(super) async fn stage(
         rows: outcome_rows,
         merge: None,
     });
-    let mut read_set = ReadSet::default();
-    match &plan.read_predicate {
-        Some(p) => read_set.predicates.push(Arc::clone(p)),
-        None => read_set.whole_table = true,
-    }
     read_set.files = removed.actions;
+    read_set.files.extend(dv_actions);
     read_set.files.extend(also_read);
     Ok(Some(StagedCommit {
         table: table.name().to_owned(),
@@ -830,7 +1005,10 @@ pub(super) async fn stage(
             .collect(),
         adds: written.adds,
         removes,
+        dv_updates,
+        dv_descriptors,
         read_set,
+        user_metadata: plan.user_metadata.clone(),
     }))
 }
 

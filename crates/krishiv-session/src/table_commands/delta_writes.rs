@@ -185,7 +185,7 @@ impl Session {
         };
         let (_, physical) = self.physical(&analysis.analyzed, &analysis.env).await?;
         let mut request = WriteRequest::new(mode, quoted, Arc::clone(physical.schema()));
-        request.options = options;
+        request.options = super::row_level::with_conf_user_metadata(options, &analysis.env.config);
         super::row_level::apply_idempotency_key(&analysis.env.config, &mut request.options)?;
         request.write_id = Some(crate::session::job_uuid());
         let plan = physical.into_table_write(scan, TableWriteRequest::Write(request));
@@ -252,8 +252,17 @@ impl Session {
         let qualified = self.qualify_path(path)?;
         let source = delta_source(&qualified);
         let env = self.query_env();
-        let exists = env.catalog.delta.exists(&source).await?;
         let plain = plain_options(options)?;
+        let exists = env.catalog.delta.exists(&source).await?;
+        let opened = if exists {
+            Some(env.catalog.delta.open(&source, None).await?)
+        } else {
+            None
+        };
+        let partitioned = opened.as_ref().map_or(!partition_by.is_empty(), |t| {
+            !t.partition_columns().is_empty()
+        });
+        let passed = super::delta_options::delta_write_options(&plain, partitioned)?;
         let quoted = format!("delta.{}", ident(&qualified));
         let option = |k: &str| {
             plain
@@ -288,7 +297,7 @@ impl Session {
                         properties: BTreeMap::new(),
                     },
                     WriteMode::Append,
-                    writer_options(plain.iter().map(|(k, v)| (k, v))),
+                    passed,
                     &quoted,
                 )
                 .await;
@@ -325,7 +334,11 @@ impl Session {
                     crate::functions::expr_with(&text, &env.parser)?.expr,
                 )),
                 None => {
-                    if crate::session::partition_overwrite_is_dynamic(&env.config, options)? {
+                    // delta-spark never reads the mode for an unpartitioned table
+                    // (`OPTIONS.json` `pom_bad_unpartitioned`).
+                    if partitioned
+                        && crate::session::partition_overwrite_is_dynamic(&env.config, options)?
+                    {
                         WriteMode::OverwriteDynamic
                     } else {
                         WriteMode::Truncate
@@ -333,7 +346,7 @@ impl Session {
                 }
             },
         };
-        let mut request_options = writer_options(plain.iter().map(|(k, v)| (k, v)));
+        let mut request_options = passed;
         if let Some(text) = option("replaceWhere") {
             request_options.insert(PREDICATE_TEXT_OPTION.to_owned(), text);
         }
@@ -357,6 +370,11 @@ impl Session {
             }
         }
         drop(env);
+        // delta-spark merges the schemas on every `save` into an existing table.
+        let widening = opened.as_ref().is_some_and(|t| t.type_widening_enabled());
+        let merge = option("mergeSchema").is_some_and(|v| v.eq_ignore_ascii_case("true"));
+        let schema = df.schema().await?;
+        super::delta_options::merge_schema_check(&columns, &schema, widening, merge, &quoted)?;
         let aligned = self.delta_by_name(df, &columns, &quoted).await?;
         if write_reads_target(&aligned, &qualified).await {
             request_options.insert(READS_TARGET_OPTION.to_owned(), "true".to_owned());
@@ -383,6 +401,7 @@ impl Session {
     ) -> Result<(), KrishivError> {
         let quoted = format!("`{}`.`{}`", table.namespace, table.name);
         let plain = plain_options(options)?;
+        let passed = super::delta_options::delta_write_options(&plain, table.is_partitioned())?;
         if plain.iter().any(|(k, v)| {
             k.eq_ignore_ascii_case("overwriteSchema") && v.eq_ignore_ascii_case("true")
         }) {
@@ -412,7 +431,7 @@ impl Session {
             &aligned,
             DeltaTarget::Existing { source, name },
             WriteMode::Truncate,
-            writer_options(plain.iter().map(|(k, v)| (k, v))),
+            passed,
             &quoted,
         )
         .await?;
@@ -425,8 +444,13 @@ impl Session {
     /// `INSERT INTO|OVERWRITE` into the Delta catalog table `table` of the rows of `df` (its
     /// columns, in its order): an append; an overwrite of the static partition `statics`
     /// (`replaceWhere` of `(p <=> 'v')`, as delta-spark records it); a dynamic partition
-    /// overwrite under `spark.sql.sources.partitionOverwriteMode = dynamic`; else a truncate.
-    /// The target's writer options give the files' `maxRecordsPerFile`.
+    /// overwrite under `spark.sql.sources.partitionOverwriteMode = dynamic` (or the statement's
+    /// `partitionOverwriteMode` option); else a truncate. The target's `sql_options` (`WITH (..)`)
+    /// are Delta's write options ([`super::delta_options`]), and so are the writer's options of
+    /// `saveAsTable` append and `writeTo(..).append()` (`target.delta_writer_options`);
+    /// `insertInto`'s give only the files' `maxRecordsPerFile` (delta-spark's `insertInto` reads
+    /// no other option, `CATALOG-OPTIONS.json`, nor `partitionOverwriteMode`, `WRITE-EDGES.json`
+    /// `insert_into_overwrite_mode`).
     pub(super) async fn insert_delta(
         &self,
         name: &super::TableName,
@@ -436,24 +460,32 @@ impl Session {
         reads_target: bool,
     ) -> Result<(), KrishivError> {
         let (overwrite, statics) = (target.overwrite, target.statics);
-        // `maxRecordsPerFile` of a DataFrame write into the table (`writeTo(..).append()`,
-        // `saveAsTable` append, `insertInto`).
-        let mut options = match target.options {
-            // Only the option the writer reads is asked to be plain: an append ignores the
-            // others, a secret one included.
-            Some(o) => {
-                let read: BTreeMap<String, OptionValue> = o
-                    .iter()
-                    .filter(|(k, _)| {
-                        k.eq_ignore_ascii_case("maxRecordsPerFile")
-                            || k.eq_ignore_ascii_case(krishiv_exec::planner::IDEMPOTENCY_KEY_OPTION)
-                    })
-                    .map(|(k, v)| (k.clone(), v.clone()))
-                    .collect();
-                writer_options(plain_options(&read)?.iter().map(|(k, v)| (k, v)))
-            }
-            None => BTreeMap::new(),
-        };
+        let user_options = target.sql_options;
+        let mut options =
+            super::delta_options::delta_write_options(user_options, table.is_partitioned())?;
+        if let (Some(o), true) = (target.options, target.delta_writer_options) {
+            // `saveAsTable` append and `writeTo(..).append()`: the writer's options are Delta's
+            // write options, checked and honoured as a `save`'s are (`CATALOG-OPTIONS.json`).
+            options.extend(super::delta_options::delta_write_options(
+                &plain_options(o)?,
+                table.is_partitioned(),
+            )?);
+        } else if let Some(o) = target.options {
+            // `insertInto` reads only `maxRecordsPerFile` (and Krishiv's idempotency key) of the
+            // writer's options. Only those are asked to be plain: the others are ignored, a
+            // secret one included.
+            let read: BTreeMap<String, OptionValue> = o
+                .iter()
+                .filter(|(k, _)| {
+                    k.eq_ignore_ascii_case("maxRecordsPerFile")
+                        || k.eq_ignore_ascii_case(krishiv_exec::planner::IDEMPOTENCY_KEY_OPTION)
+                })
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect();
+            options.extend(writer_options(
+                plain_options(&read)?.iter().map(|(k, v)| (k, v)),
+            ));
+        }
         let mode = if !overwrite {
             WriteMode::Append
         } else if !statics.is_empty() {
@@ -488,7 +520,10 @@ impl Session {
         } else if table.is_partitioned()
             && crate::session::partition_overwrite_is_dynamic(
                 &self.query_env().config,
-                &BTreeMap::new(),
+                &user_options
+                    .iter()
+                    .map(|(k, v)| (k.clone(), OptionValue::from_user(k, v)))
+                    .collect(),
             )?
         {
             WriteMode::OverwriteDynamic

@@ -18,7 +18,7 @@
 //!   `ClassicMergeExecutor.scala:200-220, 470-490`): the source rows, the target rows inserted,
 //!   updated and deleted (in total and per clause kind), copied (written less updated and
 //!   inserted), `numOutputRows` = inserted + updated + copied, files and bytes added and removed,
-//!   the times; deletion vector counts are 0 (no vector is written).
+//!   the times; the deletion vector counts (0 without vectors).
 //! - The result row (`MergeIntoCommand.scala:78-82, 183-192`): `num_affected_rows`,
 //!   `num_updated_rows`, `num_deleted_rows`, `num_inserted_rows`.
 //! - The read set (`ClassicMergeExecutor.scala:85-92`, `InsertOnlyMergeExecutor.scala:76-82`):
@@ -34,8 +34,10 @@
 //! # Known differences
 //! - The predicates are the conditions as written; delta-spark prints Catalyst's
 //!   `simpleString` of the resolved expressions (expression ids, unquoted strings).
-//! - Deletion vectors are never written (PR-37d): on a table with them on, delta-spark's
-//!   default `merge.deletionVectors.persistent = true` marks rows in vectors; Krishiv rewrites.
+//! - With deletion vectors (PR-37d, `dv`): only the changed and inserted rows are
+//!   written, the updated and deleted target rows marked in vectors; the removed files and bytes
+//!   are the fully replaced files only, the vector counts delta-spark's
+//!   (`ClassicMergeExecutor.scala:495-573`).
 
 use arrow_array::Array;
 use arrow_array::cast::AsArray;
@@ -212,21 +214,18 @@ impl MergeInfo {
         ]
     }
 
-    /// `operationMetrics`.
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "the commit's totals, each read once"
-    )]
-    pub(crate) fn metrics(
-        &self,
-        written_rows: u64,
-        added_files: u64,
-        added_bytes: u64,
-        removed_files: u64,
-        removed_bytes: u64,
-        scan_ms: u64,
-        rewrite_ms: u64,
-    ) -> Vec<(String, u64)> {
+    /// `operationMetrics`; `dvs` are the vectors added, removed and updated, as `DESCRIBE
+    /// HISTORY` counts them.
+    pub(crate) fn metrics(&self, t: &Totals, dvs: (u64, u64, u64)) -> Vec<(String, u64)> {
+        let Totals {
+            written_rows,
+            added_files,
+            added_bytes,
+            removed_files,
+            removed_bytes,
+            scan_ms,
+            rewrite_ms,
+        } = *t;
         let c = &self.counts;
         let o = self.outcome(written_rows);
         let copied = written_rows
@@ -263,15 +262,30 @@ impl MergeInfo {
             ("materializeSourceTimeMs", c.materialize_ms),
             ("scanTimeMs", scan_ms),
             ("rewriteTimeMs", rewrite_ms),
-            ("numTargetDeletionVectorsAdded", 0),
-            // delta-spark 4.4.1's copy-on-write MERGE reports 0 even when a removed file carried a
-            // deletion vector (`merge/MERGE.json` `deletion-vectors/update_copy_on_write`).
-            ("numTargetDeletionVectorsRemoved", 0),
-            ("numTargetDeletionVectorsUpdated", 0),
+            // A copy-on-write MERGE passes (0, 0, 0): delta-spark 4.4.1 reports 0 removed vectors
+            // even when a removed file carried one (`merge/MERGE.json`
+            // `deletion-vectors/update_copy_on_write`).
+            ("numTargetDeletionVectorsAdded", dvs.0),
+            ("numTargetDeletionVectorsRemoved", dvs.1),
+            ("numTargetDeletionVectorsUpdated", dvs.2),
         ];
         m.sort_by_key(|(k, _)| *k);
         m.into_iter().map(|(k, v)| (k.to_owned(), v)).collect()
     }
+}
+
+/// A `MERGE`'s file and time totals, for its metrics.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct Totals {
+    /// Rows written (inserted, updated and, without vectors, copied).
+    pub(crate) written_rows: u64,
+    pub(crate) added_files: u64,
+    pub(crate) added_bytes: u64,
+    /// Files removed whole.
+    pub(crate) removed_files: u64,
+    pub(crate) removed_bytes: u64,
+    pub(crate) scan_ms: u64,
+    pub(crate) rewrite_ms: u64,
 }
 
 /// A condition as delta-spark's `predicate` strings show it: parenthesised.
@@ -333,8 +347,21 @@ mod tests {
         )
         .unwrap();
         // 6 written rows: 2 inserted, 1 updated, 3 copied.
-        let m: std::collections::HashMap<_, _> =
-            info.metrics(6, 2, 10, 2, 20, 5, 7).into_iter().collect();
+        let m: std::collections::HashMap<_, _> = info
+            .metrics(
+                &Totals {
+                    written_rows: 6,
+                    added_files: 2,
+                    added_bytes: 10,
+                    removed_files: 2,
+                    removed_bytes: 20,
+                    scan_ms: 5,
+                    rewrite_ms: 7,
+                },
+                (0, 0, 0),
+            )
+            .into_iter()
+            .collect();
         assert_eq!(m["numTargetRowsCopied"], 3);
         assert_eq!(m["numOutputRows"], 6);
         assert_eq!(m["numTargetRowsDeleted"], 3);

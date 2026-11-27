@@ -1030,7 +1030,7 @@ impl<'a> Planner<'a> {
             );
             match &schema {
                 None => schema = Some(Arc::clone(&planned.schema)),
-                Some(s) if s.fields() != planned.schema.fields() => {
+                Some(s) if !crate::physical::same_columns(s, &planned.schema) => {
                     return Err(internal("union inputs of different physical types"));
                 }
                 Some(_) => {}
