@@ -133,6 +133,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         "krishiv.delta.maxCommitAttempts",
         &DELTA_MAX_COMMIT_ATTEMPTS,
     ),
+    ("krishiv.exec.dataflowScheduling", &EXEC_DATAFLOW_SCHEDULING),
     (
         "krishiv.io.coalesceWasteDivisor",
         &IO_COALESCE_WASTE_DIVISOR,
@@ -477,6 +478,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.runtimeFilter.residualBounds",
         &RUNTIME_FILTER_RESIDUAL_BOUNDS,
+    ),
+    (
+        "krishiv.runtimeFilter.smallTableWait",
+        &RUNTIME_FILTER_SMALL_TABLE_WAIT,
     ),
     (
         "krishiv.sql.legacy.codingErrorAction",
