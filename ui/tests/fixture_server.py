@@ -85,7 +85,12 @@ ENVIRONMENT = {
     "version": "fixture",
     "settings": [
         {"key": "krishiv.auth.token", "value": "***", "redacted": True},
-        {"key": "spark.sql.shuffle.partitions", "value": "200", "redacted": False},
+        {
+            "key": "krishiv.sql.shuffle.partitionsHint",
+            "value": "200",
+            "redacted": False,
+            "spark_key": "spark.sql.shuffle.partitions",
+        },
         {"key": "db.password", "value": "***", "redacted": True},
         {"key": "spark.hadoop.fs.s3a.secret.key", "value": "***", "redacted": True},
     ],

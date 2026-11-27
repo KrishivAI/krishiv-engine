@@ -49,7 +49,78 @@ pub fn may_raise(e: &Expr, ansi: bool) -> bool {
 /// ([`exact_decimal`], which also holds with ANSI on).
 #[must_use]
 pub fn runs_on_any_row(e: &Expr, ansi: bool) -> bool {
-    is_deterministic(e) && !has_subquery(e) && (exact_decimal(e) || !may_raise(e, ansi))
+    is_deterministic(e) && !has_subquery(e) && (decimal_never_raises(e) || !may_raise(e, ansi))
+}
+
+/// Whether `e` is decimal arithmetic that raises on no row, ANSI on or off:
+/// [`exact_decimal`], or such a value divided by a nonzero integral literal of
+/// absolute value at least one whose result type keeps the dividend's integral
+/// digits (`|a / b| <= |a|`, so no overflow; with `|b| = 1` the result scale
+/// must also hold the dividend's, so rounding cannot add a digit). TPC-DS q04's
+/// `(... + ss_ext_sales_price) / 2`.
+#[must_use]
+pub fn decimal_never_raises(e: &Expr) -> bool {
+    if exact_decimal(e) {
+        return true;
+    }
+    let ExprNode::Resolved(ResolvedExpr::Function(f)) = &e.node else {
+        return false;
+    };
+    if f.kind != FunctionKind::Scalar
+        || f.filter.is_some()
+        || f.id != FunctionId::Builtin(Builtin::Divide)
+    {
+        return false;
+    }
+    let [l, r] = f.args.as_slice() else {
+        return false;
+    };
+    let (Some(DataType::Decimal(a)), DataType::Decimal(out)) = (type_of(l), &f.data_type) else {
+        return false;
+    };
+    let Some(divisor) = divisor_magnitude(r) else {
+        return false;
+    };
+    let dividend_int = i32::from(a.precision()) - i32::from(a.scale());
+    let out_int = i32::from(out.precision()) - i32::from(out.scale());
+    out_int >= dividend_int && (divisor >= 2 || out.scale() >= a.scale()) && decimal_never_raises(l)
+}
+
+/// The integral part of the absolute value of a divisor literal (as written
+/// or cast to a decimal it fits), when it is at least one; `None` otherwise.
+fn divisor_magnitude(r: &Expr) -> Option<u128> {
+    match &r.node {
+        ExprNode::Literal(Literal::Decimal {
+            unscaled,
+            data_type,
+        }) => {
+            let scale = u32::from(data_type.scale());
+            let whole = unscaled.unsigned_abs() / 10_u128.checked_pow(scale)?;
+            (whole >= 1).then_some(whole)
+        }
+        ExprNode::Cast {
+            expr,
+            to: DataType::Decimal(to),
+            ..
+        } => {
+            let ExprNode::Literal(l) = &expr.node else {
+                return None;
+            };
+            let digits = integral_literal_digits(l)?;
+            if digits > i32::from(to.precision()) - i32::from(to.scale()) {
+                return None;
+            }
+            let v: u128 = match l {
+                Literal::Byte(v) => u128::from(v.unsigned_abs()),
+                Literal::Short(v) => u128::from(v.unsigned_abs()),
+                Literal::Integer(v) => u128::from(v.unsigned_abs()),
+                Literal::Long(v) => u128::from(v.unsigned_abs()),
+                _ => return None,
+            };
+            (v >= 1).then_some(v)
+        }
+        _ => None,
+    }
 }
 
 /// Whether `e` is **leakproof** (design `P3-E14-security-barrier.md` §4): evaluating it on any
@@ -491,6 +562,57 @@ mod tests {
 
     fn dec(p: u8, s: u8) -> DataType {
         DataType::Decimal(DecimalType::try_new(u32::from(p), u32::from(s)).unwrap())
+    }
+
+    /// TPC-DS q04's argument: an exact decimal sum divided by `2` (cast to
+    /// `DECIMAL(10,0)`), typed `DECIMAL(21,13)` as Spark's division rule
+    /// gives it, never raises; a divisor below one, zero, a non-literal or a
+    /// result that drops integral digits may.
+    #[test]
+    fn a_decimal_divided_by_a_whole_literal_that_keeps_its_digits_never_raises() {
+        let a = col("a", dec(7, 2));
+        let b = col("bb", dec(7, 2));
+        let sum = op(Builtin::Add, vec![a.clone(), b], dec(8, 2));
+        let two = cast(lit(Literal::Integer(2)), dec(10, 0), CastMode::Ansi);
+        let half = op(Builtin::Divide, vec![sum.clone(), two.clone()], dec(21, 13));
+        assert!(may_raise(&half, true));
+        assert!(decimal_never_raises(&half));
+        assert!(runs_on_any_row(&half, true));
+        let by = |d: Expr, out: DataType| op(Builtin::Divide, vec![sum.clone(), d], out);
+        // A decimal literal of at least one, as written.
+        let one_and_half = lit(Literal::Decimal {
+            unscaled: 15,
+            data_type: DecimalType::try_new(2, 1).unwrap(),
+        });
+        assert!(decimal_never_raises(&by(one_and_half, dec(16, 9))));
+        // Below one: the quotient can outgrow the dividend.
+        let half_lit = lit(Literal::Decimal {
+            unscaled: 5,
+            data_type: DecimalType::try_new(1, 1).unwrap(),
+        });
+        assert!(!decimal_never_raises(&by(half_lit, dec(15, 9))));
+        // Zero raises DIVIDE_BY_ZERO under ANSI.
+        let zero = cast(lit(Literal::Integer(0)), dec(10, 0), CastMode::Ansi);
+        assert!(!decimal_never_raises(&by(zero, dec(21, 13))));
+        // A column divisor may be zero.
+        assert!(!decimal_never_raises(&by(
+            col("ccc", dec(10, 0)),
+            dec(21, 13)
+        )));
+        // A result with fewer integral digits than the dividend may overflow.
+        assert!(!decimal_never_raises(&by(two.clone(), dec(10, 6))));
+        // By one, the result scale must hold the dividend's (rounding to fewer
+        // places can add an integral digit: 99.99 -> 100).
+        let one = cast(lit(Literal::Integer(1)), dec(10, 0), CastMode::Ansi);
+        assert!(!decimal_never_raises(&by(one.clone(), dec(16, 0))));
+        assert!(decimal_never_raises(&by(one, dec(16, 6))));
+        // A dividend that may raise is not saved by the divisor.
+        let raising = op(Builtin::Divide, vec![a, col("dddd", dec(7, 2))], dec(17, 9));
+        assert!(!decimal_never_raises(&op(
+            Builtin::Divide,
+            vec![raising, two],
+            dec(28, 11)
+        )));
     }
 
     #[test]
