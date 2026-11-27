@@ -1545,16 +1545,17 @@ impl Session {
             krishiv_types::Collation,
             krishiv_plan::analyzer::views::DefinerTexts,
         )> = Vec::new();
-        if expansion
+        let default_texts = expansion
             .stored_reads
             .iter()
-            .any(|r| !r.collation.is_utf8_binary())
-        {
+            .map(|r| (r.collation, &r.query))
+            .chain(expansion.temp_collations.iter().map(|(c, q)| (*c, q)));
+        if default_texts.clone().any(|(c, _)| !c.is_utf8_binary()) {
             let mut by: Vec<(krishiv_types::Collation, Vec<Arc<LogicalPlan>>)> = Vec::new();
-            for r in &expansion.stored_reads {
-                match by.iter_mut().find(|(c, _)| *c == r.collation) {
-                    Some((_, roots)) => roots.push(Arc::clone(&r.query)),
-                    None => by.push((r.collation, vec![Arc::clone(&r.query)])),
+            for (collation, query) in default_texts {
+                match by.iter_mut().find(|(c, _)| *c == collation) {
+                    Some((_, roots)) => roots.push(Arc::clone(query)),
+                    None => by.push((collation, vec![Arc::clone(query)])),
                 }
             }
             collations = by

@@ -137,6 +137,9 @@ pub(crate) enum TempTable {
         /// inlines this entry runs its observed nodes, so it completes them. Part of the entry, so a
         /// query reads the handles of the definition it expanded, and they are published with it.
         keeps: ViewKeeps,
+        /// The view's `DEFAULT COLLATION` (`UTF8_BINARY` when it has none): the literals of its
+        /// text take it, as for a permanent view ([`crate::store::ViewDef::collation`]).
+        collation: krishiv_types::Collation,
     },
 }
 
@@ -146,6 +149,7 @@ impl TempTable {
         plan: Arc<LogicalPlan>,
         columns: Vec<TableColumn>,
         text: Option<String>,
+        collation: krishiv_types::Collation,
     ) -> Self {
         Self::View {
             plan,
@@ -153,6 +157,7 @@ impl TempTable {
             pins: Vec::new(),
             text,
             keeps: ViewKeeps::default(),
+            collation,
         }
     }
 }
@@ -1456,6 +1461,9 @@ pub(crate) struct Expansion {
     pub(crate) reached: Vec<ReachedView>,
     /// The inlined query of each temporary view read (`AnalysisContext::temp_view_texts`).
     pub(crate) temp_texts: Vec<Arc<LogicalPlan>>,
+    /// The inlined query of each temporary view read that has a default collation of its own,
+    /// with it (beside the stored views', [`crate::view_schema::StoredRead::collation`]).
+    pub(crate) temp_collations: Vec<(krishiv_types::Collation, Arc<LogicalPlan>)>,
 }
 
 /// Whether creating the temporary view `name` over `plan` would close a

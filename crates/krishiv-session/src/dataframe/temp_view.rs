@@ -191,6 +191,7 @@ impl DataFrame {
             keeps: crate::catalog::ViewKeeps(
                 self.observation_handles_with(&analysis.env.observers),
             ),
+            collation: krishiv_types::Collation::UTF8_BINARY,
         };
         if !self
             .session

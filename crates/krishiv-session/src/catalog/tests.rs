@@ -78,6 +78,7 @@ fn expanding_a_cycle_is_an_internal_error() {
         pins: Vec::new(),
         text: None,
         keeps: ViewKeeps::default(),
+        collation: krishiv_types::Collation::UTF8_BINARY,
     };
     session.put("a", view("b"));
     session.put("b", view("a"));
@@ -1103,6 +1104,7 @@ fn a_view_expansion_carries_the_keeps_of_the_entry_it_inlined() {
             pins: Vec::new(),
             text: None,
             keeps: ViewKeeps(vec![Arc::clone(keep)]),
+            collation: krishiv_types::Collation::UTF8_BINARY,
         };
         assert!(catalog.put_with_pins("v", view, Vec::new(), None));
     };
@@ -1256,8 +1258,14 @@ fn sql_path(path: &std::path::Path) -> String {
 #[test]
 fn a_create_only_put_keeps_the_entry_it_finds() {
     let catalog = SessionCatalog::default();
-    let view =
-        |table: &str| TempTable::sql_view(Arc::new(LogicalPlan::table([table])), Vec::new(), None);
+    let view = |table: &str| {
+        TempTable::sql_view(
+            Arc::new(LogicalPlan::table([table])),
+            Vec::new(),
+            None,
+            krishiv_types::Collation::UTF8_BINARY,
+        )
+    };
     assert!(catalog.put_new("V", view("first"), false));
     let first = catalog.get("v", false).unwrap();
     assert!(!catalog.put_new("v", view("second"), false));

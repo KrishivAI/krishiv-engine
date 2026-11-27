@@ -4,24 +4,11 @@
 //! ignore the default and type its strings as `UTF8_BINARY`, so it is refused instead.
 
 use krishiv_common::error::{
-    KrishivError, KrishivUnsupportedFeature, UnsupportedFeatureCollationsInMapKeys,
-    UnsupportedFeatureObjectLevelCollations, UnsupportedFeatureSchemaLevelCollations,
+    KrishivError, UnsupportedFeatureCollationsInMapKeys, UnsupportedFeatureObjectLevelCollations,
+    UnsupportedFeatureSchemaLevelCollations,
 };
 use krishiv_sql::ast::{AlterTableAction, Statement, TableElement};
-use krishiv_types::{Collation, DataType};
-
-/// A view's `DEFAULT COLLATION`: `UTF8_BINARY` is the plain default and changes nothing; any other
-/// needs the view body analysed under it (a later unit).
-fn view_default(parts: &[&str]) -> Result<(), KrishivError> {
-    let c = Collation::parse(&parts.join("."))?;
-    if c.is_utf8_binary() {
-        return Ok(());
-    }
-    Err(KrishivUnsupportedFeature {
-        feature: "DEFAULT COLLATION on a view".to_owned(),
-    }
-    .into())
-}
+use krishiv_types::DataType;
 
 /// Whether `dt` holds a map whose key holds a collated string.
 fn collated_map_key(dt: &DataType) -> bool {
@@ -71,10 +58,6 @@ pub(crate) fn refuse_unhonoured(
                 Ok(())
             }
             _ => Ok(()),
-        },
-        Statement::CreateView(v) => match &v.collation {
-            Some(c) => view_default(&[c.value.as_str()]),
-            None => Ok(()),
         },
         // A permanent view's default is honoured (its text analyses under it): nothing to refuse.
         _ => Ok(()),

@@ -48,6 +48,9 @@ pub(super) struct Expander<'a> {
     reached: Vec<(Option<usize>, ReachedView)>,
     /// The inlined query of each temporary view read, for [`Expansion::temp_texts`].
     temp_texts: Vec<Arc<LogicalPlan>>,
+    /// The inlined query of each temporary view read, with its default collation, for
+    /// [`Expansion::temp_collations`].
+    temp_collations: Vec<(krishiv_types::Collation, Arc<LogicalPlan>)>,
     /// The stored views whose text the expansion is inside (indexes of [`Self::reached`]).
     open_views: Vec<usize>,
 }
@@ -99,6 +102,7 @@ impl<'a> Expander<'a> {
             keeps: Vec::new(),
             reached: Vec::new(),
             temp_texts: Vec::new(),
+            temp_collations: Vec::new(),
             open_views: Vec::new(),
         }
     }
@@ -121,6 +125,7 @@ impl<'a> Expander<'a> {
             keeps: self.keeps,
             reached: self.reached.into_iter().map(|(_, v)| v).collect(),
             temp_texts: self.temp_texts,
+            temp_collations: self.temp_collations,
         }
     }
 }
@@ -322,6 +327,7 @@ impl Expander<'_> {
                     plan: definition,
                     columns,
                     keeps,
+                    collation,
                     ..
                 } = &*entry
             {
@@ -345,6 +351,7 @@ impl Expander<'_> {
                 self.path.pop();
                 let input = input?;
                 self.temp_texts.push(Arc::clone(&input));
+                self.temp_collations.push((*collation, Arc::clone(&input)));
                 let columns = columns.iter().map(|c| c.name.clone()).collect();
                 // A global view's qualifier is `global_temp.v`, two parts (see `ALIAS_PART_SEP`).
                 let alias = if name.len() == 2 {

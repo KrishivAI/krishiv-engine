@@ -278,7 +278,13 @@ impl Session {
             }
             .into());
         }
-        let env = self.query_env();
+        let mut env = self.query_env();
+        // The view's `DEFAULT COLLATION`: its query analyses under it, and it is kept with the view.
+        let collation = match &v.collation {
+            Some(c) => krishiv_types::Collation::parse(&c.value)?,
+            None => krishiv_types::Collation::UTF8_BINARY,
+        };
+        env.analysis.conf.default_collation = collation;
         if !v.or_replace
             && self
                 .state
@@ -378,6 +384,7 @@ impl Session {
             original
                 .and_then(|o| o.get(v.query.span.start..v.query.span.end))
                 .map(str::to_owned),
+            collation,
         );
         if v.or_replace {
             self.state.catalog.put(&key, table);

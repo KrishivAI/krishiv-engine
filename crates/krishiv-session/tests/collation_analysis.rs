@@ -487,10 +487,6 @@ fn unsupported_collation_defaults_and_switches_are_refused() {
             ErrorClass::UnsupportedFeatureCollationsInMapKeys,
         ),
         (
-            "CREATE TEMPORARY VIEW tv DEFAULT COLLATION UNICODE AS SELECT 'a' AS c",
-            ErrorClass::KrishivUnsupportedFeature,
-        ),
-        (
             "SET spark.sql.legacy.collationAwareHashFunctions = true",
             ErrorClass::KrishivUnsupportedFeature,
         ),
