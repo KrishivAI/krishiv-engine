@@ -13,7 +13,8 @@ import pytest
 # every machine (as `.cargo/config.toml` does for the Rust tests). `tzset` moves
 # this interpreter's own conversions too; the engine reads the variable.
 os.environ["TZ"] = "UTC"
-time.tzset()
+if hasattr(time, "tzset"):  # Windows has no tzset; the engine reads TZ itself
+    time.tzset()
 
 
 @pytest.fixture(autouse=True)
