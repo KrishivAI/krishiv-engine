@@ -350,7 +350,7 @@ fn render_function(row: &Row, params: &[Param], unsupported: bool) -> (String, S
         }
         let helper = params[at].conv.helper();
         // A numeric default is an int literal (`lgNomEntries` 12), any other a string.
-        let value = if default.bytes().all(|b| b.is_ascii_digit()) {
+        let value = if !default.is_empty() && default.bytes().all(|b| b.is_ascii_digit()) {
             (*default).to_owned()
         } else {
             format!("\"{default}\"")

@@ -593,7 +593,7 @@ def aes_encrypt(
         if padding is None and (iv is not None or aad is not None)
         else _opt(_named, padding, "padding")
     )
-    _iv = (_lit(, "iv"),) if iv is None and (aad is not None) else _opt(_named, iv, "iv")
+    _iv = (_lit("", "iv"),) if iv is None and (aad is not None) else _opt(_named, iv, "iv")
     return _call(
         "aes_encrypt", _named(input, "input"), _named(key, "key"), *_mode, *_padding, *_iv, *_opt(_named, aad, "aad")
     )
