@@ -98,7 +98,7 @@ fn errors_surface_where_spark_raises_them() {
     let s = session();
     // `sql` parses and analyzes at once.
     assert_eq!(
-        class(block_on(s.sql("SELECT FROM WHERE"))),
+        class(block_on(s.sql("SELECT 1 +"))),
         ErrorClass::ParseSyntaxError
     );
     assert_eq!(

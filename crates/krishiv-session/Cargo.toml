@@ -148,6 +148,14 @@ name = "delta_dml"
 required-features = ["delta"]
 
 [[test]]
+name = "delta_insert_path"
+required-features = ["delta"]
+
+[[test]]
+name = "delta_roundtrip"
+required-features = ["delta"]
+
+[[test]]
 name = "delta_create_path"
 required-features = ["delta"]
 

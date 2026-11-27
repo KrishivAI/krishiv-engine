@@ -73,6 +73,13 @@ Write-path oracle (PR-37a part 2; `gen_delta_fixtures.py /out writes`, run as th
   a `NOT NULL` partition column (`not_null_partition`); the `maxRecordsPerFile` option (a number, `0`, `-1`, and a
   value that is not one; `max_records_table`: through `insertInto` append and overwrite and `saveAsTable` append on
   a catalog table). Each step's error or commits and rows.
+- `INSERT-PATH.json` (`gen_delta_fixtures.py /out insert-path`, PR-53b): `INSERT INTO delta.`<path>`` on a table
+  partitioned by `p` (`VALUES`, `TABLE`, a column list and a partial one, `BY NAME`, a static partition, a trailing
+  slash, a `file:` URI, an insert reading itself, an overwrite), the arity refusals by position and with a column
+  list, the same arity refusals on a catalog table over the path (`catalog_*`) and under a static partition
+  (`static_partition_arity*`: delta-spark's classes, the static column counted), and the refused targets: a missing
+  path (`PATH_NOT_FOUND`), an empty and a Parquet directory (`DELTA_TABLE_NOT_FOUND`, no log made), a name
+  without a `/` and a relative path (`TABLE_OR_VIEW_NOT_FOUND`). Each step's error or commits and rows; `tests/delta_insert_path.rs`.
 - `write-features/<name>` and `FEATURES.json`: one table per row of the writer allow-list (design 4.2), each with one
   row, its protocol and whether Krishiv refuses writing it.
 

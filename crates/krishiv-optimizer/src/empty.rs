@@ -10,13 +10,30 @@
 
 use std::sync::Arc;
 
-use krishiv_plan::{ExprNode, Grouping, JoinKind, Literal, LogicalPlan, PlanNode};
+use krishiv_plan::{
+    Expr, ExprNode, Grouping, JoinKind, Literal, LogicalPlan, PlanNode, ResolvedExpr,
+};
 
 use crate::dag;
 use crate::limit::limit_value;
 
-/// Whether `plan` is proven to return no rows at planning time, by Spark's rules.
+/// The most nodes `proven_empty` looks at below one relation. `DropEmptyUnionInputs` asks it for
+/// every input of every union in every round of the rewrite batch, and the walk follows every
+/// path to a shared subtree; past the budget a relation is not proven empty (it stays).
+const EMPTY_BUDGET: usize = 512;
+
+/// Whether `plan` is proven to return no rows at planning time, by Spark's rules (within
+/// [`EMPTY_BUDGET`] nodes).
 pub(crate) fn proven_empty(plan: &LogicalPlan) -> bool {
+    empty_within(plan, &mut { EMPTY_BUDGET })
+}
+
+fn empty_within(plan: &LogicalPlan, budget: &mut usize) -> bool {
+    if *budget == 0 {
+        return false;
+    }
+    *budget -= 1;
+    let mut proven_empty = |p: &LogicalPlan| empty_within(p, budget);
     match &plan.node {
         PlanNode::Filter { input, predicate } => {
             matches!(
@@ -92,4 +109,73 @@ pub(crate) fn prune(node: Arc<LogicalPlan>) -> Arc<LogicalPlan> {
         })
     })
     .unwrap_or(node)
+}
+
+/// Spark's `PropagateEmptyRelation` for a union (checked at tag v4.0.0): the inputs proven empty
+/// are dropped (`p.children.filterNot(isEmpty)`), one input left stands alone, several stay a
+/// union. The union's output attributes are kept: where the rest would produce other ids (the
+/// first input was dropped) or a column that is no longer nullable, an aliasing projection
+/// restores them, as Spark aliases to the old `exprId`s. A union whose inputs are all empty, or
+/// none, is left as it is.
+///
+/// TPC-DS q04, q11, q74: `year_total` is a `UNION ALL` of channel aggregates tagged by a constant
+/// `sale_type`; each reference keeps one channel, so pushdown folds the other branches' filters to
+/// `false`. Dropping those branches leaves one aggregate per reference, which
+/// `ShareLiteralInstances` can then share across the years.
+pub(crate) fn drop_empty_union_inputs(node: Arc<LogicalPlan>) -> Arc<LogicalPlan> {
+    let PlanNode::Union {
+        inputs,
+        by_name: false,
+        allow_missing_columns,
+    } = &node.node
+    else {
+        return node;
+    };
+    let kept: Vec<Arc<LogicalPlan>> = inputs
+        .iter()
+        .filter(|i| !proven_empty(i))
+        .map(Arc::clone)
+        .collect();
+    if kept.is_empty() || kept.len() == inputs.len() {
+        return node;
+    }
+    let Some(output) = node.resolved_output() else {
+        return node;
+    };
+    let rest = if kept.len() == 1 {
+        Arc::clone(&kept[0])
+    } else {
+        Arc::new(LogicalPlan::new(PlanNode::Union {
+            inputs: kept,
+            by_name: false,
+            allow_missing_columns: *allow_missing_columns,
+        }))
+    };
+    let Some(produced) = rest.resolved_output() else {
+        return node;
+    };
+    if produced.len() != output.len() {
+        return node;
+    }
+    if produced == output {
+        return rest;
+    }
+    let exprs = produced
+        .iter()
+        .zip(output.iter())
+        .map(|(p, o)| {
+            let column = Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Column(
+                p.clone(),
+            ))));
+            // A column the rest already produces as the union did passes through bare.
+            if p == o {
+                return column;
+            }
+            Arc::new(Expr::new(ExprNode::Resolved(ResolvedExpr::Alias {
+                expr: column,
+                output: o.clone(),
+            })))
+        })
+        .collect();
+    Arc::new(LogicalPlan::new(PlanNode::Project { input: rest, exprs }))
 }
