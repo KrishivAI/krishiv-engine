@@ -230,59 +230,69 @@ async fn final_phase_runs_are_written_at_once() {
     let in_memory = HashAggregate::with_row_mode(spec(&s, vec![0], aggs.clone()), mode).unwrap();
     let expected = by_hand(&in_memory, &s, &b, 3).await.rows;
     assert_eq!(sink_metric(&in_memory, "row_final_spills"), 0);
-    let mut files = None;
-    for handbacks in [0, 1, usize::MAX] {
-        // `by_hand` runs query 6.
-        {
-            let mut asked = super::super::sink::HANDBACKS.lock().unwrap();
-            asked.retain(|(q, _)| *q != QueryId(6));
-            if handbacks > 0 {
-                asked.push((QueryId(6), handbacks));
+    // Level 0 at main's width and 64 wide (design 0.4-agg-disk-overpartition
+    // §3: the final phase's runs and the spill-everything path follow it).
+    let mut by_bits = Vec::new();
+    for bits in [3, 6] {
+        let mut files = None;
+        for handbacks in [0, 1, usize::MAX] {
+            // `by_hand` runs query 6.
+            {
+                let mut asked = super::super::sink::HANDBACKS.lock().unwrap();
+                asked.retain(|(q, _)| *q != QueryId(6));
+                if handbacks > 0 {
+                    asked.push((QueryId(6), handbacks));
+                }
             }
-        }
-        let (_m, scope) = spill_dir();
-        let mut sp = spec(&s, vec![0], aggs.clone());
-        sp.spill = Some(scope);
-        // No task gets memory: everything spills at once.
-        let agg = HashAggregate::with_final_stall(sp, mode, 0).unwrap();
-        let got = by_hand(&agg, &s, &b, 3).await;
-        assert_eq!(got.rows, expected, "handbacks {handbacks}");
-        assert_eq!(sink_metric(&agg, "row_final_spills"), 1);
-        let tasks = sink_metric(&agg, "row_final_tasks");
-        assert!(tasks > 2, "{tasks} tasks");
-        assert!(
-            sink_metric(&agg, "spill_writers") > 1,
-            "handbacks {handbacks}"
-        );
-        let helper_runs = sink_metric(&agg, "spill_helper_runs");
-        let back = sink_metric(&agg, "spill_handbacks");
-        // The hand-back cases assume an extra writer takes a task before the
-        // calling thread has taken them all: helpers start after the first
-        // run with `tasks > 2` runs left, and each run takes far longer than
-        // a thread start.
-        match handbacks {
-            0 => assert_eq!(back, 0),
-            // One extra writer is refused its second file: its task goes
-            // back with the first and another writer resumes it.
-            1 => assert_eq!(back, 1),
-            // Every extra writer is refused its second file: only a task of
-            // one partition file can be finished by one; the calling thread
-            // resumes the others.
-            _ => {
-                assert!(back >= 1, "{back}");
-                assert!(helper_runs < tasks, "{helper_runs} of {tasks}");
+            let (_m, scope) = spill_dir();
+            let mut sp = spec(&s, vec![0], aggs.clone());
+            sp.spill = Some(scope);
+            // No task gets memory: everything spills at once.
+            let agg = HashAggregate::with_final_stall(sp, mode, 0)
+                .unwrap()
+                .with_spill_bits(bits);
+            let got = by_hand(&agg, &s, &b, 3).await;
+            assert_eq!(got.rows, expected, "{bits} bits, handbacks {handbacks}");
+            assert_eq!(sink_metric(&agg, "row_final_spills"), 1);
+            let tasks = sink_metric(&agg, "row_final_tasks");
+            assert!(tasks > 2, "{tasks} tasks");
+            assert!(
+                sink_metric(&agg, "spill_writers") > 1,
+                "{bits} bits, handbacks {handbacks}"
+            );
+            let helper_runs = sink_metric(&agg, "spill_helper_runs");
+            let back = sink_metric(&agg, "spill_handbacks");
+            // The hand-back cases assume an extra writer takes a task before the
+            // calling thread has taken them all: helpers start after the first
+            // run with `tasks > 2` runs left, and each run takes far longer than
+            // a thread start.
+            match handbacks {
+                0 => assert_eq!(back, 0),
+                // One extra writer is refused its second file: its task goes
+                // back with the first and another writer resumes it.
+                1 => assert_eq!(back, 1),
+                // Every extra writer is refused its second file: only a task of
+                // one partition file can be finished by one; the calling thread
+                // resumes the others.
+                _ => {
+                    assert!(back >= 1, "{back}");
+                    assert!(helper_runs < tasks, "{helper_runs} of {tasks}");
+                }
             }
+            // Files: hand-backs neither drop nor repeat any. (Not bytes: the
+            // disk phase's output files batch differently with the memory
+            // left, which depends on how many writers ran.)
+            let written = agg.metrics().spill_files;
+            assert_eq!(
+                *files.get_or_insert(written),
+                written,
+                "{bits} bits, handbacks {handbacks}"
+            );
         }
-        // Files: hand-backs neither drop nor repeat any. (Not bytes: the
-        // disk phase's output files batch differently with the memory
-        // left, which depends on how many writers ran.)
-        let written = agg.metrics().spill_files;
-        assert_eq!(
-            *files.get_or_insert(written),
-            written,
-            "handbacks {handbacks}"
-        );
+        by_bits.extend(files);
     }
+    // 64-wide runs write more files than 8-wide ones.
+    assert!(by_bits[1] > by_bits[0], "files by width {by_bits:?}");
     super::super::sink::HANDBACKS
         .lock()
         .unwrap()
