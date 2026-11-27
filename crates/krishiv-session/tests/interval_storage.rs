@@ -2,6 +2,8 @@
 //! Intervals in files, as Spark 4.2.0 stores them (design P2-T001b §3). Each
 //! expected value is from a Spark 4.2.0 local run.
 #![forbid(unsafe_code)]
+mod literal_path;
+use literal_path::sql_path;
 
 use arrow_array::cast::AsArray;
 use futures::executor::block_on;
@@ -201,7 +203,7 @@ fn read_text(
         s,
         &format!(
             "CREATE TABLE declared ({schema}) USING {format} OPTIONS (mode '{mode}') LOCATION '{}'",
-            path.display()
+            sql_path(path)
         ),
     )?;
     strings(s, "SELECT CAST(a AS STRING) FROM declared")
@@ -388,7 +390,7 @@ fn a_stored_interval_reads_under_another_declared_type_as_spark_does() -> R {
             &s,
             &format!(
                 "CREATE TABLE declared ({schema}) USING parquet LOCATION '{}'",
-                path.display()
+                sql_path(&path)
             ),
         )?;
         block_on(async {
@@ -630,7 +632,7 @@ fn a_stored_avro_interval_reads_under_another_declared_type_as_spark_does() -> R
             &s,
             &format!(
                 "CREATE TABLE declared ({schema}) USING avro LOCATION '{}'",
-                path.display()
+                sql_path(&path)
             ),
         )?;
         block_on(async {

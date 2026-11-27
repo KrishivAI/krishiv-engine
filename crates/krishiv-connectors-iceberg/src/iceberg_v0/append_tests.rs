@@ -125,7 +125,7 @@ pub(super) fn commit(
     let next = b.build().unwrap().metadata;
     let path = env.at(&format!("v{n}.metadata.json"));
     std::fs::write(
-        path.strip_prefix("file://").unwrap(),
+        super::sink_tests::local_path(&path),
         serde_json::to_vec(&next).unwrap(),
     )
     .unwrap();

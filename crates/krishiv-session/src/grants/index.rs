@@ -158,14 +158,15 @@ fn local_key(path: &Path) -> Option<ObjectKey> {
     if !path.is_absolute() {
         return None;
     }
-    let text = format!("file:{}", path.display());
+    // `file:///C:/x` on Windows: a `\` or a bare drive would not read as a path key.
+    let text = krishiv_exec::files::file_url(path);
     ObjectKey::of(&Securable::Path(OptionValue::from_user("path", text)))
 }
 
-/// The local path a `file:///...` key names.
+/// The local path a `file:///...` key names (`C:/x` for `file:///C:/x` on Windows).
 fn root_path(key: &ObjectKey) -> Option<PathBuf> {
     key.parts
         .first()
-        .and_then(|p| p.strip_prefix("file://"))
-        .map(PathBuf::from)
+        .filter(|p| p.starts_with("file://"))
+        .map(|p| krishiv_exec::files::native_path(p))
 }

@@ -192,6 +192,7 @@ impl Session {
                 udfs,
                 python_udfs,
                 python_runtime: Mutex::new(seed.python_runtime),
+                persisted_functions: Mutex::new(None),
                 sql_functions: seed.sql_functions,
                 commit_log_probes: Mutex::new(HashMap::new()),
                 number: runtime.next_session(),

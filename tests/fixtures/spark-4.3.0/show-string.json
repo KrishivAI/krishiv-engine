@@ -1,0 +1,311 @@
+{
+ "format_version": 1,
+ "generator": "tests/scripts/gen_show_string_goldens.py",
+ "spark": "4.3.0",
+ "cases": [
+  {
+   "name": "basic",
+   "sql": "SELECT id, id * 2 AS twice FROM range(3)",
+   "num_rows": 20,
+   "truncate": 20,
+   "vertical": false,
+   "expected": "+---+-----+\n| id|twice|\n+---+-----+\n|  0|    0|\n|  1|    2|\n|  2|    4|\n+---+-----+\n"
+  },
+  {
+   "name": "empty_rows",
+   "sql": "SELECT id FROM range(0)",
+   "num_rows": 20,
+   "truncate": 20,
+   "vertical": false,
+   "expected": "+---+\n| id|\n+---+\n+---+\n"
+  },
+  {
+   "name": "one_row_footer",
+   "sql": "SELECT id FROM range(3)",
+   "num_rows": 1,
+   "truncate": 20,
+   "vertical": false,
+   "expected": "+---+\n| id|\n+---+\n|  0|\n+---+\nonly showing top 1 row"
+  },
+  {
+   "name": "two_rows_footer",
+   "sql": "SELECT id FROM range(5)",
+   "num_rows": 2,
+   "truncate": 20,
+   "vertical": false,
+   "expected": "+---+\n| id|\n+---+\n|  0|\n|  1|\n+---+\nonly showing top 2 rows"
+  },
+  {
+   "name": "exactly_num_rows",
+   "sql": "SELECT id FROM range(2)",
+   "num_rows": 2,
+   "truncate": 20,
+   "vertical": false,
+   "expected": "+---+\n| id|\n+---+\n|  0|\n|  1|\n+---+\n"
+  },
+  {
+   "name": "num_rows_zero",
+   "sql": "SELECT id FROM range(2)",
+   "num_rows": 0,
+   "truncate": 20,
+   "vertical": false,
+   "expected": "+---+\n| id|\n+---+\n+---+\nonly showing top 0 rows"
+  },
+  {
+   "name": "num_rows_negative",
+   "sql": "SELECT id FROM range(2)",
+   "num_rows": -3,
+   "truncate": 20,
+   "vertical": false,
+   "expected": "+---+\n| id|\n+---+\n+---+\nonly showing top 0 rows"
+  },
+  {
+   "name": "nulls",
+   "sql": "SELECT CAST(NULL AS STRING) AS s, CAST(NULL AS INT) AS i, 1 AS one",
+   "num_rows": 20,
+   "truncate": 20,
+   "vertical": false,
+   "expected": "+----+----+---+\n|   s|   i|one|\n+----+----+---+\n|NULL|NULL|  1|\n+----+----+---+\n"
+  },
+  {
+   "name": "binary",
+   "sql": "SELECT X'0102' AS b, X'' AS empty, X'ff' AS ff",
+   "num_rows": 20,
+   "truncate": 20,
+   "vertical": false,
+   "expected": "+-------+-----+----+\n|      b|empty|  ff|\n+-------+-----+----+\n|[01 02]|   []|[FF]|\n+-------+-----+----+\n"
+  },
+  {
+   "name": "truncate_default",
+   "sql": "SELECT 'abcdefghijklmnopqrstuvwxyz0123456789' AS s",
+   "num_rows": 20,
+   "truncate": 20,
+   "vertical": false,
+   "expected": "+--------------------+\n|                   s|\n+--------------------+\n|abcdefghijklmnopq...|\n+--------------------+\n"
+  },
+  {
+   "name": "truncate_5",
+   "sql": "SELECT 'abcdefghijklmnopqrstuvwxyz0123456789' AS s",
+   "num_rows": 20,
+   "truncate": 5,
+   "vertical": false,
+   "expected": "+-----+\n|    s|\n+-----+\n|ab...|\n+-----+\n"
+  },
+  {
+   "name": "truncate_3",
+   "sql": "SELECT 'abcdefghijklmnopqrstuvwxyz0123456789' AS s",
+   "num_rows": 20,
+   "truncate": 3,
+   "vertical": false,
+   "expected": "+---+\n|  s|\n+---+\n|abc|\n+---+\n"
+  },
+  {
+   "name": "truncate_2",
+   "sql": "SELECT 'abcdefghijklmnopqrstuvwxyz0123456789' AS s",
+   "num_rows": 20,
+   "truncate": 2,
+   "vertical": false,
+   "expected": "+---+\n|  s|\n+---+\n| ab|\n+---+\n"
+  },
+  {
+   "name": "truncate_1",
+   "sql": "SELECT 'abcdefghijklmnopqrstuvwxyz0123456789' AS s",
+   "num_rows": 20,
+   "truncate": 1,
+   "vertical": false,
+   "expected": "+---+\n|  s|\n+---+\n|  a|\n+---+\n"
+  },
+  {
+   "name": "truncate_0_left_aligned",
+   "sql": "SELECT 'abcdefghijklmnopqrstuvwxyz0123456789' AS s, 1 AS i, 'x' AS c",
+   "num_rows": 20,
+   "truncate": 0,
+   "vertical": false,
+   "expected": "+------------------------------------+---+---+\n|s                                   |i  |c  |\n+------------------------------------+---+---+\n|abcdefghijklmnopqrstuvwxyz0123456789|1  |x  |\n+------------------------------------+---+---+\n"
+  },
+  {
+   "name": "truncate_negative",
+   "sql": "SELECT 'abcdefghijklmnopqrstuvwxyz0123456789' AS s, 1 AS i",
+   "num_rows": 20,
+   "truncate": -1,
+   "vertical": false,
+   "expected": "+------------------------------------+---+\n|s                                   |i  |\n+------------------------------------+---+\n|abcdefghijklmnopqrstuvwxyz0123456789|1  |\n+------------------------------------+---+\n"
+  },
+  {
+   "name": "header_truncated",
+   "sql": "SELECT 1 AS `abcdefghijklmnopqrstuvwxyz0123456789`",
+   "num_rows": 20,
+   "truncate": 10,
+   "vertical": false,
+   "expected": "+------------------------------------+\n|abcdefghijklmnopqrstuvwxyz0123456789|\n+------------------------------------+\n|                                   1|\n+------------------------------------+\n"
+  },
+  {
+   "name": "min_width_three",
+   "sql": "SELECT 1 AS a, 'bb' AS b",
+   "num_rows": 20,
+   "truncate": 20,
+   "vertical": false,
+   "expected": "+---+---+\n|  a|  b|\n+---+---+\n|  1| bb|\n+---+---+\n"
+  },
+  {
+   "name": "escapes",
+   "sql": "SELECT 'a\\nb\\tc\\\\d' AS s, 'q\"r' AS t",
+   "num_rows": 20,
+   "truncate": 20,
+   "vertical": false,
+   "expected": "+---------+---+\n|        s|  t|\n+---------+---+\n|a\\nb\\tc\\d|q\"r|\n+---------+---+\n"
+  },
+  {
+   "name": "wide_chars",
+   "sql": "SELECT '中文' AS s, 'ab' AS t, 'é' AS e",
+   "num_rows": 20,
+   "truncate": 20,
+   "vertical": false,
+   "expected": "+----+---+---+\n|   s|  t|  e|\n+----+---+---+\n|中文| ab|  é|\n+----+---+---+\n"
+  },
+  {
+   "name": "wide_chars_truncated",
+   "sql": "SELECT '中文中文中文' AS s",
+   "num_rows": 20,
+   "truncate": 4,
+   "vertical": false,
+   "expected": "+-----+\n|    s|\n+-----+\n|中...|\n+-----+\n"
+  },
+  {
+   "name": "types",
+   "sql": "SELECT true AS b, 1Y AS t, 2S AS s, 3 AS i, 4L AS l, 1.5F AS f, 2.5D AS d, CAST(1.10 AS DECIMAL(5,2)) AS dec, DATE'2024-02-29' AS dt, TIMESTAMP_NTZ'2024-02-29 01:02:03.5' AS ntz",
+   "num_rows": 20,
+   "truncate": 20,
+   "vertical": false,
+   "expected": "+----+---+---+---+---+---+---+----+----------+--------------------+\n|   b|  t|  s|  i|  l|  f|  d| dec|        dt|                 ntz|\n+----+---+---+---+---+---+---+----+----------+--------------------+\n|true|  1|  2|  3|  4|1.5|2.5|1.10|2024-02-29|2024-02-29 01:02:...|\n+----+---+---+---+---+---+---+----+----------+--------------------+\n"
+  },
+  {
+   "name": "special_floats",
+   "sql": "SELECT CAST('NaN' AS DOUBLE) AS n, CAST('Infinity' AS DOUBLE) AS p, CAST('-Infinity' AS DOUBLE) AS m, -0.0D AS z, 1e10D AS big, 1e-5D AS small",
+   "num_rows": 20,
+   "truncate": 20,
+   "vertical": false,
+   "expected": "+---+--------+---------+----+------+------+\n|  n|       p|        m|   z|   big| small|\n+---+--------+---------+----+------+------+\n|NaN|Infinity|-Infinity|-0.0|1.0E10|1.0E-5|\n+---+--------+---------+----+------+------+\n"
+  },
+  {
+   "name": "array",
+   "sql": "SELECT array(1, 2, 3) AS a, array() AS e, array('x', 'y') AS s",
+   "num_rows": 20,
+   "truncate": 20,
+   "vertical": false,
+   "expected": "+---------+---+------+\n|        a|  e|     s|\n+---------+---+------+\n|[1, 2, 3]| []|[x, y]|\n+---------+---+------+\n"
+  },
+  {
+   "name": "array_with_null",
+   "sql": "SELECT array(1, CAST(NULL AS INT), 3) AS a",
+   "num_rows": 20,
+   "truncate": 20,
+   "vertical": false,
+   "expected": "+------------+\n|           a|\n+------------+\n|[1, NULL, 3]|\n+------------+\n"
+  },
+  {
+   "name": "map",
+   "sql": "SELECT map('k', 1, 'j', 2) AS m",
+   "num_rows": 20,
+   "truncate": 20,
+   "vertical": false,
+   "expected": "+----------------+\n|               m|\n+----------------+\n|{k -> 1, j -> 2}|\n+----------------+\n"
+  },
+  {
+   "name": "map_with_null",
+   "sql": "SELECT map('k', CAST(NULL AS INT)) AS m",
+   "num_rows": 20,
+   "truncate": 20,
+   "vertical": false,
+   "expected": "+-----------+\n|          m|\n+-----------+\n|{k -> NULL}|\n+-----------+\n"
+  },
+  {
+   "name": "struct",
+   "sql": "SELECT named_struct('a', 1, 'b', 'x') AS s",
+   "num_rows": 20,
+   "truncate": 20,
+   "vertical": false,
+   "expected": "+------+\n|     s|\n+------+\n|{1, x}|\n+------+\n"
+  },
+  {
+   "name": "struct_with_null",
+   "sql": "SELECT named_struct('a', CAST(NULL AS INT), 'b', 'x') AS s",
+   "num_rows": 20,
+   "truncate": 20,
+   "vertical": false,
+   "expected": "+---------+\n|        s|\n+---------+\n|{NULL, x}|\n+---------+\n"
+  },
+  {
+   "name": "nested",
+   "sql": "SELECT array(named_struct('a', array(1, 2))) AS n",
+   "num_rows": 20,
+   "truncate": 20,
+   "vertical": false,
+   "expected": "+----------+\n|         n|\n+----------+\n|[{[1, 2]}]|\n+----------+\n"
+  },
+  {
+   "name": "array_of_binary",
+   "sql": "SELECT array(X'0102') AS a",
+   "num_rows": 20,
+   "truncate": 20,
+   "vertical": false,
+   "expected": "+---------+\n|        a|\n+---------+\n|[[01 02]]|\n+---------+\n"
+  },
+  {
+   "name": "vertical",
+   "sql": "SELECT id, 'v' || id AS name FROM range(2)",
+   "num_rows": 20,
+   "truncate": 20,
+   "vertical": true,
+   "expected": "-RECORD 0---\n id   | 0   \n name | v0  \n-RECORD 1---\n id   | 1   \n name | v1  \n"
+  },
+  {
+   "name": "vertical_empty",
+   "sql": "SELECT id FROM range(0)",
+   "num_rows": 20,
+   "truncate": 20,
+   "vertical": true,
+   "expected": "(0 rows)"
+  },
+  {
+   "name": "vertical_footer",
+   "sql": "SELECT id, 'v' AS n FROM range(5)",
+   "num_rows": 2,
+   "truncate": 20,
+   "vertical": true,
+   "expected": "-RECORD 0--\n id  | 0   \n n   | v   \n-RECORD 1--\n id  | 1   \n n   | v   \nonly showing top 2 rows"
+  },
+  {
+   "name": "vertical_truncate_0",
+   "sql": "SELECT 'abcdefghijklmnopqrstuvwxyz0123456789' AS s, 1 AS i",
+   "num_rows": 20,
+   "truncate": 0,
+   "vertical": true,
+   "expected": "-RECORD 0-----------------------------------\n s   | abcdefghijklmnopqrstuvwxyz0123456789 \n i   | 1                                    \n"
+  },
+  {
+   "name": "vertical_nulls",
+   "sql": "SELECT CAST(NULL AS STRING) AS s, 1 AS i",
+   "num_rows": 20,
+   "truncate": 20,
+   "vertical": true,
+   "expected": "-RECORD 0---\n s   | NULL \n i   | 1    \n"
+  },
+  {
+   "name": "many_columns",
+   "sql": "SELECT 1 AS a, 2 AS b, 3 AS c, 4 AS d, 5 AS e, 6 AS f",
+   "num_rows": 20,
+   "truncate": 20,
+   "vertical": false,
+   "expected": "+---+---+---+---+---+---+\n|  a|  b|  c|  d|  e|  f|\n+---+---+---+---+---+---+\n|  1|  2|  3|  4|  5|  6|\n+---+---+---+---+---+---+\n"
+  },
+  {
+   "name": "no_columns",
+   "sql": "SELECT * FROM (SELECT 1 AS a) WHERE false",
+   "num_rows": 20,
+   "truncate": 20,
+   "vertical": false,
+   "expected": "+---+\n|  a|\n+---+\n+---+\n"
+  }
+ ]
+}

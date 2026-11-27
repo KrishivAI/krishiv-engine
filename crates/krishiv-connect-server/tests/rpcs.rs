@@ -400,7 +400,12 @@ async fn analyze_input_files_lists_file_scans() {
     };
     // The path qualified as the scan lists it, not the files under it (a
     // recorded difference).
-    assert_eq!(f.files, vec![format!("file:{out}")]);
+    assert_eq!(
+        f.files,
+        vec![krishiv_exec::files::file_display(std::path::Path::new(
+            &out
+        ))]
+    );
     let AResult::InputFiles(f) = analyzed(
         &run,
         Analyze::InputFiles(Box::new(areq::InputFiles {

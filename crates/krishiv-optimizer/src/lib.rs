@@ -90,6 +90,7 @@ mod prune;
 mod pushdown;
 mod repartition;
 mod restrict;
+mod rollup_chain;
 mod semi_order;
 mod share_cte;
 mod share_literal;
@@ -104,9 +105,9 @@ use krishiv_common::config::{
     ANSI_ENABLED, AUTO_BROADCAST_JOIN_THRESHOLD, Config, ConfigValue, DERIVED_KEYS_ABOVE,
     EAGER_AGGREGATION, GROUP_KEY_CODE, GROUP_KEY_CODE_MULTI_DIMENSION, JOIN_COST, JOIN_DP_LIMIT,
     JOIN_ENUMERATOR, JOIN_PRUNE_FIRST, LATE_PAYLOAD_JOIN, PAYLOAD_ABOVE_AGGREGATE,
-    PRE_AGGREGATE_EXPAND, PRESERVED_SIDE_SEMI_JOIN, SEMI_ANTI_JOIN_ORDER, SESSION_TIME_ZONE,
-    SHARE_CTE_INSTANCES, SHARE_FILTERED_SCANS, SHARE_LITERAL_INSTANCES, SHARE_REPEATED_SUBTREES,
-    SUBQUERY_AS_WINDOW,
+    PRE_AGGREGATE_EXPAND, PRESERVED_SIDE_SEMI_JOIN, ROLLUP_FROM_PARENT, SEMI_ANTI_JOIN_ORDER,
+    SESSION_TIME_ZONE, SHARE_CTE_INSTANCES, SHARE_FILTERED_SCANS, SHARE_LITERAL_INSTANCES,
+    SHARE_REPEATED_SUBTREES, SUBQUERY_AS_WINDOW,
 };
 use krishiv_common::error::{InternalError, KrishivError};
 use krishiv_plan::{
@@ -139,11 +140,12 @@ pub const MAX_ITERATIONS: usize = 100;
 type Rule = fn(Arc<LogicalPlan>) -> Arc<LogicalPlan>;
 
 /// The rewrite batch, in order, with the rules' names.
-const REWRITE: [(&str, Rule); 9] = [
+const REWRITE: [(&str, Rule); 10] = [
     ("RemoveAlias", project::remove_alias),
     ("CollapseRepartition", repartition::collapse),
     ("ConstantFolding", fold_node),
     ("PruneObservedEmpty", empty::prune),
+    ("DropEmptyUnionInputs", empty::drop_empty_union_inputs),
     ("PushDownFilter", pushdown::push_filter),
     ("PushDownJoinCondition", pushdown::push_join_condition),
     ("PushDownAsOfCondition", pushdown::push_as_of_condition),
@@ -161,6 +163,7 @@ const REWRITE_INSIDE: [Rule; REWRITE.len()] = [
     repartition::collapse,
     fold_node,
     empty::prune,
+    keep,
     pushdown::push_filter_guarded,
     pushdown::push_join_condition_guarded,
     keep,
@@ -243,6 +246,12 @@ pub struct Options {
     /// session configuration where `krishiv.optimizer.shareFilteredScans` and
     /// `krishiv.sql.optimizer.shareCteInstances` are on.
     pub share_filtered_scans: bool,
+    /// The grouping sets of a pre-aggregated expansion are each computed
+    /// from their smallest computed parent set (`rollup_chain`, perf lever
+    /// F-C2). Needs statistics; runs only with a session configuration where
+    /// `krishiv.optimizer.rollupFromParent` and
+    /// `krishiv.sql.optimizer.shareCteInstances` are on.
+    pub rollup_from_parent: bool,
     /// Group-key codes (`group_code`, design P2b D2): an aggregate's keys
     /// from one dimension travel as one integer code. Needs statistics; a
     /// session configuration, when given, must also switch it on
@@ -278,6 +287,7 @@ impl Default for Options {
             subquery_as_window: true,
             share_repeated_subtrees: true,
             share_filtered_scans: true,
+            rollup_from_parent: true,
             group_key_code: true,
             derived_keys_above: true,
             inferred_join_filters: true,
@@ -640,13 +650,6 @@ fn run(
                     .and_then(ConfigValue::as_bool)
                     .unwrap_or(true)
             });
-        let root = match stats {
-            Some(stats) if eager => eager_pass(&root, stats, options, expand, joins, &mut t)?,
-            _ => root,
-        };
-        // After eager aggregation (which may pre-empt it) and the final join
-        // order, before pruning: an aggregate's dimension keys travel as one
-        // code (design P2b D2).
         // `krishiv.experimental.groupKeyCodeForce` (measurement only) also
         // switches it on, without the statistics test.
         let forced = udfs.is_some_and(|(_, config)| {
@@ -680,6 +683,28 @@ fn run(
                 }
             }
         };
+        let above = options.payload_above_aggregate
+            && udfs.is_some_and(|(_, config)| {
+                config
+                    .get(&PAYLOAD_ABOVE_AGGREGATE)
+                    .and_then(ConfigValue::as_bool)
+                    .unwrap_or(false)
+            });
+        // Eager aggregation leaves an aggregate to those two rules when they
+        // take it (`eager::Yield`).
+        let yields = eager::Yield {
+            payload_above: above,
+            group_code: min_dimensions.map(|min| (forced, min)),
+        };
+        let root = match stats {
+            Some(stats) if eager => {
+                eager_pass(&root, stats, options, expand, yields, joins, &mut t)?
+            }
+            _ => root,
+        };
+        // After eager aggregation (which leaves it what it codes) and the final join
+        // order, before pruning: an aggregate's dimension keys travel as one
+        // code (design P2b D2).
         let root = match stats {
             Some(stats) if let Some(min_dimensions) = min_dimensions => {
                 let (after, notes) = group_code::rewrite(
@@ -728,13 +753,6 @@ fn run(
         // ordering cannot undo it), eager aggregation and the group-key code
         // see the new aggregate, and the plan is pruned and tidied again
         // (design P2b A5).
-        let above = options.payload_above_aggregate
-            && udfs.is_some_and(|(_, config)| {
-                config
-                    .get(&PAYLOAD_ABOVE_AGGREGATE)
-                    .and_then(ConfigValue::as_bool)
-                    .unwrap_or(false)
-            });
         let root = match stats {
             Some(stats) if above => {
                 // To a fixed point: a move gives a new aggregate, which the
@@ -761,7 +779,8 @@ fn run(
                     }
                     let mut ordered = order_and_restrict(after, stats, options, joins, &mut t)?;
                     if eager {
-                        ordered = eager_pass(&ordered, stats, options, expand, joins, &mut t)?;
+                        ordered =
+                            eager_pass(&ordered, stats, options, expand, yields, joins, &mut t)?;
                     }
                     if let Some(min_dimensions) = min_dimensions {
                         let (after, notes) = group_code::rewrite(
@@ -811,7 +830,15 @@ fn run(
                     // the shape eager aggregation reads (where its gates allow,
                     // the aggregate then runs by the dimension's key below it).
                     if eager {
-                        ordered = eager_pass(&ordered, stats, options, expand, joins, &mut t)?;
+                        ordered = eager_pass(
+                            &ordered,
+                            stats,
+                            options,
+                            expand,
+                            eager::Yield::default(),
+                            joins,
+                            &mut t,
+                        )?;
                     }
                     prune_and_tidy(&ordered, Some(stats), &mut t)?
                 }
@@ -892,7 +919,9 @@ fn run(
                         let mut ordered =
                             order_and_restrict(tidied, stats, options, joins, &mut t)?;
                         if eager {
-                            ordered = eager_pass(&ordered, stats, options, expand, joins, &mut t)?;
+                            ordered = eager_pass(
+                                &ordered, stats, options, expand, yields, joins, &mut t,
+                            )?;
                         }
                         if let Some(min_dimensions) = min_dimensions {
                             let (after, notes) = group_code::rewrite(
@@ -944,6 +973,22 @@ fn run(
             } else {
                 shared
             }
+        } else {
+            root
+        };
+        // Grouping sets from their parent sets (`rollup_chain`, TPC-DS q67).
+        let rollups = share
+            && options.rollup_from_parent
+            && udfs.is_some_and(|(_, config)| {
+                config
+                    .get(&ROLLUP_FROM_PARENT)
+                    .and_then(ConfigValue::as_bool)
+                    .unwrap_or(true)
+            });
+        let root = if rollups {
+            t.once("RollupFromParent", &root, |r| {
+                rollup_chain::chain(Arc::clone(r), stats.unwrap_or(&NoStatistics))
+            })?
         } else {
             root
         };
@@ -1075,11 +1120,17 @@ fn eager_pass(
     stats: &dyn Statistics,
     options: &Options,
     expand: bool,
+    yields: eager::Yield,
     joins: join_order::Settings,
     t: &mut Trace,
 ) -> Result<Arc<LogicalPlan>, KrishivError> {
-    let (after, notes) =
-        eager::rewrite(Arc::clone(root), stats, options.stats_propagation, expand)?;
+    let (after, notes) = eager::rewrite(
+        Arc::clone(root),
+        stats,
+        options.stats_propagation,
+        expand,
+        yields,
+    )?;
     t.notes("EagerAggregate", &after, notes);
     // The moved aggregate changes what its join's inputs estimate, and so
     // their canonical order.

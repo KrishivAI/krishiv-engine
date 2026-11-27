@@ -335,11 +335,14 @@ async fn a_signed_link_opens_a_finished_query_detail_until_it_expires() {
         !detail["operators"].as_array().unwrap().is_empty(),
         "{detail}"
     );
-    // A one-second link works now and is refused after its second.
-    let (_, _, body) = get(addr, &issue(1), true).await;
+    // Expiry is in whole seconds (`expires = now + ttl`, refused once `expires <= now`),
+    // so a ttl of 1 is valid for anywhere between 0 and 1 s depending on where the clock
+    // sits in its second. A ttl of 2 is valid for at least a second: it works now and is
+    // refused once the sleep has passed its end.
+    let (_, _, body) = get(addr, &issue(2), true).await;
     let short = link_query(&body);
     let path = format!("/api/internal/embed/queries/{id}?{short}");
     assert_eq!(get(addr, &path, false).await.0, 200);
-    tokio::time::sleep(Duration::from_millis(2500)).await;
+    tokio::time::sleep(Duration::from_millis(3100)).await;
     assert_eq!(get(addr, &path, false).await.0, 401);
 }
