@@ -21,7 +21,10 @@
 //! claims a run of batches in memory at a time, so it can hold up to
 //! [`MAX_RUN`] batches and about [`RUN_BYTES`] (or one batch, when one is
 //! larger) that a spill of the segment reports freed: that is what a reader's
-//! drivers keep outside the pool, at most `drivers x RUN_BYTES` a reader.
+//! drivers keep outside the pool, about `drivers x RUN_BYTES` a reader plus
+//! the batch each has in flight. "About": a run is sized by the segment's
+//! average batch, so a segment of uneven batches, or one whose reservation a
+//! spill is lowering while it writes, can give a longer run.
 //!
 //! The coordinator keeps the sink's finalized state and drops it when the
 //! last reading pipeline ended (or the query failed), which drops the list,
@@ -1126,7 +1129,13 @@ mod tests {
     }
 
     fn cursor_index(g: &GlobalState) -> u64 {
-        lock(&global_ref::<ReaderGlobal>(g, "test").unwrap().cursor).index
+        cursor_at(g).1
+    }
+
+    /// The reader's cursor: `(segment, index in it)`.
+    fn cursor_at(g: &GlobalState) -> (usize, u64) {
+        let c = lock(&global_ref::<ReaderGlobal>(g, "test").unwrap().cursor);
+        (c.segment, c.index)
     }
 
     #[test]
@@ -1252,42 +1261,68 @@ mod tests {
     }
 
     /// Drivers on several threads read a list of a file segment and a memory
-    /// segment while the list is spilled under them (queued runs and the
-    /// gate both in play): every batch is read exactly once.
+    /// segment, and the memory segment turns into a file under them: each
+    /// driver claims its first run (the gate on the file segment, then runs
+    /// queued from memory), all stop at a barrier, the spill runs to its end
+    /// with batches still unread, and the drivers finish, the queued runs
+    /// first, then the rest from the new file under the gate. Every batch is
+    /// read exactly once (review of 0b160f3ca: the interleaving is certain,
+    /// not timed).
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn drivers_on_threads_read_every_batch_once_while_the_list_spills() {
-        for round in 0..8_u64 {
+    async fn drivers_on_threads_read_every_batch_once_after_the_list_spills_under_them() {
+        const DRIVERS: usize = 6;
+        for round in 0..4_u64 {
             let batches: Vec<Batch> = (0..400).map(|i| batch(i, 1)).collect();
             // The first batch goes to a file: a file segment, then memory.
             let (_sink, global, query, _ctx, _dir) = finalized(batches, true).await;
             let sink_g = global_ref::<SinkGlobal>(&global, "test").unwrap();
             let output = Arc::clone(sink_g.done.get().unwrap());
             let source = Arc::new(SharedSource::new(schema()));
-            let (g, locals) = drivers(&source, &query, &global, 6);
+            let (g, locals) = drivers(&source, &query, &global, DRIVERS);
+            let claimed = Arc::new(tokio::sync::Barrier::new(DRIVERS + 1));
+            let spilled = Arc::new(tokio::sync::Barrier::new(DRIVERS + 1));
             let mut tasks = Vec::new();
             for mut local in locals {
-                let source = Arc::clone(&source);
-                let g = Arc::clone(&g);
+                let (source, g) = (Arc::clone(&source), Arc::clone(&g));
+                let (claimed, spilled) = (Arc::clone(&claimed), Arc::clone(&spilled));
                 tasks.push(tokio::spawn(async move {
                     let mut read = Vec::new();
+                    let first = source.get_data(&mut local, &g).await.unwrap().unwrap();
+                    read.extend(values(&first));
+                    claimed.wait().await;
+                    spilled.wait().await;
                     while let Some(b) = source.get_data(&mut local, &g).await.unwrap() {
                         read.extend(values(&b));
-                        tokio::task::yield_now().await;
+                        for _ in 0..round {
+                            tokio::task::yield_now().await;
+                        }
                     }
                     read
                 }));
             }
-            let spill = tokio::spawn(async move {
-                for _ in 0..=round {
-                    tokio::task::yield_now().await;
-                }
-                output.spill_unread(usize::MAX).await.unwrap()
-            });
+            claimed.wait().await;
+            // Past the one-batch file segment, inside the memory segment of
+            // 399 batches, with batches left for the spill to write.
+            let at_spill = cursor_at(&g);
+            assert_eq!(at_spill.0, 1, "round {round}");
+            assert!(
+                at_spill.1 < 399,
+                "round {round}: nothing left to spill under the readers"
+            );
+            assert!(
+                output.spill_unread(usize::MAX).await.unwrap() > 0,
+                "round {round}"
+            );
+            assert_eq!(
+                cursor_at(&g),
+                at_spill,
+                "round {round}: read during the spill"
+            );
+            spilled.wait().await;
             let mut read = Vec::new();
             for t in tasks {
                 read.extend(t.await.unwrap());
             }
-            spill.await.unwrap();
             read.sort_unstable();
             assert_eq!(read, (0..400).collect::<Vec<i64>>(), "round {round}");
         }
