@@ -17,12 +17,15 @@ You can also build the wheel from the repository (`maturin build` in `python/`).
 
 ## Where to start
 
-- **New here:** [Get started](get-started/index.md) installs Krishiv and runs a first query.
-- **Coming from Spark:** [Guides](guides/index.md), beginning with
-  [Migrate a PySpark job](guides/pyspark-migration.md).
-- **Looking something up:** [Reference](reference/index.md): the [SQL language](reference/sql/index.md) and
+**[Quickstart: your first query](get-started/quickstart.md)**
+
+- **Start:** [Get started](get-started/index.md) installs Krishiv and runs a first query.
+- **Guides:** [Guides](guides/index.md) for one task each.
+- **Reference:** [Reference](reference/index.md): the [SQL language](reference/sql/index.md) and
   [functions](reference/sql/functions/index.md), the [Python package](reference/python-package.md) and
-  [API](reference/python/index.md), every [setting](reference/config/index.md), metrics and query profiles.
-- **Deciding what to rely on:** [Concepts](concepts/index.md): what is [supported](concepts/compatibility.md) against
-  Spark and the [known differences](concepts/known-differences.md).
+  [API](reference/python/index.md), every [setting](reference/config/index.md) and
+  [error class](reference/errors/index.md), metrics and query profiles.
+- **Concepts:** [Concepts](concepts/index.md): what is [supported](concepts/compatibility.md) against Spark and the
+  [known differences](concepts/known-differences.md).
+- **Coming from Spark:** [Migrate a PySpark job](guides/pyspark-migration.md).
 - **What changed:** [Releases](releases/index.md).

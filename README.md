@@ -141,7 +141,16 @@ Install, with pyarrow for the Arrow results:
 pip install "krishiv[pyarrow]"
 ```
 
-SQL and DataFrames:
+A first query:
+
+```python
+import krishiv
+
+spark = krishiv.session()  # a PySpark-style SparkSession, in process
+spark.sql("SELECT 1 AS answer").show()
+```
+
+SQL and DataFrames over a file:
 
 ```python
 import tempfile
@@ -153,10 +162,7 @@ import pyarrow.parquet as pq
 import krishiv
 from krishiv.sql import functions as F
 
-spark = krishiv.session()  # a PySpark-style SparkSession, in process
-
-# SQL.
-spark.sql("SELECT 1 AS answer").show()
+spark = krishiv.session()
 
 # DataFrames over a Parquet file; the same file is also a temp view for SQL.
 path = str(Path(tempfile.mkdtemp()) / "orders.parquet")
