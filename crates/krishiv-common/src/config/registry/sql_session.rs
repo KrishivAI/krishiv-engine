@@ -46,15 +46,16 @@ pub static IO_TEXT_TIME_NANOS: ConfigEntry = ConfigEntry {
     spark_alias: None,
 };
 
-/// Whether CSV and JSON schema inference may give `TIME`.
+/// Whether CSV and JSON file-read schema inference may give `TIME`.
 pub static IO_TEXT_INFER_TIME: ConfigEntry = ConfigEntry {
     key: "krishiv.io.text.inferTime",
     value_type: ValueType::Bool,
     default: Some(ConfigValue::Bool(true)),
-    doc: "Whether CSV and JSON schema inference (file reads, `schema_of_csv`, `schema_of_json`) may \
+    doc: "Whether CSV and JSON file-read schema inference may \
           give `TIME` while `spark.sql.timeType.enabled` is on (Spark 4.3.0); Spark 4.2 infers a \
           time-only string as `TIMESTAMP` either way. The session sets it from its Spark profile: \
-          `true` under the 4.3 profile, `false` under older ones.",
+          `true` under the 4.3 profile, `false` under older ones. `schema_of_csv` follows the \
+          session's Spark profile directly.",
     scope: Scope::Session,
     settable_by: SettableBy::Admin,
     version_added: "0.3.1",

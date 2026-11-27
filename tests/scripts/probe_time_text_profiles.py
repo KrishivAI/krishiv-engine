@@ -17,7 +17,7 @@ Usage (from repo root), once per version:
         /opt/spark/bin/spark-submit --master 'local[1]' --driver-memory 1g /work/probe_time_text_profiles.py \\
         > "$out.tmp" && python3 -m json.tool "$out.tmp" > /dev/null && mv "$out.tmp" "$out"
 
-Checked by `krishiv-session/tests/time_file_reads.rs` (`the_4_2_profile_never_infers_time`) and
+Checked by `krishiv-session/tests/time_file_reads.rs` (`text_time_follows_the_profile_runs`) and
 `krishiv-io/src/csv/time_tests.rs` (the 4.2 profile rows).
 """
 

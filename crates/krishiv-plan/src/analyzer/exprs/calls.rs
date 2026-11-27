@@ -650,8 +650,8 @@ impl Resolver<'_> {
         }
         // Inference gives `TIME` only under the session's gate (Spark 4.3.0's
         // `CSVInferSchema` reads `SQLConf.isTimeTypeEnabled`), never an option,
-        // and only under the 4.3 profile: Spark 4.2.0 infers `TIMESTAMP` with
-        // the gate on (csv-functions golden).
+        // and only under the 4.3 profile: Spark 4.2.1 infers `TIMESTAMP` with
+        // the gate on (`tests/fixtures/spark-4.2.1/time-text-profiles.json`).
         let infers_time =
             self.ctx.conf.time_type && self.ctx.profile >= crate::analyzer::SparkProfile::V4_3;
         let schema = krishiv_io::csv::option_schema();

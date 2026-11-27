@@ -44,7 +44,8 @@ pub(crate) const TIME_NANOS_CONF: &str = "krishiv.io.text.timeNanos";
 /// The session's `krishiv.io.text.inferTime`, read as an option named as the
 /// conf: schema inference may give `TIME` (with [`TIME_TYPE_CONF`] on) only
 /// under the Spark 4.3 profile; Spark 4.2's `CSVInferSchema` /
-/// `JsonInferSchema` never give `TIME` (4.2.0 run, gate on).
+/// `JsonInferSchema` never give `TIME` (Spark 4.2.1 run, gate on:
+/// `tests/fixtures/spark-4.2.1/time-text-profiles.json`).
 pub(crate) const TIME_INFER_CONF: &str = "krishiv.io.text.inferTime";
 
 /// Whether schema inference may give `TIME`: the session's gate and its
