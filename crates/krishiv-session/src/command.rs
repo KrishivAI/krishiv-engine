@@ -20,8 +20,8 @@ use krishiv_common::error::{
     DuplicateRoutineReturnsColumns, DuplicateVariableNameInsideDeclare, ErrorClass,
     ErrorQueryContext, InvalidDefaultValueSubqueryExpression, InvalidSqlFunctionDataAccess,
     KrishivError, KrishivUnsupportedFeature, RoutineAlreadyExists, RoutineNotFound,
-    RowSubqueryTooManyRows, SchemaNotFound, TableOrViewNotFound, TempTableOrViewAlreadyExists,
-    UnresolvedVariable, UnsupportedCharOrVarcharAsString, UnsupportedFeatureSetPathWhenDisabled,
+    RowSubqueryTooManyRows, TableOrViewNotFound, TempTableOrViewAlreadyExists, UnresolvedVariable,
+    UnsupportedCharOrVarcharAsString, UnsupportedFeatureSetPathWhenDisabled,
     UnsupportedFeatureSetVariableUsingSet, UserDefinedFunctionsCannotReplaceNonSqlUdfWithSqlUdf,
     UserDefinedFunctionsNotAValidDefaultExpression,
     UserDefinedFunctionsNotAValidDefaultParameterPosition,
@@ -29,7 +29,7 @@ use krishiv_common::error::{
     UserDefinedFunctionsSqlTableUdfBodyMustBeAQuery, VariableAlreadyExists, VariableNotFound,
 };
 use krishiv_common::names::check_column_name_duplication;
-use krishiv_common::redact::RedactedSql;
+use krishiv_common::redact::{REDACTED, RedactedSql, is_redacted_setting};
 use krishiv_plan::analyzer::{
     FunctionLookup, SqlFunction, SqlParam, TableColumn, VariableValue, variable_name,
 };
@@ -49,6 +49,7 @@ pub(crate) use crate::arrow_values::{arrow_field_value, arrow_value, declared_va
 use crate::catalog::TempTable;
 use crate::catalog::{is_reserved_view_name, reserved_temp_view_name};
 use crate::column::Column;
+use crate::conf::shown;
 use crate::dataframe::DataFrame;
 use crate::session::{QueryEnv, Session};
 use crate::sql_functions::Entry;
@@ -81,7 +82,10 @@ impl Session {
                 self.string_frame(
                     cols::SET,
                     rows.into_iter()
-                        .map(|(key, value)| vec![Some(key), Some(value)])
+                        .map(|(key, value)| {
+                            let value = shown(&key, value);
+                            vec![Some(key), Some(value)]
+                        })
                         .collect(),
                 )
                 .await
@@ -97,6 +101,15 @@ impl Session {
                             .state
                             .conf
                             .value(entry.key)
+                            .map(|v| {
+                                // Spark's `SET -v` hides nothing; a registered key that holds
+                                // a secret (`krishiv.access.external.token`) is hidden here.
+                                if is_redacted_setting(entry.key, Some(&v)) {
+                                    REDACTED.to_owned()
+                                } else {
+                                    v
+                                }
+                            })
                             .unwrap_or_else(|| UNDEFINED.to_owned());
                         vec![
                             Some(entry.key.to_owned()),
@@ -114,6 +127,7 @@ impl Session {
                     .conf
                     .value(key)
                     .unwrap_or_else(|| UNDEFINED.to_owned());
+                let value = shown(key, value);
                 self.string_frame(cols::SET, vec![vec![Some(key.clone()), Some(value)]])
                     .await
             }
@@ -1276,10 +1290,7 @@ impl Session {
             namespace.to_lowercase()
         };
         if !self.state.catalog.store.has_namespace(&namespace) {
-            return Err(SchemaNotFound {
-                schema_name: quote(&namespace),
-            }
-            .into());
+            return Err(crate::catalog::schema_not_found(&namespace));
         }
         Ok((namespace, part))
     }
@@ -1457,10 +1468,7 @@ impl Session {
             // A namespace dropped while the body was checked is not one to
             // store into.
             if !store.has_namespace(namespace) {
-                return Err(SchemaNotFound {
-                    schema_name: quote(namespace),
-                }
-                .into());
+                return Err(crate::catalog::schema_not_found(namespace));
             }
             let current = store.functions();
             if !f.or_replace && current.get(namespace, &entry.def.name).is_some() {

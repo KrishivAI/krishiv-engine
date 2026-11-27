@@ -30,8 +30,8 @@ use std::sync::Arc;
 
 use krishiv_common::error::{
     DataSourceNotFound, InternalError, KrishivError, LegacyErrorTemp1073, LocationAlreadyExists,
-    SchemaAlreadyExists, SchemaNotEmpty, SchemaNotFound, TableOrViewAlreadyExists,
-    TableOrViewNotFound, UnsupportedFeatureCatalogOperation,
+    SchemaAlreadyExists, SchemaNotEmpty, TableOrViewAlreadyExists, TableOrViewNotFound,
+    UnsupportedFeatureCatalogOperation,
 };
 use krishiv_common::names::check_column_name_duplication;
 use krishiv_plan::TableVersion;
@@ -379,10 +379,7 @@ impl CatalogWrite for StoreCatalog {
             if self.store.alter_namespace(&name, &apply) {
                 Ok(())
             } else {
-                Err(SchemaNotFound {
-                    schema_name: format!("`{name}`"),
-                }
-                .into())
+                Err(crate::catalog::schema_not_found(&name))
             }
         })
     }
@@ -418,10 +415,7 @@ impl CatalogWrite for StoreCatalog {
             {
                 Ok(_dropped) => {}
                 Err(DropNamespaceError::Missing) => {
-                    return Err(SchemaNotFound {
-                        schema_name: format!("`{name}`"),
-                    }
-                    .into());
+                    return Err(crate::catalog::schema_not_found(&name));
                 }
                 Err(DropNamespaceError::NotEmpty) => {
                     return Err(SchemaNotEmpty {
@@ -462,10 +456,7 @@ impl CatalogWrite for StoreCatalog {
             let (namespace, name) = self.table(&info.ident)?;
             check_new_name(&name)?;
             if !self.store.has_namespace(&namespace) {
-                return Err(SchemaNotFound {
-                    schema_name: format!("`{namespace}`"),
-                }
-                .into());
+                return Err(crate::catalog::schema_not_found(&namespace));
             }
             // As the SQL create does (`Session::refuse_collated_namespace`): the schema's default collation
             // is not applied to new columns yet, so a table here would silently compare as `UTF8_BINARY`.
@@ -678,10 +669,7 @@ impl CatalogWrite for StoreCatalog {
             check_new_name(&to_namespace)?;
             check_new_name(&to_name)?;
             if !self.store.has_namespace(&to_namespace) {
-                return Err(SchemaNotFound {
-                    schema_name: format!("`{to_namespace}`"),
-                }
-                .into());
+                return Err(crate::catalog::schema_not_found(&to_namespace));
             }
             let table = self
                 .store
