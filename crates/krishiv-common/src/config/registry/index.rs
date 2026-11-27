@@ -478,6 +478,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &RUNTIME_FILTER_RESIDUAL_BOUNDS,
     ),
     (
+        "krishiv.runtimeFilter.smallTableWait",
+        &RUNTIME_FILTER_SMALL_TABLE_WAIT,
+    ),
+    (
         "krishiv.sql.legacy.codingErrorAction",
         &LEGACY_CODING_ERROR_ACTION,
     ),
