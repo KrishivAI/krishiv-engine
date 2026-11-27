@@ -450,7 +450,14 @@ thread that runs the action. `removeTag` of a tag the thread does not have does 
 
 Global temporary views (`createGlobalTempView`, `CREATE GLOBAL TEMPORARY VIEW`) belong to the session that
 made them: another session, `spark.newSession()` included, does not see `global_temp.<name>`. In Spark they are
-shared by every session of the application.
+shared by every session of the application. Sharing them across `newSession()` on a server would cross principals,
+so it stays per session in 0.3.1; a later release may share them within one principal.
+
+ORC files are not supported in 0.3.x (ADR 0028): `spark.read.orc(..)`, `format("orc")` and `df.write.orc` fail with
+`KRISHIV_UNSUPPORTED_FEATURE`.
+
+A grouped-aggregate pandas UDF used as a window function (`pandas_udf(..., GROUPED_AGG).over(window)`) is not
+supported in the embedded session; Spark runs it.
 
 ## `krishiv server` (Spark Connect)
 
