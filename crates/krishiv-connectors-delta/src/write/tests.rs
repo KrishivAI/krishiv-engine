@@ -103,10 +103,7 @@ impl Env {
             .unwrap();
         let sched = IoScheduler::new(IoConfig::default());
         let id = StoreId::new("file");
-        sched.register_whole_listing_store(
-            id.clone(),
-            Arc::new(krishiv_io::SettledLocalFileSystem::new()),
-        );
+        sched.register_whole_listing_store(id.clone(), Arc::new(crate::TestLocalStore::new()));
         let root = TreePool::new(memory);
         let query_pool = root.child("query", None);
         let process: Arc<dyn MemoryPool> = TreePool::new(&MemoryConfig::default());

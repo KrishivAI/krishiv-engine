@@ -286,6 +286,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        not(unix),
+        ignore = "the spec holds Unix absolute paths; the sandbox runs on Linux only"
+    )]
     fn spec_round_trips_through_args() -> Result<(), SandboxError> {
         for spec in [
             full_spec(),

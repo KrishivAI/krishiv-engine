@@ -703,7 +703,17 @@ async fn edge_cases_and_errors() {
         Field::new_dictionary("x", DataType::Int32, DataType::Float64, true),
         Field::new_dictionary("y", DataType::Int32, DataType::Utf8, true),
     ]));
-    for c in 0..3 {
+    // A list orders element by element as in Spark: `DESC` (`NULLS LAST`) is the default placement;
+    // a non-default one cannot be said for the nested nulls and is refused.
+    assert!(Sort::new(Arc::clone(&nested), &[SortKey::desc(0)], None).is_ok());
+    let e = Sort::new(
+        Arc::clone(&nested),
+        &[SortKey::desc(0).nulls_first(true)],
+        None,
+    )
+    .unwrap_err();
+    assert_eq!(class(e), ErrorClass::KrishivUnsupportedFeature);
+    for c in 1..3 {
         let e = Sort::new(Arc::clone(&nested), &[SortKey::desc(c)], None).unwrap_err();
         assert_eq!(
             class(e),
