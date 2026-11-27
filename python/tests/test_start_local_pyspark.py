@@ -134,6 +134,28 @@ def test_startup_to_first_row_is_measured() -> None:
         assert median < 1.0
 
 
+def test_dataframe_window_functions_run_through_start_local() -> None:
+    """QA2-2 / QA2-18: ``row_number().over(Window...)`` was refused as ``Expression.WINDOW(11)``."""
+    from pyspark.sql import Window
+    from pyspark.sql import functions as PF
+
+    with krishiv.start_local() as server:
+        spark = _remote(server.url)
+        df = spark.createDataFrame([("a", 3), ("a", 5), ("b", 1), ("b", 9), ("b", 4)], "k string, v int")
+        w = Window.partitionBy("k").orderBy(PF.desc("v"))
+        top = df.withColumn("rk", PF.row_number().over(w)).filter("rk <= 1").orderBy("k").collect()
+        assert [(r.k, r.v) for r in top] == [("a", 5), ("b", 9)]
+        running = (
+            df.withColumn(
+                "s", PF.sum("v").over(Window.partitionBy("k").orderBy("v").rowsBetween(Window.unboundedPreceding, 0))
+            )
+            .orderBy("k", "v")
+            .collect()
+        )
+        assert [r.s for r in running] == [3, 8, 1, 5, 14]
+        spark.stop()
+
+
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="UDF workers are Linux only")
 def test_python_udfs_run_through_start_local() -> None:
     """QA2-4: ``F.udf`` and ``F.pandas_udf`` ran into 'no UDF worker pool' before."""
