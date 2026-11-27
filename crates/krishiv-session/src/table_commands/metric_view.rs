@@ -21,6 +21,7 @@ use krishiv_common::error::{
     TableOrViewAlreadyExists,
 };
 use krishiv_common::names::check_column_name_duplication;
+use krishiv_plan::analyzer::SparkProfile;
 use krishiv_sql::ast::{ColumnName, CreateMetricView, ExprKind};
 
 use super::{check_new_name, now_ms, options_of, unsupported};
@@ -237,24 +238,22 @@ impl Session {
             // Spark 4.2 raises `MISSING_CLAUSES_FOR_OPERATION` without registering it, so the
             // client sees the failure to build it (4.2.1 golden). 4.3 registers it: a parse error
             // over the whole statement (4.3.0 golden).
-            return Err(
-                if self.state.profile >= krishiv_plan::analyzer::SparkProfile::V4_3 {
-                    whole_statement(
-                        MissingClausesForOperation {
-                            clauses: clause.to_owned(),
-                            operation: "CREATE METRIC VIEW".to_owned(),
-                        }
-                        .into(),
-                        statement,
-                    )
-                } else {
-                    InternalError {
-                        message: "Cannot find main error class 'MISSING_CLAUSES_FOR_OPERATION'"
-                            .to_owned(),
+            return Err(if self.state.profile >= SparkProfile::V4_3 {
+                whole_statement(
+                    MissingClausesForOperation {
+                        clauses: clause.to_owned(),
+                        operation: "CREATE METRIC VIEW".to_owned(),
                     }
-                    .into()
-                },
-            );
+                    .into(),
+                    statement,
+                )
+            } else {
+                InternalError {
+                    message: "Cannot find main error class 'MISSING_CLAUSES_FOR_OPERATION'"
+                        .to_owned(),
+                }
+                .into()
+            });
         }
         let env = self.query_env();
         let mut spec = parse_metric_view_yaml(&v.body, &env.parser)?;

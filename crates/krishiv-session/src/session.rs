@@ -1070,48 +1070,6 @@ impl Session {
         Self::plan_frame(self.clone(), Arc::clone(plan.root()))
     }
 
-    /// A frame of `root` on `session`. A plan over a `spark.sql` relation (`PlanNode::Sql`, what
-    /// Spark Connect sends for a query it analyzed earlier, alone for `collect()` or under the
-    /// client's own nodes for `count()`, `filter(...)` or `first()`) lists its runs in
-    /// `system.queries` with that statement's text (secrets masked) and class, as a frame derived
-    /// from `Session::sql` does; with several such relations it is the first one, as there. A plan
-    /// with none stays without text. A statement that does not parse keeps none: its analysis
-    /// reports the error.
-    #[cfg(feature = "unstable-ir")]
-    fn plan_frame(session: Session, root: Arc<LogicalPlan>) -> DataFrame {
-        let statement = session.plan_statement(&root);
-        let df = DataFrame::new(session, root);
-        match statement {
-            Some(env) => df.with_first_statement(env),
-            None => df,
-        }
-    }
-
-    /// The statement a frame of `root` lists its runs under (see [`Self::plan_frame`]): the text
-    /// and class of the first `spark.sql` relation in `root`, in this session's environment.
-    #[cfg(feature = "unstable-ir")]
-    fn plan_statement(&self, root: &LogicalPlan) -> Option<QueryEnv> {
-        fn first_sql(plan: &LogicalPlan) -> Option<&str> {
-            if let PlanNode::Sql { query, .. } = &plan.node {
-                return Some(query);
-            }
-            let mut found = None;
-            plan.for_each_child(&mut |child| {
-                if found.is_none() {
-                    found = first_sql(child);
-                }
-            });
-            found
-        }
-        let query = first_sql(root)?;
-        let mut env = self.query_env();
-        let redacted = krishiv_sql::redact_sql(query);
-        let parsed = krishiv_sql::parse_statement(query, &env.parser).ok()?;
-        env.set_text(&redacted);
-        env.statement_class = Some(self.statement_class(&parsed, &env).name());
-        Some(env)
-    }
-
     /// As [`Self::from_plan`], with per-statement options, as
     /// [`Self::sql_with`] takes them for SQL: an operation id names the
     /// queries the DataFrame's actions run (Spark Connect's `ExecutePlan`
@@ -2021,6 +1979,9 @@ mod ops;
 use ops::AbortOnDrop;
 
 mod planning;
+
+#[cfg(feature = "unstable-ir")]
+mod plan_frames;
 
 // `SQL SECURITY DEFINER` reads (P3-T062 §2.4).
 mod definer;
