@@ -69,10 +69,9 @@ on every row as Spark's shuffle evaluates them. Two things differ:
   `SELECT * FROM (SELECT x FROM t DISTRIBUTE BY CAST(x AS INT)) LIMIT 1` can return a row where
   Spark's shuffle first evaluates every row and raises `CAST_INVALID_INPUT`. Do not count on it to
   skip a bad value. The expressions are evaluated a batch at a time and several batches are read at
-  once, so a bad value in any batch that was read raises as in Spark: over a one-file Parquet table
-  with the bad value in its last row, the query raises with 10,000 rows and returns a row with
-  100,000 (measured on 0.3.0). A distributed run's map stage reads every row, so there it always
-  raises as Spark does.
+  once, so a bad value in any batch that was read raises as in Spark: with the bad value in the last
+  row of a one-file Parquet table, a small table raises and a large one can return a row. A
+  distributed run's map stage reads every row, so there it always raises as Spark does.
 - Rows go to partitions by Krishiv's routing hash, not Spark's `pmod(murmur3(exprs), n)`, so what
   depends on the partition numbers (`spark_partition_id()`) can differ.
 
@@ -873,8 +872,9 @@ these differences:
   the view is created, with a Krishiv message (Spark keeps it and fails later).
 - **Spark internal errors, reproduced by class.** Where Spark fails with an internal error, Krishiv raises the same
   class and SQLSTATE (`INTERNAL_ERROR`, `XX000`, or the `MISSING_ATTRIBUTES.*` class) with Spark's message prefix;
-  plan dumps, expression ids and Java exception text after it differ. This covers: a 4.2 `CREATE VIEW` missing
-  `WITH METRICS` or `LANGUAGE` (Spark 4.2 cannot find `MISSING_CLAUSES_FOR_OPERATION`); a read with no aggregate;
+  plan dumps, expression ids and Java exception text after it differ. This covers: a `CREATE VIEW` missing
+  `WITH METRICS` or `LANGUAGE` under Spark 4.2 (which cannot find `MISSING_CLAUSES_FOR_OPERATION`; from 4.3 the
+  class itself is raised, as in Spark); a read with no aggregate;
   `measure(<dimension>)` (`key not found: ExprId(..)`); a read through a view, a temporary view or a CTE over a
   metric view; `source: ~`; a constant dimension (`expr: 1`); a measure column read anywhere but as the argument of
   `measure(..)`.
@@ -882,10 +882,6 @@ these differences:
   `SHOW CREATE TABLE .. AS SERDE` are plain JVM exceptions in Spark, with no error class: Spark Connect clients
   see `UnknownException` or `IllegalArgumentException`. Krishiv raises `INTERNAL_ERROR` with Spark's text, and its
   Connect server withholds the text of internal errors, as for any other.
-- **4.3 missing clause.** A missing `WITH METRICS` or `LANGUAGE` is 4.2's internal error under every Spark
-  version, the default 4.3 included: `INTERNAL_ERROR` (`XX000`) with the text
-  `Cannot find main error class 'MISSING_CLAUSES_FOR_OPERATION'`. Spark 4.3.0 raises
-  `MISSING_CLAUSES_FOR_OPERATION` (`42601`) and names the missing clause.
 - **`CANNOT_UP_CAST_DATATYPE` after a source column changed type.** The class, SQLSTATE and types are Spark's;
   the `expression` parameter is Krishiv's form of the dimension, where Spark qualifies its columns
   (`spark_catalog.default.t.k`).

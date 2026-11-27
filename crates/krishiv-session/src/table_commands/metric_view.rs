@@ -17,7 +17,8 @@ use krishiv_common::error::{
     CreateViewColumnArityMismatchNotEnoughDataColumns,
     CreateViewColumnArityMismatchTooManyDataColumns, ErrorClass, ErrorQueryContext, InternalError,
     KrishivError, MissingAttributesResolvedAttributeAppearInOperation,
-    MissingAttributesResolvedAttributeMissingFromInput, SchemaNotFound, TableOrViewAlreadyExists,
+    MissingAttributesResolvedAttributeMissingFromInput, MissingClausesForOperation, SchemaNotFound,
+    TableOrViewAlreadyExists,
 };
 use krishiv_common::names::check_column_name_duplication;
 use krishiv_sql::ast::{ColumnName, CreateMetricView, ExprKind};
@@ -225,17 +226,38 @@ impl Session {
         v: &CreateMetricView,
         original: &str,
     ) -> Result<DataFrame, KrishivError> {
-        if v.with_metrics.is_none() || v.language.is_none() {
+        let statement = original.get(v.span.start..v.span.end).unwrap_or(original);
+        // `SparkSqlParser.visitCreateMetricView` asks for `WITH METRICS` first, then `LANGUAGE`.
+        let missing = match (&v.with_metrics, &v.language) {
+            (None, _) => Some("WITH METRICS"),
+            (Some(_), None) => Some("LANGUAGE"),
+            (Some(_), Some(_)) => None,
+        };
+        if let Some(clause) = missing {
             // Spark 4.2 raises `MISSING_CLAUSES_FOR_OPERATION` without registering it, so the
-            // client sees the failure to build it (4.2.1 golden); 4.3 registers it.
-            return Err(InternalError {
-                message: "Cannot find main error class 'MISSING_CLAUSES_FOR_OPERATION'".to_owned(),
-            }
-            .into());
+            // client sees the failure to build it (4.2.1 golden). 4.3 registers it: a parse error
+            // over the whole statement (4.3.0 golden).
+            return Err(
+                if self.state.profile >= krishiv_plan::analyzer::SparkProfile::V4_3 {
+                    whole_statement(
+                        MissingClausesForOperation {
+                            clauses: clause.to_owned(),
+                            operation: "CREATE METRIC VIEW".to_owned(),
+                        }
+                        .into(),
+                        statement,
+                    )
+                } else {
+                    InternalError {
+                        message: "Cannot find main error class 'MISSING_CLAUSES_FOR_OPERATION'"
+                            .to_owned(),
+                    }
+                    .into()
+                },
+            );
         }
         let env = self.query_env();
         let mut spec = parse_metric_view_yaml(&v.body, &env.parser)?;
-        let statement = original.get(v.span.start..v.span.end).unwrap_or(original);
         let at_statement = |e: KrishivError| whole_statement(e, statement);
         // Spark parses each expression alone (`MetricViewPlanner.buildInputColumns`) before
         // anything resolves; a syntax error there is told against the whole statement.
