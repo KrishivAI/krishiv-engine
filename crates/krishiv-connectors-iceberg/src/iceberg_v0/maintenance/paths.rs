@@ -5,13 +5,6 @@
 //! scheme is lower-cased, repeated `/` collapse, a trailing `/` goes, and `file:/x`,
 //! `file:///x` and `/x` name one path. The path is compared as the raw key (no percent
 //! decoding on either side: `p=a%20b` is the bytes the writer used).
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "used by the remove_orphan_files procedure, which lands in the next commit"
-    )
-)]
 
 use std::collections::BTreeMap;
 

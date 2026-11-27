@@ -426,7 +426,7 @@ pub(crate) struct Deleted {
 
 /// What a file is, for the counts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-enum Kind {
+pub(crate) enum Kind {
     Data,
     PositionDeletes,
     EqualityDeletes,
@@ -435,14 +435,17 @@ enum Kind {
     Statistics,
 }
 
+/// The decoded manifests of one walk, by manifest path.
+pub(crate) type ManifestCache = HashMap<String, std::sync::Arc<[(String, Kind)]>>;
+
 /// Every file a snapshot reaches, by path: its manifest list, its manifests, the live entries
 /// of those (`ADDED`/`EXISTING`), and the statistics files naming it.
-async fn reachable(
+pub(crate) async fn reachable(
     io: &iceberg::io::FileIO,
     meta: &TableMetadata,
     snapshot_id: i64,
     max_bytes: u64,
-    manifests: &mut HashMap<String, std::sync::Arc<[(String, Kind)]>>,
+    manifests: &mut ManifestCache,
     out: &mut HashMap<String, Kind>,
 ) -> Result<(), KrishivError> {
     let Some(snapshot) = meta.snapshot_by_id(snapshot_id) else {
@@ -783,6 +786,20 @@ pub(crate) async fn checked_load(
     io: &iceberg::io::FileIO,
     max_bytes: u64,
 ) -> Result<TableMetadata, KrishivError> {
+    checked_load_located(table, io, max_bytes)
+        .await
+        .map(|(meta, _)| meta)
+}
+
+/// [`checked_load`], with the location of the metadata file it checked against.
+///
+/// # Errors
+/// As [`checked_load`].
+pub(crate) async fn checked_load_located(
+    table: &dyn CommitTable,
+    io: &iceberg::io::FileIO,
+    max_bytes: u64,
+) -> Result<(TableMetadata, String), KrishivError> {
     let (meta, location) = table.load_located(true).await?;
     let name = table.name();
     let refused = |location: &str, detail: &str| -> KrishivError {
@@ -813,7 +830,7 @@ pub(crate) async fn checked_load(
     }
     // The file decides: its refs, manifest lists and properties are what retention and cleanup
     // read, never the answer's copy of them.
-    Ok(file)
+    Ok((file, location))
 }
 
 /// The most file deletes an expire runs at once, whatever `max_concurrent_deletes` asks.

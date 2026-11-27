@@ -1156,3 +1156,141 @@ fn an_answer_whose_uuid_is_not_its_files_is_refused() {
     );
     assert_eq!(catalog.metadata().snapshots().count(), 5);
 }
+
+/// The files under a `file:` location, as `Table::list_under` returns them.
+fn walk_local(location: &str) -> Vec<(String, i64, String)> {
+    fn rec(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        for e in std::fs::read_dir(dir).unwrap() {
+            let p = e.unwrap().path();
+            if p.is_dir() {
+                rec(&p, out);
+            } else {
+                out.push(p);
+            }
+        }
+    }
+    let root = std::path::PathBuf::from(location.strip_prefix("file://").unwrap_or(location));
+    let mut files = Vec::new();
+    rec(&root, &mut files);
+    files
+        .into_iter()
+        .map(|p| {
+            let rel = p
+                .strip_prefix(&root)
+                .unwrap()
+                .to_string_lossy()
+                .into_owned();
+            let ms = p
+                .metadata()
+                .unwrap()
+                .modified()
+                .unwrap()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis();
+            (
+                format!("{}/{rel}", location.trim_end_matches('/')),
+                i64::try_from(ms).unwrap(),
+                rel,
+            )
+        })
+        .collect()
+}
+
+fn orphan_args(dry_run: bool) -> super::maintenance::orphans::OrphanArgs {
+    super::maintenance::orphans::OrphanArgs {
+        older_than_ms: Some(FAR - 2 * 86_400_000),
+        location: None,
+        dry_run,
+        max_concurrent_deletes: None,
+        equivalences: super::maintenance::paths::Equivalences::defaults(),
+        mode: super::maintenance::orphans::Mode::Error,
+        stream_results: false,
+    }
+}
+
+#[test]
+fn remove_orphan_files_deletes_only_what_no_snapshot_names() {
+    use super::maintenance::orphans::remove;
+    let env = env();
+    let catalog = five_snapshots(&env);
+    let location = catalog.metadata().location().to_owned();
+    let root = location.strip_prefix("file://").unwrap_or(&location);
+    let stray = std::path::Path::new(root).join("data/stray.parquet");
+    std::fs::create_dir_all(stray.parent().unwrap()).unwrap();
+    std::fs::write(&stray, b"x").unwrap();
+    let hidden = std::path::Path::new(root).join("data/_hidden/y.parquet");
+    std::fs::create_dir_all(hidden.parent().unwrap()).unwrap();
+    std::fs::write(&hidden, b"y").unwrap();
+    let list = |l: String| async move { Ok(walk_local(&l)) };
+    let run = |dry| {
+        env.rt
+            .block_on(remove(
+                &*catalog,
+                &env.reg.file_io(),
+                &clock(),
+                &list,
+                1 << 30,
+                &orphan_args(dry),
+            ))
+            .unwrap()
+    };
+    let dry = run(true);
+    assert_eq!(dry.orphans.len(), 1, "{:?}", dry.orphans);
+    assert!(dry.orphans[0].ends_with("data/stray.parquet"));
+    assert!(stray.exists(), "a dry run deletes nothing");
+    let done = run(false);
+    assert_eq!(done.orphans, dry.orphans);
+    assert!(!stray.exists());
+    assert!(hidden.exists(), "hidden paths are never listed");
+    // Everything the table names is still there.
+    assert_eq!(read_back(&env, &catalog), expected(5..40));
+    assert!(run(false).orphans.is_empty());
+}
+
+#[test]
+fn remove_orphan_files_refuses_a_short_interval_and_a_foreign_location() {
+    use super::maintenance::orphans::remove;
+    let env = env();
+    let catalog = five_snapshots(&env);
+    let list = |_: String| async { panic!("refused before listing") };
+    let go = |a: &super::maintenance::orphans::OrphanArgs| {
+        env.rt
+            .block_on(remove(
+                &*catalog,
+                &env.reg.file_io(),
+                &clock(),
+                &list,
+                1 << 30,
+                a,
+            ))
+            .unwrap_err()
+            .to_string()
+    };
+    let mut a = orphan_args(true);
+    a.location = Some("file:///elsewhere/t".to_owned());
+    assert!(go(&a).contains("nor under one of them"));
+    a.location = None;
+    a.older_than_ms = None;
+    let near = TestClock {
+        now: AtomicI64::new(1_000),
+        waits: Mutex::new(Vec::new()),
+        max_jitter: AtomicBool::new(false),
+    };
+    let e = env
+        .rt
+        .block_on(remove(
+            &*catalog,
+            &env.reg.file_io(),
+            &near,
+            &list,
+            1 << 30,
+            &super::maintenance::orphans::OrphanArgs {
+                older_than_ms: Some(900),
+                ..orphan_args(true)
+            },
+        ))
+        .map(|_| ());
+    // The default is three days before `near`, which is fine; a given one is not:
+    assert!(e.unwrap_err().to_string().contains("less than 24 hours"));
+}

@@ -313,6 +313,7 @@ result. Pending, not stubbed: MERGE through SQL. Concurrent writers: `race_k` (t
   removed snapshot reached, every kept snapshot reached and the decoded manifests' paths in memory, uncharged to any
   pool (each manifest is capped by `krishiv.catalog.maxMetadataBytes`, the sum is not), as Java's
   `ReachableFileCleanup` holds its sets. Follow-up: charge the sets to the procedure's pool or walk in bounded batches.
+- **`remove_orphan_files` (PR-36e unit 2b, `maintenance/orphans.rs` + `paths.rs`):** `classify` is the pure decision (valid set vs listing, `older_than`, hidden paths, `prefix_mismatch_mode`); `remove` loads with `checked_load_located`, gathers the valid set (`expire::reachable` over every snapshot, metadata files, statistics, `version-hint.text`) and lists through `IcebergTable::list_under`. Not done yet: the nested-table check (`KRISHIV_ICEBERG_ORPHAN_LOCATION_SHARED` is defined, `ProcedureTables` cannot list a namespace); listed keys are the store's key text (`Path`'s own form), not percent-decoded; no S3/MinIO listing test yet; the valid set and listing are held in memory, uncharged (as the expire limit above).
 - **Expire and concurrent refs (review of #983):** a snapshot removal asserts every ref as planned, `main` included
   (`maintenance/expire.rs` `request`), so a concurrent rollback or a ref moved onto a removed snapshot conflicts and the
   expire plans again. Two costs: a concurrent append to `main` conflicts too, so a busy table can use up
