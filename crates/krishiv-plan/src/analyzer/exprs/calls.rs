@@ -335,6 +335,7 @@ impl Resolver<'_> {
             .with_sql(&sql)
             .with_ansi(ansi)
             .with_profile(self.ctx.profile)
+            .with_nanos_types(self.ctx.conf.timestamp_nanos_types)
             .with_decimal_loss(loss)
             .with_case_sensitive(self.ctx.conf.case_sensitive)
             .with_concat_binary_as_string(self.ctx.conf.concat_binary_as_string);
@@ -357,6 +358,7 @@ impl Resolver<'_> {
             .with_bound_sql(&bound_sql)
             .with_ansi(ansi)
             .with_profile(self.ctx.profile)
+            .with_nanos_types(self.ctx.conf.timestamp_nanos_types)
             .with_decimal_loss(loss)
             .with_case_sensitive(self.ctx.conf.case_sensitive)
             .with_concat_binary_as_string(self.ctx.conf.concat_binary_as_string);

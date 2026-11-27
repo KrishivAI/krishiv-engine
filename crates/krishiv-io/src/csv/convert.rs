@@ -8,7 +8,7 @@ use arrow_array::builder::{
     BinaryBuilder, BinaryViewBuilder, BooleanBuilder, Date32Builder, Decimal128Builder,
     DurationMicrosecondBuilder, Float32Builder, Float64Builder, Int8Builder, Int16Builder,
     Int32Builder, Int64Builder, IntervalYearMonthBuilder, LargeBinaryBuilder, LargeStringBuilder,
-    StringBuilder, StringViewBuilder, TimestampMicrosecondBuilder,
+    StringBuilder, StringViewBuilder, TimestampMicrosecondBuilder, TimestampNanosecondBuilder,
 };
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
@@ -74,6 +74,10 @@ pub(crate) enum Kind {
     Date,
     Timestamp,
     TimestampNtz,
+    /// `TIMESTAMP_LTZ(p)` (Spark 4.3), with its precision `p` (7..=9).
+    TimestampNanos(u8),
+    /// `TIMESTAMP_NTZ(p)` (Spark 4.3), with its precision.
+    TimestampNtzNanos(u8),
     /// An ANSI interval, with the fields its text form names.
     YearMonth(YearMonthField, YearMonthField),
     DayTime(DayTimeField, DayTimeField),
@@ -93,6 +97,12 @@ impl Kind {
             }
             Ok(krishiv_types::DataType::DayTimeInterval { start, end }) => {
                 Ok(Self::DayTime(start, end))
+            }
+            Ok(krishiv_types::DataType::TimestampNanos { precision }) => {
+                Ok(Self::TimestampNanos(precision))
+            }
+            Ok(krishiv_types::DataType::TimestampNtzNanos { precision }) => {
+                Ok(Self::TimestampNtzNanos(precision))
             }
             _ => Self::of(f.data_type()),
         }
@@ -117,6 +127,8 @@ impl Kind {
             DataType::Date32 => Self::Date,
             DataType::Timestamp(TimeUnit::Microsecond, Some(_)) => Self::Timestamp,
             DataType::Timestamp(TimeUnit::Microsecond, None) => Self::TimestampNtz,
+            DataType::Timestamp(TimeUnit::Nanosecond, Some(_)) => Self::TimestampNanos(9),
+            DataType::Timestamp(TimeUnit::Nanosecond, None) => Self::TimestampNtzNanos(9),
             DataType::Interval(IntervalUnit::YearMonth) => {
                 Self::YearMonth(YearMonthField::Year, YearMonthField::Month)
             }
@@ -221,6 +233,12 @@ impl Converter<'_> {
             Kind::Date => Val::I64(i64::from(self.dt.parse_date(s)?.ok_or_else(bad)?)),
             Kind::Timestamp => Val::I64(self.dt.parse_timestamp(s)?.ok_or_else(bad)?),
             Kind::TimestampNtz => Val::I64(self.dt.parse_ntz(s)?.ok_or_else(bad)?),
+            Kind::TimestampNanos(p) => {
+                Val::I64(self.dt.parse_timestamp_nanos(s, *p)?.ok_or_else(bad)?)
+            }
+            Kind::TimestampNtzNanos(p) => {
+                Val::I64(self.dt.parse_ntz_nanos(s, *p)?.ok_or_else(bad)?)
+            }
             Kind::YearMonth(..) | Kind::DayTime(..) => interval_of_text(kind, s)?,
         })
     }
@@ -275,6 +293,7 @@ pub(crate) enum Column {
     LargeBinary(LargeBinaryBuilder),
     Date(Date32Builder),
     Timestamp(TimestampMicrosecondBuilder),
+    TimestampNanos(TimestampNanosecondBuilder),
     YearMonth(IntervalYearMonthBuilder),
     DayTime(DurationMicrosecondBuilder),
     Null(usize, DataType),
@@ -305,6 +324,13 @@ impl Column {
             DataType::BinaryView => Self::BinaryView(BinaryViewBuilder::new()),
             DataType::LargeBinary => Self::LargeBinary(LargeBinaryBuilder::new()),
             DataType::Date32 => Self::Date(Date32Builder::new()),
+            DataType::Timestamp(TimeUnit::Nanosecond, tz) => {
+                let b = TimestampNanosecondBuilder::new();
+                Self::TimestampNanos(match tz {
+                    Some(tz) => b.with_timezone(Arc::clone(tz)),
+                    None => b,
+                })
+            }
             DataType::Timestamp(_, tz) => {
                 let b = TimestampMicrosecondBuilder::new();
                 Self::Timestamp(match tz {
@@ -343,6 +369,7 @@ impl Column {
             (Self::LargeBinary(b), Val::Bytes(x)) => b.append_value(x),
             (Self::Date(b), Val::I64(x)) => b.append_option(i32::try_from(*x).ok()),
             (Self::Timestamp(b), Val::I64(x)) => b.append_value(*x),
+            (Self::TimestampNanos(b), Val::I64(x)) => b.append_value(*x),
             (Self::YearMonth(b), Val::I64(x)) => b.append_option(i32::try_from(*x).ok()),
             (Self::DayTime(b), Val::I64(x)) => b.append_value(*x),
             (Self::Null(n, _), _) => *n += 1,
@@ -367,6 +394,7 @@ impl Column {
             Self::LargeBinary(b) => b.append_null(),
             Self::Date(b) => b.append_null(),
             Self::Timestamp(b) => b.append_null(),
+            Self::TimestampNanos(b) => b.append_null(),
             Self::YearMonth(b) => b.append_null(),
             Self::DayTime(b) => b.append_null(),
             Self::Null(n, _) => *n += 1,
@@ -390,6 +418,7 @@ impl Column {
             Self::LargeBinary(b) => Arc::new(b.finish()),
             Self::Date(b) => Arc::new(b.finish()),
             Self::Timestamp(b) => Arc::new(b.finish()),
+            Self::TimestampNanos(b) => Arc::new(b.finish()),
             Self::YearMonth(b) => Arc::new(b.finish()),
             Self::DayTime(b) => Arc::new(b.finish()),
             Self::Null(n, dt) => {

@@ -166,6 +166,7 @@ pub struct CallTypes<'a> {
     case_sensitive: bool,
     concat_binary_as_string: bool,
     profile: SparkProfile,
+    nanos_types: bool,
 }
 
 impl fmt::Debug for CallTypes<'_> {
@@ -198,6 +199,7 @@ impl<'a> CallTypes<'a> {
             case_sensitive: false,
             concat_binary_as_string: false,
             profile: SparkProfile::V4_3,
+            nanos_types: false,
         }
     }
 
@@ -239,6 +241,22 @@ impl<'a> CallTypes<'a> {
     #[must_use]
     pub const fn profile(&self) -> SparkProfile {
         self.profile
+    }
+
+    /// With `spark.sql.timestampNanosTypes.enabled` (off by default): a schema string (`from_json`,
+    /// `from_csv`) may name `TIMESTAMP[_NTZ|_LTZ](7..=9)` on the 4.3 profile.
+    #[must_use]
+    pub const fn with_nanos_types(mut self, enabled: bool) -> Self {
+        self.nanos_types = enabled;
+        self
+    }
+
+    /// The grammar of a type string in a call: the profile's, with the nanosecond types when they
+    /// are enabled.
+    #[must_use]
+    pub const fn type_grammar(&self) -> krishiv_types::TypeGrammar {
+        krishiv_types::TypeGrammar::new(matches!(self.profile, SparkProfile::V4_3))
+            .with_nanos(self.nanos_types)
     }
 
     /// With `spark.sql.ansi.enabled = ansi` (on by default): some legacy

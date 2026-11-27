@@ -195,6 +195,32 @@ fn write_value(
             };
             push_quoted(&rendered, text);
         }
+        // A nanosecond timestamp (Spark 4.3 `formatNanos` / `formatWithoutTimeZoneNanos`): the
+        // value is already at its precision, so only the pattern decides the digits.
+        ArrowType::Timestamp(TimeUnit::Nanosecond, tz) => {
+            let nanos = col
+                .as_primitive::<arrow_array::types::TimestampNanosecondType>()
+                .value(row);
+            let (micros, rest) = crate::text::split_timestamp_nanos(nanos, 9);
+            let rendered = if tz.is_some() {
+                let offset = ctx.zone.offset_at_utc(micros.div_euclid(1_000_000));
+                let fixed = zone_id(offset);
+                let zone = Zone {
+                    id: ctx.zone.region_id().unwrap_or(&fixed),
+                    rules: ctx.zone,
+                };
+                ctx.out
+                    .timestamp
+                    .format_timestamp_nanos(micros, rest, zone)
+                    .map_err(|e| internal(format!("a to_json timestamp pattern: {e}")))?
+            } else {
+                ctx.out
+                    .timestamp_ntz
+                    .format_local_nanos(micros, rest)
+                    .map_err(|e| internal(format!("a to_json timestamp pattern: {e}")))?
+            };
+            push_quoted(&rendered, text);
+        }
         ArrowType::Timestamp(TimeUnit::Microsecond, tz) => {
             let micros = col.as_primitive::<TimestampMicrosecondType>().value(row);
             let rendered = if tz.is_some() {

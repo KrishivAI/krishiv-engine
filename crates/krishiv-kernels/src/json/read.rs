@@ -31,7 +31,7 @@ use arrow_array::builder::{
     BinaryViewBuilder, BooleanBuilder, Date32Builder, Decimal128Builder,
     DurationMicrosecondBuilder, Float32Builder, Float64Builder, Int8Builder, Int16Builder,
     Int32Builder, Int64Builder, IntervalYearMonthBuilder, StringViewBuilder,
-    Time64NanosecondBuilder, TimestampMicrosecondBuilder,
+    Time64NanosecondBuilder, TimestampMicrosecondBuilder, TimestampNanosecondBuilder,
 };
 use arrow_array::{Array, ArrayRef, NullArray, StringArray};
 use arrow_buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
@@ -49,7 +49,7 @@ use super::parse::{Error as ParseError, Lexer, RawKey, RawStr, Token, non_numeri
 use crate::cast::TimeZoneRules;
 use crate::text::{
     java_parse_double, spark_string_to_date, spark_string_to_timestamp,
-    spark_string_to_timestamp_ntz, today_in,
+    spark_string_to_timestamp_ntz, timestamp_nanos_of, timestamp_string_sub_micros, today_in,
 };
 
 /// Reads `json` into `target`, one row per string.
@@ -608,6 +608,7 @@ fn convert_key(text: &str, keys: &Builder) -> Result<Key, Poison> {
         Scalar::Binary(_) => base64::decode(text).map(Key::Binary).ok_or(Poison),
         Scalar::Time(_)
         | Scalar::Timestamp { .. }
+        | Scalar::TimestampNanos { .. }
         | Scalar::YearMonth { .. }
         | Scalar::DayTime { .. }
         | Scalar::Calendar(_) => Err(Poison),
@@ -902,6 +903,39 @@ fn read_string(raw: RawStr<'_>, out: &mut Scalar, ctx: &Ctx<'_>) -> Result<(), F
                 }
             };
             match parsed {
+                Some(v) => {
+                    builder.append_value(v);
+                    Ok(())
+                }
+                None => Err(Poison.into()),
+            }
+        }
+        Scalar::TimestampNanos {
+            builder,
+            zone,
+            precision,
+        } => {
+            // Spark 4.3 `parseNanos` / `parseWithoutTimeZoneNanos(s, p, false)`: the pattern, else
+            // the default grammar, with no fallback after a pattern fails.
+            let parsed = if zone.is_none() {
+                match &ctx.opts.timestamp_ntz_format {
+                    Some(pattern) => pattern
+                        .parse_local_nanos(&text, false)
+                        .map_err(|_| Poison)?,
+                    None => spark_string_to_timestamp_ntz(&text)
+                        .map(|m| (m, timestamp_string_sub_micros(&text))),
+                }
+            } else {
+                match &ctx.opts.timestamp_format {
+                    Some(pattern) => pattern
+                        .parse_timestamp_nanos(&text, ctx.zone)
+                        .map_err(|_| Poison)?,
+                    None => spark_string_to_timestamp(&text, ctx.zone, ctx.today)
+                        .map_err(|_| Poison)?
+                        .map(|m| (m, timestamp_string_sub_micros(&text))),
+                }
+            };
+            match parsed.and_then(|(m, rest)| timestamp_nanos_of(m, rest, *precision)) {
                 Some(v) => {
                     builder.append_value(v);
                     Ok(())
@@ -1243,6 +1277,15 @@ enum Scalar {
         /// Whether zone-less.
         ntz: bool,
     },
+    /// `TIMESTAMP_LTZ(p)` (with its zone) or `TIMESTAMP_NTZ(p)` (Spark 4.3), `p` 7..=9.
+    TimestampNanos {
+        /// The values.
+        builder: TimestampNanosecondBuilder,
+        /// The carrier's zone; `None` for `TIMESTAMP_NTZ(p)`.
+        zone: Option<Arc<str>>,
+        /// The digits kept.
+        precision: u8,
+    },
     /// An ANSI year-month interval.
     YearMonth {
         /// The values.
@@ -1282,6 +1325,7 @@ impl Scalar {
             Self::Date(b) => b.append_null(),
             Self::Time(b) => b.append_null(),
             Self::Timestamp { builder, .. } => builder.append_null(),
+            Self::TimestampNanos { builder, .. } => builder.append_null(),
             Self::YearMonth { builder, .. } => builder.append_null(),
             Self::DayTime { builder, .. } => builder.append_null(),
             Self::Calendar(b) => b.append_null(),
@@ -1318,6 +1362,9 @@ impl Scalar {
                 }
                 Arc::new(array)
             }
+            Self::TimestampNanos {
+                mut builder, zone, ..
+            } => Arc::new(builder.finish().with_timezone_opt(zone)),
             Self::YearMonth { mut builder, .. } => Arc::new(builder.finish()),
             Self::DayTime { mut builder, .. } => Arc::new(builder.finish()),
             Self::Calendar(mut b) => b.finish(),
@@ -1390,7 +1437,24 @@ impl Builder {
         Ok(match SparkType::from_arrow_field(field) {
             Ok(SparkType::YearMonthInterval { start, end }) => Self::year_month(start, end),
             Ok(SparkType::DayTimeInterval { start, end }) => Self::day_time(start, end),
+            Ok(
+                SparkType::TimestampNanos { precision }
+                | SparkType::TimestampNtzNanos { precision },
+            ) => Self::timestamp_nanos(field.data_type(), precision),
             _ => return Self::for_type(field.data_type()),
+        })
+    }
+
+    /// A builder reading a nanosecond timestamp of `precision` digits into `target`'s carrier.
+    fn timestamp_nanos(target: &ArrowType, precision: u8) -> Self {
+        let zone = match target {
+            ArrowType::Timestamp(_, zone) => zone.clone(),
+            _ => None,
+        };
+        Self::Scalar(Scalar::TimestampNanos {
+            builder: TimestampNanosecondBuilder::new(),
+            zone,
+            precision,
         })
     }
 
@@ -1436,6 +1500,7 @@ impl Builder {
             ArrowType::Time64(arrow_schema::TimeUnit::Nanosecond) => {
                 Self::Scalar(Scalar::Time(Time64NanosecondBuilder::new()))
             }
+            ArrowType::Timestamp(TimeUnit::Nanosecond, _) => Self::timestamp_nanos(target, 9),
             ArrowType::Timestamp(_, tz) => Self::Scalar(Scalar::Timestamp {
                 builder: TimestampMicrosecondBuilder::new(),
                 ntz: tz.is_none(),
@@ -1524,6 +1589,7 @@ impl Builder {
                 Scalar::Date(b) => len_of(b),
                 Scalar::Time(b) => len_of(b),
                 Scalar::Timestamp { builder, .. } => len_of(builder),
+                Scalar::TimestampNanos { builder, .. } => len_of(builder),
                 Scalar::YearMonth { builder, .. } => len_of(builder),
                 Scalar::DayTime { builder, .. } => len_of(builder),
                 Scalar::Calendar(b) => i32::try_from(b.len()).map_err(|_| {

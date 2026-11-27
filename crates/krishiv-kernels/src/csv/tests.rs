@@ -128,8 +128,8 @@ fn struct_to_csv_quotes() {
         &[FieldKind::Str],
         &o,
         &|_| Err(KernelError::unsupported("no date")),
-        &|_| Err(KernelError::unsupported("no ts")),
-        &|_| Err(KernelError::unsupported("no ntz")),
+        &|_, _| Err(KernelError::unsupported("no ts")),
+        &|_, _| Err(KernelError::unsupported("no ntz")),
     )
     .unwrap();
     assert_eq!(out.value(0), "\"a,b\"");
@@ -248,8 +248,8 @@ fn struct_to_csv_writes_every_kind_and_nested_values() {
         &kinds,
         &o,
         &|d| Ok(format!("D{d}")),
-        &|t| Ok(format!("T{t}")),
-        &|t| Ok(format!("N{t}")),
+        &|t, _| Ok(format!("T{t}")),
+        &|t, _| Ok(format!("N{t}")),
     )
     .unwrap();
     assert_eq!(
@@ -289,8 +289,8 @@ fn nested_values_of_exotic_types_are_refused() {
         &[FieldKind::Nested],
         &o,
         &|_| Ok(String::new()),
-        &|_| Ok(String::new()),
-        &|_| Ok(String::new()),
+        &|_, _| Ok(String::new()),
+        &|_, _| Ok(String::new()),
     )
     .unwrap_err();
     assert!(err.to_string().contains("CSV"), "{err}");

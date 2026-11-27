@@ -15,6 +15,7 @@ use arrow_array::builder::{
     DurationMicrosecondBuilder, Float32Builder, Float64Builder, Int8Builder, Int16Builder,
     Int32Builder, Int64Builder, IntervalYearMonthBuilder, LargeBinaryBuilder, LargeStringBuilder,
     StringBuilder, StringViewBuilder, Time64NanosecondBuilder, TimestampMicrosecondBuilder,
+    TimestampNanosecondBuilder,
 };
 use arrow_array::{Array, ArrayRef, StringArray, StructArray, new_null_array};
 use arrow_schema::{DataType, Fields, IntervalUnit, TimeUnit};
@@ -24,7 +25,8 @@ use crate::datetime_pattern::DateTimePattern;
 use crate::error::KernelError;
 use crate::text::{
     java_decimal_string, java_double_string, java_float_string32, java_parse_decimal,
-    java_parse_double, java_parse_float, java_parse_integral,
+    java_parse_double, java_parse_float, java_parse_integral, split_timestamp_nanos,
+    timestamp_nanos_of, timestamp_string_sub_micros,
 };
 
 // ---------------------------------------------------------------------------
@@ -739,6 +741,10 @@ pub enum FieldKind {
     Timestamp,
     /// `TIMESTAMP_NTZ`.
     TimestampNtz,
+    /// `TIMESTAMP_LTZ(p)` (Spark 4.3), with its precision `p` (7..=9).
+    TimestampNanos(u8),
+    /// `TIMESTAMP_NTZ(p)` (Spark 4.3), with its precision.
+    TimestampNtzNanos(u8),
     /// `VOID`.
     Null,
     /// An ANSI year-month interval, with the fields its text names.
@@ -780,6 +786,12 @@ impl FieldKind {
             }
             krishiv_types::DataType::DayTimeInterval { start, end } => Self::DayTime(*start, *end),
             krishiv_types::DataType::CalendarInterval => Self::Calendar,
+            krishiv_types::DataType::TimestampNanos { precision } => {
+                Self::TimestampNanos(*precision)
+            }
+            krishiv_types::DataType::TimestampNtzNanos { precision } => {
+                Self::TimestampNtzNanos(*precision)
+            }
             _ => return Self::of(dt),
         })
     }
@@ -804,6 +816,8 @@ impl FieldKind {
             DataType::Time64(TimeUnit::Nanosecond) => Self::Time,
             DataType::Timestamp(TimeUnit::Microsecond, Some(_)) => Self::Timestamp,
             DataType::Timestamp(TimeUnit::Microsecond, None) => Self::TimestampNtz,
+            DataType::Timestamp(TimeUnit::Nanosecond, Some(_)) => Self::TimestampNanos(9),
+            DataType::Timestamp(TimeUnit::Nanosecond, None) => Self::TimestampNtzNanos(9),
             DataType::Null => Self::Null,
             other => {
                 return Err(KernelError::unsupported(format!(
@@ -979,7 +993,11 @@ impl Converter<'_> {
                 Ok((c, _)) => Val::Calendar(calendar_value(c)?),
                 Err(_) => Val::Null,
             },
-            FieldKind::Timestamp | FieldKind::TimestampNtz | FieldKind::Nested => {
+            FieldKind::Timestamp
+            | FieldKind::TimestampNtz
+            | FieldKind::TimestampNanos(_)
+            | FieldKind::TimestampNtzNanos(_)
+            | FieldKind::Nested => {
                 return Err(bad());
             }
         })
@@ -1118,6 +1136,8 @@ enum Column {
     Time(Time64NanosecondBuilder),
     /// Timestamp.
     Timestamp(TimestampMicrosecondBuilder),
+    /// Nanosecond timestamp (Spark 4.3).
+    TimestampNanos(TimestampNanosecondBuilder),
     /// Year-month interval.
     YearMonth(IntervalYearMonthBuilder),
     /// Day-time interval.
@@ -1164,6 +1184,13 @@ impl Column {
             ),
             DataType::Date32 => Self::Date(Date32Builder::new()),
             DataType::Time64(TimeUnit::Nanosecond) => Self::Time(Time64NanosecondBuilder::new()),
+            DataType::Timestamp(TimeUnit::Nanosecond, tz) => {
+                let b = TimestampNanosecondBuilder::new();
+                Self::TimestampNanos(match tz {
+                    Some(tz) => b.with_timezone(Arc::clone(tz)),
+                    None => b,
+                })
+            }
             DataType::Timestamp(_, tz) => {
                 let b = TimestampMicrosecondBuilder::new();
                 Self::Timestamp(match tz {
@@ -1202,6 +1229,7 @@ impl Column {
             (Self::Date(b), Val::I64(x)) => b.append_option(i32::try_from(*x).ok()),
             (Self::Time(b), Val::I64(x)) => b.append_value(*x),
             (Self::Timestamp(b), Val::I64(x)) => b.append_value(*x),
+            (Self::TimestampNanos(b), Val::I64(x)) => b.append_value(*x),
             (Self::YearMonth(b), Val::I64(x)) => b.append_option(i32::try_from(*x).ok()),
             (Self::DayTime(b), Val::I64(x)) => b.append_value(*x),
             (Self::Calendar(b), Val::Calendar(x)) => b.append_value(*x),
@@ -1226,6 +1254,7 @@ impl Column {
             Self::Date(b) => b.append_null(),
             Self::Time(b) => b.append_null(),
             Self::Timestamp(b) => b.append_null(),
+            Self::TimestampNanos(b) => b.append_null(),
             Self::YearMonth(b) => b.append_null(),
             Self::DayTime(b) => b.append_null(),
             Self::Calendar(b) => b.append_null(),
@@ -1249,6 +1278,7 @@ impl Column {
             Self::Date(b) => Arc::new(b.finish()),
             Self::Time(b) => Arc::new(b.finish()),
             Self::Timestamp(b) => Arc::new(b.finish()),
+            Self::TimestampNanos(b) => Arc::new(b.finish()),
             Self::YearMonth(b) => Arc::new(b.finish()),
             Self::DayTime(b) => Arc::new(b.finish()),
             Self::Calendar(b) => b.finish(),
@@ -1461,6 +1491,38 @@ pub fn from_csv(
                         }
                     }
                 },
+                // Spark 4.3 `parseNanos` / `parseWithoutTimeZoneNanos(s, p, false)`: the pattern,
+                // else the default grammar, with no fallback after a pattern fails.
+                FieldKind::TimestampNanos(p) | FieldKind::TimestampNtzNanos(p) => match t {
+                    None => Val::Null,
+                    Some(s) if s == o.null_value => Val::Null,
+                    Some(s) => {
+                        let parsed = if matches!(kind, FieldKind::TimestampNanos(_)) {
+                            match o.timestamp_pattern.as_ref() {
+                                Some(pat) => pat
+                                    .parse_timestamp_nanos(s, zone)
+                                    .map_err(|e| KernelError::with_row(None, e))?,
+                                None => {
+                                    parse_timestamp(s)?.map(|m| (m, timestamp_string_sub_micros(s)))
+                                }
+                            }
+                        } else {
+                            match o.ntz_pattern.as_ref() {
+                                Some(pat) => pat
+                                    .parse_local_nanos(s, false)
+                                    .map_err(|e| KernelError::with_row(None, e))?,
+                                None => parse_ntz(s)?.map(|m| (m, timestamp_string_sub_micros(s))),
+                            }
+                        };
+                        match parsed.and_then(|(m, rest)| timestamp_nanos_of(m, rest, *p)) {
+                            Some(v) => Val::I64(v),
+                            None => {
+                                bad = true;
+                                Val::Null
+                            }
+                        }
+                    }
+                },
                 _ => match conv.convert(kind, t) {
                     Ok(v) => v,
                     Err(ConvError::Malformed) => {
@@ -1601,8 +1663,8 @@ fn nested_text(
     row: usize,
     out: &mut String,
     format_date: &impl Fn(i32) -> Result<String, KernelError>,
-    format_timestamp: &impl Fn(i64) -> Result<String, KernelError>,
-    format_ntz: &impl Fn(i64) -> Result<String, KernelError>,
+    format_timestamp: &impl Fn(i64, u16) -> Result<String, KernelError>,
+    format_ntz: &impl Fn(i64, u16) -> Result<String, KernelError>,
 ) -> Result<(), KernelError> {
     use arrow_array::cast::AsArray;
     use arrow_array::types::{
@@ -1661,10 +1723,24 @@ fn nested_text(
         )),
         DataType::Timestamp(TimeUnit::Microsecond, Some(_)) => out.push_str(&format_timestamp(
             a.as_primitive::<TimestampMicrosecondType>().value(row),
+            0,
         )?),
         DataType::Timestamp(TimeUnit::Microsecond, None) => out.push_str(&format_ntz(
             a.as_primitive::<TimestampMicrosecondType>().value(row),
+            0,
         )?),
+        DataType::Timestamp(TimeUnit::Nanosecond, zone) => {
+            let (micros, rest) = split_timestamp_nanos(
+                a.as_primitive::<arrow_array::types::TimestampNanosecondType>()
+                    .value(row),
+                9,
+            );
+            out.push_str(&if zone.is_some() {
+                format_timestamp(micros, rest)?
+            } else {
+                format_ntz(micros, rest)?
+            });
+        }
         DataType::List(_) => {
             let list = a.as_list::<i32>();
             let o = list.value_offsets();
@@ -1741,8 +1817,8 @@ pub fn struct_to_csv(
     kinds: &[FieldKind],
     o: &ToCsvOptions,
     format_date: &impl Fn(i32) -> Result<String, KernelError>,
-    format_timestamp: &impl Fn(i64) -> Result<String, KernelError>,
-    format_ntz: &impl Fn(i64) -> Result<String, KernelError>,
+    format_timestamp: &impl Fn(i64, u16) -> Result<String, KernelError>,
+    format_ntz: &impl Fn(i64, u16) -> Result<String, KernelError>,
 ) -> Result<StringArray, KernelError> {
     use arrow_array::cast::AsArray;
     use arrow_array::types::{
@@ -1856,13 +1932,30 @@ pub fn struct_to_csv(
                     (FieldKind::Timestamp, _) => {
                         cell.push_str(&format_timestamp(
                             a.as_primitive::<TimestampMicrosecondType>().value(row),
+                            0,
                         )?);
                         true
                     }
                     (FieldKind::TimestampNtz, _) => {
                         cell.push_str(&format_ntz(
                             a.as_primitive::<TimestampMicrosecondType>().value(row),
+                            0,
                         )?);
+                        true
+                    }
+                    // Spark 4.3 `formatNanos` / `formatWithoutTimeZoneNanos`: floored to the
+                    // precision, the pattern decides the digits.
+                    (FieldKind::TimestampNanos(p) | FieldKind::TimestampNtzNanos(p), _) => {
+                        let (micros, rest) = split_timestamp_nanos(
+                            a.as_primitive::<arrow_array::types::TimestampNanosecondType>()
+                                .value(row),
+                            *p,
+                        );
+                        cell.push_str(&if matches!(kind, FieldKind::TimestampNanos(_)) {
+                            format_timestamp(micros, rest)?
+                        } else {
+                            format_ntz(micros, rest)?
+                        });
                         true
                     }
                     (FieldKind::Nested, _) => {

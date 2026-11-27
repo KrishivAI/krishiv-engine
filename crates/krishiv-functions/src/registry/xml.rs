@@ -68,7 +68,7 @@ fn from_xml(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     match c.constant(1) {
         Some(Constant::Error(e)) => Err(e.clone()),
         Some(Constant::String(s)) => {
-            let struct_type = struct_of_ddl(s)?;
+            let struct_type = struct_of_ddl(s, krishiv_types::TypeGrammar::default())?;
             if has_non_string_map_key(&struct_type) {
                 return Err(DatatypeMismatchInvalidXmlMapKeyType {
                     sql_expr: format!("\"from_xml({})\"", c.sql(0).unwrap_or_default()),

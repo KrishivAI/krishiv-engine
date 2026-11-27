@@ -77,9 +77,10 @@ pub(super) fn struct_fields(ddl: &str) -> Result<Fields, KrishivError> {
 
 /// The struct type a schema string names.
 fn struct_type(ddl: &str) -> Result<krishiv_types::StructType, KrishivError> {
-    let parsed: krishiv_types::DataType = ddl.parse().or_else(|_: KrishivError| {
-        let wrapped = format!("STRUCT<{ddl}>");
-        wrapped.parse()
+    // The analyzer checked the schema under the session's grammar; a nanosecond type here was enabled.
+    let grammar = krishiv_types::TypeGrammar::V4_3Nanos;
+    let parsed = krishiv_types::parse_data_type_in(ddl, grammar).or_else(|_: KrishivError| {
+        krishiv_types::parse_data_type_in(&format!("STRUCT<{ddl}>"), grammar)
     })?;
     let krishiv_types::DataType::Struct(s) = parsed else {
         // The registry already rejected non-struct schemas; the binding
@@ -630,10 +631,11 @@ fn bind_to_csv(args: &[BindArg], opts: &BindOptions) -> Result<Binding, KrishivE
                 .map_err(|e| krishiv_kernels::error::KernelError::with_row(None, e)),
             None => Err(missing()),
         };
-        let format_timestamp = |m: i64| match &timestamp_pattern {
+        let format_timestamp = |m: i64, rest: u16| match &timestamp_pattern {
             Some(p) => p
-                .format_timestamp(
+                .format_timestamp_nanos(
                     m,
+                    rest,
                     krishiv_kernels::datetime_pattern::Zone {
                         id: "UTC",
                         rules: zone_ref,
@@ -642,9 +644,9 @@ fn bind_to_csv(args: &[BindArg], opts: &BindOptions) -> Result<Binding, KrishivE
                 .map_err(|e| krishiv_kernels::error::KernelError::with_row(None, e)),
             None => Err(missing()),
         };
-        let format_ntz = |m: i64| match &ntz_pattern {
+        let format_ntz = |m: i64, rest: u16| match &ntz_pattern {
             Some(p) => p
-                .format_local(m)
+                .format_local_nanos(m, rest)
                 .map_err(|e| krishiv_kernels::error::KernelError::with_row(None, e)),
             None => Err(missing()),
         };

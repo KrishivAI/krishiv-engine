@@ -126,8 +126,11 @@ pub(super) fn check_options_map(c: &CallTypes<'_>, i: usize) -> Option<Result<()
 /// `PARSE_SYNTAX_ERROR`, `UNSUPPORTED_DATATYPE`, `KRISHIV_UNSUPPORTED_FEATURE`
 /// and the other DDL errors for a malformed schema; `INVALID_SCHEMA.NON_STRUCT_TYPE`
 /// when it is not a struct.
-pub(super) fn struct_of_ddl(ddl: &str) -> Result<DataType, KrishivError> {
-    let single: Result<DataType, KrishivError> = ddl.parse();
+pub(super) fn struct_of_ddl(
+    ddl: &str,
+    grammar: krishiv_types::TypeGrammar,
+) -> Result<DataType, KrishivError> {
+    let single = krishiv_types::parse_data_type_in(ddl, grammar);
     match single {
         Ok(parsed) => {
             if matches!(parsed, DataType::Struct(_)) {
@@ -143,7 +146,7 @@ pub(super) fn struct_of_ddl(ddl: &str) -> Result<DataType, KrishivError> {
         Err(single_err) => {
             // A table schema (`a INT, b DOUBLE`) becomes `STRUCT` of its columns.
             let wrapped = format!("STRUCT<{ddl}>");
-            let table: Result<DataType, KrishivError> = wrapped.parse();
+            let table = krishiv_types::parse_data_type_in(&wrapped, grammar);
             // `STRUCT<...>` is a struct whenever it parses; when it does not,
             // the error is the data type's (a bare `ARRAY` is
             // `INCOMPLETE_TYPE_DEFINITION.ARRAY`, as Spark reports it).
@@ -179,7 +182,7 @@ fn from_csv(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
     match folded {
         Some(Constant::Error(e)) => Err(e.clone()),
         Some(Constant::String(s)) => {
-            let struct_type = struct_of_ddl(s)?;
+            let struct_type = struct_of_ddl(s, c.type_grammar())?;
             if let DataType::Struct(fields) = &struct_type
                 && let Some(nested) = fields.fields().iter().find(|f| {
                     matches!(

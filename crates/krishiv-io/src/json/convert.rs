@@ -135,6 +135,13 @@ impl JsonConverter<'_> {
             (Kind::TimestampNtz, JVal::Str(s)) if !s.is_empty() => {
                 Val::I64(self.dt.parse_ntz(s)?.ok_or_else(bad)?)
             }
+            // Only a string: the nanosecond types take no epoch-seconds number (Spark 4.3).
+            (Kind::TimestampNanos(p), JVal::Str(s)) if !s.is_empty() => {
+                Val::I64(self.dt.parse_timestamp_nanos(s, *p)?.ok_or_else(bad)?)
+            }
+            (Kind::TimestampNtzNanos(p), JVal::Str(s)) if !s.is_empty() => {
+                Val::I64(self.dt.parse_ntz_nanos(s, *p)?.ok_or_else(bad)?)
+            }
             (Kind::YearMonth(..) | Kind::DayTime(..), JVal::Str(s)) => interval_of_text(kind, s)?,
             // An empty string is not a value of a non-string type.
             (_, JVal::Str(s)) if s.is_empty() => {

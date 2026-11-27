@@ -180,7 +180,7 @@ fn from_json(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
             .into());
         }
     };
-    let parsed = parse_json_schema_in(&schema, grammar_of(c.profile()))?;
+    let parsed = parse_json_schema_in(&schema, c.type_grammar())?;
     if holds_variant(&parsed) {
         // Spark reads a JSON value as a variant there; the reader does not yet.
         return Err(KrishivUnsupportedFeature {
@@ -241,20 +241,10 @@ fn has_non_string_map_key(t: &DataType) -> bool {
     }
 }
 
-/// Parses a `from_json` schema: a data type, or a bare struct field list
-/// (which Spark accepts without `struct<...>`). The direct parse's error
-/// is reported when the wrapped parse fails too.
-pub(crate) fn parse_json_schema(schema: &str) -> Result<DataType, KrishivError> {
-    parse_json_schema_in(schema, TypeGrammar::default())
-}
-
-/// The type grammar of `profile` (Spark 4.3's from 4.3 on).
-pub(crate) fn grammar_of(profile: crate::signature::SparkProfile) -> TypeGrammar {
-    TypeGrammar::new(profile >= crate::signature::SparkProfile::V4_3)
-}
-
-/// [`parse_json_schema`] under `grammar` (Spark 4.2 refuses `TIME(7..=9)` and has no
-/// `TIMESTAMP_NTZ(p)`).
+/// Parses a `from_json` schema under `grammar` (Spark 4.2 refuses `TIME(7..=9)` and has no
+/// `TIMESTAMP_NTZ(p)`; 4.3 has the nanosecond types only when they are enabled): a data type, or a
+/// bare struct field list (which Spark accepts without `struct<...>`). The direct parse's error is
+/// reported when the wrapped parse fails too.
 pub(crate) fn parse_json_schema_in(
     schema: &str,
     grammar: TypeGrammar,
