@@ -2,8 +2,12 @@
 //! The interpreters' startup inspection, run on a thread of its own so that a server listens before it ends
 //! (an interpreter with `pyspark`, `pyarrow` and `pandas` takes about two seconds to import them). The first
 //! worker start, and every caller of [`crate::Pool::interpreters`] or [`crate::Pool::refusal`], waits for it.
+//! The pool's drop stops it and waits for its thread, so no inspection process outlives the pool (its
+//! timeout is kept by that thread, which ends with the process).
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock, PoisonError};
+use std::thread::JoinHandle;
 use std::time::Duration;
 
 use krishiv_common::error::{InternalError, KrishivError};
@@ -25,6 +29,10 @@ pub(crate) struct Inspection {
     done: OnceLock<Inspected>,
     lock: Mutex<()>,
     ready: Condvar,
+    /// Set by [`Inspection::stop`]: the running inspection kills its process and the rest are skipped.
+    stop: Arc<AtomicBool>,
+    /// The inspection's thread, joined by [`Inspection::stop`].
+    thread: Mutex<Option<JoinHandle<()>>>,
 }
 
 /// How often a cancellable wait looks at its cancel flag.
@@ -40,35 +48,52 @@ impl Inspection {
         executables: Vec<String>,
         sandbox_refusal: Option<KrishivError>,
     ) -> Result<Arc<Self>, KrishivError> {
-        Self::start_with(sandbox_refusal, move || {
+        Self::start_with(sandbox_refusal, move |stop| {
             executables
                 .iter()
-                .map(|exe| Interpreter::inspect(exe))
+                .map(|exe| Interpreter::inspect_until(exe, stop))
                 .collect()
         })
     }
 
     /// [`Inspection::start`] with the inspection itself given (`inspect` returns one result per listed
-    /// interpreter, in order; tests give a slow or a failing one).
+    /// interpreter, in order, and ends early once its flag is set; tests give a slow or a failing one).
     pub(crate) fn start_with(
         sandbox_refusal: Option<KrishivError>,
-        inspect: impl FnOnce() -> Vec<Result<Interpreter, String>> + Send + 'static,
+        inspect: impl FnOnce(&AtomicBool) -> Vec<Result<Interpreter, String>> + Send + 'static,
     ) -> Result<Arc<Self>, KrishivError> {
         let this = Arc::new(Self::default());
         let mine = Arc::clone(&this);
-        std::thread::Builder::new()
+        let stop = Arc::clone(&this.stop);
+        let thread = std::thread::Builder::new()
             .name("krishiv-udf-inspection".to_owned())
             .spawn(move || {
                 // Set even if the inspection panics, so no waiter waits for ever.
                 let _unfinished = Unfinished(&mine);
-                mine.finish(conclude(inspect(), sandbox_refusal));
+                mine.finish(conclude(inspect(&stop), sandbox_refusal));
             })
             .map_err(|e| {
                 internal(format!(
                     "cannot start the Python interpreter inspection: {e}"
                 ))
             })?;
+        *this.thread.lock().unwrap_or_else(PoisonError::into_inner) = Some(thread);
         Ok(this)
+    }
+
+    /// Stops the inspection, if it still runs, and waits for its thread: its process group is killed within
+    /// about 10 ms. Waiters then get a refusal (every interpreter failed as stopped).
+    pub(crate) fn stop(&self) {
+        self.stop.store(true, Ordering::SeqCst);
+        let thread = self
+            .thread
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        if let Some(thread) = thread {
+            // A panic in it already set the result (`Unfinished`); nothing more to do with it.
+            let _ = thread.join();
+        }
     }
 
     /// The result, if the inspection has ended.
@@ -78,6 +103,8 @@ impl Inspection {
 
     /// The result, waiting for the inspection to end.
     pub(crate) fn wait(&self) -> &Inspected {
+        // `wait_until` returns `None` only when cancelled, which this never is: one pass. The loop avoids an
+        // `expect` in library code.
         loop {
             if let Some(found) = self.wait_until(&|| false) {
                 return found;
@@ -185,7 +212,7 @@ mod tests {
     #[test]
     fn the_start_returns_before_the_inspection_ends() {
         let (release, hold) = mpsc::channel::<()>();
-        let inspection = Inspection::start_with(None, move || {
+        let inspection = Inspection::start_with(None, move |_| {
             let _ = hold.recv();
             vec![Err("slow".to_owned())]
         })
@@ -211,11 +238,11 @@ mod tests {
 
     #[test]
     fn no_interpreter_is_the_first_reason_then_the_sandbox() {
-        let none = Inspection::start_with(Some(sandbox()), Vec::new).expect("start");
+        let none = Inspection::start_with(Some(sandbox()), |_| Vec::new()).expect("start");
         let why = none.wait().refusal.as_ref().expect("refused").to_string();
         assert!(why.contains("none listed"), "{why}");
 
-        let failed = Inspection::start_with(Some(sandbox()), || vec![Err("gone".to_owned())])
+        let failed = Inspection::start_with(Some(sandbox()), |_| vec![Err("gone".to_owned())])
             .expect("start");
         let why = failed.wait().refusal.as_ref().expect("refused").to_string();
         assert!(why.contains("gone") && !why.contains("sandbox"), "{why}");
@@ -223,7 +250,7 @@ mod tests {
 
     #[test]
     fn a_panicking_inspection_refuses_rather_than_hangs() {
-        let inspection = Inspection::start_with(None, || -> Vec<Result<Interpreter, String>> {
+        let inspection = Inspection::start_with(None, |_| -> Vec<Result<Interpreter, String>> {
             panic!("inspection broke")
         })
         .expect("start");

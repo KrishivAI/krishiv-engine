@@ -346,7 +346,10 @@ impl std::fmt::Debug for Pool {
         f.debug_struct("Pool")
             .field(
                 "interpreters",
-                &self.inner.inspection.get().map(|i| i.interpreters.len()),
+                &self.inner.inspection.get().map_or_else(
+                    || "pending".to_owned(),
+                    |i| i.interpreters.len().to_string(),
+                ),
             )
             .field("sandbox", &self.inner.config.sandbox)
             .finish_non_exhaustive()
@@ -1039,6 +1042,14 @@ impl Drop for Released {
     }
 }
 
+impl Drop for Inner {
+    /// Ends the interpreters' inspection with the pool: its process would otherwise run on, with no deadline
+    /// once the process that kept it exits (review of a6b73985c).
+    fn drop(&mut self) {
+        self.inspection.stop();
+    }
+}
+
 impl Inner {
     fn lock(&self) -> MutexGuard<'_, State> {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
@@ -1218,13 +1229,16 @@ fn internal(message: String) -> KrishivError {
 mod tests {
     use super::*;
 
-    /// An interpreter that answers its inspection only after `release` exists, then fails it.
+    /// An interpreter that answers its inspection only after `release` exists, then fails it. It writes its
+    /// process id to `dir/pid` first (whole, then renamed).
     fn slow_interpreter(dir: &Path, release: &Path) -> String {
         use std::os::unix::fs::PermissionsExt;
         let exe = dir.join("python3");
+        let pid = dir.join("pid");
         let script = format!(
-            "#!/bin/sh\nwhile [ ! -e '{}' ]; do sleep 0.05; done\necho broken >&2\nexit 3\n",
-            release.display()
+            "#!/bin/sh\necho $$ > '{pid}.part' && mv '{pid}.part' '{pid}'\nwhile [ ! -e '{}' ]; do sleep 0.05; done\necho broken >&2\nexit 3\n",
+            release.display(),
+            pid = pid.display()
         );
         std::fs::write(&exe, script).expect("script");
         std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).expect("chmod");
@@ -1239,6 +1253,40 @@ mod tests {
         fn starting(&self, _pidfd: &Arc<OwnedFd>) -> bool {
             true
         }
+    }
+
+    #[test]
+    fn dropping_the_pool_ends_its_inspection_and_the_interpreters_process() {
+        let dir = tempfile::tempdir().expect("dir");
+        let config = PoolConfig {
+            // Never released: the inspection would run to its 60 s timeout.
+            executables: vec![slow_interpreter(dir.path(), &dir.path().join("release"))],
+            sandbox: false,
+            ..PoolConfig::default()
+        };
+        let pool = Pool::new(config).expect("pool");
+        let pid_file = dir.path().join("pid");
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while !pid_file.exists() {
+            assert!(Instant::now() < deadline, "the interpreter never started");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let pid: u32 = std::fs::read_to_string(&pid_file)
+            .expect("pid")
+            .trim()
+            .parse()
+            .expect("number");
+        assert!(format!("{pool:?}").contains("pending"), "{pool:?}");
+        let started = Instant::now();
+        drop(pool);
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "the drop waited for the inspection's timeout"
+        );
+        assert!(
+            crate::interpreter::tests::gone(pid),
+            "the inspection's process {pid} outlived the pool"
+        );
     }
 
     #[test]

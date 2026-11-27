@@ -78,7 +78,8 @@ Paths are relative to this crate.
 - `src/inspection.rs` `Inspection`: the listed interpreters inspected on a thread of their own, started by
   `Pool::new` so the server's listeners open before Python has imported its libraries; `checkout` waits for it
   (cancellably), `Pool::interpreters` and `Pool::refusal` wait for it; a thread that unwinds leaves an
-  `INTERNAL_ERROR` refusal, never a waiter waiting for ever
+  `INTERNAL_ERROR` refusal, never a waiter waiting for ever; the pool's drop (`Inner`) stops it and joins its
+  thread, so no inspection process outlives the pool (its timeout lives on that thread)
 - `src/interpreter.rs` the startup record of each listed interpreter (version, read paths, packages) and `choose`;
   the inspection runs in a process group of its own, its output read while it runs (capped, under the timeout)
 - `src/package.rs` the embedded worker package and the `-c` bootstrap (`bootstrap_for`: the worker with its

@@ -10,6 +10,7 @@ use std::io::{self, Read};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
@@ -69,6 +70,12 @@ impl Interpreter {
     /// # Errors
     /// The reason, in words, when it cannot be run, prints no record, or is older than Python 3.11.
     pub fn inspect(executable: &str) -> Result<Self, String> {
+        Self::inspect_until(executable, &AtomicBool::new(false))
+    }
+
+    /// [`Interpreter::inspect`], ended early (its process group killed) once `stop` is set: a pool that is
+    /// dropped while it inspects leaves no inspection running (review of a6b73985c).
+    pub(crate) fn inspect_until(executable: &str, stop: &AtomicBool) -> Result<Self, String> {
         let path = resolve(executable)
             .ok_or_else(|| format!("{executable}: not found (no such file, or not on PATH)"))?;
         let out = run_with_timeout(
@@ -80,6 +87,7 @@ impl Interpreter {
                 .stderr(Stdio::piped()),
             INSPECT_TIMEOUT,
             INSPECT_OUTPUT_CAP,
+            stop,
         )
         .map_err(|e| format!("{}: cannot run it: {e}", path.display()))?;
         if !out.status.success() {
@@ -191,8 +199,18 @@ pub fn choose<'a>(
 /// output over the cap, the process group is killed and the run fails. When the process exits, the rest of
 /// its group is killed too: a grandchild that kept a pipe open (a `.pth` hook starting a daemon) must not hold
 /// up the reads (review 2026-11-13 n9). A grandchild that left the group and holds a pipe only delays the
-/// failure to the timeout; its reader thread ends when the pipe closes.
-fn run_with_timeout(command: &mut Command, timeout: Duration, cap: usize) -> io::Result<Output> {
+/// failure to the timeout; its reader thread ends when the pipe closes. Once `stop` is set (looked at every
+/// 10 ms, and before the start) the run fails as on the timeout.
+fn run_with_timeout(
+    command: &mut Command,
+    timeout: Duration,
+    cap: usize,
+    stop: &AtomicBool,
+) -> io::Result<Output> {
+    let stopped = || io::Error::new(io::ErrorKind::Interrupted, "stopped with the UDF pool");
+    if stop.load(Ordering::SeqCst) {
+        return Err(stopped());
+    }
     let deadline = Instant::now() + timeout;
     let mut child = command.process_group(0).spawn()?;
     let pid = Pid::from_child(&child);
@@ -280,6 +298,9 @@ fn run_with_timeout(command: &mut Command, timeout: Duration, cap: usize) -> io:
                 stderr,
             });
         }
+        if stop.load(Ordering::SeqCst) {
+            return fail(&mut child, status.is_some(), stopped());
+        }
         if Instant::now() >= deadline {
             let error = io::Error::new(
                 io::ErrorKind::TimedOut,
@@ -336,9 +357,18 @@ fn resolve(name: &str) -> Option<PathBuf> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use serde_json::json;
+
+    /// [`super::run_with_timeout`] never stopped.
+    fn run_with_timeout(
+        command: &mut Command,
+        timeout: Duration,
+        cap: usize,
+    ) -> io::Result<Output> {
+        super::run_with_timeout(command, timeout, cap, &AtomicBool::new(false))
+    }
 
     fn record(version: [u32; 3], pyspark: Option<&str>) -> Value {
         json!({
@@ -406,6 +436,65 @@ mod tests {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         command
+    }
+
+    /// Whether `pid` is gone (or a zombie no one has reaped yet), waiting up to 5 s for it.
+    pub(crate) fn gone(pid: u32) -> bool {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let state = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok();
+            let alive = state.is_some_and(|s| {
+                s.rsplit_once(") ")
+                    .is_none_or(|(_, rest)| !rest.starts_with('Z'))
+            });
+            if !alive {
+                return true;
+            }
+            if Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    #[test]
+    fn a_stopped_run_ends_at_once_and_kills_its_group() {
+        let dir = tempfile::tempdir().expect("dir");
+        let pid_file = dir.path().join("pid");
+        let stop = AtomicBool::new(false);
+        let started = Instant::now();
+        let err = std::thread::scope(|scope| {
+            scope.spawn(|| {
+                while !pid_file.exists() {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                stop.store(true, Ordering::SeqCst);
+            });
+            // Written whole before it appears, so the stop never cuts the number short.
+            let script = format!(
+                "sleep 30 & echo $! > '{0}.part' && mv '{0}.part' '{0}'; wait",
+                pid_file.display()
+            );
+            super::run_with_timeout(&mut sh(&script), Duration::from_secs(30), 1024, &stop)
+                .expect_err("stopped")
+        });
+        assert_eq!(err.kind(), io::ErrorKind::Interrupted, "{err}");
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "it ran to its timeout"
+        );
+        let grandchild: u32 = std::fs::read_to_string(&pid_file)
+            .expect("pid")
+            .trim()
+            .parse()
+            .expect("number");
+        assert!(
+            gone(grandchild),
+            "the group's sleep {grandchild} survived the stop"
+        );
+        let err = super::run_with_timeout(&mut sh("exit 0"), Duration::from_secs(5), 1024, &stop)
+            .expect_err("stopped before the start");
+        assert_eq!(err.kind(), io::ErrorKind::Interrupted);
     }
 
     #[test]
