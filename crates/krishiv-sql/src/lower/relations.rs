@@ -922,9 +922,12 @@ impl Lowerer {
                     // types it and refuses it as Spark does.
                     let arg = &match args.as_slice() {
                         [a] => match &a.expr.kind {
-                            crate::ast::ExprKind::TableArgument(t) => {
-                                arc(self.table_argument(t, a.expr.span)?)
-                            }
+                            // Already lowered above (its name checked); reuse it
+                            // without the name's alias.
+                            crate::ast::ExprKind::TableArgument(_) => match &lowered[0].node {
+                                ExprNode::Alias { expr, .. } => Arc::clone(expr),
+                                _ => Arc::clone(&lowered[0]),
+                            },
                             _ => self.generator_arg(&name.parts[0], args, tf.span)?,
                         },
                         _ => self.generator_arg(&name.parts[0], args, tf.span)?,
