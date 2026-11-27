@@ -99,6 +99,9 @@ pub struct ExecConfig {
     /// operators of its pipeline that do (`krishiv.exec.coalesceInput`;
     /// Polars item 2, J1).
     pub coalesce_input: bool,
+    /// A pipeline group starts once every pipeline it depends on has ended,
+    /// not when the whole wave before it has (`krishiv.exec.dataflowScheduling`).
+    pub dataflow_scheduling: bool,
 }
 
 /// The key-hash seed of `krishiv.deterministicOrder` when `krishiv.exec.seed`
@@ -128,6 +131,7 @@ impl Default for ExecConfig {
             deterministic_order: false,
             union_output_partitioning: true,
             coalesce_input: true,
+            dataflow_scheduling: false,
         }
     }
 }
@@ -192,6 +196,10 @@ impl ExecConfig {
             .get(&krishiv_common::config::EXEC_COALESCE_INPUT)
             .and_then(krishiv_common::config::ConfigValue::as_bool)
             .unwrap_or(true);
+        let dataflow_scheduling = config
+            .get(&krishiv_common::config::EXEC_DATAFLOW_SCHEDULING)
+            .and_then(krishiv_common::config::ConfigValue::as_bool)
+            .unwrap_or(false);
         // Under `krishiv.deterministicOrder` the key hashes are seeded too
         // (`krishiv.exec.seed` when set, else a fixed seed): spill partitions
         // follow the seeded hash, so a random seed per query would order the
@@ -216,6 +224,7 @@ impl ExecConfig {
             join_idle_spill_after,
             union_output_partitioning,
             coalesce_input,
+            dataflow_scheduling,
             ..Self::default()
         }
     }
