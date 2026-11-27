@@ -40,7 +40,7 @@ Work down this list. The first option that fits your function is usually the sim
 3. **A Rust UDF.** A function that needs real code is written in Rust, compiled into the application, and
    registered on the session. See [Native Rust UDFs](../reference/rust-udfs.md).
 4. **A Python UDF.** Register it with `@udf` (or `pandas_udf` / `arrow_udf`) in the Python package; it runs in your own
-   process. Python UDFs sent to a single-node server are not part of 0.2.0.
+   process. Python UDFs sent to a single-node server run in the server's Python UDF workers (see [the sandbox](python-udf-sandbox.md)).
 
 ## Common Hive and Spark-community UDFs
 

@@ -59,7 +59,7 @@ If the file is missing or does not parse, the server does not start. The error i
 `KRISHIV_RESOURCE_GROUP_CONFIG_INVALID`, and it names the problem.
 
 This setting is new in 0.3.0, as the [configuration reference](../reference/config/index.md) lists it. The server is
-not part of 0.2.0.
+is part of 0.3.0.
 
 ## What happens under memory pressure
 

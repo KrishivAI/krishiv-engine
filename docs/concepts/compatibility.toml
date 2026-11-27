@@ -108,7 +108,7 @@ note = "`create` and `append` work in a Python session. `createOrReplace` and `r
 group = "SQL"
 name = "Spark version"
 status = "partial"
-note = "Krishiv 0.2 runs as Spark 4.2 only; Spark 3.5, 4.0 and 4.1 behaviour is not selectable yet."
+note = "Krishiv 0.3 runs as Spark 4.3 by default (the Spark 4.2 profile is selectable); Spark 3.5, 4.0 and 4.1 behaviour is not selectable yet."
 
 [[surface]]
 group = "User-defined functions"
@@ -156,7 +156,7 @@ note = "Not provided; a script runs in-process."
 group = "Not covered"
 name = "Spark Streaming and Structured Streaming APIs in Python"
 status = "not yet"
-note = "Not available in 0.2."
+note = "Not available in 0.3."
 
 [[surface]]
 group = "Not covered"

@@ -4,15 +4,15 @@ description: "The three deployment modes: embedded, single-node and distributed.
 
 # Deployment
 
-| Mode | Status in 0.2 |
+| Mode | Status in 0.3 |
 |---|---|
 | Embedded: `pip install krishiv`, the engine runs inside your Python process | Runs today |
-| Single-node: one `krishiv server` process that clients reach over Spark Connect | In development |
+| Single-node: one `krishiv server` process that clients reach over Spark Connect | Runs today |
 | Distributed: a scheduler and workers | In development |
 
 ## Embedded
 
-Nothing to deploy: import the package. Krishiv 0.2 is on PyPI (`pip install krishiv`). Supported CPUs are
+Nothing to deploy: import the package. Krishiv is on PyPI (`pip install krishiv`). Supported CPUs are
 x86-64-v3 (Intel Haswell or AMD Zen and newer) and Armv8.2 (AWS Graviton2 or newer, Apple silicon). On an older x86-64
 CPU install `krishiv-compat` instead (the same package, imports as `krishiv`; install one of the two, not both). An
 unsupported CPU is detected at import time and reported by name instead of crashing.
@@ -35,8 +35,7 @@ not print the derived value. `EXPLAIN ANALYZE` prints the limit the query ran un
 
 ## Single-node
 
-The 0.2.0 command line has no `server` subcommand: it lists only `sql` and `debug-bundle`. In builds after 0.2.0,
-`krishiv server` (a binary built with the `server` feature) starts one process that serves Spark Connect, by default on
+`krishiv server` (the released `krishiv` binary, or a build with the `server` feature) starts one process that serves Spark Connect, by default on
 `127.0.0.1` port `15002` (`--connect-port`, `krishiv.connect.port`), and the admin API on port `8080` (`--port`).
 Settings are given as `--conf KEY=VALUE`. The server is standalone: one process plans and runs every query
 itself, and there is no coordinator or worker mode yet (see [distributed](#distributed)). See [configuration](../reference/config/index.md) and
@@ -55,7 +54,7 @@ the admin port.
 
 ### Authentication, roles and TLS
 
-These settings belong to the single-node server. The Spark Connect listener and its settings are not part of 0.2.
+These settings belong to the single-node server. The Spark Connect listener has its own settings; see the [configuration reference](../reference/config/index.md).
 
 Without authentication settings the server binds loopback only, and the admin port (`/metrics`, the web UI) prints a
 random token at start. To serve another address, configure at least one method with `--conf` (these settings are
@@ -86,7 +85,7 @@ they are not an audit trail. Use the counters to see how many refusals happened.
 
 ## The web console
 
-One console, the same pages, runs in three places. It comes with builds after 0.2.0: the released `krishiv` binary
+One console, the same pages, runs in three places. It comes with 0.3: the released `krishiv` binary
 and the Python wheel both carry it (a build from source needs the `ui` feature, and `server` for `krishiv server`).
 
 | | In your process | On a server | Saved profiles |

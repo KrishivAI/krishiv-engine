@@ -1,10 +1,10 @@
 ---
-description: "The SQL statements Krishiv runs, with an example of each that was run on Krishiv 0.2, and what is not supported yet."
+description: "The SQL statements Krishiv runs, with an example of each that was run on Krishiv 0.3, and what is not supported yet."
 ---
 
 # SQL statements
 
-Statements are Spark SQL; semantics and error classes follow Spark. This page lists what Krishiv 0.2 runs, with the
+Statements are Spark SQL; semantics and error classes follow Spark. This page lists what Krishiv 0.3 runs, with the
 statement forms that were checked by running them with `krishiv sql -e`. Functions and operators are in the
 [function reference](functions/index.md); known gaps are in [known differences](../../concepts/known-differences.md).
 

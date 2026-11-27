@@ -1,0 +1,1 @@
+The README, the docs index, the deployment, security, check-compat, doctor, UDF sandbox and profiler guides, the compatibility page, the SQL statements reference and the PyPI page describe 0.3 (the Spark Connect server, `krishiv check-compat`, `krishiv doctor`, Python UDF workers, ICU) instead of saying they are not part of 0.2 (BLOG1-1).

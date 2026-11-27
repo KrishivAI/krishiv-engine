@@ -4,8 +4,6 @@ description: "Check a krishiv server configuration before you start it: settings
 
 # Check a server configuration with krishiv doctor
 
-> `krishiv doctor` is not part of the 0.2.0 release; this page describes the command as it is being built.
-
 `krishiv doctor` takes the same `--conf KEY=VALUE`, `--host`, `--port`, `--connect-port` and `--allow-root` options as `krishiv server`, checks the configuration they make, and says what to change. It does not start a server and does not use the network. Run it before you start the server, and in the pipeline that deploys it.
 
 ```bash

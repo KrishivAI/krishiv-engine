@@ -10,8 +10,6 @@ letters outside ASCII are ordered. Krishiv follows Spark's collation names and t
 
 ## ICU support
 
-> ICU support is not in 0.2.0. It arrives in the release after it.
-
 Krishiv uses the ICU Unicode library for collation sort keys and case mapping when the `collations-icu` feature is
 on. The default builds of the `krishiv` crate and of the `krishiv` command-line binary have it on.
 
