@@ -602,6 +602,9 @@ pub(crate) fn cmp(
         ArrowType::Decimal64(..) => prim!(Decimal64Type),
         ArrowType::Decimal128(..) => prim!(Decimal128Type),
         ArrowType::Date32 => prim!(Date32Type),
+        ArrowType::Timestamp(arrow_schema::TimeUnit::Nanosecond, _) => {
+            prim!(arrow_array::types::TimestampNanosecondType)
+        }
         ArrowType::Timestamp(..) => prim!(TimestampMicrosecondType),
         ArrowType::Time64(_) => prim!(Time64NanosecondType),
         ArrowType::Interval(arrow_schema::IntervalUnit::YearMonth) => {

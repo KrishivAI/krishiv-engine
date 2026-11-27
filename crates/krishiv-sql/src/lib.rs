@@ -400,10 +400,12 @@ pub fn parse_ddl_type(sql: &str, options: &ParserOptions) -> Result<ast::DataTyp
         let columns = parse_table_schema(sql, options).map_err(|_| e)?;
         let start = columns.first().map_or(0, |c| c.span.start);
         let end = columns.last().map_or(sql.len(), |c| c.span.end);
+        let nanos_types = columns.iter().any(|c| c.data_type.nanos_types);
         Ok(ast::DataTypeSpec {
             kind: ast::DataTypeKind::Struct(Some(columns)),
             collation: None,
             span: ast::Span::new(start, end),
+            nanos_types,
         })
     })
 }

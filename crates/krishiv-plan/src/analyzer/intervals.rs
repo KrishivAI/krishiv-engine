@@ -44,7 +44,12 @@ fn kind(b: &Bound) -> Kind {
         None | Some(DataType::Null) => Kind::Null,
         Some(DataType::String) => Kind::String,
         Some(DataType::Date) => Kind::Date,
-        Some(DataType::Timestamp | DataType::TimestampNtz) => Kind::Timestamp,
+        Some(
+            DataType::Timestamp
+            | DataType::TimestampNtz
+            | DataType::TimestampNanos { .. }
+            | DataType::TimestampNtzNanos { .. },
+        ) => Kind::Timestamp,
         Some(DataType::YearMonthInterval { .. }) => Kind::YearMonth,
         Some(DataType::DayTimeInterval {
             start: DayTimeField::Day,
@@ -698,9 +703,12 @@ impl Resolver<'_> {
         }
         // Spark reads the other side as the zoneless type, which matters for a
         // wall time that doesn't exist in the session zone.
-        let any_ntz = kids
-            .iter()
-            .any(|k| matches!(k.ty.data_type, Some(DataType::TimestampNtz)));
+        let any_ntz = kids.iter().any(|k| {
+            matches!(
+                k.ty.data_type,
+                Some(DataType::TimestampNtz | DataType::TimestampNtzNanos { .. })
+            )
+        });
         let t = if any_ntz {
             DataType::TimestampNtz
         } else {
