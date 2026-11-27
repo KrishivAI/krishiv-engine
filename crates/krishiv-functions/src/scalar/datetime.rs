@@ -1276,13 +1276,30 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
             })
         }
         ("from_utc_timestamp" | "to_utc_timestamp", [t, z]) if is_timestamp(t) && is_string(z) => {
-            let zone = match zone_arg(args, 1) {
-                Ok(z) => z,
-                Err(e) => return Some((listed, Err(e))),
+            // Spark resolves a literal zone name per evaluated row: an unknown
+            // name fails only when a row reaches the call (an empty table
+            // returns no rows and no error).
+            let (zone, unknown) = match zone_arg(args, 1) {
+                Ok(z) => (z, None),
+                Err(e) => match args.get(1) {
+                    Some(BindArg::Literal(a)) => match to_utf8(a.as_ref()) {
+                        Ok(text) if !text.is_null(0) => {
+                            (ZoneArg::Column, Some(text.value(0).to_owned()))
+                        }
+                        _ => return Some((listed, Err(e))),
+                    },
+                    _ => return Some((listed, Err(e))),
+                },
             };
             let (ntz, from) = (*t == ntz_type(), listed == "from_utc_timestamp");
             let ansi = opts.ansi;
             Binding::new(timestamp(), move |x: &Inputs<'_>| {
+                if let Some(name) = &unknown {
+                    if x.rows() == 0 {
+                        return Ok(Arc::new(null_instants(0)) as ArrayRef);
+                    }
+                    resolve_zone(name)?;
+                }
                 let utc = instants(x, 0, ntz, &o)?;
                 // A literal zone reads every row with one lookup; a column
                 // resolves each row (runs of equal names once).
