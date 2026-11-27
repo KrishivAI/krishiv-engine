@@ -63,7 +63,23 @@ fn size_text_and_merge_keep_null_rows() {
         let got: Vec<Option<i64>> = n.as_primitive::<Int64Type>().iter().collect();
         assert_eq!(got, vec![Some(10), None]);
         let s = run(&format!("kll_sketch_to_string_{suffix}"), &[&x]);
-        assert!(s.as_string::<i32>().value(0).contains("Kll"), "{s:?}");
+        let text = s.as_string::<i32>().value(0);
+        let name = match suffix {
+            "bigint" => "KllKllLongsSketch",
+            "float" => "KllKllFloatsSketch",
+            _ => "KllKllDoublesSketch",
+        };
+        assert!(
+            text.starts_with(&format!(
+                "\n### {name} Summary:\n   K                      : 200\n"
+            )),
+            "{text}"
+        );
+        assert!(
+            text.contains("   N                      : 10\n   Retained Items         : 10\n"),
+            "{text}"
+        );
+        assert!(text.contains("Estimation Mode        : false"), "{text}");
         assert!(s.is_null(1));
         let m = run(&format!("kll_sketch_merge_{suffix}"), &[&x, &y]);
         assert!(m.is_valid(0) && m.is_null(1));
@@ -79,20 +95,31 @@ fn quantiles_and_ranks_scalar_and_list() {
     let sk = bytes(&[Some(&s), None, Some(&s)]);
     let r: ArrayRef = Arc::new(Float64Array::from(vec![Some(0.5), Some(0.5), None]));
     let q = run("kll_sketch_get_quantile_double", &[&sk, &r]);
-    assert!(q.is_valid(0) && q.is_null(1) && q.is_null(2));
+    assert_eq!(q.as_primitive::<Float64Type>().value(0), 50.0);
+    assert!(q.is_null(1) && q.is_null(2));
     let ranks = f64_list(&[Some(&[0.0, 1.0][..]), None, Some(&[0.5][..])]);
     let ql = run("kll_sketch_get_quantile_double", &[&sk, &ranks]);
     let l = ql.as_list::<i32>();
-    assert_eq!(l.value(0).as_primitive::<Float64Type>().len(), 2);
+    assert_eq!(
+        l.value(0).as_primitive::<Float64Type>().values().to_vec(),
+        vec![1.0, 100.0]
+    );
     assert!(l.is_null(1));
-    assert_eq!(l.value(2).len(), 1);
+    assert_eq!(
+        l.value(2).as_primitive::<Float64Type>().values().to_vec(),
+        vec![50.0]
+    );
     let v: ArrayRef = Arc::new(Float64Array::from(vec![Some(50.0), Some(1.0), None]));
     let rk = run("kll_sketch_get_rank_double", &[&sk, &v]);
-    assert!(rk.is_valid(0) && rk.is_null(1) && rk.is_null(2));
+    assert_eq!(rk.as_primitive::<Float64Type>().value(0), 0.5);
+    assert!(rk.is_null(1) && rk.is_null(2));
     let vals = f64_list(&[Some(&[1.0, 100.0][..]), None, None]);
     let rl = run("kll_sketch_get_rank_double", &[&sk, &vals]);
     let l = rl.as_list::<i32>();
-    assert_eq!(l.value(0).len(), 2);
+    assert_eq!(
+        l.value(0).as_primitive::<Float64Type>().values().to_vec(),
+        vec![0.01, 1.0]
+    );
     assert!(l.is_null(1) && l.is_null(2));
 }
 
@@ -159,5 +186,29 @@ fn a_second_argument_of_the_wrong_shape_is_refused_at_bind_time() {
     ] {
         let got = bind_scalar(name, &super::types(&[&sk, second]), &opts);
         assert!(got.is_err(), "{name} bound a mismatched argument");
+    }
+}
+
+#[test]
+fn an_empty_sketch_has_no_quantile_or_rank() {
+    let empty = Kll::new(KllType::Double, 200, "kll_test")
+        .unwrap()
+        .to_bytes();
+    let sk = bytes(&[Some(&empty)]);
+    let r: ArrayRef = Arc::new(Float64Array::from(vec![Some(0.5)]));
+    let v: ArrayRef = Arc::new(Float64Array::from(vec![Some(10.0)]));
+    for (name, arg) in [
+        ("kll_sketch_get_quantile_double", &r),
+        ("kll_sketch_get_rank_double", &v),
+    ] {
+        let args = [&sk, arg];
+        let rows = 1;
+        let err = bind(name, &args)
+            .invoke(&args.iter().map(|a| col(a)).collect::<Vec<_>>(), rows)
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("KLL_INVALID_INPUT_SKETCH_BUFFER"),
+            "{name}: {err}"
+        );
     }
 }

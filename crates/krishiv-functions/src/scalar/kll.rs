@@ -265,6 +265,9 @@ fn quantiles(
             }
             continue;
         };
+        if sketch.n() == 0 {
+            return Err(empty_sketch(name));
+        }
         for r in &row_ranks {
             let q = sketch.quantile(*r, name)?;
             match t {
@@ -319,13 +322,13 @@ fn ranks(
     values: &ArrayRef,
     is_list: bool,
 ) -> Result<ArrayRef, KrishivError> {
-    let rank_of = |s: &Kll, v: &ArrayRef, j: usize| -> f64 {
+    let rank_of = |s: &Kll, v: &ArrayRef, j: usize| -> Result<f64, KrishivError> {
         let r = match t {
             KllType::Bigint => s.rank(0.0, v.as_primitive::<Int64Type>().value(j)),
             KllType::Float => s.rank(f64::from(v.as_primitive::<Float32Type>().value(j)), 0),
             KllType::Double => s.rank(v.as_primitive::<Float64Type>().value(j), 0),
         };
-        r.unwrap_or(f64::NAN)
+        r.ok_or_else(|| empty_sketch(name))
     };
     let mut out = Float64Builder::new();
     let mut lists: Vec<Option<usize>> = Vec::new();
@@ -349,11 +352,11 @@ fn ranks(
                 continue;
             }
             for j in 0..v.len() {
-                out.append_value(rank_of(&sketch, &v, j));
+                out.append_value(rank_of(&sketch, &v, j)?);
             }
             lists.push(Some(v.len()));
         } else if values.is_valid(i) {
-            out.append_value(rank_of(&sketch, values, i));
+            out.append_value(rank_of(&sketch, values, i)?);
         } else {
             out.append_null();
         }
