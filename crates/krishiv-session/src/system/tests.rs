@@ -161,6 +161,7 @@ fn capabilities_has_one_row_per_fact() {
             krishiv_exec::TokioExecutor::new(&krishiv_exec::ExecutorConfig::default()).unwrap(),
         )),
         catalogs: Default::default(),
+        information: None,
     };
     assert!(provider("capabilities", &sources).unwrap().is_some());
     assert!(provider("nope", &sources).unwrap().is_none());

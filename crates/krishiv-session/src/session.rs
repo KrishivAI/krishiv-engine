@@ -1318,6 +1318,12 @@ impl Session {
                     Arc::clone(&self.state.runtime.executor),
                 )),
                 catalogs: declared,
+                information: Some(crate::information_schema::Source {
+                    store: Arc::clone(&self.state.catalog.store),
+                    principal: Arc::clone(&self.state.principal),
+                    policy: Arc::clone(&self.state.policy),
+                    grants: self.state.grants.clone(),
+                }),
                 monitor: Arc::new(crate::system::Monitor::new(
                     Arc::clone(&self.state.principal),
                     Arc::clone(&self.state.policy),
