@@ -1489,10 +1489,11 @@ impl Session {
     }
 
     /// Whether `parts`, the name after `USE NAMESPACE|DATABASE|SCHEMA`, is a namespace of the current `system`
-    /// catalog (which has none): any name while it is current, except one qualified with the session catalog.
-    pub(crate) fn names_a_system_namespace(&self, parts: &[String]) -> bool {
+    /// catalog (which has none): any name while it is current. No part of such a name is a catalog, so
+    /// `USE NAMESPACE spark_catalog.db` under `system` names `` `system`.`spark_catalog`.`db` ``;
+    /// `USE spark_catalog.db` is the way to the session catalog.
+    pub(crate) fn names_a_system_namespace(&self) -> bool {
         is_system(&self.state.catalog.current_catalog())
-            && !(parts.len() == 2 && parts[0].eq_ignore_ascii_case(crate::catalog::CATALOG))
     }
 
     /// A namespace named on its own (`SHOW TABLES IN ns`, `DESCRIBE SCHEMA ns`): `system` itself stays

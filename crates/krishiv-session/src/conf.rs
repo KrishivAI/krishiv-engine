@@ -10,7 +10,7 @@ use krishiv_common::config::{
 use krishiv_common::error::{
     CannotModifyStaticConfig, InvalidConfValueRequirement, InvalidConfValueTimeZone, KrishivError,
 };
-use krishiv_common::redact::is_redacted_setting;
+use krishiv_common::redact::{REDACTED, is_redacted_option, is_redacted_setting};
 use krishiv_kernels::cast::FixedOffset;
 use krishiv_kernels::datetime::{resolve_zone, zone_id};
 use krishiv_plan::analyzer::SparkProfile;
@@ -552,6 +552,17 @@ impl RuntimeConf {
     pub fn is_modifiable(&self, key: &str) -> bool {
         is_modifiable(key)
             && !(self.store.static_catalogs && crate::catalog_decl::is_declaration_key(key))
+    }
+}
+
+/// The value `SET` and `SET key` print for a pair: Spark's `SQLConf.redactOptions` hides it when
+/// the key or the value looks like a secret or names a URL
+/// ([`is_redacted_option`]). Only the echo of `SET key = value` shows such a value.
+pub(crate) fn shown(key: &str, value: String) -> String {
+    if is_redacted_option(key, &value) {
+        REDACTED.to_owned()
+    } else {
+        value
     }
 }
 

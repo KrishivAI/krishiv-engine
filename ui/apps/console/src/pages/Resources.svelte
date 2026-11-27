@@ -21,6 +21,30 @@
   }));
   const pool = $derived(workers.data?.pool ?? null);
 
+  /** A pool row, or the pools of one name as one row. */
+  type PoolRow = MemoryRow & { pools: number };
+  /**
+   * Every session has a pool of its own under the same name (`process/relation_cache`), so a server with many
+   * sessions listed that name once per session. Pools alike in everything but their numbers are one row: what
+   * they hold together, and the largest single peak.
+   */
+  function fold(rows: MemoryRow[]): PoolRow[] {
+    const out = new Map<string, PoolRow>();
+    for (const r of rows) {
+      const k = JSON.stringify([r.worker_id, r.path, r.parent, r.kind, r.query_id, r.limit_bytes, r.spillable]);
+      const seen = out.get(k);
+      if (seen) {
+        seen.pools += 1;
+        seen.reserved_bytes += r.reserved_bytes;
+        seen.peak_bytes = Math.max(seen.peak_bytes, r.peak_bytes);
+      } else {
+        out.set(k, { ...r, pools: 1 });
+      }
+    }
+    return [...out.values()];
+  }
+  const memory = $derived(fold(q.data?.memory ?? []));
+
   const workerColumns: Column[] = [
     { key: "session", label: "Session", title: true },
     { key: "principal", label: "Principal" },
@@ -89,8 +113,11 @@
   <p class="text-error">Could not load resources: {q.error.message}</p>
 {:else}
   <h2 class="mb-3">Memory</h2>
-  <ResponsiveTable columns={memoryColumns} rows={q.data.memory} rowKey={keyOf(q.data.memory, (r) => `${r.worker_id ?? ""}/${r.path}`)}>
-    {#snippet cell(r, col)}<span class={col.key === "path" ? "mono" : ""}>{memoryCell(r, col.key)}</span>{/snippet}
+  <ResponsiveTable columns={memoryColumns} rows={memory} rowKey={keyOf(memory, (r) => `${r.worker_id ?? ""}/${r.path}`)}>
+    {#snippet cell(r, col)}<span class={col.key === "path" ? "mono" : ""}>{memoryCell(r, col.key)}</span>
+      {#if col.key === "path" && r.pools > 1}
+        <div class="text-xs text-muted-foreground" data-pools={r.pools}>{count(r.pools)} pools of this name: in use is their total, peak and limit are one pool's.</div>
+      {/if}{/snippet}
   </ResponsiveTable>
   <h2 class="mt-6 mb-3">Caches</h2>
   <ResponsiveTable columns={cacheColumns} rows={q.data.caches} rowKey={keyOf(q.data.caches, (c) => `${c.worker_id ?? ""}/${c.cache}`)}>

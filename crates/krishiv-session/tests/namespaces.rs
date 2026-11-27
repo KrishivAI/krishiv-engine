@@ -108,11 +108,10 @@ fn namespace_errors() {
         class(&s, "DROP DATABASE default"),
         "UNSUPPORTED_FEATURE.DROP_DATABASE"
     );
-    assert_eq!(class(&s, "USE a.b.c"), "REQUIRES_SINGLE_PART_NAMESPACE");
-    assert_eq!(
-        class(&s, "USE other_catalog.s1"),
-        "KRISHIV_UNSUPPORTED_FEATURE"
-    );
+    // No catalog is named `a` or `other_catalog`: the parts are a namespace the session catalog
+    // does not have (Spark 4.2.0 and 4.3.0 runs).
+    assert_eq!(class(&s, "USE a.b.c"), "SCHEMA_NOT_FOUND");
+    assert_eq!(class(&s, "USE other_catalog.s1"), "SCHEMA_NOT_FOUND");
     run(&s, "USE spark_catalog.s1");
     assert_eq!(
         rows(&s, "SHOW CURRENT NAMESPACE"),
@@ -403,4 +402,185 @@ fn describing_a_global_view_reports_current_dependency_types() {
     );
     let d = rows(&s, "DESCRIBE global_temp.v");
     assert_eq!(d[0][1], "string");
+}
+
+/// The schema a `SCHEMA_NOT_FOUND` names, as it stands in the message.
+fn missing_schema(e: &krishiv_common::error::KrishivError) -> String {
+    let text = e.to_string();
+    if e.error_class().name() != "SCHEMA_NOT_FOUND" {
+        return text;
+    }
+    let rest = text.split("The schema ").nth(1).unwrap_or_default();
+    rest.split(" cannot be found")
+        .next()
+        .unwrap_or_default()
+        .to_owned()
+}
+
+/// A missing schema of the session catalog is named with its catalog, whichever statement or
+/// Catalog API call misses it (Spark 4.3.0 run, acceptance R1-D-20: every statement below gives
+/// `` `spark_catalog`.`dummy` `` there).
+#[test]
+fn a_missing_schema_is_named_with_its_catalog() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    let mut wrong = Vec::new();
+    for sql in [
+        "DROP SCHEMA dummy",
+        "DESCRIBE SCHEMA dummy",
+        "DESCRIBE SCHEMA EXTENDED dummy",
+        "USE dummy",
+        "USE spark_catalog.dummy",
+        "SHOW TABLES IN dummy",
+        "SHOW TABLES IN spark_catalog.dummy",
+        "SHOW TABLES IN DUMMY",
+        "SHOW VIEWS IN dummy",
+        "SHOW TABLE EXTENDED IN dummy LIKE '*'",
+        "SHOW FUNCTIONS IN dummy",
+        "SHOW USER FUNCTIONS IN dummy",
+        "ALTER SCHEMA dummy SET DBPROPERTIES ('a' = 'b')",
+        "ALTER SCHEMA dummy SET LOCATION '/tmp/x'",
+        "COMMENT ON SCHEMA dummy IS 'x'",
+        "CREATE TABLE dummy.t (a INT) USING parquet",
+        "CREATE TABLE dummy.t (a INT)",
+        "CREATE TABLE dummy.t USING parquet AS SELECT 1 a",
+        "CREATE VIEW dummy.v AS SELECT 1 a",
+        "CREATE OR REPLACE VIEW dummy.v AS SELECT 1 a",
+        "CREATE FUNCTION dummy.f() RETURNS INT RETURN 1",
+        "CREATE OR REPLACE FUNCTION dummy.f() RETURNS INT RETURN 1",
+        "DROP FUNCTION dummy.f",
+    ] {
+        match block_on(async { s.sql(sql).await?.collect().await }) {
+            Ok(_) => wrong.push(format!("{sql}: no error")),
+            Err(e) if missing_schema(&e) != "`spark_catalog`.`dummy`" => {
+                wrong.push(format!("{sql}: {}", missing_schema(&e)));
+            }
+            Err(_) => {}
+        }
+    }
+    // A nested name keeps every part.
+    for (sql, name) in [
+        ("USE dummy.x", "`spark_catalog`.`dummy`.`x`"),
+        ("USE spark_catalog.dummy.x", "`spark_catalog`.`dummy`.`x`"),
+        ("USE NAMESPACE dummy.x", "`spark_catalog`.`dummy`.`x`"),
+        ("USE SCHEMA dummy.x", "`spark_catalog`.`dummy`.`x`"),
+        ("USE DATABASE dummy.x", "`spark_catalog`.`dummy`.`x`"),
+        ("USE a.b.c", "`spark_catalog`.`a`.`b`.`c`"),
+        ("USE NAMESPACE a.b.c", "`spark_catalog`.`a`.`b`.`c`"),
+        ("USE spark_catalog.a.b.c", "`spark_catalog`.`a`.`b`.`c`"),
+        ("USE NAMESPACE dummy", "`spark_catalog`.`dummy`"),
+        (
+            "USE NAMESPACE spark_catalog",
+            "`spark_catalog`.`spark_catalog`",
+        ),
+        // With a namespace keyword no part is a catalog (Spark 4.3.0 run, each of the three
+        // keywords): the session catalog's own name is one more namespace part, also before a
+        // schema that exists.
+        (
+            "USE NAMESPACE spark_catalog.dummy",
+            "`spark_catalog`.`spark_catalog`.`dummy`",
+        ),
+        (
+            "USE SCHEMA spark_catalog.dummy",
+            "`spark_catalog`.`spark_catalog`.`dummy`",
+        ),
+        (
+            "USE DATABASE spark_catalog.dummy",
+            "`spark_catalog`.`spark_catalog`.`dummy`",
+        ),
+        (
+            "USE NAMESPACE spark_catalog.default",
+            "`spark_catalog`.`spark_catalog`.`default`",
+        ),
+        (
+            "USE SCHEMA spark_catalog.default",
+            "`spark_catalog`.`spark_catalog`.`default`",
+        ),
+        (
+            "USE NAMESPACE spark_catalog.a.b",
+            "`spark_catalog`.`spark_catalog`.`a`.`b`",
+        ),
+        (
+            "USE DATABASE spark_catalog.a.b",
+            "`spark_catalog`.`spark_catalog`.`a`.`b`",
+        ),
+    ] {
+        match block_on(async { s.sql(sql).await?.collect().await }) {
+            Ok(_) => wrong.push(format!("{sql}: no error")),
+            Err(e) if missing_schema(&e) != name => {
+                wrong.push(format!("{sql}: {}", missing_schema(&e)));
+            }
+            Err(_) => {}
+        }
+    }
+    assert!(wrong.is_empty(), "{wrong:#?}");
+    let c = s.catalog();
+    for e in [
+        block_on(c.get_database("dummy")).unwrap_err(),
+        block_on(c.get_database("spark_catalog.dummy")).unwrap_err(),
+        block_on(c.set_current_database("dummy")).unwrap_err(),
+        block_on(c.list_tables(Some("dummy"), None)).unwrap_err(),
+        block_on(c.list_functions_in(Some("dummy"), None)).unwrap_err(),
+    ] {
+        assert_eq!(missing_schema(&e), "`spark_catalog`.`dummy`");
+    }
+    // A name of several parts keeps them, a quoted name with a dot is one part, and
+    // `setCurrentDatabase` takes no part as a catalog (Spark 4.3.0 run for each).
+    for (e, name) in [
+        (
+            block_on(c.get_database("a.b")).unwrap_err(),
+            "`spark_catalog`.`a`.`b`",
+        ),
+        (
+            block_on(c.get_database("a.b.c")).unwrap_err(),
+            "`spark_catalog`.`a`.`b`.`c`",
+        ),
+        (
+            block_on(c.get_database("`a.b`")).unwrap_err(),
+            "`spark_catalog`.`a.b`",
+        ),
+        // `getDatabase` is catalog-first at every length.
+        (
+            block_on(c.get_database("spark_catalog.a.b")).unwrap_err(),
+            "`spark_catalog`.`a`.`b`",
+        ),
+        (
+            block_on(c.get_database("SPARK_CATALOG.a.b")).unwrap_err(),
+            "`spark_catalog`.`a`.`b`",
+        ),
+        (
+            block_on(c.get_database("nocat.a.b")).unwrap_err(),
+            "`spark_catalog`.`nocat`.`a`.`b`",
+        ),
+        (
+            block_on(c.get_database("spark_catalog.`a.b`")).unwrap_err(),
+            "`spark_catalog`.`a.b`",
+        ),
+        (
+            block_on(c.get_database("spark_catalog.dummy")).unwrap_err(),
+            "`spark_catalog`.`dummy`",
+        ),
+        (
+            block_on(c.set_current_database("a.b")).unwrap_err(),
+            "`spark_catalog`.`a`.`b`",
+        ),
+        (
+            block_on(c.set_current_database("`a.b`")).unwrap_err(),
+            "`spark_catalog`.`a.b`",
+        ),
+        (
+            block_on(c.set_current_database("spark_catalog.dummy")).unwrap_err(),
+            "`spark_catalog`.`spark_catalog`.`dummy`",
+        ),
+        (
+            block_on(c.set_current_database("spark_catalog.default")).unwrap_err(),
+            "`spark_catalog`.`spark_catalog`.`default`",
+        ),
+    ] {
+        assert_eq!(missing_schema(&e), name, "{e}");
+    }
+    // The catalog-first forms still reach the schema.
+    block_on(async { s.sql("USE spark_catalog.default").await?.collect().await }).unwrap();
+    assert!(block_on(c.database_exists("spark_catalog.default")).unwrap());
+    assert!(!block_on(c.database_exists("a.b")).unwrap());
 }

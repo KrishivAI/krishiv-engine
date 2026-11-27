@@ -12,11 +12,3 @@ pub(crate) const GAPS: &[&str] = &[
     // EXPLAIN's physical plan is Krishiv's.
     "read_explain_aggregate",
 ];
-
-/// Cases of 4.3.0 alone: the session has no Spark 4.3 profile yet, so the missing-clause error is
-/// 4.2's `INTERNAL_ERROR` (design note §1).
-pub(crate) const GAPS_4_3: &[&str] = &[
-    "parse_missing_both_clauses",
-    "parse_missing_language",
-    "parse_missing_with_metrics",
-];

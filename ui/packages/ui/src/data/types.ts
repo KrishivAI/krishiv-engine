@@ -225,6 +225,8 @@ export interface Setting {
   key: string;
   value: string;
   redacted: boolean;
+  /** The Spark name the setting also answers to, when it has one. */
+  spark_key?: string | null;
 }
 
 export interface Environment {

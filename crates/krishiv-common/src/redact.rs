@@ -84,6 +84,29 @@ pub fn is_redacted_setting(key: &str, value: Option<&str>) -> bool {
         || value.is_some_and(|v| matches_redaction(v) || matches!(redact(v), Cow::Owned(_)))
 }
 
+/// Whether SQL `SET` and `SET key` hide a pair: Spark's
+/// `SQLConf.redactOptions` (`SetCommand.scala:140,196` at v4.2.0), which
+/// applies two patterns, each to the key and to the value
+/// (`Utils.redact`): the default of `spark.sql.redaction.options.regex`,
+/// `(?i)url`, and `spark.redaction.regex`. So `SET` hides more than
+/// `Config.get`: any key or value with `url` in it, whatever the case,
+/// credentials or not. Krishiv's own classifier applies on top, as in
+/// [`is_redacted_setting`]. A key that has no value is still asked with
+/// the text `SET` prints for it, as Spark does (`<undefined>`).
+///
+/// ```
+/// use krishiv_common::redact::is_redacted_option;
+/// assert!(is_redacted_option("spark.my.jdbc.URL", "postgres://h/db"));
+/// assert!(is_redacted_option("spark.x", "see the url"));
+/// assert!(is_redacted_option("spark.my.password", "<undefined>"));
+/// assert!(!is_redacted_option("spark.sql.ansi.enabled", "true"));
+/// ```
+#[must_use]
+pub fn is_redacted_option(key: &str, value: &str) -> bool {
+    let url = |text: &str| text.to_ascii_lowercase().contains("url");
+    url(key) || url(value) || is_redacted_setting(key, Some(value))
+}
+
 /// `text` with the secrets it can find replaced by [`REDACTED`]; borrowed
 /// when there are none.
 #[must_use]
@@ -468,7 +491,9 @@ fn schemes(text: &str, out: &mut Vec<Range<usize>>) {
 
 #[cfg(test)]
 mod tests {
-    use super::{Mark, RedactedSql, is_redacted_setting, matches_redaction, redact};
+    use super::{
+        Mark, RedactedSql, is_redacted_option, is_redacted_setting, matches_redaction, redact,
+    };
 
     #[test]
     fn setting_pairs_follow_sparks_pattern_and_the_classifier() {
@@ -486,6 +511,20 @@ mod tests {
             "spark.sql.ansi.enabled",
             Some("maybe")
         ));
+    }
+
+    #[test]
+    fn set_output_also_hides_what_names_a_url() {
+        // `spark.sql.redaction.options.regex`, `(?i)url`, on the key and on the value.
+        assert!(is_redacted_option("spark.my.jdbc.url", "postgres://h/db"));
+        assert!(is_redacted_option("spark.my.URL", "x"));
+        assert!(is_redacted_option("spark.x", "a curl command"));
+        // `spark.redaction.regex` and the classifier, as `Config.get`.
+        assert!(is_redacted_option("spark.my.password", "<undefined>"));
+        assert!(is_redacted_option("spark.x", "zzz-secret"));
+        assert!(is_redacted_option("fs.azure.account.key.acct", "abc"));
+        assert!(!is_redacted_option("spark.sql.ansi.enabled", "true"));
+        assert!(!is_redacted_option("spark.sql.ansi.enabled", "<undefined>"));
     }
 
     #[test]
