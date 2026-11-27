@@ -201,6 +201,7 @@ async fn analyze(
         Some(Analyze::DdlParse(d)) => res::Result::DdlParse(res::DdlParse {
             parsed: Some(schema::proto_type(&types::parse_datatype_string(
                 &d.ddl_string,
+                &session.parser_options(),
             )?)?),
         }),
         Some(Analyze::SameSemantics(s)) => {
