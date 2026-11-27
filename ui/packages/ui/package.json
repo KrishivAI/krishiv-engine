@@ -27,7 +27,8 @@
   },
   "scripts": {
     "check": "svelte-check --tsconfig ./tsconfig.json",
-    "test": "vitest run"
+    "tokens": "node scripts/build-tokens.mjs",
+    "test": "node scripts/build-tokens.mjs --check && vitest run"
   },
   "dependencies": {
     "bits-ui": "2.20.2",

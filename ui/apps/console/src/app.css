@@ -1,4 +1,5 @@
 @import "tailwindcss";
 @import "@krishiv/ui/tokens.css";
-/* The components and views of @krishiv/ui are a workspace package: Tailwind scans them too. */
+/* The components and views of @krishiv/ui are a workspace package: Tailwind scans them too, but not the token files. */
 @source "../../../packages/ui/src";
+@source not "../../../packages/ui/src/tokens";
