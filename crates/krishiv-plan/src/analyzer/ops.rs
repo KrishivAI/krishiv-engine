@@ -1251,7 +1251,7 @@ impl Resolver<'_> {
     /// filter (`restore`), and that is not such a stack: Spark does not
     /// resolve a sort through it (`GROUP BY x + 1 HAVING sum(l) > 1 ORDER BY
     /// x + 1` is UNRESOLVED_COLUMN, checked against 4.2.0).
-    fn through_to_agg(c: &Rel) -> Option<(Vec<Rel>, Rel)> {
+    fn through_to_agg(c: &Rel, past_restore: bool) -> Option<(Vec<Rel>, Rel)> {
         let mut layers = Vec::new();
         let mut cur = c.clone();
         loop {
@@ -1271,7 +1271,8 @@ impl Resolver<'_> {
                 // grouping column its select list drops (`SELECT 1 AS a, 2 AS a
                 // ... GROUP BY a HAVING a > 1 ORDER BY a`).
                 Some(Widen::Project { input, .. })
-                    if matches!(cur.plan.node, PlanNode::Project { .. })
+                    if past_restore
+                        && matches!(cur.plan.node, PlanNode::Project { .. })
                         && matches!(input.widen.as_deref(), Some(Widen::Through { .. }))
                         && input.agg.is_none() =>
                 {

@@ -307,7 +307,15 @@ impl Resolver<'_> {
                             .name()
                             .starts_with("AMBIGUOUS_REFERENCE") =>
                 {
-                    let Some((layers, mut inner)) = Self::through_to_agg(&c) else {
+                    // Only a select list that repeats a name (the sort key is
+                    // ambiguous there, the grouping column is not) reads past
+                    // the projection a `HAVING` left.
+                    let repeats = c.out.iter().enumerate().any(|(i, a)| {
+                        c.out[..i]
+                            .iter()
+                            .any(|b| same(&a.col.name, &b.col.name, self.ctx.conf.case_sensitive))
+                    });
+                    let Some((layers, mut inner)) = Self::through_to_agg(&c, repeats) else {
                         return Err(reported(e));
                     };
                     // Over a `HAVING`, Spark has rewritten a metric-view aggregate already: the
