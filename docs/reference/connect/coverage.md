@@ -25,7 +25,7 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 | 11 | local_relation | done |  | Read(ReadSource::Local) from the Arrow IPC data plus the DDL or JSON schema (createDataFrame), built by the host before translation (TranslateConf::local_relations); no data and no schema is SCHEMA_REQUIRED_FOR_LOCAL_RELATION; the inline size is bounded by the gRPC message limit | P3-T012a | 1 |
 | 12 | sample | partial | with_replacement (Poisson) and deterministic_order (randomSplit) | Sample (Bernoulli, seed or one drawn per plan, Spark's XORShiftRandom order); Poisson needs a new IR field; deterministic_order needs the per-partition sort | P3-T012 | 3 |
 | 13 | offset | done |  | Offset | P2-T091a | 0 |
-| 14 | deduplicate | partial | a column subset and within_watermark | Distinct (all columns); a subset is Aggregate with first per non-key column and needs the input columns (analyzer node); within_watermark → P4 | P3-T012 | 3 |
+| 14 | deduplicate | partial | within_watermark | Distinct (all columns); a column subset is ColumnNames Deduplicate (analyzer: aggregate with first per non-key column); within_watermark → P4 | P3-T012 | 3 |
 | 15 | range | done |  | Range | P2-T091a | 0 |
 | 16 | subquery_alias | done |  | SubqueryAlias; the qualifier and the alias are the alias parts joined by ALIAS_PART_SEP | P3-T012 | 1 |
 | 17 | repartition | partial | the partition count (spark_partition_id, getNumPartitions) | Hint(REPARTITION n \| COALESCE n): rows pass through unchanged; the count is not applied to the plan; each call adds the warning "Hint REPARTITION(n) has no effect in a single-node plan." to the plan's warnings (Spark logs nothing; whether a client sees them is not checked) | P3-T012 | 3 |
