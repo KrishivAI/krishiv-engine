@@ -529,7 +529,9 @@ shared by every session of the application.
   too; Spark 4.2 shows them. The pattern is the default only (Spark reads `spark.redaction.regex` from the startup
   configuration). Krishiv also hides what its own secret classifier finds, where Spark 4.3 shows it: keys such as
   `fs.azure.account.key.<account>`, `sasl.jaas.config` or `*.apiKey`, and values with credentials in a URL
-  (`postgres://user:password@host`). `set` of a key without a value fails with `INVALID_CONF_VALUE.REQUIREMENT`, and a request without an
+  (`postgres://user:password@host`). SQL `SET` and `SET <key>` hide the same pairs and, as Spark's do, any pair with
+  `url` in the key or the value (the default of `spark.sql.redaction.options.regex`; a changed pattern is not read);
+  `SET -v` hides a registered key that holds a secret, where Spark's `SET -v` hides nothing. `set` of a key without a value fails with `INVALID_CONF_VALUE.REQUIREMENT`, and a request without an
   operation with `CONNECT_INVALID_PLAN.INVALID_ONE_OF_FIELD_NOT_SET`; Spark sends `INTERNAL` without an error class.
   `is_modifiable` answers `true` for a key outside the engine's registry, where Spark answers `false` for a key it does
   not know. `get_all` lists a registered key under its Spark name when it has one, else under its `krishiv.*` name.
