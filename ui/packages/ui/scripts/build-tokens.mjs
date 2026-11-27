@@ -9,6 +9,7 @@
 // prefers-color-scheme: light, and data-theme="light" / "dark" on <html> overrides both ways.
 // --check exits 1 when the committed product.css differs from what the inputs give.
 import { readFileSync, writeFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
 
 const root = new URL("../", import.meta.url);
 const read = (p) => JSON.parse(readFileSync(new URL(p, root), "utf8"));
@@ -41,8 +42,9 @@ export function build() {
     stat.push(`  --t-${s.name}: ${s.fontWeight} ${s.fontSize}/${s.lineHeight} var(--font-${s.family});`);
     if ("letterSpacing" in s) stat.push(`  --t-${s.name}-track: ${s.letterSpacing};`);
   }
-  const fonts = [["Display", "display"], ["Text", "text"], ["Mono", "mono"]]
-    .map(([name, file]) => `@font-face { font-family: "Red Hat ${name}"; src: url("./fonts/redhat${file}-vf.woff2") format("woff2"); font-weight: 300 900; font-display: swap; }`)
+  // The variable fonts' weight ranges: Display 300-900, Text and Mono 300-700.
+  const fonts = [["Display", "display", "300 900"], ["Text", "text", "300 700"], ["Mono", "mono", "300 700"]]
+    .map(([name, file, w]) => `@font-face { font-family: "Red Hat ${name}"; src: url("./fonts/redhat${file}-vf.woff2") format("woff2"); font-weight: ${w}; font-display: swap; }`)
     .join("\n");
   const indented = light.split("\n").map((l) => `  ${l}`).join("\n");
   return `/* SPDX-License-Identifier: Apache-2.0 */
@@ -82,7 +84,7 @@ ${light}
 `;
 }
 
-if (process.argv[1] && new URL(`file://${process.argv[1]}`).href === import.meta.url) {
+if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
   const css = build();
   if (process.argv.includes("--check")) {
     let committed = "";

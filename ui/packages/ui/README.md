@@ -13,8 +13,9 @@ of each. Private until its first publication with an engine release; until then 
 | `@krishiv/ui/data/<name>` | `format`, `plan`, `types` |
 | `@krishiv/ui/utils` | `cn` |
 
-A console that uses the components scans them for Tailwind classes:
-`@source "<path to>/@krishiv/ui/src"; @source not "<path to>/@krishiv/ui/src/tokens";`.
+`tokens.css` tells Tailwind to scan the package's components (its own `@source` rules), so a console needs no path of
+its own. Import **one** of `tokens.css` (the engine console's `--k-*` set, TTF fonts) and `tokens/product.css` (the
+unified set, woff2 fonts): both declare the Red Hat font faces.
 
 `tokens-src/brand-tokens.json` and `tokens-src/product-tokens.json` are the token source; `pnpm tokens` writes
 `src/tokens/product.css` from them and `pnpm test` fails when the committed file differs. Fonts: SIL OFL 1.1,

@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: Apache-2.0 */
 @import "./tokens.css";
 
 /* A console that imports this file scans the package's components and views for Tailwind classes; not the token

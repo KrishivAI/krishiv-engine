@@ -5,7 +5,7 @@ Upstream: https://github.com/RedHatOfficial/RedHatFont
 The logo and banner files contain glyph outlines converted from these fonts. Under the SIL Open
 Font License 1.1, artwork made with the fonts (including outlined lettering in logos) is not
 itself subject to the licence; the licence governs only redistribution of the font software.
-The font files in _fonts/ are redistributed unmodified (variable) or as weight instances, under the OFL below.
+The font files beside this licence are redistributed unmodified (variable) or as weight instances, under the OFL below.
 
 ------------------------------------------------------------------------
 

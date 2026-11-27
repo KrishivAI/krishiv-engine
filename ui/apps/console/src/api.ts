@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // The token comes from the URL the server printed (`/?token=...`) once: the page trades it for an HttpOnly,
 // SameSite=Strict session cookie (`POST /api/internal/session`) and removes it from the address bar. No script keeps
 // the token, no request carries it in an address (the event stream sends the cookie), and a request that changes
@@ -38,6 +39,5 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   }
   return body as T;
 }
-
 
 export type * from "@krishiv/ui/data/types";

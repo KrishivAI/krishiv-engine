@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 // Row types of the engine console API (`/api/internal/*`). Step 3 of the shared-UI note replaces them with types
 // generated from `krishiv.admin.v1`.
 
