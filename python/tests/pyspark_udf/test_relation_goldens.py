@@ -32,8 +32,7 @@ GOLDENS = json.loads((Path(__file__).resolve().parent / "relation" / "goldens.js
 JVM_FAILURES = {None, "UNSUPPORTED_CALL.WITHOUT_SUGGESTION"}
 
 #: Known gaps: (case regex, reason). A matching case must still differ from Spark.
-KNOWN_GAPS: list[tuple[str, str]] = [
-]
+KNOWN_GAPS: list[tuple[str, str]] = []
 
 
 def gap(case: str) -> str | None:
