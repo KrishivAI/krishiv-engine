@@ -7,8 +7,10 @@
 use arrow_array::Array as _;
 use arrow_array::cast::AsArray;
 
-use super::super::{Kept, compiled_on_thread};
-use super::{Cut, Found, PROBE, delegated, unquote};
+use std::rc::Rc;
+
+use super::super::{Groups, Kept, compiled_on_thread};
+use super::{Cut, Found, PROBE, REST, delegated, unquote};
 use crate::scalar::tests::{ints, run, strs};
 
 /// Every group span of one match.
@@ -44,6 +46,7 @@ fn cut_of(pattern: &str) -> Option<Cut> {
 /// The spans of the match of `cut` in `text[from..]`.
 fn spans(cut: &Cut, text: &str, from: usize) -> Option<Spans> {
     cut.search(text, from)
+        .unwrap()
         .map(|f| (0..=cut.groups()).map(|g| f.span(g)).collect())
 }
 
@@ -307,7 +310,28 @@ impl Rng {
 /// and lazy repetition, anchors, a word boundary, an empty branch and a two-byte character.
 fn piece(r: &mut Rng, depth: u32, out: &mut String) {
     const ATOMS: &[&str] = &[
-        "a", "b", "c", "ab", "bc", ".", "[ab]", "[^a]", r"\b", "é", "$", "^", r"\z", "",
+        "a",
+        "b",
+        "c",
+        "ab",
+        "bc",
+        ".",
+        "[ab]",
+        "[^a]",
+        r"\b",
+        "é",
+        "$",
+        "^",
+        r"\z",
+        "",
+        r"\d",
+        r"\s",
+        r"\w",
+        r"\p{L}",
+        r"\P{Lu}",
+        "[a-c&&[^b]]",
+        "(?s:.)",
+        "(?i:b)",
     ];
     const REPEATS: &[&str] = &["*", "+", "?", "*?", "+?", "??", "{1,2}"];
     match if depth == 0 { 0 } else { r.below(8) } {
@@ -354,11 +378,14 @@ fn piece(r: &mut Rng, depth: u32, out: &mut String) {
 /// character of random short texts: [`agrees`] compares every search with the engine's.
 #[test]
 fn random_patterns_agree_with_the_engine() {
-    const ALPHABET: &[&str] = &["a", "b", "c", "é", "\n", "ab"];
+    const ALPHABET: &[&str] = &["a", "b", "c", "é", "\n", "ab", "B", "1", " "];
     let mut r = Rng(0x9E37_79B9_7F4A_7C15);
     let (mut cut_patterns, mut matched, mut fell) = (0_u32, 0_u32, 0_u32);
     for _ in 0..1500 {
         let mut pattern = String::new();
+        if r.below(6) == 0 {
+            pattern.push_str("(?i)");
+        }
         if r.below(3) == 0 {
             pattern.push('^');
         }
@@ -396,4 +423,50 @@ fn random_patterns_agree_with_the_engine() {
         cut_patterns > 100 && matched > 2_000 && fell > 400,
         "{seen}"
     );
+}
+
+#[test]
+fn a_dropped_cut_rests_and_is_probed_again() {
+    let function = "`regexp_extract`";
+    let pattern = "(a|ab)c.*-rest";
+    let first = compiled_on_thread(pattern, function).unwrap();
+    let cut = first.cut.as_ref().unwrap();
+    let search = |kept: &Kept, text: &str| {
+        let found = kept.captures_at(text, 0).unwrap().unwrap();
+        (matches!(found, Groups::Cut(..)), found.whole())
+    };
+    // The head's first choice is `a`, so each probed search falls back and the cut is dropped.
+    for _ in 0..PROBE {
+        assert_eq!(search(&first, "abc-rest"), (true, Some((0, 8))));
+    }
+    assert!(!cut.is_on());
+    // A later batch or query on this thread gets the same pattern, its cut still resting.
+    let again = compiled_on_thread(pattern, function).unwrap();
+    assert!(Rc::ptr_eq(&first, &again));
+    for _ in 0..REST {
+        assert!(!cut.is_on());
+        assert_eq!(search(&again, "abc-rest"), (false, Some((0, 8))));
+    }
+    // The rest is over: the next searches are a new probe, on the rows of that time.
+    assert!(cut.is_on());
+    assert_eq!(cut.probed(), (0, 0));
+    for _ in 0..PROBE {
+        assert_eq!(search(&again, "ac-rest"), (true, Some((0, 7))));
+    }
+    assert!(cut.is_on());
+    assert_eq!(cut.probed(), (PROBE, 0));
+    assert_eq!(search(&again, "ac-rest"), (true, Some((0, 7))));
+}
+
+#[test]
+fn a_search_while_a_match_is_held_goes_to_the_engine() {
+    let kept = Kept::new("(a)b.*", "`regexp_extract`").unwrap();
+    let cut = kept.cut.as_ref().unwrap();
+    let held = cut.search("ab", 0).unwrap().unwrap();
+    assert!(cut.search("ab", 0).is_err());
+    // The kernel's entry answers from the engine meanwhile.
+    let other = kept.captures_at("xab", 0).unwrap().unwrap();
+    assert!(matches!(other, Groups::Engine(_)));
+    assert_eq!(other.whole(), Some((1, 3)));
+    assert_eq!(held.span(1), Some((0, 1)));
 }

@@ -306,8 +306,10 @@ impl Kept {
         from: usize,
     ) -> Result<Option<Groups<'_, 't>>, KrishivError> {
         let terminated = self.compiled.terminated.is_some() && ends_terminated(text);
-        if let Some(cut) = self.cut.as_ref().filter(|c| !terminated && c.is_on()) {
-            let found = cut.search(text, from);
+        if let Some(cut) = self.cut.as_ref().filter(|c| !terminated && c.take())
+            // A cut whose slots a caller still holds is skipped: the engine answers.
+            && let Ok(found) = cut.search(text, from)
+        {
             #[cfg(test)]
             cut::tests::agrees(&self.compiled.plain, text, from, found.as_ref());
             return Ok(found.map(|f| Groups::Cut(text, f)));

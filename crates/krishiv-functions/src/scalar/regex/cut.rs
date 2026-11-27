@@ -27,10 +27,20 @@
 //! All searches run on the whole text with a span, never on a slice, so an assertion at the
 //! cut (`\b`, `\z`) sees the bytes on both sides.
 //!
-//! The parts are compiled from the pattern the kernels' engine, `fancy_regex`, hands to
-//! `regex_automata` ([`delegated`]), parsed once, so the cut and the engine search the same
-//! automaton. A pattern the engine runs itself (look-around, back-references, atomic
-//! groups) has no cut. In tests every cut search is compared with the engine's.
+//! The parts are compiled from the pattern text the kernels' engine, `fancy_regex`, prints
+//! for the pattern it delegates to `regex_automata` ([`delegated`]), parsed once with the
+//! default parser. The engine builds its own automaton from its `to_hir` translation of the
+//! pattern, which upstream defines (and tests) to equal that parse, so the cut and the engine
+//! search equal patterns. An upgrade of `fancy_regex` can drift in two places: the printed
+//! text and `to_hir`. Either one fails safe (no cut, or a test of this module fails). A
+//! pattern the engine runs itself (look-around, back-references, atomic groups) has no cut.
+//! In tests every cut search is compared with the engine's.
+//!
+//! Whether the cut pays is probed on [`PROBE`] searches. A cut the probe drops rests for
+//! [`REST`] searches and is then probed again: the pattern outlives the query on its thread,
+//! and one sample must not decide for later data. The rest is counted in searches, not
+//! batches, so a pattern that always falls back pays the probe on a fixed small share of its
+//! rows whatever the batch size.
 
 use std::cell::{Cell, Ref, RefCell};
 use std::fmt;
@@ -49,6 +59,9 @@ const PROBE: u32 = 256;
 
 /// The cut is dropped when more than one in this many probed searches fell back.
 const FALLBACK_SHARE: u32 = 4;
+
+/// Searches the engine answers after the probe dropped the cut, before it is probed again.
+const REST: u32 = 64 * PROBE;
 
 /// The most heap one part's automaton may take; a pattern over it gets no cut. The three
 /// parts stay on the thread with the compiled pattern and are not charged to the memory pool.
@@ -72,8 +85,10 @@ pub(super) struct Cut {
     tried: Cell<u32>,
     /// How many of those fell back to the full search.
     fell: Cell<u32>,
-    /// Set once the probe found that the cut does not pay for this pattern's input.
+    /// Set while the cut rests: the last probe found that it does not pay for the input.
     off: Cell<bool>,
+    /// Searches the engine answered since the cut was dropped, counted up to [`REST`].
+    rested: Cell<u32>,
 }
 
 /// Capture slots for `head` and for the whole pattern.
@@ -82,7 +97,13 @@ struct Slots {
     full: Captures,
 }
 
-/// One match: the whole match and where the groups are.
+/// The slots are lent to a [`Found`] that is still alive: the caller searches with the
+/// engine instead.
+#[derive(Debug)]
+pub(super) struct Busy;
+
+/// One match: the whole match and where the groups are. It borrows the cut's capture
+/// slots, so a search while it is alive answers [`Busy`].
 pub(super) struct Found<'c> {
     whole: (usize, usize),
     groups: Ref<'c, Captures>,
@@ -202,6 +223,7 @@ impl Cut {
             tried: Cell::new(0),
             fell: Cell::new(0),
             off: Cell::new(false),
+            rested: Cell::new(0),
         })
     }
 
@@ -212,9 +234,26 @@ impl Cut {
 
     /// Whether the cut is still in use: it is dropped for a pattern whose first choice of
     /// `head` usually fails (`(a+)a.*`), where each row would pay steps 2 and 3 on top of
-    /// the full search.
+    /// the full search (tests; the kernels ask [`Cut::take`]).
+    #[cfg(test)]
     pub(super) fn is_on(&self) -> bool {
         !self.off.get()
+    }
+
+    /// Whether the search a kernel is about to make uses the cut. While the cut rests this
+    /// counts the search, which the engine answers; after [`REST`] of them the probe starts
+    /// again.
+    pub(super) fn take(&self) -> bool {
+        if !self.off.get() {
+            return true;
+        }
+        let rested = self.rested.get() + 1;
+        if rested >= REST {
+            self.rearm();
+        } else {
+            self.rested.set(rested);
+        }
+        false
     }
 
     /// Counts one search that reached step 3; `fell` when the tail did not match there.
@@ -234,17 +273,23 @@ impl Cut {
 
     /// The leftmost-first match of the pattern in `text[from..]` with its groups, as the
     /// capture search of the whole pattern finds it. `from` is at most `text.len()`.
-    pub(super) fn search(&self, text: &str, from: usize) -> Option<Found<'_>> {
+    ///
+    /// # Errors
+    /// [`Busy`] while a [`Found`] of an earlier search is alive.
+    pub(super) fn search(&self, text: &str, from: usize) -> Result<Option<Found<'_>>, Busy> {
         let end = text.len();
+        let mut slots = self.slots.try_borrow_mut().map_err(|_| Busy)?;
         let start = if self.start_anchored {
             if from != 0 {
-                return None;
+                return Ok(None);
             }
             0
         } else {
-            self.full.search(&Input::new(text).span(from..end))?.start()
+            match self.full.search(&Input::new(text).span(from..end)) {
+                Some(found) => found.start(),
+                None => return Ok(None),
+            }
         };
-        let mut slots = self.slots.borrow_mut();
         let at_start = Input::new(text).span(start..end).anchored(Anchored::Yes);
         self.head.search_captures(&at_start, &mut slots.head);
         match slots.head.get_match() {
@@ -256,25 +301,27 @@ impl Cut {
                 self.probe(tail.is_none());
                 if let Some(tail) = tail {
                     drop(slots);
-                    return Some(Found {
+                    return Ok(Some(Found {
                         whole: (start, tail.end()),
                         groups: Ref::map(self.slots.borrow(), |s| &s.head),
-                    });
+                    }));
                 }
             }
             // The head does not match at 0, so the pattern does not match at all.
-            None if self.start_anchored => return None,
+            None if self.start_anchored => return Ok(None),
             None => {}
         }
         self.full
             .search_captures(&Input::new(text).span(from..end), &mut slots.full);
-        let whole = slots.full.get_match()?;
+        let Some(whole) = slots.full.get_match() else {
+            return Ok(None);
+        };
         let whole = (whole.start(), whole.end());
         drop(slots);
-        Some(Found {
+        Ok(Some(Found {
             whole,
             groups: Ref::map(self.slots.borrow(), |s| &s.full),
-        })
+        }))
     }
 
     /// Probed searches and how many of them fell back (tests).
@@ -283,11 +330,11 @@ impl Cut {
         (self.tried.get(), self.fell.get())
     }
 
-    /// Starts the probe again with the cut on (tests).
-    #[cfg(test)]
+    /// Starts the probe again with the cut on.
     pub(super) fn rearm(&self) {
         self.tried.set(0);
         self.fell.set(0);
+        self.rested.set(0);
         self.off.set(false);
     }
 }
