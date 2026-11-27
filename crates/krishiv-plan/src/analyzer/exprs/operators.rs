@@ -156,7 +156,18 @@ impl Resolver<'_> {
                 .as_ref()
                 .is_some_and(DataType::contains_collation)
         }) {
-            return Err(unsupported("collated comparison", origin));
+            let icu = kids.iter().any(|k| {
+                k.ty.data_type.as_ref().is_some_and(|t| {
+                    t.any_type(&|x| {
+                        matches!(x, DataType::CollatedString(c)
+                            if matches!(c.family(), krishiv_types::CollationFamily::Icu { .. }))
+                    })
+                })
+            });
+            return Err(unsupported(
+                super::super::bind::icu_note("collated comparison", icu),
+                origin,
+            ));
         }
         if let (Builtin::Between, [v, lo, hi]) = (op, kids) {
             // The value is shared, as Spark's errors show it.
