@@ -61,7 +61,8 @@ use futures::StreamExt;
 use krishiv_common::error::{KrishivError, KrishivUnsupportedFeature};
 use krishiv_exec::physical::{PhysNode, TableWriteRequest};
 use krishiv_exec::planner::{
-    CardinalityRule, RowLevelCounts, RowLevelOperation, RowLevelWrite, TableProviderResolver as _,
+    CardinalityRule, MERGE_ON_READ_OPTION, ROW_WRITE_COLUMN, RowLevelCounts, RowLevelOperation,
+    RowLevelWrite, TableProviderResolver as _,
 };
 use krishiv_exec::{ROW_FILE_COLUMN, ROW_POSITION_COLUMN};
 use krishiv_plan::analyzer::TableColumn;
@@ -515,7 +516,14 @@ impl Session {
             );
         }
 
-        // 4. The rewrite.
+        // 4. The rewrite. Merge-on-read (the table records changed rows as deletes,
+        // `RowLevelTable::merge_on_read`): only the rows a clause fires for, each target row
+        // with its row id and whether it is written (`UPDATE`) or only deleted.
+        let merge_on_read = !insert_only
+            && table.merge_on_read(
+                Some(&on_of(&m.on, &probe.env.parser)?),
+                Some(&m.target_alias),
+            );
         let (target_name, rewrite) = if insert_only {
             // Every row of the anti join is a source row no target row matches: the clauses'
             // own conditions decide.
@@ -529,7 +537,14 @@ impl Session {
             );
             (
                 name,
-                merge_project(&rows.filter(keep), &resolved, &guards, &columns, None)?,
+                merge_project(
+                    &rows.filter(keep),
+                    &resolved,
+                    &guards,
+                    &columns,
+                    None,
+                    Vec::new(),
+                )?,
             )
         } else {
             let (name, touched) = target_frame(Some(found.touched.clone()));
@@ -539,24 +554,55 @@ impl Session {
                 JoinType::LeftOuter
             };
             let rows = touched.join(&s, on, how);
-            let keep = first_of(
-                resolved
-                    .iter()
-                    .zip(&guards)
-                    .map(|(c, g)| (g.clone(), lit(!c.delete)))
-                    .collect(),
-                expr(&format!("{tp} IS NOT NULL"))?,
-            );
-            (
-                name,
-                merge_project(
-                    &rows.filter(keep),
+            if merge_on_read {
+                let fires = first_of(
+                    guards.iter().map(|g| (g.clone(), lit(true))).collect(),
+                    lit(false),
+                );
+                let written = first_of(
+                    resolved
+                        .iter()
+                        .zip(&guards)
+                        .map(|(c, g)| (g.clone(), lit(!c.delete)))
+                        .collect(),
+                    lit(false),
+                );
+                let row_id = vec![
+                    expr(&qualified(&m.target_alias, ROW_FILE_COLUMN))?.alias(ROW_FILE_COLUMN),
+                    expr(&qualified(&m.target_alias, ROW_POSITION_COLUMN))?
+                        .alias(ROW_POSITION_COLUMN),
+                    written.alias(ROW_WRITE_COLUMN),
+                ];
+                let project = merge_project(
+                    &rows.filter(fires),
                     &resolved,
                     &guards,
                     &columns,
                     Some(&m.target_alias),
-                )?,
-            )
+                    row_id,
+                )?;
+                (name, project)
+            } else {
+                let keep = first_of(
+                    resolved
+                        .iter()
+                        .zip(&guards)
+                        .map(|(c, g)| (g.clone(), lit(!c.delete)))
+                        .collect(),
+                    expr(&format!("{tp} IS NOT NULL"))?,
+                );
+                (
+                    name,
+                    merge_project(
+                        &rows.filter(keep),
+                        &resolved,
+                        &guards,
+                        &columns,
+                        Some(&m.target_alias),
+                        Vec::new(),
+                    )?,
+                )
+            }
         };
         let analysis = rewrite.action_analysis().await?;
         let (_, physical) = self.physical(&analysis.analyzed, &analysis.env).await?;
@@ -645,6 +691,11 @@ impl Session {
             (SCAN_MS_OPTION, scan_ms.to_string()),
             (ALIAS_OPTION, m.target_alias.clone()),
         ];
+        if merge_on_read {
+            request
+                .options
+                .insert(MERGE_ON_READ_OPTION.to_owned(), "true".to_owned());
+        }
         for (k, v) in options {
             request.options.insert(k.to_owned(), v);
         }
@@ -686,13 +737,14 @@ impl Session {
 /// The written rows of `rows` (the join, filtered): each target column the value of the first
 /// clause that fires (an `UPDATE`'s value or the target's own, an `INSERT`'s value or `NULL`),
 /// else the target's own (`target`: the target's alias; `None`: no target row is read, an
-/// insert-only `MERGE`).
+/// insert-only `MERGE`), then `extra`.
 fn merge_project(
     rows: &DataFrame,
     resolved: &[Resolved],
     guards: &[Column],
     columns: &[TableColumn],
     target: Option<&str>,
+    extra: Vec<Column>,
 ) -> Result<DataFrame, KrishivError> {
     let mut select = Vec::with_capacity(columns.len());
     for (i, c) in columns.iter().enumerate() {
@@ -719,6 +771,7 @@ fn merge_project(
         }
         select.push(first_of(branches, own).alias(&c.name));
     }
+    select.extend(extra);
     Ok(rows.select(select))
 }
 

@@ -83,6 +83,20 @@ Write-path oracle (PR-37a part 2; `gen_delta_fixtures.py /out writes`, run as th
 - `write-features/<name>` and `FEATURES.json`: one table per row of the writer allow-list (design 4.2), each with one
   row, its protocol and whether Krishiv refuses writing it.
 
+Deletion-vector oracle (PR-37d; `gen_delta_fixtures.py /out dvs`, run as the session probes are):
+`dvs/<scenario>/before` are tables with `delta.enableDeletionVectors = true` set up by delta-spark
+(`unpartitioned`: three files, the third with a vector; `partitioned` by `p`; `change-data-feed`
+with both on), and `dvs/DVS.json` records each `DELETE`/`UPDATE`/`MERGE` step as `DML.json` does,
+plus each commit's add and remove deletion vector descriptors (`add_dvs`, `remove_dvs`), its `cdc`
+count and, on the change-data-feed table, the change rows Spark derives (`changes`). Consumer:
+krishiv-session `tests/delta_dvs.rs`. `dvs/krishiv-written/` holds tables after Krishiv's
+statements (`write_dv_readback_tables`) and Spark's `READBACK.json` of them (with `changes` for a
+change-data-feed table).
+`dvs-no-stats/` (`gen_delta_fixtures.py /out dvs-no-stats`, `NOSTATS.json`) is the same for a table
+whose files were written without statistics (`spark.databricks.delta.stats.collect = false`):
+delta-spark keeps a file whose every row goes with a vector of all its rows and gives each file a
+new vector with statistics computed from the file.
+
 DML oracle (PR-37b part 2; `gen_delta_fixtures.py /out dml`, run as the session probes are): `dml/<scenario>/before` is a
 table set up by delta-spark (`unpartitioned`, `partitioned` by `p`, `column-mapping` (mode `name`, a renamed column),
 `deletion-vectors` (100 rows, a DELETE that left a DV), `change-data-feed`, `append-only`), and `dml/DML.json` records

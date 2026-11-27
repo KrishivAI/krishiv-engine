@@ -28,7 +28,11 @@
 //! The conflict check's read set is the table's (the Delta connector reads the condition's
 //! partition conjuncts).
 //!
-//! `MERGE` is `merge.rs` (PR-37c), over the same hidden tables. Not here yet: merge-on-read (PR-37d), `SET c = DEFAULT`, the
+//! `MERGE` is `merge.rs` (PR-37c), over the same hidden tables. Merge-on-read (PR-37d, `RowLevelTable::merge_on_read`): the
+//! rewrite reads only the rows the condition holds for, with their row ids and
+//! `__krishiv_row_write` (an `UPDATE` writes their new values, a `DELETE` none), and the
+//! request carries `MERGE_ON_READ_OPTION`; a `MERGE` writes only the rows a clause fires for.
+//! Not here yet: `SET c = DEFAULT`, the
 //! CHAR/VARCHAR write checks of an `UPDATE`, and a condition that names the table by a
 //! qualified name longer than its own (`db.t.c`: the target is read under its last name part or
 //! the statement's alias).
@@ -45,8 +49,8 @@ use krishiv_common::error::{
 };
 use krishiv_exec::physical::{PhysNode, TableWriteRequest};
 use krishiv_exec::planner::{
-    RowLevelCounts, RowLevelOperation, RowLevelProblem, RowLevelTable, RowLevelWrite,
-    TableProvider, TableProviderResolver as _,
+    MERGE_ON_READ_OPTION, ROW_WRITE_COLUMN, RowLevelCounts, RowLevelOperation, RowLevelProblem,
+    RowLevelTable, RowLevelWrite, TableProvider, TableProviderResolver as _,
 };
 use krishiv_exec::{ROW_FILE_COLUMN, ROW_POSITION_COLUMN, ScanPushdown};
 use krishiv_plan::analyzer::TableColumn;
@@ -315,6 +319,68 @@ impl Session {
         );
         let column_of =
             |name: &str| crate::functions::expr(&format!("{}.{}", ident(alias), ident(name)));
+        // Merge-on-read (the table records changed rows as deletes, `RowLevelTable::
+        // merge_on_read`): the rewrite reads only the rows the condition holds for, each with
+        // its row id; an `UPDATE` writes their new values, a `DELETE` nothing.
+        let parsed = match condition {
+            Some(c) => Some(crate::functions::expr_with(c, parser)?.expr),
+            None => None,
+        };
+        let merge_on_read = table.merge_on_read(parsed.as_ref(), Some(alias));
+        if merge_on_read {
+            let mut select = Vec::with_capacity(columns.len() + 3);
+            for c in &columns {
+                let value = match (
+                    op,
+                    assignments
+                        .iter()
+                        .find(|a| a.column.eq_ignore_ascii_case(&c.name)),
+                ) {
+                    (RowLevelOperation::Delete, _) => {
+                        crate::Column::new(krishiv_plan::Expr::literal(
+                            krishiv_plan::Literal::Null(Some(c.data_type.clone())),
+                        ))
+                    }
+                    (_, Some(a)) => {
+                        crate::functions::expr_with(a.value.as_deref().unwrap_or("NULL"), parser)?
+                            .cast_ansi(c.data_type.clone())
+                    }
+                    (_, None) => column_of(&c.name)?,
+                };
+                select.push(value.alias(&c.name));
+            }
+            select.push(column_of(ROW_FILE_COLUMN)?.alias(ROW_FILE_COLUMN));
+            select.push(column_of(ROW_POSITION_COLUMN)?.alias(ROW_POSITION_COLUMN));
+            select.push(
+                crate::functions::lit(op != RowLevelOperation::Delete).alias(ROW_WRITE_COLUMN),
+            );
+            let rewrite = self
+                .hidden_frame(&part, part_entry, &with_row_id)
+                .alias(alias)
+                .filter(crate::functions::expr_with(&hit, parser)?)
+                .select(select);
+            return self
+                .finish_row_level(RowLevelRun {
+                    op,
+                    quoted,
+                    alias,
+                    condition,
+                    rewrite,
+                    touched,
+                    affected,
+                    scan_ms,
+                    merge_on_read: true,
+                    table: &table,
+                    columns: &columns,
+                    value_types: &value_types,
+                    source: &scan.source,
+                    #[cfg(feature = "delta")]
+                    delta_root: delta_root.as_deref(),
+                    parser,
+                    key_options: &key_options,
+                })
+                .await;
+        }
         let mut select = Vec::with_capacity(columns.len());
         for c in &columns {
             let value = match assignments
@@ -343,6 +409,52 @@ impl Session {
             rewrite = rewrite.filter(crate::functions::expr_with(&format!("NOT {hit}"), parser)?);
         }
         let rewrite = rewrite.select(select);
+        self.finish_row_level(RowLevelRun {
+            op,
+            quoted,
+            alias,
+            condition,
+            rewrite,
+            touched,
+            affected,
+            scan_ms,
+            merge_on_read: false,
+            table: &table,
+            columns: &columns,
+            value_types: &value_types,
+            source: &scan.source,
+            #[cfg(feature = "delta")]
+            delta_root: delta_root.as_deref(),
+            parser,
+            key_options: &key_options,
+        })
+        .await
+    }
+
+    /// Runs `run`'s rewrite into the table's rewriter and gives the statement's result.
+    async fn finish_row_level(
+        &self,
+        run: RowLevelRun<'_>,
+    ) -> Result<Option<DataFrame>, KrishivError> {
+        let RowLevelRun {
+            op,
+            quoted,
+            alias,
+            condition,
+            rewrite,
+            touched,
+            affected,
+            scan_ms,
+            merge_on_read,
+            table,
+            columns,
+            value_types,
+            source,
+            #[cfg(feature = "delta")]
+            delta_root,
+            parser,
+            key_options,
+        } = run;
         let analysis = rewrite.action_analysis().await?;
         let (_, physical) = self.physical(&analysis.analyzed, &analysis.env).await?;
         let target = first_scan(physical.root())
@@ -351,17 +463,16 @@ impl Session {
         // (or a view's) read of the table. A Delta target is compared by its resolved root, so
         // `/t`, `/t/`, `file:/t` and the catalog table over that location are one table.
         #[cfg(feature = "delta")]
-        let rereads_target = match &delta_root {
+        let rereads_target = match delta_root {
             Some(root) => crate::catalog::reads_delta_root(
                 analysis.analyzed.plan.root(),
                 root,
                 &analysis.env.catalog,
             ),
-            None => crate::catalog::reads_source(analysis.analyzed.plan.root(), &scan.source),
+            None => crate::catalog::reads_source(analysis.analyzed.plan.root(), source),
         };
         #[cfg(not(feature = "delta"))]
-        let rereads_target =
-            crate::catalog::reads_source(analysis.analyzed.plan.root(), &scan.source);
+        let rereads_target = crate::catalog::reads_source(analysis.analyzed.plan.root(), source);
         let read_filter = read_filter(condition, rereads_target, parser)?;
         #[cfg(test)]
         tests::READ_FILTERS
@@ -385,6 +496,11 @@ impl Session {
         request
             .options
             .insert(ALIAS_OPTION.to_owned(), alias.to_owned());
+        if merge_on_read {
+            request
+                .options
+                .insert(MERGE_ON_READ_OPTION.to_owned(), "true".to_owned());
+        }
         if let Some(c) = condition {
             request
                 .options
@@ -403,7 +519,7 @@ impl Session {
         }
         .await;
         if let Err(e) = written {
-            return Err(write_failed(&table, op, e, &columns, &value_types));
+            return Err(write_failed(table, op, e, columns, value_types));
         }
         self.refresh_files();
 
@@ -416,6 +532,29 @@ impl Session {
             None => self.empty_frame().await.map(Some),
         }
     }
+}
+
+/// The rewrite of a `DELETE` or `UPDATE` and what its request and result need.
+struct RowLevelRun<'a> {
+    op: RowLevelOperation,
+    quoted: &'a str,
+    alias: &'a str,
+    condition: Option<&'a str>,
+    rewrite: DataFrame,
+    touched: Vec<Vec<u8>>,
+    affected: u64,
+    scan_ms: u128,
+    merge_on_read: bool,
+    table: &'a Arc<dyn RowLevelTable>,
+    columns: &'a [TableColumn],
+    value_types: &'a [(String, DataType)],
+    /// The statement's target as its scan reads it (a re-read of it widens the read set).
+    source: &'a krishiv_plan::ReadSource,
+    /// A Delta target's resolved root, which a re-read is compared by.
+    #[cfg(feature = "delta")]
+    delta_root: Option<&'a str>,
+    parser: &'a krishiv_sql::ParserOptions,
+    key_options: &'a std::collections::BTreeMap<String, String>,
 }
 
 impl Session {

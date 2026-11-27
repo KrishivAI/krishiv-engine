@@ -170,8 +170,8 @@ fn oracle_message(e: &KrishivError, dir: &Path) -> String {
         .replace(&dir.display().to_string(), "<path>")
 }
 
-/// Steps whose commits differ from delta-spark's by a recorded difference (the connector's
-/// `write::dml` module): delta-spark writes deletion vectors there, Krishiv rewrites files.
+/// Steps where delta-spark marks rows in deletion vectors (its default confs on a table with
+/// them on): a file it adds again with a new vector is the file it removes.
 fn writes_deletion_vectors(step: &Value) -> bool {
     step["confs"]
         .as_object()
@@ -376,11 +376,10 @@ fn delta_dml_metrics_match() {
             theirs_p.len(),
             "{name}: {ours_p:?} {theirs_p:?}"
         );
-        if writes_deletion_vectors(&step) {
-            // delta-spark marked rows in deletion vectors; Krishiv rewrote (a recorded
-            // difference): only the rows are compared (`delta_dml_matches_spark`).
-            continue;
-        }
+        // Where delta-spark marked rows in deletion vectors Krishiv does too (PR-37d): a file
+        // added again with its new vector is no new file (`tests/delta_dvs.rs` compares the
+        // vectors).
+        let marks = writes_deletion_vectors(&step);
         let (ours_m, theirs_m) = (&info["operationMetrics"], &want["operationMetrics"]);
         let keys = |m: &Value| {
             let mut k: Vec<String> = m.as_object().unwrap().keys().cloned().collect();
@@ -419,7 +418,18 @@ fn delta_dml_metrics_match() {
             p.dedup();
             p
         };
-        let (ours_adds, theirs_adds) = (of_kind(commit, "add"), of_kind_json(theirs, "adds"));
+        let theirs_removed: Vec<&Value> = of_kind_json(theirs, "removes")
+            .into_iter()
+            .map(|r| &r["path"])
+            .collect();
+        let ours_adds: Vec<&Value> = of_kind(commit, "add")
+            .into_iter()
+            .filter(|a| a.get("deletionVector").is_none())
+            .collect();
+        let theirs_adds: Vec<&Value> = of_kind_json(theirs, "adds")
+            .into_iter()
+            .filter(|a| !marks || !theirs_removed.contains(&&a["path"]))
+            .collect();
         assert_eq!(
             ours_adds.is_empty(),
             theirs_adds.is_empty(),

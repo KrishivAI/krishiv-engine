@@ -43,6 +43,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use arrow_array::RecordBatch;
+use delta_kernel::actions::deletion_vector::DeletionVectorDescriptor;
 use delta_kernel::expressions::PredicateRef;
 
 pub use self::run::commit;
@@ -130,6 +131,12 @@ pub struct StagedCommit {
     pub adds: Vec<RecordBatch>,
     /// The files removed.
     pub removes: Vec<StagedRemoves>,
+    /// The scan metadata rows of the files whose deletion vector is replaced (selected: those
+    /// files), committed through the kernel's `update_deletion_vectors`: a remove of each with
+    /// its old vector and an add with the new one.
+    pub dv_updates: Vec<StagedRemoves>,
+    /// The new deletion vector of each file of `dv_updates`, by the path the log names.
+    pub dv_descriptors: HashMap<String, DeletionVectorDescriptor>,
     /// What the statement read of the table.
     pub read_set: ReadSet,
 }

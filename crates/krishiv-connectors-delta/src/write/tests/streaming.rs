@@ -210,7 +210,7 @@ fn an_ended_driver_ships_its_row_groups_while_another_writes() {
                     e.store(true, Ordering::Release);
                     Act::stall(Duration::from_millis(30))
                 }
-                Point::Finished => Act::NONE,
+                Point::Finished | Point::VectorWritten => Act::NONE,
             }
         }),
     );

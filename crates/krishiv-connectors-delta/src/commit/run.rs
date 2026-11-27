@@ -86,9 +86,12 @@ pub async fn commit(
     let read_protocol = WriteProtocol::of(&snapshot);
     check_write(&staged.table, &read_protocol)?;
     let partition_columns = partition_columns(&snapshot, &staged.table)?;
+    // A file whose deletion vector is replaced is removed (and added again) as delta-spark's
+    // `RemoveFile`/`AddFile` pair: the conflict checker sees it as a removed file.
     let removes = staged
         .removes
         .iter()
+        .chain(&staged.dv_updates)
         .map(remove_actions)
         .collect::<Result<Vec<_>, _>>()?
         .concat();
@@ -301,6 +304,21 @@ fn attempt(e: &DeltaEngine, snapshot: SnapshotRef, p: &Prepared) -> Result<Outco
         .map_err(|err| kernel(&err))?;
         txn.remove_files(rows);
     }
+    if !p.staged.dv_descriptors.is_empty() {
+        let batches: Vec<_> = p
+            .staged
+            .dv_updates
+            .iter()
+            .map(|r| {
+                FilteredEngineData::try_new(
+                    Box::new(KrishivEngineData::new(r.scan_rows.clone())),
+                    r.selection.clone(),
+                )
+            })
+            .collect();
+        txn.update_deletion_vectors(p.staged.dv_descriptors.clone(), batches.into_iter())
+            .map_err(|err| kernel(&err))?;
+    }
     Ok(match txn.commit(e) {
         Ok(CommitResult::Committed(c)) => Outcome::Committed {
             version: c.commit_version(),
@@ -394,8 +412,9 @@ fn retries_exceeded(
     started: Instant,
 ) -> KrishivError {
     let adds: usize = p.staged.adds.iter().map(RecordBatch::num_rows).sum();
-    // The adds, the removes and the commitInfo.
-    let actions = adds + removes + 1;
+    // The adds, the removes (a replaced deletion vector's file among them), the add of each
+    // file with a new vector and the commitInfo.
+    let actions = adds + removes + p.staged.dv_descriptors.len() + 1;
     DeltaMaxCommitRetriesExceeded {
         num_attempts: attempts.to_string(),
         start_version: start_version.to_string(),

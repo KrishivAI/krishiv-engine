@@ -1190,6 +1190,7 @@ fn column_mapping_writes_physical_names_and_field_ids() {
 }
 
 mod dml;
+mod dvs;
 mod lifecycle;
 mod merge;
 mod readback;

@@ -307,6 +307,8 @@ fn staged(
             }
         },
         removes,
+        dv_updates: Vec::new(),
+        dv_descriptors: std::collections::HashMap::new(),
     }
 }
 

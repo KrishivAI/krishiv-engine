@@ -36,6 +36,13 @@ attempt: the run refuses an ``$OUT/merge`` left by an earlier or interrupted one
 ``... /out create-path`` writes ``CREATE-PATH.json`` (``create_by_path``): ``CREATE TABLE
 delta.`<path>``` in each form, the log it writes and its refusals.
 
+``... /out dvs`` writes the deletion-vector oracle (``dv_cases``, PR-37d): ``DELETE``, ``UPDATE``
+and ``MERGE`` steps on tables with ``delta.enableDeletionVectors = true``, in ``dvs/DVS.json``,
+with every commit's deletion vector descriptors and the change-data-feed rows Spark derives.
+
+``... /out dvs-no-stats`` writes the same for a table whose files carry no statistics, in
+``dvs-no-stats/NOSTATS.json``.
+
 ``... /out readback /in`` has Spark read the Krishiv-written tables under ``/in``
 (``tests/fixtures/delta-4.4.1/krishiv-written/``) and records ``READBACK.json`` there.
 
@@ -1921,6 +1928,258 @@ def merge_cases(spark: SparkSession, out: str) -> None:
         f.write("\n")
 
 
+#: A deletion-vector table of three files: ids 1-3, 4-6 and 7-100, the third with a DV
+#: (`id % 10 = 0` deleted) before the steps.
+DV_TABLE = [
+    f"CREATE TABLE {{t}} ({DML_COLUMNS}) USING delta TBLPROPERTIES ('delta.enableDeletionVectors' = 'true')",
+    f"INSERT INTO {{t}} VALUES {DML_ROWS[0]}",
+    f"INSERT INTO {{t}} VALUES {DML_ROWS[1]}",
+    "INSERT INTO {t} SELECT id, CAST(id AS STRING), CAST(id % 7 AS INT) FROM range(7, 101)",
+    "DELETE FROM {t} WHERE id % 10 = 0",
+]
+NO_MERGE_DVS = {"spark.databricks.delta.merge.deletionVectors.persistent": "false"}
+DV_SCENARIOS: list[tuple[str, list[str], list[tuple[str, str, dict]]]] = [
+    (
+        "unpartitioned",
+        DV_TABLE,
+        [
+            ("delete_rows", "DELETE FROM {t} WHERE id = 2", {}),
+            ("delete_combines_existing_dv", "DELETE FROM {t} WHERE id IN (11, 12, 13)", {}),
+            ("delete_whole_file", "DELETE FROM {t} WHERE id <= 3", {}),
+            ("delete_whole_file_with_dv", "DELETE FROM {t} WHERE id >= 7", {}),
+            ("delete_mixed", "DELETE FROM {t} WHERE id <= 4 OR id = 50", {}),
+            ("delete_null_condition", "DELETE FROM {t} WHERE n > 3", {}),
+            ("delete_nothing", "DELETE FROM {t} WHERE id = 999", {}),
+            ("delete_all", "DELETE FROM {t}", {}),
+            ("delete_rows_copy_on_write", "DELETE FROM {t} WHERE id IN (2, 11)", NO_DVS),
+            ("update_rows", "UPDATE {t} SET v = 'u' WHERE id >= 3 AND id <= 12", {}),
+            ("update_whole_file", "UPDATE {t} SET n = 0 WHERE id <= 3", {}),
+            ("update_nothing", "UPDATE {t} SET n = 0 WHERE id = 999", {}),
+            ("update_all", "UPDATE {t} SET v = 'w'", {}),
+            ("update_rows_copy_on_write", "UPDATE {t} SET v = 'u' WHERE id IN (2, 11)", NO_DVS),
+            ("merge_update", merge_on(MERGE_SRC, "WHEN MATCHED THEN UPDATE SET v = s.v"), {}),
+            ("merge_delete", merge_on(MERGE_SRC, "WHEN MATCHED THEN DELETE"), {}),
+            (
+                "merge_upsert",
+                merge_on(MERGE_SRC, "WHEN MATCHED THEN UPDATE SET * WHEN NOT MATCHED THEN INSERT *"),
+                {},
+            ),
+            ("merge_insert_only", merge_on(MERGE_SRC, "WHEN NOT MATCHED THEN INSERT *"), {}),
+            (
+                "merge_nmbs_delete",
+                merge_on(MERGE_SRC, "WHEN NOT MATCHED BY SOURCE AND t.id < 7 THEN DELETE"),
+                {},
+            ),
+            (
+                "merge_all_kinds",
+                merge_on(
+                    MERGE_SRC,
+                    "WHEN MATCHED AND t.id = 2 THEN DELETE WHEN MATCHED THEN UPDATE SET n = s.n "
+                    "WHEN NOT MATCHED THEN INSERT * WHEN NOT MATCHED BY SOURCE AND t.id = 11 THEN UPDATE SET n = -1",
+                ),
+                {},
+            ),
+            (
+                "merge_whole_file",
+                merge_on(
+                    "(SELECT CAST(id AS BIGINT) AS id FROM VALUES (1), (2), (3) AS s(id)) s",
+                    "WHEN MATCHED THEN UPDATE SET n = 9",
+                ),
+                {},
+            ),
+            (
+                "merge_update_copy_on_write",
+                merge_on(MERGE_SRC, "WHEN MATCHED THEN UPDATE SET v = s.v"),
+                NO_MERGE_DVS,
+            ),
+        ],
+    ),
+    (
+        "partitioned",
+        [
+            f"CREATE TABLE {{t}} ({DML_COLUMNS}, p STRING) USING delta PARTITIONED BY (p) "
+            "TBLPROPERTIES ('delta.enableDeletionVectors' = 'true')"
+        ]
+        + [f"INSERT INTO {{t}} VALUES {r}" for r in DML_PART_ROWS],
+        [
+            ("delete_partition", "DELETE FROM {t} WHERE p = 'x'", {}),
+            ("delete_rows", "DELETE FROM {t} WHERE n IS NULL", {}),
+            ("delete_partition_and_rows", "DELETE FROM {t} WHERE p = 'x' AND id = 1", {}),
+            ("update_partition_only", "UPDATE {t} SET v = 'all' WHERE p = 'y'", {}),
+            ("update_rows", "UPDATE {t} SET n = n * 2 WHERE id > 1", {}),
+            ("update_moves_partition", "UPDATE {t} SET p = 'w' WHERE id = 1", {}),
+            (
+                "merge_upsert",
+                merge_on(MERGE_PART_SRC, "WHEN MATCHED THEN UPDATE SET v = s.v WHEN NOT MATCHED THEN INSERT *"),
+                {},
+            ),
+        ],
+    ),
+    (
+        "change-data-feed",
+        [
+            f"CREATE TABLE {{t}} ({DML_COLUMNS}, p STRING) USING delta PARTITIONED BY (p) "
+            "TBLPROPERTIES ('delta.enableDeletionVectors' = 'true', 'delta.enableChangeDataFeed' = 'true')"
+        ]
+        + [f"INSERT INTO {{t}} VALUES {r}" for r in DML_PART_ROWS],
+        [
+            ("delete_rows", "DELETE FROM {t} WHERE id = 1", {}),
+            ("delete_whole_file", "DELETE FROM {t} WHERE id = 3", {}),
+            ("delete_rows_and_file", "DELETE FROM {t} WHERE id IN (1, 3)", {}),
+            ("delete_partition", "DELETE FROM {t} WHERE p = 'x'", {}),
+            ("update_rows", "UPDATE {t} SET v = 'u' WHERE id = 1", {}),
+            ("merge_delete", merge_on(MERGE_PART_SRC, "WHEN MATCHED THEN DELETE"), {}),
+        ],
+    ),
+]
+
+
+#: A deletion-vector table whose files carry no statistics (``stats.collect`` off while they are
+#: written): delta-spark computes a new vector's file statistics from the file
+#: (``DMLWithDeletionVectorsHelper.getActionsWithStats``) and never removes such a file whole
+#: (``TouchedFileWithDV.isFullyReplaced`` needs ``numRecords``).
+DV_NO_STATS_SCENARIOS: list[tuple[str, list[str], list[tuple[str, str, dict]]]] = [
+    (
+        "no-stats",
+        [
+            f"CREATE TABLE {{t}} ({DML_COLUMNS}) USING delta TBLPROPERTIES ('delta.enableDeletionVectors' = 'true')",
+            "SET spark.databricks.delta.stats.collect = false",
+            f"INSERT INTO {{t}} VALUES {DML_ROWS[0]}",
+            f"INSERT INTO {{t}} VALUES {DML_ROWS[1]}",
+            "SET spark.databricks.delta.stats.collect = true",
+        ],
+        [
+            ("delete_rows", "DELETE FROM {t} WHERE id = 2", {}),
+            ("delete_every_row_of_a_file", "DELETE FROM {t} WHERE id <= 3", {}),
+            ("update_rows", "UPDATE {t} SET v = 'u' WHERE id = 5", {}),
+            ("merge_delete", merge_on(MERGE_SRC, "WHEN MATCHED THEN DELETE"), {}),
+        ],
+    ),
+]
+
+
+def dv_commits(path: str) -> list[dict]:
+    """``commits`` with every add's and remove's deletion vector descriptor (``None`` without
+    one) and ``dataChange``, and the commit's ``cdc`` action count."""
+    log = os.path.join(path, "_delta_log")
+    out = commits(path)
+    for record in out:
+        record["add_dvs"] = []
+        record["remove_dvs"] = []
+        record["cdc"] = 0
+        with open(os.path.join(log, f"{record['version']:020}.json")) as f:
+            for line in f:
+                action = json.loads(line)
+                if "add" in action:
+                    a = action["add"]
+                    record["add_dvs"].append(
+                        {"path": a["path"], "deletionVector": a.get("deletionVector"), "dataChange": a["dataChange"]}
+                    )
+                elif "remove" in action:
+                    r = action["remove"]
+                    record["remove_dvs"].append(
+                        {"path": r["path"], "deletionVector": r.get("deletionVector"), "dataChange": r["dataChange"]}
+                    )
+                elif "cdc" in action:
+                    record["cdc"] += 1
+    return out
+
+
+def change_rows(spark: SparkSession, path: str, from_version: int) -> list[str]:
+    """The change data feed of ``path`` from ``from_version`` on: each change as
+    ``to_json(struct(*))`` without ``_commit_timestamp``, by version, id and change type."""
+    from pyspark.sql.functions import col, struct, to_json
+
+    df = (
+        spark.read.format("delta")
+        .option("readChangeFeed", "true")
+        .option("startingVersion", from_version)
+        .load(path)
+        .drop("_commit_timestamp")
+    )
+    return [
+        r[0]
+        for r in df.orderBy("_commit_version", "id", "_change_type")
+        .select(to_json(struct(*[col(c) for c in df.columns])))
+        .collect()
+    ]
+
+
+def dv_cases(
+    spark: SparkSession,
+    out: str,
+    dirname: str = "dvs",
+    record_name: str = "DVS.json",
+    scenarios: list[tuple[str, list[str], list[tuple[str, str, dict]]]] | None = None,
+) -> None:
+    """``dvs/``: as ``merge_cases`` for the deletion-vector steps of ``DV_SCENARIOS``
+    (``DVS.json``, P3-T021 PR-37d): every step's commits with their deletion vector descriptors
+    (``dv_commits``) and, on the change-data-feed table, the change rows Spark derives
+    (``change_rows``). ``dvs-no-stats`` writes ``DV_NO_STATS_SCENARIOS`` the same way into
+    ``dvs-no-stats/NOSTATS.json``."""
+    if scenarios is None:
+        scenarios = DV_SCENARIOS
+    root = os.path.join(out, dirname)
+    os.makedirs(root, exist_ok=True)
+    record: dict = {
+        "format_version": FORMAT_VERSION,
+        "generator": f"tests/scripts/gen_delta_fixtures.py {dirname}",
+        "spark": spark.version,
+        "delta_spark": "4.4.1",
+        "scenarios": {},
+    }
+    for name, setup, steps in scenarios:
+        before = os.path.join(root, name, "before")
+        for q in setup:
+            spark.sql(q.format(t=f"delta.`{before}`")).collect()
+        df = spark.read.format("delta").load(before)
+        scenario: dict = {
+            "setup": [q.replace("{t}", "<t>") for q in setup],
+            "fields": [f.name for f in df.schema.fields],
+            "rows": [[typed(r[i]) for i in range(len(r))] for r in df.orderBy("id").collect()],
+            "versions": len(commits(before)),
+            "steps": [],
+        }
+        cdf = name == "change-data-feed"
+        for step, sql, confs in steps:
+            work = os.path.join(out, f"{dirname}-work", name, step)
+            shutil.copytree(before, work)
+            text = sql.format(t=f"delta.`{work}`")
+            entry: dict = {"step": step, "sql": sql.replace("{t}", "<t>"), "confs": confs}
+            for k, v in confs.items():
+                spark.conf.set(k, v)
+            try:
+                result = spark.sql(text)
+                entry["output_fields"] = [f.name for f in result.schema.fields]
+                entry["output"] = [[typed(r[i]) for i in range(len(r))] for r in result.collect()]
+                entry["error"] = None
+            except Exception as e:  # the oracle's error is the record
+                entry["error"] = oracle_error(e, work)
+            finally:
+                for k in confs:
+                    spark.conf.unset(k)
+            log = dv_commits(work)
+            entry["commits"] = log[scenario["versions"] :]
+            back = spark.read.format("delta").load(work)
+            entry["rows"] = [[typed(r[i]) for i in range(len(r))] for r in back.orderBy("id").collect()]
+            if cdf and entry["commits"]:
+                entry["changes"] = change_rows(spark, work, scenario["versions"])
+            newest = spark.sql(f"DESCRIBE HISTORY delta.`{work}` LIMIT 1").collect()[0]
+            entry["history"] = {
+                "version": newest["version"],
+                "operation": newest["operation"],
+                "operationParameters": dict(newest["operationParameters"] or {}),
+                "operationMetrics": dict(newest["operationMetrics"] or {}),
+            }
+            scenario["steps"].append(entry)
+            shutil.rmtree(work)
+        record["scenarios"][name] = scenario
+    shutil.rmtree(os.path.join(out, f"{dirname}-work"), ignore_errors=True)
+    with open(os.path.join(root, record_name), "w") as f:
+        json.dump(record, f, indent=1, sort_keys=True)
+        f.write("\n")
+
+
 def readback(spark: SparkSession, out: str, src: str) -> None:
     """Spark reads the Krishiv-written tables under ``src`` (``krishiv-written/``, made by the
     connector's ``write_readback_tables``): per table its rows as ``to_json(struct(*))`` by
@@ -1944,6 +2203,10 @@ def readback(spark: SparkSession, out: str, src: str) -> None:
             history = spark.sql(f"DESCRIBE HISTORY delta.`{path}`").orderBy("version").collect()
             record["history"] = [{"version": h["version"], "operation": h["operation"]} for h in history]
             record["protocol"] = protocol(path)
+            props = spark.sql(f"SHOW TBLPROPERTIES delta.`{path}`").collect()
+            if any(r["key"] == "delta.enableChangeDataFeed" and r["value"] == "true" for r in props):
+                # The change rows Spark derives from the newest (Krishiv's) commit.
+                record["changes"] = change_rows(spark, path, len(commits(path)) - 1)
         except Exception as e:  # the oracle's error is the record
             record["error"] = oracle_error(e, path)
             tables[name] = record
@@ -2137,6 +2400,16 @@ def main(out: str, which: str = "checkpoint", src: str = "") -> None:
     spark = session()
     if which == "readback":
         readback(spark, out, src)
+        spark.stop()
+        return
+    if which == "dvs-no-stats":
+        dv_cases(spark, out, "dvs-no-stats", "NOSTATS.json", DV_NO_STATS_SCENARIOS)
+        drop_hadoop_crc(out)
+        spark.stop()
+        return
+    if which == "dvs":
+        dv_cases(spark, out)
+        drop_hadoop_crc(out)
         spark.stop()
         return
     if which == "merge":

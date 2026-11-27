@@ -708,9 +708,10 @@ They differ in:
   parentheses (`["(id = 2)"]`); delta-spark prints Catalyst's form with expression ids
   (`["(id#1231L = 2)"]`). Without a condition both write `["true"]` (`DELETE`) and `[]`
   (`UPDATE`).
-- **Deletion vectors.** Krishiv never writes them: on a table with
-  `delta.enableDeletionVectors = true` delta-spark marks deleted and updated rows in deletion
-  vectors (its default); Krishiv rewrites the files. The rows are the same.
+- **Deletion vectors.** On a table with `delta.enableDeletionVectors = true` Krishiv marks deleted
+  and updated rows in deletion vectors as delta-spark does (merge-on-read, under the same
+  `spark.databricks.delta.{delete,update}.deletionVectors.persistent` confs, default true; see
+  the `MERGE` list below for what differs).
 - **Files per partition.** A rewrite writes one file per partition per driver; delta-spark one per
   partition per task.
 - **Whole-file deletes.** A `DELETE` removes whole files without rewriting them only when its
@@ -781,8 +782,31 @@ reads the tables back, `merge/krishiv-written/`). It differs in:
 - **Refused.** A `MERGE` under `spark.sql.caseSensitive = true`, `SET c = DEFAULT`, a nested
   assignment key (`SET s.f = ..`) and a table whose row-level rule is Spark's own
   `MERGE_CARDINALITY_VIOLATION` (no oracle yet) are refused by name.
-- **Deletion vectors.** Never written (as for `DELETE` and `UPDATE`); delta-spark's default
-  `merge.deletionVectors.persistent = true` marks rows in vectors on a table with them on.
+- **Deletion vectors.** Marked as delta-spark marks them (`merge.deletionVectors.persistent`,
+  default true).
+
+Merge-on-read `DELETE`, `UPDATE` and `MERGE` on a table with deletion vectors (the connector's
+`src/write/dv.rs`) leave the rows, the counts, the files removed whole, the files given a new
+vector with the vector's cardinality and the counted `operationMetrics` that delta-spark leaves
+(`tests/fixtures/delta-4.4.1/dvs/DVS.json`; Spark reads the tables back, `dvs/krishiv-written/`,
+and derives the same change data feed rows from a vector-only `DELETE` on a change-data-feed
+table). They differ in:
+
+- **Vector bytes.** delta-spark run-optimizes its bitmaps before writing them; the kernel's writer
+  Krishiv uses does not, so a vector holding runs of rows takes more bytes (`sizeInBytes`). The
+  rows are the same.
+- **Vector file layout.** One vector file per statement, the vectors in path order; delta-spark
+  bin-packs them per task in its aggregation's order (other offsets).
+- **When vectors apply.** A `DELETE` or `UPDATE` whose condition is partition-only by Krishiv's
+  translation (the whole-file `DELETE` rule above) removes or rewrites whole files; a
+  partition-only condition of another form marks rows, where delta-spark removes whole files.
+- **Files without statistics.** As in delta-spark, a file is removed whole only when its
+  `numRecords` proves every live row goes; a file without the statistic keeps a vector of all its
+  rows, and its new add carries statistics (`tests/fixtures/delta-4.4.1/dvs-no-stats/`). Krishiv
+  writes only `numRecords` there (the footer's row count, with `tightBounds: false`); delta-spark
+  also computes the file's `minValues`, `maxValues` and `nullCount` by reading it.
+- **Change data feed.** A vector-only `DELETE` commits; an `UPDATE` or a `MERGE` that changes rows
+  stays refused (delta-spark writes change data files for them).
 
 ## Spark 4.3's nanosecond timestamps and nanosecond clocks
 
