@@ -10,10 +10,8 @@
 # docker/entrypoint.sh supplies both: the token from KRISHIV_AUTH_TOKEN (or a secret file, or one it
 # generates) and a self-signed certificate it generates on first start. See docker/README.md.
 
-ARG RUST_VERSION=1.99.1
-
 # Base images are pinned by digest; refresh with `docker pull <tag>` + `docker image inspect --format "{{index .RepoDigests 0}}" <tag>`.
-FROM rust:${RUST_VERSION}-slim-bookworm@sha256:f2c004e3d2d8b547e8cf7ffbc29205385f4e71d23e53e4e383065db5e9f822cd AS build
+FROM rust:1.99.1-slim-bookworm@sha256:f2c004e3d2d8b547e8cf7ffbc29205385f4e71d23e53e4e383065db5e9f822cd AS build
 ARG KRISHIV_GIT_SHA=unknown
 ENV KRISHIV_GIT_SHA=${KRISHIV_GIT_SHA} \
     CARGO_INCREMENTAL=0 \
