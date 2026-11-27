@@ -95,6 +95,39 @@ fn artifact_names_refused() {
 }
 
 #[test]
+fn win32_reserved_characters_are_refused_on_windows_only() {
+    // On Windows `C:x` is drive-relative, `a:s` an alternate data stream, and no file can be
+    // named with `< > " | ? *`.
+    for name in [
+        "files/C:x",
+        "files/C:/x",
+        "files/a:s",
+        "pyfiles/C:evil.py",
+        "files/a?b",
+        "files/a*b",
+        "files/a|b",
+        "files/a\"b",
+        "files/a<b",
+        "files/a>b",
+    ] {
+        if cfg!(windows) {
+            assert_eq!(class(name), ErrorClass::InvalidArtifactPath, "{name}");
+        } else {
+            // Parsed whole elsewhere: the name is its path, its kind is its first segment, no fragment.
+            let n = parse_artifact_name(name).unwrap_or_else(|e| panic!("{name}: {e}"));
+            assert_eq!(n.path(), name);
+            let kind = if name.starts_with("pyfiles/") {
+                ArtifactKind::PyFiles
+            } else {
+                ArtifactKind::Files
+            };
+            assert_eq!(n.kind(), kind, "{name}");
+            assert_eq!(n.fragment(), None, "{name}");
+        }
+    }
+}
+
+#[test]
 fn jvm_and_forwarded_artifacts_are_unsupported() {
     for name in ["jars/udf.jar", "classes/A.class", "forward_to_fs/tmp/x"] {
         assert_eq!(

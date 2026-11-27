@@ -41,7 +41,7 @@ use krishiv_sql::ast::{
     AlterView, AlterViewAction, Analyze, AnalyzeColumns, ChangeColumnAction, ColumnName,
     CreateNamespace, CreatePermanentView, CreateTable, CreateTableLike, CreateView, DdlName,
     DropBehavior, DropNamespace, DropPermanentView, DropTable, Ident, Insert, InsertClause, Query,
-    TableElement, TableOption, Truncate, Use, ViewColumn,
+    TableElement, Truncate, Use, ViewColumn,
 };
 use krishiv_types::DataType;
 
@@ -57,27 +57,6 @@ use crate::store::{
 
 /// The file formats a table can have.
 pub(crate) const PROVIDERS: &[&str] = &["parquet", "csv", "json", "text", "orc", "avro"];
-
-/// The short name of a data source written fully qualified, as Spark maps its built-in classes
-/// (`org.apache.spark.sql.parquet`, `com.databricks.spark.csv`); other names stay as written.
-fn short_provider(written: &str) -> String {
-    let lower = written.to_lowercase();
-    for prefix in [
-        "org.apache.spark.sql.execution.datasources.",
-        "org.apache.spark.sql.",
-    ] {
-        if let Some(rest) = lower.strip_prefix(prefix) {
-            let name = rest.split('.').next().unwrap_or(rest);
-            if PROVIDERS.contains(&name) {
-                return name.to_owned();
-            }
-        }
-    }
-    if lower == "com.databricks.spark.csv" {
-        return "csv".to_owned();
-    }
-    lower
-}
 
 /// Whether `name` is a name Spark accepts for a new table or namespace: letters, digits and `_`.
 fn valid_name(name: &str) -> bool {
@@ -726,6 +705,7 @@ impl Session {
                 definer: definer.then(|| self.state.principal.name.clone()),
                 // Spark captures the session's SQL configs with the view (`views.scala` line 557).
                 cte_precedence: Some(cte_precedence),
+                timestamp_ntz: Some(env.parser.timestamp_ntz),
                 functions,
                 // The store sets the version (review r10 M10).
                 revision: 0,
@@ -893,11 +873,10 @@ impl Session {
         }
         if let Some(path) = paths.first().and_then(OptionValue::as_plain) {
             let local = path.strip_prefix("file:").unwrap_or(path);
-            if !path.contains("://") && !std::path::Path::new(local).exists() {
-                return Err(krishiv_common::error::PathNotFound {
-                    path: format!("file:{local}"),
-                }
-                .into());
+            let native = krishiv_exec::files::native_path(local);
+            if !path.contains("://") && !native.exists() {
+                let path = krishiv_exec::files::file_display(&native);
+                return Err(krishiv_common::error::PathNotFound { path }.into());
             }
         }
         let columns = if infer {
@@ -1209,6 +1188,7 @@ impl Session {
                     definer: definer.then(|| self.state.principal.name.clone()),
                     // Captured again with the new query, as Spark's `ALTER VIEW .. AS` does.
                     cte_precedence: Some(cte_precedence),
+                    timestamp_ntz: Some(env.parser.timestamp_ntz),
                     functions,
                     // A new text: the store gives it a new version (review r10 M10).
                     revision: 0,
@@ -1787,6 +1767,9 @@ struct InsertTarget<'a> {
     /// The writer's options (`writeTo(..).option(..)`, `saveAsTable`'s): a Delta append reads
     /// `maxRecordsPerFile` from them, a file table's write the idempotency key; `None` for SQL.
     options: Option<&'a BTreeMap<String, OptionValue>>,
+    /// The name delta-spark's errors give a Delta table written by path (`` delta.`file:/p` ``);
+    /// `None` for a catalog table.
+    delta_name: Option<&'a str>,
 }
 
 /// A clause of a multi-table insert as a single-table one: its query reads `FROM source`, as
@@ -1919,46 +1902,14 @@ pub(crate) enum V2Mode {
     Append,
 }
 
-/// `OPTIONS (...)` / `TBLPROPERTIES (...)` as text pairs, keys lower-cased
-/// for options as Spark does not (kept as written).
-fn options_of(options: &[TableOption], original: &str) -> BTreeMap<String, String> {
-    options
-        .iter()
-        .map(|o| {
-            let key = o
-                .key
-                .parts
-                .iter()
-                .map(|p| p.value.as_str())
-                .collect::<Vec<_>>()
-                .join(".");
-            let value = o
-                .value
-                .as_ref()
-                .map(|v| literal_text(original.get(v.span.start..v.span.end).unwrap_or_default()))
-                .unwrap_or_default();
-            (key, value)
-        })
-        .collect()
-}
-
-/// A literal's text without its quotes.
-fn literal_text(fragment: &str) -> String {
-    let f = fragment.trim();
-    for q in ['\'', '"'] {
-        if f.len() >= 2 && f.starts_with(q) && f.ends_with(q) {
-            return f[1..f.len() - 1].to_owned();
-        }
-    }
-    f.to_owned()
-}
-
 pub(crate) fn now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
 }
 
+mod provider;
+pub(crate) use provider::short_provider;
 mod assign;
 use assign::{Source, assign, can_store, overflow_in_table_insert};
 
@@ -1967,7 +1918,9 @@ pub(crate) use files::CheckedDir;
 mod questions;
 use files::remove_dir;
 mod location;
+mod options;
 use location::qualified_namespace_location;
+use options::options_of;
 
 #[cfg(test)]
 mod tests;
@@ -1998,3 +1951,4 @@ mod merge_checks;
 mod merge_source;
 mod pipeline;
 mod row_level;
+pub(crate) use row_level::rewrite_files::RewriteArgs;

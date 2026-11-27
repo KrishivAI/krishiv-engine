@@ -103,7 +103,9 @@ impl Datetimes {
         let pattern = |opt: &str, default: &str| -> Result<Option<DateTimePattern>, KrishivError> {
             match (o.str(opt), purpose) {
                 (Some(p), _) => DateTimePattern::new(p, purpose).map(Some),
-                (None, Purpose::Format) => DateTimePattern::new(default, purpose).map(Some),
+                (None, Purpose::Format | Purpose::FormatTime) => {
+                    DateTimePattern::new(default, purpose).map(Some)
+                }
                 (None, Purpose::Parse | Purpose::ParseNtz) => Ok(None),
             }
         };

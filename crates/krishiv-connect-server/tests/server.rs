@@ -306,11 +306,13 @@ async fn the_idle_sweeper_runs_on_the_maintenance_interval() {
         .get_or_create(&local_caller(), ID, None, "u")
         .expect("create");
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-    while run.manager.counts().live > 0 {
+    // `sweep` takes the entry out of the live map under the lock and closes it
+    // just after, so wait for the close, not for the map to empty.
+    while !entry.session().is_closed() {
         assert!(tokio::time::Instant::now() < deadline, "never swept");
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    assert!(entry.session().is_closed());
+    assert_eq!(run.manager.counts().live, 0);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -179,11 +179,17 @@ impl Root<'_> {
     }
 
     /// A partition's type into the root (Spark's fold of the partition
-    /// results into `StructType(Nil)`, in partition order here).
+    /// results into `StructType(Nil)`, in partition order here). Each
+    /// partition first meets an empty struct, as Spark 4.2.0 does: a
+    /// scalar-only partition adds the corrupt column as a string before the
+    /// partitions merge.
     fn fold(self, root: Ty, part: Option<Ty>) -> FormatResult<Ty> {
         match part {
             None => Ok(root),
-            Some(p) => self.merge(root, p),
+            Some(p) => {
+                let p = self.merge(Ty::Struct(Vec::new()), p)?;
+                self.merge(root, p)
+            }
         }
     }
 

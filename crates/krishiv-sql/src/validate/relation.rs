@@ -5,8 +5,9 @@
 use krishiv_common::error::{
     AsofJoinMatchConditionInvalidOperator,
     InvalidSqlSyntaxInvalidTableFunctionIdentifierArgumentMissingParentheses, LegacyErrorTemp0064,
-    NearestByJoinNumResultsOutOfRange, NearestByJoinUnsupportedJoinType,
-    UnsupportedFeatureAsofJoin, UnsupportedFeatureLateralJoinNearestBy,
+    NearestByJoinCrossJoinNotEnabled, NearestByJoinNumResultsOutOfRange,
+    NearestByJoinUnsupportedJoinType, UnsupportedFeatureAsofJoin,
+    UnsupportedFeatureLateralJoinNearestBy,
 };
 
 use super::{Checker, R, at, quote};
@@ -41,6 +42,9 @@ impl Checker<'_> {
                 },
                 j.span,
             ));
+        }
+        if !self.opts.cross_join {
+            return Err(at(NearestByJoinCrossJoinNotEnabled {}, j.span));
         }
         if let Some(text) = &n.num_results {
             let value = text.parse::<i64>().ok();

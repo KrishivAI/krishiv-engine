@@ -33,27 +33,6 @@ type Rows = Vec<Vec<Option<String>>>;
 /// must be exactly `how` (`Mismatch::got`); a fixed gap, or one that differs in another way, fails
 /// the test.
 const KNOWN_GAPS: &[(&str, &str, &str)] = &[
-    // `min`/`max` have no `Time64` accumulator yet.
-    (
-        "4.2.0",
-        "max_distinct",
-        "[KRISHIV_UNSUPPORTED_FEATURE] The feature Max of Time64(ns) is not supported by Krishiv yet.",
-    ),
-    (
-        "4.3.0",
-        "max_distinct",
-        "[KRISHIV_UNSUPPORTED_FEATURE] The feature Max of Time64(ns) is not supported by Krishiv yet.",
-    ),
-    (
-        "4.2.0",
-        "max_only",
-        "[KRISHIV_UNSUPPORTED_FEATURE] The feature Max of Time64(ns) is not supported by Krishiv yet.",
-    ),
-    (
-        "4.3.0",
-        "max_only",
-        "[KRISHIV_UNSUPPORTED_FEATURE] The feature Max of Time64(ns) is not supported by Krishiv yet.",
-    ),
     // The nanosecond timestamp types are Krishiv 0.3.1 (scope note P3-R3): with
     // `spark.sql.timestampNanosTypes.enabled` on, Spark 4.3 builds them; Krishiv refuses by name.
     (
@@ -65,29 +44,6 @@ const KNOWN_GAPS: &[(&str, &str, &str)] = &[
         "4.3.0",
         "ts_ltz7_nanos_on",
         "[KRISHIV_UNSUPPORTED_FEATURE] The feature nanosecond-precision timestamp types (Krishiv 0.3.1) is not supported by Krishiv yet.",
-    ),
-    // `date_format` refuses a TIME before the implicit cast Spark tries (4.2: the class differs).
-    (
-        "4.2.0",
-        "date_format",
-        "[DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE] Cannot resolve \"date_format(TIME '12:00:00.123456789', HH:mm:ss.SSSSSSSSS)\" due to data type mismatch: The first parameter requires the (\"STRING\" or \"DATE\" or \"TIMESTAMP\" or \"TIMESTAMP_NTZ\") type, however \"TIME '12:00:00.123456'\" has the type \"TIME(6)\".",
-    ),
-    (
-        "4.3.0",
-        "date_format",
-        "[KRISHIV_UNSUPPORTED_FEATURE] The feature date_format of a TIME value (Spark 4.3) is not supported by Krishiv yet.",
-    ),
-    // No cast from TIME to TIMESTAMP_NTZ yet.
-    (
-        "4.3.0",
-        "to_timestamp_ntz",
-        "[KRISHIV_UNSUPPORTED_FEATURE] The feature a cast from TIME to TIMESTAMP_NTZ (Spark 4.3) is not supported by Krishiv yet.",
-    ),
-    // A bare TIMESTAMP does not follow `spark.sql.timestampType` yet.
-    (
-        "4.3.0",
-        "ts6_ntz_default",
-        "[KRISHIV_UNSUPPORTED_FEATURE] The feature TIMESTAMP(6) with spark.sql.timestampType=TIMESTAMP_NTZ is not supported by Krishiv yet.",
     ),
     // Spark 4.2 adds `: missing ')'` to the syntax error for some shapes; the hint is not reproduced.
     (

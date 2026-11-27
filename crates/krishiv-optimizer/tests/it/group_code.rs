@@ -438,13 +438,8 @@ fn refusals_say_why() {
         ),
         (
             "SELECT g3, count(*) FROM f JOIN d ON fk = dk GROUP BY g3",
-            base.clone(),
-            "4 bytes wide",
-        ),
-        (
-            "SELECT g1, g2, h1, h2, count(*) FROM f JOIN d ON fk = dk JOIN e ON ek2 = ek GROUP BY g1, g2, h1, h2",
             base,
-            "2 dimensions qualify",
+            "4 bytes wide",
         ),
     ];
     for (sql, stats, why) in cases {
@@ -454,6 +449,33 @@ fn refusals_say_why() {
             notes.iter().any(|n| n.contains(why)),
             "{sql}: want {why:?} in {notes:?}"
         );
+    }
+}
+
+/// Two dimensions that qualify are both coded in one pass (TPC-DS q47's
+/// `item` and `store`): the aggregate groups by the two codes (and a key of
+/// the fact beside them), each decoded by its own join above it; the plan is
+/// a fixed point and returns the same rows (`run`).
+#[test]
+fn two_dimensions_are_coded_in_one_pass() {
+    for sql in [
+        "SELECT g1, g2, h1, h2, count(*) AS n FROM f JOIN d ON fk = dk JOIN e ON ek2 = ek \
+         GROUP BY g1, g2, h1, h2",
+        "SELECT h2, g1, k2, g2, h1, sum(x) AS s FROM f JOIN d ON fk = dk JOIN e ON ek2 = ek \
+         GROUP BY g1, g2, h1, h2, k2 ORDER BY s",
+    ] {
+        let (text, notes) = run(sql, &Stats::new());
+        assert_eq!(notes.len(), 1, "{sql}: {notes:?}");
+        assert!(
+            notes[0].starts_with("coded [") && notes[0].matches("coded [").count() == 2,
+            "{sql}: {notes:?}"
+        );
+        let agg = text
+            .lines()
+            .find(|l| l.contains("Aggregate [krishiv_group_code"))
+            .unwrap_or_else(|| panic!("{sql}\n{text}"));
+        assert!(agg.matches("krishiv_group_code#").count() >= 2, "{agg}");
+        assert!(!agg.contains("g1#") && !agg.contains("h1#"), "{agg}");
     }
 }
 
@@ -712,4 +734,257 @@ fn tpch_q16_codes_its_part_keys() {
         eval::rows(&db, plan.root())
     );
     insta::assert_snapshot!(text);
+}
+
+/// The notes `EagerAggregate` left and the plan, with every rule on.
+fn eager_notes(sql: &str) -> (Plan, Vec<String>) {
+    let ctx = support::ctx_over(catalog());
+    let plan = support::resolve(sql, &ctx);
+    let (optimized, steps) =
+        optimize_traced_with_options(&plan, &Stats::new(), &Options::default()).unwrap();
+    let notes = steps
+        .into_iter()
+        .filter(|s| s.rule == "EagerAggregate" && !s.note.is_empty())
+        .map(|s| s.note)
+        .collect();
+    (optimized, notes)
+}
+
+/// An aggregate both rules accept (its dimension carries only the inferred `isnotnull` on its
+/// join key, which eager aggregation reads as whole since study 54's F-C1): eager aggregation
+/// yields, `GroupKeyCode` codes it, and the plan is the one optimized with eager aggregation off.
+#[test]
+fn eager_aggregation_yields_an_aggregate_group_key_code_takes() {
+    let sql = "SELECT g1, g2, count(*) AS n, sum(x) AS s FROM f JOIN d ON fk = dk GROUP BY g1, g2";
+    let (on, notes) = eager_notes(sql);
+    assert!(
+        notes
+            .iter()
+            .any(|n| n == "not applied: GroupKeyCode takes the aggregate"),
+        "{notes:?}\n{}",
+        on.root()
+    );
+    let text = on.root().to_string();
+    assert!(coded(&text), "{notes:?}\n{text}");
+    assert!(!text.contains("PartialAggregate"), "{text}");
+    let ctx = support::ctx_over(catalog());
+    let plan = support::resolve(sql, &ctx);
+    let off = optimize_with_options(
+        &plan,
+        &Stats::new(),
+        &support::options(|o| {
+            o.eager_aggregation = false;
+        }),
+    )
+    .unwrap();
+    assert!(
+        off.structurally_eq(&on),
+        "{}\neager off:\n{}",
+        on.root(),
+        off.root()
+    );
+    // And without the yield's beneficiary, eager aggregation takes the same aggregate.
+    let uncoded = optimize_with_options(
+        &plan,
+        &Stats::new(),
+        &support::options(|o| {
+            o.group_key_code = false;
+        }),
+    )
+    .unwrap();
+    assert!(
+        uncoded.root().to_string().contains("PartialAggregate"),
+        "{}",
+        uncoded.root()
+    );
+}
+
+/// Where `GroupKeyCode` refuses (a floating-point key), eager aggregation does not yield and
+/// takes the aggregate below the join.
+#[test]
+fn eager_aggregation_takes_an_aggregate_group_key_code_refuses() {
+    let sql = "SELECT g1, gd, count(*) AS n FROM f JOIN d ON fk = dk GROUP BY g1, gd";
+    let (on, notes) = eager_notes(sql);
+    assert!(
+        !notes.iter().any(|n| n.contains("GroupKeyCode takes")),
+        "{notes:?}"
+    );
+    let text = on.root().to_string();
+    assert!(!coded(&text), "{text}");
+    assert!(text.contains("PartialAggregate"), "{notes:?}\n{text}");
+    run(sql, &Stats::new());
+}
+
+/// The multi-dimension mode (`krishiv.optimizer.groupKeyCode` off,
+/// `krishiv.optimizer.groupKeyCodeMultiDimension` on; design P2b D2 §8)
+/// codes only aggregates where two or more dimensions qualify, then all of
+/// them; an aggregate with one is refused with a note; with both keys off
+/// (the default) nothing is coded. Rows stay the same.
+#[test]
+fn the_multi_dimension_mode_codes_only_aggregates_with_two_dimensions() {
+    let ctx = support::ctx_over(catalog());
+    let udfs = krishiv_udf_sdk::UdfLibrary::new();
+    let stats = Stats::new();
+    let two = "SELECT g1, g2, h1, h2, count(*) AS n FROM f JOIN d ON fk = dk JOIN e ON ek2 = ek \
+               GROUP BY g1, g2, h1, h2";
+    let one = "SELECT g1, g2, count(*) AS n, sum(x) AS s FROM f JOIN d ON fk = dk GROUP BY g1, g2";
+    let mut multi = krishiv_common::config::Config::new();
+    multi
+        .set("krishiv.optimizer.groupKeyCodeMultiDimension", "true")
+        .unwrap();
+    // With one qualifying dimension the mode does not code, so eager aggregation does not
+    // yield (`eager::Yield`) and pre-aggregates below the join, which the code then refuses for
+    // the smaller input instead; off here, the mode's own refusal is the note.
+    let mut multi_alone = multi.clone();
+    multi_alone
+        .set("krishiv.optimizer.eagerAggregation", "false")
+        .unwrap();
+    let off = krishiv_common::config::Config::new();
+    for (sql, config, want) in [
+        (two, &multi, Some(2)),
+        (one, &multi_alone, None),
+        (two, &off, Some(0)),
+    ] {
+        let plan = support::resolve(sql, &ctx);
+        let (once, steps) =
+            krishiv_optimizer::optimize_traced_with_udfs(&plan, &stats, &udfs, config).unwrap();
+        let text = once.root().to_string();
+        let notes: Vec<_> = steps
+            .iter()
+            .filter(|s| s.rule == "GroupKeyCode" && !s.note.is_empty())
+            .map(|s| s.note.clone())
+            .collect();
+        match want {
+            Some(n) => {
+                assert_eq!(coded(&text), n > 0, "{sql}: {notes:?}\n{text}");
+                if n > 0 {
+                    assert_eq!(notes.len(), 1, "{sql}: {notes:?}");
+                    assert_eq!(notes[0].matches("coded [").count(), n, "{notes:?}");
+                } else {
+                    assert!(notes.is_empty(), "{sql}: {notes:?}");
+                }
+            }
+            None => {
+                assert!(!coded(&text), "{sql}: {notes:?}\n{text}");
+                assert!(
+                    notes.iter().any(|n| n.contains(
+                        "1 dimension qualifies (krishiv.optimizer.groupKeyCodeMultiDimension \
+                         codes 2 or more)"
+                    )),
+                    "{sql}: {notes:?}"
+                );
+            }
+        }
+        let (twice, _) =
+            krishiv_optimizer::optimize_traced_with_udfs(&once, &stats, &udfs, config).unwrap();
+        assert!(twice.structurally_eq(&once), "{sql}: a fixed point");
+        for seed in [3, 11] {
+            let db = db(seed);
+            assert_eq!(
+                eval::rows(&db, once.root()),
+                eval::rows(&db, plan.root()),
+                "{sql} (seed {seed})"
+            );
+        }
+    }
+}
+
+/// No TPC-H aggregate groups by keys of two dimensions that qualify, so the
+/// multi-dimension mode codes none of the 22 queries (q10, coded with the key on,
+/// was 1.25x at SF100; design §8).
+#[test]
+fn the_multi_dimension_mode_codes_no_tpch_query() {
+    let ctx = support::ctx();
+    let stats = crate::join_order::fixture();
+    let udfs = krishiv_udf_sdk::UdfLibrary::new();
+    let mut multi = krishiv_common::config::Config::new();
+    multi
+        .set("krishiv.optimizer.groupKeyCodeMultiDimension", "true")
+        .unwrap();
+
+    for q in 1..=22 {
+        let plan = support::resolve(&support::tpch_sql(q), &ctx);
+        let (optimized, steps) =
+            krishiv_optimizer::optimize_traced_with_udfs(&plan, &stats, &udfs, &multi).unwrap();
+        let notes: Vec<String> = steps
+            .into_iter()
+            .filter(|s| s.rule == "GroupKeyCode" && !s.note.is_empty())
+            .map(|s| s.note)
+            .collect();
+        assert!(!coded(&optimized.root().to_string()), "q{q}: {notes:?}");
+        // q16 codes its `part` keys with the key on (`tpch_q16_codes_its_part_keys`):
+        // here the one dimension is refused by name.
+        if q == 16 {
+            assert!(
+                notes.iter().any(|n| n.contains(
+                    "1 dimension qualifies (krishiv.optimizer.groupKeyCodeMultiDimension \
+                     codes 2 or more)"
+                )),
+                "q16: {notes:?}"
+            );
+        }
+    }
+}
+
+/// The multi-dimension mode's two cost lines (design §8, from the TPC-DS SF10 A/B):
+/// a dimension with more than 100,000 groups (q24's `customer`) and an input
+/// too small to pay for the added operators (q40) are not coded there, while
+/// `krishiv.optimizer.groupKeyCode` codes both shapes. All or none: with one
+/// of two dimensions refused, the aggregate stays.
+#[test]
+fn the_multi_dimension_mode_refuses_many_groups_and_small_inputs() {
+    let ctx = support::ctx_over(catalog());
+    let udfs = krishiv_udf_sdk::UdfLibrary::new();
+    let sql = "SELECT g1, g2, h1, h2, count(*) AS n FROM f JOIN d ON fk = dk JOIN e ON ek2 = ek \
+               GROUP BY g1, g2, h1, h2";
+    let mut many = Stats::new();
+    many.rows("e", 400_000)
+        .set("e", "h1", Some(400))
+        .set("e", "h2", Some(400));
+    let mut small = Stats::new();
+    small.rows("f", 3_000);
+    let mut default = krishiv_common::config::Config::new();
+    default
+        .set("krishiv.optimizer.groupKeyCodeMultiDimension", "true")
+        .unwrap();
+    let mut on = krishiv_common::config::Config::new();
+    on.set("krishiv.optimizer.groupKeyCode", "true").unwrap();
+    let plan = support::resolve(sql, &ctx);
+    for (stats, why) in [
+        (&many, "groups in the multi-dimension mode"),
+        (&small, "key bytes"),
+    ] {
+        let (coded_on, on_steps) =
+            krishiv_optimizer::optimize_traced_with_udfs(&plan, stats, &udfs, &on).unwrap();
+        assert!(
+            coded(&coded_on.root().to_string()),
+            "{why}: the key on codes it"
+        );
+        // Both dimensions pass the plain gates, so only the mode's line refuses.
+        let on_notes: Vec<_> = on_steps
+            .iter()
+            .filter(|s| s.rule == "GroupKeyCode")
+            .map(|s| s.note.clone())
+            .collect();
+        assert!(
+            on_notes
+                .iter()
+                .any(|n| n.contains("coded [g1, g2]") && n.contains("coded [h1, h2]")),
+            "{why}: {on_notes:?}"
+        );
+        let (out, steps) =
+            krishiv_optimizer::optimize_traced_with_udfs(&plan, stats, &udfs, &default).unwrap();
+        let notes: Vec<_> = steps
+            .iter()
+            .filter(|s| s.rule == "GroupKeyCode" && !s.note.is_empty())
+            .map(|s| s.note.clone())
+            .collect();
+        assert!(!coded(&out.root().to_string()), "{why}: {notes:?}");
+        assert!(
+            notes
+                .iter()
+                .any(|n| n.contains("qualif") || n.contains(why)),
+            "{why}: {notes:?}"
+        );
+    }
 }

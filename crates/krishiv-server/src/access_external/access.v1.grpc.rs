@@ -109,7 +109,12 @@ pub mod access_policy_client {
             self.inner.unary(req, path, codec).await
         }
         /// The policy's current version. Krishiv asks at most once a second; a change makes every cached
-        /// plan analyzed under an older version miss.
+        /// plan analyzed under an older version miss. Versions are compared for equality only, so any
+        /// change (downwards too: a restarted service, hash-style versions) invalidates. A version is
+        /// trusted for 3 s after the latest answer that reported it (a `Version` or `Check` answer); past
+        /// that, or after a failed call, Krishiv reuses no cached analysis until the service answers again,
+        /// so a cached plan outlives a policy change by at most 3 s plus one call's timeout. 0 means
+        /// unknown, and so does a value with the top bit set (reserved): neither is ever trusted.
         pub async fn version(
             &mut self,
             request: impl tonic::IntoRequest<::krishiv_access_proto::VersionRequest>,
@@ -160,7 +165,12 @@ pub mod access_policy_server {
             tonic::Status,
         >;
         /// The policy's current version. Krishiv asks at most once a second; a change makes every cached
-        /// plan analyzed under an older version miss.
+        /// plan analyzed under an older version miss. Versions are compared for equality only, so any
+        /// change (downwards too: a restarted service, hash-style versions) invalidates. A version is
+        /// trusted for 3 s after the latest answer that reported it (a `Version` or `Check` answer); past
+        /// that, or after a failed call, Krishiv reuses no cached analysis until the service answers again,
+        /// so a cached plan outlives a policy change by at most 3 s plus one call's timeout. 0 means
+        /// unknown, and so does a value with the top bit set (reserved): neither is ever trusted.
         async fn version(
             &self,
             request: tonic::Request<::krishiv_access_proto::VersionRequest>,

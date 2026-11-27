@@ -7,7 +7,7 @@ Project [(sum(l_extendedprice#5)#4611686018427387946 / 7.0) AS avg_yearly#42]
    +- Exchange SinglePartition
       +- PartialHashAggregate keys=[], functions=[sum(l_extendedprice#5)]
          +- Project [l_extendedprice#5]
-            +- HashJoin Inner, [l_partkey#1] = [p_partkey#16], residual: (CAST(l_quantity#4 AS DECIMAL(21,7)) < (0.2 * avg(l_quantity))#41), RuntimeFilter #3: l_partkey#1 -> spark_catalog.default.lineitem.l_partkey, probe filter: isnotnull(l_partkey#1)
+            +- HashJoin Inner, [l_partkey#1] = [p_partkey#16], residual: (CAST(l_quantity#4 AS DECIMAL(21,7)) < (0.2 * avg(l_quantity))#41), RuntimeFilter #3: l_partkey#1 -> spark_catalog.default.lineitem.l_partkey, RuntimeFilter #4: CAST(l_quantity#4 AS DECIMAL(21,7)) <= max((0.2 * avg(l_quantity))) -> spark_catalog.default.lineitem.l_quantity, probe filter: isnotnull(l_partkey#1)
                :- Scan spark_catalog.default.lineitem [l_partkey#1, l_quantity#4, l_extendedprice#5], PushedFilters: [isnotnull(l_partkey#1)]
                +- BroadcastExchange
                   +- Project [(0.2 * avg(l_quantity))#41, p_partkey#16]

@@ -99,8 +99,9 @@ pub(crate) struct Shared {
     pub(crate) limits: DeltaLimits,
     pub(crate) cancel: Cancel,
     /// The size and modification time (ms) of each commit file (`_delta_log/*.json`) the
-    /// engine's listings returned, by URL: what a snapshot built through this engine read, so
-    /// the snapshot cache binds its entry to those files and not to a later `head`.
+    /// engine's listings returned, by its path from `_delta_log/` on ([`log_key`]): what a
+    /// snapshot built through this engine read, so the snapshot cache binds its entry to those
+    /// files and not to a later `head`.
     pub(crate) listed: std::sync::Mutex<std::collections::HashMap<String, (u64, i64)>>,
 }
 
@@ -333,7 +334,7 @@ impl DeltaEngine {
             .listed
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .get(url.as_str())
+            .get(log_key(url)?)
             .copied()
     }
 
@@ -430,3 +431,12 @@ impl KernelToken for KernelCancel {
 
 #[cfg(test)]
 mod tests;
+
+/// A log file's key in [`Shared::listed`]: its URL path from the last `_delta_log/` on
+/// (`_delta_log/00000000000000000001.json`); `None` outside the log. Not the whole URL: on
+/// Windows a listing names the root's directories by their long names (`runneradmin`) while
+/// the root may be written with an 8.3 short name (`RUNNER~1`), and both name the same file.
+pub(crate) fn log_key(url: &url::Url) -> Option<&str> {
+    let path = url.path();
+    path.rfind("/_delta_log/").map(|at| &path[at + 1..])
+}

@@ -357,7 +357,7 @@ impl DataFrame {
             principal: self.session.state.principal.name.clone(),
             tags: self.session.state.queries.tags().into_iter().collect(),
         };
-        let (mut stream, query) = self.session.run_profiled(physical, &a.env).await?;
+        let (mut stream, query, log_id) = self.session.run_profiled(physical, &a.env).await?;
         let mut out = Vec::new();
         while let Some(batch) = stream.next().await {
             let batch = batch?;
@@ -371,6 +371,7 @@ impl DataFrame {
         let mut profile = QueryProfile::new(physical, query.metrics(), true);
         profile.trace = Some(trace);
         profile.identity = Some(identity);
+        profile.planning_ns = self.session.state.queries.row_planning_ns(&log_id);
         // The same plan, metrics and thresholds the query's `system.queries` row was computed from.
         let profile = profile.with_hints(&krishiv_exec::profile::HintSettings::from_config(
             &a.env.config,

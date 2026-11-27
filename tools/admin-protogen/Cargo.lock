@@ -9,6 +9,7 @@ dependencies = [
  "prost",
  "prost-build",
  "protox",
+ "tempfile",
  "tonic-prost-build",
 ]
 

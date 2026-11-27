@@ -15,6 +15,12 @@ Spark starts each table and has the last word; Krishiv works in between:
    and an append (``SPARK-READBACK.json``).
 4. Krishiv (``roundtrip_tests::krishiv_reads_spark_on_top``) reads Spark's last metadata and compares.
 
+``race_k`` and ``race_s`` are the concurrent-writer cases (copy-on-write, v2, partitioned by ``x``): on ``race_k``
+two Krishiv writers from one base (appends both land; ``DELETE`` of the same partition: one lands, the other gets
+``KRISHIV_ICEBERG_COMMIT_CONFLICT``; ``DELETE`` of different partitions: both land); on ``race_s`` Krishiv commits
+from the metadata before Spark's ``DELETE`` of ``x = 0`` (a ``DELETE`` of ``x = 1`` and an append land, a ``DELETE``
+of ``x = 0`` conflicts). Step 3 reads them as the others.
+
 No expected value is written by hand: every comparison is between the two engines' records. Run through
 ``tests/scripts/iceberg_roundtrip.sh`` (it mounts ``<out>`` at the same path, since Iceberg metadata holds absolute
 paths).
@@ -29,7 +35,10 @@ import sys
 from pyspark.sql import SparkSession
 
 # name -> (format version, evolved)
-TABLES = {"mor2": (2, False), "mor3": (3, False), "evolved": (2, True)}
+TABLES = {"mor2": (2, False), "mor3": (3, False), "evolved": (2, True), "race_k": (2, False), "race_s": (2, False)}
+# Concurrent writers (``roundtrip_tests::race_tables``), copy-on-write: two Krishiv commits from one base on
+# ``race_k``; on ``race_s`` Krishiv commits from the metadata before Spark's ``DELETE`` of partition ``x = 0``.
+RACES = ("race_k", "race_s")
 MOR = "'write.delete.mode'='merge-on-read', 'write.update.mode'='merge-on-read', 'write.merge.mode'='merge-on-read'"
 
 
@@ -105,6 +114,12 @@ def create(spark, wh):
             spark.sql(f"ALTER TABLE {t} RENAME COLUMN nm TO name")
             spark.sql(f"ALTER TABLE {t} ADD PARTITION FIELD x")
             spark.sql(f"INSERT INTO {t} VALUES {values(range(6, 12))}")
+        elif name in RACES:
+            spark.sql(
+                f"CREATE TABLE {t} (id BIGINT, x INT, name STRING) USING iceberg PARTITIONED BY (x) "
+                f"TBLPROPERTIES ('format-version'='{version}')"
+            )
+            spark.sql(f"INSERT INTO {t} VALUES {values(range(0, 12))}")
         else:
             spark.sql(
                 f"CREATE TABLE {t} (id BIGINT, x INT, name STRING) USING iceberg PARTITIONED BY (x) "
@@ -113,7 +128,13 @@ def create(spark, wh):
             spark.sql(f"INSERT INTO {t} VALUES {values(range(0, 12))}")
             # Merge-on-read: position deletes on v2, a deletion vector on v3.
             spark.sql(f"DELETE FROM {t} WHERE id IN (1, 5)")
-        result[name] = {"format_version": version, "evolved": evolved, "spark": state(spark, wh, name, version == 3)}
+        entry = {"format_version": version, "evolved": evolved}
+        if name == "race_s":
+            # Spark's winner: Krishiv commits from the metadata before it.
+            entry["base"] = state(spark, wh, name, False)
+            spark.sql(f"DELETE FROM {t} WHERE x = 0")
+        entry["spark"] = state(spark, wh, name, version == 3)
+        result[name] = entry
     return result
 
 

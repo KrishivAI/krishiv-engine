@@ -68,6 +68,10 @@ struct X86Feature {
     bit: u32,
     compiled: bool,
     /// The flag the Linux kernel lists in `/proc/cpuinfo` for it ("" when it lists none).
+    #[cfg_attr(
+        all(not(target_os = "linux"), not(test)),
+        expect(dead_code, reason = "read from /proc/cpuinfo on Linux only")
+    )]
     flag: &'static str,
 }
 

@@ -363,6 +363,13 @@ fn extremum(t: &DataType, kind: Extremum, n: usize) -> Option<Binding> {
             let refs: Vec<_> = cols.iter().collect();
             Ok(Arc::new(math::extremum_bytes(kind, &refs)?) as ArrayRef)
         }),
+        DataType::Struct(_) | DataType::List(_) => {
+            Binding::new(t.clone(), move |x: &Inputs<'_>| {
+                let cols = (0..n).map(|i| x.column(i)).collect::<Result<Vec<_>, _>>()?;
+                let refs: Vec<&dyn Array> = cols.iter().map(AsRef::as_ref).collect();
+                Ok(math::extremum_nested(kind, &refs)?)
+            })
+        }
         _ => return None,
     })
 }
@@ -507,7 +514,7 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                 Err(e) => return Some((listed, Err(e))),
             };
             // Spark 4.3 raises ARITHMETIC_OVERFLOW under ANSI for a double outside BIGINT; 4.2 and
-            // earlier saturate (ADR 0023, `divergence-ceil-floor-ansi-overflow`).
+            // earlier saturate (ADR 0023).
             let raises =
                 opts.ansi && opts.kernel.spark_version() >= krishiv_kernels::SparkVersion::V4_3;
             match ceil_floor(t, scale, listed != "floor", args.len() == 1, raises) {

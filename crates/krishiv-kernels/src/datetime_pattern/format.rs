@@ -60,6 +60,7 @@ impl From<Fail> for KrishivError {
 }
 
 const NO_TIME: &str = "a time-of-day field in a pattern that formats a DATE";
+const NO_DATE: &str = "a date field in a pattern that formats a TIME";
 const NO_ZONE: &str = "a zone or offset field in a pattern that formats a value without a zone";
 
 /// The fields of one local date-time.
@@ -75,6 +76,8 @@ struct Fields {
     second: i64,
     nanos: i64,
     has_time: bool,
+    /// False for a `TIME`: a date field is absent.
+    has_date: bool,
     /// Seconds of the local date-time since the epoch.
     local_seconds: i64,
     /// Offset seconds and zone id, for an instant.
@@ -105,8 +108,36 @@ impl Fields {
             second: tod / 1_000_000 % 60,
             nanos: tod % 1_000_000 * 1000,
             has_time,
+            has_date: true,
             local_seconds: days.saturating_mul(86_400).saturating_add(tod / 1_000_000),
             zone: zone.map(|(o, id)| (o, id.to_owned())),
+        }
+    }
+
+    /// A `TIME` of `nanos` since midnight (`0..86_400 * 10^9`): time fields only.
+    fn time_of_day(nanos: i64) -> Self {
+        Self {
+            year: 0,
+            month: 1,
+            day: 1,
+            day_of_year: 1,
+            day_of_week: 1,
+            hour: nanos / 3_600_000_000_000,
+            minute: nanos / 60_000_000_000 % 60,
+            second: nanos / 1_000_000_000 % 60,
+            nanos: nanos % 1_000_000_000,
+            has_time: true,
+            has_date: false,
+            local_seconds: nanos / 1_000_000_000,
+            zone: None,
+        }
+    }
+
+    fn date(&self) -> Result<(), Fail> {
+        if self.has_date {
+            Ok(())
+        } else {
+            Err(Fail::Absent(NO_DATE))
         }
     }
 
@@ -118,6 +149,17 @@ impl Fields {
                 Err(Fail::Absent(NO_TIME))
             }
         };
+        if !matches!(
+            f,
+            Field::HourOfDay
+                | Field::ClockHourOfDay
+                | Field::HourOfAmPm
+                | Field::ClockHourOfAmPm
+                | Field::Minute
+                | Field::Second
+        ) {
+            self.date()?;
+        }
         Ok(match f {
             Field::Year => self.year,
             Field::YearOfEra => {
@@ -162,6 +204,36 @@ pub(super) fn format(
     let mut out = String::new();
     write_items(items, &f, &mut out)?;
     Ok(out)
+}
+
+/// Prints a `TIME` (`nanos` since midnight). `Ok(None)` when the pattern needs a field a time
+/// of day lacks (a date or a zone field, outside an optional section), where `java.time`'s
+/// `LocalTime.format` throws.
+pub(super) fn format_time_of_day(
+    items: &[Item],
+    nanos: i64,
+) -> Result<Option<String>, KrishivError> {
+    let mut out = String::new();
+    Ok(write_time_of_day(items, nanos, &mut out)?.then_some(out))
+}
+
+/// [`format_time_of_day`] appended to `out`: `Ok(false)`, with `out` as it was, where that gives
+/// `Ok(None)`.
+pub(super) fn write_time_of_day(
+    items: &[Item],
+    nanos: i64,
+    out: &mut String,
+) -> Result<bool, KrishivError> {
+    let f = Fields::time_of_day(nanos);
+    let start = out.len();
+    match write_items(items, &f, out) {
+        Ok(()) => Ok(true),
+        Err(Fail::Absent(_)) => {
+            out.truncate(start);
+            Ok(false)
+        }
+        Err(Fail::Err(e)) => Err(e),
+    }
 }
 
 /// Prints a `DATE` (days since the epoch) without going through
@@ -241,6 +313,9 @@ fn write_number(n: &Number, v: i64, out: &mut String) {
 
 fn write_text(text: Text, full: bool, f: &Fields, out: &mut String) -> Result<(), Fail> {
     let idx = |v: i64| usize::try_from(v - 1).unwrap_or(0);
+    if !matches!(text, Text::AmPm) {
+        f.date()?;
+    }
     match text {
         Text::Era => out.push_str(match (f.year >= 1, full) {
             (true, false) => "AD",

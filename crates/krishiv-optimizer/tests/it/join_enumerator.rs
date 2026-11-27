@@ -106,6 +106,7 @@ fn tpch_greedy_plans_return_the_same_rows() {
 fn tpcds_trees_are_planned_exactly() {
     let ctx = support::ctx_over(tpcds::catalog());
     let (mut planned, mut large) = (0, 0);
+    let mut diverged = Vec::new();
     for q in 1..=99 {
         let Some(plan) = support::try_resolve(&tpcds::sql(q), &ctx) else {
             continue;
@@ -113,6 +114,12 @@ fn tpcds_trees_are_planned_exactly() {
         let (_, exact) = plan_with(&plan, &NoStatistics, &[]);
         let (_, greedy) = plan_with(&plan, &NoStatistics, GREEDY);
         assert_eq!(exact.len(), greedy.len(), "q{q:02}");
+        // The two runs order the same trees until their enumerators pick different shapes at an
+        // equal cost; later trees are then built over plans that differ, and their costs need not
+        // compare. That is allowed only after such a tie, and the queries where it happens are
+        // pinned in `diverged` (q74's year-over-year trees, F-A L1), so a regression elsewhere
+        // still fails.
+        let mut tied = false;
         for (e, g) in exact.iter().zip(&greedy) {
             if e.inputs > 10 {
                 assert_eq!(e.fallback, "inputs", "q{q:02}");
@@ -120,11 +127,22 @@ fn tpcds_trees_are_planned_exactly() {
             } else {
                 assert_eq!(e.fallback, "none", "q{q:02}");
                 assert!(e.considered >= e.pairs, "q{q:02}");
-                assert!(g.cost >= e.cost, "q{q:02}: {g:?} {e:?}");
+                if g.cost < e.cost {
+                    assert!(tied, "q{q:02}: {g:?} {e:?}");
+                    if diverged.last() != Some(&q) {
+                        diverged.push(q);
+                    }
+                }
             }
+            tied |= e.shape != g.shape && (g.cost - e.cost).abs() <= 1e-9 * e.cost.abs();
             planned += 1;
         }
     }
+    assert_eq!(
+        diverged,
+        vec![74],
+        "queries whose later trees cost less greedily after a tie"
+    );
     assert!(planned > 99, "{planned} trees");
     assert!(large > 0, "q64's trees are larger than the limit");
 }

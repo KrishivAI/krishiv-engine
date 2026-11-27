@@ -51,9 +51,24 @@ pub static RUNTIME_FILTER_EQUATED_SITES: ConfigEntry = ConfigEntry {
     spark_alias: None,
 };
 
+/// `krishiv.runtimeFilter.residualBounds` (design P3-0.3.1 D2).
+pub static RUNTIME_FILTER_RESIDUAL_BOUNDS: ConfigEntry = ConfigEntry {
+    key: "krishiv.runtimeFilter.residualBounds",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(true)),
+    doc: "An inner, semi or right hash join whose condition also compares a probe-side scan column with \
+          a build column (`p < b`, `p <= b`, `p > b`, `p >= b`, numeric, date or timestamp) publishes the \
+          build's largest (or smallest) value of that column as a runtime filter: the scan then drops the \
+          rows no build row can match (`p <= max(b)`) before the join. Results do not change.",
+    scope: Scope::Session,
+    settable_by: SettableBy::Admin,
+    version_added: "0.3.1",
+    spark_alias: None,
+};
+
 #[cfg(test)]
 mod tests {
-    use super::RUNTIME_FILTER_EQUATED_SITES;
+    use super::{RUNTIME_FILTER_EQUATED_SITES, RUNTIME_FILTER_RESIDUAL_BOUNDS};
     use crate::config::{Config, ConfigValue};
 
     #[test]
@@ -69,6 +84,23 @@ mod tests {
         assert_eq!(get(&c), Some(false));
         assert!(
             c.set("krishiv.runtimeFilter.equatedSites", "often")
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn residual_bounds_default_on_and_parse() {
+        let mut c = Config::new();
+        let get = |c: &Config| {
+            c.get(&RUNTIME_FILTER_RESIDUAL_BOUNDS)
+                .and_then(ConfigValue::as_bool)
+        };
+        assert_eq!(get(&c), Some(true));
+        c.set("krishiv.runtimeFilter.residualBounds", "false")
+            .unwrap();
+        assert_eq!(get(&c), Some(false));
+        assert!(
+            c.set("krishiv.runtimeFilter.residualBounds", "often")
                 .is_err()
         );
     }

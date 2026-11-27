@@ -26,6 +26,7 @@
 //! above the plan's largest id), and the projection gives the copy the
 //! reference's own output ids, so nothing above the reference changes.
 
+use crate::expr::AddrMap;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -89,7 +90,7 @@ fn generated_keys(root: &Arc<LogicalPlan>) -> HashSet<Vec<AttrId>> {
 
 /// Whether a `WITH` is anywhere in `root` (subquery plans included).
 fn has_with(root: &Arc<LogicalPlan>) -> bool {
-    let mut seen = HashSet::new();
+    let mut seen = crate::expr::AddrSet::default();
     let mut stack = vec![Arc::clone(root)];
     while let Some(p) = stack.pop() {
         if matches!(p.node, PlanNode::WithCte { .. }) {
@@ -113,7 +114,7 @@ fn survey(
     defs: &mut HashMap<Vec<AttrId>, Arc<LogicalPlan>>,
     refs: &mut HashMap<Vec<AttrId>, usize>,
 ) {
-    let mut memo = HashMap::new();
+    let mut memo = AddrMap::default();
     *refs = occurrences(root, defs, &mut memo);
 }
 
@@ -121,7 +122,7 @@ fn survey(
 fn occurrences(
     p: &Arc<LogicalPlan>,
     defs: &mut HashMap<Vec<AttrId>, Arc<LogicalPlan>>,
-    memo: &mut HashMap<*const LogicalPlan, HashMap<Vec<AttrId>, usize>>,
+    memo: &mut AddrMap<LogicalPlan, HashMap<Vec<AttrId>, usize>>,
 ) -> HashMap<Vec<AttrId>, usize> {
     if let Some(m) = memo.get(&Arc::as_ptr(p)) {
         return m.clone();
@@ -153,7 +154,7 @@ fn occurrences(
 
 /// Whether an expression of `plan` (subquery plans included) holds an outer reference.
 fn has_outer(plan: &Arc<LogicalPlan>) -> bool {
-    let mut seen = HashSet::new();
+    let mut seen = crate::expr::AddrSet::default();
     let mut stack = vec![Arc::clone(plan)];
     let mut found = false;
     while let Some(p) = stack.pop() {
@@ -284,7 +285,7 @@ impl Inliner {
 /// The definitions the references under `plan` read (subquery plans
 /// included).
 fn collect_refs(plan: &Arc<LogicalPlan>, out: &mut HashSet<Vec<AttrId>>) {
-    let mut seen = HashSet::new();
+    let mut seen = crate::expr::AddrSet::default();
     let mut stack = vec![Arc::clone(plan)];
     while let Some(p) = stack.pop() {
         if !seen.insert(Arc::as_ptr(&p)) {

@@ -405,6 +405,7 @@ fn operator_abba(threads: usize, sizes: &[usize], reps: usize) {
                 io_threads: 1,
                 blocking_threads: threads,
                 io_blocking_threads: 2,
+                release_when_idle: true,
             })
             .expect("executor"),
         )

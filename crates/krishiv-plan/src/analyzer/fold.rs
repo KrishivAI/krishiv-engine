@@ -780,7 +780,8 @@ fn when(f: &ResolvedFunction, kids: Vec<Result<ArrayRef, KrishivError>>) -> Fold
 }
 
 /// The datetime functions the folder evaluates: the day arithmetic, the
-/// field functions and `extract`/`date_part`. Their results over dates
+/// date field functions (a precision such as `current_timestamp(dayofweek(DATE '1970-01-02'))`
+/// is folded, as Spark evaluates it) and `extract`/`date_part`. Their results over dates
 /// never read the session time zone; over timestamps they do, so those
 /// stay unfolded (checked at the call). The clock and session functions
 /// (`current_date`, `current_timestamp`, `localtimestamp`, `current_user`,
@@ -798,6 +799,11 @@ fn is_foldable_datetime(name: &str) -> bool {
             | "month"
             | "day"
             | "dayofmonth"
+            | "dayofweek"
+            | "weekday"
+            | "dayofyear"
+            | "quarter"
+            | "weekofyear"
             | "extract"
             | "date_part"
             | "datepart"

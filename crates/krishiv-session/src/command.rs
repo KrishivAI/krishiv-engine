@@ -272,7 +272,7 @@ impl Session {
                 .exists(&key, env.analysis.conf.case_sensitive)
         {
             return Err(TempTableOrViewAlreadyExists {
-                relation_name: shown,
+                relation_name: shown.clone(),
             }
             .into());
         }
@@ -358,16 +358,22 @@ impl Session {
         } else {
             Arc::clone(&df.plan)
         };
-        self.state.catalog.put(
-            &key,
-            TempTable::sql_view(
-                plan,
-                columns,
-                original
-                    .and_then(|o| o.get(v.query.span.start..v.query.span.end))
-                    .map(str::to_owned),
-            ),
+        let table = TempTable::sql_view(
+            plan,
+            columns,
+            original
+                .and_then(|o| o.get(v.query.span.start..v.query.span.end))
+                .map(str::to_owned),
         );
+        if v.or_replace {
+            self.state.catalog.put(&key, table);
+        } else if !self.state.catalog.put_new(&key, table, case_sensitive) {
+            // Another statement created the name while this one analyzed its query.
+            return Err(TempTableOrViewAlreadyExists {
+                relation_name: shown,
+            }
+            .into());
+        }
         self.state.cache.forget_table(&v.name.value);
         self.empty_frame().await
     }
@@ -1529,10 +1535,23 @@ impl Session {
             }
         } else {
             let (namespace, part) = self.stored_function_name(&f.name.parts)?;
-            self.state
+            let in_catalog = self
+                .state
                 .catalog
                 .store
-                .drop_function(&namespace, &part.value)
+                .drop_function(&namespace, &part.value);
+            // Not a SQL function of the catalog: a persisted Python UDF of the same name.
+            if in_catalog {
+                true
+            } else if f.name.parts.len() == 1
+                && let Some(hook) = self.persisted_functions()
+                && hook.exists(self, &part.value).await?
+            {
+                hook.remove(self, &part.value).await?;
+                true
+            } else {
+                false
+            }
         };
         if !dropped && !f.if_exists {
             let parts: Vec<String> = f.name.parts.iter().map(|p| quote(&p.value)).collect();
@@ -1955,6 +1974,7 @@ pub(crate) fn contains_subquery(e: &Expr) -> bool {
 
 mod drop_view;
 mod frames;
+mod persisted_function;
 
 #[cfg(test)]
 mod tests;

@@ -525,6 +525,13 @@ impl Session {
                     "bucketBy",
                 ));
             }
+            // The kernel's create writes no `description`, where delta-spark writes the comment.
+            if table.comment.is_some() {
+                return Err(super::delta::delta_write_refused(
+                    quoted(&table.namespace, &table.name),
+                    "CREATE TABLE ... COMMENT on a new Delta table",
+                ));
+            }
             // Version 0 of a new Delta table with the rows (design section 4.1, "CTAS").
             drop(pre.take());
             let source =
@@ -692,7 +699,7 @@ impl Session {
         };
         let external = t.location.is_some();
         let location = match &t.location {
-            Some(l) => PathBuf::from(l.strip_prefix("file:").unwrap_or(l)),
+            Some(l) => krishiv_exec::files::native_path(l),
             None => managed_location(&warehouse, &name.namespace, &name.name),
         };
         let table = CatalogTable {
@@ -1068,7 +1075,7 @@ impl Session {
         let by_path = match crate::access::ddl_parts(table, env)?.as_slice() {
             [format, path]
                 if format.eq_ignore_ascii_case("delta")
-                    && path.contains('/')
+                    && super::delta_writes::is_delta_path(path)
                     && self
                         .state
                         .catalog
@@ -1228,7 +1235,7 @@ pub(super) fn new_table_location(
             }
             .into());
         }
-        Some(l) => PathBuf::from(l.strip_prefix("file:").unwrap_or(l)),
+        Some(l) => krishiv_exec::files::native_path(l),
         None => managed_location(warehouse, &name.namespace, &name.name),
     };
     Ok((external, location))
