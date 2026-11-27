@@ -430,5 +430,1263 @@
    ],
    "error": null
   }
+ ],
+ "tolerance_nearest": [
+  {
+   "data": "main",
+   "how": "inner",
+   "direction": "nearest",
+   "allow_exact": true,
+   "keyed": true,
+   "left_value": "lt",
+   "right_value": "rt",
+   "tolerance": null,
+   "name": "nearest_inner_exact",
+   "rows": [
+    "x|10|3|x|9|104",
+    "x|1|1|x|1|101",
+    "x|5|2|x|5|103",
+    "y|4|4|y|6|105"
+   ],
+   "error": null
+  },
+  {
+   "data": "main",
+   "how": "inner",
+   "direction": "backward",
+   "allow_exact": true,
+   "keyed": true,
+   "left_value": "lt",
+   "right_value": "rt",
+   "tolerance": "0",
+   "name": "tolerance0_backward_inner_exact",
+   "rows": [
+    "x|1|1|x|1|101",
+    "x|5|2|x|5|103"
+   ],
+   "error": null
+  },
+  {
+   "data": "main",
+   "how": "inner",
+   "direction": "backward",
+   "allow_exact": true,
+   "keyed": true,
+   "left_value": "lt",
+   "right_value": "rt",
+   "tolerance": "1",
+   "name": "tolerance1_backward_inner_exact",
+   "rows": [
+    "x|10|3|x|9|104",
+    "x|1|1|x|1|101",
+    "x|5|2|x|5|103"
+   ],
+   "error": null
+  },
+  {
+   "data": "main",
+   "how": "inner",
+   "direction": "backward",
+   "allow_exact": true,
+   "keyed": true,
+   "left_value": "lt",
+   "right_value": "rt",
+   "tolerance": "2",
+   "name": "tolerance2_backward_inner_exact",
+   "rows": [
+    "x|10|3|x|9|104",
+    "x|1|1|x|1|101",
+    "x|5|2|x|5|103"
+   ],
+   "error": null
+  },
+  {
+   "data": "main",
+   "how": "inner",
+   "direction": "forward",
+   "allow_exact": true,
+   "keyed": true,
+   "left_value": "lt",
+   "right_value": "rt",
+   "tolerance": "0",
+   "name": "tolerance0_forward_inner_exact",
+   "rows": [
+    "x|1|1|x|1|101",
+    "x|5|2|x|5|103"
+   ],
+   "error": null
+  },
+  {
+   "data": "main",
+   "how": "inner",
+   "direction": "forward",
+   "allow_exact": true,
+   "keyed": true,
+   "left_value": "lt",
+   "right_value": "rt",
+   "tolerance": "1",
+   "name": "tolerance1_forward_inner_exact",
+   "rows": [
+    "x|1|1|x|1|101",
+    "x|5|2|x|5|103"
+   ],
+   "error": null
+  },
+  {
+   "data": "main",
+   "how": "inner",
+   "direction": "forward",
+   "allow_exact": true,
+   "keyed": true,
+   "left_value": "lt",
+   "right_value": "rt",
+   "tolerance": "2",
+   "name": "tolerance2_forward_inner_exact",
+   "rows": [
+    "x|1|1|x|1|101",
+    "x|5|2|x|5|103",
+    "y|4|4|y|6|105"
+   ],
+   "error": null
+  },
+  {
+   "data": "main",
+   "how": "inner",
+   "direction": "nearest",
+   "allow_exact": true,
+   "keyed": true,
+   "left_value": "lt",
+   "right_value": "rt",
+   "tolerance": "0",
+   "name": "tolerance0_nearest_inner_exact",
+   "rows": [
+    "x|1|1|x|1|101",
+    "x|5|2|x|5|103"
+   ],
+   "error": null
+  },
+  {
+   "data": "main",
+   "how": "inner",
+   "direction": "nearest",
+   "allow_exact": true,
+   "keyed": true,
+   "left_value": "lt",
+   "right_value": "rt",
+   "tolerance": "1",
+   "name": "tolerance1_nearest_inner_exact",
+   "rows": [
+    "x|10|3|x|9|104",
+    "x|1|1|x|1|101",
+    "x|5|2|x|5|103"
+   ],
+   "error": null
+  },
+  {
+   "data": "main",
+   "how": "inner",
+   "direction": "nearest",
+   "allow_exact": true,
+   "keyed": true,
+   "left_value": "lt",
+   "right_value": "rt",
+   "tolerance": "2",
+   "name": "tolerance2_nearest_inner_exact",
+   "rows": [
+    "x|10|3|x|9|104",
+    "x|1|1|x|1|101",
+    "x|5|2|x|5|103",
+    "y|4|4|y|6|105"
+   ],
+   "error": null
+  },
+  {
+   "data": "main",
+   "how": "inner",
+   "direction": "nearest",
+   "allow_exact": false,
+   "keyed": true,
+   "left_value": "lt",
+   "right_value": "rt",
+   "tolerance": null,
+   "name": "nearest_inner_strict",
+   "rows": [
+    "x|10|3|x|9|104",
+    "x|1|1|x|4|102",
+    "x|5|2|x|4|102",
+    "y|4|4|y|6|105"
+   ],
+   "error": null
+  },
+  {
+   "data": "main",
+   "how": "inner",
+   "direction": "backward",
+   "allow_exact": false,
+   "keyed": true,
+   "left_value": "lt",
+   "right_value": "rt",
+   "tolerance": "0",
+   "name": "tolerance0_backward_inner_strict",
+   "rows": [],
+   "error": null
+  },
+  {
+   "data": "main",
+   "how": "inner",
+   "direction": "backward",
+   "allow_exact": false,
+   "keyed": true,
+   "left_value": "lt",
+   "right_value": "rt",
+   "tolerance": "1",
+   "name": "tolerance1_backward_inner_strict",
+   "rows": [],
+   "error": null
+  },
+  {
+   "data": "main",
+   "how": "inner",
+   "direction": "backward",
+   "allow_exact": false,
+   "keyed": true,
+   "left_value": "lt",
+   "right_value": "rt",
+   "tolerance": "2",
+   "name": "tolerance2_backward_inner_strict",
+   "rows": [
+    "x|10|3|x|9|104",
+    "x|5|2|x|4|102"
+   ],
+   "error": null
+  },
+  {
+   "data": "main",
+   "how": "inner",
+   "direction": "forward",
+   "allow_exact": false,
+   "keyed": true,
+   "left_value": "lt",
+   "right_value": "rt",
+   "tolerance": "0",
+   "name": "tolerance0_forward_inner_strict",
+   "rows": [],
+   "error": null
+  },
+  {
+   "data": "main",
+   "how": "inner",
+   "direction": "forward",
+   "allow_exact": false,
+   "keyed": true,
+   "left_value": "lt",
+   "right_value": "rt",
+   "tolerance": "1",
+   "name": "tolerance1_forward_inner_strict",
+   "rows": [],
+   "error": null
+  },
+  {
+   "data": "main",
+   "how": "inner",
+   "direction": "forward",
+   "allow_exact": false,
+   "keyed": true,
+   "left_value": "lt",
+   "right_value": "rt",
+   "tolerance": "2",
+   "name": "tolerance2_forward_inner_strict",
+   "rows": [],
+   "error": null
+  },
+  {
+   "data": "main",
+   "how": "inner",
+   "direction": "nearest",
+   "allow_exact": false,
+   "keyed": true,
+   "left_value": "lt",
+   "right_value": "rt",
+   "tolerance": "0",
+   "name": "tolerance0_nearest_inner_strict",
+   "rows": [],
+   "error": null
+  },
+  {
+   "data": "main",
+   "how": "inner",
+   "direction": "nearest",
+   "allow_exact": false,
+   "keyed": true,
+   "left_value": "lt",
+   "right_value": "rt",
+   "tolerance": "1",
+   "name": "tolerance1_nearest_inner_strict",
+   "rows": [],
+   "error": null
+  },
+  {
+   "data": "main",
+   "how": "inner",
+   "direction": "nearest",
+   "allow_exact": false,
+   "keyed": true,
+   "left_value": "lt",
+   "right_value": "rt",
+   "tolerance": "2",
+   "name": "tolerance2_nearest_inner_strict",
+   "rows": [
+    "x|10|3|x|9|104",
+    "x|5|2|x|4|102"
+   ],
+   "error": null
+  },
+  {
+   "data": "main",
+   "how": "left",
+   "direction": "nearest",
+   "allow_exact": true,
+   "keyed": true,
+   "left_value": "lt",
+   "right_value": "rt",
+   "tolerance": null,
+   "name": "nearest_left_exact",
+   "rows": [
+    "NULL|3|6|NULL|NULL|NULL",
+    "x|10|3|x|9|104",
+    "x|1|1|x|1|101",
+    "x|5|2|x|5|103",
+    "x|NULL|5|NULL|NULL|NULL",
+    "y|4|4|y|6|105",
+    "z|7|7|NULL|NULL|NULL"
+   ],
+   "error": null
+  },
+  {
+   "data": "main",
+   "how": "left",
+   "direction": "backward",
+   "allow_exact": true,
+   "keyed": true,
+   "left_value": "lt",
+   "right_value": "rt",
+   "tolerance": "0",
+   "name": "tolerance0_backward_left_exact",
+   "rows": [
+    "NULL|3|6|NULL|NULL|NULL",
+    "x|10|3|NULL|NULL|NULL",
+    "x|1|1|x|1|101",
+    "x|5|2|x|5|103",
+    "x|NULL|5|NULL|NULL|NULL",
+    "y|4|4|NULL|NULL|NULL",
+    "z|7|7|NULL|NULL|NULL"
+   ],
+   "error": null
+  },
+  {
+   "data": "main",
+   "how": "left",
+   "direction": "backward",
+   "allow_exact": true,
+   "keyed": true,
+   "left_value": "lt",
+   "right_value": "rt",
+   "tolerance": "1",
+   "name": "tolerance1_backward_left_exact",
+   "rows": [
+    "NULL|3|6|NULL|NULL|NULL",
+    "x|10|3|x|9|104",
+    "x|1|1|x|1|101",
+    "x|5|2|x|5|103",
+    "x|NULL|5|NULL|NULL|NULL",
+    "y|4|4|NULL|NULL|NULL",
+    "z|7|7|NULL|NULL|NULL"
+   ],
+   "error": null
+  },
+  {
+   "data": "main",
+   "how": "left",
+   "direction": "backward",
+   "allow_exact": true,
+   "keyed": true,
+   "left_value": "lt",
+   "right_value": "rt",
+   "tolerance": "2",
+   "name": "tolerance2_backward_left_exact",
+   "rows": [
+    "NULL|3|6|NULL|NULL|NULL",
+    "x|10|3|x|9|104",
+    "x|1|1|x|1|101",
+    "x|5|2|x|5|103",
+    "x|NULL|5|NULL|NULL|NULL",
+    "y|4|4|NULL|NULL|NULL",
+    "z|7|7|NULL|NULL|NULL"
+   ],
+   "error": null
+  },
+  {
+   "data": "main",
+   "how": "left",
+   "direction": "forward",
+   "allow_exact": true,
+   "keyed": true,
+   "left_value": "lt",
+   "right_value": "rt",
+   "tolerance": "0",
+   "name": "tolerance0_forward_left_exact",
+   "rows": [
+    "NULL|3|6|NULL|NULL|NULL",
+    "x|10|3|NULL|NULL|NULL",
+    "x|1|1|x|1|101",
+    "x|5|2|x|5|103",
+    "x|NULL|5|NULL|NULL|NULL",
+    "y|4|4|NULL|NULL|NULL",
+    "z|7|7|NULL|NULL|NULL"
+   ],
+   "error": null
+  },
+  {
+   "data": "main",
+   "how": "left",
+   "direction": "forward",
+   "allow_exact": true,
+   "keyed": true,
+   "left_value": "lt",
+   "right_value": "rt",
+   "tolerance": "1",
+   "name": "tolerance1_forward_left_exact",
+   "rows": [
+    "NULL|3|6|NULL|NULL|NULL",
+    "x|10|3|NULL|NULL|NULL",
+    "x|1|1|x|1|101",
+    "x|5|2|x|5|103",
+    "x|NULL|5|NULL|NULL|NULL",
+    "y|4|4|NULL|NULL|NULL",
+    "z|7|7|NULL|NULL|NULL"
+   ],
+   "error": null
+  },
+  {
+   "data": "main",
+   "how": "left",
+   "direction": "forward",
+   "allow_exact": true,
+   "keyed": true,
+   "left_value": "lt",
+   "right_value": "rt",
+   "tolerance": "2",
+   "name": "tolerance2_forward_left_exact",
+   "rows": [
+    "NULL|3|6|NULL|NULL|NULL",
+    "x|10|3|NULL|NULL|NULL",
+    "x|1|1|x|1|101",
+    "x|5|2|x|5|103",
+    "x|NULL|5|NULL|NULL|NULL",
+    "y|4|4|y|6|105",
+    "z|7|7|NULL|NULL|NULL"
+   ],
+   "error": null
+  },
+  {
+   "data": "main",
+   "how": "left",
+   "direction": "nearest",
+   "allow_exact": true,
+   "keyed": true,
+   "left_value": "lt",
+   "right_value": "rt",
+   "tolerance": "0",
+   "name": "tolerance0_nearest_left_exact",
+   "rows": [
+    "NULL|3|6|NULL|NULL|NULL",
+    "x|10|3|NULL|NULL|NULL",
+    "x|1|1|x|1|101",
+    "x|5|2|x|5|103",
+    "x|NULL|5|NULL|NULL|NULL",
+    "y|4|4|NULL|NULL|NULL",
+    "z|7|7|NULL|NULL|NULL"
+   ],
+   "error": null
+  },
+  {
+   "data": "main",
+   "how": "left",
+   "direction": "nearest",
+   "allow_exact": true,
+   "keyed": true,
+   "left_value": "lt",
+   "right_value": "rt",
+   "tolerance": "1",
+   "name": "tolerance1_nearest_left_exact",
+   "rows": [
+    "NULL|3|6|NULL|NULL|NULL",
+    "x|10|3|x|9|104",
+    "x|1|1|x|1|101",
+    "x|5|2|x|5|103",
+    "x|NULL|5|NULL|NULL|NULL",
+    "y|4|4|NULL|NULL|NULL",
+    "z|7|7|NULL|NULL|NULL"
+   ],
+   "error": null
+  },
+  {
+   "data": "main",
+   "how": "left",
+   "direction": "nearest",
+   "allow_exact": true,
+   "keyed": true,
+   "left_value": "lt",
+   "right_value": "rt",
+   "tolerance": "2",
+   "name": "tolerance2_nearest_left_exact",
+   "rows": [
+    "NULL|3|6|NULL|NULL|NULL",
+    "x|10|3|x|9|104",
+    "x|1|1|x|1|101",
+    "x|5|2|x|5|103",
+    "x|NULL|5|NULL|NULL|NULL",
+    "y|4|4|y|6|105",
+    "z|7|7|NULL|NULL|NULL"
+   ],
+   "error": null
+  },
+  {
+   "data": "main",
+   "how": "left",
+   "direction": "nearest",
+   "allow_exact": false,
+   "keyed": true,
+   "left_value": "lt",
+   "right_value": "rt",
+   "tolerance": null,
+   "name": "nearest_left_strict",
+   "rows": [
+    "NULL|3|6|NULL|NULL|NULL",
+    "x|10|3|x|9|104",
+    "x|1|1|x|4|102",
+    "x|5|2|x|4|102",
+    "x|NULL|5|NULL|NULL|NULL",
+    "y|4|4|y|6|105",
+    "z|7|7|NULL|NULL|NULL"
+   ],
+   "error": null
+  },
+  {
+   "data": "main",
+   "how": "left",
+   "direction": "backward",
+   "allow_exact": false,
+   "keyed": true,
+   "left_value": "lt",
+   "right_value": "rt",
+   "tolerance": "0",
+   "name": "tolerance0_backward_left_strict",
+   "rows": [
+    "NULL|3|6|NULL|NULL|NULL",
+    "x|10|3|NULL|NULL|NULL",
+    "x|1|1|NULL|NULL|NULL",
+    "x|5|2|NULL|NULL|NULL",
+    "x|NULL|5|NULL|NULL|NULL",
+    "y|4|4|NULL|NULL|NULL",
+    "z|7|7|NULL|NULL|NULL"
+   ],
+   "error": null
+  },
+  {
+   "data": "main",
+   "how": "left",
+   "direction": "backward",
+   "allow_exact": false,
+   "keyed": true,
+   "left_value": "lt",
+   "right_value": "rt",
+   "tolerance": "1",
+   "name": "tolerance1_backward_left_strict",
+   "rows": [
+    "NULL|3|6|NULL|NULL|NULL",
+    "x|10|3|NULL|NULL|NULL",
+    "x|1|1|NULL|NULL|NULL",
+    "x|5|2|NULL|NULL|NULL",
+    "x|NULL|5|NULL|NULL|NULL",
+    "y|4|4|NULL|NULL|NULL",
+    "z|7|7|NULL|NULL|NULL"
+   ],
+   "error": null
+  },
+  {
+   "data": "main",
+   "how": "left",
+   "direction": "backward",
+   "allow_exact": false,
+   "keyed": true,
+   "left_value": "lt",
+   "right_value": "rt",
+   "tolerance": "2",
+   "name": "tolerance2_backward_left_strict",
+   "rows": [
+    "NULL|3|6|NULL|NULL|NULL",
+    "x|10|3|x|9|104",
+    "x|1|1|NULL|NULL|NULL",
+    "x|5|2|x|4|102",
+    "x|NULL|5|NULL|NULL|NULL",
+    "y|4|4|NULL|NULL|NULL",
+    "z|7|7|NULL|NULL|NULL"
+   ],
+   "error": null
+  },
+  {
+   "data": "main",
+   "how": "left",
+   "direction": "forward",
+   "allow_exact": false,
+   "keyed": true,
+   "left_value": "lt",
+   "right_value": "rt",
+   "tolerance": "0",
+   "name": "tolerance0_forward_left_strict",
+   "rows": [
+    "NULL|3|6|NULL|NULL|NULL",
+    "x|10|3|NULL|NULL|NULL",
+    "x|1|1|NULL|NULL|NULL",
+    "x|5|2|NULL|NULL|NULL",
+    "x|NULL|5|NULL|NULL|NULL",
+    "y|4|4|NULL|NULL|NULL",
+    "z|7|7|NULL|NULL|NULL"
+   ],
+   "error": null
+  },
+  {
+   "data": "main",
+   "how": "left",
+   "direction": "forward",
+   "allow_exact": false,
+   "keyed": true,
+   "left_value": "lt",
+   "right_value": "rt",
+   "tolerance": "1",
+   "name": "tolerance1_forward_left_strict",
+   "rows": [
+    "NULL|3|6|NULL|NULL|NULL",
+    "x|10|3|NULL|NULL|NULL",
+    "x|1|1|NULL|NULL|NULL",
+    "x|5|2|NULL|NULL|NULL",
+    "x|NULL|5|NULL|NULL|NULL",
+    "y|4|4|NULL|NULL|NULL",
+    "z|7|7|NULL|NULL|NULL"
+   ],
+   "error": null
+  },
+  {
+   "data": "main",
+   "how": "left",
+   "direction": "forward",
+   "allow_exact": false,
+   "keyed": true,
+   "left_value": "lt",
+   "right_value": "rt",
+   "tolerance": "2",
+   "name": "tolerance2_forward_left_strict",
+   "rows": [
+    "NULL|3|6|NULL|NULL|NULL",
+    "x|10|3|NULL|NULL|NULL",
+    "x|1|1|NULL|NULL|NULL",
+    "x|5|2|NULL|NULL|NULL",
+    "x|NULL|5|NULL|NULL|NULL",
+    "y|4|4|NULL|NULL|NULL",
+    "z|7|7|NULL|NULL|NULL"
+   ],
+   "error": null
+  },
+  {
+   "data": "main",
+   "how": "left",
+   "direction": "nearest",
+   "allow_exact": false,
+   "keyed": true,
+   "left_value": "lt",
+   "right_value": "rt",
+   "tolerance": "0",
+   "name": "tolerance0_nearest_left_strict",
+   "rows": [
+    "NULL|3|6|NULL|NULL|NULL",
+    "x|10|3|NULL|NULL|NULL",
+    "x|1|1|NULL|NULL|NULL",
+    "x|5|2|NULL|NULL|NULL",
+    "x|NULL|5|NULL|NULL|NULL",
+    "y|4|4|NULL|NULL|NULL",
+    "z|7|7|NULL|NULL|NULL"
+   ],
+   "error": null
+  },
+  {
+   "data": "main",
+   "how": "left",
+   "direction": "nearest",
+   "allow_exact": false,
+   "keyed": true,
+   "left_value": "lt",
+   "right_value": "rt",
+   "tolerance": "1",
+   "name": "tolerance1_nearest_left_strict",
+   "rows": [
+    "NULL|3|6|NULL|NULL|NULL",
+    "x|10|3|NULL|NULL|NULL",
+    "x|1|1|NULL|NULL|NULL",
+    "x|5|2|NULL|NULL|NULL",
+    "x|NULL|5|NULL|NULL|NULL",
+    "y|4|4|NULL|NULL|NULL",
+    "z|7|7|NULL|NULL|NULL"
+   ],
+   "error": null
+  },
+  {
+   "data": "main",
+   "how": "left",
+   "direction": "nearest",
+   "allow_exact": false,
+   "keyed": true,
+   "left_value": "lt",
+   "right_value": "rt",
+   "tolerance": "2",
+   "name": "tolerance2_nearest_left_strict",
+   "rows": [
+    "NULL|3|6|NULL|NULL|NULL",
+    "x|10|3|x|9|104",
+    "x|1|1|NULL|NULL|NULL",
+    "x|5|2|x|4|102",
+    "x|NULL|5|NULL|NULL|NULL",
+    "y|4|4|NULL|NULL|NULL",
+    "z|7|7|NULL|NULL|NULL"
+   ],
+   "error": null
+  },
+  {
+   "data": "main",
+   "how": "inner",
+   "direction": "nearest",
+   "allow_exact": true,
+   "keyed": false,
+   "left_value": "lt",
+   "right_value": "rt",
+   "tolerance": null,
+   "name": "nearest_no_key",
+   "rows": [
+    "NULL|3|6|NULL|3|107",
+    "x|10|3|x|9|104",
+    "x|1|1|x|1|101",
+    "x|5|2|x|5|103",
+    "y|4|4|x|4|102",
+    "z|7|7|y|6|105"
+   ],
+   "error": null
+  },
+  {
+   "data": "main",
+   "how": "left",
+   "direction": "nearest",
+   "allow_exact": false,
+   "keyed": false,
+   "left_value": "lt",
+   "right_value": "rt",
+   "tolerance": "1",
+   "name": "nearest_no_key_left_strict_tolerance1",
+   "rows": [
+    "NULL|3|6|NULL|NULL|NULL",
+    "x|10|3|NULL|NULL|NULL",
+    "x|1|1|NULL|NULL|NULL",
+    "x|5|2|NULL|NULL|NULL",
+    "x|NULL|5|NULL|NULL|NULL",
+    "y|4|4|NULL|NULL|NULL",
+    "z|7|7|NULL|NULL|NULL"
+   ],
+   "error": null
+  },
+  {
+   "data": "main",
+   "how": "left",
+   "direction": "backward",
+   "allow_exact": true,
+   "keyed": true,
+   "left_value": "lt",
+   "right_value": "rt",
+   "tolerance": "1 + 1",
+   "name": "tolerance_folded_expression",
+   "rows": [
+    "NULL|3|6|NULL|NULL|NULL",
+    "x|10|3|x|9|104",
+    "x|1|1|x|1|101",
+    "x|5|2|x|5|103",
+    "x|NULL|5|NULL|NULL|NULL",
+    "y|4|4|NULL|NULL|NULL",
+    "z|7|7|NULL|NULL|NULL"
+   ],
+   "error": null
+  },
+  {
+   "data": "main",
+   "how": "left",
+   "direction": "forward",
+   "allow_exact": true,
+   "keyed": true,
+   "left_value": "lt",
+   "right_value": "rt",
+   "tolerance": "CAST(2 AS BIGINT)",
+   "name": "tolerance_bigint",
+   "rows": [
+    "NULL|3|6|NULL|NULL|NULL",
+    "x|10|3|NULL|NULL|NULL",
+    "x|1|1|x|1|101",
+    "x|5|2|x|5|103",
+    "x|NULL|5|NULL|NULL|NULL",
+    "y|4|4|y|6|105",
+    "z|7|7|NULL|NULL|NULL"
+   ],
+   "error": null
+  },
+  {
+   "data": "main",
+   "how": "left",
+   "direction": "nearest",
+   "allow_exact": true,
+   "keyed": true,
+   "left_value": "lt",
+   "right_value": "rt",
+   "tolerance": "2.5",
+   "name": "tolerance_decimal",
+   "rows": [
+    "NULL|3|6|NULL|NULL|NULL",
+    "x|10|3|x|9|104",
+    "x|1|1|x|1|101",
+    "x|5|2|x|5|103",
+    "x|NULL|5|NULL|NULL|NULL",
+    "y|4|4|y|6|105",
+    "z|7|7|NULL|NULL|NULL"
+   ],
+   "error": null
+  },
+  {
+   "data": "main",
+   "how": "left",
+   "direction": "backward",
+   "allow_exact": true,
+   "keyed": true,
+   "left_value": "lt",
+   "right_value": "rt",
+   "tolerance": "CAST(NULL AS INT)",
+   "name": "tolerance_null",
+   "rows": null,
+   "error": "AS_OF_JOIN.TOLERANCE_IS_NON_NEGATIVE",
+   "message": "[AS_OF_JOIN.TOLERANCE_IS_NON_NEGATIVE] Invalid as-of join. The input argument `tolerance` must be non-negative."
+  },
+  {
+   "data": "main",
+   "how": "inner",
+   "direction": "backward",
+   "allow_exact": true,
+   "keyed": true,
+   "left_value": "lt",
+   "right_value": "rt",
+   "tolerance": "-1",
+   "name": "tolerance_negative",
+   "rows": null,
+   "error": "AS_OF_JOIN.TOLERANCE_IS_NON_NEGATIVE",
+   "message": "[AS_OF_JOIN.TOLERANCE_IS_NON_NEGATIVE] Invalid as-of join. The input argument `tolerance` must be non-negative."
+  },
+  {
+   "data": "main",
+   "how": "inner",
+   "direction": "forward",
+   "allow_exact": true,
+   "keyed": true,
+   "left_value": "lt",
+   "right_value": "rt",
+   "tolerance": "1 - 3",
+   "name": "tolerance_negative_folded",
+   "rows": null,
+   "error": "AS_OF_JOIN.TOLERANCE_IS_NON_NEGATIVE",
+   "message": "[AS_OF_JOIN.TOLERANCE_IS_NON_NEGATIVE] Invalid as-of join. The input argument `tolerance` must be non-negative."
+  },
+  {
+   "data": "main",
+   "how": "inner",
+   "direction": "backward",
+   "allow_exact": true,
+   "keyed": true,
+   "left_value": "lt",
+   "right_value": "rt",
+   "tolerance": "lt",
+   "name": "tolerance_column",
+   "rows": null,
+   "error": "INTERNAL_ERROR",
+   "message": "[INTERNAL_ERROR] Invalid call to dataType on unresolved object"
+  },
+  {
+   "data": "main",
+   "how": "inner",
+   "direction": "backward",
+   "allow_exact": true,
+   "keyed": true,
+   "left_value": "lt",
+   "right_value": "rt",
+   "tolerance": "left.lt (resolved, classic API only; Connect sends it unresolved: INTERNAL_ERROR)",
+   "name": "tolerance_resolved_column",
+   "rows": null,
+   "error": "AS_OF_JOIN.TOLERANCE_IS_UNFOLDABLE",
+   "message": "[AS_OF_JOIN.TOLERANCE_IS_UNFOLDABLE] Invalid as-of join. The input argument `tolerance` must be a constant."
+  },
+  {
+   "data": "main",
+   "how": "inner",
+   "direction": "backward",
+   "allow_exact": true,
+   "keyed": true,
+   "left_value": "lt",
+   "right_value": "rt",
+   "tolerance": "CAST(rand() * 0 AS INT)",
+   "name": "tolerance_nondeterministic",
+   "rows": null,
+   "error": "AS_OF_JOIN.TOLERANCE_IS_UNFOLDABLE",
+   "message": "[AS_OF_JOIN.TOLERANCE_IS_UNFOLDABLE] Invalid as-of join. The input argument `tolerance` must be a constant."
+  },
+  {
+   "data": "main",
+   "how": "left",
+   "direction": "backward",
+   "allow_exact": true,
+   "keyed": true,
+   "left_value": "CAST(NULL AS INT)",
+   "right_value": "rt",
+   "tolerance": null,
+   "name": "null_left_operand_backward",
+   "rows": [
+    "NULL|3|6|NULL|NULL|NULL",
+    "x|10|3|NULL|NULL|NULL",
+    "x|1|1|NULL|NULL|NULL",
+    "x|5|2|NULL|NULL|NULL",
+    "x|NULL|5|NULL|NULL|NULL",
+    "y|4|4|NULL|NULL|NULL",
+    "z|7|7|NULL|NULL|NULL"
+   ],
+   "error": null
+  },
+  {
+   "data": "main",
+   "how": "left",
+   "direction": "backward",
+   "allow_exact": true,
+   "keyed": true,
+   "left_value": "lt",
+   "right_value": "CAST(NULL AS INT)",
+   "tolerance": null,
+   "name": "null_right_operand_backward",
+   "rows": [
+    "NULL|3|6|NULL|NULL|NULL",
+    "x|10|3|NULL|NULL|NULL",
+    "x|1|1|NULL|NULL|NULL",
+    "x|5|2|NULL|NULL|NULL",
+    "x|NULL|5|NULL|NULL|NULL",
+    "y|4|4|NULL|NULL|NULL",
+    "z|7|7|NULL|NULL|NULL"
+   ],
+   "error": null
+  },
+  {
+   "data": "main",
+   "how": "left",
+   "direction": "forward",
+   "allow_exact": true,
+   "keyed": true,
+   "left_value": "CAST(NULL AS INT)",
+   "right_value": "rt",
+   "tolerance": null,
+   "name": "null_left_operand_forward",
+   "rows": [
+    "NULL|3|6|NULL|NULL|NULL",
+    "x|10|3|NULL|NULL|NULL",
+    "x|1|1|NULL|NULL|NULL",
+    "x|5|2|NULL|NULL|NULL",
+    "x|NULL|5|NULL|NULL|NULL",
+    "y|4|4|NULL|NULL|NULL",
+    "z|7|7|NULL|NULL|NULL"
+   ],
+   "error": null
+  },
+  {
+   "data": "main",
+   "how": "left",
+   "direction": "forward",
+   "allow_exact": true,
+   "keyed": true,
+   "left_value": "lt",
+   "right_value": "CAST(NULL AS INT)",
+   "tolerance": null,
+   "name": "null_right_operand_forward",
+   "rows": [
+    "NULL|3|6|NULL|NULL|NULL",
+    "x|10|3|NULL|NULL|NULL",
+    "x|1|1|NULL|NULL|NULL",
+    "x|5|2|NULL|NULL|NULL",
+    "x|NULL|5|NULL|NULL|NULL",
+    "y|4|4|NULL|NULL|NULL",
+    "z|7|7|NULL|NULL|NULL"
+   ],
+   "error": null
+  },
+  {
+   "data": "main",
+   "how": "left",
+   "direction": "nearest",
+   "allow_exact": true,
+   "keyed": true,
+   "left_value": "CAST(NULL AS INT)",
+   "right_value": "rt",
+   "tolerance": null,
+   "name": "null_left_operand_nearest",
+   "rows": [
+    "NULL|3|6|NULL|NULL|NULL",
+    "x|10|3|NULL|NULL|NULL",
+    "x|1|1|NULL|NULL|NULL",
+    "x|5|2|NULL|NULL|NULL",
+    "x|NULL|5|NULL|NULL|NULL",
+    "y|4|4|NULL|NULL|NULL",
+    "z|7|7|NULL|NULL|NULL"
+   ],
+   "error": null
+  },
+  {
+   "data": "main",
+   "how": "left",
+   "direction": "nearest",
+   "allow_exact": true,
+   "keyed": true,
+   "left_value": "lt",
+   "right_value": "CAST(NULL AS INT)",
+   "tolerance": null,
+   "name": "null_right_operand_nearest",
+   "rows": [
+    "NULL|3|6|NULL|NULL|NULL",
+    "x|10|3|NULL|NULL|NULL",
+    "x|1|1|NULL|NULL|NULL",
+    "x|5|2|NULL|NULL|NULL",
+    "x|NULL|5|NULL|NULL|NULL",
+    "y|4|4|NULL|NULL|NULL",
+    "z|7|7|NULL|NULL|NULL"
+   ],
+   "error": null
+  },
+  {
+   "data": "main",
+   "how": "left",
+   "direction": "backward",
+   "allow_exact": true,
+   "keyed": true,
+   "left_value": "NULL",
+   "right_value": "NULL",
+   "tolerance": null,
+   "name": "null_both_operands",
+   "rows": [
+    "NULL|3|6|NULL|NULL|NULL",
+    "x|10|3|NULL|NULL|NULL",
+    "x|1|1|NULL|NULL|NULL",
+    "x|5|2|NULL|NULL|NULL",
+    "x|NULL|5|NULL|NULL|NULL",
+    "y|4|4|NULL|NULL|NULL",
+    "z|7|7|NULL|NULL|NULL"
+   ],
+   "error": null
+  },
+  {
+   "data": "timestamp",
+   "how": "left",
+   "direction": "backward",
+   "allow_exact": true,
+   "keyed": true,
+   "left_value": "lt",
+   "right_value": "rt",
+   "tolerance": "INTERVAL 2 SECONDS",
+   "name": "timestamp_backward_2s",
+   "rows": [
+    "x|2026-01-01 00:00:05|1|x|2026-01-01 00:00:03|101",
+    "x|2026-01-01 00:00:20|2|NULL|NULL|NULL",
+    "y|2026-01-01 00:00:09|3|NULL|NULL|NULL"
+   ],
+   "error": null
+  },
+  {
+   "data": "timestamp",
+   "how": "left",
+   "direction": "backward",
+   "allow_exact": true,
+   "keyed": true,
+   "left_value": "lt",
+   "right_value": "rt",
+   "tolerance": "INTERVAL 3 SECONDS",
+   "name": "timestamp_backward_3s",
+   "rows": [
+    "x|2026-01-01 00:00:05|1|x|2026-01-01 00:00:03|101",
+    "x|2026-01-01 00:00:20|2|NULL|NULL|NULL",
+    "y|2026-01-01 00:00:09|3|NULL|NULL|NULL"
+   ],
+   "error": null
+  },
+  {
+   "data": "timestamp",
+   "how": "left",
+   "direction": "forward",
+   "allow_exact": true,
+   "keyed": true,
+   "left_value": "lt",
+   "right_value": "rt",
+   "tolerance": "INTERVAL 2 SECONDS",
+   "name": "timestamp_forward_2s",
+   "rows": [
+    "x|2026-01-01 00:00:05|1|NULL|NULL|NULL",
+    "x|2026-01-01 00:00:20|2|NULL|NULL|NULL",
+    "y|2026-01-01 00:00:09|3|y|2026-01-01 00:00:10|103"
+   ],
+   "error": null
+  },
+  {
+   "data": "timestamp",
+   "how": "left",
+   "direction": "forward",
+   "allow_exact": true,
+   "keyed": true,
+   "left_value": "lt",
+   "right_value": "rt",
+   "tolerance": "INTERVAL 3 SECONDS",
+   "name": "timestamp_forward_3s",
+   "rows": [
+    "x|2026-01-01 00:00:05|1|x|2026-01-01 00:00:08|102",
+    "x|2026-01-01 00:00:20|2|NULL|NULL|NULL",
+    "y|2026-01-01 00:00:09|3|y|2026-01-01 00:00:10|103"
+   ],
+   "error": null
+  },
+  {
+   "data": "timestamp",
+   "how": "left",
+   "direction": "nearest",
+   "allow_exact": true,
+   "keyed": true,
+   "left_value": "lt",
+   "right_value": "rt",
+   "tolerance": "INTERVAL 2 SECONDS",
+   "name": "timestamp_nearest_2s",
+   "rows": [
+    "x|2026-01-01 00:00:05|1|x|2026-01-01 00:00:03|101",
+    "x|2026-01-01 00:00:20|2|NULL|NULL|NULL",
+    "y|2026-01-01 00:00:09|3|y|2026-01-01 00:00:10|103"
+   ],
+   "error": null
+  },
+  {
+   "data": "timestamp",
+   "how": "left",
+   "direction": "nearest",
+   "allow_exact": true,
+   "keyed": true,
+   "left_value": "lt",
+   "right_value": "rt",
+   "tolerance": "INTERVAL 3 SECONDS",
+   "name": "timestamp_nearest_3s",
+   "rows": [
+    "x|2026-01-01 00:00:05|1|x|2026-01-01 00:00:03|101",
+    "x|2026-01-01 00:00:20|2|NULL|NULL|NULL",
+    "y|2026-01-01 00:00:09|3|y|2026-01-01 00:00:10|103"
+   ],
+   "error": null
+  },
+  {
+   "data": "timestamp",
+   "how": "inner",
+   "direction": "backward",
+   "allow_exact": true,
+   "keyed": true,
+   "left_value": "lt",
+   "right_value": "rt",
+   "tolerance": "2",
+   "name": "timestamp_int_tolerance",
+   "rows": null,
+   "error": "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
+   "message": "[DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE] Cannot resolve \"(lt - 2)\" due to data type mismatch: The second parameter requires the (\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\" or \"(TIMESTAMP_LTZ(P) OR TIMESTAMP_NTZ(P) WITH P IN [7, 9])\") type, however \"2\" has the type \"INT\"."
+  },
+  {
+   "data": {
+    "left": [
+     [
+      5,
+      1
+     ]
+    ],
+    "right": [
+     [
+      3,
+      100
+     ],
+     [
+      7,
+      101
+     ]
+    ]
+   },
+   "how": "inner",
+   "direction": "nearest",
+   "allow_exact": true,
+   "keyed": false,
+   "left_value": "lt",
+   "right_value": "rt",
+   "tolerance": null,
+   "candidates": [
+    "5|1|3|100",
+    "5|1|7|101"
+   ],
+   "name": "tie_between_lower_and_higher",
+   "rows": [
+    "5|1|7|101"
+   ],
+   "error": null
+  },
+  {
+   "data": {
+    "left": [
+     [
+      5,
+      1
+     ]
+    ],
+    "right": [
+     [
+      5,
+      100
+     ],
+     [
+      5,
+      101
+     ],
+     [
+      9,
+      102
+     ]
+    ]
+   },
+   "how": "inner",
+   "direction": "nearest",
+   "allow_exact": true,
+   "keyed": false,
+   "left_value": "lt",
+   "right_value": "rt",
+   "tolerance": null,
+   "candidates": [
+    "5|1|5|100",
+    "5|1|5|101"
+   ],
+   "name": "tie_with_exact",
+   "rows": [
+    "5|1|5|101"
+   ],
+   "error": null
+  }
  ]
 }
