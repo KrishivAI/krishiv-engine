@@ -379,6 +379,19 @@ impl SessionPython {
         }
     }
 
+    /// The principal that stored the tenant's function `name`; `None` when there is none or the server has no
+    /// function catalog.
+    ///
+    /// # Errors
+    /// The catalog's failure.
+    pub(crate) async fn stored_owner(&self, name: &str) -> Result<Option<String>, KrishivError> {
+        let Some(store) = self.store.clone() else {
+            return Ok(None);
+        };
+        let (key, name) = (self.store_key(), name.to_owned());
+        blocking(move || store.owner(key.as_deref(), &name)).await
+    }
+
     /// `PersistPythonFunction`: keeps the session's registered UDF `name` for the tenant, or removes the tenant's
     /// stored one (`drop`).
     ///
@@ -734,3 +747,44 @@ impl TranslateHost for InlineUdfs<'_> {
 
 #[cfg(test)]
 mod tests;
+
+/// The session's persisted-function hook (P3-T072d): SQL `CREATE FUNCTION ... USING PYTHON` and `DROP FUNCTION`
+/// over the same catalog and checks as the `PersistPythonFunction` command.
+pub(crate) struct SqlPersist(pub(crate) Arc<SessionPython>);
+
+impl krishiv_session::PersistedFunctions for SqlPersist {
+    fn persist<'a>(
+        &'a self,
+        session: &'a Session,
+        registered: &'a str,
+    ) -> futures::future::BoxFuture<'a, Result<(), KrishivError>> {
+        Box::pin(async move {
+            crate::auth::enforce(&crate::auth::client_code(), session).await?;
+            self.0.persist(session, registered, false).await
+        })
+    }
+
+    fn exists<'a>(
+        &'a self,
+        session: &'a Session,
+        name: &'a str,
+    ) -> futures::future::BoxFuture<'a, Result<bool, KrishivError>> {
+        // No privilege check: a name that is no stored function is `ROUTINE_NOT_FOUND` for every caller, and
+        // `DROP` was checked by the statement already.
+        Box::pin(async move {
+            let _ = session;
+            self.0.stored_owner(name).await.map(|o| o.is_some())
+        })
+    }
+
+    fn remove<'a>(
+        &'a self,
+        session: &'a Session,
+        name: &'a str,
+    ) -> futures::future::BoxFuture<'a, Result<(), KrishivError>> {
+        Box::pin(async move {
+            crate::auth::enforce(&crate::auth::client_code(), session).await?;
+            self.0.persist(session, name, true).await
+        })
+    }
+}

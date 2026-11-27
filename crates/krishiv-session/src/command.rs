@@ -1538,10 +1538,23 @@ impl Session {
             }
         } else {
             let (namespace, part) = self.stored_function_name(&f.name.parts)?;
-            self.state
+            let in_catalog = self
+                .state
                 .catalog
                 .store
-                .drop_function(&namespace, &part.value)
+                .drop_function(&namespace, &part.value);
+            // Not a SQL function of the catalog: a persisted Python UDF of the same name.
+            if in_catalog {
+                true
+            } else if f.name.parts.len() == 1
+                && let Some(hook) = self.persisted_functions()
+                && hook.exists(self, &part.value).await?
+            {
+                hook.remove(self, &part.value).await?;
+                true
+            } else {
+                false
+            }
         };
         if !dropped && !f.if_exists {
             let parts: Vec<String> = f.name.parts.iter().map(|p| quote(&p.value)).collect();
@@ -1987,6 +2000,7 @@ pub(crate) fn contains_subquery(e: &Expr) -> bool {
 
 mod drop_view;
 mod frames;
+mod persisted_function;
 
 #[cfg(test)]
 mod tests;
