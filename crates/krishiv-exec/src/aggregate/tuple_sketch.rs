@@ -345,7 +345,7 @@ impl<V: Value> Acc<V> {
         &mut self,
         groups: &[u32],
         key: &ArrayRef,
-        summary: &dyn Fn(usize) -> Option<V>,
+        summary: &impl Fn(usize) -> Option<V>,
         valid: &impl Fn(usize) -> bool,
     ) -> Result<()> {
         macro_rules! each {
@@ -509,46 +509,21 @@ impl<V: Value> Acc<V> {
     }
 }
 
-/// The summary column of `tuple_sketch_agg_double`, read as `f64`.
-fn double_summaries(arg: &ArrayRef) -> Result<Box<dyn Fn(usize) -> Option<f64> + '_>> {
-    let any = arg.as_any();
-    if let Some(a) = any.downcast_ref::<Float64Array>() {
-        Ok(Box::new(move |i| (!a.is_null(i)).then(|| a.value(i))))
-    } else if let Some(a) = any.downcast_ref::<Float32Array>() {
-        Ok(Box::new(move |i| {
-            (!a.is_null(i)).then(|| f64::from(a.value(i)))
-        }))
-    } else if let Some(a) = any.downcast_ref::<Int32Array>() {
-        Ok(Box::new(move |i| {
-            (!a.is_null(i)).then(|| f64::from(a.value(i)))
-        }))
-    } else {
-        Err(internal(format!(
-            "a Tuple summary over {:?}",
-            arg.data_type()
-        )))
-    }
-}
-
-/// The summary column of `tuple_sketch_agg_integer`, read as `i32`.
-fn integer_summaries(arg: &ArrayRef) -> Result<Box<dyn Fn(usize) -> Option<i32> + '_>> {
-    let any = arg.as_any();
-    if let Some(a) = any.downcast_ref::<Int32Array>() {
-        Ok(Box::new(move |i| (!a.is_null(i)).then(|| a.value(i))))
-    } else if let Some(a) = any.downcast_ref::<Int16Array>() {
-        Ok(Box::new(move |i| {
-            (!a.is_null(i)).then(|| i32::from(a.value(i)))
-        }))
-    } else if let Some(a) = any.downcast_ref::<Int8Array>() {
-        Ok(Box::new(move |i| {
-            (!a.is_null(i)).then(|| i32::from(a.value(i)))
-        }))
-    } else {
-        Err(internal(format!(
-            "a Tuple summary over {:?}",
-            arg.data_type()
-        )))
-    }
+/// Runs `$body` with `$read`, the reader of the summary column `$arg` (one closure type per array type, so the row loop
+/// does not dispatch dynamically), for each of the `$ty` -> `$conv` array types.
+macro_rules! with_summaries {
+    ($arg:expr, $read:ident, $body:expr, $($ty:ty => $conv:expr),+ $(,)?) => {{
+        let any = $arg.as_any();
+        $(
+            if let Some(a) = any.downcast_ref::<$ty>() {
+                let $read = move |i: usize| (!a.is_null(i)).then(|| $conv(a.value(i)));
+                $body
+            } else
+        )+
+        {
+            Err(internal(format!("a Tuple summary over {:?}", $arg.data_type())))
+        }
+    }};
 }
 
 /// The per-group Tuple states of one aggregate (`_double` or `_integer` summaries).
@@ -623,13 +598,25 @@ impl TupleSketchAcc {
         }
         match (self, args) {
             (Self::Double(a), [key, summary]) if !a.takes_sketches() => {
-                let s = double_summaries(summary)?;
-                a.update_keys(groups, key, &*s, &valid)?;
+                with_summaries!(
+                    summary,
+                    read,
+                    a.update_keys(groups, key, &read, &valid),
+                    Float64Array => |v| v,
+                    Float32Array => f64::from,
+                    Int32Array => f64::from,
+                )?;
                 a.recharge(groups);
             }
             (Self::Integer(a), [key, summary]) if !a.takes_sketches() => {
-                let s = integer_summaries(summary)?;
-                a.update_keys(groups, key, &*s, &valid)?;
+                with_summaries!(
+                    summary,
+                    read,
+                    a.update_keys(groups, key, &read, &valid),
+                    Int32Array => |v| v,
+                    Int16Array => i32::from,
+                    Int8Array => i32::from,
+                )?;
                 a.recharge(groups);
             }
             (Self::Double(a), [sketches]) if a.takes_sketches() => {
