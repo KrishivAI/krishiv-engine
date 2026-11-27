@@ -635,7 +635,8 @@ impl FileReads {
         };
         let merge = self.merges_schemas(format.name(), options);
         let ignore_invalid_partition_paths = self.ignores_invalid_partition_paths(options);
-        let (options, _) = format.options().parse(options, &self.session)?;
+        let given = format.options().without_session_confs(options);
+        let (options, _) = format.options().parse(&given, &self.session)?;
         // A read's layout is checked per leaf directory as Spark's partition discovery checks it; files
         // beside its partition directories are not read. A catalog table's listing kept its own files.
         // The data schema is still inferred from every listed file, as Spark's `allFiles()` keeps the

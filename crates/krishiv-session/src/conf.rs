@@ -49,7 +49,8 @@ pub(crate) struct ConfStore {
 /// v4.1.0; `true` at v4.2.0).
 fn profile_default(entry: &ConfigEntry, profile: SparkProfile) -> Option<ConfigValue> {
     let before_4_2 = profile < SparkProfile::V4_2;
-    // Spark 4.2 reads every `TIME` of a CSV or JSON file as microseconds; 4.3 keeps nanoseconds.
+    // Spark 4.2 reads a `TIME` of a CSV or JSON file in the default grammar as microseconds; 4.3 keeps
+    // nanoseconds (a `timeFormat` pattern keeps every digit in both).
     let before_4_3 = profile < SparkProfile::V4_3;
     ((entry.key == PYTHON_UDTF_ARROW_ENABLED.key && before_4_2)
         || (entry.key == IO_TEXT_TIME_NANOS.key && before_4_3))

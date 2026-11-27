@@ -312,16 +312,14 @@ pub(crate) const INFER_DATES_CSV: &str = "id,t\n0,2024-01-15\n1,2024-02-01\n";
 pub(crate) const INFER_JSON: &str =
     "{\"id\":0,\"t\":\"12:34:56\"}\n{\"id\":1,\"t\":\"01:02:03.5\"}\n{\"id\":2,\"t\":null}\n";
 
-/// Spark's simple name of column `t`'s inferred Arrow type.
+/// Spark's simple name of column `t`'s inferred type: the logical type of the
+/// field (its metadata too, so a `TIME(3)` carrier tag or a timestamp's zone
+/// counts), as `simple_string` prints it.
 pub(crate) fn inferred_t(schema: &SchemaRef) -> String {
     let f = schema.field_with_name("t").expect("column t");
-    match f.data_type() {
-        DataType::Time64(_) => "time(6)".to_owned(),
-        DataType::Timestamp(..) => "timestamp".to_owned(),
-        DataType::Date32 => "date".to_owned(),
-        DataType::Utf8View | DataType::Utf8 => "string".to_owned(),
-        other => other.to_string(),
-    }
+    krishiv_types::DataType::from_arrow_field(f)
+        .expect("a Spark type")
+        .simple_string()
 }
 
 /// The type Spark inferred for column `t` in `case`.

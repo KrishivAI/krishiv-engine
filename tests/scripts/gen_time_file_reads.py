@@ -5,19 +5,24 @@
 Runs a REAL Spark (never from memory) in a throw-away container. It writes CSV and JSON files of TIME text
 under a temp root, then records for each case the schema Spark reports and the rows (every column cast to
 STRING in a UTC session, rows sorted), or the error (condition, the chain of conditions of a task failure).
-Covered: `spark.sql.timeType.enabled` off (the 4.3.0 default: reads, writes and from_csv/from_json refuse,
-to_csv/to_json evaluate), and on: a table of TIME texts read through CSV and JSON next to
+Covered: `spark.sql.timeType.enabled` off (the 4.3.0 default: file reads and writes of a TIME column refuse with
+UNSUPPORTED_TIME_TYPE, while the expressions from_csv/from_json and to_csv/to_json evaluate), and on: a table of
+TIME texts read through CSV and JSON next to
 `try_cast(text AS TIME(p))`, the parse modes, `timeFormat` on read and write, `nullValue`/`emptyValue`,
 schema inference (TIME is inferred with the gate on: CSV under `preferDate`, JSON under `inferTimestamp`; a
 column of mixed shapes merges to STRING), writes of TIME(p) columns read back as text (patterns that cannot
 format a TIME), from_csv/from_json and to_csv/to_json (those four are expressions: their cases are checked by
-krishiv-functions, not by the file readers). The root is written as `<root>`. Usage (from repo root):
+krishiv-functions, not by the file readers). The root is written as `<root>`; the date Spark attaches to a
+time-only text read as a timestamp (the current date) as `<today>`, so the fixture does not change with the
+day it is generated. Usage (from repo root):
 
+    out=tests/fixtures/spark-4.3.0/time-file-reads.json
     docker run --rm -v "$PWD/tests/scripts:/work:ro" apache/spark:4.3.0 \
         /opt/spark/bin/spark-submit --master 'local[1]' --driver-memory 1g /work/gen_time_file_reads.py \
-        > tests/fixtures/spark-4.3.0/time-file-reads.json
+        > "$out.tmp" && python3 -m json.tool "$out.tmp" > /dev/null && mv "$out.tmp" "$out"
 
-The fixture goes to stdout (the container user cannot write the mount); Spark logs go to stderr.
+The fixture goes to stdout (the container user cannot write the mount); Spark logs go to stderr. It is
+written to a temporary file and replaces the fixture only once Spark succeeded and the output parses.
 """
 
 import json
@@ -26,12 +31,14 @@ import os
 import re
 import shutil
 import tempfile
+import time
 
 from pyspark.errors import PySparkException
 from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
 
 ROOT_TOKEN = "<root>"
+TODAY_TOKEN = "<today>"
 GATE = "spark.sql.timeType.enabled"
 
 # TIME texts: the default grammar's edges (Spark's `stringToTime`), read through CSV and JSON and cast.
@@ -129,6 +136,10 @@ def outcome(spark, fn, root, conf):
             spark.conf.unset(key)
 
 
+def _today(value, today):
+    return TODAY_TOKEN + " " + value[len(today) :] if value.startswith(today) else value
+
+
 def _outcome(fn, root):
     try:
         df = fn()
@@ -137,7 +148,9 @@ def _outcome(fn, root):
         cast = df.toDF(*names).select([F.col(n).cast("string").alias(n) for n in names])
         rows = [[None if v is None else str(v) for v in r] for r in cast.collect()]
         rows.sort(key=lambda r: [("", "") if v is None else ("1", v) for v in r])
-        result["rows"] = [[v.replace(root, ROOT_TOKEN) if v else v for v in r] for r in rows]
+        # A time-only text read as a timestamp gets the current date (UTC session): normalized.
+        today = time.strftime("%Y-%m-%d ", time.gmtime())
+        result["rows"] = [[_today(v.replace(root, ROOT_TOKEN), today) if v else v for v in r] for r in rows]
         return result
     except PySparkException as e:
         params = e.getMessageParameters() or {}

@@ -83,8 +83,8 @@ const NONE: OptionDefault = OptionDefault::None;
 /// without `multiLine` while the read option counts always. It is its own
 /// option, named as the conf, so a plan carrying it to a worker
 /// (`OptionSchema::with_conf_fallbacks`) keeps it apart from the option.
-/// Known divergence: given as a read option it applies (Spark ignores a
-/// conf key among read options).
+/// Given as a read option it is ignored, as Spark ignores a conf key among
+/// read options (`OptionSchema::without_session_confs`).
 const COLUMN_PRUNING_CONF: &str = "spark.sql.csv.parser.columnPruning.enabled";
 
 /// The options as one list (a brace-delimited macro: `rustfmt` leaves the

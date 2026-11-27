@@ -301,16 +301,6 @@ pub fn make_time(
     Ok(out.into_iter().collect())
 }
 
-/// `nanos` cut to whole microseconds when `micros_only` (Spark 4.2's `TIME`), else unchanged.
-#[must_use]
-pub fn cut_to_micros(nanos: i64, micros_only: bool) -> i64 {
-    if micros_only {
-        nanos.wrapping_sub(nanos.rem_euclid(1_000))
-    } else {
-        nanos
-    }
-}
-
 /// `time_to_seconds|millis|micros`: whole `nanos_per_unit`s of each time.
 pub fn time_to_units(
     times: &PrimitiveArray<Time64NanosecondType>,
