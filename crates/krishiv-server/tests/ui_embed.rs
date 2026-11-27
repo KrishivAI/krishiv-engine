@@ -265,7 +265,7 @@ async fn every_route_of_the_manifest_serves_the_page_and_its_assets() {
 #[test]
 fn the_manifest_and_the_pages_router_agree() {
     let dir = env!("CARGO_MANIFEST_DIR");
-    let routes_ts = std::fs::read_to_string(format!("{dir}/../../ui/src/routes.ts")).unwrap();
+    let routes_ts = std::fs::read_to_string(format!("{dir}/../../ui/apps/console/src/routes.ts")).unwrap();
     let paths = manifest_paths();
     for (pattern, _, _) in &paths {
         assert!(
