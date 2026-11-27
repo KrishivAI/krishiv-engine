@@ -660,7 +660,7 @@ observed node has its own, so the count can exceed `n` (P3-T084c).
   not, completes it.
 - **`Observation.get` blocks** a thread; do not call it from async code on a runtime thread.
 - **Result cache:** a plan that observes is never served from the result cache (every action runs it).
-- **`spark.sql.timestampType = TIMESTAMP_NTZ`:** a bare `TIMESTAMP` literal, `to_timestamp` and the numeric `make_timestamp` forms follow the setting; a bare `TIMESTAMP` cast target or column type still means `TIMESTAMP_LTZ`. Under the Spark 4.3 profile `TIMESTAMP(6)` is refused with `KRISHIV_UNSUPPORTED_FEATURE` while the setting is `TIMESTAMP_NTZ` (Spark types it `TIMESTAMP_NTZ`).
+- **`spark.sql.timestampType = TIMESTAMP_NTZ`:** a bare `TIMESTAMP` follows the setting everywhere Spark's type parser reads it (SQL, views as of their `CREATE`, Spark Connect type and schema strings, `from_json` / `from_csv` / `from_xml` schemas, `variant_get` types, the return type of a UDF registered on a session) except the return type of an unregistered Python `udf(...)`, which is built without a session and still means `TIMESTAMP_LTZ`.
 
 ## Delta Lake writes
 
