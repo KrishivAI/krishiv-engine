@@ -626,12 +626,10 @@ impl FileReads {
         }
         let format = match self.formats.get(format) {
             Ok(format) => format,
-            Err(e) => {
-                if is_spark_file_source(format) {
-                    return Err(unsupported(format!("the {format} file format")));
-                }
-                return Err(e);
+            Err(_) if is_spark_file_source(format) => {
+                return Err(unsupported(format!("the {format} file format")));
             }
+            Err(e) => return Err(e),
         };
         let merge = self.merges_schemas(format.name(), options);
         let ignore_invalid_partition_paths = self.ignores_invalid_partition_paths(options);
