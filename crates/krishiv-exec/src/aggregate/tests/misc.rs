@@ -19,8 +19,8 @@ use krishiv_types::batch::Batch;
 
 use super::*;
 use AggregateFunction::{
-    BitAnd, BitOr, BitXor, Mode, ModeMax, ModeMin, RegrAvgx, RegrAvgy, RegrCount, RegrIntercept,
-    RegrR2, RegrSlope, RegrSxx, RegrSxy, RegrSyy, TryAvg, TrySum,
+    BitAnd, BitOr, BitXor, Count, Mode, ModeMax, ModeMin, RegrAvgx, RegrAvgy, RegrCount,
+    RegrIntercept, RegrR2, RegrSlope, RegrSxx, RegrSxy, RegrSyy, TryAvg, TrySum,
 };
 
 fn i8s(v: &[Option<i8>]) -> ArrayRef {
@@ -705,6 +705,36 @@ async fn distinct_dedups_before_the_accumulator() {
     let plan = distinct_plan(
         input(),
         spec(&s, vec![], vec![agg(&BitXor, 0, &s)]),
+        &[true],
+    )
+    .unwrap();
+    assert_eq!(mrun(plan).await, ["3"]);
+}
+
+/// Spark 4.3 counts `map('a',1,'b',2)` and `map('b',2,'a',1)` as two
+/// `DISTINCT` values (goldens `distinct-map-aggregates` 21), though a grouping
+/// key sorts the entries.
+#[tokio::test]
+async fn distinct_keeps_the_entry_order_of_map_arguments() {
+    use arrow_array::builder::{Int32Builder, MapBuilder, StringBuilder};
+    let mut b = MapBuilder::new(None, StringBuilder::new(), Int32Builder::new());
+    for entries in [
+        &[("a", 1), ("b", 2)][..],
+        &[("b", 2), ("a", 1)],
+        &[("a", 1), ("b", 2)],
+        &[("a", 3)],
+    ] {
+        for (k, v) in entries {
+            b.keys().append_value(k);
+            b.values().append_value(*v);
+        }
+        b.append(true).unwrap();
+    }
+    let maps: ArrayRef = Arc::new(b.finish());
+    let s = schema(vec![("m", maps.data_type().clone())]);
+    let plan = distinct_plan(
+        scan(&s, vec![vec![Arc::clone(&maps)]]),
+        spec(&s, vec![], vec![agg(&Count, 0, &s)]),
         &[true],
     )
     .unwrap();
