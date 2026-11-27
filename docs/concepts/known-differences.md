@@ -660,7 +660,7 @@ observed node has its own, so the count can exceed `n` (P3-T084c).
   not, completes it.
 - **`Observation.get` blocks** a thread; do not call it from async code on a runtime thread.
 - **Result cache:** a plan that observes is never served from the result cache (every action runs it).
-- **`spark.sql.timestampType = TIMESTAMP_NTZ`:** a bare `TIMESTAMP` literal, `to_timestamp` and the numeric `make_timestamp` forms follow the setting; a bare `TIMESTAMP` cast target or column type still means `TIMESTAMP_LTZ`. Under the Spark 4.3 profile `TIMESTAMP(6)` is refused with `KRISHIV_UNSUPPORTED_FEATURE` while the setting is `TIMESTAMP_NTZ` (Spark types it `TIMESTAMP_NTZ`).
+- **`spark.sql.timestampType = TIMESTAMP_NTZ`:** a bare `TIMESTAMP` follows the setting everywhere Spark's type parser reads it (SQL, views as of their `CREATE`, Spark Connect type and schema strings, `from_json` / `from_csv` / `from_xml` schemas, `variant_get` types, the return type of a UDF registered on a session) except the return type of an unregistered Python `udf(...)`, which is built without a session and still means `TIMESTAMP_LTZ`.
 
 ## Delta Lake writes
 
@@ -698,6 +698,25 @@ Krishiv writes Delta tables through `delta_kernel` and its own writer (`krishiv-
   a qualified name (`t.p`) and a struct field (`s.p`, a data column for delta-spark) are refused, and
   so is a string compared with a `TIMESTAMP` partition column, which delta-spark casts in
   `spark.sql.session.timeZone` (Krishiv's filter translation does not know the zone yet).
+- **Write options** (`tests/fixtures/delta-4.4.1/OPTIONS.json`). Values are checked as
+  delta-spark checks them (`DELTA_ILLEGAL_OPTION`, `DELTA_INVALID_IDEMPOTENT_WRITES_OPTIONS`) and
+  unknown names are accepted, as delta-spark only logs them; `userMetadata` and `mergeSchema`
+  (`canMergeSchema`, the string `"true"`) reach the commit. Refused by name where delta-spark
+  commits: idempotent writes (`txnAppId` + `txnVersion`), `dataChange = false`, `replaceOn`,
+  `replaceUsing`, `targetAlias` and `useNullIntolerantEqualityWithDPO = true`
+  (`writePartitionColumns` is accepted and has no effect, as in delta-spark). A DataFrame
+  `save(path)` merges the frame's types with the table's as delta-spark's `SchemaMergingUtils`
+  does, with or without `mergeSchema` (`OPTIONS.json` `merge_schema`): narrower integrals,
+  NULL-typed columns and other nested nullability are taken, other types are
+  `DELTA_FAILED_TO_MERGE_FIELDS`, and a merge that would change the table's schema is
+  `DELTA_METADATA_MISMATCH` without `mergeSchema`; with it (type widening on a `typeWidening`
+  table, a wider integral, a new nested field) it is refused by name, since the kernel commits no
+  schema change on a write. Type widening follows delta-spark's default
+  `spark.databricks.delta.typeWidening.allowAutomaticWidening = same_family_type`; the conf is
+  not read. A non-numeric `maxRecordsPerFile` is
+  `KRISHIV_INVALID_FORMAT_OPTION_VALUE` where delta-spark raises a classless
+  `NumberFormatException`. `optimizeWrite` and `compression` are accepted and change nothing.
+  `INSERT INTO delta.`<path>`` is not taken (`TABLE_OR_VIEW_NOT_FOUND`); a catalog table is.
 
 `DELETE` and `UPDATE` of a Delta table (copy-on-write, `src/write/dml.rs`) leave the rows, the
 command's `num_affected_rows` and the files removed that delta-spark leaves
@@ -708,9 +727,10 @@ They differ in:
   parentheses (`["(id = 2)"]`); delta-spark prints Catalyst's form with expression ids
   (`["(id#1231L = 2)"]`). Without a condition both write `["true"]` (`DELETE`) and `[]`
   (`UPDATE`).
-- **Deletion vectors.** Krishiv never writes them: on a table with
-  `delta.enableDeletionVectors = true` delta-spark marks deleted and updated rows in deletion
-  vectors (its default); Krishiv rewrites the files. The rows are the same.
+- **Deletion vectors.** On a table with `delta.enableDeletionVectors = true` Krishiv marks deleted
+  and updated rows in deletion vectors as delta-spark does (merge-on-read, under the same
+  `spark.databricks.delta.{delete,update}.deletionVectors.persistent` confs, default true; see
+  the `MERGE` list below for what differs).
 - **Files per partition.** A rewrite writes one file per partition per driver; delta-spark one per
   partition per task.
 - **Whole-file deletes.** A `DELETE` removes whole files without rewriting them only when its
@@ -781,8 +801,31 @@ reads the tables back, `merge/krishiv-written/`). It differs in:
 - **Refused.** A `MERGE` under `spark.sql.caseSensitive = true`, `SET c = DEFAULT`, a nested
   assignment key (`SET s.f = ..`) and a table whose row-level rule is Spark's own
   `MERGE_CARDINALITY_VIOLATION` (no oracle yet) are refused by name.
-- **Deletion vectors.** Never written (as for `DELETE` and `UPDATE`); delta-spark's default
-  `merge.deletionVectors.persistent = true` marks rows in vectors on a table with them on.
+- **Deletion vectors.** Marked as delta-spark marks them (`merge.deletionVectors.persistent`,
+  default true).
+
+Merge-on-read `DELETE`, `UPDATE` and `MERGE` on a table with deletion vectors (the connector's
+`src/write/dv.rs`) leave the rows, the counts, the files removed whole, the files given a new
+vector with the vector's cardinality and the counted `operationMetrics` that delta-spark leaves
+(`tests/fixtures/delta-4.4.1/dvs/DVS.json`; Spark reads the tables back, `dvs/krishiv-written/`,
+and derives the same change data feed rows from a vector-only `DELETE` on a change-data-feed
+table). They differ in:
+
+- **Vector bytes.** delta-spark run-optimizes its bitmaps before writing them; the kernel's writer
+  Krishiv uses does not, so a vector holding runs of rows takes more bytes (`sizeInBytes`). The
+  rows are the same.
+- **Vector file layout.** One vector file per statement, the vectors in path order; delta-spark
+  bin-packs them per task in its aggregation's order (other offsets).
+- **When vectors apply.** A `DELETE` or `UPDATE` whose condition is partition-only by Krishiv's
+  translation (the whole-file `DELETE` rule above) removes or rewrites whole files; a
+  partition-only condition of another form marks rows, where delta-spark removes whole files.
+- **Files without statistics.** As in delta-spark, a file is removed whole only when its
+  `numRecords` proves every live row goes; a file without the statistic keeps a vector of all its
+  rows, and its new add carries statistics (`tests/fixtures/delta-4.4.1/dvs-no-stats/`). Krishiv
+  writes only `numRecords` there (the footer's row count, with `tightBounds: false`); delta-spark
+  also computes the file's `minValues`, `maxValues` and `nullCount` by reading it.
+- **Change data feed.** A vector-only `DELETE` commits; an `UPDATE` or a `MERGE` that changes rows
+  stays refused (delta-spark writes change data files for them).
 
 ## Spark 4.3's nanosecond timestamps and nanosecond clocks
 
@@ -888,3 +931,14 @@ from 4.1 to 4.3 for `'ſ' ILIKE 'S'` over a column (false on 4.0); Krishiv follo
 Krishiv never matches such strings by bytes.
 
 Two smaller differences in `UTF8_LCASE` `LIKE`: case folding uses Rust's Unicode tables, which are newer than the JDK 17/21 tables Spark runs on, so a case pair added after Unicode 15 matches in Krishiv and not in Spark; and a malformed pattern (invalid or trailing escape) is reported with the case-folded pattern text, where Spark reports it as written. Java's matching is one-directional for a few characters (the pattern `ß` matches only `ß`, the pattern `ẞ` matches both), which a folded comparison cannot express: the value `ẞ` against the pattern `ß` matches in Krishiv and not in Spark.
+
+## `NEAREST BY` joins run as a ranked cross join
+
+Spark rewrites `JOIN ... (APPROX | EXACT) NEAREST [k] BY ...` to a `max_by`/`min_by` of `k` rows over a cross
+join. Krishiv ranks the cross join's rows per left row with `row_number()` and keeps the first `k`; `APPROX` and `EXACT`
+return the same exact rows. The results match Spark's, including NULL rankings (never a match; a left outer join pads
+a left row left with none) and the `NEAREST_BY_JOIN.*` errors. `EXPLAIN` shows a window over a join, not Spark's
+`Generate`/`Aggregate` shape, and the rewrite materialises every left-right pair before ranking, where Spark keeps a
+top-k per left row. The `CROSS_JOIN_NOT_ENABLED` check runs when the statement is parsed, where Spark's runs in the
+optimizer, so `CREATE VIEW v AS SELECT ... NEAREST BY ...` under `spark.sql.crossJoin.enabled=false` fails here and
+succeeds in Spark.

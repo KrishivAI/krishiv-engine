@@ -1,0 +1,594 @@
+{
+ "cases": {
+  "insert_into.conf_user_metadata": {
+   "commit": {
+    "operation": "WRITE",
+    "operationParameters": {
+     "mode": "Append",
+     "partitionBy": "[]"
+    },
+    "txn": false,
+    "userMetadata": "from-conf"
+   },
+   "conf": {
+    "spark.databricks.delta.commitInfo.userMetadata": "from-conf"
+   },
+   "error": null,
+   "options": {},
+   "versions": 3,
+   "writer": "insert_into"
+  },
+  "insert_into.data_change_false": {
+   "commit": {
+    "operation": "WRITE",
+    "operationParameters": {
+     "mode": "Append",
+     "partitionBy": "[]"
+    },
+    "txn": false,
+    "userMetadata": null
+   },
+   "conf": {},
+   "error": null,
+   "options": {
+    "dataChange": "false"
+   },
+   "versions": 3,
+   "writer": "insert_into"
+  },
+  "insert_into.merge_schema_maybe": {
+   "commit": {
+    "operation": "WRITE",
+    "operationParameters": {
+     "mode": "Append",
+     "partitionBy": "[]"
+    },
+    "txn": false,
+    "userMetadata": null
+   },
+   "conf": {},
+   "error": null,
+   "options": {
+    "mergeSchema": "maybe"
+   },
+   "versions": 3,
+   "writer": "insert_into"
+  },
+  "insert_into.merge_schema_true": {
+   "commit": {
+    "operation": "WRITE",
+    "operationParameters": {
+     "mode": "Append",
+     "partitionBy": "[]"
+    },
+    "txn": false,
+    "userMetadata": null
+   },
+   "conf": {},
+   "error": null,
+   "options": {
+    "mergeSchema": "true"
+   },
+   "versions": 3,
+   "writer": "insert_into"
+  },
+  "insert_into.option_and_conf_user_metadata": {
+   "commit": {
+    "operation": "WRITE",
+    "operationParameters": {
+     "mode": "Append",
+     "partitionBy": "[]"
+    },
+    "txn": false,
+    "userMetadata": "from-conf"
+   },
+   "conf": {
+    "spark.databricks.delta.commitInfo.userMetadata": "from-conf"
+   },
+   "error": null,
+   "options": {
+    "userMetadata": "from-option"
+   },
+   "versions": 3,
+   "writer": "insert_into"
+  },
+  "insert_into.txn_pair": {
+   "commit": {
+    "operation": "WRITE",
+    "operationParameters": {
+     "mode": "Append",
+     "partitionBy": "[]"
+    },
+    "txn": false,
+    "userMetadata": null
+   },
+   "conf": {},
+   "error": null,
+   "options": {
+    "txnAppId": "app",
+    "txnVersion": "1"
+   },
+   "versions": 3,
+   "writer": "insert_into"
+  },
+  "insert_into.txn_version_only": {
+   "commit": {
+    "operation": "WRITE",
+    "operationParameters": {
+     "mode": "Append",
+     "partitionBy": "[]"
+    },
+    "txn": false,
+    "userMetadata": null
+   },
+   "conf": {},
+   "error": null,
+   "options": {
+    "txnVersion": "1"
+   },
+   "versions": 3,
+   "writer": "insert_into"
+  },
+  "insert_into.user_metadata": {
+   "commit": {
+    "operation": "WRITE",
+    "operationParameters": {
+     "mode": "Append",
+     "partitionBy": "[]"
+    },
+    "txn": false,
+    "userMetadata": null
+   },
+   "conf": {},
+   "error": null,
+   "options": {
+    "userMetadata": "hello"
+   },
+   "versions": 3,
+   "writer": "insert_into"
+  },
+  "insert_into_overwrite.conf_user_metadata": {
+   "commit": {
+    "operation": "WRITE",
+    "operationParameters": {
+     "mode": "Overwrite",
+     "partitionBy": "[]"
+    },
+    "txn": false,
+    "userMetadata": "from-conf"
+   },
+   "conf": {
+    "spark.databricks.delta.commitInfo.userMetadata": "from-conf"
+   },
+   "error": null,
+   "options": {},
+   "versions": 3,
+   "writer": "insert_into_overwrite"
+  },
+  "insert_into_overwrite.data_change_false": {
+   "commit": {
+    "operation": "WRITE",
+    "operationParameters": {
+     "mode": "Overwrite",
+     "partitionBy": "[]"
+    },
+    "txn": false,
+    "userMetadata": null
+   },
+   "conf": {},
+   "error": null,
+   "options": {
+    "dataChange": "false"
+   },
+   "versions": 3,
+   "writer": "insert_into_overwrite"
+  },
+  "insert_into_overwrite.merge_schema_maybe": {
+   "commit": {
+    "operation": "WRITE",
+    "operationParameters": {
+     "mode": "Overwrite",
+     "partitionBy": "[]"
+    },
+    "txn": false,
+    "userMetadata": null
+   },
+   "conf": {},
+   "error": null,
+   "options": {
+    "mergeSchema": "maybe"
+   },
+   "versions": 3,
+   "writer": "insert_into_overwrite"
+  },
+  "insert_into_overwrite.merge_schema_true": {
+   "commit": {
+    "operation": "WRITE",
+    "operationParameters": {
+     "mode": "Overwrite",
+     "partitionBy": "[]"
+    },
+    "txn": false,
+    "userMetadata": null
+   },
+   "conf": {},
+   "error": null,
+   "options": {
+    "mergeSchema": "true"
+   },
+   "versions": 3,
+   "writer": "insert_into_overwrite"
+  },
+  "insert_into_overwrite.option_and_conf_user_metadata": {
+   "commit": {
+    "operation": "WRITE",
+    "operationParameters": {
+     "mode": "Overwrite",
+     "partitionBy": "[]"
+    },
+    "txn": false,
+    "userMetadata": "from-conf"
+   },
+   "conf": {
+    "spark.databricks.delta.commitInfo.userMetadata": "from-conf"
+   },
+   "error": null,
+   "options": {
+    "userMetadata": "from-option"
+   },
+   "versions": 3,
+   "writer": "insert_into_overwrite"
+  },
+  "insert_into_overwrite.txn_pair": {
+   "commit": {
+    "operation": "WRITE",
+    "operationParameters": {
+     "mode": "Overwrite",
+     "partitionBy": "[]"
+    },
+    "txn": false,
+    "userMetadata": null
+   },
+   "conf": {},
+   "error": null,
+   "options": {
+    "txnAppId": "app",
+    "txnVersion": "1"
+   },
+   "versions": 3,
+   "writer": "insert_into_overwrite"
+  },
+  "insert_into_overwrite.txn_version_only": {
+   "commit": {
+    "operation": "WRITE",
+    "operationParameters": {
+     "mode": "Overwrite",
+     "partitionBy": "[]"
+    },
+    "txn": false,
+    "userMetadata": null
+   },
+   "conf": {},
+   "error": null,
+   "options": {
+    "txnVersion": "1"
+   },
+   "versions": 3,
+   "writer": "insert_into_overwrite"
+  },
+  "insert_into_overwrite.user_metadata": {
+   "commit": {
+    "operation": "WRITE",
+    "operationParameters": {
+     "mode": "Overwrite",
+     "partitionBy": "[]"
+    },
+    "txn": false,
+    "userMetadata": null
+   },
+   "conf": {},
+   "error": null,
+   "options": {
+    "userMetadata": "hello"
+   },
+   "versions": 3,
+   "writer": "insert_into_overwrite"
+  },
+  "save_as_table_append.conf_user_metadata": {
+   "commit": {
+    "operation": "WRITE",
+    "operationParameters": {
+     "mode": "Append",
+     "partitionBy": "[]"
+    },
+    "txn": false,
+    "userMetadata": "from-conf"
+   },
+   "conf": {
+    "spark.databricks.delta.commitInfo.userMetadata": "from-conf"
+   },
+   "error": null,
+   "options": {},
+   "versions": 3,
+   "writer": "save_as_table_append"
+  },
+  "save_as_table_append.data_change_false": {
+   "commit": {
+    "operation": "WRITE",
+    "operationParameters": {
+     "mode": "Append",
+     "partitionBy": "[]"
+    },
+    "txn": false,
+    "userMetadata": null
+   },
+   "conf": {},
+   "error": null,
+   "options": {
+    "dataChange": "false"
+   },
+   "versions": 3,
+   "writer": "save_as_table_append"
+  },
+  "save_as_table_append.merge_schema_maybe": {
+   "conf": {},
+   "error": {
+    "condition": "DELTA_ILLEGAL_OPTION",
+    "message": "[DELTA_ILLEGAL_OPTION] Invalid value 'maybe' for option 'mergeSchema', must be 'true' or 'false'",
+    "parameters": {
+     "explain": "must be 'true' or 'false'",
+     "input": "maybe",
+     "name": "mergeSchema"
+    },
+    "sqlstate": "42616"
+   },
+   "options": {
+    "mergeSchema": "maybe"
+   },
+   "versions": 2,
+   "writer": "save_as_table_append"
+  },
+  "save_as_table_append.merge_schema_true": {
+   "commit": {
+    "operation": "WRITE",
+    "operationParameters": {
+     "canMergeSchema": true,
+     "mode": "Append",
+     "partitionBy": "[]"
+    },
+    "txn": false,
+    "userMetadata": null
+   },
+   "conf": {},
+   "error": null,
+   "options": {
+    "mergeSchema": "true"
+   },
+   "versions": 3,
+   "writer": "save_as_table_append"
+  },
+  "save_as_table_append.option_and_conf_user_metadata": {
+   "commit": {
+    "operation": "WRITE",
+    "operationParameters": {
+     "mode": "Append",
+     "partitionBy": "[]"
+    },
+    "txn": false,
+    "userMetadata": "from-option"
+   },
+   "conf": {
+    "spark.databricks.delta.commitInfo.userMetadata": "from-conf"
+   },
+   "error": null,
+   "options": {
+    "userMetadata": "from-option"
+   },
+   "versions": 3,
+   "writer": "save_as_table_append"
+  },
+  "save_as_table_append.txn_pair": {
+   "commit": {
+    "operation": "WRITE",
+    "operationParameters": {
+     "mode": "Append",
+     "partitionBy": "[]"
+    },
+    "txn": true,
+    "userMetadata": null
+   },
+   "conf": {},
+   "error": null,
+   "options": {
+    "txnAppId": "app",
+    "txnVersion": "1"
+   },
+   "versions": 3,
+   "writer": "save_as_table_append"
+  },
+  "save_as_table_append.txn_version_only": {
+   "conf": {},
+   "error": {
+    "condition": "DELTA_INVALID_IDEMPOTENT_WRITES_OPTIONS",
+    "message": "[DELTA_INVALID_IDEMPOTENT_WRITES_OPTIONS] Invalid options for idempotent Dataframe writes: Both txnVersion and txnAppId must be specified for idempotent data frame writes",
+    "parameters": {
+     "reason": "Both txnVersion and txnAppId must be specified for idempotent data frame writes"
+    },
+    "sqlstate": "42616"
+   },
+   "options": {
+    "txnVersion": "1"
+   },
+   "versions": 2,
+   "writer": "save_as_table_append"
+  },
+  "save_as_table_append.user_metadata": {
+   "commit": {
+    "operation": "WRITE",
+    "operationParameters": {
+     "mode": "Append",
+     "partitionBy": "[]"
+    },
+    "txn": false,
+    "userMetadata": "hello"
+   },
+   "conf": {},
+   "error": null,
+   "options": {
+    "userMetadata": "hello"
+   },
+   "versions": 3,
+   "writer": "save_as_table_append"
+  },
+  "write_to_append.conf_user_metadata": {
+   "commit": {
+    "operation": "WRITE",
+    "operationParameters": {
+     "mode": "Append",
+     "partitionBy": "[]"
+    },
+    "txn": false,
+    "userMetadata": "from-conf"
+   },
+   "conf": {
+    "spark.databricks.delta.commitInfo.userMetadata": "from-conf"
+   },
+   "error": null,
+   "options": {},
+   "versions": 3,
+   "writer": "write_to_append"
+  },
+  "write_to_append.data_change_false": {
+   "commit": {
+    "operation": "WRITE",
+    "operationParameters": {
+     "mode": "Append",
+     "partitionBy": "[]"
+    },
+    "txn": false,
+    "userMetadata": null
+   },
+   "conf": {},
+   "error": null,
+   "options": {
+    "dataChange": "false"
+   },
+   "versions": 3,
+   "writer": "write_to_append"
+  },
+  "write_to_append.merge_schema_maybe": {
+   "conf": {},
+   "error": {
+    "condition": "DELTA_ILLEGAL_OPTION",
+    "message": "[DELTA_ILLEGAL_OPTION] Invalid value 'maybe' for option 'mergeSchema', must be 'true' or 'false'",
+    "parameters": {
+     "explain": "must be 'true' or 'false'",
+     "input": "maybe",
+     "name": "mergeSchema"
+    },
+    "sqlstate": "42616"
+   },
+   "options": {
+    "mergeSchema": "maybe"
+   },
+   "versions": 2,
+   "writer": "write_to_append"
+  },
+  "write_to_append.merge_schema_true": {
+   "commit": {
+    "operation": "WRITE",
+    "operationParameters": {
+     "canMergeSchema": true,
+     "mode": "Append",
+     "partitionBy": "[]"
+    },
+    "txn": false,
+    "userMetadata": null
+   },
+   "conf": {},
+   "error": null,
+   "options": {
+    "mergeSchema": "true"
+   },
+   "versions": 3,
+   "writer": "write_to_append"
+  },
+  "write_to_append.option_and_conf_user_metadata": {
+   "commit": {
+    "operation": "WRITE",
+    "operationParameters": {
+     "mode": "Append",
+     "partitionBy": "[]"
+    },
+    "txn": false,
+    "userMetadata": "from-option"
+   },
+   "conf": {
+    "spark.databricks.delta.commitInfo.userMetadata": "from-conf"
+   },
+   "error": null,
+   "options": {
+    "userMetadata": "from-option"
+   },
+   "versions": 3,
+   "writer": "write_to_append"
+  },
+  "write_to_append.txn_pair": {
+   "commit": {
+    "operation": "WRITE",
+    "operationParameters": {
+     "mode": "Append",
+     "partitionBy": "[]"
+    },
+    "txn": true,
+    "userMetadata": null
+   },
+   "conf": {},
+   "error": null,
+   "options": {
+    "txnAppId": "app",
+    "txnVersion": "1"
+   },
+   "versions": 3,
+   "writer": "write_to_append"
+  },
+  "write_to_append.txn_version_only": {
+   "conf": {},
+   "error": {
+    "condition": "DELTA_INVALID_IDEMPOTENT_WRITES_OPTIONS",
+    "message": "[DELTA_INVALID_IDEMPOTENT_WRITES_OPTIONS] Invalid options for idempotent Dataframe writes: Both txnVersion and txnAppId must be specified for idempotent data frame writes",
+    "parameters": {
+     "reason": "Both txnVersion and txnAppId must be specified for idempotent data frame writes"
+    },
+    "sqlstate": "42616"
+   },
+   "options": {
+    "txnVersion": "1"
+   },
+   "versions": 2,
+   "writer": "write_to_append"
+  },
+  "write_to_append.user_metadata": {
+   "commit": {
+    "operation": "WRITE",
+    "operationParameters": {
+     "mode": "Append",
+     "partitionBy": "[]"
+    },
+    "txn": false,
+    "userMetadata": "hello"
+   },
+   "conf": {},
+   "error": null,
+   "options": {
+    "userMetadata": "hello"
+   },
+   "versions": 3,
+   "writer": "write_to_append"
+  }
+ },
+ "delta_spark": "4.4.1",
+ "format_version": 1,
+ "generator": "gen_delta_fixtures.py catalog-options",
+ "spark": "4.2.0"
+}

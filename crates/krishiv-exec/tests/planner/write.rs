@@ -33,7 +33,9 @@ fn query_results_are_written_committed_and_read_back() {
     let want = rows(&super::run(&db.plan_sql(sql).unwrap()).unwrap());
 
     let out = tempfile::tempdir().unwrap();
-    let store = Arc::new(LocalFileSystem::new_with_prefix(out.path()).unwrap());
+    let store = Arc::new(krishiv_io::LocalDirsAsMissing::new(
+        LocalFileSystem::new_with_prefix(out.path()).unwrap(),
+    ));
     let sched = IoScheduler::new(IoConfig::default());
     let id = StoreId::new("file://out");
     sched.register_store(id.clone(), Arc::clone(&store) as Arc<dyn ObjectStore>);

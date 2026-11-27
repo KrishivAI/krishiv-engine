@@ -3,7 +3,18 @@
 //! JSON, parsed as Spark's `SparkConnectPlanner` does (v4.3.0).
 
 use krishiv_common::error::{ConnectInvalidPlanInvalidSchemaNonStructType, KrishivError};
-use krishiv_types::{DataType, StructField, StructType};
+use krishiv_sql::ParserOptions;
+use krishiv_types::{DataType, StructField, StructType, TypeGrammar};
+
+/// A type string a client wrote, read as Spark's `DataTypeAstBuilder` reads one in this session:
+/// the release's type grammar, and a bare `TIMESTAMP` as the type `spark.sql.timestampType`
+/// names.
+///
+/// # Errors
+/// The DDL parser's error.
+pub fn parse_user_type(text: &str, opts: &ParserOptions) -> Result<DataType, KrishivError> {
+    krishiv_types::parse_data_type_with(text, TypeGrammar::new(opts.spark_4_3), opts.timestamp_ntz)
+}
 
 /// The planner's `parseDatatypeString` (`SparkConnectPlanner.scala:1511-1528`):
 /// a table schema (`a INT, b STRING`), else a data type (`int`), else the
@@ -16,15 +27,13 @@ use krishiv_types::{DataType, StructField, StructType};
 ///
 /// # Errors
 /// The parse error of the text as a data type.
-pub fn parse_datatype_string(text: &str) -> Result<DataType, KrishivError> {
-    if let Ok(t) = krishiv_types::parse_data_type(&format!("STRUCT<{text}\n>")) {
+pub fn parse_datatype_string(text: &str, opts: &ParserOptions) -> Result<DataType, KrishivError> {
+    if let Ok(t) = parse_user_type(&format!("STRUCT<{text}\n>"), opts) {
         return Ok(t);
     }
-    match krishiv_types::parse_data_type(text) {
+    match parse_user_type(text, opts) {
         Ok(t) => Ok(t),
-        Err(e) => {
-            krishiv_types::parse_data_type(&format!("STRUCT<{}\n>", text.trim())).map_err(|_| e)
-        }
+        Err(e) => parse_user_type(&format!("STRUCT<{}\n>", text.trim()), opts).map_err(|_| e),
     }
 }
 
@@ -44,9 +53,13 @@ fn with_fallback(
 ///
 /// # Errors
 /// The parse error of the text as DDL when it is not JSON either.
-pub fn parse_local_schema(text: &str) -> Result<StructType, KrishivError> {
+pub fn parse_local_schema(text: &str, opts: &ParserOptions) -> Result<StructType, KrishivError> {
     Ok(
-        match with_fallback(text, parse_datatype_string, DataType::from_json)? {
+        match with_fallback(
+            text,
+            |t| parse_datatype_string(t, opts),
+            DataType::from_json,
+        )? {
             DataType::Struct(s) => s,
             other => StructType::new(vec![StructField::new("value", other, true)]),
         },
@@ -61,8 +74,8 @@ pub fn parse_local_schema(text: &str) -> Result<StructType, KrishivError> {
 /// `CONNECT_INVALID_PLAN.INVALID_SCHEMA_NON_STRUCT_TYPE` for JSON of a type that is not a struct
 /// (golden-pending: the class is the registry's Connect one for
 /// `invalidSchemaStringNonStructType`, its use unverified against a real run).
-pub fn parse_table_schema(text: &str) -> Result<StructType, KrishivError> {
-    let ddl = |t: &str| krishiv_types::parse_data_type(&format!("STRUCT<{t}\n>"));
+pub fn parse_table_schema(text: &str, opts: &ParserOptions) -> Result<StructType, KrishivError> {
+    let ddl = |t: &str| parse_user_type(&format!("STRUCT<{t}\n>"), opts);
     match with_fallback(text, ddl, DataType::from_json)? {
         DataType::Struct(s) => Ok(s),
         other => Err(ConnectInvalidPlanInvalidSchemaNonStructType {

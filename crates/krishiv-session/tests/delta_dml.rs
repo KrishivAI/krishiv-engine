@@ -170,8 +170,8 @@ fn oracle_message(e: &KrishivError, dir: &Path) -> String {
         .replace(&dir.display().to_string(), "<path>")
 }
 
-/// Steps whose commits differ from delta-spark's by a recorded difference (the connector's
-/// `write::dml` module): delta-spark writes deletion vectors there, Krishiv rewrites files.
+/// Steps where delta-spark marks rows in deletion vectors (its default confs on a table with
+/// them on): a file it adds again with a new vector is the file it removes.
 fn writes_deletion_vectors(step: &Value) -> bool {
     step["confs"]
         .as_object()
@@ -376,11 +376,10 @@ fn delta_dml_metrics_match() {
             theirs_p.len(),
             "{name}: {ours_p:?} {theirs_p:?}"
         );
-        if writes_deletion_vectors(&step) {
-            // delta-spark marked rows in deletion vectors; Krishiv rewrote (a recorded
-            // difference): only the rows are compared (`delta_dml_matches_spark`).
-            continue;
-        }
+        // Where delta-spark marked rows in deletion vectors Krishiv does too (PR-37d): a file
+        // added again with its new vector is no new file (`tests/delta_dvs.rs` compares the
+        // vectors).
+        let marks = writes_deletion_vectors(&step);
         let (ours_m, theirs_m) = (&info["operationMetrics"], &want["operationMetrics"]);
         let keys = |m: &Value| {
             let mut k: Vec<String> = m.as_object().unwrap().keys().cloned().collect();
@@ -419,7 +418,18 @@ fn delta_dml_metrics_match() {
             p.dedup();
             p
         };
-        let (ours_adds, theirs_adds) = (of_kind(commit, "add"), of_kind_json(theirs, "adds"));
+        let theirs_removed: Vec<&Value> = of_kind_json(theirs, "removes")
+            .into_iter()
+            .map(|r| &r["path"])
+            .collect();
+        let ours_adds: Vec<&Value> = of_kind(commit, "add")
+            .into_iter()
+            .filter(|a| a.get("deletionVector").is_none())
+            .collect();
+        let theirs_adds: Vec<&Value> = of_kind_json(theirs, "adds")
+            .into_iter()
+            .filter(|a| !marks || !theirs_removed.contains(&&a["path"]))
+            .collect();
         assert_eq!(
             ours_adds.is_empty(),
             theirs_adds.is_empty(),
@@ -498,6 +508,88 @@ fn delta_cdf_dml_refused() {
         refusals += 1;
     }
     assert_eq!(refusals, CDF_REFUSED.len());
+
+    // The other kinds of design section 6.2, one case each, on the oracle's change-data-feed
+    // table (partitioned by `p`): `UPDATE` and the copy-on-write `DELETE` are the steps above.
+    let cases: &[CdfCase] = &[
+        (
+            "INSERT OVERWRITE",
+            "INSERT OVERWRITE c VALUES (9, 'i', 9, 'x')",
+            &[],
+        ),
+        ("replaceWhere", "", &[("replaceWhere", "p = 'x'")]),
+        (
+            "dynamic partition overwrite",
+            "",
+            &[("partitionOverwriteMode", "dynamic")],
+        ),
+        (
+            "MERGE with removes",
+            "MERGE INTO c t USING (SELECT CAST(1 AS BIGINT) AS id) s ON t.id = s.id \
+             WHEN MATCHED THEN DELETE",
+            &[],
+        ),
+    ];
+    for (what, statement, options) in cases {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("t");
+        copy_dir(&fixtures().join("change-data-feed/before"), &dir);
+        let path = dir.to_string_lossy().into_owned();
+        let s = Session::new().unwrap();
+        sql(&s, &format!("CREATE TABLE c USING delta LOCATION '{path}'")).unwrap();
+        let versions = commits_from(&dir, 0).len();
+        let files = parquet_count(&dir);
+        let outcome = if statement.is_empty() {
+            block_on(async {
+                let mut w = s
+                    .sql("SELECT * FROM c WHERE p = 'x'")
+                    .await?
+                    .write()
+                    .format("delta")
+                    .mode("overwrite");
+                for (k, v) in *options {
+                    w = w.option(k, v);
+                }
+                w.save(&path).await
+            })
+        } else {
+            sql(&s, statement).map(drop)
+        };
+        let e = outcome.expect_err(what);
+        assert_eq!(
+            e.error_class().name(),
+            "UNSUPPORTED_FEATURE.TABLE_OPERATION",
+            "{what}: {e}"
+        );
+        assert!(e.to_string().contains("change data feed"), "{what}: {e}");
+        assert_eq!(commits_from(&dir, 0).len(), versions, "{what}: no commit");
+        assert_eq!(parquet_count(&dir), files, "{what}: no file written");
+    }
+}
+
+/// A statement refused on a change-data-feed table: what it is, its SQL (empty: a DataFrame
+/// overwrite of partition `x`) and the write's options.
+type CdfCase = (
+    &'static str,
+    &'static str,
+    &'static [(&'static str, &'static str)],
+);
+
+/// The data files under `dir`, at any depth.
+fn parquet_count(dir: &Path) -> usize {
+    let mut n = 0;
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        for e in std::fs::read_dir(&d).unwrap() {
+            let p = e.unwrap().path();
+            if p.is_dir() {
+                stack.push(p);
+            } else if p.extension().is_some_and(|x| x == "parquet") {
+                n += 1;
+            }
+        }
+    }
+    n
 }
 
 /// The steps whose tables Spark reads back (`READBACK_DML`).

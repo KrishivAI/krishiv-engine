@@ -368,9 +368,9 @@ fn merge_plans_a_sort_merge_join() {
         plain,
         sorted(&format!("SELECT /*+ MERGE(y) */ x.a, y.b {EQUI}"))
     );
-    // `MERGE` over a key the sort cannot order falls through, as in Spark.
+    // An array is an orderable key in Spark (element by element), so `MERGE` sorts on it.
     let (j, _, w) = join("SELECT /*+ MERGE(y) */ x.a FROM t x JOIN t y ON array(x.a) = array(y.a)");
-    assert_eq!(j.name, "HashJoin", "{j}");
+    assert_eq!(j.name, "SortMergeJoin", "{j}");
     assert!(w.is_empty(), "{w:?}");
     // `NOT IN` needs the whole build side: a hash join whatever is asked.
     let (j, _, _) = join("SELECT /*+ MERGE(x) */ x.a FROM t x WHERE x.a NOT IN (SELECT a FROM t)");

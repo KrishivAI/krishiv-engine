@@ -357,6 +357,18 @@ impl DateTimePattern {
         format::format_time_of_day(&self.items, nanos)
     }
 
+    /// [`Self::format_time_of_day`] appended to `out`, so a column reuses one buffer:
+    /// `Ok(false)`, with `out` unchanged, where that gives `Ok(None)`.
+    ///
+    /// # Errors
+    /// A legacy pattern (`KRISHIV_UNSUPPORTED_FEATURE`).
+    pub fn write_time_of_day(&self, nanos: i64, out: &mut String) -> Result<bool, KrishivError> {
+        if self.legacy.is_some() {
+            return Err(unsupported("a legacy datetime pattern formatting a TIME"));
+        }
+        format::write_time_of_day(&self.items, nanos, out)
+    }
+
     /// `days` (a `DATE`).
     ///
     /// # Errors

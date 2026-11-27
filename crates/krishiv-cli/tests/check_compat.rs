@@ -52,7 +52,8 @@ fn keys(findings: &Value) -> BTreeSet<Key> {
         .iter()
         .map(|f| {
             let file = f["file"].as_str().expect("file");
-            let file = file.rsplit('/').next().expect("name").to_string();
+            // The report names files natively: `\` separators on Windows.
+            let file = file.rsplit(['/', '\\']).next().expect("name").to_string();
             (
                 file,
                 f["line"].as_u64().expect("line"),

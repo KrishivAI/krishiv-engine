@@ -18,6 +18,10 @@ workspace = true
 krishiv-common = { path = "../krishiv-common", version = "=0.2.1" }
 libmimalloc-sys = { workspace = true, features = ["extended"] }
 
+# The `.init_array` constructor reads the cgroup limits with plain system calls (ADR 0028: OS calls through rustix).
+[target.'cfg(all(target_os = "linux", target_env = "gnu"))'.dependencies]
+rustix.workspace = true
+
 [features]
 # Live-heap counting for memory measurements (`krishiv_alloc::heap`).
 heap-stats = []

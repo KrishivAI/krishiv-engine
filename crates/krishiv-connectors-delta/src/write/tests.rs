@@ -103,10 +103,7 @@ impl Env {
             .unwrap();
         let sched = IoScheduler::new(IoConfig::default());
         let id = StoreId::new("file");
-        sched.register_whole_listing_store(
-            id.clone(),
-            Arc::new(krishiv_io::SettledLocalFileSystem::new()),
-        );
+        sched.register_whole_listing_store(id.clone(), Arc::new(crate::TestLocalStore::new()));
         let root = TreePool::new(memory);
         let query_pool = root.child("query", None);
         let process: Arc<dyn MemoryPool> = TreePool::new(&MemoryConfig::default());
@@ -1047,7 +1044,7 @@ fn a_create_under_a_refused_feature_writes_nothing() {
                 env.write(&new, WriteMode::Append, rows(&[(1, "a", Some("x"))]), &[])
                     .unwrap_err()
             } else {
-                env.rt.block_on(new.create_empty("w")).unwrap_err()
+                env.rt.block_on(new.create_empty("w", None)).unwrap_err()
             };
             assert_eq!(
                 e.error_class(),
@@ -1080,7 +1077,7 @@ fn a_create_under_a_refused_feature_writes_nothing() {
         None,
     )
     .unwrap();
-    env.rt.block_on(new.create_empty("w")).unwrap();
+    env.rt.block_on(new.create_empty("w", None)).unwrap();
     assert_eq!(env.latest(), 0);
 }
 
@@ -1193,7 +1190,9 @@ fn column_mapping_writes_physical_names_and_field_ids() {
 }
 
 mod dml;
+mod dvs;
 mod lifecycle;
 mod merge;
+mod options;
 mod readback;
 mod streaming;

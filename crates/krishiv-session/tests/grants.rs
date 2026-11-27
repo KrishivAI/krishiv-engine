@@ -5,6 +5,8 @@
 //! as owner) allow. A revoke takes effect for plans analysed and relations cached before it.
 #![cfg(test)]
 
+mod file_url;
+use file_url::file_url;
 use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
@@ -324,8 +326,8 @@ fn the_creator_owns_and_a_drop_takes_the_grants_with_it() {
         ok(
             &root,
             &format!(
-                "GRANT ALL PRIVILEGES ON PATH 'file:{}' TO user:{who}",
-                wh.display()
+                "GRANT ALL PRIVILEGES ON PATH '{}' TO user:{who}",
+                file_url(&wh)
             ),
         );
     }
@@ -464,8 +466,8 @@ fn path_grants_match_by_whole_segments() {
     ok(
         &root,
         &format!(
-            "GRANT SELECT ON PATH 'file:{}' TO user:ana",
-            data.join("sales/../sales").display()
+            "GRANT SELECT ON PATH '{}' TO user:ana",
+            file_url(&data.join("sales/../sales"))
         ),
     );
     assert_eq!(ok(&ana, &read(&sales)), 1);
@@ -622,8 +624,8 @@ fn a_revoke_reaches_only_the_callers_own_grants_unless_owner_or_admin() {
     ok(
         &root,
         &format!(
-            "GRANT ALL PRIVILEGES ON PATH 'file:{}' TO user:ana",
-            wh.display()
+            "GRANT ALL PRIVILEGES ON PATH '{}' TO user:ana",
+            file_url(&wh)
         ),
     );
     ok(&ana, "CREATE TABLE mine (a INT) USING parquet");

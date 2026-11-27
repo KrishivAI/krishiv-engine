@@ -172,6 +172,10 @@ fn duplicate_file_flag_is_an_error() {
 // Tool discovery.
 
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "repo tooling test: runs shell-script stand-ins and sh, Unix only"
+)]
 fn discovery_with_fake_executables() {
     let dir = tmp("discover");
     // Empty entries are skipped: nothing is found.

@@ -72,15 +72,36 @@ pub struct OpenOptions {
 /// trailing `/` otherwise (`s3://bucket/key`).
 #[must_use]
 pub fn hadoop_path(url: &url::Url) -> String {
-    if url.scheme() == "file"
-        && url.host_str().is_none_or(str::is_empty)
-        && let Ok(path) = url.to_file_path()
-    {
-        let text = path.to_string_lossy();
+    if url.scheme() == "file" && url.host_str().is_none_or(str::is_empty) {
+        // The URL's own path, decoded, not `Url::to_file_path`: on Windows that is `C:\x\` (and
+        // fails without a drive), while Hadoop's form is `file:/C:/x` there too.
+        let text = percent_decoded(url.path());
         let trimmed = text.trim_end_matches('/');
         return format!("file:{}", if trimmed.is_empty() { "/" } else { trimmed });
     }
     url.as_str().trim_end_matches('/').to_owned()
+}
+
+/// `text` with its `%XX` escapes decoded; a `%` not followed by two hex digits stays as written.
+fn percent_decoded(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let hex = |b: u8| char::from(b).to_digit(16);
+        if bytes[i] == b'%'
+            && let (Some(&h), Some(&l)) = (bytes.get(i + 1), bytes.get(i + 2))
+            && let (Some(h), Some(l)) = (hex(h), hex(l))
+        {
+            // Two hex digits: at most 0xFF, so the cast is exact.
+            out.push(u8::try_from(h * 16 + l).unwrap_or(b'%'));
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// Whether `engine`'s root holds a Delta table: a commit or checkpoint file under `_delta_log/`.
@@ -180,6 +201,38 @@ pub(crate) struct Inner {
     pub(crate) units: Arc<[ScanUnit]>,
     pub(crate) scan_options: ScanOptions,
     pub(crate) limits: crate::commit::RetryLimits,
+    /// delta-spark's `spark.databricks.delta.{delete,update,merge}.deletionVectors.persistent`
+    /// (internal, default true; `DeltaSQLConf.scala:2949-2968`) as the opening query's
+    /// configuration sets them.
+    pub(crate) persistent_dvs: PersistentDvs,
+}
+
+/// Whether `DELETE`, `UPDATE` and `MERGE` mark rows in deletion vectors where the table allows
+/// it (delta-spark's per-command `...deletionVectors.persistent` confs).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PersistentDvs {
+    pub(crate) delete: bool,
+    pub(crate) update: bool,
+    pub(crate) merge: bool,
+}
+
+impl PersistentDvs {
+    /// The confs as `config` sets them (unset: true; only `false` turns one off: another
+    /// value, which Spark refuses at `SET` for these boolean confs, keeps the default).
+    pub(crate) fn from_config(config: &Config) -> Self {
+        let flag = |op: &str| {
+            config
+                .get_unregistered(&format!(
+                    "spark.databricks.delta.{op}.deletionVectors.persistent"
+                ))
+                .is_none_or(|v| !v.trim().eq_ignore_ascii_case("false"))
+        };
+        Self {
+            delete: flag("delete"),
+            update: flag("update"),
+            merge: flag("merge"),
+        }
+    }
 }
 
 /// A Delta table at one version for one query (see the module docs).
@@ -334,6 +387,7 @@ impl DeltaTable {
                 units,
                 scan_options: ScanOptions::from_config(config),
                 limits: crate::commit::RetryLimits::from_config(config),
+                persistent_dvs: PersistentDvs::from_config(config),
             }),
         })
     }
@@ -452,12 +506,36 @@ impl DeltaTable {
             units,
             scan_options: i.scan_options,
             limits: i.limits,
+            persistent_dvs: i.persistent_dvs,
         })))
     }
 
     /// The commit loop's bounds from the table's configuration.
     pub(crate) fn retry_limits(&self) -> crate::commit::RetryLimits {
         self.inner.limits
+    }
+
+    /// The per-command persistent deletion vector confs of the opening query.
+    pub(crate) fn persistent_dvs(&self) -> PersistentDvs {
+        self.inner.persistent_dvs
+    }
+
+    /// Whether type widening is enabled: `delta.enableTypeWidening = true` (delta-spark's
+    /// `TypeWidening.isEnabled`, `TypeWidening.scala:43-52`), so a write's schema merge would
+    /// widen a column's type.
+    #[must_use]
+    pub fn type_widening_enabled(&self) -> bool {
+        self.inner.snapshot.table_properties().enable_type_widening == Some(true)
+    }
+
+    /// Whether the table takes new deletion vectors: the feature in its protocol and
+    /// `delta.enableDeletionVectors = true` (delta-spark's `deletionVectorsWritable`,
+    /// `DeletionVectorUtils.scala:72-74`).
+    pub(crate) fn dv_writable(&self) -> bool {
+        self.inner
+            .snapshot
+            .table_configuration()
+            .is_feature_enabled(&delta_kernel::table_features::TableFeature::DeletionVectors)
     }
 }
 
@@ -705,7 +783,20 @@ fn canonical(kernel: &DataType, arrow: &Field) -> Result<Field, KrishivError> {
             )));
         }
     };
-    Ok(arrow.clone().with_data_type(t))
+    let field = arrow.clone().with_data_type(t);
+    if matches!(kernel, DataType::Variant(_)) {
+        // The engine's own Variant field carries its type tags (the Arrow extension name), so
+        // a scan's column meets one the engine made (a CTAS's new table) in a union.
+        let mut metadata = field.metadata().clone();
+        metadata.extend(
+            krishiv_types::DataType::Variant
+                .to_arrow_field("", true)
+                .metadata()
+                .clone(),
+        );
+        return Ok(field.with_metadata(metadata));
+    }
+    Ok(field)
 }
 
 fn internal(message: String) -> KrishivError {
