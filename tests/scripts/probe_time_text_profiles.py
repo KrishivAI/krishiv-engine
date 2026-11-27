@@ -12,6 +12,8 @@ Runs a REAL Spark (never from memory) in a throw-away container and prints one J
 - `schema_of_json`: `schema_of_json(text, options)` over string values that read as times and timestamps, per
   setting (`spark.sql.timeType.enabled`, `spark.sql.timestampType`, `spark.sql.legacy.timeParserPolicy`): the
   `inferTimestamp` arm of `JsonInferSchema` (TIME only in 4.3.0, NTZ only by default type, the legacy fallback).
+- `json_file`: the same texts as JSON files (one record per line), read with the same options and settings: the
+  file read's inferred schema and the column `t` cast to STRING (a refusal's error class instead).
 
 Usage (from repo root), once per version:
 
@@ -22,7 +24,7 @@ Usage (from repo root), once per version:
 
 Checked by `krishiv-session/tests/time_file_reads.rs` (`text_time_follows_the_profile_runs`) and
 `krishiv-io/src/csv/time_tests.rs` (the 4.2 profile rows); the `schema_of_json` section by
-`krishiv-session/tests/schema_of_json_time.rs`.
+`krishiv-session/tests/schema_of_json_time.rs`, the `json_file` section by `krishiv-session/tests/json_file_time.rs`.
 """
 
 import json
@@ -105,6 +107,7 @@ def main() -> None:
 
     spark.conf.set("spark.sql.timeType.enabled", "false")
     sojson = {}
+    jfile = {}
     for setting, confs in SOJ_SETTINGS:
         for k, v in confs.items():
             spark.conf.set(k, v)
@@ -120,10 +123,25 @@ def main() -> None:
                 got = "ERROR " + (getattr(e, "getErrorClass", lambda: None)() or type(e).__name__)
             rows.append({"text": text, "options": opts, "schema": got})
         sojson[setting] = rows
+        frows = []
+        for i, (text, opts) in enumerate(SOJ_CASES):
+            path = os.path.join(root, f"case-{setting.replace(' ', '-')}-{i}.json")
+            with open(path, "w") as f:
+                f.write(text + "\n")
+            try:
+                df = spark.read.options(**opts).json(path)
+                schema = df.schema.simpleString()
+                values = [r.s for r in df.selectExpr("CAST(t AS STRING) AS s").collect()]
+            # The error class is the result.
+            except Exception as e:
+                schema = "ERROR " + (getattr(e, "getErrorClass", lambda: None)() or type(e).__name__)
+                values = []
+            frows.append({"text": text, "options": opts, "schema": schema, "values": values})
+        jfile[setting] = frows
         for k in confs:
             spark.conf.unset(k)
 
-    out = {"spark": spark.version, "infer": infer, "read": read, "schema_of_json": sojson}
+    out = {"spark": spark.version, "infer": infer, "read": read, "schema_of_json": sojson, "json_file": jfile}
     json.dump(out, sys.stdout, indent=2, sort_keys=True)
     sys.stdout.write("\n")
     spark.stop()

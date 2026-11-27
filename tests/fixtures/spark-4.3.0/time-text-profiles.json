@@ -11,6 +11,1103 @@
       "schema_of_csv": "STRUCT<_c0: TIME(6)>"
     }
   },
+  "json_file": {
+    "default": [
+      {
+        "options": {},
+        "schema": "struct<t:string>",
+        "text": "{\"t\":\"12:34:56\"}",
+        "values": [
+          "12:34:56"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "struct<t:timestamp>",
+        "text": "{\"t\":\"12:34:56\"}",
+        "values": [
+          "2026-11-27 12:34:56"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "struct<t:timestamp>",
+        "text": "{\"t\":\"12:34:56.123456789\"}",
+        "values": [
+          "2026-11-27 12:34:56.123456"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "struct<t:timestamp>",
+        "text": "{\"t\":\"12:34\"}",
+        "values": [
+          "2026-11-27 12:34:00"
+        ]
+      },
+      {
+        "options": {},
+        "schema": "struct<t:string>",
+        "text": "{\"t\":\"2024-01-02 03:04:05\"}",
+        "values": [
+          "2024-01-02 03:04:05"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "struct<t:timestamp>",
+        "text": "{\"t\":\"2024-01-02 03:04:05\"}",
+        "values": [
+          "2024-01-02 03:04:05"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "struct<t:timestamp>",
+        "text": "{\"t\":\"2024-01-02T03:04:05+01:00\"}",
+        "values": [
+          "2024-01-02 02:04:05"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "struct<t:timestamp>",
+        "text": "{\"t\":\"2024-01-02\"}",
+        "values": [
+          "2024-01-02 00:00:00"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "struct<t:timestamp>",
+        "text": "{\"t\":\"2024-1-2 3:4:5\"}",
+        "values": [
+          "2024-01-02 03:04:05"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "struct<t:string>",
+        "text": "{\"t\":\"not a time\"}",
+        "values": [
+          "not a time"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "struct<t:timestamp>",
+        "text": "[{\"t\":\"12:34:56\"},{\"t\":\"2024-01-02 03:04:05\"}]",
+        "values": [
+          "2026-11-27 12:34:56",
+          "2024-01-02 03:04:05"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "struct<t:timestamp>",
+        "text": "[{\"t\":\"2024-01-02 03:04:05\"},{\"t\":\"2024-01-02T03:04:05Z\"}]",
+        "values": [
+          "2024-01-02 03:04:05",
+          "2024-01-02 03:04:05"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "struct<t:string>",
+        "text": "[{\"t\":\"2024-01-02 03:04:05\"},{\"t\":\"abc\"}]",
+        "values": [
+          "2024-01-02 03:04:05",
+          "abc"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "struct<t:timestamp>",
+        "text": "[{\"t\":\"12:34:56\"},{\"t\":null}]",
+        "values": [
+          "2026-11-27 12:34:56",
+          null
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true",
+          "timestampFormat": "dd/MM/yyyy"
+        },
+        "schema": "struct<t:timestamp>",
+        "text": "{\"t\":\"02/01/2024\"}",
+        "values": [
+          "2024-01-02 00:00:00"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true",
+          "timestampFormat": "dd/MM/yyyy"
+        },
+        "schema": "struct<t:string>",
+        "text": "{\"t\":\"2024-01-02 03:04:05\"}",
+        "values": [
+          "2024-01-02 03:04:05"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true",
+          "timestampNTZFormat": "dd/MM/yyyy HH:mm"
+        },
+        "schema": "struct<t:string>",
+        "text": "{\"t\":\"02/01/2024 03:04\"}",
+        "values": [
+          "02/01/2024 03:04"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true",
+          "timeFormat": "HH.mm"
+        },
+        "schema": "struct<t:string>",
+        "text": "{\"t\":\"12.34\"}",
+        "values": [
+          "12.34"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true",
+          "primitivesAsString": "true"
+        },
+        "schema": "struct<n:string,t:timestamp>",
+        "text": "{\"t\":\"12:34:56\",\"n\":1}",
+        "values": [
+          "2026-11-27 12:34:56"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true",
+          "prefersDecimal": "true"
+        },
+        "schema": "struct<t:decimal(2,1)>",
+        "text": "{\"t\":\"1.5\"}",
+        "values": [
+          "1.5"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true",
+          "prefersDecimal": "true"
+        },
+        "schema": "struct<t:timestamp>",
+        "text": "{\"t\":\"12:34:56\"}",
+        "values": [
+          "2026-11-27 12:34:56"
+        ]
+      }
+    ],
+    "legacy": [
+      {
+        "options": {},
+        "schema": "struct<t:string>",
+        "text": "{\"t\":\"12:34:56\"}",
+        "values": [
+          "12:34:56"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "struct<t:string>",
+        "text": "{\"t\":\"12:34:56\"}",
+        "values": [
+          "12:34:56"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "struct<t:string>",
+        "text": "{\"t\":\"12:34:56.123456789\"}",
+        "values": [
+          "12:34:56.123456789"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "struct<t:string>",
+        "text": "{\"t\":\"12:34\"}",
+        "values": [
+          "12:34"
+        ]
+      },
+      {
+        "options": {},
+        "schema": "struct<t:string>",
+        "text": "{\"t\":\"2024-01-02 03:04:05\"}",
+        "values": [
+          "2024-01-02 03:04:05"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "struct<t:timestamp>",
+        "text": "{\"t\":\"2024-01-02 03:04:05\"}",
+        "values": [
+          "2024-01-02 03:04:05"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "struct<t:string>",
+        "text": "{\"t\":\"2024-01-02T03:04:05+01:00\"}",
+        "values": [
+          "2024-01-02T03:04:05+01:00"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "struct<t:timestamp>",
+        "text": "{\"t\":\"2024-01-02\"}",
+        "values": [
+          "2024-01-02 00:00:00"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "struct<t:timestamp>",
+        "text": "{\"t\":\"2024-1-2 3:4:5\"}",
+        "values": [
+          "2024-01-02 03:04:05"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "struct<t:string>",
+        "text": "{\"t\":\"not a time\"}",
+        "values": [
+          "not a time"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "struct<t:string>",
+        "text": "[{\"t\":\"12:34:56\"},{\"t\":\"2024-01-02 03:04:05\"}]",
+        "values": [
+          "12:34:56",
+          "2024-01-02 03:04:05"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "struct<t:string>",
+        "text": "[{\"t\":\"2024-01-02 03:04:05\"},{\"t\":\"2024-01-02T03:04:05Z\"}]",
+        "values": [
+          "2024-01-02 03:04:05",
+          "2024-01-02T03:04:05Z"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "struct<t:string>",
+        "text": "[{\"t\":\"2024-01-02 03:04:05\"},{\"t\":\"abc\"}]",
+        "values": [
+          "2024-01-02 03:04:05",
+          "abc"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "struct<t:string>",
+        "text": "[{\"t\":\"12:34:56\"},{\"t\":null}]",
+        "values": [
+          "12:34:56",
+          null
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true",
+          "timestampFormat": "dd/MM/yyyy"
+        },
+        "schema": "struct<t:timestamp>",
+        "text": "{\"t\":\"02/01/2024\"}",
+        "values": [
+          "2024-01-02 00:00:00"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true",
+          "timestampFormat": "dd/MM/yyyy"
+        },
+        "schema": "struct<t:timestamp>",
+        "text": "{\"t\":\"2024-01-02 03:04:05\"}",
+        "values": [
+          "2024-01-02 03:04:05"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true",
+          "timestampNTZFormat": "dd/MM/yyyy HH:mm"
+        },
+        "schema": "struct<t:string>",
+        "text": "{\"t\":\"02/01/2024 03:04\"}",
+        "values": [
+          "02/01/2024 03:04"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true",
+          "timeFormat": "HH.mm"
+        },
+        "schema": "struct<t:string>",
+        "text": "{\"t\":\"12.34\"}",
+        "values": [
+          "12.34"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true",
+          "primitivesAsString": "true"
+        },
+        "schema": "struct<n:string,t:string>",
+        "text": "{\"t\":\"12:34:56\",\"n\":1}",
+        "values": [
+          "12:34:56"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true",
+          "prefersDecimal": "true"
+        },
+        "schema": "struct<t:decimal(2,1)>",
+        "text": "{\"t\":\"1.5\"}",
+        "values": [
+          "1.5"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true",
+          "prefersDecimal": "true"
+        },
+        "schema": "struct<t:string>",
+        "text": "{\"t\":\"12:34:56\"}",
+        "values": [
+          "12:34:56"
+        ]
+      }
+    ],
+    "ntz": [
+      {
+        "options": {},
+        "schema": "struct<t:string>",
+        "text": "{\"t\":\"12:34:56\"}",
+        "values": [
+          "12:34:56"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "struct<t:timestamp>",
+        "text": "{\"t\":\"12:34:56\"}",
+        "values": [
+          "2026-11-27 12:34:56"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "struct<t:timestamp>",
+        "text": "{\"t\":\"12:34:56.123456789\"}",
+        "values": [
+          "2026-11-27 12:34:56.123456"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "struct<t:timestamp>",
+        "text": "{\"t\":\"12:34\"}",
+        "values": [
+          "2026-11-27 12:34:00"
+        ]
+      },
+      {
+        "options": {},
+        "schema": "struct<t:string>",
+        "text": "{\"t\":\"2024-01-02 03:04:05\"}",
+        "values": [
+          "2024-01-02 03:04:05"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "struct<t:timestamp_ntz>",
+        "text": "{\"t\":\"2024-01-02 03:04:05\"}",
+        "values": [
+          "2024-01-02 03:04:05"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "struct<t:timestamp>",
+        "text": "{\"t\":\"2024-01-02T03:04:05+01:00\"}",
+        "values": [
+          "2024-01-02 02:04:05"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "struct<t:timestamp_ntz>",
+        "text": "{\"t\":\"2024-01-02\"}",
+        "values": [
+          "2024-01-02 00:00:00"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "struct<t:timestamp_ntz>",
+        "text": "{\"t\":\"2024-1-2 3:4:5\"}",
+        "values": [
+          "2024-01-02 03:04:05"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "struct<t:string>",
+        "text": "{\"t\":\"not a time\"}",
+        "values": [
+          "not a time"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "struct<t:timestamp>",
+        "text": "[{\"t\":\"12:34:56\"},{\"t\":\"2024-01-02 03:04:05\"}]",
+        "values": [
+          "2026-11-27 12:34:56",
+          "2024-01-02 03:04:05"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "struct<t:timestamp>",
+        "text": "[{\"t\":\"2024-01-02 03:04:05\"},{\"t\":\"2024-01-02T03:04:05Z\"}]",
+        "values": [
+          "2024-01-02 03:04:05",
+          "2024-01-02 03:04:05"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "struct<t:string>",
+        "text": "[{\"t\":\"2024-01-02 03:04:05\"},{\"t\":\"abc\"}]",
+        "values": [
+          "2024-01-02 03:04:05",
+          "abc"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "struct<t:timestamp>",
+        "text": "[{\"t\":\"12:34:56\"},{\"t\":null}]",
+        "values": [
+          "2026-11-27 12:34:56",
+          null
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true",
+          "timestampFormat": "dd/MM/yyyy"
+        },
+        "schema": "struct<t:timestamp>",
+        "text": "{\"t\":\"02/01/2024\"}",
+        "values": [
+          "2024-01-02 00:00:00"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true",
+          "timestampFormat": "dd/MM/yyyy"
+        },
+        "schema": "struct<t:timestamp_ntz>",
+        "text": "{\"t\":\"2024-01-02 03:04:05\"}",
+        "values": [
+          "2024-01-02 03:04:05"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true",
+          "timestampNTZFormat": "dd/MM/yyyy HH:mm"
+        },
+        "schema": "struct<t:timestamp_ntz>",
+        "text": "{\"t\":\"02/01/2024 03:04\"}",
+        "values": [
+          "2024-01-02 03:04:00"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true",
+          "timeFormat": "HH.mm"
+        },
+        "schema": "struct<t:string>",
+        "text": "{\"t\":\"12.34\"}",
+        "values": [
+          "12.34"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true",
+          "primitivesAsString": "true"
+        },
+        "schema": "struct<n:string,t:timestamp>",
+        "text": "{\"t\":\"12:34:56\",\"n\":1}",
+        "values": [
+          "2026-11-27 12:34:56"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true",
+          "prefersDecimal": "true"
+        },
+        "schema": "struct<t:decimal(2,1)>",
+        "text": "{\"t\":\"1.5\"}",
+        "values": [
+          "1.5"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true",
+          "prefersDecimal": "true"
+        },
+        "schema": "struct<t:timestamp>",
+        "text": "{\"t\":\"12:34:56\"}",
+        "values": [
+          "2026-11-27 12:34:56"
+        ]
+      }
+    ],
+    "time": [
+      {
+        "options": {},
+        "schema": "struct<t:string>",
+        "text": "{\"t\":\"12:34:56\"}",
+        "values": [
+          "12:34:56"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "struct<t:time(6)>",
+        "text": "{\"t\":\"12:34:56\"}",
+        "values": [
+          "12:34:56"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "struct<t:time(6)>",
+        "text": "{\"t\":\"12:34:56.123456789\"}",
+        "values": [
+          "12:34:56.123456789"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "struct<t:time(6)>",
+        "text": "{\"t\":\"12:34\"}",
+        "values": [
+          "12:34:00"
+        ]
+      },
+      {
+        "options": {},
+        "schema": "struct<t:string>",
+        "text": "{\"t\":\"2024-01-02 03:04:05\"}",
+        "values": [
+          "2024-01-02 03:04:05"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "struct<t:timestamp>",
+        "text": "{\"t\":\"2024-01-02 03:04:05\"}",
+        "values": [
+          "2024-01-02 03:04:05"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "struct<t:timestamp>",
+        "text": "{\"t\":\"2024-01-02T03:04:05+01:00\"}",
+        "values": [
+          "2024-01-02 02:04:05"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "struct<t:timestamp>",
+        "text": "{\"t\":\"2024-01-02\"}",
+        "values": [
+          "2024-01-02 00:00:00"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "struct<t:timestamp>",
+        "text": "{\"t\":\"2024-1-2 3:4:5\"}",
+        "values": [
+          "2024-01-02 03:04:05"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "struct<t:string>",
+        "text": "{\"t\":\"not a time\"}",
+        "values": [
+          "not a time"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "struct<t:string>",
+        "text": "[{\"t\":\"12:34:56\"},{\"t\":\"2024-01-02 03:04:05\"}]",
+        "values": [
+          "12:34:56",
+          "2024-01-02 03:04:05"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "struct<t:timestamp>",
+        "text": "[{\"t\":\"2024-01-02 03:04:05\"},{\"t\":\"2024-01-02T03:04:05Z\"}]",
+        "values": [
+          "2024-01-02 03:04:05",
+          "2024-01-02 03:04:05"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "struct<t:string>",
+        "text": "[{\"t\":\"2024-01-02 03:04:05\"},{\"t\":\"abc\"}]",
+        "values": [
+          "2024-01-02 03:04:05",
+          "abc"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "struct<t:time(6)>",
+        "text": "[{\"t\":\"12:34:56\"},{\"t\":null}]",
+        "values": [
+          "12:34:56",
+          null
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true",
+          "timestampFormat": "dd/MM/yyyy"
+        },
+        "schema": "struct<t:timestamp>",
+        "text": "{\"t\":\"02/01/2024\"}",
+        "values": [
+          "2024-01-02 00:00:00"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true",
+          "timestampFormat": "dd/MM/yyyy"
+        },
+        "schema": "struct<t:string>",
+        "text": "{\"t\":\"2024-01-02 03:04:05\"}",
+        "values": [
+          "2024-01-02 03:04:05"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true",
+          "timestampNTZFormat": "dd/MM/yyyy HH:mm"
+        },
+        "schema": "struct<t:string>",
+        "text": "{\"t\":\"02/01/2024 03:04\"}",
+        "values": [
+          "02/01/2024 03:04"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true",
+          "timeFormat": "HH.mm"
+        },
+        "schema": "struct<t:time(6)>",
+        "text": "{\"t\":\"12.34\"}",
+        "values": [
+          "12:34:00"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true",
+          "primitivesAsString": "true"
+        },
+        "schema": "struct<n:string,t:time(6)>",
+        "text": "{\"t\":\"12:34:56\",\"n\":1}",
+        "values": [
+          "12:34:56"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true",
+          "prefersDecimal": "true"
+        },
+        "schema": "struct<t:decimal(2,1)>",
+        "text": "{\"t\":\"1.5\"}",
+        "values": [
+          "1.5"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true",
+          "prefersDecimal": "true"
+        },
+        "schema": "struct<t:time(6)>",
+        "text": "{\"t\":\"12:34:56\"}",
+        "values": [
+          "12:34:56"
+        ]
+      }
+    ],
+    "time ntz": [
+      {
+        "options": {},
+        "schema": "struct<t:string>",
+        "text": "{\"t\":\"12:34:56\"}",
+        "values": [
+          "12:34:56"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "struct<t:time(6)>",
+        "text": "{\"t\":\"12:34:56\"}",
+        "values": [
+          "12:34:56"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "struct<t:time(6)>",
+        "text": "{\"t\":\"12:34:56.123456789\"}",
+        "values": [
+          "12:34:56.123456789"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "struct<t:time(6)>",
+        "text": "{\"t\":\"12:34\"}",
+        "values": [
+          "12:34:00"
+        ]
+      },
+      {
+        "options": {},
+        "schema": "struct<t:string>",
+        "text": "{\"t\":\"2024-01-02 03:04:05\"}",
+        "values": [
+          "2024-01-02 03:04:05"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "struct<t:timestamp_ntz>",
+        "text": "{\"t\":\"2024-01-02 03:04:05\"}",
+        "values": [
+          "2024-01-02 03:04:05"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "struct<t:timestamp>",
+        "text": "{\"t\":\"2024-01-02T03:04:05+01:00\"}",
+        "values": [
+          "2024-01-02 02:04:05"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "struct<t:timestamp_ntz>",
+        "text": "{\"t\":\"2024-01-02\"}",
+        "values": [
+          "2024-01-02 00:00:00"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "struct<t:timestamp_ntz>",
+        "text": "{\"t\":\"2024-1-2 3:4:5\"}",
+        "values": [
+          "2024-01-02 03:04:05"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "struct<t:string>",
+        "text": "{\"t\":\"not a time\"}",
+        "values": [
+          "not a time"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "struct<t:string>",
+        "text": "[{\"t\":\"12:34:56\"},{\"t\":\"2024-01-02 03:04:05\"}]",
+        "values": [
+          "12:34:56",
+          "2024-01-02 03:04:05"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "struct<t:timestamp>",
+        "text": "[{\"t\":\"2024-01-02 03:04:05\"},{\"t\":\"2024-01-02T03:04:05Z\"}]",
+        "values": [
+          "2024-01-02 03:04:05",
+          "2024-01-02 03:04:05"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "struct<t:string>",
+        "text": "[{\"t\":\"2024-01-02 03:04:05\"},{\"t\":\"abc\"}]",
+        "values": [
+          "2024-01-02 03:04:05",
+          "abc"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true"
+        },
+        "schema": "struct<t:time(6)>",
+        "text": "[{\"t\":\"12:34:56\"},{\"t\":null}]",
+        "values": [
+          "12:34:56",
+          null
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true",
+          "timestampFormat": "dd/MM/yyyy"
+        },
+        "schema": "struct<t:timestamp>",
+        "text": "{\"t\":\"02/01/2024\"}",
+        "values": [
+          "2024-01-02 00:00:00"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true",
+          "timestampFormat": "dd/MM/yyyy"
+        },
+        "schema": "struct<t:timestamp_ntz>",
+        "text": "{\"t\":\"2024-01-02 03:04:05\"}",
+        "values": [
+          "2024-01-02 03:04:05"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true",
+          "timestampNTZFormat": "dd/MM/yyyy HH:mm"
+        },
+        "schema": "struct<t:timestamp_ntz>",
+        "text": "{\"t\":\"02/01/2024 03:04\"}",
+        "values": [
+          "2024-01-02 03:04:00"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true",
+          "timeFormat": "HH.mm"
+        },
+        "schema": "struct<t:time(6)>",
+        "text": "{\"t\":\"12.34\"}",
+        "values": [
+          "12:34:00"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true",
+          "primitivesAsString": "true"
+        },
+        "schema": "struct<n:string,t:time(6)>",
+        "text": "{\"t\":\"12:34:56\",\"n\":1}",
+        "values": [
+          "12:34:56"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true",
+          "prefersDecimal": "true"
+        },
+        "schema": "struct<t:decimal(2,1)>",
+        "text": "{\"t\":\"1.5\"}",
+        "values": [
+          "1.5"
+        ]
+      },
+      {
+        "options": {
+          "inferTimestamp": "true",
+          "prefersDecimal": "true"
+        },
+        "schema": "struct<t:time(6)>",
+        "text": "{\"t\":\"12:34:56\"}",
+        "values": [
+          "12:34:56"
+        ]
+      }
+    ]
+  },
   "read": {
     "HH:mm:ss.SSSSSSSSS": "12:34:56.123456789",
     "default": "12:34:56.123456789"

@@ -32,6 +32,8 @@ enum Ty {
     Decimal(u8, i8),
     Double,
     Timestamp,
+    /// `TIMESTAMP_NTZ`.
+    Ntz,
     /// `TIME(6)`.
     Time,
     Str,
@@ -51,7 +53,7 @@ fn java_cmp(a: &str, b: &str) -> std::cmp::Ordering {
 /// tightest common type of numbers, structs merged field by field, arrays
 /// by element type, anything else a string.
 fn compatible(a: Ty, b: Ty) -> Ty {
-    use Ty::{Array, Decimal, Double, Long, Null, Str, Struct};
+    use Ty::{Array, Decimal, Double, Long, Ntz, Null, Str, Struct, Timestamp};
     if a == b {
         return a;
     }
@@ -60,6 +62,7 @@ fn compatible(a: Ty, b: Ty) -> Ty {
         (Struct(f1), Struct(f2)) => Struct(merge_fields(f1, f2)),
         (Array(e1), Array(e2)) => Array(Box::new(compatible(*e1, *e2))),
         (Double, Long | Decimal(_, _)) | (Long | Decimal(_, _), Double) => Double,
+        (Ntz, Timestamp) | (Timestamp, Ntz) => Timestamp,
         (Decimal(p, s), Decimal(q, r)) => merge_decimals(p, s, q, r),
         // An integral type merges as the decimal that holds it (`Long` is
         // `DECIMAL(20, 0)`).
@@ -261,6 +264,11 @@ struct Infer<'a> {
     infer_timestamp: bool,
     /// `spark.sql.timeType.enabled`: a `TIME` may be inferred.
     time_type: bool,
+    /// `spark.sql.timestampType = TIMESTAMP_NTZ`: a zone-less timestamp
+    /// text infers `TIMESTAMP_NTZ`.
+    default_ntz: bool,
+    /// `spark.sql.legacy.timeParserPolicy = LEGACY`.
+    legacy: bool,
     dt: &'a Datetimes,
 }
 
@@ -277,15 +285,8 @@ impl Infer<'_> {
                     && let Some(t) = self.decimal_of_string(s)
                 {
                     t
-                } else if self.infer_timestamp
-                    && self.time_type
-                    && matches!(self.dt.parse_time(s), Ok(Some(_)))
-                {
-                    // Spark 4.3.0 tries a `TIME` first, under `inferTimestamp` only.
-                    Ty::Time
-                } else if self.infer_timestamp && matches!(self.dt.parse_timestamp(s), Ok(Some(_)))
-                {
-                    Ty::Timestamp
+                } else if self.infer_timestamp {
+                    self.timestamp_of_string(s)
                 } else {
                     Ty::Str
                 }
@@ -312,6 +313,26 @@ impl Infer<'_> {
                     .iter()
                     .fold(Ty::Null, |t, v| compatible(t, self.field(v))),
             )),
+        }
+    }
+
+    /// The `inferTimestamp` arm of Spark's string inference (v4.3.0
+    /// `JsonInferSchema` lines 181-205): a `TIME` (Spark 4.3, gate on), a
+    /// `TIMESTAMP_NTZ` (default type NTZ), a `TIMESTAMP` under
+    /// `timestampFormat` without the fallback, and under LEGACY a
+    /// `TIMESTAMP` for any zone-less timestamp text (SPARK-46769). A parse
+    /// failure of any kind is no match (`allCatch`, `parseOptional`).
+    fn timestamp_of_string(&self, s: &str) -> Ty {
+        if self.time_type && matches!(self.dt.parse_time(s), Ok(Some(_))) {
+            Ty::Time
+        } else if self.default_ntz && matches!(self.dt.parse_ntz_exact(s), Ok(Some(_))) {
+            Ty::Ntz
+        } else if matches!(self.dt.parse_timestamp_exact(s), Ok(Some(_)))
+            || (self.legacy && krishiv_kernels::text::spark_string_to_timestamp_ntz(s).is_some())
+        {
+            Ty::Timestamp
+        } else {
+            Ty::Str
         }
     }
 
@@ -404,6 +425,7 @@ fn sql_type(t: &Ty) -> String {
         Ty::Decimal(p, s) => format!("DECIMAL({p},{s})"),
         Ty::Double => "DOUBLE".to_owned(),
         Ty::Timestamp => "TIMESTAMP".to_owned(),
+        Ty::Ntz => "TIMESTAMP_NTZ".to_owned(),
         Ty::Time => "TIME(6)".to_owned(),
         Ty::Str => "STRING".to_owned(),
         Ty::Struct(fields) => format!(
@@ -426,6 +448,7 @@ fn arrow_type(t: &Ty) -> DataType {
         Ty::Decimal(p, s) => DataType::Decimal128(*p, *s),
         Ty::Double => DataType::Float64,
         Ty::Timestamp => DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+        Ty::Ntz => DataType::Timestamp(TimeUnit::Microsecond, None),
         Ty::Time => DataType::Time64(TimeUnit::Nanosecond),
         Ty::Struct(fields) => DataType::Struct(
             fields
@@ -601,6 +624,8 @@ pub(crate) fn infer<'a>(
             primitives_as_string: opts.primitives_as_string,
             infer_timestamp: opts.infer_timestamp,
             time_type: crate::text::infers_time(o),
+            default_ntz: crate::text::default_ntz(o),
+            legacy: crate::text::legacy_parser(o),
             dt: &dt,
         };
         let ratio = sampling_ratio(o)?;
