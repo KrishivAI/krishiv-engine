@@ -98,5 +98,6 @@ async fn a_global_view_over_a_file_read_is_read_as_global_temp_name() {
     let df = s.read().format("json").load([path.to_str().expect("utf8")]);
     df.create_global_temp_view("people").await.expect("create");
     assert_eq!(count(&s, "global_temp.people").await, 2);
-    assert!(s.sql("SELECT * FROM people").await.is_err());
+    let e = s.sql("SELECT * FROM people").await.expect_err("bare name");
+    assert_eq!(e.error_class().name(), "TABLE_OR_VIEW_NOT_FOUND");
 }
