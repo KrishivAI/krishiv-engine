@@ -215,6 +215,12 @@ def grid(page: Page, origin: str) -> list[str]:
         problems.append(
             f"grid: {drawn} rows in the page for 10,000 (expected a window)"
         )
+    # The rows are as tall as the virtualizer counts them (the page sets rowHeight 40, not the default 36).
+    heights = box.locator("tbody tr:not([aria-hidden])").evaluate_all(
+        "rs => [...new Set(rs.map(r => Math.round(r.getBoundingClientRect().height)))]"
+    )
+    if heights != [40]:
+        problems.append(f"grid: rows are {heights} px tall with rowHeight 40")
     box.evaluate("e => { e.scrollTop = e.scrollHeight; }")
     page.wait_for_timeout(300)
     if box.get_by_role("cell", name="10000", exact=True).count() != 1:

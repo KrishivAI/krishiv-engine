@@ -7,7 +7,8 @@
   // The grid shell of the wireframe's k-grid: TanStack Table (core) sorts, TanStack Virtual keeps only the visible
   // rows in the page past VIRTUAL_AFTER rows. The header is sticky; numbers are right-aligned in mono; a null is
   // shown as an italic "null"; the selected row is tinted with a gold edge. The box scrolls, never the page. Row
-  // positions are spacer rows whose height is set through Svelte's `style:` (CSSOM), so no style attribute is
+  // positions are spacer rows, and every row is `rowHeight` tall (the height the virtualizer counts with); both
+  // heights are set through Svelte's `style:` (CSSOM), so no style attribute is
   // written and the grid works under `style-src 'self'`.
   let {
     columns,
@@ -151,7 +152,7 @@
         >
           {#each columns as c (c.id)}
             {@const v = c.value(r.row)}
-            <td class={cn("h-9 border-b border-border px-3 align-middle whitespace-nowrap", c.num && "mono text-right tabular-nums")}>
+            <td class={cn("border-b border-border px-3 align-middle whitespace-nowrap", c.num && "mono text-right tabular-nums")} style:height={`${rowHeight}px`}>
               {#if cell}
                 {@render cell(r.row, c)}
               {:else if v === null || v === undefined}

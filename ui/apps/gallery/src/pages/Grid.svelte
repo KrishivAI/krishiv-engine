@@ -54,7 +54,7 @@
   </GridShell>
 </Section>
 <Section title="Result grid, 10,000 rows">
-  <GridShell class="w-full max-h-96" label="Readings" columns={RESULT} rows={READINGS} rowId={(r) => String(r.id)}>
+  <GridShell class="w-full max-h-96" label="Readings" rowHeight={40} columns={RESULT} rows={READINGS} rowId={(r) => String(r.id)}>
     {#snippet foot()}<span data-count>10,000 rows</span>{/snippet}
   </GridShell>
 </Section>
