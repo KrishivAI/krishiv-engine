@@ -594,9 +594,15 @@ impl CoverageFlags {
                 "--no-branch" => o.branch = false,
                 "--all-features" => o.all = true,
                 "--html" => o.html = true,
-                "-p" | "--package" => o
-                    .packages
-                    .push((*it.next().ok_or("-p needs a package name")?).to_owned()),
+                "-p" | "--package" => {
+                    let name = *it.next().ok_or("-p needs a package name")?;
+                    if name.contains(['*', '?', '[']) {
+                        return Err(format!(
+                            "-p takes an exact package name, not the pattern {name}"
+                        ));
+                    }
+                    o.packages.push(name.to_owned());
+                }
                 other => return Err(format!("unknown flag {other}")),
             }
         }
@@ -936,6 +942,7 @@ mod tests {
         assert_eq!(super::package_args(&f.packages), ["-p", "a", "-p", "b"]);
         assert_eq!(super::package_args(&[]), ["--workspace"]);
         assert!(super::CoverageFlags::parse(&["-p"]).is_err());
+        assert!(super::CoverageFlags::parse(&["-p", "krishiv-ser*"]).is_err());
         assert!(super::CoverageFlags::parse(&["--bogus"]).is_err());
         assert!(
             super::CoverageFlags::parse(&["--all-features", "--html"])
