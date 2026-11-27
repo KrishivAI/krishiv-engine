@@ -187,7 +187,10 @@ impl Resolver<'_> {
         for arg in args {
             let cx = Self::cx(&[], &[], env, "Range");
             let mut cx = cx;
-            cx.outer = false;
+            // Under `LATERAL` the left side's columns resolve and then fail
+            // to fold (`NON_FOLDABLE_ARGUMENT`); anywhere else a name is
+            // unresolved, as nothing encloses the call.
+            cx.outer = env.outer.last().is_some_and(|l| l.lateral);
             bounds.push(self.bind(arg, &cx)?);
         }
         let mut values: Vec<i64> = Vec::with_capacity(n);
