@@ -51,7 +51,7 @@ use arrow_schema::{
     ArrowError, DataType, Field, FieldRef, Fields, IntervalUnit, Schema, SchemaRef, TimeUnit,
 };
 use krishiv_common::error::{
-    CastOverflow, FailedReadFileNoHint, KrishivError, KrishivUnsupportedFeature,
+    CastOverflow, DatetimeOverflow, FailedReadFileNoHint, KrishivError, KrishivUnsupportedFeature,
     LegacyErrorTemp2093,
 };
 
@@ -1007,10 +1007,17 @@ fn convert(array: &ArrayRef, conv: &Conv, target: &DataType) -> Result<ArrayRef>
             let a = array
                 .as_primitive_opt::<TimestampNanosecondType>()
                 .ok_or_else(|| internal("a nanosecond cut of a non-nanosecond array"))?;
-            Ok(Arc::new(
-                a.unary::<_, TimestampNanosecondType>(|v| v.div_euclid(*unit) * unit)
-                    .with_timezone_opt(tz.clone()),
-            ))
+            // The floor of a value within a step of `i64::MIN` is below the carrier.
+            let floored = a
+                .try_unary::<_, TimestampNanosecondType, _>(|v| {
+                    v.checked_sub(v.rem_euclid(*unit)).ok_or(())
+                })
+                .map_err(|()| {
+                    KrishivError::from(DatetimeOverflow {
+                        operation: "floor a nanosecond timestamp to its precision".to_owned(),
+                    })
+                })?;
+            Ok(Arc::new(floored.with_timezone_opt(tz.clone())))
         }
         Conv::Same if array.data_type() == target => Ok(Arc::clone(array)),
         Conv::Same | Conv::Cast if !is_nested(target) => cast_leaf(array, target),
@@ -1454,4 +1461,36 @@ fn cast_int(array: &ArrayRef, target: &DataType) -> Result<ArrayRef> {
         }
         other => return Err(internal(format!("cannot cast an integer to {other}"))),
     })
+}
+
+#[cfg(test)]
+mod floor_tests {
+    use super::*;
+
+    /// A value whose floor to the precision is below the `i64` carrier is `DATETIME_OVERFLOW`, not a
+    /// panic or a wrap to 2262; one step above floors as usual.
+    #[test]
+    fn a_floor_below_the_nanosecond_carrier_overflows() {
+        let target = DataType::Timestamp(TimeUnit::Nanosecond, None);
+        let floor = |v: i64, unit: i64| {
+            let a: ArrayRef = Arc::new(PrimitiveArray::<TimestampNanosecondType>::from(vec![v]));
+            convert(&a, &Conv::FloorNanos(unit), &target)
+                .map(|a| a.as_primitive::<TimestampNanosecondType>().value(0))
+        };
+        // `i64::MIN + 8` is a multiple of 100: below it, the floor at precision 7 or 8 leaves the carrier.
+        for (v, unit) in [
+            (i64::MIN, 100),
+            (i64::MIN + 7, 100),
+            (i64::MIN, 10),
+            (i64::MIN + 7, 10),
+        ] {
+            let err = floor(v, unit).unwrap_err().to_string();
+            assert!(err.contains("DATETIME_OVERFLOW"), "{v} {unit}: {err}");
+        }
+        assert_eq!(floor(i64::MIN + 8, 100).unwrap(), i64::MIN + 8);
+        assert_eq!(floor(i64::MIN + 91, 100).unwrap(), i64::MIN + 8);
+        assert_eq!(floor(i64::MIN + 9, 10).unwrap(), i64::MIN + 8);
+        assert_eq!(floor(i64::MIN, 1).unwrap(), i64::MIN);
+        assert_eq!(floor(-1, 100).unwrap(), -100);
+    }
 }

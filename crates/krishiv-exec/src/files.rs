@@ -362,6 +362,8 @@ pub struct FileReads {
     formats: Arc<FormatRegistry>,
     paths: Arc<dyn PathLocator>,
     session: Arc<Config>,
+    /// The session's Spark release has the nanosecond timestamp types (4.3 on).
+    nanos_types_known: bool,
     listed: Mutex<Vec<(ReadKey, Arc<FileListing>)>>,
 }
 
@@ -389,8 +391,18 @@ impl FileReads {
             formats,
             paths,
             session,
+            nanos_types_known: true,
             listed: Mutex::new(Vec::new()),
         }
+    }
+
+    /// Reads as a Spark release before 4.3 when `known` is false: the nanosecond timestamp types
+    /// are never inferred and a Parquet footer schema naming one is not used, whatever
+    /// `spark.sql.timestampNanosTypes.enabled` says (that release has no such setting).
+    #[must_use]
+    pub fn with_nanos_types_known(mut self, known: bool) -> Self {
+        self.nanos_types_known = known;
+        self
     }
 
     /// The listing of reading `paths` as `format` with `options`: listed
@@ -635,6 +647,24 @@ impl FileReads {
         };
         let merge = self.merges_schemas(format.name(), options);
         let ignore_invalid_partition_paths = self.ignores_invalid_partition_paths(options);
+        let pinned;
+        let options = if self.nanos_types_known {
+            options
+        } else {
+            let mut o = options.clone();
+            o.retain(|k, _| {
+                !k.eq_ignore_ascii_case("timestampNanosTypes")
+                    && !k.eq_ignore_ascii_case("nanosTypesKnown")
+            });
+            for name in ["timestampNanosTypes", "nanosTypesKnown"] {
+                o.insert(
+                    name.to_owned(),
+                    OptionValue::from_user(name, "false".to_owned()),
+                );
+            }
+            pinned = o;
+            &pinned
+        };
         let (options, _) = format.options().parse(options, &self.session)?;
         // A read's layout is checked per leaf directory as Spark's partition discovery checks it; files
         // beside its partition directories are not read. A catalog table's listing kept its own files.

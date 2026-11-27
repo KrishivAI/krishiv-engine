@@ -138,45 +138,82 @@ pub(super) fn holds_interval(t: &DataType) -> bool {
 }
 
 /// `fields` with every `INT64 TIMESTAMP(NANOS)` leaf a `bigint`
-/// (`spark.sql.legacy.parquet.nanosAsLong`), at any depth; [`as_intervals`]
-/// retypes the decoded nanoseconds. arrow-rs also decodes an `INT96` as
-/// nanoseconds; a top-level `INT96` is already a microsecond `timestamp`
-/// here, and a nested one has no path, so a file with any `INT96` keeps its
-/// nested nanosecond leaves as they are.
+/// (`spark.sql.legacy.parquet.nanosAsLong`), at any depth, as Spark's
+/// `ParquetToSparkSchemaConverter` types each leaf; [`as_intervals`] retypes
+/// the decoded nanoseconds. arrow-rs also decodes an `INT96` as nanoseconds,
+/// so each nanosecond leaf is checked against its own Parquet column: the
+/// Arrow leaves are the file's columns in the same depth-first order. When
+/// the counts differ (not expected), only top-level `INT64` columns are
+/// retyped.
 pub(super) fn nanos_as_long(fields: Vec<FieldRef>, descr: &SchemaDescriptor) -> Vec<FieldRef> {
-    let int96 = descr
-        .columns()
-        .iter()
-        .any(|c| c.physical_type() == PhysicalType::INT96);
+    let leaves: usize = fields.iter().map(|f| leaf_count(f.data_type())).sum();
+    if leaves != descr.num_columns() {
+        return fields
+            .into_iter()
+            .map(|f| {
+                let top_int64 = descr.columns().iter().any(|c| {
+                    c.path().parts().len() == 1
+                        && c.path().parts()[0] == *f.name()
+                        && c.physical_type() == PhysicalType::INT64
+                });
+                match f.data_type() {
+                    DataType::Timestamp(TimeUnit::Nanosecond, _) if top_int64 => {
+                        Arc::new(f.as_ref().clone().with_data_type(DataType::Int64))
+                    }
+                    _ => f,
+                }
+            })
+            .collect();
+    }
+    let mut next = 0;
     fields
         .into_iter()
         .map(|f| {
-            let top_int64 = descr.columns().iter().any(|c| {
-                c.path().parts().len() == 1
-                    && c.path().parts()[0] == *f.name()
-                    && c.physical_type() == PhysicalType::INT64
-            });
-            match f.data_type() {
-                DataType::Timestamp(TimeUnit::Nanosecond, _) if top_int64 => {
-                    Arc::new(f.as_ref().clone().with_data_type(DataType::Int64))
-                }
-                DataType::Timestamp(..) => f,
-                _ if int96 => f,
-                t => Arc::new(f.as_ref().clone().with_data_type(longs(t))),
+            let t = longs(f.data_type(), descr, &mut next);
+            if t == *f.data_type() {
+                f
+            } else {
+                Arc::new(f.as_ref().clone().with_data_type(t))
             }
         })
         .collect()
 }
 
-fn longs(t: &DataType) -> DataType {
-    let field = |f: &FieldRef| Arc::new(f.as_ref().clone().with_data_type(longs(f.data_type())));
+/// The number of leaf columns of `t` (a struct of no fields has none).
+fn leaf_count(t: &DataType) -> usize {
     match t {
-        DataType::Timestamp(TimeUnit::Nanosecond, _) => DataType::Int64,
-        DataType::Struct(c) => DataType::Struct(c.iter().map(field).collect()),
+        DataType::Struct(c) => c.iter().map(|f| leaf_count(f.data_type())).sum(),
+        DataType::List(e) | DataType::LargeList(e) | DataType::Map(e, _) => {
+            leaf_count(e.data_type())
+        }
+        _ => 1,
+    }
+}
+
+/// `t` with its `INT64` nanosecond leaves `bigint`; `next` is the index of
+/// `t`'s first leaf column in `descr`, advanced past `t`.
+fn longs(t: &DataType, descr: &SchemaDescriptor, next: &mut usize) -> DataType {
+    let mut field = |f: &FieldRef| {
+        Arc::new(
+            f.as_ref()
+                .clone()
+                .with_data_type(longs(f.data_type(), descr, next)),
+        )
+    };
+    match t {
+        DataType::Struct(c) => DataType::Struct(c.iter().map(&mut field).collect()),
         DataType::List(e) => DataType::List(field(e)),
         DataType::LargeList(e) => DataType::LargeList(field(e)),
         DataType::Map(e, sorted) => DataType::Map(field(e), *sorted),
-        t => t.clone(),
+        t => {
+            let int64 = *next < descr.num_columns()
+                && descr.column(*next).physical_type() == PhysicalType::INT64;
+            *next = next.saturating_add(1);
+            match t {
+                DataType::Timestamp(TimeUnit::Nanosecond, _) if int64 => DataType::Int64,
+                t => t.clone(),
+            }
+        }
     }
 }
 

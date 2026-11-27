@@ -44,6 +44,7 @@ use krishiv_common::error::{
     InconsistentBehaviorCrossVersionDatetimeWeekBasedPattern,
     InvalidDatetimePatternIllegalCharacter, InvalidDatetimePatternLength,
     InvalidDatetimePatternWithSuggestion, KrishivError, KrishivUnsupportedFeature,
+    UnsupportedFeatureTimestampNanosWithLegacyTimeParser,
 };
 
 use crate::cast::TimeZoneRules;
@@ -322,23 +323,27 @@ impl DateTimePattern {
     /// instant within an offset of the `i64` range) or the pattern prints
     /// the name of a zone that needs the time-zone database.
     pub fn format_timestamp(&self, micros: i64, zone: Zone<'_>) -> Result<String, KrishivError> {
+        if let Some(l) = &self.legacy {
+            return l.format_timestamp(micros, zone);
+        }
         self.format_timestamp_nanos(micros, 0, zone)
     }
 
-    /// [`Self::format_timestamp`] of `micros` plus `nanos` (0..=999) nanoseconds within the microsecond:
-    /// the fraction fields print up to nine digits. The legacy `SimpleDateFormat` pattern reads the
-    /// microseconds only.
+    /// [`Self::format_timestamp`] of a `TIMESTAMP_LTZ(p)` (Spark 4.3): `micros` plus `nanos` (0..=999)
+    /// nanoseconds within the microsecond; the fraction fields print up to nine digits.
     ///
     /// # Errors
-    /// As [`Self::format_timestamp`].
+    /// As [`Self::format_timestamp`]; a legacy pattern (`timeParserPolicy=LEGACY`) is
+    /// `UNSUPPORTED_FEATURE.TIMESTAMP_NANOS_WITH_LEGACY_TIME_PARSER`, as Spark's legacy formatters'
+    /// `formatNanos`.
     pub fn format_timestamp_nanos(
         &self,
         micros: i64,
         nanos: u16,
         zone: Zone<'_>,
     ) -> Result<String, KrishivError> {
-        if let Some(l) = &self.legacy {
-            return l.format_timestamp(micros, zone);
+        if self.legacy.is_some() {
+            return Err(legacy_nanos_unsupported());
         }
         let offset = zone.rules.offset_at_utc(micros.div_euclid(1_000_000));
         let local = micros
@@ -465,7 +470,9 @@ impl DateTimePattern {
     }
 
     /// [`Self::parse_timestamp`] keeping the fraction's digits 7 to 9: the instant's microseconds
-    /// and the nanoseconds (0..=999) within that microsecond. The legacy parser has microseconds.
+    /// and the nanoseconds (0..=999) within that microsecond (a `TIMESTAMP_LTZ(p)`). A legacy pattern
+    /// (`timeParserPolicy=LEGACY`) matches nothing: Spark's legacy `parseNanos` throws, which its JSON
+    /// and CSV readers turn into a bad record (NULL under PERMISSIVE, Spark 4.3.0 run).
     ///
     /// # Errors
     /// As [`Self::parse_timestamp`].
@@ -475,7 +482,7 @@ impl DateTimePattern {
         session: &dyn TimeZoneRules,
     ) -> Result<Option<(i64, u16)>, KrishivError> {
         if self.legacy.is_some() {
-            return Ok(self.parse_timestamp(s, session)?.map(|m| (m, 0)));
+            return Ok(None);
         }
         let Some(p) = parse::parse(&self.items, s) else {
             return Ok(None);
@@ -571,6 +578,14 @@ impl DateTimePattern {
     pub(crate) fn parse_detailed(&self, s: &str) -> Result<parse::Resolved, parse::Fail> {
         parse::parse_detailed(&self.items, s)
     }
+}
+
+/// Spark's `TimestampFormatter.legacyNanosUnsupported`.
+pub fn legacy_nanos_unsupported() -> KrishivError {
+    UnsupportedFeatureTimestampNanosWithLegacyTimeParser {
+        config: POLICY_CONF.to_owned(),
+    }
+    .into()
 }
 
 fn unsupported(what: &str) -> KrishivError {

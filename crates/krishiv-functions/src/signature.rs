@@ -251,11 +251,11 @@ impl<'a> CallTypes<'a> {
         self
     }
 
-    /// The grammar of a type string in a call: the profile's, with the nanosecond types when they
-    /// are enabled.
+    /// The grammar of a type string in a call: the profile's (4.3's from 4.3 on), with the
+    /// nanosecond types when they are enabled.
     #[must_use]
     pub const fn type_grammar(&self) -> krishiv_types::TypeGrammar {
-        krishiv_types::TypeGrammar::new(matches!(self.profile, SparkProfile::V4_3))
+        krishiv_types::TypeGrammar::new(self.profile as u8 >= SparkProfile::V4_3 as u8)
             .with_nanos(self.nanos_types)
     }
 

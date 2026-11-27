@@ -202,8 +202,8 @@ pub fn spark_string_to_timestamp_ntz(s: &str) -> Option<i64> {
 }
 
 /// The nanoseconds (0..=999) within the microsecond that a timestamp string in the readers'
-/// default grammar names: its fraction's digits 7 to 9 (later ones dropped), 0 for a bare time of
-/// day. With [`spark_string_to_timestamp`] or [`spark_string_to_timestamp_ntz`] it reads a
+/// default grammar names: its fraction's digits 7 to 9 (later ones dropped), for a bare time of day
+/// too. With [`spark_string_to_timestamp`] or [`spark_string_to_timestamp_ntz`] it reads a
 /// nanosecond timestamp (Spark 4.3 `stringToTimestampLTZNanos` / `stringToTimestampNTZNanos`).
 #[must_use]
 pub fn timestamp_string_sub_micros(s: &str) -> u16 {
@@ -224,14 +224,12 @@ fn nanos_step(precision: u8) -> i64 {
 /// pattern formatters print.
 #[must_use]
 pub fn split_timestamp_nanos(nanos: i64, precision: u8) -> (i64, u16) {
-    let floored = nanos.wrapping_sub(nanos.checked_rem_euclid(nanos_step(precision)).unwrap_or(0));
-    (
-        floored.checked_div_euclid(1_000).unwrap_or(0),
-        floored
-            .checked_rem_euclid(1_000)
-            .and_then(|r| u16::try_from(r).ok())
-            .unwrap_or(0),
-    )
+    // The step divides 1,000, so flooring the nanoseconds within the microsecond never leaves the
+    // carrier (Spark's `epochNanosToTimestampNanos`).
+    let micros = nanos.checked_div_euclid(1_000).unwrap_or(0);
+    let rest = nanos.checked_rem_euclid(1_000).unwrap_or(0);
+    let rest = rest.wrapping_sub(rest.checked_rem_euclid(nanos_step(precision)).unwrap_or(0));
+    (micros, u16::try_from(rest).unwrap_or(0))
 }
 
 /// Microseconds and the nanoseconds within them as one nanosecond timestamp floored to

@@ -209,10 +209,10 @@ fn write_value(
                     id: ctx.zone.region_id().unwrap_or(&fixed),
                     rules: ctx.zone,
                 };
+                // A legacy pattern raises Spark's own error (`formatNanos` under LEGACY).
                 ctx.out
                     .timestamp
-                    .format_timestamp_nanos(micros, rest, zone)
-                    .map_err(|e| internal(format!("a to_json timestamp pattern: {e}")))?
+                    .format_timestamp_nanos(micros, rest, zone)?
             } else {
                 ctx.out
                     .timestamp_ntz

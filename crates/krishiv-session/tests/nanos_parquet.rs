@@ -213,3 +213,67 @@ fn a_write_keeps_the_precision_in_the_footer() {
         NOT_ENABLED
     );
 }
+
+/// A Spark 4.2 session has no nanosecond types, whatever `spark.sql.timestampNanosTypes.enabled` says
+/// (Spark 4.2.1 run): a foreign file's `INT64 TIMESTAMP(NANOS)` is `PARQUET_TYPE_ILLEGAL`, or `bigint`
+/// with `nanosAsLong`; a Spark 4.3 file's footer schema fails to parse there and is not used, so its
+/// columns read as their Parquet types say.
+#[test]
+fn a_spark_4_2_session_reads_nanoseconds_as_4_2_does() {
+    let illegal = |adjusted: bool| {
+        format!(
+            "ERR [PARQUET_TYPE_ILLEGAL] Illegal Parquet type: INT64 (TIMESTAMP(NANOS,{adjusted})). SQLSTATE: 42846"
+        )
+    };
+    for flag in ["true", "false"] {
+        let s = Session::builder()
+            .profile(krishiv_plan::analyzer::SparkProfile::V4_2)
+            .build()
+            .unwrap();
+        s.conf().set("spark.sql.session.timeZone", "UTC").unwrap();
+        s.conf()
+            .set("spark.sql.timestampNanosTypes.enabled", flag)
+            .unwrap();
+        assert_eq!(
+            run(
+                &s,
+                &format!("SELECT * FROM parquet.`{}`", fixture("pyarrow.parquet"))
+            ),
+            illegal(true),
+            "flag {flag}"
+        );
+        assert_eq!(
+            run(
+                &s,
+                &format!("SELECT * FROM parquet.`{}`", fixture("spark-flat.parquet"))
+            ),
+            illegal(false),
+            "flag {flag}"
+        );
+        s.conf()
+            .set("spark.sql.legacy.parquet.nanosAsLong", "true")
+            .unwrap();
+        assert_eq!(
+            run(
+                &s,
+                &format!(
+                    "SELECT typeof(utc), utc, typeof(local) FROM parquet.`{}`",
+                    fixture("pyarrow.parquet")
+                )
+            ),
+            "bigint|1577836800123456789|bigint",
+            "flag {flag}"
+        );
+        assert_eq!(
+            run(
+                &s,
+                &format!(
+                    "SELECT typeof(n7) FROM parquet.`{}`",
+                    fixture("spark-flat.parquet")
+                )
+            ),
+            "bigint",
+            "flag {flag}"
+        );
+    }
+}

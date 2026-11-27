@@ -100,6 +100,16 @@ static OPTIONS: OptionSchema = OptionSchema {
                   the file's Spark schema gives them a nanosecond timestamp type.",
         },
         OptionSpec {
+            name: "nanosTypesKnown",
+            kind: OptionKind::Bool,
+            default: OptionDefault::Bool(true),
+            conf_fallback: None,
+            metadata_key: false,
+            doc: "Read: whether the session's Spark release has the nanosecond timestamp types (4.3 \
+                  on). Off (set by the engine for an earlier profile): the types are never inferred \
+                  and a footer Spark schema naming one is not used, as that release reads such a file.",
+        },
+        OptionSpec {
             name: "timestampNanosTypes",
             kind: OptionKind::Bool,
             default: OptionDefault::Bool(false),
@@ -250,6 +260,7 @@ impl ParquetFormat {
                 .str("datetimeRebaseMode")
                 .is_some_and(|m| m.eq_ignore_ascii_case("LEGACY")),
             nanos_as_long: o.bool("nanosAsLong").unwrap_or(false),
+            nanos_types_known: o.bool("nanosTypesKnown").unwrap_or(true),
         }
     }
 
@@ -262,7 +273,9 @@ impl ParquetFormat {
     /// first such leaf, in schema order). A user schema infers nothing, so
     /// such a column is then a per-column type mismatch.
     fn refuse_nanos(m: &meta::ParquetMetadata, o: &FormatOptions) -> FormatResult<()> {
-        if o.bool("timestampNanosTypes").unwrap_or(false) {
+        if o.bool("timestampNanosTypes").unwrap_or(false)
+            && o.bool("nanosTypesKnown").unwrap_or(true)
+        {
             return Ok(());
         }
         if m.footer_nanos {

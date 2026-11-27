@@ -180,8 +180,8 @@ impl Datetimes {
     }
 
     /// A `TIMESTAMP_LTZ(precision)` (nanoseconds since the epoch) from text, as Spark 4.3's
-    /// `parseNanos`: the pattern, else the default grammar; no fallback to the default grammar
-    /// after a pattern fails. Digits past `precision` are floored.
+    /// `parseNanos`: the pattern, else the default grammar on the text as written; no fallback to
+    /// the default grammar after a pattern fails. Digits past `precision` are floored.
     ///
     /// # Errors
     /// A region zone id in the text; `DATETIME_OVERFLOW` for an instant past the nanosecond
@@ -194,7 +194,9 @@ impl Datetimes {
         let rules = self.rules()?;
         let parsed = match &self.timestamp {
             Some(p) => p.parse_timestamp_nanos(s, rules)?,
-            None => spark_string_to_timestamp(&clean(s), rules, self.today)?
+            // As written: Spark's `GMT` clean-up belongs to the microsecond fallback, which the
+            // nanosecond types do not have.
+            None => spark_string_to_timestamp(s, rules, self.today)?
                 .map(|m| (m, timestamp_string_sub_micros(s))),
         };
         parsed.map(|v| nanos_of(v, precision)).transpose()

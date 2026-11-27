@@ -1252,12 +1252,15 @@ impl Session {
             Arc::clone(&self.state.io),
             Arc::clone(&stores),
         ));
-        let files = Arc::new(FileReads::new(
-            io.clone(),
-            Arc::clone(&self.state.runtime.formats),
-            Arc::clone(&paths),
-            Arc::clone(&config),
-        ));
+        let files = Arc::new(
+            FileReads::new(
+                io.clone(),
+                Arc::clone(&self.state.runtime.formats),
+                Arc::clone(&paths),
+                Arc::clone(&config),
+            )
+            .with_nanos_types_known(self.state.profile >= SparkProfile::V4_3),
+        );
         let declared_paths = Arc::clone(&paths);
         let delta = Arc::new(crate::delta::DeltaReads::new(crate::delta::DeltaInputs {
             io: io.clone(),

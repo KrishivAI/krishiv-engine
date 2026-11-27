@@ -1611,11 +1611,14 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                 let zone = session_zone(&o);
                 match &pat {
                     PatternArg::Null => Ok(Arc::new(StringArray::new_null(x.rows())) as ArrayRef),
-                    PatternArg::Literal(p) => {
+                    PatternArg::Literal(p) if nanos => {
                         Ok(Arc::new(krishiv_kernels::datetime::format_timestamps_nanos(
                             p, &instants, rest, zone,
                         )?) as ArrayRef)
                     }
+                    PatternArg::Literal(p) => Ok(Arc::new(
+                        krishiv_kernels::datetime::format_timestamps(p, &instants, zone)?,
+                    ) as ArrayRef),
                     PatternArg::Column => {
                         let fmts = x.strings(1)?;
                         let mut cache = PatternCache::new(Purpose::Format, o.legacy_time_parser);
@@ -1628,12 +1631,14 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                             let p = cache
                                 .get(fmts.value(i))
                                 .map_err(|e| krishiv_kernels::KernelError::with_row(Some(i), e))?;
-                            out.push(Some(
+                            let text = if nanos {
                                 p.format_timestamp_nanos(instants.value(i), rest(i), zone)
-                                    .map_err(|e| {
-                                        krishiv_kernels::KernelError::with_row(Some(i), e)
-                                    })?,
-                            ));
+                            } else {
+                                p.format_timestamp(instants.value(i), zone)
+                            };
+                            out.push(Some(text.map_err(|e| {
+                                krishiv_kernels::KernelError::with_row(Some(i), e)
+                            })?));
                         }
                         Ok(
                             Arc::new(StringArray::from_iter(out.iter().map(|s| s.as_deref())))

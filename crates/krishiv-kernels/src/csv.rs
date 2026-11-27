@@ -1663,7 +1663,7 @@ fn nested_text(
     row: usize,
     out: &mut String,
     format_date: &impl Fn(i32) -> Result<String, KernelError>,
-    format_timestamp: &impl Fn(i64, u16) -> Result<String, KernelError>,
+    format_timestamp: &impl Fn(i64, Option<u16>) -> Result<String, KernelError>,
     format_ntz: &impl Fn(i64, u16) -> Result<String, KernelError>,
 ) -> Result<(), KernelError> {
     use arrow_array::cast::AsArray;
@@ -1723,7 +1723,7 @@ fn nested_text(
         )),
         DataType::Timestamp(TimeUnit::Microsecond, Some(_)) => out.push_str(&format_timestamp(
             a.as_primitive::<TimestampMicrosecondType>().value(row),
-            0,
+            None,
         )?),
         DataType::Timestamp(TimeUnit::Microsecond, None) => out.push_str(&format_ntz(
             a.as_primitive::<TimestampMicrosecondType>().value(row),
@@ -1736,7 +1736,7 @@ fn nested_text(
                 9,
             );
             out.push_str(&if zone.is_some() {
-                format_timestamp(micros, rest)?
+                format_timestamp(micros, Some(rest))?
             } else {
                 format_ntz(micros, rest)?
             });
@@ -1817,7 +1817,7 @@ pub fn struct_to_csv(
     kinds: &[FieldKind],
     o: &ToCsvOptions,
     format_date: &impl Fn(i32) -> Result<String, KernelError>,
-    format_timestamp: &impl Fn(i64, u16) -> Result<String, KernelError>,
+    format_timestamp: &impl Fn(i64, Option<u16>) -> Result<String, KernelError>,
     format_ntz: &impl Fn(i64, u16) -> Result<String, KernelError>,
 ) -> Result<StringArray, KernelError> {
     use arrow_array::cast::AsArray;
@@ -1932,7 +1932,7 @@ pub fn struct_to_csv(
                     (FieldKind::Timestamp, _) => {
                         cell.push_str(&format_timestamp(
                             a.as_primitive::<TimestampMicrosecondType>().value(row),
-                            0,
+                            None,
                         )?);
                         true
                     }
@@ -1952,7 +1952,7 @@ pub fn struct_to_csv(
                             *p,
                         );
                         cell.push_str(&if matches!(kind, FieldKind::TimestampNanos(_)) {
-                            format_timestamp(micros, rest)?
+                            format_timestamp(micros, Some(rest))?
                         } else {
                             format_ntz(micros, rest)?
                         });

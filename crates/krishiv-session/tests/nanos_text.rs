@@ -305,3 +305,123 @@ fn function_reads_floor_to_the_precision_and_take_only_matching_strings() {
         r#"2020-01-01 00:00:00.123456789|{"a":["2020-01-01 00:00:00.123456789Z"]}"#
     );
 }
+
+/// `spark.sql.legacy.timeParserPolicy=LEGACY` (Spark 4.3.0 run): the legacy formatter has no nanosecond
+/// methods, so a `TIMESTAMP_LTZ(p)` read is a bad record (a NULL field under PERMISSIVE, the rest of the
+/// record kept; FAILFAST raises) and a write raises `TIMESTAMP_NANOS_WITH_LEGACY_TIME_PARSER`.
+/// `TIMESTAMP_NTZ(p)` keeps the `java.time` formatter in JSON and CSV; `date_format` of either raises.
+#[test]
+fn the_legacy_time_parser_refuses_nanosecond_ltz_values() {
+    let s = session("UTC");
+    s.conf()
+        .set("spark.sql.legacy.timeParserPolicy", "LEGACY")
+        .unwrap();
+    let text = "'{\"a\":\"2020-01-01 00:00:00.123456789\"}'";
+    for (q, want) in [
+        (
+            format!("SELECT cast(from_json({text}, 'a timestamp_ltz(9)', map('timestampFormat','yyyy-MM-dd HH:mm:ss.SSSSSSSSS')).a as string)"),
+            "",
+        ),
+        (format!("SELECT cast(from_json({text}, 'a timestamp_ltz(9)').a as string)"), ""),
+        (
+            "SELECT to_json(from_json('{\"a\":\"2020-01-01 00:00:00.1\", \"b\": 1}', 'a timestamp_ltz(9), b int'))".to_owned(),
+            "{\"b\":1}",
+        ),
+        (format!("SELECT cast(from_json({text}, 'a timestamp_ntz(9)').a as string)"), "2020-01-01 00:00:00.123456789"),
+        ("SELECT cast(from_csv('2020-01-01 00:00:00.123456789', 'a timestamp_ltz(9)').a as string)".to_owned(), ""),
+        (
+            "SELECT to_json(named_struct('a', CAST('2020-01-01 00:00:00.123456789' AS TIMESTAMP_NTZ(9))))".to_owned(),
+            "{\"a\":\"2020-01-01T00:00:00.123\"}",
+        ),
+        ("SELECT cast(CAST('2020-01-01 00:00:00.123456789' AS TIMESTAMP_LTZ(9)) as string)".to_owned(), "2020-01-01 00:00:00.123456789"),
+    ] {
+        assert_eq!(run(&s, &q), want, "{q}");
+    }
+    let failfast = run(
+        &s,
+        &format!("SELECT from_json({text}, 'a timestamp_ltz(9)', map('mode','FAILFAST'))"),
+    );
+    assert!(
+        failfast.contains("MALFORMED_RECORD_IN_PARSING"),
+        "{failfast}"
+    );
+    for q in [
+        "SELECT to_json(named_struct('a', CAST('2020-01-01 00:00:00.123456789' AS TIMESTAMP_LTZ(9))))",
+        "SELECT to_csv(named_struct('a', CAST('2020-01-01 00:00:00.123456789' AS TIMESTAMP_LTZ(9))))",
+        "SELECT date_format(CAST('2020-01-01 00:00:00.123456789' AS TIMESTAMP_LTZ(9)), 'yyyy-MM-dd HH:mm:ss.SSS')",
+        "SELECT date_format(CAST('2020-01-01 00:00:00.123456789' AS TIMESTAMP_NTZ(9)), 'yyyy-MM-dd HH:mm:ss.SSS')",
+    ] {
+        let got = run(&s, q);
+        assert!(
+            got.contains("UNSUPPORTED_FEATURE.TIMESTAMP_NANOS_WITH_LEGACY_TIME_PARSER"),
+            "{q}: {got}"
+        );
+    }
+    // The microsecond types keep the legacy formatter.
+    let micros = run(
+        &s,
+        "SELECT to_json(named_struct('a', CAST('2020-01-01 00:00:00.123456' AS TIMESTAMP)))",
+    );
+    assert!(
+        micros.starts_with("{\"a\":\"2020-01-01T00:00:00.123"),
+        "{micros}"
+    );
+}
+
+/// A bare time of day (Spark 4.3.0 run, `parseTimestampToInstant`): today's date in the zone, with all
+/// nine fraction digits, through the default grammar of `from_json`, `from_csv`, a cast and a JSON file.
+#[test]
+fn a_bare_time_of_day_keeps_nine_digits() {
+    let s = session("UTC");
+    let today = run(&s, "SELECT cast(current_date() as string)");
+    let want = format!("{today} 12:34:56.123456789");
+    for q in [
+        "SELECT cast(from_json('{\"a\":\"T12:34:56.123456789\"}', 'a timestamp_ltz(9)').a as string)",
+        "SELECT cast(from_json('{\"a\":\"12:34:56.123456789\"}', 'a timestamp_ltz(9)').a as string)",
+        "SELECT cast(from_csv('T12:34:56.123456789', 'a timestamp_ltz(9)').a as string)",
+        "SELECT cast(cast('T12:34:56.123456789' as timestamp_ltz(9)) as string)",
+    ] {
+        assert_eq!(run(&s, q), want, "{q}");
+    }
+}
+
+/// The file readers' default grammar reads a trailing zone as it is (Spark 4.3.0: `parseNanos` has no
+/// legacy clean-up of `GMT`; session zone `America/Los_Angeles`): ` GMT` is UTC, `Etc/GMT+1` an hour behind.
+#[test]
+fn file_reads_take_a_trailing_zone_as_written() {
+    let dir = tempfile::tempdir().unwrap();
+    let json = dir.path().join("a.json");
+    std::fs::write(
+        &json,
+        "{\"a\":\"2020-01-01 10:00:00.123456789 GMT\",\"c\":\"2020-01-01 10:00:00.123456789 Etc/GMT+1\"}\n",
+    )
+    .unwrap();
+    let csv = dir.path().join("a.csv");
+    std::fs::write(&csv, "2020-01-01 10:00:00.123456789 GMT\n").unwrap();
+    let s = session("America/Los_Angeles");
+    for (view, format, path, cols) in [
+        ("j", "json", &json, "a TIMESTAMP_LTZ(9), c TIMESTAMP_LTZ(9)"),
+        ("c", "csv", &csv, "a TIMESTAMP_LTZ(9)"),
+    ] {
+        let q = format!(
+            "CREATE OR REPLACE TEMPORARY VIEW {view} ({cols}) USING {format} OPTIONS (path '{}')",
+            path.display()
+        );
+        assert_eq!(run(&s, &q), "", "{q}");
+    }
+    assert_eq!(
+        run(&s, "SELECT CAST(a AS STRING), CAST(c AS STRING) FROM j"),
+        "2020-01-01 02:00:00.123456789|2020-01-01 03:00:00.123456789"
+    );
+    assert_eq!(
+        run(&s, "SELECT CAST(a AS STRING) FROM c"),
+        "2020-01-01 02:00:00.123456789"
+    );
+    assert_eq!(
+        run(
+            &s,
+            "SELECT CAST(from_json('{\"a\":\"2020-01-01 10:00:00.123456789 GMT\"}', 'a timestamp_ltz(9)').a AS STRING)"
+        ),
+        "2020-01-01 02:00:00.123456789"
+    );
+}

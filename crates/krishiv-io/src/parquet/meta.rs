@@ -59,6 +59,10 @@ pub(crate) struct SchemaOptions {
     /// column is a `bigint` of its stored nanoseconds, unless the footer's
     /// Spark schema types it (a Spark 4.3 file), as Spark reads them.
     pub(crate) nanos_as_long: bool,
+    /// The session's Spark release has the nanosecond timestamp types (4.3 on). Before it, a footer
+    /// Spark schema that names one fails to parse there and is not used: the Parquet types decide
+    /// (`ParquetFileFormat.deserializeSchemaString` swallows the failure).
+    pub(crate) nanos_types_known: bool,
 }
 
 /// One row group as planned and pruned.
@@ -257,16 +261,25 @@ fn describe_checked(
     options: SchemaOptions,
 ) -> FormatResult<ParquetMetadata> {
     let row_groups = check(meta, size)?;
-    let footer_nanos = super::intervals::footer_schema(meta.file_metadata().key_value_metadata())
-        .is_some_and(|t| {
-            t.any_type(&|t| {
-                matches!(
-                    t,
-                    krishiv_types::DataType::TimestampNanos { .. }
-                        | krishiv_types::DataType::TimestampNtzNanos { .. }
-                )
-            })
-        });
+    let footer_names_nanos = super::intervals::footer_schema(
+        meta.file_metadata().key_value_metadata(),
+    )
+    .is_some_and(|t| {
+        t.any_type(&|t| {
+            matches!(
+                t,
+                krishiv_types::DataType::TimestampNanos { .. }
+                    | krishiv_types::DataType::TimestampNtzNanos { .. }
+            )
+        })
+    });
+    let footer_nanos = footer_names_nanos && options.nanos_types_known;
+    // A footer schema an earlier release cannot parse is not read at all.
+    let key_values = if footer_names_nanos && !options.nanos_types_known {
+        None
+    } else {
+        meta.file_metadata().key_value_metadata()
+    };
     let options = SchemaOptions {
         nanos_as_long: options.nanos_as_long && !footer_nanos,
         ..options
@@ -297,7 +310,7 @@ fn describe_checked(
             .iter()
             .map(|f| Arc::new(spark_read_field(f)))
             .collect::<Vec<FieldRef>>(),
-        meta.file_metadata().key_value_metadata(),
+        key_values,
     );
     let typed = if options.nanos_as_long {
         super::intervals::nanos_as_long(typed, descr)

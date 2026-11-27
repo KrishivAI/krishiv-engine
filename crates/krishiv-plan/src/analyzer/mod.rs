@@ -460,8 +460,8 @@ pub struct ResolutionConf {
     /// padding, no padding rule on comparisons, no write-side length check). The declared type is still kept.
     pub char_varchar_as_string: bool,
     /// `spark.sql.timestampNanosTypes.enabled` (internal in Spark 4.3, off): Spark builds the
-    /// nanosecond timestamp types when on. Krishiv has none yet, so `current_timestamp(7..=9)` is
-    /// `KRISHIV_UNSUPPORTED_FEATURE` then instead of `FEATURE_NOT_ENABLED`.
+    /// nanosecond timestamp types when on (`TIMESTAMP_NTZ(7..=9)` / `TIMESTAMP_LTZ(7..=9)`, casts,
+    /// `current_timestamp(7..=9)`); off, they are `FEATURE_NOT_ENABLED`.
     pub timestamp_nanos_types: bool,
 }
 

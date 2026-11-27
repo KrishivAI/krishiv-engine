@@ -631,17 +631,18 @@ fn bind_to_csv(args: &[BindArg], opts: &BindOptions) -> Result<Binding, KrishivE
                 .map_err(|e| krishiv_kernels::error::KernelError::with_row(None, e)),
             None => Err(missing()),
         };
-        let format_timestamp = |m: i64, rest: u16| match &timestamp_pattern {
-            Some(p) => p
-                .format_timestamp_nanos(
-                    m,
-                    rest,
-                    krishiv_kernels::datetime_pattern::Zone {
-                        id: "UTC",
-                        rules: zone_ref,
-                    },
-                )
-                .map_err(|e| krishiv_kernels::error::KernelError::with_row(None, e)),
+        let format_timestamp = |m: i64, rest: Option<u16>| match &timestamp_pattern {
+            Some(p) => {
+                let zone = krishiv_kernels::datetime_pattern::Zone {
+                    id: "UTC",
+                    rules: zone_ref,
+                };
+                match rest {
+                    Some(rest) => p.format_timestamp_nanos(m, rest, zone),
+                    None => p.format_timestamp(m, zone),
+                }
+                .map_err(|e| krishiv_kernels::error::KernelError::with_row(None, e))
+            }
             None => Err(missing()),
         };
         let format_ntz = |m: i64, rest: u16| match &ntz_pattern {
