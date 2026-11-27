@@ -731,3 +731,84 @@ fn a_server_mode_call_is_confined_to_the_allowed_roots() {
         .len();
     assert_eq!(after, before, "nothing is committed");
 }
+
+/// `rewrite_data_files` end to end (36e-2a): the two small files of `write_table`'s two appends
+/// are planned as one bin-pack group, rewritten into one file and committed through the declared
+/// REST catalog; the rows read back unchanged. A second call finds one file, under
+/// `min-input-files`, and sends no commit.
+#[test]
+fn rewrite_data_files_runs_through_the_rest_catalog() {
+    let dir = tempfile::tempdir().unwrap();
+    let table = krishiv_connectors_iceberg::testing::write_table(dir.path()).unwrap();
+    let (server, lake) = super::write_tests::catalog(&table, &[]);
+    let s = lake_session(&server, true);
+    let snapshots = || {
+        lake.lock().unwrap().metadata["snapshots"]
+            .as_array()
+            .unwrap()
+            .len()
+    };
+    let before = snapshots();
+    let sql = "CALL lake.system.rewrite_data_files(table => 'lake.db.t', \
+               options => map('min-input-files', '2'))";
+    let row = result_row(&s, sql);
+    let names: Vec<&str> = row.iter().map(|(n, _)| n.as_str()).collect();
+    assert_eq!(
+        names,
+        [
+            "rewritten_data_files_count",
+            "added_data_files_count",
+            "rewritten_bytes_count",
+            "failed_data_files_count",
+            "removed_delete_files_count",
+        ]
+    );
+    let counts: Vec<i64> = row.iter().map(|(_, v)| *v).collect();
+    assert_eq!(counts[..2], [2, 1], "{row:?}");
+    assert!(counts[2] > 0, "{row:?}");
+    assert_eq!(counts[3..], [0, 0], "{row:?}");
+    assert_eq!(snapshots(), before + 1);
+    assert_eq!(
+        super::read_tests::rows(&s, "SELECT id, name FROM lake.db.t"),
+        super::read_tests::pairs(&[(1, "a"), (2, "b"), (3, "c")])
+    );
+    // One file is left: nothing to do, and no commit is sent.
+    let posts = || server.seen().iter().filter(|r| r.method == "POST").count();
+    let sent = posts();
+    let row = result_row(&s, sql);
+    assert!(row.iter().all(|(_, v)| *v == 0), "{row:?}");
+    assert_eq!(posts(), sent);
+    assert_eq!(snapshots(), before + 1);
+}
+
+/// What this build does not run yet is refused by name before any file is read.
+#[test]
+fn rewrite_data_files_refuses_what_it_does_not_run_yet() {
+    let dir = tempfile::tempdir().unwrap();
+    let table = krishiv_connectors_iceberg::testing::write_table(dir.path()).unwrap();
+    let (server, _) = super::write_tests::catalog(&table, &[]);
+    let s = lake_session(&server, true);
+    for (sql, what) in [
+        (
+            "CALL lake.system.rewrite_data_files(table => 'db.t', strategy => 'sort')",
+            "binpack",
+        ),
+        (
+            "CALL lake.system.rewrite_data_files(table => 'db.t', where => 'id > 1')",
+            "where",
+        ),
+    ] {
+        let e = call(&s, sql);
+        assert_eq!(
+            e.error_class(),
+            ErrorClass::KrishivUnsupportedFeature,
+            "{sql}: {e}"
+        );
+        assert!(e.to_string().contains(what), "{sql}: {e}");
+    }
+    let e = call(
+        &lake_session(&server, false),
+        "CALL lake.system.rewrite_data_files(table => 'db.t')",
+    );
+    assert!(e.to_string().contains("read-only"), "{e}");
+}
