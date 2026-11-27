@@ -149,7 +149,7 @@ fn aggregates_and_windows_keep_nanoseconds() {
     assert_eq!(
         rows(
             &s,
-            "SELECT k, row_number() OVER (ORDER BY c) FROM t ORDER BY k"
+            "SELECT k, row_number() OVER (ORDER BY c, k) FROM t ORDER BY k"
         ),
         "0 3 | 1 5 | 2 4 | 3 2 | 4 1"
     );
@@ -345,5 +345,17 @@ fn date_format_prints_nanoseconds() {
             "SELECT date_format(c, f) FROM (SELECT c, 'ss.SSSSSSSSS' AS f FROM t WHERE k = 3)"
         ),
         "00.123456789"
+    );
+}
+
+#[test]
+fn date_functions_take_nanosecond_timestamps_without_a_cast() {
+    let s = session();
+    assert_eq!(
+        rows(
+            &s,
+            "SELECT year(c), extract(YEAR FROM c) FROM t WHERE k = 0"
+        ),
+        "2020 2020"
     );
 }

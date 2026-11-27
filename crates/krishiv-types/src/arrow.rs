@@ -574,7 +574,7 @@ impl DataType {
                     // The tag is the engine's own `json()`, which writes INDETERMINATE as `string collate null`.
                     Self::from_canonical_json(tag)?
                 } else {
-                    crate::parse_data_type(tag)?
+                    crate::parse_data_type_in(tag, crate::TypeGrammar::V4_3Nanos)?
                 };
                 if depth + t.nesting_depth() > Self::MAX_NESTING_DEPTH {
                     return Err(error::too_deep());

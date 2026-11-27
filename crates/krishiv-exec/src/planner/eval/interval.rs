@@ -214,7 +214,8 @@ impl Binary {
                 .values()
                 .get(if scalar { 0 } else { i })
                 .map_or(0, |v| v.rem_euclid(1_000));
-            match m.map(|m| m.checked_mul(1_000).and_then(|n| n.checked_add(rest))) {
+            // The product alone can leave the carrier while the sum fits (`i64::MIN`), so add in 128 bits.
+            match m.map(|m| i64::try_from(i128::from(m) * 1_000 + i128::from(rest)).ok()) {
                 None => values.push(None),
                 Some(Some(v)) => values.push(Some(v)),
                 // The nanosecond carrier ends in 1677 and 2262 (Spark's in years 1 and 9999).

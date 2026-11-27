@@ -120,7 +120,7 @@ pub(crate) fn parse_nanos(s: &[u8]) -> (Parsed, u16) {
         c.eat(b'T');
         // The time must be well formed; its zone is checked, not applied.
         return match time_of_day(&mut c) {
-            Some((_, zone, _)) => (Parsed::NeedsClock(zone), 0),
+            Some((_, zone, rest)) => (Parsed::NeedsClock(zone), rest),
             None => (Parsed::Malformed, 0),
         };
     }

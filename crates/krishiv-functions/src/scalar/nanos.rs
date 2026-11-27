@@ -248,6 +248,15 @@ pub(super) fn bind(
     }
     // `date_trunc` of a `TIMESTAMP_NTZ(p)` truncates its wall clock and stays zone-less (Spark 4.3): the
     // microsecond kernel reads it as an instant in UTC, and the result is read back the same way.
+    // `unix_seconds`/`unix_millis`/`unix_micros` of a `TIMESTAMP_NTZ(p)`: the microsecond binding refuses a
+    // zone-less argument, so the wall clock is read as an instant in UTC (as `date_trunc` below reads it).
+    if matches!(name, "unix_seconds" | "unix_millis" | "unix_micros") {
+        for zone in floored.iter_mut().flatten() {
+            if zone.is_none() {
+                *zone = Some(Arc::from("UTC"));
+            }
+        }
+    }
     let ntz_trunc = name == "date_trunc" && floored.iter().flatten().any(Option::is_none);
     let utc;
     let opts = if ntz_trunc {
@@ -305,6 +314,13 @@ pub(super) fn bind(
 
 impl Floored {
     fn run(&self, args: &[Arg], rows: usize, partition: u32) -> Result<ArrayRef, KrishivError> {
+        if args.len() != self.floored.len() {
+            return Err(internal(format!(
+                "{} arguments for a function bound over {}",
+                args.len(),
+                self.floored.len()
+            )));
+        }
         let micros: Vec<Arg> = args
             .iter()
             .zip(&self.floored)
@@ -317,11 +333,23 @@ impl Floored {
         let out = self.inner.invoke_in(&micros, rows, partition)?;
         Ok(match &self.widen {
             Widen::None => out,
-            Widen::Timestamp(zone) => Arc::new(
-                out.as_primitive::<TimestampMicrosecondType>()
-                    .unary::<_, TimestampNanosecondType>(|v| v.saturating_mul(NANOS_PER_MICRO))
-                    .with_timezone_opt(zone.clone()),
-            ),
+            Widen::Timestamp(zone) => {
+                // A truncated value below the nanosecond carrier's range is an error, not a clamp.
+                let micros = out.as_primitive::<TimestampMicrosecondType>();
+                let mut values = Vec::with_capacity(micros.len());
+                for v in micros {
+                    values.push(match v {
+                        None => None,
+                        Some(v) => Some(v.checked_mul(NANOS_PER_MICRO).ok_or_else(|| {
+                            KrishivError::from(krishiv_common::error::DatetimeOverflow {
+                                operation: "a truncated nanosecond timestamp".to_owned(),
+                            })
+                        })?),
+                    });
+                }
+                let widened = arrow_array::PrimitiveArray::<TimestampNanosecondType>::from(values);
+                Arc::new(widened.with_timezone_opt(zone.clone())) as ArrayRef
+            }
             Widen::Seconds(i) => {
                 let source = args
                     .get(*i)

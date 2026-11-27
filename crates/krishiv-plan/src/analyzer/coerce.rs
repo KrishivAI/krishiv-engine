@@ -1564,7 +1564,13 @@ fn implicit(from: Option<&DataType>, want: &InputType, ansi: bool) -> Option<Opt
                 || (*t == T::String && !f.is_nested())
                 || (*f == T::String && from_string)
                 || (*f == T::Date && matches!(t, T::Timestamp | T::TimestampNtz))
-                || (matches!(f, T::Timestamp | T::TimestampNtz) && *t == T::Date);
+                || (matches!(
+                    f,
+                    T::Timestamp
+                        | T::TimestampNtz
+                        | T::TimestampNanos { .. }
+                        | T::TimestampNtzNanos { .. }
+                ) && *t == T::Date);
             ok.then(|| Some(t.clone()))
         }
         _ => None,
