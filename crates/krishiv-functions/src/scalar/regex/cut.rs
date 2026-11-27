@@ -36,11 +36,13 @@
 //! pattern the engine runs itself (look-around, back-references, atomic groups) has no cut.
 //! In tests every cut search is compared with the engine's.
 //!
-//! Whether the cut pays is probed on [`PROBE`] searches. A cut the probe drops rests for
-//! [`REST`] searches and is then probed again: the pattern outlives the query on its thread,
-//! and one sample must not decide for later data. The rest is counted in searches, not
-//! batches, so a pattern that always falls back pays the probe on a fixed small share of its
-//! rows whatever the batch size.
+//! Whether the cut pays is judged on every window of [`PROBE`] searches, for as long as the
+//! cut is in use: the pattern outlives the query on its thread, and one sample must not
+//! decide for later data in either direction. A window in which too many searches fell back
+//! drops the cut; a dropped cut rests for [`REST`] searches and is then probed again. The
+//! rest is counted in searches, not batches, so a pattern that always falls back pays the
+//! probe on a fixed small share of its rows whatever the batch size, and a kept cut whose
+//! data turns is dropped within two windows.
 
 use std::cell::{Cell, Ref, RefCell};
 use std::fmt;
@@ -54,11 +56,14 @@ use regex_syntax::hir::{Hir, HirKind, Look};
 #[cfg(test)]
 pub(super) mod tests;
 
-/// Searches that reached step 3 before the cut decides whether it pays.
+/// Searches that reached step 3 in one window, after which the cut decides whether it pays.
 const PROBE: u32 = 256;
 
-/// The cut is dropped when more than one in this many probed searches fell back.
-const FALLBACK_SHARE: u32 = 4;
+/// The cut is dropped when more than one in this many searches of a window fell back. Half
+/// is where the cut stops paying: a search that falls back costs 1.5 to 1.9 times the
+/// engine's, one the cut answers about a third. A lower share drops a paying cut on a run of
+/// rows that fall back (a quarter cost `regexp_replace` on ClickBench's referers 9%).
+const FALLBACK_SHARE: u32 = 2;
 
 /// Searches the engine answers after the probe dropped the cut, before it is probed again.
 const REST: u32 = 64 * PROBE;
@@ -81,7 +86,8 @@ pub(super) struct Cut {
     groups: usize,
     /// The capture slots of the two capture searches, reused across rows.
     slots: RefCell<Slots>,
-    /// Searches that reached step 3, counted up to [`PROBE`].
+    /// Searches of the current window that reached step 3, below [`PROBE`] while the cut is in
+    /// use.
     tried: Cell<u32>,
     /// How many of those fell back to the full search.
     fell: Cell<u32>,
@@ -234,16 +240,16 @@ impl Cut {
 
     /// Whether the cut is still in use: it is dropped for a pattern whose first choice of
     /// `head` usually fails (`(a+)a.*`), where each row would pay steps 2 and 3 on top of
-    /// the full search (tests; the kernels ask [`Cut::take`]).
+    /// the full search (tests; the kernels ask [`Cut::use_now`]).
     #[cfg(test)]
     pub(super) fn is_on(&self) -> bool {
         !self.off.get()
     }
 
-    /// Whether the search a kernel is about to make uses the cut. While the cut rests this
-    /// counts the search, which the engine answers; after [`REST`] of them the probe starts
-    /// again.
-    pub(super) fn take(&self) -> bool {
+    /// Whether the search a kernel is about to make uses the cut. Not a pure test: while the
+    /// cut rests this counts the search, which the engine answers, and after [`REST`] of them
+    /// the probe starts again.
+    pub(super) fn use_now(&self) -> bool {
         if !self.off.get() {
             return true;
         }
@@ -256,18 +262,25 @@ impl Cut {
         false
     }
 
-    /// Counts one search that reached step 3; `fell` when the tail did not match there.
+    /// Counts one search that reached step 3; `fell` when the tail did not match there. The
+    /// [`PROBE`]-th of a window ends it: the cut is dropped when too many fell back (the
+    /// counts stay, for the tests, until [`Cut::rearm`]), else the next window starts.
     fn probe(&self, fell: bool) {
-        let tried = self.tried.get();
-        if tried >= PROBE {
+        if self.off.get() {
             return;
         }
-        self.tried.set(tried + 1);
-        if fell {
-            self.fell.set(self.fell.get() + 1);
-        }
-        if tried + 1 == PROBE && self.fell.get() * FALLBACK_SHARE > PROBE {
+        let tried = self.tried.get() + 1;
+        let fallen = self.fell.get() + u32::from(fell);
+        if tried < PROBE {
+            self.tried.set(tried);
+            self.fell.set(fallen);
+        } else if fallen * FALLBACK_SHARE > PROBE {
+            self.tried.set(tried);
+            self.fell.set(fallen);
             self.off.set(true);
+        } else {
+            self.tried.set(0);
+            self.fell.set(0);
         }
     }
 
@@ -324,7 +337,8 @@ impl Cut {
         }))
     }
 
-    /// Probed searches and how many of them fell back (tests).
+    /// Searches of the current window (or of the window that dropped the cut) and how many
+    /// of them fell back (tests).
     #[cfg(test)]
     pub(super) fn probed(&self) -> (u32, u32) {
         (self.tried.get(), self.fell.get())

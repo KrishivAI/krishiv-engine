@@ -180,14 +180,15 @@ fn a_cut_that_mostly_falls_back_is_dropped() {
     assert!(spans(&cut, "aaa", 0).is_some());
     assert!(!cut.is_on());
     assert_eq!(cut.probed(), (PROBE, PROBE));
-    // A quarter of the probe falling back is still fine.
+    // Half of each window falling back is still fine (a fallback costs under twice the
+    // engine's search, a search the cut answers about a third); a kept window starts the next.
     let cut = cut_of("(a|ab)c.*").unwrap();
-    for n in 0..PROBE * 2 {
-        let text = if n % 4 == 0 { "abc" } else { "ac" };
+    for n in 0..PROBE * 2 + 8 {
+        let text = if n % 2 == 0 { "abc" } else { "ac" };
         assert!(spans(&cut, text, 0).is_some());
+        assert!(cut.is_on(), "{n}");
     }
-    assert!(cut.is_on());
-    assert_eq!(cut.probed(), (PROBE, PROBE / 4));
+    assert_eq!(cut.probed(), (8, 4));
     cut.rearm();
     assert_eq!(cut.probed(), (0, 0));
 }
@@ -454,8 +455,39 @@ fn a_dropped_cut_rests_and_is_probed_again() {
         assert_eq!(search(&again, "ac-rest"), (true, Some((0, 7))));
     }
     assert!(cut.is_on());
-    assert_eq!(cut.probed(), (PROBE, 0));
+    assert_eq!(cut.probed(), (0, 0));
     assert_eq!(search(&again, "ac-rest"), (true, Some((0, 7))));
+}
+
+#[test]
+fn a_kept_cut_whose_data_turns_is_dropped() {
+    let kept = Kept::new("(a|ab)c.*-rest", "`regexp_extract`").unwrap();
+    let cut = kept.cut.as_ref().unwrap();
+    let search = |text: &str| {
+        let found = kept.captures_at(text, 0).unwrap().unwrap();
+        (matches!(found, Groups::Cut(..)), found.whole())
+    };
+    // Several windows in which the head's first choice is right keep the cut.
+    for _ in 0..3 * PROBE + PROBE / 2 {
+        assert_eq!(search("ac-rest"), (true, Some((0, 7))));
+    }
+    assert!(cut.is_on());
+    assert_eq!(cut.probed(), (PROBE / 2, 0));
+    // The data turns: every search falls back. The window under way ends with half of its
+    // searches fallen, which is still kept; the next window, all fallen, drops the cut.
+    for _ in 0..PROBE / 2 + PROBE {
+        assert!(cut.is_on());
+        assert_eq!(search("abc-rest"), (true, Some((0, 8))));
+    }
+    assert!(!cut.is_on());
+    assert_eq!(cut.probed(), (PROBE, PROBE));
+    assert_eq!(search("abc-rest"), (false, Some((0, 8))));
+    // A turn at a window's start is seen by the end of that window.
+    cut.rearm();
+    for _ in 0..PROBE {
+        assert_eq!(search("abc-rest"), (true, Some((0, 8))));
+    }
+    assert!(!cut.is_on());
 }
 
 #[test]

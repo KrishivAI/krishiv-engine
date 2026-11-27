@@ -306,7 +306,8 @@ impl Kept {
         from: usize,
     ) -> Result<Option<Groups<'_, 't>>, KrishivError> {
         let terminated = self.compiled.terminated.is_some() && ends_terminated(text);
-        if let Some(cut) = self.cut.as_ref().filter(|c| !terminated && c.take())
+        // `use_now` counts this search when the cut rests (the engine answers it).
+        if let Some(cut) = self.cut.as_ref().filter(|c| !terminated && c.use_now())
             // A cut whose slots a caller still holds is skipped: the engine answers.
             && let Ok(found) = cut.search(text, from)
         {
