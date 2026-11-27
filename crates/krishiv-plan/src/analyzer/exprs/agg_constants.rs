@@ -30,7 +30,19 @@ impl Resolver<'_> {
         e: &Arc<Expr>,
         kids: &[Bound],
     ) -> Result<(), AnalysisError> {
-        let (true, Some(value)) = (name == "count_min_sketch", kids.first()) else {
+        // The value is the first positional argument, or the one named `column`.
+        let at = match &e.node {
+            ExprNode::Function(f) => f
+                .arg_names
+                .iter()
+                .position(|n| {
+                    n.as_deref()
+                        .is_some_and(|n| n.eq_ignore_ascii_case("column"))
+                })
+                .unwrap_or(0),
+            _ => 0,
+        };
+        let (true, Some(value)) = (name == "count_min_sketch", kids.get(at)) else {
             return Ok(());
         };
         let Some(t @ DataType::CollatedString(c)) = &value.ty.data_type else {

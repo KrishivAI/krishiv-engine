@@ -10,3 +10,11 @@ fails at the first non-NULL value with a division by zero; an `eps` near `1e-10`
 
 Regenerate: `python gen.py fixture.json` (PySpark 4.3.0, JDK 21). Test:
 `crates/krishiv-session/tests/aggregate_count_min_sketch.rs`.
+
+## Spark sources (tags `v4.2.0` and `v4.3.0`; the aggregate's line numbers are the same in both)
+
+- `sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/aggregate/CountMinSketchAgg.scala`:
+  `CountMinSketchAgg` (line 43), `checkInputDataTypes` (71: the argument checks and their error classes),
+  `createAggregationBuffer` (134), `update` (138), `merge` (152), `eval`/`serialize` (157-159), `deserialize` (163).
+- `common/sketch/src/main/java/org/apache/spark/util/sketch/CountMinSketchImpl.java` (v4.3.0): `addLong` (169),
+  `hash` (201), `mergeInPlace` (264), `writeTo` (299: the serialized format).

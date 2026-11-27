@@ -215,7 +215,7 @@ pub static PYSPARK_PLOTTING_MAX_ROWS: ConfigEntry = ConfigEntry {
     key: "krishiv.sql.pyspark.plotting.max_rows",
     value_type: ValueType::Int32 { min: i32::MIN },
     default: Some(ConfigValue::Int(1000)),
-    doc: "The most rows `DataFrame.plot` collects to the client for a plot (top-n plots take the first rows, sampled plots sample down to this many). Read by Spark Connect clients.",
+    doc: "The most rows a `DataFrame.plot` shows. A top-n plot fetches one row more than this to tell whether it was cut, then trims to the limit; a sampled plot samples down to it; a KDE plot does not apply it. Read by Spark Connect clients.",
     scope: Scope::Session,
     settable_by: SettableBy::User,
     version_added: "0.3.0",

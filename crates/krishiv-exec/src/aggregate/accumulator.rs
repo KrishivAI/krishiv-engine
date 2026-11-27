@@ -510,7 +510,7 @@ impl Accumulator {
             (F::BitmapOrAgg, _) => Kind::Bitmap(BitmapAcc::new(BitmapOp::Or)),
             (F::BitmapAndAgg, _) => Kind::Bitmap(BitmapAcc::new(BitmapOp::And)),
             (F::CountMinSketch { depth, width, seed }, _) => {
-                Kind::CountMin(CountMinAcc::new(*depth, *width, *seed))
+                Kind::CountMin(CountMinAcc::new(*depth, *width, *seed)?)
             }
             (F::HllSketchAgg { lg_k }, _) => {
                 Kind::HllSketch(HllSketchAcc::new(HllSketchOp::Sketch(*lg_k))?)
@@ -624,6 +624,15 @@ impl Accumulator {
         match &self.kind {
             Kind::ThetaSketch(h) => h.state_bound(g),
             Kind::CountMin(c) => c.state_bound(),
+            _ => 0,
+        }
+    }
+
+    /// The bytes a group of its own takes where that is large (a count-min sketch, which the partial aggregate's
+    /// bypass builds for every input row); 0 for the other accumulators.
+    pub(crate) fn bypass_group_bytes(&self) -> usize {
+        match &self.kind {
+            Kind::CountMin(c) => c.group_bytes(),
             _ => 0,
         }
     }

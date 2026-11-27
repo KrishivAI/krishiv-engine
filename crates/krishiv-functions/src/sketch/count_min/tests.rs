@@ -1,6 +1,19 @@
 // SPDX-License-Identifier: Apache-2.0
 use super::*;
 
+fn mk_shape(depth: u32, width: u32, seed: i32) -> Shape {
+    Shape::new(depth, width, seed).expect("a shape within the coefficient budget")
+}
+
+#[test]
+fn a_depth_whose_coefficients_exceed_the_budget_is_refused_unallocated() {
+    let max = u32::try_from(MAX_COEFFICIENT_BYTES / 8).expect("fits");
+    assert!(Shape::new(max, 1, 1).is_some());
+    assert!(Shape::new(max + 1, 1, 1).is_none());
+    assert!(Shape::new(50_000_000, 1, 1).is_none());
+    assert!(Shape::new(i32::MAX.cast_unsigned(), 1, 1).is_none());
+}
+
 /// The hex of `sketch` after counting nothing or the given items.
 fn hex(bytes: &[u8]) -> String {
     use std::fmt::Write as _;
@@ -35,7 +48,7 @@ fn a_shape_past_two_gibibytes_does_not_serialize() {
 #[test]
 fn one_integer_serializes_as_spark_4_3_0() {
     // `count_min_sketch(c, 0.5d, 0.5d, 1)` over the single value 1.
-    let shape = Shape::new(depth(0.5), width(0.5), 1);
+    let shape = mk_shape(depth(0.5), width(0.5), 1);
     let mut counters = vec![0; shape.cells()];
     shape.add_long(&mut counters, 1);
     assert_eq!(
@@ -47,7 +60,7 @@ fn one_integer_serializes_as_spark_4_3_0() {
 
 #[test]
 fn a_merge_adds_a_sketch_of_the_same_shape_only() {
-    let shape = Shape::new(2, 5, 7);
+    let shape = mk_shape(2, 5, 7);
     let mut counters = vec![0; shape.cells()];
     shape.add_bytes(&mut counters, b"abcde");
     shape.add_long(&mut counters, -3);
@@ -56,11 +69,7 @@ fn a_merge_adds_a_sketch_of_the_same_shape_only() {
     assert!(shape.merge(&mut total, &mut into, &bytes));
     assert_eq!(total, 4);
     assert!(into.iter().zip(&counters).all(|(a, b)| *a == 2 * b));
-    for other in [
-        Shape::new(2, 5, 8),
-        Shape::new(1, 10, 7),
-        Shape::new(2, 4, 7),
-    ] {
+    for other in [mk_shape(2, 5, 8), mk_shape(1, 10, 7), mk_shape(2, 4, 7)] {
         let foreign = other.serialize(1, &vec![0; other.cells()]);
         let (mut total, mut into) = (4, counters.clone());
         assert!(!shape.merge(&mut total, &mut into, &foreign));
@@ -71,10 +80,10 @@ fn a_merge_adds_a_sketch_of_the_same_shape_only() {
 
 #[test]
 fn a_shape_with_no_rows_counts_nothing() {
-    let shape = Shape::new(0, 4, 1);
+    let shape = mk_shape(0, 4, 1);
     assert!(!shape.has_empty_rows());
     shape.add_long(&mut [], 1);
     shape.add_bytes(&mut [], b"x");
     assert_eq!(shape.serialize(2, &[]).len(), 20);
-    assert!(Shape::new(1, 0, 1).has_empty_rows());
+    assert!(mk_shape(1, 0, 1).has_empty_rows());
 }

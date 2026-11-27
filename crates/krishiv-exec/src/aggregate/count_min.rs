@@ -13,7 +13,7 @@ use arrow_array::cast::AsArray;
 use arrow_array::types::{Int8Type, Int16Type, Int32Type, Int64Type};
 use arrow_array::{Array, ArrayRef, BinaryArray, BinaryViewArray};
 use arrow_schema::DataType;
-use krishiv_functions::sketch::count_min::Shape;
+use krishiv_functions::sketch::count_min::{MAX_COEFFICIENT_BYTES, Shape};
 
 use super::unsupported;
 use crate::error::{Result, internal};
@@ -29,12 +29,29 @@ pub(crate) struct CountMinAcc {
 }
 
 impl CountMinAcc {
-    pub(crate) fn new(depth: u32, width: u32, seed: i32) -> Self {
-        Self {
-            shape: Shape::new(depth, width, seed),
+    /// An accumulator of `depth` rows of `width` counters; `KRISHIV_UNSUPPORTED_FEATURE` when the rows' hash
+    /// coefficients alone would pass [`MAX_COEFFICIENT_BYTES`] (checked before they are allocated, so a decoded
+    /// plan cannot ask for gigabytes).
+    pub(crate) fn new(depth: u32, width: u32, seed: i32) -> Result<Self> {
+        let shape = Shape::new(depth, width, seed).ok_or_else(|| {
+            unsupported(format!(
+                "count_min_sketch of {depth} rows (the limit is {})",
+                MAX_COEFFICIENT_BYTES / size_of::<i64>()
+            ))
+        })?;
+        Ok(Self {
+            shape,
             totals: Vec::new(),
             counters: Vec::new(),
-        }
+        })
+    }
+
+    /// The bytes one row's sketch takes as its own group (the partial aggregate's bypass builds one per input row).
+    pub(crate) fn group_bytes(&self) -> usize {
+        self.shape
+            .cells()
+            .saturating_add(1)
+            .saturating_mul(size_of::<i64>())
     }
 
     /// Adds groups up to `n` with empty sketches.

@@ -751,7 +751,15 @@ impl Lowerer {
                     .map(|a| {
                         let value = match &a.expr.kind {
                             crate::ast::ExprKind::TableArgument(t) => {
-                                if !name.parts[0].value.eq_ignore_ascii_case("stack") {
+                                // Only an unqualified generator (not `stack`) has the
+                                // one parameter name; a Python table function names its own.
+                                if name.parts.len() == 1
+                                    && !name.parts[0].value.eq_ignore_ascii_case("stack")
+                                    && krishiv_plan::GeneratorKind::of_name(
+                                        &name.parts[0].value.to_ascii_lowercase(),
+                                    )
+                                    .is_some()
+                                {
                                     Self::check_generator_param(&name.parts[0], a)?;
                                 }
                                 arc(self.table_argument(t, a.expr.span)?)

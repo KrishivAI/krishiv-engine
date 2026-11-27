@@ -18,6 +18,11 @@ const VERSION: i32 = 1;
 /// The bytes before the coefficients: version, total count, depth and width.
 const HEADER: usize = 4 + 8 + 4 + 4;
 
+/// The most bytes of per-row hash coefficients a shape holds: a plan (possibly decoded) naming more rows is
+/// refused before anything is allocated. A depth from a confidence is at most about 60, so this is never reached
+/// by a planned call.
+pub const MAX_COEFFICIENT_BYTES: usize = 1 << 20;
+
 /// The number of counter rows for a `confidence` in `(0, 1)`: `ceil(-log1p(-confidence) / ln 2)`, with Java's
 /// cast (a NaN gives 0).
 #[must_use]
@@ -86,14 +91,18 @@ pub struct Shape {
 }
 
 impl Shape {
-    /// The shape of `depth` rows of `width` counters, hashed with `seed`.
+    /// The shape of `depth` rows of `width` counters, hashed with `seed`; `None` when the coefficients of that
+    /// many rows would exceed [`MAX_COEFFICIENT_BYTES`] (nothing is allocated then).
     #[must_use]
-    pub fn new(depth: u32, width: u32, seed: i32) -> Self {
+    pub fn new(depth: u32, width: u32, seed: i32) -> Option<Self> {
+        if (depth as usize).saturating_mul(size_of::<i64>()) > MAX_COEFFICIENT_BYTES {
+            return None;
+        }
         let mut random = JavaRandom::new(seed);
-        Self {
+        Some(Self {
             width,
             coefficients: (0..depth).map(|_| random.next_below_int_max()).collect(),
-        }
+        })
     }
 
     /// The number of rows (hash coefficients) of the sketch.
@@ -176,15 +185,27 @@ impl Shape {
     /// changed, when `bytes` is not a sketch of this shape.
     #[must_use]
     pub fn merge(&self, total: &mut i64, counters: &mut [i64], bytes: &[u8]) -> bool {
-        let expected = self.serialize(0, &[]);
-        let prefix = expected.len();
+        let prefix = HEADER.saturating_add(self.coefficients.len().saturating_mul(8));
         let fits = prefix
             .checked_add(counters.len().saturating_mul(8))
             .is_some_and(|n| n == bytes.len());
-        // Everything but the total count (bytes 4 to 12) must match.
-        if !fits
-            || bytes.get(..4) != expected.get(..4)
-            || bytes.get(12..prefix) != expected.get(12..)
+        // Everything but the total count (bytes 4 to 12) must match: version, depth, width, coefficients.
+        let depth = u32::try_from(self.coefficients.len()).unwrap_or(u32::MAX);
+        let header_ok = bytes.get(..4) == Some(&VERSION.to_be_bytes()[..])
+            && bytes.get(12..16) == Some(&depth.to_be_bytes()[..])
+            && bytes.get(16..20) == Some(&self.width.to_be_bytes()[..]);
+        if !fits || !header_ok {
+            return false;
+        }
+        let Some(coefficients) = bytes.get(HEADER..prefix) else {
+            return false;
+        };
+        let (theirs, _) = coefficients.as_chunks::<8>();
+        if theirs.len() != self.coefficients.len()
+            || theirs
+                .iter()
+                .zip(&self.coefficients)
+                .any(|(b, c)| b != &c.to_be_bytes())
         {
             return false;
         }

@@ -376,6 +376,15 @@ impl AggTable {
             .decode(&self.keys, ids.iter().map(|&i| i as usize))
     }
 
+    /// The bytes `states_of_rows` builds per input row beyond the batch: the sketches of one-row groups.
+    pub(crate) fn bypass_row_bytes(core: &AggCore) -> Result<usize> {
+        let mut bytes = 0_usize;
+        for a in &core.spec.aggregates {
+            bytes = bytes.saturating_add(core.accumulator(a)?.bypass_group_bytes());
+        }
+        Ok(bytes)
+    }
+
     /// The partial states of each row of `batch` as its own group: a
     /// partial aggregate's pass-through (bypass) output.
     pub(crate) fn states_of_rows(core: &AggCore, batch: &Batch) -> Result<RecordBatch> {

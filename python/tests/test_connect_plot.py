@@ -55,8 +55,19 @@ def test_top_n_plot_stops_at_max_rows(spark: Any) -> None:
     assert len(fig.data[0].x) == 7
 
 
-def test_kde_plot(spark: Any) -> None:
-    assert _frame(spark).plot.kde(column="y", bw_method=0.5).data
+def test_kde_plot_is_the_gaussian_density_at_the_given_points(spark: Any) -> None:
+    import math
+
+    points, bw = [0.0, 600.0, 2401.0], 100.0
+    fig = _frame(spark).plot.kde(column="y", bw_method=bw, ind=points)
+    # The oracle: the mean over the 50 values y = x * x of the normal density at each point.
+    values = [float(i * i) for i in range(50)]
+    want = [
+        sum(math.exp(-0.5 * ((p - v) / bw) ** 2) / (bw * math.sqrt(2 * math.pi)) for v in values) / len(values)
+        for p in points
+    ]
+    assert list(fig.data[0].x) == points
+    assert list(fig.data[0].y) == pytest.approx(want, rel=1e-9)
 
 
 @pytest.mark.xfail(

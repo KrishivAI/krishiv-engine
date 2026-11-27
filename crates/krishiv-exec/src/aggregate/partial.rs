@@ -15,6 +15,9 @@ use super::{AggregateOutput, AggregateSpec};
 use crate::context::TaskContext;
 use crate::error::{Result, internal};
 use crate::hash::HashSeed;
+
+/// The most bytes of one-row count-min sketches a bypassed batch may build unreserved.
+const BYPASS_SKETCH_BYTES: usize = 1 << 20;
 use crate::operator::{LocalState, Operator, OperatorOutput};
 
 /// When a [`PartialAggregate`] gives up aggregating.
@@ -207,7 +210,12 @@ impl Operator for PartialAggregate {
                     .to_owned(),
             ));
         }
-        if l.bypass {
+        // A row of a count-min sketch builds one sketch per input row, unreserved: a batch of them past
+        // `BYPASS_SKETCH_BYTES` goes through the table instead, which reserves (or asks for memory, or fails).
+        if l.bypass
+            && AggTable::bypass_row_bytes(&self.core)?.saturating_mul(input.num_rows())
+                <= BYPASS_SKETCH_BYTES
+        {
             self.bypassed_rows
                 .fetch_add(input.num_rows() as u64, Ordering::Relaxed);
             let out = AggTable::states_of_rows(&self.core, input)?;

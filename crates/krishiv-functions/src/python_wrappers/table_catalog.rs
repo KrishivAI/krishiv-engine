@@ -49,7 +49,8 @@ pub(super) fn rows() -> Vec<Row> {
         Row::new(
             "count_min_sketch",
             "col: ColumnOrName, eps: Column | float, confidence: Column | float, seed: Column | int = None",
-        ),
+        )
+        .random("seed"),
         Row::new("every", "col: ColumnOrName"),
         Row::new(
             "from_csv",

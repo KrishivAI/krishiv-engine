@@ -83,9 +83,12 @@ fn every_statement_answers_as_spark() -> R {
         let sql = case["sql"].as_str().ok_or("no sql")?;
         let got = run(&s, sql);
         if let Some(class) = case["error"].as_str() {
+            let state = case["sqlstate"].as_str().ok_or("no sqlstate")?;
             match got {
-                Err(e) if e.contains(class) => {}
-                other => writeln!(wrong, "{sql}\n  want {class}\n  got {other:?}")?,
+                Err(e)
+                    if e.contains(&format!("[{class}]"))
+                        && e.contains(&format!("SQLSTATE: {state}")) => {}
+                other => writeln!(wrong, "{sql}\n  want {class} {state}\n  got {other:?}")?,
             }
         } else {
             let want = (strings(&case["columns"]), strings(&case["rows"]));
@@ -96,6 +99,20 @@ fn every_statement_answers_as_spark() -> R {
     }
     assert!(wrong.is_empty(), "{wrong}");
     Ok(())
+}
+
+/// Spark's serialization: version (4 bytes), total count (8), depth (4), width (4), then the counters, so the
+/// header says what the sketch of `n` values at `eps = 0.1`, `confidence = 0.9` must hold:
+/// depth `ceil(-ln(1 - 0.9) / ln 2) = 4`, width `ceil(2 / 0.1) = 20`.
+fn header(hex: &str) -> (u64, u32, u32) {
+    let at = |from: usize, len: usize| {
+        u64::from_str_radix(&hex[from..from + len], 16).unwrap_or(u64::MAX)
+    };
+    (
+        at(8, 16),
+        u32::try_from(at(24, 8)).unwrap_or(u32::MAX),
+        u32::try_from(at(32, 8)).unwrap_or(u32::MAX),
+    )
 }
 
 #[test]
@@ -109,6 +126,13 @@ fn the_sketch_does_not_depend_on_partitions_or_batches() -> R {
     };
     let one = run(&s, &q(1))?.1;
     assert_eq!(one.len(), 7);
+    // Each group holds the rows of its residue: 0..20000 has 2858 of residue 0 and 2857 of the others.
+    for (g, row) in one.iter().enumerate() {
+        let (group, hex) = row.split_once('|').ok_or("no hex")?;
+        assert_eq!(group, g.to_string());
+        let want = if g == 0 { 2858 } else { 2857 };
+        assert_eq!(header(hex), (want, 4, 20), "group {g}");
+    }
     assert_eq!(run(&s, &q(8))?.1, one);
     Ok(())
 }
@@ -130,14 +154,29 @@ fn a_collated_value_is_spark_s_type_mismatch() -> R {
 #[test]
 fn a_sketch_past_what_a_binary_holds_or_with_empty_rows_is_refused() -> R {
     let s = Session::new()?;
-    for sql in [
-        "SELECT count_min_sketch(id, 1e-12d, 0.5d, 1) FROM range(3)",
-        "SELECT count_min_sketch(id, double('Infinity'), 0.5d, 1) FROM range(3)",
-        "SELECT count_min_sketch(id, double('NaN'), 0.5d, 1) FROM range(3)",
-        "SELECT count_min_sketch(id, 0.5d, 0.5d, 1) OVER (ORDER BY id) FROM range(3)",
+    for (sql, why) in [
+        (
+            "SELECT count_min_sketch(id, 1e-12d, 0.5d, 1) FROM range(3)",
+            "more than 2 GiB",
+        ),
+        (
+            "SELECT count_min_sketch(id, double('Infinity'), 0.5d, 1) FROM range(3)",
+            "infinite or NaN eps",
+        ),
+        (
+            "SELECT count_min_sketch(id, double('NaN'), 0.5d, 1) FROM range(3)",
+            "infinite or NaN eps",
+        ),
+        (
+            "SELECT count_min_sketch(id, 0.5d, 0.5d, 1) OVER (ORDER BY id) FROM range(3)",
+            "the window aggregate count_min_sketch",
+        ),
     ] {
         let got = run(&s, sql);
-        assert!(got.is_err(), "{sql}: {got:?}");
+        assert!(
+            matches!(&got, Err(e) if e.contains("KRISHIV_UNSUPPORTED_FEATURE") && e.contains(why)),
+            "{sql}: {got:?}"
+        );
     }
     Ok(())
 }
