@@ -117,6 +117,8 @@ pub(crate) struct ManagerInner {
     codec: SpillCodec,
     zstd_level: i64,
     pub(crate) drop_behind: u64,
+    /// Finished files whose drop-behind sync waits ([`super::cache::Settling`]).
+    pub(crate) settling: super::cache::Settling,
     next_scope: AtomicU64,
     stale_removed: usize,
     /// Holds the advisory lock; released by the kernel when dropped or when
@@ -245,6 +247,7 @@ impl SpillManager {
                     codec: config.codec,
                     zstd_level: config.zstd_level,
                     drop_behind: config.drop_behind,
+                    settling: super::cache::Settling::default(),
                     next_scope: AtomicU64::new(0),
                     stale_removed,
                     _lock: lock,

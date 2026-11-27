@@ -34,7 +34,7 @@ Paths are relative to this crate.
   next start after a crash); every frame is checksummed, so damage is `SpillError::Corrupt`, never wrong data; all names are
   generated, never user-supplied; files go on drop, a query's directory on drop or `SpillScope::cancel`; crashed sessions are
   reclaimed via a held advisory lock (not a pid); write/read scratch is accounted in the caller's `Reservation`; writers drop their written pages from the page cache as they go
-  (`krishiv.spill.dropBehindBytes`, `spillfile/cache.rs` via `rustix`, no `unsafe`; advisory, failures are logged; a finished file is `fdatasync`ed before its pages are dropped), so dirty spill pages never pile up in a cgroup.
+  (`krishiv.spill.dropBehindBytes`, `spillfile/cache.rs` via `rustix`, no `unsafe`; advisory, failures are logged; finished files are `fdatasync`ed, a window of bytes at a time (`cache::Settling`), before their pages are dropped), so dirty spill pages never pile up in a cgroup.
 - No `unwrap`/`expect`/`panic` in library code; errors carry a Spark error class + SQLSTATE.
 
 ## ADRs (in `../krishiv-internal/adr/`)

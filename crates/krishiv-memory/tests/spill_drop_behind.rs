@@ -251,3 +251,53 @@ fn a_finished_spill_file_is_dropped_from_the_page_cache_and_reads_back() {
         );
     }
 }
+
+/// Files smaller than the window are not synced one by one at `finish`
+/// (QA2-16): they are held until the manager's finished files reach the
+/// window, then all of them are synced and dropped together.
+#[test]
+fn small_finished_files_are_dropped_once_they_reach_the_window() {
+    let probe = dir();
+    if on_ram_fs(probe.path()) {
+        eprintln!("spill test directory is on a RAM file system: residency not checked");
+        return;
+    }
+    let root_dir = dir();
+    // One batch is about 0.85 MiB uncompressed: five files pass 4 MiB.
+    let manager = SpillManager::open(&SpillConfig {
+        dir: root_dir.path().to_owned(),
+        drop_behind: 4 << 20,
+        codec: SpillCodec::None,
+        ..SpillConfig::default()
+    })
+    .unwrap();
+    let scope = manager.scope().unwrap();
+    let root = TreePool::new(&MemoryConfig {
+        limit: None,
+        ..MemoryConfig::default()
+    });
+    let pool: Arc<dyn MemoryPool> = root.child("q", None);
+    let id = pool.register("spill", None);
+    let input = batches();
+    let mut files = Vec::new();
+    for b in input.iter().take(5) {
+        let mut w = scope
+            .writer(b.schema(), Reservation::new(Arc::clone(&pool), id))
+            .unwrap();
+        w.write(b).unwrap();
+        files.push(w.finish().unwrap());
+    }
+    assert!(files[..4].iter().map(SpillFile::bytes).sum::<u64>() < 4 << 20);
+    for (n, f) in files.iter().enumerate() {
+        let (resident, pages) = resident_pages(f.path());
+        eprintln!("file {n}: {resident} of {pages} pages cached");
+        assert!(pages > 100, "{pages}");
+        assert!(
+            resident * 100 <= pages,
+            "file {n}: {resident} of {pages} pages still cached"
+        );
+        let back = read_back(f);
+        assert_eq!(back.len(), 1);
+        assert_eq!(back[0].data(), input[n].data());
+    }
+}

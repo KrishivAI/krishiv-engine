@@ -33,9 +33,10 @@ const BUF_BYTES: usize = 64 << 10;
 /// complete, and a writer that is dropped, fails or is cancelled leaves
 /// nothing behind. Durability is not a goal: spill files are scratch data
 /// that is only meaningful to the process that wrote them, and after a crash
-/// they are deleted at the next start, never read. The `fdatasync` at
-/// `finish` (with drop-behind on) is for memory, not durability: it makes
-/// the file's pages clean so they can be dropped from the page cache. Errors that surface only at `close` are not
+/// they are deleted at the next start, never read. The drop-behind's
+/// `fdatasync` of finished files (with drop-behind on) is for memory, not
+/// durability: it makes the file's pages clean so they can be dropped from
+/// the page cache. Errors that surface only at `close` are not
 /// observable on a local file system, which is why a network one is refused.
 ///
 /// # Accounting
@@ -57,9 +58,9 @@ const BUF_BYTES: usize = 64 << 10;
 /// file is discarded, not truncated.
 ///
 /// The I/O is blocking: call it from `spawn_blocking`. Each writer holds one
-/// file descriptor until it finishes or drops. That includes waiting for the
-/// disk: the drop-behind (`krishiv.spill.dropBehindBytes`, see the module
-/// docs) syncs the file at `finish`.
+/// file descriptor until it finishes or drops. A `finish` can wait for the
+/// disk: the drop-behind (`krishiv.spill.dropBehindBytes`) syncs finished
+/// files a window of bytes at a time, on the thread whose file fills it.
 #[derive(Debug)]
 pub struct SpillWriter {
     scope: Arc<ScopeInner>,
@@ -292,9 +293,12 @@ impl SpillWriter {
     /// Each time a window of bytes (`krishiv.spill.dropBehindBytes`) has
     /// been written, the file so far is advised `DONTNEED`: that starts
     /// writeback of what is dirty and drops what earlier calls had started
-    /// writing back (clean by now). At `finish` the file is synced and
-    /// dropped. Spill files are mostly smaller than a window, so for most
-    /// files only the `finish` step runs. Only complete frames are covered
+    /// writing back (clean by now). At `finish` the rest of the file's
+    /// writeback is started and the file is held with other finished files
+    /// of the manager until they reach a window of bytes; then they are
+    /// synced and dropped together ([`cache::Settling`]), which waits far
+    /// less than one sync per file (spill files are mostly smaller than a
+    /// window). Only complete frames are covered
     /// (their headers are patched in place before), so no byte is written
     /// after its range was dropped. The calls are advisory: a failure is
     /// logged and the write goes on.
@@ -307,11 +311,33 @@ impl SpillWriter {
             out.flush()
                 .map_err(|e| SpillError::io("write to", &self.tmp, e))?;
             let file = out.get_ref();
-            if finish {
-                advisory(&self.tmp, cache::sync(file));
+            // EXPERIMENT ONLY (KRISHIV_X_SETTLE=none: nothing at finish), not for the PR.
+            if finish && std::env::var("KRISHIV_X_SETTLE").is_ok_and(|m| m == "none") {
+                return Ok(());
             }
             advisory(&self.tmp, cache::drop_range(file, 0, end));
             self.started = end;
+            if finish {
+                // Synced and dropped later, with other finished files
+                // ([`cache::Settling`]); a descriptor that cannot be
+                // duplicated is synced now.
+                match file.try_clone() {
+                    Ok(held) => {
+                        let manager = self.scope.manager();
+                        for (path, e) in
+                            manager
+                                .settling
+                                .hold(held, end, self.dest.clone(), self.window)
+                        {
+                            advisory(&path, Err(e));
+                        }
+                    }
+                    Err(_) => {
+                        advisory(&self.tmp, cache::sync(file));
+                        advisory(&self.tmp, cache::drop_range(file, 0, end));
+                    }
+                }
+            }
         }
         Ok(())
     }
