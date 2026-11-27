@@ -10,6 +10,8 @@ import textwrap
 
 import pytest
 
+pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="SIGINT delivery to a child differs on Windows")
+
 _SCRIPT = textwrap.dedent(
     """
     import os, signal, sys, threading, time

@@ -521,6 +521,7 @@ def test_catalog_register_function_is_the_deprecated_alias_of_udf_register(spark
 
 
 @needs_pandas
+@pytest.mark.skipif(sys.platform == "win32", reason="time.tzset does not exist on Windows")
 @pytest.mark.parametrize("kind", ["pandas", "arrow"])
 def test_vectorized_udfs_see_timestamps_in_the_session_time_zone(
     spark: SparkSession, kind: str, monkeypatch: pytest.MonkeyPatch

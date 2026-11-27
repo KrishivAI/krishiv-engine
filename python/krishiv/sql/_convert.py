@@ -170,7 +170,7 @@ def _value(value: Any, arrow_type: Any) -> Any:
 
     if pa.types.is_timestamp(arrow_type) and arrow_type.tz is not None:
         # An instant: PySpark returns it as a naive datetime in the client's local time zone.
-        return value.astimezone().replace(tzinfo=None)
+        return _local_naive(value)
     from krishiv.sql.variant import VariantVal, is_variant_struct
 
     if is_variant_struct(arrow_type):
@@ -204,6 +204,18 @@ def session_zone(name: str) -> tzinfo:
     from zoneinfo import ZoneInfo
 
     return ZoneInfo(name)
+
+
+def _local_naive(value: datetime) -> datetime:
+    """``value`` (an aware datetime) as a naive datetime in the client's local time zone.
+
+    Windows' C runtime cannot convert an instant before 1970 (``astimezone()`` raises ``OSError``);
+    there the zone's offset at 1970-01-01 stands in, as no earlier rule is available."""
+    try:
+        return value.astimezone().replace(tzinfo=None)
+    except (OSError, OverflowError):
+        offset = datetime.fromtimestamp(0, UTC).astimezone().utcoffset() or timedelta(0)
+        return (value.astimezone(UTC) + offset).replace(tzinfo=None)
 
 
 def cell(value: Any, arrow_type: Any, zone: tzinfo = UTC) -> str:

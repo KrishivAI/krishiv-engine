@@ -108,7 +108,8 @@ class GoldenFileTestMixin:
         """
         cls._tz_prev = os.environ.get("TZ", None)
         os.environ["TZ"] = tz
-        time.tzset()
+        if hasattr(time, "tzset"):  # not on Windows
+            time.tzset()
 
         # Sync with Spark / Java if a session is available.
         if hasattr(cls, "sc"):
@@ -123,7 +124,8 @@ class GoldenFileTestMixin:
             del os.environ["TZ"]
         if cls._tz_prev is not None:
             os.environ["TZ"] = cls._tz_prev
-        time.tzset()
+        if hasattr(time, "tzset"):  # not on Windows
+            time.tzset()
 
     @staticmethod
     def is_generating_golden() -> bool:

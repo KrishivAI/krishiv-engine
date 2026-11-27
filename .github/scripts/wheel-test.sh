@@ -68,14 +68,7 @@ if sys.argv[1] == "cp314t":
     # declared free-threading safe).
     assert not sys._is_gil_enabled(), "importing krishiv enabled the GIL"
 PY
-# WHEEL_TEST_FILES (space-separated names under python/tests) narrows the run:
-# the Windows job runs a subset until the POSIX-only tests are ported (see the
-# comment in wheels.yml); every other target runs the whole directory.
 targets=("$repo/python/tests")
-if [ -n "${WHEEL_TEST_FILES:-}" ]; then
-  targets=()
-  for f in $WHEEL_TEST_FILES; do targets+=("$repo/python/tests/$f"); done
-fi
 if [ "$flavour" = cp314t ]; then
   PYTHON_GIL=0 "$py" -m pytest -q -rs "${targets[@]}"
 else
