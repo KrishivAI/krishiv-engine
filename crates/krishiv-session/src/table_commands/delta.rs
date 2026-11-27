@@ -385,7 +385,9 @@ impl Session {
             Some(format!("{}.{}", name.namespace, name.name)),
         )?;
         super::delta_writes::create_local_root(&source).await?;
-        new.create_empty(&crate::session::job_uuid()).await?;
+        let user_metadata = crate::conf::get(&env.config, super::row_level::USER_METADATA_CONF);
+        new.create_empty(&crate::session::job_uuid(), user_metadata.as_deref())
+            .await?;
         table.columns = specified.to_vec();
         table.layout = TableLayout {
             partition_columns: partition_names.to_vec(),
@@ -538,7 +540,9 @@ impl Session {
                 StatementClass::Ddl,
             )?;
         }
-        new.create_empty(&crate::session::job_uuid()).await
+        let user_metadata = crate::conf::get(&env.config, super::row_level::USER_METADATA_CONF);
+        new.create_empty(&crate::session::job_uuid(), user_metadata.as_deref())
+            .await
     }
 
     /// `CREATE TEMPORARY VIEW v USING delta OPTIONS (path 'p')`: a read of the Delta table at

@@ -653,8 +653,10 @@ impl When {
 
 /// `v` as a value of the `CASE` result type `out`: branches of one Spark
 /// `STRING`/`BINARY` in different Arrow encodings meet in the canonical
-/// carrier; an untyped `NULL` stays one. Anything else is an engine bug:
-/// the analyzer has cast every branch to the common type.
+/// carrier; an untyped `NULL` stays one; a branch of the same shape whose
+/// nested fields carry other nullability flags or metadata (a Delta scan's
+/// column-mapping ids) is relabelled to `out` ([`Relabeled`]). Anything else
+/// is an engine bug: the analyzer has cast every branch to the common type.
 fn coerce_branch(v: &mut Arc<dyn PhysExpr>, out: &ArrowType, env: &EvalEnv) -> Result<()> {
     let t = v.data_type().clone();
     if &t == out || t == ArrowType::Null {
@@ -664,9 +666,46 @@ fn coerce_branch(v: &mut Arc<dyn PhysExpr>, out: &ArrowType, env: &EvalEnv) -> R
         *v = super::cast::coerce_to(Arc::clone(v), out, env)?;
         return Ok(());
     }
+    // The same data under other nested field flags or metadata (a Delta scan's struct fields
+    // carry their column-mapping ids): the value takes the CASE's labels.
+    if super::func::same_shape(&t, out) {
+        *v = Arc::new(Relabeled {
+            e: Arc::clone(v),
+            out: out.clone(),
+        });
+        return Ok(());
+    }
     Err(internal(&format!(
         "a CASE value of type {t} in a CASE of type {out}"
     )))
+}
+
+/// `e` relabelled to `out`, a type of the same shape ([`super::func::same_shape`]).
+#[derive(Debug)]
+struct Relabeled {
+    e: Arc<dyn PhysExpr>,
+    out: ArrowType,
+}
+
+impl PhysExpr for Relabeled {
+    fn data_type(&self) -> &ArrowType {
+        &self.out
+    }
+
+    fn nullable(&self) -> bool {
+        self.e.nullable()
+    }
+
+    fn eval(&self, batch: &RecordBatch, partition: u32) -> Result<Value> {
+        Ok(match self.e.eval(batch, partition)? {
+            Value::Array(a) => Value::Array(super::func::relabeled(&a, &self.out)?),
+            Value::Scalar(a) => Value::Scalar(super::func::relabeled(&a, &self.out)?),
+        })
+    }
+
+    fn is_constant(&self) -> bool {
+        self.e.is_constant()
+    }
 }
 
 impl PhysExpr for When {

@@ -28,6 +28,7 @@ mod cast;
 mod cond;
 mod field;
 mod func;
+pub(crate) use func::relabeled;
 mod hof;
 mod in_prefix;
 mod interval;
