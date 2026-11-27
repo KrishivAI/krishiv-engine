@@ -520,6 +520,14 @@ impl DeltaTable {
         self.inner.persistent_dvs
     }
 
+    /// Whether type widening is enabled: `delta.enableTypeWidening = true` (delta-spark's
+    /// `TypeWidening.isEnabled`, `TypeWidening.scala:43-52`), so a write's schema merge would
+    /// widen a column's type.
+    #[must_use]
+    pub fn type_widening_enabled(&self) -> bool {
+        self.inner.snapshot.table_properties().enable_type_widening == Some(true)
+    }
+
     /// Whether the table takes new deletion vectors: the feature in its protocol and
     /// `delta.enableDeletionVectors = true` (delta-spark's `deletionVectorsWritable`,
     /// `DeletionVectorUtils.scala:72-74`).
@@ -775,7 +783,20 @@ fn canonical(kernel: &DataType, arrow: &Field) -> Result<Field, KrishivError> {
             )));
         }
     };
-    Ok(arrow.clone().with_data_type(t))
+    let field = arrow.clone().with_data_type(t);
+    if matches!(kernel, DataType::Variant(_)) {
+        // The engine's own Variant field carries its type tags (the Arrow extension name), so
+        // a scan's column meets one the engine made (a CTAS's new table) in a union.
+        let mut metadata = field.metadata().clone();
+        metadata.extend(
+            krishiv_types::DataType::Variant
+                .to_arrow_field("", true)
+                .metadata()
+                .clone(),
+        );
+        return Ok(field.with_metadata(metadata));
+    }
+    Ok(field)
 }
 
 fn internal(message: String) -> KrishivError {

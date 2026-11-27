@@ -698,6 +698,25 @@ Krishiv writes Delta tables through `delta_kernel` and its own writer (`krishiv-
   a qualified name (`t.p`) and a struct field (`s.p`, a data column for delta-spark) are refused, and
   so is a string compared with a `TIMESTAMP` partition column, which delta-spark casts in
   `spark.sql.session.timeZone` (Krishiv's filter translation does not know the zone yet).
+- **Write options** (`tests/fixtures/delta-4.4.1/OPTIONS.json`). Values are checked as
+  delta-spark checks them (`DELTA_ILLEGAL_OPTION`, `DELTA_INVALID_IDEMPOTENT_WRITES_OPTIONS`) and
+  unknown names are accepted, as delta-spark only logs them; `userMetadata` and `mergeSchema`
+  (`canMergeSchema`, the string `"true"`) reach the commit. Refused by name where delta-spark
+  commits: idempotent writes (`txnAppId` + `txnVersion`), `dataChange = false`, `replaceOn`,
+  `replaceUsing`, `targetAlias` and `useNullIntolerantEqualityWithDPO = true`
+  (`writePartitionColumns` is accepted and has no effect, as in delta-spark). A DataFrame
+  `save(path)` merges the frame's types with the table's as delta-spark's `SchemaMergingUtils`
+  does, with or without `mergeSchema` (`OPTIONS.json` `merge_schema`): narrower integrals,
+  NULL-typed columns and other nested nullability are taken, other types are
+  `DELTA_FAILED_TO_MERGE_FIELDS`, and a merge that would change the table's schema is
+  `DELTA_METADATA_MISMATCH` without `mergeSchema`; with it (type widening on a `typeWidening`
+  table, a wider integral, a new nested field) it is refused by name, since the kernel commits no
+  schema change on a write. Type widening follows delta-spark's default
+  `spark.databricks.delta.typeWidening.allowAutomaticWidening = same_family_type`; the conf is
+  not read. A non-numeric `maxRecordsPerFile` is
+  `KRISHIV_INVALID_FORMAT_OPTION_VALUE` where delta-spark raises a classless
+  `NumberFormatException`. `optimizeWrite` and `compression` are accepted and change nothing.
+  `INSERT INTO delta.`<path>`` is not taken (`TABLE_OR_VIEW_NOT_FOUND`); a catalog table is.
 
 `DELETE` and `UPDATE` of a Delta table (copy-on-write, `src/write/dml.rs`) leave the rows, the
 command's `num_affected_rows` and the files removed that delta-spark leaves

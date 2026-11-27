@@ -139,6 +139,8 @@ pub struct StagedCommit {
     pub dv_descriptors: HashMap<String, DeletionVectorDescriptor>,
     /// What the statement read of the table.
     pub read_set: ReadSet,
+    /// `commitInfo.userMetadata`: Delta's `userMetadata` write option.
+    pub user_metadata: Option<String>,
 }
 
 /// The bounds of the commit loop.

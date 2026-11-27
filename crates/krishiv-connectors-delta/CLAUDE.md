@@ -26,9 +26,35 @@ Delta Lake connector on `delta_kernel` (no default features) with our own Engine
 
 Fuzz target `fuzz/fuzz_targets/delta_commit_json.rs` (one commit through `parse_json`, `read_json_files`, the `_last_checkpoint`/`.crc` limits and a kernel snapshot + scan; seeds from the oracle tables' logs).
 
-## Not here yet (PR-08b part 2 left these; time travel waits for PB-07 `TableVersionSpec`, CDF read is PR-37e)
-- Time travel and `@`: `DeltaTable::open_with` already takes a pinned version.
-- CDF read (`table_changes`, `readChangeFeed`).
+## Built (P3-T021 PR-08a/08b, 37a-37e)
+Reads with the reader allow-list; writes (append, truncate, `replaceWhere` on partition columns, dynamic overwrite,
+CTAS/new tables) with the writer allow-list, the commit loop and conflict checker, checkpoints; copy-on-write
+`DELETE`/`UPDATE`/`MERGE` (37b-37c); merge-on-read with deletion vectors and DV-only `DELETE` on change-data-feed tables
+(37d); Delta's write options (37e: `userMetadata` and `mergeSchema` reach the commit through `UserOptions` in
+`write/sink.rs`; `DELETE`/`UPDATE`/`MERGE` commits take it from the request's `USER_METADATA_OPTION`, `NewDeltaTable::create_empty` as an argument: the session fills both from `spark.databricks.delta.commitInfo.userMetadata`, `DML-USER-METADATA.json`; the session checks the values as delta-spark does and refuses the ones Krishiv does not implement,
+krishiv-session `table_commands/delta_options.rs`); the change-data-feed refusals of design 6.2, one case each
+(krishiv-session `tests/delta_dml.rs` `delta_cdf_dml_refused`, `tests/delta_merge.rs` `delta_cdf_merge_refused`); the
+oracle-wide no-`INTERNAL_ERROR`, coordinated-commits and kernel-gap tests (krishiv-session `tests/delta_gaps.rs`).
+`src/write/tests/options.rs` tests the commit fields.
+
+## Not here yet
+- Time travel and `@` (wait for PB-07 `TableVersionSpec`; `DeltaTable::open_with` already takes a pinned version) and
+  CDF read (`table_changes`, `readChangeFeed`), with its errors.
+- The 4.3 `WITH (...)` options on `DELETE`/`UPDATE`/`MERGE`: krishiv-sql does not parse them (Spark 4.2.0 does not
+  either, `OPTIONS.json`); `INSERT .. WITH (..)` and DataFrame options are taken. `INSERT INTO delta.`path`` is not
+  taken (a catalog table is). Delta's read options on a write (`maxFilesPerTrigger` and the like, which delta-spark
+  also checks on a write) are not checked.
+- Refused by name (kernel or Krishiv gaps): replace (RTAS, `REPLACE TABLE`, `overwriteSchema`); write-time type
+  widening and other schema evolution on write (`mergeSchema` with other columns, or a merge that changes the
+  table's types: `DeltaTable::type_widening_enabled` tells a widening table, the type rule is krishiv-session
+  `delta_options::merge_schema_check`; `MERGE` schema evolution);
+  legacy writer 3-6 tables (`DELTA_INVALID_PROTOCOL_VERSION`); row tracking, `variantType` and the other refused
+  writer features; change files (`UPDATE`, `MERGE` with removes, copy-on-write `DELETE`, `INSERT OVERWRITE`,
+  `replaceWhere`, dynamic overwrite on change-data-feed tables); idempotent writes (`txnAppId`/`txnVersion`),
+  `dataChange = false`, `replaceOn`/`replaceUsing`; a `replaceWhere` on data columns; timestamp strings against a
+  `TIMESTAMP` partition column (the session zone); coordinated commits and catalog-managed tables.
+- Deletion vectors are not run-optimized (larger `sizeInBytes` than delta-spark's; needs `roaring` as a direct
+  dependency through the ADR 0028 checklist); inline DVs have no oracle table.
 - Delta row-tracking columns: `features::row_tracking_refused` is wired once `MetadataCols` can name them.
 - The pushed predicate prunes files only (not row groups: no `ScanRequest::predicate`).
 - A catalog table whose log schema changed since it was registered is refused by the session (delta-spark reads
@@ -36,7 +62,7 @@ Fuzz target `fuzz/fuzz_targets/delta_commit_json.rs` (one commit through `parse_
 - Arrays and maps under column mapping, `NOT NULL` columns (the analyzer makes file columns nullable) and inline DVs
   have no oracle table.
 - Writes: `variantType` stays off the writer allow-list (no Variant round trip yet); a `replaceWhere` on data
-  columns (delta-spark rewrites the matching files' other rows); schema evolution on write (`mergeSchema`); a
+  columns (delta-spark rewrites the matching files' other rows); a `mergeSchema` write that would change the table's schema (refused by name; the kernel cannot); a
   `krishiv.delta.*` key for the target file size; the CRC after a commit; a `krishiv.delta.checkpointTimeout`
   key (the checkpoint's budget is a constant 600 s, one per table root at a time); `numDeletedRows` of a
   `replaceWhere`; a file's raw stats rows (up to 64, uncut string bounds per column) are outside the

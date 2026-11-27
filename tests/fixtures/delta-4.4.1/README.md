@@ -119,3 +119,11 @@ readback /in`). delta-spark 4.4.1 raises an unresolved name in a `MERGE` as `INT
 error class 'DELTA_MERGE_UNRESOLVED_EXPRESSION'"): recorded as it ran.
 
 `CREATE-PATH.json` (`gen_delta_fixtures.py /out create-path`, with `-e TZ=UTC` and the `/etc/passwd`, `/etc/group` mounts): `CREATE TABLE delta.`<path>`` in each form, one path per case: the log each case writes (every action, per-run values dropped) and what `SELECT *` reads back, or the oracle's error; `tables_after` shows that no catalog entry is made.
+
+Write-option oracle (PR-37e; `gen_delta_fixtures.py /out options`, run as the session probes are): `OPTIONS.json`
+records, for each Delta write option of `OPTION_CASES` (a DataFrame append or overwrite of two rows into a fresh two-row
+table, partitioned by `p` or not), delta-spark's error (`DELTA_ILLEGAL_OPTION`, `DELTA_INVALID_IDEMPOTENT_WRITES_OPTIONS`,
+or a classless `NumberFormatException` for `maxRecordsPerFile`) or the commit's operation, parameters and
+`userMetadata`; and for `INSERT .. WITH (..)` (which Spark 4.2.0 parses and delta-spark reads as write options) and the
+4.3 `DELETE`/`UPDATE .. WITH (..)` (a `PARSE_SYNTAX_ERROR` in Spark 4.2.0) the same. Unknown options are accepted;
+`partitionOverwriteMode` is read only for a partitioned table. Consumer: krishiv-session `tests/delta_gaps.rs`.

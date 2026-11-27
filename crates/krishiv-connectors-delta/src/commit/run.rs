@@ -276,7 +276,7 @@ fn attempt(e: &DeltaEngine, snapshot: SnapshotRef, p: &Prepared) -> Result<Outco
         .update_table(p.staged.operation.kernel(), p.engine_info.clone(), true)
         .with_commit_info(
             Box::new(KrishivEngineData::new(commit_info_row(p)?)),
-            commit_info_schema(),
+            commit_info_schema(p.staged.user_metadata.is_some()),
         );
     if !p.staged.operation_parameters.is_empty() {
         builder = builder.with_operation_parameters(p.staged.operation_parameters.clone());
@@ -425,16 +425,21 @@ fn retries_exceeded(
     .into()
 }
 
-/// The schema of Krishiv's commitInfo row.
-fn commit_info_schema() -> Arc<StructType> {
-    Arc::new(StructType::new_unchecked([
+/// The schema of Krishiv's commitInfo row; with `userMetadata` when the write sets it (the
+/// field is absent otherwise, as delta-spark leaves it out).
+fn commit_info_schema(user_metadata: bool) -> Arc<StructType> {
+    let mut fields = vec![
         StructField::nullable("isolationLevel", DataType::STRING),
         StructField::nullable("readVersion", DataType::LONG),
         StructField::nullable(
             "tags",
             MapType::new(DataType::STRING, DataType::STRING, true),
         ),
-    ]))
+    ];
+    if user_metadata {
+        fields.push(StructField::nullable("userMetadata", DataType::STRING));
+    }
+    Arc::new(StructType::new_unchecked(fields))
 }
 
 /// Krishiv's commitInfo row: `isolationLevel`, `readVersion` and the write id's tag.
@@ -450,30 +455,43 @@ fn commit_info_row(p: &Prepared) -> Result<RecordBatch, KrishivError> {
     .map_err(|e| from_kernel(&e, table))?;
     let read_version = i64::try_from(p.read_version)
         .map_err(|_| internal("the read version does not fit a long"))?;
+    let mut row = vec![
+        Scalar::String("Serializable".to_owned()),
+        Scalar::Long(read_version),
+        Scalar::Map(tags),
+    ];
+    if let Some(m) = &p.staged.user_metadata {
+        row.push(Scalar::String(m.clone()));
+    }
     create_many(
-        &commit_info_schema(),
-        &[vec![
-            Scalar::String("Serializable".to_owned()),
-            Scalar::Long(read_version),
-            Scalar::Map(tags),
-        ]],
+        &commit_info_schema(p.staged.user_metadata.is_some()),
+        &[row],
     )
     .map_err(|e| from_kernel(&e, table))
 }
 
-/// The schema of the commitInfo row of a create: `isolationLevel` and the write id's tag.
-pub(crate) fn write_id_schema() -> Arc<StructType> {
-    Arc::new(StructType::new_unchecked([
+/// The schema of the commitInfo row of a create: `isolationLevel`, the write id's tag and,
+/// when the write sets it, `userMetadata`.
+pub(crate) fn write_id_schema(user_metadata: bool) -> Arc<StructType> {
+    let mut fields = vec![
         StructField::nullable("isolationLevel", DataType::STRING),
         StructField::nullable(
             "tags",
             MapType::new(DataType::STRING, DataType::STRING, true),
         ),
-    ]))
+    ];
+    if user_metadata {
+        fields.push(StructField::nullable("userMetadata", DataType::STRING));
+    }
+    Arc::new(StructType::new_unchecked(fields))
 }
 
 /// The commitInfo row of a create (version 0 has no `readVersion`).
-pub(crate) fn write_id_row(write_id: &str, table: &str) -> Result<RecordBatch, KrishivError> {
+pub(crate) fn write_id_row(
+    write_id: &str,
+    user_metadata: Option<&str>,
+    table: &str,
+) -> Result<RecordBatch, KrishivError> {
     let tags = MapData::try_new(
         MapType::new(DataType::STRING, DataType::STRING, true),
         [(
@@ -482,14 +500,12 @@ pub(crate) fn write_id_row(write_id: &str, table: &str) -> Result<RecordBatch, K
         )],
     )
     .map_err(|e| from_kernel(&e, table))?;
-    create_many(
-        &write_id_schema(),
-        &[vec![
-            Scalar::String("Serializable".to_owned()),
-            Scalar::Map(tags),
-        ]],
-    )
-    .map_err(|e| from_kernel(&e, table))
+    let mut row = vec![Scalar::String("Serializable".to_owned()), Scalar::Map(tags)];
+    if let Some(m) = user_metadata {
+        row.push(Scalar::String(m.to_owned()));
+    }
+    create_many(&write_id_schema(user_metadata.is_some()), &[row])
+        .map_err(|e| from_kernel(&e, table))
 }
 
 /// The partition columns of `snapshot`, in schema order.

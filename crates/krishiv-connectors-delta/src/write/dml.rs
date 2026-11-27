@@ -118,6 +118,10 @@ pub const ROW_LEVEL_SCAN_MS_OPTION: &str = "__krishiv_row_level_scan_ms";
 /// a column of the table (absent: only one-part names do).
 pub const ROW_LEVEL_ALIAS_OPTION: &str = "__krishiv_row_level_alias";
 
+/// The row-level option holding the commit's `commitInfo.userMetadata` (the session's
+/// `spark.databricks.delta.commitInfo.userMetadata`; absent: none). Delta's write option name.
+pub const USER_METADATA_OPTION: &str = "userMetadata";
+
 /// Whether `e` holds a subquery (`IN (SELECT ..)`, `EXISTS`, a scalar subquery) anywhere.
 /// delta-spark refuses a `DELETE` or `UPDATE` whose condition has one
 /// (`PreprocessTableDelete.scala:35-45`, `PreprocessTableUpdate.scala:44`).
@@ -280,6 +284,7 @@ impl RowLevelTable for DeltaRowLevel {
             .and_then(|v| v.parse::<u64>().ok())
             .unwrap_or(0);
         let condition = option(ROW_LEVEL_CONDITION_OPTION).cloned();
+        let user_metadata = option(USER_METADATA_OPTION).cloned();
         let merge_on_read = option(MERGE_ON_READ_OPTION).is_some_and(|v| v == "true");
         if merge_on_read && !self.writes_dvs() {
             return Err(internal(
@@ -367,6 +372,7 @@ impl RowLevelTable for DeltaRowLevel {
             merge_on_read,
             update_writes_dvs: request.op == RowLevelOperation::Update && self.writes_dvs(),
             outcome: Arc::clone(&self.outcome),
+            user_metadata,
         };
         Ok(row_level_sink(
             &self.table,
@@ -564,6 +570,8 @@ fn cdf_refusal(table: &str, what: &str) -> UnsupportedFeatureTableOperation {
 #[derive(Debug)]
 pub(crate) struct RowLevelPlan {
     op: RowLevelOperation,
+    /// The commit's `commitInfo.userMetadata` ([`USER_METADATA_OPTION`]).
+    user_metadata: Option<String>,
     /// The touched files' paths, as the log names them.
     touched: HashSet<String>,
     /// A whole-file `DELETE`: every file (`Some(None)`) or the files of the partitions the
@@ -883,6 +891,7 @@ pub(super) async fn stage(
             dv_updates,
             dv_descriptors,
             read_set,
+            user_metadata: plan.user_metadata.clone(),
         }));
     }
     let mut metrics: Vec<(String, u64)> = Vec::new();
@@ -999,6 +1008,7 @@ pub(super) async fn stage(
         dv_updates,
         dv_descriptors,
         read_set,
+        user_metadata: plan.user_metadata.clone(),
     }))
 }
 

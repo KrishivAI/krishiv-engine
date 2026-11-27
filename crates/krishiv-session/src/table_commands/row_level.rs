@@ -74,6 +74,32 @@ pub(crate) const SCAN_MS_OPTION: &str = "__krishiv_row_level_scan_ms";
 /// else the table's last name part): the qualifier the condition's column names may carry.
 pub(crate) const ALIAS_OPTION: &str = "__krishiv_row_level_alias";
 
+/// The session configuration delta-spark reads a commit's `userMetadata` from when the
+/// statement has no `userMetadata` option (`DeltaSQLConf.DELTA_USER_METADATA`): every Delta
+/// commit reads it, the data writes', `DELETE`'s, `UPDATE`'s, `MERGE`'s and an empty `CREATE`'s
+/// (`DML-USER-METADATA.json`, `CATALOG-OPTIONS.json`). A table that is not Delta ignores the
+/// option.
+pub(crate) const USER_METADATA_CONF: &str = "spark.databricks.delta.commitInfo.userMetadata";
+
+/// `options` with the session's [`USER_METADATA_CONF`] as `userMetadata` when they name none:
+/// the option wins, as in delta-spark (`CATALOG-OPTIONS.json` `option_and_conf_user_metadata`).
+/// `insertInto` reaches here with no `userMetadata` option even when the writer set one: it
+/// reads no Delta write option, so its options were dropped before
+/// (`insert_into.option_and_conf_user_metadata` records the conf's value).
+pub(crate) fn with_conf_user_metadata(
+    mut options: std::collections::BTreeMap<String, String>,
+    conf: &krishiv_common::config::Config,
+) -> std::collections::BTreeMap<String, String> {
+    if !options
+        .keys()
+        .any(|k| k.eq_ignore_ascii_case("userMetadata"))
+        && let Some(v) = crate::conf::get(conf, USER_METADATA_CONF)
+    {
+        options.insert("userMetadata".to_owned(), v);
+    }
+    options
+}
+
 /// A column of the statement's `SET` list: the column and the value's SQL text (`None`:
 /// `DEFAULT`).
 #[derive(Debug, Clone)]
@@ -509,6 +535,8 @@ impl Session {
         request
             .options
             .extend(key_options.iter().map(|(k, v)| (k.clone(), v.clone())));
+        request.options =
+            with_conf_user_metadata(std::mem::take(&mut request.options), &analysis.env.config);
         let plan = physical.into_table_write(target, TableWriteRequest::RowLevel(request));
         let written = async {
             let mut stream = self.run(&plan, &analysis.env).await?;
@@ -939,6 +967,7 @@ fn the_delta_connector_reads_the_same_option_keys() {
     assert_eq!(CONDITION_OPTION, d::ROW_LEVEL_CONDITION_OPTION);
     assert_eq!(SCAN_MS_OPTION, d::ROW_LEVEL_SCAN_MS_OPTION);
     assert_eq!(ALIAS_OPTION, d::ROW_LEVEL_ALIAS_OPTION);
+    assert_eq!("userMetadata", d::USER_METADATA_OPTION);
 }
 
 pub(crate) mod rewrite_files;

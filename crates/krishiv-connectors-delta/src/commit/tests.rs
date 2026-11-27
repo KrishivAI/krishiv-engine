@@ -297,6 +297,7 @@ fn staged(write_id: &str, adds: Vec<RecordBatch>, read_set: ReadSet) -> StagedCo
         dv_updates: Vec::new(),
         dv_descriptors: std::collections::HashMap::new(),
         read_set,
+        user_metadata: None,
     }
 }
 

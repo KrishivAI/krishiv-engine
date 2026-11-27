@@ -699,6 +699,10 @@ impl Session {
         for (k, v) in options {
             request.options.insert(k.to_owned(), v);
         }
+        request.options = super::row_level::with_conf_user_metadata(
+            std::mem::take(&mut request.options),
+            &analysis.env.config,
+        );
         let plan = physical.into_table_write(target, TableWriteRequest::RowLevel(request));
         let written = async {
             let mut stream = self.run(&plan, &analysis.env).await?;

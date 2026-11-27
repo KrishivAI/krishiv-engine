@@ -135,17 +135,30 @@ impl NewDeltaTable {
     }
 
     /// Creates the table with no rows (`CREATE TABLE .. USING delta` without a query): version
-    /// 0 with the protocol and metadata only, carrying `write_id`.
+    /// 0 with the protocol and metadata only, carrying `write_id` and `user_metadata` as
+    /// `commitInfo.userMetadata`.
     ///
     /// # Errors
     /// The kernel's create errors (a table already at the root); storage errors.
-    pub async fn create_empty(&self, write_id: &str) -> Result<(), KrishivError> {
+    pub async fn create_empty(
+        &self,
+        write_id: &str,
+        user_metadata: Option<&str>,
+    ) -> Result<(), KrishivError> {
         let new = Arc::clone(&self.table);
         let write_id = write_id.to_owned();
+        let user_metadata = user_metadata.map(str::to_owned);
         new.engine
             .clone()
             .delta_blocking(move |e| -> Result<(), KrishivError> {
-                match plan_create(e, &new, &write_id, None, FileLimits::default())? {
+                match plan_create(
+                    e,
+                    &new,
+                    &write_id,
+                    None,
+                    user_metadata.as_deref(),
+                    FileLimits::default(),
+                )? {
                     Planned::Landed => Ok(()),
                     Planned::Ready { create, .. } => {
                         let txn = take_create(&create)?;
@@ -180,6 +193,7 @@ impl TableProvider for NewDeltaTable {
             reads_target: false,
             limits: RetryLimits::default(),
             files: file_limits(request)?,
+            options: UserOptions::of(request),
         }))
     }
 }
@@ -278,6 +292,7 @@ pub(crate) fn writer(
             .is_some_and(|v| v == "true"),
         limits,
         files: file_limits(request)?,
+        options: UserOptions::of(request),
     }))
 }
 
@@ -318,6 +333,7 @@ pub(super) fn row_level_sink(
         reads_target: true,
         limits,
         files: FileLimits::default(),
+        options: UserOptions::default(),
     })
 }
 
@@ -345,6 +361,32 @@ fn file_limits(request: &WriteRequest) -> Result<FileLimits, KrishivError> {
     Ok(limits)
 }
 
+/// The Delta write options (`DeltaOptions`, case insensitive; the session checked their
+/// values) the commit carries: `userMetadata` (`commitInfo.userMetadata`) and `mergeSchema`
+/// (`operationParameters.canMergeSchema`, written only when set, as delta-spark's
+/// `WriteIntoDelta` writes it).
+#[derive(Debug, Clone, Default)]
+pub(super) struct UserOptions {
+    user_metadata: Option<String>,
+    merge_schema: bool,
+}
+
+impl UserOptions {
+    fn of(request: &WriteRequest) -> Self {
+        let get = |name: &str| {
+            request
+                .options
+                .iter()
+                .find(|(k, _)| k.eq_ignore_ascii_case(name))
+                .map(|(_, v)| v.clone())
+        };
+        Self {
+            user_metadata: get("userMetadata"),
+            merge_schema: get("mergeSchema").is_some_and(|v| v.eq_ignore_ascii_case("true")),
+        }
+    }
+}
+
 /// The sink of a Delta write (see the parent module).
 #[derive(Debug)]
 pub struct DeltaWriteSink {
@@ -356,6 +398,7 @@ pub struct DeltaWriteSink {
     reads_target: bool,
     limits: RetryLimits,
     files: FileLimits,
+    options: UserOptions,
 }
 
 /// What a write's files are written against, made once on the first need.
@@ -381,6 +424,7 @@ struct WriteGlobal {
     /// `krishiv.write.idempotencyKey` (E34): a create records it in version 0.
     idempotency_key: Option<String>,
     files: FileLimits,
+    options: UserOptions,
     planned: OnceCell<Arc<Planned>>,
     /// The writers of the drivers that ended their input.
     writers: Mutex<Vec<Arc<AsyncMutex<DriverWriter>>>>,
@@ -427,13 +471,19 @@ impl WriteGlobal {
                 let write_id = self.write_id.clone();
                 let key = self.idempotency_key.clone();
                 let files = self.files;
+                let user_metadata = self.options.user_metadata.clone();
                 let planned = self
                     .engine
                     .delta_blocking(move |e| match &target {
                         Target::Existing(table) => plan_existing(e, table, &mode, files),
-                        Target::Create(new) => {
-                            plan_create(e, new, &write_id, key.as_deref(), files)
-                        }
+                        Target::Create(new) => plan_create(
+                            e,
+                            new,
+                            &write_id,
+                            key.as_deref(),
+                            user_metadata.as_deref(),
+                            files,
+                        ),
                     })
                     .await??;
                 Ok(Arc::new(planned))
@@ -549,6 +599,7 @@ impl Sink for DeltaWriteSink {
             write_id: self.write_id.clone(),
             idempotency_key: self.idempotency_key.clone(),
             files: self.files,
+            options: self.options.clone(),
             planned: OnceCell::new(),
             writers: Mutex::new(Vec::new()),
             failed: std::sync::atomic::AtomicBool::new(false),
@@ -1009,12 +1060,13 @@ fn plan_existing(
 /// protocol, carrying the write's id and, for a keyed write, the key's `txn` action (E34: in
 /// version 0 itself, so a retry of the statement on the created table finds it). When the transaction cannot be built because version 0
 /// exists, it is this write's when version 0 carries its id (a retried task: [`Planned::Landed`]),
-/// else `TABLE_OR_VIEW_ALREADY_EXISTS`.
+/// else `TABLE_OR_VIEW_ALREADY_EXISTS`. `user_metadata` is the commit's `userMetadata`.
 pub(super) fn plan_create(
     e: &DeltaEngine,
     new: &NewTable,
     write_id: &str,
     key: Option<&str>,
+    user_metadata: Option<&str>,
     files: FileLimits,
 ) -> Result<Planned, KrishivError> {
     let name = new.name.as_str();
@@ -1033,9 +1085,11 @@ pub(super) fn plan_create(
     let built = builder
         .with_commit_info(
             Box::new(KrishivEngineData::new(crate::commit::write_id_row(
-                write_id, name,
+                write_id,
+                user_metadata,
+                name,
             )?)),
-            crate::commit::write_id_schema(),
+            crate::commit::write_id_schema(user_metadata.is_some()),
         )
         .build(e, Box::new(FileSystemCommitter::new()));
     let txn = match built {
@@ -1241,6 +1295,9 @@ impl DeltaWriteSink {
             Mode::Filter(_, text) => parameters.push(("predicate".to_owned(), Some(text.clone()))),
             _ => {}
         }
+        if self.options.merge_schema {
+            parameters.push(("canMergeSchema".to_owned(), Some("true".to_owned())));
+        }
         let mut metrics = vec![
             ("numFiles".to_owned(), Some(written.files.to_string())),
             ("numOutputRows".to_owned(), Some(written.rows.to_string())),
@@ -1284,6 +1341,7 @@ impl DeltaWriteSink {
             dv_updates: Vec::new(),
             dv_descriptors: HashMap::new(),
             read_set,
+            user_metadata: self.options.user_metadata.clone(),
         };
         self.commit_staged(g, table, staged, written_paths)
             .await
