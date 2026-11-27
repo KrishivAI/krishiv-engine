@@ -38,8 +38,19 @@ fn main() -> ExitCode {
 
 #[inline(never)]
 fn run() -> ExitCode {
+    // The kernels ignore an invalid cap, so a per-target run would measure the detected target
+    // while the harness records the cap: refuse to start instead.
+    if let Err(e) = krishiv_kernels::Target::cap_from_env() {
+        let _ = writeln!(std::io::stderr(), "krishiv-bench-runner: {e}");
+        return ExitCode::FAILURE;
+    }
     if std::env::args().nth(1).as_deref() == Some("--build-info") {
-        return match writeln!(std::io::stdout(), "{}", krishiv_bench_runner::BUILD_INFO) {
+        return match writeln!(
+            std::io::stdout(),
+            "{} kernel-target={}",
+            krishiv_bench_runner::BUILD_INFO,
+            krishiv_kernels::Target::best().name()
+        ) {
             Ok(()) => ExitCode::SUCCESS,
             Err(_) => ExitCode::FAILURE,
         };

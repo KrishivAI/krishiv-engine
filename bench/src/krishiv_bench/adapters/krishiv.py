@@ -129,8 +129,10 @@ class KrishivEngine(Engine):
         return {"allocator": "mimalloc", "runner": f"krishiv-bench-runner ({build['build_profile']})", **build}
 
     def _runner_build(self) -> dict[str, str]:
-        """The runner's own ``--build-info`` (``profile=dist target-cpu=x86-64-v3 branch-align=32B``), so a result says
-        what it measured. ``branch_align`` is present only when the runner reports it.
+        """The runner's own ``--build-info`` (``profile=dist target-cpu=x86-64-v3 branch-align=32B
+        kernel-target=x86_64v4``), so a result says what it measured. ``branch_align`` and ``kernel_target`` (the
+        kernel copies the run uses: the CPU's best, lowered by ``KRISHIV_KERNEL_TARGET``) are present only when the
+        runner reports them.
 
         ``unknown`` when the binary cannot say (missing, too old, or run on a CPU below its build level).
         """
@@ -147,6 +149,8 @@ class KrishivEngine(Engine):
                 }
                 if "branch-align" in fields:
                     self._build["branch_align"] = fields["branch-align"]
+                if "kernel-target" in fields:
+                    self._build["kernel_target"] = fields["kernel-target"]
             except (OSError, subprocess.SubprocessError):
                 pass
         return self._build

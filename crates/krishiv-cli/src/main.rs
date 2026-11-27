@@ -119,8 +119,18 @@ fn main() -> std::process::ExitCode {
     install_logs_from_env();
     #[cfg(feature = "mimalloc")]
     install_allocator_policy();
+    warn_invalid_kernel_target_cap();
     run();
     std::process::ExitCode::SUCCESS
+}
+
+/// `KRISHIV_KERNEL_TARGET` naming no kernel target is ignored by the kernels: say so, so a typo
+/// in a support case or a per-target benchmark does not pass for a capped run.
+#[expect(clippy::print_stderr, reason = "CLI binary: stderr is its interface")]
+fn warn_invalid_kernel_target_cap() {
+    if let Err(e) = krishiv_kernels::Target::cap_from_env() {
+        eprintln!("krishiv: {e}; ignored");
+    }
 }
 
 /// Allocator policy is this binary's (it owns the global allocator): under

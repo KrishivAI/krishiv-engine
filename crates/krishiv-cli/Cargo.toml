@@ -25,6 +25,7 @@ krishiv = { path = "../krishiv", version = "=0.2.1", default-features = false }
 krishiv-alloc = { path = "../krishiv-alloc", version = "=0.2.1", optional = true }
 krishiv-memory = { path = "../krishiv-memory", version = "=0.2.1" }
 krishiv-common = { path = "../krishiv-common", version = "=0.2.1" }
+krishiv-kernels = { path = "../krishiv-kernels", version = "=0.2.1" }
 krishiv-functions = { path = "../krishiv-functions", version = "=0.2.1" }
 krishiv-sql = { path = "../krishiv-sql", version = "=0.2.1" }
 reedline = { workspace = true }
