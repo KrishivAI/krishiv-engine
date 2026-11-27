@@ -14,8 +14,7 @@
 use krishiv_common::error::{
     DatatypeMissingSize, FeatureNotEnabled, IncompleteTypeDefinitionArray,
     IncompleteTypeDefinitionMap, IncompleteTypeDefinitionStruct, InvalidTimestampPrecision,
-    KrishivError, KrishivUnsupportedFeature, SparkRelease, UnsupportedDatatype,
-    UnsupportedTimePrecision,
+    KrishivError, SparkRelease, UnsupportedDatatype, UnsupportedTimePrecision,
 };
 
 use crate::ParserOptions;
@@ -198,15 +197,8 @@ fn timestamp_precision(
         n => n.ends_with("without time zone"),
     };
     match arg.parse::<u32>() {
-        // Spark 4.3 reads `TIMESTAMP(6)` as the session's timestamp type; Krishiv's bare
-        // `TIMESTAMP` cast target does not follow `spark.sql.timestampType` yet
-        // (known-differences.md), so the precision form is refused rather than typed wrong.
-        Ok(6) if name == "timestamp" && opts.timestamp_ntz => Err(at(
-            KrishivUnsupportedFeature {
-                feature: "TIMESTAMP(6) with spark.sql.timestampType=TIMESTAMP_NTZ".to_owned(),
-            },
-            span,
-        )),
+        // `TIMESTAMP(6)` under `spark.sql.timestampType = TIMESTAMP_NTZ` was already read as
+        // `TIMESTAMP_NTZ(6)` by the parser.
         Ok(6) => Ok(()),
         Ok(7..=9) if opts.timestamp_nanos_types => Ok(()),
         Ok(7..=9) => Err(at(

@@ -266,6 +266,16 @@ pub(crate) fn utc_to_local(utc: i64, tz: &dyn TimeZoneRules) -> Option<i64> {
     utc.checked_add(i64::from(offset).checked_mul(MICROS_PER_SECOND)?)
 }
 
+/// The time of day (micros since midnight) of the UTC instant `utc` in `tz` (as is when `tz` is
+/// `None`). Computed in `i128`, as Spark's `LocalDateTime` covers it: an instant within one zone
+/// offset of the `i64` range still has a local time of day.
+pub(crate) fn local_micros_of_day(utc: i64, tz: Option<&dyn TimeZoneRules>) -> i64 {
+    let offset = tz.map_or(0, |tz| tz.offset_at_utc(utc.div_euclid(MICROS_PER_SECOND)));
+    let local = i128::from(utc) + i128::from(offset) * i128::from(MICROS_PER_SECOND);
+    // Below one day, so it fits.
+    i64::try_from(local.rem_euclid(i128::from(MICROS_PER_DAY))).unwrap_or(0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

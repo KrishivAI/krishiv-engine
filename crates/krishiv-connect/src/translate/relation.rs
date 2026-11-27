@@ -103,9 +103,12 @@ impl Translator<'_> {
             RelType::MapPartitions(m) => self.map_partitions(m)?,
             RelType::GroupMap(g) => self.group_map(g)?,
             RelType::CoGroupMap(g) => self.cogroup_map(g)?,
-            RelType::LocalRelation(l) => PlanNode::Read(ReadSource::Local(
-                self.local_relation(|| super::local::inline_request(l))?,
-            )),
+            RelType::LocalRelation(l) => {
+                let opts = self.conf.parser;
+                PlanNode::Read(ReadSource::Local(
+                    self.local_relation(|| super::local::inline_request(l, &opts))?,
+                ))
+            }
             RelType::CachedLocalRelation(c) => {
                 PlanNode::Read(ReadSource::Local(self.local_relation(|| {
                     Ok(super::LocalRequest::Cached {
@@ -729,7 +732,9 @@ impl Translator<'_> {
             ReadType::DataSource(d) => {
                 // Spark: a set and non-empty schema is the reader's schema.
                 let schema = match d.schema.as_deref() {
-                    Some(s) if !s.is_empty() => Some(super::schema::parse_table_schema(s)?),
+                    Some(s) if !s.is_empty() => {
+                        Some(super::schema::parse_table_schema(s, &self.conf.parser)?)
+                    }
                     _ => None,
                 };
                 if !d.predicates.is_empty() {

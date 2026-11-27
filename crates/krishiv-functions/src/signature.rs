@@ -387,6 +387,13 @@ pub enum InputType {
     Any,
     /// Exactly this type.
     Exact(DataType),
+    /// The start date of `date_add` and `date_sub`: a `DATE`, which a string, `TIMESTAMP` or
+    /// `TIMESTAMP_NTZ` becomes as for [`Self::Exact`]. A `TIME` is never cast: Spark's `DateAdd` and
+    /// `DateSub` are `ExpectsInputTypes`, so no implicit cast reaches them, and only
+    /// `DateTimeOperations` casts their start (from a timestamp, or a string with ANSI off), so a
+    /// `TIME` is `DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE`, not the refused cast other `DATE`
+    /// parameters report (Spark 4.2.0 source and run: `date_add(TIME'12:00:00', 1)`).
+    StartDate,
     /// This type and no other: an untyped `NULL` becomes it, any other
     /// type is `DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE` (Spark's `if`
     /// checks its condition's type instead of casting it).
@@ -446,6 +453,7 @@ impl InputType {
         match self {
             Self::Any => "\"ANY\"".to_owned(),
             Self::Exact(t) | Self::Strict(t) => format!("\"{}\"", t.sql()),
+            Self::StartDate => format!("\"{}\"", DataType::Date.sql()),
             Self::Map => "\"MAP\"".to_owned(),
             Self::Array => "\"ARRAY\"".to_owned(),
             Self::Numeric { intervals: false } | Self::StrictNumeric => "\"NUMERIC\"".to_owned(),
