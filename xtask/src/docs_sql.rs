@@ -301,8 +301,8 @@ fn status(name: &str, def: Option<&FunctionDef>) -> &'static str {
 /// Spark's usage text links with HTML (`<a href="url">text</a>`), which a Markdown page shows as
 /// written: the tag and the whole address as one unbreakable word (a phone page scrolled sideways
 /// on it). Each becomes a Markdown link, or with `markdown` false its text alone (a page's
-/// description line is plain text). A `]` of the text is escaped, and an address with a parenthesis
-/// goes in `<...>`.
+/// description line is plain text). The brackets of the text are escaped, an address with a
+/// parenthesis goes in `<...>`, and an angle bracket of an address is percent-encoded.
 fn html_links(desc: &str, markdown: bool) -> String {
     const OPEN: &str = "<a href=\"";
     let mut out = String::with_capacity(desc.len());
@@ -316,8 +316,10 @@ fn html_links(desc: &str, markdown: bool) -> String {
         };
         out.push_str(&rest[..start]);
         if markdown {
-            // A `]` in the text or a parenthesis in the address would end the link early.
-            let text = text.replace(']', "\\]");
+            // A bracket in the text or a parenthesis in the address would end the link early,
+            // and an angle bracket in the address would end its `<...>` form.
+            let text = text.replace('[', "\\[").replace(']', "\\]");
+            let url = url.replace('<', "%3C").replace('>', "%3E");
             if url.contains(['(', ')']) {
                 let _ = write!(out, "[{text}](<{url}>)");
             } else {
@@ -646,7 +648,11 @@ mod tests {
         );
         assert_eq!(
             html_links("<a href=\"https://e.org/a_(b)\">x[1]</a>", true),
-            "[x[1\\]](<https://e.org/a_(b)>)"
+            "[x\\[1\\]](<https://e.org/a_(b)>)"
+        );
+        assert_eq!(
+            html_links("<a href=\"https://e.org/a<b>(c)\">x</a>", true),
+            "[x](<https://e.org/a%3Cb%3E(c)>)"
         );
         // Text without a whole link is kept as written.
         for kept in ["a < b", "<a href=\"u", "<a href=\"u\">open"] {
