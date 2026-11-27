@@ -583,4 +583,81 @@ fn a_missing_schema_is_named_with_its_catalog() {
     block_on(async { s.sql("USE spark_catalog.default").await?.collect().await }).unwrap();
     assert!(block_on(c.database_exists("spark_catalog.default")).unwrap());
     assert!(!block_on(c.database_exists("a.b")).unwrap());
+    // `listTables` and `listFunctions` refuse a database name of several parts before any lookup:
+    // a leading `spark_catalog` is the catalog, every other part is named (Spark 4.3.0 run for each,
+    // with and without a pattern).
+    for (name, nested) in [
+        ("a.b", "`a`.`b`"),
+        ("a.b.c", "`a`.`b`.`c`"),
+        ("spark_catalog.a.b", "`a`.`b`"),
+        ("spark_catalog.a.b.c", "`a`.`b`.`c`"),
+        ("SPARK_CATALOG.a.b", "`a`.`b`"),
+        ("nocat.a", "`nocat`.`a`"),
+        ("nocat.default", "`nocat`.`default`"),
+        ("default.b", "`default`.`b`"),
+        ("spark_catalog.default.b", "`default`.`b`"),
+    ] {
+        for e in [
+            block_on(c.list_tables(Some(name), None)).unwrap_err(),
+            block_on(c.list_tables(Some(name), Some("x*"))).unwrap_err(),
+            block_on(c.list_functions_in(Some(name), None)).unwrap_err(),
+            block_on(c.list_functions_in(Some(name), Some("abs"))).unwrap_err(),
+        ] {
+            assert_eq!(
+                e.error_class().name(),
+                "NESTED_DATABASE_UNSUPPORTED_BY_V1_SESSION_CATALOG",
+                "{name}: {e}"
+            );
+            assert_eq!(e.sql_state(), Some("42K05"), "{name}");
+            assert_eq!(
+                e.message_parameters(),
+                [("namespace", nested.to_owned())],
+                "{name}"
+            );
+        }
+    }
+    // One part, with or without the catalog and quoted with a dot: looked up, so missing.
+    for (name, missing) in [
+        ("`a.b`", "`spark_catalog`.`a.b`"),
+        ("spark_catalog.`a.b`", "`spark_catalog`.`a.b`"),
+        ("spark_catalog.nodb", "`spark_catalog`.`nodb`"),
+    ] {
+        for e in [
+            block_on(c.list_tables(Some(name), None)).unwrap_err(),
+            block_on(c.list_functions_in(Some(name), None)).unwrap_err(),
+        ] {
+            assert_eq!(missing_schema(&e), missing, "{name}: {e}");
+        }
+    }
+    assert!(block_on(c.list_tables(Some("spark_catalog.default"), None)).is_ok());
+    assert!(
+        !block_on(c.list_functions_in(Some("spark_catalog.default"), Some("abs")))
+            .unwrap()
+            .is_empty()
+    );
+    // Under `system`, which has no namespaces, `getDatabase` of a name of several parts is missing
+    // there, as `USE NAMESPACE a.b` says; a leading `spark_catalog` is still the catalog.
+    block_on(async { s.sql("USE system").await?.collect().await }).unwrap();
+    for (name, missing) in [
+        ("a.b", "`system`.`a`.`b`"),
+        ("a.b.c", "`system`.`a`.`b`.`c`"),
+        ("spark_catalog.a.b", "`spark_catalog`.`a`.`b`"),
+    ] {
+        let e = block_on(c.get_database(name)).unwrap_err();
+        assert_eq!(missing_schema(&e), missing, "{name}: {e}");
+        let sql = block_on(async {
+            s.sql(&format!("USE NAMESPACE {name}"))
+                .await?
+                .collect()
+                .await
+        });
+        if !name.starts_with("spark_catalog") {
+            assert_eq!(
+                missing_schema(&sql.unwrap_err()),
+                missing,
+                "USE NAMESPACE {name}"
+            );
+        }
+    }
+    block_on(async { s.sql("USE spark_catalog").await?.collect().await }).unwrap();
 }

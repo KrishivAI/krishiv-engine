@@ -314,6 +314,22 @@ fn the_catalog_api_never_lists_embedded_namespaces_as_a_declared_catalogs() {
         [("spark_catalog".to_owned(), "default".to_owned())]
     );
     assert_eq!(class(block_on(c.list_tables(None, None))), unsupported);
+    // A name of several parts is the current declared catalog's too, as `USE NAMESPACE a.b` reads
+    // it, and a declared catalog's name leads at every length.
+    for name in ["a.b", "a.b.c", "lake.a.b"] {
+        assert_eq!(class(block_on(c.get_database(name))), unsupported, "{name}");
+        assert_eq!(
+            class(block_on(c.list_functions_in(Some(name), None))),
+            unsupported,
+            "{name}"
+        );
+    }
+    assert_eq!(
+        class(block_on(async {
+            s.sql("USE NAMESPACE a.b").await?.collect().await
+        })),
+        unsupported
+    );
     for name in ["default", "lake.db"] {
         assert_eq!(class(block_on(c.get_database(name))), unsupported, "{name}");
         assert_eq!(
