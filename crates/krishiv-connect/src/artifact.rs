@@ -168,13 +168,17 @@ pub fn parse_artifact_name(name: &str) -> Result<ArtifactName, KrishivError> {
 
 /// One path segment: non-empty, not `.` or `..`, at most
 /// [`MAX_SEGMENT_BYTES`] bytes, and no separator, control or invisible
-/// formatting character.
+/// formatting character. On Windows also none of Win32's reserved name
+/// characters `< > : " | ? *`: `C:x` is a drive-relative path (joining it
+/// replaces the session directory), `x:s` an NTFS alternate data stream, and
+/// the others no file can be named with.
 fn valid_segment(segment: &str) -> bool {
     !segment.is_empty()
         && segment != "."
         && segment != ".."
         && segment.len() <= MAX_SEGMENT_BYTES
         && !segment.chars().any(forbidden)
+        && !(cfg!(windows) && segment.contains(['<', '>', ':', '"', '|', '?', '*']))
 }
 
 /// A character no segment may hold: separators (`/`, `\`), control

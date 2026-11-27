@@ -389,6 +389,10 @@ async fn a_profile_of_an_explain_replays_the_underlying_query() {
 }
 
 #[tokio::test]
+#[cfg_attr(
+    windows,
+    ignore = "needs a case-sensitive file system: on NTFS `Sales.parquet` and `sales.parquet` are one file"
+)]
 async fn colliding_table_names_are_refused_and_dotted_directories_stay_whole() {
     let dir = tempfile::tempdir().unwrap();
     let data = dir.path().join("data");

@@ -2,7 +2,7 @@
 //! Literal types, typed literals (`DATE '...'` and friends) and the cast errors Spark raises for them.
 
 use super::*;
-use krishiv_kernels::cast::{TimestampText, timestamp_text};
+use krishiv_kernels::cast::{TimestampText, special_value, timestamp_text};
 
 /// A cast a `TIME '..'` literal binds to (`time.rs` `time_literal`; an explicit `Ansi` cast, never what
 /// the parser writes for a user's cast): a string read as `TIME(6)` (`parse_time`) or as `TIME(9)`
@@ -243,7 +243,9 @@ pub(super) fn special_kind(kind: TypedLiteralKind, timestamp_ntz: bool) -> Speci
 }
 
 /// The clock expression Spark's special value `now`, `today`, `tomorrow` or
-/// `yesterday` stands for, of the literal's type.
+/// `yesterday` stands for, of the literal's type. A zone written after the word
+/// is checked by `special_value` and changes nothing: the day is the session
+/// zone's, as in Spark's `DateTimeUtils.convertSpecial*`.
 pub(super) fn special_clock(special: &str, kind: SpecialKind) -> Expr {
     let day = |offset: &str| match offset {
         "tomorrow" => Expr::function(
@@ -334,8 +336,7 @@ pub(super) fn time_only_today(
 }
 
 pub(super) fn is_special(value: &str) -> bool {
-    let v = value.trim().to_ascii_lowercase();
-    ["epoch", "now", "today", "yesterday", "tomorrow"].contains(&v.as_str())
+    special_value(value).is_some()
 }
 
 /// The type of a value as typing sees it: `VOID` is an untyped `NULL`
@@ -347,9 +348,7 @@ pub(in crate::analyzer) fn arg_type(data_type: DataType, nullable: bool) -> ArgT
     }
 }
 
-/// Spark's error for a cast of `arg` to `to` it refuses. Spark 4.3 (`spark_4_3`) casts a `TIME`
-/// to a timestamp (today's date at that time), which Krishiv does not yet: that cast is
-/// `KRISHIV_UNSUPPORTED_FEATURE`, not Spark's mismatch.
+/// Spark's error for a cast of `arg` to `to` it refuses.
 pub(super) fn bad_cast(
     bad: BadCast,
     origin: Origin,
@@ -357,19 +356,7 @@ pub(super) fn bad_cast(
     to: &DataType,
     mode: CastMode,
     zone: Option<SessionZone>,
-    spark_4_3: bool,
 ) -> AnalysisError {
-    if spark_4_3
-        && matches!(arg.ty.data_type, Some(DataType::Time { .. }))
-        && matches!(to, DataType::Timestamp | DataType::TimestampNtz)
-    {
-        return AnalysisError::new(
-            krishiv_common::error::KrishivUnsupportedFeature {
-                feature: format!("a cast from TIME to {} (Spark 4.3)", to.sql()),
-            },
-            origin,
-        );
-    }
     // A `JSON_TABLE` column: Spark checks the column's cast in `JsonTable.checkInputDataTypes` and names the
     // whole call (the lowering passes its text as the read's last argument), whatever the refusal.
     let shown_arg = arg.shown();

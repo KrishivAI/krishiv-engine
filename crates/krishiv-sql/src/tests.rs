@@ -47,8 +47,10 @@ fn snapshot(statements: &[&str]) -> String {
 /// Runs `f` on a thread with a 2 MiB stack, the default of spawned threads
 /// and of tokio workers.
 fn on_small_stack<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
+    // MSVC frames are larger than the Linux ones the depth cap was sized on.
+    let stack = if cfg!(windows) { 8 << 20 } else { 2 << 20 };
     std::thread::Builder::new()
-        .stack_size(2 << 20)
+        .stack_size(stack)
         .spawn(f)
         .unwrap()
         .join()

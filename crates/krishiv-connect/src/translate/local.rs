@@ -150,8 +150,11 @@ impl Eq for LocalRelations {}
 /// # Errors
 /// `CONNECT_INVALID_PLAN.SCHEMA_REQUIRED_FOR_LOCAL_RELATION` for neither, the parse error of a
 /// schema that is neither DDL nor JSON.
-pub(super) fn inline_request(l: &pb::LocalRelation) -> Result<LocalRequest, KrishivError> {
-    let (data, schema) = inline_parts(l.data.clone(), l.schema.as_deref())?;
+pub(super) fn inline_request(
+    l: &pb::LocalRelation,
+    opts: &krishiv_sql::ParserOptions,
+) -> Result<LocalRequest, KrishivError> {
+    let (data, schema) = inline_parts(l.data.clone(), l.schema.as_deref(), opts)?;
     Ok(LocalRequest::Inline { data, schema })
 }
 
@@ -159,8 +162,9 @@ pub(super) fn inline_request(l: &pb::LocalRelation) -> Result<LocalRequest, Kris
 fn inline_parts(
     data: Option<Vec<u8>>,
     schema: Option<&str>,
+    opts: &krishiv_sql::ParserOptions,
 ) -> Result<(Option<Vec<u8>>, Option<StructType>), KrishivError> {
-    let schema = schema.map(parse_local_schema).transpose()?;
+    let schema = schema.map(|s| parse_local_schema(s, opts)).transpose()?;
     if data.is_none() && schema.is_none() {
         return Err(ConnectInvalidPlanSchemaRequiredForLocalRelation {}.into());
     }
@@ -180,7 +184,10 @@ fn inline_parts(
     clippy::disallowed_methods,
     reason = "a flat message (bytes and string fields), checked by `flat_message` first"
 )]
-pub fn cached_request(bytes: &[u8]) -> Result<(Option<Vec<u8>>, Option<StructType>), KrishivError> {
+pub fn cached_request(
+    bytes: &[u8],
+    opts: &krishiv_sql::ParserOptions,
+) -> Result<(Option<Vec<u8>>, Option<StructType>), KrishivError> {
     use prost::Message as _;
     crate::wire::flat_message(bytes)?;
     let relation = pb::LocalRelation::decode(bytes).map_err(|e| {
@@ -189,7 +196,7 @@ pub fn cached_request(bytes: &[u8]) -> Result<(Option<Vec<u8>>, Option<StructTyp
         })
     })?;
     // The decoded payload is moved, not copied again.
-    inline_parts(relation.data, relation.schema.as_deref())
+    inline_parts(relation.data, relation.schema.as_deref(), opts)
 }
 
 #[cfg(test)]

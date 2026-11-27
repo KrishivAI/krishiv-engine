@@ -459,6 +459,7 @@ impl Session {
                 schema_mode: None,
                 definer: None,
                 cte_precedence: None,
+                timestamp_ntz: None,
                 functions: None,
                 revision: 0,
                 author: self.state.principal.name.clone(),

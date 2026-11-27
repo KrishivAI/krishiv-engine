@@ -173,7 +173,7 @@ impl Rule<'_> {
                 ),
                 _ => false,
             };
-            if !ok || refusal_of_call(f, &none, false).is_err() {
+            if !ok || refusal_of_call(f, &none, false, false).is_err() {
                 return None;
             }
         }

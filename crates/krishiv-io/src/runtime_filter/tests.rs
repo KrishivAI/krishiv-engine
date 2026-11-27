@@ -120,8 +120,8 @@ mod unit {
             (D::LargeUtf8, D::Utf8),
             (D::BinaryView, D::Binary),
             (
-                D::Timestamp(TimeUnit::Microsecond, None),
                 D::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+                D::Timestamp(TimeUnit::Microsecond, Some("Asia/Kolkata".into())),
             ),
             (D::Date32, D::Date32),
         ];
@@ -144,6 +144,15 @@ mod unit {
             ),
             (D::Int64, D::Utf8),
             (D::Null, D::Null),
+            // NTZ <-> TIMESTAMP shifts by the session zone's offset.
+            (
+                D::Timestamp(TimeUnit::Microsecond, None),
+                D::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+            ),
+            (
+                D::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+                D::Timestamp(TimeUnit::Microsecond, None),
+            ),
         ];
         for (f, t) in &no {
             assert!(!widens_to(f, t), "{f} -> {t}");
@@ -311,8 +320,12 @@ mod unit {
         assert_eq!(pass(&d, &Date32Array::from(vec![15, 20])), [false, true]);
         let ts = TimestampMicrosecondArray::from(vec![7]).with_timezone("UTC");
         let t = build(&ts, 0);
-        let probe = TimestampMicrosecondArray::from(vec![7, 8]);
+        let probe = TimestampMicrosecondArray::from(vec![7, 8]).with_timezone("UTC");
         assert_eq!(pass(&t, &probe), [true, false]);
+        // A `TIMESTAMP_NTZ` column is not the zoned key's values (the cast
+        // between them shifts by the session zone): it is not filtered.
+        let ntz = TimestampMicrosecondArray::from(vec![7, 8]);
+        assert!(t.evaluate(&ntz).is_none());
         assert_eq!(
             t.range_scalars().map(|r| r.0),
             Some(ScalarValue::TimestampMicros(7))

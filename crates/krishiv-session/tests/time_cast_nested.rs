@@ -104,3 +104,137 @@ fn narrowing_time_casts_are_nullable() {
         "{e}"
     );
 }
+
+/// Spark 4.3 casts timestamps to `TIME` inside arrays, structs and maps element by element
+/// (Spark 4.3.0 local run, session zone UTC), and a `TIME` array to `array<timestamp_ntz>`;
+/// Spark 4.2 refuses both.
+#[test]
+fn nested_timestamps_cast_to_time_under_spark_4_3() {
+    let s = Session::builder()
+        .profile(SparkProfile::V4_3)
+        .build()
+        .unwrap();
+    block_on(s.sql("SET spark.sql.timeType.enabled = true")).unwrap();
+    block_on(s.sql("SET spark.sql.session.timeZone = UTC")).unwrap();
+    let one = |sql: &str| -> String {
+        let df = block_on(s.sql(sql)).unwrap();
+        let b = block_on(df.collect()).unwrap();
+        b[0].columns()[0].as_string_view().value(0).to_owned()
+    };
+    for (sql, want) in [
+        (
+            "SELECT CAST(CAST(array(TIMESTAMP_NTZ'2020-05-17 12:34:56.789012', NULL) AS array<time(3)>) AS STRING)",
+            "[12:34:56.789, null]",
+        ),
+        (
+            "SELECT CAST(CAST(named_struct('a', TIMESTAMP'2020-05-17 12:34:56.789012') AS struct<a: time(6)>) AS STRING)",
+            "{12:34:56.789012}",
+        ),
+        (
+            "SELECT CAST(CAST(map('k', TIMESTAMP_NTZ'1969-12-31 23:59:59.5') AS map<string, time(1)>) AS STRING)",
+            "{k -> 23:59:59.5}",
+        ),
+        (
+            "SELECT typeof(CAST(array(TIME'01:02:03') AS array<timestamp_ntz>))",
+            "array<timestamp_ntz>",
+        ),
+    ] {
+        assert_eq!(one(sql), want, "{sql}");
+    }
+    let s42 = Session::builder()
+        .profile(SparkProfile::V4_2)
+        .build()
+        .unwrap();
+    block_on(s42.sql("SET spark.sql.timeType.enabled = true")).unwrap();
+    let e = block_on(s42.sql("SELECT CAST(array(TIME'01:02:03') AS array<timestamp_ntz>)"))
+        .err()
+        .map(|e| e.error_class().name().to_owned());
+    assert_eq!(
+        e.as_deref(),
+        Some("DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION")
+    );
+}
+
+/// A refused implicit TIME cast is reported before an ordinary argument
+/// mismatch, wherever the arguments stand: Spark inserts the cast, keeps the
+/// mismatched argument as it is, and CheckAnalysis (`foreachUp`) reaches the
+/// child cast before the call. Spark 4.2.0 and 4.3.0 runs, ANSI on and off.
+/// (`date_add`/`date_sub` take no such cast: the next test.)
+#[test]
+fn a_refused_time_cast_is_reported_before_an_earlier_mismatch() {
+    const CAST: &str = "DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION";
+    const UNEXPECTED: &str = "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE";
+    for (profile, to_timestamp) in [(SparkProfile::V4_2, CAST), (SparkProfile::V4_3, UNEXPECTED)] {
+        for ansi in ["true", "false"] {
+            let s = Session::builder().profile(profile).build().unwrap();
+            block_on(s.sql("SET spark.sql.timeType.enabled = true")).unwrap();
+            block_on(s.sql(&format!("SET spark.sql.ansi.enabled = {ansi}"))).unwrap();
+            for (sql, want) in [
+                ("SELECT datediff(array(1), TIME'12:00:00')", CAST),
+                ("SELECT datediff(TIME'12:00:00', array(1))", CAST),
+                ("SELECT add_months(array(1), TIME'12:00:00')", UNEXPECTED),
+                ("SELECT next_day(array(1), TIME'12:00:00')", UNEXPECTED),
+                (
+                    "SELECT months_between(array(1), TIME'12:00:00')",
+                    to_timestamp,
+                ),
+                (
+                    "SELECT months_between(TIME'12:00:00', array(1))",
+                    to_timestamp,
+                ),
+                ("SELECT date_format(TIME'12:00:00', array(1))", to_timestamp),
+                ("SELECT datediff(TIME'12:00:00', TIME'13:00:00')", CAST),
+            ] {
+                let got = match block_on(s.sql(sql)) {
+                    Ok(df) => block_on(df.collect())
+                        .err()
+                        .map(|e| e.error_class().name().to_owned()),
+                    Err(e) => Some(e.error_class().name().to_owned()),
+                };
+                assert_eq!(got.as_deref(), Some(want), "{profile:?} ansi={ansi}: {sql}");
+            }
+        }
+    }
+}
+
+/// `date_add` and `date_sub` never take the implicit TIME cast: Spark's
+/// `DateAdd`/`DateSub` are `ExpectsInputTypes` and only `DateTimeOperations`
+/// casts their start (from a timestamp or string), so a TIME start is
+/// `UNEXPECTED_INPUT_TYPE` on parameter 1, not `CAST_WITHOUT_SUGGESTION`.
+/// Spark 4.2.0 and 4.3.0 runs, ANSI on and off.
+#[test]
+fn date_add_and_date_sub_refuse_a_time_start_as_a_type_mismatch() {
+    for profile in [SparkProfile::V4_2, SparkProfile::V4_3] {
+        for ansi in ["true", "false"] {
+            let s = Session::builder().profile(profile).build().unwrap();
+            block_on(s.sql("SET spark.sql.timeType.enabled = true")).unwrap();
+            block_on(s.sql(&format!("SET spark.sql.ansi.enabled = {ansi}"))).unwrap();
+            for sql in [
+                "SELECT date_add(TIME'12:00:00', 1)",
+                "SELECT date_sub(TIME'12:00:00', 1)",
+                "SELECT dateadd(TIME'12:00:00', 1)",
+                "SELECT date_add(array(1), TIME'12:00:00')",
+                "SELECT date_add(TIME'12:00:00', array(1))",
+            ] {
+                let e = match block_on(s.sql(sql)) {
+                    Ok(df) => block_on(df.collect()).err(),
+                    Err(e) => Some(e),
+                };
+                let e = e.unwrap_or_else(|| panic!("{profile:?} ansi={ansi}: {sql} passed"));
+                let ctx = format!("{profile:?} ansi={ansi}: {sql}: {e}");
+                assert_eq!(
+                    e.error_class().name(),
+                    "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE",
+                    "{ctx}"
+                );
+                assert!(
+                    e.to_string().contains(r#"requires the "DATE" type"#),
+                    "{ctx}"
+                );
+            }
+            // A timestamp start is still cast to DATE.
+            let df = block_on(s.sql("SELECT date_add(TIMESTAMP'2020-01-01 10:00:00', 1)")).unwrap();
+            assert!(block_on(df.collect()).is_ok());
+        }
+    }
+}

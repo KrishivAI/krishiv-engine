@@ -676,7 +676,8 @@ impl VectorAcc {
         Ok(())
     }
 
-    /// Adds one raw vector's values (NULL elements contribute nothing).
+    /// Adds one raw vector's values. A vector with a NULL element is left out whole (not summed,
+    /// not counted, no dimension check), as Spark's `VectorAggregate.update` returns early on it.
     /// `values` is the absolute child array, `start` the vector's first
     /// element (both absolute, as the null buffer is). A dimension-zero
     /// state (only empty vectors so far) adopts the first non-empty
@@ -690,6 +691,10 @@ impl VectorAcc {
         nulls: Option<&arrow_buffer::NullBuffer>,
     ) -> Result<()> {
         let name = self.name();
+        let end = start.saturating_add(len).min(values.len());
+        if nulls.is_some_and(|n| (start..end).any(|k| n.is_null(k))) {
+            return Ok(());
+        }
         match &mut self.sums[g] {
             None => self.sums[g] = Some(vec![0.0; len]),
             // Neutral: only empty vectors so far.
@@ -703,20 +708,8 @@ impl VectorAcc {
         let s = self.sums[g]
             .as_mut()
             .ok_or_else(|| internal("a vector group without sums".to_owned()))?;
-        let end = start.saturating_add(len).min(values.len());
-        match nulls {
-            None => {
-                for (s, &v) in s.iter_mut().zip(&values[start..end]) {
-                    *s += f64::from(v);
-                }
-            }
-            Some(n) => {
-                for (k, (s, &v)) in s.iter_mut().zip(&values[start..end]).enumerate() {
-                    if n.is_valid(start + k) {
-                        *s += f64::from(v);
-                    }
-                }
-            }
+        for (s, &v) in s.iter_mut().zip(&values[start..end]) {
+            *s += f64::from(v);
         }
         self.count[g] = self.count[g].wrapping_add(1);
         Ok(())
@@ -898,27 +891,27 @@ mod tests {
         }
     }
 
-    /// An empty vector is neutral even when the child array has NULLs: it
-    /// reads none of the next vectors' slots (and none past the array).
+    /// A vector with a NULL element is left out whole (Spark 4.2.0 and 4.3.0 `VectorAggregate.update`
+    /// return early): not summed, not counted. An empty vector is neutral even when the child
+    /// array has NULLs: it reads none of the next vectors' slots (and none past the array).
     #[test]
-    fn an_empty_vector_adds_nothing_with_a_null_buffer() {
-        // Child array: [1, NULL, | (empty) | NULL, 5].
-        let values = [1.0_f32, 0.0, 0.0, 5.0];
-        let nulls = NullBuffer::from(vec![true, false, false, true]);
-        let mut v = VectorAcc::new(false);
+    fn a_vector_with_a_null_element_is_left_out_whole() {
+        // Child array: [1, NULL, | (empty) | 4, 5 | 7, 8].
+        let values = [1.0_f32, 0.0, 4.0, 5.0, 7.0, 8.0];
+        let nulls = NullBuffer::from(vec![true, false, true, true, true, true]);
+        let mut v = VectorAcc::new(true);
         v.resize(1);
         v.add(0, 0, 2, &values, Some(&nulls)).unwrap();
+        assert_eq!((v.sums[0].clone(), v.count[0]), (None, 0));
         v.add(0, 2, 0, &values, Some(&nulls)).unwrap();
         v.add(0, 2, 2, &values, Some(&nulls)).unwrap();
-        assert_eq!(v.sums[0], Some(vec![1.0, 5.0]));
+        v.add(0, 4, 2, &values, Some(&nulls)).unwrap();
+        assert_eq!(v.sums[0], Some(vec![11.0, 13.0]));
         assert_eq!(v.count[0], 3);
-        // An empty vector at the very end of the child array.
-        let nulls = NullBuffer::from(vec![true, false]);
-        let mut v = VectorAcc::new(false);
-        v.resize(1);
-        v.add(0, 0, 2, &values[..2], Some(&nulls)).unwrap();
-        v.add(0, 2, 0, &values[..2], Some(&nulls)).unwrap();
-        assert_eq!(v.sums[0], Some(vec![1.0, 0.0]));
+        // A NULL-element vector of another dimension is skipped before the dimension check.
+        let nulls = NullBuffer::from(vec![true, true, false]);
+        v.add(0, 0, 3, &values[..3], Some(&nulls)).unwrap();
+        assert_eq!(v.count[0], 3);
     }
 
     /// Every carrier of variable-width and nested values counts the bytes
