@@ -133,7 +133,11 @@ fn start_server(
     if let Some(python) = python {
         pool_config.launcher = Launcher {
             program: python.into(),
+            // `-I` (isolated mode, implies `-P`): no working directory or script directory on `sys.path`, so a
+            // file a Connect client uploaded into the worker directory (`krishiv.py`) is not imported before the
+            // sandbox is up.
             args: vec![
+                "-I".into(),
                 "-c".into(),
                 "import sys; from krishiv._native import _udf_trampoline; sys.exit(_udf_trampoline(sys.argv[1:]))"
                     .into(),
