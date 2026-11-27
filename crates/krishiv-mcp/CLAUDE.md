@@ -9,7 +9,7 @@ MCP adapter (stdio read-only first, HTTP + auth later).
 ## Key files
 Paths are relative to this crate.
 - `src/server.rs` the rmcp server pinned to the 2026-07-28 revision (`KrishivMcpServer::with_tools(McpConfig)` adds the query tools)
-- `src/tools.rs` the ten read-only tools, caps (rows, bytes, seconds), the scan-estimate gate (`allow_heavy`), one running query and a queue of 4; every call builds a fresh session over `--data`
+- `src/tools.rs` the ten read-only tools, caps (rows, bytes, seconds), the scan-estimate gate (`allow_heavy`), one running query and a queue of 4 (`KRISHIV_MCP_QUEUE_FULL` beyond it); every call builds a fresh session over `--data`, leaving out an entry that links outside it or cannot be read (`list_tables` names them); `sql_reference` patterns (`name_matches`)
 - `src/gate.rs` the read gate: one statement of class `Read` (`KRISHIV_MCP_STATEMENT_NOT_ALLOWED`), `SetupLock` (tables are registered, then only `Select` is allowed through `ReadOnlyPolicy`), root check
 - `tests/tools.rs` results, caps, the negative suite, statelessness; `tests/stdio_conformance.rs` protocol handshake
 - Not done (design P2-T095): `count_total`, `krishiv.mcp.serve()` in Python, OTel audit records; metadata tools answer in the agent text, not `structuredContent`.
