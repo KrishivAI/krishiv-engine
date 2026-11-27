@@ -283,6 +283,11 @@ impl Resolver<'_> {
                 });
             }
         }
+        // A type string argument reads a bare `TIMESTAMP` as `spark.sql.timestampType` names it.
+        let session_typed = self.session_type_argument(entry, kids, &constants);
+        if let Some((i, text)) = &session_typed {
+            constants[*i] = Some(Constant::String(text.clone()));
+        }
         let literals: Vec<bool> = kids.iter().map(|k| fold::is_literal(&k.expr)).collect();
         let foldable: Vec<bool> = kids
             .iter()
@@ -364,7 +369,58 @@ impl Resolver<'_> {
             );
             k.ty = arg_type(DataType::Binary, false);
         }
+        if let Some((i, text)) = session_typed
+            && let Some(k) = call_kids.get_mut(i)
+        {
+            // The call binds from the resolved type, shown as written (its name never shows it).
+            k.shown = Some(Arc::clone(&k.expr));
+            k.expr = Arc::new(
+                Expr::new(ExprNode::Literal(Literal::String(text))).with_origin(k.expr.origin),
+            );
+        }
         Ok((Self::folded_ntile(entry, &constants, call_kids), ty))
+    }
+
+    /// Under `spark.sql.timestampType = TIMESTAMP_NTZ`, the type string argument of `from_json`,
+    /// `from_csv`, `from_xml` (the schema) or `variant_get` / `try_variant_get` (the target type)
+    /// whose bare `TIMESTAMP` that setting changes: its position and the resolved type as SQL
+    /// text. Spark parses these strings with the session's `DataTypeAstBuilder` (a Spark 4.2.0 run:
+    /// `from_json(j, 'a timestamp')` is `struct<a:timestamp_ntz>`, named `from_json(j)`). The call
+    /// then carries the resolved text, so its result rule and the executor's bind read the same
+    /// type; a string the setting leaves alone (or that does not parse) is kept as written.
+    fn session_type_argument(
+        &self,
+        entry: &FunctionEntry,
+        kids: &[Bound],
+        constants: &[Option<Constant>],
+    ) -> Option<(usize, String)> {
+        if !self.ctx.conf.timestamp_ntz || !is_builtin_entry(entry) {
+            return None;
+        }
+        let i = match entry.id.name() {
+            "from_json" | "from_csv" | "from_xml" => 1,
+            "variant_get" | "try_variant_get" => 2,
+            _ => return None,
+        };
+        let Some(Some(Constant::String(text))) = constants.get(i) else {
+            return None;
+        };
+        if !fold::is_literal(&kids.get(i)?.expr) {
+            return None;
+        }
+        let grammar = krishiv_types::TypeGrammar::new(
+            self.ctx.profile >= crate::analyzer::SparkProfile::V4_3,
+        );
+        // A schema may be a bare field list (`a INT, b TIMESTAMP`): read as a struct of them.
+        let parse = |ntz: bool| {
+            krishiv_types::parse_data_type_with(text, grammar, ntz).or_else(|_| {
+                krishiv_types::parse_data_type_with(&format!("STRUCT<{text}>"), grammar, ntz)
+            })
+        };
+        match (parse(true), parse(false)) {
+            (Ok(session), Ok(plain)) if session != plain => Some((i, session.sql())),
+            _ => None,
+        }
     }
 
     /// The non-empty string literal path in the descriptor position of a `from_protobuf` / `to_protobuf` call (the third of three

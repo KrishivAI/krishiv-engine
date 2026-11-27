@@ -154,3 +154,82 @@ pub fn extremum_bool(
     let nulls = NullBuffer::from_iter(picked.iter().map(Option::is_some));
     Ok(BooleanArray::new(values, Some(nulls)))
 }
+
+/// `greatest` / `least` over struct or list columns of one type, compared
+/// by Spark's row order ([`crate::order::cmp_rows`]: fields and elements
+/// lexicographically, NULL first, NaN last). NULL arguments are skipped;
+/// ties keep the earlier argument.
+///
+/// # Errors
+/// As [`extremum_primitive`], and [`KernelError`] for a type the order
+/// refuses (maps).
+pub fn extremum_nested(
+    kind: Extremum,
+    columns: &[&dyn Array],
+) -> Result<arrow_array::ArrayRef, KernelError> {
+    let rows = rows_of(columns.iter().map(|c| c.len()))?;
+    let mut picks: Vec<(usize, usize)> = Vec::with_capacity(rows);
+    for i in 0..rows {
+        let mut best: Option<usize> = None;
+        for (k, c) in columns.iter().enumerate() {
+            if c.is_null(i) {
+                continue;
+            }
+            best = match best {
+                None => Some(k),
+                Some(b) => {
+                    let o = crate::order::cmp_rows(columns[k], i, columns[b], i)?;
+                    Some(if kind.replaces(o) { k } else { b })
+                }
+            };
+        }
+        match best {
+            Some(k) => picks.push((k, i)),
+            // Every argument is NULL: the first column's NULL row.
+            None => picks.push((0, i)),
+        }
+    }
+    arrow_select::interleave::interleave(columns, &picks)
+        .map_err(|e| KernelError::internal(e.to_string()))
+}
+
+#[cfg(test)]
+mod nested_tests {
+    use std::sync::Arc;
+
+    use arrow_array::{Array, ArrayRef, Int32Array, StructArray};
+    use arrow_schema::{DataType, Field, Fields};
+
+    use super::{Extremum, extremum_nested};
+
+    fn st(a: &[Option<i32>], valid: &[bool]) -> ArrayRef {
+        let f = Fields::from(vec![Field::new("a", DataType::Int32, true)]);
+        Arc::new(StructArray::new(
+            f,
+            vec![Arc::new(Int32Array::from(a.to_vec())) as ArrayRef],
+            Some(valid.to_vec().into()),
+        ))
+    }
+
+    #[test]
+    fn picks_by_field_order_skipping_null_structs() {
+        let l = st(&[Some(1), None, Some(5)], &[true, false, false]);
+        let r = st(&[Some(2), Some(3), None], &[true, true, false]);
+        let g = extremum_nested(Extremum::Greatest, &[l.as_ref(), r.as_ref()]).unwrap();
+        let g = g.as_any().downcast_ref::<StructArray>().unwrap();
+        let a = g.column(0).as_any().downcast_ref::<Int32Array>().unwrap();
+        assert_eq!(a.value(0), 2);
+        assert_eq!(a.value(1), 3);
+        assert!(g.is_null(2));
+        let s = extremum_nested(Extremum::Least, &[l.as_ref(), r.as_ref()]).unwrap();
+        let s = s.as_any().downcast_ref::<StructArray>().unwrap();
+        assert_eq!(
+            s.column(0)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap()
+                .value(0),
+            1
+        );
+    }
+}
