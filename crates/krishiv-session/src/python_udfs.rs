@@ -18,6 +18,7 @@
 //! name, so SQL cannot reach it by its display name. Its version has the top
 //! bit set ([`ANONYMOUS_VERSION_BIT`]), so it never equals a registration's.
 
+use futures::future::BoxFuture;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError, RwLock};
 
@@ -747,9 +748,152 @@ impl crate::Session {
     }
 }
 
+/// Where `CREATE FUNCTION ... AS 'python' USING PYTHON 'name'` and `DROP FUNCTION` keep and remove
+/// the persisted Python UDFs of a server (P3-T072d): the Connect server's per-tenant function
+/// catalog. A session built alone has none, and both statements are refused there.
+#[cfg_attr(
+    not(feature = "unstable-ir"),
+    expect(unreachable_pub, reason = "re-exported only under unstable-ir")
+)]
+pub trait PersistedFunctions: Send + Sync {
+    /// Keeps the session's registered Python UDF `registered` as the stored function `name`
+    /// (stored under the registered name: the catalog keys a function by it).
+    ///
+    /// # Errors
+    /// `KRISHIV_UNSUPPORTED_FEATURE` when the session registered no such UDF; the catalog's failure.
+    fn persist<'a>(
+        &'a self,
+        session: &'a crate::Session,
+        registered: &'a str,
+    ) -> BoxFuture<'a, Result<(), KrishivError>>;
+
+    /// Whether a function `name` is stored for the session's tenant.
+    ///
+    /// # Errors
+    /// The catalog's failure.
+    fn exists<'a>(
+        &'a self,
+        session: &'a crate::Session,
+        name: &'a str,
+    ) -> BoxFuture<'a, Result<bool, KrishivError>>;
+
+    /// Removes the stored function `name`.
+    ///
+    /// # Errors
+    /// The catalog's failure; a refusal when another principal stored it.
+    fn remove<'a>(
+        &'a self,
+        session: &'a crate::Session,
+        name: &'a str,
+    ) -> BoxFuture<'a, Result<(), KrishivError>>;
+}
+
+impl crate::Session {
+    /// Sets where this session's `CREATE FUNCTION ... USING PYTHON` and `DROP FUNCTION` keep
+    /// persisted Python UDFs.
+    #[cfg(feature = "unstable-ir")]
+    pub fn set_persisted_functions(&self, hook: std::sync::Arc<dyn PersistedFunctions>) {
+        *self
+            .state
+            .persisted_functions
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(hook);
+    }
+
+    /// The hook for persisted Python UDFs, if the session has one.
+    pub(crate) fn persisted_functions(&self) -> Option<Arc<dyn PersistedFunctions>> {
+        self.state
+            .persisted_functions
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A hook over a set of stored names, logging what it was asked to do.
+    #[cfg(feature = "unstable-ir")]
+    struct Stored(Mutex<Vec<String>>);
+
+    #[cfg(feature = "unstable-ir")]
+    impl PersistedFunctions for Stored {
+        fn persist<'a>(
+            &'a self,
+            _: &'a crate::Session,
+            registered: &'a str,
+        ) -> BoxFuture<'a, Result<(), KrishivError>> {
+            Box::pin(async move {
+                self.0.lock().unwrap().push(registered.to_owned());
+                Ok(())
+            })
+        }
+
+        fn exists<'a>(
+            &'a self,
+            _: &'a crate::Session,
+            name: &'a str,
+        ) -> BoxFuture<'a, Result<bool, KrishivError>> {
+            Box::pin(async move { Ok(self.0.lock().unwrap().iter().any(|n| n == name)) })
+        }
+
+        fn remove<'a>(
+            &'a self,
+            _: &'a crate::Session,
+            name: &'a str,
+        ) -> BoxFuture<'a, Result<(), KrishivError>> {
+            Box::pin(async move {
+                self.0.lock().unwrap().retain(|n| n != name);
+                Ok(())
+            })
+        }
+    }
+
+    /// `CREATE FUNCTION ... USING PYTHON` and `DROP FUNCTION` go through the session's hook: refused without one,
+    /// a stored name needs `OR REPLACE` or `IF NOT EXISTS`, and `DROP` removes it.
+    #[cfg(feature = "unstable-ir")]
+    #[test]
+    fn persisted_function_statements_go_through_the_hook() {
+        let create = "CREATE FUNCTION f AS 'python' USING PYTHON 'f'";
+        let s = crate::Session::new().unwrap();
+        let err = futures::executor::block_on(s.sql(create)).unwrap_err();
+        assert!(err.to_string().contains("function catalog"), "{err}");
+
+        let hook = Arc::new(Stored(Mutex::new(Vec::new())));
+        s.set_persisted_functions(Arc::clone(&hook) as Arc<dyn PersistedFunctions>);
+        let run = |q: &str| futures::executor::block_on(s.sql(q));
+        run(create).unwrap();
+        assert_eq!(*hook.0.lock().unwrap(), ["f"]);
+        let err = run(create).unwrap_err();
+        assert!(
+            err.to_string().contains("ROUTINE_ALREADY_EXISTS"),
+            "{err:?}"
+        );
+        run("CREATE FUNCTION IF NOT EXISTS f AS 'python' USING PYTHON 'f'").unwrap();
+        run("CREATE OR REPLACE FUNCTION f AS 'python' USING PYTHON 'f'").unwrap();
+        assert_eq!(hook.0.lock().unwrap().len(), 2);
+        let err = run("CREATE FUNCTION g AS 'python' USING PYTHON 'f2'").unwrap_err();
+        assert!(err.to_string().contains("another name"), "{err}");
+        let err = run("CREATE FUNCTION a.g AS 'python' USING PYTHON 'g'").unwrap_err();
+        assert!(err.to_string().contains("qualified"), "{err}");
+
+        run("DROP FUNCTION f").unwrap();
+        assert!(hook.0.lock().unwrap().is_empty());
+        let err = run("DROP FUNCTION f").unwrap_err();
+        assert!(err.to_string().contains("ROUTINE_NOT_FOUND"), "{err}");
+        // A qualified name never reaches the persisted-function hook.
+        let before = hook.0.lock().unwrap().len();
+        run("CREATE FUNCTION f AS 'python' USING PYTHON 'f'").unwrap();
+        run("CREATE SCHEMA other").unwrap();
+        let err = run("DROP FUNCTION other.f").unwrap_err();
+        assert!(err.to_string().contains("ROUTINE_NOT_FOUND"), "{err}");
+        assert_eq!(*hook.0.lock().unwrap(), ["f"]);
+        assert_eq!(hook.0.lock().unwrap().len(), before + 1);
+        run("DROP FUNCTION f").unwrap();
+        run("DROP FUNCTION IF EXISTS f").unwrap();
+    }
 
     /// An inline UDTF's encoded name carries its definition, return type nullability included; another
     /// version or a scalar kind is no UDTF name.

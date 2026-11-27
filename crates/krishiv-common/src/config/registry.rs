@@ -2,9 +2,10 @@
 //! The config entries. Add new entries here and to [`REGISTRY`].
 
 use super::registry_join::{
-    EXEC_COALESCE_INPUT, EXEC_JOIN_DIRECT_INDEX, EXEC_JOIN_FUSE_PROBE_SELECT,
-    EXEC_JOIN_IDLE_SPILL_AFTER, EXEC_JOIN_ROW_LAYOUT, EXEC_JOIN_SMJ_BUFFER_BYTES,
-    EXEC_JOIN_STRATEGY, SQL_ASOF_JOIN_ENABLED, SQL_SORT_MERGE_ASOF_JOIN_ENABLED,
+    EXEC_COALESCE_INPUT, EXEC_DATAFLOW_SCHEDULING, EXEC_JOIN_DIRECT_INDEX,
+    EXEC_JOIN_FUSE_PROBE_SELECT, EXEC_JOIN_IDLE_SPILL_AFTER, EXEC_JOIN_ROW_LAYOUT,
+    EXEC_JOIN_SMJ_BUFFER_BYTES, EXEC_JOIN_STRATEGY, SQL_ASOF_JOIN_ENABLED,
+    SQL_SORT_MERGE_ASOF_JOIN_ENABLED,
 };
 use std::borrow::Cow;
 use std::time::Duration;
@@ -67,9 +68,9 @@ pub use lakehouse::{
 };
 pub use optimizer::{
     DERIVED_KEYS_ABOVE, DISCOVER_KEYS, DISCOVER_KEYS_TIMEOUT, EXPERIMENTAL_GROUP_KEY_CODE_FORCE,
-    GROUP_KEY_CODE, GROUP_KEY_CODE_MULTI_DIMENSION, LATE_PAYLOAD_JOIN, PAYLOAD_ABOVE_AGGREGATE,
-    PRESERVED_SIDE_SEMI_JOIN, SEMI_ANTI_JOIN_ORDER, SHARE_FILTERED_SCANS, SHARE_LITERAL_INSTANCES,
-    SHARE_REPEATED_SUBTREES, SUBQUERY_AS_WINDOW,
+    GROUP_KEY_CODE, GROUP_KEY_CODE_MULTI_DIMENSION, JOIN_PRUNE_FIRST, LATE_PAYLOAD_JOIN,
+    PAYLOAD_ABOVE_AGGREGATE, PRESERVED_SIDE_SEMI_JOIN, ROLLUP_FROM_PARENT, SEMI_ANTI_JOIN_ORDER,
+    SHARE_FILTERED_SCANS, SHARE_LITERAL_INSTANCES, SHARE_REPEATED_SUBTREES, SUBQUERY_AS_WINDOW,
 };
 pub use result_cache::{RESULT_CACHE_ENABLED, RESULT_CACHE_MAX_BYTES, RESULT_CACHE_TTL};
 pub use runtime_filter::{
@@ -80,6 +81,7 @@ pub use runtime_filter::{
 };
 pub use runtime_filter_bloom::{
     RUNTIME_FILTER_BLOOM_AT_SCALE, RUNTIME_FILTER_BLOOM_MEMORY_TIER, RUNTIME_FILTER_EQUATED_SITES,
+    RUNTIME_FILTER_RESIDUAL_BOUNDS, RUNTIME_FILTER_SMALL_TABLE_WAIT,
 };
 // Every public item of `server` is a config entry (Connect, Flight SQL, server).
 pub use server::*;
@@ -141,6 +143,7 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &EXEC_JOIN_SHARED_BROADCAST_BYTES,
     &EXEC_JOIN_FUSE_PROBE_SELECT,
     &EXEC_COALESCE_INPUT,
+    &EXEC_DATAFLOW_SCHEDULING,
     &EXEC_JOIN_IDLE_SPILL_AFTER,
     &SQL_ASOF_JOIN_ENABLED,
     &SQL_SORT_MERGE_ASOF_JOIN_ENABLED,
@@ -206,9 +209,11 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &EXPERIMENTAL_GROUP_KEY_CODE_FORCE,
     &SHARE_REPEATED_SUBTREES,
     &SHARE_FILTERED_SCANS,
+    &ROLLUP_FROM_PARENT,
     &SHARE_LITERAL_INSTANCES,
     &SEMI_ANTI_JOIN_ORDER,
     &PRESERVED_SIDE_SEMI_JOIN,
+    &JOIN_PRUNE_FIRST,
     &SPILL_DIR,
     &WORKLOAD_RESOURCE_GROUPS_FILE,
     &CONNECT_PYTHON_FUNCTIONS_CATALOG,
@@ -221,6 +226,8 @@ pub static REGISTRY: &[&ConfigEntry] = &[
     &RUNTIME_FILTER_BLOOM_AT_SCALE,
     &RUNTIME_FILTER_BLOOM_MEMORY_TIER,
     &RUNTIME_FILTER_EQUATED_SITES,
+    &RUNTIME_FILTER_RESIDUAL_BOUNDS,
+    &RUNTIME_FILTER_SMALL_TABLE_WAIT,
     &IO_STRICT_OPTIONS,
     &FILES_MAX_PARTITION_BYTES,
     &FILES_OPEN_COST_IN_BYTES,
@@ -559,9 +566,15 @@ pub static MEMORY_LIMIT: ConfigEntry = ConfigEntry {
     doc: "Memory available to query execution in this process: the limit of the root memory \
           pool. Operators reserve memory before allocating and spill when the limit is reached. \
           When unset: 80% of the effective memory limit (the tightest cgroup limit, else \
-          physical memory), or 2 GiB where that cannot be determined. A value above that \
-          effective limit is not honoured (the kernel would kill the process before the engine \
-          spills): the default is used instead, with a warning.",
+          physical memory), lowered so the pool plus what the process may hold beyond it (an \
+          eighth of the pool and 64 MiB) leaves at least 384 MiB, but never under half of it \
+          (so 512 MiB in a 1 GiB container, about 1.39 GiB in 2 GiB, 80% from about 4.4 GiB), \
+          or 2 GiB where that cannot be determined. A value above that effective limit is not \
+          honoured (the kernel would kill the process before the engine spills): the default is \
+          used instead, with a warning. A value at or just under the effective limit is honoured \
+          but leaves no room for the memory the process uses \
+          outside the pool (allocator overhead, memory used without a reservation), so the \
+          kernel can still kill the process: leave headroom, as the default does.",
     scope: Scope::Cluster,
     settable_by: SettableBy::Startup,
     version_added: "0.1.0",

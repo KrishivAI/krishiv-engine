@@ -103,10 +103,7 @@ impl Env {
             .unwrap();
         let sched = IoScheduler::new(IoConfig::default());
         let id = StoreId::new("file");
-        sched.register_whole_listing_store(
-            id.clone(),
-            Arc::new(krishiv_io::SettledLocalFileSystem::new()),
-        );
+        sched.register_whole_listing_store(id.clone(), Arc::new(crate::TestLocalStore::new()));
         let root = TreePool::new(memory);
         let query_pool = root.child("query", None);
         let process: Arc<dyn MemoryPool> = TreePool::new(&MemoryConfig::default());
@@ -199,18 +196,19 @@ impl Env {
             input: Arc::new(Leaf(input)),
             sink,
         }));
-        // An ended driver's row groups are shipped by a background flush (`release_combined`) that returns its
-        // memory a moment after the query finished: wait for it, but not forever.
+        self.assert_memory_returned("the write");
+        out.map(drop)
+    }
+
+    /// Asserts the query pool is back to 0 after `what` ran. An ended driver's row groups are
+    /// shipped by a background flush (`release_combined`) that returns its memory a moment after
+    /// the query finished: wait for it, but not forever.
+    fn assert_memory_returned(&self, what: &str) {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         while self.query_pool.reserved() != 0 && std::time::Instant::now() < deadline {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
-        assert_eq!(
-            self.query_pool.reserved(),
-            0,
-            "the write gave its memory back"
-        );
-        out.map(drop)
+        assert_eq!(self.query_pool.reserved(), 0, "{what} gave its memory back");
     }
 
     #[expect(clippy::unwrap_in_result, reason = "test helper")]
@@ -1046,7 +1044,7 @@ fn a_create_under_a_refused_feature_writes_nothing() {
                 env.write(&new, WriteMode::Append, rows(&[(1, "a", Some("x"))]), &[])
                     .unwrap_err()
             } else {
-                env.rt.block_on(new.create_empty("w")).unwrap_err()
+                env.rt.block_on(new.create_empty("w", None)).unwrap_err()
             };
             assert_eq!(
                 e.error_class(),
@@ -1079,7 +1077,7 @@ fn a_create_under_a_refused_feature_writes_nothing() {
         None,
     )
     .unwrap();
-    env.rt.block_on(new.create_empty("w")).unwrap();
+    env.rt.block_on(new.create_empty("w", None)).unwrap();
     assert_eq!(env.latest(), 0);
 }
 
@@ -1192,7 +1190,9 @@ fn column_mapping_writes_physical_names_and_field_ids() {
 }
 
 mod dml;
+mod dvs;
 mod lifecycle;
 mod merge;
+mod options;
 mod readback;
 mod streaming;

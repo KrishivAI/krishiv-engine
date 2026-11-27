@@ -54,7 +54,7 @@
 //! into the main join tree. Both reads of `dict` are `Shift`s of one body, so
 //! `ShareCte` computes it once.
 
-use std::collections::HashSet;
+use crate::expr::AttrMap;
 use std::sync::Arc;
 
 use krishiv_common::error::KrishivError;
@@ -151,6 +151,30 @@ pub(crate) fn rewrite(
     Ok((out, notes))
 }
 
+/// Whether the rule codes the keys of the aggregate `agg`, asked without
+/// rewriting: eager aggregation runs first and yields such an aggregate.
+pub(crate) fn takes(
+    agg: &Arc<LogicalPlan>,
+    est: &mut Estimator<'_>,
+    force: bool,
+    min_dimensions: usize,
+) -> bool {
+    let Some(row_number) = row_number() else {
+        return false;
+    };
+    if collated_key(agg).is_some() {
+        return false;
+    }
+    let Some(shape) = Shape::of(agg) else {
+        return false;
+    };
+    let mut next = max_id(agg, &mut Default::default()).saturating_add(1);
+    matches!(
+        shape.code(est, &mut next, &row_number, force, min_dimensions),
+        Ok(Some(_))
+    )
+}
+
 /// Why an aggregate with `n` qualifying dimensions stays in a mode that codes
 /// `min` or more.
 fn few_dimensions(n: usize, min: usize) -> String {
@@ -217,7 +241,7 @@ struct Candidate {
     /// The group keys it produces, in key order.
     keys: Vec<BoundColumn>,
     /// The keys nothing reads on the way: they leave the payload.
-    dropped: HashSet<AttrId>,
+    dropped: Attrs,
     note: String,
 }
 
@@ -493,7 +517,7 @@ impl<'a> Shape<'a> {
                 calls_read(e, &mut read);
             }
         }
-        let dropped: HashSet<AttrId> = keys
+        let dropped: Attrs = keys
             .iter()
             .map(|k| k.id)
             .filter(|id| !read.contains(id))
@@ -777,7 +801,7 @@ impl<'a> Shape<'a> {
         let mut agg_out: Vec<Arc<Expr>> = std::iter::once(column(&row_code))
             .chain(rest.iter().map(|k| column(k)))
             .collect();
-        let decoded: std::collections::HashMap<AttrId, Arc<Expr>> = c
+        let decoded: AttrMap<Arc<Expr>> = c
             .keys
             .iter()
             .zip(&dict_keys)

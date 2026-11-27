@@ -201,15 +201,17 @@ impl World {
             });
             format!("http://{addr}")
         });
+        // Only the slow service has to miss its deadline. The others answer at once, and a short
+        // one would turn a loaded machine into a denial, since the session fails closed.
+        let deadline = if mode == Mode::Slow {
+            Duration::from_millis(300)
+        } else {
+            Duration::from_secs(60)
+        };
         let access = {
             let _guard = self.tokio.enter();
             let channel = Endpoint::parse(&endpoint).unwrap().channel().unwrap();
-            ExternalAccess::over(
-                AccessPolicyClient::new(channel),
-                Duration::from_millis(300),
-                None,
-                false,
-            )
+            ExternalAccess::over(AccessPolicyClient::new(channel), deadline, None, false)
         };
         // Server mode confines local paths to the configured roots: the warehouse here.
         let mut config = Config::new();
@@ -366,7 +368,13 @@ fn a_service_error_refuses_without_its_message() {
 #[test]
 fn a_slow_or_absent_service_refuses_everything() {
     let w = World::new();
-    for mode in [Mode::Slow, Mode::Down] {
+    // `Down` is a Unix socket nothing listens on; the endpoint is refused on Windows.
+    let modes: &[Mode] = if cfg!(unix) {
+        &[Mode::Slow, Mode::Down]
+    } else {
+        &[Mode::Slow]
+    };
+    for &mode in modes {
         let (ana, _) = w.ana(mode, Role::Admin, false);
         for sql in [
             "SELECT * FROM t",

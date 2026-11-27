@@ -51,7 +51,7 @@ input, not a trusted party (design `P3-lakehouse.md` §5.6): everything it retur
   kept per (principal without groups, claims), least recently used out past 4,096; `delegated_tests.rs` with a scripted token endpoint, `encode.rs` RFC 3986 path segments, namespace separator, Java `URLEncoder` form bodies,
   `prefix`/separator safety, JSON depth pre-scan, `types.rs` the response bodies from `serde_json::Value` (catalog, table and credential
   `config` values become `SecretString`s; `read-restrictions` fail closed), `error.rs` `RestError` -> `KRISHIV_CATALOG_FAILURE`/
-  `KRISHIV_CATALOG_LIMIT_EXCEEDED` (server messages and `error_description` stay out of the error), `client.rs` `RestClient`
+  `KRISHIV_CATALOG_LIMIT_EXCEEDED` (server messages and `error_description` stay out of the error; the text says the kind: HTTP status, an `ErrorModel.type` only if it is a spec name, timeout, connection), `client.rs` `RestClient`
   (`/v1/config` once, fetched outside the lock, only `prefix` and `namespace-separator` taken, `uri` ignored; one deadline per
   call, a paged listing included; page/entry caps, a repeated or over-4-KiB token stops it; empty/`.`/`..` names and any path
   the URL parser rewrites refused; a 404 is "absent" only with a `NoSuch*` error model; credential prefixes as full URL,
@@ -89,9 +89,9 @@ input, not a trusted party (design `P3-lakehouse.md` §5.6): everything it retur
   instance is remembered as dead, so nothing is kept for it later and two runtimes declaring one
   name never share an answer; a `loadTable` answer replaces the held one only when fetched later, under one lock; the
   table `token` of a `loadTable` answer is kept with it and is the bearer of that table's `loadCredentials` and reload
-  only, a 401 falling back to the caller's token), `VendedSource` (the cached credential while it outlives the refresh
+  only, a 401 or 419 falling back to the caller's token), `VendedSource` (the cached credential while it outlives the refresh
   skew, else `loadCredentials` with the same caller or a table reload (endpoint not advertised, or a 404); a second
-  fetch while the cache still holds the answer it served means the store refused it, so it refreshes), one store scope per vended prefix through `ScanInputs::stores`,
+  fetch while the cache still holds the answer it served means the store refused it, so it refreshes; a refreshed answer that narrows the prefix below the scope's root serves the scope with the one credential of the prefixes inside it, refused when they differ), one store scope per vended prefix through `ScanInputs::stores`,
   `VendedPaths` (a location outside every scope, or no credential, is `KRISHIV_CATALOG_LOCATION_REFUSED` before any
   request: no ambient fallback), the §4.4 block-cache scope; `iceberg_rest/vended.rs` prefix forms (full URL on
   segments, bucket, scheme family), the Iceberg 1.12.0 credential keys and their expiries; `EmbeddedLocations` (embedded use
@@ -103,7 +103,7 @@ input, not a trusted party (design `P3-lakehouse.md` §5.6): everything it retur
   every request signed with the vended key, a credential inside the refresh skew replaced through `loadCredentials`
   (with the table token) or a table reload, a key storage refuses as expired mid-read refreshed and never served
   again, a path read never signed with the vended key (`vended_prefix_does_not_open_path_reads`), remote signing
-  refused, `vended_secrets_never_shown`). Feature `testing` exports the stand-in and `write_s3_table` for other crates' tests
+  refused, `vended_secrets_never_shown`; time moves by the cache's `VendedClock` (`VendedCache::with_clock`, the test factory `ClockedFactory`), never by sleeping). Feature `testing` exports the stand-in and `write_s3_table` for other crates' tests
   (krishiv-connect-server `tests/delegated_catalog.rs`: `vended_blocks_not_shared_across_delegated_users`, `catalog_mode_matrix`).
 - Not here yet: Unity vended credentials, distributed reads of declared tables (refused by the session), a fuzz
   target for the Unity Catalog response parsers (§5.6; the REST one is `fuzz/fuzz_targets/iceberg_rest_response.rs` over `iceberg_rest/fuzz_entry.rs`, seeds `fuzz/seeds/iceberg_rest_response/`), the T021 decision on `MANAGED` Delta tables of a UC server (they may be catalog-managed: UC-ratified commits not yet in `_delta_log`, so a by-path read can be stale; `UnityTable` says so), the write half of the

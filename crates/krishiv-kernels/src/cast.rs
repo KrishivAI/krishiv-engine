@@ -43,7 +43,7 @@ pub use time::{
     TimeTruncUnit, format_time, make_time, parse_time, parse_time_nanos, time_diff,
     time_fraction_digits, time_from_units, time_to_units, time_trunc, to_time,
 };
-pub use timestamp::{TimestampText, timestamp_has_zone, timestamp_text};
+pub use timestamp::{TimestampText, special_value, timestamp_has_zone, timestamp_text};
 
 use crate::decimal::DecimalNative;
 use crate::error::{KernelError, with_capacity};
@@ -946,7 +946,8 @@ pub fn cast(
         (DataType::Date32, t) if is_numeric(t) && mode != CastMode::Ansi => {
             Ok(arrow_array::new_null_array(t, input.len()))
         }
-        (DataType::Date32 | DataType::Timestamp(TimeUnit::Microsecond, _), _) => {
+        (DataType::Date32 | DataType::Timestamp(TimeUnit::Microsecond, _), _)
+        | (DataType::Time64(TimeUnit::Nanosecond), DataType::Timestamp(..)) => {
             temporal(input, to, opts).ok_or_else(unsupported)?
         }
         _ => Err(unsupported()),
@@ -1272,7 +1273,8 @@ fn integral_bytes<T: ArrowPrimitiveType, const N: usize>(
     Ok(Arc::new(out.finish()))
 }
 
-/// `DATE` ↔ `TIMESTAMP` ↔ `TIMESTAMP_NTZ`; `None` for other targets.
+/// `DATE` ↔ `TIMESTAMP` ↔ `TIMESTAMP_NTZ`, and `TIME` ↔ either timestamp; `None` for other
+/// targets.
 fn temporal(
     input: &dyn Array,
     to: &DataType,
@@ -1329,6 +1331,57 @@ fn temporal(
                 out.map(Some).ok_or_else(|| overflow(i))
             })
             .map(ts_out(to_zone))
+        }
+        // Spark 4.3 (`Cast.castToTimestamp[NTZ]`): a time of day on today's
+        // date in the session zone (`CURRENT_DATE`, from the query start),
+        // its digits past the microsecond dropped (`makeTimestamp[NTZ]`); a
+        // `TIMESTAMP` is that local date-time's instant in the session zone.
+        (
+            DataType::Time64(TimeUnit::Nanosecond),
+            DataType::Timestamp(TimeUnit::Microsecond, zone),
+        ) => {
+            let Some(start) = tz.query_start_micros() else {
+                return Some(Err(KernelError::unsupported(
+                    "a cast of a TIME to a timestamp without the query clock",
+                )));
+            };
+            let today = match crate::datetime::current_date(start, tz) {
+                Ok(d) => i64::from(d),
+                Err(e) => return Some(Err(e)),
+            };
+            let t = input.as_primitive::<Time64NanosecondType>();
+            map_rows::<TimestampMicrosecondType>(input, |i| {
+                let local = today
+                    .checked_mul(MICROS_PER_DAY)
+                    .and_then(|d| d.checked_add(t.value(i).div_euclid(1_000)));
+                let micros = if zone.is_some() {
+                    local.and_then(|l| local_to_utc(l, tz))
+                } else {
+                    local
+                };
+                micros.map(Some).ok_or_else(|| overflow(i))
+            })
+            .map(ts_out(zone))
+        }
+        // Spark 4.3 (`Cast.castToTime`): the time of day, of the wall clock for
+        // a `TIMESTAMP_NTZ` and in the session zone for a `TIMESTAMP`
+        // (`timestampNTZToNanosOfDay`, `timestampToNanosOfDay`). The caller
+        // cuts it to the target's precision.
+        // The local time is computed past the microsecond range, as Spark's `LocalDateTime`
+        // does, so an instant within one zone offset of either end has a time of day too.
+        (
+            DataType::Timestamp(TimeUnit::Microsecond, from_zone),
+            DataType::Time64(TimeUnit::Nanosecond),
+        ) => {
+            let t = input.as_primitive::<TimestampMicrosecondType>();
+            let zone = from_zone.is_some().then_some(tz);
+            map_rows::<Time64NanosecondType>(input, |i| {
+                datetime::local_micros_of_day(t.value(i), zone)
+                    .checked_mul(1_000)
+                    .map(Some)
+                    .ok_or_else(|| overflow(i))
+            })
+            .map(|a| Arc::new(a) as ArrayRef)
         }
         _ => return None,
     })

@@ -345,6 +345,8 @@ fn fault(catalog: &str, relation: &str, detail: &str) -> KrishivError {
     KrishivCatalogFailure {
         catalog: quoted(catalog),
         relation_name: relation.to_owned(),
+        reason: "the call failed; the server log has the detail (target `krishiv::catalog`)"
+            .to_owned(),
     }
     .into()
 }

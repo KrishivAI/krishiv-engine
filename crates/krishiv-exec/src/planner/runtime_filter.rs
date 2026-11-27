@@ -32,7 +32,11 @@
 //! q81, q64 and q74 ran 1.12–1.30x slower waiting). Estimates cannot tell
 //! that case apart alone: q95 and q30 have the same ratio of scan to build
 //! rows, and only q95's filter pays. Even then a build far smaller than the
-//! scan is selective enough (q58's seven dates of `date_dim`).
+//! scan is selective enough (q58's seven dates of `date_dim`). So is a
+//! build that only filters a small table the scan also reads
+//! (`krishiv.runtimeFilter.smallTableWait`, [`Settings::scan_waits`]): the
+//! wait is one small scan, and without it the filter is a race that a scan
+//! of many morsels loses (q02's `d_year` dates, study 59).
 //!
 //! # Cost model
 //! min/max and the distinct keys (up to the larger of
@@ -97,7 +101,8 @@ use krishiv_common::config::{
     RUNTIME_FILTER_BLOOM_MAX_BYTES, RUNTIME_FILTER_BLOOM_MAX_ITEMS,
     RUNTIME_FILTER_BLOOM_MEMORY_TIER, RUNTIME_FILTER_BLOOM_MIN_APPLICATION_ROWS,
     RUNTIME_FILTER_ENABLED, RUNTIME_FILTER_EQUATED_SITES, RUNTIME_FILTER_EXACT_SET_MAX_VALUES,
-    RUNTIME_FILTER_IN_LIST_MAX_VALUES, SESSION_MEMORY_LIMIT,
+    RUNTIME_FILTER_IN_LIST_MAX_VALUES, RUNTIME_FILTER_RESIDUAL_BOUNDS,
+    RUNTIME_FILTER_SMALL_TABLE_WAIT, SESSION_MEMORY_LIMIT,
 };
 use krishiv_io::runtime_filter::RuntimeBloom;
 use krishiv_io::{ColumnPath, FilterId, KeyFilterOptions};
@@ -145,6 +150,12 @@ pub(crate) struct Settings {
     /// `krishiv.runtimeFilter.equatedSites`: an inner join's key
     /// equalities add sites ([`equated_sites`]).
     pub(crate) equated_sites: bool,
+    /// `krishiv.runtimeFilter.residualBounds`: a join's comparison
+    /// conjuncts publish a bound (`residual_bound.rs`).
+    pub(crate) residual_bounds: bool,
+    /// `krishiv.runtimeFilter.smallTableWait`: a small scan waits for a
+    /// build that only filters its own table ([`Settings::scan_waits`]).
+    small_table_wait: bool,
     row: RowStageSettings,
 }
 
@@ -206,6 +217,8 @@ impl Settings {
                 .then(|| memory_tier(query_memory_limit(config)))
                 .flatten(),
             equated_sites: flag(&RUNTIME_FILTER_EQUATED_SITES),
+            residual_bounds: flag(&RUNTIME_FILTER_RESIDUAL_BOUNDS),
+            small_table_wait: flag(&RUNTIME_FILTER_SMALL_TABLE_WAIT),
             row: RowStageSettings {
                 min_rows: count(&RUNTIME_FILTER_ADAPTIVE_MIN_ROWS, 65_536).max(1),
                 max_pass_rate,
@@ -440,7 +453,6 @@ impl Planner<'_> {
                 let bloom = s.bloom
                     && rows <= s.bloom_max_items as f64
                     && site.scan_rows >= (4.0 * rows).max(s.min_application_rows as f64);
-                let reads_scan_table = reads_source(build, &site.source);
                 let id = FilterId(self.next_filter);
                 self.next_filter += 1;
                 self.scan_filters
@@ -461,7 +473,7 @@ impl Planner<'_> {
                     max_values: s.max_values,
                     exact_max_values: s.exact_max_values,
                     bloom,
-                    scan_waits: scan_waits(site.scan_rows, build_rows, reads_scan_table),
+                    scan_waits: self.rf.scan_waits(site, build, build_rows),
                     bloom_max_items: s.bloom_max_items,
                     bloom_max_bytes: s.bloom_max_bytes,
                     ..KeyFilterOptions::default()
@@ -480,7 +492,12 @@ impl Planner<'_> {
                 options.bloom_spill_bytes = (bloom && guessed)
                     .then(|| s.spill_bloom_bytes(site.scan_rows, options.bloom_fpp))
                     .flatten();
-                out.filters.push(JoinFilterPlan { id, key, options });
+                out.filters.push(JoinFilterPlan {
+                    id,
+                    key,
+                    options,
+                    column: None,
+                });
             }
         }
         out
@@ -551,12 +568,53 @@ const SELECTIVE_BUILD: f64 = 1_000.0;
 /// Whether a scan of `scan_rows` estimated rows starts after a build of
 /// `build_rows`, given whether the build reads the scan's table (see the
 /// module docs).
-fn scan_waits(scan_rows: f64, build_rows: f64, build_reads_scan_table: bool) -> bool {
+pub(crate) fn scan_waits(scan_rows: f64, build_rows: f64, build_reads_scan_table: bool) -> bool {
     !build_reads_scan_table || scan_rows >= SELECTIVE_BUILD * build_rows.max(1.0)
 }
 
+/// A scan of its build's own table estimated at no more rows than this waits
+/// for a build that only filters that table, under
+/// `krishiv.runtimeFilter.smallTableWait` (study 59).
+const SMALL_TABLE_ROWS: f64 = 1_000_000.0;
+/// How many times such a build must be smaller than the scan: a build that
+/// keeps most of the table (a self-join's other side) has a filter that
+/// drops little.
+const SMALL_TABLE_SELECTIVE_BUILD: f64 = 10.0;
+
+impl Settings {
+    /// Whether the scan at `site` starts after `build` (of `build_rows`
+    /// estimated rows), whose filter it receives: [`scan_waits`], or, under
+    /// `krishiv.runtimeFilter.smallTableWait`, a scan of at most
+    /// [`SMALL_TABLE_ROWS`] whose build only reads its table and filters it
+    /// ([`filters_only`]) to at most a tenth of the scan's rows. That wait is one scan of a small table; not
+    /// waiting leaves the filter to a race with the build, which a scan cut
+    /// into many morsels loses (TPC-DS q02 and q59 over a `date_dim` of 12
+    /// row groups: 3.4x and 2.8x, study 59).
+    pub(crate) fn scan_waits(&self, site: &Site, build: &PhysNode, build_rows: f64) -> bool {
+        let same_table = reads_source(build, &site.source);
+        scan_waits(site.scan_rows, build_rows, same_table)
+            || (self.small_table_wait
+                && site.scan_rows <= SMALL_TABLE_ROWS
+                && site.scan_rows >= SMALL_TABLE_SELECTIVE_BUILD * build_rows.max(1.0)
+                && filters_only(build, &site.source))
+    }
+}
+
+/// Whether `node` only reads `source` and filters it: a scan of it under
+/// filters, projections and exchanges.
+pub(crate) fn filters_only(node: &PhysNode, source: &ReadSource) -> bool {
+    match node {
+        PhysNode::Scan(s) => s.scan.source == *source,
+        PhysNode::Filter { input, .. } | PhysNode::Project { input, .. } => {
+            filters_only(input, source)
+        }
+        PhysNode::Exchange(e) => filters_only(&e.input, source),
+        _ => false,
+    }
+}
+
 /// Whether `node`'s plan scans `source`.
-fn reads_source(node: &PhysNode, source: &ReadSource) -> bool {
+pub(crate) fn reads_source(node: &PhysNode, source: &ReadSource) -> bool {
     matches!(node, PhysNode::Scan(s) if s.scan.source == *source)
         || node.children().into_iter().any(|c| reads_source(c, source))
 }
@@ -594,11 +652,19 @@ mod tests {
 
     use krishiv_common::config::Config;
 
+    use std::sync::Arc;
+
+    use krishiv_io::ColumnPath;
+    use krishiv_plan::{AttrId, Expr, Literal};
+
     use super::{
-        BLOOM_AT_SCALE_MAX_BYTES, BLOOM_AT_SCALE_MAX_ITEMS, PhysNode, Settings, keys_for,
-        memory_tier, query_memory_limit, reads_source, scan_waits,
+        BLOOM_AT_SCALE_MAX_BYTES, BLOOM_AT_SCALE_MAX_ITEMS, PhysNode, Settings, Site, filters_only,
+        keys_for, memory_tier, query_memory_limit, reads_source, scan_waits,
     };
-    use crate::physical::{ScanId, ScanNode};
+    use crate::aggregate::AggregateOutput;
+    use crate::physical::{
+        AggregatePlan, ExchangeId, ExchangePlan, Partitioning, ScanId, ScanNode,
+    };
 
     fn files(path: &str) -> ReadSource {
         ReadSource::files(
@@ -608,14 +674,12 @@ mod tests {
         )
     }
 
-    /// Two paths of one format are two sources.
-    #[test]
-    fn a_source_is_its_paths_not_its_format() {
-        let scan = PhysNode::Scan(ScanNode {
+    fn scan_of(path: &str) -> PhysNode {
+        PhysNode::Scan(ScanNode {
             decided: None,
             id: ScanId(0),
             scan: Scan {
-                source: files("a.parquet"),
+                source: files(path),
                 output: Vec::new(),
                 version: None,
             },
@@ -624,7 +688,110 @@ mod tests {
             runtime_filters: Vec::new(),
             row_stage: crate::operators::RowStageSettings::default(),
             row_id: false,
+        })
+    }
+
+    fn filtered(input: PhysNode) -> PhysNode {
+        PhysNode::Filter {
+            input: Box::new(input),
+            layout: Vec::new(),
+            predicate: Arc::new(Expr::literal(Literal::Boolean(true))),
+            subqueries: Vec::new(),
+        }
+    }
+
+    fn site(path: &str, scan_rows: f64) -> Site {
+        Site {
+            attr: AttrId(0),
+            column: ColumnPath(vec!["k".to_owned()]),
+            scan: ScanId(1),
+            scan_rows,
+            scan_name: path.to_owned(),
+            source: Arc::new(files(path)),
+        }
+    }
+
+    #[test]
+    fn a_build_filters_only_a_scan_of_its_source() {
+        assert!(filters_only(&scan_of("a.parquet"), &files("a.parquet")));
+        assert!(filters_only(
+            &filtered(scan_of("a.parquet")),
+            &files("a.parquet")
+        ));
+        assert!(!filters_only(
+            &filtered(scan_of("b.parquet")),
+            &files("a.parquet")
+        ));
+        // Projections and exchanges pass through (q02's filtered build runs
+        // under an exchange).
+        let exchanged = PhysNode::Exchange(ExchangePlan {
+            id: ExchangeId(0),
+            input: Box::new(PhysNode::Project {
+                input: Box::new(filtered(scan_of("a.parquet"))),
+                layout: Vec::new(),
+                items: Vec::new(),
+                nullable: None,
+                subqueries: Vec::new(),
+            }),
+            partitioning: Partitioning::Single,
+            filters: Vec::new(),
+            schema: None,
         });
+        assert!(filters_only(&exchanged, &files("a.parquet")));
+        // An aggregate does more than filter.
+        assert!(!filters_only(
+            &aggregated(scan_of("a.parquet")),
+            &files("a.parquet")
+        ));
+    }
+
+    fn aggregated(input: PhysNode) -> PhysNode {
+        PhysNode::Aggregate {
+            input: Box::new(input),
+            aggregate: AggregatePlan {
+                group_by: vec![0],
+                aggregates: Vec::new(),
+                distinct: Vec::new(),
+                output: AggregateOutput::Final,
+            },
+        }
+    }
+
+    /// TPC-DS q02: a `date_dim` scan (73,049 rows) whose filter comes from
+    /// the 365 `d_year` dates of `date_dim` (200x, under the 1,000x line).
+    #[test]
+    fn a_small_scan_waits_for_a_build_that_filters_its_table() {
+        let on = Settings::new(&Config::new());
+        let build = filtered(scan_of("a.parquet"));
+        assert!(on.scan_waits(&site("a.parquet", 73_049.0), &build, 365.0));
+        // A large table does not.
+        assert!(!on.scan_waits(&site("a.parquet", 2e6), &build, 5_000.0));
+        // Nor does one under a build keeping most of its table (a self-join):
+        // the build only filters, but keeps more than a tenth of the rows.
+        assert!(!on.scan_waits(
+            &site("a.parquet", 73_049.0),
+            &scan_of("a.parquet"),
+            73_049.0
+        ));
+        // Nor does a build that does more than filter its table (a CTE's
+        // aggregate, q30): the 1,000x line alone decides.
+        let grouped = filtered(aggregated(scan_of("a.parquet")));
+        assert!(!on.scan_waits(&site("a.parquet", 73_049.0), &grouped, 365.0));
+        // A build over another table always waits.
+        let off_table = filtered(scan_of("b.parquet"));
+        assert!(on.scan_waits(&site("a.parquet", 73_049.0), &off_table, 365.0));
+        let mut config = Config::new();
+        config
+            .set("krishiv.runtimeFilter.smallTableWait", "false")
+            .unwrap();
+        let off = Settings::new(&config);
+        assert!(!off.scan_waits(&site("a.parquet", 73_049.0), &build, 365.0));
+    }
+
+    /// Two paths of one format are two sources.
+    #[test]
+    fn a_source_is_its_paths_not_its_format() {
+        let scan = scan_of("a.parquet");
         assert!(reads_source(&scan, &files("a.parquet")));
         assert!(!reads_source(&scan, &files("b.parquet")));
     }

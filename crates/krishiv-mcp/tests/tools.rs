@@ -389,6 +389,10 @@ async fn a_profile_of_an_explain_replays_the_underlying_query() {
 }
 
 #[tokio::test]
+#[cfg_attr(
+    windows,
+    ignore = "needs a case-sensitive file system: on NTFS `Sales.parquet` and `sales.parquet` are one file"
+)]
 async fn colliding_table_names_are_refused_and_dotted_directories_stay_whole() {
     let dir = tempfile::tempdir().unwrap();
     let data = dir.path().join("data");
@@ -505,4 +509,141 @@ async fn monitor_and_usage_through_the_tool_path() {
     .await;
     assert!(!err, "{text}");
     assert!(text.contains("| n:bigint |"), "{text}");
+}
+
+/// Acceptance R1-AD-2: a link in `--data` whose target is elsewhere is not a table, and the other
+/// tables still answer (every call failed with the path policy's refusal of the link's target).
+#[cfg(unix)]
+#[tokio::test]
+async fn a_link_that_leaves_the_data_directory_is_left_out() {
+    let (d, t) = fixture();
+    let data = d.path().join("data");
+    // A table directory and one of its part files, both outside `--data`.
+    let elsewhere = d.path().join("elsewhere");
+    std::fs::rename(data.join("nums"), &elsewhere).unwrap();
+    let s = Session::new().unwrap();
+    futures::executor::block_on(async {
+        let df = s.sql("SELECT id FROM range(1, 8)").await.unwrap();
+        df.write()
+            .mode("overwrite")
+            .format("parquet")
+            .save(data.join("seven").to_str().unwrap())
+            .await
+            .unwrap();
+    });
+    let part = std::fs::read_dir(&elsewhere)
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .find(|p| p.extension().is_some_and(|x| x == "parquet"))
+        .unwrap();
+    std::os::unix::fs::symlink(&elsewhere, data.join("linked_dir")).unwrap();
+    std::os::unix::fs::symlink(&part, data.join("linked_file.parquet")).unwrap();
+
+    let (text, err) = call(&t, "list_tables", json!({})).await;
+    assert!(!err && text.contains("seven"), "{text}");
+    for name in ["linked_dir", "linked_file"] {
+        assert!(
+            text.contains(&format!(
+                "-- not served: {name} (a link that leaves the --data directory)\n"
+            )),
+            "{text}"
+        );
+    }
+    let (text, err) = call(&t, "search_tables", json!({"pattern": "sev*"})).await;
+    assert!(!err && text.contains("-- not served: linked_dir"), "{text}");
+    let (text, err) = call(
+        &t,
+        "run_query",
+        json!({"sql": "SELECT count(*) AS n FROM seven"}),
+    )
+    .await;
+    assert!(!err && text.contains("| 7 |"), "{text}");
+    // A query's answer does not carry the list, and the link is no table.
+    assert!(!text.contains("not served"), "{text}");
+    let (text, err) = call(
+        &t,
+        "run_query",
+        json!({"sql": "SELECT count(*) AS n FROM linked_dir"}),
+    )
+    .await;
+    assert!(err && text.contains("TABLE_OR_VIEW_NOT_FOUND"), "{text}");
+}
+
+/// A link that stays inside `--data` is a table like any other.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_link_inside_the_data_directory_is_a_table() {
+    let (d, t) = fixture();
+    let data = d.path().join("data");
+    std::os::unix::fs::symlink(data.join("nums"), data.join("alias")).unwrap();
+    let (text, err) = call(&t, "list_tables", json!({})).await;
+    assert!(!err && !text.contains("not served"), "{text}");
+    let (text, err) = call(
+        &t,
+        "run_query",
+        json!({"sql": "SELECT count(*) AS n FROM alias"}),
+    )
+    .await;
+    assert!(!err && text.contains("| 50 |"), "{text}");
+}
+
+/// An entry that cannot be read as Parquet is left out with its error class; the other tables
+/// still answer.
+#[tokio::test]
+async fn an_unreadable_entry_does_not_fail_the_other_tables() {
+    let (d, t) = fixture();
+    std::fs::write(d.path().join("data").join("broken.parquet"), "not parquet").unwrap();
+    let (text, err) = call(&t, "list_tables", json!({})).await;
+    assert!(!err && text.contains("nums"), "{text}");
+    assert!(
+        text.contains("-- not served: broken (it cannot be read: "),
+        "{text}"
+    );
+    let (text, err) = call(
+        &t,
+        "run_query",
+        json!({"sql": "SELECT count(*) AS n FROM nums"}),
+    )
+    .await;
+    assert!(!err && text.contains("| 50 |"), "{text}");
+}
+
+/// Acceptance R1-AD-3: `sql_reference` takes a pattern, and prints the argument counts in Spark's
+/// words (it printed the Rust debug form of the arity).
+#[tokio::test]
+async fn sql_reference_finds_by_pattern_and_prints_plain_arities() {
+    let (_d, t) = fixture();
+    let lines = |text: &str| -> Vec<String> {
+        text.lines()
+            .filter(|l| !l.starts_with("--"))
+            .map(|l| l.split(" | ").next().unwrap_or_default().to_owned())
+            .collect()
+    };
+    let (text, err) = call(&t, "sql_reference", json!({"function": "date*"})).await;
+    assert!(!err, "{text}");
+    let names = lines(&text);
+    assert!(names.iter().any(|n| n == "date_add"), "{text}");
+    assert!(names.iter().all(|n| n.starts_with("date")), "{text}");
+
+    let (text, _) = call(&t, "sql_reference", json!({"function": "%TRUNC%"})).await;
+    let names = lines(&text);
+    assert!(
+        names.iter().any(|n| n == "date_trunc") && names.iter().any(|n| n == "trunc"),
+        "{text}"
+    );
+    assert!(names.iter().all(|n| n.contains("trunc")), "{text}");
+
+    let (text, _) = call(&t, "sql_reference", json!({"function": "abs|to_dat*"})).await;
+    assert_eq!(lines(&text), ["abs", "to_date"], "{text}");
+
+    // Without a pattern character: every name that contains the text.
+    let (text, _) = call(&t, "sql_reference", json!({"function": "trunc"})).await;
+    assert!(lines(&text).iter().any(|n| n == "date_trunc"), "{text}");
+
+    let (text, _) = call(&t, "sql_reference", json!({"function": "abs|"})).await;
+    assert!(text.contains("abs | Scalar | 1 | true\n"), "{text}");
+    assert!(!text.contains("Arity"), "{text}");
+    let (text, _) = call(&t, "sql_reference", json!({})).await;
+    assert!(!text.contains("Arity {"), "{text}");
 }

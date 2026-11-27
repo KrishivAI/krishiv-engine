@@ -20,6 +20,10 @@ pub(super) fn qualified_namespace_location(
         }
         .into());
     }
+    // On Windows a schemeless location is a local path with `\` as `/` (Hadoop's `normalizePath`), and a
+    // drive (`C:\x`, `\\?\C:\x`) is absolute, never a scheme `C`.
+    let local = windows_local(location)?;
+    let location = local.as_deref().unwrap_or(location);
     let scheme = location.split_once(':').filter(|(s, _)| {
         s.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
             && s.chars()
@@ -39,10 +43,12 @@ pub(super) fn qualified_namespace_location(
         },
         // Only a relative location needs the warehouse (and may create its directory).
         None if location.starts_with('/') => ("file:".to_owned(), location.to_owned()),
-        None => (
-            "file:".to_owned(),
-            warehouse()?.join(location).display().to_string(),
-        ),
+        None => {
+            let joined = warehouse()?.join(location).display().to_string();
+            // `Path::join` puts a `\` before the location on Windows; the URI's separator is `/`.
+            let joined = windows_local(&joined)?.unwrap_or(joined);
+            ("file:".to_owned(), joined)
+        }
     };
     let mut parts: Vec<&str> = Vec::new();
     for segment in path.split('/') {
@@ -51,7 +57,16 @@ pub(super) fn qualified_namespace_location(
             // Java's `URI.normalize` keeps a `..` that has nothing left to remove: `/../x` is
             // `file:/../x` (Spark 4.2.0).
             ".." => {
-                if parts.last().is_some_and(|p| *p != "..") {
+                // A Windows drive (`/C:/..`) is the root of its path: a `..` never removes it.
+                let drive = |p: &str| {
+                    cfg!(windows)
+                        && prefix == "file:"
+                        && parts.len() == 1
+                        && p.len() == 2
+                        && p.as_bytes()[0].is_ascii_alphabetic()
+                        && p.ends_with(':')
+                };
+                if parts.last().is_some_and(|p| *p != ".." && !drive(p)) {
                     parts.pop();
                 } else {
                     parts.push("..");
@@ -70,4 +85,61 @@ pub(super) fn qualified_namespace_location(
         });
     }
     Ok(format!("{prefix}/{}", parts.join("/")))
+}
+
+/// On Windows, a location without a URL scheme in the form the locator reads: separators `/`, a drive
+/// (`C:\x`, `C:/x`, verbatim `\\?\C:\x`) led by `/` (`/C:/x`); `None` for a URL and on every other
+/// platform.
+///
+/// # Errors
+/// `KRISHIV_UNSUPPORTED_FEATURE` for a UNC, device or verbatim location that is not a drive
+/// (`\\srv\share\x`, `\\?\UNC\..`, `\\.\C:\x`, `\\?\Volume{..}\x`) and a drive-relative one (`C:x`): none is
+/// placed in the warehouse or on the current drive.
+fn windows_local(text: &str) -> Result<Option<String>, krishiv_common::error::KrishivError> {
+    if cfg!(windows) {
+        windows_form(text)
+    } else {
+        Ok(None)
+    }
+}
+
+/// [`windows_local`]'s rule on any platform (tested everywhere).
+pub(super) fn windows_form(
+    text: &str,
+) -> Result<Option<String>, krishiv_common::error::KrishivError> {
+    let scheme = text.split_once(':').map(|(s, _)| s).filter(|s| {
+        s.len() > 1
+            && s.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
+            && s.chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+    });
+    match scheme {
+        // Hadoop's `normalizePath` replaces `\` in a `file:` URL too (`file:C:\x`, `file:///C:\x`).
+        Some(s) if s.eq_ignore_ascii_case("file") => return Ok(Some(text.replace('\\', "/"))),
+        Some(_) => return Ok(None),
+        None => {}
+    }
+    let slashed = text.replace('\\', "/");
+    let led = slashed.strip_prefix("//?/").unwrap_or(&slashed);
+    let refuse = |what: &str| {
+        krishiv_common::error::KrishivError::from(
+            krishiv_common::error::KrishivUnsupportedFeature {
+                feature: format!("{what} namespace locations"),
+            },
+        )
+    };
+    let b = led.as_bytes();
+    if b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b':' {
+        // `C:` alone and `C:x` are relative to the drive's current directory.
+        if b.len() == 2 || b[2] != b'/' {
+            return Err(refuse("drive-relative"));
+        }
+        return Ok(Some(format!("/{led}")));
+    }
+    // Every other `\\` lead is no local drive path: a UNC share (`\\srv\share`, `\\?\UNC\..` in any case),
+    // a device (`\\.\C:`) or a verbatim volume (`\\?\Volume{..}`, `\\?\GLOBALROOT`).
+    if slashed.starts_with("//") {
+        return Err(refuse("UNC, device or verbatim"));
+    }
+    Ok(Some(slashed))
 }

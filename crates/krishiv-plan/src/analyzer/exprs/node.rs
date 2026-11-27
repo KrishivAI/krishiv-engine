@@ -59,13 +59,49 @@ impl Resolver<'_> {
         let args: Vec<Arc<Expr>> = kids.iter().map(|k| Arc::clone(&k.expr)).collect();
         let mut b = match &e.node {
             ExprNode::Column(c) => self.column(c, e.origin, in_agg, cx)?,
-            ExprNode::Literal(
-                Literal::YearMonthInterval { .. } | Literal::DayTimeInterval { .. },
-            ) if self.ctx.conf.legacy_interval => {
-                return Err(unsupported(
-                    "interval literals under spark.sql.legacy.interval.enabled",
-                    e.origin,
-                ));
+            // Under `spark.sql.legacy.interval.enabled` an interval literal is a calendar interval
+            // (Spark's `Literal(CalendarInterval)`): months, whole days only when the leading field
+            // is `DAY`, and the rest as microseconds.
+            ExprNode::Literal(Literal::YearMonthInterval { months, .. })
+                if self.ctx.conf.legacy_interval =>
+            {
+                let lit = Literal::CalendarInterval {
+                    months: *months,
+                    days: 0,
+                    micros: 0,
+                };
+                let ty = literal_type(&lit);
+                Bound {
+                    expr: rebuilt(ExprNode::Literal(lit)),
+                    ..keep(ArgType {
+                        nullable: false,
+                        data_type: ty,
+                    })
+                }
+            }
+            ExprNode::Literal(Literal::DayTimeInterval { micros, start, .. })
+                if self.ctx.conf.legacy_interval =>
+            {
+                const DAY: i64 = 86_400_000_000;
+                let (days, micros) = if *start == krishiv_types::DayTimeField::Day {
+                    (micros / DAY, micros % DAY)
+                } else {
+                    (0, *micros)
+                };
+                let lit = Literal::CalendarInterval {
+                    months: 0,
+                    // At most about 1.07e8 days (the day-time interval range), far inside `i32`.
+                    days: i32::try_from(days).unwrap_or(i32::MAX),
+                    micros,
+                };
+                let ty = literal_type(&lit);
+                Bound {
+                    expr: rebuilt(ExprNode::Literal(lit)),
+                    ..keep(ArgType {
+                        nullable: false,
+                        data_type: ty,
+                    })
+                }
             }
             // A string literal in the text of a view with a `DEFAULT COLLATION` takes it.
             ExprNode::Literal(Literal::String(_))
@@ -98,9 +134,9 @@ impl Resolver<'_> {
             // the clock; they bind as the clock calls they stand for (the
             // query-start instant), `epoch` as a constant.
             ExprNode::TypedLiteral { kind, value }
-                if *kind != TypedLiteralKind::Time && is_special(value) =>
+                if *kind != TypedLiteralKind::Time
+                    && let Some(special) = special_value(value) =>
             {
-                let special = value.trim().to_ascii_lowercase();
                 if special == "epoch" {
                     let text = match special_kind(*kind, self.ctx.conf.timestamp_ntz) {
                         SpecialKind::Date => "1970-01-01",
@@ -117,9 +153,8 @@ impl Resolver<'_> {
                         ..keep(ty)
                     });
                 }
-                let call =
-                    special_clock(&special, special_kind(*kind, self.ctx.conf.timestamp_ntz))
-                        .with_origin(e.origin);
+                let call = special_clock(special, special_kind(*kind, self.ctx.conf.timestamp_ntz))
+                    .with_origin(e.origin);
                 return self.expr(&Arc::new(call), cx);
             }
             // `TIMESTAMP '11:00'`: that time today, in the session zone (Spark reads a time of day alone
@@ -1627,7 +1662,12 @@ impl Resolver<'_> {
                     ));
                 }
                 let child = &kids[0].ty;
-                if let Err(bad) = coerce::can_cast(child.data_type.as_ref(), to, mode) {
+                if let Err(bad) = coerce::can_cast(
+                    child.data_type.as_ref(),
+                    to,
+                    mode,
+                    self.ctx.profile >= crate::analyzer::SparkProfile::V4_3,
+                ) {
                     return Err(bad_cast(
                         bad,
                         e.origin,
@@ -1635,7 +1675,6 @@ impl Resolver<'_> {
                         to,
                         mode,
                         self.ctx.conf.session_zone,
-                        self.ctx.profile >= crate::analyzer::SparkProfile::V4_3,
                     ));
                 }
                 let nullable = child.nullable

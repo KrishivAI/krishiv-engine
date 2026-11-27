@@ -34,7 +34,6 @@ use krishiv_types::batch::Batch;
 
 use super::{HEADROOM, Run, Spiller, Table, bump, chunks, writer_panicked};
 use crate::error::Result;
-use crate::hash::PARTITIONS;
 
 /// Writers of one run at most, the calling thread included.
 pub(super) const MAX_WRITERS: usize = 8;
@@ -124,7 +123,7 @@ impl Spiller {
         partition: u32,
     ) -> Result<Run> {
         let started = std::time::Instant::now();
-        let mut files: Vec<Option<SpillFile>> = (0..PARTITIONS).map(|_| None).collect();
+        let mut files: Vec<Option<SpillFile>> = (0..parts.len()).map(|_| None).collect();
         let todo: Vec<usize> = (0..parts.len()).filter(|&p| !parts[p].is_empty()).collect();
         let helpers = self.helpers(table.memory_size(), todo.len());
         let next = AtomicUsize::new(0);

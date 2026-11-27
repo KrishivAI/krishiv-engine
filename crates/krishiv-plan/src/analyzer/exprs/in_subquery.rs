@@ -333,6 +333,18 @@ impl Resolver<'_> {
                 data_type: quoted_type(Some(&t)),
             }
             .into(),
+            // Spark's implicit cast of the argument, refused: its message names the argument.
+            Mismatch::ImplicitCast { arg, from, to } => super::literals::cast_mismatch(
+                BadCast::Without,
+                format!(
+                    "\"{}\"",
+                    kids.get(arg)
+                        .map(|k| pretty(&k.shown(), zone))
+                        .unwrap_or_default()
+                ),
+                quoted_type(Some(&from)),
+                quoted_type(Some(&to)),
+            ),
             Mismatch::Unsupported(what) => return unsupported(what, origin),
         };
         AnalysisError::new(error, origin)

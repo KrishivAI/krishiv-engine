@@ -132,6 +132,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         "krishiv.delta.maxCommitAttempts",
         &DELTA_MAX_COMMIT_ATTEMPTS,
     ),
+    ("krishiv.exec.dataflowScheduling", &EXEC_DATAFLOW_SCHEDULING),
     (
         "krishiv.io.coalesceWasteDivisor",
         &IO_COALESCE_WASTE_DIVISOR,
@@ -193,6 +194,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &MEMORY_RELEASE_AT_QUERY_END,
     ),
     ("krishiv.optimizer.joinEnumerator", &JOIN_ENUMERATOR),
+    ("krishiv.optimizer.joinPruneFirst", &JOIN_PRUNE_FIRST),
     (
         "krishiv.server.readiness.timeout",
         &SERVER_READINESS_TIMEOUT,
@@ -364,6 +366,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.optimizer.derivedKeysAbove", &DERIVED_KEYS_ABOVE),
     ("krishiv.optimizer.eagerAggregation", &EAGER_AGGREGATION),
     ("krishiv.optimizer.ndvSampling.rows", &NDV_SAMPLING_ROWS),
+    ("krishiv.optimizer.rollupFromParent", &ROLLUP_FROM_PARENT),
     ("krishiv.optimizer.subqueryAsWindow", &SUBQUERY_AS_WINDOW),
     (
         "krishiv.python.worker.maxPerTenant",
@@ -470,6 +473,14 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.runtimeFilter.bloom.maxItems",
         &RUNTIME_FILTER_BLOOM_MAX_ITEMS,
+    ),
+    (
+        "krishiv.runtimeFilter.residualBounds",
+        &RUNTIME_FILTER_RESIDUAL_BOUNDS,
+    ),
+    (
+        "krishiv.runtimeFilter.smallTableWait",
+        &RUNTIME_FILTER_SMALL_TABLE_WAIT,
     ),
     (
         "krishiv.sql.legacy.codingErrorAction",

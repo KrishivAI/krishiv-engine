@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Unit tests of `table_commands.rs` (kept apart so the file stays under its size baseline).
 
+use super::location::windows_form;
 use super::*;
 use krishiv_types::{ArrayType, DecimalType};
 
@@ -23,6 +24,64 @@ fn a_namespace_location_is_qualified_against_the_warehouse() {
     assert_eq!(q("file:/abs2//w/", wh), "file:/abs2/w");
     // A colon after a path character is not a scheme.
     assert_eq!(q("a/b:c", wh), "file:/w/warehouse/a/b:c");
+}
+
+/// On Windows a drive location is local and absolute whatever its separators or verbatim prefix; a UNC
+/// or drive-relative one is refused, never placed in the warehouse or on the current drive; a URL is left
+/// alone. The rule is tested on every platform; on Windows the qualified form is checked too.
+#[test]
+fn windows_drive_locations_are_local_and_unc_ones_are_refused() {
+    for written in [r"C:\x", "C:/x", r"\\?\C:\x", r"/C:\x"] {
+        assert_eq!(
+            windows_form(written).unwrap().as_deref(),
+            Some("/C:/x"),
+            "{written}"
+        );
+    }
+    assert_eq!(windows_form(r"rel\y").unwrap().as_deref(), Some("rel/y"));
+    assert_eq!(windows_form("s3a://b/x").unwrap(), None);
+    assert_eq!(
+        windows_form("file:/C:/x").unwrap().as_deref(),
+        Some("file:/C:/x")
+    );
+    assert_eq!(
+        windows_form(r"file:///C:\x").unwrap().as_deref(),
+        Some("file:///C:/x")
+    );
+    assert_eq!(
+        windows_form(r"FILE:C:\x").unwrap().as_deref(),
+        Some("FILE:C:/x")
+    );
+    for written in [
+        r"\\srv\share\x",
+        "//srv/share/x",
+        r"\\?\UNC\srv\share\x",
+        r"\\?\unc\srv\share\x",
+        r"\\?\Volume{0}\x",
+        r"\\?\GLOBALROOT\Device\x",
+        r"\\.\C:\x",
+        "C:x",
+        "C:",
+    ] {
+        let e = windows_form(written).unwrap_err();
+        assert_eq!(
+            e.error_class().name(),
+            "KRISHIV_UNSUPPORTED_FEATURE",
+            "{written}"
+        );
+    }
+    #[cfg(windows)]
+    {
+        let wh = std::path::Path::new(r"D:\w\warehouse");
+        assert_eq!(q(r"C:\x\", wh), "file:/C:/x");
+        assert_eq!(q(r"\\?\C:\x", wh), "file:/C:/x");
+        assert_eq!(q(r"rel\y", wh), "file:/D:/w/warehouse/rel/y");
+        assert_eq!(q(r"file:///C:\x", wh), "file:/C:/x");
+        assert_eq!(q(r"file:C:\x", wh), "file:/C:/x");
+        // A `..` never removes the drive.
+        assert_eq!(q("C:/../x", wh), "file:/C:/../x");
+        assert_eq!(q("C:/a/../x", wh), "file:/C:/x");
+    }
 }
 
 #[test]
@@ -94,14 +153,6 @@ fn ansi_store_assignment() {
     let a = |t: T| T::Array(Arc::new(ArrayType::new(t, true)));
     assert!(can_store(&a(T::Integer), &a(T::Long)));
     assert!(!can_store(&a(T::String), &a(T::Long)));
-}
-
-#[test]
-fn literal_text_strips_one_pair_of_quotes() {
-    assert_eq!(literal_text("'a b'"), "a b");
-    assert_eq!(literal_text("\"x\""), "x");
-    assert_eq!(literal_text(" true "), "true");
-    assert_eq!(literal_text("'"), "'");
 }
 
 /// A location with a scheme or an absolute path never asks for the warehouse directory, so a

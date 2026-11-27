@@ -95,6 +95,7 @@ impl CatalogFactory for Fake {
         if n < self.fail_first {
             return Err(krishiv_common::error::KrishivCatalogFailure {
                 catalog: decl.name.clone(),
+                reason: "test".to_owned(),
                 relation_name: "the catalog".to_owned(),
             }
             .into());
@@ -367,6 +368,9 @@ fn sql_namespace_commands_never_answer_for_a_declared_catalog() {
         "ALTER NAMESPACE default SET DBPROPERTIES ('k' = 'v')",
         "USE NAMESPACE default",
         "USE default",
+        "USE NAMESPACE a.b",
+        "USE SCHEMA spark_catalog.default",
+        "USE nocat.b",
         "CREATE TABLE t2 (a INT) USING parquet",
         "CREATE TABLE default.t3 (a INT) USING parquet",
         "CREATE VIEW v1 AS SELECT 1 AS a",

@@ -99,6 +99,9 @@ fn cell(c: &dyn Array, row: usize) -> String {
         DataType::Int32 => c.as_primitive::<Int32Type>().value(row).to_string(),
         DataType::Int64 => c.as_primitive::<Int64Type>().value(row).to_string(),
         DataType::Utf8 => c.as_string::<i32>().value(row).to_owned(),
+        // A string key merged from a parent set (`RollupFromParent`) rides on
+        // the aggregate's `Utf8View` carrier; Connect hands clients `Utf8`.
+        DataType::Utf8View => c.as_string_view().value(row).to_owned(),
         DataType::Boolean => c.as_boolean().value(row).to_string(),
         DataType::Float64 => format!("{:?}", c.as_primitive::<Float64Type>().value(row)),
         other => format!("<{other}>"),

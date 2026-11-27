@@ -155,6 +155,10 @@ mod tests;
 pub mod udtf;
 mod walk;
 
+/// The helper column a `NEAREST BY` join's lowering gives each left row (its id); the analyzer finds the
+/// join's ranking window by it.
+pub const NEAREST_BY_ID_COLUMN: &str = "__nearest_qid__";
+
 /// The option key under which a table reference's time-travel clause (`VERSION AS OF`, `@v1`, ...)
 /// rides on its read: no table reads an older version yet, so the session refuses it when the
 /// relation resolves.
@@ -211,6 +215,7 @@ pub use python::{
     plan_is_deterministic, python_relation_is_deterministic,
 };
 pub use raises::{
-    conjuncts, exact_decimal, has_subquery, is_deterministic, leakproof, may_raise, runs_on_any_row,
+    conjuncts, decimal_never_raises, exact_decimal, has_subquery, is_deterministic, leakproof,
+    may_raise, runs_on_any_row,
 };
 pub use walk::{MAX_DEPTH, check_depth};

@@ -107,6 +107,22 @@ fn query(pool: &Arc<TreePool>, id: u64) -> Arc<QueryContext> {
     )
 }
 
+/// As [`query`] for the long runs whose stalls are counted: off Unix a stall is counted but does not
+/// fail the query (no thread wait time to subtract, so a preempted poll reads as one), so the run
+/// completes and its rows, yields and memory are still checked.
+fn counting_query(pool: &Arc<TreePool>, id: u64) -> Arc<QueryContext> {
+    QueryContext::new(
+        QueryId(id),
+        WorkloadClass::Interactive,
+        ExecConfig {
+            fail_on_stall: cfg!(unix),
+            stall_threshold: stall_threshold(),
+            ..ExecConfig::default()
+        },
+        pool.child(&format!("q{id}"), None),
+    )
+}
+
 fn executor(threads: usize) -> Arc<TokioExecutor> {
     TokioExecutor::new(&ExecutorConfig {
         compute_threads: threads,
@@ -173,12 +189,23 @@ fn overloaded() -> bool {
     load > 2.0 * cores
 }
 
-/// Reports a stall in `what` as excused (and says why) when the machine is [`overloaded`].
+/// Reports a stall in `what` as excused (and says why) when the machine is [`overloaded`] or the
+/// platform has no thread wait time to subtract (not Unix).
 #[expect(
     clippy::print_stderr,
     reason = "a skipped bound is said aloud in the test output"
 )]
 fn excused_by_load(what: &str) -> bool {
+    // Off Unix the driver has no per-thread run-queue wait to subtract (no
+    // `/proc/thread-self/schedstat`), so a poll's slice is its wall time and a
+    // preempted poll on a shared runner reads as a stall; nor is there a load
+    // average to tell. The bound is a Unix measurement.
+    if cfg!(not(unix)) {
+        eprintln!(
+            "{what}: a stalled poll is not counted: this platform reports no thread wait time"
+        );
+        return true;
+    }
     let excused = overloaded();
     if excused {
         eprintln!(
@@ -726,7 +753,7 @@ fn tpch_suite_counts_no_stalls() {
             )
             .unwrap_or_else(|e| panic!("q{q:02}: {e}"));
         let worker = WorkerContext::new(Arc::clone(&tables) as _);
-        let query = query(&pool, u64::try_from(q).unwrap());
+        let query = counting_query(&pool, u64::try_from(q).unwrap());
         let start = Instant::now();
         let out = rt.block_on(async {
             let mut stream = runner.submit(physical, worker, Arc::clone(&query)).await?;
@@ -861,7 +888,7 @@ async fn a_very_large_batch_is_processed_in_chunks() {
     // extra outputs.
     let runner = QueryRunner::new(executor(2));
     let pool = root(1 << 30);
-    let q = query(&pool, 1);
+    let q = counting_query(&pool, 1);
     let (schema, batch) = big_batch(ROWS);
     let scan = Arc::new(Scan(krishiv_exec::testing::Batches::new(
         schema,

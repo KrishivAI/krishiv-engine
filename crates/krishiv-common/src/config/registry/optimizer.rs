@@ -56,6 +56,26 @@ pub static PRESERVED_SIDE_SEMI_JOIN: ConfigEntry = ConfigEntry {
     spark_alias: None,
 };
 
+/// Whether the join orderer plans the block across a clustered composite-key edge before the
+/// largest input, when that costs at most a few times the cheapest order.
+pub static JOIN_PRUNE_FIRST: ConfigEntry = ConfigEntry {
+    key: "krishiv.optimizer.joinPruneFirst",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(true)),
+    doc: "In an inner-join tree whose largest input joins another input on two or more columns, \
+          one of them clustered in the largest input's files (each row group spans at most a \
+          sixteenth of the column's range), plan the inputs on the other side of that join \
+          first and join the largest input to their result last, when the estimated cost is \
+          at most 4 times the cheapest order's (TPC-DS q17, q25, q29). A composite-key \
+          estimate cannot tell a foreign key from a many-to-many match, and the runtime filter \
+          from the planned side then skips most of the largest input's row groups. Results \
+          are the same either way; `false` turns it off.",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
+    version_added: "0.3.1",
+    spark_alias: None,
+};
+
 /// Whether a subtree the main block and a subquery both read is computed once.
 pub static SHARE_REPEATED_SUBTREES: ConfigEntry = ConfigEntry {
     key: "krishiv.optimizer.shareRepeatedSubtrees",
@@ -84,6 +104,25 @@ pub static SHARE_FILTERED_SCANS: ConfigEntry = ConfigEntry {
     scope: Scope::Session,
     settable_by: SettableBy::User,
     version_added: "0.3.0",
+    spark_alias: None,
+};
+
+/// The grouping sets of a pre-aggregated expansion are each computed from
+/// a computed parent set (`krishiv.optimizer.rollupFromParent`,
+/// perf lever F-C2).
+pub static ROLLUP_FROM_PARENT: ConfigEntry = ConfigEntry {
+    key: "krishiv.optimizer.rollupFromParent",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(true)),
+    doc: "Compute each grouping set of a `ROLLUP`, `CUBE` or `GROUPING SETS` aggregate from the \
+          already aggregated states of a finer set, instead of from every input row \
+          (TPC-DS q67), when statistics say the finest set barely reduces its input. The sets read \
+          by more than one coarser set are stored, charged to the query's memory and spilled to \
+          disk under pressure. Needs `krishiv.sql.optimizer.shareCteInstances`. Results are the \
+          same either way; `false` turns it off.",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
+    version_added: "0.3.1",
     spark_alias: None,
 };
 

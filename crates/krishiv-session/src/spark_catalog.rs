@@ -111,7 +111,7 @@ fn parts(name: &str) -> Vec<String> {
 /// `key=value` directories, following the first one at each level. Empty for a path that is not a local
 /// directory.
 fn partition_keys(location: &str) -> Vec<String> {
-    let mut dir = std::path::PathBuf::from(location.strip_prefix("file:").unwrap_or(location));
+    let mut dir = krishiv_exec::files::native_path(location);
     let mut keys: Vec<String> = Vec::new();
     loop {
         let Ok(entries) = std::fs::read_dir(&dir) else {
@@ -328,7 +328,7 @@ impl Catalog<'_> {
                 } else {
                     wh.join(format!("{name}.db"))
                 };
-                format!("file:{}", dir.display())
+                krishiv_exec::files::file_display(&dir)
             }),
         }
     }
@@ -445,10 +445,28 @@ impl Catalog<'_> {
         }
     }
 
-    /// `SCHEMA_NOT_FOUND` for the namespace `name`.
+    /// `SCHEMA_NOT_FOUND` for the namespace `name`. A leading `spark_catalog` of a name of two or
+    /// more parts is the catalog, at every length; every other part is kept (Spark 4.3.0:
+    /// `getDatabase("a.b")` names `` `spark_catalog`.`a`.`b` ``, `getDatabase("spark_catalog.a.b")`
+    /// the same, `getDatabase("nocat.a.b")` `` `spark_catalog`.`nocat`.`a`.`b` `` and
+    /// `` getDatabase("`a.b`") `` `` `spark_catalog`.`a.b` ``).
     fn database_not_found(name: &str) -> KrishivError {
+        let p = parts(name);
+        let namespace = match p.as_slice() {
+            [cat, rest @ ..]
+                if !rest.is_empty() && cat.eq_ignore_ascii_case(crate::catalog::CATALOG) =>
+            {
+                rest
+            }
+            all => all,
+        };
+        if let [one] = namespace {
+            return crate::catalog::schema_not_found(one);
+        }
+        let mut all = vec![quote(crate::catalog::CATALOG)];
+        all.extend(namespace.iter().map(|part| quote(part)));
         krishiv_common::error::SchemaNotFound {
-            schema_name: quote(&Self::bare_database(name)),
+            schema_name: all.join("."),
         }
         .into()
     }
@@ -460,9 +478,9 @@ impl Catalog<'_> {
             [cat, _] if self.is_declared(cat) => return Err(Self::refuse_declared(cat)),
             _ => {}
         }
-        let bare = Self::bare_database(name);
-        let name = bare.as_str();
-        let want = self.fold(name);
+        // The error names `name` as written: its parts are read again there, and the bare form of
+        // a quoted name with a dot would read as two parts.
+        let want = self.fold(&Self::bare_database(name));
         self.session
             .state
             .catalog

@@ -22,10 +22,17 @@ const WORKER_STACK: usize = 2 << 20;
 /// frame size; scale the stack so the same nesting fits.
 const INSTRUMENTED_STACK: usize = 16 << 20;
 
+/// Stack for the same nesting where the MSVC frames are larger.
+const WINDOWS_STACK: usize = 8 << 20;
+
 /// The stack size [`on_small_stack`] uses given the profile-file variable.
 pub(super) fn small_stack_size(profile_file: Option<&std::ffi::OsStr>) -> usize {
     if profile_file.is_some() {
         INSTRUMENTED_STACK
+    } else if cfg!(windows) {
+        // MSVC frames of the resolver and the traversals are larger than the
+        // Linux ones the depth cap was sized on.
+        WINDOWS_STACK
     } else {
         WORKER_STACK
     }
@@ -47,7 +54,12 @@ pub(super) fn on_small_stack(f: impl FnOnce() + Send + 'static) {
 #[test]
 fn instrumented_builds_get_a_larger_stack() {
     use std::ffi::OsStr;
-    assert_eq!(small_stack_size(None), 2 << 20);
+    let plain = if cfg!(windows) {
+        WINDOWS_STACK
+    } else {
+        WORKER_STACK
+    };
+    assert_eq!(small_stack_size(None), plain);
     assert_eq!(small_stack_size(Some(OsStr::new("x.profraw"))), 16 << 20);
 }
 

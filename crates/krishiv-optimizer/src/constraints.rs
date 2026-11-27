@@ -34,8 +34,10 @@
 //! already implies is never added again ([`held`]), so a second `optimize`
 //! adds nothing.
 
+use crate::expr::AttrMap;
+use crate::expr::{AddrMap, AddrSet};
+use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
-use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
@@ -87,7 +89,7 @@ pub(crate) fn infer_join_filters(node: Arc<LogicalPlan>, memo: &mut Memo) -> Arc
         sources.extend(memo.constraints(right).iter().cloned());
     }
     let mut classes = Classes::default();
-    let mut members: HashMap<AttrId, Vec<AttrId>> = HashMap::new();
+    let mut members: AttrMap<Vec<AttrId>> = AttrMap::default();
     for s in &sources {
         if let Some([a, b]) = equality(s) {
             classes.union([a.id, b.id]);
@@ -97,7 +99,7 @@ pub(crate) fn infer_join_filters(node: Arc<LogicalPlan>, memo: &mut Memo) -> Arc
         }
     }
     let ids_of: Vec<AttrId> = members.keys().copied().collect();
-    let mut by_root: HashMap<AttrId, Vec<AttrId>> = HashMap::new();
+    let mut by_root: AttrMap<Vec<AttrId>> = AttrMap::default();
     for id in ids_of {
         by_root.entry(classes.find(id)).or_default().push(id);
     }
@@ -141,20 +143,20 @@ pub(crate) fn infer_join_filters(node: Arc<LogicalPlan>, memo: &mut Memo) -> Arc
     // or from one `isnotnull` source of its class (a join chain puts every
     // key in one class, and each of its `isnotnull` filters would otherwise
     // be moved onto every member).
-    let mut nn_done: HashSet<AttrId> = HashSet::new();
+    let mut nn_done: Attrs = Attrs::default();
     for k in keys {
         nn_done.insert(k.id);
         push(k.id, is_not_null_of(k));
     }
     // The column each class member's `=` writes (once, not per member).
-    let mut cols: HashMap<AttrId, &BoundColumn> = HashMap::new();
+    let mut cols: AttrMap<&BoundColumn> = AttrMap::default();
     for s in &sources {
         if let Some([a, b]) = equality(s) {
             cols.entry(a.id).or_insert(a);
             cols.entry(b.id).or_insert(b);
         }
     }
-    let mut nn_classes: HashSet<AttrId> = HashSet::new();
+    let mut nn_classes: Attrs = Attrs::default();
     // The class's literal constraints, moved onto its other members.
     for s in &sources {
         let Some(on) = literal_constraint(s) else {
@@ -179,7 +181,7 @@ pub(crate) fn infer_join_filters(node: Arc<LogicalPlan>, memo: &mut Memo) -> Arc
                 push(m, is_not_null_of(to));
                 continue;
             }
-            let map = HashMap::from([(on, column(to))]);
+            let map = AttrMap::from_iter([(on, column(to))]);
             push(m, substitute(s, &map));
         }
     }
@@ -265,14 +267,27 @@ fn held_under(
                 grouping: Grouping::GroupBy(keys),
                 aggregates,
             } if !keys.is_empty() && aggregates.iter().all(|e| is_deterministic(e)) => {
-                let (defs, calls): (HashMap<AttrId, Arc<Expr>>, HashMap<AttrId, Arc<Expr>>) =
-                    alias_map(aggregates)
-                        .into_iter()
-                        .partition(|(_, e)| !has_aggregate(e));
+                let (defs, calls): (AttrMap<Arc<Expr>>, AttrMap<Arc<Expr>>) = alias_map(aggregates)
+                    .into_iter()
+                    .partition(|(_, e)| !has_aggregate(e));
                 // Not over an aggregate call's result.
                 let passes = |e: &Arc<Expr>| references(e).iter().all(|id| !calls.contains_key(id));
                 if passes(&p) {
                     stack.push((input, substitute(&p, &defs), Vec::new()));
+                }
+            }
+            // Eager aggregation's partial aggregate outputs its key columns
+            // as they are (same ids): what holds of them below holds above.
+            PlanNode::PartialAggregate { input, keys, .. } if !keys.is_empty() => {
+                let key_ids: Attrs = keys
+                    .iter()
+                    .filter_map(|k| match &k.node {
+                        ExprNode::Resolved(ResolvedExpr::Column(c)) => Some(c.id),
+                        _ => None,
+                    })
+                    .collect();
+                if references(&p).iter().all(|id| key_ids.contains(id)) {
+                    stack.push((input, p, known));
                 }
             }
             // A positional union holds `p` when every input does, its
@@ -296,7 +311,7 @@ fn held_under(
                         if cols.len() != out.len() {
                             return false;
                         }
-                        let map: HashMap<AttrId, Arc<Expr>> = out
+                        let map: AttrMap<Arc<Expr>> = out
                             .iter()
                             .zip(cols)
                             .map(|(o, c)| (o.id, column(c)))
@@ -327,7 +342,7 @@ fn held_under(
                 if out.len() != r.output.len() {
                     continue;
                 }
-                let map: HashMap<AttrId, Arc<Expr>> = r
+                let map: AttrMap<Arc<Expr>> = r
                     .output
                     .iter()
                     .zip(&out)
@@ -481,15 +496,15 @@ type Conjuncts = Arc<[Arc<Expr>]>;
 /// lives (the plan crate's rule for address-keyed memos).
 #[derive(Default)]
 pub(crate) struct Memo {
-    constraints: HashMap<*const LogicalPlan, (Arc<LogicalPlan>, Conjuncts)>,
-    ids: HashMap<*const LogicalPlan, (Arc<LogicalPlan>, bool, Arc<Attrs>)>,
+    constraints: AddrMap<LogicalPlan, (Arc<LogicalPlan>, Conjuncts)>,
+    ids: AddrMap<LogicalPlan, (Arc<LogicalPlan>, bool, Arc<Attrs>)>,
     /// The relations of the pass's root that more than one path reaches
     /// (shared through `Arc`, subquery plans included), with whether
     /// `ShareCte` could compute them once (worked out when first asked; a
     /// scan read twice is not one). A relation the pass rebuilt points at the
     /// input relation it comes from.
-    shared: HashMap<*const LogicalPlan, (Arc<LogicalPlan>, Arc<LogicalPlan>)>,
-    worth: HashMap<*const LogicalPlan, (Arc<LogicalPlan>, bool)>,
+    shared: AddrMap<LogicalPlan, (Arc<LogicalPlan>, Arc<LogicalPlan>)>,
+    worth: AddrMap<LogicalPlan, (Arc<LogicalPlan>, bool)>,
     /// The definitions `ShareCte` added, by their output attributes (a
     /// `CteRef`'s `source`, not its name: a nested `WITH` may bind the same
     /// name again, and a body reading the outer one must not find itself):
@@ -501,7 +516,7 @@ pub(crate) struct Memo {
 /// A cheap fingerprint of `plan`'s relation tree (node kinds and shape, not
 /// expressions), memoised by address in `memo`: equal plans have equal
 /// fingerprints.
-fn shape(plan: &Arc<LogicalPlan>, memo: &mut HashMap<*const LogicalPlan, u64>) -> u64 {
+fn shape(plan: &Arc<LogicalPlan>, memo: &mut AddrMap<LogicalPlan, u64>) -> u64 {
     let mut stack = vec![(Arc::clone(plan), false)];
     while let Some((p, expanded)) = stack.pop() {
         let key = Arc::as_ptr(&p);
@@ -531,16 +546,16 @@ impl Memo {
     /// A memo for one pass over `root`, knowing which of its relations
     /// more than one path reaches.
     pub(crate) fn for_root(root: &Arc<LogicalPlan>) -> Self {
-        let mut parents: HashMap<*const LogicalPlan, (Arc<LogicalPlan>, u32)> = HashMap::new();
+        let mut parents: AddrMap<LogicalPlan, (Arc<LogicalPlan>, u32)> = Default::default();
         // The bodies of the `Shift`s (instances of one CTE or view), with how
         // many `Shift`s read each: equal bodies under two or more instances
         // are read twice even when an earlier pass rebuilt them into separate
         // `Arc`s (join ordering re-plans a join inside each copy apart).
         let mut bodies: Vec<(Arc<LogicalPlan>, u32)> = Vec::new();
-        let mut body_at: HashMap<*const LogicalPlan, usize> = HashMap::new();
+        let mut body_at: AddrMap<LogicalPlan, usize> = Default::default();
         let mut shared_defs: HashMap<Vec<AttrId>, Arc<LogicalPlan>> = HashMap::new();
         let mut stack = vec![Arc::clone(root)];
-        let mut seen: HashSet<*const LogicalPlan> = HashSet::new();
+        let mut seen: AddrSet<LogicalPlan> = Default::default();
         while let Some(p) = stack.pop() {
             if !seen.insert(Arc::as_ptr(&p)) {
                 continue;
@@ -580,7 +595,7 @@ impl Memo {
         // A child of a shared relation is reached by more than one path too,
         // but the walk in `reaches_shared` stops at the first shared node, so
         // its parent count is enough.
-        let mut shared: HashMap<*const LogicalPlan, (Arc<LogicalPlan>, Arc<LogicalPlan>)> = parents
+        let mut shared: AddrMap<LogicalPlan, (Arc<LogicalPlan>, Arc<LogicalPlan>)> = parents
             .into_iter()
             .filter(|(_, (_, n))| *n > 1)
             .map(|(k, (p, _))| (k, (Arc::clone(&p), p)))
@@ -588,7 +603,7 @@ impl Memo {
         // Twins are found by `==` within groups of equal shape (a cheap
         // fingerprint of the relation tree); `worth_sharing` is asked only of
         // a body with a twin.
-        let mut shapes: HashMap<*const LogicalPlan, u64> = HashMap::new();
+        let mut shapes: AddrMap<LogicalPlan, u64> = Default::default();
         let mut groups: HashMap<u64, Vec<(Arc<LogicalPlan>, u32)>> = HashMap::new();
         // Bodies that differ only in the filters and projections above an
         // equal core share that core (`ShareCte`), so a core with a twin is
@@ -722,7 +737,7 @@ impl Memo {
                 // though `cse_0 = c` would be one).
                 let defs = match &input.node {
                     PlanNode::Project { exprs, .. } => cse_defs(exprs),
-                    _ => HashMap::new(),
+                    _ => AttrMap::default(),
                 };
                 let mut out: Vec<_> = deterministic(predicate)
                     .map(|c| {
