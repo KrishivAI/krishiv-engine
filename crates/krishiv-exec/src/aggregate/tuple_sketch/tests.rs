@@ -19,6 +19,15 @@ fn estimate(a: &ArrayRef, row: usize) -> f64 {
     tuple::estimate(&tuple::from_bytes::<f64>(v.value(row), "t").expect("sketch"))
 }
 
+/// The `Mode::Sum` total of every retained summary of a row's sketch.
+fn summary_sum(a: &ArrayRef, row: usize) -> f64 {
+    let v = a.as_any().downcast_ref::<BinaryViewArray>().expect("view");
+    tuple::summary_double(
+        &tuple::from_bytes::<f64>(v.value(row), "t").expect("sketch"),
+        Mode::Sum,
+    )
+}
+
 fn state_of(acc: &TupleSketchAcc) -> BinaryArray {
     acc.state(&[0])
         .unwrap()
@@ -93,9 +102,12 @@ fn partials_merge_and_the_union_and_intersection_aggregates_read_sketches() {
     u.resize(1);
     u.update(&[0, 0], &[&sketches], |_| true).unwrap();
     assert_eq!(estimate(&u.evaluate(&[0]).unwrap(), 0), 5.0);
+    assert_eq!(summary_sum(&u.evaluate(&[0]).unwrap(), 0), 6.0);
     // A union after a merge keeps raw sketches pending and still counts them.
     u.merge(&[0], &state_of(&a)).unwrap();
     assert_eq!(estimate(&u.evaluate(&[0]).unwrap(), 0), 5.0);
+    // Merging `a` again adds its three summaries: a merge that dropped it would stay at 6.
+    assert_eq!(summary_sum(&u.evaluate(&[0]).unwrap(), 0), 9.0);
 
     let mut i = TupleSketchAcc::new(TupleSketchOp::Intersection, false, 12, Mode::Sum).unwrap();
     i.resize(1);
@@ -126,19 +138,33 @@ fn an_intersection_that_saw_nothing_is_empty_bytes_and_lg_4_is_cut() {
 
 #[test]
 fn bad_arguments_and_state_bytes_are_errors() {
-    assert!(TupleSketchAcc::new(TupleSketchOp::Sketch, false, 3, Mode::Sum).is_err());
+    let class = |e: krishiv_common::error::KrishivError, want: &str| {
+        assert!(e.to_string().contains(want), "want {want}: {e}");
+    };
+    class(
+        TupleSketchAcc::new(TupleSketchOp::Sketch, false, 3, Mode::Sum).unwrap_err(),
+        "SKETCH_INVALID_LG_NOM_ENTRIES",
+    );
     let mut acc = sketch_acc(12);
     // Wrong lengths and the wrong number of argument columns.
-    assert!(
+    class(
         acc.update(&[0], &[&keys(&[1, 2]), &doubles(&[1.0, 2.0])], |_| true)
-            .is_err()
+            .unwrap_err(),
+        "INTERNAL_ERROR",
     );
-    assert!(acc.update(&[0], &[&keys(&[1])], |_| true).is_err());
+    class(
+        acc.update(&[0], &[&keys(&[1])], |_| true).unwrap_err(),
+        "INTERNAL_ERROR",
+    );
     let junk = BinaryArray::from_iter_values([vec![1u8, 2, 3]]);
-    assert!(acc.merge(&[0], &junk).is_err());
+    class(
+        acc.merge(&[0], &junk).unwrap_err(),
+        "TUPLE_INVALID_INPUT_SKETCH_BUFFER_FAMILY",
+    );
     // A summary column of a type the aggregate cannot read.
-    assert!(
+    class(
         acc.update(&[0], &[&keys(&[1]), &keys(&[1])], |_| true)
-            .is_err()
+            .unwrap_err(),
+        "INTERNAL_ERROR",
     );
 }

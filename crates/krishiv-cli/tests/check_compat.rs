@@ -366,6 +366,7 @@ fn directory_symlink_cycles_are_not_followed() {
 
 #[test]
 fn findings_carry_an_alternative_where_one_is_listed() {
+    const ALT: &str = "exact top k, one row per value: SELECT x, count(*) AS c FROM t GROUP BY x ORDER BY c DESC LIMIT k (a full count, not a sketch)";
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::write(
         dir.path().join("a.sql"),
@@ -381,15 +382,12 @@ fn findings_carry_an_alternative_where_one_is_listed() {
             .expect("finding")
     };
     let alt = by_name("approx_top_k")["alternative"].clone();
-    assert!(
-        alt.as_str().is_some_and(|a| a.contains("GROUP BY")),
-        "{alt}"
-    );
+    assert_eq!(alt.as_str(), Some(ALT), "{alt}");
     assert!(by_name("count_min_sketch").get("alternative").is_none());
     let text = run(&[], dir.path());
     let out = String::from_utf8_lossy(&text.stdout);
     assert!(
-        out.contains("approx_top_k: not yet (alternative: exact top k"),
+        out.contains(&format!("approx_top_k: not yet (alternative: {ALT}")),
         "{out}"
     );
 }

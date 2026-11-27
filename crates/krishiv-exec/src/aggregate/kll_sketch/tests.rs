@@ -105,7 +105,8 @@ fn the_memory_projection_grows_with_new_groups_and_rows() {
 fn a_mismatched_column_length_and_bad_state_bytes_are_errors() {
     let mut acc = KllSketchAcc::new(KllSketchOp::Sketch(KllType::Bigint, 200)).unwrap();
     acc.resize(1);
-    assert!(acc.update(&[0], &longs(&[1, 2]), |_| true).is_err());
+    let len_err = acc.update(&[0], &longs(&[1, 2]), |_| true).unwrap_err();
+    assert!(len_err.to_string().contains("INTERNAL_ERROR"), "{len_err}");
     let junk = BinaryArray::from_iter_values([vec![1u8, 2, 3]]);
     let err = acc.merge(&[0], &junk).unwrap_err();
     assert!(
