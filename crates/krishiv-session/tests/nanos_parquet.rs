@@ -268,12 +268,79 @@ fn a_spark_4_2_session_reads_nanoseconds_as_4_2_does() {
             run(
                 &s,
                 &format!(
-                    "SELECT typeof(n7) FROM parquet.`{}`",
+                    "SELECT typeof(n7), n7, n9 FROM parquet.`{}`",
                     fixture("spark-flat.parquet")
                 )
             ),
-            "bigint",
+            // The stored nanoseconds, decoded with the footer schema dropped.
+            "bigint|1577836800123456700|1577836800123456789",
             "flag {flag}"
         );
     }
+}
+
+/// On a profile before 4.3 a footer schema that names a nanosecond type is not used at all (Spark 4.2
+/// fails to parse the whole string): a collated string in the same file reads as a plain `string`.
+#[test]
+fn a_dropped_footer_schema_drops_its_collations_too() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("t");
+    let w = session(true);
+    let q = format!(
+        "INSERT OVERWRITE DIRECTORY '{}' USING parquet \
+         SELECT 'a' COLLATE UTF8_LCASE AS s, CAST('2020-01-01 00:00:00.123456789' AS TIMESTAMP_NTZ(9)) AS t",
+        path.display()
+    );
+    assert_eq!(run(&w, &q), "", "{q}");
+    let read = format!(
+        "SELECT typeof(s), s = 'A', typeof(t) FROM parquet.`{}`",
+        path.display()
+    );
+    assert_eq!(
+        run(&w, &read),
+        "string collate UTF8_LCASE|true|timestamp_ntz(9)"
+    );
+    let s = Session::builder()
+        .profile(krishiv_plan::analyzer::SparkProfile::V4_2)
+        .build()
+        .unwrap();
+    s.conf()
+        .set("spark.sql.legacy.parquet.nanosAsLong", "true")
+        .unwrap();
+    assert_eq!(run(&s, &read), "string|false|bigint");
+}
+
+/// The pre-4.3 pin of the Parquet nanosecond options reaches only Parquet: under
+/// `krishiv.io.strictOptions` a 4.2 session still reads CSV and JSON files (another format does not
+/// know the two names and would refuse them).
+#[test]
+fn the_pre_4_3_pin_leaves_other_formats_alone() {
+    let dir = tempfile::tempdir().unwrap();
+    let csv = dir.path().join("a.csv");
+    std::fs::write(&csv, "1\n").unwrap();
+    let json = dir.path().join("a.json");
+    std::fs::write(&json, "{\"a\":1}\n").unwrap();
+    let s = Session::builder()
+        .profile(krishiv_plan::analyzer::SparkProfile::V4_2)
+        .build()
+        .unwrap();
+    s.conf().set("krishiv.io.strictOptions", "true").unwrap();
+    assert_eq!(
+        run(&s, &format!("SELECT * FROM csv.`{}`", csv.display())),
+        "1"
+    );
+    assert_eq!(
+        run(&s, &format!("SELECT * FROM json.`{}`", json.display())),
+        "1"
+    );
+    assert_eq!(
+        run(
+            &s,
+            &format!(
+                "SELECT typeof(utc) FROM parquet.`{}`",
+                fixture("pyarrow.parquet")
+            )
+        ),
+        "ERR [PARQUET_TYPE_ILLEGAL] Illegal Parquet type: INT64 (TIMESTAMP(NANOS,true)). SQLSTATE: 42846"
+    );
 }

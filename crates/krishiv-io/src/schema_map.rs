@@ -1007,7 +1007,9 @@ fn convert(array: &ArrayRef, conv: &Conv, target: &DataType) -> Result<ArrayRef>
             let a = array
                 .as_primitive_opt::<TimestampNanosecondType>()
                 .ok_or_else(|| internal("a nanosecond cut of a non-nanosecond array"))?;
-            // The floor of a value within a step of `i64::MIN` is below the carrier.
+            // The floor of a value within a step of `i64::MIN` is below the carrier. Spark's own
+            // behaviour there was not probed; `DATETIME_OVERFLOW` is Krishiv's choice (its text
+            // readers raise it past the carrier too).
             let floored = a
                 .try_unary::<_, TimestampNanosecondType, _>(|v| {
                     v.checked_sub(v.rem_euclid(*unit)).ok_or(())

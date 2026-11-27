@@ -79,6 +79,23 @@ impl TimePattern {
             Self::Legacy(_) => Err(crate::datetime_pattern::legacy_nanos_unsupported()),
         }
     }
+
+    /// [`Self::format_timestamp_nanos`] when `nanos` is given (a nanosecond timestamp), else
+    /// [`Self::format_timestamp`].
+    ///
+    /// # Errors
+    /// As those two.
+    pub fn format_instant(
+        &self,
+        micros: i64,
+        nanos: Option<u16>,
+        zone: Zone<'_>,
+    ) -> Result<String, KrishivError> {
+        match nanos {
+            Some(n) => self.format_timestamp_nanos(micros, n, zone),
+            None => self.format_timestamp(micros, zone),
+        }
+    }
 }
 
 fn unparseable(s: &str) -> ParseFail {
@@ -107,13 +124,11 @@ pub fn format_timestamps(
     stamps: &TimestampMicrosecondArray,
     zone: Zone<'_>,
 ) -> Result<StringArray, KernelError> {
-    format_rows(stamps, |i, micros| {
-        pattern.format_timestamp(micros, zone).map_err(|e| (i, e))
-    })
+    format_timestamps_nanos(pattern, stamps, |_| None, zone)
 }
 
-/// [`format_timestamps`] with `nanos(i)` (0..=999) nanoseconds within row `i`'s microsecond (a nanosecond
-/// timestamp, Spark 4.3).
+/// [`format_timestamps`] with `nanos(i)` (0..=999) nanoseconds within row `i`'s microsecond when the
+/// column is a nanosecond timestamp (Spark 4.3), `None` for a microsecond one.
 ///
 /// # Errors
 /// As [`format_timestamps`]; a legacy pattern is
@@ -121,19 +136,8 @@ pub fn format_timestamps(
 pub fn format_timestamps_nanos(
     pattern: &TimePattern,
     stamps: &TimestampMicrosecondArray,
-    nanos: impl Fn(usize) -> u16,
+    nanos: impl Fn(usize) -> Option<u16>,
     zone: Zone<'_>,
-) -> Result<StringArray, KernelError> {
-    format_rows(stamps, |i, micros| {
-        pattern
-            .format_timestamp_nanos(micros, nanos(i), zone)
-            .map_err(|e| (i, e))
-    })
-}
-
-fn format_rows(
-    stamps: &TimestampMicrosecondArray,
-    format: impl Fn(usize, i64) -> Result<String, (usize, KrishivError)>,
 ) -> Result<StringArray, KernelError> {
     let mut out = with_capacity::<Option<String>>(stamps.len())?;
     for i in 0..stamps.len() {
@@ -141,7 +145,9 @@ fn format_rows(
             out.push(None);
             continue;
         }
-        let s = format(i, stamps.value(i)).map_err(|(i, e)| KernelError::with_row(Some(i), e))?;
+        let s = pattern
+            .format_instant(stamps.value(i), nanos(i), zone)
+            .map_err(|e| KernelError::with_row(Some(i), e))?;
         out.push(Some(s));
     }
     Ok(StringArray::from(out))
@@ -586,7 +592,7 @@ mod tests {
         };
         let stamps = TimestampMicrosecondArray::from(vec![Some(1_577_885_075_123_456), None]);
         let nine = TimePattern::new("HH:mm:ss.SSSSSSSSS", Purpose::Format, false).unwrap();
-        let out = format_timestamps_nanos(&nine, &stamps, |_| 789, zone).unwrap();
+        let out = format_timestamps_nanos(&nine, &stamps, |_| Some(789), zone).unwrap();
         assert_eq!(out.value(0), "13:24:35.123456789");
         assert!(out.is_null(1));
         let eight = TimePattern::new("ss.SSSSSSSS", Purpose::Format, false).unwrap();

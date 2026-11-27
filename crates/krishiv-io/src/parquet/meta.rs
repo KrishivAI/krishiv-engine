@@ -274,8 +274,11 @@ fn describe_checked(
         })
     });
     let footer_nanos = footer_names_nanos && options.nanos_types_known;
-    // A footer schema an earlier release cannot parse is not read at all.
-    let key_values = if footer_names_nanos && !options.nanos_types_known {
+    // A footer schema an earlier release cannot parse is not read at all: every reader of it below
+    // (collations, intervals, variants, geometries) takes `key_values`, and the Arrow schema a Krishiv
+    // writer embeds beside it (which Spark never reads) is skipped too, so only the Parquet types decide.
+    let footer_dropped = footer_names_nanos && !options.nanos_types_known;
+    let key_values = if footer_dropped {
         None
     } else {
         meta.file_metadata().key_value_metadata()
@@ -284,8 +287,11 @@ fn describe_checked(
         nanos_as_long: options.nanos_as_long && !footer_nanos,
         ..options
     };
-    let inferred = ArrowReaderMetadata::try_new(Arc::clone(meta), ArrowReaderOptions::new())
-        .map_err(footer_error)?;
+    let inferred = ArrowReaderMetadata::try_new(
+        Arc::clone(meta),
+        ArrowReaderOptions::new().with_skip_arrow_metadata(footer_dropped),
+    )
+    .map_err(footer_error)?;
     let descr = meta.file_metadata().schema_descr();
     let hint = Arc::new(Schema::new_with_metadata(
         inferred
@@ -296,7 +302,7 @@ fn describe_checked(
             .collect::<Vec<_>>(),
         inferred.schema().metadata().clone(),
     ));
-    let hint = match super::collation::restore(&hint, meta.file_metadata().key_value_metadata()) {
+    let hint = match super::collation::restore(&hint, key_values) {
         Some(restored) => Arc::new(restored),
         None => hint,
     };
@@ -317,13 +323,8 @@ fn describe_checked(
     } else {
         typed
     };
-    let (fields, variants) = super::variant::Variants::engine_fields(
-        descr,
-        meta.file_metadata().key_value_metadata(),
-        &typed,
-    );
-    let (fields, geos) =
-        super::geo::Geos::engine_fields(descr, meta.file_metadata().key_value_metadata(), fields)?;
+    let (fields, variants) = super::variant::Variants::engine_fields(descr, key_values, &typed);
+    let (fields, geos) = super::geo::Geos::engine_fields(descr, key_values, fields)?;
     let schema = Arc::new(Schema::new_with_metadata(
         fields,
         reader.schema().metadata().clone(),

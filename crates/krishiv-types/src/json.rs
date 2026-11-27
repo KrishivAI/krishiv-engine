@@ -454,7 +454,7 @@ fn atomic_from_name(name: &str) -> Option<Result<DataType>> {
         return Some(t);
     }
     // Spark 4.3's nanosecond timestamps (`DataType.fromJson` builds them whatever
-    // `spark.sql.timestampNanosTypes.enabled` says): Krishiv has no such type yet.
+    // `spark.sql.timestampNanosTypes.enabled` says).
     if let Some(t) = timestamp_from_name(name) {
         return Some(t);
     }

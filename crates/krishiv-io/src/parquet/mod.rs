@@ -519,4 +519,6 @@ impl FileFormat for ParquetFormat {
 #[cfg(test)]
 mod late_tests;
 #[cfg(test)]
+mod nanos_tests;
+#[cfg(test)]
 mod tests;
