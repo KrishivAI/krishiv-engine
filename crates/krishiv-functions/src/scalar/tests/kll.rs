@@ -158,18 +158,34 @@ fn a_null_operand_wins_over_a_malformed_sketch() {
     assert!(m.is_null(0) && m.is_null(1), "{m:?}");
 }
 
+/// Spark 4.2 reads each rank-array element with `getDouble`: a NULL element asks for rank 0.0.
 #[test]
-fn a_null_rank_element_makes_the_row_null() {
+fn a_null_rank_element_reads_as_rank_zero() {
     let a = sketch(KllType::Double, 10);
     let sk = bytes(&[Some(&a), Some(&a)]);
     let mut b = ListBuilder::new(Float64Builder::new());
     b.values().append_null();
     b.append(true);
-    b.values().append_value(0.5);
+    b.values().append_value(0.0);
     b.append(true);
     let ranks: ArrayRef = Arc::new(b.finish());
     let q = run("kll_sketch_get_quantile_double", &[&sk, &ranks]);
-    assert!(q.is_null(0) && q.is_valid(1), "{q:?}");
+    assert!(q.is_valid(0) && q.is_valid(1), "{q:?}");
+    let l = q.as_list::<i32>();
+    assert_eq!(l.value(0).len(), 1);
+    assert_eq!(&l.value(0), &l.value(1), "{q:?}");
+}
+
+/// A malformed sketch next to a NULL rank, or a NULL value, is NULL (both operands are checked first).
+#[test]
+fn a_null_rank_or_value_wins_over_a_malformed_sketch() {
+    let junk: &[u8] = b"not a sketch";
+    let sk = bytes(&[Some(junk)]);
+    let null: ArrayRef = Arc::new(Float64Array::from(vec![None::<f64>]));
+    let q = run("kll_sketch_get_quantile_double", &[&sk, &null]);
+    assert!(q.is_null(0), "{q:?}");
+    let r = run("kll_sketch_get_rank_double", &[&sk, &null]);
+    assert!(r.is_null(0), "{r:?}");
 }
 
 #[test]

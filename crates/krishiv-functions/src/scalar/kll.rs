@@ -242,17 +242,26 @@ fn quantiles(
     let mut db = Float64Builder::new();
     let mut lists: Vec<Option<usize>> = Vec::new(); // element count per row, None = NULL
     for i in 0..rows {
-        let sketch = decode(t, sketches, i, name)?;
         let row_ranks: Option<Vec<f64>> = if is_list {
             let l = ranks.as_list::<i32>();
-            // A NULL element has no defined rank (its slot holds an arbitrary value), so the row is NULL.
-            l.is_valid(i)
-                .then(|| l.value(i))
-                .filter(|v| v.null_count() == 0)
-                .map(|v| v.as_primitive::<Float64Type>().values().to_vec())
+            // Spark reads each element with `getDouble`, so a NULL element is rank 0.0 (the slot holds an
+            // arbitrary value, so it is read as zero here).
+            l.is_valid(i).then(|| l.value(i)).map(|v| {
+                let p = v.as_primitive::<Float64Type>();
+                (0..p.len())
+                    .map(|j| if p.is_valid(j) { p.value(j) } else { 0.0 })
+                    .collect()
+            })
         } else {
             let p = ranks.as_primitive::<Float64Type>();
             p.is_valid(i).then(|| vec![p.value(i)])
+        };
+        // Both operands' validity is checked before the sketch is decoded: a malformed sketch next to a NULL
+        // rank is NULL, as Spark's null-safe binary evaluation has it.
+        let sketch = if row_ranks.is_some() && bytes(sketches, i).is_some() {
+            decode(t, sketches, i, name)?
+        } else {
+            None
         };
         let (Some(sketch), Some(row_ranks)) = (sketch, row_ranks) else {
             lists.push(None);
@@ -333,7 +342,19 @@ fn ranks(
     let mut out = Float64Builder::new();
     let mut lists: Vec<Option<usize>> = Vec::new();
     for i in 0..rows {
-        let Some(sketch) = decode(t, sketches, i, name)? else {
+        // Both operands' validity is checked before the sketch is decoded (a malformed sketch next to a NULL
+        // value is NULL).
+        let operand_null = if is_list {
+            !values.as_list::<i32>().is_valid(i)
+        } else {
+            !values.is_valid(i)
+        };
+        let sketch = if operand_null {
+            None
+        } else {
+            decode(t, sketches, i, name)?
+        };
+        let Some(sketch) = sketch else {
             lists.push(None);
             if !is_list {
                 out.append_null();
@@ -342,10 +363,6 @@ fn ranks(
         };
         if is_list {
             let l = values.as_list::<i32>();
-            if !l.is_valid(i) {
-                lists.push(None);
-                continue;
-            }
             let v = l.value(i);
             if v.null_count() > 0 {
                 lists.push(None);
