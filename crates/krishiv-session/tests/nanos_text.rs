@@ -517,6 +517,8 @@ fn file_reads_follow_the_time_parser_policy() {
         for (policy, want_ts, want_ltz9) in [
             ("CORRECTED", corrected_ts.as_str(), corrected_ts.as_str()),
             ("LEGACY", legacy_ts.as_str(), " ;  ;  ;  ;  ;  ;  ;  ;  ; "),
+            // The default policy reads as CORRECTED until EXCEPTION is modelled (queue row).
+            ("EXCEPTION", corrected_ts.as_str(), corrected_ts.as_str()),
         ] {
             s.conf()
                 .set("spark.sql.legacy.timeParserPolicy", policy)
@@ -757,6 +759,119 @@ fn inference_follows_the_time_parser_policy() {
         assert_eq!(
             types("json", &json, ", inferTimestamp 'true'"),
             json_ts,
+            "{policy}"
+        );
+    }
+}
+
+/// Patterns and fallbacks per type (Spark 4.3.0 run, session zone `America/Los_Angeles`, JSON and
+/// CSV, CORRECTED and LEGACY): a `TIMESTAMP_NTZ` pattern has no fallback, whatever the policy or
+/// `enableDateTimeParsingFallback`; a `TIMESTAMP` keeps its fallback (and its `GMT` clean) when only
+/// `timestampNTZFormat` is named.
+#[test]
+fn the_ntz_pattern_has_no_fallback_and_does_not_turn_off_the_timestamp_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session("America/Los_Angeles");
+    let ntz_pattern = ", timestampNTZFormat 'yyyy/MM/dd HH:mm:ss'";
+    for policy in ["CORRECTED", "LEGACY"] {
+        s.conf()
+            .set("spark.sql.legacy.timeParserPolicy", policy)
+            .unwrap();
+        for format in ["json", "csv"] {
+            let ntz = text_file(dir.path(), "ntz", format, &["2020-01-01 10:00:00"]);
+            for options in [
+                ntz_pattern.to_owned(),
+                format!("{ntz_pattern}, enableDateTimeParsingFallback 'true'"),
+            ] {
+                assert_eq!(
+                    read_text(&s, &ntz, format, "TIMESTAMP_NTZ", &options),
+                    "",
+                    "{policy} {format} {options}"
+                );
+            }
+            let gmt = text_file(dir.path(), "gmt", format, &["2020-01-01GMT 10:00:00"]);
+            assert_eq!(
+                read_text(
+                    &s,
+                    &gmt,
+                    format,
+                    "TIMESTAMP",
+                    ", timestampNTZFormat 'yyyy-MM-dd'"
+                ),
+                "2020-01-01 10:00:00",
+                "{policy} {format}"
+            );
+        }
+    }
+}
+
+/// JSON `inferTimestamp` (Spark 4.3.0 run, `JsonInferSchema`): the pattern alone, then under LEGACY
+/// only the zone-less grammar on the text as written (no zone, no bare time, no `GMT` clean); the
+/// fallback option plays no part. The legacy pattern ignores trailing text.
+#[test]
+fn json_timestamp_inference_takes_no_fallback() {
+    let dir = tempfile::tempdir().unwrap();
+    let json = dir.path().join("inf2.json");
+    std::fs::write(
+        &json,
+        "{\"a\":\"2020-01-01 10:00:00+01:00\",\"b\":\"2020-01-01 10:00:00 GMT\",\"c\":\"T10:00:00\",\
+         \"d\":\"2020-01-01 10:00:00\",\"e\":\"2020-01-01T10:00:00\"}\n",
+    )
+    .unwrap();
+    let s = session("America/Los_Angeles");
+    let pattern = ", timestampFormat 'yyyy-MM-dd HH:mm:ss', enableDateTimeParsingFallback 'true'";
+    for (policy, options, want) in [
+        (
+            "LEGACY",
+            "",
+            "a:string,b:string,c:string,d:timestamp,e:timestamp",
+        ),
+        (
+            "CORRECTED",
+            pattern,
+            "a:string,b:string,c:string,d:timestamp,e:string",
+        ),
+        (
+            "LEGACY",
+            pattern,
+            "a:timestamp,b:timestamp,c:string,d:timestamp,e:timestamp",
+        ),
+    ] {
+        s.conf()
+            .set("spark.sql.legacy.timeParserPolicy", policy)
+            .unwrap();
+        let q = format!(
+            "CREATE OR REPLACE TEMPORARY VIEW v USING json OPTIONS (path '{}', inferTimestamp 'true'{options})",
+            json.display()
+        );
+        assert_eq!(run(&s, &q), "", "{q}");
+        let cols = run(&s, "DESCRIBE v");
+        let got = cols
+            .split(" ; ")
+            .map(|r| r.split('|').take(2).collect::<Vec<_>>().join(":"))
+            .collect::<Vec<_>>()
+            .join(",");
+        assert_eq!(got, want, "{policy} {options}");
+    }
+}
+
+/// `schema_of_csv` follows the session's parser policy (Spark 4.3.0 run): no `DATE` under LEGACY.
+#[test]
+fn schema_of_csv_follows_the_time_parser_policy() {
+    let s = session("America/Los_Angeles");
+    for (policy, want) in [
+        ("CORRECTED", "STRUCT<_c0: DATE, _c1: TIMESTAMP>"),
+        ("LEGACY", "STRUCT<_c0: STRING, _c1: TIMESTAMP>"),
+    ] {
+        s.conf()
+            .set("spark.sql.legacy.timeParserPolicy", policy)
+            .unwrap();
+        assert_eq!(
+            run(
+                &s,
+                "SELECT schema_of_csv('2020-01-01,2020-01-01T10:00:00.000Z')"
+            ),
+            want,
             "{policy}"
         );
     }

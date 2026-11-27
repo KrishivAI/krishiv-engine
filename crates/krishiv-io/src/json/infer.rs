@@ -273,8 +273,7 @@ impl Infer<'_> {
                     && let Some(t) = self.decimal_of_string(s)
                 {
                     t
-                } else if self.infer_timestamp && matches!(self.dt.parse_timestamp(s), Ok(Some(_)))
-                {
+                } else if self.infer_timestamp && self.dt.infers_json_timestamp(s) {
                     Ty::Timestamp
                 } else {
                     Ty::Str

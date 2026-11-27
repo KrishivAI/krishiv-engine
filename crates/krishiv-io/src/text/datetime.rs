@@ -50,6 +50,8 @@ pub(crate) struct Datetimes {
     today: i32,
     fallback_date: bool,
     fallback_timestamp: bool,
+    /// `timeParserPolicy=LEGACY`.
+    legacy: bool,
 }
 
 /// Spark's `cleanLegacyTimestampStr`: the fallback (only) drops `GMT`, after
@@ -109,8 +111,10 @@ impl Datetimes {
             .unwrap_or(0);
         Ok(Self {
             fallback_date: explicit.unwrap_or(legacy || !named("dateFormat")),
-            fallback_timestamp: explicit
-                .unwrap_or(legacy || !(named("timestampFormat") || named("timestampNTZFormat"))),
+            // Spark reads only `timestampFormatInRead` here; the NTZ pattern has
+            // no fallback at all (`parseWithoutTimeZone(datum, false)`).
+            fallback_timestamp: explicit.unwrap_or(legacy || !named("timestampFormat")),
+            legacy,
             today: rules.as_ref().map_or(0, |r| today_in(now, r)),
             zone_id,
             rules,
@@ -182,20 +186,25 @@ impl Datetimes {
         }
     }
 
-    /// A `TIMESTAMP_NTZ` (local microseconds) from text.
+    /// Whether JSON `inferTimestamp` reads `s` as a `TIMESTAMP`, as Spark's
+    /// `JsonInferSchema`: the pattern (else the default grammar) alone, then,
+    /// under LEGACY only, the zone-less grammar on the text as written (no
+    /// zone, no bare time, no `GMT` clean; Spark 4.3.0 run).
+    pub(crate) fn infers_json_timestamp(&self, s: &str) -> bool {
+        matches!(self.parse_timestamp_unaided(s), Ok(Some(_)))
+            || (self.legacy && spark_string_to_timestamp_ntz(s).is_some())
+    }
+
+    /// A `TIMESTAMP_NTZ` (local microseconds) from text: the pattern, else the
+    /// default grammar; no fallback after a pattern fails (Spark's
+    /// `parseWithoutTimeZone(datum, false)`, whatever the policy).
     ///
     /// # Errors
     /// A region zone id in the text.
     pub(crate) fn parse_ntz(&self, s: &str) -> Result<Option<i64>, KrishivError> {
-        let parsed = match &self.ntz {
-            Some(p) => p.parse_local(s, false)?,
-            None => spark_string_to_timestamp_ntz(s),
-        };
-        match parsed {
-            None if self.fallback_timestamp && self.ntz.is_some() => {
-                Ok(spark_string_to_timestamp_ntz(s))
-            }
-            other => Ok(other),
+        match &self.ntz {
+            Some(p) => p.parse_local(s, false),
+            None => Ok(spark_string_to_timestamp_ntz(s)),
         }
     }
 

@@ -654,8 +654,18 @@ impl Resolver<'_> {
         csv: &str,
         options: Option<&Bound>,
     ) -> Result<String, AnalysisError> {
-        let options = match options {
-            None => krishiv_io::FormatOptions::defaults(krishiv_io::csv::option_schema()),
+        // The session's parser policy reaches the inference as the option
+        // the file reads carry (`schema_of_csv` infers no `DATE` under LEGACY).
+        let mut session = krishiv_common::config::Config::new();
+        if self.ctx.conf.legacy_time_parser {
+            session
+                .set("spark.sql.legacy.timeParserPolicy", "LEGACY")
+                .map_err(|err| AnalysisError::new(err, e.origin))?;
+        }
+        let mut user: std::collections::BTreeMap<String, krishiv_common::secret::OptionValue> =
+            std::collections::BTreeMap::new();
+        match options {
+            None => {}
             Some(opts) => {
                 // Options other than a literal map keep the call (the
                 // signature accepts them; the executor has no binding).
@@ -669,10 +679,6 @@ impl Resolver<'_> {
                 };
                 // Option names are case-insensitive: of two spellings of one
                 // name, the one written last wins (Spark's `CaseInsensitiveMap`).
-                let mut user: std::collections::BTreeMap<
-                    String,
-                    krishiv_common::secret::OptionValue,
-                > = std::collections::BTreeMap::new();
                 for (k, v) in pairs {
                     user.retain(|seen, _| !seen.eq_ignore_ascii_case(k));
                     user.insert(
@@ -680,12 +686,12 @@ impl Resolver<'_> {
                         krishiv_common::secret::OptionValue::from_user(k, v.clone()),
                     );
                 }
-                krishiv_io::csv::option_schema()
-                    .parse(&user, &krishiv_common::config::Config::new())
-                    .map_err(|err| AnalysisError::new(err, e.origin))?
-                    .0
             }
-        };
+        }
+        let options = krishiv_io::csv::option_schema()
+            .parse(&user, &session)
+            .map_err(|err| AnalysisError::new(err, e.origin))?
+            .0;
         krishiv_io::csv::ddl_of_string(csv, &options).map_err(|err| {
             AnalysisError::new(
                 match err {
