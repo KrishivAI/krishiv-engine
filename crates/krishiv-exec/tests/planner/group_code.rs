@@ -241,9 +241,11 @@ fn null_stats() -> ByName {
 
 /// A null key tuple is one `dict` row, joined by `<=>`: the null groups
 /// survive the encoding join, with and without a shared dictionary, and
-/// under an outer join above `D`. Eager aggregation is off: with it on it
-/// takes these joins first (`d`'s `isnotnull(dk)` filter only drops null
-/// keys), and that plan must return the same rows.
+/// under an outer join above `D`. Eager aggregation is off; with both rules on,
+/// eager aggregation yields (`GroupKeyCode takes the aggregate`), so the plan is
+/// still coded. With the code off, eager aggregation takes the first query's
+/// join (`d`'s `isnotnull(dk)` filter only drops null keys). Every plan returns
+/// the same rows.
 #[test]
 fn null_dimension_keys_keep_their_groups() {
     let rt = runtime();
@@ -275,7 +277,15 @@ fn null_dimension_keys_keep_their_groups() {
             let got = sorted(&run(&physical(&t, &on).unwrap()).unwrap());
             let want = sorted(&run(&physical(&t, &off).unwrap()).unwrap());
             assert_eq!(got, want, "{q} {s:?}\n{}", on.root());
-            let eager = optimized(&t, q, &stats, true, s);
+            let both = optimized(&t, q, &stats, true, s);
+            assert!(
+                coded(&both),
+                "{q} {s:?}: eager did not yield\n{}",
+                both.root()
+            );
+            let rows = sorted(&run(&physical(&t, &both).unwrap()).unwrap());
+            assert_eq!(rows, want, "{q} {s:?} both\n{}", both.root());
+            let eager = optimized_eager(&t, q, &stats, false, true, s);
             // The null-only `isnotnull(dk)` filter on `d` must not stop eager
             // aggregation: rows alone would also match a refused rule.
             assert_eq!(
