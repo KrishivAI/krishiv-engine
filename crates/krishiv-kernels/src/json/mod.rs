@@ -32,6 +32,7 @@
 //! the JSON data source.
 
 mod base64;
+pub mod decimal;
 mod infer;
 mod options;
 mod parse;

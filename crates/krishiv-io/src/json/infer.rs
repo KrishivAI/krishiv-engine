@@ -7,6 +7,9 @@ use std::sync::Arc;
 use arrow_schema::{DataType, Field, Schema, SchemaRef, TimeUnit};
 use futures::future::BoxFuture;
 use krishiv_kernels::datetime_pattern::Purpose;
+use krishiv_kernels::json::decimal::{
+    LONG_DECIMAL, NumberDecimal, merge_decimals, number_decimal, string_decimal,
+};
 use krishiv_kernels::text::java_parse_long;
 
 use super::decode::{JVal, Reason, Top, parse_line, parse_next};
@@ -63,23 +66,18 @@ fn compatible(a: Ty, b: Ty) -> Ty {
         (Array(e1), Array(e2)) => Array(Box::new(compatible(*e1, *e2))),
         (Double, Long | Decimal(_, _)) | (Long | Decimal(_, _), Double) => Double,
         (Ntz, Timestamp) | (Timestamp, Ntz) => Timestamp,
-        (Decimal(p, s), Decimal(q, r)) => merge_decimals(p, s, q, r),
+        (Decimal(p, s), Decimal(q, r)) => decimal_or_double((p, s), (q, r)),
         // An integral type merges as the decimal that holds it (`Long` is
         // `DECIMAL(20, 0)`).
-        (Long, Decimal(p, s)) | (Decimal(p, s), Long) => merge_decimals(20, 0, p, s),
+        (Long, Decimal(p, s)) | (Decimal(p, s), Long) => decimal_or_double(LONG_DECIMAL, (p, s)),
         _ => Str,
     }
 }
 
-/// The decimal that holds both `(p, s)` and `(q, r)`, or `Double` when it
-/// would need more than 38 digits (as Spark's `findTightestCommonType`).
-fn merge_decimals(p: u8, s: i8, q: u8, r: i8) -> Ty {
-    let scale = s.max(r);
-    let range = (i16::from(p) - i16::from(s)).max(i16::from(q) - i16::from(r));
-    match u8::try_from(range + i16::from(scale)) {
-        Ok(precision) if precision <= 38 => Ty::Decimal(precision, scale),
-        _ => Ty::Double,
-    }
+/// The decimal that holds both, or `Double` when it would need more than 38
+/// digits (Spark's `compatibleType`).
+fn decimal_or_double(a: (u8, i8), b: (u8, i8)) -> Ty {
+    merge_decimals(a, b).map_or(Ty::Double, |(p, s)| Ty::Decimal(p, s))
 }
 
 /// Two name-sorted field lists merged, as Spark merges sorted structs.
@@ -154,13 +152,9 @@ impl Root<'_> {
         rec: &Result<Top, Reason>,
     ) -> FormatResult<Option<Ty>> {
         let t = match rec {
-            Ok(Top::Object(o)) => inf.object(&o.fields),
-            Ok(Top::Array(items)) => Ty::Array(Box::new(
-                items
-                    .iter()
-                    .fold(Ty::Null, |t, v| compatible(t, inf.field(v))),
-            )),
-            Ok(Top::Other(v)) => inf.field(v),
+            Ok(Top::Object(o)) => inf.object(&o.fields)?,
+            Ok(Top::Array(items)) => inf.array(items)?,
+            Ok(Top::Other(v)) => inf.field(v)?,
             Err(_) => match self.mode {
                 Mode::Permissive => Ty::Struct(vec![(self.corrupt.to_owned(), Ty::Str)]),
                 Mode::DropMalformed => return Ok(part),
@@ -212,52 +206,6 @@ impl Root<'_> {
     }
 }
 
-/// `new java.math.BigDecimal(s)`: precision and scale of a decimal literal.
-fn big_decimal_shape(s: &str) -> Option<(i64, i64)> {
-    let b = s.as_bytes();
-    let mut i = usize::from(matches!(b.first(), Some(b'+' | b'-')));
-    let (mut int, mut frac) = (0_i64, 0_i64);
-    let mut digits = String::new();
-    while i < b.len() && b[i].is_ascii_digit() {
-        digits.push(char::from(b[i]));
-        int += 1;
-        i += 1;
-    }
-    if b.get(i) == Some(&b'.') {
-        i += 1;
-        while i < b.len() && b[i].is_ascii_digit() {
-            digits.push(char::from(b[i]));
-            frac += 1;
-            i += 1;
-        }
-    }
-    if int + frac == 0 {
-        return None;
-    }
-    let mut exp = 0_i64;
-    if matches!(b.get(i), Some(b'e' | b'E')) {
-        i += 1;
-        let neg = b.get(i) == Some(&b'-');
-        i += usize::from(matches!(b.get(i), Some(b'+' | b'-')));
-        let from = i;
-        let mut v = 0_i64;
-        while i < b.len() && b[i].is_ascii_digit() {
-            v = v.checked_mul(10)?.checked_add(i64::from(b[i] - b'0'))?;
-            i += 1;
-        }
-        if i == from {
-            return None;
-        }
-        exp = if neg { -v } else { v };
-    }
-    if i != b.len() {
-        return None;
-    }
-    let stripped = digits.trim_start_matches('0');
-    let precision = i64::try_from(stripped.len()).ok()?.max(1);
-    Some((precision, frac.checked_sub(exp)?))
-}
-
 struct Infer<'a> {
     prefers_decimal: bool,
     primitives_as_string: bool,
@@ -274,17 +222,21 @@ struct Infer<'a> {
 
 impl Infer<'_> {
     /// Spark's `inferField`: the type of one value.
-    fn field(&self, v: &JVal) -> Ty {
-        match v {
+    ///
+    /// # Errors
+    /// `NEGATIVE_SCALE_DISALLOWED` for a number with a negative scale under
+    /// `prefersDecimal` (`1e3`), as Spark's `DecimalType` refuses it.
+    fn field(&self, v: &JVal) -> FormatResult<Ty> {
+        Ok(match v {
             JVal::Null => Ty::Null,
             // Empty strings infer as nulls (Spark treats them alike until
             // the fields are merged).
             JVal::Str(s) if s.is_empty() => Ty::Null,
             JVal::Str(s) => {
                 if self.prefers_decimal
-                    && let Some(t) = self.decimal_of_string(s)
+                    && let Some((p, sc)) = string_decimal(s)
                 {
-                    t
+                    Ty::Decimal(p, sc)
                 } else if self.infer_timestamp {
                     self.timestamp_of_string(s)
                 } else {
@@ -293,27 +245,24 @@ impl Infer<'_> {
             }
             JVal::Bool(_) | JVal::Num(_, _) if self.primitives_as_string => Ty::Str,
             JVal::Bool(_) => Ty::Boolean,
-            JVal::Num(t, false) => {
-                if java_parse_long(t).is_some() {
-                    Ty::Long
-                } else {
-                    self.decimal_shape(t)
-                }
-            }
-            JVal::Num(t, true) => {
-                if self.prefers_decimal {
-                    self.decimal_shape(t)
-                } else {
-                    Ty::Double
-                }
-            }
-            JVal::Object(fields, _) => self.object(fields),
-            JVal::Array(items, _) => Ty::Array(Box::new(
-                items
-                    .iter()
-                    .fold(Ty::Null, |t, v| compatible(t, self.field(v))),
-            )),
+            JVal::Num(t, false) if java_parse_long(t).is_some() => Ty::Long,
+            JVal::Num(_, true) if !self.prefers_decimal => Ty::Double,
+            JVal::Num(t, _) => match number_decimal(t).map_err(FormatError::Other)? {
+                NumberDecimal::Decimal(p, s) => Ty::Decimal(p, s),
+                NumberDecimal::Double => Ty::Double,
+            },
+            JVal::Object(fields, _) => self.object(fields)?,
+            JVal::Array(items, _) => self.array(items)?,
+        })
+    }
+
+    /// An array of its merged element types.
+    fn array(&self, items: &[JVal]) -> FormatResult<Ty> {
+        let mut t = Ty::Null;
+        for v in items {
+            t = compatible(t, self.field(v)?);
         }
+        Ok(Ty::Array(Box::new(t)))
     }
 
     /// The `inferTimestamp` arm of Spark's string inference (v4.3.0
@@ -337,38 +286,13 @@ impl Infer<'_> {
     }
 
     /// The struct of an object's members, sorted by name.
-    fn object(&self, fields: &[(String, JVal)]) -> Ty {
-        let mut out: Vec<(String, Ty)> = fields
-            .iter()
-            .map(|(n, v)| (n.clone(), self.field(v)))
-            .collect();
+    fn object(&self, fields: &[(String, JVal)]) -> FormatResult<Ty> {
+        let mut out = Vec::with_capacity(fields.len());
+        for (n, v) in fields {
+            out.push((n.clone(), self.field(v)?));
+        }
         out.sort_by(|(a, _), (b, _)| java_cmp(a, b));
-        Ty::Struct(out)
-    }
-
-    /// A decimal literal as a `Ty`: `Double` when it cannot be a
-    /// `Decimal128` (negative scale, precision above 38).
-    fn decimal_shape(&self, t: &str) -> Ty {
-        match big_decimal_shape(t) {
-            Some((p, s)) if s >= 0 && p <= 38 && s <= 38 => {
-                let (Ok(p), Ok(s)) = (u8::try_from(p.max(s).min(38)), i8::try_from(s)) else {
-                    return Ty::Double;
-                };
-                Ty::Decimal(p.max(1), s)
-            }
-            _ => Ty::Double,
-        }
-    }
-
-    /// A string that parses as a decimal, under `prefersDecimal`: the
-    /// decimal of its precision and scale, as Spark's string branch infers
-    /// it.
-    fn decimal_of_string(&self, s: &str) -> Option<Ty> {
-        let (p, sc) = big_decimal_shape(s)?;
-        if sc < 0 || p > 38 || sc > p {
-            return None;
-        }
-        Some(Ty::Decimal(u8::try_from(p).ok()?, i8::try_from(sc).ok()?))
+        Ok(Ty::Struct(out))
     }
 }
 
