@@ -63,12 +63,10 @@ krishiv-types = { path = "../krishiv-types" }
 futures = { workspace = true, features = ["executor"] }
 # `extension-module` is deprecated: maturin sets PYO3_BUILD_EXTENSION_MODULE.
 pyo3 = { workspace = true, features = ["macros"] }
-mimalloc = { workspace = true, optional = true }
+# Python loads the module with dlopen. With mimalloc's default initial-exec TLS the module is marked STATIC_TLS: its
+# whole TLS block must fit glibc's small static-TLS surplus (dlopen fails with "cannot allocate memory in static TLS
+# block" once it grows past it, or once other modules took the surplus), and musl crashed at import (musllinux wheels
+# segfaulted in `import krishiv`). Every target uses the dynamic model; `.github/scripts/wheel-tls-check.sh` checks it.
+mimalloc = { workspace = true, optional = true, features = ["local_dynamic_tls"] }
 # `mi_collect`, the pressure release hook of the module's mimalloc (`src/lib.rs`).
 libmimalloc-sys = { workspace = true, optional = true, features = ["extended"] }
-
-# musl loads the extension with dlopen, where mimalloc's default initial-exec
-# TLS model crashes at import (musllinux wheels segfaulted in `import krishiv`):
-# use the local-dynamic model there.
-[target.'cfg(target_env = "musl")'.dependencies]
-mimalloc = { workspace = true, optional = true, features = ["local_dynamic_tls"] }
