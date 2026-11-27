@@ -259,7 +259,11 @@ impl<V: Value> SummaryUpdatePolicy<V> for Policy<V> {
 
 impl<V: Value> SummaryCombinePolicy for Policy<V> {
     fn combine(&self, summary: &mut Summary<V>, other: &Summary<V>) {
-        summary.value = summary.value.fold(summary.mode, other.value);
+        // Spark's set operations rebuild a duplicate key's summary in the operation's mode (not the summaries' own).
+        summary.value = V::identity(self.mode)
+            .fold(self.mode, summary.value)
+            .fold(self.mode, other.value);
+        summary.mode = self.mode;
     }
 }
 
@@ -443,7 +447,21 @@ pub fn from_bytes<V: Value>(bytes: &[u8], function: &str) -> Result<Compact<V>, 
         }
         .into());
     }
-    CompactTupleSketch::<Summary<V>>::deserialize(bytes).map_err(|_| invalid_buffer(function))
+    let sketch = CompactTupleSketch::<Summary<V>>::deserialize(bytes)
+        .map_err(|_| invalid_buffer(function))?;
+    // An ordered image must list its hashes strictly ascending (as the Theta reader checks): the library's union
+    // trusts the flag and would drop entries silently.
+    if sketch.is_ordered() {
+        let mut prev = 0_u64;
+        for entry in sketch.iter() {
+            let h = entry.hash();
+            if h <= prev {
+                return Err(invalid_buffer(function));
+            }
+            prev = h;
+        }
+    }
+    Ok(sketch)
 }
 
 /// `tuple_sketch_estimate_*`.
@@ -705,6 +723,24 @@ mod tests {
         let mut t = theta::new_sketch(12, "f").unwrap();
         theta::update_long(&mut t, k);
         theta::compact(&mut t)
+    }
+
+    #[test]
+    fn duplicate_keys_combine_in_the_operations_mode() {
+        let mut x = new_sketch::<f64>(12, Mode::Sum, "f").unwrap();
+        update_long(&mut x, 1, 3.0);
+        let mut y = new_sketch::<f64>(12, Mode::Sum, "f").unwrap();
+        update_long(&mut y, 1, 5.0);
+        let (a, b) = (compact(&x), compact(&y));
+        for (mode, want) in [(Mode::Min, 3.0), (Mode::Max, 5.0), (Mode::Sum, 8.0)] {
+            let u = union(&a, Either::Tuple(&b), 12, mode, "f").unwrap();
+            let i = intersection(&a, Either::Tuple(&b), mode, "f").unwrap();
+            for r in [u, i] {
+                let e = r.iter().next().unwrap();
+                assert_eq!(e.summary().value, want);
+                assert_eq!(e.summary().mode, mode);
+            }
+        }
     }
 
     #[test]
