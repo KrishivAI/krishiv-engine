@@ -393,7 +393,11 @@ impl Resolver<'_> {
             );
             k.ty = arg_type(DataType::Binary, false);
         }
-        Ok((Self::folded_ntile(entry, &constants, call_kids), ty))
+        let call_kids = Self::folded_ntile(entry, &constants, call_kids);
+        Ok((
+            Self::folded_sketch_constants(entry, &constants, call_kids),
+            ty,
+        ))
     }
 
     /// The non-empty string literal path in the descriptor position of a `from_protobuf` / `to_protobuf` call (the third of three
@@ -521,6 +525,47 @@ impl Resolver<'_> {
             k.expr = Arc::new(
                 Expr::new(ExprNode::Literal(Literal::Integer(n))).with_origin(k.expr.origin),
             );
+        }
+        kids
+    }
+
+    /// The size (`k`, `lgNomEntries`) and mode arguments of the KLL and Tuple sketch aggregates as the literals they
+    /// fold to (`kll_sketch_agg_bigint(x, 100 + 100)`): the planner reads literals. The rule checked them. Only for the
+    /// built-ins.
+    #[inline(never)]
+    pub(super) fn folded_sketch_constants(
+        entry: &FunctionEntry,
+        constants: &[Option<Constant>],
+        mut kids: Vec<Bound>,
+    ) -> Vec<Bound> {
+        if !is_builtin_entry(entry) {
+            return kids;
+        }
+        let name = entry.id.name();
+        let (ints, strings): (&[usize], &[usize]) = if name.starts_with("kll_sketch_agg_") {
+            (&[1], &[])
+        } else if name.starts_with("tuple_sketch_agg_") {
+            (&[2], &[3])
+        } else if name.starts_with("tuple_union_agg_") {
+            (&[1], &[2])
+        } else if name.starts_with("tuple_intersection_agg_") {
+            (&[], &[1])
+        } else {
+            return kids;
+        };
+        for (at, constant) in constants.iter().enumerate() {
+            let literal = match constant {
+                Some(Constant::Integral(n)) if ints.contains(&at) => {
+                    i32::try_from(*n).ok().map(Literal::Integer)
+                }
+                Some(Constant::String(m)) if strings.contains(&at) => {
+                    Some(Literal::String(m.clone()))
+                }
+                _ => None,
+            };
+            if let (Some(literal), Some(k)) = (literal, kids.get_mut(at)) {
+                k.expr = Arc::new(Expr::new(ExprNode::Literal(literal)).with_origin(k.expr.origin));
+            }
         }
         kids
     }

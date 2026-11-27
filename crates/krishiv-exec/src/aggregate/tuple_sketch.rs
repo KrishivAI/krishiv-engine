@@ -234,6 +234,15 @@ impl<V: Value> Acc<V> {
             .saturating_add(vectors)
             .saturating_add(growth.min(cap))
             .saturating_add(full.min(growth))
+            .saturating_add(
+                // An intersection keeps a subset of its first input, which `lg_nom` does not bound: its growth is
+                // the input's, uncapped by `full()`.
+                if self.op == TupleSketchOp::Intersection {
+                    growth.saturating_sub(growth.min(cap).saturating_add(full.min(growth)))
+                } else {
+                    0
+                },
+            )
     }
 
     fn slot_mut(&mut self, g: usize) -> Result<&mut Slot<V>> {

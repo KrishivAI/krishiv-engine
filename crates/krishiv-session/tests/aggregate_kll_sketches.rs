@@ -141,3 +141,14 @@ fn a_bad_buffer_and_a_rank_outside_zero_one_are_runtime_errors() -> R {
     }
     Ok(())
 }
+
+#[test]
+fn a_folded_constant_k_lowers_like_its_literal() -> R {
+    let s = Session::new()?;
+    let got = rows(
+        &s,
+        "SELECT kll_sketch_get_n_bigint(kll_sketch_agg_bigint(id, 100 + 100)) FROM range(0, 100)",
+    )?;
+    assert_eq!(got, ["100"]);
+    Ok(())
+}

@@ -161,3 +161,20 @@ fn a_bad_buffer_and_a_theta_buffer_are_runtime_errors() -> R {
     }
     Ok(())
 }
+
+#[test]
+fn folded_constant_size_and_mode_lower_like_their_literals() -> R {
+    let s = Session::new()?;
+    let folded = rows(
+        &s,
+        "SELECT tuple_sketch_summary_integer(tuple_sketch_agg_integer(id % 10, 2, 6 + 6, concat('m', 'ax')), 'max') \
+         FROM range(0, 100)",
+    )?;
+    let literal = rows(
+        &s,
+        "SELECT tuple_sketch_summary_integer(tuple_sketch_agg_integer(id % 10, 2, 12, 'max'), 'max') \
+         FROM range(0, 100)",
+    )?;
+    assert_eq!(folded, literal);
+    Ok(())
+}
