@@ -1,1 +1,2 @@
 Parquet reads and writes the nanosecond timestamp types as Spark 4.3 does: `INT64 TIMESTAMP(NANOS)` with each column's precision in the footer's Spark schema; without `spark.sql.timestampNanosTypes.enabled` such a file is refused (`FEATURE_NOT_ENABLED` / `PARQUET_TYPE_ILLEGAL`), and `spark.sql.legacy.parquet.nanosAsLong` reads a foreign file's nanoseconds as `bigint`.
+Plans carrying the nanosecond timestamp types travel to workers (plan codec feature `timestamp_nanos_types`); an older worker refuses such a plan by name.

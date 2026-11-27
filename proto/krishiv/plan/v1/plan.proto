@@ -1531,10 +1531,17 @@ message DataType {
     KIND_VARIANT = 23;
     // feature: udt_type
     KIND_UDT = 24;
+    // feature: timestamp_nanos_types
+    KIND_TIMESTAMP_NANOS = 25;
+    // feature: timestamp_nanos_types
+    KIND_TIMESTAMP_NTZ_NANOS = 26;
   }
   Kind kind = 1;
-  // `KIND_DECIMAL` and `KIND_TIME` only. A `KIND_TIME` precision of 7 to 9
-  // (Spark 4.3's nanosecond TIME) needs feature: time_precision_nanos.
+  // `KIND_DECIMAL`, `KIND_TIME`, `KIND_TIMESTAMP_NANOS` and
+  // `KIND_TIMESTAMP_NTZ_NANOS` only. A `KIND_TIME` precision of 7 to 9
+  // (Spark 4.3's nanosecond TIME) needs feature: time_precision_nanos; the two
+  // nanosecond timestamp kinds (Spark 4.3's `TIMESTAMP_LTZ(p)` and
+  // `TIMESTAMP_NTZ(p)`) hold 7 to 9.
   uint32 precision = 2;
   // `KIND_DECIMAL` only.
   uint32 scale = 3;

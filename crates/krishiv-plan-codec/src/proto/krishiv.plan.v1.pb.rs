@@ -1757,8 +1757,11 @@ pub struct PythonUdfFunction {
 pub struct DataType {
     #[prost(enumeration = "data_type::Kind", tag = "1")]
     pub kind: i32,
-    /// `KIND_DECIMAL` and `KIND_TIME` only. A `KIND_TIME` precision of 7 to 9
-    /// (Spark 4.3's nanosecond TIME) needs feature: time_precision_nanos.
+    /// `KIND_DECIMAL`, `KIND_TIME`, `KIND_TIMESTAMP_NANOS` and
+    /// `KIND_TIMESTAMP_NTZ_NANOS` only. A `KIND_TIME` precision of 7 to 9
+    /// (Spark 4.3's nanosecond TIME) needs feature: time_precision_nanos; the two
+    /// nanosecond timestamp kinds (Spark 4.3's `TIMESTAMP_LTZ(p)` and
+    /// `TIMESTAMP_NTZ(p)`) hold 7 to 9.
     #[prost(uint32, tag = "2")]
     pub precision: u32,
     /// `KIND_DECIMAL` only.
@@ -1849,6 +1852,10 @@ pub mod data_type {
         Variant = 23,
         /// feature: udt_type
         Udt = 24,
+        /// feature: timestamp_nanos_types
+        TimestampNanos = 25,
+        /// feature: timestamp_nanos_types
+        TimestampNtzNanos = 26,
     }
     impl Kind {
         /// String value of the enum field names used in the ProtoBuf definition.
@@ -1882,6 +1889,8 @@ pub mod data_type {
                 Self::CollatedString => "KIND_COLLATED_STRING",
                 Self::Variant => "KIND_VARIANT",
                 Self::Udt => "KIND_UDT",
+                Self::TimestampNanos => "KIND_TIMESTAMP_NANOS",
+                Self::TimestampNtzNanos => "KIND_TIMESTAMP_NTZ_NANOS",
             }
         }
         /// Creates an enum from field names used in the ProtoBuf definition.
@@ -1912,6 +1921,8 @@ pub mod data_type {
                 "KIND_COLLATED_STRING" => Some(Self::CollatedString),
                 "KIND_VARIANT" => Some(Self::Variant),
                 "KIND_UDT" => Some(Self::Udt),
+                "KIND_TIMESTAMP_NANOS" => Some(Self::TimestampNanos),
+                "KIND_TIMESTAMP_NTZ_NANOS" => Some(Self::TimestampNtzNanos),
                 _ => None,
             }
         }

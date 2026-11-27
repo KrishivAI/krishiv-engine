@@ -1759,6 +1759,12 @@ fn spark_type(t: &DataType, nested: &Cell<bool>) -> Result<pb::DataType> {
         DataType::Timestamp => (Kind::Timestamp, 0, 0, 0),
         DataType::TimestampNtz => (Kind::TimestampNtz, 0, 0, 0),
         DataType::Time { precision } => (Kind::Time, u32::from(*precision), 0, 0),
+        DataType::TimestampNanos { precision } => {
+            (Kind::TimestampNanos, u32::from(*precision), 0, 0)
+        }
+        DataType::TimestampNtzNanos { precision } => {
+            (Kind::TimestampNtzNanos, u32::from(*precision), 0, 0)
+        }
         DataType::Geometry { srid } => (Kind::Geometry, 0, 0, srid.to_i32()),
         DataType::Geography { srid } => (Kind::Geography, 0, 0, srid.to_i32()),
         DataType::Variant => (Kind::Variant, 0, 0, 0),

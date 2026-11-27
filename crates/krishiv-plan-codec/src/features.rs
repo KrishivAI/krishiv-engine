@@ -184,6 +184,7 @@ registry! {
     (theta_sketch_aggregates, ThetaSketchAggregates, POST_MIGRATION_READER_VERSION, Semantic, "The DataSketches Theta aggregates (`theta_sketch_agg` and `theta_union_agg` with their folded lgNomEntries, `theta_intersection_agg`): a sketch per group."),
     (time_precision_nanos, TimePrecisionNanos, POST_MIGRATION_READER_VERSION, Semantic, "A `TIME(p)` type with p in 7..9 (Spark 4.3's nanosecond `TIME`), alone or inside an array, map, struct or user-defined type: a reader that knows only `time_type` (p <= 6) would refuse it as corrupt. Such a type contributes this feature alone, not `time_type`; a `TIME(p <= 6)` elsewhere in the plan still adds `time_type` beside it."),
     (time_type, TimeType, POST_MIGRATION_READER_VERSION, Semantic, "The `TIME` type, with its precision."),
+    (timestamp_nanos_types, TimestampNanosTypes, POST_MIGRATION_READER_VERSION, Semantic, "The nanosecond timestamp types `TIMESTAMP_LTZ(p)` and `TIMESTAMP_NTZ(p)`, p in 7..9 (Spark 4.3, `spark.sql.timestampNanosTypes.enabled`; Arrow `Timestamp(Nanosecond)`), alone or inside an array, map, struct or user-defined type: an older reader knows neither the kinds nor the Arrow carrier."),
     (udt_type, UdtType, POST_MIGRATION_READER_VERSION, Semantic, "User-defined types (Spark `UserDefinedType`): stored as their SQL type, with the class names in the plan."),
     (union_loop, UnionLoop, POST_MIGRATION_READER_VERSION, Semantic, "The `UnionLoop` and `LoopRef` nodes (recursive common table expressions run as a loop)."),
     (variant_explode, VariantExplode, POST_MIGRATION_READER_VERSION, Semantic, "The `variant_explode` generator (and `variant_explode_outer`): the fields of a variant object or the elements of a variant array."),
@@ -299,6 +300,9 @@ fn type_feature(t: &DataType) -> Option<Feature> {
             Some(Feature::TimePrecisionNanos)
         }
         DataType::Time { .. } => Some(Feature::TimeType),
+        DataType::TimestampNanos { .. } | DataType::TimestampNtzNanos { .. } => {
+            Some(Feature::TimestampNanosTypes)
+        }
         DataType::Geometry { .. } | DataType::Geography { .. } => Some(Feature::GeoTypes),
         DataType::YearMonthInterval { .. }
         | DataType::DayTimeInterval { .. }
@@ -656,7 +660,12 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
             nanos_time_field(field).then_some(Feature::TimePrecisionNanos)
         }
         Construct::ArrowType(t) => {
-            if arrow_time(t) {
+            if matches!(
+                t,
+                arrow_schema::DataType::Timestamp(arrow_schema::TimeUnit::Nanosecond, _)
+            ) {
+                Some(Feature::TimestampNanosTypes)
+            } else if arrow_time(t) {
                 Some(Feature::TimeType)
             } else if arrow_interval(t) {
                 Some(Feature::IntervalTypes)
