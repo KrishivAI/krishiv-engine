@@ -911,6 +911,7 @@ impl Translator<'_> {
             // passing right row, which evaluates the distance on each.
             distance_on_every_pair: true,
             as_written: false,
+            sort: None,
         };
         Ok(PlanNode::AsOfJoin {
             left: self.relation(left)?,

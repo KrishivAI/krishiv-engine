@@ -561,6 +561,9 @@ impl Gen<'_> {
                     distance: self.flag().then(|| Arc::new(self.expr(1))),
                     distance_on_every_pair: self.flag(),
                     as_written: self.flag(),
+                    sort: self
+                        .flag()
+                        .then(|| (Arc::new(self.expr(1)), Arc::new(self.expr(1)))),
                 }),
             },
             8 => PlanNode::Sort {

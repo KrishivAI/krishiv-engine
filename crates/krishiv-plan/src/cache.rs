@@ -855,6 +855,13 @@ impl Encoder {
                     None => self.tag("no-distance"),
                     Some(d) => self.expr(d, bias),
                 }
+                match &as_of.sort {
+                    None => self.tag("no-sort"),
+                    Some((l, r)) => {
+                        self.expr(l, bias);
+                        self.expr(r, bias);
+                    }
+                }
                 self.plan(left, bias);
                 self.plan(right, bias);
             }

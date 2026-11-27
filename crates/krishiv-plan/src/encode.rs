@@ -72,7 +72,7 @@ use crate::{
 };
 
 /// The version of the canonical encoding layout.
-pub const ENCODING_VERSION: u16 = 12;
+pub const ENCODING_VERSION: u16 = 13;
 
 /// The tag that starts a plan node's encoding: one per node kind, never
 /// reused (`plan_tags_are_unique`). A new kind takes the next number; a
@@ -989,6 +989,14 @@ impl<'k, 'a> Encoder<'k, 'a> {
                                 self.u8(1);
                                 self.expr(t);
                             }
+                        }
+                    }
+                    match &as_of.sort {
+                        None => self.u8(0),
+                        Some((l, r)) => {
+                            self.u8(1);
+                            self.expr(l);
+                            self.expr(r);
                         }
                     }
                 }

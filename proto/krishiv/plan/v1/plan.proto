@@ -1105,6 +1105,22 @@ message AsOfMerge {
   // feature: as_of_join
   // The distance counts on every passing pair, in both directions (Spark's Connect form).
   bool distance_on_every_pair = 6;
+  // feature: as_of_join_sort_operands
+  // The columns the inputs sort by when they are not the as-of columns.
+  optional AsOfSortColumns sort = 7;
+}
+
+// feature: as_of_join_sort_operands
+// The columns an as-of join's inputs sort by: Spark sorts by the operands before the comparison's
+// coercion, and the merge compares the coerced as-of columns.
+message AsOfSortColumns {
+  // feature: as_of_join_sort_operands
+  uint64 left = 1;
+  // feature: as_of_join_sort_operands
+  uint64 right = 2;
+  // feature: as_of_join_sort_operands
+  // The as-of columns are in this sort's order (each an order-keeping cast of its sort column).
+  bool monotone = 3;
 }
 
 // feature: as_of_join

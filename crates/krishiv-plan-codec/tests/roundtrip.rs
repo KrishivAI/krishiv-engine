@@ -623,6 +623,7 @@ fn readers_that_predate_features_still_refuse_what_they_cannot_read() {
             | "late_fetch"
             | "sort_merge_join"
             | "as_of_join"
+            | "as_of_join_sort_operands"
             | "as_of_join_every_pair"
             | "partial_aggregate"
             | "shared_subplan"

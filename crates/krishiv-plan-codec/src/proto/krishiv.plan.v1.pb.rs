@@ -1226,6 +1226,26 @@ pub struct AsOfMerge {
     /// The distance counts on every passing pair, in both directions (Spark's Connect form).
     #[prost(bool, tag = "6")]
     pub distance_on_every_pair: bool,
+    /// feature: as_of_join_sort_operands
+    /// The columns the inputs sort by when they are not the as-of columns.
+    #[prost(message, optional, tag = "7")]
+    pub sort: ::core::option::Option<AsOfSortColumns>,
+}
+/// feature: as_of_join_sort_operands
+/// The columns an as-of join's inputs sort by: Spark sorts by the operands before the comparison's
+/// coercion, and the merge compares the coerced as-of columns.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct AsOfSortColumns {
+    /// feature: as_of_join_sort_operands
+    #[prost(uint64, tag = "1")]
+    pub left: u64,
+    /// feature: as_of_join_sort_operands
+    #[prost(uint64, tag = "2")]
+    pub right: u64,
+    /// feature: as_of_join_sort_operands
+    /// The as-of columns are in this sort's order (each an order-keeping cast of its sort column).
+    #[prost(bool, tag = "3")]
+    pub monotone: bool,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct NestedLoopJoinNode {

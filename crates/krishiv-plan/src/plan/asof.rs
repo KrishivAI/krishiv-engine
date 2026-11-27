@@ -74,6 +74,12 @@ pub struct AsOfMatch {
     /// reads the left input first (Spark's `normalizeMatchOperands`); `false` once
     /// resolved and for Connect, whose operands are already per side.
     pub as_written: bool,
+    /// Resolved SQL: the operands each side sorts by when they differ from [`AsOfMatch::left`] and
+    /// [`AsOfMatch::right`], the operands as normalized before the comparison's coercion (Spark's
+    /// `matchSortExpressions(leftOperand, rightOperand)`; only the comparison gets the casts).
+    /// `None` when the comparison casts neither operand, before analysis, and for Connect, whose
+    /// `AsOfJoin` Spark runs as `min_by` with no sort.
+    pub sort: Option<(Arc<Expr>, Arc<Expr>)>,
 }
 
 impl AsOfMatch {
@@ -97,15 +103,18 @@ impl AsOfMatch {
             distance: None,
             distance_on_every_pair: false,
             as_written: true,
+            sort: None,
         })
     }
 
-    /// Its expressions in order: the two values, the tolerance, then the distance.
+    /// Its expressions in order: the two values, the tolerance, the distance, then the sort
+    /// operands.
     pub fn exprs(&self) -> impl Iterator<Item = &Arc<Expr>> {
         [&self.left, &self.right]
             .into_iter()
             .chain(self.tolerance.as_ref())
             .chain(self.distance.as_ref())
+            .chain(self.sort.iter().flat_map(|(l, r)| [l, r]))
     }
 
     /// Its expressions in order, mutably.
@@ -114,5 +123,15 @@ impl AsOfMatch {
             .into_iter()
             .chain(self.tolerance.as_mut())
             .chain(self.distance.as_mut())
+            .chain(self.sort.iter_mut().flat_map(|(l, r)| [l, r]))
+    }
+
+    /// The operands each side sorts by: [`AsOfMatch::sort`], else the compared values.
+    #[must_use]
+    pub fn sort_operands(&self) -> (&Arc<Expr>, &Arc<Expr>) {
+        match &self.sort {
+            Some((l, r)) => (l, r),
+            None => (&self.left, &self.right),
+        }
     }
 }

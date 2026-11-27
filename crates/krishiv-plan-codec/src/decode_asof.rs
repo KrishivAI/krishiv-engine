@@ -2,7 +2,7 @@
 //! The wire form of a sort-merge join's as-of match (`SortMergeJoinNode.as_of`, codec feature `as_of_join`), checked
 //! on decode.
 
-use krishiv_exec::{AsOfMergeDirection, AsOfMergeSpec};
+use krishiv_exec::{AsOfMergeDirection, AsOfMergeSpec, AsOfSortColumns};
 
 use crate::error::{Result, corrupt};
 use crate::proto as pb;
@@ -22,5 +22,13 @@ pub(crate) fn as_of_merge(a: &pb::AsOfMerge) -> Result<AsOfMergeSpec> {
         allow_exact: a.allow_exact,
         distance: None,
         distance_on_every_pair: a.distance_on_every_pair,
+        sort: match &a.sort {
+            None => None,
+            Some(s) => Some(AsOfSortColumns {
+                left: column(s.left)?,
+                right: column(s.right)?,
+                monotone: s.monotone,
+            }),
+        },
     })
 }

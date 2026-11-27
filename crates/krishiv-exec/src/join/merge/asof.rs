@@ -24,6 +24,14 @@
 //! forward may evaluate it on right rows past the two Spark's scan stops at: a residual that
 //! raises only there (`10 / q.v` with a later `v = 0`) raises here and not in Spark.
 //!
+//! When the comparison casts an operand in a way that does not keep its order (`INT >= STRING`),
+//! each input sorts by its operand as written ([`AsOfMergeSpec::sort`], Spark's
+//! `matchSortExpressions`) and the as-of columns, the comparison's values, are no longer in order:
+//! then each left row reads its group from the first row, as Spark's `findBestBackward` does
+//! ([`Merge::as_of_scan`]; backward only, the planner refuses forward). The comparison's values are
+//! computed below the sorts, so a cast that raises (ANSI `'x'` as `BIGINT`) raises for any row of
+//! the input, also one past where Spark's scan stops.
+//!
 //! Spark's distance ([`AsOfDistance`], planned only when it may raise) is evaluated where Spark
 //! evaluates it, over a narrow batch of the columns it reads. SQL (Spark's scan): forward only,
 //! on a left row's match and its next passing row; a run of left rows matched at one right row
@@ -78,6 +86,22 @@ pub struct AsOfMergeSpec {
     /// Spark's Connect form (`RewriteAsOfJoin`'s `min_by`): the distance of every passing pair
     /// counts, in both directions.
     pub distance_on_every_pair: bool,
+    /// The columns the inputs sort by when they are not the as-of columns: Spark sorts by the
+    /// operands before the comparison's coercion. `None`: both sort by their as-of column.
+    pub sort: Option<AsOfSortColumns>,
+}
+
+/// The columns an as-of merge's inputs sort by ([`AsOfMergeSpec::sort`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AsOfSortColumns {
+    /// The left (probe) input's sort column.
+    pub left: usize,
+    /// The right (build) input's sort column.
+    pub right: usize,
+    /// Whether the as-of columns are in order in this sort (each is an order-keeping cast of its
+    /// sort column): the merge then walks the group once; otherwise each left row reads its group
+    /// from the first row (backward only).
+    pub monotone: bool,
 }
 
 /// An as-of join's distance check compiled for the merge: Spark's `orderExpression` over a
@@ -100,6 +124,11 @@ pub struct AsOfDistance {
 pub(crate) struct AsOfMerge {
     pub(crate) left_column: usize,
     pub(crate) right_column: usize,
+    /// The columns the inputs sort by (the as-of columns unless [`AsOfMergeSpec::sort`]).
+    pub(crate) sort_columns: (usize, usize),
+    /// The as-of columns are not in sort order: each left row reads its group from the first row
+    /// ([`Merge::as_of_scan`]).
+    scan: bool,
     left: Arc<KeyEncoder>,
     right: Arc<KeyEncoder>,
     backward: bool,
@@ -151,9 +180,23 @@ impl AsOfMerge {
                 ));
             }
         }
+        let scan = spec.sort.is_some_and(|s| !s.monotone);
+        if scan && (spec.direction != AsOfMergeDirection::Backward || spec.distance_on_every_pair) {
+            return Err(internal(
+                "an as-of join out of its sort order other than a SQL backward one".to_owned(),
+            ));
+        }
+        let sort_columns = spec.sort.map_or((spec.left_column, spec.right_column), |s| {
+            (s.left, s.right)
+        });
+        if sort_columns.0 >= left.fields().len() || sort_columns.1 >= right.fields().len() {
+            return Err(internal("an as-of join's sort columns are missing".to_owned()));
+        }
         Ok(Self {
             left_column: spec.left_column,
             right_column: spec.right_column,
+            sort_columns,
+            scan,
             left: KeyEncoder::new(left, &[SortKey::asc(spec.left_column)])?,
             right: KeyEncoder::new(right, &[SortKey::asc(spec.right_column)])?,
             backward: spec.direction == AsOfMergeDirection::Backward,
@@ -253,6 +296,11 @@ pub(crate) struct AsOfSlice {
     awaiting: Vec<usize>,
     /// The bytes reserved for the copied best rows (backward with a residual).
     held: usize,
+    /// Out of sort order ([`Merge::as_of_scan`]): per left row from `start`, whether its match is
+    /// decided.
+    done: Vec<bool>,
+    /// Out of sort order: the left rows not yet decided.
+    undone: usize,
 }
 
 impl Merge {
@@ -272,14 +320,25 @@ impl Merge {
         let values = a.left.encode(&l.batch.data().slice(start, end - start))?;
         let nulls = l.batch.data().column(a.left_column).logical_nulls();
         let mut next = start;
-        while next < end && nulls.as_ref().is_some_and(|n| n.is_null(next)) {
-            self.as_of_emit(next, None);
-            next += 1;
-        }
+        // Out of sort order a NULL value may be anywhere: it is decided (unmatched) at once and
+        // emitted in its place with the others.
+        let done: Vec<bool> = if a.scan {
+            (start..end)
+                .map(|i| nulls.as_ref().is_some_and(|n| n.is_null(i)))
+                .collect()
+        } else {
+            while next < end && nulls.as_ref().is_some_and(|n| n.is_null(next)) {
+                self.as_of_emit(next, None);
+                next += 1;
+            }
+            Vec::new()
+        };
+        let undone = done.iter().filter(|&&d| !d).count();
         let filtered = self.shared.filter.is_some();
-        if filtered {
-            // With a residual each slice reads the group from its first row, as the plain
-            // merge's residual pairs do: a slice's rows may need right rows the last one passed.
+        if filtered || a.scan {
+            // With a residual (or out of sort order) each slice reads the group from its first
+            // row, as the plain merge's residual pairs do: a slice's rows may need right rows the
+            // last one passed.
             self.end_chunks();
             self.as_of_cursor.exhausted = false;
         }
@@ -288,12 +347,12 @@ impl Merge {
             end,
             next,
             values,
-            best: if filtered && a.backward {
+            best: if (filtered && a.backward) || a.scan {
                 vec![None; end - start]
             } else {
                 Vec::new()
             },
-            open: if filtered && !a.backward {
+            open: if filtered && !a.backward && !a.scan {
                 (next..end).collect()
             } else {
                 Vec::new()
@@ -301,6 +360,8 @@ impl Merge {
             reached: next,
             awaiting: Vec::new(),
             held: 0,
+            done,
+            undone,
         })
     }
 
@@ -311,7 +372,9 @@ impl Merge {
             return Err(internal("an as-of step without its match".to_owned()));
         };
         let filtered = self.shared.filter.is_some();
-        let decided = if filtered && !a.backward {
+        let decided = if a.scan {
+            slice.undone == 0
+        } else if filtered && !a.backward {
             slice.open.is_empty() && slice.awaiting.is_empty()
         } else {
             slice.next >= slice.end
@@ -335,7 +398,9 @@ impl Merge {
                 .right
                 .encode(&c.batch.data().slice(c.start, c.end - c.start))?,
         };
-        let visited = if filtered {
+        let visited = if a.scan {
+            self.as_of_scan(&a, &mut slice, &c, &values)
+        } else if filtered {
             self.as_of_filtered(&a, &mut slice, &c, &values)
         } else {
             Ok(self.as_of_walk(&a, &mut slice, &c, &values))
@@ -346,7 +411,7 @@ impl Merge {
         self.counters
             .as_of_right_rows
             .fetch_add(visited, Ordering::Relaxed);
-        if filtered && a.backward && self.chunks.row >= c.end {
+        if ((filtered && a.backward) || a.scan) && self.chunks.row >= c.end {
             self.as_of_compact(&mut slice, c.serial).await?;
             let mut held: Vec<u64> = slice.best[slice.next - slice.start..]
                 .iter()
@@ -612,6 +677,103 @@ impl Merge {
         Ok(visited)
     }
 
+    /// Out of sort order (backward, Spark's `findBestBackward` per left row): each undecided left
+    /// row against the current chunk's rows in group order. A right row it passes (and the residual
+    /// keeps) is its best so far; the first right row it does not pass once it has a best decides
+    /// it; a pass the residual drops neither sets a best nor decides. A NULL right value passes
+    /// nothing. The residual is evaluated only on pairs Spark evaluates it on: the rows' passing
+    /// pairs before their deciding row, [`PAIR_BATCH`] at a time; a row whose decision waits on
+    /// pairs not yet evaluated stops the chunk until they are. The right rows it moved past, as a
+    /// count.
+    fn as_of_scan(
+        &mut self,
+        a: &AsOfMerge,
+        slice: &mut AsOfSlice,
+        c: &Chunk,
+        values: &Rows,
+    ) -> Result<u64> {
+        let Some(l) = self.left.current.clone() else {
+            return Ok(0);
+        };
+        let filter = self.shared.filter.clone();
+        let right_nulls = c.batch.data().column(a.right_column).logical_nulls();
+        let width = slice.end - slice.start;
+        let pick = |r: usize| Pick {
+            batch: Arc::clone(&c.batch),
+            serial: c.serial,
+            row: r,
+        };
+        let mut visited = 0;
+        // (left row, chunk row), in right-row order; the rows with a pair among them.
+        let mut pairs: Vec<(usize, usize)> = Vec::new();
+        let mut pending = vec![false; width];
+        while self.chunks.row < c.end && slice.undone > 0 {
+            let r = self.chunks.row;
+            let rv = (!right_nulls.as_ref().is_some_and(|n| n.is_null(r)))
+                .then(|| values.row(r - c.start));
+            let passes = |k: usize| rv.is_some_and(|v| a.passes(v.data(), slice.values.row(k).data()));
+            if !pairs.is_empty() {
+                // A row this right row would decide waits on its pairs' residual; and the batch
+                // stays bounded.
+                let waits = (0..width).any(|k| !slice.done[k] && pending[k] && !passes(k));
+                if waits || pairs.len() + slice.undone > PAIR_BATCH {
+                    break;
+                }
+            }
+            #[expect(
+                clippy::needless_range_loop,
+                reason = "k indexes `slice.done`, `slice.best` and `pending` together and is the `passes` row"
+            )]
+            for k in 0..width {
+                if slice.done[k] {
+                    continue;
+                }
+                if passes(k) {
+                    if filter.is_some() {
+                        pairs.push((slice.start + k, r));
+                        pending[k] = true;
+                    } else {
+                        slice.best[k] = Some(pick(r));
+                    }
+                } else if slice.best[k].is_some() {
+                    slice.done[k] = true;
+                    slice.undone -= 1;
+                }
+            }
+            self.chunks.row += 1;
+            visited += 1;
+        }
+        let Some(filter) = filter.filter(|_| !pairs.is_empty()) else {
+            return Ok(visited);
+        };
+        let left_idx: Vec<(usize, usize)> = pairs.iter().map(|&(i, _)| (0, i)).collect();
+        let right_idx: Vec<(usize, usize)> = pairs.iter().map(|&(_, r)| (0, r)).collect();
+        let mut columns = gather(
+            std::slice::from_ref(l.batch.data()),
+            &left_idx,
+            self.left_columns,
+        )?;
+        columns.extend(gather(
+            std::slice::from_ref(c.batch.data()),
+            &right_idx,
+            self.right_columns,
+        )?);
+        let candidates = super::record(&self.shared.filter_schema, columns, pairs.len())?;
+        let mask = filter.evaluate_in(&candidates, self.partition)?;
+        if mask.len() != pairs.len() {
+            return Err(internal(
+                "a join filter returned the wrong row count".to_owned(),
+            ));
+        }
+        // In right-row order: a row's last kept pair is its best.
+        for (j, &(i, r)) in pairs.iter().enumerate() {
+            if mask.is_valid(j) && mask.value(j) {
+                slice.best[i - slice.start] = Some(pick(r));
+            }
+        }
+        Ok(visited)
+    }
+
     /// The key's left rows are done: the rows still waiting for their next passing right row
     /// (forward, without a residual) get it now, read on from where the walk stopped.
     pub(super) async fn as_of_finish(&mut self) -> Result<()> {
@@ -781,13 +943,13 @@ impl Merge {
     /// (backward) or none, and on to the next left rows.
     fn as_of_end(&mut self, a: &AsOfMerge, mut slice: AsOfSlice) -> Result<()> {
         let filtered = self.shared.filter.is_some();
-        if filtered && !a.backward {
+        if filtered && !a.backward && !a.scan {
             for i in std::mem::take(&mut slice.open) {
                 self.as_of_emit(i, None);
             }
         } else {
             for i in slice.next..slice.end {
-                let pick = match (filtered, a.backward) {
+                let pick = match (filtered || a.scan, a.backward) {
                     (true, _) => slice.best[i - slice.start].take(),
                     (false, true) => self.as_of_cursor.candidate.clone(),
                     (false, false) => None,
@@ -799,7 +961,7 @@ impl Merge {
             self.memory.shrink(slice.held);
         }
         self.left.pos = slice.end;
-        if filtered {
+        if filtered || a.scan {
             self.end_chunks();
         }
         self.phase = Phase::NextSlice;

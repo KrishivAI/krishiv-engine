@@ -1532,6 +1532,7 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
                         allow_exact: true,
                         distance: Some(residual()),
                         distance_on_every_pair: false,
+                        sort: None,
                     }),
                 }
             }),
@@ -1558,6 +1559,38 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
                         allow_exact: false,
                         distance: Some(residual()),
                         distance_on_every_pair: true,
+                        sort: None,
+                    }),
+                }
+            }),
+        ),
+        (
+            // The as-of operands differ from the comparison's coerced columns: the inputs sort by
+            // the operands (feature `as_of_join_sort_operands`).
+            "as_of_join_sort_operands",
+            PhysNode::SortMergeJoin({
+                let j = join_plan(JoinType::LeftOuter);
+                SortMergeJoinPlan {
+                    probe: j.probe,
+                    build: j.build,
+                    join_type: j.join_type,
+                    probe_keys: j.probe_keys,
+                    build_keys: j.build_keys,
+                    null_safe: j.null_safe,
+                    residual: None,
+                    single_match: false,
+                    as_of: Some(krishiv_exec::AsOfMergeSpec {
+                        left_column: 0,
+                        right_column: 0,
+                        direction: krishiv_exec::AsOfMergeDirection::Backward,
+                        allow_exact: true,
+                        distance: None,
+                        distance_on_every_pair: false,
+                        sort: Some(krishiv_exec::AsOfSortColumns {
+                            left: 1,
+                            right: 1,
+                            monotone: false,
+                        }),
                     }),
                 }
             }),

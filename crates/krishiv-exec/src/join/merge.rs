@@ -68,7 +68,7 @@ use crate::sync::{Event, Mutex, lock};
 
 mod asof;
 use asof::{AsOfCursor, AsOfMerge, AsOfSlice};
-pub use asof::{AsOfDistance, AsOfMergeDirection, AsOfMergeSpec};
+pub use asof::{AsOfDistance, AsOfMergeDirection, AsOfMergeSpec, AsOfSortColumns};
 
 /// Candidate pairs whose residual condition is evaluated at once.
 const PAIR_BATCH: usize = 1024;
@@ -1408,8 +1408,10 @@ impl SortMergeJoin {
                     return Err(super::unsupported("an as-of join other than inner or left"));
                 }
                 let merge = AsOfMerge::new(&spec.probe_schema, &spec.build_schema, &a, distance)?;
-                lk.push(SortKey::asc(merge.left_column));
-                rk.push(SortKey::asc(merge.right_column));
+                // Spark sorts by the operands as written (the as-of columns unless a cast
+                // separates them).
+                lk.push(SortKey::asc(merge.sort_columns.0));
+                rk.push(SortKey::asc(merge.sort_columns.1));
                 Some(Arc::new(merge))
             }
         };

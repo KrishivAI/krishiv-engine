@@ -188,7 +188,7 @@ pub use broadcast::{BroadcastKey, BroadcastTables, SharedBuildJoinNode};
 pub(crate) use broadcast::{BuildJob, Decision, PrebuiltSink, SharedOrOwnRows};
 pub(crate) use merge::MergeEnv;
 pub use merge::{
-    AsOfDistance, AsOfMergeDirection, AsOfMergeSpec, SortMergeJoin, SortMergeJoinNode,
+    AsOfDistance, AsOfMergeDirection, AsOfMergeSpec, AsOfSortColumns, SortMergeJoin, SortMergeJoinNode,
     merge_join_supported,
 };
 pub use nested::{NestedLoopJoin, NestedLoopJoinNode, NestedLoopSpec};

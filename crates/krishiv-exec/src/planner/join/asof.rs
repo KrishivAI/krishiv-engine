@@ -24,7 +24,7 @@ use super::super::explain::ExplainNode;
 use super::super::properties::Distribution;
 use super::{equality, residual_of, sides, split_and, text};
 use crate::error::{Result, internal};
-use crate::join::{AsOfMergeDirection, AsOfMergeSpec, JoinType};
+use crate::join::{AsOfMergeDirection, AsOfMergeSpec, AsOfSortColumns, JoinType};
 use crate::physical::{PhysNode, SortMergeJoinPlan, sort_merge_join};
 
 impl Planner<'_> {
@@ -62,7 +62,11 @@ impl Planner<'_> {
         };
         // Each side is asked for what the parent reads plus what the condition and the values read.
         let mut demand = demand;
-        for e in on.into_iter().chain([&as_of.left, &as_of.right]) {
+        let (left_sort, right_sort) = as_of.sort_operands();
+        for e in on
+            .into_iter()
+            .chain([&as_of.left, &as_of.right, left_sort, right_sort])
+        {
             demand = super::super::build::with_columns_of(demand, e);
         }
         self.demand.clone_from(&demand);
@@ -106,6 +110,42 @@ impl Planner<'_> {
         else {
             return Err(unsupported("an as-of join without its values"));
         };
+        // Spark sorts each side by its operand before the comparison's coercion
+        // (`matchSortExpressions`); the merge compares the coerced values. When both coercions keep
+        // the order, the coerced values are in sort order and the merge walks a group once;
+        // otherwise each left row reads its group from the first row, as Spark's scan does.
+        let (probe, build, sort) = match &as_of.sort {
+            None => (probe, build, None),
+            Some((l, r)) => {
+                let (probe, left) = self.with_columns(probe, std::slice::from_ref(l))?;
+                let (build, right) = self.with_columns(build, std::slice::from_ref(r))?;
+                let (Some(&left), Some(&right)) = (left.first(), right.first()) else {
+                    return Err(unsupported("an as-of join without its sort operands"));
+                };
+                let fixed_zone = matches!(
+                    self.env.zone_rules()?,
+                    krishiv_kernels::datetime::ZoneRef::Fixed(_)
+                );
+                let keeps = |p: &Planned, from: usize, to: usize| {
+                    keeps_order(
+                        p.schema.field(from).data_type(),
+                        p.schema.field(to).data_type(),
+                        fixed_zone,
+                    )
+                };
+                let monotone = keeps(&probe, left, left_column) && keeps(&build, right, right_column);
+                (probe, build, Some(AsOfSortColumns { left, right, monotone }))
+            }
+        };
+        if sort.is_some_and(|s| !s.monotone) {
+            // Spark's forward scan picks by the distance, which unit 2 of the design builds for
+            // every type; the Connect form has no sort operands.
+            if direction == AsOfMergeDirection::Forward || as_of.distance_on_every_pair {
+                return Err(unsupported(
+                    "a forward as-of join whose comparison casts a value out of its order (as STRING against a number)",
+                ));
+            }
+        }
         // Without keys every row meets in one group, so both sides gather to one partition
         // (I8): a hash exchange on the constant key would do the same with a hidden hot spot.
         let (probe, build) = if constant {
@@ -223,6 +263,7 @@ impl Planner<'_> {
                 allow_exact: as_of.allow_exact,
                 distance,
                 distance_on_every_pair: as_of.distance_on_every_pair,
+                sort,
             }),
         };
         // Validates the join and gives its schema.
@@ -245,8 +286,8 @@ impl Planner<'_> {
             (probe_exprs, build_exprs)
         };
         let inputs = vec![
-            sorted(probe.explain, &probe_keys_shown, &as_of.left),
-            sorted(build.explain, &build_keys_shown, &as_of.right),
+            sorted(probe.explain, &probe_keys_shown, left_sort),
+            sorted(build.explain, &build_keys_shown, right_sort),
         ];
         Ok(Planned {
             ordering: Vec::new(),
@@ -280,4 +321,36 @@ fn distance_is_floating(d: &Expr) -> bool {
         ExprNode::Resolved(ResolvedExpr::Function(f))
             if matches!(f.data_type, DataType::Float | DataType::Double)
     )
+}
+
+/// Whether a cast from `from` to `to` keeps the order of values (Spark's widening coercions):
+/// the same type, an integral to a wider integral, a decimal or a double, a decimal to a decimal
+/// or a double, a float to a double, a date to a timestamp, and a `TIMESTAMP_NTZ` to a
+/// `TIMESTAMP` in a fixed-offset session zone (a region's DST gap moves local times forward). A cast
+/// may map two values to one (a large `BIGINT` to `DOUBLE`) and still keep the order: ties sort as
+/// Spark sorts them, by the value before the cast.
+fn keeps_order(from: &arrow_schema::DataType, to: &arrow_schema::DataType, fixed_zone: bool) -> bool {
+    use arrow_schema::DataType as A;
+    let int_width = |t: &A| match t {
+        A::Int8 => Some(1),
+        A::Int16 => Some(2),
+        A::Int32 => Some(4),
+        A::Int64 => Some(8),
+        _ => None,
+    };
+    let decimal = |t: &A| matches!(t, A::Decimal32(..) | A::Decimal64(..) | A::Decimal128(..) | A::Decimal256(..));
+    if from == to {
+        return true;
+    }
+    match (from, to) {
+        (f, t) if int_width(f).is_some() => {
+            int_width(t).is_some_and(|w| int_width(f).is_some_and(|v| v <= w))
+                || decimal(t)
+                || matches!(t, A::Float64)
+        }
+        (f, t) if decimal(f) => decimal(t) || matches!(t, A::Float64),
+        (A::Float32, A::Float64) | (A::Date32, A::Timestamp(_, _)) => true,
+        (A::Timestamp(a, None), A::Timestamp(b, Some(_))) => a == b && fixed_zone,
+        _ => false,
+    }
 }

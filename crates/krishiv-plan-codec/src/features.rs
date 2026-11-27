@@ -124,6 +124,7 @@ registry! {
     (aggregate_filter, AggregateFilter, POST_MIGRATION_READER_VERSION, Semantic, "An aggregate's `FILTER (WHERE ...)` mask column."),
     (any_value_by_aggregates, AnyValueByAggregates, POST_MIGRATION_READER_VERSION, Semantic, "The `any_value`, `max_by` and `min_by` aggregates."),
     (as_of_join, AsOfJoin, POST_MIGRATION_READER_VERSION, Semantic, "A sort-merge join's as-of match (`SortMergeJoinPlan.as_of`, Spark 4.3's `ASOF JOIN`): each left row with the nearest right row of its keys by the as-of columns; without it the join would return every matching pair."),
+    (as_of_join_sort_operands, AsOfJoinSortOperands, POST_MIGRATION_READER_VERSION, Semantic, "An as-of join whose inputs sort by other columns than the as-of columns (`AsOfMergeSpec::sort`): Spark sorts by the operands before the comparison's coercion. A reader without it would sort by the coerced values and could pick another row."),
     (binary_output_style, BinaryOutputStyle, POST_MIGRATION_READER_VERSION, Semantic, "The `binary_output_style` expression environment setting (`spark.sql.binaryOutputStyle`): `to_csv` and `to_xml` print binary fields as UTF-8 text, signed bytes, base64 or hex instead of `[45 61]`."),
     (bitmap_aggregates, BitmapAggregates, POST_MIGRATION_READER_VERSION, Semantic, "The bitmap aggregates (`bitmap_construct_agg`, `bitmap_or_agg`, `bitmap_and_agg`): a 4,096-byte bitmap per group."),
     (calendar_struct, CalendarStruct, POST_MIGRATION_READER_VERSION, Semantic, "CALENDAR INTERVAL columns on the struct carrier (months, days, microseconds, each child marked `krishiv.calendar`; ADR 0009 update 2026-11-06). A reader without it would read the column as a plain STRUCT."),
@@ -227,6 +228,9 @@ pub enum Construct<'a> {
     Item(&'a ProjectItemPlan),
     /// A join type.
     Join(JoinType),
+    /// The sort columns of an as-of join whose inputs sort by other columns than the as-of
+    /// columns.
+    AsOfSort(&'a krishiv_exec::AsOfSortColumns),
     /// An exchange's partitioning.
     Partitioning(&'a Partitioning),
     /// A window function.
@@ -575,6 +579,7 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
             PhysNode::Exchange(e) if !e.filters.is_empty() => Some(Feature::ExchangeFilters),
             PhysNode::Exchange(_) => None,
         },
+        Construct::AsOfSort(_) => Some(Feature::AsOfJoinSortOperands),
         Construct::Item(item) => match item {
             ProjectItemPlan::Column { .. } | ProjectItemPlan::Expr { .. } => None,
             ProjectItemPlan::NullOf { .. } => Some(Feature::Expand),
@@ -834,7 +839,12 @@ fn constructs_of<'a>(node: &'a PhysNode, f: &mut impl FnMut(Construct<'a>)) {
                 f(Construct::ProbeSelect);
             }
         }
-        PhysNode::SortMergeJoin(j) => f(Construct::Join(j.join_type)),
+        PhysNode::SortMergeJoin(j) => {
+            f(Construct::Join(j.join_type));
+            if let Some(s) = j.as_of.as_ref().and_then(|a| a.sort.as_ref()) {
+                f(Construct::AsOfSort(s));
+            }
+        }
         PhysNode::NestedLoopJoin(j) => f(Construct::Join(j.join_type)),
         PhysNode::Generate { kind, .. } => f(Construct::Generator(*kind)),
         // The planner's schema is classified by field, as an exchange

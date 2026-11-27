@@ -704,6 +704,11 @@ impl Encoder {
                     allow_exact: a.allow_exact,
                     distance: self.residual(a.distance.as_ref())?,
                     distance_on_every_pair: a.distance_on_every_pair,
+                    sort: a.sort.map(|s| pb::AsOfSortColumns {
+                        left: s.left as u64,
+                        right: s.right as u64,
+                        monotone: s.monotone,
+                    }),
                 }),
             },
         })

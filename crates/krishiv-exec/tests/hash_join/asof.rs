@@ -209,6 +209,7 @@ impl Case {
             allow_exact: self.exact,
             distance: None,
             distance_on_every_pair: distance.as_ref().is_some_and(|d| d.1),
+            sort: None,
         };
         SortMergeJoin::try_new_with_distance(spec, Some(as_of), distance.map(|d| d.0)).unwrap()
     }

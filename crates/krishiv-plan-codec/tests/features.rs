@@ -919,6 +919,39 @@ fn a_reader_without_as_of_join_refuses_an_as_of_merge() {
     assert_eq!(Feature::AsOfJoin.kind(), FeatureKind::Semantic);
 }
 
+/// An as-of join whose inputs sort by their operands as written (`AsOfMergeSpec::sort`) needs
+/// `as_of_join_sort_operands`: a reader without it would sort by the compared values and could
+/// pick another row (design unit 0). A plain as-of join does not list it.
+#[test]
+fn a_reader_without_sort_operands_refuses_an_as_of_join_that_sorts_by_them() {
+    let case = |name: &str| {
+        cases()
+            .into_iter()
+            .find(|(n, _)| n == name)
+            .unwrap_or_else(|| panic!("{name}"))
+            .1
+    };
+    assert!(!plan_features(&case("as_of_join")).contains(&Feature::AsOfJoinSortOperands));
+    let plan = case("as_of_join_sort_operands");
+    let used = plan_features(&plan);
+    assert!(used.contains(&Feature::AsOfJoinSortOperands), "{used:?}");
+    let bytes = encode(&plan).unwrap();
+    assert_eq!(decode(&bytes).unwrap(), plan);
+    let known: Vec<Feature> = used
+        .iter()
+        .copied()
+        .filter(|f| *f != Feature::AsOfJoinSortOperands)
+        .chain([Feature::SortMergeJoin])
+        .collect();
+    assert_eq!(
+        decode_with(&bytes, &Limits::default(), &ReaderFeatures::only(known)).unwrap_err(),
+        CodecError::UnsupportedFeatures {
+            missing: vec!["as_of_join_sort_operands".to_owned()]
+        }
+    );
+    assert_eq!(Feature::AsOfJoinSortOperands.kind(), FeatureKind::Semantic);
+}
+
 /// The features an as-of join's distance expression uses are named in the header: a distance
 /// pinned to an ANSI mode (a SQL function body's) needs `captured_eval_mode` beside
 /// `as_of_join`, a reader without it refuses the plan, and it round-trips (review of #990).

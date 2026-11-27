@@ -997,3 +997,178 @@ fn nested_struct_fields_match_names_as_the_session_does() {
         ]
     );
 }
+
+/// Each side is sorted by its operand as written, not by the comparison's coerced value (Spark's
+/// `matchSortExpressions`; design unit 0). A STRING meeting an INT sorts as text, so the scan per
+/// left row stops at the first pair that fails (or is NULL) once a best row exists; a pair that
+/// fails the residual is skipped. Results of a Spark 4.3.0 run (`opus1-unit0/u0.sql`, `u0n.sql`,
+/// `opus1-u0g/g.sql`, `rev-f2-asof-ref/d1.sql`, `d3.sql`).
+#[test]
+fn each_side_sorts_by_its_operand_as_written() {
+    let s = session();
+    let r = |sql: &str| rows(&s, sql);
+    // U1 (M1): '10' < '2' < '9' as text; 11 passes all three, the last is '9'.
+    assert_eq!(
+        r("SELECT t.v, q.w FROM (SELECT 11 v) t ASOF JOIN \
+           (SELECT * FROM VALUES ('10'), ('2'), ('9') r(w)) q MATCH_CONDITION (t.v >= q.w)"),
+        ["11|9"]
+    );
+    // U2: per key; 25 stops at '100' after '10'.
+    assert_eq!(
+        r("SELECT t.k, t.v, q.w FROM (SELECT * FROM VALUES (1, 11), (1, 3), (1, 25), (1, 1), \
+           (2, 95) t(k, v)) t LEFT ASOF JOIN (SELECT * FROM VALUES (1, '10'), (1, '2'), (1, '9'), \
+           (1, '30'), (1, '100'), (2, '9'), (2, '90'), (2, '100') r(k, w)) q \
+           MATCH_CONDITION (t.v >= q.w) ON t.k = q.k"),
+        ["1|1|NULL", "1|11|10", "1|25|10", "1|3|2", "2|95|90"]
+    );
+    // U3: a pair failing the residual neither sets the best row nor ends the scan.
+    assert_eq!(
+        r("SELECT t.v, q.w FROM (SELECT * FROM VALUES (11), (25) t(v)) t LEFT ASOF JOIN \
+           (SELECT * FROM VALUES ('10', true), ('2', true), ('20', false), ('21', true), \
+           ('3', true), ('9', false) r(w, ok)) q MATCH_CONDITION (t.v >= q.w) ON q.ok"),
+        ["11|2", "25|3"]
+    );
+    // RESC (rule c) and RESC2 (the stop at '20' after '2').
+    assert_eq!(
+        r("SELECT t.v, q.w FROM (SELECT * FROM VALUES (11) a(v)) t LEFT ASOF JOIN \
+           (SELECT * FROM VALUES ('10', true), ('2', true), ('3', false), ('9', true) r(w, ok)) q \
+           MATCH_CONDITION (t.v >= q.w) ON q.ok"),
+        ["11|9"]
+    );
+    assert_eq!(
+        r("SELECT t.v, q.w FROM (SELECT * FROM VALUES (11) a(v)) t LEFT ASOF JOIN \
+           (SELECT * FROM VALUES ('10', true), ('2', true), ('20', true), ('9', false) r(w, ok)) q \
+           MATCH_CONDITION (t.v >= q.w) ON q.ok"),
+        ["11|2"]
+    );
+    // U4: strict.
+    assert_eq!(
+        r("SELECT t.v, q.w FROM (SELECT * FROM VALUES (11), (25) t(v)) t LEFT ASOF JOIN \
+           (SELECT * FROM VALUES ('10'), ('2'), ('21'), ('3'), ('9') r(w)) q \
+           MATCH_CONDITION (t.v > q.w)"),
+        ["11|2", "25|9"]
+    );
+    // U5, U6: widening casts keep the order (the two-pointer walk), both directions.
+    let dec = "SELECT t.v, CAST(q.w AS STRING) FROM (SELECT * FROM VALUES (10), (2), (11) t(v)) t \
+               LEFT ASOF JOIN (SELECT * FROM VALUES (2.5BD), (10.0BD), (10.5BD) r(w)) q \
+               MATCH_CONDITION";
+    assert_eq!(
+        r(&format!("{dec} (t.v >= q.w)")),
+        ["10|10.0", "11|10.5", "2|NULL"]
+    );
+    assert_eq!(
+        r(&format!("{dec} (t.v <= q.w)")),
+        ["10|10.0", "11|NULL", "2|2.5"]
+    );
+    let date = "SELECT CAST(t.d AS STRING), CAST(q.ts AS STRING) FROM (SELECT * FROM VALUES \
+                (DATE'2024-01-02'), (DATE'2024-01-05') t(d)) t LEFT ASOF JOIN (SELECT * FROM VALUES \
+                (TIMESTAMP_NTZ'2024-01-01 12:00:00'), (TIMESTAMP_NTZ'2024-01-02 00:00:00'), \
+                (TIMESTAMP_NTZ'2024-01-03 01:00:00') r(ts)) q MATCH_CONDITION";
+    assert_eq!(
+        r(&format!("{date} (t.d >= q.ts)")),
+        [
+            "2024-01-02|2024-01-02 00:00:00",
+            "2024-01-05|2024-01-03 01:00:00"
+        ]
+    );
+    assert_eq!(
+        r(&format!("{date} (t.d <= q.ts)")),
+        ["2024-01-02|2024-01-02 00:00:00", "2024-01-05|NULL"]
+    );
+    // STOP: the scan ends at '7' and never casts 'abc'; key 2 has no left row.
+    assert_eq!(
+        r("SELECT t.v, q.w FROM (SELECT * FROM VALUES (1, 5) a(k, v)) t ASOF JOIN \
+           (SELECT * FROM VALUES (1,'1'), (1,'7'), (1,'abc'), (2,'zzz') r(k, w)) q \
+           MATCH_CONDITION (t.v >= q.w) ON t.k = q.k"),
+        ["5|1"]
+    );
+    // U7: a left value that does not cast raises, as in Spark.
+    assert_eq!(
+        error(
+            &s,
+            "SELECT t.v, q.w FROM (SELECT * FROM VALUES ('5'), ('x'), ('30') t(v)) t LEFT ASOF \
+             JOIN (SELECT * FROM VALUES (3), (4), (20) r(w)) q MATCH_CONDITION (t.v >= q.w)"
+        ),
+        "CAST_INVALID_INPUT"
+    );
+    // Forward and not monotone is refused until its distance rule lands (design unit 2): Spark
+    // gives '10' for M2 and F2, '9' for M3.
+    for (v, ws) in [
+        (1, "('10'), ('2'), ('9')"),
+        (3, "('10'), ('2'), ('9')"),
+        (1, "('10'), ('100'), ('2')"),
+    ] {
+        let sql = format!(
+            "SELECT * FROM (SELECT {v} v) t ASOF JOIN (SELECT * FROM VALUES {ws} r(w)) q \
+             MATCH_CONDITION (t.v <= q.w)"
+        );
+        assert_eq!(error(&s, &sql), "KRISHIV_UNSUPPORTED_FEATURE", "{sql}");
+    }
+}
+
+/// Without ANSI a STRING that does not cast is a NULL comparison, which ends the scan once a best
+/// row exists (Spark 4.3.0: `u0n.sql` N1-N3, `d3.sql` NULLSTOP).
+#[test]
+fn a_null_comparison_ends_the_scan_without_ansi() {
+    let s = session();
+    rows(&s, "SET spark.sql.ansi.enabled=false");
+    let r = |sql: &str| rows(&s, sql);
+    assert_eq!(
+        r("SELECT t.v, q.w FROM (SELECT * FROM VALUES (11), (25) t(v)) t LEFT ASOF JOIN \
+           (SELECT * FROM VALUES ('10'), ('2'), ('3'), ('x'), ('9') r(w)) q \
+           MATCH_CONDITION (t.v >= q.w)"),
+        ["11|9", "25|9"]
+    );
+    assert_eq!(
+        r("SELECT t.v, q.w FROM (SELECT * FROM VALUES ('5'), ('x'), ('30'), (NULL) t(v)) t \
+           LEFT ASOF JOIN (SELECT * FROM VALUES (3), (4), (20) r(w)) q \
+           MATCH_CONDITION (t.v >= q.w)"),
+        ["30|20", "5|4", "NULL|NULL", "x|NULL"]
+    );
+    assert_eq!(
+        r("SELECT t.v, q.w FROM (SELECT * FROM VALUES (11) t(v)) t ASOF JOIN \
+           (SELECT * FROM VALUES ('x'), ('10'), ('2') r(w)) q MATCH_CONDITION (t.v >= q.w)"),
+        ["11|2"]
+    );
+    assert_eq!(
+        r("SELECT t.v, q.w FROM (SELECT * FROM VALUES (1, 5) a(k, v)) t LEFT ASOF JOIN \
+           (SELECT * FROM VALUES (1, '1'), (1, '3x'), (1, '4') r(k, w)) q \
+           MATCH_CONDITION (t.v >= q.w) ON t.k = q.k"),
+        ["5|1"]
+    );
+}
+
+/// TIMESTAMP_NTZ against TIMESTAMP in a zone with daylight saving is not monotone: a local time in
+/// the spring-forward gap moves forward by the gap, so the uncoerced order is not the compared one
+/// (Spark 4.3.0: `rev-f1-spark/ref/gap.sql`, `rev-f2-asof-ref/d1.sql` BACK, BACK2).
+#[test]
+fn a_local_time_in_a_daylight_saving_gap_takes_the_scan() {
+    let s = session();
+    rows(&s, "SET spark.sql.session.timeZone=America/Los_Angeles");
+    let r = |sql: &str| rows(&s, sql);
+    assert_eq!(
+        r("SELECT t.k, CAST(t.v AS STRING), CAST(q.w AS STRING) FROM (SELECT * FROM VALUES \
+           (1, TIMESTAMP_NTZ'2024-03-10 02:30:00'), (2, TIMESTAMP_NTZ'2024-03-10 03:00:00') a(k, v)) t \
+           ASOF JOIN (SELECT TIMESTAMP'2024-03-10 03:15:00' w) q MATCH_CONDITION (t.v >= q.w)"),
+        ["1|2024-03-10 02:30:00|2024-03-10 03:15:00"]
+    );
+    let t = "(SELECT * FROM VALUES (1, TIMESTAMP'2021-03-14 03:15:00') AS t(k, ts)) t";
+    for (q, want) in [
+        (
+            "(TIMESTAMP_NTZ'2021-03-14 02:30:00'), (TIMESTAMP_NTZ'2021-03-14 03:00:00')",
+            "2021-03-14 03:00:00",
+        ),
+        (
+            "(TIMESTAMP_NTZ'2021-03-14 01:00:00'), (TIMESTAMP_NTZ'2021-03-14 02:50:00'), \
+             (TIMESTAMP_NTZ'2021-03-14 03:10:00')",
+            "2021-03-14 01:00:00",
+        ),
+    ] {
+        let sql = format!(
+            "SELECT CAST(q.ntz AS STRING) FROM {t} LEFT ASOF JOIN \
+             (SELECT 1 AS k, * FROM VALUES {q} AS r(ntz)) q MATCH_CONDITION (t.ts >= q.ntz) \
+             ON t.k = q.k"
+        );
+        assert_eq!(r(&sql), [want], "{sql}");
+    }
+}

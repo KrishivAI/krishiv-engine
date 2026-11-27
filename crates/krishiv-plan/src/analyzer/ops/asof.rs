@@ -233,6 +233,9 @@ impl Resolver<'_> {
         } else {
             None
         };
+        // Spark sorts each side by its operand as normalized (`matchSortExpressions`), not by the
+        // comparison's coerced argument; only the comparison gets the casts.
+        let normalized = (Arc::clone(&left.expr), Arc::clone(&right.expr));
         let ExprNode::Resolved(ResolvedExpr::Function(ResolvedFunction { args, .. })) =
             &compared.node
         else {
@@ -251,6 +254,10 @@ impl Resolver<'_> {
                 origin,
             ));
         };
+        // Connect's `AsOfJoin` runs as `min_by` over the passing rows (`RewriteAsOfJoin`): no sort,
+        // so the merge walks the compared values. SQL sorts by the normalized operands.
+        let sort = (!every_pair && (normalized.0 != *left || normalized.1 != *right))
+            .then_some(normalized);
         // An untyped `NULL` value stays `NullType` in the comparison and matches no row: it
         // takes the other value's type, so both sides of the merge have one type. Against an
         // array or a struct, which the merge does not sort yet (design unit 1), both values are
@@ -292,6 +299,7 @@ impl Resolver<'_> {
             distance,
             distance_on_every_pair: every_pair,
             as_written: false,
+            sort,
         })
     }
 
