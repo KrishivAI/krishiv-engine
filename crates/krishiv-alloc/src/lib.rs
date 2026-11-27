@@ -34,7 +34,11 @@
 //! limit is the default, a share of the container's memory: the
 //! constructor reads the cgroup and physical memory without allocating
 //! (`container.rs`) and applies the options when that default is not
-//! generous, a container under about 5 GiB (QA2-12). A limit from a
+//! generous, a container under about 5 GiB (QA2-12). A given limit above
+//! the container's memory is not honoured by the pool (it gets the default
+//! instead), so the constructor decides from the default then too. Where
+//! the container's memory cannot be read, the default is the 2 GiB
+//! fallback, which is not generous. A limit from a
 //! configuration file or a runtime `SET` is still enforced by the memory
 //! pools and uses [`release`], but without these options. On other targets
 //! (musl, macOS) there is no constructor: set the `MIMALLOC_*` variables of
@@ -199,6 +203,7 @@ mod cpu_check {
     pub(super) static CHECK: extern "C" fn() = check;
 }
 
+#[cfg(any(test, all(target_os = "linux", target_env = "gnu")))]
 mod container;
 
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
@@ -300,14 +305,22 @@ mod init {
             (Some(a), Some(b)) => Some(a.min(b)),
             (a, b) => a.or(b),
         };
+        // The decision follows the limit the pool will have
+        // (`krishiv_memory::explicit_limit`). With no limit given, or one
+        // above the container's that the pool does not honour, that is the
+        // default `krishiv.memory.limit`, a share of the container's memory,
+        // read here without allocating (QA2-12: in a 2 GiB cgroup mimalloc's
+        // defaults held the process 250-300 MiB above what these options do,
+        // and filled the cgroup). Where the container's memory cannot be
+        // read, a given limit is honoured and the default is the 2 GiB
+        // fallback, which is not generous.
+        let effective = || super::container::effective_limit(&mut read_file);
         let generous = match given {
-            Some(limit) => is_generous(limit),
-            // No limit given: the default `krishiv.memory.limit` is a share
-            // of the container's, read here without allocating (QA2-12: in
-            // a 2 GiB cgroup mimalloc's defaults held the process 250-300
-            // MiB above what these options do, and filled the cgroup).
-            None => super::container::effective_limit(&mut read_file)
-                .is_none_or(super::container::default_is_generous),
+            Some(limit) if !is_generous(limit) => false,
+            Some(limit) => {
+                effective().is_none_or(|e| limit <= e || super::container::default_is_generous(e))
+            }
+            None => effective().is_some_and(super::container::default_is_generous),
         };
         if generous {
             return keep_freed_c_memory();
@@ -516,13 +529,26 @@ mod tests {
     /// Whether this test process's container is small enough (under about
     /// 5 GiB) that, with no limit given, the constructor applies the options.
     pub(super) fn container_is_tight() -> bool {
+        !container_memory().is_some_and(container::default_is_generous)
+    }
+
+    /// This test process's container memory, as the constructor reads it.
+    fn container_memory() -> Option<u64> {
         let mut read = |p: &CStr, buf: &mut [u8]| {
             let text = std::fs::read(p.to_str().ok()?).ok()?;
             let n = text.len().min(buf.len());
             buf[..n].copy_from_slice(&text[..n]);
             Some(n)
         };
-        container::effective_limit(&mut read).is_some_and(|e| !container::default_is_generous(e))
+        container::effective_limit(&mut read)
+    }
+
+    /// Whether a given generous `limit` keeps mimalloc's defaults in this
+    /// test process's container: it does when the pool honours it (it fits
+    /// the container, or the container cannot be read), else the default
+    /// share decides.
+    fn given_keeps_defaults(limit: u64) -> bool {
+        container_memory().is_none_or(|e| limit <= e || container::default_is_generous(e))
     }
 
     /// `(purge_delay, allow_thp, minimal_purge_size)` in force.
@@ -704,10 +730,28 @@ mod tests {
     fn a_generous_limit_leaves_the_defaults() {
         let unlimited = format!("(1000, 1, 0) THP {}", thp_enabled());
         let limited = "(10, 0, 64) THP 0".to_owned();
-        assert_eq!(child(Some("krishiv.memory.limit=4g"), &[]), unlimited);
-        assert_eq!(child(None, &[("KRISHIV_MEMORY_LIMIT", "4096m")]), unlimited);
-        assert_eq!(child(None, &[("KRISHIV_MEMORY_LIMIT", "1p")]), unlimited);
-        assert_eq!(child(Some("krishiv.memory.limit=24g"), &[]), unlimited);
+        // A generous limit above this container's memory gets the default
+        // share instead, which decides (it is not generous under 5 GiB).
+        let expect = |limit: u64| {
+            if given_keeps_defaults(limit) {
+                unlimited.clone()
+            } else {
+                limited.clone()
+            }
+        };
+        assert_eq!(child(Some("krishiv.memory.limit=4g"), &[]), expect(4 << 30));
+        assert_eq!(
+            child(None, &[("KRISHIV_MEMORY_LIMIT", "4096m")]),
+            expect(4 << 30)
+        );
+        assert_eq!(
+            child(None, &[("KRISHIV_MEMORY_LIMIT", "1p")]),
+            expect(1 << 50)
+        );
+        assert_eq!(
+            child(Some("krishiv.memory.limit=24g"), &[]),
+            expect(24 << 30)
+        );
         // Just below the threshold: the options apply.
         assert_eq!(child(None, &[("KRISHIV_MEMORY_LIMIT", "4095m")]), limited);
         // A limit that is not a size counts as 0.
@@ -727,7 +771,12 @@ mod tests {
             "false"
         };
         assert_eq!(mapped(None, &[]), none);
-        assert_eq!(mapped(Some("krishiv.memory.limit=24g"), &[]), "false");
+        let big = if given_keeps_defaults(24 << 30) {
+            "false"
+        } else {
+            "true"
+        };
+        assert_eq!(mapped(Some("krishiv.memory.limit=24g"), &[]), big);
         assert_eq!(mapped(Some("krishiv.memory.limit=1g"), &[]), "true");
         assert_eq!(
             mapped(None, &[("MALLOC_MMAP_THRESHOLD_", "131072")]),
@@ -752,7 +801,8 @@ mod tests {
 
     /// With no limit given, a container under about 5 GiB applies the
     /// options (its default limit is not generous) and a larger one does
-    /// not (QA2-12). Needs a user systemd instance that limits a scope's
+    /// not (QA2-12); a given limit above the container's counts as the
+    /// default, one that fits decides. Needs a user systemd instance that limits a scope's
     /// memory (the memory controller delegated); skipped without one.
     #[cfg(all(target_os = "linux", target_env = "gnu"))]
     #[test]
@@ -770,12 +820,21 @@ mod tests {
         }
         let limited = "(10, 0, 64) THP 0";
         assert_eq!(report_in(Some("2G"), None, &[], "OPTIONS "), limited);
-        // The given limit decides over the container's.
-        let generous = report_in(Some("2G"), Some("krishiv.memory.limit=8g"), &[], "OPTIONS ");
-        assert!(generous.starts_with("(1000, 1, 0)"), "{generous}");
+        // A given limit above the container's is not honoured: the pool
+        // gets the default share, so the options apply (review of 7150ebb7e).
+        let over = report_in(Some("2G"), Some("krishiv.memory.limit=8g"), &[], "OPTIONS ");
+        assert_eq!(over, limited);
         if !container_is_tight() {
             let big = report_in(Some("64G"), None, &[], "OPTIONS ");
             assert!(big.starts_with("(1000, 1, 0)"), "{big}");
+            // A generous given limit that fits keeps the defaults.
+            let fits = report_in(
+                Some("64G"),
+                Some("krishiv.memory.limit=8g"),
+                &[],
+                "OPTIONS ",
+            );
+            assert!(fits.starts_with("(1000, 1, 0)"), "{fits}");
         }
     }
 }

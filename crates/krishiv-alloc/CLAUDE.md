@@ -14,7 +14,7 @@ Paths are relative to this crate.
 - `GLIBC_OPTIONS` glibc malloc's mmap and trim thresholds (4 MiB, 64 MiB), set by `init` with no limit or a generous one, unless the environment sets glibc's malloc: the C libraries (zstd's per-column-chunk decompression contexts) allocate with glibc, whose defaults mapped and trimmed those blocks per chunk
 - `limit_in_args` detects `--memory-limit` or `krishiv.memory.limit=` in program arguments
 - `LIMIT_VAR` the `KRISHIV_MEMORY_LIMIT` environment variable
-- `init` (glibc only, inside the `.init_array` constructor) applies `LIMITED_OPTIONS` when the limit at process start is not generous: a given limit, else the default share of the container (under about 5 GiB)
+- `init` (glibc only, inside the `.init_array` constructor) applies `LIMITED_OPTIONS` when the pool's limit at process start is not generous: a given limit that fits the container, else (none given, or one above the container's, which the pool does not honour) the default share of the container (under about 5 GiB, or the 2 GiB fallback when the container's memory cannot be read)
 - `src/container.rs` the container's effective memory limit (cgroup v2/v1 walk, `MemTotal`), read without allocating for the constructor; the same rule as `krishiv_memory::effective_memory_limit`
 - `release` the pressure release hook (`mi_collect(true)`)
 - `install` links the constructor and returns `release` for `krishiv_memory::set_release_hook`
@@ -35,7 +35,7 @@ numbers to the linked mimalloc and check the argument detection and the null-`ar
 
 ## Invariants
 - The options must be in force before mimalloc reserves its first arena, so they are applied by the constructor, not from `main`.
-- They apply only when the limit at process start is not generous and the user has not set the `MIMALLOC_*` variable; with no limit given, the default limit is a share of the container's memory, so a container under about 5 GiB gets them and a larger one (or a host without a limit) keeps mimalloc's defaults. The constructor reads `/proc` and `/sys` with `rustix` `open`/`read` (safe, no allocation for a `&CStr` path; ADR 0028) into stack buffers: nothing may allocate before the options are set.
+- They apply only when the pool's limit at process start (a given limit above the container's counts as the default) is not generous and the user has not set the `MIMALLOC_*` variable; with no limit given, the default limit is a share of the container's memory, so a container under about 5 GiB gets them and a larger one (or a host without a limit) keeps mimalloc's defaults. The constructor reads `/proc` and `/sys` with `rustix` `open`/`read` (safe, no allocation for a `&CStr` path; ADR 0028) into stack buffers: nothing may allocate before the options are set.
 - With no limit or a generous one the constructor sets `GLIBC_OPTIONS` (glibc's mmap and trim thresholds) unless the user set the `MALLOC_*_` variable or a `glibc.malloc.` tunable; a tight limit keeps glibc's defaults. The test reads `mallinfo2` (glibc 2.33 and later; tests only).
 - A limit from a configuration file or a runtime `SET` is enforced by the memory pools and uses `release`, without the options.
 - Its `unsafe` blocks (the constructor, the mimalloc calls) each carry a `// SAFETY:` comment.
