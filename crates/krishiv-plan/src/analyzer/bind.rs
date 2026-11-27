@@ -91,6 +91,21 @@ pub(super) fn addr<T: ?Sized>(p: &T) -> usize {
     std::ptr::from_ref(p).cast::<u8>() as usize
 }
 
+/// Said after a refusal that comes from an ICU collation in a build without `collations-icu`
+/// (every Python wheel): Krishiv-only text, not Spark-observable.
+pub(super) const NO_ICU: &str =
+    " (this build has no ICU collations; the `krishiv` binary and the Docker image have them)";
+
+/// `feature`, with [`NO_ICU`] after it when `icu` (the refused leaf is an ICU collation) and the
+/// `collations-icu` feature is off.
+pub(super) fn icu_note(feature: &str, icu: bool) -> String {
+    if icu && !cfg!(feature = "collations-icu") {
+        format!("{feature}{NO_ICU}")
+    } else {
+        feature.to_owned()
+    }
+}
+
 pub(super) fn unsupported(feature: impl Into<String>, origin: Origin) -> AnalysisError {
     AnalysisError::new(
         KrishivUnsupportedFeature {

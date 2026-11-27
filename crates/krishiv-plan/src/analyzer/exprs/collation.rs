@@ -1005,7 +1005,10 @@ impl Resolver<'_> {
                     }
                     _ => {
                         return Err(unsupported(
-                            format!("{name} over a collated string"),
+                            super::super::bind::icu_note(
+                                &format!("{name} over a collated string"),
+                                true,
+                            ),
                             e.origin,
                         ));
                     }
