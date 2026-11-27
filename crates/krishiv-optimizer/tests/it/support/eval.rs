@@ -381,6 +381,11 @@ impl Interp<'_> {
                     });
                     groups[g].1.push(r);
                 }
+                // As the executor's: a keyless partial aggregate yields its
+                // empty states over empty input.
+                if keys.is_empty() && groups.is_empty() {
+                    groups.push((Vec::new(), Vec::new()));
+                }
                 let rows = groups
                     .iter()
                     .map(|(k, g)| {
@@ -738,6 +743,47 @@ impl Interp<'_> {
         let ExprNode::Resolved(ResolvedExpr::Function(f)) = &e.node else {
             panic!("not a partial aggregate call: {e}")
         };
+        // A partial merge (`rollup_chain`): each state column merged as its
+        // own state, a NULL state empty.
+        if let Some(ExprNode::Resolved(ResolvedExpr::StateInput { columns, .. })) =
+            f.args.first().map(|a| &a.node)
+        {
+            let name = f.id.name();
+            // A decimal `sum`'s state is (sum, nonempty): a NULL sum with
+            // `nonempty` set overflowed, and the merged sum is NULL too.
+            if name == "sum" && columns.len() == 2 {
+                let overflowed = g.iter().any(|r| {
+                    self.eval(&columns[0], ix, r, outer) == V::Null
+                        && self.eval(&columns[1], ix, r, outer) == V::Bool(true)
+                });
+                if overflowed {
+                    return vec![V::Null, V::Bool(true)];
+                }
+            }
+            return columns
+                .iter()
+                .enumerate()
+                .map(|(i, c)| {
+                    let vals: Vec<V> = g
+                        .iter()
+                        .map(|r| self.eval(c, ix, r, outer))
+                        .filter(|v| *v != V::Null)
+                        .collect();
+                    let num = |v: &V| match v {
+                        V::Num(n) => *n,
+                        v => panic!("not a number: {v:?}"),
+                    };
+                    match (name, i) {
+                        ("min", _) => vals.iter().min().cloned().unwrap_or(V::Null),
+                        ("max", _) => vals.iter().max().cloned().unwrap_or(V::Null),
+                        ("count", _) | ("avg" | "mean", 1) => V::Num(vals.iter().map(num).sum()),
+                        ("sum", 1) => V::Bool(vals.contains(&V::Bool(true))),
+                        _ if vals.is_empty() => V::Null,
+                        _ => V::Num(vals.iter().map(num).sum()),
+                    }
+                })
+                .collect();
+        }
         let as_call = |this: &mut Self, name: &str| {
             let mut c = f.clone();
             c.id = FunctionId::Registry {

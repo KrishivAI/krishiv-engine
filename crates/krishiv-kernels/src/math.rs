@@ -35,7 +35,9 @@ mod round;
 use arrow_array::types::Float64Type;
 use arrow_array::{Array, Float64Array};
 
-pub use extremum::{Extremum, extremum_bool, extremum_bytes, extremum_float, extremum_primitive};
+pub use extremum::{
+    Extremum, extremum_bool, extremum_bytes, extremum_float, extremum_nested, extremum_primitive,
+};
 pub use pmod::{pmod_decimal, pmod_float, pmod_integral};
 pub use round::{
     DecimalRounding, RoundMode, ceil_floor_to_long, ceil_floor_to_long_checked, round_decimal,

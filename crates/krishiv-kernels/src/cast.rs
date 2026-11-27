@@ -43,7 +43,7 @@ pub use time::{
     TimeTruncUnit, format_time, make_time, parse_time, parse_time_nanos, time_diff,
     time_fraction_digits, time_from_units, time_to_units, time_trunc, to_time,
 };
-pub use timestamp::{TimestampText, timestamp_has_zone, timestamp_text};
+pub use timestamp::{TimestampText, special_value, timestamp_has_zone, timestamp_text};
 
 use crate::decimal::DecimalNative;
 use crate::error::{KernelError, with_capacity};
@@ -1367,22 +1367,16 @@ fn temporal(
         // a `TIMESTAMP_NTZ` and in the session zone for a `TIMESTAMP`
         // (`timestampNTZToNanosOfDay`, `timestampToNanosOfDay`). The caller
         // cuts it to the target's precision.
-        // Known difference: an instant within one zone offset of the
-        // microsecond range has no local time here and raises
-        // `DATETIME_OVERFLOW` in every mode; Spark's `LocalDateTime` covers it.
+        // The local time is computed past the microsecond range, as Spark's `LocalDateTime`
+        // does, so an instant within one zone offset of either end has a time of day too.
         (
             DataType::Timestamp(TimeUnit::Microsecond, from_zone),
             DataType::Time64(TimeUnit::Nanosecond),
         ) => {
             let t = input.as_primitive::<TimestampMicrosecondType>();
+            let zone = from_zone.is_some().then_some(tz);
             map_rows::<Time64NanosecondType>(input, |i| {
-                let local = if from_zone.is_some() {
-                    utc_to_local(t.value(i), tz)
-                } else {
-                    Some(t.value(i))
-                };
-                let micros = local.ok_or_else(|| overflow(i))?.rem_euclid(MICROS_PER_DAY);
-                micros
+                datetime::local_micros_of_day(t.value(i), zone)
                     .checked_mul(1_000)
                     .map(Some)
                     .ok_or_else(|| overflow(i))

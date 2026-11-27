@@ -159,3 +159,24 @@ fn a_time_across_a_dst_change_is_read_as_java_reads_a_local_date_time() {
     .with_timezone("UTC");
     assert_eq!(time_of(&both, &la), vec![Some(at(1, 30)), Some(at(1, 30))]);
 }
+
+/// `h:m:s.micros` as nanoseconds since midnight.
+const fn nanos_of(h: i64, m: i64, s: i64, micros: i64) -> i64 {
+    ((h * 3_600 + m * 60 + s) * 1_000_000 + micros) * 1_000
+}
+
+#[test]
+fn an_instant_within_one_offset_of_the_range_still_has_a_time_of_day() {
+    // `Long.MIN_VALUE` micros is -290308-12-21 19:59:05.224192 UTC; at -07:52:58 (Los Angeles'
+    // mean time, which Spark renders as -290308-12-21 12:06:07.224192) its local time is past the
+    // microsecond range, which Spark's `LocalDateTime` still covers.
+    let min = TimestampMicrosecondArray::from(vec![Some(i64::MIN)]).with_timezone("UTC");
+    let la = FixedOffset(-(7 * 3_600 + 52 * 60 + 58));
+    assert_eq!(time_of(&min, &la), vec![Some(nanos_of(12, 6, 7, 224_192))]);
+    // `Long.MAX_VALUE` micros is +294247-01-10 04:00:54.775807 UTC; at +02:00, 06:00:54.775807.
+    let max = TimestampMicrosecondArray::from(vec![Some(i64::MAX)]).with_timezone("UTC");
+    assert_eq!(
+        time_of(&max, &FixedOffset(2 * 3_600)),
+        vec![Some(nanos_of(6, 0, 54, 775_807))]
+    );
+}
