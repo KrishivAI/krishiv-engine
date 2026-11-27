@@ -101,6 +101,25 @@ fn comparing_positions_refuse_a_collated_value() {
     }
 }
 
+/// A refusal that is an ICU collation's in a build without ICU says so (R1-D-8).
+#[cfg(not(feature = "collations-icu"))]
+#[test]
+fn icu_refusals_name_the_build() {
+    for sql in [
+        "SELECT 'a' COLLATE unicode_ci = 'A'",
+        "SELECT x FROM (SELECT 'a' AS x) ORDER BY x COLLATE unicode",
+        "SELECT upper('a' COLLATE de)",
+    ] {
+        let msg = run(sql).unwrap_err().to_string();
+        assert!(msg.contains("no ICU collations"), "{sql}: {msg}");
+    }
+    // A refusal that is not ICU's keeps its text.
+    let msg = run("SELECT decode('a' COLLATE utf8_lcase, 'a', 'b')")
+        .unwrap_err()
+        .to_string();
+    assert!(!msg.contains("ICU"), "{msg}");
+}
+
 /// What does not compare may still use a collated value.
 #[test]
 fn non_comparing_positions_accept_a_collated_value() {
