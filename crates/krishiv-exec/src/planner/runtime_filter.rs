@@ -661,7 +661,10 @@ mod tests {
         BLOOM_AT_SCALE_MAX_BYTES, BLOOM_AT_SCALE_MAX_ITEMS, PhysNode, Settings, Site, filters_only,
         keys_for, memory_tier, query_memory_limit, reads_source, scan_waits,
     };
-    use crate::physical::{ScanId, ScanNode};
+    use crate::aggregate::AggregateOutput;
+    use crate::physical::{
+        AggregatePlan, ExchangeId, ExchangePlan, Partitioning, ScanId, ScanNode,
+    };
 
     fn files(path: &str) -> ReadSource {
         ReadSource::files(
@@ -719,6 +722,39 @@ mod tests {
             &filtered(scan_of("b.parquet")),
             &files("a.parquet")
         ));
+        // Projections and exchanges pass through (q02's filtered build runs
+        // under an exchange).
+        let exchanged = PhysNode::Exchange(ExchangePlan {
+            id: ExchangeId(0),
+            input: Box::new(PhysNode::Project {
+                input: Box::new(filtered(scan_of("a.parquet"))),
+                layout: Vec::new(),
+                items: Vec::new(),
+                nullable: None,
+                subqueries: Vec::new(),
+            }),
+            partitioning: Partitioning::Single,
+            filters: Vec::new(),
+            schema: None,
+        });
+        assert!(filters_only(&exchanged, &files("a.parquet")));
+        // An aggregate does more than filter.
+        assert!(!filters_only(
+            &aggregated(scan_of("a.parquet")),
+            &files("a.parquet")
+        ));
+    }
+
+    fn aggregated(input: PhysNode) -> PhysNode {
+        PhysNode::Aggregate {
+            input: Box::new(input),
+            aggregate: AggregatePlan {
+                group_by: vec![0],
+                aggregates: Vec::new(),
+                distinct: Vec::new(),
+                output: AggregateOutput::Final,
+            },
+        }
     }
 
     /// TPC-DS q02: a `date_dim` scan (73,049 rows) whose filter comes from
@@ -730,7 +766,8 @@ mod tests {
         assert!(on.scan_waits(&site("a.parquet", 73_049.0), &build, 365.0));
         // A large table does not.
         assert!(!on.scan_waits(&site("a.parquet", 2e6), &build, 5_000.0));
-        // Nor does one under a build keeping most of its table (a self-join).
+        // Nor does one under a build keeping most of its table (a self-join):
+        // the build only filters, but keeps more than a tenth of the rows.
         assert!(!on.scan_waits(
             &site("a.parquet", 73_049.0),
             &scan_of("a.parquet"),
@@ -738,6 +775,9 @@ mod tests {
         ));
         // Nor does a build that does more than filter its table (a CTE's
         // aggregate, q30): the 1,000x line alone decides.
+        let grouped = filtered(aggregated(scan_of("a.parquet")));
+        assert!(!on.scan_waits(&site("a.parquet", 73_049.0), &grouped, 365.0));
+        // A build over another table always waits.
         let off_table = filtered(scan_of("b.parquet"));
         assert!(on.scan_waits(&site("a.parquet", 73_049.0), &off_table, 365.0));
         let mut config = Config::new();

@@ -72,9 +72,9 @@ pub static RUNTIME_FILTER_SMALL_TABLE_WAIT: ConfigEntry = ConfigEntry {
     value_type: ValueType::Bool,
     default: Some(ConfigValue::Bool(true)),
     doc: "A scan of a table estimated at 1,000,000 rows or fewer starts after the join build whose runtime \
-          filter it receives when that build only reads the same table and filters it (a dimension filtered \
-          twice, as in TPC-DS q02), however many rows the build keeps: the wait is one scan of a small \
-          table. Off, such a scan waits only for a build at least 1,000 times smaller, and otherwise \
+          filter it receives when that build only reads the same table and filters it to at most a tenth \
+          of the table's estimated rows (a dimension filtered twice, as in TPC-DS q02): the wait is one \
+          scan of a small table. Off, such a scan waits only for a build at least 1,000 times smaller, and otherwise \
           applies the filter only to the rows it reads after the build ends. Results do not change.",
     scope: Scope::Session,
     settable_by: SettableBy::Admin,
