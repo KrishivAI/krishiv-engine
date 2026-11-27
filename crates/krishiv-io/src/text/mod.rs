@@ -33,13 +33,25 @@ pub(crate) use self::datetime::Datetimes;
 /// option named as the conf (`OptionSchema::with_conf_fallbacks`): schema
 /// inference gives `TIME` only while it is on, as Spark 4.3.0's
 /// `CSVInferSchema` / `JsonInferSchema` read `SQLConf.isTimeTypeEnabled`.
-pub(crate) const TIME_TYPE_CONF: &str = "spark.sql.timeType.enabled";
+pub(crate) const TIME_TYPE_CONF: &str = krishiv_common::config::TIME_TYPE_ENABLED;
 
 /// The session's `krishiv.io.text.timeNanos`, read as an option named as the
 /// conf: a `TIME` read keeps nine fraction digits (Spark 4.3.0) or six (Spark
 /// 4.2, whose default `TIME` grammar reads microseconds; a `timeFormat` pattern
 /// keeps every digit in both).
 pub(crate) const TIME_NANOS_CONF: &str = "krishiv.io.text.timeNanos";
+
+/// The session's `krishiv.io.text.inferTime`, read as an option named as the
+/// conf: schema inference may give `TIME` (with [`TIME_TYPE_CONF`] on) only
+/// under the Spark 4.3 profile; Spark 4.2's `CSVInferSchema` /
+/// `JsonInferSchema` never give `TIME` (4.2.0 run, gate on).
+pub(crate) const TIME_INFER_CONF: &str = "krishiv.io.text.inferTime";
+
+/// Whether schema inference may give `TIME`: the session's gate and its
+/// Spark 4.3 profile ([`TIME_INFER_CONF`]).
+pub(crate) fn infers_time(o: &crate::options::FormatOptions) -> bool {
+    o.bool(TIME_TYPE_CONF).unwrap_or(false) && o.bool(TIME_INFER_CONF).unwrap_or(true)
+}
 
 /// Spark 4.3.0 refuses to write a `TIME` column (at any depth) to a text
 /// file while [`TIME_TYPE_CONF`] is off: `UNSUPPORTED_TIME_TYPE`.

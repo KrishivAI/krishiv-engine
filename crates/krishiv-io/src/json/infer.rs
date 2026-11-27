@@ -600,7 +600,7 @@ pub(crate) fn infer<'a>(
             prefers_decimal: opts.prefers_decimal,
             primitives_as_string: opts.primitives_as_string,
             infer_timestamp: opts.infer_timestamp,
-            time_type: o.bool(crate::text::TIME_TYPE_CONF).unwrap_or(false),
+            time_type: crate::text::infers_time(o),
             dt: &dt,
         };
         let ratio = sampling_ratio(o)?;

@@ -266,8 +266,9 @@ fn time_format_keeps_nanoseconds_and_optional_sections() {
         Some(nanos)
     );
     // The Spark 4.2 profile (`krishiv.io.text.timeNanos` off) reads six digits
-    // with the default grammar and every digit with a pattern (Spark 4.2.1 run:
-    // `12:34:56.123456` and `12:34:56.123456789` into `TIME(6)`).
+    // with the default grammar and every digit with a pattern (Spark 4.2.1 run,
+    // `tests/fixtures/spark-4.2.1/time-text-profiles.json`: `12:34:56.123456`
+    // and `12:34:56.123456789` into `TIME(6)`).
     for (o, want) in [
         (
             serde_json::json!({"krishiv.io.text.timeNanos": "false"}),

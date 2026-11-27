@@ -184,7 +184,8 @@ impl Datetimes {
             // Spark's formatter fails to build on this value: not a time.
             Some(Err(_)) => Ok(None),
             // Every digit the pattern reads, under the Spark 4.2 profile too
-            // (Spark 4.2.1 run: `HH.mm.ss.SSSSSSSSS` reads nine into `TIME(6)`).
+            // (Spark 4.2.1 run, `tests/fixtures/spark-4.2.1/time-text-profiles.json`:
+            // `HH:mm:ss.SSSSSSSSS` reads nine digits into `TIME(6)`).
             Some(Ok(p)) => p.parse_time_of_day_nanos(s),
             None if self.time_micros_only => Ok(parse_time(s)),
             None => Ok(parse_time_nanos(s)),

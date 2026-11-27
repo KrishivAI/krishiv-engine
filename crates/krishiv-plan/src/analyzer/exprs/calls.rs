@@ -5,7 +5,7 @@ use super::*;
 
 /// The session `TIME` gate, given to `schema_of_csv` inference as the CSV
 /// option named as the conf.
-const TIME_TYPE_CONF: &str = "spark.sql.timeType.enabled";
+const TIME_TYPE_CONF: &str = krishiv_common::config::TIME_TYPE_ENABLED;
 
 /// The default message of `assert_true(cond)`: `'<cond>' is not true!`,
 /// with casts stripped as Spark's `toPrettySQL` strips them.
@@ -649,15 +649,16 @@ impl Resolver<'_> {
             }
         }
         // Inference gives `TIME` only under the session's gate (Spark 4.3.0's
-        // `CSVInferSchema` reads `SQLConf.isTimeTypeEnabled`), never an option.
+        // `CSVInferSchema` reads `SQLConf.isTimeTypeEnabled`), never an option,
+        // and only under the 4.3 profile: Spark 4.2.0 infers `TIMESTAMP` with
+        // the gate on (csv-functions golden).
+        let infers_time =
+            self.ctx.conf.time_type && self.ctx.profile >= crate::analyzer::SparkProfile::V4_3;
         let schema = krishiv_io::csv::option_schema();
         let mut user = schema.without_session_confs(&user).into_owned();
         user.insert(
             TIME_TYPE_CONF.to_owned(),
-            krishiv_common::secret::OptionValue::from_user(
-                TIME_TYPE_CONF,
-                self.ctx.conf.time_type.to_string(),
-            ),
+            krishiv_common::secret::OptionValue::from_user(TIME_TYPE_CONF, infers_time.to_string()),
         );
         let options = schema
             .parse(&user, &krishiv_common::config::Config::new())

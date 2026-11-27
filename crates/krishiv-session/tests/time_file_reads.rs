@@ -185,6 +185,81 @@ fn inference_gives_time_only_with_the_gate_on() {
     }
 }
 
+/// Inference and a `TIME(6)` read under each profile, against a real run of
+/// its Spark (`tests/scripts/probe_time_text_profiles.py`): Spark 4.2.1 never
+/// infers `TIME`, gate on or off (`krishiv.io.text.inferTime`), and cuts the
+/// default grammar to microseconds while a `timeFormat` keeps every digit
+/// (`krishiv.io.text.timeNanos`); 4.3.0 infers `time(6)` with the gate on and
+/// keeps nine digits.
+#[test]
+fn text_time_follows_the_profile_runs() {
+    use krishiv_plan::analyzer::SparkProfile;
+    let dir = tempfile::tempdir().unwrap();
+    let csv = dir.path().join("a.csv");
+    std::fs::write(&csv, "id,t\n0,12:34:56\n1,01:02:03.5\n").unwrap();
+    let json = dir.path().join("a.json");
+    std::fs::write(&json, "{\"id\":0,\"t\":\"12:34:56\"}\n").unwrap();
+    let nine = dir.path().join("nine.csv");
+    std::fs::write(&nine, "t\n12:34:56.123456789\n").unwrap();
+    for (profile, version) in [(SparkProfile::V4_2, "4.2.1"), (SparkProfile::V4_3, "4.3.0")] {
+        let path = format!(
+            "{}/../../tests/fixtures/spark-{version}/time-text-profiles.json",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        let run: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(run["spark"], version);
+        let s = Session::builder().profile(profile).build().unwrap();
+        for gate in ["false", "true"] {
+            let want = &run["infer"][gate];
+            block_on(s.sql(&format!("SET spark.sql.timeType.enabled = {gate}"))).unwrap();
+            let df = s
+                .read()
+                .format("csv")
+                .option("header", "true")
+                .option("inferSchema", "true")
+                .load([csv.to_str().unwrap()]);
+            assert_eq!(typeof_t(&s, &df), want["csv"], "{version} csv, gate {gate}");
+            let df = s
+                .read()
+                .format("json")
+                .option("inferTimestamp", "true")
+                .load([json.to_str().unwrap()]);
+            assert_eq!(
+                typeof_t(&s, &df),
+                want["json"],
+                "{version} json, gate {gate}"
+            );
+            assert_eq!(
+                scalar(&s, "SELECT schema_of_csv('14:30:45')").as_deref(),
+                want["schema_of_csv"].as_str(),
+                "{version} schema_of_csv, gate {gate}"
+            );
+        }
+        for (name, pattern) in [
+            ("default", None),
+            ("HH:mm:ss.SSSSSSSSS", Some("HH:mm:ss.SSSSSSSSS")),
+        ] {
+            let mut reader = s.read().format("csv").option("header", "true");
+            if let Some(p) = pattern {
+                reader = reader.option("timeFormat", p);
+            }
+            let df = reader
+                .schema_ddl("t TIME(6)")
+                .unwrap()
+                .load([nine.to_str().unwrap()]);
+            block_on(df.create_or_replace_temp_view("n")).unwrap();
+            let out = block_on(s.sql("SELECT CAST(t AS STRING) FROM n")).unwrap();
+            let rows = texts(&block_on(out.collect()).unwrap());
+            assert_eq!(
+                rows[0][0].as_deref(),
+                run["read"][name].as_str(),
+                "{version} read, {name}"
+            );
+        }
+    }
+}
+
 /// With the gate off a JSON read and a CSV write of a `TIME` are refused too.
 #[test]
 fn the_gate_off_refuses_json_reads_and_writes() {

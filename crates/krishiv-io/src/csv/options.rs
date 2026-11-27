@@ -117,6 +117,7 @@ static SPECS: LazyLock<Vec<OptionSpec>> = LazyLock::new(|| {
         conf(crate::text::TIME_TYPE_CONF, OptionKind::Bool, OptionDefault::Bool(false), crate::text::TIME_TYPE_CONF, "The session's `spark.sql.timeType.enabled`: inference may give `TIME`.");
         string("timeFormat", "The pattern of TIME values (default: Spark's TIME grammar to read, the value's own digits to write).");
         conf(crate::text::TIME_NANOS_CONF, OptionKind::Bool, OptionDefault::Bool(true), crate::text::TIME_NANOS_CONF, "The session's `krishiv.io.text.timeNanos` (from its Spark profile): a `TIME` read keeps nine fraction digits, else six.");
+        conf(crate::text::TIME_INFER_CONF, OptionKind::Bool, OptionDefault::Bool(true), crate::text::TIME_INFER_CONF, "The session's `krishiv.io.text.inferTime` (from its Spark profile): inference may give `TIME` (Spark 4.3), never under 4.2.");
         conf("timeZone", OptionKind::String, OptionDefault::Str("UTC"), "spark.sql.session.timeZone", "The time zone of timestamps without an offset.");
         conf("binaryOutputStyle", OptionKind::String, OptionDefault::Str("HEX_DISCRETE"), "spark.sql.binaryOutputStyle", "Write: how a BINARY value prints (UTF-8, BASIC, BASE64, HEX or HEX_DISCRETE).");
         string("encoding", "The charset: UTF-8, ISO-8859-1 or US-ASCII.");
@@ -194,7 +195,8 @@ pub(crate) struct CsvOptions {
     /// `preferDate` (default true): inference tries a `TIME`, then a `DATE`,
     /// after a number; when false it goes straight to a `TIMESTAMP`.
     pub prefer_date: bool,
-    /// The session's `spark.sql.timeType.enabled`: inference may give `TIME`.
+    /// Inference may give `TIME`: the session's `spark.sql.timeType.enabled`
+    /// under the Spark 4.3 profile (`krishiv.io.text.inferTime`).
     pub time_type: bool,
     pub quote_all: bool,
     pub escape_quotes: bool,
@@ -349,7 +351,7 @@ impl CsvOptions {
             line_sep,
             enforce_schema: o.bool("enforceSchema").unwrap_or(true),
             prefer_date: o.bool("preferDate").unwrap_or(true),
-            time_type: o.bool(crate::text::TIME_TYPE_CONF).unwrap_or(false),
+            time_type: crate::text::infers_time(o),
             quote_all: o.bool("quoteAll").unwrap_or(false),
             escape_quotes: o.bool("escapeQuotes").unwrap_or(true),
             // Spark 4.2's `CSVOptions`: `getBool(COLUMN_PRUNING, !multiLine

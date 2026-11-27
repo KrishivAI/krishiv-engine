@@ -4,8 +4,8 @@
 use std::sync::{Arc, PoisonError, RwLock};
 
 use krishiv_common::config::{
-    Config, ConfigEntry, ConfigValue, IO_TEXT_TIME_NANOS, PYTHON_UDTF_ARROW_ENABLED,
-    SESSION_TIME_ZONE, Scope, ValueType, lookup,
+    Config, ConfigEntry, ConfigValue, IO_TEXT_INFER_TIME, IO_TEXT_TIME_NANOS,
+    PYTHON_UDTF_ARROW_ENABLED, SESSION_TIME_ZONE, Scope, ValueType, lookup,
 };
 use krishiv_common::error::{
     CannotModifyStaticConfig, InvalidConfValueRequirement, InvalidConfValueTimeZone, KrishivError,
@@ -50,10 +50,11 @@ pub(crate) struct ConfStore {
 fn profile_default(entry: &ConfigEntry, profile: SparkProfile) -> Option<ConfigValue> {
     let before_4_2 = profile < SparkProfile::V4_2;
     // Spark 4.2 reads a `TIME` of a CSV or JSON file in the default grammar as microseconds; 4.3 keeps
-    // nanoseconds (a `timeFormat` pattern keeps every digit in both).
+    // nanoseconds (a `timeFormat` pattern keeps every digit in both). Only 4.3's text inference gives `TIME`.
     let before_4_3 = profile < SparkProfile::V4_3;
     ((entry.key == PYTHON_UDTF_ARROW_ENABLED.key && before_4_2)
-        || (entry.key == IO_TEXT_TIME_NANOS.key && before_4_3))
+        || ((entry.key == IO_TEXT_TIME_NANOS.key || entry.key == IO_TEXT_INFER_TIME.key)
+            && before_4_3))
         .then_some(ConfigValue::Bool(false))
 }
 
@@ -176,12 +177,15 @@ impl ConfStore {
     pub(crate) fn query_snapshot(&self) -> (Arc<Config>, u64) {
         let (config, version) = self.versioned_snapshot();
         let zone_unset = config.get(&SESSION_TIME_ZONE).is_none();
-        let profile_keys: Vec<(&ConfigEntry, ConfigValue)> =
-            [&PYTHON_UDTF_ARROW_ENABLED, &IO_TEXT_TIME_NANOS]
-                .into_iter()
-                .filter(|entry| !config.is_set(entry))
-                .filter_map(|entry| Some((entry, profile_default(entry, self.profile)?)))
-                .collect();
+        let profile_keys: Vec<(&ConfigEntry, ConfigValue)> = [
+            &PYTHON_UDTF_ARROW_ENABLED,
+            &IO_TEXT_TIME_NANOS,
+            &IO_TEXT_INFER_TIME,
+        ]
+        .into_iter()
+        .filter(|entry| !config.is_set(entry))
+        .filter_map(|entry| Some((entry, profile_default(entry, self.profile)?)))
+        .collect();
         if !zone_unset && profile_keys.is_empty() {
             return (config, version);
         }
@@ -594,23 +598,27 @@ mod tests {
         }
     }
 
-    /// A `TIME` read from a CSV or JSON file keeps nanoseconds under the 4.3 profile only: Spark 4.2 reads
-    /// every `TIME` as microseconds (`krishiv-session/tests/time_file_scan.rs`).
+    /// A `TIME` read from a CSV or JSON file keeps nanoseconds, and inference gives `TIME`, under the 4.3 profile
+    /// only: Spark 4.2 reads every `TIME` as microseconds and infers `TIMESTAMP` (`krishiv-session/tests/time_file_scan.rs`).
     #[test]
     fn text_time_nanos_follows_the_profile() {
-        let key = &krishiv_common::config::IO_TEXT_TIME_NANOS;
-        for (profile, want) in [
-            (SparkProfile::V4_1, "false"),
-            (SparkProfile::V4_2, "false"),
-            (SparkProfile::V4_3, "true"),
+        for key in [
+            &krishiv_common::config::IO_TEXT_TIME_NANOS,
+            &krishiv_common::config::IO_TEXT_INFER_TIME,
         ] {
-            let store = ConfStore::new(Config::default()).with_profile(profile);
-            let (config, _) = store.query_snapshot();
-            assert_eq!(
-                config.get(key).map(ToString::to_string).as_deref(),
-                Some(want),
-                "{profile:?}"
-            );
+            for (profile, want) in [
+                (SparkProfile::V4_1, "false"),
+                (SparkProfile::V4_2, "false"),
+                (SparkProfile::V4_3, "true"),
+            ] {
+                let store = ConfStore::new(Config::default()).with_profile(profile);
+                let (config, _) = store.query_snapshot();
+                assert_eq!(
+                    config.get(key).map(ToString::to_string).as_deref(),
+                    Some(want),
+                    "{profile:?}"
+                );
+            }
         }
     }
 
