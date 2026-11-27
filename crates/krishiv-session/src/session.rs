@@ -1394,6 +1394,7 @@ impl Session {
             stored_view_texts: krishiv_plan::analyzer::views::DefinerTexts::default(),
             // Set per analysis to the temporary views it inlined.
             temp_view_texts: krishiv_plan::analyzer::views::DefinerTexts::default(),
+            view_collations: Vec::new(),
         };
         // The epoch the query's catalog reads at: entries it loads are at least as new.
         let catalog_epoch = krishiv_plan::analyzer::Catalog::epoch(&*catalog);
@@ -1538,8 +1539,36 @@ impl Session {
         // Every temporary view's text: the metric-view rule stops there, as at a permanent view's.
         let temp_texts =
             krishiv_plan::analyzer::views::DefinerTexts::new(expansion.temp_texts.clone());
-        let trusting_views =
-            definer::trusting_context(&env.analysis, &texts, &stored_texts, &temp_texts);
+        // The texts of views with a default collation, one set per collation: a view's literals take
+        // its own, the innermost view's where texts nest. Empty unless some view has one.
+        let mut collations: Vec<(
+            krishiv_types::Collation,
+            krishiv_plan::analyzer::views::DefinerTexts,
+        )> = Vec::new();
+        if expansion
+            .stored_reads
+            .iter()
+            .any(|r| !r.collation.is_utf8_binary())
+        {
+            let mut by: Vec<(krishiv_types::Collation, Vec<Arc<LogicalPlan>>)> = Vec::new();
+            for r in &expansion.stored_reads {
+                match by.iter_mut().find(|(c, _)| *c == r.collation) {
+                    Some((_, roots)) => roots.push(Arc::clone(&r.query)),
+                    None => by.push((r.collation, vec![Arc::clone(&r.query)])),
+                }
+            }
+            collations = by
+                .into_iter()
+                .map(|(c, roots)| (c, krishiv_plan::analyzer::views::DefinerTexts::new(roots)))
+                .collect();
+        }
+        let trusting_views = definer::trusting_context(
+            &env.analysis,
+            &texts,
+            &stored_texts,
+            &temp_texts,
+            &collations,
+        );
         let views_analysis = trusting_views.as_ref().unwrap_or(&env.analysis);
         // (Boxed: `analyze_in` runs on the deepest stacks, where the size of its
         // future counts.)
@@ -1559,12 +1588,24 @@ impl Session {
         let (renamed, mut kept) = crate::view_schema::apply_renames_keeping(
             &expansion.plan,
             &renames,
-            &[&texts, &stored_texts, &temp_texts],
+            &[&texts, &stored_texts, &temp_texts]
+                .into_iter()
+                .chain(collations.iter().map(|(_, t)| t))
+                .collect::<Vec<_>>(),
         );
+        for (_, set) in collations.iter_mut().rev() {
+            *set = kept.pop().unwrap_or_default();
+        }
         let temp_texts = kept.pop().unwrap_or_default();
         let stored_texts = kept.pop().unwrap_or_default();
         let texts = kept.pop().unwrap_or_default();
-        let trusting = definer::trusting_context(&env.analysis, &texts, &stored_texts, &temp_texts);
+        let trusting = definer::trusting_context(
+            &env.analysis,
+            &texts,
+            &stored_texts,
+            &temp_texts,
+            &collations,
+        );
         let analysis = trusting.as_ref().unwrap_or(&env.analysis);
         let plan = Plan::try_new(renamed)?;
         // The bodies of the functions the plan calls read views the same way:

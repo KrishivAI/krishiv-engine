@@ -104,13 +104,18 @@ impl Resolver<'_> {
                 }
             }
             // A string literal in the text of a view with a `DEFAULT COLLATION` takes it.
-            ExprNode::Literal(Literal::String(_))
-                if !self.ctx.conf.default_collation.is_utf8_binary() =>
-            {
-                keep(ArgType {
+            ExprNode::Literal(Literal::String(_)) if !self.default_collation.is_utf8_binary() => {
+                // Spark names it `'a' collate C`: the literal shown cast to the default.
+                let mut b = keep(ArgType {
                     nullable: false,
-                    data_type: Some(DataType::collated_string(self.ctx.conf.default_collation)),
-                })
+                    data_type: Some(DataType::collated_string(self.default_collation)),
+                });
+                b.shown = Some(rebuilt(ExprNode::Cast {
+                    expr: Arc::clone(e),
+                    to: DataType::collated_string(self.default_collation),
+                    mode: CastMode::Default,
+                }));
+                b
             }
             ExprNode::Literal(v) => keep(ArgType {
                 nullable: matches!(v, Literal::Null(_)),

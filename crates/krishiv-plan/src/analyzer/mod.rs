@@ -720,6 +720,12 @@ pub struct AnalysisContext {
     /// metric-view rule follows from an aggregate to its read, as a permanent view's text does.
     /// Empty for an analysis that inlined none.
     pub temp_view_texts: views::DefinerTexts,
+    /// The `DEFAULT COLLATION` of the permanent views of the plan, one set of inlined queries
+    /// (by node identity, as [`Self::stored_view_texts`]) per collation: the string literals
+    /// and plain string casts under one of these subtrees take that collation at `Default`
+    /// strength, the innermost view's winning; the rest of the plan takes
+    /// [`ResolutionConf::default_collation`]. Empty when no view has a default of its own.
+    pub view_collations: Vec<(krishiv_types::Collation, views::DefinerTexts)>,
 }
 
 /// The context inputs of a resolution: with the input key and the pins,

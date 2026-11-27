@@ -584,6 +584,19 @@ impl Session {
                 .into());
             }
         }
+        // The view's `DEFAULT COLLATION`: its query analyses under it, and it is stored with the view.
+        let collation = match &v.collation {
+            Some(c) => krishiv_types::Collation::parse(
+                &c.parts
+                    .iter()
+                    .map(|p| p.value.as_str())
+                    .collect::<Vec<_>>()
+                    .join("."),
+            )?,
+            None => krishiv_types::Collation::UTF8_BINARY,
+        };
+        let mut env = env;
+        env.analysis.conf.default_collation = collation;
         let sql = original
             .get(query.span.start..query.span.end)
             .unwrap_or_default()
@@ -718,6 +731,7 @@ impl Session {
                 revision: 0,
                 author: self.state.principal.name.clone(),
                 kind: crate::store::ViewKind::Sql,
+                collation,
             }),
             layout: TableLayout::default(),
             column_stats: BTreeMap::new(),
@@ -1127,6 +1141,12 @@ impl Session {
                 .await;
         }
         let mut changed = (*existing).clone();
+        let collation = existing
+            .view
+            .as_ref()
+            .map_or(krishiv_types::Collation::UTF8_BINARY, |v| v.collation);
+        let mut env = env;
+        env.analysis.conf.default_collation = collation;
         match &a.action {
             AlterViewAction::SetQuery {
                 query,
@@ -1206,6 +1226,8 @@ impl Session {
                         .view
                         .as_ref()
                         .map_or(crate::store::ViewKind::Sql, |v| v.kind.clone()),
+                    // `ALTER VIEW .. AS` keeps the view's default collation (design 3.2).
+                    collation,
                 });
             }
             AlterViewAction::SetSchemaBinding(binding) => {

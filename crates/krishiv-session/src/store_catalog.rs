@@ -1525,6 +1525,7 @@ mod tests {
             revision: 0,
             author: String::new(),
             kind: crate::store::ViewKind::Sql,
+            collation: krishiv_types::Collation::UTF8_BINARY,
         });
         let current = c.store.table("db", "v").unwrap();
         assert!(c.store.replace_table(&current, view));
@@ -1882,6 +1883,7 @@ mod tests {
             revision: 0,
             author: String::new(),
             kind: crate::store::ViewKind::Sql,
+            collation: krishiv_types::Collation::UTF8_BINARY,
         });
         assert!(c.store.replace_table(&current, view));
         let e = rename(c, "v", "w").unwrap_err();

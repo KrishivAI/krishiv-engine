@@ -487,10 +487,6 @@ fn unsupported_collation_defaults_and_switches_are_refused() {
             ErrorClass::UnsupportedFeatureCollationsInMapKeys,
         ),
         (
-            "CREATE VIEW vv DEFAULT COLLATION UTF8_LCASE AS SELECT 'a' AS c",
-            ErrorClass::KrishivUnsupportedFeature,
-        ),
-        (
             "CREATE TEMPORARY VIEW tv DEFAULT COLLATION UNICODE AS SELECT 'a' AS c",
             ErrorClass::KrishivUnsupportedFeature,
         ),
@@ -518,6 +514,47 @@ fn unsupported_collation_defaults_and_switches_are_refused() {
     assert_eq!(
         class_of(&s, "SET COLLATION UTF8_LCASE"),
         ErrorClass::InvalidSetSyntax
+    );
+}
+
+/// A permanent view's `DEFAULT COLLATION` types the literals of its text, names them as Spark does
+/// (`'a' collate UTF8_LCASE`), is read through the view, stays with `ALTER VIEW .. AS`, and does not
+/// reach the reader's own literals.
+#[test]
+fn a_permanent_view_default_collation_types_its_literals() {
+    let s = Session::new().unwrap();
+    let go = |sql: &str| block_on(block_on(s.sql(sql)).unwrap().collect()).unwrap();
+    let value = |sql: &str| -> String {
+        let b = go(sql);
+        let c = &b[0].columns()[0];
+        c.as_string_view_opt()
+            .map(|v| v.value(0).to_owned())
+            .or_else(|| c.as_string_opt::<i32>().map(|v| v.value(0).to_owned()))
+            .unwrap()
+    };
+    go("CREATE VIEW vd DEFAULT COLLATION UTF8_LCASE AS SELECT 'a' AS c1");
+    assert_eq!(
+        value("SELECT collation(c1) FROM vd"),
+        "SYSTEM.BUILTIN.UTF8_LCASE"
+    );
+    // The reader's literal is its own: the view column (implicit) wins the comparison.
+    assert_eq!(value("SELECT CAST(c1 = 'A' AS STRING) FROM vd"), "true");
+    assert_eq!(value("SELECT collation('a')"), "SYSTEM.BUILTIN.UTF8_BINARY");
+    go("ALTER VIEW vd AS SELECT 'b' AS c1");
+    assert_eq!(
+        value("SELECT collation(c1) FROM vd"),
+        "SYSTEM.BUILTIN.UTF8_LCASE"
+    );
+    // A nested view under another default keeps its own.
+    go("CREATE VIEW vo AS SELECT c1 FROM vd");
+    assert_eq!(
+        value("SELECT collation(c1) FROM vo"),
+        "SYSTEM.BUILTIN.UTF8_LCASE"
+    );
+    go("CREATE VIEW vb DEFAULT COLLATION UTF8_BINARY AS SELECT 'x' AS c1 FROM vd");
+    assert_eq!(
+        value("SELECT collation(c1) FROM vb"),
+        "SYSTEM.BUILTIN.UTF8_BINARY"
     );
 }
 

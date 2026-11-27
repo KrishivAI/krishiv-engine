@@ -238,6 +238,13 @@ pub(super) struct Resolver<'a> {
     /// The relations (by address, each with its representative) of the permanent views' texts
     /// ([`AnalysisContext::stored_view_texts`]); gathered only when the query has variables.
     pub(super) view_nodes: HashSet<usize>,
+    /// The relations (by address, each with its representative) of the texts of views that have a
+    /// default collation ([`AnalysisContext::view_collations`]), each with its collation, the
+    /// innermost view's where texts nest.
+    pub(super) view_collation_nodes: HashMap<usize, krishiv_types::Collation>,
+    /// The collation string literals and plain string casts take at `Default` strength in the
+    /// relation being resolved: its view's, else [`ResolutionConf::default_collation`].
+    pub(super) default_collation: krishiv_types::Collation,
     /// The relation being resolved, or one around it, is in a permanent view's text: no session
     /// variable resolves (review r5 Z2).
     pub(super) in_stored_view: bool,
@@ -318,6 +325,8 @@ pub(super) fn resolve(
         frame: None,
         fn_path: Vec::new(),
         view_nodes: HashSet::new(),
+        view_collation_nodes: HashMap::new(),
+        default_collation: ctx.conf.default_collation,
         in_stored_view: false,
         sql_calls: 0,
         inlined_calls: Vec::new(),
@@ -335,6 +344,7 @@ pub(super) fn resolve(
     r.root_env = Some(Arc::clone(&env));
     r.canonicalize(plan.root());
     r.gather_view_nodes();
+    r.gather_view_collations();
     if let Some(entry) = warm {
         r.seed_prefix(entry, plan.root(), &env);
     }
@@ -599,6 +609,42 @@ impl Resolver<'_> {
         self.view_nodes.extend(nodes);
     }
 
+    /// Fills [`Self::view_collation_nodes`]: every relation under the text of a view with a default
+    /// collation, with its representative. Texts nest (a view reads a view), and a relation takes
+    /// the collation of the innermost text holding it: the texts are walked largest first, so a
+    /// text inside another overwrites its entries.
+    fn gather_view_collations(&mut self) {
+        let mut roots: Vec<(usize, krishiv_types::Collation, Arc<LogicalPlan>)> = Vec::new();
+        for (collation, texts) in &self.ctx.view_collations {
+            for root in texts.roots() {
+                let mut size = 0;
+                let _ = crate::walk::visit_distinct(crate::walk::Node::Plan(root), |node| {
+                    if matches!(node, crate::walk::Node::Plan(_)) {
+                        size += 1;
+                    }
+                    std::ops::ControlFlow::<()>::Continue(())
+                });
+                roots.push((size, *collation, Arc::clone(root)));
+            }
+        }
+        roots.sort_by_key(|(size, ..)| std::cmp::Reverse(*size));
+        for (_, collation, root) in roots {
+            let mut nodes = Vec::new();
+            let _ = crate::walk::visit_distinct(crate::walk::Node::Plan(&root), |node| {
+                if let crate::walk::Node::Plan(p) = node {
+                    nodes.push(addr(p));
+                    if let Some(rep) = self.canon.get(&addr(p)) {
+                        nodes.push(addr(&**rep));
+                    }
+                }
+                std::ops::ControlFlow::<()>::Continue(())
+            });
+            for n in nodes {
+                self.view_collation_nodes.insert(n, collation);
+            }
+        }
+    }
+
     pub(super) fn rep(&self, p: &Arc<LogicalPlan>) -> Arc<LogicalPlan> {
         self.canon
             .get(&addr(&**p))
@@ -678,7 +724,12 @@ impl Resolver<'_> {
             // subqueries, the plans it is rewritten to), reads no session variable.
             let outside_view = !self.in_stored_view;
             self.in_stored_view |= self.view_nodes.contains(&key.0);
+            let outer_collation = self.default_collation;
+            if let Some(c) = self.view_collation_nodes.get(&key.0) {
+                self.default_collation = *c;
+            }
             let resolved = self.node(&p, env);
+            self.default_collation = outer_collation;
             if outside_view {
                 self.in_stored_view = false;
             }

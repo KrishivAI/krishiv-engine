@@ -864,7 +864,7 @@ impl Resolver<'_> {
                 e.origin,
             ));
         }
-        let mut memo = Memo::with_default(self.ctx.conf.default_collation);
+        let mut memo = Memo::with_default(self.default_collation);
         let (chosen, indeterminate) = self.choose_collation(e, kids, n, &name)?;
         if indeterminate && RUNTIME_INDETERMINATE.contains(&name.as_str()) {
             // Spark raises `INDETERMINATE_COLLATION` while evaluating the call, not at analysis.
@@ -1338,10 +1338,7 @@ impl Resolver<'_> {
             // A literal of another collation is shown cast to the call's, as in the plain path.
             if let Some(c) = search
                 && matches!(
-                    strength_of(
-                        &k.shown(),
-                        &mut Memo::with_default(self.ctx.conf.default_collation)
-                    ),
+                    strength_of(&k.shown(), &mut Memo::with_default(self.default_collation)),
                     Some((_, Strength::Default))
                 )
                 && k.ty.data_type != Some(DataType::collated_string(c))
@@ -1700,7 +1697,7 @@ impl Resolver<'_> {
         let mut b = self.expr_node_inner(&Arc::new(call), &plain, in_agg, window_fn, cx)?;
         let (chosen, _) = self.choose_collation(e, kids, 2, name)?;
         let c = chosen.unwrap_or(Collation::UTF8_LCASE);
-        let mut memo = Memo::with_default(self.ctx.conf.default_collation);
+        let mut memo = Memo::with_default(self.default_collation);
         let shown = kids
             .iter()
             .enumerate()
@@ -1762,7 +1759,7 @@ impl Resolver<'_> {
         let mut b = self.expr_node_inner(&Arc::new(call), &keyed, in_agg, window_fn, cx)?;
         // A literal of another collation is shown cast to the call's by `shown_cast`
         // (SQL-41: `instr(c COLLATE UTF8_LCASE, 'PL')` is `.., 'PL' collate UTF8_LCASE)`).
-        let mut memo = Memo::with_default(self.ctx.conf.default_collation);
+        let mut memo = Memo::with_default(self.default_collation);
         let shown = kids
             .iter()
             .enumerate()
@@ -1914,7 +1911,7 @@ impl Resolver<'_> {
                 _ => {}
             }
         }
-        let mut memo = Memo::with_default(self.ctx.conf.default_collation);
+        let mut memo = Memo::with_default(self.default_collation);
         let items: Vec<(Collation, Strength)> = kids
             [selector_args(name).min(n)..collation_args(name, n).max(selector_args(name).min(n))]
             .iter()

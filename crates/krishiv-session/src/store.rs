@@ -186,6 +186,9 @@ pub(crate) struct ViewDef {
     pub(crate) author: String,
     /// A SQL view, or a metric view whose [`Self::sql`] is its YAML body (P3 4.2-MV).
     pub(crate) kind: ViewKind,
+    /// The view's `DEFAULT COLLATION` (`UTF8_BINARY` when it has none): the string literals and plain
+    /// string casts of its text take it, as the view's own columns do (Spark's `View.collation`).
+    pub(crate) collation: krishiv_types::Collation,
 }
 
 impl ViewDef {
@@ -1190,6 +1193,7 @@ mod tests {
                 revision: 0,
                 author: author.into(),
                 kind: ViewKind::Sql,
+                collation: krishiv_types::Collation::UTF8_BINARY,
             });
             t
         };

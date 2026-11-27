@@ -409,21 +409,29 @@ impl Session {
         let mut renames = Vec::new();
         for read in reads {
             // A view whose query does not analyze alone is left to the outer query.
-            let (query, mut kept) = crate::view_schema::apply_renames_keeping(
-                &read.query,
-                &renames,
-                &[&analysis.definer_texts, &analysis.stored_view_texts],
-            );
+            let mut sets = vec![&analysis.definer_texts, &analysis.stored_view_texts];
+            sets.extend(analysis.view_collations.iter().map(|(_, t)| t));
+            let (query, mut kept) =
+                crate::view_schema::apply_renames_keeping(&read.query, &renames, &sets);
             let Ok(plan) = Plan::try_new(query) else {
                 continue;
             };
             let renamed;
-            let analysis = if renames.is_empty() {
+            // The view's own text analyses under its own default collation.
+            let own = read.collation != analysis.conf.default_collation;
+            let analysis = if renames.is_empty() && !own {
                 analysis
             } else {
                 let mut ctx = analysis.clone();
-                ctx.stored_view_texts = kept.pop().unwrap_or_default();
-                ctx.definer_texts = kept.pop().unwrap_or_default();
+                if !renames.is_empty() {
+                    let mut rest = kept.split_off(2).into_iter();
+                    for (_, texts) in &mut ctx.view_collations {
+                        *texts = rest.next().unwrap_or_default();
+                    }
+                    ctx.stored_view_texts = kept.pop().unwrap_or_default();
+                    ctx.definer_texts = kept.pop().unwrap_or_default();
+                }
+                ctx.conf.default_collation = read.collation;
                 renamed = ctx;
                 &renamed
             };
@@ -521,11 +529,16 @@ pub(super) fn trusting_context(
     definers: &krishiv_plan::analyzer::views::DefinerTexts,
     stored: &krishiv_plan::analyzer::views::DefinerTexts,
     temp: &krishiv_plan::analyzer::views::DefinerTexts,
+    collations: &[(
+        krishiv_types::Collation,
+        krishiv_plan::analyzer::views::DefinerTexts,
+    )],
 ) -> Option<krishiv_plan::analyzer::AnalysisContext> {
     if definers.is_empty() && stored.is_empty() && temp.is_empty() {
         return None;
     }
     let mut ctx = base.clone();
+    ctx.view_collations = collations.to_vec();
     ctx.definer_texts = definers.clone();
     ctx.stored_view_texts = stored.clone();
     ctx.temp_view_texts = temp.clone();

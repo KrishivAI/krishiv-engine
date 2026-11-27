@@ -76,10 +76,7 @@ pub(crate) fn refuse_unhonoured(
             Some(c) => view_default(&[c.value.as_str()]),
             None => Ok(()),
         },
-        Statement::CreatePermanentView(v) => match &v.collation {
-            Some(c) => view_default(&c.parts.iter().map(|p| p.value.as_str()).collect::<Vec<_>>()),
-            None => Ok(()),
-        },
+        // A permanent view's default is honoured (its text analyses under it): nothing to refuse.
         _ => Ok(()),
     }
 }

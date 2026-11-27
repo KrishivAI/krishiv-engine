@@ -463,6 +463,7 @@ impl Session {
                     parser: env.parser,
                     ansi: env.analysis.conf.ansi,
                 }),
+                collation: krishiv_types::Collation::UTF8_BINARY,
             }),
             layout: TableLayout::default(),
             column_stats: BTreeMap::new(),

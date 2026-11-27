@@ -58,6 +58,7 @@ pub fn context(catalog: MemoryCatalog, conf: ResolutionConf) -> AnalysisContext 
         definer_texts: super::views::DefinerTexts::default(),
         stored_view_texts: super::views::DefinerTexts::default(),
         temp_view_texts: super::views::DefinerTexts::default(),
+        view_collations: Vec::new(),
     }
 }
 

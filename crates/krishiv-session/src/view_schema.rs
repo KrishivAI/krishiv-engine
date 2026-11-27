@@ -335,6 +335,8 @@ pub(crate) struct StoredRead {
     /// Whether the view is a definer view or lies inside one's text (review r2 R1): a failure of its check is
     /// the definer's, told to the reader redacted (`Session::definer_failure`).
     pub(crate) in_definer: bool,
+    /// The view's `DEFAULT COLLATION` (`UTF8_BINARY` when it has none): its text analyses under it.
+    pub(crate) collation: krishiv_types::Collation,
 }
 
 /// What `Session::check_stored_views` returns: the evolved view entries to store (as found, as changed) and the
