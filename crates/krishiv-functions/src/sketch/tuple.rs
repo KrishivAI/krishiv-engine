@@ -601,6 +601,10 @@ pub fn difference<V: Value>(
 /// `tuple_sketch_summary_double`: the retained summaries folded with `mode` (`alwaysone` counts the entries).
 #[must_use]
 pub fn summary_double<V: Value>(sketch: &Compact<V>, mode: Mode) -> f64 {
+    if sketch.num_retained() == 0 {
+        // Spark's `aggregateNumericSummaries` returns zero for an empty MIN or MAX.
+        return 0.0;
+    }
     let mut acc = f64::identity(mode.sum_for_count());
     for e in sketch.iter() {
         acc = acc.fold(mode.sum_for_count(), e.summary().value.as_f64());
@@ -615,6 +619,9 @@ pub fn summary_double<V: Value>(sketch: &Compact<V>, mode: Mode) -> f64 {
 /// `tuple_sketch_summary_integer`: as [`summary_double`], accumulated in a `bigint` (Spark's `Long`).
 #[must_use]
 pub fn summary_integer<V: Value>(sketch: &Compact<V>, mode: Mode) -> i64 {
+    if sketch.num_retained() == 0 {
+        return 0;
+    }
     let mut acc = match mode {
         Mode::Sum | Mode::AlwaysOne => 0,
         Mode::Min => i64::MAX,
@@ -788,5 +795,15 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn empty_sketch_summaries_are_zero_in_every_mode() {
+        let d = compact(&new_sketch::<f64>(12, Mode::Sum, "f").unwrap());
+        let i = compact(&new_sketch::<i32>(12, Mode::Sum, "f").unwrap());
+        for mode in [Mode::Sum, Mode::Min, Mode::Max, Mode::AlwaysOne] {
+            assert_eq!(summary_double(&d, mode), 0.0);
+            assert_eq!(summary_integer(&i, mode), 0);
+        }
     }
 }
