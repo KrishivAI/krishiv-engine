@@ -1033,7 +1033,7 @@ fn a_scan_feeding_a_selective_build_waits_for_a_narrower_build_of_its_table() {
     // A build of the whole table: its keys are one domain with the scan's.
     // The reader's filter is the one R decides; the others do not change.
     let whole = reader_waits(&q("", ""));
-    assert!(whole.iter().all(|w| !w), "{whole:?}");
+    assert!(!whole.is_empty() && whole.iter().all(|w| !w), "{whole:?}");
     // A build keeping most of the table: no wait (TPC-DS q04's `customer`).
     let most = reader_waits(&q("WHERE d.v < 300", ""));
     assert!(!most.is_empty() && most.iter().all(|w| !w), "{most:?}");
