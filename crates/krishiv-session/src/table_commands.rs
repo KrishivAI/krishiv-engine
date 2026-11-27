@@ -495,10 +495,15 @@ impl Session {
                 schema_name: quoted(&[vec!["system".to_owned()], parts].concat()),
             }
             .into());
-        } else if parts.len() > 1 && parts.first().and_then(|p| canonical(p)).is_none() {
-            // No catalog has the first part's name, so every part is a namespace of the session
-            // catalog, which has none that deep (Spark 4.2.0 and 4.3.0: `USE dummy.x` and
-            // `USE NAMESPACE a.b.c` name `spark_catalog`.`dummy`.`x` and `spark_catalog`.`a`.`b`.`c`).
+        } else if parts.len() > 1
+            && (u.kind.is_some() || parts.first().and_then(|p| canonical(p)).is_none())
+        {
+            // No catalog has the first part's name, or the statement has a namespace keyword
+            // (NAMESPACE, SCHEMA or DATABASE), under which no part is a catalog: every part is a
+            // namespace of the session catalog, which has none that deep. Spark 4.3.0: `USE dummy.x`
+            // and `USE NAMESPACE a.b.c` name `spark_catalog`.`dummy`.`x` and
+            // `spark_catalog`.`a`.`b`.`c`; `USE SCHEMA spark_catalog.default` names
+            // `spark_catalog`.`spark_catalog`.`default`, though `USE spark_catalog.default` works.
             return Err(SchemaNotFound {
                 schema_name: quoted(&[vec![crate::catalog::CATALOG.to_owned()], parts].concat()),
             }

@@ -1364,7 +1364,7 @@ fn show_databases_lists_nothing_under_system_and_use_namespace_can_name_the_sess
             .unwrap_err()
             .contains("SCHEMA_NOT_FOUND")
     );
-    run(&s, "USE NAMESPACE spark_catalog.other_db").unwrap();
+    run(&s, "USE spark_catalog.other_db").unwrap();
     assert_eq!(
         column_of(&s, "SELECT current_catalog()", 0),
         ["spark_catalog"]

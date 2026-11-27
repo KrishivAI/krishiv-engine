@@ -473,6 +473,37 @@ fn a_missing_schema_is_named_with_its_catalog() {
             "USE NAMESPACE spark_catalog",
             "`spark_catalog`.`spark_catalog`",
         ),
+        // With a namespace keyword no part is a catalog (Spark 4.3.0 run, each of the three
+        // keywords): the session catalog's own name is one more namespace part, also before a
+        // schema that exists.
+        (
+            "USE NAMESPACE spark_catalog.dummy",
+            "`spark_catalog`.`spark_catalog`.`dummy`",
+        ),
+        (
+            "USE SCHEMA spark_catalog.dummy",
+            "`spark_catalog`.`spark_catalog`.`dummy`",
+        ),
+        (
+            "USE DATABASE spark_catalog.dummy",
+            "`spark_catalog`.`spark_catalog`.`dummy`",
+        ),
+        (
+            "USE NAMESPACE spark_catalog.default",
+            "`spark_catalog`.`spark_catalog`.`default`",
+        ),
+        (
+            "USE SCHEMA spark_catalog.default",
+            "`spark_catalog`.`spark_catalog`.`default`",
+        ),
+        (
+            "USE NAMESPACE spark_catalog.a.b",
+            "`spark_catalog`.`spark_catalog`.`a`.`b`",
+        ),
+        (
+            "USE DATABASE spark_catalog.a.b",
+            "`spark_catalog`.`spark_catalog`.`a`.`b`",
+        ),
     ] {
         match block_on(async { s.sql(sql).await?.collect().await }) {
             Ok(_) => wrong.push(format!("{sql}: no error")),
@@ -493,4 +524,42 @@ fn a_missing_schema_is_named_with_its_catalog() {
     ] {
         assert_eq!(missing_schema(&e), "`spark_catalog`.`dummy`");
     }
+    // A name of several parts keeps them, a quoted name with a dot is one part, and
+    // `setCurrentDatabase` takes no part as a catalog (Spark 4.3.0 run for each).
+    for (e, name) in [
+        (
+            block_on(c.get_database("a.b")).unwrap_err(),
+            "`spark_catalog`.`a`.`b`",
+        ),
+        (
+            block_on(c.get_database("a.b.c")).unwrap_err(),
+            "`spark_catalog`.`a`.`b`.`c`",
+        ),
+        (
+            block_on(c.get_database("`a.b`")).unwrap_err(),
+            "`spark_catalog`.`a.b`",
+        ),
+        (
+            block_on(c.set_current_database("a.b")).unwrap_err(),
+            "`spark_catalog`.`a`.`b`",
+        ),
+        (
+            block_on(c.set_current_database("`a.b`")).unwrap_err(),
+            "`spark_catalog`.`a.b`",
+        ),
+        (
+            block_on(c.set_current_database("spark_catalog.dummy")).unwrap_err(),
+            "`spark_catalog`.`spark_catalog`.`dummy`",
+        ),
+        (
+            block_on(c.set_current_database("spark_catalog.default")).unwrap_err(),
+            "`spark_catalog`.`spark_catalog`.`default`",
+        ),
+    ] {
+        assert_eq!(missing_schema(&e), name, "{e}");
+    }
+    // The catalog-first forms still reach the schema.
+    block_on(async { s.sql("USE spark_catalog.default").await?.collect().await }).unwrap();
+    assert!(block_on(c.database_exists("spark_catalog.default")).unwrap());
+    assert!(!block_on(c.database_exists("a.b")).unwrap());
 }

@@ -530,7 +530,8 @@ shared by every session of the application.
   configuration). Krishiv also hides what its own secret classifier finds, where Spark 4.3 shows it: keys such as
   `fs.azure.account.key.<account>`, `sasl.jaas.config` or `*.apiKey`, and values with credentials in a URL
   (`postgres://user:password@host`). SQL `SET` and `SET <key>` hide the same pairs and, as Spark's do, any pair with
-  `url` in the key or the value (the default of `spark.sql.redaction.options.regex`; a changed pattern is not read);
+  `url` in the key or the value (the default of `spark.sql.redaction.options.regex`; a changed pattern is not read, and `SET` of that key itself
+  prints `<undefined>`, where Spark hides its default value because the value contains `url`);
   `SET -v` hides a registered key that holds a secret, where Spark's `SET -v` hides nothing. `set` of a key without a value fails with `INVALID_CONF_VALUE.REQUIREMENT`, and a request without an
   operation with `CONNECT_INVALID_PLAN.INVALID_ONE_OF_FIELD_NOT_SET`; Spark sends `INTERNAL` without an error class.
   `is_modifiable` answers `true` for a key outside the engine's registry, where Spark answers `false` for a key it does

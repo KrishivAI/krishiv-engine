@@ -180,7 +180,7 @@ fn set_and_set_key_print_no_secret() {
         ("spark.x.token", "canary-2"),
         ("spark.hadoop.fs.s3a.secret.key", "canary-3"),
         // The value names a secret-like word; Krishiv's classifier knows the key too.
-        ("fs.azure.account.key.acct", "canary-4-secret"),
+        ("fs.azure.account.key.acct", "canary-4"),
         // `url` in the key: hidden in `SET`, though `Config.get` shows a URL without credentials.
         ("spark.my.jdbc.URL", "postgres://canary-5/db"),
         // `url` in the value only.

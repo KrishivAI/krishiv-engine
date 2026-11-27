@@ -445,8 +445,23 @@ impl Catalog<'_> {
         }
     }
 
-    /// `SCHEMA_NOT_FOUND` for the namespace `name`.
+    /// `SCHEMA_NOT_FOUND` for the namespace `name`. A name of several parts keeps every part
+    /// (Spark 4.3.0: `getDatabase("a.b")` names `` `spark_catalog`.`a`.`b` ``, and
+    /// `` getDatabase("`a.b`") `` names `` `spark_catalog`.`a.b` ``).
     fn database_not_found(name: &str) -> KrishivError {
+        let p = parts(name);
+        match p.as_slice() {
+            [_] => {}
+            [cat, _] if cat.eq_ignore_ascii_case(crate::catalog::CATALOG) => {}
+            _ => {
+                let mut all = vec![quote(crate::catalog::CATALOG)];
+                all.extend(p.iter().map(|part| quote(part)));
+                return krishiv_common::error::SchemaNotFound {
+                    schema_name: all.join("."),
+                }
+                .into();
+            }
+        }
         crate::catalog::schema_not_found(&Self::bare_database(name))
     }
 
@@ -457,9 +472,9 @@ impl Catalog<'_> {
             [cat, _] if self.is_declared(cat) => return Err(Self::refuse_declared(cat)),
             _ => {}
         }
-        let bare = Self::bare_database(name);
-        let name = bare.as_str();
-        let want = self.fold(name);
+        // The error names `name` as written: its parts are read again there, and the bare form of
+        // a quoted name with a dot would read as two parts.
+        let want = self.fold(&Self::bare_database(name));
         self.session
             .state
             .catalog
