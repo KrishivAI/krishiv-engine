@@ -1,0 +1,193 @@
+pub mod krishiv_jose
+#[non_exhaustive] pub enum krishiv_jose::Alg
+pub krishiv_jose::Alg::Es256
+pub krishiv_jose::Alg::Es384
+pub krishiv_jose::Alg::Rs256
+pub krishiv_jose::Alg::Rs384
+pub krishiv_jose::Alg::Rs512
+impl krishiv_jose::Alg
+pub const krishiv_jose::Alg::ALL: [Self; 5]
+pub fn krishiv_jose::Alg::as_str(self) -> &'static str
+pub fn krishiv_jose::Alg::curve(self) -> core::option::Option<krishiv_jose::Curve>
+pub fn krishiv_jose::Alg::parse(&str) -> core::option::Option<Self>
+impl core::clone::Clone for krishiv_jose::Alg
+pub fn krishiv_jose::Alg::clone(&self) -> krishiv_jose::Alg
+impl core::cmp::Eq for krishiv_jose::Alg
+impl core::cmp::Ord for krishiv_jose::Alg
+pub fn krishiv_jose::Alg::cmp(&self, &krishiv_jose::Alg) -> core::cmp::Ordering
+impl core::cmp::PartialEq for krishiv_jose::Alg
+pub fn krishiv_jose::Alg::eq(&self, &krishiv_jose::Alg) -> bool
+impl core::cmp::PartialOrd for krishiv_jose::Alg
+pub fn krishiv_jose::Alg::partial_cmp(&self, &krishiv_jose::Alg) -> core::option::Option<core::cmp::Ordering>
+impl core::fmt::Debug for krishiv_jose::Alg
+pub fn krishiv_jose::Alg::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for krishiv_jose::Alg
+pub fn krishiv_jose::Alg::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for krishiv_jose::Alg
+impl core::marker::StructuralPartialEq for krishiv_jose::Alg
+#[non_exhaustive] pub enum krishiv_jose::Curve
+pub krishiv_jose::Curve::P256
+pub krishiv_jose::Curve::P384
+impl krishiv_jose::Curve
+pub fn krishiv_jose::Curve::coordinate_len(self) -> usize
+impl core::clone::Clone for krishiv_jose::Curve
+pub fn krishiv_jose::Curve::clone(&self) -> krishiv_jose::Curve
+impl core::cmp::Eq for krishiv_jose::Curve
+impl core::cmp::PartialEq for krishiv_jose::Curve
+pub fn krishiv_jose::Curve::eq(&self, &krishiv_jose::Curve) -> bool
+impl core::fmt::Debug for krishiv_jose::Curve
+pub fn krishiv_jose::Curve::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for krishiv_jose::Curve
+pub fn krishiv_jose::Curve::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for krishiv_jose::Curve
+impl core::marker::StructuralPartialEq for krishiv_jose::Curve
+#[non_exhaustive] pub enum krishiv_jose::JoseError
+pub krishiv_jose::JoseError::Expired
+pub krishiv_jose::JoseError::Invalid(&'static str)
+impl core::clone::Clone for krishiv_jose::JoseError
+pub fn krishiv_jose::JoseError::clone(&self) -> krishiv_jose::JoseError
+impl core::cmp::Eq for krishiv_jose::JoseError
+impl core::cmp::PartialEq for krishiv_jose::JoseError
+pub fn krishiv_jose::JoseError::eq(&self, &krishiv_jose::JoseError) -> bool
+impl core::error::Error for krishiv_jose::JoseError
+impl core::fmt::Debug for krishiv_jose::JoseError
+pub fn krishiv_jose::JoseError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for krishiv_jose::JoseError
+pub fn krishiv_jose::JoseError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for krishiv_jose::JoseError
+impl core::marker::StructuralPartialEq for krishiv_jose::JoseError
+#[non_exhaustive] pub enum krishiv_jose::KeyMaterial
+pub krishiv_jose::KeyMaterial::Ec
+pub krishiv_jose::KeyMaterial::Ec::curve: krishiv_jose::Curve
+pub krishiv_jose::KeyMaterial::Ec::point: alloc::vec::Vec<u8>
+pub krishiv_jose::KeyMaterial::Rsa
+pub krishiv_jose::KeyMaterial::Rsa::e: alloc::vec::Vec<u8>
+pub krishiv_jose::KeyMaterial::Rsa::n: alloc::vec::Vec<u8>
+impl core::clone::Clone for krishiv_jose::KeyMaterial
+pub fn krishiv_jose::KeyMaterial::clone(&self) -> krishiv_jose::KeyMaterial
+impl core::cmp::Eq for krishiv_jose::KeyMaterial
+impl core::cmp::PartialEq for krishiv_jose::KeyMaterial
+pub fn krishiv_jose::KeyMaterial::eq(&self, &krishiv_jose::KeyMaterial) -> bool
+impl core::fmt::Debug for krishiv_jose::KeyMaterial
+pub fn krishiv_jose::KeyMaterial::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for krishiv_jose::KeyMaterial
+#[non_exhaustive] pub struct krishiv_jose::Actor
+pub krishiv_jose::Actor::chained: bool
+pub krishiv_jose::Actor::subject: core::option::Option<alloc::string::String>
+impl core::clone::Clone for krishiv_jose::Actor
+pub fn krishiv_jose::Actor::clone(&self) -> krishiv_jose::Actor
+impl core::cmp::Eq for krishiv_jose::Actor
+impl core::cmp::PartialEq for krishiv_jose::Actor
+pub fn krishiv_jose::Actor::eq(&self, &krishiv_jose::Actor) -> bool
+impl core::fmt::Debug for krishiv_jose::Actor
+pub fn krishiv_jose::Actor::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for krishiv_jose::Actor
+pub struct krishiv_jose::ClaimRules<'a>
+pub krishiv_jose::ClaimRules::audience: &'a str
+pub krishiv_jose::ClaimRules::issuer: &'a str
+pub krishiv_jose::ClaimRules::max_lifetime_secs: u64
+pub krishiv_jose::ClaimRules::principal_claim: &'a str
+pub krishiv_jose::ClaimRules::role_claim: &'a str
+pub krishiv_jose::ClaimRules::skew_secs: u64
+impl<'a> core::clone::Clone for krishiv_jose::ClaimRules<'a>
+pub fn krishiv_jose::ClaimRules<'a>::clone(&self) -> krishiv_jose::ClaimRules<'a>
+impl<'a> core::fmt::Debug for krishiv_jose::ClaimRules<'a>
+pub fn krishiv_jose::ClaimRules<'a>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<'a> core::marker::Copy for krishiv_jose::ClaimRules<'a>
+#[non_exhaustive] pub struct krishiv_jose::ExchangeClaims
+pub krishiv_jose::ExchangeClaims::audiences: alloc::vec::Vec<alloc::string::String>
+pub krishiv_jose::ExchangeClaims::groups: core::option::Option<alloc::vec::Vec<alloc::string::String>>
+pub krishiv_jose::ExchangeClaims::scope: core::option::Option<alloc::string::String>
+pub krishiv_jose::ExchangeClaims::scp: core::option::Option<alloc::vec::Vec<alloc::string::String>>
+impl krishiv_jose::ExchangeClaims
+pub fn krishiv_jose::ExchangeClaims::with_audiences(alloc::vec::Vec<alloc::string::String>) -> Self
+impl core::clone::Clone for krishiv_jose::ExchangeClaims
+pub fn krishiv_jose::ExchangeClaims::clone(&self) -> krishiv_jose::ExchangeClaims
+impl core::cmp::Eq for krishiv_jose::ExchangeClaims
+impl core::cmp::PartialEq for krishiv_jose::ExchangeClaims
+pub fn krishiv_jose::ExchangeClaims::eq(&self, &krishiv_jose::ExchangeClaims) -> bool
+impl core::default::Default for krishiv_jose::ExchangeClaims
+pub fn krishiv_jose::ExchangeClaims::default() -> krishiv_jose::ExchangeClaims
+impl core::fmt::Debug for krishiv_jose::ExchangeClaims
+pub fn krishiv_jose::ExchangeClaims::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for krishiv_jose::ExchangeClaims
+#[non_exhaustive] pub struct krishiv_jose::Header
+pub krishiv_jose::Header::alg: krishiv_jose::Alg
+pub krishiv_jose::Header::kid: core::option::Option<alloc::string::String>
+impl core::clone::Clone for krishiv_jose::Header
+pub fn krishiv_jose::Header::clone(&self) -> krishiv_jose::Header
+impl core::cmp::Eq for krishiv_jose::Header
+impl core::cmp::PartialEq for krishiv_jose::Header
+pub fn krishiv_jose::Header::eq(&self, &krishiv_jose::Header) -> bool
+impl core::fmt::Debug for krishiv_jose::Header
+pub fn krishiv_jose::Header::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for krishiv_jose::Header
+#[non_exhaustive] pub struct krishiv_jose::Identity
+pub krishiv_jose::Identity::act: core::option::Option<krishiv_jose::Actor>
+pub krishiv_jose::Identity::claims: krishiv_jose::ExchangeClaims
+pub krishiv_jose::Identity::exp: u64
+pub krishiv_jose::Identity::groups: alloc::vec::Vec<alloc::string::String>
+pub krishiv_jose::Identity::principal: alloc::string::String
+pub krishiv_jose::Identity::token_id: core::option::Option<alloc::string::String>
+impl core::clone::Clone for krishiv_jose::Identity
+pub fn krishiv_jose::Identity::clone(&self) -> krishiv_jose::Identity
+impl core::cmp::Eq for krishiv_jose::Identity
+impl core::cmp::PartialEq for krishiv_jose::Identity
+pub fn krishiv_jose::Identity::eq(&self, &krishiv_jose::Identity) -> bool
+impl core::fmt::Debug for krishiv_jose::Identity
+pub fn krishiv_jose::Identity::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for krishiv_jose::Identity
+#[non_exhaustive] pub struct krishiv_jose::Jwk
+pub krishiv_jose::Jwk::alg: core::option::Option<krishiv_jose::Alg>
+pub krishiv_jose::Jwk::kid: core::option::Option<alloc::string::String>
+pub krishiv_jose::Jwk::material: krishiv_jose::KeyMaterial
+impl krishiv_jose::Jwk
+pub fn krishiv_jose::Jwk::fits(&self, krishiv_jose::Alg) -> bool
+impl core::clone::Clone for krishiv_jose::Jwk
+pub fn krishiv_jose::Jwk::clone(&self) -> krishiv_jose::Jwk
+impl core::cmp::Eq for krishiv_jose::Jwk
+impl core::cmp::PartialEq for krishiv_jose::Jwk
+pub fn krishiv_jose::Jwk::eq(&self, &krishiv_jose::Jwk) -> bool
+impl core::fmt::Debug for krishiv_jose::Jwk
+pub fn krishiv_jose::Jwk::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for krishiv_jose::Jwk
+#[non_exhaustive] pub struct krishiv_jose::Jws<'a>
+pub krishiv_jose::Jws::claims: krishiv_jose::Object
+pub krishiv_jose::Jws::header: krishiv_jose::Header
+pub krishiv_jose::Jws::signature: alloc::vec::Vec<u8>
+pub krishiv_jose::Jws::signing_input: &'a [u8]
+impl<'a> core::clone::Clone for krishiv_jose::Jws<'a>
+pub fn krishiv_jose::Jws<'a>::clone(&self) -> krishiv_jose::Jws<'a>
+impl<'a> core::cmp::PartialEq for krishiv_jose::Jws<'a>
+pub fn krishiv_jose::Jws<'a>::eq(&self, &krishiv_jose::Jws<'a>) -> bool
+impl<'a> core::fmt::Debug for krishiv_jose::Jws<'a>
+pub fn krishiv_jose::Jws<'a>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl<'a> core::marker::StructuralPartialEq for krishiv_jose::Jws<'a>
+pub struct krishiv_jose::Object(_)
+impl krishiv_jose::Object
+pub fn krishiv_jose::Object::get(&self, &str) -> core::option::Option<&serde_json::value::Value>
+pub fn krishiv_jose::Object::members(&self) -> impl core::iter::traits::iterator::Iterator<Item = (&str, &serde_json::value::Value)>
+impl core::clone::Clone for krishiv_jose::Object
+pub fn krishiv_jose::Object::clone(&self) -> krishiv_jose::Object
+impl core::cmp::PartialEq for krishiv_jose::Object
+pub fn krishiv_jose::Object::eq(&self, &krishiv_jose::Object) -> bool
+impl core::default::Default for krishiv_jose::Object
+pub fn krishiv_jose::Object::default() -> krishiv_jose::Object
+impl core::fmt::Debug for krishiv_jose::Object
+pub fn krishiv_jose::Object::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for krishiv_jose::Object
+impl<'de> serde_core::de::Deserialize<'de> for krishiv_jose::Object
+pub fn krishiv_jose::Object::deserialize<D: serde_core::de::Deserializer<'de>>(D) -> core::result::Result<Self, <D as serde_core::de::Deserializer>::Error>
+pub const krishiv_jose::MAX_DOCUMENT_BYTES: usize
+pub const krishiv_jose::MAX_GROUPS: usize
+pub const krishiv_jose::MAX_JWKS_KEYS: usize
+pub const krishiv_jose::MAX_PRINCIPAL_BYTES: usize
+pub const krishiv_jose::MAX_TOKEN_BYTES: usize
+pub fn krishiv_jose::check_claims(&krishiv_jose::Object, &krishiv_jose::ClaimRules<'_>, u64) -> core::result::Result<krishiv_jose::Identity, krishiv_jose::JoseError>
+pub fn krishiv_jose::discovered_jwks_uri(&[u8], &str) -> core::result::Result<alloc::string::String, krishiv_jose::JoseError>
+pub fn krishiv_jose::ecdsa_der_to_fixed(krishiv_jose::Curve, &[u8]) -> core::result::Result<alloc::vec::Vec<u8>, krishiv_jose::JoseError>
+pub fn krishiv_jose::is_format_char(char) -> bool
+pub fn krishiv_jose::looks_like_jws(&str) -> bool
+pub fn krishiv_jose::parse_jwks(&[u8]) -> core::result::Result<alloc::vec::Vec<krishiv_jose::Jwk>, krishiv_jose::JoseError>
+pub fn krishiv_jose::parse_jws(&str) -> core::result::Result<krishiv_jose::Jws<'_>, krishiv_jose::JoseError>
+pub fn krishiv_jose::verify_signature(krishiv_jose::Alg, &krishiv_jose::Jwk, &[u8], &[u8]) -> bool

@@ -3,7 +3,7 @@
 **Layer:** L1 (may depend only on crates in L0–L1; `cargo xtask layering`). It depends on no workspace crate.
 
 ## Purpose
-The token verifier the engine and the platform share (ADR 0050), so both accept and refuse the same tokens:
+A standalone token verifier, usable without the engine's query crates (ADR 0050):
 JWS compact tokens, JWK sets and OpenID discovery documents parsed strictly, the claim rules, and the signature
 check. Taken unchanged from `krishiv-session`'s `auth/jose.rs` and `oidc.rs` `verify_signature`. The key-set cache,
 its fetch, `OidcConfig` and every mapping to `KrishivError` stay in `krishiv-session` (`src/auth/`).
@@ -28,6 +28,8 @@ its fetch, `OidcConfig` and every mapping to `KrishivError` stay in `krishiv-ses
 - Never put token content in an error (`JoseError` carries fixed reasons only).
 - `#![forbid(unsafe_code)]`; no `unwrap`/`expect`/`panic` outside tests.
 - Fuzzed by `fuzz/fuzz_targets/jwt_parse.rs`.
+- `public-api.txt` is the snapshot of the public surface with every feature (nightly `public-api` job):
+  regenerate with `cargo +nightly-2026-08-12 public-api -ss -p krishiv-jose --all-features`.
 
 ## ADRs (in `../krishiv-internal/adr/`)
 0026, 0027, 0028, 0029, 0046, 0050

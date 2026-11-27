@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-//! JWS compact tokens and JWK sets, parsed and (feature `verify`) verified: the token verifier
-//! the Krishiv engine and the Krishiv platform share, so both accept and refuse the same tokens
-//! (ADR 0050; engine design P3-T002 §3.3, steps 1, 2, 4 and 6).
+//! JWS compact tokens and JWK sets, parsed and (feature `verify`) verified: a standalone token
+//! verifier, usable without the engine's query crates (ADR 0050; engine design P3-T002 §3.3, steps 1, 2, 4 and 6).
 //!
 //! Parsing is a pure function of bytes: no clock, no network, no cryptography, and only `std`,
 //! `serde` and `serde_json`. The signature check (`verify_signature`) is behind the feature
@@ -571,6 +570,9 @@ pub enum KeyMaterial {
 }
 
 /// One signing key of a JWK set.
+///
+/// The fields are public to read, but the struct is `#[non_exhaustive]`, so outside this crate a
+/// `Jwk` comes only from [`parse_jwks`]: every key is checked the way a JWK set is.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct Jwk {

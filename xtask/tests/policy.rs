@@ -1006,8 +1006,9 @@ fn release_publishing_is_manual_and_gated() {
     // because krishiv-session depends on it (owner 2026-11-17); P3-T101 adds krishiv-flight-sql
     // (krishiv-cli depends on it); P3-T067 PR-58b adds krishiv-connectors-iceberg and
     // krishiv-arrow-bridge (krishiv-catalogs' declared-table reads depend on them); R1 (G5/G6)
-    // adds krishiv-access-proto (krishiv-server's external access provider depends on it).
-    assert_eq!(listed.len(), 30, "the release publishes 30 crates");
+    // adds krishiv-access-proto (krishiv-server's external access provider depends on it); ADR 0050
+    // adds krishiv-jose (krishiv-session's token verifier depends on it).
+    assert_eq!(listed.len(), 31, "the release publishes 31 crates");
     let mut manifests = vec![root().join("xtask/Cargo.toml")];
     for entry in std::fs::read_dir(root().join("crates")).unwrap() {
         manifests.push(entry.unwrap().path().join("Cargo.toml"));

@@ -919,6 +919,11 @@ jobs:
               > "$RUNNER_TEMP/$crate.txt"
             diff -u "crates/$crate/public-api.txt" "$RUNNER_TEMP/$crate.txt"
           done
+          # krishiv-jose's snapshot is taken with every feature, so `verify_signature` (feature
+          # `verify`) is in it (ADR 0050 §5).
+          cargo +nightly-2026-08-12 public-api -ss -p krishiv-jose --all-features \
+            > "$RUNNER_TEMP/krishiv-jose.txt"
+          diff -u crates/krishiv-jose/public-api.txt "$RUNNER_TEMP/krishiv-jose.txt"
 
   # Breaking changes against the last release tag (docs/concepts/stability.md). Blocking. Below 1.0 a
   # minor bump may break (0.2.0 -> 0.3.0), so the check runs as a major release then and the list of
