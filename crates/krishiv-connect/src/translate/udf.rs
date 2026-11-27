@@ -166,6 +166,20 @@ pub enum Command {
     Write(super::write::WriteSpec),
     /// `write_operation_v2`: write the command's relation with a `DataFrameWriterV2`.
     WriteV2(super::write::WriteV2Spec),
+    /// `create_dataframe_view`: register the command's relation (translated by the server, which runs
+    /// the command) as a temporary view.
+    CreateView(ViewSpec),
+}
+
+/// What a `create_dataframe_view` asks besides its relation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ViewSpec {
+    /// The view's name (for a global view, without the `global_temp` qualifier).
+    pub name: String,
+    /// `is_global`: a global temporary view.
+    pub is_global: bool,
+    /// `replace`: replace a view of that name instead of failing.
+    pub replace: bool,
 }
 
 /// What a `checkpoint_command` asks besides its relation.
@@ -203,6 +217,11 @@ pub fn translate_command(command: &pb::Command) -> Result<Command> {
                     .unwrap_or_default(),
             })
         }
+        Some(CommandType::CreateDataframeView(v)) => Ok(Command::CreateView(ViewSpec {
+            name: v.name.clone(),
+            is_global: v.is_global,
+            replace: v.replace,
+        })),
         Some(CommandType::WriteOperation(w)) => super::write::write_spec(w).map(Command::Write),
         Some(CommandType::WriteOperationV2(w)) => {
             super::write::write_v2_spec(w).map(Command::WriteV2)

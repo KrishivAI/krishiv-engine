@@ -6,8 +6,10 @@
 //! pass that recurses calls [`on_big_stack`] every [`STEP`] levels, so it
 //! never needs more than `STEP` frames of the caller's stack.
 
-/// Levels a recursive pass may take on one stack segment.
-pub const STEP: usize = 32;
+/// Levels a recursive pass may take on one stack segment. Windows debug frames are several times
+/// larger than Linux's (32 levels overflowed a 1 MiB stack in the `krishiv-plan`, `krishiv-sql` and
+/// `krishiv-connect` depth tests), so a segment takes fewer levels there.
+pub const STEP: usize = if cfg!(windows) { 8 } else { 32 };
 
 type Inherited = std::sync::Arc<dyn std::any::Any + Send + Sync>;
 

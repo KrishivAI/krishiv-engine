@@ -156,6 +156,8 @@ pub(crate) struct SessionState {
     /// The runtime that evaluates them in this process (set by the Python
     /// facade); without one a plan calling a Python UDF fails to run.
     pub(crate) python_runtime: Mutex<Option<Arc<dyn krishiv_exec::python_eval::UdfRuntime>>>,
+    /// Where persisted Python UDFs are kept (a Connect server's catalog); none for a session alone.
+    pub(crate) persisted_functions: Mutex<Option<Arc<dyn crate::python_udfs::PersistedFunctions>>>,
     /// The SQL-bodied functions the session defines.
     pub(crate) sql_functions: SqlFunctions,
     /// The process-wide part of the engine this session runs on.
@@ -604,6 +606,7 @@ impl Session {
                 self.exec_create_function(&f, redacted, &env.identifier_spans)
                     .await
             }
+            Statement::CreatePersistedFunction(f) => self.exec_create_persisted_function(&f).await,
             Statement::DropFunction(f) => self.exec_drop_function(&f).await,
             Statement::CreateTable(t) => {
                 Box::pin(self.exec_create_table(&t, query, &env.identifier_spans))
@@ -1417,6 +1420,7 @@ impl Session {
             quiet: QuietDenials::default(),
             udtfs,
             spill_failure: Arc::default(),
+            planning: Arc::default(),
         }
     }
 
@@ -1648,9 +1652,12 @@ impl Session {
         &self,
         physical: &PhysicalPlan,
         env: &QueryEnv,
-    ) -> Result<(RecordBatchStream, Arc<QueryContext>), KrishivError> {
-        self.run_on_query(physical, self.worker(env), env, true)
-            .await
+    ) -> Result<(RecordBatchStream, Arc<QueryContext>, String), KrishivError> {
+        // The row id too: the profile reads the query's `planning_ns` from its row (MODES-2).
+        let (stream, query, log_id) = self
+            .run_on_query_logged(physical, self.worker(env), env, true, None)
+            .await?;
+        Ok((crate::run_site::resolve_sites(stream, env), query, log_id))
     }
 
     /// The session's relation store (tests): every registered memory
@@ -1795,6 +1802,10 @@ impl Session {
                 .await?
                 .into_parts(),
         };
+        // The plan is made: what the statement spent planning, the queue excluded (MODES-2).
+        self.state
+            .queries
+            .set_planning_ns(&log_id, env.planning.take());
         self.state.activity.query_started();
         let id = QueryId(self.state.runtime.reserve_tagged(
             self.state.number,

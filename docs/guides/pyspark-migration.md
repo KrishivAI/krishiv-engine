@@ -155,6 +155,7 @@ Each row links to the full description in [known differences](../concepts/known-
 | [Several grouped-aggregate pandas UDFs in one `agg`](../concepts/known-differences.md#several-grouped-aggregate-pandas-udfs-in-one-agg) |
 | [Metric views (`CREATE VIEW .. WITH METRICS LANGUAGE YAML`)](../concepts/known-differences.md#metric-views-create-view--with-metrics-language-yaml) |
 | [Pattern matching over collated strings (`LIKE`, `RLIKE`)](../concepts/known-differences.md#pattern-matching-over-collated-strings-like-rlike) |
+| [`NEAREST BY` joins run as a ranked cross join](../concepts/known-differences.md#nearest-by-joins-run-as-a-ranked-cross-join) |
 
 ## Where it runs
 

@@ -4,7 +4,8 @@
 //! a datasource table `_LEGACY_ERROR_TEMP_1261`), after resolving the table it names.
 
 use krishiv_common::error::{
-    LegacyErrorTemp1261, UnsupportedFeatureCreateFlowQueryExecution,
+    LegacyErrorTemp1261, LegacyErrorTemp2233, NotSupportedCommandWithoutHiveSupport,
+    UnsupportedFeatureCreateFlowQueryExecution,
     UnsupportedFeatureCreatePipelineDatasetQueryExecution,
 };
 use krishiv_sql::ast::{
@@ -61,19 +62,23 @@ impl Session {
         ids: &[krishiv_sql::ast::Span],
     ) -> Result<DataFrame, KrishivError> {
         let DirectoryFormat::Provider { provider, options } = &d.format else {
-            return Err(unsupported(
-                "INSERT OVERWRITE DIRECTORY with ROW FORMAT or STORED AS",
-            ));
+            return Err(without_hive());
         };
         let path = match d.option_path() {
             Some(p) if !p.is_empty() => p.to_owned(),
             _ => d.path.clone().unwrap_or_default(),
         };
-        let format = provider
-            .parts
-            .last()
-            .map(|p| p.value.clone())
-            .unwrap_or_default();
+        let format = crate::table_commands::short_provider(
+            &provider
+                .parts
+                .iter()
+                .map(|p| p.value.as_str())
+                .collect::<Vec<_>>()
+                .join("."),
+        );
+        if format == "hive" {
+            return Err(without_hive());
+        }
         let plan = krishiv_sql::lower_identified(
             &d.query,
             self.next_source_id(),
@@ -82,6 +87,15 @@ impl Session {
         )
         .map_err(|e| e.error)?;
         let source = DataFrame::new(self.clone(), Arc::clone(plan.root()));
+        // Spark analyzes the query first (a missing table is its error), then refuses a source that writes
+        // no files when the command runs.
+        if let Some(class) = non_file_source(&format) {
+            source.schema().await?;
+            return Err(LegacyErrorTemp2233 {
+                providing_class: format!("class {class}"),
+            }
+            .into());
+        }
         let mut writer = source.write().format(&format).mode("overwrite");
         for option in options {
             let key = option
@@ -104,5 +118,25 @@ impl Session {
         }
         writer.save(&path).await?;
         self.empty_frame().await
+    }
+}
+
+/// Spark's refusal of the Hive form (and of `USING hive`) when the catalog is not Hive-backed.
+fn without_hive() -> KrishivError {
+    NotSupportedCommandWithoutHiveSupport {
+        cmd: "INSERT OVERWRITE DIRECTORY with the Hive format".to_owned(),
+    }
+    .into()
+}
+
+/// The provider class of a built-in data source that does not write files; Spark resolves it, then
+/// refuses it at run time (`_LEGACY_ERROR_TEMP_2233`).
+fn non_file_source(format: &str) -> Option<&'static str> {
+    match format {
+        "jdbc" => Some("org.apache.spark.sql.execution.datasources.jdbc.JdbcRelationProvider"),
+        "noop" => Some("org.apache.spark.sql.execution.datasources.noop.NoopDataSource"),
+        "console" => Some("org.apache.spark.sql.execution.streaming.ConsoleSinkProvider"),
+        "rate" => Some("org.apache.spark.sql.execution.streaming.sources.RateStreamProvider"),
+        _ => None,
     }
 }

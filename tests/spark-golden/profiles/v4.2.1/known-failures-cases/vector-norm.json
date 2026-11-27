@@ -1,0 +1,15 @@
+{
+  "cases": {
+    "wrong-result-vector-norm": [
+      46,
+      47,
+      48,
+      49,
+      52,
+      54,
+      55
+    ]
+  },
+  "file": "vector-norm",
+  "format_version": 1
+}

@@ -197,8 +197,10 @@ impl ValueType {
                 }),
             ValueType::String => Ok(ConfigValue::String(Cow::Owned(raw.to_owned()))),
             ValueType::TimeZone => {
-                if is_valid_time_zone(s) {
-                    Ok(ConfigValue::String(Cow::Owned(s.to_owned())))
+                // Untrimmed: Spark's `ZoneId.of` takes the text as given, so
+                // ` UTC ` is no zone (`INVALID_CONF_VALUE.TIME_ZONE`).
+                if is_valid_time_zone(raw) {
+                    Ok(ConfigValue::String(Cow::Owned(raw.to_owned())))
                 } else {
                     Err(
                         "expected a region ID such as `America/Los_Angeles` or a zone \

@@ -284,7 +284,7 @@ fn a_rewrite_writes_the_reserved_ids_and_their_metrics() {
         &rewrite_batch(&[(1, 1, "a", Some(7), Some(1)), (2, 1, "b", None, None)]),
         1,
     );
-    let local = w.location.strip_prefix("file://").unwrap();
+    let local = super::sink_tests::local_path(&w.location);
     let reader =
         ParquetRecordBatchReaderBuilder::try_new(std::fs::File::open(local).unwrap()).unwrap();
     let ids: Vec<(String, String, bool)> = reader
@@ -558,12 +558,12 @@ fn grouped_file(
         ],
     );
     let location = env.at(name);
-    let local = location.strip_prefix("file://").unwrap();
+    let local = super::sink_tests::local_path(&location);
     let props = parquet::file::properties::WriterProperties::builder()
         .set_max_row_group_row_count(Some(group))
         .build();
     let mut w = parquet::arrow::ArrowWriter::try_new(
-        std::fs::File::create(local).unwrap(),
+        std::fs::File::create(&local).unwrap(),
         b.schema(),
         Some(props),
     )
@@ -675,7 +675,7 @@ fn upgrade(env: &Env, m: &TableMetadata, loc: &str, n: u32) -> (TableMetadata, S
             .metadata;
     let path = env.at(&format!("v{n}.metadata.json"));
     std::fs::write(
-        path.strip_prefix("file://").unwrap(),
+        super::sink_tests::local_path(&path),
         serde_json::to_vec(&next).unwrap(),
     )
     .unwrap();

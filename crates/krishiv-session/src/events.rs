@@ -43,7 +43,7 @@ pub struct SchemaVersion {
 }
 
 /// The version this build writes.
-pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion { major: 1, minor: 0 };
+pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion { major: 1, minor: 1 };
 
 /// Who and what a query event is about.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -224,6 +224,9 @@ pub struct UsageRecord {
     pub wall_ns: Option<i64>,
     /// Time held in the admission queue.
     pub queued_ns: Option<i64>,
+    /// Time spent planning before the run, outside `wall_ns` and the queue (as
+    /// `system.queries.planning_ns`); `None` for a query that never ran.
+    pub planning_ns: Option<i64>,
     /// Busy time of the query's drivers.
     pub cpu_ns: Option<i64>,
     /// Bytes its scans read.
@@ -363,6 +366,7 @@ impl UsageRecord {
             "window_end_ms": self.window_end_ms,
             "wall_ns": opt(self.wall_ns),
             "queued_ns": opt(self.queued_ns),
+            "planning_ns": opt(self.planning_ns),
             "cpu_ns": opt(self.cpu_ns),
             "bytes_scanned": opt(self.bytes_scanned),
             "rows_read": opt(self.rows_read),
@@ -883,6 +887,7 @@ impl EventBus {
             window_end_ms: row.ended_ms.unwrap_or_else(now_ms),
             wall_ns: row.wall_ns,
             queued_ns: row.queued_ns,
+            planning_ns: row.planning_ns,
             cpu_ns: row.cpu_ns,
             bytes_scanned: row.bytes_read,
             rows_read: row.rows_read,

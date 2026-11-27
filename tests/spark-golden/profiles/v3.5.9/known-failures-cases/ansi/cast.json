@@ -3,10 +3,6 @@
     "other-version": [
       62,
       99
-    ],
-    "sql-commands": [
-      37,
-      38
     ]
   },
   "file": "ansi/cast",

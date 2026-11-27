@@ -51,17 +51,20 @@ def invalid_sample_lines(results: dict[str, dict], qids) -> list[str]:
             inv = r["queries"].get(q, {}).get("invalid_samples") or []
             if inv:
                 low = min(i["min_mem_avail_bytes"] for i in inv)
-                rows.append(f"| {q} | {e} | {len(inv)} | {_gb(low)} | {_gb(inv[0]['threshold_bytes'])} |")
+                grown = max(i.get("engine_growth_bytes", 0) for i in inv)  # older results have no such field
+                rows.append(
+                    f"| {q} | {e} | {len(inv)} | {_gb(low)} | {_gb(grown)} | {_gb(inv[0]['threshold_bytes'])} |"
+                )
     if not rows:
         return []
     return [
         "## Invalid samples",
         "",
-        "Runs discarded and retried because host MemAvailable fell below the threshold during the run "
-        "(`invalid: memory reclaimed`).",
+        "Runs discarded and retried because host MemAvailable, with the engine's own RSS growth added back, fell "
+        "below the threshold during the run (`invalid: memory reclaimed`).",
         "",
-        "| query | engine | invalid runs | lowest MemAvailable GB | threshold GB |",
-        "|---|---|---|---|---|",
+        "| query | engine | invalid runs | lowest MemAvailable GB | engine growth GB | threshold GB |",
+        "|---|---|---|---|---|---|",
         *rows,
         "",
     ]

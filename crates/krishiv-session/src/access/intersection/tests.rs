@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use krishiv_common::error::{InternalError, KrishivError};
 use krishiv_plan::analyzer::{PrincipalKind, RowColumnPolicy};
@@ -9,6 +10,10 @@ use super::*;
 /// A member that answers from a rule and records what it was asked, told and prefetched.
 struct Member {
     version: u64,
+    /// Added to `version`, for a version that changes after the member is shared.
+    bump: AtomicU64,
+    /// Added to `bump` by every `check`: a policy that changes while it answers.
+    bump_per_check: u64,
     column_level: bool,
     decides: fn(&Securable) -> bool,
     answer: fn(&Securable, Privilege) -> Result<AccessDecision, KrishivError>,
@@ -21,6 +26,8 @@ impl Member {
     fn new(answer: fn(&Securable, Privilege) -> Result<AccessDecision, KrishivError>) -> Self {
         Self {
             version: 1,
+            bump: AtomicU64::new(0),
+            bump_per_check: 0,
             column_level: false,
             decides: |_| true,
             answer,
@@ -41,7 +48,7 @@ impl Member {
 
 impl AccessPolicy for Member {
     fn version(&self) -> PolicyVersion {
-        PolicyVersion(self.version)
+        PolicyVersion(self.version + self.bump.load(Ordering::Relaxed))
     }
 
     fn check<'a>(
@@ -54,6 +61,7 @@ impl AccessPolicy for Member {
             .lock()
             .unwrap()
             .push((securable.clone(), privilege));
+        self.bump.fetch_add(self.bump_per_check, Ordering::Relaxed);
         Box::pin(std::future::ready((self.answer)(securable, privilege)))
     }
 
@@ -461,4 +469,99 @@ fn system_only_decides_the_server_objects_alone() {
     let d = run(p.check(&principal(), &table("t"), Privilege::Select)).unwrap();
     assert!(matches!(d, AccessDecision::Deny { .. }));
     assert_eq!(external.asked().len(), 1);
+}
+
+#[test]
+fn a_table_level_member_is_asked_each_relation_once_per_stage() {
+    // Review m3: a 3-column read of `t` asks the table-level member `Select` on `t` once.
+    let (grants, external, p) = grants_and_external();
+    let ana = principal();
+    run(p.prefetch(&ana, &[(table("t"), Privilege::Browse)]));
+    run(p.check(&ana, &table("t"), Privilege::Browse)).unwrap();
+    let columns = [column("t", "a"), column("t", "b"), column("t", "c")];
+    for c in &columns {
+        assert!(is_allow(&run(p.check(&ana, c, Privilege::Select)).unwrap()));
+    }
+    let selects = |m: &Member| {
+        m.asked()
+            .into_iter()
+            .filter(|(_, p)| *p == Privilege::Select)
+            .count()
+    };
+    assert_eq!(
+        selects(&grants),
+        3,
+        "the column-level member is asked per column"
+    );
+    assert_eq!(selects(&external), 1);
+    // Another principal is asked on its own.
+    let bob = Principal::new("bob", PrincipalKind::User);
+    assert!(is_allow(
+        &run(p.check(&bob, &columns[0], Privilege::Select)).unwrap()
+    ));
+    assert_eq!(selects(&external), 2);
+    // A new version of the member: the answer is asked again.
+    external.bump.store(1, Ordering::Relaxed);
+    assert!(is_allow(
+        &run(p.check(&ana, &columns[1], Privilege::Select)).unwrap()
+    ));
+    assert_eq!(selects(&external), 3);
+    assert!(is_allow(
+        &run(p.check(&ana, &columns[2], Privilege::Select)).unwrap()
+    ));
+    assert_eq!(selects(&external), 3);
+    // A new stage starts with no answers.
+    run(p.prefetch(&ana, &[]));
+    assert!(is_allow(
+        &run(p.check(&ana, &columns[0], Privilege::Select)).unwrap()
+    ));
+    assert_eq!(selects(&external), 4);
+}
+
+#[test]
+fn an_answer_given_while_the_version_changed_serves_no_other_column() {
+    // CodeRabbit on #1023: the answer is kept under the version it was decided at, and not at
+    // all when the member's version moved during the check.
+    let mut grants = Member::new(allow);
+    grants.column_level = true;
+    let grants = Arc::new(grants);
+    let mut external = Member::new(allow);
+    external.bump_per_check = 1;
+    let external = Arc::new(external);
+    let p = list(vec![Arc::clone(&grants), Arc::clone(&external)]);
+    let ana = principal();
+    run(p.prefetch(&ana, &[(table("t"), Privilege::Browse)]));
+    run(p.check(&ana, &table("t"), Privilege::Browse)).unwrap();
+    for c in [column("t", "a"), column("t", "b")] {
+        assert!(is_allow(
+            &run(p.check(&ana, &c, Privilege::Select)).unwrap()
+        ));
+    }
+    let selects = external
+        .asked()
+        .into_iter()
+        .filter(|(_, p)| *p == Privilege::Select)
+        .count();
+    assert_eq!(selects, 2, "each column asks the member again");
+}
+
+#[test]
+fn a_refused_relation_is_asked_again_for_every_column() {
+    // Only an allowed answer serves the stage: a refusal is never remembered as one.
+    let mut grants = Member::new(allow);
+    grants.column_level = true;
+    let grants = Arc::new(grants);
+    let external = Arc::new(Member::new(deny));
+    let p = list(vec![Arc::clone(&grants), Arc::clone(&external)]);
+    run(p.check(&principal(), &table("t"), Privilege::Browse)).unwrap();
+    for c in [column("t", "a"), column("t", "b")] {
+        let d = run(p.check(&principal(), &c, Privilege::Select)).unwrap();
+        assert!(matches!(d, AccessDecision::Deny { .. }), "{d:?}");
+    }
+    let selects = external
+        .asked()
+        .into_iter()
+        .filter(|(_, p)| *p == Privilege::Select)
+        .count();
+    assert_eq!(selects, 2);
 }

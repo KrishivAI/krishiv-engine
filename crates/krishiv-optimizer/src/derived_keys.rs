@@ -62,12 +62,12 @@
 //! aggregate's shape; the result is a fixed point (a second run finds only
 //! bare keys).
 
-use std::collections::HashMap;
+use crate::expr::AttrMap;
 use std::sync::Arc;
 
 use krishiv_common::error::KrishivError;
 use krishiv_plan::{
-    AttrId, BoundColumn, Builtin, Expr, ExprNode, FunctionId, FunctionKind, Grouping, LogicalPlan,
+    BoundColumn, Builtin, Expr, ExprNode, FunctionId, FunctionKind, Grouping, LogicalPlan,
     PlanNode, ResolvedExpr,
 };
 use krishiv_types::DataType;
@@ -145,7 +145,7 @@ fn at_aggregate(p: Arc<LogicalPlan>, cx: &mut Context<'_>) -> Arc<LogicalPlan> {
     };
     // The columns the project below defines (they leave the keys when they
     // move) and the bare keys it merely passes through.
-    let defs: HashMap<AttrId, Arc<Expr>> = match &input.node {
+    let defs: AttrMap<Arc<Expr>> = match &input.node {
         PlanNode::Project { exprs, .. } => exprs
             .iter()
             .filter_map(|e| match &e.node {
@@ -155,7 +155,7 @@ fn at_aggregate(p: Arc<LogicalPlan>, cx: &mut Context<'_>) -> Arc<LogicalPlan> {
                 _ => None,
             })
             .collect(),
-        _ => HashMap::new(),
+        _ => AttrMap::default(),
     };
     let base: Attrs = keys
         .iter()
@@ -231,7 +231,7 @@ fn at_aggregate(p: Arc<LogicalPlan>, cx: &mut Context<'_>) -> Arc<LogicalPlan> {
         ));
         return p;
     }
-    let substitutions: HashMap<AttrId, Arc<Expr>> = moved
+    let substitutions: AttrMap<Arc<Expr>> = moved
         .iter()
         .filter_map(|m| m.column.as_ref().map(|c| (c.id, Arc::clone(&m.expr))))
         .collect();

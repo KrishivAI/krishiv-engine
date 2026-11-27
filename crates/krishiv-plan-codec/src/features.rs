@@ -145,6 +145,7 @@ registry! {
     (indeterminate_collation, IndeterminateCollation, POST_MIGRATION_READER_VERSION, Semantic, "STRING types of the INDETERMINATE collation (`string collate null`: a mixed expression's operands' collations conflict), by its name `null`, alone or inside a nested type."),
     (interval_types, IntervalTypes, POST_MIGRATION_READER_VERSION, Semantic, "The year-month, day-time and calendar interval types, with their fields; calendar literals, and year-month and day-time literals as a cast or function argument. A bare year-month or day-time literal stays baseline."),
     (join_build_preserved, JoinBuildPreserved, POST_MIGRATION_READER_VERSION, Optimization, "Joins that build their preserved side (`RightSemi`, `RightAnti`, `RightOuter`); without it the planner builds the other side (`LeftSemi`, `LeftAnti`, `LeftOuter`)."),
+    (join_filter_bound, JoinFilterBound, POST_MIGRATION_READER_VERSION, Optimization, "A hash join's runtime filter collected from a build column as a one-sided range (`JoinFilter.bound_column`, `KeyFilterOptions.side`; design P3-0.3.1 D2): the bound of a comparison conjunct of the residual, `p < b` publishing `p <= max(b)`; without it the planner publishes no such filter, which never changes rows."),
     (join_full_outer, JoinFullOuter, POST_MIGRATION_READER_VERSION, Semantic, "The `FULL_OUTER` hash join: both sides preserved, with no equivalent plan without it."),
     (join_single_match, JoinSingleMatch, POST_MIGRATION_READER_VERSION, Semantic, "The single-match flag of a `LeftOuter` hash join (a scalar subquery: more than one match per probe row is an error)."),
     (key_group_hash, KeyGroupHash, POST_MIGRATION_READER_VERSION, Semantic, "Hash exchanges that route by key-group ranges of the routing hash `H_kg` version 1 (XXH64, seed 0, of the normalized key bytes, folded over several columns)."),
@@ -279,6 +280,9 @@ pub enum Construct<'a> {
     Generator(krishiv_plan::GeneratorKind),
     /// A hash join's probe selection (`HashJoinPlan.select`).
     ProbeSelect,
+    /// A hash join's runtime filter collected as a bound from a build
+    /// column (`JoinFilterPlan::column`, a one-sided range).
+    JoinFilterBound,
     /// A Python UDF's eval type (of a call or a relation node's UDF).
     PythonEvalType(krishiv_plan::PythonEvalType),
 }
@@ -625,6 +629,7 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
         Construct::FileSourceSchema => Some(Feature::FileSourceSchema),
         Construct::LocalRelationSource => Some(Feature::LocalRelationSource),
         Construct::ProbeSelect => Some(Feature::FusedProbe),
+        Construct::JoinFilterBound => Some(Feature::JoinFilterBound),
         // The scalar kinds came with `python_udf`; every other kind is newer.
         Construct::PythonEvalType(t) => (!t.is_scalar()).then_some(Feature::PythonUdfRelations),
         Construct::Generator(kind) => match kind {
@@ -832,6 +837,12 @@ fn constructs_of<'a>(node: &'a PhysNode, f: &mut impl FnMut(Construct<'a>)) {
             f(Construct::Join(j.join_type));
             if j.select.is_some() {
                 f(Construct::ProbeSelect);
+            }
+            if j.runtime_filters
+                .iter()
+                .any(|r| r.column.is_some() || r.options.side != krishiv_io::RangeSide::Both)
+            {
+                f(Construct::JoinFilterBound);
             }
         }
         PhysNode::SortMergeJoin(j) => f(Construct::Join(j.join_type)),

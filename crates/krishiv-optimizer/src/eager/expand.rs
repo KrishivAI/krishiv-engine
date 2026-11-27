@@ -20,7 +20,9 @@
 //!
 //! The calls are the ones eager aggregation moves ([`refusal_of_call`]): the
 //! same accumulators, whose result cannot depend on the order or the grouping
-//! of their rows. No row is dropped on the way, so nothing reads the estimate:
+//! of their rows. As the partial reads the same rows as the aggregate above,
+//! an argument may also be exact decimal arithmetic (q67's
+//! `coalesce(ss_sales_price * ss_quantity, 0)`), which raises on no row. No row is dropped on the way, so nothing reads the estimate:
 //! where `X` does not reduce (a finest set that is nearly unique, as q67's),
 //! the partial operator's adaptive bypass passes the rows on as their own
 //! states after its first rows.
@@ -101,7 +103,7 @@ impl<'a> Shape<'a> {
         }
         let input_est = est.plan(input);
         for (_, f) in &calls {
-            refusal_of_call(f, &input_est, false)?;
+            refusal_of_call(f, &input_est, false, true)?;
         }
         let keys: Vec<_> = cols
             .iter()

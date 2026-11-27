@@ -128,8 +128,8 @@ mod view_session_refs;
 mod window;
 
 pub use access::{
-    IntersectionPolicy, PathPrefixPolicy, READ_ONLY_PRIVILEGES, ReadOnlyPolicy, StatementInfo,
-    SystemOnlyPolicy,
+    IntersectionPolicy, PathPrefixPolicy, READ_ONLY_PRIVILEGES, ReadOnlyPolicy, StatementContext,
+    StatementInfo, SystemOnlyPolicy,
 };
 pub use admin_groups::{ResourceGroupDocument, ResourceGroupInfo};
 pub use admin_view::{QueryInfo, SessionInfo};
@@ -170,6 +170,8 @@ pub use krishiv_udf_sdk::{
 pub use memory_table::{BatchSource, PlannedRead, SourcePlanner};
 pub use observation::Observation;
 pub use profile::{ExplainVerbose, OptimizerStep, VERBOSE_FORMAT, VERBOSE_VERSION};
+#[cfg(feature = "unstable-ir")]
+pub use python_udfs::PersistedFunctions;
 pub use python_udfs::{
     ANONYMOUS_VERSION_BIT, PythonUdfDef, PythonUdfEntry, PythonUdfLibrary, PythonUdtfDef,
     PythonUdtfEntry,
