@@ -12,7 +12,7 @@ server first (see [Deployment](deploy.md) and [Securing a single-node server](si
 ## Connect
 
 ```ts
-import { Session, col, count } from "krishiv";
+import { Session, KrishivError, col, count } from "krishiv";
 
 const spark = await Session.builder()
   .remote("krishiv://localhost:15002") // krishivs:// for TLS
@@ -70,5 +70,5 @@ try {
 }
 ```
 
-Import `KrishivError` from `krishiv`. `1/0` fails with `DIVIDE_BY_ZERO` while ANSI mode is on (see
+`1/0` fails with `DIVIDE_BY_ZERO` while ANSI mode is on (see
 [Session settings](session-settings.md)).
