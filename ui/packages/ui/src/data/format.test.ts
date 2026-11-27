@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 import { describe, expect, it } from "vitest";
 import { bytes, count, elapsed, nanos, oneLine, percent, seconds } from "./format";
 

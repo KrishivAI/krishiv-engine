@@ -151,7 +151,7 @@ jobs:
           persist-credentials: false
       - uses: $/.github/actions/setup-uv
       # The runner image ships Node; pnpm comes from npm (major pinned, the lockfile pins the rest).
-      - name: svelte-check and build
+      - name: svelte-check, unit tests and build
         working-directory: ui
         run: |
           npx --yes pnpm@10 install --frozen-lockfile

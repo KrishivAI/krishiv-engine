@@ -23,7 +23,8 @@
     "./utils": {
       "types": "./src/utils.ts",
       "default": "./src/utils.ts"
-    }
+    },
+    "./data/*.test": null
   },
   "scripts": {
     "check": "svelte-check --tsconfig ./tsconfig.json",
@@ -31,6 +32,7 @@
     "test": "node scripts/build-tokens.mjs --check && vitest run"
   },
   "dependencies": {
+    "@internationalized/date": "3.12.4",
     "bits-ui": "2.20.2",
     "clsx": "2.1.1",
     "tailwind-merge": "3.7.0",
@@ -47,5 +49,12 @@
     "tailwindcss": "4.3.3",
     "typescript": "5.9.3",
     "vitest": "5.1.1"
-  }
+  },
+  "files": [
+    "src",
+    "!src/**/*.test.ts",
+    "tokens-src",
+    "scripts",
+    "README.md"
+  ]
 }

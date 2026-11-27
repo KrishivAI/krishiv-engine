@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 import { describe, expect, it } from "vitest";
 import { heatRows, METRICS, nodeValue, planRows, reported, unplaced } from "./plan";
 import type { Operator, PlanNode } from "./types";
