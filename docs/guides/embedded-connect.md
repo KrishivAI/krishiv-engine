@@ -28,6 +28,8 @@ The host name is `localhost` on purpose: `pyspark-client` sends a token over a p
 
 `server.stop()` closes the listener and waits for the server's thread, so the port is free when it returns. Leaving the `with` block does the same, and so does the end of the interpreter if you forget. Stopping a stopped server does nothing.
 
+**Stop the client first.** Call `spark.stop()` before the server stops (before leaving the `with` block). `pyspark-client` runs a cleanup command against its server when the interpreter exits; if the server is already gone, that command retries for minutes and the script appears to hang. A script that starts the server without a `with` block and never calls `spark.stop()` ends normally, because the server stops after the client's cleanup, at interpreter exit.
+
 ## What it is, and what it is not
 
 - The server's sessions start from a new Krishiv session, separate from the one `krishiv.session()` returns: tables and views you created through the embedded API are not visible to the client. Pass `krishiv.start_local({"krishiv.some.key": "value"})` to set `krishiv.*` configuration for its sessions.

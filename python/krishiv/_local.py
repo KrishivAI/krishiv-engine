@@ -98,6 +98,9 @@ def start_local(config: Mapping[str, str] | None = None) -> LocalConnect:
     ``SparkSession.builder.remote(server.url).getOrCreate()``. ``config`` holds ``krishiv.*``
     settings of the server's sessions.
 
+    Stop the client (``spark.stop()``) before the server: ``pyspark-client`` runs a cleanup command
+    when the interpreter exits, and against a server that is already stopped it retries for minutes.
+
     This is not ``SparkSession.builder.remote("local")``, which starts a JVM and is not supported.
 
     Example::
@@ -105,6 +108,7 @@ def start_local(config: Mapping[str, str] | None = None) -> LocalConnect:
         with krishiv.start_local() as server:
             spark = SparkSession.builder.remote(server.url).getOrCreate()  # pyspark-client
             spark.range(3).show()
+            spark.stop()  # before the server stops: the client's exit cleanup needs it
     """
     pairs = [(str(k), str(v)) for k, v in (config or {}).items()]
     return LocalConnect(_native.LocalConnectServer(pairs or None))
