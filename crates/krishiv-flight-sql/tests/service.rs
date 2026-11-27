@@ -5,10 +5,11 @@
 #![cfg(unix)]
 
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::mpsc::RecvTimeoutError;
+use std::sync::{Arc, LazyLock, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
-use arrow_array::{Int32Array, Int64Array, RecordBatch, StringArray};
+use arrow_array::{ArrayRef, Int32Array, Int64Array, RecordBatch, StringArray};
 use arrow_flight::decode::FlightRecordBatchStream;
 use arrow_flight::error::FlightError;
 use arrow_flight::flight_service_client::FlightServiceClient;
@@ -24,11 +25,16 @@ use krishiv_connect_server::{
     ConnectAuth, ConnectServer, ConnectServerConfig, SessionLimits, SessionManager,
 };
 use krishiv_flight_sql::{FlightSqlConfig, FlightSqlServer, ServerInfo};
-use krishiv_session::Session;
 use krishiv_session::auth::{AuthConfig, Authenticator, DeniedCounts, Method, ServerAuth, Surface};
+use krishiv_session::{
+    ArgField, InvokeContext, ReturnField, ScalarUdf, Session, Signature, UdfArg, UdfError,
+    UdfInputType,
+};
+use krishiv_types::DataType;
 use prost::Message;
 use tokio::net::TcpListener;
-use tokio::sync::oneshot;
+use tokio::sync::{mpsc, oneshot};
+use tokio::time::timeout;
 use tonic::service::Routes;
 use tonic::transport::Channel;
 use tonic::{Code, Request, Status};
@@ -1584,47 +1590,116 @@ async fn connect_session_cookie_resets_on_flight() {
     );
 }
 
+/// `gate(x)` returns `x`; a call reports that it was entered, then waits for the test to drop
+/// or use `release`.
+#[derive(Debug, Clone)]
+struct Gate {
+    entered: mpsc::UnboundedSender<()>,
+    release: Arc<Mutex<std::sync::mpsc::Receiver<()>>>,
+}
+
+impl ScalarUdf for Gate {
+    fn name(&self) -> &str {
+        "gate"
+    }
+    fn version(&self) -> u32 {
+        1
+    }
+    fn signature(&self) -> &Signature {
+        static SIGNATURE: LazyLock<Signature> =
+            LazyLock::new(|| Signature::Exact(vec![UdfInputType::Exact(DataType::Long)]));
+        &SIGNATURE
+    }
+    fn return_field(&self, _: &[ArgField]) -> Result<ReturnField, UdfError> {
+        Ok(ReturnField {
+            data_type: DataType::Long,
+            nullable: true,
+        })
+    }
+    fn invoke(
+        &self,
+        args: &[UdfArg<'_>],
+        _: usize,
+        _: &InvokeContext,
+    ) -> Result<ArrayRef, UdfError> {
+        let _ = self.entered.send(());
+        let release = self.release.lock().unwrap_or_else(PoisonError::into_inner);
+        // Disconnected is released too: later calls, and a test that failed while holding it.
+        if release.recv_timeout(Duration::from_secs(30)) == Err(RecvTimeoutError::Timeout) {
+            return Err(UdfError::new("gate was never released"));
+        }
+        Ok(args[0].array())
+    }
+}
+
 /// The idle clock runs only while the stream owes the reader a piece: a query slow to its
 /// first batch is not an idle fetch, however many sweeps run meanwhile (§4.2).
 #[tokio::test(flavor = "multi_thread")]
 async fn slow_first_batch_is_not_idle() {
-    let mut h = start(FlightSqlConfig {
+    let (entered, mut computing) = mpsc::unbounded_channel();
+    let (release, held) = std::sync::mpsc::channel();
+    let gate = Gate {
+        entered,
+        release: Arc::new(Mutex::new(held)),
+    };
+    let setup = Setup {
+        factory: Some(Box::new(move |caller, _transport| {
+            let session = Session::builder()
+                .principal(caller.principal.clone())
+                .build()?;
+            session.register_udf(gate.clone())?;
+            Ok(session)
+        })),
+        ..Setup::default()
+    };
+    let config = FlightSqlConfig {
         fetch_idle_timeout: Duration::from_millis(100),
         ..FlightSqlConfig::default()
-    })
-    .await;
-    let (i, cookie) = info(
-        &mut h,
-        OPS,
-        None,
-        "SELECT count(*) AS n FROM range(0, 100000000) WHERE id % 7 = 3",
-    )
-    .await
-    .expect("info");
+    };
+    let mut h = start_with(config, setup).await;
+    let (i, cookie) = info(&mut h, OPS, None, "SELECT gate(id) AS n FROM range(0, 1)")
+        .await
+        .expect("info");
     let cookie = cookie.expect("cookie");
-    let flight = h.flight.clone();
-    // Each sweep runs a second ahead, past the idle timeout: a sweep that lands while the first
-    // batch is still pending would cancel the fetch if it counted as idle. The check counts the
-    // sweeps that ran during the fetch rather than timing the query (review of 40489d958).
-    let sweeps = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let counted = Arc::clone(&sweeps);
-    let sweeper = tokio::spawn(async move {
-        loop {
-            flight.sweep_at(Instant::now() + Duration::from_secs(1));
-            counted.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            tokio::time::sleep(Duration::from_millis(1)).await;
-        }
-    });
-    let before = sweeps.load(std::sync::atomic::Ordering::Relaxed);
-    let batches = fetch(&mut h, OPS, Some(&cookie), ticket(&i)).await;
-    let during = sweeps.load(std::sync::atomic::Ordering::Relaxed) - before;
-    sweeper.abort();
-    let batches = batches.expect("the slow query is not cancelled as idle");
+    let wait = Duration::from_secs(10);
+    let request = authed(ticket(&i), OPS, Some(&cookie));
+    let mut stream = timeout(wait, h.client.do_get(request))
+        .await
+        .expect("do_get answers before the first batch")
+        .expect("do_get")
+        .into_inner();
+    // tonic sends the schema only after it has asked for the next piece and found none ready:
+    // from here until a batch is ready the stream owes the reader nothing. A sweep any earlier
+    // may find the schema piece still owed and rightly expire a 100 ms fetch.
+    let schema = timeout(wait, stream.message())
+        .await
+        .expect("the schema arrives before the first batch")
+        .expect("schema")
+        .expect("a schema message");
+    timeout(wait, computing.recv())
+        .await
+        .expect("the engine computes the first batch")
+        .expect("gate entered");
+    // Each sweep runs a second ahead, past the idle timeout.
+    for _ in 0..3 {
+        h.flight.sweep_at(Instant::now() + Duration::from_secs(1));
+    }
+    drop(release);
+    let mut pieces = vec![schema];
+    while let Some(piece) = timeout(wait, stream.message())
+        .await
+        .expect("the stream ends")
+        .expect("the slow query is not cancelled as idle")
+    {
+        pieces.push(piece);
+    }
+    let batches: Vec<RecordBatch> = FlightRecordBatchStream::new_from_flight_data(
+        futures::stream::iter(pieces.into_iter().map(Ok)),
+    )
+    .try_collect()
+    .await
+    .expect("decoded");
     assert_eq!(rows(&batches), 1);
-    assert!(
-        during >= 2,
-        "{during} sweeps ran during the fetch: too few to test the idle clock"
-    );
 }
 
 /// `${...}` substitution reads session conf, so the same ticket's text can turn from a query
