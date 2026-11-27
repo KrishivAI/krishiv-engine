@@ -629,10 +629,11 @@ impl Accumulator {
     }
 
     /// The bytes a group of its own takes where that is large (a count-min sketch, which the partial aggregate's
-    /// bypass builds for every input row); 0 for the other accumulators.
+    /// bypass builds for every input row), with the serialized state the bypass emits for it; 0 for the other
+    /// accumulators.
     pub(crate) fn bypass_group_bytes(&self) -> usize {
         match &self.kind {
-            Kind::CountMin(c) => c.group_bytes(),
+            Kind::CountMin(c) => c.group_bytes().saturating_add(c.state_bound()),
             _ => 0,
         }
     }
