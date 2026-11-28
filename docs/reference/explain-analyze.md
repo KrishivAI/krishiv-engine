@@ -12,8 +12,8 @@ Two query-debugging statements that Spark does not have. Spark's own
 | `EXPLAIN ANALYZE <query>` | Runs the query, drops its rows and prints the physical plan with each operator's metrics. |
 | `EXPLAIN VERBOSE <query>` | Prints the plan at every stage: parsed, analyzed, after each optimizer rule that changed it (with the lines it changed), optimized and physical. Does not run the query. |
 
-In Spark 4.2 both are syntax errors. `EXPLAIN ANALYZE TABLE ...` still parses
-as Spark's `ANALYZE TABLE`, which Krishiv does not support yet. Unlike
+In Spark 4.2 both are syntax errors. `EXPLAIN ANALYZE TABLE ...` (or `TABLES`) is
+Spark's explanation of an `ANALYZE` statement, which Krishiv does not print: it is a syntax error. Unlike
 Spark's `EXPLAIN`, a query that fails to analyze, plan or run is an error
 here, not part of the text.
 

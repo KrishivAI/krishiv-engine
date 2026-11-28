@@ -82,7 +82,11 @@ EXECUTE IMMEDIATE 'SELECT 1';
 CACHE TABLE t;
 REFRESH TABLE t;
 ANALYZE TABLE t COMPUTE STATISTICS;
+ANALYZE TABLES IN default COMPUTE STATISTICS NOSCAN;
 ```
+
+`ANALYZE TABLES` checks that the schema exists. Krishiv stores no table size or row count, so it records
+nothing for the schema's tables.
 
 ## Not supported yet
 

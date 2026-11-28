@@ -216,6 +216,10 @@ fn no_row_reads_the_canary_and_none_shows_the_vault() {
         ("CACHE AS", sql("CACHE TABLE cc AS SELECT * FROM canary")),
         ("UNCACHE", sql("UNCACHE TABLE canary")),
         ("ANALYZE", sql("ANALYZE TABLE canary COMPUTE STATISTICS")),
+        (
+            "ANALYZE TABLES",
+            sql("ANALYZE TABLES IN default COMPUTE STATISTICS"),
+        ),
         ("DESCRIBE", sql("DESCRIBE canary")),
         ("DESCRIBE EXTENDED", sql("DESCRIBE EXTENDED canary")),
         ("SHOW COLUMNS", sql("SHOW COLUMNS IN canary")),

@@ -15,11 +15,11 @@ use super::metric_view::ViewHead;
 use super::{Close, Fail, PR, Parser};
 use crate::ast::{
     AddResource, AlterColumnAction, AlterNamespace, AlterNamespaceAction, AlterTable,
-    AlterTableAction, AlterView, AlterViewAction, Analyze, AnalyzeColumns, Cache, CacheKind, Call,
-    ChangeColumnAction, ColumnName, CreatePermanentView, DdlName, Delete, Describe, DescribeKind,
-    DescribeMode, DirectoryFormat, DropPermanentView, FunctionScope, Ident, Insert, InsertClause,
-    InsertDirectory, ListResource, LoadData, Merge, MergeAction, MergeClause, MergeInsert,
-    MergeMatched, MergeSource, NamespaceKind, PartitionSpec, PartitionSpecPart,
+    AlterTableAction, AlterView, AlterViewAction, Analyze, AnalyzeColumns, AnalyzeTables, Cache,
+    CacheKind, Call, ChangeColumnAction, ColumnName, CreatePermanentView, DdlName, Delete,
+    Describe, DescribeKind, DescribeMode, DirectoryFormat, DropPermanentView, FunctionScope, Ident,
+    Insert, InsertClause, InsertDirectory, ListResource, LoadData, Merge, MergeAction, MergeClause,
+    MergeInsert, MergeMatched, MergeSource, NamespaceKind, PartitionSpec, PartitionSpecPart,
     PartitionWithLocation, PermanentViewColumn, Query, Refresh, RefreshKind, Relation, RelationExt,
     Repair, RepairAction, ResourceType, SchemaBinding, SchemaBindingClause, SetExprKind, Show,
     ShowKind, ShowPattern, Span, SqlSecurity, Statement, Truncate, Update, UpdateAssignment,
@@ -1542,6 +1542,9 @@ impl<'s> Parser<'s> {
         self.nested(|p| {
             let start = p.start();
             p.expect_kw("ANALYZE")?;
+            if p.eat_kw("TABLES") {
+                return p.analyze_tables(start);
+            }
             p.expect_kw("TABLE")?;
             let table = p.ddl_name()?;
             let partition = if p.kw_at(0, "PARTITION") {
@@ -1550,16 +1553,17 @@ impl<'s> Parser<'s> {
                 None
             };
             p.expect_kw("COMPUTE")?;
-            let follows = matches!(p.kind(0), None | Some(TokenKind::Sym(Sym::Semi)))
-                || p.any_kw_at(0, &["NOSCAN", "FOR"]);
-            p.expect_kw_or_missing("STATISTICS", "'STATISTICS'", follows)?;
+            p.analyze_statistics()?;
             let mut noscan = false;
+            let mut unexpected = None;
             let mut columns = AnalyzeColumns::All;
-            if p.eat_kw("NOSCAN") {
-                noscan = true;
-            } else if p.eat_kw("FOR") {
-                if p.kw_at(0, "ALL") && p.kw_at(1, "COLUMNS") {
-                    p.pos += 2;
+            // `FOR` starts a column list only before `ALL` or `COLUMNS`; alone it is the word in
+            // `NOSCAN`'s place, as in Spark's grammar.
+            if p.kw_at(0, "FOR") && p.any_kw_at(1, &["ALL", "COLUMNS"]) {
+                p.bump();
+                if p.eat_kw("ALL") {
+                    let follows = p.kind(0).is_none();
+                    p.expect_kw_or_missing("COLUMNS", "'COLUMNS'", follows)?;
                     columns = AnalyzeColumns::ForAll;
                 } else {
                     p.expect_kw("COLUMNS")?;
@@ -1569,6 +1573,8 @@ impl<'s> Parser<'s> {
                     }
                     columns = AnalyzeColumns::ForColumns(names);
                 }
+            } else {
+                (noscan, unexpected) = p.analyze_option()?;
             }
             let span = p.span_from(start);
             p.command_end()?;
@@ -1576,9 +1582,55 @@ impl<'s> Parser<'s> {
                 table,
                 partition,
                 noscan,
+                unexpected,
                 columns,
                 span,
             }))
+        })
+    }
+
+    /// The rest of `ANALYZE TABLES`, after those two words.
+    fn analyze_tables(&mut self, start: usize) -> PR<Statement> {
+        let namespace = if self.eat_kw("FROM") || self.eat_kw("IN") {
+            Some(self.ddl_name()?)
+        } else {
+            None
+        };
+        // ANTLR drops one word in the way of `COMPUTE`, or inserts it before `STATISTICS`.
+        if !self.kw_at(0, "COMPUTE") && self.kw_at(1, "COMPUTE") {
+            self.extra = Some(self.pos);
+        }
+        let follows = self.kw_at(0, "STATISTICS");
+        self.expect_kw_or_missing("COMPUTE", "'COMPUTE'", follows)?;
+        self.analyze_statistics()?;
+        let (noscan, unexpected) = self.analyze_option()?;
+        let span = self.span_from(start);
+        self.command_end()?;
+        Ok(Statement::AnalyzeTables(AnalyzeTables {
+            namespace,
+            noscan,
+            unexpected,
+            span,
+        }))
+    }
+
+    /// The `STATISTICS` of `COMPUTE STATISTICS`.
+    fn analyze_statistics(&mut self) -> PR<()> {
+        let follows = matches!(self.kind(0), None | Some(TokenKind::Sym(Sym::Semi)))
+            || self.any_kw_at(0, &["NOSCAN", "FOR"]);
+        self.expect_kw_or_missing("STATISTICS", "'STATISTICS'", follows)
+    }
+
+    /// The identifier that may follow `COMPUTE STATISTICS`: whether it is `NOSCAN`, else the word.
+    fn analyze_option(&mut self) -> PR<(bool, Option<Ident>)> {
+        if !self.is_ident_at(0, true) {
+            return Ok((false, None));
+        }
+        let word = self.any_ident()?;
+        Ok(if word.value.eq_ignore_ascii_case("noscan") {
+            (true, None)
+        } else {
+            (false, Some(word))
         })
     }
 

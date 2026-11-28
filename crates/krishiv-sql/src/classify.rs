@@ -243,7 +243,7 @@ fn class_of(
         | Statement::AlterNamespace(_)
         | Statement::Repair(_)
         | Statement::CreateMetricView(_) => StatementClass::Ddl,
-        // `ANALYZE TABLE` writes the table's statistics.
+        // `ANALYZE TABLE` and `ANALYZE TABLES` write table statistics.
         Statement::Insert(_)
         | Statement::Delete(_)
         | Statement::Update(_)
@@ -251,7 +251,8 @@ fn class_of(
         | Statement::Truncate(_)
         | Statement::LoadData(_)
         | Statement::InsertDirectory(_)
-        | Statement::Analyze(_) => StatementClass::Write,
+        | Statement::Analyze(_)
+        | Statement::AnalyzeTables(_) => StatementClass::Write,
         Statement::Cache(c) => match &c.kind {
             CacheKind::Cache { .. } | CacheKind::Uncache { .. } => StatementClass::Session,
             // cluster-scope: CLEAR CACHE drops the cached data of every session.
@@ -429,6 +430,7 @@ pub fn statement_queries(statement: &Statement) -> Option<Vec<&Query>> {
         | Statement::Show(_)
         | Statement::Refresh(_)
         | Statement::Analyze(_)
+        | Statement::AnalyzeTables(_)
         | Statement::Repair(_)
         | Statement::AddResource(_)
         | Statement::Call(_)
@@ -735,6 +737,14 @@ pub fn statement_targets(statement: &Statement) -> Vec<Target<'_>> {
         }
         // Statistics are written from the rows read.
         Statement::Analyze(a) => vec![t(O::Table(&a.table), Select), t(O::Table(&a.table), Modify)],
+        // The same, of every table of the schema.
+        Statement::AnalyzeTables(a) => {
+            let object = a
+                .namespace
+                .as_ref()
+                .map_or(O::CurrentNamespace, O::Namespace);
+            vec![t(object, Select), t(object, Modify)]
+        }
         Statement::Show(s) => match &s.kind {
             ShowKind::Tables { namespace, .. }
             | ShowKind::Views { namespace, .. }

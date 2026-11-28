@@ -920,6 +920,18 @@ impl Session {
         self.empty_frame().await
     }
 
+    /// `ANALYZE TABLES [(FROM | IN) schema] COMPUTE STATISTICS [NOSCAN]`.
+    ///
+    /// The schema must exist, as in Spark. Spark records each table's size and skips a table it
+    /// cannot analyze; the engine keeps no table-level statistics, so nothing else happens.
+    pub(crate) async fn exec_analyze_tables(
+        &self,
+        a: &AnalyzeTables,
+    ) -> Result<DataFrame, KrishivError> {
+        self.show_namespace(a.namespace.as_ref()).await?;
+        self.empty_frame().await
+    }
+
     /// `DELETE FROM`, `UPDATE` and `MERGE INTO` a file-source table: Spark's
     /// v1 tables support none of them, and says so once the table resolves.
     pub(crate) async fn exec_row_level_change(

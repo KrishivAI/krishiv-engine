@@ -62,7 +62,7 @@ use krishiv_common::error::{
     IdentityColumnsIllegalStep, IncompatibleJoinTypes, InsertReplaceOnColumnListNotAllowed,
     InsertReplaceWhereTableAliasNotAllowed, InvalidBucketCount,
     InvalidInlineTableNumColumnsMismatch, InvalidParameterValueDatetimeUnit, InvalidSetSyntax,
-    InvalidSqlSyntaxCreateFuncWithColumnConstraints,
+    InvalidSqlSyntaxAnalyzeTableUnexpectedNoscan, InvalidSqlSyntaxCreateFuncWithColumnConstraints,
     InvalidSqlSyntaxCreateFuncWithGeneratedColumnsAsParameters, InvalidSqlSyntaxEmptyInPredicate,
     InvalidSqlSyntaxEmptyPartitionValue, InvalidSqlSyntaxInvalidWindowReference,
     InvalidSqlSyntaxRepetitiveWindowDefinition, InvalidSqlSyntaxShowFunctionsInvalidPattern,
@@ -83,8 +83,8 @@ use crate::ast::{
     CreateFunction, CreateNamespace, CreatePermanentView, CreateTable, CreateTableLike, DdlName,
     Delete, Describe, DescribeKind, Expr, ExprKind, FileFormat, FileFormatKind, FrameBoundKind,
     FromClause, Function, FunctionBodyKind, FunctionReturnsKind, GeneratedKind, GroupBy, GroupItem,
-    GroupItemKind, GroupWith, GroupingSet, Insert, InsertClause, Join, JoinConstraint, Literal,
-    Merge, MergeAction, MergeInsert, MergeSource, NamedWindow, NumKind, ObjectName,
+    GroupItemKind, GroupWith, GroupingSet, Ident, Insert, InsertClause, Join, JoinConstraint,
+    Literal, Merge, MergeAction, MergeInsert, MergeSource, NamedWindow, NumKind, ObjectName,
     PartitionFieldKind, PartitionSpec, Query, RefreshKind, Relation, RelationExt, RowFormat,
     RowFormatKind, SchemaBindingClause, Select, SelectItem, SetExpr, SetExprKind, SetVariableKind,
     Show, ShowKind, SortItem, Span, Statement, StructField, TableAlias, TableConstraintKind,
@@ -101,6 +101,19 @@ fn at(error: impl Into<KrishivError>, span: Span) -> ParseError {
         error: error.into(),
         span,
     }
+}
+
+/// Spark's `AstBuilder` takes any identifier after `COMPUTE STATISTICS` and refuses all but
+/// `NOSCAN`, over the whole statement, before it reads anything else of it.
+fn analyze_option(unexpected: Option<&Ident>, statement: Span) -> Result<(), ParseError> {
+    unexpected.map_or(Ok(()), |word| {
+        Err(at(
+            InvalidSqlSyntaxAnalyzeTableUnexpectedNoscan {
+                ctx: word.value.to_uppercase(),
+            },
+            statement,
+        ))
+    })
 }
 
 /// Checks a statement; `sql` is its text. An `EXPLAIN` chain walks
@@ -207,10 +220,16 @@ pub(crate) fn statement(mut s: &Statement, sql: &str, opts: ParserOptions) -> R 
                 _ => return Ok(()),
             },
             Statement::Analyze(a) => {
+                analyze_option(a.unexpected.as_ref(), a.span)?;
                 let checker = Checker { sql, opts };
                 checker.ddl_name(&a.table)?;
                 checker.partition_values(a.partition.as_ref())?;
                 return Ok(());
+            }
+            Statement::AnalyzeTables(a) => {
+                analyze_option(a.unexpected.as_ref(), a.span)?;
+                let checker = Checker { sql, opts };
+                return a.namespace.as_ref().map_or(Ok(()), |n| checker.ddl_name(n));
             }
             Statement::CreateTableLike(t) => return Checker { sql, opts }.create_table_like(t),
             Statement::CreateView(v) => return query(&v.query, sql, opts),

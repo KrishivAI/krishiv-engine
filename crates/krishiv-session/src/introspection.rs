@@ -400,7 +400,7 @@ impl Session {
     ) -> Result<String, KrishivError> {
         let env = self.query_env();
         let ns = match name {
-            Some(n) => self.namespace_name(n, &env)?,
+            Some(n) => self.database_name(n, &env)?,
             None => {
                 // The `system` catalog has no namespace: a bare listing has nothing to show
                 // (not the session catalog's `default`).
@@ -1297,9 +1297,15 @@ impl Session {
                 self.ordered_frame(cols::DESCRIBE_TABLE, &[], rows).await
             }
             DescribeKind::Namespace { extended, name, .. } => {
-                let ns = self.namespace_name(name, &env)?;
-                // One the principal may not list reads as missing (review r2 R4).
-                self.require_namespace(&ns, true).await?;
+                let ns = self.database_name(name, &env)?;
+                // One the principal may not list reads as missing (review r2 R4), named as
+                // written.
+                let written = crate::access::ddl_parts(name, &env)?
+                    .pop()
+                    .unwrap_or_default();
+                self.require_namespace(&ns, true)
+                    .await
+                    .map_err(|_| crate::catalog::schema_not_found(&written))?;
                 let meta = self
                     .state
                     .catalog

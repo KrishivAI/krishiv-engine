@@ -1570,8 +1570,23 @@ pub struct Analyze {
     pub partition: Option<PartitionSpec>,
     /// `NOSCAN`, if written.
     pub noscan: bool,
+    /// Another word written where `NOSCAN` goes; refused after parsing, as Spark refuses it.
+    pub unexpected: Option<Ident>,
     /// Which columns to compute statistics for.
     pub columns: AnalyzeColumns,
+    /// Source text, from `ANALYZE` to the end of the statement.
+    pub span: Span,
+}
+
+/// `ANALYZE TABLES [(FROM | IN) schema] COMPUTE STATISTICS [NOSCAN]`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct AnalyzeTables {
+    /// The schema, if written; else the current one.
+    pub namespace: Option<DdlName>,
+    /// `NOSCAN`, if written.
+    pub noscan: bool,
+    /// Another word written where `NOSCAN` goes; refused after parsing, as Spark refuses it.
+    pub unexpected: Option<Ident>,
     /// Source text, from `ANALYZE` to the end of the statement.
     pub span: Span,
 }
