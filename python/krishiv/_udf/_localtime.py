@@ -20,7 +20,8 @@ def _local_naive(value: datetime) -> datetime:
     except (OSError, OverflowError):
         instant = value.astimezone(UTC)
         cycles = -(-(1970 - instant.year) // 400)
-        offset = (instant + timedelta(days=146097 * max(cycles, 0))).astimezone().utcoffset() or timedelta(0)
+        # at least one cycle: a failure at 1970-01-01 itself means the local time falls before the epoch
+        offset = (instant + timedelta(days=146097 * max(cycles, 1))).astimezone().utcoffset() or timedelta(0)
         try:
             return (instant + offset).replace(tzinfo=None)
         except OverflowError:  # within a day of datetime.min
@@ -35,7 +36,7 @@ def _naive_to_utc(value: datetime) -> datetime:
     try:
         return value.astimezone(UTC)
     except (OSError, OverflowError):
-        cycles = max(-(-(1970 - value.year) // 400), 0)
+        cycles = max(-(-(1970 - value.year) // 400), 1)  # at least one: 1970-01-01 local can be before the epoch
         try:
             offset = (value + timedelta(days=146097 * cycles)).astimezone().utcoffset() or timedelta(0)
             return (value - offset).replace(tzinfo=UTC)

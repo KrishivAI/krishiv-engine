@@ -508,6 +508,7 @@ class ScalarPandasUDFTestsMixin:
             actual = df.select(struct_f(struct(col("id"), col("id").cast("string").alias("str"))))
             self.assertEqual(expected, actual.collect())
 
+    @unittest.skipIf(sys.platform == "win32", "krishiv: needs the process time zone, which Windows cannot set from TZ")
     def test_vectorized_udf_struct_complex(self):
         df = self.spark.range(10)
         return_type = StructType(
