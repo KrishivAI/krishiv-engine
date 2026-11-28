@@ -66,8 +66,9 @@ pub enum CardinalityRule {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct RowLevelCapabilities {
-    /// Changed rows can be recorded as deletes (Delta deletion vectors, Iceberg position deletes)
-    /// instead of rewriting their files.
+    /// A `DELETE` or `UPDATE` records its changed rows as deletes in one query over the snapshot,
+    /// without a find query (Iceberg position deletes; krishiv-session `run_merge_on_read`).
+    /// Delta's deletion vectors use [`RowLevelTable::merge_on_read`] instead.
     pub merge_on_read: bool,
     /// The table's commit records the write's `krishiv.write.idempotencyKey` and a commit whose key
     /// the snapshot already has writes nothing (E34); a table without it refuses a key.
@@ -87,6 +88,16 @@ impl RowLevelCapabilities {
         }
     }
 }
+
+/// The rewrite option that marks a merge-on-read rewrite (value `true`; see
+/// [`RowLevelTable::merge_on_read`]).
+pub const MERGE_ON_READ_OPTION: &str = "__krishiv_row_level_merge_on_read";
+
+/// The last column of a merge-on-read rewrite's rows (`BOOLEAN`, never NULL): whether the row's
+/// table columns are written as a new row. It follows [`ROW_FILE_COLUMN`] and
+/// [`ROW_POSITION_COLUMN`], which name the target row the statement deletes or replaces (both
+/// NULL for an inserted row).
+pub const ROW_WRITE_COLUMN: &str = "__krishiv_row_write";
 
 /// The counts of one row-level statement, for its result rows.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -336,6 +347,24 @@ pub trait RowLevelTable: Send + Sync + fmt::Debug {
             feature: "rewriting data files of this table".to_owned(),
         }
         .into())
+    }
+
+    /// Whether a statement of this table's operation with `condition` (parsed, unresolved;
+    /// `None`: every row) records its changed rows as deletes instead of rewriting their files
+    /// (merge-on-read). `qualifier` is the name the statement reads the table under, which the
+    /// condition's column names may carry.     ///
+    /// A merge-on-read rewrite ([`MERGE_ON_READ_OPTION`] set in its request) receives the rows
+    /// the statement changes or inserts, never the rows it keeps: the table's columns, then
+    /// [`ROW_FILE_COLUMN`] and [`ROW_POSITION_COLUMN`] (the target row deleted or replaced, NULL
+    /// for an insert) and [`ROW_WRITE_COLUMN`] (whether the table columns are written).
+    ///
+    /// This is the find-then-mark path (Delta deletion vectors). A table whose
+    /// [`RowLevelCapabilities::merge_on_read`] is set takes the session's one-query path instead
+    /// (Iceberg position deletes) for `DELETE` and `UPDATE`, and never reaches this method there.
+    /// The default is `false`: copy-on-write.
+    fn merge_on_read(&self, condition: Option<&Expr>, qualifier: Option<&str>) -> bool {
+        let _ = (condition, qualifier);
+        false
     }
 
     /// The statement's result rows from its counts; `None` gives an empty result, as Spark does
@@ -852,5 +881,36 @@ mod tests {
         assert_eq!(RowLevelOperation::Merge.name(), "MERGE INTO");
         let c = RowLevelCapabilities::copy_on_write(CardinalityRule::SparkMergeCardinality);
         assert!(!c.merge_on_read);
+    }
+
+    #[derive(Debug)]
+    struct Caps(RowLevelCapabilities);
+
+    impl RowLevelTable for Caps {
+        fn capabilities(&self) -> RowLevelCapabilities {
+            self.0
+        }
+        fn scan(&self) -> Result<Arc<dyn ScanPushdown>> {
+            Err(crate::error::internal("no scan".to_owned()))
+        }
+        fn scan_files(&self, _files: &[Vec<u8>]) -> Result<Arc<dyn ScanPushdown>> {
+            Err(crate::error::internal("no scan".to_owned()))
+        }
+        fn rewriter(&self, _request: &RowLevelWrite) -> Result<Arc<dyn Sink>> {
+            Err(crate::error::internal("no sink".to_owned()))
+        }
+    }
+
+    #[test]
+    fn merge_on_read_is_off_by_default_whatever_the_capabilities() {
+        let cow = RowLevelCapabilities::copy_on_write(CardinalityRule::SparkMergeCardinality);
+        assert!(!Caps(cow).merge_on_read(None, None));
+        let mut one_query = cow;
+        one_query.merge_on_read = true;
+        // The one-query path (Iceberg) is its own: it never turns on find-then-mark.
+        assert!(!Caps(one_query).merge_on_read(None, Some("t")));
+        // The rewrite's marker column follows the row id columns.
+        assert_ne!(ROW_WRITE_COLUMN, ROW_FILE_COLUMN);
+        assert!(MERGE_ON_READ_OPTION.starts_with("__krishiv_"));
     }
 }

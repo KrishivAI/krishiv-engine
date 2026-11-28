@@ -25,9 +25,16 @@
 mod arith;
 mod between;
 mod cast;
+#[cfg(test)]
+mod compile_tests;
 mod cond;
+mod conjunction;
+#[cfg(test)]
+mod conjunction_tests;
+mod cost;
 mod field;
 mod func;
+pub(crate) use func::relabeled;
 mod hof;
 mod in_prefix;
 mod interval;
@@ -612,6 +619,9 @@ fn compile_node(e: &Expr, input: Input<'_>) -> Result<Arc<dyn PhysExpr>> {
             {
                 return hof::compile(name, f, input, e);
             }
+            if f.id == FunctionId::Builtin(Builtin::And) && f.args.len() == 2 {
+                return conjunction_of(f, input);
+            }
             let mut args = f
                 .args
                 .iter()
@@ -824,7 +834,8 @@ fn builtin(
             let r = args.pop().ok_or_else(arity)?;
             let l = args.pop().ok_or_else(arity)?;
             let r_never_raises = runs_anywhere(f, 1, env.ansi);
-            logic::and_or(b == Builtin::And, l, r, r_never_raises)
+            let r_costly = f.args.get(1).is_some_and(|a| cost::costly(a));
+            logic::and_or(b == Builtin::And, l, r, r_never_raises, r_costly)
         }
         (Builtin::Not, 1) => logic::not(args.pop().ok_or_else(arity)?),
         (Builtin::IsNull | Builtin::IsNotNull, 1) => {
@@ -938,6 +949,36 @@ fn builtin(
     })
 }
 
+/// A chain of `AND`s as one [`conjunction::conjunction`] of its conjuncts, in written order.
+fn conjunction_of(f: &ResolvedFunction, input: Input<'_>) -> Result<Arc<dyn PhysExpr>> {
+    fn flatten<'e>(e: &'e Expr, out: &mut Vec<&'e Expr>) {
+        match &e.node {
+            ExprNode::Resolved(ResolvedExpr::Function(f))
+                if f.kind == FunctionKind::Scalar
+                    && f.id == FunctionId::Builtin(Builtin::And)
+                    && f.args.len() == 2 =>
+            {
+                f.args.iter().for_each(|a| flatten(a, out));
+            }
+            _ => out.push(e),
+        }
+    }
+    let mut conjuncts = Vec::new();
+    f.args.iter().for_each(|a| flatten(a, &mut conjuncts));
+    let parts = conjuncts
+        .into_iter()
+        .map(|c| {
+            Ok(conjunction::Part {
+                expr: compile(c, input)?,
+                movable: !krishiv_plan::may_raise(c, input.env.ansi)
+                    && krishiv_plan::is_deterministic(c),
+                cost: cost::class(c),
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(conjunction::conjunction(parts))
+}
+
 /// Whether argument `i` of `f` may run on rows Spark would not evaluate it
 /// on: it raises on no row ([`krishiv_plan::may_raise`]) and is
 /// deterministic, so evaluating it there cannot be observed.
@@ -955,7 +996,7 @@ pub(crate) fn is_not_null(e: Arc<dyn PhysExpr>) -> Arc<dyn PhysExpr> {
 
 /// Kleene `l AND r`.
 pub(crate) fn and(l: Arc<dyn PhysExpr>, r: Arc<dyn PhysExpr>) -> Arc<dyn PhysExpr> {
-    logic::and_or(true, l, r, false)
+    logic::and_or(true, l, r, false, false)
 }
 
 fn arity() -> krishiv_common::error::KrishivError {

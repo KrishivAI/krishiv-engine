@@ -24,7 +24,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, PoisonError};
 
-use krishiv_common::error::{KrishivError, SchemaNotFound, TableOrViewAlreadyExists};
+use krishiv_common::error::{KrishivError, TableOrViewAlreadyExists};
 use krishiv_types::DataType;
 use std::sync::Arc;
 
@@ -795,10 +795,7 @@ impl CatalogStore for InMemoryCatalogStore {
         let mut state = self.lock();
         // Checked under the lock the insert takes, so a namespace dropped meanwhile cannot be left holding a table.
         if !state.namespaces.contains_key(&table.namespace) {
-            return Err(SchemaNotFound {
-                schema_name: format!("`{}`", table.namespace),
-            }
-            .into());
+            return Err(crate::catalog::schema_not_found(&table.namespace));
         }
         match (state.tables.contains_key(&key), mode) {
             (true, CreateMode::ErrorIfExists) => {
@@ -906,10 +903,7 @@ impl CatalogStore for InMemoryCatalogStore {
             return Ok(None);
         }
         if !state.namespaces.contains_key(&new.0) {
-            return Err(SchemaNotFound {
-                schema_name: format!("`{}`", new.0),
-            }
-            .into());
+            return Err(crate::catalog::schema_not_found(&new.0));
         }
         if state.tables.contains_key(&new) {
             return Err(TableOrViewAlreadyExists {

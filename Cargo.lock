@@ -2996,6 +2996,7 @@ version = "0.2.1"
 dependencies = [
  "krishiv-common",
  "libmimalloc-sys",
+ "rustix",
 ]
 
 [[package]]

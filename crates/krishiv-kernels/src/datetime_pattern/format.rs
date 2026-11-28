@@ -200,7 +200,20 @@ pub(super) fn format(
     zone: Option<(i32, &str)>,
     has_time: bool,
 ) -> Result<String, KrishivError> {
-    let f = Fields::new(local, zone, has_time);
+    format_nanos(items, local, 0, zone, has_time)
+}
+
+/// [`format`] with `extra` nanoseconds (0..=999) within the microsecond `local` ends in (a nanosecond
+/// timestamp, Spark 4.3): the fraction fields print them.
+pub(super) fn format_nanos(
+    items: &[Item],
+    local: i64,
+    extra: u16,
+    zone: Option<(i32, &str)>,
+    has_time: bool,
+) -> Result<String, KrishivError> {
+    let mut f = Fields::new(local, zone, has_time);
+    f.nanos = f.nanos.saturating_add(i64::from(extra.min(999)));
     let mut out = String::new();
     write_items(items, &f, &mut out)?;
     Ok(out)

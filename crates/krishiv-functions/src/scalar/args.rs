@@ -167,6 +167,11 @@ impl<'a> Inputs<'a> {
         self.rows
     }
 
+    /// The number of arguments.
+    pub(super) fn arity(&self) -> usize {
+        self.args.len()
+    }
+
     /// Argument `i` as a column of `rows` values, with string and binary
     /// carriers read as `Utf8` and `Binary`.
     pub(super) fn plain_column(&self, i: usize) -> Result<ArrayRef, KrishivError> {

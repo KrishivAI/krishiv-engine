@@ -13,8 +13,12 @@
   }));
   let filter = $state("");
   const rows = $derived(
-    (q.data?.settings ?? []).filter((s) => s.key.toLowerCase().includes(filter.trim().toLowerCase())),
+    (q.data?.settings ?? []).filter((s) =>
+      `${s.key}\n${s.spark_key ?? ""}`.toLowerCase().includes(filter.trim().toLowerCase()),
+    ),
   );
+  // Only explicitly set keys are listed, so an untouched session has none: that is not a filter's miss.
+  const empty = $derived(filter.trim() ? "No setting matches." : "Nothing is set: every setting has its default.");
   const columns: Column[] = [
     { key: "key", label: "Setting", title: true },
     { key: "value", label: "Value" },
@@ -32,9 +36,10 @@
     <span class="mb-1 block text-sm font-medium">Filter settings</span>
     <input class={cn(fieldClass, "w-full")} type="search" bind:value={filter} placeholder="spark.sql" />
   </label>
-  <ResponsiveTable {columns} rows={rows} rowKey={(s) => s.key} empty="No setting matches.">
+  <ResponsiveTable {columns} rows={rows} rowKey={(s) => s.key} {empty}>
     {#snippet cell(s, c)}
-      {#if c.key === "key"}<span class="mono">{s.key}</span>
+      {#if c.key === "key"}<span class="mono wrap-anywhere">{s.key}</span>
+        {#if s.spark_key}<div class="text-xs text-muted-foreground">Spark's <span class="mono wrap-anywhere">{s.spark_key}</span></div>{/if}
       {:else}<span class="mono wrap-anywhere">{s.value}</span>
         {#if s.redacted}<Badge>redacted</Badge>{/if}{/if}
     {/snippet}

@@ -292,6 +292,9 @@ impl Session {
                 _ => Err(unsupported("IDENTIFIER() column names")),
             })
             .collect::<Result<_, _>>()?;
+        let options: Vec<(String, String)> = super::options_of(&c.target_options, original)
+            .into_iter()
+            .collect();
         self.insert_rows(
             &name,
             &table,
@@ -304,6 +307,8 @@ impl Session {
                 dry,
                 options: None,
                 delta_name: delta_name.as_deref(),
+                delta_writer_options: false,
+                sql_options: &options,
             },
         )
         .await
@@ -1116,6 +1121,8 @@ impl Session {
             dry: false,
             options: Some(options),
             delta_name: None,
+            delta_writer_options: false,
+            sql_options: &[],
         };
         self.insert_rows(&name, &found, df, &target).await
     }
@@ -1151,6 +1158,8 @@ impl Session {
                     dry: false,
                     options: Some(&spec.options),
                     delta_name: None,
+                    delta_writer_options: true,
+                    sql_options: &[],
                 };
                 return self.insert_rows(&name, &table, df, &target).await;
             }

@@ -64,7 +64,8 @@
 //! reading any metadata, so a denied principal gets
 //! `KRISHIV_INSUFFICIENT_PERMISSIONS` whether the table exists or not (no
 //! existence oracle), then again under the catalog's own identifier.
-//! Catalog failures surface as `KRISHIV_CATALOG_FAILURE`, without the
+//! Catalog failures surface as `KRISHIV_CATALOG_FAILURE`, with Krishiv's own
+//! reason (a catalog's own failure keeps it, any other names its class) and never the
 //! provider's text. Catalog functions are not policy-checked yet (no
 //! catalog functions exist before P3).
 
@@ -531,7 +532,7 @@ impl ResolutionConf {
         "spark.sql.legacy.javaCharsets",
         "spark.sql.legacy.codingErrorAction",
         "spark.sql.legacy.negativeIndexInArrayInsert",
-        "spark.sql.timeType.enabled",
+        krishiv_common::config::TIME_TYPE_ENABLED,
         "spark.sql.legacy.interval.enabled",
         "spark.sql.legacy.nullInEmptyListBehavior",
         "spark.sql.function.concatBinaryAsString",

@@ -201,6 +201,38 @@ pub(crate) struct Inner {
     pub(crate) units: Arc<[ScanUnit]>,
     pub(crate) scan_options: ScanOptions,
     pub(crate) limits: crate::commit::RetryLimits,
+    /// delta-spark's `spark.databricks.delta.{delete,update,merge}.deletionVectors.persistent`
+    /// (internal, default true; `DeltaSQLConf.scala:2949-2968`) as the opening query's
+    /// configuration sets them.
+    pub(crate) persistent_dvs: PersistentDvs,
+}
+
+/// Whether `DELETE`, `UPDATE` and `MERGE` mark rows in deletion vectors where the table allows
+/// it (delta-spark's per-command `...deletionVectors.persistent` confs).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PersistentDvs {
+    pub(crate) delete: bool,
+    pub(crate) update: bool,
+    pub(crate) merge: bool,
+}
+
+impl PersistentDvs {
+    /// The confs as `config` sets them (unset: true; only `false` turns one off: another
+    /// value, which Spark refuses at `SET` for these boolean confs, keeps the default).
+    pub(crate) fn from_config(config: &Config) -> Self {
+        let flag = |op: &str| {
+            config
+                .get_unregistered(&format!(
+                    "spark.databricks.delta.{op}.deletionVectors.persistent"
+                ))
+                .is_none_or(|v| !v.trim().eq_ignore_ascii_case("false"))
+        };
+        Self {
+            delete: flag("delete"),
+            update: flag("update"),
+            merge: flag("merge"),
+        }
+    }
 }
 
 /// A Delta table at one version for one query (see the module docs).
@@ -355,6 +387,7 @@ impl DeltaTable {
                 units,
                 scan_options: ScanOptions::from_config(config),
                 limits: crate::commit::RetryLimits::from_config(config),
+                persistent_dvs: PersistentDvs::from_config(config),
             }),
         })
     }
@@ -473,12 +506,36 @@ impl DeltaTable {
             units,
             scan_options: i.scan_options,
             limits: i.limits,
+            persistent_dvs: i.persistent_dvs,
         })))
     }
 
     /// The commit loop's bounds from the table's configuration.
     pub(crate) fn retry_limits(&self) -> crate::commit::RetryLimits {
         self.inner.limits
+    }
+
+    /// The per-command persistent deletion vector confs of the opening query.
+    pub(crate) fn persistent_dvs(&self) -> PersistentDvs {
+        self.inner.persistent_dvs
+    }
+
+    /// Whether type widening is enabled: `delta.enableTypeWidening = true` (delta-spark's
+    /// `TypeWidening.isEnabled`, `TypeWidening.scala:43-52`), so a write's schema merge would
+    /// widen a column's type.
+    #[must_use]
+    pub fn type_widening_enabled(&self) -> bool {
+        self.inner.snapshot.table_properties().enable_type_widening == Some(true)
+    }
+
+    /// Whether the table takes new deletion vectors: the feature in its protocol and
+    /// `delta.enableDeletionVectors = true` (delta-spark's `deletionVectorsWritable`,
+    /// `DeletionVectorUtils.scala:72-74`).
+    pub(crate) fn dv_writable(&self) -> bool {
+        self.inner
+            .snapshot
+            .table_configuration()
+            .is_feature_enabled(&delta_kernel::table_features::TableFeature::DeletionVectors)
     }
 }
 
@@ -726,7 +783,20 @@ fn canonical(kernel: &DataType, arrow: &Field) -> Result<Field, KrishivError> {
             )));
         }
     };
-    Ok(arrow.clone().with_data_type(t))
+    let field = arrow.clone().with_data_type(t);
+    if matches!(kernel, DataType::Variant(_)) {
+        // The engine's own Variant field carries its type tags (the Arrow extension name), so
+        // a scan's column meets one the engine made (a CTAS's new table) in a union.
+        let mut metadata = field.metadata().clone();
+        metadata.extend(
+            krishiv_types::DataType::Variant
+                .to_arrow_field("", true)
+                .metadata()
+                .clone(),
+        );
+        return Ok(field.with_metadata(metadata));
+    }
+    Ok(field)
 }
 
 fn internal(message: String) -> KrishivError {

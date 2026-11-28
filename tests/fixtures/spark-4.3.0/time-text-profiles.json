@@ -1,0 +1,19 @@
+{
+  "infer": {
+    "false": {
+      "csv": "timestamp",
+      "json": "timestamp",
+      "schema_of_csv": "STRUCT<_c0: TIMESTAMP>"
+    },
+    "true": {
+      "csv": "time(6)",
+      "json": "time(6)",
+      "schema_of_csv": "STRUCT<_c0: TIME(6)>"
+    }
+  },
+  "read": {
+    "HH:mm:ss.SSSSSSSSS": "12:34:56.123456789",
+    "default": "12:34:56.123456789"
+  },
+  "spark": "4.3.0"
+}

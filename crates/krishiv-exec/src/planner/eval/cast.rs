@@ -212,6 +212,10 @@ pub(super) enum Precision {
     None,
     /// A `time(p)`: nanoseconds per unit (`10^(9-p)`).
     Time(i64),
+    /// A nanosecond `timestamp_ltz(p)` / `timestamp_ntz(p)`, `7 <= p <= 9`: nanoseconds per unit
+    /// (`10^(9-p)`). Spark keeps `p` digits of the value, the floor (its nanoseconds within the
+    /// microsecond are never negative).
+    Stamp(i64),
     /// The element of an array.
     List(Box<Precision>),
     /// The key and value of a map.
@@ -226,6 +230,9 @@ impl Precision {
         let p = match t {
             DataType::Time { precision } => {
                 Self::Time(10_i64.pow(9 - u32::from(*precision).min(9)))
+            }
+            DataType::TimestampNanos { precision } | DataType::TimestampNtzNanos { precision } => {
+                Self::Stamp(10_i64.pow(9 - u32::from(*precision).min(9)))
             }
             DataType::Array(a) => Self::List(Box::new(Self::of(a.element_type()))),
             DataType::Map(m) => Self::Map(
@@ -245,7 +252,7 @@ impl Precision {
     pub(super) fn is_empty(&self) -> bool {
         match self {
             Self::None => true,
-            Self::Time(unit) => *unit <= 1,
+            Self::Time(unit) | Self::Stamp(unit) => *unit <= 1,
             Self::List(e) => e.is_empty(),
             Self::Map(k, v) => k.is_empty() && v.is_empty(),
             Self::Struct(f) => f.iter().all(Self::is_empty),
@@ -256,6 +263,14 @@ impl Precision {
     fn unit(&self) -> i64 {
         match self {
             Self::Time(unit) => *unit,
+            _ => 1,
+        }
+    }
+
+    /// Nanoseconds per unit of a nanosecond `timestamp(p)` target; 1 where there is none.
+    fn stamp_unit(&self) -> i64 {
+        match self {
+            Self::Stamp(unit) => *unit,
             _ => 1,
         }
     }
@@ -404,6 +419,32 @@ pub(super) fn apply(p: &CastParts, a: &ArrayRef) -> Result<ArrayRef> {
             Arc::new(
                 out.as_primitive::<Time64NanosecondType>()
                     .unary::<_, Time64NanosecondType>(|v| v - v % unit),
+            ) as ArrayRef
+        }
+        (_, ArrowType::Timestamp(arrow_schema::TimeUnit::Nanosecond, zone))
+            if p.precision.stamp_unit() > 1 =>
+        {
+            use arrow_array::types::TimestampNanosecondType;
+            let unit = p.precision.stamp_unit();
+            // Flooring `i64::MIN` (or near it) leaves the carrier: `DATETIME_OVERFLOW`, NULL under `try_cast`.
+            let src = out.as_primitive::<TimestampNanosecondType>();
+            let mut floored = Vec::with_capacity(src.len());
+            for (i, v) in src.iter().enumerate() {
+                match v.map(|v| v.checked_sub(v.rem_euclid(unit))) {
+                    None => floored.push(None),
+                    Some(Some(f)) => floored.push(Some(f)),
+                    Some(None) if p.mode == KernelMode::Try => floored.push(None),
+                    Some(None) => {
+                        return Err(krishiv_common::error::DatetimeOverflow {
+                            operation: format!("cast to a nanosecond timestamp (row {i})"),
+                        }
+                        .into());
+                    }
+                }
+            }
+            Arc::new(
+                arrow_array::PrimitiveArray::<TimestampNanosecondType>::from(floored)
+                    .with_timezone_opt(zone.clone()),
             ) as ArrayRef
         }
         _ => out,
@@ -945,8 +986,10 @@ mod tests {
     use krishiv_common::config::Config;
 
     use super::super::{EvalEnv, PhysExpr, Value};
-    use super::{canonical_carrier, coerce_to, unify};
+    use super::{Precision, apply, canonical_carrier, coerce_to, parts, unify};
     use crate::error::Result;
+    use krishiv_plan::CastMode;
+    use krishiv_types::DataType;
 
     /// An input column.
     #[derive(Debug)]
@@ -1020,6 +1063,41 @@ mod tests {
             (T::Dictionary(Box::new(T::Int32), Box::new(T::Utf8)), None),
         ] {
             assert_eq!(canonical_carrier(&t), want, "{t}");
+        }
+    }
+
+    /// A cast to `timestamp_ntz(p)` / `timestamp_ltz(p)`, `p` in 7..=9, keeps `p` digits of the value,
+    /// the floor (Spark 4.3: `unix_nanos(cast('...123456789' as timestamp_ntz(7)))` ends in `700`;
+    /// `1960-01-01 00:00:00.000000001` as `timestamp_ntz(7)` is `1960-01-01 00:00:00`), from a string
+    /// and from a wider nanosecond timestamp alike.
+    #[test]
+    fn nanosecond_timestamp_targets_keep_p_digits() {
+        use arrow_array::Array as _;
+        use arrow_array::types::TimestampNanosecondType;
+        let env = env();
+        let strings: ArrayRef = Arc::new(arrow_array::StringArray::from(vec![
+            Some("2020-01-01 13:24:35.123456789"),
+            Some("1960-01-01 00:00:00.000000001"),
+            None,
+        ]));
+        let ntz = ArrowType::Timestamp(arrow_schema::TimeUnit::Nanosecond, None);
+        let mut nines = parts(&ArrowType::Utf8, ntz.clone(), CastMode::Ansi, &env).unwrap();
+        nines.precision = Precision::of(&DataType::TimestampNtzNanos { precision: 9 });
+        let full = apply(&nines, &strings).unwrap();
+        for (p, want) in [
+            (7, [1_577_885_075_123_456_700_i64, -315_619_200_000_000_000]),
+            (8, [1_577_885_075_123_456_780, -315_619_200_000_000_000]),
+            (9, [1_577_885_075_123_456_789, -315_619_199_999_999_999]),
+        ] {
+            let to = DataType::TimestampNtzNanos { precision: p };
+            for (from, input) in [(ArrowType::Utf8, &strings), (ntz.clone(), &full)] {
+                let mut cast = parts(&from, ntz.clone(), CastMode::Ansi, &env).unwrap();
+                cast.precision = Precision::of(&to);
+                let got = apply(&cast, input).unwrap();
+                let got = got.as_primitive::<TimestampNanosecondType>();
+                assert_eq!(&got.values()[..2], &want, "p {p} from {from}");
+                assert!(got.is_null(2));
+            }
         }
     }
 
