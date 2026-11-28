@@ -47,15 +47,22 @@
 //!
 //! - the join keeps at least [`MIN_RETENTION`] of `S`'s rows;
 //! - the groups can be at most `1 / `[`MIN_REDUCTION`] of `S`'s rows: the
-//!   largest distinct count of one key is (the product of the counts is only
-//!   an upper bound, as keys correlate: a customer's rows share the dates of
-//!   their tickets, TPC-DS q38/q87); an input that turns out not to reduce
-//!   makes each thread-local table append-only at run time;
+//!   largest distinct count of one key is ([`GroupsBound::Least`]; the product
+//!   of the counts is only an upper bound, as keys correlate: a customer's rows
+//!   share the dates of their tickets, TPC-DS q38/q87). An input that turns out
+//!   not to reduce makes each thread-local table of the aggregate below the
+//!   join append-only at run time (`krishiv-exec` `aggregate/rowtable.rs`,
+//!   fixed index); a growing table never does (deterministic mode and one
+//!   thread), so under `krishiv.deterministicOrder` the gate reads the product
+//!   ([`GroupsBound::Product`]); one thread, which the optimizer cannot see,
+//!   and the columnar layout (`krishiv.exec.agg.rowLayout` off) pay a full
+//!   aggregate below the join where the keys do not reduce;
+//! - `S` is not already grouped on some of the keys ([`grouped_within`]);
 //! - at most one key beyond the join's own;
-//! - the other side is a table read whole (only filters that a plain `=` key
-//!   of the join is not NULL, as inferred join filters add them, may sit on
-//!   it; through projections renaming the key and `Shift`s, as a shared
-//!   scan's second reader has). A filtered dimension prunes the aggregated side through a runtime
+//! - the other side is a table read whole: only filters that a plain `=` key
+//!   of the join is not NULL (inferred join filters add them) may sit on it,
+//!   read through projections renaming the key and `Shift`s (a shared scan's
+//!   other readers). A filtered dimension prunes the aggregated side through a runtime
 //!   filter, which pays more than grouping and which a smaller aggregate could
 //!   take away by becoming the join's build side; estimates cannot see this, as
 //!   they read a key's matches from its distinct counts (TPC-DS q12, q43 and
@@ -116,9 +123,10 @@ pub(crate) fn rewrite(
     root: Arc<LogicalPlan>,
     stats: &dyn Statistics,
     propagate: bool,
-    expand: bool,
+    settings: Settings,
     yields: Yield,
 ) -> Result<(Arc<LogicalPlan>, Vec<String>), KrishivError> {
+    let Settings { expand, bound } = settings;
     let mut memo = Default::default();
     let mut pass = Pass {
         next: max_id(&root, &mut memo).saturating_add(1),
@@ -128,6 +136,7 @@ pub(crate) fn rewrite(
             .then(|| payload_above::Probe::new(&root, stats)),
         group_code: yields.group_code,
         expand,
+        bound,
     };
     let mut est = Estimator::with_propagation(stats, propagate);
     let out = dag::rewrite_up(root, &mut |p| {
@@ -172,6 +181,8 @@ struct Pass<'a> {
     group_code: Option<(bool, usize)>,
     /// Whether an aggregate over an `Expand` is pre-aggregated ([`expand`]).
     expand: bool,
+    /// The bound the reduction gate reads.
+    bound: GroupsBound,
 }
 
 impl Pass<'_> {
@@ -196,13 +207,14 @@ impl Pass<'_> {
     /// `p` with its aggregate pushed below its join, or `p` (the reason in
     /// the notes).
     fn attempt(&mut self, p: Arc<LogicalPlan>, est: &mut Estimator<'_>) -> Arc<LogicalPlan> {
+        let bound = self.bound;
         let next = &mut self.next;
         let tried = match Shape::of(&p) {
-            Some(shape) => shape.push(shape.join, est, next).or_else(|why| {
+            Some(shape) => shape.push(shape.join, est, next, bound).or_else(|why| {
                 // The dimension the keys need may sit below another one.
                 shape
                     .rotated()
-                    .and_then(|join| shape.push(&join, est, next).ok())
+                    .and_then(|join| shape.push(&join, est, next, bound).ok())
                     .ok_or(why)
             }),
             None => Err(String::new()),
@@ -254,6 +266,30 @@ pub(crate) struct Yield {
     pub(crate) group_code: Option<(bool, usize)>,
 }
 
+/// How the rule runs, from the session configuration.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct Settings {
+    /// Whether an aggregate over an `Expand` is pre-aggregated ([`expand`],
+    /// `krishiv.optimizer.preAggregateExpand`).
+    pub(crate) expand: bool,
+    /// The bound the reduction gate reads.
+    pub(crate) bound: GroupsBound,
+}
+
+/// Which bound on `S`'s groups the reduction gate reads ([`Gates::check`]).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum GroupsBound {
+    /// The largest distinct count of one key: the fewest groups the keys can
+    /// make. An input that does not reduce is left to the run time, where a
+    /// thread-local table with a fixed index turns append-only.
+    #[default]
+    Least,
+    /// The product of the keys' distinct counts (they are assumed
+    /// independent): for `krishiv.deterministicOrder`, whose thread-local
+    /// tables grow and never turn append-only.
+    Product,
+}
+
 /// An aggregate over projections and expansions over a join.
 struct Shape<'a> {
     plan: &'a LogicalPlan,
@@ -302,6 +338,7 @@ impl<'a> Shape<'a> {
         join: &Arc<LogicalPlan>,
         est: &mut Estimator<'_>,
         next: &mut u64,
+        bound: GroupsBound,
     ) -> Result<(Arc<LogicalPlan>, String), String> {
         // No calls (a distinct): the partial aggregate below only removes
         // repeated groups, which the aggregate above removes anyway.
@@ -379,14 +416,15 @@ impl<'a> Shape<'a> {
             .collect();
         let extra = keys.iter().filter(|k| !equi.contains(&k.id)).count();
         if grouped_within(side, &keys) {
-            return Err("the side is already a partial aggregate on these keys".to_owned());
+            return Err("the side is already grouped on some of these keys".to_owned());
         }
         let gates = Gates {
             rows: side_est.rows,
             joined: est.plan(join).rows,
-            groups: groups_of(&keys, &side_est)?,
+            most_groups: groups_of(&keys, &side_est)?,
             least_groups: least_groups_of(&keys, &side_est),
             extra,
+            bound,
         };
         gates.check()?;
 
@@ -602,37 +640,11 @@ fn states_of(
 fn read_whole(p: &LogicalPlan, keys: &Attrs) -> bool {
     match &p.node {
         // A projection renaming a key (`c#1 AS c#2`) tests the key under its
-        // input's id below it.
-        PlanNode::Project { input, exprs } => {
-            let below: Attrs = keys
-                .iter()
-                .map(|id| {
-                    exprs
-                        .iter()
-                        .find_map(|e| match &e.node {
-                            ExprNode::Resolved(ResolvedExpr::Alias { expr, output })
-                                if output.id == *id =>
-                            {
-                                match &expr.node {
-                                    ExprNode::Resolved(ResolvedExpr::Column(c)) => Some(c.id),
-                                    _ => None,
-                                }
-                            }
-                            _ => None,
-                        })
-                        .unwrap_or(*id)
-                })
-                .collect();
-            read_whole(input, &below)
-        }
-        // A `Shift` renumbers ids only (a shared scan's second reader): the
-        // keys less the offset below it.
+        // input's id below it; a `Shift` renumbers ids only (a shared scan's
+        // other readers).
+        PlanNode::Project { input, exprs } => read_whole(input, &below_project(exprs, keys)),
         PlanNode::Shift { input, offset } => {
-            let below: Option<Attrs> = keys
-                .iter()
-                .map(|id| id.0.checked_sub(*offset).map(AttrId))
-                .collect();
-            below.is_some_and(|below| read_whole(input, &below))
+            below_shift(*offset, keys).is_some_and(|below| read_whole(input, &below))
         }
         PlanNode::Filter { input, predicate } => {
             conjuncts(predicate)
@@ -645,19 +657,89 @@ fn read_whole(p: &LogicalPlan, keys: &Attrs) -> bool {
     }
 }
 
-/// Whether `p` is (under filters) a partial aggregate grouped by some of
-/// `keys`: its rows are already distinct on them, so another one below the
-/// join reduces nothing. Without it the gate, which reads the fewest groups
-/// the keys can make, would push a second one on the next optimization.
+/// Whether `p` is grouped by some of `keys` (a `PartialAggregate` or a plain
+/// `GROUP BY` / `DISTINCT` whose bare-column keys are all among them, read
+/// through filters, renaming projections and `Shift`s): its rows are already
+/// distinct on `keys`, so an aggregate on them below the join reduces nothing.
+/// Without this the gate, which reads the fewest groups the keys can make,
+/// would push one over a grouped subquery, and a second one over its own
+/// partial on the next optimization.
 fn grouped_within(p: &LogicalPlan, keys: &[BoundColumn]) -> bool {
+    let ids: Attrs = keys.iter().map(|k| k.id).collect();
+    grouped_on(p, &ids)
+}
+
+/// [`grouped_within`] over the key ids `keys`.
+fn grouped_on(p: &LogicalPlan, keys: &Attrs) -> bool {
+    let column = |e: &Arc<Expr>| match &e.node {
+        ExprNode::Resolved(ResolvedExpr::Column(c)) => Some(c.id),
+        _ => None,
+    };
     match &p.node {
-        PlanNode::Filter { input, .. } => grouped_within(input, keys),
-        PlanNode::PartialAggregate { keys: grouped, .. } => grouped.iter().all(|g| match &g.node {
-            ExprNode::Resolved(ResolvedExpr::Column(c)) => keys.iter().any(|k| k.id == c.id),
-            _ => false,
-        }),
+        PlanNode::Filter { input, .. } => grouped_on(input, keys),
+        PlanNode::Project { input, exprs } => grouped_on(input, &below_project(exprs, keys)),
+        PlanNode::Shift { input, offset } => {
+            below_shift(*offset, keys).is_some_and(|below| grouped_on(input, &below))
+        }
+        PlanNode::PartialAggregate { keys: grouped, .. } => grouped
+            .iter()
+            .all(|g| column(g).is_some_and(|id| keys.contains(&id))),
+        // Each key's output: the key column itself, or a rename of it.
+        PlanNode::Aggregate {
+            grouping: Grouping::GroupBy(grouped),
+            aggregates,
+            ..
+        } => {
+            !grouped.is_empty()
+                && grouped.iter().all(|g| {
+                    column(g).is_some_and(|id| {
+                        aggregates.iter().any(|e| match &e.node {
+                            ExprNode::Resolved(ResolvedExpr::Column(c)) => {
+                                c.id == id && keys.contains(&c.id)
+                            }
+                            ExprNode::Resolved(ResolvedExpr::Alias { expr, output }) => {
+                                column(expr) == Some(id) && keys.contains(&output.id)
+                            }
+                            _ => false,
+                        })
+                    })
+                })
+        }
         _ => false,
     }
+}
+
+/// The ids `keys` (outputs of a projection of `exprs`) name below it: a key the
+/// projection renames (`c#1 AS c#2`) is its input column; any other keeps its
+/// id, which a computed column does not have below (so nothing below matches
+/// it).
+fn below_project(exprs: &[Arc<Expr>], keys: &Attrs) -> Attrs {
+    keys.iter()
+        .map(|id| {
+            exprs
+                .iter()
+                .find_map(|e| match &e.node {
+                    ExprNode::Resolved(ResolvedExpr::Alias { expr, output })
+                        if output.id == *id =>
+                    {
+                        match &expr.node {
+                            ExprNode::Resolved(ResolvedExpr::Column(c)) => Some(c.id),
+                            _ => None,
+                        }
+                    }
+                    _ => None,
+                })
+                .unwrap_or(*id)
+        })
+        .collect()
+}
+
+/// The ids `keys` (outputs of a `Shift`) name below it: each less the offset,
+/// or `None` for an id below it (not one the `Shift` makes).
+fn below_shift(offset: u64, keys: &Attrs) -> Option<Attrs> {
+    keys.iter()
+        .map(|id| id.0.checked_sub(offset).map(AttrId))
+        .collect()
 }
 
 /// The column `isnotnull(c)` tests.
@@ -816,11 +898,13 @@ struct Gates {
     /// The join's rows.
     joined: f64,
     /// `S`'s groups, at most: the product of the keys' distinct counts.
-    groups: f64,
+    most_groups: f64,
     /// `S`'s groups, at least: the largest distinct count of one key.
     least_groups: f64,
     /// Keys beyond the join's own.
     extra: usize,
+    /// Which of the two bounds the reduction gate reads.
+    bound: GroupsBound,
 }
 
 impl Gates {
@@ -829,12 +913,18 @@ impl Gates {
             return Err(format!("retention below {MIN_RETENTION}: {self}"));
         }
         // The product of the keys' distinct counts is an upper bound (it
-        // assumes the keys independent); the largest one is a lower bound. Only
-        // a lower bound that fails refuses: correlated keys (a customer and the
-        // dates of their tickets, TPC-DS q38/q87) reduce far more than the
-        // product says, and an input that does not reduce is caught at run
-        // time (the thread-local table turns append-only, `rowtable.rs`).
-        if self.rows < MIN_REDUCTION * self.least_groups {
+        // assumes the keys independent); the largest one is a lower bound.
+        // Reading the lower bound, only a gate that it fails refuses:
+        // correlated keys (a customer and the dates of their tickets, TPC-DS
+        // q38/q87) reduce far more than the product says, and an input that
+        // does not reduce is caught at run time where a thread-local table
+        // has a fixed index (it turns append-only, `rowtable.rs`). Growing
+        // tables (deterministic mode) never do: they read the product.
+        let groups = match self.bound {
+            GroupsBound::Least => self.least_groups,
+            GroupsBound::Product => self.most_groups,
+        };
+        if self.rows < MIN_REDUCTION * groups {
             return Err(format!("reduction below {MIN_REDUCTION}: {self}"));
         }
         if self.extra > MAX_EXTRA_KEYS {
@@ -849,7 +939,7 @@ impl std::fmt::Display for Gates {
         write!(
             f,
             "rows {:.0}, joined {:.0}, groups {:.0} to {:.0}, extra keys {}",
-            self.rows, self.joined, self.least_groups, self.groups, self.extra
+            self.rows, self.joined, self.least_groups, self.most_groups, self.extra
         )
     }
 }

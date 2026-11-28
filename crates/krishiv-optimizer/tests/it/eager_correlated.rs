@@ -157,24 +157,39 @@ fn run(sql: &str) -> Run {
 /// Optimizes `sql` with eager aggregation on and off; checks the output attributes, the fixed
 /// point and the rows over small data.
 fn run_over(sql: &str, catalog: MemoryCatalog, stats: &dyn Statistics, db: fn(u64) -> Db) -> Run {
+    run_with(sql, catalog, stats, db, &[])
+}
+
+/// As [`run_over`], with the session settings `conf` on both sides.
+fn run_with(
+    sql: &str,
+    catalog: MemoryCatalog,
+    stats: &dyn Statistics,
+    db: fn(u64) -> Db,
+    conf: &[(&str, &str)],
+) -> Run {
     let ctx = support::ctx_over(catalog);
     let plan = support::resolve(sql, &ctx);
     let udfs = UdfLibrary::new();
-    let (on, steps) = optimize_traced_with_udfs(&plan, stats, &udfs, &Config::new()).unwrap();
+    let mut config = Config::new();
+    for (k, v) in conf {
+        config.set(k, v).unwrap();
+    }
+    let (on, steps) = optimize_traced_with_udfs(&plan, stats, &udfs, &config).unwrap();
     assert_eq!(
         on.root().resolved_output(),
         plan.root().resolved_output(),
         "{sql}: the output keeps its attributes\n{}",
         on.root()
     );
-    let again = optimize_with_udfs(&on, stats, &udfs, &Config::new()).unwrap();
+    let again = optimize_with_udfs(&on, stats, &udfs, &config).unwrap();
     assert!(
         again.structurally_eq(&on),
         "{sql}: a fixed point\n{}\nagain:\n{}",
         on.root(),
         again.root()
     );
-    let mut off_config = Config::new();
+    let mut off_config = config.clone();
     off_config
         .set("krishiv.optimizer.eagerAggregation", "false")
         .unwrap();
@@ -256,6 +271,7 @@ const Q38_TABLES: &[(&str, &[(&str, &str)])] = &[
             ("c_customer_sk", "int"),
             ("c_last_name", "string"),
             ("c_first_name", "string"),
+            ("c_birth_year", "int"),
         ],
     ),
 ];
@@ -290,6 +306,8 @@ impl Statistics for Q38Stats {
                 (500_000, 1, 500_000)
             } else if n == "d_month_seq" {
                 (2_400, 0, 2_400)
+            } else if n == "c_birth_year" {
+                (69, 1_924, 1_992)
             } else {
                 (5_000, 0, 0)
             };
@@ -337,7 +355,12 @@ fn q38_db(seed: u64) -> Db {
         .map(|c| {
             let last = r.pick(&["ann", "bo"]);
             let first = r.pick(&["cy", "di"]);
-            vec![V::int(c), V::Str(last.into()), V::Str(first.into())]
+            vec![
+                V::int(c),
+                V::Str(last.into()),
+                V::Str(first.into()),
+                V::int(1_975 + 3 * c),
+            ]
         })
         .collect();
     for ((name, cols), rows) in Q38_TABLES.iter().zip([ss, cs, ws, dates, customers]) {
@@ -353,9 +376,7 @@ fn q38_db(seed: u64) -> Db {
 /// counts as the groups, 500,000 x 335 dates, neither would).
 #[test]
 fn tpcds_q38_moves_the_store_and_catalog_distincts_below_their_customer_joins() {
-    let sql =
-        include_str!("../../../../bench/queries/tpcds/q38.sql").trim_end_matches([';', '\n', ' ']);
-    let r = run_over(sql, catalog_of(Q38_TABLES), &Q38Stats, q38_db);
+    let r = run_over(&q38(), catalog_of(Q38_TABLES), &Q38Stats, q38_db);
     let text = r.on.root().to_string();
     assert!(
         !r.notes
@@ -375,4 +396,104 @@ fn tpcds_q38_moves_the_store_and_catalog_distincts_below_their_customer_joins() 
         "{:?}",
         r.notes
     );
+}
+
+/// The q38 text, without its final `;`.
+fn q38() -> String {
+    include_str!("../../../../bench/queries/tpcds/q38.sql")
+        .trim_end_matches([';', '\n', ' '])
+        .to_owned()
+}
+
+/// A dimension that is really filtered stays refused when it is read through a `Shift`: q38
+/// with `c_birth_year > 1925` in every channel (it keeps about 97% of the customers, so the
+/// join's retention gate passes), so the catalog and web channels read the filtered `customer`
+/// through `Shift`s of one shared body, and only the read-whole check refuses.
+#[test]
+fn a_filtered_dimension_read_through_a_shift_is_still_refused() {
+    let sql = q38().replace(
+        "d_month_seq BETWEEN 1200 AND 1200 + 11",
+        "d_month_seq BETWEEN 1200 AND 1200 + 11 AND c_birth_year > 1925",
+    );
+    let r = run_over(&sql, catalog_of(Q38_TABLES), &Q38Stats, q38_db);
+    let text = r.on.root().to_string();
+    assert!(text.contains("Shift"), "{text}");
+    assert_eq!(r.partials(), 0, "{:?}\n{text}", r.notes);
+    assert!(
+        r.notes
+            .iter()
+            .any(|n| n.contains("the other side is filtered or joined"))
+            && !r.notes.iter().any(|n| n.contains("retention below")),
+        "{:?}\n{text}",
+        r.notes
+    );
+}
+
+/// A dimension whose key a projection renames is read under the input's id: a not-NULL filter
+/// on another of its columns still refuses (it drops rows with a key).
+#[test]
+fn a_renamed_key_over_a_filter_on_another_column_is_still_refused() {
+    let sql = "SELECT DISTINCT name, d FROM f JOIN \
+               (SELECT c AS k, name FROM cust WHERE name IS NOT NULL) t ON f.c = t.k";
+    let r = run(sql);
+    assert_eq!(r.partials(), 0, "{sql}: {:?}\n{}", r.notes, r.on.root());
+    assert!(
+        r.notes
+            .iter()
+            .any(|n| n.contains("the other side is filtered or joined")),
+        "{sql}: {:?}\n{}",
+        r.notes,
+        r.on.root()
+    );
+}
+
+/// A side already grouped on the keys (a `GROUP BY` or `DISTINCT` subquery) is not grouped again
+/// below the join: its rows are distinct on them already (review of abe68c926, finding 1).
+#[test]
+fn a_side_already_grouped_on_the_keys_is_refused() {
+    for sql in [
+        "SELECT name, t.d, count(*) FROM (SELECT c, d FROM f GROUP BY c, d) t \
+         JOIN cust ON t.c = cust.c GROUP BY name, t.d",
+        "SELECT DISTINCT name, t.d FROM (SELECT DISTINCT c, d FROM f) t JOIN cust ON t.c = cust.c",
+    ] {
+        let r = run(sql);
+        assert_eq!(r.partials(), 0, "{sql}: {:?}\n{}", r.notes, r.on.root());
+        assert!(
+            r.notes
+                .iter()
+                .any(|n| n.contains("the side is already grouped on some of these keys")),
+            "{sql}: {:?}",
+            r.notes
+        );
+    }
+}
+
+/// Deterministic mode grows its thread-local tables, which never turn append-only, so the gate
+/// reads the product of the counts there: q38's distincts stay above their joins.
+#[test]
+fn deterministic_mode_reads_the_product_of_the_counts() {
+    let r = run_with(
+        &q38(),
+        catalog_of(Q38_TABLES),
+        &Q38Stats,
+        q38_db,
+        &[("krishiv.deterministicOrder", "true")],
+    );
+    assert_eq!(r.partials(), 0, "{:?}\n{}", r.notes, r.on.root());
+    assert!(
+        r.notes
+            .iter()
+            .any(|n| n.starts_with("not applied: reduction below 4")),
+        "{:?}",
+        r.notes
+    );
+}
+
+/// The other half of the rename: a dimension read through a projection that renames its key,
+/// with only the inferred not-NULL filter on that key, is read whole and the distinct moves.
+#[test]
+fn a_renamed_key_with_only_its_null_filter_is_read_whole() {
+    let sql = "SELECT DISTINCT name, d FROM f JOIN (SELECT c AS k, name FROM cust) t ON f.c = t.k";
+    let r = run(sql);
+    assert_eq!(r.partials(), 1, "{sql}: {:?}\n{}", r.notes, r.on.root());
 }

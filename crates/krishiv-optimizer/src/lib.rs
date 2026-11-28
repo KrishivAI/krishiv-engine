@@ -103,11 +103,11 @@ use std::sync::Arc;
 
 use krishiv_common::config::{
     ANSI_ENABLED, AUTO_BROADCAST_JOIN_THRESHOLD, Config, ConfigValue, DERIVED_KEYS_ABOVE,
-    EAGER_AGGREGATION, GROUP_KEY_CODE, GROUP_KEY_CODE_MULTI_DIMENSION, JOIN_COST, JOIN_DP_LIMIT,
-    JOIN_ENUMERATOR, JOIN_PRUNE_FIRST, LATE_PAYLOAD_JOIN, PAYLOAD_ABOVE_AGGREGATE,
-    PRE_AGGREGATE_EXPAND, PRESERVED_SIDE_SEMI_JOIN, ROLLUP_FROM_PARENT, SEMI_ANTI_JOIN_ORDER,
-    SESSION_TIME_ZONE, SHARE_CTE_INSTANCES, SHARE_FILTERED_SCANS, SHARE_LITERAL_INSTANCES,
-    SHARE_REPEATED_SUBTREES, SUBQUERY_AS_WINDOW,
+    DETERMINISTIC_ORDER, EAGER_AGGREGATION, GROUP_KEY_CODE, GROUP_KEY_CODE_MULTI_DIMENSION,
+    JOIN_COST, JOIN_DP_LIMIT, JOIN_ENUMERATOR, JOIN_PRUNE_FIRST, LATE_PAYLOAD_JOIN,
+    PAYLOAD_ABOVE_AGGREGATE, PRE_AGGREGATE_EXPAND, PRESERVED_SIDE_SEMI_JOIN, ROLLUP_FROM_PARENT,
+    SEMI_ANTI_JOIN_ORDER, SESSION_TIME_ZONE, SHARE_CTE_INSTANCES, SHARE_FILTERED_SCANS,
+    SHARE_LITERAL_INSTANCES, SHARE_REPEATED_SUBTREES, SUBQUERY_AS_WINDOW,
 };
 use krishiv_common::error::{InternalError, KrishivError};
 use krishiv_plan::{
@@ -643,6 +643,19 @@ fn run(
                     .and_then(ConfigValue::as_bool)
                     .unwrap_or(true)
             });
+        // Deterministic mode grows its thread-local tables (they never turn
+        // append-only), so eager aggregation's reduction gate reads the
+        // product of the keys' distinct counts there (`eager::GroupsBound`).
+        let bound = if udfs.is_some_and(|(_, config)| {
+            config
+                .get(&DETERMINISTIC_ORDER)
+                .and_then(ConfigValue::as_bool)
+                .unwrap_or(false)
+        }) {
+            eager::GroupsBound::Product
+        } else {
+            eager::GroupsBound::Least
+        };
         let expand = options.pre_aggregate_expand
             && udfs.is_none_or(|(_, config)| {
                 config
@@ -650,6 +663,7 @@ fn run(
                     .and_then(ConfigValue::as_bool)
                     .unwrap_or(true)
             });
+        let settings = eager::Settings { expand, bound };
         // `krishiv.experimental.groupKeyCodeForce` (measurement only) also
         // switches it on, without the statistics test.
         let forced = udfs.is_some_and(|(_, config)| {
@@ -698,7 +712,7 @@ fn run(
         };
         let root = match stats {
             Some(stats) if eager => {
-                eager_pass(&root, stats, options, expand, yields, joins, &mut t)?
+                eager_pass(&root, stats, options, settings, yields, joins, &mut t)?
             }
             _ => root,
         };
@@ -780,7 +794,7 @@ fn run(
                     let mut ordered = order_and_restrict(after, stats, options, joins, &mut t)?;
                     if eager {
                         ordered =
-                            eager_pass(&ordered, stats, options, expand, yields, joins, &mut t)?;
+                            eager_pass(&ordered, stats, options, settings, yields, joins, &mut t)?;
                     }
                     if let Some(min_dimensions) = min_dimensions {
                         let (after, notes) = group_code::rewrite(
@@ -834,7 +848,7 @@ fn run(
                             &ordered,
                             stats,
                             options,
-                            expand,
+                            settings,
                             eager::Yield::default(),
                             joins,
                             &mut t,
@@ -920,7 +934,7 @@ fn run(
                             order_and_restrict(tidied, stats, options, joins, &mut t)?;
                         if eager {
                             ordered = eager_pass(
-                                &ordered, stats, options, expand, yields, joins, &mut t,
+                                &ordered, stats, options, settings, yields, joins, &mut t,
                             )?;
                         }
                         if let Some(min_dimensions) = min_dimensions {
@@ -1119,7 +1133,7 @@ fn eager_pass(
     root: &Arc<LogicalPlan>,
     stats: &dyn Statistics,
     options: &Options,
-    expand: bool,
+    settings: eager::Settings,
     yields: eager::Yield,
     joins: join_order::Settings,
     t: &mut Trace,
@@ -1128,7 +1142,7 @@ fn eager_pass(
         Arc::clone(root),
         stats,
         options.stats_propagation,
-        expand,
+        settings,
         yields,
     )?;
     t.notes("EagerAggregate", &after, notes);
