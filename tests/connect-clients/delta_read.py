@@ -33,7 +33,11 @@ def norm(text: str) -> str:
 
 
 def render(value) -> str:
-    """A JSON value of ``EXPECTED.json`` as the string Spark's ``CAST(.. AS STRING)`` shows."""
+    """A JSON value of ``EXPECTED.json`` as the string Spark's ``CAST(.. AS STRING)`` shows.
+
+    A JSON list is rendered as a struct (``{a, b}``). An array column would need ``[a, b]``; no
+    fixture has one.
+    """
     if value is None:
         return "NULL"
     if isinstance(value, bool):

@@ -11,9 +11,13 @@
 #          --tpcds-data DIR   the TPC-DS Parquet files (<table>.parquet) for the `tpcds` run
 # `delta` and `tpcds` drive the pinned pyspark client of bench/ (uv); `delta` reads the Spark-written tables of
 # tests/fixtures/delta-4.4.1 (the server needs the `delta` cargo feature).
-# The clients run in containers (golang, virtuslab/scala-cli) on the host network, so Docker is
-# the only tool needed. See README.md.
+# `go` and `scala` run in containers (golang, virtuslab/scala-cli) on the host network and need Docker;
+# `delta` and `tpcds` need uv; python3 is needed for every run. See README.md.
 set -euo pipefail
+
+# Pinned by tag and digest, so the report changes only with a commit here; Renovate bumps both (renovate.json).
+go_image="golang:1.24.13@sha256:d2d2bc1c84f7e60d7d2438a3836ae7d0c847f4888464e7ec9ba3a1339a1ee804"
+scala_image="virtuslab/scala-cli:1.19.0@sha256:d1715b5c5085db2d461a293757561f240ec6da955846a4f5d2c0f5cc30ae2f9d"
 
 here="$(cd "$(dirname "$0")" && pwd)"
 clients="go,scala,delta"
@@ -38,14 +42,9 @@ fi
 mkdir -p "$out"
 out="$(cd "$out" && pwd)"
 if [ -n "$tpcds_data" ]; then tpcds_data="$(cd "$tpcds_data" && pwd)"; fi
-# Reports of earlier runs must not pass for this run's: clear those of the selected clients.
-for c in ${clients//,/ }; do
-  case "$c" in
-    go|scala) rm -f "$out/$c.json" ;;
-    delta) rm -f "$out"/delta-read.json "$out"/delta-read-summary.md ;;
-    tpcds) rm -f "$out"/tpcds.json "$out"/tpcds-summary.md ;;
-  esac
-done
+# Reports of earlier runs must not pass for this run's. All are cleared, not only the selected clients':
+# report.py reads whichever of go.json and scala.json exist.
+rm -f "$out"/{go,scala,delta-read,tpcds}.json "$out"/summary.md "$out"/{delta-read,tpcds}-summary.md
 
 server_pid=""
 cleanup() {
@@ -73,22 +72,22 @@ for c in ${clients//,/ }; do
   case "$c" in
     go)
       docker run --rm --network host -v "$here:/src:ro" -v "$out:/out" -v krishiv-smoke-gomod:/go/pkg/mod \
-        -e GOFLAGS=-buildvcs=false golang:1.24 \
+        -e GOFLAGS=-buildvcs=false "$go_image" \
         sh -c "cp -r /src/go /tmp/go && cd /tmp/go && go mod tidy && go run . --remote '$remote' --queries /src/queries.json --out /out/go.json" \
         || echo "go client run failed" >&2
       ;;
     scala)
       docker run --rm --network host -v "$here:/src:ro" -v "$out:/out" -v krishiv-smoke-scala:/root/.cache \
-        virtuslab/scala-cli:latest run --workspace /tmp/scala-ws /src/scala/Smoke.scala -- "$remote" /src/queries.json /out/scala.json \
+        "$scala_image" run --workspace /tmp/scala-ws /src/scala/Smoke.scala -- "$remote" /src/queries.json /out/scala.json \
         || echo "scala client run failed" >&2
       ;;
     delta)
-      (cd "$here/../../bench" && uv run python "$here/delta_read.py" --remote "$remote" --out "$out") \
+      (cd "$here/../../bench" && uv run --frozen python "$here/delta_read.py" --remote "$remote" --out "$out") \
         || echo "delta read run failed" >&2
       ;;
     tpcds)
       [ -n "$tpcds_data" ] || { echo "tpcds needs --tpcds-data DIR" >&2; continue; }
-      (cd "$here/../../bench" && uv run python "$here/tpcds_connect.py" --remote "$remote" --data "$tpcds_data" --out "$out") \
+      (cd "$here/../../bench" && uv run --frozen python "$here/tpcds_connect.py" --remote "$remote" --data "$tpcds_data" --out "$out") \
         || echo "tpcds run failed" >&2
       ;;
     *) echo "unknown client: $c" >&2 ;;

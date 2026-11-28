@@ -75,9 +75,9 @@ object Smoke {
       val got = spark.conf.get("spark.sql.shuffle.partitions")
       if (got == "7") ("pass", "") else ("fail", s"config value: $got")
     },
-    timed("api_range_collect") {
-      val rows = spark.range(3).collect()
-      if (rows.length == 3) ("pass", "") else ("fail", s"rows: ${rows.length}")
+    timed("api_values_collect") {
+      val rows = spark.sql("SELECT * FROM VALUES (1, 'a'), (2, 'b') AS t(i, s)").collect()
+      if (rows.length == 2) ("pass", "") else ("fail", s"rows: ${rows.length}")
     }
   )
 

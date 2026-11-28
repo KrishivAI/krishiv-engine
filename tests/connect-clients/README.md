@@ -9,8 +9,9 @@ is a separate CI test.
 
 ## Run
 
-Docker and python3 are the only tools needed (the clients run in `golang:1.24` and `virtuslab/scala-cli`
-containers on the host network).
+The Go and Scala clients run in containers on the host network (`golang` and `virtuslab/scala-cli`, pinned by
+tag and digest at the top of `run.sh`; Renovate bumps them) and need Docker. The default list also runs
+`delta`, which needs `uv`. python3 is needed for every run.
 
 ```text
 cargo build -p krishiv-cli --features server
