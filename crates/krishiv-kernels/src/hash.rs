@@ -159,8 +159,10 @@ enum Col<'a> {
 enum Bytes<'a> {
     Utf8(&'a arrow_array::StringArray),
     LargeUtf8(&'a arrow_array::LargeStringArray),
+    Utf8View(&'a arrow_array::StringViewArray),
     Binary(&'a arrow_array::BinaryArray),
     LargeBinary(&'a arrow_array::LargeBinaryArray),
+    BinaryView(&'a arrow_array::BinaryViewArray),
 }
 
 impl Bytes<'_> {
@@ -168,8 +170,10 @@ impl Bytes<'_> {
         match self {
             Self::Utf8(a) => a.is_valid(i).then(|| a.value(i).as_bytes()),
             Self::LargeUtf8(a) => a.is_valid(i).then(|| a.value(i).as_bytes()),
+            Self::Utf8View(a) => a.is_valid(i).then(|| a.value(i).as_bytes()),
             Self::Binary(a) => a.is_valid(i).then(|| a.value(i)),
             Self::LargeBinary(a) => a.is_valid(i).then(|| a.value(i)),
+            Self::BinaryView(a) => a.is_valid(i).then(|| a.value(i)),
         }
     }
 }
@@ -228,6 +232,9 @@ impl<'a> Col<'a> {
             DataType::LargeUtf8 => Self::Bytes(Bytes::LargeUtf8(a.as_string::<i64>())),
             DataType::Binary => Self::Bytes(Bytes::Binary(a.as_binary::<i32>())),
             DataType::LargeBinary => Self::Bytes(Bytes::LargeBinary(a.as_binary::<i64>())),
+            // Scans and `createDataFrame` carry strings as views, nested ones included.
+            DataType::Utf8View => Self::Bytes(Bytes::Utf8View(a.as_string_view())),
+            DataType::BinaryView => Self::Bytes(Bytes::BinaryView(a.as_binary_view())),
             DataType::List(_) => {
                 let l = a.as_list::<i32>();
                 Self::List(

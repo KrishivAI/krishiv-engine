@@ -98,7 +98,10 @@ fn a_nested_decimal_is_read_on_decimal128() {
     register(&s, "t", Arc::new(list));
     let df = block_on(s.sql("SELECT d, d[0] AS first FROM t")).unwrap();
     let batches = block_on(df.collect()).unwrap();
-    assert_eq!(batches[0].column(0).data_type(), &DataType::List(item));
+    // A registered list's element takes the analyzer's field name, `element`, as in Spark's Arrow
+    // output (R1-D-13); the decimal is back on `Decimal128`.
+    let element = Arc::new(item.as_ref().clone().with_name("element"));
+    assert_eq!(batches[0].column(0).data_type(), &DataType::List(element));
     assert_eq!(
         batches[0].column(1).data_type(),
         &DataType::Decimal128(10, 2)
