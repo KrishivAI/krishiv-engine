@@ -29,7 +29,42 @@ fn quoted<'a>(parts: impl IntoIterator<Item = &'a str>) -> String {
         .join(".")
 }
 
+/// `REQUIRES_SINGLE_PART_NAMESPACE` for a table, schema or function name whose namespace the
+/// session catalog cannot hold. A leading `spark_catalog` is the catalog, not part of the
+/// identifier (Spark 4.2.0 and 4.3.0 runs).
+pub(crate) fn nested_namespace(parts: &[String]) -> KrishivError {
+    let named = match parts {
+        [catalog, rest @ ..] if catalog.eq_ignore_ascii_case(CATALOG) => rest,
+        all => all,
+    };
+    RequiresSinglePartNamespace {
+        session_catalog: CATALOG.to_owned(),
+        identifier: quoted(named.iter().map(String::as_str)),
+    }
+    .into()
+}
+
 impl Session {
+    /// Refuses a table or function name with more namespace parts than the session catalog's
+    /// one (`a.b.t`, `spark_catalog.a.b.t`). A name that starts with another catalog's name is
+    /// left to the caller.
+    ///
+    /// # Errors
+    /// `REQUIRES_SINGLE_PART_NAMESPACE`; [`Self::refuse_declared_current`]'s for a name
+    /// without a catalog while a declared one is current.
+    pub(crate) fn refuse_nested_name(&self, parts: &[String]) -> Result<(), KrishivError> {
+        match parts {
+            [first, _, _, rest @ ..] if first.eq_ignore_ascii_case(CATALOG) => {
+                if rest.is_empty() {
+                    return Ok(());
+                }
+            }
+            [first, _, _, ..] if !self.is_catalog_name(first) => self.refuse_declared_current()?,
+            _ => return Ok(()),
+        }
+        Err(nested_namespace(parts))
+    }
+
     /// The namespace named by `name` (one part, or the session catalog and one part).
     pub(crate) fn namespace_name(
         &self,
@@ -46,15 +81,15 @@ impl Session {
         };
         match parts.as_slice() {
             [ns] => self.namespace_arg(&fold(ns)),
-            [catalog, ns] if catalog.eq_ignore_ascii_case(crate::catalog::CATALOG) => Ok(fold(ns)),
+            [catalog, ns] if catalog.eq_ignore_ascii_case(CATALOG) => Ok(fold(ns)),
+            [first, _] if !self.is_catalog_name(first) => {
+                self.refuse_declared_current()?;
+                Err(nested_namespace(&parts))
+            }
             [catalog, _] => Err(unsupported(&format!(
                 "namespaces in the catalog `{catalog}`"
             ))),
-            _ => Err(RequiresSinglePartNamespace {
-                session_catalog: crate::catalog::CATALOG.to_owned(),
-                identifier: format!("`{}`", parts.join("`.`")),
-            }
-            .into()),
+            _ => Err(nested_namespace(&parts)),
         }
     }
 

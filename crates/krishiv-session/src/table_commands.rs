@@ -27,10 +27,9 @@ use std::sync::Arc;
 use krishiv_common::error::{
     DataSourceNotFound, InternalError, InvalidAttributeNameSyntax, InvalidSchemaOrRelationName,
     KrishivError, KrishivUnsupportedFeature, LocationAlreadyExists,
-    NotSupportedCommandWithoutHiveSupport, RequiresSinglePartNamespace, SchemaAlreadyExists,
-    SchemaNotEmpty, SchemaNotFound, TableOrViewNotFound, UnresolvedColumnWithSuggestion,
-    UnsupportedFeatureDropDatabase, UnsupportedFeatureTableOperation, UnsupportedOverwriteTable,
-    WrongCommandForObjectType,
+    NotSupportedCommandWithoutHiveSupport, SchemaAlreadyExists, SchemaNotEmpty, SchemaNotFound,
+    TableOrViewNotFound, UnresolvedColumnWithSuggestion, UnsupportedFeatureDropDatabase,
+    UnsupportedFeatureTableOperation, UnsupportedOverwriteTable, WrongCommandForObjectType,
 };
 use krishiv_common::names::check_column_name_duplication;
 use krishiv_common::secret::OptionValue;
@@ -182,12 +181,7 @@ impl TableName {
             }
             // No other catalog is registered, so a longer name is a namespace of several parts in
             // the session catalog, which takes one.
-            _ => {
-                return Err(KrishivError::from(RequiresSinglePartNamespace {
-                    session_catalog: crate::catalog::CATALOG.to_owned(),
-                    identifier: format!("`{}`", parts.join("`.`")),
-                }));
-            }
+            _ => return Err(namespace_names::nested_namespace(parts)),
         };
         Ok(Self {
             namespace,
@@ -1926,6 +1920,7 @@ use options::options_of;
 mod tests;
 
 mod namespace_names;
+pub(crate) use namespace_names::nested_namespace;
 mod owned_directory;
 pub(crate) use owned_directory::{OwnedDirectory, OwnedDirectoryError};
 

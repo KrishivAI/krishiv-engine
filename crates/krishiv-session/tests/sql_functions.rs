@@ -692,10 +692,6 @@ fn what_is_not_supported_is_named() {
     let s = session();
     for (sql, feature) in [
         (
-            "CREATE FUNCTION other_catalog.default.p() RETURNS INT RETURN 1",
-            "functions of catalogs other than spark_catalog",
-        ),
-        (
             "CREATE TEMPORARY FUNCTION p() RETURNS INT LANGUAGE python RETURN 1",
             "LANGUAGE python functions",
         ),

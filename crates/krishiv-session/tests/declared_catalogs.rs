@@ -388,6 +388,16 @@ fn sql_namespace_commands_never_answer_for_a_declared_catalog() {
         "UNCACHE TABLE e",
         "UNCACHE TABLE default.e",
         "UNCACHE TABLE IF EXISTS e",
+        "REFRESH TABLE a.b.t",
+        "UNCACHE TABLE IF EXISTS a.b.t",
+        "REFRESH FUNCTION a.b.f",
+        "DESCRIBE FUNCTION a.b.f",
+        "DROP FUNCTION a.b.f",
+        "CREATE SCHEMA a.b",
+        "SHOW COLUMNS IN e FROM default",
+        "SHOW COLUMNS IN default.e FROM default",
+        "SHOW COLUMNS IN t FROM lake.db",
+        "CREATE SCHEMA lake.x",
     ] {
         match run(&s, sql) {
             Err(e)

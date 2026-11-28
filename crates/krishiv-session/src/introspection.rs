@@ -19,7 +19,7 @@ use krishiv_types::DataType;
 use crate::analyze::command_schema::{self as cols, CommandColumn};
 use crate::dataframe::DataFrame;
 use crate::functions::{col, lit};
-use crate::session::Session;
+use crate::session::{QueryEnv, Session};
 use crate::store::{CatalogPartition, CatalogStore, CatalogTable, NamespaceMeta};
 use crate::table_commands::TableName;
 use describe_json::describe_json;
@@ -546,14 +546,14 @@ impl Session {
                 let system_table = match namespace {
                     None => self.system_table_of(table, &env)?,
                     Some(ns) => {
-                        let from = self.namespace_name(ns, &env)?;
+                        let from = crate::access::ddl_parts(ns, &env)?;
                         let parts = crate::access::ddl_parts(table, &env)?;
                         match parts.as_slice() {
                             [t] => Some(t),
                             [q, t] if crate::system::is_system(q) => Some(t),
                             _ => None,
                         }
-                        .filter(|_| crate::system::is_system(&from))
+                        .filter(|_| matches!(from.as_slice(), [q] if crate::system::is_system(q)))
                         .filter(|t| {
                             crate::system::is_system_table(&["system".to_owned(), t.to_lowercase()])
                         })
@@ -571,28 +571,14 @@ impl Session {
                         .frame_with_order(cols::SHOW_COLUMNS, &[], names, false)
                         .await;
                 }
-                // With `FROM ns` the table is named by that namespace: no guard on the bare name first.
-                let mut name = if namespace.is_some() {
-                    let parts = crate::access::ddl_parts(table, &env)?;
-                    TableName::resolve(&parts, &self.state.catalog.current_namespace(), &env)?
-                } else {
-                    self.table_name(table, &env)?
-                };
-                if let Some(ns) = namespace {
-                    let from = self.namespace_name(ns, &env)?;
-                    if !name.bare && !name.namespace.eq_ignore_ascii_case(&from) {
-                        return Err(ShowColumnsWithConflictNamespace {
-                            namespace_a: from,
-                            namespace_b: name.namespace,
-                        }
-                        .into());
+                let columns = match namespace {
+                    None => {
+                        let name = self.table_name(table, &env)?;
+                        self.columns_of_relation(&name, Privilege::Browse, true)
+                            .await?
                     }
-                    name.namespace = from;
-                    name.bare = false;
-                }
-                let columns = self
-                    .columns_of_relation(&name, Privilege::Browse, true)
-                    .await?;
+                    Some(ns) => self.columns_from_namespace(table, ns, &env).await?,
+                };
                 let rows = columns.into_iter().map(|c| vec![s(c.0)]).collect();
                 self.frame_with_order(cols::SHOW_COLUMNS, &[], rows, false)
                     .await
@@ -1028,6 +1014,60 @@ impl Session {
             return Err(name.not_found(path()));
         }
         Ok(table)
+    }
+
+    /// The columns `SHOW COLUMNS IN table (FROM|IN) namespace` lists, in Spark's order (4.2.0
+    /// and 4.3.0 runs): a one-part table is `namespace.table`, that name is looked up, and then
+    /// the namespace must be exactly the table's database, so `spark_catalog.db` conflicts.
+    async fn columns_from_namespace(
+        &self,
+        table: &DdlName,
+        namespace: &DdlName,
+        env: &QueryEnv,
+    ) -> Result<Vec<(String, DataType, Option<String>)>, KrishivError> {
+        let from = crate::access::ddl_parts(namespace, env)?;
+        let mut parts = crate::access::ddl_parts(table, env)?;
+        let conflict = |database: &str| -> KrishivError {
+            let quote = |p: &str| format!("`{}`", p.replace('`', "``"));
+            ShowColumnsWithConflictNamespace {
+                namespace_a: quote(from.first().map_or("", String::as_str)),
+                namespace_b: quote(database),
+            }
+            .into()
+        };
+        match from.as_slice() {
+            // Another catalog's namespace is refused as `SHOW TABLES IN` refuses it.
+            [first, _, ..]
+                if !first.eq_ignore_ascii_case(crate::catalog::CATALOG)
+                    && self.is_catalog_name(first) =>
+            {
+                self.namespace_name(namespace, env)?;
+            }
+            // `system` is a catalog without databases: a table of another one is not in it.
+            [system] if crate::system::is_system(system) => {
+                if let [database, _] = parts.as_slice() {
+                    return Err(conflict(database));
+                }
+            }
+            _ => {}
+        }
+        if parts.len() == 1 {
+            parts.splice(0..0, from.iter().cloned());
+            // `t FROM spark_catalog` is the catalog and a table without a database.
+            if let [catalog, _] = parts.as_slice()
+                && catalog.eq_ignore_ascii_case(crate::catalog::CATALOG)
+            {
+                return Err(crate::table_commands::nested_namespace(&parts));
+            }
+        }
+        let name = TableName::resolve(&parts, &self.namespace_for(&parts, env)?, env)?;
+        let columns = self
+            .columns_of_relation(&name, Privilege::Browse, true)
+            .await?;
+        match from.as_slice() {
+            [only] if only.to_lowercase() == name.namespace.to_lowercase() => Ok(columns),
+            _ => Err(conflict(&name.namespace)),
+        }
     }
 
     /// The (name, type, comment) of the columns of a table, view or temporary view. A permanent
