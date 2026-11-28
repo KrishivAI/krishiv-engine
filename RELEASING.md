@@ -25,9 +25,9 @@ steps below.
 Enabling a release is therefore always a reviewed change that edits those
 guards, made by the maintainer.
 
-## Current state: `0.2.1`
+## Current state: `0.3.0`
 
-- The version is `[workspace.package] version = "0.2.1"` in `Cargo.toml`,
+- The version is `[workspace.package] version = "0.3.0"` in `Cargo.toml`,
   inherited by every crate. Python gets the same version from
   maturin.
 - `CHANGELOG.md` holds the notes. Later entries come from
@@ -108,6 +108,26 @@ Not wired yet (each is a reviewed change by the maintainer, because it edits the
 Owner actions before the gate are listed in `ops/needs-owner.md` ("Release 0.2.0 channels and pre-publish setup"):
 crates.io keywords and description (drop `datafusion`), the PyPI classifier, the credentials, and the go/no-go.
 
+## Docker image (manual, owner's go required)
+
+`publish-docker.yml` pushes `ghcr.io/krishivai/krishiv:<version>`, `:<major.minor>` and `:latest` (a pre-release tag
+pushes only `:<version>`) as one linux/amd64 + linux/arm64 manifest built from `docker/Dockerfile`, with a BuildKit SBOM,
+max-mode provenance and a GitHub build-provenance attestation. Dispatch it from the `v*` tag (Actions tab, "Run workflow",
+choose the tag) after the tag exists; it refuses any other ref, runs `ci.yml` on the tag first and waits for the `ghcr`
+environment's approval (create the environment with required reviewers and `v*` tags only before the first run). After the
+first push, make the package public in its settings on GitHub. Verify:
+`gh attestation verify oci://ghcr.io/krishivai/krishiv:<version> --repo KrishivAI/krishiv-engine`.
+
+## CLI binaries on the GitHub Release (manual, owner's go required)
+
+0.2.0's release had no assets. After the tag exists and the owner has created the GitHub Release for it, dispatch
+`publish-release-assets.yml` from the `v*` tag (it refuses any other ref, runs `ci.yml` on the tag, then builds the binaries
+through `binaries.yml`, waits for the `release` environment's approval: create it with required reviewers and `v*` tags
+only). It attaches `krishiv-linux-x86_64`, `krishiv-compat-linux-x86_64`, `krishiv-linux-aarch64`, `krishiv-macos-arm64`
+(plus `krishiv-macos-x86_64` and `krishiv-windows-x86_64.exe` when their jobs passed), one `.sha256` per binary,
+`SHA256SUMS`, the CycloneDX SBOMs, and checks the build-provenance attestation of every file before uploading
+(`gh attestation verify <file> --repo KrishivAI/krishiv-engine`). musl CLI binaries are not built yet.
+
 ## Release integrity
 
 - **Provenance:** every file in the `release-bundle` artifact (wheels, binaries, SBOMs) has a GitHub build-provenance
@@ -181,6 +201,10 @@ Owner decision 2026-11-07 (default adopted): a minor release every **6 weeks**.
   from `main`, or fixed there and merged back). `main` stays open for the next minor.
 - **RC:** tag `vX.Y.0-rc.N` from the branch; it publishes nowhere until the owner says go (see above).
 - **Release:** on the date, tag `vX.Y.0` from `release-X.Y`. Patch releases (`X.Y.Z`) are cut from the same branch.
+- **Merge back:** right after the tag, merge the release branch into `main` with one PR (`git merge --no-ff origin/release/X.Y.0`;
+  conflicts in workflows, the changelog and baselines resolve to `main`'s later form, and a changelog fragment already assembled
+  into the release section is deleted). Without it a patch cut from `main` carries the old version and no release changelog entry.
+  Check with `git merge-base --is-ancestor vX.Y.0 origin/main`.
   Support covers the latest minor only while the major is 0.
 - **Dates:** every date is 6 weeks (42 days) after the previous minor's release date. 0.3 is planned as
   *0.2 release date + 42 days*, its branch cut 7 days before that; the 0.2 date is set by the owner's publish go, so

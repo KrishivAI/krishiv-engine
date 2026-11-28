@@ -78,17 +78,17 @@ glue = [
 sqlite = ["dep:rusqlite", "dep:serde_json", "dep:krishiv-plan", "dep:krishiv-types"]
 
 [dependencies]
-krishiv-common = { path = "../krishiv-common", version = "=0.2.1" }
-krishiv-plan = { path = "../krishiv-plan", version = "=0.2.1", optional = true }
-krishiv-types = { path = "../krishiv-types", version = "=0.2.1", optional = true }
+krishiv-common = { path = "../krishiv-common", version = "=0.3.0" }
+krishiv-plan = { path = "../krishiv-plan", version = "=0.3.0", optional = true }
+krishiv-types = { path = "../krishiv-types", version = "=0.3.0", optional = true }
 # The egress address rule of the metastore connection (design P3-T067 §5.2).
-krishiv-store = { path = "../krishiv-store", version = "=0.2.1", optional = true }
+krishiv-store = { path = "../krishiv-store", version = "=0.3.0", optional = true }
 # The `TableProvider` a declared table's scan opens, and the Iceberg tables it opens (feature `session`).
-krishiv-exec = { path = "../krishiv-exec", version = "=0.2.1", optional = true }
-krishiv-connectors-iceberg = { path = "../krishiv-connectors-iceberg", version = "=0.2.1", optional = true }
+krishiv-exec = { path = "../krishiv-exec", version = "=0.3.0", optional = true }
+krishiv-connectors-iceberg = { path = "../krishiv-connectors-iceberg", version = "=0.3.0", optional = true }
 # The `CatalogFactory` trait and the declarations it builds from (feature `session`).
-krishiv-session = { path = "../krishiv-session", version = "=0.2.1", optional = true }
-krishiv-sql = { path = "../krishiv-sql", version = "=0.2.1", optional = true }
+krishiv-session = { path = "../krishiv-session", version = "=0.3.0", optional = true }
+krishiv-sql = { path = "../krishiv-sql", version = "=0.3.0", optional = true }
 tracing.workspace = true
 # The vended-credential source of a declared table (`krishiv-store`'s `CredentialSource`) and the
 # connector's async `RestCommitTransport` trait, implemented by a declared table's committer (feature `session`).
@@ -103,8 +103,8 @@ sha2 = { workspace = true, optional = true }
 
 [dev-dependencies]
 futures = { workspace = true, features = ["alloc", "executor"] }
-krishiv-plan = { path = "../krishiv-plan", version = "=0.2.1", features = ["testing"] }
+krishiv-plan = { path = "../krishiv-plan", version = "=0.3.0", features = ["testing"] }
 tempfile.workspace = true
 # The declared-table read tests serve a table the connector's test helper writes.
-krishiv-connectors-iceberg = { path = "../krishiv-connectors-iceberg", version = "=0.2.1", features = ["testing"] }
+krishiv-connectors-iceberg = { path = "../krishiv-connectors-iceberg", version = "=0.3.0", features = ["testing"] }
 arrow-array = { workspace = true }
