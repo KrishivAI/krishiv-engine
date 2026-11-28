@@ -125,7 +125,8 @@ impl Accumulator {
             && matches!(
                 &self.kind,
                 Kind::By { values, keys, .. }
-                    if matches!(values, Values::Bytes(_)) || matches!(keys, Values::Bytes(_))
+                    if matches!(values, Values::Bytes(_) | Values::Nested(_))
+                        || matches!(keys, Values::Bytes(_) | Values::Nested(_))
             )
         {
             return Err(unsupported(format!(
@@ -502,6 +503,9 @@ impl Accumulator {
                             snapshot!(i, vals, set);
                         }
                     }
+                    Values::Nested(_) => {
+                        return Err(internal("a nested value in a scalar extremum".to_owned()));
+                    }
                     Values::Bytes(vals) => {
                         let v = byte_values(a)?;
                         for (i, &g) in groups.iter().enumerate() {
@@ -655,6 +659,9 @@ impl Accumulator {
                             }
                             snapshot!(i, vals, set, null);
                         }
+                    }
+                    Values::Nested(_) => {
+                        return Err(internal("a nested value in a scalar extremum".to_owned()));
                     }
                     Values::Bytes(vals) => {
                         let v = byte_values(a)?;

@@ -725,7 +725,10 @@ impl AggregateExpr {
             (F::MaxBy | F::MinBy | F::MaxByKeyFirst | F::MinByKeyFirst, _) => match self.by_types()
             {
                 Some((v, k))
-                    if accumulator::min_max_supported(v) && accumulator::min_max_supported(k) =>
+                    if (accumulator::min_max_supported(v)
+                        || accumulator::struct_min_max_supported(v))
+                        && (accumulator::min_max_supported(k)
+                            || accumulator::struct_min_max_supported(k)) =>
                 {
                     v.clone()
                 }

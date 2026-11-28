@@ -174,10 +174,10 @@ impl Accumulator {
         &self,
         values: &Values,
         t: &DataType,
-        on: impl Fn(usize) -> bool,
+        on_group: impl Fn(usize) -> bool,
         ids: &[u32],
     ) -> Result<ArrayRef> {
-        let on = |i: &u32| on(*i as usize);
+        let on = |i: &u32| on_group(*i as usize);
         let at = |i: &u32| *i as usize;
         Ok(match values {
             Values::Float(v) => {
@@ -212,6 +212,7 @@ impl Accumulator {
                 let it = ids.iter().map(|i| on(i).then(|| v[at(i)]));
                 narrow(it, t)?
             }
+            Values::Nested(v) => self.struct_values(v, t, on_group, ids)?,
         })
     }
 

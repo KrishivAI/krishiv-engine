@@ -104,6 +104,9 @@ enum Values {
     Int(Vec<i128>),
     Float(Vec<f64>),
     Bytes(Vec<Box<[u8]>>),
+    /// Structs and arrays: each group's value as an owned one-row array (`None`: no
+    /// value). Only `max_by`/`min_by` hold these.
+    Nested(Vec<Option<ArrayRef>>),
 }
 
 impl Values {
@@ -114,6 +117,9 @@ impl Values {
             DataType::Utf8 | DataType::Utf8View | DataType::Binary | DataType::BinaryView => {
                 Self::Bytes(Vec::new())
             }
+            DataType::Struct(_) | DataType::List(_) | DataType::LargeList(_) => {
+                Self::Nested(Vec::new())
+            }
             _ => Self::Int(Vec::new()),
         }
     }
@@ -123,6 +129,7 @@ impl Values {
             Self::Int(v) => v.resize(n, 0),
             Self::Float(v) => v.resize(n, 0.0),
             Self::Bytes(v) => v.resize(n, Box::default()),
+            Self::Nested(v) => v.resize(n, None),
         }
     }
 
@@ -131,6 +138,7 @@ impl Values {
             Self::Int(v) => v.reserve(n),
             Self::Float(v) => v.reserve(n),
             Self::Bytes(v) => v.reserve(n),
+            Self::Nested(v) => v.reserve(n),
         }
     }
 
@@ -142,6 +150,7 @@ impl Values {
             Self::Int(x) => v(x),
             Self::Float(x) => v(x),
             Self::Bytes(x) => v(x),
+            Self::Nested(x) => v(x),
         }
     }
 
@@ -154,6 +163,19 @@ impl Values {
             (Self::Bytes(v), Col::Bytes(c)) => {
                 *heap = heap.saturating_sub(v[g].len()) + c[i].len();
                 v[g] = c[i].into();
+            }
+            (Self::Nested(v), Col::Nested(c)) => {
+                let index = u32::try_from(i)
+                    .map_err(|_| internal("a nested value past row u32::MAX".to_owned()))?;
+                let taken = results::compact_views(
+                    arrow_select::take::take(*c, &UInt32Array::from(vec![index]), None)
+                        .map_err(|e| internal(e.to_string()))?,
+                );
+                let old = v[g]
+                    .as_ref()
+                    .map_or(0, arrow_array::Array::get_buffer_memory_size);
+                *heap = heap.saturating_sub(old) + taken.get_buffer_memory_size();
+                v[g] = Some(taken);
             }
             _ => {
                 return Err(internal(
@@ -173,6 +195,12 @@ impl Values {
                 *heap = heap.saturating_sub(v[g].len());
                 v[g] = Box::default();
             }
+            Self::Nested(v) => {
+                let old = v[g]
+                    .take()
+                    .map_or(0, |a| arrow_array::Array::get_buffer_memory_size(&a));
+                *heap = heap.saturating_sub(old);
+            }
         }
     }
 
@@ -183,7 +211,9 @@ impl Values {
         match self {
             Self::Int(v) => v[to] = v[from],
             Self::Float(v) => v[to] = v[from],
-            Self::Bytes(_) => return Err(internal("a snapshot of byte values".to_owned())),
+            Self::Bytes(_) | Self::Nested(_) => {
+                return Err(internal("a snapshot of byte or nested values".to_owned()));
+            }
         }
         Ok(())
     }
@@ -194,6 +224,7 @@ enum Col<'a> {
     Int(Cow<'a, [i128]>),
     Float(Cow<'a, [f64]>),
     Bytes(Vec<&'a [u8]>),
+    Nested(&'a ArrayRef),
 }
 
 impl<'a> Col<'a> {
@@ -203,6 +234,7 @@ impl<'a> Col<'a> {
             DataType::Utf8 | DataType::Utf8View | DataType::Binary | DataType::BinaryView => {
                 Self::Bytes(byte_values(a)?)
             }
+            DataType::Struct(_) | DataType::List(_) | DataType::LargeList(_) => Self::Nested(a),
             _ => Self::Int(int_like(a)?),
         })
     }
@@ -810,7 +842,7 @@ impl Accumulator {
                 values, keys, heap, ..
             } => {
                 let bytes = |v: &Values, a: Option<&ArrayRef>| match v {
-                    Values::Bytes(_) => a.map_or(0, value_bytes),
+                    Values::Bytes(_) | Values::Nested(_) => a.map_or(0, value_bytes),
                     _ => 0,
                 };
                 heap + bytes(values, arg) + bytes(keys, key)
