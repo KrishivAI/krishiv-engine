@@ -214,6 +214,14 @@ fn print_pr_size(report: &ci::SizeReport) -> Result<(), String> {
     );
     println!("{summary}");
     step_summary(&summary);
+    if report.near_cap() {
+        println!(
+            "::warning title=PR size::{} counted changed lines is over {} (70% of the {} cap); consider splitting the PR.",
+            report.counted,
+            ci::WARN_CHANGED_LINES,
+            ci::MAX_CHANGED_LINES
+        );
+    }
     if report.within_cap() {
         return Ok(());
     }

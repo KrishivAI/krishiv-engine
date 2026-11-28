@@ -7,6 +7,10 @@
 /// A PR may change at most this many counted lines (additions + deletions).
 pub const MAX_CHANGED_LINES: u64 = 10000;
 
+/// A PR above this many counted lines (70% of the cap) gets a warning
+/// annotation, so that an author splits it before the cap fails the gate.
+pub const WARN_CHANGED_LINES: u64 = MAX_CHANGED_LINES / 10 * 7;
+
 /// Test code counts at half weight: it is cheaper to review than library
 /// code, and full weight rewards trimming tests to fit under the cap.
 pub const TEST_LINE_DIVISOR: u64 = 2;
@@ -108,6 +112,12 @@ impl SizeReport {
     #[must_use]
     pub fn within_cap(&self) -> bool {
         self.counted <= MAX_CHANGED_LINES
+    }
+
+    /// Whether the diff is over [`WARN_CHANGED_LINES`] but still within the cap.
+    #[must_use]
+    pub fn near_cap(&self) -> bool {
+        self.counted > WARN_CHANGED_LINES && self.within_cap()
     }
 
     /// Counts a binary file of `bytes` bytes as
