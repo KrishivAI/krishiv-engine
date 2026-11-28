@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! `information_schema.schemata`, `.tables`, `.columns` and `.views` over the session catalog.
+//! `information_schema.catalogs`, `.schemata`, `.tables`, `.columns` and `.views` over the session catalog.
 #![cfg(test)]
 
 use futures::executor::block_on;
@@ -70,5 +70,15 @@ fn schemata_tables_and_columns_list_the_catalog() {
             "SELECT table_schema, table_name, view_definition FROM information_schema.views"
         ),
         ["db1|v|SELECT 1 AS x"]
+    );
+}
+
+#[test]
+fn catalogs_lists_the_session_catalog() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    assert_eq!(
+        rows(&s, "SELECT * FROM information_schema.catalogs"),
+        ["spark_catalog"]
     );
 }

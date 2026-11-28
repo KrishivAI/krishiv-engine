@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! `information_schema.schemata`, `.tables`, `.columns` and `.views`: read-only views over the session
+//! `information_schema.catalogs`, `.schemata`, `.tables`, `.columns` and `.views`: read-only views over the session
 //! catalog (`spark_catalog`) for BI tools and SQL clients. Spark has no `information_schema`, so the
 //! columns are the SQL standard's names. Rows follow the listing rule of `SHOW TABLES` /
 //! `SHOW NAMESPACES` ([`crate::access`] `may_list`): a relation or schema the principal may not list
@@ -41,13 +41,14 @@ impl std::fmt::Debug for Source {
 pub(crate) fn is_view(name: &str) -> bool {
     matches!(
         name.to_ascii_lowercase().as_str(),
-        "schemata" | "tables" | "columns" | "views"
+        "catalogs" | "schemata" | "tables" | "columns" | "views"
     )
 }
 
 /// The columns of the view `name`: `(column, nullable, integer)`.
 fn layout(name: &str) -> Vec<(&'static str, bool, bool)> {
     match name {
+        "catalogs" => vec![("catalog_name", false, false)],
         "schemata" => vec![
             ("catalog_name", false, false),
             ("schema_name", false, false),
@@ -168,6 +169,7 @@ impl Source {
         let (schemas, relations) = self.relations().await;
         let catalog = crate::catalog::CATALOG;
         let values: Vec<ArrayRef> = match name.as_str() {
+            "catalogs" => vec![text([Some(catalog)].into_iter())],
             "schemata" => vec![
                 text(schemas.iter().map(|_| Some(catalog))),
                 text(schemas.iter().map(|s| Some(s.as_str()))),
