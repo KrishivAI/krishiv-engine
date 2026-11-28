@@ -524,7 +524,7 @@ def page_checks(origin: str) -> list[str]:
         )
         page.goto(f"{origin}/?token=fixture")
         # Ready: the shell shows its navigation and the token has left the address.
-        page.wait_for_function("!location.search.includes('token')", timeout=10000)
+        page.wait_for_function("() => !location.search.includes('token')", timeout=10000)
         page.get_by_role("navigation").first.wait_for(timeout=10000)
         # Session: the token left the address and no script can read it.
         if "token" in page.url:
@@ -1187,7 +1187,7 @@ def workload_checks() -> list[str]:
         ann.get_by_role(
             "button", name="The 14 queries of this session in History"
         ).click()
-        page.wait_for_function("location.hash === '#/history'", timeout=5000)
+        page.wait_for_function("() => location.hash === '#/history'", timeout=5000)
         history_rows = "main a[href^='#/queries/']:visible"
         try:
             expect(page.locator(history_rows)).to_have_count(2, timeout=5000)

@@ -48,8 +48,9 @@
   const virtual = $derived(virtualises(model.rows.length, virtualAfter));
 
   let box: HTMLDivElement | undefined = $state();
-  // The sticky header's height: the box keeps that much scroll padding at its top, so a row that takes the focus
-  // (the browser's scroll on focus, in a grid that is not virtual) is scrolled clear of the header, not under it.
+  // The sticky header's height, measured on its row (`offsetHeight`; how a row group reports its client box
+  // differs by engine): the box keeps that much scroll padding at its top, so a row that takes the focus (the
+  // browser's scroll on focus, in a grid that is not virtual) is scrolled clear of the header, not under it.
   let headHeight = $state(0);
   let visible = $state<{ index: number; start: number; end: number }[]>([]);
   let total = $state(0);
@@ -148,8 +149,8 @@
   class={cn("relative max-h-[480px] min-w-0 max-w-full overflow-auto rounded-lg border border-border bg-card", className)}
 >
   <table class="w-full border-separate border-spacing-0 text-sm" aria-label={label} aria-rowcount={model.rows.length + 1}>
-    <thead class="sticky top-0 z-10" bind:clientHeight={headHeight}>
-      <tr aria-rowindex={1}>
+    <thead class="sticky top-0 z-10">
+      <tr aria-rowindex={1} bind:offsetHeight={headHeight}>
         {#each model.headers as h (h.id)}
           <th
             scope="col"

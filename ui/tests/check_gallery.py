@@ -208,7 +208,7 @@ def popovers(page: Page, origin: str, scheme: str) -> list[str]:
     # The first item has the focus; Download results is disabled and skipped. Bits UI moves the focus into the
     # menu after it opens, so wait for it: arrows pressed before then are lost (seen on a CI runner).
     page.wait_for_function(
-        "document.activeElement?.getAttribute('role') === 'menuitem'", timeout=5000
+        "() => document.activeElement?.getAttribute('role') === 'menuitem'", timeout=5000
     )
     for _ in range(2):
         page.keyboard.press("ArrowDown")
@@ -295,7 +295,7 @@ def grid(page: Page, origin: str) -> list[str]:
     page.keyboard.press("End")
     try:
         page.wait_for_function(
-            "document.activeElement?.getAttribute('aria-rowindex') === '10001'",
+            "() => document.activeElement?.getAttribute('aria-rowindex') === '10001'",
             timeout=5000,
         )
     except PlaywrightTimeout:
@@ -454,7 +454,7 @@ def gallery_checks() -> list[str]:
         page.goto(origin + SELFTEST)
         try:
             page.wait_for_function(
-                "window.__csp.some(v => v.includes('style-src'))", timeout=5000
+                "() => window.__csp.some(v => v.includes('style-src'))", timeout=5000
             )
         except PlaywrightTimeout:
             pass
