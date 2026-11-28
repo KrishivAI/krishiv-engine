@@ -159,7 +159,8 @@ fn unix_time_floors_and_wants_a_timestamp() {
     assert_eq!(one(&s, "unix_seconds(NULL)"), None);
     for expr in [
         "unix_seconds(DATE '2020-12-01')",
-        "unix_seconds(TIMESTAMP_NTZ '2020-12-01 14:30:08')",
+        // A TIMESTAMP_NTZ is taken from Spark 4.3 on (the default profile) and refused before it:
+        // `unix_parts_ntz.rs` pins both.
         "unix_seconds('2020-12-01 14:30:08')",
     ] {
         assert_eq!(

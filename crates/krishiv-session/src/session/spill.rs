@@ -187,6 +187,34 @@ pub(crate) fn job_uuid() -> String {
     )
 }
 
+impl Session {
+    /// `error`, when it is a memory error of a query whose spill directory could not be set up,
+    /// as that failure (the memory error stays its cause): the query may have needed to spill
+    /// (PY-078). A refused reservation and an arbitration abort are both such errors: which
+    /// one ends a query that cannot spill depends on timing. Applied below the metrics fold,
+    /// so `system.queries` and the caller agree.
+    pub(super) fn name_spill_failure(
+        error: KrishivError,
+        failure: &std::sync::Mutex<Option<KrishivError>>,
+    ) -> KrishivError {
+        use krishiv_common::error::ErrorClass;
+        if !matches!(
+            error.error_class(),
+            ErrorClass::UnableToAcquireMemory | ErrorClass::KrishivQueryAbortedOutOfMemory
+        ) {
+            return error;
+        }
+        let found = failure
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        match found {
+            Some(f) => f.with_cause(error),
+            None => error,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

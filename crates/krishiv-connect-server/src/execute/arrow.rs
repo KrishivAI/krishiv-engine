@@ -19,7 +19,7 @@
 use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
-use arrow_array::types::TimestampMicrosecondType;
+use arrow_array::types::{TimestampMicrosecondType, TimestampNanosecondType};
 use arrow_array::{
     Array, ArrayRef, BinaryArray, ListArray, MapArray, RecordBatch, RecordBatchOptions,
     StringArray, StructArray,
@@ -56,10 +56,9 @@ fn spark_arrow_type(t: &ArrowType, tz: Option<&Arc<str>>) -> ArrowType {
     match t {
         ArrowType::Utf8View => ArrowType::Utf8,
         ArrowType::BinaryView => ArrowType::Binary,
-        ArrowType::Timestamp(TimeUnit::Microsecond, Some(old)) => ArrowType::Timestamp(
-            TimeUnit::Microsecond,
-            Some(tz.map_or_else(|| Arc::clone(old), Arc::clone)),
-        ),
+        ArrowType::Timestamp(unit @ (TimeUnit::Microsecond | TimeUnit::Nanosecond), Some(old)) => {
+            ArrowType::Timestamp(*unit, Some(tz.map_or_else(|| Arc::clone(old), Arc::clone)))
+        }
         ArrowType::Struct(fields) => ArrowType::Struct(spark_fields(fields, tz)),
         ArrowType::List(f) => ArrowType::List(Arc::new(spark_field(f, tz))),
         ArrowType::Map(f, sorted) => ArrowType::Map(Arc::new(spark_field(f, tz)), *sorted),
@@ -67,12 +66,29 @@ fn spark_arrow_type(t: &ArrowType, tz: Option<&Arc<str>>) -> ArrowType {
     }
 }
 
+/// The field metadata key under which Spark 4.3 sends the precision of a
+/// nanosecond timestamp column (`ArrowUtils.timestampNanosPrecisionKey`): Arrow's
+/// timestamp type has no precision.
+const TIMESTAMP_NANOS_PRECISION_KEY: &str = "SPARK::timestampNanos::precision";
+
 fn spark_field(f: &Field, tz: Option<&Arc<str>>) -> Field {
-    Field::new(
+    let out = Field::new(
         f.name(),
         spark_arrow_type(f.data_type(), tz),
         f.is_nullable(),
-    )
+    );
+    if !matches!(f.data_type(), ArrowType::Timestamp(TimeUnit::Nanosecond, _)) {
+        return out;
+    }
+    match DataType::from_arrow_field(f) {
+        Ok(DataType::TimestampNanos { precision } | DataType::TimestampNtzNanos { precision }) => {
+            out.with_metadata(std::collections::HashMap::from([(
+                TIMESTAMP_NANOS_PRECISION_KEY.to_owned(),
+                precision.to_string(),
+            )]))
+        }
+        _ => out,
+    }
 }
 
 fn spark_fields(fields: &Fields, tz: Option<&Arc<str>>) -> Fields {
@@ -89,6 +105,17 @@ fn spark_array(array: &ArrayRef, tz: Option<&Arc<str>>) -> Result<ArrayRef, Kris
             Some(tz) => Arc::new(
                 array
                     .as_primitive::<TimestampMicrosecondType>()
+                    .clone()
+                    .with_timezone(Arc::clone(tz)),
+            ),
+            None => Arc::clone(array),
+        },
+        // A `TIMESTAMP_LTZ(p)` column, p 7..9 (Spark 4.3): Spark sends `Timestamp(NANOSECOND)` in the
+        // session zone (`TimestampLTZNanosTypeApiOps.toArrowType`).
+        ArrowType::Timestamp(TimeUnit::Nanosecond, Some(_)) => match tz {
+            Some(tz) => Arc::new(
+                array
+                    .as_primitive::<TimestampNanosecondType>()
                     .clone()
                     .with_timezone(Arc::clone(tz)),
             ),

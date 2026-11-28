@@ -259,6 +259,45 @@ fn timestamps_carry_the_session_time_zone() {
 }
 
 #[test]
+fn nanosecond_timestamps_carry_the_session_time_zone_and_their_precision() {
+    // Spark 4.3 sends `Timestamp(NANOSECOND)` (LTZ in the session zone, NTZ without one) with the
+    // precision in the field metadata (`ArrowUtils.toPrecisionTaggedArrowField`).
+    let tz: Arc<str> = Arc::from("Asia/Kolkata");
+    for (t, zone, precision) in [
+        (
+            DataType::TimestampNanos { precision: 7 },
+            Some(Arc::clone(&tz)),
+            "7",
+        ),
+        (DataType::TimestampNtzNanos { precision: 9 }, None, "9"),
+    ] {
+        let field = t.to_arrow_field("t", true);
+        let array: ArrayRef = match field.data_type() {
+            ArrowType::Timestamp(_, Some(z)) => Arc::new(
+                arrow_array::TimestampNanosecondArray::from(vec![1_i64])
+                    .with_timezone(Arc::clone(z)),
+            ),
+            _ => Arc::new(arrow_array::TimestampNanosecondArray::from(vec![1_i64])),
+        };
+        let batch = RecordBatch::try_new(Arc::new(Schema::new(vec![field])), vec![array]).unwrap();
+        let out = spark_batch(&batch, Some(&tz)).unwrap();
+        let f = out.schema().field(0).clone();
+        assert_eq!(
+            f.data_type(),
+            &ArrowType::Timestamp(TimeUnit::Nanosecond, zone),
+            "{t:?}"
+        );
+        assert_eq!(
+            f.metadata()
+                .get("SPARK::timestampNanos::precision")
+                .map(String::as_str),
+            Some(precision),
+            "{t:?}"
+        );
+    }
+}
+
+#[test]
 fn variant_and_spatial_columns_take_sparks_shape() {
     use krishiv_types::arrow::{VARIANT_METADATA_FIELD, VARIANT_VALUE_FIELD};
     let variant = DataType::Variant.to_arrow_field("v", true);

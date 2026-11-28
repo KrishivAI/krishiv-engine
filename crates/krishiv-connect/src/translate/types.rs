@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Connect `DataType` to Krishiv's.
 
-use krishiv_common::error::{KrishivError, UnsupportedTimePrecision};
+use krishiv_common::error::{InvalidTimestampPrecision, KrishivError, UnsupportedTimePrecision};
 use krishiv_types::{
     ArrayType, Collation, DataType, DecimalType, MapType, Srid, StructField, StructType, UdtType,
 };
@@ -52,6 +52,12 @@ fn data_type_at(proto: &Proto, depth: usize) -> Result<DataType, KrishivError> {
         Kind::Timestamp(_) => DataType::Timestamp,
         Kind::TimestampNtz(_) => DataType::TimestampNtz,
         Kind::Decimal(d) => DataType::Decimal(decimal_type(d.precision, d.scale)?),
+        Kind::TimestampNtzNanos(t) => DataType::TimestampNtzNanos {
+            precision: nanos_precision(t.precision, "TIMESTAMP_NTZ")?,
+        },
+        Kind::TimestampLtzNanos(t) => DataType::TimestampNanos {
+            precision: nanos_precision(t.precision, "TIMESTAMP_LTZ")?,
+        },
         Kind::Time(t) => match t.precision {
             None => DataType::Time {
                 precision: DataType::TIME_DEFAULT_PRECISION,
@@ -170,6 +176,26 @@ fn data_type_at(proto: &Proto, depth: usize) -> Result<DataType, KrishivError> {
             ));
         }
     })
+}
+
+/// The precision of a Connect nanosecond timestamp type, as Spark 4.3's
+/// `TimestampNanosTypeConnectOps`: none is 9, and only 7 to 9 make a type
+/// (`TimestampNTZNanosType` / `TimestampLTZNanosType` refuse the rest with
+/// `INVALID_TIMESTAMP_PRECISION`).
+fn nanos_precision(precision: Option<i32>, type_name: &str) -> Result<u8, KrishivError> {
+    match precision {
+        None => Ok(9),
+        Some(p @ 7..=9) => u8::try_from(p).map_err(|_| invalid_precision(p, type_name)),
+        Some(p) => Err(invalid_precision(p, type_name)),
+    }
+}
+
+fn invalid_precision(p: i32, type_name: &str) -> KrishivError {
+    InvalidTimestampPrecision {
+        precision: p.to_string(),
+        r#type: type_name.to_owned(),
+    }
+    .into()
 }
 
 /// A decimal type from the optional precision and scale of a Connect decimal.

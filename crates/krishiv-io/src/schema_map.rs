@@ -51,7 +51,7 @@ use arrow_schema::{
     ArrowError, DataType, Field, FieldRef, Fields, IntervalUnit, Schema, SchemaRef, TimeUnit,
 };
 use krishiv_common::error::{
-    CastOverflow, FailedReadFileNoHint, KrishivError, KrishivUnsupportedFeature,
+    CastOverflow, DatetimeOverflow, FailedReadFileNoHint, KrishivError, KrishivUnsupportedFeature,
     LegacyErrorTemp2093,
 };
 
@@ -73,6 +73,10 @@ enum Conv {
     Same,
     /// A representation change, widening or narrowing of a leaf.
     Cast,
+    /// A nanosecond timestamp read at a lower precision (a `timestamp_ltz(7)`
+    /// table column over a file's `(9)`): each value floored to a multiple of
+    /// this many nanoseconds, as Spark 4.3 cuts the digits past the precision.
+    FloorNanos(i64),
     /// Per table child: its position in the decoded file struct and its
     /// conversion, or `None` (missing: null).
     Struct(Vec<Option<(usize, Conv)>>),
@@ -520,7 +524,10 @@ impl Resolver {
     ) -> Result<Option<(Conv, Vec<Vec<String>>)>> {
         let (t, f) = (tf.data_type(), ff.data_type());
         let whole = vec![Vec::new()];
-        if t.equals_datatype(f) && !needs_struct_resolution(t) {
+        if let Some(unit) = nanos_cut(tf, ff) {
+            return Ok(Some((Conv::FloorNanos(unit), whole)));
+        }
+        if t.equals_datatype(f) && !needs_struct_resolution(t) && !list_nanos_cut(tf, ff) {
             return Ok(Some((Conv::Same, whole)));
         }
         match (t, f) {
@@ -629,8 +636,9 @@ impl Resolver {
     }
 
     /// The file path, file type and table type of the table column `path`;
-    /// `Ok(None)` when it is missing in the file; `Err` when it cannot be
-    /// resolved (ambiguous, not a struct path).
+    /// `Some(None)` when it is missing in the file; `None` when it cannot be
+    /// resolved (ambiguous, not a struct path) or is read floored to a lower
+    /// nanosecond precision (no predicate is pushed onto it).
     fn resolve_path(&self, path: &ColumnPath) -> Option<Option<(ColumnPath, DataType, DataType)>> {
         let mut tchildren = self.table.fields().clone();
         let mut fchildren = self.file.fields().clone();
@@ -652,6 +660,15 @@ impl Resolver {
                 return Some(None);
             };
             let ff = &fchildren[j];
+            // A column read floored to the table precision is compared on
+            // its floored values, which the file does not hold: a literal
+            // or runtime filter of the table precision would drop rows
+            // whose stored digits it cuts, so nothing is pushed onto it
+            // (IS [NOT] NULL would be sound, since flooring keeps nulls, but
+            // is refused too, to keep the one gate simple).
+            if nanos_cut(tf, ff).is_some() {
+                return None;
+            }
             out.push(ff.name().clone());
             types = Some((tf.data_type().clone(), ff.data_type().clone()));
         }
@@ -790,6 +807,19 @@ fn needs_struct_resolution(dt: &DataType) -> bool {
     match dt {
         DataType::Struct(_) | DataType::Map(..) => true,
         DataType::List(f) | DataType::LargeList(f) => needs_struct_resolution(f.data_type()),
+        _ => false,
+    }
+}
+
+/// Whether lists `tf` over `ff` (of equal Arrow types) hold, at some depth, a nanosecond timestamp
+/// leaf whose table precision is below the file's: Arrow's `equals_datatype` ignores the leaf's
+/// precision metadata, so such a list descends to its element, where [`nanos_cut`] floors it.
+fn list_nanos_cut(tf: &Field, ff: &Field) -> bool {
+    match (tf.data_type(), ff.data_type()) {
+        (DataType::List(te), DataType::List(fe))
+        | (DataType::LargeList(te), DataType::LargeList(fe)) => {
+            nanos_cut(te, fe).is_some() || list_nanos_cut(te, fe)
+        }
         _ => false,
     }
 }
@@ -969,9 +999,51 @@ fn int_scalar(dt: &DataType, n: i128) -> Option<ScalarValue> {
     })
 }
 
+/// The nanoseconds a value of the file field `ff` is floored to when read
+/// as the table field `tf`: both nanosecond timestamps (the zone labels may
+/// differ, as [`leaf_castable`] lets one relabel), the table's precision (its
+/// [`krishiv_types::arrow::SPARK_TYPE_METADATA_KEY`] tag, else 9) below the
+/// file's. The floor writes the table's label.
+fn nanos_cut(tf: &Field, ff: &Field) -> Option<i64> {
+    let precision = |f: &Field| match krishiv_types::DataType::from_arrow_field(f) {
+        Ok(
+            krishiv_types::DataType::TimestampNanos { precision }
+            | krishiv_types::DataType::TimestampNtzNanos { precision },
+        ) => Some(precision),
+        _ => None,
+    };
+    let nanos = |f: &Field| matches!(f.data_type(), DataType::Timestamp(TimeUnit::Nanosecond, _));
+    if !nanos(tf) || !nanos(ff) {
+        return None;
+    }
+    let (t, f) = (precision(tf)?, precision(ff)?);
+    (t < f).then(|| 10_i64.pow(u32::from(9 - t)))
+}
+
 /// `array` converted by `conv` to `target`.
 fn convert(array: &ArrayRef, conv: &Conv, target: &DataType) -> Result<ArrayRef> {
     match conv {
+        Conv::FloorNanos(unit) => {
+            let DataType::Timestamp(_, tz) = target else {
+                return Err(internal("a nanosecond cut to a non-timestamp type"));
+            };
+            let a = array
+                .as_primitive_opt::<TimestampNanosecondType>()
+                .ok_or_else(|| internal("a nanosecond cut of a non-nanosecond array"))?;
+            // The floor of a value within a step of `i64::MIN` is below the carrier. Spark's own
+            // behaviour there was not probed; `DATETIME_OVERFLOW` is Krishiv's choice (its text
+            // readers raise it past the carrier too).
+            let floored = a
+                .try_unary::<_, TimestampNanosecondType, _>(|v| {
+                    v.checked_sub(v.rem_euclid(*unit)).ok_or(())
+                })
+                .map_err(|()| {
+                    KrishivError::from(DatetimeOverflow {
+                        operation: "floor a nanosecond timestamp to its precision".to_owned(),
+                    })
+                })?;
+            Ok(Arc::new(floored.with_timezone_opt(tz.clone())))
+        }
         Conv::Same if array.data_type() == target => Ok(Arc::clone(array)),
         Conv::Same | Conv::Cast if !is_nested(target) => cast_leaf(array, target),
         Conv::Same | Conv::Cast => convert(array, &same_conv(target), target),
@@ -1414,4 +1486,59 @@ fn cast_int(array: &ArrayRef, target: &DataType) -> Result<ArrayRef> {
         }
         other => return Err(internal(format!("cannot cast an integer to {other}"))),
     })
+}
+
+#[cfg(test)]
+mod floor_tests {
+    use super::*;
+
+    /// A nanosecond column read under the other zone label still floors to the table's precision,
+    /// and the result carries the table's label.
+    #[test]
+    fn a_relabelled_nanosecond_read_floors_to_the_table_precision() {
+        use krishiv_types::DataType as K;
+        let ltz9 = K::TimestampNanos { precision: 9 }.to_arrow_field("t", true);
+        let ntz7 = K::TimestampNtzNanos { precision: 7 }.to_arrow_field("t", true);
+        let ntz9 = K::TimestampNtzNanos { precision: 9 }.to_arrow_field("t", true);
+        let ltz8 = K::TimestampNanos { precision: 8 }.to_arrow_field("t", true);
+        assert_eq!(nanos_cut(&ntz7, &ltz9), Some(100));
+        assert_eq!(nanos_cut(&ltz8, &ntz9), Some(10));
+        assert_eq!(nanos_cut(&ntz9, &ltz9), None);
+        let a: ArrayRef = Arc::new(
+            PrimitiveArray::<TimestampNanosecondType>::from(vec![123_456_789]).with_timezone("UTC"),
+        );
+        let out = convert(&a, &Conv::FloorNanos(100), ntz7.data_type()).unwrap();
+        assert_eq!(out.data_type(), ntz7.data_type());
+        assert_eq!(
+            out.as_primitive::<TimestampNanosecondType>().value(0),
+            123_456_700
+        );
+    }
+
+    /// A value whose floor to the precision is below the `i64` carrier is `DATETIME_OVERFLOW`, not a
+    /// panic or a wrap to 2262; one step above floors as usual.
+    #[test]
+    fn a_floor_below_the_nanosecond_carrier_overflows() {
+        let target = DataType::Timestamp(TimeUnit::Nanosecond, None);
+        let floor = |v: i64, unit: i64| {
+            let a: ArrayRef = Arc::new(PrimitiveArray::<TimestampNanosecondType>::from(vec![v]));
+            convert(&a, &Conv::FloorNanos(unit), &target)
+                .map(|a| a.as_primitive::<TimestampNanosecondType>().value(0))
+        };
+        // `i64::MIN + 8` is a multiple of 100: below it, the floor at precision 7 or 8 leaves the carrier.
+        for (v, unit) in [
+            (i64::MIN, 100),
+            (i64::MIN + 7, 100),
+            (i64::MIN, 10),
+            (i64::MIN + 7, 10),
+        ] {
+            let err = floor(v, unit).unwrap_err().to_string();
+            assert!(err.contains("DATETIME_OVERFLOW"), "{v} {unit}: {err}");
+        }
+        assert_eq!(floor(i64::MIN + 8, 100).unwrap(), i64::MIN + 8);
+        assert_eq!(floor(i64::MIN + 91, 100).unwrap(), i64::MIN + 8);
+        assert_eq!(floor(i64::MIN + 9, 10).unwrap(), i64::MIN + 8);
+        assert_eq!(floor(i64::MIN, 1).unwrap(), i64::MIN);
+        assert_eq!(floor(-1, 100).unwrap(), -100);
+    }
 }

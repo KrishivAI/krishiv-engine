@@ -1943,3 +1943,31 @@ fn a_projector_reuses_its_plan_across_batches_and_follows_a_schema_change() {
 }
 
 mod field_ids;
+
+/// A column read floored to a lower nanosecond precision takes no pushed
+/// predicate: the file holds the unfloored digits, which a filter of the
+/// table precision would compare against (CodeRabbit on #1072). The same
+/// precision still pushes.
+#[test]
+fn no_predicate_is_pushed_onto_a_floored_nanosecond_column() {
+    use krishiv_types::DataType as K;
+    let ntz = |p: u8| K::TimestampNtzNanos { precision: p }.to_arrow_field("t", true);
+    let file = Arc::new(Schema::new(vec![ntz(9)]));
+    let probe = PushdownExpr::IsNotNull(col("t"));
+    // A runtime filter on the column (a join key) is dropped the same way.
+    let dynamic = |p: u8| {
+        let table = Arc::new(Schema::new(vec![ntz(p)]));
+        let m = mapper(&table, &file, by_name()).unwrap();
+        let filter = Arc::new(crate::RuntimeFilter::new(
+            crate::FilterId(1),
+            col("t"),
+            table.field(0).data_type().clone(),
+        ));
+        let mut req = ScanRequest::all(Arc::clone(&table));
+        req.dynamic
+            .push(crate::ScanFilter::new(filter, &table).unwrap_or_else(|| panic!("t")));
+        (m.map_predicate(&probe), m.file_request(&req).dynamic.len())
+    };
+    assert_eq!(dynamic(7), (None, 0));
+    assert_eq!(dynamic(9), (Some(probe.clone()), 1));
+}

@@ -129,7 +129,9 @@ fn analyze(case: &MatrixCase) -> Result<(String, bool), String> {
     };
     let catalog =
         MemoryCatalog::new("spark_catalog").with_table(&["default"], "one", vec![one], None);
-    let ctx = context(catalog, conf);
+    // The matrix is Spark 4.2.0's, so its cases are analyzed as 4.2 (the default profile is 4.3).
+    let mut ctx = context(catalog, conf);
+    ctx.profile = SparkProfile::V4_2;
     let a = block_on(DefaultAnalyzer.analyze(&plan, &ctx)).map_err(|e| {
         let named = e
             .error

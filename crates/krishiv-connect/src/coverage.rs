@@ -270,8 +270,8 @@ oneof! { literal, LITERAL_ROWS, expression::literal::LiteralType, "Expression.Li
     Struct => ("struct", 24, Done, "", "Literal::{Array,KeyValueMap,Struct}; the type is the root data_type, else the message\'s own type fields", "P3-T012a", 1),
     SpecializedArray => ("specialized_array", 25, Done, "", "Literal::{Array,KeyValueMap,Struct}; the type is the root data_type, else the message\'s own type fields", "P3-T012a", 1),
     Time => ("time", 26, Missing, "", "TIME literals wait for an IR value", "P3-T012", 1),
-    TimestampNtzNanos => ("timestamp_ntz_nanos", 29, Missing, "", "no IR type for nanosecond timestamps", "P3-T012", 1),
-    TimestampLtzNanos => ("timestamp_ltz_nanos", 30, Missing, "", "no IR type for nanosecond timestamps", "P3-T012", 1),
+    TimestampNtzNanos => ("timestamp_ntz_nanos", 29, Missing, "", "nanosecond timestamp literals wait for an IR value", "P3-T012", 1),
+    TimestampLtzNanos => ("timestamp_ltz_nanos", 30, Missing, "", "nanosecond timestamp literals wait for an IR value", "P3-T012", 1),
 }
 
 oneof! { data_kind, DATA_KIND_ROWS, data_type::Kind, "DataType.kind";
@@ -303,8 +303,8 @@ oneof! { data_kind, DATA_KIND_ROWS, data_type::Kind, "DataType.kind";
     Geography => ("geography", 27, Done, "", "DataType", "P2-T091a", 1),
     Unparsed => ("unparsed", 24, Missing, "", "a type string parsed by the SQL type parser", "P3-T012", 1),
     Time => ("time", 28, Done, "", "DataType", "P2-T091a", 1),
-    TimestampNtzNanos => ("timestamp_ntz_nanos", 29, Missing, "", "no IR type for nanosecond timestamps", "P3-T012", 1),
-    TimestampLtzNanos => ("timestamp_ltz_nanos", 30, Missing, "", "no IR type for nanosecond timestamps", "P3-T012", 1),
+    TimestampNtzNanos => ("timestamp_ntz_nanos", 29, Done, "", "DataType::TimestampNtzNanos / TimestampNanos (no precision is 9; 7..9, else INVALID_TIMESTAMP_PRECISION)", "P3-T090", 1),
+    TimestampLtzNanos => ("timestamp_ltz_nanos", 30, Done, "", "DataType::TimestampNtzNanos / TimestampNanos (no precision is 9; 7..9, else INVALID_TIMESTAMP_PRECISION)", "P3-T090", 1),
 }
 
 fn quote(s: &str) -> String {

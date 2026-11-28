@@ -61,7 +61,7 @@ pub use defs::legacy_day_count;
 pub use defs::{approx_percentile_result, exact_percentile_result};
 pub use describe::spark_function_description;
 pub use groups::{FunctionGroup, spark_function_groups};
-pub(crate) use json::parse_json_schema;
+pub(crate) use json::parse_json_schema_in;
 pub use variant::variant_castable;
 
 use crate::signature::{Arity, FunctionKind, Inputs, ResultType, SparkProfile};

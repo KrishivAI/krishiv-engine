@@ -852,9 +852,8 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                 Ok(Arc::new(out.with_timezone("UTC")) as ArrayRef)
             })
         }
-        ("unix_seconds" | "unix_millis" | "unix_micros", [t])
-            if is_timestamp(t) && *t != ntz_type() =>
-        {
+        // A `TIMESTAMP_NTZ` (Spark 4.3) carries its wall clock as microseconds in UTC, read as they are.
+        ("unix_seconds" | "unix_millis" | "unix_micros", [t]) if is_timestamp(t) => {
             let per = match listed {
                 "unix_seconds" => 1_000_000,
                 "unix_millis" => 1_000,
@@ -1504,6 +1503,11 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                 Ok(Arc::new(Date32Array::from(vec![day; x.rows()])) as ArrayRef)
             })
         }
+        // Spark 4.3's `current_timestamp(7..=9)` / `localtimestamp(7..=9)` (the analyzer keeps
+        // only such a precision).
+        ("current_timestamp" | "now" | "localtimestamp", [DataType::Int32]) => {
+            return Some((listed, super::nanos::clock(listed, opts)));
+        }
         ("current_timestamp" | "now", []) => {
             let now = opts.query_start_micros;
             Binding::new(timestamp(), move |x: &Inputs<'_>| {
@@ -1597,11 +1601,8 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                     }
                     None => x,
                 };
-                let rest = |i: usize| {
-                    split
-                        .as_ref()
-                        .map_or(0, |(_, r)| r.get(i).copied().unwrap_or(0))
-                };
+                // `None` for a microsecond timestamp: the legacy formatter keeps it.
+                let rest = |i: usize| split.as_ref().map(|(_, r)| r.get(i).copied().unwrap_or(0));
                 let instants = cast_to_instants(x, &o, mode)?;
                 let zone = session_zone(&o);
                 match &pat {
@@ -1624,10 +1625,9 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                                 .get(fmts.value(i))
                                 .map_err(|e| krishiv_kernels::KernelError::with_row(Some(i), e))?;
                             out.push(Some(
-                                p.format_timestamp_nanos(instants.value(i), rest(i), zone)
-                                    .map_err(|e| {
-                                        krishiv_kernels::KernelError::with_row(Some(i), e)
-                                    })?,
+                                p.format_instant(instants.value(i), rest(i), zone).map_err(
+                                    |e| krishiv_kernels::KernelError::with_row(Some(i), e),
+                                )?,
                             ));
                         }
                         Ok(

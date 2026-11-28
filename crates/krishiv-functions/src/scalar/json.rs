@@ -365,7 +365,8 @@ fn read_schema(arg: &BindArg) -> Result<DataType, KrishivError> {
     if !schema.is_valid(0) {
         return Err(internal("a null JSON schema".to_owned()));
     }
-    crate::registry::parse_json_schema(schema.value(0))
+    // The analyzer checked the schema under the session's grammar; a nanosecond type here was enabled.
+    crate::registry::parse_json_schema_in(schema.value(0), krishiv_types::TypeGrammar::V4_3Nanos)
         .map_err(|e| internal(format!("a JSON schema the analyzer accepted: {e}")))
 }
 

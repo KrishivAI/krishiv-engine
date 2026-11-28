@@ -56,14 +56,18 @@ impl TimePattern {
     /// # Errors
     /// As the two pattern kinds.
     pub fn format_timestamp(&self, micros: i64, zone: Zone<'_>) -> Result<String, KrishivError> {
-        self.format_timestamp_nanos(micros, 0, zone)
+        match self {
+            Self::Corrected(p) => p.format_timestamp(micros, zone),
+            Self::Legacy(p) => p.format_timestamp(micros, zone),
+        }
     }
 
-    /// `micros` plus `nanos` (0..=999) nanoseconds within the microsecond, shown in `zone` (the legacy
-    /// pattern reads the microseconds only).
+    /// A `TIMESTAMP_LTZ(p)`: `micros` plus `nanos` (0..=999) nanoseconds within the microsecond, shown
+    /// in `zone`.
     ///
     /// # Errors
-    /// As the two pattern kinds.
+    /// As the two pattern kinds; the legacy pattern is
+    /// `UNSUPPORTED_FEATURE.TIMESTAMP_NANOS_WITH_LEGACY_TIME_PARSER`.
     pub fn format_timestamp_nanos(
         &self,
         micros: i64,
@@ -72,7 +76,24 @@ impl TimePattern {
     ) -> Result<String, KrishivError> {
         match self {
             Self::Corrected(p) => p.format_timestamp_nanos(micros, nanos, zone),
-            Self::Legacy(p) => p.format_timestamp(micros, zone),
+            Self::Legacy(_) => Err(crate::datetime_pattern::legacy_nanos_unsupported()),
+        }
+    }
+
+    /// [`Self::format_timestamp_nanos`] when `nanos` is given (a nanosecond timestamp), else
+    /// [`Self::format_timestamp`].
+    ///
+    /// # Errors
+    /// As those two.
+    pub fn format_instant(
+        &self,
+        micros: i64,
+        nanos: Option<u16>,
+        zone: Zone<'_>,
+    ) -> Result<String, KrishivError> {
+        match nanos {
+            Some(n) => self.format_timestamp_nanos(micros, n, zone),
+            None => self.format_timestamp(micros, zone),
         }
     }
 }
@@ -103,18 +124,19 @@ pub fn format_timestamps(
     stamps: &TimestampMicrosecondArray,
     zone: Zone<'_>,
 ) -> Result<StringArray, KernelError> {
-    format_timestamps_nanos(pattern, stamps, |_| 0, zone)
+    format_timestamps_nanos(pattern, stamps, |_| None, zone)
 }
 
-/// [`format_timestamps`] with `nanos(i)` (0..=999) nanoseconds within row `i`'s microsecond (a nanosecond
-/// timestamp, Spark 4.3).
+/// [`format_timestamps`] with `nanos(i)` (0..=999) nanoseconds within row `i`'s microsecond when the
+/// column is a nanosecond timestamp (Spark 4.3), `None` for a microsecond one.
 ///
 /// # Errors
-/// As [`format_timestamps`].
+/// As [`format_timestamps`]; a legacy pattern is
+/// `UNSUPPORTED_FEATURE.TIMESTAMP_NANOS_WITH_LEGACY_TIME_PARSER` (on the first non-NULL row).
 pub fn format_timestamps_nanos(
     pattern: &TimePattern,
     stamps: &TimestampMicrosecondArray,
-    nanos: impl Fn(usize) -> u16,
+    nanos: impl Fn(usize) -> Option<u16>,
     zone: Zone<'_>,
 ) -> Result<StringArray, KernelError> {
     let mut out = with_capacity::<Option<String>>(stamps.len())?;
@@ -124,7 +146,7 @@ pub fn format_timestamps_nanos(
             continue;
         }
         let s = pattern
-            .format_timestamp_nanos(stamps.value(i), nanos(i), zone)
+            .format_instant(stamps.value(i), nanos(i), zone)
             .map_err(|e| KernelError::with_row(Some(i), e))?;
         out.push(Some(s));
     }
@@ -570,7 +592,7 @@ mod tests {
         };
         let stamps = TimestampMicrosecondArray::from(vec![Some(1_577_885_075_123_456), None]);
         let nine = TimePattern::new("HH:mm:ss.SSSSSSSSS", Purpose::Format, false).unwrap();
-        let out = format_timestamps_nanos(&nine, &stamps, |_| 789, zone).unwrap();
+        let out = format_timestamps_nanos(&nine, &stamps, |_| Some(789), zone).unwrap();
         assert_eq!(out.value(0), "13:24:35.123456789");
         assert!(out.is_null(1));
         let eight = TimePattern::new("ss.SSSSSSSS", Purpose::Format, false).unwrap();
@@ -578,14 +600,21 @@ mod tests {
             eight.format_timestamp_nanos(-1, 5, zone).unwrap(),
             "59.99999900"
         );
+        // Spark 4.3.0 run: the legacy formatter has no `formatNanos`.
         let legacy = TimePattern::new("HH:mm:ss.SSS", Purpose::Format, true).unwrap();
+        let err = legacy
+            .format_timestamp_nanos(1_577_885_075_123_456, 789, zone)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("TIMESTAMP_NANOS_WITH_LEGACY_TIME_PARSER"),
+            "{err}"
+        );
         assert_eq!(
             legacy
-                .format_timestamp_nanos(1_577_885_075_123_456, 789, zone)
-                .unwrap(),
-            legacy
                 .format_timestamp(1_577_885_075_123_456, zone)
-                .unwrap()
+                .unwrap(),
+            "13:24:35.123"
         );
     }
 

@@ -126,6 +126,11 @@ impl Resolved {
             .checked_add(self.sub_micros)
     }
 
+    /// The nanoseconds (0..=999) below the microsecond.
+    pub(crate) fn sub_micros(&self) -> u16 {
+        u16::try_from(self.sub_micros.rem_euclid(1_000)).unwrap_or(0)
+    }
+
     pub(crate) fn zone(&self) -> &ParsedZone {
         &self.zone
     }

@@ -201,6 +201,50 @@ pub fn spark_string_to_timestamp_ntz(s: &str) -> Option<i64> {
     }
 }
 
+/// The nanoseconds (0..=999) within the microsecond that a timestamp string in the readers'
+/// default grammar names: its fraction's digits 7 to 9 (later ones dropped), for a bare time of day
+/// too. With [`spark_string_to_timestamp`] or [`spark_string_to_timestamp_ntz`] it reads a
+/// nanosecond timestamp (Spark 4.3 `stringToTimestampLTZNanos` / `stringToTimestampNTZNanos`).
+#[must_use]
+pub fn timestamp_string_sub_micros(s: &str) -> u16 {
+    crate::cast::timestamp::parse_nanos(s.as_bytes()).1
+}
+
+/// `10^(9 - precision)`: the step of a nanosecond timestamp of `precision` (7..=9) digits.
+fn nanos_step(precision: u8) -> i64 {
+    match precision {
+        7 => 100,
+        8 => 10,
+        _ => 1,
+    }
+}
+
+/// A nanosecond timestamp floored to `precision` (Spark 4.3 `instantToTimestampNanos`), split into
+/// its microseconds (the floor) and the nanoseconds (0..=999) within that microsecond: what the
+/// pattern formatters print.
+#[must_use]
+pub fn split_timestamp_nanos(nanos: i64, precision: u8) -> (i64, u16) {
+    // The step divides 1,000, so flooring the nanoseconds within the microsecond never leaves the
+    // carrier (Spark's `epochNanosToTimestampNanos`).
+    let micros = nanos.checked_div_euclid(1_000).unwrap_or(0);
+    let rest = nanos.checked_rem_euclid(1_000).unwrap_or(0);
+    let rest = rest.wrapping_sub(rest.checked_rem_euclid(nanos_step(precision)).unwrap_or(0));
+    (micros, u16::try_from(rest).unwrap_or(0))
+}
+
+/// Microseconds and the nanoseconds within them as one nanosecond timestamp floored to
+/// `precision`; `None` past the `i64` nanosecond carrier (1677-09-21 to 2262-04-11).
+#[must_use]
+pub fn timestamp_nanos_of(micros: i64, rest: u16, precision: u8) -> Option<i64> {
+    // Composed and floored in `i128`, then range-checked: the first partial microsecond of the
+    // carrier (`micros * 1_000` below `i64::MIN`, the rest bringing it back) is representable.
+    let n = i128::from(micros)
+        .checked_mul(1_000)?
+        .checked_add(i128::from(rest.min(999)))?;
+    let floored = n.checked_sub(n.checked_rem_euclid(i128::from(nanos_step(precision)))?)?;
+    i64::try_from(floored).ok()
+}
+
 /// Today's date (days since the epoch) in `zone` at the UTC instant
 /// `now_micros`.
 #[must_use]

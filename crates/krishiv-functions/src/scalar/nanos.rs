@@ -54,6 +54,37 @@ pub(super) fn bind_family(name: &str, args: &[BindArg], _opts: &BindOptions) -> 
     Some((listed, binding))
 }
 
+/// Spark 4.3's `CurrentTimestampNanos` / `LocalTimestampNanos`: the query's start instant as a
+/// `TIMESTAMP_LTZ(p)`, or as the session zone's wall clock for `localtimestamp`, a
+/// `TIMESTAMP_NTZ(p)`. The query clock has microseconds, so the digits past them are 0 and no
+/// precision `p` (7..=9) cuts anything; Spark reads `Instant.now()`, whose digits past the
+/// microsecond depend on the machine's clock.
+pub(super) fn clock(name: &str, opts: &BindOptions) -> Result<Binding, KrishivError> {
+    let now = opts.query_start_micros;
+    let (micros, zone) = if name == "localtimestamp" {
+        let offset = i64::from(opts.time_zone.offset_at_utc(now.div_euclid(1_000_000)));
+        let local = offset
+            .checked_mul(1_000_000)
+            .and_then(|o| now.checked_add(o));
+        (local, None)
+    } else {
+        (Some(now), Some(Arc::from("UTC")))
+    };
+    let Some(nanos) = micros.and_then(|m| m.checked_mul(1_000)) else {
+        return Err(internal(format!(
+            "{name}: the query clock leaves the nanosecond timestamp range"
+        )));
+    };
+    Ok(Binding::new(
+        DataType::Timestamp(TimeUnit::Nanosecond, zone.clone()),
+        move |x: &Inputs<'_>| {
+            let a = TimestampNanosecondArray::from(vec![nanos; x.rows()])
+                .with_timezone_opt(zone.clone());
+            Ok(Arc::new(a) as ArrayRef)
+        },
+    ))
+}
+
 /// The scale of a count `timestamp_nanos` takes: 0 for an integral type, a decimal's own.
 fn count_scale(t: &DataType) -> Option<i8> {
     match t {

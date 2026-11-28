@@ -120,7 +120,9 @@ pub(crate) fn parse_nanos(s: &[u8]) -> (Parsed, u16) {
         c.eat(b'T');
         // The time must be well formed; its zone is checked, not applied.
         return match time_of_day(&mut c) {
-            Some((_, zone, rest)) => (Parsed::NeedsClock(zone), rest),
+            // Spark 4.3 `parseTimestampToInstant` builds the nanoseconds before it looks at
+            // `justTime`, so a bare time of day keeps its digits 7 to 9 too.
+            Some((_, zone, sub)) => (Parsed::NeedsClock(zone), sub),
             None => (Parsed::Malformed, 0),
         };
     }

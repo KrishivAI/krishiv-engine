@@ -1556,6 +1556,65 @@ fn nanosecond_time_needs_its_feature() {
 }
 
 #[test]
+fn nanosecond_timestamps_need_their_feature() {
+    use krishiv_types::DataType;
+    // TIMESTAMP_LTZ(7..9) / TIMESTAMP_NTZ(7..9) need `timestamp_nanos_types`; an older reader
+    // refuses the plan by feature, not as a corrupt type.
+    let m = message("timestamp_nanos");
+    assert!(
+        m.features.contains(&"timestamp_nanos_types".to_owned()),
+        "{:?}",
+        m.features
+    );
+    for p in 7..=9 {
+        for t in [
+            DataType::TimestampNanos { precision: p },
+            DataType::TimestampNtzNanos { precision: p },
+        ] {
+            assert_eq!(
+                feature_of(Construct::Type(&t)),
+                Some(Feature::TimestampNanosTypes),
+                "{t:?}"
+            );
+        }
+    }
+    for t in [DataType::Timestamp, DataType::TimestampNtz] {
+        assert_eq!(feature_of(Construct::Type(&t)), None, "{t:?}");
+    }
+    for tz in [None, Some("UTC".into())] {
+        assert_eq!(
+            feature_of(Construct::ArrowType(&arrow_schema::DataType::Timestamp(
+                arrow_schema::TimeUnit::Nanosecond,
+                tz.clone(),
+            ))),
+            Some(Feature::TimestampNanosTypes)
+        );
+        assert_eq!(
+            feature_of(Construct::ArrowType(&arrow_schema::DataType::Timestamp(
+                arrow_schema::TimeUnit::Microsecond,
+                tz,
+            ))),
+            None
+        );
+    }
+    assert_eq!(Feature::TimestampNanosTypes.kind(), FeatureKind::Semantic);
+    assert_eq!(Feature::TimestampNanosTypes.legacy_level(), 6);
+    let bytes = m.encode_to_vec();
+    let older = ReaderFeatures::only(
+        Feature::ALL
+            .iter()
+            .copied()
+            .filter(|f| *f != Feature::TimestampNanosTypes),
+    );
+    assert_eq!(
+        decode_with(&bytes, &Limits::default(), &older).unwrap_err(),
+        CodecError::UnsupportedFeatures {
+            missing: vec!["timestamp_nanos_types".to_owned()]
+        }
+    );
+}
+
+#[test]
 fn time_and_spatial_types_need_their_features() {
     use krishiv_types::{DataType, Srid};
     assert_eq!(message("time_project").features, ["time_type"]);

@@ -8,7 +8,8 @@ use krishiv_kernels::cast::{format_time, parse_time, parse_time_nanos};
 use krishiv_kernels::datetime::{ZoneRef, resolve_zone, zone_id};
 use krishiv_kernels::datetime_pattern::{DateTimePattern, Purpose, Zone};
 use krishiv_kernels::text::{
-    spark_string_to_date, spark_string_to_timestamp, spark_string_to_timestamp_ntz, today_in,
+    spark_string_to_date, spark_string_to_timestamp, spark_string_to_timestamp_ntz,
+    split_timestamp_nanos, timestamp_nanos_of, timestamp_string_sub_micros, today_in,
 };
 
 use crate::options::FormatOptions;
@@ -328,4 +329,91 @@ impl Datetimes {
             None => Err(crate::error::internal("a timestamp pattern for writing")),
         }
     }
+
+    /// A `TIMESTAMP_LTZ(precision)` (nanoseconds since the epoch) from text, as Spark 4.3's
+    /// `parseNanos`: the pattern, else the default grammar on the text as written; no fallback to
+    /// the default grammar after a pattern fails. Digits past `precision` are floored.
+    ///
+    /// # Errors
+    /// A region zone id in the text; `DATETIME_OVERFLOW` for an instant past the nanosecond
+    /// carrier (1677-09-21 to 2262-04-11).
+    pub(crate) fn parse_timestamp_nanos(
+        &self,
+        s: &str,
+        precision: u8,
+    ) -> Result<Option<i64>, KrishivError> {
+        let rules = self.rules()?;
+        let parsed = match &self.timestamp {
+            Some(p) => p.parse_timestamp_nanos(s, rules)?,
+            // As written: Spark's `GMT` clean-up belongs to the microsecond fallback, which the
+            // nanosecond types do not have.
+            None => spark_string_to_timestamp(s, rules, self.today)?
+                .map(|m| (m, timestamp_string_sub_micros(s))),
+        };
+        parsed.map(|v| nanos_of(v, precision)).transpose()
+    }
+
+    /// A `TIMESTAMP_NTZ(precision)` (local nanoseconds) from text, as Spark 4.3's
+    /// `parseWithoutTimeZoneNanos(s, precision, false)`; digits past `precision` are floored.
+    ///
+    /// # Errors
+    /// A region zone id in the text; `DATETIME_OVERFLOW` past the nanosecond carrier.
+    pub(crate) fn parse_ntz_nanos(
+        &self,
+        s: &str,
+        precision: u8,
+    ) -> Result<Option<i64>, KrishivError> {
+        let parsed = match &self.ntz {
+            Some(p) => p.parse_local_nanos(s, false)?,
+            None => spark_string_to_timestamp_ntz(s).map(|m| (m, timestamp_string_sub_micros(s))),
+        };
+        parsed.map(|v| nanos_of(v, precision)).transpose()
+    }
+
+    /// `nanos` (a `TIMESTAMP_LTZ(precision)` instant) as text in the session zone, as Spark 4.3's
+    /// `formatNanos`: floored to `precision`, then the pattern prints as many digits as it has.
+    ///
+    /// # Errors
+    /// A value the pattern cannot show.
+    pub(crate) fn format_timestamp_nanos(
+        &self,
+        nanos: i64,
+        precision: u8,
+    ) -> Result<String, KrishivError> {
+        let (micros, rest) = split_timestamp_nanos(nanos, precision);
+        match &self.timestamp {
+            Some(p) => p.format_timestamp_nanos(micros, rest, self.zone()?),
+            None => Err(crate::error::internal("a timestamp pattern for writing")),
+        }
+    }
+
+    /// `nanos` (a `TIMESTAMP_NTZ(precision)` local date-time) as text, as Spark 4.3's
+    /// `formatWithoutTimeZoneNanos`.
+    ///
+    /// # Errors
+    /// A value the pattern cannot show.
+    pub(crate) fn format_ntz_nanos(
+        &self,
+        nanos: i64,
+        precision: u8,
+    ) -> Result<String, KrishivError> {
+        let (micros, rest) = split_timestamp_nanos(nanos, precision);
+        match &self.ntz {
+            Some(p) => p.format_local_nanos(micros, rest),
+            None => Err(crate::error::internal("a timestamp pattern for writing")),
+        }
+    }
+}
+
+/// Microseconds and the nanoseconds within them as one nanosecond value floored to `precision`.
+///
+/// # Errors
+/// `DATETIME_OVERFLOW` past the `i64` nanosecond carrier.
+fn nanos_of((micros, rest): (i64, u16), precision: u8) -> Result<i64, KrishivError> {
+    timestamp_nanos_of(micros, rest, precision).ok_or_else(|| {
+        krishiv_common::error::DatetimeOverflow {
+            operation: "read a nanosecond timestamp from text".to_owned(),
+        }
+        .into()
+    })
 }

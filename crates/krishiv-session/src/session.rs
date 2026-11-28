@@ -1250,12 +1250,15 @@ impl Session {
             Arc::clone(&self.state.io),
             Arc::clone(&stores),
         ));
-        let files = Arc::new(FileReads::new(
-            io.clone(),
-            Arc::clone(&self.state.runtime.formats),
-            Arc::clone(&paths),
-            Arc::clone(&config),
-        ));
+        let files = Arc::new(
+            FileReads::new(
+                io.clone(),
+                Arc::clone(&self.state.runtime.formats),
+                Arc::clone(&paths),
+                Arc::clone(&config),
+            )
+            .with_nanos_types_known(self.state.profile >= SparkProfile::V4_3),
+        );
         let declared_paths = Arc::clone(&paths);
         let delta = Arc::new(crate::delta::DeltaReads::new(crate::delta::DeltaInputs {
             io: io.clone(),
@@ -1680,32 +1683,6 @@ impl Session {
             .run_on_query_logged(physical, worker, env, detailed, None)
             .await?;
         Ok((crate::run_site::resolve_sites(stream, env), query))
-    }
-
-    /// `error`, when it is a memory error of a query whose spill directory could not be set up,
-    /// as that failure (the memory error stays its cause): the query may have needed to spill
-    /// (PY-078). A refused reservation and an arbitration abort are both such errors: which
-    /// one ends a query that cannot spill depends on timing. Applied below the metrics fold,
-    /// so `system.queries` and the caller agree.
-    fn name_spill_failure(
-        error: KrishivError,
-        failure: &std::sync::Mutex<Option<KrishivError>>,
-    ) -> KrishivError {
-        use krishiv_common::error::ErrorClass;
-        if !matches!(
-            error.error_class(),
-            ErrorClass::UnableToAcquireMemory | ErrorClass::KrishivQueryAbortedOutOfMemory
-        ) {
-            return error;
-        }
-        let found = failure
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone();
-        match found {
-            Some(f) => f.with_cause(error),
-            None => error,
-        }
     }
 
     /// The tags a query started now carries: the session's, then the statement's request tags as

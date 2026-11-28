@@ -348,6 +348,121 @@ fn date_format_prints_nanoseconds() {
     );
 }
 
+/// Spark 4.3's `current_timestamp(p)` / `now(p)` / `localtimestamp(p)` for `p` in 7..=9 with
+/// `spark.sql.timestampNanosTypes.enabled`: `CurrentTimestampNanos` / `LocalTimestampNanos`, named
+/// `current_timestamp()` / `localtimestamp()` whatever the spelling, one value per query; 3 and 10 are
+/// `INVALID_TIMESTAMP_PRECISION` (Spark 4.3.0 `timestamp-ltz-nanos.sql`, `timestamp-ntz-nanos.sql`).
+#[test]
+fn clocks_at_nanosecond_precision_are_spark_43s() {
+    let s = session();
+    s.conf()
+        .set("spark.sql.timestampNanosTypes.enabled", "true")
+        .unwrap();
+    let q = "SELECT current_timestamp(9), now(8), localtimestamp(7 + 2), current_timestamp(6), now(6), \
+             current_timestamp(9) = current_timestamp(9), now(9) = current_timestamp(9), \
+             localtimestamp(9) = localtimestamp(9), \
+             CAST(current_timestamp(9) AS TIMESTAMP) = current_timestamp()";
+    let batches = futures::executor::block_on(async { s.sql(q).await?.collect().await }).unwrap();
+    let schema = batches[0].schema();
+    let names: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
+    assert_eq!(
+        names,
+        [
+            "current_timestamp()",
+            "current_timestamp()",
+            "localtimestamp()",
+            "current_timestamp()",
+            "now()",
+            "(current_timestamp() = current_timestamp())",
+            "(current_timestamp() = current_timestamp())",
+            "(localtimestamp() = localtimestamp())",
+            "(CAST(current_timestamp() AS TIMESTAMP) = current_timestamp())",
+        ]
+    );
+    let utc = Some(Arc::from("UTC"));
+    assert_eq!(
+        schema.field(0).data_type(),
+        &DataType::Timestamp(TimeUnit::Nanosecond, utc.clone())
+    );
+    assert_eq!(
+        schema.field(2).data_type(),
+        &DataType::Timestamp(TimeUnit::Nanosecond, None)
+    );
+    assert_eq!(
+        schema.field(3).data_type(),
+        &DataType::Timestamp(TimeUnit::Microsecond, utc)
+    );
+    assert!(!schema.field(0).is_nullable());
+    assert_eq!(
+        rows(
+            &s,
+            "SELECT current_timestamp(9) = current_timestamp(9), now(9) = current_timestamp(9), \
+             localtimestamp(9) = localtimestamp(9), \
+             CAST(current_timestamp(9) AS TIMESTAMP) = current_timestamp()"
+        ),
+        "true true true true"
+    );
+    for (q, p, ty) in [
+        ("SELECT current_timestamp(3)", "3", "TIMESTAMP_LTZ"),
+        ("SELECT now(10)", "10", "TIMESTAMP_LTZ"),
+        ("SELECT localtimestamp(3)", "3", "TIMESTAMP_NTZ"),
+        ("SELECT localtimestamp(10)", "10", "TIMESTAMP_NTZ"),
+    ] {
+        let e = error(&s, q);
+        assert!(e.contains("INVALID_TIMESTAMP_PRECISION"), "{q}: {e}");
+        assert!(e.contains(p) && e.contains(ty), "{q}: {e}");
+    }
+}
+
+#[test]
+fn a_sort_and_an_aggregate_that_spill_keep_nanoseconds() {
+    // 300,000 rows of 60,000 values a nanosecond apart under a 6 MiB limit: the aggregate and the sort
+    // spill (Arrow IPC spill files of `Timestamp(ns)` columns) and read every nanosecond back.
+    const ROWS: i64 = 300_000;
+    const KEYS: i64 = 60_000;
+    const BASE: i64 = 1_577_836_800_000_000_000;
+    let dir = tempfile::tempdir().unwrap();
+    let s = Session::builder()
+        .config(
+            "krishiv.spill.dir",
+            dir.path().join("spill").to_str().unwrap(),
+        )
+        .config("krishiv.memory.limit", "6m")
+        .config("spark.sql.session.timeZone", "UTC")
+        .build()
+        .unwrap();
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "c",
+        DataType::Timestamp(TimeUnit::Nanosecond, None),
+        false,
+    )]));
+    let values: Vec<i64> = (0..ROWS).map(|i| BASE + (i * 7_919) % KEYS).collect();
+    let batches = values
+        .chunks(8192)
+        .map(|c| {
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![Arc::new(TimestampNanosecondArray::from(c.to_vec())) as ArrayRef],
+            )
+            .unwrap()
+        })
+        .collect();
+    s.register_batches("f", schema, batches).unwrap();
+    let q = "SELECT /* nanos_spill */ CAST(c AS STRING), count(*) FROM f GROUP BY c ORDER BY c";
+    let got = rows(&s, q);
+    let lines: Vec<&str> = got.split(" | ").collect();
+    assert_eq!(lines.len(), usize::try_from(KEYS).unwrap());
+    assert_eq!(lines[0], "2020-01-01 00:00:00 5");
+    assert_eq!(lines[1], "2020-01-01 00:00:00.000000001 5");
+    assert_eq!(lines[59_999], "2020-01-01 00:00:00.000059999 5");
+    let spilled = rows(
+        &s,
+        "SELECT spill_bytes > 0 FROM system.queries WHERE query_text LIKE '%nanos_spill%' \
+         AND query_text NOT LIKE '%system.queries%'",
+    );
+    assert_eq!(spilled, "true");
+}
+
 #[test]
 fn date_functions_take_nanosecond_timestamps_without_a_cast() {
     let s = session();

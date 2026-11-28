@@ -1654,6 +1654,15 @@ fn write_plan(m: &pb::WritePlan) -> Result<WritePlan> {
     })
 }
 
+/// The precision of a nanosecond timestamp kind: 7 to 9 (a lower one is the
+/// microsecond kind, so it never travels as these).
+fn nanos_precision(p: u32) -> Result<u8> {
+    match u8::try_from(p) {
+        Ok(p @ 7..=9) => Ok(p),
+        _ => Err(corrupt("an invalid nanosecond timestamp type")),
+    }
+}
+
 fn spark_type(t: &pb::DataType) -> Result<DataType> {
     use pb::data_type::Kind;
     let data_type = enum_map!(Kind, t.kind, "type", {
@@ -1673,6 +1682,12 @@ fn spark_type(t: &pb::DataType) -> Result<DataType> {
         TimestampNtz => DataType::TimestampNtz,
         Nested => nested(t)?,
         Time => DataType::time(t.precision).map_err(|_| corrupt("an invalid time type"))?,
+        TimestampNanos => DataType::TimestampNanos {
+            precision: nanos_precision(t.precision)?,
+        },
+        TimestampNtzNanos => DataType::TimestampNtzNanos {
+            precision: nanos_precision(t.precision)?,
+        },
         Geometry => DataType::geometry(Srid::from_i32(t.srid))
             .map_err(|_| corrupt("an invalid geometry type"))?,
         Geography => DataType::geography(Srid::from_i32(t.srid))
@@ -1686,7 +1701,9 @@ fn spark_type(t: &pb::DataType) -> Result<DataType> {
     })?;
     let (precision, scale, srid) = match data_type {
         DataType::Decimal(_) => (true, true, false),
-        DataType::Time { .. } => (true, false, false),
+        DataType::Time { .. }
+        | DataType::TimestampNanos { .. }
+        | DataType::TimestampNtzNanos { .. } => (true, false, false),
         DataType::Geometry { .. } | DataType::Geography { .. } => (false, false, true),
         _ => (false, false, false),
     };

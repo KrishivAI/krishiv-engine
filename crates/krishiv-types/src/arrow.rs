@@ -574,6 +574,8 @@ impl DataType {
                     // The tag is the engine's own `json()`, which writes INDETERMINATE as `string collate null`.
                     Self::from_canonical_json(tag)?
                 } else {
+                    // A tag names a type something already stored, so the nanosecond types read
+                    // whatever the session's flag says (the reader of the column decides).
                     crate::parse_data_type_in(tag, crate::TypeGrammar::V4_3Nanos)?
                 };
                 if depth + t.nesting_depth() > Self::MAX_NESTING_DEPTH {

@@ -166,6 +166,7 @@ pub struct CallTypes<'a> {
     case_sensitive: bool,
     concat_binary_as_string: bool,
     profile: SparkProfile,
+    nanos_types: bool,
 }
 
 impl fmt::Debug for CallTypes<'_> {
@@ -198,6 +199,7 @@ impl<'a> CallTypes<'a> {
             case_sensitive: false,
             concat_binary_as_string: false,
             profile: SparkProfile::V4_3,
+            nanos_types: false,
         }
     }
 
@@ -239,6 +241,22 @@ impl<'a> CallTypes<'a> {
     #[must_use]
     pub const fn profile(&self) -> SparkProfile {
         self.profile
+    }
+
+    /// With `spark.sql.timestampNanosTypes.enabled` (off by default): a schema string (`from_json`,
+    /// `from_csv`) may name `TIMESTAMP[_NTZ|_LTZ](7..=9)` on the 4.3 profile.
+    #[must_use]
+    pub const fn with_nanos_types(mut self, enabled: bool) -> Self {
+        self.nanos_types = enabled;
+        self
+    }
+
+    /// The grammar of a type string in a call: the profile's (4.3's from 4.3 on), with the
+    /// nanosecond types when they are enabled.
+    #[must_use]
+    pub const fn type_grammar(&self) -> krishiv_types::TypeGrammar {
+        krishiv_types::TypeGrammar::new(self.profile as u8 >= SparkProfile::V4_3 as u8)
+            .with_nanos(self.nanos_types)
     }
 
     /// With `spark.sql.ansi.enabled = ansi` (on by default): some legacy
@@ -426,6 +444,10 @@ pub enum InputType {
     /// A nanosecond timestamp of either kind and precision, as it is, and nothing implicit (Spark 4.3's
     /// `AnyTimestampNanoType`, as `unix_nanos` takes it); an untyped `NULL` becomes `TIMESTAMP_LTZ(9)`.
     StrictTimestampNanos,
+    /// Any timestamp, as it is, and nothing implicit: `TIMESTAMP`, `TIMESTAMP_NTZ` or a nanosecond one
+    /// (Spark 4.3's `TypeCollection(AnyTimestampType, AnyTimestampNanoType)`, as `unix_micros`, `unix_millis`
+    /// and `unix_seconds` take it); an untyped `NULL` becomes `TIMESTAMP`.
+    StrictAnyTimestamp,
     /// What `sum` and `avg` take: [`Self::Numeric`] with ANSI intervals, and a
     /// `TIMESTAMP` too, read as seconds (`DOUBLE`; Spark 4.2 casts it, a
     /// `DATE` or `TIMESTAMP_NTZ` it refuses). Its message names no timestamp.
@@ -461,6 +483,7 @@ impl InputType {
             Self::StrictTimestampNanos => {
                 "\"(TIMESTAMP_LTZ(P) OR TIMESTAMP_NTZ(P) WITH P IN [7, 9])\"".to_owned()
             }
+            Self::StrictAnyTimestamp => "(\"(TIMESTAMP OR TIMESTAMP WITHOUT TIME ZONE)\" or \"(TIMESTAMP_LTZ(P) OR TIMESTAMP_NTZ(P) WITH P IN [7, 9])\")".to_owned(),
             Self::NumericOrTemporal => "(\"NUMERIC\" or \"DATE\" or \"TIMESTAMP\" or \"TIMESTAMP_NTZ\" or \"INTERVAL YEAR TO MONTH\" or \"INTERVAL DAY TO SECOND\" or \"TIME\")".to_owned(),
             Self::Numeric { intervals: true } | Self::NumericOrTimestamp => {
                 "\"NUMERIC\" or \"ANSI INTERVAL\"".to_owned()

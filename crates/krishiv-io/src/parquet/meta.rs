@@ -55,6 +55,14 @@ pub(crate) struct SchemaOptions {
     /// `datetimeRebaseMode` is `LEGACY`: a file not written by Spark is read
     /// as if in the legacy calendar (`calendar::rebased_datetime_roots`).
     pub(crate) legacy_rebase: bool,
+    /// `spark.sql.legacy.parquet.nanosAsLong`: an `INT64 TIMESTAMP(NANOS)`
+    /// column is a `bigint` of its stored nanoseconds, unless the footer's
+    /// Spark schema types it (a Spark 4.3 file), as Spark reads them.
+    pub(crate) nanos_as_long: bool,
+    /// The session's Spark release has the nanosecond timestamp types (4.3 on). Before it, a footer
+    /// Spark schema that names one fails to parse there and is not used: the Parquet types decide
+    /// (`ParquetFileFormat.deserializeSchemaString` swallows the failure).
+    pub(crate) nanos_types_known: bool,
 }
 
 /// One row group as planned and pruned.
@@ -92,6 +100,11 @@ pub struct ParquetMetadata {
     pub(crate) variants: super::variant::Variants,
     /// The top-level columns that are geometries or geographies (see [`super::geo`]).
     pub(crate) geos: super::geo::Geos,
+    /// The footer's Spark schema holds a nanosecond timestamp type (Spark
+    /// 4.3's `timestamp_ntz(p)` / `timestamp_ltz(p)`, `p` 7..=9): a session
+    /// without `spark.sql.timestampNanosTypes.enabled` may not infer it
+    /// (`FEATURE_NOT_ENABLED`, [`super::ParquetFormat`]'s `infer_schema`).
+    pub(crate) footer_nanos: bool,
     statistics: FileStatistics,
     heap: usize,
 }
@@ -248,8 +261,37 @@ fn describe_checked(
     options: SchemaOptions,
 ) -> FormatResult<ParquetMetadata> {
     let row_groups = check(meta, size)?;
-    let inferred = ArrowReaderMetadata::try_new(Arc::clone(meta), ArrowReaderOptions::new())
-        .map_err(footer_error)?;
+    let footer_names_nanos = super::intervals::footer_schema(
+        meta.file_metadata().key_value_metadata(),
+    )
+    .is_some_and(|t| {
+        t.any_type(&|t| {
+            matches!(
+                t,
+                krishiv_types::DataType::TimestampNanos { .. }
+                    | krishiv_types::DataType::TimestampNtzNanos { .. }
+            )
+        })
+    });
+    let footer_nanos = footer_names_nanos && options.nanos_types_known;
+    // A footer schema an earlier release cannot parse is not read at all: every reader of it below
+    // (collations, intervals, variants, geometries) takes `key_values`, and the Arrow schema a Krishiv
+    // writer embeds beside it (which Spark never reads) is skipped too, so only the Parquet types decide.
+    let footer_dropped = footer_names_nanos && !options.nanos_types_known;
+    let key_values = if footer_dropped {
+        None
+    } else {
+        meta.file_metadata().key_value_metadata()
+    };
+    let options = SchemaOptions {
+        nanos_as_long: options.nanos_as_long && !footer_nanos,
+        ..options
+    };
+    let inferred = ArrowReaderMetadata::try_new(
+        Arc::clone(meta),
+        ArrowReaderOptions::new().with_skip_arrow_metadata(footer_dropped),
+    )
+    .map_err(footer_error)?;
     let descr = meta.file_metadata().schema_descr();
     let hint = Arc::new(Schema::new_with_metadata(
         inferred
@@ -260,7 +302,7 @@ fn describe_checked(
             .collect::<Vec<_>>(),
         inferred.schema().metadata().clone(),
     ));
-    let hint = match super::collation::restore(&hint, meta.file_metadata().key_value_metadata()) {
+    let hint = match super::collation::restore(&hint, key_values) {
         Some(restored) => Arc::new(restored),
         None => hint,
     };
@@ -274,15 +316,15 @@ fn describe_checked(
             .iter()
             .map(|f| Arc::new(spark_read_field(f)))
             .collect::<Vec<FieldRef>>(),
-        meta.file_metadata().key_value_metadata(),
+        key_values,
     );
-    let (fields, variants) = super::variant::Variants::engine_fields(
-        descr,
-        meta.file_metadata().key_value_metadata(),
-        &typed,
-    );
-    let (fields, geos) =
-        super::geo::Geos::engine_fields(descr, meta.file_metadata().key_value_metadata(), fields)?;
+    let typed = if options.nanos_as_long {
+        super::intervals::nanos_as_long(typed, descr)
+    } else {
+        typed
+    };
+    let (fields, variants) = super::variant::Variants::engine_fields(descr, key_values, &typed);
+    let (fields, geos) = super::geo::Geos::engine_fields(descr, key_values, fields)?;
     let schema = Arc::new(Schema::new_with_metadata(
         fields,
         reader.schema().metadata().clone(),
@@ -338,6 +380,7 @@ fn describe_checked(
         legacy_writer,
         variants,
         geos,
+        footer_nanos,
         statistics,
         heap,
     })
