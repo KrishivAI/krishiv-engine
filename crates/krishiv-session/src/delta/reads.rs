@@ -438,8 +438,12 @@ pub(super) fn table_key(store: &StoreId, root: &Url) -> String {
 /// as is (a leading `/` would make it `/C:/...`, which Windows refuses). A UNC location
 /// (`//server/share/t`) is not handled: it still becomes `///server/share/t`.
 fn local_dir_path(path: &str) -> String {
-    let drive =
-        cfg!(windows) && matches!(path.as_bytes(), [d, b':', ..] if d.is_ascii_alphabetic());
+    local_dir_path_for(path, cfg!(windows))
+}
+
+/// [`local_dir_path`] with the platform named, so both shapes are testable on one host.
+fn local_dir_path_for(path: &str, windows: bool) -> String {
+    let drive = windows && matches!(path.as_bytes(), [d, b':', ..] if d.is_ascii_alphabetic());
     if drive {
         path.to_owned()
     } else {
@@ -449,16 +453,17 @@ fn local_dir_path(path: &str) -> String {
 
 #[cfg(test)]
 mod local_dir_path_tests {
-    use super::local_dir_path;
+    use super::local_dir_path_for;
 
     #[test]
-    fn a_posix_path_gains_its_root_and_a_drive_path_does_not() {
-        assert_eq!(local_dir_path("tmp/t"), "/tmp/t");
-        let drive = if cfg!(windows) {
-            "C:/Users/t"
-        } else {
-            "/C:/Users/t"
-        };
-        assert_eq!(local_dir_path("C:/Users/t"), drive);
+    fn a_posix_path_gains_its_root() {
+        assert_eq!(local_dir_path_for("tmp/t", false), "/tmp/t");
+        assert_eq!(local_dir_path_for("tmp/t", true), "/tmp/t");
+    }
+
+    #[test]
+    fn a_windows_drive_path_is_already_absolute_only_on_windows() {
+        assert_eq!(local_dir_path_for("C:/Users/t", true), "C:/Users/t");
+        assert_eq!(local_dir_path_for("C:/Users/t", false), "/C:/Users/t");
     }
 }
