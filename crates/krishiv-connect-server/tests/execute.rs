@@ -24,8 +24,8 @@ use krishiv_connect::proto::v4_3::execute_plan_response::ResponseType;
 use krishiv_connect::proto::v4_3::plan::OpType;
 use krishiv_connect::proto::v4_3::relation::RelType;
 use krishiv_connect_server::{
-    ConnectServer, ConnectServerConfig, ExecuteLimits, OperationState, SessionLimits,
-    SessionManager,
+    ConnectServer, ConnectServerConfig, ExecuteLimits, OperationState, ProfileChoice,
+    SessionLimits, SessionManager,
 };
 use krishiv_session::Session;
 use krishiv_session::auth::{Authenticated, Method};
@@ -46,10 +46,15 @@ struct Running {
 }
 
 async fn start_with(execute: ExecuteLimits) -> Running {
-    let manager = Arc::new(SessionManager::from_base(
-        Session::new().expect("session"),
-        SessionLimits::default(),
-    ));
+    serve(
+        SessionManager::from_base(Session::new().expect("session"), SessionLimits::default()),
+        execute,
+    )
+    .await
+}
+
+async fn serve(manager: SessionManager, execute: ExecuteLimits) -> Running {
+    let manager = Arc::new(manager);
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let addr = listener.local_addr().expect("addr");
     let server = ConnectServer::new(
@@ -2423,4 +2428,26 @@ async fn a_show_string_result_over_the_byte_cap_is_refused() {
             .unwrap_err();
         assert_eq!(error_class(&e), "KRISHIV_UNSUPPORTED_FEATURE", "{input}");
     }
+}
+
+/// The path issue S4M-3 was found on (ADR 0003 update 2026-11-27): under `krishiv.connect.sparkProfile = auto`,
+/// a PySpark 3.5.10 client's `SELECT 1/0` is NULL, as on Spark 3.5 (ANSI off), and a 4.x client's raises.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_3_5_client_gets_the_3_5_ansi_default_through_execute_plan() {
+    let manager =
+        SessionManager::from_base(Session::new().expect("session"), SessionLimits::default())
+            .with_profile_choice(ProfileChoice::Auto);
+    let running = serve(manager, ExecuteLimits::default()).await;
+    let mut old = request(root(sql("SELECT 1/0")));
+    old.client_type = Some("_SPARK_CONNECT_PYTHON spark/3.5.10 os/linux python/3.11.9".to_owned());
+    let responses = collect(&running.channel, old).await.expect("3.5 runs");
+    assert!(rows(&responses).column(0).is_null(0), "1/0 is NULL on 3.5");
+
+    let mut new = request(root(sql("SELECT 1/0")));
+    new.session_id = "8f0e4c55-5ad0-4d1e-9a3c-3a1b0b2c7d11".to_owned();
+    new.client_type = Some("_SPARK_CONNECT_PYTHON spark/4.1.0 os/linux python/3.11.9".to_owned());
+    let e = collect(&running.channel, new)
+        .await
+        .expect_err("4.1 raises");
+    assert_eq!(error_class(&e), "DIVIDE_BY_ZERO");
 }

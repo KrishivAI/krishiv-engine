@@ -221,6 +221,14 @@ impl ConfStore {
         self.versioned_snapshot().0
     }
 
+    /// The configuration as a query sees it ([`Self::query_snapshot`] without its version): the
+    /// reader for any key whose unset value depends on the session's Spark profile
+    /// (`spark.sql.ansi.enabled` and the parser options it gates, `${..}` substitution), so a
+    /// parse outside a query agrees with the query and with `conf.get`.
+    pub(crate) fn effective(&self) -> Arc<Config> {
+        self.query_snapshot().0
+    }
+
     /// Whether `config` gives a server-scoped store key (`krishiv_io::is_server_scoped_option`:
     /// endpoints, regions, accounts, key files) another value than the configuration the session
     /// was built with, i.e. whether the session itself redirected a store (P3-T067b).

@@ -533,7 +533,7 @@ impl Session {
 
     /// `query` with its `${name}` references replaced, unless `spark.sql.variable.substitute` is false.
     pub(crate) fn substituted<'q>(&self, query: &'q str) -> std::borrow::Cow<'q, str> {
-        let config = self.state.conf.snapshot();
+        let config = self.state.conf.effective();
         if crate::conf::get(&config, "spark.sql.variable.substitute")
             .is_none_or(|v| !v.trim().eq_ignore_ascii_case("false"))
         {
@@ -790,7 +790,7 @@ impl Session {
         // first action's error.
         match krishiv_sql::parse_multipart_identifier(
             name,
-            &parser_options(&self.state.conf.snapshot(), self.state.profile),
+            &parser_options(&self.state.conf.effective(), self.state.profile),
         ) {
             Ok(id) => {
                 let parts = id.parts.into_iter().map(|p| p.value);

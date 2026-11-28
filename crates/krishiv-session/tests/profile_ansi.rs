@@ -71,3 +71,36 @@ fn a_set_value_wins_over_the_profile_default() -> R {
     assert!(is_null(&new, "SELECT 1/0")?);
     Ok(())
 }
+
+/// The first string cell of `df`.
+fn first_string(df: &krishiv_session::DataFrame) -> R<String> {
+    block_on(async {
+        let batches = df.collect().await?;
+        let batch = batches.iter().find(|b| b.num_rows() > 0).ok_or("no row")?;
+        let column = arrow_cast::display::array_value_to_string(batch.column(0), 0)?;
+        Ok(column)
+    })
+}
+
+/// Every reader outside a query sees the profile's ANSI default too (review of c0035471f, finding 1): on 3.5,
+/// with ANSI off, `spark.sql.ansi.doubleQuotedIdentifiers` does nothing (`SQLConf.doubleQuotedIdentifiers` at
+/// v3.5.10 is `ansiEnabled && ...`), so `"a"` is a string literal in `selectExpr` as in `spark.sql`, and
+/// `${spark.sql.ansi.enabled}` expands to what `conf.get` says.
+#[test]
+fn expression_strings_and_substitution_follow_the_profile_default() -> R {
+    let old = Session::builder()
+        .profile(SparkProfile::V3_5)
+        .config("spark.sql.ansi.doubleQuotedIdentifiers", "true")
+        .build()?;
+    let base = block_on(old.sql("SELECT 'x' AS a"))?;
+    assert_eq!(
+        first_string(&block_on(old.sql("SELECT \"a\" FROM (SELECT 'x' AS a)"))?)?,
+        "a"
+    );
+    assert_eq!(first_string(&base.select_expr(["\"a\""])?)?, "a");
+    assert_eq!(
+        first_string(&block_on(old.sql("SELECT '${spark.sql.ansi.enabled}'"))?)?,
+        "false"
+    );
+    Ok(())
+}
