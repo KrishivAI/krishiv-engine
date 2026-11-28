@@ -839,3 +839,28 @@ fn window_frames_take_value_bounds_range_units_and_refuse_an_undefined_type() {
     );
     assert!(translate_expression(&w, &conf()).is_err());
 }
+
+#[test]
+fn lag_and_lead_without_an_offset_or_default_get_spark_s_constructors() {
+    for name in ["lag", "lead"] {
+        assert_eq!(
+            text(&func(name, vec![attr("id")])),
+            format!("{name}(id, 1, NULL)")
+        );
+        assert_eq!(
+            text(&func(name, vec![attr("id"), lit(LiteralType::Integer(2))])),
+            format!("{name}(id, 2, NULL)")
+        );
+        assert_eq!(
+            text(&func(
+                name,
+                vec![
+                    attr("id"),
+                    lit(LiteralType::Integer(2)),
+                    lit(LiteralType::Integer(7))
+                ]
+            )),
+            format!("{name}(id, 2, 7)")
+        );
+    }
+}

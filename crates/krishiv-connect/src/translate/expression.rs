@@ -190,7 +190,21 @@ impl Translator<'_> {
                 "calls of internal functions",
             ));
         }
-        let (args, arg_names) = self.call_args(&f.arguments)?;
+        let (mut args, arg_names) = self.call_args(&f.arguments)?;
+        // Spark's auxiliary constructors, as the SQL lowering writes them: `lag(x)` is
+        // `lag(x, 1, NULL)` and `lag(x, n)` is `lag(x, n, NULL)` (PySpark leaves out a `None`
+        // default), so names and the analyzer see all three arguments.
+        if matches!(
+            f.function_name.to_ascii_lowercase().as_str(),
+            "lag" | "lead"
+        ) && arg_names.is_empty()
+            && matches!(args.len(), 1 | 2)
+        {
+            let fill = [Literal::Integer(1), Literal::Null(None)];
+            for v in fill.into_iter().skip(args.len() - 1) {
+                args.push(Arc::new(Expr::new(ExprNode::Literal(v))));
+            }
+        }
         let call = |name: &str, args: Vec<Arc<Expr>>, distinct: bool| FunctionCall {
             name: name.to_owned(),
             qualifier: Vec::new(),
