@@ -548,6 +548,7 @@ def test_vectorized_udfs_see_timestamps_in_the_session_time_zone(
         time.tzset()
 
 
+@needs_pandas
 def test_a_scalar_iterator_pandas_udf_runs_batch_by_batch(spark: SparkSession) -> None:
     """QA2-8: Spark's `Iterator[pd.Series] -> Iterator[pd.Series]` and `Iterator[Tuple[..]]` forms run."""
 
@@ -566,6 +567,7 @@ def test_a_scalar_iterator_pandas_udf_runs_batch_by_batch(spark: SparkSession) -
     assert [(r["p"], r["m"]) for r in rows] == [(2, 10), (3, 40), (4, 90)]
 
 
+@needs_pandas
 def test_a_scalar_iterator_pandas_udf_keeps_state_across_batches(spark: SparkSession) -> None:
     """The iterator runs once per task: state set up before the loop spans every batch."""
     spark.conf.set("spark.sql.execution.arrow.maxRecordsPerBatch", "2")
@@ -596,6 +598,7 @@ def test_a_scalar_iterator_arrow_udf_runs(spark: SparkSession) -> None:
     assert [r["p"] for r in rows] == [2, 3, 4]
 
 
+@needs_pandas
 def test_a_scalar_iterator_udf_may_yield_a_batch_in_two_halves_and_be_registered(spark: SparkSession) -> None:
     @F.pandas_udf("long")  # type: ignore[call-overload]
     def halves(batches: Iterator[pd.Series]) -> Iterator[pd.Series]:
@@ -609,6 +612,7 @@ def test_a_scalar_iterator_udf_may_yield_a_batch_in_two_halves_and_be_registered
     assert [r["d"] for r in rows] == [2, 4, 6, 8, 10]
 
 
+@needs_pandas
 def test_a_scalar_iterator_udf_with_an_empty_input_returns_no_rows(spark: SparkSession) -> None:
     @F.pandas_udf("long")  # type: ignore[call-overload]
     def skip_empty(batches: Iterator[pd.Series]) -> Iterator[pd.Series]:
@@ -627,6 +631,7 @@ def test_a_scalar_iterator_udf_with_an_empty_input_returns_no_rows(spark: SparkS
         ("unread", "INPUT_NOT_FULLY_CONSUMED"),
     ],
 )
+@needs_pandas
 def test_a_scalar_iterator_udf_with_the_wrong_row_count_fails_as_in_spark(
     spark: SparkSession, body: str, error_class: str
 ) -> None:
