@@ -257,8 +257,20 @@ impl JsonOptions {
                 "dropfieldifallnull" => out.drop_field_if_all_null = flag(name, value)?,
                 // Boolean options with no scalar meaning: Spark still reads
                 // each one with `toBoolean` when it builds `JSONOptions`.
-                "multiline" | "pretty" | "writenonasciicharacterascodepoint" | "useunsaferow" => {
+                "multiline" | "useunsaferow" => {
                     flag(name, value)?;
+                }
+                // `to_json` honours these two (`JacksonGenerator`: a pretty
+                // printer, `\uXXXX` past 0x7F); not implemented, so `true`
+                // is refused for a write rather than ignored. `from_json`
+                // and `schema_of_json` never write: only the value is checked.
+                "pretty" | "writenonasciicharacterascodepoint" => {
+                    if flag(name, value)? && writing {
+                        return Err(KrishivUnsupportedFeature {
+                            feature: format!("to_json with the option {name}=true"),
+                        }
+                        .into());
+                    }
                 }
                 "mode" => {
                     out.mode = match value.trim().to_ascii_uppercase().as_str() {
@@ -321,6 +333,30 @@ fn flag(name: &str, value: &str) -> Result<bool, KrishivError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn to_json_refuses_the_writer_options_it_does_not_implement() {
+        for name in ["pretty", "writeNonAsciiCharacterAsCodePoint"] {
+            let on = BTreeMap::from([(name.to_owned(), "TRUE".to_owned())]);
+            let e = JsonOptions::from_map_for_write(&on, false).unwrap_err();
+            assert_eq!(
+                e.error_class(),
+                krishiv_common::error::ErrorClass::KrishivUnsupportedFeature,
+                "{name}"
+            );
+            // A read never writes; `false` is the default.
+            JsonOptions::from_map_with(&on, false).unwrap();
+            let off = BTreeMap::from([(name.to_owned(), "false".to_owned())]);
+            JsonOptions::from_map_for_write(&off, false).unwrap();
+            // A value that is not a boolean fails first, as in Spark.
+            let bad = BTreeMap::from([(name.to_owned(), "yes".to_owned())]);
+            let e = JsonOptions::from_map_for_write(&bad, false).unwrap_err();
+            assert_eq!(
+                e.error_class(),
+                krishiv_common::error::ErrorClass::KrishivInvalidFormatOptionValue
+            );
+        }
+    }
 
     #[test]
     fn only_the_us_locale_tag_is_accepted() {

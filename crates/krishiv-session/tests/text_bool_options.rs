@@ -21,16 +21,14 @@ fn lit(s: &str) -> String {
 }
 
 /// Options Krishiv refuses for `entry` with `KRISHIV_UNSUPPORTED_FEATURE`
-/// once their value is a boolean (not implemented there; Spark accepts
-/// them). A value that is not a boolean still fails as Spark does.
-fn unsupported(format: &str, option: &str, entry: &str) -> bool {
+/// when set to `true` (not implemented there; Spark formats the output with
+/// them). `false` and a value that is not a boolean still go as in Spark.
+fn unsupported(format: &str, option: &str, entry: &str, value: &str) -> bool {
+    let on = value.eq_ignore_ascii_case("true");
     match format {
-        "csv" => {
-            !entry.starts_with("read")
-                && matches!(
-                    option,
-                    "inferSchema" | "enforceSchema" | "columnPruning" | "multiLine"
-                )
+        "json" => {
+            on && entry == "to_json"
+                && matches!(option, "pretty" | "writeNonAsciiCharacterAsCodePoint")
         }
         "xml" => {
             entry != "schema_of_xml" && matches!(option, "excludeAttribute" | "ignoreNamespace")
@@ -58,7 +56,7 @@ fn run(
         "from_xml" => format!("SELECT from_xml('<r><a>1</a></r>', 'a int', {m})"),
         "to_xml" => format!("SELECT to_xml(named_struct('a', 1), {m})"),
         "schema_of_xml" => format!("SELECT schema_of_xml('<r><a>1</a></r>', {m})"),
-        "read" => {
+        "read" | "read_legacy" => {
             // The test writes both files before the first read.
             let file = dir.join(if format == "json" { "a.json" } else { "a.csv" });
             let df = s
@@ -106,7 +104,7 @@ fn boolean_options_are_read_as_spark_reads_them() {
                         let ok = match (want, &got) {
                             ("ok", Ok(())) => true,
                             ("ok", Err(e)) => {
-                                unsupported(format, option, entry)
+                                unsupported(format, option, entry, value)
                                     && e.error_class() == ErrorClass::KrishivUnsupportedFeature
                             }
                             (_, Ok(())) => false,
@@ -131,7 +129,7 @@ fn boolean_options_are_read_as_spark_reads_them() {
         wrong.len(),
         wrong.join("\n")
     );
-    assert_eq!(checked, 2 * 11 * (18 * 4 + 11 * 6 + 9 * 3));
+    assert_eq!(checked, 2 * 11 * (18 * 4 + 11 * 7 + 9 * 3));
 }
 
 /// The first column of the first row, as text.
@@ -146,6 +144,48 @@ fn first(s: &Session, sql: &str) -> String {
 
 /// The `single_quotes` section: `JSONOptions` allows single-quoted names and
 /// strings unless `allowSingleQuotes=false`, in file reads and expressions.
+/// The `csv_values` section: `inferSchema`, `enforceSchema`, `columnPruning`
+/// and `multiLine` change none of the CSV expressions' results.
+#[test]
+fn csv_expressions_ignore_the_file_only_flags_as_spark_does() {
+    for (profile, version) in [(SparkProfile::V4_2, "4.2.1"), (SparkProfile::V4_3, "4.3.0")] {
+        let path = format!(
+            "{}/../../tests/fixtures/spark-{version}/text-bool-options.json",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        let probe: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let s = Session::builder().profile(profile).build().unwrap();
+        let cases = probe["csv_values"].as_object().unwrap();
+        assert_eq!(cases.len(), 12, "{version}");
+        for (case, want) in cases {
+            let (o, v) = case.split_once('=').unwrap();
+            let m = if v == "None" {
+                String::new()
+            } else {
+                format!(", map({}, {})", lit(o), lit(v))
+            };
+            for (entry, sql) in [
+                (
+                    "from_csv",
+                    format!("SELECT to_json(from_csv('1,x', 'a int, b string'{m}))"),
+                ),
+                (
+                    "to_csv",
+                    format!("SELECT to_csv(named_struct('a', 1, 'b', 'x'){m})"),
+                ),
+                ("schema_of_csv", format!("SELECT schema_of_csv('1,x'{m})")),
+            ] {
+                assert_eq!(
+                    first(&s, &sql),
+                    want[entry].as_str().unwrap(),
+                    "{version} {case} {entry}"
+                );
+            }
+        }
+    }
+}
+
 #[test]
 fn single_quotes_are_allowed_by_default_as_spark_does() {
     let dir = tempfile::tempdir().unwrap();

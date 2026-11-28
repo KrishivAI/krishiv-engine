@@ -7,11 +7,13 @@ Runs a REAL Spark (never from memory) in a throw-away container and prints one J
 An outcome is `ok`, a Spark error class (`_LEGACY_ERROR_TEMP_2147` for `CSVOptions.getBool` / `XmlOptions.getBool`)
 or a Java exception class (`java.lang.IllegalArgumentException` for Scala's `toBoolean`). Entries: the three
 expressions of each format (`from_*`, `to_*`, `schema_of_*`), a file read of a one-record file (`read`, JSON and
-CSV) and, for CSV, `from_csv` / `to_csv` under `spark.sql.legacy.timeParserPolicy=LEGACY` (`*_legacy`, where
+CSV) and, for CSV, `from_csv` / `to_csv` / the read under `spark.sql.legacy.timeParserPolicy=LEGACY` (`*_legacy`, where
 `preferDate` is never read). Values cover case, padding (never trimmed), non-booleans and `fal\\u017fe` (Java's
 `equalsIgnoreCase` matches the long s to `s`; `toLowerCase` does not).
 `single_quotes`: `{'a': 'x', 'b': 1}` with no options read as a JSON file (schema and rows), through `from_json` and
 `schema_of_json`, and through `from_json` with `allowSingleQuotes=false`: `JSONOptions` defaults it to true.
+`csv_values`: the results of `from_csv`, `to_csv` and `schema_of_csv` with `inferSchema`, `enforceSchema`,
+`columnPruning` and `multiLine` unset, `true` and `false` (which of them change an expression's result).
 
 Usage (from repo root), once per version:
 
@@ -154,6 +156,7 @@ def main():
                 "from_csv_legacy": outcome(legacy(q(from_csv))),
                 "to_csv_legacy": outcome(legacy(q(to_csv))),
                 "read": outcome(read("csv", csv_file, o, v)),
+                "read_legacy": outcome(legacy(read("csv", csv_file, o, v))),
             }
     for o in XML:
         out["xml"][o] = {}
@@ -180,6 +183,15 @@ def main():
         "schema_of_json": first("""select schema_of_json("{'a': 'x'}")"""),
         "from_json_off": off,
     }
+    out["csv_values"] = {}
+    for o in ["inferSchema", "enforceSchema", "columnPruning", "multiLine"]:
+        for v in [None, "true", "false"]:
+            m = "" if v is None else f", map({sql_lit(o)}, {sql_lit(v)})"
+            out["csv_values"][f"{o}={v}"] = {
+                "from_csv": first(f"select to_json(from_csv('1,x', 'a int, b string'{m}))"),
+                "to_csv": first(f"select to_csv(named_struct('a', 1, 'b', 'x'){m})"),
+                "schema_of_csv": first(f"select schema_of_csv('1,x'{m})"),
+            }
     print(json.dumps(out, indent=1, ensure_ascii=False))
 
 

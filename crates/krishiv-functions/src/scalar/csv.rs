@@ -419,20 +419,21 @@ impl Parsed {
                 }
                 "quoteall" => self.quote_all = option_get_bool("quoteAll", v)?,
                 "escapequotes" => self.escape_quotes = option_get_bool("escapeQuotes", v)?,
-                // Not implemented here, but Spark reads each value when it
-                // builds `CSVOptions`, so a value that is not a boolean
-                // fails as it does there before the option is refused.
-                "inferschema" | "enforceschema" | "columnpruning" | "multiline" => {
-                    match lower.as_str() {
-                        "multiline" => option_to_boolean("CSV", "multiLine", v)?,
-                        "inferschema" => option_get_bool("inferSchema", v)?,
-                        "enforceschema" => option_get_bool("enforceSchema", v)?,
-                        _ => option_get_bool("columnPruning", v)?,
-                    };
-                    return Err(KrishivUnsupportedFeature {
-                        feature: format!("{func} with option {k}"),
-                    }
-                    .into());
+                // No effect on the three expressions (Spark 4.2.1 / 4.3.0
+                // runs: equal results for unset, `true` and `false`, the
+                // `csv_values` section of `text-bool-options.json`), but
+                // Spark reads each value when it builds `CSVOptions`.
+                "inferschema" => {
+                    option_get_bool("inferSchema", v)?;
+                }
+                "enforceschema" => {
+                    option_get_bool("enforceSchema", v)?;
+                }
+                "columnpruning" => {
+                    option_get_bool("columnPruning", v)?;
+                }
+                "multiline" => {
+                    option_to_boolean("CSV", "multiLine", v)?;
                 }
                 "linesep" => {
                     if v != "\n" {

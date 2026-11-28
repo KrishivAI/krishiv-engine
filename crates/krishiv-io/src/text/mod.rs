@@ -74,10 +74,22 @@ pub(crate) fn default_ntz(o: &crate::options::FormatOptions) -> bool {
         .is_some_and(|v| v.trim().eq_ignore_ascii_case("TIMESTAMP_NTZ"))
 }
 
-/// CSV's `preferDate` (`CSVOptions.preferDate`): the option, on by default,
-/// and always off under `timeParserPolicy=LEGACY`.
-pub(crate) fn prefer_date(o: &crate::options::FormatOptions) -> bool {
-    o.bool("preferDate").unwrap_or(true) && !legacy_parser(o)
+/// CSV's `preferDate` (`CSVOptions.preferDate`): always off under
+/// `timeParserPolicy=LEGACY`, where Spark never reads the option (any value
+/// goes), else the option read with `getBool`, on by default.
+///
+/// # Errors
+/// `_LEGACY_ERROR_TEMP_2147` for a value other than `true` / `false` outside
+/// `LEGACY`.
+pub(crate) fn prefer_date(
+    o: &crate::options::FormatOptions,
+) -> Result<bool, krishiv_common::error::KrishivError> {
+    if legacy_parser(o) {
+        return Ok(false);
+    }
+    o.str("preferDate").map_or(Ok(true), |v| {
+        krishiv_kernels::text::option_get_bool("preferDate", v)
+    })
 }
 
 /// Whether the session's parser policy is `LEGACY` ([`PARSER_POLICY_CONF`]).

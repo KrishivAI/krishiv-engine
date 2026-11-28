@@ -125,7 +125,8 @@ static SPECS: LazyLock<Vec<OptionSpec>> = LazyLock::new(|| {
         string("dateFormat", "The pattern of DATE values (default: Spark's lenient grammar).");
         string("timestampFormat", "The pattern of TIMESTAMP values.");
         string("timestampNTZFormat", "The pattern of TIMESTAMP_NTZ values.");
-        flag("preferDate", Some(true), "Inference: try a DATE (and a TIME) before a TIMESTAMP (always off under `timeParserPolicy=LEGACY`).");
+        // A string: under `LEGACY` Spark never reads it, so any value goes; `text::prefer_date` reads it with `getBool` otherwise.
+        string("preferDate", "Inference: try a DATE (and a TIME) before a TIMESTAMP (default true; always off under `timeParserPolicy=LEGACY`, where any value is accepted).");
         conf(crate::text::TIME_TYPE_CONF, OptionKind::Bool, OptionDefault::Bool(false), crate::text::TIME_TYPE_CONF, "The session's `spark.sql.timeType.enabled`: inference may give `TIME`.");
         string("timeFormat", "The pattern of TIME values (default: Spark's TIME grammar to read, the value's own digits to write).");
         conf(crate::text::TIME_NANOS_CONF, OptionKind::Bool, OptionDefault::Bool(true), crate::text::TIME_NANOS_CONF, "The session's `krishiv.io.text.timeNanos` (from its Spark profile): a `TIME` read keeps nine fraction digits, else six.");
@@ -365,7 +366,7 @@ impl CsvOptions {
             charset,
             line_sep,
             enforce_schema: o.bool("enforceSchema").unwrap_or(true),
-            prefer_date: crate::text::prefer_date(o),
+            prefer_date: crate::text::prefer_date(o)?,
             time_type: crate::text::infers_time(o),
             quote_all: o.bool("quoteAll").unwrap_or(false),
             escape_quotes: o.bool("escapeQuotes").unwrap_or(true),

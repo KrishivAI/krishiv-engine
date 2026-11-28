@@ -88,7 +88,7 @@ impl Datetimes {
     /// # Errors
     /// An invalid pattern or time zone.
     pub(crate) fn csv(o: &FormatOptions, purpose: Purpose) -> Result<Self, KrishivError> {
-        Self::build(o, purpose, crate::text::prefer_date(o))
+        Self::build(o, purpose, crate::text::prefer_date(o)?)
     }
 
     fn build(
