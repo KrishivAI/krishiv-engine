@@ -42,6 +42,27 @@ DROP TABLE t2;
 DROP NAMESPACE demo CASCADE;                 -- without CASCADE a non-empty namespace is refused (SCHEMA_NOT_EMPTY)
 ```
 
+## information_schema
+
+`spark_catalog.information_schema` (also `information_schema` while `spark_catalog` is current) has three
+read-only views over the session catalog. Spark has no `information_schema`, so the column names are the
+SQL-standard ones.
+
+| View | Columns |
+|---|---|
+| `schemata` | `catalog_name`, `schema_name` |
+| `tables` | `table_catalog`, `table_schema`, `table_name`, `table_type` (`BASE TABLE` or `VIEW`) |
+| `columns` | `table_catalog`, `table_schema`, `table_name`, `column_name`, `ordinal_position` (from 1), `data_type` (Spark's simple string), `is_nullable` (`YES` or `NO`) |
+
+```sql
+SELECT table_schema, table_name FROM information_schema.tables WHERE table_type = 'VIEW';
+SELECT column_name, data_type FROM information_schema.columns
+ WHERE table_schema = 'demo' AND table_name = 't' ORDER BY ordinal_position;
+```
+
+Rows follow the `SHOW TABLES` listing rule: an object the principal may not list is absent, as it is there.
+Temporary views and declared catalogs are not listed yet.
+
 ## Writing data
 
 ```sql
