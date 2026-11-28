@@ -618,7 +618,15 @@ impl Resolver<'_> {
                     && !hits.iter().any(|h| h.col.id == a.col.id)
                 {
                     let duplicate = a.duplicate || seen.duplicate;
-                    hits.push(Attr { duplicate, ..a });
+                    // The scope's attribute knows the nullability after an
+                    // outer join; the carrier's is the input's own.
+                    let mut col = a.col;
+                    col.nullable = seen.col.nullable;
+                    hits.push(Attr {
+                        duplicate,
+                        col,
+                        ..a
+                    });
                 }
             }
             // As `find`: a union input's repeat of a column does not count

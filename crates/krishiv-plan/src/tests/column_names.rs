@@ -25,10 +25,21 @@ fn run_on(
     op: ColumnNamesOp,
     after: impl FnOnce(LogicalPlan) -> LogicalPlan,
 ) -> Result<AnalyzedPlan, AnalysisError> {
+    run_on_nullable(case_sensitive, true, input, op, after)
+}
+
+/// As [`run_on`], with `year` nullable or not.
+fn run_on_nullable(
+    case_sensitive: bool,
+    year_nullable: bool,
+    input: LogicalPlan,
+    op: ColumnNamesOp,
+    after: impl FnOnce(LogicalPlan) -> LogicalPlan,
+) -> Result<AnalyzedPlan, AnalysisError> {
     let col = |name: &str, data_type: DataType| TableColumn {
         name: name.to_owned(),
         data_type,
-        nullable: true,
+        nullable: name != "year" || year_nullable,
         char_varchar: None,
     };
     let catalog = MemoryCatalog::new("spark_catalog").with_table(
@@ -658,4 +669,35 @@ fn a_source_column_resolves_after_chained_using_joins() {
             );
         }
     }
+}
+
+/// The key of the unmatched side of an outer `USING` join is nullable through `right["year"]`
+/// although the input's `year` is not.
+#[test]
+fn a_merged_key_keeps_the_outer_join_nullability() {
+    use crate::{ColumnRef, ExprNode, PlanId};
+    let left = LogicalPlan::table(["sales"]).with_origin(Origin::plan(PlanId(1)));
+    let right = LogicalPlan::table(["sales"]).with_origin(Origin::plan(PlanId(2)));
+    let joined = left.join(
+        right,
+        JoinKind::LeftOuter,
+        JoinCondition::Using(vec!["year".to_owned()]),
+    );
+    let pick = Expr::new(ExprNode::Column(ColumnRef {
+        plan_id: Some(PlanId(2)),
+        ..ColumnRef::new(vec!["year".to_owned()])
+    }));
+    let plan = LogicalPlan::new(PlanNode::Project {
+        input: Arc::new(joined),
+        exprs: vec![Arc::new(pick)],
+    });
+    let r = run_on_nullable(
+        false,
+        false,
+        LogicalPlan::table(["sales"]),
+        ColumnNamesOp::ToDf(strings(&["course", "year", "earnings"])),
+        |_| plan,
+    )
+    .expect("right[\"year\"] resolves");
+    assert!(r.output[0].nullable, "{:?}", r.output[0]);
 }
