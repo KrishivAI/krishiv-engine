@@ -937,6 +937,21 @@ async fn a_pivot_without_values_over_a_binary_column_runs() {
         .await
         .expect("runs");
     assert_eq!(got.len(), 2, "{got:?}");
+    // Two value columns besides the key.
+    let batches = run_batches(
+        &server,
+        pivot_without_values_over(binary_input(), attr("a")),
+    )
+    .await
+    .expect("runs");
+    assert_eq!(batches[0].num_columns(), 3);
+}
+
+fn binary_input() -> pb::Relation {
+    relation(RelType::Sql(pb::Sql {
+        query: "SELECT * FROM VALUES (1, X'01', 5), (2, X'02', 6) AS t(id, a, b)".to_owned(),
+        ..Default::default()
+    }))
 }
 
 fn renamed(input: pb::Relation, from: &str, to: &str) -> pb::Relation {

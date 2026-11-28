@@ -11,7 +11,7 @@ use arrow_array::types::{
     Int16Type, Int32Type, Int64Type, TimestampMicrosecondType,
 };
 use arrow_array::{Array, RecordBatch};
-use arrow_schema::DataType;
+use arrow_schema::{DataType, TimeUnit};
 use krishiv_common::error::{KrishivError, KrishivUnsupportedFeature, LegacyErrorTemp1324};
 use krishiv_connect::proto::v4_3 as pb;
 use krishiv_connect::proto::v4_3::expression::{self, ExprType};
@@ -85,7 +85,8 @@ fn values_query(input: &pb::Relation, column: &pb::Expression, max: i32) -> pb::
 }
 
 /// The pivot column as Spark's `Column.toString` prints it (`expression.sql`), for the
-/// too-many-values error: the translated expression's Spark SQL text.
+/// too-many-values error: the translated expression's Spark SQL text. (It translates with no UDF
+/// host, so a pivot over a UDF call prints `<expression>`.)
 fn column_text(entry: &SessionEntry, column: &pb::Expression) -> String {
     translate_expression(column, &super::translate_conf(entry.session()))
         .map_or_else(|_| "<expression>".to_owned(), |e| e.to_string())
@@ -197,16 +198,16 @@ fn literals(batch: &RecordBatch, out: &mut Vec<Literal>) -> Result<(), KrishivEr
             (SparkType::Double, _) => {
                 Literal::Double(array.as_primitive::<Float64Type>().value(row))
             }
-            (SparkType::String, _) => string_at(array, row)?,
+            (SparkType::String | SparkType::CollatedString(_), _) => string_at(array, row)?,
             (SparkType::Binary, _) => match bytes_at(array, row) {
                 Some(b) => Literal::Binary(b.to_vec()),
                 None => return Err(unsupported(array.data_type())),
             },
             (SparkType::Date, _) => Literal::Date(array.as_primitive::<Date32Type>().value(row)),
-            (SparkType::Timestamp, _) => {
+            (SparkType::Timestamp, DataType::Timestamp(TimeUnit::Microsecond, _)) => {
                 Literal::Timestamp(array.as_primitive::<TimestampMicrosecondType>().value(row))
             }
-            (SparkType::TimestampNtz, _) => {
+            (SparkType::TimestampNtz, DataType::Timestamp(TimeUnit::Microsecond, _)) => {
                 Literal::TimestampNtz(array.as_primitive::<TimestampMicrosecondType>().value(row))
             }
             (SparkType::Decimal(d), DataType::Decimal128(..)) => Literal::Decimal {
@@ -361,6 +362,49 @@ mod tests {
             got.as_slice(),
             [Literal::Decimal { unscaled: 123, .. }]
         ));
+    }
+
+    #[test]
+    fn a_timestamp_in_another_unit_is_refused_not_a_panic() {
+        let field = arrow_schema::Field::new(
+            "v",
+            DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
+            true,
+        )
+        .with_metadata(std::collections::HashMap::from([(
+            krishiv_types::arrow::SPARK_TYPE_METADATA_KEY.to_owned(),
+            "timestamp".to_owned(),
+        )]));
+        let batch = RecordBatch::try_new(
+            Arc::new(arrow_schema::Schema::new(vec![field])),
+            vec![Arc::new(
+                arrow_array::TimestampNanosecondArray::from(vec![1]).with_timezone("UTC"),
+            )],
+        )
+        .expect("batch");
+        // Refused (by the type's storage check or the carrier match), never a downcast panic.
+        let err = literals(&batch, &mut Vec::new())
+            .expect_err("refused")
+            .to_string();
+        assert!(err.contains("not supported"), "{err}");
+    }
+
+    #[test]
+    fn a_collated_string_is_a_string_literal() {
+        let field = arrow_schema::Field::new("v", DataType::Utf8View, true).with_metadata(
+            std::collections::HashMap::from([(
+                krishiv_types::arrow::SPARK_TYPE_METADATA_KEY.to_owned(),
+                "string collate UTF8_LCASE".to_owned(),
+            )]),
+        );
+        let batch = RecordBatch::try_new(
+            Arc::new(arrow_schema::Schema::new(vec![field])),
+            vec![Arc::new(arrow_array::StringViewArray::from(vec!["a"]))],
+        )
+        .expect("batch");
+        let mut out = Vec::new();
+        literals(&batch, &mut out).expect("literal");
+        assert_eq!(out, vec![Literal::String("a".to_owned())]);
     }
 
     #[test]
