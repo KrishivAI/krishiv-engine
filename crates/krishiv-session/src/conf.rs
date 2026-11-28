@@ -4,8 +4,8 @@
 use std::sync::{Arc, PoisonError, RwLock};
 
 use krishiv_common::config::{
-    ANSI_ENABLED, Config, ConfigEntry, ConfigValue, PYTHON_UDTF_ARROW_ENABLED, SESSION_TIME_ZONE,
-    Scope, ValueType, lookup,
+    ANSI_ENABLED, Config, ConfigEntry, ConfigValue, IO_TEXT_INFER_TIME, IO_TEXT_TIME_NANOS,
+    PYTHON_UDTF_ARROW_ENABLED, SESSION_TIME_ZONE, Scope, ValueType, lookup,
 };
 use krishiv_common::error::{
     CannotModifyStaticConfig, InvalidConfValueRequirement, InvalidConfValueTimeZone, KrishivError,
@@ -45,18 +45,28 @@ pub(crate) struct ConfStore {
 }
 
 /// The entries whose Spark default differs by release ([`profile_default`]).
-static PROFILE_KEYS: [&ConfigEntry; 2] = [&ANSI_ENABLED, &PYTHON_UDTF_ARROW_ENABLED];
+static PROFILE_KEYS: [&ConfigEntry; 4] = [
+    &ANSI_ENABLED,
+    &PYTHON_UDTF_ARROW_ENABLED,
+    &IO_TEXT_TIME_NANOS,
+    &IO_TEXT_INFER_TIME,
+];
 
 /// The default of `entry` under `profile` where Spark's differs by release from the registry's (Spark 4.2's):
 /// `spark.sql.ansi.enabled` is `false` before 4.0 (`SQLConf.scala`: `SPARK_ANSI_SQL_MODE == "true"` at v3.5.6 and
 /// v3.5.10, `!= "false"` at v4.0.0; Krishiv does not read that variable), and
 /// `spark.sql.execution.pythonUDTF.arrow.enabled` is `false` before 4.2 (v3.5.6, v4.0.0 and v4.1.0; `true` at
-/// v4.2.0).
+/// v4.2.0); the text-file `TIME` switches are `false` before 4.3.
 fn profile_default(entry: &ConfigEntry, profile: SparkProfile) -> Option<ConfigValue> {
+    // Spark 4.2 reads a `TIME` of a CSV or JSON file in the default grammar as microseconds; 4.3 keeps
+    // nanoseconds (a `timeFormat` pattern keeps every digit in both). Only 4.3's text inference gives `TIME`.
     let off = if entry.key == ANSI_ENABLED.key {
         profile < SparkProfile::V4_0
+    } else if entry.key == PYTHON_UDTF_ARROW_ENABLED.key {
+        profile < SparkProfile::V4_2
     } else {
-        entry.key == PYTHON_UDTF_ARROW_ENABLED.key && profile < SparkProfile::V4_2
+        (entry.key == IO_TEXT_TIME_NANOS.key || entry.key == IO_TEXT_INFER_TIME.key)
+            && profile < SparkProfile::V4_3
     };
     off.then_some(ConfigValue::Bool(false))
 }
@@ -638,6 +648,30 @@ mod tests {
                 store.value("spark.sql.ansi.enabled").as_deref(),
                 Some(flipped)
             );
+        }
+    }
+
+    /// A `TIME` read from a CSV or JSON file keeps nanoseconds, and inference gives `TIME`, under the 4.3 profile
+    /// only: Spark 4.2 reads every `TIME` as microseconds and infers `TIMESTAMP` (`krishiv-session/tests/time_file_scan.rs`).
+    #[test]
+    fn text_time_nanos_follows_the_profile() {
+        for key in [
+            &krishiv_common::config::IO_TEXT_TIME_NANOS,
+            &krishiv_common::config::IO_TEXT_INFER_TIME,
+        ] {
+            for (profile, want) in [
+                (SparkProfile::V4_1, "false"),
+                (SparkProfile::V4_2, "false"),
+                (SparkProfile::V4_3, "true"),
+            ] {
+                let store = ConfStore::new(Config::default()).with_profile(profile);
+                let (config, _) = store.query_snapshot();
+                assert_eq!(
+                    config.get(key).map(ToString::to_string).as_deref(),
+                    Some(want),
+                    "{profile:?}"
+                );
+            }
         }
     }
 

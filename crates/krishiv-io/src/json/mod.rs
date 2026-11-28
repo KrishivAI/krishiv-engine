@@ -148,3 +148,5 @@ mod golden_tests;
 mod infer_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod time_tests;
