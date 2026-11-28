@@ -1965,3 +1965,23 @@ fn like_over_lcase_matches_the_spark_goldens() {
         assert!(bad.is_empty(), "{}", bad.join("\n"));
     }
 }
+
+#[test]
+fn regexp_count_over_utf8_lcase_ignores_case() {
+    // Spark compiles the pattern with CASE_INSENSITIVE | UNICODE_CASE under UTF8_LCASE.
+    assert_eq!(
+        one("SELECT CAST(regexp_count('aAbB' COLLATE UTF8_LCASE, 'a') AS STRING)"),
+        "2"
+    );
+    assert_eq!(one("SELECT CAST(regexp_count('aAbB', 'a') AS STRING)"), "1");
+}
+
+#[test]
+fn listagg_distinct_keeps_the_collation() {
+    assert_eq!(
+        one(
+            "SELECT CAST(len(lower(listagg(DISTINCT c COLLATE utf8_lcase))) AS STRING) FROM VALUES ('a'),('A'),('b'),('B') t(c)"
+        ),
+        "2"
+    );
+}
