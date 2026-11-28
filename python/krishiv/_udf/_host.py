@@ -17,23 +17,63 @@ may name ``krishiv.errors``, ``krishiv.sql`` or ``krishiv._native`` at module le
 
 from __future__ import annotations
 
+import inspect
 import sys
 from typing import Any
 
 #: True in a pool worker (the stub package's marker), False in-process.
 IN_WORKER: bool = bool(getattr(sys.modules.get("krishiv"), "_UDF_WORKER", False))
 
+
+def _spark_error(base: Any) -> Any:
+    """The ``pyspark`` error class ``base`` as this package raises it: ``errorClass=`` and ``messageParameters=``.
+
+    PySpark 3.5 names those arguments ``error_class`` and ``message_parameters``, and an older release lacks some
+    of the 4.2.0 classes this package raises; such an error keeps its class and says the error class and its
+    parameters. The subclass keeps ``base``'s name and module, so a traceback reads as the client expects.
+    """
+    snake = "error_class" in inspect.signature(base.__init__).parameters
+
+    def __init__(
+        self: Any,
+        message: str | None = None,
+        errorClass: str | None = None,
+        messageParameters: dict[str, str] | None = None,
+    ) -> None:
+        if errorClass is None:
+            base.__init__(self, message)
+            return
+        params = messageParameters or {}
+        names = ("error_class", "message_parameters") if snake else ("errorClass", "messageParameters")
+        try:
+            base.__init__(self, **{names[0]: errorClass, names[1]: params})
+        except Exception:  # the class or a parameter is not in this release's error classes
+            base.__init__(self, f"[{errorClass}] {params}")
+
+    body = {"__init__": __init__, "__module__": base.__module__, "__qualname__": base.__qualname__}
+    return type(base.__name__, (base,), body)
+
+
 if IN_WORKER:
-    from pyspark.errors import (  # ty: ignore[unresolved-import]  # pool workers only
-        PySparkImportError,
-        PySparkNotImplementedError,
-        PySparkRuntimeError,
-        PySparkTypeError,
-        PySparkValueError,
-        UnsupportedOperationException,
+    import pyspark.errors as _pyspark_errors  # ty: ignore[unresolved-import]  # pool workers only
+
+    PySparkNotImplementedError = _spark_error(_pyspark_errors.PySparkNotImplementedError)
+    PySparkRuntimeError = _spark_error(_pyspark_errors.PySparkRuntimeError)
+    PySparkTypeError = _spark_error(_pyspark_errors.PySparkTypeError)
+    PySparkValueError = _spark_error(_pyspark_errors.PySparkValueError)
+    UnsupportedOperationException = _pyspark_errors.UnsupportedOperationException
+    # PySpark 3.5 has no `PySparkImportError` (it is `PySparkException` and `ImportError`, as in 4.0).
+    PySparkImportError = _spark_error(
+        getattr(_pyspark_errors, "PySparkImportError", None)
+        or type(
+            "PySparkImportError",
+            (_pyspark_errors.PySparkException, ImportError),
+            # A traceback names the class as a 4.x client has it, not this module.
+            {"__module__": "pyspark.errors.exceptions.base"},
+        )
     )
 
-    def not_implemented(feature: str) -> PySparkNotImplementedError:
+    def not_implemented(feature: str) -> Exception:
         """``krishiv.errors.not_implemented``: the same class and parameters, raised from ``pyspark``."""
         return PySparkNotImplementedError(errorClass="NOT_IMPLEMENTED", messageParameters={"feature": feature})
 

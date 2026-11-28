@@ -542,13 +542,17 @@ impl Worker {
             && let Ok(status) = status
             && status.code() == Some(i32::from(EXIT_SANDBOX_FAILED))
         {
-            return KrishivError::from(&SandboxError::Unavailable {
-                reason: if tail.is_empty() {
-                    "the trampoline could not enter the sandbox".to_owned()
-                } else {
-                    tail
-                },
-            });
+            let reason = if tail.is_empty() {
+                "the trampoline could not enter the sandbox".to_owned()
+            } else {
+                tail
+            };
+            // A Connect client reads the reason redacted, so the server's log is where it can be read.
+            tracing::warn!(
+                pid = self.pid.as_raw_nonzero().get(),
+                "a Python UDF worker could not run sandboxed: {reason}"
+            );
+            return KrishivError::from(&SandboxError::Unavailable { reason });
         }
         let how = status.map_or_else(|e| format!("cannot wait for it: {e}"), describe);
         let mut reason = format!("it ended {when} ({how})");

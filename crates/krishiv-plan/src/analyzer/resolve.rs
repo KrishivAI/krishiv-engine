@@ -466,6 +466,14 @@ pub(super) fn first_free_id(root: &LogicalPlan) -> Result<u64, AnalysisError> {
     Ok(next)
 }
 
+/// `r` also carrying its own output under `id`, when the relation it stands for had a `plan_id`.
+fn carrying(mut r: Rel, id: Option<PlanId>) -> Rel {
+    if let Some(id) = id {
+        Arc::make_mut(&mut r.carriers).insert(id, vec![Arc::clone(&r.out)]);
+    }
+    r
+}
+
 pub(super) fn hull(a: Option<(u64, u64)>, b: Option<(u64, u64)>) -> Option<(u64, u64)> {
     match (a, b) {
         (Some(x), Some(y)) => Some((x.0.min(y.0), x.1.max(y.1))),
@@ -1120,7 +1128,9 @@ impl Resolver<'_> {
                 let root = self.b.sql.get(&addr(&**p)).cloned();
                 let env0 = self.root_env.clone();
                 match (root, env0) {
-                    (Some(root), Some(env0)) => self.rel(&root, &env0),
+                    // The `SQL` relation's `plan_id` names its query's columns: a client's
+                    // `df["k"]` on `spark.sql(..)` carries it.
+                    (Some(root), Some(env0)) => Ok(carrying(self.rel(&root, &env0)?, o.plan_id)),
                     _ => Err(unsupported("SQL text", o)),
                 }
             }
@@ -1420,7 +1430,7 @@ impl Resolver<'_> {
             rels.push(r);
         }
         if defs.is_empty() {
-            return self.rel(input, env);
+            return Ok(carrying(self.rel(input, env)?, o.plan_id));
         }
         let e = self.env(visible, scope, env.outer.clone());
         let i = self.rel(input, &e)?;
@@ -1432,7 +1442,7 @@ impl Resolver<'_> {
         kids.push(&i);
         let mut r = self.make(o, node, i.out.to_vec(), &kids);
         r.carriers = Arc::clone(&i.carriers);
-        Ok(r)
+        Ok(carrying(r, o.plan_id))
     }
 
     /// The tables of an unused CTE definition, checked as Spark checks

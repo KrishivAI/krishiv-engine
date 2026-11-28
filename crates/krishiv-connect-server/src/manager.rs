@@ -51,6 +51,8 @@ use krishiv_common::error::{
     InvalidHandleSessionChanged, InvalidHandleSessionClosed, InvalidHandleSessionNotFound,
     KrishivError, KrishivSessionLimit,
 };
+use krishiv_connect::wire::ClientVersion;
+use krishiv_plan::analyzer::SparkProfile;
 use krishiv_session::auth::{Authenticated, Method, Role, Surface};
 use krishiv_session::{DataFrame, QueryId, Session, Transport};
 
@@ -65,8 +67,52 @@ use crate::udf::{FunctionStore, SessionPython, UdfHost};
 /// session is for (`Connect`, or `FlightSql` through
 /// [`SessionManager::get_or_create_with`], P3-T101 §2 H3), so the session can
 /// label what it records (its denials count under `Surface::of(transport)`).
-pub type SessionFactory =
-    dyn Fn(&Authenticated, Transport) -> Result<Session, KrishivError> + Send + Sync;
+/// The profile is the one the manager's [`ProfileChoice`] picks for the new session, `None` for
+/// the factory's own (its base session's).
+pub type SessionFactory = dyn Fn(&Authenticated, Transport, Option<SparkProfile>) -> Result<Session, KrishivError>
+    + Send
+    + Sync;
+
+/// How the manager picks the Spark profile of a new session (`krishiv.connect.sparkProfile`, ADR 0003
+/// update 2026-11-27).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ProfileChoice {
+    /// The factory's own profile for every session (an embedded server's base session).
+    #[default]
+    Base,
+    /// The profile of the Spark version a Connect client declares in `client_type` when the session
+    /// is created (`spark/3.5.10` is 3.5); the factory's own when it declares none, and on other
+    /// transports.
+    Auto,
+    /// This profile for every session, whatever the client declares.
+    Pinned(SparkProfile),
+}
+
+impl ProfileChoice {
+    /// The profile a new session takes for a client whose `client_type` is this, `None` for the
+    /// factory's own.
+    #[must_use]
+    pub fn for_client(self, client_type: Option<&str>) -> Option<SparkProfile> {
+        match self {
+            Self::Base => None,
+            Self::Auto => client_type
+                .and_then(ClientVersion::from_client_type)
+                .map(ClientVersion::profile),
+            Self::Pinned(p) => Some(p),
+        }
+    }
+
+    /// The choice a `krishiv.connect.sparkProfile` value names: `auto`, or a release line (`3.5` ..
+    /// `4.3`); `None` for anything else.
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        let value = value.trim();
+        if value.eq_ignore_ascii_case("auto") {
+            return Some(Self::Auto);
+        }
+        SparkProfile::from_line(value).map(Self::Pinned)
+    }
+}
 
 /// The manager's limits and timers.
 #[derive(Debug, Clone)]
@@ -373,6 +419,7 @@ impl<K: Clone + Eq + std::hash::Hash> Tombstones<K> {
 /// The Connect sessions of one server.
 pub struct SessionManager {
     factory: Box<SessionFactory>,
+    profiles: ProfileChoice,
     /// The server's Python UDF workers; `None` refuses Python UDFs.
     udfs: Option<Arc<dyn UdfHost>>,
     /// The catalog of persisted Python UDFs; `None`: nothing is persisted.
@@ -397,6 +444,7 @@ impl SessionManager {
     pub fn new(factory: Box<SessionFactory>, limits: SessionLimits) -> Self {
         Self {
             factory,
+            profiles: ProfileChoice::default(),
             udfs: None,
             function_store: None,
             limits,
@@ -412,7 +460,22 @@ impl SessionManager {
     /// that builds each caller's session (`Session::new_session_as`).
     #[must_use]
     pub fn from_base(base: Session, limits: SessionLimits) -> Self {
-        Self::new(Box::new(move |_, _| Ok(base.new_session())), limits)
+        Self::new(
+            Box::new(move |_, _, profile| {
+                Ok(
+                    profile
+                        .map_or_else(|| base.new_session(), |p| base.new_session_with_profile(p)),
+                )
+            }),
+            limits,
+        )
+    }
+
+    /// Picks each new session's Spark profile by `choice` (default [`ProfileChoice::Base`]).
+    #[must_use]
+    pub fn with_profile_choice(mut self, choice: ProfileChoice) -> Self {
+        self.profiles = choice;
+        self
     }
 
     /// Runs the Python UDFs of every session this manager builds on `host`'s workers (the server's one
@@ -533,12 +596,28 @@ impl SessionManager {
         observed: Option<&str>,
         client_user_id: &str,
     ) -> Result<Arc<SessionEntry>, KrishivError> {
-        self.get_or_create_with(
+        self.get_or_create_declared(caller, session_id, observed, client_user_id, None)
+    }
+
+    /// [`Self::get_or_create`] for a Connect client whose request's `client_type` is `client_type`:
+    /// a new session takes the profile the manager's [`ProfileChoice`] picks for it. An existing
+    /// session keeps its own.
+    ///
+    /// # Errors
+    /// As [`Self::get_or_create`].
+    pub fn get_or_create_declared(
+        &self,
+        caller: &Authenticated,
+        session_id: &str,
+        observed: Option<&str>,
+        client_user_id: &str,
+        client_type: Option<&str>,
+    ) -> Result<Arc<SessionEntry>, KrishivError> {
+        self.get_or_create_inner(
             caller,
-            session_id,
-            observed,
-            client_user_id,
+            (session_id, observed, client_user_id),
             Transport::Connect,
+            client_type,
         )
     }
 
@@ -558,6 +637,21 @@ impl SessionManager {
         client_user_id: &str,
         transport: Transport,
     ) -> Result<Arc<SessionEntry>, KrishivError> {
+        self.get_or_create_inner(
+            caller,
+            (session_id, observed, client_user_id),
+            transport,
+            None,
+        )
+    }
+
+    fn get_or_create_inner(
+        &self,
+        caller: &Authenticated,
+        (session_id, observed, client_user_id): (&str, Option<&str>, &str),
+        transport: Transport,
+        client_type: Option<&str>,
+    ) -> Result<Arc<SessionEntry>, KrishivError> {
         let surface = Surface::of(transport).unwrap_or(Surface::Connect);
         let key = Self::key(caller, session_id);
         if let Some(entry) = self.lookup(&key, caller, observed, surface)? {
@@ -571,7 +665,7 @@ impl SessionManager {
         }
         // Built without the lock; a racing create of the same key wins and
         // this one is closed unused.
-        let session = (self.factory)(caller, transport)?;
+        let session = (self.factory)(caller, transport, self.profiles.for_client(client_type))?;
         let python = SessionPython::new(
             self.udfs.as_ref(),
             &principal_id(caller),

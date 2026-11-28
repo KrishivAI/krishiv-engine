@@ -15,16 +15,28 @@ from typing import Any, cast
 
 from krishiv._udf._host import IN_WORKER
 
+#: The ``pyspark.sql.types`` names that PySpark 3.5 or 4.0 lack.
+_NEWER_TYPES = (
+    "CalendarIntervalType",
+    "Geography",
+    "GeographyType",
+    "Geometry",
+    "GeometryType",
+    "TimeType",
+    "VariantType",
+    "VariantVal",
+)
+
 # Pool workers (`_host`): pyspark's own classes, since a UDF's pickled return type is one of them.
 if IN_WORKER:
     from pyspark._globals import _NoValue  # ty: ignore[unresolved-import]  # pool workers only
-    from pyspark.sql.types import (  # ty: ignore[unresolved-import]  # pool workers only
+    from pyspark.sql import types as _pyspark_types  # ty: ignore[unresolved-import]
+    from pyspark.sql.types import (  # ty: ignore[unresolved-import]
         ArrayType,
         AtomicType,
         BinaryType,
         BooleanType,
         ByteType,
-        CalendarIntervalType,
         CharType,
         DataType,
         DateType,
@@ -33,10 +45,6 @@ if IN_WORKER:
         DoubleType,
         FloatType,
         FractionalType,
-        Geography,
-        GeographyType,
-        Geometry,
-        GeometryType,
         IntegerType,
         IntegralType,
         LongType,
@@ -50,14 +58,15 @@ if IN_WORKER:
         StructType,
         TimestampNTZType,
         TimestampType,
-        TimeType,
         UserDefinedType,
         VarcharType,
-        VariantType,
-        VariantVal,
         YearMonthIntervalType,
         _create_row,
     )
+
+    # Types a newer PySpark added (3.5 lacks all of them, 4.0 all but the variant ones and the interval):
+    # the stand-ins below take the place of a missing one.
+    globals().update({n: getattr(_pyspark_types, n) for n in _NEWER_TYPES if hasattr(_pyspark_types, n)})
 else:
     from krishiv.sql.row import Row, _create_row
     from krishiv.sql.types import (
@@ -138,7 +147,7 @@ __all__ = [
 
 
 if not IN_WORKER:
-    # In-process stand-ins for what `krishiv.sql.types` lacks.
+    # In-process stand-ins for what `krishiv.sql.types` lacks (the newer types below are shared).
     class _NoValueType:
         """``pyspark._globals._NoValueType``: the one "no value" marker (a zero-column batch's rows)."""
 
@@ -154,15 +163,6 @@ if not IN_WORKER:
 
     _NoValue = _NoValueType()
 
-    class TimeType(AtomicType):
-        """Stands in for ``pyspark.sql.types.TimeType`` (``TIME(6)``): made for a ``time64`` input column."""
-
-        def __init__(self, precision: int = 6) -> None:
-            self.precision = precision
-
-        def simpleString(self) -> str:
-            return f"time({self.precision})"
-
     class UserDefinedType(DataType):
         """Stands in for ``pyspark.sql.types.UserDefinedType``: Krishiv has no UDTs, so nothing is one."""
 
@@ -174,6 +174,23 @@ if not IN_WORKER:
 
         def deserialize(self, datum: Any) -> Any:
             raise NotImplementedError
+
+
+# Stand-ins for what the host's types lack: `krishiv.sql.types` in-process, an older PySpark in a pool worker
+# (no input or declared return type of such a client can be one of them).
+if "TimeType" not in globals():
+
+    class TimeType(AtomicType):
+        """Stands in for ``pyspark.sql.types.TimeType`` (``TIME(6)``): made for a ``time64`` input column."""
+
+        def __init__(self, precision: int = 6) -> None:
+            self.precision = precision
+
+        def simpleString(self) -> str:
+            return f"time({self.precision})"
+
+
+if "GeometryType" not in globals():
 
     class _SpatialType(DataType):
         MIXED_SRID = -1
@@ -200,3 +217,21 @@ if not IN_WORKER:
 
     class Geography(_Spatial):
         """Stands in for ``pyspark.sql.types.Geography``."""
+
+
+if "VariantType" not in globals():
+
+    class VariantType(AtomicType):
+        """Stands in for ``pyspark.sql.types.VariantType`` (PySpark 3.5 has no variant)."""
+
+    class VariantVal:
+        """Stands in for ``pyspark.sql.types.VariantVal`` (PySpark 3.5 has no variant)."""
+
+        def __init__(self, value: bytes, metadata: bytes) -> None:
+            raise NotImplementedError("variant values in Python UDFs of this PySpark release")
+
+
+if "CalendarIntervalType" not in globals():
+
+    class CalendarIntervalType(DataType):
+        """Stands in for ``pyspark.sql.types.CalendarIntervalType`` (PySpark 3.5 has no such class)."""

@@ -90,6 +90,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.advisor.skew.minRows", &ADVISOR_SKEW_MIN_ROWS),
     ("krishiv.advisor.skew.minTime", &ADVISOR_SKEW_MIN_TIME),
     ("krishiv.connect.maxPlanDepth", &CONNECT_MAX_PLAN_DEPTH),
+    ("krishiv.connect.sparkProfile", &CONNECT_SPARK_PROFILE),
     ("krishiv.events.file.maxBytes", &EVENTS_FILE_MAX_BYTES),
     ("krishiv.events.file.maxFiles", &EVENTS_FILE_MAX_FILES),
     ("krishiv.events.queueCapacity", &EVENTS_QUEUE_CAPACITY),

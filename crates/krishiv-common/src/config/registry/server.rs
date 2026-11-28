@@ -114,6 +114,19 @@ pub static CONNECT_SESSION_TOMBSTONES: ConfigEntry = startup(
     Some("spark.connect.session.manager.closedSessionsTombstonesSize"),
 );
 
+/// The Spark profile of the server's sessions (ADR 0003 update 2026-11-27, issue S4M-3).
+pub static CONNECT_SPARK_PROFILE: ConfigEntry = startup(
+    "krishiv.connect.sparkProfile",
+    ValueType::Enum(&["auto", "3.5", "4.0", "4.1", "4.2", "4.3"]),
+    ConfigValue::String(std::borrow::Cow::Borrowed("auto")),
+    "The Spark release whose behaviour the server's sessions follow (the default of \
+     `spark.sql.ansi.enabled`, for one). `auto` gives a Spark Connect session the release its \
+     client declares when the session is created (a PySpark 3.5 client gets 3.5), and sessions \
+     of clients that declare none, Flight SQL sessions and console sessions the newest; a release \
+     line (`3.5` to `4.3`) applies to every session.",
+    None,
+);
+
 /// Live sessions in the server.
 pub static CONNECT_MAX_SESSIONS: ConfigEntry = startup(
     "krishiv.connect.maxSessions",

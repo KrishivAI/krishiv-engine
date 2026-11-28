@@ -43,7 +43,9 @@ struct Running {
 async fn start() -> Running {
     let dir = tempfile::tempdir().expect("tempdir");
     let warehouse = dir.path().to_str().expect("utf8").to_owned();
-    let factory = move |_: &krishiv_session::auth::Authenticated, _: krishiv_session::Transport| {
+    let factory = move |_: &krishiv_session::auth::Authenticated,
+                        _: krishiv_session::Transport,
+                        _: Option<krishiv_plan::analyzer::SparkProfile>| {
         let s = Session::new()?;
         s.conf().set("spark.sql.warehouse.dir", &warehouse)?;
         Ok(s)

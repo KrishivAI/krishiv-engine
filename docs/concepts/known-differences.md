@@ -28,6 +28,13 @@ The parameters inside an error message follow Spark 4.x, also for a Spark
 (`` `spark_catalog`.`dummy` ``) where Spark 3.5 names it without
 (`` `dummy` ``).
 
+## Python UDF errors with an older PySpark client
+
+In server mode a Python UDF worker runs the result checks of Spark 4.2.0 with every client version. Where the
+client's PySpark (3.5, or an older 4.x) has no error class of that name, the exception keeps its Python type and its
+message is the 4.2.0 class name and its parameters. For example, a grouped map that returns the wrong columns raises
+`[RESULT_COLUMN_NAMES_MISMATCH]` where Spark 3.5 raises `[RESULT_COLUMNS_MISMATCH_FOR_PANDAS_UDF]`.
+
 ## Result cache, reproducible results (Krishiv extensions, off by default)
 
 `krishiv.resultCache.enabled` and `krishiv.deterministicOrder` add behaviour Spark does not have; with
@@ -193,11 +200,10 @@ had the declared ones. Krishiv refuses such a result instead, and the error depe
   a column declared `NOT NULL` fails with `PYTHON_EXCEPTION`: see the last paragraph of
   [Several grouped-aggregate pandas UDFs in one `agg`](#several-grouped-aggregate-pandas-udfs-in-one-agg).
 
-A `mapInArrow` result with more columns than declared is refused too by the server (Spark reads the declared columns
+A `mapInArrow` result with more columns than declared is refused by the server too (Spark reads the declared columns
 and ignores the rest when the setting is off, as the embedded runtime does; with it on, all raise
-`ARROW_TYPE_MISMATCH`). Krishiv does not know the client's Spark version
-here, so the setting is honoured whatever the version: under a Spark 3.5 or 4.0 client, which has no such setting,
-setting it still turns the check on.
+`ARROW_TYPE_MISMATCH`). Krishiv does not know the client's Spark version here, so the setting is honoured whatever
+the version: under a Spark 3.5 or 4.0 client, which has no such setting, setting it still turns the check on.
 
 ## Python UDF workers per session (server mode)
 

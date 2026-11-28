@@ -148,7 +148,7 @@ fn racing_manager(winner: &Authenticated) -> Arc<SessionManager> {
     let this: Arc<OnceLock<Weak<SessionManager>>> = Arc::new(OnceLock::new());
     let (hook, winner) = (Arc::clone(&this), winner.clone());
     let m = Arc::new(SessionManager::new(
-        Box::new(move |caller: &Authenticated, _| {
+        Box::new(move |caller: &Authenticated, _, _| {
             if caller.principal.name != winner.principal.name
                 && let Some(m) = hook.get().and_then(Weak::upgrade)
             {

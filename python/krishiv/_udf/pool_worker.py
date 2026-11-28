@@ -115,7 +115,7 @@ def _read_memfd(fd: int, length: int) -> Any:
 def _check_python_version(python_ver: str) -> None:
     """``worker_util.py:83-99`` ``check_python_version`` (v4.2.0): the client's ``major.minor`` must be this
     interpreter's. The error surfaces as ``PYTHON_EXCEPTION`` with Spark's text, as in Spark (note §3.1)."""
-    from pyspark.errors import PySparkRuntimeError  # ty: ignore[unresolved-import]  # pool workers only
+    from krishiv._udf._host import PySparkRuntimeError
 
     worker_version = f"{sys.version_info[0]}.{sys.version_info[1]}"
     if python_ver != worker_version:
