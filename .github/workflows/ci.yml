@@ -710,6 +710,16 @@ jobs:
       - name: Miri (unit, property and doc tests; reduced cases under cfg(miri))
         if: steps.gate.outputs.run == 'true'
         run: cargo +nightly-2026-08-12 miri test -p krishiv-kernels --locked
+      # Miri reports every target feature not enabled at compile time as absent, so the run
+      # above takes simdutf8's scalar fallback. With AVX2 on at compile time simdutf8 calls its
+      # AVX2 code, whose prefetch `unsafe_utf8::is_utf8` keeps in bounds; a simdutf8 release
+      # that prefetches further fails here. Its own target dir keeps the flags from rebuilding
+      # the run above.
+      - name: Miri (unsafe_utf8 on simdutf8's AVX2 path)
+        if: steps.gate.outputs.run == 'true'
+        env:
+          RUSTFLAGS: -Ctarget-feature=+avx2,+sse4.2
+        run: cargo +nightly-2026-08-12 miri test -p krishiv-kernels --locked --target-dir target/miri-avx2 --lib unsafe_utf8
 
   miri-bridges:
     # Not in the merge queue (about 8 minutes; it ran on the pull request, and the nightly

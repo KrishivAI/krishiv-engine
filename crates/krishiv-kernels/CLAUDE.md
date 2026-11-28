@@ -131,7 +131,8 @@ Paths are relative to this crate.
 - A NULL row never raises: overflow flags are masked with the validity word; ANSI errors name the first failing row.
 - `#![deny(clippy::arithmetic_side_effects)]`: only explicit `wrapping_*`/`overflowing_*`/`checked_*` arithmetic.
 - `unsafe` allowed only in `unsafe_*.rs` modules, each block with `// SAFETY:`; Miri on every PR touching this
-  crate (`miri-kernels`), nightly ASan and differential fuzzing (ADR 0029).
+  crate (`miri-kernels`; `unsafe_utf8` runs again with `-Ctarget-feature=+avx2,+sse4.2`, since Miri sees no
+  run-time CPU features), nightly ASan and differential fuzzing (ADR 0029).
 - No `unwrap`/`expect`/`panic` in library code; errors carry a Spark error class + SQLSTATE.
 
 ## ADRs (in `../krishiv-internal/adr/`)

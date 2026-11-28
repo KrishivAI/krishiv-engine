@@ -220,8 +220,11 @@ mod tests {
 
     // simdutf8 sends inputs under 64 bytes to its scalar fallback; these
     // reach the vector path (AVX2 / SSE4.2 chosen at run time on x86-64,
-    // NEON on aarch64), and Miri runs them (`miri-kernels`): before the
-    // prefetch cut it reported simdutf8's out-of-bounds pointer here.
+    // NEON on aarch64). Miri sees no target feature that is not enabled at
+    // compile time, so `miri-kernels` runs them a second time with
+    // `RUSTFLAGS=-Ctarget-feature=+avx2,+sse4.2`, which makes simdutf8 call
+    // its AVX2 code: with `PREFETCH_AHEAD` at 0 that run reports simdutf8's
+    // out-of-bounds pointer (`algorithm.rs:234`) here.
     #[test]
     fn long_valid_text_builds_the_array_arrow_builds() {
         let (bytes, cuts) = long_text();
