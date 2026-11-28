@@ -46,11 +46,13 @@ impl Session {
                 b.schema()
             )));
         }
-        let schema = crate::carrier::canonical_schema(schema);
+        let canonical = crate::carrier::canonical_schema(schema);
         let batches = batches
             .into_iter()
-            .map(|b| crate::carrier::recarried(&b, &schema).map(Batch::new))
-            .collect::<Result<Vec<Batch>, KrishivError>>()?;
+            .map(|b| crate::carrier::recarried(&b, &canonical))
+            .collect::<Result<Vec<_>, KrishivError>>()?;
+        let (schema, batches) = crate::carrier::as_views(&canonical, batches)?;
+        let batches: Vec<Batch> = batches.into_iter().map(Batch::new).collect();
         let rows: u64 = batches.iter().map(|b| b.num_rows() as u64).sum();
         let lease = self.state.relations.insert(&schema, &batches)?;
         Ok((

@@ -526,8 +526,15 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
             Some(b) => b,
             None => return Some((listed, Err(bad_types(listed, args)))),
         },
+        // Strings (and binaries) arrive in any carrier: a `createDataFrame` column may be
+        // `LargeUtf8` beside a `Utf8View` literal; both are read as `Utf8` (R1-D-13).
         ("greatest" | "least", [first, rest @ ..])
-            if !rest.is_empty() && rest.iter().all(|t| t == first) =>
+            if !rest.is_empty()
+                && rest.iter().all(|t| {
+                    t == first
+                        || (is_string(t) && is_string(first))
+                        || (is_binary(t) && is_binary(first))
+                }) =>
         {
             let kind = if listed == "greatest" {
                 Extremum::Greatest

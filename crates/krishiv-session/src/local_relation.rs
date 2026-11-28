@@ -23,7 +23,7 @@ use krishiv_plan::{Expr, LocalRelation, LogicalPlan, PlanNode, ReadSource};
 use krishiv_types::batch::Batch;
 use krishiv_types::{DataType, StructType};
 
-use crate::carrier::{canonical_schema, recarried};
+use crate::carrier::{canonical_schema, recarried, viewed};
 use crate::dataframe::DataFrame;
 use crate::session::{Session, internal};
 
@@ -157,27 +157,6 @@ impl Session {
             .iter()
             .map(|b| recarried(b, &canonical_schema(Arc::clone(b.schema_ref()))))
             .collect()
-    }
-}
-
-/// The view carrier of `t` for encoding-only differences: `Utf8`/`LargeUtf8` as `Utf8View` and
-/// `Binary`/`LargeBinary` as `BinaryView`, at any depth.
-fn viewed(t: &ArrowType) -> ArrowType {
-    let field = |f: &Arc<Field>| Arc::new(f.as_ref().clone().with_data_type(viewed(f.data_type())));
-    match t {
-        ArrowType::Utf8 | ArrowType::LargeUtf8 => ArrowType::Utf8View,
-        ArrowType::Binary | ArrowType::LargeBinary => ArrowType::BinaryView,
-        ArrowType::List(f) => ArrowType::List(field(f)),
-        ArrowType::LargeList(f) => ArrowType::LargeList(field(f)),
-        ArrowType::FixedSizeList(f, n) => ArrowType::FixedSizeList(field(f), *n),
-        ArrowType::Map(f, sorted) => ArrowType::Map(field(f), *sorted),
-        ArrowType::Struct(fields) => ArrowType::Struct(
-            fields
-                .iter()
-                .map(|f| f.as_ref().clone().with_data_type(viewed(f.data_type())))
-                .collect(),
-        ),
-        other => other.clone(),
     }
 }
 

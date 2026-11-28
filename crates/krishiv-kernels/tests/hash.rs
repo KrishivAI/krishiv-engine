@@ -12,10 +12,10 @@ use std::sync::Arc;
 
 use arrow_array::types::Int32Type;
 use arrow_array::{
-    Array, BinaryArray, Date32Array, DictionaryArray, DurationMicrosecondArray, Float32Array,
-    Float64Array, Int8Array, Int16Array, Int32Array, Int64Array, IntervalYearMonthArray,
-    LargeBinaryArray, LargeListArray, LargeStringArray, ListArray, NullArray, StringArray,
-    cast::AsArray,
+    Array, BinaryArray, BinaryViewArray, Date32Array, DictionaryArray, DurationMicrosecondArray,
+    Float32Array, Float64Array, Int8Array, Int16Array, Int32Array, Int64Array,
+    IntervalYearMonthArray, LargeBinaryArray, LargeListArray, LargeStringArray, ListArray,
+    NullArray, StringArray, StringViewArray, StructArray, cast::AsArray,
 };
 use arrow_buffer::OffsetBuffer;
 use arrow_schema::{DataType, Field};
@@ -143,10 +143,19 @@ fn string_and_binary_layouts_agree() {
     let ls = LargeStringArray::from(vec!["héllo", ""]);
     let b = BinaryArray::from(vec!["héllo".as_bytes(), b""]);
     let lb = LargeBinaryArray::from(vec!["héllo".as_bytes(), b""]);
+    let sv = StringViewArray::from(vec!["héllo", ""]);
+    let bv = BinaryViewArray::from(vec!["héllo".as_bytes(), b""]);
     let want = (h(&[&s]), x(&[&s]));
-    for other in [&ls as &dyn Array, &b, &lb] {
+    for other in [&ls as &dyn Array, &b, &lb, &sv, &bv] {
         assert_eq!((h(&[other]), x(&[other])), want);
     }
+    // A view holds a value past 12 bytes in a data buffer, a shorter one inline.
+    let long = ["a value longer than twelve bytes", "short"];
+    let (plain, view) = (
+        StringArray::from(long.to_vec()),
+        StringViewArray::from(long.to_vec()),
+    );
+    assert_eq!((h(&[&view]), x(&[&view])), (h(&[&plain]), x(&[&plain])));
 }
 
 #[test]
@@ -345,6 +354,25 @@ fn decimal_hashes_follow_precision_on_either_carrier() {
         x(&[&d128(i128::from(m), 18, 0)]),
         [4_265_531_446_127_695_490]
     );
+}
+
+/// R1-D-6: strings nested in an array or a struct arrive as views (SQL
+/// literals, scans, `createDataFrame`). Values from a Spark 4.3.0 run:
+/// `hash(array('a'))`, `xxhash64(struct('a'))`.
+#[test]
+fn nested_string_views_hash_as_spark() {
+    let list = ListArray::new(
+        Arc::new(Field::new("item", DataType::Utf8View, true)),
+        OffsetBuffer::from_lengths([1]),
+        Arc::new(StringViewArray::from(vec!["a"])),
+        None,
+    );
+    assert_eq!(h(&[&list]), [1_485_273_170]);
+    let row = StructArray::from(vec![(
+        Arc::new(Field::new("col1", DataType::Utf8View, false)),
+        Arc::new(StringViewArray::from(vec!["a"])) as Arc<dyn Array>,
+    )]);
+    assert_eq!(x(&[&row]), [-8_582_455_328_737_087_284]);
 }
 
 #[test]
