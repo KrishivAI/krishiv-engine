@@ -4,8 +4,8 @@
 use std::sync::{Arc, PoisonError, RwLock};
 
 use krishiv_common::config::{
-    Config, ConfigEntry, ConfigValue, IO_TEXT_INFER_TIME, IO_TEXT_TIME_NANOS,
-    PYTHON_UDTF_ARROW_ENABLED, SESSION_TIME_ZONE, Scope, ValueType, lookup,
+    Config, ConfigEntry, ConfigValue, IO_TEXT_INFER_TIME, IO_TEXT_SECOND_OFFSETS,
+    IO_TEXT_TIME_NANOS, PYTHON_UDTF_ARROW_ENABLED, SESSION_TIME_ZONE, Scope, ValueType, lookup,
 };
 use krishiv_common::error::{
     CannotModifyStaticConfig, InvalidConfValueRequirement, InvalidConfValueTimeZone, KrishivError,
@@ -52,9 +52,12 @@ fn profile_default(entry: &ConfigEntry, profile: SparkProfile) -> Option<ConfigV
     // Spark 4.2 reads a `TIME` of a CSV or JSON file in the default grammar as microseconds; 4.3 keeps
     // nanoseconds (a `timeFormat` pattern keeps every digit in both). Only 4.3's text inference gives `TIME`.
     let before_4_3 = profile < SparkProfile::V4_3;
+    // `spark.sql.files.supportSecondOffsetFormat` (default true) came in Spark 4.0; 3.5 writes `[XXX]`.
+    let before_4_0 = profile < SparkProfile::V4_0;
     ((entry.key == PYTHON_UDTF_ARROW_ENABLED.key && before_4_2)
         || ((entry.key == IO_TEXT_TIME_NANOS.key || entry.key == IO_TEXT_INFER_TIME.key)
-            && before_4_3))
+            && before_4_3)
+        || (entry.key == IO_TEXT_SECOND_OFFSETS.key && before_4_0))
         .then_some(ConfigValue::Bool(false))
 }
 
@@ -181,6 +184,7 @@ impl ConfStore {
             &PYTHON_UDTF_ARROW_ENABLED,
             &IO_TEXT_TIME_NANOS,
             &IO_TEXT_INFER_TIME,
+            &IO_TEXT_SECOND_OFFSETS,
         ]
         .into_iter()
         .filter(|entry| !config.is_set(entry))
@@ -630,6 +634,28 @@ mod tests {
                     "{profile:?}"
                 );
             }
+        }
+    }
+
+    /// CSV and JSON writes keep an offset's seconds from the 4.0 profile on
+    /// (`spark.sql.files.supportSecondOffsetFormat`, new in Spark 4.0).
+    #[test]
+    fn text_second_offsets_follow_the_profile() {
+        for (profile, want) in [
+            (SparkProfile::V3_5, "false"),
+            (SparkProfile::V4_0, "true"),
+            (SparkProfile::V4_3, "true"),
+        ] {
+            let store = ConfStore::new(Config::default()).with_profile(profile);
+            let (config, _) = store.query_snapshot();
+            assert_eq!(
+                config
+                    .get(&krishiv_common::config::IO_TEXT_SECOND_OFFSETS)
+                    .map(ToString::to_string)
+                    .as_deref(),
+                Some(want),
+                "{profile:?}"
+            );
         }
     }
 

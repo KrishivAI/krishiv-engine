@@ -117,6 +117,7 @@ static SPECS: LazyLock<Vec<OptionSpec>> = LazyLock::new(|| {
         conf(crate::text::TIME_TYPE_CONF, OptionKind::Bool, OptionDefault::Bool(false), crate::text::TIME_TYPE_CONF, "The session's `spark.sql.timeType.enabled`: inference may give `TIME`.");
         string("timeFormat", "The pattern of TIME values (default: Spark's TIME grammar to read, the value's own digits to write).");
         conf(crate::text::TIME_NANOS_CONF, OptionKind::Bool, OptionDefault::Bool(true), crate::text::TIME_NANOS_CONF, "The session's `krishiv.io.text.timeNanos` (from its Spark profile): a `TIME` read keeps nine fraction digits, else six.");
+        conf(crate::text::SECOND_OFFSETS_CONF, OptionKind::Bool, OptionDefault::Bool(true), crate::text::SECOND_OFFSETS_CONF, "The session's `krishiv.io.text.secondOffsets` (`spark.sql.files.supportSecondOffsetFormat`, from its Spark profile): the default `timestampFormat` of a write keeps the seconds of a zone offset.");
         conf(crate::text::TIME_INFER_CONF, OptionKind::Bool, OptionDefault::Bool(true), crate::text::TIME_INFER_CONF, "The session's `krishiv.io.text.inferTime` (from its Spark profile): inference may give `TIME` (Spark 4.3), never under 4.2.");
         conf("timeZone", OptionKind::String, OptionDefault::Str("UTC"), "spark.sql.session.timeZone", "The time zone of timestamps without an offset.");
         conf(crate::text::PARSER_POLICY_CONF, OptionKind::String, OptionDefault::Str("EXCEPTION"), crate::text::PARSER_POLICY_CONF, "The session's `spark.sql.legacy.timeParserPolicy`: `LEGACY` reads dates and timestamps with `FastDateFormat` patterns and the lenient fallback, and inference never gives a DATE.");
@@ -352,7 +353,7 @@ impl CsvOptions {
             charset,
             line_sep,
             enforce_schema: o.bool("enforceSchema").unwrap_or(true),
-            prefer_date: o.bool("preferDate").unwrap_or(true) && !crate::text::legacy_parser(o),
+            prefer_date: crate::text::prefer_date(o),
             time_type: crate::text::infers_time(o),
             quote_all: o.bool("quoteAll").unwrap_or(false),
             escape_quotes: o.bool("escapeQuotes").unwrap_or(true),

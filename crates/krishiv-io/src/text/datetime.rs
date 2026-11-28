@@ -15,9 +15,13 @@ use crate::options::FormatOptions;
 
 /// Spark's default write patterns.
 const DATE_PATTERN: &str = "yyyy-MM-dd";
-const TIMESTAMP_PATTERN: &str = "yyyy-MM-dd'T'HH:mm:ss[.SSS][XXX]";
+const TIMESTAMP_PATTERN: &str = "yyyy-MM-dd'T'HH:mm:ss[.SSS][XXXXX]";
+/// [`TIMESTAMP_PATTERN`] without an offset's seconds (Spark 3.5, or
+/// `spark.sql.files.supportSecondOffsetFormat` off).
+const TIMESTAMP_PATTERN_MINUTES: &str = "yyyy-MM-dd'T'HH:mm:ss[.SSS][XXX]";
 const NTZ_PATTERN: &str = "yyyy-MM-dd'T'HH:mm:ss[.SSS]";
-/// The `FastDateFormat` read patterns of dates and timestamps under LEGACY.
+/// The `FastDateFormat` patterns of dates and timestamps under LEGACY (read
+/// and write defaults alike).
 const LEGACY_DATE: &str = "yyyy-MM-dd";
 const LEGACY_TIMESTAMP: &str = "yyyy-MM-dd'T'HH:mm:ss.SSSXXX";
 
@@ -84,8 +88,7 @@ impl Datetimes {
     /// # Errors
     /// An invalid pattern or time zone.
     pub(crate) fn csv(o: &FormatOptions, purpose: Purpose) -> Result<Self, KrishivError> {
-        let prefer_date = o.bool("preferDate").unwrap_or(true) && !crate::text::legacy_parser(o);
-        Self::build(o, purpose, prefer_date)
+        Self::build(o, purpose, crate::text::prefer_date(o))
     }
 
     fn build(
@@ -105,24 +108,39 @@ impl Datetimes {
                 (None, Purpose::Parse | Purpose::ParseNtz) => Ok(None),
             }
         };
-        // Under LEGACY (the CSV and JSON options carry the policy) reading
-        // takes `FastDateFormat` patterns, Spark's legacy defaults when none
-        // is named (`JSONOptions`/`CSVOptions` `dateFormatInRead`, `timestampFormatInRead`).
-        let legacy =
-            matches!(purpose, Purpose::Parse | Purpose::ParseNtz) && crate::text::legacy_parser(o);
+        // Under LEGACY (the CSV and JSON options carry the policy) dates and
+        // timestamps take `FastDateFormat` patterns, Spark's legacy defaults
+        // when none is named, for reading and writing alike
+        // (`JSONOptions`/`CSVOptions` `dateFormatInRead`, `timestampFormatInRead`,
+        // `commonTimestampFormat`; the generators build `FAST_DATE_FORMAT`
+        // formatters). `TIMESTAMP_NTZ` keeps the `java.time` pattern. The
+        // generators build their formatters eagerly, so a pattern that does
+        // not compile fails the write, never one value.
+        let legacy = crate::text::legacy_parser(o);
+        let reading = matches!(purpose, Purpose::Parse | Purpose::ParseNtz);
         let (date, timestamp) = if legacy {
+            let fast = |opt: &str, default: &str| -> Result<DateTimePattern, KrishivError> {
+                let p = DateTimePattern::new_fast(o.str(opt).unwrap_or(default));
+                match p.build_error() {
+                    Some(e) if !reading => Err(e),
+                    _ => Ok(p),
+                }
+            };
             (
-                Some(DateTimePattern::new_fast(
-                    o.str("dateFormat").unwrap_or(LEGACY_DATE),
-                )),
-                Some(DateTimePattern::new_fast(
-                    o.str("timestampFormat").unwrap_or(LEGACY_TIMESTAMP),
-                )),
+                Some(fast("dateFormat", LEGACY_DATE)?),
+                Some(fast("timestampFormat", LEGACY_TIMESTAMP)?),
             )
         } else {
             (
                 pattern("dateFormat", DATE_PATTERN)?,
-                pattern("timestampFormat", TIMESTAMP_PATTERN)?,
+                pattern(
+                    "timestampFormat",
+                    if o.bool(crate::text::SECOND_OFFSETS_CONF).unwrap_or(true) {
+                        TIMESTAMP_PATTERN
+                    } else {
+                        TIMESTAMP_PATTERN_MINUTES
+                    },
+                )?,
             )
         };
         let ntz = pattern("timestampNTZFormat", NTZ_PATTERN)?;

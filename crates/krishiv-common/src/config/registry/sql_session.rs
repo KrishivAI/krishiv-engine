@@ -62,6 +62,22 @@ pub static IO_TEXT_INFER_TIME: ConfigEntry = ConfigEntry {
     spark_alias: None,
 };
 
+/// Whether CSV and JSON writes keep the seconds of a zone offset.
+pub static IO_TEXT_SECOND_OFFSETS: ConfigEntry = ConfigEntry {
+    key: "krishiv.io.text.secondOffsets",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(true)),
+    doc: "Whether CSV and JSON writes of a `TIMESTAMP` with the default `timestampFormat` keep the \
+          seconds of a zone offset (`yyyy-MM-dd'T'HH:mm:ss[.SSS][XXXXX]`: `-07:52:58` for \
+          `America/Los_Angeles` before 1883, Spark 4.0 and later) or drop them (`[XXX]`: `-07:52`, \
+          Spark 3.5). The session sets it from its Spark profile: `true` from the 4.0 profile on, \
+          `false` under 3.5. Spark's `spark.sql.files.supportSecondOffsetFormat`.",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
+    version_added: "0.3.1",
+    spark_alias: Some("spark.sql.files.supportSecondOffsetFormat"),
+};
+
 /// Whether `SET PATH` is allowed.
 pub static SQL_PATH_ENABLED: ConfigEntry = ConfigEntry {
     key: "krishiv.sql.path.enabled",

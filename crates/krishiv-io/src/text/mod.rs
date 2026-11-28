@@ -41,6 +41,13 @@ pub(crate) const TIME_TYPE_CONF: &str = krishiv_common::config::TIME_TYPE_ENABLE
 /// keeps every digit in both).
 pub(crate) const TIME_NANOS_CONF: &str = "krishiv.io.text.timeNanos";
 
+/// The session's `krishiv.io.text.secondOffsets`
+/// (`spark.sql.files.supportSecondOffsetFormat`), read as an option named as
+/// the conf: the default `timestampFormat` of a write keeps an offset's
+/// seconds (`[XXXXX]`, Spark 4.0 on) or drops them (`[XXX]`, Spark 3.5;
+/// `FileSourceOptions.commonTimestampFormat`).
+pub(crate) const SECOND_OFFSETS_CONF: &str = "krishiv.io.text.secondOffsets";
+
 /// The session's `krishiv.io.text.inferTime`, read as an option named as the
 /// conf: schema inference may give `TIME` (with [`TIME_TYPE_CONF`] on) only
 /// under the Spark 4.3 profile; Spark 4.2's `CSVInferSchema` /
@@ -65,6 +72,12 @@ pub(crate) const PARSER_POLICY_CONF: &str = "spark.sql.legacy.timeParserPolicy";
 pub(crate) fn default_ntz(o: &crate::options::FormatOptions) -> bool {
     o.str(TIMESTAMP_TYPE_CONF)
         .is_some_and(|v| v.trim().eq_ignore_ascii_case("TIMESTAMP_NTZ"))
+}
+
+/// CSV's `preferDate` (`CSVOptions.preferDate`): the option, on by default,
+/// and always off under `timeParserPolicy=LEGACY`.
+pub(crate) fn prefer_date(o: &crate::options::FormatOptions) -> bool {
+    o.bool("preferDate").unwrap_or(true) && !legacy_parser(o)
 }
 
 /// Whether the session's parser policy is `LEGACY` ([`PARSER_POLICY_CONF`]).

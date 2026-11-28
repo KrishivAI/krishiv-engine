@@ -551,6 +551,17 @@ fn spark_aliases_map_to_krishiv_keys() {
     assert_eq!(c.set("spark.sql.ansi.enabled", "false").unwrap(), None);
     assert_eq!(c.get(&ANSI_ENABLED), Some(&ConfigValue::Bool(false)));
     assert_eq!(
+        c.get(&IO_TEXT_SECOND_OFFSETS),
+        Some(&ConfigValue::Bool(true))
+    );
+    c.set("spark.sql.files.supportSecondOffsetFormat", "false")
+        .unwrap();
+    assert_eq!(
+        c.get(&IO_TEXT_SECOND_OFFSETS),
+        Some(&ConfigValue::Bool(false))
+    );
+    assert!(c.set("krishiv.io.text.secondOffsets", "maybe").is_err());
+    assert_eq!(
         lookup("spark.sql.session.timeZone").map(|e| e.key),
         Some(SESSION_TIME_ZONE.key)
     );

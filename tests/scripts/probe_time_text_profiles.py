@@ -20,6 +20,10 @@ Runs a REAL Spark (never from memory) in a throw-away container and prints one J
 - `json_read`: one-record JSON files read with schema `t DATE` and `t TIMESTAMP` under the same two policies.
   `JSONOptions.dateFormatInRead` is the option alone, so without `dateFormat` dates read leniently even with the
   fallback off (CSV reads `yyyy-MM-dd` strictly there, under `preferDate`).
+- `write`: one row of a `TIMESTAMP`, a `DATE` and a `TIMESTAMP_NTZ` written as CSV and as JSON under the default
+  policy and `timeParserPolicy=LEGACY` (in UTC and in `America/Los_Angeles`), per write option set; each gives the
+  written line (a refusal's error class instead). LEGACY writes dates and timestamps with `FastDateFormat`
+  (`yyyy-MM-dd'T'HH:mm:ss.SSSXXX` by default, Julian before 1582); `TIMESTAMP_NTZ` keeps the `java.time` pattern.
 
 Usage (from repo root), once per version:
 
@@ -31,7 +35,8 @@ Usage (from repo root), once per version:
 Checked by `krishiv-session/tests/time_file_reads.rs` (`text_time_follows_the_profile_runs`) and
 `krishiv-io/src/csv/time_tests.rs` (the 4.2 profile rows); the `schema_of_json` section by
 `krishiv-session/tests/schema_of_json_time.rs`, the `json_file` section by `krishiv-session/tests/json_file_time.rs`,
-the `csv_file` and `json_read` sections by `krishiv-session/tests/csv_file_legacy.rs`.
+the `csv_file` and `json_read` sections by `krishiv-session/tests/csv_file_legacy.rs`, the `write` section by
+`krishiv-session/tests/text_write_legacy.rs`.
 """
 
 import json
@@ -134,6 +139,40 @@ JSON_READ_OPTIONS = [
 
 JSON_READ_CASES = [(t, o) for o in JSON_READ_OPTIONS for t in JSON_READ_TEXTS]
 
+WRITE_SETTINGS = [
+    ("default", {}),
+    ("legacy", {"spark.sql.legacy.timeParserPolicy": "LEGACY"}),
+    ("default la", {"spark.sql.session.timeZone": "America/Los_Angeles"}),
+    ("legacy la", {"spark.sql.legacy.timeParserPolicy": "LEGACY", "spark.sql.session.timeZone": "America/Los_Angeles"}),
+]
+
+WRITE_ROWS = [
+    ("2024-01-02 03:04:05.123456", "2024-01-02"),
+    ("2024-01-02 03:04:05", "2024-07-02"),
+    ("2024-07-02 13:04:05.5", "1999-12-31"),
+    ("1500-03-01 00:00:00", "1500-03-01"),
+    ("1582-10-14 12:00:00", "1582-10-14"),
+    ("0001-01-01 00:00:00", "0001-01-01"),
+    ("1883-11-18 12:00:00", "1883-11-18"),
+]
+
+WRITE_OPTIONS = [
+    {},
+    {"timestampFormat": "yyyy-MM-dd HH:mm:ss.SSSSSS"},
+    {"timestampFormat": "yyyy-MM-dd'T'HH:mm:ss.SSSZ", "dateFormat": "dd/MM/yyyy"},
+    {"timestampFormat": "dd MMM yyyy hh:mm a z", "dateFormat": "EEE, d MMM yyyy"},
+    {"timestampFormat": "yyyy-MM-dd HH:mm:ss XXX", "timestampNTZFormat": "yyyy-MM-dd HH:mm"},
+    {"dateFormat": "u yyyy"},
+    {"timestampFormat": "yyyy-MM-dd b"},
+    {"dateFormat": "yyyy-MM-dd b"},
+]
+
+
+def error_of(e: Exception) -> str:
+    # `getCondition` (4.0+) replaces `getErrorClass`, which warns on stdout.
+    cond = getattr(e, "getCondition", None) or getattr(e, "getErrorClass", lambda: None)
+    return "ERROR " + (cond() or type(e).__name__)
+
 
 def lit(s: str) -> str:
     return "'" + s.replace("\\", "\\\\").replace("'", "\\'") + "'"
@@ -186,7 +225,7 @@ def main() -> None:
                 got = spark.sql(sql).collect()[0].s
             # The error class is the result.
             except Exception as e:
-                got = "ERROR " + (getattr(e, "getErrorClass", lambda: None)() or type(e).__name__)
+                got = error_of(e)
             rows.append({"text": text, "options": opts, "schema": got})
         sojson[setting] = rows
         frows = []
@@ -200,7 +239,7 @@ def main() -> None:
                 values = [r.s for r in df.selectExpr("CAST(t AS STRING) AS s").collect()]
             # The error class is the result.
             except Exception as e:
-                schema = "ERROR " + (getattr(e, "getErrorClass", lambda: None)() or type(e).__name__)
+                schema = error_of(e)
                 values = []
             frows.append({"text": text, "options": opts, "schema": schema, "values": values})
         jfile[setting] = frows
@@ -226,7 +265,7 @@ def main() -> None:
                     values = [x.s for x in df.selectExpr("CAST(t AS STRING) AS s").collect()]
                 # The error class is the result.
                 except Exception as e:
-                    schema = "ERROR " + (getattr(e, "getErrorClass", lambda: None)() or type(e).__name__)
+                    schema = error_of(e)
                     values = []
                 reads[name] = {"schema": schema, "values": values}
             rows.append({"text": text, "options": opts, "reads": reads})
@@ -251,13 +290,41 @@ def main() -> None:
                     values = [x.s for x in df.selectExpr("CAST(t AS STRING) AS s").collect()]
                 # The error class is the result.
                 except Exception as e:
-                    schema = "ERROR " + (getattr(e, "getErrorClass", lambda: None)() or type(e).__name__)
+                    schema = error_of(e)
                     values = []
                 reads[name] = {"schema": schema, "values": values}
             rows.append({"text": text, "options": opts, "reads": reads})
         jread[setting] = rows
         for k in confs:
             spark.conf.unset(k)
+
+    write = {}
+    for setting, confs in WRITE_SETTINGS:
+        for k, v in confs.items():
+            spark.conf.set(k, v)
+        rows = []
+        for i, opts in enumerate(WRITE_OPTIONS):
+            for j, (ts, d) in enumerate(WRITE_ROWS):
+                df = spark.sql(f"SELECT TIMESTAMP {lit(ts)} AS ts, DATE {lit(d)} AS d, TIMESTAMP_NTZ {lit(ts)} AS ntz")
+                lines = {}
+                for fmt in ["csv", "json"]:
+                    path = os.path.join(root, f"w-{setting.replace(' ', '-')}-{i}-{j}.{fmt}")
+                    try:
+                        df.coalesce(1).write.options(**opts).format(fmt).save(path)
+                        parts = sorted(p for p in os.listdir(path) if p.startswith("part-"))
+                        got = []
+                        for p in parts:
+                            with open(os.path.join(path, p)) as f:
+                                got.extend(f.read().splitlines())
+                    # The error class is the result.
+                    except Exception as e:
+                        got = [error_of(e)]
+                    lines[fmt] = got
+                rows.append({"timestamp": ts, "date": d, "options": opts, "lines": lines})
+        write[setting] = rows
+        for k in confs:
+            spark.conf.unset(k)
+        spark.conf.set("spark.sql.session.timeZone", "UTC")
 
     out = {
         "spark": spark.version,
@@ -267,6 +334,7 @@ def main() -> None:
         "json_file": jfile,
         "csv_file": cfile,
         "json_read": jread,
+        "write": write,
     }
     json.dump(out, sys.stdout, indent=2, sort_keys=True)
     sys.stdout.write("\n")
