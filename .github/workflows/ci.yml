@@ -12,7 +12,8 @@ on:
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  # Only a pull request run is superseded by a newer push; main, merge-queue, release and nightly runs are never cancelled.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -97,7 +98,7 @@ jobs:
         run: |
           python=true
           if [ "$EVENT" = "pull_request" ] && ! git diff --name-only "$BASE_SHA...$HEAD_SHA" \
-            | grep -qE '^(crates/krishiv-python/|python/|xtask/|\.github/workflows/ci\.yml$|\.github/workflows/wheels\.yml$|\.github/scripts/(wheel-test|approval-label)\.sh$|Cargo\.(toml|lock)$|rust-toolchain\.toml$|budgets\.json$)'; then
+            | grep -qE '^(crates/krishiv-python/|python/|pyproject\.toml$|Cargo\.lock$|\.github/workflows/(ci|wheels)\.yml$|\.github/scripts/wheel-test\.sh$)'; then
             python=false
           fi
           echo "python=$python" >> "$GITHUB_OUTPUT"

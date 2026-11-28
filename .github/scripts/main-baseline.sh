@@ -8,7 +8,7 @@
 #
 # TARGET_SHA is given directly, or read from the file TARGET_SHA_FILE (the
 # `measured-base-sha` a pull request's measurement job recorded), so a PR is
-# charged only for its own diff. Candidates are the push runs of WORKFLOW on
+# charged only for its own diff. Candidates are the runs (nightly schedule, manual or push) of WORKFLOW on
 # BRANCH, newest first; the first whose head is the target or an ancestor of
 # it and which still has the artifact ARTIFACT wins. A run that is still going
 # for the target itself is waited for (WAIT_SECS); if it has not finished by
@@ -106,7 +106,7 @@ artifact_state() {
 found="" expired="" pending=""
 while :; do
   runs=$(retry gh run list --repo "$REPO" --workflow "$workflow" --branch "$branch" \
-    --event push --limit "$LIMIT" --json databaseId,headSha,status \
+    --limit "$LIMIT" --json databaseId,headSha,status \
     --jq '.[] | [.databaseId, .headSha, .status] | @tsv')
   pending=""
   while IFS=$'\t' read -r id sha status; do

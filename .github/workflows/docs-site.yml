@@ -31,7 +31,8 @@ permissions:
 
 concurrency:
   group: docs-site-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  # Only a pull request run is superseded by a newer push; main, merge-queue, release and nightly runs are never cancelled.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   docs-site:

@@ -1,25 +1,28 @@
 name: Main measurement
 
 # The baseline for the budget and wheel-size gates of pull requests
-# (pr-policy.yml): on every push to main, measure the budgets (`budgets-main`)
+# (pr-policy.yml): every night on main, measure the budgets (`budgets-main`)
 # and the wheel sizes (`wheel-sizes-main`, from the `sizes` job of wheels.yml)
 # and keep them 90 days. A pull request is compared with the measurement for
 # the main commit it was built on (.github/scripts/main-baseline.sh), so it is
-# gated only on the growth it adds. Each push also reports its drift against
+# gated only on the growth it adds. Each run also reports its drift against
 # the previous main measurement in the job summary (never failing the run), so
 # growth merged under `budget-approved` stays visible.
 #
-# Why a workflow of its own: every main commit must be measured, because a
-# pull request may have been built on any of them, so these runs are keyed by
-# commit and never cancelled. ci.yml cancels superseded runs on a branch and
+# Why a workflow of its own: the runs are keyed by commit and never cancelled. ci.yml cancels superseded runs on a branch and
 # would run its whole test suite for each of them; here only the two
 # measurements run. ci.yml has no push trigger, so main's wheels are built only here. The workflow name in main-baseline.sh (`main-measure.yml`),
 # the artifact names and the job `budgets` are read by pr-policy.yml; keep them
 # in sync.
 
 on:
-  push:
-    branches: [main]
+  # Once a night, 00:00 CET (23:00 UTC; 01:00 during CEST), inside the 00:00-06:00 CET window, and on demand. A push to main no
+  # longer starts it: each measurement builds the workspace clean and the wheels on three platforms, and the runners are
+  # better spent on pull requests. A pull request is compared with the newest measurement at or before the main commit it
+  # was built on (main-baseline.sh), so between two nights it is charged also for the growth of what merged in between.
+  schedule:
+    - cron: "0 23 * * *"
+  workflow_dispatch:
   # Re-saves the `test` cache when it was evicted (GitHub drops caches unused for 7 days) and no push came.
   # Only the `test` job runs on a schedule; the measurements below are per pushed commit.
   schedule:
