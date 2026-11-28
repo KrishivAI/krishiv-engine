@@ -105,3 +105,15 @@ async fn set_session_options_cannot_turn_the_environment_on() {
     };
     assert_eq!(value, "${env:PATH}");
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_flight_sql_client_never_reads_a_hidden_setting_through_substitution() {
+    let startup = [("spark.my.token", "tok-123"), ("spark.my.plain", "visible")];
+    let mut h = served(&startup).await;
+    assert_eq!(
+        stored(&mut h, "${spark.my.token}").await,
+        "${spark.my.token}"
+    );
+    let mut h = served(&startup).await;
+    assert_eq!(stored(&mut h, "${spark.my.plain}").await, "visible");
+}

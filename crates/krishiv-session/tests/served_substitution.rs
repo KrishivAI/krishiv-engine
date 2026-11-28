@@ -125,3 +125,40 @@ fn an_embedded_session_reads_the_environment_as_spark_does() {
     assert_eq!(selected(&s, SYSTEM_REF), path());
     assert_eq!(selected(&Session::new().unwrap(), ENV_REF), path());
 }
+
+/// A served session's `${key}` never shows a value that `SET` and Connect `Config.get` hide
+/// (`krishiv_common::redact::is_redacted_setting`: a secret-like key, or a value holding a
+/// credential): the reference stays as written. Embedded sessions substitute it, as Spark does.
+#[test]
+fn a_served_reference_to_a_hidden_setting_stays_as_written() {
+    let startup = [
+        ("spark.my.token", "tok-123"),
+        ("spark.my.dsn", "postgres://u:pw@h/db"),
+        ("spark.my.plain", "visible"),
+    ];
+    let rt = runtime(DeclMode::Server, &startup);
+    for s in [
+        caller_session(&rt),
+        Session::builder().runtime(Arc::clone(&rt)).build().unwrap(),
+    ] {
+        for r in [
+            "${spark.my.token}",
+            "${hiveconf:spark.my.token}",
+            "${spark:spark.my.token}",
+            "${spark.my.dsn}",
+        ] {
+            assert_eq!(selected(&s, r), r);
+        }
+        assert_eq!(selected(&s, "${spark.my.plain}"), "visible");
+        // A plain key whose value names a hidden one does not reach it either (here the stored
+        // text `${spark.my.token}` is itself secret-like, so `${k2}` stays too).
+        run(&s, "SET k2 = ${spark.my.token}").unwrap();
+        assert_eq!(selected(&s, "${k2}"), "${k2}");
+        run(&s, "SET k3 = before ${spark.my.dsn}").unwrap();
+        assert_eq!(selected(&s, "${k3}"), "before ${spark.my.dsn}");
+    }
+    let embedded = runtime(DeclMode::Embedded, &startup);
+    let s = Session::builder().runtime(embedded).build().unwrap();
+    assert_eq!(selected(&s, "${spark.my.token}"), "tok-123");
+    assert_eq!(selected(&s, "${spark.my.dsn}"), "postgres://u:pw@h/db");
+}

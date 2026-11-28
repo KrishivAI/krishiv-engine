@@ -261,3 +261,24 @@ async fn the_operator_restores_sparks_substitution_at_startup() {
     let got = stored(&channel, "v", "${env:PATH}").await.expect("view");
     assert_eq!(got, path());
 }
+
+/// A setting `Config.get` hides (`is_redacted_setting`) is not read through `${key}` either: the
+/// operator's startup value stays behind the reference; a plain one is still substituted.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_connect_client_never_reads_a_hidden_setting_through_substitution() {
+    let (channel, _stop) =
+        start(&[("spark.my.token", "tok-123"), ("spark.my.plain", "visible")]).await;
+    for (view, reference) in [
+        ("v", "${spark.my.token}"),
+        ("w", "${hiveconf:spark.my.token}"),
+    ] {
+        let got = stored(&channel, view, reference).await.expect("view");
+        assert_eq!(got, reference);
+    }
+    assert_eq!(
+        stored(&channel, "x", "${spark.my.plain}")
+            .await
+            .expect("view"),
+        "visible"
+    );
+}

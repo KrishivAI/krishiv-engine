@@ -6,7 +6,9 @@
 //! and `${sparkconf:name}` look the same name up (also stored with their prefix, as `SET hivevar:name = v`
 //! stores it); `${env:NAME}` and `${system:NAME}` read the process environment, except in a served session
 //! (`krishiv server`), where they stay as written unless `krishiv.server.sql.substituteEnvironment` is
-//! on (a recorded difference from Spark: a client must not read the server's secrets). Values are substituted
+//! on (a recorded difference from Spark: a client must not read the server's secrets). In a served session
+//! a setting that `SET` and Connect `Config.get` hide (a secret-like key, or a value holding a credential,
+//! `krishiv_common::redact::is_redacted_setting`) stays as written too. Values are substituted
 //! again (to a depth of 10); an unknown name stays as written. Only the form `${` + characters other than
 //! `}`, `$` and space + `}` is a reference.
 
@@ -29,13 +31,18 @@ impl crate::Session {
     /// `query` with its `${name}` references replaced, unless `spark.sql.variable.substitute` is false.
     pub(crate) fn substituted<'q>(&self, query: &'q str) -> std::borrow::Cow<'q, str> {
         let config = self.state.conf.snapshot();
+        let serving = self.serves_others();
         if crate::conf::get(&config, "spark.sql.variable.substitute")
             .is_none_or(|v| !v.trim().eq_ignore_ascii_case("false"))
         {
             crate::variable_substitution::substitute(
                 query,
                 &crate::variable_substitution::Sources {
-                    lookup: &|k| crate::conf::get(&config, k),
+                    lookup: &|k| {
+                        crate::conf::get(&config, k).filter(|v| {
+                            !serving || !krishiv_common::redact::is_redacted_setting(k, Some(v))
+                        })
+                    },
                     environment: self.reads_environment(&config),
                 },
             )
@@ -44,11 +51,18 @@ impl crate::Session {
         }
     }
 
+    /// Whether this session is a served one: its runtime (`DeclMode::Server`) serves callers other
+    /// than the process owner, so `${name}` shows no setting `SET` and `Config.get` hide
+    /// (`krishiv_common::redact::is_redacted_setting`), whatever `substituteEnvironment` says.
+    fn serves_others(&self) -> bool {
+        self.runtime().catalogs().mode() == crate::catalog_decl::DeclMode::Server
+    }
+
     /// Whether `${env:..}` and `${system:..}` read the process environment: always outside a served
     /// session; in one only when the operator turned `krishiv.server.sql.substituteEnvironment` on at
     /// startup (a cluster key: no `SET` or session builder changes it).
     pub(crate) fn reads_environment(&self, config: &krishiv_common::config::Config) -> bool {
-        self.runtime().catalogs().mode() != crate::catalog_decl::DeclMode::Server
+        !self.serves_others()
             || config
                 .get(&krishiv_common::config::SERVER_SQL_SUBSTITUTE_ENVIRONMENT)
                 .and_then(krishiv_common::config::ConfigValue::as_bool)

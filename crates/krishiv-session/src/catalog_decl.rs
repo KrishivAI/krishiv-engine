@@ -77,11 +77,12 @@ pub fn is_declaration_key(key: &str) -> bool {
 /// Whether a runtime serves callers other than the process owner, and so where its catalog
 /// declarations come from.
 ///
-/// A runtime that serves other callers (a Spark Connect, Flight SQL or MCP server built from the Rust
-/// API, as `krishiv server` does) must be `Server`. Only then are catalog declarations startup-only and
+/// A runtime that serves other callers (a Spark Connect or Flight SQL server built from the Rust API,
+/// as `krishiv server` does) must be `Server`. Only then are catalog declarations startup-only,
 /// `${env:..}` / `${system:..}` in SQL text left as written (unless the operator sets
-/// `krishiv.server.sql.substituteEnvironment`); on an `Embedded` runtime every caller's SQL reads the
-/// server's environment variables and system properties.
+/// `krishiv.server.sql.substituteEnvironment`) and `${key}` of a hidden setting left as written; on an
+/// `Embedded` runtime every caller's SQL reads the server's environment variables, system properties
+/// and secret settings. (Krishiv's MCP server runs on an embedded runtime and turns substitution off.)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeclMode {
     /// `krishiv server`, or any runtime that serves other callers: references only; an HTTP catalog
