@@ -580,7 +580,8 @@ impl Resolver<'_> {
                     _ => return Ok(()),
                 },
             };
-            match krishiv_functions::scalar::schema_of_json_ddl(&csv, &pairs)
+            match self
+                .json_ddl(&csv, &pairs)
                 .map_err(|err| AnalysisError::new(err, e.origin))?
             {
                 Some(ddl) => ddl,
@@ -616,6 +617,52 @@ impl Resolver<'_> {
         };
         self.show_schema_literal(e, kids.len(), bound, ddl);
         Ok(())
+    }
+
+    /// The DDL `schema_of_json(json, options)` folds to, under the session
+    /// settings Spark's `JsonInferSchema` reads from `SQLConf`: the `TIME`
+    /// gate (inference knows `TIME` only under the 4.3 profile, Spark 4.2.1
+    /// run in `tests/fixtures/spark-4.2.1/time-text-profiles.json`), the
+    /// default timestamp type, the parser policy and the zone (the options'
+    /// `timeZone`, else the session's).
+    fn json_ddl(
+        &self,
+        json: &str,
+        pairs: &[(String, String)],
+    ) -> Result<Option<String>, krishiv_common::error::KrishivError> {
+        let conf = &self.ctx.conf;
+        let named = pairs
+            .iter()
+            .rev()
+            .find(|(k, _)| k.eq_ignore_ascii_case("timeZone"))
+            .map(|(_, v)| krishiv_kernels::datetime::resolve_zone(v))
+            .transpose()?;
+        let utc = krishiv_kernels::cast::FixedOffset(0);
+        // An unset session zone is UTC, as on the cast path (`AnalyzerConf::session_zone`).
+        let zone: &dyn krishiv_kernels::cast::TimeZoneRules = match &named {
+            Some(z) => z,
+            None => conf
+                .session_zone
+                .as_ref()
+                .map_or(&utc as &dyn krishiv_kernels::cast::TimeZoneRules, |z| z),
+        };
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()
+            .and_then(|d| i64::try_from(d.as_micros()).ok())
+            .unwrap_or(0);
+        let session = krishiv_kernels::json::InferSession {
+            time_type: conf.time_type && self.ctx.profile >= crate::analyzer::SparkProfile::V4_3,
+            default_ntz: conf.timestamp_ntz,
+            zone,
+            today: krishiv_kernels::text::today_in(now, zone),
+        };
+        krishiv_functions::scalar::schema_of_json_ddl(
+            json,
+            pairs,
+            conf.legacy_time_parser,
+            &session,
+        )
     }
 
     /// The DDL `schema_of_csv(csv[, options])` resolves to (`None`: defaults).

@@ -596,6 +596,20 @@ fn mask_class(c: char) -> MaskClass {
     }
 }
 
+/// Java's `Character.digit(c, 10)` for one UTF-16 unit: the value of an
+/// ASCII digit or of a basic-multilingual-plane `Nd` digit (each `Nd` run of
+/// [`mask_table::DIGIT`] is the ten digits from zero), else `None`. A scalar
+/// outside the plane is two surrogate units in Java, never a digit.
+pub(crate) fn java_decimal_digit(c: char) -> Option<u32> {
+    if let Some(d) = c.to_digit(10) {
+        return Some(d);
+    }
+    let cp = u32::from(c);
+    let runs = &mask_table::DIGIT;
+    let i = runs.partition_point(|&(_, last, _)| last < cp);
+    runs.get(i).and_then(|&(first, _, _)| cp.checked_sub(first))
+}
+
 /// Whether `cp` is in one of the sorted, disjoint `(first, last, step)` runs.
 fn in_runs(runs: &[(u32, u32, u32)], cp: u32) -> bool {
     let i = runs.partition_point(|&(_, last, _)| last < cp);
@@ -1007,6 +1021,32 @@ mod tests {
         assert!(reserve(&mut buf, 16).is_ok());
         assert!(buf.capacity() >= 16);
         assert!(reserve(&mut buf, usize::MAX).is_err());
+    }
+
+    #[test]
+    fn java_decimal_digits_are_the_mask_digits_with_their_values() {
+        // Every `Nd` run is the ten digits from zero, so the offset in the
+        // run is the digit's value.
+        for &(first, last, step) in &mask_table::DIGIT {
+            assert_eq!((last.checked_sub(first), step), (Some(9), 1), "{first:#x}");
+        }
+        for cp in 0..=0xffff_u32 {
+            let Some(c) = char::from_u32(cp) else {
+                continue;
+            };
+            let digit = java_decimal_digit(c);
+            assert_eq!(
+                digit.is_some(),
+                mask_class(c) == MaskClass::Digit,
+                "{cp:#x}"
+            );
+            assert!(digit.is_none_or(|d| d < 10), "{cp:#x}");
+        }
+        assert_eq!(java_decimal_digit('7'), Some(7));
+        assert_eq!(java_decimal_digit('\u{0662}'), Some(2));
+        assert_eq!(java_decimal_digit('\u{ff19}'), Some(9));
+        assert_eq!(java_decimal_digit('a'), None);
+        assert_eq!(java_decimal_digit('\u{1d7ce}'), None);
     }
 
     #[test]
