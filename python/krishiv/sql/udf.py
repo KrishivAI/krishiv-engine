@@ -189,6 +189,7 @@ def _create_py_udf(
 ) -> Any:
     """Create a regular/Arrow-optimized Python UDF."""
     is_arrow_enabled = False
+    missing_dependency: str | None = None
     if useArrow is None:
         from krishiv.sql import session as _session
 
@@ -205,14 +206,9 @@ def _create_py_udf(
         try:
             require_minimum_pandas_version()
             require_minimum_pyarrow_version()
-        except ImportError:
+        except ImportError as missing:
             is_arrow_enabled = False
-            warnings.warn(
-                "Arrow optimization failed to enable because PyArrow or Pandas is not installed. "
-                "Falling back to a non-Arrow-optimized UDF.",
-                RuntimeWarning,
-                stacklevel=3,
-            )
+            missing_dependency = str(missing)
 
     eval_type: int | None = None
     if useArrow is None:
@@ -233,8 +229,15 @@ def _create_py_udf(
             # Fallback to Regular Python UDF
             eval_type = PythonEvalType.SQL_BATCHED_UDF
             # Krishiv: the pickled-row path is not implemented (design owner question 2).
+            # One warning: a missing optional dependency, when that is why Arrow optimization is off.
+            reason = (
+                f"Arrow optimization is off because {missing_dependency} "
+                "(install it with `pip install 'krishiv[pandas]'`). "
+                if missing_dependency
+                else ""
+            )
             warnings.warn(
-                "Krishiv runs Python UDFs on the Arrow path only: this UDF (evalType SQL_BATCHED_UDF) runs "
+                f"{reason}Krishiv runs Python UDFs on the Arrow path only: this UDF (evalType SQL_BATCHED_UDF) runs "
                 "Arrow-batched, whose result coercion differs from Spark's pickled path in some cases.",
                 UserWarning,
                 stacklevel=3,

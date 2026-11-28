@@ -131,7 +131,7 @@ impl Default for ExecConfig {
             deterministic_order: false,
             union_output_partitioning: true,
             coalesce_input: true,
-            dataflow_scheduling: false,
+            dataflow_scheduling: true,
         }
     }
 }

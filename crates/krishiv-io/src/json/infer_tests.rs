@@ -220,3 +220,17 @@ fn each_partition_meets_an_empty_root_before_the_others() {
         &arrow_schema::DataType::Utf8View
     );
 }
+
+#[test]
+fn failfast_names_a_top_level_timestamp_ntz() {
+    // Under `spark.sql.timestampType=TIMESTAMP_NTZ` a top-level zone-less
+    // timestamp text infers `TIMESTAMP_NTZ`, which FAILFAST names (Spark
+    // 4.2.1 and 4.3.0 runs: `... but found "TIMESTAMP_NTZ".`).
+    let o = options(&serde_json::json!({
+        "mode": "FAILFAST",
+        "inferTimestamp": "true",
+        "spark.sql.timestampType": "TIMESTAMP_NTZ",
+    }));
+    let e = infer(b"\"2024-01-02T03:04:05\"\n", &o).expect_err("FAILFAST");
+    assert_eq!(named(&e), "TIMESTAMP_NTZ");
+}
