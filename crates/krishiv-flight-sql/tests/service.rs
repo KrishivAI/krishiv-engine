@@ -37,6 +37,8 @@ use tonic::{Code, Request, Status};
 mod metadata;
 #[path = "service/prepared.rs"]
 mod prepared;
+#[path = "service/served_environment.rs"]
+mod served_environment;
 #[path = "service/session_options.rs"]
 mod session_options;
 #[path = "service/updates.rs"]
