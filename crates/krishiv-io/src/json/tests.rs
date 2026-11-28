@@ -263,7 +263,7 @@ pub(super) fn infer_named(
         .map_err(|e| e.into_error("f.json"))
 }
 
-fn encode(batch: &RecordBatch, o: &FormatOptions) -> Result<Vec<u8>, KrishivError> {
+pub(super) fn encode(batch: &RecordBatch, o: &FormatOptions) -> Result<Vec<u8>, KrishivError> {
     let mut e = JsonEncoder::new(&batch.schema(), o).map_err(|e| e.into_error("t.json"))?;
     e.write(batch).map_err(|e| e.into_error("t.json"))?;
     let mut out = Vec::new();

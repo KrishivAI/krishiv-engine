@@ -776,8 +776,14 @@ impl Resolver<'_> {
                     .as_ref()
                     .is_some_and(DataType::contains_collation)
             })
-            && let Some(bound) = self.keyed_comparison(e, kids, n, &name, in_agg, window_fn, cx)?
+            && let Some(mut bound) =
+                self.keyed_comparison(e, kids, n, &name, in_agg, window_fn, cx)?
         {
+            // Spark's `StringPredicate` is a `BinaryExpression` (nullable with its operands); the
+            // keys are binary, whose `contains` the registry types as always nullable.
+            if KEYED_SEARCH.contains(&name.as_str()) {
+                bound.ty.nullable = kids[..n].iter().any(|k| k.ty.nullable);
+            }
             return Ok(bound);
         }
         // `nullif`, `greatest` and `least` over strings of one `UTF8_LCASE` / `_RTRIM` type pick

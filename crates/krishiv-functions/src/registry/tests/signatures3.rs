@@ -924,3 +924,97 @@ fn to_protobuf_of_a_non_struct_is_a_non_struct_type_mismatch() {
     .unwrap_err();
     assert_eq!(err.error_class(), ErrorClass::DatatypeMismatchNonStructType);
 }
+
+/// Spark's `TIME` functions are `RuntimeReplaceable` over a `StaticInvoke` (`to_time`: an `Invoke`) with
+/// `returnNullable = true`, so their results are nullable even over NOT NULL arguments (Spark 4.2.0 and 4.3.0
+/// `timeExpressions.scala`; the `time_precision_goldens` schemas). `current_time` is not.
+#[test]
+fn time_functions_are_nullable_whatever_their_arguments() {
+    use krishiv_types::DayTimeField;
+    let time = |precision| ty(DataType::Time { precision });
+    let (s, i, l) = (
+        ty(DataType::String),
+        ty(DataType::Integer),
+        ty(DataType::Long),
+    );
+    let unit = |u: &str| Some(Constant::String(u.to_owned()));
+    type Case = (&'static str, Vec<ArgType>, Vec<Option<Constant>>);
+    let cases: Vec<Case> = vec![
+        ("hour", vec![time(9)], vec![None]),
+        ("minute", vec![time(6)], vec![None]),
+        ("second", vec![time(3)], vec![None]),
+        (
+            "make_time",
+            vec![i.clone(), i.clone(), ty(dec(16, 6))],
+            vec![None, None, None],
+        ),
+        ("time_from_micros", vec![l], vec![None]),
+        ("time_from_seconds", vec![ty(dec(14, 6))], vec![None]),
+        ("time_to_micros", vec![time(9)], vec![None]),
+        ("time_to_seconds", vec![time(6)], vec![None]),
+        ("to_time", vec![s.clone()], vec![None]),
+        (
+            "time_trunc",
+            vec![s.clone(), time(9)],
+            vec![unit("SECOND"), None],
+        ),
+        (
+            "time_diff",
+            vec![s.clone(), time(6), time(9)],
+            vec![unit("SECOND"), None, None],
+        ),
+        (
+            "extract",
+            vec![s.clone(), time(9)],
+            vec![unit("SECOND"), None],
+        ),
+        (
+            "date_part",
+            vec![s.clone(), time(6)],
+            vec![unit("HOUR"), None],
+        ),
+        (
+            "__time_add_interval",
+            vec![
+                time(6),
+                ty(DataType::DayTimeInterval {
+                    start: DayTimeField::Hour,
+                    end: DayTimeField::Second,
+                }),
+                i,
+            ],
+            vec![None, None, None],
+        ),
+        ("__subtract_times", vec![time(6), time(6)], vec![None, None]),
+    ];
+    for (name, args, consts) in cases {
+        let got = result(name, &args, &consts).unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert!(got.nullable, "{name}: {got:?}");
+    }
+    // Over a timestamp the fields are Spark's `Hour` and its kin: nullable with the argument.
+    for name in ["hour", "minute", "second"] {
+        let got = result(name, &[ty(DataType::Timestamp)], &[None]).unwrap();
+        assert_eq!(got, ty(DataType::Integer), "{name}");
+    }
+    let got = result(
+        "extract",
+        &[s, ty(DataType::Timestamp)],
+        &[unit("HOUR"), None],
+    )
+    .unwrap();
+    assert_eq!(got, ty(DataType::Integer));
+}
+
+/// `make_timestamp_ntz(date, time)` is Spark's `MakeTimestampNTZ` (a `StaticInvoke`, `returnNullable = true`):
+/// nullable over NOT NULL arguments, and so is its `try_` form (`TryEval`). `make_timestamp_ltz(date, time)` is
+/// `MakeTimestampFromDateTime`, whose `returnNullable` is its children's (Spark 4.2.0/4.3.0 `datetimeExpressions.scala`).
+#[test]
+fn the_date_time_forms_of_make_timestamp_follow_their_spark_expressions() {
+    let args = [ty(DataType::Date), ty(DataType::Time { precision: 6 })];
+    for name in ["make_timestamp_ntz", "try_make_timestamp_ntz"] {
+        let got = result(name, &args, &[None, None]).unwrap();
+        assert_eq!(got, nullable(DataType::TimestampNtz), "{name}");
+    }
+    let got = result("make_timestamp_ltz", &args, &[None, None]).unwrap();
+    assert_eq!(got, ty(DataType::Timestamp));
+}

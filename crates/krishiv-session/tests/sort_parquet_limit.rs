@@ -4,7 +4,8 @@
 //! finished in 600 s under a 1 GB limit nor stayed inside its container
 //! without one), spills, writes every row once, and leaves each file in the
 //! sort's order. CI size: 400,000 rows of about 60 bytes (about 24 MB) under a
-//! 16 MB limit.
+//! 16 MB limit, and under 6 MB, where the Parquet writer itself runs short of
+//! memory and must end its file instead of aborting the query.
 #![cfg(test)]
 
 use std::sync::Arc;
@@ -25,11 +26,11 @@ const ROWS: i64 = 400_000;
 /// A write that has not finished by then counts as the acceptance hang.
 const DEADLINE: Duration = Duration::from_secs(300);
 
-fn session(spill: &std::path::Path) -> Session {
+fn session(spill: &std::path::Path, limit: &str) -> Session {
     let s = Session::builder()
         .config("krishiv.metrics.enabled", "true")
         .config("krishiv.spill.dir", spill.to_str().unwrap())
-        .config("krishiv.memory.limit", "16m")
+        .config("krishiv.memory.limit", limit)
         .build()
         .unwrap();
     let schema = Arc::new(Schema::new(vec![
@@ -103,10 +104,33 @@ fn files(dir: &std::path::Path) -> Vec<Vec<i64>> {
 
 #[test]
 fn a_sort_written_to_parquet_under_a_small_limit_finishes_and_spills() {
+    // One file at 16m: the 6m case's extra files come from the writer's roll,
+    // not from several write tasks.
+    assert_eq!(
+        sorted_write_under("16m"),
+        1,
+        "the write split without a roll"
+    );
+}
+
+/// At 6 MB the writer's buffered row group cannot grow: it ends the file and
+/// opens the next, so the output is several sorted files, not an abort.
+#[test]
+fn a_sort_written_to_parquet_under_6m_rolls_files_instead_of_aborting() {
+    let files = sorted_write_under("6m");
+    assert!(
+        files > 1,
+        "the writer did not roll under 6 MB ({files} file)"
+    );
+}
+
+/// Runs the sorted write under `limit`, checks it spilled and wrote every row
+/// once in sorted files, and returns the number of files.
+fn sorted_write_under(limit: &str) -> usize {
     let dir = tempfile::tempdir().unwrap();
     let spill = dir.path().join("spill");
     let out = dir.path().join("out");
-    let s = session(&spill);
+    let s = session(&spill, limit);
     let path = out.to_str().unwrap().to_owned();
     let (done, wait) = mpsc::channel();
     let writer = std::thread::spawn(move || {
@@ -139,7 +163,9 @@ fn a_sort_written_to_parquet_under_a_small_limit_finishes_and_spills() {
     for keys in &files {
         assert!(keys.is_sorted(), "a file is not in the sort's order");
     }
+    let count = files.len();
     let mut all: Vec<i64> = files.into_iter().flatten().collect();
     all.sort_unstable();
     assert_eq!(all, (0..ROWS).collect::<Vec<_>>(), "every row once");
+    count
 }

@@ -3,6 +3,12 @@
 
 use std::sync::Arc;
 
+use super::{DirectoryWrite, SUCCESS_MARKER, SaveMode};
+use crate::parquet::ParquetFormat;
+use crate::{
+    FileFormat, FileWriter, FormatOptions, IoConfig, IoContext, IoScheduler, LocalDirsAsMissing,
+    StoreId, WrittenFileInfo,
+};
 use arrow_array::{Int32Array, RecordBatch};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use bytes::Bytes;
@@ -12,14 +18,8 @@ use object_store::local::LocalFileSystem;
 use object_store::memory::InMemory;
 use object_store::path::Path;
 
-use super::{DirectoryWrite, SUCCESS_MARKER, SaveMode};
-use crate::parquet::ParquetFormat;
-use crate::{
-    FileFormat, FileWriter, FormatOptions, IoConfig, IoContext, IoScheduler, LocalDirsAsMissing,
-    StoreId, WrittenFileInfo,
-};
-
 mod escaped;
+mod pressure;
 
 const STORE: &str = "memory://commit";
 

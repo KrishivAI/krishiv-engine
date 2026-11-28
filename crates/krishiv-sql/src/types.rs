@@ -5,7 +5,7 @@
 
 use std::fmt;
 
-use krishiv_types::{DataType, parse_data_type};
+use krishiv_types::DataType;
 
 use crate::ast::{DataTypeKind, DataTypeSpec, StructField};
 
@@ -23,6 +23,19 @@ impl fmt::Display for DataTypeSpec {
                     && matches!(args.as_slice(), [p] if p.parse::<u32>() == Ok(6)) =>
             {
                 f.write_str(name)
+            }
+            // `TIMESTAMP(9) WITHOUT TIME ZONE` / `WITH LOCAL TIME ZONE`: the canonical name takes the precision
+            // (`timestamp_ntz(9)`), as the type grammar reads it.
+            DataTypeKind::Primitive { name, args }
+                if name.starts_with("timestamp ")
+                    && matches!(args.as_slice(), [p] if matches!(p.parse::<u32>(), Ok(7..=9))) =>
+            {
+                let canonical = if name.ends_with("without time zone") {
+                    "timestamp_ntz"
+                } else {
+                    "timestamp_ltz"
+                };
+                write!(f, "{canonical}({})", args.join(","))
             }
             DataTypeKind::Primitive { name, args } => {
                 // `time(6) without time zone`: arguments follow the first word.
@@ -137,6 +150,7 @@ impl DataTypeSpec {
             kind,
             collation: self.collation.clone(),
             span: self.span,
+            nanos_types: self.nanos_types,
         }
     }
 
@@ -171,7 +185,10 @@ impl DataTypeSpec {
     /// bound errors, and `KRISHIV_UNSUPPORTED_FEATURE` for Spark types not
     /// supported yet.
     pub fn to_data_type(&self) -> Result<DataType, krishiv_common::error::KrishivError> {
-        parse_data_type(&self.to_string())
+        krishiv_types::parse_data_type_in(
+            &self.to_string(),
+            krishiv_types::TypeGrammar::V4_3.with_nanos(self.nanos_types),
+        )
     }
 }
 

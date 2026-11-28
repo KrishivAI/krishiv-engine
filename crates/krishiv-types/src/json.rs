@@ -169,7 +169,10 @@ impl DataType {
             }
             // Spark 4.2's `nameToType` has no precision form: only Krishiv's `(6)` leniency reads.
             Value::String(name)
-                if read.v4_2 && timestamp_from_name(name).is_some_and(|t| t.is_err()) =>
+                if read.v4_2
+                    && timestamp_from_name(name).is_some_and(|t| {
+                        !matches!(t, Ok(DataType::Timestamp | DataType::TimestampNtz))
+                    }) =>
             {
                 return Err(error::invalid_json_type(name));
             }
@@ -529,9 +532,8 @@ fn timestamp_from_name(name: &str) -> Option<Result<DataType>> {
     Some(match inner.parse::<u32>() {
         Ok(6) if ntz => Ok(DataType::TimestampNtz),
         Ok(6) => Ok(DataType::Timestamp),
-        Ok(7..=9) => Err(error::unsupported(format!(
-            "the nanosecond-precision timestamp type {name} (Krishiv 0.3.1)"
-        ))),
+        Ok(n @ 7..=9) if ntz => DataType::timestamp_ntz(n),
+        Ok(n @ 7..=9) => DataType::timestamp_ltz(n),
         _ => Err(error::invalid_timestamp_precision(
             &json_digits(inner),
             if ntz {
