@@ -4,13 +4,7 @@
       22
     ],
     "parser-pipe-collate": [
-      44,
-      69,
-      78,
-      104,
-      108,
-      109,
-      147
+      44
     ]
   },
   "file": "collations-string-functions",
