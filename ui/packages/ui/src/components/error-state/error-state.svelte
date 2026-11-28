@@ -47,18 +47,22 @@
   $effect(() => () => clearTimeout(timer));
 </script>
 
-<div role="alert" class={cn("grid max-w-[72ch] gap-2.5 rounded-xl border border-error bg-error-bg p-4", className)} {...rest}>
-  <h3 class="flex items-center gap-2 text-base leading-6 font-bold">
-    <i class="text-error not-italic" aria-hidden="true">✕</i>{title}
-  </h3>
-  {#if errorClass || message || sqlstate}
-    <p class="mono text-text-2 wrap-anywhere">
-      {#if errorClass}[{errorClass}]{/if}
-      {message ?? ""}
-      {#if sqlstate}SQLSTATE {sqlstate}{/if}
-    </p>
-  {/if}
-  {#if children}<div class="text-text-2">{@render children()}</div>{/if}
+<!-- The alert (an assertive, atomic live region) holds only what happened; the support id row is its sibling, so
+     the copy button's "Copied" does not make a screen reader read the whole error again. -->
+<div class={cn("grid max-w-[72ch] gap-2.5 rounded-xl border border-error bg-error-bg p-4", className)} {...rest}>
+  <div role="alert" class="grid gap-2.5">
+    <h3 class="flex items-center gap-2 text-base leading-6 font-bold">
+      <i class="text-error not-italic" aria-hidden="true">✕</i>{title}
+    </h3>
+    {#if errorClass || message || sqlstate}
+      <p class="mono text-text-2 wrap-anywhere">
+        {#if errorClass}[{errorClass}]{/if}
+        {message ?? ""}
+        {#if sqlstate}SQLSTATE {sqlstate}{/if}
+      </p>
+    {/if}
+    {#if children}<div class="text-text-2">{@render children()}</div>{/if}
+  </div>
   {#if actions || supportId}
     <div class="flex flex-wrap items-center gap-x-4 gap-y-2">
       {@render actions?.()}

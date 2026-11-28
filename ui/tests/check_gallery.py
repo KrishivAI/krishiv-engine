@@ -225,7 +225,12 @@ def popovers(page: Page, origin: str, scheme: str) -> list[str]:
     page.get_by_role("tab", name="Overview").click()
     page.keyboard.press("ArrowRight")
     page.keyboard.press("Enter")
-    if page.get_by_role("tabpanel").inner_text().strip() != "Sessions panel":
+    if (
+        page.locator("[role=tabpanel][data-orientation=horizontal][data-state=active]")
+        .inner_text()
+        .strip()
+        != "Sessions panel"
+    ):
         problems.append(f"tabs ({scheme}): ArrowRight did not show the Sessions panel")
     return problems
 
@@ -295,6 +300,96 @@ def grid(page: Page, origin: str) -> list[str]:
         )
     except PlaywrightTimeout:
         problems.append("grid: End on a virtual grid does not focus the last row")
+    return problems
+
+
+def vertical_tabs(page: Page, origin: str) -> list[str]:
+    """Vertical tabs: the active tab's bar is drawn (2 px wide, taller than 0) and ArrowDown moves to the next tab."""
+    problems: list[str] = []
+    page.goto(f"{origin}/#/tabs")
+    tabs = page.get_by_role("tablist", name="Settings")
+    general = tabs.get_by_role("tab", name="General")
+    bar = general.evaluate(
+        "e => { const s = getComputedStyle(e, '::after'); return [parseFloat(s.width), parseFloat(s.height)]; }"
+    )
+    if bar[0] != 2 or not bar[1] > 0:
+        problems.append(
+            f"tabs: the vertical active bar is {bar[0]} x {bar[1]} px (expected 2 px wide, taller than 0)"
+        )
+    general.focus()
+    page.keyboard.press("ArrowDown")
+    access = tabs.get_by_role("tab", name="Access")
+    try:
+        page.wait_for_function(
+            "() => document.activeElement?.textContent?.trim() === 'Access'",
+            timeout=5000,
+        )
+    except PlaywrightTimeout:
+        problems.append(
+            "tabs: ArrowDown in a vertical list does not move to the next tab"
+        )
+    if access.get_attribute("data-state") != "active":
+        problems.append(
+            "tabs: ArrowDown in a vertical list does not activate the next tab"
+        )
+    return problems
+
+
+def jobs_focus(page: Page, origin: str) -> list[str]:
+    """A scrolling grid that is not virtual: a focused row is never under the sticky header (scroll padding)."""
+    problems: list[str] = []
+    page.goto(f"{origin}/#/grid")
+    box = page.get_by_role("region", name="Jobs")
+    rows = box.locator("tbody tr")
+    rows.first.wait_for(timeout=5000)
+    clear = """() => { const a = document.activeElement; const h = a?.closest('table')?.querySelector('thead');
+        return !!a && !!h && a.getBoundingClientRect().top >= h.getBoundingClientRect().bottom - 0.5; }"""
+    rows.first.focus()
+    page.keyboard.press("End")
+    page.wait_for_function(
+        "() => document.activeElement?.getAttribute('aria-rowindex') === '51'",
+        timeout=5000,
+    )
+    page.keyboard.press("Home")
+    page.wait_for_function(
+        "() => document.activeElement?.getAttribute('aria-rowindex') === '2'",
+        timeout=5000,
+    )
+    page.evaluate(SETTLED)
+    if not page.evaluate(clear):
+        problems.append(
+            "grid: after End then Home the first row is under the sticky header"
+        )
+    page.keyboard.press("End")
+    for at in range(50, 1, -1):
+        page.keyboard.press("ArrowUp")
+        page.wait_for_function(
+            f"() => document.activeElement?.getAttribute('aria-rowindex') === '{at}'",
+            timeout=5000,
+        )
+        page.evaluate(SETTLED)
+        if not page.evaluate(clear):
+            problems.append(
+                f"grid: ArrowUp to row {at} leaves it under the sticky header"
+            )
+            break
+    return problems
+
+
+def cell_focus_ring(page: Page, origin: str) -> list[str]:
+    """A link in a cell keeps its whole focus ring: its cell wrapper leaves 4 px above and below and clips nothing sideways."""
+    problems: list[str] = []
+    page.goto(f"{origin}/#/grid")
+    link = page.get_by_role("region", name="Computes").get_by_role(
+        "link", name="default"
+    )
+    link.focus()
+    got = link.evaluate(
+        """e => { const w = e.parentElement, a = e.getBoundingClientRect(), b = w.getBoundingClientRect();
+        return { inside: b.top <= a.top - 4 && b.bottom >= a.bottom + 4, x: getComputedStyle(w).overflowX }; }"""
+    )
+    if not got["inside"] or got["x"] != "visible":
+        problems.append(f"grid: a focused link's ring is clipped by its cell ({got})")
     return problems
 
 
@@ -401,6 +496,11 @@ def gallery_checks() -> list[str]:
                     problems += grid(page, origin) if scheme == "dark" else []
                     problems += support_id(page, origin) if scheme == "dark" else []
                     problems += field(page, origin) if scheme == "dark" else []
+                    problems += vertical_tabs(page, origin) if scheme == "dark" else []
+                    problems += jobs_focus(page, origin) if scheme == "dark" else []
+                    problems += (
+                        cell_focus_ring(page, origin) if scheme == "dark" else []
+                    )
                 problems += [f"CSP ({view}): {v}" for v in violations(page)]
                 problems += [f"console ({view}): {e}" for e in errors]
                 ctx.close()

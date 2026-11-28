@@ -39,6 +39,13 @@
     { id: "device", header: "device", type: "string", value: (r) => r.device },
     { id: "temp", header: "temp", type: "double", num: true, value: (r) => r.temp },
   ];
+  // A list grid that scrolls but is not virtual (50 rows, under VIRTUAL_AFTER).
+  const JOBS = Array.from({ length: 50 }, (_, i) => ({ id: `job-${i + 1}`, runs: (i * 13) % 40 }));
+  const JOB_COLUMNS: GridColumn<(typeof JOBS)[number]>[] = [
+    { id: "id", header: "Job", value: (r) => r.id },
+    { id: "runs", header: "Runs", num: true, value: (r) => r.runs },
+  ];
+  let job = $state<string | undefined>(undefined);
 </script>
 
 <h1>Grid shell</h1>
@@ -58,6 +65,9 @@
   <GridShell class="w-full max-h-96" label="Readings" rowHeight={40} columns={RESULT} rows={READINGS} rowId={(r) => String(r.id)} selected={reading} onselect={(id) => (reading = id)}>
     {#snippet foot()}<span data-count>10,000 rows</span>{/snippet}
   </GridShell>
+</Section>
+<Section title="List grid, 50 rows (scrolls, not virtual)">
+  <GridShell class="w-full max-h-72" label="Jobs" columns={JOB_COLUMNS} rows={JOBS} rowId={(r) => r.id} selected={job} onselect={(id) => (job = id)} />
 </Section>
 <Section title="Empty">
   <GridShell class="w-full" label="No rows" columns={RESULT} rows={[]} rowId={(r) => String(r.id)} selected={reading} onselect={(id) => (reading = id)}>

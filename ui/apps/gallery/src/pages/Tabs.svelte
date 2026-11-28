@@ -10,6 +10,7 @@
     ["settings", "Settings", ""],
   ];
   let tab = $state("overview");
+  let side = $state("general");
 </script>
 
 <h1>Tabs</h1>
@@ -27,5 +28,18 @@
       <TabsContent {value}>{label} panel</TabsContent>
     {/each}
     <TabsContent value="billing">Billing panel</TabsContent>
+  </Tabs>
+</section>
+<section class="grid grid-cols-[minmax(0,1fr)] gap-3">
+  <h2>Vertical</h2>
+  <Tabs bind:value={side} orientation="vertical" class="flex min-w-0 gap-4 rounded-lg border border-border bg-background p-4">
+    <TabsList aria-label="Settings">
+      <TabsTrigger value="general">General</TabsTrigger>
+      <TabsTrigger value="access">Access</TabsTrigger>
+      <TabsTrigger value="billing">Billing</TabsTrigger>
+    </TabsList>
+    <TabsContent value="general" class="pt-0">General settings</TabsContent>
+    <TabsContent value="access" class="pt-0">Access settings</TabsContent>
+    <TabsContent value="billing" class="pt-0">Billing settings</TabsContent>
   </Tabs>
 </section>

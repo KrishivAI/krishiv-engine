@@ -31,7 +31,8 @@
     rowId: (row: Row, index: number) => string;
     /** The grid's accessible name (the region and the table). */
     label: string;
-    /** A cell's content; without it the value is shown as text. */
+    /** A cell's content; without it the value is shown as text. The cell lays its children out in a row with a
+     * small gap (a flex box), so put text and a badge or link side by side as separate elements, not spaced text. */
     cell?: Snippet<[Row, GridColumn<Row>]>;
     foot?: Snippet;
     empty?: Snippet;
@@ -47,6 +48,9 @@
   const virtual = $derived(virtualises(model.rows.length, virtualAfter));
 
   let box: HTMLDivElement | undefined = $state();
+  // The sticky header's height: the box keeps that much scroll padding at its top, so a row that takes the focus
+  // (the browser's scroll on focus, in a grid that is not virtual) is scrolled clear of the header, not under it.
+  let headHeight = $state(0);
   let visible = $state<{ index: number; start: number; end: number }[]>([]);
   let total = $state(0);
   let scroller: Virtualizer<HTMLDivElement, HTMLTableRowElement> | undefined;
@@ -86,10 +90,13 @@
   // Selectable rows are one tab stop (a roving tabindex): the selected row, else the last row focused, else the
   // first. ArrowUp and ArrowDown move between rows, Home and End to the ends; Enter or Space selects. A key
   // pressed on a link or button inside the row is left to that control.
-  let active = $state(0);
+  // The last row focused is kept by its id, so a change of sort keeps the tab stop on the same row.
+  let activeId = $state<string | undefined>(undefined);
   const stop = $derived.by(() => {
-    const at = selected === undefined ? -1 : model.rows.findIndex((r) => r.id === selected);
-    const want = at >= 0 ? at : Math.min(active, model.rows.length - 1);
+    const find = (id: string | undefined) => (id === undefined ? -1 : model.rows.findIndex((r) => r.id === id));
+    const at = find(selected);
+    const was = find(activeId);
+    const want = at >= 0 ? at : was >= 0 ? was : 0;
     return shown.some((x) => x.at === want) ? want : (shown[0]?.at ?? 0);
   });
 
@@ -97,7 +104,7 @@
     if (e.target !== e.currentTarget) return;
     if (e.key === "Enter" || e.key === " ") {
       e.preventDefault();
-      active = at;
+      activeId = id;
       onselect?.(id, row);
       return;
     }
@@ -105,7 +112,7 @@
     const to = e.key === "ArrowDown" ? at + 1 : e.key === "ArrowUp" ? at - 1 : e.key === "Home" ? 0 : e.key === "End" ? last : -1;
     if (to < 0 || to > last || (to === at && e.key !== "Home" && e.key !== "End")) return;
     e.preventDefault();
-    active = to;
+    activeId = model.rows[to]?.id;
     scroller?.scrollToIndex(to, { align: "auto" });
     // A virtual row is drawn after the scroll reaches it: wait a few frames for it.
     for (let i = 0; i < 10; i++) {
@@ -133,6 +140,7 @@
 <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
 <div
   bind:this={box}
+  style:scroll-padding-top={`${headHeight}px`}
   role="region"
   aria-label={label}
   tabindex="0"
@@ -140,7 +148,7 @@
   class={cn("relative max-h-[480px] min-w-0 max-w-full overflow-auto rounded-lg border border-border bg-card", className)}
 >
   <table class="w-full border-separate border-spacing-0 text-sm" aria-label={label} aria-rowcount={model.rows.length + 1}>
-    <thead class="sticky top-0 z-10">
+    <thead class="sticky top-0 z-10" bind:clientHeight={headHeight}>
       <tr aria-rowindex={1}>
         {#each model.headers as h (h.id)}
           <th
@@ -187,15 +195,17 @@
             onselect && "cursor-pointer focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring",
           )}
           tabindex={onselect ? (at === stop ? 0 : -1) : undefined}
-          onclick={onselect ? () => ((active = at), onselect(r.id, r.row)) : undefined}
+          onclick={onselect ? () => ((activeId = r.id), onselect(r.id, r.row)) : undefined}
           onkeydown={onselect ? (e) => pick(e, at, r.id, r.row) : undefined}
         >
           {#each columns as c (c.id)}
             {@const v = c.value(r.row)}
             <td class={cn("border-b border-border px-3 align-middle whitespace-nowrap", c.num && "mono text-right tabular-nums")} style:height={`${rowHeight}px`}>
               <!-- A cell's content never grows the row past rowHeight (less its 1 px border): the virtualizer counts
-                   every row at that height, so a taller cell would make the window jump while scrolling. -->
-              <div class={cn("flex items-center overflow-hidden", c.num && "justify-end")} style:max-height={`${rowHeight - 1}px`}>
+                   every row at that height, so a taller cell would make the window jump while scrolling. The
+                   wrapper is the full height and clips only vertically, so a control of normal height keeps room
+                   for its focus ring above and below, and nothing is clipped sideways. -->
+              <div class={cn("flex items-center gap-1 overflow-y-clip", c.num && "justify-end")} style:height={`${rowHeight - 1}px`}>
                 {#if cell}
                   {@render cell(r.row, c)}
                 {:else if v === null || v === undefined}
