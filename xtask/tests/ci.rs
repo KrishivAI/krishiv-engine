@@ -204,3 +204,16 @@ fn test_code_counts_at_reduced_weight() {
         (0, 0, 900)
     );
 }
+
+#[test]
+fn a_diff_over_seventy_percent_of_the_cap_warns_until_it_fails() {
+    use xtask::ci::WARN_CHANGED_LINES;
+    assert_eq!(WARN_CHANGED_LINES, 7_000);
+    assert!(!measure_numstat(&numstat("a.rs", 7_000)).unwrap().near_cap());
+    assert!(measure_numstat(&numstat("a.rs", 7_001)).unwrap().near_cap());
+    assert!(
+        !measure_numstat(&numstat("a.rs", 10_001))
+            .unwrap()
+            .near_cap()
+    );
+}

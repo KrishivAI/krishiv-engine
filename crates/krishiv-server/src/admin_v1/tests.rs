@@ -33,7 +33,7 @@ impl AdminApi for Fake {
                     kind: "surface".to_owned(),
                     name: "admin.v1".to_owned(),
                     value: ADMIN_V1_REVISION.to_string(),
-                    detail: "preview".to_owned(),
+                    detail: String::new(),
                 }],
             })
         }
@@ -151,7 +151,7 @@ async fn rest_returns_the_proto_json_of_the_messages() {
         ADMIN_V1_REVISION.to_string(),
         "64-bit integers are strings"
     );
-    assert_eq!(json["preview"], true);
+    assert_eq!(json["preview"], PREVIEW);
     let (status, _, body) = send(&app, get("/api/admin/v1/capabilities")).await;
     assert_eq!(status, StatusCode::OK);
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();

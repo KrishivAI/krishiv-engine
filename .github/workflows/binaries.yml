@@ -78,9 +78,9 @@ jobs:
       matrix:
         include:
           - artifact: krishiv-linux-x86_64
-            rustflags: -C target-cpu=x86-64-v3
+            rustflags: -C target-cpu=x86-64-v3 -C llvm-args=-x86-branches-within-32B-boundaries
           - artifact: krishiv-compat-linux-x86_64
-            rustflags: ""
+            rustflags: -C llvm-args=-x86-branches-within-32B-boundaries
     steps:
       - name: Harden the runner (audit egress)
         uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1

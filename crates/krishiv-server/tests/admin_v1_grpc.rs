@@ -10,7 +10,8 @@ use krishiv_server::admin_v1::{
     ADMIN_V1_REVISION, AdminApi, AdminConfig, AdminResult, Call, CancelQueriesByTagRequest,
     CancelQueriesByTagResponse, CancelQueryRequest, CancelQueryResponse, GetCapabilitiesResponse,
     GetVersionRequest, GetVersionResponse, KillSessionRequest, KillSessionResponse,
-    ListQueriesRequest, ListQueriesResponse, ListSessionsRequest, ListSessionsResponse, router,
+    ListQueriesRequest, ListQueriesResponse, ListSessionsRequest, ListSessionsResponse, PREVIEW,
+    router,
 };
 use krishiv_server::guard::{Guard, GuardRequest, Refusal};
 use tonic::transport::Channel;
@@ -23,7 +24,7 @@ impl AdminApi for Api {
             Ok(GetVersionResponse {
                 version: "1.2.3".to_owned(),
                 admin_v1_revision: ADMIN_V1_REVISION,
-                preview: true,
+                preview: PREVIEW,
             })
         }
         .boxed()

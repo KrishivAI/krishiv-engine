@@ -72,7 +72,7 @@ pub mod variant;
 pub mod vector;
 pub mod version;
 
-pub use dispatch::{Baseline, Dispatch, KernelCtx, Target};
+pub use dispatch::{Baseline, Dispatch, KernelCtx, TARGET_CAP_ENV, Target, TargetCapError};
 pub use error::KernelError;
 pub use ops::{Add, ArithOp, Mul, Operand, Sub};
 pub use policy::{AnsiError, JavaWrap, NullOnOverflow, Overflow, OverflowMode, Unchecked};
