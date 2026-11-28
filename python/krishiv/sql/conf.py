@@ -67,8 +67,10 @@ class RuntimeConfig:
         if not isinstance(value, str | int | bool):
             raise not_expected_type("value", "str, int or bool", value)
         text = ("true" if value else "false") if isinstance(value, bool) else str(value)
-        _warn_if_cluster_setting(key, text, stacklevel=2)
+        # Spark refuses a core key such as `spark.executor.memory` at runtime (CANNOT_MODIFY_CONFIG): only a
+        # setting that was taken warns.
         self._set(key, text)
+        _warn_if_cluster_setting(key, text, stacklevel=2)
 
     def _set(self, key: str, text: str) -> None:
         self._session.conf_set(key, text)

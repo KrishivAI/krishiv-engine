@@ -47,7 +47,7 @@ pub use partition_types::LEGACY_SKIP_TYPE_VALIDATION_ON_ALTER_PARTITION;
 pub use registry::*;
 pub use registry_join::*;
 pub use scan_instance::EXEC_SCAN_INSTANCE_PROJECTION;
-pub use spark_defaults::{SparkDefault, SparkEntry, spark_default};
+pub use spark_defaults::{SparkDefault, SparkEntry, is_spark_core_key, spark_default};
 
 /// Spark's `TIME` gate, `spark.sql.timeType.enabled` (default off): the
 /// analyzer and the CSV / JSON sources read it under this one name.

@@ -11,9 +11,9 @@ use krishiv_session::Session;
 
 /// A session whose warehouse is `dir`, with the managed table `src(id)` holding 1, 2, 3.
 fn session(dir: &std::path::Path, pairs: &[(&str, &str)]) -> Session {
-    let s = Session::new().unwrap();
-    s.conf()
-        .set("spark.sql.warehouse.dir", dir.join("wh").to_str().unwrap())
+    let s = Session::builder()
+        .config("spark.sql.warehouse.dir", dir.join("wh").to_str().unwrap())
+        .build()
         .unwrap();
     for (k, v) in pairs {
         s.conf().set(k, v).unwrap();

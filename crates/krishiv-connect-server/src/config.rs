@@ -219,8 +219,7 @@ fn is_modifiable(conf: &RuntimeConf, key: &str) -> bool {
     if lookup(resolve_alternative(key)).is_some() {
         return conf.is_modifiable(key);
     }
-    krishiv_common::config::spark_default(key).is_some_and(|e| !e.is_static)
-        && conf.is_modifiable(key)
+    conf.spark_entry(key).is_some_and(|e| !e.is_static) && conf.is_modifiable(key)
 }
 
 fn pair(key: &str, value: Option<String>) -> pb::KeyValue {
@@ -324,8 +323,14 @@ pub(crate) async fn config(
         }
         Some(OpType::GetOption(g)) => {
             for key in &g.keys {
-                let value = capabilities_key(key)
-                    .or_else(|| conf.get(key).filter(|v| !is_redacted(key, Some(v))));
+                // Spark's `getOption` is `Option(get(key))`: an unset key Spark registers answers its default.
+                let value = capabilities_key(key).or_else(|| {
+                    match conf.get_as_spark(key) {
+                        SparkConfValue::Value(v) => Some(v),
+                        _ => None,
+                    }
+                    .filter(|v| !is_redacted(key, Some(v)))
+                });
                 out.pairs.push(pair(key, value));
                 out.warnings.extend(warning(key));
             }

@@ -23,10 +23,10 @@ fn setup(history: &std::path::Path, warehouse: &std::path::Path) -> (Arc<EngineR
         .config("krishiv.history.path", history.to_str().unwrap())
         .build()
         .unwrap();
-    let session = Session::builder().runtime(Arc::clone(&rt)).build().unwrap();
-    session
-        .conf()
-        .set("spark.sql.warehouse.dir", warehouse.to_str().unwrap())
+    let session = Session::builder()
+        .runtime(Arc::clone(&rt))
+        .config("spark.sql.warehouse.dir", warehouse.to_str().unwrap())
+        .build()
         .unwrap();
     (rt, session)
 }
@@ -229,16 +229,13 @@ impl crate::AccessPolicy for MonitorForAdmin {
 }
 
 fn as_user(rt: &Arc<EngineRuntime>, who: &str, warehouse: &std::path::Path) -> Session {
-    let s = Session::builder()
+    Session::builder()
         .runtime(Arc::clone(rt))
         .principal(crate::Principal::new(who, crate::PrincipalKind::User))
         .access_policy(Arc::new(MonitorForAdmin))
+        .config("spark.sql.warehouse.dir", warehouse.to_str().unwrap())
         .build()
-        .unwrap();
-    s.conf()
-        .set("spark.sql.warehouse.dir", warehouse.to_str().unwrap())
-        .unwrap();
-    s
+        .unwrap()
 }
 
 #[test]
@@ -431,20 +428,17 @@ impl DefinerWorld {
             Arc::new(crate::AllowAll),
             admin,
         ));
-        let s = Session::builder()
+        Session::builder()
             .runtime(Arc::clone(&self.rt))
             .principal(crate::Principal::new(who, crate::PrincipalKind::User))
             .access_policy(Arc::clone(&policy) as Arc<dyn crate::AccessPolicy>)
             .grants(policy)
-            .build()
-            .unwrap();
-        s.conf()
-            .set(
+            .config(
                 "spark.sql.warehouse.dir",
                 self.warehouse.path().to_str().unwrap(),
             )
-            .unwrap();
-        s
+            .build()
+            .unwrap()
     }
 }
 

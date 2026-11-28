@@ -808,6 +808,31 @@ async fn config_operations() {
             kv("spark.sql.adaptive.customCostEvaluatorClass", None),
         ]
     );
+    // `getOption` is Spark's `Option(get(key))`: the same answers (Spark 4.3.0: `Some(10000)`), and none for an
+    // optional or unregistered key (review of a95ba3b26, finding 2).
+    let got = config(
+        &run,
+        OpType::GetOption(creq::GetOption {
+            keys: keys(&[
+                "spark.sql.execution.arrow.maxRecordsPerBatch",
+                "spark.sql.adaptive.customCostEvaluatorClass",
+                "no.such.key",
+            ]),
+        }),
+    )
+    .await
+    .expect("get option of Spark keys");
+    assert_eq!(
+        got.pairs,
+        vec![
+            kv(
+                "spark.sql.execution.arrow.maxRecordsPerBatch",
+                Some("10000")
+            ),
+            kv("spark.sql.adaptive.customCostEvaluatorClass", None),
+            kv("no.such.key", None),
+        ]
+    );
     config(
         &run,
         OpType::Set(creq::Set {
@@ -891,6 +916,32 @@ async fn config_set_silent_and_static_keys() {
     .await
     .unwrap_err();
     assert_eq!(error_class(&status), "CANNOT_MODIFY_STATIC_CONFIG");
+    // Spark 4.3.0 (Connect, 2026-11-28): a static Spark SQL key and a core Spark key are refused on set and
+    // unset, with these classes.
+    for (key, class) in [
+        ("spark.sql.warehouse.dir", "CANNOT_MODIFY_STATIC_CONFIG"),
+        (
+            "spark.sql.globalTempDatabase",
+            "CANNOT_MODIFY_STATIC_CONFIG",
+        ),
+        ("spark.executor.memory", "CANNOT_MODIFY_CONFIG"),
+    ] {
+        let status = config(
+            &run,
+            OpType::Set(creq::Set {
+                pairs: vec![kv(key, Some("x"))],
+                silent: None,
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error_class(&status), class, "{key}");
+        assert_eq!(info(&status).metadata["sqlState"], "46110");
+        let status = config(&run, OpType::Unset(creq::Unset { keys: keys(&[key]) }))
+            .await
+            .unwrap_err();
+        assert_eq!(error_class(&status), class, "{key}");
+    }
     let r = config(
         &run,
         OpType::Set(creq::Set {

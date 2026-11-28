@@ -21,9 +21,9 @@ fn run(s: &Session, sql: &str) -> Vec<String> {
 #[test]
 fn the_k_best_over_a_partition_window_match_spark() {
     let d = tempfile::tempdir().unwrap();
-    let s = Session::new().unwrap();
-    s.conf()
-        .set("spark.sql.warehouse.dir", d.path().to_str().unwrap())
+    let s = Session::builder()
+        .config("spark.sql.warehouse.dir", d.path().to_str().unwrap())
+        .build()
         .unwrap();
     for sql in [
         "create table dept_data (dept string, emp string, salary int) using parquet",

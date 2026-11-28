@@ -82,7 +82,11 @@ fn expected_rows(rows: &Value) -> Vec<String> {
 
 /// Runs one case; `Ok` is the comparison result (`Err` text says what differs).
 fn run(case: &Value) -> Result<(), String> {
-    let s = Session::new().map_err(|e| e.to_string())?;
+    let dir = tempfile::tempdir().map_err(|e| e.to_string())?;
+    let s = Session::builder()
+        .config("spark.sql.warehouse.dir", dir.path().to_str().unwrap())
+        .build()
+        .map_err(|e| e.to_string())?;
     if let Some(conf) = case.get("conf").and_then(Value::as_object) {
         for (k, v) in conf {
             s.conf()
@@ -90,10 +94,6 @@ fn run(case: &Value) -> Result<(), String> {
                 .map_err(|e| e.to_string())?;
         }
     }
-    let dir = tempfile::tempdir().map_err(|e| e.to_string())?;
-    s.conf()
-        .set("spark.sql.warehouse.dir", dir.path().to_str().unwrap())
-        .map_err(|e| e.to_string())?;
     let sql = |text: &str| -> Result<(), String> {
         block_on(async { s.sql(text).await?.collect().await })
             .map(drop)

@@ -593,10 +593,11 @@ impl PySession {
 
     /// Whether `key` is a non-static entry Spark registers and Krishiv does not (acceptance SV-3): Spark's
     /// `isModifiable` is true for it.
-    #[staticmethod]
-    fn conf_is_spark_session_key(key: &str) -> bool {
-        krishiv_common::config::lookup(krishiv_common::config::resolve_alternative(key)).is_none()
-            && krishiv_common::config::spark_default(key).is_some_and(|e| !e.is_static)
+    fn conf_is_spark_session_key(&self, key: &str) -> bool {
+        self.inner
+            .conf()
+            .spark_entry(key)
+            .is_some_and(|e| !e.is_static)
     }
 
     fn conf_set(&self, py: Python<'_>, key: &str, value: &str) -> PyResult<()> {

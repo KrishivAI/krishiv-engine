@@ -1270,7 +1270,7 @@ cls = "ArrowPythonUDFTestsMixin"
 name = "test_type_coercion_string_to_numeric"
 runner = "ArrowPythonUDFLegacyTests"
 status = "excluded"
-category = "krishiv-divergence"
+category = "test-environment"
 reason = "pandas 3 environment, not Krishiv: under the legacy pandas conversion the UDF's string results form a pandas 3 `str` Series, which pyarrow converts to decimal; Spark's same code (ArrowStreamPandasSerializer._create_array) raises only with pandas 2's object Series (checked with pyarrow 18-26)"
 
 [[test]]

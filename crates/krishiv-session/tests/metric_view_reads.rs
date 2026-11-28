@@ -33,10 +33,8 @@ fn session_with(policy: Arc<dyn AccessPolicy>) -> (Session, tempfile::TempDir) {
     let s = Session::builder()
         .principal(Principal::new("ana", PrincipalKind::User))
         .access_policy(policy)
+        .config("spark.sql.warehouse.dir", dir.path().display().to_string())
         .build()
-        .unwrap();
-    s.conf()
-        .set("spark.sql.warehouse.dir", &dir.path().display().to_string())
         .unwrap();
     for sql in [
         "CREATE TABLE src (region STRING, n INT) USING parquet",
@@ -326,10 +324,8 @@ fn a_metric_view_inside_execute_immediate_or_a_script_is_refused_before_4_2() {
     let dir = tempfile::tempdir().unwrap();
     let s = Session::builder()
         .profile(krishiv_plan::analyzer::SparkProfile::V4_1)
+        .config("spark.sql.warehouse.dir", dir.path().display().to_string())
         .build()
-        .unwrap();
-    s.conf()
-        .set("spark.sql.warehouse.dir", &dir.path().display().to_string())
         .unwrap();
     run(&s, "CREATE TABLE src (region STRING, n INT) USING parquet").unwrap();
     let body = VIEW.replacen("CREATE VIEW mv", "CREATE VIEW mv41", 1);
@@ -706,9 +702,9 @@ fn an_expression_with_its_own_alias_is_named_by_its_column() {
 #[test]
 fn a_metric_source_inside_a_view_resolves_in_that_views_namespace() {
     let dir = tempfile::tempdir().unwrap();
-    let s = Session::builder().build().unwrap();
-    s.conf()
-        .set("spark.sql.warehouse.dir", &dir.path().display().to_string())
+    let s = Session::builder()
+        .config("spark.sql.warehouse.dir", dir.path().display().to_string())
+        .build()
         .unwrap();
     for sql in [
         "CREATE NAMESPACE a",

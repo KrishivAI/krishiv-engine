@@ -8,7 +8,8 @@ use krishiv_common::config::{
     PYTHON_UDTF_ARROW_ENABLED, SESSION_TIME_ZONE, Scope, ValueType, lookup,
 };
 use krishiv_common::error::{
-    CannotModifyStaticConfig, InvalidConfValueRequirement, InvalidConfValueTimeZone, KrishivError,
+    CannotModifyConfig, CannotModifyStaticConfig, InvalidConfValueRequirement,
+    InvalidConfValueTimeZone, KrishivError,
 };
 use krishiv_common::redact::{REDACTED, is_redacted_option, is_redacted_setting};
 use krishiv_kernels::cast::FixedOffset;
@@ -402,13 +403,38 @@ pub(crate) fn get(config: &Config, key: &str) -> Option<String> {
     }
 }
 
-/// Whether `key` can change after the session is built.
-pub(crate) fn is_modifiable(key: &str) -> bool {
+/// Whether `key` can change after the session is built, in a session of `profile`. A key Krishiv does not
+/// register can, unless the profile's Spark release registers it as a static SQL entry (`spark.sql.warehouse.dir`) or as an
+/// entry that is not a SQL one (`spark.executor.memory`): Spark refuses to change both at runtime
+/// (v4.3.0 `RuntimeConfig.requireNonStaticConf`; Krishiv refuses `spark.sql.legacy.setCommandRejectsSparkCoreConfs`
+/// off, so the core keys are always refused). Set them when the session is built ([`crate::SessionBuilder::config`]).
+pub(crate) fn is_modifiable(key: &str, profile: SparkProfile) -> bool {
     match lookup(key) {
         Some(entry) => entry.scope == Scope::Session && !SESSION_BUILD_TIME.contains(&entry.key),
-        None => true,
+        None => {
+            !krishiv_common::config::spark_default(profile.line(), key).is_some_and(|e| e.is_static)
+                && !krishiv_common::config::is_spark_core_key(key)
+        }
     }
 }
+
+/// The refusal of a runtime change to `key`, which [`RuntimeConf::is_modifiable`] answers false for: Spark's
+/// `CANNOT_MODIFY_CONFIG` for a core Spark key, else `CANNOT_MODIFY_STATIC_CONFIG`.
+fn cannot_modify(key: &str) -> KrishivError {
+    let quoted = format!("\"{key}\"");
+    if lookup(key).is_none() && krishiv_common::config::is_spark_core_key(key) {
+        CannotModifyConfig {
+            key: quoted,
+            docroot: SPARK_DOC_ROOT.to_owned(),
+        }
+        .into()
+    } else {
+        CannotModifyStaticConfig { key: quoted }.into()
+    }
+}
+
+/// Spark's `DOCROOT` in error messages.
+const SPARK_DOC_ROOT: &str = "https://spark.apache.org/docs/latest";
 
 /// What Spark's `spark.conf.get(key)` answers for a key ([`RuntimeConf::get_as_spark`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -471,7 +497,7 @@ impl RuntimeConf {
     /// ```
     #[must_use]
     pub fn get_as_spark(&self, key: &str) -> SparkConfValue {
-        use krishiv_common::config::{SparkDefault, spark_default};
+        use krishiv_common::config::SparkDefault;
         let mut at = key;
         // A fallback chain is a few entries long (the table's test checks each ends); the bound only stops a
         // cycle a later release could add.
@@ -479,10 +505,7 @@ impl RuntimeConf {
             if let Some(v) = self.get(at) {
                 return SparkConfValue::Value(v);
             }
-            let Some(entry) = (lookup(krishiv_common::config::resolve_alternative(at)).is_none())
-                .then(|| spark_default(at))
-                .flatten()
-            else {
+            let Some(entry) = self.spark_entry(at) else {
                 return if hop == 0 {
                     SparkConfValue::NotFound
                 } else {
@@ -498,6 +521,26 @@ impl RuntimeConf {
         SparkConfValue::NoValue
     }
 
+    /// The entry the session profile's Spark release registers under `key`, when Krishiv does not register
+    /// the key itself ([`krishiv_common::config::spark_default`] of the profile's release line).
+    ///
+    /// ```
+    /// use krishiv_common::config::SparkDefault;
+    /// use krishiv_plan::analyzer::SparkProfile;
+    /// let key = "spark.sql.execution.arrow.enabled";
+    /// let s = krishiv_session::Session::builder().profile(SparkProfile::V4_1).build()?;
+    /// assert_eq!(s.conf().spark_entry(key).map(|e| e.default), Some(SparkDefault::Value("false")));
+    /// assert_eq!(s.conf().spark_entry("krishiv.exec.batchSize"), None);
+    /// # Ok::<(), krishiv_common::error::KrishivError>(())
+    /// ```
+    #[must_use]
+    pub fn spark_entry(&self, key: &str) -> Option<krishiv_common::config::SparkEntry> {
+        if lookup(krishiv_common::config::resolve_alternative(key)).is_some() {
+            return None;
+        }
+        krishiv_common::config::spark_default(self.store.profile.line(), key)
+    }
+
     /// Sets `key` to `value` for queries that start afterwards.
     ///
     /// ```
@@ -510,7 +553,8 @@ impl RuntimeConf {
     ///
     /// # Errors
     /// `CANNOT_MODIFY_STATIC_CONFIG` for an entry fixed when the session
-    /// was built ([`Self::is_modifiable`]); `KRISHIV_UNKNOWN_CONFIG` for an
+    /// was built ([`Self::is_modifiable`]), a static Spark SQL key among them; `CANNOT_MODIFY_CONFIG` for a
+    /// Spark key that is not a SQL one (`spark.executor.memory`); `KRISHIV_UNKNOWN_CONFIG` for an
     /// unknown `krishiv.*` key; `KRISHIV_INVALID_CONFIG_VALUE` for a value
     /// of the wrong type. Unknown keys of other prefixes are kept.
     /// `INVALID_CONF_VALUE.TIME_ZONE` for a session time zone (`spark.sql.session.timeZone`
@@ -534,10 +578,7 @@ impl RuntimeConf {
 
     fn set_unredacted(&self, key: &str, value: &str) -> Result<(), KrishivError> {
         if !self.is_modifiable(key) {
-            return Err(CannotModifyStaticConfig {
-                key: format!("\"{key}\""),
-            }
-            .into());
+            return Err(cannot_modify(key));
         }
         // Collation switches the engine does not honour yet (ADR 0043): turning one on would
         // change results silently, so it is refused.
@@ -573,13 +614,10 @@ impl RuntimeConf {
     /// ```
     ///
     /// # Errors
-    /// `CANNOT_MODIFY_STATIC_CONFIG` as for [`Self::set`].
+    /// `CANNOT_MODIFY_STATIC_CONFIG` or `CANNOT_MODIFY_CONFIG` as for [`Self::set`].
     pub fn unset(&self, key: &str) -> Result<(), KrishivError> {
         if !self.is_modifiable(key) {
-            return Err(CannotModifyStaticConfig {
-                key: format!("\"{key}\""),
-            }
-            .into());
+            return Err(cannot_modify(key));
         }
         self.store.reset_key(key);
         Ok(())
@@ -615,7 +653,7 @@ impl RuntimeConf {
     /// fetches); an embedded session is unchanged.
     #[must_use]
     pub fn is_modifiable(&self, key: &str) -> bool {
-        is_modifiable(key)
+        is_modifiable(key, self.store.profile)
             && !(self.store.static_catalogs && crate::catalog_decl::is_declaration_key(key))
     }
 }
