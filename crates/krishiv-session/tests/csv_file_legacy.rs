@@ -209,10 +209,10 @@ fn csv_expressions_follow_the_parser_policy_as_spark_runs() {
                             }
                         }
                         (Some(v), Err(e)) => {
-                            wrong.push(format!("{at}: Spark {v}, Krishiv fails: {e}"))
+                            wrong.push(format!("{at}: Spark {v}, Krishiv fails: {e}"));
                         }
                         (None, Ok(_)) => {
-                            wrong.push(format!("{at}: Spark fails ({want}), Krishiv runs"))
+                            wrong.push(format!("{at}: Spark fails ({want}), Krishiv runs"));
                         }
                         (None, Err(_)) => {}
                     }

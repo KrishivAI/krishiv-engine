@@ -37,8 +37,8 @@ Usage (from repo root), once per version:
 Checked by `krishiv-session/tests/time_file_reads.rs` (`text_time_follows_the_profile_runs`) and
 `krishiv-io/src/csv/time_tests.rs` (the 4.2 profile rows); the `schema_of_json` section by
 `krishiv-session/tests/schema_of_json_time.rs`, the `json_file` section by `krishiv-session/tests/json_file_time.rs`,
-the `csv_file`, `csv_expr` and `json_read` sections by `krishiv-session/tests/csv_file_legacy.rs`, the `write` section by
-`krishiv-session/tests/text_write_legacy.rs`.
+the `csv_file`, `csv_expr` and `json_read` sections by `krishiv-session/tests/csv_file_legacy.rs`, the `write`
+section by `krishiv-session/tests/text_write_legacy.rs`.
 """
 
 import json
