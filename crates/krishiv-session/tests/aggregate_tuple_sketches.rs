@@ -192,3 +192,17 @@ fn the_min_and_max_summaries_of_an_empty_sketch_are_zero() -> R {
     assert_eq!(got, ["0|0"]);
     Ok(())
 }
+
+/// Spark 4.3.0 `local[2]` (and `REPARTITION(4)`): over several partitions the merged sketch is cut to
+/// 2^lgNomEntries entries, which is what Krishiv's final stage always does.
+#[test]
+fn a_merged_sketch_is_cut_to_the_requested_size() -> R {
+    let s = Session::new()?;
+    let got = rows(
+        &s,
+        "SELECT CAST(length(s) AS STRING), tuple_sketch_estimate_double(s), tuple_sketch_theta_double(s) FROM \
+         (SELECT tuple_sketch_agg_double(id, 1.0D, 5) s FROM range(0, 100))",
+    )?;
+    assert_eq!(got, ["568|130.20954598259996|0.2457577112224644"]);
+    Ok(())
+}

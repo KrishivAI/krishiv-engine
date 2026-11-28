@@ -375,8 +375,7 @@ fn page(
              only after a merge, so over a single partition (`range(100)` with `lgNomEntries` 5) it keeps every \
              retained entry (51 at theta 0.3564956426418521) where Krishiv keeps fewer (the sketch bytes, \
              `tuple_sketch_estimate_*` and `tuple_sketch_theta_*` differ). Over several partitions the results \
-             are the same. A sketch with `lgNomEntries` 4 keeps more entries than Spark's, because the library's \
-             smallest table is 2^5.\n\n",
+             are the same, `lgNomEntries` 4 included.\n\n",
         );
     }
     if doc.name.starts_with("kll_sketch_to_string_") && implemented {

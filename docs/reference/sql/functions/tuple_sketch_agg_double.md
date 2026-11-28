@@ -15,7 +15,7 @@ the number buckets or slots for the TupleSketch. Default is 12.
 
 **Applies to:** Krishiv 0.2.0 and above. Spark: 4.2 and later.
 
-**Note.** Krishiv plans every aggregate as a partial and a final stage, so the final stage always merges the partial sketches and cuts the result to 2^`lgNomEntries` entries. Spark cuts the result only after a merge, so over a single partition (`range(100)` with `lgNomEntries` 5) it keeps every retained entry (51 at theta 0.3564956426418521) where Krishiv keeps fewer (the sketch bytes, `tuple_sketch_estimate_*` and `tuple_sketch_theta_*` differ). Over several partitions the results are the same. A sketch with `lgNomEntries` 4 keeps more entries than Spark's, because the library's smallest table is 2^5.
+**Note.** Krishiv plans every aggregate as a partial and a final stage, so the final stage always merges the partial sketches and cuts the result to 2^`lgNomEntries` entries. Spark cuts the result only after a merge, so over a single partition (`range(100)` with `lgNomEntries` 5) it keeps every retained entry (51 at theta 0.3564956426418521) where Krishiv keeps fewer (the sketch bytes, `tuple_sketch_estimate_*` and `tuple_sketch_theta_*` differ). Over several partitions the results are the same, `lgNomEntries` 4 included.
 
 ## Syntax
 

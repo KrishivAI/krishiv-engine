@@ -133,8 +133,8 @@ fn an_intersection_that_saw_nothing_is_empty_bytes_and_a_sketch_group_is_not_cut
         .unwrap()
         .value(0);
     let c = tuple::from_bytes::<f64>(bytes, "t").unwrap();
-    // Spark's `compact` keeps every retained entry (its lg 4 table keeps 23 here, the crate's lg 5 minimum more:
-    // a documented divergence); a result is never cut to 2^lgNomEntries.
+    // A never-merged accumulator is not reachable from a query (the final stage always merges and cuts), so
+    // this pins only the accumulator: its result is not cut to 2^lgNomEntries.
     assert!(c.num_retained() > 16, "{}", c.num_retained());
 }
 
