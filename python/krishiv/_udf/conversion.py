@@ -35,7 +35,7 @@ from krishiv._udf.pandas_types import (
     from_arrow_schema,
 )
 from krishiv._udf.pandas_utils import require_minimum_pyarrow_version
-from krishiv.sql._convert import _local_naive, _naive_to_utc  # krishiv: guarded local-time conversions
+from krishiv._udf._localtime import _local_naive, _naive_to_utc  # krishiv: guarded local-time conversions
 from krishiv._udf.types import (
     ArrayType,
     BinaryType,

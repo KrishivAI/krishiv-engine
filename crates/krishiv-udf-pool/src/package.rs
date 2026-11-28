@@ -26,6 +26,10 @@ const FILES: &[(&str, &str)] = &[
         include_str!("../worker/krishiv/_udf/conversion.py"),
     ),
     (
+        "krishiv/_udf/_localtime.py",
+        include_str!("../worker/krishiv/_udf/_localtime.py"),
+    ),
+    (
         "krishiv/_udf/loose_version.py",
         include_str!("../worker/krishiv/_udf/loose_version.py"),
     ),
