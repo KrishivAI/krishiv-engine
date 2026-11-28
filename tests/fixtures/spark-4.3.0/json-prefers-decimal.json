@@ -1,0 +1,588 @@
+{
+ "spark": "4.3.0",
+ "cases": [
+  {
+   "text": "{\"t\":\"1.5\"}",
+   "options": {
+    "prefersDecimal": "true"
+   },
+   "schema_of_json": "STRUCT<t: DECIMAL(2,1)>",
+   "file_schema": "struct<t:decimal(2,1)>"
+  },
+  {
+   "text": "{\"t\":\"0.5\"}",
+   "options": {
+    "prefersDecimal": "true"
+   },
+   "schema_of_json": "STRUCT<t: DECIMAL(1,1)>",
+   "file_schema": "struct<t:decimal(1,1)>"
+  },
+  {
+   "text": "{\"t\":\"0.01\"}",
+   "options": {
+    "prefersDecimal": "true"
+   },
+   "schema_of_json": "STRUCT<t: STRING>",
+   "file_schema": "struct<t:string>"
+  },
+  {
+   "text": "{\"t\":\"0.00\"}",
+   "options": {
+    "prefersDecimal": "true"
+   },
+   "schema_of_json": "STRUCT<t: STRING>",
+   "file_schema": "struct<t:string>"
+  },
+  {
+   "text": "{\"t\":\"0\"}",
+   "options": {
+    "prefersDecimal": "true"
+   },
+   "schema_of_json": "STRUCT<t: DECIMAL(1,0)>",
+   "file_schema": "struct<t:decimal(1,0)>"
+  },
+  {
+   "text": "{\"t\":\"123\"}",
+   "options": {
+    "prefersDecimal": "true"
+   },
+   "schema_of_json": "STRUCT<t: DECIMAL(3,0)>",
+   "file_schema": "struct<t:decimal(3,0)>"
+  },
+  {
+   "text": "{\"t\":\"-1.5\"}",
+   "options": {
+    "prefersDecimal": "true"
+   },
+   "schema_of_json": "STRUCT<t: DECIMAL(2,1)>",
+   "file_schema": "struct<t:decimal(2,1)>"
+  },
+  {
+   "text": "{\"t\":\"+1.5\"}",
+   "options": {
+    "prefersDecimal": "true"
+   },
+   "schema_of_json": "STRUCT<t: DECIMAL(2,1)>",
+   "file_schema": "struct<t:decimal(2,1)>"
+  },
+  {
+   "text": "{\"t\":\"1,000.5\"}",
+   "options": {
+    "prefersDecimal": "true"
+   },
+   "schema_of_json": "STRUCT<t: DECIMAL(5,1)>",
+   "file_schema": "struct<t:decimal(5,1)>"
+  },
+  {
+   "text": "{\"t\":\"1,5\"}",
+   "options": {
+    "prefersDecimal": "true"
+   },
+   "schema_of_json": "STRUCT<t: DECIMAL(2,0)>",
+   "file_schema": "struct<t:decimal(2,0)>"
+  },
+  {
+   "text": "{\"t\":\",\"}",
+   "options": {
+    "prefersDecimal": "true"
+   },
+   "schema_of_json": "STRUCT<t: STRING>",
+   "file_schema": "struct<t:string>"
+  },
+  {
+   "text": "{\"t\":\"1e3\"}",
+   "options": {
+    "prefersDecimal": "true"
+   },
+   "schema_of_json": "STRUCT<t: STRING>",
+   "file_schema": "struct<t:string>"
+  },
+  {
+   "text": "{\"t\":\"1E-2\"}",
+   "options": {
+    "prefersDecimal": "true"
+   },
+   "schema_of_json": "STRUCT<t: STRING>",
+   "file_schema": "struct<t:string>"
+  },
+  {
+   "text": "{\"t\":\"1.5e1\"}",
+   "options": {
+    "prefersDecimal": "true"
+   },
+   "schema_of_json": "STRUCT<t: DECIMAL(2,0)>",
+   "file_schema": "struct<t:decimal(2,0)>"
+  },
+  {
+   "text": "{\"t\":\"15e-1\"}",
+   "options": {
+    "prefersDecimal": "true"
+   },
+   "schema_of_json": "STRUCT<t: DECIMAL(2,1)>",
+   "file_schema": "struct<t:decimal(2,1)>"
+  },
+  {
+   "text": "{\"t\":\".5\"}",
+   "options": {
+    "prefersDecimal": "true"
+   },
+   "schema_of_json": "STRUCT<t: DECIMAL(1,1)>",
+   "file_schema": "struct<t:decimal(1,1)>"
+  },
+  {
+   "text": "{\"t\":\"5.\"}",
+   "options": {
+    "prefersDecimal": "true"
+   },
+   "schema_of_json": "STRUCT<t: DECIMAL(1,0)>",
+   "file_schema": "struct<t:decimal(1,0)>"
+  },
+  {
+   "text": "{\"t\":\"007.50\"}",
+   "options": {
+    "prefersDecimal": "true"
+   },
+   "schema_of_json": "STRUCT<t: DECIMAL(3,2)>",
+   "file_schema": "struct<t:decimal(3,2)>"
+  },
+  {
+   "text": "{\"t\":\"-0.0\"}",
+   "options": {
+    "prefersDecimal": "true"
+   },
+   "schema_of_json": "STRUCT<t: DECIMAL(1,1)>",
+   "file_schema": "struct<t:decimal(1,1)>"
+  },
+  {
+   "text": "{\"t\":\"12345678901234567890123456789012345678\"}",
+   "options": {
+    "prefersDecimal": "true"
+   },
+   "schema_of_json": "STRUCT<t: DECIMAL(38,0)>",
+   "file_schema": "struct<t:decimal(38,0)>"
+  },
+  {
+   "text": "{\"t\":\"123456789012345678901234567890123456789\"}",
+   "options": {
+    "prefersDecimal": "true"
+   },
+   "schema_of_json": "STRUCT<t: STRING>",
+   "file_schema": "struct<t:string>"
+  },
+  {
+   "text": "{\"t\":\"1234567890123456789012345678901234567.8\"}",
+   "options": {
+    "prefersDecimal": "true"
+   },
+   "schema_of_json": "STRUCT<t: DECIMAL(38,1)>",
+   "file_schema": "struct<t:decimal(38,1)>"
+  },
+  {
+   "text": "{\"t\":\" 1.5\"}",
+   "options": {
+    "prefersDecimal": "true"
+   },
+   "schema_of_json": "STRUCT<t: STRING>",
+   "file_schema": "struct<t:string>"
+  },
+  {
+   "text": "{\"t\":\"1.5 \"}",
+   "options": {
+    "prefersDecimal": "true"
+   },
+   "schema_of_json": "STRUCT<t: STRING>",
+   "file_schema": "struct<t:string>"
+  },
+  {
+   "text": "{\"t\":\"NaN\"}",
+   "options": {
+    "prefersDecimal": "true"
+   },
+   "schema_of_json": "STRUCT<t: STRING>",
+   "file_schema": "struct<t:string>"
+  },
+  {
+   "text": "{\"t\":\"Infinity\"}",
+   "options": {
+    "prefersDecimal": "true"
+   },
+   "schema_of_json": "STRUCT<t: STRING>",
+   "file_schema": "struct<t:string>"
+  },
+  {
+   "text": "{\"t\":\"1.5d\"}",
+   "options": {
+    "prefersDecimal": "true"
+   },
+   "schema_of_json": "STRUCT<t: STRING>",
+   "file_schema": "struct<t:string>"
+  },
+  {
+   "text": "{\"t\":\"0x10\"}",
+   "options": {
+    "prefersDecimal": "true"
+   },
+   "schema_of_json": "STRUCT<t: STRING>",
+   "file_schema": "struct<t:string>"
+  },
+  {
+   "text": "{\"t\":\"1_0\"}",
+   "options": {
+    "prefersDecimal": "true"
+   },
+   "schema_of_json": "STRUCT<t: STRING>",
+   "file_schema": "struct<t:string>"
+  },
+  {
+   "text": "{\"t\":\"\\u0661\\u0662\"}",
+   "options": {
+    "prefersDecimal": "true"
+   },
+   "schema_of_json": "STRUCT<t: DECIMAL(2,0)>",
+   "file_schema": "struct<t:decimal(2,0)>"
+  },
+  {
+   "text": "{\"t\":\"1e2147483648\"}",
+   "options": {
+    "prefersDecimal": "true"
+   },
+   "schema_of_json": "STRUCT<t: STRING>",
+   "file_schema": "struct<t:string>"
+  },
+  {
+   "text": "{\"t\":\"2024-01-02\"}",
+   "options": {
+    "prefersDecimal": "true"
+   },
+   "schema_of_json": "STRUCT<t: STRING>",
+   "file_schema": "struct<t:string>"
+  },
+  {
+   "text": "{\"t\":\"1.5\"}",
+   "options": {},
+   "schema_of_json": "STRUCT<t: STRING>",
+   "file_schema": "struct<t:string>"
+  },
+  {
+   "text": "{\"t\":\"2024-01-02 03:04:05\"}",
+   "options": {
+    "prefersDecimal": "true",
+    "inferTimestamp": "true"
+   },
+   "schema_of_json": "STRUCT<t: TIMESTAMP>",
+   "file_schema": "struct<t:timestamp>"
+  },
+  {
+   "text": "{\"t\":\"1.5\"}",
+   "options": {
+    "prefersDecimal": "true",
+    "inferTimestamp": "true"
+   },
+   "schema_of_json": "STRUCT<t: DECIMAL(2,1)>",
+   "file_schema": "struct<t:decimal(2,1)>"
+  },
+  {
+   "text": "{\"t\":\"1.5\",\"n\":2.5,\"b\":true}",
+   "options": {
+    "prefersDecimal": "true",
+    "primitivesAsString": "true"
+   },
+   "schema_of_json": "STRUCT<b: STRING, n: STRING, t: DECIMAL(2,1)>",
+   "file_schema": "struct<b:string,n:string,t:decimal(2,1)>"
+  },
+  {
+   "text": "{\"t\":\"1.000,5\"}",
+   "options": {
+    "prefersDecimal": "true",
+    "locale": "de-DE"
+   },
+   "schema_of_json": "STRUCT<t: DECIMAL(5,1)>",
+   "file_schema": "struct<t:decimal(5,1)>"
+  },
+  {
+   "text": "{\"t\":1.5}",
+   "options": {
+    "prefersDecimal": "true"
+   },
+   "schema_of_json": "STRUCT<t: DECIMAL(2,1)>",
+   "file_schema": "struct<t:decimal(2,1)>"
+  },
+  {
+   "text": "{\"t\":0.01}",
+   "options": {
+    "prefersDecimal": "true"
+   },
+   "schema_of_json": "STRUCT<t: DECIMAL(2,2)>",
+   "file_schema": "struct<t:decimal(2,2)>"
+  },
+  {
+   "text": "{\"t\":1e3}",
+   "options": {
+    "prefersDecimal": "true"
+   },
+   "schema_of_json": "ERROR NEGATIVE_SCALE_DISALLOWED",
+   "file_schema": "ERROR NEGATIVE_SCALE_DISALLOWED"
+  },
+  {
+   "text": "{\"t\":1.5e1}",
+   "options": {
+    "prefersDecimal": "true"
+   },
+   "schema_of_json": "STRUCT<t: DECIMAL(2,0)>",
+   "file_schema": "struct<t:decimal(2,0)>"
+  },
+  {
+   "text": "[{\"t\":1.5},{\"t\":12345.678}]",
+   "options": {
+    "prefersDecimal": "true"
+   },
+   "schema_of_json": "ARRAY<STRUCT<t: DECIMAL(8,3)>>",
+   "file_schema": "struct<t:decimal(8,3)>"
+  },
+  {
+   "text": "[{\"t\":12345.6},{\"t\":1.234}]",
+   "options": {
+    "prefersDecimal": "true"
+   },
+   "schema_of_json": "ARRAY<STRUCT<t: DECIMAL(8,3)>>",
+   "file_schema": "struct<t:decimal(8,3)>"
+  },
+  {
+   "text": "[{\"t\":\"12345.6\"},{\"t\":\"1.234\"}]",
+   "options": {
+    "prefersDecimal": "true"
+   },
+   "schema_of_json": "ARRAY<STRUCT<t: DECIMAL(8,3)>>",
+   "file_schema": "struct<t:decimal(8,3)>"
+  },
+  {
+   "text": "[{\"t\":1},{\"t\":1.5}]",
+   "options": {
+    "prefersDecimal": "true"
+   },
+   "schema_of_json": "ARRAY<STRUCT<t: DECIMAL(21,1)>>",
+   "file_schema": "struct<t:decimal(21,1)>"
+  },
+  {
+   "text": "[{\"t\":1.5},{\"t\":1}]",
+   "options": {
+    "prefersDecimal": "true"
+   },
+   "schema_of_json": "ARRAY<STRUCT<t: DECIMAL(21,1)>>",
+   "file_schema": "struct<t:decimal(21,1)>"
+  },
+  {
+   "text": "[{\"t\":1},{\"t\":\"1.5\"}]",
+   "options": {
+    "prefersDecimal": "true"
+   },
+   "schema_of_json": "ARRAY<STRUCT<t: DECIMAL(21,1)>>",
+   "file_schema": "struct<t:decimal(21,1)>"
+  },
+  {
+   "text": "[{\"t\":\"1.5\"},{\"t\":2.5}]",
+   "options": {
+    "prefersDecimal": "true"
+   },
+   "schema_of_json": "ARRAY<STRUCT<t: DECIMAL(2,1)>>",
+   "file_schema": "struct<t:decimal(2,1)>"
+  },
+  {
+   "text": "[{\"t\":\"1.5\"},{\"t\":\"abc\"}]",
+   "options": {
+    "prefersDecimal": "true"
+   },
+   "schema_of_json": "ARRAY<STRUCT<t: STRING>>",
+   "file_schema": "struct<t:string>"
+  },
+  {
+   "text": "[{\"t\":\"1.5\"},{\"t\":true}]",
+   "options": {
+    "prefersDecimal": "true"
+   },
+   "schema_of_json": "ARRAY<STRUCT<t: STRING>>",
+   "file_schema": "struct<t:string>"
+  },
+  {
+   "text": "[{\"t\":\"1.5\"},{\"t\":null}]",
+   "options": {
+    "prefersDecimal": "true"
+   },
+   "schema_of_json": "ARRAY<STRUCT<t: DECIMAL(2,1)>>",
+   "file_schema": "struct<t:decimal(2,1)>"
+  },
+  {
+   "text": "[{\"t\":\"1.5\"},{\"t\":\"\"}]",
+   "options": {
+    "prefersDecimal": "true"
+   },
+   "schema_of_json": "ARRAY<STRUCT<t: DECIMAL(2,1)>>",
+   "file_schema": "struct<t:decimal(2,1)>"
+  },
+  {
+   "text": "[{\"t\":\"1.5\"},{\"t\":2.5e300}]",
+   "options": {},
+   "schema_of_json": "ARRAY<STRUCT<t: STRING>>",
+   "file_schema": "struct<t:string>"
+  },
+  {
+   "text": "[{\"t\":1.5},{\"t\":\"x\"}]",
+   "options": {
+    "prefersDecimal": "true"
+   },
+   "schema_of_json": "ARRAY<STRUCT<t: STRING>>",
+   "file_schema": "struct<t:string>"
+  },
+  {
+   "text": "[{\"t\":9223372036854775808},{\"t\":1}]",
+   "options": {},
+   "schema_of_json": "ARRAY<STRUCT<t: DECIMAL(20,0)>>",
+   "file_schema": "struct<t:decimal(20,0)>"
+  },
+  {
+   "text": "[{\"t\":1},{\"t\":9223372036854775808}]",
+   "options": {},
+   "schema_of_json": "ARRAY<STRUCT<t: DECIMAL(20,0)>>",
+   "file_schema": "struct<t:decimal(20,0)>"
+  },
+  {
+   "text": "[{\"t\":12345678901234567890},{\"t\":1}]",
+   "options": {},
+   "schema_of_json": "ARRAY<STRUCT<t: DECIMAL(20,0)>>",
+   "file_schema": "struct<t:decimal(20,0)>"
+  },
+  {
+   "text": "[{\"t\":123456789012345678901},{\"t\":1}]",
+   "options": {},
+   "schema_of_json": "ARRAY<STRUCT<t: DECIMAL(21,0)>>",
+   "file_schema": "struct<t:decimal(21,0)>"
+  },
+  {
+   "text": "[{\"t\":9223372036854775808},{\"t\":1.5}]",
+   "options": {},
+   "schema_of_json": "ARRAY<STRUCT<t: DOUBLE>>",
+   "file_schema": "struct<t:double>"
+  },
+  {
+   "text": "[{\"t\":9223372036854775808},{\"t\":1.5}]",
+   "options": {
+    "prefersDecimal": "true"
+   },
+   "schema_of_json": "ARRAY<STRUCT<t: DECIMAL(20,1)>>",
+   "file_schema": "struct<t:decimal(20,1)>"
+  },
+  {
+   "text": "[{\"t\":\"0.12345678901234567890123456789012345678\"},{\"t\":\"1234567890.5\"}]",
+   "options": {
+    "prefersDecimal": "true"
+   },
+   "schema_of_json": "ARRAY<STRUCT<t: DOUBLE>>",
+   "file_schema": "struct<t:double>"
+  },
+  {
+   "text": "[{\"t\":\"0.1234567890123456789012345678901234567\"},{\"t\":\"1.5\"}]",
+   "options": {
+    "prefersDecimal": "true"
+   },
+   "schema_of_json": "ARRAY<STRUCT<t: DECIMAL(38,37)>>",
+   "file_schema": "struct<t:decimal(38,37)>"
+  },
+  {
+   "text": "[{\"t\":\"12345678901234567890\"},{\"t\":1}]",
+   "options": {
+    "prefersDecimal": "true"
+   },
+   "schema_of_json": "ARRAY<STRUCT<t: DECIMAL(20,0)>>",
+   "file_schema": "struct<t:decimal(20,0)>"
+  },
+  {
+   "text": "[{\"t\":\"1.5\"},{\"t\":\"12\"},{\"t\":\"-0.25\"}]",
+   "options": {
+    "prefersDecimal": "true"
+   },
+   "schema_of_json": "ARRAY<STRUCT<t: DECIMAL(4,2)>>",
+   "file_schema": "struct<t:decimal(4,2)>"
+  },
+  {
+   "text": "[[\"1.5\", 2], [\"3.25\"]]",
+   "options": {
+    "prefersDecimal": "true"
+   },
+   "schema_of_json": "ARRAY<ARRAY<DECIMAL(22,2)>>",
+   "file_schema": "struct<_corrupt_record:string>"
+  },
+  {
+   "text": "{\"t\":NaN}",
+   "options": {
+    "prefersDecimal": "true"
+   },
+   "schema_of_json": "ERROR NumberFormatException",
+   "file_schema": "struct<_corrupt_record:string>"
+  },
+  {
+   "text": "{\"t\":Infinity}",
+   "options": {
+    "prefersDecimal": "true"
+   },
+   "schema_of_json": "ERROR NumberFormatException",
+   "file_schema": "struct<_corrupt_record:string>"
+  },
+  {
+   "text": "{\"t\":-Infinity}",
+   "options": {
+    "prefersDecimal": "true"
+   },
+   "schema_of_json": "ERROR NumberFormatException",
+   "file_schema": "struct<_corrupt_record:string>"
+  },
+  {
+   "text": "{\"t\":NaN}",
+   "options": {},
+   "schema_of_json": "STRUCT<t: DOUBLE>",
+   "file_schema": "struct<t:double>"
+  },
+  {
+   "text": "[{\"t\":NaN},{\"t\":1.5}]",
+   "options": {
+    "prefersDecimal": "true"
+   },
+   "schema_of_json": "ERROR NumberFormatException",
+   "file_schema": "struct<_corrupt_record:string>"
+  },
+  {
+   "text": "[{\"t\":1.5},{\"t\":-Infinity}]",
+   "options": {
+    "prefersDecimal": "true"
+   },
+   "schema_of_json": "ERROR NumberFormatException",
+   "file_schema": "struct<_corrupt_record:string>"
+  },
+  {
+   "text": "{\"t\":NaN}",
+   "options": {
+    "prefersDecimal": "true",
+    "mode": "FAILFAST"
+   },
+   "schema_of_json": "ERROR NumberFormatException",
+   "file_schema": "ERROR MALFORMED_RECORD_IN_PARSING.WITHOUT_SUGGESTION"
+  },
+  {
+   "text": "[{\"t\":NaN},{\"t\":1.5}]",
+   "options": {
+    "prefersDecimal": "true",
+    "mode": "DROPMALFORMED"
+   },
+   "schema_of_json": "ERROR NumberFormatException",
+   "file_schema": "struct<>"
+  },
+  {
+   "text": "[{\"t\":NaN},{\"t\":1.5}]",
+   "options": {
+    "prefersDecimal": "true",
+    "columnNameOfCorruptRecord": "bad"
+   },
+   "schema_of_json": "ERROR NumberFormatException",
+   "file_schema": "struct<bad:string>"
+  }
+ ]
+}

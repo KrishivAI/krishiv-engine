@@ -14,12 +14,12 @@ use std::sync::Arc;
 use crate::extension::{Extension, Slot, resolve};
 use krishiv_common::error::KrishivError;
 use krishiv_plan::{
-    Builtin, CastMode, ColumnRef, Expr, ExprNode, FunctionCall, Literal, NullOrdering, PlanId,
-    SortDirection, SortOrder, Star,
+    Builtin, CastMode, ColumnRef, Expr, ExprNode, FrameBound, FrameUnits, FunctionCall, Literal,
+    NullOrdering, PlanId, SortDirection, SortOrder, Star, WindowExpr, WindowSpec, WindowSpecRef,
 };
 
 use super::errors::{
-    expression_not_set, field_empty, not_set, unsupported_field, unsupported_variant,
+    expression_not_set, field_empty, invalid_enum, not_set, unsupported_field, unsupported_variant,
 };
 use super::literal::literal;
 use super::names::{parse_attribute_name, parse_multipart_identifier};
@@ -80,6 +80,7 @@ impl Translator<'_> {
             }
             ExprType::UnresolvedFunction(f) => self.function(f)?,
             ExprType::CallFunction(c) => self.call_function(c)?,
+            ExprType::Window(w) => self.window(w)?,
             ExprType::CommonInlineUserDefinedFunction(f) => self.inline_udf(f)?,
             ExprType::NamedArgumentExpression(_) => {
                 // Only as an argument of a function call (`call_args`); Spark's analyzer
@@ -309,6 +310,71 @@ impl Translator<'_> {
             names.clear();
         }
         Ok((args, names))
+    }
+
+    /// `function OVER (PARTITION BY .. ORDER BY .. frame)`, after Spark's `transformWindowExpression`. An absent
+    /// frame is Spark's unspecified one (the analyzer gives the function's own or the default); a bound
+    /// that is `unbounded` is `UNBOUNDED PRECEDING` below and `UNBOUNDED FOLLOWING` above.
+    fn window(&mut self, w: &expression::Window) -> Result<ExprNode> {
+        use expression::window::{
+            WindowFrame, window_frame::FrameType, window_frame::frame_boundary::Boundary,
+        };
+        let function = self.required_expression(w.window_function.as_deref())?;
+        let mut partition_by = Vec::with_capacity(w.partition_spec.len());
+        for e in &w.partition_spec {
+            partition_by.push(self.expression(e)?);
+        }
+        let mut order_by = Vec::with_capacity(w.order_spec.len());
+        for o in &w.order_spec {
+            order_by.push(self.sort_order(o)?);
+        }
+        let frame = match w.frame_spec.as_deref() {
+            None => None,
+            Some(WindowFrame {
+                frame_type,
+                lower,
+                upper,
+            }) => {
+                let units = match FrameType::try_from(*frame_type) {
+                    Ok(FrameType::Row) => FrameUnits::Rows,
+                    Ok(FrameType::Range) => FrameUnits::Range,
+                    _ => {
+                        return Err(invalid_enum(
+                            "spark.connect.Expression.Window.WindowFrame.FrameType",
+                            "FRAME_TYPE_UNDEFINED",
+                            *frame_type,
+                        ));
+                    }
+                };
+                let mut bound = |b: Option<&expression::window::window_frame::FrameBoundary>,
+                                 side: &str,
+                                 unbounded: FrameBound|
+                 -> Result<FrameBound> {
+                    match b.and_then(|b| b.boundary.as_ref()) {
+                        Some(Boundary::CurrentRow(true)) => Ok(FrameBound::CurrentRow),
+                        Some(Boundary::Unbounded(true)) => Ok(unbounded),
+                        Some(Boundary::Value(e)) => Ok(FrameBound::Offset(self.expression(e)?)),
+                        _ => Err(not_set(
+                            "spark.connect.Expression.Window.WindowFrame.FrameBoundary",
+                            &format!("{side}_BOUNDARY_NOT_SET"),
+                        )),
+                    }
+                };
+                Some(krishiv_plan::WindowFrame {
+                    units,
+                    lower: bound(lower.as_deref(), "LOWER", FrameBound::UnboundedPreceding)?,
+                    upper: bound(upper.as_deref(), "UPPER", FrameBound::UnboundedFollowing)?,
+                })
+            }
+        };
+        Ok(ExprNode::Window(WindowExpr {
+            function,
+            window: WindowSpecRef::Spec(WindowSpec {
+                partition_by,
+                order_by,
+                frame,
+            }),
+        }))
     }
 
     /// A sort key. As in Spark, anything but `SORT_DIRECTION_ASCENDING` is

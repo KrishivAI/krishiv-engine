@@ -1,35 +1,17 @@
 {
-  "name": "krishiv-ui",
+  "name": "krishiv-ui-workspace",
   "private": true,
-  "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "vite build",
-    "check": "svelte-check --tsconfig ./tsconfig.json",
-    "sync-assets": "./scripts/sync-assets.sh"
-  },
-  "dependencies": {
-    "@codemirror/lang-sql": "6.10.0",
-    "@codemirror/language": "6.13.1",
-    "@codemirror/state": "6.7.6",
-    "@codemirror/view": "6.43.15",
-    "@lezer/highlight": "1.2.5",
-    "@tanstack/svelte-query": "6.3.3",
-    "bits-ui": "2.20.2",
-    "clsx": "2.1.1",
-    "codemirror": "6.0.2",
-    "tailwind-merge": "3.7.0",
-    "tailwind-variants": "4.0.1",
-    "tailwindcss": "4.3.3"
+    "dev": "pnpm --filter krishiv-console-app dev",
+    "build": "pnpm --filter krishiv-console-app build",
+    "check": "pnpm -r check",
+    "test": "pnpm -r test && pnpm --filter krishiv-ui-gallery build",
+    "sync-assets": "./scripts/sync-assets.sh",
+    "gallery": "pnpm --filter krishiv-ui-gallery dev"
   },
   "devDependencies": {
-    "@sveltejs/vite-plugin-svelte": "7.3.1",
-    "@tailwindcss/vite": "4.3.3",
-    "axe-core": "4.14.0",
-    "svelte": "5.57.2",
-    "svelte-check": "4.7.7",
-    "typescript": "5.9.3",
-    "vite": "8.3.4"
-  }
+    "axe-core": "4.14.0"
+  },
+  "//": "axe-core is read by tests/check_pages.py and tests/check_gallery.py from ui/node_modules. `test` also builds the dev-only gallery (apps/gallery/dist), which check_gallery.py serves under the production CSP."
 }

@@ -230,3 +230,53 @@ async fn wrong_tokens_never_lock_the_owner_out() {
         .await
         .expect("join");
 }
+
+/// A host that runs nothing: only its presence is under test.
+#[derive(Debug)]
+struct NoHost;
+
+#[derive(Debug)]
+struct NoRuntime;
+
+impl krishiv_exec::python_eval::UdfRuntime for NoRuntime {
+    fn prepare(
+        &self,
+        spec: &krishiv_exec::python_eval::UdfCallSpec,
+    ) -> krishiv_exec::Result<std::sync::Arc<dyn krishiv_exec::python_eval::PreparedUdf>> {
+        Err(krishiv_common::error::KrishivUdfNotAvailable {
+            name: spec.name.clone(),
+            version: spec.version.to_string(),
+        }
+        .into())
+    }
+}
+
+impl krishiv_connect_server::SessionUdfRuntime for NoRuntime {
+    fn register(&self, _: &str, _: u32, _: &krishiv_connect::translate::PythonUdf) {}
+    fn release(&self) {}
+}
+
+impl krishiv_connect_server::UdfHost for NoHost {
+    fn session_runtime(
+        &self,
+        _: &str,
+        _: Option<&str>,
+        _: bool,
+        _: &str,
+        _: krishiv_connect_server::RunnerConf,
+    ) -> std::sync::Arc<dyn krishiv_connect_server::SessionUdfRuntime> {
+        std::sync::Arc::new(NoRuntime)
+    }
+}
+
+#[test]
+fn a_local_server_starts_with_a_udf_host_and_stops() {
+    let mut server = LocalServer::start_with_udf_host(
+        Session::new().expect("session"),
+        std::sync::Arc::new(NoHost),
+    )
+    .expect("start");
+    assert!(server.is_running());
+    server.stop().expect("stop");
+    assert!(!server.is_running());
+}

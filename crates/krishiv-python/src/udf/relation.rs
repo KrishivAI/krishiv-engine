@@ -25,14 +25,16 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
-use arrow_array::RecordBatch;
+use arrow_array::{Array, RecordBatch};
 use arrow_schema::SchemaRef;
 use futures::SinkExt;
 use futures::StreamExt;
 use futures::channel::mpsc;
 use futures::executor::block_on;
 use futures::future::BoxFuture;
-use krishiv_common::error::{InternalError, KrishivError, KrishivUnsupportedFeature};
+use krishiv_common::error::{
+    InternalError, KrishivError, KrishivUnsupportedFeature, PythonException,
+};
 use krishiv_exec::python_relation::{
     Frame, PreparedRelationUdf, RelationCallSpec, RelationSlot, RelationSlots, SchemaCheck,
     UdfTask, VALIDATE_SCHEMA,
@@ -350,27 +352,35 @@ fn import_batch(
         .getattr("num_columns")
         .and_then(|n| n.extract())
         .map_err(|e| python_error(py, &e))?;
-    if width != declared.fields().len() {
-        return Err(InternalError {
-            message: format!(
-                "a Python relation UDF produced {width} columns where its declared result has {}",
+    // Columns are taken by position, as Spark's reader takes them: it ignores what a `mapInArrow` result has
+    // beyond the declared ones (the other kinds' wrappers have bound theirs by now, and `check` has refused
+    // extras when `validateSchema` is on).
+    if width < declared.fields().len() {
+        return Err(PythonException {
+            msg: "The Python worker returned an invalid result".to_owned(),
+            traceback: format!(
+                "{width} columns where the declared result has {}",
                 declared.fields().len()
             ),
         }
         .into());
     }
+    let width = declared.fields().len();
     let mut columns = Vec::with_capacity(width);
     for (i, field) in declared.fields().iter().enumerate() {
         let column = batch
             .call_method1("column", (i,))
             .map_err(|e| python_error(py, &e))?;
-        columns.push(from_pyarrow(
-            py,
-            array_type,
-            &column,
-            field.data_type(),
-            rows,
-        )?);
+        let column = from_pyarrow(py, array_type, &column, field.data_type(), rows)?;
+        // Spark's JVM fails reading a NULL in a column declared NOT NULL.
+        if !field.is_nullable() && column.logical_null_count() > 0 {
+            return Err(PythonException {
+                msg: "The Python worker returned an invalid result".to_owned(),
+                traceback: format!("a NULL in column `{}`, declared NOT NULL", field.name()),
+            }
+            .into());
+        }
+        columns.push(column);
     }
     let options = arrow_array::RecordBatchOptions::new().with_row_count(Some(rows));
     RecordBatch::try_new_with_options(Arc::clone(declared), columns, &options).map_err(|e| {

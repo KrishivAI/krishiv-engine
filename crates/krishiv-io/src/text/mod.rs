@@ -48,6 +48,31 @@ pub(crate) const TIME_NANOS_CONF: &str = "krishiv.io.text.timeNanos";
 /// `tests/fixtures/spark-4.2.1/time-text-profiles.json`).
 pub(crate) const TIME_INFER_CONF: &str = "krishiv.io.text.inferTime";
 
+/// The session's `spark.sql.timestampType`, read as a session-only conf
+/// option (JSON): inference gives `TIMESTAMP_NTZ` only when it is
+/// `TIMESTAMP_NTZ` (Spark's `JsonInferSchema.isDefaultNTZ`).
+pub(crate) const TIMESTAMP_TYPE_CONF: &str = "spark.sql.timestampType";
+
+/// The session's `spark.sql.legacy.timeParserPolicy`, read as a
+/// session-only conf option (JSON): `LEGACY` reads dates and timestamps
+/// with `FastDateFormat` patterns and the lenient fallback (`JSONOptions`,
+/// `JacksonParser`), and inference takes a zone-less timestamp text as
+/// `TIMESTAMP` (SPARK-46769).
+pub(crate) const PARSER_POLICY_CONF: &str = "spark.sql.legacy.timeParserPolicy";
+
+/// Whether the session's default timestamp type is `TIMESTAMP_NTZ`
+/// ([`TIMESTAMP_TYPE_CONF`]).
+pub(crate) fn default_ntz(o: &crate::options::FormatOptions) -> bool {
+    o.str(TIMESTAMP_TYPE_CONF)
+        .is_some_and(|v| v.trim().eq_ignore_ascii_case("TIMESTAMP_NTZ"))
+}
+
+/// Whether the session's parser policy is `LEGACY` ([`PARSER_POLICY_CONF`]).
+pub(crate) fn legacy_parser(o: &crate::options::FormatOptions) -> bool {
+    o.str(PARSER_POLICY_CONF)
+        .is_some_and(|v| v.trim().eq_ignore_ascii_case("LEGACY"))
+}
+
 /// Whether schema inference may give `TIME`: the session's gate and its
 /// Spark 4.3 profile ([`TIME_INFER_CONF`]).
 pub(crate) fn infers_time(o: &crate::options::FormatOptions) -> bool {

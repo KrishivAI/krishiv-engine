@@ -10,6 +10,7 @@ layout-disjoint, which user code never observes).
 
 from __future__ import annotations
 
+import sys
 from typing import final
 
 __version__: str
@@ -45,6 +46,8 @@ __all__ = [
     "lit",
     "map_literal",
 ]
+if sys.platform == "linux":
+    __all__ += ["_udf_trampoline"]
 
 @final
 class LocalConnectServer:
@@ -317,6 +320,10 @@ class AnonymousPythonUdf:
 def _pressure_epoch() -> int: ...
 def _udf_pool_shutdown() -> int: ...
 def _udf_runner_conf() -> dict[str, str]: ...
+
+if sys.platform == "linux":
+    def _udf_trampoline(args: list[str]) -> int: ...
+
 def col(name: str) -> Column: ...
 def lit(value: object) -> Column: ...
 def map_literal(pairs: list[tuple[str, str]]) -> Column: ...

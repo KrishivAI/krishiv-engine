@@ -1050,6 +1050,10 @@ impl<'k, 'a> Encoder<'k, 'a> {
                     self.strs(names);
                     self.strs(columns);
                 }
+                crate::ColumnNamesOp::Deduplicate { subset } => {
+                    self.u8(6);
+                    self.strs(subset);
+                }
                 crate::ColumnNamesOp::DropNa {
                     subset,
                     min_non_nulls,
