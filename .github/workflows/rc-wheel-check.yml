@@ -49,7 +49,9 @@ jobs:
           uname -m
           for wheel in wheels/*.whl; do
             echo "== $wheel"
-            uv venv --python 3.12 "venv-$(basename "$wheel" .whl)"
+            # the free-threaded wheel (cp314t) only installs on the free-threaded interpreter
+            case "$wheel" in *cp314t*) py=3.14t ;; *) py=3.12 ;; esac
+            uv venv --python "$py" "venv-$(basename "$wheel" .whl)"
             # shellcheck disable=SC1090,SC1091
             source "venv-$(basename "$wheel" .whl)/bin/activate"
             uv pip install "$wheel" pyarrow
@@ -96,7 +98,7 @@ jobs:
           vendor_id	: GenuineIntel
           flags		: fpu sse sse2 ssse3 pni sse4_1 sse4_2 popcnt cx16 lahf_lm
           EOF2
-          main=$(ls wheels/krishiv-*.whl | grep -v compat | head -1)
+          main=$(ls wheels/krishiv-*.whl | grep -v -e compat -e cp314t | head -1)
           uv venv --python 3.12 venv-main
           uv pip install --python venv-main/bin/python --no-deps "$main"
           set +e
@@ -115,7 +117,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          compat=$(ls wheels/krishiv_compat-*.whl wheels/krishiv-compat-*.whl 2>/dev/null | head -1)
+          compat=$(find wheels -maxdepth 1 \( -name 'krishiv_compat-*.whl' -o -name 'krishiv-compat-*.whl' \) | head -1)
+          test -n "$compat"
           uv venv --python 3.12 venv-compat
           uv pip install --python venv-compat/bin/python "$compat" pyarrow
           qemu-x86_64 -cpu Nehalem venv-compat/bin/python - <<'PY'
