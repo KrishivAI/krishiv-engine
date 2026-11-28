@@ -135,6 +135,8 @@ def popovers(page: Page, origin: str, scheme: str) -> list[str]:
     page.locator(trigger).focus()
     page.keyboard.press("Enter")
     page.get_by_role("listbox").wait_for(timeout=5000)
+    # As for the menu: arrows count only once the open list has its highlighted option.
+    page.locator("[role=listbox] [data-highlighted]").wait_for(timeout=5000)
     page.keyboard.press("ArrowDown")
     page.keyboard.press("ArrowDown")
     page.keyboard.press("Enter")
@@ -183,7 +185,11 @@ def popovers(page: Page, origin: str, scheme: str) -> list[str]:
     page.get_by_role("button", name="Actions").focus()
     page.keyboard.press("Enter")
     page.get_by_role("menu").wait_for(timeout=5000)
-    # The first item has the focus; Download results is disabled and skipped.
+    # The first item has the focus; Download results is disabled and skipped. Bits UI moves the focus into the
+    # menu after it opens, so wait for it: arrows pressed before then are lost (seen on a CI runner).
+    page.wait_for_function(
+        "document.activeElement?.getAttribute('role') === 'menuitem'", timeout=5000
+    )
     for _ in range(2):
         page.keyboard.press("ArrowDown")
     page.keyboard.press("Enter")
