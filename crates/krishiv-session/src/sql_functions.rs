@@ -158,23 +158,29 @@ const UNCAPTURED_EXACT: [&str; 2] = [
 ];
 
 /// The configuration a function created now captures (Spark's `sqlConfigsToProps`): the set
-/// `spark.sql.*` keys that are not static outside
+/// `spark.sql.*` keys that a SQL entry registers and that are not static, outside
 /// [`UNCAPTURED`] and [`UNCAPTURED_EXACT`] (`spark.sql.optimizer.disableHints` is kept), then the time
 /// zone and ANSI mode when not set; sorted by key. Values show as `SET` shows them, redacted where it
 /// redacts: Spark prints the raw captured value, and Krishiv hides a secret-like one on purpose.
 ///
 /// Spark captures only keys `SQLConf.isModifiable` accepts, so not a key no SQL entry registers
-/// (`spark.sql.my.flag`, a catalog declaration). Krishiv honours Spark keys it does not register
-/// (`spark.sql.caseSensitive`), so its registry cannot tell them apart.
-// TODO(R1-D-9 follow-up, front-1 queue): use the generated Spark entry table of #1080 (`spark_default`) here.
+/// (`spark.sql.my.flag`, a catalog declaration `spark.sql.catalog.lake`). A key is registered when
+/// Krishiv registers it or the profile's Spark release does ([`krishiv_common::config::spark_default`]):
+/// Krishiv honours Spark keys it does not register itself (`spark.sql.caseSensitive`).
 pub(crate) fn captured_configs(conf: &crate::conf::ConfStore) -> Vec<(String, String)> {
     const ALWAYS: [&str; 2] = ["spark.sql.session.timeZone", "spark.sql.ansi.enabled"];
+    let line = conf.profile().line();
+    let registered = |k: &str| {
+        krishiv_common::config::lookup(krishiv_common::config::resolve_alternative(k)).is_some()
+            || krishiv_common::config::spark_default(line, k).is_some()
+    };
     let mut out: BTreeMap<String, String> = conf
         .explicit_entries()
         .into_iter()
         .filter(|(k, _)| {
             k.starts_with("spark.sql.")
-                && crate::conf::is_modifiable(k)
+                && registered(k)
+                && crate::conf::is_modifiable(k, conf.profile())
                 && !UNCAPTURED_EXACT.contains(&k.as_str())
                 && (k == "spark.sql.optimizer.disableHints"
                     || !UNCAPTURED.iter().any(|d| k.starts_with(d)))

@@ -365,6 +365,28 @@ fn describe_function_of_a_sql_function_prints_spark_s_rows() -> R {
         ]
     );
     assert_eq!(got[10], "Create Time:   <time>");
+    // Spark captures only keys a SQL entry registers: not a catalog declaration nor an unknown key.
+    let s = Session::new()?;
+    s.conf().set("spark.sql.session.timeZone", "Etc/UTC")?;
+    s.conf().set(
+        "spark.sql.catalog.lake",
+        "org.apache.iceberg.spark.SparkCatalog",
+    )?;
+    s.conf()
+        .set("spark.sql.catalog.lake.uri", "https://catalog.example")?;
+    s.conf().set("spark.sql.my.flag", "1")?;
+    s.conf().set("spark.sql.catalog.spark_catalog", "builtin")?;
+    block_on(block_on(s.sql("create temporary function k3() returns int return 1"))?.collect())?;
+    let got = extended(&s, "describe function extended k3")?;
+    assert_eq!(
+        got[6..10],
+        [
+            "Configs:       spark.sql.ansi.enabled=true",
+            "               spark.sql.catalog.spark_catalog=builtin",
+            "               spark.sql.session.timeZone=Etc/UTC",
+            "Create Time:   <time>",
+        ]
+    );
     Ok(())
 }
 

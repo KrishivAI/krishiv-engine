@@ -166,6 +166,11 @@ impl ConfStore {
         self
     }
 
+    /// The session's Spark profile.
+    pub(crate) fn profile(&self) -> SparkProfile {
+        self.profile
+    }
+
     /// The zone an unset `spark.sql.session.timeZone` means.
     pub(crate) fn local_zone(&self) -> &str {
         &self.local_zone
