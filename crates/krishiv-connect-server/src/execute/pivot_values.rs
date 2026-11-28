@@ -7,19 +7,19 @@
 
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
-    Date32Type, Decimal128Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type,
-    Int64Type, TimestampMicrosecondType,
+    Date32Type, Decimal32Type, Decimal64Type, Decimal128Type, Float32Type, Float64Type, Int8Type,
+    Int16Type, Int32Type, Int64Type, TimestampMicrosecondType,
 };
 use arrow_array::{Array, RecordBatch};
-use arrow_schema::{DataType, TimeUnit};
+use arrow_schema::DataType;
 use krishiv_common::error::{KrishivError, KrishivUnsupportedFeature, LegacyErrorTemp1324};
 use krishiv_connect::proto::v4_3 as pb;
 use krishiv_connect::proto::v4_3::expression::{self, ExprType};
 use krishiv_connect::proto::v4_3::relation::RelType;
-use krishiv_connect::translate::UdfHost as TranslateHost;
+use krishiv_connect::translate::{UdfHost as TranslateHost, translate_expression};
 use krishiv_plan::Literal;
 use krishiv_session::QueryOptions;
-use krishiv_types::DecimalType;
+use krishiv_types::DataType as SparkType;
 
 use super::{Input, request_translated};
 use crate::manager::SessionEntry;
@@ -84,13 +84,11 @@ fn values_query(input: &pb::Relation, column: &pb::Expression, max: i32) -> pb::
     })))
 }
 
-/// The pivot column as Spark's `Column.toString` prints it, for the too-many-values error (an
-/// attribute's name; other expressions are not rendered).
-fn column_text(column: &pb::Expression) -> String {
-    match &column.expr_type {
-        Some(ExprType::UnresolvedAttribute(a)) => a.unparsed_identifier.clone(),
-        _ => "<expression>".to_owned(),
-    }
+/// The pivot column as Spark's `Column.toString` prints it (`expression.sql`), for the
+/// too-many-values error: the translated expression's Spark SQL text.
+fn column_text(entry: &SessionEntry, column: &pb::Expression) -> String {
+    translate_expression(column, &super::translate_conf(entry.session()))
+        .map_or_else(|_| "<expression>".to_owned(), |e| e.to_string())
 }
 
 /// The sorted distinct values of `column` over `input`.
@@ -104,12 +102,15 @@ pub(super) async fn collect(
     column: &pb::Expression,
     udfs: &mut dyn TranslateHost,
 ) -> Result<Vec<Literal>, KrishivError> {
-    let max = entry
-        .session()
-        .conf()
-        .get("spark.sql.pivotMaxValues")
-        .and_then(|v| v.trim().parse::<i32>().ok())
-        .unwrap_or(DEFAULT_MAX_VALUES);
+    let max = match entry.session().conf().get("spark.sql.pivotMaxValues") {
+        None => DEFAULT_MAX_VALUES,
+        Some(v) => v
+            .trim()
+            .parse::<i32>()
+            .map_err(|_| KrishivUnsupportedFeature {
+                feature: format!("spark.sql.pivotMaxValues = {v:?}, which is not an integer"),
+            })?,
+    };
     let query = values_query(input, column, max);
     let requested = request_translated(entry, Input::Relation(&query), udfs).await?;
     let frame = requested
@@ -122,7 +123,7 @@ pub(super) async fn collect(
     }
     if i64::try_from(values.len()).unwrap_or(i64::MAX) > i64::from(max) {
         return Err(LegacyErrorTemp1324 {
-            pivot_column: column_text(column),
+            pivot_column: column_text(entry, column),
             max_values: max.to_string(),
             config: "spark.sql.pivotMaxValues".to_owned(),
         }
@@ -138,41 +139,89 @@ fn unsupported(data_type: &DataType) -> KrishivError {
     .into()
 }
 
-/// The first column of `batch` as literals, appended to `out`.
+/// The bytes of one row of a binary-carried array (`BinaryView`, `Binary` or `LargeBinary`).
+fn bytes_at(array: &dyn Array, row: usize) -> Option<&[u8]> {
+    match array.data_type() {
+        DataType::BinaryView => Some(array.as_binary_view().value(row)),
+        DataType::Binary => Some(array.as_binary::<i32>().value(row)),
+        DataType::LargeBinary => Some(array.as_binary::<i64>().value(row)),
+        _ => None,
+    }
+}
+
+/// The text of one row of a string-carried array (`Utf8View`, `Utf8` or `LargeUtf8`).
+fn text_at(array: &dyn Array, row: usize) -> Option<&str> {
+    match array.data_type() {
+        DataType::Utf8View => Some(array.as_string_view().value(row)),
+        DataType::Utf8 => Some(array.as_string::<i32>().value(row)),
+        DataType::LargeUtf8 => Some(array.as_string::<i64>().value(row)),
+        _ => None,
+    }
+}
+
+/// One non-null value of a `string` column in any carrier it may arrive in: text, or bytes (a
+/// string that is not valid UTF-8 is stored as binary with the type tag).
+fn string_at(array: &dyn Array, row: usize) -> Result<Literal, KrishivError> {
+    if let Some(t) = text_at(array, row) {
+        return Ok(Literal::String(t.to_owned()));
+    }
+    match bytes_at(array, row).map(std::str::from_utf8) {
+        Some(Ok(t)) => Ok(Literal::String(t.to_owned())),
+        _ => Err(KrishivUnsupportedFeature {
+            feature: "a pivot over string values that are not valid UTF-8 without explicit values"
+                .to_owned(),
+        }
+        .into()),
+    }
+}
+
+/// The first column of `batch` as literals, appended to `out`. The type is the column's Spark
+/// type (the field's tag, else its Arrow type), and every carrier that type may arrive in is read.
 fn literals(batch: &RecordBatch, out: &mut Vec<Literal>) -> Result<(), KrishivError> {
-    let array = batch.column(0);
-    let data_type = array.data_type();
+    let array = batch.column(0).as_ref();
+    let spark = SparkType::from_arrow_field(batch.schema().field(0))?;
     for row in 0..array.len() {
         if array.is_null(row) {
             out.push(Literal::Null(None));
             continue;
         }
-        out.push(match data_type {
-            DataType::Boolean => Literal::Boolean(array.as_boolean().value(row)),
-            DataType::Int8 => Literal::Byte(array.as_primitive::<Int8Type>().value(row)),
-            DataType::Int16 => Literal::Short(array.as_primitive::<Int16Type>().value(row)),
-            DataType::Int32 => Literal::Integer(array.as_primitive::<Int32Type>().value(row)),
-            DataType::Int64 => Literal::Long(array.as_primitive::<Int64Type>().value(row)),
-            DataType::Float32 => Literal::Float(array.as_primitive::<Float32Type>().value(row)),
-            DataType::Float64 => Literal::Double(array.as_primitive::<Float64Type>().value(row)),
-            DataType::Utf8 => Literal::String(array.as_string::<i32>().value(row).to_owned()),
-            DataType::LargeUtf8 => Literal::String(array.as_string::<i64>().value(row).to_owned()),
-            DataType::Utf8View => Literal::String(array.as_string_view().value(row).to_owned()),
-            DataType::Binary => Literal::Binary(array.as_binary::<i32>().value(row).to_vec()),
-            DataType::Date32 => Literal::Date(array.as_primitive::<Date32Type>().value(row)),
-            DataType::Timestamp(TimeUnit::Microsecond, tz) => {
-                let v = array.as_primitive::<TimestampMicrosecondType>().value(row);
-                if tz.is_some() {
-                    Literal::Timestamp(v)
-                } else {
-                    Literal::TimestampNtz(v)
-                }
+        out.push(match (&spark, array.data_type()) {
+            (SparkType::Boolean, _) => Literal::Boolean(array.as_boolean().value(row)),
+            (SparkType::Byte, _) => Literal::Byte(array.as_primitive::<Int8Type>().value(row)),
+            (SparkType::Short, _) => Literal::Short(array.as_primitive::<Int16Type>().value(row)),
+            (SparkType::Integer, _) => {
+                Literal::Integer(array.as_primitive::<Int32Type>().value(row))
             }
-            DataType::Decimal128(p, s) => Literal::Decimal {
-                unscaled: array.as_primitive::<Decimal128Type>().value(row),
-                data_type: DecimalType::try_new(u32::from(*p), u32::try_from(*s).unwrap_or(0))?,
+            (SparkType::Long, _) => Literal::Long(array.as_primitive::<Int64Type>().value(row)),
+            (SparkType::Float, _) => Literal::Float(array.as_primitive::<Float32Type>().value(row)),
+            (SparkType::Double, _) => {
+                Literal::Double(array.as_primitive::<Float64Type>().value(row))
+            }
+            (SparkType::String, _) => string_at(array, row)?,
+            (SparkType::Binary, _) => match bytes_at(array, row) {
+                Some(b) => Literal::Binary(b.to_vec()),
+                None => return Err(unsupported(array.data_type())),
             },
-            other => return Err(unsupported(other)),
+            (SparkType::Date, _) => Literal::Date(array.as_primitive::<Date32Type>().value(row)),
+            (SparkType::Timestamp, _) => {
+                Literal::Timestamp(array.as_primitive::<TimestampMicrosecondType>().value(row))
+            }
+            (SparkType::TimestampNtz, _) => {
+                Literal::TimestampNtz(array.as_primitive::<TimestampMicrosecondType>().value(row))
+            }
+            (SparkType::Decimal(d), DataType::Decimal128(..)) => Literal::Decimal {
+                unscaled: array.as_primitive::<Decimal128Type>().value(row),
+                data_type: *d,
+            },
+            (SparkType::Decimal(d), DataType::Decimal64(..)) => Literal::Decimal {
+                unscaled: i128::from(array.as_primitive::<Decimal64Type>().value(row)),
+                data_type: *d,
+            },
+            (SparkType::Decimal(d), DataType::Decimal32(..)) => Literal::Decimal {
+                unscaled: i128::from(array.as_primitive::<Decimal32Type>().value(row)),
+                data_type: *d,
+            },
+            _ => return Err(unsupported(array.data_type())),
         });
     }
     Ok(())
@@ -259,29 +308,65 @@ mod tests {
     }
 
     #[test]
-    fn a_type_with_no_literal_is_refused() {
-        let a = arrow_array::TimestampNanosecondArray::from(vec![1]);
-        let err = run(Arc::new(a)).expect_err("refused").to_string();
-        assert!(err.contains("without explicit values"), "{err}");
+    fn a_binary_column_in_its_canonical_carrier_becomes_binary_literals() {
+        let a = arrow_array::BinaryViewArray::from(vec![b"ab".as_slice()]);
+        assert_eq!(
+            run(Arc::new(a)).expect("literal"),
+            vec![Literal::Binary(b"ab".to_vec())]
+        );
+        let a = arrow_array::LargeBinaryArray::from(vec![b"c".as_slice()]);
+        assert_eq!(
+            run(Arc::new(a)).expect("literal"),
+            vec![Literal::Binary(b"c".to_vec())]
+        );
     }
 
     #[test]
-    fn the_error_names_an_attribute_column_and_hides_other_expressions() {
-        let attr = pb::Expression {
-            common: None,
-            expr_type: Some(ExprType::UnresolvedAttribute(
-                expression::UnresolvedAttribute {
-                    unparsed_identifier: "course".to_owned(),
-                    plan_id: None,
-                    is_metadata_column: None,
-                },
-            )),
+    fn a_string_column_carried_as_bytes_is_a_string_when_the_bytes_are_utf8() {
+        let tagged = |a: arrow_array::BinaryViewArray, bad: bool| {
+            let field = arrow_schema::Field::new("v", DataType::BinaryView, true).with_metadata(
+                std::collections::HashMap::from([(
+                    krishiv_types::arrow::SPARK_TYPE_METADATA_KEY.to_owned(),
+                    "string".to_owned(),
+                )]),
+            );
+            let batch = RecordBatch::try_new(
+                Arc::new(arrow_schema::Schema::new(vec![field])),
+                vec![Arc::new(a)],
+            )
+            .expect("batch");
+            let mut out = Vec::new();
+            let r = literals(&batch, &mut out).map(|()| out);
+            assert_eq!(r.is_err(), bad, "{r:?}");
+            r
         };
-        assert_eq!(column_text(&attr), "course");
-        let other = pb::Expression {
-            common: None,
-            expr_type: None,
-        };
-        assert_eq!(column_text(&other), "<expression>");
+        let ok = tagged(
+            arrow_array::BinaryViewArray::from(vec![b"hi".as_slice()]),
+            false,
+        );
+        assert_eq!(ok.expect("ok"), vec![Literal::String("hi".to_owned())]);
+        let _ = tagged(
+            arrow_array::BinaryViewArray::from(vec![[0xff_u8, 0xfe].as_slice()]),
+            true,
+        );
+    }
+
+    #[test]
+    fn a_decimal64_carrier_keeps_its_value() {
+        let a = arrow_array::Decimal64Array::from(vec![123])
+            .with_precision_and_scale(10, 2)
+            .expect("decimal");
+        let got = run(Arc::new(a)).expect("literal");
+        assert!(matches!(
+            got.as_slice(),
+            [Literal::Decimal { unscaled: 123, .. }]
+        ));
+    }
+
+    #[test]
+    fn a_type_with_no_literal_is_refused() {
+        let a = arrow_array::Time64NanosecondArray::from(vec![1]);
+        let err = run(Arc::new(a)).expect_err("refused").to_string();
+        assert!(err.contains("without explicit values"), "{err}");
     }
 }

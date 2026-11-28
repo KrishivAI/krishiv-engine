@@ -1007,7 +1007,8 @@ impl Resolver<'_> {
                         return Err(unsupported(
                             super::super::bind::icu_note(
                                 &format!("{name} over a collated string"),
-                                true,
+                                // The note says the ICU build has it: only when it would.
+                                upper.is_some() && n == 1,
                             ),
                             e.origin,
                         ));

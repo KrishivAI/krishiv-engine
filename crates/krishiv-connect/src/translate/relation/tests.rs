@@ -894,7 +894,10 @@ fn a_pivot_without_values_is_refused_without_a_host() {
 #[test]
 fn aggregate_errors() {
     let pivot = aggregate_of(4, vec![attr("a")], vec![]);
-    assert_eq!(code(&pivot), ErrorClass::ConnectInvalidPlanAssertionFailure);
+    assert_eq!(
+        code(&pivot),
+        ErrorClass::ConnectInvalidPlanAggregateWithPivotRequiresPivot
+    );
     let unspecified = aggregate_of(0, vec![], vec![]);
     assert_eq!(
         code(&unspecified),

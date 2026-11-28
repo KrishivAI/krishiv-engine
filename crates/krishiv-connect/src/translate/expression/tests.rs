@@ -793,3 +793,27 @@ fn a_lambda_variable_needs_a_name_and_a_parameter_a_plain_one() {
         ErrorClass::KrishivUnsupportedFeature
     );
 }
+
+#[test]
+fn a_lambda_takes_one_to_three_parameters_each_with_a_name() {
+    for count in [0_usize, 4] {
+        let params: Vec<String> = (0..count).map(|i| format!("x{i}")).collect();
+        let refs: Vec<&str> = params.iter().map(String::as_str).collect();
+        let e = err(&lambda(&refs, lambda_variable("x")));
+        assert_eq!(
+            e.error_class(),
+            ErrorClass::ConnectInvalidPlanLambdaFunctionArgumentCountInvalid
+        );
+        assert!(e.message().contains(&format!("got {count} ones")), "{e}");
+    }
+    let nameless = expr(ExprType::LambdaFunction(Box::new(
+        expression::LambdaFunction {
+            function: Some(Box::new(lambda_variable("x"))),
+            arguments: vec![expression::UnresolvedNamedLambdaVariable { name_parts: vec![] }],
+        },
+    )));
+    assert_eq!(
+        err(&nameless).error_class(),
+        ErrorClass::ConnectInvalidPlanUnresolvedNamedLambdaVariableRequiresNamePart
+    );
+}

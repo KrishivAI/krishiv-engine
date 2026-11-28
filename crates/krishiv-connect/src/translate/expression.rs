@@ -83,12 +83,23 @@ impl Translator<'_> {
                 // `F.transform(col, lambda x: ...)`: the client names the variables and the body
                 // reads them as `UnresolvedNamedLambdaVariable`, which are plain names to the
                 // analyzer's lambda binding, as the SQL front end's lambdas are.
+                if !(1..=3).contains(&l.arguments.len()) {
+                    return Err(
+                        krishiv_common::error::ConnectInvalidPlanLambdaFunctionArgumentCountInvalid {
+                            got: l.arguments.len().to_string(),
+                        }
+                        .into(),
+                    );
+                }
                 let mut params = Vec::with_capacity(l.arguments.len());
                 for a in &l.arguments {
                     let [name] = a.name_parts.as_slice() else {
-                        return Err(super::errors::unsupported(
-                            "a lambda parameter with a qualified or empty name",
-                        ));
+                        return Err(if a.name_parts.is_empty() {
+                            krishiv_common::error::ConnectInvalidPlanUnresolvedNamedLambdaVariableRequiresNamePart {}
+                                .into()
+                        } else {
+                            super::errors::unsupported("a lambda parameter with a qualified name")
+                        });
                     };
                     params.push(name.clone());
                 }

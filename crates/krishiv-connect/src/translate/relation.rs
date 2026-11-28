@@ -1000,7 +1000,9 @@ impl Translator<'_> {
         aggregates: Vec<Arc<Expr>>,
     ) -> Result<PlanNode> {
         let Some(pivot) = &a.pivot else {
-            return Err(assertion("Aggregate with GROUP_TYPE_PIVOT needs a pivot"));
+            return Err(
+                krishiv_common::error::ConnectInvalidPlanAggregateWithPivotRequiresPivot {}.into(),
+            );
         };
         let column = self.required_expression(pivot.col.as_ref())?;
         let values = if pivot.values.is_empty() {

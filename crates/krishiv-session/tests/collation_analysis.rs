@@ -113,6 +113,11 @@ fn icu_refusals_name_the_build() {
         let msg = run(sql).unwrap_err().to_string();
         assert!(msg.contains("no ICU collations"), "{sql}: {msg}");
     }
+    // `initcap` is refused in the ICU build too: no note that the build lacks ICU.
+    let msg = run("SELECT initcap('a' COLLATE de)")
+        .unwrap_err()
+        .to_string();
+    assert!(!msg.contains("no ICU collations"), "{msg}");
     // A refusal that is not ICU's keeps its text.
     let msg = run("SELECT decode('a' COLLATE utf8_lcase, 'a', 'b')")
         .unwrap_err()

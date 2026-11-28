@@ -94,6 +94,16 @@ fn attr(name: &str) -> pb::Expression {
 
 /// Runs `plan` and returns its rows as text, `NULL` for a null, sorted.
 async fn run(run: &Running, rel: pb::Relation) -> Result<Vec<Vec<String>>, tonic::Status> {
+    let mut out = Vec::new();
+    for b in run_batches(run, rel).await? {
+        out.extend(text_rows(&b));
+    }
+    out.sort();
+    Ok(out)
+}
+
+/// Runs `plan` and returns its batches.
+async fn run_batches(run: &Running, rel: pb::Relation) -> Result<Vec<RecordBatch>, tonic::Status> {
     let request = pb::ExecutePlanRequest {
         session_id: SESSION.to_owned(),
         user_context: Some(pb::UserContext {
@@ -120,12 +130,9 @@ async fn run(run: &Running, rel: pb::Relation) -> Result<Vec<Vec<String>>, tonic
     let mut out = Vec::new();
     while let Some(response) = stream.message().await? {
         if let Some(ResponseType::ArrowBatch(batch)) = response.response_type {
-            for b in read_ipc(&batch.data) {
-                out.extend(text_rows(&b));
-            }
+            out.extend(read_ipc(&batch.data));
         }
     }
-    out.sort();
     Ok(out)
 }
 
@@ -840,13 +847,17 @@ fn aggregate(
 }
 
 fn pivot_without_values() -> pb::Relation {
+    pivot_without_values_over(source(), attr("a"))
+}
+
+fn pivot_without_values_over(input: pb::Relation, column: pb::Expression) -> pb::Relation {
     relation(RelType::Aggregate(Box::new(pb::Aggregate {
-        input: Some(Box::new(source())),
+        input: Some(Box::new(input)),
         group_type: pb::aggregate::GroupType::Pivot as i32,
         grouping_expressions: vec![attr("id")],
         aggregate_expressions: vec![call("sum", attr("b"), "s")],
         pivot: Some(pb::aggregate::Pivot {
-            col: Some(attr("a")),
+            col: Some(column),
             values: Vec::new(),
         }),
         grouping_sets: Vec::new(),
@@ -858,6 +869,16 @@ async fn a_pivot_without_values_takes_the_sorted_distinct_values_of_its_column()
     let server = start().await;
     let got = run(&server, pivot_without_values()).await.expect("runs");
     // Spark: `collectPivotValues` gives 10, 20; the columns are named by the values.
+    let batches = run_batches(&server, pivot_without_values())
+        .await
+        .expect("runs");
+    let names: Vec<String> = batches[0]
+        .schema()
+        .fields()
+        .iter()
+        .map(|f| f.name().clone())
+        .collect();
+    assert_eq!(names, ["id", "10", "20"]);
     assert_eq!(
         got,
         strings(&[&["1", "200", "NULL"], &["2", "NULL", "NULL"]])
@@ -877,6 +898,45 @@ async fn a_pivot_with_more_values_than_pivot_max_values_is_refused() {
             .starts_with("The pivot column a has more than 1 distinct values"),
         "{status:?}"
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_too_many_values_error_prints_a_non_attribute_pivot_column_as_spark_sql() {
+    let server = start_with(Some(("spark.sql.pivotMaxValues", "1"))).await;
+    let lower = pb::Expression {
+        common: None,
+        expr_type: Some(pb::expression::ExprType::UnresolvedFunction(
+            pb::expression::UnresolvedFunction {
+                function_name: "lower".to_owned(),
+                arguments: vec![attr("a")],
+                is_distinct: false,
+                is_user_defined_function: false,
+                is_internal: None,
+            },
+        )),
+    };
+    let status = run(&server, pivot_without_values_over(source(), lower))
+        .await
+        .expect_err("refused");
+    assert!(
+        status
+            .message()
+            .starts_with("The pivot column lower(a) has more than 1 distinct values"),
+        "{status:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_pivot_without_values_over_a_binary_column_runs() {
+    let server = start().await;
+    let input = relation(RelType::Sql(pb::Sql {
+        query: "SELECT * FROM VALUES (1, X'01', 5), (2, X'02', 6) AS t(id, a, b)".to_owned(),
+        ..Default::default()
+    }));
+    let got = run(&server, pivot_without_values_over(input, attr("a")))
+        .await
+        .expect("runs");
+    assert_eq!(got.len(), 2, "{got:?}");
 }
 
 fn renamed(input: pb::Relation, from: &str, to: &str) -> pb::Relation {
@@ -1205,5 +1265,74 @@ async fn zip_merges_two_independent_range_inputs() {
     assert_eq!(
         run(&server, zip(range(), range())).await.expect("runs"),
         strings(&[&["0", "0"], &["1", "1"], &["2", "2"]])
+    );
+}
+
+/// `F.transform(xs, lambda x_0: x_0 + 1)` over an input that also has a column named `x_0`: the
+/// lambda variable shadows the column.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_lambda_variable_shadows_an_input_column_of_the_same_name() {
+    use pb::expression::{
+        ExprType, LambdaFunction, UnresolvedFunction, UnresolvedNamedLambdaVariable,
+    };
+    let server = start().await;
+    let input = relation(RelType::Sql(pb::Sql {
+        query: "SELECT 1000 AS x_0, array(1, 2) AS xs".to_owned(),
+        ..Default::default()
+    }));
+    let function = |name: &str, arguments: Vec<pb::Expression>| pb::Expression {
+        common: None,
+        expr_type: Some(ExprType::UnresolvedFunction(UnresolvedFunction {
+            function_name: name.to_owned(),
+            arguments,
+            is_distinct: false,
+            is_user_defined_function: false,
+            is_internal: None,
+        })),
+    };
+    let variable = pb::Expression {
+        common: None,
+        expr_type: Some(ExprType::UnresolvedNamedLambdaVariable(
+            UnresolvedNamedLambdaVariable {
+                name_parts: vec!["x_0".to_owned()],
+            },
+        )),
+    };
+    let one = pb::Expression {
+        common: None,
+        expr_type: Some(ExprType::Literal(pb::expression::Literal {
+            literal_type: Some(pb::expression::literal::LiteralType::Integer(1)),
+            data_type: None,
+        })),
+    };
+    let lambda = pb::Expression {
+        common: None,
+        expr_type: Some(ExprType::LambdaFunction(Box::new(LambdaFunction {
+            function: Some(Box::new(function("+", vec![variable, one]))),
+            arguments: vec![UnresolvedNamedLambdaVariable {
+                name_parts: vec!["x_0".to_owned()],
+            }],
+        }))),
+    };
+    let transformed = function("transform", vec![attr("xs"), lambda]);
+    let alias = pb::Expression {
+        common: None,
+        expr_type: Some(ExprType::Alias(Box::new(pb::expression::Alias {
+            expr: Some(Box::new(transformed)),
+            name: vec!["ys".to_owned()],
+            metadata: None,
+        }))),
+    };
+    let project = relation(RelType::Project(Box::new(pb::Project {
+        input: Some(Box::new(input)),
+        expressions: vec![alias],
+    })));
+    let batches = run_batches(&server, project).await.expect("runs");
+    let ys = batches[0].column(0);
+    let list = ys.as_list::<i32>();
+    let values = list.value(0);
+    assert_eq!(
+        values.as_primitive::<Int32Type>().values().to_vec(),
+        vec![2, 3]
     );
 }
