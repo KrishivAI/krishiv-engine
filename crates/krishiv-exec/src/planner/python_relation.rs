@@ -34,7 +34,9 @@ use krishiv_plan::{
 };
 use krishiv_types::DataType;
 
-use super::build::{Planned, Planner, internal, unsupported};
+use super::build::{
+    Planned, Planner, carrier_cast_target, internal, is_binary_safe_string, unsupported,
+};
 use super::explain::ExplainNode;
 use super::properties::{Distribution, Placement};
 use crate::error::Result;
@@ -116,6 +118,62 @@ fn side_of(
     side.names.extend(cols.iter().map(|c| c.name.clone()));
     side.types.extend(cols.iter().map(|c| c.data_type.clone()));
     Ok(side)
+}
+
+/// The Spark types of grouping keys.
+fn key_types(keys: &[Arc<Expr>]) -> Result<Vec<DataType>> {
+    keys.iter()
+        .map(|k| {
+            k.resolved_type()
+                .ok_or_else(|| internal("a Python UDF grouping key without a type"))
+        })
+        .collect()
+}
+
+/// The Arrow type a column of Spark type `spark`, stored as `stored` in two
+/// union branches, has in both: theirs when they agree, else the carrier
+/// the union operator uses (binary-safe for a `string` held as bytes).
+fn carrier(spark: &DataType, stored: [&arrow_schema::DataType; 2]) -> arrow_schema::DataType {
+    let [a, b] = stored;
+    if a == b {
+        a.clone()
+    } else if is_binary_safe_string(spark, stored.into_iter()) {
+        arrow_schema::DataType::BinaryView
+    } else {
+        spark.to_arrow()
+    }
+}
+
+/// Column `index` of `planned` as `column.name`, cast where it is not
+/// already stored as `to`.
+fn carried(
+    planned: &Planned,
+    index: usize,
+    column: BoundColumn,
+    to: &arrow_schema::DataType,
+) -> Result<ProjectItemPlan> {
+    if planned.stored(index)? == to {
+        return Ok(ProjectItemPlan::Column {
+            index,
+            name: Some(column.name),
+        });
+    }
+    // The expression reads the input by attribute, under the input's id.
+    let id = planned.column_attr(index)?;
+    let target = carrier_cast_target(&column.data_type, to);
+    let name = column.name.clone();
+    let read = Expr::new(ExprNode::Resolved(ResolvedExpr::Column(BoundColumn {
+        id,
+        ..column
+    })));
+    Ok(ProjectItemPlan::Expr {
+        name,
+        expr: Arc::new(Expr::new(ExprNode::Cast {
+            expr: Arc::new(read),
+            to: target,
+            mode: CastMode::Ansi,
+        })),
+    })
 }
 
 /// The columns of `p`'s declared output.
@@ -237,36 +295,67 @@ impl Planner<'_> {
         let total = if keyed { width + k } else { width };
         let layout: Vec<AttrId> = (0..total).map(|_| self.fresh_id()).collect();
         let nullable = vec![true; total];
+        // The two branches meet in one Arrow layout per column, whatever each
+        // source stores (`Utf8` beside the `Utf8View` of a null literal).
+        let left_types = key_types(left_keys)?;
+        let right_types = key_types(right_keys)?;
+        let key_carriers = left_types
+            .iter()
+            .zip(&right_types)
+            .zip(lk.iter().zip(&rk))
+            .map(|((lt, rt), (&li, &ri))| {
+                if lt != rt {
+                    return Err(unsupported("a cogroup on keys of different types"));
+                }
+                Ok(carrier(lt, [l.stored(li)?, r.stored(ri)?]))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let data_carriers = [(&l, &left_cols), (&r, &right_cols)]
+            .into_iter()
+            .map(|(planned, cols)| {
+                cols.iter()
+                    .map(|c| {
+                        let stored = planned.stored(planned.column(c.id)?)?;
+                        Ok(carrier(&c.data_type, [stored, &c.data_type.to_arrow()]))
+                    })
+                    .collect::<Result<Vec<_>>>()
+            })
+            .collect::<Result<Vec<_>>>()?;
         let mut branches = Vec::with_capacity(2);
         for (side, (planned, keys, compared)) in
             [(l, &lk, &lc), (r, &rk, &rc)].into_iter().enumerate()
         {
             let mut items = Vec::with_capacity(total);
-            for (i, &c) in keys.iter().enumerate() {
-                items.push(ProjectItemPlan::Column {
-                    index: c,
-                    name: Some(format!("_k{i}")),
-                });
+            let types = if side == 0 { &left_types } else { &right_types };
+            for (i, ((&c, data_type), to)) in keys.iter().zip(types).zip(&key_carriers).enumerate()
+            {
+                let column = BoundColumn {
+                    id: planned.column_attr(c)?,
+                    name: format!("_k{i}"),
+                    data_type: data_type.clone(),
+                    nullable: true,
+                };
+                items.push(carried(&planned, c, column, to)?);
             }
             items.push(ProjectItemPlan::Expr {
                 name: "_side".to_owned(),
                 expr: literal(krishiv_plan::Literal::Integer(i32::from(side == 1))),
             });
-            for (own, (cols, prefix)) in [(&left_cols, "_l"), (&right_cols, "_r")]
+            for (own, ((cols, prefix), carriers)) in [(&left_cols, "_l"), (&right_cols, "_r")]
                 .into_iter()
+                .zip(&data_carriers)
                 .enumerate()
             {
-                for (i, c) in cols.iter().enumerate() {
+                for (i, (c, to)) in cols.iter().zip(carriers).enumerate() {
                     let name = format!("{prefix}{i}");
                     if own == side {
-                        items.push(ProjectItemPlan::Column {
-                            index: planned.column(c.id)?,
-                            name: Some(name),
-                        });
+                        let column = BoundColumn { name, ..c.clone() };
+                        items.push(carried(&planned, planned.column(c.id)?, column, to)?);
                     } else {
+                        let null_type = carrier_cast_target(&c.data_type, to);
                         items.push(ProjectItemPlan::Expr {
                             name,
-                            expr: literal(krishiv_plan::Literal::Null(Some(c.data_type.clone()))),
+                            expr: literal(krishiv_plan::Literal::Null(Some(null_type))),
                         });
                     }
                 }

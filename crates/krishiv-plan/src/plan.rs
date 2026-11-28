@@ -150,6 +150,14 @@ pub enum ColumnNamesOp {
         /// The least count of values that count.
         min_non_nulls: Option<u32>,
     },
+    /// `dropDuplicates(subset)`: one row per group of equal `subset` columns, the other columns
+    /// from the first row of the group (Spark's `Deduplicate`, planned as an aggregate with
+    /// `first`); the columns keep the input's order. A name that matches no column is
+    /// `UNRESOLVED_COLUMN`.
+    Deduplicate {
+        /// The key columns.
+        subset: Vec<String>,
+    },
     /// `na.fill`: a NULL (and a NaN, in a float or double column) becomes the value, in the
     /// columns whose type the value's matches (Spark's `DataFrameNaFunctions.fillValue`: a
     /// number fills a numeric column, a string a string column, a boolean a boolean column; the
@@ -1322,7 +1330,8 @@ impl LogicalPlan {
                 ColumnNamesOp::ToDf(_)
                 | ColumnNamesOp::Rename(_)
                 | ColumnNamesOp::Drop { .. }
-                | ColumnNamesOp::DropNa { .. } => {}
+                | ColumnNamesOp::DropNa { .. }
+                | ColumnNamesOp::Deduplicate { .. } => {}
             },
             PlanNode::Sql { args, .. } => match args {
                 SqlArgs::None => {}
@@ -1449,7 +1458,8 @@ impl LogicalPlan {
                 ColumnNamesOp::ToDf(_)
                 | ColumnNamesOp::Rename(_)
                 | ColumnNamesOp::Drop { .. }
-                | ColumnNamesOp::DropNa { .. } => {}
+                | ColumnNamesOp::DropNa { .. }
+                | ColumnNamesOp::Deduplicate { .. } => {}
             },
             PlanNode::Sql { args, .. } => match args {
                 SqlArgs::None => {}
