@@ -99,6 +99,7 @@ mod plan_round_trip;
 mod profile;
 mod profile_history;
 pub use profile_history::{StoredProfile, read_history as read_profile_history};
+mod information_schema;
 mod python_udfs;
 mod query_fold;
 mod recursion;
