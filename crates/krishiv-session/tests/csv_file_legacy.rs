@@ -137,3 +137,93 @@ fn reads_match_spark(format: &str, section: &str, contents: fn(&str) -> String) 
         }
     }
 }
+
+/// The `csv_expr` section: the `csv_file` cases as `schema_of_csv(text,
+/// options)` and `from_csv(text, 't DATE' | 't TIMESTAMP', options).t` cast to
+/// STRING, under the default policy and LEGACY (where `CSVInferSchema` tries
+/// only the `FastDateFormat` timestamp pattern, so a date infers as STRING).
+#[test]
+fn csv_expressions_follow_the_parser_policy_as_spark_runs() {
+    fn lit(s: &str) -> String {
+        format!("'{}'", s.replace('\\', "\\\\").replace('\'', "\\'"))
+    }
+    let mut wrong = Vec::new();
+    for (profile, version) in [(SparkProfile::V4_2, "4.2.1"), (SparkProfile::V4_3, "4.3.0")] {
+        let path = format!(
+            "{}/../../tests/fixtures/spark-{version}/time-text-profiles.json",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        let run: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(run["spark"], version);
+        let sections = run["csv_expr"].as_object().unwrap();
+        assert_eq!(sections.len(), 2, "{version}: default and legacy");
+        for (setting, cases) in sections {
+            let s = Session::builder().profile(profile).build().unwrap();
+            block_on(s.sql("SET spark.sql.session.timeZone = UTC")).unwrap();
+            match setting.as_str() {
+                "default" => {}
+                "legacy" => {
+                    block_on(s.sql("SET spark.sql.legacy.timeParserPolicy = LEGACY")).unwrap();
+                }
+                other => panic!("unknown setting {other}"),
+            }
+            for case in cases.as_array().unwrap() {
+                let text = case["text"].as_str().unwrap();
+                let opts = case["options"].as_object().unwrap();
+                let pairs: Vec<String> = opts
+                    .iter()
+                    .map(|(k, v)| format!("{}, {}", lit(k), lit(v.as_str().unwrap())))
+                    .collect();
+                let omap = if pairs.is_empty() {
+                    String::new()
+                } else {
+                    format!(", map({})", pairs.join(", "))
+                };
+                for (name, want) in case["exprs"].as_object().unwrap() {
+                    let expr = match name.as_str() {
+                        "schema_of_csv" => format!("schema_of_csv({}{omap})", lit(text)),
+                        "date" => {
+                            format!("CAST(from_csv({}, 't DATE'{omap}).t AS STRING)", lit(text))
+                        }
+                        "timestamp" => format!(
+                            "CAST(from_csv({}, 't TIMESTAMP'{omap}).t AS STRING)",
+                            lit(text)
+                        ),
+                        other => panic!("unknown expression {other}"),
+                    };
+                    let at = format!("{version} {setting} {text:?} {opts:?} {name}");
+                    let got = block_on(async {
+                        let df = s.sql(&format!("SELECT {expr}")).await?;
+                        df.collect().await
+                    });
+                    match (want.get("value"), got) {
+                        (Some(v), Ok(batches)) => {
+                            let got = texts(&batches)
+                                .pop()
+                                .flatten()
+                                .map(|g| undated(Some(g), text));
+                            let want = v.as_str().map(|w| undated(Some(w.to_owned()), text));
+                            if got != want {
+                                wrong.push(format!("{at}: Spark {want:?}, Krishiv {got:?}"));
+                            }
+                        }
+                        (Some(v), Err(e)) => {
+                            wrong.push(format!("{at}: Spark {v}, Krishiv fails: {e}"))
+                        }
+                        (None, Ok(_)) => {
+                            wrong.push(format!("{at}: Spark fails ({want}), Krishiv runs"))
+                        }
+                        (None, Err(_)) => {}
+                    }
+                }
+            }
+        }
+    }
+    assert!(
+        wrong.is_empty(),
+        "{} cases differ:\n{}",
+        wrong.len(),
+        wrong.join("\n")
+    );
+}

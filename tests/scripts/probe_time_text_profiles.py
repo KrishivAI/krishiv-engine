@@ -17,6 +17,8 @@ Runs a REAL Spark (never from memory) in a throw-away container and prints one J
 - `csv_file`: one-value CSV files (header `t`) under the default policy and `timeParserPolicy=LEGACY`, read three
   ways: `inferSchema`, schema `t DATE` and schema `t TIMESTAMP`; each gives the schema and `t` cast to STRING (a
   refusal's error class instead). LEGACY reads with `FastDateFormat` patterns and the lenient fallback.
+- `csv_expr`: the `csv_file` cases as expressions under the same two policies: `schema_of_csv(text, options)` and
+  `from_csv(text, 't DATE' | 't TIMESTAMP', options).t` cast to STRING (a refusal's error class instead).
 - `json_read`: one-record JSON files read with schema `t DATE` and `t TIMESTAMP` under the same two policies.
   `JSONOptions.dateFormatInRead` is the option alone, so without `dateFormat` dates read leniently even with the
   fallback off (CSV reads `yyyy-MM-dd` strictly there, under `preferDate`).
@@ -35,11 +37,12 @@ Usage (from repo root), once per version:
 Checked by `krishiv-session/tests/time_file_reads.rs` (`text_time_follows_the_profile_runs`) and
 `krishiv-io/src/csv/time_tests.rs` (the 4.2 profile rows); the `schema_of_json` section by
 `krishiv-session/tests/schema_of_json_time.rs`, the `json_file` section by `krishiv-session/tests/json_file_time.rs`,
-the `csv_file` and `json_read` sections by `krishiv-session/tests/csv_file_legacy.rs`, the `write` section by
+the `csv_file`, `csv_expr` and `json_read` sections by `krishiv-session/tests/csv_file_legacy.rs`, the `write` section by
 `krishiv-session/tests/text_write_legacy.rs`.
 """
 
 import json
+import logging
 import os
 import sys
 import tempfile
@@ -179,6 +182,8 @@ def lit(s: str) -> str:
 
 
 def main() -> None:
+    # PySpark 4's query-context logger writes failed queries to stdout, where the JSON goes.
+    logging.getLogger("SQLQueryContextLogger").setLevel(logging.CRITICAL)
     spark = SparkSession.builder.master("local[1]").getOrCreate()
     spark.sparkContext.setLogLevel("ERROR")
     spark.conf.set("spark.sql.session.timeZone", "UTC")
@@ -273,6 +278,30 @@ def main() -> None:
         for k in confs:
             spark.conf.unset(k)
 
+    cexpr = {}
+    for setting, confs in CSV_SETTINGS:
+        for k, v in confs.items():
+            spark.conf.set(k, v)
+        rows = []
+        for text, opts in CSV_CASES:
+            # An empty `map()` is `MAP<VOID, VOID>`, which Spark refuses as options: no options, no argument.
+            omap = "".join(f", {lit(k)}, {lit(v)}" for k, v in opts.items())
+            omap = f", map({omap[2:]})" if omap else ""
+            exprs = {"schema_of_csv": f"schema_of_csv({lit(text)}{omap})"}
+            for name, ddl in CSV_SCHEMAS[1:]:
+                exprs[name] = f"CAST(from_csv({lit(text)}, {lit(ddl)}{omap}).t AS STRING)"
+            got = {}
+            for name, e in exprs.items():
+                try:
+                    got[name] = {"value": spark.sql(f"SELECT {e} AS s").collect()[0].s}
+                # The error class is the result.
+                except Exception as ex:
+                    got[name] = {"error": error_of(ex)}
+            rows.append({"text": text, "options": opts, "exprs": got})
+        cexpr[setting] = rows
+        for k in confs:
+            spark.conf.unset(k)
+
     jread = {}
     for setting, confs in CSV_SETTINGS:
         for k, v in confs.items():
@@ -333,6 +362,7 @@ def main() -> None:
         "schema_of_json": sojson,
         "json_file": jfile,
         "csv_file": cfile,
+        "csv_expr": cexpr,
         "json_read": jread,
         "write": write,
     }

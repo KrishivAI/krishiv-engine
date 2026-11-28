@@ -1,4 +1,852 @@
 {
+  "csv_expr": {
+    "default": [
+      {
+        "exprs": {
+          "date": {
+            "value": "2024-01-02"
+          },
+          "schema_of_csv": {
+            "value": "STRUCT<_c0: DATE>"
+          },
+          "timestamp": {
+            "value": "2024-01-02 00:00:00"
+          }
+        },
+        "options": {},
+        "text": "2024-01-02"
+      },
+      {
+        "exprs": {
+          "date": {
+            "value": "2024-01-02"
+          },
+          "schema_of_csv": {
+            "value": "STRUCT<_c0: TIMESTAMP>"
+          },
+          "timestamp": {
+            "value": "2024-01-02 00:00:00"
+          }
+        },
+        "options": {},
+        "text": "2024-1-2"
+      },
+      {
+        "exprs": {
+          "date": {
+            "value": "2024-01-02"
+          },
+          "schema_of_csv": {
+            "value": "STRUCT<_c0: TIMESTAMP>"
+          },
+          "timestamp": {
+            "value": "2024-01-02 03:04:05"
+          }
+        },
+        "options": {},
+        "text": "2024-01-02 03:04:05"
+      },
+      {
+        "exprs": {
+          "date": {
+            "value": "2024-01-02"
+          },
+          "schema_of_csv": {
+            "value": "STRUCT<_c0: TIMESTAMP>"
+          },
+          "timestamp": {
+            "value": "2024-01-02 03:04:05"
+          }
+        },
+        "options": {},
+        "text": "2024-01-02T03:04:05"
+      },
+      {
+        "exprs": {
+          "date": {
+            "value": "2024-01-02"
+          },
+          "schema_of_csv": {
+            "value": "STRUCT<_c0: TIMESTAMP>"
+          },
+          "timestamp": {
+            "value": "2024-01-02 02:04:05.123"
+          }
+        },
+        "options": {},
+        "text": "2024-01-02T03:04:05.123+01:00"
+      },
+      {
+        "exprs": {
+          "date": {
+            "value": "2024-01-02"
+          },
+          "schema_of_csv": {
+            "value": "STRUCT<_c0: TIMESTAMP>"
+          },
+          "timestamp": {
+            "value": "2024-01-02 03:04:05.123456"
+          }
+        },
+        "options": {},
+        "text": "2024-01-02T03:04:05.123456Z"
+      },
+      {
+        "exprs": {
+          "date": {
+            "value": "2024-01-02"
+          },
+          "schema_of_csv": {
+            "value": "STRUCT<_c0: TIMESTAMP>"
+          },
+          "timestamp": {
+            "value": "2024-01-02 03:04:05"
+          }
+        },
+        "options": {},
+        "text": "2024-01-02 03:04:05 GMT"
+      },
+      {
+        "exprs": {
+          "date": {
+            "value": "2024-01-02"
+          },
+          "schema_of_csv": {
+            "value": "STRUCT<_c0: TIMESTAMP>"
+          },
+          "timestamp": {
+            "value": "2024-01-02 03:04:05.1"
+          }
+        },
+        "options": {},
+        "text": "2024-01-02 03:04:05.1"
+      },
+      {
+        "exprs": {
+          "date": {
+            "value": "2024-01-02"
+          },
+          "schema_of_csv": {
+            "value": "STRUCT<_c0: TIMESTAMP>"
+          },
+          "timestamp": {
+            "value": "2024-01-02 03:04:05"
+          }
+        },
+        "options": {},
+        "text": "2024-1-2 3:4:5"
+      },
+      {
+        "exprs": {
+          "date": {
+            "value": null
+          },
+          "schema_of_csv": {
+            "value": "STRUCT<_c0: TIMESTAMP>"
+          },
+          "timestamp": {
+            "value": "2026-11-28 12:34:56"
+          }
+        },
+        "options": {},
+        "text": "12:34:56"
+      },
+      {
+        "exprs": {
+          "date": {
+            "value": null
+          },
+          "schema_of_csv": {
+            "value": "STRUCT<_c0: STRING>"
+          },
+          "timestamp": {
+            "value": null
+          }
+        },
+        "options": {},
+        "text": "not a date"
+      },
+      {
+        "exprs": {
+          "date": {
+            "value": "2024-01-02"
+          },
+          "schema_of_csv": {
+            "value": "STRUCT<_c0: DATE>"
+          },
+          "timestamp": {
+            "value": null
+          }
+        },
+        "options": {
+          "dateFormat": "dd/MM/yyyy"
+        },
+        "text": "02/01/2024"
+      },
+      {
+        "exprs": {
+          "date": {
+            "value": null
+          },
+          "schema_of_csv": {
+            "value": "STRUCT<_c0: TIMESTAMP>"
+          },
+          "timestamp": {
+            "value": "2024-01-02 03:04:00"
+          }
+        },
+        "options": {
+          "timestampFormat": "dd/MM/yyyy HH:mm"
+        },
+        "text": "02/01/2024 03:04"
+      },
+      {
+        "exprs": {
+          "date": {
+            "value": null
+          },
+          "schema_of_csv": {
+            "value": "STRUCT<_c0: TIMESTAMP>"
+          },
+          "timestamp": {
+            "value": "2024-01-02 00:00:00"
+          }
+        },
+        "options": {
+          "dateFormat": "dd/MM/yyyy"
+        },
+        "text": "2024-01-02"
+      },
+      {
+        "exprs": {
+          "date": {
+            "value": "2024-01-02"
+          },
+          "schema_of_csv": {
+            "value": "STRUCT<_c0: STRING>"
+          },
+          "timestamp": {
+            "value": null
+          }
+        },
+        "options": {
+          "timestampFormat": "dd/MM/yyyy HH:mm"
+        },
+        "text": "2024-01-02 03:04:05"
+      },
+      {
+        "exprs": {
+          "date": {
+            "value": null
+          },
+          "schema_of_csv": {
+            "value": "STRUCT<_c0: STRING>"
+          },
+          "timestamp": {
+            "value": null
+          }
+        },
+        "options": {
+          "enableDateTimeParsingFallback": "false",
+          "timestampFormat": "dd/MM/yyyy HH:mm"
+        },
+        "text": "2024-01-02 03:04:05"
+      },
+      {
+        "exprs": {
+          "date": {
+            "value": null
+          },
+          "schema_of_csv": {
+            "value": "STRUCT<_c0: STRING>"
+          },
+          "timestamp": {
+            "value": null
+          }
+        },
+        "options": {},
+        "text": "2024-13-45"
+      },
+      {
+        "exprs": {
+          "date": {
+            "value": null
+          },
+          "schema_of_csv": {
+            "value": "STRUCT<_c0: STRING>"
+          },
+          "timestamp": {
+            "value": null
+          }
+        },
+        "options": {
+          "dateFormat": "yyyy-MM-dd"
+        },
+        "text": "2024-02-30"
+      },
+      {
+        "exprs": {
+          "date": {
+            "value": "2024-01-02"
+          },
+          "schema_of_csv": {
+            "value": "STRUCT<_c0: DATE>"
+          },
+          "timestamp": {
+            "value": "2024-01-02 00:00:00"
+          }
+        },
+        "options": {
+          "preferDate": "true"
+        },
+        "text": "2024-01-02"
+      },
+      {
+        "exprs": {
+          "date": {
+            "value": "2024-01-02"
+          },
+          "schema_of_csv": {
+            "value": "STRUCT<_c0: TIMESTAMP>"
+          },
+          "timestamp": {
+            "value": "2024-01-02 02:04:05.123"
+          }
+        },
+        "options": {
+          "enableDateTimeParsingFallback": "true"
+        },
+        "text": "2024-01-02T03:04:05.123+01:00"
+      },
+      {
+        "exprs": {
+          "date": {
+            "value": "2024-01-02"
+          },
+          "schema_of_csv": {
+            "value": "STRUCT<_c0: TIMESTAMP>"
+          },
+          "timestamp": {
+            "value": "2024-01-02 03:04:05"
+          }
+        },
+        "options": {
+          "enableDateTimeParsingFallback": "true"
+        },
+        "text": "2024-01-02 03:04:05"
+      },
+      {
+        "exprs": {
+          "date": {
+            "value": null
+          },
+          "schema_of_csv": {
+            "value": "STRUCT<_c0: TIMESTAMP>"
+          },
+          "timestamp": {
+            "value": "2024-01-02 03:04:05"
+          }
+        },
+        "options": {
+          "enableDateTimeParsingFallback": "false"
+        },
+        "text": "2024-01-02 03:04:05"
+      },
+      {
+        "exprs": {
+          "date": {
+            "value": "2024-01-02"
+          },
+          "schema_of_csv": {
+            "value": "STRUCT<_c0: TIMESTAMP>"
+          },
+          "timestamp": {
+            "value": "2024-01-02 03:04:05"
+          }
+        },
+        "options": {
+          "enableDateTimeParsingFallback": "false",
+          "preferDate": "false"
+        },
+        "text": "2024-01-02 03:04:05"
+      },
+      {
+        "exprs": {
+          "date": {
+            "value": null
+          },
+          "schema_of_csv": {
+            "value": "STRUCT<_c0: TIMESTAMP>"
+          },
+          "timestamp": {
+            "value": "2024-01-02 00:00:00"
+          }
+        },
+        "options": {
+          "enableDateTimeParsingFallback": "false"
+        },
+        "text": "2024-1-2"
+      },
+      {
+        "exprs": {
+          "date": {
+            "value": "2024-01-02"
+          },
+          "schema_of_csv": {
+            "value": "STRUCT<_c0: TIMESTAMP>"
+          },
+          "timestamp": {
+            "value": "2024-01-02 00:00:00"
+          }
+        },
+        "options": {
+          "enableDateTimeParsingFallback": "false",
+          "preferDate": "false"
+        },
+        "text": "2024-1-2"
+      },
+      {
+        "exprs": {
+          "date": {
+            "value": "2024-01-02"
+          },
+          "schema_of_csv": {
+            "value": "STRUCT<_c0: TIMESTAMP>"
+          },
+          "timestamp": {
+            "value": "2024-01-02 03:04:05"
+          }
+        },
+        "options": {
+          "preferDate": "false"
+        },
+        "text": "2024-01-02 03:04:05"
+      }
+    ],
+    "legacy": [
+      {
+        "exprs": {
+          "date": {
+            "value": "2024-01-02"
+          },
+          "schema_of_csv": {
+            "value": "STRUCT<_c0: STRING>"
+          },
+          "timestamp": {
+            "value": "2024-01-02 00:00:00"
+          }
+        },
+        "options": {},
+        "text": "2024-01-02"
+      },
+      {
+        "exprs": {
+          "date": {
+            "value": "2024-01-02"
+          },
+          "schema_of_csv": {
+            "value": "STRUCT<_c0: STRING>"
+          },
+          "timestamp": {
+            "value": "2024-01-02 00:00:00"
+          }
+        },
+        "options": {},
+        "text": "2024-1-2"
+      },
+      {
+        "exprs": {
+          "date": {
+            "value": "2024-01-02"
+          },
+          "schema_of_csv": {
+            "value": "STRUCT<_c0: STRING>"
+          },
+          "timestamp": {
+            "value": "2024-01-02 03:04:05"
+          }
+        },
+        "options": {},
+        "text": "2024-01-02 03:04:05"
+      },
+      {
+        "exprs": {
+          "date": {
+            "value": "2024-01-02"
+          },
+          "schema_of_csv": {
+            "value": "STRUCT<_c0: STRING>"
+          },
+          "timestamp": {
+            "value": "2024-01-02 03:04:05"
+          }
+        },
+        "options": {},
+        "text": "2024-01-02T03:04:05"
+      },
+      {
+        "exprs": {
+          "date": {
+            "value": "2024-01-02"
+          },
+          "schema_of_csv": {
+            "value": "STRUCT<_c0: TIMESTAMP>"
+          },
+          "timestamp": {
+            "value": "2024-01-02 02:04:05.123"
+          }
+        },
+        "options": {},
+        "text": "2024-01-02T03:04:05.123+01:00"
+      },
+      {
+        "exprs": {
+          "date": {
+            "value": "2024-01-02"
+          },
+          "schema_of_csv": {
+            "value": "STRUCT<_c0: TIMESTAMP>"
+          },
+          "timestamp": {
+            "value": "2024-01-02 03:06:08.456"
+          }
+        },
+        "options": {},
+        "text": "2024-01-02T03:04:05.123456Z"
+      },
+      {
+        "exprs": {
+          "date": {
+            "value": "2024-01-02"
+          },
+          "schema_of_csv": {
+            "value": "STRUCT<_c0: STRING>"
+          },
+          "timestamp": {
+            "value": "2024-01-02 03:04:05"
+          }
+        },
+        "options": {},
+        "text": "2024-01-02 03:04:05 GMT"
+      },
+      {
+        "exprs": {
+          "date": {
+            "value": "2024-01-02"
+          },
+          "schema_of_csv": {
+            "value": "STRUCT<_c0: STRING>"
+          },
+          "timestamp": {
+            "value": "2024-01-02 03:04:05.1"
+          }
+        },
+        "options": {},
+        "text": "2024-01-02 03:04:05.1"
+      },
+      {
+        "exprs": {
+          "date": {
+            "value": "2024-01-02"
+          },
+          "schema_of_csv": {
+            "value": "STRUCT<_c0: STRING>"
+          },
+          "timestamp": {
+            "value": "2024-01-02 03:04:05"
+          }
+        },
+        "options": {},
+        "text": "2024-1-2 3:4:5"
+      },
+      {
+        "exprs": {
+          "date": {
+            "value": null
+          },
+          "schema_of_csv": {
+            "value": "STRUCT<_c0: STRING>"
+          },
+          "timestamp": {
+            "value": "2026-11-28 12:34:56"
+          }
+        },
+        "options": {},
+        "text": "12:34:56"
+      },
+      {
+        "exprs": {
+          "date": {
+            "value": null
+          },
+          "schema_of_csv": {
+            "value": "STRUCT<_c0: STRING>"
+          },
+          "timestamp": {
+            "value": null
+          }
+        },
+        "options": {},
+        "text": "not a date"
+      },
+      {
+        "exprs": {
+          "date": {
+            "value": "2024-01-02"
+          },
+          "schema_of_csv": {
+            "value": "STRUCT<_c0: STRING>"
+          },
+          "timestamp": {
+            "value": null
+          }
+        },
+        "options": {
+          "dateFormat": "dd/MM/yyyy"
+        },
+        "text": "02/01/2024"
+      },
+      {
+        "exprs": {
+          "date": {
+            "value": null
+          },
+          "schema_of_csv": {
+            "value": "STRUCT<_c0: TIMESTAMP>"
+          },
+          "timestamp": {
+            "value": "2024-01-02 03:04:00"
+          }
+        },
+        "options": {
+          "timestampFormat": "dd/MM/yyyy HH:mm"
+        },
+        "text": "02/01/2024 03:04"
+      },
+      {
+        "exprs": {
+          "date": {
+            "value": "2024-01-02"
+          },
+          "schema_of_csv": {
+            "value": "STRUCT<_c0: STRING>"
+          },
+          "timestamp": {
+            "value": "2024-01-02 00:00:00"
+          }
+        },
+        "options": {
+          "dateFormat": "dd/MM/yyyy"
+        },
+        "text": "2024-01-02"
+      },
+      {
+        "exprs": {
+          "date": {
+            "value": "2024-01-02"
+          },
+          "schema_of_csv": {
+            "value": "STRUCT<_c0: STRING>"
+          },
+          "timestamp": {
+            "value": "2024-01-02 03:04:05"
+          }
+        },
+        "options": {
+          "timestampFormat": "dd/MM/yyyy HH:mm"
+        },
+        "text": "2024-01-02 03:04:05"
+      },
+      {
+        "exprs": {
+          "date": {
+            "value": "2024-01-02"
+          },
+          "schema_of_csv": {
+            "value": "STRUCT<_c0: STRING>"
+          },
+          "timestamp": {
+            "value": null
+          }
+        },
+        "options": {
+          "enableDateTimeParsingFallback": "false",
+          "timestampFormat": "dd/MM/yyyy HH:mm"
+        },
+        "text": "2024-01-02 03:04:05"
+      },
+      {
+        "exprs": {
+          "date": {
+            "value": "2025-02-14"
+          },
+          "schema_of_csv": {
+            "value": "STRUCT<_c0: STRING>"
+          },
+          "timestamp": {
+            "value": null
+          }
+        },
+        "options": {},
+        "text": "2024-13-45"
+      },
+      {
+        "exprs": {
+          "date": {
+            "value": "2024-03-01"
+          },
+          "schema_of_csv": {
+            "value": "STRUCT<_c0: STRING>"
+          },
+          "timestamp": {
+            "value": null
+          }
+        },
+        "options": {
+          "dateFormat": "yyyy-MM-dd"
+        },
+        "text": "2024-02-30"
+      },
+      {
+        "exprs": {
+          "date": {
+            "value": "2024-01-02"
+          },
+          "schema_of_csv": {
+            "value": "STRUCT<_c0: STRING>"
+          },
+          "timestamp": {
+            "value": "2024-01-02 00:00:00"
+          }
+        },
+        "options": {
+          "preferDate": "true"
+        },
+        "text": "2024-01-02"
+      },
+      {
+        "exprs": {
+          "date": {
+            "value": "2024-01-02"
+          },
+          "schema_of_csv": {
+            "value": "STRUCT<_c0: TIMESTAMP>"
+          },
+          "timestamp": {
+            "value": "2024-01-02 02:04:05.123"
+          }
+        },
+        "options": {
+          "enableDateTimeParsingFallback": "true"
+        },
+        "text": "2024-01-02T03:04:05.123+01:00"
+      },
+      {
+        "exprs": {
+          "date": {
+            "value": "2024-01-02"
+          },
+          "schema_of_csv": {
+            "value": "STRUCT<_c0: STRING>"
+          },
+          "timestamp": {
+            "value": "2024-01-02 03:04:05"
+          }
+        },
+        "options": {
+          "enableDateTimeParsingFallback": "true"
+        },
+        "text": "2024-01-02 03:04:05"
+      },
+      {
+        "exprs": {
+          "date": {
+            "value": "2024-01-02"
+          },
+          "schema_of_csv": {
+            "value": "STRUCT<_c0: STRING>"
+          },
+          "timestamp": {
+            "value": null
+          }
+        },
+        "options": {
+          "enableDateTimeParsingFallback": "false"
+        },
+        "text": "2024-01-02 03:04:05"
+      },
+      {
+        "exprs": {
+          "date": {
+            "value": "2024-01-02"
+          },
+          "schema_of_csv": {
+            "value": "STRUCT<_c0: STRING>"
+          },
+          "timestamp": {
+            "value": null
+          }
+        },
+        "options": {
+          "enableDateTimeParsingFallback": "false",
+          "preferDate": "false"
+        },
+        "text": "2024-01-02 03:04:05"
+      },
+      {
+        "exprs": {
+          "date": {
+            "value": "2024-01-02"
+          },
+          "schema_of_csv": {
+            "value": "STRUCT<_c0: STRING>"
+          },
+          "timestamp": {
+            "value": null
+          }
+        },
+        "options": {
+          "enableDateTimeParsingFallback": "false"
+        },
+        "text": "2024-1-2"
+      },
+      {
+        "exprs": {
+          "date": {
+            "value": "2024-01-02"
+          },
+          "schema_of_csv": {
+            "value": "STRUCT<_c0: STRING>"
+          },
+          "timestamp": {
+            "value": null
+          }
+        },
+        "options": {
+          "enableDateTimeParsingFallback": "false",
+          "preferDate": "false"
+        },
+        "text": "2024-1-2"
+      },
+      {
+        "exprs": {
+          "date": {
+            "value": "2024-01-02"
+          },
+          "schema_of_csv": {
+            "value": "STRUCT<_c0: STRING>"
+          },
+          "timestamp": {
+            "value": "2024-01-02 03:04:05"
+          }
+        },
+        "options": {
+          "preferDate": "false"
+        },
+        "text": "2024-01-02 03:04:05"
+      }
+    ]
+  },
   "csv_file": {
     "default": [
       {

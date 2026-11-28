@@ -841,6 +841,7 @@ fn bind_from_xml(args: &[BindArg], opts: &BindOptions) -> Result<Binding, Krishi
                 date: parsed.date.as_ref(),
                 time: parsed.time.as_ref(),
                 fallback: false,
+                date_fallback: false,
                 time_micros_only,
             },
             zone: zone.as_ref(),

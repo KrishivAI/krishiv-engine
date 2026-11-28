@@ -245,6 +245,11 @@ struct Parsed {
     ntz_pattern: Option<DateTimePattern>,
     /// Fallback to lenient grammar.
     fallback: bool,
+    /// `enableDateTimeParsingFallback` as written (`None`: not named).
+    fallback_option: Option<bool>,
+    /// `preferDate` (on unless named off): a read without `dateFormat`
+    /// takes the strict `yyyy-MM-dd` (`CSVOptions.dateFormatInRead`).
+    prefer_date: bool,
     /// `spark.sql.legacy.timeParserPolicy=LEGACY`.
     legacy: bool,
     /// Quote every value (`to_csv` write).
@@ -308,6 +313,8 @@ impl Parsed {
             timestamp_pattern: None,
             ntz_pattern: None,
             fallback: legacy,
+            fallback_option: None,
+            prefer_date: true,
             quote_all: false,
             escape_quotes: true,
             line_sep: None,
@@ -381,7 +388,9 @@ impl Parsed {
                 }
                 "enabledatetimeparsingfallback" => {
                     self.fallback = v.eq_ignore_ascii_case("true");
+                    self.fallback_option = Some(self.fallback);
                 }
+                "preferdate" => self.prefer_date = v.eq_ignore_ascii_case("true"),
                 "timeformat" => {
                     self.time_pattern = Some(datetime_option(v, func, "timeFormat")?);
                 }
@@ -481,6 +490,14 @@ fn bind_from_csv(args: &[BindArg], opts: &BindOptions) -> Result<Binding, Krishi
             .timestamp_pattern
             .get_or_insert_with(|| DateTimePattern::new_fast("yyyy-MM-dd'T'HH:mm:ss.SSSXXX"));
     }
+    // `UnivocityParser`: a date falls back to the lenient grammar unless the
+    // option says otherwise, under LEGACY or without a `dateFormat` option.
+    let date_fallback = parsed
+        .fallback_option
+        .unwrap_or(opts.legacy_time_parser || parsed.date_pattern.is_none());
+    if parsed.prefer_date && !opts.legacy_time_parser && parsed.date_pattern.is_none() {
+        parsed.date_pattern = Some(datetime_option("yyyy-MM-dd", "from_csv", "dateFormat")?);
+    }
     let corrupt = fields
         .iter()
         .position(|f| f.name() == &parsed.corrupt_column);
@@ -511,6 +528,7 @@ fn bind_from_csv(args: &[BindArg], opts: &BindOptions) -> Result<Binding, Krishi
         timestamp_pattern,
         ntz_pattern,
         fallback: parsed.fallback,
+        date_fallback,
         time_micros_only: opts.kernel.spark_version() < krishiv_kernels::SparkVersion::V4_3,
     };
     // A time-only timestamp (`12:30:00`) is today's, in the session zone.
