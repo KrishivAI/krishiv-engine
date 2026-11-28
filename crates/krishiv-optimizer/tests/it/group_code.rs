@@ -988,3 +988,55 @@ fn the_multi_dimension_mode_refuses_many_groups_and_small_inputs() {
         );
     }
 }
+
+/// CTE instances that differ only in a group key's literal still read one
+/// computation in the multi-dimension mode (TPC-DS q31: coding each instance
+/// built a dictionary under its own literal, so `ShareLiteralInstances`
+/// shared none, 1.88x the instructions). The instances are not coded, and
+/// the shared definition may be coded after the rule ran. Rows stay the same,
+/// and the plan is a fixed point.
+#[test]
+fn the_multi_dimension_mode_keeps_literal_instances_shared() {
+    let ctx = support::ctx_over(catalog());
+    let udfs = krishiv_udf_sdk::UdfLibrary::new();
+    let stats = Stats::new();
+    let sql = "WITH c AS (SELECT dyear, g1, g2, h1, h2, count(*) AS n \
+               FROM f JOIN d ON fk = dk JOIN e ON ek2 = ek GROUP BY dyear, g1, g2, h1, h2) \
+               SELECT a.g1, a.g2, a.h1, a.h2, a.n, b.n AS m FROM c a JOIN c b \
+               ON a.g1 = b.g1 AND a.g2 = b.g2 AND a.h1 = b.h1 AND a.h2 = b.h2 \
+               WHERE a.dyear = 1 AND b.dyear = 2";
+    let mut multi = krishiv_common::config::Config::new();
+    multi
+        .set("krishiv.optimizer.groupKeyCodeMultiDimension", "true")
+        .unwrap();
+    let off = krishiv_common::config::Config::new();
+    let plan = support::resolve(sql, &ctx);
+    for config in [&off, &multi] {
+        let (once, steps) =
+            krishiv_optimizer::optimize_traced_with_udfs(&plan, &stats, &udfs, config).unwrap();
+        let text = once.root().to_string();
+        let notes: Vec<_> = steps
+            .iter()
+            .filter(|s| s.rule == "GroupKeyCode" && !s.note.is_empty())
+            .map(|s| s.note.clone())
+            .collect();
+        assert!(text.contains("__shared_lit_"), "{notes:?}\n{text}");
+        if std::ptr::eq(config, &multi) {
+            assert!(
+                notes.iter().any(|n| n.contains("ShareLiteralInstances")),
+                "{notes:?}"
+            );
+        }
+        let (twice, _) =
+            krishiv_optimizer::optimize_traced_with_udfs(&once, &stats, &udfs, config).unwrap();
+        assert!(twice.structurally_eq(&once), "a fixed point\n{text}");
+        for seed in [3, 11] {
+            let db = db(seed);
+            assert_eq!(
+                eval::rows(&db, once.root()),
+                eval::rows(&db, plan.root()),
+                "seed {seed}"
+            );
+        }
+    }
+}

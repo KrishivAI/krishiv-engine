@@ -154,6 +154,50 @@ pub(crate) fn share(
     renamer.go(shared)
 }
 
+/// Every node (subquery plans included) of the instances in `root` that this
+/// rule would read from one definition: the groups it finds, each with a
+/// definition worth sharing. Asked without rewriting, before the rule runs.
+///
+/// `GroupKeyCode` leaves the aggregates in them alone (and eager aggregation
+/// does not yield them to it): coding each instance builds a dictionary under
+/// that instance's own literal, so the bodies no longer differ in the literal
+/// alone and none is shared. One computation of every literal's groups costs
+/// less than one coded computation per literal (TPC-DS q31: 1.88x the
+/// instructions with the multi-dimension mode on, design P2b D2 §8). The
+/// shared definition is coded later, when the group-key code runs again
+/// after this rule.
+pub(crate) fn grouped_nodes(
+    root: &Arc<LogicalPlan>,
+    direct: bool,
+) -> crate::expr::AddrSet<LogicalPlan> {
+    let mut out = crate::expr::AddrSet::default();
+    let members = shifts(root, direct);
+    if members.len() < 2 {
+        return out;
+    }
+    let candidates: Vec<Candidate> = members
+        .iter()
+        .enumerate()
+        .flat_map(|(i, m)| candidates(i, m))
+        .collect();
+    for group in groups(&members, &candidates) {
+        if rewrite_group(&members, &candidates, &group).is_none() {
+            continue;
+        }
+        for &c in &group {
+            let mut stack = vec![Arc::clone(&members[candidates[c].member].body)];
+            while let Some(p) = stack.pop() {
+                if !out.insert(Arc::as_ptr(&p)) {
+                    continue;
+                }
+                p.for_each_expr(&mut |e| stack.extend(crate::restrict::subquery_plans(e)));
+                p.for_each_child(&mut |child| stack.push(Arc::clone(child)));
+            }
+        }
+    }
+    out
+}
+
 /// Whether `ShareCte` shared every definition in `expected` (its output ids,
 /// the definition) in `shared`: each is referenced and no longer computed in
 /// the main query.

@@ -119,6 +119,7 @@ pub(crate) fn rewrite(
     propagate: bool,
     force: bool,
     min_dimensions: usize,
+    literal_instances: Option<bool>,
 ) -> Result<(Arc<LogicalPlan>, Vec<String>), KrishivError> {
     let Some(row_number) = row_number() else {
         return Ok((root, Vec::new()));
@@ -126,7 +127,15 @@ pub(crate) fn rewrite(
     let mut next = max_id(&root, &mut Default::default()).saturating_add(1);
     let mut est = Estimator::with_propagation(stats, propagate);
     let mut notes = Vec::new();
+    let fence = fence(&root, literal_instances);
+    // The fenced nodes stay alive (and so keep their addresses) until the
+    // rewrite ends; nothing under them changes.
+    let keep = Arc::clone(&root);
     let out = dag::rewrite_up(root, &mut |p| {
+        if fence.contains(&Arc::as_ptr(&p)) && Shape::of(&p).is_some() {
+            notes.push(SHARED_NOTE.to_owned());
+            return Ok(p);
+        }
         if let Some(name) = collated_key(&p) {
             notes.push(format!(
                 "not applied: {name} is a collated string, grouped by its collation key"
@@ -148,7 +157,24 @@ pub(crate) fn rewrite(
             }
         }
     })?;
+    drop(keep);
     Ok((out, notes))
+}
+
+/// Why an aggregate in an instance `ShareLiteralInstances` shares is not coded.
+const SHARED_NOTE: &str =
+    "not applied: its CTE instance shares one computation with others (ShareLiteralInstances)";
+
+/// The nodes of the CTE instances `ShareLiteralInstances` will share, when it
+/// runs later in this optimization (`Some(direct)`): their aggregates are not
+/// coded ([`crate::share_literal::grouped_nodes`]).
+pub(crate) fn fence(
+    root: &Arc<LogicalPlan>,
+    literal_instances: Option<bool>,
+) -> crate::expr::AddrSet<LogicalPlan> {
+    literal_instances
+        .map(|direct| crate::share_literal::grouped_nodes(root, direct))
+        .unwrap_or_default()
 }
 
 /// Whether the rule codes the keys of the aggregate `agg`, asked without

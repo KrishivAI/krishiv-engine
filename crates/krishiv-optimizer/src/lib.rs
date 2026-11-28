@@ -650,6 +650,36 @@ fn run(
                     .and_then(ConfigValue::as_bool)
                     .unwrap_or(true)
             });
+        // Identical deterministic CTE instances share one computation
+        // (P2-T198): only where a session configuration is given, and the
+        // switch is on.
+        let share = udfs.is_some_and(|(_, config)| {
+            config
+                .get(&SHARE_CTE_INSTANCES)
+                .and_then(ConfigValue::as_bool)
+                .unwrap_or(true)
+        });
+        // P3 W1 shape (b): the places that read a shared body directly
+        // count as members too (`krishiv.optimizer.shareRepeatedSubtrees`).
+        let direct = options.share_repeated_subtrees
+            && udfs.is_some_and(|(_, config)| {
+                config
+                    .get(&SHARE_REPEATED_SUBTREES)
+                    .and_then(ConfigValue::as_bool)
+                    .unwrap_or(SHARE_REPEATED_SUBTREES_DEFAULT)
+            });
+        // Instances that differ only in a group key's literal read one
+        // definition over all the literals (`share_literal`, TPC-DS q31).
+        let literals = share
+            && udfs.is_some_and(|(_, config)| {
+                config
+                    .get(&SHARE_LITERAL_INSTANCES)
+                    .and_then(ConfigValue::as_bool)
+                    .unwrap_or(true)
+            });
+        // Read before the group-key code: the instances that rule will share
+        // are not coded (`group_code::fence`).
+        let literal_instances = literals.then_some(direct);
         // `krishiv.experimental.groupKeyCodeForce` (measurement only) also
         // switches it on, without the statistics test.
         let forced = udfs.is_some_and(|(_, config)| {
@@ -695,6 +725,7 @@ fn run(
         let yields = eager::Yield {
             payload_above: above,
             group_code: min_dimensions.map(|min| (forced, min)),
+            literal_instances,
         };
         let root = match stats {
             Some(stats) if eager => {
@@ -713,6 +744,7 @@ fn run(
                     options.stats_propagation,
                     forced,
                     min_dimensions,
+                    literal_instances,
                 )?;
                 t.step("GroupKeyCode", 1, "GroupKeyCode", &root, &after);
                 t.notes("GroupKeyCode", &after, notes);
@@ -789,6 +821,7 @@ fn run(
                             options.stats_propagation,
                             forced,
                             min_dimensions,
+                            literal_instances,
                         )?;
                         t.step("GroupKeyCode", 1, "GroupKeyCode", &ordered, &after);
                         t.notes("GroupKeyCode", &after, notes);
@@ -869,33 +902,6 @@ fn run(
         } else {
             root
         };
-        // Identical deterministic CTE instances share one computation
-        // (P2-T198): only where a session configuration is given, and the
-        // switch is on.
-        let share = udfs.is_some_and(|(_, config)| {
-            config
-                .get(&SHARE_CTE_INSTANCES)
-                .and_then(ConfigValue::as_bool)
-                .unwrap_or(true)
-        });
-        // P3 W1 shape (b): the places that read a shared body directly
-        // count as members too (`krishiv.optimizer.shareRepeatedSubtrees`).
-        let direct = options.share_repeated_subtrees
-            && udfs.is_some_and(|(_, config)| {
-                config
-                    .get(&SHARE_REPEATED_SUBTREES)
-                    .and_then(ConfigValue::as_bool)
-                    .unwrap_or(SHARE_REPEATED_SUBTREES_DEFAULT)
-            });
-        // Instances that differ only in a group key's literal read one
-        // definition over all the literals (`share_literal`, TPC-DS q31).
-        let literals = share
-            && udfs.is_some_and(|(_, config)| {
-                config
-                    .get(&SHARE_LITERAL_INSTANCES)
-                    .and_then(ConfigValue::as_bool)
-                    .unwrap_or(true)
-            });
         let root = if literals {
             let after = t.once("ShareLiteralInstances", &root, |r| {
                 share_literal::share(Arc::clone(r), direct)
@@ -930,6 +936,8 @@ fn run(
                                 options.stats_propagation,
                                 forced,
                                 min_dimensions,
+                                // After the rule: its definitions are coded.
+                                None,
                             )?;
                             t.step("GroupKeyCode", 1, "GroupKeyCode", &ordered, &after);
                             t.notes("GroupKeyCode", &after, notes);

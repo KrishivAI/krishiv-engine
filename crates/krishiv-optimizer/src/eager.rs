@@ -123,9 +123,16 @@ pub(crate) fn rewrite(
             .payload_above
             .then(|| payload_above::Probe::new(&root, stats)),
         group_code: yields.group_code,
+        fence: if yields.group_code.is_some() {
+            group_code::fence(&root, yields.literal_instances)
+        } else {
+            Default::default()
+        },
         expand,
     };
     let mut est = Estimator::with_propagation(stats, propagate);
+    // The fenced nodes keep their addresses while the rewrite runs.
+    let keep = Arc::clone(&root);
     let out = dag::rewrite_up(root, &mut |p| {
         if pass.yielded(&p, &mut est) {
             return Ok(p);
@@ -153,6 +160,7 @@ pub(crate) fn rewrite(
         }
         Ok(pass.attempt(p, &mut est))
     })?;
+    drop(keep);
     Ok((out, pass.notes))
 }
 
@@ -166,6 +174,8 @@ struct Pass<'a> {
     probe: Option<payload_above::Probe<'a>>,
     /// [`Yield::group_code`].
     group_code: Option<(bool, usize)>,
+    /// The aggregates `GroupKeyCode` leaves alone ([`group_code::fence`]).
+    fence: crate::expr::AddrSet<LogicalPlan>,
     /// Whether an aggregate over an `Expand` is pre-aggregated ([`expand`]).
     expand: bool,
 }
@@ -178,9 +188,10 @@ impl Pass<'_> {
                 .push("not applied: PayloadAboveAggregate takes the aggregate".to_owned());
             return true;
         }
-        if self
-            .group_code
-            .is_some_and(|(force, min)| group_code::takes(p, est, force, min))
+        if !self.fence.contains(&Arc::as_ptr(p))
+            && self
+                .group_code
+                .is_some_and(|(force, min)| group_code::takes(p, est, force, min))
         {
             self.notes
                 .push("not applied: GroupKeyCode takes the aggregate".to_owned());
@@ -248,6 +259,10 @@ pub(crate) struct Yield {
     /// `GroupKeyCode` runs later: whether it is forced, and how many
     /// qualifying dimensions it codes at least.
     pub(crate) group_code: Option<(bool, usize)>,
+    /// `ShareLiteralInstances` runs later (with its `direct` setting): the
+    /// aggregates of the instances it shares are not coded, so they are not
+    /// yielded ([`group_code::fence`]).
+    pub(crate) literal_instances: Option<bool>,
 }
 
 /// An aggregate over projections and expansions over a join.
