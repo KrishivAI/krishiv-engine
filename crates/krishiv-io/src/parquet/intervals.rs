@@ -306,3 +306,76 @@ pub(super) fn as_intervals(a: &ArrayRef, target: &DataType) -> FormatResult<Arra
         _ => Arc::clone(a),
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use arrow_schema::{DataType, Field, FieldRef, Fields, TimeUnit};
+    use parquet::schema::parser::parse_message_type;
+    use parquet::schema::types::SchemaDescriptor;
+
+    use super::{holds_nanos, nanos_as_long};
+
+    fn descr(message: &str) -> SchemaDescriptor {
+        SchemaDescriptor::new(Arc::new(parse_message_type(message).unwrap()))
+    }
+
+    fn nanos() -> DataType {
+        DataType::Timestamp(TimeUnit::Nanosecond, None)
+    }
+
+    fn field(name: &str, t: DataType) -> FieldRef {
+        Arc::new(Field::new(name, t, true))
+    }
+
+    #[test]
+    fn a_leaf_count_unlike_the_files_retypes_only_top_level_int64_columns() {
+        // Three Arrow leaves against two Parquet columns: only `a`, a top-level INT64, is retyped.
+        let d = descr("message m { optional int64 a (TIMESTAMP(NANOS,false)); optional int96 b; }");
+        let fields = vec![
+            field("a", nanos()),
+            field("b", nanos()),
+            field("c", DataType::Int32),
+        ];
+        let got = nanos_as_long(fields, &d);
+        assert_eq!(got[0].data_type(), &DataType::Int64);
+        assert_eq!(got[1].data_type(), &nanos());
+        assert_eq!(got[2].data_type(), &DataType::Int32);
+    }
+
+    #[test]
+    fn nested_nanosecond_leaves_are_retyped_by_their_own_column() {
+        let d = descr(
+            "message m {
+               optional group l (LIST) { repeated group list { optional int64 element (TIMESTAMP(NANOS,false)); } }
+               optional group m (MAP) { repeated group key_value {
+                 required int32 key; optional int96 value; } }
+             }",
+        );
+        let entries = Fields::from(vec![
+            Field::new("key", DataType::Int32, false),
+            Field::new("value", nanos(), true),
+        ]);
+        let map = DataType::Map(
+            Arc::new(Field::new("key_value", DataType::Struct(entries), false)),
+            false,
+        );
+        let list = DataType::LargeList(field("element", nanos()));
+        assert!(holds_nanos(&list) && holds_nanos(&map));
+        let got = nanos_as_long(vec![field("l", list), field("m", map)], &d);
+        let DataType::LargeList(e) = got[0].data_type() else {
+            panic!("{:?}", got[0].data_type())
+        };
+        assert_eq!(e.data_type(), &DataType::Int64);
+        // The map's value is an INT96 column: it stays a timestamp.
+        let DataType::Map(kv, _) = got[1].data_type() else {
+            panic!("{:?}", got[1].data_type())
+        };
+        let DataType::Struct(kv) = kv.data_type() else {
+            panic!("{:?}", kv.data_type())
+        };
+        assert_eq!(kv[1].data_type(), &nanos());
+        assert!(!holds_nanos(&DataType::Int64));
+    }
+}
