@@ -47,6 +47,10 @@ pub use registry::*;
 pub use registry_join::*;
 pub use scan_instance::EXEC_SCAN_INSTANCE_PROJECTION;
 
+/// Spark's `TIME` gate, `spark.sql.timeType.enabled` (default off): the
+/// analyzer and the CSV / JSON sources read it under this one name.
+pub const TIME_TYPE_ENABLED: &str = "spark.sql.timeType.enabled";
+
 /// Where a config entry may be set.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Scope {

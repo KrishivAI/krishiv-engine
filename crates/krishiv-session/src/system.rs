@@ -619,6 +619,8 @@ pub(crate) struct Sources {
     pub(crate) advice: Arc<crate::partition_advice::AdviceCell>,
     /// The declared catalogs the query's principal sees (`system.catalogs`, name resolution).
     pub(crate) catalogs: crate::catalog_registry::DeclaredView,
+    /// What lists the session catalog for `information_schema` (`None` in unit tests).
+    pub(crate) information: Option<crate::information_schema::Source>,
 }
 
 pub(crate) use crate::monitor::Monitor;

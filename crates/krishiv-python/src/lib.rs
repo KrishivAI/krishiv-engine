@@ -102,6 +102,8 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<udf::PyAnonymousUdf>()?;
     m.add_class::<session::PySession>()?;
     m.add_class::<local::PyLocalConnectServer>()?;
+    #[cfg(target_os = "linux")]
+    m.add_function(wrap_pyfunction!(local::_udf_trampoline, m)?)?;
     m.add_class::<dataframe::PyDataFrame>()?;
     m.add_class::<dataframe::PyGroupedData>()?;
     m.add_class::<dataframe::PyObservation>()?;

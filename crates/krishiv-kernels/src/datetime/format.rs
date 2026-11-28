@@ -56,8 +56,22 @@ impl TimePattern {
     /// # Errors
     /// As the two pattern kinds.
     pub fn format_timestamp(&self, micros: i64, zone: Zone<'_>) -> Result<String, KrishivError> {
+        self.format_timestamp_nanos(micros, 0, zone)
+    }
+
+    /// `micros` plus `nanos` (0..=999) nanoseconds within the microsecond, shown in `zone` (the legacy
+    /// pattern reads the microseconds only).
+    ///
+    /// # Errors
+    /// As the two pattern kinds.
+    pub fn format_timestamp_nanos(
+        &self,
+        micros: i64,
+        nanos: u16,
+        zone: Zone<'_>,
+    ) -> Result<String, KrishivError> {
         match self {
-            Self::Corrected(p) => p.format_timestamp(micros, zone),
+            Self::Corrected(p) => p.format_timestamp_nanos(micros, nanos, zone),
             Self::Legacy(p) => p.format_timestamp(micros, zone),
         }
     }
@@ -89,6 +103,20 @@ pub fn format_timestamps(
     stamps: &TimestampMicrosecondArray,
     zone: Zone<'_>,
 ) -> Result<StringArray, KernelError> {
+    format_timestamps_nanos(pattern, stamps, |_| 0, zone)
+}
+
+/// [`format_timestamps`] with `nanos(i)` (0..=999) nanoseconds within row `i`'s microsecond (a nanosecond
+/// timestamp, Spark 4.3).
+///
+/// # Errors
+/// As [`format_timestamps`].
+pub fn format_timestamps_nanos(
+    pattern: &TimePattern,
+    stamps: &TimestampMicrosecondArray,
+    nanos: impl Fn(usize) -> u16,
+    zone: Zone<'_>,
+) -> Result<StringArray, KernelError> {
     let mut out = with_capacity::<Option<String>>(stamps.len())?;
     for i in 0..stamps.len() {
         if stamps.is_null(i) {
@@ -96,7 +124,7 @@ pub fn format_timestamps(
             continue;
         }
         let s = pattern
-            .format_timestamp(stamps.value(i), zone)
+            .format_timestamp_nanos(stamps.value(i), nanos(i), zone)
             .map_err(|e| KernelError::with_row(Some(i), e))?;
         out.push(Some(s));
     }
@@ -530,6 +558,35 @@ mod tests {
 
     fn pattern(p: &str) -> TimePattern {
         TimePattern::new(p, Purpose::Parse, false).unwrap()
+    }
+
+    /// A nanosecond timestamp's nanoseconds within its microsecond print in the fraction digits 7..9 of the
+    /// `DateTimeFormatter` pattern; the legacy `SimpleDateFormat` one reads the microseconds only.
+    #[test]
+    fn nanoseconds_print_in_the_fraction() {
+        let zone = Zone {
+            id: "UTC",
+            rules: &FixedOffset(0),
+        };
+        let stamps = TimestampMicrosecondArray::from(vec![Some(1_577_885_075_123_456), None]);
+        let nine = TimePattern::new("HH:mm:ss.SSSSSSSSS", Purpose::Format, false).unwrap();
+        let out = format_timestamps_nanos(&nine, &stamps, |_| 789, zone).unwrap();
+        assert_eq!(out.value(0), "13:24:35.123456789");
+        assert!(out.is_null(1));
+        let eight = TimePattern::new("ss.SSSSSSSS", Purpose::Format, false).unwrap();
+        assert_eq!(
+            eight.format_timestamp_nanos(-1, 5, zone).unwrap(),
+            "59.99999900"
+        );
+        let legacy = TimePattern::new("HH:mm:ss.SSS", Purpose::Format, true).unwrap();
+        assert_eq!(
+            legacy
+                .format_timestamp_nanos(1_577_885_075_123_456, 789, zone)
+                .unwrap(),
+            legacy
+                .format_timestamp(1_577_885_075_123_456, zone)
+                .unwrap()
+        );
     }
 
     /// Batch parsing reports Java's failure text per row and NULLs without
