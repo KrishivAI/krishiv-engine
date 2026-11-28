@@ -321,14 +321,17 @@ pub async fn execute_plan(
     };
     let tags = validate_tags(&request.tags)?;
     // The request's tags and trace go to the engine's queries of this operation, per request.
-    let mut query_options = QueryOptions::new()
-        .operation_id(id.as_str())
+    let mut base = QueryOptions::new()
         .tags(tags.iter())
         .inbound_trace(inbound.traceparent.as_deref(), inbound.baggage.as_deref());
     // This request's own token, not whatever a concurrent request of the session stored.
     if let Some((method, credential)) = &inbound.credential {
-        query_options = query_options.inbound_credential(*method, credential.clone());
+        base = base.inbound_credential(*method, credential.clone());
     }
+    // The queries the host runs for a pivot's values are the request's too, but the operation id
+    // names the request's own statement only (a second query under it would collide).
+    let helper_options = base.clone();
+    let query_options = base.operation_id(id.as_str());
     let opts = options(request);
     let op = Arc::new(
         Operation::new(
@@ -423,8 +426,14 @@ pub async fn execute_plan(
                     }
                     .into());
                 }
-                let Executed::Relation(requested) =
-                    Box::pin(execution_plan(entry, &shown.plan, limits, &query_options)).await?
+                let Executed::Relation(requested) = Box::pin(execution_plan(
+                    entry,
+                    &shown.plan,
+                    limits,
+                    &query_options,
+                    &helper_options,
+                ))
+                .await?
                 else {
                     return Err(InternalError {
                         message: "a show_string input is not a relation".to_owned(),
@@ -438,7 +447,15 @@ pub async fn execute_plan(
                 ));
             }
             // Decompression (up to `maxPlanSize`) runs off the async workers.
-            match Box::pin(execution_plan(entry, plan, limits, &query_options)).await? {
+            match Box::pin(execution_plan(
+                entry,
+                plan,
+                limits,
+                &query_options,
+                &helper_options,
+            ))
+            .await?
+            {
                 Executed::Relation(requested) => {
                     let df = requested.frame(session, query_options).await?;
                     let schema = df.schema_boxed().await?;
@@ -704,13 +721,20 @@ async fn execution_plan(
     plan: &pb::Plan,
     limits: &ExecuteLimits,
     query_options: &QueryOptions,
+    helper_options: &QueryOptions,
 ) -> Result<Executed, KrishivError> {
     let session = entry.session();
     load_persisted_udfs(entry).await;
     let decompressed = decompressed(plan, limits).await?;
     let mut udfs = InlineUdfs::execution(entry.python());
-    let (translated, cached) =
-        translate_locals(entry, Input::Plan(plan), decompressed.as_deref(), &mut udfs).await?;
+    let (translated, cached) = translate_locals(
+        entry,
+        Input::Plan(plan),
+        decompressed.as_deref(),
+        &mut udfs,
+        helper_options,
+    )
+    .await?;
     match translated {
         Translated::Relation(logical) => {
             if udfs.seen() {
@@ -836,8 +860,14 @@ pub(crate) async fn request_plan(
     let decompressed = decompressed(plan, limits).await?;
     // Inline Python UDFs are typed, never registered: analysis runs no client code.
     let mut udfs = InlineUdfs::analysis(entry.python());
-    let (translated, cached) =
-        translate_locals(entry, Input::Plan(plan), decompressed.as_deref(), &mut udfs).await?;
+    let (translated, cached) = translate_locals(
+        entry,
+        Input::Plan(plan),
+        decompressed.as_deref(),
+        &mut udfs,
+        &QueryOptions::default(),
+    )
+    .await?;
     match translated {
         Translated::Relation(logical) => Requested::bind(entry, logical, &cached),
         // A command's ADR 0046 §3b class is checked before it is refused, on every RPC that
@@ -859,8 +889,14 @@ pub(crate) async fn request_relation(
     relation: &pb::Relation,
 ) -> Result<Requested, KrishivError> {
     let mut udfs = InlineUdfs::analysis(entry.python());
-    let (translated, cached) =
-        translate_locals(entry, Input::Relation(relation), None, &mut udfs).await?;
+    let (translated, cached) = translate_locals(
+        entry,
+        Input::Relation(relation),
+        None,
+        &mut udfs,
+        &QueryOptions::default(),
+    )
+    .await?;
     match translated {
         Translated::Relation(logical) => Requested::bind(entry, logical, &cached),
         Translated::Command(_) => Err(krishiv_common::error::InternalError {
@@ -917,14 +953,53 @@ async fn decompressed(
     })
 }
 
+/// Runs `f` on a big-stack thread (a deeply nested proto is built, encoded or dropped there).
+///
+/// # Errors
+/// `INTERNAL_ERROR` when the thread cannot be started.
+fn deep<R: Send>(f: impl FnOnce() -> R + Send) -> Result<R, KrishivError> {
+    krishiv_common::stack::on_big_stack(f).ok_or_else(|| {
+        krishiv_common::error::InternalError {
+            message: "cannot start a thread for a deeply nested plan".to_owned(),
+        }
+        .into()
+    })
+}
+
+/// The values of the pivots collected so far, by the encoded pivot input and column: a chain of
+/// pivots without values asks each once, not once per enclosing pivot.
+type PivotMemo = std::collections::HashMap<Vec<u8>, Vec<krishiv_plan::Literal>>;
+
 /// The plan translated, with its local relations (`createDataFrame`) built by an async pre-pass, as
 /// the translator is synchronous: a first translation records what the plan needs, the relations are
-/// built, and a second translation uses them. A plan without any is translated once.
+/// built, and a second translation uses them. A plan without any is translated once. `options` are
+/// the request's: a pivot's values query runs with them (its credential, tags and trace).
 async fn translate_locals(
     entry: &SessionEntry,
     plan: Input<'_>,
     decompressed: Option<&[u8]>,
-    udfs: &mut dyn TranslateHost,
+    udfs: &mut InlineUdfs<'_>,
+    options: &QueryOptions,
+) -> Result<(Translated, Vec<String>), KrishivError> {
+    translate_locals_memo(
+        entry,
+        plan,
+        decompressed,
+        udfs,
+        options,
+        &mut PivotMemo::new(),
+    )
+    .await
+}
+
+/// [`translate_locals`] sharing the pivot values found so far.
+async fn translate_locals_memo(
+    entry: &SessionEntry,
+    plan: Input<'_>,
+    decompressed: Option<&[u8]>,
+    udfs: &mut InlineUdfs<'_>,
+    options: &QueryOptions,
+    memo: &mut PivotMemo,
 ) -> Result<(Translated, Vec<String>), KrishivError> {
     let translate = translate_conf(entry.session());
     let cached = translate.cached_remote.clone();
@@ -955,9 +1030,9 @@ async fn translate_locals(
     let mut built = Vec::with_capacity(requests.len());
     for request in requests {
         built.push(match request {
-            LocalRequest::PivotValues { input, column } => {
-                Built::PivotValues(pivot_values::collect(entry, &input, &column, udfs).await?)
-            }
+            LocalRequest::PivotValues { input, column } => Built::PivotValues(
+                pivot_values::collect(entry, &input, &column, udfs, options, memo).await?,
+            ),
             request => Built::Relation(build_local_relation(entry, request).await?),
         });
     }
@@ -970,20 +1045,32 @@ async fn translate_locals(
 }
 
 /// [`translate_locals`] for a relation the host synthesizes (a pivot's values query), as a
-/// bound plan. Boxed: the pre-pass recurses through the pivot's own input.
+/// bound plan. Boxed: the pre-pass recurses through the pivot's own input. The query's own
+/// Python UDFs are checked (`Usage` on `System("udf")`) and registered before it is bound: it
+/// runs now, not after the request's plan is translated.
 ///
 /// # Errors
-/// The translation errors, and `CONNECT_INVALID_PLAN.DATAFRAME_NOT_FOUND`.
+/// The translation errors, `CONNECT_INVALID_PLAN.DATAFRAME_NOT_FOUND`, and the UDF privilege
+/// refusal.
 fn request_translated<'a>(
     entry: &'a SessionEntry,
     input: Input<'a>,
-    udfs: &'a mut dyn TranslateHost,
+    udfs: &'a mut InlineUdfs<'_>,
+    options: &'a QueryOptions,
+    memo: &'a mut PivotMemo,
 ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Requested, KrishivError>> + Send + 'a>>
 {
     Box::pin(async move {
-        let (translated, cached) = translate_locals(entry, input, None, udfs).await?;
+        let (translated, cached) =
+            translate_locals_memo(entry, input, None, udfs, options, memo).await?;
         match translated {
-            Translated::Relation(logical) => Requested::bind(entry, logical, &cached),
+            Translated::Relation(logical) => {
+                if udfs.has_pending() {
+                    crate::auth::enforce(&crate::auth::client_code(), entry.session()).await?;
+                    udfs.register_pending(entry.session())?;
+                }
+                Requested::bind(entry, logical, &cached)
+            }
             Translated::Command(_) => Err(krishiv_common::error::InternalError {
                 message: "a relation translated to a command".to_owned(),
             }

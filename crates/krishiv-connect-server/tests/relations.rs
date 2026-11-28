@@ -951,22 +951,28 @@ async fn the_too_many_values_error_prints_a_non_attribute_pivot_column_as_spark_
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_pivot_without_values_over_a_binary_column_runs() {
     let server = start().await;
-    let input = relation(RelType::Sql(pb::Sql {
-        query: "SELECT * FROM VALUES (1, X'01', 5), (2, X'02', 6) AS t(id, a, b)".to_owned(),
-        ..Default::default()
-    }));
-    let got = run(&server, pivot_without_values_over(input, attr("a")))
-        .await
-        .expect("runs");
-    assert_eq!(got.len(), 2, "{got:?}");
-    // Two value columns besides the key.
+    // Spark 4.2: a binary value names its column by its cast to a string (`\u{1}`, `\u{2}`), and
+    // sum(b) lands under the id's own value.
     let batches = run_batches(
         &server,
         pivot_without_values_over(binary_input(), attr("a")),
     )
     .await
     .expect("runs");
-    assert_eq!(batches[0].num_columns(), 3);
+    let names: Vec<String> = batches[0]
+        .schema()
+        .fields()
+        .iter()
+        .map(|f| f.name().clone())
+        .collect();
+    assert_eq!(names, ["id", "\u{1}", "\u{2}"]);
+    let got = run(
+        &server,
+        pivot_without_values_over(binary_input(), attr("a")),
+    )
+    .await
+    .expect("runs");
+    assert_eq!(got, strings(&[&["1", "5", "NULL"], &["2", "NULL", "6"]]));
 }
 
 fn binary_input() -> pb::Relation {

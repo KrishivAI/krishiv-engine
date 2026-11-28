@@ -18,5 +18,6 @@ pub mod coverage;
 pub mod extension;
 pub mod proto;
 mod stack;
+pub use stack::Deep;
 pub mod translate;
 pub mod wire;

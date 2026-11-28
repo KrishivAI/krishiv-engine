@@ -101,25 +101,25 @@ pub fn grouped_pivot(
         ));
     }
     let fold = |n: String| if case_sensitive { n } else { n.to_lowercase() };
-    let read_names: Vec<String> = read.iter().filter_map(output_name).map(fold).collect();
+    let read_folded: Vec<Option<String>> = read.iter().map(|r| output_name(r).map(fold)).collect();
+    let read_names: Vec<String> = read_folded.iter().flatten().cloned().collect();
     if read_names.contains(&fold(PIVOT_COPY.to_owned())) {
         return Err(refuse(
             "a pivot aggregate that reads a column named like the internal pivot copy",
         ));
     }
     // Two references of one name from different DataFrames (a cross join's `left["v"]`, `right["v"]`)
-    // cannot both survive a narrowing that keeps one column of each name.
+    // cannot both survive a narrowing that keeps one column of each name. Each name is folded once
+    // and its first source remembered, so the check is linear in the references.
     let source = |r: &Expr| match &r.node {
         ExprNode::Column(c) => c.plan_id.map(|id| id.0),
         _ => None,
     };
-    for (i, a) in read.iter().enumerate() {
-        let same_name = |b: &&Expr| output_name(b).map(fold) == output_name(a).map(fold);
-        if read[..i]
-            .iter()
-            .filter(same_name)
-            .any(|b| source(b) != source(a))
-        {
+    let mut first_source: std::collections::HashMap<&str, Option<i64>> =
+        std::collections::HashMap::new();
+    for (r, name) in read.iter().zip(&read_folded) {
+        let Some(name) = name else { continue };
+        if *first_source.entry(name).or_insert_with(|| source(r)) != source(r) {
             return Err(refuse(
                 "a pivot aggregate that reads same-named columns of different DataFrames",
             ));
@@ -139,22 +139,42 @@ pub fn grouped_pivot(
             "a pivot aggregate that reads a grouping column beside an unnamed grouping expression",
         ));
     }
-    let value_text: Vec<String> = values
-        .iter()
-        .filter_map(|v| match v.exprs.first().map(|e| &e.node) {
-            Some(ExprNode::Literal(Literal::String(t))) => Some(fold(t.clone())),
-            _ => None,
+    // The internal copies must not share a name with a column the projection retains.
+    let key_names: Vec<String> = names.iter().flatten().cloned().map(fold).collect();
+    if key_names.contains(&fold(PIVOT_COPY.to_owned()))
+        || (0..keys.len()).any(|i| {
+            let c = fold(format!("__krishiv_key_{i}"));
+            key_names.contains(&c) || read_names.contains(&c)
         })
-        .collect();
-    if names.iter().zip(&clash).any(|(n, c)| {
-        *c && n
-            .as_ref()
-            .is_some_and(|n| value_text.contains(&fold(n.clone())))
-    }) {
-        // The restored key `h` would sit beside a pivot output named `h`, and a bare lookup of it is ambiguous.
+    {
         return Err(refuse(
-            "a pivot value named like a grouping column an aggregate also reads",
+            "a grouping column named like an internal pivot copy (`__krishiv_pivot`, `__krishiv_key_N`)",
         ));
+    }
+    if any_clash {
+        // The keys are restored by name above the pivot, so no pivot output may carry a key's name.
+        // Spark names an output by the value's text, then `_` and the aggregate's name when there
+        // are several aggregates (`PivotTransformer.outputName`).
+        let agg_names: Vec<Option<String>> = aggregates.iter().map(|a| output_name(a)).collect();
+        let collides = values.iter().any(|v| {
+            let Some(ExprNode::Literal(Literal::String(t))) = v.exprs.first().map(|e| &e.node)
+            else {
+                return false;
+            };
+            if aggregates.len() == 1 {
+                key_names.contains(&fold(t.clone()))
+            } else {
+                agg_names
+                    .iter()
+                    .flatten()
+                    .any(|n| key_names.contains(&fold(format!("{t}_{n}"))))
+            }
+        });
+        if collides {
+            return Err(refuse(
+                "a pivot output named like a grouping column that is restored by name",
+            ));
+        }
     }
     let copy = |i: usize| format!("__krishiv_key_{i}");
     let mut kept: Vec<Arc<Expr>> = Vec::new();
@@ -170,13 +190,10 @@ pub fn grouped_pivot(
         }
     }
     kept.push(Arc::new(column.clone().alias(PIVOT_COPY)));
-    let mut seen: Vec<String> = Vec::new();
-    for r in read {
-        let Some(name) = output_name(&r).map(fold) else {
-            continue;
-        };
-        if !seen.contains(&name) {
-            seen.push(name);
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for (r, name) in read.into_iter().zip(read_folded) {
+        let Some(name) = name else { continue };
+        if seen.insert(name) {
             kept.push(Arc::new(r));
         }
     }
@@ -379,5 +396,38 @@ mod tests {
         let aliased = col("k").alias("kk");
         let node = build(&[aliased], vec![text("a")], vec![col("kk")]).expect("builds");
         assert!(matches!(node, PlanNode::Project { .. }));
+    }
+
+    #[test]
+    fn a_value_named_like_a_restored_key_is_refused_for_one_aggregate() {
+        // keys k, a; `sum(k)` reads key k, so keys are restored by name; value "a" is a key's name.
+        refused(
+            build(&[col("k"), col("a")], vec![text("a")], vec![col("k")]),
+            "named like a grouping column",
+        );
+    }
+
+    #[test]
+    fn several_aggregates_name_outputs_by_value_and_aggregate() {
+        let named_agg = |n: &str, c: &str| col(c).alias(n);
+        // Spark names the outputs `k_total` and `k_n`: neither is the key `k`, so it builds.
+        let r = build(
+            &[col("k")],
+            vec![text("k")],
+            vec![named_agg("total", "k"), named_agg("n", "v")],
+        );
+        assert!(r.is_ok(), "{r:?}");
+    }
+
+    #[test]
+    fn a_grouping_column_named_like_an_internal_copy_is_refused() {
+        refused(
+            build(&[col("__krishiv_pivot")], vec![text("a")], vec![col("v")]),
+            "internal pivot copy",
+        );
+        refused(
+            build(&[col("__krishiv_key_0")], vec![text("a")], vec![col("v")]),
+            "internal pivot copy",
+        );
     }
 }

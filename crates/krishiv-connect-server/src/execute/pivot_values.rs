@@ -13,16 +13,20 @@ use arrow_array::types::{
 use arrow_array::{Array, RecordBatch};
 use arrow_schema::{DataType, TimeUnit};
 use krishiv_common::error::{KrishivError, KrishivUnsupportedFeature, LegacyErrorTemp1324};
+use krishiv_connect::Deep;
 use krishiv_connect::proto::v4_3 as pb;
 use krishiv_connect::proto::v4_3::expression::{self, ExprType};
 use krishiv_connect::proto::v4_3::relation::RelType;
-use krishiv_connect::translate::{UdfHost as TranslateHost, translate_expression};
+use krishiv_connect::translate::translate_expression;
 use krishiv_plan::Literal;
 use krishiv_session::QueryOptions;
 use krishiv_types::DataType as SparkType;
 
-use super::{Input, request_translated};
+use prost::Message;
+
+use super::{Input, PivotMemo, request_translated};
 use crate::manager::SessionEntry;
+use crate::udf::InlineUdfs;
 
 /// Spark's default `spark.sql.pivotMaxValues`.
 const DEFAULT_MAX_VALUES: i32 = 10_000;
@@ -92,16 +96,28 @@ fn column_text(entry: &SessionEntry, column: &pb::Expression) -> String {
         .map_or_else(|_| "<expression>".to_owned(), |e| e.to_string())
 }
 
-/// The sorted distinct values of `column` over `input`.
+fn gone() -> KrishivError {
+    krishiv_common::error::InternalError {
+        message: "a pivot request lost its input".to_owned(),
+    }
+    .into()
+}
+
+/// The sorted distinct values of `column` over `input`. The values query is built, held and
+/// dropped on big-stack threads ([`Deep`]): the pivot's input may be nested deeper than an async
+/// worker's stack. Values already found for the same input and column (a pivot nested in this
+/// one's input asked first) are reused through `memo`. `options` are the request's.
 ///
 /// # Errors
 /// The errors of translating and running the query; `_LEGACY_ERROR_TEMP_1324` past the limit;
 /// `KRISHIV_UNSUPPORTED_FEATURE` for a value type with no literal.
 pub(super) async fn collect(
     entry: &SessionEntry,
-    input: &pb::Relation,
-    column: &pb::Expression,
-    udfs: &mut dyn TranslateHost,
+    input: &Deep<pb::Relation>,
+    column: &Deep<pb::Expression>,
+    udfs: &mut InlineUdfs<'_>,
+    options: &QueryOptions,
+    memo: &mut PivotMemo,
 ) -> Result<Vec<Literal>, KrishivError> {
     let max = match entry.session().conf().get("spark.sql.pivotMaxValues") {
         None => DEFAULT_MAX_VALUES,
@@ -112,11 +128,30 @@ pub(super) async fn collect(
                 feature: format!("spark.sql.pivotMaxValues = {v:?}, which is not an integer"),
             })?,
     };
-    let query = values_query(input, column, max);
-    let requested = request_translated(entry, Input::Relation(&query), udfs).await?;
-    let frame = requested
-        .frame(entry.session(), QueryOptions::default())
-        .await?;
+    let (input_ref, column_ref) = (
+        input.get().ok_or_else(gone)?,
+        column.get().ok_or_else(gone)?,
+    );
+    let key = crate::execute::deep(|| {
+        let mut key = input_ref.encode_to_vec();
+        key.extend(column_ref.encode_to_vec());
+        key.extend(max.to_le_bytes());
+        key
+    })?;
+    if let Some(values) = memo.get(&key) {
+        return Ok(values.clone());
+    }
+    let query = crate::execute::deep(|| Deep::new(values_query(input_ref, column_ref, max)))?;
+    let requested = request_translated(
+        entry,
+        Input::Relation(query.get().ok_or_else(gone)?),
+        udfs,
+        options,
+        memo,
+    )
+    .await?;
+    drop(query);
+    let frame = requested.frame(entry.session(), options.clone()).await?;
     let batches = frame.collect().await?;
     let mut values = Vec::new();
     for batch in &batches {
@@ -124,12 +159,13 @@ pub(super) async fn collect(
     }
     if i64::try_from(values.len()).unwrap_or(i64::MAX) > i64::from(max) {
         return Err(LegacyErrorTemp1324 {
-            pivot_column: column_text(entry, column),
+            pivot_column: column_text(entry, column_ref),
             max_values: max.to_string(),
             config: "spark.sql.pivotMaxValues".to_owned(),
         }
         .into());
     }
+    memo.insert(key, values.clone());
     Ok(values)
 }
 

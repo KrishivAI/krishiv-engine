@@ -20,7 +20,7 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 | 6 | set_op | done |  | SetOp / Union (by name, allow missing) / Distinct | P3-T012 | 1 |
 | 7 | sort | done |  | Sort | P2-T091a | 0 |
 | 8 | limit | done |  | Limit | P2-T091a | 0 |
-| 9 | aggregate | partial | a pivot without values over array, map, struct, interval, time, variant or geo values (Spark takes any type) | Aggregate; a pivot without values asks the host for them (`LocalRequest::PivotValues`: Spark's `collectPivotValues`, `execute/pivot_values.rs`); pivot → Project (grouping keys, the pivot column's copy, the columns the aggregates read) under Pivot (krishiv_plan::grouped_pivot, as the DataFrame API) | P3-T012 | 2 |
+| 9 | aggregate | partial | a pivot without values over array, struct, interval, time, variant, geo or map values (Spark needs an orderable type, so it refuses map, variant and geo itself; the host has no literal for the rest yet) | Aggregate; a pivot without values asks the host for them (`LocalRequest::PivotValues`: Spark's `collectPivotValues`, `execute/pivot_values.rs`); pivot → Project (grouping keys, the pivot column's copy, the columns the aggregates read) under Pivot (krishiv_plan::grouped_pivot, as the DataFrame API) | P3-T012 | 2 |
 | 10 | sql | partial | DataFrame arguments (with_relations) | Sql; the with_relations form (#41) for DataFrame arguments | P3-T012 | 4 |
 | 11 | local_relation | done |  | Read(ReadSource::Local) from the Arrow IPC data plus the DDL or JSON schema (createDataFrame), built by the host before translation (TranslateConf::local_relations); no data and no schema is SCHEMA_REQUIRED_FOR_LOCAL_RELATION; the inline size is bounded by the gRPC message limit | P3-T012a | 1 |
 | 12 | sample | partial | with_replacement (Poisson) and deterministic_order (randomSplit) | Sample (Bernoulli, seed or one drawn per plan, Spark's XORShiftRandom order); Poisson needs a new IR field; deterministic_order needs the per-partition sort | P3-T012 | 3 |
@@ -91,7 +91,7 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 | 7 | cast | done |  | Cast | P2-T091a | 0 |
 | 8 | unresolved_regex | missing |  | Star { regex } (the field exists) | P3-T012 | 2 |
 | 9 | sort_order | missing |  | SortOrder, only inside Sort and Window | P3-T012 | 2 |
-| 10 | lambda_function | partial | a parameter with a qualified name | Lambda (the analyzer binds it as the argument of a higher-order function) | P3-T012 | 2 |
+| 10 | lambda_function | partial | a parameter with a qualified name; a body that reads a column named like a parameter through an attribute reads the parameter (the IR has no separate lambda-variable reference) | Lambda (the analyzer binds it as the argument of a higher-order function) | P3-T012 | 2 |
 | 11 | window | done |  | ExprNode::Window | P3-T012 | 0 |
 | 12 | unresolved_extract_value | missing |  | Field | P3-T012 | 2 |
 | 13 | update_fields | missing |  | UpdateFields | P3-T012 | 2 |

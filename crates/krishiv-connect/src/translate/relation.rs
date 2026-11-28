@@ -1013,8 +1013,8 @@ impl Translator<'_> {
             self.locals += 1;
             let request = || {
                 Ok(super::LocalRequest::PivotValues {
-                    input: Box::new(input.clone()),
-                    column: Box::new(col.clone()),
+                    input: crate::Deep::new(input.clone()),
+                    column: crate::Deep::new(col.clone()),
                 })
             };
             self.conf

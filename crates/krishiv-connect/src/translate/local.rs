@@ -45,9 +45,9 @@ pub enum LocalRequest {
     PivotValues {
         /// The pivot's input relation, as the client sent it (it may hold local relations or UDFs
         /// of its own: the host runs it through the whole pass).
-        input: Box<pb::Relation>,
+        input: crate::Deep<pb::Relation>,
         /// The pivot column.
-        column: Box<pb::Expression>,
+        column: crate::Deep<pb::Expression>,
     },
 }
 

@@ -882,6 +882,23 @@ fn a_pivot_narrows_its_input_to_the_keys_the_pivot_column_and_what_the_aggregate
         "{shown}"
     );
     assert!(shown.ends_with("+- Read t\n"), "{shown}");
+    // The explicit values stay, in order (not [2, 1], not dropped).
+    let PlanNode::Pivot { values, .. } = node(&pivot_of(vec![
+        lit(LiteralType::Integer(1)),
+        lit(LiteralType::Integer(2)),
+    ])) else {
+        panic!("not a pivot")
+    };
+    let kept: Vec<String> = values
+        .iter()
+        .map(|v| {
+            format!(
+                "{:?}",
+                v.exprs.iter().map(ToString::to_string).collect::<Vec<_>>()
+            )
+        })
+        .collect();
+    assert_eq!(kept, [r#"["1"]"#, r#"["2"]"#]);
 }
 
 #[test]

@@ -662,12 +662,34 @@ impl<'a> InlineUdfs<'a> {
     ///
     /// # Errors
     /// [`SessionPython::grant`]'s.
-    pub(crate) fn grant(self, session: &Session) -> Result<(), KrishivError> {
+    pub(crate) fn grant(mut self, session: &Session) -> Result<(), KrishivError> {
         if !self.seen || self.analysis {
             return Ok(());
         }
+        self.install(session)
+    }
+
+    /// Whether the plan holds UDFs new to the session that a run needs registered (never in an
+    /// analysis).
+    pub(crate) fn has_pending(&self) -> bool {
+        !self.analysis && !self.pending.is_empty()
+    }
+
+    /// [`Self::grant`] for a query that runs before the plan is finished (a pivot's values): the
+    /// UDFs new so far are registered and no longer pending. Call only after the privilege check.
+    ///
+    /// # Errors
+    /// [`SessionPython::grant`]'s.
+    pub(crate) fn register_pending(&mut self, session: &Session) -> Result<(), KrishivError> {
+        if self.analysis || self.pending.is_empty() {
+            return Ok(());
+        }
+        self.install(session)
+    }
+
+    fn install(&mut self, session: &Session) -> Result<(), KrishivError> {
         let runtime = self.udfs.grant(session)?;
-        for (digest, version, udf) in self.pending {
+        for (digest, version, udf) in std::mem::take(&mut self.pending) {
             runtime.register(&udf.name, version, &udf);
             let mut state = self.udfs.lock();
             state.anonymous.insert(digest, version);
