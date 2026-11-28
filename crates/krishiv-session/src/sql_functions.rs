@@ -11,7 +11,7 @@
 //! [`FunctionRegistry::version`], so a cached resolved plan keyed by the
 //! analysis context's fingerprint never outlives the function it inlined.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{Arc, Mutex, PoisonError, RwLock};
 
 use krishiv_common::redact::RedactedSql;
@@ -98,15 +98,35 @@ impl Described {
 }
 
 /// Whether the body of `def` calls no nondeterministic function (Spark: the analyzed body's
-/// `deterministic`), for `DESCRIBE FUNCTION` of a function that declares neither.
+/// `deterministic`), for `DESCRIBE FUNCTION` of a function that declares neither. A call of a SQL
+/// function is nondeterministic when that function is declared `NOT DETERMINISTIC` or its own body is
+/// (Spark's `SQLScalarFunction.deterministic` is the declaration and its children, the inlined body
+/// among them), so the walk goes into the bodies of the SQL functions the body calls, scalar and table.
 pub(crate) fn body_deterministic(
     registry: &dyn FunctionRegistry,
     profile: SparkProfile,
     def: &SqlFunction,
 ) -> bool {
-    !any_call(vec![&*def.body], |name: &[String]| {
+    let mut seen = BTreeSet::new();
+    seen.insert(def.name.clone());
+    !body_calls_nondeterministic(registry, profile, def, &mut seen)
+}
+
+/// [`body_deterministic`]'s walk. `seen` holds the SQL functions already on the walk, so a cycle
+/// (Spark refuses one at creation; `CREATE OR REPLACE` could still close one here) ends.
+fn body_calls_nondeterministic(
+    registry: &dyn FunctionRegistry,
+    profile: SparkProfile,
+    def: &SqlFunction,
+    seen: &mut BTreeSet<String>,
+) -> bool {
+    any_call(vec![&*def.body], |name: &[String]| {
         match registry.lookup(name, profile) {
-            FunctionLookup::Sql(d) => !d.deterministic,
+            FunctionLookup::Sql(d) => {
+                !d.deterministic
+                    || (seen.insert(d.name.clone())
+                        && body_calls_nondeterministic(registry, profile, &d, seen))
+            }
             _ => name
                 .last()
                 .is_some_and(|n| registry.spark_deterministic(n) == Some(false)),
@@ -115,7 +135,7 @@ pub(crate) fn body_deterministic(
 }
 
 /// Keys Spark's `CapturesConfig` never captures (`configPrefixDenyList`, 4.3.0).
-const UNCAPTURED: [&str; 13] = [
+const UNCAPTURED: [&str; 12] = [
     "spark.sql.view.maxNestedViewDepth",
     "spark.sql.optimizer.",
     "spark.sql.codegen.",
@@ -128,12 +148,25 @@ const UNCAPTURED: [&str; 13] = [
     "spark.sql.hive.convertInsertingUnpartitionedTable",
     "spark.sql.hive.convertMetastoreCtas",
     "spark.sql.additionalRemoteRepositories",
-    "spark.sql.analyzer.singlePassResolver.",
+];
+
+/// Keys Spark's `CapturesConfig` never captures by exact name (`singlePassResolverDenyList`, 4.3.0); the
+/// other `spark.sql.analyzer.singlePassResolver.*` keys are captured.
+const UNCAPTURED_EXACT: [&str; 2] = [
+    "spark.sql.analyzer.singlePassResolver.enabledTentatively",
+    "spark.sql.analyzer.singlePassResolver.dualRunWithLegacy",
 ];
 
 /// The configuration a function created now captures (Spark's `sqlConfigsToProps`): the set
-/// `spark.sql.*` keys outside [`UNCAPTURED`] (`spark.sql.optimizer.disableHints` is kept), then the
-/// time zone and ANSI mode when not set; sorted by key. Values show as `SET` shows them.
+/// `spark.sql.*` keys that are not static outside
+/// [`UNCAPTURED`] and [`UNCAPTURED_EXACT`] (`spark.sql.optimizer.disableHints` is kept), then the time
+/// zone and ANSI mode when not set; sorted by key. Values show as `SET` shows them, redacted where it
+/// redacts: Spark prints the raw captured value, and Krishiv hides a secret-like one on purpose.
+///
+/// Spark captures only keys `SQLConf.isModifiable` accepts, so not a key no SQL entry registers
+/// (`spark.sql.my.flag`, a catalog declaration). Krishiv honours Spark keys it does not register
+/// (`spark.sql.caseSensitive`), so its registry cannot tell them apart.
+// TODO(R1-D-9 follow-up, front-1 queue): use the generated Spark entry table of #1080 (`spark_default`) here.
 pub(crate) fn captured_configs(conf: &crate::conf::ConfStore) -> Vec<(String, String)> {
     const ALWAYS: [&str; 2] = ["spark.sql.session.timeZone", "spark.sql.ansi.enabled"];
     let mut out: BTreeMap<String, String> = conf
@@ -142,6 +175,7 @@ pub(crate) fn captured_configs(conf: &crate::conf::ConfStore) -> Vec<(String, St
         .filter(|(k, _)| {
             k.starts_with("spark.sql.")
                 && crate::conf::is_modifiable(k)
+                && !UNCAPTURED_EXACT.contains(&k.as_str())
                 && (k == "spark.sql.optimizer.disableHints"
                     || !UNCAPTURED.iter().any(|d| k.starts_with(d)))
         })

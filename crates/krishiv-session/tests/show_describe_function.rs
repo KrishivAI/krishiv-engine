@@ -177,7 +177,8 @@ fn extended(s: &Session, sql: &str) -> R<Vec<String>> {
     let mut out = rows(s, sql)?;
     for r in &mut out {
         if let Some(t) = r.strip_prefix("Create Time:   ") {
-            // `Fri Nov 27 21:03:05 UTC 2026`, as Java's `Date.toString` in UTC.
+            // `Fri Nov 27 21:03:05 UTC 2026`, as Java's `Date.toString` in UTC. Spark prints it in the JVM's
+            // default zone; Krishiv prints UTC by design, as its other creation times do.
             assert_eq!(t.len(), 28, "{t}");
             assert!(t.contains(" UTC "), "{t}");
             *r = "Create Time:   <time>".to_owned();
@@ -286,6 +287,35 @@ fn describe_function_of_a_sql_function_prints_spark_s_rows() -> R {
         assert_eq!(got[4], format!("Deterministic: {deterministic}"), "{sql}");
         assert_eq!(got[5], format!("Data Access:   {access}"), "{sql}");
     }
+    // A call of a SQL function whose body is nondeterministic is nondeterministic, even when the callee
+    // is declared DETERMINISTIC (Spark's `SQLScalarFunction.deterministic` includes the inlined body);
+    // the same through a SQL table function read in a subquery.
+    for sql in [
+        "create temporary function g1() returns double return rand()",
+        "create temporary function f1() returns double return g1()",
+        "create temporary function g2() returns double deterministic return rand()",
+        "create temporary function f2() returns double return g2()",
+        "create temporary function t1() returns table (x double) return select rand() as x",
+        "create temporary function f3() returns double return (select max(x) from t1())",
+    ] {
+        block_on(block_on(s.sql(sql))?.collect())?;
+    }
+    for (name, deterministic) in [
+        ("g1", "false"),
+        ("f1", "false"),
+        ("g2", "true"),
+        ("f2", "false"),
+        ("t1", "false"),
+        ("f3", "false"),
+    ] {
+        let got = extended(&s, &format!("describe function extended {name}"))?;
+        let row = got.iter().find(|r| r.starts_with("Deterministic:"));
+        assert_eq!(
+            row.map(String::as_str),
+            Some(format!("Deterministic: {deterministic}").as_str()),
+            "{name}"
+        );
+    }
     block_on(block_on(s.sql("create temporary view v9 as select 1 as k"))?.collect())?;
     block_on(
         block_on(s.sql("create temporary function rv() return (select max(k) from v9)"))?.collect(),
@@ -314,6 +344,27 @@ fn describe_function_of_a_sql_function_prints_spark_s_rows() -> R {
         ]
     );
     assert_eq!(got[9], "Create Time:   <time>");
+    // Spark's deny list names two single-pass resolver keys exactly; the others are captured.
+    s.conf().set(
+        "spark.sql.analyzer.singlePassResolver.dualRunWithLegacy",
+        "false",
+    )?;
+    s.conf().set(
+        "spark.sql.analyzer.singlePassResolver.returnSinglePassResultInDualRun",
+        "false",
+    )?;
+    block_on(block_on(s.sql("create temporary function k2() returns int return 1"))?.collect())?;
+    let got = extended(&s, "describe function extended k2")?;
+    assert_eq!(
+        got[6..10],
+        [
+            "Configs:       spark.sql.analyzer.singlePassResolver.returnSinglePassResultInDualRun=false",
+            "               spark.sql.ansi.enabled=true",
+            "               spark.sql.caseSensitive=true",
+            "               spark.sql.session.timeZone=Etc/UTC",
+        ]
+    );
+    assert_eq!(got[10], "Create Time:   <time>");
     Ok(())
 }
 
