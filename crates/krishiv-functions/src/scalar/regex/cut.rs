@@ -62,7 +62,8 @@ const PROBE: u32 = 256;
 /// The cut is dropped when more than one in this many searches of a window fell back. Half
 /// is where the cut stops paying: a search that falls back costs 1.5 to 1.9 times the
 /// engine's, one the cut answers about a third. A lower share drops a paying cut on a run of
-/// rows that fall back (a quarter cost `regexp_replace` on ClickBench's referers 9%).
+/// rows that fall back: a quarter cost ClickBench q29 7%, and `regexp_replace` over its `Referer`
+/// column 9%.
 const FALLBACK_SHARE: u32 = 2;
 
 /// Searches the engine answers after the probe dropped the cut, before it is probed again.
