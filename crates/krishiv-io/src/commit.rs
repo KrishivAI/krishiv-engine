@@ -295,6 +295,12 @@ impl DirectoryWrite {
                 visible.iter().map(String::as_str).collect();
             for meta in io.list(&self.store, &self.dir).await? {
                 let rel = self.relative(&meta.location);
+                if self.overwrite && !self.dynamic && rel != SUCCESS_MARKER && is_old_hidden(&rel) {
+                    // Spark's static overwrite empties the directory: checksum files, `_`-prefixed
+                    // markers and hidden directories of the old output go with it (QA2-24).
+                    stale.push(meta.location);
+                    continue;
+                }
                 if rel.is_empty() || rel.split('/').any(is_hidden) || seen.contains(rel.as_str()) {
                     continue;
                 }
@@ -805,6 +811,12 @@ fn is_hidden(name: &str) -> bool {
         || (name.starts_with('_') && !name.contains('='))
         || name.ends_with("._COPYING_");
     exclude && !(name.starts_with("_common_metadata") || name.starts_with("_metadata"))
+}
+
+/// Whether the relative path is a hidden file of the old output a static overwrite removes: some
+/// component is hidden, and it is not the commit log's own (`_krishiv_log/`).
+fn is_old_hidden(rel: &str) -> bool {
+    !rel.is_empty() && rel.split('/').next() != Some(LOG_DIR) && rel.split('/').any(is_hidden)
 }
 
 /// The `name=value` directories of the relative file path `rel`.

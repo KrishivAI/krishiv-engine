@@ -1739,6 +1739,34 @@ fn a_logged_overwrite_sweeps_unlogged_files_of_a_killed_write_and_the_old_marker
     );
 }
 
+/// QA2-24: a static overwrite empties the directory as Spark's does: checksum files, `_` markers and hidden
+/// directories of the old output go with it, the commit log stays, and a dynamic overwrite keeps them.
+#[test]
+fn a_static_logged_overwrite_removes_the_hidden_files_of_the_old_output() {
+    let env = Env::memory();
+    env.write_logged("t", SaveMode::Append, "job-1", 4, true);
+    for f in [
+        "t/.part-old.parquet.crc",
+        "t/_old_marker",
+        "t/.old_dir/x.txt",
+    ] {
+        env.put(f);
+    }
+    env.write_logged("t", SaveMode::Overwrite, "job-2", 2, true);
+    let names = env.names("t");
+    assert!(
+        !names
+            .iter()
+            .any(|n| n.contains("crc") || n.contains("_old_marker") || n.contains(".old_dir")),
+        "{names:?}"
+    );
+    assert!(
+        names.iter().any(|n| n.contains("_krishiv_log")),
+        "{names:?}"
+    );
+    assert_eq!(env.visible("t").len(), 1);
+}
+
 /// A concurrent overwrite replaces only the files its base snapshot shows: the task files of an append that
 /// has not committed yet are never in it, so they survive (and the append can still commit).
 #[test]
