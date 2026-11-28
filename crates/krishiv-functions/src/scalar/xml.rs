@@ -1213,7 +1213,7 @@ fn bind_to_xml(args: &[BindArg], opts: &BindOptions) -> Result<Binding, KrishivE
             if legacy {
                 Ok(DateTimePattern::new_fast("yyyy-MM-dd'T'HH:mm:ss.SSSXXX"))
             } else {
-                default("yyyy-MM-dd'T'HH:mm:ss.SSSXXX")
+                default(opts.timestamp_write_default())
             }
         },
         Ok,

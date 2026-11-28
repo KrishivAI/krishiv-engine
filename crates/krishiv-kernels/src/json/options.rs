@@ -160,6 +160,35 @@ impl JsonOptions {
         options: &BTreeMap<String, String>,
         legacy: bool,
     ) -> Result<Self, KrishivError> {
+        Self::build(options, legacy, false)
+    }
+
+    /// [`Self::from_map_with`] for `to_json`: the patterns are compiled for
+    /// formatting only, as Spark's `JacksonGenerator` builds only formatters
+    /// (`EEE, d MMM yyyy` writes, though no parser takes it).
+    ///
+    /// # Errors
+    /// As [`Self::from_map`], for the formatting patterns.
+    pub fn from_map_for_write(
+        options: &BTreeMap<String, String>,
+        legacy: bool,
+    ) -> Result<Self, KrishivError> {
+        Self::build(options, legacy, true)
+    }
+
+    fn build(
+        options: &BTreeMap<String, String>,
+        legacy: bool,
+        writing: bool,
+    ) -> Result<Self, KrishivError> {
+        // A pattern compiled for parsing, or none for a write (never read).
+        let parse = |value: &str| -> Result<Option<DateTimePattern>, KrishivError> {
+            if writing {
+                Ok(None)
+            } else {
+                DateTimePattern::new(value, Purpose::Parse).map(Some)
+            }
+        };
         let mut out = Self::new();
         out.datetime_fallback = legacy;
         out.legacy_parser = legacy;
@@ -183,27 +212,23 @@ impl JsonOptions {
                     out.timestamp_output = Some(DateTimePattern::new_fast(value));
                 }
                 "dateformat" => {
-                    let pattern = DateTimePattern::new(value, Purpose::Parse)?;
-                    out.date_format = Some(pattern);
+                    out.date_format = parse(value)?;
                     out.date_output = Some(DateTimePattern::new(value, Purpose::Format)?);
                 }
                 "timeformat" => {
-                    let pattern = DateTimePattern::new(value, Purpose::Parse)?;
-                    out.time_format = Some(pattern);
+                    out.time_format = parse(value)?;
                     // `HH:mm:ss` writes through Spark's fraction formatter.
                     let output = DateTimePattern::new(value, Purpose::Format)?;
                     out.time_output = (!output.is_default_time_pattern()).then_some(output);
                 }
                 "timestampformat" => {
-                    let pattern = DateTimePattern::new(value, Purpose::Parse)?;
-                    out.timestamp_format = Some(pattern);
+                    out.timestamp_format = parse(value)?;
                     out.timestamp_output = Some(DateTimePattern::new(value, Purpose::Format)?);
                 }
                 // Spark builds the NTZ formatter with `forTimestampNTZ`, which
                 // never takes the legacy one, whatever the parser policy.
                 "timestampntzformat" => {
-                    let pattern = DateTimePattern::new(value, Purpose::Parse)?;
-                    out.timestamp_ntz_format = Some(pattern);
+                    out.timestamp_ntz_format = parse(value)?;
                     out.timestamp_ntz_output = Some(DateTimePattern::new(value, Purpose::Format)?);
                 }
                 "locale" => check_locale(value)?,

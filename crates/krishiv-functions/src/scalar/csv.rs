@@ -386,17 +386,47 @@ impl Parsed {
                 "timestampntzformat" => {
                     self.ntz_pattern = Some(datetime_option(v, func, "timestampNTZFormat")?);
                 }
+                // Scala's `toBoolean`: `true` or `false` in any case, else a
+                // plain `IllegalArgumentException` (no error class), under
+                // either policy.
                 "enabledatetimeparsingfallback" => {
-                    self.fallback = v.eq_ignore_ascii_case("true");
+                    self.fallback = match v.to_ascii_lowercase().as_str() {
+                        "true" => true,
+                        "false" => false,
+                        _ => {
+                            return Err(krishiv_common::error::KrishivInvalidFormatOptionValue {
+                                value: format!("'{v}'"),
+                                option: "\"enableDateTimeParsingFallback\"".to_owned(),
+                                format: "\"CSV\"".to_owned(),
+                                reason: "it is neither true nor false".to_owned(),
+                            }
+                            .into());
+                        }
+                    };
                     self.fallback_option = Some(self.fallback);
                 }
-                "preferdate" => self.prefer_date = v.eq_ignore_ascii_case("true"),
+                // `CSVOptions.getBool`: never read under LEGACY (always off),
+                // else `true` or `false` in any case or
+                // `_LEGACY_ERROR_TEMP_2147` (Spark 4.2.1 / 4.3.0 runs).
+                "preferdate" if !self.legacy => {
+                    self.prefer_date = match v.to_ascii_lowercase().as_str() {
+                        "true" => true,
+                        "false" => false,
+                        _ => {
+                            return Err(krishiv_common::error::LegacyErrorTemp2147 {
+                                param_name: "preferDate".to_owned(),
+                            }
+                            .into());
+                        }
+                    };
+                }
                 "timeformat" => {
                     self.time_pattern = Some(datetime_option(v, func, "timeFormat")?);
                 }
-                "header" => {
-                    // Ignored for `from_csv` (Spark ignores it); `to_csv`
-                    // never writes one. Any value goes.
+                "header" | "preferdate" => {
+                    // `header`: ignored for `from_csv` (Spark ignores it);
+                    // `to_csv` never writes one. `preferDate` under LEGACY:
+                    // never read. Any value goes.
                 }
                 "emptyvalue" => self.syntax.empty_value = v.clone(),
                 "ignoreleadingwhitespace" => {
@@ -593,6 +623,8 @@ fn bind_to_csv(args: &[BindArg], opts: &BindOptions) -> Result<Binding, KrishivE
         parsed.apply(&pairs, "to_csv")?;
     }
     let zone: Arc<dyn TimeZoneRules> = Arc::clone(&opts.time_zone);
+    // The session zone's id, for the `VV` and `z` pattern letters (as `to_xml`).
+    let zone_name: Arc<str> = Arc::clone(&opts.time_zone_name);
     let date_pattern = parsed.date_pattern.clone().or_else(|| {
         if opts.legacy_time_parser {
             Some(DateTimePattern::new_fast("yyyy-MM-dd"))
@@ -604,7 +636,7 @@ fn bind_to_csv(args: &[BindArg], opts: &BindOptions) -> Result<Binding, KrishivE
         if opts.legacy_time_parser {
             Some(DateTimePattern::new_fast("yyyy-MM-dd'T'HH:mm:ss.SSSXXX"))
         } else {
-            DateTimePattern::new("yyyy-MM-dd'T'HH:mm:ss.SSSXXX", Purpose::Format).ok()
+            DateTimePattern::new(opts.timestamp_write_default(), Purpose::Format).ok()
         }
     });
     // Spark's writer builds the timestamp formatter eagerly.
@@ -657,7 +689,7 @@ fn bind_to_csv(args: &[BindArg], opts: &BindOptions) -> Result<Binding, KrishivE
                 .format_timestamp(
                     m,
                     krishiv_kernels::datetime_pattern::Zone {
-                        id: "UTC",
+                        id: &zone_name,
                         rules: zone_ref,
                     },
                 )

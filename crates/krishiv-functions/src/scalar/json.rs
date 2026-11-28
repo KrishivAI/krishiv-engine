@@ -345,7 +345,14 @@ fn to(args: &[BindArg], opts: &BindOptions) -> Result<Binding, KrishivError> {
     ) {
         return Err(bad_types("to_json", args));
     }
-    let options = read_options(options, opts.legacy_time_parser)?;
+    let mut options = read_options_with(options, opts.legacy_time_parser, true)?;
+    if options.timestamp_output.is_none() {
+        // Unset outside LEGACY: the session's default (`commonTimestampFormat`).
+        options.timestamp_output = Some(krishiv_kernels::datetime_pattern::DateTimePattern::new(
+            opts.timestamp_write_default(),
+            krishiv_kernels::datetime_pattern::Purpose::Format,
+        )?);
+    }
     options.validate_for_write()?;
     let zone = Arc::clone(&opts.time_zone);
     Ok(Binding::new(ArrowDataType::Utf8, move |x: &Inputs<'_>| {
@@ -371,7 +378,23 @@ fn read_schema(arg: &BindArg) -> Result<DataType, KrishivError> {
 
 /// The options argument's compiled form (absent is the defaults).
 fn read_options(arg: Option<&BindArg>, legacy: bool) -> Result<JsonOptions, KrishivError> {
-    let none = || JsonOptions::from_map_with(&BTreeMap::new(), legacy);
+    read_options_with(arg, legacy, false)
+}
+
+/// [`read_options`], compiled for `to_json` when `writing` (formatting patterns only).
+fn read_options_with(
+    arg: Option<&BindArg>,
+    legacy: bool,
+    writing: bool,
+) -> Result<JsonOptions, KrishivError> {
+    let build = |map: &BTreeMap<String, String>| {
+        if writing {
+            JsonOptions::from_map_for_write(map, legacy)
+        } else {
+            JsonOptions::from_map_with(map, legacy)
+        }
+    };
+    let none = || build(&BTreeMap::new());
     let Some(arg) = arg else {
         return none();
     };
@@ -410,5 +433,5 @@ fn read_options(arg: Option<&BindArg>, legacy: bool) -> Result<JsonOptions, Kris
         }
         options.insert(keys.value(row).to_owned(), values.value(row).to_owned());
     }
-    JsonOptions::from_map_with(&options, legacy)
+    build(&options)
 }

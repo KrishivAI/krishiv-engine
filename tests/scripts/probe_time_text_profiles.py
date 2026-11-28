@@ -26,6 +26,10 @@ Runs a REAL Spark (never from memory) in a throw-away container and prints one J
   policy and `timeParserPolicy=LEGACY` (in UTC and in `America/Los_Angeles`), per write option set; each gives the
   written line (a refusal's error class instead). LEGACY writes dates and timestamps with `FastDateFormat`
   (`yyyy-MM-dd'T'HH:mm:ss.SSSXXX` by default, Julian before 1582); `TIMESTAMP_NTZ` keeps the `java.time` pattern.
+- `write_expr`: the `write` rows (and `1880-01-01`, an offset with seconds in `America/Los_Angeles`) through
+  `to_json`, `to_csv` and `to_xml` of `named_struct('ts', .., 'd', .., 'ntz', ..)` with each write option set as the
+  options map, under the `write` settings and `spark.sql.files.supportSecondOffsetFormat=false` in Los Angeles. The
+  expressions take the file writers' default `timestampFormat` (`FileSourceOptions.commonTimestampFormat`).
 
 Usage (from repo root), once per version:
 
@@ -38,7 +42,7 @@ Checked by `krishiv-session/tests/time_file_reads.rs` (`text_time_follows_the_pr
 `krishiv-io/src/csv/time_tests.rs` (the 4.2 profile rows); the `schema_of_json` section by
 `krishiv-session/tests/schema_of_json_time.rs`, the `json_file` section by `krishiv-session/tests/json_file_time.rs`,
 the `csv_file`, `csv_expr` and `json_read` sections by `krishiv-session/tests/csv_file_legacy.rs`, the `write`
-section by `krishiv-session/tests/text_write_legacy.rs`.
+and `write_expr` sections by `krishiv-session/tests/text_write_legacy.rs`.
 """
 
 import json
@@ -158,6 +162,17 @@ WRITE_ROWS = [
     ("0001-01-01 00:00:00", "0001-01-01"),
     ("1883-11-18 12:00:00", "1883-11-18"),
 ]
+
+# The expressions' settings: the file writes' and the 3.5 behaviour (`[XXX]`) by the conf.
+WRITE_EXPR_SETTINGS = [
+    *WRITE_SETTINGS,
+    (
+        "default la minutes",
+        {"spark.sql.session.timeZone": "America/Los_Angeles", "spark.sql.files.supportSecondOffsetFormat": "false"},
+    ),
+]
+
+WRITE_EXPR_ROWS = [*WRITE_ROWS, ("1880-01-01 00:00:00", "1880-01-01")]
 
 WRITE_OPTIONS = [
     {},
@@ -357,6 +372,29 @@ def main() -> None:
             spark.conf.unset(k)
         spark.conf.set("spark.sql.session.timeZone", "UTC")
 
+    wexpr = {}
+    for setting, confs in WRITE_EXPR_SETTINGS:
+        for k, v in confs.items():
+            spark.conf.set(k, v)
+        rows = []
+        for opts in WRITE_OPTIONS:
+            omap = "".join(f", {lit(k)}, {lit(v)}" for k, v in opts.items())
+            omap = f", map({omap[2:]})" if omap else ""
+            for ts, d in WRITE_EXPR_ROWS:
+                row = f"named_struct('ts', TIMESTAMP {lit(ts)}, 'd', DATE {lit(d)}, 'ntz', TIMESTAMP_NTZ {lit(ts)})"
+                got = {}
+                for fn in ["to_json", "to_csv", "to_xml"]:
+                    try:
+                        got[fn] = {"value": spark.sql(f"SELECT {fn}({row}{omap}) AS s").collect()[0].s}
+                    # The error class is the result.
+                    except Exception as e:
+                        got[fn] = {"error": error_of(e)}
+                rows.append({"timestamp": ts, "date": d, "options": opts, "exprs": got})
+        wexpr[setting] = rows
+        for k in confs:
+            spark.conf.unset(k)
+        spark.conf.set("spark.sql.session.timeZone", "UTC")
+
     out = {
         "spark": spark.version,
         "infer": infer,
@@ -367,6 +405,7 @@ def main() -> None:
         "csv_expr": cexpr,
         "json_read": jread,
         "write": write,
+        "write_expr": wexpr,
     }
     json.dump(out, sys.stdout, indent=2, sort_keys=True)
     sys.stdout.write("\n")

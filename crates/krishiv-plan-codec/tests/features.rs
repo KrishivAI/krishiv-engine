@@ -163,6 +163,7 @@ fn the_header_lists_exactly_the_features_in_use() {
         ["binary_output_style"]
     );
     assert_eq!(message("spark_version").features, ["spark_version"]);
+    assert_eq!(message("no_second_offsets").features, ["no_second_offsets"]);
     assert_eq!(message("aggregate_moments").features, ["moment_aggregates"]);
     // The exchange's schema alone names the collation.
     assert_eq!(
@@ -729,6 +730,22 @@ fn a_reader_without_a_feature_refuses_the_plan_naming_it() {
         }
     );
     assert_eq!(ReaderFeatures::default(), ReaderFeatures::all());
+    // A reader without `no_second_offsets` would print an offset's seconds.
+    let bytes = encode(
+        &cases()
+            .into_iter()
+            .find(|(n, _)| n == "no_second_offsets")
+            .unwrap()
+            .1,
+    )
+    .unwrap();
+    let err = decode_with(&bytes, &Limits::default(), &ReaderFeatures::only([])).unwrap_err();
+    assert_eq!(
+        err,
+        CodecError::UnsupportedFeatures {
+            missing: vec!["no_second_offsets".to_owned()]
+        }
+    );
     // A reader without `partial_aggregate` refuses states computed below a
     // join.
     let bytes = encode(

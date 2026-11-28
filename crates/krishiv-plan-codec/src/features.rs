@@ -161,6 +161,7 @@ registry! {
     (moment_aggregates, MomentAggregates, POST_MIGRATION_READER_VERSION, Semantic, "The moment aggregates (`stddev_samp`, `stddev_pop`, `var_samp`, `var_pop`, `skewness`, `kurtosis`, `corr`, `covar_samp`, `covar_pop`)."),
     (nested_literals, NestedLiterals, POST_MIGRATION_READER_VERSION, Semantic, "An array, map or struct literal value (`Literal::{Array, KeyValueMap, Struct}`). The literal's type is a nested type, so a plan with one lists `nested_types` too."),
     (nested_types, NestedTypes, POST_MIGRATION_READER_VERSION, Semantic, "Array, map and struct types (`DataType.KIND_NESTED`, written as Spark's JSON form of the type)."),
+    (no_second_offsets, NoSecondOffsets, POST_MIGRATION_READER_VERSION, Semantic, "The `no_second_offsets` expression environment setting (`spark.sql.files.supportSecondOffsetFormat = false`): the default `timestampFormat` of `to_json`, `to_csv` and `to_xml` drops the seconds of a zone offset."),
     (observe, Observe, POST_MIGRATION_READER_VERSION, Semantic, "The `CollectMetrics` node (`Dataset.observe`): rows pass through while the metrics of a named observation are folded; a worker without it cannot report them."),
     (options_map_literals, OptionsMapLiterals, POST_MIGRATION_READER_VERSION, Semantic, "A `MAP<STRING, STRING>` literal: the options of one call (`from_json`, `from_csv`, `from_xml`). Entries are classified as source options are: a sensitive key or a URL with credentials does not encode (ADR 0038)."),
     (partial_aggregate, PartialAggregate, POST_MIGRATION_READER_VERSION, Optimization, "Partial aggregates below a join, whose states a later aggregate merges (eager aggregation)."),
@@ -1179,6 +1180,9 @@ pub fn plan_features(plan: &PhysicalPlan) -> BTreeSet<Feature> {
     }
     if plan.env().legacy_time_parser {
         out.insert(Feature::LegacyTimeParser);
+    }
+    if plan.env().no_second_offsets {
+        out.insert(Feature::NoSecondOffsets);
     }
     if plan.env().binary_output_style.is_some() {
         out.insert(Feature::BinaryOutputStyle);

@@ -131,6 +131,12 @@ message ExprEnv {
   // it as Spark 4.2) refuses it.
   // feature: spark_version
   optional string spark_version = 12;
+  // `spark.sql.files.supportSecondOffsetFormat = false` (off under the 3.5 profile): the default
+  // `timestampFormat` of `to_json`, `to_csv` and `to_xml` is `[XXX]` instead of `[XXXXX]`, so an
+  // offset's seconds are dropped; a worker without the feature would print them. Set only when
+  // true.
+  // feature: no_second_offsets
+  optional bool no_second_offsets = 13;
 }
 
 message ExplainNode {

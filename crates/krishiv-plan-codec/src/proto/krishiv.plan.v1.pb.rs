@@ -139,6 +139,13 @@ pub struct ExprEnv {
     /// feature: spark_version
     #[prost(string, optional, tag = "12")]
     pub spark_version: ::core::option::Option<::prost::alloc::string::String>,
+    /// `spark.sql.files.supportSecondOffsetFormat = false` (off under the 3.5 profile): the default
+    /// `timestampFormat` of `to_json`, `to_csv` and `to_xml` is `\[XXX\]` instead of `\[XXXXX\]`, so an
+    /// offset's seconds are dropped; a worker without the feature would print them. Set only when
+    /// true.
+    /// feature: no_second_offsets
+    #[prost(bool, optional, tag = "13")]
+    pub no_second_offsets: ::core::option::Option<bool>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ExplainNode {

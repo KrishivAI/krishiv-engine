@@ -62,12 +62,14 @@ pub static IO_TEXT_INFER_TIME: ConfigEntry = ConfigEntry {
     spark_alias: None,
 };
 
-/// Whether CSV and JSON writes keep the seconds of a zone offset.
+/// Whether CSV and JSON writes and `to_json` / `to_csv` / `to_xml` keep the seconds of a zone
+/// offset.
 pub static IO_TEXT_SECOND_OFFSETS: ConfigEntry = ConfigEntry {
     key: "krishiv.io.text.secondOffsets",
     value_type: ValueType::Bool,
     default: Some(ConfigValue::Bool(true)),
-    doc: "Whether CSV and JSON writes of a `TIMESTAMP` with the default `timestampFormat` keep the \
+    doc: "Whether CSV and JSON writes, `to_json`, `to_csv` and `to_xml` of a `TIMESTAMP` with the \
+          default `timestampFormat` (outside `timeParserPolicy=LEGACY`) keep the \
           seconds of a zone offset (`yyyy-MM-dd'T'HH:mm:ss[.SSS][XXXXX]`: `-07:52:58` for \
           `America/Los_Angeles` before 1883, Spark 4.0 and later) or drop them (`[XXX]`: `-07:52`, \
           Spark 3.5). The session sets it from its Spark profile: `true` from the 4.0 profile on, \
