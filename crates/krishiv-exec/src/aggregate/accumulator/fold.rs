@@ -175,8 +175,33 @@ impl Accumulator {
                 }
             }
             (Kind::SumInt { sum, seen }, _) if dense => {
-                let v = ints(args[0])?;
-                if dense::sum_i64(groups, &v, first, sum, seen) && ansi {
+                let a = args[0];
+                // Narrow integers are read at their own width, no widened copy.
+                let overflow = match a.data_type() {
+                    DataType::Int8 => dense::sum_ints(
+                        groups,
+                        a.as_primitive::<Int8Type>().values(),
+                        first,
+                        sum,
+                        seen,
+                    ),
+                    DataType::Int16 => dense::sum_ints(
+                        groups,
+                        a.as_primitive::<Int16Type>().values(),
+                        first,
+                        sum,
+                        seen,
+                    ),
+                    DataType::Int32 => dense::sum_ints(
+                        groups,
+                        a.as_primitive::<Int32Type>().values(),
+                        first,
+                        sum,
+                        seen,
+                    ),
+                    _ => dense::sum_ints(groups, &ints(a)?[..], first, sum, seen),
+                };
+                if overflow && ansi {
                     return Err(long_overflow());
                 }
             }

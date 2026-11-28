@@ -302,8 +302,7 @@ dependencies = [
 [[package]]
 name = "arrow-arith"
 version = "60.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e5a50de298a7c0069ad475c66db65e731df547e85a9e1e7b6e7e0bf8f0c53725"
+source = "git+https://github.com/KrishivAI/arrow-rs?rev=db75bd43e7977ffbf8e6a610297d5c3c8116941f#db75bd43e7977ffbf8e6a610297d5c3c8116941f"
 dependencies = [
  "arrow-array 60.2.0",
  "arrow-buffer 60.2.0",
@@ -334,8 +333,7 @@ dependencies = [
 [[package]]
 name = "arrow-array"
 version = "60.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a7a75080e8066219ed2d1e3b8fd2eb0b1a4b35d03b6fa87fb1035e93bd8dac95"
+source = "git+https://github.com/KrishivAI/arrow-rs?rev=db75bd43e7977ffbf8e6a610297d5c3c8116941f#db75bd43e7977ffbf8e6a610297d5c3c8116941f"
 dependencies = [
  "ahash",
  "arrow-buffer 60.2.0",
@@ -365,8 +363,7 @@ dependencies = [
 [[package]]
 name = "arrow-buffer"
 version = "60.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6c6bf2edf52662586214410c6030204215453eb86b8715037e8951326e173b19"
+source = "git+https://github.com/KrishivAI/arrow-rs?rev=db75bd43e7977ffbf8e6a610297d5c3c8116941f#db75bd43e7977ffbf8e6a610297d5c3c8116941f"
 dependencies = [
  "bytes",
  "half",
@@ -398,8 +395,7 @@ dependencies = [
 [[package]]
 name = "arrow-cast"
 version = "60.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fcad6713dda348c245cd6ef36a578b4362c143c3a9dd829aa19e89f407c3e48b"
+source = "git+https://github.com/KrishivAI/arrow-rs?rev=db75bd43e7977ffbf8e6a610297d5c3c8116941f#db75bd43e7977ffbf8e6a610297d5c3c8116941f"
 dependencies = [
  "arrow-array 60.2.0",
  "arrow-buffer 60.2.0",
@@ -419,8 +415,7 @@ dependencies = [
 [[package]]
 name = "arrow-cmp"
 version = "60.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c7e23e1092a61d7addfe57a69bf5cde7628b7b6685adea11731c19acdfd86695"
+source = "git+https://github.com/KrishivAI/arrow-rs?rev=db75bd43e7977ffbf8e6a610297d5c3c8116941f#db75bd43e7977ffbf8e6a610297d5c3c8116941f"
 dependencies = [
  "arrow-array 60.2.0",
  "arrow-buffer 60.2.0",
@@ -443,8 +438,7 @@ dependencies = [
 [[package]]
 name = "arrow-data"
 version = "60.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d0a7becabdb9bf3fa058b55845c52e0f792bedc88fd0e28d6580c9730a902b60"
+source = "git+https://github.com/KrishivAI/arrow-rs?rev=db75bd43e7977ffbf8e6a610297d5c3c8116941f#db75bd43e7977ffbf8e6a610297d5c3c8116941f"
 dependencies = [
  "arrow-buffer 60.2.0",
  "arrow-schema 60.2.0",
@@ -496,8 +490,7 @@ dependencies = [
 [[package]]
 name = "arrow-ipc"
 version = "60.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3d6fe9198046b67abf4e3e3ef70de2d705099975bdc2a7d9f0661675a978a083"
+source = "git+https://github.com/KrishivAI/arrow-rs?rev=db75bd43e7977ffbf8e6a610297d5c3c8116941f#db75bd43e7977ffbf8e6a610297d5c3c8116941f"
 dependencies = [
  "arrow-array 60.2.0",
  "arrow-buffer 60.2.0",
@@ -512,8 +505,7 @@ dependencies = [
 [[package]]
 name = "arrow-json"
 version = "60.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "19629d9e810280f0878738e2a361757b8ac53eae14336bb449e6879a68f71b9a"
+source = "git+https://github.com/KrishivAI/arrow-rs?rev=db75bd43e7977ffbf8e6a610297d5c3c8116941f#db75bd43e7977ffbf8e6a610297d5c3c8116941f"
 dependencies = [
  "arrow-array 60.2.0",
  "arrow-buffer 60.2.0",
@@ -550,8 +542,7 @@ dependencies = [
 [[package]]
 name = "arrow-ord"
 version = "60.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a3935eb956aeb858ab67685e167e230facd7bf4b294cf003a72d85a80edac1d2"
+source = "git+https://github.com/KrishivAI/arrow-rs?rev=db75bd43e7977ffbf8e6a610297d5c3c8116941f#db75bd43e7977ffbf8e6a610297d5c3c8116941f"
 dependencies = [
  "arrow-array 60.2.0",
  "arrow-buffer 60.2.0",
@@ -564,8 +555,7 @@ dependencies = [
 [[package]]
 name = "arrow-row"
 version = "60.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "79af8292302d7c3a1b64469a91afd33b34e7567365030098fdf4faa8130d43c3"
+source = "git+https://github.com/KrishivAI/arrow-rs?rev=db75bd43e7977ffbf8e6a610297d5c3c8116941f#db75bd43e7977ffbf8e6a610297d5c3c8116941f"
 dependencies = [
  "arrow-array 60.2.0",
  "arrow-buffer 60.2.0",
@@ -586,8 +576,7 @@ dependencies = [
 [[package]]
 name = "arrow-schema"
 version = "60.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3e7574c4175cc731e0d26a8384bc25d455c5e220250988a772c1af843592444b"
+source = "git+https://github.com/KrishivAI/arrow-rs?rev=db75bd43e7977ffbf8e6a610297d5c3c8116941f#db75bd43e7977ffbf8e6a610297d5c3c8116941f"
 dependencies = [
  "bitflags 2.13.2",
 ]
@@ -609,8 +598,7 @@ dependencies = [
 [[package]]
 name = "arrow-select"
 version = "60.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8d6a571e56e54b485b9f2d1dac4c3c34edcaffaa2668a23a7204108b66ef163d"
+source = "git+https://github.com/KrishivAI/arrow-rs?rev=db75bd43e7977ffbf8e6a610297d5c3c8116941f#db75bd43e7977ffbf8e6a610297d5c3c8116941f"
 dependencies = [
  "ahash",
  "arrow-array 60.2.0",
@@ -641,8 +629,7 @@ dependencies = [
 [[package]]
 name = "arrow-string"
 version = "60.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d9eb6c979ef0582fd29189b66fa252e717ee32b41fd03158e801ac61005aefb9"
+source = "git+https://github.com/KrishivAI/arrow-rs?rev=db75bd43e7977ffbf8e6a610297d5c3c8116941f#db75bd43e7977ffbf8e6a610297d5c3c8116941f"
 dependencies = [
  "arrow-array 60.2.0",
  "arrow-buffer 60.2.0",
@@ -4484,8 +4471,7 @@ dependencies = [
 [[package]]
 name = "parquet"
 version = "60.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6701f0dd63f5ee23a0f1f2865ff76825c301759d6ab649e3e5686cc32d066957"
+source = "git+https://github.com/KrishivAI/arrow-rs?rev=db75bd43e7977ffbf8e6a610297d5c3c8116941f#db75bd43e7977ffbf8e6a610297d5c3c8116941f"
 dependencies = [
  "ahash",
  "arrow-array 60.2.0",

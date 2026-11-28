@@ -80,7 +80,7 @@ pub use scan_decide::{
     SourceConjunct, SourceFilter,
 };
 pub use sort::{DEFAULT_MAX_MERGE_FAN_IN, Sort, SortKey, SortMetrics, TopN};
-pub(crate) use sort::{KeyEncoder, blocking, data_bytes, owned_rows};
+pub(crate) use sort::{KeyEncoder, counted, data_bytes, owned_rows};
 pub use spilled_scan::SpilledScan;
 pub(crate) use tail::Tail;
 pub use union::UnionAlign;
