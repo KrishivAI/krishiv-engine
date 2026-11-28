@@ -72,3 +72,8 @@ libmimalloc-sys = { workspace = true, optional = true, features = ["extended"] }
 # use the local-dynamic model there.
 [target.'cfg(target_env = "musl")'.dependencies]
 mimalloc = { workspace = true, optional = true, features = ["local_dynamic_tls"] }
+
+# The local Connect server's Python UDF worker pool (QA2-4): Linux only, like the pool itself.
+[target.'cfg(target_os = "linux")'.dependencies]
+krishiv-udf-pool = { path = "../krishiv-udf-pool" }
+krishiv-udf-sandbox = { path = "../krishiv-udf-sandbox" }

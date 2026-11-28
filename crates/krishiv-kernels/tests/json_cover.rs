@@ -196,9 +196,13 @@ fn infer_decimal_and_string_options() {
         matches!(got[0], Some(DataType::Decimal128(_, _))),
         "{got:?}"
     );
-    // Negative scale widens the precision: 1e3 -> DECIMAL(4,0).
-    let got = infer_json(&strs(&[Some("1e3")]), &pref).unwrap();
-    assert_eq!(got[0], Some(DataType::Decimal128(4, 0)));
+    // A negative scale is refused, as Spark's `DecimalType` refuses it
+    // (`tests/fixtures/spark-4.3.0/json-prefers-decimal.json`).
+    let err = infer_json(&strs(&[Some("1e3")]), &pref).unwrap_err();
+    assert!(
+        err.to_string().contains("NEGATIVE_SCALE_DISALLOWED"),
+        "{err}"
+    );
     // Over-wide decimal falls back to DOUBLE.
     let wide = format!("0.{}", "1".repeat(50));
     let got = infer_json(&strs(&[Some(&wide)]), &pref).unwrap();

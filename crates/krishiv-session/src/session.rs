@@ -531,18 +531,6 @@ impl Session {
         self.sql_kind(query).await.map(|(df, _)| df)
     }
 
-    /// `query` with its `${name}` references replaced, unless `spark.sql.variable.substitute` is false.
-    pub(crate) fn substituted<'q>(&self, query: &'q str) -> std::borrow::Cow<'q, str> {
-        let config = self.state.conf.snapshot();
-        if crate::conf::get(&config, "spark.sql.variable.substitute")
-            .is_none_or(|v| !v.trim().eq_ignore_ascii_case("false"))
-        {
-            crate::variable_substitution::substitute(query, &|k| crate::conf::get(&config, k))
-        } else {
-            std::borrow::Cow::Borrowed(query)
-        }
-    }
-
     /// Runs `query` on the calling task as `sql` would, for text the session built from a
     /// statement it already substituted (`CACHE TABLE t AS query`): `spans` are the substituted
     /// names in `query`, kept while substituting again leaves the text as it is.
@@ -1329,6 +1317,12 @@ impl Session {
                     Arc::clone(&self.state.runtime.executor),
                 )),
                 catalogs: declared,
+                information: Some(crate::information_schema::Source {
+                    store: Arc::clone(&self.state.catalog.store),
+                    principal: Arc::clone(&self.state.principal),
+                    policy: Arc::clone(&self.state.policy),
+                    grants: self.state.grants.clone(),
+                }),
                 monitor: Arc::new(crate::system::Monitor::new(
                     Arc::clone(&self.state.principal),
                     Arc::clone(&self.state.policy),

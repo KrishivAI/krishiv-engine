@@ -39,6 +39,7 @@
 //! evaluates them while parsing (`INVALID_INLINE_TABLE.FAILED_SQL_EXPRESSION_EVALUATION`),
 //! which needs expression evaluation.
 
+mod analyze;
 pub(crate) mod interval;
 mod keys;
 pub(crate) mod literal;
@@ -54,6 +55,7 @@ mod types;
 
 use std::collections::HashSet;
 
+use self::analyze::analyze_option;
 use self::keys::{duplicate_key, key_text, misvalued_keys, reserved_namespace_properties};
 use self::spans::{context_children_text, property_list_span};
 use krishiv_common::error::{
@@ -62,7 +64,7 @@ use krishiv_common::error::{
     IdentityColumnsIllegalStep, IncompatibleJoinTypes, InsertReplaceOnColumnListNotAllowed,
     InsertReplaceWhereTableAliasNotAllowed, InvalidBucketCount,
     InvalidInlineTableNumColumnsMismatch, InvalidParameterValueDatetimeUnit, InvalidSetSyntax,
-    InvalidSqlSyntaxAnalyzeTableUnexpectedNoscan, InvalidSqlSyntaxCreateFuncWithColumnConstraints,
+    InvalidSqlSyntaxCreateFuncWithColumnConstraints,
     InvalidSqlSyntaxCreateFuncWithGeneratedColumnsAsParameters, InvalidSqlSyntaxEmptyInPredicate,
     InvalidSqlSyntaxEmptyPartitionValue, InvalidSqlSyntaxInvalidWindowReference,
     InvalidSqlSyntaxRepetitiveWindowDefinition, InvalidSqlSyntaxShowFunctionsInvalidPattern,
@@ -83,8 +85,8 @@ use crate::ast::{
     CreateFunction, CreateNamespace, CreatePermanentView, CreateTable, CreateTableLike, DdlName,
     Delete, Describe, DescribeKind, Expr, ExprKind, FileFormat, FileFormatKind, FrameBoundKind,
     FromClause, Function, FunctionBodyKind, FunctionReturnsKind, GeneratedKind, GroupBy, GroupItem,
-    GroupItemKind, GroupWith, GroupingSet, Ident, Insert, InsertClause, Join, JoinConstraint,
-    Literal, Merge, MergeAction, MergeInsert, MergeSource, NamedWindow, NumKind, ObjectName,
+    GroupItemKind, GroupWith, GroupingSet, Insert, InsertClause, Join, JoinConstraint, Literal,
+    Merge, MergeAction, MergeInsert, MergeSource, NamedWindow, NumKind, ObjectName,
     PartitionFieldKind, PartitionSpec, Query, RefreshKind, Relation, RelationExt, RowFormat,
     RowFormatKind, SchemaBindingClause, Select, SelectItem, SetExpr, SetExprKind, SetVariableKind,
     Show, ShowKind, SortItem, Span, Statement, StructField, TableAlias, TableConstraintKind,
@@ -101,19 +103,6 @@ fn at(error: impl Into<KrishivError>, span: Span) -> ParseError {
         error: error.into(),
         span,
     }
-}
-
-/// Spark's `AstBuilder` takes any identifier after `COMPUTE STATISTICS` and refuses all but
-/// `NOSCAN`, over the whole statement, before it reads anything else of it.
-fn analyze_option(unexpected: Option<&Ident>, statement: Span) -> Result<(), ParseError> {
-    unexpected.map_or(Ok(()), |word| {
-        Err(at(
-            InvalidSqlSyntaxAnalyzeTableUnexpectedNoscan {
-                ctx: word.value.to_uppercase(),
-            },
-            statement,
-        ))
-    })
 }
 
 /// Checks a statement; `sql` is its text. An `EXPLAIN` chain walks

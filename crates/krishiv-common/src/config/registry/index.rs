@@ -701,6 +701,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &RUNTIME_FILTER_EXACT_SET_MAX_VALUES,
     ),
     (
+        "krishiv.server.sql.substituteEnvironment",
+        &SERVER_SQL_SUBSTITUTE_ENVIRONMENT,
+    ),
+    (
         "krishiv.sql.legacy.viewSchemaBindingMode",
         &LEGACY_VIEW_SCHEMA_BINDING_MODE,
     ),
