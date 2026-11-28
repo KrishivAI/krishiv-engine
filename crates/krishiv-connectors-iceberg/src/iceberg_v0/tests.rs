@@ -45,7 +45,10 @@ async fn storage_reads_and_writes_through_krishiv_io() {
     let dir = tempfile::tempdir().unwrap();
     let (sched, reg) = local(dir.path());
     let io = reg.file_io();
-    let loc = format!("file://{}/m/v1.metadata.json", dir.path().display());
+    let loc = format!(
+        "{}/m/v1.metadata.json",
+        krishiv_exec::files::file_url(dir.path())
+    );
 
     let before = requests(&sched);
     let out = io.new_output(&loc).unwrap();
@@ -74,7 +77,7 @@ async fn storage_reads_and_writes_through_krishiv_io() {
         b"xyz"
     );
 
-    io.delete_prefix(format!("file://{}/m", dir.path().display()))
+    io.delete_prefix(format!("{}/m", krishiv_exec::files::file_url(dir.path())))
         .await
         .unwrap();
     assert!(!io.exists(&loc).await.unwrap());
@@ -193,7 +196,7 @@ async fn make_table(reg: &StorageRegistration, warehouse: &std::path::Path) -> (
             "mem",
             [(
                 iceberg::memory::MEMORY_CATALOG_WAREHOUSE.to_owned(),
-                format!("file://{}", warehouse.display()),
+                krishiv_exec::files::file_url(warehouse),
             )]
             .into(),
         )
@@ -477,7 +480,7 @@ async fn capped_reads_fetch_at_most_the_declared_bytes() {
     let dir = tempfile::tempdir().unwrap();
     let (_sched, reg) = local(dir.path());
     let io = reg.file_io();
-    let loc = format!("file://{}/m/big.avro", dir.path().display());
+    let loc = format!("{}/m/big.avro", krishiv_exec::files::file_url(dir.path()));
     io.new_output(&loc)
         .unwrap()
         .write(bytes::Bytes::from(vec![7u8; 4096]))

@@ -46,8 +46,8 @@ Paths are relative to this crate.
   `vendored/spark-function-groups.tsv` (derived from `vendored/spark-function-docs.jsonl`; a test keeps them equal), for
   Flight SQL's `GetSqlInfo` function lists
 - `src/scalar/mod.rs` `bind_scalar`; `src/scalar/args.rs` argument handling shared by bindings
-- `src/scalar/{string,chars,codec,datetime,math,arith,hash,map,session,regex}.rs` family bindings (`NAMES` and `bind`); `src/scalar/regex/java.rs` Java-to-`fancy_regex` translation
-- Spark 4.3 (registered "since 4.2", the newest profile): `scalar/text43.rs` (`to_base32`, `from_base32`, `jaro_winkler_similarity`), the VARIANT
+- `src/scalar/{string,chars,codec,datetime,math,arith,hash,map,session,regex}.rs` family bindings (`NAMES` and `bind`); `src/scalar/regex/java.rs` Java-to-`fancy_regex` translation; `src/scalar/regex/memo.rs` a batch's results by input value (constant pattern); `src/scalar/regex/cut.rs` capture groups without walking a pattern's capture-free tail (the pattern split after its last group; the full capture search is the fallback, and tests compare every cut search with the engine's)
+- Spark 4.3 (`unix_nanos` and `timestamp_nanos` are catalog rows "since 4.3", kept by the generator's `HAND_ADDED` table until it probes a 4.3 image; the earlier ones are registered "since 4.2"): `scalar/text43.rs` (`to_base32`, `from_base32`, `jaro_winkler_similarity`), the VARIANT
   edit functions in `scalar/variant.rs` (`variant_insert`/`variant_set`/`variant_delete`/`variant_array_append`/`variant_strip_nulls` and the
   `try_` forms; `registry/variant.rs` checks the value is castable to variant and the flags are foldable booleans), and `collect_union`,
   an aggregate definition the analyzer rewrites to `array_distinct(array_compact(flatten(collect_list(x))))` (no executor, no codec
@@ -63,7 +63,8 @@ Paths are relative to this crate.
   `unix_date`, `add_months`, `last_day`, `next_day`, `trunc`, `date_trunc`, `months_between`, `make_date`, `from_utc_timestamp`/
   `to_utc_timestamp` and `convert_timezone`, plus the pattern-driven functions `date_format`, `to_date`/`try_to_date`,
   `to_timestamp`/`try_to_timestamp`/`to_timestamp_ltz`/`to_timestamp_ntz`, `unix_timestamp`/`to_unix_timestamp`,
-  `from_unixtime` and `current_timezone`. Zones resolve through the kernels' `resolve_zone` (fixed offsets without the
+  `from_unixtime` and `current_timezone`; `scalar/datetime/time_format.rs` is `date_format` of a `TIME` (Spark 4.3:
+  `TimeFormatter` over the nanoseconds, `Purpose::FormatTime`, a date or zone field `INVALID_PARAMETER_VALUE.PATTERN`). Zones resolve through the kernels' `resolve_zone` (fixed offsets without the
   database, region and short ids against `jiff`'s bundled TZDB); anything else (`xx`, `abc`,
   `etc/utc`, `Etc/GMT+05`) is `INVALID_TIMEZONE`. Region zones work as function arguments, in patterns and as the session zone (`spark.sql.session.timeZone`, whose
   default is the machine's zone, as in Spark: `krishiv-session/src/conf.rs`). The

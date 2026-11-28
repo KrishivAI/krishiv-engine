@@ -107,18 +107,43 @@ fn json_to_ddl_needs_a_struct() {
 
 #[test]
 fn parse_datatype_string_tries_schema_type_then_struct() {
-    let t = parse_datatype_string("a INT, b STRING NOT NULL").unwrap();
+    let t = parse_datatype_string(
+        "a INT, b STRING NOT NULL",
+        &krishiv_connect::translate::TranslateConf::default().parser,
+    )
+    .unwrap();
     assert_eq!(t.simple_string(), "struct<a:int,b:string>");
-    assert_eq!(parse_datatype_string("int").unwrap(), DataType::Integer);
     assert_eq!(
-        parse_datatype_string("array<bigint>")
-            .unwrap()
-            .simple_string(),
+        parse_datatype_string(
+            "int",
+            &krishiv_connect::translate::TranslateConf::default().parser
+        )
+        .unwrap(),
+        DataType::Integer
+    );
+    assert_eq!(
+        parse_datatype_string(
+            "array<bigint>",
+            &krishiv_connect::translate::TranslateConf::default().parser
+        )
+        .unwrap()
+        .simple_string(),
         "array<bigint>"
     );
     assert_eq!(
-        parse_datatype_string(" a: int ").unwrap().simple_string(),
+        parse_datatype_string(
+            " a: int ",
+            &krishiv_connect::translate::TranslateConf::default().parser
+        )
+        .unwrap()
+        .simple_string(),
         "struct<a:int>"
     );
-    assert!(parse_datatype_string("a nonsense_type").is_err());
+    assert!(
+        parse_datatype_string(
+            "a nonsense_type",
+            &krishiv_connect::translate::TranslateConf::default().parser
+        )
+        .is_err()
+    );
 }

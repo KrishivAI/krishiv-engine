@@ -60,7 +60,9 @@ pub const DEFAULT_SPILL_SCRATCH_RESERVE: usize = 512 << 10;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MemoryConfig {
     /// Limit of the root pool; `None` is unbounded. From
-    /// `krishiv.memory.limit`, else 80% of the effective memory limit.
+    /// `krishiv.memory.limit`, else [`crate::default_limit`]: 80% of the
+    /// effective memory limit, lowered on small limits so the guard's ceiling
+    /// stays `MIN_HEADROOM` below it, never under half.
     pub limit: Option<usize>,
     /// Reservation granularity (`krishiv.memory.reservationQuantum`).
     pub quantum: usize,
@@ -88,7 +90,8 @@ impl Default for MemoryConfig {
 
 impl MemoryConfig {
     /// Reads the `krishiv.memory.*` entries, falling back to their defaults;
-    /// an unset limit becomes [`crate::default_limit`].
+    /// an unset limit becomes [`crate::default_limit`], and a limit above the
+    /// memory the process may use is fitted to it ([`crate::explicit_limit`]).
     pub fn from_config(config: &Config) -> Self {
         let size = |v: Option<&ConfigValue>| {
             v.and_then(ConfigValue::as_size)
@@ -98,7 +101,9 @@ impl MemoryConfig {
             v.and_then(ConfigValue::as_duration).unwrap_or(default)
         };
         Self {
-            limit: size(config.get(&MEMORY_LIMIT)).or_else(crate::default_limit),
+            limit: size(config.get(&MEMORY_LIMIT))
+                .map(crate::limit::explicit_limit)
+                .or_else(crate::default_limit),
             quantum: size(config.get(&MEMORY_RESERVATION_QUANTUM)).unwrap_or(1 << 20),
             spill_wait_timeout: duration(
                 config.get(&MEMORY_SPILL_WAIT_TIMEOUT),

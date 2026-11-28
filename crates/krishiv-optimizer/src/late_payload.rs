@@ -48,7 +48,7 @@
 //!   whose right input costs more than twice as much and is not broadcast). A
 //!   payload on a probe side only streams, and moving it would only add work.
 
-use std::collections::{HashMap, HashSet};
+use crate::expr::{AddrMap, AddrSet};
 use std::sync::Arc;
 
 use krishiv_common::error::KrishivError;
@@ -116,7 +116,7 @@ struct Context {
     /// `EXPLAIN VERBOSE` lines, each once.
     notes: Vec<String>,
     /// Nodes read by more than one parent in the input plan.
-    shared: HashSet<*const LogicalPlan>,
+    shared: AddrSet<LogicalPlan>,
     broadcast_max: Option<f64>,
 }
 
@@ -130,9 +130,9 @@ fn note(notes: &mut Vec<String>, line: String) {
 
 /// The nodes of `root` that more than one parent reads (subquery plans not
 /// entered: the rule rewrites inside them as their own roots).
-pub(crate) fn shared_nodes(root: &Arc<LogicalPlan>) -> HashSet<*const LogicalPlan> {
-    let mut parents: HashMap<*const LogicalPlan, usize> = HashMap::new();
-    let mut seen = HashSet::new();
+pub(crate) fn shared_nodes(root: &Arc<LogicalPlan>) -> AddrSet<LogicalPlan> {
+    let mut parents: AddrMap<LogicalPlan, usize> = Default::default();
+    let mut seen = crate::expr::AddrSet::default();
     let mut stack = vec![Arc::clone(root)];
     while let Some(p) = stack.pop() {
         if !seen.insert(Arc::as_ptr(&p)) {
@@ -256,7 +256,7 @@ fn null_aware(on: &Arc<Expr>) -> bool {
 /// The rows the scans of `p` read, as estimated.
 fn scanned_rows(p: &Arc<LogicalPlan>, est: &mut Estimator<'_>) -> f64 {
     let mut total = 0.0;
-    let mut seen = HashSet::new();
+    let mut seen = crate::expr::AddrSet::default();
     let mut stack = vec![Arc::clone(p)];
     while let Some(x) = stack.pop() {
         if !seen.insert(Arc::as_ptr(&x)) {

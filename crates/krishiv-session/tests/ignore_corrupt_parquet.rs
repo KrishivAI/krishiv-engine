@@ -8,6 +8,8 @@
 //! `id BIGINT, s STRING` written by Spark, cut to half its length or by its
 //! last 3 bytes (`tests/scripts/ignore_corrupt_parquet.scala`).
 #![cfg(test)]
+mod literal_path;
+use literal_path::sql_path;
 
 use std::path::{Path, PathBuf};
 
@@ -396,7 +398,7 @@ fn partitions_and_declared_tables_skip_a_corrupt_footer() {
     );
     block_on(s.sql(&format!(
         "CREATE TABLE declared (id BIGINT, s STRING) USING parquet LOCATION '{}'",
-        flat.display()
+        sql_path(&flat)
     )))
     .unwrap();
     let run = |sql: &str| match block_on(async { s.sql(sql).await?.collect().await }) {

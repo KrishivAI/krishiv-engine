@@ -67,10 +67,13 @@ impl Session {
             .collect();
         let Ok(assignment) = assign(
             &table,
+            None,
             &listed,
             c.by_name,
             &output,
             env.analysis.conf.case_sensitive,
+            false,
+            self.state.profile,
         ) else {
             return out;
         };

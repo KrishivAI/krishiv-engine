@@ -101,7 +101,7 @@ pub fn supports_key(t: &DataType) -> bool {
         | DataType::BinaryView
         | DataType::LargeBinary
         | DataType::Date32
-        | DataType::Timestamp(TimeUnit::Microsecond, _)
+        | DataType::Timestamp(TimeUnit::Microsecond | TimeUnit::Nanosecond, _)
         | DataType::Interval(IntervalUnit::YearMonth)
         | DataType::Duration(TimeUnit::Microsecond) => true,
         DataType::List(f) | DataType::LargeList(f) => supports_key(f.data_type()),
@@ -224,6 +224,11 @@ pub fn keys_equal(a: &dyn Array, i: usize, b: &dyn Array, j: usize) -> Result<bo
         (T::Timestamp(TimeUnit::Microsecond, _), T::Timestamp(TimeUnit::Microsecond, _)) => {
             Ok(a.as_primitive::<TimestampMicrosecondType>().value(i)
                 == b.as_primitive::<TimestampMicrosecondType>().value(j))
+        }
+        (T::Timestamp(TimeUnit::Nanosecond, _), T::Timestamp(TimeUnit::Nanosecond, _)) => {
+            use arrow_array::types::TimestampNanosecondType;
+            Ok(a.as_primitive::<TimestampNanosecondType>().value(i)
+                == b.as_primitive::<TimestampNanosecondType>().value(j))
         }
         (T::Interval(IntervalUnit::YearMonth), T::Interval(IntervalUnit::YearMonth)) => {
             Ok(a.as_primitive::<IntervalYearMonthType>().value(i)
@@ -414,6 +419,10 @@ fn append_value(
         T::Timestamp(TimeUnit::Microsecond, _) => {
             prim!(TimestampMicrosecondType, TimestampMicrosecondBuilder)
         }
+        T::Timestamp(TimeUnit::Nanosecond, _) => prim!(
+            arrow_array::types::TimestampNanosecondType,
+            arrow_array::builder::TimestampNanosecondBuilder
+        ),
         T::Interval(IntervalUnit::YearMonth) => {
             prim!(IntervalYearMonthType, IntervalYearMonthBuilder)
         }
@@ -639,6 +648,10 @@ fn key_text(keys: &dyn Array, key: usize) -> Result<String, KernelError> {
         }
         T::Binary | T::BinaryView | T::LargeBinary => Ok(format!("{:?}", binary_value(keys, key))),
         T::Date32 => Ok(keys.as_primitive::<Date32Type>().value(key).to_string()),
+        T::Timestamp(arrow_schema::TimeUnit::Nanosecond, _) => Ok(keys
+            .as_primitive::<arrow_array::types::TimestampNanosecondType>()
+            .value(key)
+            .to_string()),
         T::Timestamp(..) => Ok(keys
             .as_primitive::<TimestampMicrosecondType>()
             .value(key)

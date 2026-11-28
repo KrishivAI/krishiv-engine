@@ -151,7 +151,7 @@ impl Planned {
     }
 
     /// The Arrow type column `index` is stored in.
-    fn stored(&self, index: usize) -> Result<&arrow_schema::DataType> {
+    pub(crate) fn stored(&self, index: usize) -> Result<&arrow_schema::DataType> {
         self.schema
             .fields()
             .get(index)
@@ -483,7 +483,10 @@ impl<'a> Planner<'a> {
                     .ok_or_else(|| internal(&format!("CTE {} is not in scope", r.name)))?;
                 // A deterministic definition is shared only where the first pass found no runtime filter
                 // reaching a reference; a nondeterministic one always is (design P2-T198).
+                // A definition over several literals (`ShareLiteralInstances`) always is:
+                // each copy would compute every literal's groups.
                 let share = !krishiv_optimizer::plan_is_deterministic(&def)
+                    || krishiv_optimizer::is_literal_shared(&r.name)
                     || self
                         .share_groups
                         .as_ref()
@@ -1027,7 +1030,7 @@ impl<'a> Planner<'a> {
             );
             match &schema {
                 None => schema = Some(Arc::clone(&planned.schema)),
-                Some(s) if s.fields() != planned.schema.fields() => {
+                Some(s) if !crate::physical::same_columns(s, &planned.schema) => {
                     return Err(internal("union inputs of different physical types"));
                 }
                 Some(_) => {}

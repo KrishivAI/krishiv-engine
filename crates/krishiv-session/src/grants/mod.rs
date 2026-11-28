@@ -461,9 +461,9 @@ pub(crate) fn physical_key(key: ObjectKey) -> Option<ObjectKey> {
     if local.contains('%') {
         return None;
     }
-    let resolved = crate::access::resolve_links(std::path::Path::new(local))?;
-    let text = resolved.to_str()?;
-    let normal = model::path_key(text)?;
+    // Links resolved, as the segments `LocalPaths` writes (a Windows drive first: `/C:/x`).
+    let parts = crate::access::canonical_parts(&krishiv_exec::files::native_path(local))?;
+    let normal = model::path_key(&format!("/{}", parts.join("/")))?;
     Some(ObjectKey::new(model::KeyKind::Path, vec![normal]))
 }
 
@@ -484,6 +484,13 @@ impl AccessPolicy for GrantsPolicy {
         securable: &'a Securable,
         privilege: Privilege,
     ) -> BoxFuture<'a, Result<AccessDecision, KrishivError>> {
+        // The `information_schema` views are readable by everyone; their rows are filtered by what
+        // the principal may list (`information_schema::Source`).
+        if matches!(privilege, Privilege::Select | Privilege::Browse)
+            && crate::information_schema::is_view_securable(securable)
+        {
+            return Box::pin(std::future::ready(Ok(AccessDecision::Allow)));
+        }
         match Self::decided_by(securable) {
             DecidedBy::Roles => self.system.check(principal, securable, privilege),
             DecidedBy::Grants => Box::pin(std::future::ready(Ok(
@@ -561,7 +568,7 @@ pub enum AccessProvider {
     Roles,
     /// The `grants` provider.
     Grants,
-    /// The `external` provider: a `krishiv.access.v1` policy service (ADR 0049 §3).
+    /// The `external` provider: a `krishiv.access.v1` policy service.
     External,
 }
 
@@ -594,11 +601,11 @@ pub fn access_provider(
     }
 }
 
-/// The providers `config` lists, in order (ADR 0049 §1): one name or a `+`-separated list of
+/// The providers `config` lists, in order: one name or a `+`-separated list of
 /// `roles`, `grants`, `external`, each at most once, combined as an intersection
 /// ([`crate::IntersectionPolicy`]). Unset, `grants` when the server authenticates and the role
 /// matrix alone otherwise (owner answer Q1: kept here, in one place). `catalog` is refused until
-/// its unit lands (P3-T062 G5).
+/// its unit lands.
 ///
 /// # Errors
 /// `KRISHIV_INVALID_CONFIG_VALUE` naming the key for any other value.

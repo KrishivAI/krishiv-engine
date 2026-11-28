@@ -343,3 +343,42 @@ fn insert_parameter_types_need_the_write() {
         [None]
     );
 }
+
+/// Writes one row of a single column `column` to the Parquet directory `dir`, replacing it.
+fn write_column(session: &Session, dir: &str, column: &str) {
+    let df = block_on(session.sql(&format!("SELECT 1 AS {column}"))).expect("frame");
+    block_on(df.write().mode("overwrite").parquet(dir)).expect("write");
+}
+
+#[test]
+fn held_schema_reuses_the_analysis_and_analyzes_nothing() {
+    // MODES-4 F1: a frame over files is analyzed again by every `schema` call; `held_schema`
+    // reads the analysis `sql_query_with` made. The files change after that analysis, so a second
+    // analysis would show the new column.
+    let session = Session::new().expect("session");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("t");
+    let path = path.to_str().expect("utf-8 path");
+    write_column(&session, path, "a");
+    let SqlQuery::Query(df) = query(&session, &format!("SELECT * FROM parquet.`{path}`")) else {
+        panic!("a query");
+    };
+    write_column(&session, path, "b");
+    for _ in 0..2 {
+        let held = block_on(df.held_schema()).expect("held schema");
+        assert_eq!(held.field(0).name(), "a", "held_schema analyzed again");
+    }
+    // `schema` revalidates: it sees the new file, and keeps that analysis.
+    let fresh = block_on(df.schema()).expect("schema");
+    assert_eq!(fresh.field(0).name(), "b");
+    let held = block_on(df.held_schema()).expect("held schema");
+    assert_eq!(held.field(0).name(), "b");
+}
+
+#[test]
+fn held_schema_of_a_frame_with_no_analysis_is_its_schema() {
+    let session = Session::new().expect("session");
+    let df = session.range(0, 3, 1, None);
+    let held = block_on(df.held_schema()).expect("held schema");
+    assert_eq!(held, block_on(df.schema()).expect("schema"));
+}

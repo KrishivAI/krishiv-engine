@@ -157,7 +157,7 @@ impl PlanStats {
 fn subquery_plans<'a>(p: &'a LogicalPlan, f: &mut impl FnMut(&'a Arc<LogicalPlan>)) {
     let mut stack = Vec::new();
     p.for_each_expr(&mut |e| stack.push(e));
-    let mut seen = HashSet::new();
+    let mut seen = crate::expr::AddrSet::default();
     while let Some(e) = stack.pop() {
         if !seen.insert(std::ptr::from_ref(&**e)) {
             continue;

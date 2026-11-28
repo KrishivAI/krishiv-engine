@@ -84,7 +84,7 @@ fn caller_sessions(
     // its channel, version and counts (review m8). The configuration is read and checked on every
     // call; a second server in the process (another runtime) gets its own provider (review D6).
     let external = ExternalConfig::from_config(config).map_err(|e| e.to_string())?;
-    let access = shared_external(base.runtime(), || {
+    let access = shared_external(base.runtime(), &external, || {
         ExternalAccess::new(&external).map_err(|e| e.to_string())
     })?;
     let extra = ExtraProvider {
@@ -96,28 +96,32 @@ fn caller_sessions(
     provider_sessions(base, config, denials, Some(extra)).map_err(|e| e.to_string())
 }
 
-/// The `external` provider of `runtime`, made by `make` the first time a runtime asks.
+/// The `external` provider of `runtime` with the settings `config`, made by `make` the first
+/// time that runtime asks with them: one runtime asked with other settings (another server over
+/// it) gets a provider of its own (G6 review r3). Entries of dropped runtimes go at the next call.
 fn shared_external(
     runtime: &Arc<krishiv_session::EngineRuntime>,
+    config: &krishiv_server::access_external::ExternalConfig,
     make: impl FnOnce() -> Result<Arc<krishiv_server::access_external::ExternalAccess>, String>,
 ) -> Result<Arc<krishiv_server::access_external::ExternalAccess>, String> {
     type Entry = (
         std::sync::Weak<krishiv_session::EngineRuntime>,
+        krishiv_server::access_external::ExternalConfig,
         Arc<krishiv_server::access_external::ExternalAccess>,
     );
     static SHARED: std::sync::Mutex<Vec<Entry>> = std::sync::Mutex::new(Vec::new());
     let mut shared = SHARED
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    shared.retain(|(r, _)| r.strong_count() > 0);
-    if let Some((_, access)) = shared
+    shared.retain(|(r, _, _)| r.strong_count() > 0);
+    if let Some((_, _, access)) = shared
         .iter()
-        .find(|(r, _)| r.upgrade().is_some_and(|r| Arc::ptr_eq(&r, runtime)))
+        .find(|(r, c, _)| c == config && r.upgrade().is_some_and(|r| Arc::ptr_eq(&r, runtime)))
     {
         return Ok(Arc::clone(access));
     }
     let access = make()?;
-    shared.push((Arc::downgrade(runtime), Arc::clone(&access)));
+    shared.push((Arc::downgrade(runtime), config.clone(), Arc::clone(&access)));
     Ok(access)
 }
 
@@ -533,6 +537,8 @@ async fn run_listeners(
         .runtime(Arc::clone(&runtime))
         .build()
         .map_err(|e| e.to_string())?;
+    // Every client's session is built from this one and none runs in it: the console does not list it.
+    let template = base.id().to_owned();
     let authenticated = auth.is_enabled();
     let auth = Arc::new(auth);
     // One denial counter for the guards and every caller's session (ADR 0046 §8).
@@ -648,6 +654,7 @@ async fn run_listeners(
         tls.is_some(),
         Arc::clone(&late_metrics),
         udf_workers,
+        template,
     )?;
     let mut connect_config = ConnectServerConfig::from_config(config);
     connect_config.shutdown_timeout = Duration::ZERO;
@@ -823,6 +830,7 @@ fn admin_router(
     tls: bool,
     late: LateMetrics,
     udf_workers: Option<UdfWorkersProvider>,
+    template: String,
 ) -> Result<axum::Router, String> {
     let authenticated = auth.is_some();
     let denials = auth.as_ref().map(|a| a.denials());
@@ -882,6 +890,7 @@ fn admin_router(
         if let Some(read) = udf_workers {
             source = source.with_udf_workers(read);
         }
+        let mut templates = vec![template];
         if let Some(denials) = denials {
             // The editor runs a statement as the authenticated caller, in the session a Spark Connect session of
             // that caller gets: the same role matrix and path confinement.
@@ -889,6 +898,7 @@ fn admin_router(
                 .runtime(Arc::clone(runtime))
                 .build()
                 .map_err(|e| e.to_string())?;
+            templates.push(base.id().to_owned());
             // The editor's sessions are UI sessions: their denials count under the `ui` surface, where the
             // statement arrived (P3-T101 §2 H3).
             let factory = caller_sessions(base, config, denials)?;
@@ -899,6 +909,7 @@ fn admin_router(
                 Ok(session)
             }));
         }
+        let source = source.with_template_sessions(templates);
         // The `Host` allowlist (DNS rebinding, T-W5): on a loopback address the loopback names and
         // `krishiv.ui.allowedHosts`; on another address only when names are configured. The environment variable
         // `KRISHIV_UI_ALLOWED_HOSTS` adds names to either.
@@ -1302,6 +1313,36 @@ mod tests {
         assert!(!metrics_need_token(&public, lo));
         assert!(metrics_need_token(&public, any));
         assert!(!metrics_need_token(&config(&[]), lo));
+    }
+
+    /// G6 review r3: one runtime asked with other `external` settings gets a provider of its own;
+    /// the same settings share one.
+    #[tokio::test]
+    async fn the_external_provider_is_shared_per_runtime_and_settings() {
+        use krishiv_server::access_external::{ExternalAccess, ExternalConfig};
+        let runtime = EngineRuntime::builder().build().unwrap();
+        let settings = |endpoint: &str| {
+            ExternalConfig::from_config(&config(&[("krishiv.access.external.endpoint", endpoint)]))
+                .unwrap()
+        };
+        let a = settings("http://127.0.0.1:1");
+        let b = settings("http://127.0.0.1:2");
+        let get = |c: &ExternalConfig| {
+            shared_external(&runtime, c, || {
+                ExternalAccess::new(c).map_err(|e| e.to_string())
+            })
+            .unwrap()
+        };
+        let first = get(&a);
+        assert!(Arc::ptr_eq(&first, &get(&a)));
+        assert!(!Arc::ptr_eq(&first, &get(&b)));
+        // Another runtime with the same settings gets its own too.
+        let other = EngineRuntime::builder().build().unwrap();
+        let theirs = shared_external(&other, &a, || {
+            ExternalAccess::new(&a).map_err(|e| e.to_string())
+        })
+        .unwrap();
+        assert!(!Arc::ptr_eq(&first, &theirs));
     }
 
     /// Design P3-T066 §5.1: a drain refuses new queries at once, gives a stuck one the grace

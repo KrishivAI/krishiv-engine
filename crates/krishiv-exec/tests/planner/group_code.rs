@@ -103,20 +103,34 @@ enum Session {
 }
 
 fn optimized(t: &Tpch, text: &str, stats: &dyn Statistics, on: bool, s: Session) -> Plan {
+    optimized_eager(t, text, stats, on, true, s)
+}
+
+/// [`optimized`], with eager aggregation on or off (`eager`).
+fn optimized_eager(
+    t: &Tpch,
+    text: &str,
+    stats: &dyn Statistics,
+    on: bool,
+    eager: bool,
+    s: Session,
+) -> Plan {
     let plan = analyze(t, text);
+    let flag = |b: bool| if b { "true" } else { "false" };
     match s {
         Session::None => {
             let mut options = Options::default();
             options.group_key_code = on;
+            options.eager_aggregation = eager;
             krishiv_optimizer::optimize_with_options(&plan, stats, &options).unwrap()
         }
         Session::Config => {
             let mut config = Config::new();
             config
-                .set(
-                    "krishiv.optimizer.groupKeyCode",
-                    if on { "true" } else { "false" },
-                )
+                .set("krishiv.optimizer.groupKeyCode", flag(on))
+                .unwrap();
+            config
+                .set("krishiv.optimizer.eagerAggregation", flag(eager))
                 .unwrap();
             krishiv_optimizer::optimize_with_udfs(&plan, stats, &UdfLibrary::new(), &config)
                 .unwrap()
@@ -227,32 +241,100 @@ fn null_stats() -> ByName {
 
 /// A null key tuple is one `dict` row, joined by `<=>`: the null groups
 /// survive the encoding join, with and without a shared dictionary, and
-/// under an outer join above `D`.
+/// under an outer join above `D`. Eager aggregation is off; with both rules on,
+/// eager aggregation yields (`GroupKeyCode takes the aggregate`), so the plan is
+/// still coded. With the code off, eager aggregation takes the first query's
+/// join (`d`'s `isnotnull(dk)` filter only drops null keys). Every plan returns
+/// the same rows.
 #[test]
 fn null_dimension_keys_keep_their_groups() {
     let rt = runtime();
     let dir = tempfile::tempdir().unwrap();
     let t = null_tables(dir.path(), &rt);
     let stats = null_stats();
-    for q in [
-        "SELECT g1, g2, count(*), sum(x) FROM f JOIN d ON fk = dk GROUP BY g1, g2",
-        "SELECT upper(g1), g2, count(DISTINCT g2), sum(x) FROM f JOIN d ON fk = dk \
-         GROUP BY g1, g2",
-        "SELECT g1, g2, count(*), count(f2.x) FROM f JOIN d ON f.fk = dk \
-         LEFT JOIN f AS f2 ON f.x = f2.fk GROUP BY g1, g2",
+    // Whether eager aggregation takes the joins: not for a `DISTINCT` call, nor for a call
+    // over the null-supplying side of the outer join above `D`.
+    for (q, eager_fires) in [
+        (
+            "SELECT g1, g2, count(*), sum(x) FROM f JOIN d ON fk = dk GROUP BY g1, g2",
+            true,
+        ),
+        (
+            "SELECT upper(g1), g2, count(DISTINCT g2), sum(x) FROM f JOIN d ON fk = dk \
+             GROUP BY g1, g2",
+            false,
+        ),
+        (
+            "SELECT g1, g2, count(*), count(f2.x) FROM f JOIN d ON f.fk = dk \
+             LEFT JOIN f AS f2 ON f.x = f2.fk GROUP BY g1, g2",
+            false,
+        ),
     ] {
         for s in [Session::None, Session::Config] {
-            let on = optimized(&t, q, &stats, true, s);
+            let on = optimized_eager(&t, q, &stats, true, false, s);
             assert!(coded(&on), "{q} {s:?}: not coded\n{}", on.root());
-            let off = optimized(&t, q, &stats, false, s);
+            let off = optimized_eager(&t, q, &stats, false, false, s);
             let got = sorted(&run(&physical(&t, &on).unwrap()).unwrap());
             let want = sorted(&run(&physical(&t, &off).unwrap()).unwrap());
             assert_eq!(got, want, "{q} {s:?}\n{}", on.root());
+            let both = optimized(&t, q, &stats, true, s);
+            assert!(
+                coded(&both),
+                "{q} {s:?}: eager did not yield\n{}",
+                both.root()
+            );
+            let rows = sorted(&run(&physical(&t, &both).unwrap()).unwrap());
+            assert_eq!(rows, want, "{q} {s:?} both\n{}", both.root());
+            let eager = optimized_eager(&t, q, &stats, false, true, s);
+            // The null-only `isnotnull(dk)` filter on `d` must not stop eager
+            // aggregation: rows alone would also match a refused rule.
+            assert_eq!(
+                eager.root().to_string().contains("PartialAggregate"),
+                eager_fires,
+                "{q} {s:?}: eager aggregation\n{}",
+                eager.root()
+            );
+            let rows = sorted(&run(&physical(&t, &eager).unwrap()).unwrap());
+            assert_eq!(rows, want, "{q} {s:?} eager\n{}", eager.root());
             assert!(
                 want.iter().any(|r| r.starts_with("NULL|NULL|")),
                 "{q}: the data has a null group: {want:?}"
             );
         }
+    }
+}
+
+/// Two dimensions in one aggregate (TPC-DS q47's `item` and `store`) are both
+/// coded in one pass, null tuples on either side included, and the rows are
+/// those of the plan with the rule off.
+#[test]
+fn two_dimensions_keep_their_groups() {
+    let rt = runtime();
+    let dir = tempfile::tempdir().unwrap();
+    let t = null_tables(dir.path(), &rt);
+    let stats = null_stats();
+    let q = "SELECT a.g1, a.g2, b.g1, b.g2, count(*), sum(f.x) FROM f \
+             JOIN d AS a ON f.fk = a.dk JOIN d AS b ON f.x = b.dk \
+             GROUP BY a.g1, a.g2, b.g1, b.g2";
+    for s in [Session::None, Session::Config] {
+        let on = optimized(&t, q, &stats, true, s);
+        let text = on.root().to_string();
+        let agg = text
+            .lines()
+            .find(|l| l.contains("Aggregate [krishiv_group_code"))
+            .unwrap_or_else(|| panic!("{s:?}: not coded\n{text}"));
+        assert!(
+            agg.matches("krishiv_group_code#").count() >= 2,
+            "{s:?}: {agg}"
+        );
+        let off = optimized(&t, q, &stats, false, s);
+        let got = sorted(&run(&physical(&t, &on).unwrap()).unwrap());
+        let want = sorted(&run(&physical(&t, &off).unwrap()).unwrap());
+        assert_eq!(got, want, "{s:?}\n{text}");
+        assert!(
+            want.iter().any(|r| r.starts_with("NULL|NULL|NULL|NULL|")),
+            "the data has a null group on both sides: {want:?}"
+        );
     }
 }
 

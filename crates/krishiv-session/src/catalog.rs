@@ -63,6 +63,16 @@ pub(crate) use self::scans::{reads_delta_root, reads_files_at};
 
 /// The session catalog's name, as Spark names it.
 pub(crate) const CATALOG: &str = "spark_catalog";
+/// `SCHEMA_NOT_FOUND` for `namespace` of the session catalog. Spark names the schema with its
+/// catalog in every statement and Catalog API call that can miss one (4.3.0 run, acceptance
+/// R1-D-20): `` `spark_catalog`.`dummy` ``.
+pub(crate) fn schema_not_found(namespace: &str) -> KrishivError {
+    krishiv_common::error::SchemaNotFound {
+        schema_name: format!("{}.{}", quote(CATALOG), quote(namespace)),
+    }
+    .into()
+}
+
 /// The namespace temporary tables live in.
 pub(crate) const NAMESPACE: &str = "default";
 /// The namespace global temporary views live in.
@@ -1071,6 +1081,37 @@ impl Catalog for QueryCatalog {
         form: NameForm,
     ) -> BoxFuture<'a, Result<Option<TableMeta>, KrishivError>> {
         Box::pin(async move {
+            // `information_schema.<view>`: rows built from the store, listed as `SHOW TABLES` does.
+            if let [namespace] = id.namespace.as_slice()
+                && namespace.eq_ignore_ascii_case(crate::information_schema::NAMESPACE)
+                && crate::information_schema::is_view(&id.name)
+                && let Some(source) = &self.system.information
+                && let Some((columns, table)) = source.provider(&id.name).await?
+            {
+                let name = id.name.to_lowercase();
+                self.loaded
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .insert(
+                        format!("{}.{name}", crate::information_schema::NAMESPACE),
+                        Arc::new(TempTable::Memory {
+                            columns: columns.clone(),
+                            table,
+                        }),
+                    );
+                return Ok(Some(TableMeta {
+                    ident: TableIdent {
+                        catalog: CATALOG.to_owned(),
+                        namespace: vec![crate::information_schema::NAMESPACE.to_owned()],
+                        name,
+                    },
+                    columns,
+                    version: None,
+                    kind: TableKind::Table,
+                    file_metadata: FileMetadata::None,
+                    column_comments: BTreeMap::new(),
+                }));
+            }
             // Temporary views resolve for unqualified names only: Spark
             // finds `v` but not `default.v` or `spark_catalog.default.v`.
             let found = if form.qualified {

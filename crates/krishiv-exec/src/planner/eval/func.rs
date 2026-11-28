@@ -168,7 +168,7 @@ pub(super) fn same_shape(a: &ArrowType, b: &ArrowType) -> bool {
 }
 
 /// `array` with the nested field flags of `to` (see [`same_shape`]).
-pub(super) fn relabeled(array: &ArrayRef, to: &ArrowType) -> Result<ArrayRef> {
+pub(crate) fn relabeled(array: &ArrayRef, to: &ArrowType) -> Result<ArrayRef> {
     match to {
         ArrowType::List(f) if array.data_type() != to => {
             let list = array

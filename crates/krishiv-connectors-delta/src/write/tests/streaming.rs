@@ -210,7 +210,7 @@ fn an_ended_driver_ships_its_row_groups_while_another_writes() {
                     e.store(true, Ordering::Release);
                     Act::stall(Duration::from_millis(30))
                 }
-                Point::Finished => Act::NONE,
+                Point::Finished | Point::VectorWritten => Act::NONE,
             }
         }),
     );
@@ -396,7 +396,7 @@ fn a_create_finds_its_own_version_zero() {
             .rt
             .block_on(env.engine.delta_blocking({
                 let table = table.clone();
-                move |e| plan_create(e, table.new_table(), "w", None, FileLimits::default())
+                move |e| plan_create(e, table.new_table(), "w", None, None, FileLimits::default())
             }))
             .unwrap()
             .unwrap();
@@ -405,7 +405,7 @@ fn a_create_finds_its_own_version_zero() {
         };
         let txn = take_create(&create).unwrap();
         env.rt
-            .block_on(new_table(&env, &schema, &["k"]).create_empty(winner))
+            .block_on(new_table(&env, &schema, &["k"]).create_empty(winner, None))
             .unwrap();
         let name = new_name(new);
         let out = env

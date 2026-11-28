@@ -389,10 +389,7 @@ impl Session {
         {
             Ok(())
         } else {
-            Err(SchemaNotFound {
-                schema_name: format!("`{namespace}`"),
-            }
-            .into())
+            Err(crate::catalog::schema_not_found(namespace))
         }
     }
 
@@ -1311,11 +1308,7 @@ impl Session {
                     .into_iter()
                     .find(|(n, _)| *n == ns)
                     .map(|(_, m)| m)
-                    .ok_or_else(|| {
-                        KrishivError::from(SchemaNotFound {
-                            schema_name: format!("`{ns}`"),
-                        })
-                    })?;
+                    .ok_or_else(|| crate::catalog::schema_not_found(&ns))?;
                 let mut rows = self.namespace_rows(&ns, &meta)?;
                 if *extended {
                     // Spark 4.2.0 (`research/spark/schema-collation/probe1.out`): the sorted pairs as Scala
@@ -1358,7 +1351,7 @@ impl Session {
                 } else {
                     wh.join(format!("{ns}.db"))
                 };
-                format!("file:{}", dir.display())
+                krishiv_exec::files::file_display(&dir)
             }
         };
         let mut rows = vec![
@@ -1604,7 +1597,7 @@ fn bucket_rows(t: &CatalogTable) -> Vec<(String, String)> {
 fn storage_rows(t: &CatalogTable, location: &std::path::Path) -> Vec<(String, String)> {
     let mut rows = vec![(
         "Location".to_owned(),
-        format!("file:{}", location.display()),
+        krishiv_exec::files::file_display(location),
     )];
     let options = &t.options;
     if !options.is_empty() {
@@ -1779,7 +1772,7 @@ fn create_statement(t: &CatalogTable, binding_enabled: bool) -> Result<String, K
     if !t.managed {
         out.push_str(&format!(
             "LOCATION {}\n",
-            sql_literal(&format!("file:{}", t.location.display()))
+            sql_literal(&krishiv_exec::files::file_display(&t.location))
         ));
     }
     if !t.properties.is_empty() {

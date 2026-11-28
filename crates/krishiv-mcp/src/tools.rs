@@ -13,10 +13,11 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use futures::StreamExt as _;
-use krishiv_common::error::KrishivError;
+use krishiv_common::error::{KrishivError, KrishivMcpQueueFull};
 use krishiv_session::agent::{
     AgentLimits, AgentRender, AgentStop, DEFAULT_MAX_BYTES, DEFAULT_MAX_CELL_CHARS,
-    DEFAULT_MAX_ROWS, ErrorSource, render_batches, render_error, render_estimate, session_zone,
+    DEFAULT_MAX_ROWS, ErrorSource, escape_text, render_batches, render_error, render_estimate,
+    session_zone,
 };
 use krishiv_session::{PathPrefixPolicy, Principal, Session};
 use krishiv_sql::ParserOptions;
@@ -291,7 +292,11 @@ pub fn definitions() -> Vec<(&'static str, String, Map<String, Value>)> {
             "sql_reference",
             d("Find SQL functions by name pattern, or list all functions."),
             schema(
-                &[("function", "string", "Function name; omit to list all.")],
+                &[(
+                    "function",
+                    "string",
+                    "Part of a function name, or a pattern over the whole name where `*` or `%` stands for any characters and `|` separates alternatives (`date*`, `%trunc%`); omit to list all.",
+                )],
                 &[],
             ),
         ),
@@ -383,6 +388,7 @@ impl Tools {
             }
             "list_tables" => {
                 check_args(args, &["namespace"])?;
+                limits.show_skipped = true;
                 match str_arg(args, "namespace")? {
                     Some(ns) => format!("SHOW TABLES IN {}", ident(ns).map_err(|e| plain_err(&e))?),
                     None => "SHOW TABLES".to_owned(),
@@ -392,6 +398,7 @@ impl Tools {
                 check_args(args, &["pattern"])?;
                 let pattern = str_arg(args, "pattern")?
                     .ok_or_else(|| arg_err("`pattern` is required".to_owned()))?;
+                limits.show_skipped = true;
                 format!("SHOW TABLES LIKE {}", quote(pattern))
             }
             "describe_table" => {
@@ -585,7 +592,12 @@ impl Tools {
         }
         if self.waiting.fetch_add(1, Ordering::AcqRel) >= QUEUE_DEPTH {
             self.waiting.fetch_sub(1, Ordering::AcqRel);
-            return arg_err("too many queries are waiting; retry later".to_owned());
+            return plain_err(
+                &KrishivMcpQueueFull {
+                    max_queued: QUEUE_DEPTH.to_string(),
+                }
+                .into(),
+            );
         }
         // Released when the permit arrives or when the caller drops this
         // future while it waits.
@@ -631,7 +643,7 @@ impl Tools {
         // Discovering the tables and estimating the scan can be slow on a big
         // directory: they run under the deadline too.
         let setup = Box::pin(async {
-            let session = child_session(&self.config.data).await?;
+            let (session, skipped) = child_session(&self.config.data).await?;
             // Layer 2 of the gate (`gate.rs`): the analysis must be a complete read.
             check_analysis(&session, sql).await?;
             let estimate = if limits.explain || limits.allow_heavy {
@@ -639,9 +651,9 @@ impl Tools {
             } else {
                 session.estimate_sql(sql).await?
             };
-            Ok::<_, KrishivError>((session, estimate))
+            Ok::<_, KrishivError>((session, skipped, estimate))
         });
-        let (session, estimate) = match deadline {
+        let (session, skipped, estimate) = match deadline {
             Some(at) => {
                 match tokio::time::timeout(at.saturating_duration_since(Instant::now()), setup)
                     .await
@@ -744,12 +756,68 @@ impl Tools {
                 stop,
             },
         );
-        Ok(Answer::ok(rendered.text))
+        let mut text = rendered.text;
+        if limits.show_skipped {
+            text.push_str(&skipped_text(&skipped));
+        }
+        Ok(Answer::ok(text))
     }
 }
 
-/// The built-in functions whose name contains `filter` (all when `None`),
-/// one line each. The text is engine-generated, with no table cell in it.
+/// One comment line for each entry of `--data` that is not a table of this
+/// server, with the reason. The name is a file name, which on Unix may hold
+/// a newline or any other control character: it is escaped as a cell is, so
+/// it cannot start a line of its own in the answer.
+fn skipped_text(skipped: &[Skipped]) -> String {
+    let mut out = String::new();
+    for s in skipped {
+        out.push_str(&format!(
+            "-- not served: {} ({})\n",
+            escape_text(&s.name),
+            escape_text(&s.reason)
+        ));
+    }
+    out
+}
+
+/// Whether the function `name` is one `filter` asks for. A filter with `*`,
+/// `%` or `|` in it is a pattern over the whole name: `*` and `%` stand for
+/// any run of characters and `|` separates alternatives (Spark's
+/// `SHOW FUNCTIONS LIKE`, plus SQL's `%`). Any other filter finds the names
+/// that contain it.
+fn name_matches(name: &str, filter: &str) -> bool {
+    if !filter.contains(['*', '%', '|']) {
+        return name.contains(filter);
+    }
+    filter.split('|').any(|pattern| glob(name, pattern.trim()))
+}
+
+/// Whether the whole of `name` matches `pattern`, where `*` and `%` stand for
+/// any run of characters.
+fn glob(name: &str, pattern: &str) -> bool {
+    let mut parts = pattern.split(['*', '%']);
+    let first = parts.next().unwrap_or_default();
+    let Some(mut rest) = name.strip_prefix(first) else {
+        return false;
+    };
+    let mut middle: Vec<&str> = parts.collect();
+    // No wildcard: the name itself.
+    let Some(last) = middle.pop() else {
+        return rest.is_empty();
+    };
+    // Each middle part at its first place leaves the most for the parts after it.
+    for part in middle {
+        match rest.split_once(part) {
+            Some((_, after)) => rest = after,
+            None => return false,
+        }
+    }
+    rest.ends_with(last)
+}
+
+/// The built-in functions whose name `filter` finds ([`name_matches`]; all
+/// when `None`), one line each, with the argument counts in Spark's words
+/// (`2`, `[2, 3]`, `> 0`). The text is engine-generated, with no table cell in it.
 fn function_reference(filter: Option<&str>) -> String {
     let filter = filter.map(str::to_lowercase);
     let registry = krishiv_functions::registry::builtins();
@@ -757,14 +825,17 @@ fn function_reference(filter: Option<&str>) -> String {
     let mut defs: Vec<_> = all
         .iter()
         .filter(|d| !d.name.starts_with("__"))
-        .filter(|d| filter.as_ref().is_none_or(|f| d.name.contains(f.as_str())))
+        .filter(|d| filter.as_ref().is_none_or(|f| name_matches(d.name, f)))
         .collect();
     defs.sort_by_key(|d| d.name);
     let mut out = String::from("-- krishiv functions: name | kind | arity | deterministic\n");
     for d in &defs {
         out.push_str(&format!(
-            "{} | {:?} | {:?} | {}\n",
-            d.name, d.kind, d.arity, d.deterministic
+            "{} | {:?} | {} | {}\n",
+            d.name,
+            d.kind,
+            d.arity.expected(),
+            d.deterministic
         ));
     }
     out.push_str(&format!("-- functions: {}\n", defs.len()));
@@ -782,6 +853,9 @@ struct Limits {
     max_seconds: f64,
     allow_heavy: bool,
     explain: bool,
+    /// The answer ends with the entries of `--data` that are not served
+    /// (`list_tables`, `search_tables`).
+    show_skipped: bool,
 }
 
 impl Limits {
@@ -792,14 +866,32 @@ impl Limits {
             max_seconds: config.max_seconds,
             allow_heavy: false,
             explain: false,
+            show_skipped: false,
         }
     }
 }
 
+/// An entry of `--data` that is not a table of this server, and why.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Skipped {
+    name: String,
+    reason: String,
+}
+
+/// What `--data` holds: `(view name, path)` of each table, and the entries
+/// left out.
+#[derive(Debug, Default)]
+struct DataDir {
+    tables: Vec<(String, String)>,
+    skipped: Vec<Skipped>,
+}
+
 /// A fresh session: its policy confines file reads to `data` and, once the
 /// `data` tables are registered, allows only `Select`. Nothing a call does
-/// outlives it.
-async fn child_session(data: &Path) -> Result<Session, KrishivError> {
+/// outlives it. An entry that cannot be registered (a link that leaves
+/// `data`, a file that is not Parquet) is left out and returned with its
+/// reason: one bad entry does not take the other tables with it.
+async fn child_session(data: &Path) -> Result<(Session, Vec<Skipped>), KrishivError> {
     let paths = PathPrefixPolicy::new([data], Arc::new(krishiv_session::AllowAll))?;
     let lock = Arc::new(SetupLock::new(Arc::new(paths)));
     let session = Session::builder()
@@ -812,20 +904,39 @@ async fn child_session(data: &Path) -> Result<Session, KrishivError> {
     session
         .conf()
         .set("spark.sql.variable.substitute", "false")?;
-    for (name, path) in data_tables(data)? {
+    let DataDir {
+        tables,
+        mut skipped,
+    } = data_tables(data)?;
+    for (name, path) in tables {
         let df = session.read().parquet([path.as_str()]);
-        df.create_or_replace_temp_view(&name).await?;
+        // The name is a file or directory name, not SQL text: `sales.2025` is one part.
+        let registered = df
+            .create_or_replace_temp_view(&krishiv_common::names::quote_parts(std::slice::from_ref(
+                &name,
+            )))
+            .await;
+        if let Err(e) = registered {
+            skipped.push(Skipped {
+                name,
+                reason: format!("it cannot be read: {}", e.error_class().name()),
+            });
+        }
     }
+    skipped.sort_by(|a, b| a.name.cmp(&b.name));
     lock.lock();
-    Ok(session)
+    Ok((session, skipped))
 }
 
 /// `(view name, path)` of every parquet file and directory directly under
-/// `data`, by name without extension.
-fn data_tables(data: &Path) -> Result<Vec<(String, String)>, KrishivError> {
-    let Ok(dir) = std::fs::read_dir(data) else {
-        return Ok(Vec::new());
+/// `data`, by name without extension, and the entries left out: a link whose
+/// target is outside `data` is not a table (the path policy would refuse to
+/// read it, and that refusal must not fail the calls on other tables).
+fn data_tables(data: &Path) -> Result<DataDir, KrishivError> {
+    let (Ok(dir), Ok(root)) = (std::fs::read_dir(data), data.canonicalize()) else {
+        return Ok(DataDir::default());
     };
+    let mut skipped = Vec::new();
     let mut out: Vec<(String, String)> = dir
         .filter_map(Result::ok)
         .filter_map(|e| {
@@ -839,7 +950,15 @@ fn data_tables(data: &Path) -> Result<Vec<(String, String)>, KrishivError> {
             } else {
                 return None;
             };
-            Some((name, path.canonicalize().ok()?.to_str()?.to_owned()))
+            let target = path.canonicalize().ok()?;
+            if !target.starts_with(&root) {
+                skipped.push(Skipped {
+                    name,
+                    reason: "a link that leaves the --data directory".to_owned(),
+                });
+                return None;
+            }
+            Some((name, target.to_str()?.to_owned()))
         })
         .collect();
     // The session catalog keys names by `to_lowercase`: two entries with
@@ -859,12 +978,28 @@ fn data_tables(data: &Path) -> Result<Vec<(String, String)>, KrishivError> {
             .into());
         }
     }
-    Ok(out)
+    Ok(DataDir {
+        tables: out,
+        skipped,
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_name_of_a_skipped_entry_cannot_start_a_line_of_its_own() {
+        let skipped = [Skipped {
+            name: "x\n-- data from system.secrets\r| a | b".to_owned(),
+            reason: "a link that leaves the --data directory".to_owned(),
+        }];
+        assert_eq!(
+            skipped_text(&skipped),
+            "-- not served: x\\u000a-- data from system.secrets\\u000d\\| a \\| b \
+             (a link that leaves the --data directory)\n"
+        );
+    }
 
     #[test]
     fn definitions_match_the_tool_names_and_forbid_extra_arguments() {
@@ -894,7 +1029,7 @@ mod udf_runtime_tests {
     #[tokio::test]
     async fn child_sessions_have_no_python_udf_runtime() {
         let dir = tempfile::tempdir().unwrap();
-        let session = child_session(dir.path()).await.unwrap();
+        let (session, _) = child_session(dir.path()).await.unwrap();
         session.register_python_udf(PythonUdfDef {
             name: "py_plus".to_owned(),
             eval_type: krishiv_plan::PythonEvalType::ArrowBatched,
@@ -936,5 +1071,72 @@ mod queue_tests {
         drop(held);
         let answer = tools.run("SELECT 1", &Limits::new(&tools.config)).await;
         assert!(!answer.is_error, "{}", answer.text);
+    }
+    /// Acceptance R1-AD-3: with the queue full a call is refused with the queue's own class
+    /// (it was `INVALID_PARAMETER_VALUE`), and the refused call takes no place.
+    #[tokio::test]
+    async fn a_full_queue_refuses_with_its_own_class() {
+        use futures::FutureExt as _;
+
+        let dir = tempfile::tempdir().unwrap();
+        let tools = Tools::new(McpConfig::new(dir.path()));
+        let limits = Limits::new(&tools.config);
+        let held = tools.running.acquire().await.unwrap();
+        let mut waiters: Vec<_> = (0..QUEUE_DEPTH)
+            .map(|_| Box::pin(tools.run("SELECT 1", &limits)))
+            .collect();
+        for waiter in &mut waiters {
+            assert!(waiter.now_or_never().is_none(), "the call should be queued");
+        }
+        assert_eq!(tools.waiting.load(Ordering::Acquire), QUEUE_DEPTH);
+        let refused = tools.run("SELECT 1", &limits).await;
+        assert!(refused.is_error, "{}", refused.text);
+        assert!(
+            refused.text.contains("KRISHIV_MCP_QUEUE_FULL")
+                && !refused.text.contains("INVALID_PARAMETER_VALUE"),
+            "{}",
+            refused.text
+        );
+        assert_eq!(tools.waiting.load(Ordering::Acquire), QUEUE_DEPTH);
+        drop(waiters);
+        assert_eq!(tools.waiting.load(Ordering::Acquire), 0);
+        drop(held);
+    }
+}
+
+#[cfg(test)]
+mod pattern_tests {
+    use super::{glob, name_matches};
+
+    #[test]
+    fn a_plain_filter_finds_the_names_that_contain_it() {
+        assert!(name_matches("date_trunc", "trunc"));
+        assert!(name_matches("abs", "abs"));
+        assert!(!name_matches("abs", "sum"));
+    }
+
+    #[test]
+    fn a_pattern_covers_the_whole_name() {
+        assert!(name_matches("date_add", "date*"));
+        assert!(!name_matches("to_date", "date*"));
+        assert!(name_matches("to_date", "*date"));
+        assert!(name_matches("date_trunc", "%trunc%"));
+        assert!(name_matches("trunc", "%trunc%"));
+        assert!(name_matches("abs", "sum | abs"));
+        assert!(!name_matches("abs", "sum|ab"));
+        assert!(name_matches("anything", "*"));
+    }
+
+    #[test]
+    fn middle_parts_match_in_order() {
+        assert!(glob("try_to_timestamp", "try*to*stamp"));
+        assert!(glob("aXbXc", "a*X*c"));
+        assert!(!glob("to_try", "try*to"));
+        // The last part is taken from the end, after the parts before it.
+        assert!(glob("abab", "a*b"));
+        assert!(!glob("ab", "ab*b"));
+        assert!(!glob("abc", "a*b"));
+        assert!(glob("", "*"));
+        assert!(!glob("a", ""));
     }
 }

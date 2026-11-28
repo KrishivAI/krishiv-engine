@@ -2983,6 +2983,7 @@ version = "0.2.1"
 dependencies = [
  "krishiv-common",
  "libmimalloc-sys",
+ "rustix",
 ]
 
 [[package]]
@@ -3304,6 +3305,7 @@ dependencies = [
  "cbc",
  "datasketches",
  "fancy-regex",
+ "foldhash",
  "getrandom 0.4.3",
  "krishiv-common",
  "krishiv-io",
@@ -3489,6 +3491,7 @@ dependencies = [
  "arrow-data 60.2.0",
  "arrow-schema 60.2.0",
  "futures",
+ "krishiv-catalogs",
  "krishiv-common",
  "krishiv-connect-server",
  "krishiv-exec",
@@ -3499,6 +3502,8 @@ dependencies = [
  "krishiv-session",
  "krishiv-sql",
  "krishiv-types",
+ "krishiv-udf-pool",
+ "krishiv-udf-sandbox",
  "libmimalloc-sys",
  "mimalloc",
  "pyo3",

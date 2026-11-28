@@ -50,6 +50,8 @@ use krishiv_kernels::interval::{interval_part, interval_part_type};
 use super::args::{Inputs, internal, is_string, is_timestamp, to_utf8, unsupported};
 use super::{BindArg, BindOptions, Binding, FamilyResult, bad_types, listed};
 
+mod time_format;
+
 /// Every name this family binds.
 pub(super) const NAMES: &[&str] = &[
     "date_add",
@@ -1557,7 +1559,20 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                 },
             )
         }
-        ("date_format", [t, s]) if is_string(s) && is_date_or_timestamp_or_string(t) => {
+        // Spark 4.3: a `TIME` prints through `TimeFormatter` (the `java.time` pattern under any
+        // parser policy) over its nanoseconds; a pattern with a date or zone field the time
+        // cannot fill is `INVALID_PARAMETER_VALUE.PATTERN` (`DateFormatClass.formatTimeWithError`).
+        ("date_format", [DataType::Time64(TimeUnit::Nanosecond), s]) if is_string(s) => {
+            let pat = match pattern_arg(args, 1, Purpose::FormatTime, false) {
+                Ok(p) => p,
+                Err(e) => return Some((listed, Err(e))),
+            };
+            time_format::binding(pat)
+        }
+        ("date_format", [t, s])
+            if is_string(s) && (is_date_or_timestamp_or_string(t) || super::nanos::is_nanos(t)) =>
+        {
+            let nanos = super::nanos::is_nanos(t);
             let pat = match pattern_arg(args, 1, Purpose::Format, opts.legacy_time_parser) {
                 Ok(p) => p,
                 Err(e) => return Some((listed, Err(e))),
@@ -1568,12 +1583,33 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                 // the session zone gives them (Spark's implicit cast to
                 // `TIMESTAMP`); a NULL literal pattern is NULL for every
                 // row.
+                // A nanosecond timestamp formats its microseconds with the nanoseconds within them.
+                let split = if nanos {
+                    Some(super::nanos::split_first(x)?)
+                } else {
+                    None
+                };
+                let floored;
+                let x = match &split {
+                    Some((args, _)) => {
+                        floored = Inputs::new(args, x.rows());
+                        &floored
+                    }
+                    None => x,
+                };
+                let rest = |i: usize| {
+                    split
+                        .as_ref()
+                        .map_or(0, |(_, r)| r.get(i).copied().unwrap_or(0))
+                };
                 let instants = cast_to_instants(x, &o, mode)?;
                 let zone = session_zone(&o);
                 match &pat {
                     PatternArg::Null => Ok(Arc::new(StringArray::new_null(x.rows())) as ArrayRef),
                     PatternArg::Literal(p) => {
-                        Ok(Arc::new(format_timestamps(p, &instants, zone)?) as ArrayRef)
+                        Ok(Arc::new(krishiv_kernels::datetime::format_timestamps_nanos(
+                            p, &instants, rest, zone,
+                        )?) as ArrayRef)
                     }
                     PatternArg::Column => {
                         let fmts = x.strings(1)?;
@@ -1587,9 +1623,12 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                             let p = cache
                                 .get(fmts.value(i))
                                 .map_err(|e| krishiv_kernels::KernelError::with_row(Some(i), e))?;
-                            out.push(Some(p.format_timestamp(instants.value(i), zone).map_err(
-                                |e| krishiv_kernels::KernelError::with_row(Some(i), e),
-                            )?));
+                            out.push(Some(
+                                p.format_timestamp_nanos(instants.value(i), rest(i), zone)
+                                    .map_err(|e| {
+                                        krishiv_kernels::KernelError::with_row(Some(i), e)
+                                    })?,
+                            ));
                         }
                         Ok(
                             Arc::new(StringArray::from_iter(out.iter().map(|s| s.as_deref())))

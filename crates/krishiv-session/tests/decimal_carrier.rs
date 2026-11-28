@@ -4,6 +4,8 @@
 //! `Decimal128`, and queries that mix the two carriers give Spark's answers.
 #![cfg(test)]
 
+mod literal_path;
+use literal_path::sql_path;
 use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
@@ -201,16 +203,16 @@ fn file_formats_round_trip_both_carriers() {
     for format in ["parquet", "csv"] {
         for (name, ty) in [("narrow", "DECIMAL(10,2)"), ("wide", "DECIMAL(20,2)")] {
             let path = dir.path().join(format!("{format}_{name}"));
-            let path = path.to_str().unwrap();
+            let path = sql_path(&path);
             let rows =
                 format!("SELECT CAST(1.50 AS {ty}) AS d UNION ALL SELECT CAST(-2.75 AS {ty})");
             let df = block_on(s.sql(&rows)).unwrap();
-            block_on(df.write().format(format).save(path))
+            block_on(df.write().format(format).save(&path))
                 .unwrap_or_else(|e| panic!("write {format} {ty}: {e}"));
             if format == "csv" {
                 // The reader's own tests read CSV on both carriers.
                 let mut text = String::new();
-                for file in std::fs::read_dir(path).unwrap() {
+                for file in std::fs::read_dir(&path).unwrap() {
                     let file = file.unwrap();
                     if file.file_name() != "_krishiv_log" {
                         text += &std::fs::read_to_string(file.path()).unwrap();

@@ -55,6 +55,8 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.ui.embed.linkTtl", &UI_EMBED_LINK_TTL),
     ("krishiv.flightSql.enabled", &FLIGHT_SQL_ENABLED),
     ("krishiv.io.requestTimeout", &IO_REQUEST_TIMEOUT),
+    ("krishiv.io.text.inferTime", &IO_TEXT_INFER_TIME),
+    ("krishiv.io.text.timeNanos", &IO_TEXT_TIME_NANOS),
     ("krishiv.spill.compression", &SPILL_COMPRESSION),
     ("krishiv.sql.timestampType", &SQL_TIMESTAMP_TYPE),
     ("krishiv.ui.allowedOrigins", &UI_ALLOWED_ORIGINS),
@@ -132,6 +134,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         "krishiv.delta.maxCommitAttempts",
         &DELTA_MAX_COMMIT_ATTEMPTS,
     ),
+    ("krishiv.exec.dataflowScheduling", &EXEC_DATAFLOW_SCHEDULING),
     (
         "krishiv.io.coalesceWasteDivisor",
         &IO_COALESCE_WASTE_DIVISOR,
@@ -188,7 +191,12 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         "krishiv.io.maxConcurrentRequests",
         &IO_MAX_CONCURRENT_REQUESTS,
     ),
+    (
+        "krishiv.memory.releaseAtQueryEnd",
+        &MEMORY_RELEASE_AT_QUERY_END,
+    ),
     ("krishiv.optimizer.joinEnumerator", &JOIN_ENUMERATOR),
+    ("krishiv.optimizer.joinPruneFirst", &JOIN_PRUNE_FIRST),
     (
         "krishiv.server.readiness.timeout",
         &SERVER_READINESS_TIMEOUT,
@@ -360,6 +368,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.optimizer.derivedKeysAbove", &DERIVED_KEYS_ABOVE),
     ("krishiv.optimizer.eagerAggregation", &EAGER_AGGREGATION),
     ("krishiv.optimizer.ndvSampling.rows", &NDV_SAMPLING_ROWS),
+    ("krishiv.optimizer.rollupFromParent", &ROLLUP_FROM_PARENT),
     ("krishiv.optimizer.subqueryAsWindow", &SUBQUERY_AS_WINDOW),
     (
         "krishiv.python.worker.maxPerTenant",
@@ -466,6 +475,14 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.runtimeFilter.bloom.maxItems",
         &RUNTIME_FILTER_BLOOM_MAX_ITEMS,
+    ),
+    (
+        "krishiv.runtimeFilter.residualBounds",
+        &RUNTIME_FILTER_RESIDUAL_BOUNDS,
+    ),
+    (
+        "krishiv.runtimeFilter.smallTableWait",
+        &RUNTIME_FILTER_SMALL_TABLE_WAIT,
     ),
     (
         "krishiv.sql.legacy.codingErrorAction",
@@ -622,6 +639,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.optimizer.preservedSideSemiJoin",
         &PRESERVED_SIDE_SEMI_JOIN,
+    ),
+    (
+        "krishiv.optimizer.shareLiteralInstances",
+        &SHARE_LITERAL_INSTANCES,
     ),
     (
         "krishiv.optimizer.shareRepeatedSubtrees",
@@ -790,6 +811,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.flightSql.maxHandleBytesPerPrincipal",
         &FLIGHT_SQL_MAX_HANDLE_BYTES_PER_PRINCIPAL,
+    ),
+    (
+        "krishiv.optimizer.groupKeyCodeMultiDimension",
+        &GROUP_KEY_CODE_MULTI_DIMENSION,
     ),
     (
         "krishiv.sql.execution.arrow.useLargeVarTypes",

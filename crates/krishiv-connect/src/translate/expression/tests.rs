@@ -346,6 +346,30 @@ fn casts_take_a_type_or_a_ddl_string() {
     assert_eq!(text(&cast(Some(decimal), 0)), "CAST(a AS DECIMAL(10,2))");
 }
 
+/// A cast's type string reads a bare `TIMESTAMP` as `spark.sql.timestampType` names it (Spark
+/// Connect parses it with the session's `DataTypeAstBuilder`), at any depth; a typed cast and
+/// `TIMESTAMP_LTZ` keep their type.
+#[test]
+fn a_cast_type_string_follows_the_session_timestamp_type() {
+    let mut conf = TranslateConf::default();
+    conf.parser.timestamp_ntz = true;
+    let under = |ddl: &str, conf: &TranslateConf| {
+        translate_expression(&cast(Some(CastToType::TypeStr(ddl.into())), 0), conf)
+            .unwrap()
+            .to_string()
+    };
+    assert_eq!(under("timestamp", &conf), "CAST(a AS TIMESTAMP_NTZ)");
+    assert_eq!(
+        under("array<timestamp>", &conf),
+        "CAST(a AS ARRAY<TIMESTAMP_NTZ>)"
+    );
+    assert_eq!(under("timestamp_ltz", &conf), "CAST(a AS TIMESTAMP)");
+    assert_eq!(
+        under("timestamp", &TranslateConf::default()),
+        "CAST(a AS TIMESTAMP)"
+    );
+}
+
 #[test]
 fn cast_eval_modes() {
     let to = || Some(CastToType::TypeStr("int".into()));
@@ -505,7 +529,6 @@ fn unsupported_expression_kinds_are_named() {
             "unresolved_regex",
         ),
         (ExprType::SortOrder(Box::default()), "sort_order"),
-        (ExprType::Window(Box::default()), "window"),
         (ExprType::LambdaFunction(Box::default()), "lambda_function"),
         (
             ExprType::UnresolvedExtractValue(Box::default()),
@@ -703,4 +726,116 @@ fn text_of_sql(sql: &str) -> String {
     )
     .unwrap()
     .to_string()
+}
+
+#[test]
+fn a_window_expression_carries_partition_order_and_frame() {
+    use expression::window::{
+        WindowFrame,
+        window_frame::{FrameBoundary, FrameType, frame_boundary::Boundary},
+    };
+    let bound = |b| Some(Box::new(FrameBoundary { boundary: Some(b) }));
+    let w = expr(ExprType::Window(Box::new(expression::Window {
+        window_function: Some(Box::new(func("row_number", vec![]))),
+        partition_spec: vec![attr("k")],
+        order_spec: vec![expression::SortOrder {
+            child: Some(Box::new(attr("v"))),
+            direction: expression::sort_order::SortDirection::Ascending as i32,
+            null_ordering: expression::sort_order::NullOrdering::SortNullsFirst as i32,
+        }],
+        frame_spec: Some(Box::new(WindowFrame {
+            frame_type: FrameType::Row as i32,
+            lower: bound(Boundary::Unbounded(true)),
+            upper: bound(Boundary::CurrentRow(true)),
+        })),
+    })));
+    let e = translate_expression(&w, &conf()).unwrap();
+    let krishiv_plan::ExprNode::Window(win) = &e.node else {
+        panic!("a window expression")
+    };
+    let krishiv_plan::WindowSpecRef::Spec(spec) = &win.window else {
+        panic!("an inline window")
+    };
+    assert_eq!(spec.partition_by.len(), 1);
+    assert_eq!(spec.order_by.len(), 1);
+    let frame = spec.frame.as_ref().unwrap();
+    assert_eq!(frame.units, krishiv_plan::FrameUnits::Rows);
+    assert_eq!(frame.lower, krishiv_plan::FrameBound::UnboundedPreceding);
+    assert_eq!(frame.upper, krishiv_plan::FrameBound::CurrentRow);
+
+    // A frame with no lower bound is refused, and so is a missing window function.
+    let no_lower = expr(ExprType::Window(Box::new(expression::Window {
+        window_function: Some(Box::new(func("row_number", vec![]))),
+        frame_spec: Some(Box::new(WindowFrame {
+            frame_type: FrameType::Row as i32,
+            lower: None,
+            upper: bound(Boundary::CurrentRow(true)),
+        })),
+        ..Default::default()
+    })));
+    assert!(translate_expression(&no_lower, &conf()).is_err());
+    let no_function = expr(ExprType::Window(Box::default()));
+    assert!(translate_expression(&no_function, &conf()).is_err());
+}
+
+#[test]
+fn window_frames_take_value_bounds_range_units_and_refuse_an_undefined_type() {
+    use expression::window::{
+        WindowFrame,
+        window_frame::{FrameBoundary, FrameType, frame_boundary::Boundary},
+    };
+    let boundary = |b| Some(Box::new(FrameBoundary { boundary: Some(b) }));
+    let window = |frame_type: FrameType, lower, upper| {
+        expr(ExprType::Window(Box::new(expression::Window {
+            window_function: Some(Box::new(func("sum", vec![attr("v")]))),
+            frame_spec: Some(Box::new(WindowFrame {
+                frame_type: frame_type as i32,
+                lower,
+                upper,
+            })),
+            ..Default::default()
+        })))
+    };
+    let frame_of = |w: &Expression| {
+        let e = translate_expression(w, &conf()).unwrap();
+        let krishiv_plan::ExprNode::Window(win) = &e.node else {
+            panic!("a window expression")
+        };
+        let krishiv_plan::WindowSpecRef::Spec(spec) = &win.window else {
+            panic!("an inline window")
+        };
+        spec.frame.clone().unwrap()
+    };
+    // `rangeBetween(-1, 1)`: value bounds keep their expressions, the units are RANGE.
+    let w = window(
+        FrameType::Range,
+        boundary(Boundary::Value(Box::new(attr("lo")))),
+        boundary(Boundary::Value(Box::new(attr("hi")))),
+    );
+    let f = frame_of(&w);
+    assert_eq!(f.units, krishiv_plan::FrameUnits::Range);
+    assert!(matches!(f.lower, krishiv_plan::FrameBound::Offset(_)));
+    assert!(matches!(f.upper, krishiv_plan::FrameBound::Offset(_)));
+    // CURRENT ROW to UNBOUNDED FOLLOWING.
+    let w = window(
+        FrameType::Row,
+        boundary(Boundary::CurrentRow(true)),
+        boundary(Boundary::Unbounded(true)),
+    );
+    let f = frame_of(&w);
+    assert_eq!(f.lower, krishiv_plan::FrameBound::CurrentRow);
+    assert_eq!(f.upper, krishiv_plan::FrameBound::UnboundedFollowing);
+    // An undefined frame type, and a boundary with nothing set, are refused.
+    let w = window(
+        FrameType::Undefined,
+        boundary(Boundary::CurrentRow(true)),
+        boundary(Boundary::CurrentRow(true)),
+    );
+    assert!(translate_expression(&w, &conf()).is_err());
+    let w = window(
+        FrameType::Row,
+        Some(Box::new(FrameBoundary { boundary: None })),
+        boundary(Boundary::CurrentRow(true)),
+    );
+    assert!(translate_expression(&w, &conf()).is_err());
 }

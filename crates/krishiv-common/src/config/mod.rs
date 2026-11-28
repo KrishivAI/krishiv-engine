@@ -47,6 +47,10 @@ pub use registry::*;
 pub use registry_join::*;
 pub use scan_instance::EXEC_SCAN_INSTANCE_PROJECTION;
 
+/// Spark's `TIME` gate, `spark.sql.timeType.enabled` (default off): the
+/// analyzer and the CSV / JSON sources read it under this one name.
+pub const TIME_TYPE_ENABLED: &str = "spark.sql.timeType.enabled";
+
 /// Where a config entry may be set.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Scope {
@@ -197,8 +201,10 @@ impl ValueType {
                 }),
             ValueType::String => Ok(ConfigValue::String(Cow::Owned(raw.to_owned()))),
             ValueType::TimeZone => {
-                if is_valid_time_zone(s) {
-                    Ok(ConfigValue::String(Cow::Owned(s.to_owned())))
+                // Untrimmed: Spark's `ZoneId.of` takes the text as given, so
+                // ` UTC ` is no zone (`INVALID_CONF_VALUE.TIME_ZONE`).
+                if is_valid_time_zone(raw) {
+                    Ok(ConfigValue::String(Cow::Owned(raw.to_owned())))
                 } else {
                     Err(
                         "expected a region ID such as `America/Los_Angeles` or a zone \

@@ -909,6 +909,7 @@ fn two_reads_of_a_shared_cte_in_two_branches_repeat_ids_as_spark() {
         io_threads: 1,
         blocking_threads: 1,
         io_blocking_threads: 2,
+        release_when_idle: true,
     })
     .unwrap();
     let s = Session::builder().executor(executor).build().unwrap();

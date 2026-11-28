@@ -359,6 +359,14 @@ impl SpillScope {
         let _ = self.inner.writer_hook.set(WriterHook(hook));
     }
 
+    /// The drop-behind window of this scope's writers in bytes
+    /// (`krishiv.spill.dropBehindBytes`; 0 when disabled). A writer forces
+    /// writeback once per window and at finish, so files much smaller than
+    /// the window each pay that cost alone.
+    pub fn drop_behind_bytes(&self) -> u64 {
+        self.inner.manager().drop_behind
+    }
+
     /// Starts a spill file for batches of `schema`. `reservation` accounts
     /// the writer's scratch memory (see [`SpillWriter`]); when it comes from
     /// a [`ConsumerHandle`](crate::ConsumerHandle), the finished file is
@@ -723,6 +731,10 @@ fn network_fs(root: &Path) -> Option<String> {
 
 /// The type of the mount containing `path` in `/proc/self/mounts` text, if
 /// it is a network or FUSE file system.
+#[cfg_attr(
+    all(not(target_os = "linux"), not(test)),
+    expect(dead_code, reason = "/proc/self/mounts is read on Linux only")
+)]
 pub(crate) fn network_fs_in(mounts: &str, path: &Path) -> Option<String> {
     let fs_type = mount_type_in(mounts, path)?;
     let network = [
@@ -736,6 +748,10 @@ pub(crate) fn network_fs_in(mounts: &str, path: &Path) -> Option<String> {
 
 /// The type of the mount containing `path` in `/proc/self/mounts` text (the
 /// longest matching mount point).
+#[cfg_attr(
+    all(not(target_os = "linux"), not(test)),
+    expect(dead_code, reason = "/proc/self/mounts is read on Linux only")
+)]
 pub(crate) fn mount_type_in(mounts: &str, path: &Path) -> Option<String> {
     mounts
         .lines()

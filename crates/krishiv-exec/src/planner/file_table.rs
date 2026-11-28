@@ -36,6 +36,9 @@ pub struct FileTable {
     scan: FileScan,
     statistics: Option<TableStats>,
     units: Option<u64>,
+    /// Per column, the mean unit's `max - min` over the table's own `max - min`
+    /// ([`TableProvider::unit_spread`]).
+    spread: HashMap<String, f64>,
     /// The I/O the table reads through (footers, samples).
     io: IoContext,
     /// The table's columns as the analyzer resolved them.
@@ -131,6 +134,11 @@ impl FileTable {
             });
         })
         .await?;
+        let spread = stats
+            .as_ref()
+            .zip(units)
+            .map(|(s, u)| unit_spread(s, u, &table))
+            .unwrap_or_default();
         let statistics = known
             .then(|| stats.map(|s| table_stats(&s, &table)))
             .flatten();
@@ -161,6 +169,7 @@ impl FileTable {
             scan,
             statistics,
             units,
+            spread,
             io,
             table,
             file_rows,
@@ -196,6 +205,10 @@ impl TableProvider for FileTable {
 
     fn scan_units(&self) -> Option<u64> {
         self.units
+    }
+
+    fn unit_spread(&self, column: &str) -> Option<f64> {
+        self.spread.get(column).copied()
     }
 
     fn unique_keys(&self) -> Vec<Vec<String>> {
@@ -410,11 +423,45 @@ fn merge(mut acc: FileStatistics, s: &FileStatistics) -> FileStatistics {
             return false;
         };
         c.null_count = add(&c.null_count, &o.null_count);
+        c.unit_width_sum = c.unit_width_sum.zip(o.unit_width_sum).map(|(a, b)| a + b);
         c.min = pick(&c.min, &o.min, Ordering::Less);
         c.max = pick(&c.max, &o.max, Ordering::Greater);
         true
     });
     acc
+}
+
+/// Per top-level integer or date column, the mean unit's `max - min` over the
+/// table's `max - min` (`units` units in all): near 0 for a column written in
+/// order, near 1 for one spread over every unit. Columns of one value are left out.
+fn unit_spread(s: &FileStatistics, units: u64, table: &SchemaRef) -> HashMap<String, f64> {
+    let mut out = HashMap::new();
+    if units == 0 {
+        return out;
+    }
+    for c in &s.columns {
+        let [name] = c.path.0.as_slice() else {
+            continue;
+        };
+        // Only a column of the table, as `table_stats` reads them.
+        if !table.fields().iter().any(|f| f.name() == name) {
+            continue;
+        }
+        let range = c
+            .min
+            .exact()
+            .and_then(integral)
+            .zip(c.max.exact().and_then(integral))
+            .map(|(lo, hi)| hi.saturating_sub(lo));
+        if let (Some(sum), Some(range)) = (c.unit_width_sum, range)
+            && range > 0
+        {
+            #[expect(clippy::cast_precision_loss, reason = "a costing statistic")]
+            let (units, range) = (units as f64, range as f64);
+            out.insert(name.clone(), (sum / units / range).clamp(0.0, 1.0));
+        }
+    }
+    out
 }
 
 /// The smaller (`Less`) or larger of two exact bounds.
@@ -558,6 +605,47 @@ mod tests {
         config: &Config,
     ) -> impl Future<Output = Result<FileTable>> + Send + '_ {
         FileTable::open(format, io, table, files, options, config, 1)
+    }
+
+    /// A column's spread is its mean unit width over its range, summed over files by `merge`;
+    /// a column without unit widths, of one value or not integral has none.
+    #[test]
+    fn unit_spread_is_the_mean_unit_width_over_the_range() {
+        use krishiv_io::{ColumnPath, ColumnStatistics, Precision};
+        let file = |lo: i64, hi: i64, width: Option<f64>| {
+            let mut s = FileStatistics::with_rows(Precision::Exact(100));
+            let col = |name: &str, lo: ScalarValue, hi: ScalarValue| {
+                let mut c = ColumnStatistics::new(ColumnPath::new(name));
+                c.min = Precision::Exact(lo);
+                c.max = Precision::Exact(hi);
+                c.unit_width_sum = width;
+                c
+            };
+            s.columns = vec![
+                col("k", ScalarValue::Int64(lo), ScalarValue::Int64(hi)),
+                col("one", ScalarValue::Int64(7), ScalarValue::Int64(7)),
+                col("f", ScalarValue::Float64(0.0), ScalarValue::Float64(1.0)),
+            ];
+            s
+        };
+        // Two files of 5 units each, 0..=999 and 1000..=1999, each unit 20 wide.
+        let both = merge(file(0, 999, Some(100.0)), &file(1000, 1999, Some(100.0)));
+        let schema = |names: &[&str]| -> SchemaRef {
+            let fields: Vec<arrow_schema::Field> = names
+                .iter()
+                .map(|n| arrow_schema::Field::new(*n, arrow_schema::DataType::Int64, true))
+                .collect();
+            Arc::new(arrow_schema::Schema::new(fields))
+        };
+        let table = schema(&["k", "one", "f"]);
+        let spread = unit_spread(&both, 10, &table);
+        assert!((spread["k"] - 20.0 / 1999.0).abs() < 1e-12, "{spread:?}");
+        assert!(!spread.contains_key("one") && !spread.contains_key("f"));
+        assert!(unit_spread(&both, 0, &table).is_empty());
+        // A file column the table does not have has none.
+        assert!(unit_spread(&both, 10, &schema(&["one"])).is_empty());
+        let unknown = merge(file(0, 999, Some(100.0)), &file(1000, 1999, None));
+        assert!(unit_spread(&unknown, 10, &table).is_empty());
     }
 
     /// Counts live futures: one more while a [`Live`] exists.

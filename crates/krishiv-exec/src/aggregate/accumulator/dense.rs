@@ -10,7 +10,7 @@
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
     Date32Type, Decimal64Type, Decimal128Type, DurationMicrosecondType, Int8Type, Int16Type,
-    Int32Type, Int64Type, IntervalYearMonthType, TimestampMicrosecondType,
+    Int32Type, Int64Type, IntervalYearMonthType, Time64NanosecondType, TimestampMicrosecondType,
 };
 use arrow_array::{Array, ArrayRef};
 use arrow_buffer::NullBuffer;
@@ -107,8 +107,15 @@ pub(super) fn native_ints(a: &ArrayRef) -> Option<NativeInts<'_>> {
         DataType::Timestamp(TimeUnit::Microsecond, _) => {
             NativeInts::I64(a.as_primitive::<TimestampMicrosecondType>().values())
         }
+        DataType::Timestamp(TimeUnit::Nanosecond, _) => NativeInts::I64(
+            a.as_primitive::<arrow_array::types::TimestampNanosecondType>()
+                .values(),
+        ),
         DataType::Duration(TimeUnit::Microsecond) => {
             NativeInts::I64(a.as_primitive::<DurationMicrosecondType>().values())
+        }
+        DataType::Time64(TimeUnit::Nanosecond) => {
+            NativeInts::I64(a.as_primitive::<Time64NanosecondType>().values())
         }
         DataType::Decimal64(..) => NativeInts::I64(a.as_primitive::<Decimal64Type>().values()),
         DataType::Decimal128(..) => NativeInts::I128(a.as_primitive::<Decimal128Type>().values()),
