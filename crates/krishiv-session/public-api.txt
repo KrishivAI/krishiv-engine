@@ -2396,6 +2396,8 @@ pub fn krishiv_session::Session::interrupt_tag(&self, &str) -> alloc::vec::Vec<k
 pub fn krishiv_session::Session::is_closed(&self) -> bool
 pub fn krishiv_session::Session::new_session(&self) -> Self
 pub fn krishiv_session::Session::new_session_as(&self, krishiv_common::principal::Principal, alloc::sync::Arc<dyn krishiv_plan::analyzer::catalog::AccessPolicy>) -> Self
+pub fn krishiv_session::Session::new_session_as_with_profile(&self, krishiv_common::principal::Principal, alloc::sync::Arc<dyn krishiv_plan::analyzer::catalog::AccessPolicy>, krishiv_functions::signature::SparkProfile) -> Self
+pub fn krishiv_session::Session::new_session_with_profile(&self, krishiv_functions::signature::SparkProfile) -> Self
 pub fn krishiv_session::Session::running_queries(&self) -> usize
 pub fn krishiv_session::Session::runtime(&self) -> &alloc::sync::Arc<krishiv_session::EngineRuntime>
 pub fn krishiv_session::Session::set_client_info(&self, krishiv_session::Transport, core::option::Option<&str>, core::option::Option<&str>, core::option::Option<&str>)

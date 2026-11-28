@@ -42,7 +42,9 @@ struct Running {
 
 /// A server whose sessions have `spark.checkpoint.dir` set to `dir`, when given.
 async fn start(dir: Option<String>) -> Running {
-    let factory = move |_: &krishiv_session::auth::Authenticated, _: krishiv_session::Transport| {
+    let factory = move |_: &krishiv_session::auth::Authenticated,
+                        _: krishiv_session::Transport,
+                        _: Option<krishiv_plan::analyzer::SparkProfile>| {
         let s = Session::new()?;
         if let Some(dir) = &dir {
             s.conf().set("spark.checkpoint.dir", dir)?;

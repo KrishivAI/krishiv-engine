@@ -155,7 +155,7 @@ fn session_caps_refuse_before_building() {
     let base = Session::new().expect("session");
     let counter = Arc::clone(&built);
     let m = SessionManager::new(
-        Box::new(move |_, _| {
+        Box::new(move |_, _, _| {
             counter.fetch_add(1, Ordering::SeqCst);
             Ok(base.new_session())
         }),
@@ -230,7 +230,7 @@ fn close_all_closes_every_session() {
 #[test]
 fn a_failing_factory_creates_nothing() {
     let m = SessionManager::new(
-        Box::new(|_, _| {
+        Box::new(|_, _, _| {
             Err(krishiv_common::error::InternalError {
                 message: "no".to_owned(),
             }
@@ -462,7 +462,7 @@ fn the_factory_gets_the_caller() {
     let base = Session::new().expect("session");
     let log = Arc::clone(&seen);
     let m = SessionManager::new(
-        Box::new(move |caller: &Authenticated, _| {
+        Box::new(move |caller: &Authenticated, _, _| {
             log.lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .push((caller.principal.name.clone(), caller.role));
@@ -641,7 +641,7 @@ async fn the_transport_reaches_the_factory_and_system_sessions() {
     let base = Session::new().expect("session");
     let log = Arc::clone(&seen);
     let m = SessionManager::new(
-        Box::new(move |_: &Authenticated, transport| {
+        Box::new(move |_: &Authenticated, transport, _| {
             log.lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .push(transport);
@@ -739,4 +739,70 @@ fn release_owned_tombstones_only_reattachable_operations() {
     let e = m.get(&alice(), ID, None).unwrap_err();
     assert_eq!(class(&e), "INVALID_HANDLE.SESSION_CLOSED");
     assert_eq!(m.release_owned(&owner, ID, false), None, "already gone");
+}
+
+/// `krishiv.connect.sparkProfile` (ADR 0003 update 2026-11-27, S4M-3): under `auto` a new session
+/// takes the release its client declares, an undeclaring client the base's, a pinned value wins,
+/// and an existing session keeps the profile it was created with.
+#[test]
+fn a_new_session_takes_the_profile_the_choice_picks() {
+    use krishiv_plan::analyzer::SparkProfile;
+
+    use super::ProfileChoice;
+
+    let ids = [
+        "6f1f0f7e-3c1b-4b8e-9a43-0f8d2a1c5e01",
+        "6f1f0f7e-3c1b-4b8e-9a43-0f8d2a1c5e02",
+        "6f1f0f7e-3c1b-4b8e-9a43-0f8d2a1c5e03",
+    ];
+    let profile_of = |m: &SessionManager, id: &str, client_type: Option<&str>| {
+        m.get_or_create_declared(&alice(), id, None, "u", client_type)
+            .expect("create")
+            .session()
+            .spark_profile()
+    };
+    let auto = manager(SessionLimits::default()).with_profile_choice(ProfileChoice::Auto);
+    let pyspark_35 = Some("_SPARK_CONNECT_PYTHON spark/3.5.10 os/linux python/3.11.9");
+    assert_eq!(profile_of(&auto, ids[0], pyspark_35), SparkProfile::V3_5);
+    let s = auto.get(&alice(), ids[0], None).expect("get");
+    assert_eq!(
+        s.session().conf().get("spark.sql.ansi.enabled").as_deref(),
+        Some("false")
+    );
+    // The session keeps its profile whatever a later request declares.
+    assert_eq!(
+        profile_of(&auto, ids[0], Some("spark/4.2.1")),
+        SparkProfile::V3_5
+    );
+    assert_eq!(
+        profile_of(&auto, ids[1], Some("spark/4.1.0")),
+        SparkProfile::V4_1
+    );
+    assert_eq!(profile_of(&auto, ids[2], None), SparkProfile::default());
+
+    let pinned = manager(SessionLimits::default())
+        .with_profile_choice(ProfileChoice::Pinned(SparkProfile::V4_0));
+    assert_eq!(profile_of(&pinned, ids[0], pyspark_35), SparkProfile::V4_0);
+
+    let base = manager(SessionLimits::default());
+    assert_eq!(
+        profile_of(&base, ids[0], pyspark_35),
+        SparkProfile::default()
+    );
+}
+
+#[test]
+fn the_profile_choice_parses_auto_and_release_lines() {
+    use krishiv_plan::analyzer::SparkProfile;
+
+    use super::ProfileChoice;
+
+    assert_eq!(ProfileChoice::parse("auto"), Some(ProfileChoice::Auto));
+    assert_eq!(ProfileChoice::parse("AUTO"), Some(ProfileChoice::Auto));
+    assert_eq!(
+        ProfileChoice::parse("3.5"),
+        Some(ProfileChoice::Pinned(SparkProfile::V3_5))
+    );
+    assert_eq!(ProfileChoice::parse("3.4"), None);
+    assert_eq!(ProfileChoice::Auto.for_client(Some("no version")), None);
 }

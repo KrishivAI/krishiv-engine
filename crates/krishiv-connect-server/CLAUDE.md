@@ -125,7 +125,9 @@ Paths are relative to this crate.
   classes, else the Python facade's class/SQLSTATE rules); `KRISHIV_SESSION_LIMIT`, `KRISHIV_OPERATION_LIMIT`, `KRISHIV_ARTIFACT_LIMIT`
   are `RESOURCE_EXHAUSTED`
 - `src/manager.rs` `SessionManager` (Spark's `SparkConnectSessionManager`; its factory gets the `Authenticated`
-  caller and the `Transport`; a new session records transport `connect` (`get_or_create_with` / `get_with` take the
+  caller, the `Transport` and an `Option<SparkProfile>`: `ProfileChoice` (`with_profile_choice`; `Auto` maps the
+  client's `client_type` version, `Pinned` one release, `Base` the base session's; `krishiv.connect.sparkProfile`) picks
+  it when a session is made, S4M-3); a new session records transport `connect` (`get_or_create_with` / `get_with` take the
   transport / surface for Flight SQL, P3-T101 §2 H3: `system.sessions`, the factory's denial surface, the foreign-id
   record), `is_live` / `release_owned` (H5: owner-keyed, no access stamp, no foreign-id record, abandoned tombstones only
   for reattachable operations), `SessionOwner::cap_key` public (H6), the client's `user_id` (unverified, ADR 0046 §5) and its

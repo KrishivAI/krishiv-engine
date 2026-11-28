@@ -240,7 +240,7 @@ impl World {
             Method::Token,
         );
         (
-            factory(&caller, Transport::Connect).unwrap(),
+            factory(&caller, Transport::Connect, None).unwrap(),
             items,
             statements,
         )

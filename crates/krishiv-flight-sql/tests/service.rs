@@ -1683,7 +1683,7 @@ fn grant_sessions(dir: &Path) -> Box<krishiv_connect_server::manager::SessionFac
         .build()
         .expect("runtime");
     let grants = Grants::new(Arc::new(MemoryGrantStore::new()));
-    Box::new(move |caller, _transport| {
+    Box::new(move |caller, _transport, _| {
         let admin = caller.principal.name == "ops";
         let policy = Arc::new(GrantsPolicy::new(
             Arc::clone(&grants),

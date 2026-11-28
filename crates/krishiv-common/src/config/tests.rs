@@ -1964,3 +1964,21 @@ fn a_registered_value_keeps_the_text_it_was_set_to() {
     c.reset_key("spark.sql.repl.eagerEval.enabled", &baseline);
     assert_eq!(c.text(&REPL_EAGER_EVAL_ENABLED).as_deref(), Some(" TRUE "));
 }
+
+#[test]
+fn the_connect_spark_profile_parses_and_defaults_to_auto() {
+    let mut c = Config::new();
+    let get = |c: &Config| {
+        c.get(&CONNECT_SPARK_PROFILE)
+            .and_then(ConfigValue::as_str)
+            .map(str::to_owned)
+    };
+    assert_eq!(get(&c).as_deref(), Some("auto"));
+    for v in ["3.5", "4.0", "4.1", "4.2", "4.3", "auto"] {
+        c.set("krishiv.connect.sparkProfile", v).unwrap();
+        assert_eq!(get(&c).as_deref(), Some(v));
+    }
+    for bad in ["3.4", "4", "4.4", "latest", ""] {
+        assert!(c.set("krishiv.connect.sparkProfile", bad).is_err(), "{bad}");
+    }
+}

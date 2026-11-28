@@ -116,7 +116,7 @@ pub(crate) fn run(args: &DoctorArgs) -> i32 {
 /// Every check, in the order the server's own startup meets them.
 pub(crate) fn diagnose(args: &ServerArgs) -> Vec<Check> {
     let mut out = Vec::new();
-    let settings = match load_settings(args.conf()) {
+    let settings = match load_settings(&args.conf()) {
         Ok(s) => {
             out.push(Check::ok(
                 "config",
