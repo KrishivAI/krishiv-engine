@@ -136,7 +136,8 @@ Do not edit these by hand; each names its generator.
 | `crates/krishiv-functions/vendored/spark-functions.tsv` | `tests/scripts/gen_function_registry.py` |
 | `tests/fixtures/spark-*/` and `tests/fixtures/analysis/` (one file per function or coercion file) | the `tests/scripts/gen_*.py` scripts and `KRISHIV_UPDATE_MANIFEST=1` |
 | `tests/spark-golden/v4.2.0/` | `tests/scripts/import_spark_golden.sh` |
-| Config and error-class reference text | `cargo xtask docs-config`, `cargo xtask docs-errors` (print to stdout or a path) |
+| Config reference text | `cargo xtask docs-config` (prints to stdout or a path) |
+| `docs/reference/errors/` | `cargo xtask docs-errors` |
 
 ## Reading order for a change
 

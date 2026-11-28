@@ -6,6 +6,7 @@ extend-exclude = [
     "tests/spark-golden/**",
     "tests/fixtures/**",
     "docs/reference/sql/**",
+    "docs/reference/errors/**",
     "docs/reference/python/**",
     "docs/reference/rust/**",
     "crates/krishiv-functions/vendored/spark-function-docs.jsonl",

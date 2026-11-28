@@ -16,7 +16,16 @@ The command-line tool (the `krishiv` binary) installs from source with Rust 1.97
 
 Krishiv needs Python 3.11 or newer (the floor of the Spark 4.3 Python client); the examples run on 3.11 to 3.14. `pyarrow` is installed with it (a required dependency since 0.2.1); `collect()` and `toArrow()` return Arrow data.
 
-SQL and DataFrames:
+A first query:
+
+```python
+import krishiv
+
+spark = krishiv.session()  # a PySpark-style SparkSession, in process
+spark.sql("SELECT 1 AS answer").show()
+```
+
+SQL and DataFrames over a file:
 
 ```python
 import tempfile
@@ -28,10 +37,7 @@ import pyarrow.parquet as pq
 import krishiv
 from krishiv.sql import functions as F
 
-spark = krishiv.session()  # a PySpark-style SparkSession, in process
-
-# SQL.
-spark.sql("SELECT 1 AS answer").show()
+spark = krishiv.session()
 
 # DataFrames over a Parquet file; the same file is also a temp view for SQL.
 path = str(Path(tempfile.mkdtemp()) / "orders.parquet")

@@ -70,7 +70,7 @@ fn generated_reference_pages_name_no_internal_documents() {
         .parent()
         .unwrap();
     let mut files = vec![root.join("docs/reference/config/index.md")];
-    for dir in ["sql/functions", "python", "rust"] {
+    for dir in ["sql/functions", "python", "rust", "errors"] {
         let d = root.join("docs/reference").join(dir);
         for e in std::fs::read_dir(&d).unwrap() {
             files.push(e.unwrap().path());
@@ -126,22 +126,48 @@ fn fenced_blocks(text: &str, between_markers: bool) -> Vec<String> {
     out
 }
 
-#[test]
-fn the_quickstart_page_runs_the_readme_code() {
+/// The `python` blocks of a page; for the README, only the Quickstart's.
+#[expect(
+    clippy::unwrap_used,
+    reason = "a test helper: a missing page fails the test"
+)]
+fn python_blocks(path: &str) -> Vec<String> {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap();
-    let readme = std::fs::read_to_string(root.join("README.md")).unwrap();
-    let page = std::fs::read_to_string(root.join("docs/get-started/index.md")).unwrap();
-    let python = |t: &str| {
-        fenced_blocks(t, t == readme)
-            .into_iter()
-            .filter(|b| b.starts_with("```python"))
-            .collect::<Vec<_>>()
-    };
+    let text = std::fs::read_to_string(root.join(path)).unwrap();
+    fenced_blocks(&text, path == "README.md")
+        .into_iter()
+        .filter(|b| b.starts_with("```python"))
+        .collect()
+}
+
+#[test]
+fn the_quickstart_page_runs_the_readme_code() {
+    let readme = python_blocks("README.md");
+    for page in [
+        "docs/get-started/index.md",
+        "docs/get-started/quickstart.md",
+    ] {
+        assert_eq!(
+            readme,
+            python_blocks(page),
+            "{page} drifted from the README"
+        );
+    }
+}
+
+/// The first result comes before the longer example: import, a session, one query.
+#[test]
+fn the_quickstart_starts_with_three_lines() {
+    let first = &python_blocks("README.md")[0];
+    let code: Vec<&str> = first.lines().skip(1).filter(|l| !l.is_empty()).collect();
     assert_eq!(
-        python(&readme),
-        python(&page),
-        "docs/get-started/index.md drifted from the README"
+        code,
+        [
+            "import krishiv",
+            "spark = krishiv.session()  # a PySpark-style SparkSession, in process",
+            "spark.sql(\"SELECT 1 AS answer\").show()",
+        ]
     );
 }

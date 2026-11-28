@@ -27,7 +27,8 @@ Paths are relative to this crate.
 
 ## Extension points
 - New config key: register it in `src/config/registry.rs`, then `cargo xtask docs-config`.
-- New error class: add it to `krishiv-error-classes.json` (or refresh the vendored Spark file), then `cargo xtask docs-errors`.
+- New error class: add it to `krishiv-error-classes.json` (or refresh the vendored Spark file), then `cargo xtask docs-errors` and commit
+  `docs/reference/errors/`.
 - New experimental behaviour: a `krishiv.experimental.*` key in `src/experimental.rs`, never a Cargo feature.
 
 ## Invariants

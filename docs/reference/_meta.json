@@ -4,6 +4,7 @@
   "python": "Python",
   "rust": "Rust",
   "config": "Configuration",
+  "errors": "Error classes",
   "connect": "Spark Connect",
   "metrics-v1": "Metrics",
   "explain-analyze": "EXPLAIN ANALYZE",

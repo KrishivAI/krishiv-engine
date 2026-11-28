@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-//! `cargo xtask docs-config` / `docs-errors`: Markdown reference docs
-//! generated from the krishiv-common registries.
+//! `cargo xtask docs-config` / `docs-errors PATH` / `docs-metrics`: one-page Markdown reference
+//! docs generated from the registries (the published error-class pages are `docs_errors`).
 
 use std::io::Write;
 use std::path::Path;
