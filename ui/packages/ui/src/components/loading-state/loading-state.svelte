@@ -4,7 +4,8 @@
   import { skeletonWidths } from "./progress";
 
   // Loading keeps the layout (skeleton lines), and past a second shows a progress bar with the stage's name. The
-  // bar is a native <progress>: its fill needs no style attribute.
+  // bar is a native <progress>: its fill needs no style attribute. No aria-busy on this status region: a busy
+  // region may hold back its announcements until it is no longer busy, and the stage's name must be announced.
   let {
     class: className,
     label = "Loading",
@@ -16,7 +17,7 @@
   }: HTMLAttributes<HTMLDivElement> & { label?: string; lines?: number; stage?: string; value?: number; max?: number } = $props();
 </script>
 
-<div class={cn("grid gap-2.5", className)} aria-busy="true" role="status" aria-label={label} {...rest}>
+<div class={cn("grid gap-2.5", className)} role="status" aria-label={label} {...rest}>
   {#each skeletonWidths(lines) as w, i (i)}
     <span class={cn("block h-3 animate-pulse rounded-md bg-secondary", w, i === 0 && "h-5")}></span>
   {/each}

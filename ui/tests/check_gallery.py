@@ -23,6 +23,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from playwright.sync_api import Page, sync_playwright
+from playwright.sync_api import TimeoutError as PlaywrightTimeout
 
 sys.path.insert(0, str(Path(__file__).parent))
 from fixture_server import CSP
@@ -42,6 +43,8 @@ PAGES = [
     "states",
 ]
 SELFTEST = "/csp-selftest.html"
+# A page is ready to measure once its fonts are in and two frames have been drawn (no fixed delay).
+SETTLED = "document.fonts.ready.then(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))))"
 SELFTEST_HTML = b'<!doctype html><html lang="en"><title>t</title><p style="color: red">inline</p></html>'
 # Recorded before any page script runs (an init script is not subject to the page's policy).
 LISTEN = """
@@ -137,12 +140,29 @@ def popovers(page: Page, origin: str, scheme: str) -> list[str]:
     page.get_by_role("listbox").wait_for(timeout=5000)
     # As for the menu: arrows count only once the open list has its highlighted option.
     page.locator("[role=listbox] [data-highlighted]").wait_for(timeout=5000)
-    page.keyboard.press("ArrowDown")
-    page.keyboard.press("ArrowDown")
+    # From M (the click's choice): Up twice reaches XS.
+    page.keyboard.press("ArrowUp")
+    page.keyboard.press("ArrowUp")
     page.keyboard.press("Enter")
     page.get_by_role("listbox").wait_for(state="hidden", timeout=5000)
-    if page.locator("[data-chosen] .mono").inner_text() == "xl":
-        problems.append(f"select ({scheme}): the keyboard chose a disabled option")
+    chosen = page.locator("[data-chosen] .mono").inner_text()
+    if chosen != "xs":
+        problems.append(
+            f"select ({scheme}): ArrowUp x2 + Enter from m chose {chosen!r}, not 'xs'"
+        )
+    # From XS, Down three times stops at M: XL is disabled and the list does not wrap.
+    page.locator(trigger).focus()
+    page.keyboard.press("Enter")
+    page.locator("[role=listbox] [data-highlighted]").wait_for(timeout=5000)
+    for _ in range(3):
+        page.keyboard.press("ArrowDown")
+    page.keyboard.press("Enter")
+    page.get_by_role("listbox").wait_for(state="hidden", timeout=5000)
+    chosen = page.locator("[data-chosen] .mono").inner_text()
+    if chosen != "m":
+        problems.append(
+            f"select ({scheme}): ArrowDown x3 + Enter from xs chose {chosen!r}, not 'm' (XL is disabled)"
+        )
 
     # Dialog: a modal with its title as its name; Escape closes it and the focus returns to the trigger.
     page.goto(f"{origin}/#/dialog")
@@ -228,8 +248,10 @@ def grid(page: Page, origin: str) -> list[str]:
     if heights != [40]:
         problems.append(f"grid: rows are {heights} px tall with rowHeight 40")
     box.evaluate("e => { e.scrollTop = e.scrollHeight; }")
-    page.wait_for_timeout(300)
-    if box.get_by_role("cell", name="10000", exact=True).count() != 1:
+    last = box.get_by_role("cell", name="10000", exact=True)
+    try:
+        last.wait_for(timeout=5000)
+    except PlaywrightTimeout:
         problems.append("grid: scrolling to the end does not show row 10000")
     head = box.locator("thead").bounding_box()
     frame = box.bounding_box()
@@ -263,15 +285,40 @@ def grid(page: Page, origin: str) -> list[str]:
     # The 10,000-row grid: End reaches the last row even though it is not drawn yet.
     first_row = box.locator("tbody tr:not([aria-hidden])").first
     box.evaluate("e => { e.scrollTop = 0; }")
-    page.wait_for_timeout(200)
+    box.locator("tbody tr[aria-rowindex='2']").wait_for(timeout=5000)
     first_row.focus()
     page.keyboard.press("End")
-    page.wait_for_timeout(300)
-    if (
-        page.evaluate("document.activeElement?.getAttribute('aria-rowindex')")
-        != "10001"
-    ):
+    try:
+        page.wait_for_function(
+            "document.activeElement?.getAttribute('aria-rowindex') === '10001'",
+            timeout=5000,
+        )
+    except PlaywrightTimeout:
         problems.append("grid: End on a virtual grid does not focus the last row")
+    return problems
+
+
+def field(page: Page, origin: str) -> list[str]:
+    """The idle field's error (console-00 section 4): under 5 minutes is refused, 5 and "never" are accepted."""
+    problems: list[str] = []
+    page.goto(f"{origin}/#/field")
+    idle = page.locator("#f-idle")
+    for value, refused in (
+        ("00 minutes", True),
+        ("04 minutes", True),
+        ("5 minutes", False),
+        ("05 minutes", False),
+        ("90 minutes", False),
+        ("never", False),
+        ("soon", True),
+    ):
+        idle.fill(value)
+        shown = idle.get_attribute("aria-invalid") == "true"
+        named = "f-idle-error" in (idle.get_attribute("aria-describedby") or "")
+        if shown != refused or named != refused:
+            problems.append(
+                f"field: {value!r} gives aria-invalid {shown}, error named {named} (expected {refused})"
+            )
     return problems
 
 
@@ -310,7 +357,12 @@ def gallery_checks() -> list[str]:
         page = browser.new_page()
         page.add_init_script(LISTEN)
         page.goto(origin + SELFTEST)
-        page.wait_for_timeout(200)
+        try:
+            page.wait_for_function(
+                "window.__csp.some(v => v.includes('style-src'))", timeout=5000
+            )
+        except PlaywrightTimeout:
+            pass
         if not any("style-src" in v for v in violations(page)):
             problems.append(
                 "self-test: an inline style attribute was not reported as a CSP violation"
@@ -337,7 +389,7 @@ def gallery_checks() -> list[str]:
                 for name in PAGES:
                     page.goto(f"{origin}/#/{name}")
                     page.locator("h1").first.wait_for(timeout=10000)
-                    page.wait_for_timeout(150)
+                    page.evaluate(SETTLED)
                     if page.evaluate(
                         "document.documentElement.scrollWidth > innerWidth + 1"
                     ):
@@ -348,6 +400,7 @@ def gallery_checks() -> list[str]:
                     problems += popovers(page, origin, scheme)
                     problems += grid(page, origin) if scheme == "dark" else []
                     problems += support_id(page, origin) if scheme == "dark" else []
+                    problems += field(page, origin) if scheme == "dark" else []
                 problems += [f"CSP ({view}): {v}" for v in violations(page)]
                 problems += [f"console ({view}): {e}" for e in errors]
                 ctx.close()

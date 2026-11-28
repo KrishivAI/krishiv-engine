@@ -7,18 +7,31 @@ export interface FieldControl {
   "aria-invalid": "true" | undefined;
 }
 
-/** The ids a field's help and error text take, and the `aria-describedby` that names them (error first). */
+/**
+ * The ids a field's help and error text take, and the `aria-describedby` that names them: the error first, then
+ * the help, then any ids the caller adds (`extra`, a space-separated list; never dropped, never repeated).
+ */
 export function fieldIds(
   id: string,
   help: boolean,
   error: boolean,
+  extra?: string,
 ): { help: string; error: string; describedby: string | undefined } {
   const ids = { help: `${id}-help`, error: `${id}-error` };
-  const named = [error ? ids.error : "", help ? ids.help : ""].filter(Boolean);
+  const named = [...new Set([error ? ids.error : "", help ? ids.help : "", ...(extra ?? "").split(/\s+/)].filter(Boolean))];
   return { ...ids, describedby: named.length ? named.join(" ") : undefined };
 }
 
-/** The attributes a field's control takes. */
-export function fieldControl(id: string, help: boolean, error: boolean): FieldControl {
-  return { id, "aria-describedby": fieldIds(id, help, error).describedby, "aria-invalid": error ? "true" : undefined };
+/**
+ * The attributes a field's control takes. With an error the control is always invalid; without one the caller's
+ * own `aria-invalid` (if any) stands.
+ */
+export function fieldControl(
+  id: string,
+  help: boolean,
+  error: boolean,
+  extra?: { describedby?: string; invalid?: "true" | "false" | boolean },
+): FieldControl {
+  const invalid = error || extra?.invalid === true || extra?.invalid === "true" ? "true" : undefined;
+  return { id, "aria-describedby": fieldIds(id, help, error, extra?.describedby).describedby, "aria-invalid": invalid };
 }

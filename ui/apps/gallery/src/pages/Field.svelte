@@ -6,7 +6,9 @@
   let name = $state("etl-m");
   let idle = $state("0 minutes");
   let size = $state("xs");
-  const idleError = $derived(/^(never|([5-9]|\d\d+) minutes)$/.test(idle) ? undefined : 'Choose 5 minutes or more, or "never" (you pay while it runs).');
+  // "never", or a whole number of minutes from 5 up ("05 minutes" counts as 5; "04" and "00" do not).
+  const idleOk = (v: string) => v === "never" || Number(/^(\d+) minutes$/.exec(v)?.[1] ?? 0) >= 5;
+  const idleError = $derived(idleOk(idle) ? undefined : 'Choose 5 minutes or more, or "never" (you pay while it runs).');
 </script>
 
 <h1>Field</h1>

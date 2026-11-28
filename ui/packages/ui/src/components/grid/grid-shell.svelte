@@ -154,6 +154,7 @@
           >
             {#if h.sortable}
               <button
+                type="button"
                 class={cn("inline-flex min-h-9 cursor-pointer items-center gap-1 bg-transparent font-bold tracking-[0.06em] uppercase hover:text-foreground", h.num && "flex-row-reverse")}
                 onclick={() => (sort = nextSort(sort, h.id))}
               >
@@ -192,13 +193,17 @@
           {#each columns as c (c.id)}
             {@const v = c.value(r.row)}
             <td class={cn("border-b border-border px-3 align-middle whitespace-nowrap", c.num && "mono text-right tabular-nums")} style:height={`${rowHeight}px`}>
-              {#if cell}
-                {@render cell(r.row, c)}
-              {:else if v === null || v === undefined}
-                <span class="text-muted-foreground italic">null</span>
-              {:else}
-                {text(v)}
-              {/if}
+              <!-- A cell's content never grows the row past rowHeight (less its 1 px border): the virtualizer counts
+                   every row at that height, so a taller cell would make the window jump while scrolling. -->
+              <div class={cn("flex items-center overflow-hidden", c.num && "justify-end")} style:max-height={`${rowHeight - 1}px`}>
+                {#if cell}
+                  {@render cell(r.row, c)}
+                {:else if v === null || v === undefined}
+                  <span class="text-muted-foreground italic">null</span>
+                {:else}
+                  {text(v)}
+                {/if}
+              </div>
             </td>
           {/each}
         </tr>

@@ -17,18 +17,22 @@
     value = $bindable(""),
     class: className,
     control,
+    "aria-describedby": describedby,
+    "aria-invalid": invalid,
     ...rest
-  }: Omit<HTMLInputAttributes, "id" | "value"> & {
+  }: Omit<HTMLInputAttributes, "id" | "value" | "aria-invalid"> & {
     id: string;
     label: string;
     help?: string;
     error?: string;
     value?: string;
     control?: Snippet<[FieldControl]>;
+    "aria-invalid"?: "true" | "false" | boolean;
   } = $props();
 
   const ids = $derived(fieldIds(id, !!help, !!error));
-  const attrs = $derived(fieldControl(id, !!help, !!error));
+  // The caller's own description ids join the field's; an error keeps the control invalid whatever the caller says.
+  const attrs = $derived(fieldControl(id, !!help, !!error, { describedby: describedby ?? undefined, invalid }));
 </script>
 
 <div class={cn("grid max-w-xl gap-1.5", className)} data-field-error={error ? "" : undefined}>
@@ -36,7 +40,7 @@
   {#if control}
     {@render control(attrs)}
   {:else}
-    <input class={cn(fieldClass, "w-full", error && "border-2 border-error")} bind:value {...attrs} {...rest} />
+    <input class={cn(fieldClass, "w-full", error && "border-2 border-error")} bind:value {...rest} {...attrs} />
   {/if}
   {#if error}
     <span id={ids.error} class="flex items-start gap-1.5 text-[13px] leading-[18px] text-error">

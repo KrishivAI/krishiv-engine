@@ -62,9 +62,11 @@
   <SelectPrimitive.Portal>
     <SelectPrimitive.Content
       sideOffset={4}
-      class="z-50 max-h-80 min-w-(--bits-select-anchor-width) overflow-hidden rounded-lg border border-border-strong bg-popover p-1.5 text-popover-foreground shadow-pop"
+      class="z-50 min-w-(--bits-select-anchor-width) overflow-hidden rounded-lg border border-border-strong bg-popover p-1.5 text-popover-foreground shadow-pop"
     >
-      <SelectPrimitive.Viewport>
+      <!-- The viewport holds the height cap (20 rem, or less where the page has less room), so a long list scrolls
+           inside the layer instead of being clipped by it. -->
+      <SelectPrimitive.Viewport class="max-h-[min(19rem,var(--bits-select-content-available-height,19rem))] overflow-y-auto">
         {#each items as item (item.value)}
           <SelectPrimitive.Item
             value={item.value}
