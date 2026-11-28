@@ -1625,3 +1625,47 @@ fn a_restored_index_holds_the_recurring_working_set() {
     assert_eq!(RowTable::restored_limit(21_845, RECUR_KEYS), RECUR_KEYS);
     assert_eq!(RowTable::restored_limit(1, usize::MAX / 2), RECUR_KEYS);
 }
+
+/// The first decision sets the early-widening rate from the input sample's
+/// new distinct keys since `FIRST_ADAPT_ROWS / 2`: an input still bringing
+/// new keys (half its rows) is due to widen at `FIRST_ADAPT_ROWS`, one whose
+/// keys were all seen by then (TPC-DS q22's) is not, though its cleared
+/// index made rows of them.
+#[test]
+fn the_first_decision_widens_an_input_of_new_keys_early() {
+    let core = core();
+    let seed = HashSeed::new(Some(2));
+    let fixed = || {
+        RowTable::new(&core, &seed, Mode::Fixed { limit: 1024 }, true, 0)
+            .unwrap()
+            .widening(RADIX_BITS, WIDEN_GROUPS)
+    };
+    let (mut fresh, mut seen) = (fixed(), fixed());
+    let step = 8192;
+    for start in (0..FIRST_ADAPT_ROWS + step).step_by(step) {
+        let s = i64::try_from(start).unwrap();
+        // Every other row a new key, the rows between from 1,000 keys.
+        apply(
+            &mut fresh,
+            &batch(
+                &core,
+                (s..s + 8192).map(|i| {
+                    if i % 2 == 0 {
+                        i
+                    } else {
+                        -i64::try_from(mix(i.unsigned_abs()) % 1000).unwrap() - 1
+                    }
+                }),
+            ),
+        );
+        apply(&mut seen, &batch(&core, (s..s + 8192).map(|i| i % 50_000)));
+    }
+    let early = |t: &RowTable| t.adapt.as_ref().is_some_and(|a| a.early);
+    assert!(
+        early(&fresh),
+        "{:?}",
+        fresh.adapt.as_ref().map(|a| (a.half, a.rows))
+    );
+    assert!(fresh.wants_widen_early());
+    assert!(!early(&seen));
+}
