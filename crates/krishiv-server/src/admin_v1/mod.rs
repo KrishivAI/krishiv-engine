@@ -74,7 +74,7 @@ pub const ADMIN_V1_REVISION: i64 = 4;
 
 /// Whether the surface is still `preview` (design D8): until the first release that ships it a
 /// non-additive change is possible.
-pub const PREVIEW: bool = true;
+pub const PREVIEW: bool = false;
 
 /// How long a mutating call is remembered by default.
 pub const DEFAULT_IDEMPOTENCY_TTL: std::time::Duration = std::time::Duration::from_secs(3600);

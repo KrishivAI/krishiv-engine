@@ -32,7 +32,7 @@ Interfaces that programs and tools read, other than the Rust and Python APIs abo
 
 | Interface | Stability | Notes |
 |---|---|---|
-| [Admin API](../reference/admin-api.md) (`krishiv.admin.v1`) | stable since 0.3 | additive changes only; a break is `admin.v2`; builds before the 0.3.0 tag still report `preview` |
+| [Admin API](../reference/admin-api.md) (`krishiv.admin.v1`) | stable since 0.3 | additive changes only; a break is `admin.v2`; 0.3.0 and earlier builds still report `preview` |
 | [Query events and the usage record](../guides/query-events.md) (`krishiv.event.v1`) | experimental since 0.3 | the event names and the `v1` envelope stay; fields may be added |
 | [`system.*` tables](../reference/system-tables.md) | experimental since 0.3 | columns may be added or renamed in a minor release |
 | [`system.capabilities`](../reference/system-tables.md#systemcapabilities) | stable since 0.3 | the row shape and the `surface` rows; the `feature` row names are experimental |
