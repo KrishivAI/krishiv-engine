@@ -257,6 +257,11 @@ mod tests {
         for raw in ["NaN", "Infinity", "-Infinity", "1e3000000000"] {
             let err = number_decimal(raw).err();
             assert!(err.as_ref().is_some_and(is_not_decimal), "{raw}: {err:?}");
+            assert_eq!(
+                err.map(|e| e.error_class()),
+                Some(krishiv_common::error::ErrorClass::KrishivJsonNumberNotDecimal),
+                "{raw}"
+            );
         }
         assert_eq!(
             number_decimal(&"9".repeat(39)).ok(),
