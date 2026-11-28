@@ -84,10 +84,9 @@ fn first_string(df: &krishiv_session::DataFrame) -> R<String> {
 
 /// Every reader outside a query sees the profile's ANSI default too (review of c0035471f, finding 1): on 3.5,
 /// with ANSI off, `spark.sql.ansi.doubleQuotedIdentifiers` does nothing (`SQLConf.doubleQuotedIdentifiers` at
-/// v3.5.10 is `ansiEnabled && ...`), so `"a"` is a string literal in `selectExpr` as in `spark.sql`, and
-/// `${spark.sql.ansi.enabled}` expands to what `conf.get` says.
+/// v3.5.10 is `ansiEnabled && ...`), so `"a"` is a string literal in `selectExpr` as in `spark.sql`.
 #[test]
-fn expression_strings_and_substitution_follow_the_profile_default() -> R {
+fn expression_strings_follow_the_profile_default() -> R {
     let old = Session::builder()
         .profile(SparkProfile::V3_5)
         .config("spark.sql.ansi.doubleQuotedIdentifiers", "true")
@@ -98,9 +97,5 @@ fn expression_strings_and_substitution_follow_the_profile_default() -> R {
         "a"
     );
     assert_eq!(first_string(&base.select_expr(["\"a\""])?)?, "a");
-    assert_eq!(
-        first_string(&block_on(old.sql("SELECT '${spark.sql.ansi.enabled}'"))?)?,
-        "false"
-    );
     Ok(())
 }

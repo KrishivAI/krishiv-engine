@@ -223,8 +223,9 @@ impl ConfStore {
 
     /// The configuration as a query sees it ([`Self::query_snapshot`] without its version): the
     /// reader for any key whose unset value depends on the session's Spark profile
-    /// (`spark.sql.ansi.enabled` and the parser options it gates, `${..}` substitution), so a
-    /// parse outside a query agrees with the query and with `conf.get`.
+    /// (`spark.sql.ansi.enabled` and the parser options it gates), so a parse outside a query
+    /// agrees with the query and with `conf.get`. `${..}` substitution reads [`Self::snapshot`]:
+    /// Spark substitutes only keys that are set, never a default.
     pub(crate) fn effective(&self) -> Arc<Config> {
         self.query_snapshot().0
     }

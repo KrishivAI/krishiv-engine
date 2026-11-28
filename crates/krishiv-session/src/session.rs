@@ -533,7 +533,7 @@ impl Session {
 
     /// `query` with its `${name}` references replaced, unless `spark.sql.variable.substitute` is false.
     pub(crate) fn substituted<'q>(&self, query: &'q str) -> std::borrow::Cow<'q, str> {
-        let config = self.state.conf.effective();
+        let config = self.state.conf.snapshot();
         if crate::conf::get(&config, "spark.sql.variable.substitute")
             .is_none_or(|v| !v.trim().eq_ignore_ascii_case("false"))
         {
