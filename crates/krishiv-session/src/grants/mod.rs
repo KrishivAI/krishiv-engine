@@ -484,6 +484,13 @@ impl AccessPolicy for GrantsPolicy {
         securable: &'a Securable,
         privilege: Privilege,
     ) -> BoxFuture<'a, Result<AccessDecision, KrishivError>> {
+        // The `information_schema` views are readable by everyone; their rows are filtered by what
+        // the principal may list (`information_schema::Source`).
+        if matches!(privilege, Privilege::Select | Privilege::Browse)
+            && crate::information_schema::is_view_securable(securable)
+        {
+            return Box::pin(std::future::ready(Ok(AccessDecision::Allow)));
+        }
         match Self::decided_by(securable) {
             DecidedBy::Roles => self.system.check(principal, securable, privilege),
             DecidedBy::Grants => Box::pin(std::future::ready(Ok(
