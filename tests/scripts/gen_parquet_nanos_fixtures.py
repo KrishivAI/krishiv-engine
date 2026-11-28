@@ -12,7 +12,8 @@ What Spark 4.3.0 and 4.2.1 read from them is in `krishiv-session/tests/nanos_par
 Usage (from the repo root):
 
     uv run --python 3.12 --with pyarrow==21.0.0 python tests/scripts/gen_parquet_nanos_fixtures.py
-    docker run --rm -v "$PWD/tests/fixtures/parquet/nanos:/out" -v "$PWD/tests/scripts:/s" apache/spark:4.3.0 \\
+    docker run --rm --user "$(id -u):$(id -g)" -v "$PWD/tests/fixtures/parquet/nanos:/out" \\
+        -v "$PWD/tests/scripts:/s" apache/spark:4.3.0 \\
         /opt/spark/bin/spark-shell --conf spark.ui.enabled=false -i /s/parquet_nanos_fixture.scala
 """
 

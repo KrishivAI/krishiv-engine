@@ -1943,3 +1943,19 @@ fn a_projector_reuses_its_plan_across_batches_and_follows_a_schema_change() {
 }
 
 mod field_ids;
+
+/// A column read floored to a lower nanosecond precision takes no pushed
+/// predicate: the file holds the unfloored digits, which a filter of the
+/// table precision would compare against (CodeRabbit on #1072). The same
+/// precision still pushes.
+#[test]
+fn no_predicate_is_pushed_onto_a_floored_nanosecond_column() {
+    use krishiv_types::DataType as K;
+    let ntz = |p: u8| K::TimestampNtzNanos { precision: p }.to_arrow_field("t", true);
+    let file = Arc::new(Schema::new(vec![ntz(9)]));
+    let probe = PushdownExpr::IsNotNull(col("t"));
+    let floored = mapper(&Arc::new(Schema::new(vec![ntz(7)])), &file, by_name()).unwrap();
+    assert_eq!(floored.map_predicate(&probe), None);
+    let same = mapper(&Arc::new(Schema::new(vec![ntz(9)])), &file, by_name()).unwrap();
+    assert_eq!(same.map_predicate(&probe), Some(probe.clone()));
+}

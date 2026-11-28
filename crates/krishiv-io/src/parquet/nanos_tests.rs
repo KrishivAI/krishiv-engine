@@ -107,8 +107,9 @@ fn nanos_types_known_keys_the_metadata_cache() {
     let older = n9(&[("nanosAsLong", "true"), ("nanosTypesKnown", "false")]);
     assert_eq!(older, DataType::Int64);
     let newer = n9(&[("nanosAsLong", "true")]);
-    assert!(
-        matches!(newer, DataType::Timestamp(..)),
-        "a 4.3 read took the 4.2 profile's cached metadata: {newer:?}"
+    assert_eq!(
+        newer,
+        DataType::Timestamp(arrow_schema::TimeUnit::Nanosecond, None),
+        "a 4.3 read took the 4.2 profile's cached metadata"
     );
 }

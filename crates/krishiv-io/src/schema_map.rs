@@ -636,8 +636,9 @@ impl Resolver {
     }
 
     /// The file path, file type and table type of the table column `path`;
-    /// `Ok(None)` when it is missing in the file; `Err` when it cannot be
-    /// resolved (ambiguous, not a struct path).
+    /// `Some(None)` when it is missing in the file; `None` when it cannot be
+    /// resolved (ambiguous, not a struct path) or is read floored to a lower
+    /// nanosecond precision (no predicate is pushed onto it).
     fn resolve_path(&self, path: &ColumnPath) -> Option<Option<(ColumnPath, DataType, DataType)>> {
         let mut tchildren = self.table.fields().clone();
         let mut fchildren = self.file.fields().clone();
@@ -659,6 +660,13 @@ impl Resolver {
                 return Some(None);
             };
             let ff = &fchildren[j];
+            // A column read floored to the table precision is compared on
+            // its floored values, which the file does not hold: a literal
+            // or runtime filter of the table precision would drop rows
+            // whose stored digits it cuts, so nothing is pushed onto it.
+            if nanos_cut(tf, ff).is_some() {
+                return None;
+            }
             out.push(ff.name().clone());
             types = Some((tf.data_type().clone(), ff.data_type().clone()));
         }
