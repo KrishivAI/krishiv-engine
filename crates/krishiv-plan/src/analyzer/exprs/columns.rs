@@ -618,7 +618,15 @@ impl Resolver<'_> {
                     && !hits.iter().any(|h| h.col.id == a.col.id)
                 {
                     let duplicate = a.duplicate || seen.duplicate;
-                    hits.push(Attr { duplicate, ..a });
+                    // The scope's attribute knows the nullability after an
+                    // outer join; the carrier's is the input's own.
+                    let mut col = a.col;
+                    col.nullable = seen.col.nullable;
+                    hits.push(Attr {
+                        duplicate,
+                        col,
+                        ..a
+                    });
                 }
             }
             // As `find`: a union input's repeat of a column does not count
@@ -638,6 +646,18 @@ impl Resolver<'_> {
         // DataFrame reference against an enclosing query (golden case
         // `outer`).
         let mut hits = pick(carriers(cx, id), cx.scope);
+        if hits.is_empty() {
+            // A key a `USING` join merged away (`right["id"]` after
+            // `left.join(right, "id")`) is hidden, not gone: Spark resolves
+            // the reference to the input's own attribute, and the operator
+            // reveals it from the hidden list as for a qualified name.
+            let hidden: Vec<Attr> = cx
+                .rels
+                .iter()
+                .flat_map(|r| r.hidden.iter().cloned())
+                .collect();
+            hits = pick(carriers(cx, id), &hidden);
+        }
         match hits.len() {
             1 => Ok(hits.remove(0)),
             0 => Err(AnalysisError::new(

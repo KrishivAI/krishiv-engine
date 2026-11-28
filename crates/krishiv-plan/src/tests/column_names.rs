@@ -25,10 +25,21 @@ fn run_on(
     op: ColumnNamesOp,
     after: impl FnOnce(LogicalPlan) -> LogicalPlan,
 ) -> Result<AnalyzedPlan, AnalysisError> {
+    run_on_nullable(case_sensitive, true, input, op, after)
+}
+
+/// As [`run_on`], with `year` nullable or not.
+fn run_on_nullable(
+    case_sensitive: bool,
+    year_nullable: bool,
+    input: LogicalPlan,
+    op: ColumnNamesOp,
+    after: impl FnOnce(LogicalPlan) -> LogicalPlan,
+) -> Result<AnalyzedPlan, AnalysisError> {
     let col = |name: &str, data_type: DataType| TableColumn {
         name: name.to_owned(),
         data_type,
-        nullable: true,
+        nullable: name != "year" || year_nullable,
         char_varchar: None,
     };
     let catalog = MemoryCatalog::new("spark_catalog").with_table(
@@ -583,4 +594,110 @@ fn drop_na_over_a_wide_input_stays_under_the_depth_limit() {
     };
     let plan = run_on(false, wide, op, |p| p).expect("a wide drop_na analyzes");
     assert_eq!(plan.output.len(), 1500);
+}
+
+/// QA2-23: after `left.join(right, "year")`, `right["earnings"]` (a column of an input that is not
+/// a join key) still resolves, as `right["year"]` and `left["year"]` do.
+#[test]
+fn a_source_column_resolves_after_a_using_join() {
+    use crate::{ColumnRef, ExprNode, PlanId};
+    for (side, column, kind) in [
+        (1, "earnings", JoinKind::Inner),
+        (2, "earnings", JoinKind::Inner),
+        (1, "year", JoinKind::Inner),
+        (2, "year", JoinKind::Inner),
+        (2, "earnings", JoinKind::LeftOuter),
+        (2, "year", JoinKind::FullOuter),
+    ] {
+        let left = LogicalPlan::table(["sales"]).with_origin(Origin::plan(PlanId(1)));
+        let right = LogicalPlan::table(["sales"]).with_origin(Origin::plan(PlanId(2)));
+        let joined = left.join(right, kind, JoinCondition::Using(vec!["year".to_owned()]));
+        let pick = Expr::new(ExprNode::Column(ColumnRef {
+            plan_id: Some(PlanId(side)),
+            ..ColumnRef::new(vec![column.to_owned()])
+        }));
+        let plan = LogicalPlan::new(PlanNode::Project {
+            input: Arc::new(joined),
+            exprs: vec![Arc::new(pick)],
+        });
+        let r = run_on(
+            false,
+            LogicalPlan::table(["sales"]),
+            ColumnNamesOp::ToDf(strings(&["course", "year", "earnings"])),
+            |_| plan,
+        );
+        assert!(
+            r.is_ok(),
+            "{kind:?} side {side} {column}: {:?}",
+            r.err().map(|e| e.to_string())
+        );
+    }
+}
+
+/// QA2-23: the same through a second `USING` join and a filtered source.
+#[test]
+fn a_source_column_resolves_after_chained_using_joins() {
+    use crate::{ColumnRef, ExprNode, PlanId};
+    for kind in [JoinKind::Inner, JoinKind::LeftOuter, JoinKind::FullOuter] {
+        for (side, column) in [
+            (1, "earnings"),
+            (1, "year"),
+            (2, "earnings"),
+            (2, "year"),
+            (3, "earnings"),
+        ] {
+            let src = |id: i64| LogicalPlan::table(["sales"]).with_origin(Origin::plan(PlanId(id)));
+            let first = src(1).join(src(2), kind, JoinCondition::Using(vec!["year".to_owned()]));
+            let joined = first.join(src(3), kind, JoinCondition::Using(vec!["year".to_owned()]));
+            let pick = Expr::new(ExprNode::Column(ColumnRef {
+                plan_id: Some(PlanId(side)),
+                ..ColumnRef::new(vec![column.to_owned()])
+            }));
+            let plan = LogicalPlan::new(PlanNode::Project {
+                input: Arc::new(joined),
+                exprs: vec![Arc::new(pick)],
+            });
+            let r = run_on(
+                false,
+                LogicalPlan::table(["sales"]),
+                ColumnNamesOp::ToDf(strings(&["course", "year", "earnings"])),
+                |_| plan,
+            );
+            println!(
+                "{kind:?} side {side} {column}: {:?}",
+                r.err().map(|e| e.to_string())
+            );
+        }
+    }
+}
+
+/// The key of the unmatched side of an outer `USING` join is nullable through `right["year"]`
+/// although the input's `year` is not.
+#[test]
+fn a_merged_key_keeps_the_outer_join_nullability() {
+    use crate::{ColumnRef, ExprNode, PlanId};
+    let left = LogicalPlan::table(["sales"]).with_origin(Origin::plan(PlanId(1)));
+    let right = LogicalPlan::table(["sales"]).with_origin(Origin::plan(PlanId(2)));
+    let joined = left.join(
+        right,
+        JoinKind::LeftOuter,
+        JoinCondition::Using(vec!["year".to_owned()]),
+    );
+    let pick = Expr::new(ExprNode::Column(ColumnRef {
+        plan_id: Some(PlanId(2)),
+        ..ColumnRef::new(vec!["year".to_owned()])
+    }));
+    let plan = LogicalPlan::new(PlanNode::Project {
+        input: Arc::new(joined),
+        exprs: vec![Arc::new(pick)],
+    });
+    let r = run_on_nullable(
+        false,
+        false,
+        LogicalPlan::table(["sales"]),
+        ColumnNamesOp::ToDf(strings(&["course", "year", "earnings"])),
+        |_| plan,
+    )
+    .expect("right[\"year\"] resolves");
+    assert!(r.output[0].nullable, "{:?}", r.output[0]);
 }

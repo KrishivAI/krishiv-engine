@@ -150,7 +150,7 @@ print(spark.sql("SELECT 1 AS one").collect())
 With a certificate that your system does not trust (a self-signed one), point gRPC at it before you connect:
 `export GRPC_DEFAULT_SSL_ROOTS_FILE_PATH=$PWD/cert.pem`.
 
-`DataFrame.show()` is not served in 0.3.0: use `collect()` or `toPandas()`.
+`DataFrame.show()` is served from 0.3.1; on 0.3.0 use `collect()` or `toPandas()`.
 
 JDBC and ADBC clients connect to the same port with the Flight SQL driver; see [Arrow Flight SQL](flight-sql.md).
 

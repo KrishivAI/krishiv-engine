@@ -206,6 +206,25 @@ async fn deduplicate_over_a_subset_keeps_one_row_per_key_in_the_input_order() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn deduplicate_over_a_subset_keeps_duplicate_named_columns() {
+    let server = start().await;
+    let twin = relation(RelType::Sql(pb::Sql {
+        query: "SELECT v, id, id2 AS id FROM VALUES (1, 'x', 10), (2, 'x', 20) AS t(id, v, id2)"
+            .to_owned(),
+        ..Default::default()
+    }));
+    let dedup = relation(RelType::Deduplicate(Box::new(pb::Deduplicate {
+        input: Some(Box::new(twin)),
+        column_names: vec!["v".to_owned()],
+        all_columns_as_keys: None,
+        within_watermark: None,
+    })));
+    let rows = run(&server, dedup).await.expect("runs");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].len(), 3);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn deduplicate_without_keys_is_a_spark_error_class() {
     let server = start().await;
     let dedup = relation(RelType::Deduplicate(Box::new(pb::Deduplicate {
@@ -1176,5 +1195,72 @@ async fn zip_merges_two_independent_range_inputs() {
     assert_eq!(
         run(&server, zip(range(), range())).await.expect("runs"),
         strings(&[&["0", "0"], &["1", "1"], &["2", "2"]])
+    );
+}
+
+fn by_plan(name: &str, id: i64) -> pb::Expression {
+    pb::Expression {
+        common: None,
+        expr_type: Some(pb::expression::ExprType::UnresolvedAttribute(
+            pb::expression::UnresolvedAttribute {
+                unparsed_identifier: name.to_owned(),
+                plan_id: Some(id),
+                is_metadata_column: None,
+            },
+        )),
+    }
+}
+
+/// QA2-23: after `left.join(right, "id", "left")` a reference to either input's column resolves,
+/// the merged-away key included (Spark 4.2 over Connect: `right["id"]` is the right side's own
+/// key, NULL where nothing matched).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_reference_to_an_input_resolves_after_a_using_join() {
+    let server = start().await;
+    let with_id = |sql_text: &str, id: i64| {
+        let mut r = sql(sql_text);
+        r.common = Some(pb::RelationCommon {
+            plan_id: Some(id),
+            ..Default::default()
+        });
+        r
+    };
+    let left = with_id("SELECT * FROM VALUES (1, 'x'), (2, 'x2') AS t(id, v)", 1);
+    let right = with_id("SELECT * FROM VALUES (1, 'y'), (3, 'y3') AS t(id, v)", 2);
+    let joined = relation(RelType::Join(Box::new(pb::Join {
+        left: Some(Box::new(left)),
+        right: Some(Box::new(right)),
+        join_condition: None,
+        join_type: pb::join::JoinType::LeftOuter as i32,
+        using_columns: vec!["id".to_owned()],
+        join_data_type: None,
+    })));
+    let picked = project(
+        joined,
+        vec![
+            by_plan("id", 1),
+            by_plan("id", 2),
+            by_plan("v", 1),
+            by_plan("v", 2),
+        ],
+    );
+    assert_eq!(
+        run(&server, picked).await.expect("runs"),
+        strings(&[&["1", "1", "x", "y"], &["2", "NULL", "x2", "NULL"]])
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_reference_to_a_sql_relation_by_its_plan_id_resolves() {
+    let server = start().await;
+    let mut r = sql("SELECT * FROM VALUES (1, 'x') AS t(id, v)");
+    r.common = Some(pb::RelationCommon {
+        plan_id: Some(1),
+        ..Default::default()
+    });
+    let picked = project(r, vec![by_plan("v", 1)]);
+    assert_eq!(
+        run(&server, picked).await.expect("runs"),
+        strings(&[&["x"]])
     );
 }

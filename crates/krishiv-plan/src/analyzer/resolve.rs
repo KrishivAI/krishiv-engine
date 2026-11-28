@@ -1120,7 +1120,16 @@ impl Resolver<'_> {
                 let root = self.b.sql.get(&addr(&**p)).cloned();
                 let env0 = self.root_env.clone();
                 match (root, env0) {
-                    (Some(root), Some(env0)) => self.rel(&root, &env0),
+                    (Some(root), Some(env0)) => {
+                        let mut r = self.rel(&root, &env0)?;
+                        // `spark.sql(..)["c"]`: the DataFrame the text made is
+                        // found by its own `plan_id`, as a table's is.
+                        if let Some(id) = p.origin.plan_id {
+                            let out = Arc::clone(&r.out);
+                            Arc::make_mut(&mut r.carriers).insert(id, vec![out]);
+                        }
+                        Ok(r)
+                    }
                     _ => Err(unsupported("SQL text", o)),
                 }
             }

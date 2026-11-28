@@ -49,9 +49,8 @@ if HAVE_PANDAS:
 needs_pandas = pytest.mark.skipif(not HAVE_PANDAS, reason="the pandas extra is not installed")
 
 pytestmark = [
-    # Without pandas Spark's `udf` warns that Arrow cannot be used (`sql/udf.py:114-124`), and Krishiv that it
+    # Without pandas `udf` warns once, naming the missing package; Krishiv says it
     # runs the pickled kind Arrow-batched; both are covered by their own tests below.
-    pytest.mark.filterwarnings("ignore:Arrow optimization failed:RuntimeWarning"),
     pytest.mark.filterwarnings("ignore:Krishiv runs Python UDFs on the Arrow path only:UserWarning"),
 ]
 
@@ -546,3 +545,22 @@ def test_vectorized_udfs_see_timestamps_in_the_session_time_zone(
         spark.conf.unset("spark.sql.session.timeZone")
         monkeypatch.undo()
         time.tzset()
+
+
+def test_missing_pandas_gives_one_warning_naming_the_package(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A basic UDF without pandas warns once, with the package and the extra to install (CDX-7)."""
+    import warnings
+
+    from krishiv._udf import pandas_utils
+
+    def _no_pandas() -> None:
+        raise ImportError("[PACKAGE_NOT_INSTALLED] Pandas >= 2.2.0 must be installed; however, it was not found.")
+
+    monkeypatch.setattr(pandas_utils, "require_minimum_pandas_version", _no_pandas)
+    with warnings.catch_warnings(record=True) as seen:
+        warnings.simplefilter("always")
+        F.udf(lambda x: x, "double", useArrow=True)
+    messages = [str(w.message) for w in seen]
+    assert len(messages) == 1, messages
+    assert "Pandas" in messages[0]
+    assert "krishiv[pandas]" in messages[0]

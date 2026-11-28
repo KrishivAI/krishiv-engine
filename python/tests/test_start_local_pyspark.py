@@ -169,3 +169,26 @@ def test_python_udfs_run_through_start_local() -> None:
         tripled = df.select(PF.pandas_udf(lambda x: x * 3, "long")("x")).collect()
         assert [r[0] for r in tripled] == [0, 3, 6, 9]
         spark.stop()
+
+
+def test_guide_example_with_a_failing_query_exits_promptly(tmp_path: Any) -> None:
+    """The guide's example (client stopped in `finally`) ends after a failed statement (CDX-2)."""
+    import subprocess
+
+    script = (
+        "import krishiv\n"
+        "from pyspark.sql import SparkSession\n"
+        "with krishiv.start_local() as server:\n"
+        "    spark = SparkSession.builder.remote(server.url).create()\n"
+        "    try:\n"
+        "        spark.range(3).show()\n"
+        "        spark.sql(\"select cast('x' as double)\").collect()\n"
+        "    finally:\n"
+        "        spark.stop()\n"
+    )
+    path = tmp_path / "guide_example.py"
+    path.write_text(script)
+    done = subprocess.run([sys.executable, "-I", str(path)], capture_output=True, text=True, timeout=60, check=False)
+    assert done.returncode == 1
+    assert "CAST_INVALID_INPUT" in done.stderr
+    assert "| id|" in done.stdout
