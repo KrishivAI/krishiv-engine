@@ -54,9 +54,20 @@ describe("gridModel", () => {
       expect(run(true, num)).toEqual([NaN, NaN, Infinity, 3, 2, 1, 0, null]);
     }
   });
+  test("a column of numbers and bigints sorts equal values together, both directions", () => {
+    const rows = [2n, 1, 1n, 0].map((v, i) => ({ i, v }));
+    const run = (desc: boolean) =>
+      gridModel(rows, [{ id: "v", header: "v", value: (r) => r.v }], (r) => String(r.i), { id: "v", desc }).rows.map((r) =>
+        String(r.row.v),
+      );
+    expect(run(false)).toEqual(["0", "1", "1", "2"]);
+    expect(run(true)).toEqual(["2", "1", "1", "0"]);
+  });
   test("compareNumber is a consistent comparator with NaN", () => {
     expect([compareNumber(NaN, 1), compareNumber(1, NaN), compareNumber(NaN, NaN)]).toEqual([1, -1, 0]);
     expect([compareNumber(Infinity, NaN), compareNumber(-0, 0), compareNumber(2n, 1n)]).toEqual([-1, 0, 1]);
+    // A number and a bigint of the same value are equal both ways; across the types the order is exact.
+    expect([compareNumber(1, 1n), compareNumber(1n, 1), compareNumber(1, 2n), compareNumber(2n, 1)]).toEqual([0, 0, -1, 1]);
   });
   test("a repeated natural key does not merge rows", () => {
     const rows = [...ROWS, ROWS[0]];

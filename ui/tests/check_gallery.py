@@ -208,7 +208,8 @@ def popovers(page: Page, origin: str, scheme: str) -> list[str]:
     # The first item has the focus; Download results is disabled and skipped. Bits UI moves the focus into the
     # menu after it opens, so wait for it: arrows pressed before then are lost (seen on a CI runner).
     page.wait_for_function(
-        "() => document.activeElement?.getAttribute('role') === 'menuitem'", timeout=5000
+        "() => document.activeElement?.getAttribute('role') === 'menuitem'",
+        timeout=5000,
     )
     for _ in range(2):
         page.keyboard.press("ArrowDown")
@@ -423,15 +424,24 @@ def support_id(page: Page, origin: str) -> list[str]:
     page.goto(f"{origin}/#/states")
     button = page.get_by_role("button", name="Copy support id")
     button.click()
+    # The click returns before the write: "Copied" is shown only once the write succeeded, so wait for exactly
+    # one button and one announcement, then read the clipboard (a failed write times out here and fails).
+    live = page.locator("[aria-live=polite]", has_text="Copied")
+    try:
+        page.get_by_role("button", name="Copied").wait_for(timeout=5000)
+        live.wait_for(state="attached", timeout=5000)
+    except PlaywrightTimeout:
+        return problems + [
+            "states: copying the support id does not show and announce Copied"
+        ]
+    if live.count() != 1 or page.get_by_role("button", name="Copied").count() != 1:
+        problems.append(
+            "states: copying the support id shows or announces Copied more than once"
+        )
     copied = page.evaluate("navigator.clipboard.readText()")
     if copied != "req_8c1f2a90":
         problems.append(
             f"states: the copy button put {copied!r} on the clipboard, not the support id"
-        )
-    live = page.locator("[aria-live=polite]", has_text="Copied")
-    if live.count() != 1 or page.get_by_role("button", name="Copied").count() != 1:
-        problems.append(
-            "states: copying the support id does not show and announce Copied"
         )
     return problems
 

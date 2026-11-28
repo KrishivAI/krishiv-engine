@@ -75,8 +75,16 @@ export function compareNumber(a: unknown, b: unknown): number {
   const nanA = typeof a === "number" && Number.isNaN(a);
   const nanB = typeof b === "number" && Number.isNaN(b);
   if (nanA || nanB) return nanA === nanB ? 0 : nanA ? 1 : -1;
-  return a === b ? 0 : (a as number) > (b as number) ? 1 : -1;
+  if (a === b) return 0;
+  const x = a as number;
+  const y = b as number;
+  // A number and a bigint of the same value (`1`, `1n`) are equal: `<` and `>` compare across the two types
+  // exactly, so neither holds. NaN is handled above.
+  if (isNumeric(a) && isNumeric(b) && !(x < y) && !(x > y)) return 0;
+  return x > y ? 1 : -1;
 }
+
+const isNumeric = (v: unknown): v is number | bigint => typeof v === "number" || typeof v === "bigint";
 
 /** A column sorts as numbers when it says `num`, or when its first value that is not null is a number. */
 function numeric<Row>(c: GridColumn<Row>, rows: readonly Row[]): boolean {

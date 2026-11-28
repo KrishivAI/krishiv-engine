@@ -113,12 +113,21 @@
     const to = e.key === "ArrowDown" ? at + 1 : e.key === "ArrowUp" ? at - 1 : e.key === "Home" ? 0 : e.key === "End" ? last : -1;
     if (to < 0 || to > last || (to === at && e.key !== "Home" && e.key !== "End")) return;
     e.preventDefault();
-    activeId = model.rows[to]?.id;
-    scroller?.scrollToIndex(to, { align: "auto" });
+    // The target is kept by its id: a sort or a refresh during the wait below can move it to another position.
+    const target = model.rows[to]?.id;
+    if (target === undefined) return;
+    activeId = target;
+    let scrolledTo = -1;
     // A virtual row is drawn after the scroll reaches it: wait a few frames for it.
     for (let i = 0; i < 10; i++) {
+      const now = model.rows.findIndex((r) => r.id === target);
+      if (now < 0) return; // the row is gone
+      if (now !== scrolledTo) {
+        scroller?.scrollToIndex(now, { align: "auto" });
+        scrolledTo = now;
+      }
       await tick();
-      const tr = box?.querySelector<HTMLTableRowElement>(`tbody tr[aria-rowindex="${to + 2}"]`);
+      const tr = box?.querySelector<HTMLTableRowElement>(`tbody tr[aria-rowindex="${model.rows.findIndex((r) => r.id === target) + 2}"]`);
       if (tr) return tr.focus();
       await new Promise((ok) => requestAnimationFrame(ok));
     }

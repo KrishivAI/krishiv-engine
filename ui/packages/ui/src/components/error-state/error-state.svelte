@@ -30,19 +30,23 @@
     actions?: Snippet;
   } = $props();
 
-  // console-00 §3, §4: the support id is copyable. "Copied" is shown and announced (aria-live) for 2 s.
-  let copied = $state(false);
+  // console-00 §3, §4: the support id is copyable. "Copied" is shown and announced (aria-live) for 2 s, and only
+  // for the id that was written: a new support id (another error) within the 2 s, or while a write is still in
+  // flight, shows the copy button again.
+  let copiedId: string | undefined = $state();
+  const copied = $derived(copiedId !== undefined && copiedId === supportId);
   let timer: ReturnType<typeof setTimeout> | undefined;
   async function copy() {
-    if (!supportId) return;
+    const id = supportId;
+    if (!id) return;
     try {
-      await navigator.clipboard.writeText(supportId);
+      await navigator.clipboard.writeText(id);
     } catch {
       return; // no clipboard (an insecure origin, or the permission refused): the id stays selectable text
     }
-    copied = true;
+    copiedId = id;
     clearTimeout(timer);
-    timer = setTimeout(() => (copied = false), 2000);
+    timer = setTimeout(() => (copiedId = undefined), 2000);
   }
   $effect(() => () => clearTimeout(timer));
 </script>
