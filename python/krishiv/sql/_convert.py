@@ -221,8 +221,24 @@ def _local_naive(value: datetime) -> datetime:
         offset = (instant + timedelta(days=146097 * max(cycles, 0))).astimezone().utcoffset() or timedelta(0)
         try:
             return (instant + offset).replace(tzinfo=None)
-        except OverflowError:  # within a day of datetime.min or max
+        except OverflowError:  # within a day of datetime.min
             return instant.replace(tzinfo=None)
+
+
+def _naive_to_utc(value: datetime) -> datetime:
+    """``value`` as an aware UTC datetime; a naive value is read as client-local time (as ``astimezone`` does).
+
+    Windows' C runtime cannot convert a local time before 1970 (``astimezone`` raises ``OSError``). There the
+    zone's offset is read at the same wall time moved forward by whole 400-year cycles, as in ``_local_naive``."""
+    try:
+        return value.astimezone(UTC)
+    except (OSError, OverflowError):
+        cycles = max(-(-(1970 - value.year) // 400), 0)
+        try:
+            offset = (value + timedelta(days=146097 * cycles)).astimezone().utcoffset() or timedelta(0)
+            return (value - offset).replace(tzinfo=UTC)
+        except OverflowError:  # within a day of datetime.min
+            return value.replace(tzinfo=UTC)
 
 
 def cell(value: Any, arrow_type: Any, zone: tzinfo = UTC) -> str:

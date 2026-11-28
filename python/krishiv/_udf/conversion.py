@@ -35,6 +35,7 @@ from krishiv._udf.pandas_types import (
     from_arrow_schema,
 )
 from krishiv._udf.pandas_utils import require_minimum_pyarrow_version
+from krishiv.sql._convert import _local_naive, _naive_to_utc  # krishiv: guarded local-time conversions
 from krishiv._udf.types import (
     ArrayType,
     BinaryType,
@@ -694,7 +695,7 @@ class LocalDataToArrowConversion:
                     return None
                 else:
                     assert isinstance(value, datetime.datetime)
-                    return value.astimezone(datetime.timezone.utc)
+                    return _naive_to_utc(value)  # krishiv: Windows cannot convert local times before 1970
 
             return convert_timestamp
 
@@ -1235,7 +1236,7 @@ class ArrowTableToRowsConversion:
                     return None
                 else:
                     assert isinstance(value, datetime.datetime)
-                    return value.astimezone().replace(tzinfo=None)
+                    return _local_naive(value)  # krishiv: as above
 
             return convert_timestamp
 
