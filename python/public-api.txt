@@ -133,7 +133,9 @@ Session.def catalog_set_current_database(self, name: str) -> None
 Session.def catalog_table_exists(self, name: str) -> bool
 Session.def clear_cache(self) -> None
 Session.def conf_get(self, key: str) -> str | None
+Session.def conf_get_as_spark(self, key: str) -> tuple[bool, str | None]
 Session.def conf_is_modifiable(self, key: str) -> bool
+Session.def conf_is_spark_session_key(self, key: str) -> bool
 Session.def conf_set(self, key: str, value: str) -> None
 Session.def conf_unset(self, key: str) -> None
 Session.def create_dataframe(self, data: object) -> DataFrame

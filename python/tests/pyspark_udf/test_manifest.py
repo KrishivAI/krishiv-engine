@@ -17,6 +17,8 @@ CATEGORIES = {
     "engine-feature",
     "krishiv-bug",
     "krishiv-divergence",
+    # The failure comes from the test environment's package versions (pandas, pyarrow), not from Krishiv.
+    "test-environment",
 }
 
 

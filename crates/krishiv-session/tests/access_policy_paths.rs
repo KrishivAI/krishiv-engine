@@ -65,17 +65,16 @@ fn sessions(warehouse: &str, policy: Arc<dyn AccessPolicy>) -> (Session, Session
         .runtime(Arc::clone(&rt))
         .principal(Principal::new("owner", PrincipalKind::User))
         .access_policy(Arc::new(AllowAll))
+        .config("spark.sql.warehouse.dir", warehouse)
         .build()
         .unwrap();
     let subject = Session::builder()
         .runtime(rt)
         .principal(Principal::new("ana", PrincipalKind::User))
         .access_policy(policy)
+        .config("spark.sql.warehouse.dir", warehouse)
         .build()
         .unwrap();
-    for s in [&owner, &subject] {
-        s.conf().set("spark.sql.warehouse.dir", warehouse).unwrap();
-    }
     (owner, subject)
 }
 

@@ -1830,12 +1830,12 @@ mod tests {
     #[test]
     fn a_rename_waits_for_a_write_in_progress() {
         let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
-        let s = Session::new().unwrap_or_else(|e| panic!("{e}"));
-        s.conf()
-            .set(
+        let s = Session::builder()
+            .config(
                 "spark.sql.warehouse.dir",
                 dir.path().to_str().unwrap_or_default(),
             )
+            .build()
             .unwrap_or_else(|e| panic!("{e}"));
         run(
             &s,
@@ -1898,12 +1898,12 @@ mod tests {
     #[test]
     fn a_rename_swaps_against_a_fresh_entry() {
         let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
-        let s = Session::new().unwrap_or_else(|e| panic!("{e}"));
-        s.conf()
-            .set(
+        let s = Session::builder()
+            .config(
                 "spark.sql.warehouse.dir",
                 dir.path().to_str().unwrap_or_default(),
             )
+            .build()
             .unwrap_or_else(|e| panic!("{e}"));
         run(
             &s,

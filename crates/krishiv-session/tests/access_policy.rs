@@ -107,11 +107,26 @@ fn filtered_reads(_: &Securable, p: Privilege) -> AccessDecision {
 
 /// A session under `policy`, with the table `t` (column `a`, three rows).
 fn session(policy: Arc<dyn AccessPolicy>) -> Session {
-    let s = Session::builder()
-        .principal(Principal::new("ana", PrincipalKind::User))
-        .access_policy(policy)
-        .build()
-        .unwrap();
+    with_t(
+        Session::builder()
+            .principal(Principal::new("ana", PrincipalKind::User))
+            .access_policy(policy),
+    )
+}
+
+/// [`session`] with its warehouse in `warehouse` (a static key: set when the session is built).
+fn session_in(policy: Arc<dyn AccessPolicy>, warehouse: &str) -> Session {
+    with_t(
+        Session::builder()
+            .principal(Principal::new("ana", PrincipalKind::User))
+            .access_policy(policy)
+            .config("spark.sql.warehouse.dir", warehouse),
+    )
+}
+
+/// The session `builder` builds, with the table `t` (column `a`, three rows).
+fn with_t(builder: krishiv_session::SessionBuilder) -> Session {
+    let s = builder.build().unwrap();
     let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
     let batch = RecordBatch::try_new(
         Arc::clone(&schema),
@@ -1245,10 +1260,7 @@ fn deny_view_reads(securable: &Securable, p: Privilege) -> AccessDecision {
 #[test]
 fn querying_a_permanent_view_checks_the_view_securable() {
     let dir = tempfile::tempdir().unwrap();
-    let s = session(Policy::new(deny_view_reads));
-    s.conf()
-        .set("spark.sql.warehouse.dir", dir.path().to_str().unwrap())
-        .unwrap();
+    let s = session_in(Policy::new(deny_view_reads), dir.path().to_str().unwrap());
     for sql in [
         "CREATE TABLE base (a INT) USING parquet",
         "CREATE VIEW inner_view AS SELECT a FROM base",
@@ -1302,10 +1314,7 @@ fn permanent_view_reads_leak_nothing_to_a_denied_principal() {
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     use std::sync::atomic::Ordering::SeqCst;
     let dir = tempfile::tempdir().unwrap();
-    let s = session(Policy::new(flagged));
-    s.conf()
-        .set("spark.sql.warehouse.dir", dir.path().to_str().unwrap())
-        .unwrap();
+    let s = session_in(Policy::new(flagged), dir.path().to_str().unwrap());
     for sql in [
         "CREATE TABLE base (a INT) USING parquet",
         "CREATE VIEW v AS SELECT a FROM base",
@@ -1359,10 +1368,7 @@ fn a_table_rule_on_a_view_name_applies_to_queries_of_it() {
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     use std::sync::atomic::Ordering::SeqCst;
     let dir = tempfile::tempdir().unwrap();
-    let s = session(Policy::new(flagged));
-    s.conf()
-        .set("spark.sql.warehouse.dir", dir.path().to_str().unwrap())
-        .unwrap();
+    let s = session_in(Policy::new(flagged), dir.path().to_str().unwrap());
     for sql in [
         "CREATE TABLE base (a INT) USING parquet",
         "CREATE VIEW v AS SELECT a FROM base",
@@ -1386,10 +1392,7 @@ fn statement_info_lists_the_view_securable() {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let dir = tempfile::tempdir().unwrap();
-    let s = session(Policy::new(flagged));
-    s.conf()
-        .set("spark.sql.warehouse.dir", dir.path().to_str().unwrap())
-        .unwrap();
+    let s = session_in(Policy::new(flagged), dir.path().to_str().unwrap());
     for sql in [
         "CREATE TABLE base (a INT) USING parquet",
         "CREATE VIEW v AS SELECT a FROM base",
@@ -1423,10 +1426,7 @@ fn statement_info_lists_the_view_securable() {
 #[test]
 fn describing_a_view_needs_the_view_securable() {
     let dir = tempfile::tempdir().unwrap();
-    let s = session(Policy::new(deny_view_selects));
-    s.conf()
-        .set("spark.sql.warehouse.dir", dir.path().to_str().unwrap())
-        .unwrap();
+    let s = session_in(Policy::new(deny_view_selects), dir.path().to_str().unwrap());
     block_on(async {
         s.sql("CREATE TABLE pt (a INT) USING parquet")
             .await?
@@ -1521,10 +1521,7 @@ fn browse_only_views(securable: &Securable, p: Privilege) -> AccessDecision {
 #[test]
 fn show_table_extended_leaves_out_a_view_it_may_not_read() {
     let dir = tempfile::tempdir().unwrap();
-    let s = session(Policy::new(browse_only_views));
-    s.conf()
-        .set("spark.sql.warehouse.dir", dir.path().to_str().unwrap())
-        .unwrap();
+    let s = session_in(Policy::new(browse_only_views), dir.path().to_str().unwrap());
     for sql in [
         "CREATE TABLE qt (a INT) USING parquet",
         "CREATE VIEW qv AS SELECT a FROM qt",
@@ -1589,10 +1586,10 @@ fn a_new_policy_version_invalidates_cached_analysis() {
         deny_views: std::sync::atomic::AtomicBool::new(false),
         version: std::sync::atomic::AtomicU64::new(1),
     });
-    let s = session(Arc::clone(&policy) as Arc<dyn AccessPolicy>);
-    s.conf()
-        .set("spark.sql.warehouse.dir", dir.path().to_str().unwrap())
-        .unwrap();
+    let s = session_in(
+        Arc::clone(&policy) as Arc<dyn AccessPolicy>,
+        dir.path().to_str().unwrap(),
+    );
     for sql in [
         "CREATE TABLE base (a INT) USING parquet",
         "CREATE VIEW v AS SELECT a FROM base",
@@ -1742,10 +1739,7 @@ fn dataframe_overwrites_need_drop_and_modify() {
 #[test]
 fn a_keyed_overwrite_retry_is_denied_like_the_first_try() {
     let dir = tempfile::tempdir().unwrap();
-    let s = session(Policy::new(no_drop));
-    s.conf()
-        .set("spark.sql.warehouse.dir", dir.path().to_str().unwrap())
-        .unwrap();
+    let s = session_in(Policy::new(no_drop), dir.path().to_str().unwrap());
     let write = |mode: &str, key: &str| {
         class(block_on(
             s.table("t")
@@ -1769,10 +1763,7 @@ fn a_keyed_overwrite_retry_is_denied_like_the_first_try() {
 #[test]
 fn a_keyed_delta_overwrite_is_allowed_like_the_unkeyed_one() {
     let dir = tempfile::tempdir().unwrap();
-    let s = session(Policy::new(no_drop));
-    s.conf()
-        .set("spark.sql.warehouse.dir", dir.path().to_str().unwrap())
-        .unwrap();
+    let s = session_in(Policy::new(no_drop), dir.path().to_str().unwrap());
     block_on(s.table("t").write().format("delta").save_as_table("d")).unwrap();
     let unkeyed = class(block_on(
         s.table("t")
@@ -1878,10 +1869,7 @@ fn a_denied_ctas_creates_no_directories() {
     std::fs::create_dir(&root).unwrap();
     let warehouse = tmp.path().join("outside").join("wh");
     let policy = PathPrefixPolicy::new([&root], Arc::new(AllowAll)).unwrap();
-    let s = session(Arc::new(policy));
-    s.conf()
-        .set("spark.sql.warehouse.dir", warehouse.to_str().unwrap())
-        .unwrap();
+    let s = session_in(Arc::new(policy), warehouse.to_str().unwrap());
     let e = block_on(async {
         s.sql("CREATE TABLE w USING parquet AS SELECT 1 AS a")
             .await?
@@ -1988,10 +1976,10 @@ fn no_writes_under_far_t(securable: &Securable, _: Privilege) -> AccessDecision 
 #[test]
 fn a_multi_table_insert_denied_in_a_later_clause_writes_nothing() {
     let dir = tempfile::tempdir().unwrap();
-    let s = session(Policy::new(no_writes_under_far_t));
-    s.conf()
-        .set("spark.sql.warehouse.dir", dir.path().to_str().unwrap())
-        .unwrap();
+    let s = session_in(
+        Policy::new(no_writes_under_far_t),
+        dir.path().to_str().unwrap(),
+    );
     for sql in [
         "CREATE TABLE ok_t (a INT) USING parquet",
         "CREATE TABLE far_t (a INT) USING parquet",
@@ -2159,10 +2147,7 @@ fn deny_view_rows(securable: &Securable, p: Privilege) -> AccessDecision {
 #[test]
 fn browse_on_a_view_shows_its_schema_not_its_text_or_rows() {
     let dir = tempfile::tempdir().unwrap();
-    let s = session(Policy::new(deny_view_rows));
-    s.conf()
-        .set("spark.sql.warehouse.dir", dir.path().to_str().unwrap())
-        .unwrap();
+    let s = session_in(Policy::new(deny_view_rows), dir.path().to_str().unwrap());
     for sql in [
         "CREATE TABLE pt (a INT) USING parquet",
         "CREATE VIEW pv AS SELECT a, 42 AS secret_literal FROM pt",

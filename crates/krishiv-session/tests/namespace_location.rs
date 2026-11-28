@@ -44,9 +44,9 @@ fn qualified(dir: &std::path::Path) -> String {
 fn a_created_namespace_stores_the_qualified_normalised_location() {
     let wh = tempfile::tempdir().unwrap();
     let wh_path = wh.path().canonicalize().unwrap();
-    let s = Session::new().unwrap();
-    s.conf()
-        .set("spark.sql.warehouse.dir", wh_path.to_str().unwrap())
+    let s = Session::builder()
+        .config("spark.sql.warehouse.dir", wh_path.to_str().unwrap())
+        .build()
         .unwrap();
     let cases = [
         ("rel/dir//x/", format!("{}/rel/dir/x", qualified(&wh_path))),
@@ -78,9 +78,9 @@ fn a_created_namespace_stores_the_qualified_normalised_location() {
 fn set_location_qualifies_and_an_empty_location_is_refused() {
     let wh = tempfile::tempdir().unwrap();
     let wh_path = wh.path().canonicalize().unwrap();
-    let s = Session::new().unwrap();
-    s.conf()
-        .set("spark.sql.warehouse.dir", wh_path.to_str().unwrap())
+    let s = Session::builder()
+        .config("spark.sql.warehouse.dir", wh_path.to_str().unwrap())
+        .build()
         .unwrap();
     let run = |q: &str| block_on(async { s.sql(q).await?.collect().await });
     run("CREATE NAMESPACE n1").unwrap();

@@ -14,11 +14,11 @@ use krishiv_session::grants::{Grants, GrantsPolicy, MemoryGrantStore};
 use krishiv_session::{AccessPolicy, AllowAll, EngineRuntime, Principal, PrincipalKind, Session};
 
 fn session(dir: &std::path::Path) -> Session {
-    let s = Session::new().unwrap();
-    s.conf()
-        .set("spark.sql.warehouse.dir", dir.to_str().unwrap())
-        .unwrap();
-    s
+    // A static key: set when the session is built, as in Spark.
+    Session::builder()
+        .config("spark.sql.warehouse.dir", dir.to_str().unwrap())
+        .build()
+        .unwrap()
 }
 
 fn run(s: &Session, sql: &str) {

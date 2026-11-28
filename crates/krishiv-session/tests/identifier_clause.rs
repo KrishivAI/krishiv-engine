@@ -15,11 +15,10 @@ use krishiv_session::{
 };
 
 fn session(dir: &std::path::Path) -> Session {
-    let s = Session::new().unwrap();
-    s.conf()
-        .set("spark.sql.warehouse.dir", dir.to_str().unwrap())
-        .unwrap();
-    s
+    Session::builder()
+        .config("spark.sql.warehouse.dir", dir.to_str().unwrap())
+        .build()
+        .unwrap()
 }
 
 fn run(s: &Session, sql: &str) {
@@ -141,10 +140,8 @@ fn a_dynamic_name_is_authorized_as_the_name_it_evaluates_to() {
     let s = Session::builder()
         .principal(Principal::new("ana", PrincipalKind::User))
         .access_policy(Arc::new(NoSecret))
+        .config("spark.sql.warehouse.dir", dir.path().to_str().unwrap())
         .build()
-        .unwrap();
-    s.conf()
-        .set("spark.sql.warehouse.dir", dir.path().to_str().unwrap())
         .unwrap();
     run(&s, "CREATE TABLE open_t (a INT) USING parquet");
     let denied = "KRISHIV_INSUFFICIENT_PERMISSIONS";

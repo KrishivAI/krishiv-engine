@@ -301,8 +301,9 @@ fn status(name: &str, def: Option<&FunctionDef>) -> &'static str {
 /// Spark's usage text links with HTML (`<a href="url">text</a>`), which a Markdown page shows as
 /// written: the tag and the whole address as one unbreakable word (a phone page scrolled sideways
 /// on it). Each becomes a Markdown link, or with `markdown` false its text alone (a page's
-/// description line is plain text). The brackets of the text are escaped, an address with a
-/// parenthesis goes in `<...>`, and an angle bracket of an address is percent-encoded.
+/// description line is plain text). A backslash and the brackets of the text are escaped outside
+/// its code spans, an address with a parenthesis or a space goes in `<...>`, and an angle bracket
+/// of an address is percent-encoded.
 fn html_links(desc: &str, markdown: bool) -> String {
     const OPEN: &str = "<a href=\"";
     let mut out = String::with_capacity(desc.len());
@@ -316,11 +317,11 @@ fn html_links(desc: &str, markdown: bool) -> String {
         };
         out.push_str(&rest[..start]);
         if markdown {
-            // A bracket in the text or a parenthesis in the address would end the link early,
-            // and an angle bracket in the address would end its `<...>` form.
-            let text = text.replace('[', "\\[").replace(']', "\\]");
+            // A bracket in the text, or a parenthesis or a space in the address, would end the
+            // link early, and an angle bracket in the address would end its `<...>` form.
+            let text = link_text(text);
             let url = url.replace('<', "%3C").replace('>', "%3E");
-            if url.contains(['(', ')']) {
+            if url.contains(['(', ')', ' ']) {
                 let _ = write!(out, "[{text}](<{url}>)");
             } else {
                 let _ = write!(out, "[{text}]({url})");
@@ -331,6 +332,31 @@ fn html_links(desc: &str, markdown: bool) -> String {
         rest = tail;
     }
     out.push_str(rest);
+    out
+}
+
+/// The text of a Markdown link: a backslash, then each bracket, gets a backslash before it, so
+/// none of them ends the link or reads as an escape. Inside a code span (between two single
+/// backquotes) a backslash is shown as written and a bracket ends nothing, so nothing is escaped
+/// there; a text whose backquotes do not pair up that simply has no span left alone.
+fn link_text(text: &str) -> String {
+    let spans = text.matches('`').count().is_multiple_of(2) && !text.contains("``");
+    let mut out = String::with_capacity(text.len() + 4);
+    for (i, piece) in text.split('`').enumerate() {
+        if i > 0 {
+            out.push('`');
+        }
+        if spans && i % 2 == 1 {
+            out.push_str(piece);
+        } else {
+            out.push_str(
+                &piece
+                    .replace('\\', "\\\\")
+                    .replace('[', "\\[")
+                    .replace(']', "\\]"),
+            );
+        }
+    }
     out
 }
 
@@ -654,6 +680,30 @@ mod tests {
             html_links("<a href=\"https://e.org/a<b>(c)\">x</a>", true),
             "[x](<https://e.org/a%3Cb%3E(c)>)"
         );
+        // A backslash of the text is escaped before the brackets are (rendered by hand with
+        // markdown-it-py 3.0.0 in CommonMark mode: one link each, with the text as Spark wrote it).
+        for (text, url, want) in [
+            (
+                "x\\[1]",
+                "https://e.org/a",
+                "[x\\\\\\[1\\]](https://e.org/a)",
+            ),
+            ("x\\", "https://e.org/a", "[x\\\\](https://e.org/a)"),
+            ("`a[0]`", "https://e.org/a", "[`a[0]`](https://e.org/a)"),
+            (
+                "`a\\b` [c]",
+                "https://e.org/a",
+                "[`a\\b` \\[c\\]](https://e.org/a)",
+            ),
+            ("a`b[", "https://e.org/a", "[a`b\\[](https://e.org/a)"),
+            ("x", "https://e.org/a b", "[x](<https://e.org/a b>)"),
+        ] {
+            assert_eq!(
+                html_links(&format!("<a href=\"{url}\">{text}</a>"), true),
+                want,
+                "{text} {url}"
+            );
+        }
         // Text without a whole link is kept as written.
         for kept in ["a < b", "<a href=\"u", "<a href=\"u\">open"] {
             assert_eq!(html_links(kept, true), kept);

@@ -50,6 +50,13 @@ Spark readers, but other tools that list the directory see it. `krishiv.sql.file
 Spark's plain commit for a new directory; a directory that already has a log keeps being written through it, so
 do not delete the log from a table you still append to.
 
+## An unset `spark.sql.warehouse.dir` has no value
+
+`spark.conf.get` of a Spark SQL config Krishiv does not use answers the default of the session profile's Spark
+release, as Spark does. Spark computes the warehouse directory's default from its host (a path under its working
+directory); unset, Krishiv answers no value for it (`<undefined>` in `SET`) and keeps managed tables in its own
+default warehouse. Set it when the session is built (it is a static key) to read it back.
+
 ## A malformed value of a Spark config key fails at `SET`
 
 A Spark key that Krishiv maps to a typed setting (for example

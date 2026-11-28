@@ -471,12 +471,61 @@ impl Catalog<'_> {
         .into()
     }
 
+    /// Refuses a database name of more than one part for a call that lists what a database holds
+    /// (`listTables`, `listFunctions`): a leading `spark_catalog` is the catalog, and the session
+    /// catalog has no nested namespaces. Spark 4.3.0: `listTables("a.b")`, `("a.b.c")`,
+    /// `("nocat.a")` and `("default.b")` raise `NESTED_DATABASE_UNSUPPORTED_BY_V1_SESSION_CATALOG`
+    /// naming every part; `("spark_catalog.a.b")` names `` `a`.`b` ``; `` ("`a.b`") `` and
+    /// `("spark_catalog.nodb")` are one-part names (`SCHEMA_NOT_FOUND`). A name the current
+    /// declared catalog would own is left to the caller's own refusal.
+    fn refuse_nested(&self, name: &str) -> Result<(), KrishivError> {
+        let p = parts(name);
+        let namespace = match p.as_slice() {
+            [cat, rest @ ..]
+                if !rest.is_empty() && cat.eq_ignore_ascii_case(crate::catalog::CATALOG) =>
+            {
+                rest
+            }
+            all => all,
+        };
+        if namespace.len() < 2 || self.is_declared(&self.current_catalog()) {
+            return Ok(());
+        }
+        Err(
+            krishiv_common::error::NestedDatabaseUnsupportedByV1SessionCatalog {
+                namespace: namespace
+                    .iter()
+                    .map(|part| quote(part))
+                    .collect::<Vec<_>>()
+                    .join("."),
+            }
+            .into(),
+        )
+    }
+
     fn lookup_database(&self, name: &str) -> Result<Database, KrishivError> {
-        // A bare name is the current catalog's; a declared catalog's namespaces are not answered here.
-        match parts(name).as_slice() {
-            [_] => self.check_current()?,
-            [cat, _] if self.is_declared(cat) => return Err(Self::refuse_declared(cat)),
-            _ => {}
+        // A first part that names a catalog is the catalog, at every length: a declared catalog's
+        // namespaces are not answered here, `spark_catalog`'s are. Any other name is the current
+        // catalog's, as `USE NAMESPACE` reads it: refused under a declared catalog, and under
+        // `system`, which has no namespaces, a name of several parts is missing there.
+        let p = parts(name);
+        match p.as_slice() {
+            [cat, rest @ ..] if !rest.is_empty() && self.is_declared(cat) => {
+                return Err(Self::refuse_declared(cat));
+            }
+            [cat, rest @ ..]
+                if !rest.is_empty() && cat.eq_ignore_ascii_case(crate::catalog::CATALOG) => {}
+            all => {
+                self.check_current()?;
+                if all.len() > 1 && crate::system::is_system(&self.current_catalog()) {
+                    let mut named = vec![quote("system")];
+                    named.extend(all.iter().map(|part| quote(part)));
+                    return Err(krishiv_common::error::SchemaNotFound {
+                        schema_name: named.join("."),
+                    }
+                    .into());
+                }
+            }
         }
         // The error names `name` as written: its parts are read again there, and the bare form of
         // a quoted name with a dot would read as two parts.
@@ -582,6 +631,9 @@ impl Catalog<'_> {
                 .collect();
             out.sort_by(|a, b| a.name.cmp(&b.name));
             return Ok(out);
+        }
+        if let Some(d) = database {
+            self.refuse_nested(d)?;
         }
         let statement = match database {
             Some(d) => format!("SHOW TABLES IN {}", quoted(d)),
@@ -863,7 +915,13 @@ impl Catalog<'_> {
     ) -> Result<Vec<(Function, bool)>, KrishivError> {
         self.authorize_as("SHOW FUNCTIONS").await?;
         let db = match database {
-            Some(d) => self.get_database(d).await?.name,
+            Some(d) => {
+                // A declared catalog's namespace keeps `get_database`'s refusal.
+                if !parts(d).first().is_some_and(|cat| self.is_declared(cat)) {
+                    self.refuse_nested(d)?;
+                }
+                self.get_database(d).await?.name
+            }
             None => self.current_database(),
         };
         // A stored function is listed only to a principal that may see it (P3-T062 §2.4).

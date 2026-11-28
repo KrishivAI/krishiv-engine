@@ -140,14 +140,11 @@ fn setup(role: u8) -> (Arc<Roles>, Session, Fixture) {
     let outside = tmp.path().join("outside/data").to_str().unwrap().to_owned();
     let admin = Session::builder()
         .access_policy(Arc::new(AllowAll))
-        .build()
-        .unwrap();
-    admin
-        .conf()
-        .set(
+        .config(
             "spark.sql.warehouse.dir",
             tmp.path().join("warehouse").to_str().unwrap(),
         )
+        .build()
         .unwrap();
     register_t(&admin);
     for dir in [&inside, &outside] {

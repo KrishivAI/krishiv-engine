@@ -775,6 +775,108 @@ async fn config_operations() {
             kv("krishiv.memory.limit", Some("false"))
         ]
     );
+    // SV-3: a key Spark 4.3.0 registers and Krishiv does not answers Spark's default unset, an optional one
+    // no value, and the arrow key what the deprecated key it falls back to answers (set above);
+    // isModifiable is Spark's: false for a static key and for a key no entry registers. Spark 4.3.0 over
+    // Connect answers the same (`spark.conf.get`, `isModifiable`).
+    let spark_keys = [
+        "spark.sql.execution.arrow.pyspark.enabled",
+        "spark.sql.execution.arrow.maxRecordsPerBatch",
+        "spark.sql.legacy.execution.pythonUDTF.pandas.conversion.enabled",
+        "spark.sql.adaptive.customCostEvaluatorClass",
+    ];
+    let get = config(
+        &run,
+        OpType::Get(creq::Get {
+            keys: keys(&spark_keys),
+        }),
+    )
+    .await
+    .expect("get of Spark defaults");
+    assert_eq!(
+        get.pairs,
+        vec![
+            kv("spark.sql.execution.arrow.pyspark.enabled", Some("true")),
+            kv(
+                "spark.sql.execution.arrow.maxRecordsPerBatch",
+                Some("10000")
+            ),
+            kv(
+                "spark.sql.legacy.execution.pythonUDTF.pandas.conversion.enabled",
+                Some("false")
+            ),
+            kv("spark.sql.adaptive.customCostEvaluatorClass", None),
+        ]
+    );
+    // `getOption` is Spark's `Option(get(key))`: the same answers (Spark 4.3.0: `Some(10000)`), and none for an
+    // optional or unregistered key (review of a95ba3b26, finding 2).
+    let got = config(
+        &run,
+        OpType::GetOption(creq::GetOption {
+            keys: keys(&[
+                "spark.sql.execution.arrow.maxRecordsPerBatch",
+                "spark.sql.adaptive.customCostEvaluatorClass",
+                "no.such.key",
+            ]),
+        }),
+    )
+    .await
+    .expect("get option of Spark keys");
+    assert_eq!(
+        got.pairs,
+        vec![
+            kv(
+                "spark.sql.execution.arrow.maxRecordsPerBatch",
+                Some("10000")
+            ),
+            kv("spark.sql.adaptive.customCostEvaluatorClass", None),
+            kv("no.such.key", None),
+        ]
+    );
+    config(
+        &run,
+        OpType::Set(creq::Set {
+            pairs: vec![kv("spark.sql.execution.arrow.enabled", Some("false"))],
+            silent: None,
+        }),
+    )
+    .await
+    .expect("set the fallback key");
+    let get = config(
+        &run,
+        OpType::Get(creq::Get {
+            keys: keys(&spark_keys[..1]),
+        }),
+    )
+    .await
+    .expect("get through the fallback");
+    assert_eq!(
+        get.pairs,
+        vec![kv(
+            "spark.sql.execution.arrow.pyspark.enabled",
+            Some("false")
+        )]
+    );
+    let m = config(
+        &run,
+        OpType::IsModifiable(creq::IsModifiable {
+            keys: keys(&[
+                "spark.sql.execution.arrow.maxRecordsPerBatch",
+                "spark.sql.catalogImplementation",
+                "no.such.key",
+            ]),
+        }),
+    )
+    .await
+    .expect("is modifiable of Spark keys");
+    assert_eq!(
+        m.pairs,
+        vec![
+            kv("spark.sql.execution.arrow.maxRecordsPerBatch", Some("true")),
+            kv("spark.sql.catalogImplementation", Some("false")),
+            kv("no.such.key", Some("false"))
+        ]
+    );
     let status = unary::<_, pb::ConfigResponse>(
         &run.channel,
         "Config",
@@ -814,6 +916,32 @@ async fn config_set_silent_and_static_keys() {
     .await
     .unwrap_err();
     assert_eq!(error_class(&status), "CANNOT_MODIFY_STATIC_CONFIG");
+    // Spark 4.3.0 (Connect, 2026-11-28): a static Spark SQL key and a core Spark key are refused on set and
+    // unset, with these classes.
+    for (key, class) in [
+        ("spark.sql.warehouse.dir", "CANNOT_MODIFY_STATIC_CONFIG"),
+        (
+            "spark.sql.globalTempDatabase",
+            "CANNOT_MODIFY_STATIC_CONFIG",
+        ),
+        ("spark.executor.memory", "CANNOT_MODIFY_CONFIG"),
+    ] {
+        let status = config(
+            &run,
+            OpType::Set(creq::Set {
+                pairs: vec![kv(key, Some("x"))],
+                silent: None,
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error_class(&status), class, "{key}");
+        assert_eq!(info(&status).metadata["sqlState"], "46110");
+        let status = config(&run, OpType::Unset(creq::Unset { keys: keys(&[key]) }))
+            .await
+            .unwrap_err();
+        assert_eq!(error_class(&status), class, "{key}");
+    }
     let r = config(
         &run,
         OpType::Set(creq::Set {

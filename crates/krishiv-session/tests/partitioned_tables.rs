@@ -19,11 +19,10 @@ use krishiv_session::Session;
 
 /// A session whose warehouse is `dir`.
 fn session(dir: &std::path::Path) -> Session {
-    let s = Session::new().unwrap();
-    s.conf()
-        .set("spark.sql.warehouse.dir", dir.to_str().unwrap())
-        .unwrap();
-    s
+    Session::builder()
+        .config("spark.sql.warehouse.dir", dir.to_str().unwrap())
+        .build()
+        .unwrap()
 }
 
 fn run(s: &Session, sql: &str) {
@@ -2061,10 +2060,8 @@ fn by_name_columns_report_arity_then_ambiguity_then_extra_columns() {
     let old = tempfile::tempdir().unwrap();
     let s = Session::builder()
         .profile(krishiv_plan::analyzer::SparkProfile::V4_2)
+        .config("spark.sql.warehouse.dir", old.path().to_str().unwrap())
         .build()
-        .unwrap();
-    s.conf()
-        .set("spark.sql.warehouse.dir", old.path().to_str().unwrap())
         .unwrap();
     run(&s, "create table bt(a int, b int, c int) using parquet");
     let sql = "insert into bt by name select 1 as a, 2 as zz, 3 as `y``y`";

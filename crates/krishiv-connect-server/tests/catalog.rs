@@ -44,8 +44,9 @@ async fn start() -> Running {
     let dir = tempfile::tempdir().expect("tempdir");
     let warehouse = dir.path().to_str().expect("utf8").to_owned();
     let factory = move |_: &krishiv_session::auth::Authenticated, _: krishiv_session::Transport| {
-        let s = Session::new()?;
-        s.conf().set("spark.sql.warehouse.dir", &warehouse)?;
+        let s = Session::builder()
+            .config("spark.sql.warehouse.dir", &warehouse)
+            .build()?;
         Ok(s)
     };
     let manager = Arc::new(SessionManager::new(

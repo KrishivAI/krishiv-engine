@@ -34,10 +34,11 @@ fn cell(s: &Session, sql: &str) -> (String, String, String) {
 }
 
 fn ntz() -> Session {
-    Session::builder()
-        .config("spark.sql.timestampType", "TIMESTAMP_NTZ")
-        .build()
-        .unwrap()
+    ntz_builder().build().unwrap()
+}
+
+fn ntz_builder() -> krishiv_session::SessionBuilder {
+    Session::builder().config("spark.sql.timestampType", "TIMESTAMP_NTZ")
 }
 
 #[test]
@@ -123,9 +124,9 @@ fn a_bare_timestamp_type_is_the_session_timestamp_type() {
 #[test]
 fn a_table_column_keeps_the_type_its_create_resolved() {
     let dir = tempfile::tempdir().unwrap();
-    let s = ntz();
-    s.conf()
-        .set("spark.sql.warehouse.dir", dir.path().to_str().unwrap())
+    let s = ntz_builder()
+        .config("spark.sql.warehouse.dir", dir.path().to_str().unwrap())
+        .build()
         .unwrap();
     block_on(s.sql("create table t (c timestamp) using parquet")).unwrap();
     // Resolved at CREATE: a later change of the setting leaves the stored column alone.
@@ -145,9 +146,9 @@ fn a_table_column_keeps_the_type_its_create_resolved() {
 #[test]
 fn a_view_keeps_the_timestamp_type_of_its_create() {
     let dir = tempfile::tempdir().unwrap();
-    let s = Session::new().unwrap();
-    s.conf()
-        .set("spark.sql.warehouse.dir", dir.path().to_str().unwrap())
+    let s = Session::builder()
+        .config("spark.sql.warehouse.dir", dir.path().to_str().unwrap())
+        .build()
         .unwrap();
     let run = |sql: &str| {
         block_on(s.sql(sql)).unwrap_or_else(|e| panic!("{sql}: {e}"));

@@ -100,10 +100,9 @@ mod tests {
     #[test]
     fn every_command_builds_its_env_from_its_handle() {
         let dir = tempfile::tempdir().unwrap();
-        let session = Session::new().unwrap();
-        session
-            .conf()
-            .set("spark.sql.warehouse.dir", dir.path().to_str().unwrap())
+        let session = Session::builder()
+            .config("spark.sql.warehouse.dir", dir.path().to_str().unwrap())
+            .build()
             .unwrap();
         let handle = session.with_locals(vec![frame(None, &[("k", 7)])]);
         let run = |sql: &str| {
