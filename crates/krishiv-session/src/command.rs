@@ -814,6 +814,16 @@ impl Session {
                 // A bare `DEFAULT` that is no column of the query reads the target's default.
                 if let Err(e) = &first
                     && e.error_class().name().starts_with("UNRESOLVED_COLUMN")
+                    && let SetExprKind::Select(select) = &query.body.kind
+                    && select
+                        .projection
+                        .iter()
+                        .any(|i| contains_default(&i.expr) && !is_bare_default(&i.expr))
+                {
+                    // A `DEFAULT` that is only part of an expression cannot read a default.
+                    return Err(DefaultPlacementInvalid {}.into());
+                } else if let Err(e) = &first
+                    && e.error_class().name().starts_with("UNRESOLVED_COLUMN")
                     && let Some(rewritten) = default_row_query(query, inner, &stored)
                 {
                     inner_sql = padded_select("", &rewritten, query.span.start, "");
@@ -1925,6 +1935,24 @@ fn map_variable_error(
 /// the default of the variable it is assigned to; `None` unless the query is a plain `SELECT` with one
 /// item per target and at least one bare `DEFAULT`.
 fn default_row_query(query: &Query, inner: &str, stored: &[StoredVariable]) -> Option<String> {
+    if let SetExprKind::Values(values) = &query.body.kind {
+        // `VALUES (DEFAULT)` into one target: the row is the target's default.
+        let [row] = values.rows.as_slice() else {
+            return None;
+        };
+        let [var] = stored else {
+            return None;
+        };
+        if !is_bare_default(row) {
+            return None;
+        }
+        let replacement = match &var.default_query {
+            Some(q) => format!("({q})"),
+            None => format!("CAST(NULL AS {})", var.data_type.simple_string()),
+        };
+        // A default query is no inline-table value: select it instead.
+        return Some(format!("SELECT {replacement}"));
+    }
     let SetExprKind::Select(select) = &query.body.kind else {
         return None;
     };

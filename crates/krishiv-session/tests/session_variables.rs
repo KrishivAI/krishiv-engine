@@ -1626,3 +1626,25 @@ fn a_variable_may_be_named_var() {
     let df = block_on(s.sql("SELECT IDENTIFIER(var) FROM VALUES(1) AS T(c1)")).unwrap();
     assert_eq!(block_on(df.collect()).unwrap()[0].num_rows(), 1);
 }
+
+/// `SET VARIABLE (v) = (VALUES (DEFAULT))` reads the variable's default; a `DEFAULT` that is only
+/// part of a select item is `DEFAULT_PLACEMENT_INVALID` (Spark 4.3.0 sql-session-variables).
+#[test]
+fn row_assignment_default_forms() {
+    let s = session();
+    block_on(async {
+        s.sql("DECLARE OR REPLACE VARIABLE v INT DEFAULT 5")
+            .await
+            .unwrap();
+        s.sql("SET VARIABLE v = 9").await.unwrap();
+        s.sql("SET VARIABLE (v) = (VALUES (DEFAULT))")
+            .await
+            .unwrap();
+    });
+    assert_eq!(rows(&s, "SELECT v").1, vec![vec!["5".to_owned()]]);
+    let e = error(
+        &s,
+        "SET VARIABLE (v) = (SELECT DEFAULT + 1 FROM VALUES (1) AS t(c1))",
+    );
+    assert_eq!(e.error_class().name(), "DEFAULT_PLACEMENT_INVALID");
+}
