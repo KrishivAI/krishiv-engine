@@ -1,0 +1,735 @@
+{
+ "cases": {
+  "agg/arrow/one": {
+   "rows": [
+    [
+     1,
+     3.0
+    ],
+    [
+     2,
+     13.0
+    ]
+   ],
+   "schema": "struct<k:bigint,t:double>"
+  },
+  "agg/pandas/global": {
+   "rows": [
+    [
+     16.0
+    ]
+   ],
+   "schema": "struct<t:double>"
+  },
+  "agg/pandas/global_empty_input": {
+   "rows": [],
+   "schema": "struct<c:bigint>"
+  },
+  "agg/pandas/grouped_empty_input": {
+   "rows": [],
+   "schema": "struct<k:bigint,c:bigint>"
+  },
+  "agg/pandas/mixed_with_builtin": {
+   "error": {
+    "condition": "INVALID_PANDAS_UDF_PLACEMENT",
+    "exception": "AnalysisException",
+    "worker": null
+   }
+  },
+  "agg/pandas/not_a_scalar": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "worker": {
+     "error_class": null,
+     "message": "Failed to convert the value of the column '_0' with type 'object' to Arrow type 'int64'. It can be caused by overflows or other unsafe conversions warned by Arrow. Arrow safe type check can be disabled by using SQL config `spark.sql.execution.pandas.convertToArrowArraySafely`.",
+     "python_exception": "PySparkValueError"
+    }
+   }
+  },
+  "agg/pandas/one": {
+   "rows": [
+    [
+     1,
+     3.0
+    ],
+    [
+     2,
+     13.0
+    ]
+   ],
+   "schema": "struct<k:bigint,t:double>"
+  },
+  "agg/pandas/same_twice": {
+   "rows": [
+    [
+     1,
+     3.0,
+     3.0
+    ],
+    [
+     2,
+     13.0,
+     13.0
+    ]
+   ],
+   "schema": "struct<k:bigint,a:double,b:double>"
+  },
+  "agg/pandas/two": {
+   "rows": [
+    [
+     1,
+     3.0,
+     2
+    ],
+    [
+     2,
+     13.0,
+     3
+    ]
+   ],
+   "schema": "struct<k:bigint,t:double,c:bigint>"
+  },
+  "cogrouped/arrow/missing_column": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "worker": {
+     "error_class": "RESULT_COLUMN_NAMES_MISMATCH",
+     "message": "Column names of the returned data do not match specified schema. Missing: sides.",
+     "python_exception": "PySparkRuntimeError"
+    }
+   }
+  },
+  "cogrouped/arrow/one_side_keys": {
+   "rows": [
+    [
+     1,
+     "2:0"
+    ],
+    [
+     2,
+     "3:1"
+    ],
+    [
+     3,
+     "0:2"
+    ]
+   ],
+   "schema": "struct<k:bigint,sides:string>"
+  },
+  "cogrouped/pandas/key_and_data": {
+   "rows": [
+    [
+     1,
+     "2:0"
+    ],
+    [
+     2,
+     "3:1"
+    ],
+    [
+     3,
+     "0:2"
+    ]
+   ],
+   "schema": "struct<k:bigint,sides:string>"
+  },
+  "cogrouped/pandas/missing_column": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "worker": {
+     "error_class": "RESULT_COLUMN_NAMES_MISMATCH",
+     "message": "Column names of the returned data do not match specified schema. Missing: sides.",
+     "python_exception": "PySparkRuntimeError"
+    }
+   }
+  },
+  "cogrouped/pandas/one_argument": {
+   "error": {
+    "condition": "INVALID_PANDAS_UDF",
+    "exception": "PySparkValueError",
+    "worker": null
+   }
+  },
+  "cogrouped/pandas/one_side_keys": {
+   "rows": [
+    [
+     1,
+     "2:0:k,s,v:k,w"
+    ],
+    [
+     2,
+     "3:1:k,s,v:k,w"
+    ],
+    [
+     3,
+     "0:2:k,s,v:k,w"
+    ]
+   ],
+   "schema": "struct<k:bigint,sides:string>"
+  },
+  "grouped/arrow/data_only": {
+   "rows": [
+    [
+     1,
+     2
+    ],
+    [
+     2,
+     3
+    ]
+   ],
+   "schema": "struct<k:bigint,n:bigint>"
+  },
+  "grouped/arrow/empty_input": {
+   "rows": [],
+   "schema": "struct<k:bigint,n:bigint>"
+  },
+  "grouped/arrow/extra_column": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "worker": {
+     "error_class": "RESULT_COLUMN_NAMES_MISMATCH",
+     "message": "Column names of the returned data do not match specified schema. Unexpected: x.",
+     "python_exception": "PySparkRuntimeError"
+    }
+   }
+  },
+  "grouped/arrow/key_and_data": {
+   "rows": [
+    [
+     1,
+     2
+    ],
+    [
+     2,
+     3
+    ]
+   ],
+   "schema": "struct<k:bigint,n:bigint>"
+  },
+  "grouped/arrow/missing_column": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "worker": {
+     "error_class": "RESULT_COLUMN_NAMES_MISMATCH",
+     "message": "Column names of the returned data do not match specified schema. Missing: n.",
+     "python_exception": "PySparkRuntimeError"
+    }
+   }
+  },
+  "grouped/arrow/reordered_by_name": {
+   "rows": [
+    [
+     1,
+     2
+    ],
+    [
+     2,
+     3
+    ]
+   ],
+   "schema": "struct<k:bigint,n:bigint>"
+  },
+  "grouped/arrow/returns_batch": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "worker": {
+     "error_class": "UDF_RETURN_TYPE",
+     "message": "Return type of the user-defined function should be pyarrow.Table, but is RecordBatch.",
+     "python_exception": "PySparkTypeError"
+    }
+   }
+  },
+  "grouped/arrow/wrong_type": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "worker": {
+     "error_class": "RESULT_COLUMN_TYPES_MISMATCH",
+     "message": "Column types of the returned data do not match specified schema. Mismatch: column 'n' (expected int64, actual string).",
+     "python_exception": "PySparkRuntimeError"
+    }
+   }
+  },
+  "grouped/pandas/columns_seen": {
+   "rows": [
+    [
+     1,
+     "k,s,v"
+    ],
+    [
+     2,
+     "k,s,v"
+    ]
+   ],
+   "schema": "struct<k:bigint,n:string>"
+  },
+  "grouped/pandas/data_only": {
+   "rows": [
+    [
+     1,
+     2
+    ],
+    [
+     2,
+     3
+    ]
+   ],
+   "schema": "struct<k:bigint,n:bigint>"
+  },
+  "grouped/pandas/empty_frame_no_columns": {
+   "rows": [],
+   "schema": "struct<k:bigint,n:bigint>"
+  },
+  "grouped/pandas/empty_input": {
+   "rows": [],
+   "schema": "struct<k:bigint,n:bigint>"
+  },
+  "grouped/pandas/extra_column": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "worker": {
+     "error_class": "RESULT_COLUMN_NAMES_MISMATCH",
+     "message": "Column names of the returned data do not match specified schema. Unexpected: x.",
+     "python_exception": "PySparkRuntimeError"
+    }
+   }
+  },
+  "grouped/pandas/key_and_data": {
+   "rows": [
+    [
+     1,
+     2
+    ],
+    [
+     2,
+     3
+    ]
+   ],
+   "schema": "struct<k:bigint,n:bigint>"
+  },
+  "grouped/pandas/missing_column": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "worker": {
+     "error_class": "RESULT_COLUMN_NAMES_MISMATCH",
+     "message": "Column names of the returned data do not match specified schema. Missing: n.",
+     "python_exception": "PySparkRuntimeError"
+    }
+   }
+  },
+  "grouped/pandas/no_arguments": {
+   "error": {
+    "condition": "INVALID_PANDAS_UDF",
+    "exception": "PySparkValueError",
+    "worker": null
+   }
+  },
+  "grouped/pandas/other_names": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "worker": {
+     "error_class": "RESULT_COLUMN_NAMES_MISMATCH",
+     "message": "Column names of the returned data do not match specified schema. Missing: n. Unexpected: m.",
+     "python_exception": "PySparkRuntimeError"
+    }
+   }
+  },
+  "grouped/pandas/positional_labels": {
+   "rows": [
+    [
+     1,
+     2
+    ],
+    [
+     2,
+     3
+    ]
+   ],
+   "schema": "struct<k:bigint,n:bigint>"
+  },
+  "grouped/pandas/positional_too_many": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "worker": {
+     "error_class": "RESULT_COLUMN_SCHEMA_MISMATCH",
+     "message": "Number of columns of the returned data doesn't match specified schema. Expected: 1 Actual: 2",
+     "python_exception": "PySparkRuntimeError"
+    }
+   }
+  },
+  "grouped/pandas/reordered_by_name": {
+   "rows": [
+    [
+     1,
+     2
+    ],
+    [
+     2,
+     3
+    ]
+   ],
+   "schema": "struct<k:bigint,n:bigint>"
+  },
+  "grouped/pandas/returns_none": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "worker": {
+     "error_class": "UDF_RETURN_TYPE",
+     "message": "Return type of the user-defined function should be pandas.DataFrame, but is NoneType.",
+     "python_exception": "PySparkTypeError"
+    }
+   }
+  },
+  "grouped/pandas/returns_series": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "worker": {
+     "error_class": "UDF_RETURN_TYPE",
+     "message": "Return type of the user-defined function should be pandas.DataFrame, but is Series.",
+     "python_exception": "PySparkTypeError"
+    }
+   }
+  },
+  "grouped/pandas/three_arguments": {
+   "error": {
+    "condition": "INVALID_PANDAS_UDF",
+    "exception": "PySparkValueError",
+    "worker": null
+   }
+  },
+  "grouped/pandas/varargs": {
+   "error": {
+    "condition": "INVALID_PANDAS_UDF",
+    "exception": "PySparkValueError",
+    "worker": null
+   }
+  },
+  "grouped/pandas/wrong_type": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "worker": {
+     "error_class": null,
+     "message": "Failed to convert the value of the column 'n' with type 'str' to Arrow type 'int64'. It can be caused by overflows or other unsafe conversions warned by Arrow. Arrow safe type check can be disabled by using SQL config `spark.sql.execution.pandas.convertToArrowArraySafely`.",
+     "python_exception": "PySparkValueError"
+    }
+   }
+  },
+  "map/arrow/extra_column": {
+   "rows": [
+    [
+     1
+    ],
+    [
+     1
+    ],
+    [
+     2
+    ],
+    [
+     2
+    ],
+    [
+     2
+    ]
+   ],
+   "schema": "struct<k:bigint>"
+  },
+  "map/arrow/missing_column": {
+   "error": {
+    "exception": "Py4JJavaError",
+    "jvm": "Caused by: java.lang.ArrayIndexOutOfBoundsException: Index 1 out of bounds for length 1"
+   }
+  },
+  "map/arrow/reordered_by_name": {
+   "error": {
+    "condition": "UNSUPPORTED_CALL.WITHOUT_SUGGESTION",
+    "exception": "UnsupportedOperationException",
+    "worker": null
+   }
+  },
+  "map/arrow/returns_table": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "worker": {
+     "error_class": "UDF_RETURN_TYPE",
+     "message": "Return type of the user-defined function should be iterator of pyarrow.RecordBatch, but is iterator of Table.",
+     "python_exception": "PySparkTypeError"
+    }
+   }
+  },
+  "map/arrow/same_columns": {
+   "rows": [
+    [
+     1,
+     "a"
+    ],
+    [
+     1,
+     "b"
+    ],
+    [
+     2,
+     "c"
+    ],
+    [
+     2,
+     "d"
+    ],
+    [
+     2,
+     "e"
+    ]
+   ],
+   "schema": "struct<k:bigint,s:string>"
+  },
+  "map/arrow/wrong_type": {
+   "error": {
+    "condition": "UNSUPPORTED_CALL.WITHOUT_SUGGESTION",
+    "exception": "UnsupportedOperationException",
+    "worker": null
+   }
+  },
+  "map/pandas/empty_result": {
+   "rows": [],
+   "schema": "struct<k:bigint>"
+  },
+  "map/pandas/extra_column": {
+   "rows": [
+    [
+     1
+    ],
+    [
+     1
+    ],
+    [
+     2
+    ],
+    [
+     2
+    ],
+    [
+     2
+    ]
+   ],
+   "schema": "struct<k:bigint>"
+  },
+  "map/pandas/missing_column": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "worker": {
+     "error_class": "RESULT_COLUMN_NAMES_MISMATCH",
+     "message": "Column names of the returned data do not match specified schema. Missing: other.",
+     "python_exception": "PySparkRuntimeError"
+    }
+   }
+  },
+  "map/pandas/no_columns_and_no_rows": {
+   "rows": [],
+   "schema": "struct<k:bigint>"
+  },
+  "map/pandas/not_iterator": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "worker": {
+     "error_class": "UDF_RETURN_TYPE",
+     "message": "Return type of the user-defined function should be iterator of pandas.DataFrame, but is int.",
+     "python_exception": "PySparkTypeError"
+    }
+   }
+  },
+  "map/pandas/other_names": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "worker": {
+     "error_class": "RESULT_COLUMN_NAMES_MISMATCH",
+     "message": "Column names of the returned data do not match specified schema. Missing: a, b. Unexpected: k, s.",
+     "python_exception": "PySparkRuntimeError"
+    }
+   }
+  },
+  "map/pandas/positional_labels": {
+   "rows": [
+    [
+     1,
+     "a"
+    ],
+    [
+     1,
+     "b"
+    ],
+    [
+     2,
+     "c"
+    ],
+    [
+     2,
+     "d"
+    ],
+    [
+     2,
+     "e"
+    ]
+   ],
+   "schema": "struct<a:bigint,b:string>"
+  },
+  "map/pandas/positional_too_few": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "worker": {
+     "error_class": "RESULT_COLUMN_SCHEMA_MISMATCH",
+     "message": "Number of columns of the returned data doesn't match specified schema. Expected: 2 Actual: 1",
+     "python_exception": "PySparkRuntimeError"
+    }
+   }
+  },
+  "map/pandas/reordered_by_name": {
+   "rows": [
+    [
+     1,
+     "a"
+    ],
+    [
+     1,
+     "b"
+    ],
+    [
+     2,
+     "c"
+    ],
+    [
+     2,
+     "d"
+    ],
+    [
+     2,
+     "e"
+    ]
+   ],
+   "schema": "struct<k:bigint,s:string>"
+  },
+  "map/pandas/returns_series": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "worker": {
+     "error_class": "UDF_RETURN_TYPE",
+     "message": "Return type of the user-defined function should be iterator of pandas.DataFrame, but is iterator of Series.",
+     "python_exception": "PySparkTypeError"
+    }
+   }
+  },
+  "map/pandas/same_columns": {
+   "rows": [
+    [
+     1,
+     "a"
+    ],
+    [
+     1,
+     "b"
+    ],
+    [
+     2,
+     "c"
+    ],
+    [
+     2,
+     "d"
+    ],
+    [
+     2,
+     "e"
+    ]
+   ],
+   "schema": "struct<k:bigint,s:string>"
+  },
+  "map/pandas/wrong_type": {
+   "error": {
+    "condition": "PYTHON_EXCEPTION",
+    "exception": "PythonException",
+    "worker": {
+     "error_class": null,
+     "message": "Failed to convert the value of the column 's' with type 'str' to Arrow type 'int64'. It can be caused by overflows or other unsafe conversions warned by Arrow. Arrow safe type check can be disabled by using SQL config `spark.sql.execution.pandas.convertToArrowArraySafely`.",
+     "python_exception": "PySparkValueError"
+    }
+   }
+  },
+  "not_null/cogrouped/pandas": {
+   "error": {
+    "exception": "Py4JJavaError",
+    "jvm": "Caused by: java.lang.NullPointerException"
+   }
+  },
+  "not_null/grouped/arrow": {
+   "error": {
+    "exception": "Py4JJavaError",
+    "jvm": "Caused by: java.lang.IllegalStateException: Value at index is null"
+   }
+  },
+  "not_null/grouped/pandas": {
+   "error": {
+    "exception": "Py4JJavaError",
+    "jvm": "Caused by: java.lang.IllegalStateException: Value at index is null"
+   }
+  },
+  "not_null/map/arrow": {
+   "error": {
+    "exception": "Py4JJavaError",
+    "jvm": "Caused by: java.lang.IllegalStateException: Value at index is null"
+   }
+  },
+  "not_null/map/arrow_no_null": {
+   "rows": [
+    [
+     1
+    ],
+    [
+     1
+    ],
+    [
+     2
+    ],
+    [
+     2
+    ],
+    [
+     2
+    ]
+   ],
+   "schema": "struct<k:bigint>"
+  },
+  "not_null/map/pandas": {
+   "error": {
+    "exception": "Py4JJavaError",
+    "jvm": "Caused by: java.lang.IllegalStateException: Value at index is null"
+   }
+  }
+ },
+ "conf": {
+  "spark.sql.session.timeZone": "UTC"
+ },
+ "generator": "python/tests/pyspark_udf/relation/gen_goldens.py",
+ "pandas": "3.0.6",
+ "pyarrow": "26.0.0",
+ "pyspark": "4.2.0",
+ "spark": "4.2.0"
+}

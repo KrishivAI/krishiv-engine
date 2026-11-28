@@ -537,7 +537,7 @@ impl ResolutionConf {
         "spark.sql.legacy.javaCharsets",
         "spark.sql.legacy.codingErrorAction",
         "spark.sql.legacy.negativeIndexInArrayInsert",
-        "spark.sql.timeType.enabled",
+        krishiv_common::config::TIME_TYPE_ENABLED,
         "spark.sql.legacy.interval.enabled",
         "spark.sql.legacy.nullInEmptyListBehavior",
         "spark.sql.function.concatBinaryAsString",
