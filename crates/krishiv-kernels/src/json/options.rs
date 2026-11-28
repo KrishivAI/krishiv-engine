@@ -11,16 +11,41 @@
 //! `ignoreNullFields` (two `to_json` writer flags), `dropFieldIfAllNull` (a
 //! `schema_of_json` rendering flag) and `mode` (`PERMISSIVE` or `FAILFAST`
 //! for `from_json`; `DROPMALFORMED` is rejected with
-//! `PARSE_MODE_UNSUPPORTED`). Unknown options are ignored, as Spark's
-//! reader ignores them, and the file options (`multiLine`,
-//! `columnNameOfCorruptRecord`, `samplingRatio`, `locale`, `timeFormat`,
-//! ...) have no scalar meaning and are ignored.
+//! `PARSE_MODE_UNSUPPORTED`). A `locale` other than `en-US` is refused
+//! ([`check_locale`]). Unknown options are ignored, as Spark's reader
+//! ignores them, and the file options (`multiLine`,
+//! `columnNameOfCorruptRecord`, `samplingRatio`, `timeFormat`, ...) have no
+//! scalar meaning and are ignored.
 
 use std::collections::BTreeMap;
 
-use krishiv_common::error::KrishivError;
+use krishiv_common::error::{KrishivError, KrishivUnsupportedFeature};
 
 use crate::datetime_pattern::{DateTimePattern, Purpose};
+
+/// Fails unless the JSON option `locale` names the US locale.
+///
+/// Spark reads the tag with `Locale.forLanguageTag` (so `en-US` in any
+/// case is `Locale.US`, and `en_US` is not a tag at all). Only `Locale.US`
+/// parses a decimal string with the US rule (`ExprUtils.getDecimalParser`:
+/// commas dropped, then `BigDecimal`); any other locale parses it with
+/// Java's `DecimalFormat` and that locale's symbols (`1,5` is 1.5 under
+/// `de-DE`), in reads, `from_json` and `prefersDecimal` inference, and its
+/// date patterns use that locale's month and day names. Krishiv has no
+/// locale data, so it refuses rather than read such values with the US rule.
+///
+/// # Errors
+/// `KRISHIV_UNSUPPORTED_FEATURE` for any other tag.
+pub fn check_locale(tag: &str) -> Result<(), KrishivError> {
+    if tag.eq_ignore_ascii_case("en-US") {
+        Ok(())
+    } else {
+        Err(KrishivUnsupportedFeature {
+            feature: format!("the JSON option locale {tag:?} (only en-US is supported)"),
+        }
+        .into())
+    }
+}
 
 /// How `from_json` handles malformed records (Spark's `mode` option).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -181,6 +206,7 @@ impl JsonOptions {
                     out.timestamp_ntz_format = Some(pattern);
                     out.timestamp_ntz_output = Some(DateTimePattern::new(value, Purpose::Format)?);
                 }
+                "locale" => check_locale(value)?,
                 "primitivesasstring" => out.primitives_as_string = is_true(value),
                 "prefersdecimal" => out.prefers_decimal = is_true(value),
                 "infertimestamp" => out.infer_timestamp = is_true(value),
@@ -257,6 +283,26 @@ fn is_true(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_the_us_locale_tag_is_accepted() {
+        // `Locale.forLanguageTag` folds case; `en_US` is no tag (the root
+        // locale in Spark, a `DecimalFormat` parser).
+        for tag in ["en-US", "en-us", "EN-US"] {
+            check_locale(tag).unwrap();
+        }
+        for tag in ["de-DE", "en_US", "en", " en-US", "fr-FR"] {
+            let e = check_locale(tag).unwrap_err();
+            assert_eq!(
+                e.error_class(),
+                krishiv_common::error::ErrorClass::KrishivUnsupportedFeature
+            );
+        }
+        let named = BTreeMap::from([("Locale".to_owned(), "de-DE".to_owned())]);
+        assert!(JsonOptions::from_map(&named).is_err());
+        let us = BTreeMap::from([("locale".to_owned(), "en-US".to_owned())]);
+        JsonOptions::from_map(&us).unwrap();
+    }
 
     #[test]
     fn an_ntz_pattern_stays_on_the_corrected_formatter_under_legacy() {

@@ -83,6 +83,7 @@ static SPECS: LazyLock<Vec<OptionSpec>> = LazyLock::new(|| {
         conf(crate::text::PARSER_POLICY_CONF, OptionKind::String, OptionDefault::Str("EXCEPTION"), crate::text::PARSER_POLICY_CONF, "The session's `spark.sql.legacy.timeParserPolicy`: `LEGACY` reads dates and timestamps with `FastDateFormat` patterns and the lenient fallback.");
         conf("ignoreCorruptFiles", OptionKind::Bool, OptionDefault::Bool(false), "spark.sql.files.ignoreCorruptFiles", "Inference: a compressed file that breaks counts the lines decoded before the break, as the scan does (`spark.sql.files.ignoreCorruptFiles`).");
         conf("timeZone", OptionKind::String, OptionDefault::Str("UTC"), "spark.sql.session.timeZone", "The time zone of timestamps without an offset.");
+        string("locale", "The locale of decimals and dates (only en-US).");
         string("encoding", "The charset: UTF-8, ISO-8859-1 or US-ASCII.");
         string("charset", "Alias of `encoding`.");
         string("lineSep", "The line separator (read: \\r, \\r\\n, \\n; write: \\n).");
@@ -188,6 +189,9 @@ impl JsonOptions {
     pub(crate) fn new(o: &FormatOptions, writing: bool) -> Result<Self> {
         if writing {
             write_codec(o)?;
+        }
+        if let Some(l) = o.str("locale") {
+            krishiv_kernels::json::check_locale(l)?;
         }
         let charset = Charset::parse(o.str("encoding").or_else(|| o.str("charset")))?;
         let line_sep = LineSep::parse(o.str("lineSep"), charset, "json")?;

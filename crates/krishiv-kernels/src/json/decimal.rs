@@ -18,9 +18,9 @@
 //!   ([`merge_decimals`], [`LONG_DECIMAL`]).
 //!
 //! Goldens: `tests/fixtures/spark-{4.2.1,4.3.0}/json-prefers-decimal.json`.
-//! Known gap: a `locale` other than `en-US` reads through Java's
-//! `DecimalFormat` in Spark (`1.000,5` is `DECIMAL(5,1)` under `de-DE`); the
-//! US rule applies here whatever the locale.
+//! A `locale` other than `en-US` reads through Java's `DecimalFormat` in
+//! Spark (`1.000,5` is `DECIMAL(5,1)` under `de-DE`); the JSON options refuse
+//! one ([`super::check_locale`]), so only the US rule is needed here.
 
 use std::borrow::Cow;
 

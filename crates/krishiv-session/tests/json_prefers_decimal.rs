@@ -15,11 +15,25 @@ use futures::executor::block_on;
 use krishiv_plan::analyzer::SparkProfile;
 use krishiv_session::Session;
 
-/// The cases not matched yet, by text and options: a `locale` other than
-/// `en-US` parses through Java's `DecimalFormat` in Spark (`1.000,5` is
-/// `DECIMAL(5,1)` under `de-DE`); Krishiv applies the US rule. Each must
-/// still differ, so a fix removes it from here.
-const KNOWN_GAPS: &[&str] = &[r#"{"t":"1.000,5"}"#];
+/// The cases not matched yet, by text. Each must still differ, so a fix
+/// removes it from here.
+const KNOWN_GAPS: &[&str] = &[];
+
+/// Spark's result, or the refusal Krishiv gives instead by design: a
+/// `locale` other than `en-US` parses through Java's `DecimalFormat` in
+/// Spark (`1.000,5` is `DECIMAL(5,1)` under `de-DE`), which Krishiv has no
+/// locale data for, so it refuses (`krishiv_kernels::json::check_locale`).
+fn expected<'a>(case: &'a serde_json::Value, key: &str) -> &'a str {
+    let other_locale = case["options"]
+        .get("locale")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|l| !l.eq_ignore_ascii_case("en-US"));
+    if other_locale {
+        "ERROR KRISHIV_UNSUPPORTED_FEATURE"
+    } else {
+        case[key].as_str().unwrap()
+    }
+}
 
 fn quoted(s: &str) -> String {
     format!("'{}'", s.replace('\\', "\\\\").replace('\'', "\\'"))
@@ -114,7 +128,7 @@ fn json_decimal_inference_matches_spark_runs() {
             let got = block_on(async { s.sql(&sql).await?.collect().await })
                 .map(|b| first_text(&b).unwrap_or_default())
                 .map_err(|e| e.to_string());
-            let want = case["schema_of_json"].as_str().unwrap();
+            let want = expected(case, "schema_of_json");
             check(&got, want, gap, &format!("{version} {sql}"));
 
             let file = dir.path().join(format!("{version}-{i}.json"));
@@ -133,7 +147,7 @@ fn json_decimal_inference_matches_spark_runs() {
                 view_schema(&s, &names)
             })
             .map_err(|e| e.to_string());
-            let want = case["file_schema"].as_str().unwrap();
+            let want = expected(case, "file_schema");
             check(&got, want, gap, &format!("{version} file {text} {opts:?}"));
         }
     }

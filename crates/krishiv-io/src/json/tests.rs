@@ -1608,6 +1608,21 @@ fn read_path_option_negatives() {
     let e = super::options::JsonOptions::new(&options(&serde_json::json!({"lineSep": ""})), false)
         .expect_err("empty lineSep");
     assert_eq!(e.error_class(), ErrorClass::KrishivInvalidFormatOptionValue);
+    // Only `Locale.US` reads decimals with the US rule; any other locale is
+    // refused, on reads and writes alike.
+    for writing in [false, true] {
+        let e = super::options::JsonOptions::new(
+            &options(&serde_json::json!({"locale": "de-DE"})),
+            writing,
+        )
+        .expect_err("de-DE");
+        assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
+        super::options::JsonOptions::new(
+            &options(&serde_json::json!({"locale": "en-us"})),
+            writing,
+        )
+        .expect("en-US");
+    }
 }
 
 #[test]
