@@ -1202,7 +1202,7 @@ pub(super) fn bind(name: &str, args: &[BindArg], opts: &BindOptions) -> FamilyRe
                             Some(Zones::PerRow(&names))
                         }
                     };
-                    let out = make_timestamp(fields, zones.as_ref(), fail)?;
+                    let out = make_timestamp(fields, zones.as_ref(), fail, ctx.spark_version())?;
                     Ok(Arc::new(if ntz { out } else { out.with_timezone("UTC") }) as ArrayRef)
                 },
             )

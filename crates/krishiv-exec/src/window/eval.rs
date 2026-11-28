@@ -151,7 +151,7 @@ pub(super) fn evaluate(
     ansi: bool,
     zone: &krishiv_kernels::datetime::ZoneRef,
 ) -> Result<Vec<ArrayRef>> {
-    evaluate_with(plan, slices, ansi, false, zone, None, None)?.map_err(|bytes| {
+    evaluate_with(plan, slices, ansi, Default::default(), zone, None, None)?.map_err(|bytes| {
         internal(format!(
             "a window evaluation without UDFs refused {bytes} bytes"
         ))
@@ -166,7 +166,7 @@ pub(super) fn evaluate_with(
     plan: &WindowPlan,
     slices: &[Slice<'_>],
     ansi: bool,
-    legacy: bool,
+    moments: crate::aggregate::MomentRules,
     zone: &krishiv_kernels::datetime::ZoneRef,
     udafs: Option<&crate::aggregate::UdafEnv>,
     pool: Option<&mut krishiv_memory::Reservation>,
@@ -204,7 +204,7 @@ pub(super) fn evaluate_with(
                     }
                 }
             }
-            _ => function(f, &unit, ansi, legacy, zone)?,
+            _ => function(f, &unit, ansi, moments, zone)?,
         });
     }
     Ok(Ok(columns))
@@ -223,7 +223,7 @@ fn function(
     f: &WindowFunctionPlan,
     u: &Unit<'_>,
     ansi: bool,
-    legacy: bool,
+    moments: crate::aggregate::MomentRules,
     zone: &krishiv_kernels::datetime::ZoneRef,
 ) -> Result<ArrayRef> {
     let n = u.rows;
@@ -285,7 +285,7 @@ fn function(
                 .0?;
             Arc::new(Int32Array::from(v))
         }
-        WindowFunction::Aggregate(a) => aggregate(a, f, u, ansi, legacy)?,
+        WindowFunction::Aggregate(a) => aggregate(a, f, u, ansi, moments)?,
         WindowFunction::CounterDiff {
             counter,
             start_time,
@@ -405,7 +405,7 @@ fn aggregate(
     f: &WindowFunctionPlan,
     u: &Unit<'_>,
     ansi: bool,
-    legacy: bool,
+    moments: crate::aggregate::MomentRules,
 ) -> Result<ArrayRef> {
     let shape = f.shape()?;
     if shape == Shape::Frame {
@@ -418,7 +418,7 @@ fn aggregate(
             order: u.order.as_ref(),
         };
         let frames = super::frames::frames(f.frame, &rows)?;
-        return super::frames::aggregate(a, f, u.slices, &frames, ansi, legacy);
+        return super::frames::aggregate(a, f, u.slices, &frames, ansi, moments);
     }
     if exact_decimal(a) {
         return decimal_aggregate(a, f, shape, u, ansi);
@@ -435,7 +435,7 @@ fn aggregate(
         mask: None,
         ..a.clone()
     };
-    let mut acc = Accumulator::new(&local, ansi)?.legacy_statistical(legacy);
+    let mut acc = Accumulator::new(&local, ansi)?.moment_rules(moments);
     let parts = u.parts.len();
     // Group `parts` takes rows the filter drops; it is never evaluated.
     let trash = id(parts)?;

@@ -20,6 +20,7 @@ use super::Zones;
 use super::calendar::invalid_date;
 use crate::cast::datetime::{MICROS_PER_DAY, days_from_civil, local_to_utc};
 use crate::error::{KernelError, with_capacity};
+use crate::version::SparkVersion;
 use krishiv_common::error::ErrorClass;
 
 const MICROS_PER_SECOND: i128 = 1_000_000;
@@ -45,7 +46,8 @@ pub struct TimestampFields<'a> {
 /// (`TIMESTAMP`; a NULL zone gives NULL), or `None` for a `TIMESTAMP_NTZ`,
 /// which is the wall clock itself. An invalid field is
 /// `DATETIME_FIELD_OUT_OF_BOUNDS.WITH_SUGGESTION` (`INVALID_FRACTION_OF_SECOND`
-/// for 60 with a fraction) when `fail_on_error`, else NULL.
+/// for 60 with a fraction) when `fail_on_error`, else NULL; `version` picks the error class
+/// (`.WITH_SUGGESTION` before Spark 4.3, `.WITHOUT_SUGGESTION` since).
 ///
 /// # Errors
 /// As above; `INTERNAL_ERROR` for inputs of different lengths or a seconds
@@ -54,6 +56,7 @@ pub fn make_timestamp(
     fields: TimestampFields<'_>,
     zones: Option<&Zones<'_>>,
     fail_on_error: bool,
+    version: SparkVersion,
 ) -> Result<TimestampMicrosecondArray, KernelError> {
     let rows = fields.years.len();
     let lengths = [
@@ -95,7 +98,7 @@ pub fn make_timestamp(
             valid.push(false);
             continue;
         }
-        match one(&fields, row) {
+        match one(&fields, row, version) {
             Ok(local) => {
                 let instant = match zone {
                     Some(tz) => local_to_utc(local, tz),
@@ -132,9 +135,10 @@ fn wrap_i32(v: i128) -> i32 {
 }
 
 /// The wall-clock microseconds of row `row`, or the error Spark raises.
-fn one(f: &TimestampFields<'_>, row: usize) -> Result<i64, KernelError> {
+fn one(f: &TimestampFields<'_>, row: usize, version: SparkVersion) -> Result<i64, KernelError> {
     let (year, month, day) = (f.years.value(row), f.months.value(row), f.days.value(row));
-    let out_of_bounds = |text: String| KernelError::datetime_field_out_of_bounds(row, text);
+    let out_of_bounds =
+        |text: String| KernelError::datetime_field_out_of_bounds(row, text, version);
     // Spark truncates the unscaled seconds to an `int` first, and refuses a
     // fraction of 60 seconds before it checks any other field.
     let unscaled = i128::from(wrap_i32(f.seconds.value(row)));

@@ -23,7 +23,7 @@ fn core(function: AggregateFunction, sketches: DataType) -> Arc<AggCore> {
         ansi: true,
         spill: None,
         require_unit_weights: false,
-        legacy_statistical: false,
+        moments: Default::default(),
         udafs: None,
     };
     Arc::new(AggCore::new(spec).unwrap())
@@ -161,7 +161,7 @@ fn the_buffer_of_the_largest_array_is_projected() {
         ansi: true,
         spill: None,
         require_unit_weights: false,
-        legacy_statistical: false,
+        moments: Default::default(),
         udafs: None,
     };
     let core = Arc::new(AggCore::new(spec).unwrap());

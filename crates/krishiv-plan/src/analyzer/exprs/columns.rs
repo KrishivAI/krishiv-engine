@@ -326,6 +326,44 @@ impl Resolver<'_> {
                 lateral_first = true;
             }
         }
+        // A select-list generator's column is no input column yet (see above): an input column of
+        // its name is the one an unqualified reference reads (`SELECT explode(a) AS col, col`),
+        // when the generator's column is named by the select list (an alias or a name list; an unaliased `explode(a), col`
+        // stays ambiguous).
+        let unshadowed: Vec<Attr>;
+        let scope = match &c.name[..] {
+            [name] if !lateral_first => {
+                let cs = self.ctx.conf.case_sensitive;
+                let generated = |a: &Attr| {
+                    a.qual
+                        .iter()
+                        .any(|q| q.starts_with(crate::GENERATE_QUALIFIER_PREFIX))
+                };
+                let named = |a: &&Attr| same(&a.col.name, name, cs);
+                let aliased = cx
+                    .lateral
+                    .is_some_and(|l| l.iter().filter(named).any(generated))
+                    || scope.iter().filter(named).any(|a| {
+                        a.qual
+                            .iter()
+                            .any(|q| q.ends_with(crate::GENERATE_NAMES_SUFFIX))
+                    });
+                if aliased
+                    && scope.iter().filter(named).any(generated)
+                    && scope.iter().filter(named).any(|a| !generated(a))
+                {
+                    unshadowed = scope
+                        .iter()
+                        .filter(|a| !(named(a) && generated(a)))
+                        .cloned()
+                        .collect();
+                    &unshadowed[..]
+                } else {
+                    scope
+                }
+            }
+            _ => scope,
+        };
         for (i, level) in [(!lateral_first).then_some(scope), extra, hidden]
             .into_iter()
             .enumerate()
@@ -731,6 +769,10 @@ impl Resolver<'_> {
         let cs = self.ctx.conf.case_sensitive;
         let mut ty = &k.col.data_type;
         for part in rest {
+            // A field of a `NULL` (`void`) column is `NULL`.
+            if matches!(ty, krishiv_types::DataType::Null) {
+                return true;
+            }
             let krishiv_types::DataType::Struct(s) = ty else {
                 return false;
             };

@@ -69,7 +69,7 @@ impl Finalizer {
             ansi: true,
             spill: None,
             require_unit_weights: false,
-            legacy_statistical: false,
+            moments: Default::default(),
             udafs: None,
         };
         let core = Arc::new(AggCore::new(spec)?);
@@ -413,7 +413,7 @@ mod tests {
             ansi: true,
             spill: None,
             require_unit_weights: false,
-            legacy_statistical: false,
+            moments: Default::default(),
             udafs: None,
         };
         let agg = AggregateExpr::new(

@@ -112,7 +112,10 @@ fn not_outside_quantified_stays_outside() {
 #[test]
 fn empty_like_any_is_still_a_parse_error() {
     let err = lower("SELECT a LIKE ANY () FROM t").unwrap_err();
-    assert_eq!(err.error.error_class().name(), "_LEGACY_ERROR_TEMP_0064");
+    assert_eq!(
+        err.error.error_class().name(),
+        "INVALID_SQL_SYNTAX.EMPTY_QUANTIFIED_PATTERN"
+    );
 }
 
 /// Spark 4.3.0 `SqlBaseParser.g4` adds `LOCALTIME` to `#currentLike`: `localtime(n)` as a whole

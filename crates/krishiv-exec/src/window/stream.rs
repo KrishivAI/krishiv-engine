@@ -101,7 +101,7 @@ impl Fold {
     pub(super) fn new(
         a: &AggregateExpr,
         ansi: bool,
-        legacy: bool,
+        moments: crate::aggregate::MomentRules,
         udafs: Option<&crate::aggregate::UdafEnv>,
     ) -> Result<Self> {
         if super::udaf::is_udf(a) {
@@ -142,7 +142,7 @@ impl Fold {
             mask: None,
             ..a.clone()
         };
-        let mut acc = Accumulator::new(&local, ansi)?.legacy_statistical(legacy);
+        let mut acc = Accumulator::new(&local, ansi)?.moment_rules(moments);
         acc.resize(2);
         Ok(Self::Rows {
             acc: Box::new(acc),
@@ -179,7 +179,7 @@ impl Fold {
     /// The bytes [`charged`](Self::charged) takes from the credit for a
     /// fold of `a` as it opens (0 if it charges nothing).
     pub(super) fn opened_bytes(a: &AggregateExpr, env: &Env) -> Result<usize> {
-        Ok(Self::new(a, env.ansi, env.legacy, env.udafs.as_ref())?.charged_bytes(a))
+        Ok(Self::new(a, env.ansi, env.moments, env.udafs.as_ref())?.charged_bytes(a))
     }
 
     /// The size of the state [`charged`](Self::charged) charges, 0 if it
@@ -483,7 +483,7 @@ pub(super) fn copy_partition(
     for f in &env.plan.functions {
         whole.push(match &f.function {
             WindowFunction::Aggregate(a) if f.shape()? == Shape::Whole => Some(
-                Fold::new(a, env.ansi, env.legacy, env.udafs.as_ref())?.charged(a, consumer, true),
+                Fold::new(a, env.ansi, env.moments, env.udafs.as_ref())?.charged(a, consumer, true),
             ),
             _ => None,
         });
@@ -707,7 +707,7 @@ impl Emit {
                     Shape::Whole | Shape::Frame => (None, None),
                     Shape::RunningRows => (
                         Some(
-                            Fold::new(a, env.ansi, env.legacy, env.udafs.as_ref())?
+                            Fold::new(a, env.ansi, env.moments, env.udafs.as_ref())?
                                 .charged(a, consumer, true),
                         ),
                         None,
@@ -715,7 +715,7 @@ impl Emit {
                     Shape::RunningPeers => (
                         None,
                         Some(
-                            Fold::new(a, env.ansi, env.legacy, env.udafs.as_ref())?
+                            Fold::new(a, env.ansi, env.moments, env.udafs.as_ref())?
                                 .charged(a, consumer, true),
                         ),
                     ),

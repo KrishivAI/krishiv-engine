@@ -605,9 +605,9 @@ impl Accumulator {
     /// Spark divides by zero (`spark.sql.legacy.statisticalAggregate`); the
     /// other aggregates ignore it.
     #[must_use]
-    pub(crate) fn legacy_statistical(mut self, on: bool) -> Self {
+    pub(crate) fn moment_rules(mut self, rules: super::MomentRules) -> Self {
         if let Kind::Moments(m) = &mut self.kind {
-            m.legacy(on);
+            m.rules(rules);
         }
         self
     }

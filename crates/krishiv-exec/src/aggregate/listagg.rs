@@ -27,11 +27,11 @@ use std::sync::Arc;
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
     Date32Type, Decimal64Type, Decimal128Type, Float32Type, Float64Type, Int8Type, Int16Type,
-    Int32Type, Int64Type, TimestampMicrosecondType,
+    Int32Type, Int64Type, IntervalYearMonthType, TimestampMicrosecondType,
 };
 use arrow_array::{Array, ArrayRef, ListArray, UInt32Array};
 use arrow_buffer::{OffsetBuffer, ScalarBuffer};
-use arrow_schema::{DataType, Field, TimeUnit};
+use arrow_schema::{DataType, Field, IntervalUnit, TimeUnit};
 use arrow_select::take::take;
 
 use super::collect::{kept_bytes, normalize};
@@ -434,6 +434,7 @@ fn key_cmp(
         | DataType::Int16
         | DataType::Int32
         | DataType::Date32
+        | DataType::Interval(IntervalUnit::YearMonth)
         | DataType::Int64
         | DataType::Timestamp(..)
         | DataType::Boolean
@@ -465,6 +466,7 @@ fn orderable(t: &DataType) -> bool {
             | DataType::Int32
             | DataType::Int64
             | DataType::Date32
+            | DataType::Interval(IntervalUnit::YearMonth)
             | DataType::Timestamp(TimeUnit::Microsecond, _)
             | DataType::Boolean
             | DataType::Decimal64(..)
@@ -485,6 +487,9 @@ fn int_key(a: &ArrayRef, i: usize) -> i128 {
         DataType::Int16 => i128::from(a.as_primitive::<Int16Type>().value(i)),
         DataType::Int32 => i128::from(a.as_primitive::<Int32Type>().value(i)),
         DataType::Date32 => i128::from(a.as_primitive::<Date32Type>().value(i)),
+        DataType::Interval(IntervalUnit::YearMonth) => {
+            i128::from(a.as_primitive::<IntervalYearMonthType>().value(i))
+        }
         DataType::Int64 => i128::from(a.as_primitive::<Int64Type>().value(i)),
         DataType::Timestamp(TimeUnit::Microsecond, _) => {
             i128::from(a.as_primitive::<TimestampMicrosecondType>().value(i))
@@ -520,7 +525,7 @@ fn byte_key(a: &ArrayRef, i: usize) -> &[u8] {
 
 #[cfg(test)]
 mod tests {
-    use arrow_schema::{Field, Fields, TimeUnit};
+    use arrow_schema::{Field, Fields, IntervalUnit, TimeUnit};
     use krishiv_common::error::ErrorClass;
 
     use super::*;
@@ -552,6 +557,7 @@ mod tests {
     fn orderable_keys_are_accepted() {
         for key in [
             DataType::Int8,
+            DataType::Interval(IntervalUnit::YearMonth),
             DataType::Timestamp(TimeUnit::Microsecond, None),
             DataType::Float64,
             DataType::Utf8View,

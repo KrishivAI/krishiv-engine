@@ -337,6 +337,12 @@ fn selector_args(name: &str) -> usize {
     usize::from(name.eq_ignore_ascii_case("nvl2"))
 }
 
+/// `listagg(DISTINCT x)` keeps the collation of `x` in its result (Spark 4.3 deduplicates by the
+/// collated value and returns it; the plain call returns an ordinary string).
+fn distinct_listagg(name: &str, distinct: bool) -> bool {
+    distinct && matches!(name, "listagg" | "string_agg")
+}
+
 /// Whether `name` called with `count` arguments returns a binary-collated string whatever its
 /// arguments: the `BINARY_RESULT` calls, except the CASE-like `decode(expr, search, result, ...)`,
 /// which is typed by its result positions (the 2-argument form is the charset decoder).
@@ -494,7 +500,9 @@ fn strength_of_uncached(e: &Expr, memo: &mut Memo) -> Option<(Collation, Strengt
         ExprNode::Function(f)
             if {
                 let lower = f.name.to_ascii_lowercase();
-                INSPECTS.contains(&lower.as_str()) || binary_result(&lower, f.args.len())
+                INSPECTS.contains(&lower.as_str())
+                    || (binary_result(&lower, f.args.len())
+                        && !distinct_listagg(&lower, f.distinct))
             } =>
         {
             // `collation(x)` and `typeof(x)` return an ordinary string, and so do the
@@ -506,7 +514,7 @@ fn strength_of_uncached(e: &Expr, memo: &mut Memo) -> Option<(Collation, Strengt
             if INSPECTS.contains(&f.id.name()) || {
                 let mut count = 0;
                 e.for_each_child(&mut |_| count += 1);
-                binary_result(f.id.name(), count)
+                binary_result(f.id.name(), count) && !distinct_listagg(f.id.name(), f.distinct)
             } =>
         {
             Some((Collation::UTF8_BINARY, Strength::Default))
@@ -592,6 +600,9 @@ enum RwArg {
     /// The pattern argument through `__like_fold_pattern(mode, _, escape)`: the escape (the second index)
     /// is read off the pattern as written before the literals fold.
     LikeFoldPatternKid(usize, usize, i32),
+    /// The pattern argument with `(?i)` in front: Spark compiles a regular expression over
+    /// `UTF8_LCASE` with `CASE_INSENSITIVE | UNICODE_CASE`.
+    CaseInsensitiveKid(usize),
     /// An integer constant.
     Int(i32),
 }
@@ -651,6 +662,10 @@ fn collated_rewrite(name: &str, n: usize, c: Collation) -> Option<Option<Rewrite
             }
             ("like", args)
         }
+        ("regexp_count", 2) if lcase && !rtrim => (
+            "regexp_count",
+            vec![RwArg::Kid(0), RwArg::CaseInsensitiveKid(1)],
+        ),
         ("replace" | "translate", 3) if !lcase => return Some(None),
         ("replace", 3) => (
             "__replace_lcase",
@@ -1041,7 +1056,10 @@ impl Resolver<'_> {
                 if let (Some(own), Some(want)) = (own, chosen)
                     && own != want
                     && literal
-                    && !matches!(name.as_str(), "btrim" | "nvl2" | "like" | "ilike")
+                    && !matches!(
+                        name.as_str(),
+                        "btrim" | "nvl2" | "like" | "ilike" | "regexp_count"
+                    )
                     && !matches!(
                         name.as_str(),
                         "encode" | "decode" | "to_binary" | "try_to_binary"
@@ -1862,6 +1880,22 @@ impl Resolver<'_> {
                         vec![flag, (*b.expr).clone(), (*esc.expr).clone()],
                     )
                     .with_origin(e.origin);
+                    let shown = b.shown();
+                    let mut b = self.expr(&Arc::new(call), cx)?;
+                    b.shown = Some(shown);
+                    b
+                }
+                RwArg::CaseInsensitiveKid(i) => {
+                    let k = &kids[i];
+                    let b = if is_string(k.ty.data_type.as_ref()) {
+                        self.plain_string(k, e.origin, cx)?
+                    } else {
+                        k.clone()
+                    };
+                    let prefix = Expr::new(ExprNode::Literal(Literal::String("(?i)".into())))
+                        .with_origin(e.origin);
+                    let call = Expr::function("concat", vec![prefix, (*b.expr).clone()])
+                        .with_origin(e.origin);
                     let shown = b.shown();
                     let mut b = self.expr(&Arc::new(call), cx)?;
                     b.shown = Some(shown);

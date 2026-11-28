@@ -47,6 +47,9 @@
 //! NULL, or NaN under `spark.sql.legacy.statisticalAggregate`. `corr` of
 //! several rows of which one column is constant is not governed by that
 //! flag: it is `DIVIDE_BY_ZERO` under ANSI and NULL without.
+//! From Spark 4.3 (SPARK-58213, [`MomentRules::spark_4_3`]) `corr` over an
+//! exactly zero sum of squares is NULL under ANSI too, and a merge with an
+//! empty buffer keeps the other side's means to the bit.
 
 use arrow_array::{ArrayRef, Float64Array};
 use arrow_schema::{DataType, Field};
@@ -55,6 +58,26 @@ use krishiv_common::error::{DivideByZero, KrishivError};
 
 use super::{ANSI_CONF, AggregateFunction};
 use crate::error::{Result, internal};
+
+/// The session rules the moment aggregates follow beyond ANSI mode.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct MomentRules {
+    /// `spark.sql.legacy.statisticalAggregate`: NaN instead of NULL where Spark divides by zero.
+    pub legacy_nan: bool,
+    /// Spark 4.3 and later (SPARK-58213): `corr` over a constant column is NULL even under ANSI, and merging an
+    /// empty buffer takes the other side's means exactly.
+    pub spark_4_3: bool,
+}
+
+impl MomentRules {
+    /// The rules of the session `env` describes.
+    pub(crate) fn of(env: &crate::planner::eval::EvalEnv) -> Self {
+        Self {
+            legacy_nan: env.legacy_statistical_aggregate,
+            spark_4_3: env.kernels.spark_version() >= krishiv_kernels::SparkVersion::V4_3,
+        }
+    }
+}
 
 /// The widest buffer (`corr`'s).
 const WIDTH: usize = 6;
@@ -245,16 +268,29 @@ fn update(family: Family, s: &mut Row, x: f64, y: f64) {
 
 /// Combines buffer `b` into buffer `a`. Spark's `mergeExpressions` (`a` is
 /// the left buffer, `b` the right one). Applied even when a side is empty,
-/// as Spark does.
-fn merge(family: Family, a: &mut Row, b: &Row) {
+/// as Spark does; since Spark 4.3 (`v43`) an empty side contributes no
+/// deviation and the means are the other side's.
+fn merge(family: Family, a: &mut Row, b: &Row, v43: bool) {
     let new_n = a[0] + b[0];
+    let (empty_a, empty_b) = (v43 && a[0] == 0.0, v43 && b[0] == 0.0);
+    let one_empty = empty_a || empty_b;
+    // The merged mean of one column: `scaled` is the delta over `new_n`.
+    let mean = |left: f64, right: f64, scaled: f64, n2: f64| {
+        if empty_a {
+            right
+        } else if empty_b {
+            left
+        } else {
+            left + scaled * n2
+        }
+    };
     match family {
         Family::Central(order) => {
             let [n1, avg1, m2_1, m3_1, m4_1, _] = *a;
             let [n2, avg2, m2_2, m3_2, m4_2, _] = *b;
-            let delta = avg2 - avg1;
+            let delta = if one_empty { 0.0 } else { avg2 - avg1 };
             let delta_n = if new_n == 0.0 { 0.0 } else { delta / new_n };
-            let new_avg = avg1 + delta_n * n2;
+            let new_avg = mean(avg1, avg2, delta_n, n2);
             let new_m2 = m2_1 + m2_2 + delta * delta_n * n1 * n2;
             let new_m3 = if order >= 3 {
                 m3_1 + m3_2
@@ -276,12 +312,12 @@ fn merge(family: Family, a: &mut Row, b: &Row) {
         Family::Pair { marginals, .. } => {
             let [n1, x_avg1, y_avg1, ck1, x_mk1, y_mk1] = *a;
             let [n2, x_avg2, y_avg2, ck2, x_mk2, y_mk2] = *b;
-            let dx = x_avg2 - x_avg1;
+            let dx = if one_empty { 0.0 } else { x_avg2 - x_avg1 };
             let dx_n = if new_n == 0.0 { 0.0 } else { dx / new_n };
-            let dy = y_avg2 - y_avg1;
+            let dy = if one_empty { 0.0 } else { y_avg2 - y_avg1 };
             let dy_n = if new_n == 0.0 { 0.0 } else { dy / new_n };
-            let new_x_avg = x_avg1 + dx_n * n2;
-            let new_y_avg = y_avg1 + dy_n * n2;
+            let new_x_avg = mean(x_avg1, x_avg2, dx_n, n2);
+            let new_y_avg = mean(y_avg1, y_avg2, dy_n, n2);
             let new_ck = ck1 + ck2 + dx * dy_n * n1 * n2;
             let (new_x_mk, new_y_mk) = if marginals {
                 (
@@ -297,10 +333,11 @@ fn merge(family: Family, a: &mut Row, b: &Row) {
 }
 
 /// The value of `f` over buffer `s`: NULL for no rows; where Spark divides
-/// by zero, NULL, or NaN with `legacy` (`spark.sql.legacy.statisticalAggregate`).
+/// by zero, NULL, or NaN with `rules.legacy_nan` (`spark.sql.legacy.statisticalAggregate`).
 /// `corr` of several rows over a constant column is the exception: a
 /// division by zero whatever `legacy` says, `DIVIDE_BY_ZERO` with `ansi` and
-/// NULL without. Spark's `evaluateExpression`.
+/// NULL without; since Spark 4.3 an exactly zero sum of squares is NULL under
+/// ANSI too. Spark's `evaluateExpression`.
 ///
 /// `regr_avgx`/`regr_avgy` are planned as a plain average now (Spark's
 /// `RuntimeReplaceableAggregate`), so the two arms below run only for a plan
@@ -311,7 +348,7 @@ fn merge(family: Family, a: &mut Row, b: &Row) {
 /// and `y` (the second) in `yAvg`/`yMk`, as `update` folds them; the
 /// regression aggregates read them as `regr_*(y, x)` documents them (so
 /// `regr_avgx` is the `yAvg` slot, the mean of the second argument).
-fn finish(f: &AggregateFunction, s: &Row, legacy: bool, ansi: bool) -> Result<Option<f64>> {
+fn finish(f: &AggregateFunction, s: &Row, rules: MomentRules, ansi: bool) -> Result<Option<f64>> {
     use AggregateFunction as F;
     // `regr_count` counts the pairs (never NULL, even with none).
     if f == &F::RegrCount {
@@ -321,7 +358,7 @@ fn finish(f: &AggregateFunction, s: &Row, legacy: bool, ansi: bool) -> Result<Op
     if n == 0.0 {
         return Ok(None);
     }
-    let divide_by_zero = legacy.then_some(f64::NAN);
+    let divide_by_zero = rules.legacy_nan.then_some(f64::NAN);
     Ok(match f {
         F::StddevPop => Some((m2 / n).sqrt()),
         F::StddevSamp | F::VarSamp | F::CovarSamp | F::Corr if n == 1.0 => divide_by_zero,
@@ -335,6 +372,7 @@ fn finish(f: &AggregateFunction, s: &Row, legacy: bool, ansi: bool) -> Result<Op
         // `xMk`, `yMk` in the last two.
         F::CovarPop => Some(s[3] / n),
         F::CovarSamp => Some(s[3] / (n - 1.0)),
+        F::Corr if rules.spark_4_3 && (s[4] == 0.0 || s[5] == 0.0) => None,
         F::Corr if s[4] * s[5] == 0.0 => {
             if ansi {
                 return Err(KrishivError::from(DivideByZero {
@@ -376,8 +414,7 @@ fn finish(f: &AggregateFunction, s: &Row, legacy: bool, ansi: bool) -> Result<Op
 pub(super) struct Moments {
     function: AggregateFunction,
     family: Family,
-    /// NaN instead of NULL where Spark divides by zero.
-    legacy: bool,
+    rules: MomentRules,
     /// `corr` over a constant column is `DIVIDE_BY_ZERO`, not NULL.
     ansi: bool,
     cols: Vec<Vec<f64>>,
@@ -391,14 +428,14 @@ impl Moments {
         Ok(Self {
             function,
             family,
-            legacy: false,
+            rules: MomentRules::default(),
             ansi,
             cols: vec![Vec::new(); family.width()],
         })
     }
 
-    pub(super) fn legacy(&mut self, on: bool) {
-        self.legacy = on;
+    pub(super) fn rules(&mut self, rules: MomentRules) {
+        self.rules = rules;
     }
 
     /// The number of state columns.
@@ -496,7 +533,7 @@ impl Moments {
                 *slot = col[i];
             }
             let mut s = self.load(g)?;
-            merge(self.family, &mut s, &incoming);
+            merge(self.family, &mut s, &incoming, self.rules.spark_4_3);
             self.store(g, &s)?;
         }
         Ok(())
@@ -521,7 +558,7 @@ impl Moments {
     pub(super) fn evaluate(&self, ids: &[u32]) -> Result<ArrayRef> {
         let v = ids
             .iter()
-            .map(|&g| finish(&self.function, &self.load(g)?, self.legacy, self.ansi))
+            .map(|&g| finish(&self.function, &self.load(g)?, self.rules, self.ansi))
             .collect::<Result<Float64Array>>()?;
         Ok(std::sync::Arc::new(v))
     }

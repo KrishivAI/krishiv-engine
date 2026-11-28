@@ -454,8 +454,25 @@ impl Resolver<'_> {
         if f.distinct && !orders.is_empty() {
             // Structural equality, ignoring source spans (either side may
             // be written elsewhere).
+            // Without inner aliases, as Spark's `trimAliases` (a variant path names its
+            // extraction). The trimmed trees live as long as the memo, which keys by address.
             let mut memo = std::collections::HashMap::new();
-            let mut key = |e: &Arc<Expr>| semantic_key(e, &mut memo);
+            let mut trimmed = Vec::new();
+            let mut key = |e: &Arc<Expr>| {
+                let bare = Arc::clone(e)
+                    .transform_up(&mut |x: Arc<Expr>| {
+                        Ok::<_, AnalysisError>(match &x.node {
+                            ExprNode::Resolved(ResolvedExpr::Alias { expr, .. }) => {
+                                Arc::clone(expr)
+                            }
+                            _ => x,
+                        })
+                    })
+                    .unwrap_or_else(|_| Arc::clone(e));
+                let k = semantic_key(&bare, &mut memo);
+                trimmed.push(bare);
+                k
+            };
             let value = &call_kids[0].expr;
             // A collated value reads through the carrier cast of the signature: the written value
             // is what `DISTINCT` and the ordering compare. Only a collated one: a `DOUBLE`,
@@ -593,6 +610,13 @@ impl Resolver<'_> {
                 nulls: o.nulls,
             })
             .collect();
+        // A collated written value keeps its collation in the result (Spark 4.3 `ListAgg`).
+        let mut ty = ty;
+        if ty.data_type == Some(DataType::String)
+            && let Some(c @ DataType::CollatedString(_)) = kids[0].ty.data_type.clone()
+        {
+            ty.data_type = Some(c);
+        }
         let data_type = ty.data_type.clone().unwrap_or(DataType::Null);
         let call = ResolvedFunction {
             id: entry.id.clone(),
@@ -668,6 +692,9 @@ impl Resolver<'_> {
                 | DataType::Date
                 | DataType::Time { .. }
                 | DataType::TimestampNtz
+                | DataType::CalendarInterval
+                | DataType::YearMonthInterval { .. }
+                | DataType::DayTimeInterval { .. }
                 | DataType::Boolean
                 | DataType::Binary
                 | DataType::String,

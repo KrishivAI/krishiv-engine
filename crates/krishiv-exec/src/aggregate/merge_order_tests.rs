@@ -176,7 +176,7 @@ async fn run_parted(
         ansi: true,
         spill: Some(manager.scope().unwrap()),
         require_unit_weights: false,
-        legacy_statistical: false,
+        moments: Default::default(),
         udafs: None,
     })
     .unwrap();

@@ -17,7 +17,7 @@ use krishiv_common::error::ErrorClass;
 use krishiv_types::batch::Weights;
 
 use super::arity;
-use crate::aggregate::{Accumulator, AggInput, AggregateExpr, AggregateFunction};
+use crate::aggregate::{Accumulator, AggInput, AggregateExpr, AggregateFunction, MomentRules};
 
 use AggregateFunction::{
     Corr, CovarPop, CovarSamp, Kurtosis, Skewness, StddevPop, StddevSamp, VarPop, VarSamp,
@@ -59,7 +59,10 @@ fn acc(f: &AggregateFunction, legacy: bool, groups: usize) -> Accumulator {
 fn acc_ansi(f: &AggregateFunction, legacy: bool, ansi: bool, groups: usize) -> Accumulator {
     let mut a = Accumulator::new(&expr(f), ansi)
         .unwrap()
-        .legacy_statistical(legacy);
+        .moment_rules(MomentRules {
+            legacy_nan: legacy,
+            spark_4_3: false,
+        });
     a.resize(groups);
     a
 }
@@ -897,4 +900,85 @@ fn the_spark_420_moment_fixture_is_reproduced_to_the_bit() {
     }
     assert!(compared > 200, "{compared}");
     assert!(bad.is_empty(), "{} differ:\n{}", bad.len(), bad.join("\n"));
+}
+
+/// SPARK-58213: from Spark 4.3, `corr` over a constant column is NULL even under ANSI; one row keeps the
+/// legacy flag's NaN. Spark 4.2 raises `DIVIDE_BY_ZERO` under ANSI.
+#[test]
+fn corr_of_a_constant_column_is_null_from_spark_43() {
+    let xs = some(&[1.0, 1.0, 1.0]);
+    let ys = some(&[1.0, 2.0, 3.0]);
+    for (x, y) in [(&xs, &ys), (&ys, &xs)] {
+        for spark_4_3 in [false, true] {
+            let mut a = Accumulator::new(&expr(&Corr), true)
+                .unwrap()
+                .moment_rules(MomentRules {
+                    legacy_nan: false,
+                    spark_4_3,
+                });
+            a.resize(1);
+            a.update(&[0, 0, 0], &columns(&Corr, x, y), &Weights::Const(1))
+                .unwrap();
+            if spark_4_3 {
+                assert_eq!(value(&a, 0), None);
+            } else {
+                assert_eq!(
+                    a.evaluate(&[0]).unwrap_err().error_class(),
+                    ErrorClass::DivideByZero
+                );
+            }
+        }
+    }
+    let mut one = Accumulator::new(&expr(&Corr), true)
+        .unwrap()
+        .moment_rules(MomentRules {
+            legacy_nan: true,
+            spark_4_3: true,
+        });
+    one.resize(1);
+    one.update(
+        &[0],
+        &columns(&Corr, &some(&[1.0]), &some(&[2.0])),
+        &Weights::Const(1),
+    )
+    .unwrap();
+    assert!(value(&one, 0).is_some_and(f64::is_nan));
+}
+
+/// SPARK-58213: from Spark 4.3, a buffer merged with an empty one is the other buffer to the bit, also where the
+/// difference of the means overflows when squared. Before, that overflow times a zero count is NaN.
+#[test]
+fn merging_an_empty_buffer_keeps_the_other_side_from_spark_43() {
+    for f in [VarPop, Kurtosis, CovarPop, Corr] {
+        let (xs, ys) = (some(&[1.0e200, 1.0e200]), some(&[3.0e200, 3.0e200]));
+        let make = |spark_4_3| {
+            let mut a = Accumulator::new(&expr(&f), false)
+                .unwrap()
+                .moment_rules(MomentRules {
+                    legacy_nan: false,
+                    spark_4_3,
+                });
+            a.resize(1);
+            a
+        };
+        let mut partial = make(true);
+        partial
+            .update(&[0, 0], &columns(&f, &xs, &ys), &Weights::Const(1))
+            .unwrap();
+        let state = partial.state(&[0]).unwrap();
+        let mut merged = make(true);
+        merged.merge(&[0], &state).unwrap();
+        for (got, want) in merged.state(&[0]).unwrap().iter().zip(&state) {
+            assert_eq!(got.to_data(), want.to_data(), "{f:?}");
+        }
+        let mut old = make(false);
+        old.merge(&[0], &state).unwrap();
+        assert!(
+            old.state(&[0])
+                .unwrap()
+                .iter()
+                .any(|c| c.as_primitive::<Float64Type>().value(0).is_nan()),
+            "{f:?}"
+        );
+    }
 }

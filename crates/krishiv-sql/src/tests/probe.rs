@@ -393,6 +393,16 @@ fn post_parse_checks_raise_spark_classes() {
     ] {
         assert_eq!(class(sql), expected, "{sql}");
     }
+    // Spark 4.3 gave the empty quantified `LIKE` list its own class.
+    let newer = ParserOptions {
+        spark_4_3: true,
+        ..d
+    };
+    let e = parse_statement("SELECT a LIKE ALL ()", &newer).unwrap_err();
+    assert_eq!(
+        e.error.error_class(),
+        ErrorClass::InvalidSqlSyntaxEmptyQuantifiedPattern
+    );
     // The configs that relax the checks.
     let legacy = ParserOptions {
         legacy_interval: true,

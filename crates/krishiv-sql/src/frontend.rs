@@ -58,6 +58,9 @@ impl SqlFrontend for Frontend {
     }
 
     fn keywords(&self) -> Vec<(String, bool)> {
-        crate::keywords::sql_keywords(self.options.enforce_reserved_keywords)
+        crate::keywords::sql_keywords(
+            self.options.enforce_reserved_keywords,
+            self.options.spark_4_3,
+        )
     }
 }
