@@ -196,11 +196,11 @@ deletes nothing, so exact pins keep working.
 
 Owner decision 2026-11-07 (default adopted): a minor release every **6 weeks**.
 
-- **Cut:** one week before the release date, branch `release-X.Y` from `main`. That starts the one-week
+- **Cut:** one week before the release date, branch `release/X.Y.0` from `main`. That starts the one-week
   **RC freeze**: only fixes for regressions, doc corrections and version bumps go onto the branch (cherry-picked
   from `main`, or fixed there and merged back). `main` stays open for the next minor.
 - **RC:** tag `vX.Y.0-rc.N` from the branch; it publishes nowhere until the owner says go (see above).
-- **Release:** on the date, tag `vX.Y.0` from `release-X.Y`. Patch releases (`X.Y.Z`) are cut from the same branch.
+- **Release:** on the date, tag `vX.Y.0` from `release/X.Y.0`. Patch releases (`X.Y.Z`) are cut from the same branch.
 - **Merge back:** right after the tag, merge the release branch into `main` with one PR (`git merge --no-ff origin/release/X.Y.0`;
   conflicts in workflows, the changelog and baselines resolve to `main`'s later form, and a changelog fragment already assembled
   into the release section is deleted). Without it a patch cut from `main` carries the old version and no release changelog entry.
