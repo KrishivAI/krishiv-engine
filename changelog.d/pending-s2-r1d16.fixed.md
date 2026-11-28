@@ -1,0 +1,1 @@
+ANSI off: rows that differ only in nested nullability (an array holding a NULL element beside one that holds none, a struct field likewise) are two rows in `VALUES` and `UNION ALL` instead of `INTERNAL_ERROR` (R1-D-16).

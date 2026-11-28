@@ -951,7 +951,7 @@ impl<'a> Planner<'a> {
             .resolved_output()
             .ok_or_else(|| internal("a union without output"))?;
         let layout: Vec<AttrId> = out.iter().map(|c| c.id).collect();
-        let nullable: Vec<bool> = out.iter().map(|c| c.nullable).collect();
+        let mut nullable: Vec<bool> = out.iter().map(|c| c.nullable).collect();
         let mut branches = Vec::with_capacity(inputs.len());
         for input in inputs {
             let cols = input
@@ -963,6 +963,18 @@ impl<'a> Planner<'a> {
             branches.push((cols, self.plan(input)?));
         }
         let carriers = union_carriers(&out, &branches)?;
+        // A branch's expression can be nullable where the union's column is not (an array holding a NULL
+        // element, with ANSI off): every branch takes the nullability of the most nullable one.
+        for (cols, planned) in &branches {
+            for (n, c) in nullable.iter_mut().zip(cols) {
+                let index = planned.column(c.id)?;
+                *n |= planned
+                    .schema
+                    .fields()
+                    .get(index)
+                    .is_some_and(|f| f.is_nullable());
+            }
+        }
         let mut schema: Option<SchemaRef> = None;
         let mut nodes = Vec::with_capacity(inputs.len());
         let mut explain = Vec::with_capacity(inputs.len());
