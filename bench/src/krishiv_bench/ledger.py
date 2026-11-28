@@ -432,8 +432,10 @@ def duckdb_profile(duck: DuckDBEngine, query) -> dict[str, Any]:
 def measure_krishiv(
     runner: str | None, ds: Dataset, query, threads: int, memory_limit: str, timeout_s: float, plain: KrishivEngine
 ) -> dict[str, Any]:
-    """Wall seconds (plain process, 2nd of 3 runs) and the perf bucket split (fresh process, 2nd of 2 runs)."""
-    walls = [plain.profile(query)["seconds"] for _ in range(3)]
+    """Wall seconds (plain process, 2nd of 3 runs), the row count and the perf bucket split (fresh process, 2nd
+    of 2 runs)."""
+    runs = [plain.profile(query) for _ in range(3)]
+    walls = [r["seconds"] for r in runs]
     wall = walls[1]
     tmp = Path(tempfile.mkdtemp(prefix="ledger-perf-"))
     data = tmp / "perf.data"
@@ -452,12 +454,12 @@ def measure_krishiv(
         if eng is not None:
             eng.cancel()
         shutil.rmtree(tmp, ignore_errors=True)
-    return {"seconds": wall, "runs": walls, "buckets": buckets}
+    return {"seconds": wall, "runs": walls, "rows": runs[1]["rows"], "buckets": buckets}
 
 
 def measure_duckdb(duck: DuckDBEngine, query, timeout_s: float) -> dict[str, Any]:
-    """Median of 3 warm runs and the operator-bucket split of one profiled run."""
-    bounded(duck, timeout_s, lambda: duck.run(query))  # warm-up
+    """Median of 3 warm runs, the row count and the operator-bucket split of one profiled run."""
+    rows = len(bounded(duck, timeout_s, lambda: duck.run(query)))  # warm-up
     times = []
     for _ in range(3):
         t0 = time.perf_counter()
@@ -465,7 +467,7 @@ def measure_duckdb(duck: DuckDBEngine, query, timeout_s: float) -> dict[str, Any
         times.append(time.perf_counter() - t0)
     wall = statistics.median(times)
     profile = bounded(duck, timeout_s, lambda: duckdb_profile(duck, query))
-    return {"seconds": wall, "runs": times, "buckets": duckdb_buckets(profile, wall)}
+    return {"seconds": wall, "runs": times, "rows": rows, "buckets": duckdb_buckets(profile, wall)}
 
 
 def bounded(duck: DuckDBEngine, timeout_s: float, work: Callable[[], Any]) -> Any:
@@ -503,7 +505,10 @@ def run_ledger(
     tables = discover_tables(root)
     if not tables:
         raise SystemExit(f"no dataset at {root}")
-    queries = load_queries(suite, "krishiv", only)
+    # DuckDB runs its own text of each query (ClickBench q29 is written per dialect; `<suite>/duckdb/` overrides).
+    # Krishiv's text of q29 is valid DuckDB SQL with another meaning, so DuckDB would time a cheaper query.
+    duck_sql = {q.id: q for q in load_queries(suite, "duckdb", only)}
+    queries = [(q, duck_sql.get(q.id, q)) for q in load_queries(suite, "krishiv", only)]
     ds = Dataset(name, sf, root, tables)
     with bench_lock():
         wait_idle()
@@ -532,8 +537,10 @@ def _run_locked(ds, suite, queries, threads, memory_limit, timeout_s, runner, pr
     plain.setup(ds)
     record["engines"]["krishiv"] = {"version": plain.version(), "config": plain.config()}
     try:
-        for q in queries:
-            record["queries"][q.id] = _one_query(q, ds, plain, duck, threads, memory_limit, timeout_s, runner, measure)
+        for q, duck_q in queries:
+            record["queries"][q.id] = _one_query(
+                q, ds, plain, duck, threads, memory_limit, timeout_s, runner, measure, duck_q
+            )
     finally:
         plain.teardown()
         duck.teardown()
@@ -566,10 +573,16 @@ def _read_previous(path: Path | None) -> dict[str, Any] | None:
         return None
 
 
-def _one_query(q, ds, plain, duck, threads, memory_limit, timeout_s, runner, measure=None) -> dict[str, Any]:
+def _one_query(
+    q, ds, plain, duck, threads, memory_limit, timeout_s, runner, measure=None, duck_q=None
+) -> dict[str, Any]:
+    """One ledger entry: ``q`` on Krishiv against ``duck_q`` (DuckDB's text of the same query; ``q`` when omitted).
+
+    The two engines must return the same number of rows: a ratio between two different queries is not a gap.
+    """
     kr_fn = measure or measure_krishiv
     try:
-        d = measure_duckdb(duck, q, timeout_s)
+        d = measure_duckdb(duck, duck_q or q, timeout_s)
     except Exception as e:
         return {"status": "failed", "reason": f"duckdb {describe_error(e)}"}
     try:
@@ -578,10 +591,15 @@ def _one_query(q, ds, plain, duck, threads, memory_limit, timeout_s, runner, mea
         return {"status": "failed", "reason": f"krishiv {describe_error(e)}"}
     except (subprocess.SubprocessError, OSError) as e:
         return {"status": "failed", "reason": f"perf: {e}"}
+    if k.get("rows") != d.get("rows"):
+        reason = f"row counts differ: krishiv {k.get('rows')}, duckdb {d.get('rows')}"
+        print(f"  {q.id}: {reason}")
+        return {"status": "failed", "reason": reason}
     gaps = bucket_gaps(k["buckets"], d["buckets"])
     print(f"  {q.id}: krishiv {k['seconds']:.3f}s duckdb {d['seconds']:.3f}s x{k['seconds'] / d['seconds']:.2f}")
     return {
         "status": "ok",
+        "rows": d.get("rows"),
         "krishiv_s": k["seconds"],
         "duckdb_s": d["seconds"],
         "krishiv_runs_s": k["runs"],
