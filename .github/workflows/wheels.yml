@@ -235,7 +235,8 @@ jobs:
   # macOS arm64 (11.0+), built and tested natively.
   macos-arm64:
     runs-on: macos-15
-    timeout-minutes: 60
+    # cp314t took 48 min on 2026-11-28 and abi3 hit the old 60 (nightly 46105584970, wheels-ok red).
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:

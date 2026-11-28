@@ -1280,7 +1280,15 @@ pub mod catalog_decl { /* ... */ }
 
 #### Enum `DeclMode`
 
-Where the declarations come from.
+Whether a runtime serves callers other than the process owner, and so where its catalog
+declarations come from.
+
+A runtime that serves other callers (a Spark Connect or Flight SQL server built from the Rust API,
+as `krishiv server` does) must be `Server`. Only then are catalog declarations startup-only,
+`${env:..}` / `${system:..}` in SQL text left as written (unless the operator sets
+`krishiv.server.sql.substituteEnvironment`) and `${key}` of a hidden setting left as written; on an
+`Embedded` runtime every caller's SQL reads the server's environment variables, system properties
+and secret settings. (Krishiv's MCP server runs on an embedded runtime and turns substitution off.)
 
 ```rust
 pub enum DeclMode {
@@ -1293,12 +1301,15 @@ pub enum DeclMode {
 
 ###### `Server`
 
-`krishiv server`: references only; an HTTP catalog uri must be `https` unless `allowInsecure`,
-and a Hive catalog takes a `thrift://` uri.
+`krishiv server`, or any runtime that serves other callers: references only; an HTTP catalog
+uri must be `https` unless `allowInsecure`, and a Hive catalog takes a `thrift://` uri;
+declaration keys cannot be set by a session; `${env:..}` / `${system:..}` stay as written
+unless `krishiv.server.sql.substituteEnvironment` is on.
 
 ###### `Embedded`
 
-An embedded session (no principal boundary).
+An embedded session (no principal boundary): its one caller is the process owner, so SQL text
+reads `${env:..}` / `${system:..}` as Spark does. Never for a runtime that serves other callers.
 
 ##### Implementations
 
@@ -3273,7 +3284,9 @@ pub struct CatalogSetup {
 - ```rust
   pub fn new(mode: DeclMode) -> Self { /* ... */ }
   ```
-  No declarations yet, for `mode`.
+  No declarations yet, for `mode`. A runtime that serves callers other than the process owner
+  must be built with `DeclMode::Server`: its catalog declarations are then startup-only and
+  `${env:..}` / `${system:..}` in SQL text stay as written (see [`DeclMode`]).
 
 - ```rust
   pub fn setting(self: Self, key: impl Into<String>, value: impl Into<String>) -> Self { /* ... */ }
@@ -4584,6 +4597,7 @@ pub struct UsageRecord {
     pub window_end_ms: i64,
     pub wall_ns: Option<i64>,
     pub queued_ns: Option<i64>,
+    pub planning_ns: Option<i64>,
     pub cpu_ns: Option<i64>,
     pub bytes_scanned: Option<i64>,
     pub rows_read: Option<i64>,
@@ -4615,6 +4629,7 @@ pub struct UsageRecord {
 | `window_end_ms` | `i64` | The end of the window. |
 | `wall_ns` | `Option<i64>` | Execution time, queue excluded (as `system.queries.wall_ns`). |
 | `queued_ns` | `Option<i64>` | Time held in the admission queue. |
+| `planning_ns` | `Option<i64>` | Time spent planning before the run, outside `wall_ns` and the queue (as<br>`system.queries.planning_ns`); `None` for a query that never ran. |
 | `cpu_ns` | `Option<i64>` | Busy time of the query's drivers. |
 | `bytes_scanned` | `Option<i64>` | Bytes its scans read. |
 | `rows_read` | `Option<i64>` | Rows its scans produced. |
@@ -8116,6 +8131,23 @@ rows or its time is up; one call renders whatever it read.
 pub fn render_batches(schema: &arrow_schema::Schema, batches: &[arrow_array::RecordBatch], opts: &AgentRender<'_>) -> AgentResult { /* ... */ }
 ```
 
+#### Function `escape_text`
+
+**Attributes:**
+
+- `MustUse { reason: None }`
+
+Escapes a cell so it can never forge structure: every control
+character (C0, DEL, C1 and the Unicode line and paragraph separators) as `\uXXXX`, `|` as `\|`, and a
+leading `--` as `\--`.
+Backslashes are literal (only the three escapes above introduce them).
+A host that adds a line of its own to an agent answer (a file name, a
+reason) passes every value it did not write itself through this.
+
+```rust
+pub fn escape_text(s: &str) -> String { /* ... */ }
+```
+
 #### Function `render_error`
 
 Renders an engine error as one JSON object: the error class, SQLSTATE,
@@ -8261,6 +8293,12 @@ pub use access::READ_ONLY_PRIVILEGES;
 
 ```rust
 pub use access::ReadOnlyPolicy;
+```
+
+### Re-export `StatementContext`
+
+```rust
+pub use access::StatementContext;
 ```
 
 ### Re-export `StatementInfo`

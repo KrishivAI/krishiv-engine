@@ -109,11 +109,15 @@ jobs:
         if: always()
         # No log means an earlier step failed before nextest ran; that failure is the job's.
         run: if [ -f "$RUNNER_TEMP/nextest.log" ]; then cargo xtask quarantine --flaky "$RUNNER_TEMP/nextest.log"; fi
+      # KRISHIV_JDBC_CONTAINER (below): the runner's host java made the driver fail in its netty memory module
+      # (runs 45586832906 .. 46105584970), so the script runs the digest-pinned Java 21 container.
       # Needs Java 21 or Docker and the network (the driver jar), so it is ignored in the
       # workspace run above (P3-T101 note §17). The Java toolcache is removed above; the
       # script falls back to Docker. jdbc_flight_sql_tpch_all also needs tpchgen-cli, which the runner lacks (run
       # 45574109863 failed there with "tpchgen-cli runs"), so it stays a manual run.
       - name: Flight SQL JDBC end to end
+        env:
+          KRISHIV_JDBC_CONTAINER: "1"
         run: >-
           cargo nextest run -p krishiv-cli --features flight-sql --locked --test flight_sql
           --run-ignored only -E 'test(jdbc) and not test(jdbc_flight_sql_tpch_all)'

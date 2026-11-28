@@ -41,7 +41,9 @@ opens="--add-opens=java.base/java.nio=ALL-UNNAMED"
 
 # A host java older than 21 (a CI image's default 17, say) is skipped for the container.
 major=0
-if command -v java >/dev/null 2>&1; then
+# KRISHIV_JDBC_CONTAINER=1 skips the host java: a CI image's newer JDK (24+) fails in arrow's netty memory
+# module (UnsupportedOperationException in EmptyByteBuf.memoryAddress), the pinned 21 container does not.
+if [ -z "${KRISHIV_JDBC_CONTAINER:-}" ] && command -v java >/dev/null 2>&1; then
   major=$(java -XshowSettings:properties -version 2>&1 | sed -n 's/^ *java.specification.version = //p')
 fi
 if [ "${major:-0}" -ge 21 ] 2>/dev/null; then
