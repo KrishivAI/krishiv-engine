@@ -746,9 +746,52 @@ fn classify(e: &object_store::Error, file: &FileRef) -> Attempt {
         }
         object_store::Error::Generic { .. } => match transient(e) {
             Some(retry_after) => Attempt::Retry(retry_after),
-            None => Attempt::Fail(store_failed(&path, 1, &e.to_string())),
+            None => Attempt::Fail(store_failed(&path, 1, &store_reason(e))),
         },
-        other => Attempt::Fail(store_failed(&path, 1, &other.to_string())),
+        other => Attempt::Fail(store_failed(&path, 1, &store_reason(other))),
+    }
+}
+
+/// The reason of a `KRISHIV_OBJECT_STORE_REQUEST_FAILED` for `e`: its own text, then why the
+/// request did not complete when that text does not say it (SK3 E2: object_store names the
+/// request, "error sending request", not that the store host's DNS lookup failed or that the
+/// egress policy refused it). The cause added is an egress refusal of the store client's
+/// resolver, else the deepest I/O error of the source chain (an OS error, a refused connection,
+/// std's "failed to lookup address information"), left out when its text holds a URL, so no
+/// presigned query string reaches the error or the log.
+fn store_reason(e: &object_store::Error) -> String {
+    let text = e.to_string();
+    let mut egress = None;
+    let mut io_cause = None;
+    let mut cur: Option<&(dyn std::error::Error + 'static)> = std::error::Error::source(e);
+    while let Some(err) = cur {
+        if let Some(r) = err.downcast_ref::<krishiv_store::egress::EgressRefusal>() {
+            egress = Some(r);
+        }
+        if let Some(io) = err.downcast_ref::<std::io::Error>() {
+            // An I/O error's `source` skips the error it wraps, so look at that one here.
+            if let Some(r) = io
+                .get_ref()
+                .and_then(|inner| inner.downcast_ref::<krishiv_store::egress::EgressRefusal>())
+            {
+                egress = Some(r);
+            }
+            io_cause = Some(io);
+        }
+        cur = err.source();
+    }
+    let cause = match (egress, io_cause) {
+        (Some(r), _) => format!("the egress policy refused the store host ({r})"),
+        (None, Some(io)) => io.to_string(),
+        (None, None) => return text,
+    };
+    if cause.contains("://") {
+        return text;
+    }
+    if text.contains(&cause) {
+        text
+    } else {
+        format!("{text} (cause: {cause})")
     }
 }
 
@@ -1273,7 +1316,7 @@ impl IoContext {
                 }
                 Ok(Err(e)) => match classify(&e, file) {
                     Attempt::Fail(err) => return Err(err),
-                    Attempt::Retry(ra) => (ra, e.to_string()),
+                    Attempt::Retry(ra) => (ra, store_reason(&e)),
                 },
                 Err(_elapsed) => (None, "the request timed out".to_owned()),
             };
@@ -1659,9 +1702,9 @@ impl IoContext {
                         Ok(None) => return Ok(out),
                         Ok(Some(Ok(m))) => out.push(m),
                         Ok(Some(Err(e))) => match transient(&e) {
-                            Some(ra) => break (ra, e.to_string()),
+                            Some(ra) => break (ra, store_reason(&e)),
                             None => {
-                                return Err(store_failed(&display, attempt + 1, &e.to_string()));
+                                return Err(store_failed(&display, attempt + 1, &store_reason(&e)));
                             }
                         },
                         Err(_elapsed) => break (None, "the listing timed out".to_owned()),
@@ -1749,8 +1792,8 @@ impl IoContext {
             let (retry_after, reason) = match outcome {
                 Ok(Ok(v)) => return Ok(v),
                 Ok(Err(e)) => match transient(&e) {
-                    Some(ra) => (ra, e.to_string()),
-                    None => return Err(store_failed(&display, attempt + 1, &e.to_string())),
+                    Some(ra) => (ra, store_reason(&e)),
+                    None => return Err(store_failed(&display, attempt + 1, &store_reason(&e))),
                 },
                 Err(_elapsed) => (None, "the request timed out".to_owned()),
             };

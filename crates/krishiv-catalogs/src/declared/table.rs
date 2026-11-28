@@ -8,7 +8,8 @@
 //!   Read restrictions and server-side planning are refused by the client before anything is
 //!   returned.
 //! - **Table `config`.** No key of it reaches a store: the reads use the server's store
-//!   configuration, or (`storage = vended`) only the vended credential keys. A catalog-supplied
+//!   configuration, or (`storage = vended`) only the vended credential keys; an `s3.endpoint` it
+//!   names is not used, which a read logs when the server has no `fs.s3a.endpoint` (SK3 E2). A catalog-supplied
 //!   `token` is kept only with a vended answer, as the bearer of that table's `loadCredentials` and
 //!   reload (`vended.rs`); otherwise it is dropped (and the RFC 8693 token-type keys beside it
 //!   always are); the refresh-endpoint and `signer.*` keys are dropped and never followed. A response asking for remote signing
@@ -103,6 +104,9 @@ struct Loaded {
     metadata_location: String,
     /// The answer asks for remote signing (§4.5).
     signing: bool,
+    /// The host of the `s3.endpoint` the answer names (table or credential `config`), which no
+    /// read uses (module docs): kept only to say so when the server has no store endpoint.
+    store_endpoint: Option<String>,
     /// The answer's vended credentials (`storage = vended` only; module docs of `vended.rs`).
     vended: Option<Arc<VendedAnswer>>,
 }
@@ -315,6 +319,7 @@ impl RestCatalog {
             return Err(self.fault(&what, "a table without a metadata location (staged)"));
         };
         let signing = asks_for_signing(&found);
+        let store_endpoint = named_store_endpoint(&found);
         let vended = (self.storage == CatalogStorage::Vended)
             .then(|| Arc::new(VendedAnswer::of_table(&found, drops, self.vended.now())));
         let metadata = IcebergMetadata::from_json(found.metadata)
@@ -323,6 +328,7 @@ impl RestCatalog {
             metadata,
             metadata_location,
             signing,
+            store_endpoint,
             vended,
         })
     }
@@ -360,6 +366,18 @@ fn asks_for_signing(t: &LoadedTable) -> bool {
     let credentials =
         !t.storage_credentials.is_empty() || t.config.contains_key("s3.access-key-id");
     flag || (signer && !credentials)
+}
+
+/// The table `config` key of the S3 endpoint a catalog names for the table's files.
+const S3_ENDPOINT_KEY: &str = "s3.endpoint";
+
+/// The host of the S3 endpoint a `loadTable` answer names, in its table `config` or a storage
+/// credential's: only the host, never a path or user info.
+fn named_store_endpoint(t: &LoadedTable) -> Option<String> {
+    std::iter::once(&t.config)
+        .chain(t.storage_credentials.iter().map(|c| &c.config))
+        .find_map(|config| config.get(S3_ENDPOINT_KEY))
+        .and_then(|v| krishiv_store::egress::host_of(v.expose_secret().trim()))
 }
 
 impl CallerCatalog for RestCatalog {
@@ -755,6 +773,21 @@ impl DeclaredTable for RestTable {
                     self.relation
                 )));
             }
+            // SK3 E2: the catalog's endpoint is never used; without a server endpoint the reads go to
+            // AWS S3, and a store that is not there fails with no hint of why.
+            if let Some(host) = &self.loaded.store_endpoint
+                && krishiv_store::StoreSettings::lookup(&*inputs.config, krishiv_store::S3_ENDPOINT)
+                    .is_none()
+            {
+                tracing::warn!(
+                    target: "krishiv::catalog",
+                    table = self.relation.as_str(),
+                    catalog_endpoint_host = host.as_str(),
+                    "the catalog names an S3 endpoint for the table, which Krishiv does not use: the \
+                     store endpoint is server config (fs.s3a.endpoint), unset here, so the table's \
+                     reads go to AWS S3"
+                );
+            }
             // `storage = vended`: only the vended credentials, only under their prefixes, refused before any
             // storage request otherwise; never the server's own or ambient credentials.
             let paths = match &self.vended {
@@ -989,5 +1022,49 @@ impl LocationPolicy for EmbeddedLocations {
             return Ok(());
         }
         self.0.check_scheme(scheme)
+    }
+}
+
+#[cfg(test)]
+mod endpoint_tests {
+    use std::collections::BTreeMap;
+
+    use krishiv_common::secret::SecretString;
+
+    use super::named_store_endpoint;
+    use crate::iceberg_rest::types::{LoadedTable, StorageCredential};
+
+    fn table(config: &[(&str, &str)], credentials: &[(&str, &str)]) -> LoadedTable {
+        let map = |pairs: &[(&str, &str)]| -> BTreeMap<String, SecretString> {
+            pairs
+                .iter()
+                .map(|(k, v)| ((*k).to_owned(), SecretString::new(*v)))
+                .collect()
+        };
+        LoadedTable {
+            metadata_location: None,
+            location: "s3://b/wh/t".to_owned(),
+            format_version: 2,
+            metadata: serde_json::Value::Null,
+            config: map(config),
+            storage_credentials: vec![StorageCredential {
+                prefix: "s3://b/wh".to_owned(),
+                config: map(credentials),
+            }],
+            restricted: false,
+        }
+    }
+
+    #[test]
+    fn the_named_endpoint_is_its_host_only() {
+        let t = table(&[("s3.endpoint", " http://user:pw@Silo:9000/base ")], &[]);
+        assert_eq!(named_store_endpoint(&t).as_deref(), Some("silo"));
+    }
+
+    #[test]
+    fn a_credential_may_name_the_endpoint() {
+        let t = table(&[], &[("s3.endpoint", "minio.internal:9000")]);
+        assert_eq!(named_store_endpoint(&t).as_deref(), Some("minio.internal"));
+        assert_eq!(named_store_endpoint(&table(&[], &[])), None);
     }
 }

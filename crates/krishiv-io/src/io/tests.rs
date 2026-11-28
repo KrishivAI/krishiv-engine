@@ -1251,3 +1251,90 @@ fn list_from_is_recursive_sorted_and_strictly_after_the_offset() {
         );
     });
 }
+
+/// A wrapper error with a text and a source, as reqwest and hyper-util chain theirs.
+#[derive(Debug)]
+struct Wrapped(&'static str, Box<dyn std::error::Error + Send + Sync>);
+
+impl fmt::Display for Wrapped {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.0)
+    }
+}
+
+impl std::error::Error for Wrapped {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.1.as_ref())
+    }
+}
+
+fn generic(source: Wrapped) -> object_store::Error {
+    object_store::Error::Generic {
+        store: "S3",
+        source: Box::new(source),
+    }
+}
+
+#[test]
+fn a_store_failure_names_the_io_cause_its_text_leaves_out() {
+    let refused = std::io::Error::from(std::io::ErrorKind::ConnectionRefused);
+    let e = generic(Wrapped(
+        "error sending request",
+        Box::new(Wrapped("tcp connect error", Box::new(refused))),
+    ));
+    let reason = store_reason(&e);
+    assert!(reason.contains("error sending request"), "{reason}");
+    assert!(reason.ends_with("(cause: connection refused)"), "{reason}");
+}
+
+#[test]
+fn a_store_failure_names_an_egress_refusal_of_the_resolver() {
+    let refusal = || krishiv_store::egress::EgressRefusal::NoAllowedAddress;
+    let want = "(cause: the egress policy refused the store host (no allowed address))";
+    // The resolver's error is the dns error's source; an adapter may also carry it in an I/O error.
+    let direct = generic(Wrapped("dns error", Box::new(refusal())));
+    let in_io = generic(Wrapped(
+        "dns error",
+        Box::new(std::io::Error::other(refusal())),
+    ));
+    for e in [direct, in_io] {
+        let reason = store_reason(&e);
+        assert!(reason.ends_with(want), "{reason}");
+    }
+}
+
+#[test]
+fn a_store_failure_never_adds_an_io_cause_that_shows_a_url() {
+    // A URL's query may be presigned: such a cause is not added.
+    let io = std::io::Error::other("https://bucket.s3.amazonaws.com/k?X-Amz-Signature=abc");
+    let e = generic(Wrapped("error sending request", Box::new(io)));
+    let reason = store_reason(&e);
+    assert!(!reason.contains("X-Amz-Signature"), "{reason}");
+    assert!(!reason.contains("cause:"), "{reason}");
+}
+
+#[test]
+fn a_store_failure_names_a_failed_lookup() {
+    // std's lookup failure is an I/O error with a message of its own.
+    let io =
+        std::io::Error::other("failed to lookup address information: Name or service not known");
+    let e = generic(Wrapped(
+        "error sending request",
+        Box::new(Wrapped("dns error", Box::new(io))),
+    ));
+    let reason = store_reason(&e);
+    assert!(
+        reason
+            .ends_with("(cause: failed to lookup address information: Name or service not known)"),
+        "{reason}"
+    );
+}
+
+#[test]
+fn a_store_failure_whose_text_shows_the_cause_is_not_repeated() {
+    let e = generic(Wrapped(
+        "connection refused",
+        Box::new(std::io::Error::from(std::io::ErrorKind::ConnectionRefused)),
+    ));
+    assert_eq!(store_reason(&e), "Generic S3 error: connection refused");
+}

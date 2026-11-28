@@ -161,8 +161,11 @@ pub(crate) fn read_failed(path: &str, reason: &str) -> KrishivError {
 }
 
 /// `KRISHIV_OBJECT_STORE_REQUEST_FAILED`: a storage failure, never treated
-/// as corruption (`ignoreCorruptFiles` does not skip it).
+/// as corruption (`ignoreCorruptFiles` does not skip it). The reason is
+/// logged: the class is operator-only, so a client sees its parameters
+/// redacted, and the server log is where the operator finds why (SK3 E2).
 pub(crate) fn store_failed(path: &str, attempts: u32, reason: &str) -> KrishivError {
+    tracing::warn!(path, attempts, reason, "object store request failed");
     KrishivObjectStoreRequestFailed {
         path: path.to_owned(),
         attempts: attempts.to_string(),
