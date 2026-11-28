@@ -1594,3 +1594,48 @@ fn inline_skips_a_null_struct_and_splits_mid_row() {
     // Spark's inline turns a NULL struct into a row of NULL fields.
     assert_eq!(vals, [Some(1), None, Some(3)]);
 }
+
+/// A union input whose struct fields carry other metadata (a Delta scan's column-mapping ids)
+/// is relabelled to the union's types, rows and weights untouched.
+#[test]
+fn union_relabel_takes_the_unions_nested_labels() {
+    use arrow_array::{Int32Array, StructArray};
+    let tagged = Field::new("x", DataType::Int32, true).with_metadata(
+        [("delta.columnMapping.id".to_owned(), "5".to_owned())]
+            .into_iter()
+            .collect::<std::collections::HashMap<_, _>>(),
+    );
+    let plain = Field::new("x", DataType::Int32, true);
+    let input_schema = Arc::new(Schema::new(vec![Field::new(
+        "s",
+        DataType::Struct(vec![tagged.clone()].into()),
+        true,
+    )]));
+    let out = Arc::new(Schema::new(vec![Field::new(
+        "s",
+        DataType::Struct(vec![plain].into()),
+        true,
+    )]));
+    let values = StructArray::from(vec![(
+        Arc::new(tagged),
+        Arc::new(Int32Array::from(vec![Some(1), None])) as ArrayRef,
+    )]);
+    let batch = Batch::with_weights(
+        RecordBatch::try_new(input_schema, vec![Arc::new(values)]).unwrap(),
+        Weights::Column(Int64Array::from(vec![1_i64, 3])),
+    )
+    .unwrap();
+    let op = union::UnionRelabel::new(Arc::clone(&out));
+    let got = out_batch(op.execute(&batch, &mut unlocal()).unwrap()).unwrap();
+    assert_eq!(got.schema(), out);
+    assert_eq!(got.weights(), batch.weights());
+    assert_eq!(
+        got.data()
+            .column(0)
+            .as_struct()
+            .column(0)
+            .as_primitive::<arrow_array::types::Int32Type>()
+            .value(0),
+        1
+    );
+}

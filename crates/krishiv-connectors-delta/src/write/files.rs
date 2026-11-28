@@ -905,6 +905,19 @@ fn check_not_null(
 
 /// A fresh random UUID (version 4 layout) for a file name.
 pub(crate) fn file_uuid() -> String {
+    let hex: String = uuid_bytes().iter().map(|b| format!("{b:02x}")).collect();
+    format!(
+        "{}-{}-{}-{}-{}",
+        &hex[0..8],
+        &hex[8..12],
+        &hex[12..16],
+        &hex[16..20],
+        &hex[20..32]
+    )
+}
+
+/// The 16 bytes of a fresh random UUID (version 4 layout, big-endian).
+pub(crate) fn uuid_bytes() -> [u8; 16] {
     use std::hash::{BuildHasher, Hasher};
     use std::sync::atomic::{AtomicU64, Ordering};
     static N: AtomicU64 = AtomicU64::new(0);
@@ -923,15 +936,7 @@ pub(crate) fn file_uuid() -> String {
     let (a, b) = (half(1), half(2));
     let bits = (u128::from(a) << 64 | u128::from(b)) & !(0xF000_u128 << 64) | (0x4000_u128 << 64);
     let bits = bits & !(0xC000_u128 << 48) | (0x8000_u128 << 48);
-    let hex = format!("{bits:032x}");
-    format!(
-        "{}-{}-{}-{}-{}",
-        &hex[0..8],
-        &hex[8..12],
-        &hex[12..16],
-        &hex[16..20],
-        &hex[20..32]
-    )
+    bits.to_be_bytes()
 }
 
 /// Milliseconds since the epoch.

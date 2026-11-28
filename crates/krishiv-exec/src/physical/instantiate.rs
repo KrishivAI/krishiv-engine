@@ -73,9 +73,7 @@ use crate::operators::{
 use crate::pipeline::{ExecNode, PipelineBuilder};
 use crate::planner::TableProviderResolver;
 use crate::planner::eval::{self, Compiled, EvalEnv, Input, PhysExpr};
-use crate::planner::nodes::{
-    BreakerNode, FanInNode, OperatorNode, OrderedInput, OrderedNode, SourceNode,
-};
+use crate::planner::nodes::{BreakerNode, OperatorNode, OrderedInput, OrderedNode, SourceNode};
 use crate::planner::subquery::{SubquerySink, SubqueryValue, WithSubqueries};
 use crate::shared::{Output, SharedSink, SharedSource};
 use crate::values::{
@@ -90,6 +88,7 @@ mod python_eval;
 mod python_relation;
 mod reads;
 mod table_write;
+mod union;
 pub(crate) use aggregate::{aggregate_node, aggregate_spec};
 pub(crate) use detached::{Detached, LoopRun};
 mod aggregate;
@@ -1316,27 +1315,7 @@ impl Instantiation<'_> {
                     }),
                 })
             }
-            PhysNode::Union { inputs } => {
-                let mut nodes = Vec::with_capacity(inputs.len());
-                let mut schema: Option<SchemaRef> = None;
-                for i in inputs {
-                    let built = self.node(i)?;
-                    match &schema {
-                        None => schema = Some(built.schema),
-                        Some(s) if s.fields() != built.schema.fields() => {
-                            return Err(internal(
-                                "union inputs of different physical types".to_owned(),
-                            ));
-                        }
-                        Some(_) => {}
-                    }
-                    nodes.push(built.node);
-                }
-                Ok(Built {
-                    schema: schema.ok_or_else(|| internal("a union without inputs".to_owned()))?,
-                    node: Arc::new(FanInNode { inputs: nodes }),
-                })
-            }
+            PhysNode::Union { inputs } => self.union(inputs),
             PhysNode::WriteFiles { input, write } => self.write_files(input, write),
             PhysNode::TableWrite {
                 input,

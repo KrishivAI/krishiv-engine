@@ -594,9 +594,15 @@ impl CoverageFlags {
                 "--no-branch" => o.branch = false,
                 "--all-features" => o.all = true,
                 "--html" => o.html = true,
-                "-p" | "--package" => o
-                    .packages
-                    .push((*it.next().ok_or("-p needs a package name")?).to_owned()),
+                "-p" | "--package" => {
+                    let name = *it.next().ok_or("-p needs a package name")?;
+                    if name.contains(['*', '?', '[']) {
+                        return Err(format!(
+                            "-p takes an exact package name, not the pattern {name}"
+                        ));
+                    }
+                    o.packages.push(name.to_owned());
+                }
                 other => return Err(format!("unknown flag {other}")),
             }
         }
@@ -614,6 +620,49 @@ fn package_args(packages: &[String]) -> Vec<String> {
             .flat_map(|p| ["-p".to_owned(), p.clone()])
             .collect()
     }
+}
+
+/// A `--ignore-filename-regex` that keeps only the selected packages' sources in a report, or `None`
+/// when no package is selected (the whole workspace). `llvm-cov export` renders every source file the
+/// profile mentions, and one of them (`krishiv-io/src/io/beneath.rs`) segfaults the lcov exporter on
+/// nightly-2026-08-12, so a `-p` run must not ask for the crates it did not test. A package's directory
+/// under `crates/` is its name.
+fn ignore_other_crates(crate_dirs: &[String], packages: &[String]) -> Option<String> {
+    if packages.is_empty() {
+        return None;
+    }
+    let mut others: Vec<&str> = crate_dirs
+        .iter()
+        .map(String::as_str)
+        .filter(|d| !packages.iter().any(|p| p == d))
+        .collect();
+    others.sort_unstable();
+    (!others.is_empty()).then(|| format!("crates/({})/", others.join("|")))
+}
+
+/// The flags of a `cargo llvm-cov report` call before its output path.
+fn report_args<'a>(branch: bool, ignore: Option<&'a str>, extra: &[&'a str]) -> Vec<&'a str> {
+    let mut args = Vec::new();
+    if branch {
+        args.push("--branch");
+    }
+    if let Some(re) = ignore {
+        args.extend(["--ignore-filename-regex", re]);
+    }
+    args.extend_from_slice(extra);
+    args
+}
+
+/// The directory names under `<root>/crates`.
+fn crate_dir_names(root: &Path) -> Vec<String> {
+    std::fs::read_dir(root.join("crates"))
+        .map(|rd| {
+            rd.filter_map(Result::ok)
+                .filter(|e| e.path().is_dir())
+                .filter_map(|e| e.file_name().into_string().ok())
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// The nightly toolchain of branch coverage: pinned like the fuzz and ASan jobs, because a floating
@@ -670,12 +719,11 @@ pub fn run_coverage(root: &Path, flags: &[&str]) -> Result<(), String> {
         test.env("LLVM_PROFILE_FILE_NAME", "krishiv-%8m.profraw");
     }
     run(test, "cargo llvm-cov nextest")?;
+    let ignore = ignore_other_crates(&crate_dir_names(root), &packages);
     let report = |extra: &[&str], out: &Path| {
         let mut c = base(&["report"]);
-        if branch {
-            c.arg("--branch");
-        }
-        c.args(extra).arg(out);
+        c.args(report_args(branch, ignore.as_deref(), extra))
+            .arg(out);
         c
     };
     run(
@@ -841,6 +889,52 @@ pub fn run_diff_coverage(root: &Path, flags: &[&str]) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+    use super::{crate_dir_names, ignore_other_crates, report_args};
+
+    #[test]
+    fn a_package_run_ignores_the_other_crates_sources() {
+        let dirs: Vec<String> = ["krishiv-io", "krishiv-server", "krishiv-cli"]
+            .map(String::from)
+            .to_vec();
+        let pkgs = |p: &[&str]| p.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
+        assert_eq!(ignore_other_crates(&dirs, &[]), None);
+        assert_eq!(
+            ignore_other_crates(&dirs, &pkgs(&["krishiv-server", "krishiv-cli"])),
+            Some("crates/(krishiv-io)/".to_owned())
+        );
+        assert_eq!(
+            ignore_other_crates(
+                &dirs,
+                &pkgs(&["krishiv-io", "krishiv-server", "krishiv-cli"])
+            ),
+            None
+        );
+    }
+    #[test]
+    fn report_flags_carry_branch_and_the_ignore_regex() {
+        assert_eq!(report_args(false, None, &["--lcov"]), ["--lcov"]);
+        assert_eq!(
+            report_args(true, Some("crates/(a)/"), &["--json"]),
+            [
+                "--branch",
+                "--ignore-filename-regex",
+                "crates/(a)/",
+                "--json"
+            ]
+        );
+    }
+
+    #[test]
+    fn crate_dir_names_lists_only_directories() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let crates = root.path().join("crates");
+        std::fs::create_dir_all(crates.join("krishiv-io")).expect("mkdir");
+        std::fs::write(crates.join("README.md"), "x").expect("write");
+        assert_eq!(crate_dir_names(root.path()), ["krishiv-io"]);
+        let empty = tempfile::tempdir().expect("tempdir");
+        assert!(crate_dir_names(empty.path()).is_empty());
+    }
+
     #[test]
     fn coverage_flags_collect_packages() {
         let f = super::CoverageFlags::parse(&["--no-branch", "-p", "a", "--package", "b"]).unwrap();
@@ -848,6 +942,7 @@ mod tests {
         assert_eq!(super::package_args(&f.packages), ["-p", "a", "-p", "b"]);
         assert_eq!(super::package_args(&[]), ["--workspace"]);
         assert!(super::CoverageFlags::parse(&["-p"]).is_err());
+        assert!(super::CoverageFlags::parse(&["-p", "krishiv-ser*"]).is_err());
         assert!(super::CoverageFlags::parse(&["--bogus"]).is_err());
         assert!(
             super::CoverageFlags::parse(&["--all-features", "--html"])

@@ -904,3 +904,32 @@ async fn a_second_first_request_waits_for_the_load() {
     assert_eq!(second.await.unwrap(), 1);
     assert!(!python.load_pending());
 }
+
+#[tokio::test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "#[tokio::test] blocks on its own runtime"
+)]
+async fn the_sql_hook_persists_checks_and_removes_over_the_same_catalog() {
+    use krishiv_session::PersistedFunctions as _;
+    let host: Arc<dyn UdfHost> = Arc::new(Host::default());
+    let store = Arc::new(MemStore::default());
+    let s = session();
+    let python = Arc::new(with_store(&host, &store, None, &s));
+    let hook = super::SqlPersist(Arc::clone(&python));
+
+    assert!(!hook.exists(&s, "f").await.unwrap());
+    python.register(&s, udf("f", b"x")).unwrap();
+    hook.persist(&s, "f").await.unwrap();
+    assert_eq!(store.rows.lock().unwrap().len(), 1);
+    assert!(hook.exists(&s, "f").await.unwrap());
+    hook.remove(&s, "f").await.unwrap();
+    assert!(store.rows.lock().unwrap().is_empty());
+    assert!(!hook.exists(&s, "f").await.unwrap());
+
+    let bare = Arc::new(SessionPython::new(Some(&host), "alice", None, true, &s));
+    assert!(
+        !super::SqlPersist(bare).exists(&s, "f").await.unwrap(),
+        "no catalog: no stored function"
+    );
+}

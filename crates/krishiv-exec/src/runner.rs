@@ -307,7 +307,8 @@ fn runs_with_or_after(
     false
 }
 
-/// Runs the pipelines in dependency waves. The coordinator owns every
+/// Runs the pipelines in dependency waves (or, under
+/// `krishiv.exec.dataflowScheduling`, [`run_dataflow`]). The coordinator owns every
 /// breaker's state: a finalized sink's global state is kept here and handed
 /// to the pipelines that read it, dropped (with the memory it holds) once
 /// the last of them has ended, and whatever is left is dropped when this
@@ -344,6 +345,9 @@ async fn run_pipelines(
         for input in inputs(p) {
             *readers.entry(input).or_default() += 1;
         }
+    }
+    if query.config().dataflow_scheduling {
+        return run_dataflow(executor, query, todo, &deps, &sinks, finalized, readers).await;
     }
     while done.iter().any(|d| !d) {
         let ready: Vec<Vec<usize>> = (0..todo.len())
@@ -410,6 +414,134 @@ async fn run_pipelines(
                 }
             }
         }
+    }
+    Ok(())
+}
+
+/// A started group of the dataflow runner: its members, their runs, and
+/// whether it ended cleanly.
+type GroupRun = BoxFuture<'static, (Vec<usize>, Vec<Arc<PipelineRun>>, bool)>;
+
+/// [`run_pipelines`] without the wave barrier (`krishiv.exec.dataflowScheduling`):
+/// a group starts as soon as every member's dependencies have ended, not
+/// when the whole wave before it has, so a long pipeline no longer holds
+/// back the pipelines that do not read it. The bookkeeping (finalized
+/// states, their readers, metrics) happens per group as each one ends.
+/// After a failure or cancellation no group starts, and every running one
+/// is still awaited (its drivers aborted and drained), so the drivers have
+/// released everything when this returns, as in the wave runner.
+async fn run_dataflow(
+    executor: &Arc<dyn Executor>,
+    query: &Arc<QueryContext>,
+    mut todo: Vec<Option<Pipeline>>,
+    deps: &[Vec<usize>],
+    sinks: &[OperatorId],
+    mut finalized: HashMap<OperatorId, GlobalState>,
+    mut readers: HashMap<OperatorId, usize>,
+) -> Result<()> {
+    let group =
+        |i: usize| -> Vec<usize> { (0..sinks.len()).filter(|&j| sinks[j] == sinks[i]).collect() };
+    let mut started = vec![false; todo.len()];
+    let mut finished = vec![false; todo.len()];
+    let mut running: FuturesUnordered<GroupRun> = FuturesUnordered::new();
+    let mut stopped = false;
+    loop {
+        stopped |= query.is_cancelled();
+        if !stopped {
+            let ready: Vec<Vec<usize>> = (0..todo.len())
+                .filter(|&i| !started[i] && group(i)[0] == i)
+                .map(group)
+                .filter(|g| g.iter().all(|&m| deps[m].iter().all(|&d| finished[d])))
+                .collect();
+            for g in ready {
+                if let Err(e) = start_dataflow_group(
+                    executor,
+                    query,
+                    &mut todo,
+                    &mut started,
+                    &finalized,
+                    g,
+                    &running,
+                ) {
+                    query.fail(e);
+                    stopped = true;
+                    break;
+                }
+            }
+        }
+        let Some((g, runs, ok)) = running.next().await else {
+            break;
+        };
+        // Before the stop, as the wave runner records a failed wave's: a
+        // failed or cancelled query's profile keeps these counters.
+        record_extra_metrics(query, &runs);
+        if !ok || query.is_cancelled() {
+            // Keep draining the running groups; their states are dropped on return.
+            stopped = true;
+            continue;
+        }
+        for &m in &g {
+            finished[m] = true;
+        }
+        for run in &runs {
+            finalized.insert(run.pipeline.sink.0, Arc::clone(&run.sink_global));
+        }
+        for run in runs {
+            for input in inputs(&run.pipeline) {
+                let left = readers.get_mut(&input).map(|n| {
+                    *n -= 1;
+                    *n
+                });
+                if left == Some(0) {
+                    finalized.remove(&input);
+                }
+            }
+        }
+    }
+    query.check_cancelled()?;
+    if finished.iter().any(|f| !f) {
+        // Unreachable: dependencies form a DAG (a shared plan is read by several pipelines).
+        return Err(internal("pipeline dependencies form a cycle".to_owned()));
+    }
+    Ok(())
+}
+
+/// Starts group `g` of [`run_dataflow`] and adds it to `running`.
+fn start_dataflow_group(
+    executor: &Arc<dyn Executor>,
+    query: &Arc<QueryContext>,
+    todo: &mut [Option<Pipeline>],
+    started: &mut [bool],
+    finalized: &HashMap<OperatorId, GlobalState>,
+    g: Vec<usize>,
+    running: &FuturesUnordered<GroupRun>,
+) -> Result<()> {
+    let members: Vec<Pipeline> = g
+        .iter()
+        .filter_map(|&i| {
+            started[i] = true;
+            todo[i].take()
+        })
+        .collect();
+    let start = start_group(executor, query, members, finalized)?;
+    let (e, q) = (Arc::clone(executor), Arc::clone(query));
+    if fan_in_is_sequential(&start) {
+        running.push(Box::pin(async move {
+            match run_group_sequential(&e, &q, start).await {
+                Ok(rs) => (g, rs, true),
+                Err(err) => {
+                    q.fail(err);
+                    (g, Vec::new(), false)
+                }
+            }
+        }));
+    } else {
+        let (rs, hs) = spawn_group(executor, query, start)?;
+        let mut handles = Drivers(hs.into_iter().collect());
+        running.push(Box::pin(async move {
+            await_drivers(&q, &mut handles).await;
+            (g, rs, true)
+        }));
     }
     Ok(())
 }
@@ -740,19 +872,24 @@ fn member_barriers(
         .ok_or_else(|| internal("an operator without a barrier".to_owned()))
 }
 
-/// One driver per index of `member`: the scheduler-assigned partition ids
+/// The scheduler-assigned partition ids of a member's drivers,
 /// `base..base + count`. Rejects an id past `u32` instead of wrapping it.
-fn drivers(run: &Arc<PipelineRun>, base: u32, count: usize) -> Result<Vec<TaskHandle>> {
-    let mut out = Vec::with_capacity(count);
-    for i in 0..count {
-        let offset = u32::try_from(i)
-            .map_err(|_| internal("too many drivers for u32 partition ids".to_owned()))?;
-        let partition = base
-            .checked_add(offset)
-            .ok_or_else(|| internal("too many drivers for u32 partition ids".to_owned()))?;
-        out.push(spawn_driver(Arc::clone(run), partition, base));
-    }
-    Ok(out)
+/// Checked before any driver is spawned: a driver spawned before an error
+/// would be detached (a dropped [`TaskHandle`]) and never awaited.
+fn partitions(base: u32, count: usize) -> Result<std::ops::Range<u32>> {
+    let too_many = || internal("too many drivers for u32 partition ids".to_owned());
+    let end = u32::try_from(count)
+        .ok()
+        .and_then(|n| base.checked_add(n))
+        .ok_or_else(too_many)?;
+    Ok(base..end)
+}
+
+/// One driver per partition id of `ids` (from [`partitions`]).
+fn drivers(run: &Arc<PipelineRun>, ids: std::ops::Range<u32>) -> Vec<TaskHandle> {
+    let base = ids.start;
+    ids.map(|partition| spawn_driver(Arc::clone(run), partition, base))
+        .collect()
 }
 
 /// Starts every member of `group` together, sharing the sink's state.
@@ -775,10 +912,16 @@ fn spawn_group(
         && members.len() > 1
         && members.iter().all(|m| m.drivers == 1))
     .then(|| Arc::new(Baton::new(members.len())));
-    let mut runs = Vec::with_capacity(members.len());
-    let mut handles = Vec::with_capacity(total);
-    for (member, m) in members.into_iter().enumerate() {
+    // Every check first, so an error spawns no driver (see [`partitions`]).
+    let mut planned = Vec::with_capacity(members.len());
+    for m in members {
         let member_barriers = member_barriers(&m, &barriers)?;
+        let ids = partitions(m.base_partition, m.drivers)?;
+        planned.push((m, member_barriers, ids));
+    }
+    let mut runs = Vec::with_capacity(planned.len());
+    let mut handles = Vec::with_capacity(total);
+    for (member, (m, member_barriers, ids)) in planned.into_iter().enumerate() {
         let run = Arc::new(PipelineRun {
             pipeline: m.pipeline,
             operator_deps: m.operator_deps,
@@ -793,7 +936,7 @@ fn spawn_group(
             query: Arc::clone(query),
             executor: Arc::clone(executor),
         });
-        handles.extend(drivers(&run, m.base_partition, m.drivers)?);
+        handles.extend(drivers(&run, ids));
         runs.push(run);
     }
     Ok((runs, handles))
@@ -817,6 +960,7 @@ async fn run_group_sequential(
     let mut runs = Vec::with_capacity(members.len());
     for m in members {
         let member_barriers = member_barriers(&m, &barriers)?;
+        let ids = partitions(m.base_partition, m.drivers)?;
         let run = Arc::new(PipelineRun {
             pipeline: m.pipeline,
             operator_deps: m.operator_deps,
@@ -832,9 +976,7 @@ async fn run_group_sequential(
             executor: Arc::clone(executor),
         });
         let mut handles = Drivers(FuturesUnordered::new());
-        handles
-            .0
-            .extend(drivers(&run, m.base_partition, m.drivers)?);
+        handles.0.extend(drivers(&run, ids));
         await_drivers(query, &mut handles).await;
         record_extra_metrics(query, std::slice::from_ref(&run));
         query.check_cancelled()?;
