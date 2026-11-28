@@ -162,6 +162,9 @@ impl RangeKeys {
                 DataType::Int32 => ints!(Int32Type),
                 DataType::Int64 => ints!(Int64Type),
                 DataType::Date32 => ints!(Date32Type),
+                DataType::Timestamp(arrow_schema::TimeUnit::Nanosecond, _) => {
+                    ints!(arrow_array::types::TimestampNanosecondType);
+                }
                 DataType::Timestamp(..) => ints!(TimestampMicrosecondType),
                 DataType::Decimal64(..) => {
                     let a = col.as_primitive::<Decimal64Type>();

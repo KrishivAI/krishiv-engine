@@ -310,6 +310,9 @@ struct Settings {
     /// `krishiv.exec.join.directIndex`; absent: the default.
     #[prost(bool, optional, tag = "19")]
     join_direct_index: Option<bool>,
+    /// `krishiv.exec.dataflowScheduling`; absent: the default.
+    #[prost(bool, optional, tag = "20")]
+    dataflow_scheduling: Option<bool>,
 }
 
 fn wide(v: usize) -> u64 {
@@ -343,6 +346,7 @@ impl Settings {
             deterministic_order,
             union_output_partitioning,
             coalesce_input,
+            dataflow_scheduling,
         } = c.clone();
         Self {
             batch_size: wide(batch_size),
@@ -366,6 +370,7 @@ impl Settings {
             union_output_partitioning: Some(union_output_partitioning),
             coalesce_input: Some(coalesce_input),
             join_direct_index: Some(join_direct_index),
+            dataflow_scheduling: Some(dataflow_scheduling),
         }
     }
 
@@ -404,6 +409,9 @@ impl Settings {
             coalesce_input: self
                 .coalesce_input
                 .unwrap_or(ExecConfig::default().coalesce_input),
+            dataflow_scheduling: self
+                .dataflow_scheduling
+                .unwrap_or(ExecConfig::default().dataflow_scheduling),
         })
     }
 }
@@ -620,6 +628,20 @@ mod tests {
         let mut old = Settings::of(&off);
         old.coalesce_input = None;
         assert!(old.config().unwrap().coalesce_input);
+    }
+
+    #[test]
+    fn dataflow_scheduling_round_trips_and_defaults_when_absent() {
+        let off = ExecConfig {
+            dataflow_scheduling: false,
+            ..ExecConfig::default()
+        };
+        let (_, got) = decode_task(&encode_task(&TaskSpec::whole(), &off).unwrap()).unwrap();
+        assert!(!got.dataflow_scheduling);
+        // A descriptor written before tag 20 existed: the default (on).
+        let mut old = Settings::of(&off);
+        old.dataflow_scheduling = None;
+        assert!(old.config().unwrap().dataflow_scheduling);
     }
 
     #[test]

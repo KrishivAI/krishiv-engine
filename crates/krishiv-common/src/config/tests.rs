@@ -712,6 +712,10 @@ fn session_time_zone_is_validated() {
         "+8:0",
         "1/2",
         "a//b",
+        " UTC ",
+        "UTC ",
+        " +01:00",
+        "Europe/Paris\t",
     ] {
         let e = c.set("spark.sql.session.timeZone", bad).unwrap_err();
         assert_eq!(
@@ -860,6 +864,26 @@ fn io_blocking_threads_parses_and_defaults() {
         );
     }
     assert_eq!(get(&c), Some(3), "a rejected value leaves the setting");
+}
+
+#[test]
+fn release_at_query_end_defaults_on_and_parses() {
+    let mut c = Config::new();
+    let get = |c: &Config| {
+        c.get(&MEMORY_RELEASE_AT_QUERY_END)
+            .and_then(ConfigValue::as_bool)
+    };
+    assert_eq!(get(&c), Some(true));
+    c.set("krishiv.memory.releaseAtQueryEnd", "false").unwrap();
+    assert_eq!(get(&c), Some(false));
+    let e = c
+        .set("krishiv.memory.releaseAtQueryEnd", "sometimes")
+        .unwrap_err();
+    assert!(
+        e.to_string().contains("krishiv.memory.releaseAtQueryEnd"),
+        "{e}"
+    );
+    assert_eq!(get(&c), Some(false), "a rejected value leaves the setting");
 }
 
 #[test]
@@ -1847,6 +1871,21 @@ fn exec_coalesce_input_defaults_on_and_parses() {
     assert_eq!(get(&c), Some(false));
     assert!(c.set("krishiv.exec.coalesceInput", "sometimes").is_err());
     assert_eq!(EXEC_COALESCE_INPUT.scope, Scope::Session);
+}
+
+/// The dataflow pipeline scheduler is on by default and takes a boolean.
+#[test]
+fn exec_dataflow_scheduling_defaults_on_and_parses() {
+    let mut c = Config::new();
+    let get = |c: &Config| {
+        c.get(&EXEC_DATAFLOW_SCHEDULING)
+            .and_then(ConfigValue::as_bool)
+    };
+    assert_eq!(get(&c), Some(true));
+    c.set("krishiv.exec.dataflowScheduling", "false").unwrap();
+    assert_eq!(get(&c), Some(false));
+    assert!(c.set("krishiv.exec.dataflowScheduling", "often").is_err());
+    assert_eq!(EXEC_DATAFLOW_SCHEDULING.scope, Scope::Session);
 }
 
 #[test]

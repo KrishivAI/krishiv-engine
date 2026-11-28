@@ -158,7 +158,13 @@
 //! the tables: two clock reads per batch, for
 //! [`QueryMetrics::hash_probe_share`](crate::QueryMetrics::hash_probe_share))
 //! and, only when above zero, `direct_probe_rows` (rows probed through a
-//! tiny build's direct index, `direct.rs`).
+//! tiny build's direct index, `direct.rs`), `direct_payload_rows` (its
+//! build rows decoded once, `DirectPayload`) and `direct_inner_rows` (rows
+//! an inner join over unique direct keys emitted in one pass, perf lever C)
+//! and `probe_passthrough_rows` (rows of an inner or outer join's pairs output
+//! as their probe batch, with no gather: every row of a batch without a
+//! selection matched once, in order, and no residual filter applies; the
+//! semi, anti and outer tails are not counted).
 
 mod block;
 mod broadcast;
@@ -421,12 +427,26 @@ pub(crate) enum Counter {
     FixedBloomKeys,
     /// Probe rows looked up through a direct index (`direct`, perf lever J1).
     DirectProbeRows,
+    /// Build rows whose payload was decoded once for a direct index
+    /// (`direct.rs` `DirectPayload`, perf lever P3).
+    DirectPayloadRows,
+    /// Output rows of an inner join over a unique, decoded direct build,
+    /// emitted in one pass (`probe.rs` `Cursor::next_direct_inner`, perf
+    /// lever C).
+    DirectInnerRows,
     /// Grace partition loads given up because the pool lacked free memory
     /// (`grace::Loaded::TooLarge`, before or after arbitration): the rows
     /// read so far go back and the partition is read again.
     GraceLoadsRefused,
     /// The build bytes those loads had read when they gave up.
     GraceRefusedBytes,
+    /// Probe rows the row stage kept of sparse batches, held and probed as
+    /// full batches (`probe/held.rs`, K1).
+    ProbeHeldRows,
+    /// Probe rows output as their own batch, with no gather: every row of
+    /// a batch without a selection, in order (`probe.rs` `Cursor::gather`,
+    /// study 39 lever (a)).
+    ProbePassthroughRows,
 }
 
 /// The build sink's counters, by name.
@@ -470,7 +490,10 @@ const PROBE_DETAIL_COUNTERS: [(Counter, &str); 3] = [
 
 /// Counters updated by every driver (relaxed: read once the query ended).
 #[derive(Debug)]
-pub(crate) struct Counters([std::sync::atomic::AtomicU64; 38]);
+pub(crate) struct Counters([std::sync::atomic::AtomicU64; COUNTERS]);
+
+/// One counter per [`Counter`]: the last one's index plus one.
+const COUNTERS: usize = Counter::ProbePassthroughRows as usize + 1;
 
 impl Default for Counters {
     fn default() -> Self {
@@ -548,6 +571,20 @@ impl Counters {
         // Only a probe that read a direct index (`direct.rs`) reports it.
         if self.get(Counter::DirectProbeRows) > 0 {
             out.extend(self.report(&[(Counter::DirectProbeRows, "direct_probe_rows")]));
+        }
+        if self.get(Counter::DirectPayloadRows) > 0 {
+            out.extend(self.report(&[(Counter::DirectPayloadRows, "direct_payload_rows")]));
+        }
+        if self.get(Counter::DirectInnerRows) > 0 {
+            out.extend(self.report(&[(Counter::DirectInnerRows, "direct_inner_rows")]));
+        }
+        // Only a probe that held sparse batches' rows (`probe/held.rs`) reports it.
+        if self.get(Counter::ProbeHeldRows) > 0 {
+            out.extend(self.report(&[(Counter::ProbeHeldRows, "probe_held_rows")]));
+        }
+        // Only a probe that passed whole batches through reports it.
+        if self.get(Counter::ProbePassthroughRows) > 0 {
+            out.extend(self.report(&[(Counter::ProbePassthroughRows, "probe_passthrough_rows")]));
         }
         // Only a grace join that had a partition load refused reports it.
         if self.get(Counter::GraceLoadsRefused) > 0 {
@@ -651,6 +688,10 @@ pub struct JoinRuntimeFilter {
     pub filter: Arc<krishiv_io::RuntimeFilter>,
     /// What to collect (the cost model's decisions).
     pub options: krishiv_io::KeyFilterOptions,
+    /// A build input column collected instead of the key (a residual's
+    /// bound, [`crate::physical::JoinFilterPlan::column`]): its non-NULL
+    /// values in the rows the build stores.
+    pub column: Option<usize>,
 }
 
 impl fmt::Debug for Shared {
@@ -1024,12 +1065,16 @@ impl HashJoin {
             )));
         }
         for f in &filters {
-            // Key types are the same on both sides.
-            let key = shared
-                .probe_keys
-                .get(f.key)
-                .and_then(|&k| shared.probe_schema.fields().get(k).cloned())
-                .ok_or_else(|| internal(format!("runtime filter key {} out of range", f.key)))?;
+            // Key types are the same on both sides; a bound is collected
+            // from a build column of its own type.
+            let key = match f.column {
+                Some(c) => shared.build_fields.get(c).cloned().map(Arc::new),
+                None => shared
+                    .probe_keys
+                    .get(f.key)
+                    .and_then(|&k| shared.probe_schema.fields().get(k).cloned()),
+            }
+            .ok_or_else(|| internal(format!("runtime filter key {} out of range", f.key)))?;
             if key.data_type() != f.filter.key_type() {
                 return Err(internal(format!(
                     "runtime filter of type {} on a {} key",

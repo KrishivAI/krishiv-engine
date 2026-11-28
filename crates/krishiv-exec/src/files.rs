@@ -55,13 +55,16 @@ use krishiv_io::{
 };
 use krishiv_plan::analyzer::{FileSchemaResolver, SourceKind, TableColumn};
 use krishiv_types::{DataType, StructType};
-use object_store::path::Path;
+use object_store::path::{Path, PathPart};
 
 use crate::error::Result;
 use crate::operators::PathRoots;
 use crate::operators::spark_dir_text;
 
+mod local_url;
 mod user_schema;
+mod windows_path;
+pub use local_url::{file_display, file_url, native_path};
 use user_schema::{UserPartitions, check_user_schema, user_schema_columns};
 
 /// Spark 4.2's built-in data sources that read no files:
@@ -137,13 +140,24 @@ impl LocalPaths {
     pub fn new(store: StoreId, cwd: impl Into<String>) -> Self {
         Self {
             store,
-            cwd: cwd.into(),
+            cwd: local_text(&cwd.into()),
         }
+    }
+}
+
+/// A local path's text in the locator's form: on Windows `\` separators and drive letters are
+/// normalized (`files/windows_path.rs`), elsewhere unchanged. Local paths only, never object-store URLs.
+fn local_text(path: &str) -> String {
+    if cfg!(windows) {
+        windows_path::normalize(path)
+    } else {
+        path.to_owned()
     }
 }
 
 impl PathLocator for LocalPaths {
     fn locate(&self, path: &str) -> Result<LocatedPath> {
+        let path = &local_text(path);
         let local = if let Some(rest) = path.strip_prefix("file://") {
             // `file:///a` and `file://localhost/a`; another host is remote.
             let at = rest.find('/').unwrap_or(rest.len());
@@ -161,10 +175,19 @@ impl PathLocator for LocalPaths {
         } else {
             format!("{}/{path}", self.cwd)
         };
+        // On Windows a `//` lead after normalizing is a UNC share or device path: refused.
+        if cfg!(windows) && local.starts_with("//") {
+            return Err(unsupported("UNC and device paths".to_owned()));
+        }
         let mut parts: Vec<&str> = Vec::new();
         for part in local.split('/') {
             match part {
                 "" | "." => {}
+                // On Windows a drive (`C:/../x`) is the root of its path, as `C:\..\x` is `C:\x`:
+                // a `..` never removes it.
+                ".." if cfg!(windows)
+                    && parts.len() == 1
+                    && windows_path::drive_led(parts[0]).is_some() => {}
                 ".." => {
                     parts.pop();
                 }
@@ -172,9 +195,16 @@ impl PathLocator for LocalPaths {
             }
         }
         let display = format!("file:/{}", parts.join("/"));
+        // On Windows `/data/x` is on the working directory's drive; the display keeps Hadoop's
+        // `file:/data/x`.
+        if cfg!(windows)
+            && let Some(on_drive) = windows_path::on_drive_of(&parts, &self.cwd)
+        {
+            parts = on_drive;
+        }
         Ok(LocatedPath {
             store: self.store.clone(),
-            path: Path::from_iter(parts),
+            path: krishiv_io::local_object_path(&parts)?,
             display,
         })
     }
@@ -270,6 +300,10 @@ impl PathLocator for ObjectPaths {
 /// The URL scheme of `path` (`s3a` in `s3a://b/k`), if it has one.
 fn scheme(path: &str) -> Option<&str> {
     let (scheme, _) = path.split_once(':')?;
+    // On Windows `C:` is a drive, never a scheme (Hadoop's `Path` reads it so too).
+    if cfg!(windows) && windows_path::is_drive(path) {
+        return None;
+    }
     let mut chars = scheme.chars();
     let valid = chars.next().is_some_and(|c| c.is_ascii_alphabetic())
         && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'));
@@ -495,6 +529,18 @@ impl FileReads {
             };
             // `hf://` has no listing: a directory or a glob is refused with how to name files.
             krishiv_io::check_hf_file_path(text)?;
+            // On Windows a local path is read in the locator's form before the glob check and the prefix
+            // split: `C:\data\*.csv` lists `C:/data` (a `\` is a separator, not a glob escape), and a
+            // verbatim path (`\\?\C:\x`, what `canonicalize` returns) is no glob, its `?` being part of
+            // the prefix. Cloud URLs keep their text.
+            let local;
+            let text =
+                if cfg!(windows) && scheme(text).is_none_or(|s| s.eq_ignore_ascii_case("file")) {
+                    local = local_text(text);
+                    local.as_str()
+                } else {
+                    text
+                };
             if krishiv_io::partition::glob::has_glob(text) {
                 // Boxed, as the listing below: these futures sit on the recursion of nested scripts, where a
                 // larger one overflows the stack (`script_nesting_is_bounded_at_the_limit`).
@@ -580,16 +626,15 @@ impl FileReads {
         }
         let format = match self.formats.get(format) {
             Ok(format) => format,
-            Err(e) => {
-                if is_spark_file_source(format) {
-                    return Err(unsupported(format!("the {format} file format")));
-                }
-                return Err(e);
+            Err(_) if is_spark_file_source(format) => {
+                return Err(unsupported(format!("the {format} file format")));
             }
+            Err(e) => return Err(e),
         };
         let merge = self.merges_schemas(format.name(), options);
         let ignore_invalid_partition_paths = self.ignores_invalid_partition_paths(options);
-        let (options, _) = format.options().parse(options, &self.session)?;
+        let given = format.options().without_session_confs(options);
+        let (options, _) = format.options().parse(&given, &self.session)?;
         // A read's layout is checked per leaf directory as Spark's partition discovery checks it; files
         // beside its partition directories are not read. A catalog table's listing kept its own files.
         // The data schema is still inferred from every listed file, as Spark's `allFiles()` keeps the
@@ -1050,11 +1095,11 @@ impl FileReads {
             Arc<BTreeMap<String, krishiv_io::commit_log::AddedFile>>,
         )>,
     > {
-        let mut parts: Vec<String> = at.path.parts().map(|p| p.as_ref().to_owned()).collect();
+        let mut parts: Vec<PathPart<'_>> = at.path.parts().collect();
         let mut display = at.display.clone();
         while parts
             .last()
-            .is_some_and(|name| parse_segment(name).is_some())
+            .is_some_and(|name| parse_segment(name.as_ref()).is_some())
         {
             parts.pop();
             display = display
@@ -1062,7 +1107,7 @@ impl FileReads {
                 .map_or_else(String::new, |(head, _)| head.to_owned());
             let parent = LocatedPath {
                 store: at.store.clone(),
-                path: Path::from_iter(parts.iter().map(String::as_str)),
+                path: Path::from_iter(parts.iter().cloned()),
                 display: display.clone(),
             };
             if let Some(files) = Box::pin(self.committed_files(&parent)).await? {

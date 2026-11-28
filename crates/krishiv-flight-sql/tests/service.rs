@@ -37,6 +37,8 @@ use tonic::{Code, Request, Status};
 mod metadata;
 #[path = "service/prepared.rs"]
 mod prepared;
+#[path = "service/served_environment.rs"]
+mod served_environment;
 #[path = "service/session_options.rs"]
 mod session_options;
 #[path = "service/updates.rs"]
@@ -1768,11 +1770,13 @@ async fn sweep_does_not_stamp_session_access() {
     .await;
     let (_, cookie) = info(&mut h, OPS, None, "USE default").await.expect("info");
     let cookie = cookie.expect("cookie");
+    // Taken before the last call: the idle time runs from that call's access, so a clock
+    // started after it returns would read short on a loaded machine.
+    let started = Instant::now();
     // Promoted to a cookie session: only the manager's idle timeout ends it.
     let (q, _) = info(&mut h, OPS, Some(&cookie), "SELECT 1")
         .await
         .expect("info");
-    let started = Instant::now();
     let deadline = started + Duration::from_secs(10);
     while h.manager.counts().live != 0 {
         assert!(Instant::now() < deadline, "the idle session was kept alive");

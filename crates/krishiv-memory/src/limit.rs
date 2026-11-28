@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 //! The default memory limit: 80% of the effective memory limit of this
-//! process, so a query engine embedded in a notebook or container spills
-//! instead of being OOM-killed.
+//! process, lowered so the resident-set guard's ceiling stays at least
+//! [`MIN_HEADROOM`] below it (but never under half of it),
+//! so a query engine embedded in a notebook or container spills instead of
+//! being OOM-killed.
 //!
 //! The effective limit is the smallest of the cgroup limits on the
 //! process's cgroup path (v2 `memory.max`, else v1
@@ -11,9 +13,24 @@
 //! conservative fixed size, documented on `krishiv.memory.limit`.
 
 use std::path::Path;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+use crate::resident::ALLOWANCE_BASE;
 
 /// Percentage of the effective memory limit used by default.
 pub const DEFAULT_LIMIT_PERCENT: u64 = 80;
+
+/// Memory the default limit leaves below the effective limit beyond the
+/// resident-set guard's ceiling (the limit plus its
+/// [`allowance`](crate::allowance): decode and I/O buffers, allocator
+/// retention), at least: the page cache, dirty spill pages and kernel memory
+/// a cgroup also counts. 20% alone is too little on a small container
+/// (0.3.0 acceptance QA2-12): in a 1 GiB cgroup an 819 MiB pool let the
+/// process hold up to 985 MiB, and a 41M-row self-join or a high-cardinality
+/// group-by was OOM-killed; in a 2 GiB cgroup a 1.5 GiB pool (a 1.75 GiB
+/// ceiling) filled the cgroup on every run of that group-by and was killed
+/// once, while a 1.39 GiB pool peaked at 1.5-1.7 GiB.
+pub const MIN_HEADROOM: u64 = 384 << 20;
 
 /// Default limit when the effective memory limit cannot be determined.
 pub const FALLBACK_LIMIT: usize = 2 << 30;
@@ -22,34 +39,61 @@ pub const FALLBACK_LIMIT: usize = 2 << 30;
 const V1_UNLIMITED_FROM: u64 = 1 << 62;
 
 /// The default root-pool limit: [`DEFAULT_LIMIT_PERCENT`] of
-/// [`effective_memory_limit`], else [`FALLBACK_LIMIT`]. Always `Some`; pass
+/// [`effective_memory_limit`], lowered so the guard's ceiling stays
+/// [`MIN_HEADROOM`] below it but not under half of it, else
+/// [`FALLBACK_LIMIT`]. Always `Some`; pass
 /// `limit: None` in [`crate::MemoryConfig`] for an unbounded pool.
 pub fn default_limit() -> Option<usize> {
     Some(effective_memory_limit().map_or(FALLBACK_LIMIT, share_of))
 }
 
-/// [`DEFAULT_LIMIT_PERCENT`] of an effective limit of `bytes`.
+/// The pool's share of an effective limit of `bytes`:
+/// [`DEFAULT_LIMIT_PERCENT`] of it, lowered so that the limit `L` plus the
+/// guard's allowance (`L / 8` + [`ALLOWANCE_BASE`]) leaves [`MIN_HEADROOM`]
+/// (from about 4.4 GiB up the percentage already does), but never under
+/// half.
 fn share_of(bytes: u64) -> usize {
-    usize::try_from(bytes / 100 * DEFAULT_LIMIT_PERCENT).unwrap_or(usize::MAX)
+    let percent = bytes / 100 * DEFAULT_LIMIT_PERCENT;
+    let base = u64::try_from(ALLOWANCE_BASE).unwrap_or(u64::MAX);
+    // L + L / 8 + base <= bytes - MIN_HEADROOM.
+    let guarded = bytes.saturating_sub(MIN_HEADROOM).saturating_sub(base) / 9 * 8;
+    let share = percent.min(guarded).max(bytes / 2);
+    usize::try_from(share).unwrap_or(usize::MAX)
 }
 
 /// The root-pool limit for an explicit `krishiv.memory.limit` of `explicit`
 /// bytes: `explicit` itself, unless it is above [`effective_memory_limit`].
 /// Then the pool could grow past what the kernel allows and the process would
 /// be OOM-killed without an error before the engine ever spills, so the limit
-/// is [`default_limit`] instead, with a warning.
+/// is [`default_limit`] instead, with a warning (not logged again while the
+/// requested value stays the same: the setting is read again by each admin
+/// check).
+///
+/// A value at or just under the effective limit stands as given. It leaves
+/// no room for what the process holds outside the pool (the allocator's
+/// overhead, memory used without a reservation), so the kernel can still
+/// kill such a process; `krishiv.memory.limit` says so.
 pub fn explicit_limit(explicit: usize) -> usize {
     let fitted = fitted_limit(explicit, effective_memory_limit());
-    if fitted != explicit {
+    if fitted != explicit && first_warning(explicit) {
         tracing::warn!(
             target: "krishiv::memory",
             requested = explicit,
             limit = fitted,
             "krishiv.memory.limit is above the memory this process may use (cgroup limit or \
-             physical memory); using {DEFAULT_LIMIT_PERCENT}% of that instead"
+             physical memory); using the default share of that instead"
         );
     }
     fitted
+}
+
+/// The requested limit the over-limit warning was last logged for (0: none).
+static LAST_WARNED: AtomicUsize = AtomicUsize::new(0);
+
+/// Whether the over-limit warning for `requested` is not a repeat of the
+/// last one logged; records `requested` as logged.
+fn first_warning(requested: usize) -> bool {
+    LAST_WARNED.swap(requested, Ordering::Relaxed) != requested
 }
 
 /// [`explicit_limit`] against an `effective` memory limit (tests).
@@ -143,6 +187,15 @@ mod tests {
 
     use super::*;
 
+    #[test]
+    fn the_over_limit_warning_is_logged_once_per_requested_value() {
+        // No other test logs for these values, and an over-limit value on a real host is far larger.
+        assert!(first_warning(7));
+        assert!(!first_warning(7));
+        assert!(first_warning(9));
+        assert!(first_warning(7));
+    }
+
     fn fixture(name: &str) -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/memory-limit")
@@ -188,6 +241,34 @@ mod tests {
     }
 
     #[test]
+    fn the_share_leaves_headroom_on_small_limits() {
+        let mib = 1_usize << 20;
+        let gib = 1_u64 << 30;
+        // The guard's ceiling (the limit, an eighth more and 64 MiB) stays
+        // at least the headroom below the effective limit.
+        let ceiling = |l: usize| l + crate::allowance(l);
+        for b in [gib, 2 * gib, 5 * gib / 2, 4 * gib, 16 * gib] {
+            let room = usize::try_from(b - (MIN_HEADROOM)).unwrap();
+            assert!(ceiling(share_of(b)) <= room, "{b}");
+        }
+        // 1 GiB (QA2-12): 512 MiB, not 819 MiB.
+        assert_eq!(share_of(gib), 512 * mib);
+        // 2 GiB: about 1.39 GiB, not 1.6 GiB; 2.5 GiB: about 1.83 GiB.
+        assert_eq!(share_of(2 * gib), (1600 * mib) / 9 * 8);
+        assert_eq!(share_of(5 * gib / 2), (2112 * mib) / 9 * 8);
+        // From about 4.4 GiB the 20% is at least the guard's room: 80% as
+        // before.
+        let eighty = |b: u64| usize::try_from(b / 100 * 80).unwrap();
+        assert!(share_of(4 * gib) < eighty(4 * gib));
+        assert_eq!(share_of(5 * gib), eighty(5 * gib));
+        assert_eq!(share_of(16 * gib), eighty(16 * gib));
+        // Small limits keep half rather than nothing.
+        assert_eq!(share_of(512 << 20), 256 * mib);
+        assert_eq!(share_of(768 << 20), 384 * mib);
+        assert_eq!(share_of(0), 0);
+    }
+
+    #[test]
     fn meminfo_parsing() {
         assert_eq!(
             meminfo_total("MemTotal:  1024 kB\nMemFree: 1 kB"),
@@ -213,10 +294,10 @@ mod tests {
     }
 
     #[test]
-    fn default_limit_is_eighty_percent_or_the_fallback() {
+    fn default_limit_is_the_share_or_the_fallback() {
         let limit = default_limit().unwrap_or(0);
         match effective_memory_limit() {
-            Some(b) => assert_eq!(limit as u64, b / 100 * DEFAULT_LIMIT_PERCENT),
+            Some(b) => assert_eq!(limit, share_of(b)),
             None => assert_eq!(limit, FALLBACK_LIMIT),
         }
     }

@@ -154,12 +154,12 @@ impl RestCatalog {
         client: Arc<RestClient>,
         ttl: Duration,
         writes: bool,
+        vended: Arc<VendedCache>,
     ) -> Self {
         let instance = {
             static NEXT: AtomicU64 = AtomicU64::new(0);
             NEXT.fetch_add(1, Ordering::Relaxed)
         };
-        let vended = VendedCache::global();
         vended.register_instance(instance);
         Self {
             name: decl.name.clone(),
@@ -316,7 +316,7 @@ impl RestCatalog {
         };
         let signing = asks_for_signing(&found);
         let vended = (self.storage == CatalogStorage::Vended)
-            .then(|| Arc::new(VendedAnswer::of_table(&found, drops)));
+            .then(|| Arc::new(VendedAnswer::of_table(&found, drops, self.vended.now())));
         let metadata = IcebergMetadata::from_json(found.metadata)
             .map_err(|_| self.fault(&what, "table metadata that does not parse"))?;
         Ok(Loaded {
@@ -336,12 +336,14 @@ impl RestCatalog {
             .join(".")
     }
 
-    /// A catalog fault for `what`: the detail in the log, never in the error.
-    fn fault(&self, what: &str, detail: &str) -> KrishivError {
+    /// A catalog fault for `what`: `detail` is Krishiv's own fixed text, in the log and in the error's reason
+    /// (never a server's text).
+    fn fault(&self, what: &str, detail: &'static str) -> KrishivError {
         tracing::warn!(target: "krishiv::catalog", catalog = self.name.as_str(), table = what, detail, "an Iceberg REST catalog returned a table Krishiv cannot read");
         krishiv_common::error::KrishivCatalogFailure {
             catalog: quoted(&self.name),
             relation_name: what.to_owned(),
+            reason: detail.to_owned(),
         }
         .into()
     }
@@ -603,7 +605,8 @@ impl ProcedureTables for RestProcedureTables {
             };
             if !catalog.writes {
                 return Err(unsupported(format!(
-                    "an Iceberg procedure on the table {} (the catalog is declared read-only:                      set option.write = true)",
+                    "an Iceberg procedure on the table {} (the catalog is declared read-only: \
+                     set option.write = true)",
                     catalog.relation(&namespace, &table)
                 )));
             }
@@ -935,6 +938,7 @@ impl RestCommitTransport for RestCommitter {
             return Err(krishiv_common::error::KrishivCatalogFailure {
                 catalog: quoted(self.client.name()),
                 relation_name: self.relation.clone(),
+                reason: "the catalog has no such table".to_owned(),
             }
             .into());
         };

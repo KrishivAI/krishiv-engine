@@ -426,6 +426,20 @@ pub(super) fn int_like(a: &ArrayRef) -> Result<Cow<'_, [i128]>> {
                 .map(|&v| i128::from(v))
                 .collect(),
         ),
+        DataType::Timestamp(TimeUnit::Nanosecond, _) => conv(
+            a.as_primitive::<arrow_array::types::TimestampNanosecondType>()
+                .values()
+                .iter()
+                .map(|&v| i128::from(v))
+                .collect(),
+        ),
+        DataType::Time64(TimeUnit::Nanosecond) => conv(
+            a.as_primitive::<Time64NanosecondType>()
+                .values()
+                .iter()
+                .map(|&v| i128::from(v))
+                .collect(),
+        ),
         DataType::Interval(IntervalUnit::YearMonth) | DataType::Duration(TimeUnit::Microsecond) => {
             conv(interval_values(a)?.iter().map(|&v| i128::from(v)).collect())
         }

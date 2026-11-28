@@ -65,9 +65,13 @@ DISTRIBUTE BY`) places a hash exchange on the expressions' values, so they are e
 on every row as Spark's shuffle evaluates them. Two things differ:
 
 - On one worker the exchange runs inside each driver's pipeline, so a `LIMIT` above it stops reading
-  after the rows it needs: `SELECT * FROM (SELECT x FROM t DISTRIBUTE BY CAST(x AS INT)) LIMIT 1`
-  returns a row where Spark's shuffle first evaluates every row and raises `CAST_INVALID_INPUT`. A
-  distributed run's map stage reads every row, so there it raises as Spark does.
+  once it has its rows, and a value in a batch that was never read is never evaluated:
+  `SELECT * FROM (SELECT x FROM t DISTRIBUTE BY CAST(x AS INT)) LIMIT 1` can return a row where
+  Spark's shuffle first evaluates every row and raises `CAST_INVALID_INPUT`. Do not count on it to
+  skip a bad value. The expressions are evaluated a batch at a time and several batches are read at
+  once, so a bad value in any batch that was read raises as in Spark: with the bad value in the last
+  row of a one-file Parquet table, a small table raises and a large one can return a row. A
+  distributed run's map stage reads every row, so there it always raises as Spark does.
 - Rows go to partitions by Krishiv's routing hash, not Spark's `pmod(murmur3(exprs), n)`, so what
   depends on the partition numbers (`spark_partition_id()`) can differ.
 
@@ -178,10 +182,20 @@ and differs from it, and so from Krishiv, in these cases (checked on PySpark 4.2
 With `spark.sql.execution.arrow.pyspark.validateSchema.enabled` set (Spark 4.1 and later), Krishiv checks each
 result batch as Spark does and raises `ARROW_TYPE_MISMATCH` with Spark's message. With it off (the default, and on
 Spark 3.5 and 4.0, which have no such setting), Spark does not check the result's types and reads the batch as if it
-had the declared ones. Krishiv refuses such a result instead, with `PYTHON_EXCEPTION` ("The Python worker returned an
-invalid result"), and refuses a null in a column declared non-nullable when a null is present. A `mapInArrow`
-result with more columns than declared is refused too (Spark reads the declared columns and ignores the rest when
-the setting is off; with it on, both raise `ARROW_TYPE_MISMATCH`). Krishiv does not know the client's Spark version
+had the declared ones. Krishiv refuses such a result instead, and the error depends on where the UDF runs:
+
+- **Server mode (the Python worker pool).** `PYTHON_EXCEPTION` ("The Python worker returned an invalid result"),
+  also for a null in a column declared non-nullable.
+- **Embedded (`krishiv.session()`).** A `mapInArrow` column of another type is `KRISHIV_INVALID_ARROW_DATA`
+  (SQLSTATE 22000), which names the returned and the declared type. `mapInPandas` converts each column to its
+  declared type as PySpark's worker does (a `long` column declared `int` is returned as `int`) and raises
+  `PYTHON_EXCEPTION` with the conversion's traceback when it cannot (a `long` column declared `string`). A null in
+  a column declared `NOT NULL` fails with `PYTHON_EXCEPTION`: see the last paragraph of
+  [Several grouped-aggregate pandas UDFs in one `agg`](#several-grouped-aggregate-pandas-udfs-in-one-agg).
+
+A `mapInArrow` result with more columns than declared is refused too by the server (Spark reads the declared columns
+and ignores the rest when the setting is off, as the embedded runtime does; with it on, all raise
+`ARROW_TYPE_MISMATCH`). Krishiv does not know the client's Spark version
 here, so the setting is honoured whatever the version: under a Spark 3.5 or 4.0 client, which has no such setting,
 setting it still turns the check on.
 
@@ -243,6 +257,8 @@ analysis time. They match PySpark 4.2.0's answers (`python/tests/pyspark_udf/udt
   takes any value's text), but where Spark shows a JVM object's own `toString` in a string column (`[B@...` for
   `bytes`, `java.util.GregorianCalendar[...]` for a `date`), Krishiv shows the value's Python `str`; and a `Row`
   inside a result row, which Spark's JVM fails to unpickle (`PickleException`), is NULL in the column.
+- A `cogroup(...).applyInPandas` / `applyInArrow` whose two sides group on keys of different Spark types (`int` against
+  `bigint`) is refused with `KRISHIV_UNSUPPORTED_FEATURE`; the keys must have one type.
 - An `@arrow_udtf` (302) result with a NULL in a column declared `NOT NULL`: Spark 4.2.0's JVM fails reading the
   batch (`IllegalStateException`, no error class); Krishiv refuses it as a result unlike the declared schema
   (`PYTHON_EXCEPTION`).
@@ -416,6 +432,22 @@ unless the server was started with one. Krishiv accepts the setting per session 
 at server start) because a client with no `SparkContext` has no other route; code that relies on Spark's
 refusal is the only code that sees a difference.
 
+## `${env:NAME}` and `${system:NAME}` in a server's SQL stay as written
+
+Spark replaces `${env:NAME}` and `${system:NAME}` in SQL text with the driver's environment variable and Java system
+property before parsing (`VariableSubstitution`, `spark.sql.variable.substitute`). In a `krishiv server` session (Spark
+Connect, Flight SQL, the console's SQL editor) Krishiv leaves both as written, as it leaves a name it does not know:
+otherwise any signed-in client could read every secret the server process holds (`SELECT '${env:AWS_SECRET_ACCESS_KEY}'`,
+or the variables that `env:` references in `krishiv.auth.*` and catalog tokens name). `${name}` of a configuration value
+is still substituted, except a setting that `SET` and Connect `Config.get` hide: a key or value that looks secret (it
+contains `secret`, `password`, `token`, `accesskey`, `access.key` or `credential`, or a credential such as
+`postgres://user:password@host`). Such a `${name}` stays as written too (Spark substitutes it), so a client cannot read
+`${fs.s3a.secret.key}` that the operator set at startup. An operator who wants Spark's behaviour back for the environment
+sets `krishiv.server.sql.substituteEnvironment=true` at server start; no `SET` or Connect `Config` call can change it. That
+key does not bring back hidden settings. Embedded sessions (`krishiv sql`, the Python and Rust
+APIs) read the environment as Spark does; there, `${system:NAME}` reads the environment variable `NAME` too, since there
+is no JVM.
+
 ## A second catalog, `system`, next to `spark_catalog`
 
 `SHOW CATALOGS` lists `spark_catalog` and `system`. `system` is Krishiv's own catalog of introspection tables
@@ -436,9 +468,9 @@ and the token in the connection string.
 
 `spark.read.schema(..).format("delta").load(path)` (and the same read through Spark Connect) is refused with
 `KRISHIV_UNSUPPORTED_FEATURE` when the table is opened, because what delta-spark 4.4.1 does with a declared schema is
-not pinned by the Delta oracle yet. A Delta table's schema always comes from its log. Until then, a call that only
-asks for the schema (`df.schema`, `printSchema`, Connect `AnalyzePlan`) returns the declared schema without opening
-the table, and the first action fails.
+not pinned by the Delta oracle yet. A Delta table's schema always comes from its log. No call on such a read
+answers with the declared schema: embedded, `load` itself raises; through Spark Connect, where `load` sends
+nothing to the server, the first call that does raises, `df.schema` and `printSchema` included.
 
 ## Tags and global views
 
@@ -515,7 +547,10 @@ shared by every session of the application.
   too; Spark 4.2 shows them. The pattern is the default only (Spark reads `spark.redaction.regex` from the startup
   configuration). Krishiv also hides what its own secret classifier finds, where Spark 4.3 shows it: keys such as
   `fs.azure.account.key.<account>`, `sasl.jaas.config` or `*.apiKey`, and values with credentials in a URL
-  (`postgres://user:password@host`). `set` of a key without a value fails with `INVALID_CONF_VALUE.REQUIREMENT`, and a request without an
+  (`postgres://user:password@host`). SQL `SET` and `SET <key>` hide the same pairs and, as Spark's do, any pair with
+  `url` in the key or the value (the default of `spark.sql.redaction.options.regex`; a changed pattern is not read, and `SET` of that key itself
+  prints `<undefined>`, where Spark hides its default value because the value contains `url`);
+  `SET -v` hides a registered key that holds a secret, where Spark's `SET -v` hides nothing. `set` of a key without a value fails with `INVALID_CONF_VALUE.REQUIREMENT`, and a request without an
   operation with `CONNECT_INVALID_PLAN.INVALID_ONE_OF_FIELD_NOT_SET`; Spark sends `INTERNAL` without an error class.
   `is_modifiable` answers `true` for a key outside the engine's registry, where Spark answers `false` for a key it does
   not know. `get_all` lists a registered key under its Spark name when it has one, else under its `krishiv.*` name.
@@ -660,7 +695,7 @@ observed node has its own, so the count can exceed `n` (P3-T084c).
   not, completes it.
 - **`Observation.get` blocks** a thread; do not call it from async code on a runtime thread.
 - **Result cache:** a plan that observes is never served from the result cache (every action runs it).
-- **`spark.sql.timestampType = TIMESTAMP_NTZ`:** a bare `TIMESTAMP` literal, `to_timestamp` and the numeric `make_timestamp` forms follow the setting; a bare `TIMESTAMP` cast target or column type still means `TIMESTAMP_LTZ`. Under the Spark 4.3 profile `TIMESTAMP(6)` is refused with `KRISHIV_UNSUPPORTED_FEATURE` while the setting is `TIMESTAMP_NTZ` (Spark types it `TIMESTAMP_NTZ`).
+- **`spark.sql.timestampType = TIMESTAMP_NTZ`:** a bare `TIMESTAMP` follows the setting everywhere Spark's type parser reads it (SQL, views as of their `CREATE`, Spark Connect type and schema strings, `from_json` / `from_csv` / `from_xml` schemas, `variant_get` types, the return type of a UDF registered on a session) except the return type of an unregistered Python `udf(...)`, which is built without a session and still means `TIMESTAMP_LTZ`.
 
 ## Delta Lake writes
 
@@ -698,6 +733,25 @@ Krishiv writes Delta tables through `delta_kernel` and its own writer (`krishiv-
   a qualified name (`t.p`) and a struct field (`s.p`, a data column for delta-spark) are refused, and
   so is a string compared with a `TIMESTAMP` partition column, which delta-spark casts in
   `spark.sql.session.timeZone` (Krishiv's filter translation does not know the zone yet).
+- **Write options** (`tests/fixtures/delta-4.4.1/OPTIONS.json`). Values are checked as
+  delta-spark checks them (`DELTA_ILLEGAL_OPTION`, `DELTA_INVALID_IDEMPOTENT_WRITES_OPTIONS`) and
+  unknown names are accepted, as delta-spark only logs them; `userMetadata` and `mergeSchema`
+  (`canMergeSchema`, the string `"true"`) reach the commit. Refused by name where delta-spark
+  commits: idempotent writes (`txnAppId` + `txnVersion`), `dataChange = false`, `replaceOn`,
+  `replaceUsing`, `targetAlias` and `useNullIntolerantEqualityWithDPO = true`
+  (`writePartitionColumns` is accepted and has no effect, as in delta-spark). A DataFrame
+  `save(path)` merges the frame's types with the table's as delta-spark's `SchemaMergingUtils`
+  does, with or without `mergeSchema` (`OPTIONS.json` `merge_schema`): narrower integrals,
+  NULL-typed columns and other nested nullability are taken, other types are
+  `DELTA_FAILED_TO_MERGE_FIELDS`, and a merge that would change the table's schema is
+  `DELTA_METADATA_MISMATCH` without `mergeSchema`; with it (type widening on a `typeWidening`
+  table, a wider integral, a new nested field) it is refused by name, since the kernel commits no
+  schema change on a write. Type widening follows delta-spark's default
+  `spark.databricks.delta.typeWidening.allowAutomaticWidening = same_family_type`; the conf is
+  not read. A non-numeric `maxRecordsPerFile` is
+  `KRISHIV_INVALID_FORMAT_OPTION_VALUE` where delta-spark raises a classless
+  `NumberFormatException`. `optimizeWrite` and `compression` are accepted and change nothing.
+  `INSERT INTO delta.`<path>`` is not taken (`TABLE_OR_VIEW_NOT_FOUND`); a catalog table is.
 
 `DELETE` and `UPDATE` of a Delta table (copy-on-write, `src/write/dml.rs`) leave the rows, the
 command's `num_affected_rows` and the files removed that delta-spark leaves
@@ -708,9 +762,10 @@ They differ in:
   parentheses (`["(id = 2)"]`); delta-spark prints Catalyst's form with expression ids
   (`["(id#1231L = 2)"]`). Without a condition both write `["true"]` (`DELETE`) and `[]`
   (`UPDATE`).
-- **Deletion vectors.** Krishiv never writes them: on a table with
-  `delta.enableDeletionVectors = true` delta-spark marks deleted and updated rows in deletion
-  vectors (its default); Krishiv rewrites the files. The rows are the same.
+- **Deletion vectors.** On a table with `delta.enableDeletionVectors = true` Krishiv marks deleted
+  and updated rows in deletion vectors as delta-spark does (merge-on-read, under the same
+  `spark.databricks.delta.{delete,update}.deletionVectors.persistent` confs, default true; see
+  the `MERGE` list below for what differs).
 - **Files per partition.** A rewrite writes one file per partition per driver; delta-spark one per
   partition per task.
 - **Whole-file deletes.** A `DELETE` removes whole files without rewriting them only when its
@@ -781,8 +836,31 @@ reads the tables back, `merge/krishiv-written/`). It differs in:
 - **Refused.** A `MERGE` under `spark.sql.caseSensitive = true`, `SET c = DEFAULT`, a nested
   assignment key (`SET s.f = ..`) and a table whose row-level rule is Spark's own
   `MERGE_CARDINALITY_VIOLATION` (no oracle yet) are refused by name.
-- **Deletion vectors.** Never written (as for `DELETE` and `UPDATE`); delta-spark's default
-  `merge.deletionVectors.persistent = true` marks rows in vectors on a table with them on.
+- **Deletion vectors.** Marked as delta-spark marks them (`merge.deletionVectors.persistent`,
+  default true).
+
+Merge-on-read `DELETE`, `UPDATE` and `MERGE` on a table with deletion vectors (the connector's
+`src/write/dv.rs`) leave the rows, the counts, the files removed whole, the files given a new
+vector with the vector's cardinality and the counted `operationMetrics` that delta-spark leaves
+(`tests/fixtures/delta-4.4.1/dvs/DVS.json`; Spark reads the tables back, `dvs/krishiv-written/`,
+and derives the same change data feed rows from a vector-only `DELETE` on a change-data-feed
+table). They differ in:
+
+- **Vector bytes.** delta-spark run-optimizes its bitmaps before writing them; the kernel's writer
+  Krishiv uses does not, so a vector holding runs of rows takes more bytes (`sizeInBytes`). The
+  rows are the same.
+- **Vector file layout.** One vector file per statement, the vectors in path order; delta-spark
+  bin-packs them per task in its aggregation's order (other offsets).
+- **When vectors apply.** A `DELETE` or `UPDATE` whose condition is partition-only by Krishiv's
+  translation (the whole-file `DELETE` rule above) removes or rewrites whole files; a
+  partition-only condition of another form marks rows, where delta-spark removes whole files.
+- **Files without statistics.** As in delta-spark, a file is removed whole only when its
+  `numRecords` proves every live row goes; a file without the statistic keeps a vector of all its
+  rows, and its new add carries statistics (`tests/fixtures/delta-4.4.1/dvs-no-stats/`). Krishiv
+  writes only `numRecords` there (the footer's row count, with `tightBounds: false`); delta-spark
+  also computes the file's `minValues`, `maxValues` and `nullCount` by reading it.
+- **Change data feed.** A vector-only `DELETE` commits; an `UPDATE` or a `MERGE` that changes rows
+  stays refused (delta-spark writes change data files for them).
 
 ## Spark 4.3's nanosecond timestamps and nanosecond clocks
 
@@ -805,12 +883,6 @@ nanosecond timestamp type yet (planned for 0.3.1), so:
 `TIME(p)` takes `p` up to 9 under the Spark 4.3 profile and keeps nanoseconds, but the query clock
 is in microseconds: `current_time(7..9)` and `LOCALTIME(7..9)` have zero digits below the
 microsecond, where Spark 4.3 reads a nanosecond clock.
-
-Also not matched yet under the Spark 4.3 profile:
-
-- The CSV and JSON file readers have no `TIME` columns: a read with one in its schema is
-  `KRISHIV_UNSUPPORTED_FEATURE` (`from_csv`, `from_json` and `from_xml` read them). Spark 4.2 reads
-  such a column with six fraction digits; Spark 4.3 keeps every digit of the file, whatever `p`.
 
 ## HLL sketches: the compact form (`hll_sketch_agg`, `hll_union_agg`, `hll_union`)
 
@@ -842,9 +914,10 @@ call of another query does not wait for a running `mapInPandas` or `applyInPanda
 The embedded `mapInArrow` takes each result batch's columns by position and relabels them with the
 declared schema; `mapInPandas` matches the result's columns to the declared schema by name, as Spark does. With `spark.sql.execution.arrow.pyspark.validateSchema.enabled` set to `true` the embedded
 `mapInArrow` path compares the UDF's own field names with the declared schema and refuses a mismatch of names or
-types with `ARROW_TYPE_MISMATCH`, as the server's worker pool does. A declared
-`NOT NULL` (and a nested `containsNull=false` or `valueContainsNull=false`) is not kept by the embedded runtime, so a
-nullable result is accepted where Spark 4.1+ refuses it.
+types with `ARROW_TYPE_MISMATCH`, as the server's worker pool does. A NULL in a result column declared `NOT NULL`
+fails the query with `PYTHON_EXCEPTION`, where Spark 4.2.0's JVM fails reading the batch with no error class. A
+nested `containsNull=false` or `valueContainsNull=false` is not kept by the embedded runtime, so a NULL element or
+map value is accepted there.
 
 ## Metric views (`CREATE VIEW .. WITH METRICS LANGUAGE YAML`)
 
@@ -858,8 +931,9 @@ these differences:
   the view is created, with a Krishiv message (Spark keeps it and fails later).
 - **Spark internal errors, reproduced by class.** Where Spark fails with an internal error, Krishiv raises the same
   class and SQLSTATE (`INTERNAL_ERROR`, `XX000`, or the `MISSING_ATTRIBUTES.*` class) with Spark's message prefix;
-  plan dumps, expression ids and Java exception text after it differ. This covers: a 4.2 `CREATE VIEW` missing
-  `WITH METRICS` or `LANGUAGE` (Spark 4.2 cannot find `MISSING_CLAUSES_FOR_OPERATION`); a read with no aggregate;
+  plan dumps, expression ids and Java exception text after it differ. This covers: a `CREATE VIEW` missing
+  `WITH METRICS` or `LANGUAGE` under Spark 4.2 (which cannot find `MISSING_CLAUSES_FOR_OPERATION`; from 4.3 the
+  class itself is raised, as in Spark); a read with no aggregate;
   `measure(<dimension>)` (`key not found: ExprId(..)`); a read through a view, a temporary view or a CTE over a
   metric view; `source: ~`; a constant dimension (`expr: 1`); a measure column read anywhere but as the argument of
   `measure(..)`.
@@ -867,8 +941,6 @@ these differences:
   `SHOW CREATE TABLE .. AS SERDE` are plain JVM exceptions in Spark, with no error class: Spark Connect clients
   see `UnknownException` or `IllegalArgumentException`. Krishiv raises `INTERNAL_ERROR` with Spark's text, and its
   Connect server withholds the text of internal errors, as for any other.
-- **4.3 missing clause.** Krishiv has no Spark 4.3 profile yet, so a missing `WITH METRICS` or `LANGUAGE` is 4.2's
-  internal error on every release from 4.2 (Spark 4.3 raises `MISSING_CLAUSES_FOR_OPERATION`).
 - **`CANNOT_UP_CAST_DATATYPE` after a source column changed type.** The class, SQLSTATE and types are Spark's;
   the `expression` parameter is Krishiv's form of the dimension, where Spark qualifies its columns
   (`spark_catalog.default.t.k`).
@@ -888,3 +960,22 @@ from 4.1 to 4.3 for `'ſ' ILIKE 'S'` over a column (false on 4.0); Krishiv follo
 Krishiv never matches such strings by bytes.
 
 Two smaller differences in `UTF8_LCASE` `LIKE`: case folding uses Rust's Unicode tables, which are newer than the JDK 17/21 tables Spark runs on, so a case pair added after Unicode 15 matches in Krishiv and not in Spark; and a malformed pattern (invalid or trailing escape) is reported with the case-folded pattern text, where Spark reports it as written. Java's matching is one-directional for a few characters (the pattern `ß` matches only `ß`, the pattern `ẞ` matches both), which a folded comparison cannot express: the value `ẞ` against the pattern `ß` matches in Krishiv and not in Spark.
+
+## `NEAREST BY` joins run as a ranked cross join
+
+Spark rewrites `JOIN ... (APPROX | EXACT) NEAREST [k] BY ...` to a `max_by`/`min_by` of `k` rows over a cross
+join. Krishiv ranks the cross join's rows per left row with `row_number()` and keeps the first `k`; `APPROX` and `EXACT`
+return the same exact rows. The results match Spark's, including NULL rankings (never a match; a left outer join pads
+a left row left with none) and the `NEAREST_BY_JOIN.*` errors. `EXPLAIN` shows a window over a join, not Spark's
+`Generate`/`Aggregate` shape, and the rewrite materialises every left-right pair before ranking, where Spark keeps a
+top-k per left row. The `CROSS_JOIN_NOT_ENABLED` check runs when the statement is parsed, where Spark's runs in the
+optimizer, so `CREATE VIEW v AS SELECT ... NEAREST BY ...` under `spark.sql.crossJoin.enabled=false` fails here and
+succeeds in Spark.
+
+## A killed write leaves finished files that a Spark reader counts
+Krishiv writes each data file under its final name and records the write in `_krishiv_log`; it never renames. A
+write killed (`kill -9`) after some files were finished leaves those files in the directory without a `_SUCCESS`
+marker. Krishiv ignores them (its log does not list them) and deletes them in the next write to the directory. A
+Spark reader that reads the directory before that next write counts them, so a count can be larger there than
+Krishiv's. A file that was still being uploaded is staged under a name starting with `.` and Spark skips it. Fix the
+state by writing the directory again, or check for `_SUCCESS` before reading a directory a writer may have died on.

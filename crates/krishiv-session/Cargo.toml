@@ -148,11 +148,27 @@ name = "delta_dml"
 required-features = ["delta"]
 
 [[test]]
+name = "delta_insert_path"
+required-features = ["delta"]
+
+[[test]]
+name = "delta_roundtrip"
+required-features = ["delta"]
+
+[[test]]
 name = "delta_create_path"
 required-features = ["delta"]
 
 [[test]]
 name = "delta_merge"
+required-features = ["delta"]
+
+[[test]]
+name = "delta_dvs"
+required-features = ["delta"]
+
+[[test]]
+name = "delta_gaps"
 required-features = ["delta"]
 
 # The S3 round trip needs the S3 builder and an emulator (`KRISHIV_TEST_S3_ENDPOINT`).

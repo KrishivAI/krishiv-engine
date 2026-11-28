@@ -10,7 +10,7 @@
 //! `KRISHIV_INSUFFICIENT_PERMISSIONS` and never revealing the policy's
 //! reason or whether the object exists.
 
-use std::path::{Component, Path};
+use std::path::{Component, Path, Prefix};
 use std::sync::Arc;
 
 use krishiv_common::error::{ErrorClass, KrishivError, KrishivUnsupportedFeature};
@@ -36,7 +36,7 @@ mod statement_context;
 
 pub use intersection::{IntersectionPolicy, SystemOnlyPolicy};
 pub use path_prefix::PathPrefixPolicy;
-pub(crate) use path_prefix::{allowed_roots, resolve_links};
+pub(crate) use path_prefix::{allowed_roots, resolve_links, same_place};
 pub use statement_context::StatementContext;
 
 use crate::dataframe::DataFrame;
@@ -786,14 +786,11 @@ impl Session {
     /// `CREATE` on the namespace does not show every table in it), otherwise `Browse` on it.
     /// Asked quietly: leaving an entry out is not a refusal (no audit record, no denial counter).
     pub(crate) async fn may_list(&self, securable: &Securable) -> bool {
-        if let Some(listed) = self.grants_listable(securable) {
-            return listed;
-        }
-        krishiv_plan::analyzer::allowed(
+        may_list_as(
             &*self.state.policy,
             &self.state.principal,
+            self.state.grants.as_deref(),
             securable,
-            Privilege::Browse,
         )
         .await
     }
@@ -854,38 +851,14 @@ impl Session {
     /// listing: `Browse` on it, or on any relation or function in it (a table grant shows where the
     /// table is).
     pub(crate) async fn may_list_namespace(&self, namespace: &str) -> bool {
-        let securable = Securable::Namespace(vec![
-            crate::catalog::CATALOG.to_owned(),
-            namespace.to_owned(),
-        ]);
-        if self.may_list(&securable).await {
-            return true;
-        }
-        let tables = crate::store::CatalogStore::tables_in(&*self.state.catalog.store, namespace);
-        for t in tables {
-            let ident = TableIdent {
-                catalog: crate::catalog::CATALOG.to_owned(),
-                namespace: vec![namespace.to_owned()],
-                name: t.name.clone(),
-            };
-            if self.may_list(&Securable::Table(ident)).await {
-                return true;
-            }
-        }
-        // Its functions count too (ADR 0048 A1 §3: "anything in it"; review r3 N4).
-        let functions = crate::store::CatalogStore::functions(&*self.state.catalog.store)
-            .in_namespace(namespace);
-        for name in functions {
-            let securable = Securable::Function(vec![
-                crate::catalog::CATALOG.to_owned(),
-                namespace.to_owned(),
-                name,
-            ]);
-            if self.may_list(&securable).await {
-                return true;
-            }
-        }
-        false
+        may_list_namespace_as(
+            &*self.state.policy,
+            &self.state.principal,
+            self.state.grants.as_deref(),
+            &self.state.catalog.store,
+            namespace,
+        )
+        .await
     }
 
     /// The error `e` of a metadata analysis (P3 PR-14d review B1), raised after the permanent
@@ -1290,13 +1263,22 @@ pub(crate) fn physical(
     let Some(local) = at.display.strip_prefix("file:") else {
         return Ok(Checked { at, shown });
     };
-    let Some(parts) = canonical_parts(Path::new(local)) else {
+    // On Windows a rooted path (`/data`) is on the working directory's drive: `at.display` keeps
+    // Hadoop's `file:/data`, which has no drive and is not absolute there, while `at.path` is the
+    // drive-qualified located path (`D:/data`), the one to resolve. `shown` stays the caller's text.
+    let native = if cfg!(windows) {
+        krishiv_exec::files::native_path(&format!("file:/{}", at.path))
+    } else {
+        krishiv_exec::files::native_path(local)
+    };
+    let Some(parts) = canonical_parts(&native) else {
         return Err(unresolved(session, class, &shown, privilege));
     };
     Ok(Checked {
         at: LocatedPath {
             store: at.store,
-            path: object_store::path::Path::from_iter(parts.iter().map(String::as_str)),
+            path: krishiv_io::local_object_path(&parts)
+                .map_err(|_| unresolved(session, class, &shown, privilege))?,
             display: format!("file:/{}", parts.join("/")),
         },
         shown,
@@ -1326,6 +1308,15 @@ pub(crate) fn canonical_dir(
 /// # Errors
 /// `KRISHIV_UNSUPPORTED_FEATURE` for a relative or non-UTF-8 path.
 pub(crate) fn lexical_dir(path: &Path) -> Result<LocatedPath, KrishivError> {
+    // On Windows `\x` (or `/x`) has a root but no drive: it is on the current drive, as Windows
+    // opens it, and checked there.
+    let on_drive;
+    let path = if cfg!(windows) && path.has_root() && !path.is_absolute() {
+        on_drive = std::path::absolute(path).map_err(|_| unplaceable("relative paths"))?;
+        on_drive.as_path()
+    } else {
+        path
+    };
     let text = path
         .to_str()
         .ok_or_else(|| unplaceable("non-UTF-8 paths"))?;
@@ -1396,7 +1387,7 @@ pub(crate) fn unresolved(
 /// it that exists, and the part that does not exist yet appended as written (see [`resolve_links`]).
 /// `None` for a relative path, one that cannot be resolved (an I/O error, a link loop, a dangling link,
 /// a `..` in its missing part) and a non-UTF-8 one. Callers fold `..` in the text first.
-fn canonical_parts(local: &Path) -> Option<Vec<String>> {
+pub(crate) fn canonical_parts(local: &Path) -> Option<Vec<String>> {
     if !local.is_absolute() {
         return None;
     }
@@ -1404,6 +1395,12 @@ fn canonical_parts(local: &Path) -> Option<Vec<String>> {
         .components()
         .filter_map(|c| match c {
             Component::Normal(p) => Some(p.to_str().map(str::to_owned)),
+            // A drive is the first segment, as `LocalPaths` writes it (`file:/C:/x`); a UNC share or
+            // device path is not resolved here (fails closed).
+            Component::Prefix(p) => Some(match p.kind() {
+                Prefix::Disk(d) | Prefix::VerbatimDisk(d) => Some(format!("{}:", char::from(d))),
+                _ => None,
+            }),
             _ => None,
         })
         .collect()
@@ -1424,7 +1421,7 @@ pub(crate) fn still_physical(session: &Session, checked: &Checked) -> Result<(),
     let Some(local) = checked.at.display.strip_prefix("file:") else {
         return Ok(());
     };
-    match canonical_parts(Path::new(local)) {
+    match canonical_parts(&krishiv_exec::files::native_path(local)) {
         Some(parts) if format!("file:/{}", parts.join("/")) == checked.at.display => Ok(()),
         _ => Err(deny()),
     }
@@ -1580,9 +1577,55 @@ impl AccessPolicy for QuietPolicy {
     }
 }
 
+/// [`Session::may_list`] for a given principal and policy (also read by `information_schema`).
+pub(crate) async fn may_list_as(
+    policy: &dyn AccessPolicy,
+    principal: &Principal,
+    grants: Option<&crate::grants::GrantsPolicy>,
+    securable: &Securable,
+) -> bool {
+    if let Some(listed) = grants.and_then(|g| g.listable(principal, securable)) {
+        return listed;
+    }
+    krishiv_plan::analyzer::allowed(policy, principal, securable, Privilege::Browse).await
+}
+
+/// [`Session::may_list_namespace`] for a given principal, policy and store.
+pub(crate) async fn may_list_namespace_as(
+    policy: &dyn AccessPolicy,
+    principal: &Principal,
+    grants: Option<&crate::grants::GrantsPolicy>,
+    store: &crate::store::InMemoryCatalogStore,
+    namespace: &str,
+) -> bool {
+    let catalog = crate::catalog::CATALOG;
+    let namespace_securable = Securable::Namespace(vec![catalog.to_owned(), namespace.to_owned()]);
+    if may_list_as(policy, principal, grants, &namespace_securable).await {
+        return true;
+    }
+    for t in crate::store::CatalogStore::tables_in(store, namespace) {
+        let ident = TableIdent {
+            catalog: catalog.to_owned(),
+            namespace: vec![namespace.to_owned()],
+            name: t.name.clone(),
+        };
+        if may_list_as(policy, principal, grants, &Securable::Table(ident)).await {
+            return true;
+        }
+    }
+    // Its functions count too (ADR 0048 A1 §3: "anything in it"; review r3 N4).
+    for name in crate::store::CatalogStore::functions(store).in_namespace(namespace) {
+        let securable = Securable::Function(vec![catalog.to_owned(), namespace.to_owned(), name]);
+        if may_list_as(policy, principal, grants, &securable).await {
+            return true;
+        }
+    }
+    false
+}
+
 /// `KRISHIV_RESERVED_NAME` for a statement that creates, replaces, drops or
-/// writes something in the `system` catalog (P2-T126): its tables belong to
-/// the engine, whoever the principal is.
+/// writes something in the `system` catalog (P2-T126) or the session catalog's `information_schema`
+/// namespace: those tables belong to the engine, whoever the principal is.
 fn reject_system_write(securable: &Securable, privilege: Privilege) -> Result<(), KrishivError> {
     if !matches!(
         privilege,
@@ -1594,8 +1637,16 @@ fn reject_system_write(securable: &Securable, privilege: Privilege) -> Result<()
         Securable::Table(t) | Securable::View(t) if crate::system::is_system(&t.catalog) => {
             (t.to_string(), "tables")
         }
+        Securable::Table(t) | Securable::View(t)
+            if t.catalog.eq_ignore_ascii_case(crate::catalog::CATALOG)
+                && matches!(t.namespace.as_slice(), [n] if crate::information_schema::is_namespace(n)) =>
+        {
+            (t.to_string(), "tables")
+        }
         Securable::Namespace(parts)
-            if parts.first().is_some_and(|c| crate::system::is_system(c)) =>
+            if parts.first().is_some_and(|c| crate::system::is_system(c))
+                || matches!(parts.as_slice(), [c, n] if c.eq_ignore_ascii_case(crate::catalog::CATALOG)
+                    && crate::information_schema::is_namespace(n)) =>
         {
             (parts.join("."), "namespaces")
         }
@@ -1624,7 +1675,12 @@ fn reject_system_namespace(statement: &Statement) -> Result<(), KrishivError> {
                 [first, second] => {
                     crate::system::is_system(&first.value)
                         || (first.value.eq_ignore_ascii_case("spark_catalog")
-                            && crate::system::is_system(&second.value))
+                            && (crate::system::is_system(&second.value)
+                                || crate::information_schema::is_namespace(&second.value)))
+                }
+                [only] => {
+                    crate::system::is_system(&only.value)
+                        || crate::information_schema::is_namespace(&only.value)
                 }
                 parts => parts
                     .first()
@@ -1721,9 +1777,11 @@ mod canonical_path_tests {
     fn canonical(path: &Path) -> Option<String> {
         let lexical = lexical_dir(path).ok()?;
         let local = lexical.display.strip_prefix("file:")?.to_owned();
-        canonical_parts(Path::new(&local)).map(|p| format!("file:/{}", p.join("/")))
+        canonical_parts(&krishiv_exec::files::native_path(&local))
+            .map(|p| format!("file:/{}", p.join("/")))
     }
 
+    #[cfg(unix)]
     #[test]
     fn folds_dot_dot_in_the_text_then_resolves_links_and_appends_the_rest() {
         let tmp = tempfile::tempdir().unwrap();
@@ -1751,6 +1809,7 @@ mod canonical_path_tests {
         }
     }
 
+    #[cfg(unix)]
     #[test]
     fn refuses_paths_it_cannot_make_canonical() {
         let tmp = tempfile::tempdir().unwrap();

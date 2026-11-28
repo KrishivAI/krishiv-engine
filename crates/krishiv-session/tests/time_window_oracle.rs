@@ -121,3 +121,201 @@ fn an_enormous_overlap_is_an_error_not_an_abort() -> R {
     assert!(r.is_err(), "expected an error for 86.4 billion windows");
     Ok(())
 }
+
+#[test]
+fn a_window_inside_an_aggregate_of_a_nested_grouped_window_is_the_inner_window() -> R {
+    // Spark 4.3.0 (UTC): `min(window)` = {00:01:00, 00:02:00}, `max(window.start)` = 00:03:00, and
+    // `window.start` outside an aggregate is MISSING_AGGREGATION, as the bare `window` is.
+    let s = utc()?;
+    let from = "FROM VALUES (timestamp'2026-01-01 00:01:30'), (timestamp'2026-01-01 00:03:30') AS t(ts) \
+                GROUP BY window(window(ts, '1 minute'), '5 minutes')";
+    let got = rows(
+        &s,
+        &format!(
+            "SELECT CAST(min(window) AS STRING), CAST(max(window.start) AS STRING), \
+                    CAST(max(window.end) AS STRING), CAST(count(*) AS STRING) {from}"
+        ),
+    )?;
+    assert_eq!(
+        got,
+        ["{2026-01-01 00:01:00, 2026-01-01 00:02:00}\t2026-01-01 00:03:00\t2026-01-01 00:04:00\t2"]
+    );
+    let err = block_on(async {
+        s.sql(&format!("SELECT window.start, count(*) {from}"))
+            .await?
+            .collect()
+            .await
+    });
+    let text = format!("{:?}", err.err().ok_or("expected MISSING_AGGREGATION")?);
+    assert!(text.contains("MissingAggregation"), "{text}");
+    // Spark 4.3.0: inside an aggregate of HAVING or ORDER BY the inner window does not resolve.
+    for tail in [
+        "HAVING max(window.start) = timestamp'2026-01-01 00:03:00'",
+        "ORDER BY max(window.start)",
+    ] {
+        let err = block_on(async {
+            s.sql(&format!("SELECT count(*) {from} {tail}"))
+                .await?
+                .collect()
+                .await
+        });
+        let text = format!("{:?}", err.err().ok_or("expected UNRESOLVED_COLUMN")?);
+        assert!(
+            text.contains("UnresolvedColumnWithSuggestion"),
+            "{tail}: {text}"
+        );
+        assert!(
+            text.contains("(\"proposal\", \"`count(1)`\")"),
+            "{tail}: {text}"
+        );
+    }
+    // The proposal lists the aggregate's output names (Spark 4.3.0), and a select list that reads the window
+    // outside an aggregate is MISSING_AGGREGATION first.
+    let having = "HAVING max(window.start) = timestamp'2026-01-01 00:03:00'";
+    for (select, tail, want) in [
+        ("count(*) AS c", having, "(\"proposal\", \"`c`\")"),
+        (
+            "max(window.start) AS m, count(*)",
+            having,
+            "(\"proposal\", \"`count(1)`, `m`\")",
+        ),
+        ("window, count(*)", having, "MissingAggregation"),
+        (
+            "window, count(*)",
+            "ORDER BY max(window.start)",
+            "MissingAggregation",
+        ),
+    ] {
+        let err = block_on(async {
+            s.sql(&format!("SELECT {select} {from} {tail}"))
+                .await?
+                .collect()
+                .await
+        });
+        let text = format!("{:?}", err.err().ok_or("expected an error")?);
+        assert!(text.contains(want), "{select} {tail}: {text}");
+    }
+    Ok(())
+}
+
+#[test]
+fn a_window_over_a_derived_window_column_follows_the_column_it_names() -> R {
+    // Spark 4.2.0 and 4.3.0 (UTC) run every shape here; the outer window is [00:00, 00:05).
+    let s = utc()?;
+    let v = "VALUES (TIMESTAMP '2026-01-01 00:01:30') AS t(ts)";
+    let want = ["{2026-01-01 00:00:00, 2026-01-01 00:05:00}"];
+    for sql in [
+        // Two output columns share a name inside; the renamed list tells them apart by position.
+        format!(
+            "SELECT CAST(window(q.a, '5 minutes') AS STRING) \
+             FROM (SELECT window(ts, '1 minute') AS x, ts AS x FROM {v}) AS q(a, b)"
+        ),
+        format!(
+            "SELECT CAST(window(q.b, '5 minutes') AS STRING) \
+             FROM (SELECT window(ts, '1 minute') AS x, ts AS x FROM {v}) AS q(a, b)"
+        ),
+        // A struct field with the window column's name is not that column.
+        format!(
+            "SELECT CAST(window(q.w, '5 minutes') AS STRING) \
+             FROM (SELECT a.payload.iw AS w \
+                   FROM (SELECT window(ts, '1 minute') AS iw, named_struct('iw', ts) AS payload \
+                         FROM {v}) a) q"
+        ),
+        // The window column next to a `*`, and through one.
+        format!(
+            "SELECT CAST(window(q.w, '5 minutes') AS STRING) \
+             FROM (SELECT *, a.iw AS w FROM (SELECT window(ts, '1 minute') AS iw FROM {v}) a) q"
+        ),
+        format!(
+            "SELECT CAST(window(q.iw, '5 minutes') AS STRING) \
+             FROM (SELECT * FROM (SELECT window(ts, '1 minute') AS iw FROM {v}) a) q"
+        ),
+        // The outer query's own `WHERE`, with and without the qualifier.
+        format!(
+            "SELECT CAST(window(q.iw, '5 minutes') AS STRING) \
+             FROM (SELECT window(ts, '1 minute') AS iw FROM {v}) q WHERE true"
+        ),
+        format!(
+            "SELECT CAST(window(iw, '5 minutes') AS STRING) \
+             FROM (SELECT window(ts, '1 minute') AS iw FROM {v}) q WHERE true"
+        ),
+        // A `WHERE`, a `LIMIT`, a repartition or a `DISTINCT` between them keeps the column.
+        format!(
+            "SELECT CAST(window(q.iw, '5 minutes') AS STRING) \
+             FROM (SELECT * FROM (SELECT window(ts, '1 minute') AS iw FROM {v}) a WHERE true) q"
+        ),
+        format!(
+            "SELECT CAST(window(q.w, '5 minutes') AS STRING) \
+             FROM (SELECT a.iw AS w FROM (SELECT window(ts, '1 minute') AS iw FROM {v}) a WHERE true) q"
+        ),
+        format!(
+            "SELECT CAST(window(q.w, '5 minutes') AS STRING) \
+             FROM (SELECT a.iw AS w FROM (SELECT window(ts, '1 minute') AS iw FROM {v}) a \
+                   WHERE true LIMIT 5) q"
+        ),
+        format!(
+            "SELECT CAST(window(q.w, '5 minutes') AS STRING) \
+             FROM (SELECT a.iw AS w FROM (SELECT window(ts, '1 minute') AS iw FROM {v}) a \
+                   DISTRIBUTE BY a.iw) q"
+        ),
+        format!(
+            "SELECT CAST(window(q.w, '5 minutes') AS STRING) \
+             FROM (SELECT DISTINCT a.iw AS w FROM (SELECT window(ts, '1 minute') AS iw FROM {v}) a) q"
+        ),
+    ] {
+        assert_eq!(rows(&s, &sql)?, want, "{sql}");
+    }
+    // A bare `*` shows the derived table's columns and no column of the rewrite.
+    for inner in ["w", "window"] {
+        let sql = format!(
+            "SELECT *, window(q.{inner}, '5 minutes') AS outer_w \
+             FROM (SELECT window(ts, '1 minute') AS {inner} FROM {v}) q"
+        );
+        let batches = block_on(async { s.sql(&sql).await?.collect().await })
+            .map_err(|e| format!("{sql}: {e}"))?;
+        let names: Vec<String> = batches[0]
+            .schema()
+            .fields()
+            .iter()
+            .map(|f| f.name().clone())
+            .collect();
+        assert_eq!(names, [inner, "outer_w"], "{sql}");
+    }
+    // An unaliased window over a column called `window` is called `window`, and a window over it follows it.
+    let over = format!(
+        "SELECT window(window, '5 minutes') FROM (SELECT window(ts, '1 minute') AS window FROM {v})"
+    );
+    for sql in [
+        over.clone(),
+        format!("SELECT window(window, '5 minutes') FROM ({over})"),
+        format!(
+            "SELECT window(window, '5 minutes'), count(*) \
+             FROM (SELECT window(ts, '1 minute') AS window FROM {v}) \
+             GROUP BY window(window, '5 minutes')"
+        ),
+    ] {
+        let batches = block_on(async { s.sql(&sql).await?.collect().await })
+            .map_err(|e| format!("{sql}: {e}"))?;
+        assert_eq!(batches[0].schema().field(0).name(), "window", "{sql}");
+    }
+    Ok(())
+}
+
+#[test]
+fn a_lambda_variable_called_window_is_not_the_inner_window() -> R {
+    // Spark 4.2.0 and 4.3.0: `window` in the lambda's body is its variable, inside an aggregate too.
+    let s = utc()?;
+    let from = "FROM VALUES (TIMESTAMP '2026-01-01 00:01:30') AS t(ts) \
+                GROUP BY window(window(ts, '1 minute'), '5 minutes')";
+    let call = "transform(array(1), window -> window + 1)";
+    for select in [
+        format!("CAST({call} AS STRING)"),
+        format!("CAST({call} AS STRING), CAST(count(*) AS STRING)"),
+        format!("CAST(max({call}) AS STRING)"),
+    ] {
+        let sql = format!("SELECT {select} {from}");
+        let got = rows(&s, &sql)?;
+        assert!(got[0].starts_with("[2]"), "{sql}: {got:?}");
+    }
+    Ok(())
+}

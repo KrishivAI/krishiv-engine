@@ -122,6 +122,7 @@ fn vended_cache_orders_answers_by_receipt_not_by_the_clock() {
     let first = answer("s3://b/first");
     let mut second = VendedAnswer::new(Vec::new(), BTreeMap::new(), "s3://b/second".to_owned());
     second.fetched = first.fetched - Duration::from_secs(60);
+    let (first_fetched, second_received) = (first.fetched, second.received);
     let second = Arc::new(second);
     cache.put_if_newer(k(), first, TTL, 10);
     cache.put_if_newer(k(), second, TTL, 10);
@@ -130,6 +131,14 @@ fn vended_cache_orders_answers_by_receipt_not_by_the_clock() {
     third.fetched -= Duration::from_secs(120);
     let published = cache.publish(k(), Arc::new(third), TTL, 10, cache.drops());
     assert_eq!(published.location(), "s3://b/third");
+    // The cache now holds the refresh, not only `publish`'s answer.
+    assert_eq!(cache.get(&k()).unwrap().location(), "s3://b/third");
+    // An answer received before the refresh no longer replaces it, whatever its fetch time.
+    let mut late = VendedAnswer::new(Vec::new(), BTreeMap::new(), "s3://b/late".to_owned());
+    late.fetched = first_fetched + Duration::from_secs(60);
+    late.received = second_received;
+    cache.put_if_newer(k(), Arc::new(late), TTL, 10);
+    assert_eq!(cache.get(&k()).unwrap().location(), "s3://b/third");
 }
 
 /// The live set holds only catalogs not yet dropped: registering and dropping many leaves nothing behind.
@@ -199,23 +208,23 @@ fn ms(t: SystemTime) -> u128 {
 fn vended_cache_drops_expired_entries() {
     let cache = test_cache();
     let id = |n: &str| key(IdentityKey::of("cat", &user(n, None)), "t");
-    let soon = || ms(SystemTime::now() + Duration::from_millis(300));
-    let future = ms(SystemTime::now() + Duration::from_secs(3600));
+    let soon = || ms(cache.now() + Duration::from_millis(300));
+    let future = ms(cache.now() + Duration::from_secs(3600));
     // Live when kept, expired by the time of the lookup: dropped on get.
     cache.put(id("expiring"), s3_answer(Some(soon())), TTL, 10);
     assert_eq!(cache.len(), 1, "kept while live");
-    std::thread::sleep(Duration::from_millis(600));
+    cache.clock().advance(Duration::from_millis(600));
     assert!(cache.get(&id("expiring")).is_none());
     assert_eq!(cache.len(), 0, "dropped on get");
     // Live when kept, expired by the time of a later put of another key: dropped there, without a get.
     cache.put(id("old"), s3_answer(Some(soon())), TTL, 10);
     assert_eq!(cache.len(), 1, "kept while live");
-    std::thread::sleep(Duration::from_millis(600));
+    cache.clock().advance(Duration::from_millis(600));
     cache.put(id("live"), s3_answer(Some(future)), TTL, 10);
     assert_eq!(cache.len(), 1);
     assert!(cache.get(&id("live")).is_some());
     // An answer already expired when offered is not kept at all.
-    let past = ms(SystemTime::now() - Duration::from_secs(1));
+    let past = ms(cache.now() - Duration::from_secs(1));
     cache.put(id("expired"), s3_answer(Some(past)), TTL, 10);
     assert!(cache.get(&id("expired")).is_none());
     // No expiry key: the default TTL counts from the fetch.
@@ -457,19 +466,43 @@ fn token_fixture(
     super::VendedTable,
     VendedAnswer,
 ) {
+    token_fixture_refreshing(max_entries, &["s3://bucket/wh"])
+}
+
+/// [`token_fixture`] whose `loadCredentials` answers one credential per prefix of `refreshed` (key ids
+/// `AKIANEWKEY0`, `AKIANEWKEY1`, ...; a single prefix gets `AKIANEWKEY`).
+fn token_fixture_refreshing(
+    max_entries: usize,
+    refreshed: &[&str],
+) -> (
+    crate::http_test_server::Server,
+    Arc<VendedCache>,
+    super::VendedTable,
+    VendedAnswer,
+) {
     use crate::declared::tests::{decl, deps, path};
     use crate::iceberg_rest::test_server::{Reply, serve};
     use krishiv_session::catalog_decl::DeclMode;
     use krishiv_store::egress::PrivateAddresses;
 
     let long = ms(SystemTime::now() + Duration::from_secs(3600));
-    let credential = |key_id: &str| {
+    // A refreshed credential expires at `REFRESHED_EXPIRY_MS`, never at the first answer's expiry, so a test can
+    // tell which one it was served (a `ScopedCredential` shows no key id outside krishiv-store).
+    let credential = |prefix: &str, key_id: &str| {
         format!(
-            r#"{{"prefix": "s3://bucket/wh", "config": {{"s3.access-key-id": "{key_id}", "s3.secret-access-key": "s",
-                "s3.session-token-expires-at-ms": "{long}"}}}}"#
+            r#"{{"prefix": "{prefix}", "config": {{"s3.access-key-id": "{key_id}", "s3.secret-access-key": "s",
+                "s3.session-token-expires-at-ms": "{REFRESHED_EXPIRY_MS}"}}}}"#
         )
     };
-    let refreshed = credential("AKIANEWKEY");
+    let refreshed = match refreshed {
+        [one] => credential(one, "AKIANEWKEY"),
+        many => many
+            .iter()
+            .enumerate()
+            .map(|(i, p)| credential(p, &format!("AKIANEWKEY{i}")))
+            .collect::<Vec<_>>()
+            .join(", "),
+    };
     let config = r#"{"defaults": {}, "overrides": {}, "endpoints": ["GET /v1/{prefix}/namespaces/{namespace}/tables/{table}",
         "GET /v1/{prefix}/namespaces/{namespace}/tables/{table}/credentials"]}"#;
     let server = serve(move |r| match path(r) {
@@ -542,6 +575,9 @@ fn token_fixture(
     loaded.table_token = Some(SecretString::new("table-token"));
     (server, cache, table, loaded)
 }
+
+/// The expiry of every credential the refreshing fixture's `/credentials` endpoint answers (2100-01-01).
+const REFRESHED_EXPIRY_MS: u64 = 4_102_444_800_000;
 
 /// The `/credentials` requests the catalog saw, by bearer.
 fn credential_bearers(server: &crate::http_test_server::Server) -> Vec<Option<String>> {
@@ -645,4 +681,42 @@ fn an_expired_loaded_answer_refreshes_with_its_table_token() {
         credential_bearers(&server),
         vec![Some("Bearer table-token".to_owned())]
     );
+}
+
+/// #930 thread (CodeRabbit): a refresh whose answer narrows the prefix below the scope's root (`s3://bucket/wh` to
+/// `s3://bucket/wh/db/t`) still serves the scope, instead of refusing the long-running read.
+#[test]
+fn a_refresh_that_narrows_the_prefix_still_serves_the_scope() {
+    let (server, _cache, table, loaded) = token_fixture_refreshing(10, &["s3://bucket/wh/db/t"]);
+    table.offer(Arc::new(loaded));
+    let source = table.source("s3://bucket/wh", None).unwrap();
+    futures::executor::block_on(source.current()).unwrap();
+    assert!(
+        credential_bearers(&server).is_empty(),
+        "served from the cache"
+    );
+    // The store asks again (it refused the credential): the refreshed answer names only the narrower prefix.
+    let refreshed = futures::executor::block_on(source.current());
+    assert!(refreshed.is_ok(), "{:?}", refreshed.err());
+    assert_eq!(credential_bearers(&server).len(), 1);
+    // The refreshed credential (`AKIANEWKEY`), not the first answer's `AKIAOLDKEY` again.
+    assert_eq!(
+        refreshed.unwrap().expires_at(),
+        Some(UNIX_EPOCH + Duration::from_millis(REFRESHED_EXPIRY_MS))
+    );
+}
+
+/// Two narrower prefixes with different credentials: no one credential serves the scope, so the read is refused as
+/// before (`KRISHIV_CATALOG_LOCATION_REFUSED`), never served one of them at random.
+#[test]
+fn a_refresh_narrowed_to_two_different_credentials_is_refused() {
+    let (_server, _cache, table, loaded) = token_fixture_refreshing(
+        10,
+        &["s3://bucket/wh/db/t/data", "s3://bucket/wh/db/t/metadata"],
+    );
+    table.offer(Arc::new(loaded));
+    let source = table.source("s3://bucket/wh", None).unwrap();
+    futures::executor::block_on(source.current()).unwrap();
+    let e = futures::executor::block_on(source.current()).unwrap_err();
+    assert_eq!(e.error_class(), ErrorClass::KrishivCatalogLocationRefused);
 }

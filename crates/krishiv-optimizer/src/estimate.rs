@@ -23,6 +23,7 @@
 //!   cannot disturb ([`carries`]), anything else is a guess.
 //! - **Union**: rows add; distinct counts are the most of any input.
 
+use crate::expr::AttrMap;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -32,9 +33,11 @@ use krishiv_plan::{
 };
 use krishiv_types::{DataType, DecimalType};
 
-use crate::expr::{builtin, conjuncts, output_of, references, strip_alias};
+use crate::expr::{and_all, builtin, conjuncts, output_of, references, strip_alias};
 use crate::limit::limit_value;
 use crate::narrow::{View, apply};
+use crate::share_literal::{LITERAL_PREFIX, instance_of, reader_keys};
+use crate::share_scan::SHARED_SCAN_PREFIX;
 use crate::stats::{
     AttrStats, DEFAULT_ROWS, RelStats, StatSource, Statistics, cap, cse_definitions, number,
     reads_cse, resolve_cse, to_f64,
@@ -323,6 +326,32 @@ fn composite_factor(pairs: &[(AttrId, AttrId)], l: &RelStats, r: &RelStats) -> f
     }
 }
 
+/// A memoised estimate: the relation (kept alive, so its address stays
+/// unique), its estimate, and whether the estimate reads the `WITH`
+/// definitions in scope.
+type Entry = (Arc<LogicalPlan>, Arc<RelStats>, bool);
+
+/// The estimates an [`Estimator`] made that hold whatever plan the relation
+/// sits in, for the next estimator over the same statistics
+/// ([`Estimator::resume`]). An estimate is a function of its relation's
+/// subtree, the statistics and the propagation setting, except one that
+/// reads a `CteRef` (or binds definitions, a `WithCte`): that reads the
+/// definitions in scope, which a rewrite between two estimators can change
+/// under the same attributes. Those are dropped, so a resumed estimator
+/// gives every relation the estimate a fresh one would.
+#[derive(Default)]
+pub(crate) struct Memo {
+    done: HashMap<usize, Entry>,
+    stats: usize,
+    propagate: bool,
+}
+
+/// The address of a statistics source, which a [`Memo`] keeps to tell its
+/// own source from another.
+fn stats_addr(stats: &dyn Statistics) -> usize {
+    std::ptr::from_ref(stats).cast::<()>().addr()
+}
+
 /// Estimates relations, memoised per relation.
 pub(crate) struct Estimator<'a> {
     stats: &'a dyn Statistics,
@@ -330,7 +359,10 @@ pub(crate) struct Estimator<'a> {
     /// column statistics (ranges, null fractions, distinct counts) through,
     /// or only scale row counts.
     propagate: bool,
-    done: HashMap<usize, (Arc<LogicalPlan>, Arc<RelStats>)>,
+    /// Per relation address: the relation (kept alive, so its address stays
+    /// unique), its estimate, and whether the estimate depends on the `WITH`
+    /// definitions in scope (see [`Memo`]).
+    done: HashMap<usize, Entry>,
     /// How many relations were estimated (not looked up).
     computed: usize,
     /// The `WITH` definitions in scope, by their output attributes.
@@ -355,6 +387,28 @@ impl<'a> Estimator<'a> {
         }
     }
 
+    /// An estimator over `stats` that starts from `memo`'s estimates, when
+    /// `memo` was made over the same statistics and propagation setting.
+    pub(crate) fn resume(stats: &'a dyn Statistics, propagate: bool, memo: Memo) -> Self {
+        let mut est = Self::with_propagation(stats, propagate);
+        if memo.stats == stats_addr(stats) && memo.propagate == propagate {
+            est.done = memo.done;
+        }
+        est
+    }
+
+    /// The estimates that hold outside this estimator's `WITH` scope (see
+    /// [`Memo`]).
+    pub(crate) fn into_memo(self) -> Memo {
+        let mut done = self.done;
+        done.retain(|_, (_, _, reads_ctes)| !*reads_ctes);
+        Memo {
+            done,
+            stats: stats_addr(self.stats),
+            propagate: self.propagate,
+        }
+    }
+
     /// The number of relations estimated so far: each once, however often
     /// it is asked for.
     pub(crate) fn computed(&self) -> usize {
@@ -363,23 +417,89 @@ impl<'a> Estimator<'a> {
 
     /// The estimate of `p`.
     pub(crate) fn plan(&mut self, p: &Arc<LogicalPlan>) -> Arc<RelStats> {
-        if let Some((_, e)) = self.done.get(&Arc::as_ptr(p).addr()) {
+        if let Some((_, e, _)) = self.done.get(&Arc::as_ptr(p).addr()) {
             return Arc::clone(e);
         }
         let mut est = self.compute(p);
+        let mut reads_ctes = matches!(p.node, PlanNode::CteRef(_) | PlanNode::WithCte { .. });
         est.from_statistics = match &p.node {
             PlanNode::Scan(_) | PlanNode::CteRef(_) => est.from_statistics,
             _ => {
                 let mut all = true;
-                p.for_each_child(&mut |c| all &= self.plan(c).from_statistics);
+                p.for_each_child(&mut |c| {
+                    all &= self.plan(c).from_statistics;
+                    reads_ctes |= self.reads_ctes(c);
+                });
                 all
             }
         };
         self.computed += 1;
         let est = Arc::new(est);
-        self.done
-            .insert(Arc::as_ptr(p).addr(), (Arc::clone(p), Arc::clone(&est)));
+        self.done.insert(
+            Arc::as_ptr(p).addr(),
+            (Arc::clone(p), Arc::clone(&est), reads_ctes),
+        );
         est
+    }
+
+    /// Whether the memoised estimate of `p` reads the `WITH` definitions in
+    /// scope (true when `p` has none: it is not known not to).
+    fn reads_ctes(&self, p: &Arc<LogicalPlan>) -> bool {
+        self.done
+            .get(&Arc::as_ptr(p).addr())
+            .is_none_or(|(_, _, r)| *r)
+    }
+
+    /// A reader of a `ShareLiteralInstances` definition, `Filter(g = k)` over a `CteRef` of a
+    /// `__shared_lit_*` definition, estimated as the instance it replaced (the definition with
+    /// its `g' IN (..)` narrowed back to `g' = k`, [`instance_of`]), then the reader's other
+    /// conjuncts. Read as the definition, the reader holds every literal's groups before its
+    /// filter, so a second join ordering would pair the instances differently from the first
+    /// (TPC-DS q74). `None` for any other filter.
+    fn literal_reader(
+        &mut self,
+        input: &Arc<LogicalPlan>,
+        predicate: &Arc<Expr>,
+    ) -> Option<RelStats> {
+        let PlanNode::CteRef(r) = &input.node else {
+            return None;
+        };
+        if !r.name.starts_with(LITERAL_PREFIX) || self.open.contains(&r.source) {
+            return None;
+        }
+        let outputs: Vec<AttrId> = r.output.iter().map(|o| o.id).collect();
+        let def = self.ctes.get(&r.source).cloned()?;
+        // The first conjunct that narrows the definition back is the reader's own key (another
+        // literal comparison of the reader's may come first).
+        let (own, instance) =
+            reader_keys(predicate, &outputs)
+                .into_iter()
+                .find_map(|(c, g, k)| {
+                    let source = *r.source.get(outputs.iter().position(|&o| o == g)?)?;
+                    instance_of(&def, source, &k).map(|i| (c, i))
+                })?;
+        self.open.insert(r.source.clone());
+        let est = self.plan(&instance);
+        self.open.remove(&r.source);
+        let read = RelStats {
+            rows: est.rows,
+            cols: r
+                .source
+                .iter()
+                .zip(&r.output)
+                .filter_map(|(s, o)| est.cols.get(s).map(|c| (o.id, c.clone())))
+                .collect(),
+            from_statistics: est.from_statistics,
+            unfiltered_rows: est.unfiltered_rows,
+        };
+        let rest: Vec<Arc<Expr>> = conjuncts(predicate)
+            .into_iter()
+            .filter(|c| !Arc::ptr_eq(c, &own))
+            .collect();
+        Some(match and_all(rest) {
+            Some(p) => filtered(&read, &p, self.propagate),
+            None => read,
+        })
     }
 
     fn compute(&mut self, p: &LogicalPlan) -> RelStats {
@@ -392,6 +512,9 @@ impl<'a> Estimator<'a> {
         match &p.node {
             PlanNode::Scan(scan) => self.scan(scan),
             PlanNode::Filter { input, predicate } => {
+                if let Some(est) = self.literal_reader(input, predicate) {
+                    return est;
+                }
                 let est = self.plan(input);
                 // Estimates see through common-subexpression projections:
                 // the column holds its definition's values.
@@ -547,6 +670,21 @@ impl<'a> Estimator<'a> {
                 if !self.open.insert(r.source.clone()) {
                     return RelStats::unknown(DEFAULT_ROWS, ids());
                 }
+                // Every reader of a `ShareFilteredScan` definition is a
+                // filter whose predicate implies the definition's: it keeps
+                // what it kept over the scan, so the reference reads as the
+                // scan. Reading it as the definition would count the
+                // disjunction's selectivity twice, and a second optimization
+                // would order the joins above differently. The reference's
+                // own estimate (`EXPLAIN COST`) is then the scan's, above
+                // the rows it buffers. A definition of another shape (none
+                // is built today: the rule's filter, under CSE's
+                // projections) is read as it is.
+                let def = if r.name.starts_with(SHARED_SCAN_PREFIX) {
+                    shared_scan_leaf(&def, &r.source).unwrap_or(def)
+                } else {
+                    def
+                };
                 let est = self.plan(&def);
                 self.open.remove(&r.source);
                 RelStats {
@@ -727,7 +865,7 @@ impl<'a> Estimator<'a> {
         };
         let (left_only, right_only) = ((l.rows - inner).max(0.0), (r.rows - inner).max(0.0));
         let (ml, mr) = (matched(l, r, true), matched(r, l, false));
-        let cols: HashMap<AttrId, AttrStats> = match kind {
+        let cols: AttrMap<AttrStats> = match kind {
             JoinKind::LeftOuter | JoinKind::Single => side(l, ml, false, 0.0)
                 .into_iter()
                 .chain(side(r, mr, true, left_only))
@@ -866,7 +1004,7 @@ fn expand(est: RelStats, projections: &[Vec<Arc<Expr>>], output: &[BoundColumn])
         return est.with_rows(rows);
     }
     let per = est.rows;
-    let mut cols = HashMap::with_capacity(output.len());
+    let mut cols = AttrMap::with_capacity_and_hasher(output.len(), Default::default());
     for (j, out) in output.iter().enumerate() {
         let mut null_rows = 0.0;
         let mut col_id: Option<AttrId> = None;
@@ -1053,7 +1191,7 @@ pub(crate) fn same_renames(predicate: &Arc<Expr>, input: &LogicalPlan) -> Arc<Ex
 /// The outputs of the projection under `input` (through filters) that
 /// rename an input column another output already names, by attribute: that
 /// first output (the canonical name of the column).
-fn renames_to_canonical(input: &LogicalPlan) -> HashMap<AttrId, BoundColumn> {
+fn renames_to_canonical(input: &LogicalPlan) -> AttrMap<BoundColumn> {
     // Filters and subquery aliases keep their input's columns (attributes):
     // the projection may sit below them. A `Shift` renumbers them by its
     // offset: the renames below it hold at the shifted ids (the instance of a
@@ -1077,10 +1215,10 @@ fn renames_to_canonical(input: &LogicalPlan) -> HashMap<AttrId, BoundColumn> {
         }
     }
     let PlanNode::Project { exprs, .. } = &input.node else {
-        return HashMap::new();
+        return AttrMap::default();
     };
-    let mut first: HashMap<AttrId, BoundColumn> = HashMap::new();
-    let mut to: HashMap<AttrId, BoundColumn> = HashMap::new();
+    let mut first: AttrMap<BoundColumn> = AttrMap::default();
+    let mut to: AttrMap<BoundColumn> = AttrMap::default();
     let moved = |c: &BoundColumn| {
         let mut c = c.clone();
         c.id = AttrId(c.id.0.saturating_add(shift));
@@ -1117,7 +1255,7 @@ fn range_stats(start: i64, end: i64, step: i64, id: AttrId) -> RelStats {
         (span + step - step.signum()) / step
     };
     let rows = n as f64;
-    let mut cols = HashMap::new();
+    let mut cols: AttrMap<AttrStats> = Default::default();
     if n > 0 {
         let last = start + (n - 1) * step;
         let (lo, hi) = if step > 0 {
@@ -1144,5 +1282,106 @@ fn range_stats(start: i64, end: i64, step: i64, id: AttrId) -> RelStats {
         cols,
         from_statistics: true,
         unfiltered_rows: 0.0,
+    }
+}
+
+/// The scan under a `ShareFilteredScan` definition (its disjunction, and the
+/// projections common-subexpression elimination put around it), when the
+/// scan outputs the definition's attributes `source`.
+fn shared_scan_leaf(def: &Arc<LogicalPlan>, source: &[AttrId]) -> Option<Arc<LogicalPlan>> {
+    let mut p = def;
+    loop {
+        match &p.node {
+            PlanNode::Filter { input, .. } | PlanNode::Project { input, .. } => p = input,
+            PlanNode::Scan(s) => {
+                let same = s.output.len() == source.len()
+                    && s.output.iter().zip(source).all(|(c, id)| c.id == *id);
+                return same.then(|| Arc::clone(p));
+            }
+            _ => return None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use krishiv_plan::analyzer::testing::{block_on, context};
+    use krishiv_plan::analyzer::{
+        Analyzer as _, DefaultAnalyzer, MemoryCatalog, ResolutionConf, TableColumn,
+    };
+    use krishiv_plan::{LogicalPlan, PlanNode, SourceId};
+    use krishiv_types::DataType;
+
+    use super::{Estimator, Memo};
+    use crate::stats::NoStatistics;
+
+    fn plan(sql: &str) -> Arc<LogicalPlan> {
+        let column = |name: &str| TableColumn {
+            name: name.to_owned(),
+            data_type: DataType::Integer,
+            nullable: true,
+            char_varchar: None,
+        };
+        let catalog = MemoryCatalog::new("spark_catalog")
+            .with_table(&["default"], "t", vec![column("a")], None)
+            .with_table(&["default"], "u", vec![column("b")], None);
+        let ctx = context(catalog, ResolutionConf::default());
+        let lowered =
+            krishiv_sql::parse_and_lower(sql, &krishiv_sql::ParserOptions::default(), SourceId(0))
+                .expect("parses");
+        let resolved = block_on(DefaultAnalyzer.analyze(&lowered, &ctx)).expect("resolves");
+        Arc::clone(resolved.plan.root())
+    }
+
+    /// Every relation of `root`, each with whether it is or holds a `CteRef` or `WithCte`.
+    fn relations(root: &Arc<LogicalPlan>, out: &mut Vec<(Arc<LogicalPlan>, bool)>) -> bool {
+        let mut reads = matches!(root.node, PlanNode::CteRef(_) | PlanNode::WithCte { .. });
+        root.for_each_child(&mut |c| reads |= relations(c, out));
+        out.push((Arc::clone(root), reads));
+        reads
+    }
+
+    #[test]
+    fn a_memo_keeps_only_the_estimates_that_read_no_definitions() {
+        let root = plan("WITH c AS (SELECT a FROM t) SELECT * FROM c, u");
+        let mut est = Estimator::new(&NoStatistics);
+        est.plan(&root);
+        let memo = est.into_memo();
+        let mut all = Vec::new();
+        relations(&root, &mut all);
+        assert!(all.iter().any(|(_, r)| *r) && all.iter().any(|(_, r)| !*r));
+        for (p, reads) in &all {
+            let kept = memo.done.contains_key(&Arc::as_ptr(p).addr());
+            assert_eq!(kept, !reads, "{p}");
+        }
+    }
+
+    #[test]
+    fn a_resumed_estimator_estimates_as_a_fresh_one() {
+        let root = plan("WITH c AS (SELECT a FROM t) SELECT * FROM c, u, (SELECT b FROM u) v");
+        let stats = NoStatistics;
+        let mut first = Estimator::new(&stats);
+        first.plan(&root);
+        let mut fresh = Estimator::new(&stats);
+        let mut resumed = Estimator::resume(&stats, true, first.into_memo());
+        let mut all = Vec::new();
+        relations(&root, &mut all);
+        for (p, _) in all.iter().rev() {
+            assert_eq!(
+                format!("{:?}", fresh.plan(p)),
+                format!("{:?}", resumed.plan(p)),
+                "{p}"
+            );
+        }
+        assert!(resumed.computed() < fresh.computed());
+        // Another propagation setting starts afresh.
+        let mut first = Estimator::new(&stats);
+        first.plan(&root);
+        let mut other = Estimator::resume(&stats, false, first.into_memo());
+        other.plan(&root);
+        assert_eq!(other.computed(), fresh.computed());
+        assert!(Memo::default().done.is_empty());
     }
 }

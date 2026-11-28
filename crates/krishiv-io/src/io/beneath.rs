@@ -85,8 +85,8 @@ pub enum AnchorError {
     /// A component of the path is a link or not a directory: it changed
     /// since the path was checked.
     Swapped(String),
-    /// A directory of the path has a name object paths cannot carry
-    /// unchanged (non-ASCII text or reserved characters).
+    /// A directory of the path has a name no object path segment holds (a
+    /// control character).
     UnsupportedName(String),
     /// Any other failure (permissions, I/O).
     Io(std::io::Error),
@@ -231,12 +231,12 @@ impl BeneathStore {
             }
         }
         names.truncate(depth);
-        // Object paths percent-encode some names (`LocalFileSystem` names
-        // files by the encoded text), so a directory above the target whose
-        // name changes under encoding cannot be addressed by them.
+        // An object path names each file by its own name (`Path::parse`), so
+        // only a name no path segment holds (a control character) cannot be
+        // addressed.
         if let Some(name) = names
             .iter()
-            .find(|n| Path::from_iter([n.as_str()]).as_ref() != n.as_str())
+            .find(|n| object_store::path::PathPart::parse(n).is_err())
         {
             return Err(AnchorError::UnsupportedName(name.clone()));
         }
@@ -247,6 +247,14 @@ impl BeneathStore {
                 walk,
             }),
         })
+    }
+
+    /// The anchor's own object path: its names as they are, which `anchor`
+    /// checked each path segment holds. A name that does not parse fails
+    /// closed (`InvalidPath`), never as the store's root.
+    fn base_path(&self) -> StoreResult<Path> {
+        Path::parse(self.inner.base.join("/"))
+            .map_err(|e| object_store::Error::InvalidPath { source: e })
     }
 
     /// The object-path segments of `location` below the anchor.
@@ -372,12 +380,15 @@ where
     }
 }
 
-/// Creates the staging file `<name>#<n>` next to the final name, exclusively
-/// and without following a link at that name.
+/// Creates the staging file `.<name>#<n>` next to the final name, exclusively
+/// and without following a link at that name. The leading dot hides an
+/// unfinished upload from Hadoop-style readers (Spark skips names starting
+/// with `.` or `_`), so a writer killed mid-upload leaves nothing they read
+/// (R1-V-2).
 fn create_staging(parent: &OwnedFd, name: &str) -> Result<(File, String), Errno> {
     let mut n: u32 = 1;
     loop {
-        let staging = format!("{name}#{n}");
+        let staging = format!(".{name}#{n}");
         match openat(
             parent,
             staging.as_str(),
@@ -414,7 +425,7 @@ fn meta_of(location: Path, st: &Stat) -> ObjectMeta {
     }
 }
 
-/// A staging file name (`<name>#<digits>`) of an upload in flight.
+/// A staging file name (`.<name>#<digits>`, or `<name>#<digits>` as older versions wrote it) of an upload in flight.
 pub(super) fn is_staging(name: &str) -> bool {
     // As `LocalFileSystem` reads a name: the text after the first `#`.
     name.split_once('#')
@@ -814,9 +825,10 @@ impl ObjectStore for BeneathStore {
 
     fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, StoreResult<ObjectMeta>> {
         let store = self.clone();
-        let prefix = prefix
-            .cloned()
-            .unwrap_or_else(|| Path::from_iter(store.inner.base.iter().map(String::as_str)));
+        let prefix = match prefix.cloned().map_or_else(|| store.base_path(), Ok) {
+            Ok(prefix) => prefix,
+            Err(e) => return futures::stream::once(std::future::ready(Err(e))).boxed(),
+        };
         futures::stream::once(async move { blocking(move || store.list_all(&prefix)).await })
             .flat_map(|r| match r {
                 Ok(v) => futures::stream::iter(v.into_iter().map(Ok)).boxed(),
@@ -827,9 +839,7 @@ impl ObjectStore for BeneathStore {
 
     async fn list_with_delimiter(&self, prefix: Option<&Path>) -> StoreResult<ListResult> {
         let store = self.clone();
-        let prefix = prefix
-            .cloned()
-            .unwrap_or_else(|| Path::from_iter(store.inner.base.iter().map(String::as_str)));
+        let prefix = prefix.cloned().map_or_else(|| store.base_path(), Ok)?;
         blocking(move || store.list_one_level(&prefix)).await
     }
 

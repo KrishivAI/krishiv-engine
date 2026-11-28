@@ -48,6 +48,10 @@
 //! **ArtifactStatus** (`ArtifactStatusesH:43-70`): `exists` is true only for
 //! a `cache/<hash>` the session holds; every other name is false.
 
+#[cfg(unix)]
+mod dir;
+#[cfg(windows)]
+#[path = "artifacts/dir_windows.rs"]
 mod dir;
 
 use std::collections::HashMap;

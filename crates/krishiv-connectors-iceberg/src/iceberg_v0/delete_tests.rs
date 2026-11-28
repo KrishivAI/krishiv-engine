@@ -196,7 +196,7 @@ pub(super) fn build_in(env: Env, files: &[File], partitioned: bool) -> Table {
                 let blob = encode_dv(&bitmap).unwrap();
                 let mut bytes = b"PFA1".to_vec();
                 bytes.extend_from_slice(&blob);
-                std::fs::write(path.strip_prefix("file://").unwrap(), &bytes).unwrap();
+                std::fs::write(super::sink_tests::local_path(&path), &bytes).unwrap();
                 let mut d = builder(
                     DataContentType::PositionDeletes,
                     DataFileFormat::Puffin,
@@ -271,7 +271,7 @@ pub(super) fn build_in(env: Env, files: &[File], partitioned: bool) -> Table {
                 size,
                 bytes,
             } => {
-                std::fs::write(path.strip_prefix("file://").unwrap(), bytes).unwrap();
+                std::fs::write(super::sink_tests::local_path(&path), bytes).unwrap();
                 let mut d = builder(
                     DataContentType::PositionDeletes,
                     DataFileFormat::Puffin,
@@ -782,7 +782,7 @@ fn a_missing_equality_delete_file_fails() {
         ],
         false,
     );
-    std::fs::remove_file(t.env.at("e.parquet").strip_prefix("file://").unwrap()).unwrap();
+    std::fs::remove_file(super::sink_tests::local_path(&t.env.at("e.parquet"))).unwrap();
     let e = t.query_err();
     assert!(e.message().contains("e.parquet"), "{e}");
 }
@@ -1063,8 +1063,8 @@ fn a_second_plan_reads_manifests_from_the_cache() {
         .unwrap()
         .manifest_list
         .unwrap();
-    let list = list.strip_prefix("file://").unwrap_or(&list);
-    capped.max_metadata_bytes = std::fs::metadata(list).unwrap().len();
+    let list = krishiv_exec::files::native_path(&list);
+    capped.max_metadata_bytes = std::fs::metadata(&list).unwrap().len();
     let e = t.env.provider(&capped, &VersionSpec::Current).unwrap_err();
     assert_eq!(
         e.error_class(),

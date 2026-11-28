@@ -62,6 +62,10 @@ pub enum Purpose {
     /// formatter for it, so a pattern the new one rejects is always `INVALID_DATETIME_PATTERN`
     /// (`validatePatternString(checkLegacy = !forTimestampNTZ)`).
     ParseNtz,
+    /// `date_format` of a `TIME` (Spark 4.3's `TimeFormatter`): compiled as [`Self::Format`], but
+    /// with no legacy check, so every pattern it rejects is `INVALID_DATETIME_PATTERN.WITH_SUGGESTION`
+    /// (Spark 4.3.0 run: `HH YYYY`, `HH c`, `HH A`, `HHH` all give that class over a `TIME`).
+    FormatTime,
 }
 
 /// A zone a timestamp is shown in: its id (for `VV` and `z`) and its rules.
@@ -178,6 +182,9 @@ enum Item {
     Optional(Vec<Item>),
 }
 
+/// Spark's default `TIME` pattern (`TimeFormatter.defaultPattern`).
+pub const DEFAULT_TIME_PATTERN: &str = "HH:mm:ss";
+
 /// A compiled Spark datetime pattern (see the module docs).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DateTimePattern {
@@ -265,6 +272,15 @@ impl DateTimePattern {
         &self.pattern
     }
 
+    /// Whether this is Spark's default `TIME` pattern `HH:mm:ss`
+    /// (`TimeFormatter.defaultPattern`). Spark 4.3.0's CSV and JSON writers
+    /// print a `TIME` with that `timeFormat` through the fraction formatter
+    /// (`12:34:56.123456`, not `12:34:56`), as with no `timeFormat`.
+    #[must_use]
+    pub fn is_default_time_pattern(&self) -> bool {
+        self.pattern == DEFAULT_TIME_PATTERN
+    }
+
     /// Whether the pattern prints or reads a zone or offset.
     #[must_use]
     pub fn has_zone(&self) -> bool {
@@ -318,6 +334,21 @@ impl DateTimePattern {
     /// instant within an offset of the `i64` range) or the pattern prints
     /// the name of a zone that needs the time-zone database.
     pub fn format_timestamp(&self, micros: i64, zone: Zone<'_>) -> Result<String, KrishivError> {
+        self.format_timestamp_nanos(micros, 0, zone)
+    }
+
+    /// [`Self::format_timestamp`] of `micros` plus `nanos` (0..=999) nanoseconds within the microsecond:
+    /// the fraction fields print up to nine digits. The legacy `SimpleDateFormat` pattern reads the
+    /// microseconds only.
+    ///
+    /// # Errors
+    /// As [`Self::format_timestamp`].
+    pub fn format_timestamp_nanos(
+        &self,
+        micros: i64,
+        nanos: u16,
+        zone: Zone<'_>,
+    ) -> Result<String, KrishivError> {
         if let Some(l) = &self.legacy {
             return l.format_timestamp(micros, zone);
         }
@@ -325,7 +356,7 @@ impl DateTimePattern {
         let local = micros
             .checked_add(i64::from(offset) * 1_000_000)
             .ok_or_else(|| unsupported("a timestamp past the year range in a pattern"))?;
-        format::format(&self.items, local, Some((offset, zone.id)), true)
+        format::format_nanos(&self.items, local, nanos, Some((offset, zone.id)), true)
     }
 
     /// `local` (a `TIMESTAMP_NTZ`, microseconds of the local date-time).
@@ -337,6 +368,32 @@ impl DateTimePattern {
             return l.format_local(local);
         }
         format::format(&self.items, local, None, true)
+    }
+
+    /// `nanos` since midnight (a `TIME`), as Spark's `TimeFormatter` prints it: the
+    /// `java.time` pattern even under `timeParserPolicy=LEGACY`, so a legacy pattern
+    /// should not reach here (build one with [`Self::new`]). `Ok(None)` when the pattern
+    /// has a date or zone field outside an optional section (Spark: `DateTimeException`).
+    ///
+    /// # Errors
+    /// A legacy pattern (`KRISHIV_UNSUPPORTED_FEATURE`).
+    pub fn format_time_of_day(&self, nanos: i64) -> Result<Option<String>, KrishivError> {
+        if self.legacy.is_some() {
+            return Err(unsupported("a legacy datetime pattern formatting a TIME"));
+        }
+        format::format_time_of_day(&self.items, nanos)
+    }
+
+    /// [`Self::format_time_of_day`] appended to `out`, so a column reuses one buffer:
+    /// `Ok(false)`, with `out` unchanged, where that gives `Ok(None)`.
+    ///
+    /// # Errors
+    /// A legacy pattern (`KRISHIV_UNSUPPORTED_FEATURE`).
+    pub fn write_time_of_day(&self, nanos: i64, out: &mut String) -> Result<bool, KrishivError> {
+        if self.legacy.is_some() {
+            return Err(unsupported("a legacy datetime pattern formatting a TIME"));
+        }
+        format::write_time_of_day(&self.items, nanos, out)
     }
 
     /// `days` (a `DATE`).
@@ -421,7 +478,13 @@ impl DateTimePattern {
         let Some(p) = parse::parse(&self.items, s) else {
             return Ok(None);
         };
-        if !matches!(p.zone, parse::ParsedZone::None) {
+        // Spark's `toLocalTime` keeps the parsed clock fields: an offset or a
+        // zone the pattern reads is accepted and does not shift the time
+        // (`12:34:56+02:00` with `HH:mm:ssXXX` is `12:34:56`); a region id
+        // Java cannot resolve does not parse.
+        if let parse::ParsedZone::Region(id) = &p.zone
+            && crate::datetime::resolve_zone(id).is_err()
+        {
             return Ok(None);
         }
         Ok(p.time_of_day_nanos())
@@ -461,6 +524,13 @@ fn unsupported(what: &str) -> KrishivError {
 }
 
 fn spark_error(pattern: &str, reject: &Reject, purpose: Purpose) -> KrishivError {
+    if purpose == Purpose::FormatTime {
+        return InvalidDatetimePatternWithSuggestion {
+            pattern: format!("'{pattern}'"),
+            docroot: DOC_ROOT.to_owned(),
+        }
+        .into();
+    }
     let ntz = purpose == Purpose::ParseNtz;
     if !ntz && legacy_accepts(pattern) {
         return InconsistentBehaviorCrossVersionDatetimePatternRecognition {

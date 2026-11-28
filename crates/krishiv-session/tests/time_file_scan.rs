@@ -4,8 +4,8 @@
 //!
 //! Spark (lane probe `probe_time_files.py`, local[1]): 4.2.0 reads `time`, `time(3)` and `time(6)`
 //! as `12:00:00.123456` and refuses `time(9)` (`UNSUPPORTED_TIME_PRECISION`); 4.3.0 reads every
-//! precision as `12:00:00.123456789`. Krishiv's file readers have no TIME column yet, so every case
-//! is `KRISHIV_UNSUPPORTED_FEATURE` (docs/concepts/known-differences.md), never a wrong value.
+//! precision as `12:00:00.123456789`. Krishiv gives the same values (`krishiv.io.text.timeNanos`, set
+//! from the profile, keeps nine digits or six; `time_file_reads.rs` has the rest).
 #![cfg(test)]
 
 use arrow_array::Array;
@@ -46,7 +46,7 @@ fn read(profile: SparkProfile, format: &str, ty: &str) -> Result<Option<String>,
 }
 
 #[test]
-fn a_time_column_of_a_csv_or_json_file_is_refused_not_misread() {
+fn a_time_column_of_a_csv_or_json_file_reads_as_spark_does() {
     for profile in [SparkProfile::V4_2, SparkProfile::V4_3] {
         for format in ["csv", "json"] {
             for ty in ["time(9)", "time(6)", "time(3)"] {
@@ -60,12 +60,13 @@ fn a_time_column_of_a_csv_or_json_file_is_refused_not_misread() {
                     );
                     continue;
                 }
-                let e = read(profile, format, ty).unwrap_err();
-                assert_eq!(
-                    e.error_class(),
-                    ErrorClass::KrishivUnsupportedFeature,
-                    "{profile:?} {format} {ty}: {e}"
-                );
+                let want = if profile == SparkProfile::V4_2 {
+                    "12:00:00.123456"
+                } else {
+                    "12:00:00.123456789"
+                };
+                let got = read(profile, format, ty).unwrap();
+                assert_eq!(got.as_deref(), Some(want), "{profile:?} {format} {ty}");
             }
         }
     }

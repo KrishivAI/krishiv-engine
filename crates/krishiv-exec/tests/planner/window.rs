@@ -61,6 +61,7 @@ fn a_partitioned_window_reads_the_sort_buckets() {
         io_threads: 1,
         blocking_threads: 2,
         io_blocking_threads: 2,
+        release_when_idle: true,
     };
     let (out, query) = super::run_on(&plan, &root, &executor);
     let mut rows: Vec<String> = Vec::new();

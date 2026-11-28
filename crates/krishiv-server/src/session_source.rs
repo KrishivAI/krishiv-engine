@@ -49,6 +49,8 @@ pub struct SessionSource {
     own_session: bool,
     /// The server's Python UDF worker pool, when it has one ([`Self::with_udf_workers`]).
     udf_workers: Option<crate::udf_workers::UdfWorkersProvider>,
+    /// Sessions the server only builds its clients' sessions from ([`Self::with_template_sessions`]).
+    templates: Vec<String>,
 }
 
 /// How long after a query ended its plan is still expected from the history writer.
@@ -113,6 +115,7 @@ impl SessionSource {
             stored: None,
             own_session: false,
             udf_workers: None,
+            templates: Vec::new(),
         })
     }
 
@@ -134,6 +137,14 @@ impl SessionSource {
     #[must_use]
     pub fn with_caller_sessions(mut self, factory: Arc<CallerSessions>) -> Self {
         self.caller_sessions = Some(factory);
+        self
+    }
+
+    /// The same, not listing the sessions `ids` name: the ones a server builds every client's session from and no
+    /// client ever runs in, which the Sessions page would otherwise show as idle sessions an operator could end.
+    #[must_use]
+    pub fn with_template_sessions(mut self, ids: Vec<String>) -> Self {
+        self.templates = ids;
         self
     }
 
@@ -631,11 +642,23 @@ impl UiSource for SessionSource {
                 // chooses it, per session): both are listed.
                 rows.retain(|r| r.get("principal").and_then(Value::as_str) != Some(UI_PRINCIPAL));
             }
-            // The console's own session is not a client's. The session the editor runs in is listed (what
-            // it runs shows on it) and marked: `close_session` refuses it, so the page offers no action.
+            // The console's own session is not a client's, nor is one the server only builds sessions from. The
+            // session the editor runs in is listed (what it runs shows on it) and marked: `close_session` refuses
+            // it, so the page offers no action. Where callers are identified each one's statements run in a
+            // session of its own, so the shared one is listed only once it has run something (the start-up
+            // token's local administrator): until then it is nobody's editor.
             if table == SystemTable::Sessions {
-                rows.retain(|r| r.get("principal").and_then(Value::as_str) != Some(UI_PRINCIPAL));
                 let editor = self.anonymous.id();
+                let unused = |row: &Row| {
+                    self.caller_sessions.is_some()
+                        && row.get("queries_started").and_then(Value::as_i64) == Some(0)
+                };
+                rows.retain(|r| {
+                    let id = r.get("session_id").and_then(Value::as_str);
+                    r.get("principal").and_then(Value::as_str) != Some(UI_PRINCIPAL)
+                        && !id.is_some_and(|id| self.templates.iter().any(|t| t == id))
+                        && !(id == Some(editor) && unused(r))
+                });
                 for row in &mut rows {
                     if row.get("session_id").and_then(Value::as_str) == Some(editor) {
                         row.insert("endable".to_owned(), Value::Bool(false));

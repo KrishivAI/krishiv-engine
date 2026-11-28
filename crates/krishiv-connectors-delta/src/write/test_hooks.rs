@@ -24,6 +24,8 @@ pub(crate) enum Point {
     Combined,
     /// `finalize` finished every writer, before the commit.
     Finished,
+    /// A merge-on-read change wrote a deletion vector into its vector file (not yet finished).
+    VectorWritten,
 }
 
 /// Where the hook was called from.

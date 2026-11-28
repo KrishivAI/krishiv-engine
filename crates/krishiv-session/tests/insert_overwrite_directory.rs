@@ -11,6 +11,11 @@ use futures::executor::block_on;
 use krishiv_session::Session;
 use serde_json::Value;
 
+/// A path as SQL text: `/` separators, since `\` starts an escape in a string literal (Windows).
+fn sql_path(p: impl AsRef<std::path::Path>) -> String {
+    p.as_ref().to_str().unwrap().replace('\\', "/")
+}
+
 /// Cases whose Krishiv result differs from Spark's, with the reason; each must still differ.
 const KNOWN_GAPS: &[(&str, &str)] = &[(
     "IOD-05-orc",
@@ -192,8 +197,8 @@ fn run_case(case: &Value) -> Result<(), String> {
     let stmt = case["stmt"]
         .as_str()
         .unwrap()
-        .replace("<DIR>", dir.to_str().unwrap())
-        .replace("<TMP>", tmp.path().to_str().unwrap());
+        .replace("<DIR>", &sql_path(&dir))
+        .replace("<TMP>", &sql_path(tmp.path()));
     let s = Session::new().unwrap();
     let expect = &case["expect"];
     let result = block_on(async { s.sql(&stmt).await?.collect().await });
@@ -209,8 +214,8 @@ fn run_case(case: &Value) -> Result<(), String> {
                 let want_message = expect["message"]
                     .as_str()
                     .unwrap()
-                    .replace("<DIR>", dir.to_str().unwrap())
-                    .replace("<TMP>", tmp.path().to_str().unwrap());
+                    .replace("<DIR>", &sql_path(&dir))
+                    .replace("<TMP>", &sql_path(tmp.path()));
                 let state = e.sql_state();
                 if state != want_state {
                     Err(format!("SQLSTATE {state:?}: {e}, Spark: {want_state:?}"))
@@ -281,7 +286,7 @@ fn run_case(case: &Value) -> Result<(), String> {
             return Err(format!("lines {got:?}, Spark: {want:?}"));
         }
     } else if let Some(read) = expect.get("read_back") {
-        let (got, names) = read_back(&s, target.to_str().unwrap(), read)?;
+        let (got, names) = read_back(&s, &sql_path(&target), read)?;
         let want = expected_rows(&read["rows"]);
         if got != want {
             return Err(format!("rows {got:?}, Spark: {want:?}"));
@@ -342,7 +347,7 @@ fn the_directory_is_replaced_wholesale() {
     std::fs::write(dir.join("old.txt"), b"x").unwrap();
     std::fs::write(dir.join("sub/deep.txt"), b"x").unwrap();
     let s = Session::new().unwrap();
-    let d = dir.to_str().unwrap();
+    let d = sql_path(&dir);
     sql(
         &s,
         &format!("INSERT OVERWRITE DIRECTORY '{d}' USING parquet SELECT 1 AS a"),
@@ -359,7 +364,7 @@ fn the_directory_is_replaced_wholesale() {
     );
     let file = tmp.path().join("file");
     std::fs::write(&file, b"x").unwrap();
-    let f = file.to_str().unwrap();
+    let f = sql_path(&file);
     sql(
         &s,
         &format!("INSERT OVERWRITE DIRECTORY '{f}' USING parquet SELECT 1 AS a"),
@@ -378,13 +383,13 @@ fn an_empty_result_writes_the_schema() {
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("old.txt"), b"x").unwrap();
     let s = Session::new().unwrap();
-    let d = dir.to_str().unwrap();
+    let d = sql_path(&dir);
     sql(
         &s,
         &format!("INSERT OVERWRITE DIRECTORY '{d}' USING parquet SELECT 1 AS a WHERE false"),
     );
     assert!(!dir.join("old.txt").exists());
-    let (rows, names) = read_back(&s, d, &serde_json::json!({"format": "parquet"})).unwrap();
+    let (rows, names) = read_back(&s, &d, &serde_json::json!({"format": "parquet"})).unwrap();
     assert!(rows.is_empty());
     assert_eq!(names, ["a"]);
 }
@@ -397,7 +402,7 @@ fn a_query_reading_its_target_writes_what_it_read() {
     let tmp = tempfile::tempdir().unwrap();
     let dir = tmp.path().join("out");
     let s = Session::new().unwrap();
-    let d = dir.to_str().unwrap();
+    let d = sql_path(&dir);
     sql(
         &s,
         &format!("INSERT OVERWRITE DIRECTORY '{d}' USING parquet SELECT id FROM range(3)"),
@@ -408,7 +413,7 @@ fn a_query_reading_its_target_writes_what_it_read() {
             "INSERT OVERWRITE DIRECTORY '{d}' USING parquet SELECT id + 10 AS id FROM parquet.`{d}`"
         ),
     );
-    let (rows, _) = read_back(&s, d, &serde_json::json!({"format": "parquet"})).unwrap();
+    let (rows, _) = read_back(&s, &d, &serde_json::json!({"format": "parquet"})).unwrap();
     assert_eq!(rows, ["10", "11", "12"]);
 }
 
@@ -420,7 +425,7 @@ fn a_source_that_writes_no_files_is_refused() {
     let s = Session::new().unwrap();
     let stmt = format!(
         "INSERT OVERWRITE DIRECTORY '{}' USING noop SELECT 1 AS a",
-        d.to_str().unwrap()
+        sql_path(&d)
     );
     let e = block_on(async { s.sql(&stmt).await?.collect().await }).unwrap_err();
     assert_eq!(

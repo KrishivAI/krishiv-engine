@@ -74,6 +74,12 @@ static SPECS: LazyLock<Vec<OptionSpec>> = LazyLock::new(|| {
         string("dateFormat", "The pattern of DATE values (default: Spark's lenient grammar).");
         string("timestampFormat", "The pattern of TIMESTAMP values.");
         string("timestampNTZFormat", "The pattern of TIMESTAMP_NTZ values.");
+        conf(crate::text::TIME_TYPE_CONF, OptionKind::Bool, OptionDefault::Bool(false), crate::text::TIME_TYPE_CONF, "The session's `spark.sql.timeType.enabled`: inference may give `TIME`.");
+        string("timeFormat", "The pattern of TIME values (default: Spark's TIME grammar to read, the value's own digits to write).");
+        conf(crate::text::TIME_NANOS_CONF, OptionKind::Bool, OptionDefault::Bool(true), crate::text::TIME_NANOS_CONF, "The session's `krishiv.io.text.timeNanos` (from its Spark profile): a `TIME` read keeps nine fraction digits, else six.");
+        conf(crate::text::TIME_INFER_CONF, OptionKind::Bool, OptionDefault::Bool(true), crate::text::TIME_INFER_CONF, "The session's `krishiv.io.text.inferTime` (from its Spark profile): inference may give `TIME` (Spark 4.3), never under 4.2.");
+        conf(crate::text::TIMESTAMP_TYPE_CONF, OptionKind::String, OptionDefault::Str("TIMESTAMP_LTZ"), crate::text::TIMESTAMP_TYPE_CONF, "The session's `spark.sql.timestampType`: with `TIMESTAMP_NTZ`, `inferTimestamp` infers a zone-less timestamp text as `TIMESTAMP_NTZ`.");
+        conf(crate::text::PARSER_POLICY_CONF, OptionKind::String, OptionDefault::Str("EXCEPTION"), crate::text::PARSER_POLICY_CONF, "The session's `spark.sql.legacy.timeParserPolicy`: `LEGACY` reads dates and timestamps with `FastDateFormat` patterns and the lenient fallback.");
         conf("ignoreCorruptFiles", OptionKind::Bool, OptionDefault::Bool(false), "spark.sql.files.ignoreCorruptFiles", "Inference: a compressed file that breaks counts the lines decoded before the break, as the scan does (`spark.sql.files.ignoreCorruptFiles`).");
         conf("timeZone", OptionKind::String, OptionDefault::Str("UTC"), "spark.sql.session.timeZone", "The time zone of timestamps without an offset.");
         string("encoding", "The charset: UTF-8, ISO-8859-1 or US-ASCII.");
@@ -83,7 +89,8 @@ static SPECS: LazyLock<Vec<OptionSpec>> = LazyLock::new(|| {
         flag("dropFieldIfAllNull", false, "Inference drops columns that are null in every record.");
         conf("ignoreNullFields", OptionKind::Bool, OptionDefault::Bool(true), "spark.sql.jsonGenerator.ignoreNullFields", "Write: omit fields whose value is null (default: the session conf, true).");
         flag("inferTimestamp", false, "Inference reads timestamp-like strings as timestamps.");
-        flag("enableDateTimeParsingFallback", false, "Parse with the lenient grammar when the pattern fails.");
+        // No default: unset turns the fallback on under LEGACY (`JacksonParser`).
+        OptionSpec { default: OptionDefault::None, ..flag("enableDateTimeParsingFallback", false, "Parse with the lenient grammar when the pattern fails (default: on under `timeParserPolicy=LEGACY`, else off).") };
         string("compression", "Write codec: none, uncompressed, bzip2, deflate, gzip, lz4 or snappy.");
         string("codec", "Alias of `compression`.");
         conf("inferenceMaxPartitionBytes", OptionKind::String, OptionDefault::None, "spark.sql.files.maxPartitionBytes", "Sampling: the split planning conf.");

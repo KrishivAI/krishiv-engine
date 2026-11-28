@@ -160,6 +160,9 @@ pub struct ParserOptions {
     /// `spark.sql.timeTravel.atSyntax.enabled` (on by default): a table name may carry an `@v123` or
     /// `@yyyyMMddHHmmssSSS` time travel suffix.
     pub time_travel_at_syntax: bool,
+    /// `spark.sql.crossJoin.enabled` (on by default): off, a `NEAREST BY` join (a bounded cross product
+    /// inside) is `NEAREST_BY_JOIN.CROSS_JOIN_NOT_ENABLED`.
+    pub cross_join: bool,
     /// Spark 4.3 grammar: `UNNEST(..)` in `FROM` (off, it is an ordinary table function),
     /// `SHOW TABLES | TABLE EXTENDED | PARTITIONS ... AS JSON` (off, `PARSE_SYNTAX_ERROR`) and
     /// `INSERT INTO t (columns) REPLACE ...` takes a column list before `REPLACE`; the as-of branch of
@@ -221,6 +224,7 @@ impl ParserOptions {
             timestamp_nanos_types: on("spark.sql.timestampNanosTypes.enabled", false),
             asof_join: on("spark.sql.join.asofJoin.enabled", false),
             time_travel_at_syntax: on("spark.sql.timeTravel.atSyntax.enabled", true),
+            cross_join: on("spark.sql.crossJoin.enabled", true),
             spark_4_3_grammar: false,
         }
     }
@@ -396,10 +400,12 @@ pub fn parse_ddl_type(sql: &str, options: &ParserOptions) -> Result<ast::DataTyp
         let columns = parse_table_schema(sql, options).map_err(|_| e)?;
         let start = columns.first().map_or(0, |c| c.span.start);
         let end = columns.last().map_or(sql.len(), |c| c.span.end);
+        let nanos_types = columns.iter().any(|c| c.data_type.nanos_types);
         Ok(ast::DataTypeSpec {
             kind: ast::DataTypeKind::Struct(Some(columns)),
             collation: None,
             span: ast::Span::new(start, end),
+            nanos_types,
         })
     })
 }

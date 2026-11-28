@@ -57,6 +57,11 @@ pub struct Permit {
     group: Option<String>,
     priority: Option<u8>,
     class: Option<WorkloadClass>,
+    /// The query counted as running from admission until the permit drops
+    /// (after its tasks ended): the last one to end lets the executor
+    /// return freed memory (`krishiv_exec::idle`). Set by the session, never
+    /// by a controller; placeholders and controller-built permits hold none.
+    run: Option<krishiv_exec::QueryRun>,
 }
 
 impl Permit {
@@ -68,6 +73,7 @@ impl Permit {
             group: None,
             priority: None,
             class: None,
+            run: None,
         }
     }
 
@@ -80,6 +86,7 @@ impl Permit {
             group: None,
             priority: None,
             class: None,
+            run: None,
         }
     }
 
@@ -133,6 +140,12 @@ impl Permit {
     #[must_use]
     pub fn slot<T: 'static>(&self) -> Option<&T> {
         self.slot.as_deref().and_then(|s| s.downcast_ref::<T>())
+    }
+
+    /// This permit counting its query as running until it drops.
+    pub(crate) fn with_run(mut self, run: krishiv_exec::QueryRun) -> Self {
+        self.run = Some(run);
+        self
     }
 
     /// The per-query memory limit, if the controller set one.

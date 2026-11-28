@@ -1,0 +1,1 @@
+SQL: `information_schema.catalogs`, `schemata`, `tables`, `columns`, `views` and `routines` list the session catalog for BI tools and SQL clients, by the same rule as `SHOW TABLES`; `information_schema` is a reserved namespace.

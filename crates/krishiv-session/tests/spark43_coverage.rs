@@ -20,27 +20,17 @@ use krishiv_session::Session;
 use serde_json::Value;
 
 /// Cases that differ from Spark today: `(id, how)`. They are the 4.3 work the golden tail (plan row GT) takes, by area:
-/// the nanosecond and TIME(p) types (`fn_*`) and a by-position struct insert under the legacy policy.
+/// the nanosecond and TIME(p) types (`fn_*`).
 const PENDING: &[(&str, &str)] = &[
-    (
-        "fn_timestamp_ntz_to_time",
-        "DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION",
-    ),
-    (
-        "fn_timestamp_ntz_to_time_9",
-        "DATATYPE_MISMATCH.CAST_WITHOUT_SUGGESTION",
-    ),
-    (
-        "fn_time_to_timestamp_ntz_nanos",
-        "KRISHIV_UNSUPPORTED_FEATURE",
-    ),
+    // The cast runs since the TIME <-> TIMESTAMP casts; the nanosecond `TIMESTAMP_NTZ` literal is still
+    // microseconds (part B of the 4.3 TIME scope), so the digits past the microsecond are missing.
+    ("fn_timestamp_ntz_to_time_9", "rows"),
+    // Spark 4.3 refuses a TIME cast to `timestamp_ntz(9)` (`UNSUPPORTED_OPERATION`); the engine now has the
+    // nanosecond type and takes today's date as it does for `timestamp_ntz`, so it raises nothing.
+    ("fn_time_to_timestamp_ntz_nanos", "no error"),
     (
         "fn_current_timestamp_precision_9",
         "KRISHIV_UNSUPPORTED_FEATURE",
-    ),
-    (
-        "fix_insert_struct_by_position_legacy",
-        "setup: INCOMPATIBLE_DATA_FOR_TABLE.CANNOT_SAFELY_CAST",
     ),
 ];
 

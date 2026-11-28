@@ -51,6 +51,7 @@ mod catalog_call;
 pub(crate) mod hooks;
 pub mod observed;
 pub mod schema;
+mod show_string;
 mod sql_command;
 mod write_command;
 
@@ -391,6 +392,50 @@ pub async fn execute_plan(
                 .await?;
                 return Ok(Prepared::Command(answer));
             }
+            // `df.show()`: the input runs as a query and its first rows are laid out as text.
+            // A compressed relation is unpacked first, so a compressed `show_string` takes the same path.
+            let unpacked = match (&plan.op_type, decompressed(plan, limits).await?) {
+                (Some(OpType::CompressedOperation(c)), Some(bytes))
+                    if CompressedOpType::try_from(c.op_type) == Ok(CompressedOpType::Relation) =>
+                {
+                    Some(pb::Plan {
+                        op_type: Some(OpType::Root(Box::new(
+                            (*wire::decode_relation(&bytes)?).clone(),
+                        ))),
+                    })
+                }
+                _ => None,
+            };
+            if let Some(shown) = show_string::of(unpacked.as_ref().unwrap_or(plan)) {
+                if shown.html {
+                    return Err(krishiv_common::error::KrishivUnsupportedFeature {
+                        feature: "html_string (no Spark golden for its HTML escaping yet)"
+                            .to_owned(),
+                    }
+                    .into());
+                }
+                if let Some(style) = session.conf().get("spark.sql.binaryOutputStyle")
+                    && !style.is_empty()
+                {
+                    return Err(krishiv_common::error::KrishivUnsupportedFeature {
+                        feature: format!("show_string with spark.sql.binaryOutputStyle = {style}"),
+                    }
+                    .into());
+                }
+                let Executed::Relation(requested) =
+                    Box::pin(execution_plan(entry, &shown.plan, limits, &query_options)).await?
+                else {
+                    return Err(InternalError {
+                        message: "a show_string input is not a relation".to_owned(),
+                    }
+                    .into());
+                };
+                let df = requested.frame(session, query_options).await?;
+                return Ok(Prepared::Text(
+                    shown.html,
+                    show_string::render(&df, &shown, limits.max_batch_size).await?,
+                ));
+            }
             // Decompression (up to `maxPlanSize`) runs off the async workers.
             match Box::pin(execution_plan(entry, plan, limits, &query_options)).await? {
                 Executed::Relation(requested) => {
@@ -425,6 +470,15 @@ pub async fn execute_plan(
                 (Work::Command(Box::new(answer)), registered)
             }
             (Prepared::Checkpoint(id), registered) => (Work::Checkpoint(id), registered),
+            (Prepared::Text(html, text), registered) => {
+                let schema = show_string::answer_schema(html);
+                let work = Work::Text(Box::new(Shown {
+                    schema_response: schema::proto_schema(&schema)?,
+                    batch: show_string::answer_batch(html, text)?,
+                    settings: encode_settings(&conf, limits, opts.chunking),
+                }));
+                (work, registered)
+            }
             (Prepared::Done, registered) => (Work::NoResult, registered),
         }
     };
@@ -504,6 +558,8 @@ enum Prepared {
     Done,
     /// A `checkpoint_command`: the id the result frame is held under.
     Checkpoint(String),
+    /// A `show_string` / `html_string` relation, laid out: whether it is the HTML form, and the text.
+    Text(bool, String),
 }
 
 /// The producing side of `op`.
@@ -586,6 +642,7 @@ impl Translated {
     ) -> Result<Self, KrishivError> {
         let relation = match &command.command_type {
             Some(pb::command::CommandType::CheckpointCommand(c)) => Some(c.relation.as_ref()),
+            Some(pb::command::CommandType::CreateDataframeView(v)) => Some(v.input.as_ref()),
             Some(pb::command::CommandType::WriteOperation(w)) => Some(w.input.as_ref()),
             Some(pb::command::CommandType::WriteOperationV2(w)) => Some(w.input.as_ref()),
             _ => None,
@@ -688,6 +745,13 @@ async fn execution_plan(
                     let source =
                         command_source(entry, input, udfs, &cached, query_options.clone()).await?;
                     Box::pin(write_command::write(session, &source, spec)).await?;
+                }
+                RunCommand::CreateView(spec) => {
+                    // The view's plan is analyzed now, as Spark's `createTempView` does; the frame
+                    // carries this operation's options like a write's.
+                    let source =
+                        command_source(entry, input, udfs, &cached, query_options.clone()).await?;
+                    Box::pin(write_command::create_view(&source, spec)).await?;
                 }
                 RunCommand::WriteV2(spec) => {
                     let source =
@@ -916,7 +980,7 @@ async fn build_local_relation(
             let Some(bytes) = entry.artifacts().cached(&hash) else {
                 return Err(ConnectInvalidPlanCannotFindCachedLocalRelation { hash }.into());
             };
-            cached_request(&bytes)?
+            cached_request(&bytes, &entry.session().parser_options())?
         }
         LocalRequest::Catalog(call) => return catalog_call::run(entry.session(), call).await,
     };
@@ -1176,10 +1240,19 @@ enum Work {
     Command(Box<sql_command::Answer>),
     /// A `checkpoint_command`: the id its result is held under.
     Checkpoint(String),
+    /// A `show_string` / `html_string`: one batch of one string row.
+    Text(Box<Shown>),
     /// A command with no result (`ml_command.clean_cache`, a
     /// `register_function` that ran): only `result_complete`, when
     /// reattachable.
     NoResult,
+}
+
+/// The answer of a `show_string` / `html_string`.
+struct Shown {
+    schema_response: pb::DataType,
+    batch: arrow_array::RecordBatch,
+    settings: EncodeSettings,
 }
 
 /// A prepared query and how its result is encoded.
@@ -1208,6 +1281,20 @@ impl Work {
             }
             Self::Command(answer) => sql_command::produce(sender, *answer).await,
             Self::Checkpoint(id) => cache_command::produce(sender, id).await,
+            Self::Text(shown) => {
+                // A show action sends no observed metrics (Spark's show_string answers one text row and an
+                // empty `Metrics`): the show frame is built without an `ObservedSink`, unlike `produce`.
+                sender.admit().await?;
+                let mut first = sender.response(None);
+                first.schema = Some(shown.schema_response.clone());
+                sender.send(first).await?;
+                let batch = arrow::spark_batch(&shown.batch, shown.settings.time_zone.as_ref())?;
+                send_batch(sender, &batch, 0, &shown.settings).await?;
+                let mut metrics = sender.response(None);
+                metrics.metrics = Some(Metrics::default());
+                sender.send(metrics).await?;
+                complete(sender).await
+            }
             Self::NoResult => {
                 sender.admit().await?;
                 complete(sender).await

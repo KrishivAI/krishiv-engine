@@ -878,3 +878,85 @@ async fn try_partitions_agree() {
         ["NULL"]
     );
 }
+
+/// `min`/`max` of a `TIME` column (Arrow `Time64(ns)`): grouped and global, NULLs skipped, the
+/// result keeps the column's type, and two phases agree with one.
+#[tokio::test]
+async fn min_max_of_time_merge_partial_states() {
+    use arrow_array::Time64NanosecondArray;
+    use arrow_array::cast::AsArray;
+    use arrow_array::types::{Int64Type, Time64NanosecondType};
+    use arrow_schema::TimeUnit;
+    let time =
+        |v: &[Option<i64>]| -> ArrayRef { Arc::new(Time64NanosecondArray::from(v.to_vec())) };
+    // Every row as its values: the key (if any), then min and max in nanoseconds.
+    fn values(out: &[Batch]) -> Vec<Vec<Option<i64>>> {
+        let mut got = Vec::new();
+        for b in out {
+            let d = b.data();
+            let n = d.num_columns();
+            for c in &d.columns()[n - 2..] {
+                assert_eq!(c.data_type(), &DataType::Time64(TimeUnit::Nanosecond));
+            }
+            for r in 0..d.num_rows() {
+                let row = (0..n)
+                    .map(|i| {
+                        let c = d.column(i);
+                        c.is_valid(r).then(|| {
+                            if i + 2 < n {
+                                c.as_primitive::<Int64Type>().value(r)
+                            } else {
+                                c.as_primitive::<Time64NanosecondType>().value(r)
+                            }
+                        })
+                    })
+                    .collect();
+                got.push(row);
+            }
+        }
+        got.sort();
+        got
+    }
+    let s = schema(vec![
+        ("k", DataType::Int64),
+        ("t", DataType::Time64(TimeUnit::Nanosecond)),
+    ]);
+    // 01:00:00, NULL, 23:59:59.999999, NULL (group 3 is all NULL); then 00:00:00.000001, 00:00:00.000007.
+    let batches = vec![
+        vec![
+            i64s(&[Some(1), Some(1), Some(2), Some(3)]),
+            time(&[
+                Some(3_600_000_000_000),
+                None,
+                Some(86_399_999_999_000),
+                None,
+            ]),
+        ],
+        vec![i64s(&[Some(1), Some(2)]), time(&[Some(1_000), Some(7_000)])],
+    ];
+    for (group_by, want) in [
+        (
+            vec![0],
+            vec![
+                vec![Some(1), Some(1_000), Some(3_600_000_000_000)],
+                vec![Some(2), Some(7_000), Some(86_399_999_999_000)],
+                vec![Some(3), None, None],
+            ],
+        ),
+        (vec![], vec![vec![Some(1_000), Some(86_399_999_999_000)]]),
+    ] {
+        let aggs = vec![
+            agg(&AggregateFunction::Min, 1, &s),
+            agg(&AggregateFunction::Max, 1, &s),
+        ];
+        let sp = spec(&s, group_by, aggs);
+        let one = exec(node(scan(&s, batches.clone()), sp.clone()), Opts::default())
+            .await
+            .unwrap()
+            .0;
+        assert_eq!(values(&one), want);
+        let (plan, _) = two_phase_of(scan(&s, batches.clone()), sp, BypassPolicy::default(), None);
+        let two = exec(plan, Opts::default()).await.unwrap().0;
+        assert_eq!(values(&two), want);
+    }
+}

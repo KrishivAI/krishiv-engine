@@ -275,6 +275,7 @@ impl DirectoryWrite {
             let (dead, overwrite) = (dead_jobs.clone(), self.overwrite);
             io.sweep_staging(&self.store, &self.dir, move |name, modified| {
                 let base = name.split_once('#').map_or(name, |(base, _)| base);
+                let base = base.strip_prefix('.').unwrap_or(base);
                 dead.iter().any(|j| is_job_file(base, j)) || (overwrite && modified <= cutoff)
             })
             .await
@@ -378,7 +379,9 @@ impl DirectoryWrite {
         for chunk in add.chunks(32) {
             let mut heads = Vec::with_capacity(chunk.len());
             for f in chunk {
-                let path = Path::from(format!("{}/{}", self.dir, f.path));
+                let path = Path::parse(format!("{}/{}", self.dir, f.path)).map_err(|e| {
+                    crate::error::unsupported(format!("committed file names ({e})"))
+                })?;
                 heads.push(Box::pin(async move { io.head(&self.store, &path).await }));
             }
             for head in futures::future::join_all(heads).await {

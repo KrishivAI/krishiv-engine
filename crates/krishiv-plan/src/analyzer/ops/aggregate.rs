@@ -623,6 +623,12 @@ impl Resolver<'_> {
         // group id) and two ordinary aggregates. Over grouping sets the
         // aggregation already reads an expansion, which this rewrite
         // does not combine with.
+        // Spark checks an inlined SQL function call by its inputs before any
+        // rewrite: in items computed above the aggregate (windows, lateral
+        // aliases), and before the DISTINCT rewrite can replace a body by a
+        // grouping column.
+        let rewrites = analytics.is_none() && Self::needs_distinct_rewrite(items);
+        self.check_call_inputs(items, &group, rewrites, origin, global)?;
         if analytics.is_some() {
             if Self::needs_distinct_rewrite(items) {
                 return Err(unsupported(
@@ -633,12 +639,13 @@ impl Resolver<'_> {
         } else if let Some(r) = self.rewrite_distinct(origin, c, &group, items, global, env)? {
             return Ok(r);
         }
+        // Physical keys: lifting matches what the aggregate computes, so an
+        // inlined call is keyed by its body here (never by `call_keys`).
         let mut memo = HashMap::new();
         let gkeys: Vec<(u128, ArgType)> = group
             .iter()
             .map(|b| (semantic_key(&b.expr, &mut memo), b.ty.clone()))
             .collect();
-        let key_set: HashSet<u128> = gkeys.iter().map(|(k, _)| *k).collect();
         // Items with lateral aliases or windows are computed above the
         // aggregate, over its output.
         let base: Vec<Bound> = items
@@ -646,7 +653,15 @@ impl Resolver<'_> {
             .filter(|b| b.lateral.is_empty() && b.win.is_none())
             .cloned()
             .collect();
-        self.check_aggregation(&base, &key_set, &mut memo, origin, global)?;
+        {
+            let mut checked = HashMap::new();
+            let calls = self.call_keys(&mut checked);
+            let keys: HashSet<u128> = group
+                .iter()
+                .map(|b| semantic_key(&b.expr, &mut checked))
+                .collect();
+            self.check_aggregation(&base, &keys, &mut checked, &calls, origin, global)?;
+        }
         // Over grouping sets, the grouping attributes are the expansion's.
         let (keys, scope): (Vec<Attr>, Vec<Attr>) = match &analytics {
             Some(a) => (

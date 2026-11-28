@@ -33,6 +33,8 @@ enum T {
     Double,
     Date,
     Timestamp,
+    /// `TIME(6)`.
+    Time,
     Boolean,
     Str,
 }
@@ -121,6 +123,7 @@ impl Infer<'_> {
             T::Decimal(_) => self.decimal(f),
             T::Double => self.double(f),
             T::Date => self.date_time(f),
+            T::Time => self.time(f),
             T::Timestamp => self.timestamp(f),
             T::Boolean => Self::boolean(f),
             T::Str => T::Str,
@@ -159,6 +162,21 @@ impl Infer<'_> {
             || f == self.o.pos_inf
         {
             T::Double
+        } else if self.o.prefer_date {
+            self.time(f)
+        } else {
+            // Spark 4.3.0 `tryParseDouble`: without `preferDate` inference
+            // goes straight to the timestamp, never trying a DATE (Spark's
+            // lenient timestamp parser takes a date-only text). `preferDate`
+            // is off under the LEGACY parser policy (`CSVOptions`).
+            self.timestamp(f)
+        }
+    }
+
+    /// Spark 4.3.0's `tryParseTime`: a `TIME` while the gate is on, else a date.
+    fn time(&self, f: &str) -> T {
+        if self.o.time_type && matches!(self.dt.parse_time(f), Ok(Some(_))) {
+            T::Time
         } else {
             self.date_time(f)
         }
@@ -172,8 +190,10 @@ impl Infer<'_> {
         }
     }
 
+    /// Spark's `tryParseTimestamp`: `timestampParser.parseOptional`, the
+    /// pattern alone (no fallback, which LEGACY turns on for reads).
     fn timestamp(&self, f: &str) -> T {
-        if matches!(self.dt.parse_timestamp(f), Ok(Some(_))) {
+        if matches!(self.dt.parse_timestamp_exact(f), Ok(Some(_))) {
             T::Timestamp
         } else {
             Self::boolean(f)
@@ -231,6 +251,7 @@ fn arrow_type(t: T) -> DataType {
         T::Double => DataType::Float64,
         T::Date => DataType::Date32,
         T::Timestamp => DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+        T::Time => DataType::Time64(TimeUnit::Nanosecond),
         T::Boolean => DataType::Boolean,
         T::Null | T::Str => DataType::Utf8View,
     }
@@ -246,6 +267,7 @@ pub(crate) fn ddl_type(t: &DataType) -> FormatResult<String> {
         DataType::Float64 => "DOUBLE".to_owned(),
         DataType::Date32 => "DATE".to_owned(),
         DataType::Timestamp(_, _) => "TIMESTAMP".to_owned(),
+        DataType::Time64(_) => "TIME(6)".to_owned(),
         DataType::Boolean => "BOOLEAN".to_owned(),
         DataType::Utf8View => "STRING".to_owned(),
         // `arrow_type` above only yields the types matched here.
@@ -281,7 +303,7 @@ pub fn ddl_of_string(csv: &str, options: &FormatOptions) -> FormatResult<String>
         )));
     }
     let opts = CsvOptions::new(options, false)?;
-    let dt = Datetimes::new(options, Purpose::Parse)?;
+    let dt = Datetimes::csv(options, Purpose::Parse)?;
     let date = DateTimePattern::new(
         options.str("dateFormat").unwrap_or("yyyy-MM-dd"),
         Purpose::Parse,
@@ -604,7 +626,7 @@ pub(crate) fn infer<'a>(
             crate::text::check_plain(f.path.as_ref())?;
         }
         let opts = CsvOptions::new(o, false)?;
-        let dt = Datetimes::new(o, Purpose::Parse)?;
+        let dt = Datetimes::csv(o, Purpose::Parse)?;
         let date =
             DateTimePattern::new(o.str("dateFormat").unwrap_or("yyyy-MM-dd"), Purpose::Parse)?;
         let inf = Infer {
@@ -696,7 +718,7 @@ pub(crate) fn infer<'a>(
             if infer_types {
                 let sh = Arc::new(Shared {
                     opts: opts.clone(),
-                    dt: Datetimes::new(o, Purpose::Parse)?,
+                    dt: Datetimes::csv(o, Purpose::Parse)?,
                     date: date.clone(),
                     tok: line_tok,
                     first_line,

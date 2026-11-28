@@ -3,6 +3,10 @@
 
 use super::*;
 
+/// The session `TIME` gate, given to `schema_of_csv` inference as the CSV
+/// option named as the conf.
+const TIME_TYPE_CONF: &str = krishiv_common::config::TIME_TYPE_ENABLED;
+
 /// The default message of `assert_true(cond)`: `'<cond>' is not true!`,
 /// with casts stripped as Spark's `toPrettySQL` strips them.
 pub(super) fn assert_message(cond: &Bound, origin: Origin, zone: Option<SessionZone>) -> Bound {
@@ -283,6 +287,11 @@ impl Resolver<'_> {
                 });
             }
         }
+        // A type string argument reads a bare `TIMESTAMP` as `spark.sql.timestampType` names it.
+        let session_typed = self.session_type_argument(entry, kids, &constants);
+        if let Some((i, text)) = &session_typed {
+            constants[*i] = Some(Constant::String(text.clone()));
+        }
         let literals: Vec<bool> = kids.iter().map(|k| fold::is_literal(&k.expr)).collect();
         let foldable: Vec<bool> = kids
             .iter()
@@ -351,7 +360,58 @@ impl Resolver<'_> {
             );
             k.ty = arg_type(DataType::Binary, false);
         }
+        if let Some((i, text)) = session_typed
+            && let Some(k) = call_kids.get_mut(i)
+        {
+            // The call binds from the resolved type, shown as written (its name never shows it).
+            k.shown = Some(Arc::clone(&k.expr));
+            k.expr = Arc::new(
+                Expr::new(ExprNode::Literal(Literal::String(text))).with_origin(k.expr.origin),
+            );
+        }
         Ok((Self::folded_ntile(entry, &constants, call_kids), ty))
+    }
+
+    /// Under `spark.sql.timestampType = TIMESTAMP_NTZ`, the type string argument of `from_json`,
+    /// `from_csv`, `from_xml` (the schema) or `variant_get` / `try_variant_get` (the target type)
+    /// whose bare `TIMESTAMP` that setting changes: its position and the resolved type as SQL
+    /// text. Spark parses these strings with the session's `DataTypeAstBuilder` (a Spark 4.2.0 run:
+    /// `from_json(j, 'a timestamp')` is `struct<a:timestamp_ntz>`, named `from_json(j)`). The call
+    /// then carries the resolved text, so its result rule and the executor's bind read the same
+    /// type; a string the setting leaves alone (or that does not parse) is kept as written.
+    fn session_type_argument(
+        &self,
+        entry: &FunctionEntry,
+        kids: &[Bound],
+        constants: &[Option<Constant>],
+    ) -> Option<(usize, String)> {
+        if !self.ctx.conf.timestamp_ntz || !is_builtin_entry(entry) {
+            return None;
+        }
+        let i = match entry.id.name() {
+            "from_json" | "from_csv" | "from_xml" => 1,
+            "variant_get" | "try_variant_get" => 2,
+            _ => return None,
+        };
+        let Some(Some(Constant::String(text))) = constants.get(i) else {
+            return None;
+        };
+        if !fold::is_literal(&kids.get(i)?.expr) {
+            return None;
+        }
+        let grammar = krishiv_types::TypeGrammar::new(
+            self.ctx.profile >= crate::analyzer::SparkProfile::V4_3,
+        );
+        // A schema may be a bare field list (`a INT, b TIMESTAMP`): read as a struct of them.
+        let parse = |ntz: bool| {
+            krishiv_types::parse_data_type_with(text, grammar, ntz).or_else(|_| {
+                krishiv_types::parse_data_type_with(&format!("STRUCT<{text}>"), grammar, ntz)
+            })
+        };
+        match (parse(true), parse(false)) {
+            (Ok(session), Ok(plain)) if session != plain => Some((i, session.sql())),
+            _ => None,
+        }
     }
 
     /// The non-empty string literal path in the descriptor position of a `from_protobuf` / `to_protobuf` call (the third of three
@@ -520,7 +580,8 @@ impl Resolver<'_> {
                     _ => return Ok(()),
                 },
             };
-            match krishiv_functions::scalar::schema_of_json_ddl(&csv, &pairs)
+            match self
+                .json_ddl(&csv, &pairs)
                 .map_err(|err| AnalysisError::new(err, e.origin))?
             {
                 Some(ddl) => ddl,
@@ -558,6 +619,52 @@ impl Resolver<'_> {
         Ok(())
     }
 
+    /// The DDL `schema_of_json(json, options)` folds to, under the session
+    /// settings Spark's `JsonInferSchema` reads from `SQLConf`: the `TIME`
+    /// gate (inference knows `TIME` only under the 4.3 profile, Spark 4.2.1
+    /// run in `tests/fixtures/spark-4.2.1/time-text-profiles.json`), the
+    /// default timestamp type, the parser policy and the zone (the options'
+    /// `timeZone`, else the session's).
+    fn json_ddl(
+        &self,
+        json: &str,
+        pairs: &[(String, String)],
+    ) -> Result<Option<String>, krishiv_common::error::KrishivError> {
+        let conf = &self.ctx.conf;
+        let named = pairs
+            .iter()
+            .rev()
+            .find(|(k, _)| k.eq_ignore_ascii_case("timeZone"))
+            .map(|(_, v)| krishiv_kernels::datetime::resolve_zone(v))
+            .transpose()?;
+        let utc = krishiv_kernels::cast::FixedOffset(0);
+        // An unset session zone is UTC, as on the cast path (`AnalyzerConf::session_zone`).
+        let zone: &dyn krishiv_kernels::cast::TimeZoneRules = match &named {
+            Some(z) => z,
+            None => conf
+                .session_zone
+                .as_ref()
+                .map_or(&utc as &dyn krishiv_kernels::cast::TimeZoneRules, |z| z),
+        };
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()
+            .and_then(|d| i64::try_from(d.as_micros()).ok())
+            .unwrap_or(0);
+        let session = krishiv_kernels::json::InferSession {
+            time_type: conf.time_type && self.ctx.profile >= crate::analyzer::SparkProfile::V4_3,
+            default_ntz: conf.timestamp_ntz,
+            zone,
+            today: krishiv_kernels::text::today_in(now, zone),
+        };
+        krishiv_functions::scalar::schema_of_json_ddl(
+            json,
+            pairs,
+            conf.legacy_time_parser,
+            &session,
+        )
+    }
+
     /// The DDL `schema_of_csv(csv[, options])` resolves to (`None`: defaults).
     pub(super) fn csv_ddl(
         &self,
@@ -565,38 +672,45 @@ impl Resolver<'_> {
         csv: &str,
         options: Option<&Bound>,
     ) -> Result<String, AnalysisError> {
-        let options = match options {
-            None => krishiv_io::FormatOptions::defaults(krishiv_io::csv::option_schema()),
-            Some(opts) => {
-                // Options other than a literal map keep the call (the
-                // signature accepts them; the executor has no binding).
-                let ExprNode::Literal(Literal::Map(pairs)) = &opts.expr.node else {
-                    return Err(AnalysisError::new(
-                        InternalError {
-                            message: "schema_of_csv options are not a map literal".to_owned(),
-                        },
-                        e.origin,
-                    ));
-                };
-                // Option names are case-insensitive: of two spellings of one
-                // name, the one written last wins (Spark's `CaseInsensitiveMap`).
-                let mut user: std::collections::BTreeMap<
-                    String,
-                    krishiv_common::secret::OptionValue,
-                > = std::collections::BTreeMap::new();
-                for (k, v) in pairs {
-                    user.retain(|seen, _| !seen.eq_ignore_ascii_case(k));
-                    user.insert(
-                        k.clone(),
-                        krishiv_common::secret::OptionValue::from_user(k, v.clone()),
-                    );
-                }
-                krishiv_io::csv::option_schema()
-                    .parse(&user, &krishiv_common::config::Config::new())
-                    .map_err(|err| AnalysisError::new(err, e.origin))?
-                    .0
+        // Option names are case-insensitive: of two spellings of one name,
+        // the one written last wins (Spark's `CaseInsensitiveMap`).
+        let mut user: std::collections::BTreeMap<String, krishiv_common::secret::OptionValue> =
+            std::collections::BTreeMap::new();
+        if let Some(opts) = options {
+            // Options other than a literal map keep the call (the signature
+            // accepts them; the executor has no binding).
+            let ExprNode::Literal(Literal::Map(pairs)) = &opts.expr.node else {
+                return Err(AnalysisError::new(
+                    InternalError {
+                        message: "schema_of_csv options are not a map literal".to_owned(),
+                    },
+                    e.origin,
+                ));
+            };
+            for (k, v) in pairs {
+                user.retain(|seen, _| !seen.eq_ignore_ascii_case(k));
+                user.insert(
+                    k.clone(),
+                    krishiv_common::secret::OptionValue::from_user(k, v.clone()),
+                );
             }
-        };
+        }
+        // Inference gives `TIME` only under the session's gate (Spark 4.3.0's
+        // `CSVInferSchema` reads `SQLConf.isTimeTypeEnabled`), never an option,
+        // and only under the 4.3 profile: Spark 4.2.1 infers `TIMESTAMP` with
+        // the gate on (`tests/fixtures/spark-4.2.1/time-text-profiles.json`).
+        let infers_time =
+            self.ctx.conf.time_type && self.ctx.profile >= crate::analyzer::SparkProfile::V4_3;
+        let schema = krishiv_io::csv::option_schema();
+        let mut user = schema.without_session_confs(&user).into_owned();
+        user.insert(
+            TIME_TYPE_CONF.to_owned(),
+            krishiv_common::secret::OptionValue::from_user(TIME_TYPE_CONF, infers_time.to_string()),
+        );
+        let options = schema
+            .parse(&user, &krishiv_common::config::Config::new())
+            .map_err(|err| AnalysisError::new(err, e.origin))?
+            .0;
         krishiv_io::csv::ddl_of_string(csv, &options).map_err(|err| {
             AnalysisError::new(
                 match err {

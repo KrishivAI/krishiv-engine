@@ -5,7 +5,7 @@
 
 use std::fmt;
 
-use krishiv_types::{DataType, parse_data_type};
+use krishiv_types::DataType;
 
 use crate::ast::{DataTypeKind, DataTypeSpec, StructField};
 
@@ -23,6 +23,19 @@ impl fmt::Display for DataTypeSpec {
                     && matches!(args.as_slice(), [p] if p.parse::<u32>() == Ok(6)) =>
             {
                 f.write_str(name)
+            }
+            // `TIMESTAMP(9) WITHOUT TIME ZONE` / `WITH LOCAL TIME ZONE`: the canonical name takes the precision
+            // (`timestamp_ntz(9)`), as the type grammar reads it.
+            DataTypeKind::Primitive { name, args }
+                if name.starts_with("timestamp ")
+                    && matches!(args.as_slice(), [p] if matches!(p.parse::<u32>(), Ok(7..=9))) =>
+            {
+                let canonical = if name.ends_with("without time zone") {
+                    "timestamp_ntz"
+                } else {
+                    "timestamp_ltz"
+                };
+                write!(f, "{canonical}({})", args.join(","))
             }
             DataTypeKind::Primitive { name, args } => {
                 // `time(6) without time zone`: arguments follow the first word.
@@ -137,6 +150,7 @@ impl DataTypeSpec {
             kind,
             collation: self.collation.clone(),
             span: self.span,
+            nanos_types: self.nanos_types,
         }
     }
 
@@ -171,7 +185,10 @@ impl DataTypeSpec {
     /// bound errors, and `KRISHIV_UNSUPPORTED_FEATURE` for Spark types not
     /// supported yet.
     pub fn to_data_type(&self) -> Result<DataType, krishiv_common::error::KrishivError> {
-        parse_data_type(&self.to_string())
+        krishiv_types::parse_data_type_in(
+            &self.to_string(),
+            krishiv_types::TypeGrammar::V4_3.with_nanos(self.nanos_types),
+        )
     }
 }
 
@@ -233,5 +250,40 @@ mod tests {
             spec("string").to_column_type().unwrap(),
             (DataType::String, None)
         );
+    }
+
+    /// A bare `TIMESTAMP` is the type `spark.sql.timestampType` names, resolved while parsing
+    /// (Spark's `DataTypeAstBuilder.visitPrimitiveDataType`); the explicit forms keep theirs.
+    #[test]
+    fn a_bare_timestamp_follows_the_timestamp_type_setting() {
+        let ntz = ParserOptions {
+            timestamp_ntz: true,
+            ..ParserOptions::default()
+        };
+        let ty = |text: &str, opts: &ParserOptions| {
+            parse_data_type(text, opts).unwrap().to_data_type().unwrap()
+        };
+        assert_eq!(ty("timestamp", &ntz), DataType::TimestampNtz);
+        assert_eq!(ty("TIMESTAMP(6)", &ntz), DataType::TimestampNtz);
+        assert_eq!(
+            ty("array<timestamp>", &ntz),
+            ty("array<timestamp_ntz>", &ntz)
+        );
+        assert_eq!(ty("timestamp_ltz", &ntz), DataType::Timestamp);
+        assert_eq!(
+            ty("timestamp with local time zone", &ntz),
+            DataType::Timestamp
+        );
+        assert_eq!(
+            ty("timestamp", &ParserOptions::default()),
+            DataType::Timestamp
+        );
+        // Before 4.3 `TIMESTAMP(6)` is no type: the error names it as written.
+        let v42 = ParserOptions {
+            spark_4_3: false,
+            ..ntz
+        };
+        let e = parse_data_type("timestamp(6)", &v42).unwrap_err();
+        assert!(e.to_string().contains("TIMESTAMP(6)"), "{e}");
     }
 }

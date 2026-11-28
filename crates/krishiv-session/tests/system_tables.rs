@@ -219,6 +219,62 @@ fn queries_records_statements_refused_before_they_ran() {
 }
 
 #[test]
+fn queries_carry_the_planning_time_of_a_query_that_ran() {
+    let s = Session::new().unwrap();
+    run_all(
+        &s,
+        "SELECT a.id, count(*) FROM range(100) a JOIN range(100) b ON a.id = b.id GROUP BY a.id",
+    )
+    .unwrap();
+    assert!(run_all(&s, "SELECT nope FROM range(1)").is_err());
+    let rows = strings_in(
+        &s,
+        "SELECT concat_ws('|', state, coalesce(CAST(planning_ns > 0 AS STRING), 'null')) \
+         FROM system.queries WHERE query_text NOT LIKE '%system.queries%' ORDER BY submitted_at",
+    );
+    // The query that ran planned for some time; the one analysis refused never ran, so it has none.
+    assert_eq!(rows, ["finished|true", "failed|null"]);
+}
+
+#[test]
+fn each_run_of_one_dataframe_records_its_own_planning_time() {
+    let s = Session::new().unwrap();
+    let df = block_on(s.sql(
+        "SELECT a.id, count(*) FROM range(100) a JOIN range(100) b ON a.id = b.id GROUP BY a.id",
+    ))
+    .unwrap();
+    block_on(df.collect()).unwrap();
+    block_on(df.collect()).unwrap();
+    let rows = strings_in(
+        &s,
+        "SELECT CAST(planning_ns AS STRING) FROM system.queries \
+         WHERE query_text NOT LIKE '%system.queries%' ORDER BY submitted_at",
+    );
+    assert_eq!(rows.len(), 2, "{rows:?}");
+    let ns: Vec<i64> = rows.iter().map(|r| r.parse().unwrap()).collect();
+    // The second run plans again (optimization and physical planning), so it has a time of its own;
+    // the parse and analysis count only in the first (`PlanningClock::take`, unit-tested in `env.rs`).
+    assert!(ns.iter().all(|&n| n > 0), "{ns:?}");
+}
+
+#[test]
+fn a_profile_carries_the_planning_time_its_row_shows() {
+    let s = Session::new().unwrap();
+    let df =
+        block_on(s.sql("SELECT a.id FROM range(50) a JOIN range(50) b ON a.id = b.id")).unwrap();
+    let (_, profile) = block_on(df.collect_with_profile()).unwrap();
+    let planned = profile.planning_ns.expect("a profiled query planned");
+    let doc = profile.to_json_value();
+    assert_eq!(doc["usage"]["planning_ns"], planned);
+    let rows = strings_in(
+        &s,
+        "SELECT CAST(planning_ns AS STRING) FROM system.queries \
+         WHERE query_text NOT LIKE '%system.queries%' AND state = 'finished'",
+    );
+    assert_eq!(rows, [planned.to_string()]);
+}
+
+#[test]
 fn queries_records_an_action_that_fails_in_physical_planning() {
     let s = Session::new().unwrap();
     // Analyzes, so `sql` succeeds; the planner has no window form of `approx_count_distinct` yet.
@@ -1297,7 +1353,7 @@ fn a_view_over_a_system_table_and_global_temp_views_work_under_system() {
 }
 
 #[test]
-fn show_databases_lists_nothing_under_system_and_use_namespace_can_name_the_session_catalog() {
+fn show_databases_lists_nothing_under_system_and_use_reaches_the_session_catalog() {
     let s = Session::new().unwrap();
     run(&s, "CREATE DATABASE other_db").unwrap();
     run(&s, "USE system").unwrap();
@@ -1308,7 +1364,26 @@ fn show_databases_lists_nothing_under_system_and_use_namespace_can_name_the_sess
             .unwrap_err()
             .contains("SCHEMA_NOT_FOUND")
     );
-    run(&s, "USE NAMESPACE spark_catalog.other_db").unwrap();
+    // With a keyword no part is a catalog: every part is a namespace of `system`, which has none.
+    for (sql, name) in [
+        (
+            "USE NAMESPACE spark_catalog.other_db",
+            "`system`.`spark_catalog`.`other_db`",
+        ),
+        (
+            "USE SCHEMA spark_catalog.other_db",
+            "`system`.`spark_catalog`.`other_db`",
+        ),
+        ("USE DATABASE a.b", "`system`.`a`.`b`"),
+    ] {
+        let e = run(&s, sql).unwrap_err();
+        assert!(
+            e.contains("SCHEMA_NOT_FOUND") && e.contains(name),
+            "{sql}: {e}"
+        );
+    }
+    assert_eq!(column_of(&s, "SELECT current_catalog()", 0), ["system"]);
+    run(&s, "USE spark_catalog.other_db").unwrap();
     assert_eq!(
         column_of(&s, "SELECT current_catalog()", 0),
         ["spark_catalog"]

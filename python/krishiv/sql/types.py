@@ -666,6 +666,11 @@ def _parse_datatype_json_value(json_value: dict[str, Any] | str) -> DataType:
         # which differs from ``simpleString`` (``"int"``, ``"bigint"``) for four of them.
         if json_value in ("byte", "short", "integer", "long"):
             return {"byte": ByteType, "short": ShortType, "integer": IntegerType, "long": LongType}[json_value]()
+        # Spark 4.3's nanosecond timestamps (``timestamp_ntz(9)``, ``timestamp_ltz(7)``): this client has no
+        # precision-carrying timestamp type, so the schema reads them as the microsecond types.
+        nanos = re.fullmatch(r"timestamp_(ntz|ltz)\([789]\)", json_value) if isinstance(json_value, str) else None
+        if nanos:
+            return TimestampNTZType() if nanos.group(1) == "ntz" else TimestampType()
         try:
             return _from_simple_string(json_value)
         except Exception:

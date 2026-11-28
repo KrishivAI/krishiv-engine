@@ -16,6 +16,8 @@
 //! `grants_views.rs`), and a generator over the IR node kinds (`PlanNode` is `#[non_exhaustive]`
 //! outside `krishiv-plan`).
 #![cfg(test)]
+mod literal_path;
+use literal_path::sql_path;
 
 use std::fmt::Write as _;
 use std::sync::{Arc, Mutex};
@@ -187,7 +189,7 @@ fn no_row_reads_the_canary_and_none_shows_the_vault() {
     let path_read = format!("SELECT * FROM parquet.`{canary_path}`");
     let directory = format!(
         "INSERT OVERWRITE DIRECTORY '{}' USING parquet SELECT * FROM canary",
-        dir.path().join("out").display()
+        sql_path(&dir.path().join("out"))
     );
     // design §6: one row per cell (the unauthorised case of the `grants` column).
     let mut refused: Vec<Row<'_>> = vec![
@@ -219,10 +221,6 @@ fn no_row_reads_the_canary_and_none_shows_the_vault() {
         ("SHOW COLUMNS", sql("SHOW COLUMNS IN canary")),
         ("SHOW CREATE TABLE", sql("SHOW CREATE TABLE canary")),
         ("SHOW TBLPROPERTIES", sql("SHOW TBLPROPERTIES canary")),
-        (
-            "information_schema",
-            sql("SELECT * FROM information_schema.tables"),
-        ),
         (
             "SET a server-scoped store key",
             sql("SET fs.s3a.endpoint = http://127.0.0.1:1"),
@@ -438,6 +436,23 @@ fn no_row_reads_the_canary_and_none_shows_the_vault() {
         (
             "system.queries",
             sql("SELECT query_text FROM system.queries"),
+        ),
+        // The views are readable by everyone; their rows are what the principal may list.
+        (
+            "information_schema.tables",
+            sql("SELECT * FROM information_schema.tables"),
+        ),
+        (
+            "information_schema.columns",
+            sql("SELECT * FROM information_schema.columns"),
+        ),
+        (
+            "information_schema.schemata",
+            sql("SELECT * FROM information_schema.schemata"),
+        ),
+        (
+            "information_schema.views",
+            sql("SELECT * FROM information_schema.views"),
         ),
     ];
     for (row, run) in &listings {

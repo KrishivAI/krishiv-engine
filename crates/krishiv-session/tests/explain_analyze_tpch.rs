@@ -20,16 +20,23 @@ use common::query;
 const ORDERS: usize = 40;
 
 /// One compute thread, so the per-operator counts do not depend on how drivers
-/// interleave.
+/// interleave, and the wave scheduler (`krishiv.exec.dataflowScheduling`
+/// off): a runtime filter its scan does not wait for (`RuntimeFilter #1`,
+/// `#2` of Q18) is applied only to the rows the scan reads after the build
+/// ends, and under dataflow scheduling the build and the scan may run at the
+/// same time, so the filter counters would depend on timing (results do not).
+/// Waves end every build of a wave before the next starts.
 fn session() -> Session {
     let executor = TokioExecutor::new(&ExecutorConfig {
         compute_threads: 1,
         io_threads: 1,
         blocking_threads: 1,
         io_blocking_threads: 2,
+        release_when_idle: true,
     })
     .unwrap();
     let s = Session::builder().executor(executor).build().unwrap();
+    block_on(s.sql("SET krishiv.exec.dataflowScheduling = false")).unwrap();
     common::register(&s, ORDERS);
     s
 }

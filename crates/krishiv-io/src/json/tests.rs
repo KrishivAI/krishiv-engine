@@ -263,7 +263,7 @@ pub(super) fn infer_named(
         .map_err(|e| e.into_error("f.json"))
 }
 
-fn encode(batch: &RecordBatch, o: &FormatOptions) -> Result<Vec<u8>, KrishivError> {
+pub(super) fn encode(batch: &RecordBatch, o: &FormatOptions) -> Result<Vec<u8>, KrishivError> {
     let mut e = JsonEncoder::new(&batch.schema(), o).map_err(|e| e.into_error("t.json"))?;
     e.write(batch).map_err(|e| e.into_error("t.json"))?;
     let mut out = Vec::new();
@@ -893,6 +893,12 @@ fn decimal_merges_fall_back_to_double_past_38_digits() {
     // 30 integer digits next to 10 fractional ones needs 40 digits.
     assert_eq!(
         ty("{\"a\":12345678901234567890.1234567890}\n{\"a\":123456789012345678901234567890.5}\n"),
+        DataType::Float64
+    );
+    // One float of 41 digits is DOUBLE by itself (Spark 4.2.1 / 4.3.0 runs:
+    // `struct<a:double>`).
+    assert_eq!(
+        ty(&format!("{{\"a\":1.{}}}\n", "1".repeat(40))),
         DataType::Float64
     );
     // A long next to a decimal merges as DECIMAL(20, 0).

@@ -61,12 +61,16 @@
 //! starts pressure epochs only with a back-off (`Backoff`). The `krishiv`
 //! CLI and the Python module install the probe at every limit anyway (on
 //! Linux; [`process_resident_bytes`] is `None` elsewhere): the default
-//! limit is 80% of the container, and with no guard memory the pools do not
-//! track took a process over its cgroup (acceptance SQL-34); a spill costs
-//! less than a kill. At the default limit the guard holds the process to
-//! about 0.9 x the container + 64 MiB, which is inside it from 640 MiB up;
-//! a smaller container needs a lower limit. Without a probe nothing is
-//! sampled or cut.
+//! limit is 80% of the container, lowered so that the guard's ceiling below
+//! stays at least 384 MiB under it, but never under half (`limit.rs`
+//! `MIN_HEADROOM`), and with no guard memory the pools do
+//! not track took a process over its cgroup (acceptance SQL-34); a spill
+//! costs less than a kill. At the default limit the guard holds the process
+//! to 9/8 of the limit + 64 MiB: 640 MiB in a 1 GiB container, 1.6 GiB in
+//! 2 GiB, about 0.9 x the container + 64 MiB from about 4.4 GiB up, leaving
+//! room for the page cache
+//! the cgroup also counts (QA2-12). Without a probe nothing is sampled or
+//! cut.
 
 use std::sync::atomic::{AtomicU64, Ordering as StdOrdering};
 use std::sync::{Arc, OnceLock, Weak};
@@ -276,6 +280,10 @@ fn read_rss(file: &std::fs::File) -> Option<usize> {
 }
 
 /// The `VmRSS:` value of a `/proc/<pid>/status` text, in bytes.
+#[cfg_attr(
+    all(not(target_os = "linux"), not(test)),
+    expect(dead_code, reason = "/proc is read on Linux only")
+)]
 fn vm_rss(status: &[u8]) -> Option<usize> {
     const KEY: &[u8] = b"VmRSS:";
     let at = status.windows(KEY.len()).position(|w| w == KEY)?;

@@ -26,7 +26,7 @@ characters, case insensitive:
   'PR': Only allowed at the end of the format string; specifies that the result string will be
     wrapped by angle brackets if the input value is negative.
     ('<1>').
-If `expr` is a datetime, `format` shall be a valid datetime pattern, see <a href="https://spark.apache.org/docs/latest/sql-ref-datetime-pattern.html">Datetime Patterns</a>.
+If `expr` is a datetime, `format` shall be a valid datetime pattern, see [Datetime Patterns](https://spark.apache.org/docs/latest/sql-ref-datetime-pattern.html).
 If `expr` is a binary, it is converted to a string in one of the formats:
   'base64': a base 64 string.
   'hex': a string in the hexadecimal format.

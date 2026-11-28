@@ -156,9 +156,64 @@ fn spatial_fields_need_their_tag() {
     );
 }
 
+/// A user's type string under `spark.sql.timestampType = TIMESTAMP_NTZ` (Spark
+/// `DataTypeAstBuilder.visitPrimitiveDataType`): a bare `TIMESTAMP`, at any depth, and 4.3's
+/// `TIMESTAMP(6)` (`06` too) are `TIMESTAMP_NTZ`; `TIMESTAMP_LTZ` and the multi-word forms keep
+/// their type; the canonical parse keeps `timestamp` LTZ.
+#[test]
+fn a_bare_timestamp_follows_the_session_timestamp_type() {
+    let ntz = |s: &str, g| crate::parse_data_type_with(s, g, true);
+    assert_eq!(
+        ntz("timestamp", TypeGrammar::V4_2),
+        Ok(DataType::TimestampNtz)
+    );
+    assert_eq!(
+        ntz("TIMESTAMP(6)", TypeGrammar::V4_3),
+        Ok(DataType::TimestampNtz)
+    );
+    assert_eq!(
+        ntz("timestamp(06)", TypeGrammar::V4_3),
+        Ok(DataType::TimestampNtz)
+    );
+    assert_eq!(
+        ntz("timestamp_ltz", TypeGrammar::V4_3),
+        Ok(DataType::Timestamp)
+    );
+    assert_eq!(
+        ntz("timestamp with local time zone", TypeGrammar::V4_3),
+        Ok(DataType::Timestamp)
+    );
+    assert_eq!(
+        ntz("array<timestamp>", TypeGrammar::V4_3),
+        parse_data_type("array<timestamp_ntz>")
+    );
+    assert_eq!(
+        ntz("struct<a: map<string, timestamp>>", TypeGrammar::V4_3),
+        parse_data_type("struct<a: map<string, timestamp_ntz>>")
+    );
+    assert!(ntz("timestamp(6)", TypeGrammar::V4_2).is_err());
+    assert_eq!(
+        crate::parse_data_type_with("timestamp", TypeGrammar::V4_3, false),
+        Ok(DataType::Timestamp)
+    );
+    assert_eq!(parse_data_type("timestamp"), Ok(DataType::Timestamp));
+}
+
 /// The type grammar of a release (R3 review findings 7, 14, 15): 4.2 caps `TIME` at 6 and has no
 /// timestamp precision; 4.3 takes `TIME(0..=9)` and `TIMESTAMP_NTZ(6)`, refuses 7..=9, and words
 /// the range as `[0, 9]`.
+#[test]
+fn the_nanos_grammar_builds_the_nanosecond_timestamps() {
+    let nanos = |s: &str| parse_data_type_in(s, TypeGrammar::V4_3.with_nanos(true));
+    assert_eq!(nanos("timestamp_ntz(9)"), DataType::timestamp_ntz(9));
+    assert_eq!(nanos("timestamp_ltz(7)"), DataType::timestamp_ltz(7));
+    assert_eq!(nanos("timestamp(8)"), DataType::timestamp_ltz(8));
+    assert_eq!(nanos("timestamp_ntz(6)"), Ok(DataType::TimestampNtz));
+    assert!(nanos("timestamp_ntz(10)").is_err());
+    assert!(parse_data_type_in("timestamp_ntz(9)", TypeGrammar::V4_3).is_err());
+    assert_eq!(TypeGrammar::V4_2.with_nanos(true), TypeGrammar::V4_2);
+}
+
 #[test]
 fn the_type_grammar_follows_the_release() {
     let class = |r: crate::error::Result<DataType>| r.err().map(|e| e.error_class());
@@ -204,8 +259,10 @@ fn the_type_grammar_follows_the_release() {
     let ntz = DataType::from_json(&field("timestamp_ntz(6)")).unwrap();
     assert_eq!(ntz.simple_string(), "struct<a:timestamp_ntz>");
     assert_eq!(
-        class(DataType::from_json(&field("timestamp_ltz(9)"))),
-        Some(ErrorClass::KrishivUnsupportedFeature)
+        DataType::from_json(&field("timestamp_ltz(9)"))
+            .unwrap()
+            .simple_string(),
+        "struct<a:timestamp_ltz(9)>"
     );
     assert_eq!(
         class(DataType::from_json(&field("timestamp_ntz(2)"))),
@@ -233,13 +290,7 @@ fn the_type_grammar_follows_the_release() {
     }
     let ntz = DataType::from_json_in(&field("timestamp_ntz(6)"), TypeGrammar::V4_2).unwrap();
     assert_eq!(ntz.simple_string(), "struct<a:timestamp_ntz>");
-    assert_eq!(
-        class(DataType::from_json_in(
-            &field("timestamp_ntz(9)"),
-            TypeGrammar::V4_3
-        )),
-        Some(ErrorClass::KrishivUnsupportedFeature)
-    );
+    assert!(DataType::from_json_in(&field("timestamp_ntz(9)"), TypeGrammar::V4_3).is_ok());
     // A `time(9)` read under 4.2 is refused with 4.2's text.
     let t9 = DataType::from_json_in(&field("time(9)"), TypeGrammar::V4_2).unwrap_err();
     assert!(t9.to_string().contains("range [0, 6]"));
@@ -471,11 +522,11 @@ fn timestamps_distinguish_ltz_and_ntz() {
     }
     assert_eq!(normalize_ingest_type(&none), none);
     assert_eq!(normalize_ingest_type(&ArrowType::Utf8), ArrowType::Utf8);
-    for unit in [
-        TimeUnit::Second,
-        TimeUnit::Millisecond,
-        TimeUnit::Nanosecond,
-    ] {
+    assert_eq!(
+        DataType::from_arrow(&ArrowType::Timestamp(TimeUnit::Nanosecond, None)),
+        Ok(DataType::TimestampNtzNanos { precision: 9 })
+    );
+    for unit in [TimeUnit::Second, TimeUnit::Millisecond] {
         let e = DataType::from_arrow(&ArrowType::Timestamp(unit, None));
         assert_eq!(
             e.map_err(|e| e.error_class()),
@@ -1542,4 +1593,22 @@ fn a_udt_over_an_indeterminate_collation_reads_back_from_its_arrow_field() {
     );
     let field = t.to_arrow_field("p", true);
     assert_eq!(DataType::from_arrow_field(&field).unwrap(), t);
+}
+
+#[test]
+fn nanosecond_timestamps_follow_the_precision() {
+    assert_eq!(DataType::timestamp_ntz(6).unwrap(), DataType::TimestampNtz);
+    assert_eq!(DataType::timestamp_ltz(0).unwrap(), DataType::Timestamp);
+    let ntz = DataType::timestamp_ntz(8).unwrap();
+    assert_eq!(ntz, DataType::TimestampNtzNanos { precision: 8 });
+    assert_ne!(ntz, DataType::timestamp_ntz(9).unwrap());
+    assert_eq!(
+        ntz.to_arrow(),
+        ArrowType::Timestamp(TimeUnit::Nanosecond, None)
+    );
+    assert!(ntz.is_valid_storage(&ntz.to_arrow()));
+    let ltz = DataType::timestamp_ltz(9).unwrap();
+    assert!(ltz.is_valid_storage(&ltz.to_arrow()));
+    assert!(!ltz.is_valid_storage(&ntz.to_arrow()));
+    assert!(DataType::timestamp_ltz(10).is_err());
 }

@@ -207,6 +207,8 @@ impl Session {
         queries_only: bool,
     ) -> Result<Ran, KrishivError> {
         let mut env = self.query_env();
+        // Planning starts here: substitution, `IDENTIFIER(..)` clauses and the parse count (MODES-2).
+        env.planning.parse_started(std::time::Instant::now());
         env.row = row;
         let written = query;
         let query = self.substituted(query);
