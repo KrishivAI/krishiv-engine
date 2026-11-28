@@ -33,15 +33,15 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use krishiv_common::config::{
-    CONNECT_ADDRESS, CONNECT_PORT, Config, ConfigValue, IO_EGRESS_PRIVATE_ADDRESSES,
-    METRICS_ENABLED, SERVER_ALLOW_CORE_DUMPS, SERVER_METRICS_PUBLIC,
+    CONNECT_ADDRESS, CONNECT_PORT, CONNECT_SPARK_PROFILE, Config, ConfigValue,
+    IO_EGRESS_PRIVATE_ADDRESSES, METRICS_ENABLED, SERVER_ALLOW_CORE_DUMPS, SERVER_METRICS_PUBLIC,
     SERVER_READINESS_FAILURE_THRESHOLD, SERVER_READINESS_INTERVAL, SERVER_READINESS_REQUIRED,
     SERVER_READINESS_TIMEOUT, SERVER_SHUTDOWN_TIMEOUT, UI_ALLOWED_HOSTS, UI_ALLOWED_ORIGINS,
     UI_EMBED_HIDE_ATTRIBUTION, UI_EMBED_LINK_TTL, UI_ENABLED,
 };
 use krishiv_connect_server::{
-    ConnectAuth, ConnectServer, ConnectServerConfig, ExtraProvider, SessionFactory, SessionLimits,
-    SessionManager, host, provider_sessions,
+    ConnectAuth, ConnectServer, ConnectServerConfig, ExtraProvider, ProfileChoice, SessionFactory,
+    SessionLimits, SessionManager, host, provider_sessions,
 };
 use krishiv_server::guard::{Guard, TokenGuard};
 use krishiv_server::session_guard::SessionGuard;
@@ -143,6 +143,29 @@ fn refuse_unauthenticated_providers(config: &Config) -> Result<(), String> {
     Ok(())
 }
 
+/// `krishiv.connect.sparkProfile` (ADR 0003 update 2026-11-27): how the Connect manager picks a
+/// session's Spark profile.
+fn profile_choice(config: &Config) -> Result<ProfileChoice, String> {
+    let value = config
+        .get(&CONNECT_SPARK_PROFILE)
+        .and_then(ConfigValue::as_str)
+        .unwrap_or("auto");
+    ProfileChoice::parse(value)
+        .ok_or_else(|| format!("{}: unknown value `{value}`", CONNECT_SPARK_PROFILE.key))
+}
+
+/// `builder` under a pinned profile: the base sessions' profile is what Flight SQL, console and
+/// undeclaring Connect clients get, so a pinned value reaches every transport.
+fn profiled(
+    builder: krishiv_session::SessionBuilder,
+    choice: ProfileChoice,
+) -> krishiv_session::SessionBuilder {
+    match choice {
+        ProfileChoice::Pinned(p) => builder.profile(p),
+        ProfileChoice::Base | ProfileChoice::Auto => builder,
+    }
+}
+
 /// The command's arguments.
 #[derive(Debug, clap::Args)]
 pub(crate) struct ServerArgs {
@@ -160,6 +183,10 @@ pub(crate) struct ServerArgs {
     /// Run even as uid 0.
     #[arg(long)]
     allow_root: bool,
+    /// The Spark release the sessions follow: `auto` (each Spark Connect session takes its
+    /// client's declared release) or `3.5` to `4.3`; `krishiv.connect.sparkProfile`, default `auto`.
+    #[arg(long = "spark-profile", value_parser = ["auto", "3.5", "4.0", "4.1", "4.2", "4.3"])]
+    spark_profile: Option<String>,
     /// Engine setting, `KEY=VALUE` (repeatable).
     #[arg(long = "conf", value_parser = crate::common::key_value)]
     conf: Vec<(String, String)>,
@@ -178,9 +205,13 @@ impl ServerArgs {
     pub(crate) fn port(&self) -> u16 {
         self.port
     }
-    /// The `--conf` settings.
-    pub(crate) fn conf(&self) -> &[(String, String)] {
-        &self.conf
+    /// The `--conf` settings, then `--spark-profile` as `krishiv.connect.sparkProfile` (the flag wins).
+    pub(crate) fn conf(&self) -> Vec<(String, String)> {
+        let mut conf = self.conf.clone();
+        if let Some(p) = &self.spark_profile {
+            conf.push((CONNECT_SPARK_PROFILE.key.to_owned(), p.clone()));
+        }
+        conf
     }
     /// `--allow-root`.
     pub(crate) fn allow_root(&self) -> bool {
@@ -194,6 +225,7 @@ impl ServerArgs {
             connect_port: Some(0),
             host: None,
             allow_root: false,
+            spark_profile: None,
             conf: conf
                 .iter()
                 .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
@@ -318,7 +350,7 @@ pub(crate) fn check_host(host: IpAddr, settings: &Settings) -> Result<(), String
 }
 
 fn serve(args: &ServerArgs) -> Result<(), String> {
-    let settings = load_settings(&args.conf)?;
+    let settings = load_settings(&args.conf())?;
     let mut builder = EngineRuntime::builder();
     let host = resolve_host(args.host, &settings.config)?;
     check_host(host, &settings)?;
@@ -533,8 +565,8 @@ async fn run_listeners(
     connect_addr: SocketAddr,
     admin_addr: SocketAddr,
 ) -> Result<(), String> {
-    let base = Session::builder()
-        .runtime(Arc::clone(&runtime))
+    let profiles = profile_choice(config)?;
+    let base = profiled(Session::builder().runtime(Arc::clone(&runtime)), profiles)
         .build()
         .map_err(|e| e.to_string())?;
     // Every client's session is built from this one and none runs in it: the console does not list it.
@@ -549,7 +581,8 @@ async fn run_listeners(
     } else {
         refuse_unauthenticated_providers(config)?;
         SessionManager::from_base(base, limits)
-    };
+    }
+    .with_profile_choice(profiles);
     // One Python UDF worker pool per server (P3-T014): every Connect session's UDFs run on it, in
     // workers of their own owner, once the session passed the `Usage` check on `System("udf")`.
     // Starting it runs each listed interpreter once and writes the worker package: off the async workers.
@@ -894,16 +927,18 @@ fn admin_router(
         if let Some(denials) = denials {
             // The editor runs a statement as the authenticated caller, in the session a Spark Connect session of
             // that caller gets: the same role matrix and path confinement.
-            let base = Session::builder()
-                .runtime(Arc::clone(runtime))
-                .build()
-                .map_err(|e| e.to_string())?;
+            let base = profiled(
+                Session::builder().runtime(Arc::clone(runtime)),
+                profile_choice(config)?,
+            )
+            .build()
+            .map_err(|e| e.to_string())?;
             templates.push(base.id().to_owned());
             // The editor's sessions are UI sessions: their denials count under the `ui` surface, where the
             // statement arrived (P3-T101 §2 H3).
             let factory = caller_sessions(base, config, denials)?;
             source = source.with_caller_sessions(Arc::new(move |caller: &Authenticated| {
-                let session = factory(caller, Transport::Ui)?;
+                let session = factory(caller, Transport::Ui, None)?;
                 // `system.sessions` shows the transport the denials count under.
                 session.set_client_info(Transport::Ui, None, None, None);
                 Ok(session)

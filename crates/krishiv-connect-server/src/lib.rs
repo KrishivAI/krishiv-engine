@@ -41,7 +41,9 @@ pub use auth::{
 };
 pub use errors::SessionErrors;
 pub use local::LocalServer;
-pub use manager::{ManagerCounts, SessionEntry, SessionFactory, SessionLimits, SessionManager};
+pub use manager::{
+    ManagerCounts, ProfileChoice, SessionEntry, SessionFactory, SessionLimits, SessionManager,
+};
 pub use operation::{ExecuteLimits, Operation, OperationState, Operations};
 pub use server::{ConnectServer, ConnectServerConfig};
 pub use service::ConnectService;

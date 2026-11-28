@@ -59,9 +59,10 @@ LEGACY_PANDAS_CONVERSION = "spark.sql.legacy.execution.pythonUDTF.pandas.convers
 def _skip_rest_exception() -> type[BaseException]:
     """``pyspark.sql.udtf.SkipRestOfInputTableException``: the class a UDTF raises (pyspark's in a pool worker)."""
     if IN_WORKER:
-        from pyspark.sql.udtf import SkipRestOfInputTableException  # ty: ignore[unresolved-import]
+        from pyspark.sql import udtf  # ty: ignore[unresolved-import]  # pool workers only
 
-        return SkipRestOfInputTableException
+        # PySpark 3.5 has no such class, so a 3.5 UDTF cannot raise it.
+        return getattr(udtf, "SkipRestOfInputTableException", _SkipRestOfInputTable)
     return _SkipRestOfInputTable
 
 

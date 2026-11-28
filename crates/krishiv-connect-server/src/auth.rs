@@ -45,7 +45,7 @@ use krishiv_common::principal::{Principal, PrincipalKind};
 use krishiv_connect::proto::v4_3 as pb;
 use krishiv_connect::proto::v4_3::command::CommandType;
 use krishiv_connect::proto::v4_3::ml_command::Command as MlCommandType;
-use krishiv_plan::analyzer::insufficient_permissions;
+use krishiv_plan::analyzer::{SparkProfile, insufficient_permissions};
 use krishiv_session::auth::{
     AuthFailure, Authenticated, Authenticator, BasicHeader, Credentials, DeniedCounts, Method,
     Role, RolePolicy, ServerAuth, Surface, basic_header,
@@ -376,9 +376,13 @@ pub fn provider_sessions(
     };
     policy(None)?;
     Ok(Box::new(
-        move |caller: &Authenticated, transport: Transport| {
+        move |caller: &Authenticated, transport: Transport, profile: Option<SparkProfile>| {
             let policy = policy(caller.role)?;
-            let session = base.new_session_as(caller.principal.clone(), Arc::new(policy));
+            let session = base.new_session_as_with_profile(
+                caller.principal.clone(),
+                Arc::new(policy),
+                profile.unwrap_or_else(|| base.spark_profile()),
+            );
             // The manager builds sessions for its listener's services only (Connect, Flight SQL).
             let surface = Surface::of(transport).unwrap_or(Surface::Connect);
             session.count_denials(Arc::clone(&denials), surface);

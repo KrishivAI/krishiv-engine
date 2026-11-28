@@ -63,6 +63,10 @@ pub struct Interpreter {
     pub pandas: Option<String>,
 }
 
+/// The oldest `pyarrow` major version the worker program supports: PySpark 4.2.0's minimum, whose conversion
+/// code the worker runs (an older one has no `string_view` casts, which UDF input columns need).
+const MIN_PYARROW_MAJOR: u32 = 18;
+
 impl Interpreter {
     /// Runs `executable` (an absolute path, or a name looked up on `PATH`) once and records it.
     ///
@@ -167,6 +171,20 @@ impl Interpreter {
                 "{}: missing {} (install pyspark-client of the clients' version and pyarrow)",
                 self.path.display(),
                 missing.join(" and ")
+            )
+        })
+    }
+
+    /// A warning for an interpreter whose `pyarrow` is older than the worker supports: it is still used, and
+    /// UDF calls that need the newer `pyarrow` fail with a Python error.
+    pub fn old_pyarrow_warning(&self) -> Option<String> {
+        let version = self.pyarrow.as_deref()?;
+        let major: u32 = version.split('.').next()?.parse().ok()?;
+        (major < MIN_PYARROW_MAJOR).then(|| {
+            format!(
+                "{}: pyarrow {version} is older than {MIN_PYARROW_MAJOR}.0.0; some Python UDFs will fail \
+                 until it is upgraded",
+                self.path.display()
             )
         })
     }
@@ -373,6 +391,26 @@ mod tests {
                 .unwrap_or_default()
                 .contains("missing pyspark")
         );
+    }
+
+    #[test]
+    fn an_old_pyarrow_is_used_with_a_warning() {
+        let mut i = Interpreter::from_record("/x".into(), &record([3, 11, 9], Some("3.5.10")))
+            .expect("record");
+        assert_eq!(i.old_pyarrow_warning(), None);
+        i.pyarrow = Some("18.0.0".to_owned());
+        assert_eq!(i.old_pyarrow_warning(), None);
+        i.pyarrow = Some("16.1.0".to_owned());
+        assert_eq!(i.unusable_reason(), None);
+        let warning = i.old_pyarrow_warning().unwrap_or_default();
+        assert!(
+            warning.contains("pyarrow 16.1.0 is older than 18.0.0"),
+            "{warning}"
+        );
+        for unreadable in [None, Some("dev".to_owned())] {
+            i.pyarrow = unreadable;
+            assert_eq!(i.old_pyarrow_warning(), None);
+        }
     }
 
     #[test]

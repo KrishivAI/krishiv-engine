@@ -232,6 +232,7 @@ impl ConnectService {
         session_id: &str,
         observed: Option<&str>,
         user: Option<&pb::UserContext>,
+        client_type: Option<&str>,
     ) -> Result<Arc<SessionEntry>, Status> {
         let user = user.map_or("", |u| u.user_id.as_str());
         // While draining no session is created: an unknown id is not found.
@@ -239,7 +240,7 @@ impl ConnectService {
             self.manager.get(caller, session_id, observed)
         } else {
             self.manager
-                .get_or_create(caller, session_id, observed, user)
+                .get_or_create_declared(caller, session_id, observed, user, client_type)
         }
         .map_err(|e| status_of(&e))?;
         // The latest RPC's user token, for the session's delegated catalogs (P3-T067 §3.3).
@@ -259,6 +260,7 @@ impl ConnectService {
         session_id: &str,
         observed: Option<&str>,
         user: Option<&pb::UserContext>,
+        client_type: Option<&str>,
     ) -> Result<Arc<SessionEntry>, Status> {
         if self.is_draining() {
             return self.manager.get(caller, session_id, observed).map_err(|e| {
@@ -273,7 +275,7 @@ impl ConnectService {
                 }
             });
         }
-        self.session(caller, session_id, observed, user)
+        self.session(caller, session_id, observed, user, client_type)
     }
 }
 
@@ -298,6 +300,7 @@ impl SparkConnectService for ConnectService {
             &request.session_id,
             request.client_observed_server_side_session_id.as_deref(),
             request.user_context.as_ref(),
+            request.client_type.as_deref(),
         )?;
         observe(&entry, request.client_type.as_deref(), agent.as_deref());
         // An abandoned id is refused (Spark's `createExecuteHolder`, v4.3.0
@@ -333,6 +336,7 @@ impl SparkConnectService for ConnectService {
             &request.session_id,
             request.client_observed_server_side_session_id.as_deref(),
             request.user_context.as_ref(),
+            request.client_type.as_deref(),
         )?;
         observe(&entry, request.client_type.as_deref(), agent.as_deref());
         let _gate = entry.shared().await;
@@ -358,6 +362,7 @@ impl SparkConnectService for ConnectService {
             &request.session_id,
             request.client_observed_server_side_session_id.as_deref(),
             request.user_context.as_ref(),
+            request.client_type.as_deref(),
         )?;
         observe(&entry, request.client_type.as_deref(), agent.as_deref());
         let _gate = entry.shared().await;
@@ -393,6 +398,7 @@ impl SparkConnectService for ConnectService {
             &first.session_id,
             first.client_observed_server_side_session_id.as_deref(),
             first.user_context.as_ref(),
+            first.client_type.as_deref(),
         )?;
         observe(&entry, first.client_type.as_deref(), agent.as_deref());
         // Only the classes this handler applies are accepted: a class
@@ -428,6 +434,7 @@ impl SparkConnectService for ConnectService {
             &request.session_id,
             request.client_observed_server_side_session_id.as_deref(),
             request.user_context.as_ref(),
+            request.client_type.as_deref(),
         )?;
         observe(&entry, request.client_type.as_deref(), agent.as_deref());
         Ok(Response::new(artifacts::artifact_status(&entry, &request)))
@@ -447,6 +454,7 @@ impl SparkConnectService for ConnectService {
             &request.session_id,
             request.client_observed_server_side_session_id.as_deref(),
             request.user_context.as_ref(),
+            request.client_type.as_deref(),
         )?;
         observe(&entry, request.client_type.as_deref(), agent.as_deref());
         let response =
@@ -618,6 +626,7 @@ impl SparkConnectService for ConnectService {
             &request.session_id,
             request.client_observed_server_side_session_id.as_deref(),
             request.user_context.as_ref(),
+            request.client_type.as_deref(),
         )?;
         observe(&entry, request.client_type.as_deref(), agent.as_deref());
         let response = entry

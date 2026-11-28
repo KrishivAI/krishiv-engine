@@ -248,10 +248,26 @@ impl Session {
     /// ```
     #[must_use]
     pub fn new_session(&self) -> Self {
+        self.new_session_with_profile(self.state.profile)
+    }
+
+    /// [`Self::new_session`] under another Spark profile: a server's session for a client that
+    /// declares an older Spark version (ADR 0003 update 2026-11-27).
+    ///
+    /// ```
+    /// use krishiv_plan::analyzer::SparkProfile;
+    /// let a = krishiv_session::Session::new()?;
+    /// let b = a.new_session_with_profile(SparkProfile::V3_5);
+    /// assert_eq!(b.spark_profile(), SparkProfile::V3_5);
+    /// assert_eq!(b.conf().get("spark.sql.ansi.enabled").as_deref(), Some("false"));
+    /// # Ok::<(), krishiv_common::error::KrishivError>(())
+    /// ```
+    #[must_use]
+    pub fn new_session_with_profile(&self, profile: krishiv_plan::analyzer::SparkProfile) -> Self {
         let state = &self.state;
         let runtime = Arc::clone(&state.runtime);
         let parts = SessionParts {
-            profile: state.profile,
+            profile,
             principal: Arc::clone(&state.principal),
             policy: Arc::clone(&state.policy),
             grants: state.grants.clone(),
@@ -274,10 +290,22 @@ impl Session {
         principal: krishiv_common::principal::Principal,
         policy: Arc<dyn krishiv_plan::analyzer::AccessPolicy>,
     ) -> Self {
+        self.new_session_as_with_profile(principal, policy, self.state.profile)
+    }
+
+    /// [`Self::new_session_as`] under another Spark profile (the Connect server's profile choice,
+    /// ADR 0003 update 2026-11-27).
+    #[must_use]
+    pub fn new_session_as_with_profile(
+        &self,
+        principal: krishiv_common::principal::Principal,
+        policy: Arc<dyn krishiv_plan::analyzer::AccessPolicy>,
+        profile: krishiv_plan::analyzer::SparkProfile,
+    ) -> Self {
         let state = &self.state;
         let runtime = Arc::clone(&state.runtime);
         let parts = SessionParts {
-            profile: state.profile,
+            profile,
             principal: Arc::new(principal),
             policy,
             // The base session's grants policy is its own principal's: never the caller's. Without

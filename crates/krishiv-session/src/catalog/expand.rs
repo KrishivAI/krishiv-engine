@@ -257,7 +257,15 @@ impl Expander<'_> {
             );
             trial.go(Arc::clone(lowered.root()), &mut scope.clone())?;
             if trial.inlined_temp > 0 || !trial.reached.is_empty() {
-                return self.go(Arc::clone(lowered.root()), scope);
+                let expanded = self.go(Arc::clone(lowered.root()), scope)?;
+                // The `SQL` relation is gone: its `plan_id` goes to the plan that replaces it.
+                return Ok(match plan.origin.plan_id {
+                    Some(id) => {
+                        let origin = expanded.origin.with_plan_id(id);
+                        Arc::new(LogicalPlan::new(expanded.node.clone()).with_origin(origin))
+                    }
+                    None => expanded,
+                });
             }
             return Ok(plan);
         }
