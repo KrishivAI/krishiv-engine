@@ -214,7 +214,15 @@ impl HashAggregate {
         let spill = self.spiller(ctx);
         // Tests: any final stall also refuses the widening.
         let refuse = self.refused(usize::MAX);
-        if !Self::widen_inputs(&mut inputs, &mut held, spill.is_some(), refuse).await? {
+        if !Self::widen_inputs(
+            &self.counters,
+            &mut inputs,
+            &mut held,
+            spill.is_some(),
+            refuse,
+        )
+        .await?
+        {
             // No memory to widen the narrow tables: everything goes to disk.
             if let Some(s) = &spill {
                 self.spill_inputs(g, ctx, s, inputs, held).await?;
@@ -448,6 +456,7 @@ impl HashAggregate {
     /// [`final_queue`](Self::final_queue)), which needs no copy. `refuse`
     /// (a test hook) refuses every reservation.
     async fn widen_inputs(
+        counters: &super::Counters,
         inputs: &mut [RowTable],
         held: &mut [Reservation],
         spill: bool,
@@ -465,7 +474,10 @@ impl HashAggregate {
                 // widths and merge in one task.
                 return Ok(!spill);
             }
+            let rows = t.len();
             t.widen()?;
+            bump(&counters.row_widens_late, 1);
+            bump(&counters.row_widened_rows, rows as u64);
             if t.part_count() != wide {
                 return Err(internal(
                     "driver tables of different radix partitions".to_owned(),
