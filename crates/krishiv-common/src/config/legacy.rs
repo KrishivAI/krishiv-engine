@@ -49,6 +49,7 @@ pub(super) const HANDLED_IN_CODE: &[&str] = &[
     "spark.sql.legacy.percentileDiscCalculation",
     "spark.sql.legacy.scalarSubqueryAllowGroupByNonEqualityCorrelatedPredicate",
     "spark.sql.legacy.scalarSubqueryCountBugBehavior",
+    "spark.sql.legacy.setCommandRejectsSparkCoreConfs",
     "spark.sql.legacy.setopsPrecedence.enabled",
 ];
 

@@ -12,7 +12,11 @@ the embedded `spark.conf.get`) instead of `SQL_CONF_NOT_FOUND`. Krishiv's own en
 The same run lists the Spark config entries that are not SQL ones (`spark.executor.memory`, `spark.ui.port`): the
 keys of `ConfigEntry.knownConfigs` once a query has run, minus the SQL keys. They go to
 `crates/krishiv-common/src/config/spark_core_keys_table.rs`; `config::is_spark_core_key` reads it, and a session
-refuses to change them at runtime as Spark does (`CANNOT_MODIFY_CONFIG`).
+refuses to change them at runtime as Spark does (`CANNOT_MODIFY_CONFIG`, not `spark.default.parallelism`, and not
+while `spark.sql.legacy.setCommandRejectsSparkCoreConfs` is false). The list is the default profile's release (4.3.0)
+only and is read under every profile: a core key first registered after 3.5 is refused in a 3.5 session too. It
+comes from a `spark-shell` run (`local[1]`); a Connect server loads more objects, whose `spark.connect.*` keys are
+Krishiv's own entries.
 
 A default Spark computes from its host (`createWithDefaultFunction`: a path, the JVM's zone) is not a Spark
 default a client can expect anywhere: those keys are listed in `HOST_DEFAULTS` and answer no value.

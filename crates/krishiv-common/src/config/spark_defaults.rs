@@ -117,6 +117,8 @@ mod tests {
             "spark.ui.port",
             "spark.kryo.registrator",
             "spark.redaction.regex",
+            // A core key: Spark's refusal exempts it (SPARK-48773), its `isModifiable` does not.
+            "spark.default.parallelism",
         ] {
             assert!(is_spark_core_key(key), "{key}");
         }
