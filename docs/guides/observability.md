@@ -17,7 +17,8 @@ Enable the `telemetry-logs` feature and call `install_json_logs`:
 krishiv-session = { version = "0.2", features = ["telemetry-logs"] }
 ```
 
-```rust,ignore
+```rust
+// Not compiled as a doc test: it needs the `telemetry-logs` feature.
 // Writes one JSON object per event to standard error, at INFO and above,
 // at most 20 events per call site per second.
 krishiv_session::logging::install_json_logs(20)?;
@@ -38,7 +39,8 @@ krishiv-session = { version = "0.2", features = ["telemetry-otlp"] }
 tracing-subscriber = "0.3"
 ```
 
-```rust,ignore
+```rust
+// Not compiled as a doc test: it needs the `telemetry-otlp` feature and a collector.
 use krishiv_session::otlp::{OtlpConfig, OtlpTracing};
 use tracing_subscriber::prelude::*;
 
