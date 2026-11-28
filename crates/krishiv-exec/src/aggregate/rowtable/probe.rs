@@ -6,45 +6,17 @@ use super::*;
 impl RowTable {
     /// The row of each row of `keys`, inserting new groups.
     pub(super) fn lookup(&mut self, keys: &EncodedKeys, refs: &mut Vec<u32>) -> Result<()> {
-        let (hashes, heap) = (keys.hashes(), keys.heap());
         match self.mode {
             Mode::Append => {
                 self.unique &= keys.is_empty();
-                // A batch with no two equal neighbouring hashes has no run:
-                // every row pushes, with no run check carried across
-                // `push` (TPC-H q13 SF100: the check cost 2.3% of its
-                // instructions on input without runs).
-                if !hashes.windows(2).any(|w| w[0] == w[1]) {
-                    for (k, &h) in hashes.iter().enumerate() {
-                        let r = self.push(keys.row(k), heap, h)?;
-                        refs.push(r);
+                if self.views.is_none() && keys.stride() == self.stride {
+                    match self.stride {
+                        24 => return self.append_fixed::<24>(keys, refs),
+                        32 => return self.append_fixed::<32>(keys, refs),
+                        _ => {}
                     }
-                    return Ok(());
                 }
-                // A row equal to the one before takes its row: a run of
-                // one key makes one row (the batch's first row always
-                // pushes; a run across batches makes two, merged later).
-                // Fixed-width keys compare word-wise; view keys by bytes
-                // (equal long values at other heap offsets only push again).
-                let (stride, views) = (self.stride, self.views.is_some());
-                let mut prev: Option<(u64, &[u8], u32)> = None;
-                for (k, &h) in hashes.iter().enumerate() {
-                    let key = keys.row(k);
-                    if let Some((ph, pkey, pr)) = prev
-                        && ph == h
-                        && if views {
-                            pkey == key
-                        } else {
-                            same_key(pkey, key, stride)
-                        }
-                    {
-                        refs.push(pr);
-                        continue;
-                    }
-                    let r = self.push(key, heap, h)?;
-                    prev = Some((h, key, r));
-                    refs.push(r);
-                }
+                self.append_rows(keys, refs)?;
             }
             Mode::Fixed { limit } => {
                 if !self.probe_local(keys, refs, limit)? {
@@ -56,6 +28,89 @@ impl RowTable {
                     self.probe_all(keys, refs, usize::MAX)?;
                 }
             }
+        }
+        Ok(())
+    }
+
+    /// [`lookup`](Self::lookup) of an append-only table: every row pushes,
+    /// except a row equal to the one before, which takes its row.
+    pub(super) fn append_rows(&mut self, keys: &EncodedKeys, refs: &mut Vec<u32>) -> Result<()> {
+        let (hashes, heap) = (keys.hashes(), keys.heap());
+        // A batch with no two equal neighbouring hashes has no run:
+        // every row pushes, with no run check carried across
+        // `push` (TPC-H q13 SF100: the check cost 2.3% of its
+        // instructions on input without runs).
+        if !hashes.windows(2).any(|w| w[0] == w[1]) {
+            for (k, &h) in hashes.iter().enumerate() {
+                let r = self.push(keys.row(k), heap, h)?;
+                refs.push(r);
+            }
+            return Ok(());
+        }
+        // A row equal to the one before takes its row: a run of
+        // one key makes one row (the batch's first row always
+        // pushes; a run across batches makes two, merged later).
+        // Fixed-width keys compare word-wise; view keys by bytes
+        // (equal long values at other heap offsets only push again).
+        let (stride, views) = (self.stride, self.views.is_some());
+        let mut prev: Option<(u64, &[u8], u32)> = None;
+        for (k, &h) in hashes.iter().enumerate() {
+            let key = keys.row(k);
+            if let Some((ph, pkey, pr)) = prev
+                && ph == h
+                && if views {
+                    pkey == key
+                } else {
+                    same_key(pkey, key, stride)
+                }
+            {
+                refs.push(pr);
+                continue;
+            }
+            let r = self.push(key, heap, h)?;
+            prev = Some((h, key, r));
+            refs.push(r);
+        }
+        Ok(())
+    }
+
+    /// [`append_rows`](Self::append_rows) for fixed-width rows of stride `S`
+    /// (no views; 24 and 32 hold one or two keys of up to 8 bytes, as the
+    /// aggregate's key layouts are nullable): the rows walked as `[u8; S]`
+    /// and a run compared as one array, with no per-row bounds check or
+    /// word loop (study 53, lever E2: in ClickBench q16 the generic loop's
+    /// row slicing and word compare were a third of the partial sink's
+    /// `apply`). Rows that do not cover every hash take the general loop.
+    fn append_fixed<const S: usize>(
+        &mut self,
+        keys: &EncodedKeys,
+        refs: &mut Vec<u32>,
+    ) -> Result<()> {
+        let (hashes, heap) = (keys.hashes(), keys.heap());
+        let (rows, _) = keys.rows().as_chunks::<S>();
+        let Some(rows) = rows.get(..hashes.len()) else {
+            return self.append_rows(keys, refs);
+        };
+        refs.reserve(rows.len());
+        if !hashes.windows(2).any(|w| w[0] == w[1]) {
+            for (row, &h) in rows.iter().zip(hashes) {
+                let r = self.push(row, heap, h)?;
+                refs.push(r);
+            }
+            return Ok(());
+        }
+        let mut prev: Option<(u64, &[u8; S], u32)> = None;
+        for (row, &h) in rows.iter().zip(hashes) {
+            if let Some((ph, pkey, pr)) = prev
+                && ph == h
+                && pkey == row
+            {
+                refs.push(pr);
+                continue;
+            }
+            let r = self.push(row, heap, h)?;
+            prev = Some((h, row, r));
+            refs.push(r);
         }
         Ok(())
     }
