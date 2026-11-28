@@ -53,11 +53,22 @@ fn view_schema(s: &Session, names: &[&str]) -> String {
     format!("struct<{}>", fields.join(","))
 }
 
+/// Krishiv's error class for a failure Spark raises as a plain Java
+/// exception (no error class): `NumberFormatException` is `new
+/// java.math.BigDecimal` refusing `NaN` / `Infinity` or an exponent past
+/// `int` under `prefersDecimal`.
+fn krishiv_class(spark: &str) -> &str {
+    match spark {
+        "NumberFormatException" => "KRISHIV_JSON_NUMBER_NOT_DECIMAL",
+        class => class,
+    }
+}
+
 /// `got` is Spark's result `want`: a schema, or `ERROR <class>` matched
-/// against the error text.
+/// against the error's class ([`krishiv_class`] for Java exceptions).
 fn check(got: &Result<String, String>, want: &str, gap: bool, at: &str) {
     let matches = match (got, want.strip_prefix("ERROR ")) {
-        (Err(e), Some(class)) => e.contains(class),
+        (Err(e), Some(class)) => e.contains(krishiv_class(class)),
         (Ok(g), None) => g == want,
         _ => false,
     };
@@ -124,6 +135,89 @@ fn json_decimal_inference_matches_spark_runs() {
             .map_err(|e| e.to_string());
             let want = case["file_schema"].as_str().unwrap();
             check(&got, want, gap, &format!("{version} file {text} {opts:?}"));
+        }
+    }
+}
+
+/// The `files` section: a non-numeric number beside good records in one
+/// file goes to the parse mode alone (`PERMISSIVE` keeps it in the corrupt
+/// column, `DROPMALFORMED` drops it, `FAILFAST` fails the read) while the
+/// good records type the column.
+#[test]
+fn a_non_numeric_record_beside_good_ones_goes_to_the_parse_mode() {
+    let dir = tempfile::tempdir().unwrap();
+    for (profile, version) in [(SparkProfile::V4_2, "4.2.1"), (SparkProfile::V4_3, "4.3.0")] {
+        let path = format!(
+            "{}/../../tests/fixtures/spark-{version}/json-prefers-decimal.json",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        let run: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(run["spark"], version);
+        let s = Session::builder().profile(profile).build().unwrap();
+        block_on(s.sql("SET spark.sql.session.timeZone = UTC")).unwrap();
+        let files = run["files"].as_array().unwrap();
+        assert!(files.len() >= 6, "{version}: {} files", files.len());
+        for (i, case) in files.iter().enumerate() {
+            let lines: Vec<&str> = case["lines"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|l| l.as_str().unwrap())
+                .collect();
+            let opts = case["options"].as_object().unwrap();
+            let at = format!("{version} file {lines:?} {opts:?}");
+            let file = dir.path().join(format!("{version}-lines-{i}.json"));
+            std::fs::write(
+                &file,
+                lines.iter().map(|l| format!("{l}\n")).collect::<String>(),
+            )
+            .unwrap();
+            let mut reader = s.read().format("json");
+            for (k, v) in opts {
+                reader = reader.option(k, v.as_str().unwrap());
+            }
+            let df = reader.load([file.to_str().unwrap()]);
+            let got = block_on(async {
+                df.create_or_replace_temp_view("v").await?;
+                let schema = df.schema().await?;
+                let names: Vec<String> = schema.fields().iter().map(|f| f.name().clone()).collect();
+                let rows = s
+                    .sql("SELECT to_json(struct(*)) FROM v")
+                    .await?
+                    .collect()
+                    .await?;
+                Ok::<_, krishiv_common::error::KrishivError>((names, rows))
+            });
+            let want = case["schema"].as_str().unwrap();
+            match (got, want.strip_prefix("ERROR ")) {
+                (Err(e), Some(class)) => {
+                    let name = e.error_class().name();
+                    assert!(
+                        class == name || class.starts_with(&format!("{name}.")),
+                        "{at}: {class} vs {e}"
+                    );
+                }
+                (Ok((names, rows)), None) => {
+                    let names: Vec<&str> = names.iter().map(String::as_str).collect();
+                    assert_eq!(view_schema(&s, &names), want, "{at}: schema");
+                    let got: Vec<String> = rows
+                        .iter()
+                        .flat_map(|b| {
+                            let c = b.column(0).as_string_view();
+                            (0..b.num_rows()).map(move |r| c.value(r).to_owned())
+                        })
+                        .collect();
+                    let want: Vec<&str> = case["values"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|v| v.as_str().unwrap())
+                        .collect();
+                    assert_eq!(got, want, "{at}: values");
+                }
+                (got, _) => panic!("{at}: got {got:?}, Spark {want}"),
+            }
         }
     }
 }
