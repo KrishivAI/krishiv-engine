@@ -3514,6 +3514,8 @@ dependencies = [
  "krishiv-session",
  "krishiv-sql",
  "krishiv-types",
+ "krishiv-udf-pool",
+ "krishiv-udf-sandbox",
  "libmimalloc-sys",
  "mimalloc",
  "pyo3",
