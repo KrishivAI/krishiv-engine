@@ -15,6 +15,12 @@
 # the only tool needed. See README.md.
 set -euo pipefail
 
+# Pinned by tag and digest; Renovate moves both (renovate.json, "Connect client images").
+# renovate: datasource=docker depName=golang
+GO_IMAGE="golang:1.24@sha256:d2d2bc1c84f7e60d7d2438a3836ae7d0c847f4888464e7ec9ba3a1339a1ee804"
+# renovate: datasource=docker depName=virtuslab/scala-cli
+SCALA_IMAGE="virtuslab/scala-cli:1.19.0@sha256:d1715b5c5085db2d461a293757561f240ec6da955846a4f5d2c0f5cc30ae2f9d"
+
 here="$(cd "$(dirname "$0")" && pwd)"
 clients="go,scala,delta"
 tpcds_data=""
@@ -73,13 +79,13 @@ for c in ${clients//,/ }; do
   case "$c" in
     go)
       docker run --rm --network host -v "$here:/src:ro" -v "$out:/out" -v krishiv-smoke-gomod:/go/pkg/mod \
-        -e GOFLAGS=-buildvcs=false golang:1.24 \
+        -e GOFLAGS=-buildvcs=false "$GO_IMAGE" \
         sh -c "cp -r /src/go /tmp/go && cd /tmp/go && go mod tidy && go run . --remote '$remote' --queries /src/queries.json --out /out/go.json" \
         || echo "go client run failed" >&2
       ;;
     scala)
       docker run --rm --network host -v "$here:/src:ro" -v "$out:/out" -v krishiv-smoke-scala:/root/.cache \
-        virtuslab/scala-cli:latest run --workspace /tmp/scala-ws /src/scala/Smoke.scala -- "$remote" /src/queries.json /out/scala.json \
+        "$SCALA_IMAGE" run --workspace /tmp/scala-ws /src/scala/Smoke.scala -- "$remote" /src/queries.json /out/scala.json \
         || echo "scala client run failed" >&2
       ;;
     delta)
