@@ -1403,6 +1403,18 @@ error KRISHIV_UNSUPPORTED_FEATURE
 "filters":[],
 "warnings":[]}
 
+-- AnalyzeTables: ANALYZE TABLES IN db COMPUTE STATISTICS
+{"schema_version":"krishiv.analyze.v1",
+"statement_class":"WRITE",
+"explain":null,
+"partial":false,
+"securables":[{"kind":"namespace","name":["spark_catalog","db"],"display":"namespace `spark_catalog`.`db`","privilege":"SELECT","columns":[]},
+  {"kind":"namespace","name":["spark_catalog","db"],"display":"namespace `spark_catalog`.`db`","privilege":"MODIFY","columns":[]}],
+"output_schema":[],
+"lineage":[],
+"filters":[],
+"warnings":[]}
+
 -- Repair: MSCK REPAIR TABLE t
 {"schema_version":"krishiv.analyze.v1",
 "statement_class":"DDL",

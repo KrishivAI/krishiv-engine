@@ -178,6 +178,8 @@ pub enum Statement {
     Call(Call),
     /// `ANALYZE TABLE ... COMPUTE STATISTICS ...`.
     Analyze(Analyze),
+    /// `ANALYZE TABLES [(FROM | IN) schema] COMPUTE STATISTICS [NOSCAN]`.
+    AnalyzeTables(AnalyzeTables),
     /// `MSCK REPAIR TABLE ...` or `REPAIR TABLE ...`.
     Repair(Repair),
     /// `ADD JAR|FILE|ARCHIVE ...`.
@@ -238,6 +240,7 @@ impl Statement {
             Self::Refresh(r) => r.span,
             Self::Call(c) => c.span,
             Self::Analyze(a) => a.span,
+            Self::AnalyzeTables(a) => a.span,
             Self::Repair(r) => r.span,
             Self::AddResource(r) => r.span,
             Self::ListResource(r) => r.span,

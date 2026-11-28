@@ -946,6 +946,182 @@ fn analyze_validates_and_resource_commands_are_refused() {
     }
 }
 
+/// `ANALYZE TABLES` needs its schema to exist and returns no rows (Spark skips a table it cannot
+/// analyze, and the engine keeps no table-level statistics). Names and classes from a Spark 4.3.0 run.
+#[test]
+fn analyze_tables_resolves_its_schema() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(&s, "CREATE TABLE t (a INT) USING parquet");
+    run(&s, "CREATE TEMPORARY VIEW v AS SELECT 1 AS a");
+    run(&s, "CREATE SCHEMA other");
+    for sql in [
+        "ANALYZE TABLES COMPUTE STATISTICS",
+        "ANALYZE TABLES COMPUTE STATISTICS NOSCAN",
+        "ANALYZE TABLES IN default COMPUTE STATISTICS",
+        "ANALYZE TABLES FROM Other COMPUTE STATISTICS NOSCAN",
+        "ANALYZE TABLES IN spark_catalog.default COMPUTE STATISTICS",
+        "ANALYZE TABLES IN IDENTIFIER('other') COMPUTE STATISTICS",
+        "ANALYZE TABLES IN Global_Temp COMPUTE STATISTICS",
+        "ANALYZE TABLES IN spark_catalog.global_temp COMPUTE STATISTICS",
+    ] {
+        let batches = block_on(async { s.sql(sql).await?.collect().await })
+            .unwrap_or_else(|e| panic!("{sql}: {e}"));
+        assert_eq!(
+            batches
+                .iter()
+                .map(arrow_array::RecordBatch::num_rows)
+                .sum::<usize>(),
+            0,
+            "{sql}"
+        );
+    }
+    for (sql, class, parameters) in [
+        (
+            "ANALYZE TABLES IN No_Such COMPUTE STATISTICS",
+            "SCHEMA_NOT_FOUND",
+            vec![("schemaName", "`spark_catalog`.`no_such`")],
+        ),
+        (
+            "ANALYZE TABLES IN spark_catalog.no_such COMPUTE STATISTICS NOSCAN",
+            "SCHEMA_NOT_FOUND",
+            vec![("schemaName", "`spark_catalog`.`no_such`")],
+        ),
+        (
+            "ANALYZE TABLES IN spark_catalog COMPUTE STATISTICS",
+            "MISSING_DATABASE_FOR_V1_SESSION_CATALOG",
+            vec![],
+        ),
+        (
+            "ANALYZE TABLES IN A.`b c` COMPUTE STATISTICS",
+            "NESTED_DATABASE_UNSUPPORTED_BY_V1_SESSION_CATALOG",
+            vec![("namespace", "`A`.`b c`")],
+        ),
+        (
+            "ANALYZE TABLES IN spark_catalog.a.b COMPUTE STATISTICS",
+            "NESTED_DATABASE_UNSUPPORTED_BY_V1_SESSION_CATALOG",
+            vec![("namespace", "`a`.`b`")],
+        ),
+    ] {
+        let e = err(&s, sql);
+        assert_eq!(e.error_class().name(), class, "{sql}");
+        assert_eq!(
+            e.message_parameters(),
+            parameters
+                .into_iter()
+                .map(|(k, v)| (k, v.to_owned()))
+                .collect::<Vec<_>>(),
+            "{sql}"
+        );
+    }
+    // `system` is reserved here: no statement that writes statistics names it.
+    assert_eq!(
+        class(&s, "ANALYZE TABLES IN system COMPUTE STATISTICS"),
+        "KRISHIV_RESERVED_NAME"
+    );
+    // The current schema is the one analyzed when none is written.
+    run(&s, "USE other");
+    run(&s, "ANALYZE TABLES COMPUTE STATISTICS");
+}
+
+/// A statement, the error class it gives and the class's message parameters.
+type SchemaCase = (String, &'static str, Vec<(&'static str, &'static str)>);
+
+/// The schema a namespace command misses, refuses as nested, or lacks, per statement (Spark 4.3.0
+/// run of every statement below): `USE`, `DESCRIBE`, `DROP` and `SHOW NAMESPACES` name a missing
+/// schema as written, the others in lower case; `COMMENT ON SCHEMA` keeps every part.
+#[test]
+fn namespace_commands_name_a_schema_as_spark_does() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    let as_written = [
+        "USE {}",
+        "DESCRIBE SCHEMA {}",
+        "DESCRIBE SCHEMA EXTENDED {}",
+        "DROP SCHEMA {}",
+        "SHOW NAMESPACES IN {}",
+    ];
+    let lower_cased = [
+        "ALTER SCHEMA {} SET DBPROPERTIES ('a' = '1')",
+        "ALTER SCHEMA {} SET LOCATION '/tmp/x'",
+        "COMMENT ON SCHEMA {} IS 'x'",
+        "SHOW TABLES IN {}",
+        "SHOW VIEWS IN {}",
+        "SHOW FUNCTIONS IN {}",
+        "SHOW TABLE EXTENDED IN {} LIKE '*'",
+        "ANALYZE TABLES IN {} COMPUTE STATISTICS",
+    ];
+    // The statements Spark's v1 session catalog runs: one database, no more and no less.
+    let v1 = [
+        "DESCRIBE SCHEMA {}",
+        "DESCRIBE SCHEMA EXTENDED {}",
+        "DROP SCHEMA {}",
+        "DROP SCHEMA IF EXISTS {}",
+        "ALTER SCHEMA {} SET DBPROPERTIES ('a' = '1')",
+        "ALTER SCHEMA {} SET LOCATION '/tmp/x'",
+        "SHOW TABLES IN {}",
+        "SHOW VIEWS IN {}",
+        "SHOW FUNCTIONS IN {}",
+        "SHOW TABLE EXTENDED IN {} LIKE '*'",
+        "ANALYZE TABLES IN {} COMPUTE STATISTICS",
+    ];
+    let mut cases: Vec<SchemaCase> = Vec::new();
+    for (statements, shown) in [
+        (&as_written[..], "`spark_catalog`.`Dummy`"),
+        (&lower_cased[..], "`spark_catalog`.`dummy`"),
+    ] {
+        for statement in statements {
+            for name in ["Dummy", "spark_catalog.Dummy"] {
+                cases.push((
+                    statement.replace("{}", name),
+                    "SCHEMA_NOT_FOUND",
+                    vec![("schemaName", shown)],
+                ));
+            }
+        }
+    }
+    for statement in v1 {
+        for (name, nested) in [("Aa.Bb", "`Aa`.`Bb`"), ("SPARK_CATALOG.A.B", "`A`.`B`")] {
+            cases.push((
+                statement.replace("{}", name),
+                "NESTED_DATABASE_UNSUPPORTED_BY_V1_SESSION_CATALOG",
+                vec![("namespace", nested)],
+            ));
+        }
+        cases.push((
+            statement.replace("{}", "spark_catalog"),
+            "MISSING_DATABASE_FOR_V1_SESSION_CATALOG",
+            Vec::new(),
+        ));
+    }
+    for (name, shown) in [
+        ("Aa.Bb", "`spark_catalog`.`Aa`.`Bb`"),
+        ("spark_catalog.A.B", "`spark_catalog`.`A`.`B`"),
+        ("spark_catalog", "`spark_catalog`"),
+    ] {
+        cases.push((
+            format!("COMMENT ON SCHEMA {name} IS 'x'"),
+            "SCHEMA_NOT_FOUND",
+            vec![("schemaName", shown)],
+        ));
+    }
+    let mut wrong = Vec::new();
+    for (sql, class, parameters) in cases {
+        let parameters: Vec<_> = parameters
+            .into_iter()
+            .map(|(k, v)| (k, v.to_owned()))
+            .collect();
+        match block_on(async { s.sql(&sql).await?.collect().await }) {
+            Ok(_) => wrong.push(format!("{sql}: no error")),
+            Err(e) if e.error_class().name() != class || e.message_parameters() != parameters => {
+                wrong.push(format!("{sql}: {e}"));
+            }
+            Err(_) => {}
+        }
+    }
+    assert!(wrong.is_empty(), "{wrong:#?}");
+}
+
 /// `UPDATE` and `DELETE` resolve their columns and condition before Spark finds that the table cannot
 /// change; an unknown column is the error then, with the analyzer's suggestions.
 #[test]

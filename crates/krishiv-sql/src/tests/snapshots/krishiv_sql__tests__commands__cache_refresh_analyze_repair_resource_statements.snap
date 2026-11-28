@@ -513,6 +513,7 @@ Analyze(
         ),
         partition: None,
         noscan: false,
+        unexpected: None,
         columns: All,
         span: 0..34,
     },
@@ -577,6 +578,7 @@ Analyze(
             },
         ),
         noscan: false,
+        unexpected: None,
         columns: All,
         span: 0..73,
     },
@@ -622,6 +624,7 @@ Analyze(
             },
         ),
         noscan: false,
+        unexpected: None,
         columns: All,
         span: 0..53,
     },
@@ -643,6 +646,7 @@ Analyze(
         ),
         partition: None,
         noscan: true,
+        unexpected: None,
         columns: All,
         span: 0..41,
     },
@@ -664,6 +668,7 @@ Analyze(
         ),
         partition: None,
         noscan: false,
+        unexpected: None,
         columns: ForColumns(
             [
                 Ident {
@@ -698,6 +703,7 @@ Analyze(
         ),
         partition: None,
         noscan: false,
+        unexpected: None,
         columns: ForAll,
         span: 0..50,
     },

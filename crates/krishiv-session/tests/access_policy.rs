@@ -277,6 +277,7 @@ fn writes(s: &Session, f: &Fixture) -> Vec<(&'static str, String)> {
         ),
         ("TRUNCATE", sql("TRUNCATE TABLE t")),
         ("ANALYZE TABLE", sql("ANALYZE TABLE t COMPUTE STATISTICS")),
+        ("ANALYZE TABLES", sql("ANALYZE TABLES COMPUTE STATISTICS")),
     ]
 }
 

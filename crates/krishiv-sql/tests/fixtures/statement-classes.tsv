@@ -121,6 +121,7 @@ Refresh::Table	ADMIN	REFRESH TABLE t
 Refresh::Function	ADMIN	REFRESH FUNCTION f
 Refresh::Path	ADMIN	REFRESH '/data/x'
 Analyze	WRITE	ANALYZE TABLE t COMPUTE STATISTICS
+AnalyzeTables	WRITE	ANALYZE TABLES IN db COMPUTE STATISTICS
 Repair	DDL	MSCK REPAIR TABLE t
 AddResource	ADMIN	ADD JAR '/tmp/a.jar'
 Call	ADMIN	CALL cat.system.expire_snapshots(table => 'db.t', retain_last => 1)

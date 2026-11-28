@@ -27,10 +27,9 @@ use std::sync::Arc;
 use krishiv_common::error::{
     DataSourceNotFound, InternalError, InvalidAttributeNameSyntax, InvalidSchemaOrRelationName,
     KrishivError, KrishivUnsupportedFeature, LocationAlreadyExists,
-    NotSupportedCommandWithoutHiveSupport, RequiresSinglePartNamespace, SchemaAlreadyExists,
-    SchemaNotEmpty, SchemaNotFound, TableOrViewNotFound, UnresolvedColumnWithSuggestion,
-    UnsupportedFeatureDropDatabase, UnsupportedFeatureTableOperation, UnsupportedOverwriteTable,
-    WrongCommandForObjectType,
+    NotSupportedCommandWithoutHiveSupport, SchemaAlreadyExists, SchemaNotEmpty, SchemaNotFound,
+    TableOrViewNotFound, UnresolvedColumnWithSuggestion, UnsupportedFeatureDropDatabase,
+    UnsupportedFeatureTableOperation, UnsupportedOverwriteTable, WrongCommandForObjectType,
 };
 use krishiv_common::names::check_column_name_duplication;
 use krishiv_common::secret::OptionValue;
@@ -38,10 +37,10 @@ use krishiv_plan::analyzer::{Privilege, Securable, TableColumn};
 use krishiv_sql::StatementClass;
 use krishiv_sql::ast::{
     AlterColumnAction, AlterNamespace, AlterNamespaceAction, AlterTable, AlterTableAction,
-    AlterView, AlterViewAction, Analyze, AnalyzeColumns, ChangeColumnAction, ColumnName,
-    CreateNamespace, CreatePermanentView, CreateTable, CreateTableLike, CreateView, DdlName,
-    DropBehavior, DropNamespace, DropPermanentView, DropTable, Ident, Insert, InsertClause, Query,
-    TableElement, Truncate, Use, ViewColumn,
+    AlterView, AlterViewAction, Analyze, AnalyzeColumns, AnalyzeTables, ChangeColumnAction,
+    ColumnName, CreateNamespace, CreatePermanentView, CreateTable, CreateTableLike, CreateView,
+    DdlName, DropBehavior, DropNamespace, DropPermanentView, DropTable, Ident, Insert,
+    InsertClause, Query, TableElement, Truncate, Use, ViewColumn,
 };
 use krishiv_types::DataType;
 
@@ -54,6 +53,7 @@ use crate::store::{
     CatalogStore, CatalogTable, CreateMode, DEFAULT_NAMESPACE, DropNamespaceError, NamespaceMeta,
     StoreColumn, TableLayout, ViewDef, managed_location,
 };
+use crate::table_commands::namespace_names::written_namespace;
 
 /// The file formats a table can have.
 pub(crate) const PROVIDERS: &[&str] = &["parquet", "csv", "json", "text", "orc", "avro"];
@@ -181,12 +181,7 @@ impl TableName {
             }
             // No other catalog is registered, so a longer name is a namespace of several parts in
             // the session catalog, which takes one.
-            _ => {
-                return Err(KrishivError::from(RequiresSinglePartNamespace {
-                    session_catalog: crate::catalog::CATALOG.to_owned(),
-                    identifier: format!("`{}`", parts.join("`.`")),
-                }));
-            }
+            _ => return Err(namespace_names::nested_namespace(parts)),
         };
         Ok(Self {
             namespace,
@@ -266,34 +261,6 @@ impl Session {
                 .exists(&name.name, env.analysis.conf.case_sensitive)
     }
 
-    /// The namespace named by `name` (one part, or the session catalog and one part).
-    pub(crate) fn namespace_name(
-        &self,
-        name: &DdlName,
-        env: &QueryEnv,
-    ) -> Result<String, KrishivError> {
-        let parts = crate::access::ddl_parts(name, env)?;
-        let fold = |s: &str| {
-            if env.analysis.conf.case_sensitive {
-                s.to_owned()
-            } else {
-                s.to_lowercase()
-            }
-        };
-        match parts.as_slice() {
-            [ns] => self.namespace_arg(&fold(ns)),
-            [catalog, ns] if catalog.eq_ignore_ascii_case(crate::catalog::CATALOG) => Ok(fold(ns)),
-            [catalog, _] => Err(unsupported(&format!(
-                "namespaces in the catalog `{catalog}`"
-            ))),
-            _ => Err(RequiresSinglePartNamespace {
-                session_catalog: crate::catalog::CATALOG.to_owned(),
-                identifier: format!("`{}`", parts.join("`.`")),
-            }
-            .into()),
-        }
-    }
-
     /// `CREATE DATABASE|SCHEMA|NAMESPACE [IF NOT EXISTS] name ...`.
     pub(crate) async fn exec_create_namespace(
         &self,
@@ -346,7 +313,10 @@ impl Session {
         original: &str,
     ) -> Result<DataFrame, KrishivError> {
         let env = self.query_env();
-        let name = self.namespace_name(&a.name, &env)?;
+        let name = match &a.action {
+            AlterNamespaceAction::SetComment(_) => self.commented_namespace(&a.name, &env)?,
+            _ => self.database_name(&a.name, &env)?,
+        };
         let change: Box<dyn Fn(&mut NamespaceMeta)> = match &a.action {
             AlterNamespaceAction::SetProperties(properties) => {
                 let properties = options_of(properties, original);
@@ -383,7 +353,8 @@ impl Session {
         n: &DropNamespace,
     ) -> Result<DataFrame, KrishivError> {
         let env = self.query_env();
-        let name = self.namespace_name(&n.name, &env)?;
+        let name = self.database_name(&n.name, &env)?;
+        let written = written_namespace(&n.name, &env)?;
         let cascade = matches!(n.behavior, Some(DropBehavior::Cascade));
         // Every check on every table's files comes before the first change, so a refused delete leaves the
         // namespace as it was.
@@ -423,7 +394,7 @@ impl Session {
             }
             Err(DropNamespaceError::Missing) if n.if_exists => {}
             Err(DropNamespaceError::Missing) => {
-                return Err(crate::catalog::schema_not_found(&name));
+                return Err(crate::catalog::schema_not_found(&written));
             }
             Err(DropNamespaceError::NotEmpty) => {
                 return Err(SchemaNotEmpty {
@@ -515,7 +486,8 @@ impl Session {
         let name = self.namespace_name(&u.name, &env)?;
         // One the principal may not list reads as missing (review r2 R4).
         if !self.state.catalog.store.has_namespace(&name) || self.namespace_hidden(&name).await {
-            return Err(crate::catalog::schema_not_found(&name));
+            let written = written_namespace(&u.name, &env)?;
+            return Err(crate::catalog::schema_not_found(&written));
         }
         self.state
             .catalog
@@ -1947,6 +1919,8 @@ use options::options_of;
 #[cfg(test)]
 mod tests;
 
+mod namespace_names;
+pub(crate) use namespace_names::nested_namespace;
 mod owned_directory;
 pub(crate) use owned_directory::{OwnedDirectory, OwnedDirectoryError};
 

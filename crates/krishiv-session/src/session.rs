@@ -659,6 +659,7 @@ impl Session {
                 Box::pin(self.exec_script(&c, query, redacted)).await
             }
             Statement::Analyze(a) => Box::pin(self.exec_analyze(&a, query)).await,
+            Statement::AnalyzeTables(a) => Box::pin(self.exec_analyze_tables(&a)).await,
             Statement::CreatePipelineDataset(c) => Self::exec_create_pipeline_dataset(&c),
             Statement::CreateFlow(f) => self.exec_create_flow(&f),
             Statement::LoadData(l) => self.exec_load_data(&l),

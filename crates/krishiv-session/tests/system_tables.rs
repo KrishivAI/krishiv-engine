@@ -1521,9 +1521,9 @@ fn listings_overrides_and_dataframe_writes_with_an_explicit_catalog_work_under_s
     run(&s, "USE system").unwrap();
     // Temporary views stay listed.
     assert!(column_of(&s, "SHOW TABLES LIKE 'tv'", 1).contains(&"tv".to_owned()));
-    // SHOW COLUMNS with a FROM namespace reaches the named table.
+    // SHOW COLUMNS reaches the table named through the session catalog.
     assert_eq!(
-        column_of(&s, "SHOW COLUMNS IN t FROM spark_catalog.default", 0),
+        column_of(&s, "SHOW COLUMNS IN spark_catalog.default.t", 0),
         ["a"]
     );
     assert_eq!(

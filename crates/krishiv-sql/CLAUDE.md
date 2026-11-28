@@ -22,7 +22,7 @@ Paths are relative to this crate.
 - `src/parser.rs` statement parser (recursive descent); `src/parser/expr.rs` precedence climbing
 - `src/parser/types.rs` type strings (`parse_data_type`, `parse_table_schema`, `parse_ddl_type`)
 - `src/ast.rs` spanned AST; `src/error.rs` parser errors with Spark classes
-- `src/validate/mod.rs` checks Spark's `AstBuilder` makes after parsing (`literal.rs`, `types.rs`, `interval.rs`; `pipe.rs`, `sample.rs`, `relation.rs`, `transform.rs` for the query-syntax tail)
+- `src/validate/mod.rs` checks Spark's `AstBuilder` makes after parsing (`literal.rs`, `types.rs`, `interval.rs`; `pipe.rs`, `sample.rs`, `relation.rs`, `transform.rs` for the query-syntax tail; `analyze.rs` the `ANALYZE` option)
 - `src/lower.rs` AST to unresolved `krishiv_plan::Plan` (`lower/pipe.rs`: pipe operators; `DISTRIBUTE BY`/`CLUSTER BY` lower to `PlanNode::Repartition`, `CLUSTER BY` adds a local ascending sort); `src/redact.rs` `redact_sql` to `RedactedSql`
 - `src/lower/identified.rs` `lower_identified`: the session's substituted `IDENTIFIER(..)` names (by span) mark their columns `ColumnRef::by_identifier`, so a select item of one is named as Spark names the clause
 - `src/summary.rs` `sanitize_query_text` (every literal `?`, comments dropped) and `query_summary` (`SELECT orders customers`): the telemetry forms of query text, from lexer tokens

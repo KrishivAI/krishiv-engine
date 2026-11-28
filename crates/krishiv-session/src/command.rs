@@ -397,7 +397,7 @@ impl Session {
     ///
     /// # Errors
     /// `KRISHIV_UNSUPPORTED_FEATURE` for a permanent table's name while a declared catalog is
-    /// current ([`Session::refuse_declared_current`]).
+    /// current ([`Session::refuse_declared_current`]); [`Session::refuse_nested_name`]'s.
     fn cache_key(&self, parts: &[String]) -> Result<Option<String>, KrishivError> {
         let env = self.query_env();
         let case_sensitive = env.analysis.conf.case_sensitive;
@@ -409,6 +409,7 @@ impl Session {
             }
         };
         let store = &self.state.catalog.store;
+        self.refuse_nested_name(parts)?;
         match parts {
             [only] => {
                 if self.state.catalog.exists(only, case_sensitive) {
@@ -598,7 +599,11 @@ impl Session {
                 };
                 self.refresh_table(&key);
             }
-            RefreshKind::Function { .. } => {}
+            RefreshKind::Function { name, .. } => {
+                if let Some(parts) = ddl_table_parts(name) {
+                    self.refuse_nested_name(&parts)?;
+                }
+            }
             RefreshKind::Path { .. } => {
                 self.refresh_files();
                 // As REFRESH TABLE: the key counts' answers are counted again.
@@ -1279,6 +1284,8 @@ impl Session {
                 (ns.value.clone(), part)
             }
             _ => {
+                let written: Vec<String> = parts.iter().map(|p| p.value.clone()).collect();
+                self.refuse_nested_name(&written)?;
                 return Err(unsupported(
                     "functions of catalogs other than spark_catalog",
                 ));

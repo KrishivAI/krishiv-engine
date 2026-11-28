@@ -39,6 +39,7 @@
 //! evaluates them while parsing (`INVALID_INLINE_TABLE.FAILED_SQL_EXPRESSION_EVALUATION`),
 //! which needs expression evaluation.
 
+mod analyze;
 pub(crate) mod interval;
 mod keys;
 pub(crate) mod literal;
@@ -54,6 +55,7 @@ mod types;
 
 use std::collections::HashSet;
 
+use self::analyze::analyze_option;
 use self::keys::{duplicate_key, key_text, misvalued_keys, reserved_namespace_properties};
 use self::spans::{context_children_text, property_list_span};
 use krishiv_common::error::{
@@ -207,10 +209,16 @@ pub(crate) fn statement(mut s: &Statement, sql: &str, opts: ParserOptions) -> R 
                 _ => return Ok(()),
             },
             Statement::Analyze(a) => {
+                analyze_option(a.unexpected.as_ref(), a.span)?;
                 let checker = Checker { sql, opts };
                 checker.ddl_name(&a.table)?;
                 checker.partition_values(a.partition.as_ref())?;
                 return Ok(());
+            }
+            Statement::AnalyzeTables(a) => {
+                analyze_option(a.unexpected.as_ref(), a.span)?;
+                let checker = Checker { sql, opts };
+                return a.namespace.as_ref().map_or(Ok(()), |n| checker.ddl_name(n));
             }
             Statement::CreateTableLike(t) => return Checker { sql, opts }.create_table_like(t),
             Statement::CreateView(v) => return query(&v.query, sql, opts),

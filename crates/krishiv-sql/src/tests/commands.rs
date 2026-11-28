@@ -9,6 +9,7 @@
 use super::*;
 use krishiv_common::error::ErrorClass;
 
+mod analyze;
 mod namespace_and_row_format;
 mod property_keys;
 

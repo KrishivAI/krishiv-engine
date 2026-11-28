@@ -95,6 +95,7 @@ impl Session {
             }
             other => other,
         };
+        self.refuse_nested_name(parts)?;
         // A built-in the session's Spark profile does not have resolves as an unknown name.
         let in_profile = |name: &str| {
             !matches!(
