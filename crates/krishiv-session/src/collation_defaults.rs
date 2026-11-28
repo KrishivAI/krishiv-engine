@@ -4,8 +4,7 @@
 //! ignore the default and type its strings as `UTF8_BINARY`, so it is refused instead.
 
 use krishiv_common::error::{
-    KrishivError, UnsupportedFeatureCollationsInMapKeys, UnsupportedFeatureObjectLevelCollations,
-    UnsupportedFeatureSchemaLevelCollations,
+    KrishivError, UnsupportedFeatureCollationsInMapKeys, UnsupportedFeatureSchemaLevelCollations,
 };
 use krishiv_sql::ast::{AlterTableAction, Statement, TableElement};
 use krishiv_types::DataType;
@@ -33,9 +32,6 @@ pub(crate) fn refuse_unhonoured(
             Err(UnsupportedFeatureSchemaLevelCollations {}.into())
         }
         Statement::CreateTable(t) => {
-            if t.collation.is_some() {
-                return Err(UnsupportedFeatureObjectLevelCollations {}.into());
-            }
             for element in &t.elements {
                 if let TableElement::Column(c) = element
                     && let Ok(dt) = c.data_type.to_data_type()

@@ -479,10 +479,6 @@ fn unsupported_collation_defaults_and_switches_are_refused() {
             ErrorClass::UnsupportedFeatureSchemaLevelCollations,
         ),
         (
-            "CREATE TABLE tt (a STRING) DEFAULT COLLATION UTF8_LCASE",
-            ErrorClass::UnsupportedFeatureObjectLevelCollations,
-        ),
-        (
             "CREATE TABLE tm (m MAP<STRING COLLATE UTF8_LCASE, INT>)",
             ErrorClass::UnsupportedFeatureCollationsInMapKeys,
         ),
@@ -2013,4 +2009,54 @@ fn like_over_lcase_matches_the_spark_goldens() {
         }
         assert!(bad.is_empty(), "{}", bad.join("\n"));
     }
+}
+
+/// A table's `DEFAULT COLLATION` collates its string columns that name none (also nested), keeps
+/// an explicit `COLLATE`, and is printed by `SHOW CREATE TABLE`.
+#[test]
+fn a_table_default_collation_collates_its_undeclared_string_columns() {
+    let s = Session::new().unwrap();
+    let go = |sql: &str| block_on(block_on(s.sql(sql)).unwrap().collect()).unwrap();
+    let value = |sql: &str| -> String {
+        let b = go(sql);
+        let c = &b[0].columns()[0];
+        c.as_string_view_opt()
+            .map(|v| v.value(0).to_owned())
+            .or_else(|| c.as_string_opt::<i32>().map(|v| v.value(0).to_owned()))
+            .unwrap()
+    };
+    go(
+        "CREATE TABLE tc (c1 STRING, c2 STRING COLLATE UTF8_BINARY, c3 ARRAY<STRING>) USING parquet DEFAULT COLLATION UTF8_LCASE",
+    );
+    go("INSERT INTO tc VALUES ('a', 'b', array('x'))");
+    assert_eq!(
+        value("SELECT collation(c1) FROM tc"),
+        "SYSTEM.BUILTIN.UTF8_LCASE"
+    );
+    assert_eq!(
+        value("SELECT collation(c2) FROM tc"),
+        "SYSTEM.BUILTIN.UTF8_BINARY"
+    );
+    // The array column's elements take the default too.
+    assert_eq!(
+        value("SELECT typeof(c3) FROM tc"),
+        "array<string collate UTF8_LCASE>"
+    );
+    go(
+        "CREATE TABLE td (c1 STRING, c2 STRING COLLATE UTF8_BINARY) USING parquet DEFAULT COLLATION UTF8_LCASE",
+    );
+    let shown = value("SHOW CREATE TABLE td");
+    assert!(
+        shown.contains("  c1 STRING COLLATE UTF8_LCASE,\n"),
+        "{shown}"
+    );
+    assert!(
+        shown.contains("  c2 STRING COLLATE UTF8_BINARY)\n"),
+        "{shown}"
+    );
+    assert!(
+        shown.contains("\nDEFAULT COLLATION UTF8_LCASE\n"),
+        "{shown}"
+    );
+    assert!(shown.matches("COLLATE UTF8_BINARY").count() == 1, "{shown}");
 }

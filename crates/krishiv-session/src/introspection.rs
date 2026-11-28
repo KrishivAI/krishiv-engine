@@ -1682,7 +1682,7 @@ fn create_statement(t: &CatalogTable, binding_enabled: bool) -> Result<String, K
         if !c.nullable {
             out.push_str(" NOT NULL");
         }
-        if c.data_type == DataType::String {
+        if c.data_type == DataType::String && !shown.contains(" COLLATE ") {
             out.push_str(" COLLATE UTF8_BINARY");
         }
         if let Some(default) = &c.default {
@@ -1738,6 +1738,9 @@ fn create_statement(t: &CatalogTable, binding_enabled: bool) -> Result<String, K
         "CREATE TABLE {name} (\n{cols})\nUSING {}\n",
         t.provider_written
     );
+    if let Some(c) = t.collation.filter(|c| !c.is_utf8_binary()) {
+        out.push_str(&format!("DEFAULT COLLATION {}\n", c.name()));
+    }
     let partitioning = |out: &mut String| {
         if t.is_partitioned() {
             out.push_str(&format!(

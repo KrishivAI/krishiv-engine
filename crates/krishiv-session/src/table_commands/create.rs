@@ -61,6 +61,7 @@ impl Session {
             view: None,
             layout: TableLayout::default(),
             column_stats: BTreeMap::new(),
+            collation: table_collation(t)?,
             incarnation: 0,
             data_version: 0,
             stamp: 0,
@@ -324,9 +325,13 @@ impl Session {
                     .unwrap_or_default()
                     .to_owned()
             });
+            let spec = match &t.collation {
+                Some(c) => with_default_collation(&def.data_type, c),
+                None => def.data_type.clone(),
+            };
             columns.push(StoreColumn::declared(
                 ident.value.clone(),
-                &def.data_type,
+                &spec,
                 default,
                 def.comment.clone(),
             )?);
@@ -712,6 +717,7 @@ impl Session {
             view: None,
             layout,
             column_stats: BTreeMap::new(),
+            collation: None,
             incarnation: 0,
             data_version: 0,
             stamp: 0,
@@ -1278,4 +1284,49 @@ pub(super) fn layout_of(
         ),
     )?;
     crate::partitions::table_layout(name, columns, partition_by, bucket, case_sensitive)
+}
+
+/// The table's `DEFAULT COLLATION`, parsed; `None` when it declares none.
+fn table_collation(t: &CreateTable) -> Result<Option<krishiv_types::Collation>, KrishivError> {
+    t.collation
+        .as_ref()
+        .map(|c| {
+            krishiv_types::Collation::parse(
+                &c.parts
+                    .iter()
+                    .map(|p| p.value.as_str())
+                    .collect::<Vec<_>>()
+                    .join("."),
+            )
+        })
+        .transpose()
+}
+
+/// `spec` with `collation` on every `STRING` (also inside arrays, maps and structs) that names none.
+fn with_default_collation(
+    spec: &krishiv_sql::ast::DataTypeSpec,
+    collation: &krishiv_sql::ast::ObjectName,
+) -> krishiv_sql::ast::DataTypeSpec {
+    use krishiv_sql::ast::DataTypeKind;
+    let mut out = spec.clone();
+    match &mut out.kind {
+        DataTypeKind::Primitive { name, .. }
+            if name.eq_ignore_ascii_case("string") && out.collation.is_none() =>
+        {
+            out.collation = Some(collation.clone());
+        }
+        DataTypeKind::Array(Some(e)) => **e = with_default_collation(e, collation),
+        DataTypeKind::Map(Some(kv)) => {
+            let (k, v) = &mut **kv;
+            *k = with_default_collation(k, collation);
+            *v = with_default_collation(v, collation);
+        }
+        DataTypeKind::Struct(Some(fields)) => {
+            for f in fields {
+                f.data_type = with_default_collation(&f.data_type, collation);
+            }
+        }
+        _ => {}
+    }
+    out
 }

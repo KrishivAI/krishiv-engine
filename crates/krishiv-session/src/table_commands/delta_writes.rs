@@ -635,6 +635,7 @@ impl Session {
                 ..crate::store::TableLayout::default()
             },
             column_stats: BTreeMap::new(),
+            collation: None,
             incarnation: 0,
             data_version: 0,
             stamp: 0,
