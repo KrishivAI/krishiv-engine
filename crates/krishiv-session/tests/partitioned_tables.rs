@@ -1021,12 +1021,38 @@ fn partition_values_are_escaped_and_filtered() {
             .unwrap(),
         "Partition Values\t[p=a/b=c%d, q=1]"
     );
+    // R1-D-5: an overwrite with a static partition replaces that partition only.
+    run(
+        &s,
+        "INSERT OVERWRITE t PARTITION (p = 'x', q = 2) VALUES (9)",
+    );
     assert_eq!(
-        class(
+        rows(
             &s,
-            "INSERT OVERWRITE t PARTITION (p = 'x', q = 2) VALUES (1)"
+            "SELECT CAST(a AS STRING) FROM t WHERE p = 'x' AND q = 2"
         ),
-        "KRISHIV_UNSUPPORTED_FEATURE"
+        ["9"]
+    );
+    assert_eq!(
+        rows(&s, "SELECT CAST(a AS STRING) FROM t WHERE q = 5"),
+        ["4"]
+    );
+    assert_eq!(
+        rows(&s, "SELECT CAST(a AS STRING) FROM t ORDER BY a").len(),
+        4
+    );
+    // A dynamic column replaces the partitions the query writes.
+    run(
+        &s,
+        "INSERT OVERWRITE t PARTITION (p = 'x', q) VALUES (7, 5)",
+    );
+    assert_eq!(
+        rows(&s, "SELECT CAST(a AS STRING) FROM t WHERE q = 5"),
+        ["7"]
+    );
+    assert_eq!(
+        rows(&s, "SELECT CAST(a AS STRING) FROM t ORDER BY a").len(),
+        4
     );
     // A failed insert registers nothing.
     assert_eq!(

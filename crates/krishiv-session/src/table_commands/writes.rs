@@ -237,12 +237,9 @@ impl Session {
         let statics = match &c.partition {
             None => Vec::new(),
             Some(spec) => {
-                #[cfg(feature = "delta")]
-                let delta = is_delta_table(&table);
-                #[cfg(not(feature = "delta"))]
-                let delta = false;
-                // A Delta table overwrites a static partition by filter.
-                if (c.overwrite && !delta) || c.if_not_exists {
+                // A Delta table overwrites a static partition by filter; any other table replaces the
+                // partitions the query writes (below).
+                if c.if_not_exists {
                     return Err(unsupported("INSERT OVERWRITE ... PARTITION"));
                 }
                 self.insert_partition_values(&table, spec, original).await?
@@ -540,6 +537,19 @@ impl Session {
                 .map_err(|e| overflow_in_table_insert(e, &assigned, &output, &assignment));
         }
         let _ = reads_target;
+        // `INSERT OVERWRITE ... PARTITION (k='a')` replaces the partition the rows fall in, as a dynamic
+        // overwrite does. Difference from Spark: a query with no rows leaves the partition alone (Spark's
+        // static mode empties it).
+        let dynamic_table;
+        let table = if overwrite && !statics.is_empty() {
+            let mut t = (**table).clone();
+            t.options
+                .insert("partitionOverwriteMode".to_owned(), "dynamic".to_owned());
+            dynamic_table = Arc::new(t);
+            &dynamic_table
+        } else {
+            table
+        };
         let key = target
             .options
             .and_then(|o| super::explicit_key(o, |v: &OptionValue| v.as_plain()));

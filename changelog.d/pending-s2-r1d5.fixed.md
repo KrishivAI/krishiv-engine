@@ -1,0 +1,1 @@
+`INSERT OVERWRITE ... PARTITION (k = 'a')` on a Parquet, CSV or JSON table replaces the partition the rows fall in instead of being refused (R1-D-5); a query with no rows leaves the partition as it was, where Spark empties it.
