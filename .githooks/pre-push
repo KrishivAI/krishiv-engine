@@ -19,7 +19,8 @@ status=0
 
 # ruff_check <base> <local sha>: lint the .py files changed since <base>.
 ruff_check() {
-  files=$(git diff --name-only --diff-filter=d "$1" "$2" -- '*.py' 2>/dev/null || true)
+  # Only the trees CI lints (python/, bench/, tests/scripts/), each with its own ruff configuration.
+  files=$(git diff --name-only --diff-filter=d "$1" "$2" -- 'python/*.py' 'bench/*.py' 'tests/scripts/*.py' 2>/dev/null || true)
   [ -n "$files" ] || return 0
   uvx_cmd="${KRISHIV_UVX:-uvx}"
   if ! command -v "$uvx_cmd" >/dev/null 2>&1; then
@@ -49,9 +50,10 @@ while read -r local_ref local_sha remote_ref remote_sha; do
       ;;
   esac
   if [ "$local_sha" != "$zero" ]; then
-    base="$remote_sha"
-    if [ "$base" = "$zero" ]; then
-      base=$(git merge-base "$local_sha" origin/main 2>/dev/null || true)
+    # The branch's own changes: from where it left main, so a merge of main does not lint main's files.
+    base=$(git merge-base "$local_sha" origin/main 2>/dev/null || true)
+    if [ -z "$base" ] && [ "$remote_sha" != "$zero" ]; then
+      base="$remote_sha"
     fi
     if [ -n "$base" ] && ! ruff_check "$base" "$local_sha"; then
       status=1
