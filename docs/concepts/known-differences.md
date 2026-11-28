@@ -200,11 +200,10 @@ had the declared ones. Krishiv refuses such a result instead, and the error depe
   a column declared `NOT NULL` fails with `PYTHON_EXCEPTION`: see the last paragraph of
   [Several grouped-aggregate pandas UDFs in one `agg`](#several-grouped-aggregate-pandas-udfs-in-one-agg).
 
-A `mapInArrow` result with more columns than declared is refused too by the server (Spark reads the declared columns
+A `mapInArrow` result with more columns than declared is refused by the server too (Spark reads the declared columns
 and ignores the rest when the setting is off, as the embedded runtime does; with it on, all raise
-`ARROW_TYPE_MISMATCH`). Krishiv does not know the client's Spark version
-here, so the setting is honoured whatever the version: under a Spark 3.5 or 4.0 client, which has no such setting,
-setting it still turns the check on.
+`ARROW_TYPE_MISMATCH`). Krishiv does not know the client's Spark version here, so the setting is honoured whatever
+the version: under a Spark 3.5 or 4.0 client, which has no such setting, setting it still turns the check on.
 
 ## Python UDF workers per session (server mode)
 
