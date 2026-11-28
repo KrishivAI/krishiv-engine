@@ -8,14 +8,51 @@
 //! [`KernelCtx::with_target`] forces any target the CPU supports (tests run
 //! every available target, benchmarks compare them). Other architectures
 //! run the baseline only.
+//!
+//! The `KRISHIV_KERNEL_TARGET` environment variable ([`TARGET_CAP_ENV`])
+//! caps the target a whole process uses, read once with the detection: a
+//! profile-guided build trained per target, the v3 or baseline copies run on
+//! an AVX-512 machine, or a support case ("does it also fail without
+//! AVX-512?"). It can only lower the target, never raise it past what the
+//! CPU has, so dispatch stays sound; an unknown value is ignored here
+//! ([`Target::cap_from_env`] returns it as a [`TargetCapError`], and each
+//! binary warns or refuses to start).
 
 use std::sync::OnceLock;
 
 use crate::error::KernelError;
 use crate::version::SparkVersion;
 
-/// A code-generation target for kernel loops.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// The environment variable that caps the kernel target of a process: a
+/// [`Target::name`] (`baseline`, `x86_64v3` or `x86_64v4`, any case). Unset
+/// or empty means no cap.
+pub const TARGET_CAP_ENV: &str = "KRISHIV_KERNEL_TARGET";
+
+/// A [`TARGET_CAP_ENV`] value that caps nothing. [`Target::best`] ignores it;
+/// a binary decides whether to warn or refuse to start.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum TargetCapError {
+    /// The value names no [`Target`].
+    #[error("{TARGET_CAP_ENV}={0:?} names no kernel target (expected one of {names})", names = target_names())]
+    Unknown(String),
+    /// The value is not valid Unicode.
+    #[error("{TARGET_CAP_ENV} is not valid Unicode")]
+    NotUnicode,
+}
+
+/// Every [`Target::name`], comma separated, for messages.
+fn target_names() -> String {
+    Target::ALL.map(Target::name).join(", ")
+}
+
+/// A code-generation target for kernel loops, ordered from the most portable
+/// to the most specific.
+///
+/// The derived order is a chain: each target's features include the previous
+/// one's, so [`Target::capped`] (a `min`) always lands on a target the CPU
+/// has. A future target that does not include the one before it must not join
+/// this order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Target {
     /// The build's own target features (always available).
     Baseline,
@@ -39,11 +76,66 @@ impl Target {
         }
     }
 
-    /// The most specific available target (detected once, then cached).
+    /// The target every [`KernelCtx::new`] uses: the most specific available
+    /// one ([`Target::detected`]), lowered to the [`TARGET_CAP_ENV`] cap when
+    /// that names a valid target. Decided once per process, then cached.
     #[must_use]
     pub fn best() -> Self {
         static BEST: OnceLock<Target> = OnceLock::new();
-        *BEST.get_or_init(|| Self::select(has_v3(), has_v4_extra()))
+        *BEST.get_or_init(|| match Self::cap_from_env() {
+            Ok(Some(cap)) => Self::detected().capped(cap),
+            Ok(None) | Err(_) => Self::detected(),
+        })
+    }
+
+    /// The most specific target this CPU supports, ignoring any cap.
+    #[must_use]
+    pub fn detected() -> Self {
+        Self::select(has_v3(), has_v4_extra())
+    }
+
+    /// This target lowered to `cap`: the less specific of the two. A cap
+    /// never raises a target, so the result is available whenever `self` is.
+    #[must_use]
+    pub fn capped(self, cap: Self) -> Self {
+        self.min(cap)
+    }
+
+    /// The target named `name` ([`Target::name`], any case, surrounding
+    /// spaces ignored).
+    #[must_use]
+    pub fn from_name(name: &str) -> Option<Self> {
+        let name = name.trim();
+        Self::ALL
+            .into_iter()
+            .find(|t| t.name().eq_ignore_ascii_case(name))
+    }
+
+    /// The cap a [`TARGET_CAP_ENV`] value asks for: `None` when it is empty.
+    ///
+    /// # Errors
+    /// [`TargetCapError::Unknown`] when the value names no target.
+    pub fn parse_cap(value: &str) -> Result<Option<Self>, TargetCapError> {
+        if value.trim().is_empty() {
+            return Ok(None);
+        }
+        Self::from_name(value)
+            .map(Some)
+            .ok_or_else(|| TargetCapError::Unknown(value.to_owned()))
+    }
+
+    /// The cap the process environment asks for ([`Target::parse_cap`] of
+    /// [`TARGET_CAP_ENV`]); `None` when it is unset. Binaries call it at
+    /// start-up to report an invalid value, which [`Target::best`] ignores.
+    ///
+    /// # Errors
+    /// [`TargetCapError`] when the value names no target or is not Unicode.
+    pub fn cap_from_env() -> Result<Option<Self>, TargetCapError> {
+        match std::env::var(TARGET_CAP_ENV) {
+            Ok(value) => Self::parse_cap(&value),
+            Err(std::env::VarError::NotPresent) => Ok(None),
+            Err(std::env::VarError::NotUnicode(_)) => Err(TargetCapError::NotUnicode),
+        }
     }
 
     /// The target chosen for a CPU with (`v3`) the x86-64-v3 features and
@@ -475,7 +567,51 @@ mod tests {
         assert_eq!(Target::select(true, false), Target::X86_64V3);
         assert_eq!(Target::select(false, true), Target::Baseline);
         assert_eq!(Target::select(false, false), Target::Baseline);
-        assert_eq!(Target::best(), Target::select(has_v3(), has_v4_extra()));
+        assert_eq!(Target::detected(), Target::select(has_v3(), has_v4_extra()));
+        // A cap from the environment can only lower the detected target.
+        assert!(Target::best() <= Target::detected());
+        assert!(Target::best().is_available());
+    }
+
+    #[test]
+    fn a_cap_only_lowers_the_target() {
+        for t in Target::ALL {
+            for cap in Target::ALL {
+                let got = t.capped(cap);
+                assert!(
+                    got <= t && got <= cap,
+                    "{t:?} capped at {cap:?} gave {got:?}"
+                );
+                assert!(got == t || got == cap);
+            }
+            // The detected target capped anywhere stays runnable on this CPU.
+            assert!(Target::detected().capped(t).is_available());
+        }
+        assert_eq!(Target::X86_64V4.capped(Target::X86_64V3), Target::X86_64V3);
+        assert_eq!(Target::X86_64V3.capped(Target::X86_64V4), Target::X86_64V3);
+        assert_eq!(Target::Baseline.capped(Target::X86_64V4), Target::Baseline);
+    }
+
+    #[test]
+    fn targets_parse_by_name() {
+        for t in Target::ALL {
+            assert_eq!(Target::from_name(t.name()), Some(t));
+            assert_eq!(Target::from_name(&t.name().to_uppercase()), Some(t));
+            assert_eq!(Target::parse_cap(&format!(" {} ", t.name())), Ok(Some(t)));
+        }
+        assert_eq!(Target::from_name("avx512"), None);
+        assert_eq!(Target::parse_cap(""), Ok(None));
+        assert_eq!(Target::parse_cap("  "), Ok(None));
+        let e = Target::parse_cap("x86-64-v3").unwrap_err();
+        assert_eq!(e, TargetCapError::Unknown("x86-64-v3".to_owned()));
+        let msg = e.to_string();
+        assert!(
+            msg.contains(TARGET_CAP_ENV) && msg.contains("\"x86-64-v3\""),
+            "{msg}"
+        );
+        for t in Target::ALL {
+            assert!(msg.contains(t.name()), "{msg}");
+        }
     }
 
     #[test]
