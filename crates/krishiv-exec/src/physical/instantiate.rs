@@ -1765,10 +1765,28 @@ pub(crate) fn expand_op(
     nullable: &[bool],
     v: &Values<'_>,
 ) -> Result<Arc<dyn Operator>> {
-    let projects = projections
-        .iter()
-        .map(|items| project_op(schema, layout, items, Some(nullable), v))
-        .collect::<Result<Vec<_>>>()?;
+    let build = |nullable: &[bool]| {
+        projections
+            .iter()
+            .map(|items| project_op(schema, layout, items, Some(nullable), v))
+            .collect::<Result<Vec<_>>>()
+    };
+    let projects = build(nullable)?;
+    // A projection's expression can be nullable where the analyzer's column is not (an array holding a
+    // NULL element, with ANSI off): every projection takes the nullability of the most nullable one.
+    let widened: Vec<bool> = (0..nullable.len())
+        .map(|i| {
+            nullable[i]
+                || projects
+                    .iter()
+                    .any(|p| p.schema().fields().get(i).is_some_and(|f| f.is_nullable()))
+        })
+        .collect();
+    let projects = if widened == nullable {
+        projects
+    } else {
+        build(&widened)?
+    };
     Ok(Expand::try_new(projects)?)
 }
 
