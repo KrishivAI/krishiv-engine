@@ -82,3 +82,22 @@ async fn a_view_name_is_parsed_as_spark_does() {
     let e = df.create_temp_view("a..b").await.expect_err("bad");
     assert_eq!(e.error_class().name(), "_LEGACY_ERROR_TEMP_1321");
 }
+
+/// QA2-8: a global view over a read by path is read as `global_temp.name` (it was stored as a
+/// file table that only a bare name found).
+#[tokio::test]
+async fn a_global_view_over_a_file_read_is_read_as_global_temp_name() {
+    let dir = tempfile::tempdir().expect("dir");
+    let path = dir.path().join("people.json");
+    std::fs::write(
+        &path,
+        "{\"age\":30,\"name\":\"Andy\"}\n{\"age\":19,\"name\":\"Justin\"}\n",
+    )
+    .expect("write");
+    let s = Session::new().expect("session");
+    let df = s.read().format("json").load([path.to_str().expect("utf8")]);
+    df.create_global_temp_view("people").await.expect("create");
+    assert_eq!(count(&s, "global_temp.people").await, 2);
+    let e = s.sql("SELECT * FROM people").await.expect_err("bare name");
+    assert_eq!(e.error_class().name(), "TABLE_OR_VIEW_NOT_FOUND");
+}

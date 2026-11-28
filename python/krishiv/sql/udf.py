@@ -78,8 +78,8 @@ _RUNNABLE = {
 
 
 #: The relation kinds an embedded session runs (design P3-T085 PR-48a): map, grouped map, cogrouped map and
-#: grouped aggregate. Each runs as itself (``krishiv._udf.relations``); window aggregates and scalar iterators
-#: (PR-48b) are not run yet.
+#: grouped aggregate, and the scalar iterators (task-wide: one call per task, not per batch). Each runs as
+#: itself (``krishiv._udf.relations``); window aggregates (PR-48b) are not run yet.
 _RELATION_RUNNABLE = frozenset(
     {
         PythonEvalType.SQL_GROUPED_MAP_PANDAS_UDF,
@@ -94,6 +94,8 @@ _RELATION_RUNNABLE = frozenset(
         PythonEvalType.SQL_GROUPED_AGG_PANDAS_ITER_UDF,
         PythonEvalType.SQL_GROUPED_AGG_ARROW_UDF,
         PythonEvalType.SQL_GROUPED_AGG_ARROW_ITER_UDF,
+        PythonEvalType.SQL_SCALAR_PANDAS_ITER_UDF,
+        PythonEvalType.SQL_SCALAR_ARROW_ITER_UDF,
     }
 )
 

@@ -546,3 +546,102 @@ def test_vectorized_udfs_see_timestamps_in_the_session_time_zone(
         spark.conf.unset("spark.sql.session.timeZone")
         monkeypatch.undo()
         time.tzset()
+
+
+@needs_pandas
+def test_a_scalar_iterator_pandas_udf_runs_batch_by_batch(spark: SparkSession) -> None:
+    """QA2-8: Spark's `Iterator[pd.Series] -> Iterator[pd.Series]` and `Iterator[Tuple[..]]` forms run."""
+
+    @F.pandas_udf("long")  # type: ignore[call-overload]
+    def plus_one(batches: Iterator[pd.Series]) -> Iterator[pd.Series]:
+        for s in batches:
+            yield s + 1
+
+    @F.pandas_udf("long")  # type: ignore[call-overload]
+    def multiply(batches: Iterator[tuple[pd.Series, pd.Series]]) -> Iterator[pd.Series]:
+        for a, b in batches:
+            yield a * b
+
+    df = spark.createDataFrame([(1, 10), (2, 20), (3, 30)], "a long, b long")
+    rows = df.select(plus_one("a").alias("p"), multiply("a", "b").alias("m")).orderBy("p").collect()
+    assert [(r["p"], r["m"]) for r in rows] == [(2, 10), (3, 40), (4, 90)]
+
+
+@needs_pandas
+def test_a_scalar_iterator_pandas_udf_keeps_state_across_batches(spark: SparkSession) -> None:
+    """The iterator runs once per task: state set up before the loop spans every batch."""
+    spark.conf.set("spark.sql.execution.arrow.maxRecordsPerBatch", "2")
+    try:
+
+        @F.pandas_udf("long")  # type: ignore[call-overload]
+        def running(batches: Iterator[pd.Series]) -> Iterator[pd.Series]:
+            total = 0
+            for s in batches:
+                out = s.cumsum() + total
+                total += int(s.sum())
+                yield out
+
+        df = spark.range(1, 7).coalesce(1)
+        rows = df.select(F.col("id"), running("id").alias("r")).orderBy("id").collect()
+        assert [r["r"] for r in rows] == [1, 3, 6, 10, 15, 21]
+    finally:
+        spark.conf.unset("spark.sql.execution.arrow.maxRecordsPerBatch")
+
+
+def test_a_scalar_iterator_arrow_udf_runs(spark: SparkSession) -> None:
+    @F.arrow_udf("long")  # type: ignore[call-overload]
+    def plus_one(batches: Iterator[pa.Array]) -> Iterator[pa.Array]:
+        for a in batches:
+            yield pc.call_function("add", [a, 1])
+
+    rows = spark.range(1, 4).select(plus_one("id").alias("p")).orderBy("p").collect()
+    assert [r["p"] for r in rows] == [2, 3, 4]
+
+
+@needs_pandas
+def test_a_scalar_iterator_udf_may_yield_a_batch_in_two_halves_and_be_registered(spark: SparkSession) -> None:
+    @F.pandas_udf("long")  # type: ignore[call-overload]
+    def halves(batches: Iterator[pd.Series]) -> Iterator[pd.Series]:
+        for s in batches:
+            h = len(s) // 2
+            yield s.iloc[:h] * 2
+            yield s.iloc[h:] * 2
+
+    spark.udf.register("halves", halves)
+    rows = spark.range(1, 6).selectExpr("halves(id) AS d").orderBy("d").collect()
+    assert [r["d"] for r in rows] == [2, 4, 6, 8, 10]
+
+
+@needs_pandas
+def test_a_scalar_iterator_udf_with_an_empty_input_returns_no_rows(spark: SparkSession) -> None:
+    @F.pandas_udf("long")  # type: ignore[call-overload]
+    def skip_empty(batches: Iterator[pd.Series]) -> Iterator[pd.Series]:
+        for s in batches:
+            if len(s):
+                yield s + 1
+
+    assert spark.range(0).select(skip_empty("id")).collect() == []
+
+
+@pytest.mark.parametrize(
+    ("body", "error_class"),
+    [
+        ("short", "RESULT_ROWS_MISMATCH"),
+        ("long", "OUTPUT_EXCEEDS_INPUT_ROWS"),
+        ("unread", "INPUT_NOT_FULLY_CONSUMED"),
+    ],
+)
+@needs_pandas
+def test_a_scalar_iterator_udf_with_the_wrong_row_count_fails_as_in_spark(
+    spark: SparkSession, body: str, error_class: str
+) -> None:
+    @F.pandas_udf("long")  # type: ignore[call-overload]
+    def bad(batches: Iterator[pd.Series]) -> Iterator[pd.Series]:
+        if body == "unread":
+            return
+            yield  # a generator that reads nothing and yields nothing
+        for s in batches:
+            yield s.iloc[:-1] if body == "short" else pd.concat([s, s])
+
+    with pytest.raises(PySparkException, match=error_class):
+        spark.range(3).coalesce(1).select(bad("id")).collect()

@@ -151,8 +151,10 @@ impl DataFrame {
                 .map(|c| TableColumn::new(c.name.clone(), c.data_type.clone(), c.nullable))
                 .collect();
         // A view over files keeps listing them: files added or changed
-        // later show up in the next query.
-        if let PlanNode::Read(source @ ReadSource::Files { .. }) = &self.plan.node {
+        // later show up in the next query. A global view is no such file table: the readers
+        // find a file table by its bare name, and a global view is read as `global_temp.v`,
+        // so it keeps the analyzed plan like any other view (QA2-8).
+        if !global && let PlanNode::Read(source @ ReadSource::Files { .. }) = &self.plan.node {
             let files = TempTable::Files {
                 source: source.clone(),
                 columns,
