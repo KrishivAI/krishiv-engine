@@ -29,6 +29,42 @@ async fn bounded<F: Future>(what: &str, fut: F) -> F::Output {
     }
 }
 
+/// Awaits a long phase of `agg` (the whole disk phase of `finalize`),
+/// failing the test once none of `agg`'s counters has moved for
+/// [`PATIENCE`]: a hang still fails, but a loaded machine that is slow and
+/// still making progress does not (a flat 60 s limit failed under a load of
+/// 12 to 42 in a debug build).
+async fn bounded_while_progressing<F: Future>(
+    what: &str,
+    agg: &HashAggregate,
+    fut: F,
+) -> F::Output {
+    let progress = || {
+        Sink::extra_metrics(agg)
+            .into_iter()
+            .map(|(_, v)| match v {
+                crate::metrics::Metric::Count(n) | crate::metrics::Metric::Max(n) => n,
+                crate::metrics::Metric::Text(_) => 0,
+            })
+            .collect::<Vec<u64>>()
+    };
+    let mut fut = std::pin::pin!(fut);
+    let mut last = progress();
+    let mut since = tokio::time::Instant::now();
+    loop {
+        if let Ok(v) = tokio::time::timeout(Duration::from_millis(100), &mut fut).await {
+            return v;
+        }
+        let now = progress();
+        if now != last {
+            last = now;
+            since = tokio::time::Instant::now();
+        } else if since.elapsed() >= PATIENCE {
+            panic!("no progress for {PATIENCE:?}: {what}");
+        }
+    }
+}
+
 /// Polls `ready` every millisecond (sleeping, never spinning), failing the
 /// test after [`PATIENCE`].
 async fn wait_until(what: &str, ready: impl Fn() -> bool) {
@@ -159,7 +195,7 @@ async fn disk_by_hand_in(
         .await
         .unwrap();
     let final_ctx = ctx(0, "agg");
-    bounded("finalize", agg.finalize(&g, &final_ctx))
+    bounded_while_progressing("finalize", agg, agg.finalize(&g, &final_ctx))
         .await
         .unwrap();
     let src = ctx(1, "src").with_dependency(Arc::clone(&g));
@@ -1044,4 +1080,15 @@ async fn deterministic_mode_keeps_level_0_8_wide() {
         );
         assert_eq!(outs[0], outs[2], "layout {layout}: 8 slots vs 1 slot");
     }
+}
+
+/// The progress-based wait still fails a hang: a phase that never ends
+/// while none of the aggregate's counters moves panics after
+/// [`PATIENCE`] (on tokio's paused clock, so the test takes no wall time).
+#[tokio::test(start_paused = true)]
+#[should_panic(expected = "no progress for 60s: hang")]
+async fn a_disk_phase_that_makes_no_progress_fails_the_wait() {
+    let (s, _) = wide_input(0, 1);
+    let agg = HashAggregate::new(spec(&s, vec![0], wide_aggs(&s))).unwrap();
+    bounded_while_progressing("hang", &agg, std::future::pending::<()>()).await;
 }
