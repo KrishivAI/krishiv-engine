@@ -1381,6 +1381,13 @@ fn merge_field(a: &FieldRef, b: &FieldRef, case_sensitive: bool) -> Result<Field
     use arrow_schema::DataType as Arrow;
     let nullable = a.is_nullable() || b.is_nullable();
     let data_type = match (a.data_type(), b.data_type()) {
+        // TIMESTAMP(p) and TIMESTAMP_NTZ(p) share one Arrow type and differ in field metadata;
+        // Spark 4.3 merges only equal precisions (`StructType.mergeInternal`, no widening case).
+        (x @ Arrow::Timestamp(arrow_schema::TimeUnit::Nanosecond, _), y)
+            if x == y && nanos_precision(a) != nanos_precision(b) =>
+        {
+            return Err(merge_refusal(a, x, b, y).into());
+        }
         (x, y) if x == y => x.clone(),
         (Arrow::Struct(x), Arrow::Struct(y)) => {
             Arrow::Struct(merge_fields(x, y, case_sensitive)?.into())
@@ -1393,17 +1400,7 @@ fn merge_field(a: &FieldRef, b: &FieldRef, case_sensitive: bool) -> Result<Field
         (Arrow::Map(x, sorted), Arrow::Map(y, _)) => {
             Arrow::Map(merge_field(x, y, case_sensitive)?, *sorted)
         }
-        (x, y) => {
-            let sql = |f: &FieldRef, t: &Arrow| {
-                DataType::from_arrow_field(&arrow_schema::Field::new(f.name(), t.clone(), true))
-                    .map_or_else(|_| format!("{t}"), |d| d.sql())
-            };
-            return Err(CannotMergeIncompatibleDataType {
-                left: format!("\"{}\"", sql(a, x)),
-                right: format!("\"{}\"", sql(b, y)),
-            }
-            .into());
-        }
+        (x, y) => return Err(merge_refusal(a, x, b, y).into()),
     };
     Ok(Arc::new(
         a.as_ref()
@@ -1411,6 +1408,35 @@ fn merge_field(a: &FieldRef, b: &FieldRef, case_sensitive: bool) -> Result<Field
             .with_data_type(data_type)
             .with_nullable(nullable),
     ))
+}
+
+/// The precision of a TIMESTAMP(p) / TIMESTAMP_NTZ(p) field (`None` for any other field).
+fn nanos_precision(f: &FieldRef) -> Option<u8> {
+    match DataType::from_arrow_field(f) {
+        Ok(DataType::TimestampNanos { precision } | DataType::TimestampNtzNanos { precision }) => {
+            Some(precision)
+        }
+        _ => None,
+    }
+}
+
+/// `CANNOT_MERGE_INCOMPATIBLE_DATA_TYPE` for fields `a` (type `x`) and `b` (type `y`), each
+/// type in its SQL form (the field's metadata gives a timestamp its precision).
+fn merge_refusal(
+    a: &FieldRef,
+    x: &arrow_schema::DataType,
+    b: &FieldRef,
+    y: &arrow_schema::DataType,
+) -> CannotMergeIncompatibleDataType {
+    let sql = |f: &FieldRef, t: &arrow_schema::DataType| {
+        let field =
+            arrow_schema::Field::new(f.name(), t.clone(), true).with_metadata(f.metadata().clone());
+        DataType::from_arrow_field(&field).map_or_else(|_| format!("{t}"), |d| d.sql())
+    };
+    CannotMergeIncompatibleDataType {
+        left: format!("\"{}\"", sql(a, x)),
+        right: format!("\"{}\"", sql(b, y)),
+    }
 }
 
 /// How a read lists files: `recursiveFileLookup` (every file below the

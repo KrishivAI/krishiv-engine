@@ -298,3 +298,55 @@ fn cloud_locating_honours_per_read_options() {
         );
     }
 }
+
+#[test]
+fn merging_timestamp_fields_of_two_precisions_is_refused() {
+    // Spark 4.3 `StructType.mergeInternal` has no widening case for TIMESTAMP_NTZ(p) /
+    // TIMESTAMP(p): equal precisions merge, others fail in either file order.
+    let ntz = |p: u8, name: &str| -> FieldRef {
+        Arc::new(DataType::TimestampNtzNanos { precision: p }.to_arrow_field(name, true))
+    };
+    let ltz = |p: u8| -> FieldRef {
+        Arc::new(DataType::TimestampNanos { precision: p }.to_arrow_field("t", true))
+    };
+    for (a, b) in [
+        (ntz(7, "t"), ntz(9, "t")),
+        (ntz(9, "t"), ntz(7, "t")),
+        (ltz(8), ltz(9)),
+    ] {
+        let err = merge_field(&a, &b, true).map(|_| ()).unwrap_err();
+        assert_eq!(
+            err.error_class().name(),
+            "CANNOT_MERGE_INCOMPATIBLE_DATA_TYPE",
+            "{err}"
+        );
+    }
+    let err = merge_field(&ntz(7, "t"), &ntz(9, "t"), true)
+        .map(|_| ())
+        .unwrap_err();
+    let text = err.to_string();
+    assert!(
+        text.contains("TIMESTAMP_NTZ(7)") && text.contains("TIMESTAMP_NTZ(9)"),
+        "{text}"
+    );
+    // Nested: a struct child and a list element.
+    let st = |p: u8| -> FieldRef {
+        Arc::new(arrow_schema::Field::new(
+            "s",
+            arrow_schema::DataType::Struct(vec![ntz(p, "c")].into()),
+            true,
+        ))
+    };
+    assert!(merge_field(&st(7), &st(9), true).is_err());
+    let li = |p: u8| -> FieldRef {
+        Arc::new(arrow_schema::Field::new(
+            "l",
+            arrow_schema::DataType::List(ntz(p, "element")),
+            true,
+        ))
+    };
+    assert!(merge_field(&li(9), &li(7), true).is_err());
+    // Equal precisions merge and keep it.
+    let merged = merge_field(&ntz(7, "t"), &ntz(7, "t"), true).map_err(|e| e.to_string());
+    assert_eq!(merged.map(|f| nanos_precision(&f)), Ok(Some(7)),);
+}
