@@ -2,8 +2,7 @@
   "cases": {
     "s43-asof-join": [
       13,
-      14,
-      15
+      14
     ]
   },
   "file": "join-asof-grammar",
