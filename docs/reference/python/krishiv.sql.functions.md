@@ -790,7 +790,7 @@ Calls the registry function `count_if`.
 def count_min_sketch(col: ColumnOrName, eps: Column | float, confidence: Column | float, seed: Column | int | None=None) -> Column
 ```
 
-Not supported by the engine yet: calling it raises `UnsupportedOperationException`.
+Calls the registry function `count_min_sketch`.
 
 ### `counter_diff`
 

@@ -1057,6 +1057,15 @@ pub struct AggregateExpr {
     /// bins, at least 2).
     #[prost(int32, tag = "19")]
     pub histogram_bins: i32,
+    /// feature: count_min_sketch_aggregate (`count_min_sketch` only: the rows of counters).
+    #[prost(uint32, tag = "20")]
+    pub count_min_depth: u32,
+    /// feature: count_min_sketch_aggregate (`count_min_sketch` only: the counters a row).
+    #[prost(uint32, tag = "21")]
+    pub count_min_width: u32,
+    /// feature: count_min_sketch_aggregate (`count_min_sketch` only: the seed of the row hashes).
+    #[prost(int32, tag = "22")]
+    pub count_min_seed: i32,
 }
 /// The call of a session aggregate UDF: its implementation by name and
 /// version, and the columns the planner fixed for it. A worker must hold
@@ -2478,6 +2487,9 @@ pub enum AggregateFunction {
     /// `theta_intersection_agg(sketch)`.
     /// feature: theta_sketch_aggregates
     ThetaIntersectionAgg = 57,
+    /// `count_min_sketch(x, eps, confidence, seed)`: its folded shape and seed are `count_min_*`.
+    /// feature: count_min_sketch_aggregate
+    CountMinSketch = 58,
 }
 impl AggregateFunction {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2544,6 +2556,7 @@ impl AggregateFunction {
             Self::ThetaSketchAgg => "AGGREGATE_FUNCTION_THETA_SKETCH_AGG",
             Self::ThetaUnionAgg => "AGGREGATE_FUNCTION_THETA_UNION_AGG",
             Self::ThetaIntersectionAgg => "AGGREGATE_FUNCTION_THETA_INTERSECTION_AGG",
+            Self::CountMinSketch => "AGGREGATE_FUNCTION_COUNT_MIN_SKETCH",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2609,6 +2622,7 @@ impl AggregateFunction {
             "AGGREGATE_FUNCTION_THETA_INTERSECTION_AGG" => {
                 Some(Self::ThetaIntersectionAgg)
             }
+            "AGGREGATE_FUNCTION_COUNT_MIN_SKETCH" => Some(Self::CountMinSketch),
             _ => None,
         }
     }

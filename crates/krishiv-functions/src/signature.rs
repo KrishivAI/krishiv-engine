@@ -404,6 +404,9 @@ pub enum InputType {
     /// `TypeCollection`: `unix_timestamp` takes a string, date or
     /// timestamp, never a number).
     StrictOneOf(Vec<DataType>),
+    /// An integral, `STRING` or `BINARY` type, as it is (`count_min_sketch`'s value, which Spark names
+    /// `("INTEGRAL" or "STRING" or "BINARY")`); an untyped `NULL` becomes `INT`.
+    StrictIntegralStringOrBinary,
     /// Any `TIME(p)`, or a string (read as `TIME(6)`): Spark's `AnyTimeType` with its implicit cast from a
     /// string, as `time_trunc` takes it. Other time functions take [`Self::StrictOneOf`] times.
     AnyTimeOrString,
@@ -483,6 +486,9 @@ impl InputType {
             Self::OneOf(types) | Self::StrictOneOf(types) => {
                 let names: Vec<String> = types.iter().map(|t| format!("\"{}\"", t.sql())).collect();
                 format!("({})", names.join(" or "))
+            }
+            Self::StrictIntegralStringOrBinary => {
+                "(\"INTEGRAL\" or \"STRING\" or \"BINARY\")".to_owned()
             }
             Self::AnyTimeOrString => {
                 let names: Vec<String> = [6_u8, 0, 1, 2, 3, 4, 5]

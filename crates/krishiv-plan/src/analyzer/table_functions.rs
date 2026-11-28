@@ -180,14 +180,12 @@ impl Resolver<'_> {
                 o,
             ));
         }
-        // Binds each argument over no input, as inline-table cells are
-        // bound: no enclosing query is visible here (a lateral reference
-        // never reaches this point; `LATERAL` fails in lowering).
+        // Binds each argument over no input. A column of the enclosing
+        // query (a `LATERAL` or correlated reference) binds and then fails
+        // to fold: `NON_FOLDABLE_ARGUMENT`, as in Spark.
         let mut bounds: Vec<Bound> = Vec::with_capacity(n);
         for arg in args {
             let cx = Self::cx(&[], &[], env, "Range");
-            let mut cx = cx;
-            cx.outer = false;
             bounds.push(self.bind(arg, &cx)?);
         }
         let mut values: Vec<i64> = Vec::with_capacity(n);

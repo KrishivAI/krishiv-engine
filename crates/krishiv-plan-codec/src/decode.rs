@@ -1359,6 +1359,7 @@ fn aggregate_expr(a: &pb::AggregateExpr) -> Result<AggregateExpr> {
         BitmapAndAgg => AggregateFunction::BitmapAndAgg,
         HllSketchAgg => crate::decode_sketch::hll_sketch_function(a, true)?,
         HllUnionAgg => crate::decode_sketch::hll_sketch_function(a, false)?,
+        CountMinSketch => crate::decode_sketch::count_min_function(a)?,
         ThetaSketchAgg => crate::decode_sketch::theta_sketch_function(a, ThetaKind::Sketch)?,
         ThetaUnionAgg => crate::decode_sketch::theta_sketch_function(a, ThetaKind::Union)?,
         ThetaIntersectionAgg => crate::decode_sketch::theta_sketch_function(a, ThetaKind::Intersection)?,

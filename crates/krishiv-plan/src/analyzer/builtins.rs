@@ -103,9 +103,8 @@ pub(super) enum NamedDefault {
 }
 
 /// The named-parameter signature of the functions Spark 4.2 documents with
-/// named parameters that the engine accepts named arguments for: `mask`
-/// (implemented) and `count_min_sketch` (known but unimplemented, so its
-/// calls reorder and then fail as unsupported). Any other function rejects
+/// named parameters that the engine accepts named arguments for, such as `mask`
+/// and `count_min_sketch`. Any other function rejects
 /// named arguments with `NAMED_PARAMETERS_NOT_SUPPORTED`.
 pub(super) fn named_signature(name: &str) -> Option<&'static [NamedParam]> {
     use NamedDefault::{Bool, Null, Required, Text};
@@ -189,7 +188,18 @@ pub(super) fn named_signature(name: &str) -> Option<&'static [NamedParam]> {
             default: Bool(true),
         },
     ];
+    // Spark's generator builders declare their one parameter, in a select list as in `FROM`.
+    const COLLECTION: &[NamedParam] = &[NamedParam {
+        name: "collection",
+        default: Required,
+    }];
+    const INPUT: &[NamedParam] = &[NamedParam {
+        name: "input",
+        default: Required,
+    }];
     match name.to_ascii_lowercase().as_str() {
+        "explode" | "explode_outer" | "posexplode" | "posexplode_outer" => Some(COLLECTION),
+        "inline" | "inline_outer" => Some(INPUT),
         "variant_set" | "try_variant_set" => Some(VARIANT_SET),
         "variant_strip_nulls" => Some(VARIANT_STRIP_NULLS),
         "mask" => Some(MASK),

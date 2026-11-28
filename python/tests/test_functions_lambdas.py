@@ -183,9 +183,29 @@ def test_missing_engine_functions_raise_not_implemented(name: str, args: tuple[A
         getattr(F, name)(*args)
 
 
-def test_catalog_only_functions_raise_unsupported_when_called() -> None:
-    with pytest.raises(errors.UnsupportedOperationException, match="KRISHIV_UNSUPPORTED_FEATURE"):
-        F.count_min_sketch("n", 0.01, 0.99, 1)
+def test_count_min_sketch_is_an_aggregate_over_binary(df: DataFrame) -> None:
+    sql = df.agg(F.expr("count_min_sketch(cast(n as int), 0.01d, 0.99d, 1)")).collect()[0][0]
+    row = df.agg(F.count_min_sketch(F.col("n").cast("int"), 0.01, 0.99, 1)).collect()[0]
+    assert isinstance(row[0], bytes | bytearray)
+    # The wrapper and the SQL call build the same sketch, which is not empty.
+    assert bytes(row[0]) == bytes(sql)
+    assert len(row[0]) > 12
+
+
+def test_count_min_sketch_draws_a_seed_when_none_is_given(df: DataFrame, monkeypatch: pytest.MonkeyPatch) -> None:
+    from krishiv.sql import _generated_functions as gen
+
+    drawn: list[int] = []
+
+    def fixed() -> int:
+        drawn.append(1)
+        return 1
+
+    monkeypatch.setattr(gen, "_random_int", fixed)
+    row = df.agg(F.count_min_sketch(F.col("n").cast("int"), 0.01, 0.99)).collect()[0]
+    explicit = df.agg(F.count_min_sketch(F.col("n").cast("int"), 0.01, 0.99, 1)).collect()[0]
+    assert drawn == [1]
+    assert bytes(row[0]) == bytes(explicit[0])
 
 
 def test_udtf_stubs_take_pysparks_keywords() -> None:

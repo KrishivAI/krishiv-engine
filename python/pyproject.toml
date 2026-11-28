@@ -147,6 +147,7 @@ include = [
     "tests/test_pyspark_relation_arms.py",
     "tests/pyspark_udf/relation/cases.py",
     "tests/pyspark_udf/relation/gen_goldens.py",
+    "tests/test_connect_plot.py",
 ]
 
 [tool.ty.overrides.rules]

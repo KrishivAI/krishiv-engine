@@ -34,7 +34,7 @@ assert [tuple(r) for r in out.collect()] == [("east", 15.5), ("west", 20.0)]
 
 Search your project for the function names in the tables below. The `krishiv check-compat` scanner that automates this is not part of 0.2.0 (see [check-compat](check-compat.md)).
 
-## Spark functions Krishiv does not run yet (67)
+## Spark functions Krishiv does not run yet (66)
 
 A name that is not in the data is reported as unknown and is not supported. A workaround is given only where one exists;
 an empty cell means there is none yet.
@@ -46,7 +46,6 @@ an empty cell means there is none yet.
 | [`approx_top_k_combine`](../reference/sql/functions/approx_top_k_combine.md) | not yet |  |
 | [`approx_top_k_estimate`](../reference/sql/functions/approx_top_k_estimate.md) | not yet |  |
 | [`collations`](../reference/sql/functions/collations.md) | not yet |  |
-| [`count_min_sketch`](../reference/sql/functions/count_min_sketch.md) | not yet |  |
 | [`java_method`](../reference/sql/functions/java_method.md) | not yet | Krishiv has no JVM to call into; register a UDF instead (see the Native Rust UDFs reference) |
 | [`kll_merge_agg_bigint`](../reference/sql/functions/kll_merge_agg_bigint.md) | not yet |  |
 | [`kll_merge_agg_double`](../reference/sql/functions/kll_merge_agg_double.md) | not yet |  |

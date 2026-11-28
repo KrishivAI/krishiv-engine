@@ -264,20 +264,33 @@ fn named_arity_counts_required_to_total() {
 }
 
 #[test]
-fn count_min_sketch_reorders_then_fails_unsupported() {
-    // The signature is known, so named arguments reorder; the function
-    // itself is unimplemented.
+fn count_min_sketch_named_arguments_reorder() {
+    let half = || Expr::from(Literal::Double(0.5));
     let r = analyze(vec![named(
         "count_min_sketch",
         &[
             (Some("seed"), int(1)),
             (Some("column"), c("a")),
-            (Some("epsilon"), s("0.5")),
-            (Some("confidence"), s("0.5")),
+            (Some("epsilon"), half()),
+            (Some("confidence"), half()),
         ],
     )]);
-    let (class, _) = class_and_params(&r);
-    assert_eq!(class, "KRISHIV_UNSUPPORTED_FEATURE");
+    assert_eq!(names(&r.unwrap()), ["count_min_sketch(a, 0.5, 0.5, 1)"]);
+
+    // Spark casts no string to the `double` parameters.
+    let r = analyze(vec![named(
+        "count_min_sketch",
+        &[
+            (None, c("a")),
+            (None, s("0.5")),
+            (None, half()),
+            (None, int(1)),
+        ],
+    )]);
+    assert_eq!(
+        class_and_params(&r).0,
+        "DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE"
+    );
 }
 
 #[test]

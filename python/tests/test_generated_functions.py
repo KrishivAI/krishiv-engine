@@ -46,6 +46,8 @@ REGISTRY_NAME = {
 #: Optional parameters that are sent even when left out (as a NULL literal): `lag`/`lead`'s
 #: `default`, which the SQL parser fills with NULL, so the wrapper builds the SQL call.
 ALWAYS_SENT = {("lag", "default"), ("lead", "default")}
+#: Functions whose omitted optional `seed` is drawn at random by the wrapper (as Spark does) and sent as a literal.
+RANDOM_SEEDED = {"count_min_sketch"}
 #: Spark's `trim(chars, str)`: PySpark's `(col, trim)` is sent reversed.
 REVERSED = {"ltrim", "rtrim", "trim"}
 HAND_WRITTEN = set(F._HAND_WRITTEN)
@@ -186,7 +188,13 @@ def test_every_wrapper_builds_its_registry_call(name: str, recorded: None) -> No
         short = fn(*[v for vs in required for v in vs])._c
     sent_defaults = [p for p in params if p.default is not p.empty and p.default is not None]
     sent_nulls = [p for p in params if (name, p.name) in ALWAYS_SENT]
-    assert len(short[2]) == sum(len(vs) for vs in required) + len(sent_defaults) + len(sent_nulls)
+    seeds = 1 if name in RANDOM_SEEDED else 0
+    assert len(short[2]) == sum(len(vs) for vs in required) + len(sent_defaults) + len(sent_nulls) + seeds
+    if seeds:
+        seed = short[2][-1]
+        assert seed[0] == "lit", seed
+        assert isinstance(seed[1], int), seed
+        assert not isinstance(seed[1], bool), seed
     if sent_nulls:
         assert short[2][-len(sent_nulls) :] == tuple(("lit", None) for _ in sent_nulls)
 

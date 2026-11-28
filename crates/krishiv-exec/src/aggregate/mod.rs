@@ -67,6 +67,7 @@ mod accumulator;
 mod bitmap;
 mod chunks;
 mod collect;
+mod count_min;
 mod distinct;
 mod histogram;
 mod hll;
@@ -376,6 +377,16 @@ pub enum AggregateFunction {
     /// `theta_intersection_agg(sketch)` (Spark 4.1): the intersection of the non-NULL sketches; the empty sketch for
     /// no input; `binary`, never NULL.
     ThetaIntersectionAgg,
+    /// `count_min_sketch(x, eps, confidence, seed)`: the count-min sketch of the non-NULL values of an integral,
+    /// `string` or `binary` column; `binary`, never NULL. `eps` and `confidence` are folded into the sketch's size.
+    CountMinSketch {
+        /// The rows of counters.
+        depth: u32,
+        /// The counters a row.
+        width: u32,
+        /// The seed of the row hashes.
+        seed: i32,
+    },
     /// A session aggregate UDF (ADR 0045), by name and version: the worker
     /// runs the implementation its library holds under both, or refuses
     /// the plan with `KRISHIV_UDF_NOT_AVAILABLE`.
@@ -721,6 +732,20 @@ impl AggregateExpr {
                 | DataType::Utf8View
                 | DataType::Binary
                 | DataType::BinaryView,
+            )
+            | (
+                F::CountMinSketch { .. },
+                DataType::Null
+                | DataType::Int8
+                | DataType::Int16
+                | DataType::Int32
+                | DataType::Int64
+                | DataType::Utf8
+                | DataType::LargeUtf8
+                | DataType::Utf8View
+                | DataType::Binary
+                | DataType::LargeBinary
+                | DataType::BinaryView,
             ) => DataType::BinaryView,
             (F::MaxBy | F::MinBy | F::MaxByKeyFirst | F::MinByKeyFirst, _) => match self.by_types()
             {
@@ -889,7 +914,8 @@ impl AggregateExpr {
                 | F::HllUnionAgg { .. }
                 | F::ThetaSketchAgg { .. }
                 | F::ThetaUnionAgg { .. }
-                | F::ThetaIntersectionAgg,
+                | F::ThetaIntersectionAgg
+                | F::CountMinSketch { .. },
                 _,
             ) => {
                 vec![Field::new(n("sketch"), DataType::Binary, false)]
@@ -1149,6 +1175,13 @@ impl AggregateSpec {
 
 /// `spark.sql.ansi.enabled` as Spark's error messages quote it.
 const ANSI_CONF: &str = "\"spark.sql.ansi.enabled\"";
+
+/// Whether a `count_min_sketch` of `depth` rows of `width` counters can be returned: its serialized form fits
+/// a `binary` value. The planner and the plan codec refuse any other shape.
+#[must_use]
+pub fn count_min_shape_fits(depth: u32, width: u32) -> bool {
+    krishiv_functions::sketch::count_min::serialized_len(depth, width).is_some()
+}
 
 /// `KRISHIV_UNSUPPORTED_FEATURE`.
 pub(crate) fn unsupported(feature: String) -> KrishivError {

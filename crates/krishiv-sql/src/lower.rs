@@ -21,8 +21,8 @@ use std::sync::Arc;
 
 use krishiv_common::error::{
     FailedToParseTooComplex, InvalidRecursiveCte, KrishivError, KrishivUnsupportedFeature,
-    MissingWindowSpecification, UnboundSqlParameter, UnionNotSupportedInRecursiveCte,
-    WrongNumArgsWithoutSuggestion,
+    MissingWindowSpecification, NamedParametersNotSupported, UnboundSqlParameter,
+    UnionNotSupportedInRecursiveCte, UnrecognizedParameterName, WrongNumArgsWithoutSuggestion,
 };
 use krishiv_common::secret::OptionValue;
 use krishiv_common::stack::{STEP, on_big_stack};
@@ -1038,6 +1038,30 @@ impl Lowerer {
         found
     }
 
+    /// A named argument of a generator (not `stack`) must carry the one parameter's name in Spark's builders.
+    fn check_generator_param(name: &Ident, arg: &crate::ast::FunctionArg) -> R<()> {
+        let Some(given) = &arg.name else {
+            return Ok(());
+        };
+        let lower = name.value.to_ascii_lowercase();
+        let param = if lower.starts_with("explode") || lower.starts_with("posexplode") {
+            "collection"
+        } else {
+            "input"
+        };
+        if given.value.eq_ignore_ascii_case(param) {
+            return Ok(());
+        }
+        Err(err(
+            UnrecognizedParameterName {
+                routine_name: format!("`{}`", name.value),
+                argument_name: format!("`{}`", given.value),
+                proposal: format!("`{param}`"),
+            },
+            arg.span,
+        ))
+    }
+
     /// The one argument a generator call reads: the argument of `explode`,
     /// `posexplode` and `inline`, or for `stack(n, e1, ..., ek)` the array
     /// of `n` structs `inline` generates the rows from (`col0`, `col1`, ...
@@ -1064,7 +1088,16 @@ impl Lowerer {
             let [arg] = args else {
                 return Err(wrong("1", args.len()));
             };
+            Self::check_generator_param(name, arg)?;
             return self.arg(&arg.expr);
+        }
+        if let Some(a) = args.iter().find(|a| a.name.is_some()) {
+            return Err(err(
+                NamedParametersNotSupported {
+                    function_name: format!("`{}`", name.value),
+                },
+                a.span,
+            ));
         }
         if args.len() < 2 {
             return Err(wrong("> 1", args.len()));

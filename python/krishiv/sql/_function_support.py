@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import random
 import warnings
 from collections.abc import Callable, Iterable
 from typing import Any, NoReturn
@@ -82,6 +83,11 @@ def _opts(value: Any, arg: str) -> _native.Column:
 def _opt(convert: Callable[[Any, str], _native.Column], value: Any, arg: str) -> tuple[_native.Column, ...]:
     """The converted argument, or none when it is ``None`` (an optional argument left out)."""
     return () if value is None else (convert(value, arg),)
+
+
+def _random_int() -> int:
+    """A random 32-bit integer, as Spark draws the seed of ``count_min_sketch`` when none is given."""
+    return random.randint(-(2**31), 2**31 - 1)
 
 
 def _cols(values: Iterable[Any]) -> list[_native.Column]:

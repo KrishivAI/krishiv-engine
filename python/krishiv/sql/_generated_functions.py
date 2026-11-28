@@ -22,6 +22,7 @@ from krishiv.sql._function_support import (
     _one_of,
     _opt,
     _opts,
+    _random_int,
     _unsupported,
 )
 from krishiv.sql.column import Column
@@ -516,7 +517,6 @@ __all__ = [
 
 _ENGINE_UNSUPPORTED = (
     "collate",
-    "count_min_sketch",
     "java_method",
     "kll_merge_agg_bigint",
     "kll_merge_agg_double",
@@ -1026,8 +1026,14 @@ def count_if(col: ColumnOrName) -> Column:
 def count_min_sketch(
     col: ColumnOrName, eps: Column | float, confidence: Column | float, seed: Column | int | None = None
 ) -> Column:
-    """Not supported by the engine yet: calling it raises ``UnsupportedOperationException``."""
-    raise _unsupported("count_min_sketch")
+    """Calls the registry function ``count_min_sketch``."""
+    return _call(
+        "count_min_sketch",
+        _named(col, "col"),
+        _lit(eps, "eps"),
+        _lit(confidence, "confidence"),
+        _lit(_random_int() if seed is None else seed, "seed"),
+    )
 
 
 def counter_diff(value: ColumnOrName, startTime: ColumnOrName | None = None) -> Column:

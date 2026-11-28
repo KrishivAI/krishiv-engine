@@ -40,6 +40,7 @@ const HELPERS: &[&str] = &[
     "_one_of",
     "_opt",
     "_opts",
+    "_random_int",
     "_unsupported",
 ];
 
@@ -77,6 +78,9 @@ pub(crate) struct Row {
     /// of being left out of the call: `lag`/`lead`'s `default`, which the parser fills with NULL,
     /// so the wrapper builds the same call the SQL form builds.
     always: Option<&'static str>,
+    /// An integer parameter left out is a random one, as Spark's `count_min_sketch(col, eps, confidence)`
+    /// draws its seed (`_random_int`), so the call keeps the four arguments the function requires.
+    random: Option<&'static str>,
     /// Optional parameters with a SQL default, in order: one left out while a later optional
     /// parameter is given sends its default, so every argument keeps its position
     /// (`aes_encrypt(c, k, aad=a)` sends `GCM`, `DEFAULT` and an empty IV before the AAD).
@@ -94,6 +98,7 @@ impl Row {
             reversed: false,
             deprecated: None,
             always: None,
+            random: None,
             fill: &[],
         }
     }
@@ -119,6 +124,12 @@ impl Row {
     /// Sends `param` even when it is `None` (as a SQL NULL).
     pub(crate) const fn always(mut self, param: &'static str) -> Self {
         self.always = Some(param);
+        self
+    }
+
+    /// Sends a random integer for `param` when it is `None`.
+    pub(crate) const fn random(mut self, param: &'static str) -> Self {
+        self.random = Some(param);
         self
     }
 
@@ -335,6 +346,12 @@ fn render_function(row: &Row, params: &[Param], unsupported: bool) -> (String, S
         .iter()
         .map(|p| p.argument(row.always == Some(p.name.as_str())))
         .collect();
+    if let Some(name) = row.random
+        && let Some(at) = params.iter().position(|p| p.name == name)
+    {
+        let helper = params[at].conv.helper();
+        args[at] = format!("{helper}(_random_int() if {name} is None else {name}, \"{name}\")");
+    }
     let mut prelude = String::new();
     for (name, default) in row.fill {
         let Some(at) = params.iter().position(|p| p.name == *name) else {

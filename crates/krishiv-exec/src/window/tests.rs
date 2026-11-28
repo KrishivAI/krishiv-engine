@@ -529,6 +529,7 @@ fn reference(
                         | AggregateFunction::BitmapConstructAgg
                         | AggregateFunction::BitmapOrAgg
                         | AggregateFunction::BitmapAndAgg
+                        | AggregateFunction::CountMinSketch { .. }
                         | AggregateFunction::HllSketchAgg { .. }
                         | AggregateFunction::HllUnionAgg { .. }
                         | AggregateFunction::ThetaSketchAgg { .. }

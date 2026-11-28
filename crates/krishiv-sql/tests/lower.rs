@@ -764,22 +764,18 @@ fn generators_in_from_are_generate_nodes_and_other_table_functions_are_not() {
         line("SELECT * FROM stack_outer(2, 1, 2)"),
         "Project [*] | +- TableFunction stack_outer [2, 1, 2] | "
     );
-    // a table argument lowers (the analyzer gives it to a Python table function only); a four-part name is
-    // refused, and so is a table argument of a generator
+    // a table argument lowers (the analyzer gives it to a Python table function only, and refuses a
+    // generator's as Spark does); a four-part name is refused here
     assert_eq!(
         line("SELECT * FROM f(TABLE(t))"),
         "Project [*] | +- TableFunction f [table-argument] |    :  +- Read t | "
     );
-    for sql in [
-        "SELECT * FROM explode(TABLE(t))",
-        "SELECT * FROM a.b.c.d(1)",
-    ] {
-        assert!(
-            line(sql).contains("table-valued functions"),
-            "{sql}: {}",
-            line(sql)
-        );
-    }
+    assert_eq!(
+        line("SELECT * FROM explode(TABLE(t))"),
+        "Project [*] | +- Generate explode(table-argument), false, [] |    :  +- Read t |    +- OneRowRelation | "
+    );
+    let refused = line("SELECT * FROM a.b.c.d(1)");
+    assert!(refused.contains("table-valued functions"), "{refused}");
 }
 
 #[test]

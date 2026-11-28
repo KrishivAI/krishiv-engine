@@ -1,16 +1,8 @@
 {
   "cases": {
-    "fn-aggregate": [
-      5,
-      6,
-      7
-    ],
-    "query-features": [
-      8,
-      9,
+    "other-version": [
       13,
-      14,
-      16
+      14
     ]
   },
   "file": "named-function-arguments",

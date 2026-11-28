@@ -441,6 +441,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &UNION_OUTPUT_PARTITIONING,
     ),
     (
+        "spark.sql.pyspark.plotting.max_rows",
+        &PYSPARK_PLOTTING_MAX_ROWS,
+    ),
+    (
         "spark.sql.repl.eagerEval.maxNumRows",
         &REPL_EAGER_EVAL_MAX_NUM_ROWS,
     ),
@@ -531,6 +535,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.optimizer.ndvSampling.timeout",
         &NDV_SAMPLING_TIMEOUT,
+    ),
+    (
+        "krishiv.sql.pyspark.plotting.max_rows",
+        &PYSPARK_PLOTTING_MAX_ROWS,
     ),
     (
         "krishiv.sql.repl.eagerEval.maxNumRows",

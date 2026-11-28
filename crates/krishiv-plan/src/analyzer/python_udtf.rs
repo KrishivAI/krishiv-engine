@@ -44,8 +44,8 @@ use crate::{
 const OP: &str = "PythonUDTF";
 
 /// A bound `TABLE(...)` argument before `analyze` applies to it.
-struct Table {
-    rel: Rel,
+pub(super) struct Table {
+    pub(super) rel: Rel,
     arg: TableArg,
 }
 
@@ -187,7 +187,7 @@ impl Resolver<'_> {
 
     /// A `TABLE(...)` argument: its relation, and its partitioning bound
     /// over it.
-    fn table_argument(
+    pub(super) fn table_argument(
         &mut self,
         plan: &Arc<LogicalPlan>,
         spec: &TableArgSpec,
@@ -413,7 +413,7 @@ impl Resolver<'_> {
 }
 
 /// The type of a `TABLE` argument's rows: a struct of its columns.
-fn row_type(out: &[Attr]) -> DataType {
+pub(super) fn row_type(out: &[Attr]) -> DataType {
     DataType::Struct(StructType::new(out.iter().map(|a| {
         StructField::new(a.col.name.clone(), a.col.data_type.clone(), a.col.nullable)
     })))

@@ -1485,6 +1485,30 @@ pub(crate) fn nodes() -> Vec<(&'static str, PhysNode)> {
                 },
             },
         ),
+        (
+            "aggregate_count_min_sketch",
+            PhysNode::Aggregate {
+                input: boxed(scan()),
+                aggregate: AggregatePlan {
+                    group_by: vec![0],
+                    aggregates: vec![AggregateExpr {
+                        function: AggregateFunction::CountMinSketch {
+                            depth: 3,
+                            width: 4,
+                            seed: 1,
+                        },
+                        args: vec![0],
+                        input: AggInput::Raw,
+                        arg_type: ArrowType::Int32,
+                        name: "x".to_owned(),
+                        mask: None,
+                        element: None,
+                    }],
+                    distinct: vec![false],
+                    output: AggregateOutput::Final,
+                },
+            },
+        ),
         ("hash_join", PhysNode::HashJoin(join_plan(JoinType::Inner))),
         (
             // A guessed build's fixed Bloom (field 10, ignorable).

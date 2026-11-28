@@ -131,6 +131,7 @@ registry! {
     (collated_min_max, CollatedMinMax, POST_MIGRATION_READER_VERSION, Semantic, "`max` and `min` of a collated string (`MAX_BY_KEY_FIRST`, `MIN_BY_KEY_FIRST`): the value of the largest or smallest collation key, the first of equal keys kept."),
     (collated_strings, CollatedStrings, POST_MIGRATION_READER_VERSION, Semantic, "STRING types with a collation other than UTF8_BINARY, by canonical name."),
     (collect_aggregates, CollectAggregates, POST_MIGRATION_READER_VERSION, Semantic, "The collect and vector aggregates (`collect_list`, `collect_set`, `vector_sum`, `vector_avg`)."),
+    (count_min_sketch_aggregate, CountMinSketchAggregate, POST_MIGRATION_READER_VERSION, Semantic, "The `count_min_sketch` aggregate with its folded depth, width and seed: a count-min sketch per group."),
     (exchange_filters, ExchangeFilters, POST_MIGRATION_READER_VERSION, Optimization, "Runtime filters an exchange collects from the rows it writes, for scans of other stages (`ExchangePlan.filters`, distributed stages); without them the fragmenter drops the filters, which never changes rows."),
     (exchange_source, ExchangeSource, POST_MIGRATION_READER_VERSION, Semantic, "The `ExchangeSource` node: a plan fragment's read of an exchange another stage wrote (distributed stages)."),
     (existence_join, ExistenceJoin, POST_MIGRATION_READER_VERSION, Semantic, "The `Existence` join type (Spark's `ExistenceJoin`: `EXISTS` and `IN` outside a filter conjunct), hash or nested loop."),
@@ -778,6 +779,7 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
             AggregateFunction::ThetaSketchAgg { .. }
             | AggregateFunction::ThetaUnionAgg { .. }
             | AggregateFunction::ThetaIntersectionAgg => Some(Feature::ThetaSketchAggregates),
+            AggregateFunction::CountMinSketch { .. } => Some(Feature::CountMinSketchAggregate),
             AggregateFunction::Udf(_) => Some(Feature::RustUdaf),
         },
         // Built-ins and registry functions travel by name; only a

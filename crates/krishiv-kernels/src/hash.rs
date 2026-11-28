@@ -46,6 +46,13 @@ use crate::error::KernelError;
 use murmur3::Murmur3;
 use xxh64::Xxh64;
 
+/// Spark's `Murmur3_x86_32.hashUnsafeBytes` of one byte string under `seed` (its tail bytes mixed one at a
+/// time), for the formats that hash bytes outside a column, such as the count-min sketch.
+#[must_use]
+pub fn murmur3_bytes(bytes: &[u8], seed: i32) -> i32 {
+    Murmur3::hash_bytes(bytes, seed)
+}
+
 /// A Spark hash function over the primitive building blocks.
 trait SparkHasher {
     /// The running hash.

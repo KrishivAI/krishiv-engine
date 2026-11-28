@@ -124,7 +124,7 @@ Every Spark built-in function and operator, with Spark 4.2.0's description and e
 | [`cot`](cot.md) | scalar | yes | Returns the cotangent of `expr`, as if computed by `1/java.lang.Math.tan`. |
 | [`count`](count.md) | aggregate | yes | Returns the total number of retrieved rows, including rows containing null. |
 | [`count_if`](count_if.md) | aggregate | yes | Returns the number of `TRUE` values for the expression. |
-| [`count_min_sketch`](count_min_sketch.md) | aggregate | not yet | Returns a count-min sketch of a column with the given esp, |
+| [`count_min_sketch`](count_min_sketch.md) | aggregate | yes | Returns a count-min sketch of a column with the given esp, |
 | [`covar_pop`](covar_pop.md) | aggregate | yes | Returns the population covariance of a set of number pairs. |
 | [`covar_samp`](covar_samp.md) | aggregate | yes | Returns the sample covariance of a set of number pairs. |
 | [`crc32`](crc32.md) | scalar | yes | Returns a cyclic redundancy check value of the `expr` as a bigint. |
@@ -585,4 +585,4 @@ Every Spark built-in function and operator, with Spark 4.2.0's description and e
 | [`\|\|`](op-pipe-pipe.md) | scalar | yes | Returns the concatenation of `expr1` and `expr2`. |
 | [`~`](op-tilde.md) | scalar | yes | Returns the result of bitwise NOT of `expr`. |
 
-507 of 574 functions are implemented. The 67 that are not are listed in [functions not implemented yet](not-implemented.md).
+508 of 574 functions are implemented. The 66 that are not are listed in [functions not implemented yet](not-implemented.md).

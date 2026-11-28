@@ -558,6 +558,16 @@ fn constructs_map_to_one_feature_or_the_baseline() {
     }
     assert_eq!(
         feature_of(Construct::AggregateFunction(
+            &krishiv_exec::aggregate::AggregateFunction::CountMinSketch {
+                depth: 3,
+                width: 4,
+                seed: 1,
+            }
+        )),
+        Some(Feature::CountMinSketchAggregate)
+    );
+    assert_eq!(
+        feature_of(Construct::AggregateFunction(
             &krishiv_exec::aggregate::AggregateFunction::CovarPop
         )),
         Some(Feature::MomentAggregates)
@@ -1065,6 +1075,7 @@ fn a_reader_without_partitioned_writes_refuses_the_plan_naming_it() {
         ("aggregate_bitmaps", "bitmap_aggregates"),
         ("aggregate_hll_sketches", "hll_sketch_aggregates"),
         ("aggregate_theta_sketches", "theta_sketch_aggregates"),
+        ("aggregate_count_min_sketch", "count_min_sketch_aggregate"),
         ("aggregate_moments", "moment_aggregates"),
         ("aggregate_any_value", "any_value_by_aggregates"),
         ("aggregate_max_min_by", "any_value_by_aggregates"),

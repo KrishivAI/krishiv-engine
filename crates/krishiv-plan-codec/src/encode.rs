@@ -30,6 +30,7 @@ use krishiv_plan::{
 use krishiv_types::DataType;
 
 use crate::arrow::{schema_bytes, type_bytes};
+use crate::encode_aggregate::{count_min_expr, percentile_expr};
 use crate::encode_filter::{exchange_filter, join_filter, scan_filter};
 use crate::error::{CodecError, Result};
 use crate::features::arrow_type_is_nested;
@@ -201,7 +202,7 @@ fn layout(layout: &[AttrId]) -> Vec<u64> {
     layout.iter().map(|a| a.0).collect()
 }
 
-fn indexes(v: &[usize]) -> Vec<u64> {
+pub(crate) fn indexes(v: &[usize]) -> Vec<u64> {
     v.iter().map(|i| *i as u64).collect()
 }
 
@@ -1273,6 +1274,9 @@ fn aggregate_function(a: &AggregateExpr, nested: &Cell<bool>) -> Result<pb::Aggr
         AggregateFunction::ApproxCountDistinct { p } => !(4..=30).contains(p),
         AggregateFunction::HistogramNumeric { nb } => *nb < 2,
         AggregateFunction::HllSketchAgg { lg_k } => !(4..=21).contains(lg_k),
+        AggregateFunction::CountMinSketch { depth, width, .. } => {
+            !krishiv_exec::aggregate::count_min_shape_fits(*depth, *width)
+        }
         AggregateFunction::ThetaSketchAgg { lg_nom }
         | AggregateFunction::ThetaUnionAgg { lg_nom } => !(4..=26).contains(lg_nom),
         _ => false,
@@ -1477,6 +1481,9 @@ fn aggregate_function(a: &AggregateExpr, nested: &Cell<bool>) -> Result<pb::Aggr
                 nested,
             ));
         }
+        AggregateFunction::CountMinSketch { depth, width, seed } => {
+            return Ok(count_min_expr(*depth, *width, *seed, a, nested));
+        }
         AggregateFunction::StddevSamp => (pb::AggregateFunction::StddevSamp, false),
         AggregateFunction::StddevPop => (pb::AggregateFunction::StddevPop, false),
         AggregateFunction::VarSamp => (pb::AggregateFunction::VarSamp, false),
@@ -1546,44 +1553,6 @@ fn udaf_call(call: &UdafCall, nested: &Cell<bool>) -> Result<pb::UdafCall> {
         nullable: call.nullable,
         state: fields(&call.state),
     })
-}
-
-/// An [`AggregateExpr`] of the percentile family or `approx_count_distinct`,
-/// with its folded parameters.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "one call site, every folded parameter"
-)]
-fn percentile_expr(
-    function: pb::AggregateFunction,
-    percentages: &[f64],
-    array: bool,
-    reverse: bool,
-    accuracy: i64,
-    legacy: bool,
-    precision: u32,
-    a: &AggregateExpr,
-    nested: &Cell<bool>,
-) -> pb::AggregateExpr {
-    pb::AggregateExpr {
-        function: function as i32,
-        ignore_nulls: false,
-        args: indexes(&a.args),
-        input: match a.input {
-            AggInput::Raw => pb::AggregateInput::Raw,
-            AggInput::State => pb::AggregateInput::State,
-        } as i32,
-        arg_type: arrow_bytes(&a.arg_type, nested),
-        name: a.name.clone(),
-        percentages: percentages.to_vec(),
-        percentile_array: array,
-        percentile_reverse: reverse,
-        percentile_accuracy: accuracy,
-        percentile_legacy: legacy,
-        hll_precision: precision,
-        mask: a.mask.map(|m| m as u64),
-        ..Default::default()
-    }
 }
 
 fn read_source(source: &ReadSource, nested: &Cell<bool>) -> Result<pb::ReadSource> {

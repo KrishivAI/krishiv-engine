@@ -879,6 +879,17 @@ impl Lowerer {
                     .map(|a| {
                         let value = match &a.expr.kind {
                             crate::ast::ExprKind::TableArgument(t) => {
+                                // Only an unqualified generator (not `stack`) has the
+                                // one parameter name; a Python table function names its own.
+                                if name.parts.len() == 1
+                                    && !name.parts[0].value.eq_ignore_ascii_case("stack")
+                                    && krishiv_plan::GeneratorKind::of_name(
+                                        &name.parts[0].value.to_ascii_lowercase(),
+                                    )
+                                    .is_some()
+                                {
+                                    Self::check_generator_param(&name.parts[0], a)?;
+                                }
                                 arc(self.table_argument(t, a.expr.span)?)
                             }
                             _ => self.arg(&a.expr)?,
@@ -907,26 +918,20 @@ impl Lowerer {
                 // runs it as the select list `SELECT json_tuple(..)` over one
                 // row, and its alias-count error differs from a subquery's.
                 if let (Some(kind), 1) = (kind, name.parts.len()) {
-                    if let Some(a) = args
-                        .iter()
-                        .find(|a| matches!(a.expr.kind, crate::ast::ExprKind::TableArgument(_)))
-                    {
-                        return Err(unsupported("table-valued functions", a.span));
-                    }
-                    // `variant_explode` names its one parameter `input`
-                    // (Spark's `FunctionSignature(InputParameter("input"))`).
-                    let named = |a: &&crate::ast::FunctionArg| match &a.name {
-                        Some(n) => {
-                            kind != krishiv_plan::GeneratorKind::VariantExplode
-                                || args.len() != 1
-                                || !n.value.eq_ignore_ascii_case("input")
-                        }
-                        None => false,
+                    // A `TABLE(...)` argument reaches the analyzer, which
+                    // types it and refuses it as Spark does.
+                    let arg = &match args.as_slice() {
+                        [a] => match &a.expr.kind {
+                            // Already lowered above (its name checked); reuse it
+                            // without the name's alias.
+                            crate::ast::ExprKind::TableArgument(_) => match &lowered[0].node {
+                                ExprNode::Alias { expr, .. } => Arc::clone(expr),
+                                _ => Arc::clone(&lowered[0]),
+                            },
+                            _ => self.generator_arg(&name.parts[0], args, tf.span)?,
+                        },
+                        _ => self.generator_arg(&name.parts[0], args, tf.span)?,
                     };
-                    if let Some(a) = args.iter().find(named) {
-                        return Err(unsupported("table-valued functions", a.span));
-                    }
-                    let arg = &self.generator_arg(&name.parts[0], args, tf.span)?;
                     let one_row = self.node(PlanNode::OneRowRelation, tf.span);
                     self.node(
                         PlanNode::Generate {
