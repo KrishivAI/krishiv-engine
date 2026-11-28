@@ -4411,7 +4411,10 @@ Calls the registry function `width_bucket`.
 def window(timeColumn: ColumnOrName, windowDuration: str, slideDuration: str | None=None, startTime: str | None=None) -> Column
 ```
 
-Not available: time windows through the Column API are not implemented.
+Buckets rows into tumbling or sliding time windows: a struct of `start` and `end`.
+
+As Spark: durations are strings such as `"10 minutes"`; a `startTime` without a
+`slideDuration` makes the windows tumble (`slideDuration` is `windowDuration`).
 
 ### `window_time`
 
@@ -4419,7 +4422,7 @@ Not available: time windows through the Column API are not implemented.
 def window_time(windowColumn: ColumnOrName) -> Column
 ```
 
-Not available: time windows through the Column API are not implemented.
+The event time of a window: its `end` minus one microsecond.
 
 ### `xpath`
 
