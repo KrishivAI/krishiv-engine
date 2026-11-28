@@ -380,12 +380,15 @@ where
     }
 }
 
-/// Creates the staging file `<name>#<n>` next to the final name, exclusively
-/// and without following a link at that name.
+/// Creates the staging file `.<name>#<n>` next to the final name, exclusively
+/// and without following a link at that name. The leading dot hides an
+/// unfinished upload from Hadoop-style readers (Spark skips names starting
+/// with `.` or `_`), so a writer killed mid-upload leaves nothing they read
+/// (R1-V-2).
 fn create_staging(parent: &OwnedFd, name: &str) -> Result<(File, String), Errno> {
     let mut n: u32 = 1;
     loop {
-        let staging = format!("{name}#{n}");
+        let staging = format!(".{name}#{n}");
         match openat(
             parent,
             staging.as_str(),
@@ -422,7 +425,7 @@ fn meta_of(location: Path, st: &Stat) -> ObjectMeta {
     }
 }
 
-/// A staging file name (`<name>#<digits>`) of an upload in flight.
+/// A staging file name (`.<name>#<digits>`, or `<name>#<digits>` as older versions wrote it) of an upload in flight.
 pub(super) fn is_staging(name: &str) -> bool {
     // As `LocalFileSystem` reads a name: the text after the first `#`.
     name.split_once('#')
