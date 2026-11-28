@@ -23,7 +23,7 @@ use krishiv_plan::{Expr, LocalRelation, LogicalPlan, PlanNode, ReadSource};
 use krishiv_types::batch::Batch;
 use krishiv_types::{DataType, StructType};
 
-use crate::carrier::{canonical_schema, recarried, viewed};
+use crate::carrier::{as_views, canonical_schema, recarried, viewed};
 use crate::dataframe::DataFrame;
 use crate::session::{Session, internal};
 
@@ -66,6 +66,9 @@ impl Session {
             .map(|b| recarried(b.data(), &schema))
             .collect::<Result<Vec<_>, _>>()?;
         let Some(target) = target else {
+            // No user schema: the data's strings move to the view carriers and its nested fields
+            // to the analyzer's names, as `register_batches` does (R1-D-13).
+            let (schema, records) = as_views(&schema, records)?;
             return insert(store, schema, records);
         };
         let target = canonical_schema(Arc::new(target));
@@ -163,7 +166,10 @@ impl Session {
 /// `records` (of `schema`) with the encoding-only carriers of string and binary columns moved to
 /// the views the engine runs on, by an Arrow cast of the buffers: a logical STRING-to-STRING cast
 /// would be folded away by the optimizer, so this is done here and explicitly. Only columns whose
-/// target is the same logical kind are touched; the rest keep their cast path.
+/// target is the same logical kind are touched; the rest keep their cast path. A nested column is
+/// touched when its view form ([`viewed`]) differs from it, so one that differs from its target
+/// only in a field name (a pyarrow `List<Int32>` element named `item`, the analyzer's `element`)
+/// is cast too, to the analyzer's names.
 fn carried(
     schema: &SchemaRef,
     records: Vec<RecordBatch>,

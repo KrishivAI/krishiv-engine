@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Strings of a registered table (Python's `createDataFrame`, `Session::register_batches`) arrive
 //! as `Utf8`/`LargeUtf8`, at the top level and nested in arrays (an element named `item`), maps
-//! and structs; the engine runs them on the views the analyzer types (R1-D-13). Each function gives the rows it gives over the
-//! same values written as SQL `VALUES`, which run on the views already. And `hash`/`xxhash64` of a
-//! nested string give Spark 4.3.0's values (R1-D-6).
+//! and structs; the engine runs them on the views the analyzer types (R1-D-13). Each function
+//! gives the rows it gives over the same values written as SQL `VALUES`, which run on the views
+//! already. And `hash`/`xxhash64` of a nested string give Spark 4.3.0's values (R1-D-6).
 #![cfg(test)]
 
 use std::sync::Arc;

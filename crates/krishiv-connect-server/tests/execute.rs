@@ -1168,6 +1168,68 @@ async fn a_local_relation_applies_its_schema_eagerly() {
     );
 }
 
+/// An Arrow IPC stream of `(xs: array<int>, tags: array<string>)` as pyarrow writes it: each
+/// list's element is named `item` (the analyzer names it `element`) and the strings are `Utf8`.
+fn pyarrow_lists_ipc() -> Vec<u8> {
+    use arrow_array::builder::{Int32Builder, ListBuilder, StringBuilder};
+    use arrow_schema::{DataType, Field, Schema};
+    let mut xs = ListBuilder::new(Int32Builder::new());
+    let mut tags = ListBuilder::new(StringBuilder::new());
+    for (x, tag) in [(&[1, 2][..], &["a", "b"][..]), (&[3][..], &["c"][..])] {
+        xs.values().append_slice(x);
+        xs.append(true);
+        for s in tag {
+            tags.values().append_value(s);
+        }
+        tags.append(true);
+    }
+    let item = |t| Arc::new(Field::new("item", t, true));
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("xs", DataType::List(item(DataType::Int32)), true),
+        Field::new("tags", DataType::List(item(DataType::Utf8)), true),
+    ]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![Arc::new(xs.finish()), Arc::new(tags.finish())],
+    )
+    .expect("batch");
+    let mut out = Vec::new();
+    {
+        let mut w = arrow_ipc::writer::StreamWriter::try_new(&mut out, &schema).expect("writer");
+        w.write(&batch).expect("write");
+        w.finish().expect("finish");
+    }
+    out
+}
+
+/// A `createDataFrame` of lists named `item`, with and without a user schema, runs under the
+/// analyzer's field names: functions that build nested values over it give their rows (R1-D-13).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_local_relation_of_pyarrow_lists_runs_nested_functions() {
+    let run = start().await;
+    for schema in [None, Some("xs ARRAY<INT>, tags ARRAY<STRING>")] {
+        let plan = project(
+            local(Some(pyarrow_lists_ipc()), schema),
+            vec![
+                expression_string("size(array_union(xs, array(4))) AS n"),
+                expression_string("array_join(concat(tags, array('z')), ',') AS t"),
+            ],
+        );
+        let r = collect(&run.channel, request(root(plan)))
+            .await
+            .unwrap_or_else(|e| panic!("runs with schema {schema:?}: {e}"));
+        let got = rows(&r);
+        let n = got
+            .column(0)
+            .as_any()
+            .downcast_ref::<arrow_array::Int32Array>()
+            .expect("ints");
+        assert_eq!(n.values().to_vec(), vec![3, 2], "schema {schema:?}");
+        let t: Vec<&str> = got.column(1).as_string::<i32>().iter().flatten().collect();
+        assert_eq!(t, vec!["a,b,z", "c,z"], "schema {schema:?}");
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_cached_local_relation_without_its_artifact_cannot_be_found() {
     let run = start().await;
