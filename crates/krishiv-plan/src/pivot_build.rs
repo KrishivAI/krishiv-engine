@@ -225,3 +225,159 @@ pub fn grouped_pivot(
         exprs: out,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::PlanId;
+
+    fn col(name: &str) -> Expr {
+        Expr::new(ExprNode::Column(ColumnRef::new(vec![name.to_owned()])))
+    }
+
+    fn col_of(plan: i64, name: &str) -> Expr {
+        let mut c = ColumnRef::new(vec![name.to_owned()]);
+        c.plan_id = Some(PlanId(plan));
+        Expr::new(ExprNode::Column(c))
+    }
+
+    fn input() -> Arc<LogicalPlan> {
+        Arc::new(LogicalPlan::new(PlanNode::OneRowRelation))
+    }
+
+    fn text(v: &str) -> PivotValue {
+        PivotValue {
+            exprs: vec![Arc::new(Expr::new(ExprNode::Literal(Literal::String(
+                v.to_owned(),
+            ))))],
+            alias: None,
+        }
+    }
+
+    fn build(
+        keys: &[Expr],
+        values: Vec<PivotValue>,
+        aggs: Vec<Expr>,
+    ) -> Result<PlanNode, KrishivError> {
+        grouped_pivot(
+            &input(),
+            keys,
+            &col("p"),
+            values,
+            aggs.into_iter().map(Arc::new).collect(),
+            false,
+            Origin::default,
+        )
+    }
+
+    fn refused(r: Result<PlanNode, KrishivError>, needle: &str) {
+        let msg = r.expect_err("refused").to_string();
+        assert!(msg.contains(needle), "{msg}");
+    }
+
+    #[test]
+    fn a_plain_pivot_narrows_the_input_and_is_the_pivot_node() {
+        let node = build(&[col("k")], vec![text("a")], vec![col("v")]).expect("builds");
+        let PlanNode::Pivot { input, .. } = node else {
+            panic!("a Pivot node");
+        };
+        let PlanNode::Project { exprs, .. } = &input.node else {
+            panic!("a narrowing Project");
+        };
+        assert_eq!(exprs.len(), 3, "key, pivot copy, read column");
+    }
+
+    #[test]
+    fn a_star_aggregate_is_refused() {
+        let star = Expr::new(ExprNode::Star(Star {
+            qualifier: Vec::new(),
+            except: Vec::new(),
+            replace: Vec::new(),
+            position: None,
+            regex: None,
+            plan_id: None,
+        }));
+        let r = build(&[col("k")], vec![text("a")], vec![star]);
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn a_qualified_column_read_is_refused() {
+        let q = Expr::new(ExprNode::Column(ColumnRef::new(vec![
+            "s".to_owned(),
+            "x".to_owned(),
+        ])));
+        refused(
+            build(&[col("k")], vec![text("a")], vec![q]),
+            "nested field or qualified column",
+        );
+    }
+
+    #[test]
+    fn a_read_named_like_the_internal_copy_is_refused() {
+        refused(
+            build(&[col("k")], vec![text("a")], vec![col(PIVOT_COPY)]),
+            "internal pivot copy",
+        );
+    }
+
+    #[test]
+    fn same_named_columns_of_different_dataframes_are_refused() {
+        refused(
+            build(
+                &[col("k")],
+                vec![text("a")],
+                vec![col_of(1, "v"), col_of(2, "v")],
+            ),
+            "different DataFrames",
+        );
+    }
+
+    #[test]
+    fn an_unnamed_key_beside_a_clash_is_refused() {
+        let unnamed = Expr::new(ExprNode::Literal(Literal::String("x".to_owned())));
+        refused(
+            build(&[col("k"), unnamed], vec![text("a")], vec![col("k")]),
+            "unnamed grouping expression",
+        );
+    }
+
+    #[test]
+    fn a_value_named_like_a_clashing_key_is_refused() {
+        refused(
+            build(&[col("k")], vec![text("K")], vec![col("k")]),
+            "named like a grouping column",
+        );
+    }
+
+    #[test]
+    fn a_key_an_aggregate_reads_is_grouped_by_a_copy_and_restored() {
+        let node = build(&[col("k"), col("j")], vec![text("a")], vec![col("k")]).expect("builds");
+        let PlanNode::Project { input, exprs } = node else {
+            panic!("a restoring Project");
+        };
+        assert!(matches!(&input.node, PlanNode::Pivot { .. }));
+        // The two keys then the star over the pivoted columns.
+        assert_eq!(exprs.len(), 3);
+        let PlanNode::Pivot {
+            input: narrowed, ..
+        } = &input.node
+        else {
+            panic!("pivot");
+        };
+        let PlanNode::Project { exprs: kept, .. } = &narrowed.node else {
+            panic!("narrow");
+        };
+        assert!(
+            kept.iter()
+                .any(|e| output_name(e).as_deref() == Some("__krishiv_key_0"))
+        );
+    }
+
+    #[test]
+    fn an_aliased_key_an_aggregate_reads_is_copied_from_the_inner_expression() {
+        let aliased = col("k").alias("kk");
+        let node = build(&[aliased], vec![text("a")], vec![col("kk")]).expect("builds");
+        assert!(matches!(node, PlanNode::Project { .. }));
+    }
+}

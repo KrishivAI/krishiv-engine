@@ -177,3 +177,111 @@ fn literals(batch: &RecordBatch, out: &mut Vec<Literal>) -> Result<(), KrishivEr
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use arrow_array::{
+        ArrayRef, BooleanArray, Date32Array, Decimal128Array, Float32Array, Float64Array,
+        Int8Array, Int16Array, Int32Array, Int64Array, LargeStringArray, StringArray,
+        TimestampMicrosecondArray,
+    };
+
+    use super::*;
+
+    fn run(array: ArrayRef) -> Result<Vec<Literal>, KrishivError> {
+        let Ok(batch) = RecordBatch::try_from_iter([("v", array)]) else {
+            return Ok(Vec::new());
+        };
+        let mut out = Vec::new();
+        literals(&batch, &mut out).map(|()| out)
+    }
+
+    #[test]
+    fn every_supported_value_type_becomes_its_literal() {
+        let cases: Vec<(ArrayRef, Literal)> = vec![
+            (
+                Arc::new(BooleanArray::from(vec![true])),
+                Literal::Boolean(true),
+            ),
+            (Arc::new(Int8Array::from(vec![1])), Literal::Byte(1)),
+            (Arc::new(Int16Array::from(vec![2])), Literal::Short(2)),
+            (Arc::new(Int32Array::from(vec![3])), Literal::Integer(3)),
+            (Arc::new(Int64Array::from(vec![4])), Literal::Long(4)),
+            (Arc::new(Float32Array::from(vec![1.5])), Literal::Float(1.5)),
+            (
+                Arc::new(Float64Array::from(vec![2.5])),
+                Literal::Double(2.5),
+            ),
+            (
+                Arc::new(StringArray::from(vec!["a"])),
+                Literal::String("a".to_owned()),
+            ),
+            (
+                Arc::new(LargeStringArray::from(vec!["b"])),
+                Literal::String("b".to_owned()),
+            ),
+            (Arc::new(Date32Array::from(vec![7])), Literal::Date(7)),
+            (
+                Arc::new(TimestampMicrosecondArray::from(vec![9])),
+                Literal::TimestampNtz(9),
+            ),
+            (
+                Arc::new(TimestampMicrosecondArray::from(vec![9]).with_timezone("UTC")),
+                Literal::Timestamp(9),
+            ),
+        ];
+        for (array, want) in cases {
+            assert_eq!(run(array).expect("literal"), vec![want]);
+        }
+    }
+
+    #[test]
+    fn a_decimal_keeps_its_precision_and_scale() {
+        let a = Decimal128Array::from(vec![12345])
+            .with_precision_and_scale(10, 2)
+            .expect("decimal");
+        let got = run(Arc::new(a)).expect("literal");
+        assert!(matches!(
+            got.as_slice(),
+            [Literal::Decimal {
+                unscaled: 12345,
+                ..
+            }]
+        ));
+    }
+
+    #[test]
+    fn a_null_value_is_a_null_literal() {
+        let got = run(Arc::new(Int32Array::from(vec![None, Some(1)]))).expect("literal");
+        assert_eq!(got, vec![Literal::Null(None), Literal::Integer(1)]);
+    }
+
+    #[test]
+    fn a_type_with_no_literal_is_refused() {
+        let a = arrow_array::TimestampNanosecondArray::from(vec![1]);
+        let err = run(Arc::new(a)).expect_err("refused").to_string();
+        assert!(err.contains("without explicit values"), "{err}");
+    }
+
+    #[test]
+    fn the_error_names_an_attribute_column_and_hides_other_expressions() {
+        let attr = pb::Expression {
+            common: None,
+            expr_type: Some(ExprType::UnresolvedAttribute(
+                expression::UnresolvedAttribute {
+                    unparsed_identifier: "course".to_owned(),
+                    plan_id: None,
+                    is_metadata_column: None,
+                },
+            )),
+        };
+        assert_eq!(column_text(&attr), "course");
+        let other = pb::Expression {
+            common: None,
+            expr_type: None,
+        };
+        assert_eq!(column_text(&other), "<expression>");
+    }
+}
