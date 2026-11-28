@@ -15,8 +15,11 @@
 #                                                 PR_BODY when those are set
 set -euo pipefail
 
-coauthor_names='(^|[^a-z])(claude|anthropic|noreply@anthropic\.com|opencode|gpt|openai|copilot|gemini|kimi|glm|muse|meta ai|deepseek|qwen)([^a-z]|$)|\[bot\]'
-text_pattern="^[[:space:]]*co-authored-by:.*${coauthor_names}|^[[:space:]]*claude-session:|(^|[^a-z])generated with"
+coauthor_names='claude|anthropic|noreply@anthropic\.com|opencode|gpt|openai|copilot|gemini|kimi|glm|muse|meta ai|deepseek|qwen'
+# Both alternatives of a trailer (a name as a whole word, or a bot address) are
+# tied to the `Co-Authored-By:` line.
+trailer='^[[:space:]]*co-authored-by:'
+text_pattern="${trailer}(.*[^a-z])?(${coauthor_names})([^a-z]|\$)|${trailer}.*\[bot\]|^[[:space:]]*claude-session:|(^|[^a-z])generated with([^a-z]|\$)"
 robot='🤖'
 
 # check_text LABEL TEXT: prints each offending line, returns 1 when there is one.

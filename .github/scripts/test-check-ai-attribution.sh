@@ -47,6 +47,13 @@ expect_blocked "Generated with line" "Subject\n\nGenerated with [Claude Code](ht
 expect_blocked "lower-case generated with" "Subject\n\ngenerated WITH tool\n"
 expect_blocked "robot emoji" "Subject\n\n🤖 done\n"
 expect_allowed "regenerated baseline with the generator" "Regenerate golden ratchet baseline with golden-report --ratchet update\n\nThe session engine now passes foo#25, so the frozen baseline is regenerated with the generator instead of hand edits.\n"
+expect_blocked "co-author trailer without a space" "Subject\n\nCo-Authored-By:Claude <x@example.com>\n"
+expect_blocked "name after another word in a trailer" "Subject\n\nCo-Authored-By: The Claude <x@example.com>\n"
+expect_blocked "generated with at the end of a line" "Subject\n\nThis was generated with\n"
+expect_allowed "generated without" "Subject\n\nThe lock file is generated without network access.\n"
+expect_allowed "generated within" "Subject\n\nThe ids are generated within one task.\n"
+expect_allowed "a bot named outside a trailer" "Subject\n\nBump serde (renovate[bot] opened it).\n"
+expect_blocked "renovate bot co-author" "Subject\n\nCo-Authored-By: renovate[bot] <29139614+renovate[bot]@users.noreply.github.com>\n"
 
 # Multi-line: the human co-author is fine, the Claude-Session line on line 5 is not.
 printf 'Subject line\n\nBody paragraph.\nCo-Authored-By: Jane Doe <jane@example.com>\nClaude-Session: https://claude.ai/code/session_x\n' > "$msg"
