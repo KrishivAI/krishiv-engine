@@ -19,7 +19,9 @@ use krishiv_kernels::csv::{
     from_csv as kernel_from_csv, struct_to_csv,
 };
 use krishiv_kernels::datetime_pattern::{DateTimePattern, Purpose};
-use krishiv_kernels::text::{spark_string_to_timestamp, spark_string_to_timestamp_ntz};
+use krishiv_kernels::text::{
+    option_get_bool, option_to_boolean, spark_string_to_timestamp, spark_string_to_timestamp_ntz,
+};
 
 use super::args::{Inputs, internal, is_string, to_utf8, unsupported};
 use super::{BindArg, BindOptions, Binding, FamilyResult, bad_types, listed};
@@ -245,6 +247,11 @@ struct Parsed {
     ntz_pattern: Option<DateTimePattern>,
     /// Fallback to lenient grammar.
     fallback: bool,
+    /// `enableDateTimeParsingFallback` as written (`None`: not named).
+    fallback_option: Option<bool>,
+    /// `preferDate` (on unless named off): a read without `dateFormat`
+    /// takes the strict `yyyy-MM-dd` (`CSVOptions.dateFormatInRead`).
+    prefer_date: bool,
     /// `spark.sql.legacy.timeParserPolicy=LEGACY`.
     legacy: bool,
     /// Quote every value (`to_csv` write).
@@ -308,6 +315,8 @@ impl Parsed {
             timestamp_pattern: None,
             ntz_pattern: None,
             fallback: legacy,
+            fallback_option: None,
+            prefer_date: true,
             quote_all: false,
             escape_quotes: true,
             line_sep: None,
@@ -379,25 +388,53 @@ impl Parsed {
                 "timestampntzformat" => {
                     self.ntz_pattern = Some(datetime_option(v, func, "timestampNTZFormat")?);
                 }
+                // Scala's `toBoolean` under either policy (a plain
+                // `IllegalArgumentException` in Spark for anything else).
                 "enabledatetimeparsingfallback" => {
-                    self.fallback = v.eq_ignore_ascii_case("true");
+                    self.fallback = option_to_boolean("CSV", "enableDateTimeParsingFallback", v)?;
+                    self.fallback_option = Some(self.fallback);
+                }
+                // `CSVOptions.getBool`: never read under LEGACY (always off),
+                // else `true` or `false` in any case or
+                // `_LEGACY_ERROR_TEMP_2147` (Spark 4.2.1 / 4.3.0 runs).
+                "preferdate" if !self.legacy => {
+                    self.prefer_date = option_get_bool("preferDate", v)?;
                 }
                 "timeformat" => {
                     self.time_pattern = Some(datetime_option(v, func, "timeFormat")?);
                 }
+                // `header`: ignored for `from_csv` (Spark ignores it);
+                // `to_csv` never writes one. Still read by `getBool`.
                 "header" => {
-                    // Ignored for `from_csv` (Spark ignores it); `to_csv`
-                    // never writes one. Any value goes.
+                    option_get_bool("header", v)?;
                 }
+                // `preferDate` under LEGACY: never read, any value goes.
+                "preferdate" => {}
                 "emptyvalue" => self.syntax.empty_value = v.clone(),
                 "ignoreleadingwhitespace" => {
-                    self.syntax.ltrim = v.eq_ignore_ascii_case("true");
+                    self.syntax.ltrim = option_get_bool("ignoreLeadingWhiteSpace", v)?;
                 }
                 "ignoretrailingwhitespace" => {
-                    self.syntax.rtrim = v.eq_ignore_ascii_case("true");
+                    self.syntax.rtrim = option_get_bool("ignoreTrailingWhiteSpace", v)?;
                 }
-                "quoteall" => self.quote_all = v.eq_ignore_ascii_case("true"),
-                "escapequotes" => self.escape_quotes = !v.eq_ignore_ascii_case("false"),
+                "quoteall" => self.quote_all = option_get_bool("quoteAll", v)?,
+                "escapequotes" => self.escape_quotes = option_get_bool("escapeQuotes", v)?,
+                // No effect on the three expressions (Spark 4.2.1 / 4.3.0
+                // runs: equal results for unset, `true` and `false`, the
+                // `csv_values` section of `text-bool-options.json`), but
+                // Spark reads each value when it builds `CSVOptions`.
+                "inferschema" => {
+                    option_get_bool("inferSchema", v)?;
+                }
+                "enforceschema" => {
+                    option_get_bool("enforceSchema", v)?;
+                }
+                "columnpruning" => {
+                    option_get_bool("columnPruning", v)?;
+                }
+                "multiline" => {
+                    option_to_boolean("CSV", "multiLine", v)?;
+                }
                 "linesep" => {
                     if v != "\n" {
                         self.line_sep = Some(v.clone());
@@ -481,6 +518,14 @@ fn bind_from_csv(args: &[BindArg], opts: &BindOptions) -> Result<Binding, Krishi
             .timestamp_pattern
             .get_or_insert_with(|| DateTimePattern::new_fast("yyyy-MM-dd'T'HH:mm:ss.SSSXXX"));
     }
+    // `UnivocityParser`: a date falls back to the lenient grammar unless the
+    // option says otherwise, under LEGACY or without a `dateFormat` option.
+    let date_fallback = parsed
+        .fallback_option
+        .unwrap_or(opts.legacy_time_parser || parsed.date_pattern.is_none());
+    if parsed.prefer_date && !opts.legacy_time_parser && parsed.date_pattern.is_none() {
+        parsed.date_pattern = Some(datetime_option("yyyy-MM-dd", "from_csv", "dateFormat")?);
+    }
     let corrupt = fields
         .iter()
         .position(|f| f.name() == &parsed.corrupt_column);
@@ -511,6 +556,7 @@ fn bind_from_csv(args: &[BindArg], opts: &BindOptions) -> Result<Binding, Krishi
         timestamp_pattern,
         ntz_pattern,
         fallback: parsed.fallback,
+        date_fallback,
         time_micros_only: opts.kernel.spark_version() < krishiv_kernels::SparkVersion::V4_3,
     };
     // A time-only timestamp (`12:30:00`) is today's, in the session zone.
@@ -575,6 +621,8 @@ fn bind_to_csv(args: &[BindArg], opts: &BindOptions) -> Result<Binding, KrishivE
         parsed.apply(&pairs, "to_csv")?;
     }
     let zone: Arc<dyn TimeZoneRules> = Arc::clone(&opts.time_zone);
+    // The session zone's id, for the `VV` and `z` pattern letters (as `to_xml`).
+    let zone_name: Arc<str> = Arc::clone(&opts.time_zone_name);
     let date_pattern = parsed.date_pattern.clone().or_else(|| {
         if opts.legacy_time_parser {
             Some(DateTimePattern::new_fast("yyyy-MM-dd"))
@@ -586,7 +634,7 @@ fn bind_to_csv(args: &[BindArg], opts: &BindOptions) -> Result<Binding, KrishivE
         if opts.legacy_time_parser {
             Some(DateTimePattern::new_fast("yyyy-MM-dd'T'HH:mm:ss.SSSXXX"))
         } else {
-            DateTimePattern::new("yyyy-MM-dd'T'HH:mm:ss.SSSXXX", Purpose::Format).ok()
+            DateTimePattern::new(opts.timestamp_write_default(), Purpose::Format).ok()
         }
     });
     // Spark's writer builds the timestamp formatter eagerly.
@@ -639,7 +687,7 @@ fn bind_to_csv(args: &[BindArg], opts: &BindOptions) -> Result<Binding, KrishivE
                 .format_timestamp(
                     m,
                     krishiv_kernels::datetime_pattern::Zone {
-                        id: "UTC",
+                        id: &zone_name,
                         rules: zone_ref,
                     },
                 )

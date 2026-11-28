@@ -584,5 +584,90 @@
    "schema_of_json": "ERROR NumberFormatException",
    "file_schema": "struct<bad:string>"
   }
+ ],
+ "files": [
+  {
+   "lines": [
+    "{\"t\":NaN}",
+    "{\"t\":1.5}"
+   ],
+   "options": {
+    "prefersDecimal": "true"
+   },
+   "schema": "struct<_corrupt_record:string,t:decimal(2,1)>",
+   "values": [
+    "{\"_corrupt_record\":\"{\\\"t\\\":NaN}\"}",
+    "{\"t\":1.5}"
+   ]
+  },
+  {
+   "lines": [
+    "{\"t\":1.5}",
+    "{\"t\":Infinity}",
+    "{\"t\":2}"
+   ],
+   "options": {
+    "prefersDecimal": "true"
+   },
+   "schema": "struct<_corrupt_record:string,t:decimal(21,1)>",
+   "values": [
+    "{\"t\":1.5}",
+    "{\"_corrupt_record\":\"{\\\"t\\\":Infinity}\"}",
+    "{\"t\":2.0}"
+   ]
+  },
+  {
+   "lines": [
+    "{\"t\":NaN}",
+    "{\"t\":1.5}"
+   ],
+   "options": {
+    "prefersDecimal": "true",
+    "mode": "DROPMALFORMED"
+   },
+   "schema": "struct<t:decimal(2,1)>",
+   "values": [
+    "{\"t\":1.5}"
+   ]
+  },
+  {
+   "lines": [
+    "{\"t\":NaN}",
+    "{\"t\":1.5}"
+   ],
+   "options": {
+    "prefersDecimal": "true",
+    "mode": "FAILFAST"
+   },
+   "schema": "ERROR MALFORMED_RECORD_IN_PARSING.WITHOUT_SUGGESTION",
+   "values": []
+  },
+  {
+   "lines": [
+    "{\"t\":NaN}",
+    "{\"t\":1.5}"
+   ],
+   "options": {
+    "prefersDecimal": "true",
+    "columnNameOfCorruptRecord": "bad"
+   },
+   "schema": "struct<bad:string,t:decimal(2,1)>",
+   "values": [
+    "{\"bad\":\"{\\\"t\\\":NaN}\"}",
+    "{\"t\":1.5}"
+   ]
+  },
+  {
+   "lines": [
+    "{\"t\":NaN}",
+    "{\"t\":1.5}"
+   ],
+   "options": {},
+   "schema": "struct<t:double>",
+   "values": [
+    "{\"t\":\"NaN\"}",
+    "{\"t\":1.5}"
+   ]
+  }
  ]
 }

@@ -697,25 +697,24 @@ fn to_xml_wraps_inner_arrays_in_item_elements() {
 #[test]
 fn option_values_and_schemas() {
     let s = session();
-    // Spark refuses a flag that is not true or false (`_LEGACY_ERROR_TEMP_2147`, golden schema_of_xml#165); an unknown mode reads as PERMISSIVE.
+    // Spark refuses a flag that is not true or false (`_LEGACY_ERROR_TEMP_2147` for `getBool`, golden schema_of_xml#165 and the `text-bool-options.json` runs); an unknown mode reads as PERMISSIVE.
     for (options, class) in [
         (
             "'ignoreSurroundingSpaces', 'maybe'",
-            ErrorClass::KrishivUnsupportedFeature,
+            ErrorClass::LegacyErrorTemp2147,
         ),
         ("'inferSchema', 'maybe'", ErrorClass::LegacyErrorTemp2147),
         (
             "'excludeAttribute', 'maybe'",
             ErrorClass::LegacyErrorTemp2147,
         ),
+        // `toBoolean`: Spark's plain `IllegalArgumentException`
+        // (`text-bool-options.json`).
         (
             "'prefersDecimal', 'maybe'",
-            ErrorClass::KrishivUnsupportedFeature,
+            ErrorClass::KrishivInvalidFormatOptionValue,
         ),
-        (
-            "'validateName', 'maybe'",
-            ErrorClass::KrishivUnsupportedFeature,
-        ),
+        ("'validateName', 'maybe'", ErrorClass::LegacyErrorTemp2147),
     ] {
         assert_eq!(
             class_of(

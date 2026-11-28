@@ -869,6 +869,9 @@ pub struct Converter<'a> {
     pub time: Option<&'a DateTimePattern>,
     /// Whether to fall back to the lenient grammar.
     pub fallback: bool,
+    /// Whether a date falls back to the lenient grammar (Spark's own default:
+    /// on without a `dateFormat` option).
+    pub date_fallback: bool,
     /// Spark 4.2 reads six fraction digits of a `TIME` in the default grammar (a
     /// `timeFormat` keeps every digit); 4.3 (`false`) keeps nine.
     pub time_micros_only: bool,
@@ -934,7 +937,7 @@ impl Converter<'_> {
                 };
                 match parsed {
                     Some(d) => Val::I64(i64::from(d)),
-                    None if self.fallback && self.date.is_some() => {
+                    None if self.date_fallback && self.date.is_some() => {
                         match crate::text::spark_string_to_date(&s.replace("GMT", "")) {
                             Some(d) => Val::I64(i64::from(d)),
                             None => return Err(bad()),
@@ -1291,6 +1294,8 @@ pub struct FromCsvOptions {
     pub ntz_pattern: Option<DateTimePattern>,
     /// Fall back to the lenient grammar when the pattern fails.
     pub fallback: bool,
+    /// Fall back to the lenient grammar when the date pattern fails.
+    pub date_fallback: bool,
     /// Spark 4.2 reads six fraction digits of a `TIME` in the default grammar (a
     /// `timeFormat` keeps every digit); 4.3 (`false`) keeps nine.
     pub time_micros_only: bool,
@@ -1358,6 +1363,7 @@ pub fn from_csv(
         date: o.date_pattern.as_ref(),
         time: o.time_pattern.as_ref(),
         fallback: o.fallback,
+        date_fallback: o.date_fallback,
         time_micros_only: o.time_micros_only,
     };
     let mut cols: Vec<Column> = fields

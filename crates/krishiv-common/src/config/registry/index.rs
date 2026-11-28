@@ -107,6 +107,7 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     ("krishiv.io.local.allowedRoots", &IO_LOCAL_ALLOWED_ROOTS),
     ("krishiv.io.metadataCacheBytes", &IO_METADATA_CACHE_BYTES),
     ("krishiv.io.multipartPartBytes", &IO_MULTIPART_PART_BYTES),
+    ("krishiv.io.text.secondOffsets", &IO_TEXT_SECOND_OFFSETS),
     ("krishiv.optimizer.joinDpLimit", &JOIN_DP_LIMIT),
     ("krishiv.runtimeFilter.enabled", &RUNTIME_FILTER_ENABLED),
     ("krishiv.server.allowCoreDumps", &SERVER_ALLOW_CORE_DUMPS),
@@ -751,6 +752,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
     (
         "krishiv.sql.legacy.viewSchemaCompensation",
         &LEGACY_VIEW_SCHEMA_COMPENSATION,
+    ),
+    (
+        "spark.sql.files.supportSecondOffsetFormat",
+        &IO_TEXT_SECOND_OFFSETS,
     ),
     (
         "krishiv.advisor.runtimeFilter.minProbeRows",

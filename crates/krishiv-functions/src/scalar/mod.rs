@@ -178,6 +178,10 @@ pub struct BindOptions {
     /// use `SimpleDateFormat`, and the JSON, CSV and XML functions the
     /// lenient `FastDateFormat` for their `DATE` and `TIMESTAMP` fields.
     pub legacy_time_parser: bool,
+    /// `spark.sql.files.supportSecondOffsetFormat` (`krishiv.io.text.secondOffsets`, off under
+    /// the 3.5 profile): outside `LEGACY`, the default `timestampFormat` of `to_json`, `to_csv`
+    /// and `to_xml` keeps the seconds of a zone offset (`-07:52:58`), as the file writers do.
+    pub second_offsets: bool,
     /// `spark.sql.binaryOutputStyle`: how `to_csv` and `to_xml` print a `BINARY` field (an
     /// unset config prints `[45 61]`, which is `HEX_DISCRETE`).
     pub binary_style: krishiv_kernels::binary_style::BinaryStyle,
@@ -209,6 +213,7 @@ impl BindOptions {
                 replace_malformed: false,
             },
             legacy_time_parser: false,
+            second_offsets: true,
             binary_style: krishiv_kernels::binary_style::BinaryStyle::HexDiscrete,
             user: Arc::from("unknown"),
             seed_salt: Arc::new(AtomicU64::new(0)),
@@ -270,6 +275,25 @@ impl BindOptions {
     pub const fn with_legacy_time_parser(mut self, on: bool) -> Self {
         self.legacy_time_parser = on;
         self
+    }
+
+    /// With `spark.sql.files.supportSecondOffsetFormat = on`.
+    #[must_use]
+    pub const fn with_second_offsets(mut self, on: bool) -> Self {
+        self.second_offsets = on;
+        self
+    }
+
+    /// The default `timestampFormat` of `to_json`, `to_csv` and `to_xml`
+    /// outside `LEGACY`: Spark's `FileSourceOptions.commonTimestampFormat`
+    /// (`[.SSS]` prints the fraction whenever it formats).
+    #[must_use]
+    pub(crate) const fn timestamp_write_default(&self) -> &'static str {
+        if self.second_offsets {
+            "yyyy-MM-dd'T'HH:mm:ss[.SSS][XXXXX]"
+        } else {
+            "yyyy-MM-dd'T'HH:mm:ss[.SSS][XXX]"
+        }
     }
 
     /// With `spark.sql.binaryOutputStyle = style`.

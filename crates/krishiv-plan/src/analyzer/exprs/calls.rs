@@ -7,6 +7,10 @@ use super::*;
 /// option named as the conf.
 const TIME_TYPE_CONF: &str = krishiv_common::config::TIME_TYPE_ENABLED;
 
+/// The session's parser policy, given to `schema_of_csv` inference as the
+/// CSV option named as the conf.
+const PARSER_POLICY_CONF: &str = "spark.sql.legacy.timeParserPolicy";
+
 /// The default message of `assert_true(cond)`: `'<cond>' is not true!`,
 /// with casts stripped as Spark's `toPrettySQL` strips them.
 pub(super) fn assert_message(cond: &Bound, origin: Origin, zone: Option<SessionZone>) -> Bound {
@@ -707,6 +711,19 @@ impl Resolver<'_> {
             TIME_TYPE_CONF.to_owned(),
             krishiv_common::secret::OptionValue::from_user(TIME_TYPE_CONF, infers_time.to_string()),
         );
+        // Under `timeParserPolicy=LEGACY` Spark's `CSVInferSchema` tries only
+        // the `FastDateFormat` timestamp pattern and never a DATE (4.2.1 and
+        // 4.3.0 runs, `csv_expr` of `time-text-profiles.json`), as the file
+        // read does: the session's policy, never an option.
+        if self.ctx.conf.legacy_time_parser {
+            user.insert(
+                PARSER_POLICY_CONF.to_owned(),
+                krishiv_common::secret::OptionValue::from_user(
+                    PARSER_POLICY_CONF,
+                    "LEGACY".to_owned(),
+                ),
+            );
+        }
         let options = schema
             .parse(&user, &krishiv_common::config::Config::new())
             .map_err(|err| AnalysisError::new(err, e.origin))?

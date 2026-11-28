@@ -42,7 +42,7 @@ mod table;
 mod write;
 
 pub use infer::{InferSession, infer_json, infer_json_with};
-pub use options::{JsonOptions, ParseMode};
+pub use options::{JsonOptions, ParseMode, check_locale};
 pub use path::{get_json_object, json_array_length, json_object_keys};
 pub use read::read_json;
 pub use table::{json_table_exists, json_table_rows, json_table_value};

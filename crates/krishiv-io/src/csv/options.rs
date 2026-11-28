@@ -21,10 +21,22 @@ fn string(name: &'static str, doc: &'static str) -> OptionSpec {
     }
 }
 
+/// `flag` read with Scala's `toBoolean` (`multiLine`,
+/// `enableDateTimeParsingFallback`).
+fn to_boolean(name: &'static str, default: Option<bool>, doc: &'static str) -> OptionSpec {
+    OptionSpec {
+        kind: OptionKind::ToBoolean,
+        ..flag(name, default, doc)
+    }
+}
+
+/// A boolean option `CSVOptions` reads with `getBool` (`_LEGACY_ERROR_TEMP_2147`
+/// for anything but `true` / `false`); [`to_boolean`] for the two it reads
+/// with Scala's `toBoolean`.
 fn flag(name: &'static str, default: Option<bool>, doc: &'static str) -> OptionSpec {
     OptionSpec {
         name,
-        kind: OptionKind::Bool,
+        kind: OptionKind::GetBool,
         default: match default {
             Some(b) => OptionDefault::Bool(b),
             None => OptionDefault::None,
@@ -102,7 +114,7 @@ static SPECS: LazyLock<Vec<OptionSpec>> = LazyLock::new(|| {
         string("escape", "The escape character in quoted values (default `\\`).");
         string("charToEscapeQuoteEscaping", "The character that escapes the escape character.");
         string("comment", "Lines starting with this character are skipped.");
-        flag("multiLine", Some(false), "Records may span lines (the file is read whole).");
+        to_boolean("multiLine", Some(false), "Records may span lines (the file is read whole).");
         mode_spec();
         conf("columnNameOfCorruptRecord", OptionKind::String, OptionDefault::Str("_corrupt_record"), "spark.sql.columnNameOfCorruptRecord", "The column that receives malformed records in PERMISSIVE mode.");
         string("nullValue", "The text that reads and writes as NULL (default empty).");
@@ -113,10 +125,12 @@ static SPECS: LazyLock<Vec<OptionSpec>> = LazyLock::new(|| {
         string("dateFormat", "The pattern of DATE values (default: Spark's lenient grammar).");
         string("timestampFormat", "The pattern of TIMESTAMP values.");
         string("timestampNTZFormat", "The pattern of TIMESTAMP_NTZ values.");
-        flag("preferDate", Some(true), "Inference: try a DATE (and a TIME) before a TIMESTAMP (always off under `timeParserPolicy=LEGACY`).");
+        // A string: under `LEGACY` Spark never reads it, so any value goes; `text::prefer_date` reads it with `getBool` otherwise.
+        string("preferDate", "Inference: try a DATE (and a TIME) before a TIMESTAMP (default true; always off under `timeParserPolicy=LEGACY`, where any value is accepted).");
         conf(crate::text::TIME_TYPE_CONF, OptionKind::Bool, OptionDefault::Bool(false), crate::text::TIME_TYPE_CONF, "The session's `spark.sql.timeType.enabled`: inference may give `TIME`.");
         string("timeFormat", "The pattern of TIME values (default: Spark's TIME grammar to read, the value's own digits to write).");
         conf(crate::text::TIME_NANOS_CONF, OptionKind::Bool, OptionDefault::Bool(true), crate::text::TIME_NANOS_CONF, "The session's `krishiv.io.text.timeNanos` (from its Spark profile): a `TIME` read keeps nine fraction digits, else six.");
+        conf(crate::text::SECOND_OFFSETS_CONF, OptionKind::Bool, OptionDefault::Bool(true), crate::text::SECOND_OFFSETS_CONF, "The session's `krishiv.io.text.secondOffsets` (`spark.sql.files.supportSecondOffsetFormat`, from its Spark profile): the default `timestampFormat` of a write keeps the seconds of a zone offset.");
         conf(crate::text::TIME_INFER_CONF, OptionKind::Bool, OptionDefault::Bool(true), crate::text::TIME_INFER_CONF, "The session's `krishiv.io.text.inferTime` (from its Spark profile): inference may give `TIME` (Spark 4.3), never under 4.2.");
         conf("timeZone", OptionKind::String, OptionDefault::Str("UTC"), "spark.sql.session.timeZone", "The time zone of timestamps without an offset.");
         conf(crate::text::PARSER_POLICY_CONF, OptionKind::String, OptionDefault::Str("EXCEPTION"), crate::text::PARSER_POLICY_CONF, "The session's `spark.sql.legacy.timeParserPolicy`: `LEGACY` reads dates and timestamps with `FastDateFormat` patterns and the lenient fallback, and inference never gives a DATE.");
@@ -125,8 +139,8 @@ static SPECS: LazyLock<Vec<OptionSpec>> = LazyLock::new(|| {
         string("charset", "Alias of `encoding`.");
         flag("inferSchema", Some(false), "Infer column types from the data.");
         string("samplingRatio", "The fraction of lines inference reads (default 1.0).");
-        flag("prefersDate", Some(true), "Accepted, no effect: Spark 4.2 infers DATE.");
-        flag("prefersDecimal", Some(false), "Accepted, no effect: Spark 4.2 infers DOUBLE.");
+        string("prefersDate", "Accepted, any value, no effect: not a `CSVOptions` name.");
+        string("prefersDecimal", "Accepted, any value, no effect: not a `CSVOptions` name.");
         flag("enforceSchema", Some(true), "Use the given schema by position; the header is not checked.");
         flag("ignoreLeadingWhiteSpace", None, "Trim leading white space (read: false, write: true).");
         flag("ignoreTrailingWhiteSpace", None, "Trim trailing white space (read: false, write: true).");
@@ -136,7 +150,7 @@ static SPECS: LazyLock<Vec<OptionSpec>> = LazyLock::new(|| {
         int("maxColumns", 1, i64::from(i32::MAX), 20480, "Most columns of a record.");
         int("maxCharsPerColumn", -1, i64::from(i32::MAX), -1, "Most characters of a value (-1: any).");
         unescaped_spec();
-        flag("enableDateTimeParsingFallback", None, "Parse with the lenient grammar when the pattern fails (default: on under `timeParserPolicy=LEGACY` or with no pattern, else off).");
+        to_boolean("enableDateTimeParsingFallback", None, "Parse with the lenient grammar when the pattern fails (default: on under `timeParserPolicy=LEGACY` or with no pattern, else off).");
         conf("ignoreCorruptFiles", OptionKind::Bool, OptionDefault::Bool(false), "spark.sql.files.ignoreCorruptFiles", "Inference: a compressed file that breaks counts the lines decoded before the break, as the scan does (`spark.sql.files.ignoreCorruptFiles`).");
         flag("columnPruning", None, "Parse only the requested columns (default: `spark.sql.csv.parser.columnPruning.enabled`, off under `multiLine`).");
         conf(COLUMN_PRUNING_CONF, OptionKind::Bool, OptionDefault::None, COLUMN_PRUNING_CONF, "The session's `spark.sql.csv.parser.columnPruning.enabled`, carried apart from `columnPruning` (Spark ANDs it with `!multiLine`).");
@@ -352,7 +366,7 @@ impl CsvOptions {
             charset,
             line_sep,
             enforce_schema: o.bool("enforceSchema").unwrap_or(true),
-            prefer_date: o.bool("preferDate").unwrap_or(true) && !crate::text::legacy_parser(o),
+            prefer_date: crate::text::prefer_date(o)?,
             time_type: crate::text::infers_time(o),
             quote_all: o.bool("quoteAll").unwrap_or(false),
             escape_quotes: o.bool("escapeQuotes").unwrap_or(true),

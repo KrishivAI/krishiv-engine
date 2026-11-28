@@ -370,11 +370,15 @@ fn tokenizer_reads_flat_values() {
         r#"{"a":t}"#,
         r#"{"a":nul}"#,
         r#"{"a":"x"#,
-        r#"{"a":'x'}"#,
         "{a:1}",
     ] {
         assert!(parse_line(bad, s).is_err(), "{bad:?} is malformed");
     }
+    // Single quotes are on by default (`JSONOptions`, Spark 4.2.1 / 4.3.0
+    // runs), off only when asked.
+    assert!(parse_line(r#"{"a":'x'}"#, s).is_ok());
+    let no_quotes = syntax_of(&serde_json::json!({"allowSingleQuotes": "false"}));
+    assert!(parse_line(r#"{"a":'x'}"#, no_quotes).is_err());
     // Top-level arrays and scalars parse (the decoder reads an array's
     // objects as rows and treats anything else as a malformed record).
     assert!(matches!(parse_line("[1]", s), Ok(Top::Array(_))));
@@ -1608,6 +1612,21 @@ fn read_path_option_negatives() {
     let e = super::options::JsonOptions::new(&options(&serde_json::json!({"lineSep": ""})), false)
         .expect_err("empty lineSep");
     assert_eq!(e.error_class(), ErrorClass::KrishivInvalidFormatOptionValue);
+    // Only `Locale.US` reads decimals with the US rule; any other locale is
+    // refused, on reads and writes alike.
+    for writing in [false, true] {
+        let e = super::options::JsonOptions::new(
+            &options(&serde_json::json!({"locale": "de-DE"})),
+            writing,
+        )
+        .expect_err("de-DE");
+        assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
+        super::options::JsonOptions::new(
+            &options(&serde_json::json!({"locale": "en-us"})),
+            writing,
+        )
+        .expect("en-US");
+    }
 }
 
 #[test]

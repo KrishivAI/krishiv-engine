@@ -1682,3 +1682,33 @@ fn column_pruning_conf_counts_only_without_multi_line() {
         false
     ));
 }
+
+/// Under LEGACY a write builds its `FastDateFormat` patterns eagerly, so one
+/// that does not compile fails the writer, while a read keeps it and misses
+/// per value. Outside LEGACY the default timestamp write keeps an offset's
+/// seconds unless `krishiv.io.text.secondOffsets` is off (the 3.5 profile).
+#[test]
+fn legacy_write_patterns_and_second_offsets() {
+    use krishiv_kernels::datetime_pattern::Purpose;
+    let legacy = serde_json::json!({"spark.sql.legacy.timeParserPolicy": "LEGACY"});
+    let bad = options_under(
+        &serde_json::json!({"timestampFormat": "yyyy-MM-dd qq"}),
+        &legacy,
+    );
+    assert!(Datetimes::new(&bad, Purpose::Format).is_err());
+    assert!(Datetimes::new(&bad, Purpose::Parse).is_ok());
+    let good = options_under(&serde_json::json!({}), &legacy);
+    assert!(Datetimes::new(&good, Purpose::Format).is_ok());
+    // 1880-01-01T00:00:00Z: Los Angeles kept local mean time, -07:52:58.
+    let micros = -2_840_140_800_000_000;
+    let zone = serde_json::json!({"timeZone": "America/Los_Angeles"});
+    let written = |conf: serde_json::Value| {
+        Datetimes::new(&options_under(&zone, &conf), Purpose::Format)
+            .and_then(|d| d.format_timestamp(micros))
+            .expect("formats")
+    };
+    let seconds = written(serde_json::json!({}));
+    assert!(seconds.ends_with("-07:52:58"), "{seconds}");
+    let minutes = written(serde_json::json!({"krishiv.io.text.secondOffsets": "false"}));
+    assert!(minutes.ends_with("-07:52"), "{minutes}");
+}

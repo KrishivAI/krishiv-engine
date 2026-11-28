@@ -57,8 +57,17 @@ pub const FILE_SOURCE_OPTIONS: &[&str] = &[
 /// The type of an option value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OptionKind {
-    /// `true` / `false`, case-insensitive.
+    /// `true` / `false`, case-insensitive, trimmed.
     Bool,
+    /// `true` / `false` as Scala's `toBoolean` reads them (the JSON flags,
+    /// CSV `multiLine` and `enableDateTimeParsingFallback`): Java's
+    /// `equalsIgnoreCase`, not trimmed; anything else is
+    /// `KRISHIV_INVALID_FORMAT_OPTION_VALUE` (Spark: a plain
+    /// `IllegalArgumentException`).
+    ToBoolean,
+    /// `true` / `false` as `CSVOptions.getBool` reads them: lower-cased,
+    /// not trimmed; anything else is `_LEGACY_ERROR_TEMP_2147`.
+    GetBool,
     /// An integer within `min..=max`.
     Int {
         /// Smallest value.
@@ -72,6 +81,14 @@ pub enum OptionKind {
     Enum(&'static [&'static str]),
     /// A secret (an encryption key, a password): never printed.
     Secret,
+}
+
+impl OptionKind {
+    /// Whether the value is a boolean (any of the three readings).
+    #[must_use]
+    pub const fn is_bool(self) -> bool {
+        matches!(self, Self::Bool | Self::ToBoolean | Self::GetBool)
+    }
 }
 
 /// The default of an option.
@@ -287,6 +304,12 @@ impl OptionSchema {
             }
             let fallback = spec.conf_fallback.and_then(|k| conf_value(session, k));
             if let Some(raw) = fallback {
+                // A boolean conf is trimmed (`booleanConf`), an option not.
+                let raw = if spec.kind.is_bool() {
+                    raw.trim().to_owned()
+                } else {
+                    raw
+                };
                 let v = OptionValue::from_user(spec.name, raw);
                 values.insert(spec.name, self.typed(spec, spec.name, &v)?);
             } else if let Some(v) = default_value(spec.default) {
@@ -365,7 +388,7 @@ impl OptionSchema {
             if let Some(raw) = conf_value(session, conf) {
                 // Spark trims a boolean conf (`booleanConf`), but an option
                 // is not trimmed (`toBoolean`): carry the conf as it reads.
-                let raw = if spec.kind == OptionKind::Bool {
+                let raw = if spec.kind.is_bool() {
                     raw.trim().to_owned()
                 } else {
                     raw
@@ -402,6 +425,13 @@ impl OptionSchema {
                 } else {
                     Err(self.invalid(key, raw, "expected `true` or `false`"))
                 }
+            }
+            OptionKind::ToBoolean => {
+                krishiv_kernels::text::option_to_boolean(self.format, spec.name, raw)
+                    .map(Value::Bool)
+            }
+            OptionKind::GetBool => {
+                krishiv_kernels::text::option_get_bool(spec.name, raw).map(Value::Bool)
             }
             OptionKind::Int { min, max } => s
                 .parse::<i64>()

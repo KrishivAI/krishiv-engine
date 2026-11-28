@@ -47,6 +47,7 @@ pub(crate) fn env() -> ExprEnv {
         legacy_java_charsets: false,
         legacy_coding_error_action: false,
         legacy_time_parser: false,
+        no_second_offsets: false,
         binary_output_style: None,
         spark_version: None,
     }
@@ -2533,6 +2534,7 @@ pub(crate) fn cases() -> Vec<(String, PhysicalPlan)> {
     ));
     out.push(("legacy_time_parser".to_owned(), legacy_time_parser()));
     out.push(("binary_output_style".to_owned(), binary_output_style()));
+    out.push(("no_second_offsets".to_owned(), no_second_offsets()));
     out.push(("spark_version".to_owned(), spark_version()));
     out.push(("session_zone_name".to_owned(), session_zone_name()));
     out.push(("shared_subplan".to_owned(), shared_subplan()));
@@ -2605,6 +2607,7 @@ fn legacy_charset_switches() -> PhysicalPlan {
         legacy_java_charsets: true,
         legacy_coding_error_action: true,
         legacy_time_parser: false,
+        no_second_offsets: false,
         binary_output_style: None,
         spark_version: None,
         ..env()
@@ -2619,6 +2622,16 @@ fn legacy_time_parser() -> PhysicalPlan {
         legacy_time_parser: true,
         binary_output_style: None,
         spark_version: None,
+        ..env()
+    };
+    let explain = ExplainNode::new("Root", "details", vec![]);
+    PhysicalPlan::new(PhysNode::OneRow, schema(), explain, env)
+}
+
+/// A plan whose environment drops an offset's seconds from the default write pattern.
+fn no_second_offsets() -> PhysicalPlan {
+    let env = ExprEnv {
+        no_second_offsets: true,
         ..env()
     };
     let explain = ExplainNode::new("Root", "details", vec![]);

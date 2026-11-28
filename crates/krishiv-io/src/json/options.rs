@@ -19,10 +19,11 @@ fn string(name: &'static str, doc: &'static str) -> OptionSpec {
     }
 }
 
+/// A boolean option: `JSONOptions` reads every one with Scala's `toBoolean`.
 fn flag(name: &'static str, default: bool, doc: &'static str) -> OptionSpec {
     OptionSpec {
         name,
-        kind: OptionKind::Bool,
+        kind: OptionKind::ToBoolean,
         default: OptionDefault::Bool(default),
         conf_fallback: None,
         metadata_key: false,
@@ -64,7 +65,7 @@ static SPECS: LazyLock<Vec<OptionSpec>> = LazyLock::new(|| {
         flag("prefersDecimal", false, "Infer decimals instead of doubles.");
         flag("allowComments", false, "Allow `//` and `/* */` comments in records.");
         flag("allowUnquotedFieldNames", false, "Allow unquoted field names.");
-        flag("allowSingleQuotes", false, "Allow single-quoted strings.");
+        flag("allowSingleQuotes", true, "Allow single-quoted strings (Spark's default: on).");
         flag("allowNumericLeadingZeros", false, "Allow numbers like `007`.");
         flag("allowBackslashEscapingAnyCharacter", false, "Allow `\\` before any character.");
         flag("allowUnquotedControlChars", false, "Allow raw control characters in strings.");
@@ -77,20 +78,26 @@ static SPECS: LazyLock<Vec<OptionSpec>> = LazyLock::new(|| {
         conf(crate::text::TIME_TYPE_CONF, OptionKind::Bool, OptionDefault::Bool(false), crate::text::TIME_TYPE_CONF, "The session's `spark.sql.timeType.enabled`: inference may give `TIME`.");
         string("timeFormat", "The pattern of TIME values (default: Spark's TIME grammar to read, the value's own digits to write).");
         conf(crate::text::TIME_NANOS_CONF, OptionKind::Bool, OptionDefault::Bool(true), crate::text::TIME_NANOS_CONF, "The session's `krishiv.io.text.timeNanos` (from its Spark profile): a `TIME` read keeps nine fraction digits, else six.");
+        conf(crate::text::SECOND_OFFSETS_CONF, OptionKind::Bool, OptionDefault::Bool(true), crate::text::SECOND_OFFSETS_CONF, "The session's `krishiv.io.text.secondOffsets` (`spark.sql.files.supportSecondOffsetFormat`, from its Spark profile): the default `timestampFormat` of a write keeps the seconds of a zone offset.");
         conf(crate::text::TIME_INFER_CONF, OptionKind::Bool, OptionDefault::Bool(true), crate::text::TIME_INFER_CONF, "The session's `krishiv.io.text.inferTime` (from its Spark profile): inference may give `TIME` (Spark 4.3), never under 4.2.");
         conf(crate::text::TIMESTAMP_TYPE_CONF, OptionKind::String, OptionDefault::Str("TIMESTAMP_LTZ"), crate::text::TIMESTAMP_TYPE_CONF, "The session's `spark.sql.timestampType`: with `TIMESTAMP_NTZ`, `inferTimestamp` infers a zone-less timestamp text as `TIMESTAMP_NTZ`.");
         conf(crate::text::PARSER_POLICY_CONF, OptionKind::String, OptionDefault::Str("EXCEPTION"), crate::text::PARSER_POLICY_CONF, "The session's `spark.sql.legacy.timeParserPolicy`: `LEGACY` reads dates and timestamps with `FastDateFormat` patterns and the lenient fallback.");
         conf("ignoreCorruptFiles", OptionKind::Bool, OptionDefault::Bool(false), "spark.sql.files.ignoreCorruptFiles", "Inference: a compressed file that breaks counts the lines decoded before the break, as the scan does (`spark.sql.files.ignoreCorruptFiles`).");
         conf("timeZone", OptionKind::String, OptionDefault::Str("UTC"), "spark.sql.session.timeZone", "The time zone of timestamps without an offset.");
+        string("locale", "The locale of decimals and dates (only en-US).");
         string("encoding", "The charset: UTF-8, ISO-8859-1 or US-ASCII.");
         string("charset", "Alias of `encoding`.");
         string("lineSep", "The line separator (read: \\r, \\r\\n, \\n; write: \\n).");
         string("samplingRatio", "The fraction of records inference reads (default 1.0).");
         flag("dropFieldIfAllNull", false, "Inference drops columns that are null in every record.");
-        conf("ignoreNullFields", OptionKind::Bool, OptionDefault::Bool(true), "spark.sql.jsonGenerator.ignoreNullFields", "Write: omit fields whose value is null (default: the session conf, true).");
+        conf("ignoreNullFields", OptionKind::ToBoolean, OptionDefault::Bool(true), "spark.sql.jsonGenerator.ignoreNullFields", "Write: omit fields whose value is null (default: the session conf, true).");
         flag("inferTimestamp", false, "Inference reads timestamp-like strings as timestamps.");
         // No default: unset turns the fallback on under LEGACY (`JacksonParser`).
         OptionSpec { default: OptionDefault::None, ..flag("enableDateTimeParsingFallback", false, "Parse with the lenient grammar when the pattern fails (default: on under `timeParserPolicy=LEGACY`, else off).") };
+        flag("sortKeys", false, "Write: sort the fields of a record by name (refused when on: not implemented).");
+        flag("pretty", false, "Write: indent records over several lines (refused when on: not implemented).");
+        flag("writeNonAsciiCharacterAsCodePoint", false, "Write: escape non-ASCII characters as `\\uXXXX` (refused when on: not implemented).");
+        flag("useUnsafeRow", false, "Accepted, no effect (a Spark-internal read path).");
         string("compression", "Write codec: none, uncompressed, bzip2, deflate, gzip, lz4 or snappy.");
         string("codec", "Alias of `compression`.");
         conf("inferenceMaxPartitionBytes", OptionKind::String, OptionDefault::None, "spark.sql.files.maxPartitionBytes", "Sampling: the split planning conf.");
@@ -187,6 +194,18 @@ impl JsonOptions {
     pub(crate) fn new(o: &FormatOptions, writing: bool) -> Result<Self> {
         if writing {
             write_codec(o)?;
+            // Spark's generator honours these; the writer does not yet.
+            for name in ["sortKeys", "pretty", "writeNonAsciiCharacterAsCodePoint"] {
+                if o.bool(name) == Some(true) {
+                    return Err(krishiv_common::error::KrishivUnsupportedFeature {
+                        feature: format!("the JSON write option {name}=true"),
+                    }
+                    .into());
+                }
+            }
+        }
+        if let Some(l) = o.str("locale") {
+            krishiv_kernels::json::check_locale(l)?;
         }
         let charset = Charset::parse(o.str("encoding").or_else(|| o.str("charset")))?;
         let line_sep = LineSep::parse(o.str("lineSep"), charset, "json")?;
@@ -203,7 +222,7 @@ impl JsonOptions {
             syntax: Syntax {
                 comments: o.bool("allowComments").unwrap_or(false),
                 unquoted_names: o.bool("allowUnquotedFieldNames").unwrap_or(false),
-                single_quotes: o.bool("allowSingleQuotes").unwrap_or(false),
+                single_quotes: o.bool("allowSingleQuotes").unwrap_or(true),
                 leading_zeros: o.bool("allowNumericLeadingZeros").unwrap_or(false),
                 backslash_any: o
                     .bool("allowBackslashEscapingAnyCharacter")

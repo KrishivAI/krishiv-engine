@@ -6,7 +6,9 @@ Spark's `JsonInferSchema` reads a JSON string as `new BigDecimal(s.replaceAll(",
 `Long` and (with `prefersDecimal`) floating-point numbers as `DecimalType(max(p, s), s)`, and merges
 decimals with `compatibleType` (the wider range plus the wider scale, `DOUBLE` past 38; an integral as
 `DECIMAL(20, 0)` unless the decimal is wider). Each case is run through `schema_of_json` and as a one-line
-JSON file read (the file's schema).
+JSON file read (the file's schema). `files`: JSON files of several records (one per line) where a non-numeric
+number sits beside good ones, read under each parse mode: the file's schema and its rows as `to_json` (the
+malformed record goes to the corrupt column, is dropped, or fails the read).
 
 Usage (from repo root), once per version:
 
@@ -110,6 +112,16 @@ CASES = [('{"t":' + json.dumps(s) + "}", PD) for s in STRINGS] + [
 ]
 
 
+FILE_CASES = [
+    (['{"t":NaN}', '{"t":1.5}'], PD),
+    (['{"t":1.5}', '{"t":Infinity}', '{"t":2}'], PD),
+    (['{"t":NaN}', '{"t":1.5}'], {"prefersDecimal": "true", "mode": "DROPMALFORMED"}),
+    (['{"t":NaN}', '{"t":1.5}'], {"prefersDecimal": "true", "mode": "FAILFAST"}),
+    (['{"t":NaN}', '{"t":1.5}'], {"prefersDecimal": "true", "columnNameOfCorruptRecord": "bad"}),
+    (['{"t":NaN}', '{"t":1.5}'], {}),
+]
+
+
 def lit(s: str) -> str:
     return "'" + s.replace("\\", "\\\\").replace("'", "\\'") + "'"
 
@@ -153,7 +165,21 @@ def main() -> None:
         except Exception as e:
             schema = error_of(e)
         rows.append({"text": text, "options": opts, "schema_of_json": got, "file_schema": schema})
-    out = {"spark": spark.version, "cases": rows}
+    files = []
+    for i, (lines, opts) in enumerate(FILE_CASES):
+        path = os.path.join(root, f"file-{i}.json")
+        with open(path, "w") as f:
+            f.write("".join(line + "\n" for line in lines))
+        try:
+            df = spark.read.options(**opts).json(path)
+            schema = df.schema.simpleString()
+            values = [r.j for r in df.selectExpr("to_json(struct(*)) AS j").collect()]
+        # The error class is the result.
+        except Exception as e:
+            schema = error_of(e)
+            values = []
+        files.append({"lines": lines, "options": opts, "schema": schema, "values": values})
+    out = {"spark": spark.version, "cases": rows, "files": files}
     json.dump(out, sys.stdout, indent=1, ensure_ascii=False)
     sys.stdout.write("\n")
 

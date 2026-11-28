@@ -1039,6 +1039,7 @@ fn stored_keeps_hints_only_for_a_finished_entry() {
                 legacy_java_charsets: false,
                 legacy_coding_error_action: false,
                 legacy_time_parser: false,
+                no_second_offsets: false,
                 binary_output_style: None,
                 spark_version: None,
             },

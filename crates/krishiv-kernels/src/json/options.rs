@@ -11,16 +11,44 @@
 //! `ignoreNullFields` (two `to_json` writer flags), `dropFieldIfAllNull` (a
 //! `schema_of_json` rendering flag) and `mode` (`PERMISSIVE` or `FAILFAST`
 //! for `from_json`; `DROPMALFORMED` is rejected with
-//! `PARSE_MODE_UNSUPPORTED`). Unknown options are ignored, as Spark's
-//! reader ignores them, and the file options (`multiLine`,
-//! `columnNameOfCorruptRecord`, `samplingRatio`, `locale`, `timeFormat`,
-//! ...) have no scalar meaning and are ignored.
+//! `PARSE_MODE_UNSUPPORTED`). A `locale` other than `en-US` is refused
+//! ([`check_locale`]). Unknown options are ignored, as Spark's reader
+//! ignores them, and the file options (`multiLine`,
+//! `columnNameOfCorruptRecord`, `samplingRatio`, `timeFormat`, ...) have no
+//! scalar meaning and are ignored. Every boolean option, the ignored
+//! `multiLine`, `pretty`, `writeNonAsciiCharacterAsCodePoint` and
+//! `useUnsafeRow` included, must be `true` or `false` in any case
+//! ([`crate::text::option_to_boolean`]), as Spark builds `JSONOptions`.
 
 use std::collections::BTreeMap;
 
-use krishiv_common::error::KrishivError;
+use krishiv_common::error::{KrishivError, KrishivUnsupportedFeature};
 
 use crate::datetime_pattern::{DateTimePattern, Purpose};
+
+/// Fails unless the JSON option `locale` names the US locale.
+///
+/// Spark reads the tag with `Locale.forLanguageTag` (so `en-US` in any
+/// case is `Locale.US`, and `en_US` is not a tag at all). Only `Locale.US`
+/// parses a decimal string with the US rule (`ExprUtils.getDecimalParser`:
+/// commas dropped, then `BigDecimal`); any other locale parses it with
+/// Java's `DecimalFormat` and that locale's symbols (`1,5` is 1.5 under
+/// `de-DE`), in reads, `from_json` and `prefersDecimal` inference, and its
+/// date patterns use that locale's month and day names. Krishiv has no
+/// locale data, so it refuses rather than read such values with the US rule.
+///
+/// # Errors
+/// `KRISHIV_UNSUPPORTED_FEATURE` for any other tag.
+pub fn check_locale(tag: &str) -> Result<(), KrishivError> {
+    if tag.eq_ignore_ascii_case("en-US") {
+        Ok(())
+    } else {
+        Err(KrishivUnsupportedFeature {
+            feature: format!("the JSON option locale {tag:?} (only en-US is supported)"),
+        }
+        .into())
+    }
+}
 
 /// How `from_json` handles malformed records (Spark's `mode` option).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -107,6 +135,9 @@ impl JsonOptions {
     #[must_use]
     pub fn new() -> Self {
         Self {
+            // `JSONOptions`' defaults: both on (Spark 4.2.1 / 4.3.0 runs read
+            // `{'a': 'x'}` without options).
+            allow_single_quotes: true,
             allow_non_numeric_numbers: true,
             ignore_null_fields: true,
             ..Self::default()
@@ -135,6 +166,35 @@ impl JsonOptions {
         options: &BTreeMap<String, String>,
         legacy: bool,
     ) -> Result<Self, KrishivError> {
+        Self::build(options, legacy, false)
+    }
+
+    /// [`Self::from_map_with`] for `to_json`: the patterns are compiled for
+    /// formatting only, as Spark's `JacksonGenerator` builds only formatters
+    /// (`EEE, d MMM yyyy` writes, though no parser takes it).
+    ///
+    /// # Errors
+    /// As [`Self::from_map`], for the formatting patterns.
+    pub fn from_map_for_write(
+        options: &BTreeMap<String, String>,
+        legacy: bool,
+    ) -> Result<Self, KrishivError> {
+        Self::build(options, legacy, true)
+    }
+
+    fn build(
+        options: &BTreeMap<String, String>,
+        legacy: bool,
+        writing: bool,
+    ) -> Result<Self, KrishivError> {
+        // A pattern compiled for parsing, or none for a write (never read).
+        let parse = |value: &str| -> Result<Option<DateTimePattern>, KrishivError> {
+            if writing {
+                Ok(None)
+            } else {
+                DateTimePattern::new(value, Purpose::Parse).map(Some)
+            }
+        };
         let mut out = Self::new();
         out.datetime_fallback = legacy;
         out.legacy_parser = legacy;
@@ -148,7 +208,7 @@ impl JsonOptions {
         }
         for (name, value) in options {
             match name.to_ascii_lowercase().as_str() {
-                "enabledatetimeparsingfallback" => out.datetime_fallback = is_true(value),
+                "enabledatetimeparsingfallback" => out.datetime_fallback = flag(name, value)?,
                 "dateformat" if legacy => {
                     out.date_format = Some(DateTimePattern::new_fast(value));
                     out.date_output = Some(DateTimePattern::new_fast(value));
@@ -158,44 +218,60 @@ impl JsonOptions {
                     out.timestamp_output = Some(DateTimePattern::new_fast(value));
                 }
                 "dateformat" => {
-                    let pattern = DateTimePattern::new(value, Purpose::Parse)?;
-                    out.date_format = Some(pattern);
+                    out.date_format = parse(value)?;
                     out.date_output = Some(DateTimePattern::new(value, Purpose::Format)?);
                 }
                 "timeformat" => {
-                    let pattern = DateTimePattern::new(value, Purpose::Parse)?;
-                    out.time_format = Some(pattern);
+                    out.time_format = parse(value)?;
                     // `HH:mm:ss` writes through Spark's fraction formatter.
                     let output = DateTimePattern::new(value, Purpose::Format)?;
                     out.time_output = (!output.is_default_time_pattern()).then_some(output);
                 }
                 "timestampformat" => {
-                    let pattern = DateTimePattern::new(value, Purpose::Parse)?;
-                    out.timestamp_format = Some(pattern);
+                    out.timestamp_format = parse(value)?;
                     out.timestamp_output = Some(DateTimePattern::new(value, Purpose::Format)?);
                 }
                 // Spark builds the NTZ formatter with `forTimestampNTZ`, which
                 // never takes the legacy one, whatever the parser policy.
                 "timestampntzformat" => {
-                    let pattern = DateTimePattern::new(value, Purpose::Parse)?;
-                    out.timestamp_ntz_format = Some(pattern);
+                    out.timestamp_ntz_format = parse(value)?;
                     out.timestamp_ntz_output = Some(DateTimePattern::new(value, Purpose::Format)?);
                 }
-                "primitivesasstring" => out.primitives_as_string = is_true(value),
-                "prefersdecimal" => out.prefers_decimal = is_true(value),
-                "infertimestamp" => out.infer_timestamp = is_true(value),
-                "allowcomments" => out.allow_comments = is_true(value),
-                "allowsinglequotes" => out.allow_single_quotes = is_true(value),
-                "allownumericleadingzeros" => out.allow_numeric_leading_zeros = is_true(value),
+                "locale" => check_locale(value)?,
+                "primitivesasstring" => out.primitives_as_string = flag(name, value)?,
+                "prefersdecimal" => out.prefers_decimal = flag(name, value)?,
+                "infertimestamp" => out.infer_timestamp = flag(name, value)?,
+                "allowcomments" => out.allow_comments = flag(name, value)?,
+                "allowsinglequotes" => out.allow_single_quotes = flag(name, value)?,
+                "allownumericleadingzeros" => out.allow_numeric_leading_zeros = flag(name, value)?,
                 "allowbackslashescapinganycharacter" => {
-                    out.allow_backslash_escaping_any = is_true(value);
+                    out.allow_backslash_escaping_any = flag(name, value)?;
                 }
-                "allowunquotedfieldnames" => out.allow_unquoted_field_names = is_true(value),
-                "allowunquotedcontrolchars" => out.allow_unquoted_control_chars = is_true(value),
-                "allownonnumericnumbers" => out.allow_non_numeric_numbers = is_true(value),
-                "sortkeys" => out.sort_keys = is_true(value),
-                "ignorenullfields" => out.ignore_null_fields = is_true(value),
-                "dropfieldifallnull" => out.drop_field_if_all_null = is_true(value),
+                "allowunquotedfieldnames" => out.allow_unquoted_field_names = flag(name, value)?,
+                "allowunquotedcontrolchars" => {
+                    out.allow_unquoted_control_chars = flag(name, value)?;
+                }
+                "allownonnumericnumbers" => out.allow_non_numeric_numbers = flag(name, value)?,
+                "sortkeys" => out.sort_keys = flag(name, value)?,
+                "ignorenullfields" => out.ignore_null_fields = flag(name, value)?,
+                "dropfieldifallnull" => out.drop_field_if_all_null = flag(name, value)?,
+                // Boolean options with no scalar meaning: Spark still reads
+                // each one with `toBoolean` when it builds `JSONOptions`.
+                "multiline" | "useunsaferow" => {
+                    flag(name, value)?;
+                }
+                // `to_json` honours these two (`JacksonGenerator`: a pretty
+                // printer, `\uXXXX` past 0x7F); not implemented, so `true`
+                // is refused for a write rather than ignored. `from_json`
+                // and `schema_of_json` never write: only the value is checked.
+                "pretty" | "writenonasciicharacterascodepoint" => {
+                    if flag(name, value)? && writing {
+                        return Err(KrishivUnsupportedFeature {
+                            feature: format!("to_json with the option {name}=true"),
+                        }
+                        .into());
+                    }
+                }
                 "mode" => {
                     out.mode = match value.trim().to_ascii_uppercase().as_str() {
                         "PERMISSIVE" => ParseMode::Permissive,
@@ -204,9 +280,8 @@ impl JsonOptions {
                         _ => out.mode,
                     };
                 }
-                // The file-only options (`multiLine`,
-                // `columnNameOfCorruptRecord`, ...), `timeFormat` (no `TIME`
-                // type yet) and anything unknown.
+                // The file-only options (`columnNameOfCorruptRecord`,
+                // `samplingRatio`, ...) and anything unknown.
                 _ => {}
             }
         }
@@ -249,14 +324,59 @@ impl JsonOptions {
 const LEGACY_DATE: &str = "yyyy-MM-dd";
 const LEGACY_TIMESTAMP: &str = "yyyy-MM-dd'T'HH:mm:ss.SSSXXX";
 
-/// Spark's `toBoolean`: only `"true"` (any case, trimmed) is true.
-fn is_true(value: &str) -> bool {
-    value.trim().eq_ignore_ascii_case("true")
+/// A boolean JSON option as Spark's `JSONOptions` reads every one: Scala's
+/// `toBoolean` ([`crate::text::option_to_boolean`]), in every JSON entry point.
+fn flag(name: &str, value: &str) -> Result<bool, KrishivError> {
+    crate::text::option_to_boolean("JSON", name, value)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn to_json_refuses_the_writer_options_it_does_not_implement() {
+        for name in ["pretty", "writeNonAsciiCharacterAsCodePoint"] {
+            let on = BTreeMap::from([(name.to_owned(), "TRUE".to_owned())]);
+            let e = JsonOptions::from_map_for_write(&on, false).unwrap_err();
+            assert_eq!(
+                e.error_class(),
+                krishiv_common::error::ErrorClass::KrishivUnsupportedFeature,
+                "{name}"
+            );
+            // A read never writes; `false` is the default.
+            JsonOptions::from_map_with(&on, false).unwrap();
+            let off = BTreeMap::from([(name.to_owned(), "false".to_owned())]);
+            JsonOptions::from_map_for_write(&off, false).unwrap();
+            // A value that is not a boolean fails first, as in Spark.
+            let bad = BTreeMap::from([(name.to_owned(), "yes".to_owned())]);
+            let e = JsonOptions::from_map_for_write(&bad, false).unwrap_err();
+            assert_eq!(
+                e.error_class(),
+                krishiv_common::error::ErrorClass::KrishivInvalidFormatOptionValue
+            );
+        }
+    }
+
+    #[test]
+    fn only_the_us_locale_tag_is_accepted() {
+        // `Locale.forLanguageTag` folds case; `en_US` is no tag (the root
+        // locale in Spark, a `DecimalFormat` parser).
+        for tag in ["en-US", "en-us", "EN-US"] {
+            check_locale(tag).unwrap();
+        }
+        for tag in ["de-DE", "en_US", "en", " en-US", "fr-FR"] {
+            let e = check_locale(tag).unwrap_err();
+            assert_eq!(
+                e.error_class(),
+                krishiv_common::error::ErrorClass::KrishivUnsupportedFeature
+            );
+        }
+        let named = BTreeMap::from([("Locale".to_owned(), "de-DE".to_owned())]);
+        assert!(JsonOptions::from_map(&named).is_err());
+        let us = BTreeMap::from([("locale".to_owned(), "en-US".to_owned())]);
+        JsonOptions::from_map(&us).unwrap();
+    }
 
     #[test]
     fn an_ntz_pattern_stays_on_the_corrected_formatter_under_legacy() {

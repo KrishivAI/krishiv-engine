@@ -23,6 +23,12 @@ extend-exclude = [
     "python/krishiv/_udf/pandas_utils.py",
     "python/krishiv/_udf/typehints.py",
     "python/krishiv/_udf/loose_version.py",
+    # the same vendored modules, copied into the sandboxed UDF worker
+    "crates/krishiv-udf-pool/worker/krishiv/_udf/conversion.py",
+    "crates/krishiv-udf-pool/worker/krishiv/_udf/pandas_types.py",
+    "crates/krishiv-udf-pool/worker/krishiv/_udf/pandas_utils.py",
+    "crates/krishiv-udf-pool/worker/krishiv/_udf/typehints.py",
+    "crates/krishiv-udf-pool/worker/krishiv/_udf/loose_version.py",
     # adapted PySpark 4.2.0 tests and their golden tables (NOTICE)
     "python/tests/pyspark_udf/test_udf.py",
     "python/tests/pyspark_udf/test_pandas_udf_scalar.py",
@@ -50,6 +56,8 @@ extend-ignore-re = [
     '(`IST`|\d\d:\d\d (IST|ist)")',
     # base64 HTTP Basic credentials in the Flight SQL auth tests
     '"Basic [A-Za-z0-9+/=]+"',
+    # malformed boolean option values in the krishiv-kernels text option tests
+    '"(tru|t\\u\{1d400\}ue)"',
 ]
 
 [default.extend-identifiers]

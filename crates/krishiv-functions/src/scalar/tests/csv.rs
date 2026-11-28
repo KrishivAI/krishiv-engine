@@ -931,3 +931,43 @@ fn from_csv_ntz_pattern_ignores_the_legacy_time_parser() {
         .value(0);
     assert_eq!(micros.rem_euclid(1_000_000), 123);
 }
+
+/// The boolean CSV flags as Spark 4.2.1 and 4.3.0 read them (a one-off run of
+/// `from_csv('2024-01-02', 't DATE', map(..))` per value): `preferDate`
+/// (`CSVOptions.getBool`) takes `true`/`false` in any case and is
+/// `_LEGACY_ERROR_TEMP_2147` otherwise, but is never read under LEGACY;
+/// `enableDateTimeParsingFallback` (`toBoolean`) is refused under both
+/// policies (Spark: a plain `IllegalArgumentException`).
+#[test]
+fn csv_boolean_flags_take_only_true_or_false() {
+    let bind = |key: &str, value: &str, legacy: bool| {
+        let args = vec![
+            BindArg::Column {
+                ty: DataType::Utf8,
+                nullable: true,
+            },
+            BindArg::Literal(strs(&[Some("t DATE")])),
+            BindArg::Literal(map_lit(&[(key, value)])),
+        ];
+        let opts = BindOptions::new().with_legacy_time_parser(legacy);
+        bind_scalar("from_csv", &args, &opts).map(|_| ())
+    };
+    for legacy in [false, true] {
+        for v in ["TRUE", "false"] {
+            bind("preferDate", v, legacy).unwrap();
+            bind("enableDateTimeParsingFallback", v, legacy).unwrap();
+        }
+        for v in ["yes", "1"] {
+            let e = bind("enableDateTimeParsingFallback", v, legacy).unwrap_err();
+            assert_eq!(e.error_class(), ErrorClass::KrishivInvalidFormatOptionValue);
+            let prefer = bind("preferDate", v, legacy);
+            if legacy {
+                prefer.unwrap();
+            } else {
+                let e = prefer.unwrap_err();
+                assert_eq!(e.error_class(), ErrorClass::LegacyErrorTemp2147);
+                assert_eq!(e.to_string(), "preferDate flag can be true or false.");
+            }
+        }
+    }
+}

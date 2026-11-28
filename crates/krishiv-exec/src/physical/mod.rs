@@ -348,6 +348,11 @@ pub struct ExprEnv {
     /// functions use the `SimpleDateFormat` parser. A plan that sets it
     /// needs the `legacy_time_parser` codec feature.
     pub legacy_time_parser: bool,
+    /// `spark.sql.files.supportSecondOffsetFormat = false` (`krishiv.io.text.secondOffsets`, off
+    /// under the 3.5 profile): the default `timestampFormat` of `to_json`, `to_csv` and `to_xml`
+    /// drops the seconds of a zone offset. A plan that sets it needs the `no_second_offsets`
+    /// codec feature.
+    pub no_second_offsets: bool,
     /// `spark.sql.binaryOutputStyle` when it is not `HEX_DISCRETE` (what an unset config
     /// prints): `to_csv` and `to_xml` print binary fields in that style. A plan that sets it
     /// needs the `binary_output_style` codec feature.
@@ -1185,6 +1190,7 @@ plan_data!(struct ExprEnv {
     legacy_java_charsets,
     legacy_coding_error_action,
     legacy_time_parser,
+    no_second_offsets,
     binary_output_style,
     spark_version
 });
