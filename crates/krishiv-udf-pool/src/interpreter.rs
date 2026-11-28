@@ -63,6 +63,10 @@ pub struct Interpreter {
     pub pandas: Option<String>,
 }
 
+/// The oldest `pyarrow` major version the worker program supports: PySpark 4.2.0's minimum, whose conversion
+/// code the worker runs (an older one has no `string_view` casts, which UDF input columns need).
+const MIN_PYARROW_MAJOR: u32 = 18;
+
 impl Interpreter {
     /// Runs `executable` (an absolute path, or a name looked up on `PATH`) once and records it.
     ///
@@ -170,13 +174,7 @@ impl Interpreter {
             )
         })
     }
-}
 
-/// The oldest `pyarrow` major version the worker program supports: PySpark 4.2.0's minimum, whose conversion
-/// code the worker runs (an older one has no `string_view` casts, which UDF input columns need).
-const MIN_PYARROW_MAJOR: u32 = 18;
-
-impl Interpreter {
     /// A warning for an interpreter whose `pyarrow` is older than the worker supports: it is still used, and
     /// UDF calls that need the newer `pyarrow` fail with a Python error.
     pub fn old_pyarrow_warning(&self) -> Option<String> {

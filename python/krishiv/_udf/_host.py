@@ -65,7 +65,12 @@ if IN_WORKER:
     # PySpark 3.5 has no `PySparkImportError` (it is `PySparkException` and `ImportError`, as in 4.0).
     PySparkImportError = _spark_error(
         getattr(_pyspark_errors, "PySparkImportError", None)
-        or type("PySparkImportError", (_pyspark_errors.PySparkException, ImportError), {})
+        or type(
+            "PySparkImportError",
+            (_pyspark_errors.PySparkException, ImportError),
+            # A traceback names the class as a 4.x client has it, not this module.
+            {"__module__": "pyspark.errors.exceptions.base"},
+        )
     )
 
     def not_implemented(feature: str) -> Exception:
