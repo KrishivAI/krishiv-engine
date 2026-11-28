@@ -26,6 +26,8 @@
 
 <p align="center"><sub>* TPC-H SF100 on one laptop, 0.2: see the <a href="https://krishiv.ai/blog/krishiv-0-2-10x-faster-than-spark">benchmark post</a>.</sub></p>
 
+<p align="center"><img src="docs/assets/krishiv-console.png" alt="Krishiv 0.3.0 in a Python session: pip install krishiv, a PySpark groupBy with its result table, and a Spark-style UNRESOLVED_COLUMN error with SQLSTATE and a caret" width="900"></p>
+
 **Krishiv** is an Apache Spark™ alternative written in Rust: run the PySpark and Spark SQL you already write without
 the JVM, on a vectorized, Arrow-native engine. It runs in your own process or as a single-node server (`krishiv server`, Spark Connect), and on a cluster as the
 next releases land, with one engine for batch, streaming and always-fresh views.
