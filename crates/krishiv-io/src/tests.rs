@@ -1954,8 +1954,20 @@ fn no_predicate_is_pushed_onto_a_floored_nanosecond_column() {
     let ntz = |p: u8| K::TimestampNtzNanos { precision: p }.to_arrow_field("t", true);
     let file = Arc::new(Schema::new(vec![ntz(9)]));
     let probe = PushdownExpr::IsNotNull(col("t"));
-    let floored = mapper(&Arc::new(Schema::new(vec![ntz(7)])), &file, by_name()).unwrap();
-    assert_eq!(floored.map_predicate(&probe), None);
-    let same = mapper(&Arc::new(Schema::new(vec![ntz(9)])), &file, by_name()).unwrap();
-    assert_eq!(same.map_predicate(&probe), Some(probe.clone()));
+    // A runtime filter on the column (a join key) is dropped the same way.
+    let dynamic = |p: u8| {
+        let table = Arc::new(Schema::new(vec![ntz(p)]));
+        let m = mapper(&table, &file, by_name()).unwrap();
+        let filter = Arc::new(crate::RuntimeFilter::new(
+            crate::FilterId(1),
+            col("t"),
+            table.field(0).data_type().clone(),
+        ));
+        let mut req = ScanRequest::all(Arc::clone(&table));
+        req.dynamic
+            .push(crate::ScanFilter::new(filter, &table).unwrap_or_else(|| panic!("t")));
+        (m.map_predicate(&probe), m.file_request(&req).dynamic.len())
+    };
+    assert_eq!(dynamic(7), (None, 0));
+    assert_eq!(dynamic(9), (Some(probe.clone()), 1));
 }

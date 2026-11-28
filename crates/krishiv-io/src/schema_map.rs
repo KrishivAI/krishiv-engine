@@ -663,7 +663,9 @@ impl Resolver {
             // A column read floored to the table precision is compared on
             // its floored values, which the file does not hold: a literal
             // or runtime filter of the table precision would drop rows
-            // whose stored digits it cuts, so nothing is pushed onto it.
+            // whose stored digits it cuts, so nothing is pushed onto it
+            // (IS [NOT] NULL would be sound, since flooring keeps nulls, but
+            // is refused too, to keep the one gate simple).
             if nanos_cut(tf, ff).is_some() {
                 return None;
             }
