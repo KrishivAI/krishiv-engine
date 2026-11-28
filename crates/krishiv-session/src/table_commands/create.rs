@@ -1303,7 +1303,7 @@ fn table_collation(t: &CreateTable) -> Result<Option<krishiv_types::Collation>, 
 }
 
 /// `spec` with `collation` on every `STRING` (also inside arrays, maps and structs) that names none.
-fn with_default_collation(
+pub(super) fn with_default_collation(
     spec: &krishiv_sql::ast::DataTypeSpec,
     collation: &krishiv_sql::ast::ObjectName,
 ) -> krishiv_sql::ast::DataTypeSpec {

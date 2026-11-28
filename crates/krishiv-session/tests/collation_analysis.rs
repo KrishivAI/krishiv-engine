@@ -2042,6 +2042,11 @@ fn a_table_default_collation_collates_its_undeclared_string_columns() {
         value("SELECT typeof(c3) FROM tc"),
         "array<string collate UTF8_LCASE>"
     );
+    go("ALTER TABLE tc ADD COLUMNS (c4 STRING)");
+    assert_eq!(
+        value("SELECT collation(c4) FROM tc"),
+        "SYSTEM.BUILTIN.UTF8_LCASE"
+    );
     go(
         "CREATE TABLE td (c1 STRING, c2 STRING COLLATE UTF8_BINARY) USING parquet DEFAULT COLLATION UTF8_LCASE",
     );

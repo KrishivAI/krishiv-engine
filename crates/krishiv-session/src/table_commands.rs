@@ -1292,9 +1292,24 @@ impl Session {
                     // Spark alters the data schema: new columns go before the partition columns.
                     let at = changed.data_columns().count();
                     // Existing files have no such column: it reads as NULL.
+                    // A table `DEFAULT COLLATION` applies to the new string column too.
+                    let spec = match changed.collation.filter(|c| !c.is_utf8_binary()) {
+                        Some(c) => create::with_default_collation(
+                            &def.data_type,
+                            &krishiv_sql::ast::ObjectName {
+                                parts: vec![krishiv_sql::ast::Ident {
+                                    value: c.name(),
+                                    quoted: false,
+                                    span: Default::default(),
+                                }],
+                                span: Default::default(),
+                            },
+                        ),
+                        None => def.data_type.clone(),
+                    };
                     let column = StoreColumn::declared(
                         ident.value.clone(),
-                        &def.data_type,
+                        &spec,
                         None,
                         def.comment.clone(),
                     )?;
