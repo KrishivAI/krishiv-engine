@@ -3,7 +3,10 @@
 //! (an interpreter with `pyspark`, `pyarrow` and `pandas` takes about two seconds to import them). The first
 //! worker start, and every caller of [`crate::Pool::interpreters`] or [`crate::Pool::refusal`], waits for it.
 //! The pool's drop stops it and waits for its thread, so no inspection process outlives the pool (its
-//! timeout is kept by that thread, which ends with the process).
+//! timeout is kept by that thread, which ends with the process). A path that skips drops skips this too:
+//! the server's second SIGTERM or SIGINT exits at once (`std::process::exit(130)` in `krishiv-cli`'s signal
+//! watcher), and so does SIGKILL, so an inspection still running then outlives the server until its own
+//! timeout ends it.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock, PoisonError};
