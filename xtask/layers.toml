@@ -41,6 +41,7 @@ krishiv-flight-sql = 6
 krishiv-mcp = 6
 krishiv-server = 6
 krishiv-python = 6
+krishiv-node = 6
 krishiv-ui-assets = 6
 krishiv = 7
 krishiv-bench-runner = 7

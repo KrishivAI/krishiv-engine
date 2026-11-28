@@ -1,0 +1,4 @@
+id,name,score,joined,active
+1,Ana,9.5,2024-01-02,true
+2,Bo,,2024-02-29,false
+3,"Cy, Jr.",7.25,,true

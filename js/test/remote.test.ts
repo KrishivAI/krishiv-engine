@@ -144,7 +144,8 @@ describe("remote session", () => {
     await s.close();
   });
 
-  it("refuses the embedded engine with a clear error", async () => {
+  // With KRISHIV_NATIVE_ENGINE set (the CI job's real addon) the binary is there, so the refusal can't happen.
+  it.skipIf(Boolean(process.env.KRISHIV_NATIVE_ENGINE))("refuses the embedded engine with a clear error when no binary is installed", async () => {
     await expect(Session.builder().getOrCreate()).rejects.toThrow(/embedded engine is not available/);
   });
 });

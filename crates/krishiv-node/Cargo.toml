@@ -1,0 +1,45 @@
+[package]
+name = "krishiv-node"
+description = "Node.js bindings (napi-rs): the embedded engine of the npm package krishiv"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[lib]
+# Built by `napi build` from `js/` into `krishiv.<platform>.node` (design/node-engine-napi.md).
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = ["mimalloc", "cloud", "delta"]
+# mimalloc is the addon's global allocator, as in the Python wheel (P2-T012).
+mimalloc = ["dep:mimalloc"]
+# Cloud object stores (s3://, gs://, az://), as in every wheel.
+cloud = ["krishiv-session/cloud"]
+# Delta tables, as in every wheel.
+delta = ["krishiv-session/delta"]
+
+[dependencies]
+arrow-array.workspace = true
+arrow-ipc.workspace = true
+arrow-schema.workspace = true
+futures = { workspace = true, features = ["std"] }
+krishiv-common = { path = "../krishiv-common" }
+krishiv-session = { path = "../krishiv-session" }
+# An addon is always loaded with dlopen. With mimalloc's default initial-exec TLS the whole TLS block of the
+# addon must fit glibc's small static-TLS surplus (dlopen fails with "cannot allocate memory in static TLS
+# block" once it grows past it) and musl crashes at load (as the wheel found), so every target uses the
+# dynamic model.
+mimalloc = { workspace = true, optional = true, features = ["local_dynamic_tls"] }
+napi = { workspace = true, features = ["napi4", "async"] }
+napi-derive = { workspace = true, features = ["type-def", "strict"] }
+serde_json = { workspace = true, features = ["std"] }
+tokio = { workspace = true, features = ["sync"] }
+
+[build-dependencies]
+napi-build.workspace = true

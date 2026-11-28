@@ -5,13 +5,14 @@
 //! It rewrites `[workspace.package] version` in the root manifest and every exact `version = "=X"` pin of an
 //! internal path dependency in the crate manifests, then prints the lockfile step. `--check` writes nothing and
 //! fails when any file would change. It touches no prose (README, docs): those name a release by hand.
-//! Python's version is dynamic (`pyproject.toml`) and follows the crate version, so it needs no edit.
+//! Python's version is dynamic (`pyproject.toml`) and follows the crate version, so it needs no edit. The npm
+//! package's root versions (`js/package.json`, `js/package-lock.json`) are rewritten too.
 
 #![expect(clippy::print_stdout, reason = "command output is the interface")]
 
 use std::path::{Path, PathBuf};
 
-use crate::release_check::{is_version, workspace_version};
+use crate::release_check::{JS_VERSION_FILES, is_version, js_versions, workspace_version};
 
 /// Directories that never hold a manifest of ours.
 const SKIP: &[&str] = &["target", ".git", ".worktrees", "node_modules", ".venv"];
@@ -68,6 +69,39 @@ fn bump_manifest(text: &str, new: &str, root: bool) -> Option<String> {
         }
     }
     changed.then_some(out)
+}
+
+/// `text` with its root `"version": "X"` lines set to `new` (the first one, and in a lockfile the one of
+/// `packages[""]`, the first after `"packages"`), or `None` when they already are. Dependency entries are untouched.
+fn bump_js(text: &str, new: &str) -> Result<Option<String>, String> {
+    let want = js_versions(text)?.len();
+    let mut out = String::with_capacity(text.len());
+    let mut done = 0;
+    let mut in_packages = false;
+    for line in text.split_inclusive('\n') {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("\"packages\"") {
+            in_packages = true;
+        }
+        let root_entry = done == 0 && !in_packages || done == 1 && in_packages;
+        if root_entry && done < want && trimmed.starts_with("\"version\"") {
+            let indent = &line[..line.len() - trimmed.len()];
+            let comma = if trimmed.trim_end().ends_with(',') {
+                ","
+            } else {
+                ""
+            };
+            let end = &line[line.trim_end().len()..];
+            out.push_str(&format!("{indent}\"version\": \"{new}\"{comma}{end}"));
+            done += 1;
+        } else {
+            out.push_str(line);
+        }
+    }
+    if done != want {
+        return Err(format!("found {done} of {want} root version lines"));
+    }
+    Ok((out != text).then_some(out))
 }
 
 /// Every `Cargo.toml` under `dir`, skipping build output and worktrees.
@@ -127,6 +161,22 @@ pub fn run(root: &Path, flags: &[&str]) -> Result<(), String> {
             println!("bumped {}", rel.display());
         }
     }
+    for f in JS_VERSION_FILES {
+        let path = root.join(f);
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Some(new_text) = bump_js(&text, version).map_err(|e| format!("{f}: {e}"))? else {
+            continue;
+        };
+        touched += 1;
+        if check {
+            println!("would change {f}");
+        } else {
+            std::fs::write(&path, new_text).map_err(|e| format!("{f}: {e}"))?;
+            println!("bumped {f}");
+        }
+    }
     if touched == 0 {
         println!("release-bump: the workspace is already at {version}");
         return Ok(());
@@ -146,6 +196,54 @@ pub fn run(root: &Path, flags: &[&str]) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_npm_root_versions_move_and_dependencies_stay() {
+        let lock = "{\n  \"name\": \"krishiv\",\n  \"version\": \"0.2.1\",\n  \"packages\": {\n    \"\": {\n      \"name\": \"krishiv\",\n      \"version\": \"0.2.1\",\n      \"license\": \"x\"\n    },\n    \"node_modules/a\": {\n      \"version\": \"0.2.1\"\n    }\n  }\n}\n";
+        let bumped = bump_js(lock, "0.3.1").unwrap().unwrap();
+        assert_eq!(js_versions(&bumped).unwrap(), ["0.3.1", "0.3.1"]);
+        assert!(bumped.contains("\"node_modules/a\": {\n      \"version\": \"0.2.1\"\n"));
+        assert_eq!(bump_js(&bumped, "0.3.1").unwrap(), None);
+        let pkg = "{\n  \"name\": \"krishiv\",\n  \"version\": \"0.2.1\"\n}\n";
+        let bumped = bump_js(pkg, "1.0.0").unwrap().unwrap();
+        assert_eq!(
+            bumped,
+            "{\n  \"name\": \"krishiv\",\n  \"version\": \"1.0.0\"\n}\n"
+        );
+    }
+
+    #[test]
+    fn a_root_version_not_on_its_own_line_is_refused() {
+        let one_line = "{\"name\": \"krishiv\", \"version\": \"0.2.1\"}\n";
+        assert_eq!(
+            bump_js(one_line, "0.3.1"),
+            Err("found 0 of 1 root version lines".to_owned())
+        );
+    }
+
+    #[test]
+    fn the_npm_files_move_with_the_workspace() {
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("js")).unwrap_or_default();
+        let write = |p: &str, t: &str| std::fs::write(root.join(p), t).unwrap_or_default();
+        let read = |p: &str| std::fs::read_to_string(root.join(p)).unwrap_or_default();
+        write("Cargo.toml", "[workspace.package]\nversion = \"0.3.0\"\n");
+        write(
+            "js/package.json",
+            "{\n  \"name\": \"krishiv\",\n  \"version\": \"0.2.1\"\n}\n",
+        );
+        // Only the npm file is behind: `--check` fails and writes nothing, the bump moves it.
+        assert!(run(root, &["0.3.0", "--check"]).is_err());
+        assert!(read("js/package.json").contains("\"0.2.1\""));
+        assert!(run(root, &["0.3.0"]).is_ok());
+        assert!(read("js/package.json").contains("\"version\": \"0.3.0\""));
+        assert!(run(root, &["0.3.0", "--check"]).is_ok());
+        // A malformed npm file names itself.
+        write("js/package-lock.json", "{\"version\": \"0.2.1\"}");
+        let e = run(root, &["0.3.0"]).unwrap_err();
+        assert!(e.starts_with("js/package-lock.json: "), "{e}");
+    }
 
     #[test]
     fn the_root_version_and_the_pins_move() {

@@ -1,6 +1,6 @@
 # krishiv
 
-Krishiv for JavaScript and TypeScript: SQL and DataFrames over Apache Arrow, against a Krishiv server.
+Krishiv for JavaScript and TypeScript: SQL and DataFrames over Apache Arrow, against a Krishiv server or embedded in Node.
 
 ```ts
 import { Session, col, count } from "krishiv";
@@ -40,6 +40,21 @@ Every failure is a `KrishivError` with `errorClass` and `sqlState` (the Spark er
 
 ## Embedded engine
 
-Not yet available. `Session.builder().getOrCreate()` without `remote()` throws a `KrishivError`; connect to a server with `remote("krishiv://host:port")`.
+`Session.builder().getOrCreate()` runs the engine in your process. npm installs the engine binary for your machine as
+one optional package, at the same version as `krishiv`:
+
+| Platform | Package |
+|---|---|
+| Linux x64, glibc 2.28+ | `@krishiv/engine-linux-x64-gnu` |
+| Linux arm64, glibc 2.28+ | `@krishiv/engine-linux-arm64-gnu` |
+| Linux x64, musl (Alpine) | `@krishiv/engine-linux-x64-musl` |
+| macOS arm64, 11.0+ | `@krishiv/engine-darwin-arm64` |
+
+The engine loads only when a session uses embedded mode, never at import. Without a binary for your platform (or
+with `--omit=optional`), `getOrCreate()` throws a `KrishivError` with class `KRISHIV_NATIVE_ENGINE_UNAVAILABLE`; use
+remote mode instead. Embedded mode runs on Node 22 and 24, Bun and Deno (`deno run --allow-all`, with the packages
+installed in `node_modules`). To load a local build instead of the package, set `KRISHIV_NATIVE_ENGINE` to the path of
+the `.node` file (`cargo build -p krishiv-node`, then copy `libkrishiv_node.so` on Linux, or
+`libkrishiv_node.dylib` on macOS, to `krishiv.node`).
 
 Node 22 or newer. Apache-2.0.

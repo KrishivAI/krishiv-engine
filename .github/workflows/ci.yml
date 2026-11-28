@@ -58,6 +58,7 @@ jobs:
     outputs:
       rust: ${{ steps.filter.outputs.rust }}
       python: ${{ steps.python.outputs.python }}
+      js: ${{ steps.js.outputs.js }}
     steps:
       - name: Harden the runner (audit egress)
         uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
@@ -97,11 +98,26 @@ jobs:
         run: |
           python=true
           if [ "$EVENT" = "pull_request" ] && ! git diff --name-only "$BASE_SHA...$HEAD_SHA" \
-            | grep -qE '^(crates/krishiv-python/|python/|xtask/|\.github/workflows/ci\.yml$|\.github/workflows/wheels\.yml$|\.github/scripts/(wheel-test|approval-label)\.sh$|Cargo\.(toml|lock)$|rust-toolchain\.toml$|budgets\.json$)'; then
+            | grep -qE '^(crates/krishiv-python/|python/|xtask/|\.github/workflows/ci\.yml$|\.github/workflows/wheels\.yml$|\.github/scripts/(wheel-test|approval-label)\.sh$|\.github/scripts/third_party_notices\.py$|Cargo\.(toml|lock)$|rust-toolchain\.toml$|budgets\.json$)'; then
             python=false
           fi
           echo "python=$python" >> "$GITHUB_OUTPUT"
           echo "wheel targets: $python"
+      # The npm package's job: the addon follows every Rust change, the TypeScript only js/.
+      - id: js
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          RUST: ${{ steps.filter.outputs.rust }}
+        run: |
+          js=true
+          if [ "$EVENT" = "pull_request" ] && [ "$RUST" != "true" ] && ! git diff --name-only "$BASE_SHA...$HEAD_SHA" \
+            | grep -qE '^(js/|\.github/workflows/ci\.yml$)'; then
+            js=false
+          fi
+          echo "js=$js" >> "$GITHUB_OUTPUT"
+          echo "js package: $js"
 
   # Formatting and spelling of non-Rust files; no Rust toolchain needed.
   text-lint:
@@ -171,6 +187,59 @@ jobs:
           uv run --no-project --python 3.12 --with playwright==1.55.0 playwright install --with-deps chromium
           uv run --no-project --python 3.12 --with playwright==1.55.0 python ui/tests/check_pages.py
 
+  # The npm package `krishiv` (js/): typecheck and vitest on the supported Node majors (22 and 24, one addon
+  # build for both); the embedded-mode tests load the addon built from crates/krishiv-node (a debug build: the
+  # tests check behaviour, not speed). Runs when Rust or js/ changes (`changes.js`).
+  js:
+    needs: changes
+    if: needs.changes.outputs.js == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "false"
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: $/.github/actions/setup-rust
+        with:
+          toolchain: 1.99.1
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: js
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: $/.github/actions/setup-mold
+      - name: Build the addon
+        run: |
+          cargo build -p krishiv-node --locked
+          cp target/debug/libkrishiv_node.so "$RUNNER_TEMP/krishiv.node"
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+      - name: Node 22 - install, typecheck, vitest
+        working-directory: js
+        env:
+          KRISHIV_NATIVE_ENGINE: ${{ runner.temp }}/krishiv.node
+        run: |
+          node --version
+          npm ci
+          npm run typecheck
+          npm test
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+      - name: Node 24 - vitest
+        working-directory: js
+        env:
+          KRISHIV_NATIVE_ENGINE: ${{ runner.temp }}/krishiv.node
+        run: |
+          node --version
+          npm test
+
   # P2-T151: Python code quality (ruff lint + format, ty) for python/, bench/ and
   # tests/scripts/. Needs no Rust toolchain and no built extension, and it is cheap, so it
   # runs on every PR instead of being gated by `changes`. Required check (a maintainer
@@ -210,6 +279,12 @@ jobs:
           uv run --frozen --no-sync --project ../../python ruff check .
           uv run --frozen --no-sync --project ../../python ruff format --check .
           uv run --frozen --no-sync --project ../../python ty check .
+      # Unit tests of the third-party notices script the wheels, binaries and image ship with.
+      - name: tests/scripts/ (third-party notices tests)
+        working-directory: tests/scripts
+        env:
+          TPN_NO_CARGO: "1"
+        run: uv run --frozen --no-sync --project ../../python pytest -q -p no:cacheprovider test_third_party_notices.py
       # The public Python API is a checked-in snapshot (docs/concepts/stability.md); source only, no wheel.
       - name: python/public-api.txt
         run: python3 -I tests/scripts/python_public_api.py --check
