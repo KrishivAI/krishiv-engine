@@ -68,6 +68,7 @@ pub mod string;
 pub mod r#struct;
 pub mod text;
 mod unsafe_dispatch;
+pub mod unsafe_utf8;
 pub mod variant;
 pub mod vector;
 pub mod version;

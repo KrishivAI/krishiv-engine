@@ -3391,6 +3391,7 @@ dependencies = [
  "proptest",
  "sha1",
  "sha2",
+ "simdutf8",
  "thiserror",
 ]
 

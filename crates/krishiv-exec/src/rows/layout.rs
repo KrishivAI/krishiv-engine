@@ -1088,13 +1088,12 @@ impl ByteValues {
     /// `Utf8` / `Binary` column past its 2 GiB offsets, or a type rows do not
     /// store as views.
     fn finish(mut self, data_type: &DataType) -> Result<ArrayRef> {
-        use arrow_array::{
-            BinaryArray, BinaryViewArray, LargeBinaryArray, LargeStringArray, StringArray,
-            StringViewArray,
-        };
+        use arrow_array::{BinaryArray, BinaryViewArray, LargeBinaryArray, StringViewArray};
+        use krishiv_kernels::unsafe_utf8::{StringArrayError, string_array};
         let nulls = self.nulls.finish();
         let values = Buffer::from_vec(self.bytes);
-        let not_utf8 = |e: ArrowError| internal(format!("a row string is not UTF-8: {e}"));
+        let not_utf8 = |e: StringArrayError| internal(format!("a row string is not UTF-8: {e:?}"));
+        let not_bytes = |e: ArrowError| internal(format!("row bytes do not form an array: {e}"));
         let large = OffsetBuffer::new(ScalarBuffer::from(self.offsets));
         let small = |large: &OffsetBuffer<i64>| {
             large
@@ -1110,23 +1109,23 @@ impl ByteValues {
                 })
         };
         Ok(match data_type {
+            // Checked once (`simdutf8`, then every offset on a character
+            // boundary) by the kernels' helper, not by arrow's `try_new`.
             DataType::Utf8 => {
-                Arc::new(StringArray::try_new(small(&large)?, values, nulls).map_err(not_utf8)?)
+                Arc::new(string_array(small(&large)?, values, nulls).map_err(not_utf8)?)
             }
-            DataType::LargeUtf8 => {
-                Arc::new(LargeStringArray::try_new(large, values, nulls).map_err(not_utf8)?)
-            }
+            DataType::LargeUtf8 => Arc::new(string_array(large, values, nulls).map_err(not_utf8)?),
             DataType::Utf8View => Arc::new(StringViewArray::from(
-                &LargeStringArray::try_new(large, values, nulls).map_err(not_utf8)?,
+                &string_array(large, values, nulls).map_err(not_utf8)?,
             )),
             DataType::Binary => {
-                Arc::new(BinaryArray::try_new(small(&large)?, values, nulls).map_err(not_utf8)?)
+                Arc::new(BinaryArray::try_new(small(&large)?, values, nulls).map_err(not_bytes)?)
             }
             DataType::LargeBinary => {
-                Arc::new(LargeBinaryArray::try_new(large, values, nulls).map_err(not_utf8)?)
+                Arc::new(LargeBinaryArray::try_new(large, values, nulls).map_err(not_bytes)?)
             }
             DataType::BinaryView => Arc::new(BinaryViewArray::from(
-                &LargeBinaryArray::try_new(large, values, nulls).map_err(not_utf8)?,
+                &LargeBinaryArray::try_new(large, values, nulls).map_err(not_bytes)?,
             )),
             t => return Err(internal(format!("no row view decoding for {t}"))),
         })

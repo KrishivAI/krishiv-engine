@@ -24,5 +24,12 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "string_array"
+path = "fuzz_targets/string_array.rs"
+test = false
+doc = false
+bench = false
+
 [workspace]
 members = ["."]

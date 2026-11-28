@@ -29,6 +29,8 @@ memchr = { workspace = true, features = ["std"] }
 md5.workspace = true
 sha1.workspace = true
 sha2.workspace = true
+# One-pass UTF-8 validation of decoded row strings (`unsafe_utf8`); runtime CPU detection needs `std`.
+simdutf8 = { workspace = true, features = ["std"] }
 thiserror.workspace = true
 icu_collator = { workspace = true, optional = true }
 icu_locale_core = { workspace = true, optional = true }

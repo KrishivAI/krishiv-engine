@@ -93,6 +93,9 @@ jobs:
       - name: differential (4.5 hours)
         working-directory: crates/krishiv-kernels/fuzz
         run: cargo "+$NIGHTLY" fuzz run --target x86_64-unknown-linux-gnu differential -- -max_total_time=16200
+      - name: string_array (30 minutes)
+        working-directory: crates/krishiv-kernels/fuzz
+        run: cargo "+$NIGHTLY" fuzz run --target x86_64-unknown-linux-gnu string_array -- -max_total_time=1800
       - name: Save the corpus
         if: always()
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
