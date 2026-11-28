@@ -259,8 +259,7 @@ def test_session_tables_and_reader(spark: SparkSession, df: DataFrame, tmp_path:
         spark.sql("SELECT 1 +")
     with pytest.raises(errors.PySparkTypeError):
         spark.sql(1)  # ty: ignore[invalid-argument-type]
-    with pytest.raises(errors.PySparkNotImplementedError):
-        spark.sql("SELECT :a", args={"a": 1})
+    assert spark.sql("SELECT :a", args={"a": 1}).collect()[0][0] == 1
     assert spark.createDataFrame(pa.table({"a": [1]}), schema="a int").dtypes == [("a", "int")]
     assert spark.createDataFrame([(1, "a")], ["x", "y"]).orderBy("x").collect() == [Row(x=1, y="a")]
     with pytest.raises(errors.PySparkTypeError):

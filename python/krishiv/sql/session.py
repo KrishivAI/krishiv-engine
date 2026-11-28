@@ -45,6 +45,58 @@ _lock = threading.Lock()
 _active: SparkSession | None = None
 
 
+def _sql_literal(value: Any) -> str:
+    """``value`` as the SQL literal Spark's ``spark.sql(args=...)`` reads it as."""
+    import datetime
+    import decimal
+    import math
+
+    if value is None:
+        return "NULL"
+    if isinstance(value, bool):
+        return "TRUE" if value else "FALSE"
+    if isinstance(value, int):
+        if not -(2**63) <= value < 2**63:
+            raise PySparkValueError(
+                errorClass="VALUE_NOT_ALLOWED",
+                messageParameters={"arg_name": "args", "allowed_values": "a value that fits a bigint"},
+            )
+        return f"{value}L"
+    if isinstance(value, float):
+        if math.isnan(value):
+            return "CAST('NaN' AS DOUBLE)"
+        if math.isinf(value):
+            return f"CAST('{'' if value > 0 else '-'}Infinity' AS DOUBLE)"
+        return f"{value!r}D"
+    if isinstance(value, str):
+        return "'" + value.replace("\\", "\\\\").replace("'", "\\'") + "'"
+    if isinstance(value, (bytes, bytearray)):
+        return "X'" + bytes(value).hex() + "'"
+    if isinstance(value, decimal.Decimal):
+        return f"CAST('{value}' AS DECIMAL({max(len(value.as_tuple().digits), 1)}, {max(-int(value.as_tuple().exponent), 0)}))"  # ty: ignore[invalid-argument-type]
+    if isinstance(value, datetime.datetime):
+        kind = "TIMESTAMP" if value.tzinfo is not None else "TIMESTAMP_NTZ"
+        return f"{kind} '{value.isoformat(sep=' ')}'"
+    if isinstance(value, datetime.date):
+        return f"DATE '{value.isoformat()}'"
+    raise not_expected_type("args", "a value with a SQL literal", value)
+
+
+def _bind_parameters(query: str, args: Any, kwargs: dict[str, Any]) -> str:
+    """``query`` run as ``EXECUTE IMMEDIATE query USING ...`` with the parameters of ``spark.sql``."""
+    if args is not None and kwargs:
+        raise PySparkValueError(errorClass="CANNOT_SET_TOGETHER", messageParameters={"arg_list": "args and kwargs"})
+    named = kwargs if args is None else args
+    if isinstance(named, dict):
+        using = ", ".join(f"{_sql_literal(v)} AS `{k}`" for k, v in named.items())
+    elif isinstance(named, (list, tuple)):
+        using = ", ".join(_sql_literal(v) for v in named)
+    else:
+        raise not_expected_type("args", "dict or list", named)
+    text = "'" + query.replace("\\", "\\\\").replace("'", "\\'") + "'"
+    return f"EXECUTE IMMEDIATE {text} USING {using}" if using else query
+
+
 class SparkSession:
     """An embedded session. Create one with ``SparkSession.builder.getOrCreate()``."""
 
@@ -263,7 +315,7 @@ class SparkSession:
         if not isinstance(sqlQuery, str):
             raise not_expected_type("sqlQuery", "str", sqlQuery)
         if args is not None or kwargs:
-            raise not_implemented("sql with parameters")
+            sqlQuery = _bind_parameters(sqlQuery, args, kwargs)
         return DataFrame(self._native.sql(sqlQuery), self)
 
     def table(self, tableName: str) -> DataFrame:
