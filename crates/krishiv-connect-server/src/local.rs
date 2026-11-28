@@ -52,10 +52,26 @@ impl LocalServer {
     /// # Errors
     /// `INTERNAL_ERROR` when no random source, port or thread is available.
     pub fn start(base: Session) -> Result<Self, KrishivError> {
-        Self::start_with(base, true)
+        Self::start_with(base, true, None)
     }
 
-    fn start_with(base: Session, want_v6: bool) -> Result<Self, KrishivError> {
+    /// [`Self::start`] with `host` running the Python UDFs of the server's sessions (the embedding
+    /// process's worker pool). Without a host a Python UDF is refused with `KRISHIV_UNSUPPORTED_FEATURE`.
+    ///
+    /// # Errors
+    /// As [`Self::start`].
+    pub fn start_with_udf_host(
+        base: Session,
+        host: Arc<dyn crate::UdfHost>,
+    ) -> Result<Self, KrishivError> {
+        Self::start_with(base, true, Some(host))
+    }
+
+    fn start_with(
+        base: Session,
+        want_v6: bool,
+        host: Option<Arc<dyn crate::UdfHost>>,
+    ) -> Result<Self, KrishivError> {
         let token = new_token()?;
         // No failure throttle: every local client shares the peer address 127.0.0.1, so another
         // process sending wrong tokens would lock the owner out. The token is 256 random bits, so
@@ -74,7 +90,17 @@ impl LocalServer {
         let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<(), KrishivError>>();
         let thread = std::thread::Builder::new()
             .name("krishiv-local-connect".to_owned())
-            .spawn(move || run(base, &auth, std_listener, v6_listener, stopped, &ready_tx))
+            .spawn(move || {
+                run(
+                    base,
+                    host,
+                    &auth,
+                    std_listener,
+                    v6_listener,
+                    stopped,
+                    &ready_tx,
+                )
+            })
             .map_err(|e| internal(format!("cannot start the server thread: {e}")))?;
         match ready_rx.recv() {
             Ok(Ok(())) => {}
@@ -229,6 +255,7 @@ fn new_token() -> Result<SecretString, KrishivError> {
 )]
 fn run(
     base: Session,
+    host: Option<Arc<dyn crate::UdfHost>>,
     auth: &Arc<ServerAuth>,
     listener: StdListener,
     listener6: Option<StdListener>,
@@ -247,7 +274,11 @@ fn run(
         }
     };
     let result = runtime.block_on(async {
-        let manager = Arc::new(SessionManager::from_base(base, SessionLimits::default()));
+        let mut manager = SessionManager::from_base(base, SessionLimits::default());
+        if let Some(host) = host {
+            manager = manager.with_udf_host(host);
+        }
+        let manager = Arc::new(manager);
         let config = ConnectServerConfig {
             // Nothing in flight outlives a stop for long: this is the user's own process.
             shutdown_timeout: std::time::Duration::from_secs(5),
@@ -337,7 +368,7 @@ mod tests {
     #[test]
     fn a_server_without_the_ipv6_listener_serves_on_ipv4_only_and_stops() {
         let mut server =
-            LocalServer::start_with(Session::new().expect("session"), false).expect("start");
+            LocalServer::start_with(Session::new().expect("session"), false, None).expect("start");
         assert_eq!(server.addrs(), vec![server.addr()]);
         assert!(server.is_running());
         server.stop().expect("stop");

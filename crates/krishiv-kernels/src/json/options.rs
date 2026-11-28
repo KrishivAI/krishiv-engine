@@ -58,6 +58,13 @@ pub struct JsonOptions {
     pub primitives_as_string: bool,
     /// `prefersDecimal` (a `schema_of_json` inference flag).
     pub prefers_decimal: bool,
+    /// `inferTimestamp` (a `schema_of_json` inference flag): strings may
+    /// infer `TIME`, `TIMESTAMP_NTZ` or `TIMESTAMP`.
+    pub infer_timestamp: bool,
+    /// `spark.sql.legacy.timeParserPolicy=LEGACY` (the options were built by
+    /// [`Self::from_map_with`] with `legacy`): inference reads a zone-less
+    /// timestamp text as `TIMESTAMP` (SPARK-46769).
+    pub legacy_parser: bool,
     /// `allowComments`.
     pub allow_comments: bool,
     /// `allowSingleQuotes`.
@@ -89,7 +96,8 @@ pub struct JsonOptions {
     /// is on under `timeParserPolicy=LEGACY` and when the option names no
     /// pattern, off otherwise.
     pub datetime_fallback: bool,
-    /// Spark 4.2 reads six fraction digits of a `TIME` (a `from_json` reader flag set from the
+    /// Spark 4.2 reads six fraction digits of a `TIME` in the default grammar, a `timeFormat`
+    /// every digit (a `from_json` reader flag set from the
     /// profile); 4.3 (`false`, the default) keeps nine.
     pub time_micros_only: bool,
 }
@@ -129,6 +137,7 @@ impl JsonOptions {
     ) -> Result<Self, KrishivError> {
         let mut out = Self::new();
         out.datetime_fallback = legacy;
+        out.legacy_parser = legacy;
         if legacy {
             // Under LEGACY the options carry explicit `FastDateFormat`
             // patterns even when none is named (`JSONOptions`).
@@ -156,7 +165,9 @@ impl JsonOptions {
                 "timeformat" => {
                     let pattern = DateTimePattern::new(value, Purpose::Parse)?;
                     out.time_format = Some(pattern);
-                    out.time_output = Some(DateTimePattern::new(value, Purpose::Format)?);
+                    // `HH:mm:ss` writes through Spark's fraction formatter.
+                    let output = DateTimePattern::new(value, Purpose::Format)?;
+                    out.time_output = (!output.is_default_time_pattern()).then_some(output);
                 }
                 "timestampformat" => {
                     let pattern = DateTimePattern::new(value, Purpose::Parse)?;
@@ -172,6 +183,7 @@ impl JsonOptions {
                 }
                 "primitivesasstring" => out.primitives_as_string = is_true(value),
                 "prefersdecimal" => out.prefers_decimal = is_true(value),
+                "infertimestamp" => out.infer_timestamp = is_true(value),
                 "allowcomments" => out.allow_comments = is_true(value),
                 "allowsinglequotes" => out.allow_single_quotes = is_true(value),
                 "allownumericleadingzeros" => out.allow_numeric_leading_zeros = is_true(value),

@@ -4,13 +4,13 @@
 use std::sync::{Arc, PoisonError, RwLock};
 
 use krishiv_common::config::{
-    Config, ConfigEntry, ConfigValue, PYTHON_UDTF_ARROW_ENABLED, SESSION_TIME_ZONE, Scope,
-    ValueType, lookup,
+    Config, ConfigEntry, ConfigValue, IO_TEXT_INFER_TIME, IO_TEXT_TIME_NANOS,
+    PYTHON_UDTF_ARROW_ENABLED, SESSION_TIME_ZONE, Scope, ValueType, lookup,
 };
 use krishiv_common::error::{
     CannotModifyStaticConfig, InvalidConfValueRequirement, InvalidConfValueTimeZone, KrishivError,
 };
-use krishiv_common::redact::is_redacted_setting;
+use krishiv_common::redact::{REDACTED, is_redacted_option, is_redacted_setting};
 use krishiv_kernels::cast::FixedOffset;
 use krishiv_kernels::datetime::{resolve_zone, zone_id};
 use krishiv_plan::analyzer::SparkProfile;
@@ -49,7 +49,13 @@ pub(crate) struct ConfStore {
 /// v4.1.0; `true` at v4.2.0).
 fn profile_default(entry: &ConfigEntry, profile: SparkProfile) -> Option<ConfigValue> {
     let before_4_2 = profile < SparkProfile::V4_2;
-    (entry.key == PYTHON_UDTF_ARROW_ENABLED.key && before_4_2).then_some(ConfigValue::Bool(false))
+    // Spark 4.2 reads a `TIME` of a CSV or JSON file in the default grammar as microseconds; 4.3 keeps
+    // nanoseconds (a `timeFormat` pattern keeps every digit in both). Only 4.3's text inference gives `TIME`.
+    let before_4_3 = profile < SparkProfile::V4_3;
+    ((entry.key == PYTHON_UDTF_ARROW_ENABLED.key && before_4_2)
+        || ((entry.key == IO_TEXT_TIME_NANOS.key || entry.key == IO_TEXT_INFER_TIME.key)
+            && before_4_3))
+        .then_some(ConfigValue::Bool(false))
 }
 
 /// Fails when `key` is one of the switches the engine refuses and `value` sets it to the refused value.
@@ -171,11 +177,15 @@ impl ConfStore {
     pub(crate) fn query_snapshot(&self) -> (Arc<Config>, u64) {
         let (config, version) = self.versioned_snapshot();
         let zone_unset = config.get(&SESSION_TIME_ZONE).is_none();
-        let profile_keys: Vec<(&ConfigEntry, ConfigValue)> = [&PYTHON_UDTF_ARROW_ENABLED]
-            .into_iter()
-            .filter(|entry| !config.is_set(entry))
-            .filter_map(|entry| Some((entry, profile_default(entry, self.profile)?)))
-            .collect();
+        let profile_keys: Vec<(&ConfigEntry, ConfigValue)> = [
+            &PYTHON_UDTF_ARROW_ENABLED,
+            &IO_TEXT_TIME_NANOS,
+            &IO_TEXT_INFER_TIME,
+        ]
+        .into_iter()
+        .filter(|entry| !config.is_set(entry))
+        .filter_map(|entry| Some((entry, profile_default(entry, self.profile)?)))
+        .collect();
         if !zone_unset && profile_keys.is_empty() {
             return (config, version);
         }
@@ -555,6 +565,17 @@ impl RuntimeConf {
     }
 }
 
+/// The value `SET` and `SET key` print for a pair: Spark's `SQLConf.redactOptions` hides it when
+/// the key or the value looks like a secret or names a URL
+/// ([`is_redacted_option`]). Only the echo of `SET key = value` shows such a value.
+pub(crate) fn shown(key: &str, value: String) -> String {
+    if is_redacted_option(key, &value) {
+        REDACTED.to_owned()
+    } else {
+        value
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -585,6 +606,30 @@ mod tests {
                 config.get(key).map(ToString::to_string).as_deref(),
                 Some("true")
             );
+        }
+    }
+
+    /// A `TIME` read from a CSV or JSON file keeps nanoseconds, and inference gives `TIME`, under the 4.3 profile
+    /// only: Spark 4.2 reads every `TIME` as microseconds and infers `TIMESTAMP` (`krishiv-session/tests/time_file_scan.rs`).
+    #[test]
+    fn text_time_nanos_follows_the_profile() {
+        for key in [
+            &krishiv_common::config::IO_TEXT_TIME_NANOS,
+            &krishiv_common::config::IO_TEXT_INFER_TIME,
+        ] {
+            for (profile, want) in [
+                (SparkProfile::V4_1, "false"),
+                (SparkProfile::V4_2, "false"),
+                (SparkProfile::V4_3, "true"),
+            ] {
+                let store = ConfStore::new(Config::default()).with_profile(profile);
+                let (config, _) = store.query_snapshot();
+                assert_eq!(
+                    config.get(key).map(ToString::to_string).as_deref(),
+                    Some(want),
+                    "{profile:?}"
+                );
+            }
         }
     }
 

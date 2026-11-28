@@ -5,6 +5,7 @@ from typing import Any
 
 from krishiv import _cpu
 
+_cpu.warn_if_both_builds_installed()
 _cpu.ensure_supported()  # before the native module: an old CPU would die with SIGILL there
 
 from krishiv._console import Console, ui  # noqa: E402

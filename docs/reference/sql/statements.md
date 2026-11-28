@@ -42,6 +42,36 @@ DROP TABLE t2;
 DROP NAMESPACE demo CASCADE;                 -- without CASCADE a non-empty namespace is refused (SCHEMA_NOT_EMPTY)
 ```
 
+## information_schema
+
+`spark_catalog.information_schema` (also `information_schema` while `spark_catalog` is current) has six
+read-only views over the session catalog. Spark has no `information_schema`, so the column names are the
+SQL-standard ones.
+
+| View | Columns |
+|---|---|
+| `catalogs` | `catalog_name` (the session catalog, `spark_catalog`) |
+| `schemata` | `catalog_name`, `schema_name` |
+| `tables` | `table_catalog`, `table_schema`, `table_name`, `table_type` (`BASE TABLE` or `VIEW`) |
+| `columns` | `table_catalog`, `table_schema`, `table_name`, `column_name`, `ordinal_position` (from 1), `data_type` (Spark's simple string), `is_nullable` (`YES` or `NO`) |
+| `routines` | `routine_catalog`, `routine_schema`, `routine_name`, `routine_type` (`FUNCTION`; the stored functions, not built-in or temporary ones) |
+| `views` | `table_catalog`, `table_schema`, `table_name`, `view_definition` (the view's SQL text) |
+
+```sql
+SELECT table_schema, table_name FROM information_schema.tables WHERE table_type = 'VIEW';
+SELECT column_name, data_type FROM information_schema.columns
+ WHERE table_schema = 'demo' AND table_name = 't' ORDER BY ordinal_position;
+```
+
+Rows follow the `SHOW TABLES` / `SHOW NAMESPACES` listing rule: an object the principal may not list is absent, as
+it is there. `view_definition` is shown only for a view the principal may also `SELECT` (a view's text is data). The
+views themselves are readable by every principal, also under the `grants` provider. `information_schema` has no row
+in `schemata` or `tables`, and `catalogs` always shows `spark_catalog`. Temporary views and declared catalogs are not
+listed yet.
+
+`information_schema` is reserved in `spark_catalog`: creating, dropping or writing it or a table in it fails with
+`KRISHIV_RESERVED_NAME` (Spark has no such namespace, so this diverges only for a workload that created one).
+
 ## Writing data
 
 ```sql

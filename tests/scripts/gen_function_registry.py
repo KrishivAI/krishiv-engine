@@ -103,6 +103,14 @@ def matrix_cases() -> str:
     return "\n".join(out) + "\n"
 
 
+# Rows of Spark 4.3 functions no probed image has yet (the images end at 4.2): kept verbatim on every run, so a
+# regeneration does not drop them. Remove an entry when an image of 4.3 is probed and lists the function.
+HAND_ADDED = {
+    "timestamp_nanos": "timestamp_nanos\tfunction\t4.3\ttrue\tscalar\t0100000\t1",
+    "unix_nanos": "unix_nanos\tfunction\t4.3\ttrue\tscalar\t0100000\t1",
+}
+
+
 def main() -> int:
     first: dict[str, str] = {}
     kinds: dict[str, str] = {}
@@ -133,6 +141,9 @@ def main() -> int:
         counts = "".join("1" if v == "ok" else "0" for v in verdicts)
         expected = next((v for v in verdicts if v not in ("ok", "?")), "")
         rows.append(f"{name}\t{kinds[name]}\t{first[name]}\t{det}\t{kind}\t{counts}\t{expected}")
+    probed = {r.split("\t", 1)[0] for r in rows[1:]}
+    rows += [row for name, row in sorted(HAND_ADDED.items()) if name not in probed]
+    rows = rows[:1] + sorted(rows[1:], key=lambda r: r.split("\t", 1)[0])
     OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_text("\n".join(rows) + "\n", encoding="utf-8")
     print(f"{len(first)} names written to {OUT.relative_to(ROOT)}")

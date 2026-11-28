@@ -4,7 +4,7 @@
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
     Date32Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type, Int64Type,
-    TimestampMicrosecondType,
+    Time64NanosecondType, TimestampMicrosecondType,
 };
 use arrow_array::{Array, RecordBatch};
 use arrow_schema::{DataType, Schema};
@@ -36,8 +36,9 @@ pub(crate) struct CsvEncoder {
 
 impl CsvEncoder {
     pub(crate) fn new(schema: &Schema, o: &FormatOptions) -> FormatResult<Self> {
+        crate::text::refuse_time_without_gate(schema, o)?;
         let opts = CsvOptions::new(o, true)?;
-        let dt = Datetimes::new(o, Purpose::Format)?;
+        let dt = Datetimes::csv(o, Purpose::Format)?;
         let style = o.str("binaryOutputStyle").unwrap_or("HEX_DISCRETE");
         let binary = BinaryStyle::from_name(style).ok_or_else(|| {
             crate::text::invalid_option(
@@ -219,6 +220,13 @@ impl CsvEncoder {
                     .dt
                     .format_ntz(a.as_primitive::<TimestampMicrosecondType>().value(i))
                     .map_err(write_err)?,
+            ),
+            (Kind::Time, _) => buf.push_str(
+                &self
+                    .dt
+                    .format_time(a.as_primitive::<Time64NanosecondType>().value(i))
+                    // Spark: `TASK_WRITE_FAILED` at the first non-NULL `TIME`.
+                    .map_err(|e| FormatError::WriteFailed(e.to_string()))?,
             ),
             (Kind::YearMonth(..) | Kind::DayTime(..), _) => {
                 buf.push_str(&interval_text(kind, a, i).unwrap_or_default());

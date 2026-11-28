@@ -55,21 +55,20 @@ fn time_add_interval_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> 
         })
     );
     let precision = if seconds { p.max(6) } else { p };
-    Ok(ArgType::new(
-        DataType::Time { precision },
-        c.args().iter().take(2).any(|a| a.nullable),
-    ))
+    // `RuntimeReplaceable` over a `StaticInvoke` with `returnNullable = true`: nullable whatever the operands.
+    Ok(ArgType::new(DataType::Time { precision }, true))
 }
 
 /// `SubtractTimes`: an `INTERVAL HOUR TO SECOND`.
-fn subtract_times_result(c: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
-    typed(
+/// Nullable whatever the operands, as `TimeAddInterval` is.
+fn subtract_times_result(_: &CallTypes<'_>) -> Result<ArgType, KrishivError> {
+    Ok(ArgType::new(
         DataType::DayTimeInterval {
             start: DayTimeField::Hour,
             end: DayTimeField::Second,
         },
-        c,
-    )
+        true,
+    ))
 }
 
 /// `time_bucket(bucketSize, ts, origin)` (Spark 4.2 `TimeBucket` through `TimeBucketExpressionBuilder`): no

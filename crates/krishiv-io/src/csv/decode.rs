@@ -126,7 +126,7 @@ impl CsvDecoder {
     ) -> FormatResult<Self> {
         let m: TextMetadata = crate::text::downcast(m)?;
         let opts = CsvOptions::new(o, false)?;
-        let dt = Datetimes::new(o, Purpose::Parse)?;
+        let dt = Datetimes::csv(o, Purpose::Parse)?;
         let schema = req.output_schema()?;
         let table = &req.table_schema;
         // Token positions: the table's columns without the corrupt-record one.

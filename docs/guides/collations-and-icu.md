@@ -11,7 +11,26 @@ letters outside ASCII are ordered. Krishiv follows Spark's collation names and t
 ## ICU support
 
 Krishiv uses the ICU Unicode library for collation sort keys and case mapping when the `collations-icu` feature is
-on. The default builds of the `krishiv` crate and of the `krishiv` command-line binary have it on.
+on. Which builds have it, from 0.3.0 on:
+
+| Build | ICU collations |
+|---|---|
+| The `krishiv` crate with its default features | yes |
+| The `krishiv` command-line binary: the release downloads, `cargo install krishiv-cli` and the Docker image | yes |
+| The Python wheels (`pip install krishiv`, `pip install krishiv-compat`) | no |
+
+`UTF8_BINARY`, `UTF8_LCASE` and their `_RTRIM` forms do not need ICU. In a build without it, a comparison, a sort
+or grouping key, or `upper` / `lower` under an ICU collation (`UNICODE`, `UNICODE_CI`, a language such as `de`)
+raises `KRISHIV_UNSUPPORTED_FEATURE`:
+
+```sql
+SELECT 'a' COLLATE UNICODE_CI = 'A';
+-- a wheel: KRISHIV_UNSUPPORTED_FEATURE
+-- the command-line binary: true
+```
+
+The message names the operation, not ICU. From Python, send the query to a `krishiv server` started from the binary
+or the Docker image over Spark Connect to use an ICU collation.
 
 With ICU on:
 

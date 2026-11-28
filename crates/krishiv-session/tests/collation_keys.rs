@@ -597,3 +597,32 @@ fn greatest_and_least_under_an_explicit_binary_collation_compare_bytes() {
     assert_eq!(rows(&q("greatest")), ["a"]);
     assert_eq!(rows(&q("least")), ["B"]);
 }
+
+/// The collation rewrites keep Spark's nullability: `instr`, `locate`, `=` and the `StringPredicate`s
+/// (`contains`, `startswith`, `endswith`) are `BinaryExpression`s in Spark, NOT NULL over NOT NULL
+/// operands, whatever the collation (Spark 4.2.0/4.3.0 `instr_collated` schemas in
+/// `time-precision-goldens.json`; `stringExpressions.scala` `StringPredicate`).
+#[test]
+fn collated_string_searches_keep_their_operands_nullability() {
+    let s = Session::new().unwrap();
+    let nullable = |e: &str, from: &str| {
+        let sql = format!("SELECT {e} FROM {from}");
+        let a = block_on(s.analyze(&sql)).unwrap_or_else(|err| panic!("{sql}: {err}"));
+        a.output_schema[0].nullable
+    };
+    let not_null = "VALUES ('apple') t(name)";
+    let maybe_null = "VALUES ('apple'), (NULL) t(name)";
+    for e in [
+        "instr(name COLLATE UTF8_LCASE, 'PL')",
+        "instr(name, 'pl' COLLATE UTF8_LCASE)",
+        "locate('PL', name COLLATE UTF8_LCASE)",
+        "name COLLATE UTF8_LCASE = 'APPLE'",
+        "contains(name COLLATE UTF8_LCASE, 'PL')",
+        "startswith(name COLLATE UTF8_LCASE, 'AP')",
+        "endswith(name COLLATE UTF8_LCASE, 'LE')",
+        "contains(name COLLATE UTF8_LCASE, name)",
+    ] {
+        assert!(!nullable(e, not_null), "{e} over a NOT NULL column");
+        assert!(nullable(e, maybe_null), "{e} over a nullable column");
+    }
+}

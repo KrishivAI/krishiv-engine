@@ -3,6 +3,10 @@
 
 use super::*;
 
+/// The session `TIME` gate, given to `schema_of_csv` inference as the CSV
+/// option named as the conf.
+const TIME_TYPE_CONF: &str = krishiv_common::config::TIME_TYPE_ENABLED;
+
 /// The default message of `assert_true(cond)`: `'<cond>' is not true!`,
 /// with casts stripped as Spark's `toPrettySQL` strips them.
 pub(super) fn assert_message(cond: &Bound, origin: Origin, zone: Option<SessionZone>) -> Bound {
@@ -576,7 +580,8 @@ impl Resolver<'_> {
                     _ => return Ok(()),
                 },
             };
-            match krishiv_functions::scalar::schema_of_json_ddl(&csv, &pairs)
+            match self
+                .json_ddl(&csv, &pairs)
                 .map_err(|err| AnalysisError::new(err, e.origin))?
             {
                 Some(ddl) => ddl,
@@ -614,6 +619,52 @@ impl Resolver<'_> {
         Ok(())
     }
 
+    /// The DDL `schema_of_json(json, options)` folds to, under the session
+    /// settings Spark's `JsonInferSchema` reads from `SQLConf`: the `TIME`
+    /// gate (inference knows `TIME` only under the 4.3 profile, Spark 4.2.1
+    /// run in `tests/fixtures/spark-4.2.1/time-text-profiles.json`), the
+    /// default timestamp type, the parser policy and the zone (the options'
+    /// `timeZone`, else the session's).
+    fn json_ddl(
+        &self,
+        json: &str,
+        pairs: &[(String, String)],
+    ) -> Result<Option<String>, krishiv_common::error::KrishivError> {
+        let conf = &self.ctx.conf;
+        let named = pairs
+            .iter()
+            .rev()
+            .find(|(k, _)| k.eq_ignore_ascii_case("timeZone"))
+            .map(|(_, v)| krishiv_kernels::datetime::resolve_zone(v))
+            .transpose()?;
+        let utc = krishiv_kernels::cast::FixedOffset(0);
+        // An unset session zone is UTC, as on the cast path (`AnalyzerConf::session_zone`).
+        let zone: &dyn krishiv_kernels::cast::TimeZoneRules = match &named {
+            Some(z) => z,
+            None => conf
+                .session_zone
+                .as_ref()
+                .map_or(&utc as &dyn krishiv_kernels::cast::TimeZoneRules, |z| z),
+        };
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()
+            .and_then(|d| i64::try_from(d.as_micros()).ok())
+            .unwrap_or(0);
+        let session = krishiv_kernels::json::InferSession {
+            time_type: conf.time_type && self.ctx.profile >= crate::analyzer::SparkProfile::V4_3,
+            default_ntz: conf.timestamp_ntz,
+            zone,
+            today: krishiv_kernels::text::today_in(now, zone),
+        };
+        krishiv_functions::scalar::schema_of_json_ddl(
+            json,
+            pairs,
+            conf.legacy_time_parser,
+            &session,
+        )
+    }
+
     /// The DDL `schema_of_csv(csv[, options])` resolves to (`None`: defaults).
     pub(super) fn csv_ddl(
         &self,
@@ -621,38 +672,45 @@ impl Resolver<'_> {
         csv: &str,
         options: Option<&Bound>,
     ) -> Result<String, AnalysisError> {
-        let options = match options {
-            None => krishiv_io::FormatOptions::defaults(krishiv_io::csv::option_schema()),
-            Some(opts) => {
-                // Options other than a literal map keep the call (the
-                // signature accepts them; the executor has no binding).
-                let ExprNode::Literal(Literal::Map(pairs)) = &opts.expr.node else {
-                    return Err(AnalysisError::new(
-                        InternalError {
-                            message: "schema_of_csv options are not a map literal".to_owned(),
-                        },
-                        e.origin,
-                    ));
-                };
-                // Option names are case-insensitive: of two spellings of one
-                // name, the one written last wins (Spark's `CaseInsensitiveMap`).
-                let mut user: std::collections::BTreeMap<
-                    String,
-                    krishiv_common::secret::OptionValue,
-                > = std::collections::BTreeMap::new();
-                for (k, v) in pairs {
-                    user.retain(|seen, _| !seen.eq_ignore_ascii_case(k));
-                    user.insert(
-                        k.clone(),
-                        krishiv_common::secret::OptionValue::from_user(k, v.clone()),
-                    );
-                }
-                krishiv_io::csv::option_schema()
-                    .parse(&user, &krishiv_common::config::Config::new())
-                    .map_err(|err| AnalysisError::new(err, e.origin))?
-                    .0
+        // Option names are case-insensitive: of two spellings of one name,
+        // the one written last wins (Spark's `CaseInsensitiveMap`).
+        let mut user: std::collections::BTreeMap<String, krishiv_common::secret::OptionValue> =
+            std::collections::BTreeMap::new();
+        if let Some(opts) = options {
+            // Options other than a literal map keep the call (the signature
+            // accepts them; the executor has no binding).
+            let ExprNode::Literal(Literal::Map(pairs)) = &opts.expr.node else {
+                return Err(AnalysisError::new(
+                    InternalError {
+                        message: "schema_of_csv options are not a map literal".to_owned(),
+                    },
+                    e.origin,
+                ));
+            };
+            for (k, v) in pairs {
+                user.retain(|seen, _| !seen.eq_ignore_ascii_case(k));
+                user.insert(
+                    k.clone(),
+                    krishiv_common::secret::OptionValue::from_user(k, v.clone()),
+                );
             }
-        };
+        }
+        // Inference gives `TIME` only under the session's gate (Spark 4.3.0's
+        // `CSVInferSchema` reads `SQLConf.isTimeTypeEnabled`), never an option,
+        // and only under the 4.3 profile: Spark 4.2.1 infers `TIMESTAMP` with
+        // the gate on (`tests/fixtures/spark-4.2.1/time-text-profiles.json`).
+        let infers_time =
+            self.ctx.conf.time_type && self.ctx.profile >= crate::analyzer::SparkProfile::V4_3;
+        let schema = krishiv_io::csv::option_schema();
+        let mut user = schema.without_session_confs(&user).into_owned();
+        user.insert(
+            TIME_TYPE_CONF.to_owned(),
+            krishiv_common::secret::OptionValue::from_user(TIME_TYPE_CONF, infers_time.to_string()),
+        );
+        let options = schema
+            .parse(&user, &krishiv_common::config::Config::new())
+            .map_err(|err| AnalysisError::new(err, e.origin))?
+            .0;
         krishiv_io::csv::ddl_of_string(csv, &options).map_err(|err| {
             AnalysisError::new(
                 match err {
