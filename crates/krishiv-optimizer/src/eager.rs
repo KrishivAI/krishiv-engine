@@ -46,12 +46,16 @@
 //! Gates ([`Gates`]), read from statistics only:
 //!
 //! - the join keeps at least [`MIN_RETENTION`] of `S`'s rows;
-//! - the groups, the product of the keys' distinct counts, are at most
-//!   `1 / `[`MIN_REDUCTION`] of `S`'s rows;
+//! - the groups can be at most `1 / `[`MIN_REDUCTION`] of `S`'s rows: the
+//!   largest distinct count of one key is (the product of the counts is only
+//!   an upper bound, as keys correlate: a customer's rows share the dates of
+//!   their tickets, TPC-DS q38/q87); an input that turns out not to reduce
+//!   makes each thread-local table append-only at run time;
 //! - at most one key beyond the join's own;
 //! - the other side is a table read whole (only filters that a plain `=` key
 //!   of the join is not NULL, as inferred join filters add them, may sit on
-//!   it). A filtered dimension prunes the aggregated side through a runtime
+//!   it; through projections renaming the key and `Shift`s, as a shared
+//!   scan's second reader has). A filtered dimension prunes the aggregated side through a runtime
 //!   filter, which pays more than grouping and which a smaller aggregate could
 //!   take away by becoming the join's build side; estimates cannot see this, as
 //!   they read a key's matches from its distinct counts (TPC-DS q12, q43 and
@@ -374,10 +378,14 @@ impl<'a> Shape<'a> {
             .cloned()
             .collect();
         let extra = keys.iter().filter(|k| !equi.contains(&k.id)).count();
+        if grouped_within(side, &keys) {
+            return Err("the side is already a partial aggregate on these keys".to_owned());
+        }
         let gates = Gates {
             rows: side_est.rows,
             joined: est.plan(join).rows,
             groups: groups_of(&keys, &side_est)?,
+            least_groups: least_groups_of(&keys, &side_est),
             extra,
         };
         gates.check()?;
@@ -593,7 +601,39 @@ fn states_of(
 /// rows the join would keep: that dimension is filtered.
 fn read_whole(p: &LogicalPlan, keys: &Attrs) -> bool {
     match &p.node {
-        PlanNode::Project { input, .. } => read_whole(input, keys),
+        // A projection renaming a key (`c#1 AS c#2`) tests the key under its
+        // input's id below it.
+        PlanNode::Project { input, exprs } => {
+            let below: Attrs = keys
+                .iter()
+                .map(|id| {
+                    exprs
+                        .iter()
+                        .find_map(|e| match &e.node {
+                            ExprNode::Resolved(ResolvedExpr::Alias { expr, output })
+                                if output.id == *id =>
+                            {
+                                match &expr.node {
+                                    ExprNode::Resolved(ResolvedExpr::Column(c)) => Some(c.id),
+                                    _ => None,
+                                }
+                            }
+                            _ => None,
+                        })
+                        .unwrap_or(*id)
+                })
+                .collect();
+            read_whole(input, &below)
+        }
+        // A `Shift` renumbers ids only (a shared scan's second reader): the
+        // keys less the offset below it.
+        PlanNode::Shift { input, offset } => {
+            let below: Option<Attrs> = keys
+                .iter()
+                .map(|id| id.0.checked_sub(*offset).map(AttrId))
+                .collect();
+            below.is_some_and(|below| read_whole(input, &below))
+        }
         PlanNode::Filter { input, predicate } => {
             conjuncts(predicate)
                 .iter()
@@ -601,6 +641,21 @@ fn read_whole(p: &LogicalPlan, keys: &Attrs) -> bool {
                 && read_whole(input, keys)
         }
         PlanNode::Scan(_) => true,
+        _ => false,
+    }
+}
+
+/// Whether `p` is (under filters) a partial aggregate grouped by some of
+/// `keys`: its rows are already distinct on them, so another one below the
+/// join reduces nothing. Without it the gate, which reads the fewest groups
+/// the keys can make, would push a second one on the next optimization.
+fn grouped_within(p: &LogicalPlan, keys: &[BoundColumn]) -> bool {
+    match &p.node {
+        PlanNode::Filter { input, .. } => grouped_within(input, keys),
+        PlanNode::PartialAggregate { keys: grouped, .. } => grouped.iter().all(|g| match &g.node {
+            ExprNode::Resolved(ResolvedExpr::Column(c)) => keys.iter().any(|k| k.id == c.id),
+            _ => false,
+        }),
         _ => false,
     }
 }
@@ -760,8 +815,10 @@ struct Gates {
     rows: f64,
     /// The join's rows.
     joined: f64,
-    /// `S`'s groups.
+    /// `S`'s groups, at most: the product of the keys' distinct counts.
     groups: f64,
+    /// `S`'s groups, at least: the largest distinct count of one key.
+    least_groups: f64,
     /// Keys beyond the join's own.
     extra: usize,
 }
@@ -771,7 +828,13 @@ impl Gates {
         if self.joined < MIN_RETENTION * self.rows {
             return Err(format!("retention below {MIN_RETENTION}: {self}"));
         }
-        if self.rows < MIN_REDUCTION * self.groups {
+        // The product of the keys' distinct counts is an upper bound (it
+        // assumes the keys independent); the largest one is a lower bound. Only
+        // a lower bound that fails refuses: correlated keys (a customer and the
+        // dates of their tickets, TPC-DS q38/q87) reduce far more than the
+        // product says, and an input that does not reduce is caught at run
+        // time (the thread-local table turns append-only, `rowtable.rs`).
+        if self.rows < MIN_REDUCTION * self.least_groups {
             return Err(format!("reduction below {MIN_REDUCTION}: {self}"));
         }
         if self.extra > MAX_EXTRA_KEYS {
@@ -785,8 +848,8 @@ impl std::fmt::Display for Gates {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "rows {:.0}, joined {:.0}, groups {:.0}, extra keys {}",
-            self.rows, self.joined, self.groups, self.extra
+            "rows {:.0}, joined {:.0}, groups {:.0} to {:.0}, extra keys {}",
+            self.rows, self.joined, self.least_groups, self.groups, self.extra
         )
     }
 }
@@ -823,6 +886,17 @@ fn groups_of(keys: &[BoundColumn], side: &RelStats) -> Result<f64, String> {
         groups *= c.ndv;
     }
     Ok(groups.min(side.rows))
+}
+
+/// The largest distinct count of one of `keys` limited to the side's rows: the
+/// fewest groups the keys can make. Read after [`groups_of`], which refuses a
+/// key whose count is a guess.
+fn least_groups_of(keys: &[BoundColumn], side: &RelStats) -> f64 {
+    keys.iter()
+        .filter_map(|k| side.cols.get(&k.id).filter(|c| c.ndv_known()))
+        .map(|c| c.ndv)
+        .fold(1.0_f64, f64::max)
+        .min(side.rows)
 }
 
 /// Whether `e` may raise under ANSI, where exact decimal arithmetic
