@@ -9,7 +9,7 @@
 //!   partition, a directory that is not inside the warehouse);
 //! - `INSERT INTO|OVERWRITE` (each clause, a multi-table insert too): `MODIFY` and `CREATE` on the table's
 //!   location, existing or not, as the writer asks them (`Session::authorize_write_path`); not for a
-//!   clause the run refuses before it writes (`REPLACE`, `OVERWRITE ... PARTITION`). A
+//!   clause the run refuses before it writes (`REPLACE`, `PARTITION ... IF NOT EXISTS`). A
 //!   multi-table insert with a table that cannot be found lists none: the run resolves every target before
 //!   any clause writes, so it fails before it asks. A Delta table's clause lists nothing: its writer
 //!   commits to the log the table's own `MODIFY` covers and asks about no directory (`insert_delta`);
@@ -128,7 +128,7 @@ impl Session {
                     let refused = c.replace_where.is_some()
                         || c.replace_on.is_some()
                         || c.replace_using.is_some()
-                        || (c.partition.is_some() && (c.overwrite || c.if_not_exists));
+                        || (c.partition.is_some() && c.if_not_exists);
                     #[cfg(feature = "delta")]
                     let delta = crate::table_commands::is_delta_table(table);
                     #[cfg(not(feature = "delta"))]
