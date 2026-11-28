@@ -6,7 +6,7 @@
 //! (ClickBench q14: 7.7% of samples). [`string_array`] checks the whole
 //! buffer with `simdutf8` (SIMD, chosen at run time) and every offset, then
 //! builds the array with `new_unchecked`, so nothing is checked twice.
-//! The last 128 bytes go to `std` instead ([`is_utf8`]: simdutf8's AVX2
+//! The last 128 bytes go to `std` instead (`is_utf8`: simdutf8's AVX2
 //! prefetch pointer would otherwise leave the allocation).
 //!
 //! Its checks are a superset of `try_new`'s in arrow-array 60.0 through
