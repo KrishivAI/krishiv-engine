@@ -82,3 +82,17 @@ fn schema_of_json_infers_times_as_spark_runs() {
         }
     }
 }
+
+/// The zone `schema_of_json` infers under: the options' `timeZone` wins over
+/// the session's (Spark 4.2.1 / 4.3.0 runs: `STRUCT<a: TIMESTAMP>`).
+#[test]
+fn schema_of_json_reads_the_options_time_zone() {
+    let s = Session::builder()
+        .profile(SparkProfile::V4_3)
+        .build()
+        .unwrap();
+    let sql = "SELECT schema_of_json('{\"a\":\"2024-01-02 03:04:05\"}', \
+               map('inferTimestamp', 'true', 'timeZone', '+05:00'))";
+    let got = block_on(async { s.sql(sql).await?.collect().await }).unwrap();
+    assert_eq!(first_text(&got).as_deref(), Some("STRUCT<a: TIMESTAMP>"));
+}

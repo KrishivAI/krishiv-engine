@@ -638,10 +638,13 @@ impl Resolver<'_> {
             .map(|(_, v)| krishiv_kernels::datetime::resolve_zone(v))
             .transpose()?;
         let utc = krishiv_kernels::cast::FixedOffset(0);
-        let zone: &dyn krishiv_kernels::cast::TimeZoneRules = match (&named, &conf.session_zone) {
-            (Some(z), _) => z,
-            (None, Some(z)) => z,
-            (None, None) => &utc,
+        // An unset session zone is UTC, as on the cast path (`AnalyzerConf::session_zone`).
+        let zone: &dyn krishiv_kernels::cast::TimeZoneRules = match &named {
+            Some(z) => z,
+            None => conf
+                .session_zone
+                .as_ref()
+                .map_or(&utc as &dyn krishiv_kernels::cast::TimeZoneRules, |z| z),
         };
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

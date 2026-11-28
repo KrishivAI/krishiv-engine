@@ -139,10 +139,13 @@ pub fn number_decimal(raw: &str) -> Result<NumberDecimal, KrishivError> {
     let Some((p, scale)) = java_big_decimal(raw) else {
         return Ok(NumberDecimal::Double);
     };
-    let width = p.max(scale);
-    if width > MAX_PRECISION {
+    // `DOUBLE` past 38 digits (a width that does not fit a `u8` is past them).
+    let Some(width) = u8::try_from(p.max(scale))
+        .ok()
+        .filter(|w| i64::from(*w) <= MAX_PRECISION)
+    else {
         return Ok(NumberDecimal::Double);
-    }
+    };
     if scale < 0 {
         return Err(NegativeScaleDisallowed {
             scale: scale.to_string(),
@@ -150,10 +153,8 @@ pub fn number_decimal(raw: &str) -> Result<NumberDecimal, KrishivError> {
         }
         .into());
     }
-    match (u8::try_from(width), i8::try_from(scale)) {
-        (Ok(p), Ok(s)) => Ok(NumberDecimal::Decimal(p, s)),
-        _ => Ok(NumberDecimal::Double),
-    }
+    // `0 <= scale <= width <= 38`, so the scale fits an `i8`.
+    Ok(i8::try_from(scale).map_or(NumberDecimal::Double, |s| NumberDecimal::Decimal(width, s)))
 }
 
 /// Spark's `compatibleType` of two decimals: the wider integral range plus
@@ -216,6 +217,11 @@ mod tests {
         assert_eq!(string_decimal("0.5"), Some((1, 1)));
         assert_eq!(string_decimal(&"9".repeat(38)), Some((38, 0)));
         assert_eq!(string_decimal(&"9".repeat(39)), None);
+        // An exponent past `int` is Java's `NumberFormatException`: the text
+        // stays a string (Spark 4.2.1 / 4.3.0 runs: `{"a":"1e3000000000"}`
+        // under prefersDecimal reads `struct<a:string>`).
+        assert_eq!(java_big_decimal("1e3000000000"), None);
+        assert_eq!(string_decimal("1e3000000000"), None);
     }
 
     #[test]
