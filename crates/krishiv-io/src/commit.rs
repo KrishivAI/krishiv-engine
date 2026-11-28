@@ -275,6 +275,7 @@ impl DirectoryWrite {
             let (dead, overwrite) = (dead_jobs.clone(), self.overwrite);
             io.sweep_staging(&self.store, &self.dir, move |name, modified| {
                 let base = name.split_once('#').map_or(name, |(base, _)| base);
+                let base = base.strip_prefix('.').unwrap_or(base);
                 dead.iter().any(|j| is_job_file(base, j)) || (overwrite && modified <= cutoff)
             })
             .await

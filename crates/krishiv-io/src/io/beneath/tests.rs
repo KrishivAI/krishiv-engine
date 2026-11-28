@@ -617,12 +617,12 @@ async fn staging_names_that_exist_are_skipped_with_o_excl() {
         let f = fixture();
         let s = store(&f, components);
         std::fs::create_dir_all(f.root.join("a/t")).unwrap();
-        // `part#1` is a link to an outside file, `part#2` a plain file.
-        symlink(f.outside.join("keep"), f.root.join("a/t/part#1")).unwrap();
-        std::fs::write(f.root.join("a/t/part#2"), b"mine").unwrap();
+        // `.part#1` is a link to an outside file, `.part#2` a plain file.
+        symlink(f.outside.join("keep"), f.root.join("a/t/.part#1")).unwrap();
+        std::fs::write(f.root.join("a/t/.part#2"), b"mine").unwrap();
         put(&s, &obj(&f, "t/part"), b"data").await.unwrap();
         assert_eq!(std::fs::read(f.outside.join("keep")).unwrap(), b"outside");
-        assert_eq!(std::fs::read(f.root.join("a/t/part#2")).unwrap(), b"mine");
+        assert_eq!(std::fs::read(f.root.join("a/t/.part#2")).unwrap(), b"mine");
         assert_eq!(std::fs::read(f.root.join("a/t/part")).unwrap(), b"data");
     }
 }
@@ -850,4 +850,26 @@ fn a_directory_that_keeps_changing_is_listed_after_the_last_pass() {
     });
     assert_eq!(calls, SETTLE_PASSES);
     assert!(listed.is_empty(), "{listed:?}");
+}
+
+#[tokio::test]
+async fn an_upload_in_flight_is_staged_under_a_hidden_name() {
+    // Spark skips names starting with `.`: a writer killed mid-upload leaves nothing it reads (R1-V-2).
+    for components in [false, true] {
+        let f = fixture();
+        let s = store(&f, components);
+        let mut up = object_store::ObjectStoreExt::put_multipart(&s, &obj(&f, "t/part-0"))
+            .await
+            .unwrap();
+        up.put_part(bytes::Bytes::from_static(b"half").into())
+            .await
+            .unwrap();
+        let names: Vec<String> = std::fs::read_dir(f.root.join("a/t"))
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names.len(), 1, "{names:?}");
+        assert!(names[0].starts_with(".part-0#"), "{names:?}");
+        assert!(is_staging(&names[0]));
+    }
 }

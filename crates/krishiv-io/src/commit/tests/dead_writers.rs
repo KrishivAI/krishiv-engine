@@ -111,7 +111,7 @@ fn an_append_sweeps_the_unlogged_files_of_a_dead_writer_and_only_those() {
     );
 }
 
-/// PY-054 (kill -9 mid-file): the local store stages an upload as `<name>#<n>` and hides it from
+/// PY-054 (kill -9 mid-file): the local store stages an upload as `.<name>#<n>` (`<name>#<n>` before R1-V-2) and hides it from
 /// listings, so a killed write leaves a partial file that only a directory read finds. The next
 /// write deletes a dead writer's staging files and keeps a live writer's.
 #[test]
@@ -127,7 +127,9 @@ fn a_write_deletes_the_hidden_staging_files_of_a_dead_writer_only() {
     let nested = dir.join("p=1/part-00001-job-2_1-c001.snappy.parquet#2");
     let live = dir.join("part-00000-job-3-c000.snappy.parquet#1");
     let other = dir.join("part-00000-job-22-c000.snappy.parquet#1");
-    for f in [&dead, &nested, &live, &other] {
+    // The name the store stages an upload under now: hidden from Spark by the leading dot.
+    let hidden = dir.join(".part-00002-job-2-c002.snappy.parquet#1");
+    for f in [&dead, &nested, &live, &other, &hidden] {
         std::fs::write(f, b"partial").unwrap();
     }
     let machine_id = me.lines().next().unwrap();
@@ -147,7 +149,7 @@ fn a_write_deletes_the_hidden_staging_files_of_a_dead_writer_only() {
     }
     env.write_logged(rel, SaveMode::Overwrite, "job-4", 2, true);
     assert!(
-        !dead.exists() && !nested.exists(),
+        !dead.exists() && !nested.exists() && !hidden.exists(),
         "dead writer's files stay"
     );
     assert!(live.exists(), "a live writer's staging file was deleted");
