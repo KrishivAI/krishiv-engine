@@ -58,6 +58,13 @@ pub struct JsonOptions {
     pub primitives_as_string: bool,
     /// `prefersDecimal` (a `schema_of_json` inference flag).
     pub prefers_decimal: bool,
+    /// `inferTimestamp` (a `schema_of_json` inference flag): strings may
+    /// infer `TIME`, `TIMESTAMP_NTZ` or `TIMESTAMP`.
+    pub infer_timestamp: bool,
+    /// `spark.sql.legacy.timeParserPolicy=LEGACY` (the options were built by
+    /// [`Self::from_map_with`] with `legacy`): inference reads a zone-less
+    /// timestamp text as `TIMESTAMP` (SPARK-46769).
+    pub legacy_parser: bool,
     /// `allowComments`.
     pub allow_comments: bool,
     /// `allowSingleQuotes`.
@@ -130,6 +137,7 @@ impl JsonOptions {
     ) -> Result<Self, KrishivError> {
         let mut out = Self::new();
         out.datetime_fallback = legacy;
+        out.legacy_parser = legacy;
         if legacy {
             // Under LEGACY the options carry explicit `FastDateFormat`
             // patterns even when none is named (`JSONOptions`).
@@ -175,6 +183,7 @@ impl JsonOptions {
                 }
                 "primitivesasstring" => out.primitives_as_string = is_true(value),
                 "prefersdecimal" => out.prefers_decimal = is_true(value),
+                "infertimestamp" => out.infer_timestamp = is_true(value),
                 "allowcomments" => out.allow_comments = is_true(value),
                 "allowsinglequotes" => out.allow_single_quotes = is_true(value),
                 "allownumericleadingzeros" => out.allow_numeric_leading_zeros = is_true(value),

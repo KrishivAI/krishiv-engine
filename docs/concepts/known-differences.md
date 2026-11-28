@@ -197,12 +197,12 @@ had the declared ones. Krishiv refuses such a result instead, and the error depe
   (SQLSTATE 22000), which names the returned and the declared type. `mapInPandas` converts each column to its
   declared type as PySpark's worker does (a `long` column declared `int` is returned as `int`) and raises
   `PYTHON_EXCEPTION` with the conversion's traceback when it cannot (a `long` column declared `string`). A null in
-  a column declared `NOT NULL` is accepted: see the last paragraph of
+  a column declared `NOT NULL` fails with `PYTHON_EXCEPTION`: see the last paragraph of
   [Several grouped-aggregate pandas UDFs in one `agg`](#several-grouped-aggregate-pandas-udfs-in-one-agg).
 
-A `mapInArrow` result with more columns than declared is refused too, in server mode as above and embedded with
-`INTERNAL_ERROR` (Spark reads the declared columns and ignores the rest when the setting is off; with it on, both
-raise `ARROW_TYPE_MISMATCH`). Krishiv does not know the client's Spark version
+A `mapInArrow` result with more columns than declared is refused too by the server (Spark reads the declared columns
+and ignores the rest when the setting is off, as the embedded runtime does; with it on, all raise
+`ARROW_TYPE_MISMATCH`). Krishiv does not know the client's Spark version
 here, so the setting is honoured whatever the version: under a Spark 3.5 or 4.0 client, which has no such setting,
 setting it still turns the check on.
 
@@ -264,6 +264,8 @@ analysis time. They match PySpark 4.2.0's answers (`python/tests/pyspark_udf/udt
   takes any value's text), but where Spark shows a JVM object's own `toString` in a string column (`[B@...` for
   `bytes`, `java.util.GregorianCalendar[...]` for a `date`), Krishiv shows the value's Python `str`; and a `Row`
   inside a result row, which Spark's JVM fails to unpickle (`PickleException`), is NULL in the column.
+- A `cogroup(...).applyInPandas` / `applyInArrow` whose two sides group on keys of different Spark types (`int` against
+  `bigint`) is refused with `KRISHIV_UNSUPPORTED_FEATURE`; the keys must have one type.
 - An `@arrow_udtf` (302) result with a NULL in a column declared `NOT NULL`: Spark 4.2.0's JVM fails reading the
   batch (`IllegalStateException`, no error class); Krishiv refuses it as a result unlike the declared schema
   (`PYTHON_EXCEPTION`).
@@ -436,6 +438,22 @@ directory, so a reliable `checkpoint()` fails with "Checkpoint directory has not
 unless the server was started with one. Krishiv accepts the setting per session (or `krishiv.checkpoint.dir`
 at server start) because a client with no `SparkContext` has no other route; code that relies on Spark's
 refusal is the only code that sees a difference.
+
+## `${env:NAME}` and `${system:NAME}` in a server's SQL stay as written
+
+Spark replaces `${env:NAME}` and `${system:NAME}` in SQL text with the driver's environment variable and Java system
+property before parsing (`VariableSubstitution`, `spark.sql.variable.substitute`). In a `krishiv server` session (Spark
+Connect, Flight SQL, the console's SQL editor) Krishiv leaves both as written, as it leaves a name it does not know:
+otherwise any signed-in client could read every secret the server process holds (`SELECT '${env:AWS_SECRET_ACCESS_KEY}'`,
+or the variables that `env:` references in `krishiv.auth.*` and catalog tokens name). `${name}` of a configuration value
+is still substituted, except a setting that `SET` and Connect `Config.get` hide: a key or value that looks secret (it
+contains `secret`, `password`, `token`, `accesskey`, `access.key` or `credential`, or a credential such as
+`postgres://user:password@host`). Such a `${name}` stays as written too (Spark substitutes it), so a client cannot read
+`${fs.s3a.secret.key}` that the operator set at startup. An operator who wants Spark's behaviour back for the environment
+sets `krishiv.server.sql.substituteEnvironment=true` at server start; no `SET` or Connect `Config` call can change it. That
+key does not bring back hidden settings. Embedded sessions (`krishiv sql`, the Python and Rust
+APIs) read the environment as Spark does; there, `${system:NAME}` reads the environment variable `NAME` too, since there
+is no JVM.
 
 ## A second catalog, `system`, next to `spark_catalog`
 
@@ -903,9 +921,10 @@ call of another query does not wait for a running `mapInPandas` or `applyInPanda
 The embedded `mapInArrow` takes each result batch's columns by position and relabels them with the
 declared schema; `mapInPandas` matches the result's columns to the declared schema by name, as Spark does. With `spark.sql.execution.arrow.pyspark.validateSchema.enabled` set to `true` the embedded
 `mapInArrow` path compares the UDF's own field names with the declared schema and refuses a mismatch of names or
-types with `ARROW_TYPE_MISMATCH`, as the server's worker pool does. A declared
-`NOT NULL` (and a nested `containsNull=false` or `valueContainsNull=false`) is not kept by the embedded runtime, so a
-nullable result is accepted where Spark 4.1+ refuses it.
+types with `ARROW_TYPE_MISMATCH`, as the server's worker pool does. A NULL in a result column declared `NOT NULL`
+fails the query with `PYTHON_EXCEPTION`, where Spark 4.2.0's JVM fails reading the batch with no error class. A
+nested `containsNull=false` or `valueContainsNull=false` is not kept by the embedded runtime, so a NULL element or
+map value is accepted there.
 
 ## Metric views (`CREATE VIEW .. WITH METRICS LANGUAGE YAML`)
 

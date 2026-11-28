@@ -332,6 +332,12 @@
     ],
     "sqlState" : "53200"
   },
+  "KRISHIV_JSON_NUMBER_NOT_DECIMAL" : {
+    "message" : [
+      "Value <value> can not be deserialized as java.math.BigDecimal: JSON schema inference under \"prefersDecimal\" reads every floating-point number as a decimal, and this number has no decimal form. Set \"prefersDecimal\" to \"false\", or quote the value. Spark raises a Java `NumberFormatException` here without an error class."
+    ],
+    "sqlState" : "22018"
+  },
   "KRISHIV_JVM_FUNCTION_UNSUPPORTED" : {
     "message" : [
       "The function <function> is implemented by a JVM class, which Krishiv cannot load: it runs no JVM. <hint>"

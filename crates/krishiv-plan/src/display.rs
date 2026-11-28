@@ -442,6 +442,9 @@ impl Display for NodeLine<'_> {
                     }
                     Ok(())
                 }
+                crate::ColumnNamesOp::Deduplicate { subset } => {
+                    write!(f, "Deduplicate {}", Names(subset))
+                }
                 crate::ColumnNamesOp::DropNa {
                     subset,
                     min_non_nulls,

@@ -121,10 +121,19 @@ class _AggregateCall(Column):
         )
 
 
-def _engine_ddl(dt: DataType) -> str:
-    """``dt`` as a DDL string the engine parses (struct field names backquoted)."""
+def _engine_ddl(dt: DataType, *, not_null: bool = False) -> str:
+    """``dt`` as a DDL string the engine parses (struct field names backquoted). ``not_null`` keeps ``NOT NULL`` on the
+    top-level struct's fields (a relation's result columns) only: nested fields stay nullable, as Spark's
+    Arrow check does not compare them, and the DDL has no syntax for ``containsNull=False``."""
     if isinstance(dt, StructType):
-        fields = ",".join("`" + f.name.replace("`", "``") + "`:" + _engine_ddl(f.dataType) for f in dt.fields)
+        fields = ",".join(
+            "`"
+            + f.name.replace("`", "``")
+            + "`:"
+            + _engine_ddl(f.dataType)
+            + (" not null" if not_null and not f.nullable else "")
+            for f in dt.fields
+        )
         return f"struct<{fields}>"
     if isinstance(dt, ArrayType):
         return f"array<{_engine_ddl(dt.elementType)}>"
@@ -137,14 +146,15 @@ def _engine_registration(
     func: Callable[..., Any], return_type: DataType, eval_type: int
 ) -> tuple[int, str, Callable[..., Any]]:
     """What the engine registers a UDF with: the eval type it runs, the return type's DDL and the wrapper.
-    The wrapper sees the return type as the engine declares it (from the DDL; results are nullable)."""
+    The wrapper sees the return type as the engine declares it (from the DDL). A relation kind's result columns
+    keep their ``NOT NULL``, which the engine enforces; the other kinds' results are nullable."""
     from krishiv._udf.worker import make_wrapper
 
     if eval_type in _RELATION_RUNNABLE:
         # A relation kind's "wrapper" is its runner: frames in, result batches out (the engine's task calls it).
         from krishiv._udf.relations import make_relation
 
-        ddl = _engine_ddl(return_type)
+        ddl = _engine_ddl(return_type, not_null=True)
         return eval_type, ddl, make_relation(func, eval_type, _parse_datatype_string(ddl))
 
     run = _RUNNABLE.get(eval_type)

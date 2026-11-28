@@ -151,7 +151,7 @@ impl Planned {
     }
 
     /// The Arrow type column `index` is stored in.
-    fn stored(&self, index: usize) -> Result<&arrow_schema::DataType> {
+    pub(crate) fn stored(&self, index: usize) -> Result<&arrow_schema::DataType> {
         self.schema
             .fields()
             .get(index)

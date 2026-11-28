@@ -31,5 +31,6 @@ The host name is `localhost` on purpose: `pyspark-client` sends a token over a p
 ## What it is, and what it is not
 
 - The server's sessions start from a new Krishiv session, separate from the one `krishiv.session()` returns: tables and views you created through the embedded API are not visible to the client. Pass `krishiv.start_local({"krishiv.some.key": "value"})` to set `krishiv.*` configuration for its sessions.
+- Python UDFs (`F.udf`, `F.pandas_udf`, `mapInPandas`) run on Linux, in sandboxed worker processes of the interpreter that called `start_local()`; that interpreter needs `pyarrow` and `pyspark-client`. Keys: `krishiv.python.worker.executables` (another interpreter), `krishiv.python.worker.memoryLimit` (address space per worker, 1 GiB; raise it, for example `"4g"`, when a worker cannot import `pyarrow`, as on free-threaded Python) and `krishiv.udf.sandbox=off`. On other platforms a Python UDF is refused with `KRISHIV_UNSUPPORTED_FEATURE`.
 - It is the same Connect server as `krishiv server`, with one fixed token and no TLS, for one process. For a server other machines use, see [Securing a single-node server](single-node-server-security.md).
 - It does not implement `SparkSession.builder.remote("local")`. In Spark that starts a JVM and needs the full `pyspark` package; Krishiv has no JVM. See [known differences](../concepts/known-differences.md).

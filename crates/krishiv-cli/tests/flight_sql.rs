@@ -781,3 +781,46 @@ fn jdbc_output_parses() {
     assert_eq!(run.schemas, ["default", "db"]);
     assert_eq!(run.columns, ["n:INTEGER"]);
 }
+
+/// The one string cell of a Flight SQL query on `server`.
+async fn one_string(server: &Running, sql: &str) -> String {
+    let mut c = client(&server.connect).await;
+    let info = c.execute(sql.to_owned(), None).await.expect("execute");
+    let ticket = info.endpoint[0].ticket.clone().expect("ticket");
+    let batches: Vec<arrow_array::RecordBatch> = c
+        .do_get(ticket)
+        .await
+        .expect("do_get")
+        .try_collect()
+        .await
+        .expect("rows");
+    let col = batches[0].column(0);
+    if let Some(s) = col.as_any().downcast_ref::<arrow_array::StringArray>() {
+        return s.value(0).to_owned();
+    }
+    col.as_any()
+        .downcast_ref::<arrow_array::StringViewArray>()
+        .expect("a string column")
+        .value(0)
+        .to_owned()
+}
+
+/// Code health I-1 over what `krishiv server` itself builds (its runtime is server mode): a client's
+/// `${env:..}` stays as written, and the operator's startup key turns Spark's substitution back on.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_served_runtime_never_reads_the_environment_for_a_client() {
+    let path = std::env::var("PATH").expect("PATH is set");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (server, _) = start(dir.path(), &[]);
+    assert_eq!(
+        one_string(&server, "SELECT '${env:PATH}' AS p").await,
+        "${env:PATH}"
+    );
+    drop(server);
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (server, _) = start(
+        dir.path(),
+        &["krishiv.server.sql.substituteEnvironment=true"],
+    );
+    assert_eq!(one_string(&server, "SELECT '${env:PATH}' AS p").await, path);
+}

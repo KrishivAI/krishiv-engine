@@ -1,0 +1,63 @@
+{
+  "name": "@krishiv/ui",
+  "version": "0.2.1",
+  "description": "Krishiv's console tokens, components and data helpers, shipped as Svelte source.",
+  "license": "Apache-2.0",
+  "private": true,
+  "type": "module",
+  "sideEffects": [
+    "**/*.css"
+  ],
+  "exports": {
+    "./tokens.css": "./src/tokens/index.css",
+    "./tokens/*": "./src/tokens/*",
+    "./components/*": {
+      "types": "./src/components/*/index.ts",
+      "svelte": "./src/components/*/index.ts",
+      "default": "./src/components/*/index.ts"
+    },
+    "./data/*": {
+      "types": "./src/data/*.ts",
+      "default": "./src/data/*.ts"
+    },
+    "./utils": {
+      "types": "./src/utils.ts",
+      "default": "./src/utils.ts"
+    },
+    "./data/*.test": null,
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "check": "svelte-check --tsconfig ./tsconfig.json",
+    "tokens": "node scripts/build-tokens.mjs",
+    "test": "node scripts/build-tokens.mjs --check && vitest run"
+  },
+  "dependencies": {
+    "@internationalized/date": "3.12.4",
+    "@tanstack/table-core": "9.3.1",
+    "@tanstack/virtual-core": "3.19.11",
+    "bits-ui": "2.20.2",
+    "clsx": "2.1.1",
+    "tailwind-merge": "3.7.0",
+    "tailwind-variants": "4.0.1"
+  },
+  "peerDependencies": {
+    "svelte": "^5.57.2",
+    "tailwindcss": "^4.3.3"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "7.3.1",
+    "svelte": "5.57.2",
+    "svelte-check": "4.7.7",
+    "tailwindcss": "4.3.3",
+    "typescript": "5.9.3",
+    "vitest": "5.1.1"
+  },
+  "files": [
+    "src",
+    "!src/**/*.test.ts",
+    "tokens-src",
+    "scripts",
+    "README.md"
+  ]
+}

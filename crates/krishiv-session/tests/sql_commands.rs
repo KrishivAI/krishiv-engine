@@ -424,6 +424,29 @@ fn static_and_core_spark_keys_are_set_when_the_session_is_built() {
             ErrorClass::CannotModifyConfig
         );
     }
+    // Spark exempts `spark.default.parallelism` from the refusal (SPARK-48773; Spark 4.3.0 run 2026-11-28: set,
+    // `SET k=v` and unset succeed), while `isModifiable` is false for it.
+    let par = "spark.default.parallelism";
+    assert!(!s.conf().is_modifiable(par));
+    s.conf().set(par, "4").unwrap();
+    block_on(s.sql(&format!("SET {par}=5"))).unwrap();
+    assert_eq!(s.conf().get(par).as_deref(), Some("5"));
+    s.conf().unset(par).unwrap();
+    assert_eq!(s.conf().get(par), None);
+    // With `spark.sql.legacy.setCommandRejectsSparkCoreConfs` false a core key can change (Spark 4.3.0 run
+    // 2026-11-28: the set succeeds and `spark.conf.get` answers `1g`); true again refuses it.
+    let rejects = "spark.sql.legacy.setCommandRejectsSparkCoreConfs";
+    s.conf().set(rejects, "false").unwrap();
+    s.conf().set("spark.executor.memory", "1g").unwrap();
+    assert_eq!(s.conf().get("spark.executor.memory").as_deref(), Some("1g"));
+    assert!(!s.conf().is_modifiable("spark.executor.memory"));
+    block_on(s.sql("SET spark.ui.port=4041")).unwrap();
+    s.conf().unset("spark.ui.port").unwrap();
+    block_on(s.sql(&format!("SET {rejects}=true"))).unwrap();
+    assert_eq!(
+        class(s.conf().set("spark.executor.memory", "2g")),
+        ErrorClass::CannotModifyConfig
+    );
     // A key no Spark entry registers stays settable, as in Spark.
     s.conf().set("spark.sql.no.such", "1").unwrap();
     s.conf().set("spark.yarn.queue", "q").unwrap();

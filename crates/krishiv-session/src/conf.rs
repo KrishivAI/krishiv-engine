@@ -411,8 +411,9 @@ pub(crate) fn get(config: &Config, key: &str) -> Option<String> {
 /// Whether `key` can change after the session is built, in a session of `profile`. A key Krishiv does not
 /// register can, unless the profile's Spark release registers it as a static SQL entry (`spark.sql.warehouse.dir`) or as an
 /// entry that is not a SQL one (`spark.executor.memory`): Spark refuses to change both at runtime
-/// (v4.3.0 `RuntimeConfig.requireNonStaticConf`; Krishiv refuses `spark.sql.legacy.setCommandRejectsSparkCoreConfs`
-/// off, so the core keys are always refused). Set them when the session is built ([`crate::SessionBuilder::config`]).
+/// (v4.3.0 `RuntimeConfig.requireNonStaticConf`). Set them when the session is built ([`crate::SessionBuilder::config`]).
+/// A change to a core key is still accepted in the cases Spark accepts one ([`RuntimeConf::core_change_allowed`]),
+/// while `isModifiable` answers false for it, as Spark's does.
 pub(crate) fn is_modifiable(key: &str, profile: SparkProfile) -> bool {
     match lookup(key) {
         Some(entry) => entry.scope == Scope::Session && !SESSION_BUILD_TIME.contains(&entry.key),
@@ -581,8 +582,19 @@ impl RuntimeConf {
         })
     }
 
+    /// Whether a runtime change to the core Spark key `key` is accepted, as Spark's `requireNonStaticConf`
+    /// (v4.3.0 `RuntimeConfig.scala:106-115`) accepts one: `spark.default.parallelism` always (SPARK-48773), any
+    /// other while the session's `spark.sql.legacy.setCommandRejectsSparkCoreConfs` is false (its default is true).
+    fn core_change_allowed(&self, key: &str) -> bool {
+        const REJECTS: &str = "spark.sql.legacy.setCommandRejectsSparkCoreConfs";
+        lookup(key).is_none()
+            && krishiv_common::config::is_spark_core_key(key)
+            && (key == "spark.default.parallelism"
+                || matches!(self.get_as_spark(REJECTS), SparkConfValue::Value(v) if v.trim().eq_ignore_ascii_case("false")))
+    }
+
     fn set_unredacted(&self, key: &str, value: &str) -> Result<(), KrishivError> {
-        if !self.is_modifiable(key) {
+        if !self.is_modifiable(key) && !self.core_change_allowed(key) {
             return Err(cannot_modify(key));
         }
         // Collation switches the engine does not honour yet (ADR 0043): turning one on would
@@ -621,7 +633,7 @@ impl RuntimeConf {
     /// # Errors
     /// `CANNOT_MODIFY_STATIC_CONFIG` or `CANNOT_MODIFY_CONFIG` as for [`Self::set`].
     pub fn unset(&self, key: &str) -> Result<(), KrishivError> {
-        if !self.is_modifiable(key) {
+        if !self.is_modifiable(key) && !self.core_change_allowed(key) {
             return Err(cannot_modify(key));
         }
         self.store.reset_key(key);

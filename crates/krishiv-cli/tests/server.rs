@@ -770,6 +770,56 @@ fn the_editors_denials_count_under_the_ui_surface() {
     );
 }
 
+/// Code health I-1 through the console's editor on what `krishiv server` builds (its sessions come
+/// from the server-mode runtime too): a statement's `${env:..}` stays as written.
+#[cfg(all(unix, feature = "ui"))]
+#[test]
+fn the_editor_never_reads_the_servers_environment() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let token = "editor-env-token-0123456789abcdef012";
+    let path = dir.path().join("op");
+    std::fs::write(&path, token).expect("write secret");
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).expect("chmod");
+    let conf = [
+        format!("krishiv.auth.tokens.op.secret=file:{}", path.display()),
+        "krishiv.auth.tokens.op.principal=editor".to_owned(),
+        "krishiv.auth.tokens.op.role=operator".to_owned(),
+    ];
+    let server = start_with(dir.path(), &conf);
+    let started = http_post_as(
+        &server.admin,
+        "/api/internal/sql",
+        r#"{"sql": "SELECT '${env:PATH}' AS p"}"#,
+        token,
+    );
+    assert!(started.starts_with("HTTP/1.1 202"), "{started}");
+    let run = started
+        .split("\"run_id\":\"")
+        .nth(1)
+        .and_then(|r| r.split('"').next())
+        .expect("run id")
+        .to_owned();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let status = loop {
+        let status = http_get_as(
+            &server.admin,
+            &format!("/api/internal/sql/{run}"),
+            Some(token),
+        );
+        assert!(status.starts_with("HTTP/1.1 200"), "{status}");
+        if !status.contains("\"running\"") && !status.contains("\"queued\"") {
+            break status;
+        }
+        assert!(Instant::now() < deadline, "the run did not end: {status}");
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    assert!(status.contains(r#""state":"finished""#), "{status}");
+    assert!(status.contains("${env:PATH}"), "{status}");
+    let path_value = std::env::var("PATH").expect("PATH is set");
+    assert!(!status.contains(&path_value), "{status}");
+}
+
 /// `krishiv.admin.v1` on the admin listener (design P3-T066 PR-52a): any authenticated caller
 /// reads the version and the capabilities, which list the surface and its revision; a request
 /// without a token is 401, and a `Host` outside the loopback names is 421.

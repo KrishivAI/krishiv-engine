@@ -135,7 +135,7 @@ jobs:
           if taplo fmt --check --config .github/ci-fixtures/taplo.toml .github/ci-fixtures/unformatted.toml; then echo "taplo accepted the unformatted fixture"; exit 1; fi
           if docker run --rm -v "$PWD/.github/ci-fixtures:/workdir" davidanson/markdownlint-cli2:v0.23.3 bad.md; then echo "markdownlint accepted the bad fixture"; exit 1; fi
 
-  # T133: the UI. svelte-check, a build whose output must equal the committed
+  # T133: the UI. svelte-check, the @krishiv/ui unit tests (Vitest), a build whose output must equal the committed
   # crates/krishiv-ui-assets/assets (ADR 0024: cargo build never needs Node), and the
   # Playwright page check (ui/tests/check_pages.py) against that build. No Rust toolchain.
   ui:
@@ -151,11 +151,12 @@ jobs:
           persist-credentials: false
       - uses: $/.github/actions/setup-uv
       # The runner image ships Node; pnpm comes from npm (major pinned, the lockfile pins the rest).
-      - name: svelte-check and build
+      - name: svelte-check, unit tests and build
         working-directory: ui
         run: |
           npx --yes pnpm@10 install --frozen-lockfile
           npx --yes pnpm@10 run check
+          npx --yes pnpm@10 run test
           npx --yes pnpm@10 run sync-assets
       - name: Committed assets equal the build
         run: git diff --exit-code --stat -- crates/krishiv-ui-assets/assets
@@ -283,6 +284,10 @@ jobs:
         with:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          # Only a PR run saves: a queue ref's cache is never read again (only main's and the ref's own are);
+          # main-measure.yml's `test` job saves the one the queue restores.
+          save-if: ${{ github.event_name == 'pull_request' }}
       - uses: $/.github/actions/setup-mold
       - uses: $/.github/actions/install-tool
         with:

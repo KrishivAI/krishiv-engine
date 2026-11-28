@@ -12,7 +12,7 @@ use krishiv_flight_sql::session_options::{
 use super::*;
 
 /// A string option.
-fn text(v: &str) -> SessionOptionValue {
+pub(super) fn text(v: &str) -> SessionOptionValue {
     SessionOptionValue {
         option_value: Some(OptionValue::StringValue(v.to_owned())),
     }
@@ -36,7 +36,7 @@ async fn action(
 }
 
 /// `SetSessionOptions(options)`: the refused options and the session id set.
-async fn set_options(
+pub(super) async fn set_options(
     h: &mut Harness,
     cookie: Option<&str>,
     options: Vec<(&str, SessionOptionValue)>,
