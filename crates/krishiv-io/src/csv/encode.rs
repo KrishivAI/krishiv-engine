@@ -38,7 +38,7 @@ impl CsvEncoder {
     pub(crate) fn new(schema: &Schema, o: &FormatOptions) -> FormatResult<Self> {
         crate::text::refuse_time_without_gate(schema, o)?;
         let opts = CsvOptions::new(o, true)?;
-        let dt = Datetimes::new(o, Purpose::Format)?;
+        let dt = Datetimes::csv(o, Purpose::Format)?;
         let style = o.str("binaryOutputStyle").unwrap_or("HEX_DISCRETE");
         let binary = BinaryStyle::from_name(style).ok_or_else(|| {
             crate::text::invalid_option(

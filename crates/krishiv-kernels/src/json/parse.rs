@@ -586,17 +586,6 @@ fn skip_escape(bytes: &[u8], i: usize, quote: u8, flags: LexerFlags) -> Result<u
     Err(Error::Malformed)
 }
 
-/// Whether `raw` is a non-numeric number spelling (`NaN`, `Infinity` or
-/// `INF`, signed), which the lexer only produces with
-/// `allowNonNumericNumbers`.
-#[must_use]
-pub(crate) fn is_non_numeric_number(raw: &str) -> bool {
-    matches!(
-        raw,
-        "NaN" | "INF" | "+INF" | "-INF" | "Infinity" | "+Infinity" | "-Infinity"
-    )
-}
-
 /// The value of a non-numeric number spelling (`None` for anything else).
 #[must_use]
 pub(crate) fn non_numeric_value(raw: &str) -> Option<f64> {
