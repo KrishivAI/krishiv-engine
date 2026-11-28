@@ -17,6 +17,9 @@ Runs a REAL Spark (never from memory) in a throw-away container and prints one J
 - `csv_file`: one-value CSV files (header `t`) under the default policy and `timeParserPolicy=LEGACY`, read three
   ways: `inferSchema`, schema `t DATE` and schema `t TIMESTAMP`; each gives the schema and `t` cast to STRING (a
   refusal's error class instead). LEGACY reads with `FastDateFormat` patterns and the lenient fallback.
+- `json_read`: one-record JSON files read with schema `t DATE` and `t TIMESTAMP` under the same two policies.
+  `JSONOptions.dateFormatInRead` is the option alone, so without `dateFormat` dates read leniently even with the
+  fallback off (CSV reads `yyyy-MM-dd` strictly there, under `preferDate`).
 
 Usage (from repo root), once per version:
 
@@ -28,7 +31,7 @@ Usage (from repo root), once per version:
 Checked by `krishiv-session/tests/time_file_reads.rs` (`text_time_follows_the_profile_runs`) and
 `krishiv-io/src/csv/time_tests.rs` (the 4.2 profile rows); the `schema_of_json` section by
 `krishiv-session/tests/schema_of_json_time.rs`, the `json_file` section by `krishiv-session/tests/json_file_time.rs`,
-the `csv_file` section by `krishiv-session/tests/csv_file_legacy.rs`.
+the `csv_file` and `json_read` sections by `krishiv-session/tests/csv_file_legacy.rs`.
 """
 
 import json
@@ -101,7 +104,35 @@ CSV_CASES = [
     ("2024-01-02", {"preferDate": "true"}),
     ("2024-01-02T03:04:05.123+01:00", {"enableDateTimeParsingFallback": "true"}),
     ("2024-01-02 03:04:05", {"enableDateTimeParsingFallback": "true"}),
+    # `dateFormatInRead` is `yyyy-MM-dd` only under `preferDate`: with it off the default reader stays lenient.
+    ("2024-01-02 03:04:05", {"enableDateTimeParsingFallback": "false"}),
+    ("2024-01-02 03:04:05", {"enableDateTimeParsingFallback": "false", "preferDate": "false"}),
+    ("2024-1-2", {"enableDateTimeParsingFallback": "false"}),
+    ("2024-1-2", {"enableDateTimeParsingFallback": "false", "preferDate": "false"}),
+    ("2024-01-02 03:04:05", {"preferDate": "false"}),
 ]
+
+JSON_READ_SCHEMAS = [("date", "t DATE"), ("timestamp", "t TIMESTAMP")]
+
+JSON_READ_TEXTS = [
+    "2024-01-02",
+    "2024-1-2",
+    "2024-01-02 03:04:05",
+    "2024-01-02T03:04:05.123+01:00",
+    "02/01/2024",
+    "not a date",
+]
+
+JSON_READ_OPTIONS = [
+    {},
+    {"enableDateTimeParsingFallback": "false"},
+    {"enableDateTimeParsingFallback": "true"},
+    {"dateFormat": "dd/MM/yyyy"},
+    {"dateFormat": "dd/MM/yyyy", "enableDateTimeParsingFallback": "false"},
+    {"timestampFormat": "dd/MM/yyyy HH:mm", "enableDateTimeParsingFallback": "false"},
+]
+
+JSON_READ_CASES = [(t, o) for o in JSON_READ_OPTIONS for t in JSON_READ_TEXTS]
 
 
 def lit(s: str) -> str:
@@ -203,6 +234,31 @@ def main() -> None:
         for k in confs:
             spark.conf.unset(k)
 
+    jread = {}
+    for setting, confs in CSV_SETTINGS:
+        for k, v in confs.items():
+            spark.conf.set(k, v)
+        rows = []
+        for i, (text, opts) in enumerate(JSON_READ_CASES):
+            path = os.path.join(root, f"jread-{setting}-{i}.json")
+            with open(path, "w") as f:
+                f.write(json.dumps({"t": text}) + "\n")
+            reads = {}
+            for name, ddl in JSON_READ_SCHEMAS:
+                try:
+                    df = spark.read.options(**opts).schema(ddl).json(path)
+                    schema = df.schema.simpleString()
+                    values = [x.s for x in df.selectExpr("CAST(t AS STRING) AS s").collect()]
+                # The error class is the result.
+                except Exception as e:
+                    schema = "ERROR " + (getattr(e, "getErrorClass", lambda: None)() or type(e).__name__)
+                    values = []
+                reads[name] = {"schema": schema, "values": values}
+            rows.append({"text": text, "options": opts, "reads": reads})
+        jread[setting] = rows
+        for k in confs:
+            spark.conf.unset(k)
+
     out = {
         "spark": spark.version,
         "infer": infer,
@@ -210,6 +266,7 @@ def main() -> None:
         "schema_of_json": sojson,
         "json_file": jfile,
         "csv_file": cfile,
+        "json_read": jread,
     }
     json.dump(out, sys.stdout, indent=2, sort_keys=True)
     sys.stdout.write("\n")

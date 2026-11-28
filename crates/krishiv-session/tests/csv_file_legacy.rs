@@ -6,6 +6,10 @@
 //! is read three ways: `inferSchema` (under LEGACY never a `DATE`, and a
 //! `TIMESTAMP` only under the `FastDateFormat` pattern), schema `t DATE` and
 //! schema `t TIMESTAMP` (LEGACY's lenient `SimpleDateFormat` and fallback).
+//! The `json_read` section reads one-record JSON files with the same two
+//! schemas: JSON has no strict default date pattern (`JSONOptions`), so with
+//! the fallback off and no `dateFormat` it reads `2024-01-02 03:04:05` as a
+//! date, where CSV under `preferDate` reads NULL.
 #![cfg(test)]
 
 use arrow_array::cast::AsArray;
@@ -52,6 +56,19 @@ fn undated(value: Option<String>, text: &str) -> Option<String> {
 
 #[test]
 fn csv_file_reads_follow_the_parser_policy_as_spark_runs() {
+    reads_match_spark("csv", "csv_file", |text| format!("t\n{text}\n"));
+}
+
+#[test]
+fn json_file_date_reads_follow_the_parser_policy_as_spark_runs() {
+    reads_match_spark("json", "json_read", |text| {
+        format!("{}\n", serde_json::json!({ "t": text }))
+    });
+}
+
+/// Every case of `section` written by `contents` as a `format` file and read
+/// as the case's `reads` name, against Spark's schema and values.
+fn reads_match_spark(format: &str, section: &str, contents: fn(&str) -> String) {
     let dir = tempfile::tempdir().unwrap();
     for (profile, version) in [(SparkProfile::V4_2, "4.2.1"), (SparkProfile::V4_3, "4.3.0")] {
         let path = format!(
@@ -61,7 +78,7 @@ fn csv_file_reads_follow_the_parser_policy_as_spark_runs() {
         let run: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(run["spark"], version);
-        let sections = run["csv_file"].as_object().unwrap();
+        let sections = run[section].as_object().unwrap();
         assert_eq!(sections.len(), 2, "{version}: default and legacy");
         for (setting, cases) in sections {
             let s = Session::builder().profile(profile).build().unwrap();
@@ -76,11 +93,14 @@ fn csv_file_reads_follow_the_parser_policy_as_spark_runs() {
             for (i, case) in cases.as_array().unwrap().iter().enumerate() {
                 let text = case["text"].as_str().unwrap();
                 let opts = case["options"].as_object().unwrap();
-                let file = dir.path().join(format!("{version}-{setting}-{i}.csv"));
-                std::fs::write(&file, format!("t\n{text}\n")).unwrap();
+                let file = dir.path().join(format!("{version}-{setting}-{i}.{format}"));
+                std::fs::write(&file, contents(text)).unwrap();
                 for (read, want) in case["reads"].as_object().unwrap() {
-                    let at = format!("{version} {setting} {text:?} {opts:?} {read}");
-                    let mut reader = s.read().format("csv").option("header", "true");
+                    let at = format!("{format} {version} {setting} {text:?} {opts:?} {read}");
+                    let mut reader = s.read().format(format);
+                    if format == "csv" {
+                        reader = reader.option("header", "true");
+                    }
                     for (k, v) in opts {
                         reader = reader.option(k, v.as_str().unwrap());
                     }

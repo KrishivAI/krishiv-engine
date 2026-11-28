@@ -8,7 +8,7 @@ use arrow_schema::{DataType, Field, Schema, SchemaRef, TimeUnit};
 use futures::future::BoxFuture;
 use krishiv_kernels::datetime_pattern::Purpose;
 use krishiv_kernels::json::decimal::{
-    LONG_DECIMAL, NumberDecimal, merge_decimals, number_decimal, string_decimal,
+    LONG_DECIMAL, NumberDecimal, is_not_decimal, merge_decimals, number_decimal, string_decimal,
 };
 use krishiv_kernels::text::java_parse_long;
 
@@ -151,11 +151,22 @@ impl Root<'_> {
         part: Option<Ty>,
         rec: &Result<Top, Reason>,
     ) -> FormatResult<Option<Ty>> {
-        let t = match rec {
-            Ok(Top::Object(o)) => inf.object(&o.fields)?,
-            Ok(Top::Array(items)) => inf.array(items)?,
-            Ok(Top::Other(v)) => inf.field(v)?,
-            Err(_) => match self.mode {
+        let typed = match rec {
+            Ok(Top::Object(o)) => inf.object(&o.fields).map(Some),
+            Ok(Top::Array(items)) => inf.array(items).map(Some),
+            Ok(Top::Other(v)) => inf.field(v).map(Some),
+            Err(_) => Ok(None),
+        };
+        // A number with no decimal form under `prefersDecimal` is a
+        // `RuntimeException` in Spark's per-record `inferField`, so the
+        // record goes to the parse mode as one that does not parse.
+        let typed = match typed {
+            Err(FormatError::Other(e)) if is_not_decimal(&e) => None,
+            other => other?,
+        };
+        let t = match typed {
+            Some(t) => t,
+            None => match self.mode {
                 Mode::Permissive => Ty::Struct(vec![(self.corrupt.to_owned(), Ty::Str)]),
                 Mode::DropMalformed => return Ok(part),
                 Mode::FailFast => {

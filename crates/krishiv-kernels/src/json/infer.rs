@@ -295,7 +295,7 @@ fn infer_number(raw: &str, floating: bool, opts: &JsonOptions) -> Result<Inferre
     if !floating && raw.parse::<i64>().is_ok() {
         return Ok(Inferred::Long);
     }
-    if floating && (!opts.prefers_decimal || super::parse::is_non_numeric_number(raw)) {
+    if floating && !opts.prefers_decimal {
         return Ok(Inferred::Double);
     }
     match number_decimal(raw).map_err(WalkError::Type)? {

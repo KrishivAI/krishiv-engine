@@ -96,6 +96,17 @@ CASES = [('{"t":' + json.dumps(s) + "}", PD) for s in STRINGS] + [
     ('[{"t":"12345678901234567890"},{"t":1}]', PD),
     ('[{"t":"1.5"},{"t":"12"},{"t":"-0.25"}]', PD),
     ('[["1.5", 2], ["3.25"]]', PD),
+    # Non-numeric numbers (allowed by default): `getDecimalValue` fails on them, so `schema_of_json` raises
+    # and a file read takes the record to the parse mode.
+    ('{"t":NaN}', PD),
+    ('{"t":Infinity}', PD),
+    ('{"t":-Infinity}', PD),
+    ('{"t":NaN}', {}),
+    ('[{"t":NaN},{"t":1.5}]', PD),
+    ('[{"t":1.5},{"t":-Infinity}]', PD),
+    ('{"t":NaN}', {"prefersDecimal": "true", "mode": "FAILFAST"}),
+    ('[{"t":NaN},{"t":1.5}]', {"prefersDecimal": "true", "mode": "DROPMALFORMED"}),
+    ('[{"t":NaN},{"t":1.5}]', {"prefersDecimal": "true", "columnNameOfCorruptRecord": "bad"}),
 ]
 
 
@@ -106,7 +117,17 @@ def lit(s: str) -> str:
 def error_of(e: Exception) -> str:
     # `getCondition` (4.0+) replaces `getErrorClass`, which warns on stdout.
     cond = getattr(e, "getCondition", None) or getattr(e, "getErrorClass", lambda: None)
-    return "ERROR " + (cond() or type(e).__name__)
+    got = cond()
+    # A Py4J error (a file read's job failure): the first Spark condition, else the innermost Java class.
+    j = getattr(e, "java_exception", None)
+    while got is None and j is not None:
+        name = j.getClass().getName()
+        if name.startswith("org.apache.spark"):
+            got = j.getCondition()
+        elif j.getCause() is None:
+            got = name.rsplit(".", 1)[-1]
+        j = j.getCause()
+    return "ERROR " + (got or type(e).__name__)
 
 
 def main() -> None:

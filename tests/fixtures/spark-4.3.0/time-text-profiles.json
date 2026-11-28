@@ -523,6 +523,138 @@
           }
         },
         "text": "2024-01-02 03:04:05"
+      },
+      {
+        "options": {
+          "enableDateTimeParsingFallback": "false"
+        },
+        "reads": {
+          "date": {
+            "schema": "struct<t:date>",
+            "values": [
+              null
+            ]
+          },
+          "infer": {
+            "schema": "struct<t:timestamp>",
+            "values": [
+              "2024-01-02 03:04:05"
+            ]
+          },
+          "timestamp": {
+            "schema": "struct<t:timestamp>",
+            "values": [
+              "2024-01-02 03:04:05"
+            ]
+          }
+        },
+        "text": "2024-01-02 03:04:05"
+      },
+      {
+        "options": {
+          "enableDateTimeParsingFallback": "false",
+          "preferDate": "false"
+        },
+        "reads": {
+          "date": {
+            "schema": "struct<t:date>",
+            "values": [
+              "2024-01-02"
+            ]
+          },
+          "infer": {
+            "schema": "struct<t:timestamp>",
+            "values": [
+              "2024-01-02 03:04:05"
+            ]
+          },
+          "timestamp": {
+            "schema": "struct<t:timestamp>",
+            "values": [
+              "2024-01-02 03:04:05"
+            ]
+          }
+        },
+        "text": "2024-01-02 03:04:05"
+      },
+      {
+        "options": {
+          "enableDateTimeParsingFallback": "false"
+        },
+        "reads": {
+          "date": {
+            "schema": "struct<t:date>",
+            "values": [
+              null
+            ]
+          },
+          "infer": {
+            "schema": "struct<t:timestamp>",
+            "values": [
+              "2024-01-02 00:00:00"
+            ]
+          },
+          "timestamp": {
+            "schema": "struct<t:timestamp>",
+            "values": [
+              "2024-01-02 00:00:00"
+            ]
+          }
+        },
+        "text": "2024-1-2"
+      },
+      {
+        "options": {
+          "enableDateTimeParsingFallback": "false",
+          "preferDate": "false"
+        },
+        "reads": {
+          "date": {
+            "schema": "struct<t:date>",
+            "values": [
+              "2024-01-02"
+            ]
+          },
+          "infer": {
+            "schema": "struct<t:timestamp>",
+            "values": [
+              "2024-01-02 00:00:00"
+            ]
+          },
+          "timestamp": {
+            "schema": "struct<t:timestamp>",
+            "values": [
+              "2024-01-02 00:00:00"
+            ]
+          }
+        },
+        "text": "2024-1-2"
+      },
+      {
+        "options": {
+          "preferDate": "false"
+        },
+        "reads": {
+          "date": {
+            "schema": "struct<t:date>",
+            "values": [
+              "2024-01-02"
+            ]
+          },
+          "infer": {
+            "schema": "struct<t:timestamp>",
+            "values": [
+              "2024-01-02 03:04:05"
+            ]
+          },
+          "timestamp": {
+            "schema": "struct<t:timestamp>",
+            "values": [
+              "2024-01-02 03:04:05"
+            ]
+          }
+        },
+        "text": "2024-01-02 03:04:05"
       }
     ],
     "legacy": [
@@ -1048,6 +1180,138 @@
           }
         },
         "text": "2024-01-02 03:04:05"
+      },
+      {
+        "options": {
+          "enableDateTimeParsingFallback": "false"
+        },
+        "reads": {
+          "date": {
+            "schema": "struct<t:date>",
+            "values": [
+              "2024-01-02"
+            ]
+          },
+          "infer": {
+            "schema": "struct<t:string>",
+            "values": [
+              "2024-01-02 03:04:05"
+            ]
+          },
+          "timestamp": {
+            "schema": "struct<t:timestamp>",
+            "values": [
+              null
+            ]
+          }
+        },
+        "text": "2024-01-02 03:04:05"
+      },
+      {
+        "options": {
+          "enableDateTimeParsingFallback": "false",
+          "preferDate": "false"
+        },
+        "reads": {
+          "date": {
+            "schema": "struct<t:date>",
+            "values": [
+              "2024-01-02"
+            ]
+          },
+          "infer": {
+            "schema": "struct<t:string>",
+            "values": [
+              "2024-01-02 03:04:05"
+            ]
+          },
+          "timestamp": {
+            "schema": "struct<t:timestamp>",
+            "values": [
+              null
+            ]
+          }
+        },
+        "text": "2024-01-02 03:04:05"
+      },
+      {
+        "options": {
+          "enableDateTimeParsingFallback": "false"
+        },
+        "reads": {
+          "date": {
+            "schema": "struct<t:date>",
+            "values": [
+              "2024-01-02"
+            ]
+          },
+          "infer": {
+            "schema": "struct<t:string>",
+            "values": [
+              "2024-1-2"
+            ]
+          },
+          "timestamp": {
+            "schema": "struct<t:timestamp>",
+            "values": [
+              null
+            ]
+          }
+        },
+        "text": "2024-1-2"
+      },
+      {
+        "options": {
+          "enableDateTimeParsingFallback": "false",
+          "preferDate": "false"
+        },
+        "reads": {
+          "date": {
+            "schema": "struct<t:date>",
+            "values": [
+              "2024-01-02"
+            ]
+          },
+          "infer": {
+            "schema": "struct<t:string>",
+            "values": [
+              "2024-1-2"
+            ]
+          },
+          "timestamp": {
+            "schema": "struct<t:timestamp>",
+            "values": [
+              null
+            ]
+          }
+        },
+        "text": "2024-1-2"
+      },
+      {
+        "options": {
+          "preferDate": "false"
+        },
+        "reads": {
+          "date": {
+            "schema": "struct<t:date>",
+            "values": [
+              "2024-01-02"
+            ]
+          },
+          "infer": {
+            "schema": "struct<t:string>",
+            "values": [
+              "2024-01-02 03:04:05"
+            ]
+          },
+          "timestamp": {
+            "schema": "struct<t:timestamp>",
+            "values": [
+              "2024-01-02 03:04:05"
+            ]
+          }
+        },
+        "text": "2024-01-02 03:04:05"
       }
     ]
   },
@@ -1080,7 +1344,7 @@
         "schema": "struct<t:timestamp>",
         "text": "{\"t\":\"12:34:56\"}",
         "values": [
-          "2026-11-27 12:34:56"
+          "2026-11-28 12:34:56"
         ]
       },
       {
@@ -1090,7 +1354,7 @@
         "schema": "struct<t:timestamp>",
         "text": "{\"t\":\"12:34:56.123456789\"}",
         "values": [
-          "2026-11-27 12:34:56.123456"
+          "2026-11-28 12:34:56.123456"
         ]
       },
       {
@@ -1100,7 +1364,7 @@
         "schema": "struct<t:timestamp>",
         "text": "{\"t\":\"12:34\"}",
         "values": [
-          "2026-11-27 12:34:00"
+          "2026-11-28 12:34:00"
         ]
       },
       {
@@ -1168,7 +1432,7 @@
         "schema": "struct<t:timestamp>",
         "text": "[{\"t\":\"12:34:56\"},{\"t\":\"2024-01-02 03:04:05\"}]",
         "values": [
-          "2026-11-27 12:34:56",
+          "2026-11-28 12:34:56",
           "2024-01-02 03:04:05"
         ]
       },
@@ -1201,7 +1465,7 @@
         "schema": "struct<t:timestamp>",
         "text": "[{\"t\":\"12:34:56\"},{\"t\":null}]",
         "values": [
-          "2026-11-27 12:34:56",
+          "2026-11-28 12:34:56",
           null
         ]
       },
@@ -1257,7 +1521,7 @@
         "schema": "struct<n:string,t:timestamp>",
         "text": "{\"t\":\"12:34:56\",\"n\":1}",
         "values": [
-          "2026-11-27 12:34:56"
+          "2026-11-28 12:34:56"
         ]
       },
       {
@@ -1279,7 +1543,7 @@
         "schema": "struct<t:timestamp>",
         "text": "{\"t\":\"12:34:56\"}",
         "values": [
-          "2026-11-27 12:34:56"
+          "2026-11-28 12:34:56"
         ]
       }
     ],
@@ -1518,7 +1782,7 @@
         "schema": "struct<t:timestamp>",
         "text": "{\"t\":\"12:34:56\"}",
         "values": [
-          "2026-11-27 12:34:56"
+          "2026-11-28 12:34:56"
         ]
       },
       {
@@ -1528,7 +1792,7 @@
         "schema": "struct<t:timestamp>",
         "text": "{\"t\":\"12:34:56.123456789\"}",
         "values": [
-          "2026-11-27 12:34:56.123456"
+          "2026-11-28 12:34:56.123456"
         ]
       },
       {
@@ -1538,7 +1802,7 @@
         "schema": "struct<t:timestamp>",
         "text": "{\"t\":\"12:34\"}",
         "values": [
-          "2026-11-27 12:34:00"
+          "2026-11-28 12:34:00"
         ]
       },
       {
@@ -1606,7 +1870,7 @@
         "schema": "struct<t:timestamp>",
         "text": "[{\"t\":\"12:34:56\"},{\"t\":\"2024-01-02 03:04:05\"}]",
         "values": [
-          "2026-11-27 12:34:56",
+          "2026-11-28 12:34:56",
           "2024-01-02 03:04:05"
         ]
       },
@@ -1639,7 +1903,7 @@
         "schema": "struct<t:timestamp>",
         "text": "[{\"t\":\"12:34:56\"},{\"t\":null}]",
         "values": [
-          "2026-11-27 12:34:56",
+          "2026-11-28 12:34:56",
           null
         ]
       },
@@ -1695,7 +1959,7 @@
         "schema": "struct<n:string,t:timestamp>",
         "text": "{\"t\":\"12:34:56\",\"n\":1}",
         "values": [
-          "2026-11-27 12:34:56"
+          "2026-11-28 12:34:56"
         ]
       },
       {
@@ -1717,7 +1981,7 @@
         "schema": "struct<t:timestamp>",
         "text": "{\"t\":\"12:34:56\"}",
         "values": [
-          "2026-11-27 12:34:56"
+          "2026-11-28 12:34:56"
         ]
       }
     ],
@@ -2157,6 +2421,1452 @@
         "values": [
           "12:34:56"
         ]
+      }
+    ]
+  },
+  "json_read": {
+    "default": [
+      {
+        "options": {},
+        "reads": {
+          "date": {
+            "schema": "struct<t:date>",
+            "values": [
+              "2024-01-02"
+            ]
+          },
+          "timestamp": {
+            "schema": "struct<t:timestamp>",
+            "values": [
+              "2024-01-02 00:00:00"
+            ]
+          }
+        },
+        "text": "2024-01-02"
+      },
+      {
+        "options": {},
+        "reads": {
+          "date": {
+            "schema": "struct<t:date>",
+            "values": [
+              "2024-01-02"
+            ]
+          },
+          "timestamp": {
+            "schema": "struct<t:timestamp>",
+            "values": [
+              "2024-01-02 00:00:00"
+            ]
+          }
+        },
+        "text": "2024-1-2"
+      },
+      {
+        "options": {},
+        "reads": {
+          "date": {
+            "schema": "struct<t:date>",
+            "values": [
+              "2024-01-02"
+            ]
+          },
+          "timestamp": {
+            "schema": "struct<t:timestamp>",
+            "values": [
+              "2024-01-02 03:04:05"
+            ]
+          }
+        },
+        "text": "2024-01-02 03:04:05"
+      },
+      {
+        "options": {},
+        "reads": {
+          "date": {
+            "schema": "struct<t:date>",
+            "values": [
+              "2024-01-02"
+            ]
+          },
+          "timestamp": {
+            "schema": "struct<t:timestamp>",
+            "values": [
+              "2024-01-02 02:04:05.123"
+            ]
+          }
+        },
+        "text": "2024-01-02T03:04:05.123+01:00"
+      },
+      {
+        "options": {},
+        "reads": {
+          "date": {
+            "schema": "struct<t:date>",
+            "values": [
+              null
+            ]
+          },
+          "timestamp": {
+            "schema": "struct<t:timestamp>",
+            "values": [
+              null
+            ]
+          }
+        },
+        "text": "02/01/2024"
+      },
+      {
+        "options": {},
+        "reads": {
+          "date": {
+            "schema": "struct<t:date>",
+            "values": [
+              null
+            ]
+          },
+          "timestamp": {
+            "schema": "struct<t:timestamp>",
+            "values": [
+              null
+            ]
+          }
+        },
+        "text": "not a date"
+      },
+      {
+        "options": {
+          "enableDateTimeParsingFallback": "false"
+        },
+        "reads": {
+          "date": {
+            "schema": "struct<t:date>",
+            "values": [
+              "2024-01-02"
+            ]
+          },
+          "timestamp": {
+            "schema": "struct<t:timestamp>",
+            "values": [
+              "2024-01-02 00:00:00"
+            ]
+          }
+        },
+        "text": "2024-01-02"
+      },
+      {
+        "options": {
+          "enableDateTimeParsingFallback": "false"
+        },
+        "reads": {
+          "date": {
+            "schema": "struct<t:date>",
+            "values": [
+              "2024-01-02"
+            ]
+          },
+          "timestamp": {
+            "schema": "struct<t:timestamp>",
+            "values": [
+              "2024-01-02 00:00:00"
+            ]
+          }
+        },
+        "text": "2024-1-2"
+      },
+      {
+        "options": {
+          "enableDateTimeParsingFallback": "false"
+        },
+        "reads": {
+          "date": {
+            "schema": "struct<t:date>",
+            "values": [
+              "2024-01-02"
+            ]
+          },
+          "timestamp": {
+            "schema": "struct<t:timestamp>",
+            "values": [
+              "2024-01-02 03:04:05"
+            ]
+          }
+        },
+        "text": "2024-01-02 03:04:05"
+      },
+      {
+        "options": {
+          "enableDateTimeParsingFallback": "false"
+        },
+        "reads": {
+          "date": {
+            "schema": "struct<t:date>",
+            "values": [
+              "2024-01-02"
+            ]
+          },
+          "timestamp": {
+            "schema": "struct<t:timestamp>",
+            "values": [
+              "2024-01-02 02:04:05.123"
+            ]
+          }
+        },
+        "text": "2024-01-02T03:04:05.123+01:00"
+      },
+      {
+        "options": {
+          "enableDateTimeParsingFallback": "false"
+        },
+        "reads": {
+          "date": {
+            "schema": "struct<t:date>",
+            "values": [
+              null
+            ]
+          },
+          "timestamp": {
+            "schema": "struct<t:timestamp>",
+            "values": [
+              null
+            ]
+          }
+        },
+        "text": "02/01/2024"
+      },
+      {
+        "options": {
+          "enableDateTimeParsingFallback": "false"
+        },
+        "reads": {
+          "date": {
+            "schema": "struct<t:date>",
+            "values": [
+              null
+            ]
+          },
+          "timestamp": {
+            "schema": "struct<t:timestamp>",
+            "values": [
+              null
+            ]
+          }
+        },
+        "text": "not a date"
+      },
+      {
+        "options": {
+          "enableDateTimeParsingFallback": "true"
+        },
+        "reads": {
+          "date": {
+            "schema": "struct<t:date>",
+            "values": [
+              "2024-01-02"
+            ]
+          },
+          "timestamp": {
+            "schema": "struct<t:timestamp>",
+            "values": [
+              "2024-01-02 00:00:00"
+            ]
+          }
+        },
+        "text": "2024-01-02"
+      },
+      {
+        "options": {
+          "enableDateTimeParsingFallback": "true"
+        },
+        "reads": {
+          "date": {
+            "schema": "struct<t:date>",
+            "values": [
+              "2024-01-02"
+            ]
+          },
+          "timestamp": {
+            "schema": "struct<t:timestamp>",
+            "values": [
+              "2024-01-02 00:00:00"
+            ]
+          }
+        },
+        "text": "2024-1-2"
+      },
+      {
+        "options": {
+          "enableDateTimeParsingFallback": "true"
+        },
+        "reads": {
+          "date": {
+            "schema": "struct<t:date>",
+            "values": [
+              "2024-01-02"
+            ]
+          },
+          "timestamp": {
+            "schema": "struct<t:timestamp>",
+            "values": [
+              "2024-01-02 03:04:05"
+            ]
+          }
+        },
+        "text": "2024-01-02 03:04:05"
+      },
+      {
+        "options": {
+          "enableDateTimeParsingFallback": "true"
+        },
+        "reads": {
+          "date": {
+            "schema": "struct<t:date>",
+            "values": [
+              "2024-01-02"
+            ]
+          },
+          "timestamp": {
+            "schema": "struct<t:timestamp>",
+            "values": [
+              "2024-01-02 02:04:05.123"
+            ]
+          }
+        },
+        "text": "2024-01-02T03:04:05.123+01:00"
+      },
+      {
+        "options": {
+          "enableDateTimeParsingFallback": "true"
+        },
+        "reads": {
+          "date": {
+            "schema": "struct<t:date>",
+            "values": [
+              null
+            ]
+          },
+          "timestamp": {
+            "schema": "struct<t:timestamp>",
+            "values": [
+              null
+            ]
+          }
+        },
+        "text": "02/01/2024"
+      },
+      {
+        "options": {
+          "enableDateTimeParsingFallback": "true"
+        },
+        "reads": {
+          "date": {
+            "schema": "struct<t:date>",
+            "values": [
+              null
+            ]
+          },
+          "timestamp": {
+            "schema": "struct<t:timestamp>",
+            "values": [
+              null
+            ]
+          }
+        },
+        "text": "not a date"
+      },
+      {
+        "options": {
+          "dateFormat": "dd/MM/yyyy"
+        },
+        "reads": {
+          "date": {
+            "schema": "struct<t:date>",
+            "values": [
+              null
+            ]
+          },
+          "timestamp": {
+            "schema": "struct<t:timestamp>",
+            "values": [
+              "2024-01-02 00:00:00"
+            ]
+          }
+        },
+        "text": "2024-01-02"
+      },
+      {
+        "options": {
+          "dateFormat": "dd/MM/yyyy"
+        },
+        "reads": {
+          "date": {
+            "schema": "struct<t:date>",
+            "values": [
+              null
+            ]
+          },
+          "timestamp": {
+            "schema": "struct<t:timestamp>",
+            "values": [
+              "2024-01-02 00:00:00"
+            ]
+          }
+        },
+        "text": "2024-1-2"
+      },
+      {
+        "options": {
+          "dateFormat": "dd/MM/yyyy"
+        },
+        "reads": {
+          "date": {
+            "schema": "struct<t:date>",
+            "values": [
+              null
+            ]
+          },
+          "timestamp": {
+            "schema": "struct<t:timestamp>",
+            "values": [
+              "2024-01-02 03:04:05"
+            ]
+          }
+        },
+        "text": "2024-01-02 03:04:05"
+      },
+      {
+        "options": {
+          "dateFormat": "dd/MM/yyyy"
+        },
+        "reads": {
+          "date": {
+            "schema": "struct<t:date>",
+            "values": [
+              null
+            ]
+          },
+          "timestamp": {
+            "schema": "struct<t:timestamp>",
+            "values": [
+              "2024-01-02 02:04:05.123"
+            ]
+          }
+        },
+        "text": "2024-01-02T03:04:05.123+01:00"
+      },
+      {
+        "options": {
+          "dateFormat": "dd/MM/yyyy"
+        },
+        "reads": {
+          "date": {
+            "schema": "struct<t:date>",
+            "values": [
+              "2024-01-02"
+            ]
+          },
+          "timestamp": {
+            "schema": "struct<t:timestamp>",
+            "values": [
+              null
+            ]
+          }
+        },
+        "text": "02/01/2024"
+      },
+      {
+        "options": {
+          "dateFormat": "dd/MM/yyyy"
+        },
+        "reads": {
+          "date": {
+            "schema": "struct<t:date>",
+            "values": [
+              null
+            ]
+          },
+          "timestamp": {
+            "schema": "struct<t:timestamp>",
+            "values": [
+              null
+            ]
+          }
+        },
+        "text": "not a date"
+      },
+      {
+        "options": {
+          "dateFormat": "dd/MM/yyyy",
+          "enableDateTimeParsingFallback": "false"
+        },
+        "reads": {
+          "date": {
+            "schema": "struct<t:date>",
+            "values": [
+              null
+            ]
+          },
+          "timestamp": {
+            "schema": "struct<t:timestamp>",
+            "values": [
+              "2024-01-02 00:00:00"
+            ]
+          }
+        },
+        "text": "2024-01-02"
+      },
+      {
+        "options": {
+          "dateFormat": "dd/MM/yyyy",
+          "enableDateTimeParsingFallback": "false"
+        },
+        "reads": {
+          "date": {
+            "schema": "struct<t:date>",
+            "values": [
+              null
+            ]
+          },
+          "timestamp": {
+            "schema": "struct<t:timestamp>",
+            "values": [
+              "2024-01-02 00:00:00"
+            ]
+          }
+        },
+        "text": "2024-1-2"
+      },
+      {
+        "options": {
+          "dateFormat": "dd/MM/yyyy",
+          "enableDateTimeParsingFallback": "false"
+        },
+        "reads": {
+          "date": {
+            "schema": "struct<t:date>",
+            "values": [
+              null
+            ]
+          },
+          "timestamp": {
+            "schema": "struct<t:timestamp>",
+            "values": [
+              "2024-01-02 03:04:05"
+            ]
+          }
+        },
+        "text": "2024-01-02 03:04:05"
+      },
+      {
+        "options": {
+          "dateFormat": "dd/MM/yyyy",
+          "enableDateTimeParsingFallback": "false"
+        },
+        "reads": {
+          "date": {
+            "schema": "struct<t:date>",
+            "values": [
+              null
+            ]
+          },
+          "timestamp": {
+            "schema": "struct<t:timestamp>",
+            "values": [
+              "2024-01-02 02:04:05.123"
+            ]
+          }
+        },
+        "text": "2024-01-02T03:04:05.123+01:00"
+      },
+      {
+        "options": {
+          "dateFormat": "dd/MM/yyyy",
+          "enableDateTimeParsingFallback": "false"
+        },
+        "reads": {
+          "date": {
+            "schema": "struct<t:date>",
+            "values": [
+              "2024-01-02"
+            ]
+          },
+          "timestamp": {
+            "schema": "struct<t:timestamp>",
+            "values": [
+              null
+            ]
+          }
+        },
+        "text": "02/01/2024"
+      },
+      {
+        "options": {
+          "dateFormat": "dd/MM/yyyy",
+          "enableDateTimeParsingFallback": "false"
+        },
+        "reads": {
+          "date": {
+            "schema": "struct<t:date>",
+            "values": [
+              null
+            ]
+          },
+          "timestamp": {
+            "schema": "struct<t:timestamp>",
+            "values": [
+              null
+            ]
+          }
+        },
+        "text": "not a date"
+      },
+      {
+        "options": {
+          "enableDateTimeParsingFallback": "false",
+          "timestampFormat": "dd/MM/yyyy HH:mm"
+        },
+        "reads": {
+          "date": {
+            "schema": "struct<t:date>",
+            "values": [
+              "2024-01-02"
+            ]
+          },
+          "timestamp": {
+            "schema": "struct<t:timestamp>",
+            "values": [
+              null
+            ]
+          }
+        },
+        "text": "2024-01-02"
+      },
+      {
+        "options": {
+          "enableDateTimeParsingFallback": "false",
+          "timestampFormat": "dd/MM/yyyy HH:mm"
+        },
+        "reads": {
+          "date": {
+            "schema": "struct<t:date>",
+            "values": [
+              "2024-01-02"
+            ]
+          },
+          "timestamp": {
+            "schema": "struct<t:timestamp>",
+            "values": [
+              null
+            ]
+          }
+        },
+        "text": "2024-1-2"
+      },
+      {
+        "options": {
+          "enableDateTimeParsingFallback": "false",
+          "timestampFormat": "dd/MM/yyyy HH:mm"
+        },
+        "reads": {
+          "date": {
+            "schema": "struct<t:date>",
+            "values": [
+              "2024-01-02"
+            ]
+          },
+          "timestamp": {
+            "schema": "struct<t:timestamp>",
+            "values": [
+              null
+            ]
+          }
+        },
+        "text": "2024-01-02 03:04:05"
+      },
+      {
+        "options": {
+          "enableDateTimeParsingFallback": "false",
+          "timestampFormat": "dd/MM/yyyy HH:mm"
+        },
+        "reads": {
+          "date": {
+            "schema": "struct<t:date>",
+            "values": [
+              "2024-01-02"
+            ]
+          },
+          "timestamp": {
+            "schema": "struct<t:timestamp>",
+            "values": [
+              null
+            ]
+          }
+        },
+        "text": "2024-01-02T03:04:05.123+01:00"
+      },
+      {
+        "options": {
+          "enableDateTimeParsingFallback": "false",
+          "timestampFormat": "dd/MM/yyyy HH:mm"
+        },
+        "reads": {
+          "date": {
+            "schema": "struct<t:date>",
+            "values": [
+              null
+            ]
+          },
+          "timestamp": {
+            "schema": "struct<t:timestamp>",
+            "values": [
+              null
+            ]
+          }
+        },
+        "text": "02/01/2024"
+      },
+      {
+        "options": {
+          "enableDateTimeParsingFallback": "false",
+          "timestampFormat": "dd/MM/yyyy HH:mm"
+        },
+        "reads": {
+          "date": {
+            "schema": "struct<t:date>",
+            "values": [
+              null
+            ]
+          },
+          "timestamp": {
+            "schema": "struct<t:timestamp>",
+            "values": [
+              null
+            ]
+          }
+        },
+        "text": "not a date"
+      }
+    ],
+    "legacy": [
+      {
+        "options": {},
+        "reads": {
+          "date": {
+            "schema": "struct<t:date>",
+            "values": [
+              "2024-01-02"
+            ]
+          },
+          "timestamp": {
+            "schema": "struct<t:timestamp>",
+            "values": [
+              "2024-01-02 00:00:00"
+            ]
+          }
+        },
+        "text": "2024-01-02"
+      },
+      {
+        "options": {},
+        "reads": {
+          "date": {
+            "schema": "struct<t:date>",
+            "values": [
+              "2024-01-02"
+            ]
+          },
+          "timestamp": {
+            "schema": "struct<t:timestamp>",
+            "values": [
+              "2024-01-02 00:00:00"
+            ]
+          }
+        },
+        "text": "2024-1-2"
+      },
+      {
+        "options": {},
+        "reads": {
+          "date": {
+            "schema": "struct<t:date>",
+            "values": [
+              "2024-01-02"
+            ]
+          },
+          "timestamp": {
+            "schema": "struct<t:timestamp>",
+            "values": [
+              "2024-01-02 03:04:05"
+            ]
+          }
+        },
+        "text": "2024-01-02 03:04:05"
+      },
+      {
+        "options": {},
+        "reads": {
+          "date": {
+            "schema": "struct<t:date>",
+            "values": [
+              "2024-01-02"
+            ]
+          },
+          "timestamp": {
+            "schema": "struct<t:timestamp>",
+            "values": [
+              "2024-01-02 02:04:05.123"
+            ]
+          }
+        },
+        "text": "2024-01-02T03:04:05.123+01:00"
+      },
+      {
+        "options": {},
+        "reads": {
+          "date": {
+            "schema": "struct<t:date>",
+            "values": [
+              null
+            ]
+          },
+          "timestamp": {
+            "schema": "struct<t:timestamp>",
+            "values": [
+              null
+            ]
+          }
+        },
+        "text": "02/01/2024"
+      },
+      {
+        "options": {},
+        "reads": {
+          "date": {
+            "schema": "struct<t:date>",
+            "values": [
+              null
+            ]
+          },
+          "timestamp": {
+            "schema": "struct<t:timestamp>",
+            "values": [
+              null
+            ]
+          }
+        },
+        "text": "not a date"
+      },
+      {
+        "options": {
+          "enableDateTimeParsingFallback": "false"
+        },
+        "reads": {
+          "date": {
+            "schema": "struct<t:date>",
+            "values": [
+              "2024-01-02"
+            ]
+          },
+          "timestamp": {
+            "schema": "struct<t:timestamp>",
+            "values": [
+              null
+            ]
+          }
+        },
+        "text": "2024-01-02"
+      },
+      {
+        "options": {
+          "enableDateTimeParsingFallback": "false"
+        },
+        "reads": {
+          "date": {
+            "schema": "struct<t:date>",
+            "values": [
+              "2024-01-02"
+            ]
+          },
+          "timestamp": {
+            "schema": "struct<t:timestamp>",
+            "values": [
+              null
+            ]
+          }
+        },
+        "text": "2024-1-2"
+      },
+      {
+        "options": {
+          "enableDateTimeParsingFallback": "false"
+        },
+        "reads": {
+          "date": {
+            "schema": "struct<t:date>",
+            "values": [
+              "2024-01-02"
+            ]
+          },
+          "timestamp": {
+            "schema": "struct<t:timestamp>",
+            "values": [
+              null
+            ]
+          }
+        },
+        "text": "2024-01-02 03:04:05"
+      },
+      {
+        "options": {
+          "enableDateTimeParsingFallback": "false"
+        },
+        "reads": {
+          "date": {
+            "schema": "struct<t:date>",
+            "values": [
+              "2024-01-02"
+            ]
+          },
+          "timestamp": {
+            "schema": "struct<t:timestamp>",
+            "values": [
+              "2024-01-02 02:04:05.123"
+            ]
+          }
+        },
+        "text": "2024-01-02T03:04:05.123+01:00"
+      },
+      {
+        "options": {
+          "enableDateTimeParsingFallback": "false"
+        },
+        "reads": {
+          "date": {
+            "schema": "struct<t:date>",
+            "values": [
+              null
+            ]
+          },
+          "timestamp": {
+            "schema": "struct<t:timestamp>",
+            "values": [
+              null
+            ]
+          }
+        },
+        "text": "02/01/2024"
+      },
+      {
+        "options": {
+          "enableDateTimeParsingFallback": "false"
+        },
+        "reads": {
+          "date": {
+            "schema": "struct<t:date>",
+            "values": [
+              null
+            ]
+          },
+          "timestamp": {
+            "schema": "struct<t:timestamp>",
+            "values": [
+              null
+            ]
+          }
+        },
+        "text": "not a date"
+      },
+      {
+        "options": {
+          "enableDateTimeParsingFallback": "true"
+        },
+        "reads": {
+          "date": {
+            "schema": "struct<t:date>",
+            "values": [
+              "2024-01-02"
+            ]
+          },
+          "timestamp": {
+            "schema": "struct<t:timestamp>",
+            "values": [
+              "2024-01-02 00:00:00"
+            ]
+          }
+        },
+        "text": "2024-01-02"
+      },
+      {
+        "options": {
+          "enableDateTimeParsingFallback": "true"
+        },
+        "reads": {
+          "date": {
+            "schema": "struct<t:date>",
+            "values": [
+              "2024-01-02"
+            ]
+          },
+          "timestamp": {
+            "schema": "struct<t:timestamp>",
+            "values": [
+              "2024-01-02 00:00:00"
+            ]
+          }
+        },
+        "text": "2024-1-2"
+      },
+      {
+        "options": {
+          "enableDateTimeParsingFallback": "true"
+        },
+        "reads": {
+          "date": {
+            "schema": "struct<t:date>",
+            "values": [
+              "2024-01-02"
+            ]
+          },
+          "timestamp": {
+            "schema": "struct<t:timestamp>",
+            "values": [
+              "2024-01-02 03:04:05"
+            ]
+          }
+        },
+        "text": "2024-01-02 03:04:05"
+      },
+      {
+        "options": {
+          "enableDateTimeParsingFallback": "true"
+        },
+        "reads": {
+          "date": {
+            "schema": "struct<t:date>",
+            "values": [
+              "2024-01-02"
+            ]
+          },
+          "timestamp": {
+            "schema": "struct<t:timestamp>",
+            "values": [
+              "2024-01-02 02:04:05.123"
+            ]
+          }
+        },
+        "text": "2024-01-02T03:04:05.123+01:00"
+      },
+      {
+        "options": {
+          "enableDateTimeParsingFallback": "true"
+        },
+        "reads": {
+          "date": {
+            "schema": "struct<t:date>",
+            "values": [
+              null
+            ]
+          },
+          "timestamp": {
+            "schema": "struct<t:timestamp>",
+            "values": [
+              null
+            ]
+          }
+        },
+        "text": "02/01/2024"
+      },
+      {
+        "options": {
+          "enableDateTimeParsingFallback": "true"
+        },
+        "reads": {
+          "date": {
+            "schema": "struct<t:date>",
+            "values": [
+              null
+            ]
+          },
+          "timestamp": {
+            "schema": "struct<t:timestamp>",
+            "values": [
+              null
+            ]
+          }
+        },
+        "text": "not a date"
+      },
+      {
+        "options": {
+          "dateFormat": "dd/MM/yyyy"
+        },
+        "reads": {
+          "date": {
+            "schema": "struct<t:date>",
+            "values": [
+              "2024-01-02"
+            ]
+          },
+          "timestamp": {
+            "schema": "struct<t:timestamp>",
+            "values": [
+              "2024-01-02 00:00:00"
+            ]
+          }
+        },
+        "text": "2024-01-02"
+      },
+      {
+        "options": {
+          "dateFormat": "dd/MM/yyyy"
+        },
+        "reads": {
+          "date": {
+            "schema": "struct<t:date>",
+            "values": [
+              "2024-01-02"
+            ]
+          },
+          "timestamp": {
+            "schema": "struct<t:timestamp>",
+            "values": [
+              "2024-01-02 00:00:00"
+            ]
+          }
+        },
+        "text": "2024-1-2"
+      },
+      {
+        "options": {
+          "dateFormat": "dd/MM/yyyy"
+        },
+        "reads": {
+          "date": {
+            "schema": "struct<t:date>",
+            "values": [
+              "2024-01-02"
+            ]
+          },
+          "timestamp": {
+            "schema": "struct<t:timestamp>",
+            "values": [
+              "2024-01-02 03:04:05"
+            ]
+          }
+        },
+        "text": "2024-01-02 03:04:05"
+      },
+      {
+        "options": {
+          "dateFormat": "dd/MM/yyyy"
+        },
+        "reads": {
+          "date": {
+            "schema": "struct<t:date>",
+            "values": [
+              "2024-01-02"
+            ]
+          },
+          "timestamp": {
+            "schema": "struct<t:timestamp>",
+            "values": [
+              "2024-01-02 02:04:05.123"
+            ]
+          }
+        },
+        "text": "2024-01-02T03:04:05.123+01:00"
+      },
+      {
+        "options": {
+          "dateFormat": "dd/MM/yyyy"
+        },
+        "reads": {
+          "date": {
+            "schema": "struct<t:date>",
+            "values": [
+              "2024-01-02"
+            ]
+          },
+          "timestamp": {
+            "schema": "struct<t:timestamp>",
+            "values": [
+              null
+            ]
+          }
+        },
+        "text": "02/01/2024"
+      },
+      {
+        "options": {
+          "dateFormat": "dd/MM/yyyy"
+        },
+        "reads": {
+          "date": {
+            "schema": "struct<t:date>",
+            "values": [
+              null
+            ]
+          },
+          "timestamp": {
+            "schema": "struct<t:timestamp>",
+            "values": [
+              null
+            ]
+          }
+        },
+        "text": "not a date"
+      },
+      {
+        "options": {
+          "dateFormat": "dd/MM/yyyy",
+          "enableDateTimeParsingFallback": "false"
+        },
+        "reads": {
+          "date": {
+            "schema": "struct<t:date>",
+            "values": [
+              null
+            ]
+          },
+          "timestamp": {
+            "schema": "struct<t:timestamp>",
+            "values": [
+              null
+            ]
+          }
+        },
+        "text": "2024-01-02"
+      },
+      {
+        "options": {
+          "dateFormat": "dd/MM/yyyy",
+          "enableDateTimeParsingFallback": "false"
+        },
+        "reads": {
+          "date": {
+            "schema": "struct<t:date>",
+            "values": [
+              null
+            ]
+          },
+          "timestamp": {
+            "schema": "struct<t:timestamp>",
+            "values": [
+              null
+            ]
+          }
+        },
+        "text": "2024-1-2"
+      },
+      {
+        "options": {
+          "dateFormat": "dd/MM/yyyy",
+          "enableDateTimeParsingFallback": "false"
+        },
+        "reads": {
+          "date": {
+            "schema": "struct<t:date>",
+            "values": [
+              null
+            ]
+          },
+          "timestamp": {
+            "schema": "struct<t:timestamp>",
+            "values": [
+              null
+            ]
+          }
+        },
+        "text": "2024-01-02 03:04:05"
+      },
+      {
+        "options": {
+          "dateFormat": "dd/MM/yyyy",
+          "enableDateTimeParsingFallback": "false"
+        },
+        "reads": {
+          "date": {
+            "schema": "struct<t:date>",
+            "values": [
+              null
+            ]
+          },
+          "timestamp": {
+            "schema": "struct<t:timestamp>",
+            "values": [
+              "2024-01-02 02:04:05.123"
+            ]
+          }
+        },
+        "text": "2024-01-02T03:04:05.123+01:00"
+      },
+      {
+        "options": {
+          "dateFormat": "dd/MM/yyyy",
+          "enableDateTimeParsingFallback": "false"
+        },
+        "reads": {
+          "date": {
+            "schema": "struct<t:date>",
+            "values": [
+              "2024-01-02"
+            ]
+          },
+          "timestamp": {
+            "schema": "struct<t:timestamp>",
+            "values": [
+              null
+            ]
+          }
+        },
+        "text": "02/01/2024"
+      },
+      {
+        "options": {
+          "dateFormat": "dd/MM/yyyy",
+          "enableDateTimeParsingFallback": "false"
+        },
+        "reads": {
+          "date": {
+            "schema": "struct<t:date>",
+            "values": [
+              null
+            ]
+          },
+          "timestamp": {
+            "schema": "struct<t:timestamp>",
+            "values": [
+              null
+            ]
+          }
+        },
+        "text": "not a date"
+      },
+      {
+        "options": {
+          "enableDateTimeParsingFallback": "false",
+          "timestampFormat": "dd/MM/yyyy HH:mm"
+        },
+        "reads": {
+          "date": {
+            "schema": "struct<t:date>",
+            "values": [
+              "2024-01-02"
+            ]
+          },
+          "timestamp": {
+            "schema": "struct<t:timestamp>",
+            "values": [
+              null
+            ]
+          }
+        },
+        "text": "2024-01-02"
+      },
+      {
+        "options": {
+          "enableDateTimeParsingFallback": "false",
+          "timestampFormat": "dd/MM/yyyy HH:mm"
+        },
+        "reads": {
+          "date": {
+            "schema": "struct<t:date>",
+            "values": [
+              "2024-01-02"
+            ]
+          },
+          "timestamp": {
+            "schema": "struct<t:timestamp>",
+            "values": [
+              null
+            ]
+          }
+        },
+        "text": "2024-1-2"
+      },
+      {
+        "options": {
+          "enableDateTimeParsingFallback": "false",
+          "timestampFormat": "dd/MM/yyyy HH:mm"
+        },
+        "reads": {
+          "date": {
+            "schema": "struct<t:date>",
+            "values": [
+              "2024-01-02"
+            ]
+          },
+          "timestamp": {
+            "schema": "struct<t:timestamp>",
+            "values": [
+              null
+            ]
+          }
+        },
+        "text": "2024-01-02 03:04:05"
+      },
+      {
+        "options": {
+          "enableDateTimeParsingFallback": "false",
+          "timestampFormat": "dd/MM/yyyy HH:mm"
+        },
+        "reads": {
+          "date": {
+            "schema": "struct<t:date>",
+            "values": [
+              "2024-01-02"
+            ]
+          },
+          "timestamp": {
+            "schema": "struct<t:timestamp>",
+            "values": [
+              null
+            ]
+          }
+        },
+        "text": "2024-01-02T03:04:05.123+01:00"
+      },
+      {
+        "options": {
+          "enableDateTimeParsingFallback": "false",
+          "timestampFormat": "dd/MM/yyyy HH:mm"
+        },
+        "reads": {
+          "date": {
+            "schema": "struct<t:date>",
+            "values": [
+              null
+            ]
+          },
+          "timestamp": {
+            "schema": "struct<t:timestamp>",
+            "values": [
+              null
+            ]
+          }
+        },
+        "text": "02/01/2024"
+      },
+      {
+        "options": {
+          "enableDateTimeParsingFallback": "false",
+          "timestampFormat": "dd/MM/yyyy HH:mm"
+        },
+        "reads": {
+          "date": {
+            "schema": "struct<t:date>",
+            "values": [
+              null
+            ]
+          },
+          "timestamp": {
+            "schema": "struct<t:timestamp>",
+            "values": [
+              null
+            ]
+          }
+        },
+        "text": "not a date"
       }
     ]
   },

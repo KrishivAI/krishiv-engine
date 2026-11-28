@@ -9,7 +9,9 @@
 //!   ([`string_decimal`]).
 //! - A number past `Long`, or a floating-point number under `prefersDecimal`,
 //!   is `DecimalType(max(precision, scale), scale)`, `DOUBLE` past 38 digits;
-//!   a negative scale (`1e3`) fails the query with `NEGATIVE_SCALE_DISALLOWED`
+//!   a negative scale (`1e3`) fails the query with `NEGATIVE_SCALE_DISALLOWED`,
+//!   and a number with no decimal form (`NaN`, the infinities) is Jackson's
+//!   `getDecimalValue` failure, `KRISHIV_JSON_NUMBER_NOT_DECIMAL`
 //!   ([`number_decimal`]).
 //! - Two decimals merge to the wider integral range plus the wider scale,
 //!   `DOUBLE` past 38 digits; a `BIGINT` merges as `DECIMAL(20, 0)`
@@ -22,7 +24,7 @@
 
 use std::borrow::Cow;
 
-use krishiv_common::error::{KrishivError, NegativeScaleDisallowed};
+use krishiv_common::error::{KrishivError, KrishivJsonNumberNotDecimal, NegativeScaleDisallowed};
 
 /// `DecimalType.forType(LongType)`: the decimal a `BIGINT` merges as.
 pub const LONG_DECIMAL: (u8, i8) = (20, 0);
@@ -88,7 +90,9 @@ fn java_exponent(chars: &mut impl Iterator<Item = char>) -> Option<i64> {
         }
         let d = crate::string::java_decimal_digit(c)?;
         value = value.checked_mul(10)?.checked_add(i64::from(d))?;
-        // Past `int` already: Java throws.
+        // Past `int` in either sign: Java throws. `2^31` itself stays (it is
+        // `-2^31` when negated); the final `i32::try_from` refuses `+2^31`,
+        // so this early exit only keeps `value` from overflowing.
         if value > 1_i64 << 31 {
             return None;
         }
@@ -125,7 +129,7 @@ pub fn string_decimal(s: &str) -> Option<(u8, i8)> {
 pub enum NumberDecimal {
     /// `DECIMAL(p, s)`.
     Decimal(u8, i8),
-    /// Wider than 38 digits, or no decimal form (`NaN`, the infinities).
+    /// Wider than 38 digits.
     Double,
 }
 
@@ -134,10 +138,18 @@ pub enum NumberDecimal {
 ///
 /// # Errors
 /// `NEGATIVE_SCALE_DISALLOWED` for a negative scale within 38 digits
-/// (`1e3` under `prefersDecimal`), as `DecimalType` refuses it.
+/// (`1e3` under `prefersDecimal`), as `DecimalType` refuses it, and
+/// `KRISHIV_JSON_NUMBER_NOT_DECIMAL` for a number with no decimal form
+/// (`NaN`, `Infinity`, `-Infinity`, an exponent past `int`), where Spark's
+/// `getDecimalValue` throws a `NumberFormatException` (Spark 4.2.1 / 4.3.0
+/// runs: `schema_of_json` fails; a file read takes the record to the parse
+/// mode, [`is_not_decimal`]).
 pub fn number_decimal(raw: &str) -> Result<NumberDecimal, KrishivError> {
     let Some((p, scale)) = java_big_decimal(raw) else {
-        return Ok(NumberDecimal::Double);
+        return Err(KrishivJsonNumberNotDecimal {
+            value: format!("\"{raw}\""),
+        }
+        .into());
     };
     // `DOUBLE` past 38 digits (a width that does not fit a `u8` is past them).
     let Some(width) = u8::try_from(p.max(scale))
@@ -155,6 +167,14 @@ pub fn number_decimal(raw: &str) -> Result<NumberDecimal, KrishivError> {
     }
     // `0 <= scale <= width <= 38`, so the scale fits an `i8`.
     Ok(i8::try_from(scale).map_or(NumberDecimal::Double, |s| NumberDecimal::Decimal(width, s)))
+}
+
+/// Whether `e` is [`number_decimal`]'s "no decimal form" failure, a
+/// `RuntimeException` that Spark's file inference hands to the parse mode
+/// (unlike `NEGATIVE_SCALE_DISALLOWED`, which fails the read).
+#[must_use]
+pub fn is_not_decimal(e: &KrishivError) -> bool {
+    e.error_class() == krishiv_common::error::ErrorClass::KrishivJsonNumberNotDecimal
 }
 
 /// Spark's `compatibleType` of two decimals: the wider integral range plus
@@ -234,7 +254,10 @@ mod tests {
             number_decimal("1.5e1").ok(),
             Some(NumberDecimal::Decimal(2, 0))
         );
-        assert_eq!(number_decimal("NaN").ok(), Some(NumberDecimal::Double));
+        for raw in ["NaN", "Infinity", "-Infinity", "1e3000000000"] {
+            let err = number_decimal(raw).err();
+            assert!(err.as_ref().is_some_and(is_not_decimal), "{raw}: {err:?}");
+        }
         assert_eq!(
             number_decimal(&"9".repeat(39)).ok(),
             Some(NumberDecimal::Double)

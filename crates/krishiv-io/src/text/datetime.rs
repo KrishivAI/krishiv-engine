@@ -63,13 +63,36 @@ fn clean(s: &str) -> std::borrow::Cow<'_, str> {
 }
 
 impl Datetimes {
-    /// The conversions of `o`: its `timeZone` and patterns. For reading
-    /// ([`Purpose::Parse`]) an unset pattern means Spark's lenient default
-    /// grammar; for writing the default patterns are used.
+    /// The conversions of `o` for the JSON reader and writer: its `timeZone`
+    /// and patterns. For reading ([`Purpose::Parse`]) an unset pattern means
+    /// Spark's lenient default grammar (`JSONOptions.dateFormatInRead` is the
+    /// option alone); for writing the default patterns are used.
     ///
     /// # Errors
     /// An invalid pattern or time zone.
     pub(crate) fn new(o: &FormatOptions, purpose: Purpose) -> Result<Self, KrishivError> {
+        Self::build(o, purpose, false)
+    }
+
+    /// [`Datetimes::new`] for the CSV reader and writer. Under `preferDate`
+    /// (default on, off under LEGACY) a read without `dateFormat` takes the
+    /// strict `yyyy-MM-dd` (`CSVOptions.dateFormatInRead`), so with the
+    /// fallback turned off `2024-01-02 03:04:05` is NULL; with `preferDate`
+    /// off dates read leniently as in JSON (Spark 4.2.1 and 4.3.0 runs,
+    /// `time-text-profiles.json`).
+    ///
+    /// # Errors
+    /// An invalid pattern or time zone.
+    pub(crate) fn csv(o: &FormatOptions, purpose: Purpose) -> Result<Self, KrishivError> {
+        let prefer_date = o.bool("preferDate").unwrap_or(true) && !crate::text::legacy_parser(o);
+        Self::build(o, purpose, prefer_date)
+    }
+
+    fn build(
+        o: &FormatOptions,
+        purpose: Purpose,
+        strict_date_default: bool,
+    ) -> Result<Self, KrishivError> {
         let configured = o.str("timeZone").unwrap_or("UTC");
         let rules = resolve_zone(configured);
         let zone_id = zone_id(configured);
@@ -113,15 +136,13 @@ impl Datetimes {
             })
             .map(|p| DateTimePattern::new(p, purpose));
         let explicit = o.bool("enableDateTimeParsingFallback");
-        // Spark has no lenient default date reader: without `dateFormat` it
-        // reads `yyyy-MM-dd` and leans on the fallback, so turning the
-        // fallback off leaves the strict pattern (`2024-01-02 03:04:05` is
-        // null; Spark 4.2.1 and 4.3.0 runs, `time-text-profiles.json`).
-        let date = match (date, explicit, purpose) {
-            (None, Some(false), Purpose::Parse | Purpose::ParseNtz) => {
+        // CSV under `preferDate` reads `yyyy-MM-dd` when no `dateFormat` is
+        // named; the fallback (on unless named) makes that lenient again.
+        let date = match (date, purpose) {
+            (None, Purpose::Parse | Purpose::ParseNtz) if strict_date_default => {
                 Some(DateTimePattern::new(DATE_PATTERN, purpose)?)
             }
-            (date, _, _) => date,
+            (date, _) => date,
         };
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -129,8 +150,9 @@ impl Datetimes {
             .and_then(|d| i64::try_from(d.as_micros()).ok())
             .unwrap_or(0);
         Ok(Self {
-            // `JacksonParser`: the fallback is on under LEGACY unless named.
-            fallback_date: explicit.unwrap_or(legacy || date.is_none()),
+            // `JacksonParser` and `UnivocityParser`: the fallback is on under
+            // LEGACY or without a `dateFormat` option, unless named.
+            fallback_date: explicit.unwrap_or(legacy || o.str("dateFormat").is_none()),
             fallback_timestamp: explicit
                 .unwrap_or(legacy || (timestamp.is_none() && ntz.is_none())),
             fallback_ntz: explicit.unwrap_or(timestamp.is_none() && ntz.is_none()),

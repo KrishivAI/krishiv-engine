@@ -303,7 +303,7 @@ pub fn ddl_of_string(csv: &str, options: &FormatOptions) -> FormatResult<String>
         )));
     }
     let opts = CsvOptions::new(options, false)?;
-    let dt = Datetimes::new(options, Purpose::Parse)?;
+    let dt = Datetimes::csv(options, Purpose::Parse)?;
     let date = DateTimePattern::new(
         options.str("dateFormat").unwrap_or("yyyy-MM-dd"),
         Purpose::Parse,
@@ -626,7 +626,7 @@ pub(crate) fn infer<'a>(
             crate::text::check_plain(f.path.as_ref())?;
         }
         let opts = CsvOptions::new(o, false)?;
-        let dt = Datetimes::new(o, Purpose::Parse)?;
+        let dt = Datetimes::csv(o, Purpose::Parse)?;
         let date =
             DateTimePattern::new(o.str("dateFormat").unwrap_or("yyyy-MM-dd"), Purpose::Parse)?;
         let inf = Infer {
@@ -718,7 +718,7 @@ pub(crate) fn infer<'a>(
             if infer_types {
                 let sh = Arc::new(Shared {
                     opts: opts.clone(),
-                    dt: Datetimes::new(o, Purpose::Parse)?,
+                    dt: Datetimes::csv(o, Purpose::Parse)?,
                     date: date.clone(),
                     tok: line_tok,
                     first_line,

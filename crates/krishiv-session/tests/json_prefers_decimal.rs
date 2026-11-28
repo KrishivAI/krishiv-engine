@@ -31,8 +31,12 @@ fn first_text(batches: &[RecordBatch]) -> Option<String> {
     (!c.is_null(0)).then(|| c.as_string_view().value(0).to_owned())
 }
 
-/// The `typeof` of each named column of view `v`, as `struct<n:t,...>`.
+/// The `typeof` of each named column of view `v`, as `struct<n:t,...>`
+/// (`struct<>` for none: DROPMALFORMED over only malformed records).
 fn view_schema(s: &Session, names: &[&str]) -> String {
+    if names.is_empty() {
+        return "struct<>".to_owned();
+    }
     let types = names
         .iter()
         .map(|n| format!("typeof(`{n}`)"))
