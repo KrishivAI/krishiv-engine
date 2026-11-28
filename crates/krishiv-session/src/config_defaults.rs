@@ -136,7 +136,10 @@ fn admin_settable(key: &str) -> Result<&'static str, KrishivError> {
         }
         .into());
     };
-    if entry.settable_by == SettableBy::Startup || !is_modifiable(key) {
+    // A registered key: its answer does not depend on the profile.
+    if entry.settable_by == SettableBy::Startup
+        || !is_modifiable(key, krishiv_plan::analyzer::SparkProfile::default())
+    {
         return Err(CannotModifyStaticConfig {
             key: format!("\"{key}\""),
         }

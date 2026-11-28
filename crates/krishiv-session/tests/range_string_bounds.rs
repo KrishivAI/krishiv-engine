@@ -10,9 +10,9 @@ use futures::executor::block_on;
 use krishiv_session::Session;
 
 fn session(dir: &std::path::Path) -> Session {
-    let s = Session::new().unwrap();
-    s.conf()
-        .set("spark.sql.warehouse.dir", dir.to_str().unwrap())
+    let s = Session::builder()
+        .config("spark.sql.warehouse.dir", dir.to_str().unwrap())
+        .build()
         .unwrap();
     for sql in [
         "create table numerics (id int, f_float4 float, f_float8 float, f_numeric int) using parquet",

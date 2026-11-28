@@ -49,7 +49,7 @@ pub(crate) use crate::arrow_values::{arrow_field_value, arrow_value, declared_va
 use crate::catalog::TempTable;
 use crate::catalog::{is_reserved_view_name, reserved_temp_view_name};
 use crate::column::Column;
-use crate::conf::shown;
+use crate::conf::{RuntimeConf, shown};
 use crate::dataframe::DataFrame;
 use crate::session::{QueryEnv, Session};
 use crate::sql_functions::Entry;
@@ -122,11 +122,11 @@ impl Session {
                 self.string_frame(cols::SET_VERBOSE, rows).await
             }
             SetKind::Show { key, .. } => {
-                let value = self
-                    .state
-                    .conf
-                    .value(key)
-                    .unwrap_or_else(|| UNDEFINED.to_owned());
+                // A key Spark registers and Krishiv does not shows Spark's default (SV-3).
+                let value = match RuntimeConf::new(Arc::clone(&self.state.conf)).get_as_spark(key) {
+                    crate::conf::SparkConfValue::Value(v) => v,
+                    _ => UNDEFINED.to_owned(),
+                };
                 let value = shown(key, value);
                 self.string_frame(cols::SET, vec![vec![Some(key.clone()), Some(value)]])
                     .await

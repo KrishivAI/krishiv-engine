@@ -20,9 +20,9 @@ fn run(s: &Session, sql: &str) -> Vec<RecordBatch> {
 #[test]
 fn a_nondeterministic_predicate_is_evaluated_once_per_row() {
     let d = tempfile::tempdir().unwrap();
-    let s = Session::new().unwrap();
-    s.conf()
-        .set("spark.sql.warehouse.dir", d.path().to_str().unwrap())
+    let s = Session::builder()
+        .config("spark.sql.warehouse.dir", d.path().to_str().unwrap())
+        .build()
         .unwrap();
     run(
         &s,

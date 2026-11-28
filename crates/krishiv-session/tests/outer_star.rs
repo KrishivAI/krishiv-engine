@@ -88,11 +88,12 @@ fn a_local_struct_column_wins_over_the_outer_relation() -> R {
 #[test]
 fn an_outer_star_over_a_file_table_skips_the_metadata_column() -> R {
     let dir = tempfile::tempdir()?;
-    let s = Session::new()?;
-    s.conf().set(
-        "spark.sql.warehouse.dir",
-        dir.path().to_str().unwrap_or_default(),
-    )?;
+    let s = Session::builder()
+        .config(
+            "spark.sql.warehouse.dir",
+            dir.path().to_str().unwrap_or_default(),
+        )
+        .build()?;
     for sql in [
         "create table p (k int) using parquet",
         "insert into p values (1)",

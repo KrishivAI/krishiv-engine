@@ -495,9 +495,6 @@ class ArrowPythonUDFTests(ArrowPythonUDFTestsMixin, ReusedSQLTestCase):
         super().test_udf_binary_type_in_nested_structures()
 
 
-@unittest.skip(
-    "spark.sql.legacy.execution.pythonUDF.pandas.conversion.enabled=true is a refused legacy setting (P3 PR-64)"
-)
 class ArrowPythonUDFLegacyTests(ArrowPythonUDFLegacyTestsMixin, ReusedSQLTestCase):
     @classmethod
     def setUpClass(cls):

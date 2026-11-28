@@ -13,11 +13,10 @@ use krishiv_session::{
 };
 
 fn session(dir: &std::path::Path) -> Session {
-    let s = Session::new().unwrap();
-    s.conf()
-        .set("spark.sql.warehouse.dir", dir.to_str().unwrap())
-        .unwrap();
-    s
+    Session::builder()
+        .config("spark.sql.warehouse.dir", dir.to_str().unwrap())
+        .build()
+        .unwrap()
 }
 
 fn run(s: &Session, sql: &str) {
@@ -425,10 +424,8 @@ fn dropping_a_global_temporary_view_asks_for_drop_as_the_sql_does() {
         .runtime(rt)
         .principal(Principal::new("pat", PrincipalKind::User))
         .access_policy(Arc::new(NoDrop))
+        .config("spark.sql.warehouse.dir", dir.path().to_str().unwrap())
         .build()
-        .unwrap();
-    s.conf()
-        .set("spark.sql.warehouse.dir", dir.path().to_str().unwrap())
         .unwrap();
     run(&s, "CREATE GLOBAL TEMPORARY VIEW gv AS SELECT 1 AS x");
     let c = s.catalog();
@@ -463,11 +460,9 @@ fn the_catalog_api_shows_a_principal_no_more_than_the_sql_statements_do() {
         if let Some(p) = policy {
             b = b.access_policy(p);
         }
-        let s = b.build().unwrap();
-        s.conf()
-            .set("spark.sql.warehouse.dir", dir.path().to_str().unwrap())
-            .unwrap();
-        s
+        b.config("spark.sql.warehouse.dir", dir.path().to_str().unwrap())
+            .build()
+            .unwrap()
     };
     let admin = open(None);
     run(&admin, "CREATE TABLE secret (card STRING) USING parquet");
@@ -637,11 +632,9 @@ fn list_columns_of_a_permanent_view_needs_browse_on_the_view() {
         if let Some(p) = policy {
             b = b.access_policy(p);
         }
-        let s = b.build().unwrap();
-        s.conf()
-            .set("spark.sql.warehouse.dir", dir.path().to_str().unwrap())
-            .unwrap();
-        s
+        b.config("spark.sql.warehouse.dir", dir.path().to_str().unwrap())
+            .build()
+            .unwrap()
     };
     let admin = open(None);
     run(&admin, "CREATE TABLE t (a INT) USING parquet");

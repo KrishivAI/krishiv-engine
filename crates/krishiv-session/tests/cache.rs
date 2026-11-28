@@ -968,12 +968,12 @@ fn the_default_storage_level_follows_the_config() {
 /// A session whose warehouse is under `dir`, with the managed (versioned) tables `src(id)`
 /// holding 1, 2, 3 and `other(id)` holding 10.
 fn table_session(dir: &tempfile::TempDir) -> Session {
-    let s = Session::new().unwrap();
-    s.conf()
-        .set(
+    let s = Session::builder()
+        .config(
             "spark.sql.warehouse.dir",
             dir.path().join("wh").to_str().unwrap(),
         )
+        .build()
         .unwrap();
     for sql in [
         "CREATE TABLE src (id INT) USING parquet",

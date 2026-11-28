@@ -11,11 +11,10 @@ use krishiv_session::Session;
 use literal_path::sql_path;
 
 fn session(dir: &std::path::Path) -> Session {
-    let s = Session::new().unwrap();
-    s.conf()
-        .set("spark.sql.warehouse.dir", dir.to_str().unwrap())
-        .unwrap();
-    s
+    Session::builder()
+        .config("spark.sql.warehouse.dir", dir.to_str().unwrap())
+        .build()
+        .unwrap()
 }
 
 fn run(s: &Session, sql: &str) {
@@ -859,9 +858,10 @@ fn created_by_names_the_profile_release() {
         (krishiv_plan::analyzer::SparkProfile::V4_2, "Spark 4.2.0"),
     ] {
         let dir = tempfile::tempdir().unwrap();
-        let s = Session::builder().profile(profile).build().unwrap();
-        s.conf()
-            .set("spark.sql.warehouse.dir", dir.path().to_str().unwrap())
+        let s = Session::builder()
+            .profile(profile)
+            .config("spark.sql.warehouse.dir", dir.path().to_str().unwrap())
+            .build()
             .unwrap();
         run(&s, "CREATE TABLE c (a INT) USING parquet");
         let ext = rows(&s, "DESCRIBE TABLE EXTENDED c");
@@ -880,10 +880,8 @@ fn show_create_table_names_the_string_collation_under_spark_4_3() {
     let dir = tempfile::tempdir().unwrap();
     let s = Session::builder()
         .profile(krishiv_plan::analyzer::SparkProfile::V4_3)
+        .config("spark.sql.warehouse.dir", dir.path().to_str().unwrap())
         .build()
-        .unwrap();
-    s.conf()
-        .set("spark.sql.warehouse.dir", dir.path().to_str().unwrap())
         .unwrap();
     run(&s, "CREATE TABLE t (s STRING, i INT) USING parquet");
     assert_eq!(

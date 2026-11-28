@@ -54,6 +54,13 @@ def test_builder_options(spark: SparkSession) -> None:
     spark.conf.set("spark.sql.ansi.enabled", True)
     assert spark.conf.get("spark.sql.ansi.enabled") == "true"
     spark.conf.unset("spark.sql.ansi.enabled")
+    # SV-3: a key Spark 4.3.0 registers and Krishiv does not answers Spark's default; an optional one None.
+    assert spark.conf.get("spark.sql.execution.arrow.pyspark.enabled") == "true"
+    assert spark.conf.get("spark.sql.execution.arrow.maxRecordsPerBatch") == "10000"
+    assert spark.conf.get("spark.sql.adaptive.customCostEvaluatorClass") is None
+    assert spark.conf.isModifiable("spark.sql.execution.arrow.maxRecordsPerBatch")
+    assert not spark.conf.isModifiable("spark.sql.catalogImplementation")
+    assert not spark.conf.isModifiable("no.such.key")
     with pytest.raises(errors.PySparkTypeError):
         spark.conf.set("k", 1.5)  # ty: ignore[invalid-argument-type]
     with pytest.raises(errors.PySparkNotImplementedError):

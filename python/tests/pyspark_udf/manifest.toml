@@ -1267,6 +1267,15 @@ status = "included"
 [[test]]
 file = "test_arrow_python_udf.py"
 cls = "ArrowPythonUDFTestsMixin"
+name = "test_type_coercion_string_to_numeric"
+runner = "ArrowPythonUDFLegacyTests"
+status = "excluded"
+category = "test-environment"
+reason = "pandas 3 environment, not Krishiv: under the legacy pandas conversion the UDF's string results form a pandas 3 `str` Series, which pyarrow converts to decimal; Spark's same code (ArrowStreamPandasSerializer._create_array) raises only with pandas 2's object Series (checked with pyarrow 18-26)"
+
+[[test]]
+file = "test_arrow_python_udf.py"
+cls = "ArrowPythonUDFTestsMixin"
 name = "test_arrow_udf_int_to_decimal_coercion"
 status = "included"
 
@@ -1322,9 +1331,7 @@ reason = "Krishiv bug: a day-time interval UDF argument fails with INTERNAL_ERRO
 file = "test_arrow_python_udf.py"
 cls = "ArrowPythonUDFLegacyTestsMixin"
 name = "test_udf_binary_type"
-status = "excluded"
-category = "krishiv-bug"
-reason = "Krishiv bug: the legacy Arrow conversion (BinaryType always bytes) is not honored; the UDF receives bytearray"
+status = "included"
 
 [[test]]
 file = "test_arrow_python_udf.py"

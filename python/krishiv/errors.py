@@ -587,6 +587,8 @@ _BY_PREFIX: tuple[tuple[str, type[PySparkException]], ...] = (
     ("PARSE_", ParseException),
     # Spark raises it from `QueryCompilationErrors` for every `action`/`type` pair.
     ("PYTHON_DATA_SOURCE_ERROR", AnalysisException),
+    # `CANNOT_MODIFY_CONFIG` and `CANNOT_MODIFY_STATIC_CONFIG` (46110) come from `QueryCompilationErrors`.
+    ("CANNOT_MODIFY_", AnalysisException),
     ("UNSUPPORTED_DATATYPE", ParseException),
     ("INVALID_SQL_SYNTAX", ParseException),
     # Spark's unnamed errors: 0xxx come from `QueryParsingErrors`, 1xxx from `QueryCompilationErrors`.

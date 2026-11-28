@@ -36,6 +36,8 @@ pub(super) const HANDLED_IN_CODE: &[&str] = &[
     "spark.sql.legacy.collationAwareHashFunctions",
     "spark.sql.legacy.consecutiveStringLiterals.enabled",
     "spark.sql.legacy.execution.pandas.groupedMap.assignColumnsByName",
+    "spark.sql.legacy.execution.pythonUDF.pandas.conversion.enabled",
+    "spark.sql.legacy.execution.pythonUDTF.pandas.conversion.enabled",
     "spark.sql.legacy.extraOptionsBehavior.enabled",
     "spark.sql.legacy.identifierClause",
     "spark.sql.legacy.interval.enabled",
@@ -47,6 +49,7 @@ pub(super) const HANDLED_IN_CODE: &[&str] = &[
     "spark.sql.legacy.percentileDiscCalculation",
     "spark.sql.legacy.scalarSubqueryAllowGroupByNonEqualityCorrelatedPredicate",
     "spark.sql.legacy.scalarSubqueryCountBugBehavior",
+    "spark.sql.legacy.setCommandRejectsSparkCoreConfs",
     "spark.sql.legacy.setopsPrecedence.enabled",
 ];
 
@@ -149,6 +152,8 @@ mod tests {
                 } else if p.extension().is_some_and(|x| x == "rs")
                     && !p.ends_with("config/legacy_table.rs")
                     && !p.ends_with("config/legacy.rs")
+                    // The generated table of Spark's defaults lists every entry the release registers.
+                    && !p.ends_with("config/spark_defaults_table.rs")
                     && !p.ends_with("tests.rs")
                     // Spark Connect's deprecation-warning table names keys to warn about, not to handle.
                     && !p.ends_with("krishiv-connect-server/src/config.rs")

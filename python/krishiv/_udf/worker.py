@@ -8,7 +8,9 @@
 Spark's worker reads one Arrow stream per task and runs a chain of UDFs over each batch; here the engine
 calls one UDF per batch, so each wrapper is the body of Spark's per-batch loop for one UDF:
 
-- ``SQL_ARROW_BATCHED_UDF`` (101, ``@udf``): ``worker.py:2999-3090``, the non-legacy path.
+- ``SQL_ARROW_BATCHED_UDF`` (101, ``@udf``): ``worker.py:2999-3090``, the non-legacy path, and
+  ``worker.py:3093-3177``, the legacy pandas path ``spark.sql.legacy.execution.pythonUDF.pandas.conversion.enabled``
+  selects (acceptance SV-5).
 - ``SQL_SCALAR_PANDAS_UDF`` (200, scalar ``pandas_udf``): ``wrap_scalar_pandas_udf`` (``worker.py:381-414``)
   between ``ArrowStreamPandasUDFSerializer``'s load and dump (``serializers.py:363-549``).
 - ``SQL_SCALAR_ARROW_UDF`` (250, ``arrow_udf``): ``worker.py:2553-2582``, no conversion.
@@ -77,6 +79,10 @@ class RunnerConf:
     @property
     def timezone(self) -> str | None:
         return self.get("spark.sql.session.timeZone", None, lower_str=False)
+
+    @property
+    def use_legacy_pandas_udf_conversion(self) -> bool:
+        return self.get("spark.sql.legacy.execution.pythonUDF.pandas.conversion.enabled", "false") == "true"
 
     @property
     def arrow_concurrency_level(self) -> int:
@@ -245,7 +251,9 @@ def _arrow_return_type(return_type: DataType, conf: RunnerConf) -> Any:
 
 
 # --- SQL_ARROW_BATCHED_UDF (101): pyspark/worker.py:2999-3090, one UDF ---
-def arrow_batched_wrapper(udf_func: Callable[..., Any], return_type: DataType) -> Callable[..., Any]:
+def arrow_batched_wrapper(
+    udf_func: Callable[..., Any], return_type: DataType, *, legacy_allowed: bool = True
+) -> Callable[..., Any]:
     """``@udf``: rows in, ``udf_func`` per row, rows out (the non-legacy path, ``worker.py:2999-3090``)."""
     import pyarrow as pa
 
@@ -266,6 +274,10 @@ def arrow_batched_wrapper(udf_func: Callable[..., Any], return_type: DataType) -
 
     def func(*arrays: Any) -> Any:
         conf = _runner_conf()
+        # The legacy pandas path is Spark's for ``SQL_ARROW_BATCHED_UDF`` only; a ``SQL_BATCHED_UDF``
+        # (``useArrow=False``) is pickled in Spark and never sees pandas values.
+        if legacy_allowed and conf.use_legacy_pandas_udf_conversion:
+            return _arrow_batched_legacy(udf_func, return_type, arrays, conf)
         zero_arg = len(arrays) == 0
         arrow_return_type = _arrow_return_type(return_type, conf)
         result_conv = LocalDataToArrowConversion._create_converter(
@@ -309,6 +321,72 @@ def arrow_batched_wrapper(udf_func: Callable[..., Any], return_type: DataType) -
         return _to_engine(arr, _engine_arrow_type(arrow_return_type))
 
     return func
+
+
+# --- SQL_ARROW_BATCHED_UDF (101), legacy pandas conversion: pyspark/worker.py:3093-3177, one UDF ---
+def _arrow_batched_legacy(
+    udf_func: Callable[..., Any], return_type: DataType, arrays: tuple[Any, ...], conf: RunnerConf
+) -> Any:
+    """``@udf`` under ``spark.sql.legacy.execution.pythonUDF.pandas.conversion.enabled``: the arguments go
+    through pandas (``struct_in_pandas="row"``, arrays as lists), the results back through pandas with an
+    Arrow cast, and a string or binary result is coerced with ``str`` / ``bytes`` first."""
+    import pandas as pd
+    import pyarrow as pa
+
+    from krishiv._udf.conversion import ArrowBatchTransformer, PandasToArrowConversion
+    from krishiv._udf.types import BinaryType, StringType, _NoValue
+
+    zero_arg = len(arrays) == 0
+    # Legacy coerces String/Binary for Arrow compatibility
+    coerce = str if isinstance(return_type, StringType) else bytes if isinstance(return_type, BinaryType) else None
+    return_schema = StructType([StructField("_0", return_type)])
+
+    @fail_on_stopiteration
+    def _evaluate_batch_udf_legacy(udf_func: Callable[..., Any], rows: list[Any]) -> list[Any]:
+        if conf.arrow_concurrency_level <= 0:
+            return [udf_func(*row) for row in rows]
+        from concurrent.futures import ThreadPoolExecutor
+
+        with ThreadPoolExecutor(max_workers=conf.arrow_concurrency_level) as pool:
+            return list(pool.map(lambda row: udf_func(*row), rows))
+
+    num_rows = len(arrays[0]) if arrays else _zero_arg_rows()
+    # --- Input: Arrow -> pandas columns --- (the engine sends no input schema: the types come from the arrays)
+    pandas_columns = []
+    if arrays:
+        batch = pa.RecordBatch.from_arrays(
+            [_to_spark(a, conf.timezone) for a in arrays], names=[f"_{i}" for i in range(len(arrays))]
+        )
+        pandas_columns = ArrowBatchTransformer.to_pandas(
+            batch,
+            timezone=conf.timezone,  # ty: ignore[invalid-argument-type]  # Optional, as Spark passes it
+            struct_in_pandas="row",
+            ndarray_as_list=True,
+            prefer_int_ext_dtype=conf.prefer_int_ext_dtype,
+            df_for_struct=False,
+        )
+    if not pandas_columns:
+        pandas_columns = [pd.Series([_NoValue] * num_rows)]
+
+    # --- Process: evaluate the UDF row-by-row ---
+    rows = [() for _ in range(num_rows)] if zero_arg else list(zip(*[c.tolist() for c in pandas_columns], strict=True))
+    results = _evaluate_batch_udf_legacy(udf_func, rows)
+    verify_result_row_count(len(results), num_rows)
+    if coerce:
+        results = [coerce(v) if v is not None else v for v in results]
+
+    # --- Output: pandas -> Arrow ---
+    out = PandasToArrowConversion.convert(
+        [pd.Series(results)],
+        return_schema,
+        timezone=conf.timezone,
+        safecheck=conf.safecheck,
+        arrow_cast=True,
+        prefers_large_types=conf.use_large_var_types,
+        assign_cols_by_name=conf.assign_cols_by_name,
+        int_to_decimal_coercion_enabled=conf.int_to_decimal_coercion_enabled,
+    ).column(0)
+    return _to_engine(out, _engine_arrow_type(_arrow_return_type(return_type, conf)))
 
 
 def _zero_arg_rows() -> int:
@@ -407,7 +485,7 @@ def make_wrapper(f: Callable[..., Any], eval_type: int, return_type: DataType) -
     """The wrapper of ``f`` for ``eval_type``; ``SQL_BATCHED_UDF`` (100) runs on the Arrow-batched path
     (design owner question 2: the pickled-row path is not implemented, a documented divergence)."""
     if eval_type in (SQL_BATCHED_UDF, SQL_ARROW_BATCHED_UDF):
-        return arrow_batched_wrapper(f, return_type)
+        return arrow_batched_wrapper(f, return_type, legacy_allowed=eval_type == SQL_ARROW_BATCHED_UDF)
     if eval_type == SQL_SCALAR_PANDAS_UDF:
         return scalar_pandas_wrapper(f, return_type)
     if eval_type == SQL_SCALAR_ARROW_UDF:

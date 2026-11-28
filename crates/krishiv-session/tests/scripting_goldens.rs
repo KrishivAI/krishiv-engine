@@ -65,9 +65,9 @@ fn load() -> (Vec<String>, Vec<String>, Vec<String>) {
 
 fn fresh(setup: &[String]) -> (Session, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
-    let s = Session::new().unwrap();
-    s.conf()
-        .set("spark.sql.warehouse.dir", dir.path().to_str().unwrap())
+    let s = Session::builder()
+        .config("spark.sql.warehouse.dir", dir.path().to_str().unwrap())
+        .build()
         .unwrap();
     s.conf().set("spark.sql.session.timeZone", "UTC").unwrap();
     for statement in setup {

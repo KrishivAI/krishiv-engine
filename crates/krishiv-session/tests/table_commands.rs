@@ -15,11 +15,10 @@ use krishiv_session::Session;
 
 /// A session whose warehouse is `dir`.
 fn session(dir: &std::path::Path) -> Session {
-    let s = Session::new().unwrap();
-    s.conf()
-        .set("spark.sql.warehouse.dir", dir.to_str().unwrap())
-        .unwrap();
-    s
+    Session::builder()
+        .config("spark.sql.warehouse.dir", dir.to_str().unwrap())
+        .build()
+        .unwrap()
 }
 
 fn run(s: &Session, sql: &str) {
@@ -435,12 +434,7 @@ fn a_failed_create_leaves_no_metadata() {
     assert_eq!(class(&s, "CREATE TABLE t (a INT)"), "INTERNAL_ERROR");
     assert_eq!(class(&s, "SELECT * FROM t"), "TABLE_OR_VIEW_NOT_FOUND");
     // A table of the same name can be created once the warehouse is usable.
-    s.conf()
-        .set(
-            "spark.sql.warehouse.dir",
-            dir.path().join("ok").to_str().unwrap(),
-        )
-        .unwrap();
+    std::fs::remove_file(&blocker).unwrap();
     run(&s, "CREATE TABLE t (a INT)");
 }
 
@@ -464,11 +458,19 @@ fn store_overflow_is_an_error_even_with_ansi_off() {
 fn dropping_a_table_after_the_warehouse_moved_removes_its_files() {
     let old = tempfile::tempdir().unwrap();
     let new = tempfile::tempdir().unwrap();
-    let s = session(old.path());
+    // The warehouse is a static key, so a session on the same runtime built with another one drops it.
+    let rt = krishiv_session::EngineRuntime::builder().build().unwrap();
+    let s = Session::builder()
+        .runtime(std::sync::Arc::clone(&rt))
+        .config("spark.sql.warehouse.dir", old.path().to_str().unwrap())
+        .build()
+        .unwrap();
     run(&s, "CREATE TABLE t (a INT)");
     run(&s, "INSERT INTO t VALUES (1)");
-    s.conf()
-        .set("spark.sql.warehouse.dir", new.path().to_str().unwrap())
+    let s = Session::builder()
+        .runtime(rt)
+        .config("spark.sql.warehouse.dir", new.path().to_str().unwrap())
+        .build()
         .unwrap();
     run(&s, "DROP TABLE t");
     assert!(!old.path().join("t").exists());
