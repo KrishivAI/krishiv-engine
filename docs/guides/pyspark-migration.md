@@ -32,7 +32,7 @@ assert [tuple(r) for r in out.collect()] == [("east", 15.5), ("west", 20.0)]
 
 ## Step 2: find the functions your code calls
 
-Search your project for the function names in the tables below. The `krishiv check-compat` scanner automates this (see [check-compat](check-compat.md)).
+Search your project for the function names in the tables below. The `krishiv check-compat` scanner that automates this is not part of 0.2.0 (see [check-compat](check-compat.md)).
 
 ## Spark functions Krishiv does not run yet (67)
 
@@ -161,7 +161,7 @@ Each row links to the full description in [known differences](../concepts/known-
 ## Where it runs
 
 Krishiv has three deployment modes: embedded (in your Python process, as above), single-node and distributed.
-Single-node, one `krishiv server` process that PySpark and other clients reach over Spark Connect, runs in 0.3. See [Deployment](deploy.md).
+Single-node, one `krishiv server` process that PySpark and other clients reach over Spark Connect, is in development: 0.2 has the server's web UI and admin API, not Spark Connect. See [Deployment](deploy.md).
 
 ## Step 3: check the result
 
