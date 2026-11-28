@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Dates and timestamps as text for the text formats: the session time
 //! zone, Spark's default grammars and the `dateFormat` / `timestampFormat` /
-//! `timestampNTZFormat` patterns.
+//! `timestampNTZFormat` / `timeFormat` patterns.
 
 use krishiv_common::error::KrishivError;
+use krishiv_kernels::cast::{format_time, parse_time, parse_time_nanos};
 use krishiv_kernels::datetime::{ZoneRef, resolve_zone, zone_id};
 use krishiv_kernels::datetime_pattern::{DateTimePattern, Purpose, Zone};
 use krishiv_kernels::text::{
@@ -27,6 +28,19 @@ pub(crate) struct Datetimes {
     date: Option<DateTimePattern>,
     timestamp: Option<DateTimePattern>,
     ntz: Option<DateTimePattern>,
+    /// `timeFormat`: unset reads Spark's `TIME` grammar and writes the value's
+    /// own digits (Spark 4.3.0, `tests/fixtures/spark-4.3.0/time-file-reads.json`).
+    /// Spark builds the formatter lazily, so a pattern that does not compile
+    /// fails each value it meets (a malformed record on read, the write on
+    /// writing), never the reader itself; the error is kept for that.
+    /// A pattern with a field Spark's timestamp checks refuse (`Q`, `E`,
+    /// `F`, ...) fails every value, as in Spark (4.3.0 run: `E HH:mm:ss`,
+    /// `QQ HH:mm:ss`, `F HH:mm:ss` read `Mon 12:34:56` and the like as NULL;
+    /// the fixture's `qqq HH` parses nothing).
+    time: Option<Result<DateTimePattern, KrishivError>>,
+    /// A `TIME` read in the default grammar keeps six fraction digits, not
+    /// nine (the Spark 4.2 profile, `krishiv.io.text.timeNanos` off).
+    time_micros_only: bool,
     /// Today in the session zone, for a bare time of day.
     today: i32,
     fallback_date: bool,
@@ -65,6 +79,15 @@ impl Datetimes {
         let date = pattern("dateFormat", DATE_PATTERN)?;
         let timestamp = pattern("timestampFormat", TIMESTAMP_PATTERN)?;
         let ntz = pattern("timestampNTZFormat", NTZ_PATTERN)?;
+        // Writing, `HH:mm:ss` is Spark's fraction formatter (UnivocityGenerator,
+        // JacksonGenerator), as with no `timeFormat`; reading keeps it exact.
+        let time = o
+            .str("timeFormat")
+            .filter(|p| {
+                !(matches!(purpose, Purpose::Format | Purpose::FormatTime)
+                    && *p == krishiv_kernels::datetime_pattern::DEFAULT_TIME_PATTERN)
+            })
+            .map(|p| DateTimePattern::new(p, purpose));
         let explicit = o.bool("enableDateTimeParsingFallback");
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -80,6 +103,8 @@ impl Datetimes {
             date,
             timestamp,
             ntz,
+            time,
+            time_micros_only: !o.bool(crate::text::TIME_NANOS_CONF).unwrap_or(true),
         })
     }
 
@@ -142,6 +167,48 @@ impl Datetimes {
                 Ok(spark_string_to_timestamp_ntz(s))
             }
             other => Ok(other),
+        }
+    }
+
+    /// A `TIME` (nanoseconds since midnight) from text: `timeFormat` exactly
+    /// when set (no fallback to the default grammar), else Spark's `TIME`
+    /// grammar. Up to nine fraction digits are kept whatever the column's
+    /// precision (Spark 4.3.0: a `TIME(3)` column reads `12:34:56.123456789`);
+    /// the default grammar keeps six under the Spark 4.2 profile
+    /// (`12:34:56.123456`), a pattern still nine (Spark 4.2.1 run).
+    ///
+    /// # Errors
+    /// A text the pattern refuses with an error of its own.
+    pub(crate) fn parse_time(&self, s: &str) -> Result<Option<i64>, KrishivError> {
+        match &self.time {
+            // Spark's formatter fails to build on this value: not a time.
+            Some(Err(_)) => Ok(None),
+            // Every digit the pattern reads, under the Spark 4.2 profile too
+            // (Spark 4.2.1 run, `tests/fixtures/spark-4.2.1/time-text-profiles.json`:
+            // `HH:mm:ss.SSSSSSSSS` reads nine digits into `TIME(6)`).
+            Some(Ok(p)) => p.parse_time_of_day_nanos(s),
+            None if self.time_micros_only => Ok(parse_time(s)),
+            None => Ok(parse_time_nanos(s)),
+        }
+    }
+
+    /// `nanos` (a `TIME`) as text: `timeFormat` when set, else `HH:mm:ss` with
+    /// the fraction's own digits.
+    ///
+    /// # Errors
+    /// A `timeFormat` that does not compile, or names a field a time of day
+    /// has not (a date, a zone) outside an optional section: Spark fails the
+    /// write at the first non-NULL `TIME` (`TASK_WRITE_FAILED`). Every
+    /// fraction digit is kept (`SSSSSSSSS` prints nine).
+    pub(crate) fn format_time(&self, nanos: i64) -> Result<String, KrishivError> {
+        match &self.time {
+            Some(Err(e)) => Err(e.clone()),
+            Some(Ok(p)) => p.format_time_of_day(nanos)?.ok_or_else(|| {
+                crate::error::unsupported(
+                    "a TIME written with a timeFormat field a time of day has not (a date or a zone)",
+                )
+            }),
+            None => Ok(format_time(nanos)),
         }
     }
 

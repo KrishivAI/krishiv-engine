@@ -53,6 +53,139 @@ fn a_derived_frame_run_shows_the_statement_it_came_from() {
     );
 }
 
+#[cfg(feature = "unstable-ir")]
+#[test]
+fn a_sql_relation_run_shows_its_text_and_class() {
+    use krishiv_plan::{LogicalPlan, Plan, PlanNode, SqlArgs};
+    let s = Session::new().unwrap();
+    let plan = Plan::try_new(LogicalPlan::new(PlanNode::Sql {
+        query: "SELECT id FROM range(0, 5) WHERE id >= 0 /*relation-marker*/".to_owned(),
+        args: SqlArgs::None,
+    }))
+    .unwrap();
+    let df = s.from_plan(&plan);
+    let rows: usize = block_on(df.collect())
+        .unwrap()
+        .iter()
+        .map(arrow_array::RecordBatch::num_rows)
+        .sum();
+    assert_eq!(rows, 5);
+    let got = texts(&s, "SELECT id FROM range%relation-marker%");
+    assert_eq!(got.len(), 1, "one row: {got:?}");
+    assert_eq!(got[0].1.as_deref(), Some("READ"));
+    let text = got[0].0.as_deref().expect("the relation's run has a text");
+    assert!(text.contains("relation-marker"), "{text}");
+}
+
+/// What a Spark Connect client sends for `spark.sql(...).filter(...)` or `.count()`: its own nodes over
+/// the relation. The run is listed under the statement it reads, as an embedded derived frame's is.
+#[cfg(feature = "unstable-ir")]
+#[test]
+fn a_plan_over_sql_relations_shows_the_first_ones_text() {
+    use krishiv_plan::{JoinCondition, JoinKind, LogicalPlan, Plan, PlanNode, SqlArgs};
+    let sql = |query: &str| {
+        LogicalPlan::new(PlanNode::Sql {
+            query: query.to_owned(),
+            args: SqlArgs::None,
+        })
+    };
+    let s = Session::new().unwrap();
+    let plan = Plan::try_new(sql("SELECT id FROM range(0, 5) /*left-marker*/").join(
+        sql("SELECT id AS other FROM range(0, 2) /*right-marker*/"),
+        JoinKind::Cross,
+        JoinCondition::None,
+    ))
+    .unwrap();
+    let rows: usize = block_on(s.from_plan(&plan).collect())
+        .unwrap()
+        .iter()
+        .map(arrow_array::RecordBatch::num_rows)
+        .sum();
+    assert_eq!(rows, 10);
+    let got = texts(&s, "SELECT id FROM range%left-marker%");
+    assert_eq!(got.len(), 1, "one row: {got:?}");
+    assert_eq!(got[0].1.as_deref(), Some("READ"));
+    assert!(texts(&s, "SELECT id AS other%right-marker%").is_empty());
+}
+
+/// A plan whose subtrees are shared (each level a union of the level below with itself: 41 nodes,
+/// 2^40 paths) is searched for its `spark.sql` relation once per node, not once per path.
+#[cfg(feature = "unstable-ir")]
+#[test]
+fn a_plan_of_shared_subtrees_is_searched_once_per_node() {
+    use krishiv_plan::{LogicalPlan, Plan, PlanNode};
+    use std::sync::Arc;
+    let s = Session::new().unwrap();
+    let mut level = Arc::new(LogicalPlan::table(["absent_table"]));
+    for _ in 0..40 {
+        level = Arc::new(LogicalPlan::new(PlanNode::Union {
+            inputs: vec![Arc::clone(&level), Arc::clone(&level)],
+            by_name: false,
+            allow_missing_columns: false,
+        }));
+    }
+    let plan = Plan::try_new(level).unwrap();
+    // Building the frame is the search; the frame is never analyzed or run.
+    let _frame = s.from_plan(&plan);
+}
+
+/// A plan that also reads a frame the host holds (Spark Connect's cached relation, a checkpoint) is
+/// listed under its own `spark.sql` relation, not under a statement of the frame spliced in.
+#[cfg(feature = "unstable-ir")]
+#[test]
+fn a_plan_over_a_held_frame_shows_its_own_relations_text() {
+    use krishiv_plan::{JoinCondition, JoinKind, LogicalPlan, Plan, PlanNode, SqlArgs};
+    use krishiv_session::QueryOptions;
+    let s = Session::new().unwrap();
+    let held = block_on(s.sql("SELECT id AS other FROM range(0, 2) /*held-marker*/")).unwrap();
+    let plan = Plan::try_new(LogicalPlan::table(["held"]).join(
+        LogicalPlan::new(PlanNode::Sql {
+            query: "SELECT id FROM range(0, 5) /*over-marker*/".to_owned(),
+            args: SqlArgs::None,
+        }),
+        JoinKind::Cross,
+        JoinCondition::None,
+    ))
+    .unwrap();
+    let frames = [(vec!["held".to_owned()], held)];
+    let df = block_on(s.from_plan_over(&plan, QueryOptions::new(), &frames)).unwrap();
+    let rows: usize = block_on(df.collect())
+        .unwrap()
+        .iter()
+        .map(arrow_array::RecordBatch::num_rows)
+        .sum();
+    assert_eq!(rows, 10);
+    let got = texts(&s, "SELECT id FROM range%over-marker%");
+    assert_eq!(got.len(), 1, "one row: {got:?}");
+    assert_eq!(got[0].1.as_deref(), Some("READ"));
+    assert!(texts(&s, "SELECT id AS other%held-marker%").is_empty());
+}
+
+/// The text of a `spark.sql` relation is masked like a statement's: the credentials of a URL in
+/// it never reach `system.queries`.
+#[cfg(feature = "unstable-ir")]
+#[test]
+fn a_sql_relations_secret_is_masked_in_its_listed_text() {
+    use krishiv_plan::{LogicalPlan, Plan, PlanNode, SqlArgs};
+    let s = Session::new().unwrap();
+    let plan = Plan::try_new(LogicalPlan::new(PlanNode::Sql {
+        query: "SELECT 's3://key-id:hunter2-secret@bucket/p' AS u /*masked-marker*/".to_owned(),
+        args: SqlArgs::None,
+    }))
+    .unwrap();
+    let rows: usize = block_on(s.from_plan(&plan).collect())
+        .unwrap()
+        .iter()
+        .map(arrow_array::RecordBatch::num_rows)
+        .sum();
+    assert_eq!(rows, 1);
+    let got = texts(&s, "SELECT _s3://key-id:%masked-marker%");
+    assert_eq!(got.len(), 1, "one row: {got:?}");
+    let text = got[0].0.as_deref().expect("the relation's run has a text");
+    assert!(text.contains("bucket/p"), "{text}");
+    assert!(!text.contains("hunter2-secret"), "{text}");
+}
+
 #[test]
 fn a_frame_no_sql_started_still_has_no_text() {
     let s = Session::new().unwrap();

@@ -21,10 +21,14 @@ export const ROUTES = [
   "/environment",
 ] as const;
 
-/** The route of a path (`/queries/q1/profile`) or of a hash (`#/queries/q1`); an explicit hash (a navigation inside the page) wins over the path the page was opened at. */
+/**
+ * The route of a path (`/queries/q1/profile`) or of a hash (`#/queries/q1`); an explicit hash (a navigation inside
+ * the page) wins over the path the page was opened at. Only a hash that starts with `#/` names a route: any other
+ * (`#operators`, an anchor inside a page) leaves the path's route.
+ */
 export function parseRoute(pathname: string, hash: string, search = ""): Route {
   const fromPath = pathname.replace(/^\/+|\/+$/g, "");
-  const [hashPath, hashQuery = ""] = hash.replace(/^#\/?/, "").split("?", 2);
+  const [hashPath, hashQuery = ""] = (hash.startsWith("#/") ? hash.slice(2) : "").split("?", 2);
   // The parameters travel with the address that names the page: the hash's own, or the path's.
   const [raw, query] = hashPath !== "" ? [hashPath, hashQuery] : [fromPath, search.replace(/^\?/, "")];
   // An empty qualifier (`?session=`) stays an empty string: the embedded view sends it on, and the server refuses it.

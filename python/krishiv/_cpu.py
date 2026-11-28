@@ -14,12 +14,17 @@ builds the main wheels). Without that file (the ``krishiv-compat`` wheel, a
 development install, macOS and Windows wheels) nothing is checked. The
 features come from ``/proc/cpuinfo`` (or ``$KRISHIV_CPUINFO``), so the check runs on Linux only; if the
 file cannot be read the check is skipped rather than blocking the import.
+
+``krishiv`` and ``krishiv-compat`` are one package in two builds: both install the
+folder ``krishiv``. pip has no way to refuse the second one, so the import warns
+when the metadata of both is beside the package (:func:`warn_if_both_builds_installed`).
 """
 
 from __future__ import annotations
 
 import os
 import sys
+import warnings
 from pathlib import Path
 
 COMPAT_PACKAGE = "krishiv-compat"
@@ -108,3 +113,38 @@ def ensure_supported(
     missing = missing_features(level, cpuinfo)
     if missing:
         raise ImportError(failure_message(level, missing))
+
+
+def both_builds_installed(site_packages: Path) -> bool:
+    """Whether ``site_packages`` holds the metadata of both ``krishiv`` and ``krishiv-compat``.
+
+    Read from the ``*.dist-info`` folder names (``<name>-<version>.dist-info``), which costs one
+    directory listing; ``importlib.metadata`` would add its own import time to every ``import krishiv``.
+    A folder that cannot be listed counts as "not both".
+    """
+    try:
+        entries = [entry.name for entry in site_packages.glob("[Kk]rishiv*.dist-info")]
+    except OSError:
+        return False
+    names = set()
+    for entry in entries:
+        name = entry.removesuffix(".dist-info").rpartition("-")[0]
+        names.add(name.lower().replace("-", "_").replace(".", "_"))
+    return {"krishiv", COMPAT_PACKAGE.replace("-", "_")} <= names
+
+
+def warn_if_both_builds_installed(site_packages: Path | None = None) -> None:
+    """Warn when ``krishiv`` and ``krishiv-compat`` are installed in the same environment.
+
+    The later install overwrote the files of the earlier one, and ``pip uninstall`` of either
+    removes the files of both while pip still lists the other.
+    """
+    site = site_packages or Path(__file__).resolve().parent.parent
+    if both_builds_installed(site):
+        warnings.warn(
+            f"krishiv and {COMPAT_PACKAGE} are both installed in {site}. They are one package in two builds "
+            "and share their files: the one installed last is the one that runs, and uninstalling either "
+            f"removes the files of both. Run `pip uninstall krishiv {COMPAT_PACKAGE}`, then install one of them.",
+            RuntimeWarning,
+            stacklevel=2,
+        )

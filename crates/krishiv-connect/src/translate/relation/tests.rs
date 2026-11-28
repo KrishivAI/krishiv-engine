@@ -1280,12 +1280,20 @@ fn deduplicate_over_all_columns_is_distinct() {
         code(&bad_input),
         ErrorClass::ConnectInvalidPlanDeduplicateRequiresColumnsOrAll
     );
-    for unsupported in [
-        dedup(None, &["a"], None),
-        dedup(Some(true), &[], Some(true)),
-    ] {
-        assert_eq!(code(&unsupported), ErrorClass::KrishivUnsupportedFeature);
-    }
+    // A subset is a node the analyzer lowers over the input's columns.
+    let PlanNode::ColumnNames { op, .. } = node(&dedup(None, &["a"], None)) else {
+        panic!("a subset is a ColumnNames node");
+    };
+    assert_eq!(
+        op,
+        ColumnNamesOp::Deduplicate {
+            subset: vec!["a".to_owned()]
+        }
+    );
+    assert_eq!(
+        code(&dedup(Some(true), &[], Some(true))),
+        ErrorClass::KrishivUnsupportedFeature
+    );
 }
 
 #[test]

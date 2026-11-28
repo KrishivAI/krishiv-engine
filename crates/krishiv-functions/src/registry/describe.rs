@@ -69,7 +69,7 @@ mod tests {
 
     #[test]
     fn every_catalog_name_of_4_2_is_described() {
-        // 588 catalog names, 14 of them added in 4.3.
+        // 590 catalog names, 16 of them added in 4.3.
         assert!(ROWS.len() >= 570);
         assert!(
             ROWS.values()

@@ -70,3 +70,8 @@ pyo3 = { workspace = true, features = ["macros"] }
 mimalloc = { workspace = true, optional = true, features = ["local_dynamic_tls"] }
 # `mi_collect`, the pressure release hook of the module's mimalloc (`src/lib.rs`).
 libmimalloc-sys = { workspace = true, optional = true, features = ["extended"] }
+
+# The local Connect server's Python UDF worker pool (QA2-4): Linux only, like the pool itself.
+[target.'cfg(target_os = "linux")'.dependencies]
+krishiv-udf-pool = { path = "../krishiv-udf-pool" }
+krishiv-udf-sandbox = { path = "../krishiv-udf-sandbox" }

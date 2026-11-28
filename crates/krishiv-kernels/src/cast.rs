@@ -20,6 +20,7 @@
 //! (the full cast matrix is a later task).
 
 pub(crate) mod datetime;
+mod nanos;
 pub(crate) mod text;
 pub(crate) mod time;
 pub(crate) mod timestamp;
@@ -651,6 +652,9 @@ pub fn cast(
     let from = input.data_type();
     if from == to {
         return Ok(arrow_array::make_array(input.to_data()));
+    }
+    if let Some(out) = nanos::cast_nanos(input, to, opts) {
+        return out;
     }
     if let Some(out) = widen_decimal(input, to) {
         return out;
