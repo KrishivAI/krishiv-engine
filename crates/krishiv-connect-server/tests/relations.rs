@@ -83,15 +83,18 @@ fn attr(name: &str) -> pb::Expression {
 
 /// Runs `plan` and returns its rows as text, `NULL` for a null, sorted.
 async fn run(run: &Running, rel: pb::Relation) -> Result<Vec<Vec<String>>, tonic::Status> {
+    execute(run, OpType::Root(Box::new(rel))).await
+}
+
+/// `run` for a relation or a command.
+async fn execute(run: &Running, op: OpType) -> Result<Vec<Vec<String>>, tonic::Status> {
     let request = pb::ExecutePlanRequest {
         session_id: SESSION.to_owned(),
         user_context: Some(pb::UserContext {
             user_id: "someone".to_owned(),
             ..Default::default()
         }),
-        plan: Some(pb::Plan {
-            op_type: Some(OpType::Root(Box::new(rel))),
-        }),
+        plan: Some(pb::Plan { op_type: Some(op) }),
         ..Default::default()
     };
     let mut grpc = tonic::client::Grpc::new(run.channel.clone());
@@ -1155,4 +1158,74 @@ async fn zip_merges_two_independent_range_inputs() {
         run(&server, zip(range(), range())).await.expect("runs"),
         strings(&[&["0", "0"], &["1", "1"], &["2", "2"]])
     );
+}
+
+/// `relation` as a client's `DataFrame` sends it: with its `plan_id`.
+fn planned(plan_id: i64, mut rel: pb::Relation) -> pb::Relation {
+    rel.common = Some(pb::RelationCommon {
+        plan_id: Some(plan_id),
+        ..Default::default()
+    });
+    rel
+}
+
+/// `df["name"]` of the `DataFrame` with `plan_id`.
+fn column_of(plan_id: i64, name: &str) -> pb::Expression {
+    pb::Expression {
+        common: None,
+        expr_type: Some(pb::expression::ExprType::UnresolvedAttribute(
+            pb::expression::UnresolvedAttribute {
+                unparsed_identifier: name.to_owned(),
+                plan_id: Some(plan_id),
+                is_metadata_column: None,
+            },
+        )),
+    }
+}
+
+#[tokio::test]
+async fn a_column_of_a_sql_dataframe_resolves_by_its_plan_id() {
+    let server = start().await;
+    let view = pb::CreateDataFrameViewCommand {
+        input: Some(sql("SELECT * FROM VALUES (1, 'a'), (2, 'b') AS t(k, v)")),
+        name: "pt".to_owned(),
+        is_global: false,
+        replace: false,
+    };
+    let command = pb::command::CommandType::CreateDataframeView(Box::new(view));
+    let command = pb::Command {
+        command_type: Some(command),
+    };
+    execute(&server, OpType::Command(Box::new(command)))
+        .await
+        .expect("view");
+    for query in [
+        "SELECT * FROM VALUES (1, 'a'), (2, 'b') AS t(k, v)",
+        // A text that reads a view is lowered and expanded before analysis.
+        "SELECT k, v FROM pt",
+        "SELECT * FROM pt ORDER BY k LIMIT 5",
+        "WITH c AS (SELECT k, v FROM pt) SELECT * FROM c",
+        "WITH unused AS (SELECT 1) SELECT k, v FROM pt",
+        "WITH c AS (SELECT * FROM VALUES (1, 'a'), (2, 'b') AS t(k, v)) SELECT * FROM c",
+    ] {
+        let df = || planned(7, sql(query));
+        let rows = run(&server, project(df(), vec![column_of(7, "v")]))
+            .await
+            .unwrap_or_else(|e| panic!("{query}: {e}"));
+        assert_eq!(rows, strings(&[&["a"], &["b"]]), "{query}");
+        // Through a relation that passes its input's columns on, too.
+        let rows = run(
+            &server,
+            project(
+                relation(RelType::Limit(Box::new(pb::Limit {
+                    input: Some(Box::new(df())),
+                    limit: 5,
+                }))),
+                vec![column_of(7, "k")],
+            ),
+        )
+        .await
+        .unwrap_or_else(|e| panic!("{query}: {e}"));
+        assert_eq!(rows, strings(&[&["1"], &["2"]]), "{query}");
+    }
 }
