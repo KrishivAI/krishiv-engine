@@ -73,7 +73,11 @@ def _sql_literal(value: Any) -> str:
     if isinstance(value, (bytes, bytearray)):
         return "X'" + bytes(value).hex() + "'"
     if isinstance(value, decimal.Decimal):
-        return f"CAST('{value}' AS DECIMAL({max(len(value.as_tuple().digits), 1)}, {max(-int(value.as_tuple().exponent), 0)}))"  # ty: ignore[invalid-argument-type]
+        _sign, digits, exponent = value.as_tuple()
+        if not isinstance(exponent, int):
+            raise not_expected_type("args", "a finite decimal", value)
+        scale = max(-exponent, 0)
+        return f"CAST('{value}' AS DECIMAL({max(len(digits), scale, 1)}, {scale}))"
     if isinstance(value, datetime.datetime):
         kind = "TIMESTAMP" if value.tzinfo is not None else "TIMESTAMP_NTZ"
         return f"{kind} '{value.isoformat(sep=' ')}'"
