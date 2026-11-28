@@ -116,7 +116,10 @@ impl Transport {
                 allow_http,
                 concat!("krishiv/", env!("CARGO_PKG_VERSION")),
             )
-            .map_err(|e| RestError::Transport(format!("HTTP client: {e}")))?;
+            .map_err(|e| RestError::Client {
+                no_tls_roots: krishiv_store::is_missing_tls_roots(&e),
+                detail: e.to_string(),
+            })?;
         let connector = connector.clone();
         let (jobs, mut rx) = tokio::sync::mpsc::unbounded_channel::<Job>();
         let (ready_tx, ready_rx) = mpsc::sync_channel::<Result<(), RestError>>(1);
@@ -205,6 +208,15 @@ fn transport_error(e: reqwest::Error) -> RestError {
     if e.is_timeout() {
         return RestError::Timeout;
     }
+    // The egress resolver's refusal (a name that resolves to no allowed address) is the policy's, not
+    // a connection failure.
+    let mut cause = std::error::Error::source(&e);
+    while let Some(c) = cause {
+        if let Some(refusal) = c.downcast_ref::<krishiv_store::egress::EgressRefusal>() {
+            return RestError::Egress(*refusal);
+        }
+        cause = c.source();
+    }
     // The detail goes to the log only; the URL is left out all the same (its query names the warehouse).
     let e = e.without_url();
     RestError::Transport(
@@ -243,9 +255,7 @@ async fn send(
     // message never names the address.
     connector
         .check_request_host(url.host_str().unwrap_or_default())
-        .map_err(|refusal| {
-            SendFailure::unsent(RestError::Transport(format!("egress policy: {refusal}")))
-        })?;
+        .map_err(|refusal| SendFailure::unsent(RestError::Egress(refusal)))?;
     let mut builder = if post {
         client.post(url)
     } else {

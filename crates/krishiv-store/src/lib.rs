@@ -54,7 +54,7 @@ pub use error::Result;
 pub use http_clients::DataOnlyClients;
 pub use http_clients::SharedHttpClients;
 #[cfg(feature = "cloud")]
-pub use http_clients::policy::{PolicyConnector, Redirects};
+pub use http_clients::policy::{NO_TLS_ROOTS, PolicyConnector, Redirects, is_missing_tls_roots};
 pub use id::StoreId;
 pub use policy::StorePolicy;
 pub use refreshing::RefreshingStore;

@@ -56,6 +56,15 @@ pub enum RestError {
     Protocol(String),
     /// Connecting or reading failed.
     Transport(String),
+    /// The HTTP client could not be built, so nothing was ever sent (SK3 E1).
+    Client {
+        /// The builder's reason, for the log.
+        detail: String,
+        /// The system trust store is empty (`krishiv_store::is_missing_tls_roots`).
+        no_tls_roots: bool,
+    },
+    /// The egress policy refused the host, before anything was sent (SK3 E1).
+    Egress(krishiv_store::egress::EgressRefusal),
     /// A delegated catalog has no usable user token, or the IdP refused the exchange (T067 §3.3). The reason is
     /// Krishiv's own text: at most an OAuth `error` code, never a token or `error_description`.
     Delegation(String),
@@ -130,6 +139,8 @@ impl RestError {
             ),
             Self::Protocol(d) => format!("protocol: {}", shortened(d)),
             Self::Transport(d) => format!("transport: {}", shortened(d)),
+            Self::Client { detail, .. } => format!("HTTP client: {}", shortened(detail)),
+            Self::Egress(refusal) => format!("egress policy: {refusal}"),
             Self::Delegation(d) => format!("delegation: {}", shortened(d)),
             Self::DelegationLimit { what, value, .. } => format!("limit exceeded: {value} {what}"),
         }
@@ -156,6 +167,13 @@ impl RestError {
             }
             Self::Protocol(_) => "the answer is not what the Iceberg REST protocol says".to_owned(),
             Self::Transport(_) => "the connection failed or was cut".to_owned(),
+            Self::Client {
+                no_tls_roots: true, ..
+            } => "the HTTP client could not be built: no TLS root certificates were found \
+                  (install the CA certificates, or point SSL_CERT_FILE at a bundle)"
+                .to_owned(),
+            Self::Client { .. } => "the HTTP client could not be built".to_owned(),
+            Self::Egress(_) => "the egress policy refused the host".to_owned(),
             Self::Delegation(_) | Self::DelegationLimit { .. } => {
                 "delegated access failed".to_owned()
             }

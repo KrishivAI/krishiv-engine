@@ -7,7 +7,9 @@
 //! `ClientOptions::get_config_value` and parsed the way object_store parses it: every
 //! [`ClientConfigKey`] (an option this copy does not know fails the build, never dropped
 //! silently), `https_only` from `allow_http`, default headers, and no response decompression.
-//! Root certificates have no getter; no Krishiv store sets any, so the copy adds none. On top of
+//! Root certificates have no getter; no Krishiv store sets any, so the copy adds none. Without any
+//! system root (an empty trust store), a client that may speak plain HTTP is built with an empty root
+//! set (HTTPS fails verification, closed) and an HTTPS-only one fails with [`NO_TLS_ROOTS`]. On top of
 //! the original:
 //! - the **egress resolver** ([`EgressResolver`]) replaces object_store's address-shuffling
 //!   resolver: it resolves, drops every address the rule refuses, fails when none is left and
@@ -151,13 +153,70 @@ pub(crate) fn build_policy_client(
     scope: &EgressScope,
     redirects: Redirects,
     egress_proxy: Option<&str>,
-    answers: Option<Answers>,
+    answers: Option<&Answers>,
 ) -> object_store::Result<reqwest::Client> {
     if options.dns_resolver().is_some() {
         return Err(generic(
             "a custom DNS resolver cannot be combined with the egress policy",
         ));
     }
+    let allow_http = match options.get_config_value(&ClientConfigKey::AllowHttp) {
+        Some(v) => parse_bool(ClientConfigKey::AllowHttp, &v)?,
+        None => false,
+    };
+    let configured = || configure(options, scope, redirects, egress_proxy, answers.cloned());
+    match configured()?.build() {
+        Ok(client) => Ok(client),
+        // No system root (a container without `/etc/ssl/certs`): a client that may speak plain HTTP is
+        // built with an empty root set, so `http://` works and every HTTPS server fails verification
+        // (closed, never open); a client that may only speak HTTPS cannot work and says why.
+        Err(e) if lacks_tls_roots(&e) => {
+            if allow_http {
+                configured()?
+                    .tls_certs_only(std::iter::empty())
+                    .build()
+                    .map_err(|_| generic("the egress policy client could not be built"))
+            } else {
+                Err(generic(NO_TLS_ROOTS))
+            }
+        }
+        Err(_) => Err(generic("the egress policy client could not be built")),
+    }
+}
+
+/// The reason a client that may only speak HTTPS cannot be built without a system root certificate.
+pub const NO_TLS_ROOTS: &str = "no TLS root certificates were found: the system trust store is empty \
+    (install the CA certificates, or point SSL_CERT_FILE at a bundle)";
+
+/// Whether `error` (from [`PolicyConnector::catalog_client`] or a store build) is the missing system
+/// root certificates of [`NO_TLS_ROOTS`].
+#[must_use]
+pub fn is_missing_tls_roots(error: &object_store::Error) -> bool {
+    matches!(error, object_store::Error::Generic { source, .. } if source.to_string() == NO_TLS_ROOTS)
+}
+
+/// Whether a `reqwest` build error is the platform verifier finding no root certificate
+/// (rustls-platform-verifier 0.7 on Linux: "No CA certificates were loaded from the system"; pinned by
+/// the test `no_system_roots`).
+fn lacks_tls_roots(error: &reqwest::Error) -> bool {
+    let mut cause: Option<&dyn std::error::Error> = Some(error);
+    while let Some(e) = cause {
+        if e.to_string().contains("No CA certificates were loaded") {
+            return true;
+        }
+        cause = e.source();
+    }
+    false
+}
+
+/// The policy client's builder for `options`, before `build` (see [`build_policy_client`]).
+fn configure(
+    options: &ClientOptions,
+    scope: &EgressScope,
+    redirects: Redirects,
+    egress_proxy: Option<&str>,
+    answers: Option<Answers>,
+) -> object_store::Result<reqwest::ClientBuilder> {
     let mut builder = reqwest::ClientBuilder::new().user_agent(DEFAULT_USER_AGENT);
     if let Some(headers) = options.get_default_headers() {
         builder = builder.default_headers(headers.clone());
@@ -209,16 +268,14 @@ pub(crate) fn build_policy_client(
             })
         }
     };
-    builder
+    Ok(builder
         .no_gzip()
         .no_brotli()
         .no_zstd()
         .no_deflate()
         .redirect(redirect)
         .dns_resolver(Arc::new(EgressResolver::new(scope.clone(), answers)))
-        .https_only(!allow_http)
-        .build()
-        .map_err(|_| generic("the egress policy client could not be built"))
+        .https_only(!allow_http))
 }
 
 /// The egress resolver: resolves, keeps only the addresses the rule allows (failing when none is
@@ -393,7 +450,7 @@ impl PolicyConnector {
             &self.scope,
             self.redirects,
             self.proxy.as_deref(),
-            self.answers.clone(),
+            self.answers.as_ref(),
         )
     }
 }
@@ -423,7 +480,7 @@ impl PolicyConnector {
             &self.scope,
             Redirects::None,
             self.proxy.as_deref(),
-            self.answers.clone(),
+            self.answers.as_ref(),
         )
     }
 

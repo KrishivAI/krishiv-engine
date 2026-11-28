@@ -51,7 +51,7 @@ input, not a trusted party (design `P3-lakehouse.md` §5.6): everything it retur
   kept per (principal without groups, claims), least recently used out past 4,096; `delegated_tests.rs` with a scripted token endpoint, `encode.rs` RFC 3986 path segments, namespace separator, Java `URLEncoder` form bodies,
   `prefix`/separator safety, JSON depth pre-scan, `types.rs` the response bodies from `serde_json::Value` (catalog, table and credential
   `config` values become `SecretString`s; `read-restrictions` fail closed), `error.rs` `RestError` -> `KRISHIV_CATALOG_FAILURE`/
-  `KRISHIV_CATALOG_LIMIT_EXCEEDED` (server messages and `error_description` stay out of the error; the text says the kind: HTTP status, an `ErrorModel.type` only if it is a spec name, timeout, connection), `client.rs` `RestClient`
+  `KRISHIV_CATALOG_LIMIT_EXCEEDED` (server messages and `error_description` stay out of the error; the text says the kind: HTTP status, an `ErrorModel.type` only if it is a spec name, timeout, connection, a client that could not be built (no TLS roots named), an egress refusal (the request host or the resolver's)), `client.rs` `RestClient`
   (`/v1/config` once, fetched outside the lock, only `prefix` and `namespace-separator` taken, `uri` ignored; one deadline per
   call, a paged listing included; page/entry caps, a repeated or over-4-KiB token stops it; empty/`.`/`..` names and any path
   the URL parser rewrites refused; a 404 is "absent" only with a `NoSuch*` error model; credential prefixes as full URL,

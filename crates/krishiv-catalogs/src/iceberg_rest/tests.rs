@@ -481,6 +481,10 @@ fn every_request_goes_through_the_egress_policy_client() {
     let e = client_with(config).list_namespaces(&[]).unwrap_err();
     assert_eq!(class(&e), ErrorClass::KrishivCatalogFailure);
     assert!(!e.to_string().contains("127.0.0.1"), "{e}");
+    assert!(
+        e.to_string().contains("the egress policy refused the host"),
+        "named as the policy's refusal, not a failed connection: {e}"
+    );
     assert!(server.seen().is_empty());
     // The declared host is exempt by name: the same calls pass, token fetch included.
     let idp = serve(|_| {
@@ -527,6 +531,10 @@ fn every_request_goes_through_the_egress_policy_client() {
     let before = server.seen().len();
     let e = client_with(config).list_namespaces(&[]).unwrap_err();
     assert_eq!(class(&e), ErrorClass::KrishivCatalogFailure);
+    assert!(
+        e.to_string().contains("the egress policy refused the host"),
+        "the resolver's refusal is the policy's: {e}"
+    );
     assert!(
         refused_idp.seen().is_empty(),
         "the refused endpoint is never called"
@@ -963,4 +971,54 @@ fn only_a_404_of_the_credentials_route_is_absence() {
         .unwrap_err();
     assert_eq!(class(&e), ErrorClass::KrishivCatalogFailure, "{e}");
     assert_eq!(issued.load(Ordering::SeqCst), 2, "the renewal was asked");
+}
+
+/// Runs this test binary's test `name` again with an empty system trust store (rustls-native-certs reads
+/// `SSL_CERT_FILE` / `SSL_CERT_DIR`); this process's environment is never changed.
+fn rerun_without_system_roots(name: &str) {
+    let dir = std::env::temp_dir().join(format!("krishiv-no-roots-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let out = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", name, "--nocapture"])
+        .env("KRISHIV_TEST_NO_ROOTS", "1")
+        .env("SSL_CERT_FILE", dir.join("absent.pem"))
+        .env("SSL_CERT_DIR", &dir)
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(out.status.success(), "{text}");
+    assert!(text.contains("1 passed"), "the child ran nothing: {text}");
+}
+
+/// SK3 E1: without a system root certificate an `http://` catalog still works (the client may speak plain
+/// HTTP), and an HTTPS-only one is refused when declared, naming the missing roots, never as a failed connection.
+#[test]
+fn a_catalog_without_system_roots() {
+    if std::env::var_os("KRISHIV_TEST_NO_ROOTS").is_none() {
+        rerun_without_system_roots("iceberg_rest::tests::a_catalog_without_system_roots");
+        return;
+    }
+    let server = serve(|r| match path(r) {
+        "/v1/config" => Reply::Json(200, CONFIG.into()),
+        _ => Reply::Json(200, r#"{"namespaces": [["a"]]}"#.into()),
+    });
+    let mut config = config_for(&server);
+    config.egress = Some(deny_connector(&["127.0.0.1"]));
+    let names = client_with(config).list_namespaces(&[]).unwrap().unwrap();
+    assert_eq!(names, vec![ns(&["a"])]);
+    let mut config = RestConfig::new("https://catalog.example/").unwrap();
+    config.egress = Some(deny_connector(&[]));
+    let e = RestClient::new("rest", config, Arc::new(RemoteLocationPolicy::default())).unwrap_err();
+    assert_eq!(class(&e), ErrorClass::KrishivCatalogFailure);
+    let text = e.to_string();
+    assert!(
+        text.contains("no TLS root certificates were found"),
+        "{text}"
+    );
+    assert!(!text.contains("connection failed"), "{text}");
 }

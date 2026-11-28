@@ -580,3 +580,57 @@ fn store_endpoint_at_provider_literal_refused_at_build() {
         );
     }
 }
+
+/// Runs this test binary's test `name` again with an empty system trust store (rustls-native-certs reads
+/// `SSL_CERT_FILE` / `SSL_CERT_DIR`), so the process environment of this one is never changed.
+fn rerun_without_system_roots(name: &str) {
+    let dir = std::env::temp_dir().join(format!("krishiv-no-roots-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let out = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", name, "--nocapture"])
+        .env("KRISHIV_TEST_NO_ROOTS", "1")
+        .env("SSL_CERT_FILE", dir.join("absent.pem"))
+        .env("SSL_CERT_DIR", &dir)
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(out.status.success(), "{text}");
+    assert!(text.contains("1 passed"), "the child ran nothing: {text}");
+}
+
+#[tokio::test]
+async fn no_system_roots() {
+    if std::env::var_os("KRISHIV_TEST_NO_ROOTS").is_none() {
+        rerun_without_system_roots("http_clients::policy::tests::no_system_roots");
+        return;
+    }
+    let conn = connector(&["127.0.0.1"]);
+    // HTTPS only: refused, by name.
+    let err = conn
+        .catalog_client(std::time::Duration::from_secs(5), false, "krishiv/test")
+        .unwrap_err();
+    assert!(super::is_missing_tls_roots(&err), "{err}");
+    assert!(
+        err.to_string().contains("no TLS root certificates"),
+        "{err}"
+    );
+    // Plain HTTP allowed: the client builds and an http:// request goes out.
+    let (port, seen) =
+        server("HTTP/1.1 200 OK\r\ncontent-length: 2\r\nconnection: close\r\n\r\n{}".to_owned())
+            .await;
+    let client = conn
+        .catalog_client(std::time::Duration::from_secs(5), true, "krishiv/test")
+        .unwrap();
+    let response = client
+        .get(format!("http://127.0.0.1:{port}/v1/config"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    assert_eq!(seen.lock().unwrap().len(), 1);
+}
