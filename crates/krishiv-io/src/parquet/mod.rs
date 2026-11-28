@@ -104,7 +104,7 @@ static OPTIONS: OptionSchema = OptionSchema {
             kind: OptionKind::Bool,
             default: OptionDefault::Bool(true),
             conf_fallback: None,
-            metadata_key: false,
+            metadata_key: true,
             doc: "Read: whether the session's Spark release has the nanosecond timestamp types (4.3 \
                   on). Off (set by the engine for an earlier profile): the types are never inferred \
                   and a footer Spark schema naming one is not used, as that release reads such a file.",

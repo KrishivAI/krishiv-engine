@@ -175,6 +175,18 @@ fn a_user_schema_reads_nanoseconds_at_its_precision_or_refuses_microseconds() {
         ),
         "timestamp_ltz(7)|2020-01-01 00:00:00.1234567|2020-01-01 00:00:00.1234567"
     );
+    // The same floor inside an array (Arrow's type equality ignores the element's precision).
+    let nested = fixture("spark-nested.parquet");
+    run(
+        &s,
+        &format!(
+            "CREATE OR REPLACE TEMPORARY VIEW a7 (a ARRAY<TIMESTAMP_NTZ(7)>) USING parquet OPTIONS (path '{nested}')"
+        ),
+    );
+    assert_eq!(
+        run(&s, "SELECT typeof(a), CAST(a[0] AS STRING) FROM a7"),
+        "array<timestamp_ntz(7)>|2020-01-01 00:00:00.1234567"
+    );
 }
 
 #[test]

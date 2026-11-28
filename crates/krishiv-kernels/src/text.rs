@@ -236,10 +236,13 @@ pub fn split_timestamp_nanos(nanos: i64, precision: u8) -> (i64, u16) {
 /// `precision`; `None` past the `i64` nanosecond carrier (1677-09-21 to 2262-04-11).
 #[must_use]
 pub fn timestamp_nanos_of(micros: i64, rest: u16, precision: u8) -> Option<i64> {
-    let n = micros
+    // Composed and floored in `i128`, then range-checked: the first partial microsecond of the
+    // carrier (`micros * 1_000` below `i64::MIN`, the rest bringing it back) is representable.
+    let n = i128::from(micros)
         .checked_mul(1_000)?
-        .checked_add(i64::from(rest.min(999)))?;
-    n.checked_sub(n.checked_rem_euclid(nanos_step(precision))?)
+        .checked_add(i128::from(rest.min(999)))?;
+    let floored = n.checked_sub(n.checked_rem_euclid(i128::from(nanos_step(precision)))?)?;
+    i64::try_from(floored).ok()
 }
 
 /// Today's date (days since the epoch) in `zone` at the UTC instant

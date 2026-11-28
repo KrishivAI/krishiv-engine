@@ -79,3 +79,36 @@ fn nanos_as_long_retypes_each_nanosecond_leaf_beside_an_int96_column() {
         1_577_836_800_123_456_789
     );
 }
+
+/// `nanosTypesKnown` changes how the footer decodes, so it keys the metadata cache: a Spark 4.2
+/// profile (`false`, the footer's nanosecond types dropped, `nanosAsLong` makes them `bigint`) and a
+/// 4.3 one (the footer's types kept) over the same file and `IoContext` never share an entry.
+#[test]
+fn nanos_types_known_keys_the_metadata_cache() {
+    let bytes = std::fs::read(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/parquet/nanos/spark-flat.parquet"),
+    )
+    .unwrap();
+    let env = Env::new();
+    let file = env.put("spark-flat.parquet", bytes);
+    let n9 = |kv: &[(&str, &str)]| {
+        let o = env.options(kv);
+        let schema = env
+            .rt
+            .block_on(
+                env.io
+                    .read_metadata(&ParquetFormat, &file, MetadataNeeds::default(), &o),
+            )
+            .unwrap()
+            .schema();
+        schema.field_with_name("n9").unwrap().data_type().clone()
+    };
+    let older = n9(&[("nanosAsLong", "true"), ("nanosTypesKnown", "false")]);
+    assert_eq!(older, DataType::Int64);
+    let newer = n9(&[("nanosAsLong", "true")]);
+    assert!(
+        matches!(newer, DataType::Timestamp(..)),
+        "a 4.3 read took the 4.2 profile's cached metadata: {newer:?}"
+    );
+}

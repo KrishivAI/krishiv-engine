@@ -527,7 +527,7 @@ impl Resolver {
         if let Some(unit) = nanos_cut(tf, ff) {
             return Ok(Some((Conv::FloorNanos(unit), whole)));
         }
-        if t.equals_datatype(f) && !needs_struct_resolution(t) {
+        if t.equals_datatype(f) && !needs_struct_resolution(t) && !list_nanos_cut(tf, ff) {
             return Ok(Some((Conv::Same, whole)));
         }
         match (t, f) {
@@ -797,6 +797,19 @@ fn needs_struct_resolution(dt: &DataType) -> bool {
     match dt {
         DataType::Struct(_) | DataType::Map(..) => true,
         DataType::List(f) | DataType::LargeList(f) => needs_struct_resolution(f.data_type()),
+        _ => false,
+    }
+}
+
+/// Whether lists `tf` over `ff` (of equal Arrow types) hold, at some depth, a nanosecond timestamp
+/// leaf whose table precision is below the file's: Arrow's `equals_datatype` ignores the leaf's
+/// precision metadata, so such a list descends to its element, where [`nanos_cut`] floors it.
+fn list_nanos_cut(tf: &Field, ff: &Field) -> bool {
+    match (tf.data_type(), ff.data_type()) {
+        (DataType::List(te), DataType::List(fe))
+        | (DataType::LargeList(te), DataType::LargeList(fe)) => {
+            nanos_cut(te, fe).is_some() || list_nanos_cut(te, fe)
+        }
         _ => false,
     }
 }

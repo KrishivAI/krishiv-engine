@@ -217,3 +217,26 @@ fn a_nanosecond_split_at_the_bottom_of_the_carrier_does_not_wrap() {
         assert_eq!(split_timestamp_nanos(v, p), want, "{v} p{p}");
     }
 }
+
+/// The first partial microsecond of the carrier composes: `micros * 1_000` is below `i64::MIN`, the
+/// nanoseconds bring it back (Codex on #1072); a floor or a value past either end is `None`.
+#[test]
+fn a_nanosecond_timestamp_composes_at_the_bottom_of_the_carrier() {
+    let micros = -9_223_372_036_854_776;
+    assert_eq!(timestamp_nanos_of(micros, 192, 9), Some(i64::MIN));
+    assert_eq!(timestamp_nanos_of(micros, 999, 9), Some(i64::MIN + 807));
+    // Floored to precision 8 or 7, 192 ns leaves the carrier.
+    assert_eq!(timestamp_nanos_of(micros, 192, 8), None);
+    assert_eq!(timestamp_nanos_of(micros, 191, 9), None);
+    assert_eq!(timestamp_nanos_of(micros, 200, 7), Some(i64::MIN + 8));
+    assert_eq!(
+        timestamp_nanos_of(9_223_372_036_854_775, 807, 9),
+        Some(i64::MAX)
+    );
+    assert_eq!(timestamp_nanos_of(9_223_372_036_854_775, 808, 9), None);
+    assert_eq!(
+        timestamp_nanos_of(9_223_372_036_854_775, 899, 7),
+        Some(i64::MAX - 7)
+    );
+    assert_eq!(timestamp_nanos_of(i64::MIN, 0, 9), None);
+}
