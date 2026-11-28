@@ -213,6 +213,7 @@ per-bucket tables with a "geomean if this bucket's positive gap were zero" colum
 ledger of the same suite. `other` has no DuckDB counterpart, so its gap is an upper bound. Runs hold the bench lock.
 DuckDB runs its own text of a query where one exists (ClickBench q29, `queries/<suite>/duckdb/`), as `abba` does; a
 query whose two engines return different row counts is reported as failed and gets no ratio.
+Against a previous ledger from before this (DuckDB on Krishiv's text), deltas are shown only for queries with one text.
 
 ## Minimise a differing query (`krishiv-bench minimize`)
 ```bash

@@ -327,11 +327,11 @@ def test_duckdb_is_measured_on_its_own_text_and_differing_row_counts_fail(
 
     monkeypatch.setattr(ledger, "measure_duckdb", fake_duck)
     e = ledger._one_query(q, None, None, object(), 2, "1g", 5, None, krishiv(25), duck_q)
-    assert (e["status"], e["rows"]) == ("ok", 25)
+    assert (e["status"], e["rows"], e["duckdb_text"]) == ("ok", 25, "own")
     assert seen == ["duckdb text"]
     # Without a DuckDB text of its own the query runs as written.
-    ledger._one_query(q, None, None, object(), 2, "1g", 5, None, krishiv(25))
-    assert seen[-1] == "spark text"
+    e = ledger._one_query(q, None, None, object(), 2, "1g", 5, None, krishiv(25))
+    assert (seen[-1], e["duckdb_text"]) == ("spark text", "shared")
     # 11 rows against 25 is another query, not a faster one: no ratio is recorded.
     e = ledger._one_query(q, None, None, object(), 2, "1g", 5, None, krishiv(11), duck_q)
     assert e == {"status": "failed", "reason": "row counts differ: krishiv 11, duckdb 25"}
@@ -355,6 +355,36 @@ def test_run_ledger_pairs_each_query_with_duckdbs_text(tmp_path: Path, monkeypat
     monkeypatch.setattr(ledger, "_run_locked", lambda ds, suite, queries, *a: got.setdefault("q", queries))
     ledger.run_ledger("tpch", 1, threads=1, memory_limit="1g")
     assert [(q.sql, d.sql) for q, d in got["q"]] == [("k1", "k1"), ("k2", "d2")]
+
+
+def test_no_delta_across_the_change_of_duckdbs_text():
+    def record(method, texts):
+        qs = {}
+        for q, text in texts.items():
+            qs[q] = _query_entry(2.0, 1.0, {"aggregate": 2.0}, {"aggregate": 1.0})
+            if text:
+                qs[q]["duckdb_text"] = text
+        rec = _record(qs)
+        if method:
+            rec["method"] = method
+        return rec
+
+    old = record(None, {"q01": None, "q29": None})  # a ledger from before the method was recorded
+    new = record(ledger.METHOD, {"q01": "shared", "q29": "own"})
+    md = ledger.render_markdown(new, old)
+    rows = {line.split("|")[1].strip(): line for line in md.splitlines() if line.startswith("| q")}
+    assert rows["q01"].rstrip().endswith("+0.00 |")  # one text on both engines, before and after
+    assert rows["q29"].rstrip().endswith(" - |")  # DuckDB ran another text before
+    bucket = next(line for line in md.splitlines() if line.startswith("| 1 | aggregate"))
+    assert bucket.rstrip().endswith(" - |")
+    assert "times DuckDB on its own text" in md
+    # Two ledgers of the same method keep every delta, and so does a record where no text differs.
+    same = ledger.render_markdown(new, record(ledger.METHOD, {"q01": "shared", "q29": "own"}))
+    assert " - |" not in same
+    assert "times DuckDB on its own text" not in same
+    shared = ledger.render_markdown(record(ledger.METHOD, {"q01": "shared", "q29": "shared"}), old)
+    assert " - |" not in shared
+    assert "times DuckDB on its own text" not in shared
 
 
 def test_profile_of_a_metadata_only_query_is_empty(tmp_path: Path):

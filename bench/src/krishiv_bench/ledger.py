@@ -303,6 +303,18 @@ def _top(gaps: dict[str, float], n: int = 2) -> list[tuple[str, float]]:
     return sorted(((b, g) for b, g in gaps.items() if g > 0), key=lambda x: -x[1])[:n]
 
 
+# Version of the measurement. 2: DuckDB runs its own text of a query (1 ran Krishiv's text on both engines).
+METHOD = 2
+
+
+def _same_measurement(record: dict[str, Any], previous: dict[str, Any] | None, entry: dict[str, Any]) -> bool:
+    """Whether ``entry`` was measured the same way in ``previous``: a delta across a method change compares two
+    different DuckDB queries, except where both engines still run one text."""
+    if previous is None or previous.get("method", 1) == record.get("method", 1):
+        return True
+    return entry.get("duckdb_text") == "shared"
+
+
 def render_markdown(record: dict[str, Any], previous: dict[str, Any] | None = None) -> str:
     """The per-query table, the ranked bucket table and, with ``previous``, the deltas."""
     s = record["summary"]
@@ -319,6 +331,8 @@ def render_markdown(record: dict[str, Any], previous: dict[str, Any] | None = No
         head += " ratio vs previous |"
     lines += [head, "|---|--:|--:|--:|--:|---|---|" + ("--:|" if previous else "")]
     prev_q = (previous or {}).get("queries", {})
+    ok_entries = [e for e in record["queries"].values() if e.get("status") == "ok"]
+    buckets_comparable = all(_same_measurement(record, previous, e) for e in ok_entries)
     for q, e in record["queries"].items():
         if e.get("status") != "ok":
             lines.append(f"| {q} | failed | - | - | - | {str(e.get('reason', ''))[:80].replace('|', '/')} | |")
@@ -333,7 +347,7 @@ def render_markdown(record: dict[str, Any], previous: dict[str, Any] | None = No
             p = prev_q.get(q, {})
             row += (
                 f" {e['krishiv_s'] / e['duckdb_s'] - p['krishiv_s'] / p['duckdb_s']:+.2f} |"
-                if p.get("status") == "ok"
+                if p.get("status") == "ok" and _same_measurement(record, previous, e)
                 else " - |"
             )
         lines.append(row)
@@ -363,8 +377,14 @@ def render_markdown(record: dict[str, Any], previous: dict[str, Any] | None = No
             f"| {v['share'] * 100:.1f}% | {v['geomean_if_zero']:.2f}x |"
         )
         if previous:
-            row += f" {v['gap_s'] - prev_b[b]['gap_s']:+.2f} |" if b in prev_b else " - |"
+            row += f" {v['gap_s'] - prev_b[b]['gap_s']:+.2f} |" if b in prev_b and buckets_comparable else " - |"
         lines.append(row)
+    if previous and not buckets_comparable:
+        lines += [
+            "",
+            "The previous ledger timed DuckDB on Krishiv's text of every query; this one times DuckDB on its own "
+            "text. No delta is shown for a query whose two texts differ, nor for the buckets.",
+        ]
     lines += [
         "",
         "Caveats: DuckDB's operator timings have no scheduler or idle term, so Krishiv's `other` gap is an upper "
@@ -522,6 +542,7 @@ def _run_locked(ds, suite, queries, threads, memory_limit, timeout_s, runner, pr
     started = dt.datetime.now(dt.UTC)
     record: dict[str, Any] = {
         "schema": 1,
+        "method": METHOD,
         "kind": "ledger",
         "suite": suite,
         "scale_factor": ds.sf,
@@ -600,6 +621,7 @@ def _one_query(
     return {
         "status": "ok",
         "rows": d.get("rows"),
+        "duckdb_text": "own" if duck_q is not None and duck_q.sql != q.sql else "shared",
         "krishiv_s": k["seconds"],
         "duckdb_s": d["seconds"],
         "krishiv_runs_s": k["runs"],
