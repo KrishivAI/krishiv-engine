@@ -26,6 +26,9 @@ pub(crate) mod paths;
 pub(crate) mod rewrite_options;
 pub(crate) mod rewrite_plan;
 
+/// `(name, location)` of each other table of a namespace.
+pub type SiblingLocations = Vec<(String, String)>;
+
 /// Where a procedure finds its table: the catalog that serves `CALL cat.system.p(table => ..)`.
 pub trait ProcedureTables: fmt::Debug + Send + Sync {
     /// The table `name` (`ns.t`, as the call wrote it) of the catalog, loaded to commit through
@@ -34,6 +37,20 @@ pub trait ProcedureTables: fmt::Debug + Send + Sync {
     /// # Errors
     /// `KRISHIV_ICEBERG_PROCEDURE_TABLE_NOT_FOUND`, or the catalog's failure.
     fn open<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<IcebergTable, KrishivError>>;
+
+    /// The other tables of `name`'s namespace as `(name, location)`, for `remove_orphan_files`'s
+    /// nested-table check (design 36e §4.4); `None` when the catalog cannot list (the check is
+    /// then skipped with a warning).
+    ///
+    /// # Errors
+    /// The catalog's failure.
+    fn sibling_locations<'a>(
+        &'a self,
+        name: &'a str,
+    ) -> BoxFuture<'a, Result<Option<SiblingLocations>, KrishivError>> {
+        let _ = name;
+        Box::pin(async { Ok(None) })
+    }
 }
 
 const fn req(name: &'static str, data_type: ProcedureType) -> ProcedureParameter {
@@ -301,9 +318,12 @@ impl Maintenance {
                 _ => None,
             })?,
             stream_results: matches!(arg(10), ProcedureValue::Boolean(true)),
+            siblings: None,
         };
         let t = self.tables.open(table).await?;
         let (committer, io, clock) = t.maintenance_parts(io_clock)?;
+        let mut opts = opts;
+        opts.siblings = self.tables.sibling_locations(table).await?;
         let list = |location: String| {
             let t = &t;
             async move { t.list_under(&location).await }

@@ -1230,6 +1230,7 @@ fn orphan_args(dry_run: bool) -> super::maintenance::orphans::OrphanArgs {
         equivalences: super::maintenance::paths::Equivalences::defaults(),
         mode: super::maintenance::orphans::Mode::Error,
         stream_results: false,
+        siblings: None,
     }
 }
 

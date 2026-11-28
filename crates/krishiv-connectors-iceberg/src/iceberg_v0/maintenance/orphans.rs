@@ -9,8 +9,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use iceberg::spec::TableMetadata;
 use krishiv_common::error::{
-    KrishivError, KrishivIcebergOrphanPathUnreadable, KrishivIcebergProcedureArgument,
-    KrishivIcebergProcedureGcDisabled,
+    KrishivError, KrishivIcebergOrphanLocationShared, KrishivIcebergOrphanPathUnreadable,
+    KrishivIcebergProcedureArgument, KrishivIcebergProcedureGcDisabled,
 };
 
 use super::super::commit::{CommitClock, CommitTable};
@@ -60,6 +60,8 @@ pub(crate) struct OrphanArgs {
     pub(crate) equivalences: Equivalences,
     pub(crate) mode: Mode,
     pub(crate) stream_results: bool,
+    /// `(name, location)` of the namespace's other tables; `None` when the catalog cannot list.
+    pub(crate) siblings: Option<Vec<(String, String)>>,
 }
 
 /// One listed file.
@@ -151,6 +153,44 @@ pub(crate) fn resolve_location(
         "Cannot remove orphan files under `{given}`: it is not the location, data path or metadata \
          path of table `{table}`, nor under one of them."
     )))
+}
+
+/// Refuses when another table of the namespace is stored at or under `location` (design 36e
+/// §4.4): its files are not in this table's valid set and would be listed as orphans. Partial: it
+/// sees only the table's own namespace.
+///
+/// # Errors
+/// `KRISHIV_ICEBERG_ORPHAN_LOCATION_SHARED`.
+pub(crate) fn check_shared(
+    location: &str,
+    siblings: &[(String, String)],
+    eq: &Equivalences,
+) -> Result<(), KrishivError> {
+    let Some(here) = FileIdentity::parse(location) else {
+        return Ok(());
+    };
+    for (name, other) in siblings {
+        let Some(o) = FileIdentity::parse(other) else {
+            continue;
+        };
+        let under = here.path == "/"
+            || o.path == here.path
+            || o.path.starts_with(&format!("{}/", here.path));
+        let same_store = FileIdentity {
+            path: o.path.clone(),
+            ..here.clone()
+        }
+        .relation(&o, eq)
+            == Relation::Same;
+        if under && same_store {
+            return Err(KrishivIcebergOrphanLocationShared {
+                location: location.to_owned(),
+                other_table: name.clone(),
+            }
+            .into());
+        }
+    }
+    Ok(())
 }
 
 /// Whether a key under the listed location is hidden: a segment starting `_` or `.`, unless it is
@@ -325,6 +365,13 @@ where
     check_gc(&meta)?;
     let older = resolve_older_than(args.older_than_ms, clock.now_ms())?;
     let location = resolve_location(&meta, &name, args.location.as_deref(), &args.equivalences)?;
+    match &args.siblings {
+        Some(s) => check_shared(&location, s, &args.equivalences)?,
+        None => tracing::warn!(
+            table = %name,
+            "the catalog cannot list the namespace's tables; the nested-table check was skipped"
+        ),
+    }
     let valid = valid_set(io, &meta, &metadata_location, max_bytes, memory).await?;
     let listed: Vec<Listed> = list(location)
         .await?
@@ -493,6 +540,23 @@ mod tests {
         );
         assert!(e.to_string().contains("relative/a.parquet"), "{e}");
         assert!(e.to_string().contains("v1.metadata.json"), "{e}");
+    }
+
+    #[test]
+    fn another_table_under_the_location_is_refused() {
+        let eq = Equivalences::defaults();
+        let sib = |l: &str| vec![("other".to_owned(), l.to_owned())];
+        let e = check_shared("s3://b/wh/db", &sib("s3://b/wh/db/other"), &eq).unwrap_err();
+        assert_eq!(
+            e.error_class(),
+            krishiv_common::error::ErrorClass::KrishivIcebergOrphanLocationShared
+        );
+        assert!(e.to_string().contains("other"), "{e}");
+        // The same location, a sibling next to it, another bucket: none is shared.
+        assert!(check_shared("s3://b/wh/db/t", &sib("s3://b/wh/db/t"), &eq).is_err());
+        assert!(check_shared("s3://b/wh/db/t", &sib("s3://b/wh/db/t2"), &eq).is_ok());
+        assert!(check_shared("s3://b/wh/db/t", &sib("s3://c/wh/db/t/x"), &eq).is_ok());
+        assert!(check_shared("s3://b/wh/db/t", &[], &eq).is_ok());
     }
 
     #[test]
