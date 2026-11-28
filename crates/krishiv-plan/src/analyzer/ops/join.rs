@@ -788,28 +788,41 @@ impl Resolver<'_> {
             }
             ColumnNamesOp::Deduplicate { subset } => {
                 // One row per key: the input's columns in order, a key as itself and any
-                // other as `first(col) AS col`, over a group by the keys.
-                let col = |n: &str| Arc::new(Expr::column([n.to_owned()]));
-                let keys: Vec<Arc<Expr>> = subset.iter().map(|k| col(k)).collect();
+                // other as `first(col) AS col`, over a group by the keys. Columns are
+                // attributes, not names, so duplicate names (a join's both sides) work as
+                // Spark's `Deduplicate` does; a key resolves like any reference (ambiguous
+                // is an error). A name that matches nothing stays a name for the aggregate
+                // to refuse.
+                let mut key_ids = Vec::new();
+                let mut keys: Vec<Arc<Expr>> = Vec::new();
+                for k in subset {
+                    match self.find(&c.out, std::slice::from_ref(k), p.origin, true)? {
+                        Some((a, _)) => {
+                            key_ids.push(a.col.id);
+                            keys.push(self.pass_expr(&a.col));
+                        }
+                        None => keys.push(Arc::new(Expr::column([k.clone()]))),
+                    }
+                }
                 let items: Vec<Arc<Expr>> = c
                     .out
                     .iter()
                     .map(|a| {
-                        let name = &a.col.name;
-                        if subset.iter().any(|k| same(name, k)) {
-                            col(name)
+                        let col = self.pass_expr(&a.col);
+                        if key_ids.contains(&a.col.id) {
+                            col
                         } else {
                             Arc::new(Expr::new(ExprNode::Alias {
                                 expr: Arc::new(Expr::new(ExprNode::Function(FunctionCall {
                                     name: "first".to_owned(),
                                     qualifier: Vec::new(),
-                                    args: vec![col(name)],
+                                    args: vec![col],
                                     arg_names: Vec::new(),
                                     distinct: false,
                                     filter: None,
                                     within_group: Vec::new(),
                                 }))),
-                                name: name.clone(),
+                                name: a.col.name.clone(),
                             }))
                         }
                     })

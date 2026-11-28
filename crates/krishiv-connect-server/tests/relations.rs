@@ -206,6 +206,25 @@ async fn deduplicate_over_a_subset_keeps_one_row_per_key_in_the_input_order() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn deduplicate_over_a_subset_keeps_duplicate_named_columns() {
+    let server = start().await;
+    let twin = relation(RelType::Sql(pb::Sql {
+        query: "SELECT v, id, id2 AS id FROM VALUES (1, 'x', 10), (2, 'x', 20) AS t(id, v, id2)"
+            .to_owned(),
+        ..Default::default()
+    }));
+    let dedup = relation(RelType::Deduplicate(Box::new(pb::Deduplicate {
+        input: Some(Box::new(twin)),
+        column_names: vec!["v".to_owned()],
+        all_columns_as_keys: None,
+        within_watermark: None,
+    })));
+    let rows = run(&server, dedup).await.expect("runs");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].len(), 3);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn deduplicate_without_keys_is_a_spark_error_class() {
     let server = start().await;
     let dedup = relation(RelType::Deduplicate(Box::new(pb::Deduplicate {
