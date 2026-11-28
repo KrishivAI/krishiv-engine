@@ -41,7 +41,7 @@ use krishiv_common::error::{
 use krishiv_common::redact::{REDACTED, is_redacted_setting};
 use krishiv_connect::proto::v4_3 as pb;
 use krishiv_connect::proto::v4_3::config_request::operation::OpType;
-use krishiv_session::RuntimeConf;
+use krishiv_session::{RuntimeConf, SparkConfValue};
 
 use crate::manager::SessionEntry;
 
@@ -212,6 +212,17 @@ fn capabilities_key(key: &str) -> Option<String> {
         .then(krishiv_connect::extension::capabilities_value)
 }
 
+/// Spark's `isModifiable` (`RuntimeConfig.isModifiable`, `SQLConf.isModifiable`): true for a registered,
+/// non-static entry only, so false for a key no entry registers. A key Spark registers and Krishiv does
+/// not is modifiable unless it is static (SV-3); Krishiv's own entries keep the session's answer.
+fn is_modifiable(conf: &RuntimeConf, key: &str) -> bool {
+    if lookup(resolve_alternative(key)).is_some() {
+        return conf.is_modifiable(key);
+    }
+    krishiv_common::config::spark_default(key).is_some_and(|e| !e.is_static)
+        && conf.is_modifiable(key)
+}
+
 fn pair(key: &str, value: Option<String>) -> pb::KeyValue {
     pb::KeyValue {
         key: key.to_owned(),
@@ -269,13 +280,22 @@ pub(crate) async fn config(
         }
         Some(OpType::Get(get)) => {
             for key in &get.keys {
-                let value = capabilities_key(key).or_else(|| conf.get(key));
-                if value.is_none() || is_redacted(key, value.as_deref()) {
-                    return Err(SqlConfNotFound {
-                        sql_conf: format!("\"{key}\""),
+                // A key Spark registers and Krishiv does not answers Spark's default (SV-3); an
+                // optional one answers no value.
+                let value = match capabilities_key(key).map(SparkConfValue::Value) {
+                    Some(v) => v,
+                    None => conf.get_as_spark(key),
+                };
+                let value = match value {
+                    SparkConfValue::Value(v) if !is_redacted(key, Some(&v)) => Some(v),
+                    SparkConfValue::NoValue if !is_redacted(key, None) => None,
+                    _ => {
+                        return Err(SqlConfNotFound {
+                            sql_conf: format!("\"{key}\""),
+                        }
+                        .into());
                     }
-                    .into());
-                }
+                };
                 out.pairs.push(pair(key, value));
                 out.warnings.extend(warning(key));
             }
@@ -341,7 +361,7 @@ pub(crate) async fn config(
         Some(OpType::IsModifiable(m)) => {
             for key in &m.keys {
                 out.pairs
-                    .push(pair(key, Some(conf.is_modifiable(key).to_string())));
+                    .push(pair(key, Some(is_modifiable(&conf, key).to_string())));
                 out.warnings.extend(warning(key));
             }
         }

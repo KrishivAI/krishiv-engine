@@ -45,8 +45,12 @@ use sha2::{Digest, Sha256};
 /// The session conf a worker gets with each batch (Spark's runner conf; the keys the embedded runtime
 /// sends, `krishiv-python`'s `RUNNER_KEYS`), read from the session's live conf when a query's calls are
 /// prepared, so each query sends the values current when it starts, as Spark sends them per execution.
-const RUNNER_KEYS: [&str; 8] = [
+const RUNNER_KEYS: [&str; 10] = [
     "spark.sql.legacy.execution.pandas.groupedMap.assignColumnsByName",
+    // The legacy pandas paths of an Arrow UDF (ported) and an Arrow UDTF (refused, `NOT_IMPLEMENTED`),
+    // acceptance SV-5.
+    "spark.sql.legacy.execution.pythonUDF.pandas.conversion.enabled",
+    "spark.sql.legacy.execution.pythonUDTF.pandas.conversion.enabled",
     "spark.sql.execution.arrow.useLargeVarTypes",
     "spark.sql.execution.pandas.convertToArrowArraySafely",
     "spark.sql.execution.pythonUDF.pandas.intToDecimalCoercionEnabled",

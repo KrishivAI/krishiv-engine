@@ -145,6 +145,16 @@ fn set_returns_spark_rows_and_sets() {
     // An unset key shows `<undefined>`, as in Spark.
     let (_, found) = rows(&s, "SET my.app.missing");
     assert_eq!(found, [vec!["my.app.missing", "<undefined>"]]);
+    // SV-3: a key Spark 4.3.0 registers and Krishiv does not shows Spark's default (the arrow key through
+    // the key it falls back to); an optional one `<undefined>`. Spark 4.3.0's `SET <key>` shows the same.
+    for (key, want) in [
+        ("spark.sql.execution.arrow.pyspark.enabled", "true"),
+        ("spark.sql.execution.arrow.maxRecordsPerBatch", "10000"),
+        ("spark.sql.adaptive.customCostEvaluatorClass", "<undefined>"),
+    ] {
+        let (_, found) = rows(&s, &format!("SET {key}"));
+        assert_eq!(found, [vec![key, want]], "{key}");
+    }
 }
 
 #[test]

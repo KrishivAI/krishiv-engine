@@ -143,7 +143,7 @@ pub mod agent;
 
 pub use cancel::CancelReason;
 pub use column::Column;
-pub use conf::RuntimeConf;
+pub use conf::{RuntimeConf, SparkConfValue};
 pub use dataframe::{
     DataFrame, DataFrameReader, DataFrameWriter, DataFrameWriterV2, ExplainMode, GroupedData,
     JoinType, ObservedSink, StorageLevel,

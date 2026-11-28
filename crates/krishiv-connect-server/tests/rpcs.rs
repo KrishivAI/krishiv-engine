@@ -775,6 +775,83 @@ async fn config_operations() {
             kv("krishiv.memory.limit", Some("false"))
         ]
     );
+    // SV-3: a key Spark 4.3.0 registers and Krishiv does not answers Spark's default unset, an optional one
+    // no value, and the arrow key what the deprecated key it falls back to answers (set above);
+    // isModifiable is Spark's: false for a static key and for a key no entry registers. Spark 4.3.0 over
+    // Connect answers the same (`spark.conf.get`, `isModifiable`).
+    let spark_keys = [
+        "spark.sql.execution.arrow.pyspark.enabled",
+        "spark.sql.execution.arrow.maxRecordsPerBatch",
+        "spark.sql.legacy.execution.pythonUDTF.pandas.conversion.enabled",
+        "spark.sql.adaptive.customCostEvaluatorClass",
+    ];
+    let get = config(
+        &run,
+        OpType::Get(creq::Get {
+            keys: keys(&spark_keys),
+        }),
+    )
+    .await
+    .expect("get of Spark defaults");
+    assert_eq!(
+        get.pairs,
+        vec![
+            kv("spark.sql.execution.arrow.pyspark.enabled", Some("true")),
+            kv(
+                "spark.sql.execution.arrow.maxRecordsPerBatch",
+                Some("10000")
+            ),
+            kv(
+                "spark.sql.legacy.execution.pythonUDTF.pandas.conversion.enabled",
+                Some("false")
+            ),
+            kv("spark.sql.adaptive.customCostEvaluatorClass", None),
+        ]
+    );
+    config(
+        &run,
+        OpType::Set(creq::Set {
+            pairs: vec![kv("spark.sql.execution.arrow.enabled", Some("false"))],
+            silent: None,
+        }),
+    )
+    .await
+    .expect("set the fallback key");
+    let get = config(
+        &run,
+        OpType::Get(creq::Get {
+            keys: keys(&spark_keys[..1]),
+        }),
+    )
+    .await
+    .expect("get through the fallback");
+    assert_eq!(
+        get.pairs,
+        vec![kv(
+            "spark.sql.execution.arrow.pyspark.enabled",
+            Some("false")
+        )]
+    );
+    let m = config(
+        &run,
+        OpType::IsModifiable(creq::IsModifiable {
+            keys: keys(&[
+                "spark.sql.execution.arrow.maxRecordsPerBatch",
+                "spark.sql.catalogImplementation",
+                "no.such.key",
+            ]),
+        }),
+    )
+    .await
+    .expect("is modifiable of Spark keys");
+    assert_eq!(
+        m.pairs,
+        vec![
+            kv("spark.sql.execution.arrow.maxRecordsPerBatch", Some("true")),
+            kv("spark.sql.catalogImplementation", Some("false")),
+            kv("no.such.key", Some("false"))
+        ]
+    );
     let status = unary::<_, pb::ConfigResponse>(
         &run.channel,
         "Config",

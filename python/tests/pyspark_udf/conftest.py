@@ -23,9 +23,12 @@ def load_manifest() -> list[dict[str, str]]:
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
     excluded: dict[tuple[str, str, str], str] = {}
+    included: set[tuple[str, str]] = set()
     for e in load_manifest():
         if e["status"] == "excluded":
             excluded[(e["cls"], e["name"], e.get("runner", ""))] = f"excluded ({e['category']}): {e['reason']}"
+        elif "runner" not in e:
+            included.add((e["cls"], e["name"]))
     for item in items:
         cls = getattr(item, "cls", None)
         if cls is None or not str(item.path).startswith(str(_HERE)):
@@ -36,4 +39,7 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
             )
             if reason:
                 item.add_marker(pytest.mark.skip(reason=reason))
+                break
+            # A class's own entry (it overrides the method) decides over its bases' entries.
+            if (klass.__name__, item.name) in included and item.name in vars(klass):
                 break

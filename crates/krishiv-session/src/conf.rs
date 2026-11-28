@@ -410,6 +410,17 @@ pub(crate) fn is_modifiable(key: &str) -> bool {
     }
 }
 
+/// What Spark's `spark.conf.get(key)` answers for a key ([`RuntimeConf::get_as_spark`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SparkConfValue {
+    /// A value: set, or a default.
+    Value(String),
+    /// No value and no error: an optional Spark entry that is unset.
+    NoValue,
+    /// `SQL_CONF_NOT_FOUND`: no entry registers the key and it is unset.
+    NotFound,
+}
+
 /// The runtime configuration of a session (Spark's `spark.conf`). Changes
 /// apply to queries that start afterwards.
 ///
@@ -441,6 +452,50 @@ impl RuntimeConf {
     #[must_use]
     pub fn get(&self, key: &str) -> Option<String> {
         self.store.value(key)
+    }
+
+    /// What Spark's `spark.conf.get(key)` answers (acceptance SV-3): [`Self::get`]'s value, else for a key
+    /// Krishiv does not register but Spark does
+    /// ([`krishiv_common::config::spark_default`]), Spark's default: a value, no value for an optional
+    /// entry, or what the entry it falls back to answers. [`SparkConfValue::NotFound`] for a key neither
+    /// registers (and, as before, for a Krishiv entry without a default that is unset).
+    ///
+    /// ```
+    /// use krishiv_session::SparkConfValue;
+    /// # let session = krishiv_session::Session::new()?;
+    /// let conf = session.conf();
+    /// let v = conf.get_as_spark("spark.sql.execution.arrow.pyspark.enabled");
+    /// assert_eq!(v, SparkConfValue::Value("true".to_owned()));
+    /// assert_eq!(conf.get_as_spark("my.app.flag"), SparkConfValue::NotFound);
+    /// # Ok::<(), krishiv_common::error::KrishivError>(())
+    /// ```
+    #[must_use]
+    pub fn get_as_spark(&self, key: &str) -> SparkConfValue {
+        use krishiv_common::config::{SparkDefault, spark_default};
+        let mut at = key;
+        // A fallback chain is a few entries long (the table's test checks each ends); the bound only stops a
+        // cycle a later release could add.
+        for hop in 0..8 {
+            if let Some(v) = self.get(at) {
+                return SparkConfValue::Value(v);
+            }
+            let Some(entry) = (lookup(krishiv_common::config::resolve_alternative(at)).is_none())
+                .then(|| spark_default(at))
+                .flatten()
+            else {
+                return if hop == 0 {
+                    SparkConfValue::NotFound
+                } else {
+                    SparkConfValue::NoValue
+                };
+            };
+            match entry.default {
+                SparkDefault::Value(v) => return SparkConfValue::Value(v.to_owned()),
+                SparkDefault::NoValue => return SparkConfValue::NoValue,
+                SparkDefault::Fallback(next) => at = next,
+            }
+        }
+        SparkConfValue::NoValue
     }
 
     /// Sets `key` to `value` for queries that start afterwards.
