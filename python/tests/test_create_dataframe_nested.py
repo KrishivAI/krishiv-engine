@@ -6,7 +6,6 @@ verification errors), pandas and pyarrow input. Expected values are from the Spa
 from __future__ import annotations
 
 import datetime
-import sys
 from decimal import Decimal
 from typing import Any
 
@@ -190,7 +189,6 @@ def test_pandas_types(spark: SparkSession) -> None:
 
 # goldens: pa_large_list, pa_fixed_list, pa_map, pa_struct_nested, pa_large_string, pa_dictionary, pa_decimal256,
 # pa_ts_ns
-@pytest.mark.skipif(sys.platform == "win32", reason="Windows client-local zone ignores the TZ the test sets (open)")
 def test_pyarrow_nested_and_normalised_types(spark: SparkSession) -> None:
     table = pa.table(
         {

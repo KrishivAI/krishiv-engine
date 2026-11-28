@@ -279,18 +279,15 @@ def _check_identity(spark: SparkSession, make: Any, null_struct: Any = None) -> 
             assert got[1] is None, (name, got)
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="Windows client-local zone ignores the TZ the test sets (open)")
 def test_arrow_batched_round_trips_every_type_and_null(spark: SparkSession) -> None:
     _check_identity(spark, lambda t: F.udf(lambda v: v, t))
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="Windows client-local zone ignores the TZ the test sets (open)")
 def test_arrow_udf_round_trips_every_type_and_null(spark: SparkSession) -> None:
     _check_identity(spark, lambda t: F.arrow_udf(lambda a: a, t))
 
 
 @needs_pandas
-@pytest.mark.skipif(sys.platform == "win32", reason="Windows client-local zone ignores the TZ the test sets (open)")
 def test_pandas_udf_round_trips_every_type_and_null(spark: SparkSession) -> None:
     # A struct reaches a pandas UDF as a DataFrame (`worker.py:2467-2475`, `df_for_struct`), where a NULL
     # struct is a row of NULL fields: it comes back as a struct of NULLs, not a NULL struct.

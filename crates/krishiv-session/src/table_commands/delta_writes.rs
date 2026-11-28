@@ -613,6 +613,16 @@ impl Session {
 /// `scheme:` and `//authority` starts with `/`). Anything else is a table name
 /// (`INSERT-PATH.json` `refused`: `no_slash`, `relative_path` are `TABLE_OR_VIEW_NOT_FOUND`).
 pub(super) fn is_delta_path(part: &str) -> bool {
+    is_delta_path_on(part, cfg!(windows))
+}
+
+/// [`is_delta_path`] with the platform named. On Windows a drive path (`C:\Users\t`, `C:/Users/t`) is
+/// absolute as Hadoop reads it there, where elsewhere `C:` would be a one-letter scheme.
+fn is_delta_path_on(part: &str, windows: bool) -> bool {
+    if windows && matches!(part.as_bytes(), [d, b':', b'\\' | b'/', ..] if d.is_ascii_alphabetic())
+    {
+        return true;
+    }
     let rest = match part.split_once(':') {
         Some((scheme, rest))
             if scheme.starts_with(|c: char| c.is_ascii_alphabetic())
@@ -765,7 +775,7 @@ fn arrow_schema(columns: &[TableColumn]) -> Result<arrow_schema::SchemaRef, Kris
 
 #[cfg(test)]
 mod tests {
-    use super::is_delta_path;
+    use super::{is_delta_path, is_delta_path_on};
 
     #[test]
     fn a_delta_path_is_absolute_as_hadoop_reads_it() {
@@ -790,5 +800,15 @@ mod tests {
         ] {
             assert!(!is_delta_path(name), "{name}");
         }
+    }
+
+    #[test]
+    fn a_windows_drive_path_is_a_delta_path_only_on_windows() {
+        for path in ["C:\\Users\\t\\d", "C:/Users/t/d", "d:\\x"] {
+            assert!(is_delta_path_on(path, true), "{path}");
+        }
+        assert!(!is_delta_path_on("C:\\Users\\t", false));
+        assert!(!is_delta_path_on("C:rel", true));
+        assert!(!is_delta_path_on("ab:\\x", true));
     }
 }

@@ -211,8 +211,7 @@ it does not stop it early.
 
 On Windows the Python UDF worker pool runs calls one after another where Linux and macOS run them at once, and
 an interrupt (Ctrl-C, query cancel) does not reach a call that is already running: the call finishes first. Results
-are the same; only latency and cancellation differ. The tests of both behaviours are skipped on Windows
-(`WINDOWS_POOL` in `python/tests/test_python_udf_runtime.py`) until this is fixed.
+are the same; only latency and cancellation differ.
 
 ## Python artifacts in server mode
 

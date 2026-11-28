@@ -4,7 +4,6 @@ DML and MERGE failed with DATA_SOURCE_NOT_FOUND. This writes and reads a table t
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
 import pytest
@@ -26,7 +25,6 @@ def test_a_delta_table_is_written_appended_and_read_back(spark: SparkSession, tm
     assert (tmp_path / "t" / "_delta_log").is_dir()
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="delta.`C:\\..` path tables are not resolved on Windows (open)")
 def test_delta_dml_and_merge_run_in_the_wheel(spark: SparkSession, tmp_path: Path) -> None:
     path = str(tmp_path / "d")
     spark.createDataFrame([(1, "a"), (2, "b"), (3, "c")], ["id", "v"]).write.format("delta").save(path)
