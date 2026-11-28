@@ -1011,7 +1011,11 @@ impl Resolver<'_> {
                     }
                     _ => {
                         return Err(unsupported(
-                            format!("{name} over a collated string"),
+                            super::super::bind::icu_note(
+                                &format!("{name} over a collated string"),
+                                // The note says the ICU build has it: only when it would.
+                                upper.is_some() && n == 1,
+                            ),
                             e.origin,
                         ));
                     }

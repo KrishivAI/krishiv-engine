@@ -23,7 +23,6 @@ use prost_reflect::{DescriptorPool, DynamicMessage};
 /// other fixture must translate.
 const UNSUPPORTED: &[(&str, ErrorClass)] = &[
     ("alias_multi", ErrorClass::KrishivUnsupportedFeature),
-    ("aggregate_pivot", ErrorClass::KrishivUnsupportedFeature),
     (
         "show_string",
         ErrorClass::ConnectInvalidPlanInvalidOneOfFieldNotSupported,

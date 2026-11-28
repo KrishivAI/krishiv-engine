@@ -29,5 +29,70 @@ pub(crate) fn on_deep_stack<R: Send>(f: impl FnOnce() -> R + Send) -> Result<R, 
     })
 }
 
+/// A value (a deeply nested proto) that is dropped on a big-stack thread, wherever its owner is
+/// dropped: an async worker holding it across an `await` cannot overflow its own stack by it.
+pub struct Deep<T: Send>(Option<Box<T>>);
+
+impl<T: Send> Deep<T> {
+    /// Takes `value`.
+    pub fn new(value: T) -> Self {
+        Self(Some(Box::new(value)))
+    }
+
+    /// The value.
+    #[must_use]
+    pub fn get(&self) -> Option<&T> {
+        self.0.as_deref()
+    }
+
+    /// Builds a value from this one on a big-stack thread (a deep clone, or a derived message).
+    ///
+    /// # Errors
+    /// `INTERNAL_ERROR` when the thread cannot be started or the value is gone.
+    pub fn map<U: Send>(&self, f: impl FnOnce(&T) -> U + Send) -> Result<Deep<U>, KrishivError>
+    where
+        T: Sync,
+    {
+        let value = self.0.as_deref().ok_or_else(|| {
+            KrishivError::from(InternalError {
+                message: "a deep value was already dropped".to_owned(),
+            })
+        })?;
+        on_deep_stack(|| f(value)).map(Deep::new)
+    }
+}
+
+impl<T: Send> Drop for Deep<T> {
+    fn drop(&mut self) {
+        if let Some(value) = self.0.take() {
+            // A failed thread start leaks the value rather than recursing on a small stack.
+            let _ = krishiv_common::stack::on_big_stack(move || drop(value));
+        }
+    }
+}
+
+impl<T: Send + Sync + Clone> Clone for Deep<T> {
+    fn clone(&self) -> Self {
+        // Cloned on a big stack too; a failed thread start leaves the copy empty (its users refuse it).
+        let value = self
+            .0
+            .as_ref()
+            .and_then(|v| krishiv_common::stack::on_big_stack(|| Box::new((**v).clone())));
+        Self(value)
+    }
+}
+
+impl<T: Send + std::fmt::Debug> std::fmt::Debug for Deep<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Deep(..)")
+    }
+}
+
+impl<T: Send + PartialEq> PartialEq for Deep<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+
 #[cfg(test)]
 mod tests;

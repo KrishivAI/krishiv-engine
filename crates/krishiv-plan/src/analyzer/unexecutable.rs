@@ -115,6 +115,39 @@ fn has_icu(t: Option<&DataType>) -> bool {
     })
 }
 
+/// Whether the plan node or expression `node` holds an ICU collation in the type of one of its
+/// own expressions (the refusal of its key is then the missing feature's).
+fn node_has_icu(node: &Node<'_>) -> bool {
+    match node {
+        // `SELECT DISTINCT` has no expressions of its own: the rows it compares are its
+        // projection's (the refusal looks there).
+        Node::Plan(p) if matches!(&p.node, PlanNode::Distinct { .. }) => {
+            let PlanNode::Distinct { input } = &p.node else {
+                return false;
+            };
+            matches!(&input.node, PlanNode::Project { exprs, .. }
+                if exprs.iter().any(|x| has_icu(expr_type(x))))
+        }
+        Node::Plan(p) => {
+            let mut found = false;
+            p.for_each_expr(&mut |x| found = found || has_icu(expr_type(x)));
+            found
+        }
+        Node::Expr(e) => {
+            // A sketch over an ICU collation is refused in every build (ADR 0043 Decision 6): the
+            // ICU build is no remedy, so no note.
+            if let ExprNode::Resolved(ResolvedExpr::Function(f)) = &e.node
+                && super::exprs::builtin_name(f) == "approx_count_distinct"
+            {
+                return false;
+            }
+            has_icu(expr_type(e))
+                || matches!(&e.node, ExprNode::Resolved(ResolvedExpr::Function(f))
+                    if f.args.iter().any(|a| has_icu(expr_type(a))))
+        }
+    }
+}
+
 /// A collated string inside an array, map or struct: it has an equality key but no ordering yet.
 fn nested_order(t: Option<&DataType>) -> bool {
     t.is_some_and(|t| t.contains_collation() && !t.is_collated_string())
@@ -350,7 +383,9 @@ pub(super) fn check_known(
         // `min`/`max` argument; the operators below would compare its
         // internal struct.
         if let Some((what, origin)) = spatial_key(&node).or_else(|| collated_key(&node)) {
-            error = Some(unsupported(what, origin));
+            // The key a collated leaf lacks is an ICU collation's in a build without ICU: say so.
+            let icu = !cfg!(feature = "collations-icu") && node_has_icu(&node);
+            error = Some(unsupported(super::bind::icu_note(what, icu), origin));
             return ControlFlow::Break(());
         }
         let (types, origin) = match node {

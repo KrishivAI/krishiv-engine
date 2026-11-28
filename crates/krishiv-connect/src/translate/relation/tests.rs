@@ -850,12 +850,71 @@ fn an_aliased_grouping_key_groups_by_the_bare_expression() {
     );
 }
 
+fn pivot_of(values: Vec<Expression>) -> Relation {
+    relation(RelType::Aggregate(Box::new(pb::Aggregate {
+        input: input(),
+        group_type: 4,
+        grouping_expressions: vec![attr("a")],
+        aggregate_expressions: vec![func("sum", vec![attr("c")])],
+        pivot: Some(pb::aggregate::Pivot {
+            col: Some(attr("b")),
+            values: values
+                .into_iter()
+                .map(|v| match v.expr_type {
+                    Some(ExprType::Literal(l)) => l,
+                    other => panic!("not a literal: {other:?}"),
+                })
+                .collect(),
+        }),
+        ..pb::Aggregate::default()
+    })))
+}
+
+#[test]
+fn a_pivot_narrows_its_input_to_the_keys_the_pivot_column_and_what_the_aggregates_read() {
+    let shown = show(&pivot_of(vec![
+        lit(LiteralType::Integer(1)),
+        lit(LiteralType::Integer(2)),
+    ]));
+    assert!(shown.starts_with("Pivot"), "{shown}");
+    assert!(
+        shown.contains("Project [a, b AS __krishiv_pivot, c]"),
+        "{shown}"
+    );
+    assert!(shown.ends_with("+- Read t\n"), "{shown}");
+    // The explicit values stay, in order (not [2, 1], not dropped).
+    let PlanNode::Pivot { values, .. } = node(&pivot_of(vec![
+        lit(LiteralType::Integer(1)),
+        lit(LiteralType::Integer(2)),
+    ])) else {
+        panic!("not a pivot")
+    };
+    let kept: Vec<String> = values
+        .iter()
+        .map(|v| {
+            format!(
+                "{:?}",
+                v.exprs.iter().map(ToString::to_string).collect::<Vec<_>>()
+            )
+        })
+        .collect();
+    assert_eq!(kept, [r#"["1"]"#, r#"["2"]"#]);
+}
+
+#[test]
+fn a_pivot_without_values_is_refused_without_a_host() {
+    let e = fails(translate(&pivot_of(vec![])));
+    assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
+    assert!(e.message().contains("pivot without values"));
+}
+
 #[test]
 fn aggregate_errors() {
     let pivot = aggregate_of(4, vec![attr("a")], vec![]);
-    let e = fails(translate(&pivot));
-    assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
-    assert!(e.message().contains("pivot"));
+    assert_eq!(
+        code(&pivot),
+        ErrorClass::ConnectInvalidPlanAggregateWithPivotRequiresPivot
+    );
     let unspecified = aggregate_of(0, vec![], vec![]);
     assert_eq!(
         code(&unspecified),

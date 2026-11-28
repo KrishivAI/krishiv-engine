@@ -16,14 +16,14 @@ use krishiv_common::error::{
     ConnectInvalidPlanCannotParse, ConnectInvalidPlanSchemaRequiredForLocalRelation, KrishivError,
     KrishivUnsupportedFeature,
 };
-use krishiv_plan::LocalRelation;
+use krishiv_plan::{Literal, LocalRelation};
 use krishiv_types::StructType;
 
 use super::schema::parse_local_schema;
 use crate::proto::v4_3 as pb;
 
 /// A local relation the host builds before the second translation.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum LocalRequest {
     /// `LocalRelation`: Arrow IPC data with its own schema and a user schema, either of which may
     /// be absent (not both).
@@ -40,6 +40,24 @@ pub enum LocalRequest {
     },
     /// `Relation.catalog`: a call of `spark.catalog` the host runs, answering its result rows.
     Catalog(super::catalog::CatalogCall),
+    /// A pivot without values: the host runs Spark's `collectPivotValues` over the pivot's input
+    /// (`select(col).distinct().limit(max + 1).sort(col)`) and answers the values.
+    PivotValues {
+        /// The pivot's input relation, as the client sent it (it may hold local relations or UDFs
+        /// of its own: the host runs it through the whole pass).
+        input: crate::Deep<pb::Relation>,
+        /// The pivot column.
+        column: crate::Deep<pb::Expression>,
+    },
+}
+
+/// What the host built for one request.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Built {
+    /// The relation of an inline, cached or catalog request.
+    Relation(LocalRelation),
+    /// The values of a [`LocalRequest::PivotValues`], sorted.
+    PivotValues(Vec<Literal>),
 }
 
 /// Where the translator gets its local relations from.
@@ -54,7 +72,7 @@ enum Mode {
     /// The first pass: record the requests, answer with placeholders.
     Collect(Arc<Mutex<Vec<LocalRequest>>>),
     /// The second pass: the relation of the n-th request.
-    Resolved(Arc<[LocalRelation]>),
+    Resolved(Arc<[Built]>),
 }
 
 impl LocalRelations {
@@ -67,7 +85,13 @@ impl LocalRelations {
     /// The second pass: `relations[n]` answers the n-th request of the first pass.
     #[must_use]
     pub fn resolved(relations: Vec<LocalRelation>) -> Self {
-        Self(Mode::Resolved(relations.into()))
+        Self::resolved_with(relations.into_iter().map(Built::Relation).collect())
+    }
+
+    /// The second pass: `built[n]` answers the n-th request of the first pass.
+    #[must_use]
+    pub fn resolved_with(built: Vec<Built>) -> Self {
+        Self(Mode::Resolved(built.into()))
     }
 
     /// Takes the requests recorded so far, in order (empty unless [`Self::collecting`]), leaving
@@ -111,14 +135,49 @@ impl LocalRelations {
                     0,
                 ))
             }
-            Mode::Resolved(relations) => relations.get(ordinal).cloned().ok_or_else(|| {
-                krishiv_common::error::InternalError {
-                    message: format!("no local relation was built for request {ordinal}"),
-                }
-                .into()
-            }),
+            Mode::Resolved(built) => match built.get(ordinal) {
+                Some(Built::Relation(r)) => Ok(r.clone()),
+                _ => Err(no_answer(ordinal)),
+            },
         }
     }
+
+    /// The values of the pivot request `ordinal`: recorded (and one placeholder value returned)
+    /// in the first pass, looked up in the second.
+    pub(super) fn pivot_values(
+        &self,
+        ordinal: usize,
+        request: impl FnOnce() -> Result<LocalRequest, KrishivError>,
+    ) -> Result<Vec<Literal>, KrishivError> {
+        match &self.0 {
+            Mode::None => Err(KrishivUnsupportedFeature {
+                feature: "a pivot without values, without a host that computes them \
+                          (TranslateConf::local_relations)"
+                    .to_owned(),
+            }
+            .into()),
+            Mode::Collect(requests) => {
+                let request = request()?;
+                requests
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .push(request);
+                // Never run: the first pass's plan is dropped when there were requests.
+                Ok(vec![Literal::Null(None)])
+            }
+            Mode::Resolved(built) => match built.get(ordinal) {
+                Some(Built::PivotValues(v)) => Ok(v.clone()),
+                _ => Err(no_answer(ordinal)),
+            },
+        }
+    }
+}
+
+fn no_answer(ordinal: usize) -> KrishivError {
+    krishiv_common::error::InternalError {
+        message: format!("no local relation was built for request {ordinal}"),
+    }
+    .into()
 }
 
 impl std::fmt::Debug for LocalRelations {

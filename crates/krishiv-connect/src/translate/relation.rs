@@ -15,8 +15,8 @@ use std::sync::Arc;
 use krishiv_common::secret::OptionValue;
 use krishiv_plan::{
     ALIAS_PART_SEP, AsOfDirection, AsOfMatch, Builtin, CastMode, ColumnNamesOp, Expr, ExprNode,
-    Grouping, JoinCondition, JoinKind, Literal, LogicalPlan, Origin, PlanId, PlanNode, ReadSource,
-    SampleBounds, SetOperation, SqlArgs, UnpivotColumnSet,
+    Grouping, JoinCondition, JoinKind, Literal, LogicalPlan, Origin, PivotValue, PlanId, PlanNode,
+    ReadSource, SampleBounds, SetOperation, SqlArgs, UnpivotColumnSet,
 };
 
 use super::errors::{
@@ -965,9 +965,7 @@ impl Translator<'_> {
                     })
                     .collect::<Result<_>>()?,
             },
-            Ok(GroupType::Pivot) => {
-                return Err(unsupported("pivots (spark.connect.Aggregate.pivot)"));
-            }
+            Ok(GroupType::Pivot) => return self.pivot(a, &input, &keys, aggregates),
             Ok(GroupType::Unspecified) => {
                 return Err(invalid_enum(
                     "spark.connect.Aggregate.GroupType",
@@ -988,6 +986,70 @@ impl Translator<'_> {
             grouping,
             aggregates: keys.into_iter().chain(aggregates).collect(),
         })
+    }
+
+    /// `Aggregate` with `GROUP_TYPE_PIVOT` (`groupBy(...).pivot(col, values).agg(...)`): the
+    /// session's pivot ([`krishiv_plan::grouped_pivot`]). Spark computes the values of a pivot
+    /// without any by running a query before planning (`collectPivotValues`); the translator
+    /// runs none, so it asks the host ([`super::LocalRequest::PivotValues`]).
+    fn pivot(
+        &mut self,
+        a: &pb::Aggregate,
+        input: &Arc<LogicalPlan>,
+        keys: &[Arc<Expr>],
+        aggregates: Vec<Arc<Expr>>,
+    ) -> Result<PlanNode> {
+        let Some(pivot) = &a.pivot else {
+            return Err(
+                krishiv_common::error::ConnectInvalidPlanAggregateWithPivotRequiresPivot {}.into(),
+            );
+        };
+        let column = self.required_expression(pivot.col.as_ref())?;
+        let values = if pivot.values.is_empty() {
+            let (Some(input), Some(col)) = (a.input.as_deref(), pivot.col.as_ref()) else {
+                return Err(assertion("Aggregate with GROUP_TYPE_PIVOT needs an input"));
+            };
+            let ordinal = self.locals;
+            self.locals += 1;
+            let request = || {
+                Ok(super::LocalRequest::PivotValues {
+                    input: crate::Deep::new(input.clone()),
+                    column: crate::Deep::new(col.clone()),
+                })
+            };
+            self.conf
+                .local_relations
+                .pivot_values(ordinal, request)?
+                .into_iter()
+                .map(|l| {
+                    Ok(PivotValue {
+                        exprs: vec![Arc::new(Expr::new(ExprNode::Literal(l)))],
+                        alias: None,
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?
+        } else {
+            pivot
+                .values
+                .iter()
+                .map(|v| {
+                    Ok(PivotValue {
+                        exprs: vec![self.literal_expression(v)?],
+                        alias: None,
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?
+        };
+        let keys: Vec<Expr> = keys.iter().map(|k| (**k).clone()).collect();
+        krishiv_plan::grouped_pivot(
+            input,
+            &keys,
+            &column,
+            values,
+            aggregates,
+            self.conf.case_sensitive,
+            || Origin::UNKNOWN,
+        )
     }
 
     /// `Range`: `range(start, end, step, numPartitions)`, as Spark builds
