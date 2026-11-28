@@ -200,7 +200,20 @@ pub(super) fn format(
     zone: Option<(i32, &str)>,
     has_time: bool,
 ) -> Result<String, KrishivError> {
-    let f = Fields::new(local, zone, has_time);
+    format_nanos(items, local, 0, zone, has_time)
+}
+
+/// [`format`] with `extra` nanoseconds (0..=999) within the microsecond `local` ends in (a nanosecond
+/// timestamp, Spark 4.3): the fraction fields print them.
+pub(super) fn format_nanos(
+    items: &[Item],
+    local: i64,
+    extra: u16,
+    zone: Option<(i32, &str)>,
+    has_time: bool,
+) -> Result<String, KrishivError> {
+    let mut f = Fields::new(local, zone, has_time);
+    f.nanos = f.nanos.saturating_add(i64::from(extra.min(999)));
     let mut out = String::new();
     write_items(items, &f, &mut out)?;
     Ok(out)
@@ -213,11 +226,25 @@ pub(super) fn format_time_of_day(
     items: &[Item],
     nanos: i64,
 ) -> Result<Option<String>, KrishivError> {
-    let f = Fields::time_of_day(nanos);
     let mut out = String::new();
-    match write_items(items, &f, &mut out) {
-        Ok(()) => Ok(Some(out)),
-        Err(Fail::Absent(_)) => Ok(None),
+    Ok(write_time_of_day(items, nanos, &mut out)?.then_some(out))
+}
+
+/// [`format_time_of_day`] appended to `out`: `Ok(false)`, with `out` as it was, where that gives
+/// `Ok(None)`.
+pub(super) fn write_time_of_day(
+    items: &[Item],
+    nanos: i64,
+    out: &mut String,
+) -> Result<bool, KrishivError> {
+    let f = Fields::time_of_day(nanos);
+    let start = out.len();
+    match write_items(items, &f, out) {
+        Ok(()) => Ok(true),
+        Err(Fail::Absent(_)) => {
+            out.truncate(start);
+            Ok(false)
+        }
         Err(Fail::Err(e)) => Err(e),
     }
 }

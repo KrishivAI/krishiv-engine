@@ -60,6 +60,23 @@ pub fn parse_data_type(input: &str) -> Result<DataType> {
 /// # Errors
 /// As [`parse_data_type`].
 pub fn parse_data_type_in(input: &str, grammar: TypeGrammar) -> Result<DataType> {
+    parse_data_type_with(input, grammar, false)
+}
+
+/// [`parse_data_type_in`] for a type string a user wrote, where a bare `TIMESTAMP` is the type
+/// `spark.sql.timestampType` names: with `timestamp_ntz`, `TIMESTAMP` (and Spark 4.3's
+/// `TIMESTAMP(6)`) is `TIMESTAMP_NTZ`, at any depth, as Spark's `DataTypeAstBuilder` reads
+/// `SqlApiConf.get.timestampType` (Spark Connect's cast and schema strings, UDF return types).
+/// A stored type string (a catalog column, a plan tag) is canonical and goes through
+/// [`parse_data_type_in`], where `timestamp` is always `TIMESTAMP_LTZ`.
+///
+/// # Errors
+/// As [`parse_data_type`].
+pub fn parse_data_type_with(
+    input: &str,
+    grammar: TypeGrammar,
+    timestamp_ntz: bool,
+) -> Result<DataType> {
     let tokens = Lexer {
         src: input,
         pos: 0,
@@ -75,6 +92,7 @@ pub fn parse_data_type_in(input: &str, grammar: TypeGrammar) -> Result<DataType>
         deferred: None,
         pinned: false,
         grammar,
+        timestamp_ntz,
     };
     let data_type = p.data_type(0)?;
     let left = p.tokens.len().saturating_sub(p.pos);
@@ -382,6 +400,8 @@ struct Parser<'a> {
     pinned: bool,
     /// The release's type grammar.
     grammar: TypeGrammar,
+    /// `spark.sql.timestampType` is `TIMESTAMP_NTZ`: a bare `TIMESTAMP` names that type.
+    timestamp_ntz: bool,
 }
 
 impl<'a> Parser<'a> {
@@ -524,6 +544,8 @@ impl<'a> Parser<'a> {
             None
         } else if let Some(e) = error::incomplete_type(&lower) {
             Some(Err(e))
+        } else if self.timestamp_ntz && is_session_timestamp(&lower, &args, self.grammar) {
+            resolve("timestamp_ntz", &args, self.grammar)
         } else {
             resolve(&lower, &args, self.grammar)
         };
@@ -931,8 +953,10 @@ fn resolve(lower: &str, args: &[String], grammar: TypeGrammar) -> Option<Result<
             });
         }
         // Spark 4.3: 6 is the microsecond type; 7..=9 the nanosecond types Krishiv has not yet.
-        ("timestamp" | "timestamp_ltz" | "timestamp_ntz", [p]) if grammar == TypeGrammar::V4_3 => {
-            return Some(timestamp_with_precision(lower, p));
+        ("timestamp" | "timestamp_ltz" | "timestamp_ntz", [p])
+            if grammar.has_timestamp_precision() =>
+        {
+            return Some(timestamp_with_precision(lower, p, grammar));
         }
         ("geometry" | "geography", [srid]) => {
             return Some(match srid.parse::<i32>() {
@@ -946,15 +970,29 @@ fn resolve(lower: &str, args: &[String], grammar: TypeGrammar) -> Option<Result<
     Some(Ok(t))
 }
 
+/// Whether `lower` with `args` is the session's timestamp type: a bare `TIMESTAMP`, or Spark
+/// 4.3's `TIMESTAMP(6)` (the precision read as a number, so `TIMESTAMP(06)` too). Any other
+/// precision keeps its name, so its error names `TIMESTAMP` as Spark's does.
+fn is_session_timestamp(lower: &str, args: &[String], grammar: TypeGrammar) -> bool {
+    lower == "timestamp"
+        && match args {
+            [] => true,
+            [p] => grammar == TypeGrammar::V4_3 && p.parse::<u32>() == Ok(6),
+            _ => false,
+        }
+}
+
 /// `TIMESTAMP[_NTZ|_LTZ](p)` in Spark 4.3's grammar (`TIMESTAMP` is the session's timestamp type,
 /// taken here as `TIMESTAMP_LTZ` like the bare name).
-fn timestamp_with_precision(lower: &str, p: &str) -> Result<DataType> {
+fn timestamp_with_precision(lower: &str, p: &str, grammar: TypeGrammar) -> Result<DataType> {
     let ntz = lower == "timestamp_ntz";
     match p.parse::<u32>() {
         Ok(6) if ntz => Ok(DataType::TimestampNtz),
         Ok(6) => Ok(DataType::Timestamp),
+        Ok(n @ 7..=9) if grammar.nanos_types() && ntz => DataType::timestamp_ntz(n),
+        Ok(n @ 7..=9) if grammar.nanos_types() => DataType::timestamp_ltz(n),
         Ok(7..=9) => Err(error::unsupported(format!(
-            "the nanosecond-precision timestamp type {}({}) (Krishiv 0.3.1)",
+            "the nanosecond-precision timestamp type {}({}) (spark.sql.timestampNanosTypes.enabled is off)",
             lower.to_ascii_uppercase(),
             digits(p)
         ))),

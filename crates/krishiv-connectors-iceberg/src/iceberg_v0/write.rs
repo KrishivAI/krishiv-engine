@@ -313,6 +313,21 @@ impl DataFileWriter {
         self
     }
 
+    /// This writer rolling files over at `bytes` instead of `write.target-file-size-bytes`
+    /// (`rewrite_data_files`' `target-file-size-bytes` / `write-max-file-size`, as Java's
+    /// `SparkWriteRequirements` sizing of the rewrite's writer). Zero is refused.
+    ///
+    /// # Errors
+    /// `INTERNAL_ERROR` for zero bytes.
+    #[must_use = "the override is on the returned writer"]
+    pub(crate) fn with_target_file_bytes(mut self, bytes: u64) -> Result<Self, KrishivError> {
+        if bytes == 0 {
+            return Err(internal("a zero target file size".to_owned()));
+        }
+        self.target_file_bytes = bytes;
+        Ok(self)
+    }
+
     /// The task's sketches; `None` when it has none or dropped them.
     pub(crate) fn take_sketches(&mut self) -> Option<TaskSketches> {
         self.sketches.take()

@@ -156,6 +156,8 @@ pub(crate) struct SessionState {
     /// The runtime that evaluates them in this process (set by the Python
     /// facade); without one a plan calling a Python UDF fails to run.
     pub(crate) python_runtime: Mutex<Option<Arc<dyn krishiv_exec::python_eval::UdfRuntime>>>,
+    /// Where persisted Python UDFs are kept (a Connect server's catalog); none for a session alone.
+    pub(crate) persisted_functions: Mutex<Option<Arc<dyn crate::python_udfs::PersistedFunctions>>>,
     /// The SQL-bodied functions the session defines.
     pub(crate) sql_functions: SqlFunctions,
     /// The process-wide part of the engine this session runs on.
@@ -604,6 +606,7 @@ impl Session {
                 self.exec_create_function(&f, redacted, &env.identifier_spans)
                     .await
             }
+            Statement::CreatePersistedFunction(f) => self.exec_create_persisted_function(&f).await,
             Statement::DropFunction(f) => self.exec_drop_function(&f).await,
             Statement::CreateTable(t) => {
                 Box::pin(self.exec_create_table(&t, query, &env.identifier_spans))
@@ -1064,7 +1067,7 @@ impl Session {
     #[cfg(feature = "unstable-ir")]
     #[must_use]
     pub fn from_plan(&self, plan: &Plan) -> DataFrame {
-        DataFrame::new(self.clone(), Arc::clone(plan.root()))
+        Self::plan_frame(self.clone(), Arc::clone(plan.root()))
     }
 
     /// As [`Self::from_plan`], with per-statement options, as
@@ -1095,7 +1098,7 @@ impl Session {
         plan: &Plan,
         options: crate::QueryOptions,
     ) -> Result<DataFrame, KrishivError> {
-        Ok(DataFrame::new(
+        Ok(Self::plan_frame(
             self.with_options(options)?,
             Arc::clone(plan.root()),
         ))
@@ -1119,8 +1122,11 @@ impl Session {
     ) -> Result<DataFrame, KrishivError> {
         let session = self.with_options(options)?;
         if frames.is_empty() {
-            return Ok(DataFrame::new(session, Arc::clone(plan.root())));
+            return Ok(Self::plan_frame(session, Arc::clone(plan.root())));
         }
+        // The statement comes from the client's plan, before the cached frames' own plans
+        // (which may hold `spark.sql` relations of their own) are spliced in.
+        let statement = session.plan_statement(plan.root());
         let frames = frames.to_vec();
         let root = Arc::clone(plan.root());
         let (root, keep) = self
@@ -1149,7 +1155,11 @@ impl Session {
                 Ok((root.unwrap_or_else(|e| match e {}), keep))
             })
             .await?;
-        Ok(DataFrame::over_plan(session, root, keep))
+        let df = DataFrame::over_plan(session, root, keep);
+        Ok(match statement {
+            Some(env) => df.with_first_statement(env),
+            None => df,
+        })
     }
 
     /// Runs `work` on the session's executor, so that it finds the
@@ -1318,6 +1328,12 @@ impl Session {
                     Arc::clone(&self.state.runtime.executor),
                 )),
                 catalogs: declared,
+                information: Some(crate::information_schema::Source {
+                    store: Arc::clone(&self.state.catalog.store),
+                    principal: Arc::clone(&self.state.principal),
+                    policy: Arc::clone(&self.state.policy),
+                    grants: self.state.grants.clone(),
+                }),
                 monitor: Arc::new(crate::system::Monitor::new(
                     Arc::clone(&self.state.principal),
                     Arc::clone(&self.state.policy),
@@ -1969,6 +1985,9 @@ mod ops;
 use ops::AbortOnDrop;
 
 mod planning;
+
+#[cfg(feature = "unstable-ir")]
+mod plan_frames;
 
 // `SQL SECURITY DEFINER` reads (P3-T062 §2.4).
 mod definer;

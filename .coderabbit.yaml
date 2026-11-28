@@ -105,16 +105,14 @@ reviews:
         Report only correctness, security, licence and reproducibility issues.
         Do not comment on style, naming or other nitpicks.
   auto_review:
-    enabled: true
+    # Paced, not automatic (owner 2026-11-26): the plan allows about 5 reviews an hour and 1 an hour after 60 in 7 days,
+    # every reviewed push counting. A keeper script (keeper/bin/coderabbit-pacer.sh) asks for ONE review an hour with
+    # `@coderabbitai review` on the most important open PR whose head it has not reviewed, so we never hit the limit.
+    # The old label gate made it skip almost every PR because nobody added the label.
+    enabled: false
     drafts: false
     base_branches: ["main"]
-    # Quota (Essentials plan: 5 PR reviews an hour for the one developer account all our PRs share, 1 an hour after
-    # 60 reviews in 7 days; every reviewed push counts). Only a PR with the `coderabbit` label is reviewed
-    # automatically; add the label once, then comment `@coderabbitai review` once per round. Later pushes are not
-    # reviewed on their own, and automatic reviews pause after the first reviewed commit.
-    labels: ["coderabbit"]
     auto_incremental_review: false
-    auto_pause_after_reviewed_commits: 1
   finishing_touches:
     docstrings:
       enabled: false

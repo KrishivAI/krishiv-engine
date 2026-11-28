@@ -104,3 +104,62 @@ def test_cpuinfo_can_be_pointed_at_by_the_environment(tmp_path, monkeypatch):
     monkeypatch.setenv("KRISHIV_CPUINFO", info)
     with pytest.raises(ImportError):
         _cpu.ensure_supported(level_file, platform="linux")
+
+
+def _site(tmp_path: Path, *dist_infos: str) -> Path:
+    for name in dist_infos:
+        (tmp_path / name).mkdir()
+    return tmp_path
+
+
+@pytest.mark.parametrize(
+    "dist_infos",
+    [
+        ("krishiv-0.3.0.dist-info", "krishiv_compat-0.3.0.dist-info"),
+        ("krishiv-0.3.1.dist-info", "krishiv-compat-0.3.0.dist-info"),
+        ("Krishiv-0.3.0.dist-info", "krishiv.compat-0.3.0.dist-info"),
+    ],
+)
+def test_both_builds_in_one_environment_are_seen(tmp_path, dist_infos):
+    assert _cpu.both_builds_installed(_site(tmp_path, *dist_infos))
+
+
+@pytest.mark.parametrize(
+    "dist_infos",
+    [
+        (),
+        ("krishiv-0.3.0.dist-info",),
+        ("krishiv_compat-0.3.0.dist-info",),
+        ("krishiv-0.3.0.dist-info", "krishiv_compat_tools-1.0.dist-info", "krishiv_extras-1.0.dist-info"),
+        ("krishiv-0.3.0.dist-info", "krishiv_compat-0.3.0.egg-info"),
+    ],
+)
+def test_one_build_or_another_package_is_not_both(tmp_path, dist_infos):
+    assert not _cpu.both_builds_installed(_site(tmp_path, *dist_infos))
+
+
+def test_a_folder_that_cannot_be_listed_is_not_both(tmp_path):
+    assert not _cpu.both_builds_installed(tmp_path / "missing")
+
+
+def test_a_listing_that_fails_is_not_both(tmp_path, monkeypatch):
+    site = _site(tmp_path, "krishiv-0.3.0.dist-info", "krishiv_compat-0.3.0.dist-info")
+
+    def refuse(self: Path, pattern: str) -> list[Path]:
+        raise PermissionError(13, "Permission denied", str(self))
+
+    monkeypatch.setattr(Path, "glob", refuse)
+    assert not _cpu.both_builds_installed(site)
+
+
+def test_both_builds_warn_and_name_the_fix(tmp_path):
+    site = _site(tmp_path, "krishiv-0.3.0.dist-info", "krishiv_compat-0.3.0.dist-info")
+    with pytest.warns(RuntimeWarning, match="pip uninstall krishiv krishiv-compat") as caught:
+        _cpu.warn_if_both_builds_installed(site)
+    assert str(site) in str(caught[0].message)
+
+
+def test_one_build_does_not_warn(tmp_path, recwarn):
+    _cpu.warn_if_both_builds_installed(_site(tmp_path, "krishiv_compat-0.3.0.dist-info"))
+    _cpu.warn_if_both_builds_installed()  # this checkout: a development install has no metadata beside it
+    assert not recwarn.list

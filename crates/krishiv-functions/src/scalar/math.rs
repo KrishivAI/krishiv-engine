@@ -338,6 +338,9 @@ fn extremum(t: &DataType, kind: Extremum, n: usize) -> Option<Binding> {
         DataType::Int32 => prim!(Int32Type),
         DataType::Int64 => prim!(Int64Type),
         DataType::Date32 => prim!(Date32Type),
+        DataType::Timestamp(arrow_schema::TimeUnit::Nanosecond, _) => {
+            prim!(arrow_array::types::TimestampNanosecondType)
+        }
         DataType::Timestamp(..) => prim!(TimestampMicrosecondType),
         DataType::Decimal128(..) => prim!(Decimal128Type),
         DataType::Float32 => flt!(Float32Type),
@@ -363,6 +366,13 @@ fn extremum(t: &DataType, kind: Extremum, n: usize) -> Option<Binding> {
             let refs: Vec<_> = cols.iter().collect();
             Ok(Arc::new(math::extremum_bytes(kind, &refs)?) as ArrayRef)
         }),
+        DataType::Struct(_) | DataType::List(_) => {
+            Binding::new(t.clone(), move |x: &Inputs<'_>| {
+                let cols = (0..n).map(|i| x.column(i)).collect::<Result<Vec<_>, _>>()?;
+                let refs: Vec<&dyn Array> = cols.iter().map(AsRef::as_ref).collect();
+                Ok(math::extremum_nested(kind, &refs)?)
+            })
+        }
         _ => return None,
     })
 }

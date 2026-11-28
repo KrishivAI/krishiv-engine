@@ -18,6 +18,7 @@ use arrow_array::{Array, ArrayRef, RecordBatch};
 use arrow_schema::DataType;
 use futures::executor::block_on;
 use krishiv_common::error::KrishivError;
+use krishiv_plan::analyzer::SparkProfile;
 use krishiv_session::Session;
 use serde_json::Value;
 
@@ -225,9 +226,9 @@ fn run_step(s: &Session, step: &Value) -> Result<(), String> {
 }
 
 /// The first step of `case` that does not match, if any.
-fn run_case(case: &Value) -> Option<String> {
+fn run_case(case: &Value, profile: SparkProfile) -> Option<String> {
     let dir = tempfile::tempdir().unwrap();
-    let s = Session::new().unwrap();
+    let s = Session::builder().profile(profile).build().unwrap();
     s.conf()
         .set("spark.sql.warehouse.dir", &dir.path().display().to_string())
         .unwrap();
@@ -247,14 +248,15 @@ fn run_case(case: &Value) -> Option<String> {
     None
 }
 
-fn check(release: &str, gaps: &[&str]) {
+/// The cases of `release` under the profile of that release (the missing-clause error differs).
+fn check(release: &str, profile: SparkProfile, gaps: &[&str]) {
     let fixture = fixture(release);
     let mut failing = BTreeSet::new();
     let mut report = String::new();
     let mut all = String::new();
     for case in fixture["cases"].as_array().unwrap() {
         let name = case["name"].as_str().unwrap();
-        if let Some(why) = run_case(case) {
+        if let Some(why) = run_case(case, profile) {
             all.push_str(&format!("{name}: {why}\n"));
             failing.insert(name.to_owned());
             if !gaps.contains(&name) {
@@ -276,13 +278,12 @@ fn check(release: &str, gaps: &[&str]) {
 
 #[test]
 fn spark_4_2_1() {
-    check("4.2.1", gaps::GAPS);
+    check("4.2.1", SparkProfile::V4_2, gaps::GAPS);
 }
 
 #[test]
 fn spark_4_3_0() {
-    let gaps: Vec<&str> = gaps::GAPS.iter().chain(gaps::GAPS_4_3).copied().collect();
-    check("4.3.0", &gaps);
+    check("4.3.0", SparkProfile::V4_3, gaps::GAPS);
 }
 
 /// The classes only these goldens raise (`cargo xtask registry-coverage` reads test sources, not

@@ -372,7 +372,7 @@ fn modes_and_partial_duplicates() {
     assert_eq!(all.len(), 40);
     // Spilling from a position skips exactly the rows before it.
     for from in [0, 1, 17, 39, 40, 41] {
-        let mut got: Vec<u32> = append.ids_by_partition(0, from).concat();
+        let mut got: Vec<u32> = append.ids_by_partition(0, 3, from).concat();
         let mut want = append.ids(from..append.len());
         got.sort_unstable();
         want.sort_unstable();

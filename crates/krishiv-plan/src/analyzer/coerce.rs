@@ -33,6 +33,7 @@
 
 use krishiv_types::{ArrayType, DataType, DecimalType, MapType, StructField, StructType};
 
+use super::SparkProfile;
 use super::catalog::{CallTypes, InputType, Inputs, Operator};
 use crate::{Builtin, CastMode};
 
@@ -135,6 +136,16 @@ pub(super) enum Mismatch {
     MapConcatDiffTypes(Vec<Option<DataType>>),
     /// `INVALID_ORDERING_TYPE`: a type that does not order (a map).
     InvalidOrdering(DataType),
+    /// `CAST_WITHOUT_SUGGESTION`: Spark inserts the implicit cast of the argument (a datetime type
+    /// to another), and the cast itself is refused (`TIME` to `TIMESTAMP` before Spark 4.3).
+    ImplicitCast {
+        /// The argument (0-based).
+        arg: usize,
+        /// Its type.
+        from: DataType,
+        /// The type Spark casts it to.
+        to: DataType,
+    },
     /// A coercion Krishiv does not implement.
     Unsupported(&'static str),
 }
@@ -375,9 +386,42 @@ fn common_in(
             return widen_intervals(x, y).map(Some);
         }
         (T::Timestamp, T::TimestampNtz) | (T::TimestampNtz, T::Timestamp) => T::Timestamp,
-        _ => return None,
+        // The nanosecond timestamps (Spark 4.3) meet a timestamp or a date at the wider
+        // precision, with a time zone when either has one.
+        _ => return nanos_wider(x, y).map(Some),
     };
     Some(Some(t))
+}
+
+/// The (zone, precision) of a timestamp type, a date as an NTZ one of precision 0.
+fn timestamp_parts(t: &DataType) -> Option<(bool, u8)> {
+    use DataType as T;
+    match t {
+        T::Timestamp => Some((true, 6)),
+        T::TimestampNtz => Some((false, 6)),
+        T::TimestampNanos { precision } => Some((true, *precision)),
+        T::TimestampNtzNanos { precision } => Some((false, *precision)),
+        T::Date => Some((false, 0)),
+        _ => None,
+    }
+}
+
+/// The type a nanosecond timestamp meets another timestamp or a date at.
+fn nanos_wider(x: &DataType, y: &DataType) -> Option<DataType> {
+    use DataType as T;
+    if !matches!(x, T::TimestampNanos { .. } | T::TimestampNtzNanos { .. })
+        && !matches!(y, T::TimestampNanos { .. } | T::TimestampNtzNanos { .. })
+    {
+        return None;
+    }
+    let ((zx, px), (zy, py)) = (timestamp_parts(x)?, timestamp_parts(y)?);
+    let (zone, p) = (zx || zy, px.max(py));
+    let built = if zone {
+        T::timestamp_ltz(u32::from(p))
+    } else {
+        T::timestamp_ntz(u32::from(p))
+    };
+    built.ok()
 }
 
 /// The type two ANSI intervals of one family widen to: the lowest start and
@@ -439,7 +483,15 @@ fn legacy_string_type(args: &[Arg<'_>]) -> Option<Option<Option<DataType>>> {
     let promotes = |t: &&DataType| {
         is_numeric(t)
             || is_ansi_interval(t)
-            || matches!(t, T::String | T::Date | T::Timestamp | T::TimestampNtz)
+            || matches!(
+                t,
+                T::String
+                    | T::Date
+                    | T::Timestamp
+                    | T::TimestampNtz
+                    | T::TimestampNanos { .. }
+                    | T::TimestampNtzNanos { .. }
+            )
     };
     Some(typed.iter().all(promotes).then_some(Some(T::String)))
 }
@@ -1081,7 +1133,7 @@ pub(super) fn inputs(
         }
         Inputs::Leading(types) => {
             let n = types.len().min(args.len());
-            let mut casts = declared(types, &args[..n], call.ansi())?;
+            let mut casts = declared(types, &args[..n], call)?;
             casts.extend(common_casts(&args[n..], &args[n..], Rules::of(call))?);
             Ok(casts)
         }
@@ -1131,7 +1183,7 @@ pub(super) fn inputs(
         .map(|t| t.casts),
         _ => match inputs.expected(call) {
             Some(types) => {
-                let casts = declared(&types, args, call.ansi())?;
+                let casts = declared(&types, args, call)?;
                 legacy_string_counts(&types, args, call)?;
                 Ok(casts)
             }
@@ -1353,20 +1405,67 @@ fn hidden_zero() -> Arg<'static> {
 fn declared(
     types: &[InputType],
     args: &[Arg<'_>],
-    ansi: bool,
+    call: &CallTypes<'_>,
 ) -> Result<Vec<Option<DataType>>, Mismatch> {
+    let ansi = call.ansi();
     let mut casts = Vec::new();
+    // An ordinary mismatch waits for the later arguments: Spark inserts the
+    // implicit casts it can (a refused datetime cast among them) and keeps a
+    // mismatched argument as it is, and CheckAnalysis (`foreachUp`) reaches a
+    // child cast before the call, so a refused cast anywhere is reported
+    // first (Spark 4.2.0/4.3.0 run: `datediff(array(1), TIME'12:00:00')`).
+    let mut unexpected = None;
     for (i, a) in args.iter().enumerate() {
         let want = types.get(i).or(types.last()).unwrap_or(&InputType::Any);
-        let to = implicit(a.ty, want, ansi).ok_or_else(|| Mismatch::Unexpected {
-            arg: i,
-            param: i,
-            ty: a.ty.cloned(),
-            required: want.sql(),
-        })?;
-        casts.push(cast_to(a.ty, to.as_ref()));
+        match implicit(a.ty, want, ansi) {
+            Some(to) => casts.push(cast_to(a.ty, to.as_ref())),
+            None => {
+                if let Some((from, to)) = refused_datetime_cast(a.ty, want, call) {
+                    return Err(Mismatch::ImplicitCast { arg: i, from, to });
+                }
+                unexpected.get_or_insert_with(|| Mismatch::Unexpected {
+                    arg: i,
+                    param: i,
+                    ty: a.ty.cloned(),
+                    required: want.sql(),
+                });
+            }
+        }
+    }
+    if let Some(m) = unexpected {
+        return Err(m);
     }
     Ok(casts)
+}
+
+/// Spark's implicit cast between datetime types (`TypeCoercion` and `AnsiTypeCoercion`:
+/// `DatetimeType` to a `DatetimeType` parameter, `Cast.canANSIStoreAssign`), which it inserts even
+/// where the cast itself is refused: a `TIME` where a `DATE`, `TIMESTAMP` or `TIMESTAMP_NTZ` is
+/// declared, or one of those where a `TIME` is, gives `CAST_WITHOUT_SUGGESTION` on the argument
+/// (Spark 4.2.0 run: `date_format(TIME'12:00:00', ..)`). Returns the refused cast, if this is one.
+/// A cast the profile allows (Spark 4.3's `TIME` to and from the timestamps) is not reported here.
+fn refused_datetime_cast(
+    from: Option<&DataType>,
+    want: &InputType,
+    call: &CallTypes<'_>,
+) -> Option<(DataType, DataType)> {
+    use DataType as T;
+    let (Some(f), InputType::Exact(t)) = (from, want) else {
+        return None;
+    };
+    let datetime = |d: &DataType| matches!(d, T::Date | T::Timestamp | T::TimestampNtz);
+    let time = |d: &DataType| matches!(d, T::Time { .. });
+    if !((time(f) && datetime(t)) || (datetime(f) && time(t))) {
+        return None;
+    }
+    let mode = if call.ansi() {
+        CastMode::Ansi
+    } else {
+        CastMode::Legacy
+    };
+    let spark_4_3 = call.profile() >= SparkProfile::V4_3;
+    matches!(can_cast(Some(f), t, mode, spark_4_3), Err(BadCast::Without))
+        .then(|| (f.clone(), t.clone()))
 }
 
 /// The type an argument of type `from` takes for `want`, if it may.
@@ -1385,6 +1484,18 @@ fn implicit(from: Option<&DataType>, want: &InputType, ansi: bool) -> Option<Opt
         {
             Some(Some(t.clone()))
         }
+        (Some(t), InputType::StrictIntegralOrDecimal)
+            if matches!(t, T::Byte | T::Short | T::Integer | T::Long | T::Decimal(_)) =>
+        {
+            Some(Some(t.clone()))
+        }
+        (None, InputType::StrictIntegralOrDecimal) => Some(Some(T::Long)),
+        (Some(t), InputType::StrictTimestampNanos)
+            if matches!(t, T::TimestampNanos { .. } | T::TimestampNtzNanos { .. }) =>
+        {
+            Some(Some(t.clone()))
+        }
+        (None, InputType::StrictTimestampNanos) => Some(Some(T::TimestampNanos { precision: 9 })),
         (Some(T::Timestamp), InputType::NumericOrTimestamp)
         | (None | Some(T::String), InputType::NumericOrTemporal) => Some(Some(T::Double)),
         (Some(t), InputType::NumericOrTemporal)
@@ -1426,6 +1537,9 @@ fn implicit(from: Option<&DataType>, want: &InputType, ansi: bool) -> Option<Opt
         (None, InputType::Exact(t) | InputType::Strict(t)) => Some(Some(t.clone())),
         (Some(f), InputType::Strict(t)) => (f == t).then(|| Some(t.clone())),
         (None, InputType::Map) => Some(Some(null_map())),
+        // `date_add`/`date_sub` cast their start as a `DATE` parameter does, except a `TIME`.
+        (Some(T::Time { .. }), InputType::StartDate) => None,
+        (_, InputType::StartDate) => implicit(from, &InputType::Exact(T::Date), ansi),
         (None, InputType::Array) => Some(Some(null_array())),
         // A geometry or geography reaches only a spatial parameter, by the
         // cast rules of `CAST` (never a string).
@@ -1450,7 +1564,13 @@ fn implicit(from: Option<&DataType>, want: &InputType, ansi: bool) -> Option<Opt
                 || (*t == T::String && !f.is_nested())
                 || (*f == T::String && from_string)
                 || (*f == T::Date && matches!(t, T::Timestamp | T::TimestampNtz))
-                || (matches!(f, T::Timestamp | T::TimestampNtz) && *t == T::Date);
+                || (matches!(
+                    f,
+                    T::Timestamp
+                        | T::TimestampNtz
+                        | T::TimestampNanos { .. }
+                        | T::TimestampNtzNanos { .. }
+                ) && *t == T::Date);
             ok.then(|| Some(t.clone()))
         }
         _ => None,
@@ -1502,6 +1622,22 @@ pub(super) fn can_cast(
     };
     if from == to {
         return Ok(());
+    }
+    // The nanosecond timestamps (Spark 4.3) cast where their microsecond kin do.
+    let micros = |t: &DataType| match t {
+        T::TimestampNanos { .. } => T::Timestamp,
+        T::TimestampNtzNanos { .. } => T::TimestampNtz,
+        other => other.clone(),
+    };
+    if matches!(from, T::TimestampNanos { .. } | T::TimestampNtzNanos { .. })
+        || matches!(to, T::TimestampNanos { .. } | T::TimestampNtzNanos { .. })
+    {
+        let (f, t) = (micros(from), micros(to));
+        return if f == t {
+            Ok(())
+        } else {
+            can_cast(Some(&f), &t, mode, spark_4_3)
+        };
     }
     // Nothing but a NULL casts to VOID (an untyped NULL returned above).
     if *to == T::Null {
@@ -1676,12 +1812,15 @@ pub(super) fn force_nullable(from: &DataType, to: &DataType) -> bool {
     match (from, to) {
         // A variant null is SQL NULL, so a cast of a variant is nullable.
         (T::Variant, _) => true,
-        (T::String, T::Binary)
-        | (_, T::String)
+        // Spark's `(StringType, BinaryType)` and `(_, _: StringType) => false`, then
+        // `(_: StringType, _) => true`: a collated string is a `StringType` on either side.
+        (T::String | T::CollatedString(_), T::Binary)
+        | (_, T::String | T::CollatedString(_))
         | (T::Timestamp, T::Date)
         | (T::Date, T::Timestamp) => false,
-        // The seconds of a time may not fit a `tinyint` or `smallint`.
-        (T::String | T::Date, _)
+        // A string (collated or not) or a date may not parse or fit; the seconds of a time may
+        // not fit a `tinyint` or `smallint`.
+        (T::String | T::CollatedString(_) | T::Date, _)
         | (T::Float | T::Double, T::Timestamp)
         | (_, T::Date)
         | (T::Time { .. }, T::Byte | T::Short) => true,
@@ -1718,7 +1857,16 @@ pub(super) fn try_nullable(from: &DataType, to: &DataType) -> bool {
     if from.is_nested() || to.is_nested() {
         return !nested_up_cast(from, to);
     }
-    if (from, to) == (&T::Binary, &T::String) {
+    // Spark's `UpCastRule` reads a collated string as a `StringType` (only a CHAR/VARCHAR
+    // constraint matters, never the collation), on either side.
+    let string = |t: &T| matches!(t, T::String | T::CollatedString(_));
+    // Spark's `canUpCast` refuses a variant source (`(VariantType, _) => false`), so only variant
+    // to variant is an up-cast (`TRY_CAST(parse_json('1') AS STRING)` is nullable, Spark 4.2.0
+    // and 4.3.0 runs).
+    if *from == T::Variant {
+        return *to != T::Variant;
+    }
+    if *from == T::Binary && string(to) {
         return true;
     }
     // Integral and floating types widen in this order.
@@ -1732,9 +1880,9 @@ pub(super) fn try_nullable(from: &DataType, to: &DataType) -> bool {
         _ => None,
     };
     let up = match (from, to) {
-        _ if from == to || *to == T::String => true,
-        (T::String, T::Binary)
-        | (T::Date | T::TimestampNtz | T::Long, T::Timestamp)
+        _ if from == to || string(to) => true,
+        (f, T::Binary) if string(f) => true,
+        (T::Date | T::TimestampNtz | T::Long, T::Timestamp)
         | (T::Date | T::Timestamp, T::TimestampNtz)
         | (T::Timestamp, T::Long) => true,
         (T::Decimal(a), T::Decimal(b)) => {
@@ -1750,14 +1898,16 @@ pub(super) fn try_nullable(from: &DataType, to: &DataType) -> bool {
 }
 
 /// Spark's `Cast.canUpCast` for nested types: element by element, where a
-/// target that may not hold NULL needs a source that has none (to `STRING`
-/// as for any type).
+/// target that may not hold NULL needs a source that has none. A nested
+/// value to `STRING` is no up-cast (Spark's rule is `(_: AtomicType,
+/// StringType)`), so `TRY_CAST(array(1) AS STRING)` is nullable (Spark
+/// 4.2.0 and 4.3.0 runs).
 fn nested_up_cast(from: &DataType, to: &DataType) -> bool {
     use DataType as T;
     let fits = |from_null: bool, to_null: bool| !from_null || to_null;
     let up = |f: &DataType, t: &DataType| !try_nullable(f, t);
     match (from, to) {
-        _ if from == to || *to == T::String => true,
+        _ if from == to => true,
         (T::Array(a), T::Array(b)) => {
             up(a.element_type(), b.element_type()) && fits(a.contains_null(), b.contains_null())
         }

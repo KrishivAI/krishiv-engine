@@ -25,13 +25,13 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 | 11 | local_relation | done |  | Read(ReadSource::Local) from the Arrow IPC data plus the DDL or JSON schema (createDataFrame), built by the host before translation (TranslateConf::local_relations); no data and no schema is SCHEMA_REQUIRED_FOR_LOCAL_RELATION; the inline size is bounded by the gRPC message limit | P3-T012a | 1 |
 | 12 | sample | partial | with_replacement (Poisson) and deterministic_order (randomSplit) | Sample (Bernoulli, seed or one drawn per plan, Spark's XORShiftRandom order); Poisson needs a new IR field; deterministic_order needs the per-partition sort | P3-T012 | 3 |
 | 13 | offset | done |  | Offset | P2-T091a | 0 |
-| 14 | deduplicate | partial | a column subset and within_watermark | Distinct (all columns); a subset is Aggregate with first per non-key column and needs the input columns (analyzer node); within_watermark → P4 | P3-T012 | 3 |
+| 14 | deduplicate | partial | within_watermark | Distinct (all columns); a column subset is ColumnNames Deduplicate (analyzer: aggregate with first per non-key column); within_watermark → P4 | P3-T012 | 3 |
 | 15 | range | done |  | Range | P2-T091a | 0 |
 | 16 | subquery_alias | done |  | SubqueryAlias; the qualifier and the alias are the alias parts joined by ALIAS_PART_SEP | P3-T012 | 1 |
 | 17 | repartition | partial | the partition count (spark_partition_id, getNumPartitions) | Hint(REPARTITION n \| COALESCE n): rows pass through unchanged; the count is not applied to the plan; each call adds the warning "Hint REPARTITION(n) has no effect in a single-node plan." to the plan's warnings (Spark logs nothing; whether a client sees them is not checked) | P3-T012 | 3 |
 | 18 | to_df | done |  | ColumnNames(ToDf): the analyzer renames by position (count mismatch is the derived-table alias error) | P3-T012 | 4 |
 | 19 | with_columns_renamed | partial | rename_columns_map when its result depends on entry order (wire order is lost on decode) | ColumnNames(Rename): the pairs in turn, case rule of the session, unknown names ignored | P3-T012 | 4 |
-| 20 | show_string | missing |  | server-side: execute, then format as Spark's Dataset.showString (truncate, vertical); returns a one-row, one-column relation | P3-T012 | 4 |
+| 20 | show_string | missing |  | the translator refuses it; the server answers a ROOT show_string itself (connect-server execute/show_string.rs: runs the input, ToPrettyString cells, truncate, vertical; AnalyzePlan of it is not done): execute, then format as Spark's Dataset.showString (truncate, vertical); returns a one-row, one-column relation | P3-T012 | 4 |
 | 21 | drop | partial | columns that are qualified or tied to a DataFrame | ColumnNames(Drop): by name; a plain one-part column expression resolves over the input (ambiguous is an error); unknown names ignored | P3-T012 | 4 |
 | 22 | tail | done |  | Tail (the last n rows in plan order; not Sort + Limit); a negative n is INVALID_LIMIT_LIKE_EXPRESSION.IS_NEGATIVE from the analyzer | P3-T012 | 3 |
 | 23 | with_columns | partial | Alias.metadata | WithColumns; metadata on the column field | P3-T012 | 4 |
@@ -46,7 +46,7 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 | 32 | co_group_map | partial | input_sorting_expressions, other_sorting_expressions, unequal key counts, Scala/Java functions (56K00), additional_includes | CoGroupMap (cogroup applyInPandas 206, applyInArrow 210) over the PythonUdfRef the server's UdfHost names (Usage on System(udf), as for inline UDFs); nondeterministic UDF refused at analysis; runs on the session's Python workers | P3-T014 | 6 |
 | 33 | with_watermark | out of scope |  | P4 |  | 0 |
 | 34 | apply_in_pandas_with_state | out of scope |  | P4 |  | 0 |
-| 35 | html_string | missing |  | as show_string, HTML form | P3-T012 | 4 |
+| 35 | html_string | missing |  | as show_string, HTML form (served by the server as a ROOT, not translated) | P3-T012 | 4 |
 | 36 | cached_local_relation | done |  | Read(ReadSource::Local) through the same host request as local_relation; the host reads the session's own cache/<hash> artifact (CANNOT_FIND_CACHED_LOCAL_RELATION without one) and builds it as an inline local_relation | P3-T012 | 7 |
 | 37 | cached_remote_relation | done |  | a read of the reserved table `__krishiv_cached_remote.<id>`; the server resolves the id in its session (DATAFRAME_NOT_FOUND when absent) and splices the frame's plan in (`Session::from_plan_over`); a lazy checkpoint's rows are taken by the first analysis that reads it, AnalyzePlan included (Spark runs no job on analysis: a recorded difference); tests/cache.rs | P3-T083 | 7 |
 | 38 | common_inline_user_defined_table_function | missing |  | TableFunction with a Python UDTF (T014) | P3-T014 | 6 |
@@ -78,7 +78,7 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 
 ## Expression.expr_type
 
-22 arms: 4 done, 7 partial, 10 missing, 1 out of scope.
+22 arms: 5 done, 7 partial, 9 missing, 1 out of scope.
 
 | # | Arm | Status | Refused fields | IR target | Task | Group |
 |---:|---|---|---|---|---|---:|
@@ -92,7 +92,7 @@ Every arm of the `oneof` fields the Connect translator dispatches on, for the ve
 | 8 | unresolved_regex | missing |  | Star { regex } (the field exists) | P3-T012 | 2 |
 | 9 | sort_order | missing |  | SortOrder, only inside Sort and Window | P3-T012 | 2 |
 | 10 | lambda_function | missing |  | Lambda | P3-T012 | 2 |
-| 11 | window | missing |  | ExprNode::Window (frames: LOWER_BOUND_REQUIRED_IN_WINDOW_FRAME, UPPER_BOUND_…, WINDOW_FUNCTION_REQUIRED) | P3-T012 | 2 |
+| 11 | window | done |  | ExprNode::Window | P3-T012 | 0 |
 | 12 | unresolved_extract_value | missing |  | Field | P3-T012 | 2 |
 | 13 | update_fields | missing |  | UpdateFields | P3-T012 | 2 |
 | 14 | unresolved_named_lambda_variable | missing |  | lambda-scoped Column (UNRESOLVED_NAMED_LAMBDA_VARIABLE_REQUIRES_NAME_PART) | P3-T012 | 2 |

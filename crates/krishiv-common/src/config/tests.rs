@@ -1873,6 +1873,21 @@ fn exec_coalesce_input_defaults_on_and_parses() {
     assert_eq!(EXEC_COALESCE_INPUT.scope, Scope::Session);
 }
 
+/// The dataflow pipeline scheduler is on by default and takes a boolean.
+#[test]
+fn exec_dataflow_scheduling_defaults_on_and_parses() {
+    let mut c = Config::new();
+    let get = |c: &Config| {
+        c.get(&EXEC_DATAFLOW_SCHEDULING)
+            .and_then(ConfigValue::as_bool)
+    };
+    assert_eq!(get(&c), Some(true));
+    c.set("krishiv.exec.dataflowScheduling", "false").unwrap();
+    assert_eq!(get(&c), Some(false));
+    assert!(c.set("krishiv.exec.dataflowScheduling", "often").is_err());
+    assert_eq!(EXEC_DATAFLOW_SCHEDULING.scope, Scope::Session);
+}
+
 #[test]
 fn scan_instance_projection_defaults_on_and_parses_booleans() {
     let mut c = Config::new();

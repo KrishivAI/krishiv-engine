@@ -217,7 +217,8 @@ pub fn parse_origins(list: &str) -> Result<Vec<String>, String> {
     Ok(out)
 }
 
-/// Whether `o` is `http://` or `https://` plus a host name or bracketed IPv6 address and an optional port.
+/// Whether `o` is `http://` or `https://` plus a host name or bracketed IPv6 address and an optional port
+/// (1 to 65535, written without a leading zero, so the textual default-port check sees every form of it).
 #[must_use]
 pub fn is_origin(o: &str) -> bool {
     let Some(rest) = o
@@ -254,6 +255,7 @@ pub fn is_origin(o: &str) -> bool {
     let port_ok = port.is_empty()
         || port.strip_prefix(':').is_some_and(|p| {
             p.len() <= 5
+                && !p.starts_with('0')
                 && p.bytes().all(|b| b.is_ascii_digit())
                 && p.parse::<u32>().is_ok_and(|n| (1..=65535).contains(&n))
         });
@@ -542,6 +544,8 @@ mod tests {
             "https://a..b",
             "https://a.example:0",
             "https://a.example:99999",
+            "https://a.example:0443",
+            "http://a.example:080",
         ] {
             assert!(!is_origin(bad), "{bad}");
         }

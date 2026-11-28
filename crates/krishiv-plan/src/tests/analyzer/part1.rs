@@ -641,6 +641,84 @@ impl crate::analyzer::Catalog for ExchangeLimit {
     }
 }
 
+/// A catalog whose every table load fails with the error `make` builds.
+struct Raises(fn() -> KrishivError);
+
+impl crate::analyzer::Catalog for Raises {
+    fn name(&self) -> &str {
+        "spark_catalog"
+    }
+
+    fn epoch(&self) -> u64 {
+        0
+    }
+
+    fn load_table<'a>(
+        &'a self,
+        _: &'a crate::analyzer::TableIdent,
+        _: Option<TableVersion>,
+        _: crate::analyzer::NameForm,
+    ) -> BoxFuture<'a, Result<Option<crate::analyzer::TableMeta>, KrishivError>> {
+        Box::pin(std::future::ready(Err((self.0)())))
+    }
+}
+
+fn raised_by(make: fn() -> KrishivError) -> crate::analyzer::AnalysisError {
+    let mut ctx = ctx();
+    ctx.catalogs = Arc::new(crate::analyzer::testing::OneCatalog(
+        Arc::new(Raises(make)),
+        vec!["default".to_owned()],
+    ));
+    run(LogicalPlan::table(["t"]), &ctx).unwrap_err()
+}
+
+#[test]
+fn a_catalogs_own_failure_keeps_its_reason() {
+    let e = raised_by(|| {
+        krishiv_common::error::KrishivCatalogFailure {
+            catalog: "`lake`".to_owned(),
+            relation_name: "`t`".to_owned(),
+            reason: "the catalog answered HTTP 503".to_owned(),
+        }
+        .into()
+    });
+    assert_eq!(e.error.error_class(), ErrorClass::KrishivCatalogFailure);
+    assert!(
+        e.to_string().contains("the catalog answered HTTP 503"),
+        "{e}"
+    );
+}
+
+#[test]
+fn a_refused_location_keeps_its_class() {
+    let e = raised_by(|| {
+        krishiv_common::error::KrishivCatalogLocationRefused {
+            catalog: "`lake`".to_owned(),
+            relation_name: "`t`".to_owned(),
+            rule: "a `file:` location is not allowed".to_owned(),
+        }
+        .into()
+    });
+    assert_eq!(
+        e.error.error_class(),
+        ErrorClass::KrishivCatalogLocationRefused
+    );
+}
+
+#[test]
+fn any_other_failure_names_only_its_class() {
+    let e = raised_by(|| {
+        krishiv_common::error::KrishivUnsupportedFeature {
+            feature: "Canary secret text".to_owned(),
+        }
+        .into()
+    });
+    assert_eq!(e.error.error_class(), ErrorClass::KrishivCatalogFailure);
+    let text = format!("{e} {e:?}");
+    assert!(text.contains("KRISHIV_UNSUPPORTED_FEATURE"), "{text}");
+    assert!(!text.contains("Canary"), "{text}");
+}
+
 #[test]
 fn a_catalog_limit_is_not_hidden_as_a_catalog_failure() {
     let mut ctx = ctx();
@@ -930,8 +1008,7 @@ fn unsupported_inputs_fail_explicitly() {
         krishiv_types::DataType::DEFAULT_YEAR_MONTH_INTERVAL
     );
     assert!(!out[0].nullable);
-    // `spark.sql.legacy.interval.enabled` makes Spark's literals calendar
-    // intervals, which is refused rather than answered differently.
+    // `spark.sql.legacy.interval.enabled` makes Spark's literals calendar intervals.
     let legacy = context(
         catalog(),
         ResolutionConf {
@@ -939,10 +1016,8 @@ fn unsupported_inputs_fail_explicitly() {
             ..ResolutionConf::default()
         },
     );
-    assert_eq!(
-        class(&run(interval, &legacy)),
-        "KRISHIV_UNSUPPORTED_FEATURE"
-    );
+    let out = run(interval, &legacy).unwrap().output;
+    assert_eq!(out[0].data_type, krishiv_types::DataType::CalendarInterval);
     // With ordinals off, an integer key is a constant.
     let off = context(
         catalog(),

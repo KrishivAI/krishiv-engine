@@ -68,6 +68,30 @@ pub fn timestamp_text(s: &str) -> TimestampText {
     }
 }
 
+/// Spark's special date/timestamp value in `s` (`DateTimeUtils.extractSpecialValue`):
+/// `epoch`, `now`, `today`, `yesterday` or `tomorrow` (any case, trimmed),
+/// optionally followed by a time-zone id (`tomorrow EST`). The zone is only
+/// checked, as Spark does: it never changes the value (the day is the session
+/// zone's). `None` for anything else, for a zone the database does not know,
+/// and for `now` with a zone.
+///
+/// Spark's pattern is `(\p{Alpha}+)\p{Blank}*(.*)`: the leading letters are the
+/// word, blanks (space or tab) are skipped, the rest is the zone.
+#[must_use]
+pub fn special_value(s: &str) -> Option<&'static str> {
+    let t = s.trim();
+    let end = t.find(|c: char| !c.is_alphabetic()).unwrap_or(t.len());
+    let (word, rest) = t.split_at(end);
+    let zone = rest.trim_start_matches([' ', '\t']).trim();
+    let word = ["epoch", "now", "today", "yesterday", "tomorrow"]
+        .into_iter()
+        .find(|k| word.eq_ignore_ascii_case(k))?;
+    if !zone.is_empty() && (word == "now" || crate::datetime::resolve_zone(zone).is_err()) {
+        return None;
+    }
+    Some(word)
+}
+
 /// Whether `s` names an explicit zone (an offset or region id after the
 /// seconds), as the cast kernel's parse sees it. Session-independent
 /// timestamp strings evaluate the same in every session zone.
@@ -81,6 +105,12 @@ pub fn timestamp_has_zone(s: &str) -> bool {
 
 /// Parses one string.
 pub(crate) fn parse(s: &[u8]) -> Parsed {
+    parse_nanos(s).0
+}
+
+/// Parses one string, with the nanoseconds within the microsecond of its fraction (its digits 7 to 9;
+/// later digits are dropped), which [`Parsed::At`] does not hold.
+pub(crate) fn parse_nanos(s: &[u8]) -> (Parsed, u16) {
     let s = trim_all(s);
     // A time of day without a date (`T10:00`, `10:00:00`) is today's.
     let first_non_digit = s.iter().position(|b| !b.is_ascii_digit());
@@ -90,11 +120,11 @@ pub(crate) fn parse(s: &[u8]) -> Parsed {
         c.eat(b'T');
         // The time must be well formed; its zone is checked, not applied.
         return match time_of_day(&mut c) {
-            Some((_, zone)) => Parsed::NeedsClock(zone),
-            None => Parsed::Malformed,
+            Some((_, zone, rest)) => (Parsed::NeedsClock(zone), rest),
+            None => (Parsed::Malformed, 0),
         };
     }
-    datetime(s).unwrap_or(Parsed::Malformed)
+    datetime(s).unwrap_or((Parsed::Malformed, 0))
 }
 
 /// A read position in the text.
@@ -132,7 +162,7 @@ impl Cursor<'_> {
     }
 }
 
-fn datetime(s: &[u8]) -> Option<Parsed> {
+fn datetime(s: &[u8]) -> Option<(Parsed, u16)> {
     let mut c = Cursor { s, at: 0 };
     let sign = if c.eat(b'-') {
         -1
@@ -160,19 +190,20 @@ fn datetime(s: &[u8]) -> Option<Parsed> {
     let date = i128::from(days) * i128::from(MICROS_PER_DAY);
     let at_micros = |time: i128| i64::try_from(date + time).ok();
     if c.done() {
-        return Some(Parsed::At(at_micros(0)?, Zone::Session));
+        return Some((Parsed::At(at_micros(0)?, Zone::Session), 0));
     }
     // A time needs the whole date and a separator.
     if parts < 3 || !(c.eat(b' ') || c.eat(b'T')) {
         return None;
     }
-    let (time, zone) = time_of_day(&mut c)?;
-    Some(Parsed::At(at_micros(time)?, zone))
+    let (time, zone, nanos) = time_of_day(&mut c)?;
+    Some((Parsed::At(at_micros(time)?, zone), nanos))
 }
 
 /// The time of day and zone at the cursor: `h[:m[:s[.f]]]`, then a zone
 /// (only after the seconds), up to the end of the text.
-fn time_of_day(c: &mut Cursor<'_>) -> Option<(i128, Zone)> {
+fn time_of_day(c: &mut Cursor<'_>) -> Option<(i128, Zone, u16)> {
+    let mut nanos = 0;
     let mut time = i128::from(c.number(1, 2).filter(|h| *h <= 23)? * 3600 * MICROS_PER_SECOND);
     if !c.done() {
         if !c.eat(b':') {
@@ -185,7 +216,9 @@ fn time_of_day(c: &mut Cursor<'_>) -> Option<(i128, Zone)> {
             }
             time += i128::from(c.number(1, 2).filter(|s| *s <= 59)? * MICROS_PER_SECOND);
             if c.eat(b'.') {
-                time += i128::from(fraction(c)?);
+                let (micros, sub) = fraction(c)?;
+                time += i128::from(micros);
+                nanos = sub;
             }
         }
     }
@@ -195,17 +228,23 @@ fn time_of_day(c: &mut Cursor<'_>) -> Option<(i128, Zone)> {
         // Only the seconds (or their fraction) may be followed by a zone.
         zone(c.s.get(c.at..)?)?
     };
-    Some((time, zone))
+    Some((time, zone, nanos))
 }
 
-/// The digits after `.` (any number; the first 6 are kept) as microseconds.
-fn fraction(c: &mut Cursor<'_>) -> Option<i64> {
+/// The digits after `.` (any number; the first 6 are kept) as microseconds, and digits 7 to 9 as the
+/// nanoseconds within the microsecond.
+fn fraction(c: &mut Cursor<'_>) -> Option<(i64, u16)> {
     let run = c.s.get(c.at..)?;
     let n = run.iter().take_while(|b| b.is_ascii_digit()).count();
     c.at += n;
     let kept = run.get(..n.min(6))?;
     let micros = kept.iter().fold(0_i64, |v, b| v * 10 + i64::from(b - b'0'));
-    Some(micros * 10_i64.pow(u32::try_from(6 - kept.len()).ok()?))
+    let sub = run.get(n.min(6)..n.min(9))?;
+    let nanos = sub.iter().fold(0_u16, |v, b| v * 10 + u16::from(b - b'0'));
+    Some((
+        micros * 10_i64.pow(u32::try_from(6 - kept.len()).ok()?),
+        nanos * 10_u16.pow(u32::try_from(3 - sub.len()).ok()?),
+    ))
 }
 
 /// The zone text after the seconds: `Z`, ` +05:30`, `UTC+8`, a region id.
@@ -338,6 +377,19 @@ mod tests {
         for special in ["now", "today", "epoch", "yesterday", "tomorrow", "t10:00"] {
             assert_eq!(parse(special.as_bytes()), Parsed::Malformed, "{special}");
         }
+    }
+
+    #[test]
+    fn special_values_with_a_zone() {
+        use super::special_value;
+        assert_eq!(special_value(" Tomorrow "), Some("tomorrow"));
+        assert_eq!(special_value("today EST"), Some("today"));
+        assert_eq!(special_value("today\tEST"), Some("today"));
+        assert_eq!(special_value("today+05:00"), Some("today"));
+        assert_eq!(special_value("epoch Zulu"), Some("epoch"));
+        assert_eq!(special_value("now EST"), None);
+        assert_eq!(special_value("today Not/AZone"), None);
+        assert_eq!(special_value("2020-01-01"), None);
     }
 
     #[test]

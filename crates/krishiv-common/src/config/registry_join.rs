@@ -149,3 +149,22 @@ pub static SQL_SORT_MERGE_ASOF_JOIN_ENABLED: ConfigEntry = ConfigEntry {
     version_added: "0.3.0",
     spark_alias: Some("spark.sql.join.sortMergeAsOfJoin.enabled"),
 };
+
+/// Pipelines start as soon as the pipelines they read have ended, not when
+/// their whole wave of the dependency order has (design `P2b-D2-group-key-code`
+/// §8, step 0 for the critical-path line). On by default since its SF10
+/// TPC-DS/TPC-H ABBA (geomean 0.987x / 0.992x, no query past the 1.03 line).
+pub static EXEC_DATAFLOW_SCHEDULING: ConfigEntry = ConfigEntry {
+    key: "krishiv.exec.dataflowScheduling",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(true)),
+    doc: "Internal: a query's pipelines start as soon as every pipeline whose result they \
+          read has ended, instead of in waves of the dependency order (where a pipeline \
+          waits for every pipeline of the wave before its own). Results are the same either \
+          way; only the order in which independent pipelines overlap changes. `false` \
+          restores the wave order.",
+    scope: Scope::Session,
+    settable_by: SettableBy::User,
+    version_added: "0.3.1",
+    spark_alias: None,
+};

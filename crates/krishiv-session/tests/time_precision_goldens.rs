@@ -33,30 +33,6 @@ type Rows = Vec<Vec<Option<String>>>;
 /// must be exactly `how` (`Mismatch::got`); a fixed gap, or one that differs in another way, fails
 /// the test.
 const KNOWN_GAPS: &[(&str, &str, &str)] = &[
-    // The nanosecond timestamp types are Krishiv 0.3.1 (scope note P3-R3): with
-    // `spark.sql.timestampNanosTypes.enabled` on, Spark 4.3 builds them; Krishiv refuses by name.
-    (
-        "4.3.0",
-        "ts_ntz9_nanos_on",
-        "[KRISHIV_UNSUPPORTED_FEATURE] The feature nanosecond-precision timestamp types (Krishiv 0.3.1) is not supported by Krishiv yet.",
-    ),
-    (
-        "4.3.0",
-        "ts_ltz7_nanos_on",
-        "[KRISHIV_UNSUPPORTED_FEATURE] The feature nanosecond-precision timestamp types (Krishiv 0.3.1) is not supported by Krishiv yet.",
-    ),
-    // `date_format` refuses a TIME before the implicit cast Spark tries (4.2: the class differs).
-    (
-        "4.2.0",
-        "date_format",
-        "[DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE] Cannot resolve \"date_format(TIME '12:00:00.123456789', HH:mm:ss.SSSSSSSSS)\" due to data type mismatch: The first parameter requires the (\"STRING\" or \"DATE\" or \"TIMESTAMP\" or \"TIMESTAMP_NTZ\") type, however \"TIME '12:00:00.123456'\" has the type \"TIME(6)\".",
-    ),
-    // A bare TIMESTAMP does not follow `spark.sql.timestampType` yet.
-    (
-        "4.3.0",
-        "ts6_ntz_default",
-        "[KRISHIV_UNSUPPORTED_FEATURE] The feature TIMESTAMP(6) with spark.sql.timestampType=TIMESTAMP_NTZ is not supported by Krishiv yet.",
-    ),
     // Spark 4.2 adds `: missing ')'` to the syntax error for some shapes; the hint is not reproduced.
     (
         "4.2.0",
@@ -81,28 +57,6 @@ const KNOWN_GAPS: &[(&str, &str, &str)] = &[
         "eq_collated",
         "names [\"(collate(name, UTF8_LCASE) = APPLE)\"]",
     ),
-    // A foldable precision Krishiv's folder cannot evaluate: Spark evaluates it (6), Krishiv refuses
-    // it by name.
-    (
-        "4.3.0",
-        "current_timestamp_dayofweek",
-        "[KRISHIV_UNSUPPORTED_FEATURE] The feature `current_timestamp(dayofweek(DATE '1970-01-02'))` with a precision Krishiv cannot fold is not supported by Krishiv yet.",
-    ),
-    // `instr` and `locate` of a collated column give a NOT NULL result in Spark; Krishiv's is nullable.
-    ("4.2.0", "instr_collated", "schema [(\"int\", true)]"),
-    (
-        "4.2.0",
-        "instr_literal_collated",
-        "schema [(\"int\", true)]",
-    ),
-    ("4.2.0", "locate_collated", "schema [(\"int\", true)]"),
-    ("4.3.0", "instr_collated", "schema [(\"int\", true)]"),
-    (
-        "4.3.0",
-        "instr_literal_collated",
-        "schema [(\"int\", true)]",
-    ),
-    ("4.3.0", "locate_collated", "schema [(\"int\", true)]"),
     // Spark 4.2 parses a precision past `Int` with `Integer.parseInt` and fails outside its error
     // classes (`NumberFormatException: For input string`); Krishiv raises its own class.
     (

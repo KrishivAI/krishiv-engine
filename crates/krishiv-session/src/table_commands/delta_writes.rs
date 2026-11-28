@@ -185,7 +185,7 @@ impl Session {
         };
         let (_, physical) = self.physical(&analysis.analyzed, &analysis.env).await?;
         let mut request = WriteRequest::new(mode, quoted, Arc::clone(physical.schema()));
-        request.options = options;
+        request.options = super::row_level::with_conf_user_metadata(options, &analysis.env.config);
         super::row_level::apply_idempotency_key(&analysis.env.config, &mut request.options)?;
         request.write_id = Some(crate::session::job_uuid());
         let plan = physical.into_table_write(scan, TableWriteRequest::Write(request));
@@ -252,8 +252,17 @@ impl Session {
         let qualified = self.qualify_path(path)?;
         let source = delta_source(&qualified);
         let env = self.query_env();
-        let exists = env.catalog.delta.exists(&source).await?;
         let plain = plain_options(options)?;
+        let exists = env.catalog.delta.exists(&source).await?;
+        let opened = if exists {
+            Some(env.catalog.delta.open(&source, None).await?)
+        } else {
+            None
+        };
+        let partitioned = opened.as_ref().map_or(!partition_by.is_empty(), |t| {
+            !t.partition_columns().is_empty()
+        });
+        let passed = super::delta_options::delta_write_options(&plain, partitioned)?;
         let quoted = format!("delta.{}", ident(&qualified));
         let option = |k: &str| {
             plain
@@ -288,7 +297,7 @@ impl Session {
                         properties: BTreeMap::new(),
                     },
                     WriteMode::Append,
-                    writer_options(plain.iter().map(|(k, v)| (k, v))),
+                    passed,
                     &quoted,
                 )
                 .await;
@@ -325,7 +334,11 @@ impl Session {
                     crate::functions::expr_with(&text, &env.parser)?.expr,
                 )),
                 None => {
-                    if crate::session::partition_overwrite_is_dynamic(&env.config, options)? {
+                    // delta-spark never reads the mode for an unpartitioned table
+                    // (`OPTIONS.json` `pom_bad_unpartitioned`).
+                    if partitioned
+                        && crate::session::partition_overwrite_is_dynamic(&env.config, options)?
+                    {
                         WriteMode::OverwriteDynamic
                     } else {
                         WriteMode::Truncate
@@ -333,7 +346,7 @@ impl Session {
                 }
             },
         };
-        let mut request_options = writer_options(plain.iter().map(|(k, v)| (k, v)));
+        let mut request_options = passed;
         if let Some(text) = option("replaceWhere") {
             request_options.insert(PREDICATE_TEXT_OPTION.to_owned(), text);
         }
@@ -357,6 +370,11 @@ impl Session {
             }
         }
         drop(env);
+        // delta-spark merges the schemas on every `save` into an existing table.
+        let widening = opened.as_ref().is_some_and(|t| t.type_widening_enabled());
+        let merge = option("mergeSchema").is_some_and(|v| v.eq_ignore_ascii_case("true"));
+        let schema = df.schema().await?;
+        super::delta_options::merge_schema_check(&columns, &schema, widening, merge, &quoted)?;
         let aligned = self.delta_by_name(df, &columns, &quoted).await?;
         if write_reads_target(&aligned, &qualified).await {
             request_options.insert(READS_TARGET_OPTION.to_owned(), "true".to_owned());
@@ -383,6 +401,7 @@ impl Session {
     ) -> Result<(), KrishivError> {
         let quoted = format!("`{}`.`{}`", table.namespace, table.name);
         let plain = plain_options(options)?;
+        let passed = super::delta_options::delta_write_options(&plain, table.is_partitioned())?;
         if plain.iter().any(|(k, v)| {
             k.eq_ignore_ascii_case("overwriteSchema") && v.eq_ignore_ascii_case("true")
         }) {
@@ -412,7 +431,7 @@ impl Session {
             &aligned,
             DeltaTarget::Existing { source, name },
             WriteMode::Truncate,
-            writer_options(plain.iter().map(|(k, v)| (k, v))),
+            passed,
             &quoted,
         )
         .await?;
@@ -425,8 +444,13 @@ impl Session {
     /// `INSERT INTO|OVERWRITE` into the Delta catalog table `table` of the rows of `df` (its
     /// columns, in its order): an append; an overwrite of the static partition `statics`
     /// (`replaceWhere` of `(p <=> 'v')`, as delta-spark records it); a dynamic partition
-    /// overwrite under `spark.sql.sources.partitionOverwriteMode = dynamic`; else a truncate.
-    /// The target's writer options give the files' `maxRecordsPerFile`.
+    /// overwrite under `spark.sql.sources.partitionOverwriteMode = dynamic` (or the statement's
+    /// `partitionOverwriteMode` option); else a truncate. The target's `sql_options` (`WITH (..)`)
+    /// are Delta's write options ([`super::delta_options`]), and so are the writer's options of
+    /// `saveAsTable` append and `writeTo(..).append()` (`target.delta_writer_options`);
+    /// `insertInto`'s give only the files' `maxRecordsPerFile` (delta-spark's `insertInto` reads
+    /// no other option, `CATALOG-OPTIONS.json`, nor `partitionOverwriteMode`, `WRITE-EDGES.json`
+    /// `insert_into_overwrite_mode`).
     pub(super) async fn insert_delta(
         &self,
         name: &super::TableName,
@@ -436,24 +460,32 @@ impl Session {
         reads_target: bool,
     ) -> Result<(), KrishivError> {
         let (overwrite, statics) = (target.overwrite, target.statics);
-        // `maxRecordsPerFile` of a DataFrame write into the table (`writeTo(..).append()`,
-        // `saveAsTable` append, `insertInto`).
-        let mut options = match target.options {
-            // Only the option the writer reads is asked to be plain: an append ignores the
-            // others, a secret one included.
-            Some(o) => {
-                let read: BTreeMap<String, OptionValue> = o
-                    .iter()
-                    .filter(|(k, _)| {
-                        k.eq_ignore_ascii_case("maxRecordsPerFile")
-                            || k.eq_ignore_ascii_case(krishiv_exec::planner::IDEMPOTENCY_KEY_OPTION)
-                    })
-                    .map(|(k, v)| (k.clone(), v.clone()))
-                    .collect();
-                writer_options(plain_options(&read)?.iter().map(|(k, v)| (k, v)))
-            }
-            None => BTreeMap::new(),
-        };
+        let user_options = target.sql_options;
+        let mut options =
+            super::delta_options::delta_write_options(user_options, table.is_partitioned())?;
+        if let (Some(o), true) = (target.options, target.delta_writer_options) {
+            // `saveAsTable` append and `writeTo(..).append()`: the writer's options are Delta's
+            // write options, checked and honoured as a `save`'s are (`CATALOG-OPTIONS.json`).
+            options.extend(super::delta_options::delta_write_options(
+                &plain_options(o)?,
+                table.is_partitioned(),
+            )?);
+        } else if let Some(o) = target.options {
+            // `insertInto` reads only `maxRecordsPerFile` (and Krishiv's idempotency key) of the
+            // writer's options. Only those are asked to be plain: the others are ignored, a
+            // secret one included.
+            let read: BTreeMap<String, OptionValue> = o
+                .iter()
+                .filter(|(k, _)| {
+                    k.eq_ignore_ascii_case("maxRecordsPerFile")
+                        || k.eq_ignore_ascii_case(krishiv_exec::planner::IDEMPOTENCY_KEY_OPTION)
+                })
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect();
+            options.extend(writer_options(
+                plain_options(&read)?.iter().map(|(k, v)| (k, v)),
+            ));
+        }
         let mode = if !overwrite {
             WriteMode::Append
         } else if !statics.is_empty() {
@@ -488,7 +520,10 @@ impl Session {
         } else if table.is_partitioned()
             && crate::session::partition_overwrite_is_dynamic(
                 &self.query_env().config,
-                &BTreeMap::new(),
+                &user_options
+                    .iter()
+                    .map(|(k, v)| (k.clone(), OptionValue::from_user(k, v)))
+                    .collect(),
             )?
         {
             WriteMode::OverwriteDynamic
@@ -502,13 +537,161 @@ impl Session {
             df,
             DeltaTarget::Existing {
                 source: crate::catalog::table_source(table),
-                name: Some(format!("{}.{}", table.namespace, table.name)),
+                // A table by path is named by its root, in the Hadoop form.
+                name: target
+                    .delta_name
+                    .is_none()
+                    .then(|| format!("{}.{}", table.namespace, table.name)),
             },
             mode,
             options,
             &name.quoted(),
         )
         .await
+    }
+}
+
+impl Session {
+    /// The Delta table an `INSERT` into `delta.`<path>`` writes, when `written` names one: two
+    /// parts, `delta` and a path with a `/`, and no catalog table or temporary view of that name.
+    /// Returned as a catalog entry built from the log (columns, partitioning, the qualified root
+    /// as its location), never stored, beside the name delta-spark's errors give it
+    /// (`` delta.`file:/p` ``). `Modify` is asked on the root before the log is read, as a
+    /// `DELETE` by path asks it.
+    ///
+    /// # Errors
+    /// The access refusal; `PATH_NOT_FOUND` for a local root that does not exist and
+    /// `DELTA_TABLE_NOT_FOUND` for a root without a Delta log (delta-spark 4.4.1,
+    /// `INSERT-PATH.json` `refused`); the log's read errors.
+    pub(super) async fn delta_path_table(
+        &self,
+        written: &krishiv_sql::ast::DdlName,
+        name: &super::TableName,
+        env: &crate::session::QueryEnv,
+    ) -> Result<Option<(Arc<crate::store::CatalogTable>, String)>, KrishivError> {
+        use crate::store::CatalogStore as _;
+        let parts = crate::access::ddl_parts(written, env)?;
+        let [format, path] = parts.as_slice() else {
+            return Ok(None);
+        };
+        if !format.eq_ignore_ascii_case(DELTA)
+            || !is_delta_path(path)
+            || self
+                .state
+                .catalog
+                .store
+                .table(&name.namespace, &name.name)
+                .is_some()
+            || self.temp_entry_of(name, env)
+        {
+            return Ok(None);
+        }
+        let qualified = self.qualify_path(path)?;
+        self.authorize_qualified_root(
+            &qualified,
+            &[krishiv_plan::analyzer::Privilege::Modify],
+            krishiv_sql::StatementClass::Write,
+        )
+        .await?;
+        if let Some(local) = qualified.strip_prefix("file:")
+            && !std::path::Path::new(local).exists()
+        {
+            return Err(krishiv_common::error::PathNotFound { path: path.clone() }.into());
+        }
+        let source = delta_source(&qualified);
+        let shape = env.catalog.delta.shape(&source, qualified.clone()).await?;
+        if !shape.existing {
+            return Err(krishiv_common::error::DeltaTableNotFound {
+                table_name: format!("`{path}`"),
+            }
+            .into());
+        }
+        let table = crate::store::CatalogTable {
+            namespace: name.namespace.clone(),
+            name: name.name.clone(),
+            managed: false,
+            provider: DELTA.to_owned(),
+            provider_written: DELTA.to_owned(),
+            location: std::path::PathBuf::from(&qualified),
+            columns: shape
+                .columns
+                .iter()
+                .map(|c| {
+                    crate::store::StoreColumn::plain(
+                        c.name.clone(),
+                        c.data_type.clone(),
+                        c.nullable,
+                    )
+                })
+                .collect(),
+            options: BTreeMap::new(),
+            properties: BTreeMap::new(),
+            comment: None,
+            created_ms: 0,
+            root: std::path::PathBuf::new(),
+            view: None,
+            layout: crate::store::TableLayout {
+                partition_columns: shape.partition_columns,
+                ..crate::store::TableLayout::default()
+            },
+            column_stats: BTreeMap::new(),
+            incarnation: 0,
+            data_version: 0,
+            stamp: 0,
+        };
+        Ok(Some((Arc::new(table), format!("delta.`{}`", shape.path))))
+    }
+}
+
+/// Whether the second part of `` delta.`<part>` `` names a table by path: delta-spark's
+/// `DeltaTableUtils.isValidPath`, Hadoop's `Path.isAbsolute` (the path after an optional
+/// `scheme:` and `//authority` starts with `/`). Anything else is a table name
+/// (`INSERT-PATH.json` `refused`: `no_slash`, `relative_path` are `TABLE_OR_VIEW_NOT_FOUND`).
+pub(super) fn is_delta_path(part: &str) -> bool {
+    let rest = match part.split_once(':') {
+        Some((scheme, rest))
+            if scheme.starts_with(|c: char| c.is_ascii_alphabetic())
+                && scheme
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.')) =>
+        {
+            rest
+        }
+        _ => part,
+    };
+    let path = match rest.strip_prefix("//") {
+        Some(authority_and_path) => authority_and_path
+            .find('/')
+            .map_or("", |i| &authority_and_path[i..]),
+        None => rest,
+    };
+    path.starts_with('/')
+}
+
+/// delta-spark's refusal of an `INSERT` by position whose query has another column count than
+/// the Delta table `table` (named `shown`): too few is `DELTA_INSERT_COLUMN_ARITY_MISMATCH`, too
+/// many `DELTA_METADATA_MISMATCH` (its schema-evolution check), for a table by path and a catalog
+/// table alike (`INSERT-PATH.json` `arity`, `arity_too_many`, `catalog_arity*`), a static
+/// partition's values counted as data columns (`static_partition_arity*`). A column list keeps
+/// Spark's own arity errors (`arity_column_list`).
+pub(super) fn delta_insert_arity(
+    shown: &str,
+    table_columns: usize,
+    data_columns: usize,
+) -> Option<KrishivError> {
+    use std::cmp::Ordering;
+    match data_columns.cmp(&table_columns) {
+        Ordering::Equal => None,
+        Ordering::Less => Some(
+            krishiv_common::error::DeltaInsertColumnArityMismatch {
+                table_name: shown.to_owned(),
+                column_name: "not enough data columns".to_owned(),
+                num_columns: table_columns.to_string(),
+                insert_columns: data_columns.to_string(),
+            }
+            .into(),
+        ),
+        Ordering::Greater => Some(DeltaMetadataMismatch {}.into()),
     }
 }
 
@@ -613,4 +796,34 @@ fn arrow_schema(columns: &[TableColumn]) -> Result<arrow_schema::SchemaRef, Kris
         .map(|c| c.data_type.to_arrow_field(&c.name, c.nullable))
         .collect();
     Ok(Arc::new(arrow_schema::Schema::new(fields)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_delta_path;
+
+    #[test]
+    fn a_delta_path_is_absolute_as_hadoop_reads_it() {
+        for path in [
+            "/p",
+            "/p/",
+            "file:/p",
+            "file:///p",
+            "s3://bucket/k",
+            "abfss://c@a.host/k",
+        ] {
+            assert!(is_delta_path(path), "{path}");
+        }
+        for name in [
+            "t",
+            "a/b",
+            "rel/dir",
+            "file:rel/x",
+            "s3://bucket",
+            "1x:/p",
+            ":/p",
+        ] {
+            assert!(!is_delta_path(name), "{name}");
+        }
+    }
 }

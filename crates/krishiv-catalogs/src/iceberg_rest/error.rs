@@ -2,7 +2,8 @@
 //! What a call to an Iceberg REST catalog can fail with, and the Krishiv error each becomes (design P3-lakehouse
 //! §5.6): a limit is `KRISHIV_CATALOG_LIMIT_EXCEEDED`, anything else `KRISHIV_CATALOG_FAILURE`, both naming the
 //! catalog and the table or namespace, with the detail in the log only (cut short). A server's own message, and an
-//! IdP's `error_description`, never reach the error text: either may carry what it should not.
+//! IdP's `error_description`, never reach the error text: either may carry what it should not. The error text does say the kind of failure: the HTTP status, and an
+//! `ErrorModel.type` only when it is one of the spec's names.
 
 use krishiv_common::error::{
     KrishivCatalogDelegationUnavailable, KrishivCatalogFailure, KrishivCatalogLimitExceeded,
@@ -69,6 +70,28 @@ pub enum RestError {
     },
 }
 
+/// The `ErrorModel.type` names the Iceberg REST spec and the Java client define: the only server text an error shows.
+const SPEC_ERROR_TYPES: &[&str] = &[
+    "BadRequestException",
+    "NotAuthorizedException",
+    "ForbiddenException",
+    "NoSuchNamespaceException",
+    "NoSuchTableException",
+    "NoSuchViewException",
+    "NoSuchIcebergTableException",
+    "AlreadyExistsException",
+    "NamespaceNotEmptyException",
+    "CommitFailedException",
+    "CommitStateUnknownException",
+    "ValidationException",
+    "UnsupportedOperationException",
+    "ServiceFailureException",
+    "ServiceUnavailableException",
+    "InternalServerError",
+    "RESTException",
+    "AuthorizationExpiredException",
+];
+
 /// Longest detail a log line carries.
 const LOGGED_DETAIL_CHARS: usize = 300;
 
@@ -109,6 +132,33 @@ impl RestError {
             Self::Transport(d) => format!("transport: {}", shortened(d)),
             Self::Delegation(d) => format!("delegation: {}", shortened(d)),
             Self::DelegationLimit { what, value, .. } => format!("limit exceeded: {value} {what}"),
+        }
+    }
+
+    /// What a user may be told: Krishiv's own words for the kind of failure, and the HTTP status. Never a
+    /// server's message; an `ErrorModel.type` only when it is a plain identifier.
+    fn reason(&self) -> String {
+        match self {
+            Self::Timeout => "the request timed out".to_owned(),
+            Self::Limit(_) => "a limit was exceeded".to_owned(),
+            Self::Redirect(s) => {
+                format!("the catalog answered with a redirect (HTTP {s}), which is not followed")
+            }
+            Self::Status { status, kind, .. } => {
+                let kind = kind.as_deref().filter(|k| SPEC_ERROR_TYPES.contains(k));
+                match kind {
+                    Some(k) => format!("the catalog answered HTTP {status} ({k})"),
+                    None => format!("the catalog answered HTTP {status}"),
+                }
+            }
+            Self::TokenRefused { status, .. } => {
+                format!("the token endpoint refused the client credentials (HTTP {status})")
+            }
+            Self::Protocol(_) => "the answer is not what the Iceberg REST protocol says".to_owned(),
+            Self::Transport(_) => "the connection failed or was cut".to_owned(),
+            Self::Delegation(_) | Self::DelegationLimit { .. } => {
+                "delegated access failed".to_owned()
+            }
         }
     }
 
@@ -183,9 +233,11 @@ impl RestError {
             detail = self.detail().as_str(),
             "an Iceberg REST catalog call failed"
         );
+        let reason = self.reason();
         KrishivCatalogFailure {
             catalog: quoted(catalog),
             relation_name: relation.to_owned(),
+            reason,
         }
         .into()
     }
@@ -196,6 +248,38 @@ mod tests {
     use krishiv_common::error::ErrorClass;
 
     use super::*;
+
+    #[test]
+    fn a_failure_says_what_kind_it_was_and_never_the_servers_text() {
+        let limits = RestLimits::default();
+        let text = RestError::Status {
+            status: 500,
+            kind: Some("ServiceFailureException".into()),
+            message: Some("secret=hunter2".into()),
+        }
+        .into_error("rest", "`db`.`t`", &limits)
+        .to_string();
+        assert!(
+            text.contains("HTTP 500 (ServiceFailureException)"),
+            "{text}"
+        );
+        assert!(!text.contains("hunter2"), "{text}");
+        let text = RestError::Status {
+            status: 400,
+            kind: Some("a b; drop".into()),
+            message: None,
+        }
+        .into_error("rest", "`db`.`t`", &limits)
+        .to_string();
+        assert!(
+            text.contains("HTTP 400") && !text.contains("drop"),
+            "{text}"
+        );
+        let text = RestError::Timeout
+            .into_error("rest", "`db`.`t`", &limits)
+            .to_string();
+        assert!(text.contains("timed out"), "{text}");
+    }
 
     #[test]
     fn limits_name_the_limit_and_the_key_and_the_rest_name_only_the_catalog() {

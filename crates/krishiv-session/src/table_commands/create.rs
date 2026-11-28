@@ -182,10 +182,7 @@ impl Session {
         if provider.eq_ignore_ascii_case(crate::delta::DELTA)
             && !self.state.catalog.store.has_namespace(&name.namespace)
         {
-            return Err(SchemaNotFound {
-                schema_name: format!("`spark_catalog`.`{}`", name.namespace),
-            }
-            .into());
+            return Err(crate::catalog::schema_not_found(&name.namespace));
         }
         check_new_name(&name.namespace)?;
         check_new_name(&name.name)?;
@@ -298,10 +295,7 @@ impl Session {
         if self.state.catalog.store.has_namespace(&name.namespace) {
             Ok(())
         } else {
-            Err(SchemaNotFound {
-                schema_name: format!("`{}`", name.namespace),
-            }
-            .into())
+            Err(crate::catalog::schema_not_found(&name.namespace))
         }
     }
 
@@ -1075,7 +1069,7 @@ impl Session {
         let by_path = match crate::access::ddl_parts(table, env)?.as_slice() {
             [format, path]
                 if format.eq_ignore_ascii_case("delta")
-                    && path.contains('/')
+                    && super::delta_writes::is_delta_path(path)
                     && self
                         .state
                         .catalog
