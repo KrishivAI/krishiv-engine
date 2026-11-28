@@ -38,10 +38,27 @@ A Delta write is single-writer in 0.3: the rows of one statement are gathered to
 file and makes the commit. The scans and the rest of the query before the write still run in parallel. Writing a
 table's files from several workers, with one commit made by the coordinator, comes with distributed mode.
 
+### Reading an older version of a Delta table
+
+Time travel is not supported in 0.3. A Delta read option that would choose another version (`versionAsOf`,
+`timestampAsOf`) is refused with `KRISHIV_UNSUPPORTED_FEATURE`, and a read option that would choose another snapshot of a
+declared Iceberg table is refused with `UNSUPPORTED_FEATURE.TIME_TRAVEL`; neither is ignored, so you never get the
+latest rows in place of the old ones. A read without such an option returns the latest version. To keep a version,
+write it out (`df.write.format("delta").save(...)` or Parquet) before the next commit, or read the old version with
+Spark.
+
+### A schema on a Delta read
+
+The columns of a Delta table come from its log. `spark.read.schema(..).format("delta").load(path)` is refused with
+`KRISHIV_UNSUPPORTED_FEATURE`, although for Parquet, CSV and JSON a schema you give sets the columns. Drop `.schema(..)`;
+see [the known difference](../concepts/known-differences.md#a-declared-schema-on-a-delta-read).
+
 ## Iceberg tables
 
 An Iceberg table is read through a [declared catalog](#declare-a-catalog) (`SELECT * FROM lake.sales.orders`).
-Reads cover position deletes, deletion vectors and equality deletes.
+Iceberg is not in the Python wheel or the release binary (only the Docker image), and 0.3 reads only a table of a
+declared REST catalog: there is no `read.format("iceberg").load(path)` on a metadata file, so there is no local-file
+example. To try it, point a declared catalog at an Iceberg REST catalog you run. Reads cover position deletes, deletion vectors and equality deletes.
 
 Writing Iceberg tables is not available from SQL or the DataFrame API in 0.3: `INSERT`, `CREATE TABLE ... USING
 iceberg` and the other writes do not reach the Iceberg writer yet. The session does not route a write statement to a

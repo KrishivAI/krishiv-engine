@@ -4,8 +4,6 @@ description: "Securing a single-node Krishiv server: admin token roles, what the
 
 # Securing a single-node server
 
-> The single-node server is not part of 0.2.0. This page describes its security settings.
-
 This page covers a single-node `krishiv server`: one process that serves Spark Connect clients, the metrics
 endpoint and the web console. It describes what the server checks today.
 
@@ -82,6 +80,5 @@ Embedded use, where the Python or Rust code runs in your own process, is not aff
 
 - **OpenID Connect (OIDC) sign-in.** No released build enables the `oidc` feature, so the OIDC settings are refused
   at start-up. Use static tokens.
-- **The Spark Connect server.** It is not part of 0.2 (see [Deployment](deploy.md)). The authentication and TLS
-  settings on this page and in the deployment guide apply to the server in the builds that enable them. The release
-  notes say when each build does.
+- **The Spark Connect server.** It is part of 0.3 (see [Deployment](deploy.md)). The authentication and TLS
+  settings on this page and in the deployment guide apply to it.

@@ -10,7 +10,7 @@ description: "Run a Spark Connect server inside your Python process and connect 
 
 ```python
 import krishiv
-from pyspark.sql import SparkSession  # pip install pyspark-client
+from pyspark.sql import SparkSession  # pip install pyspark-client "pandas<3"
 
 with krishiv.start_local() as server:
     spark = SparkSession.builder.remote(server.url).create()
@@ -19,6 +19,8 @@ with krishiv.start_local() as server:
 ```
 
 `server.url` is `sc://localhost:<port>/;token=<token>`. The client sends the token with every request (`authorization: Bearer <token>`), and the server refuses a connection that does not carry it. The token is made for each `start_local()` call, so another local process that finds the port cannot use it.
+
+`pyspark-client` 4.3 warns "PySpark does not yet fully support pandas >= 3.0.0" when pandas 3 is installed, and pip picks pandas 3 when it is free to. The warning is the client's, not an engine failure; install `"pandas<3"` (2.3 was checked) to avoid it.
 
 The host name is `localhost` on purpose: `pyspark-client` sends a token over a plain connection only to that name, and wants TLS for any other. The server listens on `127.0.0.1` and `[::1]` (the two addresses `localhost` can mean, so that no other process can hold one of them and receive the token) and on no other address.
 

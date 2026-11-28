@@ -59,8 +59,10 @@ pip install krishiv-compat        # or: pip install krishiv
 To connect to a running Krishiv server from stock PySpark you need only the thin client, not Krishiv:
 
 ```bash
-pip install pyspark-client
+pip install pyspark-client "pandas<3"
 ```
+
+The `pandas<3` pin keeps the client from warning about an unsupported pandas; the warning comes from the client, not from Krishiv.
 
 ## Docker
 

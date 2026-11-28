@@ -80,7 +80,7 @@ Vectorised compute kernels (SIMD) with Spark semantics, Spark-observable Murmur3
   trimming are assumed, unverified against a Spark run), `trunc`/`date_trunc` (`TruncUnit`:
   Spark's unit names and aliases; an hour or a day is assumed to keep the start's offset in a DST overlap, the date levels start the local
   day), `months_between` (31-day months, whole months for equal or last days; the time of day in whole seconds counted from the
-  instant the local day starts is matrix-pinned in UTC and assumed across DST), `make_date` (`DATETIME_FIELD_OUT_OF_BOUNDS.WITH_SUGGESTION` with the `java.time` message under
+  instant the local day starts is matrix-pinned in UTC and assumed across DST), `make_date` (`DATETIME_FIELD_OUT_OF_BOUNDS.WITH_SUGGESTION` (`.WITHOUT_SUGGESTION` from 4.3) with the `java.time` message under
   ANSI, NULL without) and the zone conversions `from_utc_timestamp`/`to_utc_timestamp`/`convert_timezone` (`Zones`: one zone, or
   one per row with `None` for a NULL zone; `DATETIME_OVERFLOW` under ANSI, NULL without, like `next_day`'s bad name and
   `make_date`'s bad field). `last_day`/`next_day` int-wrap at the range ends is assumed, unverified against a Spark run

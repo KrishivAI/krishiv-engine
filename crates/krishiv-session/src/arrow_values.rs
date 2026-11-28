@@ -4,12 +4,13 @@
 //! An ANSI interval is held only where its fields are known (a tagged field or the analyzed
 //! column's type): Arrow carries no fields, and Spark's defaults would be a silent divergence.
 
-use arrow_array::RecordBatch;
 use arrow_array::cast::AsArray;
+use arrow_array::{Array, RecordBatch};
 use arrow_schema::DataType as ArrowType;
 use krishiv_common::error::{KrishivError, KrishivUnsupportedFeature};
 use krishiv_plan::Literal;
-use krishiv_types::{DataType, DecimalType};
+use krishiv_types::{ArrayType, DataType, DecimalType, MapType};
+use std::sync::Arc;
 
 /// The value of `array` at `row` as a typed literal. The type comes from
 /// the single [`arrow_krishiv_type`] map, so a NULL slot and a value never
@@ -53,6 +54,14 @@ pub(crate) fn declared_value(
         (other, _) => arrow_krishiv_type(other)?,
     };
     typed_value(array, row, data_type)
+}
+
+/// An element of a nested value: [`arrow_value`], whose NULL carries the element's type.
+fn nested_value(
+    array: &arrow_array::ArrayRef,
+    row: usize,
+) -> Result<(DataType, Literal), KrishivError> {
+    arrow_value(array, row)
 }
 
 /// The value of `array` at `row` as a literal of `data_type` (the array's Krishiv type).
@@ -148,6 +157,34 @@ fn typed_value(
                 end,
             }
         }
+        ArrowType::List(_) | ArrowType::LargeList(_) => {
+            let DataType::Array(array_type) = &data_type else {
+                return Err(crate::session::internal(
+                    "a variable array changed type".to_owned(),
+                ));
+            };
+            let items = match array.data_type() {
+                ArrowType::List(_) => array.as_list::<i32>().value(row),
+                _ => array.as_list::<i64>().value(row),
+            };
+            let elements = (0..items.len())
+                .map(|i| nested_value(&items, i).map(|(_, v)| v))
+                .collect::<Result<Vec<_>, _>>()?;
+            Literal::array((**array_type).clone(), elements)?
+        }
+        ArrowType::Map(..) => {
+            let DataType::Map(map_type) = &data_type else {
+                return Err(crate::session::internal(
+                    "a variable map changed type".to_owned(),
+                ));
+            };
+            let entries = array.as_map().value(row);
+            let (keys, values) = (entries.column(0), entries.column(1));
+            let pairs = (0..entries.len())
+                .map(|i| Ok((nested_value(keys, i)?.1, nested_value(values, i)?.1)))
+                .collect::<Result<Vec<_>, KrishivError>>()?;
+            Literal::key_value_map((**map_type).clone(), pairs)?
+        }
         // `arrow_krishiv_type` above already failed on any other type.
         _ => {
             return Err(crate::session::internal(
@@ -182,6 +219,19 @@ pub(crate) fn arrow_krishiv_type(data_type: &ArrowType) -> Result<DataType, Kris
         ArrowType::Timestamp(arrow_schema::TimeUnit::Microsecond, None) => {
             Ok(DataType::TimestampNtz)
         }
+        ArrowType::List(field) | ArrowType::LargeList(field) => Ok(DataType::Array(Arc::new(
+            ArrayType::new(arrow_krishiv_type(field.data_type())?, field.is_nullable()),
+        ))),
+        ArrowType::Map(entries, _) => match entries.data_type() {
+            ArrowType::Struct(fields) if fields.len() == 2 => {
+                Ok(DataType::Map(Arc::new(MapType::new(
+                    arrow_krishiv_type(fields[0].data_type())?,
+                    arrow_krishiv_type(fields[1].data_type())?,
+                    fields[1].is_nullable(),
+                ))))
+            }
+            other => Err(unsupported(other)),
+        },
         // An ANSI interval's fields are not in its Arrow type: only [`declared_value`] holds one.
         other => Err(unsupported(other)),
     }

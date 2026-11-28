@@ -107,6 +107,7 @@ pub(crate) use accumulator::plain;
 pub(crate) use accumulator::{Accumulator, Running, avg_decimal_wide, wide_sum_value};
 pub(crate) use collect::{collect_set_supported, kept_bytes};
 pub(crate) use hll::precision_for;
+pub use moments::MomentRules;
 pub(crate) use moments::arity;
 pub(crate) use node::distinct_count_at_merge;
 pub use node::{AggregateNode, PartialNode, distinct_plan, distinct_plan_with, union_distinct};
@@ -158,7 +159,7 @@ pub enum AggregateFunction {
         ignore_nulls: bool,
     },
     /// `stddev(x)` / `std` / `stddev_samp`: `double`; NULL for no rows, and
-    /// for one row unless `legacy_statistical` (then NaN). Rows with a NULL
+    /// for one row unless `moments.legacy_nan` (then NaN). Rows with a NULL
     /// are skipped. Likewise for the moment aggregates below.
     StddevSamp,
     /// `stddev_pop(x)`: `double`; NULL for no rows.
@@ -168,16 +169,16 @@ pub enum AggregateFunction {
     /// `var_pop(x)`, as `StddevPop` without the root.
     VarPop,
     /// `skewness(x)`: `double`; NULL for no rows, and for no variance
-    /// unless `legacy_statistical` (then NaN).
+    /// unless `moments.legacy_nan` (then NaN).
     Skewness,
     /// `kurtosis(x)`, as `Skewness`.
     Kurtosis,
     /// `corr(x, y)`: Pearson correlation, `double`; both arguments are read
     /// as `double` and a row with a NULL in either is skipped. NULL for no
-    /// rows, and for one row unless `legacy_statistical` (then NaN). Over
+    /// rows, and for one row unless `moments.legacy_nan` (then NaN). Over
     /// several rows of which one argument is constant it is
     /// `DIVIDE_BY_ZERO` with `ansi` and NULL without, whatever
-    /// `legacy_statistical` says.
+    /// `moments.legacy_nan` says.
     Corr,
     /// `covar_samp(x, y)`: as `Corr` for its arguments and its single-row
     /// rule.
@@ -1097,10 +1098,11 @@ pub struct AggregateSpec {
     /// Reject input weights other than 1 (`DISTINCT`, `UNION`: set
     /// semantics over Z-sets need IVM).
     pub require_unit_weights: bool,
-    /// `spark.sql.legacy.statisticalAggregate`: where Spark divides by zero,
-    /// the sample moment aggregates (`stddev_samp`, `var_samp`, `covar_samp`,
-    /// `corr`, `skewness`, `kurtosis`) give NaN instead of NULL.
-    pub legacy_statistical: bool,
+    /// The session's rules for the moment aggregates. With
+    /// `legacy_nan` (`spark.sql.legacy.statisticalAggregate`), the sample
+    /// ones (`stddev_samp`, `var_samp`, `covar_samp`, `corr`, `skewness`,
+    /// `kurtosis`) give NaN instead of NULL where Spark divides by zero.
+    pub moments: MomentRules,
     /// The session's aggregate UDFs, for [`AggregateFunction::Udf`]
     /// aggregates (`None`: a plan calling one is refused with
     /// `KRISHIV_UDF_NOT_AVAILABLE`).

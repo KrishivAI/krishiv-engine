@@ -6,7 +6,7 @@ description: "Install the Python package and run your first SQL and DataFrame qu
 
 <!-- The code blocks equal the Quickstart section of the repository README (a test checks it); CI runs the README's. -->
 
-Krishiv 0.2 is on PyPI (you can also build the wheel from the repository with `maturin build`):
+Krishiv is on PyPI (you can also build the wheel from the repository with `maturin build`):
 
 ```bash
 pip install krishiv
@@ -14,7 +14,7 @@ pip install krishiv
 
 The command-line tool (the `krishiv` binary) installs from source with Rust 1.97 or newer: `cargo install krishiv-cli`. Prebuilt `krishiv` CLI binaries are not available yet.
 
-Krishiv needs Python 3.11 or newer (the floor of the Spark 4.3 Python client); the examples run on 3.11 to 3.14. `pyarrow` is installed with it (a required dependency since 0.2.1); `collect()` and `toArrow()` return Arrow data.
+Krishiv needs Python 3.11 or newer (the floor of the Spark 4.3 Python client); the examples run on 3.11 to 3.14. `pyarrow` is installed with it (a required dependency since 0.2.1); `collect()` returns a Python list of `Row` objects, `toArrow()` returns a PyArrow `Table`, and `show()` prints the rows and returns `None`.
 
 SQL and DataFrames:
 

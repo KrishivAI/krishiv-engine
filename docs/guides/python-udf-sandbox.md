@@ -4,8 +4,6 @@ description: "How Python UDFs run in a single-node Krishiv server: sandboxed wor
 
 # Python UDFs in the server: the sandbox
 
-> The single-node server is not part of 0.2.0. This page describes how it runs Python UDFs.
-
 There are two ways to run a Python UDF in Krishiv, and they are protected differently.
 
 - **In your own process** (`@udf`, `pandas_udf` and `arrow_udf` in the Python package). The function runs in the

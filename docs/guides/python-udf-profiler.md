@@ -4,8 +4,6 @@ description: "Profile the time and memory of a Python UDF with spark.sql.pyspark
 
 # Profile a Python UDF
 
-> The Python UDF profiler is not part of the 0.2.0 release; this page describes it as it is being built.
-
 Set `spark.sql.pyspark.udf.profiler` to `perf` or `memory`, run the query, and read the result with `spark.profile`. It is off by default, and while it is off a UDF runs exactly as before.
 
 ```python

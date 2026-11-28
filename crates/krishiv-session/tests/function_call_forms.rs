@@ -22,6 +22,7 @@ use arrow_array::{Array, RecordBatch, StringArray};
 use arrow_schema::{DataType as ArrowType, Field, Schema};
 use futures::executor::block_on;
 use krishiv_common::error::KrishivError;
+use krishiv_plan::analyzer::SparkProfile;
 use krishiv_session::Session;
 use serde_json::Value;
 
@@ -123,8 +124,12 @@ fn strings_table(s: &Session, name: &str, rows: &[(&str, &str)]) {
     s.register_batches(name, schema, vec![batch]).unwrap();
 }
 
+/// A session on the Spark 4.2 profile, the version of these goldens.
 fn session() -> Session {
-    let s = Session::new().unwrap();
+    let s = Session::builder()
+        .profile(SparkProfile::V4_2)
+        .build()
+        .unwrap();
     strings_table(
         &s,
         "like_any_table",

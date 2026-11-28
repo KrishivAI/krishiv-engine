@@ -179,6 +179,8 @@ impl Resolver<'_> {
         let arg = &self.stack_rows(arg, &cx)?;
         let arg = &self.unnest_rows(arg, &cx)?;
         let mut b = self.bind(arg, &cx)?;
+        // A column a `USING` join merged away (`t1.c1`) is read from the join's output.
+        let c = self.reveal(&c, std::slice::from_ref(&b))?;
         // `variant_explode` expects a VARIANT: an untyped NULL is cast to one
         // (and gives no rows), as `ExpectsInputTypes` casts it.
         if kind == GeneratorKind::VariantExplode
@@ -214,7 +216,7 @@ impl Resolver<'_> {
         // does not carry: an exploded array is not copied once per element.
         // A resolved node read again already has it as a column.
         let (below, arg_col) = match crate::generator_arg(&b.expr) {
-            Some(_) if resolved => (c.clone(), Arc::clone(&b.expr)),
+            Some(_) if resolved => (c, Arc::clone(&b.expr)),
             _ => {
                 let col = self.attr("_generate_arg", &b.ty);
                 let mut items: Vec<Arc<Expr>> = c

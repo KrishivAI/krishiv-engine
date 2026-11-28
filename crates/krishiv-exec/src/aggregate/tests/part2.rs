@@ -947,7 +947,7 @@ async fn moments_legacy_flag_reaches_every_accumulator() {
     };
     for legacy in [false, true] {
         let mut sp = spec(&s, vec![0], moment_aggs());
-        sp.legacy_statistical = legacy;
+        sp.moments.legacy_nan = legacy;
         let want = moment_oracle(&b, 40, true, legacy);
         // The oracle itself shows the flag: some groups' cells are NaN or NULL.
         let nan_cells = want
@@ -1006,7 +1006,7 @@ async fn corr_of_a_constant_column_follows_ansi() {
         for ansi in [false, true] {
             let mut sp = spec(&s, vec![0], corr());
             sp.ansi = ansi;
-            sp.legacy_statistical = legacy;
+            sp.moments.legacy_nan = legacy;
             let plans: [Plan<'_>; 2] = [
                 Box::new(|b| node(scan(&s, b.to_vec()), sp.clone())),
                 Box::new(|b| {

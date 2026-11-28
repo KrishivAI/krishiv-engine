@@ -14,7 +14,7 @@ Enable the `telemetry-logs` feature and call `install_json_logs`:
 
 ```toml
 [dependencies]
-krishiv-session = { version = "0.2", features = ["telemetry-logs"] }
+krishiv-session = { version = "0.3", features = ["telemetry-logs"] }
 ```
 
 ```rust,ignore
@@ -34,7 +34,7 @@ Enable `telemetry-otlp`. Spans go to an OTLP/HTTP collector (protobuf bodies, ru
 collector's base URL and `/v1/traces` is appended.
 
 ```toml
-krishiv-session = { version = "0.2", features = ["telemetry-otlp"] }
+krishiv-session = { version = "0.3", features = ["telemetry-otlp"] }
 tracing-subscriber = "0.3"
 ```
 

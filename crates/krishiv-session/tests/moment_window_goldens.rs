@@ -17,6 +17,7 @@ use arrow_array::types::{Float64Type, Int32Type, Int64Type};
 use arrow_array::{Array, ArrayRef};
 use arrow_schema::DataType;
 use futures::executor::block_on;
+use krishiv_plan::analyzer::SparkProfile;
 use krishiv_session::Session;
 use serde_json::Value;
 
@@ -65,7 +66,10 @@ fn moment_window_aggregates_match_spark() {
             .get("conf")
             .map_or_else(String::new, ToString::to_string);
         if !sessions.iter().any(|(c, _)| *c == conf) {
-            let s = Session::new().unwrap();
+            let s = Session::builder()
+                .profile(SparkProfile::V4_2)
+                .build()
+                .unwrap();
             if let Some(map) = case.get("conf").and_then(Value::as_object) {
                 for (k, v) in map {
                     s.conf().set(k, v.as_str().unwrap()).unwrap();

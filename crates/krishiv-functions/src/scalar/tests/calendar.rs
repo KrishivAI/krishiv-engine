@@ -426,7 +426,7 @@ fn make_date_follows_ansi_and_the_version() {
     let e = f.invoke(&[col(&y), col(&m), col(&d)], 4).unwrap_err();
     assert_eq!(
         class(&e),
-        ErrorClass::DatetimeFieldOutOfBoundsWithSuggestion
+        ErrorClass::DatetimeFieldOutOfBoundsWithoutSuggestion
     );
     assert!(
         e.to_string()

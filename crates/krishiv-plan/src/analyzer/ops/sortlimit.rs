@@ -271,15 +271,17 @@ impl Resolver<'_> {
                 // the select list are looked up below it first
                 // (`bind_missing` with leniency); when that is ambiguous
                 // too, the aggregate below still resolves grouping columns.
+                // A path or subscript the select list's column cannot serve is read
+                // below it too (see `over_agg`).
                 Err(e)
-                    if e.error
-                        .error_class()
-                        .name()
-                        .starts_with("UNRESOLVED_COLUMN")
-                        || e.error
-                            .error_class()
-                            .name()
-                            .starts_with("AMBIGUOUS_REFERENCE") =>
+                    if [
+                        "UNRESOLVED_COLUMN",
+                        "AMBIGUOUS_REFERENCE",
+                        "INVALID_EXTRACT_BASE_FIELD_TYPE",
+                        "FIELD_NOT_FOUND",
+                    ]
+                    .iter()
+                    .any(|class| e.error.error_class().name().starts_with(class)) =>
                 {
                     let Some((layers, mut inner)) = Self::through_to_agg(&c) else {
                         return Err(reported(e));

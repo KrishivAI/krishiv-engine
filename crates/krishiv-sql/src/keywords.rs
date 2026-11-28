@@ -623,14 +623,45 @@ pub const SQL_KEYWORDS: &[(&str, bool)] = &[
     ("ZONE", false),
 ];
 
+/// Keywords Spark 4.3 adds to `sql_keywords()` (`SqlBaseLexer.g4` at v4.3.0), sorted, with
+/// whether each is reserved under enforced ANSI keywords. Listed only for the 4.3 grammar.
+const SQL_KEYWORDS_4_3: &[(&str, bool)] = &[
+    ("ALIGN", false),
+    ("APPLY", false),
+    ("ASOF", false),
+    ("AUTO", false),
+    ("BIN", false),
+    ("BIN_DISTRIBUTE_RATIO", false),
+    ("BIN_END", false),
+    ("BIN_START", false),
+    ("CDC", false),
+    ("ERROR", false),
+    ("HISTORY", false),
+    ("JSON_TABLE", false),
+    ("LOCALTIME", true),
+    ("MATCH_CONDITION", false),
+    ("ORDINALITY", false),
+    ("SCD", false),
+    ("SEQUENCE", false),
+    ("TRACK", false),
+    ("UNIFORM", false),
+    ("UNNEST", false),
+    ("WIDTH", false),
+];
+
 /// The rows of `sql_keywords()`: `(keyword, reserved)` with `reserved`
 /// honoring `enforce_reserved` (as Spark's `SqlKeywords` does: reserved
-/// only when ANSI reserved keywords are enforced).
+/// only when ANSI reserved keywords are enforced). `spark_4_3` adds the
+/// keywords the 4.3 grammar introduced, merged in sorted order.
 #[must_use]
-pub fn sql_keywords(enforce_reserved: bool) -> Vec<(String, bool)> {
-    SQL_KEYWORDS
-        .iter()
-        .map(|(k, r)| ((*k).to_owned(), *r && enforce_reserved))
+pub fn sql_keywords(enforce_reserved: bool, spark_4_3: bool) -> Vec<(String, bool)> {
+    let mut all: Vec<(&str, bool)> = SQL_KEYWORDS.to_vec();
+    if spark_4_3 {
+        all.extend_from_slice(SQL_KEYWORDS_4_3);
+        all.sort_unstable_by_key(|(k, _)| *k);
+    }
+    all.into_iter()
+        .map(|(k, r)| (k.to_owned(), r && enforce_reserved))
         .collect()
 }
 
@@ -683,6 +714,16 @@ mod tests {
                 "{text}"
             );
         }
+    }
+
+    #[test]
+    fn spark_4_3_adds_its_keywords_in_order() {
+        let base = sql_keywords(true, false);
+        let v43 = sql_keywords(true, true);
+        assert_eq!(v43.len(), base.len() + SQL_KEYWORDS_4_3.len());
+        assert!(v43.windows(2).all(|w| w[0].0 < w[1].0));
+        assert!(v43.contains(&("LOCALTIME".to_owned(), true)));
+        assert!(!base.iter().any(|(k, _)| k == "LOCALTIME"));
     }
 
     #[test]

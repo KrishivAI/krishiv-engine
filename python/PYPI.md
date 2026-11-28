@@ -31,7 +31,7 @@ df.groupBy("region").agg(F.sum("amount").alias("revenue")).orderBy("region").sho
 table = df.toArrow()  # a pyarrow.Table; also pa.table(df), polars.DataFrame(df), duckdb.from_arrow(df)
 ```
 
-## What works in 0.2
+## What works
 
 - Batch Spark SQL and DataFrames, in process, over Arrow. `krishiv.sql` mirrors `pyspark.sql`
   (import paths and signatures); errors in `krishiv.errors` carry Spark's error classes.

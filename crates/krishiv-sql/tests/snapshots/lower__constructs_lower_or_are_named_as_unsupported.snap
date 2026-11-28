@@ -121,7 +121,7 @@ FROM t SELECT a UNION SELECT b
 WITH RECURSIVE c MAX RECURSION LEVEL 3 AS (SELECT a FROM t) SELECT a FROM c
   => WithCte [c] | :- Project [a] | :  +- Read t | +- Project [a] |    +- Read c | 
 SELECT explode(a) AS (x, y) FROM t
-  => Project [__krishiv_generate_0.*] | +- Generate explode(a), false, [] |    +- Read t | 
+  => Project [__krishiv_generate_0_names.*] | +- Generate explode(a), false, [] |    +- Read t | 
 SELECT * FROM t JOIN LATERAL (SELECT a) s
   => Project [*] | +- Join LateralInner |    :- Read t |    +- SubqueryAlias s |       +- Project [a] |          +- OneRowRelation | 
 SELECT * FROM t WITH (k = true, n = 2) RIGHT JOIN (SELECT a FROM u) USING (a)

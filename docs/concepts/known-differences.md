@@ -486,8 +486,7 @@ shared by every session of the application.
 
 ## `krishiv server` (Spark Connect)
 
-> The Spark Connect server is not part of the 0.2 release; `krishiv server` in 0.2 serves the web UI and admin API
-> only. The behaviour below is what the Spark Connect server is built to do, and it does not apply to 0.2.
+> `krishiv server` serves Spark Connect from 0.3. The behaviour below is what it does.
 
 - **The Connect listener binds `127.0.0.1` by default.** Spark binds every interface when
   `spark.connect.grpc.binding.address` is unset. A non-loopback address needs authentication, so `krishiv server`
@@ -533,8 +532,8 @@ shared by every session of the application.
   an `UnsupportedOperationException` without an error class.
 - **AnalyzePlan.** An `UNSPECIFIED` explain mode fails with `CONNECT_INVALID_PLAN.INVALID_ENUM`, and `json_to_ddl` of a
   type that is not a struct with `INVALID_SCHEMA.NON_STRUCT_TYPE`; Spark sends `INTERNAL` without an error class for
-  both. `persist`, `unpersist` and `get_storage_level` fail with
-  `CONNECT_INVALID_PLAN.INVALID_ONE_OF_FIELD_NOT_SUPPORTED` until DataFrame caching lands. `input_files` lists the paths
+  both. `persist`, `unpersist` and `get_storage_level` work (a persisted frame reports
+  `Disk Memory Deserialized 1x Replicated`). `input_files` lists the paths
   the file scans read, qualified (`file:/data/t`), not the files under them, and nothing for a catalog table (Spark
   lists the files of a file-backed table). `same_semantics` and `semantic_hash` ignore column and alias names and
   subquery aliases, as Spark's canonicalization does, but not Spark's other rewrites: plans that differ only in the

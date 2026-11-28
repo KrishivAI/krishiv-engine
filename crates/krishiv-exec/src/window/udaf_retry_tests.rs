@@ -663,7 +663,7 @@ fn a_refusal_names_the_states_of_every_udaf_of_the_evaluation() {
             &op.env.plan,
             &slices,
             false,
-            false,
+            Default::default(),
             &super::utc_zone(),
             op.env.udafs.as_ref(),
             Some(&mut window),
