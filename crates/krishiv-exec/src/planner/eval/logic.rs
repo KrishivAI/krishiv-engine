@@ -51,20 +51,30 @@ struct AndOr {
     /// `r` raises on no row and is deterministic, so it may run on rows
     /// the left side decides (see `runs_anywhere` in the parent module).
     r_never_raises: bool,
+    /// `r` costs far more per row than copying the open rows out
+    /// ([`super::cost::costly`]): when the left side leaves few rows open,
+    /// a right side that never raises runs over them only.
+    r_costly: bool,
 }
 
-/// `l AND r` (`and`) or `l OR r`; `r_never_raises` as on [`AndOr`].
+/// The open-row fraction (one in `SURVIVORS_DIVISOR`) under which a costly
+/// right side that never raises runs over the open rows only (study 60 (d)).
+const SURVIVORS_DIVISOR: usize = 8;
+
+/// `l AND r` (`and`) or `l OR r`; `r_never_raises` and `r_costly` as on [`AndOr`].
 pub(super) fn and_or(
     and: bool,
     l: Arc<dyn PhysExpr>,
     r: Arc<dyn PhysExpr>,
     r_never_raises: bool,
+    r_costly: bool,
 ) -> Arc<dyn PhysExpr> {
     Arc::new(AndOr {
         and,
         l,
         r,
         r_never_raises,
+        r_costly,
     })
 }
 
@@ -95,7 +105,9 @@ impl PhysExpr for AndOr {
         // divides by zero. A right side that never raises runs over the
         // whole batch instead: the combination below ignores its value
         // where the left side decides, and copying the open rows out and
-        // back costs far more than comparing every row.
+        // back costs far more than comparing every row, unless the right
+        // side is costly (a pattern match, a string function, a UDF) and few
+        // rows are open.
         let rows = batch.num_rows();
         let l_all = lv.clone().into_array(rows)?;
         let l = l_all
@@ -105,7 +117,11 @@ impl PhysExpr for AndOr {
         let decided = if self.and { &l_ok & &!&lb } else { &l_ok & &lb };
         let open = !&decided;
         let open_rows = open.count_set_bits();
-        let rv = if open_rows == rows || (open_rows > 0 && self.r_never_raises) {
+        let whole = open_rows == rows
+            || (open_rows > 0
+                && self.r_never_raises
+                && !(self.r_costly && open_rows.saturating_mul(SURVIVORS_DIVISOR) <= rows));
+        let rv = if whole {
             self.r.eval(batch, partition)?
         } else {
             Value::Array(super::eval_where(self.r.as_ref(), batch, &open, partition)?)

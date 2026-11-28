@@ -57,21 +57,6 @@ const KNOWN_GAPS: &[(&str, &str, &str)] = &[
         "eq_collated",
         "names [\"(collate(name, UTF8_LCASE) = APPLE)\"]",
     ),
-    // `instr` and `locate` of a collated column give a NOT NULL result in Spark; Krishiv's is nullable.
-    ("4.2.0", "instr_collated", "schema [(\"int\", true)]"),
-    (
-        "4.2.0",
-        "instr_literal_collated",
-        "schema [(\"int\", true)]",
-    ),
-    ("4.2.0", "locate_collated", "schema [(\"int\", true)]"),
-    ("4.3.0", "instr_collated", "schema [(\"int\", true)]"),
-    (
-        "4.3.0",
-        "instr_literal_collated",
-        "schema [(\"int\", true)]",
-    ),
-    ("4.3.0", "locate_collated", "schema [(\"int\", true)]"),
     // Spark 4.2 parses a precision past `Int` with `Integer.parseInt` and fails outside its error
     // classes (`NumberFormatException: For input string`); Krishiv raises its own class.
     (

@@ -183,6 +183,9 @@ enum Item {
     Optional(Vec<Item>),
 }
 
+/// Spark's default `TIME` pattern (`TimeFormatter.defaultPattern`).
+pub const DEFAULT_TIME_PATTERN: &str = "HH:mm:ss";
+
 /// A compiled Spark datetime pattern (see the module docs).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DateTimePattern {
@@ -268,6 +271,15 @@ impl DateTimePattern {
     #[must_use]
     pub fn pattern(&self) -> &str {
         &self.pattern
+    }
+
+    /// Whether this is Spark's default `TIME` pattern `HH:mm:ss`
+    /// (`TimeFormatter.defaultPattern`). Spark 4.3.0's CSV and JSON writers
+    /// print a `TIME` with that `timeFormat` through the fraction formatter
+    /// (`12:34:56.123456`, not `12:34:56`), as with no `timeFormat`.
+    #[must_use]
+    pub fn is_default_time_pattern(&self) -> bool {
+        self.pattern == DEFAULT_TIME_PATTERN
     }
 
     /// Whether the pattern prints or reads a zone or offset.
@@ -548,7 +560,13 @@ impl DateTimePattern {
         let Some(p) = parse::parse(&self.items, s) else {
             return Ok(None);
         };
-        if !matches!(p.zone, parse::ParsedZone::None) {
+        // Spark's `toLocalTime` keeps the parsed clock fields: an offset or a
+        // zone the pattern reads is accepted and does not shift the time
+        // (`12:34:56+02:00` with `HH:mm:ssXXX` is `12:34:56`); a region id
+        // Java cannot resolve does not parse.
+        if let parse::ParsedZone::Region(id) = &p.zone
+            && crate::datetime::resolve_zone(id).is_err()
+        {
             return Ok(None);
         }
         Ok(p.time_of_day_nanos())

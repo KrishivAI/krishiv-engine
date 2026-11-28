@@ -630,16 +630,16 @@ impl FileReads {
         }
         let format = match self.formats.get(format) {
             Ok(format) => format,
-            Err(e) => {
-                if is_spark_file_source(format) {
-                    return Err(unsupported(format!("the {format} file format")));
-                }
-                return Err(e);
+            Err(_) if is_spark_file_source(format) => {
+                return Err(unsupported(format!("the {format} file format")));
             }
+            Err(e) => return Err(e),
         };
         let merge = self.merges_schemas(format.name(), options);
         let ignore_invalid_partition_paths = self.ignores_invalid_partition_paths(options);
-        let options = self.nanos_pin(format.options(), options);
+        let given = format.options().without_session_confs(options);
+        // The pin goes after the session-only options are dropped, so nothing a user wrote undoes it.
+        let options = self.nanos_pin(format.options(), &given);
         let (options, _) = format.options().parse(&options, &self.session)?;
         // A read's layout is checked per leaf directory as Spark's partition discovery checks it; files
         // beside its partition directories are not read. A catalog table's listing kept its own files.

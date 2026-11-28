@@ -100,6 +100,7 @@ fn and_or_answer_alike_on_every_row_or_on_the_open_rows() {
                 column(0, ArrowType::Boolean),
                 Arc::clone(&r) as Arc<dyn PhysExpr>,
                 never_raises,
+                false,
             );
             assert_eq!(answers(e.as_ref(), &batch), expected, "and={is_and}");
             assert_eq!(r.rows(), seen, "and={is_and} never_raises={never_raises}");
@@ -118,6 +119,7 @@ fn a_left_side_that_decides_every_row_skips_the_right_side() {
         column(0, ArrowType::Boolean),
         Arc::clone(&r) as Arc<dyn PhysExpr>,
         true,
+        false,
     );
     assert_eq!(answers(e.as_ref(), &batch), [Some(false); 3]);
     assert_eq!(r.rows(), 0);
@@ -222,4 +224,87 @@ fn between_runs_no_bound_where_v_is_null() {
     let e = e.unwrap();
     assert_eq!(answers(e.as_ref(), &batch), [None; 4]);
     assert_eq!((lo.rows(), hi.rows()), (0, 0));
+}
+
+/// A batch of `rows` rows whose `l` is `true` on every `step`-th row and
+/// `false` elsewhere (NULL on row 1), and whose `r` cycles true, false, NULL.
+fn sparse(rows: usize, step: usize) -> RecordBatch {
+    let l: Vec<Option<bool>> = (0..rows)
+        .map(|i| if i == 1 { None } else { Some(i % step == 0) })
+        .collect();
+    let r: Vec<Option<bool>> = (0..rows)
+        .map(|i| [Some(true), Some(false), None][i % 3])
+        .collect();
+    let schema = Schema::new(vec![
+        Field::new("l", ArrowType::Boolean, true),
+        Field::new("r", ArrowType::Boolean, true),
+    ]);
+    RecordBatch::try_new(
+        Arc::new(schema),
+        vec![
+            Arc::new(BooleanArray::from(l)),
+            Arc::new(BooleanArray::from(r)),
+        ],
+    )
+    .unwrap()
+}
+
+/// Kleene `l AND r` / `l OR r`, row by row.
+fn kleene(and: bool, l: Option<bool>, r: Option<bool>) -> Option<bool> {
+    match (and, l, r) {
+        (true, Some(false), _) | (true, _, Some(false)) => Some(false),
+        (false, Some(true), _) | (false, _, Some(true)) => Some(true),
+        (_, Some(a), Some(_)) => Some(a),
+        _ => None,
+    }
+}
+
+/// A costly right side that never raises runs over the open rows only once
+/// they are at most an eighth of the batch, and over every row otherwise; the
+/// answers are the same either way.
+#[test]
+fn costly_right_side_runs_over_few_open_rows_only() {
+    for (step, survivors_only) in [(16, true), (8, true), (2, false)] {
+        let batch = sparse(64, step);
+        let l = batch.column(0).as_boolean().clone();
+        let r_col = batch.column(1).as_boolean().clone();
+        for is_and in [true, false] {
+            let r = Counted::new(column(1, ArrowType::Boolean));
+            let e = and_or(
+                is_and,
+                column(0, ArrowType::Boolean),
+                Arc::clone(&r) as Arc<dyn PhysExpr>,
+                true,
+                true,
+            );
+            let expected: Vec<Option<bool>> = l
+                .iter()
+                .zip(r_col.iter())
+                .map(|(a, b)| kleene(is_and, a, b))
+                .collect();
+            assert_eq!(
+                answers(e.as_ref(), &batch),
+                expected,
+                "and={is_and} step={step}"
+            );
+            // AND leaves open the rows `l` does not make false (true or NULL);
+            // OR those it does not make true.
+            let open = l
+                .iter()
+                .filter(|v| {
+                    if is_and {
+                        *v != Some(false)
+                    } else {
+                        *v != Some(true)
+                    }
+                })
+                .count();
+            let seen = if survivors_only && open * 8 <= 64 {
+                open
+            } else {
+                64
+            };
+            assert_eq!(r.rows(), seen, "and={is_and} step={step}");
+        }
+    }
 }

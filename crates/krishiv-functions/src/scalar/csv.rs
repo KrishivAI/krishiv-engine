@@ -609,7 +609,11 @@ fn bind_to_csv(args: &[BindArg], opts: &BindOptions) -> Result<Binding, KrishivE
         line_sep: parsed.line_sep,
         null_value: parsed.null_value,
         date_pattern: date_pattern.clone(),
-        time_pattern: parsed.time_pattern.clone(),
+        // `HH:mm:ss` writes through Spark's fraction formatter.
+        time_pattern: parsed
+            .time_pattern
+            .clone()
+            .filter(|p| !p.is_default_time_pattern()),
         timestamp_pattern: timestamp_pattern.clone(),
         ntz_pattern: ntz_pattern.clone(),
     };

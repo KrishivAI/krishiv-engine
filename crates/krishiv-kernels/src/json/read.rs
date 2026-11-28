@@ -865,8 +865,8 @@ fn read_string(raw: RawStr<'_>, out: &mut Scalar, ctx: &Ctx<'_>) -> Result<(), F
             let parsed = match &ctx.opts.time_format {
                 Some(pattern) => pattern
                     .parse_time_of_day_nanos(&text)
-                    .map_err(|_| Poison)?
-                    .map(|n| crate::cast::time::cut_to_micros(n, micros_only)),
+                    // Every digit the pattern reads, under Spark 4.2 too (4.2.1 run).
+                    .map_err(|_| Poison)?,
                 None if micros_only => crate::cast::time::parse_time(&text),
                 None => crate::cast::time::parse_time_nanos(&text),
             };

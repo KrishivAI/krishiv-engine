@@ -883,7 +883,8 @@ pub struct Converter<'a> {
     pub time: Option<&'a DateTimePattern>,
     /// Whether to fall back to the lenient grammar.
     pub fallback: bool,
-    /// Spark 4.2 reads six fraction digits of a `TIME`; 4.3 (`false`) keeps nine.
+    /// Spark 4.2 reads six fraction digits of a `TIME` in the default grammar (a
+    /// `timeFormat` keeps every digit); 4.3 (`false`) keeps nine.
     pub time_micros_only: bool,
 }
 
@@ -967,8 +968,9 @@ impl Converter<'_> {
                 let parsed = match self.time {
                     Some(p) => p
                         .parse_time_of_day_nanos(s)
-                        .map_err(|e| ConvError::Fatal(KernelError::with_row(None, e)))?
-                        .map(|n| crate::cast::time::cut_to_micros(n, self.time_micros_only)),
+                        // Every digit the pattern reads, under Spark 4.2 too (4.2.1 run:
+                        // `HH.mm.ss.SSSSSSSSS` keeps nine; only the default grammar cuts).
+                        .map_err(|e| ConvError::Fatal(KernelError::with_row(None, e)))?,
                     None => lenient(s),
                 };
                 match parsed {
@@ -1319,7 +1321,8 @@ pub struct FromCsvOptions {
     pub ntz_pattern: Option<DateTimePattern>,
     /// Fall back to the lenient grammar when the pattern fails.
     pub fallback: bool,
-    /// Spark 4.2 reads six fraction digits of a `TIME`; 4.3 (`false`) keeps nine.
+    /// Spark 4.2 reads six fraction digits of a `TIME` in the default grammar (a
+    /// `timeFormat` keeps every digit); 4.3 (`false`) keeps nine.
     pub time_micros_only: bool,
 }
 

@@ -142,6 +142,10 @@ impl JsonConverter<'_> {
             (Kind::TimestampNtzNanos(p), JVal::Str(s)) if !s.is_empty() => {
                 Val::I64(self.dt.parse_ntz_nanos(s, *p)?.ok_or_else(bad)?)
             }
+            // A `TIME` reads only a string, as `CAST(text AS TIME)` (Spark 4.3.0).
+            (Kind::Time, JVal::Str(s)) if !s.is_empty() => {
+                Val::I64(self.dt.parse_time(s)?.ok_or_else(bad)?)
+            }
             (Kind::YearMonth(..) | Kind::DayTime(..), JVal::Str(s)) => interval_of_text(kind, s)?,
             // An empty string is not a value of a non-string type.
             (_, JVal::Str(s)) if s.is_empty() => {
