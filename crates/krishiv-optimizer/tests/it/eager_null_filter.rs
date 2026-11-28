@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Eager aggregation over a dimension whose only filter is an inferred `isnotnull` on its join
 //! key (study 54, lever F-C1, TPC-DS q22): the dimension still counts as read whole, on the direct
-//! and the rotated path; any other filter still refuses. Rows never change and the plan is a fixed
-//! point.
+//! and the rotated path; so does `isnotnull` of another column whose statistics count no nulls
+//! (perf D2, TPC-DS q04/q11/q74's `customer_id` in the shared years); any other filter still
+//! refuses. Rows never change and the plan is a fixed point.
 
 use krishiv_common::config::Config;
 use krishiv_optimizer::{
@@ -39,9 +40,15 @@ fn catalog() -> MemoryCatalog {
     c
 }
 
-/// A million fact rows over 1,000 items and 100 days; every count known.
+/// A million fact rows over 1,000 items and 100 days; every count known, except that `item.a`
+/// has `a_nulls` nulls (`None`: unknown).
 #[derive(Debug)]
-struct Stats;
+struct Stats {
+    a_nulls: Option<u64>,
+}
+
+/// Every column counts no nulls.
+const NO_NULLS: Stats = Stats { a_nulls: Some(0) };
 
 impl Statistics for Stats {
     fn table(&self, scan: &Scan) -> Option<TableStats> {
@@ -68,9 +75,13 @@ impl Statistics for Stats {
             } else {
                 (None, None)
             };
+            let nulls = match (table, c.name.as_str()) {
+                ("item", "a") => self.a_nulls,
+                _ => Some(0),
+            };
             let stats = ColumnStats {
                 distinct: Some(distinct),
-                nulls: Some(0),
+                nulls,
                 min,
                 max,
                 ..ColumnStats::default()
@@ -131,17 +142,22 @@ impl Run {
 /// Optimizes `sql` with eager aggregation on and off; checks the output attributes, the fixed
 /// point and the rows over small data.
 fn run(sql: &str) -> Run {
+    run_over(sql, &NO_NULLS)
+}
+
+/// [`run`] over `stats`.
+fn run_over(sql: &str, stats: &Stats) -> Run {
     let ctx = support::ctx_over(catalog());
     let plan = support::resolve(sql, &ctx);
     let udfs = UdfLibrary::new();
-    let (on, steps) = optimize_traced_with_udfs(&plan, &Stats, &udfs, &Config::new()).unwrap();
+    let (on, steps) = optimize_traced_with_udfs(&plan, stats, &udfs, &Config::new()).unwrap();
     assert_eq!(
         on.root().resolved_output(),
         plan.root().resolved_output(),
         "{sql}: the output keeps its attributes\n{}",
         on.root()
     );
-    let again = optimize_with_udfs(&on, &Stats, &udfs, &Config::new()).unwrap();
+    let again = optimize_with_udfs(&on, stats, &udfs, &Config::new()).unwrap();
     assert!(
         again.structurally_eq(&on),
         "{sql}: a fixed point\n{}\nagain:\n{}",
@@ -152,7 +168,7 @@ fn run(sql: &str) -> Run {
     off_config
         .set("krishiv.optimizer.eagerAggregation", "false")
         .unwrap();
-    let off = optimize_with_udfs(&plan, &Stats, &udfs, &off_config).unwrap();
+    let off = optimize_with_udfs(&plan, stats, &udfs, &off_config).unwrap();
     for seed in [3, 11, 29, 41] {
         let db = db(seed);
         let want = eval::rows(&db, plan.root());
@@ -196,16 +212,37 @@ fn a_filtered_dimension_beside_a_null_filtered_one_still_moves_the_calls() {
     assert!(r.fired(), "{:?}\n{}", r.notes, r.on.root());
 }
 
-/// A filter that drops rows with a key, or tests a column the join does not compare, keeps the
-/// refusal: its runtime filter can prune the fact.
+const A_NOT_NULL: &str =
+    "SELECT a, sum(v) FROM f JOIN item ON f.k = item.k WHERE item.a IS NOT NULL GROUP BY a";
+
+/// `isnotnull` of a column the join does not compare, where statistics count no nulls in it, drops
+/// no row: the dimension is read whole and the calls move. This is the filter an equality between
+/// two readers of a shared aggregate infers into its body (q11's `a.customer_id = b.customer_id`).
+#[test]
+fn a_null_filter_on_a_column_without_nulls_reads_the_dimension_whole() {
+    let r = run(A_NOT_NULL);
+    assert!(r.fired(), "{:?}\n{}", r.notes, r.on.root());
+}
+
+/// A filter that drops rows with a key, or tests a column the join does not compare (one with
+/// nulls, or whose null count is unknown), keeps the refusal: its runtime filter can prune the fact.
 #[test]
 fn other_filters_on_the_dimension_still_refuse() {
-    for sql in [
-        "SELECT a, sum(v) FROM f JOIN item ON f.k = item.k WHERE item.a = 'x' GROUP BY a",
-        "SELECT a, sum(v) FROM f JOIN item ON f.k = item.k WHERE item.a IS NOT NULL GROUP BY a",
-        "SELECT a, sum(v) FROM f JOIN item ON f.k = item.k WHERE item.k > 3 GROUP BY a",
+    let some = Stats { a_nulls: Some(50) };
+    let unknown = Stats { a_nulls: None };
+    for (sql, stats) in [
+        (
+            "SELECT a, sum(v) FROM f JOIN item ON f.k = item.k WHERE item.a = 'x' GROUP BY a",
+            &NO_NULLS,
+        ),
+        (A_NOT_NULL, &some),
+        (A_NOT_NULL, &unknown),
+        (
+            "SELECT a, sum(v) FROM f JOIN item ON f.k = item.k WHERE item.k > 3 GROUP BY a",
+            &NO_NULLS,
+        ),
     ] {
-        let r = run(sql);
+        let r = run_over(sql, stats);
         assert!(!r.fired(), "{sql}: {:?}\n{}", r.notes, r.on.root());
         assert!(
             r.notes

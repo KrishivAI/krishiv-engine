@@ -387,6 +387,11 @@ impl<'a> Estimator<'a> {
         }
     }
 
+    /// The statistics this estimator reads.
+    pub(crate) fn statistics(&self) -> &'a dyn Statistics {
+        self.stats
+    }
+
     /// An estimator over `stats` that starts from `memo`'s estimates, when
     /// `memo` was made over the same statistics and propagation setting.
     pub(crate) fn resume(stats: &'a dyn Statistics, propagate: bool, memo: Memo) -> Self {

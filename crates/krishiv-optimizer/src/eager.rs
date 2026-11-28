@@ -51,9 +51,13 @@
 //! - at most one key beyond the join's own;
 //! - the other side is a table read whole (only filters that a plain `=` key
 //!   of the join is not NULL, as inferred join filters add them, may sit on
-//!   it). A filtered dimension prunes the aggregated side through a runtime
-//!   filter, which pays more than grouping and which a smaller aggregate could
-//!   take away by becoming the join's build side; estimates cannot see this, as
+//!   it, and `isnotnull(c)` of another scan column `c` whose statistics count
+//!   no nulls: such a filter drops no row. Inferred filters add those from an
+//!   equality above the aggregate, TPC-DS q04/q11/q74's `customer_id`, once
+//!   `ShareLiteralInstances` shares the years). A filtered dimension prunes
+//!   the aggregated side through a runtime filter, which pays more than
+//!   grouping and which a smaller aggregate could take away by becoming the
+//!   join's build side; estimates cannot see this, as
 //!   they read a key's matches from its distinct counts (TPC-DS q12, q43 and
 //!   q63 ran 1.2–1.4x slower);
 //! - every key's distinct count is known (never [`StatSource::Guess`]): Umbra
@@ -347,7 +351,12 @@ impl<'a> Shape<'a> {
             (right, &right_cols)
         };
         let other = if left_side { right } else { left };
-        if !read_whole(other, &equi_keys(on, &attrs_of(other)?)) {
+        if !read_whole(
+            other,
+            &equi_keys(on, &attrs_of(other)?),
+            &mut Vec::new(),
+            est.statistics(),
+        ) {
             return Err("the other side is filtered or joined: its runtime filter is worth more than the aggregate".to_owned());
         }
         let null_supplying = matches!(
@@ -590,17 +599,43 @@ fn states_of(
 /// a filtered dimension does not hold (TPC-DS q11, q74 and q04's `customer`).
 /// A not-NULL filter on any other column (`d.attr IS NOT NULL` on a sparse
 /// column) or on a null-safe (`<=>`) key, where a NULL key does match, prunes
-/// rows the join would keep: that dimension is filtered.
-fn read_whole(p: &LogicalPlan, keys: &Attrs) -> bool {
+/// rows the join would keep: that dimension is filtered, unless the column is
+/// one of the scan's whose statistics count no nulls (`nulls == Some(0)`; an
+/// unknown count does not do), so the filter drops no row. Those columns
+/// collect in `not_null` on the way down and are checked at the scan. Since
+/// `ShareLiteralInstances` merges q04/q11/q74's years into one body, the
+/// `customer_id` equality between the years reaches the body as
+/// `isnotnull(c_customer_id)`, a column without nulls.
+fn read_whole(
+    p: &LogicalPlan,
+    keys: &Attrs,
+    not_null: &mut Vec<AttrId>,
+    stats: &dyn Statistics,
+) -> bool {
     match &p.node {
-        PlanNode::Project { input, .. } => read_whole(input, keys),
+        PlanNode::Project { input, .. } => read_whole(input, keys, not_null, stats),
         PlanNode::Filter { input, predicate } => {
-            conjuncts(predicate)
-                .iter()
-                .all(|c| not_null_of(c).is_some_and(|id| keys.contains(&id)))
-                && read_whole(input, keys)
+            for c in conjuncts(predicate) {
+                match not_null_of(&c) {
+                    Some(id) if keys.contains(&id) => {}
+                    Some(id) => not_null.push(id),
+                    None => return false,
+                }
+            }
+            read_whole(input, keys, not_null, stats)
         }
-        PlanNode::Scan(_) => true,
+        PlanNode::Scan(scan) => {
+            not_null.is_empty() || {
+                let table = stats.table(scan);
+                not_null.iter().all(|id| {
+                    scan.output.iter().find(|c| c.id == *id).is_some_and(|c| {
+                        table.as_ref().is_some_and(|t| {
+                            t.columns.get(&c.name).is_some_and(|s| s.nulls == Some(0))
+                        })
+                    })
+                })
+            }
+        }
         _ => false,
     }
 }
