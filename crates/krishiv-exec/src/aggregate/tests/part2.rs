@@ -535,6 +535,11 @@ async fn row_layout_metrics() {
         .unwrap();
     assert!(extra(&m, "HashAggregate", "row_abandons") > 0);
     assert!(extra(&m, "HashAggregate", "row_final_tasks") > 1);
+    // Several final tasks need wide tables: some widened, copying rows.
+    let widens = extra(&m, "HashAggregate", "row_widens_early")
+        + extra(&m, "HashAggregate", "row_widens_late");
+    assert!(widens > 0);
+    assert!(extra(&m, "HashAggregate", "row_widened_rows") > 0);
     assert_eq!(extra(&m, "HashAggregate", "row_final_spills"), 0);
     assert_eq!(extra(&m, "HashAggregate", "row_final_flushes"), 0);
     assert_eq!(extra(&m, "HashAggregate", "groups"), 90_000);

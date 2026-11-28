@@ -452,12 +452,12 @@ impl Table {
     /// is still being folded, see [`RowTable::wants_widen_early`]), if
     /// `reserve` grants the bytes it needs while it runs (returned to the
     /// caller after); a table that cannot stays narrow. No-op for other
-    /// tables.
+    /// tables. Returns the rows copied when it widened.
     pub(crate) fn widen_if(
         &mut self,
         early: bool,
         reserve: impl FnOnce(usize) -> bool,
-    ) -> Result<()> {
+    ) -> Result<Option<usize>> {
         if let Self::Rows(t) = self
             && (if early {
                 t.wants_widen_early()
@@ -466,9 +466,11 @@ impl Table {
             })
             && reserve(t.widen_bytes())
         {
+            let rows = t.len();
             t.widen()?;
+            return Ok(Some(rows));
         }
-        Ok(())
+        Ok(None)
     }
 
     pub(crate) fn not_worth_spilling(&self) -> bool {

@@ -111,6 +111,13 @@ struct Counters {
     resizes: Arc<AtomicU64>,
     /// Partition tasks of the row tables' final phase.
     row_final_tasks: AtomicU64,
+    /// Thread-local row tables widened while their input was still folded.
+    row_widens_early: AtomicU64,
+    /// Thread-local row tables widened when their input ended (or in the
+    /// final phase, to match another table's width).
+    row_widens_late: AtomicU64,
+    /// Rows the widenings copied.
+    row_widened_rows: AtomicU64,
     /// Final-phase tasks whose presizing from the estimate grew their row
     /// pages or accumulators (counted once per task, even when the task stalls
     /// and runs again).
@@ -479,7 +486,10 @@ impl HashAggregate {
         let _ = reserve_to(&mut l.reservation, l.table.memory_size());
         // Widening is a cost choice: only with memory to spare.
         let r = &mut l.reservation;
-        l.table.widen_if(true, |bytes| r.try_grow(bytes).is_ok())?;
+        if let Some(rows) = l.table.widen_if(true, |bytes| r.try_grow(bytes).is_ok())? {
+            bump(&self.counters.row_widens_early, 1);
+            bump(&self.counters.row_widened_rows, rows as u64);
+        }
         shrink_to(&mut l.reservation, l.table.memory_size() + self.headroom());
         self.publish_spillable(l)?;
         Ok(None)
@@ -1539,7 +1549,10 @@ impl Sink for HashAggregate {
         // now its input has ended, on this driver (in parallel with the
         // others), so the final phase merges partitions in parallel (see
         // `rowtable`'s width docs). Only with memory to spare.
-        table.widen_if(false, |bytes| reservation.try_grow(bytes).is_ok())?;
+        if let Some(rows) = table.widen_if(false, |bytes| reservation.try_grow(bytes).is_ok())? {
+            bump(&self.counters.row_widens_late, 1);
+            bump(&self.counters.row_widened_rows, rows as u64);
+        }
         if let (Some(mut report), Some(total)) = (exchange, &self.exchange) {
             table.record_exchange(&mut report);
             report.end_task();
@@ -1773,6 +1786,18 @@ impl Sink for HashAggregate {
                 (
                     "row_final_tasks",
                     c.row_final_tasks.load(AtomicOrdering::Relaxed),
+                ),
+                (
+                    "row_widens_early",
+                    c.row_widens_early.load(AtomicOrdering::Relaxed),
+                ),
+                (
+                    "row_widens_late",
+                    c.row_widens_late.load(AtomicOrdering::Relaxed),
+                ),
+                (
+                    "row_widened_rows",
+                    c.row_widened_rows.load(AtomicOrdering::Relaxed),
                 ),
                 (
                     "row_final_presized",

@@ -87,8 +87,10 @@
 //! partition, every batch) and the copy (every row of the table, once):
 //! - while the input is folded, when its input keeps making new rows
 //!   (nearly all rows so far, or a quarter of the rows since a settled
-//!   fixed index last adapted): the table grows with its input, and a
-//!   late copy costs several times the fold per row it copies;
+//!   fixed index last adapted, or, at the first decision, a quarter of the
+//!   rows since [`FIRST_ADAPT_ROWS`]` / 2` bringing new distinct keys to the
+//!   input sample): the table grows with its input, and a late copy costs
+//!   several times the fold per row it copies;
 //! - otherwise when its input ends (`combine`, on each driver in
 //!   parallel): most rows find their group, so the fold would be paid on
 //!   every row for a copy of few groups.
@@ -97,6 +99,12 @@
 //! expanded rows into 204K groups; a driver's table ends at 1.8M rows from
 //! 66M input rows) is faster widening at the end; q39, q65, q67 and q75
 //! (a quarter to all input rows new) are faster widening early.
+//! The first decision reads the sample's distinct keys, not the rows the
+//! table made (a cleared index makes rows of keys it has seen): between
+//! 64K and 128K input rows q22's tables found no new key (all ~50K were
+//! seen), ClickBench q13 and q14's found 0.39 to 0.93 per row. Waiting
+//! for [`ADAPT_ROWS`] there widened them at about 600K rows each, so the
+//! copy was most of the table.
 //! A table that cannot reserve the copy stays narrow (the final phase asks
 //! again). One thread never widens (nothing merges in parallel).
 //!
@@ -329,6 +337,10 @@ struct Adapt {
     early: bool,
     /// The index was cleared since the last apply decided its mode.
     filled: bool,
+    /// The sample's distinct keys and `rows` once `rows` passed
+    /// [`FIRST_ADAPT_ROWS`]` / 2`: the first decision's early-widening rate
+    /// counts the new keys from there.
+    half: Option<(f64, usize)>,
     /// The last hash of the previous batch (a run may cross batches).
     last: Option<u64>,
     /// Sampled run starts, to tell keys that come back from new ones.
@@ -512,6 +524,7 @@ impl RowTable {
                 window: (0, 0),
                 early: false,
                 filled: false,
+                half: None,
                 last: None,
                 recur: Recur::new(),
                 fixed: 0,
@@ -1108,10 +1121,18 @@ impl RowTable {
             a.early = false;
         }
         if a.rows >= a.next && a.rows < ADAPT_ROWS {
-            // The first decision, at FIRST_ADAPT_ROWS, only chooses append:
-            // the early-widening rate keeps its ADAPT_ROWS window (an empty
-            // table counts nearly every early row as new; TPC-DS q22 widens
-            // best at the end).
+            // The first decision, at FIRST_ADAPT_ROWS: the rows the table
+            // made overstate new keys here (an empty table counts nearly
+            // every early row as new), so the early-widening rate is the
+            // sample's new distinct keys per row since the half sample
+            // (TPC-DS q22's: none, so it widens at the end, as it should).
+            // `half` serves this first decision only; the ADAPT_ROWS
+            // windows below use `window`.
+            if let Some((d, rows)) = a.half {
+                #[expect(clippy::cast_precision_loss, reason = "row counts in a ratio")]
+                let rate = (Self::distinct(a) - d) / (a.rows - rows).max(1) as f64;
+                a.early = !grew && rate >= EARLY_RATE;
+            }
             a.next = ADAPT_ROWS;
             a.recur.next_interval();
         } else if a.rows >= a.next {
@@ -1190,6 +1211,13 @@ impl RowTable {
         self.start_sketches(n);
         let start_recur = self.starts_recur(n);
         if let Some(a) = self.adapt.as_mut() {
+            // The half sample is taken before the batch that crosses
+            // FIRST_ADAPT_ROWS / 2 is added, so the first decision's window
+            // always holds at least one batch (a single batch that crosses
+            // both marks would otherwise give a rate of 0).
+            if a.half.is_none() && a.rows + n >= FIRST_ADAPT_ROWS / 2 {
+                a.half = Some((Self::distinct(a), a.rows));
+            }
             a.rows += n;
             // The direct path's keys are one per batch-local id, not per
             // row (and its append pushes every row): every row counts.
