@@ -55,14 +55,20 @@ fn types_print_with_their_precision() {
 #[test]
 fn casts_between_nanos_micros_and_dates_resolve() {
     assert_eq!(one(&format!("SELECT CAST({N9} AS DATE)")), "2020-01-01");
-    assert!(
-        !one(&format!(
+    assert_eq!(
+        one(&format!(
             "SELECT CAST(CAST({N9} AS TIMESTAMP_NTZ) AS STRING)"
-        ))
-        .starts_with("ERR")
+        )),
+        "2020-01-01 00:00:00.123456"
     );
-    assert!(!one(&format!("SELECT CAST(CAST({N9} AS TIMESTAMP) AS STRING)")).starts_with("ERR"));
-    assert!(!one("SELECT CAST(DATE'2020-01-01' AS TIMESTAMP_NTZ(8))").starts_with("ERR"));
+    assert_eq!(
+        one(&format!("SELECT CAST(CAST({N9} AS TIMESTAMP) AS STRING)")),
+        "2020-01-01 00:00:00.123456"
+    );
+    assert_eq!(
+        one("SELECT CAST(CAST(DATE'2020-01-01' AS TIMESTAMP_NTZ(8)) AS STRING)"),
+        "2020-01-01 00:00:00"
+    );
 }
 
 #[test]
@@ -93,4 +99,39 @@ fn precisions_outside_the_range_are_refused_and_the_key_gates_the_types() {
     assert!(one("SELECT current_timestamp(10)").contains("INVALID_TIMESTAMP_PRECISION"));
     let off = run(&session(false), "SELECT CAST(1 AS TIMESTAMP_NTZ(9))").unwrap_err();
     assert!(off.contains("FEATURE_NOT_ENABLED"), "{off}");
+}
+
+#[test]
+fn a_bare_timestamp_with_a_nanos_precision_follows_the_session_type_and_zone_words_parse() {
+    let s = session(true);
+    s.conf()
+        .set("spark.sql.timestampType", "TIMESTAMP_NTZ")
+        .unwrap();
+    assert_eq!(
+        run(
+            &s,
+            "SELECT typeof(CAST('2020-01-01 00:00:00.123456789' AS TIMESTAMP(9)))"
+        )
+        .unwrap(),
+        "timestamp_ntz(9)"
+    );
+    s.conf()
+        .set("spark.sql.timestampType", "TIMESTAMP_LTZ")
+        .unwrap();
+    assert_eq!(
+        run(
+            &s,
+            "SELECT typeof(CAST('2020-01-01 00:00:00.123456789' AS TIMESTAMP(9) WITHOUT TIME ZONE))"
+        )
+        .unwrap(),
+        "timestamp_ntz(9)"
+    );
+    assert_eq!(
+        run(
+            &s,
+            "SELECT typeof(CAST('2020-01-01 00:00:00.123456789' AS TIMESTAMP(9) WITH LOCAL TIME ZONE))"
+        )
+        .unwrap(),
+        "timestamp_ltz(9)"
+    );
 }

@@ -47,7 +47,7 @@ Paths are relative to this crate.
   Flight SQL's `GetSqlInfo` function lists
 - `src/scalar/mod.rs` `bind_scalar`; `src/scalar/args.rs` argument handling shared by bindings
 - `src/scalar/{string,chars,codec,datetime,math,arith,hash,map,session,regex}.rs` family bindings (`NAMES` and `bind`); `src/scalar/regex/java.rs` Java-to-`fancy_regex` translation
-- Spark 4.3 (`unix_nanos` and `timestamp_nanos` are catalog rows "since 4.3", hand-added until the generator probes a 4.3 image; the earlier ones are registered "since 4.2"): `scalar/text43.rs` (`to_base32`, `from_base32`, `jaro_winkler_similarity`), the VARIANT
+- Spark 4.3 (`unix_nanos` and `timestamp_nanos` are catalog rows "since 4.3", kept by the generator's `HAND_ADDED` table until it probes a 4.3 image; the earlier ones are registered "since 4.2"): `scalar/text43.rs` (`to_base32`, `from_base32`, `jaro_winkler_similarity`), the VARIANT
   edit functions in `scalar/variant.rs` (`variant_insert`/`variant_set`/`variant_delete`/`variant_array_append`/`variant_strip_nulls` and the
   `try_` forms; `registry/variant.rs` checks the value is castable to variant and the flags are foldable booleans), and `collect_union`,
   an aggregate definition the analyzer rewrites to `array_distinct(array_compact(flatten(collect_list(x))))` (no executor, no codec

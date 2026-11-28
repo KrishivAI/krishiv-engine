@@ -11,7 +11,7 @@
 use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
-use arrow_array::types::{TimestampMicrosecondType, TimestampNanosecondType};
+use arrow_array::types::{Time64NanosecondType, TimestampMicrosecondType, TimestampNanosecondType};
 use arrow_array::{Array, ArrayRef, PrimitiveArray};
 use arrow_schema::{DataType, TimeUnit};
 
@@ -19,6 +19,35 @@ use super::{CastMode, CastOptions, cast, timestamp};
 use crate::KernelError;
 
 const NANOS_PER_MICRO: i64 = 1_000;
+
+/// `input` as microseconds. Under `try_cast` a row whose intermediate conversion overflows (a `DATE`
+/// near `i32::MAX` days) is NULL, not an error of the whole batch.
+fn to_micros(
+    input: &dyn Array,
+    micros_type: &DataType,
+    opts: &CastOptions<'_>,
+) -> Result<ArrayRef, KernelError> {
+    match cast(input, micros_type, opts) {
+        Err(e) if opts.mode == CastMode::Try && is_overflow(&e) => {
+            let mut parts: Vec<ArrayRef> = Vec::with_capacity(input.len());
+            for i in 0..input.len() {
+                let one = input.slice(i, 1);
+                parts.push(match cast(&one, micros_type, opts) {
+                    Ok(v) => v,
+                    Err(e) if is_overflow(&e) => arrow_array::new_null_array(micros_type, 1),
+                    Err(e) => return Err(e),
+                });
+            }
+            let refs: Vec<&dyn Array> = parts.iter().map(AsRef::as_ref).collect();
+            arrow_select::concat::concat(&refs).map_err(|e| KernelError::internal(e.to_string()))
+        }
+        other => other,
+    }
+}
+
+fn is_overflow(e: &KernelError) -> bool {
+    e.error_class() == krishiv_common::error::ErrorClass::DatetimeOverflow
+}
 
 /// The cast when `input` or `to` is a nanosecond timestamp, else `None`.
 pub(super) fn cast_nanos(
@@ -46,6 +75,21 @@ pub(super) fn cast_nanos(
                 }
             }
             DataType::Utf8 => Ok(format(nanos, from_zone.is_some(), opts)),
+            DataType::Time64(TimeUnit::Nanosecond) => {
+                // The microsecond kernel floors; the within-microsecond digits are added back (a time of
+                // day is nanoseconds since midnight, so the sum stays inside the day).
+                let rest = sub_micros(nanos);
+                cast(&micros_of(nanos, from_zone), to, opts).map(|t| {
+                    let t = t.as_primitive::<Time64NanosecondType>();
+                    let out: PrimitiveArray<Time64NanosecondType> = (0..t.len())
+                        .map(|i| {
+                            t.is_valid(i)
+                                .then(|| t.value(i).saturating_add(i64::from(rest[i])))
+                        })
+                        .collect();
+                    Arc::new(out) as ArrayRef
+                })
+            }
             _ => cast(&micros_of(nanos, from_zone), to, opts),
         });
     }
@@ -53,7 +97,7 @@ pub(super) fn cast_nanos(
         return None;
     };
     let micros_type = DataType::Timestamp(TimeUnit::Microsecond, to_zone.clone());
-    Some(cast(input, &micros_type, opts).and_then(|micros| {
+    Some(to_micros(input, &micros_type, opts).and_then(|micros| {
         let micros = micros.as_primitive::<TimestampMicrosecondType>();
         match from {
             DataType::Utf8 => {
@@ -63,6 +107,15 @@ pub(super) fn cast_nanos(
             DataType::LargeUtf8 => {
                 let s = input.as_string::<i64>();
                 combine(micros, |i| string_rest(s.value(i)), to_zone, opts.mode)
+            }
+            DataType::Time64(TimeUnit::Nanosecond) => {
+                let t = input.as_primitive::<Time64NanosecondType>();
+                combine(
+                    micros,
+                    |i| u16::try_from(t.value(i).rem_euclid(NANOS_PER_MICRO)).unwrap_or(0),
+                    to_zone,
+                    opts.mode,
+                )
             }
             _ => combine(micros, |_| 0, to_zone, opts.mode),
         }
@@ -123,10 +176,14 @@ fn combine(
             out.push(None);
             continue;
         }
-        let v = micros
-            .value(i)
-            .checked_mul(NANOS_PER_MICRO)
-            .and_then(|n| n.checked_add(i64::from(rest(i))));
+        // The product alone can pass the carrier while the sum fits (`i64::MIN` is -9223372036854776 µs
+        // and 192 ns), so the sum is built wide and narrowed once.
+        let v = i64::try_from(
+            i128::from(micros.value(i))
+                .saturating_mul(i128::from(NANOS_PER_MICRO))
+                .saturating_add(i128::from(rest(i))),
+        )
+        .ok();
         match (v, mode) {
             (Some(v), _) => out.push(Some(v)),
             (None, CastMode::Try) => out.push(None),
@@ -194,6 +251,33 @@ mod tests {
             .iter()
             .map(|s| s.map(str::to_owned))
             .collect()
+    }
+
+    #[test]
+    fn the_carrier_minimum_and_time_digits_survive_casts() {
+        let utc = FixedOffset(0);
+        let o = opts(CastMode::Ansi, &utc);
+        // -9223372036854776 µs and 192 ns: the product alone overflows, the sum is i64::MIN.
+        let s = StringArray::from(vec![Some("1677-09-21 00:12:43.145224192")]);
+        let v = cast(&s, &NTZ, &o).unwrap();
+        assert_eq!(
+            v.as_primitive::<TimestampNanosecondType>().value(0),
+            i64::MIN
+        );
+        // A clock-only string keeps digits 7 to 9 (the clock itself comes from the caller).
+        assert_eq!(timestamp::parse_nanos(b"10:00:00.123456789").1, 789);
+        // TIME <-> nanosecond timestamp keep them both ways.
+        let ts =
+            TimestampNanosecondArray::from(vec![Some(86_400_000_000_000 + 43_200_123_456_789)]);
+        let back = cast(&ts, &DataType::Time64(TimeUnit::Nanosecond), &o).unwrap();
+        assert_eq!(
+            back.as_primitive::<Time64NanosecondType>().value(0),
+            43_200_123_456_789
+        );
+        // try_cast of a DATE past the range is NULL for that row only.
+        let d = Date32Array::from(vec![Some(i32::MAX), Some(0)]);
+        let v = cast(&d, &NTZ, &opts(CastMode::Try, &utc)).unwrap();
+        assert!(v.is_null(0) && v.is_valid(1));
     }
 
     #[test]

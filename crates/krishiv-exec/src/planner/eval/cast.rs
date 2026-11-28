@@ -426,9 +426,24 @@ pub(super) fn apply(p: &CastParts, a: &ArrayRef) -> Result<ArrayRef> {
         {
             use arrow_array::types::TimestampNanosecondType;
             let unit = p.precision.stamp_unit();
+            // Flooring `i64::MIN` (or near it) leaves the carrier: `DATETIME_OVERFLOW`, NULL under `try_cast`.
+            let src = out.as_primitive::<TimestampNanosecondType>();
+            let mut floored = Vec::with_capacity(src.len());
+            for (i, v) in src.iter().enumerate() {
+                match v.map(|v| v.checked_sub(v.rem_euclid(unit))) {
+                    None => floored.push(None),
+                    Some(Some(f)) => floored.push(Some(f)),
+                    Some(None) if p.mode == KernelMode::Try => floored.push(None),
+                    Some(None) => {
+                        return Err(krishiv_common::error::DatetimeOverflow {
+                            operation: format!("cast to a nanosecond timestamp (row {i})"),
+                        }
+                        .into());
+                    }
+                }
+            }
             Arc::new(
-                out.as_primitive::<TimestampNanosecondType>()
-                    .unary::<_, TimestampNanosecondType>(|v| v - v.rem_euclid(unit))
+                arrow_array::PrimitiveArray::<TimestampNanosecondType>::from(floored)
                     .with_timezone_opt(zone.clone()),
             ) as ArrayRef
         }
