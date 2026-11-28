@@ -603,12 +603,12 @@ impl Driver {
         let source = &run.pipeline.source.1;
         // The first operator whose buffered output is still wanted.
         let mut finish_from = 0;
+        // A source's blocking-pool work (a sort's merge) is its compute.
+        let ctx = Arc::clone(&self.slots.get_mut().slot(0)?.ctx);
         self.take_turn().await?;
         loop {
             self.boundary().await?;
             let start = run.executor.now();
-            // A source's blocking-pool work (a sort's merge) is its compute.
-            let ctx = Arc::clone(&self.slots.get_mut().slot(0)?.ctx);
             let ran = ctx.blocking_time();
             let (next, waited) = pause(
                 &run,

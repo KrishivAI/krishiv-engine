@@ -1669,3 +1669,6 @@ impl ExecNode for SortMergeJoinNode {
             .map(drop)
     }
 }
+
+#[cfg(test)]
+mod tests;
