@@ -229,7 +229,14 @@ impl<V: Value> Acc<V> {
         } else {
             new.max(self.slots.capacity()).saturating_mul(slot)
         };
+        // Raw rows: `state_bytes` is the largest key array, copied into one buffer while it hashes.
+        let transient = if states || self.takes_sketches() {
+            0
+        } else {
+            state_bytes
+        };
         self.size()
+            .saturating_add(transient)
             .saturating_add(new.saturating_mul(self.new_group))
             .saturating_add(vectors)
             .saturating_add(growth.min(cap))

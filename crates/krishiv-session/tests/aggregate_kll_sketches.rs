@@ -189,3 +189,16 @@ fn an_empty_sketch_prints_nan_extremes() -> R {
     }
     Ok(())
 }
+
+/// A foldable `k` of `kll_merge_agg_*` (an expression, not a literal) reaches the executor as its literal.
+#[test]
+fn a_folded_k_of_a_merge_aggregate_runs() -> R {
+    let s = Session::new()?;
+    let got = rows(
+        &s,
+        "SELECT kll_sketch_get_n_bigint(kll_merge_agg_bigint(sk, length('12345678'))) FROM \
+         (SELECT kll_sketch_agg_bigint(id) AS sk FROM range(0, 5))",
+    )?;
+    assert_eq!(got, ["5"]);
+    Ok(())
+}

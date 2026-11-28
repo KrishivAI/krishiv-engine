@@ -598,21 +598,26 @@ impl Resolver<'_> {
             return kids;
         }
         let name = entry.id.name();
-        let (ints, strings): (&[usize], &[usize]) = if name.starts_with("kll_sketch_agg_") {
-            (&[1], &[])
-        } else if name.starts_with("tuple_sketch_agg_") {
-            (&[2], &[3])
-        } else if name.starts_with("tuple_union_agg_") {
-            (&[1], &[2])
-        } else if name.starts_with("tuple_intersection_agg_") {
-            (&[], &[1])
-        } else {
-            return kids;
-        };
+        let (ints, strings): (&[usize], &[usize]) =
+            if name.starts_with("kll_sketch_agg_") || name.starts_with("kll_merge_agg_") {
+                (&[1], &[])
+            } else if name.starts_with("tuple_sketch_agg_") {
+                (&[2], &[3])
+            } else if name.starts_with("tuple_union_agg_") {
+                (&[1], &[2])
+            } else if name.starts_with("tuple_intersection_agg_") {
+                (&[], &[1])
+            } else {
+                return kids;
+            };
         for (at, constant) in constants.iter().enumerate() {
             let literal = match constant {
                 Some(Constant::Integral(n)) if ints.contains(&at) => {
                     i32::try_from(*n).ok().map(Literal::Integer)
+                }
+                // A string size (`concat('1', '2')`) is cast to `INT` as the rule's check did.
+                Some(Constant::String(m)) if ints.contains(&at) => {
+                    m.trim().parse::<i32>().ok().map(Literal::Integer)
                 }
                 Some(Constant::String(m)) if strings.contains(&at) => {
                     Some(Literal::String(m.clone()))

@@ -788,6 +788,8 @@ impl Accumulator {
     pub(crate) fn theta_raw_values(&self, states: bool) -> bool {
         match &self.kind {
             Kind::ThetaSketch(h) => !states && !h.takes_sketches(),
+            // A Tuple key array is copied into one byte buffer the same way.
+            Kind::TupleSketch(h) => !states && !h.takes_sketches(),
             _ => false,
         }
     }

@@ -176,6 +176,16 @@ fn folded_constant_size_and_mode_lower_like_their_literals() -> R {
          FROM range(0, 100)",
     )?;
     assert_eq!(folded, literal);
+    // Each key carries the summary 2 and `max` keeps it: an oracle independent of both paths.
+    assert_eq!(folded, ["2"]);
+    assert_eq!(literal, ["2"]);
+    // A string size is cast to `INT` as the rule's check does.
+    let text = rows(
+        &s,
+        "SELECT tuple_sketch_summary_integer(tuple_sketch_agg_integer(id % 10, 2, concat('1', '2'), 'max'), 'max') \
+         FROM range(0, 100)",
+    )?;
+    assert_eq!(text, ["2"]);
     Ok(())
 }
 
