@@ -1,0 +1,82 @@
+{
+ "name": "Krishiv",
+ "version": 2,
+ "color": {
+  "themes": [{"id": "dark", "name": "Dark"}, {"id": "light", "name": "Light"}],
+  "tokens": [
+   {"name": "bg", "value": {"dark": "#0A0B0C", "light": "#FFFFFF"}, "usage": "Page ground. Dark is the default scheme."},
+   {"name": "bg-subtle", "value": {"dark": "#111315", "light": "#F6F7F8"}, "usage": "Alternating bands, code window ground."},
+   {"name": "surface", "value": {"dark": "#151719", "light": "#FFFFFF"}, "usage": "Cards, table header, menus."},
+   {"name": "surface-2", "value": {"dark": "#202326", "light": "#F6F7F8"}, "usage": "Hover fill, inline code, tags."},
+   {"name": "border", "value": {"dark": "#2A2E33", "light": "#E3E6EA"}, "usage": "Dividers and card edges. Decorative only, never the only cue."},
+   {"name": "border-strong", "value": {"dark": "#4A4232", "light": "#C9CED6"}, "usage": "Card hover, chips, dashed placeholders. Warm in dark to sit with gold."},
+   {"name": "btn-border", "value": {"dark": "#8A7A4E", "light": "#6B7380"}, "usage": "Secondary button and input edges (3:1 UI rule on bg in both themes)."},
+   {"name": "text", "value": {"dark": "#FFFFFF", "light": "#0A0B0C"}, "usage": "Headings and emphasis on bg (19.7:1)."},
+   {"name": "text-2", "value": {"dark": "#B4BAC3", "light": "#2B3038"}, "usage": "Body copy on bg (10.1:1 dark, 13.3:1 light)."},
+   {"name": "muted", "value": {"dark": "#9AA1AB", "light": "#5D646F"}, "usage": "Meta, captions, labels (7.6:1 dark, 6.0:1 light)."},
+   {"name": "silver", "value": {"dark": "#C9CED6", "light": "#6B7380"}, "usage": "The silver: syntax base, flat silver details, light-scheme steel. One of the three brand colours."},
+   {"name": "gold", "value": {"dark": "#D4AF37", "light": "#8A6A12"}, "usage": "The gold accent: primary buttons, eyebrow rule, active tab, link hover, the K mark's blade. 9.5:1 on dark bg, 5.0:1 on white. Use sparingly: one gold element per view region."},
+   {"name": "gold-bright", "value": {"dark": "#E8C766", "light": "#6E5410"}, "usage": "Gold hover and focus ring."},
+   {"name": "primary", "value": {"dark": "{gold}", "light": "{gold}"}, "usage": "Primary button fill."},
+   {"name": "primary-hover", "value": {"dark": "{gold-bright}", "light": "{gold-bright}"}, "usage": "Primary button hover fill."},
+   {"name": "on-primary", "value": {"dark": "#0A0B0C", "light": "#FFFFFF"}, "usage": "Text on primary (9.5:1 dark, 5.0:1 light)."},
+   {"name": "accent", "value": {"dark": "{gold}", "light": "{gold}"}, "usage": "Eyebrow rule, active tab underline, link hover."},
+   {"name": "focus", "value": {"dark": "{gold-bright}", "light": "{gold-bright}"}, "usage": "2px focus ring, offset 3px."},
+   {"name": "ok", "value": {"dark": "#5EE29A", "light": "#157F48"}, "usage": "Available / success text and icons."},
+   {"name": "ok-bg", "value": {"dark": "#11261B", "light": "#EAF8F1"}, "usage": "Success badge ground."},
+   {"name": "warn", "value": {"dark": "#FF9B57", "light": "#B24A00"}, "usage": "In progress, warning callout."},
+   {"name": "warn-bg", "value": {"dark": "#2A1B10", "light": "#FEF3EA"}, "usage": "Warning ground."},
+   {"name": "err", "value": {"dark": "#FF7A75", "light": "#C4272C"}, "usage": "Errors, danger callout."},
+   {"name": "err-bg", "value": {"dark": "#2C1414", "light": "#FDECEC"}, "usage": "Error ground."},
+   {"name": "info", "value": {"dark": "#7CC4FF", "light": "#1D5FD1"}, "usage": "Note callout."},
+   {"name": "info-bg", "value": {"dark": "#0F1D2E", "light": "#EBF2FE"}, "usage": "Note ground."},
+   {"name": "syn-base", "value": {"dark": "#C9CED6", "light": "#2B3038"}, "usage": "Code: identifiers (on bg-subtle)."},
+   {"name": "syn-kw", "value": {"dark": "#E8C766", "light": "#6E5410"}, "usage": "Code: keywords, 600 weight."},
+   {"name": "syn-str", "value": {"dark": "#7CC4FF", "light": "#1D5FD1"}, "usage": "Code: strings."},
+   {"name": "syn-num", "value": {"dark": "#FBBF24", "light": "#9A4D00"}, "usage": "Code: numbers."},
+   {"name": "syn-fn", "value": {"dark": "#E3E6EA", "light": "#0A0B0C"}, "usage": "Code: function names."},
+   {"name": "syn-com", "value": {"dark": "#9AA1AB", "light": "#5D646F"}, "usage": "Code: comments and the > prompt, italic."}
+  ]
+ },
+ "type": {
+  "fonts": [],
+  "families": {
+   "display": "\"Red Hat Display\", ui-sans-serif, system-ui, sans-serif",
+   "text": "\"Red Hat Text\", ui-sans-serif, system-ui, sans-serif",
+   "mono": "\"Red Hat Mono\", ui-monospace, SFMono-Regular, Menlo, monospace"
+  },
+  "groups": [
+   {"name": "Display", "family": "display", "styles": [
+    {"name": "hero", "fontSize": "88px", "lineHeight": 1, "fontWeight": 900, "letterSpacing": "-0.035em"},
+    {"name": "h2", "fontSize": "48px", "lineHeight": 1.08, "fontWeight": 900, "letterSpacing": "-0.03em"},
+    {"name": "h3", "fontSize": "22px", "lineHeight": "28px", "fontWeight": 700, "letterSpacing": "-0.01em"}
+   ]},
+   {"name": "Text", "family": "text", "styles": [
+    {"name": "lead", "fontSize": "18px", "lineHeight": "28px", "fontWeight": 400},
+    {"name": "body", "fontSize": "16px", "lineHeight": "26px", "fontWeight": 400},
+    {"name": "ui", "fontSize": "15px", "lineHeight": "22px", "fontWeight": 500}
+   ]},
+   {"name": "Mono", "family": "mono", "styles": [
+    {"name": "code", "fontSize": "14px", "lineHeight": "22px", "fontWeight": 400},
+    {"name": "eyebrow", "fontSize": "12px", "lineHeight": "16px", "fontWeight": 500, "letterSpacing": "0.12em"}
+   ]}
+  ]
+ },
+ "spacing": {"tokens": [
+  {"name": "space-1", "value": "4px", "usage": "Icon to label."},
+  {"name": "space-2", "value": "8px", "usage": "Tight groups, chip padding."},
+  {"name": "space-3", "value": "12px", "usage": "Button gaps, eyebrow gap, table cell vertical padding."},
+  {"name": "space-4", "value": "16px", "usage": "Minimum side gutter, table cell horizontal padding."},
+  {"name": "space-6", "value": "24px", "usage": "Container side padding, card grid gap."},
+  {"name": "space-8", "value": "32px", "usage": "Card padding (28-36)."},
+  {"name": "space-12", "value": "48px", "usage": "Between blocks inside a section."},
+  {"name": "space-24", "value": "96px", "usage": "Between page sections."}
+ ]},
+ "radius": {"tokens": [
+  {"name": "radius-xs", "value": "4px", "usage": "Inline code."},
+  {"name": "radius-sm", "value": "8px", "usage": "Buttons, inputs, nav items."},
+  {"name": "radius-md", "value": "12px", "usage": "Cards, code windows, callouts, tables."},
+  {"name": "radius-lg", "value": "16px", "usage": "Hub cards, light demo panels."},
+  {"name": "radius-pill", "value": "999px", "usage": "Badges and chips."}
+ ]}
+}

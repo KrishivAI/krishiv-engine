@@ -431,3 +431,81 @@ fn count_of_an_untyped_null_column() {
         );
     }
 }
+
+/// The per-row reference of [`dense::sum_ints`]: the overflow-tracking
+/// wrapping loop over the widened values (`i64` never takes the batch
+/// reduction: `len * 2^63` does not fit).
+fn reference_sum(v: &[i64], nulls: Option<&NullBuffer>, acc: i64) -> (i64, bool, bool) {
+    let mut s = [acc];
+    let mut seen = [false];
+    let o = dense::sum_ints(&vec![0; v.len()], v, nulls, &mut s, &mut seen);
+    (s[0], seen[0], o)
+}
+
+fn narrow_case<T: dense::SumInt>(v: &[T], nulls: Option<&NullBuffer>, acc: i64) {
+    let wide: Vec<i64> = v.iter().map(|&x| x.into()).collect();
+    let want = reference_sum(&wide, nulls, acc);
+    let mut s = [acc];
+    let mut seen = [false];
+    let o = dense::sum_ints(&vec![0; v.len()], v, nulls, &mut s, &mut seen);
+    assert_eq!((s[0], seen[0], o), want, "acc {acc}, len {}", v.len());
+}
+
+/// A running sum the batch reduction's bound allows exactly, one past it,
+/// and one that overflows, on both sides: the same sum and overflow flag as
+/// the per-row loop.
+#[test]
+fn narrow_sum_at_the_guard() {
+    fn edges<T: dense::SumInt>(hi: T, lo: T) {
+        for len in [1_usize, 63, 64, 65, 8192] {
+            #[expect(clippy::cast_possible_wrap, reason = "test lengths")]
+            let b = len as i64 * i64::try_from(T::ABS_MAX).unwrap();
+            for acc in [i64::MAX - b, i64::MAX - b + 1, i64::MAX - 1, i64::MAX] {
+                narrow_case(&vec![hi; len], None, acc);
+                narrow_case(&vec![lo; len], None, -acc);
+                narrow_case(&vec![lo; len], None, i64::MIN);
+            }
+        }
+    }
+    edges(i8::MAX, i8::MIN);
+    edges(i16::MAX, i16::MIN);
+    edges(i32::MAX, i32::MIN);
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig {
+        cases: 256,
+        failure_persistence: None,
+        ..ProptestConfig::default()
+    })]
+
+    /// One group, Int8/16/32 values at their own width against the widened
+    /// per-row loop: sliced validity (an offset not a multiple of 64, a tail
+    /// shorter than a word), garbage under NULL slots, running sums at the
+    /// `i64` edges.
+    #[test]
+    fn narrow_sum_equals_per_row(
+        raw in prop::collection::vec((any::<i32>(), prop::bool::weighted(0.8)), 0..300),
+        skip in 0_usize..70,
+        acc in prop_oneof![
+            Just(0_i64),
+            any::<i64>(),
+            (0_i64..1 << 40).prop_map(|k| i64::MAX - k),
+            (0_i64..1 << 40).prop_map(|k| i64::MIN + k),
+        ],
+        with_nulls in any::<bool>(),
+    ) {
+        let skip = skip.min(raw.len());
+        let all = NullBuffer::from(raw.iter().map(|r| r.1).collect::<Vec<_>>());
+        let n = with_nulls.then(|| all.slice(skip, raw.len() - skip));
+        let rows = &raw[skip..];
+        let v32: Vec<i32> = rows.iter().map(|r| r.0).collect();
+        #[expect(clippy::cast_possible_truncation, reason = "narrowed test values")]
+        let v16: Vec<i16> = rows.iter().map(|r| r.0 as i16).collect();
+        #[expect(clippy::cast_possible_truncation, reason = "narrowed test values")]
+        let v8: Vec<i8> = rows.iter().map(|r| r.0 as i8).collect();
+        narrow_case(&v32, n.as_ref(), acc);
+        narrow_case(&v16, n.as_ref(), acc);
+        narrow_case(&v8, n.as_ref(), acc);
+    }
+}
