@@ -151,7 +151,7 @@ impl Planned {
     }
 
     /// The Arrow type column `index` is stored in.
-    fn stored(&self, index: usize) -> Result<&arrow_schema::DataType> {
+    pub(crate) fn stored(&self, index: usize) -> Result<&arrow_schema::DataType> {
         self.schema
             .fields()
             .get(index)
@@ -1030,7 +1030,7 @@ impl<'a> Planner<'a> {
             );
             match &schema {
                 None => schema = Some(Arc::clone(&planned.schema)),
-                Some(s) if s.fields() != planned.schema.fields() => {
+                Some(s) if !crate::physical::same_columns(s, &planned.schema) => {
                     return Err(internal("union inputs of different physical types"));
                 }
                 Some(_) => {}

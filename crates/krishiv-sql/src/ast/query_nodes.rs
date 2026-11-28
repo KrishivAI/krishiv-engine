@@ -1283,6 +1283,10 @@ pub struct DataTypeSpec {
     pub collation: Option<ObjectName>,
     /// Source text.
     pub span: Span,
+    /// The nanosecond timestamp types are on where this was parsed
+    /// (`spark.sql.timestampNanosTypes.enabled` under the Spark 4.3 grammar): `TIMESTAMP[_NTZ|_LTZ](7..=9)`
+    /// builds them in [`Self::to_data_type`].
+    pub nanos_types: bool,
 }
 
 /// The kinds of [`DataTypeSpec`].

@@ -339,7 +339,8 @@ impl Session {
     ) -> Result<(), KrishivError> {
         unique_columns(schema, env.analysis.conf.case_sensitive)?;
         let format = self.writable_format(format)?;
-        let (parsed, _) = format.options().parse(options, &env.config)?;
+        let user = format.options().without_session_confs(options);
+        let (parsed, _) = format.options().parse(&user, &env.config)?;
         // The framework options the format schema skips (`maxRecordsPerFile`).
         max_records_per_file(options, format.name())?;
         // What the writer would refuse once it exists (a Parquet codec that is not one, a CSV
@@ -382,7 +383,8 @@ impl Session {
         let mode = SaveMode::parse(&mode)?;
         unique_columns(physical.schema(), env.analysis.conf.case_sensitive)?;
         let format = self.writable_format(&format)?;
-        let (parsed, _) = format.options().parse(&options, &env.config)?;
+        let user = format.options().without_session_confs(&options);
+        let (parsed, _) = format.options().parse(&user, &env.config)?;
         let Some(text) = path.as_plain() else {
             return Err(KrishivUnsupportedFeature {
                 feature: "write paths with credentials".to_owned(),
@@ -518,7 +520,10 @@ impl Session {
                 format: format.name().to_owned(),
                 // The session's conf fallbacks travel with the plan: a
                 // worker parses these options against its own config.
-                options: format.options().with_conf_fallbacks(&options, &env.config),
+                options: format.options().with_conf_fallbacks(
+                    &format.options().without_session_confs(&options),
+                    &env.config,
+                ),
                 store: store.key().to_owned(),
                 dir: at.path.as_ref().to_owned(),
                 job_uuid: job,

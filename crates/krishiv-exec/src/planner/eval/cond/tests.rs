@@ -948,6 +948,133 @@ fn when_unifies_string_encodings() {
     );
 }
 
+/// A branch whose struct fields carry other field metadata (a Delta column mapping's ids and
+/// physical names on a scanned struct) is the CASE's type relabelled, not an engine error.
+#[test]
+fn case_branch_with_other_field_metadata_is_relabelled() {
+    use arrow_array::StructArray;
+    let env = env(true);
+    let tagged = Field::new("x", ArrowType::Int32, true).with_metadata(
+        [("delta.columnMapping.id".to_owned(), "5".to_owned())]
+            .into_iter()
+            .collect::<std::collections::HashMap<_, _>>(),
+    );
+    let from = ArrowType::Struct(vec![tagged.clone()].into());
+    let out = ArrowType::Struct(vec![Field::new("x", ArrowType::Int32, true)].into());
+    let values = StructArray::from(vec![(
+        Arc::new(tagged),
+        Arc::new(Int32Array::from(vec![Some(1), Some(2)])) as ArrayRef,
+    )]);
+    let schema = Arc::new(Schema::new(vec![Field::new("s", from.clone(), true)]));
+    let batch = RecordBatch::try_new(schema, vec![Arc::new(values)]).unwrap();
+    let e = when(
+        vec![lit(&Literal::Boolean(true)), column(0, from, true)],
+        out.clone(),
+        &env,
+        false,
+    )
+    .unwrap();
+    let got = e.eval(&batch, 0).unwrap().into_array(2).unwrap();
+    assert_eq!(got.data_type(), &out);
+    assert_eq!(
+        got.as_struct()
+            .column(0)
+            .as_primitive::<Int32Type>()
+            .values(),
+        &[1, 2]
+    );
+    // A literal (scalar) branch and a list of tagged structs are relabelled the same way.
+    let list_of = |f: Field| {
+        ArrowType::List(Arc::new(Field::new(
+            "item",
+            ArrowType::Struct(vec![f].into()),
+            true,
+        )))
+    };
+    let tagged_list = list_of(tagged_field());
+    let plain_list = list_of(Field::new("x", ArrowType::Int32, true));
+    let items = StructArray::from(vec![(
+        Arc::new(tagged_field()),
+        Arc::new(Int32Array::from(vec![Some(7), None, Some(9)])) as ArrayRef,
+    )]);
+    let list = arrow_array::ListArray::new(
+        Arc::new(Field::new("item", items.data_type().clone(), true)),
+        arrow_buffer::OffsetBuffer::from_lengths([2, 1]),
+        Arc::new(items),
+        None,
+    );
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "l",
+        tagged_list.clone(),
+        true,
+    )]));
+    let batch = RecordBatch::try_new(schema, vec![Arc::new(list)]).unwrap();
+    let e = when(
+        vec![
+            lit(&Literal::Boolean(false)),
+            column(0, tagged_list.clone(), true),
+            column(0, tagged_list, true),
+        ],
+        plain_list.clone(),
+        &env,
+        false,
+    )
+    .unwrap();
+    let got = e.eval(&batch, 0).unwrap().into_array(2).unwrap();
+    assert_eq!(got.data_type(), &plain_list);
+    assert_eq!(got.as_list::<i32>().value_offsets(), &[0, 2, 3]);
+    struct Constant(ArrayRef);
+    impl std::fmt::Debug for Constant {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("Constant")
+        }
+    }
+    impl PhysExpr for Constant {
+        fn data_type(&self) -> &ArrowType {
+            self.0.data_type()
+        }
+        fn nullable(&self) -> bool {
+            true
+        }
+        fn eval(&self, _: &RecordBatch, _: u32) -> Result<Value> {
+            Ok(Value::Scalar(Arc::clone(&self.0)))
+        }
+        fn is_constant(&self) -> bool {
+            true
+        }
+    }
+    let one = StructArray::from(vec![(
+        Arc::new(tagged_field()),
+        Arc::new(Int32Array::from(vec![Some(5)])) as ArrayRef,
+    )]);
+    let scalar: Arc<dyn PhysExpr> = Arc::new(Constant(Arc::new(one)));
+    let e = when(
+        vec![lit(&Literal::Boolean(true)), scalar],
+        out.clone(),
+        &env,
+        false,
+    )
+    .unwrap();
+    let got = e.eval(&rows_batch(3), 0).unwrap().into_array(3).unwrap();
+    assert_eq!(got.data_type(), &out);
+    assert_eq!(
+        got.as_struct()
+            .column(0)
+            .as_primitive::<Int32Type>()
+            .values(),
+        &[5, 5, 5]
+    );
+}
+
+/// A struct field carrying a Delta column-mapping id.
+fn tagged_field() -> Field {
+    Field::new("x", ArrowType::Int32, true).with_metadata(
+        [("delta.columnMapping.id".to_owned(), "5".to_owned())]
+            .into_iter()
+            .collect::<std::collections::HashMap<_, _>>(),
+    )
+}
+
 /// `nullif` of `Utf8` and `Utf8View` operands compares in the view and
 /// returns the `STRING` carrier with the value's contents.
 #[test]

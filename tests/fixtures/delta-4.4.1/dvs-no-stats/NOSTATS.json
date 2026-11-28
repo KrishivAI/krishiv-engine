@@ -1,0 +1,724 @@
+{
+ "delta_spark": "4.4.1",
+ "format_version": 1,
+ "generator": "tests/scripts/gen_delta_fixtures.py dvs-no-stats",
+ "scenarios": {
+  "no-stats": {
+   "fields": [
+    "id",
+    "v",
+    "n"
+   ],
+   "rows": [
+    [
+     1,
+     "a",
+     1
+    ],
+    [
+     2,
+     "b",
+     null
+    ],
+    [
+     3,
+     "c",
+     3
+    ],
+    [
+     4,
+     "d",
+     4
+    ],
+    [
+     5,
+     null,
+     50
+    ],
+    [
+     6,
+     "f",
+     null
+    ]
+   ],
+   "setup": [
+    "CREATE TABLE <t> (id BIGINT, v STRING, n INT) USING delta TBLPROPERTIES ('delta.enableDeletionVectors' = 'true')",
+    "SET spark.databricks.delta.stats.collect = false",
+    "INSERT INTO <t> VALUES (1, 'a', 1), (2, 'b', NULL), (3, 'c', 3)",
+    "INSERT INTO <t> VALUES (4, 'd', 4), (5, NULL, 50), (6, 'f', NULL)",
+    "SET spark.databricks.delta.stats.collect = true"
+   ],
+   "steps": [
+    {
+     "commits": [
+      {
+       "add_dvs": [
+        {
+         "dataChange": true,
+         "deletionVector": {
+          "cardinality": 1,
+          "offset": 1,
+          "pathOrInlineDv": "f4&74m#6UBHnIJ]+UXRH",
+          "sizeInBytes": 34,
+          "storageType": "u"
+         },
+         "path": "part-00000-333f72d4-839c-4156-822d-51bf34c5e298-c000.snappy.parquet"
+        }
+       ],
+       "adds": [
+        {
+         "partitionValues": {},
+         "path": "part-00000-333f72d4-839c-4156-822d-51bf34c5e298-c000.snappy.parquet",
+         "stats": {
+          "maxValues": {
+           "id": 3,
+           "n": 3,
+           "v": "c"
+          },
+          "minValues": {
+           "id": 1,
+           "n": 1,
+           "v": "a"
+          },
+          "nullCount": {
+           "id": 0,
+           "n": 1,
+           "v": 0
+          },
+          "numRecords": 3,
+          "tightBounds": false
+         }
+        }
+       ],
+       "cdc": 0,
+       "commitInfo": {
+        "isBlindAppend": false,
+        "isolationLevel": "Serializable",
+        "operation": "DELETE",
+        "operationMetrics": {
+         "executionTimeMs": "8713",
+         "numAddedBytes": "0",
+         "numAddedChangeFiles": "0",
+         "numAddedFiles": "0",
+         "numCopiedRows": "0",
+         "numDeletedRows": "1",
+         "numDeletionVectorsAdded": "1",
+         "numDeletionVectorsRemoved": "0",
+         "numDeletionVectorsUpdated": "0",
+         "numRemovedBytes": "0",
+         "numRemovedFiles": "0",
+         "rewriteTimeMs": "0",
+         "scanTimeMs": "0"
+        },
+        "operationParameters": {
+         "predicate": "[\"(id#1462L = 2)\"]"
+        },
+        "readVersion": 2
+       },
+       "remove_dvs": [
+        {
+         "dataChange": true,
+         "deletionVector": null,
+         "path": "part-00000-333f72d4-839c-4156-822d-51bf34c5e298-c000.snappy.parquet"
+        }
+       ],
+       "removes": [
+        {
+         "partitionValues": {},
+         "path": "part-00000-333f72d4-839c-4156-822d-51bf34c5e298-c000.snappy.parquet"
+        }
+       ],
+       "version": 3
+      }
+     ],
+     "confs": {},
+     "error": null,
+     "history": {
+      "operation": "DELETE",
+      "operationMetrics": {
+       "executionTimeMs": "8713",
+       "numAddedBytes": "0",
+       "numAddedChangeFiles": "0",
+       "numAddedFiles": "0",
+       "numCopiedRows": "0",
+       "numDeletedRows": "1",
+       "numDeletionVectorsAdded": "1",
+       "numDeletionVectorsRemoved": "0",
+       "numDeletionVectorsUpdated": "0",
+       "numRemovedBytes": "0",
+       "numRemovedFiles": "0",
+       "rewriteTimeMs": "0",
+       "scanTimeMs": "0"
+      },
+      "operationParameters": {
+       "predicate": "[\"(id#1462L = 2)\"]"
+      },
+      "version": 3
+     },
+     "output": [
+      [
+       1
+      ]
+     ],
+     "output_fields": [
+      "num_affected_rows"
+     ],
+     "rows": [
+      [
+       1,
+       "a",
+       1
+      ],
+      [
+       3,
+       "c",
+       3
+      ],
+      [
+       4,
+       "d",
+       4
+      ],
+      [
+       5,
+       null,
+       50
+      ],
+      [
+       6,
+       "f",
+       null
+      ]
+     ],
+     "sql": "DELETE FROM <t> WHERE id = 2",
+     "step": "delete_rows"
+    },
+    {
+     "commits": [
+      {
+       "add_dvs": [
+        {
+         "dataChange": true,
+         "deletionVector": {
+          "cardinality": 3,
+          "offset": 1,
+          "pathOrInlineDv": "d7IhhXoQ+UK[T?MVv(em",
+          "sizeInBytes": 38,
+          "storageType": "u"
+         },
+         "path": "part-00000-333f72d4-839c-4156-822d-51bf34c5e298-c000.snappy.parquet"
+        }
+       ],
+       "adds": [
+        {
+         "partitionValues": {},
+         "path": "part-00000-333f72d4-839c-4156-822d-51bf34c5e298-c000.snappy.parquet",
+         "stats": {
+          "maxValues": {
+           "id": 3,
+           "n": 3,
+           "v": "c"
+          },
+          "minValues": {
+           "id": 1,
+           "n": 1,
+           "v": "a"
+          },
+          "nullCount": {
+           "id": 0,
+           "n": 1,
+           "v": 0
+          },
+          "numRecords": 3,
+          "tightBounds": false
+         }
+        }
+       ],
+       "cdc": 0,
+       "commitInfo": {
+        "isBlindAppend": false,
+        "isolationLevel": "Serializable",
+        "operation": "DELETE",
+        "operationMetrics": {
+         "executionTimeMs": "8828",
+         "numAddedBytes": "0",
+         "numAddedChangeFiles": "0",
+         "numAddedFiles": "0",
+         "numCopiedRows": "0",
+         "numDeletedRows": "3",
+         "numDeletionVectorsAdded": "1",
+         "numDeletionVectorsRemoved": "0",
+         "numDeletionVectorsUpdated": "0",
+         "numRemovedBytes": "0",
+         "numRemovedFiles": "0",
+         "rewriteTimeMs": "0",
+         "scanTimeMs": "0"
+        },
+        "operationParameters": {
+         "predicate": "[\"(id#4765L <= 3)\"]"
+        },
+        "readVersion": 2
+       },
+       "remove_dvs": [
+        {
+         "dataChange": true,
+         "deletionVector": null,
+         "path": "part-00000-333f72d4-839c-4156-822d-51bf34c5e298-c000.snappy.parquet"
+        }
+       ],
+       "removes": [
+        {
+         "partitionValues": {},
+         "path": "part-00000-333f72d4-839c-4156-822d-51bf34c5e298-c000.snappy.parquet"
+        }
+       ],
+       "version": 3
+      }
+     ],
+     "confs": {},
+     "error": null,
+     "history": {
+      "operation": "DELETE",
+      "operationMetrics": {
+       "executionTimeMs": "8828",
+       "numAddedBytes": "0",
+       "numAddedChangeFiles": "0",
+       "numAddedFiles": "0",
+       "numCopiedRows": "0",
+       "numDeletedRows": "3",
+       "numDeletionVectorsAdded": "1",
+       "numDeletionVectorsRemoved": "0",
+       "numDeletionVectorsUpdated": "0",
+       "numRemovedBytes": "0",
+       "numRemovedFiles": "0",
+       "rewriteTimeMs": "0",
+       "scanTimeMs": "0"
+      },
+      "operationParameters": {
+       "predicate": "[\"(id#4765L <= 3)\"]"
+      },
+      "version": 3
+     },
+     "output": [
+      [
+       3
+      ]
+     ],
+     "output_fields": [
+      "num_affected_rows"
+     ],
+     "rows": [
+      [
+       4,
+       "d",
+       4
+      ],
+      [
+       5,
+       null,
+       50
+      ],
+      [
+       6,
+       "f",
+       null
+      ]
+     ],
+     "sql": "DELETE FROM <t> WHERE id <= 3",
+     "step": "delete_every_row_of_a_file"
+    },
+    {
+     "commits": [
+      {
+       "add_dvs": [
+        {
+         "dataChange": true,
+         "deletionVector": {
+          "cardinality": 1,
+          "offset": 1,
+          "pathOrInlineDv": "caj$Mf?UptXSdTNfO#6*",
+          "sizeInBytes": 34,
+          "storageType": "u"
+         },
+         "path": "part-00000-ba4067c2-a254-42a4-af82-e154929f1eaf-c000.snappy.parquet"
+        },
+        {
+         "dataChange": true,
+         "deletionVector": null,
+         "path": "part-00000-59bb04cb-adf9-4c74-b7ec-16c2a641498e-c000.snappy.parquet"
+        }
+       ],
+       "adds": [
+        {
+         "partitionValues": {},
+         "path": "part-00000-ba4067c2-a254-42a4-af82-e154929f1eaf-c000.snappy.parquet",
+         "stats": {
+          "maxValues": {
+           "id": 6,
+           "n": 50,
+           "v": "f"
+          },
+          "minValues": {
+           "id": 4,
+           "n": 4,
+           "v": "d"
+          },
+          "nullCount": {
+           "id": 0,
+           "n": 1,
+           "v": 1
+          },
+          "numRecords": 3,
+          "tightBounds": false
+         }
+        },
+        {
+         "partitionValues": {},
+         "path": "part-00000-59bb04cb-adf9-4c74-b7ec-16c2a641498e-c000.snappy.parquet",
+         "stats": {
+          "maxValues": {
+           "id": 5,
+           "n": 50,
+           "v": "u"
+          },
+          "minValues": {
+           "id": 5,
+           "n": 50,
+           "v": "u"
+          },
+          "nullCount": {
+           "id": 0,
+           "n": 0,
+           "v": 0
+          },
+          "numRecords": 1,
+          "tightBounds": true
+         }
+        }
+       ],
+       "cdc": 0,
+       "commitInfo": {
+        "isBlindAppend": false,
+        "isolationLevel": "Serializable",
+        "operation": "UPDATE",
+        "operationMetrics": {
+         "executionTimeMs": "7299",
+         "numAddedBytes": "907",
+         "numAddedChangeFiles": "0",
+         "numAddedFiles": "1",
+         "numCopiedRows": "0",
+         "numDeletionVectorsAdded": "1",
+         "numDeletionVectorsRemoved": "0",
+         "numDeletionVectorsUpdated": "0",
+         "numRemovedBytes": "0",
+         "numRemovedFiles": "1",
+         "numUpdatedRows": "1",
+         "rewriteTimeMs": "262",
+         "scanTimeMs": "6339"
+        },
+        "operationParameters": {
+         "predicate": "[\"(id#8040L = 5)\"]"
+        },
+        "readVersion": 2
+       },
+       "remove_dvs": [
+        {
+         "dataChange": true,
+         "deletionVector": null,
+         "path": "part-00000-ba4067c2-a254-42a4-af82-e154929f1eaf-c000.snappy.parquet"
+        }
+       ],
+       "removes": [
+        {
+         "partitionValues": {},
+         "path": "part-00000-ba4067c2-a254-42a4-af82-e154929f1eaf-c000.snappy.parquet"
+        }
+       ],
+       "version": 3
+      }
+     ],
+     "confs": {},
+     "error": null,
+     "history": {
+      "operation": "UPDATE",
+      "operationMetrics": {
+       "executionTimeMs": "7299",
+       "numAddedBytes": "907",
+       "numAddedChangeFiles": "0",
+       "numAddedFiles": "1",
+       "numCopiedRows": "0",
+       "numDeletionVectorsAdded": "1",
+       "numDeletionVectorsRemoved": "0",
+       "numDeletionVectorsUpdated": "0",
+       "numRemovedBytes": "0",
+       "numRemovedFiles": "1",
+       "numUpdatedRows": "1",
+       "rewriteTimeMs": "262",
+       "scanTimeMs": "6339"
+      },
+      "operationParameters": {
+       "predicate": "[\"(id#8040L = 5)\"]"
+      },
+      "version": 3
+     },
+     "output": [
+      [
+       1
+      ]
+     ],
+     "output_fields": [
+      "num_affected_rows"
+     ],
+     "rows": [
+      [
+       1,
+       "a",
+       1
+      ],
+      [
+       2,
+       "b",
+       null
+      ],
+      [
+       3,
+       "c",
+       3
+      ],
+      [
+       4,
+       "d",
+       4
+      ],
+      [
+       5,
+       "u",
+       50
+      ],
+      [
+       6,
+       "f",
+       null
+      ]
+     ],
+     "sql": "UPDATE <t> SET v = 'u' WHERE id = 5",
+     "step": "update_rows"
+    },
+    {
+     "commits": [
+      {
+       "add_dvs": [
+        {
+         "dataChange": true,
+         "deletionVector": {
+          "cardinality": 1,
+          "offset": 1,
+          "pathOrInlineDv": "j26%z<pj)WMe375jTwJ@",
+          "sizeInBytes": 34,
+          "storageType": "u"
+         },
+         "path": "part-00000-333f72d4-839c-4156-822d-51bf34c5e298-c000.snappy.parquet"
+        },
+        {
+         "dataChange": true,
+         "deletionVector": {
+          "cardinality": 1,
+          "offset": 43,
+          "pathOrInlineDv": "j26%z<pj)WMe375jTwJ@",
+          "sizeInBytes": 34,
+          "storageType": "u"
+         },
+         "path": "part-00000-ba4067c2-a254-42a4-af82-e154929f1eaf-c000.snappy.parquet"
+        }
+       ],
+       "adds": [
+        {
+         "partitionValues": {},
+         "path": "part-00000-333f72d4-839c-4156-822d-51bf34c5e298-c000.snappy.parquet",
+         "stats": {
+          "maxValues": {
+           "id": 3,
+           "n": 3,
+           "v": "c"
+          },
+          "minValues": {
+           "id": 1,
+           "n": 1,
+           "v": "a"
+          },
+          "nullCount": {
+           "id": 0,
+           "n": 1,
+           "v": 0
+          },
+          "numRecords": 3,
+          "tightBounds": false
+         }
+        },
+        {
+         "partitionValues": {},
+         "path": "part-00000-ba4067c2-a254-42a4-af82-e154929f1eaf-c000.snappy.parquet",
+         "stats": {
+          "maxValues": {
+           "id": 6,
+           "n": 50,
+           "v": "f"
+          },
+          "minValues": {
+           "id": 4,
+           "n": 4,
+           "v": "d"
+          },
+          "nullCount": {
+           "id": 0,
+           "n": 1,
+           "v": 1
+          },
+          "numRecords": 3,
+          "tightBounds": false
+         }
+        }
+       ],
+       "cdc": 0,
+       "commitInfo": {
+        "isBlindAppend": false,
+        "isolationLevel": "Serializable",
+        "operation": "MERGE",
+        "operationMetrics": {
+         "executionTimeMs": "8203",
+         "materializeSourceTimeMs": "36",
+         "numOutputRows": "0",
+         "numSourceRows": "4",
+         "numTargetBytesAdded": "0",
+         "numTargetBytesRemoved": "0",
+         "numTargetChangeFilesAdded": "0",
+         "numTargetDeletionVectorsAdded": "2",
+         "numTargetDeletionVectorsRemoved": "0",
+         "numTargetDeletionVectorsUpdated": "0",
+         "numTargetFilesAdded": "0",
+         "numTargetFilesRemoved": "0",
+         "numTargetRowsCopied": "0",
+         "numTargetRowsDeleted": "2",
+         "numTargetRowsInserted": "0",
+         "numTargetRowsMatchedDeleted": "2",
+         "numTargetRowsMatchedUpdated": "0",
+         "numTargetRowsNotMatchedBySourceDeleted": "0",
+         "numTargetRowsNotMatchedBySourceUpdated": "0",
+         "numTargetRowsUpdated": "0",
+         "rewriteTimeMs": "1493",
+         "scanTimeMs": "6667"
+        },
+        "operationParameters": {
+         "matchedPredicates": "[{\"actionType\":\"delete\"}]",
+         "notMatchedBySourcePredicates": "[]",
+         "notMatchedPredicates": "[]",
+         "predicate": "[\"(id#11505L = id#11504L)\"]"
+        },
+        "readVersion": 2
+       },
+       "remove_dvs": [
+        {
+         "dataChange": true,
+         "deletionVector": null,
+         "path": "part-00000-333f72d4-839c-4156-822d-51bf34c5e298-c000.snappy.parquet"
+        },
+        {
+         "dataChange": true,
+         "deletionVector": null,
+         "path": "part-00000-ba4067c2-a254-42a4-af82-e154929f1eaf-c000.snappy.parquet"
+        }
+       ],
+       "removes": [
+        {
+         "partitionValues": {},
+         "path": "part-00000-333f72d4-839c-4156-822d-51bf34c5e298-c000.snappy.parquet"
+        },
+        {
+         "partitionValues": {},
+         "path": "part-00000-ba4067c2-a254-42a4-af82-e154929f1eaf-c000.snappy.parquet"
+        }
+       ],
+       "version": 3
+      }
+     ],
+     "confs": {},
+     "error": null,
+     "history": {
+      "operation": "MERGE",
+      "operationMetrics": {
+       "executionTimeMs": "8203",
+       "materializeSourceTimeMs": "36",
+       "numOutputRows": "0",
+       "numSourceRows": "4",
+       "numTargetBytesAdded": "0",
+       "numTargetBytesRemoved": "0",
+       "numTargetChangeFilesAdded": "0",
+       "numTargetDeletionVectorsAdded": "2",
+       "numTargetDeletionVectorsRemoved": "0",
+       "numTargetDeletionVectorsUpdated": "0",
+       "numTargetFilesAdded": "0",
+       "numTargetFilesRemoved": "0",
+       "numTargetRowsCopied": "0",
+       "numTargetRowsDeleted": "2",
+       "numTargetRowsInserted": "0",
+       "numTargetRowsMatchedDeleted": "2",
+       "numTargetRowsMatchedUpdated": "0",
+       "numTargetRowsNotMatchedBySourceDeleted": "0",
+       "numTargetRowsNotMatchedBySourceUpdated": "0",
+       "numTargetRowsUpdated": "0",
+       "rewriteTimeMs": "1493",
+       "scanTimeMs": "6667"
+      },
+      "operationParameters": {
+       "matchedPredicates": "[{\"actionType\":\"delete\"}]",
+       "notMatchedBySourcePredicates": "[]",
+       "notMatchedPredicates": "[]",
+       "predicate": "[\"(id#11505L = id#11504L)\"]"
+      },
+      "version": 3
+     },
+     "output": [
+      [
+       2,
+       0,
+       2,
+       0
+      ]
+     ],
+     "output_fields": [
+      "num_affected_rows",
+      "num_updated_rows",
+      "num_deleted_rows",
+      "num_inserted_rows"
+     ],
+     "rows": [
+      [
+       1,
+       "a",
+       1
+      ],
+      [
+       3,
+       "c",
+       3
+      ],
+      [
+       5,
+       null,
+       50
+      ],
+      [
+       6,
+       "f",
+       null
+      ]
+     ],
+     "sql": "MERGE INTO <t> t USING (SELECT CAST(id AS BIGINT) AS id, v, n FROM VALUES (2, 'B', 20), (4, 'D', 40), (7, 'G', 70), (NULL, 'N', 0) AS s(id, v, n)) s ON t.id = s.id WHEN MATCHED THEN DELETE",
+     "step": "merge_delete"
+    }
+   ],
+   "versions": 3
+  }
+ },
+ "spark": "4.2.0"
+}

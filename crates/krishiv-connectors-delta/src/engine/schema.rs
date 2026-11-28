@@ -350,7 +350,8 @@ pub fn to_kernel_type(data_type: &ArrowType) -> KernelResult<DataType> {
         | ArrowType::LargeBinary
         | ArrowType::BinaryView
         | ArrowType::FixedSizeBinary(_) => DataType::BINARY,
-        ArrowType::Decimal128(p, s) => {
+        // The engine carries a decimal of precision up to 18 as `Decimal64`.
+        ArrowType::Decimal128(p, s) | ArrowType::Decimal64(p, s) | ArrowType::Decimal32(p, s) => {
             let scale = u8::try_from(*s).map_err(|_| {
                 KernelError::invalid_decimal("negative scales are not supported in Delta")
             })?;

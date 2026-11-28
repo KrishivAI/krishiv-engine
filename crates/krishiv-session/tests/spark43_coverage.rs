@@ -25,10 +25,9 @@ const PENDING: &[(&str, &str)] = &[
     // The cast runs since the TIME <-> TIMESTAMP casts; the nanosecond `TIMESTAMP_NTZ` literal is still
     // microseconds (part B of the 4.3 TIME scope), so the digits past the microsecond are missing.
     ("fn_timestamp_ntz_to_time_9", "rows"),
-    (
-        "fn_time_to_timestamp_ntz_nanos",
-        "KRISHIV_UNSUPPORTED_FEATURE",
-    ),
+    // Spark 4.3 refuses a TIME cast to `timestamp_ntz(9)` (`UNSUPPORTED_OPERATION`); the engine now has the
+    // nanosecond type and takes today's date as it does for `timestamp_ntz`, so it raises nothing.
+    ("fn_time_to_timestamp_ntz_nanos", "no error"),
     (
         "fn_current_timestamp_precision_9",
         "KRISHIV_UNSUPPORTED_FEATURE",
