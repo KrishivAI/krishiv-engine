@@ -171,7 +171,6 @@ UNSUPPORTED = [
     ("sumDistinct", ("n",)),
     ("udtf", ()),
     ("unwrap_udt", ("n",)),
-    ("window", ("n", "10 minutes")),
     ("current_time", ()),
     ("st_srid", ("n",)),
 ]

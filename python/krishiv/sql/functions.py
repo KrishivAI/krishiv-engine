@@ -602,13 +602,25 @@ def unwrap_udt(col: ColumnOrName) -> Column:
 def window(
     timeColumn: ColumnOrName, windowDuration: str, slideDuration: str | None = None, startTime: str | None = None
 ) -> Column:
-    """Not available: time windows through the Column API are not implemented."""
-    raise not_implemented("F.window (time windows through the Column API are not implemented)")
+    """Buckets rows into tumbling or sliding time windows: a struct of ``start`` and ``end``.
+
+    As Spark: durations are strings such as ``"10 minutes"``; a ``startTime`` without a
+    ``slideDuration`` makes the windows tumble (``slideDuration`` is ``windowDuration``).
+    """
+    for name, value in (("windowDuration", windowDuration), ("slideDuration", slideDuration), ("startTime", startTime)):
+        if value is not None and not isinstance(value, str):
+            raise not_expected_type(name, "str", value)
+    args = [_named(timeColumn, "timeColumn"), _literal(windowDuration)]
+    if slideDuration is not None or startTime is not None:
+        args.append(_literal(windowDuration if slideDuration is None else slideDuration))
+    if startTime is not None:
+        args.append(_literal(startTime))
+    return _call("window", *args)
 
 
 def window_time(windowColumn: ColumnOrName) -> Column:
-    """Not available: time windows through the Column API are not implemented."""
-    raise not_implemented("F.window_time (time windows through the Column API are not implemented)")
+    """The event time of a window: its ``end`` minus one microsecond."""
+    return _call("window_time", _named(windowColumn, "windowColumn"))
 
 
 def current_time(precision: int | None = None) -> Column:
