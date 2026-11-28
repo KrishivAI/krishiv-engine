@@ -311,6 +311,82 @@ def test_one_query_ok_and_failures(monkeypatch: pytest.MonkeyPatch):
         assert ledger._one_query(q, None, None, Duck(), 2, "1g", 5, None, measure)["reason"].startswith("duckdb")
 
 
+def test_duckdb_is_measured_on_its_own_text_and_differing_row_counts_fail(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+):
+    q = Query("q29", "spark text", "clickbench")
+    duck_q = Query("q29", "duckdb text", "clickbench")
+    seen: list[str] = []
+
+    def fake_duck(duck, query, t):
+        seen.append(query.sql)
+        return {"seconds": 1.0, "runs": [1.0], "rows": 25, "buckets": {"aggregate": 1.0}}
+
+    def krishiv(rows):
+        return lambda *a: {"seconds": 2.0, "runs": [2.0] * 3, "rows": rows, "buckets": {"aggregate": 2.0}}
+
+    monkeypatch.setattr(ledger, "measure_duckdb", fake_duck)
+    e = ledger._one_query(q, None, None, object(), 2, "1g", 5, None, krishiv(25), duck_q)
+    assert (e["status"], e["rows"], e["duckdb_text"]) == ("ok", 25, "own")
+    assert seen == ["duckdb text"]
+    # Without a DuckDB text of its own the query runs as written.
+    e = ledger._one_query(q, None, None, object(), 2, "1g", 5, None, krishiv(25))
+    assert (seen[-1], e["duckdb_text"]) == ("spark text", "shared")
+    # 11 rows against 25 is another query, not a faster one: no ratio is recorded.
+    e = ledger._one_query(q, None, None, object(), 2, "1g", 5, None, krishiv(11), duck_q)
+    assert e == {"status": "failed", "reason": "row counts differ: krishiv 11, duckdb 25"}
+    assert "row counts differ" in capsys.readouterr().out
+    assert "krishiv_s" not in e
+
+
+def test_run_ledger_pairs_each_query_with_duckdbs_text(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    root = tmp_path / "tpch-duckdb" / "sf1"
+    root.mkdir(parents=True)
+    (root / "lineitem.parquet").write_bytes(b"")
+    texts = {
+        "krishiv": [Query("q01", "k1", "tpch"), Query("q02", "k2", "tpch")],
+        "duckdb": [Query("q02", "d2", "tpch")],  # q01 has no DuckDB text here: it runs Krishiv's
+    }
+    monkeypatch.setenv("KRISHIV_DATA", str(tmp_path))
+    monkeypatch.setattr(ledger, "load_queries", lambda suite, engine, only=None: texts[engine])
+    monkeypatch.setattr(ledger, "dataset_dir", lambda name, sf: root)
+    monkeypatch.setattr(ledger, "wait_idle", lambda *a, **k: None)
+    got = {}
+    monkeypatch.setattr(ledger, "_run_locked", lambda ds, suite, queries, *a: got.setdefault("q", queries))
+    ledger.run_ledger("tpch", 1, threads=1, memory_limit="1g")
+    assert [(q.sql, d.sql) for q, d in got["q"]] == [("k1", "k1"), ("k2", "d2")]
+
+
+def test_no_delta_across_the_change_of_duckdbs_text():
+    def record(method, texts):
+        qs = {}
+        for q, text in texts.items():
+            qs[q] = _query_entry(2.0, 1.0, {"aggregate": 2.0}, {"aggregate": 1.0})
+            if text:
+                qs[q]["duckdb_text"] = text
+        rec = _record(qs)
+        if method:
+            rec["method"] = method
+        return rec
+
+    old = record(None, {"q01": None, "q29": None})  # a ledger from before the method was recorded
+    new = record(ledger.METHOD, {"q01": "shared", "q29": "own"})
+    md = ledger.render_markdown(new, old)
+    rows = {line.split("|")[1].strip(): line for line in md.splitlines() if line.startswith("| q")}
+    assert rows["q01"].rstrip().endswith("+0.00 |")  # one text on both engines, before and after
+    assert rows["q29"].rstrip().endswith(" - |")  # DuckDB ran another text before
+    bucket = next(line for line in md.splitlines() if line.startswith("| 1 | aggregate"))
+    assert bucket.rstrip().endswith(" - |")
+    assert "times DuckDB on its own text" in md
+    # Two ledgers of the same method keep every delta, and so does a record where no text differs.
+    same = ledger.render_markdown(new, record(ledger.METHOD, {"q01": "shared", "q29": "own"}))
+    assert " - |" not in same
+    assert "times DuckDB on its own text" not in same
+    shared = ledger.render_markdown(record(ledger.METHOD, {"q01": "shared", "q29": "shared"}), old)
+    assert " - |" not in shared
+    assert "times DuckDB on its own text" not in shared
+
+
 def test_profile_of_a_metadata_only_query_is_empty(tmp_path: Path):
     import pyarrow as pa
     import pyarrow.parquet as pq
@@ -331,6 +407,7 @@ def test_measure_duckdb_times_and_splits():
     out = ledger.measure_duckdb(duck, Query("q", "select sum(i) from t", "t"), 5)
     assert out["seconds"] > 0
     assert len(out["runs"]) == 3
+    assert out["rows"] == 1
     assert math.isclose(sum(out["buckets"].values()), out["seconds"])
 
 
@@ -366,11 +443,12 @@ def test_run_ledger_end_to_end_with_a_fake_measurement(tmp_path: Path, monkeypat
             return {}
 
     monkeypatch.setattr(ledger, "KrishivEngine", FakeKrishiv)
-    measure = lambda *a: {"seconds": 0.5, "runs": [0.5] * 3, "buckets": {"aggregate": 0.4, "other": 0.1}}  # noqa: E731
+    measure = lambda *a: {"seconds": 0.5, "runs": [0.5] * 3, "rows": 1, "buckets": {"aggregate": 0.4, "other": 0.1}}  # noqa: E731
     f = ledger.run_ledger("tpch", 1, threads=1, memory_limit="1g", measure=measure)
     rec = json.loads(f.read_text())
     assert rec["kind"] == "ledger"
-    assert set(rec["queries"]) == {"q01", "q02"}
+    assert {q: e["status"] for q, e in rec["queries"].items()} == {"q01": "ok", "q02": "ok"}
+    assert rec["queries"]["q01"]["rows"] == 1
     assert rec["engines"]["krishiv"]["version"] == "9.9"
     assert f.with_suffix(".md").read_text().startswith("# Performance gap ledger")
     assert rec["previous"] is None
@@ -391,7 +469,7 @@ def test_measure_krishiv_takes_the_second_plain_run_and_splits_the_perf_run(monk
 
     class Plain:
         def profile(self, query):
-            return {"seconds": next(runs)}
+            return {"seconds": next(runs), "rows": 7}
 
     class Perf:
         def __init__(self, threads, memory_limit, binary, launcher):
@@ -416,6 +494,7 @@ def test_measure_krishiv_takes_the_second_plain_run_and_splits_the_perf_run(monk
     out = ledger.measure_krishiv(None, None, Query("q", "select 1", "t"), 2, "1g", 0, Plain())  # ty: ignore[invalid-argument-type]
     assert out["seconds"] == 0.8
     assert out["runs"] == [0.9, 0.8, 0.7]
+    assert out["rows"] == 7
     assert events == ["setup", "profile", "profile", "teardown", "cancel"]
     assert math.isclose(sum(out["buckets"].values()), 0.8)
 

@@ -211,6 +211,9 @@ matching frame from the leaf up and shared per 20 ms bin); DuckDB warm median pl
 build/probe by child rows). Output `$KRISHIV_DATA/results/<ts>_ledger_<suite>_sf<N>.json` and `.md`: the per-query and
 per-bucket tables with a "geomean if this bucket's positive gap were zero" column and the delta against the previous
 ledger of the same suite. `other` has no DuckDB counterpart, so its gap is an upper bound. Runs hold the bench lock.
+DuckDB runs its own text of a query where one exists (ClickBench q29, `queries/<suite>/duckdb/`), as `abba` does; a
+query whose two engines return different row counts is reported as failed and gets no ratio.
+Against a previous ledger from before this (DuckDB on Krishiv's text), deltas are shown only for queries with one text.
 
 ## Minimise a differing query (`krishiv-bench minimize`)
 ```bash
