@@ -10,7 +10,7 @@ Intersects two binary representations of Datasketches
 TupleSketch objects with integer summary data type using a TupleSketch Intersection object.
 Users can set mode to 'sum', 'min', 'max', or 'alwaysone' (defaults to 'sum').
 
-**Applies to:** not available in Krishiv yet. Spark: 4.2 and later.
+**Applies to:** Krishiv 0.2.0 and above. Spark: 4.2 and later.
 
 ## Syntax
 
@@ -22,9 +22,9 @@ tuple_intersection_integer(tupleSketch1, tupleSketch2, mode)
 
 | | |
 |---|---|
-| Krishiv | Not implemented yet |
+| Krishiv | Implemented |
 | Group | `sketch_funcs` |
-| Kind | aggregate (function) |
+| Kind | scalar (function) |
 | Added in Spark | 4.2.0 |
 | In Spark profiles | 4.2 and later |
 | Arguments | [2, 3] |
@@ -35,12 +35,13 @@ tuple_intersection_integer(tupleSketch1, tupleSketch2, mode)
 ```sql
 -- tuple_intersection_integer, example 1
 > SELECT tuple_sketch_estimate_integer(tuple_intersection_integer(tuple_sketch_agg_integer(col1, val1), tuple_sketch_agg_integer(col2, val2))) FROM VALUES (1, 1, 1, 4), (2, 2, 2, 5), (3, 3, 4, 6) tab(col1, val1, col2, val2);
-Error: KRISHIV_UNSUPPORTED_FEATURE
+2.0
 ```
 
 ## Version history
 
 - Added in Spark 4.2.0.
+- Added in Krishiv 0.2.0.
 
 ## Related
 

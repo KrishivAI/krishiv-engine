@@ -10,7 +10,7 @@ Subtracts two binary representations of Datasketches
 TupleSketch objects with double summary data type using a TupleSketch AnotB object.
 Returns elements in the first sketch that are not in the second sketch.
 
-**Applies to:** not available in Krishiv yet. Spark: 4.2 and later.
+**Applies to:** Krishiv 0.2.0 and above. Spark: 4.2 and later.
 
 ## Syntax
 
@@ -22,9 +22,9 @@ tuple_difference_double(tupleSketch1, tupleSketch2)
 
 | | |
 |---|---|
-| Krishiv | Not implemented yet |
+| Krishiv | Implemented |
 | Group | `sketch_funcs` |
-| Kind | aggregate (function) |
+| Kind | scalar (function) |
 | Added in Spark | 4.2.0 |
 | In Spark profiles | 4.2 and later |
 | Arguments | 2 |
@@ -35,12 +35,13 @@ tuple_difference_double(tupleSketch1, tupleSketch2)
 ```sql
 -- tuple_difference_double, example 1
 > SELECT tuple_sketch_estimate_double(tuple_difference_double(tuple_sketch_agg_double(col1, val1), tuple_sketch_agg_double(col2, val2))) FROM VALUES (5, 5.0D, 4, 4.0D), (1, 1.0D, 4, 4.0D), (2, 2.0D, 5, 5.0D), (3, 3.0D, 1, 1.0D) tab(col1, val1, col2, val2);
-Error: KRISHIV_UNSUPPORTED_FEATURE
+2.0
 ```
 
 ## Version history
 
 - Added in Spark 4.2.0.
+- Added in Krishiv 0.2.0.
 
 ## Related
 

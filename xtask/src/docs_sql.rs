@@ -402,6 +402,27 @@ fn page(
              Krishiv returns the Spark version it runs as, `4.2.0`, with no revision.\n\n",
         );
     }
+    if matches!(
+        doc.name.as_str(),
+        "tuple_sketch_agg_double" | "tuple_sketch_agg_integer"
+    ) && implemented
+    {
+        m.push_str(
+            "**Note.** Krishiv plans every aggregate as a partial and a final stage, so the final stage always \
+             merges the partial sketches and cuts the result to 2^`lgNomEntries` entries. Spark cuts the result \
+             only after a merge, so over a single partition (`range(100)` with `lgNomEntries` 5) it keeps every \
+             retained entry (51 at theta 0.3564956426418521) where Krishiv keeps fewer (the sketch bytes, \
+             `tuple_sketch_estimate_*` and `tuple_sketch_theta_*` differ). Over several partitions the results \
+             are the same, `lgNomEntries` 4 included.\n\n",
+        );
+    }
+    if doc.name.starts_with("kll_sketch_to_string_") && implemented {
+        m.push_str(
+            "**Note.** The text matches Spark line for line for a sketch that has not left exact mode. In \
+             estimation mode the levels, retained items and compact size are those of Krishiv's sketch, which \
+             differ from Spark's, and two runs of one query can differ from each other.\n\n",
+        );
+    }
     if !sig.is_empty() {
         let _ = write!(m, "## Syntax\n\n```text\n{sig}\n```\n\n");
     }

@@ -8,7 +8,7 @@ description: "Merges two sketch buffers together into one."
 
 Merges two sketch buffers together into one.
 
-**Applies to:** not available in Krishiv yet. Spark: 4.1 and later.
+**Applies to:** Krishiv 0.2.0 and above. Spark: 4.1 and later.
 
 ## Syntax
 
@@ -20,9 +20,9 @@ kll_sketch_merge_float(left, right)
 
 | | |
 |---|---|
-| Krishiv | Not implemented yet |
+| Krishiv | Implemented |
 | Group | `sketch_funcs` |
-| Kind | aggregate (function) |
+| Kind | scalar (function) |
 | Added in Spark | 4.1.0 |
 | In Spark profiles | 4.1 and later |
 | Arguments | 2 |
@@ -33,12 +33,13 @@ kll_sketch_merge_float(left, right)
 ```sql
 -- kll_sketch_merge_float, example 1
 > SELECT LENGTH(kll_sketch_to_string_float(kll_sketch_merge_float(kll_sketch_agg_float(col), kll_sketch_agg_float(col)))) > 0 FROM VALUES (CAST(1.0 AS FLOAT)), (CAST(2.0 AS FLOAT)), (CAST(3.0 AS FLOAT)), (CAST(4.0 AS FLOAT)), (CAST(5.0 AS FLOAT)) tab(col);
-Error: KRISHIV_UNSUPPORTED_FEATURE
+true
 ```
 
 ## Version history
 
 - Added in Spark 4.1.0.
+- Added in Krishiv 0.2.0.
 
 ## Related
 

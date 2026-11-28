@@ -1,0 +1,158 @@
+{
+  "entries": [
+    {
+      "id": "tuple_sketch_agg_integer#0985794038d0/ansi_on",
+      "reason": "SELECT tuple_sketch_estimate_integer(tuple_sketch_agg_integer(key, summary, 12, X'01')) FROM VALUES (1, 5), (1, 1), (2, 2), (2, 3), (3, 2) tab(key, summary) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT where Spark has DATATYPE_MISMATCH.TYPE_CHECK_FAILURE_WITH_HINT"
+    },
+    {
+      "id": "tuple_sketch_agg_integer#0985794038d0/ansi_off",
+      "reason": "SELECT tuple_sketch_estimate_integer(tuple_sketch_agg_integer(key, summary, 12, X'01')) FROM VALUES (1, 5), (1, 1), (2, 2), (2, 3), (3, 2) tab(key, summary) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT where Spark has DATATYPE_MISMATCH.TYPE_CHECK_FAILURE_WITH_HINT"
+    },
+    {
+      "id": "tuple_sketch_agg_integer#14bab2b3f696/ansi_on",
+      "reason": "SELECT tuple_sketch_estimate_integer(tuple_sketch_agg_integer(key, summary, 12, CAST(1.5 AS DECIMAL(10,2)))) FROM VALUES (1, 5), (1, 1), (2, 2), (2, 3), (3, 2) tab(key, summary) | resolves to double where Spark has DATATYPE_MISMATCH.TYPE_CHECK_FAILURE_WITH_HINT"
+    },
+    {
+      "id": "tuple_sketch_agg_integer#14bab2b3f696/ansi_off",
+      "reason": "SELECT tuple_sketch_estimate_integer(tuple_sketch_agg_integer(key, summary, 12, CAST(1.5 AS DECIMAL(10,2)))) FROM VALUES (1, 5), (1, 1), (2, 2), (2, 3), (3, 2) tab(key, summary) | resolves to double where Spark has DATATYPE_MISMATCH.TYPE_CHECK_FAILURE_WITH_HINT"
+    },
+    {
+      "id": "tuple_sketch_agg_integer#14e14c8f11d0/ansi_on",
+      "reason": "SELECT tuple_sketch_estimate_integer(tuple_sketch_agg_integer(key, summary, 12, CAST(X'C328FF' AS STRING))) FROM VALUES (1, 5), (1, 1), (2, 2), (2, 3), (3, 2) tab(key, summary) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT where Spark has DATATYPE_MISMATCH.TYPE_CHECK_FAILURE_WITH_HINT"
+    },
+    {
+      "id": "tuple_sketch_agg_integer#14e14c8f11d0/ansi_off",
+      "reason": "SELECT tuple_sketch_estimate_integer(tuple_sketch_agg_integer(key, summary, 12, CAST(X'C328FF' AS STRING))) FROM VALUES (1, 5), (1, 1), (2, 2), (2, 3), (3, 2) tab(key, summary) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT where Spark has DATATYPE_MISMATCH.TYPE_CHECK_FAILURE_WITH_HINT"
+    },
+    {
+      "id": "tuple_sketch_agg_integer#26b192b322bf/ansi_on",
+      "reason": "SELECT tuple_sketch_estimate_integer(tuple_sketch_agg_integer(key, summary, 12, 1)) FROM VALUES (1, 5), (1, 1), (2, 2), (2, 3), (3, 2) tab(key, summary) | resolves to double where Spark has DATATYPE_MISMATCH.TYPE_CHECK_FAILURE_WITH_HINT"
+    },
+    {
+      "id": "tuple_sketch_agg_integer#26b192b322bf/ansi_off",
+      "reason": "SELECT tuple_sketch_estimate_integer(tuple_sketch_agg_integer(key, summary, 12, 1)) FROM VALUES (1, 5), (1, 1), (2, 2), (2, 3), (3, 2) tab(key, summary) | resolves to double where Spark has DATATYPE_MISMATCH.TYPE_CHECK_FAILURE_WITH_HINT"
+    },
+    {
+      "id": "tuple_sketch_agg_integer#2dd2e0a3dd49/ansi_on",
+      "reason": "SELECT tuple_sketch_estimate_integer(tuple_sketch_agg_integer(key, summary, 12, INTERVAL '1-2' YEAR TO MONTH)) FROM VALUES (1, 5), (1, 1), (2, 2), (2, 3), (3, 2) tab(key, summary) | resolves to double where Spark has DATATYPE_MISMATCH.TYPE_CHECK_FAILURE_WITH_HINT"
+    },
+    {
+      "id": "tuple_sketch_agg_integer#2dd2e0a3dd49/ansi_off",
+      "reason": "SELECT tuple_sketch_estimate_integer(tuple_sketch_agg_integer(key, summary, 12, INTERVAL '1-2' YEAR TO MONTH)) FROM VALUES (1, 5), (1, 1), (2, 2), (2, 3), (3, 2) tab(key, summary) | resolves to double where Spark has DATATYPE_MISMATCH.TYPE_CHECK_FAILURE_WITH_HINT"
+    },
+    {
+      "id": "tuple_sketch_agg_integer#3182f7991b17/ansi_on",
+      "reason": "SELECT tuple_sketch_estimate_integer(tuple_sketch_agg_integer(key, summary, 12, DATE'2024-02-29')) FROM VALUES (1, 5), (1, 1), (2, 2), (2, 3), (3, 2) tab(key, summary) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT where Spark has DATATYPE_MISMATCH.TYPE_CHECK_FAILURE_WITH_HINT"
+    },
+    {
+      "id": "tuple_sketch_agg_integer#3182f7991b17/ansi_off",
+      "reason": "SELECT tuple_sketch_estimate_integer(tuple_sketch_agg_integer(key, summary, 12, DATE'2024-02-29')) FROM VALUES (1, 5), (1, 1), (2, 2), (2, 3), (3, 2) tab(key, summary) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT where Spark has DATATYPE_MISMATCH.TYPE_CHECK_FAILURE_WITH_HINT"
+    },
+    {
+      "id": "tuple_sketch_agg_integer#50dbe9aadc86/ansi_on",
+      "reason": "SELECT tuple_sketch_estimate_integer(tuple_sketch_agg_integer(key, summary, 12, true)) FROM VALUES (1, 5), (1, 1), (2, 2), (2, 3), (3, 2) tab(key, summary) | resolves to double where Spark has DATATYPE_MISMATCH.TYPE_CHECK_FAILURE_WITH_HINT"
+    },
+    {
+      "id": "tuple_sketch_agg_integer#50dbe9aadc86/ansi_off",
+      "reason": "SELECT tuple_sketch_estimate_integer(tuple_sketch_agg_integer(key, summary, 12, true)) FROM VALUES (1, 5), (1, 1), (2, 2), (2, 3), (3, 2) tab(key, summary) | resolves to double where Spark has DATATYPE_MISMATCH.TYPE_CHECK_FAILURE_WITH_HINT"
+    },
+    {
+      "id": "tuple_sketch_agg_integer#591419f45514/ansi_on",
+      "reason": "SELECT tuple_sketch_estimate_integer(tuple_sketch_agg_integer(key, summary, 'abc', 'sum')) FROM VALUES (1, 5), (1, 1), (2, 2), (2, 3), (3, 2) tab(key, summary) | CAST_INVALID_INPUT"
+    },
+    {
+      "id": "tuple_sketch_agg_integer#591419f45514/ansi_off",
+      "reason": "SELECT tuple_sketch_estimate_integer(tuple_sketch_agg_integer(key, summary, 'abc', 'sum')) FROM VALUES (1, 5), (1, 1), (2, 2), (2, 3), (3, 2) tab(key, summary) | CAST_INVALID_INPUT where Spark has DATATYPE_MISMATCH.UNEXPECTED_NULL"
+    },
+    {
+      "id": "tuple_sketch_agg_integer#695e060d924b/ansi_on",
+      "reason": "SELECT tuple_sketch_estimate_integer(tuple_sketch_agg_integer(key, summary, 12, CAST(1 AS TINYINT))) FROM VALUES (1, 5), (1, 1), (2, 2), (2, 3), (3, 2) tab(key, summary) | resolves to double where Spark has DATATYPE_MISMATCH.TYPE_CHECK_FAILURE_WITH_HINT"
+    },
+    {
+      "id": "tuple_sketch_agg_integer#695e060d924b/ansi_off",
+      "reason": "SELECT tuple_sketch_estimate_integer(tuple_sketch_agg_integer(key, summary, 12, CAST(1 AS TINYINT))) FROM VALUES (1, 5), (1, 1), (2, 2), (2, 3), (3, 2) tab(key, summary) | resolves to double where Spark has DATATYPE_MISMATCH.TYPE_CHECK_FAILURE_WITH_HINT"
+    },
+    {
+      "id": "tuple_sketch_agg_integer#738bc6f7812c/ansi_on",
+      "reason": "SELECT tuple_sketch_estimate_integer(tuple_sketch_agg_integer(key, summary, 12, 1.5D)) FROM VALUES (1, 5), (1, 1), (2, 2), (2, 3), (3, 2) tab(key, summary) | resolves to double where Spark has DATATYPE_MISMATCH.TYPE_CHECK_FAILURE_WITH_HINT"
+    },
+    {
+      "id": "tuple_sketch_agg_integer#738bc6f7812c/ansi_off",
+      "reason": "SELECT tuple_sketch_estimate_integer(tuple_sketch_agg_integer(key, summary, 12, 1.5D)) FROM VALUES (1, 5), (1, 1), (2, 2), (2, 3), (3, 2) tab(key, summary) | resolves to double where Spark has DATATYPE_MISMATCH.TYPE_CHECK_FAILURE_WITH_HINT"
+    },
+    {
+      "id": "tuple_sketch_agg_integer#8fd548477809/ansi_on",
+      "reason": "SELECT tuple_sketch_estimate_integer(tuple_sketch_agg_integer(key, summary, 12, TIMESTAMP_NTZ'2024-02-29 12:34:56.123456')) FROM VALUES (1, 5), (1, 1), (2, 2), (2, 3), (3, 2) tab(key, summary) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT where Spark has DATATYPE_MISMATCH.TYPE_CHECK_FAILURE_WITH_HINT"
+    },
+    {
+      "id": "tuple_sketch_agg_integer#8fd548477809/ansi_off",
+      "reason": "SELECT tuple_sketch_estimate_integer(tuple_sketch_agg_integer(key, summary, 12, TIMESTAMP_NTZ'2024-02-29 12:34:56.123456')) FROM VALUES (1, 5), (1, 1), (2, 2), (2, 3), (3, 2) tab(key, summary) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT where Spark has DATATYPE_MISMATCH.TYPE_CHECK_FAILURE_WITH_HINT"
+    },
+    {
+      "id": "tuple_sketch_agg_integer#9f042b8d0005/ansi_on",
+      "reason": "SELECT tuple_sketch_estimate_integer(tuple_sketch_agg_integer(key, summary, 12, CAST(1.5 AS FLOAT))) FROM VALUES (1, 5), (1, 1), (2, 2), (2, 3), (3, 2) tab(key, summary) | resolves to double where Spark has DATATYPE_MISMATCH.TYPE_CHECK_FAILURE_WITH_HINT"
+    },
+    {
+      "id": "tuple_sketch_agg_integer#9f042b8d0005/ansi_off",
+      "reason": "SELECT tuple_sketch_estimate_integer(tuple_sketch_agg_integer(key, summary, 12, CAST(1.5 AS FLOAT))) FROM VALUES (1, 5), (1, 1), (2, 2), (2, 3), (3, 2) tab(key, summary) | resolves to double where Spark has DATATYPE_MISMATCH.TYPE_CHECK_FAILURE_WITH_HINT"
+    },
+    {
+      "id": "tuple_sketch_agg_integer#abfbf609d12a/ansi_on",
+      "reason": "SELECT tuple_sketch_estimate_integer(tuple_sketch_agg_integer(key, summary, 12, CAST(NULL AS string))) FROM VALUES (1, 5), (1, 1), (2, 2), (2, 3), (3, 2) tab(key, summary) | resolves to double where Spark has DATATYPE_MISMATCH.UNEXPECTED_NULL"
+    },
+    {
+      "id": "tuple_sketch_agg_integer#abfbf609d12a/ansi_off",
+      "reason": "SELECT tuple_sketch_estimate_integer(tuple_sketch_agg_integer(key, summary, 12, CAST(NULL AS string))) FROM VALUES (1, 5), (1, 1), (2, 2), (2, 3), (3, 2) tab(key, summary) | resolves to double where Spark has DATATYPE_MISMATCH.UNEXPECTED_NULL"
+    },
+    {
+      "id": "tuple_sketch_agg_integer#b78294e443e3/ansi_on",
+      "reason": "SELECT tuple_sketch_estimate_integer(tuple_sketch_agg_integer(key, summary, 12, INTERVAL '1 02:03:04' DAY TO SECOND)) FROM VALUES (1, 5), (1, 1), (2, 2), (2, 3), (3, 2) tab(key, summary) | resolves to double where Spark has DATATYPE_MISMATCH.TYPE_CHECK_FAILURE_WITH_HINT"
+    },
+    {
+      "id": "tuple_sketch_agg_integer#b78294e443e3/ansi_off",
+      "reason": "SELECT tuple_sketch_estimate_integer(tuple_sketch_agg_integer(key, summary, 12, INTERVAL '1 02:03:04' DAY TO SECOND)) FROM VALUES (1, 5), (1, 1), (2, 2), (2, 3), (3, 2) tab(key, summary) | resolves to double where Spark has DATATYPE_MISMATCH.TYPE_CHECK_FAILURE_WITH_HINT"
+    },
+    {
+      "id": "tuple_sketch_agg_integer#c6c885d0a9bf/ansi_on",
+      "reason": "SELECT tuple_sketch_estimate_integer(tuple_sketch_agg_integer(key, summary, 12, CAST(1.5 AS DECIMAL(38,18)))) FROM VALUES (1, 5), (1, 1), (2, 2), (2, 3), (3, 2) tab(key, summary) | resolves to double where Spark has DATATYPE_MISMATCH.TYPE_CHECK_FAILURE_WITH_HINT"
+    },
+    {
+      "id": "tuple_sketch_agg_integer#c6c885d0a9bf/ansi_off",
+      "reason": "SELECT tuple_sketch_estimate_integer(tuple_sketch_agg_integer(key, summary, 12, CAST(1.5 AS DECIMAL(38,18)))) FROM VALUES (1, 5), (1, 1), (2, 2), (2, 3), (3, 2) tab(key, summary) | resolves to double where Spark has DATATYPE_MISMATCH.TYPE_CHECK_FAILURE_WITH_HINT"
+    },
+    {
+      "id": "tuple_sketch_agg_integer#d3f513cdfd8f/ansi_on",
+      "reason": "SELECT tuple_sketch_estimate_integer(tuple_sketch_agg_integer(key, summary, 12, TIMESTAMP'2024-02-29 12:34:56.123456')) FROM VALUES (1, 5), (1, 1), (2, 2), (2, 3), (3, 2) tab(key, summary) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT where Spark has DATATYPE_MISMATCH.TYPE_CHECK_FAILURE_WITH_HINT"
+    },
+    {
+      "id": "tuple_sketch_agg_integer#d3f513cdfd8f/ansi_off",
+      "reason": "SELECT tuple_sketch_estimate_integer(tuple_sketch_agg_integer(key, summary, 12, TIMESTAMP'2024-02-29 12:34:56.123456')) FROM VALUES (1, 5), (1, 1), (2, 2), (2, 3), (3, 2) tab(key, summary) | DATATYPE_MISMATCH.NON_FOLDABLE_INPUT where Spark has DATATYPE_MISMATCH.TYPE_CHECK_FAILURE_WITH_HINT"
+    },
+    {
+      "id": "tuple_sketch_agg_integer#d8771063ce63/ansi_on",
+      "reason": "SELECT tuple_sketch_estimate_integer(tuple_sketch_agg_integer(key, summary, 12, CAST(1 AS SMALLINT))) FROM VALUES (1, 5), (1, 1), (2, 2), (2, 3), (3, 2) tab(key, summary) | resolves to double where Spark has DATATYPE_MISMATCH.TYPE_CHECK_FAILURE_WITH_HINT"
+    },
+    {
+      "id": "tuple_sketch_agg_integer#d8771063ce63/ansi_off",
+      "reason": "SELECT tuple_sketch_estimate_integer(tuple_sketch_agg_integer(key, summary, 12, CAST(1 AS SMALLINT))) FROM VALUES (1, 5), (1, 1), (2, 2), (2, 3), (3, 2) tab(key, summary) | resolves to double where Spark has DATATYPE_MISMATCH.TYPE_CHECK_FAILURE_WITH_HINT"
+    },
+    {
+      "id": "tuple_sketch_agg_integer#ed77d81a02c1/ansi_on",
+      "reason": "SELECT tuple_sketch_estimate_integer(tuple_sketch_agg_integer(key, summary, 12, NULL)) FROM VALUES (1, 5), (1, 1), (2, 2), (2, 3), (3, 2) tab(key, summary) | resolves to double where Spark has DATATYPE_MISMATCH.UNEXPECTED_NULL"
+    },
+    {
+      "id": "tuple_sketch_agg_integer#ed77d81a02c1/ansi_off",
+      "reason": "SELECT tuple_sketch_estimate_integer(tuple_sketch_agg_integer(key, summary, 12, NULL)) FROM VALUES (1, 5), (1, 1), (2, 2), (2, 3), (3, 2) tab(key, summary) | resolves to double where Spark has DATATYPE_MISMATCH.UNEXPECTED_NULL"
+    },
+    {
+      "id": "tuple_sketch_agg_integer#fc158d4fa83d/ansi_on",
+      "reason": "SELECT tuple_sketch_estimate_integer(tuple_sketch_agg_integer(key, summary, 12, 1L)) FROM VALUES (1, 5), (1, 1), (2, 2), (2, 3), (3, 2) tab(key, summary) | resolves to double where Spark has DATATYPE_MISMATCH.TYPE_CHECK_FAILURE_WITH_HINT"
+    },
+    {
+      "id": "tuple_sketch_agg_integer#fc158d4fa83d/ansi_off",
+      "reason": "SELECT tuple_sketch_estimate_integer(tuple_sketch_agg_integer(key, summary, 12, 1L)) FROM VALUES (1, 5), (1, 1), (2, 2), (2, 3), (3, 2) tab(key, summary) | resolves to double where Spark has DATATYPE_MISMATCH.TYPE_CHECK_FAILURE_WITH_HINT"
+    }
+  ],
+  "format_version": 1,
+  "function": "tuple_sketch_agg_integer"
+}

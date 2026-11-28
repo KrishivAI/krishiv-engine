@@ -11,7 +11,7 @@ The input expression should contain binary sketch representations (e.g., from kl
 The optional k parameter controls the size and accuracy of the merged sketch (range 8-65535).
 If k is not specified, the merged sketch adopts the k value from the first input sketch.
 
-**Applies to:** not available in Krishiv yet. Spark: 4.2 and later.
+**Applies to:** Krishiv 0.2.0 and above. Spark: 4.2 and later.
 
 ## Syntax
 
@@ -23,7 +23,7 @@ kll_merge_agg_bigint(expr[, k])
 
 | | |
 |---|---|
-| Krishiv | Not implemented yet |
+| Krishiv | Implemented |
 | Group | `agg_funcs` |
 | Kind | aggregate (function) |
 | Added in Spark | 4.1.2 |
@@ -36,12 +36,13 @@ kll_merge_agg_bigint(expr[, k])
 ```sql
 -- kll_merge_agg_bigint, example 1
 > SELECT kll_sketch_get_n_bigint(kll_merge_agg_bigint(sketch)) FROM (SELECT kll_sketch_agg_bigint(col) as sketch FROM VALUES (1), (2), (3) tab(col) UNION ALL SELECT kll_sketch_agg_bigint(col) as sketch FROM VALUES (4), (5), (6) tab(col)) t;
-Error: KRISHIV_UNSUPPORTED_FEATURE
+6
 ```
 
 ## Version history
 
 - Added in Spark 4.1.2.
+- Added in Krishiv 0.2.0.
 
 ## Related
 

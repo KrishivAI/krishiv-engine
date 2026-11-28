@@ -10,7 +10,7 @@ Returns the intersected TupleSketch compact binary representation.
 `child` should be a binary TupleSketch representation created with an integer type summary.
 `mode` is the aggregation mode for numeric summaries during intersection (sum, min, max, alwaysone). Default is sum.
 
-**Applies to:** not available in Krishiv yet. Spark: 4.2 and later.
+**Applies to:** Krishiv 0.2.0 and above. Spark: 4.2 and later.
 
 ## Syntax
 
@@ -22,7 +22,7 @@ tuple_intersection_agg_integer(child, mode)
 
 | | |
 |---|---|
-| Krishiv | Not implemented yet |
+| Krishiv | Implemented |
 | Group | `agg_funcs` |
 | Kind | aggregate (function) |
 | Added in Spark | 4.2.0 |
@@ -35,12 +35,13 @@ tuple_intersection_agg_integer(child, mode)
 ```sql
 -- tuple_intersection_agg_integer, example 1
 > SELECT tuple_sketch_estimate_integer(tuple_intersection_agg_integer(sketch)) FROM (SELECT tuple_sketch_agg_integer(key, summary) as sketch FROM VALUES (1, 1), (2, 2), (3, 3) tab(key, summary) UNION ALL SELECT tuple_sketch_agg_integer(key, summary) as sketch FROM VALUES (2, 2), (3, 3), (4, 4) tab(key, summary));
-Error: KRISHIV_UNSUPPORTED_FEATURE
+2.0
 ```
 
 ## Version history
 
 - Added in Spark 4.2.0.
+- Added in Krishiv 0.2.0.
 
 ## Related
 

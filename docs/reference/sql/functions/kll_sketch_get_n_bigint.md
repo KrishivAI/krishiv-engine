@@ -8,7 +8,7 @@ description: "Returns the number of items collected in the sketch."
 
 Returns the number of items collected in the sketch.
 
-**Applies to:** not available in Krishiv yet. Spark: 4.1 and later.
+**Applies to:** Krishiv 0.2.0 and above. Spark: 4.1 and later.
 
 ## Syntax
 
@@ -20,9 +20,9 @@ kll_sketch_get_n_bigint(expr)
 
 | | |
 |---|---|
-| Krishiv | Not implemented yet |
+| Krishiv | Implemented |
 | Group | `sketch_funcs` |
-| Kind | aggregate (function) |
+| Kind | scalar (function) |
 | Added in Spark | 4.1.0 |
 | In Spark profiles | 4.1 and later |
 | Arguments | 1 |
@@ -33,12 +33,13 @@ kll_sketch_get_n_bigint(expr)
 ```sql
 -- kll_sketch_get_n_bigint, example 1
 > SELECT kll_sketch_get_n_bigint(kll_sketch_agg_bigint(col)) FROM VALUES (1), (2), (3), (4), (5) tab(col);
-Error: KRISHIV_UNSUPPORTED_FEATURE
+5
 ```
 
 ## Version history
 
 - Added in Spark 4.1.0.
+- Added in Krishiv 0.2.0.
 
 ## Related
 

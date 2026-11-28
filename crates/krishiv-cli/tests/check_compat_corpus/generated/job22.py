@@ -2,7 +2,7 @@
 import pyspark.sql.functions as F
 
 # F.nope('x')
-df = spark.sql("SELECT tuple_difference_integer(a) FROM t22")
-df = spark.sql("SELECT bitmap_bucket_number(a) FROM t22")
-df = df.select(F.legacy_fn_24("a"), F.col("b"))
-df = df.select(F.st_asbinary("a"), F.col("b"))
+df = df.select(F.legacy_fn_14("a"), F.col("b"))
+df = df.select(F.tuple_union_agg_double("a"), F.col("b"))
+df = df.select(F.slice("a"), F.col("b"))
+df = df.select(F.xpath_long("a"), F.col("b"))

@@ -100,6 +100,8 @@ pub(super) enum NamedDefault {
     Text(&'static str),
     /// A boolean literal default (as `variant_set`'s `create_if_missing` does).
     Bool(bool),
+    /// An `INT` literal default (as the Tuple sketches' `lgNomEntries` does).
+    Int(i32),
 }
 
 /// The named-parameter signature of the functions Spark 4.2 documents with
@@ -108,7 +110,7 @@ pub(super) enum NamedDefault {
 /// calls reorder and then fail as unsupported). Any other function rejects
 /// named arguments with `NAMED_PARAMETERS_NOT_SUPPORTED`.
 pub(super) fn named_signature(name: &str) -> Option<&'static [NamedParam]> {
-    use NamedDefault::{Bool, Null, Required, Text};
+    use NamedDefault::{Bool, Int, Null, Required, Text};
     const MASK: &[NamedParam] = &[
         NamedParam {
             name: "str",
@@ -189,12 +191,68 @@ pub(super) fn named_signature(name: &str) -> Option<&'static [NamedParam]> {
             default: Bool(true),
         },
     ];
+    const TUPLE_SKETCH_AGG: &[NamedParam] = &[
+        NamedParam {
+            name: "key",
+            default: Required,
+        },
+        NamedParam {
+            name: "summary",
+            default: Required,
+        },
+        NamedParam {
+            name: "lgNomEntries",
+            default: Int(12),
+        },
+        NamedParam {
+            name: "mode",
+            default: Text("sum"),
+        },
+    ];
+    const TUPLE_UNION_AGG: &[NamedParam] = &[
+        NamedParam {
+            name: "child",
+            default: Required,
+        },
+        NamedParam {
+            name: "lgNomEntries",
+            default: Int(12),
+        },
+        NamedParam {
+            name: "mode",
+            default: Text("sum"),
+        },
+    ];
+    const TUPLE_BINARY: &[NamedParam] = &[
+        NamedParam {
+            name: "first",
+            default: Required,
+        },
+        NamedParam {
+            name: "second",
+            default: Required,
+        },
+        NamedParam {
+            name: "lgNomEntries",
+            default: Int(12),
+        },
+        NamedParam {
+            name: "mode",
+            default: Text("sum"),
+        },
+    ];
     match name.to_ascii_lowercase().as_str() {
         "variant_set" | "try_variant_set" => Some(VARIANT_SET),
         "variant_strip_nulls" => Some(VARIANT_STRIP_NULLS),
         "mask" => Some(MASK),
         "counter_diff" => Some(COUNTER_DIFF),
         "count_min_sketch" => Some(COUNT_MIN_SKETCH),
+        "tuple_sketch_agg_double" | "tuple_sketch_agg_integer" => Some(TUPLE_SKETCH_AGG),
+        "tuple_union_agg_double" | "tuple_union_agg_integer" => Some(TUPLE_UNION_AGG),
+        "tuple_union_double"
+        | "tuple_union_integer"
+        | "tuple_union_theta_double"
+        | "tuple_union_theta_integer" => Some(TUPLE_BINARY),
         _ => None,
     }
 }

@@ -13,7 +13,9 @@ Returns the TupleSketch compact binary representation.
 the number buckets or slots for the TupleSketch. Default is 12.
 `mode` is the aggregation mode for numeric summaries (sum, min, max, alwaysone). Default is sum.
 
-**Applies to:** not available in Krishiv yet. Spark: 4.2 and later.
+**Applies to:** Krishiv 0.2.0 and above. Spark: 4.2 and later.
+
+**Note.** Krishiv plans every aggregate as a partial and a final stage, so the final stage always merges the partial sketches and cuts the result to 2^`lgNomEntries` entries. Spark cuts the result only after a merge, so over a single partition (`range(100)` with `lgNomEntries` 5) it keeps every retained entry (51 at theta 0.3564956426418521) where Krishiv keeps fewer (the sketch bytes, `tuple_sketch_estimate_*` and `tuple_sketch_theta_*` differ). Over several partitions the results are the same, `lgNomEntries` 4 included.
 
 ## Syntax
 
@@ -25,7 +27,7 @@ tuple_sketch_agg_integer(key, summary, lgNomEntries, mode)
 
 | | |
 |---|---|
-| Krishiv | Not implemented yet |
+| Krishiv | Implemented |
 | Group | `agg_funcs` |
 | Kind | aggregate (function) |
 | Added in Spark | 4.2.0 |
@@ -38,12 +40,13 @@ tuple_sketch_agg_integer(key, summary, lgNomEntries, mode)
 ```sql
 -- tuple_sketch_agg_integer, example 1
 > SELECT tuple_sketch_estimate_integer(tuple_sketch_agg_integer(key, summary, 12, 'sum')) FROM VALUES (1, 5), (1, 1), (2, 2), (2, 3), (3, 2) tab(key, summary);
-Error: KRISHIV_UNSUPPORTED_FEATURE
+3.0
 ```
 
 ## Version history
 
 - Added in Spark 4.2.0.
+- Added in Krishiv 0.2.0.
 
 ## Related
 

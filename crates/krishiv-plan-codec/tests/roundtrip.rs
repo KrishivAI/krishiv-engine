@@ -670,6 +670,8 @@ fn readers_that_predate_features_still_refuse_what_they_cannot_read() {
             | "aggregate_bitmaps"
             | "aggregate_hll_sketches"
             | "aggregate_theta_sketches"
+            | "aggregate_kll_sketches"
+            | "aggregate_tuple_sketches"
             | "options_map_literal"
             | "nested_literals"
             | "file_source_schema"

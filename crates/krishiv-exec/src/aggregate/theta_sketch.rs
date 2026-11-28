@@ -46,7 +46,7 @@ const TABLE_BYTES_PER_STATE_BYTE: usize = 32;
 
 /// The `binary` column of state rows. Arrow's 32-bit offsets overflow past 2 GiB (and `from_iter_values` wraps
 /// without a check), which a batch of large sketches can reach.
-fn binary_array(rows: Vec<Vec<u8>>) -> Result<BinaryArray> {
+pub(crate) fn binary_array(rows: Vec<Vec<u8>>) -> Result<BinaryArray> {
     check_total_len(rows.iter().map(Vec::len))?;
     Ok(BinaryArray::from_iter_values(rows))
 }

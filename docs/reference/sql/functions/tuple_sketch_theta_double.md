@@ -10,7 +10,7 @@ Returns the theta value (sampling rate) from a Datasketches TupleSketch.
 The theta value represents the effective sampling rate of the sketch, between 0.0 and 1.0.
 The sketch's summary type must be a double.
 
-**Applies to:** not available in Krishiv yet. Spark: 4.2 and later.
+**Applies to:** Krishiv 0.2.0 and above. Spark: 4.2 and later.
 
 ## Syntax
 
@@ -22,9 +22,9 @@ tuple_sketch_theta_double(child)
 
 | | |
 |---|---|
-| Krishiv | Not implemented yet |
+| Krishiv | Implemented |
 | Group | `sketch_funcs` |
-| Kind | aggregate (function) |
+| Kind | scalar (function) |
 | Added in Spark | 4.2.0 |
 | In Spark profiles | 4.2 and later |
 | Arguments | 1 |
@@ -35,12 +35,13 @@ tuple_sketch_theta_double(child)
 ```sql
 -- tuple_sketch_theta_double, example 1
 > SELECT tuple_sketch_theta_double(tuple_sketch_agg_double(key, summary)) FROM VALUES (1, 1.0D), (2, 2.0D), (3, 3.0D) tab(key, summary);
-Error: KRISHIV_UNSUPPORTED_FEATURE
+1.0
 ```
 
 ## Version history
 
 - Added in Spark 4.2.0.
+- Added in Krishiv 0.2.0.
 
 ## Related
 

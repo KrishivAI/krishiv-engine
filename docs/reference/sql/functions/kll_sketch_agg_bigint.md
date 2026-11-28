@@ -10,7 +10,7 @@ Returns the KllLongsSketch compact binary representation.
 The optional k parameter controls the size and accuracy of the sketch (default 200, range 8-65535).
 Larger k values provide more accurate quantile estimates but result in larger, slower sketches.
 
-**Applies to:** not available in Krishiv yet. Spark: 4.1 and later.
+**Applies to:** Krishiv 0.2.0 and above. Spark: 4.1 and later.
 
 ## Syntax
 
@@ -22,7 +22,7 @@ kll_sketch_agg_bigint(expr[, k])
 
 | | |
 |---|---|
-| Krishiv | Not implemented yet |
+| Krishiv | Implemented |
 | Group | `agg_funcs` |
 | Kind | aggregate (function) |
 | Added in Spark | 4.1.0 |
@@ -35,18 +35,19 @@ kll_sketch_agg_bigint(expr[, k])
 ```sql
 -- kll_sketch_agg_bigint, example 1
 > SELECT LENGTH(kll_sketch_to_string_bigint(kll_sketch_agg_bigint(col))) > 0 FROM VALUES (1), (2), (3), (4), (5) tab(col);
-Error: KRISHIV_UNSUPPORTED_FEATURE
+true
 ```
 
 ```sql
 -- kll_sketch_agg_bigint, example 2
 > SELECT LENGTH(kll_sketch_to_string_bigint(kll_sketch_agg_bigint(col, 400))) > 0 FROM VALUES (1), (2), (3), (4), (5) tab(col);
-Error: KRISHIV_UNSUPPORTED_FEATURE
+true
 ```
 
 ## Version history
 
 - Added in Spark 4.1.0.
+- Added in Krishiv 0.2.0.
 
 ## Related
 

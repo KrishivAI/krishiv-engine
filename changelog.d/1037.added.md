@@ -1,0 +1,1 @@
+functions, exec, plan-codec, plan: the Tuple sketch functions: `tuple_sketch_agg_{double,integer}`, `tuple_union_agg_*`, `tuple_intersection_agg_*` and the `tuple_*` scalars over Apache DataSketches, with named arguments (the `tuplesketch` golden file passes except for the invalid-UTF-8 string statements)

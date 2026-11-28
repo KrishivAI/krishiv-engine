@@ -11,7 +11,7 @@ desired quantile given the input rank. The desired quantile can either be a sing
 or an array. In the latter case, the function will return an array of results of equal
 length to the input array.
 
-**Applies to:** not available in Krishiv yet. Spark: 4.1 and later.
+**Applies to:** Krishiv 0.2.0 and above. Spark: 4.1 and later.
 
 ## Syntax
 
@@ -23,9 +23,9 @@ kll_sketch_get_quantile_bigint(left, right)
 
 | | |
 |---|---|
-| Krishiv | Not implemented yet |
+| Krishiv | Implemented |
 | Group | `sketch_funcs` |
-| Kind | aggregate (function) |
+| Kind | scalar (function) |
 | Added in Spark | 4.1.0 |
 | In Spark profiles | 4.1 and later |
 | Arguments | 2 |
@@ -36,12 +36,13 @@ kll_sketch_get_quantile_bigint(left, right)
 ```sql
 -- kll_sketch_get_quantile_bigint, example 1
 > SELECT kll_sketch_get_quantile_bigint(kll_sketch_agg_bigint(col), 0.5) > 1 FROM VALUES (1), (2), (3), (4), (5) tab(col);
-Error: KRISHIV_UNSUPPORTED_FEATURE
+true
 ```
 
 ## Version history
 
 - Added in Spark 4.1.0.
+- Added in Krishiv 0.2.0.
 
 ## Related
 

@@ -2,9 +2,8 @@
 import pyspark.sql.functions as F
 
 # F.nope('x')
-df = spark.sql("SELECT filter(a) FROM t17")
-df = df.select(F.tuple_intersection_integer("a"), F.col("b"))
-df = df.select(F.legacy_fn_37("a"), F.col("b"))
-df = df.select(F.log2("a"), F.col("b"))
-df = df.select(F.json_tuple("a"), F.col("b"))
-df = df.select(F.kll_sketch_get_n_bigint("a"), F.col("b"))
+df = df.select(F.xpath_string("a"), F.col("b"))
+df = df.select(F.regr_slope("a"), F.col("b"))
+df = df.select(F.array_compact("a"), F.col("b"))
+df = spark.sql("SELECT from_xml(a) FROM t17")
+df = spark.sql("SELECT legacy_fn_32(a) FROM t17")

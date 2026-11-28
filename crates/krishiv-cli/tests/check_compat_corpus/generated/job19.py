@@ -2,7 +2,7 @@
 import pyspark.sql.functions as F
 
 # F.nope('x')
-df = df.select(F.tuple_difference_theta_integer("a"), F.col("b"))
-df = df.select(F.floor("a"), F.col("b"))
-df = df.select(F.vector_avg("a"), F.col("b"))
-df = spark.sql("SELECT element_at(a) FROM t19")
+df = spark.sql("SELECT reflect(a) FROM t19")
+df = spark.sql("SELECT date_from_unix_date(a) FROM t19")
+df = df.select(F.legacy_fn_24("a"), F.col("b"))
+df = df.select(F.ilike("a"), F.col("b"))

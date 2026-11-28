@@ -10,7 +10,7 @@ Returns the intersected TupleSketch compact binary representation.
 `child` should be a binary TupleSketch representation created with a double type summary.
 `mode` is the aggregation mode for numeric summaries during intersection (sum, min, max, alwaysone). Default is sum.
 
-**Applies to:** not available in Krishiv yet. Spark: 4.2 and later.
+**Applies to:** Krishiv 0.2.0 and above. Spark: 4.2 and later.
 
 ## Syntax
 
@@ -22,7 +22,7 @@ tuple_intersection_agg_double(child, mode)
 
 | | |
 |---|---|
-| Krishiv | Not implemented yet |
+| Krishiv | Implemented |
 | Group | `agg_funcs` |
 | Kind | aggregate (function) |
 | Added in Spark | 4.2.0 |
@@ -35,12 +35,13 @@ tuple_intersection_agg_double(child, mode)
 ```sql
 -- tuple_intersection_agg_double, example 1
 > SELECT tuple_sketch_estimate_double(tuple_intersection_agg_double(sketch)) FROM (SELECT tuple_sketch_agg_double(key, summary) as sketch FROM VALUES (1, 5.0D), (2, 10.0D), (3, 15.0D) tab(key, summary) UNION ALL SELECT tuple_sketch_agg_double(key, summary) as sketch FROM VALUES (2, 3.0D), (3, 7.0D), (4, 12.0D) tab(key, summary));
-Error: KRISHIV_UNSUPPORTED_FEATURE
+2.0
 ```
 
 ## Version history
 
 - Added in Spark 4.2.0.
+- Added in Krishiv 0.2.0.
 
 ## Related
 

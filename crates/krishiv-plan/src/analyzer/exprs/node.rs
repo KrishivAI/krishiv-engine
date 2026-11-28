@@ -1040,6 +1040,18 @@ impl Resolver<'_> {
                     }
                     (&owned[..], 3)
                 } else if is_builtin_entry(&entry)
+                    && entry.id.name().starts_with("tuple_")
+                    && !tuple_defaults(entry.id.name(), n, e.origin).is_empty()
+                {
+                    // The Tuple sketch functions' omitted size and mode (see `tuple_defaults`).
+                    owned = kids[..n].to_vec();
+                    owned.extend(tuple_defaults(entry.id.name(), n, e.origin));
+                    let total = owned.len();
+                    if let Some(filter) = kids.get(n) {
+                        owned.push(filter.clone());
+                    }
+                    (&owned[..], total)
+                } else if is_builtin_entry(&entry)
                     && let Some(default) = hll_default(entry.id.name(), n, e.origin)
                 {
                     // Spark's constructors write the omitted constants (see `hll_default`).

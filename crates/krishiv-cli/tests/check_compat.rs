@@ -347,7 +347,8 @@ fn vendored_spark_sql_inputs_report_at_least_95_percent_of_not_yet_calls() {
             }
         }
     }
-    assert!(want.len() > 100, "only {} expected calls", want.len());
+    // Corpus-size sanity check only (the vendored inputs now mostly call supported functions); the 95% recall below is the real gate.
+    assert!(want.len() > 10, "only {} expected calls", want.len());
     let hit = want.iter().filter(|w| reported.contains(*w)).count();
     let pct = hit * 100 / want.len();
     assert!(pct >= 95, "recall {pct}% ({hit}/{})", want.len());
@@ -366,10 +367,11 @@ fn directory_symlink_cycles_are_not_followed() {
 
 #[test]
 fn findings_carry_an_alternative_where_one_is_listed() {
+    const ALT: &str = "exact top k, one row per value: SELECT x, count(*) AS c FROM t GROUP BY x ORDER BY c DESC LIMIT k (a full count, not a sketch)";
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::write(
         dir.path().join("a.sql"),
-        "SELECT kll_sketch_agg_bigint(c), count_min_sketch(s) FROM t\n",
+        "SELECT approx_top_k(c), count_min_sketch(s) FROM t\n",
     )
     .expect("write");
     let (_, rep) = report(dir.path());
@@ -380,17 +382,13 @@ fn findings_carry_an_alternative_where_one_is_listed() {
             .cloned()
             .expect("finding")
     };
-    let alt = by_name("kll_sketch_agg_bigint")["alternative"].clone();
-    assert!(
-        alt.as_str()
-            .is_some_and(|a| a.contains("percentile_approx")),
-        "{alt}"
-    );
+    let alt = by_name("approx_top_k")["alternative"].clone();
+    assert_eq!(alt.as_str(), Some(ALT), "{alt}");
     assert!(by_name("count_min_sketch").get("alternative").is_none());
     let text = run(&[], dir.path());
     let out = String::from_utf8_lossy(&text.stdout);
     assert!(
-        out.contains("kll_sketch_agg_bigint: not yet (alternative: percentile_approx"),
+        out.contains(&format!("approx_top_k: not yet (alternative: {ALT}")),
         "{out}"
     );
 }

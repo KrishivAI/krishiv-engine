@@ -128,7 +128,8 @@ pub(crate) fn arity(f: &AggregateFunction) -> usize {
         | AggregateFunction::RegrSlope
         | AggregateFunction::RegrIntercept
         | AggregateFunction::RegrR2
-        | AggregateFunction::Percentile { .. } => 2,
+        | AggregateFunction::Percentile { .. }
+        | AggregateFunction::TupleSketchAgg { .. } => 2,
         _ => 1,
     }
 }

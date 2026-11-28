@@ -44,6 +44,7 @@ use crate::error::{CodecError, Result, corrupt};
 use crate::features::{Feature, ReaderFeatures, legacy_level, plan_features};
 use crate::proto as pb;
 use crate::{EPOCH, FORMAT_VERSION, Limits};
+use krishiv_exec::aggregate::KllType;
 
 /// Decodes `krishiv.plan.v1` bytes under the default [`Limits`], with every
 /// feature this build implements.
@@ -1362,6 +1363,18 @@ fn aggregate_expr(a: &pb::AggregateExpr) -> Result<AggregateExpr> {
         ThetaSketchAgg => crate::decode_sketch::theta_sketch_function(a, ThetaKind::Sketch)?,
         ThetaUnionAgg => crate::decode_sketch::theta_sketch_function(a, ThetaKind::Union)?,
         ThetaIntersectionAgg => crate::decode_sketch::theta_sketch_function(a, ThetaKind::Intersection)?,
+        TupleSketchAggDouble => crate::decode_sketch::tuple_sketch_function(a, ThetaKind::Sketch, false)?,
+        TupleSketchAggInteger => crate::decode_sketch::tuple_sketch_function(a, ThetaKind::Sketch, true)?,
+        TupleUnionAggDouble => crate::decode_sketch::tuple_sketch_function(a, ThetaKind::Union, false)?,
+        TupleUnionAggInteger => crate::decode_sketch::tuple_sketch_function(a, ThetaKind::Union, true)?,
+        TupleIntersectionAggDouble => crate::decode_sketch::tuple_sketch_function(a, ThetaKind::Intersection, false)?,
+        TupleIntersectionAggInteger => crate::decode_sketch::tuple_sketch_function(a, ThetaKind::Intersection, true)?,
+        KllSketchAggBigint => crate::decode_sketch::kll_sketch_function(a, KllType::Bigint, true)?,
+        KllSketchAggFloat => crate::decode_sketch::kll_sketch_function(a, KllType::Float, true)?,
+        KllSketchAggDouble => crate::decode_sketch::kll_sketch_function(a, KllType::Double, true)?,
+        KllMergeAggBigint => crate::decode_sketch::kll_sketch_function(a, KllType::Bigint, false)?,
+        KllMergeAggFloat => crate::decode_sketch::kll_sketch_function(a, KllType::Float, false)?,
+        KllMergeAggDouble => crate::decode_sketch::kll_sketch_function(a, KllType::Double, false)?,
         Listagg => if a.listagg_desc.len() != a.listagg_nulls_first.len() {
             return Err(corrupt("a listagg state of another shape than its orders"));
         } else {

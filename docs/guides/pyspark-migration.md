@@ -34,7 +34,7 @@ assert [tuple(r) for r in out.collect()] == [("east", 15.5), ("west", 20.0)]
 
 Search your project for the function names in the tables below. The `krishiv check-compat` scanner that automates this is not part of 0.2.0 (see [check-compat](check-compat.md)).
 
-## Spark functions Krishiv does not run yet (67)
+## Spark functions Krishiv does not run yet (22)
 
 A name that is not in the data is reported as unknown and is not supported. A workaround is given only where one exists;
 an empty cell means there is none yet.
@@ -48,57 +48,12 @@ an empty cell means there is none yet.
 | [`collations`](../reference/sql/functions/collations.md) | not yet |  |
 | [`count_min_sketch`](../reference/sql/functions/count_min_sketch.md) | not yet |  |
 | [`java_method`](../reference/sql/functions/java_method.md) | not yet | Krishiv has no JVM to call into; register a UDF instead (see the Native Rust UDFs reference) |
-| [`kll_merge_agg_bigint`](../reference/sql/functions/kll_merge_agg_bigint.md) | not yet |  |
-| [`kll_merge_agg_double`](../reference/sql/functions/kll_merge_agg_double.md) | not yet |  |
-| [`kll_merge_agg_float`](../reference/sql/functions/kll_merge_agg_float.md) | not yet |  |
-| [`kll_sketch_agg_bigint`](../reference/sql/functions/kll_sketch_agg_bigint.md) | not yet | percentile_approx(col, p) returns the quantile directly; serialized KLL sketches are not available |
-| [`kll_sketch_agg_double`](../reference/sql/functions/kll_sketch_agg_double.md) | not yet | percentile_approx(col, p) returns the quantile directly; serialized KLL sketches are not available |
-| [`kll_sketch_agg_float`](../reference/sql/functions/kll_sketch_agg_float.md) | not yet | percentile_approx(col, p) returns the quantile directly; serialized KLL sketches are not available |
-| [`kll_sketch_get_n_bigint`](../reference/sql/functions/kll_sketch_get_n_bigint.md) | not yet |  |
-| [`kll_sketch_get_n_double`](../reference/sql/functions/kll_sketch_get_n_double.md) | not yet |  |
-| [`kll_sketch_get_n_float`](../reference/sql/functions/kll_sketch_get_n_float.md) | not yet |  |
-| [`kll_sketch_get_quantile_bigint`](../reference/sql/functions/kll_sketch_get_quantile_bigint.md) | not yet | percentile_approx(col, p) over the raw column returns the quantile; serialized KLL sketches are not available |
-| [`kll_sketch_get_quantile_double`](../reference/sql/functions/kll_sketch_get_quantile_double.md) | not yet | percentile_approx(col, p) over the raw column returns the quantile; serialized KLL sketches are not available |
-| [`kll_sketch_get_quantile_float`](../reference/sql/functions/kll_sketch_get_quantile_float.md) | not yet | percentile_approx(col, p) over the raw column returns the quantile; serialized KLL sketches are not available |
-| [`kll_sketch_get_rank_bigint`](../reference/sql/functions/kll_sketch_get_rank_bigint.md) | not yet |  |
-| [`kll_sketch_get_rank_double`](../reference/sql/functions/kll_sketch_get_rank_double.md) | not yet |  |
-| [`kll_sketch_get_rank_float`](../reference/sql/functions/kll_sketch_get_rank_float.md) | not yet |  |
-| [`kll_sketch_merge_bigint`](../reference/sql/functions/kll_sketch_merge_bigint.md) | not yet |  |
-| [`kll_sketch_merge_double`](../reference/sql/functions/kll_sketch_merge_double.md) | not yet |  |
-| [`kll_sketch_merge_float`](../reference/sql/functions/kll_sketch_merge_float.md) | not yet |  |
-| [`kll_sketch_to_string_bigint`](../reference/sql/functions/kll_sketch_to_string_bigint.md) | not yet |  |
-| [`kll_sketch_to_string_double`](../reference/sql/functions/kll_sketch_to_string_double.md) | not yet |  |
-| [`kll_sketch_to_string_float`](../reference/sql/functions/kll_sketch_to_string_float.md) | not yet |  |
 | [`python_worker_logs`](../reference/sql/functions/python_worker_logs.md) | not yet |  |
 | [`reflect`](../reference/sql/functions/reflect.md) | not yet | Krishiv has no JVM to call into; register a UDF instead (see the Native Rust UDFs reference) |
 | [`schema_of_avro`](../reference/sql/functions/schema_of_avro.md) | not yet |  |
 | [`schema_of_variant_agg`](../reference/sql/functions/schema_of_variant_agg.md) | not yet |  |
 | [`sentences`](../reference/sql/functions/sentences.md) | not yet | for the words of one sentence: regexp_extract_all(str, '[A-Za-z0-9_]+', 0); Spark's sentence and word break rules are not reproduced |
 | [`try_reflect`](../reference/sql/functions/try_reflect.md) | not yet | Krishiv has no JVM to call into; register a UDF instead (see the Native Rust UDFs reference) |
-| [`tuple_difference_double`](../reference/sql/functions/tuple_difference_double.md) | not yet |  |
-| [`tuple_difference_integer`](../reference/sql/functions/tuple_difference_integer.md) | not yet |  |
-| [`tuple_difference_theta_double`](../reference/sql/functions/tuple_difference_theta_double.md) | not yet |  |
-| [`tuple_difference_theta_integer`](../reference/sql/functions/tuple_difference_theta_integer.md) | not yet |  |
-| [`tuple_intersection_agg_double`](../reference/sql/functions/tuple_intersection_agg_double.md) | not yet |  |
-| [`tuple_intersection_agg_integer`](../reference/sql/functions/tuple_intersection_agg_integer.md) | not yet |  |
-| [`tuple_intersection_double`](../reference/sql/functions/tuple_intersection_double.md) | not yet |  |
-| [`tuple_intersection_integer`](../reference/sql/functions/tuple_intersection_integer.md) | not yet |  |
-| [`tuple_intersection_theta_double`](../reference/sql/functions/tuple_intersection_theta_double.md) | not yet |  |
-| [`tuple_intersection_theta_integer`](../reference/sql/functions/tuple_intersection_theta_integer.md) | not yet |  |
-| [`tuple_sketch_agg_double`](../reference/sql/functions/tuple_sketch_agg_double.md) | not yet |  |
-| [`tuple_sketch_agg_integer`](../reference/sql/functions/tuple_sketch_agg_integer.md) | not yet |  |
-| [`tuple_sketch_estimate_double`](../reference/sql/functions/tuple_sketch_estimate_double.md) | not yet |  |
-| [`tuple_sketch_estimate_integer`](../reference/sql/functions/tuple_sketch_estimate_integer.md) | not yet |  |
-| [`tuple_sketch_summary_double`](../reference/sql/functions/tuple_sketch_summary_double.md) | not yet |  |
-| [`tuple_sketch_summary_integer`](../reference/sql/functions/tuple_sketch_summary_integer.md) | not yet |  |
-| [`tuple_sketch_theta_double`](../reference/sql/functions/tuple_sketch_theta_double.md) | not yet |  |
-| [`tuple_sketch_theta_integer`](../reference/sql/functions/tuple_sketch_theta_integer.md) | not yet |  |
-| [`tuple_union_agg_double`](../reference/sql/functions/tuple_union_agg_double.md) | not yet |  |
-| [`tuple_union_agg_integer`](../reference/sql/functions/tuple_union_agg_integer.md) | not yet |  |
-| [`tuple_union_double`](../reference/sql/functions/tuple_union_double.md) | not yet |  |
-| [`tuple_union_integer`](../reference/sql/functions/tuple_union_integer.md) | not yet |  |
-| [`tuple_union_theta_double`](../reference/sql/functions/tuple_union_theta_double.md) | not yet |  |
-| [`tuple_union_theta_integer`](../reference/sql/functions/tuple_union_theta_integer.md) | not yet |  |
 | [`xpath`](../reference/sql/functions/xpath.md) | not yet |  |
 | [`xpath_boolean`](../reference/sql/functions/xpath_boolean.md) | not yet |  |
 | [`xpath_double`](../reference/sql/functions/xpath_double.md) | not yet |  |

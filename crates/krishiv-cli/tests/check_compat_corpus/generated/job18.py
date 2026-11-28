@@ -2,8 +2,8 @@
 import pyspark.sql.functions as F
 
 # F.nope('x')
-df = df.select(F.xpath_string("a"), F.col("b"))
-df = df.select(F.rank("a"), F.col("b"))
-df = df.select(F.kll_sketch_agg_bigint("a"), F.col("b"))
-df = df.select(F.regr_sxx("a"), F.col("b"))
-df = df.select(F.st_setsrid("a"), F.col("b"))
+df = spark.sql("SELECT array_union(a) FROM t18")
+df = df.select(F.acos("a"), F.col("b"))
+df = spark.sql("SELECT tuple_intersection_theta_integer(a) FROM t18")
+df = df.select(F.minute("a"), F.col("b"))
+df = spark.sql("SELECT approx_top_k_accumulate(a) FROM t18")

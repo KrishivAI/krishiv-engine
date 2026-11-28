@@ -8,7 +8,9 @@ description: "Returns human readable summary information about this sketch."
 
 Returns human readable summary information about this sketch.
 
-**Applies to:** not available in Krishiv yet. Spark: 4.1 and later.
+**Applies to:** Krishiv 0.2.0 and above. Spark: 4.1 and later.
+
+**Note.** The text matches Spark line for line for a sketch that has not left exact mode. In estimation mode the levels, retained items and compact size are those of Krishiv's sketch, which differ from Spark's, and two runs of one query can differ from each other.
 
 ## Syntax
 
@@ -20,9 +22,9 @@ kll_sketch_to_string_bigint(expr)
 
 | | |
 |---|---|
-| Krishiv | Not implemented yet |
+| Krishiv | Implemented |
 | Group | `sketch_funcs` |
-| Kind | aggregate (function) |
+| Kind | scalar (function) |
 | Added in Spark | 4.1.0 |
 | In Spark profiles | 4.1 and later |
 | Arguments | 1 |
@@ -33,12 +35,13 @@ kll_sketch_to_string_bigint(expr)
 ```sql
 -- kll_sketch_to_string_bigint, example 1
 > SELECT LENGTH(kll_sketch_to_string_bigint(kll_sketch_agg_bigint(col))) > 0 FROM VALUES (1), (2), (3), (4), (5) tab(col);
-Error: KRISHIV_UNSUPPORTED_FEATURE
+true
 ```
 
 ## Version history
 
 - Added in Spark 4.1.0.
+- Added in Krishiv 0.2.0.
 
 ## Related
 

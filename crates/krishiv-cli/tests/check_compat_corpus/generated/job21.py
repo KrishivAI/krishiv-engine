@@ -2,6 +2,9 @@
 import pyspark.sql.functions as F
 
 # F.nope('x')
-df = spark.sql("SELECT legacy_fn_35(a) FROM t21")
-df = df.select(F.legacy_fn_12("a"), F.col("b"))
-df = df.select(F.regr_sxx("a"), F.col("b"))
+df = spark.sql("SELECT find_in_set(a) FROM t21")
+df = df.select(F.variant_explode_outer("a"), F.col("b"))
+df = df.select(F.legacy_fn_34("a"), F.col("b"))
+df = df.select(F.legacy_fn_10("a"), F.col("b"))
+df = df.select(F.randn("a"), F.col("b"))
+df = df.select(F.log2("a"), F.col("b"))

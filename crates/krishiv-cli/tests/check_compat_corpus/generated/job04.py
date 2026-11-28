@@ -2,8 +2,8 @@
 import pyspark.sql.functions as F
 
 # F.nope('x')
-df = spark.sql("SELECT element_at(a) FROM t4")
-df = df.select(F.transform("a"), F.col("b"))
-df = spark.sql("SELECT cot(a) FROM t4")
-df = df.select(F.startswith("a"), F.col("b"))
-df = df.select(F.tuple_difference_double("a"), F.col("b"))
+df = spark.sql("SELECT rpad(a) FROM t4")
+df = df.select(F.greatest("a"), F.col("b"))
+df = spark.sql("SELECT python_worker_logs(a) FROM t4")
+df = df.select(F.array_size("a"), F.col("b"))
+df = df.select(F.python_worker_logs("a"), F.col("b"))

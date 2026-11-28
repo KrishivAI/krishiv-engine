@@ -3,6 +3,7 @@
 //! `theta_sketch_agg`, `theta_union_agg`, `theta_intersection_agg`).
 
 use krishiv_exec::aggregate::AggregateFunction;
+use krishiv_exec::aggregate::KllType;
 
 use crate::error::{Result, corrupt};
 use crate::proto as pb;
@@ -74,5 +75,76 @@ pub(crate) fn theta_sketch_function(
             Ok(AggregateFunction::ThetaIntersectionAgg)
         }
         ThetaKind::Intersection => Err(bad()),
+    }
+}
+
+/// A KLL aggregate from its wire form: `hll_precision` is the folded `k` in `8..=65535` of a sketch, and of a merge
+/// when given (0 when omitted).
+pub(crate) fn kll_sketch_function(
+    a: &pb::AggregateExpr,
+    ty: KllType,
+    sketch: bool,
+) -> Result<AggregateFunction> {
+    let bad = || corrupt("a KLL sketch aggregate of bad parameters");
+    if !a.percentages.is_empty()
+        || a.percentile_array
+        || a.percentile_reverse
+        || a.percentile_accuracy != 0
+        || a.percentile_legacy
+    {
+        return Err(bad());
+    }
+    let k = u16::try_from(a.hll_precision)
+        .ok()
+        .filter(|k| (8..=u16::MAX).contains(k));
+    match (sketch, k, a.hll_precision) {
+        (true, Some(k), _) => Ok(AggregateFunction::KllSketchAgg { ty, k }),
+        (false, Some(k), _) => Ok(AggregateFunction::KllMergeAgg { ty, k: Some(k) }),
+        (false, None, 0) => Ok(AggregateFunction::KllMergeAgg { ty, k: None }),
+        _ => Err(bad()),
+    }
+}
+
+/// A Tuple aggregate from its wire form: `hll_precision` is lgNomEntries (4 to 26; 0 for an intersection) plus 256
+/// times the mode.
+pub(crate) fn tuple_sketch_function(
+    a: &pb::AggregateExpr,
+    kind: crate::decode_sketch::ThetaKind,
+    integer: bool,
+) -> Result<AggregateFunction> {
+    use krishiv_exec::aggregate::TupleMode as Mode;
+    let bad = || corrupt("a Tuple sketch aggregate of bad parameters");
+    if !a.percentages.is_empty()
+        || a.percentile_array
+        || a.percentile_reverse
+        || a.percentile_accuracy != 0
+        || a.percentile_legacy
+    {
+        return Err(bad());
+    }
+    let mode = match a.hll_precision >> 8 {
+        0 => Mode::Sum,
+        1 => Mode::Min,
+        2 => Mode::Max,
+        3 => Mode::AlwaysOne,
+        _ => return Err(bad()),
+    };
+    let lg = a.hll_precision & 0xFF;
+    let lg_nom = u8::try_from(lg).ok().filter(|k| (4..=26).contains(k));
+    match (kind, lg_nom, lg) {
+        (ThetaKind::Sketch, Some(lg_nom), _) => Ok(AggregateFunction::TupleSketchAgg {
+            integer,
+            lg_nom,
+            mode,
+        }),
+        (ThetaKind::Union, Some(lg_nom), _) => Ok(AggregateFunction::TupleUnionAgg {
+            integer,
+            lg_nom,
+            mode,
+        }),
+        (ThetaKind::Intersection, _, 0) => {
+            Ok(AggregateFunction::TupleIntersectionAgg { integer, mode })
+        }
+        _ => Err(bad()),
     }
 }

@@ -149,6 +149,7 @@ registry! {
     (join_full_outer, JoinFullOuter, POST_MIGRATION_READER_VERSION, Semantic, "The `FULL_OUTER` hash join: both sides preserved, with no equivalent plan without it."),
     (join_single_match, JoinSingleMatch, POST_MIGRATION_READER_VERSION, Semantic, "The single-match flag of a `LeftOuter` hash join (a scalar subquery: more than one match per probe row is an error)."),
     (key_group_hash, KeyGroupHash, POST_MIGRATION_READER_VERSION, Semantic, "Hash exchanges that route by key-group ranges of the routing hash `H_kg` version 1 (XXH64, seed 0, of the normalized key bytes, folded over several columns)."),
+    (kll_sketch_aggregates, KllSketchAggregates, POST_MIGRATION_READER_VERSION, Semantic, "The DataSketches KLL quantile aggregates (`kll_sketch_agg_bigint`, `_float`, `_double` with their folded k; `kll_merge_agg_*` with their folded k, if any): a sketch per group."),
     (lambda_functions, LambdaFunctions, POST_MIGRATION_READER_VERSION, Semantic, "Lambda expressions (`x -> body`) and variables: the bound bodies of higher-order function arguments (`transform`, `filter`, `exists`, `forall`)."),
     (late_fetch, LateFetch, POST_MIGRATION_READER_VERSION, Optimization, "The `LateFetch` node and a scan's row id: a top-N that ranks a narrow scan and reads the other columns of its rows afterwards."),
     (legacy_charset_switches, LegacyCharsetSwitches, POST_MIGRATION_READER_VERSION, Semantic, "The session's `encode`/`decode` switches (`spark.sql.legacy.javaCharsets`, `spark.sql.legacy.codingErrorAction`); without them a worker would refuse the charset or raise on malformed input."),
@@ -184,6 +185,7 @@ registry! {
     (theta_sketch_aggregates, ThetaSketchAggregates, POST_MIGRATION_READER_VERSION, Semantic, "The DataSketches Theta aggregates (`theta_sketch_agg` and `theta_union_agg` with their folded lgNomEntries, `theta_intersection_agg`): a sketch per group."),
     (time_precision_nanos, TimePrecisionNanos, POST_MIGRATION_READER_VERSION, Semantic, "A `TIME(p)` type with p in 7..9 (Spark 4.3's nanosecond `TIME`), alone or inside an array, map, struct or user-defined type: a reader that knows only `time_type` (p <= 6) would refuse it as corrupt. Such a type contributes this feature alone, not `time_type`; a `TIME(p <= 6)` elsewhere in the plan still adds `time_type` beside it."),
     (time_type, TimeType, POST_MIGRATION_READER_VERSION, Semantic, "The `TIME` type, with its precision."),
+    (tuple_sketch_aggregates, TupleSketchAggregates, POST_MIGRATION_READER_VERSION, Semantic, "The DataSketches Tuple aggregates (`tuple_sketch_agg_double`, `_integer`, `tuple_union_agg_*`, `tuple_intersection_agg_*`) with their folded lgNomEntries and summary mode: a sketch per group."),
     (udt_type, UdtType, POST_MIGRATION_READER_VERSION, Semantic, "User-defined types (Spark `UserDefinedType`): stored as their SQL type, with the class names in the plan."),
     (union_loop, UnionLoop, POST_MIGRATION_READER_VERSION, Semantic, "The `UnionLoop` and `LoopRef` nodes (recursive common table expressions run as a loop)."),
     (variant_explode, VariantExplode, POST_MIGRATION_READER_VERSION, Semantic, "The `variant_explode` generator (and `variant_explode_outer`): the fields of a variant object or the elements of a variant array."),
@@ -774,6 +776,14 @@ pub fn feature_of(construct: Construct<'_>) -> Option<Feature> {
             | AggregateFunction::BitmapAndAgg => Some(Feature::BitmapAggregates),
             AggregateFunction::HllSketchAgg { .. } | AggregateFunction::HllUnionAgg { .. } => {
                 Some(Feature::HllSketchAggregates)
+            }
+            AggregateFunction::TupleSketchAgg { .. }
+            | AggregateFunction::TupleUnionAgg { .. }
+            | AggregateFunction::TupleIntersectionAgg { .. } => {
+                Some(Feature::TupleSketchAggregates)
+            }
+            AggregateFunction::KllSketchAgg { .. } | AggregateFunction::KllMergeAgg { .. } => {
+                Some(Feature::KllSketchAggregates)
             }
             AggregateFunction::ThetaSketchAgg { .. }
             | AggregateFunction::ThetaUnionAgg { .. }

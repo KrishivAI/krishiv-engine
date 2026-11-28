@@ -349,8 +349,14 @@ fn render_function(row: &Row, params: &[Param], unsupported: bool) -> (String, S
             continue;
         }
         let helper = params[at].conv.helper();
+        // A numeric default is an int literal (`lgNomEntries` 12), any other a string.
+        let value = if !default.is_empty() && default.bytes().all(|b| b.is_ascii_digit()) {
+            (*default).to_owned()
+        } else {
+            format!("\"{default}\"")
+        };
         let (given, cond) = (
-            format!("(_lit(\"{default}\", \"{name}\"),)"),
+            format!("(_lit({value}, \"{name}\"),)"),
             format!("{name} is None and ({})", later.join(" or ")),
         );
         let rest = format!("_opt({helper}, {name}, \"{name}\")");

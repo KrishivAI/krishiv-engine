@@ -10,7 +10,7 @@ Aggregates the summary values from a integer summary type
 Datasketches TupleSketch. The mode can be 'sum', 'min', 'max', or 'alwaysone'
 (defaults to 'sum').
 
-**Applies to:** not available in Krishiv yet. Spark: 4.2 and later.
+**Applies to:** Krishiv 0.2.0 and above. Spark: 4.2 and later.
 
 ## Syntax
 
@@ -22,9 +22,9 @@ tuple_sketch_summary_integer(child, mode)
 
 | | |
 |---|---|
-| Krishiv | Not implemented yet |
+| Krishiv | Implemented |
 | Group | `sketch_funcs` |
-| Kind | aggregate (function) |
+| Kind | scalar (function) |
 | Added in Spark | 4.2.0 |
 | In Spark profiles | 4.2 and later |
 | Arguments | [1, 2] |
@@ -35,12 +35,13 @@ tuple_sketch_summary_integer(child, mode)
 ```sql
 -- tuple_sketch_summary_integer, example 1
 > SELECT tuple_sketch_summary_integer(tuple_sketch_agg_integer(key, summary)) FROM VALUES (1, 1), (1, 2), (2, 3) tab(key, summary);
-Error: KRISHIV_UNSUPPORTED_FEATURE
+6
 ```
 
 ## Version history
 
 - Added in Spark 4.2.0.
+- Added in Krishiv 0.2.0.
 
 ## Related
 

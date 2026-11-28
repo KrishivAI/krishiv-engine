@@ -23,7 +23,7 @@ def main(path):
     daily = spark.sql(
         """
         SELECT day, legacy_score(amount) AS score,
-               kll_sketch_agg_bigint(amount) AS sketch  -- sentences(x) in a comment
+               approx_top_k_estimate(amount) AS sketch  -- sentences(x) in a comment
         FROM daily_totals
         """
     )

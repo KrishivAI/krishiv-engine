@@ -49,6 +49,48 @@ pub(super) fn hll_default(name: &str, n: usize, origin: Origin) -> Option<Bound>
     }
 }
 
+/// The omitted trailing constants of the Tuple sketch functions (`lgNomEntries` 12, mode `'sum'`), as Spark's constructors
+/// write them: `tuple_sketch_agg_*(key, summary[, lg[, mode]])`, `tuple_union_agg_*(sketch[, lg[, mode]])`,
+/// `tuple_union_*(a, b[, lg[, mode]])`, `tuple_intersection_agg_*(sketch[, mode])`, `tuple_intersection_*(a, b[, mode])`
+/// and `tuple_sketch_summary_*(sketch[, mode])`.
+pub(super) fn tuple_defaults(name: &str, n: usize, origin: Origin) -> Vec<Bound> {
+    let lg = || default_argument(Literal::Integer(12), DataType::Integer, false, origin);
+    let mode = || {
+        default_argument(
+            Literal::String("sum".to_owned()),
+            DataType::String,
+            false,
+            origin,
+        )
+    };
+    let Some(rest) = name.strip_prefix("tuple_") else {
+        return Vec::new();
+    };
+    let sized = |base: usize| match n.checked_sub(base) {
+        Some(0) => vec![lg(), mode()],
+        Some(1) => vec![mode()],
+        _ => Vec::new(),
+    };
+    if rest.starts_with("sketch_agg_") {
+        sized(2)
+    } else if rest.starts_with("union_agg_") {
+        sized(1)
+    } else if rest.starts_with("union_") {
+        sized(2)
+    } else if rest.starts_with("intersection_agg_") {
+        if n == 1 { vec![mode()] } else { Vec::new() }
+    } else if rest.starts_with("intersection_") || rest.starts_with("sketch_summary_") {
+        let base = if rest.starts_with("sketch_summary_") {
+            1
+        } else {
+            2
+        };
+        if n == base { vec![mode()] } else { Vec::new() }
+    } else {
+        Vec::new()
+    }
+}
+
 /// The position of the options argument of the CSV and JSON functions (`n` arguments in the call: `from_protobuf` and `to_protobuf`
 /// take the options third in a three-argument call and fourth otherwise).
 pub(super) fn options_index(name: &str, n: usize) -> Option<usize> {
@@ -369,7 +411,11 @@ impl Resolver<'_> {
                 Expr::new(ExprNode::Literal(Literal::String(text))).with_origin(k.expr.origin),
             );
         }
-        Ok((Self::folded_ntile(entry, &constants, call_kids), ty))
+        let call_kids = Self::folded_ntile(entry, &constants, call_kids);
+        Ok((
+            Self::folded_sketch_constants(entry, &constants, call_kids),
+            ty,
+        ))
     }
 
     /// Under `spark.sql.timestampType = TIMESTAMP_NTZ`, the type string argument of `from_json`,
@@ -539,6 +585,52 @@ impl Resolver<'_> {
             k.expr = Arc::new(
                 Expr::new(ExprNode::Literal(Literal::Integer(n))).with_origin(k.expr.origin),
             );
+        }
+        kids
+    }
+
+    /// The size (`k`, `lgNomEntries`) and mode arguments of the KLL and Tuple sketch aggregates as the literals they
+    /// fold to (`kll_sketch_agg_bigint(x, 100 + 100)`): the planner reads literals. The rule checked them. Only for the
+    /// built-ins.
+    #[inline(never)]
+    pub(super) fn folded_sketch_constants(
+        entry: &FunctionEntry,
+        constants: &[Option<Constant>],
+        mut kids: Vec<Bound>,
+    ) -> Vec<Bound> {
+        if !is_builtin_entry(entry) {
+            return kids;
+        }
+        let name = entry.id.name();
+        let (ints, strings): (&[usize], &[usize]) =
+            if name.starts_with("kll_sketch_agg_") || name.starts_with("kll_merge_agg_") {
+                (&[1], &[])
+            } else if name.starts_with("tuple_sketch_agg_") {
+                (&[2], &[3])
+            } else if name.starts_with("tuple_union_agg_") {
+                (&[1], &[2])
+            } else if name.starts_with("tuple_intersection_agg_") {
+                (&[], &[1])
+            } else {
+                return kids;
+            };
+        for (at, constant) in constants.iter().enumerate() {
+            let literal = match constant {
+                Some(Constant::Integral(n)) if ints.contains(&at) => {
+                    i32::try_from(*n).ok().map(Literal::Integer)
+                }
+                // A string size (`concat('1', '2')`) is cast to `INT` as the rule's check did.
+                Some(Constant::String(m)) if ints.contains(&at) => {
+                    m.trim().parse::<i32>().ok().map(Literal::Integer)
+                }
+                Some(Constant::String(m)) if strings.contains(&at) => {
+                    Some(Literal::String(m.clone()))
+                }
+                _ => None,
+            };
+            if let (Some(literal), Some(k)) = (literal, kids.get_mut(at)) {
+                k.expr = Arc::new(Expr::new(ExprNode::Literal(literal)).with_origin(k.expr.origin));
+            }
         }
         kids
     }
@@ -975,6 +1067,7 @@ impl Resolver<'_> {
                     NamedDefault::Null => Literal::Null(None),
                     NamedDefault::Text(s) => Literal::String(s.to_owned()),
                     NamedDefault::Bool(b) => Literal::Boolean(b),
+                    NamedDefault::Int(v) => Literal::Integer(v),
                     NamedDefault::Required => {
                         return Err(unsupported("a required parameter default", origin));
                     }
