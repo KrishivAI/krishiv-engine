@@ -44,6 +44,7 @@ static SPECS: LazyLock<Vec<OptionSpec>> = LazyLock::new(|| {
         string("charset", "Alias of `encoding`.");
         string("compression", "Write codec: none, uncompressed, bzip2, deflate, gzip, lz4 or snappy.");
         string("codec", "Alias of `compression`.");
+        crate::text::compression_suffixes_spec();
     }
 });
 

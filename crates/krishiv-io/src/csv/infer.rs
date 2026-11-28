@@ -372,7 +372,7 @@ async fn for_each_line(
 
 /// The lines of `range` of `file`; a compressed file is read whole.
 fn line_reader(file: &FileRef, range: ByteRange, o: &CsvOptions) -> LineReader {
-    let codec = crate::text::codec::Codec::of_path(file.path.as_ref());
+    let codec = crate::text::codec::Codec::of_path(file.path.as_ref(), o.suffixes);
     let range = if codec.is_some() {
         ByteRange::whole(file.size)
     } else {
@@ -516,8 +516,8 @@ async fn infer_part(io: &IoContext, sh: &Arc<Shared>, mut part: Part) -> FormatR
 
 /// The text of `file`, read whole (`multiLine`).
 async fn whole_text(io: &IoContext, file: &FileRef, o: &CsvOptions) -> FormatResult<String> {
-    let mut r = WholeReader::new(file.size, ByteRange::whole(file.size))
-        .compressed(crate::text::codec::Codec::of_path(file.path.as_ref()));
+    let codec = crate::text::codec::Codec::of_path(file.path.as_ref(), o.suffixes);
+    let mut r = WholeReader::new(file.size, ByteRange::whole(file.size)).compressed(codec);
     loop {
         if let Some(need) = r.need() {
             let got = io.get_ranges(file, std::slice::from_ref(&need)).await?;
@@ -622,10 +622,10 @@ pub(crate) fn infer<'a>(
     o: &'a FormatOptions,
 ) -> BoxFuture<'a, FormatResult<SchemaRef>> {
     Box::pin(async move {
-        for f in files {
-            crate::text::check_plain(f.path.as_ref())?;
-        }
         let opts = CsvOptions::new(o, false)?;
+        for f in files {
+            crate::text::check_plain(f.path.as_ref(), opts.suffixes)?;
+        }
         let dt = Datetimes::csv(o, Purpose::Parse)?;
         let date =
             DateTimePattern::new(o.str("dateFormat").unwrap_or("yyyy-MM-dd"), Purpose::Parse)?;
@@ -680,7 +680,8 @@ pub(crate) fn infer<'a>(
                 .map(|f| SplitFile {
                     size: f.size,
                     // A compressed file is one split, sampled once.
-                    splittable: crate::text::codec::Codec::of_path(f.path.as_ref()).is_none(),
+                    splittable: crate::text::codec::Codec::of_path(f.path.as_ref(), opts.suffixes)
+                        .is_none(),
                 })
                 .collect();
             let parts = plan(&split_config(o)?, &listing);

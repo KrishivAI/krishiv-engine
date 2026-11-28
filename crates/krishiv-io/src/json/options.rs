@@ -74,6 +74,7 @@ static SPECS: LazyLock<Vec<OptionSpec>> = LazyLock::new(|| {
         string("dateFormat", "The pattern of DATE values (default: Spark's lenient grammar).");
         string("timestampFormat", "The pattern of TIMESTAMP values.");
         string("timestampNTZFormat", "The pattern of TIMESTAMP_NTZ values.");
+        crate::text::compression_suffixes_spec();
         conf(crate::text::TIME_TYPE_CONF, OptionKind::Bool, OptionDefault::Bool(false), crate::text::TIME_TYPE_CONF, "The session's `spark.sql.timeType.enabled`: inference may give `TIME`.");
         string("timeFormat", "The pattern of TIME values (default: Spark's TIME grammar to read, the value's own digits to write).");
         conf(crate::text::TIME_NANOS_CONF, OptionKind::Bool, OptionDefault::Bool(true), crate::text::TIME_NANOS_CONF, "The session's `krishiv.io.text.timeNanos` (from its Spark profile): a `TIME` read keeps nine fraction digits, else six.");
@@ -176,6 +177,8 @@ pub(crate) struct JsonOptions {
     /// `ignoreCorruptFiles` (or `spark.sql.files.ignoreCorruptFiles`): inference keeps the lines of a broken
     /// compressed file.
     pub ignore_corrupt_files: bool,
+    /// Which file suffixes name a compression codec.
+    pub suffixes: crate::text::codec::CompressionSuffixes,
 }
 
 impl JsonOptions {
@@ -221,6 +224,7 @@ impl JsonOptions {
             drop_field_if_all_null: o.bool("dropFieldIfAllNull").unwrap_or(false),
             ignore_null_fields: o.bool("ignoreNullFields").unwrap_or(true),
             ignore_corrupt_files: o.bool("ignoreCorruptFiles").unwrap_or(false),
+            suffixes: crate::text::codec::CompressionSuffixes::of(o),
         })
     }
 }

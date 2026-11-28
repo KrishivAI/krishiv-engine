@@ -15,15 +15,16 @@ use crate::options::FormatOptions;
 pub(crate) fn infer<'a>(
     _io: &'a IoContext,
     files: &'a [FileRef],
-    _o: &'a FormatOptions,
+    o: &'a FormatOptions,
 ) -> BoxFuture<'a, FormatResult<SchemaRef>> {
     let mut result: FormatResult<SchemaRef> = Ok(Arc::new(Schema::new(vec![Field::new(
         "value",
         DataType::Utf8View,
         true,
     )])));
+    let rules = crate::text::codec::CompressionSuffixes::of(o);
     for f in files {
-        if let Err(e) = crate::text::check_plain(f.path.as_ref()) {
+        if let Err(e) = crate::text::check_plain(f.path.as_ref(), rules) {
             result = Err(e.into());
             break;
         }

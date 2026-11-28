@@ -145,15 +145,21 @@ impl FileMetadata for TextMetadata {
 }
 
 impl TextMetadata {
-    /// The metadata of the listed `file`.
+    /// The metadata of the listed `file` under the read's suffix rules (the
+    /// metadata cache keys on them: [`compression_suffixes_spec`]).
     ///
     /// # Errors
-    /// `KRISHIV_UNSUPPORTED_FEATURE` for a compressed file.
-    pub(crate) fn of(file: &crate::io::FileRef) -> crate::error::Result<Self> {
-        check_plain(file.path.as_ref())?;
+    /// `KRISHIV_UNSUPPORTED_FEATURE` for a zstd file under the rules of a
+    /// Spark line before 4.1.
+    pub(crate) fn of(
+        file: &crate::io::FileRef,
+        o: &crate::options::FormatOptions,
+    ) -> crate::error::Result<Self> {
+        let rules = codec::CompressionSuffixes::of(o);
+        check_plain(file.path.as_ref(), rules)?;
         Ok(Self {
             size: file.size,
-            codec: codec::Codec::of_path(file.path.as_ref()),
+            codec: codec::Codec::of_path(file.path.as_ref(), rules),
         })
     }
 
@@ -333,20 +339,43 @@ mod reader_tests;
 #[cfg(test)]
 mod tests;
 
-/// Compression suffixes this build cannot read.
-const UNREADABLE: &[&str] = &[".zst", ".zstd"];
+/// Zstandard's suffixes, which the rules of Spark 3.5 and 4.0 do not name.
+const ZSTD_SUFFIXES: &[&str] = &[".zst", ".zstd"];
 
-/// Checks that the file at `path` is not in a codec this build lacks.
+/// Checks that the file at `path` is not a zstd file the `rules` have no codec
+/// for: stock Spark 3.5 and 4.0 fail on `.zst`, and reading either suffix as
+/// text would give the compressed bytes.
 ///
 /// # Errors
-/// `KRISHIV_UNSUPPORTED_FEATURE` for a zstd file.
-pub(crate) fn check_plain(path: &str) -> crate::error::Result<()> {
-    if UNREADABLE.iter().any(|s| path.ends_with(s)) {
+/// `KRISHIV_UNSUPPORTED_FEATURE` for such a file.
+pub(crate) fn check_plain(
+    path: &str,
+    rules: codec::CompressionSuffixes,
+) -> crate::error::Result<()> {
+    if rules != codec::CompressionSuffixes::Extended
+        && ZSTD_SUFFIXES.iter().any(|s| rules.matches(path, s))
+    {
         return Err(unsupported(format!(
-            "reading zstd-compressed files such as {path} (Spark's text sources have no zstd codec)"
+            "reading zstd-compressed files such as {path} under this Spark profile (Spark reads \
+             them from 4.1: {})",
+            codec::SUFFIXES_CONF
         )));
     }
     Ok(())
+}
+
+/// The session's [`codec::SUFFIXES_CONF`] as a conf option of the line
+/// formats. The codec it gives a file is part of the file's metadata, so it
+/// joins the metadata cache key.
+pub(crate) fn compression_suffixes_spec() -> crate::options::OptionSpec {
+    crate::options::OptionSpec {
+        name: codec::SUFFIXES_CONF,
+        kind: crate::options::OptionKind::Enum(codec::SUFFIXES_VALUES),
+        default: crate::options::OptionDefault::Str("extended"),
+        conf_fallback: Some(codec::SUFFIXES_CONF),
+        metadata_key: true,
+        doc: "The session's `krishiv.io.text.compressionSuffixes` (from its Spark profile): which file suffixes name a compression codec.",
+    }
 }
 
 /// The codec the write options ask for.

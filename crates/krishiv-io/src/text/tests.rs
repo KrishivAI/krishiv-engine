@@ -154,14 +154,25 @@ fn readers_ask_for_chunks_and_refuse_misplaced_bytes() {
 }
 
 #[test]
-fn only_zstd_files_are_refused() {
+fn zstd_files_are_refused_only_under_the_older_suffix_rules() {
+    use super::codec::CompressionSuffixes::{AnyCase, Exact, Extended};
     use krishiv_common::error::ErrorClass::KrishivUnsupportedFeature;
-    for path in ["a.zst", "a.zstd"] {
-        let e = super::check_plain(path).expect_err(path);
+    for (path, rules) in [
+        ("a.zst", Exact),
+        ("a.zstd", Exact),
+        ("a.ZST", AnyCase),
+        ("a.Zstd", AnyCase),
+    ] {
+        let e = super::check_plain(path, rules).expect_err(path);
         assert_eq!(e.error_class(), KrishivUnsupportedFeature, "{path}");
     }
     for path in ["a.csv", "a.gz", "a.deflate", "a.bz2", "a.lz4", "a.snappy"] {
-        assert!(super::check_plain(path).is_ok(), "{path}");
+        assert!(super::check_plain(path, Exact).is_ok(), "{path}");
+    }
+    // Upper case is no suffix to 3.5, and 4.1 reads every zstd file.
+    assert!(super::check_plain("a.ZST", Exact).is_ok());
+    for path in ["a.zst", "a.ZSTD"] {
+        assert!(super::check_plain(path, Extended).is_ok(), "{path}");
     }
 }
 

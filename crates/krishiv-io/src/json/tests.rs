@@ -1441,7 +1441,8 @@ fn write_then_read_round_trips() {
         e.error_class(),
         ErrorClass::CodecNotAvailableWithAvailableCodecsSuggestion
     );
-    let e = infer_named(b"{}\n", "a.json.zst", &options(&serde_json::json!({}))).expect_err("zst");
+    let old = serde_json::json!({"krishiv.io.text.compressionSuffixes": "exact"});
+    let e = infer_named(b"{}\n", "a.json.zst", &options(&old)).expect_err("zst");
     assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
 }
 

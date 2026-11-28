@@ -32,6 +32,7 @@ fn text_source() -> Capabilities {
         page_checksums: false,
         write: false,
         random_access: None,
+        suffixes: crate::text::codec::CompressionSuffixes::default(),
     }
 }
 

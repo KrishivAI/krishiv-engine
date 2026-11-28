@@ -1,14 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Hadoop compression codecs of the line-oriented sources (CSV, JSON, text),
-//! by file suffix, as Spark 4.2 reads and writes them: `.gz` (gzip, members
-//! may be concatenated), `.deflate` (zlib), `.bz2`, `.lz4` and `.snappy`
+//! by file suffix, as Spark reads and writes them: `.gz` (gzip, members may
+//! be concatenated), `.deflate` (zlib), `.bz2`, `.lz4` and `.snappy`
 //! (Hadoop's block framing: a big-endian uncompressed block length, then
-//! chunks of a big-endian compressed length and a raw LZ4 or Snappy block).
+//! chunks of a big-endian compressed length and a raw LZ4 or Snappy block),
+//! and, read only, Zstandard (frames may be concatenated). Which suffixes
+//! name a codec differs by Spark release ([`CompressionSuffixes`]).
 //!
 //! Compressed files are read whole by the split that starts at byte 0 (the
 //! other splits of a `.bz2` file own nothing), so line offsets count
-//! uncompressed bytes. `.zst` is not a codec Spark's text sources write, and
-//! reading it stays `KRISHIV_UNSUPPORTED_FEATURE`.
+//! uncompressed bytes. Spark's text sources do not write Zstandard
+//! (`CODEC_NOT_AVAILABLE`).
 
 use std::io::Write;
 
@@ -24,6 +26,53 @@ const MAX_BLOCK: usize = 64 << 20;
 pub(crate) const COMPRESSED_CHUNK: u64 = 64 << 10;
 /// Uncompressed bytes per block the block-framed writers cut.
 const WRITE_BLOCK: usize = 256_000;
+/// Plain bytes after which a Zstandard decoder stops and keeps the rest of its
+/// input, so that a chunk of a very repetitive file is decoded in pieces.
+const ZSTD_STEP: usize = 8 << 20;
+
+/// The session's `krishiv.io.text.compressionSuffixes`, read as an option
+/// named as the conf: which file suffixes name a compression codec.
+pub(crate) const SUFFIXES_CONF: &str = "krishiv.io.text.compressionSuffixes";
+
+/// The values of [`SUFFIXES_CONF`].
+pub(crate) const SUFFIXES_VALUES: &[&str] = &["exact", "anyCase", "extended"];
+
+/// Which file suffixes name a compression codec (observed with Spark 3.5.9,
+/// 4.0.5, 4.1.4, 4.2.0, 4.2.1 and 4.3.0).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum CompressionSuffixes {
+    /// Spark 3.5: `.gz`, `.deflate`, `.bz2`, `.lz4` and `.snappy`, in lower
+    /// case.
+    Exact,
+    /// Spark 4.0: the same suffixes in any case.
+    AnyCase,
+    /// Spark 4.1 and later: also `.gzip`, `.zst` and `.zstd`, in any case.
+    #[default]
+    Extended,
+}
+
+impl CompressionSuffixes {
+    /// The rules of a read's options.
+    pub(crate) fn of(o: &crate::options::FormatOptions) -> Self {
+        match o.str(SUFFIXES_CONF) {
+            Some(v) if v.eq_ignore_ascii_case("exact") => Self::Exact,
+            Some(v) if v.eq_ignore_ascii_case("anyCase") => Self::AnyCase,
+            _ => Self::Extended,
+        }
+    }
+
+    /// Whether `path` ends in `suffix` under these rules.
+    pub(crate) fn matches(self, path: &str, suffix: &str) -> bool {
+        match self {
+            Self::Exact => path.ends_with(suffix),
+            Self::AnyCase | Self::Extended => path
+                .len()
+                .checked_sub(suffix.len())
+                .and_then(|at| path.as_bytes().get(at..))
+                .is_some_and(|end| end.eq_ignore_ascii_case(suffix.as_bytes())),
+        }
+    }
+}
 
 /// A compression codec of a text file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -33,6 +82,7 @@ pub(crate) enum Codec {
     Bzip2,
     Lz4,
     Snappy,
+    Zstd,
 }
 
 /// Names Spark accepts for `compression` / `codec` (besides none).
@@ -47,8 +97,16 @@ pub(crate) const WRITE_NAMES: &[&str] = &[
 ];
 
 impl Codec {
-    /// The codec of a file name, by Hadoop's suffix rule.
-    pub(crate) fn of_path(path: &str) -> Option<Self> {
+    /// The codec of a file name, by Hadoop's suffix rule under `rules`.
+    pub(crate) fn of_path(path: &str, rules: CompressionSuffixes) -> Option<Self> {
+        let later: &[(&str, Self)] = match rules {
+            CompressionSuffixes::Extended => &[
+                (".gzip", Self::Gzip),
+                (".zst", Self::Zstd),
+                (".zstd", Self::Zstd),
+            ],
+            CompressionSuffixes::Exact | CompressionSuffixes::AnyCase => &[],
+        };
         [
             (".gz", Self::Gzip),
             (".deflate", Self::Deflate),
@@ -56,9 +114,10 @@ impl Codec {
             (".lz4", Self::Lz4),
             (".snappy", Self::Snappy),
         ]
-        .into_iter()
-        .find(|(s, _)| path.ends_with(s))
-        .map(|(_, c)| c)
+        .iter()
+        .chain(later)
+        .find(|(s, _)| rules.matches(path, s))
+        .map(|&(_, c)| c)
     }
 
     /// The codec a write option names: `Some(None)` for no compression,
@@ -83,8 +142,13 @@ impl Codec {
             Self::Bzip2 => ".bz2",
             Self::Lz4 => ".lz4",
             Self::Snappy => ".snappy",
+            Self::Zstd => ".zst",
         }
     }
+}
+
+fn unwritable() -> FormatError {
+    FormatError::Other(internal("zstd text files are not written"))
 }
 
 fn corrupt(codec: Codec, what: impl std::fmt::Display) -> FormatError {
@@ -96,6 +160,7 @@ enum Dec {
     Deflate(Multi<flate2::Decompress>),
     Bzip2(Multi<bzip2::Decompress>),
     Block(BlockDec),
+    Zstd(Multi<ZstdFrame>),
 }
 
 /// A streaming decompressor: compressed bytes in, plain bytes out.
@@ -119,6 +184,7 @@ impl Decompressor {
             Codec::Deflate => Dec::Deflate(Multi::new(|| flate2::Decompress::new(true))),
             Codec::Bzip2 => Dec::Bzip2(Multi::new(|| bzip2::Decompress::new(false))),
             Codec::Lz4 | Codec::Snappy => Dec::Block(BlockDec::new(codec)),
+            Codec::Zstd => Dec::Zstd(Multi::pausing(ZstdFrame::default)),
         };
         Self {
             codec,
@@ -151,8 +217,35 @@ impl Decompressor {
             Dec::Deflate(d) => d.run(codec, input, out)?,
             Dec::Bzip2(d) => d.run(codec, input, out)?,
             Dec::Block(d) => d.push(input, out)?,
+            Dec::Zstd(d) => d.run(codec, input, out)?,
         }
         Ok(())
+    }
+
+    /// Whether pushed input is still to be decoded ([`Self::resume`]).
+    pub(crate) fn pending(&self) -> bool {
+        matches!(&self.dec, Some(Dec::Zstd(d)) if d.paused)
+    }
+
+    /// Decodes the next piece of the input a push kept.
+    pub(crate) fn resume(&mut self, out: &mut Vec<u8>) -> FormatResult<()> {
+        let codec = self.codec;
+        match self.dec.as_mut() {
+            Some(Dec::Zstd(d)) if d.paused => {
+                let held = std::mem::take(&mut d.held);
+                d.run(codec, &held, out)
+            }
+            _ => Ok(()),
+        }
+    }
+
+    /// Bytes the decoder holds beyond a few fixed-size buffers: a Zstandard
+    /// window and the input not yet decoded.
+    pub(crate) fn buffered(&self) -> usize {
+        match &self.dec {
+            Some(Dec::Zstd(d)) => d.held.capacity() + d.dec.size(),
+            _ => 0,
+        }
     }
 
     /// Ends the stream; a truncated one is `Corrupt`.
@@ -167,6 +260,7 @@ impl Decompressor {
             Dec::Deflate(d) => d.finish(codec)?,
             Dec::Bzip2(d) => d.finish(codec)?,
             Dec::Block(d) => d.finish()?,
+            Dec::Zstd(d) => d.finish(codec)?,
         }
         Ok(())
     }
@@ -200,10 +294,40 @@ impl Stream for bzip2::Decompress {
     }
 }
 
+/// One Zstandard frame's decoder; its context is made at the first byte, with
+/// zstd's default window limit (128 MiB).
+#[derive(Default)]
+struct ZstdFrame(Option<zstd::zstd_safe::DCtx<'static>>);
+
+impl ZstdFrame {
+    /// Bytes the context holds.
+    fn size(&self) -> usize {
+        self.0.as_ref().map_or(0, zstd::zstd_safe::DCtx::sizeof)
+    }
+}
+
+impl Stream for ZstdFrame {
+    fn step(&mut self, input: &[u8], out: &mut Vec<u8>) -> Result<(usize, bool), String> {
+        use zstd::zstd_safe::{DCtx, InBuffer, OutBuffer, get_error_name};
+        let ctx = match &mut self.0 {
+            Some(ctx) => ctx,
+            none => none.insert(DCtx::try_create().ok_or("no memory for a zstd decoder")?),
+        };
+        let written = out.len();
+        let mut source = InBuffer::around(input);
+        let mut sink = OutBuffer::around_pos(out, written);
+        // Zero left: the frame is decoded and handed over whole.
+        let left = ctx
+            .decompress_stream(&mut sink, &mut source)
+            .map_err(|code| get_error_name(code).to_owned())?;
+        Ok((source.pos(), left == 0))
+    }
+}
+
 /// Most plain bytes one pushed chunk may inflate to: gzip and zlib cannot
 /// exceed ~1032:1, so a chunk of [`COMPRESSED_CHUNK`] bytes stays within it;
 /// a bomb is an error, not an allocation.
-const MAX_PUSH_OUTPUT: usize = 128 << 20;
+pub(crate) const MAX_PUSH_OUTPUT: usize = 128 << 20;
 
 /// A decoder of consecutive streams.
 struct Multi<D: Stream> {
@@ -211,6 +335,13 @@ struct Multi<D: Stream> {
     dec: D,
     /// Whether a stream has begun and not ended.
     open: bool,
+    /// Whether a run stops after [`ZSTD_STEP`] plain bytes and keeps the rest,
+    /// instead of failing past [`MAX_PUSH_OUTPUT`].
+    pauses: bool,
+    /// Whether the last run stopped early, with input or output left.
+    paused: bool,
+    /// The input a paused run has not consumed.
+    held: Vec<u8>,
 }
 
 impl<D: Stream> Multi<D> {
@@ -219,12 +350,30 @@ impl<D: Stream> Multi<D> {
             dec: make(),
             make,
             open: false,
+            pauses: false,
+            paused: false,
+            held: Vec::new(),
+        }
+    }
+
+    /// A decoder that hands over a large output in pieces.
+    fn pausing(make: fn() -> D) -> Self {
+        Self {
+            pauses: true,
+            ..Self::new(make)
         }
     }
 
     fn run(&mut self, codec: Codec, mut input: &[u8], out: &mut Vec<u8>) -> FormatResult<()> {
         let start = out.len();
-        while !input.is_empty() {
+        // Whether the decoder may still hold output of the input it consumed.
+        let mut full = std::mem::take(&mut self.paused);
+        while !input.is_empty() || full {
+            if self.pauses && out.len() - start >= ZSTD_STEP {
+                self.held = input.to_vec();
+                self.paused = true;
+                return Ok(());
+            }
             if out.len() - start > MAX_PUSH_OUTPUT {
                 return Err(corrupt(codec, "a chunk inflates past the size limit"));
             }
@@ -235,11 +384,16 @@ impl<D: Stream> Multi<D> {
             }
             let (used, ended) = self.dec.step(input, out).map_err(|e| corrupt(codec, e))?;
             input = &input[used.min(input.len())..];
+            full = false;
             if ended {
                 self.dec = (self.make)();
                 self.open = false;
             } else if used == 0 && out.len() == before_out {
-                return Err(corrupt(codec, "the stream made no progress"));
+                if !input.is_empty() {
+                    return Err(corrupt(codec, "the stream made no progress"));
+                }
+            } else {
+                full = self.pauses && out.len() == out.capacity();
             }
         }
         Ok(())
@@ -335,7 +489,13 @@ enum Enc {
     Gzip(flate2::write::GzEncoder<Vec<u8>>),
     Deflate(flate2::write::ZlibEncoder<Vec<u8>>),
     Bzip2(bzip2::write::BzEncoder<Vec<u8>>),
-    Block { pending: Vec<u8>, out: Vec<u8> },
+    Block {
+        pending: Vec<u8>,
+        out: Vec<u8>,
+    },
+    /// Zstandard, which the text sources do not write
+    /// ([`Codec::parse_write`] never names it).
+    Unwritable,
 }
 
 /// A streaming compressor.
@@ -363,6 +523,7 @@ impl Compressor {
                 pending: Vec::new(),
                 out: Vec::new(),
             },
+            Codec::Zstd => Enc::Unwritable,
         };
         Self { codec, enc }
     }
@@ -404,6 +565,7 @@ impl Compressor {
                 pending.drain(..done);
                 Ok(())
             }
+            Enc::Unwritable => Err(unwritable()),
         }
     }
 
@@ -414,6 +576,7 @@ impl Compressor {
             Enc::Deflate(e) => std::mem::take(e.get_mut()),
             Enc::Bzip2(e) => std::mem::take(e.get_mut()),
             Enc::Block { out, .. } => std::mem::take(out),
+            Enc::Unwritable => Vec::new(),
         }
     }
 
@@ -424,6 +587,7 @@ impl Compressor {
             Enc::Deflate(e) => e.get_ref().capacity(),
             Enc::Bzip2(e) => e.get_ref().capacity(),
             Enc::Block { pending, out } => pending.capacity() + out.capacity(),
+            Enc::Unwritable => 0,
         }
     }
 
@@ -439,6 +603,7 @@ impl Compressor {
                 Self::cut(codec, &pending, &mut out)?;
                 Ok(out)
             }
+            Enc::Unwritable => Err(unwritable()),
         }
     }
 }

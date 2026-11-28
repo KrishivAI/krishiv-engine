@@ -351,14 +351,15 @@ fn write_checks_and_nulls() {
         let schema = Arc::new(Schema::new(vec![Field::new("value", dt, true)]));
         assert!(TextFormat.check_write(&schema, &o).is_ok());
     }
-    // Spark has no zstd text codec; the others are covered in `text::format_codec_tests`.
+    // Spark's text sources do not write zstd; the others are covered in `text::format_codec_tests`.
     let w = options(&serde_json::json!({"compression": "zstd"}));
     let e = TextFormat
         .check_write(&value_schema(), &w)
         .expect_err("codec");
     assert!(matches!(&e, crate::error::FormatError::Other(e)
         if e.error_class() == krishiv_common::error::ErrorClass::CodecNotAvailableWithAvailableCodecsSuggestion));
-    let e = infer_named(b"a\n", "a.txt.zst", &o).expect_err("zst");
+    let old = options(&serde_json::json!({"krishiv.io.text.compressionSuffixes": "exact"}));
+    let e = infer_named(b"a\n", "a.txt.zst", &old).expect_err("zst");
     assert_eq!(e.error_class(), Unsupported);
 }
 

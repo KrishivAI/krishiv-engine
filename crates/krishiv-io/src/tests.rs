@@ -1727,6 +1727,7 @@ fn capabilities_and_metadata_needs() {
         page_checksums: false,
         write: false,
         random_access: None,
+        suffixes: crate::text::codec::CompressionSuffixes::default(),
     };
     assert!(
         caps.is_splittable("a.csv")

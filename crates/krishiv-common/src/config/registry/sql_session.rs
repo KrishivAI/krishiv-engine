@@ -62,6 +62,23 @@ pub static IO_TEXT_INFER_TIME: ConfigEntry = ConfigEntry {
     spark_alias: None,
 };
 
+/// Which suffixes name the compression codec of a CSV, JSON or text file.
+pub static IO_TEXT_COMPRESSION_SUFFIXES: ConfigEntry = ConfigEntry {
+    key: "krishiv.io.text.compressionSuffixes",
+    value_type: ValueType::Enum(&["exact", "anyCase", "extended"]),
+    default: Some(ConfigValue::String(Cow::Borrowed("extended"))),
+    doc: "Which file suffixes make a CSV, JSON or text read decompress a file. `exact`: `.gz`, \
+          `.deflate`, `.bz2`, `.lz4` and `.snappy` in lower case (Spark 3.5). `anyCase`: the same \
+          in any case (Spark 4.0). `extended`: also `.gzip`, `.zst` and `.zstd`, in any case \
+          (Spark 4.1 and later). A file with another suffix is read as text; a `.zst` or `.zstd` \
+          file under the first two is `KRISHIV_UNSUPPORTED_FEATURE`. The session sets it from its \
+          Spark profile.",
+    scope: Scope::Session,
+    settable_by: SettableBy::Admin,
+    version_added: "0.3.1",
+    spark_alias: None,
+};
+
 /// Whether Parquet schema inference opens zero-byte files.
 pub static IO_PARQUET_INFER_EMPTY_FILES: ConfigEntry = ConfigEntry {
     key: "krishiv.io.parquet.inferFromEmptyFiles",

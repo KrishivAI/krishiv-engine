@@ -415,6 +415,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         "krishiv.iceberg.manifestCache.bytes",
         &ICEBERG_MANIFEST_CACHE_BYTES,
     ),
+    (
+        "krishiv.io.text.compressionSuffixes",
+        &IO_TEXT_COMPRESSION_SUFFIXES,
+    ),
     ("krishiv.optimizer.semiAntiJoinOrder", &SEMI_ANTI_JOIN_ORDER),
     (
         "krishiv.python.worker.maxPerSession",

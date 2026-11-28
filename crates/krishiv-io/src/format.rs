@@ -25,6 +25,7 @@
 //! [`AsyncDecoder`]: their reads go to a [`PushReadAt`] that turns them into
 //! [`Step::NeedData`], so their I/O still goes through the scheduler.
 
+use crate::text::codec::{Codec, CompressionSuffixes};
 use std::any::Any;
 use std::fmt;
 use std::ops::Range;
@@ -222,8 +223,8 @@ pub enum Splittable {
     No,
     /// Always (Parquet: units are found from the footer).
     Yes,
-    /// By the file's compression suffix, as Hadoop codecs decide: none or
-    /// `.bz2` yes; `.gz`, `.deflate`, `.lz4`, `.snappy`, `.zst` no.
+    /// By the file's compression codec, as Hadoop decides: an uncompressed or
+    /// bzip2 file yes, any other codec no.
     ByCodec,
 }
 
@@ -259,6 +260,8 @@ pub struct Capabilities {
     /// it. The row index is then positional: its value doesn't depend on
     /// how much of the file was read before, so a split may be cut finer.
     pub random_access: Option<Granularity>,
+    /// Which file suffixes name a codec, for [`Splittable::ByCodec`].
+    pub(crate) suffixes: CompressionSuffixes,
 }
 
 /// What a read of one row by position costs at least.
@@ -271,10 +274,6 @@ pub enum Granularity {
     /// The row alone.
     Row,
 }
-
-/// Compression suffixes whose Hadoop codec cannot split (observed with
-/// Spark 4.2's text source).
-const UNSPLITTABLE_SUFFIXES: &[&str] = &[".gz", ".deflate", ".lz4", ".snappy", ".zst"];
 
 impl Capabilities {
     /// Capabilities with `splittable` and nothing else; set the other
@@ -291,6 +290,7 @@ impl Capabilities {
             page_checksums: false,
             write: false,
             random_access: None,
+            suffixes: CompressionSuffixes::default(),
         }
     }
 
@@ -300,7 +300,10 @@ impl Capabilities {
         match self.splittable {
             Splittable::No => false,
             Splittable::Yes => true,
-            Splittable::ByCodec => !UNSPLITTABLE_SUFFIXES.iter().any(|s| path.ends_with(s)),
+            // Only bzip2's blocks can be found from the middle of a file.
+            Splittable::ByCodec => {
+                Codec::of_path(path, self.suffixes).is_none_or(|c| c == Codec::Bzip2)
+            }
         }
     }
 }

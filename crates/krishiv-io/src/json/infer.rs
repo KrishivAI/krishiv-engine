@@ -411,7 +411,7 @@ async fn for_each_line(
     syntax: Syntax,
     mut f: impl FnMut(&Result<Top, Reason>) -> FormatResult<bool>,
 ) -> FormatResult<()> {
-    let codec = crate::text::codec::Codec::of_path(ctx.file.path.as_ref());
+    let codec = crate::text::codec::Codec::of_path(ctx.file.path.as_ref(), ctx.o.suffixes);
     let range = if codec.is_some() {
         ByteRange::whole(ctx.file.size)
     } else {
@@ -457,8 +457,8 @@ async fn for_each_line(
 
 /// The text of `file`, read whole (`multiLine`).
 async fn whole_text(ctx: &Ctx<'_>) -> FormatResult<String> {
-    let mut r = WholeReader::new(ctx.file.size, ByteRange::whole(ctx.file.size))
-        .compressed(crate::text::codec::Codec::of_path(ctx.file.path.as_ref()));
+    let codec = crate::text::codec::Codec::of_path(ctx.file.path.as_ref(), ctx.o.suffixes);
+    let mut r = WholeReader::new(ctx.file.size, ByteRange::whole(ctx.file.size)).compressed(codec);
     loop {
         if let Some(need) = r.need() {
             let got = ctx
@@ -548,10 +548,10 @@ pub(crate) fn infer<'a>(
     o: &'a FormatOptions,
 ) -> BoxFuture<'a, FormatResult<SchemaRef>> {
     Box::pin(async move {
-        for f in files {
-            crate::text::check_plain(f.path.as_ref())?;
-        }
         let opts = JsonOptions::new(o, false)?;
+        for f in files {
+            crate::text::check_plain(f.path.as_ref(), opts.suffixes)?;
+        }
         let dt = Datetimes::new(o, Purpose::Parse)?;
         let syntax = Syntax::from(&opts);
         let inf = Infer {
@@ -598,7 +598,8 @@ pub(crate) fn infer<'a>(
                 .map(|f| SplitFile {
                     size: f.size,
                     // A compressed file is one split, sampled once.
-                    splittable: crate::text::codec::Codec::of_path(f.path.as_ref()).is_none(),
+                    splittable: crate::text::codec::Codec::of_path(f.path.as_ref(), opts.suffixes)
+                        .is_none(),
                 })
                 .collect();
             let parts = plan(&split_config(o)?, &listing);

@@ -6,7 +6,7 @@ use std::ops::Range;
 
 use bytes::Bytes;
 
-use super::codec::{Codec, Decompressor};
+use super::codec::{Codec, Decompressor, MAX_PUSH_OUTPUT};
 use super::{CHUNK_BYTES, LineSep};
 use crate::error::{FormatError, FormatResult, internal};
 use crate::io::ByteRange;
@@ -39,6 +39,8 @@ struct Feed {
     /// before it stay in `buf` (Hadoop's line reader returns the lines read
     /// before its codec throws), and the feed counts as fully fetched.
     broken: Option<FormatError>,
+    /// Plain bytes decoded from the last pushed range so far.
+    burst: usize,
 }
 
 impl Feed {
@@ -51,11 +53,22 @@ impl Feed {
             cursor: 0,
             dec: None,
             broken: None,
+            burst: 0,
         }
     }
 
     fn eof(&self) -> bool {
-        self.fetched >= self.size
+        self.fetched >= self.size && !self.pending()
+    }
+
+    /// Whether pushed bytes are still to be decompressed.
+    fn pending(&self) -> bool {
+        self.dec.as_ref().is_some_and(Decompressor::pending)
+    }
+
+    /// Bytes held: the plain buffer and the decoder's.
+    fn buffered(&self) -> usize {
+        self.buf.capacity() + self.dec.as_ref().map_or(0, Decompressor::buffered)
     }
 
     fn rest(&self) -> &[u8] {
@@ -69,7 +82,7 @@ impl Feed {
         } else {
             CHUNK_BYTES
         };
-        (!self.eof()).then(|| self.fetched..(self.fetched + chunk).min(self.size))
+        (self.fetched < self.size).then(|| self.fetched..(self.fetched + chunk).min(self.size))
     }
 
     /// Hands over the bytes of a range asked for.
@@ -84,28 +97,64 @@ impl Feed {
                 self.fetched
             ))));
         }
+        self.compact();
+        self.fetched = range.end;
+        self.burst = 0;
+        if self.dec.is_some() {
+            return self.decode(|d, buf| d.push(bytes, buf));
+        }
+        self.buf.extend_from_slice(bytes);
+        Ok(())
+    }
+
+    /// Decompresses the next piece of the bytes pushed, if any are left:
+    /// whether there was one.
+    fn resume(&mut self) -> FormatResult<bool> {
+        if !self.pending() {
+            return Ok(false);
+        }
+        self.compact();
+        self.decode(Decompressor::resume)?;
+        Ok(true)
+    }
+
+    /// Drops the bytes read from the buffer.
+    fn compact(&mut self) {
         self.buf.drain(..self.cursor);
         self.buf_pos += self.cursor as u64;
         self.cursor = 0;
-        match self.dec.as_mut() {
-            Some(d) => {
-                let mut res = d.push(bytes, &mut self.buf);
-                if res.is_ok() && range.end >= self.size {
-                    res = d.finish(&mut self.buf);
-                }
-                if let Err(e) = res {
-                    if !matches!(e, FormatError::Corrupt(_)) {
-                        return Err(e);
-                    }
-                    self.dec = None;
-                    self.broken = Some(e);
-                    self.fetched = self.size;
-                    return Ok(());
-                }
+    }
+
+    /// Runs one step of the decompressor, ending the stream after the last.
+    fn decode(
+        &mut self,
+        step: impl FnOnce(&mut Decompressor, &mut Vec<u8>) -> FormatResult<()>,
+    ) -> FormatResult<()> {
+        let Some(d) = self.dec.as_mut() else {
+            return Ok(());
+        };
+        let before = self.buf.len();
+        let mut res = step(d, &mut self.buf);
+        self.burst += self.buf.len() - before;
+        if res.is_ok() {
+            // One range that inflates to one record past the limit, or to a
+            // whole file past it: a bomb is an error, not an allocation.
+            if self.burst.min(self.buf.len()) > MAX_PUSH_OUTPUT {
+                res = Err(FormatError::Corrupt(
+                    "compressed file: a chunk inflates past the size limit".to_owned(),
+                ));
+            } else if self.fetched >= self.size && !d.pending() {
+                res = d.finish(&mut self.buf);
             }
-            None => self.buf.extend_from_slice(bytes),
         }
-        self.fetched = range.end;
+        if let Err(e) = res {
+            if !matches!(e, FormatError::Corrupt(_)) {
+                return Err(e);
+            }
+            self.dec = None;
+            self.broken = Some(e);
+            self.fetched = self.size;
+        }
         Ok(())
     }
 }
@@ -231,6 +280,9 @@ impl LineReader {
                 None if eof && (self.feed.rest().is_empty() || !clean_eof) => return self.end(),
                 None if eof => (self.feed.rest().len(), 0),
                 None => {
+                    if self.feed.resume()? {
+                        continue;
+                    }
                     return match self.feed.want() {
                         Some(r) => Ok(ReadChunk::NeedData(r)),
                         None => Err(FormatError::Other(internal("text reader stalled"))),
@@ -269,7 +321,7 @@ impl LineReader {
 
     /// Bytes held.
     pub(crate) fn buffered_bytes(&self) -> usize {
-        self.feed.buf.capacity()
+        self.feed.buffered()
     }
 }
 
@@ -310,6 +362,7 @@ impl WholeReader {
     /// An internal error for bytes that do not continue the file.
     pub(crate) fn push(&mut self, range: &Range<u64>, bytes: &Bytes) -> FormatResult<()> {
         self.feed.push(range, bytes)?;
+        while self.feed.resume()? {}
         // A record may span the rest of the file: a broken stream fails it.
         match self.feed.broken.take() {
             Some(e) => Err(e),
@@ -337,6 +390,6 @@ impl WholeReader {
 
     /// Bytes held.
     pub(crate) fn buffered_bytes(&self) -> usize {
-        self.feed.buf.capacity()
+        self.feed.buffered()
     }
 }

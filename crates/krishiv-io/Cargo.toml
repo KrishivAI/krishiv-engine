@@ -63,6 +63,8 @@ tracing = { workspace = true, features = ["std"] }
 # The descriptor-relative opens of `BeneathStore` (P2-T199); safe API, Unix only.
 [target.'cfg(unix)'.dependencies]
 rustix.workspace = true
+# Zstandard text files (read only), as the Spark 4.1 line sources read them.
+zstd.workspace = true
 
 [dev-dependencies]
 arrow-buffer.workspace = true

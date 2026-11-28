@@ -4,8 +4,9 @@
 use std::sync::{Arc, PoisonError, RwLock};
 
 use krishiv_common::config::{
-    Config, ConfigEntry, ConfigValue, IO_PARQUET_INFER_EMPTY_FILES, IO_TEXT_INFER_TIME,
-    IO_TEXT_TIME_NANOS, PYTHON_UDTF_ARROW_ENABLED, SESSION_TIME_ZONE, Scope, ValueType, lookup,
+    Config, ConfigEntry, ConfigValue, IO_PARQUET_INFER_EMPTY_FILES, IO_TEXT_COMPRESSION_SUFFIXES,
+    IO_TEXT_INFER_TIME, IO_TEXT_TIME_NANOS, PYTHON_UDTF_ARROW_ENABLED, SESSION_TIME_ZONE, Scope,
+    ValueType, lookup,
 };
 use krishiv_common::error::{
     CannotModifyStaticConfig, InvalidConfValueRequirement, InvalidConfValueTimeZone, KrishivError,
@@ -52,6 +53,16 @@ fn profile_default(entry: &ConfigEntry, profile: SparkProfile) -> Option<ConfigV
     // Spark 4.2 reads a `TIME` of a CSV or JSON file in the default grammar as microseconds; 4.3 keeps
     // nanoseconds (a `timeFormat` pattern keeps every digit in both). Only 4.3's text inference gives `TIME`.
     let before_4_3 = profile < SparkProfile::V4_3;
+    // Which suffixes name a text file's codec: 3.5 knows the lower-case ones, 4.0 any case, 4.1
+    // `.gzip`, `.zst` and `.zstd` too (the registry's default).
+    if entry.key == IO_TEXT_COMPRESSION_SUFFIXES.key {
+        let rules = match profile {
+            SparkProfile::V3_5 => "exact",
+            SparkProfile::V4_0 => "anyCase",
+            _ => return None,
+        };
+        return Some(ConfigValue::String(rules.into()));
+    }
     // Up to 4.2, Parquet schema inference opens zero-byte files too.
     if entry.key == IO_PARQUET_INFER_EMPTY_FILES.key {
         return before_4_3.then_some(ConfigValue::Bool(true));
@@ -186,6 +197,7 @@ impl ConfStore {
             &IO_TEXT_TIME_NANOS,
             &IO_TEXT_INFER_TIME,
             &IO_PARQUET_INFER_EMPTY_FILES,
+            &IO_TEXT_COMPRESSION_SUFFIXES,
         ]
         .into_iter()
         .filter(|entry| !config.is_set(entry))

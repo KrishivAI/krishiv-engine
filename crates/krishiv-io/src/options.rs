@@ -100,7 +100,8 @@ pub struct OptionSpec {
     /// `spark.sql.parquet.mergeSchema`.
     pub conf_fallback: Option<&'static str>,
     /// Whether the value changes how file metadata decodes (a footer
-    /// decryption key): its fingerprint joins the metadata cache key.
+    /// decryption key, the compression suffix rules): its fingerprint joins
+    /// the metadata cache key.
     pub metadata_key: bool,
     /// One-line description.
     pub doc: &'static str,

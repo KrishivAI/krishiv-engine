@@ -63,6 +63,7 @@ impl FileFormat for CsvFormat {
         } else {
             Splittable::ByCodec
         });
+        c.suffixes = crate::text::codec::CompressionSuffixes::of(o);
         c.write = true;
         // The row index of a split that starts after byte 0 counts the rows
         // before it by reading them.
@@ -96,10 +97,10 @@ impl FileFormat for CsvFormat {
         _io: &'a IoContext,
         file: &'a FileRef,
         _needs: MetadataNeeds,
-        _o: &'a FormatOptions,
+        o: &'a FormatOptions,
     ) -> BoxFuture<'a, FormatResult<Arc<dyn FileMetadata>>> {
         Box::pin(std::future::ready(
-            TextMetadata::of(file)
+            TextMetadata::of(file, o)
                 .map(|m| Arc::new(m) as Arc<dyn FileMetadata>)
                 .map_err(Into::into),
         ))

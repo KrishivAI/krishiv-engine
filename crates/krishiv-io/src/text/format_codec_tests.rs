@@ -286,7 +286,8 @@ fn unknown_codecs_are_spark_errors_and_zstd_files_are_refused() {
                 "{format} {name}"
             );
         }
-        let e = read_splits(format, b"x", "f.zst", &opts(format, &[]), &whole(1)).expect_err("zst");
+        let old = opts(format, &[("krishiv.io.text.compressionSuffixes", "exact")]);
+        let e = read_splits(format, b"x", "f.zst", &old, &whole(1)).expect_err("zst");
         assert_eq!(e.error_class(), ErrorClass::KrishivUnsupportedFeature);
     }
 }

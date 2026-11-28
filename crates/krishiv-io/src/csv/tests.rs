@@ -1019,7 +1019,8 @@ fn written_files_read_back_and_unknown_codecs_are_refused() {
         e.error_class(),
         krishiv_common::error::ErrorClass::CodecNotAvailableWithAvailableCodecsSuggestion
     );
-    let e = infer_named(b"a,b\n", "a.csv.zst", &options(&serde_json::json!({}))).expect_err("zst");
+    let old = serde_json::json!({"krishiv.io.text.compressionSuffixes": "exact"});
+    let e = infer_named(b"a,b\n", "a.csv.zst", &options(&old)).expect_err("zst");
     assert_eq!(
         e.error_class(),
         krishiv_common::error::ErrorClass::KrishivUnsupportedFeature
