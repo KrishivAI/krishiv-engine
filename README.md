@@ -26,7 +26,7 @@
 
 <p align="center"><sub>* TPC-H SF100 on one laptop, 0.2: see the <a href="https://krishiv.ai/blog/krishiv-0-2-10x-faster-than-spark">benchmark post</a>.</sub></p>
 
-<p align="center"><img src="docs/assets/krishiv-console.png" alt="Krishiv 0.3.0 in a Python session: pip install krishiv, a PySpark groupBy with its result table, and a Spark-style UNRESOLVED_COLUMN error with SQLSTATE and a caret" width="900"></p>
+<p align="center"><img src="docs/assets/console-query-profile.png" alt="The krishiv server web console on a finished query: the SQL, wall time, CPU time, peak memory, rows produced and spilled bytes, and a plan heatmap that shades each operator by its share of compute time (the hash aggregate takes 75.6%)" width="900"></p>
 
 **Krishiv** is an Apache Spark™ alternative written in Rust: run the PySpark and Spark SQL you already write without
 the JVM, on a vectorized, Arrow-native engine. It runs in your own process or as a single-node server (`krishiv server`, Spark Connect), and on a cluster as the
@@ -119,6 +119,8 @@ published TPC results. TPC-H is a trademark of the Transaction Processing Perfor
 - **`krishiv sql`**, a command-line SQL shell (scripts, table/CSV/JSON output, `--timing`).
 - **`krishiv server`.** Spark Connect for a stock PySpark client, Arrow Flight SQL, a web console, Delta and Iceberg
   tables, access control and Python UDF workers.
+
+<p align="center"><img src="docs/assets/console-sql-editor.png" alt="The krishiv server web console SQL editor: a GROUP BY query over a Parquet file with its result table (country, product, orders, revenue)" width="900"></p>
 
 The full list is in the [0.3.0 release notes](https://github.com/KrishivAI/krishiv-engine/releases/tag/v0.3.0).
 
