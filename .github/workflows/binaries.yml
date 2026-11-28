@@ -170,7 +170,11 @@ jobs:
       - name: Build
         env:
           RUSTFLAGS: -C target-cpu=neoverse-n1
+          # The 0.3 feature set makes the fat-LTO link of krishiv-cli outgrow the 4-core, 16 GB arm runner:
+          # the job was killed (exit 143) twice about 11 minutes into the link. Thin LTO here only.
+          CARGO_PROFILE_DIST_LTO: thin
         run: |
+          free -m
           cargo build --profile dist --locked -p krishiv-cli --features "$RELEASE_FEATURES"
           mkdir -p out
           cp target/dist/krishiv "out/$ARTIFACT"
