@@ -186,7 +186,36 @@ fn show_columns_refuses_a_namespace_that_is_not_the_tables_database() {
         "SHOW COLUMNS IN tt FROM default",
         "SHOW COLUMNS IN default.tt FROM DEFAULT",
         "SHOW COLUMNS IN spark_catalog.default.tt FROM default",
+        // Only the first part of the namespace is compared (Spark 3.5.9 and 4.3.0 runs).
+        "SHOW COLUMNS IN default.tt FROM default.x",
+        "SHOW COLUMNS IN spark_catalog.default.tt FROM default.x",
     ] {
         run(&s, sql);
+    }
+}
+
+#[test]
+fn show_columns_compares_the_namespace_by_the_sessions_case_rule() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(&s, "CREATE SCHEMA Db");
+    run(&s, "CREATE TABLE Db.t (c INT) USING parquet");
+    run(&s, "CREATE TABLE tt (x INT) USING parquet");
+    run(&s, "SHOW COLUMNS IN Db.t FROM db");
+    run(&s, "SET spark.sql.caseSensitive = true");
+    run(&s, "SHOW COLUMNS IN db.t FROM db");
+    for (sql, want) in [
+        ("SHOW COLUMNS IN db.t FROM Db", "`Db` != `db`."),
+        (
+            "SHOW COLUMNS IN default.tt FROM DEFAULT",
+            "`DEFAULT` != `default`.",
+        ),
+    ] {
+        let (class, message) = error(&s, sql);
+        assert_eq!(
+            class, "SHOW_COLUMNS_WITH_CONFLICT_NAMESPACE",
+            "{sql}: {message}"
+        );
+        assert!(message.contains(want), "{sql}: {message}");
     }
 }

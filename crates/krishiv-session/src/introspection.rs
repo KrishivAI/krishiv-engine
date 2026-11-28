@@ -1016,9 +1016,10 @@ impl Session {
         Ok(table)
     }
 
-    /// The columns `SHOW COLUMNS IN table (FROM|IN) namespace` lists, in Spark's order (4.2.0
-    /// and 4.3.0 runs): a one-part table is `namespace.table`, that name is looked up, and then
-    /// the namespace must be exactly the table's database, so `spark_catalog.db` conflicts.
+    /// The columns `SHOW COLUMNS IN table (FROM|IN) namespace` lists, in Spark's order (3.5.9,
+    /// 4.2.0 and 4.3.0 runs): a one-part table is `namespace.table`, that name is looked up, and
+    /// then the namespace's first part must be the table's database, so `spark_catalog.db`
+    /// conflicts and `db.x` does not.
     async fn columns_from_namespace(
         &self,
         table: &DdlName,
@@ -1064,9 +1065,19 @@ impl Session {
         let columns = self
             .columns_of_relation(&name, Privilege::Browse, true)
             .await?;
-        match from.as_slice() {
-            [only] if only.to_lowercase() == name.namespace.to_lowercase() => Ok(columns),
-            _ => Err(conflict(&name.namespace)),
+        // Spark compares only the first part, by the session's case rule.
+        let database = &name.namespace;
+        let same = |first: &String| {
+            if env.analysis.conf.case_sensitive {
+                first == database
+            } else {
+                first.to_lowercase() == database.to_lowercase()
+            }
+        };
+        if from.first().is_some_and(same) {
+            Ok(columns)
+        } else {
+            Err(conflict(database))
         }
     }
 
