@@ -1,2 +1,5 @@
+packages:
+  - packages/*
+  - apps/*
 minimumReleaseAgeExclude:
   - svelte-check@4.7.7

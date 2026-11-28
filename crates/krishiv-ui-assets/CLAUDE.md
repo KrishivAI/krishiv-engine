@@ -12,9 +12,11 @@ Paths are relative to this crate.
 - `assets/index.html` built entry page; `assets/assets/` built JS and CSS
 
 ## How the UI is built (ADR 0024 update 2026-11-06)
-Svelte 5 + Tailwind CSS v4 + shadcn-svelte components (on Bits UI), copied into `ui/src/lib/components/ui/` and restyled once to the
-brand. `ui/src/app.css` maps Tailwind's theme and shadcn's CSS variables to the brand `--k-*` tokens (`ui/src/brand/tokens.css`, dark and
-light); Red Hat Display/Text/Mono are self-hosted (`fonts-LICENSE.txt` ships beside them). Rebuild with `ui/scripts/sync-assets.sh`.
+`ui/` is a pnpm workspace (shared-UI note step 1): `ui/packages/ui` is `@krishiv/ui` (tokens, components, data helpers, Vitest
+tests), `ui/apps/console` the engine console that builds into `ui/dist`. Svelte 5 + Tailwind CSS v4 + shadcn-svelte components (on Bits UI),
+copied into `ui/packages/ui/src/components/` and restyled once to the brand. `ui/packages/ui/src/tokens/index.css` maps Tailwind's theme and
+shadcn's CSS variables to the brand `--k-*` tokens (`tokens/tokens.css`, dark and light); Red Hat Display/Text/Mono are self-hosted
+(`fonts-LICENSE.txt` ships in `ui/apps/console/public`). Rebuild with `ui/scripts/sync-assets.sh`.
 `ui/tests/check_pages.py` is the snapshot check (10 pages x 360/390/820/1440 px x dark/light, run against `ui/tests/fixture_server.py` under the
 real CSP: no sideways scroll, no console error, no request outside the origin, fonts loaded, touch targets, the mobile menu), then `page_checks`: token out of the address and storage, hostile text rendered as text (XSS), the editor's cancel within 2 s, `***` on the environment page, and axe-core (`ui/node_modules`) with no serious violation on queries, catalog, SQL and environment.
 

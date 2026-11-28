@@ -153,7 +153,7 @@ def _open(
     page.on("pageerror", lambda e: errors.append(str(e)))
     page.goto(f"{origin}/?token=fixture")
     page.locator("header [data-shell]").wait_for(timeout=10000)
-    page.wait_for_function("!location.search.includes('token')", timeout=10000)
+    page.wait_for_function("() => !location.search.includes('token')", timeout=10000)
     return page, errors
 
 
