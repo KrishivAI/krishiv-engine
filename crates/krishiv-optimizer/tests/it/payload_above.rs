@@ -389,7 +389,12 @@ fn refused(sql: &str, stats: &dyn Statistics, why: &str) {
     let (on, notes) = optimized_alone(&plan, stats, true);
     let (off, _) = optimized_alone(&plan, stats, false);
     assert!(moved(&notes).is_empty(), "{sql}\n{notes:?}\n{}", on.root());
-    assert!(on.structurally_eq(&off), "{sql}\n{}", on.root());
+    assert!(
+        on.structurally_eq(&off),
+        "{sql}\n{}\noff:\n{}",
+        on.root(),
+        off.root()
+    );
     assert!(
         notes.iter().any(|n| n.contains(why)),
         "{sql}: no note with {why:?}: {notes:?}"

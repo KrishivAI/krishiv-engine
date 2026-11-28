@@ -30,7 +30,7 @@ use krishiv_plan::{AttrId, Builtin, Expr, may_raise};
 
 use super::build::{Planned, Planner, column_of};
 use super::pushdown::builtin;
-use super::runtime_filter::{JoinFilters, column_type, key_source, reads_source, scan_waits};
+use super::runtime_filter::{JoinFilters, column_type, key_source};
 use crate::physical::{JoinFilterPlan, ScanRuntimeFilter};
 
 /// The comparison of `p op b` a bound keeps, with `p` the probe value:
@@ -117,8 +117,6 @@ impl Planner<'_> {
             let Some(source) = key_source(p, &input_type) else {
                 continue;
             };
-            let reads_scan_table =
-                |site: &super::runtime_filter::Site| reads_source(&build.node, &site.source);
             for site in probe.sites.iter().filter(|s| s.attr == source) {
                 let id = krishiv_io::FilterId(self.next_filter);
                 self.next_filter += 1;
@@ -147,7 +145,7 @@ impl Planner<'_> {
                         max_values: 0,
                         exact_max_values: 0,
                         bloom: false,
-                        scan_waits: scan_waits(site.scan_rows, build_rows, reads_scan_table(site)),
+                        scan_waits: s.scan_waits(site, &build.node, build_rows),
                         side,
                         ..KeyFilterOptions::default()
                     },

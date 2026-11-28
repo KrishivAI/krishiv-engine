@@ -1777,6 +1777,21 @@ struct InsertTarget<'a> {
     /// The name delta-spark's errors give a Delta table written by path (`` delta.`file:/p` ``);
     /// `None` for a catalog table.
     delta_name: Option<&'a str>,
+    /// `options` are a Delta table's write options ([`delta_options`]), as delta-spark reads
+    /// those of `saveAsTable` append and `writeTo(..).append()`; `insertInto` reads only
+    /// `maxRecordsPerFile` of them (`tests/fixtures/delta-4.4.1/CATALOG-OPTIONS.json`).
+    #[cfg_attr(
+        not(feature = "delta"),
+        expect(dead_code, reason = "read by the Delta write path only")
+    )]
+    delta_writer_options: bool,
+    /// The statement's `INSERT .. WITH (..)` options: a Delta table's write options
+    /// ([`delta_options`]); empty for the DataFrame writers.
+    #[cfg_attr(
+        not(feature = "delta"),
+        expect(dead_code, reason = "read by the Delta write path only")
+    )]
+    sql_options: &'a [(String, String)],
 }
 
 /// A clause of a multi-table insert as a single-table one: its query reads `FROM source`, as
@@ -1948,6 +1963,8 @@ mod delta;
 mod metric_view;
 #[cfg(feature = "delta")]
 pub(crate) use delta::{delta_write_refused, is_delta_table};
+#[cfg(feature = "delta")]
+mod delta_options;
 #[cfg(feature = "delta")]
 mod delta_writes;
 #[cfg(feature = "delta")]

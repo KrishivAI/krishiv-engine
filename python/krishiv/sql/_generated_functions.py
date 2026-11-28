@@ -393,6 +393,7 @@ __all__ = [
     "timestamp_diff",
     "timestamp_micros",
     "timestamp_millis",
+    "timestamp_nanos",
     "timestamp_seconds",
     "toDegrees",
     "toRadians",
@@ -471,6 +472,7 @@ __all__ = [
     "unix_date",
     "unix_micros",
     "unix_millis",
+    "unix_nanos",
     "unix_seconds",
     "upper",
     "url_decode",
@@ -2547,6 +2549,11 @@ def timestamp_millis(col: ColumnOrName) -> Column:
     return _call("timestamp_millis", _named(col, "col"))
 
 
+def timestamp_nanos(col: ColumnOrName) -> Column:
+    """Calls the registry function ``timestamp_nanos``."""
+    return _call("timestamp_nanos", _named(col, "col"))
+
+
 def timestamp_seconds(col: ColumnOrName) -> Column:
     """Calls the registry function ``timestamp_seconds``."""
     return _call("timestamp_seconds", _named(col, "col"))
@@ -3026,6 +3033,11 @@ def unix_micros(col: ColumnOrName) -> Column:
 def unix_millis(col: ColumnOrName) -> Column:
     """Calls the registry function ``unix_millis``."""
     return _call("unix_millis", _named(col, "col"))
+
+
+def unix_nanos(col: ColumnOrName) -> Column:
+    """Calls the registry function ``unix_nanos``."""
+    return _call("unix_nanos", _named(col, "col"))
 
 
 def unix_seconds(col: ColumnOrName) -> Column:

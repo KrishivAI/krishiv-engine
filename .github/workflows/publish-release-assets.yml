@@ -1,0 +1,107 @@
+name: Attach the CLI binaries to the GitHub Release
+
+# 0.3 release (owner 2026-11-23: 0.2.0's release had no assets). MANUAL ONLY: dispatched by the maintainer on a `v*` tag
+# after the GitHub Release for that tag exists (xtask/tests/policy.rs keeps it manual, tag-only and gated). Publishing is
+# a hard stop that needs the owner's explicit go.
+#
+# It builds the CLI binaries from the tag through binaries.yml (Linux x86-64 at v3 and the compat baseline, Linux aarch64,
+# macOS arm64 and x86-64, Windows x86-64; the last two are in the set only while their jobs pass), adds a `.sha256` file
+# per binary, one SHA256SUMS, the CycloneDX SBOMs, a GitHub build-provenance attestation of every file, verifies the
+# attestations, then uploads everything to the release with `gh release upload`. Gates: the `release` environment
+# (required reviewers; `v*` tags only) and the ref check. No secret: the run's GITHUB_TOKEN (contents: write) uploads.
+# musl CLI binaries are not built yet (binaries.yml has no musl leg); the musllinux wheel covers musl for Python.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-release-assets
+  cancel-in-progress: false
+
+jobs:
+  ci:
+    if: github.repository == 'KrishivAI/krishiv-engine' && startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: read
+      actions: read
+      checks: read
+      id-token: write
+      issues: write
+      pull-requests: write
+    uses: $/.github/workflows/ci.yml
+
+  binaries:
+    needs: ci
+    permissions:
+      contents: read
+      actions: read
+    uses: $/.github/workflows/binaries.yml
+
+  publish:
+    needs: binaries
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment:
+      name: release
+    permissions:
+      contents: write # gh release upload
+      id-token: write # sigstore signing for the attestations
+      attestations: write
+    steps:
+      - name: Harden the runner (audit egress)
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: "krishiv-*"
+          path: assets
+          merge-multiple: true
+      - uses: $/.github/actions/setup-rust
+      - uses: $/.github/actions/install-tool
+        with:
+          tool: cargo-cyclonedx@0.5.10
+      - name: SBOMs, checksums and the file list
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REF" == refs/tags/v* ]] || { echo "::error::only a v* tag publishes release assets"; exit 1; }
+          cargo cyclonedx --features server,ui --target all --format json --spec-version 1.5 --override-filename krishiv-sbom.cdx
+          cp crates/krishiv-cli/krishiv-sbom.cdx.json assets/krishiv-cli-sbom.cdx.json
+          cp crates/krishiv/krishiv-sbom.cdx.json assets/krishiv-sbom.cdx.json
+          cd assets
+          for f in krishiv-linux-x86_64 krishiv-compat-linux-x86_64 krishiv-linux-aarch64 krishiv-macos-arm64 krishiv-cli-sbom.cdx.json; do
+            test -s "$f" || { echo "::error::missing $f"; exit 1; }
+          done
+          # Windows and Intel macOS are not gates yet: ship them when their jobs produced a binary.
+          for f in krishiv-*; do
+            case "$f" in *.sha256 | *.cdx.json) continue ;; esac
+            sha256sum "$f" > "$f.sha256"
+          done
+          sha256sum -- $(ls | grep -v -e '\.sha256$' -e '^SHA256SUMS$') > SHA256SUMS
+          cat SHA256SUMS
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: assets/*
+      - name: Verify the attestations before uploading
+        env:
+          GH_TOKEN: ${{ github.token }}
+        working-directory: assets
+        run: |
+          for f in *; do
+            gh attestation verify "$f" --repo "$GITHUB_REPOSITORY" > /dev/null || { echo "::error::no valid attestation for $f"; exit 1; }
+          done
+      - name: Upload to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        working-directory: assets
+        run: |
+          gh release view "$TAG" > /dev/null || { echo "::error::create the GitHub Release for $TAG first (RELEASING.md)"; exit 1; }
+          # If this upload fails, clobbered assets may be missing: re-dispatch this workflow for the same tag (it rebuilds and re-uploads every asset).
+          gh release upload "$TAG" --clobber -- *

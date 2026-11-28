@@ -74,7 +74,7 @@ See the [Rust reference](../reference/rust/index.md) for the 0.3 signatures.
 ## New settings you may want
 
 The [configuration reference](../reference/config/index.md) lists every key. The ones most upgrades look at:
-`krishiv.memory.limit` (the default is 80% of a container's memory limit), `krishiv.spill.dir`,
+`krishiv.memory.limit` (the default is 80% of a container's memory limit, lower on a small container, never under half), `krishiv.spill.dir`,
 `krishiv.history.path`, `krishiv.workload.resourceGroups.file`, `krishiv.flightSql.enabled` and
 `krishiv.write.idempotencyKey`. No 0.2 setting was renamed in the changes recorded so far.
 

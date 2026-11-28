@@ -163,6 +163,14 @@ required-features = ["delta"]
 name = "delta_merge"
 required-features = ["delta"]
 
+[[test]]
+name = "delta_dvs"
+required-features = ["delta"]
+
+[[test]]
+name = "delta_gaps"
+required-features = ["delta"]
+
 # The S3 round trip needs the S3 builder and an emulator (`KRISHIV_TEST_S3_ENDPOINT`).
 [[test]]
 name = "s3_tpch"

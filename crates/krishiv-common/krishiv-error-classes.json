@@ -54,7 +54,7 @@
   },
   "KRISHIV_CATALOG_FAILURE" : {
     "message" : [
-      "The catalog <catalog> failed while loading <relationName>."
+      "The catalog <catalog> failed while loading <relationName>: <reason>."
     ],
     "sqlState" : "58030"
   },
