@@ -22,15 +22,20 @@
   <a href="https://github.com/KrishivAI"><img src="https://img.shields.io/github/followers/KrishivAI?style=social" alt="Follow KrishivAI"></a>
 </p>
 
-<h3 align="center">Spark in Rust, no JVM. Your PySpark and Spark SQL, 10× faster on one machine.</h3>
+<h3 align="center">Spark in Rust, no JVM. Your PySpark and Spark SQL, 10× faster on one machine<sup>*</sup>.</h3>
+
+<p align="center"><sub>* TPC-H SF100 on one laptop, 0.2: see the <a href="https://krishiv.ai/blog/krishiv-0-2-10x-faster-than-spark">benchmark post</a>.</sub></p>
+
+<p align="center"><img src="docs/assets/console-query-profile.png" alt="The krishiv server web console on a finished query: the SQL, wall time, CPU time, peak memory, rows produced and spilled bytes, and a plan heatmap that shades each operator by its share of compute time (the hash aggregate takes 75.6%)" width="900"></p>
 
 **Krishiv** is an Apache Spark™ alternative written in Rust: run the PySpark and Spark SQL you already write without
-the JVM, on a vectorized, Arrow-native engine. It runs in your own process today, and on a server or a cluster as the
+the JVM, on a vectorized, Arrow-native engine. It runs in your own process or as a single-node server (`krishiv server`, Spark Connect), and on a cluster as the
 next releases land, with one engine for batch, streaming and always-fresh views.
 
 > [!NOTE]
-> **Krishiv 0.2 is out** ([release notes](https://github.com/KrishivAI/krishiv-engine/releases/tag/v0.2.0)): the
-> embedded core, on [PyPI](https://pypi.org/project/krishiv/) and [crates.io](https://crates.io/crates/krishiv).
+> **Krishiv 0.3 is out** ([release notes](https://github.com/KrishivAI/krishiv-engine/releases/tag/v0.3.0)): the
+> embedded core plus `krishiv server` (Spark Connect, Arrow Flight SQL, a web console), on
+> [PyPI](https://pypi.org/project/krishiv/) and [crates.io](https://crates.io/crates/krishiv).
 > APIs can still change before 1.0.
 
 ## Install
@@ -53,9 +58,9 @@ cargo add krishiv   # needs Rust 1.97 or newer
 cargo install krishiv-cli   # needs Rust 1.97 or newer
 ```
 
-Prebuilt `krishiv` CLI binaries are not available yet; install the CLI from source with the command above.
+Prebuilt `krishiv` CLI binaries and the Docker image are coming (not published yet); install the CLI from source with the command above.
 
-Install with the `pyarrow` extra: `collect()`, `show()` and `toArrow()` return Arrow data. Wheels cover Linux x86_64
+Install with the `pyarrow` extra: `collect()` returns a list of `Row` objects, `toArrow()` a PyArrow `Table`, and `show()` prints and returns `None`. Wheels cover Linux x86_64
 and aarch64 (manylinux and musllinux x86_64) and macOS arm64. For an x86-64 CPU without AVX2 use
 `pip install krishiv-compat` ([Supported CPUs](#supported-cpus)).
 
@@ -68,10 +73,10 @@ spark.sql("SELECT 1 AS answer").show()
 
 ## Benchmarks
 
-**10.4× faster than Apache Spark 4.2.0 on one machine**: geometric mean over 22 queries derived from TPC-H at
+**10.4× faster than Apache Spark 4.2.0 on one machine** (TPC-H SF100 on one laptop, 0.2; [the post](https://krishiv.ai/blog/krishiv-0-2-10x-faster-than-spark)): geometric mean over 22 queries derived from TPC-H at
 scale factor 100, on the same Parquet files and the same laptop.
 
-| | Krishiv 0.2 | Spark 4.2.0 |
+| | Krishiv (0.2 build) | Spark 4.2.0 |
 |---|---|---|
 | SF100, all 22 queries | **228 s** | 2,675 s (3,137 s with 12 shuffle partitions) |
 | SF1000 (about 1 TB of Parquet), queries completed | **22 of 22** | 6 of 17 within 30 minutes |
@@ -97,7 +102,7 @@ SF10 and SF1000 and the comparison with a reference engine that is still faster 
 <sub>Derived from the TPC-H benchmark. These are not TPC-H results: they are unaudited and not comparable with
 published TPC results. TPC-H is a trademark of the Transaction Processing Performance Council.</sub>
 
-## What is in 0.2
+## What is in 0.3
 
 - **Embedded Spark-compatible engine.** `krishiv.session()` gives a PySpark-style session in your process, from
   Python or Rust, with no JVM. Spark-observable behaviour is checked against real Spark runs.
@@ -112,18 +117,22 @@ published TPC results. TPC-H is a trademark of the Transaction Processing Perfor
   console, Prometheus metrics, OTLP spans and JSON logs, and errors that point at the SQL span that raised them.
 - **Zero-copy interop** with pyarrow, Polars and other Arrow tools through the Arrow PyCapsule interface.
 - **`krishiv sql`**, a command-line SQL shell (scripts, table/CSV/JSON output, `--timing`).
+- **`krishiv server`.** Spark Connect for a stock PySpark client, Arrow Flight SQL, a web console, Delta and Iceberg
+  tables, access control and Python UDF workers.
 
-The full list is in the [0.2.1 release notes](https://github.com/KrishivAI/krishiv-engine/releases/tag/v0.2.1).
+<p align="center"><img src="docs/assets/console-sql-editor.png" alt="The krishiv server web console SQL editor: a GROUP BY query over a Parquet file with its result table (country, product, orders, revenue)" width="900"></p>
+
+The full list is in the [0.3.0 release notes](https://github.com/KrishivAI/krishiv-engine/releases/tag/v0.3.0).
 
 ## Status and roadmap at a glance
 
-Krishiv is at **`0.2.1`**. The embedded core (in-process batch SQL and DataFrames over Arrow, from Python) runs;
-streaming, incremental views, Spark Connect and distributed execution are still being built.
+Krishiv is at **`0.3`**. The embedded core (in-process batch SQL and DataFrames over Arrow, from Python) and the
+single-node server (Spark Connect) run; streaming, incremental views and distributed execution are still being built.
 
 | Milestone | Focus | Status |
 |---|---|---|
-| 1. Embedded core alpha | In-process SQL and DataFrames on Arrow, with Python and Rust APIs | 🚧 In progress |
-| 2. Single-node (0.3) | `krishiv server` with Spark Connect, authentication, Iceberg and Delta, Python UDFs | ⏳ Planned |
+| 1. Embedded core alpha | In-process SQL and DataFrames on Arrow, with Python and Rust APIs | ✅ Released (0.2) |
+| 2. Single-node (0.3) | `krishiv server` with Spark Connect, authentication, Iceberg and Delta, Python UDFs | ✅ Released (0.3) |
 | 3. Streaming | Stateful streaming with the same SQL and semantics as batch | ⏳ Planned |
 | 4. Incremental views | Always-fresh materialized views and queryable state | ⏳ Planned |
 | 5. Distributed | Scale out to a cluster with the same code | ⏳ Planned |
@@ -245,18 +254,17 @@ flowchart LR
 | Release | Focus | Status |
 |---|---|---|
 | 0.2 | Embedded core: in-process SQL and DataFrames on Arrow, Python and Rust APIs | ✅ Released |
-| 0.3 | Spark Connect server, lakehouse tables (Iceberg, Delta), Python UDFs over Connect, authentication | 🚧 In progress |
+| 0.3 | Spark Connect server, lakehouse tables (Iceberg, Delta), Python UDFs over Connect, authentication | ✅ Released |
 | Next | Stateful streaming with the same SQL and semantics as batch | ⏳ Planned |
 | Next | Always-fresh incremental views and queryable state | ⏳ Planned |
 | Next | Distributed execution with the same code | ⏳ Planned |
 | 1.0 | Stable APIs and formats | ⏳ Planned |
 
-**Coming in 0.3: your existing PySpark code, pointed at Krishiv over Spark Connect.**
+**Your existing PySpark code, pointed at Krishiv over Spark Connect** (`krishiv server`, new in 0.3):
 
 ```python
 from pyspark.sql import SparkSession, functions as F
 
-# Planned: single-node Krishiv (`krishiv server`) speaking the Spark Connect protocol.
 spark = SparkSession.builder.remote("sc://localhost:15002").getOrCreate()
 
 orders = spark.read.parquet("s3://lake/orders/")
