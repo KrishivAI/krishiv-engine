@@ -344,6 +344,12 @@
     ],
     "sqlState" : "22018"
   },
+  "KRISHIV_MCP_QUEUE_FULL" : {
+    "message" : [
+      "The MCP server already has <maxQueued> calls waiting behind the running query, so this call is refused. Retry when one of them has finished."
+    ],
+    "sqlState" : "53400"
+  },
   "KRISHIV_MCP_STATEMENT_NOT_ALLOWED" : {
     "message" : [
       "The read-only MCP server runs one read statement; this statement is of class <statementClass>."

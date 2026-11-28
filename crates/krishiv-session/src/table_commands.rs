@@ -372,10 +372,7 @@ impl Session {
         let found = self.state.catalog.store.alter_namespace(&name, &*change);
         drop(change);
         if !found {
-            return Err(SchemaNotFound {
-                schema_name: format!("`{name}`"),
-            }
-            .into());
+            return Err(crate::catalog::schema_not_found(&name));
         }
         self.empty_frame().await
     }
@@ -426,10 +423,7 @@ impl Session {
             }
             Err(DropNamespaceError::Missing) if n.if_exists => {}
             Err(DropNamespaceError::Missing) => {
-                return Err(SchemaNotFound {
-                    schema_name: format!("`{name}`"),
-                }
-                .into());
+                return Err(crate::catalog::schema_not_found(&name));
             }
             Err(DropNamespaceError::NotEmpty) => {
                 return Err(SchemaNotEmpty {
@@ -496,19 +490,32 @@ impl Session {
                     .into());
                 }
             }
-        } else if self.names_a_system_namespace(&parts) {
+        } else if self.names_a_system_namespace() {
             return Err(SchemaNotFound {
                 schema_name: quoted(&[vec!["system".to_owned()], parts].concat()),
+            }
+            .into());
+        } else if parts.len() > 1
+            && (u.kind.is_some() || parts.first().and_then(|p| canonical(p)).is_none())
+        {
+            // No catalog has the first part's name, or the statement has a namespace keyword
+            // (NAMESPACE, SCHEMA or DATABASE), under which no part is a catalog: every part is a
+            // namespace of the session catalog, which has none that deep. Spark 4.3.0: `USE dummy.x`
+            // and `USE NAMESPACE a.b.c` name `spark_catalog`.`dummy`.`x` and
+            // `spark_catalog`.`a`.`b`.`c`; `USE SCHEMA spark_catalog.default` names
+            // `spark_catalog`.`spark_catalog`.`default`, though `USE spark_catalog.default` works.
+            // Under a declared catalog the name is a namespace of that catalog: refused, as the
+            // one-part form is.
+            self.refuse_declared_current()?;
+            return Err(SchemaNotFound {
+                schema_name: quoted(&[vec![crate::catalog::CATALOG.to_owned()], parts].concat()),
             }
             .into());
         }
         let name = self.namespace_name(&u.name, &env)?;
         // One the principal may not list reads as missing (review r2 R4).
         if !self.state.catalog.store.has_namespace(&name) || self.namespace_hidden(&name).await {
-            return Err(SchemaNotFound {
-                schema_name: format!("`{name}`"),
-            }
-            .into());
+            return Err(crate::catalog::schema_not_found(&name));
         }
         self.state
             .catalog

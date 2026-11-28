@@ -1067,7 +1067,7 @@ impl Session {
     #[cfg(feature = "unstable-ir")]
     #[must_use]
     pub fn from_plan(&self, plan: &Plan) -> DataFrame {
-        DataFrame::new(self.clone(), Arc::clone(plan.root()))
+        Self::plan_frame(self.clone(), Arc::clone(plan.root()))
     }
 
     /// As [`Self::from_plan`], with per-statement options, as
@@ -1098,7 +1098,7 @@ impl Session {
         plan: &Plan,
         options: crate::QueryOptions,
     ) -> Result<DataFrame, KrishivError> {
-        Ok(DataFrame::new(
+        Ok(Self::plan_frame(
             self.with_options(options)?,
             Arc::clone(plan.root()),
         ))
@@ -1122,8 +1122,11 @@ impl Session {
     ) -> Result<DataFrame, KrishivError> {
         let session = self.with_options(options)?;
         if frames.is_empty() {
-            return Ok(DataFrame::new(session, Arc::clone(plan.root())));
+            return Ok(Self::plan_frame(session, Arc::clone(plan.root())));
         }
+        // The statement comes from the client's plan, before the cached frames' own plans
+        // (which may hold `spark.sql` relations of their own) are spliced in.
+        let statement = session.plan_statement(plan.root());
         let frames = frames.to_vec();
         let root = Arc::clone(plan.root());
         let (root, keep) = self
@@ -1152,7 +1155,11 @@ impl Session {
                 Ok((root.unwrap_or_else(|e| match e {}), keep))
             })
             .await?;
-        Ok(DataFrame::over_plan(session, root, keep))
+        let df = DataFrame::over_plan(session, root, keep);
+        Ok(match statement {
+            Some(env) => df.with_first_statement(env),
+            None => df,
+        })
     }
 
     /// Runs `work` on the session's executor, so that it finds the
@@ -1972,6 +1979,9 @@ mod ops;
 use ops::AbortOnDrop;
 
 mod planning;
+
+#[cfg(feature = "unstable-ir")]
+mod plan_frames;
 
 // `SQL SECURITY DEFINER` reads (P3-T062 §2.4).
 mod definer;

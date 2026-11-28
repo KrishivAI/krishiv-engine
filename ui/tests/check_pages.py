@@ -159,6 +159,14 @@ def embed_checks(origin: str, shots: Path | None) -> list[str]:
             problems.append(
                 "deep link: the header's Queries link does not show the query list"
             )
+        # A hash that is not `#/...` is an anchor inside the page, not a route: the page stays the path's.
+        page.goto(f"{origin}/queries/{QID}?token=fixture#operators")
+        try:
+            page.get_by_text("HashJoin").first.wait_for(timeout=5000)
+        except PlaywrightTimeout:
+            problems.append(
+                "deep link /queries/{id}#operators: an anchor was read as a route"
+            )
         page.goto(f"{origin}/sql?token=fixture")
         page.get_by_role("link", name="Environment").first.click()
         try:
@@ -327,6 +335,33 @@ def embed_checks(origin: str, shots: Path | None) -> list[str]:
             )
         if not any("not in krishiv.ui.allowedOrigins" in m for m in log):
             problems.append(f"a message from a disallowed origin was not logged: {log}")
+        ctx.close()
+
+        # 4b. The allowed origins cannot be read: a theme sent as the frame loads is refused and logged, not held.
+        ctx = browser.new_context()
+        log = []
+        ctx.route(
+            "http://parent.test/**",
+            lambda r: r.fulfill(
+                status=200,
+                content_type="text/html",
+                body=parent_html(link, message({"tokens": {"accent": "#00ff00"}})),
+            ),
+        )
+        ctx.route("**/api/internal/embed/config", lambda r: r.fulfill(status=500))
+        page = ctx.new_page()
+        _console(page, log)
+        page.goto("http://parent.test/")
+        page.frame_locator("#f").get_by_text("HashJoin").first.wait_for(timeout=10000)
+        page.wait_for_timeout(500)
+        if accent_of(page) == "#00ff00":
+            problems.append(
+                "a theme was applied although the allowed origins were not read"
+            )
+        if not any("not in krishiv.ui.allowedOrigins" in m for m in log):
+            problems.append(
+                f"a theme message held while the origins read failed was not logged: {log}"
+            )
         ctx.close()
 
         # 5. A theme in the link that is not valid is ignored and logged.
@@ -549,6 +584,34 @@ def page_checks(origin: str) -> list[str]:
         page.evaluate("window.location.hash = '#/sql'")
         editor = page.locator(".cm-content")
         editor.wait_for(timeout=10000)
+        # Typing over a selection must not make the browser write a style attribute, which the policy blocks.
+        blocked: list[str] = []
+        page.on(
+            "console",
+            lambda m: blocked.append(m.text) if m.type == "error" else None,
+        )
+        editor.click()
+        page.keyboard.press("Control+A")
+        page.keyboard.type("SELECT 'typed over'")
+        page.wait_for_timeout(300)
+        typed = editor.inner_text().strip()
+        if typed != "SELECT 'typed over'":
+            problems.append(f"sql: typing over the selection left {typed!r}")
+        problems += [f"sql: typing over a selection logs: {e}" for e in blocked]
+        # Ctrl + Enter runs the statement, as the page says; it must not add a line to it instead.
+        editor.click()
+        page.keyboard.press("Control+A")
+        page.keyboard.type("SELECT 1")
+        page.keyboard.press("Control+Enter")
+        try:
+            page.get_by_text("finished", exact=True).first.wait_for(timeout=5000)
+        except PlaywrightTimeout:
+            problems.append("sql: Ctrl + Enter did not run the statement")
+        kept = editor.inner_text().strip()
+        if kept != "SELECT 1":
+            problems.append(f"sql: Ctrl + Enter changed the statement to {kept!r}")
+        page.reload()
+        editor.wait_for(timeout=10000)
         for text, outcome in (("SELECT 1", "finished"), ("boom", "failed")):
             editor.click()
             page.keyboard.press("Control+A")
@@ -583,6 +646,29 @@ def page_checks(origin: str) -> list[str]:
             shown = row.locator("span.mono").nth(1).inner_text().strip()
             if shown != "***":
                 problems.append(f"environment: {key} shows {shown!r}, not '***'")
+        # A setting is found by its Spark name too, and a filter that matches nothing says so.
+        box = page.get_by_placeholder("spark.sql")
+        box.fill("spark.sql.shuffle")
+        if not page.get_by_text(
+            "krishiv.sql.shuffle.partitionsHint", exact=True
+        ).first.is_visible():
+            problems.append("environment: the Spark name does not find its setting")
+        box.fill("no-such-setting")
+        if not page.get_by_text("No setting matches.").first.is_visible():
+            problems.append("environment: a filter with no match does not say so")
+        box.fill("")
+        # Pools of one name are one row on Resources.
+        page.evaluate("window.location.hash = '#/resources'")
+        page.locator("[data-pools]").first.wait_for(timeout=10000)
+        named = page.locator(
+            "tr", has=page.get_by_text("process/relation_cache", exact=True)
+        ).count()
+        pools = page.locator("[data-pools]").first.get_attribute("data-pools")
+        row = page.locator("tr", has=page.locator("[data-pools]")).first.inner_text()
+        if named != 1 or pools != "3" or "3.0 MiB" not in row or "8.0 MiB" not in row:
+            problems.append(
+                f"resources: relation_cache is {named} rows of {pools} pools: {row!r}"
+            )
         # Accessibility: no serious or critical axe violation on the four pages.
         if not AXE.exists():
             problems.append(
