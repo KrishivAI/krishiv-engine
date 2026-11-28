@@ -250,6 +250,21 @@ async fn variable_substitution_cannot_read_the_environment() {
 }
 
 #[tokio::test]
+async fn a_client_cannot_turn_substitution_back_on() {
+    let (_d, t) = fixture();
+    // Whatever the gate answers to `SET`, the environment never comes back afterwards.
+    let _ = call(
+        &t,
+        "run_query",
+        json!({"sql": "SET spark.sql.variable.substitute = true"}),
+    )
+    .await;
+    let (text, _) = call(&t, "run_query", json!({"sql": "SELECT '${env:PATH}' AS v"})).await;
+    let path = std::env::var("PATH").unwrap_or_default();
+    assert!(path.is_empty() || !text.contains(&path), "{text}");
+}
+
+#[tokio::test]
 async fn list_catalogs_answers_without_sql() {
     let (_d, t) = fixture();
     let (text, err) = call(&t, "list_catalogs", json!({})).await;

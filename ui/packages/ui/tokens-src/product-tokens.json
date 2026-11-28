@@ -1,0 +1,69 @@
+{
+ "name": "Krishiv product additions",
+ "version": 1,
+ "extends": "tokens-src/brand-tokens.json (version 2): every brand colour, type family, space and radius is taken from there unchanged",
+ "note": "Only what a data-heavy console needs and the brand system does not have. scripts/build-tokens.mjs merges both files into src/tokens/product.css. Contrast of every text pair is checked by axe on the pages that use it.",
+ "color": {
+  "tokens": [
+   {"name": "row-hover", "value": {"dark": "#1A1D20", "light": "#F1F3F5"}, "usage": "Grid and list row under the pointer."},
+   {"name": "sel-bg", "value": {"dark": "#221D10", "light": "#FBF5E1"}, "usage": "Selected row, current tree node, active editor tab ground. A gold tint, not a gold fill."},
+   {"name": "sel-edge", "value": {"dark": "#8A7A4E", "light": "#C9A227"}, "usage": "The 2px left edge of a selected row (pairs with sel-bg)."},
+   {"name": "scrim", "value": {"dark": "rgba(0,0,0,0.6)", "light": "rgba(10,11,12,0.32)"}, "usage": "Behind dialogs, drawers and the command palette."},
+   {"name": "shadow-pop", "value": {"dark": "0 12px 32px rgba(0,0,0,0.55)", "light": "0 12px 32px rgba(10,11,12,0.14)"}, "usage": "Floating layers only (menus, popovers, toasts, dialogs). Cards keep borders, no shadow."},
+   {"name": "heat-0", "value": {"dark": "#202326", "light": "#EEF0F2"}, "usage": "Plan heatmap: empty track."},
+   {"name": "heat-1", "value": {"dark": "#4A4232", "light": "#EAD9A0"}, "usage": "Plan heatmap: under 10% of the time."},
+   {"name": "heat-2", "value": {"dark": "#7A6630", "light": "#D9BD60"}, "usage": "Plan heatmap: 10 to 30%."},
+   {"name": "heat-3", "value": {"dark": "#B39231", "light": "#B08A22"}, "usage": "Plan heatmap: 30 to 50%."},
+   {"name": "heat-4", "value": {"dark": "#E8C766", "light": "#8A6A12"}, "usage": "Plan heatmap: over half the time. Gold means where the time went; nothing else in a profile is gold."},
+   {"name": "series-1", "value": {"dark": "#D4AF37", "light": "#8A6A12"}, "usage": "Chart series 1 (gold): the series the reader should look at first."},
+   {"name": "series-2", "value": {"dark": "#C9CED6", "light": "#6B7380"}, "usage": "Chart series 2 (silver)."},
+   {"name": "series-3", "value": {"dark": "#8DB4E2", "light": "#2F5F95"}, "usage": "Chart series 3 (steel blue)."},
+   {"name": "series-4", "value": {"dark": "#B9A6F0", "light": "#5B45B0"}, "usage": "Chart series 4 (violet)."},
+   {"name": "series-5", "value": {"dark": "#6FCFC4", "light": "#0F6B63"}, "usage": "Chart series 5 (teal)."},
+   {"name": "series-6", "value": {"dark": "#E9A6C3", "light": "#9B2C5E"}, "usage": "Chart series 6 (rose). Status colours (ok, warn, err) are never series colours."},
+   {"name": "null", "value": {"dark": "#8B929C", "light": "#5D646F"}, "usage": "The word null in a result cell, italic. At least 4.5:1 on surface, row-hover and sel-bg in both themes."}
+  ]
+ },
+ "type": {
+  "styles": [
+   {"name": "page-title", "family": "display", "fontSize": "24px", "lineHeight": "30px", "fontWeight": 900, "letterSpacing": "-0.02em", "usage": "One per page. Product pages never use the brushed metal or the 40px+ display sizes."},
+   {"name": "section", "family": "text", "fontSize": "16px", "lineHeight": "24px", "fontWeight": 700, "usage": "Panel and card titles."},
+   {"name": "ui", "family": "text", "fontSize": "14px", "lineHeight": "20px", "fontWeight": 500, "usage": "Controls, menus, grid cells (the engine console already uses 14px)."},
+   {"name": "body-s", "family": "text", "fontSize": "14px", "lineHeight": "22px", "fontWeight": 400, "usage": "Help text and descriptions inside the console."},
+   {"name": "small", "family": "text", "fontSize": "12px", "lineHeight": "16px", "fontWeight": 500, "usage": "Meta, column units, badges."},
+   {"name": "data", "family": "mono", "fontSize": "13px", "lineHeight": "20px", "fontWeight": 400, "usage": "Numbers, ids, SQL, paths; tabular figures so columns line up."}
+  ]
+ },
+ "size": {
+  "tokens": [
+   {"name": "ctl-h", "value": "36px", "usage": "Control height with a fine pointer (desktop). WCAG 2.2 target size minimum is 24px."},
+   {"name": "ctl-h-touch", "value": "44px", "usage": "Control height with a coarse pointer and below 768px (the brand's 44px touch rule)."},
+   {"name": "row-h", "value": "36px", "usage": "Grid row, comfortable density (default)."},
+   {"name": "row-h-compact", "value": "28px", "usage": "Grid row, compact density (a per-person setting)."},
+   {"name": "topbar-h", "value": "52px", "usage": "The frame's top bar."},
+   {"name": "nav-w", "value": "224px", "usage": "Side menu, 1280px and wider."},
+   {"name": "rail-w", "value": "60px", "usage": "Side menu as an icon rail, 768 to 1279px."}
+  ]
+ },
+ "motion": {
+  "tokens": [
+   {"name": "dur-1", "value": "120ms", "usage": "Hover, press, toggle: inside Nielsen's 0.1 s 'instant' limit."},
+   {"name": "dur-2", "value": "200ms", "usage": "Menus, drawers, toasts entering."},
+   {"name": "ease", "value": "cubic-bezier(0.2, 0, 0, 1)", "usage": "Every transition. prefers-reduced-motion sets durations to 0."}
+  ]
+ },
+ "breakpoints": {
+  "tokens": [
+   {"name": "phone", "value": "0-767px", "usage": "Checked at 390. One column; menu in a drawer; grids become cards or scroll inside their own frame."},
+   {"name": "tablet", "value": "768-1023px", "usage": "Checked at 768. Icon rail; side panels become sheets."},
+   {"name": "laptop", "value": "1024-1279px", "usage": "Checked at 1024. Icon rail; two panes."},
+   {"name": "desktop", "value": "1280px and up", "usage": "Checked at 1440. Full menu; three panes in the SQL editor."}
+  ]
+ },
+ "z": {
+  "tokens": [
+   {"name": "z-sticky", "value": "10"}, {"name": "z-nav", "value": "20"}, {"name": "z-pop", "value": "30"},
+   {"name": "z-drawer", "value": "40"}, {"name": "z-dialog", "value": "50"}, {"name": "z-toast", "value": "60"}
+  ]
+ }
+}
