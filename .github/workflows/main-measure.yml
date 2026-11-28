@@ -20,6 +20,11 @@ name: Main measurement
 on:
   push:
     branches: [main]
+  # Re-saves the `test` cache when it was evicted (GitHub drops caches unused for 7 days) and no push came.
+  # Only the `test` job runs on a schedule; the measurements below are per pushed commit.
+  schedule:
+    - cron: "37 3 * * *"
+  workflow_dispatch:
 
 concurrency:
   group: main-measure-${{ github.sha }}
@@ -68,6 +73,7 @@ jobs:
       - run: cargo nextest run --workspace --lib --bins --no-run --locked
 
   budgets:
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
@@ -119,6 +125,7 @@ jobs:
         run: cargo xtask budgets --compare target/budgets-current.json --baseline "$BASELINE" || echo "::warning::a budget grew past 5% on main (report only; see the summary)"
 
   wheels:
+    if: github.event_name == 'push'
     permissions:
       contents: read
       actions: read
