@@ -2113,6 +2113,12 @@ pub use ddl::parse_data_type;
 pub use ddl::parse_data_type_in;
 ```
 
+### Re-export `parse_data_type_with`
+
+```rust
+pub use ddl::parse_data_type_with;
+```
+
 ### Re-export `parse_metadata`
 
 ```rust
