@@ -288,7 +288,9 @@ def main() -> None:
             omap = "".join(f", {lit(k)}, {lit(v)}" for k, v in opts.items())
             omap = f", map({omap[2:]})" if omap else ""
             exprs = {"schema_of_csv": f"schema_of_csv({lit(text)}{omap})"}
-            for name, ddl in CSV_SCHEMAS[1:]:
+            for name, ddl in CSV_SCHEMAS:
+                if ddl is None:  # "infer" is schema_of_csv above
+                    continue
                 exprs[name] = f"CAST(from_csv({lit(text)}, {lit(ddl)}{omap}).t AS STRING)"
             got = {}
             for name, e in exprs.items():
