@@ -3434,6 +3434,14 @@ def timestamp_millis(col: ColumnOrName) -> Column
 
 Calls the registry function `timestamp_millis`.
 
+### `timestamp_nanos`
+
+```python
+def timestamp_nanos(col: ColumnOrName) -> Column
+```
+
+Calls the registry function `timestamp_nanos`.
+
 ### `timestamp_seconds`
 
 ```python
@@ -4130,6 +4138,14 @@ def unix_millis(col: ColumnOrName) -> Column
 ```
 
 Calls the registry function `unix_millis`.
+
+### `unix_nanos`
+
+```python
+def unix_nanos(col: ColumnOrName) -> Column
+```
+
+Calls the registry function `unix_nanos`.
 
 ### `unix_seconds`
 

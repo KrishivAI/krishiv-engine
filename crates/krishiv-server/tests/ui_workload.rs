@@ -197,6 +197,64 @@ async fn an_editor_caller_whose_session_was_ended_gets_a_new_one() {
     assert_ne!(open[0]["session_id"], first.as_str());
 }
 
+/// CON-RC-8: a server that identifies its callers listed three idle sessions of its own, one of them labelled as
+/// the console's editor although every caller's statements run in a session of that caller.
+#[tokio::test]
+async fn a_server_with_identified_callers_lists_neither_its_templates_nor_an_unused_shared_editor()
+{
+    let rt = EngineRuntime::builder().build().unwrap();
+    let connect_base = Session::builder().runtime(Arc::clone(&rt)).build().unwrap();
+    let base = Session::builder().runtime(Arc::clone(&rt)).build().unwrap();
+    let templates = vec![connect_base.id().to_owned(), base.id().to_owned()];
+    let factory = move |who: &Authenticated| {
+        Session::builder()
+            .runtime(Arc::clone(base.runtime()))
+            .principal(who.principal.clone())
+            .build()
+    };
+    let source = SessionSource::new(Arc::clone(&rt))
+        .unwrap()
+        .with_caller_sessions(Arc::new(factory))
+        .with_template_sessions(templates.clone());
+    assert_eq!(sessions(&source).await, Vec::<Row>::new());
+
+    let who = Authenticated::new(
+        Principal::new("ann", PrincipalKind::User),
+        Some(Role::Operator),
+        Method::Token,
+    );
+    let ann = Caller {
+        principal: "ann".to_owned(),
+        role: Some("operator".to_owned()),
+        method: "token".to_owned(),
+        identity: Some(Arc::new(who)),
+    };
+    let id = source.sql_start("SELECT 1", Some(&ann)).await.unwrap();
+    assert_eq!(ended(&source, &id, Some(&ann)).await["state"], "finished");
+    // The caller's own session is the one row, and it can be ended (the editor opens another).
+    let rows = sessions(&source).await;
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0]["principal"], "ann", "{rows:?}");
+    assert!(rows[0].get("endable").is_none(), "{rows:?}");
+
+    // The shared session appears, marked, once the start-up token's administrator has run a statement in it.
+    let id = source.sql_start("SELECT 2", None).await.unwrap();
+    assert_eq!(ended(&source, &id, None).await["state"], "finished");
+    let rows = sessions(&source).await;
+    assert_eq!(rows.len(), 2, "{rows:?}");
+    let shared: Vec<&Row> = rows
+        .iter()
+        .filter(|r| r.get("endable") == Some(&Value::Bool(false)))
+        .collect();
+    assert_eq!(shared.len(), 1, "{rows:?}");
+    assert_ne!(shared[0]["principal"], "ann", "{rows:?}");
+    assert!(
+        rows.iter()
+            .all(|r| !templates.iter().any(|t| r["session_id"] == t.as_str())),
+        "{rows:?}"
+    );
+}
+
 #[tokio::test]
 async fn the_resource_groups_are_listed_with_their_limits_and_none_without_a_group_file() {
     let rt = EngineRuntime::builder().build().unwrap();

@@ -44,10 +44,16 @@ def _quiesced_threads() -> int:
 
 
 def _wait_threads(expected: int) -> None:
+    """Wait for the count to fall to ``expected`` and settle there.
+
+    A leaked server thread leaves the count above ``expected`` and fails. A count below it is not a leak: a
+    thread that was alive at the baseline (an engine pool thread of an earlier test) can exit on its own.
+    """
     deadline = time.monotonic() + 10
     while _threads() > expected and time.monotonic() < deadline:
         time.sleep(0.01)
-    assert _threads() == expected
+    settled = _quiesced_threads()
+    assert settled <= expected, f"{settled - expected} thread(s) outlived the stopped servers"
 
 
 def test_url_names_a_loopback_port_and_a_token() -> None:

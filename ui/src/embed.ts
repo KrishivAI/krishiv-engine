@@ -114,7 +114,7 @@ export function listenForTheme(
     for (const e of queued) handle(e);
   };
   if (Array.isArray(origins)) ready(origins);
-  // If the origins never arrive, every message stays held (and is never applied).
-  else origins.then(ready, () => {});
+  // If the origins cannot be read, no origin is allowed: the held messages are refused and logged, and none is kept.
+  else origins.then(ready, () => ready([]));
   return () => parentWindow.removeEventListener("message", on);
 }

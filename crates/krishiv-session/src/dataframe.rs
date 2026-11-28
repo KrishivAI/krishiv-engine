@@ -960,6 +960,14 @@ impl DataFrame {
         Ok(analysis)
     }
 
+    /// This frame's own statement, for the text and class its first analysis lists in
+    /// `system.queries` (a `spark.sql` relation a Spark Connect client sends back).
+    #[cfg(feature = "unstable-ir")]
+    pub(crate) fn with_first_statement(mut self, env: QueryEnv) -> Self {
+        self.statement = Some(Arc::new(env));
+        self
+    }
+
     /// Makes the statement `text` of class `class` the one this frame's executions show in
     /// `system.queries`, when its analysis has none yet (a frame a command made).
     pub(crate) fn with_statement(

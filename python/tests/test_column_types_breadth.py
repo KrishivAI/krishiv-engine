@@ -855,3 +855,14 @@ def test_new_session_keeps_build_options() -> None:
     fresh = built.newSession()
     assert fresh.conf.get("spark.sql.session.timeZone") == "Asia/Tokyo"
     assert built.conf.get("spark.sql.session.timeZone") == "UTC"
+
+
+def test_nanosecond_timestamp_type_names_read_as_the_microsecond_types() -> None:
+    """Spark 4.3's ``timestamp_ntz(9)`` / ``timestamp_ltz(7)`` in a schema (``DataFrame.schema``)."""
+    for text, type_ in (
+        ("timestamp_ntz(9)", T.TimestampNTZType()),
+        ("timestamp_ntz(7)", T.TimestampNTZType()),
+        ("timestamp_ltz(8)", T.TimestampType()),
+        ("timestamp_ltz(9)", T.TimestampType()),
+    ):
+        assert T._parse_datatype_json_string(f'"{text}"') == type_

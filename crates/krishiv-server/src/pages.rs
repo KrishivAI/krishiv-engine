@@ -254,7 +254,15 @@ pub fn redact_entries(entries: &[(String, String)]) -> Vec<Value> {
                 let changed = r != v.as_str();
                 (r.into_owned(), changed)
             };
-            json!({"key": k, "value": value, "redacted": masked})
+            let mut row = json!({"key": k, "value": value, "redacted": masked});
+            // A setting made under its Spark name is listed under Krishiv's: the row names both, so a reader who
+            // typed `SET spark.sql.shuffle.partitions` finds it.
+            if let Some(alias) = krishiv_common::config::lookup(k).and_then(|e| e.spark_alias)
+                && alias != k
+            {
+                row["spark_key"] = Value::from(alias);
+            }
+            row
         })
         .collect();
     out.sort_by(|a, b| a["key"].as_str().cmp(&b["key"].as_str()));
@@ -552,6 +560,8 @@ pub struct EnvironmentSetting {
     value: String,
     /// Whether anything was masked.
     redacted: bool,
+    /// The Spark name the setting also answers to, when it has one.
+    spark_key: Option<String>,
 }
 
 /// The environment page's body.
@@ -636,6 +646,18 @@ mod tests {
             assert!(!text.contains(canary), "{canary} leaked: {text}");
         }
         assert!(text.contains("200"));
+    }
+
+    /// CON-RC-7: `SET spark.sql.shuffle.partitions=7` is listed under Krishiv's key, which nobody typed.
+    #[test]
+    fn a_setting_with_a_spark_name_carries_it() {
+        let rows = redact_entries(&[
+            ("krishiv.sql.shuffle.partitionsHint".into(), "7".into()),
+            ("my.app.flag".into(), "on".into()),
+        ]);
+        assert_eq!(rows[0]["key"], "krishiv.sql.shuffle.partitionsHint");
+        assert_eq!(rows[0]["spark_key"], "spark.sql.shuffle.partitions");
+        assert!(rows[1].get("spark_key").is_none(), "{rows:?}");
     }
 
     #[test]

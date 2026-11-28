@@ -402,6 +402,36 @@
         "limit_bytes": null,
         "spillable": true,
         "worker_id": "w2"
+      },
+      {
+        "path": "process/relation_cache",
+        "parent": "process",
+        "kind": "pool",
+        "reserved_bytes": 1048576,
+        "peak_bytes": 4194304,
+        "limit_bytes": null,
+        "spillable": true,
+        "worker_id": "local"
+      },
+      {
+        "path": "process/relation_cache",
+        "parent": "process",
+        "kind": "pool",
+        "reserved_bytes": 0,
+        "peak_bytes": 8388608,
+        "limit_bytes": null,
+        "spillable": true,
+        "worker_id": "local"
+      },
+      {
+        "path": "process/relation_cache",
+        "parent": "process",
+        "kind": "pool",
+        "reserved_bytes": 2097152,
+        "peak_bytes": 2097152,
+        "limit_bytes": null,
+        "spillable": true,
+        "worker_id": "local"
       }
     ]
   }

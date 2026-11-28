@@ -131,7 +131,7 @@ pub(super) fn union_carriers(
 /// carrier: some branch holds it in a binary Arrow type, whose bytes are not
 /// necessarily valid UTF-8, so the validating `STRING` cast is not a way to
 /// meet the branches.
-pub(super) fn is_binary_safe_string<'a>(
+pub(crate) fn is_binary_safe_string<'a>(
     spark: &krishiv_types::DataType,
     mut stored: impl Iterator<Item = &'a arrow_schema::DataType>,
 ) -> bool {
@@ -150,7 +150,7 @@ pub(super) fn is_binary_safe_string<'a>(
 /// the column's own Spark type — unless the carrier is a binary-safe
 /// `string` union's `BinaryView`, whose Spark type is `binary`, so the cast
 /// is a byte-preserving reinterpretation, never a validating string cast.
-pub(super) fn carrier_cast_target(
+pub(crate) fn carrier_cast_target(
     spark: &krishiv_types::DataType,
     carrier: &arrow_schema::DataType,
 ) -> krishiv_types::DataType {

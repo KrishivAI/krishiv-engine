@@ -1,0 +1,1065 @@
+{
+ "cases": {
+  "data_change_bad": {
+   "error": {
+    "condition": "DELTA_ILLEGAL_OPTION",
+    "message": "[DELTA_ILLEGAL_OPTION] Invalid value 'maybe' for option 'dataChange', must be 'true' or 'false'",
+    "parameters": {
+     "explain": "must be 'true' or 'false'",
+     "input": "maybe",
+     "name": "dataChange"
+    },
+    "sqlstate": "42616"
+   },
+   "mode": "append",
+   "options": {
+    "dataChange": "maybe"
+   },
+   "partitioned": false,
+   "versions": 1
+  },
+  "data_change_false_append": {
+   "commit": {
+    "operation": "WRITE",
+    "operationParameters": {
+     "mode": "Append",
+     "partitionBy": "[]"
+    },
+    "userMetadata": null
+   },
+   "error": null,
+   "mode": "append",
+   "options": {
+    "dataChange": "false"
+   },
+   "partitioned": false,
+   "versions": 2
+  },
+  "max_records_bad": {
+   "error": {
+    "condition": null,
+    "message": "For input string: \"abc\"",
+    "parameters": {},
+    "sqlstate": null
+   },
+   "mode": "append",
+   "options": {
+    "maxRecordsPerFile": "abc"
+   },
+   "partitioned": false,
+   "versions": 1
+  },
+  "merge_schema_bad": {
+   "error": {
+    "condition": "DELTA_ILLEGAL_OPTION",
+    "message": "[DELTA_ILLEGAL_OPTION] Invalid value 'maybe' for option 'mergeSchema', must be 'true' or 'false'",
+    "parameters": {
+     "explain": "must be 'true' or 'false'",
+     "input": "maybe",
+     "name": "mergeSchema"
+    },
+    "sqlstate": "42616"
+   },
+   "mode": "append",
+   "options": {
+    "mergeSchema": "maybe"
+   },
+   "partitioned": false,
+   "versions": 1
+  },
+  "merge_schema_true_same": {
+   "commit": {
+    "operation": "WRITE",
+    "operationParameters": {
+     "canMergeSchema": true,
+     "mode": "Append",
+     "partitionBy": "[]"
+    },
+    "userMetadata": null
+   },
+   "error": null,
+   "mode": "append",
+   "options": {
+    "mergeSchema": "true"
+   },
+   "partitioned": false,
+   "versions": 2
+  },
+  "optimize_write_bad": {
+   "error": {
+    "condition": "DELTA_ILLEGAL_OPTION",
+    "message": "[DELTA_ILLEGAL_OPTION] Invalid value 'maybe' for option 'optimizeWrite', must be 'true' or 'false'",
+    "parameters": {
+     "explain": "must be 'true' or 'false'",
+     "input": "maybe",
+     "name": "optimizeWrite"
+    },
+    "sqlstate": "42616"
+   },
+   "mode": "append",
+   "options": {
+    "optimizeWrite": "maybe"
+   },
+   "partitioned": false,
+   "versions": 1
+  },
+  "optimize_write_true": {
+   "commit": {
+    "operation": "WRITE",
+    "operationParameters": {
+     "mode": "Append",
+     "partitionBy": "[]"
+    },
+    "userMetadata": null
+   },
+   "error": null,
+   "mode": "append",
+   "options": {
+    "optimizeWrite": "true"
+   },
+   "partitioned": false,
+   "versions": 2
+  },
+  "overwrite_schema_bad": {
+   "error": {
+    "condition": "DELTA_ILLEGAL_OPTION",
+    "message": "[DELTA_ILLEGAL_OPTION] Invalid value 'maybe' for option 'overwriteSchema', must be 'true' or 'false'",
+    "parameters": {
+     "explain": "must be 'true' or 'false'",
+     "input": "maybe",
+     "name": "overwriteSchema"
+    },
+    "sqlstate": "42616"
+   },
+   "mode": "overwrite",
+   "options": {
+    "overwriteSchema": "maybe"
+   },
+   "partitioned": false,
+   "versions": 1
+  },
+  "pom_bad": {
+   "error": {
+    "condition": "DELTA_ILLEGAL_OPTION",
+    "message": "[DELTA_ILLEGAL_OPTION] Invalid value 'bogus' for option 'partitionOverwriteMode', must be 'STATIC' or 'DYNAMIC'",
+    "parameters": {
+     "explain": "must be 'STATIC' or 'DYNAMIC'",
+     "input": "bogus",
+     "name": "partitionOverwriteMode"
+    },
+    "sqlstate": "42616"
+   },
+   "mode": "overwrite",
+   "options": {
+    "partitionOverwriteMode": "bogus"
+   },
+   "partitioned": true,
+   "versions": 1
+  },
+  "pom_bad_append": {
+   "error": {
+    "condition": "DELTA_ILLEGAL_OPTION",
+    "message": "[DELTA_ILLEGAL_OPTION] Invalid value 'bogus' for option 'partitionOverwriteMode', must be 'STATIC' or 'DYNAMIC'",
+    "parameters": {
+     "explain": "must be 'STATIC' or 'DYNAMIC'",
+     "input": "bogus",
+     "name": "partitionOverwriteMode"
+    },
+    "sqlstate": "42616"
+   },
+   "mode": "append",
+   "options": {
+    "partitionOverwriteMode": "bogus"
+   },
+   "partitioned": true,
+   "versions": 1
+  },
+  "pom_bad_append_unpartitioned": {
+   "commit": {
+    "operation": "WRITE",
+    "operationParameters": {
+     "mode": "Append",
+     "partitionBy": "[]"
+    },
+    "userMetadata": null
+   },
+   "error": null,
+   "mode": "append",
+   "options": {
+    "partitionOverwriteMode": "bogus"
+   },
+   "partitioned": false,
+   "versions": 2
+  },
+  "pom_bad_unpartitioned": {
+   "commit": {
+    "operation": "WRITE",
+    "operationParameters": {
+     "mode": "Overwrite",
+     "partitionBy": "[]"
+    },
+    "userMetadata": null
+   },
+   "error": null,
+   "mode": "overwrite",
+   "options": {
+    "partitionOverwriteMode": "bogus"
+   },
+   "partitioned": false,
+   "versions": 2
+  },
+  "replace_using": {
+   "commit": {
+    "operation": "WRITE",
+    "operationParameters": {
+     "mode": "Overwrite",
+     "partitionBy": "[]",
+     "replaceUsingCols": "(id)"
+    },
+    "userMetadata": null
+   },
+   "error": null,
+   "mode": "overwrite",
+   "options": {
+    "replaceUsing": "id"
+   },
+   "partitioned": false,
+   "versions": 2
+  },
+  "txn_app_only": {
+   "error": {
+    "condition": "DELTA_INVALID_IDEMPOTENT_WRITES_OPTIONS",
+    "message": "[DELTA_INVALID_IDEMPOTENT_WRITES_OPTIONS] Invalid options for idempotent Dataframe writes: Both txnVersion and txnAppId must be specified for idempotent data frame writes",
+    "parameters": {
+     "reason": "Both txnVersion and txnAppId must be specified for idempotent data frame writes"
+    },
+    "sqlstate": "42616"
+   },
+   "mode": "append",
+   "options": {
+    "txnAppId": "a"
+   },
+   "partitioned": false,
+   "versions": 1
+  },
+  "txn_both": {
+   "commit": {
+    "operation": "WRITE",
+    "operationParameters": {
+     "mode": "Append",
+     "partitionBy": "[]"
+    },
+    "userMetadata": null
+   },
+   "error": null,
+   "mode": "append",
+   "options": {
+    "txnAppId": "a",
+    "txnVersion": "1"
+   },
+   "partitioned": false,
+   "versions": 2
+  },
+  "txn_version_negative": {
+   "error": {
+    "condition": "DELTA_ILLEGAL_OPTION",
+    "message": "[DELTA_ILLEGAL_OPTION] Invalid value '-1' for option 'txnVersion', must be a non-negative integer",
+    "parameters": {
+     "explain": "must be a non-negative integer",
+     "input": "-1",
+     "name": "txnVersion"
+    },
+    "sqlstate": "42616"
+   },
+   "mode": "append",
+   "options": {
+    "txnAppId": "a",
+    "txnVersion": "-1"
+   },
+   "partitioned": false,
+   "versions": 1
+  },
+  "txn_version_only": {
+   "error": {
+    "condition": "DELTA_INVALID_IDEMPOTENT_WRITES_OPTIONS",
+    "message": "[DELTA_INVALID_IDEMPOTENT_WRITES_OPTIONS] Invalid options for idempotent Dataframe writes: Both txnVersion and txnAppId must be specified for idempotent data frame writes",
+    "parameters": {
+     "reason": "Both txnVersion and txnAppId must be specified for idempotent data frame writes"
+    },
+    "sqlstate": "42616"
+   },
+   "mode": "append",
+   "options": {
+    "txnVersion": "1"
+   },
+   "partitioned": false,
+   "versions": 1
+  },
+  "unknown_option": {
+   "commit": {
+    "operation": "WRITE",
+    "operationParameters": {
+     "mode": "Append",
+     "partitionBy": "[]"
+    },
+    "userMetadata": null
+   },
+   "error": null,
+   "mode": "append",
+   "options": {
+    "someUnknownOption": "x"
+   },
+   "partitioned": false,
+   "versions": 2
+  },
+  "user_metadata": {
+   "commit": {
+    "operation": "WRITE",
+    "operationParameters": {
+     "mode": "Append",
+     "partitionBy": "[]"
+    },
+    "userMetadata": "hello"
+   },
+   "error": null,
+   "mode": "append",
+   "options": {
+    "userMetadata": "hello"
+   },
+   "partitioned": false,
+   "versions": 2
+  },
+  "user_metadata_overwrite": {
+   "commit": {
+    "operation": "WRITE",
+    "operationParameters": {
+     "mode": "Overwrite",
+     "partitionBy": "[]"
+    },
+    "userMetadata": "hello"
+   },
+   "error": null,
+   "mode": "overwrite",
+   "options": {
+    "userMetadata": "hello"
+   },
+   "partitioned": false,
+   "versions": 2
+  },
+  "write_partition_columns": {
+   "commit": {
+    "operation": "WRITE",
+    "operationParameters": {
+     "mode": "Append",
+     "partitionBy": "[]"
+    },
+    "userMetadata": null
+   },
+   "error": null,
+   "mode": "append",
+   "options": {
+    "writePartitionColumns": "true"
+   },
+   "partitioned": true,
+   "versions": 2
+  }
+ },
+ "delta_spark": "4.4.1",
+ "format_version": 1,
+ "generator": "gen_delta_fixtures.py options",
+ "merge_schema": {
+  "bigint_into_int": {
+   "error": {
+    "condition": "DELTA_FAILED_TO_MERGE_FIELDS",
+    "message": "[DELTA_FAILED_TO_MERGE_FIELDS] Failed to merge fields 'n' and 'n'",
+    "parameters": {
+     "currentField": "n",
+     "updateField": "n"
+    },
+    "sqlstate": "22005"
+   },
+   "mode": "append",
+   "options": {
+    "mergeSchema": "true"
+   },
+   "select": "CAST(5 AS BIGINT) AS id, CAST(5 AS BIGINT) AS n, CAST(1.5 AS DECIMAL(10,2)) AS d, named_struct('a', CAST(1 AS INT)) AS s",
+   "table": "plain",
+   "versions": 2,
+   "writer": "save"
+  },
+  "bigint_into_int_no_merge": {
+   "error": {
+    "condition": "DELTA_FAILED_TO_MERGE_FIELDS",
+    "message": "[DELTA_FAILED_TO_MERGE_FIELDS] Failed to merge fields 'n' and 'n'",
+    "parameters": {
+     "currentField": "n",
+     "updateField": "n"
+    },
+    "sqlstate": "22005"
+   },
+   "mode": "append",
+   "options": {},
+   "select": "CAST(5 AS BIGINT) AS id, CAST(5 AS BIGINT) AS n, CAST(1.5 AS DECIMAL(10,2)) AS d, named_struct('a', CAST(1 AS INT)) AS s",
+   "table": "plain",
+   "versions": 2,
+   "writer": "save"
+  },
+  "bigint_into_int_overwrite_no_merge": {
+   "error": {
+    "condition": "DELTA_FAILED_TO_MERGE_FIELDS",
+    "message": "[DELTA_FAILED_TO_MERGE_FIELDS] Failed to merge fields 'n' and 'n'",
+    "parameters": {
+     "currentField": "n",
+     "updateField": "n"
+    },
+    "sqlstate": "22005"
+   },
+   "mode": "overwrite",
+   "options": {},
+   "select": "CAST(5 AS BIGINT) AS id, CAST(5 AS BIGINT) AS n, CAST(1.5 AS DECIMAL(10,2)) AS d, named_struct('a', CAST(1 AS INT)) AS s",
+   "table": "plain",
+   "versions": 2,
+   "writer": "save"
+  },
+  "bigint_into_int_save_as_table_append": {
+   "commit": {
+    "operation": "WRITE",
+    "operationParameters": {
+     "mode": "Append",
+     "partitionBy": "[]"
+    }
+   },
+   "error": null,
+   "mode": "append",
+   "options": {},
+   "rows": [
+    [
+     1,
+     1,
+     {
+      "decimal": "1.00"
+     },
+     {
+      "struct": {
+       "a": 1
+      }
+     }
+    ],
+    [
+     5,
+     5,
+     {
+      "decimal": "1.50"
+     },
+     {
+      "struct": {
+       "a": 1
+      }
+     }
+    ]
+   ],
+   "select": "CAST(5 AS BIGINT) AS id, CAST(5 AS BIGINT) AS n, CAST(1.5 AS DECIMAL(10,2)) AS d, named_struct('a', CAST(1 AS INT)) AS s",
+   "table": "plain",
+   "types": {
+    "d": "decimal(10,2)",
+    "id": "bigint",
+    "n": "int",
+    "s": "struct<a:int>"
+   },
+   "versions": 3,
+   "writer": "saveAsTable"
+  },
+  "decimal_precision": {
+   "error": {
+    "condition": "DELTA_FAILED_TO_MERGE_FIELDS",
+    "message": "[DELTA_FAILED_TO_MERGE_FIELDS] Failed to merge fields 'd' and 'd'",
+    "parameters": {
+     "currentField": "d",
+     "updateField": "d"
+    },
+    "sqlstate": "22005"
+   },
+   "mode": "append",
+   "options": {
+    "mergeSchema": "true"
+   },
+   "select": "CAST(5 AS BIGINT) AS id, CAST(5 AS INT) AS n, CAST(1.5 AS DECIMAL(12,2)) AS d, named_struct('a', CAST(1 AS INT)) AS s",
+   "table": "plain",
+   "versions": 2,
+   "writer": "save"
+  },
+  "int_into_bigint": {
+   "error": {
+    "condition": "DELTA_FAILED_TO_MERGE_FIELDS",
+    "message": "[DELTA_FAILED_TO_MERGE_FIELDS] Failed to merge fields 'id' and 'id'",
+    "parameters": {
+     "currentField": "id",
+     "updateField": "id"
+    },
+    "sqlstate": "22005"
+   },
+   "mode": "append",
+   "options": {
+    "mergeSchema": "true"
+   },
+   "select": "CAST(5 AS INT) AS id, CAST(5 AS INT) AS n, CAST(1.5 AS DECIMAL(10,2)) AS d, named_struct('a', CAST(1 AS INT)) AS s",
+   "table": "plain",
+   "versions": 2,
+   "writer": "save"
+  },
+  "int_into_short_merge": {
+   "commit": {
+    "operation": "WRITE",
+    "operationParameters": {
+     "canMergeSchema": true,
+     "mode": "Append",
+     "partitionBy": "[]"
+    }
+   },
+   "error": null,
+   "mode": "append",
+   "options": {
+    "mergeSchema": "true"
+   },
+   "rows": [
+    [
+     1,
+     1
+    ],
+    [
+     5,
+     5
+    ]
+   ],
+   "select": "CAST(5 AS BIGINT) AS id, CAST(5 AS INT) AS n",
+   "table": "short",
+   "types": {
+    "id": "bigint",
+    "n": "int"
+   },
+   "versions": 3,
+   "writer": "save"
+  },
+  "int_into_short_no_merge": {
+   "error": {
+    "condition": "DELTA_METADATA_MISMATCH",
+    "message": "[DELTA_METADATA_MISMATCH] A metadata mismatch was detected when writing to the Delta table.",
+    "parameters": {},
+    "sqlstate": "42KDG"
+   },
+   "mode": "append",
+   "options": {},
+   "select": "CAST(5 AS BIGINT) AS id, CAST(5 AS INT) AS n",
+   "table": "short",
+   "versions": 2,
+   "writer": "save"
+  },
+  "nested_bigint_into_int": {
+   "error": {
+    "condition": "DELTA_FAILED_TO_MERGE_FIELDS",
+    "message": "[DELTA_FAILED_TO_MERGE_FIELDS] Failed to merge fields 's' and 's'",
+    "parameters": {
+     "currentField": "s",
+     "updateField": "s"
+    },
+    "sqlstate": "22005"
+   },
+   "mode": "append",
+   "options": {
+    "mergeSchema": "true"
+   },
+   "select": "CAST(5 AS BIGINT) AS id, CAST(5 AS INT) AS n, CAST(1.5 AS DECIMAL(10,2)) AS d, named_struct('a', CAST(1 AS BIGINT)) AS s",
+   "table": "plain",
+   "versions": 2,
+   "writer": "save"
+  },
+  "null_into_int": {
+   "commit": {
+    "operation": "WRITE",
+    "operationParameters": {
+     "canMergeSchema": true,
+     "mode": "Append",
+     "partitionBy": "[]"
+    }
+   },
+   "error": null,
+   "mode": "append",
+   "options": {
+    "mergeSchema": "true"
+   },
+   "rows": [
+    [
+     1,
+     1,
+     {
+      "decimal": "1.00"
+     },
+     {
+      "struct": {
+       "a": 1
+      }
+     }
+    ],
+    [
+     5,
+     null,
+     {
+      "decimal": "1.50"
+     },
+     {
+      "struct": {
+       "a": 1
+      }
+     }
+    ]
+   ],
+   "select": "CAST(5 AS BIGINT) AS id, NULL AS n, CAST(1.5 AS DECIMAL(10,2)) AS d, named_struct('a', CAST(1 AS INT)) AS s",
+   "table": "plain",
+   "types": {
+    "d": "decimal(10,2)",
+    "id": "bigint",
+    "n": "int",
+    "s": "struct<a:int>"
+   },
+   "versions": 3,
+   "writer": "save"
+  },
+  "same_types": {
+   "commit": {
+    "operation": "WRITE",
+    "operationParameters": {
+     "canMergeSchema": true,
+     "mode": "Append",
+     "partitionBy": "[]"
+    }
+   },
+   "error": null,
+   "mode": "append",
+   "options": {
+    "mergeSchema": "true"
+   },
+   "rows": [
+    [
+     1,
+     1,
+     {
+      "decimal": "1.00"
+     },
+     {
+      "struct": {
+       "a": 1
+      }
+     }
+    ],
+    [
+     5,
+     5,
+     {
+      "decimal": "1.50"
+     },
+     {
+      "struct": {
+       "a": 1
+      }
+     }
+    ]
+   ],
+   "select": "CAST(5 AS BIGINT) AS id, CAST(5 AS INT) AS n, CAST(1.5 AS DECIMAL(10,2)) AS d, named_struct('a', CAST(1 AS INT)) AS s",
+   "table": "plain",
+   "types": {
+    "d": "decimal(10,2)",
+    "id": "bigint",
+    "n": "int",
+    "s": "struct<a:int>"
+   },
+   "versions": 3,
+   "writer": "save"
+  },
+  "smallint_into_int": {
+   "commit": {
+    "operation": "WRITE",
+    "operationParameters": {
+     "canMergeSchema": true,
+     "mode": "Append",
+     "partitionBy": "[]"
+    }
+   },
+   "error": null,
+   "mode": "append",
+   "options": {
+    "mergeSchema": "true"
+   },
+   "rows": [
+    [
+     1,
+     1,
+     {
+      "decimal": "1.00"
+     },
+     {
+      "struct": {
+       "a": 1
+      }
+     }
+    ],
+    [
+     5,
+     5,
+     {
+      "decimal": "1.50"
+     },
+     {
+      "struct": {
+       "a": 1
+      }
+     }
+    ]
+   ],
+   "select": "CAST(5 AS BIGINT) AS id, CAST(5 AS SMALLINT) AS n, CAST(1.5 AS DECIMAL(10,2)) AS d, named_struct('a', CAST(1 AS INT)) AS s",
+   "table": "plain",
+   "types": {
+    "d": "decimal(10,2)",
+    "id": "bigint",
+    "n": "int",
+    "s": "struct<a:int>"
+   },
+   "versions": 3,
+   "writer": "save"
+  },
+  "string_into_int": {
+   "error": {
+    "condition": "DELTA_FAILED_TO_MERGE_FIELDS",
+    "message": "[DELTA_FAILED_TO_MERGE_FIELDS] Failed to merge fields 'n' and 'n'",
+    "parameters": {
+     "currentField": "n",
+     "updateField": "n"
+    },
+    "sqlstate": "22005"
+   },
+   "mode": "append",
+   "options": {
+    "mergeSchema": "true"
+   },
+   "select": "CAST(5 AS BIGINT) AS id, '5' AS n, CAST(1.5 AS DECIMAL(10,2)) AS d, named_struct('a', CAST(1 AS INT)) AS s",
+   "table": "plain",
+   "versions": 2,
+   "writer": "save"
+  },
+  "string_into_varchar": {
+   "commit": {
+    "operation": "WRITE",
+    "operationParameters": {
+     "mode": "Append",
+     "partitionBy": "[]"
+    }
+   },
+   "error": null,
+   "mode": "append",
+   "options": {},
+   "rows": [
+    [
+     1,
+     "a"
+    ],
+    [
+     5,
+     "ab"
+    ]
+   ],
+   "select": "CAST(5 AS BIGINT) AS id, 'ab' AS v",
+   "table": "varchar",
+   "types": {
+    "id": "bigint",
+    "v": "string"
+   },
+   "versions": 3,
+   "writer": "save"
+  },
+  "tinyint_into_int": {
+   "commit": {
+    "operation": "WRITE",
+    "operationParameters": {
+     "canMergeSchema": true,
+     "mode": "Append",
+     "partitionBy": "[]"
+    }
+   },
+   "error": null,
+   "mode": "append",
+   "options": {
+    "mergeSchema": "true"
+   },
+   "rows": [
+    [
+     1,
+     1,
+     {
+      "decimal": "1.00"
+     },
+     {
+      "struct": {
+       "a": 1
+      }
+     }
+    ],
+    [
+     5,
+     5,
+     {
+      "decimal": "1.50"
+     },
+     {
+      "struct": {
+       "a": 1
+      }
+     }
+    ]
+   ],
+   "select": "CAST(5 AS BIGINT) AS id, CAST(5 AS TINYINT) AS n, CAST(1.5 AS DECIMAL(10,2)) AS d, named_struct('a', CAST(1 AS INT)) AS s",
+   "table": "plain",
+   "types": {
+    "d": "decimal(10,2)",
+    "id": "bigint",
+    "n": "int",
+    "s": "struct<a:int>"
+   },
+   "versions": 3,
+   "writer": "save"
+  },
+  "widening_bigint_into_int": {
+   "commit": {
+    "operation": "WRITE",
+    "operationParameters": {
+     "canMergeSchema": true,
+     "mode": "Append",
+     "partitionBy": "[]"
+    }
+   },
+   "error": null,
+   "mode": "append",
+   "options": {
+    "mergeSchema": "true"
+   },
+   "rows": [
+    [
+     1,
+     1
+    ],
+    [
+     5,
+     5
+    ]
+   ],
+   "select": "CAST(5 AS BIGINT) AS id, CAST(5 AS BIGINT) AS i",
+   "table": "widening",
+   "types": {
+    "i": "bigint",
+    "id": "bigint"
+   },
+   "versions": 3,
+   "writer": "save"
+  },
+  "widening_bigint_into_int_no_merge": {
+   "error": {
+    "condition": "DELTA_METADATA_MISMATCH",
+    "message": "[DELTA_METADATA_MISMATCH] A metadata mismatch was detected when writing to the Delta table.",
+    "parameters": {},
+    "sqlstate": "42KDG"
+   },
+   "mode": "append",
+   "options": {},
+   "select": "CAST(5 AS BIGINT) AS id, CAST(5 AS BIGINT) AS i",
+   "table": "widening",
+   "versions": 2,
+   "writer": "save"
+  },
+  "widening_short_into_int": {
+   "commit": {
+    "operation": "WRITE",
+    "operationParameters": {
+     "canMergeSchema": true,
+     "mode": "Append",
+     "partitionBy": "[]"
+    }
+   },
+   "error": null,
+   "mode": "append",
+   "options": {
+    "mergeSchema": "true"
+   },
+   "rows": [
+    [
+     1,
+     1
+    ],
+    [
+     5,
+     5
+    ]
+   ],
+   "select": "CAST(5 AS BIGINT) AS id, CAST(5 AS SMALLINT) AS i",
+   "table": "widening",
+   "types": {
+    "i": "int",
+    "id": "bigint"
+   },
+   "versions": 3,
+   "writer": "save"
+  },
+  "widening_string_into_int": {
+   "error": {
+    "condition": "DELTA_FAILED_TO_MERGE_FIELDS",
+    "message": "[DELTA_FAILED_TO_MERGE_FIELDS] Failed to merge fields 'i' and 'i'",
+    "parameters": {
+     "currentField": "i",
+     "updateField": "i"
+    },
+    "sqlstate": "22005"
+   },
+   "mode": "append",
+   "options": {
+    "mergeSchema": "true"
+   },
+   "select": "CAST(5 AS BIGINT) AS id, '5' AS i",
+   "table": "widening",
+   "versions": 2,
+   "writer": "save"
+  }
+ },
+ "spark": "4.2.0",
+ "statements": {
+  "delete_with_options": {
+   "error": {
+    "condition": "PARSE_SYNTAX_ERROR",
+    "message": "",
+    "parameters": {
+     "error": "'WITH'",
+     "hint": ""
+    },
+    "sqlstate": "42601"
+   },
+   "sql": "DELETE FROM <t> WITH ('userMetadata' = 'x') WHERE id = 0",
+   "versions": 1
+  },
+  "insert_overwrite_partitioned_with_pom_bad": {
+   "error": {
+    "condition": "DELTA_ILLEGAL_OPTION",
+    "message": "[DELTA_ILLEGAL_OPTION] Invalid value 'bogus' for option 'partitionOverwriteMode', must be 'STATIC' or 'DYNAMIC'",
+    "parameters": {
+     "explain": "must be 'STATIC' or 'DYNAMIC'",
+     "input": "bogus",
+     "name": "partitionOverwriteMode"
+    },
+    "sqlstate": "42616"
+   },
+   "sql": "INSERT OVERWRITE <pt> WITH ('partitionOverwriteMode' = 'bogus') VALUES (5, 1)",
+   "versions": 1
+  },
+  "insert_overwrite_partitioned_with_pom_dynamic": {
+   "commit": {
+    "operation": "WRITE",
+    "operationParameters": {
+     "isDynamicPartitionOverwrite": true,
+     "mode": "Overwrite",
+     "partitionBy": "[]"
+    },
+    "userMetadata": null
+   },
+   "error": null,
+   "sql": "INSERT OVERWRITE <pt> WITH ('partitionOverwriteMode' = 'dynamic') VALUES (5, 1)",
+   "versions": 2
+  },
+  "insert_overwrite_with_pom_bad": {
+   "commit": {
+    "operation": "WRITE",
+    "operationParameters": {
+     "mode": "Overwrite",
+     "partitionBy": "[]"
+    },
+    "userMetadata": null
+   },
+   "error": null,
+   "sql": "INSERT OVERWRITE <t> WITH ('partitionOverwriteMode' = 'bogus') VALUES (5, 1)",
+   "versions": 2
+  },
+  "insert_partitioned_with_pom_bad": {
+   "error": {
+    "condition": "DELTA_ILLEGAL_OPTION",
+    "message": "[DELTA_ILLEGAL_OPTION] Invalid value 'bogus' for option 'partitionOverwriteMode', must be 'STATIC' or 'DYNAMIC'",
+    "parameters": {
+     "explain": "must be 'STATIC' or 'DYNAMIC'",
+     "input": "bogus",
+     "name": "partitionOverwriteMode"
+    },
+    "sqlstate": "42616"
+   },
+   "sql": "INSERT INTO <pt> WITH ('partitionOverwriteMode' = 'bogus') VALUES (5, 1)",
+   "versions": 1
+  },
+  "insert_with_merge_schema_bad": {
+   "error": {
+    "condition": "DELTA_ILLEGAL_OPTION",
+    "message": "[DELTA_ILLEGAL_OPTION] Invalid value 'maybe' for option 'mergeSchema', must be 'true' or 'false'",
+    "parameters": {
+     "explain": "must be 'true' or 'false'",
+     "input": "maybe",
+     "name": "mergeSchema"
+    },
+    "sqlstate": "42616"
+   },
+   "sql": "INSERT INTO <t> WITH ('mergeSchema' = 'maybe') VALUES (5, 1)",
+   "versions": 1
+  },
+  "insert_with_txn_version_only": {
+   "error": {
+    "condition": "DELTA_INVALID_IDEMPOTENT_WRITES_OPTIONS",
+    "message": "[DELTA_INVALID_IDEMPOTENT_WRITES_OPTIONS] Invalid options for idempotent Dataframe writes: Both txnVersion and txnAppId must be specified for idempotent data frame writes",
+    "parameters": {
+     "reason": "Both txnVersion and txnAppId must be specified for idempotent data frame writes"
+    },
+    "sqlstate": "42616"
+   },
+   "sql": "INSERT INTO <t> WITH ('txnVersion' = '1') VALUES (5, 1)",
+   "versions": 1
+  },
+  "insert_with_unknown": {
+   "commit": {
+    "operation": "WRITE",
+    "operationParameters": {
+     "mode": "Append",
+     "partitionBy": "[]"
+    },
+    "userMetadata": null
+   },
+   "error": null,
+   "sql": "INSERT INTO <t> WITH ('someUnknownOption' = 'x') VALUES (5, 1)",
+   "versions": 2
+  },
+  "insert_with_user_metadata": {
+   "commit": {
+    "operation": "WRITE",
+    "operationParameters": {
+     "mode": "Append",
+     "partitionBy": "[]"
+    },
+    "userMetadata": "m1"
+   },
+   "error": null,
+   "sql": "INSERT INTO <t> WITH ('userMetadata' = 'm1') VALUES (5, 1)",
+   "versions": 2
+  },
+  "update_with_options": {
+   "error": {
+    "condition": "PARSE_SYNTAX_ERROR",
+    "message": "",
+    "parameters": {
+     "error": "'WITH'",
+     "hint": ": missing 'SET'"
+    },
+    "sqlstate": "42601"
+   },
+   "sql": "UPDATE <t> WITH ('userMetadata' = 'x') SET id = 3 WHERE id = 0",
+   "versions": 1
+  }
+ }
+}

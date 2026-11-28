@@ -63,6 +63,9 @@ pub use data::{PlanData, assert_plan_data};
 #[cfg(test)]
 mod shared_tests;
 
+mod union_columns;
+pub(crate) use union_columns::same_columns;
+
 #[cfg(test)]
 pub(crate) use instantiate::node_ids;
 pub(crate) use instantiate::{

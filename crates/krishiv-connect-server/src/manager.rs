@@ -150,7 +150,7 @@ pub struct SessionEntry {
     artifacts: Arc<SessionArtifacts>,
     /// The session's Python UDFs (P3-T014): their runtime exists from the first passed `Usage` check on
     /// `System("udf")`; its workers stop when the session is closed.
-    python: SessionPython,
+    python: Arc<SessionPython>,
     /// The DataFrames the session holds for the client (`checkpoint_command`, Spark's
     /// `SessionHolder.dataFrameCache`): id to frame, ended by
     /// `remove_cached_remote_relation_command` or with the session. A frame's rows and files end
@@ -261,7 +261,7 @@ impl SessionEntry {
 
     /// The session's Python UDFs.
     pub(crate) fn python(&self) -> &SessionPython {
-        &self.python
+        self.python.as_ref()
     }
 
     /// Closes the session's operations, then the session (its queries
@@ -458,6 +458,8 @@ impl SessionManager {
         python: SessionPython,
         transport: Transport,
     ) -> Arc<SessionEntry> {
+        let python = Arc::new(python);
+        session.set_persisted_functions(Arc::new(crate::udf::SqlPersist(Arc::clone(&python))));
         session.set_client_info(transport, None, Some(client_user_id), Some(session.id()));
         Arc::new(SessionEntry {
             errors: Arc::new(SessionErrors::new(session.conf())),
