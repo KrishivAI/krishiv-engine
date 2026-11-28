@@ -296,7 +296,11 @@ def test_the_worker_host_takes_its_names_from_pyspark(
 ) -> None:
     host = _load_as_worker(monkeypatch, _host, "_worker_host")
     assert host.IN_WORKER
-    assert host.PySparkRuntimeError is kerrors.PySparkRuntimeError
+    assert issubclass(host.PySparkRuntimeError, kerrors.PySparkRuntimeError)
+    # A traceback names the client's class, not this package's subclass.
+    assert host.PySparkRuntimeError.__module__ == kerrors.PySparkRuntimeError.__module__
+    assert host.PySparkRuntimeError.__qualname__ == "PySparkRuntimeError"
+    assert host.PySparkImportError("pandas is missing").args
     err = host.not_implemented("relation UDFs")
     assert isinstance(err, kerrors.PySparkNotImplementedError)
     assert err.getCondition() == "NOT_IMPLEMENTED"
@@ -320,6 +324,90 @@ def test_the_worker_host_takes_its_names_from_pyspark(
     assert worker_types.LongType is udf_types.LongType
     assert worker_types.TimeType is udf_types.TimeType
     assert worker_types._NoValue is udf_types._NoValue
+
+
+class _Errors35:
+    """``pyspark.errors`` as PySpark 3.5 has it: ``error_class``/``message_parameters``, a closed table of
+    error classes and no ``PySparkImportError``."""
+
+    class PySparkException(Exception):
+        def __init__(
+            self,
+            message: str | None = None,
+            error_class: str | None = None,
+            message_parameters: dict[str, str] | None = None,
+        ) -> None:
+            if error_class is not None:
+                assert error_class == "NOT_IMPLEMENTED", "unknown error class"
+                message = f"{message_parameters['feature']} is not implemented."  # ty: ignore[not-subscriptable]
+            super().__init__(message)
+            self.error_class = error_class
+
+
+def test_a_pyspark_3_5_worker_raises_its_own_error_classes(monkeypatch: pytest.MonkeyPatch) -> None:
+    base = _Errors35.PySparkException
+    errors = types.ModuleType("pyspark.errors")
+    errors.PySparkException = base  # ty: ignore[unresolved-attribute]
+    for name in ("PySparkNotImplementedError", "PySparkRuntimeError", "PySparkTypeError", "PySparkValueError"):
+        setattr(errors, name, type(name, (base,), {}))
+    errors.UnsupportedOperationException = type("UnsupportedOperationException", (base,), {})  # ty: ignore[unresolved-attribute]
+    pyspark = types.ModuleType("pyspark")
+    pyspark.errors = errors  # ty: ignore[unresolved-attribute]
+    monkeypatch.setitem(sys.modules, "pyspark", pyspark)
+    monkeypatch.setitem(sys.modules, "pyspark.errors", errors)
+    host = _load_as_worker(monkeypatch, _host, "_worker_host_35")
+
+    known = host.not_implemented("x")
+    assert (str(known), known.error_class) == ("x is not implemented.", "NOT_IMPLEMENTED")
+    unknown = host.PySparkRuntimeError(errorClass="RESULT_ROWS_MISMATCH", messageParameters={"n": "1"})
+    assert isinstance(unknown, errors.PySparkRuntimeError)
+    assert str(unknown) == "[RESULT_ROWS_MISMATCH] {'n': '1'}"
+    assert str(host.PySparkValueError("plain")) == "plain"
+    missing = host.PySparkImportError("pandas is missing")
+    assert isinstance(missing, ImportError)
+    assert isinstance(missing, base)
+
+
+@pytest.mark.parametrize(
+    "absent",
+    [
+        # PySpark 4.0
+        {"Geography", "GeographyType", "Geometry", "GeometryType", "TimeType"},
+        # PySpark 3.5
+        set(udf_types._NEWER_TYPES),
+    ],
+)
+def test_an_older_pyspark_worker_imports_its_types(
+    fake_pyspark: types.ModuleType, monkeypatch: pytest.MonkeyPatch, absent: set[str]
+) -> None:
+    def lookup(name: str) -> Any:
+        if name in absent:
+            raise AttributeError(name)
+        return getattr(udf_types, name)
+
+    pyspark_globals = types.ModuleType("pyspark._globals")
+    pyspark_globals._NoValue = udf_types._NoValue  # ty: ignore[unresolved-attribute]
+    pyspark_types = types.ModuleType("pyspark.sql.types")
+    pyspark_types.__getattr__ = lookup  # ty: ignore[invalid-assignment]
+    pyspark_sql = types.ModuleType("pyspark.sql")
+    pyspark_sql.types = pyspark_types  # ty: ignore[unresolved-attribute]
+    for name, mod in (
+        ("pyspark._globals", pyspark_globals),
+        ("pyspark.sql", pyspark_sql),
+        ("pyspark.sql.types", pyspark_types),
+    ):
+        monkeypatch.setitem(sys.modules, name, mod)
+    host = _load_as_worker(monkeypatch, _host, "_worker_host_old")
+    monkeypatch.setitem(sys.modules, "krishiv._udf._host", host)
+    worker_types = _load_as_worker(monkeypatch, udf_types, "_worker_types_old")
+
+    for name in udf_types._NEWER_TYPES:
+        present = getattr(worker_types, name)
+        assert (present is getattr(udf_types, name)) == (name not in absent), name
+    assert worker_types.TimeType(3).simpleString() == "time(3)"
+    if "VariantVal" in absent:
+        with pytest.raises(NotImplementedError, match="variant values"):
+            worker_types.VariantVal(b"", b"")
 
 
 def test_the_in_process_host_keeps_a_set_conf_for_workers_only() -> None:

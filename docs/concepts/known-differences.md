@@ -28,6 +28,13 @@ The parameters inside an error message follow Spark 4.x, also for a Spark
 (`` `spark_catalog`.`dummy` ``) where Spark 3.5 names it without
 (`` `dummy` ``).
 
+## Python UDF errors with a PySpark 3.5 client
+
+In server mode a Python UDF worker runs the result checks of Spark 4.2.0 with every client version. Where the
+client's PySpark 3.5 has no error class of that name, the exception keeps its Python type and its message is the
+4.2.0 class name and its parameters. For example, a grouped map that returns the wrong columns raises
+`[RESULT_COLUMN_NAMES_MISMATCH]` where Spark 3.5 raises `[RESULT_COLUMNS_MISMATCH_FOR_PANDAS_UDF]`.
+
 ## Result cache, reproducible results (Krishiv extensions, off by default)
 
 `krishiv.resultCache.enabled` and `krishiv.deterministicOrder` add behaviour Spark does not have; with

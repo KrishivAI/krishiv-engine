@@ -366,7 +366,12 @@ impl Pool {
         for exe in &config.executables {
             match Interpreter::inspect(exe) {
                 Ok(i) => match i.unusable_reason() {
-                    None => interpreters.push(i),
+                    None => {
+                        if let Some(why) = i.old_pyarrow_warning() {
+                            tracing::warn!("Python UDF worker interpreter: {why}");
+                        }
+                        interpreters.push(i);
+                    }
                     Some(why) => rejected.push(why),
                 },
                 Err(why) => rejected.push(why),

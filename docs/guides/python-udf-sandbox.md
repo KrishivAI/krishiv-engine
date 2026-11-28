@@ -29,8 +29,8 @@ In this release, the server runs scalar Python UDFs in workers. Other UDF forms 
 - Linux. The sandbox uses Landlock and seccomp, which are Linux features. On a kernel without them, a server with
   `krishiv.udf.sandbox=on` refuses the UDF instead of running it unprotected.
 - Each worker interpreter (`krishiv.python.worker.executables`) needs Python 3.11 or later, `pyspark-client`
-  (or `pyspark`) of the same version as your client, `pyarrow` and `pandas`. The worker does not need the
-  `krishiv` package.
+  (or `pyspark`) of the same version as your client, `pyarrow` 18.0.0 or later (also with a PySpark 3.5 or 4.0
+  client, whose own minimum is lower) and `pandas`. The worker does not need the `krishiv` package.
 
 ## What the sandbox allows and blocks
 
