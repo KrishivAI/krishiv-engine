@@ -1669,3 +1669,31 @@ fn the_first_decision_widens_an_input_of_new_keys_early() {
     assert!(fresh.wants_widen_early());
     assert!(!early(&seen));
 }
+
+/// Batches larger than `FIRST_ADAPT_ROWS / 2` still decide early: the half
+/// sample is taken before the batch that crosses it, so a batch that crosses
+/// both marks at once leaves the first decision a window of one batch, not of
+/// none (which gave a rate of 0).
+#[test]
+fn the_first_decision_widens_early_after_batches_past_half_its_rows() {
+    let core = core();
+    let seed = HashSeed::new(Some(2));
+    let step = FIRST_ADAPT_ROWS * 3 / 4;
+    for batches in [1, 2] {
+        let mut t = RowTable::new(&core, &seed, Mode::Fixed { limit: 1024 }, true, 0)
+            .unwrap()
+            .widening(RADIX_BITS, WIDEN_GROUPS);
+        // One batch of 1.5 * FIRST_ADAPT_ROWS crosses both marks; two of 0.75 * cross one each.
+        let len = if batches == 1 { step * 2 } else { step };
+        for b in 0..batches {
+            let s = i64::try_from(b * len).unwrap();
+            let n = i64::try_from(len).unwrap();
+            apply(&mut t, &batch(&core, s..s + n));
+        }
+        // The decision runs when the next batch comes in.
+        let s = i64::try_from(batches * len).unwrap();
+        apply(&mut t, &batch(&core, s..s + 1024));
+        let a = t.adapt.as_ref().unwrap();
+        assert!(a.early, "{batches} batch(es): {:?}", (a.half, a.rows));
+    }
+}

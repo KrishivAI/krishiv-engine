@@ -1126,6 +1126,8 @@ impl RowTable {
             // every early row as new), so the early-widening rate is the
             // sample's new distinct keys per row since the half sample
             // (TPC-DS q22's: none, so it widens at the end, as it should).
+            // `half` serves this first decision only; the ADAPT_ROWS
+            // windows below use `window`.
             if let Some((d, rows)) = a.half {
                 #[expect(clippy::cast_precision_loss, reason = "row counts in a ratio")]
                 let rate = (Self::distinct(a) - d) / (a.rows - rows).max(1) as f64;
@@ -1209,6 +1211,13 @@ impl RowTable {
         self.start_sketches(n);
         let start_recur = self.starts_recur(n);
         if let Some(a) = self.adapt.as_mut() {
+            // The half sample is taken before the batch that crosses
+            // FIRST_ADAPT_ROWS / 2 is added, so the first decision's window
+            // always holds at least one batch (a single batch that crosses
+            // both marks would otherwise give a rate of 0).
+            if a.half.is_none() && a.rows + n >= FIRST_ADAPT_ROWS / 2 {
+                a.half = Some((Self::distinct(a), a.rows));
+            }
             a.rows += n;
             // The direct path's keys are one per batch-local id, not per
             // row (and its append pushes every row): every row counts.
@@ -1228,9 +1237,6 @@ impl RowTable {
             }
             for &h in p.keys.hashes().iter().filter(|&&h| h & 7 == 0) {
                 a.sketch.add(h);
-            }
-            if a.half.is_none() && a.rows >= FIRST_ADAPT_ROWS / 2 {
-                a.half = Some((Self::distinct(a), a.rows));
             }
         }
         for (v, c) in self.parts.iter_mut().zip(p.counts) {
