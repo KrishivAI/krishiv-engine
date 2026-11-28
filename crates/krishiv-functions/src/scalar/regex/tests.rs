@@ -1361,3 +1361,294 @@ fn split_limit_mismatch_is_internal() {
     let err = split_regex(&input, ",", &[Some(-1), Some(-1)]).unwrap_err();
     assert_eq!(err.error_class(), ErrorClass::InternalError);
 }
+
+/// The constant-pattern path (the batch memo, `memo.rs`) against the per-row path: the same
+/// function over the same rows, once with the pattern (and replacement, index, position) as
+/// scalars and once as columns.
+mod constant_pattern {
+    use std::sync::Arc;
+
+    use arrow_array::{ArrayRef, Int32Array, StringArray};
+
+    use super::{bools, text};
+    use crate::scalar::Arg;
+    use crate::scalar::regex::memo::{Memo, PROBE_ROWS};
+    use crate::scalar::tests::bind;
+
+    fn column(rows: &[Option<&str>]) -> ArrayRef {
+        Arc::new(StringArray::from(rows.to_vec())) as ArrayRef
+    }
+
+    /// `f(values, consts...)` with the constants as scalars, then as columns of `values.len()` rows.
+    fn both(
+        f: &str,
+        values: &[Option<&str>],
+        consts: &[ArrayRef],
+    ) -> (Result<ArrayRef, String>, Result<ArrayRef, String>) {
+        let rows = values.len();
+        let input = column(values);
+        let mut types: Vec<&ArrayRef> = vec![&input];
+        types.extend(consts.iter());
+        let g = bind(f, &types);
+        let mut scalar = vec![Arg::Array(Arc::clone(&input))];
+        scalar.extend(consts.iter().map(|c| Arg::Scalar(Arc::clone(c))));
+        let mut wide = vec![Arg::Array(Arc::clone(&input))];
+        wide.extend(consts.iter().map(|c| {
+            let at = Int32Array::from(vec![0; rows]);
+            Arg::Array(
+                arrow_select::take::take(c.as_ref(), &at, None).unwrap_or_else(|e| panic!("{e}")),
+            )
+        }));
+        let show =
+            |r: Result<ArrayRef, krishiv_common::error::KrishivError>| r.map_err(|e| e.to_string());
+        (show(g.invoke(&scalar, rows)), show(g.invoke(&wide, rows)))
+    }
+
+    fn s(v: &str) -> ArrayRef {
+        Arc::new(StringArray::from(vec![Some(v)])) as ArrayRef
+    }
+
+    fn i(v: Option<i32>) -> ArrayRef {
+        Arc::new(Int32Array::from(vec![v])) as ArrayRef
+    }
+
+    /// Repeated values, NULLs, empty strings and inputs ending in a line terminator (the
+    /// `terminated` variant of a `$` pattern).
+    fn repetitive() -> Vec<Option<&'static str>> {
+        let base = [
+            Some("http://www.example.com/a/b"),
+            None,
+            Some("https://example.org/x"),
+            Some(""),
+            Some("http://www.example.com/a/b"),
+            Some("ftp://nope/"),
+            Some("http://site.ru/path\n"),
+            Some("http://site.ru/path\n"),
+            Some("https://example.org/x"),
+        ];
+        base.iter().cycle().take(3 * PROBE_ROWS).copied().collect()
+    }
+
+    /// Every value distinct, past the probe, so the memo stops part way.
+    fn distinct() -> Vec<String> {
+        (0..2 * PROBE_ROWS + 7)
+            .map(|n| format!("http://h{n}.example/p{n}"))
+            .collect()
+    }
+
+    const DOMAIN: &str = r"^https?://(?:www\.)?([^/]+)/.*$";
+
+    #[test]
+    fn replace_matches_the_row_path() {
+        for (rep, position) in [
+            ("$1", None),
+            ("<$0>", Some(1)),
+            ("-", Some(3)),
+            ("", Some(40)),
+        ] {
+            let mut consts = vec![s(DOMAIN), s(rep)];
+            if let Some(p) = position {
+                consts.push(i(Some(p)));
+            }
+            let (memo, rows) = both("regexp_replace", &repetitive(), &consts);
+            assert_eq!(
+                text(&memo.unwrap_or_else(|e| panic!("{e}"))),
+                text(&rows.unwrap_or_else(|e| panic!("{e}")))
+            );
+            let owned = distinct();
+            let values: Vec<Option<&str>> = owned.iter().map(|v| Some(v.as_str())).collect();
+            let (memo, rows) = both("regexp_replace", &values, &consts);
+            assert_eq!(
+                text(&memo.unwrap_or_else(|e| panic!("{e}"))),
+                text(&rows.unwrap_or_else(|e| panic!("{e}")))
+            );
+        }
+    }
+
+    #[test]
+    fn extract_and_like_match_the_row_path() {
+        let owned = distinct();
+        let spread: Vec<Option<&str>> = owned.iter().map(|v| Some(v.as_str())).collect();
+        for values in [repetitive(), spread] {
+            for idx in [None, Some(0), Some(1)] {
+                let mut consts = vec![s(DOMAIN)];
+                if let Some(n) = idx {
+                    consts.push(i(Some(n)));
+                }
+                let (memo, rows) = both("regexp_extract", &values, &consts);
+                assert_eq!(
+                    text(&memo.unwrap_or_else(|e| panic!("{e}"))),
+                    text(&rows.unwrap_or_else(|e| panic!("{e}")))
+                );
+            }
+            for f in ["regexp_like", "regexp", "rlike"] {
+                for pattern in [DOMAIN, "example", r"\.org/x$", "^$"] {
+                    let (memo, rows) = both(f, &values, &[s(pattern)]);
+                    assert_eq!(
+                        bools(&memo.unwrap_or_else(|e| panic!("{e}"))),
+                        bools(&rows.unwrap_or_else(|e| panic!("{e}"))),
+                        "{f} {pattern}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn errors_are_the_row_paths() {
+        // A group index past the pattern's groups raises at the first matching row on both paths.
+        let (memo, rows) = both("regexp_extract", &repetitive(), &[s(DOMAIN), i(Some(2))]);
+        assert!(memo.is_err());
+        assert_eq!(memo.err(), rows.err());
+        // An invalid replacement raises on a match; a position below one at the first value.
+        for consts in [
+            vec![s(DOMAIN), s("$9")],
+            vec![s(DOMAIN), s("x"), i(Some(0))],
+        ] {
+            let (memo, rows) = both("regexp_replace", &repetitive(), &consts);
+            assert!(memo.is_err());
+            assert_eq!(memo.err(), rows.err());
+        }
+        // A position below one over NULL values only raises on neither path.
+        let nulls = vec![None; 5];
+        let (memo, rows) = both("regexp_replace", &nulls, &[s(DOMAIN), s("x"), i(Some(0))]);
+        assert_eq!(text(&memo.unwrap_or_else(|e| panic!("{e}"))), vec![None; 5]);
+        assert_eq!(text(&rows.unwrap_or_else(|e| panic!("{e}"))), vec![None; 5]);
+    }
+
+    /// An invalid pattern raises at the first value it meets, so a batch of NULLs (or of no
+    /// rows) is NULL on both paths, and one value is enough to raise on both.
+    #[test]
+    fn an_invalid_pattern_raises_only_when_a_value_meets_it() {
+        for (f, consts) in [
+            ("regexp_like", vec![s("(")]),
+            ("regexp_extract", vec![s("("), i(Some(1))]),
+            ("regexp_replace", vec![s("("), s("x")]),
+        ] {
+            for values in [vec![], vec![None, None, None]] {
+                let (scalar, wide) = both(f, &values, &consts);
+                assert_eq!(
+                    scalar.as_ref().map(|a| a.null_count()),
+                    Ok(values.len()),
+                    "{f}"
+                );
+                assert_eq!(wide.map(|a| a.null_count()), Ok(values.len()), "{f}");
+            }
+            let (scalar, wide) = both(f, &[None, Some("a")], &consts);
+            assert!(scalar.is_err(), "{f}");
+            assert_eq!(scalar.err(), wide.err(), "{f}");
+        }
+    }
+
+    #[test]
+    fn a_null_constant_is_null_everywhere() {
+        let null_str = Arc::new(StringArray::from(vec![None::<&str>])) as ArrayRef;
+        let values = repetitive();
+        let (memo, rows) = both("regexp_replace", &values, &[Arc::clone(&null_str), s("x")]);
+        assert_eq!(
+            text(&memo.unwrap_or_else(|e| panic!("{e}"))),
+            text(&rows.unwrap_or_else(|e| panic!("{e}")))
+        );
+        let (memo, rows) = both("regexp_extract", &values, &[s(DOMAIN), i(None)]);
+        assert_eq!(
+            text(&memo.unwrap_or_else(|e| panic!("{e}"))),
+            text(&rows.unwrap_or_else(|e| panic!("{e}")))
+        );
+        let (memo, rows) = both("regexp_like", &values, &[null_str]);
+        assert_eq!(
+            bools(&memo.unwrap_or_else(|e| panic!("{e}"))),
+            bools(&rows.unwrap_or_else(|e| panic!("{e}")))
+        );
+    }
+
+    #[test]
+    fn the_memo_evaluates_each_value_once_and_stops_on_distinct_batches() {
+        let values = repetitive();
+        let mut memo = Memo::new(values.len());
+        let mut calls = 0;
+        for v in values.iter().flatten() {
+            let got = memo.get(v, |x| {
+                calls += 1;
+                Ok(x.len())
+            });
+            assert_eq!(got.ok().copied(), Some(v.len()));
+        }
+        assert_eq!(calls, 5, "five distinct values");
+        assert!(!memo.is_off());
+
+        let owned = distinct();
+        let mut memo = Memo::new(owned.len());
+        let mut calls = 0;
+        for v in &owned {
+            let got = memo.get(v, |x| {
+                calls += 1;
+                Ok(x.len())
+            });
+            assert_eq!(got.ok().copied(), Some(v.len()));
+        }
+        assert_eq!(calls, owned.len());
+        assert!(memo.is_off());
+
+        // A batch of one row never builds the index.
+        assert!(Memo::<usize>::new(1).is_off());
+    }
+
+    /// A thread's compiled patterns are kept by function and pattern: one pattern under two
+    /// functions raises each function's own error, whichever compiled it first.
+    #[test]
+    fn a_kept_pattern_keeps_its_function() {
+        let values = [Some("ab"), Some("ab")];
+        let consts = [s("(a)(b)"), i(Some(3))];
+        for (f, name) in [
+            ("regexp_extract", "`regexp_extract`"),
+            ("regexp_extract_all", "`regexp_extract_all`"),
+            ("regexp_extract", "`regexp_extract`"),
+        ] {
+            let (memo, rows) = both(f, &values, &consts);
+            let memo = memo.err().unwrap_or_else(|| panic!("{f}: no error"));
+            assert!(memo.contains("REGEX_GROUP_INDEX"), "{memo}");
+            assert!(memo.contains(&format!("{name} ")), "{f}: {memo}");
+            assert_eq!(Some(memo), rows.err());
+        }
+    }
+
+    /// More patterns than a thread keeps: a pattern that was dropped compiles again and one
+    /// that stayed is found, each with its own results (a `$` pattern on a value ending in a
+    /// line terminator among them).
+    #[test]
+    fn dropped_and_kept_patterns_match_as_compiled() {
+        use crate::scalar::regex::THREAD_PATTERNS;
+
+        let owned: Vec<String> = (0..THREAD_PATTERNS + 2).map(|n| format!("a{n}")).collect();
+        let mut values: Vec<Option<&str>> = owned.iter().map(|v| Some(v.as_str())).collect();
+        values.push(Some("x/path\n"));
+        let last = values.len() - 1;
+        let check = |pattern: &str, hit: usize| {
+            let (memo, rows) = both("rlike", &values, &[s(pattern)]);
+            let want: Vec<Option<bool>> = (0..values.len()).map(|row| Some(row == hit)).collect();
+            assert_eq!(
+                bools(&memo.unwrap_or_else(|e| panic!("{e}"))),
+                want,
+                "{pattern}"
+            );
+            assert_eq!(
+                bools(&rows.unwrap_or_else(|e| panic!("{e}"))),
+                want,
+                "{pattern}"
+            );
+        };
+        check("path$", last);
+        for round in 0..2 {
+            for n in 0..owned.len() {
+                check(&format!("^a{n}$"), n);
+                if round == 1 {
+                    // Kept since the row before, then moved to the front again.
+                    check(&format!("^a{n}$"), n);
+                    check("path$", last);
+                }
+            }
+            // Dropped in the first round, kept in the second.
+            check("path$", last);
+        }
+    }
+}
