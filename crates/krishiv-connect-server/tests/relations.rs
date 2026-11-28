@@ -202,6 +202,28 @@ async fn deduplicate_over_all_columns_drops_repeated_rows() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn deduplicate_over_a_subset_keeps_one_row_per_key_in_the_input_order() {
+    let server = start().await;
+    let dedup = relation(RelType::Deduplicate(Box::new(pb::Deduplicate {
+        input: Some(Box::new(source())),
+        column_names: vec!["id".to_owned()],
+        all_columns_as_keys: None,
+        within_watermark: None,
+    })));
+    let mut rows = run(&server, dedup).await.expect("runs");
+    rows.sort();
+    assert_eq!(rows, strings(&[&["1", "10", "100"], &["2", "20", "NULL"]]));
+    let unknown = relation(RelType::Deduplicate(Box::new(pb::Deduplicate {
+        input: Some(Box::new(source())),
+        column_names: vec!["nope".to_owned()],
+        all_columns_as_keys: None,
+        within_watermark: None,
+    })));
+    let status = run(&server, unknown).await.expect_err("refused");
+    assert_eq!(error_class(&status), "UNRESOLVED_COLUMN.WITH_SUGGESTION");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn deduplicate_without_keys_is_a_spark_error_class() {
     let server = start().await;
     let dedup = relation(RelType::Deduplicate(Box::new(pb::Deduplicate {

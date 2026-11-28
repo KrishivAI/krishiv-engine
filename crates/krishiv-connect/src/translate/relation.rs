@@ -427,16 +427,16 @@ impl Translator<'_> {
                 "dropDuplicatesWithinWatermark",
             ));
         }
+        let input = self.relation(rel)?;
         if !all {
-            return Err(unsupported_field(
-                "Deduplicate",
-                "column_names",
-                "deduplicating on a subset of columns",
-            ));
+            return Ok(PlanNode::ColumnNames {
+                input,
+                op: ColumnNamesOp::Deduplicate {
+                    subset: d.column_names.clone(),
+                },
+            });
         }
-        Ok(PlanNode::Distinct {
-            input: self.relation(rel)?,
-        })
+        Ok(PlanNode::Distinct { input })
     }
 
     /// `RepartitionByExpression` without a partition count is `DISTRIBUTE BY exprs`; a count has

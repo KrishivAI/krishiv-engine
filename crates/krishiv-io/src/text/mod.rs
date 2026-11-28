@@ -19,6 +19,8 @@
 pub(crate) mod codec;
 mod datetime;
 pub(crate) mod reader;
+#[cfg(test)]
+pub(crate) mod time_golden;
 
 use std::borrow::Cow;
 use std::sync::Arc;
@@ -26,6 +28,61 @@ use std::sync::Arc;
 use arrow_schema::{Schema, SchemaRef};
 
 pub(crate) use self::datetime::Datetimes;
+
+/// The session's `TIME` gate, carried to the CSV and JSON readers as an
+/// option named as the conf (`OptionSchema::with_conf_fallbacks`): schema
+/// inference gives `TIME` only while it is on, as Spark 4.3.0's
+/// `CSVInferSchema` / `JsonInferSchema` read `SQLConf.isTimeTypeEnabled`.
+pub(crate) const TIME_TYPE_CONF: &str = krishiv_common::config::TIME_TYPE_ENABLED;
+
+/// The session's `krishiv.io.text.timeNanos`, read as an option named as the
+/// conf: a `TIME` read keeps nine fraction digits (Spark 4.3.0) or six (Spark
+/// 4.2, whose default `TIME` grammar reads microseconds; a `timeFormat` pattern
+/// keeps every digit in both).
+pub(crate) const TIME_NANOS_CONF: &str = "krishiv.io.text.timeNanos";
+
+/// The session's `krishiv.io.text.inferTime`, read as an option named as the
+/// conf: schema inference may give `TIME` (with [`TIME_TYPE_CONF`] on) only
+/// under the Spark 4.3 profile; Spark 4.2's `CSVInferSchema` /
+/// `JsonInferSchema` never give `TIME` (Spark 4.2.1 run, gate on:
+/// `tests/fixtures/spark-4.2.1/time-text-profiles.json`).
+pub(crate) const TIME_INFER_CONF: &str = "krishiv.io.text.inferTime";
+
+/// Whether schema inference may give `TIME`: the session's gate and its
+/// Spark 4.3 profile ([`TIME_INFER_CONF`]).
+pub(crate) fn infers_time(o: &crate::options::FormatOptions) -> bool {
+    o.bool(TIME_TYPE_CONF).unwrap_or(false) && o.bool(TIME_INFER_CONF).unwrap_or(true)
+}
+
+/// Spark 4.3.0 refuses to write a `TIME` column (at any depth) to a text
+/// file while [`TIME_TYPE_CONF`] is off: `UNSUPPORTED_TIME_TYPE`.
+///
+/// # Errors
+/// `UNSUPPORTED_TIME_TYPE`.
+pub(crate) fn refuse_time_without_gate(
+    schema: &arrow_schema::Schema,
+    o: &crate::options::FormatOptions,
+) -> Result<(), krishiv_common::error::KrishivError> {
+    fn has_time(t: &arrow_schema::DataType) -> bool {
+        use arrow_schema::DataType as A;
+        match t {
+            A::Time32(_) | A::Time64(_) => true,
+            A::List(f)
+            | A::LargeList(f)
+            | A::ListView(f)
+            | A::FixedSizeList(f, _)
+            | A::Map(f, _) => has_time(f.data_type()),
+            A::Struct(fs) => fs.iter().any(|f| has_time(f.data_type())),
+            _ => false,
+        }
+    }
+    if !o.bool(TIME_TYPE_CONF).unwrap_or(false)
+        && schema.fields().iter().any(|f| has_time(f.data_type()))
+    {
+        return Err(krishiv_common::error::UnsupportedTimeType {}.into());
+    }
+    Ok(())
+}
 use crate::error::unsupported;
 use crate::format::FileMetadata;
 use crate::stats::{FileStatistics, Precision};

@@ -153,3 +153,5 @@ impl FileFormat for CsvFormat {
 mod corrupt_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod time_tests;

@@ -305,6 +305,34 @@ impl OptionSchema {
         ))
     }
 
+    /// `user` without the options named as their own session conf
+    /// (`spark.sql.timeType.enabled`, `krishiv.io.text.timeNanos`, CSV's
+    /// `spark.sql.csv.parser.columnPruning.enabled`). Spark reads those from
+    /// `SQLConf` only and ignores a read or write option of that name, so
+    /// the session value (or the plan-carried one, see
+    /// [`Self::with_conf_fallbacks`]) decides. Call it where user options
+    /// enter a query, before [`Self::parse`] or `with_conf_fallbacks`.
+    #[must_use]
+    pub fn without_session_confs<'a>(
+        &self,
+        user: &'a BTreeMap<String, OptionValue>,
+    ) -> std::borrow::Cow<'a, BTreeMap<String, OptionValue>> {
+        let session_only = |k: &str| {
+            self.options
+                .iter()
+                .any(|s| s.conf_fallback == Some(s.name) && s.name.eq_ignore_ascii_case(k))
+        };
+        if !user.keys().any(|k| session_only(k)) {
+            return std::borrow::Cow::Borrowed(user);
+        }
+        std::borrow::Cow::Owned(
+            user.iter()
+                .filter(|(k, _)| !session_only(k))
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
+        )
+    }
+
     /// `user` with the value `session` gives each conf fallback the user
     /// did not set (case-insensitive), written as if the user had set it.
     /// A plan built on the driver carries these options, so a worker
