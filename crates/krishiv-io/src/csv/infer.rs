@@ -167,11 +167,8 @@ impl Infer<'_> {
         } else {
             // Spark 4.3.0 `tryParseDouble`: without `preferDate` inference
             // goes straight to the timestamp, never trying a DATE (Spark's
-            // lenient timestamp parser takes a date-only text). Spark also
-            // forces `preferDate` off under the LEGACY parser policy
-            // (`CSVOptions.scala:193-198`). Not applied: krishiv-io has no
-            // LEGACY datetime readers for CSV or JSON at all (no lenient
-            // `FastDateFormat` path), and this is one part of that gap.
+            // lenient timestamp parser takes a date-only text). `preferDate`
+            // is off under the LEGACY parser policy (`CSVOptions`).
             self.timestamp(f)
         }
     }
@@ -193,8 +190,10 @@ impl Infer<'_> {
         }
     }
 
+    /// Spark's `tryParseTimestamp`: `timestampParser.parseOptional`, the
+    /// pattern alone (no fallback, which LEGACY turns on for reads).
     fn timestamp(&self, f: &str) -> T {
-        if matches!(self.dt.parse_timestamp(f), Ok(Some(_))) {
+        if matches!(self.dt.parse_timestamp_exact(f), Ok(Some(_))) {
             T::Timestamp
         } else {
             Self::boolean(f)

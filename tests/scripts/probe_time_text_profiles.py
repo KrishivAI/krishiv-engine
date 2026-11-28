@@ -14,6 +14,9 @@ Runs a REAL Spark (never from memory) in a throw-away container and prints one J
   `inferTimestamp` arm of `JsonInferSchema` (TIME only in 4.3.0, NTZ only by default type, the legacy fallback).
 - `json_file`: the same texts as JSON files (one record per line), read with the same options and settings: the
   file read's inferred schema and the column `t` cast to STRING (a refusal's error class instead).
+- `csv_file`: one-value CSV files (header `t`) under the default policy and `timeParserPolicy=LEGACY`, read three
+  ways: `inferSchema`, schema `t DATE` and schema `t TIMESTAMP`; each gives the schema and `t` cast to STRING (a
+  refusal's error class instead). LEGACY reads with `FastDateFormat` patterns and the lenient fallback.
 
 Usage (from repo root), once per version:
 
@@ -24,7 +27,8 @@ Usage (from repo root), once per version:
 
 Checked by `krishiv-session/tests/time_file_reads.rs` (`text_time_follows_the_profile_runs`) and
 `krishiv-io/src/csv/time_tests.rs` (the 4.2 profile rows); the `schema_of_json` section by
-`krishiv-session/tests/schema_of_json_time.rs`, the `json_file` section by `krishiv-session/tests/json_file_time.rs`.
+`krishiv-session/tests/schema_of_json_time.rs`, the `json_file` section by `krishiv-session/tests/json_file_time.rs`,
+the `csv_file` section by `krishiv-session/tests/csv_file_legacy.rs`.
 """
 
 import json
@@ -66,6 +70,37 @@ SOJ_CASES = [
     ('{"t":"12:34:56","n":1}', {"inferTimestamp": "true", "primitivesAsString": "true"}),
     ('{"t":"1.5"}', {"inferTimestamp": "true", "prefersDecimal": "true"}),
     ('{"t":"12:34:56"}', {"inferTimestamp": "true", "prefersDecimal": "true"}),
+]
+
+CSV_SETTINGS = [
+    ("default", {}),
+    ("legacy", {"spark.sql.legacy.timeParserPolicy": "LEGACY"}),
+]
+
+CSV_SCHEMAS = [("infer", None), ("date", "t DATE"), ("timestamp", "t TIMESTAMP")]
+
+CSV_CASES = [
+    ("2024-01-02", {}),
+    ("2024-1-2", {}),
+    ("2024-01-02 03:04:05", {}),
+    ("2024-01-02T03:04:05", {}),
+    ("2024-01-02T03:04:05.123+01:00", {}),
+    ("2024-01-02T03:04:05.123456Z", {}),
+    ("2024-01-02 03:04:05 GMT", {}),
+    ("2024-01-02 03:04:05.1", {}),
+    ("2024-1-2 3:4:5", {}),
+    ("12:34:56", {}),
+    ("not a date", {}),
+    ("02/01/2024", {"dateFormat": "dd/MM/yyyy"}),
+    ("02/01/2024 03:04", {"timestampFormat": "dd/MM/yyyy HH:mm"}),
+    ("2024-01-02", {"dateFormat": "dd/MM/yyyy"}),
+    ("2024-01-02 03:04:05", {"timestampFormat": "dd/MM/yyyy HH:mm"}),
+    ("2024-01-02 03:04:05", {"timestampFormat": "dd/MM/yyyy HH:mm", "enableDateTimeParsingFallback": "false"}),
+    ("2024-13-45", {}),
+    ("2024-02-30", {"dateFormat": "yyyy-MM-dd"}),
+    ("2024-01-02", {"preferDate": "true"}),
+    ("2024-01-02T03:04:05.123+01:00", {"enableDateTimeParsingFallback": "true"}),
+    ("2024-01-02 03:04:05", {"enableDateTimeParsingFallback": "true"}),
 ]
 
 
@@ -141,7 +176,41 @@ def main() -> None:
         for k in confs:
             spark.conf.unset(k)
 
-    out = {"spark": spark.version, "infer": infer, "read": read, "schema_of_json": sojson, "json_file": jfile}
+    cfile = {}
+    for setting, confs in CSV_SETTINGS:
+        for k, v in confs.items():
+            spark.conf.set(k, v)
+        rows = []
+        for i, (text, opts) in enumerate(CSV_CASES):
+            path = os.path.join(root, f"csv-{setting}-{i}.csv")
+            with open(path, "w") as f:
+                f.write("t\n" + text + "\n")
+            reads = {}
+            for name, ddl in CSV_SCHEMAS:
+                r = spark.read.option("header", "true").options(**opts)
+                r = r.option("inferSchema", "true") if ddl is None else r.schema(ddl)
+                try:
+                    df = r.csv(path)
+                    schema = df.schema.simpleString()
+                    values = [x.s for x in df.selectExpr("CAST(t AS STRING) AS s").collect()]
+                # The error class is the result.
+                except Exception as e:
+                    schema = "ERROR " + (getattr(e, "getErrorClass", lambda: None)() or type(e).__name__)
+                    values = []
+                reads[name] = {"schema": schema, "values": values}
+            rows.append({"text": text, "options": opts, "reads": reads})
+        cfile[setting] = rows
+        for k in confs:
+            spark.conf.unset(k)
+
+    out = {
+        "spark": spark.version,
+        "infer": infer,
+        "read": read,
+        "schema_of_json": sojson,
+        "json_file": jfile,
+        "csv_file": cfile,
+    }
     json.dump(out, sys.stdout, indent=2, sort_keys=True)
     sys.stdout.write("\n")
     spark.stop()
