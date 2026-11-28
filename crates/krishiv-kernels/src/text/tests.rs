@@ -199,3 +199,45 @@ fn today_is_the_local_date_in_the_zone_named() {
     assert_eq!(today_in(midnight, &FixedOffset(0)), 20_000);
     assert_eq!(today_in(midnight, &FixedOffset(-1)), 19_999);
 }
+
+#[test]
+fn boolean_options_read_as_spark_reads_them() {
+    use krishiv_common::error::ErrorClass;
+    // Scala's `toBoolean` (Java's `equalsIgnoreCase`): any case, the long s
+    // matches `s`, never trimmed (Spark 4.2.1 / 4.3.0 runs).
+    for (v, want) in [
+        ("true", true),
+        ("TRUE", true),
+        ("tRuE", true),
+        ("false", false),
+    ] {
+        assert_eq!(option_to_boolean("JSON", "x", v).unwrap(), want, "{v}");
+    }
+    assert!(!option_to_boolean("JSON", "x", "fal\u{17f}e").unwrap());
+    for v in [
+        " true",
+        "true ",
+        "yes",
+        "1",
+        "",
+        "tru",
+        "truee",
+        "t\u{1d400}ue",
+        "\u{1d42d}rue",
+    ] {
+        let e = option_to_boolean("JSON", "allowComments", v).unwrap_err();
+        assert_eq!(
+            e.error_class(),
+            ErrorClass::KrishivInvalidFormatOptionValue,
+            "{v:?}"
+        );
+        assert!(e.to_string().contains("allowComments"), "{e}");
+    }
+    // `getBool`: `toLowerCase`, so the long s is no `s`.
+    assert!(option_get_bool("header", "TRUE").unwrap());
+    assert!(!option_get_bool("header", "False").unwrap());
+    for v in [" true", "yes", "", "fal\u{17f}e"] {
+        let e = option_get_bool("header", v).unwrap_err();
+        assert_eq!(e.error_class(), ErrorClass::LegacyErrorTemp2147, "{v:?}");
+    }
+}

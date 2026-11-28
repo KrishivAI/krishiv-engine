@@ -15,7 +15,10 @@
 //! ([`check_locale`]). Unknown options are ignored, as Spark's reader
 //! ignores them, and the file options (`multiLine`,
 //! `columnNameOfCorruptRecord`, `samplingRatio`, `timeFormat`, ...) have no
-//! scalar meaning and are ignored.
+//! scalar meaning and are ignored. Every boolean option, the ignored
+//! `multiLine`, `pretty`, `writeNonAsciiCharacterAsCodePoint` and
+//! `useUnsafeRow` included, must be `true` or `false` in any case
+//! ([`crate::text::option_to_boolean`]), as Spark builds `JSONOptions`.
 
 use std::collections::BTreeMap;
 
@@ -132,6 +135,9 @@ impl JsonOptions {
     #[must_use]
     pub fn new() -> Self {
         Self {
+            // `JSONOptions`' defaults: both on (Spark 4.2.1 / 4.3.0 runs read
+            // `{'a': 'x'}` without options).
+            allow_single_quotes: true,
             allow_non_numeric_numbers: true,
             ignore_null_fields: true,
             ..Self::default()
@@ -202,7 +208,7 @@ impl JsonOptions {
         }
         for (name, value) in options {
             match name.to_ascii_lowercase().as_str() {
-                "enabledatetimeparsingfallback" => out.datetime_fallback = is_true(value),
+                "enabledatetimeparsingfallback" => out.datetime_fallback = flag(name, value)?,
                 "dateformat" if legacy => {
                     out.date_format = Some(DateTimePattern::new_fast(value));
                     out.date_output = Some(DateTimePattern::new_fast(value));
@@ -232,21 +238,28 @@ impl JsonOptions {
                     out.timestamp_ntz_output = Some(DateTimePattern::new(value, Purpose::Format)?);
                 }
                 "locale" => check_locale(value)?,
-                "primitivesasstring" => out.primitives_as_string = is_true(value),
-                "prefersdecimal" => out.prefers_decimal = is_true(value),
-                "infertimestamp" => out.infer_timestamp = is_true(value),
-                "allowcomments" => out.allow_comments = is_true(value),
-                "allowsinglequotes" => out.allow_single_quotes = is_true(value),
-                "allownumericleadingzeros" => out.allow_numeric_leading_zeros = is_true(value),
+                "primitivesasstring" => out.primitives_as_string = flag(name, value)?,
+                "prefersdecimal" => out.prefers_decimal = flag(name, value)?,
+                "infertimestamp" => out.infer_timestamp = flag(name, value)?,
+                "allowcomments" => out.allow_comments = flag(name, value)?,
+                "allowsinglequotes" => out.allow_single_quotes = flag(name, value)?,
+                "allownumericleadingzeros" => out.allow_numeric_leading_zeros = flag(name, value)?,
                 "allowbackslashescapinganycharacter" => {
-                    out.allow_backslash_escaping_any = is_true(value);
+                    out.allow_backslash_escaping_any = flag(name, value)?;
                 }
-                "allowunquotedfieldnames" => out.allow_unquoted_field_names = is_true(value),
-                "allowunquotedcontrolchars" => out.allow_unquoted_control_chars = is_true(value),
-                "allownonnumericnumbers" => out.allow_non_numeric_numbers = is_true(value),
-                "sortkeys" => out.sort_keys = is_true(value),
-                "ignorenullfields" => out.ignore_null_fields = is_true(value),
-                "dropfieldifallnull" => out.drop_field_if_all_null = is_true(value),
+                "allowunquotedfieldnames" => out.allow_unquoted_field_names = flag(name, value)?,
+                "allowunquotedcontrolchars" => {
+                    out.allow_unquoted_control_chars = flag(name, value)?;
+                }
+                "allownonnumericnumbers" => out.allow_non_numeric_numbers = flag(name, value)?,
+                "sortkeys" => out.sort_keys = flag(name, value)?,
+                "ignorenullfields" => out.ignore_null_fields = flag(name, value)?,
+                "dropfieldifallnull" => out.drop_field_if_all_null = flag(name, value)?,
+                // Boolean options with no scalar meaning: Spark still reads
+                // each one with `toBoolean` when it builds `JSONOptions`.
+                "multiline" | "pretty" | "writenonasciicharacterascodepoint" | "useunsaferow" => {
+                    flag(name, value)?;
+                }
                 "mode" => {
                     out.mode = match value.trim().to_ascii_uppercase().as_str() {
                         "PERMISSIVE" => ParseMode::Permissive,
@@ -255,9 +268,8 @@ impl JsonOptions {
                         _ => out.mode,
                     };
                 }
-                // The file-only options (`multiLine`,
-                // `columnNameOfCorruptRecord`, ...), `timeFormat` (no `TIME`
-                // type yet) and anything unknown.
+                // The file-only options (`columnNameOfCorruptRecord`,
+                // `samplingRatio`, ...) and anything unknown.
                 _ => {}
             }
         }
@@ -300,9 +312,10 @@ impl JsonOptions {
 const LEGACY_DATE: &str = "yyyy-MM-dd";
 const LEGACY_TIMESTAMP: &str = "yyyy-MM-dd'T'HH:mm:ss.SSSXXX";
 
-/// Spark's `toBoolean`: only `"true"` (any case, trimmed) is true.
-fn is_true(value: &str) -> bool {
-    value.trim().eq_ignore_ascii_case("true")
+/// A boolean JSON option as Spark's `JSONOptions` reads every one: Scala's
+/// `toBoolean` ([`crate::text::option_to_boolean`]), in every JSON entry point.
+fn flag(name: &str, value: &str) -> Result<bool, KrishivError> {
+    crate::text::option_to_boolean("JSON", name, value)
 }
 
 #[cfg(test)]

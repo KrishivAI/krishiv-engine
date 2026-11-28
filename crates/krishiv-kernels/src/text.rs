@@ -209,5 +209,80 @@ pub fn today_in(now_micros: i64, zone: &dyn TimeZoneRules) -> i32 {
     i32::try_from(local.div_euclid(86_400_000_000)).unwrap_or(0)
 }
 
+/// A boolean option of Spark's CSV, JSON or XML options read with Scala's
+/// `toBoolean` (`multiLine`, `enableDateTimeParsingFallback`, every JSON
+/// flag, XML `prefersDecimal`): Java's `equalsIgnoreCase` against `true` and
+/// `false`, not trimmed. Anything else is a plain
+/// `IllegalArgumentException` in Spark (no error class; Spark 4.2.1 and
+/// 4.3.0 runs), here `KRISHIV_INVALID_FORMAT_OPTION_VALUE`.
+///
+/// # Errors
+/// `KRISHIV_INVALID_FORMAT_OPTION_VALUE` naming `format` and `name`.
+pub fn option_to_boolean(format: &str, name: &str, value: &str) -> Result<bool, KrishivError> {
+    if java_equals_ignore_case(value, "true") {
+        Ok(true)
+    } else if java_equals_ignore_case(value, "false") {
+        Ok(false)
+    } else {
+        Err(krishiv_common::error::KrishivInvalidFormatOptionValue {
+            value: format!("'{value}'"),
+            option: format!("\"{name}\""),
+            format: format!("\"{format}\""),
+            reason: "it is neither true nor false".to_owned(),
+        }
+        .into())
+    }
+}
+
+/// A boolean option read with `CSVOptions.getBool` / `XmlOptions.getBool`
+/// (`header`, `quoteAll`, `escapeQuotes`, `ignoreLeadingWhiteSpace`, XML
+/// `excludeAttribute`, ...): the value lower-cased with `Locale.ROOT` must be
+/// `true` or `false` (not trimmed), else `_LEGACY_ERROR_TEMP_2147` naming the
+/// option (Spark 4.2.1 and 4.3.0 runs).
+///
+/// # Errors
+/// `_LEGACY_ERROR_TEMP_2147`.
+pub fn option_get_bool(name: &str, value: &str) -> Result<bool, KrishivError> {
+    match value.to_lowercase().as_str() {
+        "true" => Ok(true),
+        "false" => Ok(false),
+        _ => Err(krishiv_common::error::LegacyErrorTemp2147 {
+            param_name: name.to_owned(),
+        }
+        .into()),
+    }
+}
+
+/// Java's `String.equalsIgnoreCase` for an ASCII lower-case `word`: equal
+/// UTF-16 lengths, and each pair of units equal after `Character.toUpperCase`
+/// or, failing that, `Character.toLowerCase` of the upper-cased ones (so the
+/// long s `\u{17f}` matches `s`, and the Kelvin sign `\u{212a}` matches `k`).
+fn java_equals_ignore_case(value: &str, word: &str) -> bool {
+    if value.encode_utf16().count() != word.len() || value.chars().count() != word.len() {
+        return false;
+    }
+    value.chars().zip(word.chars()).all(|(a, b)| {
+        if a == b {
+            return true;
+        }
+        let upper = |c: char| {
+            let mut it = c.to_uppercase();
+            match (it.next(), it.next()) {
+                (Some(u), None) => u,
+                _ => c,
+            }
+        };
+        let lower = |c: char| {
+            let mut it = c.to_lowercase();
+            match (it.next(), it.next()) {
+                (Some(l), None) => l,
+                _ => c,
+            }
+        };
+        let (ua, ub) = (upper(a), upper(b));
+        ua == ub || lower(ua) == lower(ub)
+    })
+}
+
 #[cfg(test)]
 mod tests;

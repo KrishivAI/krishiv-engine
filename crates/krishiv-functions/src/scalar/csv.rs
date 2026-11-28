@@ -19,7 +19,9 @@ use krishiv_kernels::csv::{
     from_csv as kernel_from_csv, struct_to_csv,
 };
 use krishiv_kernels::datetime_pattern::{DateTimePattern, Purpose};
-use krishiv_kernels::text::{spark_string_to_timestamp, spark_string_to_timestamp_ntz};
+use krishiv_kernels::text::{
+    option_get_bool, option_to_boolean, spark_string_to_timestamp, spark_string_to_timestamp_ntz,
+};
 
 use super::args::{Inputs, internal, is_string, to_utf8, unsupported};
 use super::{BindArg, BindOptions, Binding, FamilyResult, bad_types, listed};
@@ -386,57 +388,52 @@ impl Parsed {
                 "timestampntzformat" => {
                     self.ntz_pattern = Some(datetime_option(v, func, "timestampNTZFormat")?);
                 }
-                // Scala's `toBoolean`: `true` or `false` in any case, else a
-                // plain `IllegalArgumentException` (no error class), under
-                // either policy.
+                // Scala's `toBoolean` under either policy (a plain
+                // `IllegalArgumentException` in Spark for anything else).
                 "enabledatetimeparsingfallback" => {
-                    self.fallback = match v.to_ascii_lowercase().as_str() {
-                        "true" => true,
-                        "false" => false,
-                        _ => {
-                            return Err(krishiv_common::error::KrishivInvalidFormatOptionValue {
-                                value: format!("'{v}'"),
-                                option: "\"enableDateTimeParsingFallback\"".to_owned(),
-                                format: "\"CSV\"".to_owned(),
-                                reason: "it is neither true nor false".to_owned(),
-                            }
-                            .into());
-                        }
-                    };
+                    self.fallback = option_to_boolean("CSV", "enableDateTimeParsingFallback", v)?;
                     self.fallback_option = Some(self.fallback);
                 }
                 // `CSVOptions.getBool`: never read under LEGACY (always off),
                 // else `true` or `false` in any case or
                 // `_LEGACY_ERROR_TEMP_2147` (Spark 4.2.1 / 4.3.0 runs).
                 "preferdate" if !self.legacy => {
-                    self.prefer_date = match v.to_ascii_lowercase().as_str() {
-                        "true" => true,
-                        "false" => false,
-                        _ => {
-                            return Err(krishiv_common::error::LegacyErrorTemp2147 {
-                                param_name: "preferDate".to_owned(),
-                            }
-                            .into());
-                        }
-                    };
+                    self.prefer_date = option_get_bool("preferDate", v)?;
                 }
                 "timeformat" => {
                     self.time_pattern = Some(datetime_option(v, func, "timeFormat")?);
                 }
-                "header" | "preferdate" => {
-                    // `header`: ignored for `from_csv` (Spark ignores it);
-                    // `to_csv` never writes one. `preferDate` under LEGACY:
-                    // never read. Any value goes.
+                // `header`: ignored for `from_csv` (Spark ignores it);
+                // `to_csv` never writes one. Still read by `getBool`.
+                "header" => {
+                    option_get_bool("header", v)?;
                 }
+                // `preferDate` under LEGACY: never read, any value goes.
+                "preferdate" => {}
                 "emptyvalue" => self.syntax.empty_value = v.clone(),
                 "ignoreleadingwhitespace" => {
-                    self.syntax.ltrim = v.eq_ignore_ascii_case("true");
+                    self.syntax.ltrim = option_get_bool("ignoreLeadingWhiteSpace", v)?;
                 }
                 "ignoretrailingwhitespace" => {
-                    self.syntax.rtrim = v.eq_ignore_ascii_case("true");
+                    self.syntax.rtrim = option_get_bool("ignoreTrailingWhiteSpace", v)?;
                 }
-                "quoteall" => self.quote_all = v.eq_ignore_ascii_case("true"),
-                "escapequotes" => self.escape_quotes = !v.eq_ignore_ascii_case("false"),
+                "quoteall" => self.quote_all = option_get_bool("quoteAll", v)?,
+                "escapequotes" => self.escape_quotes = option_get_bool("escapeQuotes", v)?,
+                // Not implemented here, but Spark reads each value when it
+                // builds `CSVOptions`, so a value that is not a boolean
+                // fails as it does there before the option is refused.
+                "inferschema" | "enforceschema" | "columnpruning" | "multiline" => {
+                    match lower.as_str() {
+                        "multiline" => option_to_boolean("CSV", "multiLine", v)?,
+                        "inferschema" => option_get_bool("inferSchema", v)?,
+                        "enforceschema" => option_get_bool("enforceSchema", v)?,
+                        _ => option_get_bool("columnPruning", v)?,
+                    };
+                    return Err(KrishivUnsupportedFeature {
+                        feature: format!("{func} with option {k}"),
+                    }
+                    .into());
+                }
                 "linesep" => {
                     if v != "\n" {
                         self.line_sep = Some(v.clone());

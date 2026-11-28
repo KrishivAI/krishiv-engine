@@ -336,7 +336,7 @@ fn options_every_flag_and_mode() {
         ("primitivesAsString", "true"),
         ("prefersDecimal", "TRUE"),
         ("allowComments", "true"),
-        ("allowSingleQuotes", " True "),
+        ("allowSingleQuotes", "True"),
         ("allowNumericLeadingZeros", "true"),
         ("allowBackslashEscapingAnyCharacter", "true"),
         ("allowUnquotedFieldNames", "true"),
@@ -360,6 +360,9 @@ fn options_every_flag_and_mode() {
     assert!(opts.allow_unquoted_control_chars);
     assert!(opts.sort_keys);
     assert_eq!(opts.mode, ParseMode::Permissive);
+    // Scala's `toBoolean` does not trim (Spark 4.2.1 / 4.3.0 runs).
+    let padded = BTreeMap::from([("allowSingleQuotes".to_owned(), " True ".to_owned())]);
+    assert!(JsonOptions::from_map(&padded).is_err());
 
     for (mode, expect) in [
         ("PERMISSIVE", ParseMode::Permissive),
@@ -374,10 +377,12 @@ fn options_every_flag_and_mode() {
     // Unknown mode keeps the default; unknown and file-only options ignored.
     let o = opts_map(&[("mode", "BOGUS"), ("multiLine", "true"), ("whatever", "1")]);
     assert_eq!(o.mode, ParseMode::Permissive);
-    // False spellings stay false.
-    let o = opts_map(&[("sortKeys", "yes"), ("primitivesAsString", "0")]);
-    assert!(!o.sort_keys);
-    assert!(!o.primitives_as_string);
+    // Spellings other than `true` / `false` are refused, as Spark's
+    // `toBoolean` refuses them.
+    for (k, v) in [("sortKeys", "yes"), ("primitivesAsString", "0")] {
+        let m = BTreeMap::from([(k.to_owned(), v.to_owned())]);
+        assert!(JsonOptions::from_map(&m).is_err(), "{k}={v}");
+    }
     // Bad patterns fail for each of the three.
     for key in ["dateFormat", "timestampFormat", "timestampNTZFormat"] {
         let m: BTreeMap<String, String> = BTreeMap::from([(key.to_owned(), "QQQ".to_owned())]);

@@ -21,10 +21,22 @@ fn string(name: &'static str, doc: &'static str) -> OptionSpec {
     }
 }
 
+/// `flag` read with Scala's `toBoolean` (`multiLine`,
+/// `enableDateTimeParsingFallback`).
+fn to_boolean(name: &'static str, default: Option<bool>, doc: &'static str) -> OptionSpec {
+    OptionSpec {
+        kind: OptionKind::ToBoolean,
+        ..flag(name, default, doc)
+    }
+}
+
+/// A boolean option `CSVOptions` reads with `getBool` (`_LEGACY_ERROR_TEMP_2147`
+/// for anything but `true` / `false`); [`to_boolean`] for the two it reads
+/// with Scala's `toBoolean`.
 fn flag(name: &'static str, default: Option<bool>, doc: &'static str) -> OptionSpec {
     OptionSpec {
         name,
-        kind: OptionKind::Bool,
+        kind: OptionKind::GetBool,
         default: match default {
             Some(b) => OptionDefault::Bool(b),
             None => OptionDefault::None,
@@ -102,7 +114,7 @@ static SPECS: LazyLock<Vec<OptionSpec>> = LazyLock::new(|| {
         string("escape", "The escape character in quoted values (default `\\`).");
         string("charToEscapeQuoteEscaping", "The character that escapes the escape character.");
         string("comment", "Lines starting with this character are skipped.");
-        flag("multiLine", Some(false), "Records may span lines (the file is read whole).");
+        to_boolean("multiLine", Some(false), "Records may span lines (the file is read whole).");
         mode_spec();
         conf("columnNameOfCorruptRecord", OptionKind::String, OptionDefault::Str("_corrupt_record"), "spark.sql.columnNameOfCorruptRecord", "The column that receives malformed records in PERMISSIVE mode.");
         string("nullValue", "The text that reads and writes as NULL (default empty).");
@@ -126,8 +138,8 @@ static SPECS: LazyLock<Vec<OptionSpec>> = LazyLock::new(|| {
         string("charset", "Alias of `encoding`.");
         flag("inferSchema", Some(false), "Infer column types from the data.");
         string("samplingRatio", "The fraction of lines inference reads (default 1.0).");
-        flag("prefersDate", Some(true), "Accepted, no effect: Spark 4.2 infers DATE.");
-        flag("prefersDecimal", Some(false), "Accepted, no effect: Spark 4.2 infers DOUBLE.");
+        string("prefersDate", "Accepted, any value, no effect: not a `CSVOptions` name.");
+        string("prefersDecimal", "Accepted, any value, no effect: not a `CSVOptions` name.");
         flag("enforceSchema", Some(true), "Use the given schema by position; the header is not checked.");
         flag("ignoreLeadingWhiteSpace", None, "Trim leading white space (read: false, write: true).");
         flag("ignoreTrailingWhiteSpace", None, "Trim trailing white space (read: false, write: true).");
@@ -137,7 +149,7 @@ static SPECS: LazyLock<Vec<OptionSpec>> = LazyLock::new(|| {
         int("maxColumns", 1, i64::from(i32::MAX), 20480, "Most columns of a record.");
         int("maxCharsPerColumn", -1, i64::from(i32::MAX), -1, "Most characters of a value (-1: any).");
         unescaped_spec();
-        flag("enableDateTimeParsingFallback", None, "Parse with the lenient grammar when the pattern fails (default: on under `timeParserPolicy=LEGACY` or with no pattern, else off).");
+        to_boolean("enableDateTimeParsingFallback", None, "Parse with the lenient grammar when the pattern fails (default: on under `timeParserPolicy=LEGACY` or with no pattern, else off).");
         conf("ignoreCorruptFiles", OptionKind::Bool, OptionDefault::Bool(false), "spark.sql.files.ignoreCorruptFiles", "Inference: a compressed file that breaks counts the lines decoded before the break, as the scan does (`spark.sql.files.ignoreCorruptFiles`).");
         flag("columnPruning", None, "Parse only the requested columns (default: `spark.sql.csv.parser.columnPruning.enabled`, off under `multiLine`).");
         conf(COLUMN_PRUNING_CONF, OptionKind::Bool, OptionDefault::None, COLUMN_PRUNING_CONF, "The session's `spark.sql.csv.parser.columnPruning.enabled`, carried apart from `columnPruning` (Spark ANDs it with `!multiLine`).");

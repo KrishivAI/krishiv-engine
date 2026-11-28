@@ -370,11 +370,15 @@ fn tokenizer_reads_flat_values() {
         r#"{"a":t}"#,
         r#"{"a":nul}"#,
         r#"{"a":"x"#,
-        r#"{"a":'x'}"#,
         "{a:1}",
     ] {
         assert!(parse_line(bad, s).is_err(), "{bad:?} is malformed");
     }
+    // Single quotes are on by default (`JSONOptions`, Spark 4.2.1 / 4.3.0
+    // runs), off only when asked.
+    assert!(parse_line(r#"{"a":'x'}"#, s).is_ok());
+    let no_quotes = syntax_of(&serde_json::json!({"allowSingleQuotes": "false"}));
+    assert!(parse_line(r#"{"a":'x'}"#, no_quotes).is_err());
     // Top-level arrays and scalars parse (the decoder reads an array's
     // objects as rows and treats anything else as a malformed record).
     assert!(matches!(parse_line("[1]", s), Ok(Top::Array(_))));

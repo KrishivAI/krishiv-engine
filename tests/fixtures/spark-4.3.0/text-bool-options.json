@@ -1,0 +1,2761 @@
+{
+ "spark": "4.3.0",
+ "values": [
+  "true",
+  "TRUE",
+  "True",
+  " true",
+  "true ",
+  "yes",
+  "1",
+  "false",
+  "FALSE",
+  "",
+  "falſe"
+ ],
+ "json": {
+  "enableDateTimeParsingFallback": {
+   "true": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   "TRUE": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   "True": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   " true": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "true ": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "yes": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "1": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "false": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   "FALSE": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   "": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "falſe": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   }
+  },
+  "primitivesAsString": {
+   "true": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   "TRUE": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   "True": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   " true": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "true ": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "yes": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "1": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "false": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   "FALSE": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   "": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "falſe": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   }
+  },
+  "prefersDecimal": {
+   "true": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   "TRUE": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   "True": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   " true": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "true ": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "yes": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "1": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "false": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   "FALSE": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   "": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "falſe": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   }
+  },
+  "inferTimestamp": {
+   "true": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   "TRUE": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   "True": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   " true": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "true ": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "yes": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "1": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "false": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   "FALSE": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   "": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "falſe": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   }
+  },
+  "allowComments": {
+   "true": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   "TRUE": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   "True": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   " true": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "true ": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "yes": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "1": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "false": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   "FALSE": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   "": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "falſe": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   }
+  },
+  "allowSingleQuotes": {
+   "true": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   "TRUE": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   "True": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   " true": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "true ": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "yes": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "1": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "false": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   "FALSE": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   "": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "falſe": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   }
+  },
+  "allowNumericLeadingZeros": {
+   "true": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   "TRUE": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   "True": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   " true": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "true ": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "yes": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "1": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "false": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   "FALSE": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   "": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "falſe": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   }
+  },
+  "allowBackslashEscapingAnyCharacter": {
+   "true": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   "TRUE": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   "True": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   " true": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "true ": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "yes": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "1": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "false": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   "FALSE": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   "": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "falſe": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   }
+  },
+  "allowUnquotedFieldNames": {
+   "true": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   "TRUE": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   "True": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   " true": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "true ": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "yes": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "1": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "false": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   "FALSE": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   "": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "falſe": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   }
+  },
+  "allowUnquotedControlChars": {
+   "true": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   "TRUE": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   "True": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   " true": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "true ": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "yes": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "1": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "false": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   "FALSE": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   "": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "falſe": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   }
+  },
+  "allowNonNumericNumbers": {
+   "true": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   "TRUE": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   "True": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   " true": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "true ": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "yes": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "1": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "false": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   "FALSE": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   "": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "falſe": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   }
+  },
+  "ignoreNullFields": {
+   "true": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   "TRUE": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   "True": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   " true": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "true ": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "yes": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "1": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "false": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   "FALSE": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   "": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "falſe": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   }
+  },
+  "dropFieldIfAllNull": {
+   "true": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   "TRUE": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   "True": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   " true": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "true ": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "yes": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "1": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "false": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   "FALSE": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   "": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "falſe": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   }
+  },
+  "multiLine": {
+   "true": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   "TRUE": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   "True": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   " true": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "true ": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "yes": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "1": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "false": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   "FALSE": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   "": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "falſe": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   }
+  },
+  "sortKeys": {
+   "true": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   "TRUE": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   "True": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   " true": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "true ": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "yes": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "1": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "false": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   "FALSE": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   "": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "falſe": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   }
+  },
+  "pretty": {
+   "true": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   "TRUE": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   "True": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   " true": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "true ": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "yes": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "1": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "false": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   "FALSE": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   "": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "falſe": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   }
+  },
+  "writeNonAsciiCharacterAsCodePoint": {
+   "true": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   "TRUE": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   "True": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   " true": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "true ": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "yes": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "1": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "false": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   "FALSE": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   "": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "falſe": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   }
+  },
+  "useUnsafeRow": {
+   "true": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   "TRUE": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   "True": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   " true": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "true ": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "yes": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "1": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "false": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   "FALSE": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   },
+   "": {
+    "from_json": "java.lang.IllegalArgumentException",
+    "to_json": "java.lang.IllegalArgumentException",
+    "schema_of_json": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "falſe": {
+    "from_json": "ok",
+    "to_json": "ok",
+    "schema_of_json": "ok",
+    "read": "ok"
+   }
+  }
+ },
+ "csv": {
+  "header": {
+   "true": {
+    "from_csv": "ok",
+    "to_csv": "ok",
+    "schema_of_csv": "ok",
+    "from_csv_legacy": "ok",
+    "to_csv_legacy": "ok",
+    "read": "ok"
+   },
+   "TRUE": {
+    "from_csv": "ok",
+    "to_csv": "ok",
+    "schema_of_csv": "ok",
+    "from_csv_legacy": "ok",
+    "to_csv_legacy": "ok",
+    "read": "ok"
+   },
+   "True": {
+    "from_csv": "ok",
+    "to_csv": "ok",
+    "schema_of_csv": "ok",
+    "from_csv_legacy": "ok",
+    "to_csv_legacy": "ok",
+    "read": "ok"
+   },
+   " true": {
+    "from_csv": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_csv": "_LEGACY_ERROR_TEMP_2147",
+    "from_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "read": "_LEGACY_ERROR_TEMP_2147"
+   },
+   "true ": {
+    "from_csv": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_csv": "_LEGACY_ERROR_TEMP_2147",
+    "from_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "read": "_LEGACY_ERROR_TEMP_2147"
+   },
+   "yes": {
+    "from_csv": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_csv": "_LEGACY_ERROR_TEMP_2147",
+    "from_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "read": "_LEGACY_ERROR_TEMP_2147"
+   },
+   "1": {
+    "from_csv": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_csv": "_LEGACY_ERROR_TEMP_2147",
+    "from_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "read": "_LEGACY_ERROR_TEMP_2147"
+   },
+   "false": {
+    "from_csv": "ok",
+    "to_csv": "ok",
+    "schema_of_csv": "ok",
+    "from_csv_legacy": "ok",
+    "to_csv_legacy": "ok",
+    "read": "ok"
+   },
+   "FALSE": {
+    "from_csv": "ok",
+    "to_csv": "ok",
+    "schema_of_csv": "ok",
+    "from_csv_legacy": "ok",
+    "to_csv_legacy": "ok",
+    "read": "ok"
+   },
+   "": {
+    "from_csv": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_csv": "_LEGACY_ERROR_TEMP_2147",
+    "from_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "read": "_LEGACY_ERROR_TEMP_2147"
+   },
+   "falſe": {
+    "from_csv": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_csv": "_LEGACY_ERROR_TEMP_2147",
+    "from_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "read": "_LEGACY_ERROR_TEMP_2147"
+   }
+  },
+  "inferSchema": {
+   "true": {
+    "from_csv": "ok",
+    "to_csv": "ok",
+    "schema_of_csv": "ok",
+    "from_csv_legacy": "ok",
+    "to_csv_legacy": "ok",
+    "read": "ok"
+   },
+   "TRUE": {
+    "from_csv": "ok",
+    "to_csv": "ok",
+    "schema_of_csv": "ok",
+    "from_csv_legacy": "ok",
+    "to_csv_legacy": "ok",
+    "read": "ok"
+   },
+   "True": {
+    "from_csv": "ok",
+    "to_csv": "ok",
+    "schema_of_csv": "ok",
+    "from_csv_legacy": "ok",
+    "to_csv_legacy": "ok",
+    "read": "ok"
+   },
+   " true": {
+    "from_csv": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_csv": "_LEGACY_ERROR_TEMP_2147",
+    "from_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "read": "_LEGACY_ERROR_TEMP_2147"
+   },
+   "true ": {
+    "from_csv": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_csv": "_LEGACY_ERROR_TEMP_2147",
+    "from_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "read": "_LEGACY_ERROR_TEMP_2147"
+   },
+   "yes": {
+    "from_csv": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_csv": "_LEGACY_ERROR_TEMP_2147",
+    "from_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "read": "_LEGACY_ERROR_TEMP_2147"
+   },
+   "1": {
+    "from_csv": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_csv": "_LEGACY_ERROR_TEMP_2147",
+    "from_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "read": "_LEGACY_ERROR_TEMP_2147"
+   },
+   "false": {
+    "from_csv": "ok",
+    "to_csv": "ok",
+    "schema_of_csv": "ok",
+    "from_csv_legacy": "ok",
+    "to_csv_legacy": "ok",
+    "read": "ok"
+   },
+   "FALSE": {
+    "from_csv": "ok",
+    "to_csv": "ok",
+    "schema_of_csv": "ok",
+    "from_csv_legacy": "ok",
+    "to_csv_legacy": "ok",
+    "read": "ok"
+   },
+   "": {
+    "from_csv": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_csv": "_LEGACY_ERROR_TEMP_2147",
+    "from_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "read": "_LEGACY_ERROR_TEMP_2147"
+   },
+   "falſe": {
+    "from_csv": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_csv": "_LEGACY_ERROR_TEMP_2147",
+    "from_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "read": "_LEGACY_ERROR_TEMP_2147"
+   }
+  },
+  "ignoreLeadingWhiteSpace": {
+   "true": {
+    "from_csv": "ok",
+    "to_csv": "ok",
+    "schema_of_csv": "ok",
+    "from_csv_legacy": "ok",
+    "to_csv_legacy": "ok",
+    "read": "ok"
+   },
+   "TRUE": {
+    "from_csv": "ok",
+    "to_csv": "ok",
+    "schema_of_csv": "ok",
+    "from_csv_legacy": "ok",
+    "to_csv_legacy": "ok",
+    "read": "ok"
+   },
+   "True": {
+    "from_csv": "ok",
+    "to_csv": "ok",
+    "schema_of_csv": "ok",
+    "from_csv_legacy": "ok",
+    "to_csv_legacy": "ok",
+    "read": "ok"
+   },
+   " true": {
+    "from_csv": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_csv": "_LEGACY_ERROR_TEMP_2147",
+    "from_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "read": "_LEGACY_ERROR_TEMP_2147"
+   },
+   "true ": {
+    "from_csv": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_csv": "_LEGACY_ERROR_TEMP_2147",
+    "from_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "read": "_LEGACY_ERROR_TEMP_2147"
+   },
+   "yes": {
+    "from_csv": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_csv": "_LEGACY_ERROR_TEMP_2147",
+    "from_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "read": "_LEGACY_ERROR_TEMP_2147"
+   },
+   "1": {
+    "from_csv": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_csv": "_LEGACY_ERROR_TEMP_2147",
+    "from_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "read": "_LEGACY_ERROR_TEMP_2147"
+   },
+   "false": {
+    "from_csv": "ok",
+    "to_csv": "ok",
+    "schema_of_csv": "ok",
+    "from_csv_legacy": "ok",
+    "to_csv_legacy": "ok",
+    "read": "ok"
+   },
+   "FALSE": {
+    "from_csv": "ok",
+    "to_csv": "ok",
+    "schema_of_csv": "ok",
+    "from_csv_legacy": "ok",
+    "to_csv_legacy": "ok",
+    "read": "ok"
+   },
+   "": {
+    "from_csv": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_csv": "_LEGACY_ERROR_TEMP_2147",
+    "from_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "read": "_LEGACY_ERROR_TEMP_2147"
+   },
+   "falſe": {
+    "from_csv": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_csv": "_LEGACY_ERROR_TEMP_2147",
+    "from_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "read": "_LEGACY_ERROR_TEMP_2147"
+   }
+  },
+  "ignoreTrailingWhiteSpace": {
+   "true": {
+    "from_csv": "ok",
+    "to_csv": "ok",
+    "schema_of_csv": "ok",
+    "from_csv_legacy": "ok",
+    "to_csv_legacy": "ok",
+    "read": "ok"
+   },
+   "TRUE": {
+    "from_csv": "ok",
+    "to_csv": "ok",
+    "schema_of_csv": "ok",
+    "from_csv_legacy": "ok",
+    "to_csv_legacy": "ok",
+    "read": "ok"
+   },
+   "True": {
+    "from_csv": "ok",
+    "to_csv": "ok",
+    "schema_of_csv": "ok",
+    "from_csv_legacy": "ok",
+    "to_csv_legacy": "ok",
+    "read": "ok"
+   },
+   " true": {
+    "from_csv": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_csv": "_LEGACY_ERROR_TEMP_2147",
+    "from_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "read": "_LEGACY_ERROR_TEMP_2147"
+   },
+   "true ": {
+    "from_csv": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_csv": "_LEGACY_ERROR_TEMP_2147",
+    "from_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "read": "_LEGACY_ERROR_TEMP_2147"
+   },
+   "yes": {
+    "from_csv": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_csv": "_LEGACY_ERROR_TEMP_2147",
+    "from_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "read": "_LEGACY_ERROR_TEMP_2147"
+   },
+   "1": {
+    "from_csv": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_csv": "_LEGACY_ERROR_TEMP_2147",
+    "from_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "read": "_LEGACY_ERROR_TEMP_2147"
+   },
+   "false": {
+    "from_csv": "ok",
+    "to_csv": "ok",
+    "schema_of_csv": "ok",
+    "from_csv_legacy": "ok",
+    "to_csv_legacy": "ok",
+    "read": "ok"
+   },
+   "FALSE": {
+    "from_csv": "ok",
+    "to_csv": "ok",
+    "schema_of_csv": "ok",
+    "from_csv_legacy": "ok",
+    "to_csv_legacy": "ok",
+    "read": "ok"
+   },
+   "": {
+    "from_csv": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_csv": "_LEGACY_ERROR_TEMP_2147",
+    "from_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "read": "_LEGACY_ERROR_TEMP_2147"
+   },
+   "falſe": {
+    "from_csv": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_csv": "_LEGACY_ERROR_TEMP_2147",
+    "from_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "read": "_LEGACY_ERROR_TEMP_2147"
+   }
+  },
+  "preferDate": {
+   "true": {
+    "from_csv": "ok",
+    "to_csv": "ok",
+    "schema_of_csv": "ok",
+    "from_csv_legacy": "ok",
+    "to_csv_legacy": "ok",
+    "read": "ok"
+   },
+   "TRUE": {
+    "from_csv": "ok",
+    "to_csv": "ok",
+    "schema_of_csv": "ok",
+    "from_csv_legacy": "ok",
+    "to_csv_legacy": "ok",
+    "read": "ok"
+   },
+   "True": {
+    "from_csv": "ok",
+    "to_csv": "ok",
+    "schema_of_csv": "ok",
+    "from_csv_legacy": "ok",
+    "to_csv_legacy": "ok",
+    "read": "ok"
+   },
+   " true": {
+    "from_csv": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_csv": "_LEGACY_ERROR_TEMP_2147",
+    "from_csv_legacy": "ok",
+    "to_csv_legacy": "ok",
+    "read": "_LEGACY_ERROR_TEMP_2147"
+   },
+   "true ": {
+    "from_csv": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_csv": "_LEGACY_ERROR_TEMP_2147",
+    "from_csv_legacy": "ok",
+    "to_csv_legacy": "ok",
+    "read": "_LEGACY_ERROR_TEMP_2147"
+   },
+   "yes": {
+    "from_csv": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_csv": "_LEGACY_ERROR_TEMP_2147",
+    "from_csv_legacy": "ok",
+    "to_csv_legacy": "ok",
+    "read": "_LEGACY_ERROR_TEMP_2147"
+   },
+   "1": {
+    "from_csv": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_csv": "_LEGACY_ERROR_TEMP_2147",
+    "from_csv_legacy": "ok",
+    "to_csv_legacy": "ok",
+    "read": "_LEGACY_ERROR_TEMP_2147"
+   },
+   "false": {
+    "from_csv": "ok",
+    "to_csv": "ok",
+    "schema_of_csv": "ok",
+    "from_csv_legacy": "ok",
+    "to_csv_legacy": "ok",
+    "read": "ok"
+   },
+   "FALSE": {
+    "from_csv": "ok",
+    "to_csv": "ok",
+    "schema_of_csv": "ok",
+    "from_csv_legacy": "ok",
+    "to_csv_legacy": "ok",
+    "read": "ok"
+   },
+   "": {
+    "from_csv": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_csv": "_LEGACY_ERROR_TEMP_2147",
+    "from_csv_legacy": "ok",
+    "to_csv_legacy": "ok",
+    "read": "_LEGACY_ERROR_TEMP_2147"
+   },
+   "falſe": {
+    "from_csv": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_csv": "_LEGACY_ERROR_TEMP_2147",
+    "from_csv_legacy": "ok",
+    "to_csv_legacy": "ok",
+    "read": "_LEGACY_ERROR_TEMP_2147"
+   }
+  },
+  "enableDateTimeParsingFallback": {
+   "true": {
+    "from_csv": "ok",
+    "to_csv": "ok",
+    "schema_of_csv": "ok",
+    "from_csv_legacy": "ok",
+    "to_csv_legacy": "ok",
+    "read": "ok"
+   },
+   "TRUE": {
+    "from_csv": "ok",
+    "to_csv": "ok",
+    "schema_of_csv": "ok",
+    "from_csv_legacy": "ok",
+    "to_csv_legacy": "ok",
+    "read": "ok"
+   },
+   "True": {
+    "from_csv": "ok",
+    "to_csv": "ok",
+    "schema_of_csv": "ok",
+    "from_csv_legacy": "ok",
+    "to_csv_legacy": "ok",
+    "read": "ok"
+   },
+   " true": {
+    "from_csv": "java.lang.IllegalArgumentException",
+    "to_csv": "java.lang.IllegalArgumentException",
+    "schema_of_csv": "java.lang.IllegalArgumentException",
+    "from_csv_legacy": "java.lang.IllegalArgumentException",
+    "to_csv_legacy": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "true ": {
+    "from_csv": "java.lang.IllegalArgumentException",
+    "to_csv": "java.lang.IllegalArgumentException",
+    "schema_of_csv": "java.lang.IllegalArgumentException",
+    "from_csv_legacy": "java.lang.IllegalArgumentException",
+    "to_csv_legacy": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "yes": {
+    "from_csv": "java.lang.IllegalArgumentException",
+    "to_csv": "java.lang.IllegalArgumentException",
+    "schema_of_csv": "java.lang.IllegalArgumentException",
+    "from_csv_legacy": "java.lang.IllegalArgumentException",
+    "to_csv_legacy": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "1": {
+    "from_csv": "java.lang.IllegalArgumentException",
+    "to_csv": "java.lang.IllegalArgumentException",
+    "schema_of_csv": "java.lang.IllegalArgumentException",
+    "from_csv_legacy": "java.lang.IllegalArgumentException",
+    "to_csv_legacy": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "false": {
+    "from_csv": "ok",
+    "to_csv": "ok",
+    "schema_of_csv": "ok",
+    "from_csv_legacy": "ok",
+    "to_csv_legacy": "ok",
+    "read": "ok"
+   },
+   "FALSE": {
+    "from_csv": "ok",
+    "to_csv": "ok",
+    "schema_of_csv": "ok",
+    "from_csv_legacy": "ok",
+    "to_csv_legacy": "ok",
+    "read": "ok"
+   },
+   "": {
+    "from_csv": "java.lang.IllegalArgumentException",
+    "to_csv": "java.lang.IllegalArgumentException",
+    "schema_of_csv": "java.lang.IllegalArgumentException",
+    "from_csv_legacy": "java.lang.IllegalArgumentException",
+    "to_csv_legacy": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "falſe": {
+    "from_csv": "ok",
+    "to_csv": "ok",
+    "schema_of_csv": "ok",
+    "from_csv_legacy": "ok",
+    "to_csv_legacy": "ok",
+    "read": "ok"
+   }
+  },
+  "multiLine": {
+   "true": {
+    "from_csv": "ok",
+    "to_csv": "ok",
+    "schema_of_csv": "ok",
+    "from_csv_legacy": "ok",
+    "to_csv_legacy": "ok",
+    "read": "ok"
+   },
+   "TRUE": {
+    "from_csv": "ok",
+    "to_csv": "ok",
+    "schema_of_csv": "ok",
+    "from_csv_legacy": "ok",
+    "to_csv_legacy": "ok",
+    "read": "ok"
+   },
+   "True": {
+    "from_csv": "ok",
+    "to_csv": "ok",
+    "schema_of_csv": "ok",
+    "from_csv_legacy": "ok",
+    "to_csv_legacy": "ok",
+    "read": "ok"
+   },
+   " true": {
+    "from_csv": "java.lang.IllegalArgumentException",
+    "to_csv": "java.lang.IllegalArgumentException",
+    "schema_of_csv": "java.lang.IllegalArgumentException",
+    "from_csv_legacy": "java.lang.IllegalArgumentException",
+    "to_csv_legacy": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "true ": {
+    "from_csv": "java.lang.IllegalArgumentException",
+    "to_csv": "java.lang.IllegalArgumentException",
+    "schema_of_csv": "java.lang.IllegalArgumentException",
+    "from_csv_legacy": "java.lang.IllegalArgumentException",
+    "to_csv_legacy": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "yes": {
+    "from_csv": "java.lang.IllegalArgumentException",
+    "to_csv": "java.lang.IllegalArgumentException",
+    "schema_of_csv": "java.lang.IllegalArgumentException",
+    "from_csv_legacy": "java.lang.IllegalArgumentException",
+    "to_csv_legacy": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "1": {
+    "from_csv": "java.lang.IllegalArgumentException",
+    "to_csv": "java.lang.IllegalArgumentException",
+    "schema_of_csv": "java.lang.IllegalArgumentException",
+    "from_csv_legacy": "java.lang.IllegalArgumentException",
+    "to_csv_legacy": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "false": {
+    "from_csv": "ok",
+    "to_csv": "ok",
+    "schema_of_csv": "ok",
+    "from_csv_legacy": "ok",
+    "to_csv_legacy": "ok",
+    "read": "ok"
+   },
+   "FALSE": {
+    "from_csv": "ok",
+    "to_csv": "ok",
+    "schema_of_csv": "ok",
+    "from_csv_legacy": "ok",
+    "to_csv_legacy": "ok",
+    "read": "ok"
+   },
+   "": {
+    "from_csv": "java.lang.IllegalArgumentException",
+    "to_csv": "java.lang.IllegalArgumentException",
+    "schema_of_csv": "java.lang.IllegalArgumentException",
+    "from_csv_legacy": "java.lang.IllegalArgumentException",
+    "to_csv_legacy": "java.lang.IllegalArgumentException",
+    "read": "java.lang.IllegalArgumentException"
+   },
+   "falſe": {
+    "from_csv": "ok",
+    "to_csv": "ok",
+    "schema_of_csv": "ok",
+    "from_csv_legacy": "ok",
+    "to_csv_legacy": "ok",
+    "read": "ok"
+   }
+  },
+  "escapeQuotes": {
+   "true": {
+    "from_csv": "ok",
+    "to_csv": "ok",
+    "schema_of_csv": "ok",
+    "from_csv_legacy": "ok",
+    "to_csv_legacy": "ok",
+    "read": "ok"
+   },
+   "TRUE": {
+    "from_csv": "ok",
+    "to_csv": "ok",
+    "schema_of_csv": "ok",
+    "from_csv_legacy": "ok",
+    "to_csv_legacy": "ok",
+    "read": "ok"
+   },
+   "True": {
+    "from_csv": "ok",
+    "to_csv": "ok",
+    "schema_of_csv": "ok",
+    "from_csv_legacy": "ok",
+    "to_csv_legacy": "ok",
+    "read": "ok"
+   },
+   " true": {
+    "from_csv": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_csv": "_LEGACY_ERROR_TEMP_2147",
+    "from_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "read": "_LEGACY_ERROR_TEMP_2147"
+   },
+   "true ": {
+    "from_csv": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_csv": "_LEGACY_ERROR_TEMP_2147",
+    "from_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "read": "_LEGACY_ERROR_TEMP_2147"
+   },
+   "yes": {
+    "from_csv": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_csv": "_LEGACY_ERROR_TEMP_2147",
+    "from_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "read": "_LEGACY_ERROR_TEMP_2147"
+   },
+   "1": {
+    "from_csv": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_csv": "_LEGACY_ERROR_TEMP_2147",
+    "from_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "read": "_LEGACY_ERROR_TEMP_2147"
+   },
+   "false": {
+    "from_csv": "ok",
+    "to_csv": "ok",
+    "schema_of_csv": "ok",
+    "from_csv_legacy": "ok",
+    "to_csv_legacy": "ok",
+    "read": "ok"
+   },
+   "FALSE": {
+    "from_csv": "ok",
+    "to_csv": "ok",
+    "schema_of_csv": "ok",
+    "from_csv_legacy": "ok",
+    "to_csv_legacy": "ok",
+    "read": "ok"
+   },
+   "": {
+    "from_csv": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_csv": "_LEGACY_ERROR_TEMP_2147",
+    "from_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "read": "_LEGACY_ERROR_TEMP_2147"
+   },
+   "falſe": {
+    "from_csv": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_csv": "_LEGACY_ERROR_TEMP_2147",
+    "from_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "read": "_LEGACY_ERROR_TEMP_2147"
+   }
+  },
+  "quoteAll": {
+   "true": {
+    "from_csv": "ok",
+    "to_csv": "ok",
+    "schema_of_csv": "ok",
+    "from_csv_legacy": "ok",
+    "to_csv_legacy": "ok",
+    "read": "ok"
+   },
+   "TRUE": {
+    "from_csv": "ok",
+    "to_csv": "ok",
+    "schema_of_csv": "ok",
+    "from_csv_legacy": "ok",
+    "to_csv_legacy": "ok",
+    "read": "ok"
+   },
+   "True": {
+    "from_csv": "ok",
+    "to_csv": "ok",
+    "schema_of_csv": "ok",
+    "from_csv_legacy": "ok",
+    "to_csv_legacy": "ok",
+    "read": "ok"
+   },
+   " true": {
+    "from_csv": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_csv": "_LEGACY_ERROR_TEMP_2147",
+    "from_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "read": "_LEGACY_ERROR_TEMP_2147"
+   },
+   "true ": {
+    "from_csv": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_csv": "_LEGACY_ERROR_TEMP_2147",
+    "from_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "read": "_LEGACY_ERROR_TEMP_2147"
+   },
+   "yes": {
+    "from_csv": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_csv": "_LEGACY_ERROR_TEMP_2147",
+    "from_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "read": "_LEGACY_ERROR_TEMP_2147"
+   },
+   "1": {
+    "from_csv": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_csv": "_LEGACY_ERROR_TEMP_2147",
+    "from_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "read": "_LEGACY_ERROR_TEMP_2147"
+   },
+   "false": {
+    "from_csv": "ok",
+    "to_csv": "ok",
+    "schema_of_csv": "ok",
+    "from_csv_legacy": "ok",
+    "to_csv_legacy": "ok",
+    "read": "ok"
+   },
+   "FALSE": {
+    "from_csv": "ok",
+    "to_csv": "ok",
+    "schema_of_csv": "ok",
+    "from_csv_legacy": "ok",
+    "to_csv_legacy": "ok",
+    "read": "ok"
+   },
+   "": {
+    "from_csv": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_csv": "_LEGACY_ERROR_TEMP_2147",
+    "from_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "read": "_LEGACY_ERROR_TEMP_2147"
+   },
+   "falſe": {
+    "from_csv": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_csv": "_LEGACY_ERROR_TEMP_2147",
+    "from_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "read": "_LEGACY_ERROR_TEMP_2147"
+   }
+  },
+  "enforceSchema": {
+   "true": {
+    "from_csv": "ok",
+    "to_csv": "ok",
+    "schema_of_csv": "ok",
+    "from_csv_legacy": "ok",
+    "to_csv_legacy": "ok",
+    "read": "ok"
+   },
+   "TRUE": {
+    "from_csv": "ok",
+    "to_csv": "ok",
+    "schema_of_csv": "ok",
+    "from_csv_legacy": "ok",
+    "to_csv_legacy": "ok",
+    "read": "ok"
+   },
+   "True": {
+    "from_csv": "ok",
+    "to_csv": "ok",
+    "schema_of_csv": "ok",
+    "from_csv_legacy": "ok",
+    "to_csv_legacy": "ok",
+    "read": "ok"
+   },
+   " true": {
+    "from_csv": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_csv": "_LEGACY_ERROR_TEMP_2147",
+    "from_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "read": "_LEGACY_ERROR_TEMP_2147"
+   },
+   "true ": {
+    "from_csv": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_csv": "_LEGACY_ERROR_TEMP_2147",
+    "from_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "read": "_LEGACY_ERROR_TEMP_2147"
+   },
+   "yes": {
+    "from_csv": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_csv": "_LEGACY_ERROR_TEMP_2147",
+    "from_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "read": "_LEGACY_ERROR_TEMP_2147"
+   },
+   "1": {
+    "from_csv": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_csv": "_LEGACY_ERROR_TEMP_2147",
+    "from_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "read": "_LEGACY_ERROR_TEMP_2147"
+   },
+   "false": {
+    "from_csv": "ok",
+    "to_csv": "ok",
+    "schema_of_csv": "ok",
+    "from_csv_legacy": "ok",
+    "to_csv_legacy": "ok",
+    "read": "ok"
+   },
+   "FALSE": {
+    "from_csv": "ok",
+    "to_csv": "ok",
+    "schema_of_csv": "ok",
+    "from_csv_legacy": "ok",
+    "to_csv_legacy": "ok",
+    "read": "ok"
+   },
+   "": {
+    "from_csv": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_csv": "_LEGACY_ERROR_TEMP_2147",
+    "from_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "read": "_LEGACY_ERROR_TEMP_2147"
+   },
+   "falſe": {
+    "from_csv": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_csv": "_LEGACY_ERROR_TEMP_2147",
+    "from_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "read": "_LEGACY_ERROR_TEMP_2147"
+   }
+  },
+  "columnPruning": {
+   "true": {
+    "from_csv": "ok",
+    "to_csv": "ok",
+    "schema_of_csv": "ok",
+    "from_csv_legacy": "ok",
+    "to_csv_legacy": "ok",
+    "read": "ok"
+   },
+   "TRUE": {
+    "from_csv": "ok",
+    "to_csv": "ok",
+    "schema_of_csv": "ok",
+    "from_csv_legacy": "ok",
+    "to_csv_legacy": "ok",
+    "read": "ok"
+   },
+   "True": {
+    "from_csv": "ok",
+    "to_csv": "ok",
+    "schema_of_csv": "ok",
+    "from_csv_legacy": "ok",
+    "to_csv_legacy": "ok",
+    "read": "ok"
+   },
+   " true": {
+    "from_csv": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_csv": "_LEGACY_ERROR_TEMP_2147",
+    "from_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "read": "_LEGACY_ERROR_TEMP_2147"
+   },
+   "true ": {
+    "from_csv": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_csv": "_LEGACY_ERROR_TEMP_2147",
+    "from_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "read": "_LEGACY_ERROR_TEMP_2147"
+   },
+   "yes": {
+    "from_csv": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_csv": "_LEGACY_ERROR_TEMP_2147",
+    "from_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "read": "_LEGACY_ERROR_TEMP_2147"
+   },
+   "1": {
+    "from_csv": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_csv": "_LEGACY_ERROR_TEMP_2147",
+    "from_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "read": "_LEGACY_ERROR_TEMP_2147"
+   },
+   "false": {
+    "from_csv": "ok",
+    "to_csv": "ok",
+    "schema_of_csv": "ok",
+    "from_csv_legacy": "ok",
+    "to_csv_legacy": "ok",
+    "read": "ok"
+   },
+   "FALSE": {
+    "from_csv": "ok",
+    "to_csv": "ok",
+    "schema_of_csv": "ok",
+    "from_csv_legacy": "ok",
+    "to_csv_legacy": "ok",
+    "read": "ok"
+   },
+   "": {
+    "from_csv": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_csv": "_LEGACY_ERROR_TEMP_2147",
+    "from_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "read": "_LEGACY_ERROR_TEMP_2147"
+   },
+   "falſe": {
+    "from_csv": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_csv": "_LEGACY_ERROR_TEMP_2147",
+    "from_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "to_csv_legacy": "_LEGACY_ERROR_TEMP_2147",
+    "read": "_LEGACY_ERROR_TEMP_2147"
+   }
+  }
+ },
+ "xml": {
+  "excludeAttribute": {
+   "true": {
+    "from_xml": "ok",
+    "to_xml": "ok",
+    "schema_of_xml": "ok"
+   },
+   "TRUE": {
+    "from_xml": "ok",
+    "to_xml": "ok",
+    "schema_of_xml": "ok"
+   },
+   "True": {
+    "from_xml": "ok",
+    "to_xml": "ok",
+    "schema_of_xml": "ok"
+   },
+   " true": {
+    "from_xml": "_LEGACY_ERROR_TEMP_2147",
+    "to_xml": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_xml": "_LEGACY_ERROR_TEMP_2147"
+   },
+   "true ": {
+    "from_xml": "_LEGACY_ERROR_TEMP_2147",
+    "to_xml": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_xml": "_LEGACY_ERROR_TEMP_2147"
+   },
+   "yes": {
+    "from_xml": "_LEGACY_ERROR_TEMP_2147",
+    "to_xml": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_xml": "_LEGACY_ERROR_TEMP_2147"
+   },
+   "1": {
+    "from_xml": "_LEGACY_ERROR_TEMP_2147",
+    "to_xml": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_xml": "_LEGACY_ERROR_TEMP_2147"
+   },
+   "false": {
+    "from_xml": "ok",
+    "to_xml": "ok",
+    "schema_of_xml": "ok"
+   },
+   "FALSE": {
+    "from_xml": "ok",
+    "to_xml": "ok",
+    "schema_of_xml": "ok"
+   },
+   "": {
+    "from_xml": "_LEGACY_ERROR_TEMP_2147",
+    "to_xml": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_xml": "_LEGACY_ERROR_TEMP_2147"
+   },
+   "falſe": {
+    "from_xml": "_LEGACY_ERROR_TEMP_2147",
+    "to_xml": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_xml": "_LEGACY_ERROR_TEMP_2147"
+   }
+  },
+  "ignoreSurroundingSpaces": {
+   "true": {
+    "from_xml": "ok",
+    "to_xml": "ok",
+    "schema_of_xml": "ok"
+   },
+   "TRUE": {
+    "from_xml": "ok",
+    "to_xml": "ok",
+    "schema_of_xml": "ok"
+   },
+   "True": {
+    "from_xml": "ok",
+    "to_xml": "ok",
+    "schema_of_xml": "ok"
+   },
+   " true": {
+    "from_xml": "_LEGACY_ERROR_TEMP_2147",
+    "to_xml": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_xml": "_LEGACY_ERROR_TEMP_2147"
+   },
+   "true ": {
+    "from_xml": "_LEGACY_ERROR_TEMP_2147",
+    "to_xml": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_xml": "_LEGACY_ERROR_TEMP_2147"
+   },
+   "yes": {
+    "from_xml": "_LEGACY_ERROR_TEMP_2147",
+    "to_xml": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_xml": "_LEGACY_ERROR_TEMP_2147"
+   },
+   "1": {
+    "from_xml": "_LEGACY_ERROR_TEMP_2147",
+    "to_xml": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_xml": "_LEGACY_ERROR_TEMP_2147"
+   },
+   "false": {
+    "from_xml": "ok",
+    "to_xml": "ok",
+    "schema_of_xml": "ok"
+   },
+   "FALSE": {
+    "from_xml": "ok",
+    "to_xml": "ok",
+    "schema_of_xml": "ok"
+   },
+   "": {
+    "from_xml": "_LEGACY_ERROR_TEMP_2147",
+    "to_xml": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_xml": "_LEGACY_ERROR_TEMP_2147"
+   },
+   "falſe": {
+    "from_xml": "_LEGACY_ERROR_TEMP_2147",
+    "to_xml": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_xml": "_LEGACY_ERROR_TEMP_2147"
+   }
+  },
+  "inferSchema": {
+   "true": {
+    "from_xml": "ok",
+    "to_xml": "ok",
+    "schema_of_xml": "ok"
+   },
+   "TRUE": {
+    "from_xml": "ok",
+    "to_xml": "ok",
+    "schema_of_xml": "ok"
+   },
+   "True": {
+    "from_xml": "ok",
+    "to_xml": "ok",
+    "schema_of_xml": "ok"
+   },
+   " true": {
+    "from_xml": "_LEGACY_ERROR_TEMP_2147",
+    "to_xml": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_xml": "_LEGACY_ERROR_TEMP_2147"
+   },
+   "true ": {
+    "from_xml": "_LEGACY_ERROR_TEMP_2147",
+    "to_xml": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_xml": "_LEGACY_ERROR_TEMP_2147"
+   },
+   "yes": {
+    "from_xml": "_LEGACY_ERROR_TEMP_2147",
+    "to_xml": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_xml": "_LEGACY_ERROR_TEMP_2147"
+   },
+   "1": {
+    "from_xml": "_LEGACY_ERROR_TEMP_2147",
+    "to_xml": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_xml": "_LEGACY_ERROR_TEMP_2147"
+   },
+   "false": {
+    "from_xml": "ok",
+    "to_xml": "ok",
+    "schema_of_xml": "ok"
+   },
+   "FALSE": {
+    "from_xml": "ok",
+    "to_xml": "ok",
+    "schema_of_xml": "ok"
+   },
+   "": {
+    "from_xml": "_LEGACY_ERROR_TEMP_2147",
+    "to_xml": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_xml": "_LEGACY_ERROR_TEMP_2147"
+   },
+   "falſe": {
+    "from_xml": "_LEGACY_ERROR_TEMP_2147",
+    "to_xml": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_xml": "_LEGACY_ERROR_TEMP_2147"
+   }
+  },
+  "ignoreNamespace": {
+   "true": {
+    "from_xml": "ok",
+    "to_xml": "ok",
+    "schema_of_xml": "ok"
+   },
+   "TRUE": {
+    "from_xml": "ok",
+    "to_xml": "ok",
+    "schema_of_xml": "ok"
+   },
+   "True": {
+    "from_xml": "ok",
+    "to_xml": "ok",
+    "schema_of_xml": "ok"
+   },
+   " true": {
+    "from_xml": "_LEGACY_ERROR_TEMP_2147",
+    "to_xml": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_xml": "_LEGACY_ERROR_TEMP_2147"
+   },
+   "true ": {
+    "from_xml": "_LEGACY_ERROR_TEMP_2147",
+    "to_xml": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_xml": "_LEGACY_ERROR_TEMP_2147"
+   },
+   "yes": {
+    "from_xml": "_LEGACY_ERROR_TEMP_2147",
+    "to_xml": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_xml": "_LEGACY_ERROR_TEMP_2147"
+   },
+   "1": {
+    "from_xml": "_LEGACY_ERROR_TEMP_2147",
+    "to_xml": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_xml": "_LEGACY_ERROR_TEMP_2147"
+   },
+   "false": {
+    "from_xml": "ok",
+    "to_xml": "ok",
+    "schema_of_xml": "ok"
+   },
+   "FALSE": {
+    "from_xml": "ok",
+    "to_xml": "ok",
+    "schema_of_xml": "ok"
+   },
+   "": {
+    "from_xml": "_LEGACY_ERROR_TEMP_2147",
+    "to_xml": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_xml": "_LEGACY_ERROR_TEMP_2147"
+   },
+   "falſe": {
+    "from_xml": "_LEGACY_ERROR_TEMP_2147",
+    "to_xml": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_xml": "_LEGACY_ERROR_TEMP_2147"
+   }
+  },
+  "prefersDecimal": {
+   "true": {
+    "from_xml": "ok",
+    "to_xml": "ok",
+    "schema_of_xml": "ok"
+   },
+   "TRUE": {
+    "from_xml": "ok",
+    "to_xml": "ok",
+    "schema_of_xml": "ok"
+   },
+   "True": {
+    "from_xml": "ok",
+    "to_xml": "ok",
+    "schema_of_xml": "ok"
+   },
+   " true": {
+    "from_xml": "java.lang.IllegalArgumentException",
+    "to_xml": "java.lang.IllegalArgumentException",
+    "schema_of_xml": "java.lang.IllegalArgumentException"
+   },
+   "true ": {
+    "from_xml": "java.lang.IllegalArgumentException",
+    "to_xml": "java.lang.IllegalArgumentException",
+    "schema_of_xml": "java.lang.IllegalArgumentException"
+   },
+   "yes": {
+    "from_xml": "java.lang.IllegalArgumentException",
+    "to_xml": "java.lang.IllegalArgumentException",
+    "schema_of_xml": "java.lang.IllegalArgumentException"
+   },
+   "1": {
+    "from_xml": "java.lang.IllegalArgumentException",
+    "to_xml": "java.lang.IllegalArgumentException",
+    "schema_of_xml": "java.lang.IllegalArgumentException"
+   },
+   "false": {
+    "from_xml": "ok",
+    "to_xml": "ok",
+    "schema_of_xml": "ok"
+   },
+   "FALSE": {
+    "from_xml": "ok",
+    "to_xml": "ok",
+    "schema_of_xml": "ok"
+   },
+   "": {
+    "from_xml": "java.lang.IllegalArgumentException",
+    "to_xml": "java.lang.IllegalArgumentException",
+    "schema_of_xml": "java.lang.IllegalArgumentException"
+   },
+   "falſe": {
+    "from_xml": "ok",
+    "to_xml": "ok",
+    "schema_of_xml": "ok"
+   }
+  },
+  "validateName": {
+   "true": {
+    "from_xml": "ok",
+    "to_xml": "ok",
+    "schema_of_xml": "ok"
+   },
+   "TRUE": {
+    "from_xml": "ok",
+    "to_xml": "ok",
+    "schema_of_xml": "ok"
+   },
+   "True": {
+    "from_xml": "ok",
+    "to_xml": "ok",
+    "schema_of_xml": "ok"
+   },
+   " true": {
+    "from_xml": "_LEGACY_ERROR_TEMP_2147",
+    "to_xml": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_xml": "_LEGACY_ERROR_TEMP_2147"
+   },
+   "true ": {
+    "from_xml": "_LEGACY_ERROR_TEMP_2147",
+    "to_xml": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_xml": "_LEGACY_ERROR_TEMP_2147"
+   },
+   "yes": {
+    "from_xml": "_LEGACY_ERROR_TEMP_2147",
+    "to_xml": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_xml": "_LEGACY_ERROR_TEMP_2147"
+   },
+   "1": {
+    "from_xml": "_LEGACY_ERROR_TEMP_2147",
+    "to_xml": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_xml": "_LEGACY_ERROR_TEMP_2147"
+   },
+   "false": {
+    "from_xml": "ok",
+    "to_xml": "ok",
+    "schema_of_xml": "ok"
+   },
+   "FALSE": {
+    "from_xml": "ok",
+    "to_xml": "ok",
+    "schema_of_xml": "ok"
+   },
+   "": {
+    "from_xml": "_LEGACY_ERROR_TEMP_2147",
+    "to_xml": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_xml": "_LEGACY_ERROR_TEMP_2147"
+   },
+   "falſe": {
+    "from_xml": "_LEGACY_ERROR_TEMP_2147",
+    "to_xml": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_xml": "_LEGACY_ERROR_TEMP_2147"
+   }
+  },
+  "preferDate": {
+   "true": {
+    "from_xml": "ok",
+    "to_xml": "ok",
+    "schema_of_xml": "ok"
+   },
+   "TRUE": {
+    "from_xml": "ok",
+    "to_xml": "ok",
+    "schema_of_xml": "ok"
+   },
+   "True": {
+    "from_xml": "ok",
+    "to_xml": "ok",
+    "schema_of_xml": "ok"
+   },
+   " true": {
+    "from_xml": "_LEGACY_ERROR_TEMP_2147",
+    "to_xml": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_xml": "_LEGACY_ERROR_TEMP_2147"
+   },
+   "true ": {
+    "from_xml": "_LEGACY_ERROR_TEMP_2147",
+    "to_xml": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_xml": "_LEGACY_ERROR_TEMP_2147"
+   },
+   "yes": {
+    "from_xml": "_LEGACY_ERROR_TEMP_2147",
+    "to_xml": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_xml": "_LEGACY_ERROR_TEMP_2147"
+   },
+   "1": {
+    "from_xml": "_LEGACY_ERROR_TEMP_2147",
+    "to_xml": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_xml": "_LEGACY_ERROR_TEMP_2147"
+   },
+   "false": {
+    "from_xml": "ok",
+    "to_xml": "ok",
+    "schema_of_xml": "ok"
+   },
+   "FALSE": {
+    "from_xml": "ok",
+    "to_xml": "ok",
+    "schema_of_xml": "ok"
+   },
+   "": {
+    "from_xml": "_LEGACY_ERROR_TEMP_2147",
+    "to_xml": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_xml": "_LEGACY_ERROR_TEMP_2147"
+   },
+   "falſe": {
+    "from_xml": "_LEGACY_ERROR_TEMP_2147",
+    "to_xml": "_LEGACY_ERROR_TEMP_2147",
+    "schema_of_xml": "_LEGACY_ERROR_TEMP_2147"
+   }
+  },
+  "multiLine": {
+   "true": {
+    "from_xml": "ok",
+    "to_xml": "ok",
+    "schema_of_xml": "ok"
+   },
+   "TRUE": {
+    "from_xml": "ok",
+    "to_xml": "ok",
+    "schema_of_xml": "ok"
+   },
+   "True": {
+    "from_xml": "ok",
+    "to_xml": "ok",
+    "schema_of_xml": "ok"
+   },
+   " true": {
+    "from_xml": "java.lang.IllegalArgumentException",
+    "to_xml": "java.lang.IllegalArgumentException",
+    "schema_of_xml": "java.lang.IllegalArgumentException"
+   },
+   "true ": {
+    "from_xml": "java.lang.IllegalArgumentException",
+    "to_xml": "java.lang.IllegalArgumentException",
+    "schema_of_xml": "java.lang.IllegalArgumentException"
+   },
+   "yes": {
+    "from_xml": "java.lang.IllegalArgumentException",
+    "to_xml": "java.lang.IllegalArgumentException",
+    "schema_of_xml": "java.lang.IllegalArgumentException"
+   },
+   "1": {
+    "from_xml": "java.lang.IllegalArgumentException",
+    "to_xml": "java.lang.IllegalArgumentException",
+    "schema_of_xml": "java.lang.IllegalArgumentException"
+   },
+   "false": {
+    "from_xml": "ok",
+    "to_xml": "ok",
+    "schema_of_xml": "ok"
+   },
+   "FALSE": {
+    "from_xml": "ok",
+    "to_xml": "ok",
+    "schema_of_xml": "ok"
+   },
+   "": {
+    "from_xml": "java.lang.IllegalArgumentException",
+    "to_xml": "java.lang.IllegalArgumentException",
+    "schema_of_xml": "java.lang.IllegalArgumentException"
+   },
+   "falſe": {
+    "from_xml": "ok",
+    "to_xml": "ok",
+    "schema_of_xml": "ok"
+   }
+  },
+  "useLegacyXMLParser": {
+   "true": {
+    "from_xml": "ok",
+    "to_xml": "ok",
+    "schema_of_xml": "ok"
+   },
+   "TRUE": {
+    "from_xml": "ok",
+    "to_xml": "ok",
+    "schema_of_xml": "ok"
+   },
+   "True": {
+    "from_xml": "ok",
+    "to_xml": "ok",
+    "schema_of_xml": "ok"
+   },
+   " true": {
+    "from_xml": "java.lang.IllegalArgumentException",
+    "to_xml": "java.lang.IllegalArgumentException",
+    "schema_of_xml": "java.lang.IllegalArgumentException"
+   },
+   "true ": {
+    "from_xml": "java.lang.IllegalArgumentException",
+    "to_xml": "java.lang.IllegalArgumentException",
+    "schema_of_xml": "java.lang.IllegalArgumentException"
+   },
+   "yes": {
+    "from_xml": "java.lang.IllegalArgumentException",
+    "to_xml": "java.lang.IllegalArgumentException",
+    "schema_of_xml": "java.lang.IllegalArgumentException"
+   },
+   "1": {
+    "from_xml": "java.lang.IllegalArgumentException",
+    "to_xml": "java.lang.IllegalArgumentException",
+    "schema_of_xml": "java.lang.IllegalArgumentException"
+   },
+   "false": {
+    "from_xml": "ok",
+    "to_xml": "ok",
+    "schema_of_xml": "ok"
+   },
+   "FALSE": {
+    "from_xml": "ok",
+    "to_xml": "ok",
+    "schema_of_xml": "ok"
+   },
+   "": {
+    "from_xml": "java.lang.IllegalArgumentException",
+    "to_xml": "java.lang.IllegalArgumentException",
+    "schema_of_xml": "java.lang.IllegalArgumentException"
+   },
+   "falſe": {
+    "from_xml": "ok",
+    "to_xml": "ok",
+    "schema_of_xml": "ok"
+   }
+  }
+ },
+ "single_quotes": {
+  "read_schema": "struct<a:string,b:bigint>",
+  "read_rows": [
+   [
+    "x",
+    1
+   ]
+  ],
+  "from_json": "{\"a\":\"x\"}",
+  "schema_of_json": "STRUCT<a: STRING>",
+  "from_json_off": "{}"
+ }
+}

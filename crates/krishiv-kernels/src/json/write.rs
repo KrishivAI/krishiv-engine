@@ -8,8 +8,9 @@
 //! agrees with Spark's key order for string keys), arrays keep order. Strings are quoted and escaped, integral values print as
 //! digits, doubles and floats print as Java's `toString` does, decimals
 //! print plain, dates print as `yyyy-MM-dd` and timestamps in the session
-//! zone as `yyyy-MM-dd'T'HH:mm:ss.SSSXXX` unless the options name other
-//! patterns (non-finite floats and doubles are quoted, as Spark writes
+//! zone with the options' patterns (`to_json` always supplies the timestamp
+//! one: the file writers' `commonTimestampFormat`; without one,
+//! `yyyy-MM-dd'T'HH:mm:ss.SSSXXX`) (non-finite floats and doubles are quoted, as Spark writes
 //! them). Binary prints base64. A map key that is not a string prints
 //! as its JSON value does, except a struct key, which prints as the JSON
 //! array of its values (`{"[1,2]":...}`, as Spark does).
@@ -34,7 +35,8 @@ use crate::text::{java_decimal_string, java_double_string, java_float_string32};
 
 /// Spark's default `dateFormat` for JSON output.
 const DATE_DEFAULT: &str = "yyyy-MM-dd";
-/// Spark's default `timestampFormat` for JSON output.
+/// The timestamp pattern when the caller supplies none (`to_json` always
+/// supplies `commonTimestampFormat`, which depends on the session).
 const TIMESTAMP_DEFAULT: &str = "yyyy-MM-dd'T'HH:mm:ss.SSSXXX";
 /// Spark's default `timestampNTZFormat` for JSON output.
 const TIMESTAMP_NTZ_DEFAULT: &str = "yyyy-MM-dd'T'HH:mm:ss.SSS";

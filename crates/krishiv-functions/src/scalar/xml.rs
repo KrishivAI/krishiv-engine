@@ -51,8 +51,8 @@ use krishiv_kernels::csv::{ConvError, Converter, FieldKind, Val};
 use krishiv_kernels::datetime_pattern::{DateTimePattern, Purpose, Zone};
 use krishiv_kernels::error::KernelError;
 use krishiv_kernels::text::{
-    java_decimal_string, java_double_string, java_float_string32, spark_string_to_timestamp,
-    spark_string_to_timestamp_ntz,
+    java_decimal_string, java_double_string, java_float_string32, option_get_bool,
+    option_to_boolean, spark_string_to_timestamp, spark_string_to_timestamp_ntz,
 };
 use quick_xml::Reader;
 use quick_xml::events::Event;
@@ -148,7 +148,8 @@ impl Opts {
             }
         };
         for (k, v) in pairs {
-            match k.to_ascii_lowercase().as_str() {
+            let lower = k.to_ascii_lowercase();
+            match lower.as_str() {
                 "mode" => {
                     o.mode = match v.to_ascii_uppercase().as_str() {
                         "FAILFAST" => Mode::FailFast,
@@ -177,7 +178,7 @@ impl Opts {
                 "rowtag" => o.row_tag = v.clone(),
                 "nullvalue" => o.null_value = Some(v.clone()),
                 "ignoresurroundingspaces" => {
-                    o.ignore_surrounding_spaces = flag(v, func, "ignoreSurroundingSpaces")?;
+                    o.ignore_surrounding_spaces = option_get_bool("ignoreSurroundingSpaces", v)?;
                 }
                 "indent" => o.indent = Some(v.clone()),
                 "dateformat" => o.date = Some(fast_or(v, "dateFormat")?),
@@ -187,14 +188,16 @@ impl Opts {
                 // Accepted and ignored: they select or label input this
                 // function does not read, or change nothing it writes.
                 "declaration" | "encoding" => {}
-                "inferschema" => o.infer_schema = flag(v, func, "inferSchema")?,
-                "prefersdecimal" => o.prefers_decimal = flag(v, func, "prefersDecimal")?,
+                "inferschema" => o.infer_schema = option_get_bool("inferSchema", v)?,
+                "prefersdecimal" => {
+                    o.prefers_decimal = option_to_boolean("XML", "prefersDecimal", v)?;
+                }
                 // Read by the schema inference only: `from_xml` would have to skip attributes too.
                 "excludeattribute" if func == "schema_of_xml" => {
-                    o.exclude_attribute = flag(v, func, "excludeAttribute")?;
+                    o.exclude_attribute = option_get_bool("excludeAttribute", v)?;
                 }
                 "ignorenamespace" if func == "schema_of_xml" => {
-                    o.ignore_namespace = flag(v, func, "ignoreNamespace")?;
+                    o.ignore_namespace = option_get_bool("ignoreNamespace", v)?;
                 }
                 // `samplingRatio` must be a number above 0 (Spark: `requirement failed: samplingRatio (x) should be greater than 0`).
                 "samplingratio" if func == "schema_of_xml" => match v.trim().parse::<f64>() {
@@ -217,10 +220,31 @@ impl Opts {
                 | "columnnameofcorruptrecord"
                 | "wildcardcolname"
                 | "charset"
-                | "locale"
-                | "ignorenamespace"
-                | "excludeattribute" => return Err(unsupported(func, &format!("option {k}"))),
-                "validatename" => o.validate_name = flag(v, func, "validateName")?,
+                | "locale" => return Err(unsupported(func, &format!("option {k}"))),
+                // Spark reads these with `getBool` when it builds `XmlOptions`,
+                // so a value that is not a boolean fails as it does there.
+                "ignorenamespace" | "excludeattribute" => {
+                    let name = if lower == "ignorenamespace" {
+                        "ignoreNamespace"
+                    } else {
+                        "excludeAttribute"
+                    };
+                    option_get_bool(name, v)?;
+                    return Err(unsupported(func, &format!("option {k}")));
+                }
+                // Read and without effect here (one record per value; one
+                // parser), checked as Spark's `toBoolean` reads them.
+                "multiline" => {
+                    option_to_boolean("XML", "multiLine", v)?;
+                }
+                "uselegacyxmlparser" => {
+                    option_to_boolean("XML", "useLegacyXMLParser", v)?;
+                }
+                // `XmlOptions.preferDate`: never read under LEGACY.
+                "preferdate" if !legacy => {
+                    option_get_bool("preferDate", v)?;
+                }
+                "validatename" => o.validate_name = option_get_bool("validateName", v)?,
                 // Names Spark's XML source defines and this module does not
                 // implement: refused, not silently ignored.
                 name if UNIMPLEMENTED.contains(&name) => {
@@ -238,28 +262,6 @@ impl Opts {
                 .get_or_insert_with(|| DateTimePattern::new_fast("yyyy-MM-dd'T'HH:mm:ss.SSSXXX"));
         }
         Ok(o)
-    }
-}
-
-/// A `true` / `false` option value (Spark refuses anything else).
-fn flag(v: &str, func: &str, name: &str) -> Result<bool, KrishivError> {
-    if v.eq_ignore_ascii_case("true") {
-        Ok(true)
-    } else if v.eq_ignore_ascii_case("false") {
-        Ok(false)
-    } else {
-        // `schema_of_xml` (Spark 4.2.0 runs, goldens #15 and #165): `_LEGACY_ERROR_TEMP_2147` naming the option; the other options and
-        // functions keep the refusal (Spark gives `prefersDecimal` a classless exception, and nothing is recorded for the rest).
-        if func == "schema_of_xml" && matches!(name, "excludeAttribute" | "inferSchema") {
-            return Err(krishiv_common::error::LegacyErrorTemp2147 {
-                param_name: name.to_owned(),
-            }
-            .into());
-        }
-        Err(unsupported(
-            func,
-            &format!("option {name}={v} (it must be true or false)"),
-        ))
     }
 }
 

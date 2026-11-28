@@ -326,7 +326,13 @@ pub fn options(fx: &dyn FormatFixture) -> SuiteResult {
     if let Some(b) = schema
         .options
         .iter()
-        .find(|o| matches!(o.kind, OptionKind::Bool | OptionKind::Int { .. }))
+        // `GetBool` refuses with `_LEGACY_ERROR_TEMP_2147`, as Spark's CSV does.
+        .find(|o| {
+            matches!(
+                o.kind,
+                OptionKind::Bool | OptionKind::ToBoolean | OptionKind::Int { .. }
+            )
+        })
     {
         let user = BTreeMap::from([(
             b.name.to_owned(),
@@ -346,7 +352,7 @@ pub fn options(fx: &dyn FormatFixture) -> SuiteResult {
     if let Some(spec) = schema
         .options
         .iter()
-        .find(|o| o.conf_fallback.is_some() && o.kind == OptionKind::Bool)
+        .find(|o| o.conf_fallback.is_some() && o.kind.is_bool())
     {
         let key = spec.conf_fallback.unwrap_or_default();
         let flipped = !matches!(spec.default, krishiv_io::OptionDefault::Bool(true));
@@ -412,7 +418,7 @@ pub fn options(fx: &dyn FormatFixture) -> SuiteResult {
 /// A value `spec` accepts.
 pub(super) fn valid_text(spec: &krishiv_io::OptionSpec) -> String {
     match spec.kind {
-        OptionKind::Bool => "true".to_owned(),
+        OptionKind::Bool | OptionKind::ToBoolean | OptionKind::GetBool => "true".to_owned(),
         OptionKind::Int { min, .. } => min.to_string(),
         OptionKind::Enum(values) => values.first().map_or_else(String::new, |v| (*v).to_owned()),
         OptionKind::String | OptionKind::Secret => "x".to_owned(),
