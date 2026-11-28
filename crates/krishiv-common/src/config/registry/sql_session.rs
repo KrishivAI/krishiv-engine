@@ -62,6 +62,21 @@ pub static IO_TEXT_INFER_TIME: ConfigEntry = ConfigEntry {
     spark_alias: None,
 };
 
+/// Whether Parquet schema inference opens zero-byte files.
+pub static IO_PARQUET_INFER_EMPTY_FILES: ConfigEntry = ConfigEntry {
+    key: "krishiv.io.parquet.inferFromEmptyFiles",
+    value_type: ValueType::Bool,
+    default: Some(ConfigValue::Bool(false)),
+    doc: "Whether Parquet schema inference opens a zero-byte file and fails on it with \
+          `FAILED_READ_FILE.CANNOT_READ_FILE_FOOTER` (Spark up to 4.2: the first file, or every \
+          file under `mergeSchema`) or leaves it out (Spark 4.3.0). No read scans a zero-byte \
+          file. The session sets it from its Spark profile: `true` under profiles before 4.3.",
+    scope: Scope::Session,
+    settable_by: SettableBy::Admin,
+    version_added: "0.3.1",
+    spark_alias: None,
+};
+
 /// Whether `SET PATH` is allowed.
 pub static SQL_PATH_ENABLED: ConfigEntry = ConfigEntry {
     key: "krishiv.sql.path.enabled",

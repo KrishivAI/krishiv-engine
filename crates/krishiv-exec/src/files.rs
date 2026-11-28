@@ -61,9 +61,11 @@ use crate::error::Result;
 use crate::operators::PathRoots;
 use crate::operators::spark_dir_text;
 
+mod inference;
 mod local_url;
 mod user_schema;
 mod windows_path;
+use inference::scanned_files;
 pub use local_url::{file_display, file_url, native_path};
 use user_schema::{UserPartitions, check_user_schema, user_schema_columns};
 
@@ -696,7 +698,8 @@ impl FileReads {
             .iter()
             .map(|(f, segs)| (f.display_path(), segs.clone()))
             .collect();
-        let files: Vec<FileRef> = listed.into_iter().map(|(f, _)| f).collect();
+        let mut files: Vec<FileRef> = listed.into_iter().map(|(f, _)| f).collect();
+        let all_files = scanned_files(&mut files, all_files, self.skips_empty_files(format.name()));
         // A known table's partition values take its declared types: they
         // are never inferred (nor refused for looking like timestamps).
         let infer = known.is_none() && self.infers_partition_types();
@@ -847,21 +850,6 @@ impl FileReads {
         option.unwrap_or_else(|| {
             self.session
                 .get_unregistered("spark.sql.files.ignoreInvalidPartitionPaths")
-                .is_some_and(on)
-        })
-    }
-
-    /// Whether the read asks to merge the files' schemas: the
-    /// `mergeSchema` option, else `spark.sql.<format>.mergeSchema`.
-    fn merges_schemas(&self, format: &str, options: &BTreeMap<String, OptionValue>) -> bool {
-        let on = |v: &str| v.trim().eq_ignore_ascii_case("true");
-        let option = options
-            .iter()
-            .find(|(k, _)| k.eq_ignore_ascii_case("mergeSchema"))
-            .map(|(_, v)| v.as_plain().is_some_and(on));
-        option.unwrap_or_else(|| {
-            self.session
-                .get_unregistered(&format!("spark.sql.{format}.mergeSchema"))
                 .is_some_and(on)
         })
     }

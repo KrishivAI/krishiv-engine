@@ -4,8 +4,8 @@
 use std::sync::{Arc, PoisonError, RwLock};
 
 use krishiv_common::config::{
-    Config, ConfigEntry, ConfigValue, IO_TEXT_INFER_TIME, IO_TEXT_TIME_NANOS,
-    PYTHON_UDTF_ARROW_ENABLED, SESSION_TIME_ZONE, Scope, ValueType, lookup,
+    Config, ConfigEntry, ConfigValue, IO_PARQUET_INFER_EMPTY_FILES, IO_TEXT_INFER_TIME,
+    IO_TEXT_TIME_NANOS, PYTHON_UDTF_ARROW_ENABLED, SESSION_TIME_ZONE, Scope, ValueType, lookup,
 };
 use krishiv_common::error::{
     CannotModifyStaticConfig, InvalidConfValueRequirement, InvalidConfValueTimeZone, KrishivError,
@@ -52,6 +52,10 @@ fn profile_default(entry: &ConfigEntry, profile: SparkProfile) -> Option<ConfigV
     // Spark 4.2 reads a `TIME` of a CSV or JSON file in the default grammar as microseconds; 4.3 keeps
     // nanoseconds (a `timeFormat` pattern keeps every digit in both). Only 4.3's text inference gives `TIME`.
     let before_4_3 = profile < SparkProfile::V4_3;
+    // Up to 4.2, Parquet schema inference opens zero-byte files too.
+    if entry.key == IO_PARQUET_INFER_EMPTY_FILES.key {
+        return before_4_3.then_some(ConfigValue::Bool(true));
+    }
     ((entry.key == PYTHON_UDTF_ARROW_ENABLED.key && before_4_2)
         || ((entry.key == IO_TEXT_TIME_NANOS.key || entry.key == IO_TEXT_INFER_TIME.key)
             && before_4_3))
@@ -181,6 +185,7 @@ impl ConfStore {
             &PYTHON_UDTF_ARROW_ENABLED,
             &IO_TEXT_TIME_NANOS,
             &IO_TEXT_INFER_TIME,
+            &IO_PARQUET_INFER_EMPTY_FILES,
         ]
         .into_iter()
         .filter(|entry| !config.is_set(entry))

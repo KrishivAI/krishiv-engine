@@ -569,6 +569,10 @@ pub static INDEX: &[(&str, &ConfigEntry)] = &[
         &IO_PARQUET_BLOOM_FILTER_ENABLED,
     ),
     (
+        "krishiv.io.parquet.inferFromEmptyFiles",
+        &IO_PARQUET_INFER_EMPTY_FILES,
+    ),
+    (
         "krishiv.optimizer.discoverKeys.timeout",
         &DISCOVER_KEYS_TIMEOUT,
     ),
