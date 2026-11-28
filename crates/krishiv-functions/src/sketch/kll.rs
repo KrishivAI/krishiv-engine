@@ -5,7 +5,7 @@
 //! the function's type is `KLL_INVALID_INPUT_SKETCH_BUFFER`, a rank outside `[0, 1]` is
 //! `KLL_SKETCH_INVALID_QUANTILE_RANGE`.
 //!
-//! [`Kll::summary`] is Java's `KllSketch.toString()` in full (the doubled `Kll` in the title is Spark's output).
+//! [`Kll::summary`] is Java's `KllSketch.toString()` in full for exact-mode sketches (the doubled `Kll` in the title is Spark's output); an estimation-mode sketch reports this crate's own levels and retained items.
 
 use datasketches::common::SearchCriteria;
 use datasketches::kll::{KllFloat, KllSketch};
@@ -205,8 +205,10 @@ impl Kll {
 
     /// Human-readable summary, Java's `KllSketch.toString()` (datasketches-java 6.2, `KllHelper.toStringImpl`): the
     /// 17 fields in Java's order. Levels, the level-zero flag and the item size come from the compact image, the
-    /// capacities and the updatable size from Java's formulas. Pinned by an exact-text golden for an exact-mode
-    /// `BIGINT` sketch; the empty form and the FLOAT/DOUBLE min and max text follow the Java source (not a Spark run).
+    /// capacities and the updatable size from Java's formulas. Pinned by exact-text tests against Spark 4.3.0 for an
+    /// exact-mode sketch of each type and an empty one of each. In estimation mode the levels and retained items are
+    /// those of this crate's sketch, which differ from Spark's (`range(10000)`: Levels 6, Retained 313 here, 539 in
+    /// Spark), and two runs of one query can differ from each other.
     #[must_use]
     pub fn summary(&self) -> String {
         let (name, item_bytes) = match self {
@@ -275,12 +277,14 @@ impl Kll {
         )
     }
 
-    /// The minimum and maximum as Java prints them (an empty sketch: `Long.MAX_VALUE`/`MIN_VALUE`, or `NaN`).
+    /// The minimum and maximum as Spark 4.3.0 prints them (an empty sketch: `NaN`, for every type).
     fn extremes(&self) -> (String, String) {
         match self {
             Self::Long(s) => (
-                s.min_item().map_or(i64::MAX, |v| *v).to_string(),
-                s.max_item().map_or(i64::MIN, |v| *v).to_string(),
+                s.min_item()
+                    .map_or_else(|| "NaN".to_owned(), ToString::to_string),
+                s.max_item()
+                    .map_or_else(|| "NaN".to_owned(), ToString::to_string),
             ),
             Self::Float(s) => (
                 krishiv_kernels::text::java_float_string32(s.min_item().map_or(f32::NAN, |v| **v)),
@@ -357,6 +361,63 @@ Retained Items         : 5\n   Free Space             : 195\n   ReadOnly        
 Updatable Storage Bytes: 1644\n   Compact Storage Bytes  : 80\n   Min Item               : 0\n   \
 Max Item               : 4\n### End sketch summary\n";
         assert_eq!(bigint(5).summary(), want);
+    }
+
+    /// The summary text for a `k` 200 sketch of at most two items, as Spark 4.3.0 prints it.
+    fn spark_text(
+        title: &str,
+        n: u8,
+        updatable: u32,
+        compact: u32,
+        min: &str,
+        max: &str,
+    ) -> String {
+        let (empty, free) = (n == 0, 200 - u32::from(n));
+        format!(
+            "\n### {title} Summary:\n   K                      : 200\n   Dynamic min K          : 200\n   \
+             M                      : 8\n   N                      : {n}\n   Epsilon                : 1.329%\n   \
+             Epsilon PMF            : 1.652%\n   Empty                  : {empty}\n   Estimation Mode        : false\n   \
+             Levels                 : 1\n   Level 0 Sorted         : false\n   Capacity Items         : 200\n   \
+             Retained Items         : {n}\n   Free Space             : {free}\n   ReadOnly               : false\n   \
+             Updatable Storage Bytes: {updatable}\n   Compact Storage Bytes  : {compact}\n   \
+             Min Item               : {min}\n   Max Item               : {max}\n### End sketch summary\n"
+        )
+    }
+
+    /// Spark 4.3.0: the empty sketch of each type prints `NaN` for both extremes.
+    #[test]
+    fn empty_forms_match_spark() {
+        assert_eq!(
+            bigint(0).summary(),
+            spark_text("KllKllLongsSketch", 0, 1644, 8, "NaN", "NaN")
+        );
+        assert_eq!(
+            Kll::Double(KllSketch::<KllFloat<f64>>::new(200).unwrap()).summary(),
+            spark_text("KllKllDoublesSketch", 0, 1644, 8, "NaN", "NaN")
+        );
+        assert_eq!(
+            Kll::Float(KllSketch::<KllFloat<f32>>::new(200).unwrap()).summary(),
+            spark_text("KllKllFloatsSketch", 0, 836, 8, "NaN", "NaN")
+        );
+    }
+
+    /// Spark 4.3.0: the values 1e7 and 2e7 (`range(1, 3)` times 1e7).
+    #[test]
+    fn exact_mode_float_and_double_match_spark() {
+        let mut d = KllSketch::<KllFloat<f64>>::new(200).unwrap();
+        d.update(KllFloat::<f64>::new(1e7).unwrap());
+        d.update(KllFloat::<f64>::new(2e7).unwrap());
+        assert_eq!(
+            Kll::Double(d).summary(),
+            spark_text("KllKllDoublesSketch", 2, 1644, 56, "1.0E7", "2.0E7")
+        );
+        let mut f = KllSketch::<KllFloat<f32>>::new(200).unwrap();
+        f.update(KllFloat::<f32>::new(1e7).unwrap());
+        f.update(KllFloat::<f32>::new(2e7).unwrap());
+        assert_eq!(
+            Kll::Float(f).summary(),
+            spark_text("KllKllFloatsSketch", 2, 836, 40, "1.0E7", "2.0E7")
+        );
     }
 
     #[test]

@@ -152,7 +152,13 @@ fn a_never_merged_sketch_keeps_its_estimation_mode_entries() {
         .unwrap()
         .value(0);
     let c = tuple::from_bytes::<f64>(bytes, "t").unwrap();
-    assert!(c.num_retained() > 32, "{}", c.num_retained());
+    // Spark keeps 51 entries at theta 0.3564956426418521 (the library's rebuild threshold decides both).
+    assert_eq!(c.num_retained(), 51);
+    assert!(
+        (c.theta() - 0.356_495_642_641_852_1).abs() < 1e-15,
+        "{}",
+        c.theta()
+    );
 }
 
 #[test]

@@ -178,3 +178,17 @@ fn folded_constant_size_and_mode_lower_like_their_literals() -> R {
     assert_eq!(folded, literal);
     Ok(())
 }
+
+/// Spark 4.3.0: the MIN and MAX summaries of an empty sketch are zero, not an infinity.
+#[test]
+fn the_min_and_max_summaries_of_an_empty_sketch_are_zero() -> R {
+    let s = Session::new()?;
+    let got = rows(
+        &s,
+        "SELECT tuple_sketch_summary_double(tuple_sketch_agg_double(id, 1.0D, 12), 'max'), \
+         tuple_sketch_summary_integer(tuple_sketch_agg_integer(id, 1, 12), 'min') \
+         FROM range(5) WHERE id > 10",
+    )?;
+    assert_eq!(got, ["0|0"]);
+    Ok(())
+}

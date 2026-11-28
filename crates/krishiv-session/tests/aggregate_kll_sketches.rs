@@ -152,3 +152,40 @@ fn a_folded_constant_k_lowers_like_its_literal() -> R {
     assert_eq!(got, ["100"]);
     Ok(())
 }
+
+/// Spark 4.3.0: the empty sketch's text prints `NaN` for both extremes, for every element type.
+#[test]
+fn an_empty_sketch_prints_nan_extremes() -> R {
+    let s = Session::new()?;
+    for (sql, title, updatable) in [
+        (
+            "SELECT kll_sketch_to_string_bigint(kll_sketch_agg_bigint(id)) FROM range(5) WHERE id > 10",
+            "KllKllLongsSketch",
+            1644,
+        ),
+        (
+            "SELECT kll_sketch_to_string_double(kll_sketch_agg_double(CAST(id AS DOUBLE))) FROM range(5) WHERE id > 10",
+            "KllKllDoublesSketch",
+            1644,
+        ),
+        (
+            "SELECT kll_sketch_to_string_float(kll_sketch_agg_float(CAST(id AS FLOAT))) FROM range(5) WHERE id > 10",
+            "KllKllFloatsSketch",
+            836,
+        ),
+    ] {
+        let text = block_on(async {
+            let batches = s.sql(sql).await?.collect().await?;
+            Ok::<_, krishiv_common::error::KrishivError>(cell(&batches[0], 0, 0))
+        })?;
+        assert!(text.contains(&format!("### {title} Summary:")), "{text}");
+        assert!(text.contains("   Min Item               : NaN\n"), "{text}");
+        assert!(text.contains("   Max Item               : NaN\n"), "{text}");
+        assert!(
+            text.contains(&format!("   Updatable Storage Bytes: {updatable}\n")),
+            "{text}"
+        );
+        assert!(text.contains("   Compact Storage Bytes  : 8\n"), "{text}");
+    }
+    Ok(())
+}

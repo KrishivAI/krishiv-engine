@@ -10,6 +10,8 @@ Returns human readable summary information about this sketch.
 
 **Applies to:** Krishiv 0.2.0 and above. Spark: 4.1 and later.
 
+**Note.** The text matches Spark line for line for a sketch that has not left exact mode. In estimation mode the levels, retained items and compact size are those of Krishiv's sketch, which differ from Spark's, and two runs of one query can differ from each other.
+
 ## Syntax
 
 ```text
