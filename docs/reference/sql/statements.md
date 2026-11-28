@@ -44,7 +44,7 @@ DROP NAMESPACE demo CASCADE;                 -- without CASCADE a non-empty name
 
 ## information_schema
 
-`spark_catalog.information_schema` (also `information_schema` while `spark_catalog` is current) has three
+`spark_catalog.information_schema` (also `information_schema` while `spark_catalog` is current) has four
 read-only views over the session catalog. Spark has no `information_schema`, so the column names are the
 SQL-standard ones.
 
@@ -53,6 +53,7 @@ SQL-standard ones.
 | `schemata` | `catalog_name`, `schema_name` |
 | `tables` | `table_catalog`, `table_schema`, `table_name`, `table_type` (`BASE TABLE` or `VIEW`) |
 | `columns` | `table_catalog`, `table_schema`, `table_name`, `column_name`, `ordinal_position` (from 1), `data_type` (Spark's simple string), `is_nullable` (`YES` or `NO`) |
+| `views` | `table_catalog`, `table_schema`, `table_name`, `view_definition` (the view's SQL text) |
 
 ```sql
 SELECT table_schema, table_name FROM information_schema.tables WHERE table_type = 'VIEW';

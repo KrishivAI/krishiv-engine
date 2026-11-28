@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! `information_schema.schemata`, `.tables` and `.columns`: read-only views over the session
+//! `information_schema.schemata`, `.tables`, `.columns` and `.views`: read-only views over the session
 //! catalog (`spark_catalog`) for BI tools and SQL clients. Spark has no `information_schema`, so the
 //! columns are the SQL standard's names. Rows follow the listing rule of `SHOW TABLES` /
 //! `SHOW NAMESPACES` ([`crate::access`] `may_list`): a relation or schema the principal may not list
@@ -41,7 +41,7 @@ impl std::fmt::Debug for Source {
 pub(crate) fn is_view(name: &str) -> bool {
     matches!(
         name.to_ascii_lowercase().as_str(),
-        "schemata" | "tables" | "columns"
+        "schemata" | "tables" | "columns" | "views"
     )
 }
 
@@ -57,6 +57,12 @@ fn layout(name: &str) -> Vec<(&'static str, bool, bool)> {
             ("table_schema", false, false),
             ("table_name", false, false),
             ("table_type", false, false),
+        ],
+        "views" => vec![
+            ("table_catalog", false, false),
+            ("table_schema", false, false),
+            ("table_name", false, false),
+            ("view_definition", false, false),
         ],
         _ => vec![
             ("table_catalog", false, false),
@@ -178,6 +184,18 @@ impl Source {
                     })
                 })),
             ],
+            "views" => {
+                let views: Vec<(&CatalogTable, &str)> = relations
+                    .iter()
+                    .filter_map(|t| t.view.as_ref().map(|v| (&**t, v.sql.as_str())))
+                    .collect();
+                vec![
+                    text(views.iter().map(|_| Some(catalog))),
+                    text(views.iter().map(|(t, _)| Some(t.namespace.as_str()))),
+                    text(views.iter().map(|(t, _)| Some(t.name.as_str()))),
+                    text(views.iter().map(|(_, sql)| Some(*sql))),
+                ]
+            }
             _ => {
                 let rows: Vec<(&CatalogTable, usize)> = relations
                     .iter()

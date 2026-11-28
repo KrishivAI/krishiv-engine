@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! `information_schema.schemata`, `.tables` and `.columns` over the session catalog.
+//! `information_schema.schemata`, `.tables`, `.columns` and `.views` over the session catalog.
 #![cfg(test)]
 
 use futures::executor::block_on;
@@ -63,5 +63,12 @@ fn schemata_tables_and_columns_list_the_catalog() {
              FROM information_schema.columns WHERE table_name = 't' ORDER BY ordinal_position"
         ),
         ["t|a|1|int|YES", "t|b|2|string|YES"]
+    );
+    assert_eq!(
+        rows(
+            &s,
+            "SELECT table_schema, table_name, view_definition FROM information_schema.views"
+        ),
+        ["db1|v|SELECT 1 AS x"]
     );
 }
