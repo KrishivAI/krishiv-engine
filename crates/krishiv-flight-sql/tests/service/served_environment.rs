@@ -72,3 +72,36 @@ async fn the_operator_restores_sparks_substitution_for_flight_sql() {
     let path = std::env::var("PATH").expect("PATH is set");
     assert_eq!(stored(&mut h, "${env:PATH}").await, path);
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn set_session_options_cannot_turn_the_environment_on() {
+    use krishiv_flight_sql::session_options::ErrorValue;
+    let mut h = served(&[]).await;
+    let (errors, cookie) = super::session_options::set_options(
+        &mut h,
+        None,
+        vec![(
+            "krishiv.server.sql.substituteEnvironment",
+            super::session_options::text("true"),
+        )],
+    )
+    .await;
+    assert_eq!(
+        errors.get("krishiv.server.sql.substituteEnvironment"),
+        Some(&(ErrorValue::Error as i32)),
+        "{errors:?}"
+    );
+    let cookie = cookie.expect("cookie");
+    let (q, _) = info(&mut h, OPS, Some(&cookie), "SELECT '${env:PATH}' AS s")
+        .await
+        .expect("info");
+    let batches = fetch(&mut h, OPS, Some(&cookie), ticket(&q))
+        .await
+        .expect("fetch");
+    let column = batches[0].column(0);
+    let value = match column.as_string_opt::<i32>() {
+        Some(a) => a.value(0).to_owned(),
+        None => column.as_string_view().value(0).to_owned(),
+    };
+    assert_eq!(value, "${env:PATH}");
+}

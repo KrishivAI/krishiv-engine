@@ -74,13 +74,23 @@ pub fn is_declaration_key(key: &str) -> bool {
     is_catalog_key(key) && krishiv_common::config::lookup(key).is_none()
 }
 
-/// Where the declarations come from.
+/// Whether a runtime serves callers other than the process owner, and so where its catalog
+/// declarations come from.
+///
+/// A runtime that serves other callers (a Spark Connect, Flight SQL or MCP server built from the Rust
+/// API, as `krishiv server` does) must be `Server`. Only then are catalog declarations startup-only and
+/// `${env:..}` / `${system:..}` in SQL text left as written (unless the operator sets
+/// `krishiv.server.sql.substituteEnvironment`); on an `Embedded` runtime every caller's SQL reads the
+/// server's environment variables and system properties.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeclMode {
-    /// `krishiv server`: references only; an HTTP catalog uri must be `https` unless `allowInsecure`,
-    /// and a Hive catalog takes a `thrift://` uri.
+    /// `krishiv server`, or any runtime that serves other callers: references only; an HTTP catalog
+    /// uri must be `https` unless `allowInsecure`, and a Hive catalog takes a `thrift://` uri;
+    /// declaration keys cannot be set by a session; `${env:..}` / `${system:..}` stay as written
+    /// unless `krishiv.server.sql.substituteEnvironment` is on.
     Server,
-    /// An embedded session (no principal boundary).
+    /// An embedded session (no principal boundary): its one caller is the process owner, so SQL text
+    /// reads `${env:..}` / `${system:..}` as Spark does. Never for a runtime that serves other callers.
     Embedded,
 }
 

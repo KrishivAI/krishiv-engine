@@ -25,6 +25,35 @@ impl crate::Session {
     pub fn substitute_variables(&self, query: &str) -> String {
         self.substituted(query).into_owned()
     }
+
+    /// `query` with its `${name}` references replaced, unless `spark.sql.variable.substitute` is false.
+    pub(crate) fn substituted<'q>(&self, query: &'q str) -> std::borrow::Cow<'q, str> {
+        let config = self.state.conf.snapshot();
+        if crate::conf::get(&config, "spark.sql.variable.substitute")
+            .is_none_or(|v| !v.trim().eq_ignore_ascii_case("false"))
+        {
+            crate::variable_substitution::substitute(
+                query,
+                &crate::variable_substitution::Sources {
+                    lookup: &|k| crate::conf::get(&config, k),
+                    environment: self.reads_environment(&config),
+                },
+            )
+        } else {
+            std::borrow::Cow::Borrowed(query)
+        }
+    }
+
+    /// Whether `${env:..}` and `${system:..}` read the process environment: always outside a served
+    /// session; in one only when the operator turned `krishiv.server.sql.substituteEnvironment` on at
+    /// startup (a cluster key: no `SET` or session builder changes it).
+    pub(crate) fn reads_environment(&self, config: &krishiv_common::config::Config) -> bool {
+        self.runtime().catalogs().mode() != crate::catalog_decl::DeclMode::Server
+            || config
+                .get(&krishiv_common::config::SERVER_SQL_SUBSTITUTE_ENVIRONMENT)
+                .and_then(krishiv_common::config::ConfigValue::as_bool)
+                .unwrap_or(false)
+    }
 }
 
 /// Where a `${name}` reference's value comes from.
@@ -44,7 +73,7 @@ pub(crate) fn substitute<'a>(text: &'a str, sources: &Sources<'_>) -> Cow<'a, st
     Cow::Owned(go(text, sources, 0))
 }
 
-fn go(text: &str, lookup: &Sources<'_>, depth: usize) -> String {
+fn go(text: &str, sources: &Sources<'_>, depth: usize) -> String {
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
     while let Some(at) = rest.find("${") {
@@ -54,8 +83,8 @@ fn go(text: &str, lookup: &Sources<'_>, depth: usize) -> String {
         match end {
             Some(i) if i > 0 && after[i..].starts_with('}') => {
                 let name = &after[..i];
-                match value(name, lookup).filter(|_| depth < MAX_DEPTH) {
-                    Some(v) => out.push_str(&go(&v, lookup, depth + 1)),
+                match value(name, sources).filter(|_| depth < MAX_DEPTH) {
+                    Some(v) => out.push_str(&go(&v, sources, depth + 1)),
                     None => out.push_str(&rest[at..at + 2 + i + 1]),
                 }
                 rest = &after[i + 1..];

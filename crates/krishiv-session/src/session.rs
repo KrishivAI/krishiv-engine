@@ -531,32 +531,6 @@ impl Session {
         self.sql_kind(query).await.map(|(df, _)| df)
     }
 
-    /// `query` with its `${name}` references replaced, unless `spark.sql.variable.substitute` is false.
-    pub(crate) fn substituted<'q>(&self, query: &'q str) -> std::borrow::Cow<'q, str> {
-        let config = self.state.conf.snapshot();
-        if crate::conf::get(&config, "spark.sql.variable.substitute")
-            .is_none_or(|v| !v.trim().eq_ignore_ascii_case("false"))
-        {
-            // A served session never reads the server's environment unless the operator turned it on
-            // at startup (a cluster key: no `SET` or session builder changes it).
-            let environment = self.runtime().catalogs().mode()
-                != crate::catalog_decl::DeclMode::Server
-                || config
-                    .get(&krishiv_common::config::SERVER_SQL_SUBSTITUTE_ENVIRONMENT)
-                    .and_then(krishiv_common::config::ConfigValue::as_bool)
-                    .unwrap_or(false);
-            crate::variable_substitution::substitute(
-                query,
-                &crate::variable_substitution::Sources {
-                    lookup: &|k| crate::conf::get(&config, k),
-                    environment,
-                },
-            )
-        } else {
-            std::borrow::Cow::Borrowed(query)
-        }
-    }
-
     /// Runs `query` on the calling task as `sql` would, for text the session built from a
     /// statement it already substituted (`CACHE TABLE t AS query`): `spans` are the substituted
     /// names in `query`, kept while substituting again leaves the text as it is.
