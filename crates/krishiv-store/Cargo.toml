@@ -17,7 +17,7 @@ workspace = true
 
 # krishiv-common and object_store only (layer L1, ADR 0044).
 [dependencies]
-krishiv-common = { path = "../krishiv-common", version = "=0.2.1" }
+krishiv-common = { path = "../krishiv-common", version = "=0.3.0" }
 # Bearer header of `hf://` reads; only with `cloud`.
 http = { workspace = true, optional = true }
 # The egress policy client (design P3-T067 §5.2): Krishiv's copy of object_store's reqwest client,

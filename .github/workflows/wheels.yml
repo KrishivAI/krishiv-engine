@@ -235,7 +235,7 @@ jobs:
   # macOS arm64 (11.0+), built and tested natively.
   macos-arm64:
     runs-on: macos-15
-    timeout-minutes: 60
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:

@@ -13,7 +13,7 @@ publish = true
 
 [dependencies]
 arrow-array.workspace = true
-krishiv-types = { path = "../krishiv-types", version = "=0.2.1" }
+krishiv-types = { path = "../krishiv-types", version = "=0.3.0" }
 
 [lints]
 workspace = true

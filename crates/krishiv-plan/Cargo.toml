@@ -15,18 +15,18 @@ publish = true
 # One-row arrays: constant arguments fold through the cast kernels.
 arrow-array.workspace = true
 arrow-schema.workspace = true
-krishiv-common = { path = "../krishiv-common", version = "=0.2.1" }
+krishiv-common = { path = "../krishiv-common", version = "=0.3.0" }
 # The built-in function registry and the signature types it shares.
-krishiv-functions = { path = "../krishiv-functions", version = "=0.2.1" }
+krishiv-functions = { path = "../krishiv-functions", version = "=0.3.0" }
 # The CSV literal inference `schema_of_csv` resolves with (layer L2).
-krishiv-io = { path = "../krishiv-io", version = "=0.2.1" }
+krishiv-io = { path = "../krishiv-io", version = "=0.3.0" }
 # Spark's decimal result types, shared with the kernels that compute them.
-krishiv-kernels = { path = "../krishiv-kernels", version = "=0.2.1" }
+krishiv-kernels = { path = "../krishiv-kernels", version = "=0.3.0" }
 # The relation store a local relation's data lives in (layer L1).
-krishiv-memory = { path = "../krishiv-memory", version = "=0.2.1" }
+krishiv-memory = { path = "../krishiv-memory", version = "=0.3.0" }
 # Session UDFs, for constant folding through the registry.
-krishiv-udf-sdk = { path = "../krishiv-udf-sdk", version = "=0.2.1" }
-krishiv-types = { path = "../krishiv-types", version = "=0.2.1" }
+krishiv-udf-sdk = { path = "../krishiv-udf-sdk", version = "=0.3.0" }
+krishiv-types = { path = "../krishiv-types", version = "=0.3.0" }
 thiserror.workspace = true
 # One trace event per privilege check (`analyzer/access.rs`, target `krishiv::authorize`).
 tracing.workspace = true

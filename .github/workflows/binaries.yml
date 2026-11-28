@@ -26,6 +26,8 @@ on:
       - crates/krishiv-alloc/**
       - crates/krishiv-common/src/cpu.rs
       - crates/krishiv-cli/src/main.rs
+      - .github/scripts/release-smoke.sh
+      - .github/scripts/console-smoke.sh
 
 permissions:
   contents: read
@@ -35,9 +37,11 @@ env:
   CARGO_INCREMENTAL: 0
   # Read at build time by krishiv-session (the `git_sha` label of `krishiv.build.info`).
   KRISHIV_GIT_SHA: ${{ github.sha }}
-  # Released binaries carry `krishiv server` and the web console (ADR 0024); the crate's default
-  # features stay the embedded build the size and dependency budgets measure.
-  RELEASE_FEATURES: server,ui
+  # Released binaries carry `krishiv server`, the web console (ADR 0024) and the 0.3 headline features: Spark Connect
+  # with the UDF worker pool (connect), Arrow Flight SQL, cloud object stores, Delta and Iceberg tables, and declared
+  # Iceberg REST catalogs. The crate's default features stay the embedded build the size and dependency budgets
+  # measure; the release binary is larger (its size is printed by each build step).
+  RELEASE_FEATURES: server,ui,connect,flight-sql,cloud,delta,iceberg,catalog-iceberg-rest
 
 jobs:
   # Not for the pull-request run of this file. The merge queue skips Miri, the fuzz-target build and
@@ -103,6 +107,7 @@ jobs:
           cargo build --profile dist --locked -p krishiv-cli --features "$RELEASE_FEATURES"
           mkdir -p out
           cp target/dist/krishiv "out/$ARTIFACT"
+          ls -l "out/$ARTIFACT"
       - name: Smoke test
         env:
           ARTIFACT: ${{ matrix.artifact }}
@@ -110,6 +115,7 @@ jobs:
           "out/$ARTIFACT" --version
           "out/$ARTIFACT" sql -e "SELECT 1"
           .github/scripts/console-smoke.sh "out/$ARTIFACT"
+          .github/scripts/release-smoke.sh "out/$ARTIFACT"
       # The old-CPU path: user-mode QEMU with a pre-AVX2 CPU (Nehalem). The
       # v3 binary must exit cleanly with a message naming the missing
       # features and the compat binary; the compat binary must start.
@@ -164,15 +170,21 @@ jobs:
       - name: Build
         env:
           RUSTFLAGS: -C target-cpu=neoverse-n1
+          # The 0.3 feature set makes the fat-LTO link of krishiv-cli outgrow the 4-core, 16 GB arm runner:
+          # the job was killed (exit 143) twice about 11 minutes into the link. Thin LTO here only.
+          CARGO_PROFILE_DIST_LTO: thin
         run: |
+          free -m
           cargo build --profile dist --locked -p krishiv-cli --features "$RELEASE_FEATURES"
           mkdir -p out
           cp target/dist/krishiv "out/$ARTIFACT"
+          ls -l "out/$ARTIFACT"
       - name: Smoke test
         run: |
           "out/$ARTIFACT" --version
           "out/$ARTIFACT" sql -e "SELECT 1"
           .github/scripts/console-smoke.sh "out/$ARTIFACT"
+          .github/scripts/release-smoke.sh "out/$ARTIFACT"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: krishiv-linux-aarch64
@@ -184,7 +196,7 @@ jobs:
     if: ${{ !cancelled() && (needs.nightly-green.result == 'success' || needs.nightly-green.result == 'skipped') }}
     name: cli (krishiv-macos-arm64)
     runs-on: macos-15
-    timeout-minutes: 60
+    timeout-minutes: 120
     env:
       ARTIFACT: krishiv-macos-arm64
     steps:
@@ -205,11 +217,13 @@ jobs:
           cargo build --profile dist --locked -p krishiv-cli --features "$RELEASE_FEATURES"
           mkdir -p out
           cp target/dist/krishiv "out/$ARTIFACT"
+          ls -l "out/$ARTIFACT"
       - name: Smoke test
         run: |
           "out/$ARTIFACT" --version
           "out/$ARTIFACT" sql -e "SELECT 1"
           .github/scripts/console-smoke.sh "out/$ARTIFACT"
+          .github/scripts/release-smoke.sh "out/$ARTIFACT"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: krishiv-macos-arm64
