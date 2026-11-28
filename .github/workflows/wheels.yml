@@ -45,7 +45,8 @@ env:
   ABI3_ARGS: --profile dist --locked
   FT_ARGS: --profile dist --locked --no-default-features --features mimalloc,cloud,ui,delta,catalog-iceberg-rest
   # The shipped CPU levels (see README.md, "Supported CPUs").
-  X86_RUSTFLAGS: -C target-cpu=x86-64-v3
+  # The branch-alignment flag is what krishiv-bench-runner is benchmarked with (0.928x on six scan-bound queries).
+  X86_RUSTFLAGS: -C target-cpu=x86-64-v3 -C llvm-args=-x86-branches-within-32B-boundaries
   ARM_RUSTFLAGS: -C target-cpu=neoverse-n1
 
 jobs:
@@ -235,7 +236,9 @@ jobs:
   # macOS arm64 (11.0+), built and tested natively.
   macos-arm64:
     runs-on: macos-15
-    timeout-minutes: 60
+    # The dist-profile build alone takes 47 to 54 minutes on the macOS runner (since the Delta feature went into
+    # every wheel); 60 cancelled the abi3 job in the 2026-11-28 nightly and in #1082.
+    timeout-minutes: 100
     strategy:
       fail-fast: false
       matrix:

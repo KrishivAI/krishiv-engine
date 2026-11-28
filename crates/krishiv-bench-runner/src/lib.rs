@@ -95,7 +95,9 @@ pub enum RunnerError {
 }
 
 /// How this runner was built, as
-/// `profile=<cargo profile> target-cpu=<cpu> branch-align=<32B|off>` (`--build-info`).
+/// `profile=<cargo profile> target-cpu=<cpu> branch-align=<32B|off>`. `--build-info` prints it
+/// followed by ` kernel-target=<name>`, the kernel target this run uses (`Target::best`: the
+/// CPU's, lowered by `KRISHIV_KERNEL_TARGET`).
 pub const BUILD_INFO: &str = concat!(
     "profile=",
     env!("KRISHIV_BUILD_PROFILE"),

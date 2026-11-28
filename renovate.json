@@ -92,5 +92,18 @@
         "before 6am on monday"
       ]
     }
+  ],
+  "customManagers": [
+    {
+      "description": "Connect client images",
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^tests/connect-clients/run\\.sh$/"
+      ],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\n\\w+=\"[^:\"]+:(?<currentValue>[^@\"]+)@(?<currentDigest>sha256:[a-f0-9]+)\""
+      ],
+      "versioningTemplate": "docker"
+    }
   ]
 }

@@ -632,16 +632,16 @@ mod tests {
 
     #[test]
     fn dataflow_scheduling_round_trips_and_defaults_when_absent() {
-        let on = ExecConfig {
-            dataflow_scheduling: true,
+        let off = ExecConfig {
+            dataflow_scheduling: false,
             ..ExecConfig::default()
         };
-        let (_, got) = decode_task(&encode_task(&TaskSpec::whole(), &on).unwrap()).unwrap();
-        assert!(got.dataflow_scheduling);
-        // A descriptor written before tag 20 existed.
-        let mut old = Settings::of(&on);
+        let (_, got) = decode_task(&encode_task(&TaskSpec::whole(), &off).unwrap()).unwrap();
+        assert!(!got.dataflow_scheduling);
+        // A descriptor written before tag 20 existed: the default (on).
+        let mut old = Settings::of(&off);
         old.dataflow_scheduling = None;
-        assert!(!old.config().unwrap().dataflow_scheduling);
+        assert!(old.config().unwrap().dataflow_scheduling);
     }
 
     #[test]

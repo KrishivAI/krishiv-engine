@@ -45,7 +45,12 @@ if command -v java >/dev/null 2>&1; then
   major=$(java -XshowSettings:properties -version 2>&1 | sed -n 's/^ *java.specification.version = //p')
 fi
 if [ "${major:-0}" -ge 21 ] 2>/dev/null; then
-  exec java "$opens" -cp "$jar" "$program" "$@"
+  # Java 24 and later refuse the `sun.misc.Unsafe` memory access Netty (inside the driver) uses for its
+  # allocator ("ExceptionInInitializerError ... EmptyByteBuf.memoryAddress"); the runner image moved to
+  # Java 25 on 2026-11-25. Java 21 does not know the option.
+  if [ "$major" -ge 24 ]; then opens="$opens --sun-misc-unsafe-memory-access=allow"; fi
+  # shellcheck disable=SC2086 # two options in one variable
+  exec java $opens -cp "$jar" "$program" "$@"
 fi
 # `tpch URL QUERIES DATA` reads QUERIES in the program: mount it; DATA stays the host path,
 # since the server (not this program) opens it.

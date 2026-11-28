@@ -8,7 +8,8 @@ Vectorised compute kernels (SIMD) with Spark semantics, Spark-observable Murmur3
 
 ## Layout (kernel specialization framework, P2-T020)
 - `vector` (P3-T076): `vector_inner_product`/`l2_distance`/`cosine_similarity`/`l1,l2,inf` norms over `&[f32]`, bit for bit Spark 4.2.0's `VectorFunctionImplUtils` (blocks of 8 summed left to right, then added to the accumulator, `float`, no FMA, no reassociation). Goldens: `tests/fixtures/spark-4.2.0/vector-goldens.json` (`crates/krishiv-session/tests/vector_goldens.rs`). 4.3.0 accumulates in `double`: a separate kernel set once a 4.3 profile exists.
-- `policy` (4 overflow policies as ZSTs), `ops` (`Operand`, `BinaryOp`), `dispatch` (`Target`, `KernelCtx`).
+- `policy` (4 overflow policies as ZSTs), `ops` (`Operand`, `BinaryOp`), `dispatch` (`Target`, `KernelCtx`; `KRISHIV_KERNEL_TARGET`
+  caps `Target::best` for the whole process, read once, only ever lowering it: `Target::cap_from_env`, `tests/target_cap.rs`).
 - `chunk`: the generic 64-row chunk engine; monomorphs `<L_SCALAR, R_SCALAR>` × policy, chosen once per batch. No
   has-nulls axis (compute-through-nulls makes it ~1.0x); `specialize` is the opt-in `const NULLS` axis for kernels
   whose work changes with NULLs (division, strings).

@@ -9,8 +9,8 @@ is a separate CI test.
 
 ## Run
 
-Docker and python3 are the only tools needed (the clients run in `golang:1.24` and `virtuslab/scala-cli`
-containers on the host network).
+Docker and python3 are the only tools needed (the clients run in the `golang` and `virtuslab/scala-cli`
+containers, pinned by digest at the top of `run.sh`, on the host network).
 
 ```text
 cargo build -p krishiv-cli --features server

@@ -283,6 +283,9 @@ impl TokioExecutor {
         let io_count = Arc::new(ThreadCount::default());
         let build =
             |builder: &mut tokio::runtime::Builder, name: &str, count: &Arc<ThreadCount>| {
+                // Tokio's `cfg(loom)` build has no thread hooks (park, start,
+                // stop); the loom models do not exercise the idle release.
+                #[cfg(not(loom))]
                 if release {
                     // A worker about to park has no task: release there for an
                     // idle epoch it has not released for (pressure epochs are
@@ -295,6 +298,8 @@ impl TokioExecutor {
                         .on_thread_start(move || up.start())
                         .on_thread_stop(move || down.stop());
                 }
+                #[cfg(loom)]
+                let _ = (release, count);
                 builder
                     .thread_name(name)
                     .enable_all()

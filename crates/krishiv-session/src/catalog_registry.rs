@@ -628,7 +628,9 @@ impl CatalogSetup {
         self.mode
     }
 
-    /// No declarations yet, for `mode`.
+    /// No declarations yet, for `mode`. A runtime that serves callers other than the process owner
+    /// must be built with `DeclMode::Server`: its catalog declarations are then startup-only and
+    /// `${env:..}` / `${system:..}` in SQL text stay as written (see [`DeclMode`]).
     pub fn new(mode: DeclMode) -> Self {
         Self {
             mode,

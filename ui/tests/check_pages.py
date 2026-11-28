@@ -9,7 +9,8 @@ origin, logs a console error, lacks the self-hosted Red Hat fonts, loses its key
 under 40 px on a phone (the responsive checks ask for 44 px on touch screens). With SHOT_DIR it also writes a PNG per page and view (the visual record; the assertions
 are the check, since pixels differ between machines). It ends with the responsive and device checks of
 `check_responsive.py` (13 screen sizes from a phone to an ultrawide monitor, touch targets, the SQL editor on a
-phone, text size, motion), whose pictures go to SHOT_DIR/responsive.
+phone, text size, motion), whose pictures go to SHOT_DIR/responsive, and the @krishiv/ui gallery check of
+`check_gallery.py` (the gallery is built by `pnpm -C ui test`).
 """
 
 from __future__ import annotations
@@ -28,6 +29,7 @@ from playwright.sync_api import TimeoutError as PlaywrightTimeout
 
 sys.path.insert(0, str(Path(__file__).parent))
 import fixture_server
+from check_gallery import gallery_checks
 from check_responsive import responsive_checks
 
 # "small" is the narrowest width the spec names (360 px); it is checked but not photographed.
@@ -522,7 +524,7 @@ def page_checks(origin: str) -> list[str]:
         )
         page.goto(f"{origin}/?token=fixture")
         # Ready: the shell shows its navigation and the token has left the address.
-        page.wait_for_function("!location.search.includes('token')", timeout=10000)
+        page.wait_for_function("() => !location.search.includes('token')", timeout=10000)
         page.get_by_role("navigation").first.wait_for(timeout=10000)
         # Session: the token left the address and no script can read it.
         if "token" in page.url:
@@ -1185,7 +1187,7 @@ def workload_checks() -> list[str]:
         ann.get_by_role(
             "button", name="The 14 queries of this session in History"
         ).click()
-        page.wait_for_function("location.hash === '#/history'", timeout=5000)
+        page.wait_for_function("() => location.hash === '#/history'", timeout=5000)
         history_rows = "main a[href^='#/queries/']:visible"
         try:
             expect(page.locator(history_rows)).to_have_count(2, timeout=5000)
@@ -1834,12 +1836,15 @@ if __name__ == "__main__":
     found += heatmap_checks(f"http://127.0.0.1:{server.server_address[1]}")
     found += q9_checks(shots)
     found += responsive_checks(shots / "responsive" if shots is not None else None)
+    # The @krishiv/ui gallery: CSP with every popover kind open, axe per component (shared-UI note section 4).
+    found += gallery_checks()
     print(
         "\n".join(found)
         if found
         else "ui pages: ok (11 pages x 4 widths x dark/light, xss, session, cancel, redaction, axe, deep links, embed, "
         "embedded and profiles consoles, operator, history filters and comparison, sessions and workload, the advisor and session links, the plan heatmap, "
         "TPC-H Q9's profile, "
-        "responsive: 3 consoles x 13 screen sizes, touch targets, SQL editor on a phone, text size, motion)"
+        "responsive: 3 consoles x 13 screen sizes, touch targets, SQL editor on a phone, text size, motion; "
+        "the @krishiv/ui gallery under the CSP with its popovers open, axe per component)"
     )
     sys.exit(1 if found else 0)
