@@ -545,11 +545,27 @@ fn types_states_and_errors() {
     };
     assert_eq!(bad(DataType::Null, DataType::Int64), Err(unsupported));
     assert_eq!(bad(DataType::Int64, DataType::Null), Err(unsupported));
-    // Spark reports these as `DATATYPE_MISMATCH`; the engine has no
-    // ordering for them at all, so they are unsupported here.
+    // Arrays and structs order field by field, as value or as key.
     let array = DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
-    assert_eq!(bad(array.clone(), DataType::Int64), Err(unsupported));
-    assert_eq!(bad(DataType::Int64, array), Err(unsupported));
+    assert_eq!(bad(array.clone(), DataType::Int64), Ok(array.clone()));
+    assert_eq!(bad(DataType::Int64, array), Ok(DataType::Int64));
+    // A map has no ordering.
+    let map = DataType::Map(
+        Arc::new(Field::new(
+            "entries",
+            DataType::Struct(
+                vec![
+                    Field::new("key", DataType::Int32, false),
+                    Field::new("value", DataType::Int32, true),
+                ]
+                .into(),
+            ),
+            false,
+        )),
+        false,
+    );
+    assert_eq!(bad(map.clone(), DataType::Int64), Err(unsupported));
+    assert_eq!(bad(DataType::Int64, map), Err(unsupported));
     // An ANSI interval orders by value, as either argument.
     let interval = DataType::Interval(arrow_schema::IntervalUnit::YearMonth);
     assert_eq!(

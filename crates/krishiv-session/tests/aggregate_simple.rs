@@ -479,3 +479,38 @@ fn distinct_and_filter_with_new_aggregates() -> R {
     );
     Ok(())
 }
+
+/// `max_by` / `min_by` over struct and array values and keys (grouped, so the
+/// partial and final phases both run).
+#[test]
+fn max_by_and_min_by_over_nested_values_and_keys() -> R {
+    let s = session()?;
+    // Nested values: the last id of each group is the max, the first the min.
+    assert_eq!(
+        rows(
+            &s,
+            "SELECT k, max_by(struct(id, x), id).x, min_by(array(id, id + 1), id)[1] \
+             FROM t GROUP BY k ORDER BY k"
+        )?,
+        ["1|d|2", "2|p|6", "3|q|8"]
+    );
+    // Nested keys compare field by field, NULL smallest (group 1: y = 3, NULL, 7, 7).
+    assert_eq!(
+        rows(
+            &s,
+            "SELECT k, max_by(id, struct(y, id)), min_by(id, array(y, id)) \
+             FROM t GROUP BY k ORDER BY k"
+        )?,
+        ["1|4|2", "2|6|5", "3|7|7"]
+    );
+    // A global aggregate, and a nested value under a nested key.
+    assert_eq!(rows(&s, "SELECT max_by(id, array(id)) FROM t")?, ["7"]);
+    assert_eq!(
+        rows(
+            &s,
+            "SELECT max_by(array(id), struct(id)) [0], min_by(struct(id).id, array(id)) FROM t"
+        )?,
+        ["7|1"]
+    );
+    Ok(())
+}

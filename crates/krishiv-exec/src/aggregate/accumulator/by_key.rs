@@ -29,6 +29,13 @@ impl Values {
                 !float_lt(if max { c[i] } else { v[g] }, if max { v[g] } else { c[i] })
             }
             (Self::Bytes(v), Col::Bytes(c)) => takes(c[i].cmp(&v[g][..])),
+            (Self::Nested(v), Col::Nested(c)) => match &v[g] {
+                None => true,
+                Some(held) => takes(
+                    krishiv_kernels::order::cmp_rows(c.as_ref(), i, held.as_ref(), 0)
+                        .map_err(|e| internal(e.to_string()))?,
+                ),
+            },
             _ => {
                 return Err(internal(
                     "an ordering key of another kind than its state".to_owned(),
