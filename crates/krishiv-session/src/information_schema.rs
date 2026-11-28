@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! `information_schema.catalogs`, `.schemata`, `.tables`, `.columns` and `.views`: read-only views over the session
+//! `information_schema.catalogs`, `.schemata`, `.tables`, `.columns`, `.views` and `.routines`: read-only views over the session
 //! catalog (`spark_catalog`) for BI tools and SQL clients. Spark has no `information_schema`, so the
 //! columns are the SQL standard's names. Rows follow the listing rule of `SHOW TABLES` /
 //! `SHOW NAMESPACES` ([`crate::access`] `may_list`): a relation or schema the principal may not list
@@ -58,7 +58,7 @@ pub(crate) fn is_view_securable(securable: &Securable) -> bool {
 pub(crate) fn is_view(name: &str) -> bool {
     matches!(
         name.to_ascii_lowercase().as_str(),
-        "catalogs" | "schemata" | "tables" | "columns" | "views"
+        "catalogs" | "schemata" | "tables" | "columns" | "views" | "routines"
     )
 }
 
@@ -66,6 +66,12 @@ pub(crate) fn is_view(name: &str) -> bool {
 fn layout(name: &str) -> Vec<(&'static str, bool, bool)> {
     match name {
         "catalogs" => vec![("catalog_name", false, false)],
+        "routines" => vec![
+            ("routine_catalog", false, false),
+            ("routine_schema", false, false),
+            ("routine_name", false, false),
+            ("routine_type", false, false),
+        ],
         "schemata" => vec![
             ("catalog_name", false, false),
             ("schema_name", false, false),
@@ -158,6 +164,26 @@ impl Source {
         (schemas, relations)
     }
 
+    /// The stored functions of the catalog the principal may list, as `(namespace, name)`. Built-in
+    /// and temporary functions belong to no schema and are not listed.
+    async fn routines(&self) -> Vec<(String, String)> {
+        let mut rows = Vec::new();
+        for (namespace, _) in CatalogStore::namespaces(&*self.store) {
+            for name in CatalogStore::functions(&*self.store).in_namespace(&namespace) {
+                let securable = Securable::Function(vec![
+                    crate::catalog::CATALOG.to_owned(),
+                    namespace.clone(),
+                    name.clone(),
+                ]);
+                if self.may_list(&securable).await {
+                    rows.push((namespace.clone(), name));
+                }
+            }
+        }
+        rows.sort();
+        rows
+    }
+
     /// The view `name` with its rows now, or `None` for an unknown name.
     pub(crate) async fn provider(
         &self,
@@ -173,6 +199,19 @@ impl Source {
                 &name,
                 table_columns,
                 vec![text([Some(catalog)].into_iter())],
+            )?));
+        }
+        if name == "routines" {
+            let rows = self.routines().await;
+            return Ok(Some(self.assemble(
+                &name,
+                table_columns,
+                vec![
+                    text(rows.iter().map(|_| Some(catalog))),
+                    text(rows.iter().map(|(ns, _)| Some(ns.as_str()))),
+                    text(rows.iter().map(|(_, f)| Some(f.as_str()))),
+                    text(rows.iter().map(|_| Some("FUNCTION"))),
+                ],
             )?));
         }
         let (schemas, relations) = self.relations().await;

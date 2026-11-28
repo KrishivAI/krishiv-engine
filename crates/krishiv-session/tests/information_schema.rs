@@ -241,6 +241,9 @@ fn under_grants_a_principal_sees_what_it_may_list() {
     for statement in [
         "CREATE TABLE mine (a INT) USING parquet",
         "CREATE TABLE canary (a INT) USING parquet",
+        "CREATE FUNCTION myf() RETURNS INT RETURN 1",
+        "CREATE FUNCTION secretf() RETURNS INT RETURN 2",
+        "GRANT SELECT ON FUNCTION myf TO user:ana",
         "CREATE NAMESPACE vaultns",
         "CREATE TABLE vaultns.vt (b INT) USING parquet",
         "GRANT SELECT ON TABLE mine TO user:ana",
@@ -267,7 +270,35 @@ fn under_grants_a_principal_sees_what_it_may_list() {
     );
     assert!(rows(&ana, "SELECT * FROM information_schema.views").is_empty());
     assert_eq!(
+        rows(
+            &ana,
+            "SELECT routine_schema, routine_name FROM information_schema.routines"
+        ),
+        ["default|myf"]
+    );
+    assert_eq!(
         rows(&root, "SELECT count(*) FROM information_schema.tables"),
         ["3"]
+    );
+}
+
+#[test]
+fn routines_list_the_stored_functions() {
+    let dir = tempfile::tempdir().unwrap();
+    let s = session(dir.path());
+    run(&s, "CREATE DATABASE db1");
+    run(&s, "CREATE FUNCTION db1.two() RETURNS INT RETURN 2");
+    run(&s, "CREATE FUNCTION one() RETURNS INT RETURN 1");
+    run(&s, "CREATE TEMPORARY FUNCTION tmp() RETURNS INT RETURN 3");
+    assert_eq!(
+        rows(
+            &s,
+            "SELECT routine_catalog, routine_schema, routine_name, routine_type \
+             FROM information_schema.routines ORDER BY 2, 3"
+        ),
+        [
+            "spark_catalog|db1|two|FUNCTION",
+            "spark_catalog|default|one|FUNCTION"
+        ]
     );
 }
