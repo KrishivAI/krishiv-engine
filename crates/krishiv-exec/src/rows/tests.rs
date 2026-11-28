@@ -1035,3 +1035,85 @@ fn estimate_sized_indexes_grow_to_the_same_answer() {
     // Sized by the estimate, the directory is smaller than by rows.
     assert!(run(20_000, IndexChoice::Salted).2 < exact.2);
 }
+
+/// Decoded string and binary columns of every type equal their input:
+/// NULLs, an empty value, multi-byte (Cyrillic) values inline and on the
+/// heap. Bytes that are not UTF-8 fail a string column, a character split
+/// across two values included: their bytes back to back are valid UTF-8,
+/// so only the check that every value starts on a character boundary
+/// catches it.
+#[test]
+fn byte_columns_decode_back_and_strings_stay_checked() {
+    use arrow_array::{
+        BinaryArray, BinaryViewArray, LargeBinaryArray, LargeStringArray, StringArray,
+        StringViewArray,
+    };
+    let text = [
+        Some("поисковая фраза длиннее двенадцати байт"),
+        None,
+        Some(""),
+        Some("яндекс"),
+        Some("short"),
+        Some("a value longer than twelve bytes"),
+    ];
+    let bytes: Vec<Option<&[u8]>> = text.iter().map(|t| t.map(str::as_bytes)).collect();
+    let cols: [ArrayRef; 6] = [
+        Arc::new(StringArray::from(text.to_vec())),
+        Arc::new(LargeStringArray::from(text.to_vec())),
+        Arc::new(StringViewArray::from(text.to_vec())),
+        Arc::new(BinaryArray::from(bytes.clone())),
+        Arc::new(LargeBinaryArray::from(bytes.clone())),
+        Arc::new(BinaryViewArray::from(bytes)),
+    ];
+    for col in cols {
+        let types = [col.data_type().clone()];
+        for layout in [
+            RowLayout::new(&types, &[true]).unwrap_or_else(|e| panic!("{e}")),
+            RowLayout::for_payload(&types).unwrap_or_else(|e| panic!("{e}")),
+        ] {
+            let keys = layout
+                .encode(&[Arc::clone(&col)])
+                .unwrap_or_else(|e| panic!("{e}"));
+            let rows: Vec<(&[u8], &[u8])> =
+                (0..col.len()).map(|i| (keys.row(i), keys.heap())).collect();
+            let back = layout.decode_rows(&rows).unwrap_or_else(|e| panic!("{e}"));
+            assert_eq!(back[0].data_type(), col.data_type());
+            assert_eq!(back[0].to_data(), col.to_data(), "{}", col.data_type());
+        }
+    }
+    // Rows of binary values read as strings.
+    let as_text = |values: Vec<&[u8]>, text: DataType| {
+        let binary = match text {
+            DataType::Utf8View => DataType::BinaryView,
+            DataType::LargeUtf8 => DataType::LargeBinary,
+            _ => DataType::Binary,
+        };
+        let col: ArrayRef = match binary {
+            DataType::BinaryView => Arc::new(BinaryViewArray::from(values)),
+            DataType::LargeBinary => Arc::new(LargeBinaryArray::from(values)),
+            _ => Arc::new(BinaryArray::from(values)),
+        };
+        let from = RowLayout::for_payload(&[binary]).unwrap_or_else(|e| panic!("{e}"));
+        let to = RowLayout::for_payload(&[text]).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(from.stride(), to.stride());
+        let keys = from.encode(&[col]).unwrap_or_else(|e| panic!("{e}"));
+        let rows: Vec<(&[u8], &[u8])> = (0..keys.len())
+            .map(|i| (keys.row(i), keys.heap()))
+            .collect();
+        to.decode_rows(&rows).map(|_| ())
+    };
+    for text in [DataType::Utf8, DataType::LargeUtf8, DataType::Utf8View] {
+        let ok = as_text(vec!["я".as_bytes(), b"ok"], text.clone());
+        assert!(ok.is_ok(), "{text}: {ok:?}");
+        let long_bad = [&b"thirteen bytes "[..], &[0xff]].concat();
+        for bad in [
+            vec![&[0xff][..]],
+            vec![&long_bad[..]],
+            vec![&[0xd0][..], &[0xb0][..]],
+        ] {
+            let e = as_text(bad.clone(), text.clone()).err();
+            let msg = e.map(|e| e.to_string()).unwrap_or_default();
+            assert!(msg.contains("not UTF-8"), "{text} {bad:?}: {msg}");
+        }
+    }
+}

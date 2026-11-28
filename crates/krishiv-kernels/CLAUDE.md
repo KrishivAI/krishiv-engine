@@ -16,7 +16,7 @@ Vectorised compute kernels (SIMD) with Spark semantics, Spark-observable Murmur3
 - `Dispatch` (sealed): `KernelCtx` picks the CPU target at run time (three clones of each loop, plus scalar-operand
   loops); `Baseline` runs the build-baseline loop only, a scalar repeated into an array (one loop per kernel), for
   one-row/constant evaluation such as plan-time folding. Dispatching entry points take `ctx: &impl Dispatch`.
-- `unsafe_dispatch`: the only `unsafe` (calling `#[target_feature]` clones; `prefetch_read`, the hash tables' software prefetch); `xtask source-guard` rejects `unsafe`
+- `unsafe_dispatch` and `unsafe_utf8`: the only `unsafe` (`unsafe_dispatch`: calling `#[target_feature]` clones; `prefetch_read`, the hash tables' software prefetch; `unsafe_utf8::string_array`: a string array from a value buffer checked once with `simdutf8` (the whole buffer UTF-8, every offset a character boundary, offsets within the values, nulls one per value: a superset of arrow-array 60.x `try_new`'s checks) then built with `new_unchecked`; the row decode's string columns, krishiv-exec `rows/layout.rs` `ByteValues`); `xtask source-guard` rejects `unsafe`
   in any other file here and `xtask budgets` counts unsafe sites.
 - `version`: the Spark version profile (`KernelCtx::with_spark_version`); error classes/messages differ by version.
 - Kernels: `integer` (tinyint..bigint `+ - * %`, bigint `div`, unary `-`/`abs`), `decimal` (`+ - * / % div`, unary; Spark result types
@@ -112,7 +112,7 @@ Vectorised compute kernels (SIMD) with Spark semantics, Spark-observable Murmur3
 Paths are relative to this crate.
 - `src/lib.rs` module map and crate docs
 - `src/chunk.rs` generic 64-row chunk engine; `src/policy.rs` overflow policies (wrap, NULL, raise)
-- `src/dispatch.rs` `Target` and `KernelCtx`; `src/unsafe_dispatch.rs` the only `unsafe` module
+- `src/dispatch.rs` `Target` and `KernelCtx`; `src/unsafe_dispatch.rs` and `src/unsafe_utf8.rs` the only `unsafe` modules
 - `src/integer.rs`, `src/decimal.rs`, `src/float.rs` arithmetic kernels; `src/compare.rs` comparisons
 - `src/cast.rs` Spark CAST on Arrow carriers; `src/string.rs` string kernels
 - `src/hash.rs` and `src/hash/murmur3.rs` Murmur3 (seed 42), `src/hash/xxh64.rs` xxhash64, `src/hash/routing.rs` `H_kg`
@@ -131,7 +131,8 @@ Paths are relative to this crate.
 - A NULL row never raises: overflow flags are masked with the validity word; ANSI errors name the first failing row.
 - `#![deny(clippy::arithmetic_side_effects)]`: only explicit `wrapping_*`/`overflowing_*`/`checked_*` arithmetic.
 - `unsafe` allowed only in `unsafe_*.rs` modules, each block with `// SAFETY:`; Miri on every PR touching this
-  crate (`miri-kernels`), nightly ASan and differential fuzzing (ADR 0029).
+  crate (`miri-kernels`; `unsafe_utf8` runs again with `-Ctarget-feature=+avx2,+sse4.2`, since Miri sees no
+  run-time CPU features), nightly ASan and differential fuzzing (ADR 0029).
 - No `unwrap`/`expect`/`panic` in library code; errors carry a Spark error class + SQLSTATE.
 
 ## ADRs (in `../krishiv-internal/adr/`)
@@ -141,7 +142,8 @@ Paths are relative to this crate.
 `cargo nextest run -p krishiv-kernels --no-tests=pass` · `cargo clippy -p krishiv-kernels --all-targets -- -D warnings`
 `KRISHIV_REQUIRE_TARGETS=baseline,x86_64v3` makes a skipped CPU target a test failure (set in CI) ·
 `cargo +nightly miri test -p krishiv-kernels` · `cargo bench -p krishiv-kernels` ·
-`(cd crates/krishiv-kernels/fuzz && cargo +nightly fuzz run differential -- -max_total_time=60)`
+`(cd crates/krishiv-kernels/fuzz && cargo +nightly fuzz run differential -- -max_total_time=60)` ·
+`(cd crates/krishiv-kernels/fuzz && cargo +nightly fuzz run string_array -- -max_total_time=60)` (`unsafe_utf8` against arrow's `try_new`: whatever it accepts, `try_new` accepts and builds equal)
 
 ## Time zones and datetime patterns
 `datetime::resolve_zone` resolves fixed offsets without a database and region ids against `jiff-tzdb` 0.1.9 (pinned in `Cargo.lock`; the crate does not record its IANA release), caching each id per thread. A region *session* zone is still refused by the CLI; only function arguments and pattern zone fields use regions. In the legacy parser `z` and `Z` read what `SimpleDateFormat` does: `+hhmm`, `GMT[+h:mm]`, or the first name of the JVM's zone strings (`vendored/legacy_zones.rs`, included by `datetime_pattern/legacy_zones.rs`, generated from Spark 4.2.0's JVM by `tests/scripts/gen_legacy_zone_strings.py` + `gen_legacy_zone_table.py`; `tests/legacy_parse.rs` checks every name against Spark) that starts the text, ignoring case, trying the session zone's own row first (`TimeZoneRules::region_id`); no region ids. Numeric fields read any BMP decimal digit. `spark.sql.legacy.timeParserPolicy=LEGACY` is `datetime_pattern/legacy.rs` (`LegacyPattern`, reached through `datetime::TimePattern`): the SQL functions use `SimpleDateFormat` (non-lenient parsing that ignores trailing text; offset fields from `TimeZoneRules::legacy_offset_at_utc`, `java.util.TimeZone`: a region's raw offset before 1900, read in 2400 as the smaller of the January and July offsets). Spark's JSON, CSV and XML options use commons-lang `FastDateFormat` instead, the `fast` flag of the same type (`DateTimePattern::new_fast`, `datetime_pattern/legacy/fast.rs`): a lenient `FastDateParser` (a number run followed by a number takes its letter count of digits, any other skips Java whitespace and takes every digit; `2024-02-30` is March 1; `S` runs scale to a fraction of a second by the pattern's whole `S` count; a value past `int` is no match; text names match the longest first, `a`/`G` also in one letter) and `FastDatePrinter` letters (`y`/`Y` padded to four, `Z` `+hhmm`, `ZZ` `Z`/`+hh:mm`, `ZZZ` `+hh:mm`, a negative week year through commons-lang's digit loop). Goldens: `tests/fast_date_format.rs` (kernel level, fallback off) and `krishiv-functions` `scalar/tests/legacy_fast.rs` (end to end, fallback on), both from Spark 4.2.0 runs; the JSON options (`JsonOptions::from_map_with(.., true)`) carry Spark's LEGACY default patterns, `enableDateTimeParsingFallback` (on under LEGACY: the lenient default grammar, then for a JSON date a day count) and a lazily built reader pattern that matches nothing when Spark could not build it. Known approximations: a `DATE` is read as the instant's day in UTC (the JVM default zone is the host's), zone names come from the `SimpleDateFormat` model's JVM zone strings (not `FastDateParser`'s `getDisplayName` extras), and file readers do not use it.
